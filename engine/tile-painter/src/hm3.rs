@@ -168,6 +168,39 @@ fn encode_pixels(
             255
         });
     }
+    compress_raw(raw, layer)
+}
+
+/// Encode already-quantized display cells (255 = NO_DATA) as one HM3 stream.
+pub fn encode_cells(cells: &[u8], layer: Hm3Layer) -> Result<EncodedHm3> {
+    ensure!(
+        cells.len() == TILE_PIXEL_SIDE * TILE_PIXEL_SIDE,
+        "invalid HM3 cell count"
+    );
+    let mut raw = Vec::with_capacity(cells.len() + 6);
+    raw.extend_from_slice(b"HM3 \x03");
+    raw.push(layer.source_id());
+    raw.extend_from_slice(cells);
+    compress_raw(raw, layer)
+}
+
+/// Decode HM3 bytes to quantized cells, rejecting truncation, trailing bytes
+/// or a header that names another layer.
+pub fn decode_cells(bytes: &[u8], layer: Hm3Layer) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let expected = TILE_PIXEL_SIDE * TILE_PIXEL_SIDE + 6;
+    let mut raw = Vec::with_capacity(expected);
+    brotli::Decompressor::new(Cursor::new(bytes), 4096)
+        .take((expected + 1) as u64)
+        .read_to_end(&mut raw)?;
+    ensure!(
+        raw.len() == expected && &raw[..5] == b"HM3 \x03" && raw[5] == layer.source_id(),
+        "invalid HM3 header, layer or dimensions"
+    );
+    Ok(raw.split_off(6))
+}
+
+fn compress_raw(raw: Vec<u8>, layer: Hm3Layer) -> Result<EncodedHm3> {
     let mut compressed = Vec::new();
     brotli::BrotliCompress(
         &mut Cursor::new(raw),

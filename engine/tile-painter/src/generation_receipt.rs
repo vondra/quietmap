@@ -25,8 +25,10 @@ impl GenerationReceipt {
         let mut connection = Connection::open(root.join("generation.sqlite"))?;
         connection.busy_timeout(std::time::Duration::from_secs(60))?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute_batch("CREATE TABLE IF NOT EXISTS surface_generation(id INTEGER PRIMARY KEY CHECK(id=1),
-            sources BLOB NOT NULL,code BLOB NOT NULL,producer BLOB NOT NULL);")?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS surface_generation(id INTEGER PRIMARY KEY CHECK(id=1),
+            sources BLOB NOT NULL,code BLOB NOT NULL,producer BLOB NOT NULL);",
+        )?;
         tx.execute(
             "INSERT OR IGNORE INTO surface_generation VALUES(1,?1,?2,?3)",
             params![
@@ -88,6 +90,11 @@ pub fn file_digest(path: &Path) -> Result<[u8; 32]> {
         hash.update(&buffer[..count]);
     }
     Ok(hash.finalize().into())
+}
+
+/// Lowercase hex of a digest for the authority ledger, manifest and receipts.
+pub fn hex_digest(digest: [u8; 32]) -> String {
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]

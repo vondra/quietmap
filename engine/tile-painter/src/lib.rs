@@ -11,3 +11,7 @@ pub mod generation_receipt;
 pub mod hm3;
 
 pub mod corner_totals;
+
+mod heatmap_authority;
+pub mod heatmap_pack;
+mod heatmap_pyramid;

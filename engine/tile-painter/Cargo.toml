@@ -12,9 +12,15 @@ sha2 = "0.11"
 
 noise-compute = { path = "../noise-compute" }
 brotli = "8"
+pmtiles = { version = "0.23.0", default-features = false, features = ["write"] }
+serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"
+bytes = "1"
+# iter-async is the lightest feature that compiles the crate's own reader
+# (AsyncPmTilesReader) so tests read archives back through format truth.
+pmtiles = { version = "0.23.0", default-features = false, features = ["write", "iter-async"] }
 
 [build-dependencies]
 sha2 = "0.11"
@@ -22,3 +28,7 @@ sha2 = "0.11"
 [[bin]]
 name = "corner-artifact-check"
 path = "src/bin/corner_artifact_check.rs"
+
+[[bin]]
+name = "heatmap-pack"
+path = "src/bin/heatmap_pack.rs"

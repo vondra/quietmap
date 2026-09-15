@@ -1,4 +1,4 @@
-// Analytical aircraft energy, adapted from the existing CUDA backend; constants supplied by canonical Rust.
+// Shared Doc29 aircraft energy; scalar precision and screening belong to the caller.
 #pragma once
 #define MLAT AIRCRAFT_M_LAT
 #define LN10 2.302585092994046
@@ -11,65 +11,65 @@
 #define HALF_PI_D 1.57079632679489661923132169163975144
 #define TAU_D 6.28318530717958647692528676655900577
 
-// noise_compute fast_exp_f64, fp32 internals (copy of the surface-kernel fexp). ~1e-6 drift.
-__device__ __forceinline__ float fexpf_nc(float x) {
-    x = fminf(fmaxf(x, -87.0f), 88.0f);
-    float n = roundf(x * 1.4426950408889634f);          // 1/ln2
-    float r = x - n * 0.6931471805599453f;              // ln2
-    float r2 = r * r;
-    float poly = 1.0f + r + r2 * (0.5f + r * (1.0f/6.0f + r * (1.0f/24.0f + r * (1.0f/120.0f))));
-    return poly * exp2f(n);
+template<typename Real>
+__device__ __forceinline__ Real aircraft_fast_exp(Real x) {
+    x = fmin(fmax(x, Real(-87)), Real(88));
+    Real n = round(x * Real(1.4426950408889634));
+    Real r = x - n * Real(0.6931471805599453);
+    Real r2 = r * r;
+    Real poly = Real(1) + r + r2 * (Real(0.5) + r * (Real(1)/Real(6) + r * (Real(1)/Real(24) + r * (Real(1)/Real(120)))));
+    return poly * exp2(n);
 }
 
-// doc29.rs fast_atan: Padé [3/2], max err ~0.003 rad.
-__device__ __forceinline__ float fast_atan_small(float x) {
-    float x2 = x * x;
-    return x * (1.0f + 0.1827f * x2) / (1.0f + 0.5124f * x2);
+template<typename Real>
+__device__ __forceinline__ Real fast_atan_small(Real x) {
+    Real x2 = x * x;
+    return x * (Real(1) + Real(0.1827) * x2) / (Real(1) + Real(0.5124) * x2);
 }
-__device__ __forceinline__ float fast_atan(float x) {
-    if (fabsf(x) > 1.0f) {
-        float s = (x >= 0.0f) ? 1.0f : -1.0f;
-        return s * 1.5707963267948966f - fast_atan_small(1.0f / x);
+template<typename Real>
+__device__ __forceinline__ Real fast_atan(Real x) {
+    if (fabs(x) > Real(1)) {
+        Real sign = x >= Real(0) ? Real(1) : Real(-1);
+        return sign * Real(HALF_PI_D) - fast_atan_small(Real(1) / x);
     }
     return fast_atan_small(x);
 }
 
 #include "airborne_screening.cuh"
 
-// doc29.rs fast_delta_f — ΔF finite-segment correction (Padé atan, log2 trick).
-__device__ __forceinline__ float fast_delta_f(float q_m, float slen, float d_bar) {
-    if (slen < 1.0f || d_bar < 1.0f) return 0.0f;
-    float a1 = -q_m / d_bar;
-    float a2 = -(q_m - slen) / d_bar;
-    float g1 = a1 / (1.0f + a1 * a1) + fast_atan(a1);
-    float g2 = a2 / (1.0f + a2 * a2) + fast_atan(a2);
-    float f = (g2 - g1) * 0.3183098861837907f;          // 1/π
-    return (10.0f * (float)LOG10_2) * log2f(fmaxf(f, 1e-15f));
+template<typename Real>
+__device__ __forceinline__ Real fast_delta_f(Real q_m, Real slen, Real d_bar) {
+    if (slen < Real(1) || d_bar < Real(1)) return Real(0);
+    Real a1 = -q_m / d_bar;
+    Real a2 = -(q_m - slen) / d_bar;
+    Real g1 = a1 / (Real(1) + a1 * a1) + fast_atan(a1);
+    Real g2 = a2 / (Real(1) + a2 * a2) + fast_atan(a2);
+    Real fraction = (g2 - g1) * Real(0.3183098861837907);
+    return (Real(10) * Real(LOG10_2)) * log2(fmax(fraction, Real(1e-15)));
 }
 
-// doc29.rs fast_lateral_attenuation — Λ = Γ(l)×Λ(β), Wing-mounted jets only.
-__device__ __forceinline__ float fast_lat_atten(float rel_alt, float lateral_sq, int inst) {
-    if (inst != INST_WING) return 0.0f;
-    float lateral_m = sqrtf(lateral_sq); // only the Wing path needs it — skip the sqrt otherwise
-    float beta = fast_atan(rel_alt / fmaxf(lateral_m, 0.01f)) * 57.29577951308232f; // →deg
-    if (!(beta >= 0.0f && beta <= 50.0f)) return (beta < 0.0f) ? 10.857f : 0.0f;
-    float gamma = (lateral_m <= 914.0f)
-        ? 1.089f * (1.0f - fexpf_nc(-0.00274f * lateral_m)) : 1.0f;
-    float lambda_beta = 1.137f - 0.0229f * beta + 9.72f * fexpf_nc(-0.142f * beta);
-    return gamma * lambda_beta;
+template<typename Real>
+__device__ __forceinline__ Real fast_lat_atten(Real relative_alt, Real lateral_sq, int installation) {
+    if (installation != INST_WING) return Real(0);
+    Real lateral_m = sqrt(lateral_sq);
+    Real beta = fast_atan(relative_alt / fmax(lateral_m, Real(0.01))) * Real(57.29577951308232);
+    if (!(beta >= Real(0) && beta <= Real(50))) return beta < Real(0) ? Real(10.857) : Real(0);
+    Real gamma = lateral_m <= Real(914)
+        ? Real(1.089) * (Real(1) - aircraft_fast_exp(Real(-0.00274) * lateral_m)) : Real(1);
+    Real lambda = Real(1.137) - Real(0.0229) * beta + Real(9.72) * aircraft_fast_exp(Real(-0.142) * beta);
+    return gamma * lambda;
 }
 
-// npd.rs fast_npd_lookup against the per-class SEL LUT (NPD_NB+1 entries/class).
-__device__ __forceinline__ float npd_lookup(const float* lut_base, int cls, float log_d) {
-    const float* lut = lut_base + cls * (NPD_NB + 1);
-    float t = fmaxf((log_d - NPD_LOG_MIN) * NPD_INV_STEP, 0.0f);
-    int idx = min((int)t, NPD_NB - 1);
-    float frac = t - (float)idx;
-    return lut[idx] + frac * (lut[idx + 1] - lut[idx]);
+template<typename Real>
+__device__ __forceinline__ Real npd_lookup(const Real* base, int cls, Real log_d) {
+    const Real* lut = base + cls * (NPD_NB + 1);
+    Real t = fmax((log_d - Real(NPD_LOG_MIN)) * Real(NPD_INV_STEP), Real(0));
+    int index = min((int)t, NPD_NB - 1);
+    Real fraction = t - Real(index);
+    return lut[index] + fraction * (lut[index + 1] - lut[index]);
 }
 
-// Preserve coordinate subtraction in f64 before the energy path rounds to f32.
-// Discrete screening sectors separately retain the canonical f64 CPA geometry.
+// Airborne input coordinates are stored f32; subtraction stays f64 before its existing f32 kernel.
 __device__ __forceinline__ float airborne_row_offset_north(double start_lat, double rx_lat) {
     return (float)((start_lat - rx_lat) * MLAT);
 }
@@ -83,69 +83,57 @@ __device__ __forceinline__ float airborne_offset_east(double start_lon, double r
     return (float)(delta * mpdl);
 }
 
-// Shared per-(sub-seg, receiver) physics — the body of segment_energy_kernel<false>.
-// Returns true + the SEL (dB) if the seg contributes at the receiver, false if any
-// gate rejects. `f` = sf + s*12; `ax`/`ay`/`sdx` come from the row helpers above.
-__device__ __forceinline__ bool airborne_sel(
-    float ax, float ay, float sdx, const float* f, int cls, int is_dep, int inst,
-    float rx_elev, const float* npd, const float* npd_dep, int pixel,
-    const AirborneScreen& screen, const float* screen_geometry, float* sel_out)
+template<typename Real, bool SCREENED>
+__device__ __forceinline__ bool aircraft_sel(
+    Real ax, Real ay, Real sdx, const Real* f, int cls, int departure, int installation,
+    Real receiver_altitude, const Real* npd, const Real* npd_departure, int pixel,
+    const AirborneScreen& screen, const float* screen_geometry, Real* sel_out)
 {
-    float sdy = f[2], sdz = f[3], sz1 = f[0];
-    float seg_len_sq = sdx * sdx + sdy * sdy;
-    float inv_lsq = (seg_len_sq > 1e-6f) ? (1.0f / seg_len_sq) : 0.0f;
-    float slen = fmaxf(sqrtf(seg_len_sq), 1.0f);
+    Real sdy = f[2], sdz = f[3], start_altitude = f[0];
+    Real length_sq = sdx * sdx + sdy * sdy;
+    Real inverse = length_sq > Real(1e-6) ? Real(1) / length_sq : Real(0);
+    Real length = fmax(sqrt(length_sq), Real(1));
+    Real t = -(ax * sdx + ay * sdy) * inverse;
+    Real cpx = ax + t * sdx, cpy = ay + t * sdy;
+    Real lateral_sq = cpx * cpx + cpy * cpy;
+    Real relative_altitude = start_altitude + t * sdz - receiver_altitude;
+    Real slant_sq = lateral_sq + relative_altitude * relative_altitude;
+    if (slant_sq > f[9]) return false;
+    if (t < Real(0)) { if (start_altitude + t * sdz < f[10]) return false; }
+    else if (t > Real(1) && start_altitude + t * sdz < f[11]) return false;
 
-    float t = -(ax * sdx + ay * sdy) * inv_lsq;
-    float cpx = ax + t * sdx, cpy = ay + t * sdy;
-    float lateral_sq = cpx * cpx + cpy * cpy;
-    float rel_alt = sz1 + t * sdz - rx_elev;
-    float slant_sq = lateral_sq + rel_alt * rel_alt;
-
-    if (slant_sq > f[9]) return false;                   // reach_sq
-    if (t < 0.0f) { if (sz1 + t * sdz < f[10]) return false; }       // terrain_start_cut
-    else if (t > 1.0f && sz1 + t * sdz < f[11]) return false;        // terrain_end_cut
-
-    float d_p_m = sqrtf(slant_sq);
-    float d_ft = fmaxf(d_p_m * (float)FT_PER_M, 100.0f);
-    float log_d = log2f(d_ft) * (float)LOG10_2;
-    float sel_npd = npd_lookup(is_dep ? npd_dep : npd, cls, log_d);
-    float dv = f[4];
-
-    float sel;
-    float lambda = 0.0f;
-    if (d_p_m > FARFIELD_M) {                            // CFFK fast path: only ΔF
-        if (sel_npd + dv < SEL_FLOOR) return false;
-        sel = sel_npd + dv + fast_delta_f(t * slen, slen, f[5]);
-        if (sel < SEL_FLOOR) return false;
+    Real distance = sqrt(slant_sq);
+    Real feet = fmax(distance * Real(FT_PER_M), Real(100));
+    Real log_d = log2(feet) * Real(LOG10_2);
+    Real sel_npd = npd_lookup(departure ? npd_departure : npd, cls, log_d);
+    Real sel, lambda = Real(0);
+    if (distance > Real(FARFIELD_M)) {
+        if (sel_npd + f[4] < Real(SEL_FLOOR)) return false;
+        sel = sel_npd + f[4] + fast_delta_f(t * length, length, f[5]);
+        if (sel < Real(SEL_FLOOR)) return false;
     } else {
-        float df = fast_delta_f(t * slen, slen, f[5]);
-        lambda = fast_lat_atten(rel_alt, lateral_sq, inst);
-        float di = 0.0f;
-        if (inst != INST_PROP) {
-            float ra = fmaxf(rel_alt, 0.0f);
-            float u2 = (ra * ra) / fmaxf(slant_sq, 1e-12f);
-            float v2 = 1.0f - u2;
-            float x = f[6] * v2 + u2;                    // di_a
-            float den = f[8] * (4.0f * u2 * v2) + (v2 - u2) * (v2 - u2);  // di_c
-            if (den > 0.0f && x > 0.0f)
-                di = (10.0f * (float)LOG10_2) * (f[7] * log2f(x) - log2f(den));  // di_b
+        Real finite = fast_delta_f(t * length, length, f[5]);
+        lambda = fast_lat_atten(relative_altitude, lateral_sq, installation);
+        Real installation_db = Real(0);
+        if (installation != INST_PROP) {
+            Real above = fmax(relative_altitude, Real(0));
+            Real u2 = above * above / fmax(slant_sq, Real(1e-12));
+            Real v2 = Real(1) - u2;
+            Real x = f[6] * v2 + u2;
+            Real denominator = f[8] * (Real(4) * u2 * v2) + (v2 - u2) * (v2 - u2);
+            if (denominator > Real(0) && x > Real(0))
+                installation_db = (Real(10) * Real(LOG10_2)) * (f[7] * log2(x) - log2(denominator));
         }
-        sel = sel_npd + dv + di - lambda + df;
-        if (sel < SEL_FLOOR) return false;
+        sel = sel_npd + f[4] + installation_db - lambda + finite;
+        if (sel < Real(SEL_FLOOR)) return false;
     }
-
-    float diffraction_db = receiver_screening_db(
-        screen, pixel,
-        screen_geometry[0], screen_geometry[1], screen_geometry[2], screen_geometry[3],
-        screen_geometry[4], screen_geometry[5], screen_geometry[6]);
-    if (d_p_m > FARFIELD_M) {
-        sel -= diffraction_db;
-    } else {
-        sel -= fmaxf(diffraction_db - lambda, 0.0f);
+    if constexpr (SCREENED) {
+        Real diffraction = Real(receiver_screening_db(screen, pixel,
+            screen_geometry[0], screen_geometry[1], screen_geometry[2], screen_geometry[3],
+            screen_geometry[4], screen_geometry[5], screen_geometry[6]));
+        sel -= distance > Real(FARFIELD_M) ? diffraction : fmax(diffraction - lambda, Real(0));
+        if (sel < Real(SEL_FLOOR)) return false;
     }
-    if (sel < SEL_FLOOR) return false;
     *sel_out = sel;
     return true;
 }
-

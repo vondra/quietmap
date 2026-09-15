@@ -277,3 +277,220 @@ fn field_and_receiver_parallelism_keep_identical_power_bytes() {
         }
     }
 }
+
+/// The cruise CUDA unit against the canonical CPU kernel: every heading bin,
+/// reach and floor boundaries, dateline wrap, and the reduction part/batch seams.
+#[cfg(feature = "gpu")]
+mod gpu_parity {
+    use super::*;
+    use noise_compute::propagation::iso9613::fast_exp_f64;
+
+    fn reference_energy(bucket: &Bucket, lat: f64, lon: f64, altitude: f64) -> f64 {
+        let north = (bucket.lat - lat) * aircraft::M_PER_DEG_LAT;
+        let east =
+            grid::geo::wrapped_longitude_delta(lon, bucket.lon)
+                * grid::geo::m_per_deg_lon(lat.to_radians());
+        if north * north + east * east
+            > (aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M + bucket.half_length).powi(2)
+        {
+            return 0.0;
+        }
+        let row = aircraft::prepare_row(
+            &bucket.prepared,
+            lat,
+            aircraft::M_PER_DEG_LAT * lat.to_radians().cos().max(0.2),
+        );
+        aircraft::segment_sel_at_pixel_energy(
+            &bucket.prepared,
+            &row,
+            lon,
+            altitude,
+            aircraft::NpdLuts::shared(),
+            None,
+        )
+        .map_or(0.0, |sel| {
+            fast_exp_f64(sel * std::f64::consts::LN_10 * 0.1) * bucket.density
+        })
+    }
+
+    fn db_error(observed: f64, wanted: f64) -> f64 {
+        if observed == wanted {
+            0.0
+        } else {
+            (10.0 * (observed / wanted).log10()).abs()
+        }
+    }
+
+    fn view(
+        lat: f64,
+        lon: f64,
+        altitude: f32,
+        length: f32,
+        heading_bin: u8,
+        period: u8,
+    ) -> CruiseRowView<'static> {
+        CruiseRowView {
+            lat,
+            lon: grid::geo::normalize_longitude(lon),
+            class: 0,
+            rep_profile_idx: 0,
+            fl_bin: 0,
+            period,
+            sum_length_m: length,
+            heading_bin,
+            rep_alt_m: altitude,
+            rep_speed_kt: 450.0,
+            source_id: heading_bin + 8 * period,
+            origin: 0,
+            unique_count: 1,
+            top_candidates: &[],
+        }
+    }
+
+    fn buckets_of(views: &[CruiseRowView<'_>], rasters: &dyn RasterSampler) -> Vec<Bucket> {
+        groups(views, rasters)
+            .into_iter()
+            .flat_map(|group| group.buckets)
+            .collect()
+    }
+
+    #[test]
+    fn layouts_match_the_cuda_static_asserts() {
+        assert_eq!(std::mem::size_of::<gpu::DeviceCruiseSource>(), 160);
+        assert_eq!(std::mem::size_of::<gpu::DeviceCruiseReceiver>(), 40);
+    }
+
+    #[test]
+    fn single_buckets_match_the_canonical_kernel_across_regimes() {
+        let terrain = Terrain {
+            ground: 1200.0,
+            latitude: 52.0,
+        };
+        let mut views = Vec::new();
+        for heading in 0..8u8 {
+            for &(altitude, length) in
+                &[(9_500.0f32, 800.0f32), (11_000.0, 3_000.0), (600.0, 50.0)]
+            {
+                views.push(view(
+                    52.0 + f64::from(heading) * 0.002 - 0.007,
+                    14.0,
+                    altitude,
+                    length,
+                    heading,
+                    heading % 3,
+                ));
+                views.push(view(
+                    0.0,
+                    179.999,
+                    altitude,
+                    length,
+                    heading,
+                    heading % 3,
+                ));
+            }
+        }
+        let grouped = groups(&views, &terrain);
+        assert_eq!(grouped.len(), 48);
+        let reach_edge = |bucket: &Bucket, metres: f64| {
+            (aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M + bucket.half_length + metres)
+                / aircraft::M_PER_DEG_LAT
+        };
+        let mut max_error = 0.0f64;
+        for (view, group) in views.iter().zip(&grouped) {
+            let bucket = &group.buckets[0];
+            let edge = reach_edge(bucket, 0.0);
+            let points = [
+                [bucket.lat, bucket.lon],
+                [bucket.lat - 0.08, bucket.lon + 0.08],
+                [bucket.lat - edge - 50.0 / aircraft::M_PER_DEG_LAT, bucket.lon],
+                [bucket.lat - edge + 50.0 / aircraft::M_PER_DEG_LAT, bucket.lon],
+                if bucket.lon > 90.0 {
+                    [-0.001, -179.999]
+                } else {
+                    [bucket.lat - 0.02, bucket.lon - 0.11]
+                },
+            ];
+            let altitudes = vec![
+                terrain.elevation(points[0][0], points[0][1]) + DEFAULT_RECEIVER_HEIGHT;
+                points.len()
+            ];
+            let gpu = gpu::evaluate(std::slice::from_ref(&bucket), &points, &altitudes).unwrap();
+            for (i, &[lat, lon]) in points.iter().enumerate() {
+                let wanted = reference_energy(bucket, lat, lon, altitudes[i]);
+                let observed = gpu[i][bucket.period];
+                assert!(
+                    observed == 0.0 || wanted > 0.0,
+                    "CUDA kept a source the CPU kernel rejected at ({lat},{lon})"
+                );
+                if wanted > 0.0 {
+                    let error = db_error(observed, wanted);
+                    assert!(
+                        error < 1e-9,
+                        "heading={} altitude={} receiver=({lat},{lon}) error={error}dB \
+                         gpu={observed:e} cpu={wanted:e}",
+                        view.heading_bin,
+                        view.rep_alt_m
+                    );
+                    max_error = max_error.max(error);
+                }
+            }
+        }
+        eprintln!("cruise_gpu parity buckets=48 max_abs_error_db={max_error:.12}");
+    }
+
+    #[test]
+    fn reduction_spans_two_parts_and_receiver_batches() {
+        let terrain = Terrain {
+            ground: 0.0,
+            latitude: 51.0,
+        };
+        let mut views = Vec::new();
+        for i in 0..8193u16 {
+            views.push(view(
+                51.0 + f64::from(i % 64) * 0.001 - 0.032,
+                14.0 + f64::from(i / 64) * 0.001 - 0.032,
+                10_500.0,
+                50.0 + f32::from(i % 7) * 111.0,
+                (i % 8) as u8,
+                (i % 3) as u8,
+            ));
+        }
+        let buckets = buckets_of(&views, &terrain);
+        assert_eq!(buckets.len(), 8193);
+        let selected: Vec<&Bucket> = buckets.iter().collect();
+        let points: Vec<_> = (0..300)
+            .map(|i| {
+                [
+                    51.0 + f64::from(i % 20) * 0.003 - 0.028,
+                    14.0 + f64::from(i / 20) * 0.014 - 0.028,
+                ]
+            })
+            .collect();
+        let altitudes: Vec<_> = points
+            .iter()
+            .map(|&[lat, lon]| terrain.elevation(lat, lon) + DEFAULT_RECEIVER_HEIGHT)
+            .collect();
+        let gpu = gpu::evaluate(&selected, &points, &altitudes).unwrap();
+        let reference: Vec<_> = points
+            .par_iter()
+            .zip(&altitudes)
+            .map(|(&[lat, lon], &altitude)| {
+                let mut sums = [0.0f64; 3];
+                for bucket in &buckets {
+                    sums[bucket.period] += reference_energy(bucket, lat, lon, altitude);
+                }
+                sums
+            })
+            .collect();
+        let mut max_error = 0.0f64;
+        for (i, wanted) in reference.iter().enumerate() {
+            for period in 0..3 {
+                if wanted[period] > 0.0 {
+                    max_error = max_error.max(db_error(gpu[i][period], wanted[period]));
+                }
+            }
+        }
+        assert!(max_error < 1e-9, "reduction seam error={max_error}dB");
+        eprintln!("cruise_gpu reduction 8193 buckets x 300 receivers max_abs_error_db={max_error:.12}");
+    }
+}

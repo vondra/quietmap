@@ -454,13 +454,13 @@ fn main() {
     for arch in &archs {
         assert_ptx_has_no_f64(&output_directory, arch);
     }
-    let airborne_object = airborne_build::compile(&output_directory, &nvcc_arguments(&archs));
+    let aircraft_objects = airborne_build::compile(&output_directory, &nvcc_arguments(&archs));
     run_checked(
         Command::new("ar")
             .arg("crs")
             .arg(&archive_path)
             .arg(&object_path)
-            .arg(&airborne_object),
+            .args(&aircraft_objects),
         "relevant-source CUDA archive",
     );
 

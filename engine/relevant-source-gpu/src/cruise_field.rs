@@ -9,8 +9,8 @@ use arrow::{ipc::reader::FileReader, record_batch::RecordBatch};
 use grid::{bounds::BoundedSquares, Square};
 use noise_compute::{
     compute::aircraft_v6::cruise::cruise_segment,
-    constants::{m_per_deg_lon, DEFAULT_RECEIVER_HEIGHT, M_PER_DEG_LAT},
-    emission::aircraft::{self, NpdLuts, SegmentPrepared, SegmentTerrain},
+    constants::DEFAULT_RECEIVER_HEIGHT,
+    emission::aircraft::{self, SegmentPrepared, SegmentTerrain},
     types::RasterSampler,
 };
 use raster_reader::RealRasters;
@@ -20,6 +20,9 @@ use std::{collections::BTreeSet, io::Cursor, path::Path};
 
 #[path = "cruise_lattice.rs"]
 mod lattice;
+#[cfg(feature = "gpu")]
+#[path = "cruise_gpu.rs"]
+pub(crate) mod gpu;
 use lattice::Lattice;
 
 #[derive(Clone)]
@@ -32,7 +35,8 @@ struct Bucket {
     period: usize,
 }
 impl Bucket {
-    fn energy(&self, lat: f64, lon: f64, altitude: f64, npd: &NpdLuts) -> f64 {
+    #[cfg(not(feature = "gpu"))]
+    fn energy(&self, lat: f64, lon: f64, altitude: f64, npd: &aircraft::NpdLuts) -> f64 {
         let row = aircraft::prepare_row(
             &self.prepared,
             lat,
@@ -40,17 +44,18 @@ impl Bucket {
         );
         self.energy_at_row(lat, lon, altitude, npd, &row)
     }
+    #[cfg(not(feature = "gpu"))]
     fn energy_at_row(
         &self,
         lat: f64,
         lon: f64,
         altitude: f64,
-        npd: &NpdLuts,
+        npd: &aircraft::NpdLuts,
         row: &aircraft::SegmentRowState,
     ) -> f64 {
-        let north = (self.lat - lat) * M_PER_DEG_LAT;
+        let north = (self.lat - lat) * aircraft::M_PER_DEG_LAT;
         let east =
-            grid::geo::wrapped_longitude_delta(lon, self.lon) * m_per_deg_lon(lat.to_radians());
+            grid::geo::wrapped_longitude_delta(lon, self.lon) * grid::geo::m_per_deg_lon(lat.to_radians());
         if north * north + east * east
             > (aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M + self.half_length).powi(2)
         {
@@ -73,12 +78,15 @@ struct Group {
     buckets: Vec<Bucket>,
 }
 impl Group {
+    #[cfg(not(feature = "gpu"))]
     fn reaches(&self, lat: f64, lon: f64) -> bool {
         let middle = (self.bounds[1] + self.bounds[3]) * 0.5;
         let lon = middle + grid::geo::wrapped_longitude_delta(middle, lon);
-        let north = (lat - lat.clamp(self.bounds[0], self.bounds[2])) * M_PER_DEG_LAT;
+        let north =
+            (lat - lat.clamp(self.bounds[0], self.bounds[2])) * aircraft::M_PER_DEG_LAT;
         let east =
-            (lon - lon.clamp(self.bounds[1], self.bounds[3])) * m_per_deg_lon(lat.to_radians());
+            (lon - lon.clamp(self.bounds[1], self.bounds[3]))
+                * grid::geo::m_per_deg_lon(lat.to_radians());
         north * north + east * east
             <= (aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M + self.half_length).powi(2)
     }
@@ -233,38 +241,53 @@ impl CruiseField {
             field.altitudes.iter().all(|v| v.is_finite()),
             "cruise receiver terrain is unavailable"
         );
-        let npd = NpdLuts::shared();
-        field
-            .energies
-            .par_chunks_mut(field.lattice.width)
-            .enumerate()
-            .for_each(|(y, values)| {
-                let [lat, _] = field.lattice.point(0, y);
-                let m_lon = aircraft::M_PER_DEG_LAT * lat.to_radians().cos().max(0.2);
-                for group in &field.groups {
-                    let columns: Vec<_> = (0..field.lattice.width)
-                        .filter_map(|x| {
-                            let [_, lon] = field.lattice.point(x, y);
-                            group.reaches(lat, lon).then_some((x, lon))
-                        })
-                        .collect();
-                    if columns.is_empty() {
-                        continue;
-                    }
-                    for bucket in &group.buckets {
-                        let row = aircraft::prepare_row(&bucket.prepared, lat, m_lon);
-                        for &(x, lon) in &columns {
-                            values[x][bucket.period] += bucket.energy_at_row(
-                                lat,
-                                lon,
-                                field.altitudes[y * field.lattice.width + x],
-                                npd,
-                                &row,
-                            );
+        #[cfg(feature = "gpu")]
+        {
+            let buckets: Vec<_> = field.groups.iter().flat_map(|g| &g.buckets).collect();
+            let nodes: Vec<_> = (0..count)
+                .map(|i| {
+                    field
+                        .lattice
+                        .point(i % field.lattice.width, i / field.lattice.width)
+                })
+                .collect();
+            field.energies = gpu::evaluate(&buckets, &nodes, &field.altitudes)?;
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            let npd = aircraft::NpdLuts::shared();
+            field
+                .energies
+                .par_chunks_mut(field.lattice.width)
+                .enumerate()
+                .for_each(|(y, values)| {
+                    let [lat, _] = field.lattice.point(0, y);
+                    let m_lon = aircraft::M_PER_DEG_LAT * lat.to_radians().cos().max(0.2);
+                    for group in &field.groups {
+                        let columns: Vec<_> = (0..field.lattice.width)
+                            .filter_map(|x| {
+                                let [_, lon] = field.lattice.point(x, y);
+                                group.reaches(lat, lon).then_some((x, lon))
+                            })
+                            .collect();
+                        if columns.is_empty() {
+                            continue;
+                        }
+                        for bucket in &group.buckets {
+                            let row = aircraft::prepare_row(&bucket.prepared, lat, m_lon);
+                            for &(x, lon) in &columns {
+                                values[x][bucket.period] += bucket.energy_at_row(
+                                    lat,
+                                    lon,
+                                    field.altitudes[y * field.lattice.width + x],
+                                    npd,
+                                    &row,
+                                );
+                            }
                         }
                     }
-                }
-            });
+                });
+        }
         Ok(field)
     }
     pub fn period_powers(
@@ -318,7 +341,6 @@ impl CruiseField {
             })
             .collect();
         let mut nodes = self.energies.clone();
-        let npd = NpdLuts::shared();
         if !near.is_empty() {
             let mut required = BTreeSet::new();
             for &(x, y, _, _) in &brackets {
@@ -331,28 +353,34 @@ impl CruiseField {
                     required.insert(i);
                 }
             }
-            for i in required {
-                let [lat, lon] = self
-                    .lattice
-                    .point(i % self.lattice.width, i / self.lattice.width);
-                for bucket in &near {
-                    nodes[i][bucket.period] -= bucket.energy(lat, lon, self.altitudes[i], npd);
+            let node_points: Vec<_> = required
+                .iter()
+                .map(|&i| {
+                    self.lattice
+                        .point(i % self.lattice.width, i / self.lattice.width)
+                })
+                .collect();
+            let node_altitudes: Vec<_> = required.iter().map(|&i| self.altitudes[i]).collect();
+            let subtracted = self.near_energies(&near, &node_points, &node_altitudes)?;
+            for (i, energy) in required.iter().zip(&subtracted) {
+                for period in 0..3 {
+                    nodes[*i][period] -= energy[period];
                 }
-                for power in &mut nodes[i] {
+                for power in &mut nodes[*i] {
                     *power = power.max(0.0);
                 }
             }
         }
+        let receiver_altitudes: Vec<_> = altitudes.iter().map(|&a| f64::from(a)).collect();
+        let added = self.near_energies(&near, points, &receiver_altitudes)?;
         let mut out = vec![0.0; count * 3];
         out.par_chunks_mut(3).enumerate().for_each(|(i, power)| {
             let mut energy = self.lattice.blend(&nodes, brackets[i]);
-            let [lat, lon] = points[i];
-            for bucket in &near {
-                energy[bucket.period] += bucket.energy(lat, lon, f64::from(altitudes[i]), npd);
-            }
-            for p in 0..3 {
-                power[p] =
-                    (energy[p] / (f64::from(self.days) * aircraft::PERIOD_SECONDS[p])) as f32;
+            for period in 0..3 {
+                energy[period] += added[i][period];
+                power[period] = (energy[period]
+                    / (f64::from(self.days) * aircraft::PERIOD_SECONDS[period]))
+                    as f32;
             }
         });
         ensure!(
@@ -360,6 +388,37 @@ impl CruiseField {
             "invalid cruise mean power"
         );
         Ok(out)
+    }
+    /// Near-field bucket energies per receiver, either from the cruise CUDA unit
+    /// or, without the GPU feature, from the canonical CPU kernel.
+    fn near_energies(
+        &self,
+        near: &[&Bucket],
+        points: &[[f64; 2]],
+        altitudes: &[f64],
+    ) -> Result<Vec<[f64; 3]>> {
+        if near.is_empty() {
+            return Ok(vec![[0.0; 3]; points.len()]);
+        }
+        #[cfg(feature = "gpu")]
+        {
+            gpu::evaluate(near, points, altitudes)
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            let npd = aircraft::NpdLuts::shared();
+            Ok(points
+                .par_iter()
+                .zip(altitudes)
+                .map(|(&[lat, lon], &altitude)| {
+                    let mut energy = [0.0f64; 3];
+                    for bucket in near {
+                        energy[bucket.period] += bucket.energy(lat, lon, altitude, npd);
+                    }
+                    energy
+                })
+                .collect())
+        }
     }
 }
 

@@ -94,26 +94,35 @@ pub fn header() -> String {
     out
 }
 
-pub fn compile(output: &Path, arguments: &[String]) -> std::path::PathBuf {
+pub fn compile(output: &Path, arguments: &[String]) -> Vec<std::path::PathBuf> {
     for file in [
         "airborne.cu",
+        "cruise.cu",
         "airborne_energy.cuh",
         "airborne_screening.cuh",
     ] {
         println!("cargo:rerun-if-changed=kernels/{file}");
     }
     fs::write(output.join("airborne_defines.cuh"), header()).expect("write airborne constants");
-    let object = output.join("airborne.o");
-    super::run_checked(
-        std::process::Command::new("nvcc")
-            .args(arguments)
-            // Discrete horizon sectors require the CPU's non-contracted f64 CPA operations.
-            .arg("--fmad=false")
-            .arg("-I")
-            .arg(output)
-            .args(["-c", "kernels/airborne.cu", "-o"])
-            .arg(&object),
-        "nvcc airborne compilation",
-    );
-    object
+    let mut objects = Vec::new();
+    for unit in ["airborne", "cruise"] {
+        let object = output.join(format!("{unit}.o"));
+        let source = format!("kernels/{unit}.cu");
+        super::run_checked(
+            std::process::Command::new("nvcc")
+                .args(arguments)
+                // The f64 cruise path and the discrete horizon sectors require the
+                // CPU's non-contracted operations.
+                .arg("--fmad=false")
+                .arg("-I")
+                .arg(output)
+                .arg("-c")
+                .arg(&source)
+                .arg("-o")
+                .arg(&object),
+            &format!("nvcc {unit} compilation"),
+        );
+        objects.push(object);
+    }
+    objects
 }

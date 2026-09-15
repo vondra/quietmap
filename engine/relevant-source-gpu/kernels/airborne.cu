@@ -79,10 +79,10 @@ __global__ void airborne_independent_parts(
         float sel;
         float screen_geometry[7];
         airborne_screen_geometry(source, rx, screen_geometry);
-        if (airborne_sel(ax, ay, dx, source.physical, source.identity[1], source.identity[2],
+        if (aircraft_sel<float, true>(ax, ay, dx, source.physical, source.identity[1], source.identity[2],
                          source.identity[0], rx.altitude, npd, npd + NPD_NC * (NPD_NB + 1),
                          receiver, screen, screen_geometry, &sel)) {
-            energy[source.identity[3]] += fexpf_nc(sel * (float)LN10 * 0.1f) * weights[source.identity[1]];
+            energy[source.identity[3]] += aircraft_fast_exp(sel * (float)LN10 * 0.1f) * weights[source.identity[1]];
         }
     }
     for (int period = 0; period < 3; period++) sums[period][threadIdx.x] = energy[period];

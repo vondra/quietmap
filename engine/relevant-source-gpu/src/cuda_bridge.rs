@@ -82,8 +82,11 @@ mod device_value {
     impl Sealed for u16 {}
     impl Sealed for crate::airborne_pack::DeviceAirborneSource {}
     impl Sealed for crate::airborne_pack::DeviceAirborneReceiver {}
+    impl Sealed for crate::cruise_field::gpu::DeviceCruiseSource {}
+    impl Sealed for crate::cruise_field::gpu::DeviceCruiseReceiver {}
     impl Sealed for u32 {}
     impl Sealed for f32 {}
+    impl Sealed for f64 {}
     impl Sealed for raster_reader::FusedPixel {}
     impl Sealed for crate::source_frame::DeviceLineSource {}
     impl Sealed for crate::obstacle_transfer::DeviceObstacleGrid {}

@@ -619,16 +619,22 @@ impl NpdLuts {
         fast_npd_lookup(lut, log_d)
     }
 
-    /// SEL LUTs flattened for GPU upload (f32): all `NUM_CLASSES` approach LUTs
+    /// SEL LUTs flattened for GPU upload, `f64` first: the cruise CUDA path
+    /// evaluates Doc 29 in double precision. All `NUM_CLASSES` approach LUTs
     /// then all departure LUTs, each `NPD_LUT_BINS + 1` entries. The device
     /// kernel indexes it identically to `lookup`:
     /// `flat[(is_dep as usize * NUM_CLASSES + class) * (NPD_LUT_BINS + 1) + bin]`.
-    pub fn sel_luts_flat_f32(&self) -> Vec<f32> {
+    pub fn sel_luts_flat_f64(&self) -> Vec<f64> {
         let mut v = Vec::with_capacity(2 * NUM_CLASSES * (NPD_LUT_BINS + 1));
         for lut in self.approach.iter().chain(self.departure.iter()) {
-            v.extend(lut.iter().map(|&x| x as f32));
+            v.extend(lut.iter().copied());
         }
         v
+    }
+
+    /// The same canonical layout narrowed for the float32 airborne kernel.
+    pub fn sel_luts_flat_f32(&self) -> Vec<f32> {
+        self.sel_luts_flat_f64().into_iter().map(|x| x as f32).collect()
     }
 
     /// Per-event peak A-weighted SPL (LAmax) lookup — replaces the prior
