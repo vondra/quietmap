@@ -120,8 +120,6 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
                                   if key not in ('threads', 'memory_gib', 'osm_node_cache', 'osm_spill_dir')}}
     if data_configuration(json.loads(state['config'])) != data_configuration(config):
         raise ValueError('cannot resume another configuration; prior output retained')
-    if state['status'] == 'complete':
-        raise ValueError('cannot resume a complete build; prior output retained')
     live = [step.name for step in steps if subprocess.run(
         ['systemctl', '--user', '--quiet', 'is-active', scope_unit(step)], check=False).returncode == 0]
     if live:
@@ -174,8 +172,10 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
                 if not isinstance(boundary, str) or not boundary.strip():
                     raise ValueError(f'{key} must be a nonempty chain step name')
                 previous = latest.get(name, {})
+                reviewed_rebuild = state['status'] == 'complete' and review is not None
                 if boundary != persisted and (not previous.get('command')
-                        or 'environment' not in previous or previous.get('exit') == 0
+                        or 'environment' not in previous
+                        or (previous.get('exit') == 0 and not reviewed_rebuild)
                         or previous.get('input_pin_sha256') != previous_digest):
                     raise ValueError(f'{name} step resume requires an unsuccessful {name} attempt at the previous pin')
                 steps = [replace(step, argv=step.argv + ('--from', boundary))
@@ -211,6 +211,8 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
         print(json.dumps(report), flush=True)
         if dry_run:
             return completed
+        if state['status'] == 'complete' and (review is None or not invalidated):
+            raise ValueError('complete build requires an exact resume review that rebuilds completed producer outputs')
         for name, boundary in (('aircraft', aircraft_stage), *chain_starts.items()):
             if boundary:
                 step = next(step for step in steps if step.name == name)

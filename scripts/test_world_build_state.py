@@ -71,9 +71,10 @@ class WorldBuildStateTests(unittest.TestCase):
 
     def test_source_change_refuses_every_retry_without_replacing_the_evidence(self):
         before = (self.output / state.PIN_NAME).read_bytes()
-        original_state = (self.output / state.STATE_NAME).read_bytes()
         self.source.write_text('changed source')
-        for _ in range(2):
+        for status in ('failed', 'complete'):
+            state.write_state(self.output, self.config, status)
+            original_state = (self.output / state.STATE_NAME).read_bytes()
             with self.assertRaisesRegex(ValueError, 'frozen sources changed'):
                 self.resume()
             self.assertEqual((self.output / state.PIN_NAME).read_bytes(), before)
@@ -109,6 +110,44 @@ class WorldBuildStateTests(unittest.TestCase):
         state.write_state(self.output, self.config, 'complete')
         with self.assertRaisesRegex(ValueError, 'complete build'):
             self.resume()
+
+    def test_complete_build_requires_reviewed_rebuild_and_preserves_unaffected_outputs(self):
+        railways = self.step('railways', ('osm',))
+        self.steps.extend([railways, self.step('railways-finalize', ('railways',)),
+                           self.step('structures-finalize', ('osm',))])
+        self.receipts([*self.steps[:2], self.step('railways', ('osm',),
+                       argv=railways.argv + ('--from', 'railways-at')), *self.steps[3:]])
+        state.write_state(self.output, self.config, 'complete', railways_from_step='railways-at')
+        before = {name: (self.output / name).read_bytes()
+                  for name in (state.STATE_NAME, state.STEPS_NAME, state.PIN_NAME)}
+        self.assertEqual(self.resume(dry_run=True), {'osm', 'roads', 'railways', 'railways-finalize'})
+        with self.assertRaisesRegex(ValueError, 'complete build requires'):
+            self.resume()
+        with self.assertRaisesRegex(ValueError, 'complete build requires'):
+            self.resume(review=self.review(['osm', 'roads', 'railways', 'railways-finalize']))
+        self.code.write_text('fixed rail routing; other producer output contracts unchanged')
+        review = dict(self.review(['osm', 'roads']), railways_from_step='railways-cz')
+        with self.assertRaisesRegex(ValueError, 'exact previous/current pins'):
+            self.resume(review=dict(review, current_pin_sha256='stale review'))
+        with self.assertRaisesRegex(ValueError, 'cannot adopt'):
+            self.resume(review=dict(review, reuse=['osm', 'roads', 'railways']))
+        with self.assertRaisesRegex(ValueError, 'retained upstream'):
+            self.resume(review=dict(review, reuse=[]))
+        self.assertEqual(self.resume(review=review, dry_run=True), {'osm', 'roads'})
+        for name, content in before.items():
+            self.assertEqual((self.output / name).read_bytes(), content)
+        self.assertEqual(self.steps[2].argv, railways.argv)
+        self.assertEqual(self.resume(review=review), {'osm', 'roads'})
+        current = json.loads((self.output / state.STATE_NAME).read_text())
+        self.assertEqual((current['status'], current['railways_from_step']), ('running', 'railways-cz'))
+        self.assertEqual(current['resumes'][-1]['invalidated'], ['railways', 'railways-finalize'])
+        self.assertEqual(self.steps[2].argv, railways.argv + ('--from', 'railways-cz'))
+        receipts = state.latest_receipts(self.output / state.STEPS_NAME)
+        for name in ('osm', 'roads'):
+            self.assertEqual(receipts[name]['exit'], 0)
+            self.assertEqual(receipts[name]['review'], review)
+        for name in ('railways', 'railways-finalize'):
+            self.assertIsNone(receipts[name]['exit'])
 
     def test_runtime_upgrade_needs_exact_review_and_invalidates_completed_steps(self):
         runtime = self.root / 'node'
