@@ -23,6 +23,7 @@ use arrow::record_batch::RecordBatch;
 use grid::Square;
 use memmap2::Mmap;
 use std::fs::File;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::{Arc, OnceLock};
@@ -47,7 +48,7 @@ const ARROW_MAGIC: &[u8; 6] = b"ARROW1";
 const FILE_HEADER_LEN: usize = 8;
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
-fn block_buffer(buffer: &Buffer, block: &Block, body_end: usize) -> Result<Buffer, ArrowError> {
+fn block_range(block: &Block, body_end: usize) -> Result<Range<usize>, ArrowError> {
     let offset = usize::try_from(block.offset())
         .map_err(|_| invalid_ipc(format!("negative IPC block offset {}", block.offset())))?;
     let metadata_len = usize::try_from(block.metaDataLength()).map_err(|_| {
@@ -74,7 +75,13 @@ fn block_buffer(buffer: &Buffer, block: &Block, body_end: usize) -> Result<Buffe
             "IPC block metadata length {metadata_len} is shorter than its prefix"
         )));
     }
-    let metadata = &buffer[offset..offset + metadata_len];
+    Ok(offset..end)
+}
+
+fn block_buffer(buffer: &Buffer, block: &Block, body_end: usize) -> Result<Buffer, ArrowError> {
+    let range = block_range(block, body_end)?;
+    let metadata_len = block.metaDataLength() as usize;
+    let metadata = &buffer[range.start..range.start + metadata_len];
     let (prefix_len, declared_len_bytes): (usize, &[u8]) = if metadata[..4] == CONTINUATION_MARKER {
         if metadata_len < 8 {
             return Err(invalid_ipc(
@@ -101,7 +108,7 @@ fn block_buffer(buffer: &Buffer, block: &Block, body_end: usize) -> Result<Buffe
             "IPC message prefix declares {declared_len} bytes inside {metadata_len}-byte metadata"
         )));
     }
-    Ok(buffer.slice_with_length(offset, block_len))
+    Ok(buffer.slice_with_length(range.start, range.len()))
 }
 
 fn decode_file(
@@ -149,8 +156,10 @@ fn decode_file(
         .iter()
         .copied()
         .collect();
+    // Validate every declared range without faulting in distant batch pages.
+    // Message prefixes are checked when a selected batch is decoded.
     for block in &batches {
-        block_buffer(buffer, block, footer_start)?;
+        block_range(block, footer_start)?;
     }
     Ok((schema, decoder, batches, footer_start))
 }
@@ -620,6 +629,59 @@ mod lazy_arrow_tests {
         assert_eq!(flights.keys().values(), &[1, 0, 1]);
         assert_eq!(callsigns.value(1), "TVS100P");
         assert_eq!(profiles.values(), &[3, 7]);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn an_unselected_corrupt_prefix_is_lazy_but_selected_and_full_reads_fail() {
+        let path = test_path("lazy-prefix");
+        let blocks = [
+            arrow_batching::Block {
+                cell_x: 0,
+                cell_y: 0,
+                bbox: [0.0; 4],
+                alt_m: [0.0; 2],
+            },
+            arrow_batching::Block {
+                cell_x: 1,
+                cell_y: 1,
+                bbox: [50.0, 14.0, 50.0, 14.0],
+                alt_m: [0.0; 2],
+            },
+        ];
+        let batch = RecordBatch::try_from_iter([(
+            "value",
+            Arc::new(Int32Array::from(vec![7])) as ArrayRef,
+        )])
+        .unwrap();
+        let schema = Arc::new(
+            batch.schema().as_ref().clone().with_metadata(
+                [(
+                    arrow_batching::QM_BLOCKS_KEY.into(),
+                    arrow_batching::encode_blocks(&blocks),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+        );
+        let batch = RecordBatch::try_new(schema.clone(), batch.columns().to_vec()).unwrap();
+        let mut bytes = Vec::new();
+        let mut writer = FileWriter::try_new(&mut bytes, &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+        let (_, _, batches, _) = decode_file(&Buffer::from_vec(bytes.clone())).unwrap();
+        let offset = batches[1].offset() as usize;
+        assert_eq!(&bytes[offset..offset + 4], &CONTINUATION_MARKER);
+        bytes[offset + 4..offset + 8].copy_from_slice(&i32::MAX.to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+
+        let lazy = LazyArrow::open(&path).expect("open must not read unselected prefixes");
+        assert_eq!(lazy.batches_within(0.0, 0.0, 1000.0).unwrap().len(), 1);
+        let error = lazy.batches_within(50.0, 14.0, 1000.0).unwrap_err();
+        assert!(error.contains("IPC message prefix declares"), "{error}");
+        assert_eq!(lazy.batches_all().unwrap_err(), error);
         std::fs::remove_file(path).unwrap();
     }
 
