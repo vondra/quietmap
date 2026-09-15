@@ -1,5 +1,6 @@
 """Freeze world-build input identities and attach a complete native raster year."""
 
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 import hashlib
 import json
@@ -13,6 +14,7 @@ from prepared_manifest import file_identity, square_directories
 
 sys.path.insert(0, str(Path(__file__).parent / 'lib'))
 import qmgrid
+from worker_jobs import cpu_jobs, fit_jobs
 
 
 def canonical_input(path):
@@ -174,15 +176,14 @@ def verify_prepared_raster_links(source, prepared):
             raise ValueError(f'prepared raster replaced: {attached}')
 
 
-def audit_world(prepared):
+def audit_world(prepared, jobs=None):
     import pyarrow as pa
     sys.path.insert(0, str(Path(__file__).parent / 'structures'))
     from structure_contract import CONTRACT_KEY, CONTRACT_VERSION
     sys.path.insert(0, str(Path(__file__).parent / 'square-country-city'))
     from build_square_country_city import expected_contract
-    counts = {}
-    squares = 0
-    for square in square_directories(prepared):
+    def audit_square(square):
+        counts = {}
         x, y = int(square.parent.name), int(square.name)
         record = (square / 'square-country-city.bin').read_bytes()
         if len(record) != 13 or struct.unpack('<Q', record[:8])[0] != qmgrid.square_id(x, y):
@@ -216,7 +217,23 @@ def audit_world(prepared):
                 if path.stem in ('structures', 'roads', 'railways') and rows and b'qm_blocks' not in metadata:
                     raise ValueError(f'unfinished {path.stem} blocks: {path}')
                 counts[path.stem] = counts.get(path.stem, 0) + rows
-        squares += 1
+        return counts
+
+    counts, squares = {}, 0
+    # Each worker holds one mapped batch; reserve 1 GiB for decompression and validation.
+    jobs = fit_jobs(cpu_jobs() if jobs is None else jobs, 1 << 30)
+    directories = iter(square_directories(prepared))
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        pending = {pool.submit(audit_square, square) for _, square in zip(range(jobs), directories)}
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                for layer, rows in future.result().items():
+                    counts[layer] = counts.get(layer, 0) + rows
+                squares += 1
+                square = next(directories, None)
+                if square is not None:
+                    pending.add(pool.submit(audit_square, square))
     if squares != qmgrid.Z9_AXIS ** 2:
         raise ValueError(f'incomplete world: {squares} structure squares')
     for layer in ('roads', 'railways', 'structures', 'industrial', 'airborne', 'cruise', 'airport_traffic'):

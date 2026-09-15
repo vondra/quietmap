@@ -317,7 +317,7 @@ def main():
                     raise RuntimeError(f'{step.name} failed; inspect {output / (step.name + ".log")}; all work retained')
             run_plan(steps, execute, completed)
             require_structures_final(steps, environment)
-            counts = audit_world(year)
+            counts = audit_world(year, settings['threads'])
             verify_prepared_raster_links(sources['rasters'], year)
             verify_inputs(pin_path, current_roots())
             write_state(output, config, 'complete', rows=counts)

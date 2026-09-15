@@ -112,7 +112,9 @@ class WorldBuildInputsTest(unittest.TestCase):
             table = table.replace_schema_metadata({CONTRACT_KEY: CONTRACT_VERSION, 'qm_blocks': 'AQ=='})
             with pa.ipc.new_file(path, table.schema) as writer:
                 writer.write_table(table)
-            self.assertEqual(len(inputs.audit_world(root)), 7)
+            serial = inputs.audit_world(root, jobs=1)
+            self.assertEqual(len(serial), 7)
+            self.assertEqual(inputs.audit_world(root, jobs=3), serial)
             structure = root / 'z9/1/1/structures.arrow'
             structure.unlink()
             with self.assertRaisesRegex(ValueError, 'unfinished structures'):
