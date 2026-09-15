@@ -58,6 +58,17 @@ class WorldBuildStateTests(unittest.TestCase):
                 state.subprocess, 'run', return_value=SimpleNamespace(returncode=3)):
             return state.resume_steps(self.output, self.config, self.steps, self.roots, [self.source], **options)
 
+    def test_state_updates_remove_obsolete_note_and_preserve_rows(self):
+        path = self.output / state.STATE_NAME
+        counts = {'roads': 42, 'railways': 7}
+        for status in ('running', 'failed', 'complete'):
+            path.write_text(json.dumps({'remaining': 'World incomplete', 'rows': counts}))
+            state.write_state(self.output, self.config, status)
+            updated = json.loads(path.read_text())
+            self.assertEqual(updated['status'], status)
+            self.assertNotIn('remaining', updated)
+            self.assertEqual(updated['rows'], counts)
+
     def test_source_change_refuses_every_retry_without_replacing_the_evidence(self):
         before = (self.output / state.PIN_NAME).read_bytes()
         original_state = (self.output / state.STATE_NAME).read_bytes()

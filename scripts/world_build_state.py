@@ -37,6 +37,7 @@ def write_state(output, config, status, **fields):
     path = output / STATE_NAME
     state = json.loads(path.read_text()) if path.exists() else {}
     state.update(config=json.dumps(config, sort_keys=True), status=status, **fields)
+    state.pop('remaining', None)
     write_atomic(path, json.dumps(state, sort_keys=True) + '\n')
 
 
