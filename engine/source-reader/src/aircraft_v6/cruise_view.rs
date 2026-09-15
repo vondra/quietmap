@@ -1,14 +1,4 @@
-//! Cruise row accumulator (v14). Snapshots `cruise.arrow` columns into
-//! owned per-row buffers; views borrow into them so noise-compute's
-//! `CruiseRowView<'_>` never holds a reference into mmap'd arrow.
-//!
-//! v14 swap: drops the per-fid lists (`cruise_flight_ids` /
-//! `cruise_aircraft_types` / `cruise_callsigns`) and stores the bounded
-//! top-K `top_candidates` struct list + scalar `unique_count` instead.
-//!
-//! The row carries its
-//! explicit `lon`/`lat` centroid (Float64 degrees), which is what
-//! noise-compute's `CruiseRowView` consumes.
+//! Strict cruise rows with owned candidate buffers and borrowed acoustic views.
 
 use arrow::array::*;
 use noise_compute::compute::aircraft_v6::{CruiseRowView, CruiseTopCandidateView};
@@ -34,7 +24,7 @@ struct OwnedCruiseRow {
     fl_bin: u8,
     period: u8,
     sum_length_m: f32,
-    rep_len_m: f32,
+    heading_bin: u8,
     rep_alt_m: f32,
     rep_speed_kt: f32,
     source_id: u8,
@@ -81,11 +71,18 @@ impl CruiseRowAccum {
                 batch_index,
                 "sum_length_m",
             )?;
-            let rep_len = required_column::<Float32Array>(
-                batch.column_by_name("rep_len_m"),
+            let heading = required_column::<UInt8Array>(
+                batch.column_by_name("heading_bin"),
                 batch_index,
-                "rep_len_m",
+                "heading_bin",
             )?;
+            if heading.values().iter().any(|&value| {
+                value >= noise_compute::compute::aircraft_v6::cruise::CRUISE_HEADING_BINS
+            }) {
+                return Err(format!(
+                    "cruise.arrow[batch {batch_index}] heading_bin must be in 0..8"
+                ));
+            }
             let rep_alt = required_column::<Float32Array>(
                 batch.column_by_name("rep_alt_m"),
                 batch_index,
@@ -179,7 +176,7 @@ impl CruiseRowAccum {
                     fl_bin: fl_bin.value(i),
                     period: period.value(i),
                     sum_length_m: sum_len.value(i),
-                    rep_len_m: rep_len.value(i),
+                    heading_bin: heading.value(i),
                     rep_alt_m: rep_alt.value(i),
                     rep_speed_kt: rep_speed.value(i),
                     source_id: source_id.value(i),
@@ -248,7 +245,7 @@ impl<'a> CruiseViewSlices<'a> {
                 fl_bin: r.fl_bin,
                 period: r.period,
                 sum_length_m: r.sum_length_m,
-                rep_len_m: r.rep_len_m,
+                heading_bin: r.heading_bin,
                 rep_alt_m: r.rep_alt_m,
                 rep_speed_kt: r.rep_speed_kt,
                 source_id: r.source_id,

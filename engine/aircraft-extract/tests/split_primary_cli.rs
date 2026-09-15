@@ -150,8 +150,11 @@ fn split_primary_roots_match_single_root_through_shuffle_and_cruise_and_fail_clo
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        !independent_work.exists(),
-        "cruise needs no shuffled scratch or manifests"
+        std::fs::read_dir(&independent_work)
+            .unwrap()
+            .next()
+            .is_none(),
+        "completed cruise retires its scratch without creating shuffle manifests"
     );
     let expected_squares = square_directories(&reference).unwrap();
     assert!(!expected_squares.is_empty());
@@ -282,6 +285,7 @@ fn cruise_spill_and_finish_are_real_separate_cli_phases() {
     let inputs = temp.path().join("segments");
     write_segments(&inputs.join("2025-01-01.arrow"), &segments("2025-01-01", 1)).unwrap();
     let prepared = temp.path().join("result/2026");
+    let work = temp.path().join("work");
     let run = |phase| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_aircraft-extract"));
         command
@@ -312,7 +316,7 @@ fn cruise_spill_and_finish_are_real_separate_cli_phases() {
             .arg("--adsb-cache")
             .arg(temp.path().join("unused-cache"))
             .arg("--work-dir")
-            .arg(temp.path().join("unused-work"));
+            .arg(&work);
         if phase == "spill" {
             command.args(["--cruise-spill-disk-budget-bytes", "1000000000"]);
         }
@@ -325,12 +329,8 @@ fn cruise_spill_and_finish_are_real_separate_cli_phases() {
         String::from_utf8_lossy(&spill.stderr)
     );
     assert!(!prepared.exists());
-    assert!(temp
-        .path()
-        .join("result/spill_cruise/state.sqlite")
-        .exists());
-    let db =
-        rusqlite::Connection::open(temp.path().join("result/spill_cruise/state.sqlite")).unwrap();
+    assert!(work.join("spill_cruise/state.sqlite").exists());
+    let db = rusqlite::Connection::open(work.join("spill_cruise/state.sqlite")).unwrap();
     let budget: u64 = db
         .query_row(
             "SELECT start_free_bytes-minimum_free_bytes FROM disk_reservation",
@@ -342,10 +342,7 @@ fn cruise_spill_and_finish_are_real_separate_cli_phases() {
     drop(db);
     let duplicate = run("spill");
     assert!(!duplicate.status.success());
-    assert!(temp
-        .path()
-        .join("result/spill_cruise/state.sqlite")
-        .exists());
+    assert!(work.join("spill_cruise/state.sqlite").exists());
     let finish = run("finish");
     assert!(
         finish.status.success(),
@@ -354,7 +351,7 @@ fn cruise_spill_and_finish_are_real_separate_cli_phases() {
     );
     assert!(!square_directories(&prepared).unwrap().is_empty());
     assert!(!temp.path().join("result/spill_cruise").exists());
-    assert!(!temp.path().join("unused-work").exists());
+    assert!(std::fs::read_dir(&work).unwrap().next().is_none());
     for (_, directory) in square_directories(&prepared).unwrap() {
         let (schema, batches) = read_record_batches(&directory.join("cruise.arrow")).unwrap();
         assert!(batches.iter().map(|b| b.num_rows()).sum::<usize>() > 0);

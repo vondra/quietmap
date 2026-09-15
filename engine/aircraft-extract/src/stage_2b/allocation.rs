@@ -29,9 +29,10 @@ pub(super) fn fold_map_allocation(counts: CruiseSpillCounts) -> usize {
 
 pub(super) fn fold_inputs(spill_dir: &Path) -> Result<Vec<FoldBucket>> {
     let overhead = crate::arrow_io::spill_file_overhead_bound()?;
-    (0..SPILL_HASH_BUCKETS)
+    (0..SPILL_HASH_BUCKETS as usize)
+        .into_par_iter()
         .map(|bucket| {
-            let parts = list_spill_parts(&spill_bucket_dir(spill_dir, bucket))?;
+            let parts = list_spill_parts(&spill_bucket_dir(spill_dir, bucket as u64))?;
             let mut counts = CruiseSpillCounts::default();
             let mut file_bytes = 0;
             let mut allocated_bytes = 0;

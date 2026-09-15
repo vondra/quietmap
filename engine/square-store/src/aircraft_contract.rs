@@ -2,7 +2,7 @@
 
 pub const SCHEMA_VERSION: &str = "v15";
 pub const AIRBORNE_CONTRACT: &str = "airborne_segments_z9_v2";
-pub const CRUISE_CONTRACT: &str = "cruise_owner_z9_v1";
+pub const CRUISE_CONTRACT: &str = "cruise_owner_z9_v2";
 /// v2: per-airport global movement unions live in the file footer under
 /// [`AIRPORT_SUMMARIES_KEY`] instead of a sibling `airport_summary.arrow`.
 pub const AIRPORT_TRAFFIC_CONTRACT: &str = "airport_traffic_z9_v2";

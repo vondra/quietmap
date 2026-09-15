@@ -1,8 +1,4 @@
-//! Stage 2B cruise writer (schema v14).
-//!
-//! Rev 2 of the cruise rewrite: replaces v13's per-fid lists with a
-//! bounded top-K `top_candidates` struct list + scalar `unique_count`
-//! so per-row size stays bounded regardless of `n_days`.
+//! Owner-local cruise buckets with heading-aware query envelopes.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -14,6 +10,7 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
+use noise_compute::compute::aircraft_v6::cruise::CRUISE_HEADING_BINS;
 
 use crate::arrow_schemas;
 use crate::flight::CruiseBucket;
@@ -29,23 +26,23 @@ pub fn write_cruise(path: &Path, rows: &[CruiseBucket], n_days: u16) -> Result<(
 }
 
 /// Envelope of the synthetic line the popup centres on the bucket.
-fn cruise_row_bbox(lat: f64, lon: f64, rep_len_m: f32) -> arrow_batching::RowBbox {
-    let (lat_off, lon_off) = noise_compute::compute::aircraft_v6::cruise::cruise_synth_offsets(
-        lat,
-        f64::from(rep_len_m.max(noise_compute::compute::aircraft_v6::cruise::SLANT_FLOOR_M as f32))
-            * 0.5,
+fn cruise_row_bbox(lat: f64, lon: f64, heading_bin: u8) -> arrow_batching::RowBbox {
+    let (lat_off, lon_off, _) =
+        noise_compute::compute::aircraft_v6::cruise::cruise_geometry(lat, heading_bin);
+    let (south, north) = (
+        (lat - lat_off).min(lat + lat_off),
+        (lat - lat_off).max(lat + lat_off),
     );
-    let (west, east) = if lon - lon_off < -180.0 || lon + lon_off > 180.0 {
+    let (west, east) = (
+        (lon - lon_off).min(lon + lon_off),
+        (lon - lon_off).max(lon + lon_off),
+    );
+    let (west, east) = if west < -180.0 || east > 180.0 {
         (-180.0, 180.0)
     } else {
-        (lon - lon_off, lon + lon_off)
+        (west, east)
     };
-    [
-        (lat - lat_off).max(-90.0),
-        west,
-        (lat + lat_off).min(90.0),
-        east,
-    ]
+    [south.max(-90.0), west, north.min(90.0), east]
 }
 
 type CruiseColumns = (
@@ -65,7 +62,7 @@ fn cruise_columns(rows: &[CruiseBucket], n_days: u16) -> Result<CruiseColumns> {
     let mut fl_bin = UInt8Builder::with_capacity(n);
     let mut period = UInt8Builder::with_capacity(n);
     let mut sum_len = Float32Builder::with_capacity(n);
-    let mut rep_len = Float32Builder::with_capacity(n);
+    let mut heading = UInt8Builder::with_capacity(n);
     let mut rep_alt = Float32Builder::with_capacity(n);
     let mut rep_speed = Float32Builder::with_capacity(n);
     let mut unique_count = UInt32Builder::with_capacity(n);
@@ -86,13 +83,12 @@ fn cruise_columns(rows: &[CruiseBucket], n_days: u16) -> Result<CruiseColumns> {
 
     for r in rows {
         anyhow::ensure!(
-            r.rep_len_m.is_finite()
-                && r.rep_len_m <= noise_compute::emission::aircraft::CRUISE_MAX_REP_LEN_M,
-            "cruise rep_len_m {} exceeds the query radius contract",
-            r.rep_len_m
+            r.heading_bin < CRUISE_HEADING_BINS,
+            "invalid cruise heading_bin {}",
+            r.heading_bin
         );
         let center = grid::cruise::cruise_centroid(r.cruise_cell_id);
-        bboxes.push(cruise_row_bbox(center.1, center.0, r.rep_len_m));
+        bboxes.push(cruise_row_bbox(center.1, center.0, r.heading_bin));
         lon.append_value(center.0);
         lat.append_value(center.1);
         class.append_value(r.class);
@@ -100,7 +96,7 @@ fn cruise_columns(rows: &[CruiseBucket], n_days: u16) -> Result<CruiseColumns> {
         fl_bin.append_value(r.fl_bin);
         period.append_value(r.period);
         sum_len.append_value(r.sum_length_m);
-        rep_len.append_value(r.rep_len_m);
+        heading.append_value(r.heading_bin);
         rep_alt.append_value(r.rep_alt_m);
         rep_speed.append_value(r.rep_speed_kt);
         unique_count.append_value(r.unique_count);
@@ -148,7 +144,7 @@ fn cruise_columns(rows: &[CruiseBucket], n_days: u16) -> Result<CruiseColumns> {
         Arc::new(fl_bin.finish()),
         Arc::new(period.finish()),
         Arc::new(sum_len.finish()),
-        Arc::new(rep_len.finish()),
+        Arc::new(heading.finish()),
         Arc::new(rep_alt.finish()),
         Arc::new(rep_speed.finish()),
         Arc::new(unique_count.finish()),
@@ -174,7 +170,7 @@ mod tests {
             fl_bin: 3,
             period: 0,
             sum_length_m: 5000.0,
-            rep_len_m: 1500.0,
+            heading_bin: 2,
             rep_alt_m: 11_000.0,
             rep_speed_kt: 460.0,
             unique_count: 3,
@@ -216,17 +212,14 @@ mod tests {
         assert_eq!(batches[0].num_rows(), 1);
     }
 
-    /// Blocks carry synthetic-line envelopes, an owner spanning several z14
-    /// cells splits into several batches, and a row beyond the query radius
-    /// contract is refused.
     #[test]
-    fn cruise_batches_carry_line_envelopes_and_reject_overlong_rows() {
+    fn cruise_batches_bound_every_heading_and_reject_invalid_bins() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("cruise.arrow");
         let rows: Vec<_> = (0..4_097)
             .map(|i| CruiseBucket {
                 cruise_cell_id: grid::cruise::cruise_cell_id(50.0 + i as f64 * 1e-4, 14.25),
-                rep_len_m: 50_000.0,
+                heading_bin: (i % 8) as u8,
                 ..sample_bucket()
             })
             .collect();
@@ -234,29 +227,34 @@ mod tests {
         let (schema, batches) = read_record_batches(&p).unwrap();
         assert!(batches.len() > 1);
         let blocks = arrow_batching::parse_blocks(
-            schema.metadata().get(arrow_batching::QM_BLOCKS_KEY).unwrap(),
+            schema
+                .metadata()
+                .get(arrow_batching::QM_BLOCKS_KEY)
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(blocks.len(), batches.len());
-        // A 50 km NE–SW line spans 25 km / √2 ≈ 17.7 km ≈ 0.159° on each side.
-        for bb in blocks.iter().map(|b| b.bbox) {
-            assert!(bb[2] - bb[0] >= 0.3 && bb[2] - bb[0] < 1.0, "{bb:?}");
-        }
-        assert_eq!(schema.metadata().get("n_days").map(String::as_str), Some("12"));
         assert_eq!(
-            cruise_row_bbox(0.0, 179.999, 5_000.0),
-            [
-                cruise_row_bbox(0.0, 0.0, 5_000.0)[0],
-                -180.0,
-                cruise_row_bbox(0.0, 0.0, 5_000.0)[2],
-                180.0
-            ]
+            schema.metadata().get("n_days").map(String::as_str),
+            Some("12")
         );
-        let overlong = CruiseBucket {
-            rep_len_m: 50_000.5,
+        for heading in 0..8 {
+            let (dy, dx, _) =
+                noise_compute::compute::aircraft_v6::cruise::cruise_geometry(50.0, heading);
+            let bbox = cruise_row_bbox(50.0, 14.0, heading);
+            for sign in [-1.0, 1.0] {
+                let lat = 50.0 + sign * dy;
+                let lon = 14.0 + sign * dx;
+                assert!(bbox[0] <= lat && lat <= bbox[2] && bbox[1] <= lon && lon <= bbox[3]);
+            }
+        }
+        let seam = cruise_row_bbox(0.0, 179.999, 6);
+        assert_eq!((seam[1], seam[3]), (-180.0, 180.0));
+        let invalid = CruiseBucket {
+            heading_bin: 8,
             ..sample_bucket()
         };
-        assert!(write_cruise(&p, &[overlong], 12).is_err());
+        assert!(write_cruise(&p, &[invalid], 12).is_err());
     }
 
     #[test]

@@ -40,14 +40,28 @@ piece). Splitting
 otherwise changes only the Doc 29 finite-segment terms: per layer and period
 the energy of an unsplit chord is unchanged, a split chord within reach moves
 Lden by at most 0.01 dB, keeps the same top flights and draws the same total
-length. Equal original observations retain their multiplicity. Cruise
-aggregates canonical cells once
-and publishes them only in the owner z9 (`cruise_owner_z9_v1`); the popup loads
-owner squares within `CRUISE_QUERY_RADIUS_M` and prunes batches by their
-synthetic-line envelope. A bucket's representative length is clamped to
-`CRUISE_MAX_REP_LEN_M` (50 km): ADS-B coverage gaps up to 2 589 km stay local,
-their density rises accordingly (about +2 dB along such a gap track), and no
-bucket reaches beyond the query radius. Ground sources retain their spatial owners. Surface owner selection enumerates
+length. Equal original observations retain their multiplicity. Cruise aggregates canonical z15 cells once
+and publishes them only in the owner z9 (`cruise_owner_z9_v2`). Each bucket key
+retains the nearest of eight axial headings (22.5-degree spacing, modulo
+180 degrees); opposite travel directions share an axis, crossing axes do not.
+Non-null UInt8 `heading_bin` is required and must be in 0..7. The shared
+`cruise_geometry` constructs a cell-local line with that bearing and the local
+z15 cell diagonal length, in the same projection as Doc 29. Its weight is
+`sum_length_m / geometry_length_m`, including fractions below one. Both the
+popup and cruise field use `cruise_segment`; no source-chord representative
+length, weighted length accumulator or 50 km clamp remains. Original carried
+length, distinct flight identities and the sampling-day divisor are unchanged.
+Owner queries include 16 km reach plus half the maximum cell diagonal; batch
+bounds contain the complete synthetic line, including wrapped longitude.
+
+This replaces directionless long diagonal smoothing, not the Doc 29 emission
+model. Thirty 200 km trajectory checks across ten headings (including 135 degrees
+and bin boundaries) and heights 7.5, 11 and 15 km require aggregate error below
+0.1 dB against the same unsimplified kernel. This is a bounded regression, not a
+global accuracy guarantee. The cruise field retains its separate 0.5 dB
+interpolation limit against exact prepared-row computation.
+
+Ground sources retain their spatial owners. Surface owner selection enumerates
 the existing midpoint-gate envelope, including wrapped longitude and high
 latitudes.
 Present aircraft schemas must carry a positive sampling-window stamp, including
@@ -124,7 +138,7 @@ at least 180° wide cannot identify its contained short arcs, so it retains the
 latitude gate but defers longitude pruning to individual segments. Owner
 squares are selected in the same metre-per-degree metric that bounds a row's
 length, so a decoded arc the envelope accepts always lies in a loaded square.
-Cruise retains its separate representative-length centroid gate.
+Cruise retains its separate cell-diagonal centroid gate.
 
 Ground-operation line divergence uses half a canonical surface pixel at receiver
 latitude: the z13 tile has 512 pixels. Popup and GPU use the same grid-derived

@@ -32,18 +32,14 @@ pub const AIRCRAFT_NPD_REACH_CAP_M: f64 = 16_000.0;
 /// rejection.
 pub const AIRCRAFT_MAX_HORIZONTAL_REACH_M: f64 = 16_000.0;
 
-/// Longest representative segment a finalized cruise bucket may carry. The
-/// popup centres a synthetic line of this length on the bucket, so the bucket
-/// reaches receivers within `CRUISE_QUERY_RADIUS_M`. World day 2025-10-01:
-/// 24.6 M cruise segments, p99 7.2 km, 0.17 % longer than 50 km (ADS-B
-/// coverage gaps up to 2 589 km). Clamping keeps those gaps local; a clamped
-/// row's `sum_length / rep_len` density rises, so a straight gap track sums to
-/// about 1.6 passes instead of 1 (+2 dB) for those 0.17 % of segments.
-pub const CRUISE_MAX_REP_LEN_M: f32 = 50_000.0;
+/// Maximum z15 cell diagonal in the Doc 29 projection (at the equator).
+pub const CRUISE_CELL_DIAGONAL_EQUATOR_M: f64 = 360.0 / grid::cruise::CRUISE_AXIS as f64
+    * super::doc29::M_PER_DEG_LAT
+    * std::f64::consts::SQRT_2;
 
-/// Horizontal radius within which a finalized cruise bucket can reach a receiver.
+/// A cell-local representative segment can extend half a cell diagonal toward a receiver.
 pub const CRUISE_QUERY_RADIUS_M: f64 =
-    AIRCRAFT_MAX_HORIZONTAL_REACH_M + CRUISE_MAX_REP_LEN_M as f64 / 2.0;
+    AIRCRAFT_MAX_HORIZONTAL_REACH_M + CRUISE_CELL_DIAGONAL_EQUATOR_M / 2.0;
 
 /// Longest airborne sub-segment row a prepared `airborne.arrow` may hold. The
 /// shuffle splits a longer chord (a 120 s coverage gap yields 18 km) into

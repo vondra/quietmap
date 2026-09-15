@@ -28,7 +28,7 @@ fn rows(lat: f64, lon: f64, altitude: f32) -> Vec<CruiseRowView<'static>> {
             fl_bin: 0,
             period: p,
             sum_length_m: if p == 0 { 50.0 } else { 1000.0 },
-            rep_len_m: 1000.0,
+            heading_bin: p * 3,
             rep_alt_m: altitude,
             rep_speed_kt: 450.0,
             source_id: 0,
@@ -46,7 +46,7 @@ fn groups(rows: &[CruiseRowView<'_>], rasters: &dyn RasterSampler) -> Vec<Group>
             let terrain = SegmentTerrain::sample(&segment, rasters);
             Group {
                 bounds: [row.lat, row.lon, row.lat, row.lon],
-                half_length: 500.0,
+                half_length: f64::from(segment.segment_length_m) * 0.5,
                 buckets: vec![Bucket {
                     prepared: aircraft::prepare_segment(
                         &segment,
@@ -55,7 +55,7 @@ fn groups(rows: &[CruiseRowView<'_>], rasters: &dyn RasterSampler) -> Vec<Group>
                     ),
                     lat: row.lat,
                     lon: row.lon,
-                    half_length: 500.0,
+                    half_length: f64::from(segment.segment_length_m) * 0.5,
                     density,
                     period: row.period as usize,
                 }],

@@ -2,6 +2,24 @@
 use super::*;
 use crate::geo::flat_dist;
 
+fn run_stage_2b(
+    day_paths: &[PathBuf],
+    prepared_year_dir: &Path,
+    n_days: u16,
+    scope: Option<&ScopeBbox>,
+    fail_on_ga_cruise: bool,
+) -> Result<usize> {
+    run_stage_2b_phase(
+        day_paths,
+        prepared_year_dir,
+        &prepared_year_dir.parent().unwrap().join("spill_cruise"),
+        n_days,
+        scope,
+        fail_on_ga_cruise,
+        CruisePhase::All,
+    )
+}
+
 pub(super) fn cruise(flight_id: u64, lat0: f32, lon0: f32, lat1: f32, lon1: f32) -> FlightSegment {
     FlightSegment {
         callsign: String::new(),
@@ -120,8 +138,12 @@ fn merge_matches_sequential() {
         let par_inner = par.get(&square).unwrap();
         let mut seq_keys: Vec<CruiseKey> = seq_inner.keys().copied().collect();
         let mut par_keys: Vec<CruiseKey> = par_inner.keys().copied().collect();
-        seq_keys.sort_unstable_by_key(|k| (k.cruise_cell_id, k.class, k.fl_bin, k.period));
-        par_keys.sort_unstable_by_key(|k| (k.cruise_cell_id, k.class, k.fl_bin, k.period));
+        seq_keys.sort_unstable_by_key(|k| {
+            (k.cruise_cell_id, k.class, k.fl_bin, k.period, k.heading_bin)
+        });
+        par_keys.sort_unstable_by_key(|k| {
+            (k.cruise_cell_id, k.class, k.fl_bin, k.period, k.heading_bin)
+        });
         assert_eq!(seq_keys, par_keys);
 
         for k in seq_keys {
@@ -135,7 +157,6 @@ fn merge_matches_sequential() {
             assert!(close(sa.weight, pa.weight), "weight");
             assert!(close(sa.rep_alt_m, pa.rep_alt_m), "rep_alt_m");
             assert!(close(sa.rep_speed_kt, pa.rep_speed_kt), "rep_speed_kt");
-            assert!(close(sa.rep_len_m, pa.rep_len_m), "rep_len_m");
             assert_eq!(sa.fid_set.len(), pa.fid_set.len(), "fid_set size");
             assert_eq!(sa.top.len(), pa.top.len(), "top size");
         }
@@ -341,7 +362,7 @@ fn merge_by_square(
 }
 
 /// Each finalized bucket is published once, in its owner z9, sorted by key,
-/// with clamped rep_len, across long, polar and seam segments; a scope keeps
+/// across long, polar and seam segments; a scope keeps
 /// owners inside its buffered bbox.
 #[test]
 fn fold_publishes_each_canonical_row_once_in_its_owner_square() {
@@ -381,9 +402,6 @@ fn fold_publishes_each_canonical_row_once_in_its_owner_square() {
                 assert_eq!(bucket.unique_count, 2);
                 assert_eq!(bucket.top_candidates.len(), 2);
                 assert_eq!(bucket.top_candidates[0].callsign, "COPY42");
-                assert!(
-                    bucket.rep_len_m <= noise_compute::emission::aircraft::CRUISE_MAX_REP_LEN_M
-                );
                 canonical_length += f64::from(bucket.sum_length_m);
                 expected.entry(owner).or_default().push(bucket);
             }
@@ -404,7 +422,9 @@ fn fold_publishes_each_canonical_row_once_in_its_owner_square() {
             expected.len()
         );
         for (square, mut rows) in expected {
-            rows.sort_unstable_by_key(|r| (r.cruise_cell_id, r.class, r.fl_bin, r.period));
+            rows.sort_unstable_by_key(|r| {
+                (r.cruise_cell_id, r.class, r.fl_bin, r.period, r.heading_bin)
+            });
             let reference = directory.path().join("reference.arrow");
             write_cruise(&reference, &rows, 12).unwrap();
             assert_eq!(
@@ -418,24 +438,37 @@ fn fold_publishes_each_canonical_row_once_in_its_owner_square() {
     }
 }
 
-/// A coverage-gap segment (200 km) is clamped to the query-radius contract.
 #[test]
-fn finalize_clamps_representative_length_to_query_contract() {
-    let seg = cruise(7, 50.0, 14.0, 51.8, 14.0);
-    assert!(seg.length_m > 190_000.0);
+fn axial_buckets_merge_opposite_tracks_and_preserve_crossing_length_through_spill() {
+    let cell = grid::cruise::cruise_cell_id(50.1, 14.2);
+    let (lon, lat) = grid::cruise::cruise_centroid(cell);
+    let (lon, lat) = (lon as f32, lat as f32);
+    let segments = [
+        cruise(1, lat, lon - 0.0001, lat, lon + 0.0001),
+        cruise(2, lat, lon + 0.0001, lat, lon - 0.0001),
+        cruise(3, lat - 0.0001, lon, lat + 0.0001, lon),
+    ];
     let mut by_square = HashMap::new();
-    process_segment(&seg, &mut by_square, NpdLuts::shared());
-    let (key, accum) = by_square
+    for segment in &segments {
+        process_segment(segment, &mut by_square, NpdLuts::shared());
+    }
+    let directory = tempfile::tempdir().unwrap();
+    flush_to_spill(&mut by_square, directory.path(), &AtomicU64::new(0)).unwrap();
+    let parts: Vec<_> = (0..SPILL_HASH_BUCKETS)
+        .flat_map(|bucket| list_spill_parts(&spill_bucket_dir(directory.path(), bucket)).unwrap())
+        .collect();
+    let folded = fold_raw_parts(&parts).unwrap();
+    let mut rows: Vec<_> = folded
         .into_values()
-        .next()
-        .unwrap()
-        .into_iter()
-        .next()
-        .unwrap();
-    assert_eq!(
-        accum.finalize(key).rep_len_m,
-        noise_compute::emission::aircraft::CRUISE_MAX_REP_LEN_M
-    );
+        .flat_map(|map| map.into_iter().map(|(key, accum)| accum.finalize(key)))
+        .collect();
+    rows.sort_unstable_by_key(|row| row.heading_bin);
+    assert_eq!(rows.len(), 2);
+    assert_eq!((rows[0].heading_bin, rows[0].unique_count), (0, 2));
+    assert_eq!((rows[1].heading_bin, rows[1].unique_count), (4, 1));
+    let source_length: f32 = segments.iter().map(|segment| segment.length_m).sum();
+    let stored_length: f32 = rows.iter().map(|row| row.sum_length_m).sum();
+    assert!((stored_length - source_length).abs() < source_length * 1e-6);
 }
 
 #[test]
@@ -445,9 +478,19 @@ fn retained_spill_checks_input_window_inventory_and_refuses_partial_fold_resume(
     crate::arrow_io::write_segments(&input, &[cruise(42, 50.1, 14.2, 50.1, 14.20001)]).unwrap();
     let prepared = directory.path().join("prepared");
     let paths = [input];
-    run_stage_2b_phase(&paths, &prepared, 1, None, false, CruisePhase::Spill).unwrap();
+    let spill = directory.path().join("work/spill_cruise");
+    run_stage_2b_phase(
+        &paths,
+        &prepared,
+        &spill,
+        1,
+        None,
+        false,
+        CruisePhase::Spill,
+    )
+    .unwrap();
+    assert!(!directory.path().join("spill_cruise").exists());
     assert!(!prepared.exists());
-    let spill = directory.path().join("spill_cruise");
     let identities = receipt::input_identities(&paths).unwrap();
     assert!(receipt::verify(&spill, &identities, 2, None, false).is_err());
     let mut changed = identities.clone();
@@ -479,9 +522,100 @@ fn retained_spill_checks_input_window_inventory_and_refuses_partial_fold_resume(
     receipt::verify(&spill, &identities, 1, None, false).unwrap();
     receipt::begin_fold(&spill).unwrap();
     assert!(receipt::begin_fold(&spill).is_err());
-    let error =
-        run_stage_2b_phase(&paths, &prepared, 1, None, false, CruisePhase::Finish).unwrap_err();
+    let error = run_stage_2b_phase(
+        &paths,
+        &prepared,
+        &spill,
+        1,
+        None,
+        false,
+        CruisePhase::Finish,
+    )
+    .unwrap_err();
     assert!(error.to_string().contains("partial-fold resume"));
     assert!(parts[0].exists());
     assert!(!prepared.exists());
+}
+
+#[test]
+fn old_sealed_spill_schema_is_rejected_before_prepared_outputs_are_wiped() {
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::ipc::{reader::FileReader, writer::FileWriter};
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("2025-01-01.arrow");
+    crate::arrow_io::write_segments(&input, &[cruise(42, 50.1, 14.2, 50.1, 14.20001)]).unwrap();
+    let prepared = directory.path().join("prepared");
+    let paths = [input];
+    let spill = directory.path().join("work/spill_cruise");
+    run_stage_2b_phase(
+        &paths,
+        &prepared,
+        &spill,
+        1,
+        None,
+        false,
+        CruisePhase::Spill,
+    )
+    .unwrap();
+    assert!(!directory.path().join("spill_cruise").exists());
+    let part = (0..SPILL_HASH_BUCKETS)
+        .flat_map(|bucket| list_spill_parts(&spill_bucket_dir(&spill, bucket)).unwrap())
+        .next()
+        .unwrap();
+    let schema = FileReader::try_new(std::fs::File::open(&part).unwrap(), None)
+        .unwrap()
+        .schema();
+    let mut fields: Vec<_> = schema
+        .fields()
+        .iter()
+        .map(|field| field.as_ref().clone())
+        .collect();
+    fields[12] = Field::new("rep_len_m", DataType::Float32, false);
+    fields.insert(13, Field::new("rep_len_w", DataType::Float32, false));
+    let old_schema = Schema::new(fields).with_metadata(schema.metadata().clone());
+    FileWriter::try_new(std::fs::File::create(&part).unwrap(), &old_schema)
+        .unwrap()
+        .finish()
+        .unwrap();
+    std::fs::remove_file(spill.join("state.sqlite")).unwrap();
+    receipt::create(
+        &spill,
+        &std::fs::File::open(&spill).unwrap(),
+        &receipt::input_identities(&paths).unwrap(),
+        1,
+        None,
+        0,
+    )
+    .unwrap();
+    let retained = prepared.join("z9/275/173/cruise.arrow");
+    std::fs::create_dir_all(retained.parent().unwrap()).unwrap();
+    std::fs::write(&retained, b"retained prepared output").unwrap();
+    let error = run_stage_2b_phase(
+        &paths,
+        &prepared,
+        &spill,
+        1,
+        None,
+        false,
+        CruisePhase::Finish,
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("incompatible cruise spill schema"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read(retained).unwrap(),
+        b"retained prepared output"
+    );
+    receipt::verify(
+        &spill,
+        &receipt::input_identities(&paths).unwrap(),
+        1,
+        None,
+        false,
+    )
+    .unwrap();
 }

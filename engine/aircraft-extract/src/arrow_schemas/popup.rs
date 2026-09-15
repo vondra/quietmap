@@ -66,7 +66,7 @@ pub fn cruise_schema() -> Arc<Schema> {
         Field::new("fl_bin", DataType::UInt8, false),
         Field::new("period", DataType::UInt8, false),
         Field::new("sum_length_m", DataType::Float32, false),
-        Field::new("rep_len_m", DataType::Float32, false),
+        Field::new("heading_bin", DataType::UInt8, false),
         Field::new("rep_alt_m", DataType::Float32, false),
         Field::new("rep_speed_kt", DataType::Float32, false),
         Field::new("unique_count", DataType::UInt32, false),

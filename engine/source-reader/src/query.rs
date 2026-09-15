@@ -1229,7 +1229,7 @@ mod square_query_tests {
                 fl_bin: 4,
                 period: 0,
                 sum_length_m: 4000.0,
-                rep_len_m: 5000.0,
+                heading_bin: 2,
                 rep_alt_m: 11_000.0,
                 rep_speed_kt: 460.0,
                 unique_count: 1,

@@ -283,8 +283,8 @@ class WorldBuildStateTests(unittest.TestCase):
         self.assertNotIn('FROM_STAGE', dict(self.steps[-1].environment))
         for name, content in before.items():
             self.assertEqual((self.output / name).read_bytes(), content)
-        for stage in ('stage2b', 'audit', '', None, 2):
-            with self.subTest(stage=stage), self.assertRaisesRegex(ValueError, 'must be stage2c'):
+        for stage in ('stage2a', 'audit', '', None, 2):
+            with self.subTest(stage=stage), self.assertRaisesRegex(ValueError, 'must be stage2b or stage2c'):
                 self.resume(review=dict(review, aircraft_from_stage=stage))
         with self.assertRaisesRegex(ValueError, 'retained upstream'):
             self.resume(review=dict(review, reuse=[]))
@@ -307,6 +307,39 @@ class WorldBuildStateTests(unittest.TestCase):
         state.record_steps(self.output, [dict(name='aircraft', exit=0, **state.step_identity(
             self.steps[-1], self.config['build'], pin_digest(self.output / state.PIN_NAME)))])
         self.assertEqual(self.resume(), {'osm', 'roads', 'aircraft'})
+        self.source.write_text('changed source')
+        with self.assertRaisesRegex(ValueError, 'frozen sources changed'):
+            self.resume()
+
+    def test_reviewed_cruise_only_replay_retains_other_aircraft_stages_and_resumes_its_window(self):
+        aircraft = self.step('aircraft', ('osm',), environment=(('WORK_DIR', '/aircraft'),))
+        self.steps.append(aircraft)
+        previous = dict(name='aircraft', exit=0, **state.step_identity(
+            self.step('aircraft', ('osm',), environment=(*aircraft.environment, ('FROM_STAGE', 'stage2c'))),
+            self.config['build'], pin_digest(self.output / state.PIN_NAME)))
+        state.record_steps(self.output, [previous])
+        state.write_state(self.output, self.config, 'failed', aircraft_from_stage='stage2c')
+        self.code.write_text('fixed cruise headings; ground and airborne contracts unchanged')
+        review = dict(self.review(['osm', 'roads']), aircraft_from_stage='stage2b')
+        for row in (dict(previous, exit=1), dict(previous, input_pin_sha256='another pin')):
+            state.record_steps(self.output, [row])
+            with self.assertRaisesRegex(ValueError, 'reviewed successful aircraft receipt'):
+                self.resume(review=review)
+        state.record_steps(self.output, [previous])
+        before = {name: (self.output / name).read_bytes()
+                  for name in (state.STATE_NAME, state.STEPS_NAME, state.PIN_NAME)}
+        with self.assertRaisesRegex(ValueError, 'cannot adopt'):
+            self.resume(review=dict(review, reuse=['osm', 'roads', 'aircraft']))
+        self.assertEqual(self.resume(review=review, dry_run=True), {'osm', 'roads'})
+        for name, content in before.items():
+            self.assertEqual((self.output / name).read_bytes(), content)
+        self.assertEqual(self.resume(review=review), {'osm', 'roads'})
+        self.assertEqual(dict(self.steps[-1].environment),
+                         {'WORK_DIR': '/aircraft', 'FROM_STAGE': 'stage2b', 'UNTIL_STAGE': 'stage2b'})
+        self.assertIsNone(state.latest_receipts(self.output / state.STEPS_NAME)['aircraft']['exit'])
+        self.steps[-1] = aircraft
+        self.assertEqual(self.resume(), {'osm', 'roads'})
+        self.assertEqual(dict(self.steps[-1].environment)['UNTIL_STAGE'], 'stage2b')
         self.source.write_text('changed source')
         with self.assertRaisesRegex(ValueError, 'frozen sources changed'):
             self.resume()

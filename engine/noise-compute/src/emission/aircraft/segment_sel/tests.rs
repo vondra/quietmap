@@ -861,8 +861,6 @@ fn negative_rel_alt_goes_through_full_check() {
 /// beyond the class reach, plus a couple of degenerate short segments.
 #[test]
 fn reach_gate_matches_kernel_rejection() {
-    use crate::compute::aircraft_v6::cruise::cruise_synth_offsets;
-
     let npd = NpdLuts::shared();
     let (rx_lat, rx_lon, rx_elev) = (49.8_f64, 14.4_f64, 300.0_f64);
     let mut checked = 0;
@@ -876,7 +874,9 @@ fn reach_gate_matches_kernel_rejection() {
                 // sides of its threshold.
                 for step in 0..40 {
                     let d_deg = (step * step) as f64 * 0.002;
-                    let (lat_off, lon_off) = cruise_synth_offsets(rx_lat + d_deg, rep_len_m * 0.5);
+                    let axis_m = rep_len_m * 0.5 / std::f64::consts::SQRT_2;
+                    let lat_off = axis_m / M_PER_DEG_LAT;
+                    let lon_off = lat_off / (rx_lat + d_deg).to_radians().cos();
                     let seg = AircraftSegment {
                         flight_id: 1,
                         profile_idx,

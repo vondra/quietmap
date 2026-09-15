@@ -115,7 +115,7 @@ fn cruise_schema_v16_required_columns() {
         "fl_bin",
         "period",
         "sum_length_m",
-        "rep_len_m",
+        "heading_bin",
         "rep_alt_m",
         "rep_speed_kt",
         "unique_count",

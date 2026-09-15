@@ -66,8 +66,7 @@ pub(super) fn spill_row_consume(square: u64, key: CruiseKey, accum: CruiseAccum)
         weight: accum.weight,
         rep_alt_m: accum.rep_alt_m,
         rep_speed_kt: accum.rep_speed_kt,
-        rep_len_m: accum.rep_len_m,
-        rep_len_w: accum.rep_len_w,
+        heading_bin: key.heading_bin,
         fid_set,
         top_candidates,
     }
@@ -93,8 +92,6 @@ pub(super) fn accum_from_spill(row: CruiseSpillRow) -> CruiseAccum {
     }
     CruiseAccum {
         sum_length_m: row.sum_length_m,
-        rep_len_m: row.rep_len_m,
-        rep_len_w: row.rep_len_w,
         rep_alt_m: row.rep_alt_m,
         rep_speed_kt: row.rep_speed_kt,
         weight: row.weight,

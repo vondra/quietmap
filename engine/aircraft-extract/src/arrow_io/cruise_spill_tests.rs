@@ -17,8 +17,7 @@ fn row(square: u64, n_fids: usize) -> CruiseSpillRow {
         weight: 2345.6,
         rep_alt_m: 11_000.0,
         rep_speed_kt: 460.0,
-        rep_len_m: 800.0,
-        rep_len_w: 1234.5,
+        heading_bin: 6,
         fid_set: (0..n_fids as u64).collect(),
         top_candidates: (0..n_fids.min(crate::arrow_schemas::CRUISE_TOP_K))
             .map(|i| CruiseTopCandidate {
@@ -43,6 +42,7 @@ fn write_read_roundtrip() {
     for (a, b) in rows.iter().zip(&back) {
         assert_eq!(a.square, b.square);
         assert_eq!(a.cruise_cell_id, b.cruise_cell_id);
+        assert_eq!(a.heading_bin, b.heading_bin);
         assert_eq!(a.fid_set, b.fid_set);
         assert_eq!(a.top_candidates, b.top_candidates);
         assert!((a.sum_length_m - b.sum_length_m).abs() < 1e-3);

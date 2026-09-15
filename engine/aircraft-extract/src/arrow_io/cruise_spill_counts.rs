@@ -29,13 +29,13 @@ impl CruiseSpillCounts {
 
     pub fn encoded_buffers_bytes(self) -> usize {
         // Arrow IPC writes validity bitmaps even for these non-null arrays:
-        // 16 row arrays, the flight-id child, and six candidate struct/children.
-        54 * self.rows
+        // 15 row arrays, the flight-id child, and six candidate struct/children.
+        47 * self.rows
             + 8 * self.fids
             + 24 * self.candidates
             + self.callsign_bytes
             + 12
-            + 16 * self.rows.div_ceil(8)
+            + 15 * self.rows.div_ceil(8)
             + self.fids.div_ceil(8)
             + 6 * self.candidates.div_ceil(8)
     }
@@ -52,6 +52,7 @@ impl CruiseSpillCounts {
     pub fn read(path: &Path) -> Result<Self> {
         let reader = FileReader::try_new(BufReader::new(File::open(path)?), None)?;
         let schema = reader.schema();
+        super::cruise_spill::validate_spill_schema(schema.as_ref())?;
         let get = |name| -> Result<usize> {
             Ok(schema
                 .metadata()

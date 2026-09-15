@@ -189,16 +189,8 @@ pub struct CruiseTopCandidateView<'a> {
     pub altitude_m: f32,
 }
 
-/// One row of `cruise.arrow` v14. Grid-cell bucket aggregating
-/// `sum_length_m` of cruise track at altitude `rep_alt_m`. v14 replaces
-/// v13's per-fid lists with a bounded top-K `top_candidates` (ranked by
-/// source-side peak Lmax at 25 m) + scalar `unique_count`.
-///
-/// `lon` / `lat` is the bucket's explicit centroid (degrees) — the grid
-/// transfer replaced the old R7 hex id with plain coordinates. Popup
-/// `band_stats` walks `top_candidates` into a per-fid HashMap
-/// for dedup across grid cells. Tail fids outside the top-K cap drop
-/// out of band counters; documented regression.
+/// A z15 cell and axial heading carry summed cruise length plus weighted altitude/speed.
+/// Bounded top candidates preserve display identity; they do not limit acoustic traffic.
 #[derive(Clone, Debug)]
 pub struct CruiseRowView<'a> {
     pub lon: f64,
@@ -208,7 +200,7 @@ pub struct CruiseRowView<'a> {
     pub fl_bin: u8,
     pub period: u8,
     pub sum_length_m: f32,
-    pub rep_len_m: f32,
+    pub heading_bin: u8,
     pub rep_alt_m: f32,
     pub rep_speed_kt: f32,
     pub source_id: u8,

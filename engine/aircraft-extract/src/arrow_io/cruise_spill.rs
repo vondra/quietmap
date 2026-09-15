@@ -1,21 +1,4 @@
-//! Stage 2B disk-spill IPC format (v14).
-//!
-//! Spill rows persist a **raw `CruiseAccum`** (weighted numerators +
-//! per-fid set + per-fid top entries) tagged with its target z9 — the
-//! merge step reconstructs the same `(z9, CruiseKey) → CruiseAccum` map
-//! the in-memory fold/reduce produced. Distinct from `cruise.arrow`,
-//! which only stores finalised `CruiseBucket` (averages + top-K), because
-//! finalisation is one-way: merging averages would corrupt the per-energy
-//! means, and merging two already-finalised top-K lists discards the
-//! per-fid Lmax history needed for re-entrant tracking.
-//!
-//! Rev 2: replaces v13's per-fid (typecode + callsign) metadata list
-//! with two parallel sets — a sorted `fid_set: List<UInt64>` for
-//! unique-count tracking and a per-fid top-entry struct list carrying
-//! Lmax + altitude + identity.
-//!
-//! The sealed spill can resume in another binary; its local reader validates
-//! the raw schema separately from final popup data.
+//! Raw heading-keyed cruise accumulators, preserving weighted numerators and exact flight unions.
 
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Write};
@@ -52,8 +35,7 @@ pub(crate) struct CruiseSpillRow {
     pub weight: f32,
     pub rep_alt_m: f32,
     pub rep_speed_kt: f32,
-    pub rep_len_m: f32,
-    pub rep_len_w: f32,
+    pub heading_bin: u8,
     /// Sorted ascending. `len()` = `unique_count` for the bucket.
     pub fid_set: Vec<u64>,
     /// Per-fid top entries sorted by Lmax descending (tiebreak fid
@@ -88,8 +70,7 @@ fn spill_schema() -> Arc<Schema> {
         Field::new("weight", DataType::Float32, false),
         Field::new("rep_alt_m", DataType::Float32, false),
         Field::new("rep_speed_kt", DataType::Float32, false),
-        Field::new("rep_len_m", DataType::Float32, false),
-        Field::new("rep_len_w", DataType::Float32, false),
+        Field::new("heading_bin", DataType::UInt8, false),
         Field::new(
             "fid_set",
             DataType::List(Arc::new(Field::new("item", DataType::UInt64, false))),
@@ -101,6 +82,14 @@ fn spill_schema() -> Arc<Schema> {
             false,
         ),
     ]))
+}
+
+pub(super) fn validate_spill_schema(schema: &Schema) -> Result<()> {
+    anyhow::ensure!(
+        schema.fields() == spill_schema().fields(),
+        "incompatible cruise spill schema; rebuild spill from primary segments"
+    );
+    Ok(())
 }
 
 pub(crate) fn write_cruise_spill(path: &Path, rows: &[CruiseSpillRow]) -> Result<()> {
@@ -138,8 +127,7 @@ fn write_spill_to<W: Write>(writer: W, rows: &[CruiseSpillRow]) -> Result<(W, us
     let mut weight = Float32Builder::with_capacity(n);
     let mut rep_alt = Float32Builder::with_capacity(n);
     let mut rep_speed = Float32Builder::with_capacity(n);
-    let mut rep_len = Float32Builder::with_capacity(n);
-    let mut rep_len_w = Float32Builder::with_capacity(n);
+    let mut heading = UInt8Builder::with_capacity(n);
 
     let total_fids: usize = rows.iter().map(|r| r.fid_set.len()).sum();
     let mut fid_off: Vec<i32> = Vec::with_capacity(n + 1);
@@ -170,8 +158,7 @@ fn write_spill_to<W: Write>(writer: W, rows: &[CruiseSpillRow]) -> Result<(W, us
         weight.append_value(row.weight);
         rep_alt.append_value(row.rep_alt_m);
         rep_speed.append_value(row.rep_speed_kt);
-        rep_len.append_value(row.rep_len_m);
-        rep_len_w.append_value(row.rep_len_w);
+        heading.append_value(row.heading_bin);
         for &fid in &row.fid_set {
             fid_vals.append_value(fid);
         }
@@ -231,8 +218,7 @@ fn write_spill_to<W: Write>(writer: W, rows: &[CruiseSpillRow]) -> Result<(W, us
             Arc::new(weight.finish()),
             Arc::new(rep_alt.finish()),
             Arc::new(rep_speed.finish()),
-            Arc::new(rep_len.finish()),
-            Arc::new(rep_len_w.finish()),
+            Arc::new(heading.finish()),
             Arc::new(fid_list),
             Arc::new(top_list),
         ],
@@ -269,8 +255,7 @@ pub(crate) fn spill_file_overhead_bound() -> Result<u64> {
         weight: 0.0,
         rep_alt_m: 0.0,
         rep_speed_kt: 0.0,
-        rep_len_m: 0.0,
-        rep_len_w: 0.0,
+        heading_bin: 0,
         fid_set: vec![1],
         top_candidates: vec![CruiseTopCandidate {
             flight_id: 1,
@@ -305,6 +290,7 @@ pub(crate) fn for_each_cruise_spill(
 ) -> Result<()> {
     let f = File::open(path).with_context(|| format!("open spill {}", path.display()))?;
     let r = FileReader::try_new(BufReader::new(f), None)?;
+    validate_spill_schema(r.schema().as_ref())?;
     for batch in r {
         let batch = batch?;
         let square = downcast::<UInt64Array>(&batch, 0)?;
@@ -319,10 +305,9 @@ pub(crate) fn for_each_cruise_spill(
         let weight = downcast::<Float32Array>(&batch, 9)?;
         let rep_alt = downcast::<Float32Array>(&batch, 10)?;
         let rep_speed = downcast::<Float32Array>(&batch, 11)?;
-        let rep_len = downcast::<Float32Array>(&batch, 12)?;
-        let rep_len_w = downcast::<Float32Array>(&batch, 13)?;
-        let fid_list = downcast::<ListArray>(&batch, 14)?;
-        let top_list = downcast::<ListArray>(&batch, 15)?;
+        let heading = downcast::<UInt8Array>(&batch, 12)?;
+        let fid_list = downcast::<ListArray>(&batch, 13)?;
+        let top_list = downcast::<ListArray>(&batch, 14)?;
         let fid_vals = fid_list
             .values()
             .as_any()
@@ -392,8 +377,7 @@ pub(crate) fn for_each_cruise_spill(
                 weight: weight.value(i),
                 rep_alt_m: rep_alt.value(i),
                 rep_speed_kt: rep_speed.value(i),
-                rep_len_m: rep_len.value(i),
-                rep_len_w: rep_len_w.value(i),
+                heading_bin: heading.value(i),
                 fid_set,
                 top_candidates,
             })?;

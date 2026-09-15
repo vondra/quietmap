@@ -9,6 +9,7 @@ pub(super) struct CruiseKey {
     pub(super) class: u8,
     pub(super) fl_bin: u8,
     pub(super) period: u8,
+    pub(super) heading_bin: u8,
 }
 
 /// Per-bucket worker accumulator (v14). `fid_set` tracks the full
@@ -19,8 +20,6 @@ pub(super) struct CruiseKey {
 #[derive(Clone)]
 pub(super) struct CruiseAccum {
     pub(super) sum_length_m: f32,
-    pub(super) rep_len_m: f32, // weighted mean of original segment lengths
-    pub(super) rep_len_w: f32, // weight accumulator
     pub(super) rep_alt_m: f32,
     pub(super) rep_speed_kt: f32,
     pub(super) weight: f32,
@@ -42,8 +41,6 @@ impl Default for CruiseAccum {
     fn default() -> Self {
         Self {
             sum_length_m: 0.0,
-            rep_len_m: 0.0,
-            rep_len_w: 0.0,
             rep_alt_m: 0.0,
             rep_speed_kt: 0.0,
             weight: 0.0,
@@ -71,11 +68,6 @@ impl CruiseAccum {
         self.rep_alt_m += clip_len_m * mid_alt;
         self.rep_speed_kt += clip_len_m * seg.speed_kt;
         self.weight += clip_len_m;
-        // rep_len_m: weighted mean of source-segment length, used as
-        // ΔF input. We weight by clip-length so a segment slicing many
-        // cells contributes its full length to each cell's mean.
-        self.rep_len_m += clip_len_m * seg.length_m;
-        self.rep_len_w += clip_len_m;
         self.fid_set.insert(seg.flight_id);
         self.rep_profile_idx = seg.profile_idx;
         self.source_id = seg.source_id;
@@ -111,8 +103,6 @@ impl CruiseAccum {
         self.rep_alt_m += other.rep_alt_m;
         self.rep_speed_kt += other.rep_speed_kt;
         self.weight += other.weight;
-        self.rep_len_m += other.rep_len_m;
-        self.rep_len_w += other.rep_len_w;
         for fid in other.fid_set {
             self.fid_set.insert(fid);
         }
@@ -188,7 +178,6 @@ impl CruiseAccum {
 
     pub(super) fn finalize(self, key: CruiseKey) -> CruiseBucket {
         let w = self.weight.max(1e-6);
-        let lw = self.rep_len_w.max(1e-6);
         let unique_count = self.fid_set.len() as u32;
         let mut top_candidates: Vec<CruiseTopCandidate> = self.top.into_values().collect();
         // Sort by Lmax descending (tiebreak fid ascending) so on-disk
@@ -211,8 +200,7 @@ impl CruiseAccum {
             fl_bin: key.fl_bin,
             period: key.period,
             sum_length_m: self.sum_length_m,
-            rep_len_m: (self.rep_len_m / lw)
-                .min(noise_compute::emission::aircraft::CRUISE_MAX_REP_LEN_M),
+            heading_bin: key.heading_bin,
             rep_alt_m: self.rep_alt_m / w,
             rep_speed_kt: self.rep_speed_kt / w,
             unique_count,

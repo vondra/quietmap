@@ -12,7 +12,7 @@ use aircraft_extract::{
     stage_2c::run_stage_2c,
     stage_airport_discover_runner::run_stage_airport_discover,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use noise_compute::types::AirportArea;
 use raster_reader::RealRasters;
 use std::path::{Path, PathBuf};
@@ -312,12 +312,11 @@ pub fn run_all(
     }
 
     if runs(FromStage::Stage2b) {
+        let spill_dir = work_dir.join("spill_cruise");
         let _disk_reservation = cruise_spill_disk_budget_bytes
             .map(|bytes| -> Result<_> {
                 Ok(aircraft_extract::arrow_io::SpillDiskReservation::new(
-                    prepared_year_dir
-                        .parent()
-                        .context("missing prepared parent")?,
+                    &work_dir,
                     bytes,
                     ok_paths.len(),
                 )?)
@@ -326,6 +325,7 @@ pub fn run_all(
         run_stage_2b_phase(
             &ok_paths,
             &prepared_year_dir,
+            &spill_dir,
             window_n_days,
             scope.as_ref(),
             fail_on_ga_cruise,

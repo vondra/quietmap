@@ -25,6 +25,7 @@ WORK_DIR="${WORK_DIR:-/tmp/aircraft-extract-work}"
 DAYS="${DAYS:-}"
 SCOPE_BBOX="${SCOPE_BBOX:-}"
 FROM_STAGE="${FROM_STAGE:-}"
+UNTIL_STAGE="${UNTIL_STAGE:-}"
 HYBRID="${HYBRID:-}"
 AIRLINE_FEED="${AIRLINE_FEED:-adsbexchange}"
 AIRLINE_CACHE="${AIRLINE_CACHE:-}"
@@ -70,7 +71,7 @@ while [ $# -gt 0 ]; do
             echo
             echo "Usage: $0 [--feed <adsblol|adsbexchange>] [--from-stage <stage0|...|stage2c>]"
             echo "Env vars: FEED, ADSB_CACHE, PREPARED_YEAR_DIR (year directory containing z9/), PREPARED_DIR, WORK_DIR,"
-            echo "          DAYS, SCOPE_BBOX, FROM_STAGE, LOG_DIR, MEMMAX, MAX_THREADS"
+            echo "          DAYS, SCOPE_BBOX, FROM_STAGE, UNTIL_STAGE, LOG_DIR, MEMMAX, MAX_THREADS"
             echo "Hybrid:   HYBRID=1, AIRLINE_FEED, AIRLINE_CACHE, GA_CACHE, AIRCRAFT_ANCHOR,"
             echo "          FAIL_ON_GA_CRUISE=1"
             exit 0
@@ -80,6 +81,11 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+CRUISE_ONLY=
+if [ "$FROM_STAGE" = stage2b ] && [ "$UNTIL_STAGE" = stage2b ]; then
+    CRUISE_ONLY=1
+fi
 
 [ -n "$PREPARED_YEAR_DIR" ] || die "requires PREPARED_YEAR_DIR= (year directory containing z9/)"
 [ -n "$PREPARED_DIR" ] || die "requires PREPARED_DIR= (root containing rasters/dem, rasters/forest, rasters/imd)"
@@ -203,11 +209,13 @@ if [ -n "$HYBRID" ]; then
             2>&1 | stdbuf -oL -eL tee -a "$LOG_FILE"
     }
 
-    # Every earlier starting phase includes Stage 2B, which still reads primary days.
-    if [ "$FROM_STAGE" != stage2c ]; then
+    # A bounded cruise replay requires existing primary days; native validates them once.
+    if [ "$FROM_STAGE" != stage2c ] && [ -z "$CRUISE_ONLY" ]; then
         run_pass J "$AIRLINE_FEED" "$AIRLINE_CACHE" "$AIRLINE_DAYS" non-ga "$W_AIR"
     fi
-    MERGE_ARGS=(--from-stage "$FROM_STAGE" --ga-adsb-cache "$GA_CACHE" --class-filter non-ga)
+    MERGE_ARGS=(--from-stage "$FROM_STAGE" --class-filter non-ga)
+    [ -z "$UNTIL_STAGE" ] || MERGE_ARGS+=(--until-stage "$UNTIL_STAGE")
+    [ -n "$CRUISE_ONLY" ] || MERGE_ARGS+=(--ga-adsb-cache "$GA_CACHE")
     if [ "$FROM_STAGE" = shuffle ]; then
         run_pass G adsblol "$GA_CACHE" "$GA_DAYS" ga "$W_GA"
         MERGE_ARGS+=(--ga-segments-dir "$W_GA/segments")
@@ -244,6 +252,7 @@ fi
 
 log "running aircraft-extract run-all (DAYS=$DAYS)"
 EXTRA_ARGS=(--feed "$FEED")
+[ -z "$UNTIL_STAGE" ] || EXTRA_ARGS+=(--until-stage "$UNTIL_STAGE")
 if [ -n "$FROM_STAGE" ]; then
     EXTRA_ARGS+=(--from-stage "$FROM_STAGE")
     log "from-stage: $FROM_STAGE (skipping every phase before $FROM_STAGE)"

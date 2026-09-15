@@ -213,7 +213,7 @@ pub struct CruiseBucket {
     pub fl_bin: u8,
     pub period: u8,
     pub sum_length_m: f32,
-    pub rep_len_m: f32,
+    pub heading_bin: u8,
     pub rep_alt_m: f32,
     pub rep_speed_kt: f32,
     /// Distinct real fids that touched this bucket. Display-only.

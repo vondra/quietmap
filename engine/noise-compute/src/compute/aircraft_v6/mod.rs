@@ -377,7 +377,7 @@ mod tests {
                 fl_bin: 3,
                 period: (i % 3) as u8,
                 sum_length_m: 3_000.0 + jitter(i, 41) * 40_000.0,
-                rep_len_m: 40_000.0 + jitter(i, 43) * 90_000.0,
+                heading_bin: (i % 8) as u8,
                 rep_alt_m: 9_000.0 + jitter(i, 47) * 300_000.0,
                 rep_speed_kt: 450.0,
                 source_id: 0,

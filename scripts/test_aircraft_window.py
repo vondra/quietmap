@@ -69,7 +69,7 @@ class AircraftWindowTests(unittest.TestCase):
         cargo.write_text("#!/bin/sh\nexit 0\n")
         cargo.chmod(0o755)
         environment = {key: value for key, value in os.environ.items()
-                       if key not in {"DAYS", "AIRLINE_DAYS", "GA_DAYS", "FROM_STAGE", "SCOPE_BBOX"}}
+                       if key not in {"DAYS", "AIRLINE_DAYS", "GA_DAYS", "FROM_STAGE", "UNTIL_STAGE", "SCOPE_BBOX"}}
         environment.update(HYBRID="1", AIRCRAFT_ANCHOR="2024-03", MEMMAX="",
                            AIRLINE_FEED="adsbexchange", FEED="adsblol",
                            PREPARED_YEAR_DIR=str(root / "prepared"), PREPARED_DIR=str(root / "prepared"),
@@ -124,6 +124,7 @@ class AircraftWindowTests(unittest.TestCase):
                 self.assertEqual([call[0] for call in calls], ["run-all"] * run_count + ["audit"])
                 merge = calls[-2]
                 self.assertEqual(merge[merge.index("--from-stage") + 1], stage)
+                self.assertNotIn("--until-stage", merge)
                 self.assertEqual(merge[merge.index("--ga-adsb-cache") + 1], environment["GA_CACHE"])
                 self.assertEqual("--ga-segments-dir" in merge, stage == "shuffle")
                 if stage != "shuffle":
@@ -131,6 +132,25 @@ class AircraftWindowTests(unittest.TestCase):
                 if stage != "stage2c":
                     self.assertEqual(calls[0][calls[0].index("--until-stage") + 1], "stage1")
                     self.assertEqual(calls[0][calls[0].index("--class-filter") + 1], "non-ga")
+
+    def test_reviewed_cruise_window_runs_only_native_stage2b_and_preserves_hybrid_audit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner, environment = self.runner_fixture(root)
+            environment.update(FROM_STAGE="stage2b", UNTIL_STAGE="stage2b")
+            result = subprocess.run(["bash", str(runner)], env=environment, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
+            self.assertEqual([call[0] for call in calls], ["run-all", "audit"])
+            replay = calls[0]
+            for option in ("--from-stage", "--until-stage"):
+                self.assertEqual(replay[replay.index(option) + 1], "stage2b")
+            for option in ("--ga-adsb-cache", "--ga-segments-dir"):
+                self.assertNotIn(option, replay)
+            self.assertEqual(replay[replay.index("--class-filter") + 1], "non-ga")
+            self.assertEqual(replay[replay.index("--days") + 1].split(","),
+                             [day.isoformat() for day in sampling_days(date(2024, 3, 1))[0]])
+            self.assertEqual(calls[1][-1], str(root / "work/airline/segments_by_square"))
 
     def test_missing_ga_source_stops_before_build_or_either_pass(self):
         with tempfile.TemporaryDirectory() as directory:

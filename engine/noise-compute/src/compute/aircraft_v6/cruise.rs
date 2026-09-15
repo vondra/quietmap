@@ -1,11 +1,4 @@
-//! Direct row-view scatter for cruise grid-cell buckets. The synth-fid keying
-//! into `flights` is deliberate: one transit may cross many buckets, so
-//! per-real-fid energy aggregation would over-count. Real-fid dedup
-//! lives in `cruise_flight_stats` (band counters) and `top_flight_candidates`
-//! (popup table); both walk the row's `top_candidates` slice — v14
-//! replaces v13's per-fid lists with a bounded top-K identity slice
-//! ranked by source-side peak Lmax at 25 m. Tail fids outside the cap
-//! drop out of band counters; documented regression.
+//! Shared cell-local cruise geometry and density-weighted Doc 29 scatter.
 
 use std::collections::HashMap;
 
@@ -27,22 +20,35 @@ use crate::types::{
 /// above the receiver. 5 m matches Doc 29 §A.2 minimum non-zero CPA.
 pub const SLANT_FLOOR_M: f64 = 5.0;
 
-/// Lat/lon endpoint offsets (degrees) for a cruise bucket's synthetic
-/// NE–SW diagonal segment, such that the segment's flat-earth length is
-/// `2 × half_len_m` (= `rep_len_m`).
-///
-/// Each axis takes `half_len_m / √2` because the endpoints move along
-/// BOTH axes at once. Without the divide the segment spanned
-/// `half_len_m` in lat AND lon → geometric length `√2 × rep_len_m`,
-/// while the bucket's `density = sum_length / rep_len` normalizes by
-/// `rep_len` — a `+10·log10(√2)` ≈ +1.5 dB systematic cruise
-/// over-count (2026-06 audit B2). Shared by the popup scatter and
-/// tile-painter's cruise scatter: parity by construction.
-pub fn cruise_synth_offsets(lat: f64, half_len_m: f64) -> (f64, f64) {
-    let axis_m = half_len_m / std::f64::consts::SQRT_2;
+/// Eight axial directions retain crossing tracks without duplicating reverse travel.
+pub const CRUISE_HEADING_BINS: u8 = 8;
+
+/// Nearest undirected track bearing: eight bins over 180 degrees, east = zero.
+pub fn cruise_heading_bin(start_lat: f64, start_lon: f64, end_lat: f64, end_lon: f64) -> u8 {
+    let dx = grid::geo::wrapped_longitude_delta(start_lon, end_lon)
+        * ((start_lat + end_lat) * 0.5).to_radians().cos().max(0.2);
+    let angle = (end_lat - start_lat)
+        .atan2(dx)
+        .rem_euclid(std::f64::consts::PI);
+    ((angle * f64::from(CRUISE_HEADING_BINS) / std::f64::consts::PI).round() as u8)
+        % CRUISE_HEADING_BINS
+}
+
+/// Cell-local segment offsets and length in the same projection used by Doc 29.
+/// Its diagonal length also normalizes traffic density; source chord length does not.
+pub fn cruise_geometry(lat: f64, heading_bin: u8) -> (f64, f64, f64) {
+    assert!(
+        heading_bin < CRUISE_HEADING_BINS,
+        "cruise heading_bin must be in 0..8"
+    );
+    let cos_lat = lat.to_radians().cos();
+    let length_m = aircraft::CRUISE_CELL_DIAGONAL_EQUATOR_M * cos_lat;
+    let angle = f64::from(heading_bin) * std::f64::consts::PI / f64::from(CRUISE_HEADING_BINS);
+    let (sin, cos) = angle.sin_cos();
     (
-        axis_m / crate::constants::M_PER_DEG_LAT,
-        axis_m / crate::constants::m_per_deg_lon(lat.to_radians()),
+        length_m * 0.5 * sin / aircraft::M_PER_DEG_LAT,
+        length_m * 0.5 * cos / (aircraft::M_PER_DEG_LAT * cos_lat.max(0.2)),
+        length_m,
     )
 }
 
@@ -53,22 +59,11 @@ pub fn cruise_segment(row: &CruiseRowView<'_>, index: usize) -> Option<(Aircraft
     if !lat.is_finite() || !lon.is_finite() {
         return None;
     }
-    let rep_len_m = (row.rep_len_m as f64).max(SLANT_FLOOR_M);
-    let half_len_m = rep_len_m * 0.5;
-    // Density = sum_length / rep_len: fractional weight of this
-    // representative segment carried by the bucket. Partial transits
-    // (sum_length < rep_len, e.g. 500 m of a 10 km segment clipped
-    // to one grid cell) keep their 0.05× weight — no `.max(1.0)`
-    // floor, which a /gg review caught as a multi-cell over-count.
-    let density = if row.rep_len_m > 0.0 {
-        (row.sum_length_m / row.rep_len_m) as f64
-    } else {
-        0.0
-    };
-    if density <= 0.0 {
+    let (lat_off, lon_off, length_m) = cruise_geometry(lat, row.heading_bin);
+    let density = f64::from(row.sum_length_m) / length_m;
+    if !density.is_finite() || density <= 0.0 {
         return None;
     }
-    let (lat_off, lon_off) = cruise_synth_offsets(lat, half_len_m);
     let synth_fid = pack_synth(index as u64);
     let seg = AircraftSegment {
         flight_id: synth_fid,
@@ -80,13 +75,13 @@ pub fn cruise_segment(row: &CruiseRowView<'_>, index: usize) -> Option<(Aircraft
         period: row.period,
         date_id: 0,
         start_lat: lat - lat_off,
-        start_lon: lon - lon_off,
+        start_lon: grid::geo::normalize_longitude(lon - lon_off),
         start_alt_m: row.rep_alt_m,
         end_lat: lat + lat_off,
-        end_lon: lon + lon_off,
+        end_lon: grid::geo::normalize_longitude(lon + lon_off),
         end_alt_m: row.rep_alt_m,
         speed_kt: row.rep_speed_kt,
-        segment_length_m: rep_len_m as f32,
+        segment_length_m: length_m as f32,
         count_weight: density as f32,
         surface_model: false,
         ground_context: aircraft::GROUND_CONTEXT_NONE,
@@ -135,10 +130,7 @@ pub fn scatter(
     // bucket centroid via the grid crate.
     let mut cell_accums: HashMap<(i32, i32), CellAccum> = HashMap::new();
 
-    // Centroid prefilter constants. rep_len_m is the source-segment
-    // length (median ~4 km, clamped at CRUISE_MAX_REP_LEN_M), so the
-    // cap dilates the 16 km horizontal reach to CRUISE_QUERY_RADIUS_M
-    // at worst. Detailed math at the call site below.
+    // The cell-local segment extends at most half a cell diagonal from its centre.
     let m_per_lat = crate::constants::M_PER_DEG_LAT;
     let m_per_lon = crate::constants::m_per_deg_lon(receiver.lat.to_radians());
 
@@ -148,21 +140,9 @@ pub fn scatter(
         if !lat.is_finite() || !lon.is_finite() {
             continue;
         }
-        let rep_len_m = (row.rep_len_m as f64).max(SLANT_FLOOR_M);
-        let half_len_m = rep_len_m * 0.5;
+        let half_len_m = aircraft::CRUISE_CELL_DIAGONAL_EQUATOR_M * lat.to_radians().cos() * 0.5;
 
-        // Distance prefilter: both synth segment endpoints lie
-        // `half_len_m` from the bucket centroid along the NE-SW diagonal
-        // (`cruise_synth_offsets`), so the closest segment point is at
-        // least `dist_to_centre - half_len_m` from the receiver. Skip
-        // rows beyond reach + that cap. The kernel's per-row slant test
-        // would reject these too, but this lat/lon test is ~ns vs ~µs
-        // for `segment_sel_with_terrain`.
-        // /gg (Codex) flagged that a naive `lon - receiver.lon` produces
-        // a ~360° false-negative for receivers near ±180° (a Pacific
-        // receiver vs an Asia source on the other side of the
-        // dateline). Wrap the lon delta to [-180, 180] so the test
-        // measures real great-circle longitude separation.
+        // Wrap longitude before the cheap centre-distance gate at the dateline.
         let dlat_m = (lat - receiver.lat) * m_per_lat;
         let mut dlon = lon - receiver.lon;
         if dlon > 180.0 {
@@ -455,118 +435,124 @@ pub fn band_stats(cruise_flight_stats: &HashMap<u64, CruiseFlightStats>) -> [Ban
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::RasterSampler;
 
-    struct FlatGround;
-
-    impl RasterSampler for FlatGround {
-        fn elevation(&self, _lat: f64, _lon: f64) -> f64 {
-            250.0
-        }
-        fn ground_g(&self, _lat: f64, _lon: f64) -> f64 {
-            0.0
-        }
-        fn building_enclosure(&self, _lat: f64, _lon: f64) -> f64 {
-            0.0
-        }
-    }
-
-    /// Synthetic cruise bucket segment exactly as `scatter` builds it,
-    /// with caller-supplied axis offsets so tests can compare the fixed
-    /// construction against the pre-fix one.
-    fn synth_segment(
-        lat: f64,
-        lon: f64,
-        lat_off: f64,
-        lon_off: f64,
-        rep_len_m: f64,
-        rep_alt_m: f32,
-    ) -> AircraftSegment {
-        AircraftSegment {
-            flight_id: pack_synth(0),
-            profile_idx: 0,
-            is_departure: true,
-            on_ground: false,
+    fn row(lat: f64, lon: f64, altitude: f32, heading_bin: u8) -> CruiseRowView<'static> {
+        CruiseRowView {
+            lat,
+            lon,
+            class: 5,
+            rep_profile_idx: 0,
+            fl_bin: 3,
             period: 0,
-            date_id: 0,
-            start_lat: lat - lat_off,
-            start_lon: lon - lon_off,
-            start_alt_m: rep_alt_m,
-            end_lat: lat + lat_off,
-            end_lon: lon + lon_off,
-            end_alt_m: rep_alt_m,
-            speed_kt: 450.0,
-            segment_length_m: rep_len_m as f32,
-            count_weight: 1.0,
-            surface_model: false,
-            ground_context: aircraft::GROUND_CONTEXT_NONE,
-            ground_ops_kind: aircraft::GROUND_OPS_KIND_NONE,
+            sum_length_m: 250.0,
+            heading_bin,
+            rep_alt_m: altitude,
+            rep_speed_kt: 450.0,
             source_id: 0,
+            origin: 0,
+            unique_count: 1,
+            top_candidates: &[],
         }
     }
 
-    /// Audit B2 geometry pin: the synthetic diagonal's flat-earth length
-    /// must equal `rep_len_m`, recomputed per-axis with the same
-    /// `M_PER_DEG_LAT` / `m_per_deg_lon` scaling `segment_sel` applies
-    /// (constants here are the crate ones the offsets are built from;
-    /// the kernel's own Doc 29 constant `doc29::M_PER_DEG_LAT =
-    /// 111_132.92` sees the segment ~0.19 % longer ≈ +0.008 dB, far
-    /// below the audit's +1.5 dB bug this test pins against).
     #[test]
-    fn cruise_synth_segment_length_matches_rep_len() {
-        for &(lat, rep_len_m) in &[(49.8_f64, 50_000.0_f64), (0.0, 80_000.0), (68.0, 30_000.0)] {
-            let half_len_m = rep_len_m * 0.5;
-            let (lat_off, lon_off) = cruise_synth_offsets(lat, half_len_m);
-            let dlat_m = 2.0 * lat_off * crate::constants::M_PER_DEG_LAT;
-            let dlon_m = 2.0 * lon_off * crate::constants::m_per_deg_lon(lat.to_radians());
-            let len_m = (dlat_m * dlat_m + dlon_m * dlon_m).sqrt();
-            let rel_err = (len_m - rep_len_m).abs() / rep_len_m;
-            assert!(
-                rel_err < 0.001,
-                "lat={lat} rep_len={rep_len_m}: synth length {len_m:.2} m, rel err {rel_err:.5}"
-            );
+    fn axial_geometry_preserves_density_length_and_wrapped_direction() {
+        for lat in [0.0_f64, 49.8, 68.0, 85.0] {
+            for heading in 0..8 {
+                let r = row(lat, 179.999, 11000.0, heading);
+                let (segment, density) = cruise_segment(&r, 0).unwrap();
+                let dx = grid::geo::wrapped_longitude_delta(segment.start_lon, segment.end_lon)
+                    * aircraft::M_PER_DEG_LAT
+                    * lat.to_radians().cos().max(0.2);
+                let dy = (segment.end_lat - segment.start_lat) * aircraft::M_PER_DEG_LAT;
+                let length = dx.hypot(dy);
+                assert!((length * density - 250.0).abs() < 1e-7);
+                assert_eq!(
+                    cruise_heading_bin(
+                        segment.start_lat,
+                        segment.start_lon,
+                        segment.end_lat,
+                        segment.end_lon
+                    ),
+                    heading
+                );
+                assert_eq!(
+                    cruise_heading_bin(
+                        segment.end_lat,
+                        segment.end_lon,
+                        segment.start_lat,
+                        segment.start_lon
+                    ),
+                    heading
+                );
+                if lat < 80.0 {
+                    assert!(
+                        density < 1.0,
+                        "fractional traffic is not rounded to one flight"
+                    );
+                }
+            }
         }
     }
 
-    /// Audit B2 energy regression: vs the pre-fix construction (axis
-    /// offsets NOT divided by √2) the segment SEL must drop by
-    /// 10·log10(√2) = 1.505 dB.
-    ///
-    /// Regime: ΔF (Doc 29 Eq. 4-20) scales energy ∝ geometric length
-    /// only while `seg_len ≪ d_bar` (B738 anchor d̄ = 370 m); at real
-    /// ~50 km cruise rep-lengths the per-bucket energy fraction
-    /// saturates (f → 1) and the √2 over-length instead widens the
-    /// window of grid-cell buckets whose synthetic segment covers a receiver —
-    /// the same √2 factor, paid in the bucket-overlap aggregate. The
-    /// single-`segment_sel` pin therefore uses `rep_len = 0.2·d̄` where
-    /// the length→energy proportionality is direct.
     #[test]
-    fn cruise_sqrt2_fix_energy_regression() {
-        let (lat, lon) = (49.8_f64, 14.4_f64);
-        let class_idx = aircraft::noise_class_of(0) as usize;
-        let anchor = &aircraft::PROFILES[aircraft::CLASS_REP_PROFILE_IDX[class_idx] as usize];
-        let rep_len_m = 0.2 * anchor.d_bar_m;
-        let half_len_m = rep_len_m * 0.5;
-        let rep_alt_m = 10_000.0_f32;
-        let rx_elev_m = 300.0;
-
-        let (lat_off, lon_off) = cruise_synth_offsets(lat, half_len_m);
-        let new_seg = synth_segment(lat, lon, lat_off, lon_off, rep_len_m, rep_alt_m);
-
-        let old_lat_off = half_len_m / crate::constants::M_PER_DEG_LAT;
-        let old_lon_off = half_len_m / crate::constants::m_per_deg_lon(lat.to_radians());
-        let old_seg = synth_segment(lat, lon, old_lat_off, old_lon_off, rep_len_m, rep_alt_m);
-
-        let (sel_new, _) = aircraft::segment_sel(&new_seg, lat, lon, rx_elev_m, &FlatGround)
-            .expect("fixed construction should compute SEL");
-        let (sel_old, _) = aircraft::segment_sel(&old_seg, lat, lon, rx_elev_m, &FlatGround)
-            .expect("pre-fix construction should compute SEL");
-
-        let diff = sel_new - sel_old;
-        let expect = -10.0 * std::f64::consts::SQRT_2.log10(); // −1.505 dB
-        assert!(
-            (diff - expect).abs() < 0.1,
-            "SEL diff new−old = {diff:.3} dB, expected {expect:.3} ± 0.1"
-        );
+    fn cell_local_heading_preserves_physical_trajectory_energy() {
+        let (lat, lon) = (55.99_f64, -74.34);
+        let mlat = aircraft::M_PER_DEG_LAT;
+        let mlon = mlat * lat.to_radians().cos();
+        let energy = |segment: &AircraftSegment, weight: f64| {
+            aircraft::segment_sel_with_cuts(
+                segment,
+                lat,
+                lon,
+                281.0,
+                247.0,
+                247.0,
+                aircraft::NpdLuts::shared(),
+                None,
+            )
+            .map_or(0.0, |(sel, _)| 10.0_f64.powf(sel / 10.0) * weight)
+        };
+        let mut maximum_error = 0.0_f64;
+        for altitude in [7500.0, 11000.0, 15000.0] {
+            for degrees in [
+                0.0_f64, 11.25, 22.5, 33.75, 45.0, 78.75, 90.0, 123.75, 135.0, 168.75,
+            ] {
+                let (sin, cos) = degrees.to_radians().sin_cos();
+                let (mut original, _) = cruise_segment(&row(lat, lon, altitude, 0), 0).unwrap();
+                original.start_lat = lat - 100000.0 * sin / mlat;
+                original.end_lat = lat + 100000.0 * sin / mlat;
+                original.start_lon = lon - 100000.0 * cos / mlon;
+                original.end_lon = lon + 100000.0 * cos / mlon;
+                original.segment_length_m = 200000.0;
+                let reference = energy(&original, 1.0);
+                let heading = cruise_heading_bin(
+                    original.start_lat,
+                    original.start_lon,
+                    original.end_lat,
+                    original.end_lon,
+                );
+                let sum: f64 = (0..800)
+                    .map(|index| {
+                        let distance = -100000.0 + (index as f64 + 0.5) * 250.0;
+                        let r = row(
+                            lat + distance * sin / mlat,
+                            lon + distance * cos / mlon,
+                            altitude,
+                            heading,
+                        );
+                        let (segment, density) = cruise_segment(&r, index).unwrap();
+                        energy(&segment, density)
+                    })
+                    .sum();
+                let error = 10.0 * (sum / reference).log10();
+                maximum_error = maximum_error.max(error.abs());
+                assert!(
+                    error.abs() < 0.1,
+                    "height={altitude} heading={degrees} error={error}dB"
+                );
+            }
+        }
+        eprintln!("cruise heading: 30 physical trajectories; max_abs_error_db={maximum_error:.9}");
     }
 }

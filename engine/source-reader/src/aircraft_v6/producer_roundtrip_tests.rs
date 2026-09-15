@@ -113,7 +113,7 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
             fl_bin: 4,
             period: 1,
             sum_length_m: 10000.0,
-            rep_len_m: 2000.0,
+            heading_bin: 2,
             rep_alt_m: 11000.0,
             rep_speed_kt: 450.0,
             unique_count: 20,
@@ -142,6 +142,33 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
     assert_eq!(views[0].unique_count, 20);
     assert_eq!(views[0].top_candidates[0].callsign, "TEST42");
     assert_eq!(views[0].sum_length_m, 10000.0);
+    assert_eq!(views[0].heading_bin, 2);
+    let batch = &batches[0];
+    let index = batch.schema().index_of("heading_bin").unwrap();
+    for array in [
+        Arc::new(UInt8Array::from(vec![8])) as ArrayRef,
+        Arc::new(UInt8Array::from(vec![None])),
+        Arc::new(Float32Array::from(vec![2.0])),
+    ] {
+        let mut fields: Vec<_> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+        fields[index] = Field::new("heading_bin", array.data_type().clone(), true);
+        let schema = Arc::new(Schema::new_with_metadata(
+            fields,
+            batch.schema().metadata().clone(),
+        ));
+        let mut columns = batch.columns().to_vec();
+        columns[index] = array;
+        let invalid = RecordBatch::try_new(schema, columns).unwrap();
+        assert!(CruiseRowAccum::new(&[invalid])
+            .err()
+            .unwrap()
+            .contains("heading_bin"));
+    }
 
     let traffic = dir.path().join("airport_traffic.arrow");
     let end = grid::lonlat_to_grid(14.261, 50.1);
@@ -289,7 +316,7 @@ fn cruise_popup_names_and_highlights_the_actual_producer_cell() {
                 fl_bin: 4,
                 period: 1,
                 sum_length_m: 10000.0,
-                rep_len_m: 2000.0,
+                heading_bin: 2,
                 rep_alt_m: 11000.0,
                 rep_speed_kt: 450.0,
                 unique_count: 1,

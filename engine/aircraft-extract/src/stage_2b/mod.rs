@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
+use noise_compute::compute::aircraft_v6::cruise::cruise_heading_bin;
 use noise_compute::emission::aircraft::{NpdLuts, FT_PER_M};
 use rayon::prelude::*;
 
@@ -65,53 +66,33 @@ pub enum CruisePhase {
     Finish,
 }
 
-pub fn run_stage_2b(
-    day_paths: &[PathBuf],
-    prepared_year_dir: &Path,
-    n_days: u16,
-    scope: Option<&ScopeBbox>,
-    fail_on_ga_cruise: bool,
-) -> Result<usize> {
-    run_stage_2b_phase(
-        day_paths,
-        prepared_year_dir,
-        n_days,
-        scope,
-        fail_on_ga_cruise,
-        CruisePhase::All,
-    )
-}
-
 pub fn run_stage_2b_phase(
     day_paths: &[PathBuf],
     prepared_year_dir: &Path,
+    spill_dir: &Path,
     n_days: u16,
     scope: Option<&ScopeBbox>,
     fail_on_ga_cruise: bool,
     phase: CruisePhase,
 ) -> Result<usize> {
-    let spill_dir = prepared_year_dir
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("prepared_year_dir has no parent for spill_cruise sibling"))?
-        .join("spill_cruise");
     let stage_start = std::time::Instant::now();
     let part_id = AtomicU64::new(0);
     let identities = receipt::input_identities(day_paths)?;
     if phase == CruisePhase::Finish {
-        receipt::verify(&spill_dir, &identities, n_days, scope, fail_on_ga_cruise)?;
+        receipt::verify(spill_dir, &identities, n_days, scope, fail_on_ga_cruise)?;
     } else {
         // A fresh producer owns this directory exclusively; ambiguous partial work
         // requires a new output tree instead of silently destroying retained spill.
         crate::arrow_io::create_directory_all_synced(
             spill_dir.parent().context("missing spill parent")?,
         )?;
-        std::fs::create_dir(&spill_dir)
+        std::fs::create_dir(spill_dir)
             .context("existing cruise spill requires finish or a new output directory")?;
         std::fs::File::open(spill_dir.parent().context("missing spill parent")?)?.sync_all()?;
         // Open before writes so the final syncfs also observes intervening writeback errors.
-        let spill_filesystem = std::fs::File::open(&spill_dir)?;
+        let spill_filesystem = std::fs::File::open(spill_dir)?;
         for b in 0..SPILL_HASH_BUCKETS {
-            std::fs::create_dir_all(spill_bucket_dir(&spill_dir, b))?;
+            std::fs::create_dir_all(spill_bucket_dir(spill_dir, b))?;
         }
 
         started(
@@ -175,14 +156,20 @@ pub fn run_stage_2b_phase(
                             addition <= SPILL_TRIGGER_BYTES,
                             "one cruise transit exceeds the accumulator allocation"
                         );
+                        let heading = cruise_heading_bin(
+                            f64::from(seg.start_lat),
+                            f64::from(seg.start_lon),
+                            f64::from(seg.end_lat),
+                            f64::from(seg.end_lon),
+                        );
                         for (cell, clip_m) in
                             cruise_transits(seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon)
                         {
                             if charged_bytes + addition > SPILL_TRIGGER_BYTES {
-                                flush_to_spill(&mut local, &spill_dir, &part_id)?;
+                                flush_to_spill(&mut local, spill_dir, &part_id)?;
                                 charged_bytes = 0;
                             }
-                            add_transit(seg, cell, clip_m, &mut local, npd_luts);
+                            add_transit(seg, cell, clip_m, heading, &mut local, npd_luts);
                             charged_bytes += addition;
                         }
                         cruise_kept += 1;
@@ -192,7 +179,7 @@ pub fn run_stage_2b_phase(
                 })
                 .with_context(|| format!("stage2b spill day {}", day_path.display()))?;
                 if !local.is_empty() {
-                    flush_to_spill(&mut local, &spill_dir, &part_id)?;
+                    flush_to_spill(&mut local, spill_dir, &part_id)?;
                 }
                 Ok(())
             })
@@ -228,7 +215,7 @@ pub fn run_stage_2b_phase(
             "primary inputs changed during cruise spill"
         );
         receipt::create(
-            &spill_dir,
+            spill_dir,
             &spill_filesystem,
             &identities,
             n_days,
@@ -245,7 +232,7 @@ pub fn run_stage_2b_phase(
     let fold_start = std::time::Instant::now();
     let fold_bucket_counter = Milestone::new("stage2b/fold", "buckets", 10);
     let fold_row_counter = Milestone::new("stage2b/fold", "cruise rows", 100_000);
-    let inputs = allocation::fold_inputs(&spill_dir)?;
+    let inputs = allocation::fold_inputs(spill_dir)?;
     let largest = inputs
         .iter()
         .map(|input| input.allocation_bytes)
@@ -254,7 +241,7 @@ pub fn run_stage_2b_phase(
         + allocation::retained_paths_allocation(&inputs);
     let spill_bytes: u64 = inputs.iter().map(|input| input.file_bytes).sum();
     receipt::record_fold_plan(
-        &spill_dir,
+        spill_dir,
         largest,
         spill_bytes,
         inputs.iter().map(|input| input.allocated_bytes).sum(),
@@ -268,7 +255,7 @@ pub fn run_stage_2b_phase(
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()?;
-    receipt::begin_fold(&spill_dir)?;
+    receipt::begin_fold(spill_dir)?;
     // A z9 without cruise activity this run would otherwise keep a prior-run
     // file, possibly with an older schema the popup reader refuses.
     let wiped = crate::wipe::wipe_stale_arrows_for_scope(prepared_year_dir, "cruise.arrow", scope)?;
@@ -295,10 +282,14 @@ pub fn run_stage_2b_phase(
                     .into_iter()
                     .map(|(key, accum)| accum.finalize(key))
                     .collect();
-                rows.sort_unstable_by_key(|r| (r.cruise_cell_id, r.class, r.fl_bin, r.period));
+                rows.sort_unstable_by_key(|r| {
+                    (r.cruise_cell_id, r.class, r.fl_bin, r.period, r.heading_bin)
+                });
                 canonical_rows += rows.len() as u64;
                 write_cruise(
-                    &prepared_year_dir.join(square_path(square)).join("cruise.arrow"),
+                    &prepared_year_dir
+                        .join(square_path(square))
+                        .join("cruise.arrow"),
                     &rows,
                     n_days,
                 )?;
@@ -315,7 +306,7 @@ pub fn run_stage_2b_phase(
     })?;
     let n = squares_written.load(Ordering::Relaxed) as usize;
     // Completed output is durable; a failed cleanup leaves an explicitly non-resumable state.
-    let _ = std::fs::remove_dir_all(&spill_dir);
+    let _ = std::fs::remove_dir_all(spill_dir);
 
     finished(
         "stage2b/fold",
@@ -338,6 +329,7 @@ fn fold_raw_parts(parts: &[PathBuf]) -> Result<HashMap<u64, HashMap<CruiseKey, C
                 class: row.class,
                 fl_bin: row.fl_bin,
                 period: row.period,
+                heading_bin: row.heading_bin,
             };
             let square = row.square;
             let incoming = accum_from_spill(row);
@@ -357,6 +349,7 @@ fn add_transit(
     seg: &FlightSegment,
     cell: u64,
     clip_m: f32,
+    heading_bin: u8,
     by_square: &mut HashMap<u64, HashMap<CruiseKey, CruiseAccum>>,
     npd_luts: &NpdLuts,
 ) {
@@ -366,6 +359,7 @@ fn add_transit(
         class: noise_class_of(seg.profile_idx),
         fl_bin: fl_bin_of((seg.start_alt_m + seg.end_alt_m) * 0.5),
         period: seg.period,
+        heading_bin,
     };
     by_square
         .entry(square)
@@ -386,8 +380,14 @@ fn process_segment(
     by_square: &mut HashMap<u64, HashMap<CruiseKey, CruiseAccum>>,
     npd_luts: &NpdLuts,
 ) {
+    let heading = cruise_heading_bin(
+        f64::from(seg.start_lat),
+        f64::from(seg.start_lon),
+        f64::from(seg.end_lat),
+        f64::from(seg.end_lon),
+    );
     for (cell, clip_m) in cruise_transits(seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon) {
-        add_transit(seg, cell, clip_m, by_square, npd_luts);
+        add_transit(seg, cell, clip_m, heading, by_square, npd_luts);
     }
 }
 

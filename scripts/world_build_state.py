@@ -149,20 +149,27 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
         original_steps = steps
         persisted_aircraft_stage = state.get('aircraft_from_stage')
         aircraft_stage = review.get('aircraft_from_stage', persisted_aircraft_stage) if review is not None else persisted_aircraft_stage
-        if aircraft_stage not in (None, 'stage2c') or (review is not None
+        if aircraft_stage not in (None, 'stage2b', 'stage2c') or (review is not None
                 and 'aircraft_from_stage' in review and aircraft_stage is None):
-            raise ValueError('aircraft_from_stage must be stage2c')
-        if persisted_aircraft_stage and aircraft_stage != persisted_aircraft_stage:
-            raise ValueError('cannot change the persisted aircraft resume stage')
-        if aircraft_stage:
-            aircraft = latest.get('aircraft', {})
-            if not persisted_aircraft_stage and (not aircraft.get('command')
+            raise ValueError('aircraft_from_stage must be stage2b or stage2c')
+        aircraft = latest.get('aircraft', {})
+        if aircraft_stage != persisted_aircraft_stage:
+            if aircraft_stage == 'stage2b':
+                if (review is None or not aircraft.get('command') or 'environment' not in aircraft
+                        or aircraft.get('exit') != 0 or aircraft.get('input_pin_sha256') != previous_digest):
+                    raise ValueError('cruise-only replay requires a reviewed successful aircraft receipt at the previous pin')
+            elif persisted_aircraft_stage:
+                raise ValueError('cannot change the persisted aircraft resume stage')
+            elif aircraft_stage and (not aircraft.get('command')
                     or 'environment' not in aircraft or aircraft.get('exit') == 0
                     or aircraft.get('input_pin_sha256') != previous_digest):
                 raise ValueError('aircraft stage resume requires an unsuccessful aircraft attempt at the previous pin')
-            steps = [replace(step, environment=tuple(dict(step.environment,
-                         FROM_STAGE=aircraft_stage).items())) if step.name == 'aircraft' else step
-                     for step in steps]
+        if aircraft_stage:
+            stage_environment = {'FROM_STAGE': aircraft_stage}
+            if aircraft_stage == 'stage2b':
+                stage_environment['UNTIL_STAGE'] = aircraft_stage
+            steps = [replace(step, environment=tuple(dict(step.environment, **stage_environment).items()))
+                     if step.name == 'aircraft' else step for step in steps]
         chain_starts = {}
         for name in ('roads', 'railways'):
             key = f'{name}_from_step'
