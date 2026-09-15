@@ -9,4 +9,4 @@ arrow = { version = "54", default-features = false, features = ["ipc"] }
 arrow-batching = { path = "../arrow-batching" }
 grid = { path = "../grid" }
 noise-compute = { path = "../noise-compute" }
-rusqlite = { version = "0.37", features = ["bundled"] }
+rayon = "1"

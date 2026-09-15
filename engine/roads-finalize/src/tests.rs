@@ -129,9 +129,6 @@ fn cross_owner_ipc(dateline: bool) {
     let root = std::env::temp_dir().join(format!("road-finalize-test-{}-{dateline}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
     let year = root.join("2026");
-    let database = rusqlite::Connection::open(root.join("2026.transport.sqlite")).unwrap();
-    database.execute_batch(include_str!("../../osm-extract/src/transport.sql")).unwrap();
-    database.execute_batch("PRAGMA user_version=2").unwrap();
     let mut paths = Vec::new();
     let mut original_bytes = Vec::new();
     for (way, x, square, direction) in [(1_i64, -5.0, "z9/255/255", 1_u8), (2, 5.0, "z9/256/255", 2)] {
@@ -177,12 +174,28 @@ fn cross_owner_ipc(dateline: bool) {
         let batch = RecordBatch::try_new(schema.clone(), columns.into_iter().map(|(_, array)| array).collect()).unwrap();
         let mut writer = FileWriter::try_new(std::fs::File::create(&path).unwrap(), &schema).unwrap();
         writer.write(&batch).unwrap(); writer.finish().unwrap();
-        database.execute("INSERT INTO source_ways VALUES (?,'roads','[]')", [way]).unwrap();
-        database.execute("INSERT INTO source_pieces VALUES (?,0,?,0,0,1,0)", rusqlite::params![way, square]).unwrap();
         original_bytes.push(std::fs::read(&path).unwrap());
         paths.push(path);
     }
-    assert_eq!(crate::finalize_year(&year).unwrap(), 2);
+    let serial = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+    let corrupt = year.join("z9/300/255/roads.arrow");
+    std::fs::create_dir_all(corrupt.parent().unwrap()).unwrap();
+    std::fs::write(&corrupt, b"invalid Arrow").unwrap();
+    assert!(serial.install(|| crate::finalize_year(&year)).is_err());
+    assert_eq!(paths.iter().map(std::fs::read).collect::<Result<Vec<_>, _>>().unwrap(), original_bytes,
+        "a later owner failure must not promote already staged output");
+    assert!(year.join(".roads-finalize/z9/255/255/roads.arrow").is_file());
+    assert!(!year.join(".roads-finalize/ready").exists());
+    assert_eq!(std::fs::read(&corrupt).unwrap(), b"invalid Arrow");
+    std::fs::remove_file(corrupt).unwrap();
+    assert_eq!(serial.install(|| crate::finalize_year(&year)).unwrap(), 2);
+    let serial_output = paths.iter().map(|path| crate::input::load(path).unwrap()).collect::<Vec<_>>();
+    for (path, bytes) in paths.iter().zip(&original_bytes) { std::fs::write(path, bytes).unwrap(); }
+    let parallel = rayon::ThreadPoolBuilder::new().num_threads(3).build().unwrap();
+    assert_eq!(parallel.install(|| crate::finalize_year(&year)).unwrap(), 2);
+    for (path, expected) in paths.iter().zip(serial_output) {
+        assert_eq!(crate::input::load(path).unwrap(), expected, "parallel allocation must match serial batches and values");
+    }
     for (index, path) in paths.iter().enumerate() {
         let batches = crate::input::load(path).unwrap();
         let batch = &batches[0];
@@ -218,6 +231,20 @@ fn cross_owner_ipc(dateline: bool) {
     std::fs::write(&paths[1], &original_bytes[1]).unwrap();
     assert_eq!(crate::finalize_year(&year).unwrap(), 1, "resume partially promoted generation");
     assert_eq!(paths.iter().map(std::fs::read).collect::<Result<Vec<_>, _>>().unwrap(), before);
-    drop(database);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn dense_owner_uses_its_own_batch_without_serializing_sparse_owners() {
+    let allowances = [2, 2, 8, 2, 2, 2];
+    let mut start = 0;
+    let mut ranges = Vec::new();
+    while start < allowances.len() {
+        let end = crate::scheduling::batch_end(&allowances, start, 3, 8);
+        assert!(end - start <= 3);
+        assert!(allowances[start..end].iter().sum::<u64>() <= 8);
+        ranges.push(start..end);
+        start = end;
+    }
+    assert_eq!(ranges, [0..2, 2..3, 3..6]);
 }

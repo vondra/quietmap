@@ -3,10 +3,12 @@
 mod allocation;
 mod input;
 mod spatial;
+mod scheduling;
 mod write;
 
 use grid::Square;
-use rusqlite::{Connection, OpenFlags};
+use rayon::prelude::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -32,21 +34,6 @@ fn squares(year: &Path) -> Result<Vec<Square>, String> {
     Ok(result)
 }
 
-fn verify_pieces(database: &Connection, square: Square, roads: &[input::Road]) -> Result<(), String> {
-    let mut query = database.prepare_cached("SELECT p.way_id,p.segment_idx FROM source_pieces p JOIN source_ways w ON w.osm_id=p.way_id WHERE p.square=? AND w.family='roads'")
-        .map_err(|e| e.to_string())?;
-    let identities = query.query_map([grid::square_name(square)], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i16>(1)?)))
-        .map_err(|e| e.to_string())?.collect::<Result<HashSet<_>, _>>().map_err(|e| e.to_string())?;
-    let mut seen = HashSet::new();
-    for road in roads {
-        let identity = (road.way_id, road.segment_idx);
-        if !identities.contains(&identity) || !seen.insert(identity) {
-            return Err(format!("missing or duplicate source road piece {}:{}", road.way_id, road.segment_idx));
-        }
-    }
-    Ok(())
-}
-
 fn promote(year: &Path, staging: &Path, squares: &[Square]) -> Result<usize, String> {
     let mut count = 0;
     for square in squares {
@@ -63,6 +50,42 @@ fn promote(year: &Path, staging: &Path, squares: &[Square]) -> Result<usize, Str
     Ok(count)
 }
 
+fn stage_square(year: &Path, staging: &Path, square: Square) -> Result<bool, String> {
+    let batches = input::load(&road_path(year, square))?;
+    let own = batches.iter().map(input::roads).collect::<Result<Vec<_>, _>>()?.into_iter().flatten().collect::<Vec<_>>();
+    if batches[0].schema().metadata().get(input::CONTRACT).map(String::as_str) == Some("1") { return Ok(false); }
+    let mut neighbors = own.iter().filter(|r| r.direction != 0).cloned().collect::<Vec<_>>();
+    if !neighbors.is_empty() {
+        let corridor_key = |r: &input::Road| (r.class, r.country.country_iso, r.country.city_id, r.corridor.clone());
+        let observation_key = |r: &input::Road| (r.class, r.country.country_iso, r.country.city_id, r.observation_source_id, r.observation.clone());
+        let corridors = neighbors.iter().filter(|r| !r.corridor.is_empty()).map(corridor_key).collect::<HashSet<_>>();
+        let observations = neighbors.iter().filter(|r| !r.observation.is_empty()).map(observation_key).collect::<HashSet<_>>();
+        let center_x = neighbors[0].midpoint().0;
+        for neighbor in grid::ring_squares(square, 0.0) {
+            if neighbor == square { continue; }
+            let path = road_path(year, neighbor);
+            if !path.is_file() { continue; }
+            for batch in input::load(&path)? {
+                for mut candidate in input::roads(&batch)? {
+                    if candidate.direction == 0 { continue; }
+                    let wrap = ((center_x - candidate.midpoint().0) / grid::EARTH_CIRCUMFERENCE_M).round()
+                        * grid::EARTH_CIRCUMFERENCE_M;
+                    candidate.start.0 += wrap;
+                    candidate.end.0 += wrap;
+                    if corridors.contains(&corridor_key(&candidate)) || observations.contains(&observation_key(&candidate)) {
+                        neighbors.push(candidate);
+                    }
+                }
+            }
+        }
+    }
+    let index = spatial::RoadIndex::new(neighbors);
+    let target = road_path(staging, square);
+    std::fs::create_dir_all(target.parent().ok_or("road staging parent missing")?).map_err(|e| e.to_string())?;
+    write::stage(&target, &batches, &index)?;
+    Ok(true)
+}
+
 pub fn finalize_year(year: &Path) -> Result<usize, String> {
     let squares = squares(year)?;
     let staging = year.join(".roads-finalize");
@@ -71,50 +94,32 @@ pub fn finalize_year(year: &Path) -> Result<usize, String> {
     // generation or allocating an already allocated neighboring carriageway.
     if staging.join("ready").is_file() { return promote(year, &staging, &squares); }
     if staging.exists() { std::fs::remove_dir_all(&staging).map_err(|e| e.to_string())?; }
-    let parent = year.parent().ok_or("prepared year has no parent")?;
-    let name = year.file_name().ok_or("prepared year has no name")?.to_string_lossy();
-    let database = Connection::open_with_flags(parent.join(format!("{name}.transport.sqlite")), OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|e| e.to_string())?;
-    let version: i64 = database.query_row("PRAGMA user_version", [], |row| row.get(0)).map_err(|e| e.to_string())?;
-    if version != 2 { return Err("source transport topology schema must be 2".to_owned()); }
-    let mut changed = 0;
-    for (position, square) in squares.iter().enumerate() {
-        let batches = input::load(&road_path(year, *square))?;
-        let own = batches.iter().map(input::roads).collect::<Result<Vec<_>, _>>()?.into_iter().flatten().collect::<Vec<_>>();
-        if batches[0].schema().metadata().get(input::CONTRACT).map(String::as_str) == Some("1") { continue; }
-        verify_pieces(&database, *square, &own)?;
-        let mut neighbors = own.iter().filter(|r| r.direction != 0).cloned().collect::<Vec<_>>();
-        if !neighbors.is_empty() {
-            let corridor_key = |r: &input::Road| (r.class, r.country.country_iso, r.country.city_id, r.corridor.clone());
-            let observation_key = |r: &input::Road| (r.class, r.country.country_iso, r.country.city_id, r.observation_source_id, r.observation.clone());
-            let corridors = neighbors.iter().filter(|r| !r.corridor.is_empty()).map(corridor_key).collect::<HashSet<_>>();
-            let observations = neighbors.iter().filter(|r| !r.observation.is_empty()).map(observation_key).collect::<HashSet<_>>();
-            let center_x = neighbors[0].midpoint().0;
-            for neighbor in grid::ring_squares(*square, 0.0) {
-                if neighbor == *square { continue; }
-                let path = road_path(year, neighbor);
-                if !path.is_file() { continue; }
-                for batch in input::load(&path)? {
-                    for mut candidate in input::roads(&batch)? {
-                        if candidate.direction == 0 { continue; }
-                        let wrap = ((center_x - candidate.midpoint().0) / grid::EARTH_CIRCUMFERENCE_M).round()
-                            * grid::EARTH_CIRCUMFERENCE_M;
-                        candidate.start.0 += wrap;
-                        candidate.end.0 += wrap;
-                        if corridors.contains(&corridor_key(&candidate)) || observations.contains(&observation_key(&candidate)) {
-                            neighbors.push(candidate);
-                        }
-                    }
-                }
-            }
-        }
-        let index = spatial::RoadIndex::new(neighbors);
-        let target = road_path(&staging, *square);
-        std::fs::create_dir_all(target.parent().ok_or("road staging parent missing")?).map_err(|e| e.to_string())?;
-        write::stage(&target, &batches, &index)?;
-        changed += 1;
-        if position % 1000 == 0 { eprintln!("roads-finalize: {}/{} squares", position + 1, squares.len()); }
+    // Continuity already admits every source piece; taper changes only speed.
+    let allowances = scheduling::allowances(year, &squares)?;
+    let budget = scheduling::memory_budget()?;
+    if let Some(needed) = allowances.iter().find(|&&needed| needed > budget) {
+        return Err(format!("road square requires {needed} B allocation allowance, memory limit is {budget} B"));
     }
+    let changed = AtomicUsize::new(0);
+    let completed = AtomicUsize::new(0);
+    let workers = rayon::current_num_threads();
+    eprintln!("roads-finalize: up to {workers} workers, {budget} B memory budget");
+    let mut start = 0;
+    while start < squares.len() {
+        let end = scheduling::batch_end(&allowances, start, workers, budget * 3 / 4);
+        squares[start..end].par_iter().try_for_each(
+            |square| -> Result<(), String> {
+                if stage_square(year, &staging, *square)? { changed.fetch_add(1, Ordering::Relaxed); }
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                if done == 1 || done.is_multiple_of(1000) || done == squares.len() {
+                    eprintln!("roads-finalize: {done}/{} squares", squares.len());
+                }
+                Ok(())
+            },
+        )?;
+        start = end;
+    }
+    let changed = changed.load(Ordering::Relaxed);
     if changed == 0 { return Ok(0); }
     let marker = std::fs::File::create(staging.join("ready")).map_err(|e| e.to_string())?;
     marker.sync_all().map_err(|e| e.to_string())?;
