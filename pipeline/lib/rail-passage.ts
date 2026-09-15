@@ -150,8 +150,13 @@ export async function writeClippedRailPassages(
     }
 
     const walkPieces = new Set<string>()
+    const replaceAcceptedPiece = database.prepare(`
+      DELETE FROM rail_interval WHERE source_id IN (${ownSourceIds.map(() => '?').join(',')})
+        AND country_iso = ? AND square = ? AND osm_id = ? AND segment_idx = ?
+    `)
     let nextOccurrence = 0
     for (const service of request.services) {
+      if (service.evidence.sourceId !== request.sourceId) throw new Error('railway service source differs from snapshot owner')
       // Local visit zero on two different services represents two passages.
       const serviceOccurrenceOffset = nextOccurrence
       const matching = railMatchingMask(service.evidence.matching)
@@ -160,7 +165,7 @@ export async function writeClippedRailPassages(
         if (!Number.isSafeInteger(passage.occurrence) || passage.occurrence < 0 ||
             !Number.isSafeInteger(occurrence + 1)) throw new Error('invalid railway passage occurrence')
         nextOccurrence = Math.max(nextOccurrence, occurrence + 1)
-        if (request.quarantinedPieceKeys.has(transportPassageKey(passage))) continue
+        const quarantined = request.quarantinedPieceKeys.has(transportPassageKey(passage))
         if (!allowedSquares.has(passage.square)) {
           result.skippedForeign++
           continue
@@ -171,14 +176,23 @@ export async function writeClippedRailPassages(
             passenger: service.evidence.passenger,
             freight: service.evidence.freight,
             sourceId: service.evidence.sourceId,
-            passengerStatus: service.evidence.passengerStatus,
-            freightStatus: service.evidence.freightStatus,
+            passengerStatus: quarantined && service.evidence.passengerStatus !== 'unknown'
+              ? 'estimated' : service.evidence.passengerStatus,
+            freightStatus: quarantined && service.evidence.freightStatus !== 'unknown'
+              ? 'estimated' : service.evidence.freightStatus,
             matching,
           },
         )
-        if (!row) continue
-        insertRailInterval(database, row)
+        if (!row || !Number.isFinite(row.fromM) || !Number.isFinite(row.toM) || row.fromM === row.toM) continue
         const key = `${passage.square}\x1f${transportPassageKey(passage)}`
+        if (quarantined && !walkPieces.has(key)) {
+          // A current accepted snapshot replaces old visits once, even where another
+          // failed service left quarantine. Keep that uncertainty and its fallback veto.
+          result.retracted += Number(replaceAcceptedPiece.run(
+            ...ownSourceIds, request.countryIso, passage.square, row.osmId, row.segmentIndex,
+          ).changes)
+        }
+        insertRailInterval(database, row)
         if (!walkPieces.has(key)) {
           walkPieces.add(key)
           result.walkStamped++

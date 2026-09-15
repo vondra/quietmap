@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { listRailIntervals } from './rail-traffic-store.js'
+import { listRailIntervals, openRailTrafficSidecar } from './rail-traffic-store.js'
 import { writeClippedRailPassages, type RailServicePassages, type WriteClippedRailPassagesRequest } from './rail-passage.js'
 import { RAIL_TEST_DIRECTORY, writePreparedRailwaySquare } from './rail-test-fixture.js'
 import { writeSyntheticRailTopology } from './transport-test-fixture.js'
@@ -50,49 +50,65 @@ test('clipped visits stay separate, unknown freight is omitted, Arrow bytes are 
   assert.equal(rows[1].occurrence, 1)
 })
 
-test('retractSafe removes previous visits except quarantine across square owners', async () => {
-  const prepared = join(RAIL_TEST_DIRECTORY, 'passage-retract')
-  writePreparedRailwaySquare(prepared, SQUARE, 'passage-retract.arrow', [
+test('accepted passages replace their source on quarantine without claiming complete traffic', async () => {
+  const prepared = join(RAIL_TEST_DIRECTORY, 'passage-quarantine')
+  const path = writePreparedRailwaySquare(prepared, SQUARE, 'passage-quarantine.arrow', [
     { osmId: 50_000, segmentIndex: 0, latitude: 50, longitude: 14, country: 'DE' },
   ])
   const otherSquare = 'z9/277/173'
-  writePreparedRailwaySquare(prepared, otherSquare, 'passage-quarantine-other.arrow', [
+  const otherPath = writePreparedRailwaySquare(prepared, otherSquare, 'passage-quarantine-other.arrow', [
     { osmId: 50_001, segmentIndex: 0, latitude: 50.01, longitude: 14, country: 'DE' },
   ])
   writeSyntheticRailTopology(prepared, [SQUARE, otherSquare])
+  const before = [readFileSync(path), readFileSync(otherPath)]
+  const service = (passenger: number, fromM: number): RailServicePassages => ({
+    evidence: { sourceId: SOURCE, passenger, freight: 0,
+      passengerStatus: 'known', freightStatus: 'unknown', matching: 'relation_estimated' },
+    passages: [{ wayId: '50001', segmentIndex: 0, square: otherSquare,
+      fromM, toM: 50, occurrence: 0 }],
+  })
   const request: WriteClippedRailPassagesRequest = {
-    preparedDirectory: prepared,
-    squares: [SQUARE, otherSquare],
-    countryIso: 'DE',
-    sourceId: SOURCE,
-    retractSafe: true,
-    quarantinedPieceKeys: new Set(['50001:0']),
-    services: [{
-      evidence: {
-        sourceId: SOURCE, passenger: 8, freight: 0,
-        passengerStatus: 'estimated', freightStatus: 'unknown',
-        matching: 'graph_estimated',
-      },
-      passages: [
-        { wayId: '50000', segmentIndex: 0, square: SQUARE, fromM: 0, toM: 50, occurrence: 0 },
-      ],
-    }],
+    preparedDirectory: prepared, squares: [SQUARE, otherSquare], countryIso: 'DE',
+    sourceId: SOURCE, retractSafe: true, quarantinedPieceKeys: new Set(['50001:0']),
+    services: [service(2.5, 0), service(3.5, 0)],
   }
-  await writeClippedRailPassages({ ...request, quarantinedPieceKeys: new Set(),
-    services: [{ ...request.services[0], passages: [
-      ...request.services[0].passages,
-      { ...request.services[0].passages[0], wayId: '50001', square: otherSquare },
-    ] }],
-  })
-  const preserved = listRailIntervals(prepared).filter(row => row.osmId === 50001)
-  await writeClippedRailPassages({ ...request,
-    services: [{ evidence: { ...request.services[0].evidence, passenger: 999 },
-      passages: [{ ...request.services[0].passages[0], wayId: '50001', square: otherSquare }] }],
-  })
-  assert.deepEqual(listRailIntervals(prepared), preserved)
-  const empty = await writeClippedRailPassages({ ...request, services: [] })
+  // Another dataset's accepted evidence on exactly the same piece is not ours to retract.
+  const national = service(17, 0)
+  national.evidence.sourceId = 9864
+  await writeClippedRailPassages({ ...request, sourceId: 9864,
+    services: [national], quarantinedPieceKeys: new Set() })
+  const foreign = listRailIntervals(prepared).filter(row => row.sourceId === 9864)
+  const first = await writeClippedRailPassages(request)
+  assert.equal(first.walkStamped, 1, 'an unrelated failed service cannot erase accepted passages')
+  const owned = () => listRailIntervals(prepared).filter(row => row.sourceId === SOURCE)
+  assert.deepEqual(owned().map(row => row.passenger), [2.5, 3.5])
+  assert.ok(owned().every(row => row.passengerStatus === 2 && row.freightStatus === 0 && row.matching === 1))
+  for (const retractSafe of [true, false]) {
+    await writeClippedRailPassages({ ...request, retractSafe })
+    assert.deepEqual(owned().map(row => row.passenger), [2.5, 3.5])
+  }
+  // Changed interval and fewer services must remove old occurrence/extent keys, not add to them.
+  await writeClippedRailPassages({ ...request, services: [service(4.25, 10)] })
+  const retained = owned()
+  assert.equal(retained.length, 1)
+  assert.equal(retained[0].passenger, 4.25)
+  assert.equal(retained[0].fromM, 10)
+  for (const fromM of [50, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const invalid = await writeClippedRailPassages({ ...request, services: [service(99, fromM)] })
+    assert.equal(invalid.walkStamped, 0)
+    assert.deepEqual(owned(), retained, 'invalid replacement cannot retract accepted evidence')
+  }
+  const empty = await writeClippedRailPassages({ ...request, services: [],
+    extraMatch: () => { throw new Error('quarantine must still block fallback testimony') },
+    squares: [otherSquare] })
   assert.equal(empty.retracted, 0)
-  assert.deepEqual(listRailIntervals(prepared), preserved)
+  assert.deepEqual(owned(), retained, 'no accepted replacement preserves earlier evidence')
+  assert.deepEqual(listRailIntervals(prepared).filter(row => row.sourceId === 9864), foreign)
+  const database = openRailTrafficSidecar(prepared)
+  try {
+    assert.equal(database.prepare('SELECT count(*) AS n FROM rail_quarantine WHERE source_id = ?').get(SOURCE)?.n, 1)
+  } finally { database.close() }
+  assert.deepEqual([readFileSync(path), readFileSync(otherPath)], before)
 })
 
 test('different services sharing local visit zero sum, real returns repeat, and reruns replace', async () => {
