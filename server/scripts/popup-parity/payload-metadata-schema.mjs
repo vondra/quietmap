@@ -11,6 +11,17 @@ import {
   string,
 } from './schema-values.mjs'
 
+export const ROAD_TRAFFIC_KEYS = ['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'traffic_estimated']
+
+export function validateRoadTraffic(value, path) {
+  for (const key of ROAD_TRAFFIC_KEYS.slice(0, 4)) {
+    finite(value[key], `${path}.${key}`)
+    if (value[key] < 0) fail(`${path}.${key}`, 'negative traffic')
+  }
+  integer(value.traffic_estimated, `${path}.traffic_estimated`, 0)
+  if (value.traffic_estimated > 15) fail(`${path}.traffic_estimated`, 'invalid category bitmask')
+}
+
 export function validateProvenance(value, path) {
   if (value === null) return
   exactKeys(value, path, ['name', 'year', 'license', 'url', 'tier'])
@@ -75,11 +86,7 @@ export function validateMetadata(value, sourceType, path) {
   if (value.kind === 'aircraft') return validateAircraftMetadata(value, path)
   const definitions = {
     road: [
-      ['kind', 'aadt_light_raw', 'aadt_medium_raw', 'aadt_heavy_raw', 'aadt_moto_raw',
-        'traffic_source', 'dominant_source_id', 'speed_posted_kmh', 'aadt_light_nominal',
-        'aadt_medium_nominal', 'aadt_heavy_nominal', 'aadt_moto_nominal',
-        'aadt_light_effective', 'aadt_medium_effective', 'aadt_heavy_effective',
-        'aadt_moto_effective', 'speed_kmh', 'speed_source', 'road_class', 'surface',
+      ['kind', ...ROAD_TRAFFIC_KEYS, 'dominant_source_id', 'speed_posted_kmh', 'speed_kmh', 'speed_source', 'road_class', 'surface',
         'surface_corr_db', 'lanes', 'oneway', 'dominant_segment_idx',
         'dominant_distance_m', 'closest_distance_m', 'speed_min_kmh', 'speed_max_kmh',
         'oneway_segment_count', 'twoway_segment_count', 'segment_count', 'total_length_m',
@@ -98,6 +105,7 @@ export function validateMetadata(value, sourceType, path) {
   const definition = definitions[expectedKind]
   if (!definition || value.kind !== expectedKind) fail(`${path}.kind`, `expected ${expectedKind}`)
   exactKeys(value, path, definition[0], definition[1])
+  if (expectedKind === 'road') validateRoadTraffic(value, path)
   if (expectedKind === 'rail') validateRailTraffic(value, path)
   if (Object.hasOwn(value, 'provenance')) validateProvenance(value.provenance, `${path}.provenance`)
 }

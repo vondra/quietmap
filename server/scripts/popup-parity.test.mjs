@@ -16,6 +16,7 @@ import {
   generateEqualAreaPoints,
   loadParityPoints,
 } from './popup-parity/points.mjs'
+import { validateMetadata } from './popup-parity/payload-metadata-schema.mjs'
 import { validatePopupPayload } from './popup-parity/payload-schema.mjs'
 
 const HASHES = {
@@ -78,7 +79,7 @@ function emission(layer, currentCruise = false) {
     road: {
       kind: 'road', aadt_light: 1, aadt_medium: 0, aadt_heavy: 0, aadt_moto: 0,
       speed_kmh: 50, surface_corr_db: 0, surface: 'asphalt',
-      traffic_source: 'default_by_class', source_id: 0, road_class: 'residential',
+      traffic_estimated: 15, source_id: 0, road_class: 'residential',
       bridge: false, tunnel: false, oneway: false, lanes: 2,
     },
     railway: {
@@ -210,6 +211,30 @@ test('strict schema accepts all seven layers and canonicalizes only known dev1 a
   assert.equal(report.numeric['points[\"fixture\"].elevation_m'].absolute_delta_max, 0)
   assert.ok(!JSON.stringify(canonicalizePopup(legacy)).includes('871111111'))
   assert.ok(!JSON.stringify(canonicalizePopup(current)).includes('z9/1/2'))
+})
+
+test('road metadata and traces require prepared fractional counts and category evidence only', () => {
+  const current = payload(true)
+  const traffic = { aadt_light: 0, aadt_medium: 0.125, aadt_heavy: 4.5, aadt_moto: 0, traffic_estimated: 6 }
+  Object.assign(current.segments[0].emission, traffic)
+  const metadata = { kind: 'road', ...traffic, dominant_source_id: 12, speed_posted_kmh: null,
+    speed_kmh: 50, speed_source: 'derestricted', road_class: 'residential', surface: 'asphalt',
+    surface_corr_db: 0, lanes: 2, oneway: false, dominant_segment_idx: 0, dominant_distance_m: 1,
+    closest_distance_m: 1, speed_min_kmh: 50, speed_max_kmh: 50, oneway_segment_count: 0,
+    twoway_segment_count: 1, segment_count: 1, total_length_m: 10, bridge_count: 0,
+    obstacle_segment_count: 0, obstacle_avg_height_m: 0, obstacle_max_height_m: 0, obstacle_max_segment_idx: 0 }
+  validatePopupPayload(current, POINT)
+  validateMetadata(metadata, 'road', 'metadata')
+  for (const [key, value] of [['aadt_light', -1], ['aadt_medium', NaN], ['aadt_heavy', Infinity],
+    ['aadt_moto', null], ['traffic_estimated', 16], ['traffic_estimated', 0.5], ['traffic_estimated', undefined]]) {
+    const broken = structuredClone(current)
+    broken.segments[0].emission[key] = value
+    assert.throws(() => validatePopupPayload(broken, POINT), /traffic|finite|integer/)
+    assert.throws(() => validateMetadata({ ...metadata, [key]: value }, 'road', 'metadata'), /traffic|finite|integer/)
+  }
+  assert.throws(() => validateMetadata({ ...metadata, aadt_light_raw: 0 }, 'road', 'metadata'), /unknown key/)
+  current.segments[0].emission.traffic_source = 'default_by_class'
+  assert.throws(() => validatePopupPayload(current, POINT), /unknown key/)
 })
 
 test('schema fails unknown fields, invalid aircraft subtype, meta drift, and energy drift', () => {

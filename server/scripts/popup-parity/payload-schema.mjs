@@ -1,6 +1,6 @@
 //! Strict runtime schema and acoustic invariants for popup parity payloads.
 
-import { validateMetadata, validateProvenance, validateRailTraffic } from './payload-metadata-schema.mjs'
+import { ROAD_TRAFFIC_KEYS, validateMetadata, validateProvenance, validateRailTraffic, validateRoadTraffic } from './payload-metadata-schema.mjs'
 import {
   array,
   boolean,
@@ -112,8 +112,8 @@ export function semanticLayerForSegment(segment, path = 'segment') {
 
 function validateEmission(value, layer, path) {
   const keys = {
-    road: [['kind', 'aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'speed_kmh',
-      'surface_corr_db', 'surface', 'traffic_source', 'source_id', 'road_class',
+    road: [['kind', ...ROAD_TRAFFIC_KEYS, 'speed_kmh',
+      'surface_corr_db', 'surface', 'source_id', 'road_class',
       'bridge', 'tunnel', 'oneway', 'lanes'], ['provenance']],
     railway: [['kind', 'traffic', 'passenger_provenance', 'freight_provenance',
       'speed_kmh', 'bridge', 'highspeed', 'rail_type', 'service'], []],
@@ -127,6 +127,7 @@ function validateEmission(value, layer, path) {
       ['nace', 'hub_height_m', 'rated_power_kw']],
   }[layer]
   exactKeys(value, path, keys[0], keys[1])
+  if (layer === 'road') validateRoadTraffic(value, path)
   if (layer === 'railway') validateRailTraffic(value, path)
   if (value.kind !== layer) fail(`${path}.kind`, `expected ${layer}`)
   if (layer === 'aircraft_cruise') {
