@@ -2,7 +2,7 @@
 use crate::{
     corner_codec::SourceDictionary,
     corner_totals::SurfacePeriodTotals,
-    hm3::{EncodedHm3, SURFACE_SOURCE_IDS},
+    hm3::{EncodedHm3, SURFACE_LAYERS},
 };
 use anyhow::{bail, ensure, Context, Result};
 use grid::{
@@ -241,8 +241,8 @@ impl CornerStore {
             tiles.len() == 5
                 && tiles
                     .iter()
-                    .zip(SURFACE_SOURCE_IDS)
-                    .all(|(tile, id)| tile.source_id == id),
+                    .zip(SURFACE_LAYERS)
+                    .all(|(tile, layer)| tile.layer == layer),
             "incomplete tile or wrong layer order"
         );
         let expected_hashes: [[u8; 32]; 5] =

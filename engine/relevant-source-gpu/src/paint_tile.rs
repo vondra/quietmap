@@ -45,7 +45,7 @@ pub fn paint_tile(
     let reflection = DeviceBuffer::from_slice(&receivers.reflection)?;
     let floor = DeviceBuffer::from_slice(&receivers.floor)?;
     let mut tiles = Vec::new();
-    for (layer, source_id) in tile_painter::hm3::SURFACE_SOURCE_IDS
+    for (layer, output_layer) in tile_painter::hm3::SURFACE_LAYERS
         .into_iter()
         .enumerate()
     {
@@ -107,7 +107,7 @@ pub fn paint_tile(
         )?;
         tiles.push(tile_painter::hm3::encode_period_power(
             &energy,
-            source_id,
+            output_layer,
             &receivers.indoor_attenuation,
         )?);
     }
