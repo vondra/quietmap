@@ -122,7 +122,7 @@ interface RoadMetadata {
   aadt_moto: number
   /** Bitmask: light 1, medium 2, heavy 4, moto 8 — set = estimated. */
   traffic_estimated: number
-  dominant_dataset_id?: number
+  dominant_source_id: number
   provenance?: DatasetProvenance | null
   /** Raw OSM maxspeed; null = derestricted (`maxspeed=none`) — no number exists. */
   speed_posted_kmh: number | null
@@ -564,7 +564,7 @@ type EmissionTrace =
       speed_kmh: number
       surface_corr_db: number
       surface: string
-      dataset_id: number
+      source_id: number
       provenance?: DatasetProvenance | null
       road_class: string
       bridge: boolean

@@ -30,7 +30,7 @@ export function screeningFanPopupFixture(lat: number, lng: number): NoiseCompute
       surface_corr_db: 0,
       surface: 'asphalt',
       traffic_estimated: 15,
-      dataset_id: 0,
+      source_id: 0,
       provenance: null,
       road_class: 'secondary',
       bridge: false,
