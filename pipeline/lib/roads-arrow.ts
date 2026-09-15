@@ -124,7 +124,7 @@ export function applyRoadAadt(
   }
   result.rows = table.numRows
   const geometry = segmentGeometryReader(table)
-  if (table.numRows === 0) return { table, result }
+  if (result.rows === 0) return { table, result }
 
   const ref = table.getChild('ref')
   const name = table.getChild('name')
@@ -157,16 +157,16 @@ export function applyRoadAadt(
     }
   }
 
-  const light = new Float64Array(table.numRows)
-  const medium = new Float64Array(table.numRows)
-  const heavy = new Float64Array(table.numRows)
-  const moto = new Float64Array(table.numRows)
-  const source = new Uint16Array(table.numRows)
-  const basis = new Uint8Array(table.numRows)
-  const estimated = new Uint8Array(table.numRows)
-  const origins = new Uint16Array(table.numRows)
-  const observations = new Array<string>(table.numRows)
-  for (let index = 0; index < table.numRows; index++) {
+  const light = new Float64Array(result.rows)
+  const medium = new Float64Array(result.rows)
+  const heavy = new Float64Array(result.rows)
+  const moto = new Float64Array(result.rows)
+  const source = new Uint16Array(result.rows)
+  const basis = new Uint8Array(result.rows)
+  const estimated = new Uint8Array(result.rows)
+  const origins = new Uint16Array(result.rows)
+  const observations = new Array<string>(result.rows)
+  for (let index = 0; index < result.rows; index++) {
     light[index] = (existingLight?.get(index) as number) ?? 0
     medium[index] = (existingMedium?.get(index) as number) ?? 0
     heavy[index] = (existingHeavy?.get(index) as number) ?? 0
@@ -187,8 +187,8 @@ export function applyRoadAadt(
   const setTaper = (index: number, value: number): void => {
     if (taperAt(index) === value) return
     if (!taper) {
-      taper = new Uint8Array(table.numRows)
-      for (let i = 0; i < table.numRows; i++) taper[i] = (existingTaper?.get(i) as number) ?? 0
+      taper = new Uint8Array(result.rows)
+      for (let i = 0; i < result.rows; i++) taper[i] = (existingTaper?.get(i) as number) ?? 0
     }
     taper[index] = value
   }
@@ -209,7 +209,7 @@ export function applyRoadAadt(
   const retractCountries = new Map(retract?.sourceIds.map(id => [id, expectedCountryCodes(id)]))
   let changed = false
 
-  for (let index = 0; index < table.numRows; index++) {
+  for (let index = 0; index < result.rows; index++) {
     const row: RoadRow = {
       ...geometry.row(index),
       ref: (ref?.get(index) as string | null) ?? null,

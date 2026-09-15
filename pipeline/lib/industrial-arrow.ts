@@ -175,7 +175,8 @@ export async function enrichIndustrialFacilities(
       const source = Uint16Array.from(oldSource)
       const nace = Uint16Array.from(oldNace)
       const suppressedColumn = Uint8Array.from(oldSuppressed)
-      for (let row = 0; row < table.numRows; row++) {
+      const rows = table.numRows
+      for (let row = 0; row < rows; row++) {
         if (countryAt(row, polygons[row]) === null || (ownership && polygons[row].sourceType === 10)) continue
         if (reset.has(source[row])) {
           source[row] = 0; nace[row] = 0; suppressedColumn[row] = 0

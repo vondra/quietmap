@@ -77,11 +77,12 @@ export async function enrichIndustrialNames(preparedDirectory: string, squares?:
       const gx = integerColumn(table, 'centroid_gx', 32, true)!
       const gy = integerColumn(table, 'centroid_gy', 32, true)!
       const country = bakedIndustrialCountryReader(table)
+      const rows = table.numRows
       const newSource = Uint16Array.from(source as Iterable<number>)
-      const newNace = nace ? Uint16Array.from(nace as Iterable<number>) : new Uint16Array(table.numRows)
+      const newNace = nace ? Uint16Array.from(nace as Iterable<number>) : new Uint16Array(rows)
       let changed = false
-      result.rows += table.numRows
-      for (let row = 0; row < table.numRows; row++) {
+      result.rows += rows
+      for (let row = 0; row < rows; row++) {
         // Native turbines keep their independent point-source classification and measurements.
         if (sourceType.get(row) === 10) continue
         const name = names.get(row) as string | null

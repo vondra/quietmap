@@ -182,3 +182,41 @@ for (const contract of ['0', '1']) test(`speed-only IPC preserves contract${cont
   }
   assert.deepEqual([...output.schema.metadata], [...input.schema.metadata])
 })
+
+test('non-CZ squares preserve bytes and counts while still validating country and taper columns', async () => {
+  const path = writeRoadsFixture('foreign-speed-only.arrow', [4, 4], {
+    speeds: [100, 0], countryCodes: [iso2Code('AT'), 0],
+  })
+  await withArrowWrite(path, table => {
+    const columns = Object.fromEntries(table.schema.fields.map(field => [field.name, table.getChild(field.name)!]))
+    columns.segment_idx = vectorFromArray([0, 0], new Int16())
+    columns.length_m = vectorFromArray([60, 60], new Float32())
+    for (const name of ['access', 'junction', 'built_up']) columns[name] = vectorFromArray([0, 0], new Uint8())
+    for (const name of ['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto']) {
+      columns[name] = vectorFromArray([123.125, 456.75], new Float64())
+    }
+    columns.speed_taper = vectorFromArray([44, 77], new Uint8())
+    return new Table(columns)
+  })
+  const input = bytes(path), modified = statSync(path).mtimeMs
+  assert.deepEqual(await enrichTaperSquare(path), {
+    rows: 2, matched: 0, retracted: 0, updated: false, boundaries: 0, foreignRows: 2,
+  })
+  assert.deepEqual(bytes(path), input)
+  assert.equal(statSync(path).mtimeMs, modified)
+
+  await withArrowWrite(path, table => new Table({
+    ...Object.fromEntries(table.schema.fields.map(field => [field.name, table.getChild(field.name)!])),
+    speed_taper: vectorFromArray([44, 77], new Uint16()),
+  }))
+  const malformedSpeed = bytes(path)
+  await assert.rejects(enrichTaperSquare(path), /invalid speed_taper column/)
+  assert.deepEqual(bytes(path), malformedSpeed)
+  await withArrowWrite(path, table => new Table({
+    ...Object.fromEntries(table.schema.fields.map(field => [field.name, table.getChild(field.name)!])),
+    country_iso: vectorFromArray([0, 0], new Uint8()),
+  }))
+  const malformedCountry = bytes(path)
+  await assert.rejects(enrichTaperSquare(path), /country_iso.*Uint16/)
+  assert.deepEqual(bytes(path), malformedCountry)
+})

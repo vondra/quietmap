@@ -57,7 +57,7 @@ export async function enrichWindSquare(path: string, match: ReturnType<typeof wi
     for (const column of [hubs, powers]) if (!column || !DataType.isFloat(column.type) || column.type.precision !== 1) throw new Error('wind measurements must be nullable Float32')
     const hub = Array.from(hubs!) as Array<number | null>, power = Array.from(powers!) as Array<number | null>
     result.rows = table.numRows
-    for (let row = 0; row < table.numRows; row++) {
+    for (let row = 0; row < result.rows; row++) {
       if (type.get(row) !== 10) continue
       result.turbines++
       if ([hub[row], power[row]].some(value => value !== null && !Number.isFinite(value))) throw new Error(`invalid native wind measurement at row ${row}`)

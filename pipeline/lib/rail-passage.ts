@@ -191,8 +191,9 @@ export async function writeClippedRailPassages(
       const arrowPath = resolve(prepared, square, 'railways.arrow')
       if (!existsSync(arrowPath)) continue
       const table = tableFromIPC(readFileSync(arrowPath))
-      result.rows += table.numRows
-      if (table.numRows === 0 || (!request.silentResidual && !request.extraMatch)) continue
+      const rows = table.numRows
+      result.rows += rows
+      if (rows === 0 || (!request.silentResidual && !request.extraMatch)) continue
       const geometry = segmentGeometryReader(table)
       const osmId = table.getChild('osm_id')!
       const segmentIndex = table.getChild('segment_idx')!
@@ -203,7 +204,7 @@ export async function writeClippedRailPassages(
       const countries = bakedRailwayCountryReader(table)
       const allowedCountry = iso2Code(request.countryIso)
 
-      for (let index = 0; index < table.numRows; index++) {
+      for (let index = 0; index < rows; index++) {
         if ((serviceCol.get(index) as number) > 0) {
           result.skippedService++
           continue

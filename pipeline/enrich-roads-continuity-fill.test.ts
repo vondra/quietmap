@@ -12,7 +12,7 @@ import { iso2Code, segmentGeometryReader } from './lib/prepared-grid.js'
 import { writeRoadAadt } from './lib/roads-arrow.js'
 import { readPlanningRoads, type PlanningRoad } from './lib/road-planning-input.js'
 import { roadContinuityComponent, planContinuityComponent, type ContinuityRoad, type Flow } from './lib/roads-continuity-plan.js'
-import { enrichContinuityDirectory } from './enrich-roads-continuity-fill.js'
+import { enrichContinuityDirectory, writeContinuitySquares } from './enrich-roads-continuity-fill.js'
 import { transportTopologyPath } from './lib/transport-topology.js'
 import { writeTransportFixture, type FixtureSourceWay, type FixtureSourcePiece } from './lib/transport-test-fixture.js'
 import { generateRoadPlanningDefaults } from './generate-road-planning-defaults.js'
@@ -144,6 +144,10 @@ test('native continuity retains metadata, batches and measurements; retiring all
   assert.equal((await enrichContinuitySquare(path)).updated, false)
   assert.deepEqual(bytes(path), stable); assert.equal(statSync(path).mtimeMs, mtime)
   await writeRoadAadt(path, () => null, undefined, undefined, { sourceIds: [10], when: () => true })
+  await withArrowWrite(path, table => new Table({
+    ...Object.fromEntries(table.schema.fields.map(field => [field.name, table.getChild(field.name)!])),
+    road_class: vectorFromArray([4, 5, 4], new Uint8()),
+  }))
   const retired = await enrichContinuitySquare(path)
   assert.equal(retired.anchors, 0); assert.equal(retired.retracted, 2)
   output = tableFromIPC(bytes(path))
@@ -203,6 +207,11 @@ test('ordered preparation workers preserve cross-owner counts, exact bytes, retr
       writeFileSync(path, tableToIPC(original.slice(from, to), 'file'))
     }
     writeRoadTopology(prepared, squares)
+    if (squares.length > 1) {
+      // The anchor-only square must not enter withArrowWrite at all (reading this lock directory fails).
+      const lock = resolve(prepared, squares[0], 'roads.arrow.lock')
+      mkdirSync(lock); t.after(() => rmSync(lock, { recursive: true, force: true }))
+    }
     const result = await enrichContinuityDirectory(prepared)
     assert.equal(result.matched, 4)
     console.log(JSON.stringify({ continuityFixture: number, graphBytes: result.graphBytes }))
@@ -249,4 +258,19 @@ test('ordered preparation workers preserve cross-owner counts, exact bytes, retr
       assert.deepEqual(bytes(resolve(prepared, squares[0], 'roads.arrow')), stable[0])
     }
   }
+})
+
+test('writeback child failures reject without replacing corrupt input or hiding worker startup errors', async () => {
+  const path = await chain('writeback-failure.arrow', [4])
+  const prepared = resolve(dirname(path), '../../..'), graphPath = resolve(prepared, 'fills.sqlite')
+  {
+    using database = new DatabaseSync(graphPath)
+    database.exec('CREATE TABLE fills (square TEXT, row_index INTEGER, PRIMARY KEY(square,row_index)) WITHOUT ROWID')
+  }
+  writeFileSync(path, 'invalid Arrow input')
+  const before = bytes(path)
+  await assert.rejects(writeContinuitySquares(prepared, graphPath, ['z9/275/173']))
+  assert.deepEqual(bytes(path), before)
+  await assert.rejects(writeContinuitySquares(prepared, graphPath + '.absent', ['z9/275/173']), /worker exited/)
+  assert.deepEqual(bytes(path), before)
 })

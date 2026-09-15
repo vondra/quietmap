@@ -13,13 +13,23 @@ import { runSquareSteps } from './lib/square-pool.js'
 export async function enrichTaperSquare(path: string) {
   const counts = { rows: 0, matched: 0, retracted: 0, updated: false, boundaries: 0, foreignRows: 0 }
   await withArrowWrite(path, table => {
-    const countries = bakedRoadCountryReader(table), roads = readPlanningRoads(table)
-    const cz = roads.filter(road => countries.codeAt(road.i) === iso2Code('CZ'))
-    const { plan, stats } = buildTaperPlan(cz, CZ_SPEEDS)
+    const rows = table.numRows
+    const countries = bakedRoadCountryReader(table), czechCode = iso2Code('CZ')
     const existing = table.getChild('speed_taper')
     if (existing && (!DataType.isInt(existing.type) || existing.type.bitWidth !== 8 || existing.type.isSigned || existing.nullCount)) {
       throw new Error(`${path}: invalid speed_taper column`)
     }
+    let hasCzechRoads = false
+    for (let index = 0; index < rows; index++) {
+      if (countries.codeAt(index) === czechCode) { hasCzechRoads = true; break }
+    }
+    if (!hasCzechRoads) {
+      counts.rows = counts.foreignRows = rows
+      return table
+    }
+    const roads = readPlanningRoads(table)
+    const cz = roads.filter(road => countries.codeAt(road.i) === czechCode)
+    const { plan, stats } = buildTaperPlan(cz, CZ_SPEEDS)
     const speed = Uint8Array.from(roads, road => Number(existing?.get(road.i) ?? 0))
     for (const road of cz) {
       const next = plan.get(road.i)?.speed ?? 0

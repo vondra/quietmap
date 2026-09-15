@@ -83,14 +83,15 @@ export function segmentGeometryReader(table: Table): SegmentGeometryReader {
   const startGy = requiredInt32(table, 'start_gy')
   const endGx = requiredInt32(table, 'end_gx')
   const endGy = requiredInt32(table, 'end_gy')
+  const rows = table.numRows
   return {
     endpointKeys(index): SegmentEndpointKeys {
-      assertRow(index, table.numRows)
+      assertRow(index, rows)
       return { startKey: `${startGx.get(index)}_${startGy.get(index)}`,
         endKey: `${endGx.get(index)}_${endGy.get(index)}` }
     },
     row(index): SegmentGeometry {
-      assertRow(index, table.numRows)
+      assertRow(index, rows)
       const start = gridToLonLat(startGx.get(index) as number, startGy.get(index) as number)
       const end = gridToLonLat(endGx.get(index) as number, endGy.get(index) as number)
       return {
@@ -123,9 +124,10 @@ function bakedCountryReader(
   if (!DataType.isInt(vector.type) || vector.type.isSigned || vector.type.bitWidth !== 16 || vector.nullCount !== 0) {
     throw new Error(`${layer} Arrow 'country_iso' must be non-null Uint16`)
   }
+  const rows = table.numRows
   return {
     codeAt(index: number): number {
-      assertRow(index, table.numRows)
+      assertRow(index, rows)
       return vector.get(index) as number
     },
   }

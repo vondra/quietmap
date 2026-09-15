@@ -54,7 +54,8 @@ function assignDirectionalObservations(
         !sources || !DataType.isInt(sources.type) || sources.type.bitWidth !== 16 || sources.type.isSigned || sources.nullCount) {
       throw new Error(`${path}: invalid road identity or source column`)
     }
-    for (let index = 0; index < table.numRows; index++) {
+    const rows = table.numRows
+    for (let index = 0; index < rows; index++) {
       if (!shouldOverwrite(Number(sources.get(index)), SOURCE_ID_EU_CITY_TRAFFIC)) continue
       const osmId = Number(ids.get(index))
       if (!Number.isSafeInteger(osmId) || osmId <= 0) throw new Error(`${path}: invalid OSM way identity at row ${index}`)

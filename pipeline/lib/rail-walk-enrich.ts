@@ -43,7 +43,8 @@ export function collectZ9RailGraphSegments(
       const segmentIndex = requiredVector(table, 'segment_idx')
       const identities = source.squareWayPieces(square, Array.from(osmId, value => String(value)))
 
-      for (let index = 0; index < table.numRows; index++) {
+      const rows = table.numRows
+      for (let index = 0; index < rows; index++) {
         const type = railType.get(index) as number
         const serviceCode = service.get(index) as number
         const isTraversalOnly = serviceCode === 4

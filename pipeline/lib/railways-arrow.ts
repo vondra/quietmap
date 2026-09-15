@@ -152,7 +152,7 @@ export async function writeRailwayTraffic(
   try {
     const table = tableFromIPC(readFileSync(arrowPath))
     result.rows = table.numRows
-    if (table.numRows === 0) return result
+    if (result.rows === 0) return result
 
     const geometry = segmentGeometryReader(table)
     const osmId = requiredInteger(table, 'osm_id', true, 64)
@@ -179,7 +179,7 @@ export async function writeRailwayTraffic(
 
     database.exec('BEGIN IMMEDIATE')
     if (options.retract) {
-      for (let index = 0; index < table.numRows; index++) {
+      for (let index = 0; index < result.rows; index++) {
         const rowSource = existingSource.get(index) as number
         const inAllowedCountry = allowedCountryCodes === null || allowedCountryCodes.has(countries.codeAt(index))
         const row: RailwayRow = {
@@ -204,7 +204,7 @@ export async function writeRailwayTraffic(
       }
     }
 
-    for (let index = 0; index < table.numRows; index++) {
+    for (let index = 0; index < result.rows; index++) {
       const row: RailwayRow = {
         ...geometry.row(index),
         osmId: String(osmId.get(index)),

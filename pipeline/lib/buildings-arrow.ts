@@ -47,7 +47,7 @@ export async function writeBuildingEnrichment(
     const floors = Uint8Array.from(originalFloors)
     const types = Uint8Array.from(originalTypes)
     const sources = Uint16Array.from(originalSource)
-    for (let i = 0; i < table.numRows; i++) {
+    for (let i = 0; i < result.rows; i++) {
       if (types[i] > 13) throw new Error(`${path}: invalid building_type at row ${i}`)
       const row: BuildingRow = {
         ...gridToLonLat(gx.get(i) as number, gy.get(i) as number),
