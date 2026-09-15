@@ -63,6 +63,15 @@ export function wrappedLongitudeMidpoint(start: number, end: number): number {
   return normalizeLongitude(start + delta / 2)
 }
 
+/** Project longitude/latitude into the native grid's integer cell coordinates. */
+export function lonLatToGrid(lon: number, lat: number): [number, number] {
+  const latitude = Math.max(-85.051_128_78, Math.min(85.051_128_78, lat))
+  const radians = Math.PI / 180
+  const x = WEB_MERCATOR_RADIUS_M * (lon * radians)
+  const y = WEB_MERCATOR_RADIUS_M * Math.log(Math.tan(Math.PI / 4 + (latitude * radians) / 2))
+  return [Math.floor(x / GRID_QUANTUM_M) + GRID_ORIGIN, Math.floor(y / GRID_QUANTUM_M) + GRID_ORIGIN]
+}
+
 /** Decode one global z30 cell corner to latitude/longitude. */
 export function gridToLonLat(gx: number, gy: number): { lat: number; lon: number } {
   if (!Number.isInteger(gx) || !Number.isInteger(gy)) throw new TypeError('grid coordinates must be integers')

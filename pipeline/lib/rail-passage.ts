@@ -1,15 +1,16 @@
 /** Clipped source-way passages and category evidence for the railway traffic sidecar. */
 
 import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { tableFromIPC } from 'apache-arrow'
+import { resolve } from 'node:path'
+import { restoreRailwayParentsForEnrichment } from './rail-parent.js'
 import { isNationallyOwnedSource } from './sources.js'
 import { isWalkableRailType } from './rail-graph.js'
 import { bakedRailwayCountryReader, iso2Code, segmentGeometryReader } from './prepared-grid.js'
 import { SourceTransportTopology, transportPieceKey } from './transport-topology.js'
 import {
   inferredRailStatus, insertRailInterval, openRailTrafficSidecar, railMatchingMask,
-  railStatusCode, replaceRailQuarantine, retractRailSourceSquare, type RailIntervalRow,
+  railStatusCode, replaceRailQuarantine, retractRailSourceSquare, railTrafficSidecarPath, type RailIntervalRow,
 } from './rail-traffic-store.js'
 import { type RailwayRow, type RailwayTraffic } from './railways-arrow.js'
 
@@ -105,7 +106,7 @@ function trafficToInterval(
 /**
  * Persist clipped visits and whole-piece extra/silent stamps in the sidecar.
  * Visit ordinals are snapshot-local; changed services require retractSafe replacement.
- * Does not mutate railways.arrow — unique (osm_id, segment_idx) stays valid for routing.
+ * Restores finalized parents when needed; routing keeps unique (osm_id, segment_idx).
  */
 export async function writeClippedRailPassages(
   request: WriteClippedRailPassagesRequest,
@@ -116,6 +117,14 @@ export async function writeClippedRailPassages(
   const result: WriteClippedRailPassagesResult = {
     rows: 0, walkStamped: 0, silentStamped: 0, extraStamped: 0, retracted: 0,
     skippedService: 0, skippedForeign: 0, skippedForeignNational: 0,
+  }
+  if (!existsSync(railTrafficSidecarPath(prepared))) {
+    for (const square of request.squares) {
+      const path = resolve(prepared, square, 'railways.arrow')
+      if (existsSync(path) && tableFromIPC(readFileSync(path)).schema.metadata.get('rail_traffic_contract') === '1') {
+        throw new Error('railway parent restoration requires the retained traffic sidecar')
+      }
+    }
   }
   const database = openRailTrafficSidecar(prepared)
   const topology = new SourceTransportTopology(prepared)
@@ -204,7 +213,7 @@ export async function writeClippedRailPassages(
 
       const arrowPath = resolve(prepared, square, 'railways.arrow')
       if (!existsSync(arrowPath)) continue
-      const table = tableFromIPC(readFileSync(arrowPath))
+      const table = restoreRailwayParentsForEnrichment(arrowPath, prepared, square, topology)
       const rows = table.numRows
       result.rows += rows
       if (rows === 0 || (!request.silentResidual && !request.extraMatch)) continue

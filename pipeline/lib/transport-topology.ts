@@ -2,7 +2,7 @@
 
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
-import type { SegmentEndpointKeys } from './prepared-grid.js'
+import { normalizeLongitude, type SegmentEndpointKeys } from './prepared-grid.js'
 import { flatDist } from './spatial.js'
 
 export const transportTopologyPath = (preparedDirectory: string): string => {
@@ -250,6 +250,39 @@ export class SourceTransportTopology implements Disposable {
       SELECT square FROM owners WHERE square IS NOT NULL AND EXISTS (
         SELECT 1 FROM source_pieces p JOIN source_ways w ON w.osm_id=p.way_id
         WHERE p.square=owners.square AND w.family=?)`).iterate(this.family)) yield row.square as string
+  }
+
+  squareParentGeometries(square: string, wayIds: Iterable<string>): Map<string, {
+    start: [number, number]; end: [number, number]; lengthM: number
+  }> {
+    const result = new Map<string, { start: [number, number]; end: [number, number]; lengthM: number }>()
+    for (const wayId of new Set(wayIds)) {
+      const nodes = this.wayNodes(wayId)
+      if (!nodes) throw new Error(`source railway missing ${wayId}`)
+      const distances = sourceNodeDistances(nodes)
+      const at = (vertex: number, fraction: number): { point: [number, number]; distance: number } => {
+        assertSourcePosition(nodes, wayId, vertex, fraction)
+        const start = nodes[vertex][1]!
+        if (fraction === 0) return { point: start, distance: distances[vertex] }
+        const end = nodes[vertex + 1][1]!
+        return {
+          point: [start[0] + (end[0] - start[0]) * fraction,
+            normalizeLongitude(start[1] + normalizeLongitude(end[1] - start[1]) * fraction)],
+          distance: distances[vertex] + (distances[vertex + 1] - distances[vertex]) * fraction,
+        }
+      }
+      for (const raw of this.wayPieces.iterate(wayId)) {
+        if (raw.square !== square) continue
+        const piece = raw as unknown as SourcePiece
+        const start = at(piece.start_vertex, piece.start_fraction)
+        const end = at(piece.end_vertex, piece.end_fraction)
+        if (end.distance <= start.distance) throw new Error(`invalid source piece interval ${wayId}:${piece.segment_idx}`)
+        result.set(transportPieceKey(wayId, piece.segment_idx), {
+          start: start.point, end: end.point, lengthM: end.distance - start.distance,
+        })
+      }
+    }
+    return result
   }
 
   squareWayPieces(square: string, wayIds: Iterable<string>): Map<string, SegmentEndpointKeys> {

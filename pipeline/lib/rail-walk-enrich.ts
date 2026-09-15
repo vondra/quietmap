@@ -1,8 +1,8 @@
 /** Join acoustic railway rows to their original OSM connectivity before matching traffic. */
 
-import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { tableFromIPC, type Table, type Vector } from 'apache-arrow'
+import { type Table, type Vector } from 'apache-arrow'
+import { restoreRailwayParentsForEnrichment } from './rail-parent.js'
 import { listPreparedSquares, segmentGeometryReader, type PreparedBbox } from './prepared-grid.js'
 import { buildRailGraph, isWalkableRailType, type RailGraphSegmentInput, type RailStationPairCount, type RailFailedPairRecord } from './rail-graph.js'
 import { walkRailStationPairs } from './rail-graph-metrics.js'
@@ -31,7 +31,7 @@ export function collectZ9RailGraphSegments(
     const segments: RailGraphSegmentInput[] = []
     for (const square of squares) {
       const path = resolve(preparedDirectory, square, 'railways.arrow')
-      const table = tableFromIPC(readFileSync(path))
+      const table = restoreRailwayParentsForEnrichment(path, preparedDirectory, square, source)
       const geometry = segmentGeometryReader(table)
       const railType = requiredVector(table, 'rail_type')
       const usage = requiredVector(table, 'usage')

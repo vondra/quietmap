@@ -1,13 +1,13 @@
 /** Whole-piece railway evidence writer for the final preparation sidecar. */
 
-import { readFileSync } from 'node:fs'
 import { dirname, basename, resolve } from 'node:path'
-import { DataType, tableFromIPC, type Table, type Vector } from 'apache-arrow'
+import { DataType, type Table, type Vector } from 'apache-arrow'
 import { SOURCES_BY_ID, countryIsosForNationalSource } from './sources.js'
 import {
   bakedRailwayCountryReader, iso2Code, segmentGeometryReader, type SegmentGeometry,
 } from './prepared-grid.js'
 import { SourceTransportTopology } from './transport-topology.js'
+import { restoreRailwayParentsForEnrichment } from './rail-parent.js'
 import {
   inferredRailStatus, insertRailInterval, openRailTrafficSidecar, railMatchingMask,
   railStatusCode, retractRailSourceSquare,
@@ -129,7 +129,7 @@ function writerCountryIso(options: RailwayWriteOptions): string {
 
 /**
  * Persist whole-piece daily evidence in the rail-traffic sidecar.
- * Does not mutate railways.arrow traffic columns.
+ * Restores finalized parents when needed; traffic is written only to the sidecar.
  */
 export async function writeRailwayTraffic(
   arrowPath: string,
@@ -147,10 +147,10 @@ export async function writeRailwayTraffic(
   const allowedCountryCodes = options.allowedCountryIsos
     ? new Set(options.allowedCountryIsos.map(iso2Code))
     : null
-  const database = openRailTrafficSidecar(preparedDirectory)
   const topology = topologyFor(preparedDirectory)
+  const table = restoreRailwayParentsForEnrichment(arrowPath, preparedDirectory, square, topology)
+  const database = openRailTrafficSidecar(preparedDirectory)
   try {
-    const table = tableFromIPC(readFileSync(arrowPath))
     result.rows = table.numRows
     if (result.rows === 0) return result
 
