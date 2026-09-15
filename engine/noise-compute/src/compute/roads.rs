@@ -62,6 +62,8 @@ pub(crate) fn compute_roads(
         dominant_distance_m: f64,
         /// Prepared traffic of the dominant segment (counts + estimated bitmask).
         dominant_traffic: normalize::RoadTraffic,
+        /// Observed timing attribution of the dominant segment (display).
+        dominant_time_profile_attribution: Option<normalize::RoadTimeProfileAttribution>,
         dominant_source_id: u16, // dataset identity from pipeline/lib/enrichment-datasets.ts
         dominant_speed_posted: u8,
         dominant_speed_used: f64,
@@ -78,6 +80,7 @@ pub(crate) fn compute_roads(
         speed_max: f64,
         oneway_segment_count: u32,
         twoway_segment_count: u32,
+        profiled_segment_count: u32,
         // Group-level screening obstacle histogram (popup transparency)
         obstacle_segment_count: u32,
         obstacle_height_sum: f64,
@@ -575,6 +578,7 @@ pub(crate) fn compute_roads(
                 dominant_segment_idx: 0,
                 dominant_distance_m: 0.0,
                 dominant_traffic: normalize::RoadTraffic::default(),
+                dominant_time_profile_attribution: None,
                 dominant_source_id: 0,
                 dominant_speed_posted: 0,
                 dominant_speed_used: 0.0,
@@ -590,6 +594,7 @@ pub(crate) fn compute_roads(
                 speed_max: 0.0,
                 oneway_segment_count: 0,
                 twoway_segment_count: 0,
+                profiled_segment_count: 0,
                 obstacle_segment_count: 0,
                 obstacle_height_sum: 0.0,
                 obstacle_max_height: 0.0,
@@ -607,6 +612,9 @@ pub(crate) fn compute_roads(
         // Aggregation across all grouped segments (independent of closest check)
         acc.segment_count += 1;
         acc.total_length_m += seg.length_m as f64;
+        if seg.traffic.time_profile.is_some() {
+            acc.profiled_segment_count += 1;
+        }
         if seg.bridge {
             acc.bridge_count += 1;
         }
@@ -676,6 +684,7 @@ pub(crate) fn compute_roads(
             acc.dominant_segment_idx = seg.segment_idx;
             acc.dominant_distance_m = seg.dist_m;
             acc.dominant_traffic = seg.traffic;
+            acc.dominant_time_profile_attribution = seg.time_profile_attribution.clone();
             acc.dominant_source_id = seg.source_id;
             acc.dominant_speed_posted = seg.speed_limit;
             acc.dominant_speed_used = speed;
@@ -803,6 +812,8 @@ pub(crate) fn compute_roads(
             obstacle_max_height_m: (acc.obstacle_max_height * 10.0).round() / 10.0,
             obstacle_max_segment_idx: acc.obstacle_max_segment_idx,
             provenance: crate::sources::dataset_meta(acc.dominant_source_id),
+            time_profile_attribution: acc.dominant_time_profile_attribution.clone(),
+            profiled_segment_count: acc.profiled_segment_count,
         };
 
         contributors.push(Contributor {
@@ -884,6 +895,7 @@ pub(crate) mod tests {
         RoadSegment {
             osm_id: 1,
             square_country_city: None,
+            time_profile_attribution: None,
             segment_idx: 0,
             start_lat: 50.0,
             start_lon: 14.0,
@@ -958,6 +970,51 @@ pub(crate) mod tests {
             assert_eq!(meta.traffic_estimated, 15);
         }
         assert_eq!(world.speed_source, "osm_posted");
+    }
+
+    /// Observed timing attribution rides the dominant segment into
+    /// RoadMetadata verbatim; the group counter separates profiled from
+    /// unprofiled segments so the popup never claims one profile for a
+    /// mixed group.
+    #[test]
+    fn timing_attribution_and_profiled_count_reach_road_metadata() {
+        let seg = secondary_segment();
+        let profiled = RoadSegment {
+            traffic: crate::normalize::RoadTraffic {
+                // Doubled counts keep this segment deterministically dominant
+                // in the mixed-group case below (dominance is day energy).
+                light: seg.traffic.light * 2.0,
+                time_profile: Some(crate::normalize::RoadTimeProfile {
+                    light: Some([0.75, 0.18, 0.07]),
+                    heavy: Some([0.55, 0.18, 0.27]),
+                    ..Default::default()
+                }),
+                ..seg.traffic
+            },
+            time_profile_attribution: Some(crate::normalize::RoadTimeProfileAttribution {
+                source: "https://example.org/counts".to_owned(),
+                window: "2025-01..2025-12".to_owned(),
+                total_transfer: false,
+            }),
+            ..seg.clone()
+        };
+        let meta = one_road_meta(std::slice::from_ref(&profiled));
+        let attr = meta.time_profile_attribution.as_ref().unwrap();
+        assert_eq!(attr.source, "https://example.org/counts");
+        assert_eq!(attr.window, "2025-01..2025-12");
+        assert!(!attr.total_transfer);
+        assert_eq!(meta.profiled_segment_count, 1);
+
+        // Mixed group: dominant attribution stays scoped to the profiled
+        // segment while the counter reports only one profiled of two.
+        let mixed = one_road_meta(&[profiled, seg.clone()]);
+        assert_eq!(mixed.segment_count, 2);
+        assert_eq!(mixed.profiled_segment_count, 1);
+        assert!(mixed.time_profile_attribution.is_some());
+
+        let plain = one_road_meta(std::slice::from_ref(&seg));
+        assert!(plain.time_profile_attribution.is_none());
+        assert_eq!(plain.profiled_segment_count, 0);
     }
 
     /// A prepared total zero is a TRUE zero: no contributor, no class-default

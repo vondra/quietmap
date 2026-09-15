@@ -643,6 +643,7 @@ mod tests {
         let roads = vec![RoadSegment {
             osm_id: 1,
             square_country_city: None,
+            time_profile_attribution: None,
             segment_idx: 0,
             // 500 m due north of the receiver, running east-west: the
             // declared dist_m/cp/fraction must AGREE with the geometry —
@@ -726,6 +727,7 @@ mod tests {
         RoadSegment {
             osm_id: 1,
             square_country_city: None,
+            time_profile_attribution: None,
             segment_idx: 0,
             start_lat: 50.080905,
             start_lon: 14.418460,
@@ -979,6 +981,7 @@ mod tests {
         let roads = vec![RoadSegment {
             osm_id: 2,
             square_country_city: None,
+            time_profile_attribution: None,
             segment_idx: 0,
             start_lat: 50.0801,
             start_lon: 14.42,
@@ -1148,6 +1151,7 @@ mod tests {
         let roads = vec![RoadSegment {
             osm_id: 1,
             square_country_city: None,
+            time_profile_attribution: None,
             segment_idx: 0,
             start_lat: 50.081,
             start_lon: 14.42,

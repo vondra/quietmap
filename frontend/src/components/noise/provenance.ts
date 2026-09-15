@@ -2,6 +2,7 @@ import type {
   DatasetProvenance,
   RailCategoryTraffic,
   RailTraffic,
+  RoadTimingAttribution,
   RoadTrafficCounts,
 } from '../../types/noise.ts'
 
@@ -49,6 +50,22 @@ export function roadTrafficSourceLine(provenance: DatasetProvenance | null | und
   if (!provenance) return 'Source: class prior (no observation dataset)'
   const url = provenance.url ? `\n  ${provenance.url}` : ''
   return `Source: ${formatProv(provenance)}${url}`
+}
+
+/** Hostname of a stored timing-source URL; the raw string when unparseable. */
+export function sourceHost(source: string): string {
+  try {
+    return new URL(source).hostname.replace(/^www\./, '')
+  } catch {
+    return source
+  }
+}
+
+/** One-line attribution of the observed day/evening/night traffic timing:
+ *  counting-station dataset · observation window · transfer caveat. */
+export function roadTimingLine(attr: RoadTimingAttribution): string {
+  const caveat = attr.total_transfer ? ' · vehicle-class timing estimated' : ''
+  return `Timing: ${sourceHost(attr.source)} · ${attr.window.replace('..', '–')}${caveat}`
 }
 
 export function roadTrafficLabel(traffic: RoadTrafficCounts): string {

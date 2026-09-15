@@ -232,6 +232,20 @@ test('road metadata and traces require prepared fractional counts and category e
     assert.throws(() => validatePopupPayload(broken, POINT), /traffic|finite|integer/)
     assert.throws(() => validateMetadata({ ...metadata, [key]: value }, 'road', 'metadata'), /traffic|finite|integer/)
   }
+  const timing = { source: 'https://example.org/counts', window: '2025-01..2025-12', total_transfer: true }
+  metadata.time_profile_attribution = timing
+  metadata.profiled_segment_count = 1
+  current.segments[0].emission.time_profile_attribution = timing
+  validatePopupPayload(current, POINT)
+  validateMetadata(metadata, 'road', 'metadata')
+  assert.throws(() => validateMetadata({ ...metadata, profiled_segment_count: 2 }, 'road', 'metadata'), /exceeds/)
+  for (const [key, value] of [['source', null], ['window', 2025], ['total_transfer', 'yes']]) {
+    const invalid = { ...timing, [key]: value }
+    assert.throws(() => validateMetadata({ ...metadata, time_profile_attribution: invalid }, 'road', 'metadata'), /expected/)
+    const broken = structuredClone(current)
+    broken.segments[0].emission.time_profile_attribution = invalid
+    assert.throws(() => validatePopupPayload(broken, POINT), /expected/)
+  }
   assert.throws(() => validateMetadata({ ...metadata, aadt_light_raw: 0 }, 'road', 'metadata'), /unknown key/)
   current.segments[0].emission.traffic_source = 'default_by_class'
   assert.throws(() => validatePopupPayload(current, POINT), /unknown key/)

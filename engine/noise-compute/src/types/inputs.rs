@@ -95,6 +95,10 @@ pub struct RoadSegment {
     /// The row's own baked SquareCountryCity (plan M3 columns); `None` when its batch
     /// carried none — the kernel then takes the receiver's SquareCountryCity.
     pub square_country_city: Option<crate::square_country_city::SquareCountryCity>,
+    /// Display provenance of `traffic.time_profile` (dataset landing page +
+    /// observation window); `None` exactly when the row has no observed
+    /// profile. Consumed by the popup metadata, never by emission math.
+    pub time_profile_attribution: Option<crate::normalize::RoadTimeProfileAttribution>,
 }
 
 /// Railway microsegment (≤250m) with pre-joined traffic.

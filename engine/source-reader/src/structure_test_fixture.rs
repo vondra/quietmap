@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
+    Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
     Int64Array, StringArray, UInt16Array, UInt32Array, UInt8Array,
 };
 use arrow::datatypes::{DataType, Field, Schema};
@@ -227,6 +227,9 @@ pub struct FixtureRoad {
     pub aadt_moto: f64,
     /// Per-category estimated bitmask (light 1, medium 2, heavy 4, moto 8).
     pub traffic_estimated: u8,
+    /// 1-based index into the file's `roads_time_profiles` dictionary;
+    /// 0 (the default) = no observed profile.
+    pub traffic_profile_id: u16,
     /// Written but unread at runtime: the producer already resolved closures.
     pub access: u8,
 }
@@ -246,13 +249,14 @@ impl Default for FixtureRoad {
             aadt_heavy: 400.0,
             aadt_moto: 100.0,
             traffic_estimated: 15,
+            traffic_profile_id: 0,
             access: 0,
         }
     }
 }
 
-fn roads_schema() -> Schema {
-    Schema::new(vec![
+fn roads_schema(profiles: Option<&str>) -> Schema {
+    let mut fields = vec![
         Field::new("osm_id", DataType::Int64, false),
         Field::new("segment_idx", DataType::Int16, false),
         Field::new("start_gx", DataType::Int32, false),
@@ -279,22 +283,37 @@ fn roads_schema() -> Schema {
         Field::new("aadt_heavy", DataType::Float64, false),
         Field::new("aadt_moto", DataType::Float64, false),
         Field::new("traffic_estimated", DataType::UInt8, false),
-    ])
-    .with_metadata(std::collections::HashMap::from([(
+    ];
+    let mut metadata = std::collections::HashMap::from([(
         "road_traffic_contract".to_owned(),
         "1".to_owned(),
-    )]))
+    )]);
+    if let Some(dictionary) = profiles {
+        fields.push(Field::new("traffic_profile_id", DataType::UInt16, false));
+        metadata.insert(
+            crate::road_traffic::ROAD_PROFILES_METADATA_KEY.to_owned(),
+            dictionary.to_owned(),
+        );
+    }
+    Schema::new(fields).with_metadata(metadata)
 }
 
 /// A final roads.arrow on disk: osm-extract grid layout plus the finalized
 /// traffic columns (`road_traffic_contract=1`).
 pub fn write_roads_file(path: &Path, rows: &[FixtureRoad]) {
-    let schema = Arc::new(roads_schema());
+    write_roads_file_opts(path, rows, None);
+}
+
+/// `write_roads_file` with an optional `roads_time_profiles` dictionary:
+/// `rows` reference entries 1-based via `traffic_profile_id`.
+pub fn write_roads_file_opts(path: &Path, rows: &[FixtureRoad], profiles: Option<&str>) {
+    let schema = Arc::new(roads_schema(profiles));
     let starts: Vec<(i32, i32)> = rows.iter().map(|r| grid_of(r.start.0, r.start.1)).collect();
     let ends: Vec<(i32, i32)> = rows.iter().map(|r| grid_of(r.end.0, r.end.1)).collect();
     let batch = RecordBatch::try_new(
         schema.clone(),
-        vec![
+        {
+            let mut columns: Vec<Arc<dyn Array>> = vec![
             Arc::new(Int64Array::from_iter_values(rows.iter().map(|r| r.osm_id))),
             Arc::new(Int16Array::from_iter_values(rows.iter().map(|_| 0i16))),
             Arc::new(Int32Array::from_iter_values(
@@ -343,7 +362,14 @@ pub fn write_roads_file(path: &Path, rows: &[FixtureRoad]) {
             Arc::new(UInt8Array::from_iter_values(
                 rows.iter().map(|r| r.traffic_estimated),
             )),
-        ],
+        ];
+        if profiles.is_some() {
+            columns.push(Arc::new(UInt16Array::from_iter_values(
+                rows.iter().map(|r| r.traffic_profile_id),
+            )));
+        }
+        columns
+        }
     )
     .unwrap();
     let file = std::fs::File::create(path).unwrap();

@@ -2,6 +2,7 @@
 
 import {
   array,
+  boolean,
   exactKeys,
   fail,
   finite,
@@ -17,6 +18,14 @@ export function validateRoadTraffic(value, path) {
   for (const key of ROAD_TRAFFIC_KEYS.slice(0, 4)) {
     finite(value[key], `${path}.${key}`)
     if (value[key] < 0) fail(`${path}.${key}`, 'negative traffic')
+  }
+  if (Object.hasOwn(value, 'time_profile_attribution')) {
+    const at = `${path}.time_profile_attribution`
+    const timing = value.time_profile_attribution
+    exactKeys(timing, at, ['source', 'window', 'total_transfer'])
+    string(timing.source, `${at}.source`)
+    string(timing.window, `${at}.window`)
+    boolean(timing.total_transfer, `${at}.total_transfer`)
   }
   integer(value.traffic_estimated, `${path}.traffic_estimated`, 0)
   if (value.traffic_estimated > 15) fail(`${path}.traffic_estimated`, 'invalid category bitmask')
@@ -91,7 +100,7 @@ export function validateMetadata(value, sourceType, path) {
         'dominant_distance_m', 'closest_distance_m', 'speed_min_kmh', 'speed_max_kmh',
         'oneway_segment_count', 'twoway_segment_count', 'segment_count', 'total_length_m',
         'bridge_count', 'obstacle_segment_count', 'obstacle_avg_height_m',
-        'obstacle_max_height_m', 'obstacle_max_segment_idx'], ['provenance']],
+        'obstacle_max_height_m', 'obstacle_max_segment_idx'], ['provenance', 'time_profile_attribution', 'profiled_segment_count']],
     rail: [
       ['kind', 'traffic', 'passenger_provenance', 'freight_provenance', 'maxspeed_posted_kmh',
         'speed_kmh', 'speed_source', 'rail_type', 'usage', 'service', 'highspeed',
@@ -105,7 +114,13 @@ export function validateMetadata(value, sourceType, path) {
   const definition = definitions[expectedKind]
   if (!definition || value.kind !== expectedKind) fail(`${path}.kind`, `expected ${expectedKind}`)
   exactKeys(value, path, definition[0], definition[1])
-  if (expectedKind === 'road') validateRoadTraffic(value, path)
+  if (expectedKind === 'road') {
+    validateRoadTraffic(value, path)
+    if (Object.hasOwn(value, 'profiled_segment_count')) {
+      integer(value.profiled_segment_count, `${path}.profiled_segment_count`, 0)
+      if (value.profiled_segment_count > value.segment_count) fail(path, 'profiled_segment_count exceeds segment_count')
+    }
+  }
   if (expectedKind === 'rail') validateRailTraffic(value, path)
   if (Object.hasOwn(value, 'provenance')) validateProvenance(value.provenance, `${path}.provenance`)
 }

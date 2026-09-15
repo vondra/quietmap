@@ -273,6 +273,10 @@ pub enum EmissionTrace {
         /// Per-category estimated bitmask (light 1, medium 2, heavy 4, moto 8):
         /// bit set = estimate/prior, clear = observed count.
         traffic_estimated: u8,
+        /// Observed traffic-timing attribution (dataset landing page +
+        /// observation window); `None` = class-default timing, omitted.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        time_profile_attribution: Option<crate::normalize::RoadTimeProfileAttribution>,
         speed_kmh: f64,
         surface_corr_db: f64,
         surface: &'static str, // "asphalt" | "paving" | "concrete" | "unpaved" | "gravel"

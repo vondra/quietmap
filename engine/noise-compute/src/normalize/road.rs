@@ -76,6 +76,22 @@ impl RoadTimeProfile {
     }
 }
 
+/// Display attribution for an observed [`RoadTimeProfile`] — where the
+/// counting-station observation came from and how honest its class split
+/// is. Not an emission input: it rides the segment to the popup the same
+/// way `source_id` does, and is omitted entirely when absent.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct RoadTimeProfileAttribution {
+    /// Dataset landing page (validated non-empty by the reader).
+    pub source: String,
+    /// Observation window as stored, e.g. "2025-01..2025-12".
+    pub window: String,
+    /// Some vehicle classes have no class-specific observation and consume
+    /// the total-vehicle share — their timing is a transferred estimate,
+    /// not a measured class profile.
+    pub total_transfer: bool,
+}
+
 /// Prepared road traffic: per-category effective vehicles/day plus the
 /// per-category estimated bitmask written by `roads-finalize`. Bit set means
 /// that category's value is an estimate or prior rather than an observed
@@ -679,6 +695,7 @@ mod tests {
         crate::types::RoadSegment {
             osm_id: 1,
             square_country_city: None,
+            time_profile_attribution: None,
             segment_idx: 0,
             start_lat: 50.0,
             start_lon: 14.0,

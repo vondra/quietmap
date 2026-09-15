@@ -1,7 +1,7 @@
 //! Strict prepared road traffic decoding shared by popup and surface loaders.
 use arrow::array::{Array, Float64Array, UInt16Array, UInt8Array};
 use arrow::record_batch::RecordBatch;
-use noise_compute::normalize::{RoadTimeProfile, RoadTraffic};
+use noise_compute::normalize::{RoadTimeProfile, RoadTimeProfileAttribution, RoadTraffic};
 
 /// Schema-metadata key carrying the sparse profile dictionary: a JSON object
 /// `{source, entries:[{station, window, days, status, profile}]}` written by
@@ -14,7 +14,14 @@ pub struct RoadTrafficColumns<'a> {
     counts: [&'a Float64Array; 4],
     estimated: &'a UInt8Array,
     profile_ids: Option<&'a UInt16Array>,
-    profiles: Vec<RoadTimeProfile>,
+    entries: Vec<RoadProfileEntry>,
+}
+
+/// One decoded dictionary entry: the emission shares plus the display
+/// attribution validated alongside them — one parse, one truth per entry.
+pub struct RoadProfileEntry {
+    pub profile: RoadTimeProfile,
+    pub attribution: RoadTimeProfileAttribution,
 }
 
 fn required<'a, T: Array + 'static>(batch: &'a RecordBatch, name: &str) -> Result<&'a T, String> {
@@ -62,7 +69,7 @@ impl<'a> RoadTrafficColumns<'a> {
             ],
             estimated: required(batch, "traffic_estimated")?,
             profile_ids,
-            profiles,
+            entries: profiles,
         };
         for row in 0..batch.num_rows() {
             if result
@@ -70,12 +77,21 @@ impl<'a> RoadTrafficColumns<'a> {
                 .iter()
                 .any(|column| !column.value(row).is_finite() || column.value(row) < 0.0)
                 || result.estimated.value(row) > 15
-                || result.profile_ids.is_some_and(|ids| ids.value(row) as usize > result.profiles.len())
+                || result.profile_ids.is_some_and(|ids| ids.value(row) as usize > result.entries.len())
             {
                 return Err(format!("invalid prepared road traffic at row {row}"));
             }
         }
         Ok(result)
+    }
+
+    /// 1-based dictionary index of the row's entry; 0 and an absent column
+    /// both mean "no observed profile". `read` proved id ≤ entry count.
+    fn entry_index(&self, row: usize) -> Option<usize> {
+        match self.profile_ids?.value(row) {
+            0 => None,
+            id => Some(id as usize - 1),
+        }
     }
 
     pub fn row(&self, row: usize) -> RoadTraffic {
@@ -85,16 +101,17 @@ impl<'a> RoadTrafficColumns<'a> {
             heavy: self.counts[2].value(row),
             moto: self.counts[3].value(row),
             estimated: self.estimated.value(row),
-            time_profile: match self.profile_ids {
-                // 0 is the valid no-profile reference; ids are 1-based and
-                // `read` already proved id ≤ dictionary length.
-                Some(ids) => match ids.value(row) {
-                    0 => None,
-                    id => self.profiles.get(id as usize - 1).copied(),
-                },
-                None => None,
-            },
+            time_profile: self
+                .entry_index(row)
+                .and_then(|i| self.entries.get(i).map(|e| e.profile)),
         }
+    }
+
+    /// Display attribution paired with `row()`'s `time_profile` by
+    /// construction (same id, same entry); `None` = no observed profile.
+    pub fn attribution(&self, row: usize) -> Option<&RoadTimeProfileAttribution> {
+        self.entry_index(row)
+            .and_then(|i| self.entries.get(i).map(|e| &e.attribution))
     }
 }
 
@@ -105,7 +122,7 @@ impl<'a> RoadTrafficColumns<'a> {
 fn decode_profile_dictionary(
     metadata: Option<&String>,
     column_rows: Option<usize>,
-) -> Result<Vec<RoadTimeProfile>, String> {
+) -> Result<Vec<RoadProfileEntry>, String> {
     let Some(raw) = metadata else {
         if column_rows.is_some() {
             return Err("traffic_profile_id column without roads_time_profiles metadata".to_owned());
@@ -121,10 +138,14 @@ fn decode_profile_dictionary(
         .get("entries")
         .and_then(|v| v.as_array())
         .ok_or_else(|| format!("invalid {ROAD_PROFILES_METADATA_KEY}: entries missing"))?;
-    if value.get("source").and_then(|v| v.as_str()).unwrap_or("").is_empty() {
+    let source = value
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if source.is_empty() {
         return Err(format!("invalid {ROAD_PROFILES_METADATA_KEY}: source missing"));
     }
-    let mut profiles = Vec::with_capacity(entries.len());
+    let mut decoded = Vec::with_capacity(entries.len());
     for entry in entries {
         let text_field = |name: &str| {
             entry
@@ -134,7 +155,7 @@ fn decode_profile_dictionary(
                 .ok_or_else(|| format!("invalid {ROAD_PROFILES_METADATA_KEY} entry: {name} missing"))
         };
         text_field("station")?;
-        text_field("window")?;
+        let window = text_field("window")?;
         text_field("status")?;
         entry
             .get("days")
@@ -177,9 +198,23 @@ fn decode_profile_dictionary(
             total: shares("total")?,
         };
         profile.validate().map_err(|e| format!("{ROAD_PROFILES_METADATA_KEY}: {e}"))?;
-        profiles.push(profile);
+        // Total-transfer caveat: a total share only backs classes without
+        // their own observation, so the caveat fires iff at least one class
+        // falls back to it (all-four-observed makes `total` inert).
+        let total_transfer = profile.total.is_some()
+            && [profile.light, profile.medium, profile.heavy, profile.moto]
+                .into_iter()
+                .any(|class| class.is_none());
+        decoded.push(RoadProfileEntry {
+            profile,
+            attribution: RoadTimeProfileAttribution {
+                source: source.to_owned(),
+                window: window.to_owned(),
+                total_transfer,
+            },
+        });
     }
-    Ok(profiles)
+    Ok(decoded)
 }
 
 #[cfg(test)]
@@ -285,22 +320,33 @@ mod tests {
             (ROAD_PROFILES_METADATA_KEY.to_owned(), dictionary.to_owned()),
         ]);
         let batch = RecordBatch::try_new(Arc::new(Schema::new(fields).with_metadata(metadata)), columns).unwrap();
-        let traffic = RoadTrafficColumns::read(&batch).unwrap().row(0);
+        let columns = RoadTrafficColumns::read(&batch).unwrap();
+        let traffic = columns.row(0);
         let profile = traffic.time_profile.expect("total-only entry resolves");
         assert_eq!(profile.total.unwrap(), [0.80, 0.10, 0.10]);
         assert_eq!(profile.class_shares(2).unwrap(), [0.55, 0.18, 0.27], "heavy keeps its own observation");
         assert_eq!(profile.class_shares(0).unwrap(), [0.80, 0.10, 0.10], "light inherits the total estimate");
         assert_eq!(profile.class_shares(1).unwrap(), [0.80, 0.10, 0.10], "medium inherits the total estimate");
+        // Attribution survives the same decode: stored source + window, and
+        // the transfer caveat marked because light/medium/moto have no
+        // class-specific observation backing them.
+        let attribution = columns.attribution(0).expect("profiled row carries attribution");
+        assert_eq!(attribution.source, "https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/");
+        assert_eq!(attribution.window, "2025-01..2025-12");
+        assert!(attribution.total_transfer, "unmeasured classes inherit the total share");
         // A wrong-typed or null total share must fail, never degrade to absence.
         for invalid in ["null", "17", "[0.3,0.3]", "\"0.8,0.1,0.1\""] {
             let corrupt = dictionary.replacen("[0.80,0.10,0.10]", invalid, 1);
             assert!(decode_profile_dictionary(Some(&corrupt), Some(1)).is_err(), "corrupt total rejected: {invalid}");
         }
-        // A class-only entry (legacy BW shape) is untouched by the total field.
+        // A class-only entry (legacy BW shape) is untouched by the total field
+        // and carries no transfer caveat — unmeasured classes keep the
+        // class-default split, not a transferred share.
         let legacy = dictionary.replace("\"total\":[0.80,0.10,0.10],", "");
-        let profiles = decode_profile_dictionary(Some(&legacy), Some(1)).unwrap();
-        assert_eq!(profiles[0].total, None);
-        assert_eq!(profiles[0].class_shares(0), None, "no total means light stays unknown");
+        let entries = decode_profile_dictionary(Some(&legacy), Some(1)).unwrap();
+        assert_eq!(entries[0].profile.total, None);
+        assert_eq!(entries[0].profile.class_shares(0), None, "no total means light stays unknown");
+        assert!(!entries[0].attribution.total_transfer, "no total share, no transfer caveat");
     }
 
     #[test]
@@ -340,6 +386,7 @@ mod tests {
         let columns = RoadTrafficColumns::read(&batch).unwrap();
         let traffic = columns.row(0);
         assert!(columns.row(1).time_profile.is_none(), "id 0 stays no-profile without underflow");
+        assert!(columns.attribution(1).is_none(), "unprofiled row omits attribution");
         let profile = traffic.time_profile.expect("dictionary row resolves a profile");
         assert_eq!(profile.heavy.unwrap()[2], 0.27);
         assert_eq!(profile.light.unwrap()[2], 0.07);

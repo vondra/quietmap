@@ -111,6 +111,19 @@ pub struct RoadMetadata {
     /// `crate::sources::DatasetMeta` and `EmissionTrace::Road.provenance`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provenance: Option<crate::sources::DatasetMeta>,
+    /// Observed traffic-timing attribution of the dominant segment (dataset
+    /// landing page + observation window); `None` = class-default timing,
+    /// omitted on the wire. Refers to the day/evening/night split, not AADT.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_profile_attribution: Option<crate::normalize::RoadTimeProfileAttribution>,
+    /// Segments in this group carrying an observed time profile; below
+    /// `segment_count` the group's timing is mixed with class defaults.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub profiled_segment_count: u32,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 /// Railway contributor metadata — prepared category traffic and effective speed.

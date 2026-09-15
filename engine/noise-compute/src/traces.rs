@@ -594,6 +594,8 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
         surface: crate::surface_name(seg.surface_type),
         source_id: seg.source_id,
         provenance: crate::sources::dataset_meta(seg.source_id),
+        // Observed timing attribution, omitted when the segment has none.
+        time_profile_attribution: seg.time_profile_attribution.clone(),
         road_class: class_name,
         bridge: seg.bridge,
         tunnel: seg.tunnel,

@@ -6,9 +6,11 @@ import {
   railTrafficLabel,
   roadCategoryEstimated,
   roadCategoryLine,
+  roadTimingLine,
   roadTrafficDescription,
   roadTrafficLabel,
   roadTrafficSourceLine,
+  sourceHost,
 } from '../src/components/noise/provenance.ts'
 
 function dataset(tier, overrides = {}) {
@@ -88,4 +90,32 @@ test('the headline label totals the four prepared classes', () => {
     roadTrafficLabel(traffic({ aadt_light: 0, aadt_medium: 0, aadt_moto: 0, aadt_heavy: 500 })),
     '500/day',
   )
+})
+
+test('timing attribution names the stored source and window, marking total transfer', () => {
+  const tmas = {
+    source: 'https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/',
+    window: '2025-01..2025-12',
+    total_transfer: true,
+  }
+  assert.equal(
+    roadTimingLine(tmas),
+    'Timing: fhwa.dot.gov · 2025-01–2025-12 · vehicle-class timing estimated',
+  )
+  const bw = {
+    source: 'https://mobidata-bw.de/de/dataset/stundenwerte_dauerzaehlstellen',
+    window: '2025-01..2025-12',
+    total_transfer: false,
+  }
+  // No total share → no transfer caveat; unmeasured classes keep defaults.
+  assert.equal(
+    roadTimingLine(bw),
+    'Timing: mobidata-bw.de · 2025-01–2025-12',
+  )
+})
+
+test('sourceHost extracts the hostname and falls back to the raw string', () => {
+  assert.equal(sourceHost('https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/'), 'fhwa.dot.gov')
+  assert.equal(sourceHost('https://mobidata-bw.de/de/dataset/x'), 'mobidata-bw.de')
+  assert.equal(sourceHost('not a url'), 'not a url')
 })

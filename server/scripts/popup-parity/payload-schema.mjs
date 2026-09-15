@@ -114,7 +114,7 @@ function validateEmission(value, layer, path) {
   const keys = {
     road: [['kind', ...ROAD_TRAFFIC_KEYS, 'speed_kmh',
       'surface_corr_db', 'surface', 'source_id', 'road_class',
-      'bridge', 'tunnel', 'oneway', 'lanes'], ['provenance']],
+      'bridge', 'tunnel', 'oneway', 'lanes'], ['provenance', 'time_profile_attribution']],
     railway: [['kind', 'traffic', 'passenger_provenance', 'freight_provenance',
       'speed_kmh', 'bridge', 'highspeed', 'rail_type', 'service'], []],
     aircraft_ground: [['kind', 'class', 'observed_movements', 'modeled_movements',

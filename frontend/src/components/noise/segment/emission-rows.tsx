@@ -8,7 +8,7 @@ import {
   modelName,
 } from '../../../utils/aircraft-types'
 import { HoverText } from '../../ui/info-tip'
-import { railTrafficLabel, railTrafficDescription, roadTrafficDescription } from '../shared'
+import { railTrafficLabel, railTrafficDescription, roadTimingLine, roadTrafficDescription } from '../shared'
 import { fmtDbSigned } from './display'
 
 export function emissionInputRows(t: SegmentTrace): [React.ReactNode, React.ReactNode][] {
@@ -16,8 +16,12 @@ export function emissionInputRows(t: SegmentTrace): [React.ReactNode, React.Reac
   switch (e.kind) {
     case 'road': {
       const total = e.aadt_light + e.aadt_medium + e.aadt_heavy + e.aadt_moto
+      // Timing line appears only when this segment carries an observed
+      // profile — the segments tab stays silent about class defaults.
+      const timing = e.time_profile_attribution ? `\n${roadTimingLine(e.time_profile_attribution)}` : ''
       const trafficText =
         roadTrafficDescription(e, e.provenance) +
+        timing +
         `\n  ──────────────\n  Total    ${Math.round(total)}/day`
       const surfaceText =
         `Source: OSM surface=${e.surface}\n\n` +

@@ -1,7 +1,7 @@
 import type { Contributor } from '../../../types/noise'
 import { fmt, fmtFloat, fmtInt, fmtCompact, txtTable, type TableRow } from '../../../utils/formatters'
 import { MetricLabel, DataPoint } from '../noise-tooltips'
-import { formatProv, lineRow, railTrafficLabel, railTrafficDescription, roadCategoryEstimated, roadTrafficLabel, roadTrafficSourceLine, subtypeLabel } from '../shared'
+import { formatProv, lineRow, railTrafficLabel, railTrafficDescription, roadCategoryEstimated, roadTrafficSourceLine, sourceHost, subtypeLabel } from '../shared'
 
 // Road and rail source helpers are shared with the Noise segments tab
 // (SegmentExpanded), so both views use identical attribution wording. The
@@ -71,6 +71,37 @@ export function MetadataRows({ c }: { c: Contributor }) {
       'Metadata from loudest segment.',
     ], 18, 12)
     const hasMixedOneway = m.oneway_segment_count > 0 && m.twoway_segment_count > 0
+    const timing = m.time_profile_attribution
+    // Timing attribution is dominant-segment scoped, mirroring every other
+    // metadata row; the "k of N" line keeps a mixed group honest instead of
+    // claiming one profile for all segments.
+    const timingText = timing
+      ? txtTable(
+          [
+            'Observed day/evening/night traffic timing',
+            'from counting stations (dominant segment).',
+            ['Source', timing.source],
+            ['Window', timing.window.replace('..', '–')],
+            '',
+            ...(timing.total_transfer
+              ? [
+                  'Vehicle-class timing estimated:',
+                  'total-vehicle shares transferred where',
+                  'no class observation exists.',
+                ]
+              : ['Unmeasured vehicle classes keep the', 'standard default split.']),
+            ...((m.profiled_segment_count ?? 0) < m.segment_count
+              ? [
+                  '' as TableRow,
+                  `Group: ${m.profiled_segment_count} of ${m.segment_count} segments`,
+                  'carry observed timing.',
+                ]
+              : []),
+          ] as TableRow[],
+          18,
+          12,
+        )
+      : ''
     const surfaceText = txtTable([
       ['Type', m.surface],
       ['Rolling correction', `${fmt(m.surface_corr_db)} dB`],
@@ -95,6 +126,24 @@ export function MetadataRows({ c }: { c: Contributor }) {
             {`${fmtCompact(Math.round(total))}/day`}
           </DataPoint>,
         )}
+        {timing &&
+          lineRow(
+            'Timing',
+            <DataPoint title="Observed traffic timing" text={timingText}>
+              <span className="whitespace-normal">
+                <a
+                  href={timing.source}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:underline"
+                >
+                  {sourceHost(timing.source)}
+                </a>
+                {` · ${timing.window.replace('..', '–')}`}
+                {timing.total_transfer ? ' · vehicle-class timing estimated' : ''}
+              </span>
+            </DataPoint>,
+          )}
         {lineRow(
           <MetricLabel term="segments">Segments</MetricLabel>,
           <DataPoint title="Road aggregation" text={segmentsText}>

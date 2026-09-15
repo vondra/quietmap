@@ -103,6 +103,19 @@ export interface RailTraffic {
   freight: RailCategoryTraffic
 }
 
+/** Observed traffic-timing attribution (display only): where the
+ *  day/evening/night split was measured. Refers to the timing of traffic,
+ *  not the daily counts — AADT provenance stays `DatasetProvenance`. */
+export interface RoadTimingAttribution {
+  /** Dataset landing page URL, as stored in roads_time_profiles. */
+  source: string
+  /** Observation window as stored, e.g. "2025-01..2025-12". */
+  window: string
+  /** True when some vehicle classes inherit the total-vehicle timing
+   *  share — their class timing is an estimate, not measured. */
+  total_transfer: boolean
+}
+
 export interface DatasetProvenance {
   /** Authority tier from the shared dataset registry. It identifies explicit
    * national proxies, but does not by itself prove counted vs derived data.
@@ -124,6 +137,12 @@ interface RoadMetadata {
   traffic_estimated: number
   dominant_source_id: number
   provenance?: DatasetProvenance | null
+  /** Observed traffic-timing attribution of the dominant segment;
+   *  absent = class-default timing (no observed profile). */
+  time_profile_attribution?: RoadTimingAttribution | null
+  /** Segments carrying an observed time profile; below `segment_count`
+   *  the group's timing is mixed with class defaults. */
+  profiled_segment_count?: number
   /** Raw OSM maxspeed; null = derestricted (`maxspeed=none`) — no number exists. */
   speed_posted_kmh: number | null
   speed_kmh: number
@@ -566,6 +585,7 @@ type EmissionTrace =
       surface: string
       source_id: number
       provenance?: DatasetProvenance | null
+      time_profile_attribution?: RoadTimingAttribution | null
       road_class: string
       bridge: boolean
       tunnel: boolean

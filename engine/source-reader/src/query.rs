@@ -317,6 +317,7 @@ pub fn collect_from_square_data(
                     estimated: r.traffic_estimated,
                     time_profile: r.time_profile,
                 },
+                time_profile_attribution: r.time_profile_attribution,
                 source_id: r.source_id,
                 name: r.name.clone(),
                 road_ref: r.road_ref.clone(),
@@ -573,6 +574,11 @@ pub struct RoadResult {
     /// it is emission input, not display data.
     #[serde(skip_serializing)]
     pub time_profile: Option<noise_compute::normalize::RoadTimeProfile>,
+    /// Display attribution of `time_profile` (dataset landing page, observation
+    /// window, total-transfer caveat). `None` = no observed profile; omitted
+    /// on the wire. Describes the day/evening/night split, not the AADT counts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_profile_attribution: Option<noise_compute::normalize::RoadTimeProfileAttribution>,
     pub source_id: u16,
     pub dist_m: f64,
     pub cp_lat: f64,
@@ -748,6 +754,7 @@ pub fn query_roads_from_batches(
                 aadt_moto: raw.traffic.moto,
                 traffic_estimated: raw.traffic.estimated,
                 time_profile: raw.traffic.time_profile,
+                time_profile_attribution: traffic_columns.attribution(i).cloned(),
                 source_id,
                 dist_m: cp.dist_m,
                 cp_lat: cp.lat,
@@ -1344,6 +1351,73 @@ mod square_query_tests {
                     (1, 1),
                     "lat={lat} bearing={bearing}"
                 );
+            }
+        }
+    }
+
+    /// Reader → response: observed timing attribution rides RoadResult JSON.
+    /// The profiled row carries the stored source/window plus the
+    /// total-transfer caveat; the unprofiled row (id 0 in a profiled file)
+    /// omits the field entirely, and the physics input stays untouched.
+    #[test]
+    fn observed_timing_attribution_survives_reader_to_result_json() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (lat, lon) = (50.0, 14.0);
+        let dir = fx::square_dir(tmp.path(), grid::square_of(lat, lon));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dictionary = r#"{"source":"https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/","entries":[{"station":"6-021560","window":"2025-01..2025-12","days":360,"status":"total hourly volumes; no vehicle classes","profile":{"total":[0.80,0.10,0.10],"heavy":[0.55,0.18,0.27]}}]}"#;
+        fx::write_roads_file_opts(
+            &dir.join("roads.arrow"),
+            &[
+                fx::FixtureRoad {
+                    osm_id: 11,
+                    start: (lon, lat),
+                    end: (lon + 0.001, lat),
+                    traffic_profile_id: 1,
+                    ..Default::default()
+                },
+                fx::FixtureRoad {
+                    osm_id: 12,
+                    start: (lon, lat),
+                    end: (lon + 0.001, lat),
+                    traffic_profile_id: 0,
+                    ..Default::default()
+                },
+            ],
+            Some(dictionary),
+        );
+        let square = load_square(&dir).unwrap();
+        let results = query_roads_from_batches(
+            &square.roads.batches_all().unwrap(),
+            lat,
+            lon,
+            noise_compute::constants::ROAD_MAX_RADIUS[0],
+        )
+        .unwrap();
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            let wire = serde_json::to_value(r).unwrap();
+            if r.osm_id == 11 {
+                let attr = r
+                    .time_profile_attribution
+                    .as_ref()
+                    .expect("profiled row carries attribution");
+                assert_eq!(
+                    attr.source,
+                    "https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/"
+                );
+                assert_eq!(attr.window, "2025-01..2025-12");
+                assert!(attr.total_transfer, "light/medium/moto inherit the total share");
+                assert_eq!(wire["time_profile_attribution"]["total_transfer"], true);
+                assert!(r.time_profile.is_some(), "emission input rides along untouched");
+                assert!(wire.get("time_profile").is_none(), "shares stay off the wire");
+            } else {
+                assert!(r.time_profile_attribution.is_none(), "id 0 stays unattributed");
+                assert!(
+                    wire.get("time_profile_attribution").is_none(),
+                    "absence omitted on the wire"
+                );
+                assert!(r.time_profile.is_none());
             }
         }
     }
