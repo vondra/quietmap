@@ -12,7 +12,7 @@ import {
   loadBastCensus, type BastCensusSection,
 } from './lib/roads-de-source.js'
 import { BW_HOURLY_SOURCE_URL, loadBwHourlyProfiles, type BwStationProfile } from './lib/roads-de-bw-hourly-source.js'
-import { writeRoadAadt, writeRoadTimeProfiles, type RoadRow, type RoadTimeProfileEntry } from './lib/roads-arrow.js'
+import { writeRoadAadt, applyRoadTimeProfiles, type RoadRow, type RoadTimeProfileEntry } from './lib/roads-arrow.js'
 import { haversineM } from './lib/spatial.js'
 
 const GERMANY_BBOX = [46, 4, 56, 16] as const
@@ -213,17 +213,11 @@ export async function enrichBwTimeProfiles(
     rows: 0, matched: 0, retracted: 0, matchedAutobahn: 0, matchedBundesstrasse: 0,
     skippedForeign: 0, squares: squares.length, squaresUpdated: 0,
   }
-  for (const square of squares) {
-    const write = await writeRoadTimeProfiles(
-      resolve(preparedDirectory, square, 'roads.arrow'),
-      BW_HOURLY_SOURCE_URL,
-      entries,
-      row => indexOf.get(matchBwStation(row, byRef)?.svznr ?? '') ?? 0,
-    )
-    result.rows += write.rows
-    result.matched += write.matched
-    if (write.updated) result.squaresUpdated++
-  }
+  const write = await applyRoadTimeProfiles(preparedDirectory, squares, BW_HOURLY_SOURCE_URL, entries,
+    row => indexOf.get(matchBwStation(row, byRef)?.svznr ?? '') ?? 0)
+  result.rows = write.rows
+  result.matched = write.matched
+  result.squaresUpdated = write.squaresUpdated
   return result
 }
 

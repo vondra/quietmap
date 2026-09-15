@@ -147,14 +147,14 @@ fn decode_profile_dictionary(
             .get("profile")
             .and_then(|v| v.as_object())
             .ok_or_else(|| format!("invalid {ROAD_PROFILES_METADATA_KEY} entry: profile missing"))?;
-        let known = ["light", "medium", "heavy", "moto"];
+        let known = ["light", "medium", "heavy", "moto", "total"];
         if profile_object.keys().any(|key| !known.contains(&key.as_str())) {
             return Err(format!(
                 "invalid {ROAD_PROFILES_METADATA_KEY} entry: unknown class key (known: {known:?})"
             ));
         }
         if profile_object.is_empty() {
-            return Err(format!("invalid {ROAD_PROFILES_METADATA_KEY} entry: no observed class"));
+            return Err(format!("invalid {ROAD_PROFILES_METADATA_KEY} entry: no observed class or total"));
         }
         let shares = |class: &str| -> Result<Option<[f64; 3]>, String> {
             profile_object
@@ -174,6 +174,7 @@ fn decode_profile_dictionary(
             medium: shares("medium")?,
             heavy: shares("heavy")?,
             moto: shares("moto")?,
+            total: shares("total")?,
         };
         profile.validate().map_err(|e| format!("{ROAD_PROFILES_METADATA_KEY}: {e}"))?;
         profiles.push(profile);
@@ -257,6 +258,49 @@ mod tests {
         )
         .unwrap();
         assert!(RoadTrafficColumns::read(&invalid).is_err());
+    }
+
+    #[test]
+    fn total_share_is_a_transferred_estimate_for_unmeasured_classes() {
+        // Producer contract: a TOTAL-only entry (US TMAS shape — no class
+        // breakdown in the source). Every class without its own observation
+        // consumes the total share; a class-specific observation overrides it.
+        let dictionary = r#"{"source":"https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/","entries":[{"station":"6-021560","window":"2025-01..2025-12","days":360,"status":"total hourly volumes; no vehicle classes","profile":{"total":[0.80,0.10,0.10],"heavy":[0.55,0.18,0.27]}}]}"#;
+        let mut fields: Vec<_> = ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"]
+            .iter()
+            .map(|name| Field::new(*name, DataType::Float64, false))
+            .collect();
+        fields.push(Field::new("traffic_estimated", DataType::UInt8, false));
+        fields.push(Field::new("traffic_profile_id", DataType::UInt16, false));
+        let columns: Vec<Arc<dyn Array>> = vec![
+            Arc::new(Float64Array::from(vec![20_000.0])),
+            Arc::new(Float64Array::from(vec![0.0])),
+            Arc::new(Float64Array::from(vec![2_000.0])),
+            Arc::new(Float64Array::from(vec![0.0])),
+            Arc::new(UInt8Array::from(vec![0])),
+            Arc::new(UInt16Array::from(vec![1])),
+        ];
+        let metadata = std::collections::HashMap::from([
+            ("road_traffic_contract".to_owned(), "1".to_owned()),
+            (ROAD_PROFILES_METADATA_KEY.to_owned(), dictionary.to_owned()),
+        ]);
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(fields).with_metadata(metadata)), columns).unwrap();
+        let traffic = RoadTrafficColumns::read(&batch).unwrap().row(0);
+        let profile = traffic.time_profile.expect("total-only entry resolves");
+        assert_eq!(profile.total.unwrap(), [0.80, 0.10, 0.10]);
+        assert_eq!(profile.class_shares(2).unwrap(), [0.55, 0.18, 0.27], "heavy keeps its own observation");
+        assert_eq!(profile.class_shares(0).unwrap(), [0.80, 0.10, 0.10], "light inherits the total estimate");
+        assert_eq!(profile.class_shares(1).unwrap(), [0.80, 0.10, 0.10], "medium inherits the total estimate");
+        // A wrong-typed or null total share must fail, never degrade to absence.
+        for invalid in ["null", "17", "[0.3,0.3]", "\"0.8,0.1,0.1\""] {
+            let corrupt = dictionary.replacen("[0.80,0.10,0.10]", invalid, 1);
+            assert!(decode_profile_dictionary(Some(&corrupt), Some(1)).is_err(), "corrupt total rejected: {invalid}");
+        }
+        // A class-only entry (legacy BW shape) is untouched by the total field.
+        let legacy = dictionary.replace("\"total\":[0.80,0.10,0.10],", "");
+        let profiles = decode_profile_dictionary(Some(&legacy), Some(1)).unwrap();
+        assert_eq!(profiles[0].total, None);
+        assert_eq!(profiles[0].class_shares(0), None, "no total means light stays unknown");
     }
 
     #[test]

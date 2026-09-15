@@ -89,7 +89,10 @@ class-default split applies — never a compatibility variant) plus a
 [{station, window, days, status, profile}]}`; ids are 1-based into entries,
 restricted to entries referenced by that file. A profile holds per-class
 day/evening/night shares of the 24 h volume (local periods 07–19/19–23/23–07);
-an absent class in an entry is unmeasured and keeps the class default.
+an absent class in an entry is unmeasured and keeps the class default, and an
+optional `total` share of the unclassified volume backs every class without a
+class-specific observation as an explicitly transferred estimate (US TMAS
+hourly totals) — never a measured class profile.
 One canonical validation lives in `normalize::RoadTimeProfile::validate`.
 The reader rejects a wrong-typed/null column, an id past the dictionary,
 unknown class keys and malformed entries — malformed never degrades to

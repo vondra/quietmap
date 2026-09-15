@@ -1,4 +1,5 @@
-/** Enrich z9 US roads with class-compatible FHWA HPMS 2022 traffic measurements. */
+/** Enrich z9 US roads with class-compatible FHWA HPMS 2022 traffic measurements
+ * and observed TMAS 2025 hourly TOTAL period profiles. */
 
 import { roadFeatureObservation } from './lib/pinned-road-lines.js'
 import type { RoadObservation } from './lib/road-observation.js'
@@ -7,13 +8,19 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { writeCacheAtomically } from './lib/atomic-cache.js'
 import { DATASETS } from './lib/enrichment-datasets.js'
-import { listPreparedSquares } from './lib/prepared-grid.js'
+import { iso2Code, listPreparedSquares, lonLatToGrid } from './lib/prepared-grid.js'
 import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
-import { osmRoadClassRank, ROAD_CLASS_RANK_TOLERANCE, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import {
+  applyRoadTimeProfiles, osmRoadClassRank, readRoadTimeProfilesSource, ROAD_CLASS_RANK_TOLERANCE,
+  writeRoadAadt, type RoadRow, type RoadTimeProfileEntry,
+} from './lib/roads-arrow.js'
 import { SOURCE_ID_US_FHWA_HPMS, shouldOverwrite } from './lib/sources.js'
 import {
-  buildOneHundredthDegreePointGrid, nearestCompatiblePointWithin200Metres, type RankedPoint,
+  buildOneHundredthDegreePointGrid, haversineM, nearestCompatiblePointWithin200Metres,
+  pointGridCandidates, pointSearchReach, wrapLonDeltaDeg, type RankedPoint,
 } from './lib/spatial.js'
+import { writeTmasProfileSquares } from './lib/roads-us-tmas-write.js'
+import { loadTmasProfiles, TMAS_SOURCE_URL, type TmasStationProfile } from './lib/roads-us-tmas-source.js'
 
 const SOURCE_ID = SOURCE_ID_US_FHWA_HPMS
 const coverage = DATASETS.find(dataset => dataset.id === SOURCE_ID)?.roadCoverage
@@ -182,9 +189,123 @@ export async function enrichUsRoads(preparedDirectory: string, segments: readonl
   return result
 }
 
+/** Digits tail of an OSM road ref ("US 101" → "101", "I 5" → "5"). */
+function refTail(ref: string | null): string {
+  const match = ref?.replace(/\s+/g, '').toUpperCase().match(/(\d+)[A-Z]?$/)
+  return match ? match[1] : ''
+}
+
+/** Individual compass observations apply only to a matching one-way carriageway.
+ * Combined observations remain explicit local transfers to either carriageway. */
+function tmasDirectionMatches(row: RoadRow, station: TmasStationProfile): boolean {
+  const scope = /:D([0-9])$/.exec(station.station)
+  if (!scope) return false
+  const direction = Number(scope[1])
+  if (direction === 0 || direction === 9) return true
+  if (row.oneway !== 1 && row.oneway !== 2) return false
+  const east = wrapLonDeltaDeg(row.endLon - row.startLon) * Math.cos(row.midLat * Math.PI / 180)
+  const north = row.endLat - row.startLat
+  if (east === 0 && north === 0) return false
+  const heading = Math.atan2(east, north) * 180 / Math.PI + (row.oneway === 2 ? 180 : 0)
+  // Eight compass directions quantize bearing in 45-degree sectors.
+  return Math.abs(wrapLonDeltaDeg(heading - (direction - 1) * 45)) <= 45
+}
+
+/** Nearest compatible US observation within 200 m, respecting route and direction. */
+export function matchTmasStation(
+  row: RoadRow,
+  grid: ReadonlyMap<string, readonly TmasStationProfile[]>,
+): TmasStationProfile | null {
+  if (row.countryCode !== iso2Code('US')) return null
+  const rowRank = osmRoadClassRank(row.roadClass)
+  const refs = (row.ref ?? '').split(';').map(refTail).filter(Boolean)
+  let closest: TmasStationProfile | null = null
+  let closestDistance = 200
+  for (const station of pointGridCandidates(row.midLat, row.midLon, closestDistance, grid)) {
+    if (!tmasDirectionMatches(row, station)) continue
+    if (station.rank !== null && Math.abs(station.rank - rowRank) > ROAD_CLASS_RANK_TOLERANCE) continue
+    if (refs.length ? !refs.includes(station.routeNumber) : station.rank === null) continue
+    const distance = haversineM(row.midLat, row.midLon, station.latitude, station.longitude)
+    if (distance < closestDistance) { closest = station; closestDistance = distance }
+  }
+  return closest
+}
+
+function tmasProfileEntries(stations: readonly TmasStationProfile[]): RoadTimeProfileEntry[] {
+  return stations.map(station => ({
+    station: station.station,
+    window: `${station.windowFrom}..${station.windowTo}`,
+    days: station.days,
+    status: `${station.status}; applied ≤200 m from station point, route/class-compatible, direction-gated, US-only rows; total share is a transferred estimate for every vehicle class`,
+    profile: { total: station.shares },
+  }))
+}
+
+/** Only owners intersecting the actual match radius, plus previously stamped owners. */
+export function tmasCandidateSquares(
+  stations: readonly TmasStationProfile[], preparedDirectory: string, existing: readonly string[],
+): string[] {
+  const existingSet = new Set(existing)
+  const candidates = new Set<string>()
+  for (const station of stations) {
+    const [latReach, lonReach] = pointSearchReach(station.latitude, 200)
+    const [west, south] = lonLatToGrid(station.longitude - lonReach, station.latitude - latReach)
+    const [east, north] = lonLatToGrid(station.longitude + lonReach, station.latitude + latReach)
+    // A z9 owner spans 2^(30-9) grid cells; tile Y runs southward.
+    for (let x = Math.floor(west / 2 ** 21); x <= Math.floor(east / 2 ** 21); x++) {
+      for (let gy = Math.floor(south / 2 ** 21); gy <= Math.floor(north / 2 ** 21); gy++) {
+        const name = `z9/${(x + 512) % 512}/${511 - gy}`
+        if (existingSet.has(name)) candidates.add(name)
+      }
+    }
+  }
+  for (const square of existing) {
+    const source = readRoadTimeProfilesSource(resolve(preparedDirectory, square, 'roads.arrow'))
+    if (source === TMAS_SOURCE_URL) candidates.add(square)
+  }
+  return [...candidates].sort()
+}
+
+/** Profile-only producer entry: applies observed TMAS TOTAL shares to the
+ * prepared road copies without touching any traffic column — usable on
+ * finalized copies for refreshes between AADT enrichment runs. */
+export async function enrichTmasTimeProfiles(
+  preparedDirectory: string, stations: readonly TmasStationProfile[],
+): Promise<{ squares: number; rows: number; matched: number; squaresUpdated: number }> {
+  const squares = tmasCandidateSquares(stations, preparedDirectory, listPreparedSquares(preparedDirectory, US_BBOX))
+  return { squares: squares.length, ...await writeTmasProfileSquares(preparedDirectory, squares, stations) }
+}
+
+/** Shared serial shard body; each worker owns disjoint Arrow files. */
+export async function applyTmasProfileSquares(
+  preparedDirectory: string, squares: readonly string[], stations: readonly TmasStationProfile[],
+) {
+  const grid = buildOneHundredthDegreePointGrid(stations)
+  const entries = tmasProfileEntries(stations)
+  const indexOf = new Map(entries.map((entry, index) => [entry.station, index + 1]))
+  return applyRoadTimeProfiles(preparedDirectory, squares, TMAS_SOURCE_URL, entries,
+    row => indexOf.get(matchTmasStation(row, grid)?.station ?? '') ?? 0)
+}
+
+/** The normal US producer flow: HPMS AADT enrichment, then observed TMAS
+ * TOTAL period profiles when the dataset is pinned (absent skips silently —
+ * the AADT step stays independently runnable). */
 export async function runUsEnrichment(options: RoadLoaderArguments) {
   const segments = await loadUsSegments(options)
-  return { segments: segments.length, ...await enrichUsRoads(options.preparedDirectory, segments) }
+  const tmas = await loadTmasProfiles(options)
+  const result = { segments: segments.length, ...await enrichUsRoads(options.preparedDirectory, segments) }
+  if (!tmas) return result
+  const profiles = await enrichTmasTimeProfiles(options.preparedDirectory, tmas.stations)
+  return {
+    ...result,
+    tmasStations: tmas.stations.length,
+    tmasCompleteStationDays: tmas.stations.reduce((sum, station) => sum + station.days, 0),
+    tmasRejectedRows: tmas.rejectedRows,
+    tmasRejected: tmas.rejected,
+    tmasMatched: profiles.matched,
+    tmasSquares: profiles.squares,
+    tmasSquaresUpdated: profiles.squaresUpdated,
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

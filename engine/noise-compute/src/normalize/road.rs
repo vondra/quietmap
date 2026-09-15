@@ -30,22 +30,27 @@ pub const ROAD_ESTIMATED_MOTO: u8 = 8;
 /// periods (day 07–19, evening 19–23, night 23–07 local) — the measured
 /// counterpart of the class-default [`road::TimeDist`] splits. A class with no
 /// observations stays `None` and keeps the class default; classes with counts
-/// carry `[day, evening, night]` fractions summing to 1. One canonical
-/// validation lives here; every producer, reader and consumer defers to it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// carry `[day, evening, night]` fractions summing to 1. `total` is the share
+/// of the unclassified 24 h volume: for every class without a class-specific
+/// observation it is an explicitly transferred estimate, never a measured
+/// class profile. One canonical validation lives here; every producer, reader
+/// and consumer defers to it.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RoadTimeProfile {
     pub light: Option<[f64; 3]>,
     pub medium: Option<[f64; 3]>,
     pub heavy: Option<[f64; 3]>,
     pub moto: Option<[f64; 3]>,
+    /// Unclassified total-vehicle share; backs every class-specific `None`.
+    pub total: Option<[f64; 3]>,
 }
 
 impl RoadTimeProfile {
-    /// Shares must be finite, non-negative, and each observed class triple
-    /// sums to 1 (1e-9 tolerance for float aggregation rounding).
+    /// Shares must be finite, non-negative, and each observed triple
+    /// (class-specific or total) sums to 1 (1e-9 tolerance for float
+    /// aggregation rounding).
     pub fn validate(&self) -> Result<(), String> {
-        for (name, class) in
-            [("light", &self.light), ("medium", &self.medium), ("heavy", &self.heavy), ("moto", &self.moto)]
+        for (name, class) in [("light", &self.light), ("medium", &self.medium), ("heavy", &self.heavy), ("moto", &self.moto), ("total", &self.total)]
         {
             let Some(shares) = class else { continue };
             if shares.iter().any(|v| !v.is_finite() || *v < 0.0)
@@ -57,6 +62,8 @@ impl RoadTimeProfile {
         Ok(())
     }
 
+    /// A class resolves to its own observation when present, otherwise to the
+    /// transferred total estimate; `None` only when neither exists.
     pub fn class_shares(&self, class: usize) -> Option<[f64; 3]> {
         match class {
             0 => self.light,
@@ -65,6 +72,7 @@ impl RoadTimeProfile {
             3 => self.moto,
             _ => None,
         }
+        .or(self.total)
     }
 }
 
@@ -596,6 +604,50 @@ mod tests {
         assert!(default_road_speed(10) < default_road_speed(0)); // motorway_link < motorway
         assert!(default_road_speed(11) < default_road_speed(1)); // trunk_link <= trunk
         assert!(default_road_speed(12) == default_road_speed(2)); // primary_link same as primary
+    }
+
+    /// A total-only observed profile is a transferred estimate for every
+    /// class; a class-specific observation overrides it; validation rejects a
+    /// total that does not sum to 1 — one parse → profile → emission chain.
+    #[test]
+    fn total_only_profile_transfers_to_classes_without_class_observations() {
+        let traffic = RoadTraffic {
+            light: 20_000.0,
+            heavy: 2_000.0,
+            ..Default::default()
+        };
+        let profiled = RoadTraffic {
+            time_profile: Some(RoadTimeProfile {
+                light: None,
+                medium: None,
+                heavy: None,
+                moto: None,
+                total: Some([0.80, 0.10, 0.10]),
+            }),
+            ..traffic
+        };
+        profiled.time_profile.unwrap().validate().unwrap();
+        let road = normalize_road(prepared(profiled), SquareCountryCity::UNKNOWN).unwrap();
+        let pcts = road.period_pcts();
+        assert_eq!(pcts[2][0], 0.10, "light night inherits the total estimate");
+        assert_eq!(pcts[2][2], 0.10, "heavy night inherits the total estimate");
+        let partial = RoadTraffic {
+            time_profile: Some(RoadTimeProfile {
+                heavy: Some([0.55, 0.18, 0.27]),
+                total: Some([0.80, 0.10, 0.10]),
+                ..Default::default()
+            }),
+            ..profiled
+        };
+        let mixed = normalize_road(prepared(partial), SquareCountryCity::UNKNOWN).unwrap().period_pcts();
+        assert_eq!(mixed[2][2], 0.27, "heavy keeps its own observation over the total");
+        assert_eq!(mixed[2][0], 0.10, "light still inherits the total");
+        assert!(RoadTimeProfile { total: Some([0.5, 0.5, 0.5]), ..Default::default() }.validate().is_err());
+        // No profile at all keeps the pure class-default behaviour.
+        let plain_road = normalize_road(prepared(traffic), SquareCountryCity::UNKNOWN).unwrap();
+        let plain = plain_road.period_pcts();
+        assert_eq!(plain[2][0], plain_road.time_dist().night_pct);
+        assert_ne!(plain[2][0], 0.10);
     }
 
     #[test]

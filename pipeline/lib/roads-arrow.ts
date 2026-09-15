@@ -1,6 +1,9 @@
 /** The single atomic writer for road traffic enrichment on z9/z30 Arrow data. */
 
+import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
 import { DataType, RecordBatch, Schema, Table, Utf8, makeTable, makeVector, vectorFromArray } from 'apache-arrow'
+import { resolve } from 'node:path'
+import { Footer } from 'apache-arrow/ipc/metadata/file'
 import { ROAD_COUNT_BASES, type RoadObservation } from './road-observation.js'
 import { withArrowWrite } from './provenance.js'
 import {
@@ -49,6 +52,10 @@ export interface RoadRow extends SegmentGeometry {
   osmId: number | null
   roadClass: number
   existingSourceId: number
+  /** Baked square-country-city code (`iso2Code` numeric form). */
+  countryCode?: number
+  /** Stored geometry direction: 0 both, 1 forward, 2 reverse. */
+  oneway?: number
 }
 
 export interface RoadRetract {
@@ -77,12 +84,42 @@ export interface RoadTimeProfileEntry {
   days: number
   /** Coverage/flags documentation (accepted quality flags, direction caveats). */
   status: string
-  /** Per-class day/evening/night shares of 24 h volume; absent class = unknown. */
+  /** Per-class day/evening/night shares of 24 h volume; absent class =
+   * unknown. `total` is the unclassified-volume share: an explicitly
+   * transferred estimate for every class without its own observation. */
   profile: { light?: [number, number, number]; medium?: [number, number, number];
-    heavy?: [number, number, number]; moto?: [number, number, number] }
+    heavy?: [number, number, number]; moto?: [number, number, number];
+    total?: [number, number, number] }
 }
 
 export const ROADS_TIME_PROFILES_METADATA_KEY = 'roads_time_profiles'
+
+/** Metadata-only probe of a roads.arrow IPC file: the owning profile-source
+ * URL recorded in the schema dictionary, or null when the file carries no
+ * `roads_time_profiles` metadata. Parses just the IPC footer flatbuffer —
+ * record batches are never decoded — so stale-owner discovery stays cheap
+ * enough to sweep every candidate square (Arrow file layout: footer, then
+ * int32 footer length, then the closing `ARROW1` magic). */
+export function readRoadTimeProfilesSource(arrowPath: string): string | null {
+  const file = openSync(arrowPath, 'r')
+  try {
+    const { size } = fstatSync(file)
+    if (size < 20) throw new Error(`truncated Arrow IPC file: ${arrowPath}`)
+    const tail = Buffer.alloc(10)
+    readSync(file, tail, 0, 10, size - 10)
+    if (tail.toString('latin1', 4) !== 'ARROW1') {
+      throw new Error(`readRoadTimeProfilesSource: ${arrowPath} is not an Arrow IPC file`)
+    }
+    const footerLength = tail.readUInt32LE(0)
+    if (footerLength <= 0 || footerLength > size - 20) throw new Error(`invalid Arrow footer: ${arrowPath}`)
+    const footer = Buffer.alloc(footerLength)
+    readSync(file, footer, 0, footerLength, size - 10 - footerLength)
+    const raw = Footer.decode(footer).schema.metadata.get(ROADS_TIME_PROFILES_METADATA_KEY)
+    return raw ? decodeTimeProfileDictionary(raw).source : null
+  } finally {
+    closeSync(file)
+  }
+}
 
 function assertTimeProfileEntry(entry: RoadTimeProfileEntry): void {
   if (!entry.station || !entry.window || !entry.status || !Number.isInteger(entry.days) || entry.days <= 0) {
@@ -132,7 +169,9 @@ export async function writeRoadTimeProfiles(
     const roadClass = table.getChild('road_class')
     const existingSource = table.getChild('source_id')
     const existingIds = table.getChild('traffic_profile_id')
+    const oneway = table.getChild('oneway')
     const rows = table.numRows
+    const countries = bakedRoadCountryReader(table)
     const ids = new Uint16Array(rows)
     for (let index = 0; index < rows; index++) {
       ids[index] = (existingIds?.get(index) as number) ?? 0
@@ -144,12 +183,17 @@ export async function writeRoadTimeProfiles(
     // Merge: previously stamped references stay valid; a re-stamp of the same
     // station (same window/days/status/profile) reuses its id instead of duplicating.
     const merged = [...dictionary.entries]
+    const storedIds = new Map(merged.map((entry, index) => [JSON.stringify(entry), index + 1]))
     const idOf = new Map<number, number>()
     entries.forEach((entry, index) => {
-      const existing = merged.findIndex(stored =>
-        stored.station === entry.station && JSON.stringify(stored) === JSON.stringify(entry))
-      idOf.set(index + 1, existing >= 0 ? existing + 1 : merged.length + 1)
-      if (existing < 0) merged.push(entry)
+      const key = JSON.stringify(entry)
+      let id = storedIds.get(key)
+      if (id === undefined) {
+        merged.push(entry)
+        id = merged.length
+        storedIds.set(key, id)
+      }
+      idOf.set(index + 1, id)
     })
     if (merged.length > 65_535) {
       throw new Error(`writeRoadTimeProfiles: ${merged.length} entries exceed the u16 id capacity`)
@@ -164,6 +208,8 @@ export async function writeRoadTimeProfiles(
         osmId: osmId ? Number(osmId.get(index)) : null,
         roadClass: (roadClass?.get(index) as number) ?? 5,
         existingSourceId: (existingSource?.get(index) as number) ?? 0,
+        countryCode: countries.codeAt(index),
+        oneway: (oneway?.get(index) as number) ?? 0,
       }, index)
       if (!Number.isInteger(picked) || picked < 0 || picked > entries.length) {
         throw new Error(`writeRoadTimeProfiles: match returned ${picked} out of range`)
@@ -208,6 +254,31 @@ export async function writeRoadTimeProfiles(
     return new Table(schema, rebuiltTable.batches.map(batch => new RecordBatch(schema, batch.data)))
   })
   return result
+}
+
+/** Walk prepared squares stamping one source's profile dictionary — the
+ * reusable profile-only producer entry shared by every profile enrichment
+ * (DE BW counters, US TMAS hourly totals). Applying never touches traffic
+ * columns, so it is safe on finalized copies. */
+export async function applyRoadTimeProfiles(
+  preparedDirectory: string,
+  squares: readonly string[],
+  sourceUrl: string,
+  entries: readonly RoadTimeProfileEntry[],
+  match: (row: RoadRow, index: number) => number,
+): Promise<{ rows: number; matched: number; squaresUpdated: number }> {
+  let rows = 0
+  let matched = 0
+  let squaresUpdated = 0
+  for (const square of squares) {
+    const write = await writeRoadTimeProfiles(
+      resolve(preparedDirectory, square, 'roads.arrow'), sourceUrl, entries, match,
+    )
+    rows += write.rows
+    matched += write.matched
+    if (write.updated) squaresUpdated++
+  }
+  return { rows, matched, squaresUpdated }
 }
 
 function assertMatch(match: RoadAadt, index: number, path: string): void {

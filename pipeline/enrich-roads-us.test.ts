@@ -6,9 +6,11 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { tableFromIPC } from 'apache-arrow'
-import { enrichUsRoads, loadUsSegments, parseUsPage, runUsEnrichment } from './enrich-roads-us.js'
+import { enrichUsRoads, enrichTmasTimeProfiles, loadUsSegments, parseUsPage, runUsEnrichment, tmasCandidateSquares, matchTmasStation } from './enrich-roads-us.js'
 import { iso2Code, listPreparedSquares } from './lib/prepared-grid.js'
 import { decodeQmBlocks, writeRoadsFixture } from './lib/road-test-fixture.js'
+import { readRoadTimeProfilesSource, type RoadRow } from './lib/roads-arrow.js'
+import { buildOneHundredthDegreePointGrid } from './lib/spatial.js'
 import type { RoadLoaderArguments } from './lib/road-loader-cli.js'
 
 const DIRECTORY = mkdtempSync(join(tmpdir(), 'enrich-roads-us-test-'))
@@ -234,4 +236,90 @@ test('Puerto Rico measurements do not bypass the current registry and baked-coun
   assert.equal(result.skippedForeign, 1)
   assert.equal(result.matched, 0)
   assert.deepEqual(readFileSync(target), before)
+})
+
+/** A TMAS station profile as the loader produces it (TOTAL shares only). */
+function tmasStation(overrides: Partial<import('./lib/roads-us-tmas-source.js').TmasStationProfile> = {}) {
+  return {
+    station: 'CA021560:D9', routeNumber: '5', latitude: 34.0007, longitude: -84.0007, rank: 0,
+    windowFrom: '2025-01', windowTo: '2025-12', daysByMonth: {}, days: 300, status: 'total hourly volumes only',
+    counts: [80, 10, 10], shares: [0.8016, 0.0997, 0.0987], ...overrides,
+  } as import('./lib/roads-us-tmas-source.js').TmasStationProfile
+}
+
+test('TMAS total profiles stamp only compatible US rows, idempotently, and retract stale stations', async () => {
+  const options = cache('tmas-profiles')
+  const square = join(options.preparedDirectory, 'z9', '136', '204')
+  mkdirSync(square, { recursive: true })
+  const target = join(square, 'roads.arrow')
+  // Row 0: numbered motorway on the station's route. Row 1: numbered motorway
+  // on a different route. Row 2: foreign baked country. Row 3: class-incompatible.
+  // Row 4: unnumbered trunk near a second, unsigned station.
+  copyFileSync(writeRoadsFixture('us-tmas-profiles.arrow', [0, 0, 0, 3, 1], {
+    origin: [-84, 34],
+    countryCodes: ['US', 'US', 'CA', 'US', 'US'].map(iso2Code),
+    refs: ['I 5', 'US 101', 'I 5', null, null],
+    sourceIds: [21, 21, 0, 0, 21],
+  }), target)
+  const trunk = tmasStation({ station: 'CA000400:D9', routeNumber: '', latitude: 34.0047, longitude: -83.9963, rank: 1 })
+  assert.deepEqual(tmasCandidateSquares([tmasStation()], options.preparedDirectory, ["z9/136/204"]), ["z9/136/204"])
+  const result = await enrichTmasTimeProfiles(options.preparedDirectory, [tmasStation(), trunk])
+  assert.deepEqual({ matched: result.matched, squares: result.squares }, { matched: 2, squares: 1 })
+  let table = tableFromIPC(readFileSync(target))
+  const ids = [...table.getChild('traffic_profile_id')!]
+  assert.deepEqual(ids, [1, 0, 0, 0, 2])
+  const dictionary = JSON.parse(table.schema.metadata.get('roads_time_profiles')!)
+  assert.equal(dictionary.source, 'https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/')
+  assert.equal(readRoadTimeProfilesSource(target), dictionary.source)
+  assert.deepEqual(Object.keys(dictionary.entries[0].profile), ['total'])
+  assert.deepEqual(dictionary.entries[0].profile.total, [0.8016, 0.0997, 0.0987])
+  assert.ok(dictionary.entries[0].status.includes('transferred estimate for every vehicle class'))
+  assert.ok(dictionary.entries[0].window.includes('2025-01..2025-12'))
+  // Traffic columns keep the AADT enrichment untouched.
+  assert.deepEqual([...table.getChild('source_id')!], [21, 21, 0, 0, 21])
+  assert.deepEqual([...table.getChild('aadt_light')!], [1000, 1001, 1002, 1003, 1004])
+  // Idempotence: the same stations leave the file byte-identical.
+  const before = readFileSync(target)
+  assert.equal((await enrichTmasTimeProfiles(options.preparedDirectory, [tmasStation(), trunk])).squaresUpdated, 0)
+  assert.deepEqual(readFileSync(target), before)
+  // A refresh without the first station retracts its rows and its dictionary
+  // entry — and a second, now-stationless owner square is still discovered
+  // through the footer probe and fully retracted (stale owners never persist).
+  const otherSquare = join(options.preparedDirectory, 'z9', '142', '204')
+  mkdirSync(otherSquare, { recursive: true })
+  const otherTarget = join(otherSquare, 'roads.arrow')
+  copyFileSync(writeRoadsFixture('us-tmas-profiles-2.arrow', [0], {
+    origin: [-80, 34], countryCodes: [iso2Code('US')], refs: ['I 5'],
+  }), otherTarget)
+  const distant = tmasStation({ station: 'CA000900:D9', latitude: 34.0007, longitude: -79.9997 })
+  await enrichTmasTimeProfiles(options.preparedDirectory, [tmasStation(), trunk, distant])
+  assert.equal(tableFromIPC(readFileSync(otherTarget)).getChild('traffic_profile_id')!.get(0), 1)
+  const refreshed = await enrichTmasTimeProfiles(options.preparedDirectory, [trunk])
+  assert.equal(refreshed.matched, 1)
+  table = tableFromIPC(readFileSync(target))
+  assert.deepEqual([...table.getChild('traffic_profile_id')!], [0, 0, 0, 0, 1])
+  const retracted = JSON.parse(table.schema.metadata.get('roads_time_profiles')!)
+  assert.deepEqual(retracted.entries.map((entry: { station: string }) => entry.station), ['CA000400:D9'])
+  const other = tableFromIPC(readFileSync(otherTarget))
+  assert.deepEqual([...other.getChild('traffic_profile_id')!], [0], 'stationless owner square retracts via footer probe')
+  assert.deepEqual(JSON.parse(other.schema.metadata.get('roads_time_profiles')!).entries, [])
+  assert.equal((await enrichTmasTimeProfiles(options.preparedDirectory, [])).matched, 0)
+  assert.deepEqual([...tableFromIPC(readFileSync(target)).getChild('traffic_profile_id')!], [0, 0, 0, 0, 0])
+})
+
+
+test('TMAS opposing carriageways retain their own hourly profiles; two-way roads need combined observations', () => {
+  const north = tmasStation({ station: 'CA1:D1', latitude: 34, longitude: -84 })
+  const south = tmasStation({ ...north, station: 'CA1:D5', shares: [0.5, 0.1, 0.4] })
+  const grid = buildOneHundredthDegreePointGrid([north, south])
+  const row: RoadRow = { startLat: 33.9999, startLon: -84, endLat: 34.0001, endLon: -84,
+    midLat: 34, midLon: -84, oneway: 1, ref: 'I 5', name: null, osmId: 1,
+    roadClass: 0, existingSourceId: 21, countryCode: iso2Code('US') }
+  assert.equal(matchTmasStation(row, grid)?.station, north.station)
+  assert.equal(matchTmasStation({ ...row, oneway: 2 }, grid)?.station, south.station)
+  assert.equal(matchTmasStation({ ...row, oneway: 0 }, grid), null)
+  assert.equal(matchTmasStation({ ...row, startLat: row.endLat, endLat: row.startLat }, grid)?.station, south.station)
+  const combined = buildOneHundredthDegreePointGrid([tmasStation({ ...north, station: 'CA1:D9', rank: null })])
+  assert.equal(matchTmasStation({ ...row, oneway: 0 }, combined)?.station, 'CA1:D9')
+  assert.equal(matchTmasStation({ ...row, ref: null }, combined), null)
 })
