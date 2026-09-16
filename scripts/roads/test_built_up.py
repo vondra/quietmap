@@ -211,7 +211,7 @@ class BuiltUpTests(unittest.TestCase):
         self.assertEqual(result, {"rows": 3, "unknown": 0, "rural": 2, "urban": 1, "files_changed": 1})
         with pa.ipc.open_file(path) as reader:
             self.assertEqual(reader.num_record_batches, 2)
-            self.assertEqual(reader.schema.metadata, metadata)
+            self.assertEqual({k: v for k, v in reader.schema.metadata.items() if k != b"qm_built_up_inputs"}, metadata)
             self.assertEqual(reader.get_batch(0).column("built_up").to_pylist(), [2])
             for i, original in enumerate((first, second)):
                 batch = reader.get_batch(i)
@@ -223,6 +223,27 @@ class BuiltUpTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), before[0])
         self.assertEqual(path.stat(), before[1])
         self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+
+    def test_resume_skips_classification_until_owner_or_halo_structures_change(self):
+        lat, lon = self.point
+        structures = write_structures(self.root, self.square, [])
+        path = self.root / qmgrid.square_name(*self.square) / "roads.arrow"
+        write_roads(path, [road_batch([self.point])])
+        self.assertEqual(bake_file(path, self.sampler())["rural"], 1)
+        before = path.stat()
+        with patch.object(BuildingFootprintSampler, "classify", side_effect=AssertionError("already baked")):
+            self.assertEqual(bake_file(path, self.sampler()), {"files_changed": 0, "files_skipped": 1})
+        self.assertEqual(path.stat(), before)
+        write_structures(self.root, self.square, [footprint(lat, lon, side=100)])
+        self.assertEqual(bake_file(path, self.sampler())["urban"], 1)
+        # A previously absent halo appearing also invalidates the recorded input set.
+        neighbor = (self.square[0] + 1, self.square[1])
+        write_structures(self.root, neighbor, [])
+        with patch.object(BuildingFootprintSampler, "classify", return_value=1) as classify:
+            self.assertEqual(bake_file(path, self.sampler())["rural"], 1)
+            self.assertEqual(classify.call_count, 1)
+        structures.unlink()
+        self.assertEqual(bake_file(path, self.sampler())["unknown"], 1)
 
     def test_absent_valid_empty_and_corrupt_structures_are_distinct(self):
         self.assertEqual(self.sampler().classify(*self.point), 0)
@@ -267,7 +288,7 @@ class BuiltUpTests(unittest.TestCase):
         self.assertIn('"unknown": 1', built.stdout)
         self.assertIn('"rural": 1', built.stdout)
 
-    def test_parallel_cli_matches_single_worker_arrow_bytes(self):
+    def test_parallel_cli_matches_single_worker_rows_and_spatial_metadata(self):
         source = self.root / "source"
         points = [(lat, lon) for lat in (48.5, 49.5) for lon in (14.5, 15.5, 16.5, 17.5)]
         squares = sorted({qmgrid.square_of(*point) for point in points})
@@ -293,7 +314,14 @@ class BuiltUpTests(unittest.TestCase):
         self.assertEqual(run(single, 1), run(parallel, 16))
         for square in squares:
             relative = Path(qmgrid.square_name(*square)) / "roads.arrow"
-            self.assertEqual((single / relative).read_bytes(), (parallel / relative).read_bytes())
+            with pa.ipc.open_file(single / relative) as a, pa.ipc.open_file(parallel / relative) as b:
+                # Physical input identities differ between copies; computed data and spatial metadata do not.
+                self.assertEqual(a.num_record_batches, b.num_record_batches)
+                clean = lambda metadata: {k: v for k, v in metadata.items() if k != b"qm_built_up_inputs"}
+                self.assertEqual(clean(a.schema.metadata), clean(b.schema.metadata))
+                for index in range(a.num_record_batches):
+                    self.assertTrue(a.get_batch(index).replace_schema_metadata(clean(a.schema.metadata)).equals(
+                        b.get_batch(index).replace_schema_metadata(clean(b.schema.metadata)), check_metadata=True))
 
         rejected = subprocess.run(
             [sys.executable, script, "--prepared-dir", str(source), "--workers", "0"],

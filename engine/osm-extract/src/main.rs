@@ -38,12 +38,13 @@ struct Cli {
 fn main() -> Result<()> {
     let mut cli = Cli::parse();
     validate_paths(&mut cli)?;
+    let input_identity = spill_input_identity(&cli.input, std::env::var("QM_OSM_ONLY").ok())?;
     let t0 = Instant::now();
     eprintln!("=== osm-extract ===");
 
     // A complete spill left by an extract whose finalize failed is finalized
     // again from the spill; the planet is read only for a partial or absent one.
-    if spill::is_complete(&cli.spill_dir, cli.num_buckets)
+    if spill::is_complete(&cli.spill_dir, cli.num_buckets, &input_identity)
         && transport::TransportWriter::is_complete(&cli.spill_dir)
     {
         eprintln!(
@@ -102,7 +103,11 @@ fn main() -> Result<()> {
     )?;
 
     transport.finish()?;
-    spiller.complete()?;
+    anyhow::ensure!(
+        spill_input_identity(&cli.input, std::env::var("QM_OSM_ONLY").ok())? == input_identity,
+        "OSM input changed during extraction; partial spill retained"
+    );
+    spiller.complete(&input_identity)?;
     eprintln!(
         "  {:.1}M ways → {:.1}M features ({} multipolygon rels) in {:.1}s",
         pass2.ways_total as f64 / 1e6,
@@ -134,6 +139,17 @@ fn main() -> Result<()> {
     finalize_and_cleanup(&cli)?;
     eprintln!("\n=== Done: {:.1}s ===", t0.elapsed().as_secs_f64());
     Ok(())
+}
+
+fn spill_input_identity(input: &Path, layers: Option<String>) -> Result<String> {
+    let stat = input.metadata()?;
+    Ok(serde_json::json!({
+        "input": input.canonicalize()?, "layers": layers,
+        "device": stat.dev(), "inode": stat.ino(), "bytes": stat.len(),
+        "mtime": [stat.mtime(), stat.mtime_nsec()],
+        "ctime": [stat.ctime(), stat.ctime_nsec()]
+    })
+    .to_string())
 }
 
 fn finalize_and_cleanup(cli: &Cli) -> Result<()> {
@@ -260,6 +276,14 @@ mod tests {
         std::fs::create_dir(&root)?;
         let input = root.join("planet.pbf");
         std::fs::write(&input, b"irreplaceable planet")?;
+        let original = spill_input_identity(&input, None)?;
+        assert_ne!(
+            original,
+            spill_input_identity(&input, Some("roads,railways".into()))?
+        );
+        let replacement = root.join("replacement.pbf");
+        std::fs::write(&replacement, b"a different planet")?;
+        assert_ne!(original, spill_input_identity(&replacement, None)?);
         let make_cli = || Cli {
             input: input.clone(),
             output: root.join("new/output"),

@@ -88,7 +88,9 @@ fn roads_writer_roundtrips_grid_columns() {
         schema.metadata().get(GRID_CONTRACT_KEY).map(String::as_str),
         Some(GRID_CONTRACT_Z30)
     );
-    assert!(schema.metadata().contains_key(arrow_batching::QM_BLOCKS_KEY));
+    assert!(schema
+        .metadata()
+        .contains_key(arrow_batching::QM_BLOCKS_KEY));
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -235,19 +237,23 @@ fn multiline_osm_tags_survive_spill_and_arrow_for_every_source() {
     ];
     for (index, source) in sources.iter().enumerate() {
         if source.is_linear() {
-            spiller.emit_segment(
-                source,
-                square,
-                index as i64 + 1,
-                0,
-                &([50.0, 14.0], [50.0001, 14.0], 11.0),
-                &tags,
-            );
+            spiller
+                .emit_segment(
+                    source,
+                    square,
+                    index as i64 + 1,
+                    0,
+                    &([50.0, 14.0], [50.0001, 14.0], 11.0),
+                    &tags,
+                )
+                .unwrap();
         } else {
-            spiller.emit_polygon(source, square, index as i64 + 1, 50.0, 14.0, &tags, None);
+            spiller
+                .emit_polygon(source, square, index as i64 + 1, 50.0, 14.0, &tags, None)
+                .unwrap();
         }
     }
-    spiller.complete().unwrap();
+    spiller.complete("fixture").unwrap();
     drop(spiller);
     assert_eq!(finalize(&spill_dir, &output_dir, 1).unwrap(), 1);
     for source in sources {

@@ -104,7 +104,7 @@ pub fn list_segments_day_paths_multi(dirs: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
-fn validated_days(
+pub(crate) fn validated_days(
     days: impl IntoIterator<Item = String>,
     allow_empty: bool,
 ) -> Result<BTreeSet<String>> {

@@ -20,7 +20,10 @@ actual commands without starting producers. Destinations are empty or contain an
 build of the same configuration. Resume retains successful steps with unchanged producer
 arguments and completed dependencies. Worker caps and scope names do not change data identity.
 A changed source or a live producer refuses resume; code changes are recorded in `build.json`.
-The OSM extractor reuses a complete spill only when its bucket count matches.
+An unchanged interrupted road/rail chain resumes at its last started substep.
+The OSM extractor reuses a complete spill only for the same Planet file identity,
+layer selection and bucket count. A partial Pass 2 still rereads the Planet.
+Spill write failures stop extraction immediately; partial output is never marked complete.
 `--jobs` on a producer is an optional cap; omitting it uses every CPU that still
 fits the process memory limit so a forgotten flag does not fall back to one thread.
 
@@ -30,7 +33,17 @@ absolute paths named `planet`, `rasters`, `enrichment`, `boundaries`, `city_boun
 `overture`, `ghsl`, `regional_heights`, `airline` and `general_aviation`.
 `rasters` is an already published native raster year, `city_boundaries` is the ADM2
 cache, and `regional_heights` retains the measured regional raster or VRT dependencies.
-Download and validate new source versions before freezing these inputs.
+Download and validate new source versions before freezing these inputs. A fresh
+build checks the exact airline days and GA publisher receipts before pinning or
+starting OSM. This reads archive tails, not all compressed traces; extraction still
+validates payloads. Missing or incomplete samples stop the run early.
+
+Optional `[build]` paths `osm_node_cache` and `osm_spill_dir` place the sparse node
+cache and spill independently. Keep immutable inputs on read-heavy disks and
+output/scratch on separate writable disks. Budget a new generation plus peak
+intermediates before launching; free space on another mount is not usable by a
+producer unless its configured path points there. Preserve two verified final
+copies while rotating generations. `--plan` shows paths without admission or writes.
 
 The controller records each frozen input's device identity in `input-identities.jsonl`
 (path, inode, size, mtimes — no SHA-256 of the world) and step receipts in `steps.jsonl`.
@@ -130,7 +143,9 @@ are emitted as JSON. `--from STEP` resumes within the selected family.
 `--jobs` (default: every CPU) caps square workers; omitting it, or `QM_ROAD_WORKERS`,
 uses every CPU that still fits the process memory limit. Per-square world heuristics
 (service-tree, continuity, taper, railways-parallel, industrial wind/name, built-up)
-shard that way. Country adapters stay one process: they load a national dataset once.
+shard that way. Built-up completion is stored with the owner/halo structure identities
+and classification code; an unchanged retry reads only the Arrow header. Changed
+structure inputs invalidate that square. Country adapters stay one process: they load a national dataset once.
 Industrial GEM/global/special stay one process because facility winners compete worldwide.
 
 Service-tree visits every road square, including those without buildings. Empty
@@ -157,11 +172,13 @@ the source archive and digest, then use `--enrich-only` for national roads.
 to z9. Reuse validated Stage 0/1 segment files; do not re-extract them just because
 the world prepared tree has no aircraft output yet.
 
-The current primary window has 12 dates, 2025-10-01 through 2026-09-01. GA uses the
-2025-09-02 through 2026-09-01 source window with the absent 2026-05-06 day excluded
-by receipts. Use the recorded day list and class normalization, not a hardcoded
-365 divisor. Primary segments are split across two roots; the CLI accepts repeated
-`--segments-dir` arguments. Keep the input paths and receipts in the execution record.
+`aircraft_anchor` selects 12 monthly airline samples and the preceding GA year
+through `scripts/aircraft_window.py`. Publisher receipts determine admitted GA days;
+use that recorded list and class normalization, never a hardcoded 365 divisor.
+For example, the September 2026 delivery admitted 12 airline and 364 GA days:
+May 6 contained only excluded MLAT traffic. Refresh the sources and anchor together.
+The CLI accepts repeated `--segments-dir` arguments for split retained segments.
+Keep input paths and receipts in the execution record.
 
 After Stage 0/1: world shuffle, airport discovery, Stage 2A airborne, Stage 2B
 cruise, Stage 2C ground operations and local airport summaries. Stage 2B spills raw

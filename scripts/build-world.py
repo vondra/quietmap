@@ -37,6 +37,8 @@ from world_build_inputs import (
     pin_digest, pin_inputs, raster_inputs, verify_inputs, verify_prepared_raster_links,
 )
 
+from aircraft_preflight import preflight_aircraft_sources
+
 from world_build_state import (
     STATE_NAME, PIN_NAME, producer_command, record_steps, resume_steps, scope_unit, step_identity, write_state,
 )
@@ -272,6 +274,12 @@ def main():
         for target in (output, scratch):
             if target.exists() and any(target.iterdir()):
                 raise ValueError(f'requires a fresh directory; prior output retained: {target}')
+        # The multi-terabyte aircraft caches are the one input family whose sampling
+        # window cannot be judged from the pin; admit the exact days read-only before
+        # pinning, directory creation or any producer can start.
+        admitted = preflight_aircraft_sources(
+            sources['airline'], sources['general_aviation'], settings['aircraft_anchor'])
+        print(json.dumps({'step': 'aircraft-preflight', **admitted}), flush=True)
     output.mkdir(parents=True, exist_ok=True)
     scratch.mkdir(parents=True, exist_ok=True)
     environment = producer_environment(settings['threads'])

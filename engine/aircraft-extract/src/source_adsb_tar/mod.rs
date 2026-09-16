@@ -153,6 +153,22 @@ impl AdsbTarSource {
         }
         self.root.join(day_str)
     }
+
+    /// Read-only world-build preflight admission: the day resolves to its
+    /// archive directory whose TAR parts pass the same structural admission
+    /// (`archive_parts`, end-marker tails) Stage 0 will read. Only the final
+    /// kilobyte of each archive is touched, never a whole multi-terabyte day.
+    pub fn require_archive_day(&self, day_str: &str) -> Result<()> {
+        crate::period::parse_date_id(day_str)?;
+        let dir = self.day_dir(day_str);
+        anyhow::ensure!(
+            dir.is_dir(),
+            "missing ADS-B day {day_str}: {}",
+            dir.display()
+        );
+        crate::trace::archive_parts(&dir)?;
+        Ok(())
+    }
 }
 
 impl FlightSource for AdsbTarSource {

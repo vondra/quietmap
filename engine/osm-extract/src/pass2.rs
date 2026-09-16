@@ -102,7 +102,7 @@ fn apply_prepared(
                 *stats.fallthrough_tags.entry(reason).or_insert(0) += 1;
             }
             Prepared::Train(route) => transport.write_train_route(&route)?,
-            Prepared::Point(point) => apply_point(point, spiller, stats),
+            Prepared::Point(point) => apply_point(point, spiller, stats)?,
             Prepared::Way(way) => {
                 apply_way(
                     way, manifest, junctions, assembler, spiller, transport, stats,
@@ -113,7 +113,7 @@ fn apply_prepared(
     Ok(())
 }
 
-fn apply_point(point: PreparedPoint, spiller: &mut Spiller, stats: &mut Pass2Stats) {
+fn apply_point(point: PreparedPoint, spiller: &mut Spiller, stats: &mut Pass2Stats) -> Result<()> {
     if let Some(tags) = point.turbine {
         stats.features_total += emit_node(
             spiller,
@@ -122,7 +122,7 @@ fn apply_point(point: PreparedPoint, spiller: &mut Spiller, stats: &mut Pass2Sta
             point.id,
             point.lat,
             point.lon,
-        );
+        )?;
     }
     if let Some(tags) = point.airport {
         stats.features_total += emit_node(
@@ -132,12 +132,13 @@ fn apply_point(point: PreparedPoint, spiller: &mut Spiller, stats: &mut Pass2Sta
             point.id,
             point.lat,
             point.lon,
-        );
+        )?;
     }
     if let Some((kind, tags)) = point.settlement {
         stats.features_total +=
-            emit_settlement_node(spiller, kind, point.id, point.lat, point.lon, &tags);
+            emit_settlement_node(spiller, kind, point.id, point.lat, point.lon, &tags)?;
     }
+    Ok(())
 }
 
 fn apply_way(
@@ -171,7 +172,7 @@ fn apply_way(
                     clon,
                     &extracted_tags,
                     safe_ring,
-                );
+                )?;
                 stats.features_total += 1;
                 stats.rels_assembled += 1;
             }
@@ -223,7 +224,7 @@ fn apply_way(
         let (clat, clon) = centroid(&coords);
         let square = grid::square_of(clat, clon);
         let ring = ring_for_spill(&coords, &mut stats.antimeridian_rings_omitted);
-        spiller.emit_polygon(&ftype, square, way.id, clat, clon, &way.tags, ring);
+        spiller.emit_polygon(&ftype, square, way.id, clat, clon, &way.tags, ring)?;
         stats.features_total += 1;
     }
     Ok(())
@@ -261,7 +262,7 @@ fn emit_linear_way(
         let mid_lat = (seg.0[0] + seg.1[0]) / 2.0;
         let mid_lon = grid::geo::wrapped_longitude_midpoint(seg.0[1], seg.1[1]);
         let square = grid::square_of(mid_lat, mid_lon);
-        spiller.emit_segment(ftype, square, way_id, idx as i16, &seg, tags);
+        spiller.emit_segment(ftype, square, way_id, idx as i16, &seg, tags)?;
         if is_transport {
             transport.write_piece(way_id, idx as i16, &grid::square_name(square), interval)?;
         }
@@ -278,10 +279,10 @@ fn emit_node(
     osm_id: i64,
     lat: f64,
     lon: f64,
-) -> u64 {
+) -> Result<u64> {
     let square = grid::square_of(lat, lon);
-    spiller.emit_polygon(&ftype, square, osm_id, lat, lon, tags, None);
-    1
+    spiller.emit_polygon(&ftype, square, osm_id, lat, lon, tags, None)?;
+    Ok(1)
 }
 
 /// Spill one settlement NODE: a `Leisure` node becomes a point leisure source
@@ -294,21 +295,21 @@ fn emit_settlement_node(
     lat: f64,
     lon: f64,
     tags: &classify::Tags,
-) -> u64 {
+) -> Result<u64> {
     let square = grid::square_of(lat, lon);
     match kind {
         classify::FeatureType::Leisure => {
-            spiller.emit_polygon(&kind, square, osm_id, lat, lon, tags, None);
-            1
+            spiller.emit_polygon(&kind, square, osm_id, lat, lon, tags, None)?;
+            Ok(1)
         }
         classify::FeatureType::Poi => match spill::poi_class_from_tags(tags) {
             Some(class) => {
-                spiller.emit_poi(square, lat, lon, class);
-                1
+                spiller.emit_poi(square, lat, lon, class)?;
+                Ok(1)
             }
-            None => 0,
+            None => Ok(0),
         },
-        _ => 0,
+        _ => Ok(0),
     }
 }
 

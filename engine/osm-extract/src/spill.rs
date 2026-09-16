@@ -12,7 +12,7 @@ use crate::ids;
 use crate::microsegment;
 use anyhow::Result;
 use grid::{lonlat_to_grid, Square};
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 use std::fmt::{self, Write as _};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -98,11 +98,6 @@ fn tsv_road_ref(tags: &Tags) -> TsvText<'_> {
     })
 }
 
-/// Per-feature-type, per-bucket writer.
-struct BucketFile {
-    writer: BufWriter<File>,
-}
-
 /// Observability for the two SILENT failure modes of building classification (so
 /// a blind spot is never invisible — reported at the end of every extract):
 /// an unrecognised `building=*` value that fell to the residential(0) default.
@@ -119,7 +114,7 @@ pub struct Spiller {
     dir: PathBuf,
     num_buckets: usize,
     /// (feature_type_name, bucket_idx) → writer
-    writers: HashMap<(String, usize), BucketFile>,
+    writers: HashMap<(String, usize), BufWriter<File>>,
     pub audit: ExtractAudit,
 }
 
@@ -134,13 +129,12 @@ impl Spiller {
         })
     }
 
-    fn get_writer(&mut self, ftype: &str, bucket: usize) -> &mut BucketFile {
-        let key = (ftype.to_string(), bucket);
-        self.writers.entry(key).or_insert_with(|| {
-            let path = self.dir.join(format!("{}_{:03}.tsv", ftype, bucket));
-            let file = File::create(&path).expect("cannot create spill file");
-            BucketFile {
-                writer: BufWriter::with_capacity(1 << 20, file),
+    fn get_writer(&mut self, ftype: &str, bucket: usize) -> Result<&mut BufWriter<File>> {
+        Ok(match self.writers.entry((ftype.to_string(), bucket)) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let path = self.dir.join(format!("{ftype}_{bucket:03}.tsv"));
+                entry.insert(BufWriter::with_capacity(1 << 20, File::create(path)?))
             }
         })
     }
@@ -159,7 +153,7 @@ impl Spiller {
         seg_idx: i16,
         seg: &([f64; 2], [f64; 2], f32),
         tags: &Tags,
-    ) {
+    ) -> Result<()> {
         let bucket = self.bucket(square);
         let name = ftype.name();
 
@@ -167,8 +161,8 @@ impl Spiller {
         let (egx, egy) = lonlat_to_grid(seg.1[1], seg.1[0]);
 
         // TSV: sq, osm_id, seg_idx, s_gx, s_gy, e_gx, e_gy, length_m, tags...
-        let w = &mut self.get_writer(name, bucket).writer;
-        let _ = write!(
+        let w = self.get_writer(name, bucket)?;
+        write!(
             w,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}",
             spill_key(square),
@@ -179,7 +173,7 @@ impl Spiller {
             egx,
             egy,
             seg.2
-        );
+        )?;
 
         // Append feature-specific tags as key=value pairs
         match ftype {
@@ -206,7 +200,7 @@ impl Spiller {
                     Some("no") => 2,
                     _ => 0, // 0=unknown
                 };
-                let _ = write!(
+                write!(
                     w,
                     "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     classify::road_class(highway),
@@ -239,7 +233,7 @@ impl Spiller {
                         tags.get("motor_vehicle").map(|s| s.as_str()),
                         tags.get("vehicle").map(|s| s.as_str()),
                     ),
-                );
+                )?;
             }
             FeatureType::Railway => {
                 let railway = tags.get("railway").map(|s| s.as_str()).unwrap_or("rail");
@@ -260,7 +254,7 @@ impl Spiller {
                     tags.get("tunnel").map(|s| s.as_str()),
                     Some("yes" | "building_passage" | "culvert")
                 );
-                let _ = write!(
+                write!(
                     w,
                     "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     classify::rail_type(railway),
@@ -284,39 +278,40 @@ impl Spiller {
                         0
                     },
                     classify::rail_service_type(tags.get("service").map(|s| s.as_str())),
-                );
+                )?;
             }
             FeatureType::Barrier => {
                 // height_tier mirrors the structure-table ladder: 0 = mapped
                 // height tag, 2 = the 3.0 m default (the merged structures.arrow
                 // carries the tier per wall; the builder reads it from here).
                 let mapped = tags.get("height").and_then(|s| parse_height(s));
-                let _ = write!(
+                write!(
                     w,
                     "\t{}\t{}\t{}",
                     mapped.unwrap_or(3.0),
                     classify::barrier_material_type(tags.get("material").map(|s| s.as_str())),
                     if mapped.is_some() { 0 } else { 2 },
-                );
+                )?;
             }
             FeatureType::AirportLine => {
                 let heading = microsegment::bearing_deg(seg.0[0], seg.0[1], seg.1[0], seg.1[1]);
-                let _ = write!(
+                write!(
                     w,
                     "\t{:.1}\t{}\t{}\t{}\t",
                     heading,
                     classify::aeroway_type(tags),
                     tsv_tag(tags, "ref"),
                     tsv_tag(tags, "surface"),
-                );
+                )?;
                 if let Some(v) = classify::parse_width_m(tags.get("width").map(|s| s.as_str())) {
-                    let _ = write!(w, "{v:.1}");
+                    write!(w, "{v:.1}")?;
                 }
             }
             _ => {}
         }
 
-        let _ = writeln!(w);
+        writeln!(w)?;
+        Ok(())
     }
 
     /// Emit a polygon/point feature (building, industrial, wind turbine).
@@ -333,7 +328,7 @@ impl Spiller {
         clon: f64,
         tags: &Tags,
         ring: Option<&[[f64; 2]]>,
-    ) {
+    ) -> Result<()> {
         let bucket = self.bucket(square);
         let name = ftype.name();
 
@@ -361,15 +356,15 @@ impl Spiller {
             .map(|r| r.iter().map(|c| lonlat_to_grid(c[1], c[0])).collect())
             .unwrap_or_default();
 
-        let w = &mut self.get_writer(name, bucket).writer;
-        let _ = write!(w, "{}\t{}\t{}\t{}", spill_key(square), osm_id, cgx, cgy);
+        let w = self.get_writer(name, bucket)?;
+        write!(w, "{}\t{}\t{}\t{}", spill_key(square), osm_id, cgx, cgy)?;
 
         match ftype {
             FeatureType::Building => {
                 // Use amenity/shop/healthcare tags to override building type classification.
                 // WHY: building=yes + amenity=school → type 3 (school), not 0 (residential).
                 let bt = building_bt.unwrap();
-                let _ = write!(
+                write!(
                     w,
                     "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     bt,
@@ -388,18 +383,18 @@ impl Spiller {
                     // settlement v2 phase 2: opening_hours → day-fraction u8.
                     classify::opening_hours_fraction(tags.get("opening_hours").map(|s| s.as_str())),
                     is_area_source as u8,
-                );
+                )?;
             }
             FeatureType::Leisure => {
                 // No capacity column: the area-law unification dropped capacity
                 // scaling, and this contract bump is the moment to delete it.
-                let _ = write!(
+                write!(
                     w,
                     "\t{}\t{}\t{}",
                     classify::leisure_sport_class(tags),
                     classify::opening_hours_fraction(tags.get("opening_hours").map(|s| s.as_str())),
                     tsv_tag(tags, "name"),
-                );
+                )?;
             }
             FeatureType::Industrial | FeatureType::WindTurbine => {
                 let src_type: u8 = if matches!(ftype, FeatureType::WindTurbine) {
@@ -409,7 +404,7 @@ impl Spiller {
                 else {
                     site_type_from_tags(tags)
                 };
-                let _ = write!(
+                write!(
                     w,
                     "\t{}\t{}\t{}\t{}\t{}",
                     src_type,
@@ -419,7 +414,7 @@ impl Spiller {
                         .and_then(|s| parse_height(s))
                         .unwrap_or(0.0),
                     parse_power_kw(tags.get("generator:output:electricity").map(|s| s.as_str())),
-                );
+                )?;
             }
             FeatureType::AirportArea => {
                 let airport_ref = tags
@@ -430,7 +425,7 @@ impl Spiller {
                 let width_m = classify::parse_width_m(tags.get("width").map(|s| s.as_str()))
                     .map(|v| format!("{v:.1}"))
                     .unwrap_or_default();
-                let _ = write!(
+                write!(
                     w,
                     "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     classify::aeroway_type(tags),
@@ -443,15 +438,16 @@ impl Spiller {
                     width_m,
                     tsv_tag(tags, "aerodrome:type"),
                     tsv_tag(tags, "access"),
-                );
+                )?;
             }
             _ => {}
         }
 
         // Snapped ring as grid text (empty when the feature is a point).
-        let _ = write!(w, "\t{}", encode_ring_text(&snapped));
+        write!(w, "\t{}", encode_ring_text(&snapped))?;
 
-        let _ = writeln!(w);
+        writeln!(w)?;
+        Ok(())
     }
 
     /// Emit a function-POI node for the finalize footprint join. Format:
@@ -459,39 +455,46 @@ impl Spiller {
     /// `building=yes` the POI sits inside; never a final arrow.
     /// `class` is the settlement class from [`poi_class`]; rows whose tags don't
     /// resolve are not emitted (caller checks first).
-    pub fn emit_poi(&mut self, square: Square, clat: f64, clon: f64, class: u8) {
+    pub fn emit_poi(&mut self, square: Square, clat: f64, clon: f64, class: u8) -> Result<()> {
         let bucket = self.bucket(square);
         let (gx, gy) = lonlat_to_grid(clon, clat);
-        let w = &mut self.get_writer(FeatureType::Poi.name(), bucket).writer;
-        let _ = writeln!(w, "{}\t{}\t{}\t{}", spill_key(square), gx, gy, class);
+        let w = self.get_writer(FeatureType::Poi.name(), bucket)?;
+        writeln!(w, "{}\t{}\t{}\t{}", spill_key(square), gx, gy, class)?;
+        Ok(())
     }
 
     /// Flush every bucket and mark the spill complete, so a finalize that
     /// fails after a nine-hour extract can be rerun from the spill alone
-    /// instead of from the planet. The marker names the
-    /// bucket count: finalize enumerates `0..num_buckets`, so another count
-    /// would silently drop buckets.
-    pub fn complete(&mut self) -> Result<()> {
+    /// instead of from the planet. Bind reuse to the input and bucket count;
+    /// another planet, layer selection or partition count must never reuse it.
+    pub fn complete(&mut self, input_identity: &str) -> Result<()> {
         for bf in self.writers.values_mut() {
-            bf.writer.flush()?;
-            bf.writer.get_ref().sync_all()?;
+            bf.flush()?;
+            bf.get_ref().sync_all()?;
         }
         let mut marker = File::create(self.dir.join(SPILL_COMPLETE_MARKER))?;
-        writeln!(marker, "{}", self.num_buckets)?;
+        writeln!(
+            marker,
+            "{}",
+            completion_identity(self.num_buckets, input_identity)
+        )?;
         marker.sync_all()?;
+        File::open(&self.dir)?.sync_all()?;
         Ok(())
     }
 }
 
-/// Written last into the spill directory, holding the bucket count; its
+/// Written last into the spill directory, holding input and bucket identities; its
 /// absence means a partial spill.
 pub const SPILL_COMPLETE_MARKER: &str = "complete";
 
-/// Whether every bucket of `dir` was flushed by a finished extract that
-/// spilled into `num_buckets` buckets.
-pub fn is_complete(dir: &Path, num_buckets: usize) -> bool {
+fn completion_identity(num_buckets: usize, input_identity: &str) -> String {
+    serde_json::json!([num_buckets, input_identity]).to_string()
+}
+
+pub fn is_complete(dir: &Path, num_buckets: usize, input_identity: &str) -> bool {
     fs::read_to_string(dir.join(SPILL_COMPLETE_MARKER))
-        .map(|text| text.trim() == num_buckets.to_string())
+        .map(|text| text.trim() == completion_identity(num_buckets, input_identity))
         .unwrap_or(false)
 }
 
@@ -969,19 +972,67 @@ mod settlement_class_tests {
         assert_eq!(tsv_road_ref(&empty_ref).to_string(), "D1");
     }
 
+    #[test]
+    fn disk_full_stops_every_spill_row_writer() {
+        let dir = std::env::temp_dir().join(format!("osm-spill-full-{}", std::process::id()));
+        let square = grid::square_of(50.0, 14.0);
+        for feature in [FeatureType::Road, FeatureType::Building, FeatureType::Poi] {
+            let mut spiller = Spiller::new(&dir, 1).unwrap();
+            // Zero capacity makes the actual ENOSPC visible during the row write.
+            spiller.writers.insert(
+                (feature.name().into(), 0),
+                BufWriter::with_capacity(
+                    0,
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open("/dev/full")
+                        .unwrap(),
+                ),
+            );
+            let tags = Tags::new();
+            let result = match feature {
+                FeatureType::Road => spiller.emit_segment(
+                    &feature,
+                    square,
+                    1,
+                    0,
+                    &([50.0, 14.0], [50.001, 14.0], 111.0),
+                    &tags,
+                ),
+                FeatureType::Building => {
+                    spiller.emit_polygon(&feature, square, 2, 50.0, 14.0, &tags, None)
+                }
+                _ => spiller.emit_poi(square, 50.0, 14.0, 1),
+            };
+            assert_eq!(
+                result
+                    .unwrap_err()
+                    .downcast_ref::<std::io::Error>()
+                    .unwrap()
+                    .raw_os_error(),
+                Some(28)
+            );
+            assert!(!dir.join(SPILL_COMPLETE_MARKER).exists());
+        }
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A spill is complete only after the extract said so and only for the
     /// bucket count it was spilled into; a fresh or interrupted spill
     /// directory, or another count, never finalizes.
     #[test]
-    fn spill_is_complete_only_after_the_extract_marks_it_for_its_bucket_count() {
+    fn spill_completion_requires_the_same_source_and_partition_count() {
         let dir = std::env::temp_dir().join(format!("osm-extract-spill-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let mut spiller = Spiller::new(&dir, 4).unwrap();
-        spiller.emit_poi(grid::square_of(50.0, 14.0), 50.0, 14.0, 1);
-        assert!(!is_complete(&dir, 4));
-        spiller.complete().unwrap();
-        assert!(is_complete(&dir, 4));
-        assert!(!is_complete(&dir, 8));
+        spiller
+            .emit_poi(grid::square_of(50.0, 14.0), 50.0, 14.0, 1)
+            .unwrap();
+        assert!(!is_complete(&dir, 4, "planet-a"));
+        spiller.complete("planet-a").unwrap();
+        assert!(is_complete(&dir, 4, "planet-a"));
+        assert!(!is_complete(&dir, 8, "planet-a"));
+        assert!(!is_complete(&dir, 4, "planet-b"));
         fs::remove_dir_all(dir).unwrap();
     }
 }

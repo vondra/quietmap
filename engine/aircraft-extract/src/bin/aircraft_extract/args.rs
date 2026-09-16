@@ -74,6 +74,13 @@ pub enum Cmd {
         #[arg(long)]
         output: PathBuf,
     },
+    /// Admit exact source days against the archive cache without reading them.
+    PreflightDays {
+        #[arg(long)]
+        adsb_cache: PathBuf,
+        #[arg(long, value_delimiter = ',', required = true)]
+        days: Vec<String>,
+    },
     /// Check complete expected day files, class routing, provenance, and IPC payloads.
     ValidateSegments {
         #[arg(long)]

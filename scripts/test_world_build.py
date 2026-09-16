@@ -47,6 +47,7 @@ class WorldBuildTest(unittest.TestCase):
                     patch.object(world, 'raster_inputs', return_value=[]), \
                     patch.object(world, 'height_inputs', return_value=[]), \
                     patch.object(world, 'resume_steps', return_value=set()) as resume, \
+                    patch.object(world, 'preflight_aircraft_sources') as preflight, \
                     patch.object(world, 'attach_rasters') as attach, \
                     patch.object(world, 'pin_digest') as digest, \
                     patch.object(world.subprocess, 'run') as run, \
@@ -60,10 +61,47 @@ class WorldBuildTest(unittest.TestCase):
                 finally:
                     os.chdir(previous_cwd)
                 self.assertTrue(resume.call_args.kwargs['dry_run'])
+                preflight.assert_not_called()
                 run.assert_not_called()
                 attach.assert_not_called()
                 digest.assert_not_called()
             self.assertEqual(state_path.read_text(), 'retained build state')
+
+    def test_fresh_build_rejects_a_missing_newest_sample_before_pinning_osm_or_any_producer(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()):
+            root = Path(directory)
+            output, scratch = root / 'output', root / 'scratch'
+            source = root / 'planet.pbf'
+            source.write_text('frozen')
+            airline, ga = root / 'adsbexchange', root / 'adsblol'
+            airline.mkdir()
+            ga.mkdir()
+            config = root / 'build.toml'
+            config.write_text('[build]\nas_of_date="20260910"\naircraft_anchor="2026-09"\n'
+                              'memory_gib=80\nthreads=4\n[sources]\n')
+            argv = ['build-world.py', '--config', str(config), '--output', str(output),
+                    '--scratch', str(scratch)]
+            with patch.object(sys, 'argv', argv), \
+                    patch.object(world, 'source_paths', return_value={'planet': source}) as paths, \
+                    patch.object(world, 'build_plan', return_value=(output / 'prepared/2026', [
+                        world.Step('osm', (), ('osm-extract',))])), \
+                    patch.object(world, 'preflight_aircraft_sources', side_effect=ValueError(
+                        'airline source window incomplete: missing ADS-B day 2026-09-01')) as preflight, \
+                    patch.object(world, 'pin_inputs') as pin, \
+                    patch.object(world.subprocess, 'run') as run, \
+                    patch.dict(os.environ, {}, clear=True):
+                paths.return_value.update(airline=airline, general_aviation=ga)
+                with self.assertRaisesRegex(ValueError, 'missing ADS-B day 2026-09-01'):
+                    world.main()
+                self.assertEqual(preflight.call_args.args, (airline, ga, '2026-09'))
+                self.assertFalse(output.exists())
+                pin.assert_not_called()
+                run.assert_not_called()
+                # --plan is a read-only nonproducer: it never builds or validates sources.
+                with patch.object(sys, 'argv', [*argv, '--plan']):
+                    world.main()
+                preflight.assert_called_once()
+                self.assertFalse(output.exists())
 
     def test_partial_transport_finalization_does_not_restart_enrichment_on_split_geometry(self):
         for layer in ('railways', 'roads'):

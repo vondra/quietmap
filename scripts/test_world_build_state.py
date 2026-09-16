@@ -58,6 +58,41 @@ class WorldBuildStateTests(unittest.TestCase):
                 state.subprocess, 'run', return_value=SimpleNamespace(returncode=3)):
             return state.resume_steps(self.output, self.config, self.steps, self.roots, [self.source], **options)
 
+    def test_unchanged_interrupted_chain_resumes_at_last_started_substep_only(self):
+        roads = self.steps[1]
+        receipt = dict(name='roads', exit=None, started=100.0, **state.step_identity(
+            roads, self.config['build'], pin_digest(self.output / state.PIN_NAME)))
+        state.record_steps(self.output, [receipt])
+        log = self.output / 'roads.log'
+        log.write_text('=== attempt 1970-01-01T00:01:40+00:00 ===\n'
+                       '{"step":"roads-built-up","argv":["bake"]}\n'
+                       '{"step":"roads-built-up","exit":0}\n'
+                       '{"step":"roads-us","argv":["enrich"]}\n'
+                       'progress interrupted without a final error message\n')
+        before = (self.output / state.STATE_NAME).read_bytes()
+        self.assertEqual(self.resume(dry_run=True), {'osm'})
+        self.assertEqual((self.output / state.STATE_NAME).read_bytes(), before)
+        self.assertEqual(self.steps[1].argv, roads.argv)
+        self.assertEqual(self.resume(), {'osm'})
+        self.assertEqual(self.steps[1].argv[-2:], ('--from', 'roads-us'))
+        self.assertEqual(json.loads((self.output / state.STATE_NAME).read_text())['roads_from_step'], 'roads-us')
+        # A later interruption moves forward rather than replaying earlier countries.
+        receipt.update(started=200.0, **state.step_identity(self.steps[1], self.config['build'], pin_digest(self.output / state.PIN_NAME)))
+        state.record_steps(self.output, [receipt])
+        with log.open('a') as stream:
+            stream.write('=== attempt 1970-01-01T00:03:20+00:00 ===\n'
+                         '{"step":"roads-continuity","argv":["fill"]}\n')
+        self.assertEqual(self.resume(), {'osm'})
+        self.assertEqual(self.steps[1].argv[-2:], ('--from', 'roads-continuity'))
+        self.assertEqual(self.steps[1].argv.count('--from'), 1)
+        # A controller killed before opening its attempt cannot adopt an older log.
+        receipt['started'] = 300.0
+        self.assertIsNone(state.interrupted_chain_step(self.output, 'roads', receipt,
+            roads, self.config['build'], pin_digest(self.output / state.PIN_NAME)))
+        receipt['started'] = 200.0
+        self.assertIsNone(state.interrupted_chain_step(self.output, 'roads', receipt,
+            roads, self.config['build'], 'changed-code-pin'))
+
     def test_state_updates_remove_obsolete_note_and_preserve_rows(self):
         path = self.output / state.STATE_NAME
         counts = {'roads': 42, 'railways': 7}

@@ -4,6 +4,8 @@ import argparse
 from concurrent.futures import ProcessPoolExecutor
 from collections import Counter
 import fcntl
+from functools import cache
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -12,7 +14,7 @@ import pyarrow as pa
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from prepared_arrow import rewrite_arrow_batches, segment_midpoints  # noqa: E402
-from qmgrid import parse_square_name  # noqa: E402
+from qmgrid import parse_square_name, square_name, Z9_AXIS  # noqa: E402
 from building_footprints import BuildingFootprintSampler  # noqa: E402
 from worker_jobs import available_memory_bytes, cpu_jobs, fit_jobs  # noqa: E402
 
@@ -20,7 +22,38 @@ from worker_jobs import available_memory_bytes, cpu_jobs, fit_jobs  # noqa: E402
 WORKER_BYTES = (20 << 30) // 16
 
 
+@cache
+def classification_code_identity():
+    files = (Path(__file__), Path(__file__).with_name('building_footprints.py'),
+             Path(__file__).resolve().parents[1] / 'lib/qmgrid.py')
+    return hashlib.sha256(b''.join(path.read_bytes() for path in files)).hexdigest()
+
+
+def classification_inputs(path):
+    """The owner and its halo are the complete density inputs for this road file."""
+    x, y = int(path.parent.parent.name), int(path.parent.name)
+    prepared = path.parents[3]
+    identities = []
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            if not 0 <= y + dy < Z9_AXIS:
+                continue
+            source = prepared / square_name((x + dx) % Z9_AXIS, y + dy) / 'structures.arrow'
+            try:
+                stat = source.stat()
+                identities.append([str(source), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns])
+            except FileNotFoundError:
+                identities.append([str(source), None])
+    return hashlib.sha256(json.dumps([classification_code_identity(), identities],
+        separators=(',', ':')).encode()).hexdigest().encode()
+
+
 def bake_file(path, sampler):
+    identity = classification_inputs(path)
+    with pa.memory_map(str(path), 'r') as source:
+        schema = pa.ipc.open_file(source).schema
+        if (schema.metadata or {}).get(b'qm_built_up_inputs') == identity:
+            return {'files_changed': 0, 'files_skipped': 1}
     counts = Counter()
 
     def classify_batch(batch):
@@ -32,10 +65,12 @@ def bake_file(path, sampler):
         array = pa.array(values, type=pa.uint8())
         index = batch.schema.get_field_index("built_up")
         if index < 0:
-            return batch.append_column(pa.field("built_up", pa.uint8(), nullable=False), array)
-        if batch.column(index).type != pa.uint8() or batch.column(index).null_count:
-            raise ValueError(f"{path}: built_up must be a non-null UInt8 column")
-        return batch.set_column(index, batch.schema.field(index), array)
+            batch = batch.append_column(pa.field("built_up", pa.uint8(), nullable=False), array)
+        else:
+            if batch.column(index).type != pa.uint8() or batch.column(index).null_count:
+                raise ValueError(f"{path}: built_up must be a non-null UInt8 column")
+            batch = batch.set_column(index, batch.schema.field(index), array)
+        return batch.replace_schema_metadata({**(batch.schema.metadata or {}), b'qm_built_up_inputs': identity})
 
     rows, changed = rewrite_arrow_batches(path, classify_batch)
     return {"rows": rows, "unknown": counts[0], "rural": counts[1], "urban": counts[2],

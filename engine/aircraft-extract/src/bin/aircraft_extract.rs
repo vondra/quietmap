@@ -11,6 +11,8 @@ use args::*;
 mod cli_audit;
 #[path = "aircraft_extract/cli_days.rs"]
 mod cli_days;
+#[path = "aircraft_extract/cli_preflight.rs"]
+mod cli_preflight;
 #[path = "aircraft_extract/cli_run_all.rs"]
 mod cli_run_all;
 #[path = "aircraft_extract/cli_runners.rs"]
@@ -25,6 +27,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     init_rayon_pool(cli.max_threads)?;
     match cli.cmd {
+        Cmd::PreflightDays { adsb_cache, days } => cli_preflight::preflight_days(&adsb_cache, &days)?,
         Cmd::CruiseCensus {
             segments_dir,
             output,

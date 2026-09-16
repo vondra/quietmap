@@ -113,6 +113,41 @@ def completed_steps(latest, steps, settings, input_pin_sha256, reviewed=()):
         completed -= stale
 
 
+def interrupted_chain_step(output, name, previous, step, settings, input_pin):
+    """Resume the last started substep only inside the same immutable attempt."""
+    if (previous.get('exit') == 0 or previous.get('input_pin_sha256') != input_pin
+            or not isinstance(previous.get('started'), (int, float))):
+        return None
+    def without_boundary(arguments):
+        return arguments[:-2] if arguments[-2:-1] == ['--from'] else arguments
+    if (without_boundary(producer_arguments(previous['command'])) !=
+            without_boundary(producer_arguments(producer_command(step, settings)))
+            or data_environment(previous.get('environment', {})) != data_environment(dict(step.environment))):
+        return None
+    path = output / f'{name}.log'
+    if not path.is_file():
+        return None
+    boundary, current_attempt = None, False
+    with path.open(errors='replace') as log:
+        for line in log:
+            if line.startswith('=== attempt '):
+                boundary = None
+                try:
+                    current_attempt = datetime.fromisoformat(line.removeprefix('=== attempt ').split(' ===')[0]).timestamp() >= previous['started']
+                except ValueError:
+                    current_attempt = False
+            elif current_attempt and line.startswith('{'):
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if (isinstance(row, dict) and isinstance(row.get('argv'), list)
+                        and isinstance(row.get('step'), str)
+                        and row['step'].startswith(name + '-')):
+                    boundary = row['step']
+    return boundary
+
+
 def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry_run=False):
     state = json.loads((output / STATE_NAME).read_text())
     def data_configuration(value):
@@ -175,6 +210,11 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
             key = f'{name}_from_step'
             persisted = state.get(key)
             boundary = review.get(key, persisted) if review is not None else persisted
+            if review is None and state['status'] != 'complete':
+                step = next((step for step in steps if step.name == name), None)
+                if step is not None:
+                    boundary = interrupted_chain_step(output, name, latest.get(name, {}),
+                        step, config['build'], current_digest) or boundary
             if boundary is not None or (review is not None and key in review):
                 if not isinstance(boundary, str) or not boundary.strip():
                     raise ValueError(f'{key} must be a nonempty chain step name')
@@ -185,7 +225,7 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
                         or (previous.get('exit') == 0 and not reviewed_rebuild)
                         or previous.get('input_pin_sha256') != previous_digest):
                     raise ValueError(f'{name} step resume requires an unsuccessful {name} attempt at the previous pin')
-                steps = [replace(step, argv=step.argv + ('--from', boundary))
+                steps = [replace(step, argv=(step.argv[:-2] if step.argv[-2:-1] == ('--from',) else step.argv) + ('--from', boundary))
                          if step.name == name and step.argv[-2:] != ('--from', boundary) else step
                          for step in steps]
             chain_starts[name] = boundary
