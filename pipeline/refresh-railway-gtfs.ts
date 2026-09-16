@@ -111,7 +111,7 @@ async function candidateFromUrl(
   if (freshness.historical) {
     throw new Error(`download is still the accepted historical ${freshness.lastServiceDate} snapshot`)
   }
-  const familyOf = (routeType: number) => railFamilyFor(routeType, feed)
+  const familyOf = (routeType: number, route?: Record<string, string>) => railFamilyFor(routeType, feed, route)
   const declaredFamilies = [...await declaredRouteFamiliesForFeed(candidate, familyOf)].sort()
   // The freshness window is the ONLY date truth here: admission samples the same days the
   // enrichment will, so a validated download can never select a different service day.

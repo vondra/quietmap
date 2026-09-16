@@ -25,6 +25,8 @@ export interface RailServiceRoutingCounts {
   total: number
   relationEstimated: number
   graphEstimated: number
+  /** Graph-estimated patterns that also quarantined at least one unresolved leg. */
+  partial: number
   unmatched: number
   failures: { snapFailed: number; disconnected: number; ambiguous: number }
 }
@@ -387,6 +389,17 @@ function walkPair(
   return visits
 }
 
+type LegFailure = 'snap' | 'disconnected' | 'ambiguous'
+
+interface WalkedPattern {
+  passages: ClippedRailPassage[]
+  /** Station legs the graph could not resolve; their observations localize the uncertainty. */
+  failedLegs: Array<{ reason: LegFailure; observations: Array<[number, number]> }>
+}
+
+/** Every departure of a pattern passes each of its resolvable legs, so one
+ *  unresolved leg quarantines only its own corridor instead of dropping the
+ *  whole pattern (FR lost 14% and DE 19% of daily departures that way, r260910). */
 function graphPassages(
   graph: RailGraph,
   topology: SourceTransportTopology,
@@ -394,25 +407,28 @@ function graphPassages(
   stops: readonly GtfsServiceStop[],
   shape: ReadonlyArray<[number, number]>,
   scratch: DijkstraScratch,
-): ClippedRailPassage[] | { unmatched: 'snap' | 'disconnected' | 'ambiguous' } {
+): WalkedPattern {
   const stations = collapseStops(stops)
-  if (stations.length < 2) return { unmatched: 'snap' }
+  const walked: WalkedPattern = { passages: [], failedLegs: [] }
+  if (stations.length < 2) {
+    walked.failedLegs.push({ reason: 'snap', observations: stations.map(stop => [stop.lat, stop.lon]) })
+    return walked
+  }
   const anchors = stationShapeAnchors(shape, stations)
   let visits: DirectedVisit[] = []
   for (let index = 1; index < stations.length; index++) {
     for (const run of splitReversalRuns(legObservations(shape, stations, anchors, index))) {
       const leg = walkPair(graph, edges, run[0], run.at(-1)!, shape.length ? shapeFilter(run) : null, scratch)
-      if (typeof leg === 'string') return { unmatched: leg }
-      visits = stitch(visits, leg)
+      if (typeof leg === 'string') walked.failedLegs.push({ reason: leg, observations: run })
+      else visits = stitch(visits, leg)
     }
   }
-  const passages: ClippedRailPassage[] = []
   visits.forEach((visit, occurrence) => {
     if (!isStampable(graph.edges[visit.edgeIndex])) return
     const passage = clipVisit(graph, topology, visit, occurrence)
-    if (passage) passages.push(passage)
+    if (passage) walked.passages.push(passage)
   })
-  return passages.length ? passages : { unmatched: 'disconnected' }
+  return walked
 }
 
 function relationPassages(
@@ -434,6 +450,25 @@ function relationPassages(
   return passages
 }
 
+function quarantineNear(graph: RailGraph, edges: RailEdgeIndex, at: readonly [number, number], keys: Set<string>): void {
+  for (const index of edges.nearby(at[0], at[1], UNLOCALIZED_PAIR_QUARANTINE_RADIUS_M)) {
+    keys.add(graph.edges[index].key)
+  }
+}
+
+/** Quarantine one unresolved leg: both ends and three points along its observations. */
+function quarantineLeg(
+  graph: RailGraph,
+  edges: RailEdgeIndex,
+  observations: ReadonlyArray<[number, number]>,
+  keys: Set<string>,
+): void {
+  if (!observations.length) return
+  quarantineNear(graph, edges, observations[0], keys)
+  quarantineNear(graph, edges, observations.at(-1)!, keys)
+  for (const fraction of [0.25, 0.5, 0.75]) quarantineNear(graph, edges, pointAlongPolyline(observations, fraction), keys)
+}
+
 function quarantineStops(
   graph: RailGraph,
   edges: RailEdgeIndex,
@@ -443,23 +478,15 @@ function quarantineStops(
 ): void {
   const stations = collapseStops(stops)
   const anchors = stationShapeAnchors(shape, stations)
-  const mark = (at: readonly [number, number]): void => {
-    for (const index of edges.nearby(at[0], at[1], UNLOCALIZED_PAIR_QUARANTINE_RADIUS_M)) {
-      keys.add(graph.edges[index].key)
-    }
-  }
-  const markLeg = (observations: ReadonlyArray<[number, number]>): void => {
-    for (const fraction of [0.25, 0.5, 0.75]) mark(pointAlongPolyline(observations, fraction))
-  }
   if (stations.length === 0) {
     // An orphan timetable row can localize uncertainty through its source shape.
-    for (const point of shape) mark(point)
-    for (let index = 1; index < shape.length; index++) markLeg([shape[index - 1], shape[index]])
+    for (let index = 1; index < shape.length; index++) quarantineLeg(graph, edges, [shape[index - 1], shape[index]], keys)
+    if (shape.length === 1) quarantineNear(graph, edges, shape[0], keys)
     return
   }
-  for (const stop of stations) mark([stop.lat, stop.lon])
+  for (const stop of stations) quarantineNear(graph, edges, [stop.lat, stop.lon], keys)
   for (let index = 1; index < stations.length; index++) {
-    markLeg(legObservations(shape, stations, anchors, index))
+    quarantineLeg(graph, edges, legObservations(shape, stations, anchors, index), keys)
   }
 }
 
@@ -480,9 +507,9 @@ export function routeRailServices(
   const edges = new RailEdgeIndex(graph)
   const scratch = createDijkstraScratch(graph.nodeCount)
   const result: RailServiceRouteResult = {
-    total: 0, relationEstimated: 0, graphEstimated: 0, unmatched: 0,
+    total: 0, relationEstimated: 0, graphEstimated: 0, partial: 0, unmatched: 0,
     failures: { snapFailed: 0, disconnected: 0, ambiguous: 0 },
-    dailyDepartures: { total: 0, relationEstimated: 0, graphEstimated: 0, unmatched: 0,
+    dailyDepartures: { total: 0, relationEstimated: 0, graphEstimated: 0, partial: 0, unmatched: 0,
       failures: { snapFailed: 0, disconnected: 0, ambiguous: 0 } },
     services: [], quarantinedPieceKeys: new Set(),
   }
@@ -503,9 +530,17 @@ export function routeRailServices(
     }
     if (!passages) {
       const walked = graphPassages(graph, topology, edges, pattern.service.stops, shape, scratch)
-      if (Array.isArray(walked)) { passages = walked; matching = 'graph_estimated' }
-      else {
-        const reason = walked.unmatched === 'snap' ? 'snapFailed' : walked.unmatched
+      if (walked.passages.length) {
+        passages = walked.passages
+        matching = 'graph_estimated'
+        if (walked.failedLegs.length) {
+          result.partial++
+          result.dailyDepartures.partial += pattern.passenger
+          for (const leg of walked.failedLegs) quarantineLeg(graph, edges, leg.observations, result.quarantinedPieceKeys)
+        }
+      } else {
+        const failure = walked.failedLegs[0]?.reason ?? 'disconnected'
+        const reason = failure === 'snap' ? 'snapFailed' : failure
         result.failures[reason]++
         result.dailyDepartures.failures[reason] += pattern.passenger
       }

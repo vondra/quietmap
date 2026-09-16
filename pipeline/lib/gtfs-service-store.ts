@@ -9,7 +9,7 @@ import { computeActiveTripFamiliesForFeed, loadStopsWithCoords, RAIL_TYPES,
   readGtfsTripDepartureMultipliers, resolveStopViaParent, type GtfsServiceWindow } from './gtfs-enrich-core.js'
 
 export interface GtfsServiceOptions {
-  familyOf?: (routeType: number) => 'rail' | null
+  familyOf?: (routeType: number, route: Record<string, string>) => 'rail' | null
   dateSelection?: (calendarRows: Record<string, string>[]) => string
   /** Window the freshness gate derived for this feed; bounds which service days are selectable. */
   serviceWindow?: GtfsServiceWindow

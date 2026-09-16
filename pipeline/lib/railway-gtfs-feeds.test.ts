@@ -27,15 +27,15 @@ function writeRequiredGtfs(directory: string): void {
   )
 }
 
-test('global registry keeps the 22 productive feeds across 21 countries', () => {
+test('global registry keeps the 23 productive feeds across 21 countries', () => {
   assert.deepEqual(GLOBAL_GTFS_FEEDS.map(feed => feed.id), [
-    'de', 'ch', 'at', 'nl', 'se', 'no', 'fi', 'be', 'in', 'us', 'ca', 'fr',
+    'de', 'ch', 'at', 'nl', 'se', 'no', 'fi', 'be', 'in', 'us', 'ca', 'fr', 'fr-idf',
     'lu', 'gr', 'lv-pv', 'ee', 'bg-sofia', 'hr', 'hu', 'sk', 'au-vic', 'au-qld',
   ])
   assert.equal(new Set(GLOBAL_GTFS_FEEDS.map(feed => feed.country)).size, 21)
   assert.deepEqual(
     GLOBAL_GTFS_FEEDS.filter(feed => feed.country === 'FR').map(feed => feed.id),
-    ['fr'],
+    ['fr', 'fr-idf'],
   )
   assert.deepEqual(
     GLOBAL_GTFS_FEEDS.filter(feed => feed.country === 'AU').map(feed => feed.id),
@@ -49,6 +49,11 @@ test('registries retain only productive, explicit family overrides', () => {
   assert.equal(railFamilyFor(400, victoria), 'rail')
   assert.equal(railFamilyFor(0, victoria), null)
   assert.equal(railFamilyFor(1, thailand), null)
+  // Transilien repeats the national feed's TER rows; only its own suburban lines count.
+  const transilien = GLOBAL_GTFS_FEEDS.find(feed => feed.id === 'fr-idf')!
+  assert.equal(railFamilyFor(2, transilien, { route_short_name: 'TER', route_type: '2' }), null)
+  assert.equal(railFamilyFor(2, transilien, { route_short_name: 'C', route_type: '2' }), 'rail')
+  assert.equal(railFamilyFor(2, transilien), 'rail')
 })
 
 test('every immutable feed records its refresh URL and Greece no longer points at the 2019 archive', () => {

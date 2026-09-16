@@ -61,8 +61,12 @@ export function parsePrahaRows(rows: readonly (readonly unknown[])[]) {
     streets.set(key, acc); sections++
   }
   if (sections < 500) throw new Error(`Praha source has only ${sections} positive sections; expected the monitored network`)
+  // The sheet counts every vehicle crossing the profile in 0-24 h ("Vozidel celkem"): the
+  // carriageway's whole cross-section. Nuselský most (68,100) equals its two one-way feeders
+  // Legerova (35,800) + Sokolská (32,300) in the 2025 edition, so a one-way street's profile
+  // is that street's full flow, never a half to be doubled or halved.
   return { sections, records: [...streets].map(([street, a]): CityRoadRecord => ({
-    ...roadObservation({ street, sections: a.sections.sort() }, 'unknown'),
+    ...roadObservation({ street, sections: a.sections.sort() }, 'both-directions'),
     street: PRAHA_STREET_NAMES[street] ?? street, light: Math.round(a.light / a.length),
     medium: Math.round(a.medium / a.length), heavy: Math.round(a.heavy / a.length), moto: 0,
   })) }

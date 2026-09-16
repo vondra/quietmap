@@ -269,9 +269,45 @@ test('failed pattern summaries preserve the cause and sum daily departures acros
   assert.equal(routed.unmatched, 2)
   assert.deepEqual(routed.failures, { snapFailed: 1, disconnected: 1, ambiguous: 0 })
   assert.deepEqual(routed.dailyDepartures, {
-    total: 23.5, relationEstimated: 0, graphEstimated: 11, unmatched: 12.5,
+    total: 23.5, relationEstimated: 0, graphEstimated: 11, partial: 0, unmatched: 12.5,
     failures: { snapFailed: 7, disconnected: 5.5, ambiguous: 0 },
   })
+})
+
+test('an unresolved leg quarantines its own corridor while the other legs keep every departure', () => {
+  const a = point(0, 0), cut = point(4000, 0), b = point(10000, 0), c = point(30000, 0), d = point(31000, 0)
+  const prepared = join(TEMP, 'partial-legs')
+  writeTransportFixture(prepared, [
+    { id: '1', nodes: [['a', a], ['k', cut], ['b', b]] },
+    { id: '2', nodes: [['c', c], ['d', d]] },
+  ], [
+    { way: '1', segment: 0, square, start: [0, 0], end: [1, 0] },
+    { way: '1', segment: 1, square, start: [1, 0], end: [2, 0] },
+    { way: '2', segment: 0, square, start: [0, 0], end: [1, 0] },
+  ])
+  using topology = new SourceTransportTopology(prepared)
+  const graph = buildRailGraph([
+    segment('1', a, cut, 'a', 'k'), { ...segment('1', cut, b, 'k', 'b'), key: '1:1' },
+    segment('2', c, d, 'c', 'd'),
+  ])
+  // Legs A-B and C-D walk; B-C spans a 20 km gap between two components.
+  const stops = [stop('A', a, 1), stop('B', b, 2), stop('C', c, 3), stop('D', d, 4)]
+  const routed = routeRailServices([service('T', stops, [a, b, c, d], 5)], topology, graph, 100)
+  assert.equal(routed.graphEstimated, 1)
+  assert.equal(routed.partial, 1)
+  assert.equal(routed.unmatched, 0)
+  assert.deepEqual(routed.dailyDepartures, {
+    total: 5, relationEstimated: 0, graphEstimated: 5, partial: 5, unmatched: 0,
+    failures: { snapFailed: 0, disconnected: 0, ambiguous: 0 },
+  })
+  const flow = passageFlow(routed.services)
+  assert.equal(flow.get('1:0')?.passenger, 5)
+  assert.equal(flow.get('1:1')?.passenger, 5)
+  assert.equal(flow.get('2:0')?.passenger, 5)
+  // Quarantine reaches 5 km around the failed leg's ends, not the far end of the walked leg.
+  assert.ok(routed.quarantinedPieceKeys.has('1:1'))
+  assert.ok(routed.quarantinedPieceKeys.has('2:0'))
+  assert.ok(!routed.quarantinedPieceKeys.has('1:0'))
 })
 
 test('joint station snaps use the connected through track when both closest tracks are isolated', () => {

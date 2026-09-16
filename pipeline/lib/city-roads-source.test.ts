@@ -22,7 +22,7 @@ test('TSK weights whole-street components by section length and preserves the pu
   const rows = Array.from({ length: 500 }, (_, i) => row(`Street${i}`, 100, 100, 10, 1))
   rows.push(row('LEGEROVA', 100, 100, 20, 4), row('LEGEROVA', 300, 300, 40, 8), row('BARRAND.MOST', 50, 10, 2, 1))
   const source = parsePrahaRows(rows)
-  assert.deepEqual(source.records.find(r => r.street === 'LEGEROVA'), { ...roadObservation({ street: 'LEGEROVA', sections: ['1:2', '1:2'] }, 'unknown'), street: 'LEGEROVA', light: 250, medium: 7, heavy: 35, moto: 0 })
+  assert.deepEqual(source.records.find(r => r.street === 'LEGEROVA'), { ...roadObservation({ street: 'LEGEROVA', sections: ['1:2', '1:2'] }, 'both-directions'), street: 'LEGEROVA', light: 250, medium: 7, heavy: 35, moto: 0 })
   assert.ok(source.records.some(r => r.street === 'Barrandovský most'))
   assert.equal(source.sections, 503)
   assert.throws(() => parsePrahaRows(rows.slice(0, 499)), /only499|only 499/)

@@ -98,11 +98,11 @@ async function loadFeed(
 
   try {
     for (const directory of directories) {
-      const stopFamily = (routeType: number) => railFamilyFor(routeType, feed)
-      const pairFamily = (routeType: number): 'rail' | null =>
-        feed.includeRailPairs !== false && stopFamily(routeType) === 'rail' ? 'rail' : null
-      const declaredFamily = (routeType: number): 'rail' | 'tram' | null =>
-        pairFamily(routeType) ?? (stopFamily(routeType) === 'tram' ? 'tram' : null)
+      const stopFamily = (routeType: number, route?: Record<string, string>) => railFamilyFor(routeType, feed, route)
+      const pairFamily = (routeType: number, route?: Record<string, string>): 'rail' | null =>
+        feed.includeRailPairs !== false && stopFamily(routeType, route) === 'rail' ? 'rail' : null
+      const declaredFamily = (routeType: number, route?: Record<string, string>): 'rail' | 'tram' | null =>
+        pairFamily(routeType, route) ?? (stopFamily(routeType, route) === 'tram' ? 'tram' : null)
       const dateSelection = serviceDaySelection(feed)
       const directoryFamilies = await declaredRouteFamiliesForFeed(directory, declaredFamily)
       for (const family of directoryFamilies) declared.add(family)
@@ -120,7 +120,8 @@ async function loadFeed(
             familyOf: pairFamily,
             dateSelection,
             serviceWindow: freshness,
-            optionsKey: `${registry}-complete-family-day-v2-${feed.serviceDay}-${feed.includeRailPairs === false ? 'tram-only' : 'rail'}`,
+            optionsKey: `${registry}-complete-family-day-v2-${feed.serviceDay}-${feed.includeRailPairs === false ? 'tram-only' : 'rail'}`
+              + (feed.excludedRouteShortNames ? `-without-${[...feed.excludedRouteShortNames].sort().join('+')}` : ''),
             cachePath: serviceCachePath(cacheDirectory, sourceDirectory, registry, feed, directory),
           })
         : null

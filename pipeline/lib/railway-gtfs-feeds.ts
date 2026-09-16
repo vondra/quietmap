@@ -51,6 +51,9 @@ export interface GlobalGtfsFeed {
   /** The publisher stamps `feed_info` with the snapshot day instead of the service horizon,
    *  so the calendars own this feed's validity window (ZTM GZM, verified 2026-09-13). */
   serviceWindowFromCalendars?: true
+  /** Routes (by `route_short_name`) another feed of the same country already publishes;
+   *  stamping them from both feeds would count those trains twice. */
+  excludedRouteShortNames?: ReadonlySet<string>
   serviceDay: 'busiest-wednesday' | 'midpoint-wednesday'
   acceptedHistoricalSource?: { gtfsTextSha256: string; lastServiceDate: string; sourceYear: number }
   sourceArchive?: { relativePath: string; sha256: string }
@@ -76,6 +79,9 @@ export const GLOBAL_GTFS_FEEDS: readonly GlobalGtfsFeed[] = [
   globalFeed({ id: 'us', country: 'US', name: 'Amtrak', url: 'https://content.amtrak.com/content/gtfs/GTFS.zip', bbox: [24.5, -125, 49, -66.9], routeTypes: RAIL_TYPES }),
   globalFeed({ id: 'ca', country: 'CA', name: 'VIA Rail', url: 'https://www.viarail.ca/sites/all/files/gtfs/viarail.zip', bbox: [41.7, -141, 60, -52.6], routeTypes: RAIL_TYPES }),
   globalFeed({ id: 'fr', country: 'FR', name: 'SNCF national', url: 'https://eu.ftp.opendatasoft.com/sncf/plandata/Export_OpenData_SNCF_GTFS_NewTripId.zip', bbox: [41.3, -5.2, 51.1, 9.6], routeTypes: ALL_RAIL_AND_TRAM }),
+  // The national export carries no Transilien/RER service (verified 2026-09-16: no SNCF stop within
+  // 1.5 km of RER C at Paris-Invalides); the Transilien feed adds it. Its TER rows repeat the national feed.
+  globalFeed({ id: 'fr-idf', country: 'FR', name: 'SNCF Transilien', url: 'https://eu.ftp.opendatasoft.com/sncf/gtfs/transilien-gtfs.zip', bbox: [48.1, 1.4, 49.2, 3.6], routeTypes: RAIL_TYPES, excludedRouteShortNames: new Set(['TER']) }),
   globalFeed({ id: 'lu', country: 'LU', name: 'Luxembourg ATP open data', url: 'https://data.public.lu/en/datasets/horaires-et-arrets-des-transport-publics-gtfs/', bbox: [49.4, 5.7, 50.2, 6.6], routeTypes: ALL_RAIL_AND_TRAM }),
   globalFeed({ id: 'gr', country: 'GR', name: 'Hellenic Train community timetable', url: 'https://jbb.ghsq.de/gtfs/gr-hellenic-train.gtfs.zip', bbox: [34.8, 19.3, 41.8, 29.8], routeTypes: ALL_RAIL_AND_TRAM }),
   globalFeed({ id: 'lv-pv', country: 'LV', name: 'Latvia Vivi', url: 'https://www.vivi.lv/uploads/GTFS.zip', bbox: [55.6, 20.9, 58.1, 28.2], routeTypes: ALL_RAIL_AND_TRAM }),
@@ -319,8 +325,11 @@ export function gtfsSourceDirectories(sourceRoot: string, feed: GlobalGtfsFeed, 
   return [extractedArchiveSource(sourceRoot, cacheDirectory, feed)]
 }
 
-export function railFamilyFor(routeType: number, feed: GlobalGtfsFeed): 'rail' | 'tram' | null {
+export function railFamilyFor(
+  routeType: number, feed: GlobalGtfsFeed, route?: Record<string, string>,
+): 'rail' | 'tram' | null {
   if (!feed.routeTypes.has(routeType)) return null
+  if (route && feed.excludedRouteShortNames?.has(route['route_short_name'] ?? '')) return null
   if (feed.metroAsRail && METRO_TYPES.has(routeType)) return 'rail'
   return routeFamily(routeType)
 }

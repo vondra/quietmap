@@ -386,12 +386,12 @@ export async function parseRoutesTxtOrThrow(extractDir: string): Promise<Record<
  *  demanded back as completeness evidence. */
 export async function declaredRouteFamiliesForFeed<F extends string>(
   extractDir: string,
-  familyOf: (routeType: number) => F | null,
+  familyOf: (routeType: number, route: Record<string, string>) => F | null,
 ): Promise<Set<F>> {
   const routesRaw = await parseRoutesTxtOrThrow(extractDir)
   const declared = new Set<F>()
   for (const r of routesRaw) {
-    const fam = familyOf(parseInt(r['route_type'] || '3'))
+    const fam = familyOf(parseInt(r['route_type'] || '3'), r)
     if (fam) declared.add(fam)
   }
   return declared
@@ -428,7 +428,7 @@ export function describeInactiveFamilies<F extends string>(
 
 export async function computeActiveTripFamiliesForFeed<F extends string>(
   extractDir: string,
-  familyOf: (routeType: number) => F | null,
+  familyOf: (routeType: number, route: Record<string, string>) => F | null,
   dateSelection?: (calendarRows: Record<string, string>[]) => string,
   serviceWindow?: GtfsServiceWindow,
 ): Promise<ActiveTripFamiliesResult<F>> {
@@ -438,7 +438,7 @@ export async function computeActiveTripFamiliesForFeed<F extends string>(
   const routesRaw = await parseRoutesTxtOrThrow(extractDir)
   const routeFam = new Map<string, F>()
   for (const r of routesRaw) {
-    const fam = familyOf(parseInt(r['route_type'] || '3'))
+    const fam = familyOf(parseInt(r['route_type'] || '3'), r)
     if (fam) routeFam.set(r['route_id'], fam)
   }
   if (routeFam.size === 0) {
