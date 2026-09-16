@@ -90,7 +90,7 @@ class WorldBuildInputsTest(unittest.TestCase):
                 from build_square_country_city import expected_contract
                 path = root / 'z9/0/0' / f'{layer}.arrow'
                 metadata = dict([expected_contract(path)]) if layer in ('roads', 'railways', 'industrial') else (
-                    {b'ships_contract': b'ships_v1', b'grid': b'z30'} if layer == 'ships' else None)
+                    {b'ships_contract': b'ships_v1', b'grid': b'z30', b'qm_blocks': b'AQ=='} if layer == 'ships' else None)
                 table = pa.table({'value': [37]}).replace_schema_metadata(metadata)
                 with pa.ipc.new_file(path, table.schema) as writer:
                     writer.write_table(table)

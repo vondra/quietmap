@@ -53,7 +53,7 @@ export const EMPTY_RASTER_OVERLAYS: Record<string, boolean> = Object.fromEntries
   ALL_RASTER_OVERLAY_IDS.map(id => [id, false]),
 )
 
-// Default view: the noise heatmap on (all seven layers → the precomputed
+// Default view: the noise heatmap on (every layer → the precomputed
 // `total` tile), advanced rasters off. The point compute popup
 // (`/api/noise-onfly-v2`) stays the exact-level source; the heatmap is the map.
 const DEFAULT_RASTER_OVERLAYS: Record<string, boolean> = {

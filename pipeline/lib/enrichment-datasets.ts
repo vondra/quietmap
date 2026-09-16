@@ -41,7 +41,7 @@ export type Provenance =
 
 export interface Dataset {
   id: number
-  layer: 'roads' | 'railways' | 'buildings' | 'industrial' | 'aircraft' | 'any'
+  layer: 'roads' | 'railways' | 'buildings' | 'industrial' | 'aircraft' | 'ships' | 'any'
   key: string
   name: string
   year: number | null
@@ -1616,6 +1616,18 @@ export const DATASETS: Dataset[] = [
     license: 'CC-BY-4.0',
     url: 'https://opendata.geoportalpraha.cz/maps/ad9aca20e9c042d2b52eb31ff18961b6',
     priority: 90, // city-measured
+  },
+  {
+    id: 9901,
+    layer: 'ships',
+    key: 'emodnet-vessel-density-2024',
+    name: 'EMODnet Human Activities vessel density 2024 (AIS hours per km² per month)',
+    year: 2024,
+    license: 'CC-BY-4.0',
+    url: 'https://emodnet.ec.europa.eu/en/human-activities',
+    priority: 70,
+    provenance: 'continental-measured', // AIS-derived hours for all EU waters, one product
+    measurement: 'counted',
   },
 ]
 

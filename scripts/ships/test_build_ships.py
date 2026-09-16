@@ -72,6 +72,11 @@ class BuildShipsTests(unittest.TestCase):
             self.assertEqual(row["hours_work"], 1.0)
             self.assertEqual(row["source_id"], build_ships.SOURCE_ID_EMODNET_2024)
 
+    def test_dataset_id_matches_the_generated_registry(self):
+        # pipeline/lib/sources.ts is the registry; its generated TypeScript mirror pins the id.
+        generated = (Path(__file__).resolve().parents[2] / "pipeline/lib/source-ids.generated.ts").read_text()
+        self.assertIn(f"= {build_ships.SOURCE_ID_EMODNET_2024} as const // emodnet-vessel-density-2024", generated)
+
     def test_batches_split_at_the_block_row_cap(self):
         n = build_ships.MAX_ROWS_PER_BLOCK_BATCH + 1
         lon = np.full(n, 4.0) + np.arange(n) * 1e-7  # one z14 cell

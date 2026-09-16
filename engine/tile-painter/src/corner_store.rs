@@ -44,7 +44,7 @@ impl SourceIdentity {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceEnergy {
-    /// Road, rail, industrial, building, ground operations, in that order.
+    /// Road, rail, industrial, building, ground operations, ships: `hm3::SURFACE_LAYERS` order.
     pub layer: u8,
     pub source: SourceIdentity,
     pub periods: [f32; 3],

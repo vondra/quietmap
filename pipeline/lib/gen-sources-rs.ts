@@ -145,26 +145,6 @@ impl Provenance {
     pub fn has_data(self) -> bool {
         !matches!(self, Self::None)
     }
-
-    /// Legacy string form for the JSON API contract
-    /// (\`frontend/src/types/noise.ts::traffic_source\` union). Folds the six
-    /// Provenance variants into the three strings the frontend currently
-    /// understands. When F.4 lands (ts-rs derivation), the frontend will
-    /// switch to the full \`as_str()\` form and this helper goes away.
-    pub fn legacy_traffic_source_str(self) -> &'static str {
-        match self {
-            // NationalProxy folds in here so the popup still shows its dataset
-            // attribution; the coarse 3-bucket label can't say "estimate" yet
-            // (F.4 as_str() will). The acoustic distinction lives in is_measured().
-            Self::CityMeasured
-            | Self::NationalMeasured
-            | Self::ContinentalMeasured
-            | Self::GlobalMeasured
-            | Self::NationalProxy => "matched_external",
-            Self::Heuristic => "estimated_service_tree",
-            Self::Baseline | Self::None => "default_by_class",
-        }
-    }
 }
 
 /// One enrichment dataset. Mirrors the TypeScript \`Source\` interface.

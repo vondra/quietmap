@@ -165,6 +165,35 @@ latitude: the z13 tile has 512 pixels. Popup and GPU use the same grid-derived
 floor. This corrects the retired z12 floor, which was twice the current half
 pixel and reduced the near-line contribution by approximately 3 dB.
 
+## Ship traffic cells
+
+A `ships.arrow` row is one water cell of an AIS vessel-density product (EMODnet 2024: 1 km
+ETRS89-LAEA cells, vessel-hours per km² per month by ship type, folded into three acoustic
+classes): `centroid_gx/gy` (z30 grid), `area_m2`, `hours_large`, `hours_work`,
+`hours_leisure`, `source_id`; stamps `grid=z30`, `ships_contract=ships_v1`, `qm_blocks`.
+Cells below 0.5 vessel-hours per month are not written (at most 76 dB(A) for large ships).
+
+Emission (`emission/ships.rs`): the mean ships present per class is `hours / 730.5`
+(365.25 · 24 / 12); the cell's A-weighted sound power is the energy sum of
+`N_class · 10^(Lw_class/10)` with `Lw` 108 dB(A) for large ships (cargo, tanker, passenger,
+high-speed craft, military, unknown), 98 dB(A) for work boats (tug, service, dredging,
+fishing, other) and 88 dB(A) for leisure craft (sailing, pleasure), one value for sailing and
+moored ships (Fredianelli et al. 2020 pass-by line levels 82.6–89.0 dB(A)/m; Bernardini et al.
+2022 moored and small-vessel levels; NEPTUNES). Octave spectrum 63 Hz … 8 kHz relative
+`[0, 0, −3, −6, −9, −13, −18, −25]` dB, normalized so the A-weighted total equals `Lw`. Source
+height 15 / 5 / 3 m and the popup class label follow the class carrying most of the energy.
+Ships run around the clock: day, evening and night bands are equal, so Lden = Leq + 6.4 dB.
+
+Geometry (`normalize::prepare_ship_points`): the cell is a square area source of `area_m2`
+around its centre, gridded at 250 m by the shared area discretizer (each sub-cell carries its
+area share of the energy and a self-screening exclusion radius √(A/π)), propagated by the
+ISO 9613-2 / CNOSSOS-EU point kernel of buildings and industry (water reads IMD 100 → G = 0).
+Reach: the Lw-derived audibility radius capped at `SHIP_MAX_RADIUS_M` = 11 800 m, inside the
+painter's 11 872 m profile cadence; the popup reads rows whose centre lies within that cap
+plus the cell half diagonal (707 m). Popup contributors group the sub-cells by the cell's
+identity `(gx << 32) | gy`. A cell beyond the cap contributes nothing; water without an AIS
+density product (inner harbours and rivers until GFW, everything outside Europe) has no rows.
+
 ## 4.7 Vector screening
 
 One source-to-receiver ray shares its bare-earth raster profile between terrain

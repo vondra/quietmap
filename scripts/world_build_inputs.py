@@ -218,7 +218,7 @@ def audit_world(prepared, jobs=None):
                     rows += batch.num_rows
                 # The merge's plain chunks carry no z14 envelope; the popup would read
                 # the whole table. A 0-row table has nothing to prune and no key.
-                if path.stem in ('structures', 'roads', 'railways') and rows and b'qm_blocks' not in metadata:
+                if path.stem in ('structures', 'roads', 'railways', 'ships') and rows and b'qm_blocks' not in metadata:
                     raise ValueError(f'unfinished {path.stem} blocks: {path}')
                 counts[path.stem] = counts.get(path.stem, 0) + rows
         return counts
