@@ -11,11 +11,11 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { ALLOWED_LAYERS, MANIFEST_FILENAME, MIN_ZOOM, PMTILES_BASE, WORLD_BASE_ZOOM } from './heatmap-shared.js'
+import { ALLOWED_LAYERS, MANIFEST_FILENAME, MIN_ZOOM, OPTIONAL_ARCHIVES, PMTILES_BASE, WORLD_BASE_ZOOM } from './heatmap-shared.js'
 
 const BUILD_ID = /^b\d+$/
 const SHA256 = /^[a-f0-9]{64}$/
-const ARCHIVE_NAME = /^(total|road|rail|industrial|building|aircraft-ground|aircraft-airborne|aircraft-cruise)\.(b\d+)\.pmtiles$/
+const ARCHIVE_NAME = /^(total|road|rail|industrial|building|aircraft-ground|aircraft-airborne|aircraft-cruise|ship)\.(b\d+)\.pmtiles$/
 
 export type ManifestLayer = {
   file?: unknown
@@ -55,7 +55,9 @@ export function validatePmtilesManifest(manifest: PmtilesManifest, manifestPath:
     throw new Error(`${manifestPath} has no layers object`)
   }
   for (const layer of ALLOWED_LAYERS) {
-    if (!(layer in manifest.layers)) throw new Error(`${manifestPath} is missing layer ${layer}`)
+    if (!(layer in manifest.layers) && !OPTIONAL_ARCHIVES.has(layer)) {
+      throw new Error(`${manifestPath} is missing layer ${layer}`)
+    }
   }
   for (const [layer, entry] of Object.entries(manifest.layers)) {
     if (!ALLOWED_LAYERS.has(layer)) throw new Error(`${manifestPath} has unexpected layer ${layer}`)

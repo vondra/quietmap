@@ -64,6 +64,8 @@ pub(crate) fn compute_point_sources(
         /// Dataset stamp of the first-touched PointSource (whole site
         /// shares one source_id) — resolved to `provenance` for the popup.
         source_id: u16,
+        /// Ship cell hours by class (zero outside the ship layer).
+        ship_hours: [f32; 3],
     }
     let mut pts_by_osm: HashMap<i64, PtAccum> = HashMap::new();
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
@@ -202,6 +204,7 @@ pub(crate) fn compute_point_sources(
             area_m2: src.area_m2,
             grid_point_count: 0,
             source_id: src.source_id,
+            ship_hours: src.ship_hours.unwrap_or([0.0; 3]),
         });
         acc.variants[0].add(&v_day);
         acc.variants[1].add(&v_eve);
@@ -277,10 +280,10 @@ pub(crate) fn compute_point_sources(
 
         let impacts = PropagationVariants::impact_deltas(&acc.variants, pt_periods.lden_db);
 
-        let subtype_name: &'static str = if source_kind == LayerKind::Industrial {
-            industrial_type_name(acc.subtype)
-        } else {
-            building_type_name(acc.subtype)
+        let subtype_name: &'static str = match source_kind {
+            LayerKind::Industrial => industrial_type_name(acc.subtype),
+            LayerKind::Ship => ship_type_name(acc.subtype),
+            _ => building_type_name(acc.subtype),
         };
 
         // Build per-source metadata (popup only). `floors` / `area_m2` /
@@ -292,6 +295,14 @@ pub(crate) fn compute_point_sources(
                 source_type: subtype_name,
                 nace: None,
                 grid_point_count: acc.grid_point_count,
+                source_id: acc.source_id,
+                provenance: crate::sources::dataset_meta(acc.source_id),
+            }))
+        } else if source_kind == LayerKind::Ship {
+            Some(SourceMetadata::Ship(ShipMetadata {
+                area_m2: acc.area_m2 as f64,
+                source_type: subtype_name,
+                hours_per_month: acc.ship_hours,
                 source_id: acc.source_id,
                 provenance: crate::sources::dataset_meta(acc.source_id),
             }))

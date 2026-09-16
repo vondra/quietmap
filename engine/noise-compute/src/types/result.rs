@@ -56,6 +56,7 @@ pub struct LayerTimings {
     pub rail_ms: f64,
     pub building_ms: f64,
     pub industrial_ms: f64,
+    pub ship_ms: f64,
     /// Aircraft sub-layers, populated by source-reader's `aircraft_v6` path.
     /// `aircraft_airborne_ms` includes `airb_detail` post-processing.
     pub aircraft_airborne_ms: f64,

@@ -252,7 +252,7 @@ class WorldBuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sources = {name: str(root / name) for name in ('planet', 'rasters', 'enrichment', 'boundaries',
-                       'city_boundaries', 'overture', 'ghsl', 'regional_heights', 'airline', 'general_aviation')}
+                       'city_boundaries', 'overture', 'ghsl', 'regional_heights', 'airline', 'general_aviation', 'ships')}
             for path in sources.values():
                 Path(path).touch()
             config = {'build': {'as_of_date': '20260909', 'aircraft_anchor': '2026-09',

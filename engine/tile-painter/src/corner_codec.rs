@@ -1,5 +1,6 @@
 //! Lossless source dictionary stores stable identities once per owner and exact f32 bytes per vertex.
 use crate::corner_store::{CornerEnergy, SourceEnergy, SourceIdentity};
+use crate::corner_totals::SURFACE_LAYER_COUNT;
 use anyhow::{ensure, Context, Result};
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
@@ -25,7 +26,7 @@ impl SourceDictionary {
         for row in rows {
             let (id, layer, identity) = row?;
             ensure!(
-                id as usize == entries.len() && layer < 5,
+                id as usize == entries.len() && usize::from(layer) < SURFACE_LAYER_COUNT,
                 "invalid source dictionary order or layer"
             );
             let identity = SourceIdentity(
@@ -100,7 +101,7 @@ fn validate(energy: &CornerEnergy) -> Result<()> {
         "corner source identities must be unique and sorted"
     );
     ensure!(
-        energy.0.iter().all(|source| source.layer < 5
+        energy.0.iter().all(|source| usize::from(source.layer) < SURFACE_LAYER_COUNT
             && source
                 .periods
                 .iter()

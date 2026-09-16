@@ -1,4 +1,4 @@
-//! Stage eight PMTiles archives from acknowledged owner outputs; publication remains the caller's job.
+//! Stage one PMTiles archive per HM3 layer from acknowledged owner outputs; publication remains the caller's job.
 use crate::{
     generation_receipt::{file_digest, hex_digest},
     heatmap_authority::{completed_owners, OwnerArtifact},

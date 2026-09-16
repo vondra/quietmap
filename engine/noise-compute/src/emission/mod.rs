@@ -9,5 +9,6 @@ pub mod profiles_generated;
 pub mod railway;
 pub mod road;
 pub mod settlement;
+pub mod ships;
 pub mod spectrum;
 pub mod wind;

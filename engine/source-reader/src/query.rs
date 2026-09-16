@@ -21,6 +21,10 @@ use square_store::store::{load_square, SquareData, STRUCTURE_KIND_BUILDING};
 
 const BUILDING_QUERY_RADIUS_M: f64 = 2_000.0;
 const INDUSTRIAL_QUERY_RADIUS_M: f64 = 5_000.0;
+/// A ship row is read when its cell centre lies within the sub-cell reach plus the cell's
+/// half diagonal (`batches_within` adds its own 2 % slack).
+const SHIP_QUERY_RADIUS_M: f64 = noise_compute::emission::ships::SHIP_MAX_RADIUS_M
+    + noise_compute::emission::ships::SHIP_CELL_HALF_DIAGONAL_M;
 // Existing row gates bound accepted line midpoints by 1.5 times their reach.
 pub(crate) const LINE_MIDPOINT_REACH_FACTOR: f64 = 1.5;
 
@@ -30,6 +34,8 @@ pub struct PointQueryData {
     pub railways: Vec<noise_compute::types::RailSegment>,
     pub buildings: Vec<noise_compute::types::PointSource>,
     pub industrial: Vec<noise_compute::types::PointSource>,
+    /// Ship traffic cells within `SHIP_QUERY_RADIUS_M`.
+    pub ships: Vec<noise_compute::types::PointSource>,
     /// v6 aircraft popup arrows. Rows are consumed via typed views in
     /// `compute_aircraft_v6` — no AircraftSegment synthesis happens here.
     pub aircraft_airborne_batches: Vec<arrow::record_batch::RecordBatch>,
@@ -71,6 +77,7 @@ fn surface_reach_m() -> f64 {
         .max(noise_compute::constants::GROUND_OPS_RUNWAY_MAX_RADIUS)
         .max(BUILDING_QUERY_RADIUS_M)
         .max(INDUSTRIAL_QUERY_RADIUS_M)
+        .max(SHIP_QUERY_RADIUS_M)
         * LINE_MIDPOINT_REACH_FACTOR
 }
 
@@ -135,6 +142,7 @@ pub fn collect_from_square_data(
     let mut all_railways = Vec::new();
     let mut all_buildings = Vec::new();
     let mut all_industrial = Vec::new();
+    let mut all_ships = Vec::new();
     let mut all_airborne_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut all_cruise_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
     let mut all_airport_traffic_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
@@ -515,6 +523,47 @@ pub fn collect_from_square_data(
             }
         }
 
+        for batch in &data.ships.batches_within(lat, lng, SHIP_QUERY_RADIUS_M)? {
+            let (Some(cgx), Some(cgy), Some(area), Some(large), Some(work), Some(leisure)) = (
+                col_i32(batch, "centroid_gx"),
+                col_i32(batch, "centroid_gy"),
+                col_f32(batch, "area_m2"),
+                col_f32(batch, "hours_large"),
+                col_f32(batch, "hours_work"),
+                col_f32(batch, "hours_leisure"),
+            ) else {
+                return Err("ships.arrow lacks its cell columns — rerun scripts/ships/build_ships.py".to_string());
+            };
+            let source_ids = col_u16(batch, "source_id");
+            for i in 0..batch.num_rows() {
+                let (c_lon, c_lat) = grid_cell_lonlat(cgx.value(i), cgy.value(i));
+                let dist = grid::geo::flat_dist(lat, lng, c_lat, c_lon);
+                if dist > SHIP_QUERY_RADIUS_M {
+                    continue;
+                }
+                let Some((prepared_points, class)) =
+                    noise_compute::normalize::prepare_ship_points(noise_compute::normalize::RawShipInput {
+                        centroid_lat: c_lat,
+                        centroid_lon: c_lon,
+                        area_m2: area.value(i),
+                        hours_per_month: [large.value(i), work.value(i), leisure.value(i)],
+                    })
+                else {
+                    continue;
+                };
+                // One synthetic identity per cell: the z30 grid pair groups its sub-cells.
+                let cell_id = (i64::from(cgx.value(i)) << 32) | i64::from(cgy.value(i) as u32);
+                let row_source_id = source_ids.map(|a| a.value(i)).unwrap_or(0);
+                for prepared in prepared_points {
+                    let pt_dist = grid::geo::flat_dist(lat, lng, prepared.lat, prepared.lon);
+                    let mut ps =
+                        prepared.with_metadata(cell_id, class as u8, String::new(), Vec::new(), pt_dist);
+                    ps.source_id = row_source_id;
+                    all_ships.push(ps);
+                }
+            }
+        }
+
         // Aircraft popup arrows: bbox-gated above (per_square_aircraft);
         // per-row reach prune + emission contract live inside
         // compute_aircraft_v6. RecordBatch clones are refcount bumps on
@@ -529,6 +578,7 @@ pub fn collect_from_square_data(
         railways: all_railways,
         buildings: all_buildings,
         industrial: all_industrial,
+        ships: all_ships,
         aircraft_airborne_batches: all_airborne_batches,
         aircraft_cruise_batches: all_cruise_batches,
         aircraft_airport_traffic_batches: all_airport_traffic_batches,
@@ -1120,6 +1170,7 @@ pub(crate) fn apply_segment_top_k_with_cap(
     summary.aircraft_ground_total = aircraft_ground_total;
     summary.building_total = *per_kind_total.get(&LayerKind::Building).unwrap_or(&0);
     summary.industrial_total = *per_kind_total.get(&LayerKind::Industrial).unwrap_or(&0);
+    summary.ship_total = *per_kind_total.get(&LayerKind::Ship).unwrap_or(&0);
     summary.aircraft_airborne_total = traces.airborne_above_cutoff;
     summary.aircraft_cruise_total = aircraft_cruise_total;
 
@@ -1190,6 +1241,7 @@ pub(crate) fn apply_segment_top_k_with_cap(
     summary.aircraft_ground_count = aircraft_ground_count;
     summary.building_count = *per_kind.get(&LayerKind::Building).unwrap_or(&0);
     summary.industrial_count = *per_kind.get(&LayerKind::Industrial).unwrap_or(&0);
+    summary.ship_count = *per_kind.get(&LayerKind::Ship).unwrap_or(&0);
     summary.aircraft_airborne_count = aircraft_airborne_subseg_count;
     summary.aircraft_cruise_count = aircraft_cruise_count;
     // Airborne pre-capping in `airborne::scatter` drops most above-cutoff
@@ -1799,6 +1851,60 @@ mod square_query_tests {
         let data = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
         assert_eq!(data.industrial.len(), 1);
         assert_eq!(data.industrial[0].osm_id, 99);
+    }
+
+    /// A ship cell within reach becomes one point source with the cell's own
+    /// identity, class and dataset; a silent cell and a cell beyond 12.6 km do not;
+    /// a stale contract fails loud.
+    #[test]
+    fn ship_cells_collect_with_cell_identity_and_reach() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = fx::square_dir(tmp.path(), prague());
+        std::fs::create_dir_all(&dir).unwrap();
+        let cells = [
+            fx::FixtureShipCell {
+                centroid: (LON + 0.01, LAT),
+                hours: [60.0, 5.0, 0.0],
+            },
+            fx::FixtureShipCell {
+                centroid: (LON, LAT + 0.005),
+                hours: [0.0, 0.0, 0.0],
+            },
+            fx::FixtureShipCell {
+                centroid: (LON + 0.2, LAT),
+                hours: [500.0, 0.0, 0.0],
+            },
+        ];
+        fx::write_ships_file(&dir.join("ships.arrow"), &cells, "ships_v1");
+        let data = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
+        let n = data.ships.len();
+        assert!((16..=25).contains(&n), "a 1 km cell grids into 4–5 sub-cells per axis, got {n}");
+        let (gx, gy) = fx::grid_of(LON + 0.01, LAT);
+        let cell_id = (i64::from(gx) << 32) | i64::from(gy as u32);
+        let energy: f64 = data
+            .ships
+            .iter()
+            .map(|p| 10f64.powf(f64::from(p.lw_day[1]) / 10.0))
+            .sum();
+        let whole = noise_compute::emission::ships::ship_emission_bands(
+            noise_compute::emission::ships::ship_cell_lw([60.0, 5.0, 0.0]).unwrap().0,
+        )[1];
+        assert!((10.0 * energy.log10() - whole).abs() < 0.05, "sub-cells conserve the cell energy");
+        for cell in &data.ships {
+            assert_eq!(cell.osm_id, cell_id);
+            assert_eq!(cell.source_type, 0, "large ships carry the energy");
+            assert_eq!(cell.source_id, 9901);
+            assert_eq!(cell.ship_hours, Some([60.0, 5.0, 0.0]));
+            // 4–5 sub-cells per axis: each carries 40 000–62 500 m² → √(A/π) of 113–141 m,
+            // less where the sampled fraction of an edge sub-cell is smaller.
+            assert!((80.0..=150.0).contains(&cell.exclusion_radius_m), "{}", cell.exclusion_radius_m);
+            assert!(cell.max_radius_m <= noise_compute::emission::ships::SHIP_MAX_RADIUS_M);
+            assert!(cell.dist_m > 200.0 && cell.dist_m < 1300.0, "{}", cell.dist_m);
+        }
+
+        fx::write_ships_file(&dir.join("ships.arrow"), &cells, "ships_v0");
+        let error = collect_sources_at_point(tmp.path(), LAT, LON).unwrap_err();
+        assert!(error.contains("ships_contract"), "{error}");
     }
 
     #[test]

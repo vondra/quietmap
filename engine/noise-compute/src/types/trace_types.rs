@@ -372,6 +372,12 @@ pub enum EmissionTrace {
         rated_power_kw: Option<f32>,
         effective_area_source_dist_m: f64,
     },
+    Ship {
+        source_type: &'static str,
+        area_m2: f64,
+        hours_per_month: [f32; 3],
+        effective_area_source_dist_m: f64,
+    },
 }
 
 /// Full per-segment trace for an ISO 9613-2 source (road / rail / aircraft
@@ -557,6 +563,7 @@ pub struct SegmentTracesSummary {
     pub aircraft_cruise_count: u32,
     pub building_count: u32,
     pub industrial_count: u32,
+    pub ship_count: u32,
     pub road_total: u32,
     pub railway_total: u32,
     pub aircraft_ground_total: u32,
@@ -564,4 +571,5 @@ pub struct SegmentTracesSummary {
     pub aircraft_cruise_total: u32,
     pub building_total: u32,
     pub industrial_total: u32,
+    pub ship_total: u32,
 }

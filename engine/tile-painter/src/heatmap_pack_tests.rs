@@ -134,7 +134,7 @@ fn complete_owner_roundtrip_preserves_z13_and_never_sums_quantized_layers() {
         serde_json::from_slice(&std::fs::read(output.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(manifest["build"], "b7");
     assert_eq!(manifest["zoom"], 13);
-    assert_eq!(manifest["layers"].as_object().unwrap().len(), 8);
+    assert_eq!(manifest["layers"].as_object().unwrap().len(), 9);
     let owner = Connection::open(&owner_path).unwrap();
     for (i, layer) in ALL_LAYERS.into_iter().enumerate() {
         let archive = std::fs::read(output.join(format!("{}.b7.pmtiles", layer.name()))).unwrap();

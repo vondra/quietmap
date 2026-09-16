@@ -17,6 +17,7 @@ const HEATMAP_OVERLAY_IDS = [
   'aircraft-ground',
   'aircraft-airborne',
   'aircraft-cruise',
+  'ship',
 ]
 // Exactly the overlays the UI can enable (AdvancedSection + RasterOverlayLayer).
 // `barriers` has no renderer (gg finding 8: an unlisted `imd` would neither

@@ -114,10 +114,13 @@ impl CornerStore {
         connection.execute_batch("PRAGMA synchronous=FULL; PRAGMA auto_vacuum=INCREMENTAL;")?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute_batch(&format!("CREATE TABLE IF NOT EXISTS generation(id INTEGER PRIMARY KEY CHECK(id=1),digest BLOB NOT NULL CHECK(length(digest)=32),owner_x INTEGER NOT NULL,owner_y INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS sources(id INTEGER PRIMARY KEY CHECK(id BETWEEN 0 AND 4294967295),layer INTEGER NOT NULL CHECK(layer BETWEEN 0 AND 4),identity BLOB NOT NULL CHECK(length(identity)=32),UNIQUE(layer,identity));
-            CREATE TABLE IF NOT EXISTS corners(x INTEGER NOT NULL,y INTEGER NOT NULL,totals BLOB NOT NULL CHECK(length(totals)=60),remaining INTEGER NOT NULL CHECK(remaining BETWEEN 0 AND 15),PRIMARY KEY(x,y)) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS sources(id INTEGER PRIMARY KEY CHECK(id BETWEEN 0 AND 4294967295),layer INTEGER NOT NULL CHECK(layer BETWEEN 0 AND {last_surface}),identity BLOB NOT NULL CHECK(length(identity)=32),UNIQUE(layer,identity));
+            CREATE TABLE IF NOT EXISTS corners(x INTEGER NOT NULL,y INTEGER NOT NULL,totals BLOB NOT NULL CHECK(length(totals)={totals_bytes}),remaining INTEGER NOT NULL CHECK(remaining BETWEEN 0 AND 15),PRIMARY KEY(x,y)) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS staging(x INTEGER NOT NULL,y INTEGER NOT NULL,energy BLOB NOT NULL,PRIMARY KEY(x,y)) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS surface_tiles(x INTEGER NOT NULL,y INTEGER NOT NULL,layer INTEGER NOT NULL CHECK(layer BETWEEN 0 AND {last_layer}),hm3 BLOB NOT NULL,sha256 BLOB NOT NULL CHECK(length(sha256)=32),PRIMARY KEY(x,y,layer)) WITHOUT ROWID;", last_layer = ALL_LAYERS.len() - 1))?;
+            CREATE TABLE IF NOT EXISTS surface_tiles(x INTEGER NOT NULL,y INTEGER NOT NULL,layer INTEGER NOT NULL CHECK(layer BETWEEN 0 AND {last_layer}),hm3 BLOB NOT NULL,sha256 BLOB NOT NULL CHECK(length(sha256)=32),PRIMARY KEY(x,y,layer)) WITHOUT ROWID;",
+            last_surface = crate::corner_totals::SURFACE_LAYER_COUNT - 1,
+            totals_bytes = crate::corner_totals::TOTALS_BYTES,
+            last_layer = ALL_LAYERS.len() - 1))?;
         tx.execute(
             "INSERT OR IGNORE INTO generation VALUES(1,?1,?2,?3)",
             params![generation.0.as_slice(), owner.x, owner.y],

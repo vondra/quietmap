@@ -66,7 +66,7 @@ class WorldBuildInputsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'cyclic height'):
                 list(inputs.height_inputs(source))
 
-    def test_world_audit_requires_all_squares_and_all_seven_layers(self):
+    def test_world_audit_requires_all_squares_and_all_eight_layers(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(inputs.qmgrid, 'Z9_AXIS', 2):
             root = Path(directory)
             for x in range(2):
@@ -84,12 +84,13 @@ class WorldBuildInputsTest(unittest.TestCase):
                     (tile / 'structures.qoix').touch()
             # buildings.arrow is an input to structures.arrow, not a served
             # layer. A finalized generation does not retain that intermediate.
-            for layer in ('roads', 'railways', 'industrial', 'airborne', 'cruise', 'airport_traffic'):
+            for layer in ('roads', 'railways', 'industrial', 'airborne', 'cruise', 'airport_traffic', 'ships'):
                 import sys
                 sys.path.insert(0, str(Path(__file__).parent / 'square-country-city'))
                 from build_square_country_city import expected_contract
                 path = root / 'z9/0/0' / f'{layer}.arrow'
-                metadata = dict([expected_contract(path)]) if layer in ('roads', 'railways', 'industrial') else None
+                metadata = dict([expected_contract(path)]) if layer in ('roads', 'railways', 'industrial') else (
+                    {b'ships_contract': b'ships_v1', b'grid': b'z30'} if layer == 'ships' else None)
                 table = pa.table({'value': [37]}).replace_schema_metadata(metadata)
                 with pa.ipc.new_file(path, table.schema) as writer:
                     writer.write_table(table)
@@ -113,7 +114,7 @@ class WorldBuildInputsTest(unittest.TestCase):
             with pa.ipc.new_file(path, table.schema) as writer:
                 writer.write_table(table)
             serial = inputs.audit_world(root, jobs=1)
-            self.assertEqual(len(serial), 7)
+            self.assertEqual(len(serial), 8)
             self.assertEqual(inputs.audit_world(root, jobs=3), serial)
             structure = root / 'z9/1/1/structures.arrow'
             structure.unlink()

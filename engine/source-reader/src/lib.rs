@@ -457,6 +457,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         &sources.railways,
         &sources.buildings,
         &sources.industrial,
+        &sources.ships,
         &obstacle_set,
         rasters,
         Some(&mut traces),

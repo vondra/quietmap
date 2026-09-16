@@ -11,7 +11,7 @@ use crate::types::{
     PropagationVariants, RailSegment, RoadSegment, ScreeningFanTrace, ScreeningObstacleTrace,
     ScreeningTrace, SegmentTrace, TerrainTrace, VegetationTrace, NUM_BANDS,
 };
-use crate::{building_type_name, industrial_type_name, rail_type_name};
+use crate::{building_type_name, industrial_type_name, rail_type_name, ship_type_name};
 
 mod aircraft;
 pub use aircraft::{
@@ -375,6 +375,18 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
     } = inputs;
 
     let (subtype_label, emission) = match source_kind {
+        LayerKind::Ship => {
+            let label = ship_type_name(src.source_type);
+            (
+                label,
+                EmissionTrace::Ship {
+                    source_type: label,
+                    area_m2: src.area_m2 as f64,
+                    hours_per_month: src.ship_hours.unwrap_or([0.0; 3]),
+                    effective_area_source_dist_m: prop_dist,
+                },
+            )
+        }
         LayerKind::Industrial => {
             let label = industrial_type_name(src.source_type);
             (

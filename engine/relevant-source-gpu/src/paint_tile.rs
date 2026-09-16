@@ -1,4 +1,4 @@
-//! Reuse saved corners to produce five outdoor surface-power planes at shared receivers.
+//! Reuse saved corners to produce the outdoor surface-power planes at shared receivers.
 use crate::{
     cuda_bridge::{DeviceBuffer, RelevantSourceCuda},
     relevance_partition::build_relevant_source_partition,

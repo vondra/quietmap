@@ -146,6 +146,7 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
             &[],
             &[],
             &[],
+            &[],
             &obstacles,
             &FlatGround,
             None,

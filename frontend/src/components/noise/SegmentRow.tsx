@@ -12,7 +12,7 @@ function segmentName(t: SegmentTrace): string {
 }
 
 function highlightGeometry(t: SegmentTrace) {
-  if (t.kind === 'building' || t.kind === 'industrial') {
+  if (t.kind === 'building' || t.kind === 'industrial' || t.kind === 'ship') {
     return { type: 'Point', coordinates: [t.start_lon, t.start_lat] }
   }
   // Road/railway segments with an engine screening fan: draw the fan itself

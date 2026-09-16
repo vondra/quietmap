@@ -3,7 +3,7 @@
 //! exclusion, emission-derived cull radius) the popup and heatmap loaders share.
 
 use crate::constants::BUILDING_HEIGHT_MAX_M;
-use crate::emission::{industrial, leisure, settlement, wind};
+use crate::emission::{industrial, leisure, settlement, wind, ships};
 use crate::types::{PointSource, NUM_BANDS};
 
 use super::{bands_to_f32, resolve_area_m2};
@@ -85,6 +85,8 @@ pub struct PreparedPoint {
     /// Wind turbine rated power (kW). Same purpose as hub_height_m
     /// — `None` outside the wind-turbine branch.
     pub rated_power_kw: Option<f32>,
+    /// Ship cell hours per month by class; `None` outside the ship layer.
+    pub ship_hours: Option<[f32; 3]>,
 }
 
 const INDUSTRIAL_AREA_CELL_M: f64 = 75.0;
@@ -123,6 +125,7 @@ impl PreparedPoint {
             area_m2: self.area_m2,
             hub_height_m: self.hub_height_m,
             rated_power_kw: self.rated_power_kw,
+            ship_hours: self.ship_hours,
             dist_m,
         }
     }
@@ -346,6 +349,7 @@ fn discretize_area_source(
                 area_m2: src.area_m2 as f32,
                 hub_height_m: src.hub_height_m,
                 rated_power_kw: src.rated_power_kw,
+                ship_hours: None,
             }
         })
         .collect()
@@ -448,6 +452,7 @@ pub fn prepare_industrial_points(input: RawIndustrialInput<'_>) -> Vec<PreparedP
             area_m2: 0.0,
             hub_height_m: Some(hub_height_m),
             rated_power_kw: Some(rated_power_kw),
+            ship_hours: None,
         }];
     }
 
@@ -497,6 +502,69 @@ pub fn prepare_industrial_points(input: RawIndustrialInput<'_>) -> Vec<PreparedP
         lw_evening,
         lw_night,
     )
+}
+
+/// One AIS vessel-density cell of the ships layer.
+pub struct RawShipInput {
+    pub centroid_lat: f64,
+    pub centroid_lon: f64,
+    pub area_m2: f32,
+    /// Mean vessel-hours per month: large ships, work boats, leisure craft.
+    pub hours_per_month: [f32; 3],
+}
+
+/// Sub-cell pitch of a ship density cell: a quarter of the 1 km statistical cell, so a quay
+/// receiver sees the nearest water at its true distance (≥ ~125 m) instead of the whole cell
+/// clamped to its 564 m radius, while a cell costs 16 points, not 178 (the 75 m industrial pitch).
+const SHIP_SUB_CELL_M: f64 = 250.0;
+
+/// The ship cells of one water cell: the cell's mean ships present radiate the class sound
+/// power spread over the cell's square footprint, gridded at [`SHIP_SUB_CELL_M`] by the shared
+/// [`discretize_area_source`] (area share of the energy, self-screening exclusion √(A/π) per
+/// sub-cell), 24 h flat, reaching at most [`ships::SHIP_MAX_RADIUS_M`]; plus the class carrying
+/// most of the energy. `None` for a silent cell.
+pub fn prepare_ship_points(input: RawShipInput) -> Option<(Vec<PreparedPoint>, ships::ShipClass)> {
+    let (lw, loudest) = ships::ship_cell_lw(input.hours_per_month)?;
+    if lw < 10.0 || input.area_m2.is_nan() || input.area_m2 <= 0.0 {
+        return None;
+    }
+    let bands = bands_to_f32(ships::ship_emission_bands(lw));
+    let half_m = f64::from(input.area_m2).sqrt() / 2.0;
+    let d_lat = half_m / M_PER_DEG_LAT;
+    let d_lon = half_m / grid::geo::m_per_deg_lon(input.centroid_lat.to_radians());
+    let ring: GridRing = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)]
+        .iter()
+        .map(|(sx, sy)| {
+            snap_lonlat(
+                grid::geo::normalize_longitude(input.centroid_lon + sx * d_lon),
+                input.centroid_lat + sy * d_lat,
+            )
+        })
+        .collect();
+    let mut points = discretize_area_source(
+        AreaSource {
+            polygon_grid: &ring,
+            centroid_lat: input.centroid_lat,
+            centroid_lon: input.centroid_lon,
+            area_m2: f64::from(input.area_m2),
+            grid_threshold_m2: 0.0,
+            cell_m: SHIP_SUB_CELL_M,
+            source_height_m: loudest.source_height_m(),
+            reach: PointReach::LoudestDayBand {
+                cap_m: ships::SHIP_MAX_RADIUS_M,
+            },
+            floors: 0,
+            hub_height_m: None,
+            rated_power_kw: None,
+        },
+        bands,
+        bands,
+        bands,
+    );
+    for point in &mut points {
+        point.ship_hours = Some(input.hours_per_month);
+    }
+    Some((points, loudest))
 }
 
 /// Leisure areas are LOCAL activity sources — cap reach like buildings (2 km),

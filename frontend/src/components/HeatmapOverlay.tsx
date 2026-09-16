@@ -12,7 +12,7 @@ import { MIN_ZOOM, WORLD_EXTENT, buildKey, tileUrl, useTileBuild, type TileBuild
 import { loadTileProgressively, fetchAncestor, type HeatTile } from '../lib/progressive-tile-loader'
 import { compositeSig, baseRange, buildComposite, type Composite } from '../lib/tile-composite'
 
-// The seven toggleable noise layers. All share the same HM3 format + palette
+// The eight toggleable noise layers. All share the same HM3 format + palette
 // (Lden), so the tile fetch/decode/energy-sum loop is layer-agnostic.
 export const HEATMAP_LAYERS = [
   'road',
@@ -22,12 +22,14 @@ export const HEATMAP_LAYERS = [
   'aircraft-ground',
   'aircraft-airborne',
   'aircraft-cruise',
+  'ship',
 ] as const
 
 export type HeatmapLayer = (typeof HEATMAP_LAYERS)[number]
 
-// The overlay can also fetch the precomputed `total` (energy-sum of all seven).
-// MapView passes `['total']` when every layer is on — the common case, one fetch.
+// The overlay can also fetch the precomputed `total` (energy-sum of every layer
+// of the paint that produced it). MapView passes `['total']` when every layer is
+// on — the common case, one fetch.
 export type HeatmapSource = HeatmapLayer | 'total'
 
 interface Props {

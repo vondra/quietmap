@@ -247,6 +247,26 @@ export function MetadataRows({ c }: { c: Contributor }) {
     )
   }
 
+  if (m.kind === 'ship') {
+    const [large, work, leisure] = m.hours_per_month
+    const prov = m.provenance
+    const cellText = txtTable([
+      ['Loudest', m.source_type.replace(/_/g, ' ')],
+      ['Source', prov ? formatProv(prov) : 'AIS vessel density'],
+      ['Cell', `${(m.area_m2 / 1e6).toFixed(2)} km²`],
+      ['Large ships', `${large.toFixed(1)} h/month`],
+      ['Work boats', `${work.toFixed(1)} h/month`],
+      ['Leisure craft', `${leisure.toFixed(1)} h/month`],
+      '', 'Mean vessel-hours per month in this', 'water cell, from AIS positions;', 'ships radiate around the clock.',
+    ], 16, 16)
+    return lineRow(
+      'Ships',
+      <DataPoint title="Ship traffic cell" text={cellText}>
+        {`${(large + work + leisure).toFixed(0)} h/month`}
+      </DataPoint>,
+    )
+  }
+
   if (m.kind === 'aircraft' && m.variant === 'airborne' && m.airborne) {
     const a = m.airborne
     // Display thresholds for the sampling-fragility caveat — the Rust

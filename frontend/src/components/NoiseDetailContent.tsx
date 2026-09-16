@@ -304,6 +304,7 @@ function TimingsOverlay({ timings }: { timings: NoiseComputeData['timings'] }) {
     ['rail', timings.rail_ms],
     ['building', timings.building_ms],
     ['industrial', timings.industrial_ms],
+    ['ships', timings.ship_ms],
     ['ac airborne', timings.aircraft_airborne_ms],
     ['ac cruise', timings.aircraft_cruise_ms],
     ['ac ground', timings.aircraft_ground_ms],

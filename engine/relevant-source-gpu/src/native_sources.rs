@@ -39,6 +39,7 @@ pub fn load_sources(
             "structures",
             "leisure",
             "airport_traffic",
+            "ships",
         ] {
             let relative = format!("z9/{}/{}/{name}.arrow", square.x, square.y);
             let Some((bytes, digest)) = manifest.read_arrow(root, &relative)? else {
@@ -130,7 +131,11 @@ pub fn load_sources(
                             {
                                 sources.push(SurfaceSource {
                                     identity: identity(part.try_into()?),
-                                    layer: if name == "industrial" { 2 } else { 3 },
+                                    layer: match name {
+                                        "industrial" => 2,
+                                        "ships" => 5,
+                                        _ => 3,
+                                    },
                                     device: point_device(frame, point),
                                 });
                             }

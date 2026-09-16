@@ -19,6 +19,7 @@ const KIND_FILTERS: { key: SegmentKind; label: string; longName: string }[] = [
   { key: 'aircraft_cruise', label: 'Cruise', longName: 'Aircraft cruise' },
   { key: 'building', label: 'Building', longName: 'Buildings' },
   { key: 'industrial', label: 'Industry', longName: 'Industrial sites' },
+  { key: 'ship', label: 'Ships', longName: 'Ship traffic cells' },
 ]
 
 const kindMap = (fn: (k: SegmentKind) => boolean): Record<SegmentKind, boolean> =>
@@ -69,6 +70,7 @@ const META_FIELD: Record<SegmentKind, { count: keyof SegmentTracesSummary; total
   aircraft_cruise: { count: 'aircraft_cruise_count', total: 'aircraft_cruise_total' },
   building: { count: 'building_count', total: 'building_total' },
   industrial: { count: 'industrial_count', total: 'industrial_total' },
+  ship: { count: 'ship_count', total: 'ship_total' },
 }
 
 function metaCount(meta: SegmentTracesSummary | null | undefined, kind: SegmentKind, field: 'count' | 'total'): number {

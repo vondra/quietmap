@@ -15,3 +15,4 @@ server/dist
 server/dist.*
 server/tsconfig.tsbuildinfo
 /data/
+.pi/

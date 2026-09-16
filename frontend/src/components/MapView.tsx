@@ -9,7 +9,8 @@ import StayLayer from './StayLayer'
 import ValidationLayer, { type ValidationPayload, type ValidationSelection } from './ValidationLayer'
 import IsochronLayer from './IsochronLayer'
 import RasterOverlayLayer from './RasterOverlayLayer'
-import HeatmapOverlay, { HEATMAP_LAYERS } from './HeatmapOverlay'
+import HeatmapOverlay, { HEATMAP_LAYERS, type HeatmapSource } from './HeatmapOverlay'
+import { useTileBuild } from '../lib/tile-urls'
 import HighlightLayer from './HighlightLayer'
 import HoverTooltip from './HoverTooltip'
 import CellInspectorLayer from './CellInspectorLayer'
@@ -86,12 +87,15 @@ export default function MapView({
     onGeolocateReadyChange?.(instance !== null && 'geolocation' in navigator)
   }, [onGeolocateReadyChange])
 
-  const activeHeatmapSources = useMemo(() => {
+  const tileBuild = useTileBuild()
+  const activeHeatmapSources = useMemo((): readonly HeatmapSource[] => {
     const active = HEATMAP_LAYERS.filter(s => !!rasterOverlays?.[s])
-    // All seven on → fetch the single precomputed `total` tile (one fetch, no
-    // client-side sum); any subset → fetch + energy-sum those layers.
-    return active.length === HEATMAP_LAYERS.length ? (['total'] as const) : active
-  }, [rasterOverlays])
+    // All on → the single precomputed `total` tile (one fetch, no client-side sum);
+    // any subset → fetch + energy-sum those layers. A layer the manifest does not
+    // publish (no archive painted yet) has no tiles to fetch.
+    if (active.length === HEATMAP_LAYERS.length) return ['total']
+    return active.filter(s => tileBuild === null || s in tileBuild.byLayer)
+  }, [rasterOverlays, tileBuild])
 
   useEffect(() => {
     let cancelled = false

@@ -1,4 +1,4 @@
-//! Building, leisure and industrial area adapters preserve native emission geometry.
+//! Building, leisure, industrial and ship-cell adapters preserve native emission geometry.
 use super::*;
 
 fn polygon(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<(i32, i32)>> {
@@ -20,6 +20,20 @@ pub(super) fn points(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<
     }
     if name == "industrial" && byte(batch, "suppressed", row) != 0 {
         return Ok(Vec::new());
+    }
+    if name == "ships" {
+        let [centroid_lat, centroid_lon] = position(batch, row, "centroid")?;
+        let hours = |column| {
+            float(batch, column, row).with_context(|| format!("ships.arrow lacks {column}"))
+        };
+        return Ok(prepare_ship_points(RawShipInput {
+            centroid_lat,
+            centroid_lon,
+            area_m2: float(batch, "area_m2", row).context("ships.arrow lacks area_m2")?,
+            hours_per_month: [hours("hours_large")?, hours("hours_work")?, hours("hours_leisure")?],
+        })
+        .map(|(points, _)| points)
+        .unwrap_or_default());
     }
     let position = if name == "structures"
         && col_i32(batch, "emission_centroid_gx").is_some_and(|c| !c.is_null(row))

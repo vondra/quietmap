@@ -13,6 +13,7 @@ export const SOURCE_LABELS: Record<string, string> = {
   aircraft_cruise: 'Aircraft (cruise)',
   industrial: 'Industrial',
   building: 'Buildings',
+  ship: 'Ships',
 }
 
 const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
@@ -50,6 +51,12 @@ const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
     factory: 'Factory',
     wastewater: 'Wastewater plant',
     wind_turbine: 'Wind turbine',
+  },
+  ship: {
+    // Keys ARE the backend names (emission/ships.rs::ShipClass::name).
+    large_ships: 'Large ships',
+    work_boats: 'Work boats',
+    leisure_craft: 'Leisure craft',
   },
   building: {
     // Keys ARE the backend names (source_names.rs::building_type_name) — keep in

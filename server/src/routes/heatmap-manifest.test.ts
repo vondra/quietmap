@@ -47,7 +47,7 @@ test('serves the pin with tile_base attached', async () => {
   assert.equal(res.statusCode, 200)
   assert.equal(res.json().build, 'b546')
   assert.equal(res.json().zoom, WORLD_BASE_ZOOM)
-  assert.equal(Object.keys(res.json().layers).length, 8)
+  assert.equal(Object.keys(res.json().layers).length, ALLOWED_LAYERS.size)
   assert.equal(res.json().layers.total.file, 'total.b546.pmtiles')
   assert.equal(res.json().tile_base, '')
   assert.equal(res.headers['cache-control'], 'no-cache')

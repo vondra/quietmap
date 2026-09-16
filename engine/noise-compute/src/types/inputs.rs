@@ -179,6 +179,9 @@ pub struct PointSource {
     /// Wind turbine rated power (kW). `None` outside the wind-
     /// turbine branch.
     pub rated_power_kw: Option<f32>,
+    /// Ship cell: mean vessel-hours per month by class (large, work, leisure).
+    /// `None` outside the ship layer.
+    pub ship_hours: Option<[f32; 3]>,
     // Pre-computed:
     pub dist_m: f64,
 }

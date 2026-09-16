@@ -127,6 +127,7 @@ pub fn compute_at_point(
     railways: &[RailSegment],
     buildings: &[PointSource],
     industrial: &[PointSource],
+    ships: &[PointSource],
     obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
     mut traces: Option<&mut TraceCollector>,
@@ -218,6 +219,7 @@ pub fn compute_at_point(
             industrial,
             &mut timings.industrial_ms,
         ),
+        (LayerKind::Ship, ships, &mut timings.ship_ms),
     ] {
         if sources.is_empty() {
             continue;
@@ -716,6 +718,7 @@ mod tests {
             railways,
             &[],
             &[],
+            &[],
             &crate::propagation::obstacle_index::ObstacleSet::empty(),
             &MockRasters,
             None,
@@ -858,6 +861,7 @@ mod tests {
                 &railways,
                 &[],
                 &[],
+                &[],
                 &obstacles,
                 &MockRasters,
                 with_traces.then_some(&mut traces),
@@ -921,6 +925,7 @@ mod tests {
             &receiver,
             &roads,
             &railways,
+            &[],
             &[],
             &[],
             &obstacles,

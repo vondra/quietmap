@@ -1366,6 +1366,16 @@ pub const SOURCES: &[Source] = &[
         url: Some("https://datagov.mot.go.th/"),
         year: Some(2024),
     },
+    Source {
+        id: 9901,
+        key: "emodnet-vessel-density-2024",
+        provenance: Provenance::ContinentalMeasured,
+        layer: "ships",
+        name: "EMODnet Human Activities vessel density 2024 (AIS hours per km² per month)",
+        license: Some("CC-BY-4.0"),
+        url: Some("https://emodnet.ec.europa.eu/en/human-activities"),
+        year: Some(2024),
+    },
 ];
 
 #[cfg(test)]

@@ -78,14 +78,14 @@ fn main() -> Result<()> {
     let mut sparse_pair_count = 0usize;
     let mut candidate_pair_count = 0usize;
     for (vertex, entries) in vertices.iter().zip(&energy) {
-        let candidates: [usize; 5] = std::array::from_fn(|layer| {
+        let candidates: [usize; tile_painter::corner_totals::SURFACE_LAYER_COUNT] = std::array::from_fn(|layer| {
             entries
                 .0
                 .iter()
                 .filter(|entry| entry.layer as usize == layer)
                 .count()
         });
-        let nonzero: [usize; 5] = std::array::from_fn(|layer| {
+        let nonzero: [usize; tile_painter::corner_totals::SURFACE_LAYER_COUNT] = std::array::from_fn(|layer| {
             entries
                 .0
                 .iter()

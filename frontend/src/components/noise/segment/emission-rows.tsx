@@ -280,5 +280,16 @@ export function emissionInputRows(t: SegmentTrace): [React.ReactNode, React.Reac
       rows.push(['Effective source dist', `${e.effective_area_source_dist_m.toFixed(0)} m`])
       return rows
     }
+    case 'ship': {
+      const [large, work, leisure] = e.hours_per_month
+      return [
+        ['Loudest class', e.source_type.replace(/_/g, ' ')],
+        ['Cell', `${(e.area_m2 / 1e6).toFixed(2)} km²`],
+        ['Large ships', `${large.toFixed(1)} h/month`],
+        ['Work boats', `${work.toFixed(1)} h/month`],
+        ['Leisure craft', `${leisure.toFixed(1)} h/month`],
+        ['Effective source dist', `${e.effective_area_source_dist_m.toFixed(0)} m`],
+      ]
+    }
   }
 }

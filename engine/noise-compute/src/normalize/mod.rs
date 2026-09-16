@@ -13,8 +13,9 @@ mod rail;
 pub mod road;
 
 pub use points::{
-    prepare_building_points, prepare_industrial_points, prepare_leisure_points, PreparedPoint,
-    RawBuildingInput, RawIndustrialInput, RawLeisureInput,
+    prepare_building_points, prepare_industrial_points, prepare_leisure_points,
+    prepare_ship_points, PreparedPoint, RawBuildingInput, RawIndustrialInput, RawLeisureInput,
+    RawShipInput,
 };
 pub use rail::{normalize_rail, NormalizedRail, RailCategoryTraffic, RailTraffic, RawRailInput};
 pub use road::{

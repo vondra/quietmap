@@ -1,4 +1,4 @@
-import { Car, TrainFront, Plane, Building2, Factory } from 'lucide-react'
+import { Car, TrainFront, Plane, Building2, Factory, Ship } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { HeatmapLayer } from './HeatmapOverlay'
 import { Switch } from './ui/switch'
@@ -10,7 +10,7 @@ interface LayerRow {
   icon: ReactNode
 }
 
-// The layer panel: the seven noise layers, all on by default. There is no
+// The layer panel: the eight noise layers, all on by default. There is no
 // `total` toggle — when every layer is on the overlay fetches the precomputed
 // `total` tile automatically (see MapView); turning any off sums the rest.
 const LAYER_ROWS: LayerRow[] = [
@@ -21,6 +21,7 @@ const LAYER_ROWS: LayerRow[] = [
   { id: 'aircraft-ground', label: 'Aircraft — ground ops', tooltip: 'Taxi + runway roll + apron movements', icon: <Plane className="size-4" /> },
   { id: 'aircraft-airborne', label: 'Aircraft — airborne', tooltip: 'Climb / approach / departure within ~3000 m AGL', icon: <Plane className="size-4" /> },
   { id: 'aircraft-cruise', label: 'Aircraft — cruise', tooltip: 'High-altitude overflight (FL100+)', icon: <Plane className="size-4" /> },
+  { id: 'ship', label: 'Ships', tooltip: 'Ship traffic from AIS: lanes, ports, ferries, inland waterways', icon: <Ship className="size-4" /> },
 ]
 
 interface SourceTogglesProps {

@@ -301,6 +301,8 @@ pub struct SquareData {
     pub industrial: LazyArrow,
     /// Leisure AREA sources (`leisure.arrow`).
     pub leisure: LazyArrow,
+    /// AIS vessel-density cells (`ships.arrow`).
+    pub ships: LazyArrow,
     pub aircraft_airborne: LazyArrow,
     pub aircraft_cruise: LazyArrow,
     pub aircraft_airport_traffic: LazyArrow,
@@ -323,11 +325,20 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         "leisure.arrow",
         "re-extract the source store",
     )?;
+    let ships = LazyArrow::open(&dir.join("ships.arrow"))?;
+    check_contract(
+        &ships,
+        "ships_contract",
+        SHIPS_CONTRACT_V1,
+        "ships.arrow",
+        "rerun scripts/ships/build_ships.py",
+    )?;
     // Every extract-written file pins its coordinate grid; readers that do
     // not know integer grids must refuse the file, never misread it.
     for (arrow, label) in [
         (&structures, "structures.arrow"),
         (&leisure, "leisure.arrow"),
+        (&ships, "ships.arrow"),
     ] {
         check_contract(
             arrow,
@@ -359,6 +370,7 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         structures,
         industrial: LazyArrow::open(&dir.join("industrial.arrow"))?,
         leisure,
+        ships,
         aircraft_airborne,
         aircraft_cruise: LazyArrow::open(&dir.join("cruise.arrow"))?,
         aircraft_airport_traffic: LazyArrow::open(&dir.join("airport_traffic.arrow"))?,
@@ -375,6 +387,8 @@ pub const STRUCTURE_KIND_BARRIER: u8 = 1;
 /// `scripts/structures/build-structures.py`). Mirrored here so the popup
 /// rejects a stale file whose semantics predate the current schema.
 pub const LEISURE_CONTRACT_V2: &str = "leisure_v2";
+/// `ships.arrow` schema stamp written by `scripts/ships/build_ships.py`.
+pub const SHIPS_CONTRACT_V1: &str = "ships_v1";
 pub const GRID_CONTRACT_Z30: &str = "z30";
 
 /// Verify a source arrow's schema carries the expected stamp. Missing file

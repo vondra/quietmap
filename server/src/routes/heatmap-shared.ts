@@ -16,8 +16,8 @@ export const MAX_ZOOM = WORLD_BASE_ZOOM
 
 // Each ID is its own tile tree / pmtiles archive with a distinct HM3
 // `source_id` byte in the header. `total` is the precomputed energy-sum of
-// every layer (build-heatmap-combine) — the default all-layers-on view served
-// as one tile fetch.
+// every layer painted together — the default all-layers-on view served as one
+// tile fetch.
 export const ALLOWED_LAYERS = new Set([
   'total',
   'road',
@@ -27,7 +27,12 @@ export const ALLOWED_LAYERS = new Set([
   'aircraft-ground',
   'aircraft-airborne',
   'aircraft-cruise',
+  'ship',
 ])
+
+// Archives a manifest may omit: a layer added after the published paint has no
+// tiles until the next full paint.
+export const OPTIONAL_ARCHIVES = new Set(['ship'])
 
 export interface TileParams {
   layer: string

@@ -1,4 +1,4 @@
-//! Produce canonical surface corners or one complete z9 seven-layer noise result.
+//! Produce canonical surface corners or one complete z9 eight-layer noise result.
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
 use grid::surface_corner::{
@@ -51,7 +51,7 @@ enum Phase {
         #[arg(long)]
         result: PathBuf,
     },
-    /// Import exact dependency bundles and publish all 256 tiles with seven layers and total.
+    /// Import exact dependency bundles and publish all 256 tiles with every source layer and total.
     Owner {
         #[arg(long = "edge-bundle", required = true)]
         edge_bundles: Vec<PathBuf>,
@@ -237,6 +237,7 @@ fn paint_owner(
                     &surface[4],
                     &airborne_power,
                     &cruise_power,
+                    &surface[5],
                 ],
                 &receivers.indoor_attenuation,
             )?;

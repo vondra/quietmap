@@ -159,6 +159,8 @@ export function screeningFanPopupFixture(lat: number, lng: number): NoiseCompute
     aircraft_cruise_total: 0,
     building_total: 0,
     industrial_total: 0,
+    ship_count: 0,
+    ship_total: 0,
   }
   return {
     ...popupFixture(lat, lng, 58.5, { road: 58.5 }),

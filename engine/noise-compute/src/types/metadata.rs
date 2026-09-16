@@ -46,6 +46,7 @@ pub enum SourceMetadata {
     Rail(RailMetadata),
     Building(BuildingMetadata),
     Industrial(IndustrialMetadata),
+    Ship(ShipMetadata),
     // Boxed: AircraftMetadata is ~3× the next-largest variant (it nests the full
     // airborne/ground-ops detail), so inlining it would bloat every Contributor's
     // `Option<SourceMetadata>` to that size. serde sees through the Box, so the
@@ -182,6 +183,18 @@ pub struct IndustrialMetadata {
     pub nace: Option<String>,
     pub grid_point_count: u16, // engine discretized the site into N points
     pub source_id: u16, // dataset identity stamp (0 = unspecified); resolved into `provenance`
+    pub provenance: Option<crate::sources::DatasetMeta>,
+}
+
+/// Ship traffic cell contributor metadata.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ShipMetadata {
+    pub area_m2: f64,
+    /// Loudest class of the cell: "large_ships" | "work_boats" | "leisure_craft".
+    pub source_type: &'static str,
+    /// Mean vessel-hours per month: large ships, work boats, leisure craft.
+    pub hours_per_month: [f32; 3],
+    pub source_id: u16,
     pub provenance: Option<crate::sources::DatasetMeta>,
 }
 

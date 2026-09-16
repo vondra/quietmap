@@ -11,6 +11,7 @@ pub enum LayerKind {
     Building,
     Industrial,
     Aircraft,
+    Ship,
 }
 
 impl LayerKind {
@@ -21,6 +22,7 @@ impl LayerKind {
             Self::Building => "building",
             Self::Industrial => "industrial",
             Self::Aircraft => "aircraft",
+            Self::Ship => "ship",
         }
     }
 }

@@ -13,6 +13,7 @@ pub enum Hm3Layer {
     AircraftGround,
     AircraftAirborne,
     AircraftCruise,
+    Ship,
 }
 
 impl Hm3Layer {
@@ -26,6 +27,7 @@ impl Hm3Layer {
             Self::AircraftGround => "aircraft-ground",
             Self::AircraftAirborne => "aircraft-airborne",
             Self::AircraftCruise => "aircraft-cruise",
+            Self::Ship => "ship",
         }
     }
 
@@ -37,18 +39,22 @@ impl Hm3Layer {
             Self::Industrial => 4,
             Self::Building => 5,
             Self::AircraftGround | Self::AircraftAirborne | Self::AircraftCruise => 3,
+            Self::Ship => 6,
         }
     }
 }
 
-pub const SURFACE_LAYERS: [Hm3Layer; 5] = [
+/// Planes the surface painter evaluates, in its GPU layer order.
+pub const SURFACE_LAYERS: [Hm3Layer; 6] = [
     Hm3Layer::Road,
     Hm3Layer::Rail,
     Hm3Layer::Industrial,
     Hm3Layer::Building,
     Hm3Layer::AircraftGround,
+    Hm3Layer::Ship,
 ];
-pub const SOURCE_LAYERS: [Hm3Layer; 7] = [
+/// Published source planes: the aircraft field planes sit between ground ops and ships.
+pub const SOURCE_LAYERS: [Hm3Layer; 8] = [
     SURFACE_LAYERS[0],
     SURFACE_LAYERS[1],
     SURFACE_LAYERS[2],
@@ -56,9 +62,10 @@ pub const SOURCE_LAYERS: [Hm3Layer; 7] = [
     SURFACE_LAYERS[4],
     Hm3Layer::AircraftAirborne,
     Hm3Layer::AircraftCruise,
+    SURFACE_LAYERS[5],
 ];
 
-pub const ALL_LAYERS: [Hm3Layer; 8] = [
+pub const ALL_LAYERS: [Hm3Layer; 9] = [
     SOURCE_LAYERS[0],
     SOURCE_LAYERS[1],
     SOURCE_LAYERS[2],
@@ -66,6 +73,7 @@ pub const ALL_LAYERS: [Hm3Layer; 8] = [
     SOURCE_LAYERS[4],
     SOURCE_LAYERS[5],
     SOURCE_LAYERS[6],
+    SOURCE_LAYERS[7],
     Hm3Layer::Total,
 ];
 
@@ -86,10 +94,10 @@ impl EncodedHm3 {
     }
 }
 
-/// Encode seven outdoor mean-power planes in SOURCE_LAYERS order, followed by total.
+/// Encode the outdoor mean-power planes in SOURCE_LAYERS order, followed by total.
 /// Sampling-day and period-duration normalization belongs to the producers.
 pub fn encode_all_period_powers(
-    planes: [&[f32]; 7],
+    planes: [&[f32]; SOURCE_LAYERS.len()],
     indoor_attenuation: &[f32],
 ) -> Result<Vec<EncodedHm3>> {
     let mut tiles = Vec::with_capacity(ALL_LAYERS.len());
@@ -238,9 +246,10 @@ mod tests {
             &silent,
             &silent,
             &silent,
+            &silent,
         ];
         let tiles = encode_all_period_powers(planes, &delta).unwrap();
-        assert_eq!(tiles.len(), 8);
+        assert_eq!(tiles.len(), 9);
         let mut decoded = Vec::new();
         for tile in &tiles {
             let mut raw = Vec::new();
@@ -252,8 +261,10 @@ mod tests {
             decoded.push(raw);
         }
         assert_eq!(&decoded[0][6..9], &[255, 0, 120]);
-        assert_eq!(tiles[7].layer(), Hm3Layer::Total);
-        assert_eq!(&decoded[7][6..9], &[1, 0, 127]);
+        assert_eq!(tiles[7].layer(), Hm3Layer::Ship);
+        assert_eq!(decoded[7][5], 6);
+        assert_eq!(tiles[8].layer(), Hm3Layer::Total);
+        assert_eq!(&decoded[8][6..9], &[1, 0, 127]);
         assert_eq!(
             tiles[4..7]
                 .iter()
@@ -263,7 +274,7 @@ mod tests {
         );
         assert!(decoded[4..7].iter().all(|raw| raw[5] == 3));
         let mut missing = planes;
-        missing[6] = &[];
+        missing[7] = &[];
         assert!(encode_all_period_powers(missing, &delta).is_err());
     }
 

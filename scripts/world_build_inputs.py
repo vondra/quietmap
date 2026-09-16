@@ -209,6 +209,8 @@ def audit_world(prepared, jobs=None):
                     key, value = expected_contract(path)
                     if metadata.get(key) != value:
                         raise ValueError(f'unbaked geography: {path}')
+                if path.stem == 'ships' and (metadata.get(b'ships_contract') != b'ships_v1' or metadata.get(b'grid') != b'z30'):
+                    raise ValueError(f'stale ships cells: {path}')
                 rows = 0
                 for index in range(reader.num_record_batches):
                     batch = reader.get_batch(index)
@@ -238,7 +240,7 @@ def audit_world(prepared, jobs=None):
                     pending.add(pool.submit(audit_square, square))
     if squares != qmgrid.Z9_AXIS ** 2:
         raise ValueError(f'incomplete world: {squares} structure squares')
-    for layer in ('roads', 'railways', 'structures', 'industrial', 'airborne', 'cruise', 'airport_traffic'):
+    for layer in ('roads', 'railways', 'structures', 'industrial', 'airborne', 'cruise', 'airport_traffic', 'ships'):
         if counts.get(layer, 0) == 0:
             raise ValueError(f'no world rows for {layer}')
     return counts

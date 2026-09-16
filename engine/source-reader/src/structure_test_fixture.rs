@@ -47,7 +47,7 @@ pub struct StructureRow {
     pub screening_ordinal: Option<u32>,
 }
 
-fn grid_of(lon: f64, lat: f64) -> (i32, i32) {
+pub(crate) fn grid_of(lon: f64, lat: f64) -> (i32, i32) {
     grid::lonlat_to_grid(lon, lat)
 }
 
@@ -598,6 +598,65 @@ pub fn write_industrial_file(path: &Path, rows: &[FixtureIndustrial]) {
                 rows.iter().map(|_| 5000.0f32),
             )),
             Arc::new(UInt16Array::from_iter_values(rows.iter().map(|_| 0u16))),
+        ],
+    )
+    .unwrap();
+    let file = std::fs::File::create(path).unwrap();
+    let mut w = FileWriter::try_new(file, &schema).unwrap();
+    w.write(&batch).unwrap();
+    w.finish().unwrap();
+}
+
+/// One ship traffic cell: centre (lon, lat) and hours per month by class.
+pub struct FixtureShipCell {
+    pub centroid: (f64, f64),
+    pub hours: [f32; 3],
+}
+
+/// A ships.arrow on disk as `scripts/ships/build_ships.py` writes it; `contract`
+/// lets a test stamp a stale version.
+pub fn write_ships_file(path: &Path, rows: &[FixtureShipCell], contract: &str) {
+    let metadata = std::collections::HashMap::from([
+        ("grid".to_string(), "z30".to_string()),
+        ("ships_contract".to_string(), contract.to_string()),
+    ]);
+    let schema = Arc::new(Schema::new_with_metadata(
+        vec![
+            Field::new("centroid_gx", DataType::Int32, false),
+            Field::new("centroid_gy", DataType::Int32, false),
+            Field::new("area_m2", DataType::Float32, false),
+            Field::new("hours_large", DataType::Float32, false),
+            Field::new("hours_work", DataType::Float32, false),
+            Field::new("hours_leisure", DataType::Float32, false),
+            Field::new("source_id", DataType::UInt16, false),
+        ],
+        metadata,
+    ));
+    let centroids: Vec<(i32, i32)> = rows
+        .iter()
+        .map(|r| grid_of(r.centroid.0, r.centroid.1))
+        .collect();
+    let hours = |class: usize| {
+        Arc::new(Float32Array::from_iter_values(
+            rows.iter().map(move |r| r.hours[class]),
+        ))
+    };
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from_iter_values(
+                centroids.iter().map(|(gx, _)| *gx),
+            )),
+            Arc::new(Int32Array::from_iter_values(
+                centroids.iter().map(|(_, gy)| *gy),
+            )),
+            Arc::new(Float32Array::from_iter_values(
+                rows.iter().map(|_| 1_000_000.0f32),
+            )),
+            hours(0),
+            hours(1),
+            hours(2),
+            Arc::new(UInt16Array::from_iter_values(rows.iter().map(|_| 9901u16))),
         ],
     )
     .unwrap();

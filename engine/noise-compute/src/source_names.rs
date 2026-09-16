@@ -75,6 +75,11 @@ pub(crate) fn leisure_type_name(sport: u8) -> &'static str {
     }
 }
 
+/// Ship cells carry the loudest class index as `source_type`.
+pub(crate) fn ship_type_name(class_index: u8) -> &'static str {
+    crate::emission::ships::ShipClass::from_index(class_index).name()
+}
+
 pub(crate) fn industrial_type_name(st: u8) -> &'static str {
     match st {
         0 => "industrial_area",

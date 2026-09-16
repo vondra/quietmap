@@ -373,11 +373,23 @@ export interface AircraftMetadata {
   ground_ops?: AircraftGroundOpsDetail | null
 }
 
+interface ShipMetadata {
+  kind: 'ship'
+  area_m2: number
+  /** Loudest class of the cell: large_ships | work_boats | leisure_craft. */
+  source_type: string
+  /** Mean vessel-hours per month: large ships, work boats, leisure craft. */
+  hours_per_month: [number, number, number]
+  source_id?: number
+  provenance?: DatasetProvenance | null
+}
+
 type SourceMetadata =
   | RoadMetadata
   | RailMetadata
   | BuildingMetadata
   | IndustrialMetadata
+  | ShipMetadata
   | AircraftMetadata
 
 export interface Contributor {
@@ -446,6 +458,7 @@ interface PopupTimings {
   rail_ms: number
   building_ms: number
   industrial_ms: number
+  ship_ms: number
   aircraft_airborne_ms: number
   aircraft_cruise_ms: number
   aircraft_ground_ms: number
@@ -465,6 +478,7 @@ export type SegmentKind =
   | 'aircraft_cruise'
   | 'building'
   | 'industrial'
+  | 'ship'
 
 interface PerPeriod<T> {
   day: T
@@ -670,6 +684,13 @@ type EmissionTrace =
       rated_power_kw: number | null
       effective_area_source_dist_m: number
     }
+  | {
+      kind: 'ship'
+      source_type: string
+      area_m2: number
+      hours_per_month: [number, number, number]
+      effective_area_source_dist_m: number
+    }
 
 /** One bucket inside a cruise-cell aggregate trace.
  *
@@ -732,7 +753,7 @@ export interface SegmentTrace {
    * 1 = ground path, 2 = airborne sub-segment, 3 = cruise cell.
    * UI dispatch helper is `traceKind()` in `SegmentList`.
    */
-  kind: 'road' | 'railway' | 'building' | 'industrial' | 'aircraft'
+  kind: 'road' | 'railway' | 'building' | 'industrial' | 'aircraft' | 'ship'
   osm_id: number | null
   segment_idx: number
   name: string
@@ -804,6 +825,7 @@ export interface SegmentTracesSummary {
   aircraft_cruise_count: number
   building_count: number
   industrial_count: number
+  ship_count: number
   road_total: number
   railway_total: number
   aircraft_ground_total: number
@@ -811,6 +833,7 @@ export interface SegmentTracesSummary {
   aircraft_cruise_total: number
   building_total: number
   industrial_total: number
+  ship_total: number
 }
 
 /**

@@ -23,7 +23,7 @@ if [ "$HALF" != "rust" ]; then
   # own directory; discover does not descend into these package-less folders.
   step "scripts: Python unittest modules, each from its own directory"
   for directory in scripts scripts/rasters scripts/roads scripts/square-country-city \
-      scripts/structures scripts/overture; do
+      scripts/structures scripts/overture scripts/ships; do
     echo "-- $directory"
     (cd "$directory" && python3 -m unittest discover -s . -p 'test_*.py')
   done
