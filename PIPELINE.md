@@ -28,6 +28,9 @@ layer selection and bucket count. A partial Pass 2 still rereads the Planet.
 Spill write failures stop extraction immediately; partial output is never marked complete.
 `--jobs` on a producer is an optional cap; omitting it uses every CPU that still
 fits the process memory limit so a forgotten flag does not fall back to one thread.
+The controller builds whole planets only: national adapters fail when their country
+has no prepared squares, so a regional extract (Prague, 2026-09-16) stops at
+`buildings-national` after OSM and geography. Smoke-test producers individually instead.
 
 The TOML file has `[build]` keys `as_of_date` (YYYYMMDD string), `aircraft_anchor`
 (YYYY-MM string), `memory_gib` and `threads` (positive integers). `[sources]` supplies
