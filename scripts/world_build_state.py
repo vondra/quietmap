@@ -160,7 +160,7 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
     if live:
         raise ValueError(f'cannot resume while producers are alive: {live}')
     pin_path = output / PIN_NAME
-    with repin_inputs(pin_path, roots, frozen_roots) as (candidate, changed):
+    with repin_inputs(pin_path, roots, frozen_roots) as (candidate, changed, sources):
         previous_digest, current_digest = pin_digest(pin_path), pin_digest(candidate)
         latest = latest_receipts(output / STEPS_NAME)
         reviewed = set()
@@ -248,7 +248,8 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
                              and latest.get(step.name, {}).get('exit') == 0)
         report = {'at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
                   'resume': sorted(completed), 'rebuild': [step.name for step in steps if step.name not in completed],
-                  'invalidated': invalidated, 'producer_inputs_changed': changed, 'osm_scope': osm_scope,
+                  'invalidated': invalidated, 'producer_inputs_changed': changed,
+                  'frozen_inputs_changed': sources, 'osm_scope': osm_scope,
                   'aircraft_from_stage': aircraft_stage, **chain_fields,
                   'review': review or {'previous_pin_sha256': previous_digest,
                       'current_pin_sha256': current_digest, 'reuse': [], 'reason': '',
@@ -258,6 +259,9 @@ def resume_steps(output, config, steps, roots, frozen_roots, *, review=None, dry
         print(json.dumps(report), flush=True)
         if dry_run:
             return completed
+        if sources and review is None:
+            raise ValueError(f'{len(sources)} frozen sources changed since the pin (examples: {sources[:3]}); '
+                             'inspect --resume-plan and supply --resume-review naming the steps whose outputs do not read them')
         if state['status'] == 'complete' and (review is None or not invalidated):
             raise ValueError('complete build requires an exact resume review that rebuilds completed producer outputs')
         for name, boundary in (('aircraft', aircraft_stage), *chain_starts.items()):

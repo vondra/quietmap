@@ -104,9 +104,12 @@ class WorldBuildStateTests(unittest.TestCase):
             self.assertNotIn('remaining', updated)
             self.assertEqual(updated['rows'], counts)
 
-    def test_source_change_refuses_every_retry_without_replacing_the_evidence(self):
+    def test_source_change_needs_review_then_rebuilds_only_the_steps_the_review_leaves_out(self):
         before = (self.output / state.PIN_NAME).read_bytes()
         self.source.write_text('changed source')
+        added = self.root / 'counters.csv'
+        added.write_text('refreshed after completion')
+        self.roots.append(added)
         for status in ('failed', 'complete'):
             state.write_state(self.output, self.config, status)
             original_state = (self.output / state.STATE_NAME).read_bytes()
@@ -114,6 +117,18 @@ class WorldBuildStateTests(unittest.TestCase):
                 self.resume()
             self.assertEqual((self.output / state.PIN_NAME).read_bytes(), before)
             self.assertEqual((self.output / state.STATE_NAME).read_bytes(), original_state)
+        # The reviewed pin keeps the step that never reads the changed source and rebuilds its consumer.
+        review = self.review(['osm'])
+        self.assertEqual(self.resume(review=review), {'osm'})
+        self.assertNotEqual((self.output / state.PIN_NAME).read_bytes(), before)
+        current = json.loads((self.output / state.STATE_NAME).read_text())
+        self.assertEqual(current['resumes'][-1]['frozen_inputs_changed'], [str(self.source)])
+        self.assertIn(str(added), current['resumes'][-1]['producer_inputs_changed'])
+        self.assertEqual(current['resumes'][-1]['invalidated'], ['roads'])
+        receipts = state.latest_receipts(self.output / state.STEPS_NAME)
+        self.assertEqual(receipts['osm']['review'], review)
+        self.assertIsNone(receipts['roads']['exit'])
+        self.assertEqual(self.resume(), {'osm'})
 
     def review(self, reuse):
         report = io.StringIO()

@@ -19,7 +19,9 @@ coordinates a fresh world through all seven Arrow layers. Add `--plan` to print 
 actual commands without starting producers. Destinations are empty or contain an interrupted
 build of the same configuration. Resume retains successful steps with unchanged producer
 arguments and completed dependencies. Worker caps and scope names do not change data identity.
-A changed source or a live producer refuses resume; code changes are recorded in `build.json`.
+A live producer refuses resume. Changed code, runtime or frozen sources (a counter file
+refreshed after completion, a new timetable) need a `--resume-review` naming the steps to
+reuse; `--resume-plan` lists the changed files, and `build.json` records every review.
 An unchanged interrupted road/rail chain resumes at its last started substep.
 The OSM extractor reuses a complete spill only for the same Planet file identity,
 layer selection and bucket count. A partial Pass 2 still rereads the Planet.

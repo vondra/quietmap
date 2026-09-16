@@ -119,7 +119,13 @@ def pin_digest(path):
 
 @contextmanager
 def repin_inputs(path, roots, frozen_roots):
-    """Prepare a source-checked pin; the caller publishes it after durable receipt invalidation."""
+    """Prepare a candidate pin and name what changed; the caller publishes it after durable receipt invalidation.
+
+    Yields the candidate path, every changed input and the subset under frozen source
+    roots. A changed or added source is evidence like a code change: the reviewed pin
+    decides which completed steps survive, so a source refreshed after completion (new
+    counters, a new timetable) rebuilds only its consumers instead of blocking every resume.
+    """
     previous = {row['path']: row for row in load_pin(path)} if path.exists() else {}
     if not previous:
         raise ValueError('cannot resume without the previous input pin; retained work needs inspection')
@@ -130,13 +136,9 @@ def repin_inputs(path, roots, frozen_roots):
         changed = sorted(name for name in previous.keys() | current.keys()
                          if previous.get(name) != current.get(name))
         frozen = {Path(root).absolute() for root in frozen_roots}
-        # Source roots come from the unchanged build configuration; code and
-        # runtime upgrades instead invalidate receipts through the reviewed pin.
         sources = [name for name in changed
                    if any(parent in frozen for parent in (Path(name), *Path(name).parents))]
-        if sources:
-            raise ValueError(f'cannot resume: {len(sources)} frozen sources changed; examples: {sources[:5]}')
-        yield candidate, changed
+        yield candidate, changed, sources
     finally:
         candidate.unlink(missing_ok=True)
 
