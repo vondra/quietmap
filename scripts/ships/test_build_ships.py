@@ -90,3 +90,49 @@ class BuildShipsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GfwReaderTests(unittest.TestCase):
+    def test_gfw_tiles_become_cells_outside_the_emodnet_coverage(self):
+        import io
+        import json
+        import zipfile
+        import rasterio
+        from rasterio.transform import from_origin
+
+        def tile_zip(path, values):
+            if values is None:
+                path.write_bytes(b"")
+                return
+            buffer = io.BytesIO()
+            with rasterio.open(buffer, "w", driver="GTiff", width=3, height=2, count=1, dtype="int32",
+                               crs="EPSG:4326", transform=from_origin(4.0, 52.02, 0.01, 0.01), nodata=build_ships.GFW_NODATA) as dataset:
+                dataset.write(np.asarray(values, dtype=np.int32), 1)
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr(build_ships.GFW_TIF_MEMBER, buffer.getvalue())
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "window.json").write_text(json.dumps({"days": 365}))
+            # large: 3650 h/365 d = 300.4 h/month in cell (0,0); nodata elsewhere but one 1-hour cell (dropped: < 0.5 h/month)
+            tile_zip(root / "lon+000_lat+48-large.zip", [[3650, build_ships.GFW_NODATA, 1], [build_ships.GFW_NODATA] * 3])
+            tile_zip(root / "lon+000_lat+48-work.zip", [[365, 730, build_ships.GFW_NODATA], [build_ships.GFW_NODATA] * 3])
+            tile_zip(root / "lon+008_lat+48-large.zip", None)  # empty tile: no reports at all
+            tile_zip(root / "lon+008_lat+48-work.zip", None)
+            cells = build_ships.read_gfw(root)
+            self.assertEqual(len(cells["lon"]), 2)
+            self.assertAlmostEqual(float(cells["lon"][0]), 4.005)
+            self.assertAlmostEqual(float(cells["lat"][0]), 52.015)
+            self.assertAlmostEqual(float(cells["hours_large"][0]), 3650 * 30.4375 / 365, places=6)
+            self.assertAlmostEqual(float(cells["hours_work"][0]), 30.4375, places=6)
+            self.assertAlmostEqual(float(cells["hours_work"][1]), 60.875, places=6)
+            self.assertEqual(float(cells["hours_leisure"].sum()), 0.0)
+            self.assertTrue(all(cells["source_id"] == build_ships.SOURCE_ID_GFW_PRESENCE))
+            self.assertAlmostEqual(cells["raster_hours_kept"], (3650 + 365 + 730) * 30.4375 / 365, places=6)
+            self.assertAlmostEqual(cells["raster_hours_total"], (3650 + 1 + 365 + 730) * 30.4375 / 365, places=6)
+            # cell area: 0.01° × 0.01° at 52°N
+            self.assertAlmostEqual(float(cells["area_m2"][0]) / 1e6, (1113.2 ** 2) * np.cos(np.radians(52.015)) / 1e6, places=3)
+            # a coverage that samples the first cell centre removes it
+            coverage = {"mask": np.array([[True]]), "crs": "EPSG:4326",
+                        "affine": from_origin(4.0, 52.02, 0.01, 0.01)}
+            self.assertEqual(len(build_ships.read_gfw(root, exclude=coverage)["lon"]), 1)

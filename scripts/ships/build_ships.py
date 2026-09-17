@@ -11,6 +11,10 @@ import struct
 import sys
 import tempfile
 
+import glob
+import io
+import zipfile
+
 import numpy as np
 import pyarrow as pa
 import rasterio
@@ -30,8 +34,14 @@ EMODNET_CLASS_TYPES = {
 CLASSES = ("large", "work", "leisure")
 EMODNET_FILE = "vesseldensity_{code}avg_2024_laea.tif"
 EMODNET_CELL_AREA_M2 = 1_000_000.0  # native 1 km ETRS89-LAEA (equal-area) cells
-# `sources::SOURCES` id of the EMODnet 2024 vessel density product.
+# `sources::SOURCES` ids of the EMODnet 2024 vessel density product and of GFW AIS presence.
 SOURCE_ID_EMODNET_2024 = 9901
+SOURCE_ID_GFW_PRESENCE = 9902
+# GFW report zips (scripts/ships/download_gfw.py) hold one Int32 GeoTIFF of vessel-hours per 0.01° cell.
+GFW_TIF_MEMBER = "layer-activity-data-0/public-global-presence-v4.0.tif"
+GFW_NODATA = 999999
+HOURS_PER_MONTH = 365.25 * 24.0 / 12.0  # emission/ships.rs::HOURS_PER_MONTH
+METRES_PER_DEGREE = 111_320.0
 # A cell below 0.5 vessel-hours per month is at most 76 dB(A) (large ships) — under 10 dB(A)
 # at its own edge and nothing at 1 km; dropping it keeps 1.65 M of 13.7 M positive cells.
 MIN_CELL_HOURS_PER_MONTH = 0.5
@@ -84,7 +94,82 @@ def read_emodnet(directory):
         "source_id": np.full(len(rows), SOURCE_ID_EMODNET_2024, dtype=np.uint16),
         "raster_hours_total": float(np.where(mask, hours, 0.0).sum()),
         "raster_hours_kept": float(hours[keep].sum()),
+        "coverage": {"mask": mask, "crs": crs, "affine": affine},
     }
+
+
+def covered_by(coverage, lon, lat):
+    """True where a product samples the cell centre (its raster is valid there)."""
+    xs, ys = warp_transform("EPSG:4326", coverage["crs"], np.asarray(lon), np.asarray(lat))
+    cols, rows = (~coverage["affine"]) * (np.asarray(xs), np.asarray(ys))
+    cols, rows = np.floor(cols).astype(np.int64), np.floor(rows).astype(np.int64)
+    mask = coverage["mask"]
+    inside = (rows >= 0) & (rows < mask.shape[0]) & (cols >= 0) & (cols < mask.shape[1])
+    hit = np.zeros(len(cols), dtype=bool)
+    hit[inside] = mask[rows[inside], cols[inside]]
+    return hit
+
+
+def gfw_tile_hours(path):
+    """(hours Int32 array, affine) of one GFW report zip; None for an empty tile (0-byte file)."""
+    payload = Path(path).read_bytes()
+    if not payload:
+        return None
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive, rasterio.open(io.BytesIO(archive.read(GFW_TIF_MEMBER))) as dataset:
+        hours = dataset.read(1)
+        return np.where(hours == GFW_NODATA, 0, hours), dataset.transform
+
+
+def read_gfw(directory, exclude=None):
+    """Cells of the GFW world download: hours per month by class (leisure has no GFW type),
+    skipping cell centres that `exclude` (an EMODnet coverage) samples."""
+    directory = Path(directory)
+    window = json.loads((directory / "window.json").read_text())
+    # vessel-hours over the window → mean vessel-hours per month (30.4375 days).
+    per_month = HOURS_PER_MONTH / 24.0 / float(window["days"])
+    parts = {key: [] for key in ("lon", "lat", "area_m2", "hours_large", "hours_work", "hours_leisure")}
+    tile_hours_total = 0.0
+    for large_path in sorted(glob.glob(str(directory / "*-large.zip"))):
+        work_path = large_path[: -len("-large.zip")] + "-work.zip"
+        large = gfw_tile_hours(large_path)
+        work = gfw_tile_hours(work_path)
+        if large is None and work is None:
+            continue
+        reference = large if large is not None else work
+        shape, affine = reference[0].shape, reference[1]
+        grids = []
+        for tile in (large, work):
+            if tile is None:
+                grids.append(np.zeros(shape, dtype=np.float64))
+            else:
+                if tile[0].shape != shape or tile[1] != affine:
+                    raise ValueError(f"GFW class rasters disagree: {large_path}")
+                grids.append(tile[0].astype(np.float64) * per_month)
+        total = grids[0] + grids[1]
+        tile_hours_total += float(total.sum())
+        rows, cols = np.nonzero(total >= MIN_CELL_HOURS_PER_MONTH)
+        if not len(rows):
+            continue
+        lon, lat = affine * (cols + 0.5, rows + 0.5)
+        lon, lat = np.asarray(lon), np.asarray(lat)
+        keep = np.ones(len(rows), dtype=bool) if exclude is None else ~covered_by(exclude, lon, lat)
+        cell_side_m = abs(affine.a) * METRES_PER_DEGREE
+        parts["lon"].append(lon[keep])
+        parts["lat"].append(lat[keep])
+        parts["area_m2"].append(cell_side_m * cell_side_m * np.cos(np.radians(lat[keep])))
+        parts["hours_large"].append(grids[0][rows, cols][keep])
+        parts["hours_work"].append(grids[1][rows, cols][keep])
+        parts["hours_leisure"].append(np.zeros(int(keep.sum())))
+    cells = {key: (np.concatenate(values) if values else np.zeros(0)) for key, values in parts.items()}
+    cells["source_id"] = np.full(len(cells["lon"]), SOURCE_ID_GFW_PRESENCE, dtype=np.uint16)
+    cells["raster_hours_total"] = tile_hours_total
+    cells["raster_hours_kept"] = float(cells["hours_large"].sum() + cells["hours_work"].sum())
+    return cells
+
+
+def concatenate(*cell_sets):
+    keys = ("lon", "lat", "area_m2", "hours_large", "hours_work", "hours_leisure", "source_id")
+    return {key: np.concatenate([cells[key] for cells in cell_sets]) for key in keys}
 
 
 def mercator_axes(lat, lon, zoom):
@@ -181,12 +266,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepared-dir", required=True, help="prepared year directory holding z9/")
     parser.add_argument("--emodnet-dir", required=True, help="EMODnet 2024 annual-average LAEA GeoTIFFs")
+    parser.add_argument("--gfw-dir", help="GFW world download (download_gfw.py output); used where EMODnet has no sample")
     args = parser.parse_args()
-    cells = read_emodnet(args.emodnet_dir)
-    report = write_prepared(cells, args.prepared_dir)
-    report["raster_hours_total"] = cells["raster_hours_total"]
-    report["raster_hours_kept"] = cells["raster_hours_kept"]
-    report["cells_kept"] = int(len(cells["lon"]))
+    emodnet = read_emodnet(args.emodnet_dir)
+    report = {"emodnet": {key: emodnet[key] for key in ("raster_hours_total", "raster_hours_kept")}, "emodnet_cells": int(len(emodnet["lon"]))}
+    cells = emodnet
+    if args.gfw_dir:
+        gfw = read_gfw(args.gfw_dir, exclude=emodnet["coverage"])
+        report["gfw"] = {key: gfw[key] for key in ("raster_hours_total", "raster_hours_kept")}
+        report["gfw_cells"] = int(len(gfw["lon"]))
+        cells = concatenate(emodnet, gfw)
+    report.update(write_prepared(cells, args.prepared_dir))
     print(json.dumps(report))
 
 

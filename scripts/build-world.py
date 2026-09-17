@@ -55,7 +55,7 @@ class Step:
 
 def source_paths(config):
     required = {'planet', 'rasters', 'enrichment', 'boundaries', 'city_boundaries',
-                'overture', 'ghsl', 'regional_heights', 'airline', 'general_aviation', 'ships'}
+                'overture', 'ghsl', 'regional_heights', 'airline', 'general_aviation', 'ships', 'ships_gfw'}
     if set(config['sources']) != required:
         raise ValueError(f'sources must be exactly {sorted(required)}')
     return {name: canonical_input(path) for name, path in config['sources'].items()}
@@ -120,7 +120,7 @@ def build_plan(config, output, scratch):
         layer('industrial', ('square-country-city',)),
         layer('roads', ('square-country-city', 'structures')),
         Step('ships', ('osm',), (python, str(scripts / 'ships/build_ships.py'),
-             '--prepared-dir', str(year), '--emodnet-dir', str(sources['ships']))),
+             '--prepared-dir', str(year), '--emodnet-dir', str(sources['ships']), '--gfw-dir', str(sources['ships_gfw']))),
         Step('roads-finalize', ('roads',), (str(REPO / 'engine/target/release/roads-finalize'), str(year))),
         Step('aircraft', ('osm',), ('bash', str(scripts / 'run-aircraft-extract.sh')), 2,
              (('HYBRID', '1'), ('AIRLINE_FEED', 'adsbexchange'), ('AIRCRAFT_ANCHOR', settings['aircraft_anchor']),

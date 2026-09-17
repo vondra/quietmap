@@ -1376,6 +1376,16 @@ pub const SOURCES: &[Source] = &[
         url: Some("https://emodnet.ec.europa.eu/en/human-activities"),
         year: Some(2024),
     },
+    Source {
+        id: 9902,
+        key: "gfw-ais-presence",
+        provenance: Provenance::GlobalMeasured,
+        layer: "ships",
+        name: "Global Fishing Watch AIS vessel presence (hours per 0.01° cell; Powered by Global Fishing Watch)",
+        license: Some("CC-BY-NC-4.0"),
+        url: Some("https://globalfishingwatch.org/our-apis/"),
+        year: Some(2026),
+    },
 ];
 
 #[cfg(test)]

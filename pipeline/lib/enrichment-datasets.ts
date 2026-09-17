@@ -1629,6 +1629,18 @@ export const DATASETS: Dataset[] = [
     provenance: 'continental-measured', // AIS-derived hours for all EU waters, one product
     measurement: 'counted',
   },
+  {
+    id: 9902,
+    layer: 'ships',
+    key: 'gfw-ais-presence',
+    name: 'Global Fishing Watch AIS vessel presence (hours per 0.01° cell; Powered by Global Fishing Watch)',
+    year: 2026,
+    license: 'CC-BY-NC-4.0',
+    url: 'https://globalfishingwatch.org/our-apis/',
+    priority: 60,
+    provenance: 'global-measured', // hourly AIS positions worldwide, rivers and harbours included
+    measurement: 'counted',
+  },
 ]
 
 // `DATASETS_BY_ID` / `DATASETS_BY_KEY` / `UNSPECIFIED` were the legacy

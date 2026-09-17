@@ -125,3 +125,4 @@ export const SOURCE_ID_PE_ROAD_CLASSIFICATION_FALLBACK = 9874 as const // pe-roa
 export const SOURCE_ID_SA_ROAD_CLASSIFICATION_FALLBACK = 9875 as const // sa-road-classification-fallback
 export const SOURCE_ID_TH_ROAD_CLASSIFICATION_FALLBACK = 9876 as const // th-road-classification-fallback
 export const SOURCE_ID_EMODNET_VESSEL_DENSITY_2024 = 9901 as const // emodnet-vessel-density-2024
+export const SOURCE_ID_GFW_AIS_PRESENCE = 9902 as const // gfw-ais-presence
