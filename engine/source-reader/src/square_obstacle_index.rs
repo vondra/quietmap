@@ -10,7 +10,7 @@
 //! click and hid a broken pipeline behind a slow popup.
 //!
 //! Provenance lives in the file header (`obstacle_index_file`): `code_ver` must
-//! equal [`CACHE_CODE_VER`] (the index code moved ⇒ rebuild); `data_ver` and
+//! equal [`CACHE_CODE_VER`] (the index format changed ⇒ rebuild); `data_ver` and
 //! `data_len` are [`structures_fingerprint`] and the byte length of the Arrow
 //! file the index was built from. Every reader compares `data_len` with the
 //! table on disk (one `metadata()` call); the painter, which holds the
@@ -27,29 +27,17 @@ use std::sync::{Arc, Mutex, OnceLock};
 use grid::Square;
 use noise_compute::propagation::obstacle_index::ObstacleIndex;
 use noise_compute::propagation::obstacle_index_file::{
-    fnv1a64, index_file_provenance, IndexBlob, IndexFileProvenance, BUILDER_CODE_VER, FNV1A64_SEED,
+    fnv1a64, index_file_provenance, IndexBlob, IndexFileProvenance, FNV1A64_SEED,
     HEADER_BYTES,
 };
 
-/// Everything that decides an index file's BYTES: the engine's builder and
-/// grid (`BUILDER_CODE_VER`) folded with the files that own the loader's
-/// decisions — `structure_store.rs` (obstacle id ordering, which rows feed the
-/// height cap), `structure_contract.rs` (which columns are the heights),
-/// `poly.rs` (ring topology of the decoded footprints) and this file (the
-/// input fingerprint, the header contract). Editing any of them rotates the
-/// version and every `structures.qoix` written by the old code is refused
-/// until the pipeline step reruns. Over-invalidating costs a 10-minute
-/// rebuild; under-invalidating puts a silently wrong screen in the map.
-pub const CACHE_CODE_VER: u64 = {
-    let h = fnv1a64(BUILDER_CODE_VER, include_bytes!("structure_store.rs"));
-    let h = fnv1a64(h, include_bytes!("../../square-store/src/grid_cols.rs"));
-    let h = fnv1a64(
-        h,
-        include_bytes!("../../square-store/src/structure_contract.rs"),
-    );
-    let h = fnv1a64(h, include_bytes!("../../grid/src/poly.rs"));
-    fnv1a64(h, include_bytes!("square_obstacle_index.rs"))
-};
+/// The format version of `structures.qoix`. Change it by hand in the same commit that changes
+/// the index BYTES (builder, grid pitch, id ordering, height cap, header); every older file is
+/// then refused until `structures-finalize` reruns. It used to be a content hash of ten source
+/// files, so a comment edit in `constants.rs` on 2026-09-18 declared every index in the world
+/// stale and every popup returned 500. The value is that last hash, so the files of release
+/// r260910 stay valid.
+pub const CACHE_CODE_VER: u64 = 0x513e_d5eb_7ee8_1826;
 
 pub const STRUCTURES_ARROW: &str = "structures.arrow";
 pub const STRUCTURES_QOIX: &str = "structures.qoix";

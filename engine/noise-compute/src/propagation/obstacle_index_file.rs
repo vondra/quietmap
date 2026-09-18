@@ -13,8 +13,7 @@
 //! (`source-reader`'s) job, handed in through [`IndexBlob`].
 //!
 //! Three u64s in the header carry the file's provenance, never a comment:
-//! * `code_ver` — a content hash of every source file that decides the bytes
-//!   (built on [`BUILDER_CODE_VER`]; the caller folds its own decisions in).
+//! * `code_ver` — the caller's explicit format version of the bytes.
 //!   [`ObstacleIndex::from_blob`] refuses any other value: the builder moved,
 //!   so the pipeline step must run again.
 //! * `data_ver` — the builder's fingerprint of the INPUT table. The mapping
@@ -147,10 +146,8 @@ impl<T: Copy + std::fmt::Debug + 'static> std::fmt::Debug for IndexArray<T> {
     }
 }
 
-/// FNV-1a over `bytes`, seeded with `seed` — `const` so a source-content hash
-/// can be computed at COMPILE time from `include_bytes!`. Not a cryptographic
-/// hash and does not need to be: it fingerprints our own build inputs, and the
-/// only adversary is a forgotten rebuild.
+/// FNV-1a over `bytes`, seeded with `seed`: the fingerprint of an index's input table. Not a
+/// cryptographic hash and does not need to be; the only adversary is a forgotten rebuild.
 pub const fn fnv1a64(seed: u64, bytes: &[u8]) -> u64 {
     let mut h = seed;
     let mut i = 0;
@@ -164,25 +161,6 @@ pub const fn fnv1a64(seed: u64, bytes: &[u8]) -> u64 {
 
 /// FNV-1a offset basis — the seed for a fresh chain.
 pub const FNV1A64_SEED: u64 = 0xcbf2_9ce4_8422_2325;
-
-/// Content hash of every source file that decides an index's BYTES: the
-/// builder and its grid pitch, this file's layout, the WKB ring parser, the
-/// low-profile height cap and the metric-frame constants. Editing any of them
-/// rotates the version, so every cached file written by the old code is refused
-/// on the next start — the same safe-over-invalidation rule
-/// `scripts/layer-codever.py` applies to tiles, enforced by the compiler instead
-/// of by remembering to bump a number.
-///
-/// Callers that add decisions of their OWN on top (id ordering, input
-/// fingerprint) must fold their source in too — see `source-reader`'s
-/// `square_obstacle_index::CACHE_CODE_VER`.
-pub const BUILDER_CODE_VER: u64 = {
-    let h = fnv1a64(FNV1A64_SEED, include_bytes!("obstacle_index.rs"));
-    let h = fnv1a64(h, include_bytes!("obstacle_index_file.rs"));
-    let h = fnv1a64(h, include_bytes!("../wkb.rs"));
-    let h = fnv1a64(h, include_bytes!("../low_profile.rs"));
-    fnv1a64(h, include_bytes!("../constants.rs"))
-};
 
 /// "Quiet Obstacle IndeX" — a stray file identifies itself, like the tile
 /// store's `QTSI`/`QTSD`.
@@ -645,19 +623,5 @@ mod tests {
         assert!(index_file_provenance(&bytes[..HEADER_BYTES - 1])
             .unwrap_err()
             .contains("truncated"));
-    }
-
-    /// The content hash must actually cover the builder's sources — a constant
-    /// that never moves is worse than no versioning at all, because it looks
-    /// like versioning.
-    #[test]
-    fn builder_code_ver_hashes_real_sources() {
-        assert_ne!(BUILDER_CODE_VER, 0);
-        assert_ne!(BUILDER_CODE_VER, FNV1A64_SEED);
-        assert_ne!(
-            BUILDER_CODE_VER,
-            fnv1a64(FNV1A64_SEED, include_bytes!("obstacle_index.rs")),
-            "the chain must fold in more than the first file"
-        );
     }
 }
