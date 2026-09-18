@@ -22,12 +22,12 @@ test('polyline distance handles empty, singleton, body and endpoint cases', () =
   assert.ok(pointToPolylineDist(50, 13.99, [[14, 50], [14.01, 50]]) > 700)
 })
 
-test('ranked point grid enforces class, strict radius and antimeridian neighbors', () => {
+test('point grid enforces the caller\'s compatibility, strict radius and antimeridian neighbors', () => {
   const incompatible = { latitude: 0, longitude: 179.999, rank: 4, id: 'wrong-class' }
   const compatible = { latitude: 0, longitude: -179.999, rank: 1, id: 'seam-neighbor' }
   const grid = buildOneHundredthDegreePointGrid([incompatible, compatible])
-  assert.equal(nearestCompatiblePointWithin200Metres(0, 180, 1, 1, grid), compatible)
-  assert.equal(nearestCompatiblePointWithin200Metres(0.01, 180, 1, 1, grid), null)
+  assert.equal(nearestCompatiblePointWithin200Metres(0, 180, grid, point => point.rank === 1), compatible)
+  assert.equal(nearestCompatiblePointWithin200Metres(0.01, 180, grid, point => point.rank === 1), null)
 })
 
 

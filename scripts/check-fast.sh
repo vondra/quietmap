@@ -22,10 +22,14 @@ if [ "$HALF" != "rust" ]; then
   # Each test module imports its neighbours by bare name, so it runs from its
   # own directory; discover does not descend into these package-less folders.
   step "scripts: Python unittest modules, each from its own directory"
+  # The producers run on the repository's virtualenv (pyarrow, rasterio, system GDAL), so the
+  # tests do too; a plain python3 lacks one half of those modules on every build box.
+  PYTHON="$ROOT/.venv/bin/python"
+  [ -x "$PYTHON" ] || PYTHON=python3
   for directory in scripts scripts/rasters scripts/roads scripts/square-country-city \
       scripts/structures scripts/overture scripts/ships; do
     echo "-- $directory"
-    (cd "$directory" && python3 -m unittest discover -s . -p 'test_*.py')
+    (cd "$directory" && "$PYTHON" -m unittest discover -s . -p 'test_*.py')
   done
 
   step "scripts: shell syntax"

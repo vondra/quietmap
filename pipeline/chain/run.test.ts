@@ -10,7 +10,7 @@ import { squareCountryCityPreflight, commandFor, runChain, spawnStep } from './r
 
 test('world plan keeps national roads, GTFS, proxies and world-covering heuristics', () => {
   const ids = buildPlan({ kind: 'world' }).map(step => step.id)
-  assert.equal(ids[0], 'roads-built-up')
+  assert.equal(ids[0], 'roads-restore-parents')
   assert.equal(ids.at(-1), 'roads-taper')
   for (const cc of [...ROAD_NATIONAL, ...ROAD_NATIONAL_POLICIES, ...ROAD_NATIONAL_NETWORKS]) assert.ok(ids.includes(`roads-${cc}`), cc)
   assert.ok(ids.includes('roads-us'))

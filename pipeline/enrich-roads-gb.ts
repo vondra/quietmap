@@ -67,7 +67,7 @@ function countPoint(row: CsvRow): DftCountPoint | null {
   if (!id || !Number.isSafeInteger(year) || !Number.isFinite(latitude) ||
       !Number.isFinite(longitude) || latitude < 49 || latitude > 61 ||
       longitude < -8.5 || longitude > 2.5) return null
-  const point: DftCountPoint = { ...roadObservation(id, 'unknown'),
+  const point: DftCountPoint = { ...roadObservation(id, 'both-directions'),
     ref: (row.road_name ?? '').replace(/\s+/g, ''),
     latitude,
     longitude,
@@ -113,9 +113,9 @@ function validateCachedPoints(value: unknown, path: string): DftCountPoint[] {
   return value.map((entry, index) => {
     if (!entry || typeof entry !== 'object') throw new Error(`invalid DfT cache row ${index}: ${path}`)
     const old = entry as Record<string, unknown>
-    if (typeof old.observationId !== 'string' || !old.observationId || old.countBasis !== 'unknown') throw new Error(`DfT cache row ${index} lost its original observation identity: ${path}`)
+    if (typeof old.observationId !== 'string' || !old.observationId) throw new Error(`DfT cache row ${index} lost its original observation identity: ${path}`)
     const id = old.observationId
-    const point: DftCountPoint = { ...roadObservation(id, 'unknown'),
+    const point: DftCountPoint = { ...roadObservation(id, 'both-directions'),
       ref: String(old.ref ?? ''),
       latitude: Number(old.latitude),
       longitude: Number(old.longitude),
@@ -226,7 +226,7 @@ export async function enrichGreatBritainRoads(
         const point = matchDftPoint(row, pointsByRef)
         return point ? { countBasis: point.countBasis, observationId: point.observationId,
           light: point.light, medium: point.medium, heavy: point.heavy,
-          moto: point.moto, sourceId: SOURCE_ID,
+          moto: point.moto, sourceId: SOURCE_ID, estimatedClasses: 0, // DfT publishes every class
         } : null
       },
       undefined,

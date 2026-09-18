@@ -22,6 +22,7 @@ export interface NewZealandRoadObservation extends RoadObservation {
   latitude: number
   longitude: number
   rank: number | null
+  isRamp: boolean
   total: number
   heavyPercent: number
   light: number
@@ -132,8 +133,10 @@ export function parseNewZealandRoadSources(
       const rawHeavy = properties!.loadingPcHeavy
       const heavyPercent = typeof rawHeavy === 'number' && Number.isFinite(rawHeavy) &&
         rawHeavy >= 0 && rawHeavy <= 100 ? rawHeavy : 8
-      result.observations.push({ source: 'nzta', countBasis: 'unknown', observationId: `nzta:${roadFeatureObservation(feature as object, 'unknown').observationId}`, sourceRow: page * 2000 + sourceRow,
-        latitude: point[0], longitude: point[1], rank, total, heavyPercent,
+      result.observations.push({ source: 'nzta', countBasis: 'both-directions', observationId: `nzta:${roadFeatureObservation(feature as object, 'both-directions').observationId}`, sourceRow: page * 2000 + sourceRow,
+        // NZTA carriageway element names end `-R<n>` (or spell `ON RMP`/`OFF RMP`) on ramps.
+        latitude: point[0], longitude: point[1], rank,
+        isRamp: /-R\d+\b|\bRMP\b/.test(String(properties!.roadName ?? '')), total, heavyPercent,
         ...split(total, heavyPercent) })
     }
   }
@@ -155,8 +158,8 @@ export function parseNewZealandRoadSources(
     const rawHeavy = properties!.pcheavy
     const heavyPercent = typeof rawHeavy === 'number' && Number.isFinite(rawHeavy) &&
       rawHeavy >= 0 && rawHeavy <= 100 ? rawHeavy : 0
-    result.observations.push({ source: 'at', countBasis: 'unknown', observationId: `at:${roadFeatureObservation(feature as object, 'unknown').observationId}`, sourceRow, latitude: point[0], longitude: point[1],
-      rank: null, total, heavyPercent, ...split(total, heavyPercent) })
+    result.observations.push({ source: 'at', countBasis: 'street-cross-section', observationId: `at:${roadFeatureObservation(feature as object, 'street-cross-section').observationId}`, sourceRow, latitude: point[0], longitude: point[1],
+      rank: null, isRamp: false, total, heavyPercent, ...split(total, heavyPercent) })
   }
   if (result.observations.length === 0) throw new Error('New Zealand road sources have no usable measurements')
   return result

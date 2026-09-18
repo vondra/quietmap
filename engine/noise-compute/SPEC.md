@@ -102,10 +102,42 @@ Emission consumes per-class shares via `NormalizedRoad::period_pcts` into the
 single `build_period_flows` — there is no second day/night split. Unprofiled
 rows keep the class-default `TIME_DIST_{MOTORWAY,URBAN}` behaviour unchanged.
 
-The producer (`roads-finalize`) resolves observations, priors, class defaults,
-directional allocation, lane and access factors before publication; the
-class-default cascade (`noise_compute::defaults::resolve_traffic_default`)
-and the estimate factors (`normalize::road::{access_factor, lane_ratio}`)
+The producer (`roads-finalize`) resolves observations, priors, directional
+allocation, lane and access factors before publication.
+
+Count basis (`traffic_count_basis`, build-only): 0 unknown, 1 directional,
+2 both-directions, 3 already allocated, 4 street-cross-section. A directional
+count is kept as published. Every other count is shared 1/n between the n
+parallel one-way carriageways of the same class, country and corridor found
+within 50 m. A national census publishes the two-way total of a road
+(release r260910, classes 0-1: paired one-way rows sit at a median 0.50 of the
+adjacent two-way count, lone rows at 1.00), so a both-directions count on a
+LONE one-way row of class 0-2 with a ref or name takes 0.5: its sibling was
+missed. Classes 3+ and links keep a lone count whole (30 % of their measured
+one-way km are genuine one-way streets). A street-cross-section count (city
+profile counters) is that one street's own total and stays whole on a lone
+one-way street, which also keeps the publisher's class status. Every shared
+count, unknown scope, and any other count on a one-way row is published with
+all four `traffic_estimated` bits set; otherwise the bits are the adapter's:
+clear only for a class the publisher counted, never inferred from the basis.
+
+Priors for rows without a count (`noise_compute::defaults::resolve_traffic_default`):
+hand-set city (São Paulo, Rio, Bangkok) and country (TH, BR) section totals
+first. Otherwise motorway, trunk and primary take a measured world rate per
+lane and per stored carriageway, vehicles/lane/day one-way / two-way:
+motorway 6,379 / 3,010, trunk 4,533 / 2,594, primary 4,250 / 2,800
+(length-weighted medians of measured rows of release r260910 over 174k / 218k /
+200k km; leave-one-country-out MAE 3.2-3.7 dB, |bias| < 0.6 dB). The lanes tag
+counts when 1-6; a row without one takes the median whole count of untagged
+measured rows (motorway 5,200 / 6,019, trunk 1,810 / 3,045, primary
+5,882 / 3,719). The vehicle-class split keeps the `WORLD_DEFAULT` proportions
+of the class. Such a prior is per carriageway by construction: no carriageway
+share, one-way half or `lane_ratio` applies, only `access_factor`. Classes
+3-12 and every hand-set arm are both-directions section totals x
+`normalize::road::lane_ratio` x share (1/n matched carriageways, 0.5 for a
+standalone one-way row) x `access_factor`. No country or continent factor
+exists: vehicles per paved km measured worse than none in every class, and
+nine alternative predictors failed to beat a constant. These tables
 remain authoritative for that build step. Serving consumes the prepared
 counts verbatim: no traffic default, oneway share, lane or access factor is
 re-applied at runtime, and a row stamped `source_id` 0 with positive counts

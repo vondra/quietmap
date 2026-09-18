@@ -201,6 +201,8 @@ export interface PointCoordinates {
 export interface RankedPoint extends PointCoordinates {
   /** Null means the source does not publish a compatible functional class. */
   rank: number | null
+  /** The publisher marks this count as taken on a ramp, not on the through carriageway. */
+  isRamp?: boolean
 }
 
 const POINT_GRID_SCALE = 100
@@ -299,18 +301,17 @@ export function* pointGridCandidates<T>(
   }
 }
 
-/** Find the nearest class-compatible point under the proven strict 200 m cap. */
-export function nearestCompatiblePointWithin200Metres<T extends RankedPoint>(
+/** Find the nearest compatible point under the proven strict 200 m cap. */
+export function nearestCompatiblePointWithin200Metres<T extends PointCoordinates>(
   latitude: number,
   longitude: number,
-  roadRank: number,
-  rankTolerance: number,
   grid: ReadonlyMap<string, readonly T[]>,
+  isCompatible: (point: T) => boolean,
 ): T | null {
   let closest: T | null = null
   let closestDistance = 200
   for (const point of pointGridCandidates(latitude, longitude, closestDistance, grid)) {
-    if (point.rank !== null && Math.abs(point.rank - roadRank) > rankTolerance) continue
+    if (!isCompatible(point)) continue
     const distance = haversineM(latitude, longitude, point.latitude, point.longitude)
     if (distance < closestDistance) {
       closest = point

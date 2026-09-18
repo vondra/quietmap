@@ -192,7 +192,7 @@ export class SourceTransportTopology implements Disposable {
 
   passagePieces(passage: { way: string; from: number; to: number }): SourcePiecePassage[] {
     const nodes = this.wayNodes(passage.way)
-    if (!nodes) throw new Error(`source railway missing for passage ${passage.way}`)
+    if (!nodes) throw new Error(`source way missing for passage ${passage.way}`)
     const distances = sourceNodeDistances(nodes)
     const lower = Math.min(passage.from, passage.to), upper = Math.max(passage.from, passage.to)
     if (!Number.isFinite(lower) || !Number.isFinite(upper) || lower < 0 || upper > distances.at(-1)! || lower === upper) {
@@ -222,7 +222,7 @@ export class SourceTransportTopology implements Disposable {
 
   pieceExtent(wayId: string, segmentIndex: number): { square: string; from: number; to: number } {
     const nodes = this.wayNodes(wayId)
-    if (!nodes) throw new Error(`source railway missing for piece ${wayId}:${segmentIndex}`)
+    if (!nodes) throw new Error(`source way missing for piece ${wayId}:${segmentIndex}`)
     const distances = sourceNodeDistances(nodes)
     const row = this.pieceById.get(wayId, segmentIndex) as
       { square: string; start_vertex: number; start_fraction: number; end_vertex: number; end_fraction: number } | undefined
@@ -258,7 +258,7 @@ export class SourceTransportTopology implements Disposable {
     const result = new Map<string, { start: [number, number]; end: [number, number]; lengthM: number }>()
     for (const wayId of new Set(wayIds)) {
       const nodes = this.wayNodes(wayId)
-      if (!nodes) throw new Error(`source railway missing ${wayId}`)
+      if (!nodes) throw new Error(`source way missing ${wayId}`)
       const distances = sourceNodeDistances(nodes)
       const at = (vertex: number, fraction: number): { point: [number, number]; distance: number } => {
         assertSourcePosition(nodes, wayId, vertex, fraction)
@@ -297,6 +297,11 @@ export class SourceTransportTopology implements Disposable {
       }
     }
     return result
+  }
+
+  squarePieceKeys(square: string): string[] {
+    return Array.from(this.pieces.iterate(square, this.family), raw =>
+      transportPieceKey(raw.way_id as string, raw.segment_idx as number))
   }
 
   squarePieces(square: string): Map<string, SegmentEndpointKeys> {

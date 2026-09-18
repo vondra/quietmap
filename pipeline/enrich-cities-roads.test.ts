@@ -17,7 +17,7 @@ import { enrichMunicipalRoads } from './enrich-cities-roads.js'
 const directory = mkdtempSync(resolve(tmpdir(), 'municipal-road-tests-'))
 after(() => rmSync(directory, { recursive: true, force: true }))
 const coverage = new Set([1, 2, 3, 4, 5, 9, 11, 12])
-const record = (street: string, line?: CityRoadRecord['line']): CityRoadRecord => ({ countBasis: 'unknown', observationId: street, street, light: 9000, medium: 10, heavy: 500, moto: 0, ...(line ? { line } : {}) })
+const record = (street: string, line?: CityRoadRecord['line']): CityRoadRecord => ({ countBasis: 'unknown', observationId: street, street, light: 9000, medium: 10, heavy: 500, moto: 0, estimatedClasses: 8, ...(line ? { line } : {}) })
 function row(name: string, roadClass: number, offsetM: number, vertical = false): RoadRow {
   const lat = 48.2 + offsetM / 110540, lon = 16.37
   return { name, roadClass, startLat: lat, startLon: lon, endLat: vertical ? lat + 0.0008 : lat,

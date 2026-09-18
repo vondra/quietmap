@@ -7,13 +7,9 @@ import { listPreparedSquares } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/provenance.js'
 import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import { loadNorwegianNvdbSource, type NorwegianNvdbSegment } from './lib/roads-no-source.js'
-import {
-  buildOneHundredthDegreePointGrid, nearestCompatiblePointWithin200Metres,
-} from './lib/spatial.js'
+import { buildOneHundredthDegreePointGrid } from './lib/spatial.js'
 import { SOURCE_ID_NO_NATIONAL_ROADS } from './lib/source-ids.generated.js'
-import {
-  osmRoadClassRank, ROAD_CLASS_RANK_TOLERANCE, writeRoadAadt, type RoadRow,
-} from './lib/roads-arrow.js'
+import { nearestCountWithin200Metres, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
 
 const SOURCE_ID = SOURCE_ID_NO_NATIONAL_ROADS
 const NORWAY_BBOX = [57.9, 4.5, 71.2, 31.2] as const
@@ -27,10 +23,7 @@ export async function enrichNorwegianRoads(
   const squares = listPreparedSquares(preparedDirectory, NORWAY_BBOX)
   if (squares.length === 0) throw new Error(`no Norwegian roads.arrow squares found under ${preparedDirectory}`)
   const grid = buildOneHundredthDegreePointGrid(segments)
-  const match = (row: RoadRow): NorwegianNvdbSegment | null =>
-    nearestCompatiblePointWithin200Metres(
-      row.midLat, row.midLon, osmRoadClassRank(row.roadClass), ROAD_CLASS_RANK_TOLERANCE, grid,
-    )
+  const match = (row: RoadRow): NorwegianNvdbSegment | null => nearestCountWithin200Metres(row, grid)
   const result = { rows: 0, matched: 0, retracted: 0, skipped: 0, skippedForeign: 0,
     squares: squares.length, squaresUpdated: 0 }
   for (const square of squares) {
@@ -39,7 +32,7 @@ export async function enrichNorwegianRoads(
       row => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const segment = match(row)
-        return segment ? { ...roadObservation(String(segment.sourceId), 'unknown'),
+        return segment ? { ...roadObservation(String(segment.sourceId), 'both-directions'),
           light: segment.light, medium: segment.medium, heavy: segment.heavy,
           moto: segment.moto, sourceId: SOURCE_ID,
         } : null

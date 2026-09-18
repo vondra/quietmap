@@ -6,7 +6,7 @@ import { tableFromIPC } from 'apache-arrow'
 import { iso2Code } from './prepared-grid.js'
 import { bytes, writeRoadsFixture } from './road-test-fixture.js'
 import {
-  disjointVehicleClassCountsFitPublishedTotal, osmRoadClassRank, writeRoadAadt,
+  disjointVehicleClassCountsFitPublishedTotal, osmRoadClassRank, roadClassTakesCount, writeRoadAadt,
   writeRoadTimeProfiles, type RoadRow,
 } from './roads-arrow.js'
 
@@ -37,6 +37,19 @@ test('road-class rank keeps majors, collapses links and excludes minors', () => 
   assert.deepEqual([0, 1, 2, 3, 4].map(osmRoadClassRank), [0, 1, 2, 3, 4])
   assert.deepEqual([10, 11, 12].map(osmRoadClassRank), [0, 1, 2])
   assert.deepEqual([5, 6, 7, 8, 9].map(osmRoadClassRank), [6, 6, 6, 6, 6])
+})
+
+test('a mainline count never stamps a slip road, whatever its rank says', () => {
+  // The I/10 census section at Turnov (rank 1) stamped a trunk_link with 24,254 vehicles a day.
+  assert.deepEqual([1, 0, 2, 11, 10, 12].map(roadClass => roadClassTakesCount(roadClass, { rank: 1 })),
+    [true, true, true, false, false, false])
+  assert.equal(roadClassTakesCount(11, { rank: null }), false)
+})
+
+test('a publisher ramp count stamps slip roads of its rank and never the mainline', () => {
+  const ramp = { rank: 0, isRamp: true }
+  assert.deepEqual([0, 1, 10, 11, 12, 3].map(roadClass => roadClassTakesCount(roadClass, ramp)),
+    [false, false, true, true, false, false])
 })
 
 test('disjoint class totals distinguish exact from independent integer rounding', () => {
@@ -183,6 +196,14 @@ test('source basis and identity survive writes, replace together and retract tog
   table = tableFromIPC(bytes(path))
   assert.deepEqual([...table.getChild('traffic_count_basis')!], [0, 2])
   assert.deepEqual([...table.getChild('traffic_observation_id')!], ['', 'counter:1'])
+})
+
+test('a declared count basis never declares classes counted: only the adapter clears estimated bits', async () => {
+  const path = writeRoadsFixture('class-status.arrow', [2, 2])
+  // Row 0 is a measured two-way total split by policy; row 1 publishes its heavy count.
+  await writeRoadAadt(path, (_row, index) => ({ ...payload(), countBasis: 'both-directions' as const,
+    ...(index === 1 ? { estimatedClasses: 1 | 2 | 8 } : {}) }))
+  assert.deepEqual([...tableFromIPC(bytes(path)).getChild('traffic_estimated')!], [15, 11])
 })
 
 test('writeRoadTimeProfiles stamps only the sparse profile reference and dictionary', async () => {

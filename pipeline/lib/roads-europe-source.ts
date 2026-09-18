@@ -129,8 +129,7 @@ export function parseEuropeanCityTraffic(city: string, path: string, bytes: Buff
     result.records.push({ coordinates, ...counts,
       sourceId: SOURCE_ID_EU_CITY_TRAFFIC,
       ...roadObservation({ city, feature: index, observation: feature },
-        properties.raw_oneway === true ? 'directional'
-          : properties.raw_oneway === false ? 'both-directions' : 'unknown'),
+        properties.raw_oneway === true ? 'directional' : 'street-cross-section'),
       sourceOsmId: typeof properties.osmid === 'number' && Number.isSafeInteger(properties.osmid)
         && properties.osmid > 0 ? properties.osmid : null,
       estimatedClasses: /estimat/i.test(String(properties.raw_techno ?? '')) ? 15

@@ -62,8 +62,9 @@ export async function enrichIrishRoads(
     const write = await writeRoadAadt(resolve(preparedDirectory, square, 'roads.arrow'), row => {
       if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
       const observation = match(row)
-      return observation ? { ...roadObservation(observation.cosit, 'unknown'), light: observation.light, medium: observation.medium,
-        heavy: observation.heavy, moto: observation.moto, sourceId: SOURCE_ID } : null
+      return observation ? { ...roadObservation(observation.cosit, 'both-directions'), light: observation.light, medium: observation.medium,
+        heavy: observation.heavy, moto: observation.moto, sourceId: SOURCE_ID,
+        estimatedClasses: 0 } : null // TII publishes every class bin
     }, undefined, undefined, { sourceIds: [SOURCE_ID], when: row => match(row) === null })
     result.rows += write.rows
     result.matched += write.matched

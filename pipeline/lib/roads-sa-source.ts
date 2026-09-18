@@ -5,7 +5,7 @@ import { pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, ne
 import { parse } from 'csv-parse/sync'
 import { readPinnedRoadSource } from './pinned-road-source.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
-import { osmRoadClassRank, ROAD_CLASS_RANK_TOLERANCE, type RoadRow } from './roads-arrow.js'
+import { isSlipRoadClass, osmRoadClassRank, ROAD_CLASS_RANK_TOLERANCE, type RoadRow } from './roads-arrow.js'
 import { inBbox } from './spatial.js'
 
 const MOT_FILE = { relativePath: 'sa/mot-traffic-density.csv', sha256: 'ac80f4557a5aede318230c826b809a4a77796c6b32d0ed5bc2c4ad18e7cf1339' } as const
@@ -89,10 +89,11 @@ function split(aadt: number) {
 }
 
 export function matchSaudiRoad(row: RoadRow, source: SaudiRoadSource) {
-  for (const token of String(row.ref ?? '').split(/[;,]/)) {
+  // A slip road inherits the mainline ref; the route average was never counted on it.
+  for (const token of isSlipRoadClass(row.roadClass) ? [] : String(row.ref ?? '').split(/[;,]/)) {
     const roadRef = token.trim().replace(/^[A-Za-z]+/, '')
     const aadt = source.refAadt.get(roadRef)
-    if (aadt !== undefined) return { ...roadObservation(`road-average:${roadRef}`, 'unknown'), kind: 'mot' as const, ...split(aadt) }
+    if (aadt !== undefined) return { ...roadObservation(`road-average:${roadRef}`, 'both-directions'), kind: 'mot' as const, ...split(aadt) }
   }
   const rank = osmRoadClassRank(row.roadClass)
   if (inBbox(row.midLat, row.midLon, RIYADH_BBOX)) {

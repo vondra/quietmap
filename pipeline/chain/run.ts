@@ -33,6 +33,8 @@ export function commandFor(step: PlanStep, paths: ChainPaths): { argv: string[];
   const prepared = ['--prepared-dir', paths.preparedDir]
   const enrichment = ['--enrichment-dir', paths.enrichmentDir]
   switch (step.kind) {
+    case 'restore-road-parents':
+      return tsx('restore-road-parents.ts', prepared)
     case 'built-up':
       return {
         argv: [paths.python, resolve(paths.repoRoot, 'scripts/roads/build_built_up.py'),

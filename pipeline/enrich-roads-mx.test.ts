@@ -18,7 +18,7 @@ const DIRECTORY = mkdtempSync(join(tmpdir(), 'enrich-roads-mx-test-'))
 after(() => rmSync(DIRECTORY, { recursive: true, force: true }))
 
 const segment = (overrides: Partial<MexicanSictSegment> = {}): MexicanSictSegment => ({
-  countBasis: 'unknown', observationId: '1',
+  countBasis: 'both-directions', observationId: '1',
   sourceRow: 0, lines: [[[-100.1, 20], [-99.9, 20]]], total: 1000,
   fractions: { light: 0.8, medium: 0.07, heavy: 0.08, moto: 0.05 },
   allowedRoadClassMask: mexicanAllowedRoadClassMask('Federal', 'Libre'), ...overrides,

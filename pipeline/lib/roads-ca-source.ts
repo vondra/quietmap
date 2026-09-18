@@ -116,7 +116,7 @@ export function parseQuebecDjmaSource(raw: string): QuebecDjmaSource {
       result.invalidGeometrySkipped++
       continue
     }
-    result.sections.push({ sourceRow, ...roadFeatureObservation(feature as object, 'unknown'), route, rank: quebecRouteRank(route),
+    result.sections.push({ sourceRow, ...roadFeatureObservation(feature as object, 'both-directions'), route, rank: quebecRouteRank(route),
       latitude: centroid[0], longitude: centroid[1], ...traffic,
       ...splitQuebecDjma(traffic.total, traffic.truckPercent) })
   }

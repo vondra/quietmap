@@ -80,7 +80,7 @@ export async function enrichSpanishRoads(
       (row) => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const section = match(row)
-        return section ? { ...roadObservation(section.featureId, 'unknown'),
+        return section ? { ...roadObservation(section.featureId, 'both-directions'),
           light: section.aadt_light,
           medium: section.aadt_medium,
           heavy: section.aadt_heavy,

@@ -16,7 +16,7 @@ const road: RoadRow = { startLat: -12, startLon: -77, endLat: -12, endLon: -77,
 
 test('Peru uses dIMD before classification and applies the Lima split', () => {
   assert.deepEqual(matchPeruRoad(road, source([line({ dIMD: 1000, cSuperfici: '1', cClasifica: 'TRANSVERSAL' })])),
-    { countBasis: 'unknown', observationId: 'fixture', kind: 'imd', light: 1300, medium: 120, heavy: 280, moto: 300 })
+    { countBasis: 'both-directions', observationId: 'fixture', kind: 'imd', light: 1300, medium: 120, heavy: 280, moto: 300 })
 })
 
 test('Peru retains departmental paved fallback and rejects lower OSM classes', () => {

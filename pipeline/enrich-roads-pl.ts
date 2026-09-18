@@ -9,7 +9,7 @@ import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-l
 import { loadPolishGprSource, type PolishGprSegment } from './lib/roads-pl-source.js'
 import { pointToPolylineDist } from './lib/spatial.js'
 import { SOURCE_ID_PL_NATIONAL_ROADS } from './lib/source-ids.generated.js'
-import { writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { isSlipRoadClass, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
 
 const SOURCE_ID = SOURCE_ID_PL_NATIONAL_ROADS
 const POLAND_BBOX = [49, 14, 55, 24.5] as const
@@ -54,6 +54,7 @@ export function matchPolishGpr(
   row: RoadRow,
   index: PolishRoadIndex,
 ): PolishGprSegment | null {
+  if (isSlipRoadClass(row.roadClass)) return null
   let closestNational: PolishGprSegment | null = null
   let closestDistance = MAXIMUM_NATIONAL_DISTANCE_M
   let provincial: PolishGprSegment | null = null
@@ -90,9 +91,9 @@ export async function enrichPolishRoads(
       row => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const segment = match(row)
-        return segment ? { ...roadObservation(segment.sourceId, 'unknown'),
+        return segment ? { ...roadObservation(segment.sourceId, 'both-directions'),
           light: segment.light, medium: segment.medium, heavy: segment.heavy,
-          moto: segment.moto, sourceId: SOURCE_ID,
+          moto: segment.moto, sourceId: SOURCE_ID, estimatedClasses: 0, // GPR publishes every category
         } : null
       },
       undefined,

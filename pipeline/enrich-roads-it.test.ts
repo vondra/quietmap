@@ -21,7 +21,7 @@ const feature = (overrides: Record<string, unknown> = {}) => ({
   geometry: { type: 'Point', coordinates: [12, 42, 10] }, ...overrides,
 })
 const station = (overrides: Partial<ItalianTgmStation> = {}): ItalianTgmStation => ({
-  countBasis: 'unknown', observationId: 'station-1', sourceRow: 0, ref: 'A1', latitude: 42, longitude: 12, total: 1000, ...overrides,
+  countBasis: 'both-directions', observationId: 'station-1', sourceRow: 0, ref: 'A1', latitude: 42, longitude: 12, total: 1000, ...overrides,
 })
 const road = (overrides: Partial<RoadRow> = {}): RoadRow => ({
   startLat: 42, startLon: 12, endLat: 42.001, endLon: 12.001,

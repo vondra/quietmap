@@ -16,6 +16,8 @@ export interface CityRoadRecord extends RoadObservation {
   medium: number
   heavy: number
   moto: number
+  /** `RoadAadt.estimatedClasses`: the classes this counter does not publish. */
+  estimatedClasses: number
   line?: readonly CityCoordinate[]
 }
 export const MUNICIPAL_ROAD_SOURCES = [
@@ -66,9 +68,9 @@ export function parsePrahaRows(rows: readonly (readonly unknown[])[]) {
   // Legerova (35,800) + Sokolská (32,300) in the 2025 edition, so a one-way street's profile
   // is that street's full flow, never a half to be doubled or halved.
   return { sections, records: [...streets].map(([street, a]): CityRoadRecord => ({
-    ...roadObservation({ street, sections: a.sections.sort() }, 'both-directions'),
+    ...roadObservation({ street, sections: a.sections.sort() }, 'street-cross-section'),
     street: PRAHA_STREET_NAMES[street] ?? street, light: Math.round(a.light / a.length),
-    medium: Math.round(a.medium / a.length), heavy: Math.round(a.heavy / a.length), moto: 0,
+    medium: Math.round(a.medium / a.length), heavy: Math.round(a.heavy / a.length), moto: 0, estimatedClasses: 8,
   })) }
 }
 export function parseBrno(text: string) {
@@ -94,8 +96,8 @@ export function parseBrno(text: string) {
     const heavy = Math.round(total * percent / 100)
     for (const part of parts) {
       if (!Array.isArray(part) || part.length < 2) throw new Error('Brno section has an empty line')
-      records.push({ ...roadObservation(f.properties.id != null || f.properties.ObjectId != null ? String(f.properties.id ?? f.properties.ObjectId) : f, 'unknown'), street: `BKOM section ${f.properties.id ?? f.properties.ObjectId}`,
-        light: total - heavy, medium: 0, heavy, moto: 0, line: part.map(coordinate) })
+      records.push({ ...roadObservation(f.properties.id != null || f.properties.ObjectId != null ? String(f.properties.id ?? f.properties.ObjectId) : f, 'street-cross-section'), street: `BKOM section ${f.properties.id ?? f.properties.ObjectId}`,
+        light: total - heavy, medium: 0, heavy, moto: 0, estimatedClasses: 2 | 8, line: part.map(coordinate) })
     }
   }
   if (records.length < 500) throw new Error('Brno has fewer than500 usable sections')
@@ -152,8 +154,8 @@ export function parseWien(values: Buffer, locations: string) {
     }
     const total = totalSum / days, heavy = heavySum / days
     if (heavy > total) throw new Error(`Wien station ${id}: truck-like total exceeds all vehicles`)
-    records.push({ ...roadObservation(`${id}:${year}`, 'both-directions'), street: names.get(id) ?? `ZNR ${id}`, light: Math.round(total - heavy), medium: 0,
-      heavy: Math.round(heavy), moto: 0, line: [point] })
+    records.push({ ...roadObservation(`${id}:${year}`, 'street-cross-section'), street: names.get(id) ?? `ZNR ${id}`, light: Math.round(total - heavy), medium: 0,
+      heavy: Math.round(heavy), moto: 0, estimatedClasses: 2 | 8, line: [point] })
   }
   if (records.length < 50) throw new Error('Wien has fewer than50 stations after geometry join')
   return { year, noGeometry, invalidValuesSkipped, records }

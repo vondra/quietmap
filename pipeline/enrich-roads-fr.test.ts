@@ -25,7 +25,7 @@ const csv = (rows: readonly string[]): string => [HEADER, ...rows].join('\r\n')
 
 function section(overrides: Partial<CeremaCensusSection> = {}): CeremaCensusSection {
   return {
-    countBasis: 'unknown', observationId: '1',
+    countBasis: 'both-directions', observationId: '1',
     route: 'A0001', ref: 'A1', lat: 48.8, lon: 2.3,
     coords: [[2.3, 48.8], [2.31, 48.81]],
     tmja: 1000, ratio_pl: 0.17,

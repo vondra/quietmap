@@ -16,9 +16,9 @@ import type { RoadLoaderArguments } from './lib/road-loader-cli.js'
 const DIRECTORY = mkdtempSync(join(tmpdir(), 'enrich-roads-us-test-'))
 after(() => rmSync(DIRECTORY, { recursive: true, force: true }))
 
-function feature(aadt: unknown = 10000, functionalClass: unknown = 1, longitude = -84, latitude = 34) {
+function feature(aadt: unknown = 10000, functionalClass: unknown = 1, longitude = -84, latitude = 34, facilityType = 2) {
   return {
-    properties: { AADT: aadt, F_SYSTEM: functionalClass },
+    properties: { AADT: aadt, F_SYSTEM: functionalClass, FACILITY_TYPE: facilityType },
     geometry: { type: 'LineString', coordinates: [[longitude, latitude], [longitude, latitude]] },
   }
 }
@@ -52,6 +52,16 @@ test('FHWA parser preserves all five class splits and genuine positive half-coun
   )
   assert.equal(decimal.longitude, -122.291209293)
   assert.equal(parseUsPage({ features: [feature(100, 6), feature(0)] }).segments.length, 0)
+})
+
+test('FHWA facility type decides the count scope; a page cached without it fails', () => {
+  const scopes = parseUsPage({ features: [1, '4', 2, null].map(type => feature(10000, 1, -84, 34, type as number)) }).segments
+  assert.deepEqual(scopes.map(({ countBasis, isRamp }) => [countBasis, isRamp]),
+    [['directional', false], ['directional', true], ['both-directions', false], ['unknown', false]])
+  const stale = feature()
+  delete (stale.properties as Partial<typeof stale.properties>).FACILITY_TYPE
+  assert.throws(() => parseUsPage({ features: [stale] }), /no FACILITY_TYPE/)
+  assert.throws(() => parseUsPage({ features: [feature(10000, 1, -84, 34, 'ramp' as unknown as number)] }), /invalid FHWA FACILITY_TYPE/)
 })
 
 test('FHWA malformed pages/counts/coordinates fail instead of manufacturing empty source data', () => {
@@ -177,8 +187,9 @@ test('actual US z9 Arrow matching protects road class, source priority and baked
     // A registered same-tier newer source exercises the existing priority gate.
     sourceIds: [0, 0, 21, 21, 0, 24, 0],
   }), target)
+  // The motorway_link row 6 lies on an HPMS ramp section and 144 m from a mainline section.
   const features = Array.from({ length: 7 }, (_, index) =>
-    feature(398000, 1, -83.99975 + index * 0.001, 34.00025 + index * 0.001))
+    feature(index === 6 ? 3000 : 398000, 1, -83.99975 + index * 0.001, 34.00025 + index * 0.001, index === 6 ? 4 : 2))
   features.push(feature(10000, 4, -83.9984, 34.0016))
   page(options, 0, { features })
   page(options, 2000, { features: [] })
@@ -196,6 +207,7 @@ test('actual US z9 Arrow matching protects road class, source priority and baked
   )
   assert.equal(table.getChild('aadt_light')!.get(1), 9300)
   assert.equal(table.getChild('aadt_light')!.get(5), 1005)
+  assert.equal(table.getChild('aadt_light')!.get(6), 2610)
   assert.equal(result.retracted, 2) // Out-of-coverage and foreign own stamps are obsolete.
   assert.equal(table.schema.metadata.get('roads_contract'), 'country_baked_v1')
   assert.equal(table.schema.metadata.get('grid'), 'z30')

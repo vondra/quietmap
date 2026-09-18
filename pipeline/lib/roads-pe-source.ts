@@ -96,7 +96,7 @@ export function matchPeruRoad(row: RoadRow, source: PeruRoadSource) {
   const traffic = splitVehicles((observed || classifiedAadt(line)) * multiplier(tier), tier,
     peruRegion(row.midLat, row.midLon), tier === 0 && MINING_REGIONS.some(bbox => inBbox(row.midLat, row.midLon, bbox)))
   if (traffic.light + traffic.medium + traffic.heavy + traffic.moto === 0) return null
-  return { ...pinnedRoadObservation(line, observed > 0 ? 'unknown' : 'both-directions'), kind: observed > 0 ? 'imd' as const : 'network' as const, ...traffic }
+  return { ...pinnedRoadObservation(line, 'both-directions'), kind: observed > 0 ? 'imd' as const : 'network' as const, ...traffic }
 }
 
 export const PERU_ROAD_BBOX: [number, number, number, number] = [-18.4, -82.0, 0, -68.5]

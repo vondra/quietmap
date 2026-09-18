@@ -22,7 +22,7 @@ test('Indonesia prioritizes toll, preserves observed LHRT and rejects lower road
   assert.deepEqual(matchIndonesiaRoad(road, source({ toll: [line({})], regional: [line({ LHRT: 1234 })] })),
     { countBasis: 'both-directions', observationId: 'fixture', kind: 'toll', light: 48000, medium: 8000, heavy: 8000, moto: 96000 })
   assert.deepEqual(matchIndonesiaRoad(road, source({ regional: [line({ LHRT: 1234 })] })),
-    { countBasis: 'unknown', observationId: 'fixture', kind: 'lhrt', light: 370, medium: 62, heavy: 62, moto: 740 })
+    { countBasis: 'both-directions', observationId: 'fixture', kind: 'lhrt', light: 370, medium: 62, heavy: 62, moto: 740 })
   assert.equal(matchIndonesiaRoad({ ...road, roadClass: 3 }, source({ toll: [line({})] })), null)
 })
 

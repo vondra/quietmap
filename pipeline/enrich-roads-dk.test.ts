@@ -17,8 +17,8 @@ const DIRECTORY = mkdtempSync(join(tmpdir(), 'enrich-roads-dk-test-'))
 after(() => rmSync(DIRECTORY, { recursive: true, force: true }))
 
 const observation = (overrides: Partial<DanishMastraObservation> = {}): DanishMastraObservation => ({
-  countBasis: 'unknown', observationId: 'station-1', sourceRow: 0, roadNumber: 10, kilometre: 1, year: 2025,
-  latitude: 55.7, longitude: 12.5, rank: 1, total: 1000,
+  countBasis: 'both-directions', observationId: 'station-1', sourceRow: 0, roadNumber: 10, kilometre: 1, year: 2025,
+  latitude: 55.7, longitude: 12.5, rank: 1, isRamp: false, total: 1000,
   light: 890, medium: 5, heavy: 95, moto: 10, ...overrides,
 })
 const feature = (properties: Record<string, unknown>, longitude = 12.5, latitude = 55.7) => {
@@ -34,13 +34,17 @@ test('Mastra parser keeps the latest station year and preserves exact totals', (
     AAR: 2024, AADT: 900, LBIL_AADT: 90, VEJBESTYRER: 0 }
   const parsed = parseDanishMastraPages([collection([
     feature(base), feature({ ...base, AAR: 2025, AADT: 1000, LBIL_AADT: 100 }),
+    feature({ ...base, AAR: 2026, AADT: 200, VEJDEL: '3' }), // A ramp never supersedes its mainline station.
+    feature({ ...base, AADT: 480, VEJDEL: '1' }), // One carriageway of a state road is one direction.
     feature({ ...base, VEJNR: 11, KOERETOEJSART: 'CYKEL' }),
     feature({ ...base, VEJNR: 12, AADT: 0 }),
   ])])
   assert.deepEqual({ sourceRows: parsed.sourceRows, admitted: parsed.admittedRecords,
     observations: parsed.observations.length, superseded: parsed.supersededRecords,
     nonMotor: parsed.nonMotorSkipped, invalid: parsed.invalidRowsSkipped },
-  { sourceRows: 4, admitted: 2, observations: 1, superseded: 1, nonMotor: 1, invalid: 1 })
+  { sourceRows: 6, admitted: 4, observations: 3, superseded: 1, nonMotor: 1, invalid: 1 })
+  assert.equal(parsed.observations[1].isRamp, true)
+  assert.deepEqual(parsed.observations.map(({ countBasis }) => countBasis), ['both-directions', 'both-directions', 'directional'])
   assert.deepEqual({ ...parsed.observations[0], latitude: 55.7, longitude: 12.5 },
     observation({ sourceRow: 1 }))
   assert.ok(Math.abs(parsed.observations[0].latitude - 55.7) < 1e-9)

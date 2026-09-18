@@ -94,7 +94,7 @@ export function parseAmsterdamTrafficSource(raw: string): AmsterdamTrafficCensus
     const aadt_medium = Math.round(aadtTotal * MEDIUM_SHARE_OF_TOTAL)
     // Dev1 rounded both complements independently, making 99 real rows sum to AADT+1.
     const aadt_light = aadtTotal - aadt_medium
-    census.records.push({ countBasis: 'unknown', observationId: `Amsterdam:2025:${roadFeatureObservation(feature as object, 'unknown').observationId}`,
+    census.records.push({ countBasis: 'street-cross-section', observationId: `Amsterdam:2025:${roadFeatureObservation(feature as object, 'street-cross-section').observationId}`,
       sourceRow,
       longitude: coordinate[0],
       latitude: coordinate[1],

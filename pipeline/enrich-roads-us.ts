@@ -11,13 +11,12 @@ import { DATASETS } from './lib/enrichment-datasets.js'
 import { iso2Code, listPreparedSquares, lonLatToGrid } from './lib/prepared-grid.js'
 import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
-  applyRoadTimeProfiles, osmRoadClassRank, readRoadTimeProfilesSource, ROAD_CLASS_RANK_TOLERANCE,
-  writeRoadAadt, type RoadRow, type RoadTimeProfileEntry,
+  applyRoadTimeProfiles, nearestCountWithin200Metres, osmRoadClassRank, readRoadTimeProfilesSource,
+  ROAD_CLASS_RANK_TOLERANCE, writeRoadAadt, type RoadRow, type RoadTimeProfileEntry,
 } from './lib/roads-arrow.js'
 import { SOURCE_ID_US_FHWA_HPMS, shouldOverwrite } from './lib/sources.js'
 import {
-  buildOneHundredthDegreePointGrid, haversineM, nearestCompatiblePointWithin200Metres,
-  pointGridCandidates, pointSearchReach, wrapLonDeltaDeg, type RankedPoint,
+  buildOneHundredthDegreePointGrid, haversineM, pointGridCandidates, pointSearchReach, wrapLonDeltaDeg, type RankedPoint,
 } from './lib/spatial.js'
 import { writeTmasProfileSquares } from './lib/roads-us-tmas-write.js'
 import { loadTmasProfiles, TMAS_SOURCE_URL, type TmasStationProfile } from './lib/roads-us-tmas-source.js'
@@ -105,8 +104,15 @@ export function parseUsPage(page: unknown): { segments: UsRoadSegment[]; feature
     const moto = Math.round(aadt * 0.01)
     const totalHeavy = Math.round(aadt * HEAVY_SHARES[rank])
     const medium = Math.round(totalHeavy * 0.20)
-    segments.push({ ...roadFeatureObservation(feature as object, 'unknown'),
-      latitude, longitude, rank, aadt,
+    // HPMS Field Manual item 3: FACILITY_TYPE 1 is a one-way roadway and 4 a ramp; their AADT is
+    // that one direction. Every other section reports the two-way total; the publisher leaves 118
+    // of 235,257 archived sections null, whose scope stays unknown. A page cached without the
+    // field would silently make every ramp a two-way mainline, so its absence is an error.
+    if (!('FACILITY_TYPE' in values)) throw new Error('FHWA feature has no FACILITY_TYPE: download the snapshot again')
+    const facilityType = values.FACILITY_TYPE === null ? null : sourceNumber(values.FACILITY_TYPE, 'FACILITY_TYPE')
+    const countBasis = facilityType === null ? 'unknown' : facilityType === 1 || facilityType === 4 ? 'directional' : 'both-directions'
+    segments.push({ ...roadFeatureObservation(feature as object, countBasis),
+      latitude, longitude, rank, isRamp: facilityType === 4, aadt,
       light: aadt - totalHeavy - moto, medium, heavy: totalHeavy - medium, moto,
     })
   }
@@ -126,7 +132,7 @@ export async function loadUsSegments(options: RoadLoaderArguments): Promise<UsRo
     if (download) {
       if (options.enrichOnly) throw new Error(`FHWA cache page missing: ${path}`)
       const query = new URLSearchParams({
-        where: 'AADT>0', outFields: 'AADT,F_SYSTEM',
+        where: 'AADT>0', outFields: 'AADT,F_SYSTEM,FACILITY_TYPE',
         f: 'geojson', outSR: '4326', resultOffset: String(offset),
         resultRecordCount: String(PAGE_SIZE), orderByFields: 'OBJECTID',
       })
@@ -165,9 +171,7 @@ export async function enrichUsRoads(preparedDirectory: string, segments: readonl
   const grid = buildOneHundredthDegreePointGrid(segments)
   const match = (row: RoadRow) => {
     if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
-    const segment = nearestCompatiblePointWithin200Metres(
-      row.midLat, row.midLon, osmRoadClassRank(row.roadClass), ROAD_CLASS_RANK_TOLERANCE, grid,
-    )
+    const segment = nearestCountWithin200Metres(row, grid)
     return segment ? { countBasis: segment.countBasis, observationId: segment.observationId,
       light: segment.light, medium: segment.medium, heavy: segment.heavy,
       moto: segment.moto, sourceId: SOURCE_ID,
@@ -293,7 +297,11 @@ export async function applyTmasProfileSquares(
 export async function runUsEnrichment(options: RoadLoaderArguments) {
   const segments = await loadUsSegments(options)
   const tmas = await loadTmasProfiles(options)
-  const result = { segments: segments.length, ...await enrichUsRoads(options.preparedDirectory, segments) }
+  const result = { segments: segments.length,
+    oneWaySegments: segments.filter(segment => segment.countBasis === 'directional' && !segment.isRamp).length,
+    rampSegments: segments.filter(segment => segment.isRamp).length,
+    unknownScopeSegments: segments.filter(segment => segment.countBasis === 'unknown').length,
+    ...await enrichUsRoads(options.preparedDirectory, segments) }
   if (!tmas) return result
   const profiles = await enrichTmasTimeProfiles(options.preparedDirectory, tmas.stations)
   return {

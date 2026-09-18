@@ -19,7 +19,7 @@ const road: RoadRow = { startLat: 4.6, startLon: -74.1, endLat: 4.6, endLon: -74
 test('Colombia prioritizes TPDA and preserves its observed vehicle percentages', () => {
   assert.deepEqual(matchColombiaRoad(road, source([line({ superficie: '1', administrador: '2', calzada: '2' })],
     [line({ conteo: 1000, au_p: 60, bu_p: 10, ca_p: 30 })])),
-  { countBasis: 'unknown', observationId: 'fixture', kind: 'tpda', light: 1140, medium: 190, heavy: 570, moto: 100 })
+  { countBasis: 'both-directions', observationId: 'fixture', kind: 'tpda', light: 1140, medium: 190, heavy: 570, moto: 100 })
 })
 
 test('Colombia uses Red Vial defaults only for major roads', () => {

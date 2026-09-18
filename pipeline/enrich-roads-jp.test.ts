@@ -26,14 +26,14 @@ const csvRow = (roadType: string, route: string, name: string, small: string, la
   return fields.join(',')
 }
 const census = (): JapaneseRoadCensus => ({
-  nationalByRef: new Map([['1', { countBasis: 'unknown' as const, observationId: 'fixture', small: 1000, large: 200 }]]),
-  expresswayByName: new Map([['TestExpressway', { countBasis: 'unknown' as const, observationId: 'fixture', small: 2000, large: 400 }]]),
+  nationalByRef: new Map([['1', { countBasis: 'both-directions' as const, observationId: 'fixture', small: 1000, large: 200 }]]),
+  expresswayByName: new Map([['TestExpressway', { countBasis: 'both-directions' as const, observationId: 'fixture', small: 2000, large: 400 }]]),
   expresswayNames: ['TestExpressway'],
   classMedian: new Map([
-    [0, { countBasis: 'unknown' as const, observationId: 'fixture', small: 1800, large: 360 }], [1, { countBasis: 'unknown' as const, observationId: 'fixture', small: 900, large: 180 }],
-    [2, { countBasis: 'unknown' as const, observationId: 'fixture', small: 800, large: 160 }], [3, { countBasis: 'unknown' as const, observationId: 'fixture', small: 500, large: 100 }],
-    [4, { countBasis: 'unknown' as const, observationId: 'fixture', small: 300, large: 60 }], [10, { countBasis: 'unknown' as const, observationId: 'fixture', small: 1800, large: 360 }],
-    [11, { countBasis: 'unknown' as const, observationId: 'fixture', small: 900, large: 180 }], [12, { countBasis: 'unknown' as const, observationId: 'fixture', small: 800, large: 160 }],
+    [0, { countBasis: 'both-directions' as const, observationId: 'fixture', small: 1800, large: 360 }], [1, { countBasis: 'both-directions' as const, observationId: 'fixture', small: 900, large: 180 }],
+    [2, { countBasis: 'both-directions' as const, observationId: 'fixture', small: 800, large: 160 }], [3, { countBasis: 'both-directions' as const, observationId: 'fixture', small: 500, large: 100 }],
+    [4, { countBasis: 'both-directions' as const, observationId: 'fixture', small: 300, large: 60 }], [10, { countBasis: 'both-directions' as const, observationId: 'fixture', small: 1800, large: 360 }],
+    [11, { countBasis: 'both-directions' as const, observationId: 'fixture', small: 900, large: 180 }], [12, { countBasis: 'both-directions' as const, observationId: 'fixture', small: 800, large: 160 }],
   ]),
   sourceRows: 47, admittedSections: 47, unsupportedTypeRows: 0,
   unavailableTrafficRows: 0, invalidRows: 0,
@@ -64,14 +64,14 @@ test('Japanese parser hard-gates 47 prefectures and computes route and class med
 
 test('Japanese matcher distinguishes measured identity from census-derived fallback', () => {
   const match = buildJapaneseRoadMatcher(census())
-  assert.deepEqual(match(road()), { countBasis: 'unknown', observationId: 'fixture', light: 1000, medium: 50, heavy: 150, moto: 0,
+  assert.deepEqual(match(road()), { countBasis: 'both-directions', observationId: 'fixture', light: 1000, medium: 50, heavy: 150, moto: 0,
     sourceId: SOURCE_ID_JP_NATIONAL_ROADS })
   assert.deepEqual(match(road({ roadClass: 3, ref: null })),
-    { countBasis: 'unknown', observationId: 'fixture', light: 500, medium: 25, heavy: 75, moto: 0,
+    { countBasis: 'both-directions', observationId: 'fixture', light: 500, medium: 25, heavy: 75, moto: 0,
       sourceId: SOURCE_ID_JP_CLASS_MEDIAN_FALLBACK })
   assert.deepEqual(match(road({ roadClass: 10, ref: null, name: 'TestExpressway ramp' })),
-    { countBasis: 'unknown', observationId: 'fixture', light: 1000, medium: 50, heavy: 150, moto: 0,
-      sourceId: SOURCE_ID_JP_NATIONAL_ROADS })
+    { countBasis: 'both-directions', observationId: 'fixture', light: 900, medium: 45, heavy: 135, moto: 0,
+      sourceId: SOURCE_ID_JP_CLASS_MEDIAN_FALLBACK })
   assert.equal(match(road({ roadClass: 7 })), null)
 })
 

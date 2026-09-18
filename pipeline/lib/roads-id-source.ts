@@ -152,7 +152,7 @@ export function matchIndonesiaRoad(row: RoadRow, source: IndonesiaRoadSource) {
     } else return null
   }
   const traffic = splitVehicles(total, tier)
-  return Object.values(traffic).some(value => value > 0) ? { ...pinnedRoadObservation(line!, kind === 'lhrt' ? 'unknown' : 'both-directions'), kind, ...traffic } : null
+  return Object.values(traffic).some(value => value > 0) ? { ...pinnedRoadObservation(line!, 'both-directions'), kind, ...traffic } : null
 }
 
 export const INDONESIA_ROAD_BBOX = ID_SCAN_BBOX

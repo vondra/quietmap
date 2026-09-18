@@ -120,7 +120,7 @@ export function matchArgentinaRoad(row: RoadRow, source: ArgentinaRoadSource) {
   const tier = cityTier(row.midLat, row.midLon)
   const multiplier = tierMultiplier(tier)
   const observed = nearestRoadLine(row.midLat, row.midLon, source.tmda, 300)
-  let observation = observed ? pinnedRoadObservation(observed, 'unknown') : null
+  let observation = observed ? pinnedRoadObservation(observed, 'both-directions') : null
   let total: number, kind: 'tmda' | 'dnv-national' | 'dnv-provincial'
   if (observed) { total = tmdaAadt(observed) * multiplier; kind = 'tmda' }
   else {

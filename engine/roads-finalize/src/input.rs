@@ -27,6 +27,8 @@ pub struct Road {
     pub observation_source_id: u16,
     pub provenance: Provenance,
     pub counts: [f64; 4],
+    /// `pipeline/lib/road-observation.ts` order: 0 unknown, 1 directional, 2 both-directions,
+    /// 3 allocated, 4 street-cross-section.
     pub basis: u8,
     pub estimated: u8,
     pub observation: String,
@@ -103,7 +105,7 @@ pub fn roads(batch: &RecordBatch) -> Result<Vec<Road>, String> {
         let count_basis = basis.map(|v| v.value(i)).unwrap_or(if finalized { 3 } else { 0 });
         let observation = observations.map(|v| v.value(i)).unwrap_or("").to_owned();
         let status = estimated.map(|v| v.value(i)).unwrap_or(15);
-        if direction.value(i) > 2 || class.value(i) > 12 || count_basis > 3 || status > 15
+        if direction.value(i) > 2 || class.value(i) > 12 || count_basis > 4 || status > 15
             || count_values.iter().any(|v| !v.is_finite() || *v < 0.0)
             || (source.value(i) != 0 && count_basis != 3 && observation.is_empty()) {
             return Err(format!("invalid road traffic at {}:{}", ids.value(i), segments.value(i)));

@@ -9,9 +9,7 @@ import { writeCacheAtomically } from './lib/atomic-cache.js'
 import { SOURCE_ID_CZ_RSD_SCITANI } from './lib/source-ids.generated.js'
 import { listPreparedSquares } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/provenance.js'
-import {
-  ROAD_CLASS_RANK_TOLERANCE, osmRoadClassRank, writeRoadAadt, type RoadRow,
-} from './lib/roads-arrow.js'
+import { roadClassTakesCount, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
 import { pointToPolylineDist } from './lib/spatial.js'
 import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 
@@ -89,7 +87,7 @@ export function parseCensus(features: readonly unknown[]): ParsedCensus {
     const ref = normalizeRsdRef(psilnice, pkodR)
     const paths = geometryPaths(geometry?.paths)
     if (!ref || paths.length === 0) continue
-    const section: CensusSection = { ...roadFeatureObservation(feature as object, 'unknown'),
+    const section: CensusSection = { ...roadFeatureObservation(feature as object, 'both-directions'),
       ref,
       rank: rsdRank(psilnice, pkodR),
       light: count(values, 'O') + count(values, 'LN'),
@@ -120,11 +118,10 @@ export function matchCensusSection(
   const candidates = censusByRef.get(normalizedRef)
   if (!candidates) return null
 
-  const rowRank = osmRoadClassRank(row.roadClass)
   let closest: CensusSection | null = null
   let closestDistance = 10_000
   for (const candidate of candidates) {
-    if (Math.abs(rowRank - candidate.rank) > ROAD_CLASS_RANK_TOLERANCE) continue
+    if (!roadClassTakesCount(row.roadClass, candidate)) continue
     for (const path of candidate.paths) {
       const distance = pointToPolylineDist(row.midLat, row.midLon, path)
       if (distance < closestDistance) {
@@ -158,6 +155,7 @@ export async function enrichCzechRoads(
           heavy: section.heavy,
           moto: section.moto,
           sourceId: SOURCE_ID,
+          estimatedClasses: 0, // the census publishes every vehicle category
         } : null
       },
       undefined,

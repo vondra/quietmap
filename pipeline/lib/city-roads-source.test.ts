@@ -22,7 +22,7 @@ test('TSK weights whole-street components by section length and preserves the pu
   const rows = Array.from({ length: 500 }, (_, i) => row(`Street${i}`, 100, 100, 10, 1))
   rows.push(row('LEGEROVA', 100, 100, 20, 4), row('LEGEROVA', 300, 300, 40, 8), row('BARRAND.MOST', 50, 10, 2, 1))
   const source = parsePrahaRows(rows)
-  assert.deepEqual(source.records.find(r => r.street === 'LEGEROVA'), { ...roadObservation({ street: 'LEGEROVA', sections: ['1:2', '1:2'] }, 'both-directions'), street: 'LEGEROVA', light: 250, medium: 7, heavy: 35, moto: 0 })
+  assert.deepEqual(source.records.find(r => r.street === 'LEGEROVA'), { ...roadObservation({ street: 'LEGEROVA', sections: ['1:2', '1:2'] }, 'street-cross-section'), street: 'LEGEROVA', light: 250, medium: 7, heavy: 35, moto: 0, estimatedClasses: 8 })
   assert.ok(source.records.some(r => r.street === 'Barrandovský most'))
   assert.equal(source.sections, 503)
   assert.throws(() => parsePrahaRows(rows.slice(0, 499)), /only499|only 499/)
@@ -35,7 +35,7 @@ test('BKOM selects a populated non-pandemic edition, preserves truck percent and
   }, geometry: { type: 'LineString', coordinates: [[16.6, 49.2], [16.601, 49.2]] } }))
   const source = parseBrno(JSON.stringify({ type: 'FeatureCollection', features }))
   assert.equal(source.year, 2023)
-  assert.deepEqual(source.records[0], { countBasis: 'unknown', observationId: '0', street: 'BKOM section 0', light: 7500, medium: 0, heavy: 2500, moto: 0, line: features[0].geometry.coordinates })
+  assert.deepEqual(source.records[0], { countBasis: 'street-cross-section', observationId: '0', street: 'BKOM section 0', light: 7500, medium: 0, heavy: 2500, moto: 0, estimatedClasses: 10, line: features[0].geometry.coordinates })
   const multipart = structuredClone(features) as Array<{ properties: Record<string, unknown>; geometry: { type: string; coordinates: unknown } }>
   multipart[0].geometry = { type: 'MultiLineString', coordinates: [[[16.6, 49.2], [16.601, 49.2]], [[16.7, 49.2], [16.701, 49.2]]] }
   assert.equal(parseBrno(JSON.stringify({ type: 'FeatureCollection', features: multipart })).records.length, 501)
@@ -60,7 +60,7 @@ test('Wien uses days-weighted total-minus-trucks, rejects invented clamps and re
   assert.equal(source.records.length, 50)
   assert.equal(source.records[0].light, Math.round((100 * 337 + 200 * 28) / 365 - 10))
   assert.equal(source.records[0].heavy, 10)
-  assert.equal(source.records[0].countBasis, 'both-directions')
+  assert.equal(source.records[0].countBasis, 'street-cross-section')
   assert.equal(source.records[0].observationId, '0:2025')
   assert.equal(source.invalidValuesSkipped, 150)
   assert.throws(() => parseWien(Buffer.from(rows.join('\n').replaceAll(';LkwÄ;10', ';LkwÄ;1000'), 'latin1'), locations), /exceeds all vehicles/)

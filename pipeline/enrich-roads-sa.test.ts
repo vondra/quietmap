@@ -24,7 +24,9 @@ test('Saudi MoT parser averages valid stations by road reference', () => {
 
 test('Saudi MoT ref wins and Riyadh fallback enforces source-class compatibility', () => {
   assert.deepEqual(matchSaudiRoad(road, source(new Map([['40', 10_000]]), [line({ CLASS: 'B', NO_OF_LANE: 4 })])),
-    { countBasis: 'unknown', observationId: 'road-average:40', kind: 'mot', light: 7800, medium: 1000, heavy: 1100, moto: 100 })
+    { countBasis: 'both-directions', observationId: 'road-average:40', kind: 'mot', light: 7800, medium: 1000, heavy: 1100, moto: 100 })
+  // A slip road tagged with the mainline ref never takes the route average.
+  assert.equal(matchSaudiRoad({ ...road, roadClass: 11 }, source(new Map([['40', 10_000]]), [])), null)
   assert.deepEqual(matchSaudiRoad({ ...road, ref: null }, source(new Map(), [line({ CLASS: 'B', NO_OF_LANE: 4 })])),
     { countBasis: 'both-directions', observationId: 'fixture', kind: 'riyadh', light: 14040, medium: 1800, heavy: 1980, moto: 180 })
   assert.equal(matchSaudiRoad({ ...road, ref: null, roadClass: 4 },

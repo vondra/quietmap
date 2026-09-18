@@ -11,6 +11,7 @@ export interface NorwegianNvdbSegment {
   sourceId: number
   vegref: string
   rank: number
+  isRamp: boolean
   latitude: number
   longitude: number
   year: number
@@ -81,6 +82,8 @@ export function parseNorwegianNvdbSource(raw: string): NorwegianNvdbSource {
       sourceId,
       vegref: row.vegref,
       rank,
+      // NVDB vegsystemreferanse: a KD (kryssdel) or SD (sideanlegg) part is a junction arm, not the road.
+      isRamp: / [KS]D\d+ /.test(row.vegref),
       latitude: row.midLat,
       longitude: row.midLon,
       year,

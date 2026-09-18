@@ -44,7 +44,7 @@ export function buildJapaneseRoadMatcher(census: JapaneseRoadCensus): (row: Road
     return counts
   }
   const national = (row: RoadRow): (JapaneseVehicleCounts & RoadObservation) | null => {
-    if (row.roadClass === 1 || row.roadClass === 11) {
+    if (row.roadClass === 1) {
       for (const token of (row.ref ?? '').split(/[;,/]/)) {
         const ref = leadingJapaneseRoadDigits(token)
         const counts = ref ? census.nationalByRef.get(ref) : undefined
@@ -56,12 +56,13 @@ export function buildJapaneseRoadMatcher(census: JapaneseRoadCensus): (row: Road
   }
   return (row: RoadRow): RoadAadt | null => {
     if (!COVERED_ROAD_CLASSES.has(row.roadClass)) return null
-    if (row.roadClass === 0 || row.roadClass === 10) {
+    // A census section is counted on the through road; a slip road keeps the class prior.
+    if (row.roadClass === 0) {
       const counts = row.name ? expressway(row.name) : null
-      if (counts) return traffic(row.roadClass === 10 ? half(counts) : counts, MEASURED_SOURCE_ID)
-    } else if (row.roadClass <= 2 || row.roadClass === 11 || row.roadClass === 12) {
+      if (counts) return traffic(counts, MEASURED_SOURCE_ID)
+    } else if (row.roadClass <= 2) {
       const counts = national(row)
-      if (counts) return traffic(row.roadClass >= 10 ? half(counts) : counts, MEASURED_SOURCE_ID)
+      if (counts) return traffic(counts, MEASURED_SOURCE_ID)
     }
     const fallback = census.classMedian.get(row.roadClass)
     return fallback ? traffic(row.roadClass >= 10 ? half(fallback) : fallback, FALLBACK_SOURCE_ID) : null

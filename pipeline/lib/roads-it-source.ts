@@ -93,7 +93,7 @@ export function parseItalianTgmSource(raw: string): ItalianTgmSource {
       result.invalidGeometrySkipped++
       continue
     }
-    result.stations.push({ sourceRow, ...roadFeatureObservation(feature as object, 'unknown'), ref, latitude, longitude, total: Math.round(total) })
+    result.stations.push({ sourceRow, ...roadFeatureObservation(feature as object, 'both-directions'), ref, latitude, longitude, total: Math.round(total) })
   }
   if (result.stations.length === 0) throw new Error('Italian TGM source has no usable measurements')
   return result

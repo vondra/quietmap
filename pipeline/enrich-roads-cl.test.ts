@@ -10,7 +10,7 @@ import { buildOneHundredthDegreePointGrid } from './lib/spatial.js'
 const line: PinnedRoadLine = { observationId: 'fixture', coordinates: [[-70.7, -33.5], [-70.69, -33.5]],
   properties: { CARPETA: 'PAVIMENTO', CONCESIONADO: 'SI' }, relativePath: 'fixture' }
 const source = (tmda: Array<{ latitude: number; longitude: number; aadt: number }>): ChileRoadSource => ({
-  network: buildRoadLineVertexGrid([line]), tmda: buildOneHundredthDegreePointGrid(tmda.map(point => ({ ...point, countBasis: 'unknown' as const, observationId: 'fixture' }))),
+  network: buildRoadLineVertexGrid([line]), tmda: buildOneHundredthDegreePointGrid(tmda.map(point => ({ ...point, countBasis: 'both-directions' as const, observationId: 'fixture' }))),
   sourceRows: 0, sourceLines: 0, tmdaPoints: tmda.length, invalidGeometrySkipped: 0, unavailableTrafficSkipped: 0,
 })
 const road: RoadRow = { startLat: -33.5, startLon: -70.7, endLat: -33.5, endLon: -70.7,
@@ -18,7 +18,7 @@ const road: RoadRow = { startLat: -33.5, startLon: -70.7, endLat: -33.5, endLon:
 
 test('Chile prioritizes observed TMDA and applies the Santiago split', () => {
   assert.deepEqual(matchChileRoad(road, source([{ latitude: -33.5, longitude: -70.7, aadt: 1000 }])),
-    { countBasis: 'unknown', observationId: 'fixture', kind: 'tmda', light: 1500, medium: 200, heavy: 200, moto: 100 })
+    { countBasis: 'both-directions', observationId: 'fixture', kind: 'tmda', light: 1500, medium: 200, heavy: 200, moto: 100 })
 })
 
 test('Chile uses Vialidad classifications only for major roads', () => {

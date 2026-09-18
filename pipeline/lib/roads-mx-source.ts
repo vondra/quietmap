@@ -117,7 +117,7 @@ export function parseMexicanSictSource(segmentsRaw: string, compositionRaw: stri
     if (!compositionById.has(id)) result.missingCompositionRows++
     const fractions = compositionById.get(id) ?? null
     if (!fractions) result.fallbackCompositionRows++
-    result.segments.push({ sourceRow, ...roadObservation(id || feature as object, 'unknown'), lines: geometryLines, total: Math.round(totalValue),
+    result.segments.push({ sourceRow, ...roadObservation(id || feature as object, 'both-directions'), lines: geometryLines, total: Math.round(totalValue),
       fractions: fractions ?? NATIONAL_SPLIT,
       allowedRoadClassMask: mexicanAllowedRoadClassMask(
         String(properties?.red_ok ?? ''), String(properties?.operacion ?? '')) })

@@ -82,8 +82,8 @@ test('high-latitude and dateline candidates survive the shared index and nearest
     assert.ok(flatDist(lat, lon, matched!.coordinates[0][1], matched!.coordinates[0][0]) < 41)
     const ranked = { latitude: lat, longitude: lon + 190 / (111_320 * Math.cos(lat * Math.PI / 180)), rank: 1 }
     ranked.longitude = ((ranked.longitude + 180) % 360) - 180
-    assert.equal(nearestCompatiblePointWithin200Metres(lat, lon, 1, 1,
-      buildOneHundredthDegreePointGrid([ranked])), ranked)
+    assert.equal(nearestCompatiblePointWithin200Metres(lat, lon,
+      buildOneHundredthDegreePointGrid([ranked]), () => true), ranked)
   }
 })
 
@@ -191,7 +191,7 @@ test('one directional observation chooses one current way across owners; two-way
     for (const row of output.filter(row => row.source === 10)) {
       assert.deepEqual(row.counts, [8300, 200, 1000, 500], scenario.name)
       assert.equal(row.id, observation.records[0].observationId)
-      assert.equal(row.basis, scenario.directional ? 1 : 2)
+      assert.equal(row.basis, scenario.directional ? 1 : 4)
     }
     const before = paths.map(path => readFileSync(path))
     assert.equal((await enrichEuropeanRoads(prepared, [observation])).squaresUpdated, 0)

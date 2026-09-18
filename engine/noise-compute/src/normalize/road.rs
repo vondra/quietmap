@@ -290,9 +290,10 @@ pub fn normalize_road_segment(
     )
 }
 
-/// Lane-based AADT scaling ratio for un-enriched roads. PRODUCER input
-/// (`roads-finalize` allocation) — runtime consumes prepared counts and never
-/// calls this.
+/// Lane-based scaling of a both-directions section-total prior (classes 3+
+/// and the hand-set city/country arms); the measured per-lane prior of classes
+/// 0-2 never takes it. PRODUCER input (`roads-finalize` allocation) — runtime
+/// consumes prepared counts and never calls this.
 ///
 /// Source: CZ ŘSD Celostátní sčítání dopravy 2020. Median totals over
 /// 3 197 deduplicated census sections (one section ≈ many OSM ways)
@@ -589,30 +590,12 @@ mod tests {
 
     #[test]
     fn ramp_defaults_are_15_percent_of_mainline() {
-        // Producer-side default table invariant (resolve_traffic_default
-        // stays authoritative for roads-finalize).
-        let (l0, m0, h0, x0) =
-            crate::defaults::resolve_traffic_default(0, SquareCountryCity::UNKNOWN);
-        let (l10, m10, h10, x10) =
-            crate::defaults::resolve_traffic_default(10, SquareCountryCity::UNKNOWN);
-        assert!((l10 - l0 * 0.15).abs() < 1e-6);
-        assert!((m10 - m0 * 0.15).abs() < 1e-6);
-        assert!((h10 - h0 * 0.15).abs() < 1e-6);
-        assert!((x10 - x0 * 0.15).abs() < 1e-6);
-
-        let (l1, m1, h1, _) = crate::defaults::resolve_traffic_default(1, SquareCountryCity::UNKNOWN);
-        let (l11, m11, h11, _) =
-            crate::defaults::resolve_traffic_default(11, SquareCountryCity::UNKNOWN);
-        assert!((l11 - l1 * 0.15).abs() < 1e-6);
-        assert!((m11 - m1 * 0.15).abs() < 1e-6);
-        assert!((h11 - h1 * 0.15).abs() < 1e-6);
-
-        let (l2, m2, h2, _) = crate::defaults::resolve_traffic_default(2, SquareCountryCity::UNKNOWN);
-        let (l12, m12, h12, _) =
-            crate::defaults::resolve_traffic_default(12, SquareCountryCity::UNKNOWN);
-        assert!((l12 - l2 * 0.15).abs() < 1e-6);
-        assert!((m12 - m2 * 0.15).abs() < 1e-6);
-        assert!((h12 - h2 * 0.15).abs() < 1e-6);
+        for (mainline, ramp) in [(0, 10), (1, 11), (2, 12)] {
+            let (main, link) = (WORLD_DEFAULT[mainline], WORLD_DEFAULT[ramp]);
+            for (whole, part) in [(main.0, link.0), (main.1, link.1), (main.2, link.2), (main.3, link.3)] {
+                assert!((part - whole * 0.15).abs() < 1e-6);
+            }
+        }
     }
 
     #[test]

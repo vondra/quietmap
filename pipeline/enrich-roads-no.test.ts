@@ -26,7 +26,7 @@ const sourceRow = (overrides: Record<string, unknown> = {}) => ({
 })
 
 const segment = (overrides: Partial<NorwegianNvdbSegment> = {}): NorwegianNvdbSegment => ({
-  sourceId: 1, vegref: 'EV6 S1D1 m0-100', rank: 1,
+  sourceId: 1, vegref: 'EV6 S1D1 m0-100', rank: 1, isRamp: false,
   latitude: 59.9, longitude: 10.75, year: 2025,
   light: 790, medium: 50, heavy: 150, moto: 10,
   ...overrides,
@@ -37,13 +37,14 @@ test('Norwegian parser filters road category and geometry then derives an exact 
     sourceRow(),
     sourceRow({ id: 2, vegref: 'KV1 S1D1 m0-100' }),
     sourceRow({ id: 3, vegref: 'FV1 S1D1 m0-100', midLat: null }),
-    sourceRow({ id: 4, vegref: 'RV4 S1D1 m0-100', aadt: 100, heavyPct: 100 }),
+    sourceRow({ id: 4, vegref: 'RV4 S1D1 m20 KD1 m0-100', aadt: 100, heavyPct: 100 }),
   ]))
   assert.deepEqual({ rows: parsed.sourceRows, accepted: parsed.segments.length,
     category: parsed.unsupportedRoadCategorySkipped, geometry: parsed.invalidGeometrySkipped },
   { rows: 4, accepted: 2, category: 1, geometry: 1 })
   assert.deepEqual(parsed.segments[0], segment())
   const extreme = parsed.segments[1]
+  assert.equal(extreme.isRamp, true) // KD: a junction arm of RV4, not its carriageway.
   assert.equal(extreme.light + extreme.medium + extreme.heavy + extreme.moto, 100)
   assert.deepEqual(splitNorwegianAadt(100, 100), { light: 0, medium: 25, heavy: 74, moto: 1 })
   assert.equal(norwegianVegrefRank('FV7'), 2)

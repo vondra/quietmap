@@ -6,9 +6,9 @@ import { listPreparedSquares } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/provenance.js'
 import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import { loadDanishMastraSource, type DanishMastraObservation } from './lib/roads-dk-source.js'
-import { buildOneHundredthDegreePointGrid, nearestCompatiblePointWithin200Metres } from './lib/spatial.js'
+import { buildOneHundredthDegreePointGrid } from './lib/spatial.js'
 import { SOURCE_ID_DK_NATIONAL_ROADS } from './lib/source-ids.generated.js'
-import { osmRoadClassRank, ROAD_CLASS_RANK_TOLERANCE, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { nearestCountWithin200Metres, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
 
 const SOURCE_ID = SOURCE_ID_DK_NATIONAL_ROADS
 const DENMARK_BBOX = [54.5, 8, 57.8, 13] as const
@@ -22,8 +22,7 @@ export async function enrichDanishRoads(
   const squares = listPreparedSquares(preparedDirectory, DENMARK_BBOX)
   if (squares.length === 0) throw new Error(`no Danish roads.arrow squares found under ${preparedDirectory}`)
   const grid = buildOneHundredthDegreePointGrid(observations)
-  const match = (row: RoadRow) => nearestCompatiblePointWithin200Metres(
-    row.midLat, row.midLon, osmRoadClassRank(row.roadClass), ROAD_CLASS_RANK_TOLERANCE, grid)
+  const match = (row: RoadRow) => nearestCountWithin200Metres(row, grid)
   const result = { rows: 0, matched: 0, retracted: 0, skipped: 0, skippedForeign: 0,
     squares: squares.length, squaresUpdated: 0 }
   for (const square of squares) {

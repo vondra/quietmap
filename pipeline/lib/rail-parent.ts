@@ -1,13 +1,11 @@
 /** Restore original railway parents before repeat enrichment; sidecar evidence remains authoritative. */
 
-import { closeSync, fsyncSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
-import { isDeepStrictEqual } from 'node:util'
-import { Float32, Int32, RecordBatch, Schema, Table, Uint16, tableFromIPC, tableToIPC, vectorFromArray, type Vector } from 'apache-arrow'
-import { lonLatToGrid } from './prepared-grid.js'
+import { Float32, Int32, RecordBatch, Schema, Table, Uint16, tableFromIPC, vectorFromArray, type Vector } from 'apache-arrow'
 import { railTrafficSidecarPath, RAIL_TRAFFIC_SIDECAR_VERSION } from './rail-traffic-store.js'
-import { SourceTransportTopology, transportPieceKey } from './transport-topology.js'
+import { finalizedChildrenBySourcePiece, replaceArrowFileDurably, sourceParentCoveredByChildren } from './transport-parent.js'
+import type { SourceTransportTopology } from './transport-topology.js'
 
 const GEOMETRY = new Set(['start_gx', 'start_gy', 'end_gx', 'end_gy', 'length_m'])
 const TRAFFIC = new Set([
@@ -29,70 +27,26 @@ export function restoreRailwayParentsForEnrichment(
   if (sidecar.prepare('PRAGMA user_version').get()?.user_version !== RAIL_TRAFFIC_SIDECAR_VERSION) {
     throw new Error('railway parent restoration requires the retained traffic sidecar')
   }
-  const ids = table.getChild('osm_id')!, indices = table.getChild('segment_idx')!
-  if (!ids || !indices) throw new Error('railway parent restoration requires source identity columns')
   const fields = table.schema.fields.filter(field => !TRAFFIC.has(field.name) && !GEOMETRY.has(field.name))
+  const childRows = finalizedChildrenBySourcePiece(table, fields.map(field => field.name), 'railway', square)
   const attributes = fields.map(field => table.getChild(field.name)!)
-  const parents = new Map<string, number>()
-  const childRows = new Map<string, number[]>()
-  const rows = table.numRows
-  for (let row = 0; row < rows; row++) {
-    const key = transportPieceKey(String(ids.get(row)), indices.get(row) as number)
-    const children = childRows.get(key) ?? []
-    children.push(row)
-    childRows.set(key, children)
-    const first = parents.get(key)
-    if (first === undefined) parents.set(key, row)
-    else for (let column = 0; column < attributes.length; column++) {
-      if (!isDeepStrictEqual(attributes[column].get(first), attributes[column].get(row))) {
-        throw new Error(`railway children disagree on ${fields[column].name} for ${key} in ${square}`)
-      }
-    }
-  }
-  const geometry = topology.squareParentGeometries(square, Array.from(parents.values(), row => String(ids.get(row))))
-  const selected = [...parents.values()]
+  const ids = table.getChild('osm_id')!
+  const selected = Array.from(childRows.values(), children => children[0])
+  const geometry = topology.squareParentGeometries(square, selected.map(row => String(ids.get(row))))
   const columns: Record<string, Vector> = {}
   fields.forEach((field, index) => {
     columns[field.name] = vectorFromArray(selected.map(row => attributes[index].get(row)), field.type)
   })
   const starts: Array<[number, number]> = [], ends: Array<[number, number]> = [], lengths: number[] = []
-  for (const key of parents.keys()) {
+  for (const [key, children] of childRows) {
     const parent = geometry.get(key)
     if (!parent) throw new Error(`source railway parent missing ${key} in ${square}`)
-    const start = lonLatToGrid(parent.start[1], parent.start[0])
-    const end = lonLatToGrid(parent.end[1], parent.end[0])
-    const children = childRows.get(key)!
-    const links = new Map<string, string>()
-    const collapsed = new Set<string>()
-    for (const child of children) {
-      const from = `${table.getChild('start_gx')!.get(child)},${table.getChild('start_gy')!.get(child)}`
-      const to = `${table.getChild('end_gx')!.get(child)},${table.getChild('end_gy')!.get(child)}`
-      // Distinct metric cuts can quantize into the same z30 cell.
-      if (from === to) { collapsed.add(from); continue }
-      if (links.has(from)) throw new Error(`overlapping railway children for ${key} in ${square}`)
-      links.set(from, to)
-    }
-    let endpoint: string | undefined = start.join(',')
-    const edgeCount = links.size
-    for (let visit = 0; visit < edgeCount; visit++) {
-      collapsed.delete(endpoint!)
-      const next: string | undefined = links.get(endpoint!)
-      links.delete(endpoint!)
-      endpoint = next
-    }
-    collapsed.delete(endpoint!)
-    if (endpoint !== end.join(',') || links.size !== 0 || collapsed.size !== 0) {
-      throw new Error(`railway children do not cover source parent ${key} in ${square}`)
-    }
-    starts.push(start)
-    ends.push(end)
-    // Unsplit rows retain the exact extractor value. Merged parents recover the
-    // Float32 then one-decimal ties-to-even encoding in osm-extract/src/spill.rs.
-    const tenths = Math.fround(parent.lengthM) * 10
-    const lower = Math.floor(tenths), fraction = tenths - lower
-    const rounded = lower + Number(fraction > 0.5 || (fraction === 0.5 && lower % 2 !== 0))
+    const covered = sourceParentCoveredByChildren(table, children, parent, 'railway', `${key} in ${square}`)
+    starts.push(covered.start)
+    ends.push(covered.end)
+    // Unsplit rows retain the exact extractor value.
     lengths.push(children.length === 1
-      ? table.getChild('length_m')!.get(parents.get(key)!) as number : rounded / 10)
+      ? table.getChild('length_m')!.get(children[0]) as number : covered.lengthM)
   }
   columns.start_gx = vectorFromArray(starts.map(point => point[0]), new Int32())
   columns.start_gy = vectorFromArray(starts.map(point => point[1]), new Int32())
@@ -109,14 +63,6 @@ export function restoreRailwayParentsForEnrichment(
   const schema = new Schema(bare.schema.fields.map(field =>
     table.schema.fields.find(original => original.name === field.name) ?? field), metadata)
   const restored = new Table(schema, bare.batches.map(batch => new RecordBatch(schema, batch.data)))
-  const temporary = `${path}.tmp`
-  const fd = openSync(temporary, 'w')
-  try {
-    writeFileSync(fd, Buffer.from(tableToIPC(restored, 'file')))
-    fsyncSync(fd)
-  } finally { closeSync(fd) }
-  renameSync(temporary, path)
-  const directory = openSync(dirname(path), 'r')
-  try { fsyncSync(directory) } finally { closeSync(directory) }
+  replaceArrowFileDurably(path, restored)
   return restored
 }

@@ -143,7 +143,7 @@ export function parseJapaneseRoadCensus(rawFiles: readonly Uint8Array[]): Japane
         unavailableTrafficRows++
         continue
       }
-      const counts = { small, large, ...roadObservation({ prefecture: fileIndex + 1, fields }, 'unknown') }
+      const counts = { small, large, ...roadObservation({ prefecture: fileIndex + 1, fields }, 'both-directions') }
       admittedSections++
       fileSections++
       for (const roadClass of classes) append(classRows, roadClass, counts)
@@ -160,8 +160,8 @@ export function parseJapaneseRoadCensus(rawFiles: readonly Uint8Array[]): Japane
   if (unusableFiles.length) {
     throw new Error(`Japanese census prefectures have no usable sections: ${unusableFiles.join(', ')}`)
   }
-  const nationalByRef = new Map([...refRows].map(([key, values]) => [key, { ...medianCounts(values), ...roadObservation({ aggregate: 'route', key, values }, 'unknown') }]))
-  const expresswayByName = new Map([...nameRows].map(([key, values]) => [key, { ...medianCounts(values), ...roadObservation({ aggregate: 'expressway', key, values }, 'unknown') }]))
+  const nationalByRef = new Map([...refRows].map(([key, values]) => [key, { ...medianCounts(values), ...roadObservation({ aggregate: 'route', key, values }, 'both-directions') }]))
+  const expresswayByName = new Map([...nameRows].map(([key, values]) => [key, { ...medianCounts(values), ...roadObservation({ aggregate: 'expressway', key, values }, 'both-directions') }]))
   const classMedian = new Map([...classRows].map(([key, values]) => [key, { ...medianCounts(values), ...roadObservation({ aggregate: 'class-prior', key, values }, 'both-directions') }]))
   for (const [link, parent] of [[10, 0], [11, 1], [12, 2]] as const) {
     const counts = classMedian.get(parent)

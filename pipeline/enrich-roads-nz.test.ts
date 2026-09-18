@@ -26,7 +26,7 @@ const at = (overrides: Record<string, unknown> = {}) => ({
   geometry: { type: 'Point', coordinates: [174.8, -36.9] }, ...overrides,
 })
 const observation = (overrides: Partial<NewZealandRoadObservation> = {}): NewZealandRoadObservation => ({
-  countBasis: 'unknown', observationId: 'nzta:station-1', source: 'nzta', sourceRow: 0, latitude: -36.9, longitude: 174.8, rank: 1,
+  countBasis: 'both-directions', observationId: 'nzta:station-1', source: 'nzta', sourceRow: 0, latitude: -36.9, longitude: 174.8, rank: 1, isRamp: false,
   total: 1000, heavyPercent: 20, light: 790, medium: 40, heavy: 160, moto: 10,
   ...overrides,
 })
@@ -41,6 +41,8 @@ test('NZ parser combines pages and Auckland points with exact totals and explici
     unsupported: parsed.unsupportedClassSkipped, geometry: parsed.invalidGeometrySkipped },
   { nztaRows: 4, atRows: 1, accepted: 2, traffic: 1, unsupported: 1, geometry: 1 })
   assert.deepEqual(parsed.observations[0], observation())
+  assert.equal(parseNewZealandRoadSources([collection([nzta({ properties: {
+    trafficADTEst: 900, ONRC: 'National', roadName: '01N-0326-R1' } })])], collection([at()])).observations[0].isRamp, true)
   assert.equal(newZealandOnrcRank('Secondary Collector'), 4)
   assert.equal(newZealandOnrcRank('Access'), null)
   for (const value of parsed.observations) {

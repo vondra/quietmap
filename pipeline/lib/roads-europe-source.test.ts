@@ -40,7 +40,7 @@ test('source rounding, aliases and the whole line preserve published directional
   assert.deepEqual(source.records[1], {
     coordinates: [[14, 50], [14.001, 50.001]], light: 880, medium: 20, heavy: 100, moto: 0, sourceId: 10,
     observationId: source.records[1].observationId, sourceOsmId: null, estimatedClasses: 11,
-    countBasis: 'unknown', rawOneway: 'true', rawDirection: null, osmOneway: null, rawTechnology: null,
+    countBasis: 'street-cross-section', rawOneway: 'true', rawDirection: null, osmOneway: null, rawTechnology: null,
   })
   assert.equal(source.nonBooleanOneway, 1)
 })
@@ -97,7 +97,7 @@ test('source basis survives OSM disagreement and heavy-only counts gain no inven
   assert.equal(source.records[0].rawDirection, 'A-->B')
   assert.equal(source.records[0].osmOneway, 'False')
   assert.equal(source.records[0].rawTechnology, 'Estimated using previous year')
-  assert.equal(source.records[1].countBasis, 'both-directions')
+  assert.equal(source.records[1].countBasis, 'street-cross-section')
   assert.equal(source.records[1].osmOneway, 'True')
   assert.deepEqual(['light', 'medium', 'heavy', 'moto'].map(key =>
     source.records[2][key as 'light' | 'medium' | 'heavy' | 'moto']), [0, 0, 500, 0])

@@ -1,50 +1,31 @@
-//! Hierarchical traffic-default cascade.
-//!
-//! For any z9 square whose segment has no enriched AADT (i.e. no spatial
-//! match against a national census + no service-tree heuristic), the engine
-//! picks a default via this cascade:
+//! Road traffic priors for rows without a count, and legal speed defaults.
 //!
 //! ```text
-//!   city default (tier-1 metro override)   e.g. São Paulo, Bangkok, NYC, ...
-//!   │   ↓ fallback
-//!   MEASURED region default                country × class medians from national
-//!   │   (region_defaults_generated.rs)     censuses (M6.3 — mechanism parked,
-//!   │                                        table empty: the TH DRR band→class
-//!   │                                        crosswalk proved invalid /gg M6)
-//!   │   ↓ fallback
-//!   country default                        e.g. TH/BR rural (hand-tuned), GDP-scaled
-//!   │   ↓ fallback
-//!   continent default                      e.g. SA/AF coarse averages
-//!   │   ↓ fallback
-//!   WORLD_DEFAULT                          EU-generic (same as pre-redesign)
+//!   city arm (tier-1 metro)        São Paulo, Rio, Bangkok: hand-set section totals
+//!   │   ↓
+//!   country arm                    TH, BR rural: hand-set section totals
+//!   │   ↓
+//!   classes 0-2                    measured world rate per lane, per carriageway
+//!   classes 3-12                   WORLD_DEFAULT section totals
 //! ```
 //!
-//! `WORLD_DEFAULT` reproduces the legacy `normalize.rs::default_road_traffic`
-//! table bit-for-bit so today's call sites without a SquareCountryCity see no behavior change.
-//! The measured region arm is generated from census data only
-//! (`scripts/gen-region-defaults-rs.mjs`) and SUPERSEDES a country's
-//! hand-tuned arm once its class attribution is proven — the TH DRR attempt
-//! was parked (/gg M6 Codex: 1xxx–5xxx sections are dominantly engine class
-//! 4, not 3, so band medians biased class-3 roads ~4.6 dB low); it re-lands
-//! with class attribution via exact-ref joins.
-//! (M6); BR's hand-tuned arm stays until a BR per-section census is wired
-//! into the pipeline (the DNIT-derived BR table is corridor-level).
+//! No country or continent factor exists: vehicles per paved km (clamped
+//! 0.7-1.3) measured worse than no factor in every scaled class
+//! (leave-one-country-out MAE/bias dB with vs without: motorway 3.51/+1.32
+//! vs 3.42/+1.28, trunk 5.00/+3.58 vs 4.72/+3.11, primary 4.28/+2.37 vs
+//! 4.05/+1.93), and nine alternative country predictors failed to beat a
+//! constant.
 //!
-//! Data format: `Aadt = (light, medium, heavy, moto)`, all in vehicles/day
-//! both-directions total. Vehicle-class split follows the country's typical
-//! fleet composition (e.g. TH has ~25 % motorcycles in Bangkok, BR has
-//! higher heavy-vehicle share on rural freight corridors).
+//! Data format: `Aadt = (light, medium, heavy, moto)`, vehicles/day.
 
 use crate::square_country_city::{Continent, SquareCountryCity};
 
-/// Vehicle-class AADT tuple: (light, medium, heavy, moto), veh/day
-/// both-directions total.
+/// Vehicle-class AADT tuple: (light, medium, heavy, moto), veh/day.
 pub type Aadt = (f64, f64, f64, f64);
 
-// Exact copy of the pre-redesign `normalize.rs::default_road_traffic` table.
-// Must match bit-for-bit so call sites without a SquareCountryCity (the legacy
-// `default_road_traffic(class)` wrapper) see zero behavior change.
-
+/// Both-directions section totals. Classes 3-12 use them as the prior;
+/// classes 0-2 contribute only their vehicle-class proportions to the
+/// measured per-lane prior below.
 pub const WORLD_DEFAULT: [Aadt; 13] = [
     (21600.0, 2400.0, 5700.0, 300.0), // 0 motorway — 30k
     (11700.0, 1200.0, 1800.0, 300.0), // 1 trunk — 15k
@@ -69,26 +50,60 @@ pub const WORLD_DEFAULT: [Aadt; 13] = [
 
 pub use crate::city_consts_generated::*;
 
-/// Returns the best-known default (light, medium, heavy, moto) AADT for a
-/// segment with no spatial / ref / service-tree data. Cascades most-specific
-/// → least-specific: city → country → continent → world. `class` clamps to
-/// the WORLD_DEFAULT array bounds. AUTHORITATIVE for the native producer
-/// (`roads-finalize` allocation); runtime consumers read prepared counts and
-/// never call this.
-pub fn resolve_traffic_default(class: u8, square_country_city: SquareCountryCity) -> Aadt {
-    if square_country_city.city_id != 0 {
-        if let Some(v) = city_default(square_country_city.city_id, class) {
-            return v;
-        }
+/// A hand-set or world class total describes the whole two-way section and
+/// is shared between its carriageways by the producer; a measured per-lane
+/// prior already describes the one stored carriageway and is never divided.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TrafficDefault {
+    SectionBothDirections(Aadt),
+    Carriageway(Aadt),
+}
+
+// Length-weighted medians of stored per-carriageway counts over all measured
+// rows of release r260910 outside tunnels (motorway 174,178 km, trunk
+// 218,042 km, primary 200,387 km), trained separately for one-way and two-way
+// rows; leave-one-country-out MAE 3.2-3.7 dB, |bias| < 0.6 dB. Columns:
+// vehicles per lane per day for a lanes tag of 1-6 (one-way, two-way), then
+// the median whole count of rows without such a tag (one-way, two-way), which
+// sit far below lanes x rate (trunk one-way 1,810 against 2 x 4,533).
+// Lone one-way rows that still held a two-way total (18,246 km) are halved and
+// ramp-sized mainline rows (3,729 km) dropped before taking the medians.
+const MEASURED_CARRIAGEWAY_VEHICLES_PER_DAY: [[f64; 4]; 3] = [
+    [6379.0, 3010.0, 5200.0, 6019.0], // 0 motorway
+    [4533.0, 2594.0, 1810.0, 3045.0], // 1 trunk
+    [4250.0, 2800.0, 5882.0, 3719.0], // 2 primary
+];
+
+/// The prior for a row without a count: city arm, country arm, then the
+/// measured per-lane carriageway prior (classes 0-2) or the world class total.
+/// `class` clamps to the WORLD_DEFAULT bounds. AUTHORITATIVE for the native
+/// producer (`roads-finalize` allocation); runtime consumers read prepared
+/// counts and never call this.
+pub fn resolve_traffic_default(
+    class: u8,
+    square_country_city: SquareCountryCity,
+    lanes: u8,
+    one_way: bool,
+) -> TrafficDefault {
+    let hand_set = (square_country_city.city_id != 0)
+        .then(|| city_default(square_country_city.city_id, class))
+        .flatten()
+        .or_else(|| country_default(&square_country_city.country_iso, class));
+    if let Some(section) = hand_set {
+        return TrafficDefault::SectionBothDirections(section);
     }
-    if let Some(v) = country_default(&square_country_city.country_iso, class) {
-        return v;
-    }
-    if let Some(v) = continent_default(square_country_city.continent, class) {
-        return v;
-    }
-    let idx = (class as usize).min(WORLD_DEFAULT.len() - 1);
-    WORLD_DEFAULT[idx]
+    let world = WORLD_DEFAULT[(class as usize).min(WORLD_DEFAULT.len() - 1)];
+    let Some(measured) = MEASURED_CARRIAGEWAY_VEHICLES_PER_DAY.get(class as usize) else {
+        return TrafficDefault::SectionBothDirections(world);
+    };
+    let direction = usize::from(!one_way);
+    let total = if (1..=6).contains(&lanes) {
+        f64::from(lanes) * measured[direction]
+    } else {
+        measured[2 + direction]
+    };
+    let scale = total / (world.0 + world.1 + world.2 + world.3);
+    TrafficDefault::Carriageway((world.0 * scale, world.1 * scale, world.2 * scale, world.3 * scale))
 }
 
 // One arm per (city_id, class). Values reflect each metro's published or
@@ -107,11 +122,8 @@ fn city_default(city_id: u16, class: u8) -> Option<Aadt> {
         (CITY_SAO_PAULO, 5) | (CITY_RIO, 5) => Some((1400.0, 200.0, 300.0, 100.0)), // 2k residential
 
         // ─── Bangkok — TH metro (rural × 1.5) split 60/8/7/25 ─────────────
-        // Derivation: the pre-M6 TH rural arm totals × 1.5, split via
-        // pipeline/enrich-roads-th.ts thaiClassSplit(isBangkok=true) (live,
-        // still used by the DOH tiers there). Deliberately NOT replaced by
-        // the M6.3 measured medians: the DRR census is rural roads — it has
-        // no measured say inside the Bangkok metro.
+        // Derivation: the TH rural arm totals × 1.5, split via
+        // pipeline/enrich-roads-th.ts thaiClassSplit(isBangkok=true).
         (CITY_BANGKOK, 0) => Some((54000.0, 7200.0, 6300.0, 22500.0)), // 90k motorway
         (CITY_BANGKOK, 1) => Some((27000.0, 3600.0, 3150.0, 11250.0)), // 45k trunk
         (CITY_BANGKOK, 2) => Some((13500.0, 1800.0, 1575.0, 5625.0)),  // 22.5k primary
@@ -123,135 +135,33 @@ fn city_default(city_id: u16, class: u8) -> Option<Aadt> {
     }
 }
 
-// Three-layer policy:
-//   (a) MEASURED region arm from `region_defaults_generated::region_default`
-//       — country × class medians computed from national censuses (M6.3).
-//       PARKED: the TH DRR band→class crosswalk proved invalid (/gg M6
-//       Codex), so the generated table is empty until class attribution via
-//       exact-ref joins lands; the arm then supersedes that country's
-//       hand-tuned arm below.
-//   (b) Hand-tuned arm for a country whose enricher publishes per-class
-//       AADT but has NO per-section measured census wired in (BR rural —
-//       DNIT-derived corridor table; TH's arm was deleted at M6).
-//   (c) Data-driven fallback from `country_defaults_generated::country_scale`
-//       — Wikipedia vehicles_per_km ratio vs DE (wiki-sourced, ~160
-//       countries), or World Bank pop_density fallback (~80 more).
-//       Clamped to [0.7, 1.3], applied to motorway/trunk/primary/link
-//       classes. Local roads (class 3-9) stay at WORLD regardless.
-//
-// Refresh (c):
-//   node scripts/fetch-wb-country-data.mjs
-//   node scripts/fetch-wiki-roads-fleet.mjs
-//   node scripts/gen-country-defaults-rs.mjs
-// Refresh (a):
-//   node scripts/gen-region-defaults-rs.mjs
-// Empirical basis: direct fleet / paved_km is the AADT denominator
-// itself — Wikipedia gives both signals for ~160 countries so we sidestep
-// the need for a proxy. For the remaining ~80 we still use pop_density
-// (weak but positive correlation with motorway fleet-per-km).
-
-/// Classes whose default AADT scales with country traffic intensity
-/// (motorway, trunk, primary, and their ramp classes). Local roads (3-9)
-/// stay at WORLD — informal transport, cycling, pedestrian share
-/// decorrelate local AADT from motorway AADT.
-///
-/// Encoded as a bitmask (1 << class) for O(1) set membership: each
-/// `country_default` call shaves ~6 cmp branches off the hot fallback
-/// path that fires for every `source_id == 0` segment.
-const GDP_SCALED_MASK: u16 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 10) | (1 << 11) | (1 << 12);
-
-#[inline]
-fn is_traffic_scaled(class: u8) -> bool {
-    class < 16 && (GDP_SCALED_MASK >> class) & 1 != 0
-}
-
 fn country_default(iso: &[u8; 2], class: u8) -> Option<Aadt> {
-    // (a) MEASURED region arm — census medians, country × class (M6.3).
-    // PARKED: the TH DRR number-band → engine-class crosswalk proved invalid
-    // (/gg M6 Codex: band-median defaults biased engine class 3 ~4.6 dB low
-    // because 1xxx–5xxx sections are dominantly class 4). The mechanism and
-    // generated table stay for censuses with proper class attribution
-    // (exact-ref joins); TH's entries are removed until then.
-    if let Some(v) = crate::region_defaults_generated::region_default(iso, class) {
-        return Some(v);
-    }
-
-    // (b) Hand-tuned arm — only where no per-section measured census is
-    // wired into the pipeline. TH's arm was deleted at M6 only for classes
-    // the DRR census measures (3 secondary, 4 tertiary); the DOH-backed
-    // classes stay until a DOH adapter lands (/gg M6: deleting them dropped
-    // TH motorway/trunk/primary/residential −1.2 to −5 dB on no measured
-    // evidence). BR stays until a BR per-section census exists in the
-    // pipeline (the DNIT-derived BR table is corridor-level, not per-section
-    // counts).
+    // Hand-set arms exist only where an enricher publishes per-class AADT
+    // but no per-section measured census is wired into the pipeline.
     match (iso, class) {
         // ─── Thailand rural — split 62/10/13/15 ───────────────────────────
         // Thai-tuned class totals × pipeline/enrich-roads-th.ts
-        // thaiClassSplit(isBangkok=false). Rural baseline, Bangkok square
-        // overrides via CITY_BANGKOK above. The M6.3 measured DRR arm is
-        // PARKED (see country_default): the DRR number-band → engine-class
-        // crosswalk proved invalid (/gg M6 Codex: 1xxx–5xxx sections are
-        // dominantly engine class 4, not 3 — band-median defaults biased
-        // class-3 roads ~4.6 dB low). Re-land only after class attribution
-        // via exact-ref joins.
-        (b"TH", 0) => return Some((37200.0, 6000.0, 7800.0, 9000.0)), // 60k motorway
-        (b"TH", 1) => return Some((18600.0, 3000.0, 3900.0, 4500.0)), // 30k trunk
-        (b"TH", 2) => return Some((9300.0, 1500.0, 1950.0, 2250.0)),  // 15k primary
-        (b"TH", 3) => return Some((3720.0, 600.0, 780.0, 900.0)),     // 6k secondary
-        (b"TH", 4) => return Some((1550.0, 250.0, 325.0, 375.0)),     // 2.5k tertiary
-        (b"TH", 5) => return Some((744.0, 120.0, 156.0, 180.0)),      // 1.2k residential
+        // thaiClassSplit(isBangkok=false). Rural baseline; a Bangkok square
+        // overrides via CITY_BANGKOK above.
+        (b"TH", 0) => Some((37200.0, 6000.0, 7800.0, 9000.0)), // 60k motorway
+        (b"TH", 1) => Some((18600.0, 3000.0, 3900.0, 4500.0)), // 30k trunk
+        (b"TH", 2) => Some((9300.0, 1500.0, 1950.0, 2250.0)),  // 15k primary
+        (b"TH", 3) => Some((3720.0, 600.0, 780.0, 900.0)),     // 6k secondary
+        (b"TH", 4) => Some((1550.0, 250.0, 325.0, 375.0)),     // 2.5k tertiary
+        (b"TH", 5) => Some((744.0, 120.0, 156.0, 180.0)),      // 1.2k residential
 
         // ─── Brazil rural (tier 0) — split 60/10/25/5 ────────────────────
         // Source: pipeline/enrich-roads-br.ts CLASS_AADT rural × splitVehicles(tier=0).
-        (b"BR", 0) => return Some((30000.0, 5000.0, 12500.0, 2500.0)), // 50k motorway
-        (b"BR", 1) => return Some((15000.0, 2500.0, 6250.0, 1250.0)),  // 25k trunk
-        (b"BR", 2) => return Some((7200.0, 1200.0, 3000.0, 600.0)),    // 12k primary
-        (b"BR", 3) => return Some((3000.0, 500.0, 1250.0, 250.0)),     // 5k secondary
-        (b"BR", 4) => return Some((1200.0, 200.0, 500.0, 100.0)),      // 2k tertiary
-        (b"BR", 5) => return Some((600.0, 100.0, 250.0, 50.0)),        // 1k residential
-        (b"BR", 6) => return Some((240.0, 40.0, 100.0, 20.0)),         // 400 living_street
+        (b"BR", 0) => Some((30000.0, 5000.0, 12500.0, 2500.0)), // 50k motorway
+        (b"BR", 1) => Some((15000.0, 2500.0, 6250.0, 1250.0)),  // 25k trunk
+        (b"BR", 2) => Some((7200.0, 1200.0, 3000.0, 600.0)),    // 12k primary
+        (b"BR", 3) => Some((3000.0, 500.0, 1250.0, 250.0)),     // 5k secondary
+        (b"BR", 4) => Some((1200.0, 200.0, 500.0, 100.0)),      // 2k tertiary
+        (b"BR", 5) => Some((600.0, 100.0, 250.0, 50.0)),        // 1k residential
+        (b"BR", 6) => Some((240.0, 40.0, 100.0, 20.0)),         // 400 living_street
 
-        _ => {}
+        _ => None,
     }
-
-    // (c) WB GDP-scaled fallback from WORLD_DEFAULT.
-    if !is_traffic_scaled(class) {
-        // Local roads: don't scale with GDP.
-        return None;
-    }
-    let scale = crate::country_defaults_generated::country_scale(iso)?;
-    let class_idx = (class as usize).min(WORLD_DEFAULT.len() - 1);
-    let base = WORLD_DEFAULT[class_idx];
-    Some((
-        base.0 * scale,
-        base.1 * scale,
-        base.2 * scale,
-        base.3 * scale,
-    ))
-}
-
-// Sparse — only where a continent-wide skew is known to diverge from the EU
-// baseline (e.g. Africa has a sparser motorway network, so the class-0
-// default is lower).
-
-fn continent_default(continent: Continent, class: u8) -> Option<Aadt> {
-    // Reached only when country arm returned None (usually because the
-    // ISO is not in the WB dataset or the class isn't GDP-scaled).
-    // We still apply continent scaling for GDP-scaled classes because
-    // those are the ones where the signal matters — local roads fall
-    // through to WORLD_DEFAULT.
-    if !is_traffic_scaled(class) {
-        return None;
-    }
-    let scale = crate::country_defaults_generated::continent_scale(continent)?;
-    let class_idx = (class as usize).min(WORLD_DEFAULT.len() - 1);
-    let base = WORLD_DEFAULT[class_idx];
-    Some((
-        base.0 * scale,
-        base.1 * scale,
-        base.2 * scale,
-        base.3 * scale,
-    ))
 }
 
 // ── Legal default SPEEDS for untagged maxspeed (task #15, 2026-07-03) ──────────────
@@ -352,45 +262,44 @@ mod tests {
         }
     }
 
-    #[test]
-    fn world_default_matches_legacy_motorway() {
-        // Baseline check: cascade with SquareCountryCity::UNKNOWN = WORLD_DEFAULT.
-        assert_eq!(
-            resolve_traffic_default(0, SquareCountryCity::UNKNOWN),
-            WORLD_DEFAULT[0]
-        );
+    fn section_total(default: TrafficDefault) -> Aadt {
+        match default {
+            TrafficDefault::SectionBothDirections(section) => section,
+            TrafficDefault::Carriageway(_) => panic!("hand-set arms are section totals"),
+        }
     }
 
     #[test]
-    fn us_scales_close_to_world_via_wiki_vpk() {
-        // US vehicles_per_km ≈ 60.2 (Wikipedia 2024) ≈ DE's 63.5 → scale ≈ 0.98
-        // → motorway ≈ 29k. (I.3 refined, wiki-sourced.)
-        let a = square_country_city_for(b"US", 0, Continent::NorthAmerica);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
-        let total = l + m + h + x;
-        assert!(
-            total > 28_000.0 && total < 30_000.0,
-            "US motorway ≈ 29k, got {}",
-            total
-        );
-    }
-
-    #[test]
-    fn brazil_rural_motorway_is_50k() {
-        let a = square_country_city_for(b"BR", 0, Continent::SouthAmerica);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
-        let total = l + m + h + x;
-        assert!(
-            (total - 50000.0).abs() < 1.0,
-            "BR rural motorway total should be 50k, got {}",
-            total
-        );
+    fn main_classes_take_the_measured_rate_per_lane_per_carriageway() {
+        let anywhere = square_country_city_for(b"DE", 0, Continent::Europe);
+        let TrafficDefault::Carriageway(motorway) = resolve_traffic_default(0, anywhere, 3, true) else {
+            panic!("motorway prior is per carriageway");
+        };
+        let total = motorway.0 + motorway.1 + motorway.2 + motorway.3;
+        assert!((total - 3.0 * 6379.0).abs() < 1e-9);
+        // WORLD_DEFAULT motorway proportions 72/8/19/1 %.
+        assert!((motorway.0 / total - 0.72).abs() < 1e-12 && (motorway.2 / total - 0.19).abs() < 1e-12);
+        let sum = |default| match default {
+            TrafficDefault::Carriageway(v) => v.0 + v.1 + v.2 + v.3,
+            TrafficDefault::SectionBothDirections(_) => panic!("classes 0-2 are per carriageway"),
+        };
+        assert!((sum(resolve_traffic_default(2, anywhere, 2, false)) - 2.0 * 2800.0).abs() < 1e-9);
+        // No lanes tag (0) or an implausible one: the median of untagged measured rows.
+        assert!((sum(resolve_traffic_default(1, anywhere, 0, true)) - 1810.0).abs() < 1e-9);
+        assert!((sum(resolve_traffic_default(1, SquareCountryCity::UNKNOWN, 9, false)) - 3045.0).abs() < 1e-9);
+        for class in 3..=12 {
+            assert_eq!(
+                resolve_traffic_default(class, anywhere, 3, true),
+                TrafficDefault::SectionBothDirections(WORLD_DEFAULT[class as usize])
+            );
+        }
+        assert_eq!(section_total(resolve_traffic_default(200, anywhere, 0, false)), WORLD_DEFAULT[12]);
     }
 
     #[test]
     fn sao_paulo_tier1_motorway_is_100k() {
         let a = square_country_city_for(b"BR", CITY_SAO_PAULO, Continent::SouthAmerica);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
+        let (l, m, h, x) = section_total(resolve_traffic_default(0, a, 3, true));
         let total = l + m + h + x;
         assert!(
             (total - 100000.0).abs() < 1.0,
@@ -402,7 +311,7 @@ mod tests {
     #[test]
     fn bangkok_motorway_is_90k_with_heavy_moto_share() {
         let a = square_country_city_for(b"TH", CITY_BANGKOK, Continent::Asia);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
+        let (l, m, h, x) = section_total(resolve_traffic_default(0, a, 3, true));
         let total = l + m + h + x;
         assert!(
             (total - 90000.0).abs() < 1.0,
@@ -418,187 +327,17 @@ mod tests {
     }
 
     #[test]
-    fn thailand_classes_use_the_hand_tuned_arm_while_the_measured_arm_is_parked() {
-        // M6.3 follow-up (/gg M6 Codex): the DRR band→class crosswalk proved
-        // invalid (1xxx–5xxx sections are dominantly engine class 4, so band
-        // medians biased class-3 roads low), so the measured arm is parked
-        // (REGION_DEFAULTS is empty) and TH falls back to the hand-tuned
-        // rural arm ×62/10/13/15 for every class until class attribution
-        // lands via exact-ref joins.
-        let a = square_country_city_for(b"TH", 0, Continent::Asia);
-        assert_eq!(resolve_traffic_default(3, a), (3720.0, 600.0, 780.0, 900.0));
-        assert_eq!(resolve_traffic_default(4, a), (1550.0, 250.0, 325.0, 375.0));
-        assert_eq!(
-            resolve_traffic_default(0, a),
-            (37200.0, 6000.0, 7800.0, 9000.0)
-        );
-        assert_eq!(resolve_traffic_default(5, a), (744.0, 120.0, 156.0, 180.0));
-    }
-
-    #[test]
-    fn city_overrides_country() {
-        // If square_country_city.city_id matches, city wins over country default.
-        let sp = square_country_city_for(b"BR", CITY_SAO_PAULO, Continent::SouthAmerica);
-        let br_rural = square_country_city_for(b"BR", 0, Continent::SouthAmerica);
-        let sp_motorway = resolve_traffic_default(0, sp).0;
-        let br_motorway = resolve_traffic_default(0, br_rural).0;
-        assert!(sp_motorway > br_motorway, "SP tier-1 > BR rural");
-    }
-
-    #[test]
     fn unknown_city_falls_through_to_country() {
         // Brazilian square with no metro match (city_id=0) gets BR country default.
         let a = square_country_city_for(b"BR", 0, Continent::SouthAmerica);
         assert_eq!(
-            resolve_traffic_default(0, a),
+            section_total(resolve_traffic_default(0, a, 3, true)),
             (30000.0, 5000.0, 12500.0, 2500.0)
         );
-    }
-
-    #[test]
-    fn dz_algeria_scales_from_wiki_vpk() {
-        // Algeria vehicles_per_km ≈ 66.1 (Wikipedia) ≈ DE → scale ≈ 1.02
-        // → motorway ≈ 30.5k. (I.3 refined, wiki-sourced — replaces
-        // the old density-only heuristic which under-ranked Algeria.)
-        let a = square_country_city_for(b"DZ", 0, Continent::Africa);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
-        let total = l + m + h + x;
-        assert!(
-            total > 29_000.0 && total < 32_000.0,
-            "DZ motorway ≈ 30.5k, got {}",
-            total
-        );
-    }
-
-    #[test]
-    fn class_out_of_range_clamps() {
-        // Classes ≥ 13 clamp to primary_link (class 12) as deterministic fallback.
-        let v = resolve_traffic_default(200, SquareCountryCity::UNKNOWN);
-        assert_eq!(v, WORLD_DEFAULT[12]);
-    }
-
-    // ── Wiki-vpk country scaling tests (plan v5 §I.3 refined) ───────────
-    #[test]
-    fn de_reference_country_at_world_default() {
-        // DE vehicles_per_km = 63.5 = reference → scale = 1.0 → motorway ≈ 30k.
-        // (I.3 refined: DE is the calibration reference for wiki scale.)
-        let a = square_country_city_for(b"DE", 0, Continent::Europe);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
-        let total = l + m + h + x;
-        assert!(
-            (total - 30_000.0).abs() < 100.0,
-            "DE motorway ≈ 30k, got {}",
-            total
-        );
-    }
-
-    #[test]
-    fn sg_hits_upper_clamp() {
-        // SG vehicles_per_km ≈ 285 (Wikipedia) → tanh hits 1.3 clamp
-        // → motorway ≈ 39k. City-state with short dense network.
-        let a = square_country_city_for(b"SG", 0, Continent::Asia);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
-        let total = l + m + h + x;
-        assert!(
-            total > 38_000.0 && total < 40_000.0,
-            "SG motorway ≈ 39k, got {}",
-            total
-        );
-    }
-
-    #[test]
-    fn no_norway_scales_down_via_wiki_vpk() {
-        // NO vehicles_per_km ≈ 35.5 (Wikipedia) → log2(35.5/63.5) ≈ -0.84
-        // → scale ≈ 0.79 → motorway ≈ 24k. Sparse network, moderate fleet.
-        let a = square_country_city_for(b"NO", 0, Continent::Europe);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
-        let total = l + m + h + x;
-        assert!(
-            total > 22_000.0 && total < 25_000.0,
-            "NO motorway ≈ 24k, got {}",
-            total
-        );
-    }
-
-    #[test]
-    fn et_hits_lower_clamp_via_wiki_vpk() {
-        // ET (Ethiopia) vehicles_per_km ≈ 10 (Wikipedia) → hits 0.7 clamp
-        // → motorway ≈ 21k. One of the lowest-motorization countries.
-        let a = square_country_city_for(b"ET", 0, Continent::Africa);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
-        let total = l + m + h + x;
-        assert!(
-            total > 20_000.0 && total < 22_000.0,
-            "ET motorway ≈ 21k, got {}",
-            total
-        );
-    }
-
-    #[test]
-    fn ng_hits_upper_clamp_via_wiki_vpk() {
-        // NG vehicles_per_km ≈ 225 (Wikipedia: 13.5M vehicles, 60k paved)
-        // → scale 1.285 → motorway ≈ 38.5k.
-        let a = square_country_city_for(b"NG", 0, Continent::Africa);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
-        let total = l + m + h + x;
-        assert!(
-            total > 37_000.0 && total < 40_000.0,
-            "NG motorway ≈ 38.5k, got {}",
-            total
-        );
-    }
-
-    #[test]
-    fn density_fallback_still_active_for_missing_wiki() {
-        // Kuwait is in wiki, Angola isn't (vehicles_per_km=null). Angola
-        // should fall back to density-based scale from WB.
-        // AO density ≈ 28.6/km² → scale ≈ 0.76 → motorway ≈ 23k.
-        let a = square_country_city_for(b"AO", 0, Continent::Africa);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
-        let total = l + m + h + x;
-        assert!(
-            total > 21_000.0 && total < 25_000.0,
-            "AO motorway ≈ 23k (density fallback), got {}",
-            total
-        );
-    }
-
-    #[test]
-    fn country_local_roads_are_not_scaled() {
-        // Classes ≥ 3 never scale by GDP — they go straight to WORLD.
-        for iso in [b"NG", b"IN", b"LU", b"DE"] {
-            for class in [3u8, 4, 5, 6, 7, 8, 9] {
-                let a = square_country_city_for(iso, 0, Continent::Unknown);
-                assert_eq!(
-                    resolve_traffic_default(class, a),
-                    WORLD_DEFAULT[class as usize],
-                    "{:?} class={} should be WORLD",
-                    std::str::from_utf8(iso).unwrap(),
-                    class
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn unknown_country_falls_through_to_continent_or_world() {
-        // ZZ is an invalid ISO — the country_scale table returns None.
-        // Continent::Unknown → cascade lands on WORLD.
-        let a = square_country_city_for(b"ZZ", 0, Continent::Unknown);
-        assert_eq!(resolve_traffic_default(0, a), WORLD_DEFAULT[0]);
-    }
-
-    #[test]
-    fn continent_arm_applies_scale() {
-        // Unknown ISO in Africa continent → Africa pop-weighted mean scale.
-        // Africa mean ≈ 1.057 (wiki+density blend) → motorway ≈ 31.7k.
-        let a = square_country_city_for(b"ZZ", 0, Continent::Africa);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
-        let total = l + m + h + x;
-        assert!(
-            total > 30_000.0 && total < 33_000.0,
-            "Africa continent mtw ≈ 31.7k, got {}",
-            total
+        let thailand = square_country_city_for(b"TH", 0, Continent::Asia);
+        assert_eq!(
+            section_total(resolve_traffic_default(3, thailand, 0, false)),
+            (3720.0, 600.0, 780.0, 900.0)
         );
     }
 
@@ -628,15 +367,6 @@ mod tests {
         // country without a table row → None (legacy behavior everywhere)
         let zz = square_country_city_for(b"ZZ", 0, Continent::Unknown);
         assert_eq!(resolve_speed_default(4, zz, BUILT_UP_RURAL), None);
-    }
-
-    #[test]
-    fn explicit_br_takes_priority_over_gdp_scale() {
-        // BR is in WB dataset (would give ~15k motorway from sqrt(17k/69k) × 30k ≈ 15k),
-        // but the explicit arm is 50k — that must win.
-        let a = square_country_city_for(b"BR", 0, Continent::SouthAmerica);
-        let (l, m, h, x) = resolve_traffic_default(0, a);
-        assert!((l + m + h + x - 50000.0).abs() < 1.0);
     }
 
     #[test]

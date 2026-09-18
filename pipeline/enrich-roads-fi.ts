@@ -11,13 +11,9 @@ import { listPreparedSquares } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/provenance.js'
 import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
-  ROAD_CLASS_RANK_TOLERANCE, disjointVehicleClassCountsFitPublishedTotal,
-  osmRoadClassRank, writeRoadAadt, type RoadRow,
+  disjointVehicleClassCountsFitPublishedTotal, nearestCountWithin200Metres, writeRoadAadt, type RoadRow,
 } from './lib/roads-arrow.js'
-import {
-  buildOneHundredthDegreePointGrid, nearestCompatiblePointWithin200Metres,
-  type RankedPoint,
-} from './lib/spatial.js'
+import { buildOneHundredthDegreePointGrid, type RankedPoint } from './lib/spatial.js'
 
 const SOURCE_ID = SOURCE_ID_FI_NATIONAL_ROADS
 const COVERED_ROAD_CLASSES: ReadonlySet<number> = new Set([0, 1, 2, 3, 4, 10, 11, 12])
@@ -139,7 +135,7 @@ export function parseFiPages(pages: readonly unknown[]): ParsedFiPages {
         inconsistentClassTotalsSkipped++
         continue
       }
-      segments.push({ ...roadFeatureObservation(feature as object, 'unknown'),
+      segments.push({ ...roadFeatureObservation(feature as object, 'both-directions'),
         roadNumber,
         latitude,
         longitude,
@@ -188,9 +184,7 @@ export async function enrichFinnishRoads(
   const squares = listPreparedSquares(preparedDirectory, FINLAND_BBOX)
   if (squares.length === 0) throw new Error(`no Finnish roads.arrow squares found under ${preparedDirectory}`)
   const grid = buildOneHundredthDegreePointGrid(segments)
-  const match = (row: RoadRow): FiRoadSegment | null => nearestCompatiblePointWithin200Metres(
-    row.midLat, row.midLon, osmRoadClassRank(row.roadClass), ROAD_CLASS_RANK_TOLERANCE, grid,
-  )
+  const match = (row: RoadRow): FiRoadSegment | null => nearestCountWithin200Metres(row, grid)
   const result: FiEnrichmentResult = {
     rows: 0, matched: 0, retracted: 0, skippedForeign: 0,
     squares: squares.length, squaresUpdated: 0,
@@ -203,7 +197,8 @@ export async function enrichFinnishRoads(
         const segment = match(row)
         return segment ? { countBasis: segment.countBasis, observationId: segment.observationId,
           light: segment.light, medium: segment.medium, heavy: segment.heavy,
-          moto: segment.moto, sourceId: SOURCE_ID,
+          // Only kvl_raskas is a class count; moto is 1 %, medium an invented zero, light the residual.
+          moto: segment.moto, sourceId: SOURCE_ID, estimatedClasses: 1 | 2 | 8,
         } : null
       },
       undefined,

@@ -1,7 +1,7 @@
 //! Allocate one physical cross-section once; longitudinal pieces retain through-flow.
 
 use crate::input::Road;
-use noise_compute::defaults::resolve_traffic_default;
+use noise_compute::defaults::{resolve_traffic_default, TrafficDefault};
 use noise_compute::normalize::road::{access_factor, lane_ratio};
 
 // Conservative matching envelope inherited from European source admission.
@@ -76,41 +76,47 @@ pub fn resolve<'a>(road: &'a Road, candidates: impl IntoIterator<Item = &'a Road
     if road.tunnel || (matches!(road.access, 2 | 4) && !measured) {
         return ([0.0; 4], 15);
     }
-    let alternatives = cross_section(road, candidates);
-    let is_prior = road.source_id == 0;
-    let mut estimated = road.estimated;
-    let mut values = if is_prior {
-        let prior = resolve_traffic_default(road.class, road.country);
-        [prior.0, prior.1, prior.2, prior.3]
-    } else { road.counts };
-    let count = alternatives.len();
-    let factor = if is_prior {
-        estimated = 15;
-        let lane_factor = alternatives.iter().map(|candidate|
-            lane_ratio(candidate.class as usize, candidate.lanes, candidate.direction != 0))
-            .fold(1.0, f64::max);
-        // The standalone one-way estimate is a separately resolved directional
-        // prior. Two evidenced carriageways instead share one section prior.
-        let share = if count > 1 { 1.0 / count as f64 }
-            else if road.direction != 0 { 0.5 } else { 1.0 };
-        lane_factor * share * access_factor(road.access, road.provenance, road.class)
-    } else if road.basis == 1 {
-        // Published directional traffic is already on a directional basis,
-        // including when the publisher's OSM tag disagrees with the count.
-        1.0
-    } else {
-        // Neither unknown scope nor an estimated physical split is a measured
-        // directional count. Keep that uncertainty in every class's status.
-        if road.basis == 0 || road.direction != 0 || count > 1 { estimated = 15; }
-        let share = if count > 1 { 1.0 / count as f64 }
-            else if !road.provenance.is_measured() && road.direction != 0 { 0.5 }
-            else { 1.0 };
-        share * access_factor(road.access, road.provenance, road.class)
-    };
-    for value in &mut values { *value *= factor; }
-    (values, estimated)
+    let access = access_factor(road.access, road.provenance, road.class);
+    if road.source_id == 0 {
+        let (prior, factor) = match resolve_traffic_default(road.class, road.country, road.lanes, road.direction != 0) {
+            // A measured per-lane rate already describes this one stored carriageway.
+            TrafficDefault::Carriageway(prior) => (prior, access),
+            TrafficDefault::SectionBothDirections(prior) => {
+                let alternatives = cross_section(road, candidates);
+                let lane_factor = alternatives.iter().map(|candidate|
+                    lane_ratio(candidate.class as usize, candidate.lanes, candidate.direction != 0))
+                    .fold(1.0, f64::max);
+                // A standalone one-way row takes one direction of the section
+                // total; evidenced carriageways share that total instead.
+                let share = if alternatives.len() > 1 { 1.0 / alternatives.len() as f64 }
+                    else if road.direction != 0 { 0.5 } else { 1.0 };
+                (prior, lane_factor * share * access)
+            }
+        };
+        return ([prior.0, prior.1, prior.2, prior.3].map(|value| value * factor), 15);
+    }
+    // Published directional traffic is already on a directional basis,
+    // including when the publisher's OSM tag disagrees with the count.
+    if road.basis == 1 { return (road.counts, road.estimated); }
+    let count = cross_section(road, candidates).len();
+    // Neither unknown scope nor an estimated physical split is a measured
+    // directional count. Keep that uncertainty in every class's status. A lone
+    // one-way street's own profile (basis 4) is the counter's value unchanged.
+    let estimated = if road.basis == 0 || count > 1 || (road.direction != 0 && road.basis != 4) { 15 }
+        else { road.estimated };
+    // A national census publishes the two-way total of a numbered road
+    // (release r260910, classes 0-1: paired one-way rows sit at a median 0.50
+    // of the adjacent two-way count, lone rows at 1.00; 13,623 of 269,552 km
+    // are lone). A lone one-way main-road row therefore misses its sibling and
+    // holds one direction. Classes 3+ stay whole: 30 % of their measured
+    // one-way km are genuine one-way streets. A street's own cross-section
+    // (basis 4, city profile counters) is already the one direction there.
+    let lone_direction_of_a_two_way_total = road.direction != 0 && road.basis != 4
+        && (!road.provenance.is_measured() || (road.basis == 2 && road.class <= 2 && !road.corridor.is_empty()));
+    let share = if count > 1 { 1.0 / count as f64 }
+        else if lone_direction_of_a_two_way_total { 0.5 } else { 1.0 };
+    (road.counts.map(|value| value * share * access), estimated)
 }
-
 
 /// Cut where the physical alternative set changes, before resolving each child.
 pub fn intervals<'a>(road: &'a Road, candidates: &[&'a Road]) -> Vec<(f64, f64, [f64; 4], u8)> {
@@ -136,9 +142,14 @@ pub fn intervals<'a>(road: &'a Road, candidates: &[&'a Road]) -> Vec<(f64, f64, 
     cuts.sort_by(f64::total_cmp);
     cuts.dedup();
     let point = |t: f64| (road.start.0 + axis.0 * t, road.start.1 + axis.1 * t);
-    cuts.windows(2).map(|pair| {
+    let mut children: Vec<(f64, f64, [f64; 4], u8)> = Vec::new();
+    for pair in cuts.windows(2) {
         let child = Road { start: point(pair[0]), end: point(pair[1]), ..road.clone() };
         let (counts, estimated) = resolve(&child, candidates.iter().copied());
-        (pair[0], pair[1], counts, estimated)
-    }).collect()
+        match children.last_mut() {
+            Some(previous) if previous.2 == counts && previous.3 == estimated => previous.1 = pair[1],
+            _ => children.push((pair[0], pair[1], counts, estimated)),
+        }
+    }
+    children
 }

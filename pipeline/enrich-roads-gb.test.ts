@@ -39,7 +39,7 @@ function road(overrides: Partial<RoadRow> = {}): RoadRow {
 
 function point(overrides: Partial<DftCountPoint> = {}): DftCountPoint {
   return {
-    countBasis: 'unknown', observationId: '1',
+    countBasis: 'both-directions', observationId: '1',
     ref: 'A1', latitude: 51.505, longitude: -0.095, roadCategory: 'PA',
     light: 1000, medium: 40, heavy: 100, moto: 10, total: 1150, year: 2024,
     ...overrides,
@@ -57,7 +57,7 @@ test('DfT CSV parsing respects quoted commas, latest-point identity, age and cla
   const parsed = parseDftCsv(csv)
   assert.equal(parsed.length, 1)
   assert.deepEqual(parsed[0], {
-    countBasis: 'unknown', observationId: '1',
+    countBasis: 'both-directions', observationId: '1',
     ref: 'A1', latitude: 51.5, longitude: -0.1, roadCategory: 'PA',
     light: 220, medium: 8, heavy: 40, moto: 4, total: 272, year: 2024,
   })

@@ -131,12 +131,13 @@ export async function enrichGermanRoads(
         if (!section) return null
         const pickedSourceId = sourceId(section)
         return {
-          ...roadObservation(section.tkzst, 'unknown'),
+          ...roadObservation(section.tkzst, 'both-directions'),
           light: section.aadt_light,
           medium: section.aadt_medium,
           heavy: section.aadt_heavy,
           moto: section.aadt_moto,
           sourceId: pickedSourceId,
+          estimatedClasses: 0, // BASt publishes DTV per vehicle group
         }
       },
       (_row, _index, applied) => {

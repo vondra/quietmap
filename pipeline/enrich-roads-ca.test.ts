@@ -22,7 +22,7 @@ const feature = (overrides: Record<string, unknown> = {}) => ({
   geometry: { type: 'LineString', coordinates: [[-73.01, 46.8], [-72.99, 46.8]] }, ...overrides,
 })
 const section = (overrides: Partial<QuebecDjmaSection> = {}): QuebecDjmaSection => ({
-  countBasis: 'unknown', observationId: 'station-1', sourceRow: 0, route: 138, rank: 1, latitude: 46.8, longitude: -73,
+  countBasis: 'both-directions', observationId: 'station-1', sourceRow: 0, route: 138, rank: 1, latitude: 46.8, longitude: -73,
   total: 1000, truckPercent: 10, light: 890, medium: 20, heavy: 80, moto: 10,
   ...overrides,
 })

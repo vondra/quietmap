@@ -26,6 +26,7 @@ export const LAYERS = ['roads', 'railways', 'industrial', 'buildings'] as const
 export type Layer = (typeof LAYERS)[number]
 
 export type StepKind =
+  | 'restore-road-parents'
   | 'built-up'
   | 'roads-europe'
   | 'roads-national'
@@ -61,6 +62,7 @@ export function parseScope(raw: string): Scope {
 
 export function buildPlan(_scope: Scope, layer?: Layer): PlanStep[] {
   const steps: PlanStep[] = [
+    { id: 'roads-restore-parents', phase: 'column-parents', kind: 'restore-road-parents' },
     { id: 'roads-built-up', phase: 'column-parents', kind: 'built-up' },
     { id: 'roads-europe', phase: 'global-priors', kind: 'roads-europe' },
     { id: 'industrial-global', phase: 'global-priors', kind: 'industrial-global' },

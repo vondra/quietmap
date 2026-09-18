@@ -10,9 +10,7 @@ import {
 } from './lib/roads-ca-source.js'
 import { haversineM } from './lib/spatial.js'
 import { SOURCE_ID_CA_NATIONAL_ROADS } from './lib/source-ids.generated.js'
-import {
-  osmRoadClassRank, ROAD_CLASS_RANK_TOLERANCE, writeRoadAadt, type RoadRow,
-} from './lib/roads-arrow.js'
+import { roadClassTakesCount, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
 
 const SOURCE_ID = SOURCE_ID_CA_NATIONAL_ROADS
 const QUEBEC_BBOX = [44.5, -80, 63, -56] as const
@@ -39,11 +37,10 @@ export function matchQuebecDjma(
   const route = normalizeQuebecOsmRef(row.ref ?? '')
   const candidates = route === null ? undefined : byRoute.get(route)
   if (!candidates) return null
-  const roadRank = osmRoadClassRank(row.roadClass)
   let closest: QuebecDjmaSection | null = null
   let closestDistance = MAXIMUM_MATCH_DISTANCE_M
   for (const section of candidates) {
-    if (Math.abs(roadRank - section.rank) > ROAD_CLASS_RANK_TOLERANCE) continue
+    if (!roadClassTakesCount(row.roadClass, section)) continue
     const distance = haversineM(row.midLat, row.midLon, section.latitude, section.longitude)
     if (distance < closestDistance) {
       closest = section

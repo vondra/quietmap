@@ -117,8 +117,11 @@ function tmdaPoint(value: unknown): TmdaPoint | null {
   if (!Array.isArray(point) || !Number.isFinite(Number(point[0])) || !Number.isFinite(Number(point[1]))) return null
   const properties = feature.properties && typeof feature.properties === 'object' && !Array.isArray(feature.properties)
     ? feature.properties as Record<string, unknown> : {}
+  // A rama of the Plan Nacional de Censos is one road leg at the station, published with its own
+  // road ROL and destination name (station 07-159: J-40 towards Teno 7,582, J-40 towards Pte. Rauco
+  // 5,235, J-300-I 4,142), never a direction of travel: its TMDA is that leg's two-way total.
   const aadt = Math.max(...[1, 2, 3, 4].map(index => Number(properties[`TMDA_RAMA_${index}`]) || 0))
-  return aadt >= 50 ? { ...roadFeatureObservation(value, 'unknown'), longitude: Number(point[0]), latitude: Number(point[1]), aadt } : null
+  return aadt >= 50 ? { ...roadFeatureObservation(value, 'both-directions'), longitude: Number(point[0]), latitude: Number(point[1]), aadt } : null
 }
 
 export function loadChileRoadSource(options: RoadLoaderArguments): ChileRoadSource {

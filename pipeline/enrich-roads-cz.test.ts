@@ -82,11 +82,11 @@ test('matcher does not invent a bridge between disconnected ArcGIS paths', () =>
 })
 
 test('matcher filters incompatible road rank before choosing the nearest section', () => {
-  const incompatible: CensusSection = { countBasis: 'unknown', observationId: '1',
+  const incompatible: CensusSection = { countBasis: 'both-directions', observationId: '1',
     ref: '34', rank: 4, light: 1, medium: 1, heavy: 1, moto: 1,
     paths: [[[14.0005, 50.0005]]],
   }
-  const compatible: CensusSection = { countBasis: 'unknown', observationId: '2',
+  const compatible: CensusSection = { countBasis: 'both-directions', observationId: '2',
     ref: '34', rank: 1, light: 2, medium: 2, heavy: 2, moto: 2,
     paths: [[[14.001, 50.0005]]],
   }
@@ -117,5 +117,5 @@ test('z9 CZ pass writes domestic data and heals a matching foreign CZ stamp', as
   assert.deepEqual([...Array(2)].map((_, index) => table.getChild('aadt_light')!.get(index)), [110, 0])
   assert.equal(table.schema.metadata.get('roads_contract'), 'country_baked_v1')
   assert.deepEqual([...table.getChild('traffic_observation_id')!], ['12345', ''])
-  assert.deepEqual([...table.getChild('traffic_count_basis')!], [0, 0])
+  assert.deepEqual([...table.getChild('traffic_count_basis')!], [2, 0])
 })

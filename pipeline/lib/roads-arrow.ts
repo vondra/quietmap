@@ -7,8 +7,9 @@ import { Footer } from 'apache-arrow/ipc/metadata/file'
 import { ROAD_COUNT_BASES, type RoadObservation } from './road-observation.js'
 import { withArrowWrite } from './provenance.js'
 import {
-  SOURCES_BY_ID, countryIsosForNationalSource, isMeasured, shouldOverwrite,
+  SOURCES_BY_ID, countryIsosForNationalSource, shouldOverwrite,
 } from './sources.js'
+import { nearestCompatiblePointWithin200Metres, type RankedPoint } from './spatial.js'
 import {
   bakedRoadCountryReader, iso2Code, segmentGeometryReader, type SegmentGeometry,
 } from './prepared-grid.js'
@@ -21,6 +22,17 @@ export const ROAD_CLASS_RANK_TOLERANCE = 1
 
 export const osmRoadClassRank = (roadClass: number): number =>
   roadClass <= 4 ? roadClass : roadClass === 10 ? 0 : roadClass === 11 ? 1 : roadClass === 12 ? 2 : 6
+
+/** A count is stamped only on the class family it was counted on: a publisher ramp count
+ *  only on slip roads, every other count never on them; then the functional ranks must agree. */
+export const roadClassTakesCount = (roadClass: number, counted: Pick<RankedPoint, 'rank' | 'isRamp'>): boolean =>
+  isSlipRoadClass(roadClass) === (counted.isRamp === true) && (counted.rank === null ||
+    Math.abs(osmRoadClassRank(roadClass) - counted.rank) <= ROAD_CLASS_RANK_TOLERANCE)
+
+export const nearestCountWithin200Metres = <T extends RankedPoint>(
+  row: RoadRow, grid: ReadonlyMap<string, readonly T[]>,
+): T | null => nearestCompatiblePointWithin200Metres(
+  row.midLat, row.midLon, grid, point => roadClassTakesCount(row.roadClass, point))
 
 /** Validate disjoint class counts against an exact or independently rounded total. */
 export function disjointVehicleClassCountsFitPublishedTotal(
@@ -44,7 +56,9 @@ export interface RoadAadt extends RoadObservation {
   sourceId: number
   /** Derived effective speed; any accepted write clears it unless restated. */
   speedTaper?: number
-  /** Bits light=1, medium=2, heavy=4, moto=8: estimated class counts. */
+  /** Bits light=1, medium=2, heavy=4, moto=8: set where the value is a policy share of a published
+   *  total (or an invented zero), clear only where the publisher counted that class. Omitted = 15:
+   *  the count basis says whose directions a total covers, never which classes were counted. */
   estimatedClasses?: number
   /** Original dataset of a propagated observation; authored writes use sourceId. */
   observationSourceId?: number
@@ -98,13 +112,11 @@ export interface RoadTimeProfileEntry {
 
 export const ROADS_TIME_PROFILES_METADATA_KEY = 'roads_time_profiles'
 
-/** Metadata-only probe of a roads.arrow IPC file: the owning profile-source
- * URL recorded in the schema dictionary, or null when the file carries no
- * `roads_time_profiles` metadata. Parses just the IPC footer flatbuffer —
- * record batches are never decoded — so stale-owner discovery stays cheap
- * enough to sweep every candidate square (Arrow file layout: footer, then
- * int32 footer length, then the closing `ARROW1` magic). */
-export function readRoadTimeProfilesSource(arrowPath: string): string | null {
+/** Schema metadata of an Arrow IPC file from its footer flatbuffer alone —
+ * record batches are never read — so a sweep over every square stays cheap
+ * (Arrow file layout: footer, then int32 footer length, then the closing
+ * `ARROW1` magic). */
+export function readArrowFileSchemaMetadata(arrowPath: string): Map<string, string> {
   const file = openSync(arrowPath, 'r')
   try {
     const { size } = fstatSync(file)
@@ -112,17 +124,22 @@ export function readRoadTimeProfilesSource(arrowPath: string): string | null {
     const tail = Buffer.alloc(10)
     readSync(file, tail, 0, 10, size - 10)
     if (tail.toString('latin1', 4) !== 'ARROW1') {
-      throw new Error(`readRoadTimeProfilesSource: ${arrowPath} is not an Arrow IPC file`)
+      throw new Error(`${arrowPath} is not an Arrow IPC file`)
     }
     const footerLength = tail.readUInt32LE(0)
     if (footerLength <= 0 || footerLength > size - 20) throw new Error(`invalid Arrow footer: ${arrowPath}`)
     const footer = Buffer.alloc(footerLength)
     readSync(file, footer, 0, footerLength, size - 10 - footerLength)
-    const raw = Footer.decode(footer).schema.metadata.get(ROADS_TIME_PROFILES_METADATA_KEY)
-    return raw ? decodeTimeProfileDictionary(raw).source : null
+    return Footer.decode(footer).schema.metadata
   } finally {
     closeSync(file)
   }
+}
+
+/** The owning profile-source URL of a roads.arrow file, or null without a `roads_time_profiles` dictionary. */
+export function readRoadTimeProfilesSource(arrowPath: string): string | null {
+  const raw = readArrowFileSchemaMetadata(arrowPath).get(ROADS_TIME_PROFILES_METADATA_KEY)
+  return raw ? decodeTimeProfileDictionary(raw).source : null
 }
 
 function assertTimeProfileEntry(entry: RoadTimeProfileEntry): void {
@@ -484,8 +501,7 @@ export function applyRoadAadt(
       throw new Error(`writeRoadAadt: invalid observation source ${nextOrigin}`)
     }
     const nextBasis = ROAD_COUNT_BASES.indexOf(candidate.countBasis)
-    const nextEstimated = candidate.estimatedClasses ??
-      (isMeasured(candidate.sourceId) && candidate.countBasis !== 'unknown' ? 0 : 15)
+    const nextEstimated = candidate.estimatedClasses ?? 15
     const nextTaper = candidate.speedTaper ?? 0
     const valueChanged = light[index] !== candidate.light || medium[index] !== candidate.medium ||
       heavy[index] !== candidate.heavy || moto[index] !== candidate.moto ||

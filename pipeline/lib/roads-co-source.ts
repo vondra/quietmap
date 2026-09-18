@@ -87,7 +87,7 @@ export function matchColombiaRoad(row: RoadRow, source: ColombiaRoadSource) {
   if (row.roadClass > 2) return null
   const tier = cityTier(row.midLat, row.midLon)
   const observed = nearestRoadLine(row.midLat, row.midLon, source.tpda, 500)
-  if (observed) return { ...pinnedRoadObservation(observed, 'unknown'), kind: 'tpda' as const, ...observedSplit(tpdaAadt(observed) * multiplier(tier), observed) }
+  if (observed) return { ...pinnedRoadObservation(observed, 'both-directions'), kind: 'tpda' as const, ...observedSplit(tpdaAadt(observed) * multiplier(tier), observed) }
   const network = nearestRoadLine(row.midLat, row.midLon, source.network, 400)
   if (!network) return null
   const coal = tier === 0 && COAL_REGIONS.some(bbox => inBbox(row.midLat, row.midLon, bbox))

@@ -170,7 +170,7 @@ function parseFile(
       stats.invalidHeavyRatioSkipped++
       continue
     }
-    sections.push({ ...roadObservation({ year, row }, 'unknown'),
+    sections.push({ ...roadObservation({ year, row }, 'both-directions'),
       route, ref, lat, lon, coords, tmja, ratio_pl: ratio,
       aadt_light, aadt_medium, aadt_heavy, aadt_moto,
     })

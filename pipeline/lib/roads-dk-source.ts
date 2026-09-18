@@ -28,6 +28,7 @@ export interface DanishMastraObservation extends RoadObservation {
   latitude: number
   longitude: number
   rank: number
+  isRamp: boolean
   total: number
   light: number
   medium: number
@@ -110,11 +111,19 @@ export function parseDanishMastraPages(rawPages: readonly string[]): DanishMastr
         continue
       }
       const total = Math.round(totalValue)
-      const observation: DanishMastraObservation = { sourceRow, ...roadFeatureObservation(feature as object, 'unknown'), roadNumber, kilometre, year,
-        latitude, longitude, rank: String(properties?.VEJBESTYRER ?? '').trim() === '0' ? 1 : 4,
+      const isStateRoad = String(properties?.VEJBESTYRER ?? '').trim() === '0'
+      // Vejdirektoratet VEJDEL on state roads: 0 is the whole road, 1 and 2 its separate carriageways,
+      // 3 and above the ramps. In the pinned pages the 27 state roads counted both ways hold a median
+      // 0.505 of their part-0 count on part 1 or 2 (road 40: 31,148 and 30,229 against 63,388), so
+      // those 95 rows are one direction. Municipal parts show no such ratio (0.94) and stay totals.
+      const roadPart = String(properties?.VEJDEL ?? '').trim()
+      const statePart = isStateRoad ? Number.parseInt(roadPart, 10) : 0
+      const observation: DanishMastraObservation = { sourceRow,
+        ...roadFeatureObservation(feature as object, statePart === 1 || statePart === 2 ? 'directional' : 'both-directions'), roadNumber, kilometre, year,
+        latitude, longitude, rank: isStateRoad ? 1 : 4, isRamp: statePart >= 3,
         total, ...splitDanishTraffic(total, publishedHeavy) }
       result.admittedRecords++
-      const key = `${roadNumber}_${kilometre}`
+      const key = `${roadNumber}_${roadPart}_${kilometre}`
       const previous = latest.get(key)
       if (!previous || observation.year > previous.year) latest.set(key, observation)
       sourceRow++
