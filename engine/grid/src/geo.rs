@@ -291,9 +291,6 @@ pub fn finite_line_correction_for_divergence(
     signed_fraction: f64,
     d_divergence_m: f64,
 ) -> f64 {
-    if seg_length_m < 0.1 {
-        return 0.0;
-    }
     let d_perp = d_perp_m.max(FLC_MIN_PERP_M);
     // `.max(d_perp)`: the endpoint distance is ≥ the perpendicular one by
     // construction, except when the floor lifted `d_perp` above it.
@@ -314,7 +311,10 @@ pub fn finite_line_correction(
     d_perp_horizontal: f64,
     fraction: f64, // 0-1 position of closest point along segment
 ) -> f64 {
-    if seg_length_m < 0.1 || d_perp_horizontal < 0.1 {
+    // A short piece subtends a small angle and radiates proportionally little. Returning 0 dB
+    // here once made every piece under 0.1 m as loud as an infinite line (up to +10 dB on the
+    // road layer where finalize had cut centimetre slivers, regression hunt 2026-09-18).
+    if d_perp_horizontal < 0.1 {
         return 0.0;
     }
 
@@ -339,7 +339,8 @@ pub fn finite_line_correction(
 
     // Correction: ratio of subtended angle to π (full infinite line)
     // Use ln for speed: 10*log10(x) = (10/ln10)*ln(x)
-    let correction = 4.342944819032518_f64 * (theta / std::f64::consts::PI).ln();
+    // The floor keeps a zero-length piece finite (-115 dB) instead of -inf.
+    let correction = 4.342944819032518_f64 * (theta.max(1e-12) / std::f64::consts::PI).ln();
 
     correction.min(0.0)
 }
@@ -375,6 +376,18 @@ pub fn reach_box_half_extents_deg(widest_abs_lat_deg: f64, reach_m: f64) -> (f64
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_short_piece_radiates_in_proportion_to_its_length_not_as_an_infinite_line() {
+        // 0.05 m seen from 100 m subtends 0.0005 rad: 10 log10(0.0005 / pi) = -38.0 dB.
+        let sliver = super::finite_line_correction(0.05, 100.0, 0.5);
+        assert!((sliver + 37.98).abs() < 0.05, "{sliver}");
+        // Two halves carry the energy of the whole, however short.
+        let whole = 10f64.powf(super::finite_line_correction(0.08, 50.0, 0.5) / 10.0);
+        let halves = 2.0 * 10f64.powf(super::finite_line_correction(0.04, 50.0, 0.5) / 10.0);
+        assert!((whole / halves - 1.0).abs() < 1e-6);
+        assert!(super::finite_line_correction(0.0, 50.0, 0.5).is_finite());
+    }
+
     use super::*;
 
     /// The box must CONTAIN the reach disk at every latitude a source can sit at,

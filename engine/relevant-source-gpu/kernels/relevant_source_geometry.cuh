@@ -208,9 +208,8 @@ __device__ __forceinline__ float finite_line_correction_db(
     float signed_fraction,
     float divergence_distance_m
 ) {
-    if (segment_length_m < 0.1f) {
-        return 0.0f;
-    }
+    // No short-length shortcut: a centimetre piece must radiate by its subtended angle, not as
+    // an infinite line (CPU twin: grid/src/geo.rs finite_line_correction).
     const float perpendicular = fmaxf(perpendicular_distance_m,
                                       QUIETMAP_FINITE_LINE_MIN_PERPENDICULAR_M);
     const float first = signed_fraction * segment_length_m / perpendicular;
