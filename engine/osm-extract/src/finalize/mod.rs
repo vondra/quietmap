@@ -27,22 +27,27 @@ use std::path::Path;
 
 use crate::poi_join::{JoinStats, PoiIndex};
 use crate::spill::{parse_ring_text, square_from_spill_key};
+use crate::transport::{load_node_aliases, NodeAliases};
 
 mod write_airport;
 mod write_barriers;
 mod write_buildings;
 mod write_industrial;
 mod write_leisure;
+pub mod write_railway_globals;
 mod write_railways;
 mod write_roads;
+pub mod write_source_pieces;
 
 use write_airport::{write_airport_areas, write_airport_lines};
 use write_barriers::write_barriers;
 use write_buildings::write_buildings;
 use write_industrial::write_industrial;
 use write_leisure::write_leisure;
+use write_railway_globals::{write_railway_ways, write_train_routes};
 use write_railways::write_railways;
 use write_roads::write_roads;
+use write_source_pieces::write_source_pieces;
 
 /// Per-file schema contracts. Bumped from the hex era (`buildings_v2`,
 /// `leisure_v1`): integer grid columns, `geom` binaries, no leisure capacity.
@@ -58,7 +63,9 @@ pub const GRID_CONTRACT_Z30: &str = "z30";
 ///
 /// Each `(source, bucket)` pair is an independent unit of work: `bucket` is a
 /// pure function of the square id, so a given square lands in exactly one
-/// bucket — two units never write the same `{source}.arrow` path.
+/// bucket — two units never write the same `{source}.arrow` path. The roads and
+/// railways units also write the square's `{source}.pieces.arrow`; the two railway
+/// globals beside the year are built by one more task on the same pool.
 pub fn finalize(spill_dir: &Path, output_dir: &Path, num_buckets: usize) -> Result<usize> {
     // `poi` is intentionally NOT a final source — it is the footprint-join
     // input consumed when finalizing `buildings`.
@@ -83,14 +90,34 @@ pub fn finalize(spill_dir: &Path, output_dir: &Path, num_buckets: usize) -> Resu
         units.len()
     );
 
+    let aliases = load_node_aliases(spill_dir)?;
+    let no_aliases = HashMap::new();
+    let railway_aliases = aliases.get("railways").unwrap_or(&no_aliases);
     // Shared across the parallel building buckets.
     let join_stats = JoinStats::default();
-    let dir_sets = units
-        .par_iter()
-        .map(|(source, bucket)| {
-            finalize_bucket(source, *bucket, spill_dir, output_dir, &join_stats)
-        })
-        .collect::<Result<Vec<HashSet<String>>>>()?;
+    let (dir_sets, railway_globals) = rayon::join(
+        || {
+            units
+                .par_iter()
+                .map(|(source, bucket)| {
+                    finalize_bucket(
+                        source,
+                        *bucket,
+                        spill_dir,
+                        output_dir,
+                        &aliases,
+                        &join_stats,
+                    )
+                })
+                .collect::<Result<Vec<HashSet<String>>>>()
+        },
+        || {
+            write_railway_ways(spill_dir, output_dir, railway_aliases)?;
+            write_train_routes(spill_dir, output_dir)
+        },
+    );
+    let dir_sets = dir_sets?;
+    railway_globals?;
 
     let (checked, reclassified) = join_stats.report();
     if checked > 0 {
@@ -117,6 +144,7 @@ fn finalize_bucket(
     bucket: usize,
     spill_dir: &Path,
     output_dir: &Path,
+    aliases: &NodeAliases,
     join_stats: &JoinStats,
 ) -> Result<HashSet<String>> {
     let mut square_dirs = HashSet::new();
@@ -164,6 +192,7 @@ fn finalize_bucket(
                     id,
                     &current_rows,
                     output_dir,
+                    aliases,
                     &poi_index,
                     join_stats,
                 )?);
@@ -180,6 +209,7 @@ fn finalize_bucket(
                 id,
                 &current_rows,
                 output_dir,
+                aliases,
                 &poi_index,
                 join_stats,
             )?);
@@ -214,6 +244,7 @@ fn flush_square(
     spill_key: u32,
     rows: &[Vec<String>],
     output_dir: &Path,
+    aliases: &NodeAliases,
     poi_index: &PoiIndex,
     join_stats: &JoinStats,
 ) -> Result<String> {
@@ -227,6 +258,15 @@ fn flush_square(
         .join(square.y.to_string());
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{source}.arrow"));
+    if matches!(source, "roads" | "railways") {
+        let no_aliases = HashMap::new();
+        write_source_pieces(
+            source,
+            rows,
+            aliases.get(source).unwrap_or(&no_aliases),
+            &dir.join(format!("{source}.pieces.arrow")),
+        )?;
+    }
     match source {
         "roads" => write_roads(rows, &path),
         "railways" => write_railways(rows, &path),
@@ -281,6 +321,21 @@ pub(super) fn write_arrow_z14_blocked(
         writer.write(batch)?;
     }
     writer.finish()?;
+    fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
+/// A plain one-batch Arrow file through a sibling temp and rename, never an append.
+pub(crate) fn write_single_batch_arrow(
+    path: &Path,
+    batch: arrow::record_batch::RecordBatch,
+) -> Result<()> {
+    let tmp_path = path.with_extension("arrow.tmp");
+    let file = File::create(&tmp_path)?;
+    let mut writer = FileWriter::try_new(file, &batch.schema())?;
+    writer.write(&batch)?;
+    writer.finish()?;
+    writer.get_ref().sync_all()?;
     fs::rename(&tmp_path, path)?;
     Ok(())
 }

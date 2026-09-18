@@ -35,7 +35,8 @@ export function restoreRoadParentsForEnrichment(
   const firstRows = new Map(Array.from(children, ([key, rows]) => [key, rows[0]]))
   // Finalization drops a parent whose whole extent is one z30 cell; continuity still needs its incidence,
   // so it returns with the way-level attributes of the nearest surviving piece of the same way.
-  const dropped = topology.squarePieceKeys(square).filter(key => !firstRows.has(key))
+  const pieces = topology.squarePieces(square)
+  const dropped = Array.from({ length: pieces.count }, (_, row) => pieces.key(row)).filter(key => !firstRows.has(key))
   const donors = new Map<string, Array<[segment: number, row: number]>>()
   if (dropped.length) for (const [key, row] of firstRows) {
     const [way, segment] = key.split(':')
@@ -56,20 +57,17 @@ export function restoreRoadParentsForEnrichment(
   }))
   const cut = [...firstRows].flatMap(([key, row], parent) =>
     children.get(key)?.length !== 1 || !isExtractedLength(geometry.length_m[parent]) ? [{ key, row, parent }] : [])
-  if (cut.length) {
-    const source = topology.squareParentGeometries(square, cut.map(({ row }) => String(ids.get(row))))
-    for (const { key, parent } of cut) {
-      const sourceParent = source.get(key)
-      if (!sourceParent) throw new Error(`source road parent missing ${key} in ${square}`)
-      const covered = sourceParentCoveredByChildren(table, children.get(key) ?? [],
-        sourceParent, 'road', `${key} in ${square}`)
-      geometry.segment_idx[parent] = Number(key.split(':')[1])
-      geometry.start_gx[parent] = covered.start[0]
-      geometry.start_gy[parent] = covered.start[1]
-      geometry.end_gx[parent] = covered.end[0]
-      geometry.end_gy[parent] = covered.end[1]
-      geometry.length_m[parent] = covered.lengthM
-    }
+  for (const { key, row, parent } of cut) {
+    const segment = Number(key.split(':')[1]), sourceRow = pieces.row(String(ids.get(row)), segment)
+    if (sourceRow < 0) throw new Error(`source road parent missing ${key} in ${square}`)
+    const covered = sourceParentCoveredByChildren(table, children.get(key) ?? [],
+      pieces.geometry(sourceRow), 'road', `${key} in ${square}`)
+    geometry.segment_idx[parent] = segment
+    geometry.start_gx[parent] = covered.start[0]
+    geometry.start_gy[parent] = covered.start[1]
+    geometry.end_gx[parent] = covered.end[0]
+    geometry.end_gy[parent] = covered.end[1]
+    geometry.length_m[parent] = covered.lengthM
   }
   const columns: Record<string, Vector> = {}
   for (const field of kept) {

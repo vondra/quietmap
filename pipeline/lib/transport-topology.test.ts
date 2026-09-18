@@ -1,15 +1,15 @@
 /** Original node identity survives Arrow row order, interpolation and colocated independent ways. */
 
 import assert from 'node:assert/strict'
-import { after, test } from 'node:test'
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { after, mock, test } from 'node:test'
+import fs, { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { DatabaseSync } from 'node:sqlite'
 import { writeRailwaysFixture, type RailwayFixtureRow } from './rail-test-fixture.js'
 import { writeTransportFixture, type FixtureSourceWay, type FixtureSourcePiece } from './transport-test-fixture.js'
 import { M_PER_DEG_LON_EQ } from './spatial.js'
-import { SourceTransportTopology, transportTopologyPath } from './transport-topology.js'
+import { arrowStreamBatches, railwayGlobalPath } from './railway-globals.js'
+import { SourceTransportTopology } from './transport-topology.js'
 import { collectZ9RailGraphSegments, enrichZ9RailwaysByGraphWalk } from './rail-walk-enrich.js'
 
 const TEMP = mkdtempSync(join(tmpdir(), 'source-transport-'))
@@ -48,8 +48,10 @@ test('source identities preserve large IDs, fractional joins and explicit zero h
   ]
   writeTransportFixture(prepared, ways, pieces, [['railways', '3', '2'], ['roads', '5', '2']])
   using topology = new SourceTransportTopology(prepared)
-  assert.deepEqual(topology.squareWayPieces(square, [id, '11', '12', id]), topology.squarePieces(square))
-  assert.deepEqual([...topology.squareWayPieces(square, ['11']).keys()], ['11:0'])
+  const stored = topology.squarePieces(square)
+  assert.deepEqual(Array.from({ length: stored.count }, (_, piece) => stored.key(piece)), ['11:0', '12:0', `${id}:0`, `${id}:1`])
+  assert.equal(stored.row('11', 0), 0)
+  assert.equal(stored.row('11', 1), -1)
   const first = collectZ9RailGraphSegments(prepared, [square])
   assert.deepEqual(first.map(({ key, startKey, endKey }) => [key, startKey, endKey]), [
     [`${id}:0`, 'node:1', `way:${id}:0+0.5`],
@@ -61,86 +63,78 @@ test('source identities preserve large IDs, fractional joins and explicit zero h
   assert.deepEqual(collectZ9RailGraphSegments(prepared, [square]), [...first].reverse())
 })
 
-test('missing, incomplete or unmatched topology fails before existing traffic is changed', async () => {
+test('missing or unmatched topology fails before existing traffic is changed', async () => {
   const prepared = join(TEMP, 'incomplete')
   const path = arrow(prepared, [{ ...row(10n, 0, 14, 14.001), sourceId: 100, passenger: 7 }])
   const before = readFileSync(path)
   const options = { preparedDirectory: prepared, bbox: [49.99, 13.99, 50.01, 14.01] as const,
     pairs: [], sourceId: 100, countryIso: 'CD', retractSafe: true }
-  await assert.rejects(enrichZ9RailwaysByGraphWalk(options), /unable to open database/)
-  assert.deepEqual(readFileSync(path), before)
-  writeTransportFixture(prepared, [{ id: '10', nodes: [['1', [50, 14]], ['2', null]] }], [])
   await assert.rejects(enrichZ9RailwaysByGraphWalk(options), /source topology missing/)
   assert.deepEqual(readFileSync(path), before)
-  {
-    using database = new DatabaseSync(transportTopologyPath(prepared))
-    database.exec("INSERT INTO source_pieces VALUES (10, 0, 'z9/275/173', 0, 0, 1, 0)")
-  }
-  await assert.rejects(enrichZ9RailwaysByGraphWalk(options), /invalid source position/)
+  writeTransportFixture(prepared, [{ id: '10', nodes: [['1', [50, 14]], ['2', null]] },
+    { id: '11', nodes: [['1', [50, 14]], ['2', [50, 14.001]]] }],
+  [{ way: '11', segment: 0, square, start: [0, 0], end: [1, 0] }])
+  await assert.rejects(enrichZ9RailwaysByGraphWalk(options), /source topology missing/)
   assert.deepEqual(readFileSync(path), before)
-  {
-    using database = new DatabaseSync(transportTopologyPath(prepared))
-    database.exec('PRAGMA user_version = 0')
-  }
-  assert.throws(() => new SourceTransportTopology(prepared), /incomplete or.*unsupported/)
+  using roads = new SourceTransportTopology(prepared, 'roads')
+  writeFileSync(join(prepared, square, 'roads.pieces.arrow'), readFileSync(join(prepared, square, 'railways.pieces.arrow')))
+  assert.throws(() => roads.squarePieces(square), /not a roads pieces file/)
 })
 
-
 test('train routes preserve ordered occurrences and explicit aliases; unresolved source orders stay unresolved', () => {
-  const prepared = join(TEMP, 'routes')
   const large = '9007199254740993'
-  writeTransportFixture(prepared, [
+  const ways: FixtureSourceWay[] = [
     { id: large, nodes: [['1', [0, 0]], ['2', [0, 1]]] },
     { id: '11', nodes: [['3', [0, 1]], ['4', [0, 2]]] },
     { id: '12', nodes: [['5', [0, 1]], ['6', [0, 2]]] },
     { id: '13', nodes: [['4', [0, 2]], ['7', null]] },
     { id: '14', family: 'roads', nodes: [['2', [0, 1]], ['4', [0, 2]]] },
     { id: '15', nodes: [['2', [0, 1]], ['3', [0, 1]]] },
-  ], [], [['railways', '3', '2'], ['roads', '5', '2']])
-  const member = (id: string, role = '') => ['w', id, role]
-  {
-    using database = new DatabaseSync(transportTopologyPath(prepared))
-    const insert = database.prepare('INSERT INTO source_train_routes VALUES (?, ?)')
-    insert.run(BigInt(large), JSON.stringify([['n', '999', 'stop'], member(large, 'forward'),
-      member('11'), member('11'), member(large, 'backward'), ['w', '999', 'platform']]))
-    insert.run(1, JSON.stringify([member(large, 'forward'), member('12')]))
-    insert.run(2, JSON.stringify([member('13'), member('999'), member('14')]))
-    insert.run(3, JSON.stringify([['r', '10', ''], member('11', 'unknown')]))
-    insert.run(4, JSON.stringify([member(large)]))
-    insert.run(5, JSON.stringify([]))
-    insert.run(6, JSON.stringify(Array.from({ length: 1100 }, () => member('15'))))
-  }
+  ]
+  const member = (id: string, role = ''): [string, string, string] => ['w', id, role]
+  const prepared = join(TEMP, 'routes')
+  writeTransportFixture(prepared, ways, [], [['railways', '3', '2'], ['roads', '5', '2']], [
+    { id: large, members: [['n', '999', 'stop'], member(large, 'forward'),
+      member('11'), member('11'), member(large, 'backward'), ['w', '999', 'platform']] },
+    { id: '1', members: [member(large, 'forward'), member('12')] },
+    { id: '2', members: [member('13'), member('999'), member('14')] },
+    { id: '3', members: [['r', '10', ''], member('11', 'unknown')] },
+    { id: '4', members: [member(large)] },
+    { id: '5', members: [] },
+    { id: '6', members: Array.from({ length: 1100 }, () => member('15')) },
+  ])
   using topology = new SourceTransportTopology(prepared)
-  const route = topology.trainRoute(large)!
+  const routes = new Map([...topology.trainRoutes()].map(route => [route.id, route]))
+  const route = routes.get(large)!
   assert.equal(route.status, 'complete')
   assert.deepEqual(route.ways.map(way => [way.id, way.role, way.reverse]), [
     [large, 'forward', false], ['11', '', false], ['11', '', true], [large, 'backward', true],
   ])
   assert.equal(route.ways[1].nodes[0][0], '2')
-  assert.equal(topology.trainRoute('1')!.status, 'ambiguous_or_disconnected_order')
-  assert.deepEqual(topology.trainRoute('2')!.missingWays, ['w13', 'w999', 'w14'])
-  assert.equal(topology.trainRoute('2')!.status, 'missing_source_ways')
-  assert.deepEqual(topology.trainRoute('3')!.unsupportedMembers, [['r10', ''], ['w11', 'unknown']])
-  assert.equal(topology.trainRoute('3')!.status, 'unsupported_members')
+  assert.equal(routes.get('1')!.status, 'ambiguous_or_disconnected_order')
+  assert.deepEqual(routes.get('2')!.missingWays, ['w13', 'w999', 'w14'])
+  assert.equal(routes.get('2')!.status, 'missing_source_ways')
+  assert.deepEqual(routes.get('3')!.unsupportedMembers, [['r10', ''], ['w11', 'unknown']])
+  assert.equal(routes.get('3')!.status, 'unsupported_members')
   for (const id of ['4', '5', '6']) {
-    assert.equal(topology.trainRoute(id)!.status, 'ambiguous_or_disconnected_order')
-    assert.deepEqual(topology.trainRoute(id)!.ways, [])
+    assert.equal(routes.get(id)!.status, 'ambiguous_or_disconnected_order')
+    assert.deepEqual(routes.get(id)!.ways, [])
   }
-  assert.equal(topology.trainRoute('999'), undefined)
-  assert.deepEqual([...topology.trainRoutes()].map(route => route.id), ['1', '2', '3', '4', '5', '6', large])
+  assert.deepEqual([...routes.keys()], ['1', '2', '3', '4', '5', '6', large])
 })
 
 test('physical passages clip acoustic pieces across squares and retain the ordered return', () => {
   const prepared = join(TEMP, 'passage-pieces')
   const id = '9007199254740993', neighbor = 'z9/276/173'
-  writeTransportFixture(prepared, [{ id, nodes: [['1', [0, 0]], ['2', [0, 600 / M_PER_DEG_LON_EQ]], ['3', [0, 1000 / M_PER_DEG_LON_EQ]]] }], [
+  const way: FixtureSourceWay = { id, nodes: [['1', [0, 0]], ['2', [0, 600 / M_PER_DEG_LON_EQ]], ['3', [0, 1000 / M_PER_DEG_LON_EQ]]] }
+  const pieces: FixtureSourcePiece[] = [
     { way: id, segment: 30, square: neighbor, start: [1, .5], end: [2, 0] },
     { way: id, segment: 10, square, start: [0, 0], end: [1, 0] },
     { way: id, segment: 20, square: neighbor, start: [1, 0], end: [1, .5] },
-  ])
+  ]
+  writeTransportFixture(prepared, [way], pieces)
   using topology = new SourceTransportTopology(prepared)
-  assert.deepEqual([...topology.squareWayPieces(square, [id]).keys()], [`${id}:10`])
-  assert.deepEqual(new Set(topology.squareWayPieces(neighbor, [id]).keys()), new Set([`${id}:20`, `${id}:30`]))
+  assert.deepEqual(topology.squarePieces(neighbor).wayRows(id), [0, 2])
   const forward = topology.passagePieces({ way: id, from: 100, to: 900 })
   assert.deepEqual(forward, [
     { segmentIndex: 10, square, from: 100, to: 600 },
@@ -156,32 +150,40 @@ test('physical passages clip acoustic pieces across squares and retain the order
   assert.equal([...outward, ...inward].reduce((sum, piece) => sum + Math.abs(piece.to - piece.from), 0), 1200.5)
   assert.deepEqual(topology.pieceExtent(id, 10), { square, from: 0, to: 600 })
   assert.throws(() => topology.passagePieces({ way: id, from: 0, to: 1001 }), /invalid source passage/)
-  {
-    using database = new DatabaseSync(transportTopologyPath(prepared))
-    database.exec('DELETE FROM source_pieces WHERE segment_idx = 20')
-  }
-  assert.throws(() => topology.passagePieces({ way: id, from: 100, to: 900 }), /gap or overlap/)
-  {
-    using database = new DatabaseSync(transportTopologyPath(prepared))
-    database.prepare('INSERT INTO source_pieces VALUES (?, 20, ?, 0, 0.5, 2, 0)').run(BigInt(id), neighbor)
-  }
-  assert.throws(() => topology.passagePieces({ way: id, from: 100, to: 900 }), /gap or overlap/)
+  assert.deepEqual(topology.pieceExtent(id, 30, neighbor), { square: neighbor, from: 800, to: 1000 })
+  writeTransportFixture(prepared, [way], [pieces[0], pieces[1]])
+  using gapped = new SourceTransportTopology(prepared)
+  assert.throws(() => gapped.passagePieces({ way: id, from: 100, to: 900 }), /gap or overlap/)
+  writeTransportFixture(prepared, [way], [pieces[0], pieces[1], { ...pieces[2], start: [0, 0.5], end: [2, 0] }])
+  using overlapping = new SourceTransportTopology(prepared)
+  assert.throws(() => overlapping.passagePieces({ way: id, from: 100, to: 900 }), /gap or overlap/)
 })
 
+test('railway ways stream batch by batch through bounded reads', () => {
+  const prepared = join(TEMP, 'bounded-reads')
+  const ways: FixtureSourceWay[] = Array.from({ length: 5 }, (_, way) =>
+    ({ id: String(way + 1), nodes: [[`${way}a`, [0, way]], [`${way}b`, [0, way + 1]]] }))
+  writeTransportFixture(prepared, ways, [])
+  const reads = mock.method(fs, 'readSync')
+  try {
+    const batches = [...arrowStreamBatches(railwayGlobalPath(prepared, 'railway-ways'), 'railway_ways_contract', 64)]
+    assert.deepEqual(batches.map(batch => [...batch.getChild('way_id')!].map(String)), [['1', '2'], ['3', '4'], ['5']])
+    assert.ok(reads.mock.calls.length > 3)
+    for (const call of reads.mock.calls) assert.ok(((call.arguments as unknown[])[3] as number) <= 64)
+  } finally { reads.mock.restore() }
+})
 
-test('owner inventory seeks distinct squares and retains the requested family, including empty input', () => {
-  const prepared = join(TEMP, 'owners')
-  writeTransportFixture(prepared, [
-    { id: '1', family: 'roads', nodes: [] }, { id: '2', family: 'railways', nodes: [] },
-  ], [])
-  using roads = new SourceTransportTopology(prepared, 'roads')
-  using railways = new SourceTransportTopology(prepared, 'railways')
-  assert.deepEqual([...roads.squares()], [])
-  using database = new DatabaseSync(transportTopologyPath(prepared))
-  database.exec(`INSERT INTO source_pieces VALUES
-    (1, 0, 'z9/1/1', 0, 0, 1, 0), (1, 1, 'z9/1/1', 1, 0, 2, 0),
-    (1, 2, 'z9/3/1', 2, 0, 3, 0), (2, 0, 'z9/2/1', 0, 0, 1, 0),
-    (2, 1, 'z9/3/1', 1, 0, 2, 0)`)
-  assert.deepEqual([...roads.squares()], ['z9/1/1', 'z9/3/1'])
-  assert.deepEqual([...railways.squares()], ['z9/2/1', 'z9/3/1'])
+test('the railway square cache evicts by bytes, so a world crossing never retains the world', () => {
+  const prepared = join(TEMP, 'cache-bytes'), neighbor = 'z9/276/173'
+  const way = (id: string): FixtureSourceWay => ({ id, nodes: [['1', [0, 0]], ['2', [0, 1]]] })
+  const piece = (id: string, target: string): FixtureSourcePiece => ({ way: id, segment: 0, square: target, start: [0, 0], end: [1, 0] })
+  writeTransportFixture(prepared, [way('1'), way('2')], [piece('1', square), piece('2', neighbor)])
+  using cached = new SourceTransportTopology(prepared)
+  using evicting = new SourceTransportTopology(prepared, 'railways', 1)
+  for (const topology of [cached, evicting]) assert.equal(topology.squarePieces(square).row('1', 0), 0)
+  writeTransportFixture(prepared, [way('1'), way('2')], [piece('2', neighbor)])
+  rmSync(join(prepared, square, 'railways.pieces.arrow'))
+  for (const topology of [cached, evicting]) assert.equal(topology.squarePieces(neighbor).count, 1)
+  assert.equal(cached.squarePieces(square).count, 1)
+  assert.equal(evicting.squarePieces(square).count, 0)
 })

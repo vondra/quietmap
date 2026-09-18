@@ -165,6 +165,17 @@ async function releaseLock(lockPath: string): Promise<void> {
   }
 }
 
+/** Serialize writers of one file across processes; the lock is a sibling `<file>.lock`. */
+export async function withFileLock<T>(filePath: string, fn: () => T | Promise<T>): Promise<T> {
+  const lockPath = `${filePath}.lock`
+  await acquireLock(lockPath)
+  try {
+    return await fn()
+  } finally {
+    await releaseLock(lockPath)
+  }
+}
+
 /**
  * Read Arrow file → mutate via callback → atomic replace.
  * The callback receives the parsed `Table`; returns the updated table to write.
@@ -177,10 +188,8 @@ export async function withArrowWrite(
   arrowPath: string,
   fn: (table: Table) => Table | Promise<Table>,
 ): Promise<void> {
-  const lockPath = `${arrowPath}.lock`
   const tmpPath = `${arrowPath}.tmp`
-  await acquireLock(lockPath)
-  try {
+  await withFileLock(arrowPath, async () => {
     const bytes = await fs.readFile(arrowPath)
     const input = tableFromIPC(bytes)
     const output = await fn(input)
@@ -188,9 +197,7 @@ export async function withArrowWrite(
     const normalized = preserveArrowShape(input, output)
     await fs.writeFile(tmpPath, Buffer.from(tableToIPC(normalized, 'file')))
     await fs.rename(tmpPath, arrowPath)
-  } finally {
-    await releaseLock(lockPath)
-  }
+  })
 }
 
 /**

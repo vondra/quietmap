@@ -1,10 +1,11 @@
-/** Sidecar writer: clipped visits, unknown freight, retract, no Arrow mutation. */
+/** Interval-file writer: clipped visits, unknown freight, retract, no Arrow mutation. */
 
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { listRailIntervals, openRailTrafficSidecar } from './rail-traffic-store.js'
+import { tableFromIPC } from 'apache-arrow'
+import { listRailIntervals } from './rail-traffic-store.js'
 import { writeClippedRailPassages, type RailServicePassages, type WriteClippedRailPassagesRequest } from './rail-passage.js'
 import { RAIL_TEST_DIRECTORY, writePreparedRailwaySquare } from './rail-test-fixture.js'
 import { writeSyntheticRailTopology } from './transport-test-fixture.js'
@@ -104,10 +105,8 @@ test('accepted passages replace their source on quarantine without claiming comp
   assert.equal(empty.retracted, 0)
   assert.deepEqual(owned(), retained, 'no accepted replacement preserves earlier evidence')
   assert.deepEqual(listRailIntervals(prepared).filter(row => row.sourceId === 9864), foreign)
-  const database = openRailTrafficSidecar(prepared)
-  try {
-    assert.equal(database.prepare('SELECT count(*) AS n FROM rail_quarantine WHERE source_id = ?').get(SOURCE)?.n, 1)
-  } finally { database.close() }
+  const quarantine = tableFromIPC(readFileSync(join(prepared, otherSquare, 'rail-quarantine.DE.arrow')))
+  assert.deepEqual(Array.from(quarantine.getChild('source_id')!.toArray() as Uint16Array), [SOURCE])
   assert.deepEqual([readFileSync(path), readFileSync(otherPath)], before)
 })
 

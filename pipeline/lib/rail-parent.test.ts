@@ -1,7 +1,7 @@
-/** Repeat enrichment recovers unique parents while retaining independent sidecar evidence. */
+/** Repeat enrichment recovers unique parents while retaining independent interval evidence. */
 
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Float64, RecordBatch, Schema, Table, Uint8, Uint16, tableFromIPC, tableToIPC, vectorFromArray } from 'apache-arrow'
@@ -10,7 +10,7 @@ import { writeTransportFixture } from './transport-test-fixture.js'
 import { SourceTransportTopology } from './transport-topology.js'
 import { collectZ9RailGraphSegments } from './rail-walk-enrich.js'
 import { writeRailwayTraffic } from './railways-arrow.js'
-import { listRailIntervals, openRailTrafficSidecar } from './rail-traffic-store.js'
+import { listRailIntervals, RailTrafficSquareSession } from './rail-traffic-store.js'
 import { restoreRailwayParentsForEnrichment } from './rail-parent.js'
 import { lonLatToGrid } from './prepared-grid.js'
 
@@ -42,16 +42,15 @@ function finalizedFixture(name: string, differentName = false, geometry: 'normal
   const table = new Table(columns)
   const schema = new Schema(table.schema.fields, new Map([...raw.schema.metadata, ['rail_traffic_contract', '1']]))
   writeFileSync(path, tableToIPC(new Table(schema, table.batches.map(batch => new RecordBatch(schema, batch.data))), 'file'))
-  const sidecar = openRailTrafficSidecar(prepared)
-  sidecar.close()
+  const evidence = new RailTrafficSquareSession(join(prepared, SQUARE), 'FR')
+  evidence.insert({ osmId: 50000, segmentIndex: 0, fromM: 0, toM: 1000, occurrence: 0, sourceId: 9864,
+    passenger: 17, freight: 0, passengerStatus: 2, freightStatus: 0, matching: 1 })
+  evidence.write()
   return { prepared, path }
 }
 
-test('finalized child rows restore once for graph and source replay without duplicating sidecar evidence', async () => {
+test('finalized child rows restore once for graph and source replay without duplicating interval evidence', async () => {
   const { prepared, path } = finalizedFixture('parent-replay')
-  const sidecar = openRailTrafficSidecar(prepared)
-  sidecar.prepare(`INSERT INTO rail_interval VALUES (?,50000,0,0,1000,0,9864,'FR',17,0,2,0,1)`).run(SQUARE)
-  sidecar.close()
   const segments = collectZ9RailGraphSegments(prepared, [SQUARE])
   assert.equal(segments.length, 1)
   const restored = tableFromIPC(readFileSync(path))
@@ -73,6 +72,15 @@ test('finalized child rows restore once for graph and source replay without dupl
   }
 })
 
+test('evidenced final rows are never restored once their interval files are gone', () => {
+  const { prepared, path } = finalizedFixture('parent-evidence-lost')
+  rmSync(join(prepared, SQUARE, 'rail-intervals.FR.arrow'))
+  const before = readFileSync(path)
+  using topology = new SourceTransportTopology(prepared)
+  assert.throws(() => restoreRailwayParentsForEnrichment(path, SQUARE, topology), /requires the retained interval files/)
+  assert.deepEqual(readFileSync(path), before)
+})
+
 test('conflicting attributes or incomplete child coverage fail before replacing finalized evidence', () => {
   for (const [name, conflict, geometry, error] of [
     ['parent-conflict', true, 'normal', /children disagree on name/],
@@ -81,7 +89,7 @@ test('conflicting attributes or incomplete child coverage fail before replacing 
     const { prepared, path } = finalizedFixture(name, conflict, geometry)
     const before = readFileSync(path)
     using topology = new SourceTransportTopology(prepared)
-    assert.throws(() => restoreRailwayParentsForEnrichment(path, prepared, SQUARE, topology), error)
+    assert.throws(() => restoreRailwayParentsForEnrichment(path, SQUARE, topology), error)
     assert.deepEqual(readFileSync(path), before)
   }
 })
@@ -89,7 +97,7 @@ test('conflicting attributes or incomplete child coverage fail before replacing 
 test('dateline children retain the source endpoints across the grid edge', () => {
   const { prepared, path } = finalizedFixture('parent-dateline', false, 'dateline')
   using topology = new SourceTransportTopology(prepared)
-  const restored = restoreRailwayParentsForEnrichment(path, prepared, SQUARE, topology)
+  const restored = restoreRailwayParentsForEnrichment(path, SQUARE, topology)
   assert.equal(restored.numRows, 1)
   assert.deepEqual([restored.getChild('start_gx')!.get(0), restored.getChild('start_gy')!.get(0)], lonLatToGrid(179.8, 45.75))
   assert.deepEqual([restored.getChild('end_gx')!.get(0), restored.getChild('end_gy')!.get(0)], lonLatToGrid(-179.8, 45.75))
@@ -118,11 +126,11 @@ test('subpixel children must lie on the restored chain, while duplicate positive
     const before = readFileSync(path)
     using topology = new SourceTransportTopology(prepared)
     if (location === 'detached' || location === 'overlap') {
-      assert.throws(() => restoreRailwayParentsForEnrichment(path, prepared, SQUARE, topology),
+      assert.throws(() => restoreRailwayParentsForEnrichment(path, SQUARE, topology),
         location === 'detached' ? /children do not cover source parent/ : /overlapping railway children/)
       assert.deepEqual(readFileSync(path), before)
     } else {
-      assert.equal(restoreRailwayParentsForEnrichment(path, prepared, SQUARE, topology).numRows, 1)
+      assert.equal(restoreRailwayParentsForEnrichment(path, SQUARE, topology).numRows, 1)
     }
   }
 })

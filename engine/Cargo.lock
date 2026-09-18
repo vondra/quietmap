@@ -1662,8 +1662,6 @@ dependencies = [
  "grid",
  "noise-compute",
  "rayon",
- "rusqlite",
- "serde_json",
 ]
 
 [[package]]

@@ -65,8 +65,8 @@ test('CZ whole source admits before writes; measured, silent and foreign rows co
   for (const field of before.schema.fields) {
     assert.deepEqual([...actual.getChild(field.name)!], [...before.getChild(field.name)!], field.name)
   }
-  const sidecar = listRailIntervals(prepared, 'z9/275/173')
-  assert.ok(sidecar.length >= 3)
+  const intervals = listRailIntervals(prepared, 'z9/275/173')
+  assert.ok(intervals.length >= 3)
   const expected = readFileSync(path)
   await enrichCzechRailways(directory, prepared); assert.deepEqual(readFileSync(path), expected)
   copyFileSync(fixture, path)

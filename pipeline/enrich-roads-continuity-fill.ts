@@ -36,13 +36,16 @@ function prepareSquare(prepared: string, square: string, topology: SourceTranspo
   if (!direction || !DataType.isInt(direction.type) || direction.type.bitWidth !== 8 || direction.type.isSigned || direction.nullCount) {
     throw new Error(`${square}: invalid oneway direction column`)
   }
-  const identities = topology.squarePieces(square)
+  const pieces = topology.squarePieces(square), seen = new Uint8Array(pieces.count)
   const roads = readPlanningRoads(table)
   const staged: StagedRoads = []
   for (const road of roads) {
-    const key = transportPieceKey(String(road.osmId), road.segIdx), identity = identities.get(key)
-    if (!identity) throw new Error(`${square}: source topology missing or repeated road piece ${key}`)
-    identities.delete(key)
+    const piece = pieces.row(String(road.osmId), road.segIdx)
+    if (piece < 0 || seen[piece]) {
+      throw new Error(`${square}: source topology missing or repeated road piece ${transportPieceKey(String(road.osmId), road.segIdx)}`)
+    }
+    seen[piece] = 1
+    const identity = pieces.identity(piece)
     const oneway = Number(direction.get(road.i))
     if (oneway > 2) throw new Error(`${square}: invalid oneway direction ${oneway}`)
     const { osmId, cls, src, ref, name, aadt, access, roundabout, countBasis, observationId, observationSourceId } = road
@@ -53,7 +56,8 @@ function prepareSquare(prepared: string, square: string, topology: SourceTranspo
     }
     staged.push([square, road.i, identity.startKey, identity.endKey, osmId, cls, src, ref, name, ...aadt, access, Number(roundabout), oneway, countBasis, observationId, observationSourceId])
   }
-  if (identities.size) throw new Error(`${square}: ${identities.size} source road pieces absent from Arrow`)
+  // Holds only before roads-finalize, which drops subpixel pieces from the layer file; the build audit checks the other direction.
+  if (staged.length !== pieces.count) throw new Error(`${square}: ${pieces.count - staged.length} source road pieces absent from Arrow`)
   return { roads: staged, hasOwned: roads.some(road => road.src === SOURCE_ID_ROAD_CONTINUITY_HEURISTIC) }
 }
 
@@ -135,10 +139,6 @@ export async function enrichContinuityDirectory(preparedDirectory: string) {
   const squares = listPreparedSquares(prepared, [-90, -180, 90, 180], 'roads.arrow')
   if (!squares.length) throw new Error(`${prepared}: no prepared road scope`)
   using topology = new SourceTransportTopology(prepared, 'roads')
-  const available = new Set(squares)
-  for (const square of topology.squares()) {
-    if (!available.has(square)) throw new Error(`source topology road owner is missing: ${square}`)
-  }
   const temporary = mkdtempSync(join(tmpdir(), 'road-continuity-'))
   try {
     const graphPath = join(temporary, 'graph.sqlite'), writeSquares = new Set<string>()

@@ -26,6 +26,15 @@ def sha256(path):
     return digest.digest()
 
 
+def served_layer_files(square):
+    """Layer Arrow files of one square. Transport provenance (`*.pieces.arrow`) and railway
+    evidence (`rail-intervals.*`, `rail-quarantine.*`) feed enrichment only: no renderer reads
+    them, and evidence changes on every enrichment without any vector changing."""
+    return [path for path in sorted(square.glob('*.arrow'))
+            if not path.name.endswith('.pieces.arrow')
+            and not path.name.startswith(('rail-intervals.', 'rail-quarantine.'))]
+
+
 def square_directories(prepared):
     for x in sorted((prepared / 'z9').iterdir(), key=lambda path: path.name):
         if (not x.is_dir() or not x.name.isdecimal() or str(int(x.name)) != x.name
@@ -52,7 +61,7 @@ def write_manifest(prepared, output):
                              'relative_path TEXT PRIMARY KEY, '
                              'sha256 BLOB NOT NULL CHECK(length(sha256)=32))')
             for square in square_directories(prepared):
-                for path in sorted(square.glob('*.arrow')):
+                for path in served_layer_files(square):
                     before = file_identity(path)
                     digest = sha256(path)
                     if before != file_identity(path):

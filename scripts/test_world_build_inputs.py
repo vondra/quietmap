@@ -82,6 +82,9 @@ class WorldBuildInputsTest(unittest.TestCase):
                     with pa.ipc.new_file(tile / 'structures.arrow', schema):
                         pass
                     (tile / 'structures.qoix').touch()
+                    # Enrichment-only files are neither layers nor audited: they cannot fail a release.
+                    (tile / 'railways.pieces.arrow').write_bytes(b'not a served layer')
+                    (tile / 'rail-intervals.CZ.arrow').write_bytes(b'not a served layer')
             # buildings.arrow is an input to structures.arrow, not a served
             # layer. A finalized generation does not retain that intermediate.
             for layer in ('roads', 'railways', 'industrial', 'airborne', 'cruise', 'airport_traffic', 'ships'):

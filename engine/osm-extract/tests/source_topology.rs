@@ -1,8 +1,11 @@
 //! Exercise real PBF extraction across a tile seam, source junctions, zero-length ways and missing nodes.
 
-use arrow::array::{Int16Array, Int64Array};
+use arrow::array::{
+    Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, ListArray, StringArray,
+    UInt16Array, UInt32Array, UInt8Array,
+};
 use arrow::ipc::reader::FileReader;
-use rusqlite::Connection;
+use arrow::record_batch::RecordBatch;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -210,44 +213,43 @@ impl Drop for TempDir {
     }
 }
 
-/// (way_id, segment_idx) pairs of one square's Arrow file, in file order.
-fn arrow_piece_keys(path: &Path) -> Vec<(i64, i16)> {
+fn all_rows(path: &Path) -> RecordBatch {
     let reader =
         FileReader::try_new(File::open(path).expect("open arrow file"), None).expect("read IPC");
-    let mut keys = Vec::new();
-    for batch in reader {
-        let batch = batch.expect("decode IPC batch");
-        let osm_ids = batch
-            .column_by_name("osm_id")
-            .expect("osm_id column")
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .expect("osm_id is Int64");
-        let segment_indices = batch
-            .column_by_name("segment_idx")
-            .expect("segment_idx column")
-            .as_any()
-            .downcast_ref::<Int16Array>()
-            .expect("segment_idx is Int16");
-        for row in 0..osm_ids.len() {
-            keys.push((osm_ids.value(row), segment_indices.value(row)));
-        }
-    }
-    keys
+    let schema = reader.schema();
+    let batches: Vec<RecordBatch> = reader.map(|batch| batch.expect("decode batch")).collect();
+    arrow::compute::concat_batches(&schema, &batches).expect("concatenate batches")
 }
 
-fn coordinate(id: i64) -> Option<[f64; 2]> {
-    NODES
+fn column<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> &'a T {
+    batch
+        .column_by_name(name)
+        .unwrap_or_else(|| panic!("column {name}"))
+        .as_any()
+        .downcast_ref::<T>()
+        .unwrap_or_else(|| panic!("type of {name}"))
+}
+
+fn list_values<T: Array + Clone + 'static>(batch: &RecordBatch, name: &str, row: usize) -> T {
+    let list = column::<ListArray>(batch, name).value(row);
+    list.as_any()
+        .downcast_ref::<T>()
+        .expect("list item type")
+        .clone()
+}
+
+fn e7(degrees: f64) -> i32 {
+    (degrees * 1e7).round() as i32
+}
+
+/// Expected canonical id and e7 coordinates; only the zero-length hop 3→7 (way 13) unions, so
+/// node 7 is written as 3 — the coordinate twin 4 (way 11) never touches 2.
+fn expected_node(id: i64) -> (i64, Option<(i32, i32)>) {
+    let coordinates = NODES
         .iter()
         .find(|&&(node_id, _, _)| node_id == id)
-        .map(|&(_, lat, lon)| [lat, lon])
-}
-
-fn expected_chain(nodes: &[i64]) -> Vec<(String, Option<[f64; 2]>)> {
-    nodes
-        .iter()
-        .map(|&id| (id.to_string(), coordinate(id)))
-        .collect()
+        .map(|&(_, lat, lon)| (e7(lat), e7(lon)));
+    (if id == 7 { 3 } else { id }, coordinates)
 }
 
 #[test]
@@ -279,150 +281,158 @@ fn hand_built_pbf_yields_exact_source_topology_and_matching_arrow_pieces() {
         String::from_utf8_lossy(&run.stderr)
     );
 
-    let published = root.path().join("prepared.transport.sqlite");
-    let connection = Connection::open(&published).expect("open published transport database");
-
-    let mut routes = connection
-        .prepare("SELECT osm_id, members_json FROM source_train_routes")
-        .unwrap();
-    let route_rows: Vec<(i64, String)> = routes
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
+    let routes = all_rows(&root.path().join("prepared.train-routes.arrow"));
     assert_eq!(
-        route_rows.len(),
-        1,
+        column::<Int64Array>(&routes, "osm_id").values(),
+        &[1000],
         "non-train relation leaked into train routes"
     );
-    assert_eq!(route_rows[0].0, 1000);
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&route_rows[0].1).unwrap(),
-        serde_json::json!([
-            ["n", "1", "stop"],
-            ["w", "10", "forward"],
-            ["w", "10", "backward"],
-            ["w", "9007199254740993", ""],
-            ["r", "2000", "unusual"],
-            ["w", "11", "platform"]
-        ])
+        list_values::<UInt8Array>(&routes, "member_kind", 0).values(),
+        b"nwwwrw"
+    );
+    assert_eq!(
+        list_values::<Int64Array>(&routes, "member_id", 0).values(),
+        &[1, 10, 10, 9007199254740993, 2000, 11]
+    );
+    let roles = list_values::<StringArray>(&routes, "member_role", 0);
+    assert_eq!(
+        roles.iter().flatten().collect::<Vec<_>>(),
+        ["stop", "forward", "backward", "", "unusual", "platform"]
     );
 
-    // Original chains: every fixture way is retained, way 15 keeps the null
-    // entry for the absent node 999, way 13 keeps its zero-length pair.
-    let mut chains = connection
-        .prepare("SELECT osm_id, family, nodes_json FROM source_ways ORDER BY osm_id")
-        .expect("prepare source_ways query");
-    let rows: Vec<(i64, String, String)> = chains
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-        .expect("query source_ways")
-        .collect::<Result<_, _>>()
-        .expect("collect source_ways");
-    drop(chains);
-    assert_eq!(rows.len(), WAYS.len());
-    for ((way_id, family, nodes_json), (want_id, tag, _, refs)) in rows.iter().zip(WAYS) {
-        assert_eq!(way_id, want_id);
+    // Original chains: every railway way is retained with canonical ids, way 15 keeps the null
+    // entry for the absent node 999 and so has no metres, way 13 keeps its zero-length pair.
+    let ways = arrow::ipc::reader::StreamReader::try_new(
+        File::open(root.path().join("prepared.railway-ways.arrow")).expect("open railway ways"),
+        None,
+    )
+    .expect("read IPC stream");
+    let ways = arrow::compute::concat_batches(
+        &ways.schema(),
+        &ways
+            .map(|batch| batch.expect("decode batch"))
+            .collect::<Vec<_>>(),
+    )
+    .expect("concatenate batches");
+    let railways: Vec<_> = WAYS.iter().filter(|way| way.1 == "railway").collect();
+    assert_eq!(
+        column::<Int64Array>(&ways, "way_id").values(),
+        &railways.iter().map(|way| way.0).collect::<Vec<_>>()[..]
+    );
+    for (row, (way_id, _, _, refs)) in railways.iter().enumerate() {
+        let expected: Vec<_> = refs.iter().map(|&id| expected_node(id)).collect();
         assert_eq!(
-            family,
-            if *tag == "highway" {
-                "roads"
-            } else {
-                "railways"
-            }
+            list_values::<Int64Array>(&ways, "node_id", row).values(),
+            &expected.iter().map(|node| node.0).collect::<Vec<_>>()[..],
+            "node ids of way {way_id}"
         );
-        let chain: Vec<(String, Option<[f64; 2]>)> =
-            serde_json::from_str(nodes_json).expect("parse nodes_json");
-        assert_eq!(chain, expected_chain(refs), "chain of way {way_id}");
+        let lat = list_values::<Int32Array>(&ways, "lat_e7", row);
+        let lon = list_values::<Int32Array>(&ways, "lon_e7", row);
+        let stored: Vec<_> = (0..lat.len())
+            .map(|node| {
+                lat.is_valid(node)
+                    .then(|| (lat.value(node), lon.value(node)))
+            })
+            .collect();
+        assert_eq!(
+            stored,
+            expected.iter().map(|node| node.1).collect::<Vec<_>>()
+        );
+        let metres = column::<ListArray>(&ways, "node_m");
+        assert_eq!(
+            metres.is_valid(row),
+            *way_id != 15,
+            "metres of way {way_id}"
+        );
     }
+    let squares = |row| list_values::<UInt32Array>(&ways, "square_key", row);
+    assert_eq!(squares(0).values(), &[173 * 512 + 275, 173 * 512 + 276]);
+    assert!(squares(3).is_empty() && squares(5).is_empty());
+    let way_10_metres = list_values::<Float64Array>(&ways, "node_m", 0);
 
-    // Aliases: only the explicit zero-length hop 3→7 (way 13) unions — the
-    // coordinate twins 4 (way 11) never touch 2, and roads stay sparse.
-    let mut aliases = connection
-        .prepare("SELECT family, node_id, canonical_node FROM node_aliases")
-        .expect("prepare node_aliases query");
-    let alias_rows: Vec<(String, i64, i64)> = aliases
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
-        .expect("query node_aliases")
-        .collect::<Result<_, _>>()
-        .expect("collect node_aliases");
-    drop(aliases);
-    assert_eq!(alias_rows, vec![("railways".to_string(), 7, 3)]);
-
-    // Pieces: junction split at node 2 (vertex 1) across the z9 seam, no
-    // bridging piece for way 15, fractional halves for road 16's long hop.
-    let mut pieces = connection
-        .prepare(
-            "SELECT way_id, segment_idx, square, start_vertex, start_fraction,
-                    end_vertex, end_fraction
-             FROM source_pieces ORDER BY way_id, segment_idx",
-        )
-        .expect("prepare source_pieces query");
-    let piece_rows: Vec<(i64, i16, String, i64, f64, i64, f64)> = pieces
-        .query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-                row.get(6)?,
-            ))
-        })
-        .expect("query source_pieces")
-        .collect::<Result<_, _>>()
-        .expect("collect source_pieces");
-    drop(pieces);
-    let expected_pieces: Vec<(i64, i16, &str, i64, f64, i64, f64)> = vec![
-        (10, 0, "z9/275/173", 0, 0.0, 1, 0.0),
-        (10, 1, "z9/276/173", 1, 0.0, 2, 0.0),
-        (11, 0, "z9/276/173", 0, 0.0, 1, 0.0),
-        (12, 0, "z9/276/173", 0, 0.0, 1, 0.0),
-        (14, 0, "z9/276/173", 0, 0.0, 1, 0.0),
-        (16, 0, "z9/275/173", 0, 0.0, 0, 0.5),
-        (16, 1, "z9/276/173", 0, 0.5, 1, 0.0),
+    // Pieces: junction split at node 2 (vertex 1) across the z9 seam, no bridging piece for
+    // way 15, fractional halves for road 16's long hop. Each pieces file pairs with its layer
+    // file: same keys, the layer's own cells and length.
+    type Piece = (i64, i16, u16, f64, u16, f64, i64, i64);
+    let expected: [(&str, &str, Vec<Piece>); 4] = [
+        (
+            "railways",
+            "z9/275/173",
+            vec![(10, 0, 0, 0.0, 1, 0.0, 1, 2)],
+        ),
+        (
+            "railways",
+            "z9/276/173",
+            vec![
+                (10, 1, 1, 0.0, 2, 0.0, 2, 3),
+                (11, 0, 0, 0.0, 1, 0.0, 4, 5),
+                (12, 0, 0, 0.0, 1, 0.0, 2, 6),
+                (14, 0, 0, 0.0, 1, 0.0, 3, 8),
+            ],
+        ),
+        ("roads", "z9/275/173", vec![(16, 0, 0, 0.0, 0, 0.5, 30, 30)]),
+        ("roads", "z9/276/173", vec![(16, 1, 0, 0.5, 1, 0.0, 30, 31)]),
     ];
-    assert_eq!(
-        piece_rows,
-        expected_pieces
-            .into_iter()
-            .map(|(w, s, square, sv, sf, ev, ef)| (w, s, square.to_string(), sv, sf, ev, ef))
-            .collect::<Vec<_>>()
-    );
-
-    // Arrow association: per (family, square), the emitted rows equal the SQL
-    // piece keys — the trunk's two pieces land in both seam squares.
-    for family in ["railways", "roads"] {
-        for square in ["z9/275/173", "z9/276/173"] {
-            let mut sql_keys = connection
-                .prepare(
-                    "SELECT source_pieces.way_id, source_pieces.segment_idx
-                     FROM source_pieces
-                     JOIN source_ways ON source_ways.osm_id = source_pieces.way_id
-                     WHERE source_ways.family = ?1 AND source_pieces.square = ?2
-                     ORDER BY 1, 2",
+    for (family, square, pieces) in expected {
+        let batch = all_rows(&output.join(square).join(format!("{family}.pieces.arrow")));
+        let stored: Vec<Piece> = (0..batch.num_rows())
+            .map(|row| {
+                (
+                    column::<Int64Array>(&batch, "way_id").value(row),
+                    column::<Int16Array>(&batch, "segment_idx").value(row),
+                    column::<UInt16Array>(&batch, "start_vertex").value(row),
+                    column::<Float64Array>(&batch, "start_fraction").value(row),
+                    column::<UInt16Array>(&batch, "end_vertex").value(row),
+                    column::<Float64Array>(&batch, "end_fraction").value(row),
+                    column::<Int64Array>(&batch, "start_node").value(row),
+                    column::<Int64Array>(&batch, "end_node").value(row),
                 )
-                .expect("prepare piece-key query");
-            let keys: Vec<(i64, i16)> = sql_keys
-                .query_map([family, square], |row| Ok((row.get(0)?, row.get(1)?)))
-                .expect("query piece keys")
-                .collect::<Result<_, _>>()
-                .expect("collect piece keys");
-            drop(sql_keys);
-            let arrow_path = output.join(square).join(format!("{family}.arrow"));
-            if keys.is_empty() {
-                assert!(
-                    !arrow_path.exists(),
-                    "{family} has no pieces in {square} yet {} exists",
-                    arrow_path.display()
-                );
-                continue;
-            }
-            let mut arrow_keys = arrow_piece_keys(&arrow_path);
-            arrow_keys.sort_unstable();
-            assert_eq!(arrow_keys, keys, "{family} rows in {square}");
+            })
+            .collect();
+        assert_eq!(stored, pieces, "{family} pieces in {square}");
+        let layer = all_rows(&output.join(square).join(format!("{family}.arrow")));
+        let mut layer_rows: Vec<_> = (0..layer.num_rows())
+            .map(|row| {
+                (
+                    column::<Int64Array>(&layer, "osm_id").value(row),
+                    column::<Int16Array>(&layer, "segment_idx").value(row),
+                    column::<Int32Array>(&layer, "start_gx").value(row),
+                    column::<Int32Array>(&layer, "end_gy").value(row),
+                    column::<Float32Array>(&layer, "length_m")
+                        .value(row)
+                        .to_bits(),
+                )
+            })
+            .collect();
+        layer_rows.sort_unstable();
+        let piece_rows: Vec<_> = (0..batch.num_rows())
+            .map(|row| {
+                (
+                    column::<Int64Array>(&batch, "way_id").value(row),
+                    column::<Int16Array>(&batch, "segment_idx").value(row),
+                    column::<Int32Array>(&batch, "start_gx").value(row),
+                    column::<Int32Array>(&batch, "end_gy").value(row),
+                    column::<Float32Array>(&batch, "length_m")
+                        .value(row)
+                        .to_bits(),
+                )
+            })
+            .collect();
+        assert_eq!(piece_rows, layer_rows, "{family} layer rows in {square}");
+        if family == "railways" && square == "z9/276/173" {
+            // Way 10's second piece continues the whole-way metres across the seam.
+            let from = column::<Float64Array>(&batch, "from_m").value(0);
+            let to = column::<Float64Array>(&batch, "to_m").value(0);
+            assert_eq!(from.to_bits(), way_10_metres.value(1).to_bits());
+            assert_eq!(to.to_bits(), way_10_metres.value(2).to_bits());
+            assert_eq!(
+                list_values::<Int32Array>(&batch, "chain_lon_e7", 0).values(),
+                &[e7(14.0625), e7(14.064)]
+            );
         }
     }
+    assert!(!root.path().join("spill").exists());
 }
 
 #[test]
@@ -451,5 +461,5 @@ fn node_cache_cap_is_checked_before_the_selected_node_filter() {
     assert!(!run.status.success());
     assert!(String::from_utf8_lossy(&run.stderr).contains("MAX_NODE_ID"));
     assert!(!output.exists());
-    assert!(!root.path().join("prepared.transport.sqlite").exists());
+    assert!(!root.path().join("prepared.railway-ways.arrow").exists());
 }

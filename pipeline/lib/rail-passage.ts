@@ -1,7 +1,6 @@
-/** Clipped source-way passages and category evidence for the railway traffic sidecar. */
+/** Clipped source-way passages and category evidence for the square's railway interval files. */
 
-import { existsSync, readFileSync } from 'node:fs'
-import { tableFromIPC } from 'apache-arrow'
+import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { restoreRailwayParentsForEnrichment } from './rail-parent.js'
 import { isNationallyOwnedSource } from './sources.js'
@@ -9,12 +8,11 @@ import { isWalkableRailType } from './rail-graph.js'
 import { bakedRailwayCountryReader, iso2Code, segmentGeometryReader } from './prepared-grid.js'
 import { SourceTransportTopology, transportPieceKey } from './transport-topology.js'
 import {
-  inferredRailStatus, insertRailInterval, openRailTrafficSidecar, railMatchingMask,
-  railStatusCode, replaceRailQuarantine, retractRailSourceSquare, railTrafficSidecarPath, type RailIntervalRow,
+  inferredRailStatus, railMatchingMask, railStatusCode, withRailTrafficSquare,
+  type RailPieceIdentity, type RailSquareInterval,
 } from './rail-traffic-store.js'
 import { type RailwayRow, type RailwayTraffic } from './railways-arrow.js'
 
-export { railTrafficSidecarPath } from './rail-traffic-store.js'
 export type RailTrafficStatus = 'known' | 'estimated' | 'unknown'
 export type RailServiceMatching = 'relation_estimated' | 'graph_estimated'
 
@@ -77,15 +75,13 @@ function parseOsmId(wayId: string): number {
 }
 
 function trafficToInterval(
-  square: string,
   osmId: number,
   segmentIndex: number,
   fromM: number,
   toM: number,
   occurrence: number,
-  countryIso: string,
   traffic: Pick<RailwayTraffic, 'passenger' | 'freight' | 'sourceId' | 'passengerStatus' | 'freightStatus' | 'matching' | 'divisor'>,
-): RailIntervalRow | null {
+): RailSquareInterval | null {
   const divisor = traffic.divisor && traffic.divisor > 0 ? traffic.divisor : 1
   const passenger = traffic.passenger / divisor
   const freight = traffic.freight / divisor
@@ -94,8 +90,8 @@ function trafficToInterval(
   if (passengerStatus === 'unknown' && freightStatus === 'unknown') return null
   const matching = traffic.matching ?? 0
   return {
-    square, osmId, segmentIndex, fromM, toM, occurrence,
-    sourceId: traffic.sourceId, countryIso,
+    osmId, segmentIndex, fromM, toM, occurrence,
+    sourceId: traffic.sourceId,
     passenger, freight,
     passengerStatus: railStatusCode(passengerStatus),
     freightStatus: railStatusCode(freightStatus),
@@ -104,9 +100,10 @@ function trafficToInterval(
 }
 
 /**
- * Persist clipped visits and whole-piece extra/silent stamps in the sidecar.
+ * Persist clipped visits and whole-piece extra/silent stamps in each square's interval files.
  * Visit ordinals are snapshot-local; changed services require retractSafe replacement.
- * Restores finalized parents when needed; routing keeps unique (osm_id, segment_idx).
+ * Each square is restored, then loaded, mutated and written once; a failure keeps the squares
+ * already written, and the country's rerun replaces them.
  */
 export async function writeClippedRailPassages(
   request: WriteClippedRailPassagesRequest,
@@ -118,105 +115,83 @@ export async function writeClippedRailPassages(
     rows: 0, walkStamped: 0, silentStamped: 0, extraStamped: 0, retracted: 0,
     skippedService: 0, skippedForeign: 0, skippedForeignNational: 0,
   }
-  if (!existsSync(railTrafficSidecarPath(prepared))) {
-    for (const square of request.squares) {
-      const path = resolve(prepared, square, 'railways.arrow')
-      if (existsSync(path) && tableFromIPC(readFileSync(path)).schema.metadata.get('rail_traffic_contract') === '1') {
-        throw new Error('railway parent restoration requires the retained traffic sidecar')
-      }
+  using topology = new SourceTransportTopology(prepared)
+  const quarantineBySquare = new Map<string, RailPieceIdentity[]>()
+  for (const key of request.quarantinedPieceKeys) {
+    const split = key.lastIndexOf(':')
+    const wayId = key.slice(0, split)
+    const segmentIndex = Number(key.slice(split + 1))
+    try {
+      const square = topology.pieceExtent(wayId, segmentIndex).square
+      if (!allowedSquares.has(square)) continue
+      const quarantined = quarantineBySquare.get(square) ?? []
+      quarantined.push({ osmId: parseOsmId(wayId), segmentIndex })
+      quarantineBySquare.set(square, quarantined)
+    } catch {
+      // Piece may sit outside this country's listed squares.
     }
   }
-  const database = openRailTrafficSidecar(prepared)
-  const topology = new SourceTransportTopology(prepared)
-  try {
-    const quarantineBySquare = new Map<string, Array<{ osmId: number; segmentIndex: number }>>()
-    for (const key of request.quarantinedPieceKeys) {
-      const split = key.lastIndexOf(':')
-      const wayId = key.slice(0, split)
-      const segmentIndex = Number(key.slice(split + 1))
-      try {
-        const square = topology.pieceExtent(wayId, segmentIndex).square
-        if (!allowedSquares.has(square)) continue
-        const quarantined = quarantineBySquare.get(square) ?? []
-        quarantined.push({ osmId: parseOsmId(wayId), segmentIndex })
-        quarantineBySquare.set(square, quarantined)
-      } catch {
-        // Piece may sit outside this country's listed squares.
-      }
-    }
-    database.exec('BEGIN IMMEDIATE')
-    for (const square of request.squares) {
-      const quarantined = quarantineBySquare.get(square) ?? []
-      replaceRailQuarantine(database, request.sourceId, request.countryIso, square, quarantined)
-      if (request.silentResidual) {
-        replaceRailQuarantine(
-          database, request.silentResidual.sourceId, request.countryIso, square, quarantined,
-        )
-      }
-      if (request.retractSafe) {
-        result.retracted += retractRailSourceSquare(database, ownSourceIds, request.countryIso, square)
-      }
-    }
 
-    const walkPieces = new Set<string>()
-    const replaceAcceptedPiece = database.prepare(`
-      DELETE FROM rail_interval WHERE source_id IN (${ownSourceIds.map(() => '?').join(',')})
-        AND country_iso = ? AND square = ? AND osm_id = ? AND segment_idx = ?
-    `)
-    let nextOccurrence = 0
-    for (const service of request.services) {
-      if (service.evidence.sourceId !== request.sourceId) throw new Error('railway service source differs from snapshot owner')
-      // Local visit zero on two different services represents two passages.
-      const serviceOccurrenceOffset = nextOccurrence
-      const matching = railMatchingMask(service.evidence.matching)
-      for (const passage of service.passages) {
-        const occurrence = serviceOccurrenceOffset + passage.occurrence
-        if (!Number.isSafeInteger(passage.occurrence) || passage.occurrence < 0 ||
-            !Number.isSafeInteger(occurrence + 1)) throw new Error('invalid railway passage occurrence')
-        nextOccurrence = Math.max(nextOccurrence, occurrence + 1)
-        const quarantined = request.quarantinedPieceKeys.has(transportPassageKey(passage))
-        if (!allowedSquares.has(passage.square)) {
-          result.skippedForeign++
-          continue
-        }
-        const row = trafficToInterval(
-          passage.square, parseOsmId(passage.wayId), passage.segmentIndex,
-          passage.fromM, passage.toM, occurrence, request.countryIso, {
-            passenger: service.evidence.passenger,
-            freight: service.evidence.freight,
-            sourceId: service.evidence.sourceId,
-            passengerStatus: quarantined && service.evidence.passengerStatus !== 'unknown'
-              ? 'estimated' : service.evidence.passengerStatus,
-            freightStatus: quarantined && service.evidence.freightStatus !== 'unknown'
-              ? 'estimated' : service.evidence.freightStatus,
-            matching,
-          },
-        )
-        if (!row || !Number.isFinite(row.fromM) || !Number.isFinite(row.toM) || row.fromM === row.toM) continue
-        const key = `${passage.square}\x1f${transportPassageKey(passage)}`
-        if (quarantined && !walkPieces.has(key)) {
-          // A current accepted snapshot replaces old visits once, even where another
-          // failed service left quarantine. Keep that uncertainty and its fallback veto.
-          result.retracted += Number(replaceAcceptedPiece.run(
-            ...ownSourceIds, request.countryIso, passage.square, row.osmId, row.segmentIndex,
-          ).changes)
-        }
-        insertRailInterval(database, row)
+  const visitsBySquare = new Map<string, Array<{ row: RailSquareInterval; quarantined: boolean }>>()
+  let nextOccurrence = 0
+  for (const service of request.services) {
+    if (service.evidence.sourceId !== request.sourceId) throw new Error('railway service source differs from snapshot owner')
+    // Local visit zero on two different services represents two passages.
+    const serviceOccurrenceOffset = nextOccurrence
+    const matching = railMatchingMask(service.evidence.matching)
+    for (const passage of service.passages) {
+      const occurrence = serviceOccurrenceOffset + passage.occurrence
+      if (!Number.isSafeInteger(passage.occurrence) || passage.occurrence < 0 ||
+          !Number.isSafeInteger(occurrence + 1)) throw new Error('invalid railway passage occurrence')
+      nextOccurrence = Math.max(nextOccurrence, occurrence + 1)
+      const quarantined = request.quarantinedPieceKeys.has(transportPassageKey(passage))
+      if (!allowedSquares.has(passage.square)) {
+        result.skippedForeign++
+        continue
+      }
+      const row = trafficToInterval(
+        parseOsmId(passage.wayId), passage.segmentIndex, passage.fromM, passage.toM, occurrence, {
+          passenger: service.evidence.passenger,
+          freight: service.evidence.freight,
+          sourceId: service.evidence.sourceId,
+          passengerStatus: quarantined && service.evidence.passengerStatus !== 'unknown'
+            ? 'estimated' : service.evidence.passengerStatus,
+          freightStatus: quarantined && service.evidence.freightStatus !== 'unknown'
+            ? 'estimated' : service.evidence.freightStatus,
+          matching,
+        },
+      )
+      if (!row || !Number.isFinite(row.fromM) || !Number.isFinite(row.toM) || row.fromM === row.toM) continue
+      const visits = visitsBySquare.get(passage.square)
+      if (visits) visits.push({ row, quarantined })
+      else visitsBySquare.set(passage.square, [{ row, quarantined }])
+    }
+  }
+
+  for (const square of request.squares) {
+    const arrowPath = resolve(prepared, square, 'railways.arrow')
+    if (!existsSync(arrowPath)) continue
+    const table = restoreRailwayParentsForEnrichment(arrowPath, square, topology)
+    await withRailTrafficSquare(prepared, square, request.countryIso, session => {
+      const quarantined = quarantineBySquare.get(square) ?? []
+      for (const sourceId of ownSourceIds) session.replaceQuarantine(sourceId, quarantined)
+      if (request.retractSafe) result.retracted += session.retract(ownSourceIds)
+      const walkPieces = new Set<string>()
+      for (const visit of visitsBySquare.get(square) ?? []) {
+        const key = transportPieceKey(String(visit.row.osmId), visit.row.segmentIndex)
+        // A current accepted snapshot replaces old visits once, even where another
+        // failed service left quarantine. Keep that uncertainty and its fallback veto.
+        if (visit.quarantined && !walkPieces.has(key)) result.retracted += session.retract(ownSourceIds, visit.row, true)
+        session.insert(visit.row)
         if (!walkPieces.has(key)) {
           walkPieces.add(key)
           result.walkStamped++
         }
       }
-    }
 
-    for (const square of request.squares) {
-
-      const arrowPath = resolve(prepared, square, 'railways.arrow')
-      if (!existsSync(arrowPath)) continue
-      const table = restoreRailwayParentsForEnrichment(arrowPath, prepared, square, topology)
       const rows = table.numRows
       result.rows += rows
-      if (rows === 0 || (!request.silentResidual && !request.extraMatch)) continue
+      if (rows === 0 || (!request.silentResidual && !request.extraMatch)) return
       const geometry = segmentGeometryReader(table)
       const osmId = table.getChild('osm_id')!
       const segmentIndex = table.getChild('segment_idx')!
@@ -239,7 +214,7 @@ export async function writeClippedRailPassages(
         const wayId = String(osmId.get(index))
         const segment = segmentIndex.get(index) as number
         const key = transportPieceKey(wayId, segment)
-        if (walkPieces.has(`${square}\x1f${key}`) || request.quarantinedPieceKeys.has(key)) continue
+        if (walkPieces.has(key) || request.quarantinedPieceKeys.has(key)) continue
         const existing = existingSource.get(index) as number
         const row: RailwayRow = {
           ...geometry.row(index),
@@ -263,23 +238,14 @@ export async function writeClippedRailPassages(
           result.skippedForeignNational++
           continue
         }
-        const extent = topology.pieceExtent(wayId, segment)
-        const interval = trafficToInterval(
-          square, parseOsmId(wayId), segment, extent.from, extent.to, 0, request.countryIso, candidate,
-        )
+        const extent = topology.pieceExtent(wayId, segment, square)
+        const interval = trafficToInterval(parseOsmId(wayId), segment, extent.from, extent.to, 0, candidate)
         if (!interval) continue
-        insertRailInterval(database, interval)
+        session.insert(interval)
         if (silent) result.silentStamped++
         else result.extraStamped++
       }
-    }
-    database.exec('COMMIT')
-  } catch (error) {
-    try { database.exec('ROLLBACK') } catch { /* transaction may not have started */ }
-    throw error
-  } finally {
-    topology[Symbol.dispose]()
-    database.close()
+    })
   }
   return result
 }

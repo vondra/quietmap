@@ -50,6 +50,22 @@ pub fn flat_dist(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     (dx * dx + dy * dy).sqrt()
 }
 
+/// Cumulative [`flat_dist`] metres along `points` (`[lat, lon]`), starting at `first_m`.
+/// Left-to-right additions only, so a reader continuing from a stored interior value
+/// reproduces the whole-way prefix sums bit for bit.
+pub fn cumulative_flat_metres(first_m: f64, points: &[[f64; 2]]) -> Vec<f64> {
+    let mut metres = Vec::with_capacity(points.len());
+    if points.is_empty() {
+        return metres;
+    }
+    metres.push(first_m);
+    for hop in points.windows(2) {
+        metres
+            .push(metres[metres.len() - 1] + flat_dist(hop[0][0], hop[0][1], hop[1][0], hop[1][1]));
+    }
+    metres
+}
+
 /// 3D slant distance: horizontal distance + height difference.
 /// Used for geometric divergence and atmospheric absorption.
 pub fn slant_dist(d_horizontal: f64, source_alt: f64, receiver_alt: f64) -> f64 {

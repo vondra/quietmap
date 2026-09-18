@@ -35,7 +35,7 @@ export async function runGtfsCountries(options: GlobalGtfsCountryOptions): Promi
   {
     using topology = new SourceTransportTopology(prepared)
     for (const square of squares) {
-      restoreRailwayParentsForEnrichment(resolve(prepared, square, 'railways.arrow'), prepared, square, topology)
+      restoreRailwayParentsForEnrichment(resolve(prepared, square, 'railways.arrow'), square, topology)
     }
   }
   let failure: Error | undefined

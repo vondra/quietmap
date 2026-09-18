@@ -110,6 +110,30 @@ pub struct ExtractAudit {
     pub default_residential: HashMap<String, u64>,
 }
 
+/// Leading columns of every segment row: `sq osm_id seg_idx s_gx s_gy e_gx e_gy length_m`.
+pub fn write_segment_row_prefix(
+    out: &mut impl Write,
+    square: Square,
+    osm_id: i64,
+    seg_idx: i16,
+    seg: &([f64; 2], [f64; 2], f32),
+) -> std::io::Result<()> {
+    let (sgx, sgy) = lonlat_to_grid(seg.0[1], seg.0[0]);
+    let (egx, egy) = lonlat_to_grid(seg.1[1], seg.1[0]);
+    write!(
+        out,
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}",
+        spill_key(square),
+        osm_id,
+        seg_idx,
+        sgx,
+        sgy,
+        egx,
+        egy,
+        seg.2
+    )
+}
+
 pub struct Spiller {
     dir: PathBuf,
     num_buckets: usize,
@@ -144,7 +168,9 @@ impl Spiller {
     }
 
     /// Emit a linear segment (road, railway, barrier). Endpoints snap to grid
-    /// here; length/bearing stay float (microsegment math, proven).
+    /// here; length/bearing stay float (microsegment math, proven). A transport
+    /// row ends with its one-field `transport::piece_tail`.
+    #[allow(clippy::too_many_arguments)]
     pub fn emit_segment(
         &mut self,
         ftype: &FeatureType,
@@ -153,27 +179,12 @@ impl Spiller {
         seg_idx: i16,
         seg: &([f64; 2], [f64; 2], f32),
         tags: &Tags,
+        piece_tail: Option<&str>,
     ) -> Result<()> {
         let bucket = self.bucket(square);
         let name = ftype.name();
-
-        let (sgx, sgy) = lonlat_to_grid(seg.0[1], seg.0[0]);
-        let (egx, egy) = lonlat_to_grid(seg.1[1], seg.1[0]);
-
-        // TSV: sq, osm_id, seg_idx, s_gx, s_gy, e_gx, e_gy, length_m, tags...
         let w = self.get_writer(name, bucket)?;
-        write!(
-            w,
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.1}",
-            spill_key(square),
-            osm_id,
-            seg_idx,
-            sgx,
-            sgy,
-            egx,
-            egy,
-            seg.2
-        )?;
+        write_segment_row_prefix(w, square, osm_id, seg_idx, seg)?;
 
         // Append feature-specific tags as key=value pairs
         match ftype {
@@ -312,7 +323,9 @@ impl Spiller {
             }
             _ => {}
         }
-
+        if let Some(piece_tail) = piece_tail {
+            write!(w, "\t{piece_tail}")?;
+        }
         writeln!(w)?;
         Ok(())
     }
@@ -1001,6 +1014,7 @@ mod settlement_class_tests {
                     0,
                     &([50.0, 14.0], [50.001, 14.0], 111.0),
                     &tags,
+                    None,
                 ),
                 FeatureType::Building => {
                     spiller.emit_polygon(&feature, square, 2, 50.0, 14.0, &tags, None)

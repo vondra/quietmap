@@ -1,13 +1,20 @@
-//! SQLite provenance store linking published transport pieces to original OSM ways, node chains, and identity aliases.
+//! Transport provenance in the spill: piece tails on segment rows, railway way chains, train routes and node aliases.
 
 use crate::microsegment::SourceInterval;
-use anyhow::{bail, Context, Result};
-use rusqlite::{params, Connection, OpenFlags};
-use std::{
-    collections::HashMap,
-    fs::File,
-    path::{Path, PathBuf},
-};
+use anyhow::{bail, ensure, Context, Result};
+use std::collections::{BTreeSet, HashMap};
+use std::fmt::Write as _;
+use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::path::{Path, PathBuf};
+
+pub const RAILWAY_WAYS_SPILL: &str = "railway_ways.tsv";
+pub const TRAIN_ROUTES_SPILL: &str = "train_routes.tsv";
+pub const NODE_ALIASES_SPILL: &str = "node_aliases.tsv";
+
+pub type ResolvedNode = (i64, Option<[f64; 2]>);
+/// Per family: aliased node id → canonical (minimum) node id of its zero-length-hop set.
+pub type NodeAliases = HashMap<String, HashMap<i64, i64>>;
 
 /// Owned train-route membership extracted while the PBF relation is still alive.
 pub struct TrainRouteRecord {
@@ -44,43 +51,113 @@ impl TrainRouteRecord {
     }
 }
 
-/// PRAGMA user_version stamped when the single write transaction commits; readers gate on it.
-const SCHEMA_VERSION: i32 = 2;
+/// The node cache holds `i32` e7 degrees, so rounding recovers the stored integer exactly;
+/// truncation would land one unit (1.1 cm) low for about half of all coordinates.
+pub fn coordinate_e7(degrees: f64) -> i32 {
+    let e7 = (degrees * 1e7).round() as i32;
+    assert!(
+        e7 as f64 / 1e7 == degrees,
+        "coordinate {degrees} is not an exact e7 value"
+    );
+    e7
+}
 
-pub struct TransportWriter {
-    database: PathBuf,
-    connection: Connection,
+/// Whole-way cumulative metres; `None` when a coordinate is missing or the way has under two nodes.
+pub fn way_metres(nodes: &[ResolvedNode]) -> Option<Vec<f64>> {
+    let points: Vec<[f64; 2]> = nodes.iter().map(|node| node.1).collect::<Option<_>>()?;
+    (points.len() >= 2).then(|| grid::geo::cumulative_flat_metres(0.0, &points))
+}
+
+/// One comma-separated spill field per piece, so finalize holds one extra string per row:
+/// `start_vertex,start_fraction,end_vertex,end_fraction,start_node,end_node`, and for railways
+/// `,first_vertex_m,from_m,to_m,lat_e7;lon_e7;…` (metres empty on an incomplete way).
+/// Node ids are raw; aliases are known only after Pass 2 and are applied in finalize.
+pub fn piece_tail(
+    nodes: &[ResolvedNode],
+    interval: &SourceInterval,
+    railway_metres: Option<Option<&[f64]>>,
+) -> String {
+    let (start, end) = (interval.start, interval.end);
+    assert!(
+        end.vertex_index <= u16::MAX as usize,
+        "source vertex {} exceeds UInt16",
+        end.vertex_index
+    );
+    let mut tail = format!(
+        "{},{},{},{},{},{}",
+        start.vertex_index,
+        start.fraction_to_next,
+        end.vertex_index,
+        end.fraction_to_next,
+        nodes[start.vertex_index].0,
+        nodes[end.vertex_index].0
+    );
+    let Some(metres) = railway_metres else {
+        return tail;
+    };
+    match metres {
+        Some(metres) => {
+            let at = |vertex: usize, fraction: f64| {
+                if fraction == 0.0 {
+                    metres[vertex]
+                } else {
+                    metres[vertex] + fraction * (metres[vertex + 1] - metres[vertex])
+                }
+            };
+            write!(
+                tail,
+                ",{},{},{},",
+                metres[start.vertex_index],
+                at(start.vertex_index, start.fraction_to_next),
+                at(end.vertex_index, end.fraction_to_next)
+            )
+        }
+        None => write!(tail, ",,,,"),
+    }
+    .expect("write to string");
+    let last_vertex = end.vertex_index + usize::from(end.fraction_to_next > 0.0);
+    for (index, node) in nodes[start.vertex_index..=last_vertex].iter().enumerate() {
+        let [lat, lon] = node.1.expect("a piece spans resolved nodes only");
+        let separator = if index == 0 { "" } else { ";" };
+        write!(
+            tail,
+            "{separator}{};{}",
+            coordinate_e7(lat),
+            coordinate_e7(lon)
+        )
+        .expect("write to string");
+    }
+    tail
+}
+
+pub struct TransportSpill {
+    spill_dir: PathBuf,
+    railway_ways: BufWriter<File>,
+    train_routes: BufWriter<File>,
     /// Per-family sparse union-find (node → parent) fed only by explicit zero-length
-    /// source hops; a set's root is its minimum node ID, so canonical identity is
-    /// deterministic and `node_aliases` stays sparse.
+    /// source hops; a set's root is its minimum node ID, so canonical identity is deterministic.
     alias_parents: HashMap<String, HashMap<i64, i64>>,
 }
 
-impl TransportWriter {
-    /// Opens `spill_dir/transport.sqlite`, creates the schema, and begins the single write transaction.
+impl TransportSpill {
     pub fn new(spill_dir: &Path) -> Result<Self> {
-        let database = spill_dir.join("transport.sqlite");
-        let connection =
-            Connection::open(&database).with_context(|| format!("open {}", database.display()))?;
-        connection.execute_batch("BEGIN IMMEDIATE")?;
-        connection
-            .execute_batch(include_str!("transport.sql"))
-            .with_context(|| format!("create transport schema in {}", database.display()))?;
+        let create = |name: &str| -> Result<BufWriter<File>> {
+            let path = spill_dir.join(name);
+            Ok(BufWriter::with_capacity(
+                1 << 20,
+                File::create(&path).with_context(|| format!("create {}", path.display()))?,
+            ))
+        };
         Ok(Self {
-            connection,
+            spill_dir: spill_dir.to_path_buf(),
+            railway_ways: create(RAILWAY_WAYS_SPILL)?,
+            train_routes: create(TRAIN_ROUTES_SPILL)?,
             alias_parents: HashMap::new(),
-            database,
         })
     }
 
-    /// Records the complete original node chain and unions the IDs of consecutive
-    /// distinct nodes whose coordinates are exactly equal (explicit zero-length hops).
-    pub fn write_way(
-        &mut self,
-        way_id: i64,
-        family: &str,
-        nodes: &[(i64, Option<[f64; 2]>)],
-    ) -> Result<()> {
+    /// Unions the IDs of consecutive distinct nodes whose coordinates are exactly equal.
+    pub fn observe_way(&mut self, family: &str, nodes: &[ResolvedNode]) {
         for adjacent in nodes.windows(2) {
             let (a, b) = (adjacent[0], adjacent[1]);
             // Missing coordinates must not bridge identities, so require a present pair.
@@ -88,60 +165,49 @@ impl TransportWriter {
                 self.union_aliased(family, a.0, b.0);
             }
         }
-        let chain: Vec<(String, Option<[f64; 2]>)> = nodes
-            .iter()
-            .map(|(node_id, coordinates)| (node_id.to_string(), *coordinates))
-            .collect();
-        self.connection
-            .prepare_cached(
-                "INSERT INTO source_ways(osm_id, family, nodes_json) VALUES (?1, ?2, ?3)",
-            )?
-            .execute(params![way_id, family, serde_json::to_string(&chain)?])
-            .with_context(|| format!("store source way {way_id}"))?;
+    }
+
+    /// `way_id \t id,lat_e7,lon_e7;… \t square_key;…` — called after the way's pieces are known.
+    pub fn write_railway_way(
+        &mut self,
+        way_id: i64,
+        nodes: &[ResolvedNode],
+        piece_squares: &BTreeSet<u32>,
+    ) -> Result<()> {
+        let out = &mut self.railway_ways;
+        write!(out, "{way_id}\t")?;
+        for (index, (node_id, coordinates)) in nodes.iter().enumerate() {
+            let separator = if index == 0 { "" } else { ";" };
+            match coordinates {
+                Some([lat, lon]) => write!(
+                    out,
+                    "{separator}{node_id},{},{}",
+                    coordinate_e7(*lat),
+                    coordinate_e7(*lon)
+                )?,
+                None => write!(out, "{separator}{node_id},,")?,
+            }
+        }
+        write!(out, "\t")?;
+        for (index, square) in piece_squares.iter().enumerate() {
+            write!(out, "{}{square}", if index == 0 { "" } else { ";" })?;
+        }
+        writeln!(out)?;
         Ok(())
     }
 
     /// Retains every train-route member in source order, including repeats and unresolved references.
     pub fn write_train_route(&mut self, route: &TrainRouteRecord) -> Result<()> {
-        self.connection
-            .prepare_cached(
-                "INSERT INTO source_train_routes(osm_id, members_json) VALUES (?1, ?2)",
-            )?
-            .execute(params![
-                route.osm_id,
-                serde_json::to_string(&route.members)?
-            ])
-            .with_context(|| format!("store train route {}", route.osm_id))?;
+        writeln!(
+            self.train_routes,
+            "{}\t{}",
+            route.osm_id,
+            serde_json::to_string(&route.members)?
+        )?;
         Ok(())
     }
 
-    /// Records one acoustic piece's square and its exact interval on the original vertex chain.
-    pub fn write_piece(
-        &mut self,
-        way_id: i64,
-        segment_idx: i16,
-        square: &str,
-        interval: &SourceInterval,
-    ) -> Result<()> {
-        self.connection
-            .prepare_cached(
-                "INSERT INTO source_pieces(way_id, segment_idx, square, start_vertex, start_fraction,
-                     end_vertex, end_fraction) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            )?
-            .execute(params![
-                way_id,
-                segment_idx,
-                square,
-                interval.start.vertex_index as i64,
-                interval.start.fraction_to_next,
-                interval.end.vertex_index as i64,
-                interval.end.fraction_to_next,
-            ])
-            .with_context(|| format!("store piece {way_id}/{segment_idx}"))?;
-        Ok(())
-    }
-
-    /// Materializes aliases, stamps the schema version, commits, closes, and syncs the bytes.
+    /// Materializes aliases and syncs all three files; the caller writes the spill completion marker after this.
     pub fn finish(mut self) -> Result<()> {
         let mut aliases: Vec<(String, i64, i64)> = Vec::new();
         for (family, parents) in &mut self.alias_parents {
@@ -154,68 +220,19 @@ impl TransportWriter {
             }
         }
         aliases.sort();
+        let mut alias_file = BufWriter::new(File::create(self.spill_dir.join(NODE_ALIASES_SPILL))?);
         for (family, node_id, canonical_node) in aliases {
-            self.connection
-                .prepare_cached(
-                    "INSERT INTO node_aliases(family, node_id, canonical_node) VALUES (?1, ?2, ?3)",
-                )?
-                .execute(params![family, node_id, canonical_node])?;
+            writeln!(alias_file, "{family}\t{node_id}\t{canonical_node}")?;
         }
-        self.connection
-            .pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        self.connection.execute_batch("COMMIT")?;
-        drop(self.connection);
-        File::open(&self.database)
-            .and_then(|file| file.sync_all())
-            .with_context(|| format!("sync {}", self.database.display()))?;
+        for file in [
+            &mut alias_file,
+            &mut self.railway_ways,
+            &mut self.train_routes,
+        ] {
+            file.flush()?;
+            file.get_ref().sync_all()?;
+        }
         Ok(())
-    }
-
-    /// True only when the spill database exists, is readable, and carries the current schema version.
-    pub fn is_complete(spill_dir: &Path) -> bool {
-        Connection::open_with_flags(
-            spill_dir.join("transport.sqlite"),
-            OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .and_then(|connection| {
-            connection.query_row("PRAGMA user_version", [], |row| row.get::<_, i32>(0))
-        })
-        .map(|version| version == SCHEMA_VERSION)
-        .unwrap_or(false)
-    }
-
-    /// Publishes the completed spill database as a sibling of the prepared directory.
-    pub fn publish(spill_dir: &Path, output_directory: &Path) -> Result<()> {
-        if !Self::is_complete(spill_dir) {
-            bail!(
-                "incomplete transport database {}; nothing published",
-                spill_dir.join("transport.sqlite").display()
-            );
-        }
-        let source = spill_dir.join("transport.sqlite");
-        let target = output_path(output_directory)?;
-        let temp = {
-            let mut name = target
-                .file_name()
-                .expect("output_path yields a file name")
-                .to_os_string();
-            name.push(".copying");
-            target.parent().unwrap_or(Path::new("")).join(name)
-        };
-        let published: Result<()> = (|| {
-            std::fs::copy(&source, &temp)
-                .with_context(|| format!("copy {} to {}", source.display(), temp.display()))?;
-            File::open(&temp)
-                .and_then(|file| file.sync_all())
-                .with_context(|| format!("sync {}", temp.display()))?;
-            std::fs::rename(&temp, &target)
-                .with_context(|| format!("publish {}", target.display()))?;
-            Ok(())
-        })();
-        if published.is_err() {
-            let _ = std::fs::remove_file(&temp);
-        }
-        published
     }
 
     fn union_aliased(&mut self, family: &str, a: i64, b: i64) {
@@ -223,34 +240,42 @@ impl TransportWriter {
         let root_a = find_root(parents, a);
         let root_b = find_root(parents, b);
         if root_a != root_b {
-            let (minimum, other) = if root_a < root_b {
-                (root_a, root_b)
-            } else {
-                (root_b, root_a)
-            };
-            parents.insert(other, minimum);
+            parents.insert(root_a.max(root_b), root_a.min(root_b));
         }
     }
 }
 
-/// Sibling of the prepared year directory that carries the published database,
-/// e.g. `output/prepared/2026` → `output/prepared/2026.transport.sqlite`.
-pub fn output_path(prepared_directory: &Path) -> Result<PathBuf> {
-    let file_name = prepared_directory
-        .file_name()
-        .with_context(|| {
-            format!(
-                "{} has no final directory name",
-                prepared_directory.display()
-            )
-        })?
-        .to_os_string();
-    let mut published = file_name;
-    published.push(".transport.sqlite");
+pub fn load_node_aliases(spill_dir: &Path) -> Result<NodeAliases> {
+    let path = spill_dir.join(NODE_ALIASES_SPILL);
+    let mut aliases = NodeAliases::new();
+    let file = File::open(&path).with_context(|| format!("open {}", path.display()))?;
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        let fields: Vec<&str> = line.split('\t').collect();
+        ensure!(fields.len() == 3, "malformed node alias row {line:?}");
+        aliases
+            .entry(fields[0].to_owned())
+            .or_default()
+            .insert(fields[1].parse()?, fields[2].parse()?);
+    }
+    Ok(aliases)
+}
+
+/// Sibling of the prepared year directory, e.g. `prepared/2026` + `railway-ways` →
+/// `prepared/2026.railway-ways.arrow`.
+pub fn year_sibling_path(prepared_directory: &Path, kind: &str) -> Result<PathBuf> {
+    let Some(file_name) = prepared_directory.file_name() else {
+        bail!(
+            "{} has no final directory name",
+            prepared_directory.display()
+        );
+    };
+    let mut sibling = file_name.to_os_string();
+    sibling.push(format!(".{kind}.arrow"));
     Ok(prepared_directory
         .parent()
         .unwrap_or(Path::new(""))
-        .join(published))
+        .join(sibling))
 }
 
 /// Union-find root with path compression; an absent entry is its own root.

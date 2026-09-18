@@ -3,8 +3,8 @@
 use crate::encode::{encode_children, Expanded, CONTRACT_KEY};
 use crate::merge::{fill_missing_priors, RowTraffic, STATUS_UNKNOWN};
 use crate::sharing::apply_default_sharing;
-use crate::sidecar::{load_square_intervals, Interval};
 use crate::split::{split_parent, ChildGeom, ChildRow};
+use crate::square_intervals::{load_square_intervals, Interval};
 use crate::topology::load_square_pieces;
 use arrow::array::{
     Array, Float32Array, Int16Array, Int32Array, Int64Array, UInt16Array, UInt8Array,
@@ -28,8 +28,6 @@ pub struct SquareReceipt {
 pub fn finalize_square(
     prepared_year: &Path,
     square: Square,
-    sidecar: &Path,
-    topology: &Path,
 ) -> Result<Option<SquareReceipt>, String> {
     let dir = prepared_year.join(grid::square_name(square));
     let arrow_path = dir.join("railways.arrow");
@@ -80,19 +78,18 @@ pub fn finalize_square(
     }
     let merged =
         concat_batches(&schema, &batches).map_err(|e| format!("{}: {e}", arrow_path.display()))?;
-    let square_name = grid::square_name(square);
     let retained = finalized
         .then(|| crate::rail_traffic::RailTrafficColumns::read(&merged))
         .transpose()?;
     let intervals = if finalized {
         HashMap::new()
     } else {
-        load_square_intervals(sidecar, &square_name)?
+        load_square_intervals(&dir)?
     };
     let pieces = if finalized {
         HashMap::new()
     } else {
-        load_square_pieces(topology, &square_name, col_i64(&merged, "osm_id")?.values())?
+        load_square_pieces(&dir)?
     };
     let children = expand_rows(&merged, &intervals, &pieces, retained.as_ref())?;
     let ipc = encode_children(&merged, &children)?;

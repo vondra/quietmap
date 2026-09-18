@@ -1,7 +1,7 @@
 //! Split a parent acoustic piece at every distinct evidence boundary.
 
 use crate::merge::{row_traffic, RowTraffic};
-use crate::sidecar::Interval;
+use crate::square_intervals::Interval;
 use crate::topology::Piece;
 use grid::lonlat_to_grid;
 use noise_compute::square_country_city::SquareCountryCity;
@@ -37,7 +37,7 @@ pub fn split_parent(
     let Some(piece) = piece else {
         if !intervals.is_empty() {
             return Err(format!(
-                "sidecar interval for {osm_id}:{segment_idx} has no source topology piece"
+                "rail interval for {osm_id}:{segment_idx} has no source topology piece"
             ));
         }
         return Ok(vec![ChildRow {
@@ -79,8 +79,8 @@ pub fn split_parent(
         let geom = if unique.len() == 2 {
             original
         } else {
-            let start = piece.way.coordinates_at(from_m);
-            let end = piece.way.coordinates_at(to_m);
+            let start = piece.coordinates_at(from_m);
+            let end = piece.coordinates_at(to_m);
             let (start_gx, start_gy) = lonlat_to_grid(start[1], start[0]);
             let (end_gx, end_gy) = lonlat_to_grid(end[1], end[0]);
             ChildGeom {

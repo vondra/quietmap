@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { spawnSync } from 'node:child_process'
 import { CompleteTrainRouteIndex, StopOrderGeometry, relationWayPoints } from './rail-service-match.js'
+import { fixtureNodeDistances } from './transport-test-fixture.js'
 import type { OrientedSourceRailWay, SourceTrainRoute } from './transport-topology.js'
 
 const points: Array<[number, number]> = [[0, 0], [0, 0.02], [0, 0.04]]
@@ -16,10 +17,8 @@ function route(id: string, ways: OrientedSourceRailWay[]): SourceTrainRoute {
 }
 
 function way(id: string, geometry: Array<[number, number]>, reverse = false): OrientedSourceRailWay {
-  return {
-    id, role: '', reverse,
-    nodes: geometry.map((coordinate, index) => [String(index), coordinate]),
-  }
+  const nodes: OrientedSourceRailWay['nodes'] = geometry.map((coordinate, index) => [String(index), coordinate])
+  return { id, role: '', reverse, nodes, distances: fixtureNodeDistances(nodes)! }
 }
 
 test('stop order rejects a reverse itinerary and treats duplicate complete fits as ambiguous', () => {

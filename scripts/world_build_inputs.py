@@ -10,7 +10,7 @@ import struct
 import sys
 import tempfile
 
-from prepared_manifest import file_identity, square_directories
+from prepared_manifest import file_identity, served_layer_files, square_directories
 
 sys.path.insert(0, str(Path(__file__).parent / 'lib'))
 import qmgrid
@@ -196,7 +196,7 @@ def audit_world(prepared, jobs=None):
         # structures-finalize (a table rewritten after the step makes the rerun write).
         if not (square / 'structures.qoix').is_file():
             raise ValueError(f'unfinished obstacle index: {square}')
-        for path in sorted(square.glob('*.arrow')):
+        for path in served_layer_files(square):
             with pa.memory_map(str(path), 'r') as source:
                 reader = pa.ipc.open_file(source)
                 metadata = reader.schema.metadata or {}

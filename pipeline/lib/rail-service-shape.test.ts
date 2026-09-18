@@ -4,13 +4,15 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { alignRailServiceShape } from './rail-service-shape.js'
 import { flatDist, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './spatial.js'
+import { fixtureNodeDistances } from './transport-test-fixture.js'
 import type { OrientedSourceRailWay } from './transport-topology.js'
 
 type Point = [number, number]
 const point = (x: number, y: number): Point => [y / M_PER_DEG_LAT, x / M_PER_DEG_LON_EQ]
 function way(id: string, points: Point[], nodes: string[], reverse = false): OrientedSourceRailWay {
   assert.equal(points.length, nodes.length)
-  return { id, nodes: points.map((coordinate, index) => [nodes[index], coordinate]), role: '', reverse }
+  const chain: OrientedSourceRailWay['nodes'] = points.map((coordinate, index) => [nodes[index], coordinate])
+  return { id, nodes: chain, distances: fixtureNodeDistances(chain)!, role: '', reverse }
 }
 
 const interval = (from: number, to: number) => [from, to]

@@ -1,4 +1,4 @@
-/** Proxy classifications and topology-backed sidecar integration for the railway proxy family. */
+/** Proxy classifications and topology-backed interval-file integration for the railway proxy family. */
 
 import assert from 'node:assert/strict'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -215,7 +215,7 @@ function z9Directory(prepared: string, latitude: number, longitude: number): str
   return join(prepared, 'z9', String(x), String(y))
 }
 
-test('country runner writes estimated sidecar claims and reruns without accumulating or changing Arrow', async () => {
+test('country runner writes estimated interval claims and reruns without accumulating or changing Arrow', async () => {
   const prepared = join(TEST_DIRECTORY, 'prepared-country')
   const square = z9Directory(prepared, -5.82, 13.45)
   mkdirSync(square, { recursive: true })

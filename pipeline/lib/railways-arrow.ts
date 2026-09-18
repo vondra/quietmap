@@ -1,4 +1,4 @@
-/** Whole-piece railway evidence writer for the final preparation sidecar. */
+/** Whole-piece railway evidence writer for the square interval files read by railways-finalize. */
 
 import { dirname, basename, resolve } from 'node:path'
 import { DataType, type Table, type Vector } from 'apache-arrow'
@@ -9,8 +9,8 @@ import {
 import { SourceTransportTopology } from './transport-topology.js'
 import { restoreRailwayParentsForEnrichment } from './rail-parent.js'
 import {
-  inferredRailStatus, insertRailInterval, openRailTrafficSidecar, railMatchingMask,
-  railStatusCode, retractRailSourceSquare,
+  inferredRailStatus, railMatchingMask,
+  railStatusCode, withRailTrafficSquare,
 } from './rail-traffic-store.js'
 import type { RailTrafficStatus } from './rail-passage.js'
 
@@ -124,12 +124,12 @@ function validateRetract(retract: RailwayRetract | undefined): ReadonlySet<numbe
 function writerCountryIso(options: RailwayWriteOptions): string {
   if (options.countryIso) return options.countryIso
   if (options.allowedCountryIsos?.length === 1) return options.allowedCountryIsos[0]
-  throw new Error('writeRailwayTraffic: countryIso is required for sidecar evidence')
+  throw new Error('writeRailwayTraffic: countryIso is required for interval evidence')
 }
 
 /**
- * Persist whole-piece daily evidence in the rail-traffic sidecar.
- * Restores finalized parents when needed; traffic is written only to the sidecar.
+ * Persist whole-piece daily evidence in the square's interval file of the writing country.
+ * Restores finalized parents when needed; traffic is written only to that file.
  */
 export async function writeRailwayTraffic(
   arrowPath: string,
@@ -148,11 +148,10 @@ export async function writeRailwayTraffic(
     ? new Set(options.allowedCountryIsos.map(iso2Code))
     : null
   const topology = topologyFor(preparedDirectory)
-  const table = restoreRailwayParentsForEnrichment(arrowPath, preparedDirectory, square, topology)
-  const database = openRailTrafficSidecar(preparedDirectory)
-  try {
-    result.rows = table.numRows
-    if (result.rows === 0) return result
+  const table = restoreRailwayParentsForEnrichment(arrowPath, square, topology)
+  result.rows = table.numRows
+  if (result.rows === 0) return result
+  await withRailTrafficSquare(preparedDirectory, square, countryIso, session => {
 
     const geometry = segmentGeometryReader(table)
     const osmId = requiredInteger(table, 'osm_id', true, 64)
@@ -177,7 +176,6 @@ export async function writeRailwayTraffic(
       return codes
     }
 
-    database.exec('BEGIN IMMEDIATE')
     if (options.retract) {
       for (let index = 0; index < result.rows; index++) {
         const rowSource = existingSource.get(index) as number
@@ -196,10 +194,8 @@ export async function writeRailwayTraffic(
           existingDivisor: (existingDivisor?.get(index) as number) ?? 1,
         }
         if (inAllowedCountry && (row.service > 0 || options.retract.when(row, index))) {
-          result.retracted += retractRailSourceSquare(
-            database, [...retractIds], countryIso, square,
-            { osmId: Number(row.osmId), segmentIndex: row.segmentIndex },
-          )
+          result.retracted += session.retract([...retractIds],
+            { osmId: Number(row.osmId), segmentIndex: row.segmentIndex })
         }
       }
     }
@@ -235,17 +231,17 @@ export async function writeRailwayTraffic(
         result.skippedForeign++
         continue
       }
-      const extent = topology.pieceExtent(row.osmId, row.segmentIndex)
+      const extent = topology.pieceExtent(row.osmId, row.segmentIndex, square)
       const divisor = candidate.divisor && candidate.divisor > 0 ? candidate.divisor : 1
       const passenger = candidate.passenger / divisor
       const freight = candidate.freight / divisor
       const passengerStatus = inferredRailStatus(passenger, candidate.passengerStatus)
       const freightStatus = inferredRailStatus(freight, candidate.freightStatus)
       if (passengerStatus === 'unknown' && freightStatus === 'unknown') continue
-      insertRailInterval(database, {
-        square, osmId: Number(row.osmId), segmentIndex: row.segmentIndex,
+      session.insert({
+        osmId: Number(row.osmId), segmentIndex: row.segmentIndex,
         fromM: extent.from, toM: extent.to, occurrence: 0,
-        sourceId: candidate.sourceId, countryIso,
+        sourceId: candidate.sourceId,
         passenger, freight,
         passengerStatus: railStatusCode(passengerStatus),
         freightStatus: railStatusCode(freightStatus),
@@ -255,12 +251,6 @@ export async function writeRailwayTraffic(
       result.updated = true
       onApplied?.(row, index, candidate)
     }
-    database.exec('COMMIT')
-  } catch (error) {
-    try { database.exec('ROLLBACK') } catch { /* no transaction */ }
-    throw error
-  } finally {
-    database.close()
-  }
+  })
   return result
 }

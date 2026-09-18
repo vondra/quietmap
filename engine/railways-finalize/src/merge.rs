@@ -1,7 +1,7 @@
-//! Merge overlapping sidecar claims per category and split daily totals into END periods.
+//! Merge overlapping interval claims per category and split daily totals into END periods.
 
-use crate::sidecar::Interval;
 use crate::sources::{blocks_foreign_national, should_overwrite, source_applies_to_row};
+use crate::square_intervals::Interval;
 use noise_compute::emission::railway::{default_traffic, rail_time_dist, RailType};
 use noise_compute::square_country_city::SquareCountryCity;
 
@@ -162,7 +162,7 @@ pub fn share_class_defaults(rows: &mut [RowTraffic], group_size: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sidecar::Interval;
+    use crate::square_intervals::Interval;
 
     fn interval(
         from_m: f64,

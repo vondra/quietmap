@@ -118,6 +118,10 @@ fn only_emittable_buildings_suppress_functional_areas() {
             format!("{key}\t{gx}\t{gy}\t{food_retail}\n"),
         )
         .unwrap();
+        crate::transport::TransportSpill::new(&spill)
+            .unwrap()
+            .finish()
+            .unwrap();
         assert_eq!(finalize(&spill, &output, 1).unwrap(), 1);
         let (_, batches) = read_ipc(
             &output
@@ -245,6 +249,13 @@ fn multiline_osm_tags_survive_spill_and_arrow_for_every_source() {
                     0,
                     &([50.0, 14.0], [50.0001, 14.0], 11.0),
                     &tags,
+                    match source {
+                        FeatureType::Road => Some("0,0,1,0,1,2"),
+                        FeatureType::Railway => {
+                            Some("0,0,1,0,1,2,0,0,11.1,500000000;140000000;500001000;140000000")
+                        }
+                        _ => None,
+                    },
                 )
                 .unwrap();
         } else {
@@ -253,6 +264,10 @@ fn multiline_osm_tags_survive_spill_and_arrow_for_every_source() {
                 .unwrap();
         }
     }
+    crate::transport::TransportSpill::new(&spill_dir)
+        .unwrap()
+        .finish()
+        .unwrap();
     spiller.complete("fixture").unwrap();
     drop(spiller);
     assert_eq!(finalize(&spill_dir, &output_dir, 1).unwrap(), 1);

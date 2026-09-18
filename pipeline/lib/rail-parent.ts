@@ -1,9 +1,9 @@
-/** Restore original railway parents before repeat enrichment; sidecar evidence remains authoritative. */
+/** Restore original railway parents before repeat enrichment; the square's interval files remain authoritative. */
 
 import { readFileSync } from 'node:fs'
-import { DatabaseSync } from 'node:sqlite'
+import { dirname } from 'node:path'
 import { Float32, Int32, RecordBatch, Schema, Table, Uint16, tableFromIPC, vectorFromArray, type Vector } from 'apache-arrow'
-import { railTrafficSidecarPath, RAIL_TRAFFIC_SIDECAR_VERSION } from './rail-traffic-store.js'
+import { squareHasRailIntervalFiles } from './rail-traffic-store.js'
 import { finalizedChildrenBySourcePiece, replaceArrowFileDurably, sourceParentCoveredByChildren } from './transport-parent.js'
 import type { SourceTransportTopology } from './transport-topology.js'
 
@@ -18,35 +18,37 @@ const TRAFFIC = new Set([
 
 /** Caller holds the existing railway enrichment lock; a raw file is deliberately unpublishable until finalization. */
 export function restoreRailwayParentsForEnrichment(
-  path: string, prepared: string, square: string, topology: SourceTransportTopology,
+  path: string, square: string, topology: SourceTransportTopology,
 ): Table {
   const table = tableFromIPC(readFileSync(path))
   if (table.schema.metadata.get('rail_traffic_contract') !== '1') return table
-  // Never discard finalized evidence if its authoritative preparation input is absent.
-  using sidecar = new DatabaseSync(railTrafficSidecarPath(prepared), { readOnly: true })
-  if (sidecar.prepare('PRAGMA user_version').get()?.user_version !== RAIL_TRAFFIC_SIDECAR_VERSION) {
-    throw new Error('railway parent restoration requires the retained traffic sidecar')
+  // Never discard finalized evidence whose interval files are gone: the final rows would be its only copy.
+  // A square that only ever received class priors (source 0) has no files and nothing to lose.
+  // Presence only, not one file per consumed country: nothing deletes a single country's file, and a
+  // partial copy of a prepared tree is the copier's checksummed inventory to catch, not a restore gate.
+  const evidenced = ['passenger_source_id', 'freight_source_id'].some(name =>
+    (table.getChild(name)!.toArray() as Uint16Array).some(source => source !== 0))
+  if (evidenced && !squareHasRailIntervalFiles(dirname(path))) {
+    throw new Error(`railway parent restoration requires the retained interval files of ${square}`)
   }
   const fields = table.schema.fields.filter(field => !TRAFFIC.has(field.name) && !GEOMETRY.has(field.name))
   const childRows = finalizedChildrenBySourcePiece(table, fields.map(field => field.name), 'railway', square)
   const attributes = fields.map(field => table.getChild(field.name)!)
   const ids = table.getChild('osm_id')!
   const selected = Array.from(childRows.values(), children => children[0])
-  const geometry = topology.squareParentGeometries(square, selected.map(row => String(ids.get(row))))
+  const pieces = topology.squarePieces(square)
   const columns: Record<string, Vector> = {}
   fields.forEach((field, index) => {
     columns[field.name] = vectorFromArray(selected.map(row => attributes[index].get(row)), field.type)
   })
   const starts: Array<[number, number]> = [], ends: Array<[number, number]> = [], lengths: number[] = []
   for (const [key, children] of childRows) {
-    const parent = geometry.get(key)
-    if (!parent) throw new Error(`source railway parent missing ${key} in ${square}`)
-    const covered = sourceParentCoveredByChildren(table, children, parent, 'railway', `${key} in ${square}`)
+    const sourceRow = pieces.row(String(ids.get(children[0])), Number(key.split(':')[1]))
+    if (sourceRow < 0) throw new Error(`source railway parent missing ${key} in ${square}`)
+    const covered = sourceParentCoveredByChildren(table, children, pieces.geometry(sourceRow), 'railway', `${key} in ${square}`)
     starts.push(covered.start)
     ends.push(covered.end)
-    // Unsplit rows retain the exact extractor value.
-    lengths.push(children.length === 1
-      ? table.getChild('length_m')!.get(children[0]) as number : covered.lengthM)
+    lengths.push(covered.lengthM)
   }
   columns.start_gx = vectorFromArray(starts.map(point => point[0]), new Int32())
   columns.start_gy = vectorFromArray(starts.map(point => point[1]), new Int32())

@@ -1,19 +1,8 @@
 //! Extract OSM features into z9 Arrow files and retain original transport connectivity for enrichment.
 
-mod classify;
-mod finalize;
-mod ids;
-mod junctions;
-mod microsegment;
-mod node_cache;
-mod pass2;
-mod poi_join;
-mod relations;
-mod spill;
-mod transport;
-
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use osm_extract::{finalize, node_cache, pass2, relations, spill, transport};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
@@ -44,9 +33,7 @@ fn main() -> Result<()> {
 
     // A complete spill left by an extract whose finalize failed is finalized
     // again from the spill; the planet is read only for a partial or absent one.
-    if spill::is_complete(&cli.spill_dir, cli.num_buckets, &input_identity)
-        && transport::TransportWriter::is_complete(&cli.spill_dir)
-    {
+    if spill::is_complete(&cli.spill_dir, cli.num_buckets, &input_identity) {
         eprintln!(
             "  Complete spill in {} ({} buckets): finalizing from it, not from the planet",
             cli.spill_dir.display(),
@@ -91,7 +78,7 @@ fn main() -> Result<()> {
         ),
     }
     let mut spiller = spill::Spiller::new(&cli.spill_dir, cli.num_buckets)?;
-    let mut transport = transport::TransportWriter::new(&cli.spill_dir)?;
+    let mut transport = transport::TransportSpill::new(&cli.spill_dir)?;
 
     let pass2 = pass2::extract_features(
         &cli.input,
@@ -161,7 +148,6 @@ fn finalize_and_cleanup(cli: &Cli) -> Result<()> {
     eprintln!("\n── Finalize ──");
     let started = Instant::now();
     let square_count = finalize::finalize(&cli.spill_dir, &cli.output, cli.num_buckets)?;
-    transport::TransportWriter::publish(&cli.spill_dir, &cli.output)?;
     eprintln!(
         "  {} square dirs in {:.1}s",
         square_count,
@@ -208,17 +194,15 @@ fn validate_paths(cli: &mut Cli) -> Result<()> {
     cli.output = resolved_path(&cli.output)?;
     cli.node_cache = resolved_path(&cli.node_cache)?;
     cli.spill_dir = resolved_path(&cli.spill_dir)?;
-    let transport = resolved_path(&transport::output_path(&cli.output)?)?;
-    let mut copying = transport::output_path(&cli.output)?.into_os_string();
-    copying.push(".copying");
-    let copying = resolved_path(Path::new(&copying))?;
+    let railway_ways = resolved_path(&transport::year_sibling_path(&cli.output, "railway-ways")?)?;
+    let train_routes = resolved_path(&transport::year_sibling_path(&cli.output, "train-routes")?)?;
     let paths = [
         ("input", &cli.input),
         ("output", &cli.output),
         ("node cache", &cli.node_cache),
         ("spill", &cli.spill_dir),
-        ("transport output", &transport),
-        ("transport staging", &copying),
+        ("railway ways output", &railway_ways),
+        ("train routes output", &train_routes),
     ];
     for (index, (left_role, left)) in paths.iter().enumerate() {
         for (right_role, right) in &paths[index + 1..] {
@@ -304,7 +288,7 @@ mod tests {
             linked,
             valid.spill_dir.join("nodes"),
             valid.output.join("nodes"),
-            transport::output_path(&valid.output)?,
+            transport::year_sibling_path(&valid.output, "railway-ways")?,
         ] {
             let mut cli = make_cli();
             cli.node_cache = cache;

@@ -31,7 +31,7 @@ export function collectZ9RailGraphSegments(
     const segments: RailGraphSegmentInput[] = []
     for (const square of squares) {
       const path = resolve(preparedDirectory, square, 'railways.arrow')
-      const table = restoreRailwayParentsForEnrichment(path, preparedDirectory, square, source)
+      const table = restoreRailwayParentsForEnrichment(path, square, source)
       const geometry = segmentGeometryReader(table)
       const railType = requiredVector(table, 'rail_type')
       const usage = requiredVector(table, 'usage')
@@ -41,7 +41,7 @@ export function collectZ9RailGraphSegments(
       const ref = requiredVector(table, 'ref')
       const osmId = requiredVector(table, 'osm_id')
       const segmentIndex = requiredVector(table, 'segment_idx')
-      const identities = source.squareWayPieces(square, Array.from(osmId, value => String(value)))
+      const pieces = source.squarePieces(square), seen = new Set<number>()
 
       const rows = table.numRows
       for (let index = 0; index < rows; index++) {
@@ -53,11 +53,11 @@ export function collectZ9RailGraphSegments(
         const corridorRef = (ref.get(index) as string | null) ?? ''
         const corridorName = (name.get(index) as string | null) ?? ''
         const key = transportPieceKey(String(osmId.get(index)), segmentIndex.get(index) as number)
-        const identity = identities.get(key)
-        if (!identity) throw new Error(`source topology missing or repeated railway piece ${key} in ${square}`)
-        identities.delete(key)
+        const piece = pieces.row(String(osmId.get(index)), segmentIndex.get(index) as number)
+        if (piece < 0 || seen.has(piece)) throw new Error(`source topology missing or repeated railway piece ${key} in ${square}`)
+        seen.add(piece)
         segments.push({
-          ...identity,
+          ...pieces.identity(piece),
           key,
           osmId: String(osmId.get(index)),
           railType: type,

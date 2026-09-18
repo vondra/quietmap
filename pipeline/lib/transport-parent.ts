@@ -4,14 +4,7 @@ import { closeSync, fsyncSync, openSync, renameSync, writeFileSync } from 'node:
 import { dirname } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { tableToIPC, type Table } from 'apache-arrow'
-import { lonLatToGrid } from './prepared-grid.js'
-import { transportPieceKey } from './transport-topology.js'
-
-export interface SourceParentGeometry {
-  start: [latitude: number, longitude: number]
-  end: [latitude: number, longitude: number]
-  lengthM: number
-}
+import { transportPieceKey, type SourceParentGeometry } from './transport-topology.js'
 
 /** Finalized rows of each source piece in file order. The first child speaks for the restored
  *  parent, so every sibling must carry the same value in each named attribute column. */
@@ -43,9 +36,8 @@ export function finalizedChildrenBySourcePiece(
 export function sourceParentCoveredByChildren(
   table: Table, children: readonly number[], parent: SourceParentGeometry,
   family: 'railway' | 'road', piece: string,
-): { start: [number, number]; end: [number, number]; lengthM: number } {
-  const start = lonLatToGrid(parent.start[1], parent.start[0])
-  const end = lonLatToGrid(parent.end[1], parent.end[0])
+): SourceParentGeometry {
+  const { start, end } = parent
   const [startX, startY, endX, endY] = ['start_gx', 'start_gy', 'end_gx', 'end_gy'].map(name => table.getChild(name)!)
   const links = new Map<string, string>()
   const collapsed = new Set<string>()
@@ -69,11 +61,7 @@ export function sourceParentCoveredByChildren(
   if (endpoint !== end.join(',') || links.size !== 0 || collapsed.size !== 0) {
     throw new Error(`${family} children do not cover source parent ${piece}`)
   }
-  // Recover the Float32 then one-decimal ties-to-even encoding in osm-extract/src/spill.rs.
-  const tenths = Math.fround(parent.lengthM) * 10
-  const lower = Math.floor(tenths), fraction = tenths - lower
-  const rounded = lower + Number(fraction > 0.5 || (fraction === 0.5 && lower % 2 !== 0))
-  return { start, end, lengthM: rounded / 10 }
+  return parent
 }
 
 export function replaceArrowFileDurably(path: string, table: Table): void {

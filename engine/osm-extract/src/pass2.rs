@@ -7,12 +7,12 @@ use crate::microsegment;
 use crate::node_cache::NodeCache;
 use crate::relations::{self, RelationAssembler, RelationManifest};
 use crate::spill::{self, Spiller};
-use crate::transport::TransportWriter;
+use crate::transport::{self, TransportSpill};
 use anyhow::Result;
 use osmpbf::BlobReader;
 use prepare::{prepare_blob, Prepared, PreparedBlob, PreparedPoint, PreparedWay};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 pub struct Pass2Stats {
@@ -25,15 +25,14 @@ pub struct Pass2Stats {
 
 /// Parallel decode/classify/lookup in bounded blob batches; apply in file order
 /// so spill rows, piece intervals, assembled relations and train routes match
-/// the previous serial Pass 2. One Spiller and one TransportWriter on this
-/// thread — no per-worker SQLite.
+/// the previous serial Pass 2. One Spiller and one TransportSpill on this thread.
 pub fn extract_features(
     input: &Path,
     cache: &NodeCache,
     manifest: &RelationManifest,
     junctions: &NodeIdBitmap,
     spiller: &mut Spiller,
-    transport: &mut TransportWriter,
+    transport: &mut TransportSpill,
 ) -> Result<Pass2Stats> {
     let mut assembler = RelationAssembler::new(manifest);
     let mut stats = Pass2Stats {
@@ -82,7 +81,7 @@ fn apply_prepared(
     junctions: &NodeIdBitmap,
     assembler: &mut RelationAssembler,
     spiller: &mut Spiller,
-    transport: &mut TransportWriter,
+    transport: &mut TransportSpill,
     stats: &mut Pass2Stats,
 ) -> Result<()> {
     stats.ways_total += blob.ways_seen;
@@ -147,7 +146,7 @@ fn apply_way(
     junctions: &NodeIdBitmap,
     assembler: &mut RelationAssembler,
     spiller: &mut Spiller,
-    transport: &mut TransportWriter,
+    transport: &mut TransportSpill,
     stats: &mut Pass2Stats,
 ) -> Result<()> {
     let coords: Vec<_> = way
@@ -199,33 +198,33 @@ fn apply_way(
 
     let is_transport = matches!(ftype, FeatureType::Road | FeatureType::Railway);
     if is_transport {
-        transport.write_way(way.id, ftype.name(), &way.resolved_nodes)?;
+        transport.observe_way(ftype.name(), &way.resolved_nodes);
     }
-    if ftype.is_linear() && coords.len() < 2 {
-        return Ok(());
-    }
-    if coords.is_empty() {
-        return Ok(());
-    }
-
+    let mut piece_squares = BTreeSet::new();
     if ftype.is_linear() {
-        emit_linear_way(
-            way.id,
-            &ftype,
-            &way.resolved_nodes,
-            &way.tags,
-            is_transport,
-            junctions,
-            spiller,
-            transport,
-            stats,
-        )?;
-    } else {
+        if coords.len() >= 2 {
+            emit_linear_way(
+                way.id,
+                &ftype,
+                &way.resolved_nodes,
+                &way.tags,
+                junctions,
+                spiller,
+                &mut piece_squares,
+                stats,
+            )?;
+        }
+    } else if !coords.is_empty() {
         let (clat, clon) = centroid(&coords);
         let square = grid::square_of(clat, clon);
         let ring = ring_for_spill(&coords, &mut stats.antimeridian_rings_omitted);
         spiller.emit_polygon(&ftype, square, way.id, clat, clon, &way.tags, ring)?;
         stats.features_total += 1;
+    }
+    if matches!(ftype, FeatureType::Railway) {
+        // Every classified railway way is kept, even without pieces: a train route naming it
+        // must resolve to `missing_source_ways`, not to an unknown member.
+        transport.write_railway_way(way.id, &way.resolved_nodes, &piece_squares)?;
     }
     Ok(())
 }
@@ -234,12 +233,11 @@ fn apply_way(
 fn emit_linear_way(
     way_id: i64,
     ftype: &FeatureType,
-    resolved_nodes: &[(i64, Option<[f64; 2]>)],
+    resolved_nodes: &[transport::ResolvedNode],
     tags: &Tags,
-    is_transport: bool,
     junctions: &NodeIdBitmap,
     spiller: &mut Spiller,
-    transport: &mut TransportWriter,
+    piece_squares: &mut BTreeSet<u32>,
     stats: &mut Pass2Stats,
 ) -> Result<()> {
     let max_len = 250.0;
@@ -253,6 +251,9 @@ fn emit_linear_way(
         segs.len() <= i16::MAX as usize + 1,
         "way {way_id} exceeds nonnegative Int16 segment identities",
     );
+    // Whole-way metres are summed once here, while the complete chain is in hand.
+    let railway_metres =
+        matches!(ftype, FeatureType::Railway).then(|| transport::way_metres(resolved_nodes));
     for (idx, interval) in segs.iter().enumerate() {
         let seg = interval.geometry(|index| {
             resolved_nodes[index]
@@ -262,9 +263,25 @@ fn emit_linear_way(
         let mid_lat = (seg.0[0] + seg.1[0]) / 2.0;
         let mid_lon = grid::geo::wrapped_longitude_midpoint(seg.0[1], seg.1[1]);
         let square = grid::square_of(mid_lat, mid_lon);
-        spiller.emit_segment(ftype, square, way_id, idx as i16, &seg, tags)?;
-        if is_transport {
-            transport.write_piece(way_id, idx as i16, &grid::square_name(square), interval)?;
+        let piece_tail = matches!(ftype, FeatureType::Road | FeatureType::Railway).then(|| {
+            transport::piece_tail(
+                resolved_nodes,
+                interval,
+                railway_metres.as_ref().map(|metres| metres.as_deref()),
+            )
+        });
+        spiller.emit_segment(
+            ftype,
+            square,
+            way_id,
+            idx as i16,
+            &seg,
+            tags,
+            piece_tail.as_deref(),
+        )?;
+        // Only `railway-ways` records the squares of a way's pieces.
+        if railway_metres.is_some() {
+            piece_squares.insert(spill::spill_key(square));
         }
         stats.features_total += 1;
     }

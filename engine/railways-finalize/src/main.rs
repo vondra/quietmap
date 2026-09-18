@@ -1,4 +1,4 @@
-//! Pipeline step `railways-finalize`: split clipped sidecar evidence onto
+//! Pipeline step `railways-finalize`: split each square's clipped interval evidence onto
 //! native railway pieces and stamp `rail_traffic_contract=1`.
 
 use railways_finalize::finalize_year;

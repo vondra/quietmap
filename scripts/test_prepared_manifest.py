@@ -19,6 +19,8 @@ class PreparedManifestTests(unittest.TestCase):
             (square / 'roads.arrow').write_bytes(b'roads')
             (square / 'structures.arrow').write_bytes(b'structures')
             (square / 'roads.arrow.tmp').write_bytes(b'incomplete')
+            for enrichment_only in ('roads.pieces.arrow', 'rail-intervals.CZ.arrow', 'rail-quarantine.CZ.arrow'):
+                (square / enrichment_only).write_bytes(b'not a paint input')
             first, second = root / 'a.sqlite', root / 'b.sqlite'
             a = prepared_manifest.write_manifest(root / 'prepared', first)
             b = prepared_manifest.write_manifest(root / 'prepared', second)

@@ -20,7 +20,7 @@ const point = (x: number, y: number): [number, number] => [y / M_PER_DEG_LAT, x 
 const square = 'z9/275/173'
 
 /** Sum directed visits per piece — the writer's former accumulatePassageFlow
- *  moved into the final sidecar writer, so the routing tests keep their own. */
+ *  moved into the final interval writer, so the routing tests keep their own. */
 function passageFlow(services: readonly RailServicePassages[]): Map<string, { passenger: number; freight: number }> {
   const flow = new Map<string, { passenger: number; freight: number }>()
   for (const service of services) {

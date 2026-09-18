@@ -13,15 +13,14 @@ import { writeRoadAadt } from './lib/roads-arrow.js'
 import { readPlanningRoads, type PlanningRoad } from './lib/road-planning-input.js'
 import { roadContinuityComponent, planContinuityComponent, type ContinuityRoad, type Flow } from './lib/roads-continuity-plan.js'
 import { enrichContinuityDirectory, writeContinuitySquares } from './enrich-roads-continuity-fill.js'
-import { transportTopologyPath } from './lib/transport-topology.js'
 import { writeTransportFixture, type FixtureSourceWay, type FixtureSourcePiece } from './lib/transport-test-fixture.js'
 import { generateRoadPlanningDefaults } from './generate-road-planning-defaults.js'
 
 const traffic = (light: number, sourceId: number) => ({ light, medium: 0, heavy: 0, moto: 0, sourceId,
   countBasis: 'unknown' as const, observationId: 'fixture-observation', observationSourceId: sourceId, estimatedClasses: 0 })
 
-function writeRoadTopology(prepared: string, squares: string[]): void {
-  rmSync(transportTopologyPath(prepared), { force: true })
+function writeRoadTopology(prepared: string, squares: string[],
+  alter?: (ways: FixtureSourceWay[], pieces: FixtureSourcePiece[]) => FixtureSourcePiece[]): void {
   const nodes = new Map<string, string>(), ways: FixtureSourceWay[] = [], pieces: FixtureSourcePiece[] = []
   const node = (key: string) => {
     if (!nodes.has(key)) nodes.set(key, String(nodes.size + 1))
@@ -37,7 +36,7 @@ function writeRoadTopology(prepared: string, squares: string[]): void {
       pieces.push({ way: id, segment: Number(table.getChild('segment_idx')!.get(i)), square, start: [0, 0], end: [1, 0] })
     }
   }
-  writeTransportFixture(prepared, ways, pieces)
+  writeTransportFixture(prepared, ways, alter ? alter(ways, pieces) : pieces)
 }
 
 async function enrichContinuitySquare(path: string) {
@@ -249,24 +248,17 @@ test('ordered preparation workers preserve cross-owner counts, exact bytes, retr
     for (const [index, square] of squares.entries()) assert.deepEqual(bytes(resolve(prepared, square, 'roads.arrow')), stable[index])
     if (squares.length === 1) {
       // Equal snapped coordinates do not connect distinct original OSM nodes, such as separated grades.
-      using database = new DatabaseSync(transportTopologyPath(prepared))
-      const row = database.prepare('SELECT nodes_json FROM source_ways WHERE osm_id=10001').get()!
-      const nodes = JSON.parse(String(row.nodes_json)); nodes[0][0] = '900'
-      database.prepare('UPDATE source_ways SET nodes_json=? WHERE osm_id=10001').run(JSON.stringify(nodes))
+      writeRoadTopology(prepared, squares, (ways, pieces) => {
+        ways.find(way => way.id === '10001')!.nodes[0][0] = '900'
+        return pieces
+      })
       const separated = await enrichContinuityDirectory(prepared)
       assert.equal(separated.matched, 0); assert.equal(separated.retracted, 4)
     }
     if (squares.length > 1) {
-      {
-        using database = new DatabaseSync(transportTopologyPath(prepared))
-        database.prepare('DELETE FROM source_pieces WHERE way_id=10002').run()
-      }
+      writeRoadTopology(prepared, squares, (_ways, pieces) => pieces.filter(piece => piece.way !== '10002'))
       await assert.rejects(enrichContinuityDirectory(prepared), /source topology missing or repeated road piece/)
       for (const [index, square] of squares.entries()) assert.deepEqual(bytes(resolve(prepared, square, 'roads.arrow')), stable[index])
-      writeRoadTopology(prepared, squares)
-      rmSync(resolve(prepared, squares[1], 'roads.arrow'))
-      await assert.rejects(enrichContinuityDirectory(prepared), /source topology road owner is missing/)
-      assert.deepEqual(bytes(resolve(prepared, squares[0], 'roads.arrow')), stable[0])
     }
   }
 })

@@ -1,4 +1,4 @@
-/** Safety and sidecar contracts for the z9 railway traffic writer. */
+/** Safety and interval-file contracts for the z9 railway traffic writer. */
 
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
@@ -55,7 +55,7 @@ test('Moroccan national ownership admits EH and rejects an unrelated baked count
   assert.equal(listRailIntervals(prepared, SQUARE).length, 1)
 })
 
-test('invalid counts and source ids fail before replacing the sidecar', async () => {
+test('invalid counts and source ids fail before replacing the interval files', async () => {
   for (const [name, match, error] of [
     ['negative', { passenger: 1, freight: -1, sourceId: CD_SOURCE_ID }, /invalid match/],
     ['unknown-source', { passenger: 1, freight: 1, sourceId: 65_000 }, /registered railways source/],
@@ -69,7 +69,7 @@ test('invalid counts and source ids fail before replacing the sidecar', async ()
   }
 })
 
-test('missing railway source never creates a sidecar row', async () => {
+test('missing railway source never creates an interval row', async () => {
   const missing = `${writeRailwaysFixture('existing-neighbor.arrow', [])}.missing`
   await assert.rejects(
     writeRailwayTraffic(missing, () => ({ passenger: 1, freight: 1, sourceId: CD_SOURCE_ID }), undefined, { countryIso: 'CD' }),
