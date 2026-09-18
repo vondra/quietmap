@@ -37,9 +37,12 @@ EMODNET_CELL_AREA_M2 = 1_000_000.0  # native 1 km ETRS89-LAEA (equal-area) cells
 # `sources::SOURCES` ids of the EMODnet 2024 vessel density product and of GFW AIS presence.
 SOURCE_ID_EMODNET_2024 = 9901
 SOURCE_ID_GFW_PRESENCE = 9902
-# GFW report zips (scripts/ships/download_gfw.py) hold one Int32 GeoTIFF of vessel-hours per 0.01° cell.
+# GFW report zips (scripts/ships/download_gfw.py) hold one Int32 GeoTIFF of vessel-hours per 0.01°
+# cell, or for nearly empty tiles the CSV report with one row per vessel and cell.
 GFW_TIF_MEMBER = "layer-activity-data-0/public-global-presence-v4.0.tif"
+GFW_CSV_MEMBER = "layer-activity-data-0/public-global-presence-v4.0.csv"
 GFW_NODATA = 999999
+GFW_CELL_DEG = 0.01
 HOURS_PER_MONTH = 365.25 * 24.0 / 12.0  # emission/ships.rs::HOURS_PER_MONTH
 METRES_PER_DEGREE = 111_320.0
 # A cell below 0.5 vessel-hours per month is at most 76 dB(A) (large ships) — under 10 dB(A)
@@ -111,13 +114,30 @@ def covered_by(coverage, lon, lat):
 
 
 def gfw_tile_hours(path):
-    """(hours Int32 array, affine) of one GFW report zip; None for an empty tile (0-byte file)."""
+    """Vessel-hours per 0.01° cell of one GFW report zip as {(lon_centre, lat_centre): hours};
+    empty for a 0-byte file (no vessels)."""
     payload = Path(path).read_bytes()
+    cells = {}
     if not payload:
-        return None
-    with zipfile.ZipFile(io.BytesIO(payload)) as archive, rasterio.open(io.BytesIO(archive.read(GFW_TIF_MEMBER))) as dataset:
-        hours = dataset.read(1)
-        return np.where(hours == GFW_NODATA, 0, hours), dataset.transform
+        return cells
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        names = set(archive.namelist())
+        if GFW_TIF_MEMBER in names:
+            with rasterio.open(io.BytesIO(archive.read(GFW_TIF_MEMBER))) as dataset:
+                hours = dataset.read(1)
+                rows, cols = np.nonzero((hours != GFW_NODATA) & (hours > 0))
+                lon, lat = dataset.transform * (cols + 0.5, rows + 0.5)
+                for x, y, value in zip(np.asarray(lon), np.asarray(lat), hours[rows, cols]):
+                    key = (round(float(x), 3), round(float(y), 3))
+                    cells[key] = cells.get(key, 0.0) + float(value)
+        elif GFW_CSV_MEMBER in names:
+            import csv
+            for row in csv.DictReader(io.TextIOWrapper(io.BytesIO(archive.read(GFW_CSV_MEMBER)), encoding="utf-8")):
+                key = (round(float(row["Lon"]), 3), round(float(row["Lat"]), 3))
+                cells[key] = cells.get(key, 0.0) + float(row["Vessel Presence Hours"])
+        else:
+            raise ValueError(f"GFW report without a TIF or CSV member: {path}")
+    return cells
 
 
 def read_gfw(directory, exclude=None):
@@ -129,36 +149,28 @@ def read_gfw(directory, exclude=None):
     per_month = HOURS_PER_MONTH / 24.0 / float(window["days"])
     parts = {key: [] for key in ("lon", "lat", "area_m2", "hours_large", "hours_work", "hours_leisure")}
     tile_hours_total = 0.0
+    cell_side_m = GFW_CELL_DEG * METRES_PER_DEGREE
     for large_path in sorted(glob.glob(str(directory / "*-large.zip"))):
         work_path = large_path[: -len("-large.zip")] + "-work.zip"
         large = gfw_tile_hours(large_path)
         work = gfw_tile_hours(work_path)
-        if large is None and work is None:
+        keys = sorted(set(large) | set(work))
+        if not keys:
             continue
-        reference = large if large is not None else work
-        shape, affine = reference[0].shape, reference[1]
-        grids = []
-        for tile in (large, work):
-            if tile is None:
-                grids.append(np.zeros(shape, dtype=np.float64))
-            else:
-                if tile[0].shape != shape or tile[1] != affine:
-                    raise ValueError(f"GFW class rasters disagree: {large_path}")
-                grids.append(tile[0].astype(np.float64) * per_month)
-        total = grids[0] + grids[1]
+        hours_large = np.array([large.get(key, 0.0) for key in keys]) * per_month
+        hours_work = np.array([work.get(key, 0.0) for key in keys]) * per_month
+        total = hours_large + hours_work
         tile_hours_total += float(total.sum())
-        rows, cols = np.nonzero(total >= MIN_CELL_HOURS_PER_MONTH)
-        if not len(rows):
-            continue
-        lon, lat = affine * (cols + 0.5, rows + 0.5)
-        lon, lat = np.asarray(lon), np.asarray(lat)
-        keep = np.ones(len(rows), dtype=bool) if exclude is None else ~covered_by(exclude, lon, lat)
-        cell_side_m = abs(affine.a) * METRES_PER_DEGREE
+        lon = np.array([key[0] for key in keys])
+        lat = np.array([key[1] for key in keys])
+        keep = total >= MIN_CELL_HOURS_PER_MONTH
+        if exclude is not None:
+            keep &= ~covered_by(exclude, lon, lat)
         parts["lon"].append(lon[keep])
         parts["lat"].append(lat[keep])
         parts["area_m2"].append(cell_side_m * cell_side_m * np.cos(np.radians(lat[keep])))
-        parts["hours_large"].append(grids[0][rows, cols][keep])
-        parts["hours_work"].append(grids[1][rows, cols][keep])
+        parts["hours_large"].append(hours_large[keep])
+        parts["hours_work"].append(hours_work[keep])
         parts["hours_leisure"].append(np.zeros(int(keep.sum())))
     cells = {key: (np.concatenate(values) if values else np.zeros(0)) for key, values in parts.items()}
     cells["source_id"] = np.full(len(cells["lon"]), SOURCE_ID_GFW_PRESENCE, dtype=np.uint16)

@@ -119,8 +119,16 @@ class GfwReaderTests(unittest.TestCase):
             tile_zip(root / "lon+000_lat+48-work.zip", [[365, 730, build_ships.GFW_NODATA], [build_ships.GFW_NODATA] * 3])
             tile_zip(root / "lon+008_lat+48-large.zip", None)  # empty tile: no reports at all
             tile_zip(root / "lon+008_lat+48-work.zip", None)
+            # a polar tile stored as the CSV report: one vessel-row per cell, summed
+            with zipfile.ZipFile(root / "lon+016_lat+76-large.zip", "w") as archive:
+                archive.writestr(build_ships.GFW_CSV_MEMBER,
+                                 "Lat,Lon,Time Range,Vessel ID,Vessel Presence Hours\n"
+                                 "80.005,16.005,\"2025-09-01,2026-08-31\",a,365.00\n80.005,16.005,\"2025-09-01,2026-08-31\",b,365.00\n")
+            (root / "lon+016_lat+76-work.zip").write_bytes(b"")
             cells = build_ships.read_gfw(root)
-            self.assertEqual(len(cells["lon"]), 2)
+            self.assertEqual(len(cells["lon"]), 3)
+            self.assertAlmostEqual(float(cells["hours_large"][2]), 730 * 30.4375 / 365, places=6)
+            self.assertAlmostEqual(float(cells["lat"][2]), 80.005)
             self.assertAlmostEqual(float(cells["lon"][0]), 4.005)
             self.assertAlmostEqual(float(cells["lat"][0]), 52.015)
             self.assertAlmostEqual(float(cells["hours_large"][0]), 3650 * 30.4375 / 365, places=6)
@@ -128,11 +136,11 @@ class GfwReaderTests(unittest.TestCase):
             self.assertAlmostEqual(float(cells["hours_work"][1]), 60.875, places=6)
             self.assertEqual(float(cells["hours_leisure"].sum()), 0.0)
             self.assertTrue(all(cells["source_id"] == build_ships.SOURCE_ID_GFW_PRESENCE))
-            self.assertAlmostEqual(cells["raster_hours_kept"], (3650 + 365 + 730) * 30.4375 / 365, places=6)
-            self.assertAlmostEqual(cells["raster_hours_total"], (3650 + 1 + 365 + 730) * 30.4375 / 365, places=6)
+            self.assertAlmostEqual(cells["raster_hours_kept"], (3650 + 365 + 730 + 730) * 30.4375 / 365, places=6)
+            self.assertAlmostEqual(cells["raster_hours_total"], (3650 + 1 + 365 + 730 + 730) * 30.4375 / 365, places=6)
             # cell area: 0.01° × 0.01° at 52°N
             self.assertAlmostEqual(float(cells["area_m2"][0]) / 1e6, (1113.2 ** 2) * np.cos(np.radians(52.015)) / 1e6, places=3)
             # a coverage that samples the first cell centre removes it
             coverage = {"mask": np.array([[True]]), "crs": "EPSG:4326",
                         "affine": from_origin(4.0, 52.02, 0.01, 0.01)}
-            self.assertEqual(len(build_ships.read_gfw(root, exclude=coverage)["lon"]), 1)
+            self.assertEqual(len(build_ships.read_gfw(root, exclude=coverage)["lon"]), 2)

@@ -51,9 +51,9 @@ def polygon(lon, lat):
     return {"geojson": {"type": "Polygon", "coordinates": [[[lon, lat], [lon1, lat], [lon1, lat1], [lon, lat1], [lon, lat]]]}}
 
 
-def report_url(class_name, first_day, last_day):
+def report_url(class_name, first_day, last_day, report_format="TIF"):
     query = {
-        "datasets[0]": DATASET, "format": "TIF", "temporal-resolution": "ENTIRE",
+        "datasets[0]": DATASET, "format": report_format, "temporal-resolution": "ENTIRE",
         "spatial-resolution": "HIGH", "spatial-aggregation": "false",
         "date-range": f"{first_day},{last_day}",
         "filters[0]": "vessel_type in (" + ",".join(f"'{t}'" for t in CLASS_TYPES[class_name]) + ")",
@@ -90,6 +90,10 @@ class Client:
             if status == 404 and b"Empty data" in payload:
                 return b""
             self.log(f"  attempt {attempt + 1}: HTTP {status} {payload[:160]!r}")
+            if status == 503 and b"exit status 1" in payload and "format=TIF" in url and attempt >= 1:
+                # The TIF renderer fails on nearly empty tiles (polar rows); the CSV report of
+                # the same query lists the vessel-hours per cell and is read equivalently.
+                return self.report(url.replace("format=TIF", "format=CSV"), body)
             if status == 524:
                 for _ in range(60):
                     time.sleep(LAST_REPORT_POLL_S)
