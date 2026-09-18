@@ -8,11 +8,11 @@ python scripts/square-country-city/build_square_country_city.py --prepared-dir <
 ```
 
 Requires NumPy, Shapely 2 and PyArrow. Repeat `--square z9/x/y` for a subset.
-The supplied CGAZ dataset must be the preserved v6 source used by dev1;
+The supplied CGAZ dataset must be the preserved v6 source used by the previous generation;
 verify it against its independently preserved `SHA256SUMS` before building.
 No data is downloaded by the builder.
 
-The dev1 geographic policy is retained: exact country polygons and holes,
+The previous generation's geographic policy is retained: exact country polygons and holes,
 explicit disputed-area mappings, a uniquely attributable 2 km coastal buffer,
 polar handling, and country-gated metro defaults. Shapely supplies the shared
 spatial index and polygon operations; no custom ray-casting index is needed.
@@ -35,4 +35,4 @@ QM_ADMIN_BOUNDARIES=<source>/geoBoundariesCGAZ_ADM0_s0005.geojson \
 ```
 
 The data-bearing test uses the same independently labelled geographic probes
-as dev1. Other tests use tiny in-memory polygons and Arrow files.
+as the previous generation. Other tests use tiny in-memory polygons and Arrow files.

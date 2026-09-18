@@ -15,7 +15,7 @@ standalone copy. Never synthesize an empty structure file to cover an unfinished
 ## One-command world build
 
 `scripts/build-world.py --config WORLD.toml --output NEW_GENERATION --scratch NEW_SCRATCH`
-coordinates a fresh world through all seven Arrow layers. Add `--plan` to print its
+coordinates a fresh world through all eight Arrow layers (ships included). Add `--plan` to print its
 actual commands without starting producers. Destinations are empty or contain an interrupted
 build of the same configuration. Resume retains successful steps with unchanged producer
 arguments and completed dependencies. Worker caps and scope names do not change data identity.
@@ -35,7 +35,8 @@ has no prepared squares, so a regional extract (Prague, 2026-09-16) stops at
 The TOML file has `[build]` keys `as_of_date` (YYYYMMDD string), `aircraft_anchor`
 (YYYY-MM string), `memory_gib` and `threads` (positive integers). `[sources]` supplies
 absolute paths named `planet`, `rasters`, `enrichment`, `boundaries`, `city_boundaries`,
-`overture`, `ghsl`, `regional_heights`, `airline` and `general_aviation`.
+`overture`, `ghsl`, `regional_heights`, `airline`, `general_aviation`, `ships` (EMODnet
+vessel density) and `ships_gfw` (Global Fishing Watch presence hours).
 `rasters` is an already published native raster year, `city_boundaries` is the ADM2
 cache, and `regional_heights` retains the measured regional raster or VRT dependencies.
 Download and validate new source versions before freezing these inputs. A fresh
@@ -197,8 +198,8 @@ squares require final structures/square-country-city coverage before serving.
 
 ## Final derived artifacts and serving
 
-Validate all seven noise layers: road, rail, building, industrial, aircraft airborne,
-aircraft cruise and aircraft ground. Validate absence through producer coverage and
+Validate all eight noise layers: road, rail, building, industrial, ships, aircraft
+airborne, aircraft cruise and aircraft ground. Validate absence through producer coverage and
 receipts, not by requiring an Arrow file for an empty layer in every ocean square.
 
 After the final Arrow/structures generation, rerun `structures-finalize`.

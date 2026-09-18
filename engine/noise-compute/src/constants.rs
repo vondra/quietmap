@@ -125,7 +125,7 @@ pub const P_FAV: f64 = 0.5;
 /// (2015/996 formulas (2.5.9), (2.5.24), (2.5.25)). FLIPPED ON
 /// 2026-07-28 after the gates passed (G3: 7 anchors moved toward
 /// external truth, none regressed beyond pre-existing near-barrier
-/// overshoots; G6: r9950 gate pass, drift mean 0.004 dB). Flipping raises
+/// overshoots; G6: GPU gate pass, drift mean 0.004 dB). Flipping raises
 /// every terrain/building screened receiver, so any future change here
 /// travels with a surface-layer OUTPUT_VER bump + world repaint + the
 /// CUDA surface-kernel #define mirror — never alone.

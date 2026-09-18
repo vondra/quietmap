@@ -6,8 +6,8 @@ import { existsSync } from 'node:fs'
 import test from 'node:test'
 import { demColor, forestColor, imdColor, renderGridTile } from './raster-grid-renderer.js'
 
-// The published native raster year; the real-file tests skip until it exists.
-const PRAGUE_PREPARED = '/data/mixeduse2/r260910/rasters/2026'
+// A published native raster year (RASTER_YEAR_DIR); the real-file tests skip without it.
+const PRAGUE_PREPARED = process.env.RASTER_YEAR_DIR ?? ''
 const PRAGUE_RASTERS = {
   skip: !['dem.i16be', 'forest.u8', 'imd.u8'].every((file) => existsSync(`${PRAGUE_PREPARED}/z9/276/173/${file}`)),
 }

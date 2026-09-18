@@ -5,9 +5,8 @@ Ops/automation conventions live in the private repo and do not apply here.
 
 ## Quality gate
 
-Before every commit, run `cargo test` and `cargo clippy -- -D warnings`
-from `engine/` and read the complete raw output. Both must pass with zero
-warnings. (When `scripts/check-fast.sh` lands, it becomes the gate.)
+Before every commit, run `./scripts/check-fast.sh` (`node` or `rust` selects one
+half) and read the complete raw output. It must pass with zero warnings.
 
 ## Simplicity budget
 
@@ -65,18 +64,6 @@ details in product files, including comments and docs.
 
 `data/` is gitignored and may be irreplaceable. Inspect contents before any
 `rm -rf`; compute numbers from data, never estimate them.
-
-## Disks (this box)
-
-- `readmostly1` = finished sources, read-only inputs (`r260904/source`).
-  `readmostly2` = finished web data (`r260904/prepared`), written once as a
-  bulk promotion, then only read.
-- All work happens on mixeduse: heavy temp/spill on `mixeduse1` (shares its
-  disk with `/tmp`), intermediates on `mixeduse2/r260904/work`. Split reads
-  and writes across disks for throughput: sources on one, temp on another,
-  output on a third where the job allows.
-- Never write intermediates to a readmostly disk. Keep the finished tree on
-  mixeduse2 as the backup copy; readmostly2 is the served copy.
 
 ## Grid and releases
 

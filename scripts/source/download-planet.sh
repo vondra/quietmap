@@ -10,7 +10,7 @@
 set -euo pipefail
 
 DATE="${1:?usage: $0 YYMMDD  (e.g. $0 260831)}"
-PBF_DIR="${PBF_DIR:-/data/readmostly1/r260904/source/2026/osm}"
+PBF_DIR="${PBF_DIR:?set PBF_DIR to the release source directory (…/source/<year>/osm)}"
 mkdir -p "$PBF_DIR"
 exec curl -L -C - --retry 5 --retry-all-errors \
     -o "$PBF_DIR/planet-$DATE.osm.pbf" \
