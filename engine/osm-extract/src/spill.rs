@@ -250,9 +250,12 @@ impl Spiller {
                     tags.get("bridge").map(|s| s.as_str()),
                     Some("yes" | "viaduct" | "cantilever" | "movable")
                 );
-                let tunnel = matches!(
+                let tunnel = classify::railway_is_underground(
+                    railway,
                     tags.get("tunnel").map(|s| s.as_str()),
-                    Some("yes" | "building_passage" | "culvert")
+                    tags.get("layer").map(|s| s.as_str()),
+                    tags.get("location").map(|s| s.as_str()),
+                    tags.get("covered").map(|s| s.as_str()),
                 );
                 write!(
                     w,

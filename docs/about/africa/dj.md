@@ -1,6 +1,6 @@
 ---
 title: Djibouti
-intro: World defaults for roads and railways; the Addis Ababa to Djibouti line is modelled at 100 trains per day here against 16 in Ethiopia.
+intro: World defaults for roads; the Addis Ababa to Djibouti railway uses a line estimate of 16 trains per day, as in Ethiopia.
 map: { center: [42.5, 11.5], zoom: 7 }
 ---
 
@@ -21,7 +21,7 @@ Resulting volumes:
 
 ## Railways
 
-Train counts: no timetable. World default on every OpenStreetMap track: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branches, 15 freight on industrial track. The only line, Addis Ababa to Djibouti, uses the world default (100 trains/day) on the Djibouti side and the Ethiopian estimate (4 passenger and 12 freight) across the border.
+Train counts: no timetable. The only working line is the Djibouti end of the Addis Ababa to Djibouti railway; it carries the same estimate as the Ethiopian side, 4 passenger and 12 freight trains per day, based on services reported by Ethio-Djibouti Railway. Service tracks carry no traffic.
 
 ## Industry
 

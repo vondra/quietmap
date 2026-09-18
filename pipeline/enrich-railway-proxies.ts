@@ -47,9 +47,8 @@ export function validateRailwayProxyCatalog(): void {
       throw new Error(`railway proxy ${spec.iso2} has invalid source registration ${spec.sourceId}`)
     }
   }
-  if (RAILWAY_PROXY_SPECS.length !== 17 ||
-      RAILWAY_PROXY_SPECS.filter(spec => spec.classify === null).map(spec => spec.iso2).join() !== 'KR') {
-    throw new Error('railway proxy catalog must contain 16 active countries plus KR no-source')
+  if (RAILWAY_PROXY_SPECS.filter(spec => spec.classify === null).map(spec => spec.iso2).join() !== 'KR') {
+    throw new Error('KR is the only railway proxy country without a classifier')
   }
 }
 

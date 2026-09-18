@@ -25,8 +25,9 @@ pub(crate) fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
         return Some(FeatureType::Road);
     }
 
-    // Railway
-    if let Some("rail" | "tram" | "light_rail" | "narrow_gauge" | "funicular") = tag("railway") {
+    // Railway. Subway is included for its above-ground sections; the spill marks
+    // its underground sections as tunnel, which emits nothing.
+    if super::railway_carries_trains(tag("railway"), tag("disused"), tag("abandoned")) {
         return Some(FeatureType::Railway);
     }
 
@@ -229,6 +230,9 @@ pub fn extract_way_tags(way: &Way, ftype: &FeatureType) -> Tags {
                         | "operator"
                         | "bridge"
                         | "tunnel"
+                        | "layer"
+                        | "location"
+                        | "covered"
                         | "service"
                         | "highspeed"
                 ) {

@@ -27,7 +27,7 @@ pub(crate) fn rail_usage_name(u: u8) -> &'static str {
         0 => "main",
         1 => "branch",
         2 => "industrial",
-        _ => "main",
+        _ => "untagged",
     }
 }
 

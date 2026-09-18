@@ -1,7 +1,7 @@
-/** Dev1's operator-published railway proxy tiers for nine African countries. */
+/** Operator-published railway proxy tiers for ten African countries. */
 
 import {
-  SOURCE_ID_CD_NATIONAL_RAILWAY, SOURCE_ID_DZ_NATIONAL_RAILWAY,
+  SOURCE_ID_CD_NATIONAL_RAILWAY, SOURCE_ID_DJ_NATIONAL_RAILWAY, SOURCE_ID_DZ_NATIONAL_RAILWAY,
   SOURCE_ID_EG_NATIONAL_RAILWAY, SOURCE_ID_ET_NATIONAL_RAILWAY,
   SOURCE_ID_KE_NATIONAL_RAILWAY, SOURCE_ID_MA_NATIONAL_RAILWAY,
   SOURCE_ID_NG_NATIONAL_RAILWAY, SOURCE_ID_SD_NATIONAL_RAILWAY,
@@ -162,8 +162,15 @@ function classifyTz(row: RailwayRow) {
   return trains(2, 6)
 }
 
+/** Djibouti's only working railway is its end of the Addis Ababa–Djibouti line, so it
+ *  carries the same trains as the Ethiopian side. */
+function classifyDj(row: RailwayRow) {
+  return row.railType === 0 ? trains(4, 12) : null
+}
+
 export const AFRICA_RAILWAY_PROXY_SPECS: readonly RailwayProxySpec[] = [
   { iso2: 'CD', bbox: [-13.5, 12.0, 5.5, 31.5], sourceId: SOURCE_ID_CD_NATIONAL_RAILWAY, classify: classifyCd },
+  { iso2: 'DJ', bbox: [10.9, 41.7, 12.8, 43.5], sourceId: SOURCE_ID_DJ_NATIONAL_RAILWAY, classify: classifyDj },
   { iso2: 'DZ', bbox: [18.9, -8.7, 37.1, 12.0], sourceId: SOURCE_ID_DZ_NATIONAL_RAILWAY, classify: classifyDz },
   { iso2: 'EG', bbox: [22.0, 24.7, 31.7, 36.9], sourceId: SOURCE_ID_EG_NATIONAL_RAILWAY, classify: classifyEg },
   { iso2: 'ET', bbox: [3.3, 32.9, 15.0, 48.1], sourceId: SOURCE_ID_ET_NATIONAL_RAILWAY, classify: classifyEt },

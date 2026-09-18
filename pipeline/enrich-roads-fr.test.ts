@@ -91,7 +91,7 @@ test('Cerema parser reads the CRLF ratio field and applies only the published 20
 test('Cerema matcher uses the full section line, normalized suffix ref and strict 20 km cap', () => {
   const measured = section({ route: 'A0005A', ref: 'A5A', coords: [[2, 48], [3, 48]] })
   const census = indexCeremaCensus([measured])
-  assert.equal(matchCeremaSection(road({ ref: ' A 5A ', midLat: 48, midLon: 2.99 }), census), measured)
+  assert.equal(matchCeremaSection(road({ ref: ' A 5a ', midLat: 48, midLon: 2.99 }), census), measured)
   assert.equal(matchCeremaSection(road({ ref: 'A5', midLat: 48, midLon: 2.99 }), census), null)
   assert.equal(matchCeremaSection(road({ ref: 'A5A', midLat: 48.179, midLon: 2.5 }), census), measured)
   assert.equal(matchCeremaSection(road({ ref: 'A5A', midLat: 48.181, midLon: 2.5 }), census), null)

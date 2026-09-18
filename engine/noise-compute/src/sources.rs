@@ -947,6 +947,16 @@ pub const SOURCES: &[Source] = &[
         year: Some(2024),
     },
     Source {
+        id: 9263,
+        key: "dj-national-railway",
+        provenance: Provenance::NationalProxy,
+        layer: "railways",
+        name: "Djibouti operator-class CNOSSOS defaults (Addis-Djibouti SGR)",
+        license: Some("derived-from-OSM"),
+        url: None,
+        year: Some(2024),
+    },
+    Source {
         id: 9364,
         key: "ir-national-roads",
         provenance: Provenance::NationalProxy,

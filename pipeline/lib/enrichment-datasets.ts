@@ -1457,6 +1457,18 @@ export const DATASETS: Dataset[] = [
     railFamilies: ['rail'],
   },
   {
+    id: 9263, // DJ = 262 (+1 railway)
+    layer: 'railways',
+    key: 'dj-national-railway',
+    measurement: 'proxy',
+    name: 'Djibouti operator-class CNOSSOS defaults (Addis-Djibouti SGR)',
+    year: 2024,
+    license: 'derived-from-OSM',
+    url: null,
+    priority: 80,
+    railFamilies: ['rail'],
+  },
+  {
     id: 9181, // CD = 180 (+1 railway)
     layer: 'railways',
     key: 'cd-national-railway',

@@ -9,7 +9,7 @@ export type Aadt = readonly [number, number, number, number]
 export interface PlanningRoad {
   i: number; osmId: number; segIdx: number; cls: number; src: number
   speedTag: number; builtUp: number; access: number; roundabout: boolean
-  len: number; a: string; b: string; ref: string; aadt: Aadt
+  len: number; a: string; b: string; ref: string; name: string; aadt: Aadt
 }
 
 export function readPlanningRoads(table: Table): Array<PlanningRoad & { estimatedClasses: number; countBasis: RoadCountBasis; observationId: string; observationSourceId: number }> {
@@ -42,9 +42,10 @@ export function readPlanningRoads(table: Table): Array<PlanningRoad & { estimate
     if (finalized || !unsigned(basis, 8) || !unsigned(origin, 16) || !observation ||
         !DataType.isUtf8(observation.type) || observation.nullCount) throw new Error('invalid road planning observation columns')
   }
-  const length = table.getChild('length_m'), ref = table.getChild('ref')
-  if (!length || !DataType.isFloat(length.type) || length.nullCount || !ref || !DataType.isUtf8(ref.type)) {
-    throw new Error('invalid road planning length_m/ref columns')
+  const length = table.getChild('length_m'), ref = table.getChild('ref'), name = table.getChild('name')
+  if (!length || !DataType.isFloat(length.type) || length.nullCount || !ref || !DataType.isUtf8(ref.type) ||
+      !name || !DataType.isUtf8(name.type)) {
+    throw new Error('invalid road planning length_m/ref/name columns')
   }
   const number = (name: string, index: number) => Number(columns.get(name)?.get(index) ?? 0)
   return Array.from({ length: table.numRows }, (_, i) => {
@@ -63,6 +64,7 @@ export function readPlanningRoads(table: Table): Array<PlanningRoad & { estimate
     return { i, osmId, segIdx: number('segment_idx', i), cls, src: number('source_id', i),
       speedTag: number('speed_limit', i), builtUp, access: number('access', i), roundabout: number('junction', i) !== 0,
       estimatedClasses, countBasis, observationId, observationSourceId, len, a: endpoints.startKey, b: endpoints.endKey,
-      ref: ((ref.get(i) as string | null) ?? '').trim().toUpperCase().replace(/\s+/g, ''), aadt }
+      ref: ((ref.get(i) as string | null) ?? '').trim().toUpperCase().replace(/\s+/g, ''),
+      name: ((name.get(i) as string | null) ?? '').trim().toLowerCase().replace(/\s+/g, ' '), aadt }
   })
 }

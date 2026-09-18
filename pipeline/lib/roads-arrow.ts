@@ -13,6 +13,10 @@ import {
   bakedRoadCountryReader, iso2Code, segmentGeometryReader, type SegmentGeometry,
 } from './prepared-grid.js'
 
+/** A slip road carries the ref of its mainline but not its traffic. A census matched by
+ *  ref alone must not stamp it; it keeps the link-class default. */
+export const isSlipRoadClass = (roadClass: number): boolean => roadClass >= 10 && roadClass <= 12
+
 export const ROAD_CLASS_RANK_TOLERANCE = 1
 
 export const osmRoadClassRank = (roadClass: number): number =>

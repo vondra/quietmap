@@ -76,7 +76,7 @@ async function chain(name: string, classes: number[], countries = classes.map(()
 }
 
 function row(i: number, a: string, b: string, changes: Partial<PlanningRoad & ContinuityRoad> = {}): PlanningRoad & ContinuityRoad {
-  return { i, a, b, ref: '0033', cls: 4, src: 0, aadt: [0, 0, 0, 0], osmId: i, segIdx: 0,
+  return { i, a, b, ref: '0033', name: '', cls: 4, src: 0, aadt: [0, 0, 0, 0], osmId: i, segIdx: 0,
     speedTag: 0, builtUp: 2, access: 0, roundabout: false, len: 60, direction: 0, countBasis: 'unknown', observationId: 'fixture-observation', observationSourceId: 10, ...changes }
 }
 
@@ -116,6 +116,17 @@ test('unobserved branches stop propagation; pure subdivisions retain even below-
   assert.equal(buildContinuityPlan(roads).fill.get(1)?.light, 90)
   roads[0].aadt = [0, 0, 0, 0]
   assert.deepEqual(buildContinuityPlan(roads).fill.get(1), { light: 0, medium: 0, heavy: 0, moto: 0, countBasis: 'unknown', observationId: 'fixture-observation', observationSourceId: 10 })
+})
+
+test('pieces without a ref continue under one name; another name, a missing name or another ref ends the chain', () => {
+  const chainFills = (first: Partial<ContinuityRoad>, second: Partial<ContinuityRoad>) => buildContinuityPlan([
+    row(0, 'a', 'b', { src: 10, aadt: [90, 5, 4, 1], ...first }), row(1, 'b', 'c', second)]).fill.has(1)
+  const inner = { ref: '', name: 'Boulevard Périphérique Intérieur' }
+  assert.equal(chainFills(inner, inner), true)
+  assert.equal(chainFills(inner, { ref: '', name: 'Boulevard Périphérique Extérieur' }), false)
+  assert.equal(chainFills({ ref: '', name: '' }, { ref: '', name: '' }), false)
+  assert.equal(chainFills(inner, { ...inner, ref: 'A1' }), false)
+  assert.equal(chainFills({ ...inner, ref: 'A1' }, { ...inner, ref: 'A3' }), false)
 })
 
 test('conflicting measured vectors remain unresolved; agreeing observations preserve their exact counts', () => {

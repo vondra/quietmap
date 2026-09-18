@@ -20,7 +20,7 @@ const MIN_SPEED_DIFF_KMH = 3
 
 export type CountrySpeeds = readonly [number, number, number, number]
 
-export type Seg = Omit<PlanningRoad, 'ref' | 'src' | 'aadt'>
+export type Seg = Omit<PlanningRoad, 'ref' | 'name' | 'src' | 'aadt'>
 
 export function resolveSpeed(s: Seg, country: CountrySpeeds): number {
   if (s.speedTag === 255) return DERESTRICTED_SPEED_KMH

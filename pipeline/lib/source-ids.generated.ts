@@ -82,6 +82,7 @@ export const SOURCE_ID_CD_NATIONAL_ROADS = 9180 as const // cd-national-roads
 export const SOURCE_ID_CD_NATIONAL_RAILWAY = 9181 as const // cd-national-railway
 export const SOURCE_ID_ET_NATIONAL_ROADS = 9231 as const // et-national-roads
 export const SOURCE_ID_ET_NATIONAL_RAILWAY = 9232 as const // et-national-railway
+export const SOURCE_ID_DJ_NATIONAL_RAILWAY = 9263 as const // dj-national-railway
 export const SOURCE_ID_IR_NATIONAL_ROADS = 9364 as const // ir-national-roads
 export const SOURCE_ID_IR_NATIONAL_RAILWAY = 9365 as const // ir-national-railway
 export const SOURCE_ID_IQ_NATIONAL_ROADS = 9368 as const // iq-national-roads

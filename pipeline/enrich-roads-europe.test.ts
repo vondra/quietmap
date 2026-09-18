@@ -10,7 +10,7 @@ import { encodeQmBlocks, writeRoadsFixture } from './lib/road-test-fixture.js'
 import { segmentGeometryReader } from './lib/prepared-grid.js'
 import { parseEuropeanCityTraffic } from './lib/roads-europe-source.js'
 import { buildOneHundredthDegreePointGrid, flatDist, nearestCompatiblePointWithin200Metres } from './lib/spatial.js'
-import { enrichEuropeanRoads, nearestEuropeanTraffic } from './enrich-roads-europe.js'
+import { enrichEuropeanRoads, indexEuropeanTraffic, nearestEuropeanTraffic } from './enrich-roads-europe.js'
 
 const temporary = mkdtempSync(join(tmpdir(), 'eu-traffic-ipc-'))
 after(() => rmSync(temporary, { recursive: true, force: true }))
@@ -28,13 +28,44 @@ function city(...features: unknown[]) {
     Buffer.from(JSON.stringify({ type: 'FeatureCollection', features })))
 }
 
+/** A northbound road piece of the given length centred on a point, optionally east of it. */
+function roadPiece(midLat: number, midLon: number, osmId: number | null = null, oneway = 0, lengthMetres = 20, offsetEastMetres = 0) {
+  const longitude = midLon + offsetEastMetres / (111_320 * Math.cos(midLat * Math.PI / 180))
+  const halfLength = lengthMetres / 2 / 110_540
+  return { startLat: midLat - halfLength, startLon: longitude, endLat: midLat + halfLength, endLon: longitude,
+    midLat, midLon: longitude, osmId, oneway, roadClass: 2 }
+}
+
 test('the exact 50 metre flat-distance cap rejects the dev1 50-to-51 metre leak', () => {
   const row = { midLat: 50, midLon: 14 }
   for (const [offset, accepted] of [[49.9, true], [50.5, false]] as const) {
     const source = city(traffic(row, offset))
-    const grid = buildOneHundredthDegreePointGrid(source.records)
-    assert.equal(nearestEuropeanTraffic(50, 14, grid) !== null, accepted)
+    assert.equal(nearestEuropeanTraffic(roadPiece(50, 14), indexEuropeanTraffic(source.records)) !== null, accepted)
   }
+})
+
+test('a road piece along a long line matches far from its middle vertex, the published way wins, and the opposite carriageway is refused', () => {
+  const line = (osmid: number, offsetEastMetres: number, northward: boolean) => {
+    const longitude = 14 + offsetEastMetres / (111_320 * Math.cos(50 * Math.PI / 180))
+    const coordinates = [[longitude, 50], [longitude, 50.005], [longitude, 50.01]]
+    return { type: 'Feature', properties: { AADT: 1000, raw_oneway: true, osmid },
+      geometry: { type: 'LineString', coordinates: northward ? coordinates : coordinates.reverse() } }
+  }
+  const source = city(line(100, 30, true), line(200, 5, true), line(300, -10, false))
+  const [publishedWay, nearerNorthbound, nearerSouthbound] = source.records
+  const index = indexEuropeanTraffic(source.records)
+  // 50.001 is 440 m from every middle vertex, yet lies along all three lines.
+  assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 100, 1), index), publishedWay)
+  assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 999, 1), index), nearerNorthbound)
+  assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 999, 2), index), nearerSouthbound)
+  assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 999, 0, 20, -61), index), null)
+  assert.equal(nearestEuropeanTraffic(roadPiece(50.02, 14, 999, 1), index), null)
+  // Proximity alone is not the counted street: a service lane beside it and a street crossing it stay unmatched.
+  assert.equal(nearestEuropeanTraffic({ ...roadPiece(50.001, 14, 999, 1), roadClass: 7 }, index), null)
+  const crossing = roadPiece(50.001, 14, 999, 0)
+  const halfLengthDegrees = 10 / (111_320 * Math.cos(50 * Math.PI / 180))
+  assert.equal(nearestEuropeanTraffic({ ...crossing, startLat: 50.001, endLat: 50.001,
+    startLon: crossing.midLon - halfLengthDegrees, endLon: crossing.midLon + halfLengthDegrees }, index), null)
 })
 
 test('high-latitude and dateline candidates survive the shared index and nearest wins', () => {
@@ -46,9 +77,9 @@ test('high-latitude and dateline candidates survive the shared index and nearest
       feature.geometry.coordinates[0] = ((feature.geometry.coordinates[0] + 180) % 360) - 180
     }
     const source = city(far, close)
-    const matched = nearestEuropeanTraffic(lat, lon, buildOneHundredthDegreePointGrid(source.records))
+    const matched = nearestEuropeanTraffic(roadPiece(lat, lon), indexEuropeanTraffic(source.records))
     assert.equal(matched, source.records[1])
-    assert.ok(flatDist(lat, lon, matched!.latitude, matched!.longitude) < 41)
+    assert.ok(flatDist(lat, lon, matched!.coordinates[0][1], matched!.coordinates[0][0]) < 41)
     const ranked = { latitude: lat, longitude: lon + 190 / (111_320 * Math.cos(lat * Math.PI / 180)), rank: 1 }
     ranked.longitude = ((ranked.longitude + 180) % 360) - 180
     assert.equal(nearestCompatiblePointWithin200Metres(lat, lon, 1, 1,
@@ -72,7 +103,7 @@ test('whole road rows across a z9 boundary receive four-class totals without cha
   assert.ok([...Array(4).keys()].every(index => geometry.row(index).midLon < 0))
   const source = city(traffic(geometry.row(0), 50.5), traffic(geometry.row(1)),
     traffic(geometry.row(2)), traffic(geometry.row(3), 0, 40))
-  assert.ok(source.records[3].longitude > 0)
+  assert.ok(source.records[3].coordinates[0][0] > 0)
   const owner = join(temporary, 'z9/255/173')
   mkdirSync(owner, { recursive: true })
   const path = join(owner, 'roads.arrow')

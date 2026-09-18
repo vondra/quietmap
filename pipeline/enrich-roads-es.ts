@@ -11,7 +11,7 @@ import {
   loadMitmaRoadCensus, normalizeSpanishRoadRef, SPAIN_ROAD_SOURCE_BBOX,
   type MitmaRoadSection,
 } from './lib/roads-es-source.js'
-import { writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { isSlipRoadClass, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
 import { pointToPolylineDist } from './lib/spatial.js'
 
 const SOURCE_ID = SOURCE_ID_ES_NATIONAL_ROADS
@@ -43,6 +43,7 @@ export function matchMitmaRoadSection(
   row: RoadRow,
   sectionsByRef: ReadonlyMap<string, readonly MitmaRoadSection[]>,
 ): MitmaRoadSection | null {
+  if (isSlipRoadClass(row.roadClass)) return null
   const normalizedRef = normalizeSpanishRoadRef(row.ref ?? '')
   const candidates = normalizedRef ? sectionsByRef.get(normalizedRef) : undefined
   if (!candidates) return null

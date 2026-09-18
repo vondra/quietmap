@@ -140,7 +140,7 @@ pub struct RailMetadata {
 
     // Descriptive
     pub rail_type: &'static str, // "rail" | "tram" | ...
-    pub usage: &'static str,     // "main" | "branch" | "industrial"
+    pub usage: &'static str,     // "main" | "branch" | "industrial" | "untagged"
     pub service: bool,
     pub highspeed: bool,
     pub bridge: bool,

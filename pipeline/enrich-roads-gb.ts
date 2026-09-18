@@ -12,6 +12,7 @@ import { listPreparedSquares } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/provenance.js'
 import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
+  isSlipRoadClass,
   disjointVehicleClassCountsFitPublishedTotal, writeRoadAadt, type RoadRow,
 } from './lib/roads-arrow.js'
 import { haversineM } from './lib/spatial.js'
@@ -190,6 +191,7 @@ export function matchDftPoint(
   row: RoadRow,
   pointsByRef: ReadonlyMap<string, readonly DftCountPoint[]>,
 ): DftCountPoint | null {
+  if (isSlipRoadClass(row.roadClass)) return null
   const ref = row.ref?.replace(/\s+/g, '') ?? ''
   const candidates = pointsByRef.get(ref)
   if (!candidates) return null

@@ -10,7 +10,7 @@ import {
 } from './lib/roads-it-source.js'
 import { flatDist } from './lib/spatial.js'
 import { SOURCE_ID_IT_NATIONAL_ROADS } from './lib/source-ids.generated.js'
-import { writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { isSlipRoadClass, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
 
 const SOURCE_ID = SOURCE_ID_IT_NATIONAL_ROADS
 const ITALY_BBOX = [35.5, 6.6, 47.1, 18.6] as const
@@ -32,6 +32,7 @@ export function matchItalianTgm(
   row: RoadRow,
   stationsByRef: ReadonlyMap<string, readonly ItalianTgmStation[]>,
 ): ItalianTgmStation | null {
+  if (isSlipRoadClass(row.roadClass)) return null
   const ref = normalizeItalianOsmRef(row.ref ?? '')
   const candidates = ref ? stationsByRef.get(ref) : undefined
   if (!candidates) return null

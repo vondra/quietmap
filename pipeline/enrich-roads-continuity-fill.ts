@@ -45,13 +45,13 @@ function prepareSquare(prepared: string, square: string, topology: SourceTranspo
     identities.delete(key)
     const oneway = Number(direction.get(road.i))
     if (oneway > 2) throw new Error(`${square}: invalid oneway direction ${oneway}`)
-    const { osmId, cls, src, ref, aadt, access, roundabout, countBasis, observationId, observationSourceId } = road
+    const { osmId, cls, src, ref, name, aadt, access, roundabout, countBasis, observationId, observationSourceId } = road
     // These pieces still contribute incidence, but compatibility rejects them before reading traffic.
     if (!FILLABLE.has(cls)) {
       staged.push([identity.startKey, identity.endKey, cls])
       continue
     }
-    staged.push([square, road.i, identity.startKey, identity.endKey, osmId, cls, src, ref, ...aadt, access, Number(roundabout), oneway, countBasis, observationId, observationSourceId])
+    staged.push([square, road.i, identity.startKey, identity.endKey, osmId, cls, src, ref, name, ...aadt, access, Number(roundabout), oneway, countBasis, observationId, observationSourceId])
   }
   if (identities.size) throw new Error(`${square}: ${identities.size} source road pieces absent from Arrow`)
   return { roads: staged, hasOwned: roads.some(road => road.src === SOURCE_ID_ROAD_CONTINUITY_HEURISTIC) }
@@ -146,12 +146,12 @@ export async function enrichContinuityDirectory(preparedDirectory: string) {
     // Disposable staging only: a failure is rebuilt from unchanged authored inputs.
     database.exec(`PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;
       CREATE TABLE roads (i INTEGER PRIMARY KEY, square TEXT, row_index INTEGER, a TEXT, b TEXT,
-        osmId INTEGER, cls INTEGER, src INTEGER, ref TEXT, light REAL, medium REAL, heavy REAL, moto REAL,
+        osmId INTEGER, cls INTEGER, src INTEGER, ref TEXT, name TEXT, light REAL, medium REAL, heavy REAL, moto REAL,
         access INTEGER, roundabout INTEGER, direction INTEGER, countBasis TEXT, observationId TEXT, observationSourceId INTEGER, visited INTEGER DEFAULT 0);
       CREATE TABLE fills (square TEXT, row_index INTEGER, light REAL, medium REAL, heavy REAL, moto REAL, countBasis TEXT, observationId TEXT, observationSourceId INTEGER,
                           PRIMARY KEY(square,row_index)) WITHOUT ROWID;`)
-    const insert = database.prepare(`INSERT INTO roads(square,row_index,a,b,osmId,cls,src,ref,light,medium,heavy,moto,access,roundabout,direction,countBasis,observationId,observationSourceId)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    const insert = database.prepare(`INSERT INTO roads(square,row_index,a,b,osmId,cls,src,ref,name,light,medium,heavy,moto,access,roundabout,direction,countBasis,observationId,observationSourceId)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     const compactInsert = database.prepare('INSERT INTO roads(a,b,cls) VALUES (?,?,?)')
     let rows = 0, position = 0
     for await (const { roads, hasOwned } of processedSquares<PreparedSquare>(prepared, squares)) {

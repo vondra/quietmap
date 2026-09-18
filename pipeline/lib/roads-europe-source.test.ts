@@ -25,20 +25,20 @@ test('latest staged raw is deterministic and ignores stale normalized copies', (
   assert.throws(() => latestStagedCityFile('Paris', temporary), /missing staged/)
 })
 
-test('source rounding, aliases and line vertex preserve published directional counts', () => {
+test('source rounding, aliases and the whole line preserve published directional counts', () => {
   const source = parseEuropeanCityTraffic('sample', 'sample.geojson', bytes(
     feature({ AADT: 1000.4, AAWT: 2000, TR_AADT: 100.4, '2W_AADT': 50.4, raw_oneway: true }),
     feature({ AADT: null, AAWT: 1000, TR_AADT: null, TR_AAWT: 100, raw_oneway: 'true' },
-      { type: 'LineString', coordinates: [[14, 50], [14.001, 50.001]] }),
+      { type: 'LineString', coordinates: [[14, 50], [14, 50], [14.001, 50.001]] }),
   ))
   // Source direction remains separate from the matched OSM road direction.
   assert.deepEqual(source.records[0], {
-    latitude: 50, longitude: 14, light: 830, medium: 20, heavy: 100, moto: 50, sourceId: 10,
+    coordinates: [[14, 50]], light: 830, medium: 20, heavy: 100, moto: 50, sourceId: 10,
     observationId: source.records[0].observationId, sourceOsmId: null, estimatedClasses: 3,
     countBasis: 'directional', rawOneway: true, rawDirection: null, osmOneway: null, rawTechnology: null,
   })
   assert.deepEqual(source.records[1], {
-    latitude: 50.001, longitude: 14.001, light: 880, medium: 20, heavy: 100, moto: 0, sourceId: 10,
+    coordinates: [[14, 50], [14.001, 50.001]], light: 880, medium: 20, heavy: 100, moto: 0, sourceId: 10,
     observationId: source.records[1].observationId, sourceOsmId: null, estimatedClasses: 11,
     countBasis: 'unknown', rawOneway: 'true', rawDirection: null, osmOneway: null, rawTechnology: null,
   })

@@ -53,10 +53,10 @@ function assertGoldens(goldens: readonly Golden[]): void {
   }
 }
 
-test('catalog is exactly the complete 17-country dev1 proxy/default family', () => {
+test('catalog is exactly the listed proxy/default countries, KR the only one without a source', () => {
   validateRailwayProxyCatalog()
   assert.deepEqual(RAILWAY_PROXY_SPECS.map(spec => spec.iso2), [
-    'CD', 'DZ', 'EG', 'ET', 'IQ', 'IR', 'KE', 'KR', 'KZ', 'MA', 'NG', 'RU', 'SD', 'TR', 'TZ', 'UA', 'UZ',
+    'CD', 'DJ', 'DZ', 'EG', 'ET', 'IQ', 'IR', 'KE', 'KR', 'KZ', 'MA', 'NG', 'RU', 'SD', 'TR', 'TZ', 'UA', 'UZ',
   ])
   assert.equal(RAILWAY_PROXY_SPECS.find(spec => spec.iso2 === 'KR')!.classify, null)
 })
@@ -94,6 +94,8 @@ test('African classifiers preserve dev1 family, corridor and fallback precedence
     ['ET', row(8.92, 38.60, 0, 0, 'Awash–Weldiya Railway'), 1, 4],
     ['ET', row(11.72, 39.60), 1, 4],
     ['ET', row(9.59, 41.86), 4, 12],
+    // The Djibouti end of the same line carries the same trains as the Ethiopian side.
+    ['DJ', row(11.55, 42.95), 4, 12],
 
     ['KE', row(-4.03, 39.55), 8, 20],
     ['KE', row(-0.95, 36.35), 4, 8],
@@ -285,6 +287,6 @@ test('KR no-source is an explicit zero-write result and family preflight prevent
     { latitude: -5.82, longitude: 13.45, country: 'CD' },
   ]), target)
   const before = readFileSync(target)
-  await assert.rejects(enrichAllRailwayProxies(prepared), /no DZ railways.arrow source squares/)
+  await assert.rejects(enrichAllRailwayProxies(prepared), /no DJ railways.arrow source squares/)
   assert.deepEqual(readFileSync(target), before)
 })

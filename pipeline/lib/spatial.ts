@@ -242,6 +242,35 @@ export function buildOneHundredthDegreePointGrid<T extends PointCoordinates>(
   return grid
 }
 
+export interface SegmentCoordinates {
+  startLatitude: number
+  startLongitude: number
+  endLatitude: number
+  endLongitude: number
+}
+
+/** Index line segments under every cell of their bounds, so a point query needs only its own reach. */
+export function buildOneHundredthDegreeSegmentGrid<T extends SegmentCoordinates>(
+  segments: readonly T[],
+): ReadonlyMap<string, readonly T[]> {
+  const grid = new Map<string, T[]>()
+  for (const segment of segments) {
+    const endLongitude = segment.startLongitude + wrapLonDeltaDeg(segment.endLongitude - segment.startLongitude)
+    const west = Math.floor(Math.min(segment.startLongitude, endLongitude) * POINT_GRID_SCALE)
+    const east = Math.floor(Math.max(segment.startLongitude, endLongitude) * POINT_GRID_SCALE)
+    for (let y = Math.floor(Math.min(segment.startLatitude, segment.endLatitude) * POINT_GRID_SCALE);
+      y <= Math.floor(Math.max(segment.startLatitude, segment.endLatitude) * POINT_GRID_SCALE); y++) {
+      for (let x = west; x <= east; x++) {
+        const key = pointGridKey(y, wrappedLongitudeCell(x))
+        const bucket = grid.get(key)
+        if (bucket) bucket.push(segment)
+        else grid.set(key, [segment])
+      }
+    }
+  }
+  return grid
+}
+
 /** Degree reaches enclosing both shared distance models, including polar queries. */
 export function pointSearchReach(latitude: number, radiusMetres: number): [number, number] {
   const latitudeReach = radiusMetres / METRES_PER_DEGREE_LATITUDE
@@ -250,7 +279,7 @@ export function pointSearchReach(latitude: number, radiusMetres: number): [numbe
 }
 
 /** Conservative cell candidates; callers retain their exact distance and class gates. */
-export function* pointGridCandidates<T extends PointCoordinates>(
+export function* pointGridCandidates<T>(
   latitude: number,
   longitude: number,
   radiusMetres: number,

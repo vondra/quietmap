@@ -9,7 +9,7 @@ import { parseRoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
   loadCeremaCensus, type CeremaCensusSection,
 } from './lib/roads-fr-source.js'
-import { writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { isSlipRoadClass, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
 import { pointToPolylineDist } from './lib/spatial.js'
 
 const SOURCE_ID = SOURCE_ID_FR_CEREMA_TMJA
@@ -25,14 +25,18 @@ export interface FrEnrichmentResult {
   squaresUpdated: number
 }
 
+/** OSM writes "A 5a" where Cerema publishes A0005A; both sides meet as "A5A". */
+const comparableRef = (ref: string): string => ref.replace(/\s+/g, '').toUpperCase()
+
 export function indexCeremaCensus(
   sections: readonly CeremaCensusSection[],
 ): ReadonlyMap<string, readonly CeremaCensusSection[]> {
   const byRef = new Map<string, CeremaCensusSection[]>()
   for (const section of sections) {
-    const candidates = byRef.get(section.ref)
+    const ref = comparableRef(section.ref)
+    const candidates = byRef.get(ref)
     if (candidates) candidates.push(section)
-    else byRef.set(section.ref, [section])
+    else byRef.set(ref, [section])
   }
   return byRef
 }
@@ -42,8 +46,8 @@ export function matchCeremaSection(
   row: RoadRow,
   sectionsByRef: ReadonlyMap<string, readonly CeremaCensusSection[]>,
 ): CeremaCensusSection | null {
-  const normalizedRef = row.ref?.replace(/\s+/g, '') ?? ''
-  const candidates = normalizedRef ? sectionsByRef.get(normalizedRef) : undefined
+  if (isSlipRoadClass(row.roadClass)) return null
+  const candidates = row.ref ? sectionsByRef.get(comparableRef(row.ref)) : undefined
   if (!candidates) return null
   let closest: CeremaCensusSection | null = null
   let closestDistance = MAXIMUM_MATCH_DISTANCE_M

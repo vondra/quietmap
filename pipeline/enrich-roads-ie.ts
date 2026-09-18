@@ -9,7 +9,7 @@ import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-l
 import { loadIrishTiiSource, normalizeIrishRoadRef, type IrishTiiObservation } from './lib/roads-ie-source.js'
 import { haversineM } from './lib/spatial.js'
 import { SOURCE_ID_IE_NATIONAL_ROADS } from './lib/source-ids.generated.js'
-import { writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { isSlipRoadClass, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
 
 const SOURCE_ID = SOURCE_ID_IE_NATIONAL_ROADS
 const IRELAND_BBOX = [51.4, -10.5, 55.4, -5.4] as const
@@ -31,6 +31,7 @@ export function matchIrishTii(
   row: RoadRow,
   byRef: ReadonlyMap<string, readonly IrishTiiObservation[]>,
 ): IrishTiiObservation | null {
+  if (isSlipRoadClass(row.roadClass)) return null
   let closest: IrishTiiObservation | null = null
   let closestDistance = MAXIMUM_MATCH_DISTANCE_M
   for (const token of (row.ref ?? '').split(/[;,]/)) {

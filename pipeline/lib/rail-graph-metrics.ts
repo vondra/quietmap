@@ -280,7 +280,9 @@ function lateralTwinGate(
 
 function parallelSiblingLateralM(a: RailGraphEdge, aMidLat: number, aMidLon: number, b: RailGraphEdge): number | null {
   if (a.osmId === b.osmId) return null
-  if (a.railType !== b.railType || a.usage !== b.usage) return null
+  // A main-tagged track and its untagged twin (usage 0 and 3) are one corridor.
+  const usageFamily = (usage: number): number => usage === 3 ? 0 : usage
+  if (a.railType !== b.railType || usageFamily(a.usage) !== usageFamily(b.usage)) return null
   if (a.nodeA === b.nodeA || a.nodeA === b.nodeB || a.nodeB === b.nodeA || a.nodeB === b.nodeB) return null
   const { overlapM, aSpanM } = longitudinalOverlapM(a, b)
   if (overlapM < Math.max(PARALLEL_SPREAD_MIN_OVERLAP_ABS_M, PARALLEL_SPREAD_MIN_OVERLAP_FRACTION * aSpanM)) return null

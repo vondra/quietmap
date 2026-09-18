@@ -7,14 +7,18 @@ import type { RoadObservation } from './road-observation.js'
 import type { PlanningRoad } from './road-planning-input.js'
 
 export const FILLABLE = new Set(DATASETS.find(row => row.id === SOURCE_ID_ROAD_CONTINUITY_HEURISTIC)!.roadCoverage!)
-export type ContinuityRoad = Pick<PlanningRoad, 'i' | 'osmId' | 'cls' | 'src' | 'a' | 'b' | 'ref' | 'aadt' | 'access' | 'roundabout'> & RoadObservation & {
+export type ContinuityRoad = Pick<PlanningRoad, 'i' | 'osmId' | 'cls' | 'src' | 'a' | 'b' | 'ref' | 'name' | 'aadt' | 'access' | 'roundabout'> & RoadObservation & {
   direction: number; observationSourceId: number
 }
 export interface Flow extends RoadObservation { light: number; medium: number; heavy: number; moto: number; observationSourceId: number }
 
+/** One road continues under its ref, or under its name when neither piece carries a ref. */
+const sameSignedRoad = (a: ContinuityRoad, b: ContinuityRoad): boolean =>
+  a.ref !== '' || b.ref !== '' ? a.ref === b.ref : a.name !== '' && a.name === b.name
+
 function compatible(a: ContinuityRoad, b: ContinuityRoad, endpoint: string): boolean {
   if (!FILLABLE.has(b.cls) || a.cls !== b.cls || a.access !== b.access || a.roundabout || b.roundabout ||
-      !(a.osmId === b.osmId || (a.ref !== '' && a.ref === b.ref))) return false
+      !(a.osmId === b.osmId || sameSignedRoad(a, b))) return false
   if (a.direction === 0 || b.direction === 0) return a.direction === b.direction
   // A permitted arrival must meet a permitted departure; two opposing one-way ends do not connect.
   return ((a.direction === 1 ? a.b : a.a) === endpoint) !== ((b.direction === 1 ? b.b : b.a) === endpoint)

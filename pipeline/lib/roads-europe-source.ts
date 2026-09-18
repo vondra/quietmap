@@ -16,8 +16,8 @@ export const EUROPEAN_TRAFFIC_CITIES = [
 ] as const
 
 export interface EuropeanTrafficRecord extends RoadAadt {
-  latitude: number
-  longitude: number
+  /** GeoJSON-order `[longitude, latitude]` vertices; one for a Point, and a LineString runs in its travel direction. */
+  coordinates: ReadonlyArray<readonly [number, number]>
   sourceOsmId: number | null
   rawOneway: unknown
   rawDirection: unknown
@@ -87,15 +87,20 @@ export function parseEuropeanCityTraffic(city: string, path: string, bytes: Buff
     const truck = nonnegativeNumber(properties.TR_AADT ?? properties.TR_AAWT ?? 0, `${context} truck count`)
     const motorcycle = nonnegativeNumber(properties['2W_AADT'] ?? properties['2W_AAWT'] ?? 0, `${context} motorcycle count`)
     const geometry = object(feature.geometry, `${context} geometry`)
-    const coordinates = geometry.coordinates
-    const point = geometry.type === 'Point' ? coordinates
-      : geometry.type === 'LineString' && Array.isArray(coordinates)
-        ? coordinates[Math.floor(coordinates.length / 2)] : null
-    if (!Array.isArray(point) || point.length < 2 ||
-        typeof point[0] !== 'number' || typeof point[1] !== 'number' ||
-        !Number.isFinite(point[0]) || !Number.isFinite(point[1]) ||
-        point[0] < -180 || point[0] > 180 || point[1] < -90 || point[1] > 90) {
-      throw new Error(`${context}: invalid Point/LineString representative coordinate`)
+    const vertices: unknown = geometry.type === 'Point' ? [geometry.coordinates]
+      : geometry.type === 'LineString' ? geometry.coordinates : null
+    if (!Array.isArray(vertices) || !vertices.length) throw new Error(`${context}: expected a nonempty Point/LineString`)
+    const coordinates: Array<readonly [number, number]> = []
+    for (const vertex of vertices) {
+      if (!Array.isArray(vertex) || vertex.length < 2 ||
+          typeof vertex[0] !== 'number' || typeof vertex[1] !== 'number' ||
+          !Number.isFinite(vertex[0]) || !Number.isFinite(vertex[1]) ||
+          vertex[0] < -180 || vertex[0] > 180 || vertex[1] < -90 || vertex[1] > 90) {
+        throw new Error(`${context}: invalid Point/LineString coordinate`)
+      }
+      // A repeated vertex has no heading, and a line of one repeated vertex is a point.
+      const previous = coordinates.at(-1)
+      if (previous?.[0] !== vertex[0] || previous[1] !== vertex[1]) coordinates.push([vertex[0], vertex[1]])
     }
     if (properties.raw_oneway !== undefined && typeof properties.raw_oneway !== 'boolean') {
       result.nonBooleanOneway++
@@ -121,7 +126,7 @@ export function parseEuropeanCityTraffic(city: string, path: string, bytes: Buff
       result.rejected.push({ feature: index, reason: 'rounds_to_zero', total, truck, motorcycle })
       continue
     }
-    result.records.push({ latitude: point[1], longitude: point[0], ...counts,
+    result.records.push({ coordinates, ...counts,
       sourceId: SOURCE_ID_EU_CITY_TRAFFIC,
       ...roadObservation({ city, feature: index, observation: feature },
         properties.raw_oneway === true ? 'directional'

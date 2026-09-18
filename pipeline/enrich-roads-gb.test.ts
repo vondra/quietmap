@@ -79,6 +79,7 @@ test('DfT matcher requires an exact normalized ref within fifteen kilometres', (
   assert.equal(matchDftPoint(road({ ref: ' A 1 ' }), index), near)
   assert.equal(matchDftPoint(road({ ref: 'A2' }), index), null)
   assert.equal(matchDftPoint(road({ midLat: 50 }), index), null)
+  assert.equal(matchDftPoint(road({ ref: 'A1', roadClass: 10 }), index), null, 'a slip road never takes the mainline count')
 })
 
 test('z9 GB pass writes domestic data and heals a matching foreign GB stamp', async () => {

@@ -1,4 +1,4 @@
-/** Apply preserved European city traffic observations to z9 roads within 50 metres. */
+/** Apply preserved European city traffic observations to z9 roads of the published way or within 50 metres of its line. */
 
 import { readFileSync } from 'node:fs'
 import { DataType, tableFromIPC } from 'apache-arrow'
@@ -12,62 +12,118 @@ import { writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
 import {
   loadEuropeanCityTraffic, type EuropeanCityTraffic, type EuropeanTrafficRecord,
 } from './lib/roads-europe-source.js'
-import { buildOneHundredthDegreePointGrid, flatDist, pointGridCandidates, pointSearchReach } from './lib/spatial.js'
+import {
+  buildOneHundredthDegreeSegmentGrid, M_PER_DEG_LAT, M_PER_DEG_LON_EQ, pointGridCandidates, pointSearchReach,
+  pointToPolylineDist, pointToSegmentDist, wrapLonDeltaDeg, type SegmentCoordinates,
+} from './lib/spatial.js'
 
 const MAXIMUM_DISTANCE_METRES = 50
 
-export function nearestEuropeanTraffic(
-  latitude: number,
-  longitude: number,
-  grid: ReadonlyMap<string, readonly EuropeanTrafficRecord[]>,
-  osmId?: number | null,
-  directionalWays?: ReadonlyMap<string, number>,
-): EuropeanTrafficRecord | null {
-  let closest: EuropeanTrafficRecord | null = null
-  let closestDistance = MAXIMUM_DISTANCE_METRES
-  for (const record of pointGridCandidates(latitude, longitude, MAXIMUM_DISTANCE_METRES, grid)) {
-    if (directionalWays && record.countBasis === 'directional' &&
-        directionalWays.get(record.observationId) !== osmId) continue
-    const distance = flatDist(latitude, longitude, record.latitude, record.longitude)
-    if (distance <= MAXIMUM_DISTANCE_METRES && (closest === null || distance < closestDistance ||
-        (distance === closestDistance && record.observationId < closest.observationId))) {
-      closest = record
-      closestDistance = distance
+type MatchedRoad = Pick<RoadRow, 'startLat' | 'startLon' | 'endLat' | 'endLon' | 'midLat' | 'midLon' | 'osmId' | 'oneway' | 'roadClass'>
+interface ObservationSegment extends SegmentCoordinates { record: EuropeanTrafficRecord }
+export interface EuropeanTrafficIndex {
+  segments: ReadonlyMap<string, readonly ObservationSegment[]>
+  byWayId: ReadonlyMap<number, readonly EuropeanTrafficRecord[]>
+}
+
+export function indexEuropeanTraffic(records: readonly EuropeanTrafficRecord[]): EuropeanTrafficIndex {
+  const segments: ObservationSegment[] = [], byWayId = new Map<number, EuropeanTrafficRecord[]>()
+  for (const record of records) {
+    const vertices = record.coordinates
+    for (let index = Math.min(1, vertices.length - 1); index < vertices.length; index++) {
+      const start = vertices[Math.max(0, index - 1)], end = vertices[index]
+      segments.push({ record, startLatitude: start[1], startLongitude: start[0], endLatitude: end[1], endLongitude: end[0] })
+    }
+    if (record.sourceOsmId === null) continue
+    const sameWay = byWayId.get(record.sourceOsmId)
+    if (sameWay) sameWay.push(record)
+    else byWayId.set(record.sourceOsmId, [record])
+  }
+  return { segments: buildOneHundredthDegreeSegmentGrid(segments), byWayId }
+}
+
+/** A point count has no heading, so one current way is chosen for it across every owner. */
+const isDirectionalPoint = (record: EuropeanTrafficRecord): boolean =>
+  record.countBasis === 'directional' && record.coordinates.length === 1
+
+// A counted street is not its slip road, its service lane or a track beside it.
+const NEVER_MATCHED_BY_PROXIMITY: ReadonlySet<number> = new Set([6, 7, 8, 10, 11, 12])
+const MINIMUM_ALONG_LINE_COSINE = Math.cos(30 * Math.PI / 180)
+
+/** Without the publisher's way id a row must be the counted street itself: an eligible class
+ *  running along the line (a cross street within 50 m is not), and for a directional line a
+ *  one-way row must run with it, because the row running against it is the other carriageway. */
+function liesAlongObservation(row: MatchedRoad, segment: ObservationSegment): boolean {
+  if (NEVER_MATCHED_BY_PROXIMITY.has(row.roadClass)) return false
+  const scale = M_PER_DEG_LON_EQ * Math.cos(row.midLat * Math.PI / 180)
+  const rowEast = wrapLonDeltaDeg(row.endLon - row.startLon) * scale, rowNorth = (row.endLat - row.startLat) * M_PER_DEG_LAT
+  const lineEast = wrapLonDeltaDeg(segment.endLongitude - segment.startLongitude) * scale
+  const lineNorth = (segment.endLatitude - segment.startLatitude) * M_PER_DEG_LAT
+  const lengths = Math.hypot(rowEast, rowNorth) * Math.hypot(lineEast, lineNorth)
+  if (lengths === 0) return true // a point count has no heading
+  const cosine = (rowEast * lineEast + rowNorth * lineNorth) / lengths
+  if (Math.abs(cosine) < MINIMUM_ALONG_LINE_COSINE) return false
+  return segment.record.countBasis !== 'directional' || !row.oneway || (row.oneway === 1 ? cosine : -cosine) >= 0
+}
+
+/** The publisher's own way identity qualifies at any distance; every other row must lie along the line. */
+function* qualifyingObservations(row: MatchedRoad, index: EuropeanTrafficIndex) {
+  for (const segment of pointGridCandidates(row.midLat, row.midLon, MAXIMUM_DISTANCE_METRES, index.segments)) {
+    const sameWay = row.osmId !== null && row.osmId > 0 && segment.record.sourceOsmId === row.osmId
+    const distance = pointToSegmentDist(row.midLat, row.midLon,
+      segment.startLatitude, segment.startLongitude, segment.endLatitude, segment.endLongitude)
+    if (distance <= MAXIMUM_DISTANCE_METRES && (sameWay || liesAlongObservation(row, segment))) {
+      yield { record: segment.record, sameWay, distance }
     }
   }
-  return closest
+  for (const record of row.osmId === null || row.osmId <= 0 ? [] : index.byWayId.get(row.osmId) ?? []) {
+    yield { record, sameWay: true, distance: pointToPolylineDist(row.midLat, row.midLon, record.coordinates) }
+  }
+}
+
+export function nearestEuropeanTraffic(
+  row: MatchedRoad,
+  index: EuropeanTrafficIndex,
+  directionalPointWays?: ReadonlyMap<string, number>,
+): EuropeanTrafficRecord | null {
+  let best: { record: EuropeanTrafficRecord; sameWay: boolean; distance: number } | null = null
+  for (const candidate of qualifyingObservations(row, index)) {
+    if (directionalPointWays && isDirectionalPoint(candidate.record) &&
+        directionalPointWays.get(candidate.record.observationId) !== row.osmId) continue
+    if (best === null || (candidate.sameWay && !best.sameWay) || (candidate.sameWay === best.sameWay &&
+        (candidate.distance < best.distance || (candidate.distance === best.distance &&
+          candidate.record.observationId < best.record.observationId)))) best = candidate
+  }
+  return best?.record ?? null
 }
 
 /** Choose across every owner before writes; source IDs refer to ways, not clipped rows. */
-function assignDirectionalObservations(
+function assignDirectionalPointObservations(
   paths: readonly string[],
   records: readonly EuropeanTrafficRecord[],
 ): ReadonlyMap<string, number> {
-  const directional = records.filter(record => record.countBasis === 'directional')
-  const selected = new Map<string, { osmId: number; distance: number }>()
-  if (!directional.length) return new Map()
-  const grid = buildOneHundredthDegreePointGrid(directional)
+  const directionalPoints = records.filter(isDirectionalPoint)
+  const selected = new Map<string, { osmId: number; sameWay: boolean; distance: number }>()
+  if (!directionalPoints.length) return new Map()
+  const index = indexEuropeanTraffic(directionalPoints)
   for (const path of paths) {
     const table = tableFromIPC(readFileSync(path)), geometry = segmentGeometryReader(table)
-    const ids = table.getChild('osm_id'), sources = table.getChild('source_id')
+    const ids = table.getChild('osm_id'), sources = table.getChild('source_id'), classes = table.getChild('road_class')
     if (!ids || !DataType.isInt(ids.type) || ids.type.bitWidth !== 64 || !ids.type.isSigned || ids.nullCount ||
-        !sources || !DataType.isInt(sources.type) || sources.type.bitWidth !== 16 || sources.type.isSigned || sources.nullCount) {
-      throw new Error(`${path}: invalid road identity or source column`)
+        !sources || !DataType.isInt(sources.type) || sources.type.bitWidth !== 16 || sources.type.isSigned || sources.nullCount ||
+        !classes || classes.nullCount) {
+      throw new Error(`${path}: invalid road identity, source or class column`)
     }
     const rows = table.numRows
-    for (let index = 0; index < rows; index++) {
-      if (!shouldOverwrite(Number(sources.get(index)), SOURCE_ID_EU_CITY_TRAFFIC)) continue
-      const osmId = Number(ids.get(index))
-      if (!Number.isSafeInteger(osmId) || osmId <= 0) throw new Error(`${path}: invalid OSM way identity at row ${index}`)
-      const row = geometry.row(index)
-      for (const record of pointGridCandidates(row.midLat, row.midLon, MAXIMUM_DISTANCE_METRES, grid)) {
-        const distance = flatDist(row.midLat, row.midLon, record.latitude, record.longitude)
-        if (distance > MAXIMUM_DISTANCE_METRES) continue
+    for (let rowIndex = 0; rowIndex < rows; rowIndex++) {
+      if (!shouldOverwrite(Number(sources.get(rowIndex)), SOURCE_ID_EU_CITY_TRAFFIC)) continue
+      const osmId = Number(ids.get(rowIndex))
+      if (!Number.isSafeInteger(osmId) || osmId <= 0) throw new Error(`${path}: invalid OSM way identity at row ${rowIndex}`)
+      for (const { record, sameWay, distance } of qualifyingObservations({ ...geometry.row(rowIndex), osmId, roadClass: Number(classes.get(rowIndex)) }, index)) {
         const previous = selected.get(record.observationId)
-        const preferred = osmId === record.sourceOsmId, previousPreferred = previous?.osmId === record.sourceOsmId
-        if (!previous || (preferred && !previousPreferred) || (preferred === previousPreferred &&
+        if (!previous || (sameWay && !previous.sameWay) || (sameWay === previous.sameWay &&
             (distance < previous.distance || (distance === previous.distance && osmId < previous.osmId)))) {
-          selected.set(record.observationId, { osmId, distance })
+          selected.set(record.observationId, { osmId, sameWay, distance })
         }
       }
     }
@@ -77,13 +133,13 @@ function assignDirectionalObservations(
 
 export async function enrichEuropeanRoads(preparedDirectory: string, cities: readonly EuropeanCityTraffic[]) {
   const records = cities.flatMap(city => city.records)
-  const grid = buildOneHundredthDegreePointGrid(records)
+  const index = indexEuropeanTraffic(records)
   const squares = new Set<string>()
   for (const city of cities) {
-    const [south, west, north, east] = city.records.reduce(
-      ([south, west, north, east], record) => [
-        Math.min(south, record.latitude), Math.min(west, record.longitude),
-        Math.max(north, record.latitude), Math.max(east, record.longitude),
+    const [south, west, north, east] = city.records.flatMap(record => record.coordinates).reduce(
+      ([south, west, north, east], [longitude, latitude]) => [
+        Math.min(south, latitude), Math.min(west, longitude),
+        Math.max(north, latitude), Math.max(east, longitude),
       ], [90, 180, -90, -180])
     // Include neighbouring road owners, not just the observations' own cells.
     const [latitudeReach, longitudeReach] = pointSearchReach(
@@ -97,12 +153,12 @@ export async function enrichEuropeanRoads(preparedDirectory: string, cities: rea
   }
   if (!squares.size) throw new Error(`No prepared road squares intersect the European observations under ${preparedDirectory}`)
   const paths = [...squares].sort().map(square => resolve(preparedDirectory, square, 'roads.arrow'))
-  const directionalWays = assignDirectionalObservations(paths, records)
+  const directionalPointWays = assignDirectionalPointObservations(paths, records)
   const result = { rows: 0, matched: 0, squares: squares.size, squaresUpdated: 0 }
   for (const path of paths) {
     const match = (row: RoadRow): EuropeanTrafficRecord | null => {
       if (!shouldOverwrite(row.existingSourceId, SOURCE_ID_EU_CITY_TRAFFIC)) return null
-      return nearestEuropeanTraffic(row.midLat, row.midLon, grid, row.osmId, directionalWays)
+      return nearestEuropeanTraffic(row, index, directionalPointWays)
     }
     const written = await writeRoadAadt(path, match, undefined, undefined,
       { sourceIds: [SOURCE_ID_EU_CITY_TRAFFIC], when: row => match(row) === null })

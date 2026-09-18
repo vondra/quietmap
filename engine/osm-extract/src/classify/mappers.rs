@@ -118,20 +118,49 @@ pub fn rail_type(railway: &str) -> u8 {
     match railway {
         "rail" => 0,
         "tram" => 1,
-        "light_rail" => 2,
+        // Metro shares the light-rail emission family; GTFS metro routes stamp it too.
+        "light_rail" | "subway" => 2,
         "narrow_gauge" => 3,
         "funicular" => 4,
         _ => 0,
     }
 }
 
-/// Map usage tag to rail usage enum. 0=main, 1=branch, 2=industrial.
+/// Whether a way is a railway that carries trains. Subway is included for its above-ground
+/// sections (the spill marks the underground ones as tunnel, which emits nothing); a line
+/// mapped as disused or abandoned carries no trains.
+pub fn railway_carries_trains(railway: Option<&str>, disused: Option<&str>, abandoned: Option<&str>) -> bool {
+    matches!(railway, Some("rail" | "tram" | "light_rail" | "subway" | "narrow_gauge" | "funicular"))
+        && disused != Some("yes")
+        && abandoned != Some("yes")
+}
+
+/// Whether a railway way runs below ground. A plain railway needs the `tunnel` tag; a
+/// subway is often mapped underground with only `layer`, `location` or `covered`.
+pub fn railway_is_underground(
+    railway: &str,
+    tunnel: Option<&str>,
+    layer: Option<&str>,
+    location: Option<&str>,
+    covered: Option<&str>,
+) -> bool {
+    if matches!(tunnel, Some("yes" | "building_passage" | "culvert")) {
+        return true;
+    }
+    railway == "subway"
+        && (layer.and_then(|value| value.trim().parse::<i32>().ok()).is_some_and(|value| value < 0)
+            || location == Some("underground")
+            || covered == Some("yes"))
+}
+
+/// Map usage tag to rail usage enum. 0=main, 1=branch, 2=industrial, 3=untagged or other.
+/// An untagged line is not evidence of a main line: it takes the moderate default.
 pub fn rail_usage_type(usage: Option<&str>) -> u8 {
     match usage {
         Some("main") => 0,
         Some("branch") => 1,
         Some("industrial") => 2,
-        _ => 0,
+        _ => 3,
     }
 }
 
@@ -327,6 +356,26 @@ pub fn parse_maxspeed_kmh(raw: &str) -> u16 {
         _ => return 0, // unknown unit
     };
     (kmh.round() as u32).min(400) as u16
+}
+
+#[cfg(test)]
+mod railway_tests {
+    use super::{rail_type, rail_usage_type, railway_carries_trains, railway_is_underground};
+
+    #[test]
+    fn subway_is_light_rail_family_and_underground_without_a_tunnel_tag() {
+        assert_eq!(rail_type("subway"), rail_type("light_rail"));
+        assert_eq!((rail_usage_type(Some("main")), rail_usage_type(None)), (0, 3));
+        assert!(railway_carries_trains(Some("subway"), None, None));
+        assert!(!railway_carries_trains(Some("rail"), Some("yes"), None));
+        assert!(!railway_carries_trains(Some("rail"), None, Some("yes")));
+        assert!(!railway_carries_trains(Some("platform"), None, None));
+        assert!(railway_is_underground("subway", None, Some("-2"), None, None));
+        assert!(railway_is_underground("subway", None, None, Some("underground"), None));
+        assert!(!railway_is_underground("subway", None, Some("1"), None, None));
+        assert!(!railway_is_underground("rail", None, Some("-1"), None, None));
+        assert!(railway_is_underground("rail", Some("yes"), None, None, None));
+    }
 }
 
 #[cfg(test)]

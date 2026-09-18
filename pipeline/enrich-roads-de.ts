@@ -12,7 +12,7 @@ import {
   loadBastCensus, type BastCensusSection,
 } from './lib/roads-de-source.js'
 import { BW_HOURLY_SOURCE_URL, loadBwHourlyProfiles, type BwStationProfile } from './lib/roads-de-bw-hourly-source.js'
-import { writeRoadAadt, applyRoadTimeProfiles, type RoadRow, type RoadTimeProfileEntry } from './lib/roads-arrow.js'
+import { isSlipRoadClass, writeRoadAadt, applyRoadTimeProfiles, type RoadRow, type RoadTimeProfileEntry } from './lib/roads-arrow.js'
 import { haversineM } from './lib/spatial.js'
 
 const GERMANY_BBOX = [46, 4, 56, 16] as const
@@ -92,6 +92,7 @@ function nearbySections(
 
 /** Dev1's exact-ref match, then its class-compatible two-kilometre fallback. */
 export function matchBastSection(row: RoadRow, census: BastCensusIndex): BastCensusSection | null {
+  if (isSlipRoadClass(row.roadClass)) return null
   const normalizedRef = row.ref?.replace(/\s+/g, '') ?? ''
   const byRef = normalizedRef ? census.byRef.get(normalizedRef) : undefined
   if (byRef) return nearest(row, byRef, REF_DISTANCE_M)
