@@ -580,11 +580,11 @@ pub(crate) fn compute_railways(
         );
         let acc = rails_by_key.entry(key).or_insert_with(|| RailAccum {
             name: {
-                // Build display name: "trať 250 — Brno–Havlíčkův Brod" or "trať 250" or name or "Rail"
+                // Build display name: "Line 250 — Brno–Havlíčkův Brod" or "Line 250" or name or "Rail"
                 if !seg.rail_ref.is_empty() && !seg.name.is_empty() {
-                    format!("trať {} — {}", seg.rail_ref, seg.name)
+                    format!("Line {} — {}", seg.rail_ref, seg.name)
                 } else if !seg.rail_ref.is_empty() {
-                    format!("trať {}", seg.rail_ref)
+                    format!("Line {}", seg.rail_ref)
                 } else if !seg.name.is_empty() {
                     seg.name.clone()
                 } else {

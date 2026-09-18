@@ -169,7 +169,8 @@ pub struct BuildAircraftCruiseCellTrace {
 pub fn build_aircraft_cruise_cell_trace(inputs: BuildAircraftCruiseCellTrace) -> SegmentTrace {
     let cell = grid::cruise::cruise_cell_id(inputs.lat, inputs.lon);
     let square = grid::cruise::cruise_cell_name(cell);
-    let display_name = format!("Cruise over {square}");
+    // The z15 cell key stays in the emission trace; the visitor sees a plain label.
+    let display_name = "High-altitude traffic".to_string();
     let cell_polygon = grid::cruise::cruise_cell_polygon(cell);
     let variants = aircraft_period_variants(inputs.period_energies, inputs.n_days);
 

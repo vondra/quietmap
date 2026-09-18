@@ -354,7 +354,7 @@ fn cruise_popup_names_and_highlights_the_actual_producer_cell() {
             "cruise-cell {x}/{y} {}",
             serde_json::to_string(trace).unwrap()
         );
-        assert_eq!(trace.name, format!("Cruise over z15/{x}/{y}"));
+        assert_eq!(trace.name, "High-altitude traffic");
         let noise_compute::types::EmissionTrace::AircraftCruise { square, .. } = &trace.emission
         else {
             panic!("expected cruise emission");
