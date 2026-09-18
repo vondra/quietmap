@@ -26,7 +26,9 @@ const NOISE_ONFLY_QUEUE_TIMEOUT_MS = Number(process.env.NOISE_ONFLY_QUEUE_TIMEOU
 const NOISE_ONFLY_MAX_QUEUE = Number(process.env.NOISE_ONFLY_MAX_QUEUE || '8')
 // One worker computes one popup. Workers share the native area's cache;
 // decoded Arrow batches occupy heap memory, while persisted obstacle indexes
-// are mapped. Set concurrency to the measured memory budget of the deployment.
+// are mapped. An index the addon has to build itself (stale or missing file) is
+// heap too: one build at a time in the process, at most four kept. Set
+// concurrency to the measured memory budget of the deployment.
 const NOISE_ONFLY_POOL_SIZE = Number(process.env.NOISE_ONFLY_POOL_SIZE || '8')
 
 export type NoiseOnflyEngine = {

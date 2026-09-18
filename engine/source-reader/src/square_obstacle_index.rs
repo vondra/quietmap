@@ -4,10 +4,12 @@
 //! The pipeline step (`structures-finalize`, right after `structures`; see
 //! `structures_finalize`) calls [`write_square_obstacle_index`] per square with
 //! the final table bytes; readers call [`load_square_obstacle_index`]. A square
-//! without `structures.arrow` has no index and no obstacles. A
-//! `structures.arrow` without a valid, current `structures.qoix` is an error
-//! naming the step to rerun — building at click time cost 0.4–18 s per first
-//! click and hid a broken pipeline behind a slow popup.
+//! without `structures.arrow` has no index and no obstacles. For the painter and
+//! the pipeline a `structures.arrow` without a valid, current `structures.qoix`
+//! is an error naming the step to rerun. The popup
+//! ([`load_square_obstacle_index_or_build_it_in_process`]) builds the index from
+//! the table instead (0.4–18 s on the first click) and warns once per square: a
+//! stale stamp took every popup of the world down on 2026-09-18.
 //!
 //! Provenance lives in the file header (`obstacle_index_file`): `code_ver` must
 //! equal [`CACHE_CODE_VER`] (the index format changed ⇒ rebuild); `data_ver` and
@@ -46,9 +48,10 @@ pub const STRUCTURES_QOIX: &str = "structures.qoix";
 const REBUILD_HINT: &str =
     "rerun the pipeline step structures-finalize (engine/target/release/structures-finalize <prepared_year_dir>)";
 
-/// Process memo capacity. A dense metro square's index runs to low hundreds of
-/// MB; popups cluster spatially, so a small LRU keeps the active area's
-/// mappings (and their faulted pages) alive while bounding worst-case RSS.
+/// Process memo capacity of MAPPED indexes. A dense metro square's index runs to low
+/// hundreds of MB; popups cluster spatially, so a small LRU keeps the active area's
+/// mappings (and their faulted pages) alive while bounding worst-case RSS. Indexes built
+/// in process are heap, not mappings, and are bounded by [`HEAP_BUILT_INDEX_CAP`].
 const MEMO_CAP: usize = 8;
 
 /// Fingerprint of a `structures.arrow` as the index's `data_ver`.
@@ -93,6 +96,128 @@ fn memo() -> &'static Mutex<Memo> {
     })
 }
 
+fn file_identity(meta: &std::fs::Metadata) -> FileIdentity {
+    (
+        meta.dev(),
+        meta.ino(),
+        meta.len(),
+        meta.mtime(),
+        meta.mtime_nsec(),
+    )
+}
+
+fn remembered(key: &FileIdentity) -> Option<(Arc<ObstacleIndex>, IndexFileProvenance)> {
+    let mut memo = memo().lock().unwrap_or_else(|e| e.into_inner());
+    memo.stamp += 1;
+    let stamp = memo.stamp;
+    let (index, built_from, touched) = memo.map.get_mut(key)?;
+    *touched = stamp;
+    Some((Arc::clone(index), *built_from))
+}
+
+fn remember(key: FileIdentity, index: &Arc<ObstacleIndex>, built_from: IndexFileProvenance) {
+    let mut memo = memo().lock().unwrap_or_else(|e| e.into_inner());
+    memo.stamp += 1;
+    let stamp = memo.stamp;
+    if memo.map.len() >= MEMO_CAP {
+        if let Some((&evict, _)) = memo.map.iter().min_by_key(|(_, (_, _, t))| *t) {
+            memo.map.remove(&evict);
+        }
+    }
+    memo.map.insert(key, (Arc::clone(index), built_from, stamp));
+}
+
+/// Indexes built in process own anonymous heap the kernel cannot drop, unlike the mapped files
+/// of [`MEMO_CAP`], so they have their own budget: one query's surface squares (at most four),
+/// and at most 1 GiB of source tables, of which an index is a fraction. The newest index always
+/// stays; it is alive for its query anyway.
+const HEAP_BUILT_INDEX_CAP: usize = 4;
+const HEAP_BUILT_TABLE_BYTES_BUDGET: u64 = 1 << 30;
+
+/// Oldest first: (table identity, index, table bytes).
+static HEAP_BUILT_INDEXES: Mutex<Vec<(FileIdentity, Arc<ObstacleIndex>, u64)>> =
+    Mutex::new(Vec::new());
+/// One in-process build at a time in the whole process: concurrent clicks and the rayon workers
+/// of one click wait for the first build of a table instead of each reading it (a dense metro
+/// table is ~1 GB), and two different tables are never held in memory together.
+static ONE_BUILD_AT_A_TIME: Mutex<()> = Mutex::new(());
+
+fn heap_built(key: &FileIdentity) -> Option<Arc<ObstacleIndex>> {
+    let mut indexes = HEAP_BUILT_INDEXES.lock().unwrap_or_else(|e| e.into_inner());
+    let at = indexes.iter().position(|(identity, _, _)| identity == key)?;
+    let entry = indexes.remove(at);
+    let index = Arc::clone(&entry.1);
+    indexes.push(entry);
+    Some(index)
+}
+
+fn keep_heap_built(key: FileIdentity, index: &Arc<ObstacleIndex>, table_bytes: u64) {
+    let mut indexes = HEAP_BUILT_INDEXES.lock().unwrap_or_else(|e| e.into_inner());
+    indexes.push((key, Arc::clone(index), table_bytes));
+    while indexes.len() > 1
+        && (indexes.len() > HEAP_BUILT_INDEX_CAP
+            || indexes.iter().map(|(_, _, bytes)| bytes).sum::<u64>()
+                > HEAP_BUILT_TABLE_BYTES_BUDGET)
+    {
+        indexes.remove(0);
+    }
+}
+
+/// The popup's loader: a missing, stale or mispaired `structures.qoix` costs this square a slow
+/// first click, never the answer: the index is derived, so the build gives the same edges.
+/// Only a table that cannot become an index is an error. The release stays immutable: the
+/// built index is never written back.
+pub fn load_square_obstacle_index_or_build_it_in_process(
+    square_dir: &Path,
+    square: Square,
+) -> Result<Option<Arc<ObstacleIndex>>, String> {
+    let index_file_fault = match load_square_obstacle_index(square_dir, None) {
+        Ok(index) => return Ok(index),
+        Err(fault) => fault,
+    };
+    let arrow_path = square_dir.join(STRUCTURES_ARROW);
+    let build = || -> Result<Arc<ObstacleIndex>, String> {
+        let meta =
+            std::fs::metadata(&arrow_path).map_err(|e| format!("{}: {e}", arrow_path.display()))?;
+        let key = file_identity(&meta);
+        if let Some(index) = heap_built(&key) {
+            return Ok(index);
+        }
+        let _one_build = ONE_BUILD_AT_A_TIME
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(index) = heap_built(&key) {
+            return Ok(index);
+        }
+        let bytes =
+            std::fs::read(&arrow_path).map_err(|e| format!("{}: {e}", arrow_path.display()))?;
+        let index = Arc::new(
+            crate::structure_store::build_obstacle_index_from_arrow_bytes(
+                square,
+                &bytes,
+                &arrow_path,
+            )?,
+        );
+        keep_heap_built(key, &index, bytes.len() as u64);
+        Ok(index)
+    };
+    match build() {
+        Ok(index) => {
+            square_store::warn_once::warn_once(
+                &format!(
+                    "{index_file_fault}; serving an index built in process from {}",
+                    arrow_path.display()
+                ),
+                "",
+            );
+            Ok(Some(index))
+        }
+        Err(build_fault) => Err(format!(
+            "{index_file_fault}; building it in process failed: {build_fault}"
+        )),
+    }
+}
+
 /// One square's index, or `None` when there is no square directory (outside
 /// the prepared world). A square directory without `structures.arrow` is a
 /// broken tree — the structures step writes a 0-row table for every square any
@@ -124,13 +249,7 @@ pub fn load_square_obstacle_index(
     let meta = file
         .metadata()
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    let key = (
-        meta.dev(),
-        meta.ino(),
-        meta.len(),
-        meta.mtime(),
-        meta.mtime_nsec(),
-    );
+    let key = file_identity(&meta);
     let check_pairing = |built_from: IndexFileProvenance| -> Result<(), String> {
         let other_bytes = match expected_fingerprint {
             Some(want) if want != built_from.data_ver => Some(format!(
@@ -151,15 +270,9 @@ pub fn load_square_obstacle_index(
             None => Ok(()),
         }
     };
-    {
-        let mut memo = memo().lock().unwrap_or_else(|e| e.into_inner());
-        memo.stamp += 1;
-        let stamp = memo.stamp;
-        if let Some((index, built_from, touched)) = memo.map.get_mut(&key) {
-            *touched = stamp;
-            check_pairing(*built_from)?;
-            return Ok(Some(Arc::clone(index)));
-        }
+    if let Some((index, built_from)) = remembered(&key) {
+        check_pairing(built_from)?;
+        return Ok(Some(index));
     }
     // SAFETY: the file is written once (tmp + rename) and a release is never
     // edited in place, so no writer can change these bytes under the mapping.
@@ -180,16 +293,7 @@ pub fn load_square_obstacle_index(
         ObstacleIndex::from_blob(blob, CACHE_CODE_VER)
             .map_err(|e| format!("{}: {e}; {REBUILD_HINT}", path.display()))?,
     );
-    let mut memo = memo().lock().unwrap_or_else(|e| e.into_inner());
-    memo.stamp += 1;
-    let stamp = memo.stamp;
-    if memo.map.len() >= MEMO_CAP {
-        if let Some((&evict, _)) = memo.map.iter().min_by_key(|(_, (_, _, t))| *t) {
-            memo.map.remove(&evict);
-        }
-    }
-    memo.map
-        .insert(key, (Arc::clone(&index), built_from, stamp));
+    remember(key, &index, built_from);
     Ok(Some(index))
 }
 
@@ -363,6 +467,69 @@ mod tests {
         std::fs::remove_file(dir.join(STRUCTURES_QOIX)).unwrap();
         std::fs::write(dir.join(STRUCTURES_QOIX), bytes).unwrap();
         refuses(None, "stale");
+    }
+
+    /// The tests that fill the process-wide heap-built budget take turns, so neither evicts
+    /// the other's index between two of its own loads.
+    static HEAP_BUILT_BUDGET_TESTS_TAKE_TURNS: Mutex<()> = Mutex::new(());
+
+    /// The visitor's loader answers all three index faults with the builder's own edges.
+    #[test]
+    fn popup_builds_a_missing_stale_or_mispaired_index_in_process() {
+        let _turn = HEAP_BUILT_BUDGET_TESTS_TAKE_TURNS.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let square = grid::square_of(LAT, LON);
+        let dir = fx::square_dir(tmp.path(), square);
+        std::fs::create_dir_all(&dir).unwrap();
+        let arrow = dir.join(STRUCTURES_ARROW);
+        let serves_edges = |edges: usize| {
+            assert!(load_square_obstacle_index(&dir, None).is_err());
+            let index = load_square_obstacle_index_or_build_it_in_process(&dir, square)
+                .unwrap()
+                .unwrap();
+            assert_eq!(index.edge_count(), edges);
+        };
+        fx::write_structure_file(&arrow, &[house(12)], true);
+        serves_edges(4);
+        finalize_square_structures(&dir, square).unwrap();
+        fx::write_structure_file(&arrow, &[house(12), house(20)], true);
+        serves_edges(8);
+        finalize_square_structures(&dir, square).unwrap();
+        let mut bytes = std::fs::read(dir.join(STRUCTURES_QOIX)).unwrap();
+        bytes[8..16].copy_from_slice(&(CACHE_CODE_VER ^ 1).to_le_bytes());
+        std::fs::remove_file(dir.join(STRUCTURES_QOIX)).unwrap();
+        std::fs::write(dir.join(STRUCTURES_QOIX), bytes).unwrap();
+        serves_edges(8);
+        std::fs::write(&arrow, b"not Arrow").unwrap();
+        let fault = load_square_obstacle_index_or_build_it_in_process(&dir, square)
+            .err()
+            .unwrap();
+        assert!(fault.contains("building it in process failed"), "{fault}");
+    }
+
+    /// Concurrent clicks and rayon workers on one stale square share ONE build: every caller
+    /// gets the same index, so the table was read once.
+    #[test]
+    fn concurrent_popups_of_one_stale_square_share_one_in_process_build() {
+        let _turn = HEAP_BUILT_BUDGET_TESTS_TAKE_TURNS.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let square = grid::square_of(LAT, LON);
+        let dir = fx::square_dir(tmp.path(), square);
+        std::fs::create_dir_all(&dir).unwrap();
+        fx::write_structure_file(&dir.join(STRUCTURES_ARROW), &[house(12)], true);
+        let built: Vec<_> = std::thread::scope(|scope| {
+            let clicks: Vec<_> = (0..8)
+                .map(|_| {
+                    scope.spawn(|| {
+                        load_square_obstacle_index_or_build_it_in_process(&dir, square)
+                            .unwrap()
+                            .unwrap()
+                    })
+                })
+                .collect();
+            clicks.into_iter().map(|click| click.join().unwrap()).collect()
+        });
+        assert!(built.iter().all(|index| Arc::ptr_eq(index, &built[0])));
     }
 
     /// No square directory is the answer "no obstacles" (outside the prepared

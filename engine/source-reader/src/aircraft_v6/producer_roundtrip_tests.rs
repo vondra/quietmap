@@ -9,6 +9,56 @@ use arrow::{
 use noise_compute::compute::aircraft_v6::airport_traffic::AirportSummaryEntry;
 use std::sync::Arc;
 
+fn cruise_bucket(cruise_cell_id: u64, unique_count: u32) -> CruiseBucket {
+    CruiseBucket {
+        cruise_cell_id,
+        class: 3,
+        rep_profile_idx: 2,
+        fl_bin: 4,
+        period: 1,
+        sum_length_m: 10000.0,
+        heading_bin: 2,
+        rep_alt_m: 11000.0,
+        rep_speed_kt: 450.0,
+        unique_count,
+        source_id: 2,
+        origin: 0,
+        top_candidates: vec![CruiseTopCandidate {
+            flight_id: 42,
+            callsign: "TEST42".into(),
+            aircraft_type: *b"A320",
+            peak_lmax_25m_db: 95.0,
+            altitude_m: 11000.0,
+        }],
+    }
+}
+
+/// "aircraft" is one layer of the answer: a stale airborne stamp drops the valid cruise of
+/// the same query with it, so the flag never stands beside an aircraft source.
+#[test]
+fn stale_airborne_stamp_drops_the_whole_aircraft_layer() {
+    let prepared = tempfile::tempdir().unwrap();
+    let (lat, lon) = (50.1, 14.26);
+    let dir = crate::query::square_dir(prepared.path(), grid::square_of(lat, lon));
+    std::fs::create_dir_all(&dir).unwrap();
+    let id = grid::cruise::cruise_cell_id(lat, lon);
+    write_cruise(&dir.join("cruise.arrow"), &[cruise_bucket(id, 20)], 12).unwrap();
+    let served = crate::collect_sources_at_point(prepared.path(), lat, lon).unwrap();
+    assert!(!served.aircraft_cruise_batches.is_empty());
+    assert!(served.unavailable_layers.is_empty());
+
+    let stale = Schema::new(Vec::<Field>::new()).with_metadata(
+        [("airborne_contract".to_string(), "another".to_string())].into(),
+    );
+    let file = std::fs::File::create(dir.join("airborne.arrow")).unwrap();
+    let mut writer = arrow::ipc::writer::FileWriter::try_new(file, &stale).unwrap();
+    writer.finish().unwrap();
+    let served = crate::collect_sources_at_point(prepared.path(), lat, lon).unwrap();
+    assert_eq!(served.unavailable_layers, ["aircraft"]);
+    assert!(served.aircraft_cruise_batches.is_empty());
+    assert_eq!(served.n_days, 365);
+}
+
 fn flight() -> FlightSegment {
     FlightSegment {
         flight_id: 42,
@@ -106,27 +156,7 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
     let id = grid::cruise::cruise_cell_id(50.1, 14.26);
     write_cruise(
         &cruise,
-        &[CruiseBucket {
-            cruise_cell_id: id,
-            class: 3,
-            rep_profile_idx: 2,
-            fl_bin: 4,
-            period: 1,
-            sum_length_m: 10000.0,
-            heading_bin: 2,
-            rep_alt_m: 11000.0,
-            rep_speed_kt: 450.0,
-            unique_count: 20,
-            source_id: 2,
-            origin: 0,
-            top_candidates: vec![CruiseTopCandidate {
-                flight_id: 42,
-                callsign: "TEST42".into(),
-                aircraft_type: *b"A320",
-                peak_lmax_25m_db: 95.0,
-                altitude_m: 11000.0,
-            }],
-        }],
+        &[cruise_bucket(id, 20)],
         12,
     )
     .unwrap();
@@ -309,27 +339,7 @@ fn cruise_popup_names_and_highlights_the_actual_producer_cell() {
     ] {
         write_cruise(
             &path,
-            &[CruiseBucket {
-                cruise_cell_id: (x << 15) | y,
-                class: 3,
-                rep_profile_idx: 2,
-                fl_bin: 4,
-                period: 1,
-                sum_length_m: 10000.0,
-                heading_bin: 2,
-                rep_alt_m: 11000.0,
-                rep_speed_kt: 450.0,
-                unique_count: 1,
-                source_id: 2,
-                origin: 0,
-                top_candidates: vec![CruiseTopCandidate {
-                    flight_id: 42,
-                    callsign: "TEST42".into(),
-                    aircraft_type: *b"A320",
-                    peak_lmax_25m_db: 95.0,
-                    altitude_m: 11000.0,
-                }],
-            }],
+            &[cruise_bucket((x << 15) | y, 1)],
             12,
         )
         .unwrap();

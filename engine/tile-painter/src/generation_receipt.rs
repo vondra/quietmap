@@ -1,10 +1,13 @@
-//! Published source/code pins let a popup verify a different producer executable.
+//! The published receipt pins stored corners to their source manifest and the hand-bumped physics generation.
 use crate::corner_store::CornerGeneration;
 use anyhow::{ensure, Context, Result};
 use rusqlite::{params, Connection, OpenFlags, TransactionBehavior};
 use sha2::{Digest, Sha256};
 use std::{fs::File, io::Read, path::Path};
-include!(concat!(env!("OUT_DIR"), "/surface_code.rs"));
+
+/// Names the corner value physics and store layout. Bump it by hand in the commit that changes
+/// corner values or layout; a hash of source text invalidated every store on a comment edit.
+pub const SURFACE_FORMAT_AND_PHYSICS_GENERATION: [u8; 32] = *b"surface-corners-physics-gen-0001";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GenerationReceipt {
@@ -18,7 +21,7 @@ impl GenerationReceipt {
     }
     pub fn publish(self, root: &Path) -> Result<()> {
         ensure!(
-            self.code == SURFACE_CODE_DIGEST,
+            self.code == SURFACE_FORMAT_AND_PHYSICS_GENERATION,
             "producer code receipt mismatch"
         );
         crate::durable_directory::create_dir_all(root)?;
@@ -53,7 +56,7 @@ impl GenerationReceipt {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let receipt = read_receipt(&connection)?;
         ensure!(
-            receipt.sources == sources && receipt.code == SURFACE_CODE_DIGEST,
+            receipt.sources == sources && receipt.code == SURFACE_FORMAT_AND_PHYSICS_GENERATION,
             "stored corners do not match current sources and shared physics"
         );
         Ok(Some(receipt))
@@ -110,7 +113,7 @@ mod tests {
         assert!(!root.exists());
         let receipt = GenerationReceipt {
             sources: [1; 32],
-            code: SURFACE_CODE_DIGEST,
+            code: SURFACE_FORMAT_AND_PHYSICS_GENERATION,
             producer: [4; 32],
         };
         receipt.publish(&root).unwrap();

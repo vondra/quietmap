@@ -2,8 +2,9 @@
 //!
 //! The `qm_blocks` batch envelopes prune bodies outside the click's reach.
 //! Only absent optional files are empty; opening or decoding an existing file
-//! fails the query on error. Source contracts reject stale coordinate and
-//! layer semantics.
+//! fails the query on error. A stale structures stamp refuses the square (the
+//! table is the screening geometry); a stale leisure, ships or airborne stamp
+//! drops that emission layer and names it in the answer.
 //!
 //! Batches decode through `FileDecoder` over a `Buffer` that owns the mapping,
 //! so every decoded array is a slice of the file-backed pages the kernel can
@@ -219,6 +220,10 @@ impl LazyArrow {
         })
     }
 
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// File-level schema (None only for an absent optional file).
     pub fn schema(&self) -> Option<&arrow::datatypes::SchemaRef> {
         self.schema.as_ref()
@@ -308,54 +313,77 @@ pub struct SquareData {
     pub aircraft_airport_traffic: LazyArrow,
     /// OSM aeroway microsegments (`airport_lines.arrow`).
     pub airport_lines: LazyArrow,
+    /// Emission layers whose file carries another contract stamp: read as absent and named in
+    /// the response; the point query then skips that layer in every square. Never cached, so
+    /// a repaired file serves on the next click. The world build audit refuses such a file.
+    pub unavailable_layers: Vec<&'static str>,
 }
 
 /// Load all source data from a square directory `…/z9/<x>/<y>`. Only footers +
 /// schemas read here; batch bodies decode lazily at query time.
 pub fn load_square(dir: &Path) -> Result<SquareData, String> {
+    // The structure table is also the screening geometry: without it every level would be
+    // served louder with nothing to tell the visitor why, so its stamp refuses the square.
     let structures = LazyArrow::open(&dir.join("structures.arrow"))?;
-    let leisure = LazyArrow::open(&dir.join("leisure.arrow"))?;
     if let Some(schema) = structures.schema() {
         crate::structure_contract::validate_schema(schema)?;
     }
-    check_contract(
-        &leisure,
-        "leisure_contract",
-        LEISURE_CONTRACT_V2,
+    let mut unavailable_layers = Vec::new();
+    let mut open_or_drop_layer =
+        |file: &str, layer: &'static str, stamps: &[(&str, &str)], recovery: &str| {
+            let path = dir.join(file);
+            let arrow = LazyArrow::open(&path)?;
+            let fault = arrow.schema().and_then(|schema| {
+                stamps.iter().find_map(|(key, expected)| {
+                    let found = schema.metadata().get(*key).map(String::as_str);
+                    (found != Some(*expected))
+                        .then(|| format!("{key} expected {expected}, found {found:?}"))
+                })
+            });
+            Ok::<_, String>(match fault {
+                None => arrow,
+                Some(fault) => {
+                    crate::warn_once::warn_once(
+                        &format!(
+                            "{}: {fault}; serving without the {layer} layer — {recovery}",
+                            path.display()
+                        ),
+                        "",
+                    );
+                    unavailable_layers.push(layer);
+                    LazyArrow::empty()
+                }
+            })
+        };
+    // Every extract-written file pins its coordinate grid; a reader must never misread
+    // another grid.
+    let leisure = open_or_drop_layer(
         "leisure.arrow",
+        "leisure",
+        &[
+            ("leisure_contract", LEISURE_CONTRACT_V2),
+            ("grid", GRID_CONTRACT_Z30),
+        ],
         "re-extract the source store",
     )?;
-    let ships = LazyArrow::open(&dir.join("ships.arrow"))?;
-    check_contract(
-        &ships,
-        "ships_contract",
-        SHIPS_CONTRACT_V1,
+    let ships = open_or_drop_layer(
         "ships.arrow",
+        "ships",
+        &[
+            ("ships_contract", SHIPS_CONTRACT_V1),
+            ("grid", GRID_CONTRACT_Z30),
+        ],
         "rerun scripts/ships/build_ships.py",
     )?;
-    // Every extract-written file pins its coordinate grid; readers that do
-    // not know integer grids must refuse the file, never misread it.
-    for (arrow, label) in [
-        (&structures, "structures.arrow"),
-        (&leisure, "leisure.arrow"),
-        (&ships, "ships.arrow"),
-    ] {
-        check_contract(
-            arrow,
-            "grid",
-            GRID_CONTRACT_Z30,
-            label,
-            "re-extract the source store",
-        )?;
-    }
-    // The nested one-row-per-flight layout decodes as valid Arrow; only the
-    // stamp tells it from the flattened owner rows this reader computes on.
-    let aircraft_airborne = LazyArrow::open(&dir.join("airborne.arrow"))?;
-    check_contract(
-        &aircraft_airborne,
-        "airborne_contract",
-        crate::aircraft_contract::AIRBORNE_CONTRACT,
+    // The nested one-row-per-flight airborne layout decodes as valid Arrow; only its stamp
+    // tells it from the flattened owner rows. The point query drops cruise and ground with it.
+    let aircraft_airborne = open_or_drop_layer(
         "airborne.arrow",
+        "aircraft",
+        &[(
+            "airborne_contract",
+            crate::aircraft_contract::AIRBORNE_CONTRACT,
+        )],
         "re-extract aircraft Stage 2A (shuffle + airborne flatten)",
     )?;
 
@@ -375,6 +403,7 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         aircraft_cruise: LazyArrow::open(&dir.join("cruise.arrow"))?,
         aircraft_airport_traffic: LazyArrow::open(&dir.join("airport_traffic.arrow"))?,
         airport_lines: LazyArrow::open(&dir.join("airport_lines.arrow"))?,
+        unavailable_layers,
     })
 }
 
@@ -385,32 +414,11 @@ pub const STRUCTURE_KIND_BARRIER: u8 = 1;
 
 /// Per-file contract stamps (sources of truth: `osm-extract::finalize`,
 /// `scripts/structures/build-structures.py`). Mirrored here so the popup
-/// rejects a stale file whose semantics predate the current schema.
+/// drops a stale layer whose semantics predate the current schema.
 pub const LEISURE_CONTRACT_V2: &str = "leisure_v2";
 /// `ships.arrow` schema stamp written by `scripts/ships/build_ships.py`.
 pub const SHIPS_CONTRACT_V1: &str = "ships_v1";
 pub const GRID_CONTRACT_Z30: &str = "z30";
-
-/// Verify a source arrow's schema carries the expected stamp. Missing file
-/// passes. Fails loud on mismatch, naming the build step that rewrites it.
-fn check_contract(
-    arrow: &LazyArrow,
-    key: &str,
-    expected: &str,
-    label: &str,
-    recovery: &str,
-) -> Result<(), String> {
-    let Some(schema) = arrow.schema() else {
-        return Ok(());
-    };
-    let c = schema.metadata().get(key).map(String::as_str);
-    if c != Some(expected) {
-        return Err(format!(
-            "{label} {key} mismatch (expected {expected}, got {c:?}) — {recovery}"
-        ));
-    }
-    Ok(())
-}
 
 fn check_column_type(
     arrow: &LazyArrow,

@@ -22,9 +22,6 @@ bytes = "1"
 # (AsyncPmTilesReader) so tests read archives back through format truth.
 pmtiles = { version = "0.23.0", default-features = false, features = ["write", "iter-async"] }
 
-[build-dependencies]
-sha2 = "0.11"
-
 [[bin]]
 name = "corner-artifact-check"
 path = "src/bin/corner_artifact_check.rs"

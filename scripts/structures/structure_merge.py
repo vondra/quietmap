@@ -1,8 +1,6 @@
 """One-to-one OSM/Overture merge preserving emission order and screening identity."""
 
 import os
-from hashlib import sha256
-from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -10,11 +8,10 @@ import shapely
 from shapely import STRtree
 
 import qmgrid
-import structure_contract
-import structure_inputs
-import structure_freshness
-import structure_inventory
-from structure_freshness import input_fingerprint
+from structure_freshness import (
+    fingerprint_with_ctime_of_squares_built_before_content_digests, input_content_digest,
+    input_fingerprint, structure_input_files,
+)
 from structure_contract import (
     SCHEMA, CONTRACT_KEY, CONTRACT_VERSION, KIND_BUILDING, KIND_BARRIER,
     load_osm_buildings, load_barriers, wall_grid_poly, wall_centroid_grid,
@@ -27,34 +24,37 @@ from structure_inputs import (
 
 IOU_MATCH_THRESHOLD = 0.5
 
-def builder_version():
-    """A source-code correction invalidates resume even with frozen inputs."""
-    digest = sha256()
-    for module in (qmgrid, structure_contract, structure_inputs, structure_freshness,
-                   structure_inventory):
-        assert module.__file__ is not None
-        digest.update(Path(module.__file__).read_bytes())
-    for name in ("build-structures.py", "structure_merge.py"):
-        digest.update(Path(__file__).with_name(name).read_bytes())
-    return digest.hexdigest()
+# Bump by hand in the commit that changes the rows this builder writes. A hash of the source
+# text rebuilt every square of the world after a comment edit.
+BUILDER_VERSION = "structures-builder-1"
+# Source-text hashes stamped before the explicit version; they wrote the same rows. The served
+# world counted 217,414 worker-pool and 44,730 serial RAM-mosaic squares (2026-09-18). The next
+# world structures build restamps every square: delete these with it, together with
+# fingerprint_with_ctime_of_squares_built_before_content_digests.
+SOURCE_TEXT_HASHES_OF_BUILDER_VERSION_1 = (
+    "ee8627f5ab0d96d69c97f9039048b720bafc14b11dd9afffe436d81a20da9345",
+    "4a5f9dbd74d3c216237204aebc2760d580754faf69916973468884c7865486a4",
+)
+ACCEPTED_BUILDER_VERSIONS = {
+    version.encode() for version in (BUILDER_VERSION, *SOURCE_TEXT_HASHES_OF_BUILDER_VERSION_1)}
 
 
-BUILDER_VERSION = builder_version()
-# On-disk squares from the serial RAM-mosaic producer. Windowed zonal reads the
-# same IPR window, so those files stay fresh across the worker-pool cutover.
-SERIAL_BUILDER_VERSION = "4a5f9dbd74d3c216237204aebc2760d580754faf69916973468884c7865486a4"
-
-
-def structure_is_fresh(out_path, inputs):
+def structure_is_fresh(out_path, input_files):
     if not os.path.exists(out_path):
         return False
     with ipc.open_file(out_path) as output_file:
         metadata = output_file.schema.metadata or {}
-    version = metadata.get(b"builder_version")
-    return (metadata.get(b"input_fingerprint") == inputs.encode()
-            and version in (BUILDER_VERSION.encode(), SERIAL_BUILDER_VERSION.encode())
+    if not (metadata.get(b"builder_version") in ACCEPTED_BUILDER_VERSIONS
             and metadata.get(CONTRACT_KEY.encode()) == CONTRACT_VERSION.encode()
-            and metadata.get(b"grid") == b"z30")
+            and metadata.get(b"grid") == b"z30"):
+        return False
+    if metadata.get(b"input_fingerprint") in (
+            input_fingerprint(input_files).encode(),
+            fingerprint_with_ctime_of_squares_built_before_content_digests(input_files).encode()):
+        return True
+    # Size or mtime moved: only different bytes make the input changed.
+    stored_content = metadata.get(b"input_content_digest")
+    return stored_content is not None and stored_content == input_content_digest(input_files).encode()
 
 
 def match_pairs(osm_geoms, osm_geom_idx, overture_rows):
@@ -100,7 +100,7 @@ def match_pairs(osm_geoms, osm_geom_idx, overture_rows):
         pairs[j] = i
     return pairs
 
-def build_square(name, prepared_dir, overture_rows, overture_inputs, ghsl, regional):
+def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, regional):
     """Write one square's structures.arrow; return the census dict, or None
     when the square is up to date (idempotent skip)."""
     square = qmgrid.parse_square_name(name)
@@ -110,9 +110,13 @@ def build_square(name, prepared_dir, overture_rows, overture_inputs, ghsl, regio
     square_dir = os.path.join(prepared_dir, "z9", str(x), str(y))
     overture_rows = overture_rows or []
     out_path = os.path.join(square_dir, "structures.arrow")
-    inputs = input_fingerprint(square_dir, overture_inputs, ghsl, regional)
-    if structure_is_fresh(out_path, inputs):
+    input_files = structure_input_files(square_dir, overture_files, ghsl, regional)
+    if structure_is_fresh(out_path, input_files):
         return None
+    # Both stamps describe the inputs BEFORE the read: an input rewritten during the build then
+    # differs from both on the next run and the square is rebuilt.
+    fingerprint_before_reading = input_fingerprint(input_files)
+    content_digest_before_reading = input_content_digest(input_files)
     osm = load_osm_buildings(os.path.join(square_dir, "buildings.arrow"))
     barriers = load_barriers(os.path.join(square_dir, "barriers.arrow"))
 
@@ -255,7 +259,8 @@ def build_square(name, prepared_dir, overture_rows, overture_inputs, ghsl, regio
     meta[CONTRACT_KEY] = CONTRACT_VERSION
     meta["grid"] = "z30"
     meta["builder_version"] = BUILDER_VERSION
-    meta["input_fingerprint"] = inputs
+    meta["input_fingerprint"] = fingerprint_before_reading
+    meta["input_content_digest"] = content_digest_before_reading
     meta["building_rows"] = str(n_osm + n_ovt_only)
     meta["barrier_rows"] = str(len(barriers))
     schema = SCHEMA.with_metadata(meta)

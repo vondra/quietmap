@@ -91,6 +91,7 @@ export interface ValidationCohort {
   data_year: string
   runtime_sha256: string
   prepared_sha256: string
+  cohort_unstable?: true
 }
 
 export interface ValidationPayload {

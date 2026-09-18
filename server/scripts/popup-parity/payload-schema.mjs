@@ -34,8 +34,11 @@ const ROOT_KEYS = [
 ]
 const ROOT_OPTIONAL_KEYS = [
   'center', 'h3_center', 'envelope_class', 'envelope_delta_db', 'facade_lden',
-  'indoor_lden_tilted', 'segments',
+  'indoor_lden_tilted', 'segments', 'unavailable_layers',
 ]
+// Emission layers the server answered without; the comparison keeps the key, so an answer
+// that lacks a layer on one side only is a structural difference, never a quiet delta.
+const UNAVAILABLE_LAYERS = new Set(['aircraft', 'leisure', 'ships'])
 const SEGMENT_KEYS = [
   'kind', 'segment_idx', 'name', 'subtype', 'is_dominant_of_group',
   'start_lat', 'start_lon', 'end_lat', 'end_lon', 'cp_lat', 'cp_lon',
@@ -251,6 +254,15 @@ export function validatePopupPayload(value, point, label = 'payload') {
   const layers = array(segments, `${label}.segments`).map((segment, i) => validateSegment(segment, `${label}.segments[${i}]`))
   validateMeta(value.segments_meta, layers, `${label}.segments_meta`)
   numericObject(value.timings, `${label}.timings`, TIMING_KEYS)
+  if (Object.hasOwn(value, 'unavailable_layers')) {
+    const dropped = array(value.unavailable_layers, `${label}.unavailable_layers`)
+    if (dropped.length === 0 || dropped.some((layer) => !UNAVAILABLE_LAYERS.has(layer))) {
+      fail(`${label}.unavailable_layers`, 'expected a non-empty list of aircraft, leisure, ships')
+    }
+    if (dropped.includes('aircraft') && sourceNames.includes('aircraft')) {
+      fail(`${label}.unavailable_layers`, 'names aircraft beside an aircraft source')
+    }
+  }
   // Indoor projection floors each source independently at 0 dB, so only the
   // outdoor wire retains exact linear-energy additivity.
   if (!Object.hasOwn(value, 'envelope_delta_db')) {

@@ -138,7 +138,11 @@ export async function validationViewRoutes(app: FastifyInstance, options: {
   app.get('/api/validation/cohort', async (_request, reply) => {
     reply.header('Cache-Control', 'no-store')
     try {
-      return reply.send(await cohortProvider())
+      const cohort = await cohortProvider()
+      if (cohort.cohort_unstable) {
+        app.log.warn({ cohort_id: cohort.cohort_id }, 'validation cohort unstable: model code or prepared data changed under this process; restart to stabilise')
+      }
+      return reply.send(cohort)
     } catch (error) {
       app.log.error(error, 'validation cohort fingerprint failed')
       return reply.code(503).send({ error: 'validation cohort unavailable' })
@@ -150,6 +154,9 @@ export async function validationViewRoutes(app: FastifyInstance, options: {
     let currentCohort: ValidationCohort | null = null
     try {
       currentCohort = await cohortProvider()
+      if (currentCohort.cohort_unstable) {
+        warnings.push('model code or prepared data changed under this server process — model results may mix cohorts until it restarts')
+      }
     } catch (error) {
       warnings.push(`model cohort unavailable — model results hidden; ${error instanceof Error ? error.message : String(error)}`)
     }

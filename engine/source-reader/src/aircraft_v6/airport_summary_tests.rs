@@ -185,13 +185,7 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
             write_airport_traffic(&traffic_path, &traffic_rows, 12, 365).unwrap();
             stamp_airport_summaries(&traffic_path, summaries).unwrap();
         };
-        for (defect, expected) in [
-            ("unstamped", "Stage 2C"),
-            ("empty", "missing airport"),
-            ("conflict", "disagrees across cells"),
-            ("stale", "re-extract"),
-            ("corrupt", "airport_traffic"),
-        ] {
+        for defect in ["unstamped", "empty", "conflict", "stale", "corrupt"] {
             match defect {
                 "unstamped" => {
                     write_airport_traffic(&traffic_path, &traffic_rows, 12, 365).unwrap()
@@ -223,8 +217,19 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
                 "corrupt" => std::fs::write(&traffic_path, b"broken").unwrap(),
                 _ => unreachable!(),
             }
-            let error = crate::collect_sources_at_point(&prepared, lat + 0.001, lon).unwrap_err();
-            assert!(error.contains(expected), "{defect}: {error}");
+            // Unreadable bytes refuse the query; a stamp the reader does not know costs only
+            // the aircraft layer.
+            let served = crate::collect_sources_at_point(&prepared, lat + 0.001, lon);
+            if defect == "corrupt" {
+                let Err(error) = served else {
+                    panic!("unreadable bytes must refuse the query")
+                };
+                assert!(error.contains("airport_traffic"), "{error}");
+            } else {
+                let served = served.unwrap_or_else(|error| panic!("{defect}: {error}"));
+                assert_eq!(served.unavailable_layers, ["aircraft"], "{defect}");
+                assert!(served.aircraft_airport_traffic_batches.is_empty());
+            }
             std::fs::write(&traffic_path, &original).unwrap();
         }
         assert!(crate::collect_sources_at_point(&prepared, lat + 0.001, lon).is_ok());

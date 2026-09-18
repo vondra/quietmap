@@ -14,6 +14,9 @@ export type ValidationCohort = {
   data_year: string
   runtime_sha256: string
   prepared_sha256: string
+  /** Present when files changed under the live process: its caches may still hold the older
+   * bytes, so results cannot be attributed to this cohort until the server restarts. */
+  cohort_unstable?: true
 }
 
 export type ValidationCohortProvider = () => Promise<ValidationCohort>
@@ -246,11 +249,11 @@ export function createValidationCohortProvider(options: ValidationCohortOptions 
       ])
       // source-reader keeps decoded squares, rasters and square-country-city data in
       // process-wide caches. A disk change cannot become a new valid cohort
-      // in that same process: some queried squares may still be old. Fail closed
-      // until restart instead of labelling cached results with the new hash.
-      if (Math.max(runtime.newestChangeMs, prepared.newestChangeMs) > modelProcessStartedAtMs) {
-        throw new Error('model code or prepared data changed after this server process loaded; restart required')
-      }
+      // in that same process: some queried squares may still be old. A touch or an
+      // rsync must not take the route down, so the cohort says it is unstable and
+      // its readers decide; popup-parity refuses it.
+      const changedAfterProcessLoaded =
+        Math.max(runtime.newestChangeMs, prepared.newestChangeMs) > modelProcessStartedAtMs
       const runtimeSha256 = runtime.sha256
       const preparedSha256 = prepared.sha256
       const identity = JSON.stringify({ data_year: dataYear, runtime_sha256: runtimeSha256, prepared_sha256: preparedSha256 })
@@ -262,11 +265,10 @@ export function createValidationCohortProvider(options: ValidationCohortOptions 
         runtime_sha256: runtimeSha256,
         prepared_sha256: preparedSha256,
       }
-      if (establishedCohortId && cohort.cohort_id !== establishedCohortId) {
-        throw new Error('model code or prepared data changed after this server established its cohort; restart required')
-      }
-      establishedCohortId = cohort.cohort_id
-      return cohort
+      establishedCohortId ??= cohort.cohort_id
+      return changedAfterProcessLoaded || cohort.cohort_id !== establishedCohortId
+        ? { ...cohort, cohort_unstable: true }
+        : cohort
     })()
     inFlight = computation
     try {

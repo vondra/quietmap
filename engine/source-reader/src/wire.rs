@@ -226,6 +226,10 @@ pub struct WireResult {
     pub segments_meta: Option<SegmentTracesSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timings: Option<WireTimings>,
+    /// Emission layers (aircraft, leisure, ships) whose files carried another contract: the
+    /// levels lack their noise, no source of them is served, and the popup says so.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_layers: Vec<&'static str>,
 }
 
 /// `indoor`: the winning envelope class, its effective delta, and the
@@ -236,6 +240,7 @@ pub fn build_wire_result(
     lng: f64,
     elevation: f64,
     indoor: Option<(noise_compute::envelope::EnvelopeClass, f64, f64)>,
+    unavailable_layers: Vec<&'static str>,
 ) -> WireResult {
     WireResult {
         center: [lat, lng],
@@ -263,5 +268,6 @@ pub fn build_wire_result(
         segments: result.segments,
         segments_meta: result.segments_meta,
         timings: result.timings.map(WireTimings::from),
+        unavailable_layers,
     }
 }

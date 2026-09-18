@@ -136,7 +136,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         "second owner square increase: {increase}"
     );
     // Two original observations remain two energy contributions, even when identical.
-    arrow_io::write_airborne(&path, &[row.clone(), row], 12, 0).unwrap();
+    arrow_io::write_airborne(&path, &[row.clone(), row.clone()], 12, 0).unwrap();
     let tripled = airborne(&popup(facade_lat, facade_lon));
     assert_eq!(tripled["segment_count"].as_u64().unwrap(), 3);
     let increase = tripled["lden"].as_f64().unwrap() - first["lden"].as_f64().unwrap();
@@ -170,4 +170,26 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         warm_north, expected_north,
         "previous click must not change aircraft sources"
     );
+    // Owner squares disagreeing on the sampling windows cost the visitor the aircraft layer,
+    // named in the answer; the building keeps its level and the popup is never refused.
+    arrow_io::write_airborne(&path, std::slice::from_ref(&row), 12, 5).unwrap();
+    let without_aircraft = popup(facade_lat, facade_lon);
+    assert_eq!(
+        without_aircraft["unavailable_layers"],
+        serde_json::json!(["aircraft"])
+    );
+    let served_layers = without_aircraft["sources"].as_array().unwrap();
+    assert!(served_layers.iter().all(|source| source["source_type"] != "aircraft"));
+    assert!(building_distance(&without_aircraft) > 0);
+    assert!(outside.get("unavailable_layers").is_none());
+    assert!(
+        crate::STORE.read().unwrap().squares.is_empty(),
+        "a square served with a fault is reloaded on the next click"
+    );
+    // The screening table is never dropped: a stale stamp refuses the popup end to end,
+    // even though its paired index still maps.
+    arrow_io::write_airborne(&path, std::slice::from_ref(&row), 12, 0).unwrap();
+    fx::write_structure_file(&facade_dir.join("structures.arrow"), &[], false);
+    let refused = crate::query_noise_at_point(facade_lat, facade_lon).unwrap_err();
+    assert!(refused.to_string().contains("structures_contract mismatch"), "{refused}");
 }

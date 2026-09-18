@@ -45,6 +45,9 @@ function validateCohort(value, label) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`${label}: expected object`)
   }
+  if (value.cohort_unstable === true) {
+    throw new Error(`${label}: cohort unstable — model code or prepared data changed under the server; restart it`)
+  }
   const keys = [
     'schema_version', 'cohort_id', 'cache_ttl_ms', 'data_year',
     'runtime_sha256', 'prepared_sha256',

@@ -11,7 +11,6 @@ import shapely.ops
 from pyproj import Transformer
 
 import qmgrid
-from structure_freshness import file_identity
 from structure_inventory import overture_sources
 
 MEASURED_MIN_M = 2.0      # zonal pixels below this are "not a building surface here"
@@ -40,7 +39,7 @@ class GlobalPrior:
         if self.crs is None:
             raise SystemExit(f"{path}: raster is not georeferenced — re-fetch it")
         self.tr = Transformer.from_crs("EPSG:4326", self.crs, always_xy=True)
-        self.input_identity = [file_identity(f) for f in sorted(self.ds.files)]
+        self.input_files = sorted(self.ds.files)
 
     def sample(self, lon, lat):
         x, y = self.tr.transform(lon, lat)
@@ -65,7 +64,7 @@ class RegionalHeights:
         self.gt = self.ds.transform
         self.w, self.h = self.ds.width, self.ds.height
         self.tr = Transformer.from_crs("EPSG:4326", self.ds.crs, always_xy=True)
-        self.input_identity = [file_identity(f) for f in sorted(self.ds.files)]
+        self.input_files = sorted(self.ds.files)
         self.nodata = self.ds.nodata
 
     def covers(self, x, y):
@@ -215,13 +214,13 @@ def read_overture_parquet(parquet_dir, square):
     rule, then assigned to this square by GEOS centroid. A z9 square never
     straddles the antimeridian (spans slice [-180, 180)), so no unwrapping.
 
-    Returns (rows, identities of every contributing parquet)."""
+    Returns (rows, every contributing parquet file)."""
     from shapely import wkb as shapely_wkb
 
     rows = []
     inputs = []
     for lat, lon, src in overture_sources(parquet_dir, square):
-        inputs.append(file_identity(src))
+        inputs.append(src)
         pf = pq.ParquetFile(src)
         have = set(pf.schema_arrow.names)
         cols = [c for c in ("geometry", "height", "num_floors", "class",

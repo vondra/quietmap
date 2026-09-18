@@ -68,8 +68,8 @@ def barriers_arrow(path, rows):
 
 
 class FakeGlobalPrior:
-    def __init__(self, mtime=0.0):
-        self.input_identity = ("fake-ghsl", mtime)
+    def __init__(self, input_files=()):
+        self.input_files = input_files
 
     def sample(self, _lon, _lat):
         return 12.5
@@ -118,7 +118,7 @@ def write_prepared_roundtrip(root):
     barriers_arrow(square / "barriers.arrow", [{
         "osm_id": 77, "segment_idx": 0, "start_lat": 49.78, "start_lon": 14.17,
         "end_lat": 49.7801, "end_lon": 14.1701, "height": 2.5, "height_tier": 0}])
-    BUILDER.build_square(SQUARE, root, [ovt_row(OVT_LONELY)], 0,
+    BUILDER.build_square(SQUARE, root, [ovt_row(OVT_LONELY)], [],
                          FakeGlobalPrior(), None)
 
 

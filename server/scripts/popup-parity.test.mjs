@@ -269,6 +269,18 @@ test('schema fails unknown fields, invalid aircraft subtype, meta drift, and ene
   assert.throws(() => validatePopupPayload(energy, POINT), /linear-energy sum/)
 })
 
+test('a layer the server answered without is valid, and one-sided it is a structural difference', () => {
+  const served = payload()
+  served.unavailable_layers = ['leisure']
+  validatePopupPayload(served, POINT)
+  const state = compareCanonical(canonicalizePopup(payload()), canonicalizePopup(served), POINT.id)
+  assert.equal(comparisonReport(state).structural_differences.length, 1)
+  served.unavailable_layers = ['aircraft']
+  assert.throws(() => validatePopupPayload(served, POINT), /beside an aircraft source/)
+  served.unavailable_layers = ['buildings']
+  assert.throws(() => validatePopupPayload(served, POINT), /non-empty list/)
+})
+
 test('numeric differences are reported without an invented acoustic verdict', () => {
   const reference = canonicalizePopup(payload())
   const candidatePayload = payload(true)

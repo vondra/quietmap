@@ -183,6 +183,17 @@ fn prune_source_cache(square_names: &[String]) -> napi::Result<()> {
     Ok(())
 }
 
+/// A square answered without one of its layers leaves the cache with its query (the pins keep
+/// the running query valid), so a repaired file serves on the next click.
+#[cfg(feature = "node")]
+fn forget_squares_served_with_a_fault(square_names: &[String]) -> napi::Result<()> {
+    let mut store = STORE
+        .write()
+        .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
+    store.squares.retain(|id, _| !square_names.contains(id));
+    Ok(())
+}
+
 #[cfg(all(test, feature = "node"))]
 mod square_cache_tests;
 
@@ -403,7 +414,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         .collect();
 
     let t_load = t_start.elapsed();
-    let sources = collect_from_square_data(&square_refs, facade_lat, facade_lng)
+    let mut sources = collect_from_square_data(&square_refs, facade_lat, facade_lng)
         .map_err(|error| Error::new(Status::GenericFailure, error))?;
     let t_collect = t_start.elapsed() - t_load;
 
@@ -463,7 +474,8 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         Some(&mut traces),
     );
     let t_ground = t_start.elapsed() - t_load - t_collect;
-    aircraft_v6::add_v6_aircraft_to_result(
+    // Every aircraft fault is raised before the result is touched, so the other layers stand.
+    if let Err(fault) = aircraft_v6::add_v6_aircraft_to_result(
         &mut result,
         &mut traces,
         &receiver,
@@ -476,8 +488,17 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         &obstacle_set,
         sources.n_days,
         top_k_per_kind,
-    )
-    .map_err(|e| Error::new(Status::GenericFailure, e))?;
+    ) {
+        square_store::warn_once::warn_once(
+            &format!("{fault}; serving without the aircraft layer"),
+            &format!("first seen at ({facade_lat:.5}, {facade_lng:.5})"),
+        );
+        sources.unavailable_layers.push("aircraft");
+        sources.unavailable_layers.sort_unstable();
+    }
+    if !sources.unavailable_layers.is_empty() {
+        forget_squares_served_with_a_fault(&square_names)?;
+    }
     checked
         .ensure_valid()
         .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))?;
@@ -512,6 +533,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         lng,
         elevation,
         indoor.map(|(class, delta)| (class, delta, facade_lden)),
+        sources.unavailable_layers,
     );
     let json = serde_json::to_string(&wire_result).unwrap();
     let t_total = t_start.elapsed();

@@ -4,6 +4,7 @@ import { DataPoint } from './noise/noise-tooltips'
 import { HoverText } from './ui/info-tip'
 import { txtTable } from '../utils/formatters'
 import { SOURCE_LABELS } from './noise/shared'
+import { unavailableLayersSentence } from '../lib/unavailable-layers'
 import { SegmentList } from './noise/SegmentList'
 import { TabStrip, type PopupTab } from './noise/TabStrip'
 import { ContributorRow } from './noise/source/ContributorRow'
@@ -176,6 +177,7 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
             </div>
           </div>
           <IndoorEstimateNotice estimate={indoorEstimate} />
+          <UnavailableLayersNotice layers={data.unavailable_layers} />
           {hasSegmentsTab ? (
             <TabStrip
               active={tab}
@@ -244,7 +246,10 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
           <TimingsOverlay timings={data.timings ?? null} />
         </>
       ) : (
-        <div className="text-sm text-muted-foreground mt-1">No noise data computed for this location.</div>
+        <>
+          <div className="text-sm text-muted-foreground mt-1">No noise data computed for this location.</div>
+          <UnavailableLayersNotice layers={data.unavailable_layers} />
+        </>
       )}
     </div>
   )
@@ -285,6 +290,18 @@ function IndoorEstimateNotice({ estimate }: { estimate: IndoorEstimate | null })
           </span>
         </span>
       </HoverText>
+    </div>
+  )
+}
+
+// The server answered without these emission layers, so the level is lower than the real one:
+// the visitor must see that, not only a missing source row.
+function UnavailableLayersNotice({ layers }: { layers: NoiseComputeData['unavailable_layers'] }) {
+  const sentence = unavailableLayersSentence(layers)
+  if (!sentence) return null
+  return (
+    <div data-testid="unavailable-layers" role="status" className="mb-1 border-b border-border/50 py-1 text-xs font-medium text-amber-800">
+      {sentence}
     </div>
   )
 }

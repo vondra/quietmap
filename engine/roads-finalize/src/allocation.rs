@@ -151,5 +151,29 @@ pub fn intervals<'a>(road: &'a Road, candidates: &[&'a Road]) -> Vec<(f64, f64, 
             _ => children.push((pair[0], pair[1], counts, estimated)),
         }
     }
+    merge_children_shorter_than_a_metre(&mut children, axis.0.hypot(axis.1) * road.mercator_scale());
     children
+}
+
+// Carriageway ends rarely face each other exactly: cuts within a metre of a parent end or of
+// each other wrote centimetre rows (509 in the Prague square, 2,082 in New York, r260910).
+const MIN_CHILD_LENGTH_M: f64 = 1.0;
+
+/// The shortest sliver first joins its longer neighbour and takes that neighbour's allocation,
+/// until no child is shorter than a metre unless the parent itself is.
+fn merge_children_shorter_than_a_metre(children: &mut Vec<(f64, f64, [f64; 4], u8)>, parent_length_m: f64) {
+    let min_fraction = MIN_CHILD_LENGTH_M / parent_length_m;
+    let fraction = |child: &(f64, f64, [f64; 4], u8)| child.1 - child.0;
+    while children.len() > 1 {
+        let Some(sliver) = (0..children.len()).filter(|i| fraction(&children[*i]) < min_fraction)
+            .min_by(|a, b| fraction(&children[*a]).total_cmp(&fraction(&children[*b]))) else { break };
+        let removed = children.remove(sliver);
+        let after_is_longer = sliver < children.len()
+            && (sliver == 0 || fraction(&children[sliver]) > fraction(&children[sliver - 1]));
+        if after_is_longer { children[sliver].0 = removed.0; } else { children[sliver - 1].1 = removed.1; }
+        if sliver > 0 && sliver < children.len()
+            && (children[sliver - 1].2, children[sliver - 1].3) == (children[sliver].2, children[sliver].3) {
+            children[sliver - 1].1 = children.remove(sliver).1;
+        }
+    }
 }

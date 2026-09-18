@@ -5,7 +5,7 @@ use crate::{
     corner_store::{CornerEnergy, CornerGeneration, CornerStore},
     corner_totals::SurfacePeriodTotals,
     durable_directory,
-    generation_receipt::{GenerationReceipt, SURFACE_CODE_DIGEST},
+    generation_receipt::{GenerationReceipt, SURFACE_FORMAT_AND_PHYSICS_GENERATION},
 };
 use anyhow::{ensure, Context, Result};
 use grid::{surface_corner::owner_edge_corners, Square};
@@ -21,7 +21,7 @@ pub struct EdgeBundle {
 
 pub fn seal(store: &mut CornerStore, epoch: u64, receipt: GenerationReceipt) -> Result<()> {
     ensure!(
-        receipt.generation() == store.generation && receipt.code == SURFACE_CODE_DIGEST,
+        receipt.generation() == store.generation && receipt.code == SURFACE_FORMAT_AND_PHYSICS_GENERATION,
         "edge bundle receipt differs from its corner generation"
     );
     let expected = owner_edge_corners(store.owner);
@@ -100,7 +100,7 @@ pub fn read_receipt(
     super::corner_store::verify_generation(&connection, generation, owner)?;
     let (epoch, receipt) = read_stored_receipt(&connection)?;
     ensure!(
-        receipt.generation() == generation && receipt.code == SURFACE_CODE_DIGEST,
+        receipt.generation() == generation && receipt.code == SURFACE_FORMAT_AND_PHYSICS_GENERATION,
         "edge bundle generation receipt mismatch"
     );
     Ok((epoch, receipt))
@@ -121,7 +121,7 @@ pub fn read(path: &Path, generation: CornerGeneration) -> Result<EdgeBundle> {
     super::corner_store::verify_generation(&connection, generation, owner)?;
     let (epoch, receipt) = read_stored_receipt(&connection)?;
     ensure!(
-        receipt.generation() == generation && receipt.code == SURFACE_CODE_DIGEST,
+        receipt.generation() == generation && receipt.code == SURFACE_FORMAT_AND_PHYSICS_GENERATION,
         "edge bundle generation receipt mismatch"
     );
     let expected = owner_edge_corners(owner);
@@ -294,7 +294,7 @@ mod tests {
         let owner = Square { x: 276, y: 173 };
         let receipt = GenerationReceipt {
             sources: [1; 32],
-            code: SURFACE_CODE_DIGEST,
+            code: SURFACE_FORMAT_AND_PHYSICS_GENERATION,
             producer: [4; 32],
         };
         let generation = receipt.generation();
@@ -403,7 +403,7 @@ mod tests {
         let owner = Square { x: 0, y: 0 };
         let receipt = GenerationReceipt {
             sources: [3; 32],
-            code: SURFACE_CODE_DIGEST,
+            code: SURFACE_FORMAT_AND_PHYSICS_GENERATION,
             producer: [6; 32],
         };
         let generation = receipt.generation();

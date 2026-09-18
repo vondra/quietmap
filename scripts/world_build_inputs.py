@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import struct
 import sys
 import tempfile
@@ -178,12 +179,35 @@ def verify_prepared_raster_links(source, prepared):
             raise ValueError(f'prepared raster replaced: {attached}')
 
 
+def stamps_the_point_query_expects():
+    """layer -> {metadata key: value}, read from the reader's own constants. The point query
+    answers another stamp by serving without the layer (structures: by refusing), so this
+    audit is the gate that keeps such a file out of a release."""
+    reader = Path(__file__).resolve().parent.parent / 'engine/square-store/src'
+    def constants(file):
+        return {name: value.encode() for name, value in
+                re.findall(r'pub const (\w+): &str = "([^"]*)";', (reader / file).read_text())}
+    store, aircraft = constants('store.rs'), constants('aircraft_contract.rs')
+    grid = {b'grid': store['GRID_CONTRACT_Z30']}
+    version = {b'schema_version': aircraft['SCHEMA_VERSION']}
+    return {
+        'structures': grid,
+        'leisure': {b'leisure_contract': store['LEISURE_CONTRACT_V2'], **grid},
+        'ships': {b'ships_contract': store['SHIPS_CONTRACT_V1'], **grid},
+        'airborne': {b'airborne_contract': aircraft['AIRBORNE_CONTRACT'], **version},
+        'cruise': {b'cruise_contract': aircraft['CRUISE_CONTRACT'], **version},
+        'airport_traffic': {b'airport_traffic_contract': aircraft['AIRPORT_TRAFFIC_CONTRACT'],
+                            **version},
+    }, aircraft['AIRPORT_SUMMARIES_KEY']
+
+
 def audit_world(prepared, jobs=None):
     import pyarrow as pa
     sys.path.insert(0, str(Path(__file__).parent / 'structures'))
     from structure_contract import CONTRACT_KEY, CONTRACT_VERSION
     sys.path.insert(0, str(Path(__file__).parent / 'square-country-city'))
     from build_square_country_city import expected_contract
+    expected_stamps, airport_summaries_key = stamps_the_point_query_expects()
     def audit_square(square):
         counts = {}
         x, y = int(square.parent.name), int(square.name)
@@ -209,8 +233,16 @@ def audit_world(prepared, jobs=None):
                     key, value = expected_contract(path)
                     if metadata.get(key) != value:
                         raise ValueError(f'unbaked geography: {path}')
-                if path.stem == 'ships' and (metadata.get(b'ships_contract') != b'ships_v1' or metadata.get(b'grid') != b'z30'):
-                    raise ValueError(f'stale ships cells: {path}')
+                for key, value in expected_stamps.get(path.stem, {}).items():
+                    if metadata.get(key) != value:
+                        raise ValueError(f'stale {path.stem} stamp {key.decode()}={metadata.get(key)}, the point query expects {value.decode()}: {path}')
+                if path.stem in ('airborne', 'cruise', 'airport_traffic'):
+                    days = metadata.get(b'n_days', b'')
+                    if not (days.isdigit() and 0 < int(days) < 1 << 16):
+                        raise ValueError(f'invalid n_days sampling window {days}: {path}')
+                # Its agreement across cells is Stage 2C's own reduce; the stamp proves it ran.
+                if path.stem == 'airport_traffic' and airport_summaries_key not in metadata:
+                    raise ValueError(f'airport traffic without Stage 2C summaries: {path}')
                 rows = 0
                 for index in range(reader.num_record_batches):
                     batch = reader.get_batch(index)

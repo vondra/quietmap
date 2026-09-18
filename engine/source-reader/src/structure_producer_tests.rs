@@ -36,6 +36,7 @@ fn empty_files_do_not_bypass_any_screening_height_reader() {
             grid::Square { x: 276, y: 174 }
         )
         .is_err());
+        assert!(crate::structure_store::load_obstacle_set(output.path(), 49.78, 14.18).is_err());
         assert!(crate::structure_store::footprints_in_bbox(
             output.path(),
             49.77,

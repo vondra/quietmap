@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
 import qmgrid
 from structure_inputs import GlobalPrior, RegionalHeights, read_overture_parquet
-from structure_freshness import file_identity, input_fingerprint
+from structure_freshness import structure_input_files
 from structure_inventory import overture_sources, world_squares
 from structure_merge import build_square, structure_is_fresh
 from worker_jobs import available_memory_bytes, cpu_jobs, fit_jobs
@@ -31,13 +31,12 @@ def build_one(name, prepared_dir, overture_parquet, ghsl, regional):
         raise ValueError(f"not a square name: {name}")
     name = qmgrid.square_name(*square)
     square_dir = os.path.join(prepared_dir, name)
-    ovt_inputs = [file_identity(source)
-                  for _, _, source in overture_sources(overture_parquet, square)]
-    inputs = input_fingerprint(square_dir, ovt_inputs, ghsl, regional)
-    if structure_is_fresh(os.path.join(square_dir, "structures.arrow"), inputs):
+    overture_files = [source for _, _, source in overture_sources(overture_parquet, square)]
+    if structure_is_fresh(os.path.join(square_dir, "structures.arrow"),
+                          structure_input_files(square_dir, overture_files, ghsl, regional)):
         return None
-    ovt, ovt_inputs = read_overture_parquet(overture_parquet, square)
-    return build_square(name, prepared_dir, ovt, ovt_inputs, ghsl, regional)
+    ovt, overture_files = read_overture_parquet(overture_parquet, square)
+    return build_square(name, prepared_dir, ovt, overture_files, ghsl, regional)
 
 
 def _init_worker(prepared_dir, overture_parquet, ghsl_path, regional_path):

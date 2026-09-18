@@ -449,6 +449,9 @@ export interface NoiseComputeData {
    * cost is NOT measured here — the frontend can derive it from XHR
    * wall time minus the sum of these. */
   timings?: PopupTimings | null
+  /** Emission layers whose prepared files the server could not use: the levels lack their
+   * noise and no source of such a layer is present. */
+  unavailable_layers?: ('aircraft' | 'leisure' | 'ships')[]
 }
 
 interface PopupTimings {

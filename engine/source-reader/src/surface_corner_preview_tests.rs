@@ -3,7 +3,7 @@ use super::*;
 use grid::surface_corner::{SurfaceCorner, WORLD_BLOCK_SIDE};
 use tile_painter::{
     corner_store::{CornerEnergy, CornerGeneration, SourceEnergy, SourceIdentity},
-    generation_receipt::SURFACE_CODE_DIGEST,
+    generation_receipt::SURFACE_FORMAT_AND_PHYSICS_GENERATION,
 };
 
 fn prepare(root: &Path) -> (PathBuf, PathBuf, GenerationReceipt) {
@@ -18,7 +18,7 @@ fn prepare(root: &Path) -> (PathBuf, PathBuf, GenerationReceipt) {
     .unwrap();
     let receipt = GenerationReceipt {
         sources: file_digest(&prepared.join("inputs.sqlite")).unwrap(),
-        code: SURFACE_CODE_DIGEST,
+        code: SURFACE_FORMAT_AND_PHYSICS_GENERATION,
         producer: [4; 32],
     };
     (prepared, corners, receipt)

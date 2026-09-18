@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     corner_store::CornerStore,
-    generation_receipt::{hex_digest, GenerationReceipt, SURFACE_CODE_DIGEST},
+    generation_receipt::{hex_digest, GenerationReceipt, SURFACE_FORMAT_AND_PHYSICS_GENERATION},
     hm3::decode_cells,
 };
 use grid::Z13_PER_Z9_SIDE;
@@ -60,7 +60,7 @@ fn tile(archive: &[u8], z: u8, x: u32, y: u32) -> Vec<u8> {
 fn fixture(root: &Path) -> (std::path::PathBuf, String, std::path::PathBuf) {
     let receipt = GenerationReceipt {
         sources: [1; 32],
-        code: SURFACE_CODE_DIGEST,
+        code: SURFACE_FORMAT_AND_PHYSICS_GENERATION,
         producer: [2; 32],
     };
     let generation = receipt.generation();

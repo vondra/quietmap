@@ -19,7 +19,7 @@ use tile_painter::{
     corner_directory::CornerDirectory,
     corner_store::{CornerEnergy, CornerStore},
     durable_directory, edge_bundle,
-    generation_receipt::{GenerationReceipt, SURFACE_CODE_DIGEST},
+    generation_receipt::{GenerationReceipt, SURFACE_FORMAT_AND_PHYSICS_GENERATION},
     hm3::encode_all_period_powers,
 };
 
@@ -73,7 +73,7 @@ fn main() -> Result<()> {
     )?;
     let receipt = GenerationReceipt {
         sources: manifest.digest,
-        code: SURFACE_CODE_DIGEST,
+        code: SURFACE_FORMAT_AND_PHYSICS_GENERATION,
         producer: file_digest(&std::env::current_exe()?)?,
     };
     let rasters = raster_reader::RealRasters::new(&args.raster_root);

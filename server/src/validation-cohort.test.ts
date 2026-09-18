@@ -48,7 +48,7 @@ test('validation cohort is stable while runtime and prepared inputs are unchange
   assert.match(first.cohort_id, /^[a-f0-9]{64}$/)
 })
 
-test('validation cohort refuses inputs changed before its first fingerprint', async (t) => {
+test('validation cohort reports inputs changed before its first fingerprint as unstable', async (t) => {
   const fixture = await cohortFixture(t)
   const initial = await stat(fixture.runtimePath)
   const modelProcessStartedAtMs = Math.ceil(Math.max(initial.mtimeMs, initial.ctimeMs)) + 1_000
@@ -60,15 +60,15 @@ test('validation cohort refuses inputs changed before its first fingerprint', as
   const changedAt = new Date(modelProcessStartedAtMs + 1_000)
   await utimes(fixture.runtimePath, changedAt, changedAt)
 
-  await assert.rejects(provider(), /server process loaded; restart required/)
+  assert.equal((await provider()).cohort_unstable, true)
 })
 
-test('validation cohort refuses runtime changed under a live process', async (t) => {
+test('validation cohort reports runtime changed under a live process as unstable', async (t) => {
   const fixture = await cohortFixture(t)
   const before = await fixture.provider()
 
   await writeFile(fixture.runtimePath, 'export const model = "b"\n')
-  await assert.rejects(fixture.provider(), /restart required/)
+  assert.equal((await fixture.provider()).cohort_unstable, true)
   const after = await createValidationCohortProvider({
     ...fixture.providerOptions,
     modelProcessStartedAtMs: Date.now() + 1_000,
@@ -79,7 +79,7 @@ test('validation cohort refuses runtime changed under a live process', async (t)
   assert.notEqual(after.cohort_id, before.cohort_id)
 })
 
-test('validation cohort refuses a same-size prepared replacement until restart', async (t) => {
+test('validation cohort reports a same-size prepared replacement as unstable until restart', async (t) => {
   const fixture = await cohortFixture(t)
   const before = await fixture.provider()
   const beforeStat = await stat(fixture.preparedPath)
@@ -96,7 +96,7 @@ test('validation cohort refuses a same-size prepared replacement until restart',
     'fixture must replace the inode rather than modify the original file',
   )
 
-  await assert.rejects(fixture.provider(), /restart required/)
+  assert.equal((await fixture.provider()).cohort_unstable, true)
   const after = await createValidationCohortProvider({
     ...fixture.providerOptions,
     modelProcessStartedAtMs: Date.now() + 1_000,
@@ -119,7 +119,7 @@ test('validation cohort also binds raster and sidecar inputs', async (t) => {
   const before = await provider()
 
   await writeFile(auxiliaryPath, 'sidecar-b')
-  await assert.rejects(provider(), /restart required/)
+  assert.equal((await provider()).cohort_unstable, true)
   const after = await createValidationCohortProvider({
     ...options,
     modelProcessStartedAtMs: Date.now() + 1_000,
@@ -135,5 +135,5 @@ test('validation cohort throttles recomputation but rechecks after its public TT
 
   assert.deepEqual(await provider(), before, 'requests inside the TTL reuse the resolved fingerprint')
   await new Promise(resolve => setTimeout(resolve, 40))
-  await assert.rejects(provider(), /restart required/)
+  assert.equal((await provider()).cohort_unstable, true)
 })

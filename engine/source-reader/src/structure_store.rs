@@ -10,8 +10,9 @@
 //! dense ids in `screening_ordinal` order, the capped heights) and the
 //! containment probes the popup runs on the assembled set.
 //!
-//! **All-or-error.** Any selected square whose index cannot be mapped aborts
-//! the whole load: a partial set would silently under-screen the path.
+//! **All-or-error.** Any selected square whose index can neither be mapped nor
+//! built in process aborts the whole load: a partial set would silently
+//! under-screen the path.
 //! Emptiness is not a gap: a 0-row table is the answer "nothing stands here".
 
 use std::io::Cursor;
@@ -32,7 +33,9 @@ use square_store::grid_cols::{
 use square_store::store::{STRUCTURE_KIND_BARRIER, STRUCTURE_KIND_BUILDING};
 use square_store::structure_contract;
 
-use crate::square_obstacle_index::{load_square_obstacle_index, STRUCTURES_ARROW};
+use crate::square_obstacle_index::{
+    load_square_obstacle_index_or_build_it_in_process, STRUCTURES_ARROW,
+};
 
 fn square_dir(prepared_year_dir: &Path, square: Square) -> std::path::PathBuf {
     prepared_year_dir.join(grid::square_name(square))
@@ -52,7 +55,10 @@ pub fn load_obstacle_set(
     let indexes = crate::query::surface_squares_within_reach(lat, lon)?
         .into_par_iter()
         .filter_map(|square| {
-            load_square_obstacle_index(&square_dir(prepared_year_dir, square), None)
+            load_square_obstacle_index_or_build_it_in_process(
+                &square_dir(prepared_year_dir, square),
+                square,
+            )
                 .map_err(|e| format!("structure_store: {e}"))
                 .transpose()
         })

@@ -47,6 +47,9 @@ pub struct PointQueryData {
     /// taxiway segment traces.
     pub airport_lines_batches: Vec<arrow::record_batch::RecordBatch>,
     pub n_days: u16,
+    /// Emission layers dropped from the whole query because a file of theirs carried another
+    /// contract; the answer lacks their noise and says so.
+    pub unavailable_layers: Vec<&'static str>,
 }
 
 // NACE codes are written directly into industrial.arrow by enrichment scripts.
@@ -143,87 +146,32 @@ pub fn collect_from_square_data(
     let mut all_buildings = Vec::new();
     let mut all_industrial = Vec::new();
     let mut all_ships = Vec::new();
-    let mut all_airborne_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
-    let mut all_cruise_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
-    let mut all_airport_traffic_batches: Vec<arrow::record_batch::RecordBatch> = Vec::new();
-    let mut airport_summary =
-        crate::aircraft_v6::airport_summary_view::AirportSummaryAccum::default();
-    let mut n_days_from_metadata: Option<u16> = None;
-    // Prune aircraft batches per square ONCE; the collection below consumes the
-    // result. Airborne blocks carry their rows' full-geometry envelope, so the
-    // kernel's axis envelope gates them in every owner square. Cruise batches
-    // carry synthetic-line envelopes, so the horizontal reach gates them in
-    // every owner square; airport traffic's row accept is a planar circle.
-    let airborne_gate = airborne_envelope_gate(lat, lng);
-    let per_square_aircraft: Vec<(
-        Vec<arrow::record_batch::RecordBatch>,
-        Vec<arrow::record_batch::RecordBatch>,
-        Vec<arrow::record_batch::RecordBatch>,
-    )> = square_data
+    // A layer is one fact of the answer: a file of it dropped in any owner square, or any
+    // aircraft stamp the reader does not know, drops it in every square, so a layer named in
+    // `unavailable_layers` never also contributes sources.
+    let mut unavailable_layers: Vec<&'static str> = square_data
         .iter()
-        .map(|(_, data)| {
-            Ok((
-                data.aircraft_airborne.batches_where(&airborne_gate)?,
-                data.aircraft_cruise.batches_within(
-                    lat,
-                    lng,
-                    noise_compute::emission::aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M,
-                )?,
-                data.aircraft_airport_traffic.batches_within(
-                    lat,
-                    lng,
-                    noise_compute::constants::GROUND_OPS_RUNWAY_MAX_RADIUS,
-                )?,
-            ))
-        })
-        .collect::<Result<_, String>>()?;
-    // The label lookup needs every selected airport-line row, but only
-    // when nearby airport traffic exists. Keep the files footer-only for all
-    // other clicks.
-    let all_airport_lines_batches = if per_square_aircraft
-        .iter()
-        .any(|(_, _, traffic)| !traffic.is_empty())
-    {
-        let mut batches = Vec::new();
-        for (_, data) in square_data {
-            batches.extend(data.airport_lines.batches_all()?);
-        }
-        batches
-    } else {
-        Vec::new()
-    };
-    // Every aircraft file is read from its owner cell. The file stamp is the
-    // sampling window even when no row is near.
-    for (_, data) in square_data {
-        for arrow in [
-            &data.aircraft_airborne,
-            &data.aircraft_cruise,
-            &data.aircraft_airport_traffic,
-        ] {
-            if let Some(schema) = arrow.schema() {
-                let days = schema
-                    .metadata()
-                    .get("n_days")
-                    .and_then(|value| value.parse::<u16>().ok())
-                    .filter(|days| *days > 0)
-                    .ok_or_else(|| {
-                        "aircraft file has no valid n_days sampling window".to_string()
-                    })?;
-                n_days_from_metadata =
-                    Some(n_days_from_metadata.map_or(days, |value| value.max(days)));
-            }
+        .flat_map(|(_, data)| data.unavailable_layers.iter().copied())
+        .collect();
+    let mut aircraft = AircraftPointQueryData::none();
+    if !unavailable_layers.contains(&"aircraft") {
+        aircraft = read_aircraft_batches_of_square_data(square_data, lat, lng)?;
+        if let Err(fault) =
+            read_aircraft_stamps_of_square_data(square_data, lat, lng, &mut aircraft)
+        {
+            square_store::warn_once::warn_once(
+                &format!("{fault}; serving without the aircraft layer"),
+                &format!("first seen at ({lat:.5}, {lng:.5})"),
+            );
+            unavailable_layers.push("aircraft");
+            aircraft = AircraftPointQueryData::none();
         }
     }
-    let n_days = n_days_from_metadata.unwrap_or(365);
+    unavailable_layers.sort_unstable();
+    unavailable_layers.dedup();
+    let served = |layer: &str| !unavailable_layers.contains(&layer);
 
-    for ((_, data), (airborne_batches, cruise_batches, airport_traffic_batches)) in
-        square_data.iter().zip(per_square_aircraft)
-    {
-        // Footer-only: every opened traffic file must carry current summaries,
-        // whether or not its rows are near the click.
-        if let Some(schema) = data.aircraft_airport_traffic.schema() {
-            airport_summary.merge_square(schema, &airport_traffic_batches)?;
-        }
+    for (_, data) in square_data {
         if let Some(schema) = data.railways.schema() {
             crate::rail_traffic::RailTrafficColumns::read(
                 &arrow::record_batch::RecordBatch::new_empty(schema.clone()),
@@ -385,9 +333,12 @@ pub fn collect_from_square_data(
         // (settlement v2 phase 2): same point-source compute, tagged with
         // `source_type = LEISURE_TYPE_BASE + sport` so the popup names a padel
         // court correctly (see source_names::building_type_name).
-        let leisure_batches = data
-            .leisure
-            .batches_within(lat, lng, BUILDING_QUERY_RADIUS_M)?;
+        let leisure_batches = if served("leisure") {
+            data.leisure
+                .batches_within(lat, lng, BUILDING_QUERY_RADIUS_M)?
+        } else {
+            Vec::new()
+        };
         let leisure =
             query_leisure_from_batches(&leisure_batches, lat, lng, BUILDING_QUERY_RADIUS_M);
         for lz in leisure {
@@ -523,7 +474,12 @@ pub fn collect_from_square_data(
             }
         }
 
-        for batch in &data.ships.batches_within(lat, lng, SHIP_QUERY_RADIUS_M)? {
+        let ship_batches = if served("ships") {
+            data.ships.batches_within(lat, lng, SHIP_QUERY_RADIUS_M)?
+        } else {
+            Vec::new()
+        };
+        for batch in &ship_batches {
             let (Some(cgx), Some(cgy), Some(area), Some(large), Some(work), Some(leisure)) = (
                 col_i32(batch, "centroid_gx"),
                 col_i32(batch, "centroid_gy"),
@@ -563,14 +519,6 @@ pub fn collect_from_square_data(
                 }
             }
         }
-
-        // Aircraft popup arrows: bbox-gated above (per_square_aircraft);
-        // per-row reach prune + emission contract live inside
-        // compute_aircraft_v6. RecordBatch clones are refcount bumps on
-        // Arc-backed Arrow buffers, not data copies.
-        all_airborne_batches.extend(airborne_batches);
-        all_cruise_batches.extend(cruise_batches);
-        all_airport_traffic_batches.extend(airport_traffic_batches);
     }
 
     Ok(PointQueryData {
@@ -579,13 +527,131 @@ pub fn collect_from_square_data(
         buildings: all_buildings,
         industrial: all_industrial,
         ships: all_ships,
-        aircraft_airborne_batches: all_airborne_batches,
-        aircraft_cruise_batches: all_cruise_batches,
-        aircraft_airport_traffic_batches: all_airport_traffic_batches,
-        airport_summary,
-        airport_lines_batches: all_airport_lines_batches,
-        n_days,
+        aircraft_airborne_batches: aircraft.airborne_batches,
+        aircraft_cruise_batches: aircraft.cruise_batches,
+        aircraft_airport_traffic_batches: aircraft.airport_traffic_batches,
+        airport_summary: aircraft.airport_summary,
+        airport_lines_batches: aircraft.airport_lines_batches,
+        n_days: aircraft.n_days,
+        unavailable_layers,
     })
+}
+
+struct AircraftPointQueryData {
+    airborne_batches: Vec<arrow::record_batch::RecordBatch>,
+    cruise_batches: Vec<arrow::record_batch::RecordBatch>,
+    airport_traffic_batches: Vec<arrow::record_batch::RecordBatch>,
+    airport_summary: crate::aircraft_v6::airport_summary_view::AirportSummaryAccum,
+    airport_lines_batches: Vec<arrow::record_batch::RecordBatch>,
+    n_days: u16,
+}
+
+impl AircraftPointQueryData {
+    fn none() -> Self {
+        Self {
+            airborne_batches: Vec::new(),
+            cruise_batches: Vec::new(),
+            airport_traffic_batches: Vec::new(),
+            airport_summary: Default::default(),
+            airport_lines_batches: Vec::new(),
+            n_days: 365,
+        }
+    }
+}
+
+/// Unreadable bytes are an error of the whole query, as for every other layer.
+fn read_aircraft_batches_of_square_data(
+    square_data: &[(grid::Square, &SquareData)],
+    lat: f64,
+    lng: f64,
+) -> Result<AircraftPointQueryData, String> {
+    let mut aircraft = AircraftPointQueryData::none();
+    // Airborne blocks carry their rows' full-geometry envelope, so the kernel's axis envelope
+    // gates them in every owner square. Cruise batches carry synthetic-line envelopes, so the
+    // horizontal reach gates them. RecordBatch clones are refcount bumps, not data copies.
+    let airborne_gate = airborne_envelope_gate(lat, lng);
+    for (_, data) in square_data {
+        aircraft
+            .airborne_batches
+            .extend(data.aircraft_airborne.batches_where(&airborne_gate)?);
+        aircraft
+            .cruise_batches
+            .extend(data.aircraft_cruise.batches_within(
+                lat,
+                lng,
+                noise_compute::emission::aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M,
+            )?);
+        aircraft
+            .airport_traffic_batches
+            .extend(airport_traffic_batches_near(data, lat, lng)?);
+    }
+    // The label lookup needs every selected airport-line row, but only when nearby airport
+    // traffic exists. Keep the files footer-only for all other clicks.
+    if !aircraft.airport_traffic_batches.is_empty() {
+        for (_, data) in square_data {
+            aircraft
+                .airport_lines_batches
+                .extend(data.airport_lines.batches_all()?);
+        }
+    }
+    Ok(aircraft)
+}
+
+/// Airport traffic's row accept is a planar circle.
+fn airport_traffic_batches_near(
+    data: &SquareData,
+    lat: f64,
+    lng: f64,
+) -> Result<Vec<arrow::record_batch::RecordBatch>, String> {
+    data.aircraft_airport_traffic.batches_within(
+        lat,
+        lng,
+        noise_compute::constants::GROUND_OPS_RUNWAY_MAX_RADIUS,
+    )
+}
+
+/// Sampling windows and airport summaries. An `Err` is a stamp the reader does not know, so the
+/// caller serves the other layers without aircraft.
+fn read_aircraft_stamps_of_square_data(
+    square_data: &[(grid::Square, &SquareData)],
+    lat: f64,
+    lng: f64,
+    aircraft: &mut AircraftPointQueryData,
+) -> Result<(), String> {
+    let mut n_days_from_metadata: Option<u16> = None;
+    for (_, data) in square_data {
+        // Footer-only: every opened traffic file must carry current summaries,
+        // whether or not its rows are near the click.
+        if let Some(schema) = data.aircraft_airport_traffic.schema() {
+            aircraft
+                .airport_summary
+                .merge_square(schema, &airport_traffic_batches_near(data, lat, lng)?)?;
+        }
+        // Every aircraft file is read from its owner cell. The file stamp is the
+        // sampling window even when no row is near.
+        for arrow in [
+            &data.aircraft_airborne,
+            &data.aircraft_cruise,
+            &data.aircraft_airport_traffic,
+        ] {
+            if let Some(schema) = arrow.schema() {
+                let found = schema.metadata().get("n_days");
+                let days = found
+                    .and_then(|value| value.parse::<u16>().ok())
+                    .filter(|days| *days > 0)
+                    .ok_or_else(|| {
+                        format!(
+                            "{}: n_days sampling window expected a positive day count, found {found:?}",
+                            arrow.path().display()
+                        )
+                    })?;
+                n_days_from_metadata =
+                    Some(n_days_from_metadata.map_or(days, |value| value.max(days)));
+            }
+        }
+    }
+    aircraft.n_days = n_days_from_metadata.unwrap_or(365);
+    Ok(())
 }
 
 /// Road segment query result (references into mmap'd data, minimal copy).
@@ -1855,7 +1921,7 @@ mod square_query_tests {
 
     /// A ship cell within reach becomes one point source with the cell's own
     /// identity, class and dataset; a silent cell and a cell beyond 12.6 km do not;
-    /// a stale contract fails loud.
+    /// a stale contract in one owner square drops the layer of the whole answer.
     #[test]
     fn ship_cells_collect_with_cell_identity_and_reach() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -1902,11 +1968,24 @@ mod square_query_tests {
             assert!(cell.dist_m > 200.0 && cell.dist_m < 1300.0, "{}", cell.dist_m);
         }
 
-        fx::write_ships_file(&dir.join("ships.arrow"), &cells, "ships_v0");
-        let error = collect_sources_at_point(tmp.path(), LAT, LON).unwrap_err();
-        assert!(error.contains("ships_contract"), "{error}");
+        // Another contract stamp in any one owner square costs the visitor the whole layer,
+        // named in the answer, never the popup: this square's valid cells must not be served
+        // under a flag that says ships are missing.
+        let neighbour = squares_within_reach(LAT, LON)
+            .unwrap()
+            .into_iter()
+            .find(|square| *square != prague())
+            .expect("the reach spans a second owner square");
+        let neighbour_dir = fx::square_dir(tmp.path(), neighbour);
+        std::fs::create_dir_all(&neighbour_dir).unwrap();
+        fx::write_ships_file(&neighbour_dir.join("ships.arrow"), &cells, "ships_v0");
+        let served = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
+        assert_eq!(served.unavailable_layers, ["ships"]);
+        assert!(served.ships.is_empty());
     }
 
+    /// The structure table is the screening geometry: a level served without it would be
+    /// louder with no reason shown, so its stamp refuses the point query.
     #[test]
     fn unstamped_structures_fail_loud() {
         let tmp = tempfile::TempDir::new().unwrap();

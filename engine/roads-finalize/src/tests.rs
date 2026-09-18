@@ -43,6 +43,24 @@ fn section_total_is_shared_once_while_longitudinal_subdivisions_keep_through_flo
 }
 
 #[test]
+fn a_cut_within_a_metre_of_a_parent_end_or_of_another_cut_leaves_no_sliver_child() {
+    let long = Road { class: 3, ..road(1, 2, false) };
+    let nearly_whole = Road { class: 3, start: (10.0, 0.3), end: (10.0, 99.5), ..road(2, 2, true) };
+    assert_eq!(allocation::intervals(&long, &[&nearly_whole]), [(0.0, 1.0, [5000.0, 0.0, 0.0, 0.0], 15)]);
+    let staggered = Road { class: 3, start: (10.0, 0.3), end: (10.0, 40.0), ..road(2, 2, true) };
+    let children = allocation::intervals(&long, &[&staggered]);
+    assert_eq!(children.iter().map(|child| (child.0, child.1, child.2[0])).collect::<Vec<_>>(),
+        [(0.0, 0.4, 5000.0), (0.4, 1.0, 10_000.0)]);
+    // Two siblings ending 0.4 m apart: the sliver between their cuts joins the longer child.
+    let other = Road { class: 3, start: (10.0, 40.4), ..road(3, 2, true) };
+    let children = allocation::intervals(&long, &[&staggered, &other]);
+    assert_eq!(children.iter().map(|child| (child.0, child.1, child.2[0])).collect::<Vec<_>>(),
+        [(0.0, 1.0, 5000.0)]);
+    let shorter_than_a_metre = Road { end: (0.0, 0.8), ..long.clone() };
+    assert_eq!(allocation::intervals(&shorter_than_a_metre, &[&staggered]).len(), 1);
+}
+
+#[test]
 fn staggered_carriageway_ends_split_the_longer_source_and_conserve_each_cross_section() {
     // Class 3: beyond the sibling's end a one-way street holds the whole count.
     let long = Road { class: 3, ..road(1, 2, false) };

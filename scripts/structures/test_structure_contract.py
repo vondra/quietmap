@@ -24,7 +24,7 @@ class PreparedStructureContractTests(unittest.TestCase):
 
     def build(self, regional=None):
         return BUILDER.build_square(
-            SQUARE, self.prepared, [ovt_row(OVT_LONELY)], 0,
+            SQUARE, self.prepared, [ovt_row(OVT_LONELY)], [],
             FakeGlobalPrior(), regional)
 
     def test_prepared_height_rounds_once_without_changing_raw_emission(self):
@@ -62,7 +62,7 @@ class PreparedStructureContractTests(unittest.TestCase):
 
     def test_regional_selection_is_an_input_even_when_its_mtime_is_older(self):
         regional = SimpleNamespace(
-            mtime=0, input_identity="regional-measurement",
+            input_files=[],
             tr=SimpleNamespace(transform=lambda xs, ys: (xs, ys)),
             covers=lambda _x, _y: True,
             zonal_measured_mean=lambda _polygon: 20.5)

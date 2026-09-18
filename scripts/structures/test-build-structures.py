@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+import unittest.mock
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -26,7 +27,7 @@ class BuildStructuresTests(unittest.TestCase):
 
     def build(self, rows):
         census = BUILDER.build_square(
-            SQUARE, self.prepared, rows, 0, FakeGlobalPrior(), None)
+            SQUARE, self.prepared, rows, [], FakeGlobalPrior(), None)
         table = ipc.open_file(self.prepared / SQUARE / "structures.arrow").read_all()
         return census, table
 
@@ -144,25 +145,50 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(t.column_names, CONTRACT.SCHEMA.names)
         self.assertEqual(t.schema.metadata[b"building_rows"], b"0")
 
-    def test_idempotent_skip_and_input_refresh(self):
-        buildings_arrow(self.prepared / SQUARE / "buildings.arrow",
-                        [osm_row(0, OSM_POLY, 32.0)])
+    def test_only_changed_input_bytes_or_a_new_input_end_the_idempotent_skip(self):
+        source = self.prepared / SQUARE / "buildings.arrow"
+        buildings_arrow(source, [osm_row(0, OSM_POLY, 32.0)])
         rows = [ovt_row(OVT_LONELY)]
         census, _ = self.build(rows)
         self.assertIsNotNone(census)
         output = self.prepared / SQUARE / "structures.arrow"
         before = output.read_bytes()
-        self.assertIsNone(BUILDER.build_square(
-            SQUARE, self.prepared, rows, 0, FakeGlobalPrior(), None))
-        self.assertEqual(output.read_bytes(), before)
-        newer = output.stat().st_mtime + 5
-        self.assertIsNotNone(BUILDER.build_square(
-            SQUARE, self.prepared, rows, 0, FakeGlobalPrior(newer), None))
-        source = self.prepared / SQUARE / "buildings.arrow"
+        restored = self.prepared / "restored-copy"
+        restored.write_bytes(source.read_bytes())
+        os.replace(restored, source)  # new inode, ctime and mtime; same bytes
         newer = output.stat().st_mtime + 5
         os.utime(source, (newer, newer))
+        self.assertIsNone(BUILDER.build_square(
+            SQUARE, self.prepared, rows, [], FakeGlobalPrior(), None))
+        self.assertEqual(output.read_bytes(), before)
+        ghsl = self.prepared / "fake-ghsl"
+        ghsl.write_bytes(b"prior")
         self.assertIsNotNone(BUILDER.build_square(
-            SQUARE, self.prepared, rows, 0, FakeGlobalPrior(), None))
+            SQUARE, self.prepared, rows, [], FakeGlobalPrior([ghsl]), None))
+        buildings_arrow(source, [osm_row(0, OSM_POLY, 33.0)])
+        self.assertIsNotNone(BUILDER.build_square(
+            SQUARE, self.prepared, rows, [], FakeGlobalPrior([ghsl]), None))
+
+    def test_an_input_rewritten_during_the_build_is_rebuilt_by_the_next_run(self):
+        source = self.prepared / SQUARE / "buildings.arrow"
+        buildings_arrow(source, [osm_row(0, OSM_POLY, 32.0)])
+
+        rows = [ovt_row(OVT_LONELY)]
+        import structure_merge
+        load_barriers = structure_merge.load_barriers
+
+        def rewrite_the_buildings_after_they_were_read(path):
+            newer = source.stat().st_mtime + 5  # same size; the clock tick alone may not move
+            buildings_arrow(source, [osm_row(0, OSM_POLY, 33.0)])
+            os.utime(source, (newer, newer))
+            return load_barriers(path)
+
+        with unittest.mock.patch.object(
+                structure_merge, "load_barriers", rewrite_the_buildings_after_they_were_read):
+            self.assertIsNotNone(BUILDER.build_square(
+                SQUARE, self.prepared, rows, [], FakeGlobalPrior(), None))
+        self.assertIsNotNone(BUILDER.build_square(
+            SQUARE, self.prepared, rows, [], FakeGlobalPrior(), None))
 
     def test_stale_buildings_contract_is_rejected(self):
         path = self.prepared / SQUARE / "buildings.arrow"

@@ -78,7 +78,8 @@ class WorldBuildInputsTest(unittest.TestCase):
                     import sys
                     sys.path.insert(0, str(Path(__file__).parent / 'structures'))
                     from structure_contract import CONTRACT_KEY, CONTRACT_VERSION
-                    schema = pa.schema([('value', pa.int32())], metadata={CONTRACT_KEY: CONTRACT_VERSION})
+                    structure_stamps = {CONTRACT_KEY.encode(): CONTRACT_VERSION.encode(), b'grid': b'z30'}
+                    schema = pa.schema([('value', pa.int32())], metadata=structure_stamps)
                     with pa.ipc.new_file(tile / 'structures.arrow', schema):
                         pass
                     (tile / 'structures.qoix').touch()
@@ -92,8 +93,17 @@ class WorldBuildInputsTest(unittest.TestCase):
                 sys.path.insert(0, str(Path(__file__).parent / 'square-country-city'))
                 from build_square_country_city import expected_contract
                 path = root / 'z9/0/0' / f'{layer}.arrow'
-                metadata = dict([expected_contract(path)]) if layer in ('roads', 'railways', 'industrial') else (
-                    {b'ships_contract': b'ships_v1', b'grid': b'z30', b'qm_blocks': b'AQ=='} if layer == 'ships' else None)
+                expected_stamps, airport_summaries_key = inputs.stamps_the_point_query_expects()
+                metadata = dict([expected_contract(path)]) if layer in ('roads', 'railways', 'industrial') else {
+                    **expected_stamps[layer], b'qm_blocks': b'AQ==', b'n_days': b'12', airport_summaries_key: b'{}'}
+                if layer in ('airborne', 'ships'):
+                    # A stamp the point query would answer by dropping the layer fails the build.
+                    stale_key = next(iter(expected_stamps[layer]))
+                    table = pa.table({'value': [37]}).replace_schema_metadata({**metadata, stale_key: b'another'})
+                    with pa.ipc.new_file(path, table.schema) as writer:
+                        writer.write_table(table)
+                    with self.assertRaisesRegex(ValueError, f'stale {layer} stamp {stale_key.decode()}'):
+                        inputs.audit_world(root)
                 table = pa.table({'value': [37]}).replace_schema_metadata(metadata)
                 with pa.ipc.new_file(path, table.schema) as writer:
                     writer.write_table(table)
@@ -107,13 +117,13 @@ class WorldBuildInputsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'no world rows for structures'):
                 inputs.audit_world(root)
             path = root / 'z9/0/0/structures.arrow'
-            table = pa.table({'value': [37]}).replace_schema_metadata({CONTRACT_KEY: CONTRACT_VERSION})
+            table = pa.table({'value': [37]}).replace_schema_metadata(structure_stamps)
             with pa.ipc.new_file(path, table.schema) as writer:
                 writer.write_table(table)
             # The merge's plain chunks are not final: only structures-finalize stamps qm_blocks.
             with self.assertRaisesRegex(ValueError, 'unfinished structures blocks'):
                 inputs.audit_world(root)
-            table = table.replace_schema_metadata({CONTRACT_KEY: CONTRACT_VERSION, 'qm_blocks': 'AQ=='})
+            table = table.replace_schema_metadata({**structure_stamps, b'qm_blocks': b'AQ=='})
             with pa.ipc.new_file(path, table.schema) as writer:
                 writer.write_table(table)
             serial = inputs.audit_world(root, jobs=1)
