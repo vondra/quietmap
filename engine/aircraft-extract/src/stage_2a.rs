@@ -13,7 +13,6 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rayon::prelude::*;
 
 use crate::arrow_io::{for_each_segment_batch, require_owner_shard};
 use crate::flight::{FlightSegment, Phase};
@@ -37,15 +36,13 @@ pub fn run_stage_2a(
     scope: Option<&ScopeBbox>,
 ) -> Result<usize> {
     let square_inputs = list_square_shards(segments_by_square_dir, "airborne.arrow", scope)?;
-    let mut largest_allocation = 0;
-    for (_, path) in &square_inputs {
-        largest_allocation = largest_allocation.max(shard_allocation_allowance(path)?);
-    }
-    let workers =
-        crate::memory::max_concurrent_tasks(rayon::current_num_threads(), largest_allocation)?;
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(workers)
-        .build()?;
+    let allocation_allowances = square_inputs
+        .iter()
+        .map(|(_, path)| shard_allocation_allowance(path))
+        .collect::<Result<Vec<u64>>>()?;
+    let largest_allocation = allocation_allowances.iter().copied().max().unwrap_or(0);
+    let concurrent_budget = crate::memory::concurrent_allocation_budget_for(largest_allocation)?;
+    let threads = rayon::current_num_threads();
     // Validate every input before replacing any prior output.
     let wiped =
         crate::wipe::wipe_stale_arrows_for_scope(prepared_year_dir, "airborne.arrow", scope)?;
@@ -56,45 +53,48 @@ pub fn run_stage_2a(
         );
     }
     let n_square = square_inputs.len();
-    started("stage2a", &format!("{n_square} z9 cells; {workers} workers; {largest_allocation} B allocation allowance each"));
+    started("stage2a", &format!("{n_square} z9 cells; {threads} threads share {concurrent_budget} B of allocation allowances; largest cell {largest_allocation} B"));
     let stage_start = std::time::Instant::now();
 
     let square_counter = Milestone::new("stage2a", "z9 cells", 100);
     let seg_counter = Milestone::new("stage2a", "segments in", 1_000_000);
     let row_counter = Milestone::new("stage2a", "rows out", 1_000_000);
     let written = std::sync::atomic::AtomicUsize::new(0);
-    pool.install(|| {
-        square_inputs
-            .par_iter()
-            .try_for_each(|(square, shard_path)| -> Result<()> {
-                let mut rows = Vec::new();
-                for_each_segment_batch(shard_path, |segments| {
-                    seg_counter.add(segments.len() as u64);
-                    rows.extend(segments.into_iter().filter(is_aircraft_airborne));
-                    Ok(())
-                })
-                .with_context(|| format!("read {}", shard_path.display()))?;
-                square_counter.add(1);
-                if rows.is_empty() {
-                    return Ok(());
-                }
-                // Stable by flight: the dictionary lists flights in ascending id
-                // order and a flight's rows keep their shard order, so the bytes
-                // are reproducible.
-                rows.sort_by_key(|row| row.flight_id);
-                row_counter.add(rows.len() as u64);
-                let dir = prepared_year_dir.join(square_path(*square));
-                std::fs::create_dir_all(&dir)?;
-                crate::arrow_io::write_airborne(
-                    &dir.join("airborne.arrow"),
-                    &rows,
-                    n_days,
-                    ga_n_days,
-                )?;
-                written.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Each cell writes only its own file, so the start order cannot change any output byte.
+    crate::largest_first_memory_admission::run_largest_first_within_memory_budget(
+        &allocation_allowances,
+        threads,
+        concurrent_budget,
+        |task| {
+            let (square, shard_path) = &square_inputs[task];
+            let mut rows = Vec::new();
+            for_each_segment_batch(shard_path, |segments| {
+                seg_counter.add(segments.len() as u64);
+                rows.extend(segments.into_iter().filter(is_aircraft_airborne));
                 Ok(())
             })
-    })?;
+            .with_context(|| format!("read {}", shard_path.display()))?;
+            square_counter.add(1);
+            if rows.is_empty() {
+                return Ok(());
+            }
+            // Stable by flight: the dictionary lists flights in ascending id
+            // order and a flight's rows keep their shard order, so the bytes
+            // are reproducible.
+            rows.sort_by_key(|row| row.flight_id);
+            row_counter.add(rows.len() as u64);
+            let dir = prepared_year_dir.join(square_path(*square));
+            std::fs::create_dir_all(&dir)?;
+            crate::arrow_io::write_airborne(
+                &dir.join("airborne.arrow"),
+                &rows,
+                n_days,
+                ga_n_days,
+            )?;
+            written.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        },
+    )?;
     let written = written.load(std::sync::atomic::Ordering::Relaxed);
     let empty = n_square.saturating_sub(written);
     finished(
