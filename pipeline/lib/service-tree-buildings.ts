@@ -10,8 +10,8 @@ export const MAX_BUFFER_M = 50
 export interface ServiceBuilding { lat: number; lon: number; type: number; floors: number; area: number | null }
 
 export function readServiceBuildings(table: Table): ServiceBuilding[] {
-  if (table.schema.metadata.get('buildings_contract') !== 'buildings_v3' || table.schema.metadata.get('grid') !== 'z30') {
-    throw new Error('service-tree requires original buildings_v3/z30')
+  if (table.schema.metadata.get('buildings_contract') !== 'buildings_v4' || table.schema.metadata.get('grid') !== 'z30') {
+    throw new Error('service-tree requires original buildings_v4/z30')
   }
   for (const [name, bits, signed] of [['centroid_gx', 32, true], ['centroid_gy', 32, true],
     ['building_type', 8, false], ['floors', 8, false]] as const) {

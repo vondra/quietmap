@@ -1,7 +1,7 @@
 //! End-to-end source spill and Arrow contract regressions.
 
 use super::*;
-use arrow::array::{BinaryArray, Int32Array, StringArray, UInt8Array};
+use arrow::array::{BinaryArray, BooleanArray, Int32Array, Int64Array, StringArray, UInt8Array};
 use arrow::ipc::reader::FileReader;
 
 fn prague_ring_text() -> String {
@@ -160,8 +160,14 @@ fn buildings_writer_roundtrips_geom_and_contract() {
     let ring = prague_ring_text();
     // TSV: sq osm cgx cgy btype buse height floors name street houseno
     // opening area_source ring
-    let row = format!("100\t22\t1500\t2500\t0\t0\t0\t0\tH\tS\t1\t0\t0\t{ring}");
-    let rows = vec![row.split('\t').map(str::to_string).collect::<Vec<_>>()];
+    // A house, then a school ground far from it: the ground keeps its flag.
+    let rows: Vec<Vec<String>> = [
+        format!("100\t22\t1500\t2500\t0\t0\t0\t0\tH\tS\t1\t0\t0\t{ring}"),
+        "100\t23\t900000\t900000\t3\t0\t0\t0\tG\t\t\t0\t1\t".to_string(),
+    ]
+    .iter()
+    .map(|row| row.split('\t').map(str::to_string).collect())
+    .collect();
     let stats = JoinStats::default();
     write_buildings(
         &rows,
@@ -172,14 +178,26 @@ fn buildings_writer_roundtrips_geom_and_contract() {
     )
     .unwrap();
     let (schema, batches) = read_ipc(&path);
-    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
-    let batch = &batches[0];
+    let batch = arrow::compute::concat_batches(&std::sync::Arc::new(schema.clone()), &batches).unwrap();
+    let column_of = |name: &str| batch.column(schema.index_of(name).unwrap()).clone();
+    let osm_ids = column_of("osm_id");
+    let osm_ids = osm_ids.as_any().downcast_ref::<Int64Array>().unwrap();
+    let area_sources = column_of("area_source");
+    let area_sources = area_sources
+        .as_any()
+        .downcast_ref::<BooleanArray>()
+        .unwrap();
+    let flags: Vec<(i64, bool)> = (0..batch.num_rows())
+        .map(|row| (osm_ids.value(row), area_sources.value(row)))
+        .collect();
+    assert!(flags.contains(&(22, false)) && flags.contains(&(23, true)), "{flags:?}");
+    let house = flags.iter().position(|&(id, _)| id == 22).unwrap();
     let geom = batch
         .column(schema.index_of("geom").unwrap())
         .as_any()
         .downcast_ref::<BinaryArray>()
         .unwrap();
-    let ring = grid::poly::decode_grid_poly(geom.value(0)).unwrap();
+    let ring = grid::poly::decode_grid_poly(geom.value(house)).unwrap();
     assert_eq!(ring.len(), 4);
     // Area of the ~100×100 m test ring survives the roundtrip.
     let area = batch
@@ -187,14 +205,14 @@ fn buildings_writer_roundtrips_geom_and_contract() {
         .as_any()
         .downcast_ref::<arrow::array::Float32Array>()
         .unwrap()
-        .value(0);
+        .value(house);
     assert!((9_000.0..11_000.0).contains(&area), "area={area}");
     assert_eq!(
         schema
             .metadata()
             .get("buildings_contract")
             .map(String::as_str),
-        Some(BUILDINGS_CONTRACT_V3)
+        Some(BUILDINGS_CONTRACT_V4)
     );
     std::fs::remove_dir_all(&dir).ok();
 }

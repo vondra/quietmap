@@ -41,7 +41,8 @@ def buildings_arrow(path, rows):
         ("addr_street", pa.utf8()), ("addr_housenumber", pa.utf8()),
         ("geom", pa.binary()), ("area_m2", pa.float32()),
         ("opening_hours_frac", pa.uint8()), ("source_id", pa.uint16()),
-    ], metadata={b"buildings_contract": b"buildings_v3", b"grid": b"z30"})
+        ("area_source", pa.bool_()),
+    ], metadata={b"buildings_contract": b"buildings_v4", b"grid": b"z30"})
     with ipc.new_file(path, schema) as writer:
         writer.write_table(pa.table({name: [row[name] for row in rows]
                                      for name in schema.names}, schema=schema))
@@ -90,7 +91,7 @@ OVT_ANNEX_TWIN = shapely.box(14.171302, 49.781202, 14.171502, 49.781402)  # IoU 
 OVT_ANNEX_LOOSE = shapely.box(14.171260, 49.781160, 14.171460, 49.781360)  # IoU 0.471
 
 
-def osm_row(index, polygon, area, height=None, floors=0, use=0, btype=11):
+def osm_row(index, polygon, area, height=None, floors=0, use=0, btype=11, area_source=False):
     centroid = polygon.centroid if polygon is not None else shapely.Point(14.174, 49.784)
     gx, gy = GRID.lonlat_to_grid(centroid.x, centroid.y)
     return {
@@ -100,6 +101,7 @@ def osm_row(index, polygon, area, height=None, floors=0, use=0, btype=11):
         "addr_housenumber": None,
         "geom": grid_polygon(polygon) if polygon is not None else None,
         "area_m2": area, "opening_hours_frac": 0, "source_id": 0,
+        "area_source": area_source,
     }
 
 

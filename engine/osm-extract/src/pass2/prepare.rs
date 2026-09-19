@@ -14,7 +14,6 @@ pub(super) struct PreparedBlob {
 
 pub(super) enum Prepared {
     Way(PreparedWay),
-    Fallthrough(String),
     Point(PreparedPoint),
     Train(TrainRouteRecord),
 }
@@ -59,9 +58,6 @@ pub(super) fn prepare_blob(
                 let is_relation_member = manifest.way_to_relations.contains_key(&way.id());
                 let mut way_class = classify::classify_way(&way);
                 if way_class.is_none() && !is_relation_member {
-                    if let Some(reason) = classify::fallthrough_reason(&way) {
-                        out.items.push(Prepared::Fallthrough(reason));
-                    }
                     continue;
                 }
                 let resolved_nodes: Vec<_> = way.refs().map(|id| (id, cache.get(id))).collect();

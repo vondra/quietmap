@@ -623,7 +623,7 @@ pub fn poi_class(
             "restaurant" | "bar" | "pub" | "cafe" | "fast_food" | "food_court" | "ice_cream"
             | "nightclub" => return Some(ids::SETTLEMENT_HOSPITALITY),
             "fuel" | "car_wash" => return Some(1), // small-commercial placeholder (PROP-MEAS)
-            "parking" | "parking_space" => return Some(7),
+            "parking" | "parking_space" => return Some(ids::SETTLEMENT_PARKING_STRUCTURE),
             "fire_station" | "police" | "townhall" | "courthouse" | "post_office" => {
                 return Some(9)
             }
@@ -680,7 +680,7 @@ fn building_type(val: &str) -> u8 {
         "church" | "cathedral" | "chapel" | "mosque" | "synagogue" | "temple" | "monastery"
         | "religious" | "wayside_shrine" | "presbytery" | "shrine" => 5,
         "hotel" | "hostel" | "motel" => 6,
-        "garage" | "garages" | "carport" | "parking" => 7,
+        "garage" | "garages" | "carport" | "parking" => ids::SETTLEMENT_PARKING_STRUCTURE,
         "farm" | "barn" | "stable" | "sty" | "cowshed" => 8,
         // Large semi-open sports structures: occasional crowds, mostly empty
         // concrete — a moderate public-grade level, NOT a footprint-scaled

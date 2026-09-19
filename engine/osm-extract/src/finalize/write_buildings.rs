@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use super::{
     decode_tsv_ring, parse_grid_cell, polygon_row_bbox, schema_with_contract,
-    write_arrow_z14_blocked, BUILDINGS_CONTRACT_V3,
+    write_arrow_z14_blocked, BUILDINGS_CONTRACT_V4,
 };
 use crate::poi_join::{joined_building_type, JoinStats, PoiIndex};
 use grid::Square;
@@ -63,9 +63,12 @@ pub(super) fn write_buildings(
             Field::new("source_id", DataType::UInt16, false),
             // opening_hours day-fraction (0=unknown,1=24/7,2=day,3=evening/night).
             Field::new("opening_hours_frac", DataType::UInt8, false),
+            // A functional AREA without a `building` tag (school ground, retail
+            // zone): it emits, but nothing stands there, so it must never screen.
+            Field::new("area_source", DataType::Boolean, false),
         ],
         "buildings_contract",
-        BUILDINGS_CONTRACT_V3,
+        BUILDINGS_CONTRACT_V4,
     );
 
     let mut osm_id = Int64Builder::with_capacity(n);
@@ -82,6 +85,7 @@ pub(super) fn write_buildings(
     let mut source_id = UInt16Builder::with_capacity(n);
     let mut geom = BinaryBuilder::with_capacity(n, n * 100);
     let mut opening = UInt8Builder::with_capacity(n);
+    let mut area_source = BooleanBuilder::with_capacity(n);
     let mut row_bboxes = Vec::with_capacity(n);
 
     // Centroids of the REAL buildings in this square (those with a `building`
@@ -140,6 +144,7 @@ pub(super) fn write_buildings(
         street.append_value(&row[9]);
         housenumber.append_value(&row[10]);
         opening.append_value(row[11].parse().unwrap_or(0));
+        area_source.append_value(row[12] == "1");
         match ring.as_ref() {
             Some(ring) => {
                 match area_opt {
@@ -174,6 +179,7 @@ pub(super) fn write_buildings(
             Arc::new(area_m2.finish()),
             Arc::new(source_id.finish()),
             Arc::new(opening.finish()),
+            Arc::new(area_source.finish()),
         ],
         &row_bboxes,
     )
