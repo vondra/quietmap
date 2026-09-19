@@ -116,7 +116,7 @@ class AdminResolver:
 
         A polygon can hold a point only if it meets the box, so when exactly one polygon meets the box and
         holds all of it in its interior (no border, hole or enclave reaches in), each point is within that
-        polygon alone. A box without area proves nothing and takes the per-point path.
+        polygon alone. A box without area is a degenerate polygon, so its few points are tested themselves.
         """
         if not len(x) or x.min() == x.max() or y.min() == y.max():
             return None

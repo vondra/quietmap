@@ -24,6 +24,8 @@ from worker_jobs import available_memory_bytes, cpu_jobs, fit_jobs  # noqa: E402
 
 # 20 workers finished the 60 GiB world-build share of square-country-city.
 WORKER_BYTES = 2 << 30
+# Bounds a worker's resolve memory by rows, not by its largest file (2.1 million road rows in one square).
+RESOLVE_ROWS = 1 << 18
 
 COUNTRY_CITY_COLUMNS = {"country_iso": pa.uint16(), "city_id": pa.uint16(), "continent": pa.uint8()}
 COUNTRY_CONTRACT = b"country_baked_v1"
@@ -33,9 +35,6 @@ _RESOLVER = None
 
 
 def baked_batch(batch, values, contract):
-    present = [name for name in COUNTRY_CITY_COLUMNS if name in batch.schema.names]
-    if present and len(present) != len(COUNTRY_CITY_COLUMNS):
-        raise ValueError("Partial country bake; country_iso/city_id/continent must be all-or-none")
     result = batch
     for name, arrow_type in COUNTRY_CITY_COLUMNS.items():
         array = pa.array(values[name], type=arrow_type)
@@ -51,20 +50,29 @@ def baked_batch(batch, values, contract):
     return result.replace_schema_metadata(metadata)
 
 
-def file_geography(path, resolver):
-    """One resolve per file: a per-batch resolve spends most of its time in fixed per-call overhead."""
+def file_geography(path, resolver, contract):
+    """Whole-file resolve: a per-batch resolve spends most of its time in fixed per-call overhead."""
     with pa.memory_map(str(path), "r") as source:
         rows = pa.ipc.open_file(source).read_all()
-        if path.stem != "industrial":
-            return resolver.resolve(*segment_midpoints(rows))
-        if (rows.schema.metadata or {}).get(b"grid") != b"z30":
+        present = [name for name in COUNTRY_CITY_COLUMNS if name in rows.schema.names]
+        if present and len(present) != len(COUNTRY_CITY_COLUMNS):
+            raise ValueError("Partial country bake; country_iso/city_id/continent must be all-or-none")
+        if contract[1] == COUNTRY_CONTRACT:
+            resolve, (latitudes, longitudes) = resolver.resolve, segment_midpoints(rows)
+        elif (rows.schema.metadata or {}).get(b"grid") != b"z30":
             raise ValueError("industrial Arrow requires the z30 grid contract")
-        return resolver.resolve_land(*grid_points(rows, "centroid"))
+        else:
+            resolve, (latitudes, longitudes) = resolver.resolve_land, grid_points(rows, "centroid")
+    chunks = [resolve(latitudes[first:first + RESOLVE_ROWS], longitudes[first:first + RESOLVE_ROWS])
+              for first in range(0, max(len(latitudes), 1), RESOLVE_ROWS)]
+    return {name: np.concatenate([chunk[name] for chunk in chunks]) for name in COUNTRY_CITY_COLUMNS}
 
 
 def bake_file(path, resolver):
     contract = expected_contract(path)
-    values = file_geography(path, resolver)
+    # Taken before the first read, so a writer between the resolve and the rewrite fails the bake.
+    original_stat = path.stat()
+    values = file_geography(path, resolver, contract)
     first_row = 0
 
     def baked_next_batch(batch):
@@ -73,7 +81,7 @@ def bake_file(path, resolver):
         first_row = rows.stop
         return baked_batch(batch, {name: column[rows] for name, column in values.items()}, contract)
 
-    return rewrite_arrow_batches(path, baked_next_batch)
+    return rewrite_arrow_batches(path, baked_next_batch, original_stat)
 
 
 def expected_contract(path):

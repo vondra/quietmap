@@ -37,8 +37,9 @@ def segment_midpoints(batch):
     return (start_lat + end_lat) / 2, wrapped_longitude_midpoint(start_lon, end_lon)
 
 
-def rewrite_arrow_batches(path, transform):
-    original_stat = path.stat()
+def rewrite_arrow_batches(path, transform, original_stat=None):
+    """`original_stat` is the caller's stat from before its own earlier read of `path`, when it made one."""
+    original_stat = original_stat or path.stat()
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(temporary_name)
     changed, rows = False, 0

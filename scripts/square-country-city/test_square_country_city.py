@@ -74,6 +74,8 @@ class CountryBakeTests(unittest.TestCase):
             self.assertEqual(bake_file(path, self.resolver), (2, True))
             before = path.read_bytes()
             with pa.ipc.open_file(path) as reader:
+                self.assertEqual(reader.read_all().column("country_iso").to_pylist(),
+                                 [int.from_bytes(b"CZ", "little"), int.from_bytes(b"PL", "little")])
                 self.assertEqual(reader.num_record_batches, 2)
                 self.assertEqual(reader.schema.metadata[b"qm_blocks"], blocks)
                 self.assertEqual(reader.schema.metadata[b"source"], b"fixture")
@@ -129,7 +131,10 @@ class CountryBakeTests(unittest.TestCase):
                  "hole and enclave inside the box": ([(49.3, 14.3), (49.7, 14.65), (49.42, 14.42), (49.5, 14.5)],
                                                      [code["CZ"], code["CZ"], 0, code["PL"]]),
                  "overlap inside the box": ([(50.4, 14.65), (50.6, 14.8), (50.8, 14.95)], None),
-                 "box without area": ([(50, 14.5), (50.5, 14.5)], [code["CZ"]] * 2)}
+                 "box without area": ([(50, 14.5), (50.5, 14.5)], [code["CZ"]] * 2),
+                 # On an edge or vertex no polygon holds the point; the coastal rule over outer rings decides.
+                 "points on borders": ([(50, 14), (49, 14), (49.5, 14.4), (49.45, 14.5), (50.3, 14.5)],
+                                       [code["CZ"], code["CZ"], 0, code["PL"], code["CZ"]])}
         for label, (points, expected) in cases.items():
             with self.subTest(label):
                 latitudes, longitudes = (np.array(axis) for axis in zip(*points))
