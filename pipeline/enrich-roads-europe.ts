@@ -19,7 +19,7 @@ import {
 
 const MAXIMUM_DISTANCE_METRES = 50
 
-type MatchedRoad = Pick<RoadRow, 'startLat' | 'startLon' | 'endLat' | 'endLon' | 'midLat' | 'midLon' | 'osmId' | 'oneway' | 'roadClass'>
+type MatchedRoad = Pick<RoadRow, 'startLat' | 'startLon' | 'endLat' | 'endLon' | 'midLat' | 'midLon' | 'osmId' | 'roadClass'>
 interface ObservationSegment extends SegmentCoordinates { record: EuropeanTrafficRecord }
 export interface EuropeanTrafficIndex {
   segments: ReadonlyMap<string, readonly ObservationSegment[]>
@@ -51,8 +51,7 @@ const NEVER_MATCHED_BY_PROXIMITY: ReadonlySet<number> = new Set([6, 7, 8, 10, 11
 const MINIMUM_ALONG_LINE_COSINE = Math.cos(30 * Math.PI / 180)
 
 /** Without the publisher's way id a row must be the counted street itself: an eligible class
- *  running along the line (a cross street within 50 m is not), and for a directional line a
- *  one-way row must run with it, because the row running against it is the other carriageway. */
+ *  running along the line in either direction (a cross street within 50 m is not). */
 function liesAlongObservation(row: MatchedRoad, segment: ObservationSegment): boolean {
   if (NEVER_MATCHED_BY_PROXIMITY.has(row.roadClass)) return false
   const scale = M_PER_DEG_LON_EQ * Math.cos(row.midLat * Math.PI / 180)
@@ -61,9 +60,7 @@ function liesAlongObservation(row: MatchedRoad, segment: ObservationSegment): bo
   const lineNorth = (segment.endLatitude - segment.startLatitude) * M_PER_DEG_LAT
   const lengths = Math.hypot(rowEast, rowNorth) * Math.hypot(lineEast, lineNorth)
   if (lengths === 0) return true // a point count has no heading
-  const cosine = (rowEast * lineEast + rowNorth * lineNorth) / lengths
-  if (Math.abs(cosine) < MINIMUM_ALONG_LINE_COSINE) return false
-  return segment.record.countBasis !== 'directional' || !row.oneway || (row.oneway === 1 ? cosine : -cosine) >= 0
+  return Math.abs(rowEast * lineEast + rowNorth * lineNorth) / lengths >= MINIMUM_ALONG_LINE_COSINE
 }
 
 /** The publisher's own way identity qualifies at any distance; every other row must lie along the line. */

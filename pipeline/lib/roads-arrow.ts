@@ -65,6 +65,8 @@ export interface RoadAadt extends RoadObservation {
   observationSourceId?: number
 }
 
+/** Both writers offer every field lazily. No AADT matcher reads `oneway` or `countryCode`: a count
+ *  stamps either carriageway and the writer itself gates national sources by baked country. */
 export interface RoadRow extends SegmentGeometry {
   ref: string | null
   name: string | null

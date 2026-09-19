@@ -1,6 +1,6 @@
 /** Flat column access and per-batch column rebuild for roads.arrow writers: no per-row `Vector.get`, no `makeTable`. */
 
-import { Field, RecordBatch, Schema, Struct, Table, makeData, makeVector, type Data, type Vector } from 'apache-arrow'
+import { DataType, Field, RecordBatch, Schema, Struct, Table, makeData, makeVector, type Data, type Vector } from 'apache-arrow'
 import { bakedRoadCountryReader, segmentGeometryReader, type SegmentGeometry } from './prepared-grid.js'
 import type { RoadRow } from './roads-arrow.js'
 
@@ -75,8 +75,12 @@ export function tableWithRebuiltColumns(
     return chunks
   })
   const fields = [...kept.map(position => table.schema.fields[position]),
-    ...[...rebuiltColumns.keys()].map((name, column) => new Field(name, children[0][kept.length + column].type,
-      children.some(chunks => chunks[kept.length + column].nullable)))]
+    // Flags of a column new to the file, as `makeTable` declared them and every stored file carries them: a built
+    // string column nullable, a typed-array column not. `withArrowWrite` restores the stored flag of an existing column.
+    ...[...rebuiltColumns.keys()].map((name, column) => {
+      const { type } = children[0][kept.length + column]
+      return new Field(name, type, DataType.isUtf8(type))
+    })]
   const schema = new Schema(fields, metadata)
   return new Table(schema, batches.map((batch, position) => new RecordBatch(schema, makeData({
     type: new Struct(fields), length: batch.numRows, nullCount: 0, children: children[position] }))))
