@@ -52,7 +52,7 @@ SCHEMA = pa.schema(
 BUILDINGS_COLUMNS = [
     "osm_id", "centroid_gx", "centroid_gy", "building_type", "building_use",
     "height", "floors", "name", "addr_street", "addr_housenumber", "geom",
-    "area_m2", "opening_hours_frac", "source_id",
+    "area_m2", "opening_hours_frac", "source_id", "area_source",
 ]
 
 # The columns the emission view is validated against, in buildings.arrow order.
@@ -90,9 +90,9 @@ def load_osm_buildings(path):
         return {column: [] for column in [*BUILDINGS_COLUMNS, "shapely"]}
     t = ipc.open_file(path).read_all()
     contract = (t.schema.metadata or {}).get(b"buildings_contract")
-    if contract != b"buildings_v3":
+    if contract != b"buildings_v4":
         raise SystemExit(
-            f"{path}: buildings_contract mismatch (expected buildings_v3, got "
+            f"{path}: buildings_contract mismatch (expected buildings_v4, got "
             f"{contract!r}) — re-extract OSM"
         )
     require_grid_contract(t, path, ("centroid_gx", "centroid_gy"))

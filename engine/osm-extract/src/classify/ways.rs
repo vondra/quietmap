@@ -91,12 +91,12 @@ pub(crate) fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
         return Some(FeatureType::Industrial);
     }
 
-    // Functional AREA with no `building` tag IS a noise source: a mall master
-    // polygon (shop=mall), a hospital ground, a school yard, a retail/commercial
-    // zone. FUNCTION is the gate, not just `building=` (audit 2026-06). Reuses
-    // poi_class so the area classifies identically to the same function on a
-    // building; the overlap with sub-buildings inside it is suppressed in
-    // finalize (an area containing real buildings defers to them).
+    // Functional AREA with no `building` tag IS a noise source and never an
+    // obstacle: a mall master polygon (shop=mall), a hospital ground, a school
+    // yard, a retail/commercial zone. FUNCTION is the gate, not just `building=`
+    // (audit 2026-06). Reuses poi_class so the area classifies identically to
+    // the same function on a building; the overlap with sub-buildings inside it
+    // is suppressed in finalize (an area containing real buildings defers to them).
     if is_functional_area(tag) {
         return Some(FeatureType::Building);
     }
@@ -104,58 +104,23 @@ pub(crate) fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
     None
 }
 
-/// True if a tag set is a functional building AREA worth keeping even without a
-/// `building` tag: a noise-relevant `amenity`/`shop`/`healthcare`/`tourism` POI,
-/// or a retail/commercial landuse zone. Takes a `tag` lookup so way + relation
-/// routing share ONE definition (each already has its own closure).
+/// True if a tag set is a functional AREA worth keeping as an emission source
+/// even without a `building` tag: a noise-relevant `amenity`/`shop`/
+/// `healthcare`/`tourism` POI, or a retail/commercial landuse zone. Takes a `tag`
+/// lookup so way + relation routing share ONE definition (each already has its
+/// own closure).
 pub(crate) fn is_functional_area<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool {
+    // An open car park has no walls and none of the vent fans the parking
+    // STRUCTURE class emits (per-movement Parkplatzlärm is not modelled), so
+    // without a `building` tag it is neither an obstacle nor a source.
     crate::spill::poi_class(
         tag("amenity"),
         tag("shop"),
         tag("healthcare"),
         tag("tourism"),
     )
-    .is_some()
+    .is_some_and(|class| class != crate::ids::SETTLEMENT_PARKING_STRUCTURE)
         || matches!(tag("landuse"), Some("retail" | "commercial"))
-}
-
-/// Observability: for a way that classified to `None` (vanished from the map),
-/// the noise-relevant tag it carried that arguably SHOULD route it but currently
-/// doesn't. Drives the extract's fall-through report so a silent gap is visible.
-/// Returns `None` for genuinely irrelevant ways (the overwhelming majority).
-pub fn fallthrough_reason(way: &Way) -> Option<String> {
-    let tags = way.tags().collect::<Vec<_>>();
-    let tag = |k: &str| tags.iter().find(|(key, _)| *key == k).map(|(_, v)| *v);
-    // Car parks are vehicle sources (Parkplatzlärm), a separate concern from the
-    // building layer — don't report them as a building gap.
-    if matches!(
-        tag("amenity"),
-        Some("parking" | "parking_space" | "parking_entrance")
-    ) {
-        return None;
-    }
-    // A functional POI as an AREA (no building wrapper) — mall / hospital / school.
-    if crate::spill::poi_class(
-        tag("amenity"),
-        tag("shop"),
-        tag("healthcare"),
-        tag("tourism"),
-    )
-    .is_some()
-    {
-        let kind = tag("shop")
-            .map(|v| format!("shop={v}"))
-            .or_else(|| tag("amenity").map(|v| format!("amenity={v}")))
-            .unwrap_or_else(|| "poi".into());
-        return Some(kind);
-    }
-    if let Some(v @ ("retail" | "commercial" | "port" | "harbour" | "landfill")) = tag("landuse") {
-        return Some(format!("landuse={v}"));
-    }
-    if let Some(v @ ("plant" | "substation")) = tag("power") {
-        return Some(format!("power={v}"));
-    }
-    None
 }
 
 /// True if a tag set describes an open-air leisure AREA source (no `building`).
@@ -342,7 +307,20 @@ pub fn extract_way_tags(way: &Way, ftype: &FeatureType) -> Tags {
 
 #[cfg(test)]
 mod tests {
-    use super::keep_road_tag;
+    use super::{is_functional_area, keep_road_tag};
+
+    /// Praha, Na Špitálce (way 1342239310): a 2 m wide `parking=street_side`
+    /// strip became a 3 m wall. A ground with a function still routes, as a source.
+    #[test]
+    fn open_car_park_without_a_building_tag_is_not_extracted() {
+        let routes = |tags: &[(&str, &str)]| {
+            is_functional_area(|key| tags.iter().find(|(k, _)| *k == key).map(|(_, v)| *v))
+        };
+        assert!(!routes(&[("amenity", "parking"), ("parking", "street_side")]));
+        assert!(!routes(&[("amenity", "parking_space")]));
+        assert!(routes(&[("amenity", "school")]));
+        assert!(routes(&[("landuse", "retail")]));
+    }
 
     #[test]
     fn road_keep_list_carries_old_ref_for_the_fallback() {

@@ -109,11 +109,6 @@ fn main() -> Result<()> {
         &spiller.audit.default_residential,
         12,
     );
-    report_top(
-        "  functional AREA vanished (no building tag → routing fall-through)",
-        &pass2.fallthrough_tags,
-        12,
-    );
     eprintln!(
         "  antimeridian polygon rings omitted (centroid-only): {}",
         pass2.antimeridian_rings_omitted

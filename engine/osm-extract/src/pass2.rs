@@ -12,7 +12,7 @@ use anyhow::Result;
 use osmpbf::BlobReader;
 use prepare::{prepare_blob, Prepared, PreparedBlob, PreparedPoint, PreparedWay};
 use rayon::prelude::*;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 pub struct Pass2Stats {
@@ -20,7 +20,6 @@ pub struct Pass2Stats {
     pub features_total: u64,
     pub rels_assembled: u64,
     pub antimeridian_rings_omitted: u64,
-    pub fallthrough_tags: HashMap<String, u64>,
 }
 
 /// Parallel decode/classify/lookup in bounded blob batches; apply in file order
@@ -40,7 +39,6 @@ pub fn extract_features(
         features_total: 0,
         rels_assembled: 0,
         antimeridian_rings_omitted: 0,
-        fallthrough_tags: HashMap::new(),
     };
 
     let batch_len = rayon::current_num_threads().max(1);
@@ -97,9 +95,6 @@ fn apply_prepared(
     }
     for item in blob.items {
         match item {
-            Prepared::Fallthrough(reason) => {
-                *stats.fallthrough_tags.entry(reason).or_insert(0) += 1;
-            }
             Prepared::Train(route) => transport.write_train_route(&route)?,
             Prepared::Point(point) => apply_point(point, spiller, stats)?,
             Prepared::Way(way) => {

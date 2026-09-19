@@ -7,6 +7,8 @@
 //! Values verified 2026-09-04 against dev/1 — never invent new ids here.
 
 // settlement.rs ids
+/// Garage, carport, multi-storey car park: the profile is a structure's vent fans.
+pub const SETTLEMENT_PARKING_STRUCTURE: u8 = 7;
 pub const SETTLEMENT_SILENT: u8 = 10;
 pub const SETTLEMENT_HOUSE: u8 = 11;
 pub const SETTLEMENT_FOOD_RETAIL: u8 = 12;

@@ -3,7 +3,6 @@
 from functools import lru_cache
 import hashlib
 import json
-import os
 from pathlib import Path
 
 
@@ -56,10 +55,3 @@ def input_content_digest(input_files):
     return _digest_of_each_file(
         input_files, lambda file: content_digest_of_path_size_and_mtime(path_size_and_mtime(file)))
 
-
-def fingerprint_with_ctime_of_squares_built_before_content_digests(input_files):
-    """Those squares stored no content digest; delete this with the next world structures build."""
-    def identity_with_ctime(file):
-        identity = path_size_and_mtime(file)
-        return identity if identity[1] is None else (*identity, os.stat(identity[0]).st_ctime_ns)
-    return _digest_of_each_file(input_files, identity_with_ctime)

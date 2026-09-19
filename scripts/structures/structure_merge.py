@@ -8,10 +8,7 @@ import shapely
 from shapely import STRtree
 
 import qmgrid
-from structure_freshness import (
-    fingerprint_with_ctime_of_squares_built_before_content_digests, input_content_digest,
-    input_fingerprint, structure_input_files,
-)
+from structure_freshness import input_content_digest, input_fingerprint, structure_input_files
 from structure_contract import (
     SCHEMA, CONTRACT_KEY, CONTRACT_VERSION, KIND_BUILDING, KIND_BARRIER,
     load_osm_buildings, load_barriers, wall_grid_poly, wall_centroid_grid,
@@ -26,17 +23,8 @@ IOU_MATCH_THRESHOLD = 0.5
 
 # Bump by hand in the commit that changes the rows this builder writes. A hash of the source
 # text rebuilt every square of the world after a comment edit.
-BUILDER_VERSION = "structures-builder-1"
-# Source-text hashes stamped before the explicit version; they wrote the same rows. The served
-# world counted 217,414 worker-pool and 44,730 serial RAM-mosaic squares (2026-09-18). The next
-# world structures build restamps every square: delete these with it, together with
-# fingerprint_with_ctime_of_squares_built_before_content_digests.
-SOURCE_TEXT_HASHES_OF_BUILDER_VERSION_1 = (
-    "ee8627f5ab0d96d69c97f9039048b720bafc14b11dd9afffe436d81a20da9345",
-    "4a5f9dbd74d3c216237204aebc2760d580754faf69916973468884c7865486a4",
-)
-ACCEPTED_BUILDER_VERSIONS = {
-    version.encode() for version in (BUILDER_VERSION, *SOURCE_TEXT_HASHES_OF_BUILDER_VERSION_1)}
+# 2: an area source (buildings_v4 `area_source`) emits but never matches, screens or has a height.
+BUILDER_VERSION = "structures-builder-2"
 
 
 def structure_is_fresh(out_path, input_files):
@@ -44,13 +32,11 @@ def structure_is_fresh(out_path, input_files):
         return False
     with ipc.open_file(out_path) as output_file:
         metadata = output_file.schema.metadata or {}
-    if not (metadata.get(b"builder_version") in ACCEPTED_BUILDER_VERSIONS
+    if not (metadata.get(b"builder_version") == BUILDER_VERSION.encode()
             and metadata.get(CONTRACT_KEY.encode()) == CONTRACT_VERSION.encode()
             and metadata.get(b"grid") == b"z30"):
         return False
-    if metadata.get(b"input_fingerprint") in (
-            input_fingerprint(input_files).encode(),
-            fingerprint_with_ctime_of_squares_built_before_content_digests(input_files).encode()):
+    if metadata.get(b"input_fingerprint") == input_fingerprint(input_files).encode():
         return True
     # Size or mtime moved: only different bytes make the input changed.
     stored_content = metadata.get(b"input_content_digest")
@@ -122,7 +108,9 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
 
     osm_geoms, osm_geom_idx, osm_geom_by_row = [], [], {}
     for i, g in enumerate(osm["shapely"]):
-        if g is None or g.is_empty:
+        # Nothing stands on an area source (school ground, retail zone): it emits from its ring,
+        # but it must never borrow an Overture footprint, take a raster height or screen.
+        if g is None or g.is_empty or osm["area_source"][i]:
             continue
         osm_geoms.append(g)
         osm_geom_idx.append(i)
@@ -137,7 +125,8 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
     for i in range(n_osm):
         if i in matched_osm:
             continue
-        h, tier = overture_height_ladder(osm["height"][i], osm["floors"][i])
+        h, tier = ((0.0, 2) if osm["area_source"][i]
+                   else overture_height_ladder(osm["height"][i], osm["floors"][i]))
         gx, gy = osm["centroid_gx"][i], osm["centroid_gy"][i]
         clon, clat = qmgrid.grid_to_lonlat(gx, gy)
         row = {"height_m": h, "tier": tier,
@@ -171,9 +160,9 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
             envelope = ovt["envelope"]
             cgx, cgy = qmgrid.lonlat_to_grid(ovt["clon"], ovt["clat"])
         else:
-            osm_blob = osm["geom"][i_osm]
-            geom_blob = (qmgrid.encode_grid_polygons([[qmgrid.decode_grid_poly(osm_blob)]])
-                         if osm_blob is not None else None)
+            geom_blob = (
+                qmgrid.encode_grid_polygons([[qmgrid.decode_grid_poly(osm["geom"][i_osm])]])
+                if i_osm in osm_geom_by_row else None)
             r = osm_only[i_osm]  # every unmatched OSM row laddered above
             height_m, tier = r["height_m"], r["tier"]
             envelope = ENVELOPE_FROM_BUILDING_USE.get(

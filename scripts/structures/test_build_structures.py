@@ -53,6 +53,21 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(row["emission_centroid_gx"], GRID.lonlat_to_grid(OSM_POLY.centroid.x, OSM_POLY.centroid.y)[0])
         self.assertEqual(row["emission_geom"], grid_polygon(OSM_POLY))
 
+    def test_school_ground_emits_but_never_screens_or_borrows_an_overture_footprint(self):
+        # The ground covers the centroid of an Overture building OSM lacks: as a building row it
+        # would match it, and alone it would stand as a wall with a raster height.
+        ground = osm_row(0, OSM_WAREHOUSE, 6000.0, btype=3, area_source=True)
+        buildings_arrow(self.prepared / SQUARE / "buildings.arrow", [ground])
+        census, t = self.build([ovt_row(OVT_ANNEX_TWIN)])
+        self.assertEqual((census["both"], census["overture_only"]), (0, 1))
+        area, overture = (
+            {name: t.column(name)[row].as_py() for name in t.column_names} for row in range(2))
+        self.assertEqual((area["osm_id"], area["building_type"]), (1000, 3))
+        self.assertEqual(area["emission_geom"], grid_polygon(OSM_WAREHOUSE))
+        self.assertEqual((area["geom"], area["screening_ordinal"], area["height_m"]), (None, None, 0))
+        self.assertEqual((overture["osm_id"], overture["screening_ordinal"]), (None, 0))
+        self.assertEqual(overture["geom"], screening_polygons(OVT_ANNEX_TWIN))
+
     def test_a_contested_first_choice_falls_through_to_the_next_twin(self):
         """Both Overture footprints rank the annex first; the loser must take the
         warehouse it also qualifies against instead of becoming Overture-only.

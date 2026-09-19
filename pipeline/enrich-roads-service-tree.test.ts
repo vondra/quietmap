@@ -94,7 +94,7 @@ function fixture(directory: string, roads: ServiceRoad[], emptyBuildings = false
   const points = emptyBuildings ? [] : [grid(50.00001, 14.0015)]
   const buildings = makeTable({ centroid_gx: Int32Array.from(points, r => r[0]), centroid_gy: Int32Array.from(points, r => r[1]),
     building_type: new Uint8Array(points.length), floors: Uint8Array.from(points, () => 2), area_m2: Float32Array.from(points, () => 400) })
-  store(resolve(directory, 'buildings.arrow'), buildings, new Map([['grid', 'z30'], ['buildings_contract', 'buildings_v3']]))
+  store(resolve(directory, 'buildings.arrow'), buildings, new Map([['grid', 'z30'], ['buildings_contract', 'buildings_v4']]))
 }
 
 test('real IPC preserves measured roads, all other columns and batches; retraction heals even without eligible roads', async () => {
