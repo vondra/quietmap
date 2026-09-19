@@ -35,17 +35,16 @@ fn squares(year: &Path) -> Result<Vec<Square>, String> {
 }
 
 fn promote(year: &Path, staging: &Path, squares: &[Square]) -> Result<usize, String> {
-    let mut count = 0;
-    for square in squares {
+    // Every square renames into and syncs its own directory, so promotions are independent.
+    let count = squares.par_iter().map(|square| -> Result<usize, String> {
         let source = road_path(staging, *square);
-        if source.is_file() {
-            let target = road_path(year, *square);
-            std::fs::rename(&source, &target).map_err(|e| e.to_string())?;
-            std::fs::File::open(target.parent().ok_or("road parent missing")?)
-                .and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
-            count += 1;
-        }
-    }
+        if !source.is_file() { return Ok(0); }
+        let target = road_path(year, *square);
+        std::fs::rename(&source, &target).map_err(|e| e.to_string())?;
+        std::fs::File::open(target.parent().ok_or("road parent missing")?)
+            .and_then(|f| f.sync_all()).map_err(|e| e.to_string())?;
+        Ok(1)
+    }).try_reduce(|| 0, |left, right| Ok(left + right))?;
     std::fs::remove_dir_all(staging).map_err(|e| e.to_string())?;
     Ok(count)
 }
