@@ -19,6 +19,11 @@ def replace_atomically(temporary, path):
         os.close(descriptor)
 
 
+def grid_to_latlon(gx, gy):
+    x, y = ((axis.astype(np.float64) - (1 << 29)) * QUANTUM_M for axis in (gx, gy))
+    return np.degrees(2 * np.arctan(np.exp(y / RADIUS_M)) - np.pi / 2), np.degrees(x / RADIUS_M)
+
+
 def grid_points(batch, prefix):
     coordinates = []
     for axis in ("gx", "gy"):
@@ -26,9 +31,8 @@ def grid_points(batch, prefix):
         index = batch.schema.get_field_index(name)
         if index < 0 or batch.column(index).type != pa.int32() or batch.column(index).null_count:
             raise ValueError(f"{name} must be a non-null Int32 grid column")
-        coordinates.append((batch.column(index).to_numpy().astype(np.float64) - (1 << 29)) * QUANTUM_M)
-    x, y = coordinates
-    return np.degrees(2 * np.arctan(np.exp(y / RADIUS_M)) - np.pi / 2), np.degrees(x / RADIUS_M)
+        coordinates.append(batch.column(index).to_numpy())
+    return grid_to_latlon(*coordinates)
 
 
 def segment_midpoints(batch):
