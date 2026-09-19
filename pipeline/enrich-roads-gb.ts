@@ -4,17 +4,16 @@ import { roadObservation, type RoadObservation } from './lib/road-observation.js
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { parse } from 'csv-parse/sync'
 import { writeCacheAtomically } from './lib/atomic-cache.js'
 import { SOURCE_ID_GB_NATIONAL_ROADS } from './lib/source-ids.generated.js'
-import { listPreparedSquares } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/provenance.js'
-import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
+import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
   isSlipRoadClass,
   disjointVehicleClassCountsFitPublishedTotal, writeRoadAadt, type RoadRow,
 } from './lib/roads-arrow.js'
+import { writeNationalRoadSquares } from './lib/square-pool.js'
 import { haversineM } from './lib/spatial.js'
 
 const SOURCE_ID = SOURCE_ID_GB_NATIONAL_ROADS
@@ -36,15 +35,6 @@ export interface DftCountPoint extends RoadObservation {
   moto: number
   total: number
   year: number
-}
-
-export interface GbEnrichmentResult {
-  rows: number
-  matched: number
-  retracted: number
-  skippedForeign: number
-  squares: number
-  squaresUpdated: number
 }
 
 type CsvRow = Record<string, string>
@@ -210,17 +200,11 @@ export function matchDftPoint(
 export async function enrichGreatBritainRoads(
   preparedDirectory: string,
   points: readonly DftCountPoint[],
-): Promise<GbEnrichmentResult> {
-  const squares = listPreparedSquares(preparedDirectory, GREAT_BRITAIN_BBOX)
-  if (squares.length === 0) throw new Error(`no Great Britain roads.arrow squares found under ${preparedDirectory}`)
+) {
   const pointsByRef = pointIndex(points)
-  const result: GbEnrichmentResult = {
-    rows: 0, matched: 0, retracted: 0, skippedForeign: 0,
-    squares: squares.length, squaresUpdated: 0,
-  }
-  for (const square of squares) {
-    const write = await writeRoadAadt(
-      resolve(preparedDirectory, square, 'roads.arrow'),
+  return writeNationalRoadSquares(preparedDirectory, GREAT_BRITAIN_BBOX, 'Great Britain', {}, path =>
+    writeRoadAadt(
+      path,
       (row) => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const point = matchDftPoint(row, pointsByRef)
@@ -232,26 +216,13 @@ export async function enrichGreatBritainRoads(
       undefined,
       undefined,
       { sourceIds: [SOURCE_ID], when: row => matchDftPoint(row, pointsByRef) === null },
-    )
-    result.rows += write.rows
-    result.matched += write.matched
-    result.retracted += write.retracted
-    result.skippedForeign += write.skippedForeign
-    if (write.updated) result.squaresUpdated++
-  }
-  return result
+    ))
 }
 
-async function main(): Promise<void> {
-  const options = parseRoadLoaderArguments(process.argv.slice(2), 'enrich-roads-gb.ts')
+async function main(options: RoadLoaderArguments) {
   const points = await loadDftPoints(options)
   const result = await enrichGreatBritainRoads(options.preparedDirectory, points)
-  console.log(JSON.stringify({ points: points.length, ...result }))
+  return { points: points.length, ...result }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error)
-    process.exitCode = 1
-  })
-}
+runRoadLoaderCli(import.meta.url, main)

@@ -3,6 +3,7 @@
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { DataType, Table, makeVector } from 'apache-arrow'
+import { CZECHIA_BBOX } from './enrich-roads-cz.js'
 import { withArrowWrite } from './lib/provenance.js'
 import { bakedRoadCountryReader, iso2Code } from './lib/prepared-grid.js'
 import { readPlanningRoads } from './lib/road-planning-input.js'
@@ -51,7 +52,7 @@ export async function enrichTaperSquare(path: string) {
 }
 
 async function main(): Promise<void> {
-  await runSquareSteps('usage: enrich-roads-taper.ts --prepared-dir PREPARED_YEAR_DIR', directory => enrichTaperSquare(resolve(directory, 'roads.arrow')))
+  await runSquareSteps('usage: enrich-roads-taper.ts --prepared-dir PREPARED_YEAR_DIR', directory => enrichTaperSquare(resolve(directory, 'roads.arrow')), CZECHIA_BBOX)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

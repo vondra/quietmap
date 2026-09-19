@@ -1,15 +1,13 @@
 /** Enrich z9 Norwegian roads with NVDB Trafikkmengde measurements. */
 
 import { roadObservation } from './lib/road-observation.js'
-import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { listPreparedSquares } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/provenance.js'
-import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
+import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import { loadNorwegianNvdbSource, type NorwegianNvdbSegment } from './lib/roads-no-source.js'
 import { buildOneHundredthDegreePointGrid } from './lib/spatial.js'
 import { SOURCE_ID_NO_NATIONAL_ROADS } from './lib/source-ids.generated.js'
 import { nearestCountWithin200Metres, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { writeNationalRoadSquares } from './lib/square-pool.js'
 
 const SOURCE_ID = SOURCE_ID_NO_NATIONAL_ROADS
 const NORWAY_BBOX = [57.9, 4.5, 71.2, 31.2] as const
@@ -20,15 +18,11 @@ export async function enrichNorwegianRoads(
   segments: readonly NorwegianNvdbSegment[],
 ) {
   if (segments.length === 0) throw new Error('Norwegian NVDB source has no usable measurements')
-  const squares = listPreparedSquares(preparedDirectory, NORWAY_BBOX)
-  if (squares.length === 0) throw new Error(`no Norwegian roads.arrow squares found under ${preparedDirectory}`)
   const grid = buildOneHundredthDegreePointGrid(segments)
   const match = (row: RoadRow): NorwegianNvdbSegment | null => nearestCountWithin200Metres(row, grid)
-  const result = { rows: 0, matched: 0, retracted: 0, skipped: 0, skippedForeign: 0,
-    squares: squares.length, squaresUpdated: 0 }
-  for (const square of squares) {
-    const write = await writeRoadAadt(
-      resolve(preparedDirectory, square, 'roads.arrow'),
+  return writeNationalRoadSquares(preparedDirectory, NORWAY_BBOX, 'Norwegian', {}, path =>
+    writeRoadAadt(
+      path,
       row => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const segment = match(row)
@@ -41,15 +35,7 @@ export async function enrichNorwegianRoads(
       COVERED_ROAD_CLASSES,
       { sourceIds: [SOURCE_ID], when: row =>
         !COVERED_ROAD_CLASSES.has(row.roadClass) || match(row) === null },
-    )
-    result.rows += write.rows
-    result.matched += write.matched
-    result.retracted += write.retracted
-    result.skipped += write.skipped
-    result.skippedForeign += write.skippedForeign
-    if (write.updated) result.squaresUpdated++
-  }
-  return result
+    ))
 }
 
 export async function runNorwegianRoadEnrichment(options: RoadLoaderArguments) {
@@ -60,11 +46,4 @@ export async function runNorwegianRoadEnrichment(options: RoadLoaderArguments) {
     ...await enrichNorwegianRoads(options.preparedDirectory, source.segments) }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  runNorwegianRoadEnrichment(parseRoadLoaderArguments(process.argv.slice(2), 'enrich-roads-no.ts'))
-    .then(result => console.log(JSON.stringify(result)))
-    .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : error)
-      process.exitCode = 1
-    })
-}
+runRoadLoaderCli(import.meta.url, runNorwegianRoadEnrichment)

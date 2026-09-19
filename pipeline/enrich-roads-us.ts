@@ -5,11 +5,10 @@ import { roadFeatureObservation } from './lib/pinned-road-lines.js'
 import type { RoadObservation } from './lib/road-observation.js'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { writeCacheAtomically } from './lib/atomic-cache.js'
 import { DATASETS } from './lib/enrichment-datasets.js'
 import { iso2Code, listPreparedSquares, lonLatToGrid } from './lib/prepared-grid.js'
-import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
+import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
   applyRoadTimeProfiles, nearestCountWithin200Metres, osmRoadClassRank, readRoadTimeProfilesSource,
   ROAD_CLASS_RANK_TOLERANCE, writeRoadAadt, type RoadRow, type RoadTimeProfileEntry,
@@ -19,6 +18,7 @@ import {
   buildOneHundredthDegreePointGrid, haversineM, pointGridCandidates, pointSearchReach, wrapLonDeltaDeg, type RankedPoint,
 } from './lib/spatial.js'
 import { writeTmasProfileSquares } from './lib/roads-us-tmas-write.js'
+import { ownSquareShard, writeNationalRoadSquares } from './lib/square-pool.js'
 import { loadTmasProfiles, TMAS_SOURCE_URL, type TmasStationProfile } from './lib/roads-us-tmas-source.js'
 
 const SOURCE_ID = SOURCE_ID_US_FHWA_HPMS
@@ -166,8 +166,6 @@ export async function loadUsSegments(options: RoadLoaderArguments): Promise<UsRo
 
 export async function enrichUsRoads(preparedDirectory: string, segments: readonly UsRoadSegment[]) {
   if (segments.length === 0) throw new Error('FHWA snapshot has no usable traffic measurements')
-  const squares = listPreparedSquares(preparedDirectory, US_BBOX)
-  if (squares.length === 0) throw new Error(`no US roads.arrow squares found under ${preparedDirectory}`)
   const grid = buildOneHundredthDegreePointGrid(segments)
   const match = (row: RoadRow) => {
     if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
@@ -177,20 +175,9 @@ export async function enrichUsRoads(preparedDirectory: string, segments: readonl
       moto: segment.moto, sourceId: SOURCE_ID,
     } : null
   }
-  const result = { rows: 0, matched: 0, retracted: 0, skipped: 0, skippedForeign: 0,
-    squares: squares.length, squaresUpdated: 0 }
-  for (const square of squares) {
-    const write = await writeRoadAadt(resolve(preparedDirectory, square, 'roads.arrow'),
-      match, undefined, COVERED_ROAD_CLASSES,
-      { sourceIds: [SOURCE_ID], when: row => !COVERED_ROAD_CLASSES.has(row.roadClass) || match(row) === null })
-    result.rows += write.rows
-    result.matched += write.matched
-    result.retracted += write.retracted
-    result.skipped += write.skipped
-    result.skippedForeign += write.skippedForeign
-    if (write.updated) result.squaresUpdated++
-  }
-  return result
+  return writeNationalRoadSquares(preparedDirectory, US_BBOX, 'US', {}, path =>
+    writeRoadAadt(path, match, undefined, COVERED_ROAD_CLASSES,
+      { sourceIds: [SOURCE_ID], when: row => !COVERED_ROAD_CLASSES.has(row.roadClass) || match(row) === null }))
 }
 
 /** Digits tail of an OSM road ref ("US 101" → "101", "I 5" → "5"). */
@@ -296,12 +283,14 @@ export async function applyTmasProfileSquares(
  * the AADT step stays independently runnable). */
 export async function runUsEnrichment(options: RoadLoaderArguments) {
   const segments = await loadUsSegments(options)
-  const tmas = await loadTmasProfiles(options)
   const result = { segments: segments.length,
     oneWaySegments: segments.filter(segment => segment.countBasis === 'directional' && !segment.isRamp).length,
     rampSegments: segments.filter(segment => segment.isRamp).length,
     unknownScopeSegments: segments.filter(segment => segment.countBasis === 'unknown').length,
     ...await enrichUsRoads(options.preparedDirectory, segments) }
+  // The TMAS writer runs its own pool over a list read from file contents, so only the fan-out parent
+  // runs it, and loads it after the walk so that it does not count as memory every shard repeats.
+  const tmas = ownSquareShard ? null : await loadTmasProfiles(options)
   if (!tmas) return result
   const profiles = await enrichTmasTimeProfiles(options.preparedDirectory, tmas.stations)
   return {
@@ -316,10 +305,4 @@ export async function runUsEnrichment(options: RoadLoaderArguments) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const options = parseRoadLoaderArguments(process.argv.slice(2), 'enrich-roads-us.ts')
-  runUsEnrichment(options).then(result => console.log(JSON.stringify(result))).catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error)
-    process.exitCode = 1
-  })
-}
+runRoadLoaderCli(import.meta.url, runUsEnrichment)

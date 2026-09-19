@@ -1,27 +1,19 @@
 /** Enrich z9 Amsterdam roads with the pinned EU-city 2025 AADT source. */
 
-import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { SOURCE_ID_EU_CITY_TRAFFIC } from './lib/source-ids.generated.js'
-import { listPreparedSquares, type PreparedBbox } from './lib/prepared-grid.js'
+import type { PreparedBbox } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/provenance.js'
-import { parseRoadLoaderArguments } from './lib/road-loader-cli.js'
+import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
   loadAmsterdamTrafficCensus, type AmsterdamTrafficRecord,
 } from './lib/roads-nl-source.js'
 import { writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { writeNationalRoadSquares } from './lib/square-pool.js'
 import { flatDist } from './lib/spatial.js'
 
 const SOURCE_ID = SOURCE_ID_EU_CITY_TRAFFIC
 const GRID_CELL_DEGREES = 0.001
 const MAXIMUM_MATCH_DISTANCE_M = 50
-
-export interface NlEnrichmentResult {
-  rows: number
-  matched: number
-  squares: number
-  squaresUpdated: number
-}
 
 const gridKey = (latitudeCell: number, longitudeCell: number): string =>
   `${latitudeCell},${longitudeCell}`
@@ -96,18 +88,11 @@ function sourceBbox(records: readonly AmsterdamTrafficRecord[]): PreparedBbox {
 export async function enrichNetherlandsRoads(
   preparedDirectory: string,
   records: readonly AmsterdamTrafficRecord[],
-): Promise<NlEnrichmentResult> {
-  const squares = listPreparedSquares(preparedDirectory, sourceBbox(records))
-  if (squares.length === 0) {
-    throw new Error(`no Amsterdam roads.arrow squares found under ${preparedDirectory}`)
-  }
+) {
   const grid = indexAmsterdamTraffic(records)
-  const result: NlEnrichmentResult = {
-    rows: 0, matched: 0, squares: squares.length, squaresUpdated: 0,
-  }
-  for (const square of squares) {
-    const write = await writeRoadAadt(
-      resolve(preparedDirectory, square, 'roads.arrow'),
+  return writeNationalRoadSquares(preparedDirectory, sourceBbox(records), 'Amsterdam', {}, path =>
+    writeRoadAadt(
+      path,
       (row) => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const record = matchAmsterdamTrafficRecord(row, grid)
@@ -119,25 +104,14 @@ export async function enrichNetherlandsRoads(
           sourceId: SOURCE_ID,
         } : null
       },
-    )
-    result.rows += write.rows
-    result.matched += write.matched
-    if (write.updated) result.squaresUpdated++
-  }
-  return result
+    ))
 }
 
-async function main(): Promise<void> {
-  const options = parseRoadLoaderArguments(process.argv.slice(2), 'enrich-roads-nl.ts')
+async function main(options: RoadLoaderArguments) {
   const census = await loadAmsterdamTrafficCensus(options)
   const result = await enrichNetherlandsRoads(options.preparedDirectory, census.records)
   const { records, ...source } = census
-  console.log(JSON.stringify({ ...source, records: records.length, ...result }))
+  return { ...source, records: records.length, ...result }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error)
-    process.exitCode = 1
-  })
-}
+runRoadLoaderCli(import.meta.url, main)

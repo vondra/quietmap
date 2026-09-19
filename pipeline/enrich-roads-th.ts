@@ -1,14 +1,12 @@
 /** Enrich Thailand roads from pinned DRR counts and explicit DOH corridor policies. */
 
 import { roadObservation } from './lib/road-observation.js'
-import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { listPreparedSquares } from './lib/prepared-grid.js'
-import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
+import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import { loadThailandDrrSource, thailandDrrTraffic, type ThailandDrrSource } from './lib/roads-th-source.js'
 import { inBbox } from './lib/spatial.js'
 import { SOURCE_ID_TH_ROAD_CLASSIFICATION_FALLBACK, SOURCE_ID_TH_NATIONAL_ROADS } from './lib/source-ids.generated.js'
 import { isSlipRoadClass, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { writeNationalRoadSquares } from './lib/square-pool.js'
 
 const THAILAND_BBOX = [5.5, 97.3, 20.5, 105.7] as const
 const BANGKOK_BBOX = [13.5, 100.3, 14.2, 100.9] as const
@@ -53,28 +51,21 @@ export function matchThailandRoad(row: RoadRow, source: ThailandDrrSource) {
 }
 
 export async function enrichThailandRoads(preparedDirectory: string, source: ThailandDrrSource) {
-  const squares = listPreparedSquares(preparedDirectory, THAILAND_BBOX)
-  if (squares.length === 0) throw new Error(`no Thailand roads.arrow squares found under ${preparedDirectory}`)
-  const result = { rows: 0, matched: 0, retracted: 0, skipped: 0, skippedForeign: 0,
-    squares: squares.length, squaresUpdated: 0, matchedDrr: 0, matchedMotorway: 0, matchedTrunk: 0 }
-  for (const square of squares) {
-    const match = (row: RoadRow) => matchThailandRoad(row, source)
-    const write = await writeRoadAadt(resolve(preparedDirectory, square, 'roads.arrow'), row => {
+  const tally = { matchedDrr: 0, matchedMotorway: 0, matchedTrunk: 0 }
+  const match = (row: RoadRow) => matchThailandRoad(row, source)
+  const counters = await writeNationalRoadSquares(preparedDirectory, THAILAND_BBOX, 'Thailand', tally, path =>
+    writeRoadAadt(path, row => {
       const traffic = match(row)
       return traffic ? { countBasis: traffic.countBasis, observationId: traffic.observationId, light: traffic.light, medium: traffic.medium, heavy: traffic.heavy,
         moto: traffic.moto, sourceId: traffic.kind === 'drr' ? SOURCE_ID_TH_NATIONAL_ROADS : SOURCE_ID_TH_ROAD_CLASSIFICATION_FALLBACK } : null
     }, (_row, _index, traffic) => {
       const kind = match(_row)?.kind
-      if (kind === 'drr') result.matchedDrr++
-      else if (kind === 'motorway') result.matchedMotorway++
-      else if (kind === 'trunk') result.matchedTrunk++
+      if (kind === 'drr') tally.matchedDrr++
+      else if (kind === 'motorway') tally.matchedMotorway++
+      else if (kind === 'trunk') tally.matchedTrunk++
     }, undefined, { sourceIds: [SOURCE_ID_TH_NATIONAL_ROADS, SOURCE_ID_TH_ROAD_CLASSIFICATION_FALLBACK], when: row => { const traffic = match(row); return traffic === null ||
-        (traffic.kind === 'drr' ? SOURCE_ID_TH_NATIONAL_ROADS : SOURCE_ID_TH_ROAD_CLASSIFICATION_FALLBACK) !== row.existingSourceId } })
-    result.rows += write.rows; result.matched += write.matched; result.retracted += write.retracted
-    result.skipped += write.skipped; result.skippedForeign += write.skippedForeign
-    if (write.updated) result.squaresUpdated++
-  }
-  return result
+        (traffic.kind === 'drr' ? SOURCE_ID_TH_NATIONAL_ROADS : SOURCE_ID_TH_ROAD_CLASSIFICATION_FALLBACK) !== row.existingSourceId } }))
+  return { ...counters, ...tally }
 }
 
 export async function runThailandRoadEnrichment(options: RoadLoaderArguments) {
@@ -86,8 +77,4 @@ export async function runThailandRoadEnrichment(options: RoadLoaderArguments) {
     ...await enrichThailandRoads(options.preparedDirectory, source) }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  runThailandRoadEnrichment(parseRoadLoaderArguments(process.argv.slice(2), 'enrich-roads-th.ts'))
-    .then(result => console.log(JSON.stringify(result)))
-    .catch((error: unknown) => { console.error(error instanceof Error ? error.message : error); process.exitCode = 1 })
-}
+runRoadLoaderCli(import.meta.url, runThailandRoadEnrichment)

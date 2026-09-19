@@ -1,18 +1,17 @@
 /** Enrich z9 German roads with BASt SVZ 2021 measured vehicle classes. */
 
 import { roadObservation } from './lib/road-observation.js'
-import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import {
   SOURCE_ID_DE_BAST_AUTOBAHN, SOURCE_ID_DE_BAST_BUNDESSTRASSEN,
 } from './lib/source-ids.generated.js'
-import { listPreparedSquares } from './lib/prepared-grid.js'
-import { parseRoadLoaderArguments } from './lib/road-loader-cli.js'
+import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
   loadBastCensus, type BastCensusSection,
 } from './lib/roads-de-source.js'
 import { BW_HOURLY_SOURCE_URL, loadBwHourlyProfiles, type BwStationProfile } from './lib/roads-de-bw-hourly-source.js'
+import { listPreparedSquares } from './lib/prepared-grid.js'
 import { isSlipRoadClass, writeRoadAadt, applyRoadTimeProfiles, type RoadRow, type RoadTimeProfileEntry } from './lib/roads-arrow.js'
+import { ownSquareShard, writeNationalRoadSquares } from './lib/square-pool.js'
 import { haversineM } from './lib/spatial.js'
 
 const GERMANY_BBOX = [46, 4, 56, 16] as const
@@ -24,17 +23,6 @@ const GRID_SEARCH_RADIUS = 4
 export interface BastCensusIndex {
   byRef: ReadonlyMap<string, readonly BastCensusSection[]>
   grid: ReadonlyMap<string, readonly BastCensusSection[]>
-}
-
-export interface DeEnrichmentResult {
-  rows: number
-  matched: number
-  retracted: number
-  matchedAutobahn: number
-  matchedBundesstrasse: number
-  skippedForeign: number
-  squares: number
-  squaresUpdated: number
 }
 
 const gridKey = (lat: number, lon: number): string =>
@@ -115,17 +103,12 @@ function sourceId(section: BastCensusSection): number {
 export async function enrichGermanRoads(
   preparedDirectory: string,
   sections: readonly BastCensusSection[],
-): Promise<DeEnrichmentResult> {
-  const squares = listPreparedSquares(preparedDirectory, GERMANY_BBOX)
-  if (squares.length === 0) throw new Error(`no German roads.arrow squares found under ${preparedDirectory}`)
+) {
   const census = indexBastCensus(sections)
-  const result: DeEnrichmentResult = {
-    rows: 0, matched: 0, retracted: 0, matchedAutobahn: 0, matchedBundesstrasse: 0,
-    skippedForeign: 0, squares: squares.length, squaresUpdated: 0,
-  }
-  for (const square of squares) {
-    const write = await writeRoadAadt(
-      resolve(preparedDirectory, square, 'roads.arrow'),
+  const tally = { matchedAutobahn: 0, matchedBundesstrasse: 0 }
+  const counters = await writeNationalRoadSquares(preparedDirectory, GERMANY_BBOX, 'German', tally, path =>
+    writeRoadAadt(
+      path,
       (row) => {
         const section = matchBastSection(row, census)
         if (!section) return null
@@ -141,8 +124,8 @@ export async function enrichGermanRoads(
         }
       },
       (_row, _index, applied) => {
-        if (applied.sourceId === SOURCE_ID_DE_BAST_AUTOBAHN) result.matchedAutobahn++
-        else result.matchedBundesstrasse++
+        if (applied.sourceId === SOURCE_ID_DE_BAST_AUTOBAHN) tally.matchedAutobahn++
+        else tally.matchedBundesstrasse++
       },
       undefined,
       { sourceIds: [SOURCE_ID_DE_BAST_AUTOBAHN, SOURCE_ID_DE_BAST_BUNDESSTRASSEN],
@@ -150,14 +133,8 @@ export async function enrichGermanRoads(
           const section = matchBastSection(row, census)
           return section === null || sourceId(section) !== row.existingSourceId
         } },
-    )
-    result.rows += write.rows
-    result.matched += write.matched
-    result.retracted += write.retracted
-    result.skippedForeign += write.skippedForeign
-    if (write.updated) result.squaresUpdated++
-  }
-  return result
+    ))
+  return { ...counters, ...tally }
 }
 
 const BW_BBOX = [47.4, 7.4, 50.0, 10.6] as const
@@ -206,32 +183,23 @@ export function matchBwStation(
 /** Stamp observed BW period profiles next to (never onto) the AADT columns. */
 export async function enrichBwTimeProfiles(
   preparedDirectory: string, stations: readonly BwStationProfile[],
-): Promise<DeEnrichmentResult> {
-  const squares = listPreparedSquares(preparedDirectory, BW_BBOX)
+) {
   const byRef = bwByRef(stations)
   const entries = bwProfileEntries(stations)
   const indexOf = new Map(entries.map((entry, index) => [entry.station, index + 1]))
-  const result: DeEnrichmentResult = {
-    rows: 0, matched: 0, retracted: 0, matchedAutobahn: 0, matchedBundesstrasse: 0,
-    skippedForeign: 0, squares: squares.length, squaresUpdated: 0,
-  }
-  const write = await applyRoadTimeProfiles(preparedDirectory, squares, BW_HOURLY_SOURCE_URL, entries,
-    row => indexOf.get(matchBwStation(row, byRef)?.svznr ?? '') ?? 0)
-  result.rows = write.rows
-  result.matched = write.matched
-  result.squaresUpdated = write.squaresUpdated
-  return result
+  return applyRoadTimeProfiles(preparedDirectory, listPreparedSquares(preparedDirectory, BW_BBOX),
+    BW_HOURLY_SOURCE_URL, entries, row => indexOf.get(matchBwStation(row, byRef)?.svznr ?? '') ?? 0)
 }
 
-async function main(): Promise<void> {
-  const options = parseRoadLoaderArguments(process.argv.slice(2), 'enrich-roads-de.ts')
+async function main(options: RoadLoaderArguments) {
   const census = await loadBastCensus(options)
   const result = await enrichGermanRoads(options.preparedDirectory, census.sections)
   // Observed period profiles are a separate concern from AADT: absent dataset
   // (not yet pinned) skips the step without touching anything.
-  const bw = await loadBwHourlyProfiles(options)
+  // Few squares: the fan-out parent alone stamps them after its shards exit.
+  const bw = ownSquareShard ? null : await loadBwHourlyProfiles(options)
   const bwResult = bw ? await enrichBwTimeProfiles(options.preparedDirectory, bw.stations) : null
-  console.log(JSON.stringify({
+  return {
     sourceRows: census.sourceRows,
     sections: census.sections.length,
     invalidRowsSkipped: census.invalidRowsSkipped,
@@ -242,12 +210,7 @@ async function main(): Promise<void> {
     bwCompleteDays: bw?.completeDays ?? 0,
     bwMatched: bwResult?.matched ?? 0,
     bwSquaresUpdated: bwResult?.squaresUpdated ?? 0,
-  }))
+  }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error)
-    process.exitCode = 1
-  })
-}
+runRoadLoaderCli(import.meta.url, main)

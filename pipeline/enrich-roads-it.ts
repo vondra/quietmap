@@ -1,16 +1,14 @@
 /** Enrich z9 Italian roads with Anas TGM point measurements. */
 
-import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { listPreparedSquares } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/provenance.js'
-import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
+import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
   loadItalianTgmSource, normalizeItalianOsmRef, type ItalianTgmStation,
 } from './lib/roads-it-source.js'
 import { flatDist } from './lib/spatial.js'
 import { SOURCE_ID_IT_NATIONAL_ROADS } from './lib/source-ids.generated.js'
 import { isSlipRoadClass, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { writeNationalRoadSquares } from './lib/square-pool.js'
 
 const SOURCE_ID = SOURCE_ID_IT_NATIONAL_ROADS
 const ITALY_BBOX = [35.5, 6.6, 47.1, 18.6] as const
@@ -63,15 +61,11 @@ export async function enrichItalianRoads(
   stations: readonly ItalianTgmStation[],
 ) {
   if (stations.length === 0) throw new Error('Italian TGM source has no usable measurements')
-  const squares = listPreparedSquares(preparedDirectory, ITALY_BBOX)
-  if (squares.length === 0) throw new Error(`no Italian roads.arrow squares found under ${preparedDirectory}`)
   const stationsByRef = indexItalianTgm(stations)
   const match = (row: RoadRow): ItalianTgmStation | null => matchItalianTgm(row, stationsByRef)
-  const result = { rows: 0, matched: 0, retracted: 0, skippedForeign: 0,
-    squares: squares.length, squaresUpdated: 0 }
-  for (const square of squares) {
-    const write = await writeRoadAadt(
-      resolve(preparedDirectory, square, 'roads.arrow'),
+  return writeNationalRoadSquares(preparedDirectory, ITALY_BBOX, 'Italian', {}, path =>
+    writeRoadAadt(
+      path,
       row => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const station = match(row)
@@ -80,14 +74,7 @@ export async function enrichItalianRoads(
       undefined,
       undefined,
       { sourceIds: [SOURCE_ID], when: row => match(row) === null },
-    )
-    result.rows += write.rows
-    result.matched += write.matched
-    result.retracted += write.retracted
-    result.skippedForeign += write.skippedForeign
-    if (write.updated) result.squaresUpdated++
-  }
-  return result
+    ))
 }
 
 export async function runItalianRoadEnrichment(options: RoadLoaderArguments) {
@@ -99,11 +86,4 @@ export async function runItalianRoadEnrichment(options: RoadLoaderArguments) {
     ...await enrichItalianRoads(options.preparedDirectory, source.stations) }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  runItalianRoadEnrichment(parseRoadLoaderArguments(process.argv.slice(2), 'enrich-roads-it.ts'))
-    .then(result => console.log(JSON.stringify(result)))
-    .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : error)
-      process.exitCode = 1
-    })
-}
+runRoadLoaderCli(import.meta.url, runItalianRoadEnrichment)

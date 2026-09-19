@@ -151,7 +151,9 @@ uses every CPU that still fits the process memory limit. Per-square world heuris
 (service-tree, continuity, taper, railways-parallel, industrial wind/name, built-up)
 shard that way. Built-up completion is stored with the owner/halo structure identities
 and classification code; an unchanged retry reads only the Arrow header. Changed
-structure inputs invalidate that square. Country adapters stay one process: they load a national dataset once.
+structure inputs invalidate that square. Country adapters, national policies and national networks load their
+dataset, then re-spawn their own command line per shard. Every shard repeats the load (at most 6 s), so the
+shard count is `--jobs` capped by memory over the parent's peak resident size plus one square. The receipt carries `shards`.
 Industrial GEM/global/special stay one process because facility winners compete worldwide.
 
 Service-tree visits every road square, including those without buildings. Empty
