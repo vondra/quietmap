@@ -1,7 +1,9 @@
 /** Strict shared path and cache-mode arguments for national road loaders. */
 
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
+import { ownSquareShard, runRoadSquaresCli } from './square-pool.js'
 
 export interface RoadLoaderArguments {
   preparedDirectory: string
@@ -34,7 +36,13 @@ export function parseRoadLoaderArguments(
   return {
     preparedDirectory: resolve(values['prepared-dir']),
     enrichmentDirectory: resolve(values['enrichment-dir']),
-    enrichOnly: values['enrich-only'],
-    forceDownload: values['force-download'],
+    // A shard child reads the cache its parent has already loaded; it never downloads again.
+    enrichOnly: values['enrich-only'] || ownSquareShard !== null,
+    forceDownload: values['force-download'] && ownSquareShard === null,
   }
+}
+
+export function runRoadLoaderCli(moduleUrl: string, run: (options: RoadLoaderArguments) => Promise<object>): void {
+  runRoadSquaresCli(moduleUrl, async () =>
+    run(parseRoadLoaderArguments(process.argv.slice(2), basename(fileURLToPath(moduleUrl)))))
 }

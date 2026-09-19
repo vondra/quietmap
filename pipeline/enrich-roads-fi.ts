@@ -4,15 +4,14 @@ import { roadFeatureObservation } from './lib/pinned-road-lines.js'
 import type { RoadObservation } from './lib/road-observation.js'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { writeCacheAtomically } from './lib/atomic-cache.js'
 import { SOURCE_ID_FI_NATIONAL_ROADS } from './lib/source-ids.generated.js'
-import { listPreparedSquares } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/provenance.js'
-import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
+import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
   disjointVehicleClassCountsFitPublishedTotal, nearestCountWithin200Metres, writeRoadAadt, type RoadRow,
 } from './lib/roads-arrow.js'
+import { writeNationalRoadSquares } from './lib/square-pool.js'
 import { buildOneHundredthDegreePointGrid, type RankedPoint } from './lib/spatial.js'
 
 const SOURCE_ID = SOURCE_ID_FI_NATIONAL_ROADS
@@ -30,15 +29,6 @@ export interface FiRoadSegment extends RankedPoint, RoadObservation {
   medium: number
   heavy: number
   moto: number
-}
-
-export interface FiEnrichmentResult {
-  rows: number
-  matched: number
-  retracted: number
-  skippedForeign: number
-  squares: number
-  squaresUpdated: number
 }
 
 export interface ParsedFiPages {
@@ -180,18 +170,12 @@ async function loadFiSegments(options: RoadLoaderArguments): Promise<ParsedFiPag
 export async function enrichFinnishRoads(
   preparedDirectory: string,
   segments: readonly FiRoadSegment[],
-): Promise<FiEnrichmentResult> {
-  const squares = listPreparedSquares(preparedDirectory, FINLAND_BBOX)
-  if (squares.length === 0) throw new Error(`no Finnish roads.arrow squares found under ${preparedDirectory}`)
+) {
   const grid = buildOneHundredthDegreePointGrid(segments)
   const match = (row: RoadRow): FiRoadSegment | null => nearestCountWithin200Metres(row, grid)
-  const result: FiEnrichmentResult = {
-    rows: 0, matched: 0, retracted: 0, skippedForeign: 0,
-    squares: squares.length, squaresUpdated: 0,
-  }
-  for (const square of squares) {
-    const write = await writeRoadAadt(
-      resolve(preparedDirectory, square, 'roads.arrow'),
+  return writeNationalRoadSquares(preparedDirectory, FINLAND_BBOX, 'Finnish', {}, path =>
+    writeRoadAadt(
+      path,
       (row) => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const segment = match(row)
@@ -204,30 +188,17 @@ export async function enrichFinnishRoads(
       undefined,
       COVERED_ROAD_CLASSES,
       { sourceIds: [SOURCE_ID], when: row => match(row) === null },
-    )
-    result.rows += write.rows
-    result.matched += write.matched
-    result.retracted += write.retracted
-    result.skippedForeign += write.skippedForeign
-    if (write.updated) result.squaresUpdated++
-  }
-  return result
+    ))
 }
 
-async function main(): Promise<void> {
-  const options = parseRoadLoaderArguments(process.argv.slice(2), 'enrich-roads-fi.ts')
+async function main(options: RoadLoaderArguments) {
   const parsed = await loadFiSegments(options)
   const result = await enrichFinnishRoads(options.preparedDirectory, parsed.segments)
-  console.log(JSON.stringify({
+  return {
     segments: parsed.segments.length,
     inconsistentClassTotalsSkipped: parsed.inconsistentClassTotalsSkipped,
     ...result,
-  }))
+  }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error)
-    process.exitCode = 1
-  })
-}
+runRoadLoaderCli(import.meta.url, main)

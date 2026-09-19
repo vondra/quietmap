@@ -4,18 +4,17 @@ import { roadFeatureObservation } from './lib/pinned-road-lines.js'
 import type { RoadObservation } from './lib/road-observation.js'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { writeCacheAtomically } from './lib/atomic-cache.js'
 import { SOURCE_ID_CZ_RSD_SCITANI } from './lib/source-ids.generated.js'
-import { listPreparedSquares } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/provenance.js'
 import { roadClassTakesCount, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { writeNationalRoadSquares } from './lib/square-pool.js'
 import { pointToPolylineDist } from './lib/spatial.js'
-import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
+import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 
 const SOURCE_ID = SOURCE_ID_CZ_RSD_SCITANI
 const COVERED_ROAD_CLASSES: ReadonlySet<number> = new Set([0, 1, 2, 3, 4, 10, 11, 12])
-const CZECHIA_BBOX = [48.2, 11.7, 51.4, 19.2] as const
+export const CZECHIA_BBOX = [48.2, 11.7, 51.4, 19.2] as const
 const CACHE_RELATIVE_PATH = 'cz/rsd-scitani.json'
 const RSD_QUERY_URL = 'https://geoportal.rsd.cz/arcgis/rest/services/ScitaniDopravy/MapServer/3/query'
 const RSD_BBOX_SJTSK = { xmin: -900000, ymin: -1300000, xmax: -400000, ymax: -900000 }
@@ -34,15 +33,6 @@ export interface CensusSection extends RoadObservation {
 export interface ParsedCensus {
   byRef: ReadonlyMap<string, readonly CensusSection[]>
   zeroSectionsSkipped: number
-}
-
-export interface CzEnrichmentResult {
-  rows: number
-  matched: number
-  retracted: number
-  skippedForeign: number
-  squares: number
-  squaresUpdated: number
 }
 
 function count(attributes: Record<string, unknown>, name: string): number {
@@ -136,16 +126,10 @@ export function matchCensusSection(
 export async function enrichCzechRoads(
   preparedDirectory: string,
   censusByRef: ReadonlyMap<string, readonly CensusSection[]>,
-): Promise<CzEnrichmentResult> {
-  const squares = listPreparedSquares(preparedDirectory, CZECHIA_BBOX)
-  if (squares.length === 0) throw new Error(`no Czech roads.arrow squares found under ${preparedDirectory}`)
-  const result: CzEnrichmentResult = {
-    rows: 0, matched: 0, retracted: 0, skippedForeign: 0,
-    squares: squares.length, squaresUpdated: 0,
-  }
-  for (const square of squares) {
-    const write = await writeRoadAadt(
-      resolve(preparedDirectory, square, 'roads.arrow'),
+) {
+  return writeNationalRoadSquares(preparedDirectory, CZECHIA_BBOX, 'Czech', {}, path =>
+    writeRoadAadt(
+      path,
       (row) => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
         const section = matchCensusSection(row, censusByRef)
@@ -161,14 +145,7 @@ export async function enrichCzechRoads(
       undefined,
       COVERED_ROAD_CLASSES,
       { sourceIds: [SOURCE_ID], when: row => matchCensusSection(row, censusByRef) === null },
-    )
-    result.rows += write.rows
-    result.matched += write.matched
-    result.retracted += write.retracted
-    result.skippedForeign += write.skippedForeign
-    if (write.updated) result.squaresUpdated++
-  }
-  return result
+    ))
 }
 
 async function downloadCensus(): Promise<unknown[]> {
@@ -229,23 +206,17 @@ export function normalizeOsmRef(ref: string): string {
   return ''
 }
 
-async function main(): Promise<void> {
-  const options = parseRoadLoaderArguments(process.argv.slice(2), 'enrich-roads-cz.ts')
+async function main(options: RoadLoaderArguments) {
   const features = await loadCensusFeatures(options)
   const census = parseCensus(features)
   const result = await enrichCzechRoads(options.preparedDirectory, census.byRef)
-  console.log(JSON.stringify({
+  return {
     cache: resolve(options.enrichmentDirectory, CACHE_RELATIVE_PATH),
     features: features.length,
     refs: census.byRef.size,
     zeroSectionsSkipped: census.zeroSectionsSkipped,
     ...result,
-  }))
+  }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error)
-    process.exitCode = 1
-  })
-}
+runRoadLoaderCli(import.meta.url, main)

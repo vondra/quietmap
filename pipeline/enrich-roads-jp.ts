@@ -1,14 +1,12 @@
 /** Enrich z9 Japanese roads with MLIT census route medians and class fallbacks. */
 
 import type { RoadObservation } from './lib/road-observation.js'
-import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
-import { listPreparedSquares } from './lib/prepared-grid.js'
-import { parseRoadLoaderArguments, type RoadLoaderArguments } from './lib/road-loader-cli.js'
+import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import { leadingJapaneseRoadDigits, loadJapaneseRoadCensus, normalizeJapaneseRoadIdentity,
   type JapaneseRoadCensus, type JapaneseVehicleCounts } from './lib/roads-jp-source.js'
 import { SOURCE_ID_JP_CLASS_MEDIAN_FALLBACK, SOURCE_ID_JP_NATIONAL_ROADS } from './lib/source-ids.generated.js'
 import { writeRoadAadt, type RoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { writeNationalRoadSquares } from './lib/square-pool.js'
 
 const MEASURED_SOURCE_ID = SOURCE_ID_JP_NATIONAL_ROADS
 const FALLBACK_SOURCE_ID = SOURCE_ID_JP_CLASS_MEDIAN_FALLBACK
@@ -71,23 +69,11 @@ export function buildJapaneseRoadMatcher(census: JapaneseRoadCensus): (row: Road
 
 export async function enrichJapaneseRoads(preparedDirectory: string, census: JapaneseRoadCensus) {
   if (census.admittedSections === 0) throw new Error('Japanese census has no usable sections')
-  const squares = listPreparedSquares(preparedDirectory, JAPAN_BBOX)
-  if (squares.length === 0) throw new Error(`no Japanese roads.arrow squares found under ${preparedDirectory}`)
   const match = buildJapaneseRoadMatcher(census)
-  const result = { rows: 0, matched: 0, retracted: 0, skipped: 0, skippedForeign: 0,
-    squares: squares.length, squaresUpdated: 0 }
-  for (const square of squares) {
-    const write = await writeRoadAadt(resolve(preparedDirectory, square, 'roads.arrow'), match,
+  return writeNationalRoadSquares(preparedDirectory, JAPAN_BBOX, 'Japanese', {}, path =>
+    writeRoadAadt(path, match,
       undefined, COVERED_ROAD_CLASSES, { sourceIds: [MEASURED_SOURCE_ID, FALLBACK_SOURCE_ID],
-        when: row => match(row)?.sourceId !== row.existingSourceId })
-    result.rows += write.rows
-    result.matched += write.matched
-    result.retracted += write.retracted
-    result.skipped += write.skipped
-    result.skippedForeign += write.skippedForeign
-    if (write.updated) result.squaresUpdated++
-  }
-  return result
+        when: row => match(row)?.sourceId !== row.existingSourceId }))
 }
 
 export async function runJapaneseRoadEnrichment(options: RoadLoaderArguments) {
@@ -100,11 +86,4 @@ export async function runJapaneseRoadEnrichment(options: RoadLoaderArguments) {
     ...await enrichJapaneseRoads(options.preparedDirectory, census) }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  runJapaneseRoadEnrichment(parseRoadLoaderArguments(process.argv.slice(2), 'enrich-roads-jp.ts'))
-    .then(result => console.log(JSON.stringify(result)))
-    .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : error)
-      process.exitCode = 1
-    })
-}
+runRoadLoaderCli(import.meta.url, runJapaneseRoadEnrichment)
