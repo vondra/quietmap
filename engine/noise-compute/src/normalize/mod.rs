@@ -66,6 +66,7 @@ mod tests {
     ) -> [Vec<PreparedPoint>; 3] {
         [
             prepare_building_points(RawBuildingInput {
+                area_source: false,
                 centroid_lat: 0.0,
                 centroid_lon: 0.0,
                 height_m: 9.0,

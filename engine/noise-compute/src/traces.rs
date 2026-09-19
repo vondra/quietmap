@@ -405,16 +405,11 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
             let label = building_type_name(src.source_type);
             (
                 label,
-                // `src.source_height_m` for buildings is the mid-facade
-                // anchor (= building_height / 2, per CNOSSOS-EU §2.5.5
-                // and `prepare_building_points`). The popup user sees a
-                // row labeled "Height" so present the FULL building
-                // height by doubling. The mid-facade source_height_m
-                // remains available on `baseline.source_height_m` for
-                // the ISO 9613-2 anchor display.
                 EmissionTrace::Building {
                     building_type: label,
-                    height_m: src.source_height_m * 2.0,
+                    height_m: crate::emission::settlement::building_height_from_source(
+                        src.source_height_m as f64, src.floors,
+                    ) as f32,
                     floors: src.floors,
                     area_m2: src.area_m2 as f64,
                 },

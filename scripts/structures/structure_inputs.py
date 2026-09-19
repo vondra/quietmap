@@ -149,10 +149,8 @@ SUBTYPE_ENVELOPE = {
 }
 
 
-def envelope_class(building_class, subtype, underground):
-    """Overture (class, subtype, is_underground) -> envelope class 0..5."""
-    if underground:
-        return 0
+def envelope_class(building_class, subtype):
+    """Overture above-ground (class, subtype) -> envelope class 0..5."""
     if building_class in OUTDOOR_CLASSES:
         return 0
     if building_class in RESIDENTIAL_CLASSES:
@@ -235,7 +233,8 @@ def read_overture_parquet(parquet_dir, square):
             subtypes = t.column("subtype").to_pylist() if "subtype" in have else [None] * n
             und = t.column("is_underground").to_pylist() if "is_underground" in have else [False] * n
             for g, h, f, bc, st, ug in zip(geoms, heights, floors, classes, subtypes, und):
-                if g is None:
+                # Underground footprints are not above-ground obstacles or matches for an OSM building.
+                if g is None or ug:
                     continue
                 geom = shapely_wkb.loads(bytes(g))
                 if geom.is_empty or geom.geom_type not in ("Polygon", "MultiPolygon"):
@@ -251,7 +250,7 @@ def read_overture_parquet(parquet_dir, square):
                 rows.append(
                     {"wkb": bytes(g), "height_m": hh, "tier": tier,
                      "clat": clat, "clon": clon,
-                     "envelope": envelope_class(bc, st, ug)}
+                     "envelope": envelope_class(bc, st)}
                 )
     return rows, inputs
 

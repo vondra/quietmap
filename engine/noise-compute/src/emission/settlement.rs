@@ -54,6 +54,11 @@ pub fn is_shed_type(building_type: u8) -> bool {
     matches!(building_type, 2 | 5 | 8 | FOOD_RETAIL | HOSPITALITY)
 }
 
+/// Ground activity has no building height; building sources sit at mid-facade.
+pub fn building_height_from_source(source_height_m: f64, floors: u8) -> f64 {
+    if floors == 0 { 0.0 } else { (source_height_m * 2.0).max(0.0) }
+}
+
 /// Building emission profile.
 pub struct BuildingProfile {
     pub lw_fixed: f64,              // point sources (loading dock, HVAC unit) [dB]

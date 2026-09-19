@@ -19,6 +19,7 @@ pub struct RawBuildingInput<'a> {
     pub centroid_lon: f64,
     pub height_m: f32,
     pub floors: u8,
+    pub area_source: bool,
     pub building_type: u8,
     pub area_m2: Option<f64>,
     /// Snapped z30 grid ring (empty = unavailable).
@@ -72,7 +73,7 @@ pub struct PreparedPoint {
     /// Building floors used in the Lw GFA computation (resolved
     /// from OSM `building:levels` or derived from
     /// height_m / BUILDING_FLOOR_HEIGHT_M when the tag is absent).
-    /// 0 for industrial / wind-turbine point sources.
+    /// 0 for emission-only grounds, leisure, industrial and wind-turbine sources.
     pub floors: u8,
     /// Building polygon area (m²) used in the Lw GFA computation.
     /// 0 for industrial point sources without polygon coverage.
@@ -356,7 +357,9 @@ fn discretize_area_source(
 }
 
 pub fn prepare_building_points(input: RawBuildingInput<'_>) -> Vec<PreparedPoint> {
-    let actual_height = if input.height_m > 0.0 {
+    let actual_height = if input.area_source {
+        0.0
+    } else if input.height_m > 0.0 {
         input.height_m
     } else if input.floors > 0 {
         input.floors as f32 * crate::constants::BUILDING_FLOOR_HEIGHT_M as f32
@@ -364,7 +367,9 @@ pub fn prepare_building_points(input: RawBuildingInput<'_>) -> Vec<PreparedPoint
         crate::constants::BUILDING_DEFAULT_HEIGHT_M as f32
     }
     .min(BUILDING_HEIGHT_MAX_M as f32);
-    let actual_floors = if input.floors > 0 {
+    let actual_floors = if input.area_source {
+        0
+    } else if input.floors > 0 {
         input.floors
     } else {
         (actual_height / crate::constants::BUILDING_FLOOR_HEIGHT_M as f32).ceil() as u8
@@ -374,7 +379,7 @@ pub fn prepare_building_points(input: RawBuildingInput<'_>) -> Vec<PreparedPoint
     let profile = settlement::building_profile(input.building_type);
     // Shed-types scale on FOOTPRINT, not floors, so a tall single-story hall
     // isn't counted as `height/3` floors (rationale in `settlement::is_shed_type`).
-    let lw_floors = if settlement::is_shed_type(input.building_type) {
+    let lw_floors = if input.area_source || settlement::is_shed_type(input.building_type) {
         1
     } else {
         actual_floors
@@ -398,9 +403,13 @@ pub fn prepare_building_points(input: RawBuildingInput<'_>) -> Vec<PreparedPoint
             area_m2: area,
             grid_threshold_m2: BUILDING_AREA_THRESHOLD_M2,
             cell_m: BUILDING_AREA_CELL_M,
-            source_height_m: actual_height / 2.0,
+            source_height_m: if input.area_source {
+                crate::constants::SOURCE_HEIGHT_LEISURE as f32
+            } else {
+                actual_height / 2.0
+            },
             reach: PointReach::Fixed(settlement::building_max_dist(lw)),
-            floors: lw_floors,
+            floors: if input.area_source { 0 } else { lw_floors },
             hub_height_m: None,
             rated_power_kw: None,
         },
@@ -624,8 +633,38 @@ mod tests {
     }
 
     #[test]
+    fn emission_only_ground_has_no_floors_or_invented_facade() {
+        for building_type in [1, 3, 7] {
+            let prepare = |area_source, height_m, floors| prepare_building_points(RawBuildingInput {
+                centroid_lat: 50.0,
+                centroid_lon: 14.0,
+                height_m,
+                floors,
+                area_source,
+                building_type,
+                area_m2: Some(1_000.0),
+                polygon_grid: &[],
+            }).remove(0);
+            let ground = prepare(true, 0.0, 0);
+            let tagged_ground = prepare(true, 24.0, 8);
+            let building = prepare(false, 0.0, 0);
+            let profile = settlement::building_profile(building_type);
+            let expected_lw = settlement::building_lw(&profile, 1_000.0, 1);
+            let bands = ground.lw_day.map(f64::from);
+            let actual_lw = crate::propagation::iso9613::a_weighted_total(&bands);
+            assert!((actual_lw - expected_lw).abs() < 1e-4);
+            assert_eq!(ground.lw_day, tagged_ground.lw_day);
+            assert_eq!(ground.source_height_m, tagged_ground.source_height_m);
+            assert_eq!(ground.floors, 0);
+            assert_eq!(ground.source_height_m, crate::constants::SOURCE_HEIGHT_LEISURE as f32);
+            assert_eq!((building.floors, building.source_height_m), (3, 4.0));
+        }
+    }
+
+    #[test]
     fn prepared_building_uses_radius_from_lw() {
         let points = prepare_building_points(RawBuildingInput {
+            area_source: false,
             centroid_lat: 49.0,
             centroid_lon: 14.0,
             height_m: 12.0,
@@ -645,6 +684,7 @@ mod tests {
     fn prepared_building_clamps_resolved_height_to_physical_ceiling() {
         let source_height = |height_m, floors| {
             let points = prepare_building_points(RawBuildingInput {
+                area_source: false,
                 centroid_lat: 49.0,
                 centroid_lon: 14.0,
                 height_m,
@@ -672,6 +712,7 @@ mod tests {
     #[test]
     fn prepared_building_carries_floors_and_area_to_segment_trace() {
         let points = prepare_building_points(RawBuildingInput {
+            area_source: false,
             centroid_lat: 49.0,
             centroid_lon: 14.0,
             height_m: 12.0,
@@ -762,6 +803,7 @@ mod tests {
     #[test]
     fn building_cull_radius_matches_honest_lw() {
         let points = prepare_building_points(RawBuildingInput {
+            area_source: false,
             centroid_lat: 49.0,
             centroid_lon: 14.0,
             height_m: 0.0,

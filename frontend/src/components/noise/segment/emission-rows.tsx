@@ -259,7 +259,7 @@ export function emissionInputRows(t: SegmentTrace): [React.ReactNode, React.Reac
     case 'building': {
       return [
         ['Type', e.building_type],
-        ['Height', `${e.height_m.toFixed(1)} m (${e.floors || '—'} floors)`],
+        ...(e.height_m > 0 ? [['Height', `${e.height_m.toFixed(1)} m (${e.floors || '—'} floors)`] as [string, string]] : []),
         ['Footprint', e.area_m2 > 0 ? `${Math.round(e.area_m2)} m²` : '—'],
       ]
     }

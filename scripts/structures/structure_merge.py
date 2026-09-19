@@ -24,7 +24,8 @@ IOU_MATCH_THRESHOLD = 0.5
 # Bump by hand in the commit that changes the rows this builder writes. A hash of the source
 # text rebuilt every square of the world after a comment edit.
 # 2: an area source (buildings_v4 `area_source`) emits but never matches, screens or has a height.
-BUILDER_VERSION = "structures-builder-2"
+# 3: explicitly underground Overture footprints are not screening stock.
+BUILDER_VERSION = "structures-builder-3"
 
 
 def structure_is_fresh(out_path, input_files):

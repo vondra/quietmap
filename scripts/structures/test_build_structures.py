@@ -10,6 +10,7 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pyarrow.parquet as pq
 import shapely
+import shapely.affinity
 
 from test_structures_fixtures import (
     BUILDER, SOURCES, CONTRACT, GRID, SQUARE, FakeGlobalPrior, buildings_arrow, barriers_arrow,
@@ -30,6 +31,24 @@ class BuildStructuresTests(unittest.TestCase):
             SQUARE, self.prepared, rows, [], FakeGlobalPrior(), None)
         table = ipc.open_file(self.prepared / SQUARE / "structures.arrow").read_all()
         return census, table
+
+    def test_underground_overture_cannot_screen_or_replace_an_above_ground_osm_building(self):
+        path = self.prepared / "overture.parquet"
+        pq.write_table(pa.table({
+            "geometry": pa.array([shapely.to_wkb(g) for g in
+                                  (OSM_POLY, OVT_LONELY, shapely.affinity.translate(OVT_LONELY, xoff=0.001))]),
+            "height": [24.0, 12.0, 15.0],
+            "is_underground": pa.array([True, False, None], type=pa.bool_()),
+        }), path)
+        with unittest.mock.patch.object(SOURCES, "overture_sources", return_value=[(49, 14, path)]):
+            rows, _ = BUILDER.read_overture_parquet(self.prepared, GRID.parse_square_name(SQUARE))
+        self.assertEqual([row["height_m"] for row in rows], [12.0, 15.0])
+        buildings_arrow(self.prepared / SQUARE / "buildings.arrow",
+                        [osm_row(0, OSM_POLY, 32.0, height=6.0)])
+        census, table = self.build(rows)
+        self.assertEqual((census["both"], census["osm_only"], census["overture_only"]), (0, 1, 2))
+        self.assertEqual(table.column("height_m").to_pylist(), [6, 12, 15])
+        self.assertEqual(table.column("geom")[0].as_py(), screening_polygons(OSM_POLY))
 
     def test_matched_row_keeps_overture_geometry_and_osm_attributes(self):
         buildings_arrow(self.prepared / SQUARE / "buildings.arrow",

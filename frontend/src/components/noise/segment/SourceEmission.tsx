@@ -31,10 +31,6 @@ export function Section1Source({ trace }: { trace: SegmentTrace }) {
   )
 }
 
-// Source height is the single row inherited from the removed §2 Baseline
-// section — value is a per-source-type model constant (road 0.05 m wheel,
-// rail 0.5 m wheel-rail, building mid-facade, industrial varies, aircraft
-// ground 4 m), not a computed field. Tooltip explains the convention.
 function computeSourceHeightRow(trace: SegmentTrace): [React.ReactNode, React.ReactNode] | null {
   // Aircraft ground-ops + airborne rows hide Source height: ground
   // is a fixed CNOSSOS 4 m model constant (no info per row); airborne
@@ -52,11 +48,12 @@ function computeSourceHeightRow(trace: SegmentTrace): [React.ReactNode, React.Re
     ? ''
     : `\n\nSlant distance: ${trace.d_slant_m.toFixed(0)} m vs horizontal ${trace.dist_m.toFixed(0)} m — the vertical offset from source height contributes.`
   const tooltip =
-    'Source height above ground — model constant per source type:\n' +
+    'Source height above ground — model convention per source type:\n' +
     '  road       0.05 m   (wheel/tyre contact)\n' +
     '  railway    0.5 m    (wheel-rail contact)\n' +
     '  aircraft   4.0 m    (ground ops)\n' +
     '  building   height/2 (mid-facade)\n' +
+    '  open activity 1.5 m (parking, grounds and leisure)\n' +
     '  industrial varies   (5 m other / 8 m quarry / 10 m heavy NACE;\n' +
     '                       wind turbine = hub height)\n\n' +
     `Feeds geometric divergence (d_slant = √(d_horizontal² + Δh²)) and\n` +

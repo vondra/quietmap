@@ -310,6 +310,7 @@ pub fn collect_from_square_data(
                 noise_compute::normalize::RawBuildingInput {
                     centroid_lat: b.centroid_lat,
                     centroid_lon: b.centroid_lon,
+                    area_source: b.area_source,
                     height_m: b.height,
                     floors: b.floors,
                     building_type: b.building_type,
@@ -890,6 +891,7 @@ pub struct BuildingResult {
     pub centroid_lon: f64,
     pub height: f32,
     pub floors: u8,
+    pub area_source: bool,
     pub area_m2: f32,
     pub building_type: u8,
     pub name: String,
@@ -1110,6 +1112,7 @@ pub fn query_buildings_from_batches(
                 osm_id: osm_id.value(i),
                 centroid_lat: e_lat,
                 centroid_lon: e_lon,
+                area_source: square_store::structure_contract::is_emission_only_area(batch, i),
                 height: opt_f32(height).unwrap_or(0.0),
                 floors: opt_u8(floors).unwrap_or(0),
                 area_m2: opt_f32(area).unwrap_or(0.0),

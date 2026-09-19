@@ -7,7 +7,7 @@ use std::{fs::File, io::Read, path::Path};
 
 /// Names the corner value physics and store layout. Bump it by hand in the commit that changes
 /// corner values or layout; a hash of source text invalidated every store on a comment edit.
-pub const SURFACE_FORMAT_AND_PHYSICS_GENERATION: [u8; 32] = *b"surface-corners-physics-gen-0001";
+pub const SURFACE_FORMAT_AND_PHYSICS_GENERATION: [u8; 32] = *b"surface-corners-physics-gen-0002";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GenerationReceipt {

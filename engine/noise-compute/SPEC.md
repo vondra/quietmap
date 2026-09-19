@@ -226,6 +226,31 @@ plus the cell half diagonal (707 m). Popup contributors group the sub-cells by t
 identity `(gx << 32) | gy`. A cell beyond the cap contributes nothing; water without an AIS
 density product (inner harbours and rivers until GFW, everything outside Europe) has no rows.
 
+## Open parking and emission-only grounds
+
+Open parking ways use `leisure_v3` classes 8 (lot) and 9 (street strip), with no
+screening geometry. Their mapped area estimates spaces at 23.8 and 13.3 m² per
+space. Day sound power follows the Parkplatzlärmstudie (LfU, 6th ed. 2007):
+63 dB(A) per movement/hour, 0.40 movements/space/hour and the searching term
+2.5 log10(spaces − 9) above ten spaces. The 06–22 / 22–06 rates 0.40 / 0.05
+are averaged over this engine's periods: evening −1.1 dB, night −6.3 dB.
+These are model defaults, not measured traffic for an individual car park.
+
+Functional grounds and underground sources retained in structures have null
+screening geometry and zero screening height at default height tier 2
+(`structures-builder-2` and later). Explicitly underground Overture footprints
+are excluded from above-ground screening and matching (`structures-builder-3`);
+an independently mapped above-ground OSM building keeps its own wall. Mapped
+sub-metre building heights retain tier 0 even when the screening height rounds
+to zero. Both popup and painter preserve that distinction when normalizing
+emission: one
+mapped ground area, no floor multiplier, source height 1.5 m (the existing
+open-air activity convention). Raw building height/floor tags cannot turn such
+an area into a facade source. A real building with unavailable geometry keeps
+its nonzero screening height and normal building defaults. Popup traces report
+zero building height and floors for ground activities, including open parking;
+propagation still reports the actual source height.
+
 ## 4.7 Vector screening
 
 One source-to-receiver ray shares its bare-earth raster profile between terrain

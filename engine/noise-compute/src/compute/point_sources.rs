@@ -307,12 +307,10 @@ pub(crate) fn compute_point_sources(
                 provenance: crate::sources::dataset_meta(acc.source_id),
             }))
         } else {
-            // building. `acc.src_height` is `elevation + height/2`
-            // (mid-facade anchor), so subtracting `elevation` gives
-            // half the building height. Double to recover the full
-            // building height the popup shows under "Height".
             Some(SourceMetadata::Building(BuildingMetadata {
-                height_m: ((acc.src_height - rasters.elevation(acc.lat, acc.lon)) * 2.0).max(0.0),
+                height_m: crate::emission::settlement::building_height_from_source(
+                    acc.src_height - rasters.elevation(acc.lat, acc.lon), acc.floors,
+                ),
                 floors: acc.floors,
                 area_m2: acc.area_m2 as f64,
                 building_type: subtype_name,

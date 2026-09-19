@@ -1,6 +1,6 @@
 //! Current prepared screening heights, shared by the obstacle index, the finalize step and the footprint overlay.
 
-use arrow::array::{Array, Int16Array};
+use arrow::array::{Array, Int16Array, UInt8Array};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
@@ -38,6 +38,19 @@ pub fn heights(batch: &RecordBatch) -> Result<&Int16Array, String> {
         return Err("structures.arrow height_m must be non-null and nonnegative".to_string());
     }
     Ok(heights)
+}
+
+/// Builder 2 marks a ground activity or underground source with no wall and zero
+/// screening height at the default tier (2). Mapped sub-metre building heights
+/// can round to zero too, but retain their explicit-height tier (0).
+pub fn is_emission_only_area(batch: &RecordBatch, row: usize) -> bool {
+    batch.column_by_name("geom").is_some_and(|geometry| geometry.is_null(row))
+        && batch.column_by_name("height_m")
+            .and_then(|column| column.as_any().downcast_ref::<Int16Array>())
+            .is_some_and(|height| !height.is_null(row) && height.value(row) == 0)
+        && batch.column_by_name("height_tier")
+            .and_then(|column| column.as_any().downcast_ref::<UInt8Array>())
+            .is_some_and(|tier| !tier.is_null(row) && tier.value(row) == 2)
 }
 
 #[cfg(test)]
