@@ -32,6 +32,8 @@ export interface SegmentEndpointKeys {
 export interface SegmentGeometryReader {
   row(index: number): SegmentGeometry
   endpointKeys(index: number): SegmentEndpointKeys
+  /** Per row, one number per endpoint, equal exactly where `endpointKeys` strings are equal; valid within this table only. */
+  tableLocalEndpointNumbers(): { start: Float64Array; end: Float64Array }
 }
 
 function requiredVector(table: Table, name: string): Vector {
@@ -40,12 +42,13 @@ function requiredVector(table: Table, name: string): Vector {
   return vector
 }
 
-function requiredInt32(table: Table, name: string): Vector {
+/** One flat array for the whole column: `Vector.get` on a many-batch table searches the chunk list on every read. */
+function requiredInt32(table: Table, name: string): Int32Array {
   const vector = requiredVector(table, name)
   if (!DataType.isInt(vector.type) || !vector.type.isSigned || vector.type.bitWidth !== 32 || vector.nullCount !== 0) {
     throw new Error(`prepared Arrow '${name}' must be non-null Int32`)
   }
-  return vector
+  return vector.toArray() as Int32Array
 }
 
 function assertRow(index: number, rows: number): void {
@@ -94,15 +97,31 @@ export function segmentGeometryReader(table: Table): SegmentGeometryReader {
   const endGy = requiredInt32(table, 'end_gy')
   const rows = table.numRows
   return {
+    tableLocalEndpointNumbers() {
+      let minGx = Infinity, maxGx = -Infinity, minGy = Infinity, maxGy = -Infinity
+      for (let index = 0; index < rows; index++) {
+        minGx = Math.min(minGx, startGx[index], endGx[index]); maxGx = Math.max(maxGx, startGx[index], endGx[index])
+        minGy = Math.min(minGy, startGy[index], endGy[index]); maxGy = Math.max(maxGy, startGy[index], endGy[index])
+      }
+      const spanGy = maxGy - minGy + 1
+      if (rows > 0 && !Number.isSafeInteger((maxGx - minGx + 1) * spanGy)) {
+        throw new Error('prepared Arrow endpoints span too many grid cells for exact numeric keys')
+      }
+      const start = new Float64Array(rows), end = new Float64Array(rows)
+      for (let index = 0; index < rows; index++) {
+        start[index] = (startGx[index] - minGx) * spanGy + (startGy[index] - minGy)
+        end[index] = (endGx[index] - minGx) * spanGy + (endGy[index] - minGy)
+      }
+      return { start, end }
+    },
     endpointKeys(index): SegmentEndpointKeys {
       assertRow(index, rows)
-      return { startKey: `${startGx.get(index)}_${startGy.get(index)}`,
-        endKey: `${endGx.get(index)}_${endGy.get(index)}` }
+      return { startKey: `${startGx[index]}_${startGy[index]}`, endKey: `${endGx[index]}_${endGy[index]}` }
     },
     row(index): SegmentGeometry {
       assertRow(index, rows)
-      const start = gridToLonLat(startGx.get(index) as number, startGy.get(index) as number)
-      const end = gridToLonLat(endGx.get(index) as number, endGy.get(index) as number)
+      const start = gridToLonLat(startGx[index], startGy[index])
+      const end = gridToLonLat(endGx[index], endGy[index])
       return {
         startLat: start.lat,
         startLon: start.lon,
@@ -133,11 +152,11 @@ function bakedCountryReader(
   if (!DataType.isInt(vector.type) || vector.type.isSigned || vector.type.bitWidth !== 16 || vector.nullCount !== 0) {
     throw new Error(`${layer} Arrow 'country_iso' must be non-null Uint16`)
   }
-  const rows = table.numRows
+  const codes = vector.toArray() as Uint16Array
   return {
     codeAt(index: number): number {
-      assertRow(index, rows)
-      return vector.get(index) as number
+      assertRow(index, codes.length)
+      return codes[index]
     },
   }
 }

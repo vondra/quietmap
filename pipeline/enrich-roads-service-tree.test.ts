@@ -15,8 +15,7 @@ import { SOURCE_ID_SERVICE_TREE_HEURISTIC as SELF } from './lib/source-ids.gener
 import { enrichServiceTreeSquare, readServiceRoads, splitAADT, SERVICE_TREE_CAP_PER_CLASS } from './enrich-roads-service-tree.js'
 
 function road(a: number, b: number, roadClass = 5, sourceId = 0): ServiceRoad {
-  return { startKey: String(a), endKey: String(b), startLat: 50, endLat: 50, midLat: 50, startLon: 14 + a * 0.001,
-    endLon: 14 + b * 0.001, midLon: 14 + (a + b) * 0.0005,
+  return { startNode: a, endNode: b, startLat: 50, endLat: 50, startLon: 14 + a * 0.001, endLon: 14 + b * 0.001,
     length: Math.abs(b - a) * 71, roadClass, sourceId, tunnel: false, access: 0 }
 }
 

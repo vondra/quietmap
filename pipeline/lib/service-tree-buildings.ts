@@ -21,15 +21,15 @@ export function readServiceBuildings(table: Table): ServiceBuilding[] {
   }
   const area = table.getChild('area_m2')
   if (!area || !DataType.isFloat(area.type)) throw new Error('invalid building area_m2')
+  const centroidGx = table.getChild('centroid_gx')!.toArray() as Int32Array, centroidGy = table.getChild('centroid_gy')!.toArray() as Int32Array
+  const types = table.getChild('building_type')!.toArray() as Uint8Array, floors = table.getChild('floors')!.toArray() as Uint8Array
+  const areas = Array.from(area) as (number | null)[]
   return Array.from({ length: table.numRows }, (_, index) => {
-    const type = table.getChild('building_type')!.get(index) as number
-    const footprint = area.get(index) as number | null
+    const type = types[index], footprint = areas[index]
     if (type > 13 || (footprint !== null && (!Number.isFinite(footprint) || footprint < 0))) {
       throw new Error(`invalid building load at row ${index}`)
     }
-    return { ...gridToLonLat(table.getChild('centroid_gx')!.get(index) as number,
-      table.getChild('centroid_gy')!.get(index) as number), type,
-      floors: table.getChild('floors')!.get(index) as number, area: footprint }
+    return { ...gridToLonLat(centroidGx[index], centroidGy[index]), type, floors: floors[index], area: footprint }
   })
 }
 
@@ -46,7 +46,9 @@ export function assignBuildingsGlobally(
     (Math.abs(lon - longitudeOrigin) > 180 ? longitudeOrigin + normalizeLongitude(lon - longitudeOrigin) : lon) * metresPerLongitude,
     lat * 110540,
   ]
-  const grid = new Map<string, number[]>()
+  // |x| < 2^21 cells (540 degrees of unwrapped longitude) and |y| < 2^19 (85 degrees of latitude) make this exact and unique.
+  const gridCell = (x: number, y: number) => x * 2 ** 20 + (y + 2 ** 19)
+  const grid = new Map<number, number[]>()
   const segments = eligibleSegments.map(index => {
     const road = roads[index]
     const [ax, ay] = project(road.startLat, road.startLon)
@@ -58,7 +60,7 @@ export function assignBuildingsGlobally(
       y <= Math.floor((Math.max(ay, by) + MAX_BUFFER_M) / MAX_BUFFER_M); y++) {
       for (let x = Math.floor((Math.min(ax, bx) - MAX_BUFFER_M) / MAX_BUFFER_M);
         x <= Math.floor((Math.max(ax, bx) + MAX_BUFFER_M) / MAX_BUFFER_M); x++) {
-        const key = `${x}_${y}`, list = grid.get(key)
+        const key = gridCell(x, y), list = grid.get(key)
         if (list) list.push(index)
         else grid.set(key, [index])
       }
@@ -66,7 +68,7 @@ export function assignBuildingsGlobally(
   })
   for (const building of buildings) {
     const [px, py] = project(building.lat, building.lon)
-    const candidates = grid.get(`${Math.floor(px / MAX_BUFFER_M)}_${Math.floor(py / MAX_BUFFER_M)}`)
+    const candidates = grid.get(gridCell(Math.floor(px / MAX_BUFFER_M), Math.floor(py / MAX_BUFFER_M)))
     let best = -1, distance = Infinity
     for (const candidate of candidates ?? []) {
       const { index, ax, ay, bx, by } = segments[candidate]

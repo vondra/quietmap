@@ -1,7 +1,7 @@
 /** The single atomic writer for road traffic enrichment on z9/z30 Arrow data. */
 
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
-import { DataType, RecordBatch, Schema, Table, Utf8, makeTable, makeVector, vectorFromArray } from 'apache-arrow'
+import { DataType, Table, Utf8, makeData, vectorFromArray } from 'apache-arrow'
 import { resolve } from 'node:path'
 import { Footer } from 'apache-arrow/ipc/metadata/file'
 import { ROAD_COUNT_BASES, type RoadObservation } from './road-observation.js'
@@ -10,9 +10,10 @@ import {
   SOURCES_BY_ID, countryIsosForNationalSource, shouldOverwrite,
 } from './sources.js'
 import { nearestCompatiblePointWithin200Metres, type RankedPoint } from './spatial.js'
+import { bakedRoadCountryReader, iso2Code, type SegmentGeometry } from './prepared-grid.js'
 import {
-  bakedRoadCountryReader, iso2Code, segmentGeometryReader, type SegmentGeometry,
-} from './prepared-grid.js'
+  ColumnBackedRoadRow, numericColumnChunk, roadRowColumns, seedColumn, tableWithRebuiltColumns, type ColumnChunkOfBatch,
+} from './roads-arrow-columns.js'
 
 /** A slip road carries the ref of its mainline but not its traffic. A census matched by
  *  ref alone must not stamp it; it keeps the link-class default. */
@@ -183,20 +184,12 @@ export async function writeRoadTimeProfiles(
   for (const entry of entries) assertTimeProfileEntry(entry)
   let result!: WriteRoadResult
   await withArrowWrite(arrowPath, table => {
-    const geometry = segmentGeometryReader(table)
-    const ref = table.getChild('ref')
-    const name = table.getChild('name')
-    const osmId = table.getChild('osm_id')
-    const roadClass = table.getChild('road_class')
-    const existingSource = table.getChild('source_id')
-    const existingIds = table.getChild('traffic_profile_id')
-    const oneway = table.getChild('oneway')
     const rows = table.numRows
-    const countries = bakedRoadCountryReader(table)
-    const ids = new Uint16Array(rows)
-    for (let index = 0; index < rows; index++) {
-      ids[index] = (existingIds?.get(index) as number) ?? 0
-    }
+    const columns = roadRowColumns(table)
+    columns.countries = bakedRoadCountryReader(table)
+    const existingSourceIds = new Uint16Array(rows), ids = new Uint16Array(rows)
+    seedColumn(existingSourceIds, table.getChild('source_id'), () => 0)
+    seedColumn(ids, table.getChild('traffic_profile_id'), () => 0)
     const dictionary = decodeTimeProfileDictionary(table.schema.metadata.get(ROADS_TIME_PROFILES_METADATA_KEY))
     if (dictionary.source && dictionary.source !== sourceUrl) {
       throw new Error(`writeRoadTimeProfiles: ${arrowPath} carries '${dictionary.source}' profiles; refusing to restamp as '${sourceUrl}'`)
@@ -222,16 +215,7 @@ export async function writeRoadTimeProfiles(
     let matched = 0
     let updated = false
     for (let index = 0; index < rows; index++) {
-      const picked = match({
-        ...geometry.row(index),
-        ref: (ref?.get(index) as string | null) ?? null,
-        name: (name?.get(index) as string | null) ?? null,
-        osmId: osmId ? Number(osmId.get(index)) : null,
-        roadClass: (roadClass?.get(index) as number) ?? 5,
-        existingSourceId: (existingSource?.get(index) as number) ?? 0,
-        countryCode: countries.codeAt(index),
-        oneway: (oneway?.get(index) as number) ?? 0,
-      }, index)
+      const picked = match(new ColumnBackedRoadRow(columns, index, existingSourceIds[index]), index)
       if (!Number.isInteger(picked) || picked < 0 || picked > entries.length) {
         throw new Error(`writeRoadTimeProfiles: match returned ${picked} out of range`)
       }
@@ -256,13 +240,6 @@ export async function writeRoadTimeProfiles(
       const entry = merged[ids[index] - 1]
       if (ids[index] !== 0) ids[index] = remap.get(entry)!
     }
-    const columns: Record<string, unknown> = {}
-    const rebuilt = new Set(['traffic_profile_id'])
-    for (const field of table.schema.fields) {
-      if (!rebuilt.has(field.name)) columns[field.name] = table.getChild(field.name)!
-    }
-    columns.traffic_profile_id = makeVector(ids)
-    const rebuiltTable = makeTable(columns as never) as unknown as Table
     const metadata = new Map(table.schema.metadata)
     // `withArrowWrite` re-imposes input metadata (output keys only override),
     // so a full retraction keeps an explicit EMPTY dictionary — "this source
@@ -271,8 +248,7 @@ export async function writeRoadTimeProfiles(
       source: dictionary.source || sourceUrl,
       entries: kept.map(({ entry }) => entry),
     }))
-    const schema = new Schema(rebuiltTable.schema.fields, metadata)
-    return new Table(schema, rebuiltTable.batches.map(batch => new RecordBatch(schema, batch.data)))
+    return tableWithRebuiltColumns(table, metadata, new Map([['traffic_profile_id', numericColumnChunk(ids)]]))
   })
   return result
 }
@@ -360,18 +336,9 @@ export function applyRoadAadt(
     rows: 0, matched: 0, updated: false, skipped: 0, skippedForeign: 0, retracted: 0,
   }
   result.rows = table.numRows
-  const geometry = segmentGeometryReader(table)
+  const columns = roadRowColumns(table)
   if (result.rows === 0) return { table, result }
 
-  const ref = table.getChild('ref')
-  const name = table.getChild('name')
-  const osmId = table.getChild('osm_id')
-  const roadClass = table.getChild('road_class')
-  const existingLight = table.getChild('aadt_light')
-  const existingMedium = table.getChild('aadt_medium')
-  const existingHeavy = table.getChild('aadt_heavy')
-  const existingMoto = table.getChild('aadt_moto')
-  const existingSource = table.getChild('source_id')
   const existingTaper = table.getChild('speed_taper')
   if (table.schema.metadata.get('road_traffic_contract') === '1') {
     throw new Error(`writeRoadAadt: rebuild raw inputs before enriching finalized traffic in ${arrowPath}`)
@@ -379,7 +346,6 @@ export function applyRoadAadt(
   const existingEstimated = table.getChild('traffic_estimated')
   const existingBasis = table.getChild('traffic_count_basis')
   const existingObservation = table.getChild('traffic_observation_id')
-  const existingOrigin = table.getChild('traffic_observation_source')
   if (existingEstimated) {
     if (!existingEstimated || !DataType.isInt(existingEstimated.type) || existingEstimated.type.bitWidth !== 8 ||
         existingEstimated.type.isSigned || existingEstimated.nullCount) {
@@ -402,32 +368,44 @@ export function applyRoadAadt(
   const basis = new Uint8Array(result.rows)
   const estimated = new Uint8Array(result.rows)
   const origins = new Uint16Array(result.rows)
-  const observations = new Array<string>(result.rows)
+  const taper = new Uint8Array(result.rows)
+  seedColumn(light, table.getChild('aadt_light'), () => 0)
+  seedColumn(medium, table.getChild('aadt_medium'), () => 0)
+  seedColumn(heavy, table.getChild('aadt_heavy'), () => 0)
+  seedColumn(moto, table.getChild('aadt_moto'), () => 0)
+  seedColumn(source, table.getChild('source_id'), () => 0)
+  seedColumn(basis, existingBasis, () => 0)
+  seedColumn(estimated, existingEstimated, () => 15)
+  seedColumn(origins, table.getChild('traffic_observation_source'), index => source[index])
+  seedColumn(taper, existingTaper, () => 0)
+  // Stored observation strings are decoded only where a row is compared or its batch is rewritten.
+  const storedObservationIsEmpty = new Uint8Array(result.rows).fill(1)
+  let chunkStart = 0
+  for (const chunk of existingObservation?.data ?? []) {
+    const offsets = chunk.valueOffsets
+    for (let index = 0; index < chunk.length; index++) {
+      storedObservationIsEmpty[chunkStart + index] = offsets[index + 1] === offsets[index] ? 1 : 0
+    }
+    chunkStart += chunk.length
+  }
   for (let index = 0; index < result.rows; index++) {
-    light[index] = (existingLight?.get(index) as number) ?? 0
-    medium[index] = (existingMedium?.get(index) as number) ?? 0
-    heavy[index] = (existingHeavy?.get(index) as number) ?? 0
-    moto[index] = (existingMoto?.get(index) as number) ?? 0
-    source[index] = (existingSource?.get(index) as number) ?? 0
-    basis[index] = (existingBasis?.get(index) as number) ?? 0
-    observations[index] = (existingObservation?.get(index) as string) ?? ''
-    estimated[index] = (existingEstimated?.get(index) as number) ?? 15
-    origins[index] = (existingOrigin?.get(index) as number) ?? source[index]
     if (basis[index] >= ROAD_COUNT_BASES.length || estimated[index] > 15 ||
-        (source[index] !== 0 && basis[index] !== 3 && !observations[index])) {
+        (source[index] !== 0 && basis[index] !== 3 && storedObservationIsEmpty[index])) {
       throw new Error(`writeRoadAadt: missing or invalid source observation at row ${index} in ${arrowPath}`)
     }
   }
+  const changedObservations = new Map<number, string>()
+  const observationAt = (index: number): string => changedObservations.get(index) ??
+    (storedObservationIsEmpty[index] ? '' : existingObservation!.get(index) as string)
+  const setObservation = (index: number, value: string): void => {
+    if (observationAt(index) !== value) changedObservations.set(index, value)
+  }
 
-  let taper: Uint8Array | null = null
-  const taperAt = (index: number) => taper?.[index] ?? ((existingTaper?.get(index) as number) ?? 0)
+  let taperChanged = false
   const setTaper = (index: number, value: number): void => {
-    if (taperAt(index) === value) return
-    if (!taper) {
-      taper = new Uint8Array(result.rows)
-      for (let i = 0; i < result.rows; i++) taper[i] = (existingTaper?.get(i) as number) ?? 0
-    }
+    if (taper[index] === value) return
     taper[index] = value
+    taperChanged = true
   }
 
   let countries: ReturnType<typeof bakedRoadCountryReader> | null = null
@@ -447,14 +425,7 @@ export function applyRoadAadt(
   let changed = false
 
   for (let index = 0; index < result.rows; index++) {
-    const row: RoadRow = {
-      ...geometry.row(index),
-      ref: (ref?.get(index) as string | null) ?? null,
-      name: (name?.get(index) as string | null) ?? null,
-      osmId: osmId ? Number(osmId.get(index)) : null,
-      roadClass: (roadClass?.get(index) as number) ?? 5,
-      existingSourceId: source[index],
-    }
+    const row = new ColumnBackedRoadRow(columns, index, source[index])
 
     // Retraction precedes every eligibility gate so stale out-of-scope rows heal.
     const owned = retractCountries.has(source[index])
@@ -469,7 +440,7 @@ export function applyRoadAadt(
       moto[index] = 0
       source[index] = 0
       basis[index] = 0
-      observations[index] = ''
+      setObservation(index, '')
       estimated[index] = 15
       origins[index] = 0
       row.existingSourceId = 0
@@ -505,9 +476,9 @@ export function applyRoadAadt(
     const nextTaper = candidate.speedTaper ?? 0
     const valueChanged = light[index] !== candidate.light || medium[index] !== candidate.medium ||
       heavy[index] !== candidate.heavy || moto[index] !== candidate.moto ||
-      source[index] !== candidate.sourceId || taperAt(index) !== nextTaper ||
+      source[index] !== candidate.sourceId || taper[index] !== nextTaper ||
       basis[index] !== nextBasis || estimated[index] !== nextEstimated || origins[index] !== nextOrigin ||
-      observations[index] !== candidate.observationId
+      observationAt(index) !== candidate.observationId
     light[index] = candidate.light
     medium[index] = candidate.medium
     heavy[index] = candidate.heavy
@@ -516,7 +487,7 @@ export function applyRoadAadt(
     basis[index] = nextBasis
     estimated[index] = nextEstimated
     origins[index] = nextOrigin
-    observations[index] = candidate.observationId
+    setObservation(index, candidate.observationId)
     setTaper(index, nextTaper)
     result.matched++
     changed ||= valueChanged
@@ -525,26 +496,25 @@ export function applyRoadAadt(
 
   if (!changed) return { table, result }
   result.updated = true
-  const rebuilt = new Set(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id',
-    'traffic_count_basis', 'traffic_observation_id', 'traffic_observation_source', 'traffic_estimated'])
-  if (taper) rebuilt.add('speed_taper')
-  const columns: Record<string, unknown> = {}
-  for (const field of table.schema.fields) {
-    if (!rebuilt.has(field.name)) columns[field.name] = table.getChild(field.name)!
-  }
-  columns.aadt_light = makeVector(light)
-  columns.aadt_medium = makeVector(medium)
-  columns.aadt_heavy = makeVector(heavy)
-  columns.aadt_moto = makeVector(moto)
-  columns.source_id = makeVector(source)
-  columns.traffic_estimated = makeVector(estimated)
-  columns.traffic_observation_source = makeVector(origins)
-  columns.traffic_count_basis = makeVector(basis)
-  columns.traffic_observation_id = vectorFromArray(observations, new Utf8())
-  if (taper) columns.speed_taper = makeVector(taper)
-  const rebuiltTable = makeTable(columns as never) as unknown as Table
   const metadata = new Map(table.schema.metadata)
   metadata.set('road_traffic_contract', '0')
-  const schema = new Schema(rebuiltTable.schema.fields, metadata)
-  return { table: new Table(schema, rebuiltTable.batches.map(batch => new RecordBatch(schema, batch.data))), result }
+  const rebuiltColumns = new Map<string, ColumnChunkOfBatch>([
+    ['aadt_light', numericColumnChunk(light)], ['aadt_medium', numericColumnChunk(medium)],
+    ['aadt_heavy', numericColumnChunk(heavy)], ['aadt_moto', numericColumnChunk(moto)],
+    ['source_id', numericColumnChunk(source)], ['traffic_estimated', numericColumnChunk(estimated)],
+    ['traffic_observation_source', numericColumnChunk(origins)], ['traffic_count_basis', numericColumnChunk(basis)],
+    ['traffic_observation_id', (startRow, endRow, batch) => {
+      const stored = batch.getChild('traffic_observation_id')?.data[0]
+      let batchChanged = !stored
+      for (let index = startRow; index < endRow && !batchChanged; index++) batchChanged = changedObservations.has(index)
+      if (!batchChanged) return stored!
+      const observations = Array.from({ length: endRow - startRow }, (_, index) => observationAt(startRow + index))
+      // Most batches of a first write hold no observation; the builder costs more than the rest of their rebuild.
+      return observations.some(Boolean) ? vectorFromArray(observations, new Utf8()).data[0] : makeData({
+        type: new Utf8(), length: observations.length, nullCount: 0,
+        valueOffsets: new Int32Array(observations.length + 1), data: new Uint8Array(0) })
+    }],
+  ])
+  if (taperChanged) rebuiltColumns.set('speed_taper', numericColumnChunk(taper))
+  return { table: tableWithRebuiltColumns(table, metadata, rebuiltColumns), result }
 }
