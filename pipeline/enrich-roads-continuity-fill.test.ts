@@ -4,14 +4,15 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
-import { Float32, Float64, Int16, Int32, RecordBatch, Schema, Table, Uint8, Uint16, Utf8, tableFromIPC, tableToIPC, vectorFromArray } from 'apache-arrow'
+import { Float32, Float64, Int16, Int32, Int64, RecordBatch, Schema, Table, Uint8, Uint16, Utf8, tableFromIPC, tableToIPC, vectorFromArray } from 'apache-arrow'
 import { bytes, writeRoadsFixture } from './lib/road-test-fixture.js'
 import { withArrowWrite } from './lib/provenance.js'
-import { iso2Code, segmentGeometryReader } from './lib/prepared-grid.js'
+import { gridToLonLat, iso2Code, lonLatToGrid, segmentGeometryReader, z9AxesOfGridCell } from './lib/prepared-grid.js'
 import { writeRoadAadt } from './lib/roads-arrow.js'
 import { readPlanningRoads, type PlanningRoad } from './lib/road-planning-input.js'
 import { roadContinuityComponent, planContinuityComponent, type ContinuityRoad, type Flow } from './lib/roads-continuity-plan.js'
+import { planSquareContinuity } from './lib/roads-continuity-square.js'
+import { SquarePieces } from './lib/transport-topology.js'
 import { enrichContinuityDirectory, writeContinuitySquares } from './enrich-roads-continuity-fill.js'
 import { writeTransportFixture, type FixtureSourceWay, type FixtureSourcePiece } from './lib/transport-test-fixture.js'
 import { generateRoadPlanningDefaults } from './generate-road-planning-defaults.js'
@@ -193,7 +194,7 @@ test('planning defaults remain an exact derivation of the canonical engine table
   assert.equal(readFileSync(new URL('./lib/road-planning-defaults.generated.ts', import.meta.url), 'utf8'), generateRoadPlanningDefaults())
 })
 
-test('ordered preparation workers preserve cross-owner counts, exact bytes, retraction and missing-owner failures', async t => {
+test('parallel square workers preserve cross-owner counts, exact bytes, retraction and missing-owner failures', async t => {
   const originalWorkers = process.env.QM_ROAD_WORKERS
   t.after(() => { if (originalWorkers === undefined) delete process.env.QM_ROAD_WORKERS; else process.env.QM_ROAD_WORKERS = originalWorkers })
   const outputs = new Map<number, { result: Awaited<ReturnType<typeof enrichContinuityDirectory>>; bytes: Buffer[] }>()
@@ -224,7 +225,6 @@ test('ordered preparation workers preserve cross-owner counts, exact bytes, retr
     }
     const result = await enrichContinuityDirectory(prepared)
     assert.equal(result.matched, 4)
-    console.log(JSON.stringify({ continuityFixture: number, graphBytes: result.graphBytes }))
     for (const [square, from, to] of layout) {
       const path = resolve(prepared, square, 'roads.arrow'), result = tableFromIPC(bytes(path))
       for (let row = 0; row < result.numRows; row++) {
@@ -263,18 +263,11 @@ test('ordered preparation workers preserve cross-owner counts, exact bytes, retr
   }
 })
 
-test('writeback child failures reject without replacing corrupt input or hiding worker startup errors', async () => {
+test('a writeback child failure rejects without replacing corrupt input', async () => {
   const path = await chain('writeback-failure.arrow', [4])
-  const prepared = resolve(dirname(path), '../../..'), graphPath = resolve(prepared, 'fills.sqlite')
-  {
-    using database = new DatabaseSync(graphPath)
-    database.exec('CREATE TABLE fills (square TEXT, row_index INTEGER, PRIMARY KEY(square,row_index)) WITHOUT ROWID')
-  }
   writeFileSync(path, 'invalid Arrow input')
   const before = bytes(path)
-  await assert.rejects(writeContinuitySquares(prepared, graphPath, ['z9/275/173']))
-  assert.deepEqual(bytes(path), before)
-  await assert.rejects(writeContinuitySquares(prepared, graphPath + '.absent', ['z9/275/173']), /worker exited/)
+  await assert.rejects(writeContinuitySquares(resolve(dirname(path), '../../..'), new Map([['z9/275/173', []]])))
   assert.deepEqual(bytes(path), before)
 })
 
@@ -300,4 +293,105 @@ test('compact nonfillable branches and selfloops keep incidence and retract thei
     assert.deepEqual([...output.getChild('source_id')!.toArray()], [10, 0, 0])
     assert.deepEqual([...output.getChild('aadt_light')!.toArray()], [100, 0, 0])
   }
+})
+
+type RegionNode = [id: string, lon: number, lat: number]
+interface RegionPiece { way: number; segment?: number; from: RegionNode; to: RegionNode; cut?: [from: number, to: number]
+  cls?: number; ref?: string; name?: string; oneway?: number; anchorLight?: number }
+
+/** Roads and source pieces stored where the extractor stores them: in the square of each piece's midpoint. */
+async function writeRegion(name: string, regionPieces: RegionPiece[]) {
+  const prepared = resolve(dirname(writeRoadsFixture(`${name}.unused`, [])), `${name}-prepared`)
+  const placed = regionPieces.map(piece => {
+    const [from, to] = piece.cut ?? [0, 1]
+    const at = (fraction: number) => lonLatToGrid(piece.from[1] + (piece.to[1] - piece.from[1]) * fraction, piece.from[2] + (piece.to[2] - piece.from[2]) * fraction)
+    const [x, y] = z9AxesOfGridCell(...at((from + to) / 2))
+    return { piece, square: `z9/${x}/${y}`, start: at(from), end: at(to) }
+  })
+  const squares = [...new Set(placed.map(member => member.square))].sort()
+  for (const square of squares) {
+    const members = placed.filter(member => member.square === square), constant = (value: number) => members.map(() => value)
+    const path = resolve(prepared, square, 'roads.arrow')
+    mkdirSync(dirname(path), { recursive: true })
+    renameSync(writeRoadsFixture(`${name}-${square.replaceAll('/', '-')}.arrow`, members.map(member => member.piece.cls ?? 4), { sourceIds: constant(0), speeds: constant(0) }), path)
+    await withArrowWrite(path, table => new Table({
+      ...Object.fromEntries(table.schema.fields.map(field => [field.name, table.getChild(field.name)!])),
+      osm_id: vectorFromArray(members.map(member => BigInt(member.piece.way)), new Int64()),
+      segment_idx: vectorFromArray(members.map(member => member.piece.segment ?? 0), new Int16()),
+      ref: vectorFromArray(members.map(member => member.piece.ref ?? 'R1'), new Utf8()),
+      name: vectorFromArray(members.map(member => member.piece.name ?? ''), new Utf8()),
+      ...Object.fromEntries((['start', 'end'] as const).flatMap(side => [0, 1].map(axis =>
+        [`${side}_g${'xy'[axis]}`, vectorFromArray(members.map(member => member[side][axis]), new Int32())]))),
+      length_m: vectorFromArray(constant(60), new Float32()),
+      access: vectorFromArray(constant(0), new Uint8()), junction: vectorFromArray(constant(0), new Uint8()),
+      oneway: vectorFromArray(members.map(member => member.piece.oneway ?? 0), new Uint8()), built_up: vectorFromArray(constant(2), new Uint8()),
+      ...Object.fromEntries(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto'].map(column => [column, vectorFromArray(constant(0), new Float64())])),
+    }))
+    await writeRoadAadt(path, (_row, index) => members[index].piece.anchorLight === undefined ? null :
+      { ...traffic(members[index].piece.anchorLight!, 10), observationId: `count-${members[index].piece.anchorLight}` })
+  }
+  const ways = new Map<number, FixtureSourceWay>()
+  for (const { piece } of placed) ways.set(piece.way, { id: String(piece.way), family: 'roads',
+    nodes: [[piece.from[0], [piece.from[2], piece.from[1]]], [piece.to[0], [piece.to[2], piece.to[1]]]] })
+  writeTransportFixture(prepared, [...ways.values()], placed.map(({ piece, square }) => {
+    const [from, to] = piece.cut ?? [0, 1]
+    return { way: String(piece.way), segment: piece.segment ?? 0, square, start: [0, from] as [number, number], end: to === 1 ? [1, 0] as [number, number] : [0, to] as [number, number] }
+  }))
+  return { prepared, squares }
+}
+
+test('chains crossing square borders fill exactly as one undivided walk; a chain inside one square never reaches the parent', async t => {
+  const originalWorkers = process.env.QM_ROAD_WORKERS
+  t.after(() => { if (originalWorkers === undefined) delete process.env.QM_ROAD_WORKERS; else process.env.QM_ROAD_WORKERS = originalWorkers })
+  process.env.QM_ROAD_WORKERS = '2'
+  // The corner shared by z9/275/173, z9/276/173, z9/275/174 and z9/276/174.
+  const corner = gridToLonLat(276 << 21, (511 - 173) << 21)
+  let nextWay = 1
+  const line = (label: string, lat: number, lons: number[], pieces: Array<Partial<RegionPiece>>): RegionPiece[] =>
+    pieces.map((piece, index) => ({ way: nextWay++, from: [`${label}${index}`, corner.lon + lons[index], lat], to: [`${label}${index + 1}`, corner.lon + lons[index + 1], lat], ...piece }))
+  const crossing = [-0.0020, -0.0010, 0.0015, 0.0025, 0.0035], north = (step: number) => corner.lat + 0.01 * step
+  const diagonalWay = nextWay++, thirds = [0, 1 / 3, 2 / 3, 1]
+  const region: RegionPiece[] = [
+    ...line('straight', north(1), crossing, [{ anchorLight: 100 }, {}, {}, {}]),
+    ...line('agreeing', north(2), crossing, [{ anchorLight: 200 }, {}, {}, { anchorLight: 200 }]),
+    ...line('conflicting', north(3), crossing, [{ anchorLight: 300 }, {}, {}, { anchorLight: 301 }]),
+    ...line('named', north(4), crossing, [{ anchorLight: 400, ref: '', name: 'Ring' }, { ref: '', name: 'Ring' }, { ref: '', name: 'Other' }, {}]),
+    ...line('oneway', north(5), crossing, [{ anchorLight: 500, oneway: 1 }, { oneway: 1 }, { oneway: 2 }, { oneway: 2 }]),
+    ...line('branched', north(6), crossing, [{ anchorLight: 600 }, {}, {}, {}]),
+    // A side arm stored west of the border ends on the node where the branched line crosses into the eastern square.
+    { way: nextWay++, from: ['arm', corner.lon - 0.0005, north(6) + 0.0002], to: ['branched1', corner.lon - 0.0010, north(6)], cls: 6, ref: '' },
+    ...line('inside', north(7), [0.0100, 0.0110, 0.0120, 0.0130], [{}, { anchorLight: 700 }, {}]),
+    // One long hop cut at fractions crosses three squares diagonally through the corner.
+    ...thirds.slice(1).map((to, segment): RegionPiece => ({ way: diagonalWay, segment, cut: [thirds[segment], to], anchorLight: segment === 0 ? 800 : undefined,
+      from: ['diagonal0', corner.lon - 0.0020, corner.lat + 0.0028], to: ['diagonal1', corner.lon + 0.0040, corner.lat - 0.0014] })),
+  ]
+  const { prepared, squares } = await writeRegion('border-region', region)
+  assert.deepEqual(squares, ['z9/275/173', 'z9/276/173', 'z9/276/174'])
+
+  const stored = squares.flatMap(square => {
+    const table = tableFromIPC(bytes(resolve(prepared, square, 'roads.arrow'))), pieces = SquarePieces.read(prepared, square, 'roads')
+    return readPlanningRoads(table).map(road => {
+      const { startKey, endKey } = pieces.identity(pieces.row(String(road.osmId), road.segIdx))
+      return { ...road, square, row: road.i, a: startKey, b: endKey, direction: Number(table.getChild('oneway')!.get(road.i)) }
+    })
+  }).map((road, i) => ({ ...road, i }))
+  const undivided = buildContinuityPlan(stored)
+  assert.deepEqual([undivided.anchors, undivided.conflicts, undivided.fill.size], [10, 1, 11])
+
+  const inside = planSquareContinuity(prepared, 'z9/276/173', [])
+  assert.deepEqual(inside.fills.map(fill => [[...fill.rows].length, fill.flow.light]), [[2, 700]])
+  assert.equal(inside.anchors, 1)
+
+  const result = await enrichContinuityDirectory(prepared)
+  assert.deepEqual([result.rows, result.anchors, result.conflicts, result.matched], [stored.length, undivided.anchors, undivided.conflicts, undivided.fill.size])
+  for (const square of squares) {
+    const table = tableFromIPC(bytes(resolve(prepared, square, 'roads.arrow')))
+    for (const road of stored.filter(road => road.square === square)) {
+      const flow = undivided.fill.get(road.i), label = `${square} way ${road.osmId}:${road.segIdx}`
+      assert.equal(table.getChild('source_id')!.get(road.row), flow ? 12 : road.src, label)
+      assert.equal(table.getChild('aadt_light')!.get(road.row), flow ? flow.light : road.aadt[0], label)
+      assert.equal(table.getChild('traffic_observation_id')!.get(road.row), flow ? flow.observationId : road.observationId, label)
+    }
+  }
+  assert.equal((await enrichContinuityDirectory(prepared)).updated, false)
 })

@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { Table } from 'apache-arrow'
 import { contractTable, firstRowAtOrAfter, railwayGlobals, type SourceNode } from './railway-globals.js'
-import type { SegmentEndpointKeys } from './prepared-grid.js'
+import { z9AxesOfGridCell, type SegmentEndpointKeys } from './prepared-grid.js'
 
 export type TransportFamily = 'roads' | 'railways'
 
@@ -57,11 +57,13 @@ export class SquarePieces {
   private readonly segments: Int16Array
   // Flat arrays: a per-row Vector.get dominates a million-piece road square.
   private readonly columns = new Map<string, ArrayLike<number | bigint>>()
+  private readonly squareAxes: number[]
 
   /** `fileBytes` is what a cached square keeps alive: the table is a view of the file's buffer. */
   private constructor(readonly square: string, private readonly table: Table | null, readonly fileBytes = 0) {
     this.wayIds = table ? column(table, 'way_id') : new BigInt64Array()
     this.segments = table ? column(table, 'segment_idx') : new Int16Array()
+    this.squareAxes = square.split('/').slice(1).map(Number)
   }
 
   /** A square without the file has no pieces; a caller needing one reports the piece it misses. */
@@ -103,14 +105,21 @@ export class SquarePieces {
   }
 
   /** A fractional end is identified by its exact double on the way; a vertex end by its canonical node. */
+  endpointKey(row: number, side: 'start' | 'end'): string {
+    const fraction = this.value(`${side}_fraction`, row)
+    return fraction > 0
+      ? `way:${this.wayIds[row]}:${this.value(`${side}_vertex`, row)}+${fraction}`
+      : `node:${this.value<bigint>(`${side}_node`, row)}`
+  }
+
   identity(row: number): SegmentEndpointKeys {
-    const endpointKey = (side: 'start' | 'end'): string => {
-      const fraction = this.value(`${side}_fraction`, row)
-      return fraction > 0
-        ? `way:${this.wayIds[row]}:${this.value(`${side}_vertex`, row)}+${fraction}`
-        : `node:${this.value<bigint>(`${side}_node`, row)}`
-    }
-    return { startKey: endpointKey('start'), endKey: endpointKey('end') }
+    return { startKey: this.endpointKey(row, 'start'), endKey: this.endpointKey(row, 'end') }
+  }
+
+  /** Square holding the end's z30 cell when it is not this one; every square derives the same home from the shared cell. */
+  endpointHomeInAnotherSquare(row: number, side: 'start' | 'end'): string | null {
+    const [x, y] = z9AxesOfGridCell(this.value(`${side}_gx`, row), this.value(`${side}_gy`, row))
+    return x === this.squareAxes[0] && y === this.squareAxes[1] ? null : `z9/${x}/${y}`
   }
 
   geometry(row: number): SourceParentGeometry {

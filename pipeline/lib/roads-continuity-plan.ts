@@ -11,12 +11,17 @@ export type ContinuityRoad = Pick<PlanningRoad, 'i' | 'osmId' | 'cls' | 'src' | 
   direction: number; observationSourceId: number
 }
 export interface Flow extends RoadObservation { light: number; medium: number; heavy: number; moto: number; observationSourceId: number }
+/** What decides a link at one endpoint; the only road facts a square sends for a chain end it cannot close itself. */
+export type ContinuityChainEnd = Pick<ContinuityRoad, 'osmId' | 'cls' | 'access' | 'roundabout' | 'ref' | 'name' | 'direction' | 'a' | 'b'>
+/** Anchors of one chain or of a part of it: their agreed flow, or one conflict. */
+export interface AnchorAgreement { anchors: number; conflicts: number; flow?: Flow }
 
 /** One road continues under its ref, or under its name when neither piece carries a ref. */
-const sameSignedRoad = (a: ContinuityRoad, b: ContinuityRoad): boolean =>
+const sameSignedRoad = (a: ContinuityChainEnd, b: ContinuityChainEnd): boolean =>
   a.ref !== '' || b.ref !== '' ? a.ref === b.ref : a.name !== '' && a.name === b.name
 
-function compatible(a: ContinuityRoad, b: ContinuityRoad, endpoint: string): boolean {
+/** Symmetric, and both pieces must be fillable; the caller establishes that exactly these two piece ends meet at the endpoint. */
+export function chainContinuesThroughEndpoint(a: ContinuityChainEnd, b: ContinuityChainEnd, endpoint: string): boolean {
   if (!FILLABLE.has(b.cls) || a.cls !== b.cls || a.access !== b.access || a.roundabout || b.roundabout ||
       !(a.osmId === b.osmId || sameSignedRoad(a, b))) return false
   if (a.direction === 0 || b.direction === 0) return a.direction === b.direction
@@ -34,7 +39,7 @@ export function roadContinuityComponent<T extends ContinuityRoad>(seed: T, touch
       // An unsigned count on a side arm does not determine any turning movement.
       if (incident.length !== 2) continue
       const next = incident.find(candidate => candidate.i !== road.i)
-      if (next && !seen.has(next.i) && compatible(road, next, endpoint)) {
+      if (next && !seen.has(next.i) && chainContinuesThroughEndpoint(road, next, endpoint)) {
         seen.add(next.i)
         component.push(next)
       }
@@ -43,20 +48,32 @@ export function roadContinuityComponent<T extends ContinuityRoad>(seed: T, touch
   return component
 }
 
+export const isContinuityAnchor = (road: ContinuityRoad): boolean => isMeasured(road.src) && road.observationId !== ''
+export const isContinuityFillTarget = (road: Pick<ContinuityRoad, 'cls' | 'src'>): boolean =>
+  FILLABLE.has(road.cls) && (road.src === 0 || road.src === SOURCE_ID_ROAD_CONTINUITY_HEURISTIC)
+
+// Without observation uncertainties there is no justified tolerance or reconciliation weight.
+const sameFlow = (a: Flow, b: Flow): boolean => a.countBasis === b.countBasis && a.observationId === b.observationId &&
+  a.observationSourceId === b.observationSourceId && a.light === b.light && a.medium === b.medium && a.heavy === b.heavy && a.moto === b.moto
+
+/** The parts of one chain agree only when every anchor in every part carries the same observation and counts. */
+export function joinAnchorAgreements(parts: Iterable<AnchorAgreement>): AnchorAgreement {
+  let anchors = 0, conflicts = 0, flow: Flow | undefined
+  for (const part of parts) {
+    anchors += part.anchors
+    if (part.conflicts || (flow && part.flow && !sameFlow(flow, part.flow))) conflicts = 1
+    flow ??= part.flow
+  }
+  return conflicts ? { anchors, conflicts } : { anchors, conflicts, flow }
+}
+
+export function anchorAgreement(roads: ContinuityRoad[]): AnchorAgreement {
+  return joinAnchorAgreements(roads.filter(isContinuityAnchor).map(({ aadt: [light, medium, heavy, moto], countBasis, observationId, observationSourceId }) =>
+    ({ anchors: 1, conflicts: 0, flow: { light, medium, heavy, moto, countBasis, observationId, observationSourceId } })))
+}
+
 export function planContinuityComponent(roads: ContinuityRoad[]) {
-  const anchors = roads.filter(road => isMeasured(road.src) && road.observationId !== '')
-  const fill = new Map<number, Flow>()
-  if (!anchors.length) return { fill, anchors: 0, conflicts: 0 }
-  // Without observation uncertainties there is no justified tolerance or reconciliation weight.
-  if (anchors.some(road => road.countBasis !== anchors[0].countBasis || road.observationId !== anchors[0].observationId ||
-      road.observationSourceId !== anchors[0].observationSourceId || road.aadt.some((value, index) => value !== anchors[0].aadt[index]))) {
-    return { fill, anchors: anchors.length, conflicts: 1 }
-  }
-  const [light, medium, heavy, moto] = anchors[0].aadt
-  const { countBasis, observationId, observationSourceId } = anchors[0]
-  const flow = { light, medium, heavy, moto, countBasis, observationId, observationSourceId }
-  for (const road of roads) {
-    if (FILLABLE.has(road.cls) && (road.src === 0 || road.src === SOURCE_ID_ROAD_CONTINUITY_HEURISTIC)) fill.set(road.i, flow)
-  }
-  return { fill, anchors: anchors.length, conflicts: 0 }
+  const { anchors, conflicts, flow } = anchorAgreement(roads), fill = new Map<number, Flow>()
+  if (flow) for (const road of roads) if (isContinuityFillTarget(road)) fill.set(road.i, flow)
+  return { fill, anchors, conflicts }
 }
