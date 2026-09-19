@@ -14,7 +14,7 @@ from unittest.mock import patch
 import numpy as np
 import pyarrow as pa
 
-from building_footprints import BuildingFootprintSampler, WINDOW_HALF_DEG
+from building_footprints import WINDOW_HALF_DEG, built_up_classes, window_areas_m2, window_sums
 from build_built_up import bake_file
 import qmgrid
 
@@ -91,8 +91,11 @@ class BuiltUpTests(unittest.TestCase):
         self.point = (49.5, 14.5)
         self.square = qmgrid.square_of(*self.point)
 
-    def sampler(self):
-        return BuildingFootprintSampler(self.root)
+    def area(self, lat, lon):
+        return float(window_areas_m2(self.root, np.array([lat], dtype=float), np.array([lon], dtype=float))[0])
+
+    def classify(self, lat, lon):
+        return int(built_up_classes(self.root, np.array([lat], dtype=float), np.array([lon], dtype=float))[0])
 
     def test_degree_window_uses_centroids_in_both_axes(self):
         lat, lon = self.point
@@ -100,26 +103,27 @@ class BuiltUpTests(unittest.TestCase):
         rows = [footprint(lat + dy, lon + dx, 20)
                 for dy, dx in [(0, 0), (inside, 0), (0, inside), (outside, 0), (0, outside)]]
         write_structures(self.root, self.square, rows)
-        area = self.sampler().window_area_m2(lat, lon)
-        assert area is not None
+        area = self.area(lat, lon)
         self.assertAlmostEqual(area, 1200, delta=5)
 
-    def test_longitude_prefilter_preserves_exact_wrapped_boundary_sums(self):
+    def test_banded_candidate_search_keeps_exactly_the_closed_wrapped_window_members(self):
         rng = np.random.default_rng(42)
         for lon in (-540, -180, -179.9999, 0, 139.7, 179.9999, 180, 540):
             edges = np.array([lon - WINDOW_HALF_DEG, lon + WINDOW_HALF_DEG])
             longitudes = qmgrid.normalize_longitude(np.concatenate((
-                rng.uniform(-180, 180, 20_000), edges,
+                rng.uniform(-180, 180, 20_000), rng.uniform(lon - .01, lon + .01, 2_000), edges,
                 np.nextafter(edges, -np.inf), np.nextafter(edges, np.inf))))
-            areas = rng.uniform(1, 10000, len(longitudes))
-            cell = (np.full(len(longitudes), 35.6), longitudes, areas)
-            expected = float(areas[
-                np.abs(qmgrid.wrapped_longitude_delta(lon, longitudes)) <= WINDOW_HALF_DEG].sum())
-            sampler = self.sampler()
-            with self.subTest(longitude=lon), \
-                    patch("building_footprints.window_squares", return_value=[(0, 0)]), \
-                    patch.object(sampler, "cell_footprints", return_value=cell):
-                self.assertEqual(sampler.window_area_m2(35.6, lon), expected)
+            latitudes = 35.6 + rng.uniform(-.01, .01, len(longitudes))
+            # Whole-number areas sum exactly in any order, so equality tests membership alone.
+            areas = rng.integers(1, 10000, len(longitudes)).astype(float)
+            rows = 35.6 + rng.uniform(-.004, .004, 50)
+            expected = [areas[(np.abs(qmgrid.wrapped_longitude_delta(lon, longitudes)) <= WINDOW_HALF_DEG)
+                              & (latitudes >= lat - WINDOW_HALF_DEG) & (latitudes <= lat + WINDOW_HALF_DEG)].sum()
+                        for lat in rows]
+            with self.subTest(longitude=lon), patch("building_footprints.CANDIDATES_PER_STEP", 64):
+                self.assertGreater(min(expected), 0)
+                self.assertEqual(window_sums((latitudes, longitudes, areas), rows, np.full(50, float(lon))).tolist(),
+                                 expected)
 
     def test_courtyards_and_multipart_area_cross_the_calibrated_threshold(self):
         lat, lon = self.point
@@ -129,11 +133,9 @@ class BuiltUpTests(unittest.TestCase):
             with self.subTest(holes=holes, parts=parts):
                 write_structures(self.root, self.square,
                                  [footprint(lat, lon, holes=holes, extra_parts=parts)])
-                sampler = self.sampler()
-                area = sampler.window_area_m2(lat, lon)
-                assert area is not None
+                area = self.area(lat, lon)
                 self.assertAlmostEqual(area, expected_area, delta=10)
-                self.assertEqual(sampler.classify(lat, lon), expected_class)
+                self.assertEqual(self.classify(lat, lon), expected_class)
 
     def test_only_overture_stock_counts_even_with_osm_and_barrier_rows(self):
         lat, lon = self.point
@@ -143,59 +145,26 @@ class BuiltUpTests(unittest.TestCase):
         barrier.update(kind=1, geom=qmgrid.encode_grid_poly(ring(lat, lon, 200)[:2]))
         rows.append(barrier)
         write_structures(self.root, self.square, rows)
-        sampler = self.sampler()
-        area = sampler.window_area_m2(lat, lon)
-        assert area is not None
+        area = self.area(lat, lon)
         self.assertAlmostEqual(area, 1800, delta=5)
-        self.assertEqual(sampler.classify(lat, lon), 1)
+        self.assertEqual(self.classify(lat, lon), 1)
 
     def test_four_cell_corner_requires_every_owner_even_when_known_area_is_urban(self):
         squares = [(255, 255), (256, 255), (255, 256), (256, 256)]
         for square, point in zip(squares, [(0.001, -.001), (.001, .001), (-.001, -.001), (-.001, .001)]):
             self.assertEqual(qmgrid.square_of(*point), square)
             write_structures(self.root, square, [footprint(*point, side=70)])
-        self.assertEqual(self.sampler().classify(0, 0), 2)
+        self.assertEqual(self.classify(0, 0), 2)
         (self.root / "z9/255/255/structures.arrow").unlink()
-        self.assertEqual(self.sampler().classify(0, 0), 0)
+        self.assertEqual(self.classify(0, 0), 0)
         write_structures(self.root, (255, 255), [])
-        self.assertEqual(self.sampler().classify(0, 0), 2)
-
-    def test_owner_corner_working_set_loads_once_and_stays_bounded_when_owner_changes(self):
-        owner = (256, 256)
-        west, north, east, south = qmgrid.square_lonlat_span(*owner)
-        inset = WINDOW_HALF_DEG / 4
-        corners = [(north - inset, west + inset), (north - inset, east - inset),
-                   (south + inset, west + inset), (south + inset, east - inset)]
-        for x in range(255, 258):
-            for y in range(255, 258):
-                write_structures(self.root, (x, y), [])
-        sides = [20, 30, 40, 50]
-        write_structures(self.root, owner,
-                         [footprint(*point, side=side) for point, side in zip(corners, sides)])
-        sampler = self.sampler()
-        with patch.object(sampler, "load_cell", wraps=sampler.load_cell) as load:
-            for index in [0, 1, 2, 3, 0]:
-                area = sampler.window_area_m2(*corners[index])
-                assert area is not None
-                self.assertAlmostEqual(area, sides[index] ** 2, delta=5)
-                self.assertLessEqual(len(sampler.cells), 9)
-            self.assertEqual(load.call_count, 9)
-            self.assertEqual(len({call.args[0] for call in load.call_args_list}), 9)
-            write_structures(self.root, self.square, [])
-            self.assertEqual(sampler.classify(*self.point), 1)
-            self.assertEqual(load.call_count, 10)
-            self.assertEqual(len(sampler.cells), 9)
-            area = sampler.window_area_m2(*corners[0])
-            assert area is not None
-            self.assertAlmostEqual(area, sides[0] ** 2, delta=5)
-            self.assertEqual(len(sampler.cells), 9)
+        self.assertEqual(self.classify(0, 0), 2)
 
     def test_dateline_footprint_and_road_midpoint_preserve_arrow_identity(self):
         y = qmgrid.square_of(10, 179.99)[1]
         write_structures(self.root, (511, y), [footprint(10, 179.9999)])
         write_structures(self.root, (0, y), [])
-        area = self.sampler().window_area_m2(10, 180)
-        assert area is not None
+        area = self.area(10, 180)
         self.assertAlmostEqual(area, 10000, delta=15)
         metadata = {b"grid": b"z30", b"roads_contract": b"country_baked_v1",
                     b"qm_blocks": QM_BLOCKS_TWO_BATCHES, b"source": b"fixture"}
@@ -207,7 +176,7 @@ class BuiltUpTests(unittest.TestCase):
         write_structures(self.root, self.square, [])
         path = self.root / f"z9/511/{y}/roads.arrow"
         write_roads(path, [first, second])
-        result = bake_file(path, self.sampler())
+        result = bake_file(path, self.root)
         self.assertEqual(result, {"rows": 3, "unknown": 0, "rural": 2, "urban": 1, "files_changed": 1})
         with pa.ipc.open_file(path) as reader:
             self.assertEqual(reader.num_record_batches, 2)
@@ -219,7 +188,7 @@ class BuiltUpTests(unittest.TestCase):
                     self.assertEqual(batch.schema.field(field.name), field)
                     self.assertTrue(batch.column(field.name).equals(original.column(field.name)))
         before = path.read_bytes(), path.stat()
-        self.assertEqual(bake_file(path, self.sampler())["files_changed"], 0)
+        self.assertEqual(bake_file(path, self.root)["files_changed"], 0)
         self.assertEqual(path.read_bytes(), before[0])
         self.assertEqual(path.stat(), before[1])
         self.assertEqual(path.stat().st_mode & 0o777, 0o640)
@@ -229,34 +198,34 @@ class BuiltUpTests(unittest.TestCase):
         structures = write_structures(self.root, self.square, [])
         path = self.root / qmgrid.square_name(*self.square) / "roads.arrow"
         write_roads(path, [road_batch([self.point])])
-        self.assertEqual(bake_file(path, self.sampler())["rural"], 1)
+        self.assertEqual(bake_file(path, self.root)["rural"], 1)
         before = path.stat()
-        with patch.object(BuildingFootprintSampler, "classify", side_effect=AssertionError("already baked")):
-            self.assertEqual(bake_file(path, self.sampler()), {"files_changed": 0, "files_skipped": 1})
+        with patch("build_built_up.built_up_classes", side_effect=AssertionError("already baked")):
+            self.assertEqual(bake_file(path, self.root), {"files_changed": 0, "files_skipped": 1})
         self.assertEqual(path.stat(), before)
         write_structures(self.root, self.square, [footprint(lat, lon, side=100)])
-        self.assertEqual(bake_file(path, self.sampler())["urban"], 1)
+        self.assertEqual(bake_file(path, self.root)["urban"], 1)
         # A previously absent halo appearing also invalidates the recorded input set.
         neighbor = (self.square[0] + 1, self.square[1])
         write_structures(self.root, neighbor, [])
-        with patch.object(BuildingFootprintSampler, "classify", return_value=1) as classify:
-            self.assertEqual(bake_file(path, self.sampler())["rural"], 1)
+        with patch("build_built_up.built_up_classes", return_value=np.array([1], dtype=np.uint8)) as classify:
+            self.assertEqual(bake_file(path, self.root)["rural"], 1)
             self.assertEqual(classify.call_count, 1)
         structures.unlink()
-        self.assertEqual(bake_file(path, self.sampler())["unknown"], 1)
+        self.assertEqual(bake_file(path, self.root)["unknown"], 1)
 
     def test_absent_valid_empty_and_corrupt_structures_are_distinct(self):
-        self.assertEqual(self.sampler().classify(*self.point), 0)
+        self.assertEqual(self.classify(*self.point), 0)
         path = write_structures(self.root, self.square, [])
         with pa.ipc.open_file(path) as reader:
             self.assertEqual(reader.num_record_batches, 0)
-        self.assertEqual(self.sampler().classify(*self.point), 1)
+        self.assertEqual(self.classify(*self.point), 1)
         write_structures(self.root, self.square, [], STRUCTURES_SCHEMA.remove_metadata())
         with self.assertRaisesRegex(ValueError, "structures_v4"):
-            self.sampler().classify(*self.point)
+            self.classify(*self.point)
         path.write_bytes(b"corrupt IPC")
         with self.assertRaises(pa.ArrowInvalid):
-            self.sampler().classify(*self.point)
+            self.classify(*self.point)
 
     def test_late_bad_geometry_never_replaces_the_original_road_file(self):
         write_structures(self.root, self.square, [])
@@ -268,7 +237,7 @@ class BuiltUpTests(unittest.TestCase):
         write_roads(path, [road_batch([self.point]), road_batch([point])])
         before = path.read_bytes(), path.stat()
         with self.assertRaisesRegex(ValueError, "Malformed structures_v4"):
-            bake_file(path, self.sampler())
+            bake_file(path, self.root)
         self.assertEqual((path.read_bytes(), path.stat()), before)
         self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["roads.arrow", "structures.arrow"])
 

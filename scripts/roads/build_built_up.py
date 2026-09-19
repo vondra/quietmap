@@ -10,21 +10,26 @@ import json
 from pathlib import Path
 import sys
 
+import numpy as np
 import pyarrow as pa
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from prepared_arrow import rewrite_arrow_batches, segment_midpoints  # noqa: E402
 from qmgrid import parse_square_name, square_name, Z9_AXIS  # noqa: E402
-from building_footprints import BuildingFootprintSampler  # noqa: E402
-from worker_jobs import available_memory_bytes, cpu_jobs, fit_jobs  # noqa: E402
+from building_footprints import built_up_classes  # noqa: E402
+from worker_jobs import available_memory_bytes, cpu_jobs  # noqa: E402
 
-# 16 workers filled the 20 GiB road-layer cgroup (1/4 of an 80 GiB world build).
-WORKER_BYTES = (20 << 30) // 16
+# A worker's peak anonymous memory stays under this base plus its roads and owner structures
+# bytes: measured 2026-09-19 on eight squares from 51 MiB of inputs (124 MiB peak) to Tokyo,
+# the world's heaviest (1122 MiB of inputs, 897 MiB peak).
+WORKER_BASE_BYTES = 256 << 20
 
 
 @cache
 def classification_code_identity():
     files = (Path(__file__), Path(__file__).with_name('building_footprints.py'),
+             Path(__file__).with_name('footprint_polygon_areas.py'),
+             Path(__file__).resolve().parents[1] / 'lib/prepared_arrow.py',
              Path(__file__).resolve().parents[1] / 'lib/qmgrid.py')
     return hashlib.sha256(b''.join(path.read_bytes() for path in files)).hexdigest()
 
@@ -48,21 +53,29 @@ def classification_inputs(path):
         separators=(',', ':')).encode()).hexdigest().encode()
 
 
-def bake_file(path, sampler):
-    identity = classification_inputs(path)
+def unbaked_road_midpoints(path, identity):
     with pa.memory_map(str(path), 'r') as source:
-        schema = pa.ipc.open_file(source).schema
-        if (schema.metadata or {}).get(b'qm_built_up_inputs') == identity:
-            return {'files_changed': 0, 'files_skipped': 1}
-    counts = Counter()
-
-    def classify_batch(batch):
-        if (batch.schema.metadata or {}).get(b"grid") != b"z30":
+        reader = pa.ipc.open_file(source)
+        if (reader.schema.metadata or {}).get(b'qm_built_up_inputs') == identity:
+            return None
+        if (reader.schema.metadata or {}).get(b"grid") != b"z30":
             raise ValueError(f"{path}: expected grid z30 roads")
-        latitudes, longitudes = segment_midpoints(batch)
-        values = [sampler.classify(lat, lon) for lat, lon in zip(latitudes, longitudes)]
-        counts.update(values)
-        array = pa.array(values, type=pa.uint8())
+        midpoints = [segment_midpoints(reader.get_batch(i)) for i in range(reader.num_record_batches)]
+    return [np.concatenate(axis) for axis in zip(*midpoints)] if midpoints else [np.zeros(0), np.zeros(0)]
+
+
+def bake_file(path, prepared_dir):
+    identity = classification_inputs(path)
+    midpoints = unbaked_road_midpoints(path, identity)
+    if midpoints is None:
+        return {'files_changed': 0, 'files_skipped': 1}
+    classes = built_up_classes(prepared_dir, *midpoints)
+    baked_rows = 0
+
+    def bake_batch(batch):
+        nonlocal baked_rows
+        array = pa.array(classes[baked_rows:baked_rows + batch.num_rows], type=pa.uint8())
+        baked_rows += batch.num_rows
         index = batch.schema.get_field_index("built_up")
         if index < 0:
             batch = batch.append_column(pa.field("built_up", pa.uint8(), nullable=False), array)
@@ -72,30 +85,21 @@ def bake_file(path, sampler):
             batch = batch.set_column(index, batch.schema.field(index), array)
         return batch.replace_schema_metadata({**(batch.schema.metadata or {}), b'qm_built_up_inputs': identity})
 
-    rows, changed = rewrite_arrow_batches(path, classify_batch)
-    return {"rows": rows, "unknown": counts[0], "rural": counts[1], "urban": counts[2],
-            "files_changed": int(changed)}
-
-
-_WORKER_SAMPLER = None
-
-
-def initialize_worker(prepared_dir):
-    global _WORKER_SAMPLER
-    _WORKER_SAMPLER = BuildingFootprintSampler(prepared_dir)
+    rows, changed = rewrite_arrow_batches(path, bake_batch)
+    unknown, rural, urban = np.bincount(classes, minlength=3).tolist()
+    return {"rows": rows, "unknown": unknown, "rural": rural, "urban": urban, "files_changed": int(changed)}
 
 
 def bake_square(prepared_dir, name):
-    sampler = _WORKER_SAMPLER or BuildingFootprintSampler(prepared_dir)
-    path = Path(prepared_dir) / name / "roads.arrow"
-    return name, bake_file(path, sampler)
+    return name, bake_file(Path(prepared_dir) / name / "roads.arrow", prepared_dir)
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepared-dir", type=Path, required=True)
     parser.add_argument("--square", action="append", help="Repeat to select existing z9/x/y units")
     parser.add_argument("--workers", type=int, default=None,
-                        help="Worker cap (default: all CPUs that fit memory; 1 keeps the serial path)")
+                        help="Worker cap (default: all CPUs that fit memory)")
     args = parser.parse_args()
     if args.workers is not None and args.workers < 1:
         parser.error("--workers must be >= 1")
@@ -106,29 +110,28 @@ def main():
         raise ValueError("Select existing prepared z9/x/y directories")
     if not any((prepared / name / "structures.arrow").is_file() for name in names):
         raise ValueError("No structures.arrow in selected squares; run the structures builder first")
-    road_names = [name for name in names if (prepared / name / "roads.arrow").is_file()]
+    # Heaviest first, one square per task: no worker ends the run alone behind a queue of cities,
+    # and the first tasks are the largest set that ever runs together, so they size the pool.
+    worker_bytes = {name: WORKER_BASE_BYTES + sum(
+        (prepared / name / file).stat().st_size for file in ("roads.arrow", "structures.arrow")
+        if (prepared / name / file).is_file())
+        for name in names if (prepared / name / "roads.arrow").is_file()}
+    road_names = sorted(worker_bytes, key=lambda name: (-worker_bytes[name], name))
     requested = cpu_jobs() if args.workers is None else args.workers
-    workers = min(len(road_names), fit_jobs(requested, WORKER_BYTES)) if road_names else 1
-    print(
-        f"[build-built-up] workers={workers} requested={requested} "
-        f"memory_bytes={available_memory_bytes()} worker_bytes={WORKER_BYTES}",
-        flush=True,
-    )
+    memory_bytes, workers = available_memory_bytes(), 0
+    while workers < min(requested, len(road_names)) and worker_bytes[road_names[workers]] <= memory_bytes:
+        memory_bytes -= worker_bytes[road_names[workers]]
+        workers += 1
+    workers = max(workers, 1)
+    print(f"[build-built-up] workers={workers} requested={requested} "
+          f"memory_bytes={available_memory_bytes()} unclaimed_memory_bytes={memory_bytes}", flush=True)
     totals = Counter()
     with (prepared / ".built-up-build.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if workers == 1:
-            results = map(lambda name: bake_square(prepared, name), road_names)
-            for name, result in results:
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            for name, result in executor.map(bake_square, [prepared] * len(road_names), road_names):
                 totals.update(result)
                 print(json.dumps({"square": name, **result}), flush=True)
-        else:
-            with ProcessPoolExecutor(max_workers=workers, initializer=initialize_worker,
-                                     initargs=(prepared,)) as executor:
-                for name, result in executor.map(
-                        bake_square, [prepared] * len(road_names), road_names, chunksize=4):
-                    totals.update(result)
-                    print(json.dumps({"square": name, **result}), flush=True)
     print(json.dumps({"total": dict(totals)}), flush=True)
 
 
