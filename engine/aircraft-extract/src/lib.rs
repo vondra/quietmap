@@ -12,6 +12,7 @@ pub mod flight;
 pub mod geo;
 pub mod ground_discovery_finalize;
 pub mod ground_inference;
+pub(crate) mod largest_first_memory_admission;
 pub mod memory;
 pub mod period;
 pub mod profile;

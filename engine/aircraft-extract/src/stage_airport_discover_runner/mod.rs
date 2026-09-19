@@ -11,7 +11,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use noise_compute::types::AirportArea;
-use rayon::prelude::*;
 
 use crate::airport_index::AerodromeIndex;
 use crate::airport_io::AirportLineRow;
@@ -94,17 +93,26 @@ pub fn run_stage_airport_discover(
     if inputs.is_empty() && stale.is_empty() {
         return Ok(0);
     }
-    let largest_allocation = match inputs.values().map(|input| input.allocation_bytes).max() {
-        Some(bytes) => bytes,
-        None => admission::working_set_allowance(
-            0,
-            0,
-            0,
-            admission::shared_allocation_allowance(aerodrome_index, airport_lines_global)?,
-        )?,
-    };
-    let workers =
-        crate::memory::max_concurrent_tasks(rayon::current_num_threads(), largest_allocation)?;
+    let mut square_keys: Vec<u64> = inputs.keys().copied().collect();
+    square_keys.extend(stale);
+    square_keys.sort_unstable();
+    let stale_only_allocation = admission::working_set_allowance(
+        0,
+        0,
+        0,
+        admission::shared_allocation_allowance(aerodrome_index, airport_lines_global)?,
+    )?;
+    let allocation_allowances: Vec<u64> = square_keys
+        .iter()
+        .map(|square| {
+            inputs
+                .get(square)
+                .map_or(stale_only_allocation, |input| input.allocation_bytes)
+        })
+        .collect();
+    let largest_allocation = allocation_allowances.iter().copied().max().unwrap_or(0);
+    let concurrent_budget = crate::memory::concurrent_allocation_budget_for(largest_allocation)?;
+    let threads = rayon::current_num_threads();
     let raw = prepared_year_dir.join(".ground_discovery_raw");
     let canonical = prepared_year_dir.join(".ground_discovery_canonical");
     anyhow::ensure!(
@@ -112,16 +120,10 @@ pub fn run_stage_airport_discover(
         "incomplete discovery generation requires inspection before rerun"
     );
     crate::arrow_io::create_directory_all_synced(&raw)?;
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(workers)
-        .build()?;
-    let mut square_keys: Vec<u64> = inputs.keys().copied().collect();
-    square_keys.extend(stale);
-    square_keys.sort_unstable();
     started(
         "stage1.5",
         &format!(
-            "{} z9 cells ({} active, {} stale-only); {workers} workers; {largest_allocation} B allocation allowance each",
+            "{} z9 cells ({} active, {} stale-only); {threads} threads share {concurrent_budget} B of allocation allowances; largest cell {largest_allocation} B",
             square_keys.len(),
             inputs.len(),
             square_keys.len() - inputs.len()
@@ -135,66 +137,63 @@ pub fn run_stage_airport_discover(
     // hub z9s without further configuration.
     const PER_SQUARE_SLOW_LOG_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(5);
 
-    let results: Vec<Result<bool>> = pool.install(|| {
-        square_keys
-            .par_iter()
-            .map(|square| {
-                let square_start = std::time::Instant::now();
-                let (extent, n_segs, candidate_bound) = inputs
-                    .get(square)
-                    .map(|input| {
-                        (
-                            input.extent,
-                            input.rows,
-                            input.candidate_vertices_upper_bound,
-                        )
-                    })
-                    .unwrap_or((Extent::empty(*square), 0, 0));
-                let lines = nearby_airport_lines(*square, extent, airport_lines_global);
-                let mut candidates = Vec::with_capacity(candidate_bound);
-                if let Some(input) = inputs.get(square) {
-                    let shard = &input.path;
-                    crate::arrow_io::for_each_segment_batch(shard, |segments| {
-                        collect_miss_snap_vertices(
-                            &segments,
-                            &lines,
-                            aerodrome_index,
-                            &mut candidates,
-                        );
-                        anyhow::ensure!(
-                            candidates.len() <= candidate_bound,
-                            "ground candidates changed after validation"
-                        );
-                        Ok(())
-                    })
-                    .with_context(|| format!("read {}", shard.display()))?;
-                }
-                let out = run_one_square(*square, &candidates, aerodrome_index, &lines, &raw)
-                    .with_context(|| format!("z9 {square:015x}"))?;
-                let elapsed = square_start.elapsed();
-                if elapsed >= PER_SQUARE_SLOW_LOG_THRESHOLD {
-                    eprintln!(
-                        "{} [stage1.5] z9 {} done in {:?} ({} ground segs, populated={})",
-                        crate::progress::ts(),
-                        square_path(*square),
-                        elapsed,
-                        n_segs,
-                        out,
+    // Each cell writes only its own raw sidecar, so the start order cannot change any output byte.
+    crate::largest_first_memory_admission::run_largest_first_within_memory_budget(
+        &allocation_allowances,
+        threads,
+        concurrent_budget,
+        |task| {
+            let square = &square_keys[task];
+            let square_start = std::time::Instant::now();
+            let (extent, n_segs, candidate_bound) = inputs
+                .get(square)
+                .map(|input| {
+                    (
+                        input.extent,
+                        input.rows,
+                        input.candidate_vertices_upper_bound,
+                    )
+                })
+                .unwrap_or((Extent::empty(*square), 0, 0));
+            let lines = nearby_airport_lines(*square, extent, airport_lines_global);
+            let mut candidates = Vec::with_capacity(candidate_bound);
+            if let Some(input) = inputs.get(square) {
+                let shard = &input.path;
+                crate::arrow_io::for_each_segment_batch(shard, |segments| {
+                    collect_miss_snap_vertices(
+                        &segments,
+                        &lines,
+                        aerodrome_index,
+                        &mut candidates,
                     );
-                }
-                square_counter.add(1);
-                Ok(out)
-            })
-            .collect()
-    });
-
-    for result in results {
-        result?;
-    }
+                    anyhow::ensure!(
+                        candidates.len() <= candidate_bound,
+                        "ground candidates changed after validation"
+                    );
+                    Ok(())
+                })
+                .with_context(|| format!("read {}", shard.display()))?;
+            }
+            let out = run_one_square(*square, &candidates, aerodrome_index, &lines, &raw)
+                .with_context(|| format!("z9 {square:015x}"))?;
+            let elapsed = square_start.elapsed();
+            if elapsed >= PER_SQUARE_SLOW_LOG_THRESHOLD {
+                eprintln!(
+                    "{} [stage1.5] z9 {} done in {:?} ({} ground segs, populated={})",
+                    crate::progress::ts(),
+                    square_path(*square),
+                    elapsed,
+                    n_segs,
+                    out,
+                );
+            }
+            square_counter.add(1);
+            Ok(())
+        },
+    )?;
     let square_count = square_keys.len();
     drop(inputs);
     drop(square_keys);
-    drop(pool);
     let retained_bytes =
         admission::shared_allocation_allowance(aerodrome_index, airport_lines_global)?;
     let populated = crate::ground_discovery_finalize::finalize_ground_discovery(

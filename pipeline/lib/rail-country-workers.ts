@@ -2,10 +2,11 @@
 
 import { fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { getHeapStatistics } from 'node:v8'
 import type { GlobalGtfsCountryOptions } from '../enrich-railway-europe.js'
-import { countryGtfsBbox, feedsForRegistry } from './railway-gtfs-feeds.js'
+import { countryGtfsBbox, feedsForRegistry, existingGtfsSourceDirectories } from './railway-gtfs-feeds.js'
 import { listPreparedSquares } from './prepared-grid.js'
 import { restoreRailwayParentsForEnrichment } from './rail-parent.js'
 import { SourceTransportTopology } from './transport-topology.js'
@@ -21,12 +22,39 @@ export function awaitCountryPublication(): Promise<void> {
   })
 }
 
+/**
+ * Routing time follows the timetable size: DE's 4.1 GB `stop_times.txt` took 1,562 s and, started
+ * late in alphabetical order, ended the world batch alone. The largest timetable starts first.
+ * Order is only a speedup: an unreadable or not yet extracted feed counts 0 B and its own
+ * country worker reports the fault.
+ */
+export function countriesLargestTimetableFirst(
+  countries: readonly string[], options: Pick<GlobalGtfsCountryOptions, 'sourceDirectory' | 'registry'>,
+): string[] {
+  const feeds = feedsForRegistry(options.registry ?? 'global')
+  const stopTimesBytes = (directory: string): number => {
+    try { return statSync(resolve(directory, 'stop_times.txt')).size } catch { return 0 }
+  }
+  const countryBytes = new Map(countries.map(country => {
+    try {
+      return [country, feeds.filter(feed => feed.country === country)
+        .flatMap(feed => existingGtfsSourceDirectories(resolve(options.sourceDirectory), feed))
+        .reduce((bytes, directory) => bytes + stopTimesBytes(directory), 0)]
+    } catch { return [country, 0] }
+  }))
+  return [...countries].sort((left, right) => {
+    const [leftBytes, rightBytes] = [countryBytes.get(left)!, countryBytes.get(right)!]
+    return leftBytes > rightBytes ? -1 : leftBytes < rightBytes ? 1 : 0
+  })
+}
+
 /** The chain subprocess retains its existing enrichment/admin locks until all children exit. */
 export async function runGtfsCountries(options: GlobalGtfsCountryOptions): Promise<void> {
-  const countries = options.country.toUpperCase().split(',')
-  if (countries.some(country => !/^[A-Z]{2}$/.test(country)) || new Set(countries).size !== countries.length) {
+  const requested = options.country.toUpperCase().split(',')
+  if (requested.some(country => !/^[A-Z]{2}$/.test(country)) || new Set(requested).size !== requested.length) {
     throw new Error('GTFS countries must be distinct ISO2 codes')
   }
+  const countries = countriesLargestTimetableFirst(requested, options)
   // Reserve a second heap-equivalent for Arrow/native memory; this is admission,
   // not a claim that V8 limits the complete RSS. Four bounds retained country results.
   const prepared = resolve(options.preparedDirectory)

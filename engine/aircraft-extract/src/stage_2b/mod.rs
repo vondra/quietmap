@@ -233,12 +233,13 @@ pub fn run_stage_2b_phase(
     let fold_bucket_counter = Milestone::new("stage2b/fold", "buckets", 10);
     let fold_row_counter = Milestone::new("stage2b/fold", "cruise rows", 100_000);
     let inputs = allocation::fold_inputs(spill_dir)?;
-    let largest = inputs
+    // The retained part paths stay resident beside every running bucket.
+    let retained_paths = allocation::retained_paths_allocation(&inputs);
+    let allocation_allowances: Vec<u64> = inputs
         .iter()
-        .map(|input| input.allocation_bytes)
-        .max()
-        .unwrap_or(0)
-        + allocation::retained_paths_allocation(&inputs);
+        .map(|input| input.allocation_bytes + retained_paths)
+        .collect();
+    let largest = allocation_allowances.iter().copied().max().unwrap_or(0);
     let spill_bytes: u64 = inputs.iter().map(|input| input.file_bytes).sum();
     receipt::record_fold_plan(
         spill_dir,
@@ -250,11 +251,9 @@ pub fn run_stage_2b_phase(
         eprintln!("{} [stage2b/spill] retained {spill_bytes} B raw spill; largest prospective fold allocation {largest} B", ts());
         return Ok(0);
     }
-    let workers = crate::memory::max_concurrent_tasks(rayon::current_num_threads(), largest)?;
-    eprintln!("{} [stage2b/fold] {workers} workers; largest allocation {largest} B; raw spill {spill_bytes} B", ts());
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(workers)
-        .build()?;
+    let concurrent_budget = crate::memory::concurrent_allocation_budget_for(largest)?;
+    let threads = rayon::current_num_threads();
+    eprintln!("{} [stage2b/fold] {threads} threads share {concurrent_budget} B of allocation allowances; largest bucket {largest} B; raw spill {spill_bytes} B", ts());
     receipt::begin_fold(spill_dir)?;
     // A z9 without cruise activity this run would otherwise keep a prior-run
     // file, possibly with an older schema the popup reader refuses.
@@ -266,8 +265,14 @@ pub fn run_stage_2b_phase(
         );
     }
     let squares_written = AtomicU64::new(0);
-    pool.install(|| {
-        inputs.par_iter().try_for_each(|input| -> Result<()> {
+    // Every owner z9 hashes into one bucket, which alone writes its file and retires its own
+    // parts, so the start order cannot change any output byte.
+    crate::largest_first_memory_admission::run_largest_first_within_memory_budget(
+        &allocation_allowances,
+        threads,
+        concurrent_budget,
+        |task| {
+            let input = &inputs[task];
             let parts = &input.parts;
             if parts.is_empty() {
                 fold_bucket_counter.add(1);
@@ -302,8 +307,8 @@ pub fn run_stage_2b_phase(
             fold_bucket_counter.add(1);
             fold_row_counter.add(canonical_rows);
             Ok(())
-        })
-    })?;
+        },
+    )?;
     let n = squares_written.load(Ordering::Relaxed) as usize;
     // Completed output is durable; a failed cleanup leaves an explicitly non-resumable state.
     let _ = std::fs::remove_dir_all(spill_dir);

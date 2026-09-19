@@ -19,22 +19,30 @@ pub fn max_concurrent_days(num_days: usize, peak_per_day_gb: f64) -> usize {
     // Effective budget = min(host RAM, this process's cgroup memory limit) so a
     // container or `systemd-run -p MemoryMax=…` scope caps concurrency too —
     // sizing off host RAM alone re-OOMs inside a smaller cgroup.
-    let total_gb = available_memory_bytes() as f64 / 1_000_000_000.0;
-    // Budget 60%: leaves headroom for the OS, the shared raster cache, and the
-    // parent process while staying well clear of the OOM boundary.
-    let k = (total_gb * 0.60 / peak_per_day_gb).floor() as usize;
+    let budget_gb = concurrent_allocation_budget_bytes() as f64 / 1_000_000_000.0;
+    let k = (budget_gb / peak_per_day_gb).floor() as usize;
     k.clamp(1, num_days.max(1))
+}
+
+/// 60% of the memory limit: leaves headroom for the OS, the shared raster
+/// cache, and the parent process while staying well clear of the OOM boundary.
+fn concurrent_allocation_budget_bytes() -> u64 {
+    available_memory_bytes() * 6 / 10
+}
+
+/// Refuse an individually oversized task, then give the budget that the
+/// allowances of concurrently running tasks share.
+pub fn concurrent_allocation_budget_for(largest_task_bytes: u64) -> anyhow::Result<u64> {
+    let available = available_memory_bytes();
+    anyhow::ensure!(largest_task_bytes <= available,
+        "one aircraft task requires {largest_task_bytes} B allocation allowance, memory limit is {available} B");
+    Ok(concurrent_allocation_budget_bytes())
 }
 
 /// Refuse an individually oversized task, then bound concurrent actual working sets.
 pub fn max_concurrent_tasks(num_tasks: usize, peak_bytes: u64) -> anyhow::Result<usize> {
-    let available = available_memory_bytes();
-    anyhow::ensure!(peak_bytes <= available,
-        "one aircraft task requires {peak_bytes} B allocation allowance, memory limit is {available} B");
-    Ok(max_concurrent_days(
-        num_tasks,
-        peak_bytes.max(1) as f64 / 1_000_000_000.0,
-    ))
+    let budget = concurrent_allocation_budget_for(peak_bytes)?;
+    Ok(((budget / peak_bytes.max(1)) as usize).clamp(1, num_tasks.max(1)))
 }
 
 /// Total physical RAM in bytes from `/proc/meminfo` (Linux). Falls back to a

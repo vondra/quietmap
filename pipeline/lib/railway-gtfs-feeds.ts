@@ -318,8 +318,13 @@ function extractedArchiveSource(sourceRoot: string, cacheDirectory: string, feed
 }
 
 /** Resolve immutable directories, or extract one identity-pinned historical archive into derived cache. */
+/** The feed's GTFS directories already on disk; never extracts a pinned archive. */
+export function existingGtfsSourceDirectories(sourceRoot: string, feed: GlobalGtfsFeed): string[] {
+  return directoryGtfsSources(resolve(sourceRoot, feed.sourcePath ?? feed.id), feed)
+}
+
 export function gtfsSourceDirectories(sourceRoot: string, feed: GlobalGtfsFeed, cacheDirectory?: string): string[] {
-  const direct = directoryGtfsSources(resolve(sourceRoot, feed.sourcePath ?? feed.id), feed)
+  const direct = existingGtfsSourceDirectories(sourceRoot, feed)
   if (direct.length > 0 || !feed.sourceArchive) return direct
   if (!cacheDirectory) throw new Error(`GTFS feed ${feed.id} requires --cache-dir for its pinned source archive`)
   return [extractedArchiveSource(sourceRoot, cacheDirectory, feed)]
