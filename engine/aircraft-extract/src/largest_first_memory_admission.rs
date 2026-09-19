@@ -35,14 +35,23 @@ impl AdmissionQueue {
                 .checked_sub(1)?
         };
         let task = self.waiting_ascending.remove(position);
-        self.reserved_bytes += allowances[task];
+        self.reserved_bytes = self
+            .reserved_bytes
+            .checked_add(allowances[task])
+            .expect("an admitted allowance fits the budget or starts from zero");
         self.running_tasks += 1;
         Some(task)
     }
 
     pub(crate) fn release(&mut self, allowance: u64) {
-        self.reserved_bytes -= allowance;
-        self.running_tasks -= 1;
+        self.reserved_bytes = self
+            .reserved_bytes
+            .checked_sub(allowance)
+            .expect("released more than reserved");
+        self.running_tasks = self
+            .running_tasks
+            .checked_sub(1)
+            .expect("released a task that never ran");
     }
 }
 
@@ -57,13 +66,23 @@ impl Shared {
     }
 }
 
-/// Returns the allowance on every exit, including a panicking task, so waiting workers never hang.
-struct Reservation<'a>(&'a Shared, u64);
+/// Returns the allowance on every exit so waiting workers never hang; a
+/// panicking task also abandons the queue, so the panic surfaces promptly.
+struct Reservation<'a> {
+    shared: &'a Shared,
+    task: usize,
+    allowance: u64,
+}
 
 impl Drop for Reservation<'_> {
     fn drop(&mut self) {
-        self.0.lock().release(self.1);
-        self.0.released.notify_all();
+        let mut queue = self.shared.lock();
+        queue.release(self.allowance);
+        if std::thread::panicking() {
+            queue.waiting_ascending.clear();
+        }
+        drop(queue);
+        self.shared.released.notify_all();
     }
 }
 
@@ -75,20 +94,30 @@ pub fn run_largest_first_within_memory_budget(
     budget: u64,
     work: impl Fn(usize) -> Result<()> + Sync,
 ) -> Result<()> {
+    if allowances.is_empty() {
+        return Ok(());
+    }
     let shared = Shared {
         queue: Mutex::new(AdmissionQueue::new(allowances)),
         released: Condvar::new(),
     };
     let first_error = Mutex::new(None);
     let worker = || loop {
-        let task = {
+        // The guard exists before the lock is released: no window separates accounting from release.
+        let reservation = {
             let mut queue = shared.lock();
             loop {
                 if queue.waiting_ascending.is_empty() {
                     return;
                 }
                 match queue.admit_largest_fitting(allowances, budget) {
-                    Some(task) => break task,
+                    Some(task) => {
+                        break Reservation {
+                            shared: &shared,
+                            task,
+                            allowance: allowances[task],
+                        }
+                    }
                     None => {
                         queue = shared
                             .released
@@ -98,18 +127,16 @@ pub fn run_largest_first_within_memory_budget(
                 }
             }
         };
-        let reservation = Reservation(&shared, allowances[task]);
-        if let Err(error) = work(task) {
+        if let Err(error) = work(reservation.task) {
             first_error
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .get_or_insert(error);
             shared.lock().waiting_ascending.clear();
         }
-        drop(reservation);
     };
     std::thread::scope(|scope| {
-        for _ in 0..threads.clamp(1, allowances.len().max(1)) {
+        for _ in 0..threads.clamp(1, allowances.len()) {
             scope.spawn(worker);
         }
     });
@@ -167,15 +194,34 @@ mod tests {
 
     #[test]
     fn the_first_error_is_returned_and_no_further_task_starts() {
-        let allowances = [1_u64; 50];
+        // Two 60 B tasks never fit 100 B together, so three threads still start one task at a time.
+        let allowances = [60_u64; 4];
         let started = AtomicUsize::new(0);
-        let error = run_largest_first_within_memory_budget(&allowances, 1, 10, |task| {
+        let error = run_largest_first_within_memory_budget(&allowances, 3, 100, |task| {
             started.fetch_add(1, Ordering::SeqCst);
-            anyhow::ensure!(task != 47, "task {task} failed");
-            Ok(())
+            anyhow::bail!("task {task} failed")
         })
         .unwrap_err();
-        assert_eq!(error.to_string(), "task 47 failed");
-        assert_eq!(started.load(Ordering::SeqCst), 3);
+        assert_eq!(error.to_string(), "task 3 failed");
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_panicking_task_releases_its_reservation_and_the_panic_propagates() {
+        let allowances = [60_u64; 4];
+        let started = AtomicUsize::new(0);
+        let outcome = std::panic::catch_unwind(|| {
+            run_largest_first_within_memory_budget(&allowances, 3, 100, |_| {
+                started.fetch_add(1, Ordering::SeqCst);
+                panic!("task panicked")
+            })
+        });
+        assert!(outcome.is_err());
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn no_task_starts_no_thread() {
+        run_largest_first_within_memory_budget(&[], 8, 0, |_| unreachable!()).unwrap();
     }
 }

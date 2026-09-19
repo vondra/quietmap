@@ -27,7 +27,7 @@ pub fn max_concurrent_days(num_days: usize, peak_per_day_gb: f64) -> usize {
 /// 60% of the memory limit: leaves headroom for the OS, the shared raster
 /// cache, and the parent process while staying well clear of the OOM boundary.
 fn concurrent_allocation_budget_bytes() -> u64 {
-    available_memory_bytes() / 10 * 6
+    available_memory_bytes() * 6 / 10
 }
 
 /// Refuse an individually oversized task, then give the budget that the
