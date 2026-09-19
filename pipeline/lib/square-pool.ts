@@ -1,7 +1,6 @@
 /** Shard per-square work across QM_ROAD_WORKERS child processes: world heuristics by `--shard`, national road loaders by re-spawned command line. */
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -85,7 +84,6 @@ export async function runSquareSteps(
 }
 
 const OWN_SQUARE_SHARD_ENV = 'QM_ROAD_SQUARE_SHARD'
-const SAMPLED_SQUARE_ENV = 'QM_ROAD_SQUARE_SAMPLED'
 
 /** Set only in a child of `writeRoadSquaresAcrossShards`: the share of the square walk this process owns. */
 export const ownSquareShard = process.env[OWN_SQUARE_SHARD_ENV] === undefined
@@ -116,23 +114,23 @@ export function runRoadSquaresCli(moduleUrl: string, main: () => Promise<object>
 }
 
 /**
- * A shard repeats the parent's whole start and source load. It therefore pays only while its share of
- * the walk lasts at least as long as that load, and it needs the parent's peak memory plus one decoded square.
+ * A shard repeats the parent's source load, so it needs the parent's peak memory plus one decoded square.
+ * Load seconds never limit the count: measured 2026-09-19, the slowest loads (US HPMS, IN network) take
+ * 5.7 s against serial walks of 4,486 s and over 1,890 s.
  */
-function squareShardCount(squares: number, loadSeconds: number, walkSeconds: number): number {
+function squareShardCount(squares: number): number {
   const peakBytes = process.resourceUsage().maxRSS * 1024
-  return Math.min(squares, Math.ceil(walkSeconds / loadSeconds), workerCount(process.env,
-    peakBytes + SQUARE_WORKER_BYTES, Math.max(1, availableMemoryBytes(process.memoryUsage().rss))))
+  return Math.min(squares, workerCount(process.env, peakBytes + SQUARE_WORKER_BYTES,
+    Math.max(1, availableMemoryBytes(process.memoryUsage().rss))))
 }
 
-function spawnSquareShards(shards: number, sampledSquare: string): Promise<ShardTotals[]> {
+function spawnSquareShards(shards: number): Promise<ShardTotals[]> {
   const children: ChildProcess[] = []
   return Promise.all(Array.from({ length: shards }, (_, index) => new Promise<ShardTotals>((done, fail) => {
     const reported: ShardTotals[] = []
     const child = spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-      env: { ...process.env, QM_ROAD_WORKERS: '1', [OWN_SQUARE_SHARD_ENV]: `${index}/${shards}`,
-        [SAMPLED_SQUARE_ENV]: sampledSquare },
+      env: { ...process.env, QM_ROAD_WORKERS: '1', [OWN_SQUARE_SHARD_ENV]: `${index}/${shards}` },
     })
     children.push(child)
     child.on('message', totals => reported.push(totals as ShardTotals))
@@ -148,9 +146,8 @@ function spawnSquareShards(shards: number, sampledSquare: string): Promise<Shard
 
 /**
  * Write every square once and sum the write counters plus the caller's `tally`.
- * A CLI parent first writes the square of median size itself. Its start-to-walk seconds and that
- * square's seconds per byte decide the shard count; with more than one shard it re-spawns its own
- * command line per shard, and each child walks the squares it owns except the sampled one.
+ * A CLI parent that fits more than one shard re-spawns its own command line per shard, and each
+ * child walks the squares it owns.
  * `squares` must therefore be the same list in every process: derive it from the directory tree and
  * the source only, never from file contents a sibling shard is rewriting. One loader shards one walk.
  */
@@ -177,20 +174,11 @@ export async function writeRoadSquaresAcrossShards(
   }
   let owned = squares
   if (ownSquareShard) {
-    owned = shardSquares(squares, ownSquareShard).filter(square => square !== process.env[SAMPLED_SQUARE_ENV])
+    owned = shardSquares(squares, ownSquareShard)
   } else if (shardedWalkStarted) {
-    const loadSeconds = process.uptime()
-    const bytes = new Map(squares.map(square => [square, statSync(resolve(preparedDirectory, square, 'roads.arrow')).size]))
-    const sampledSquare = [...squares].sort((a, b) => bytes.get(a)! - bytes.get(b)!)[squares.length >> 1]
-    owned = squares.filter(square => square !== sampledSquare)
-    const started = performance.now()
-    await write(sampledSquare)
-    const walkSeconds = (performance.now() - started) / 1000 / bytes.get(sampledSquare)! *
-      owned.reduce((sum, square) => sum + bytes.get(square)!, 0)
-    const shards = squareShardCount(owned.length, loadSeconds, walkSeconds)
-    console.error(JSON.stringify({ squareShards: shards, loadSeconds, estimatedWalkSeconds: walkSeconds }))
+    const shards = squareShardCount(squares.length)
     if (shards > 1) {
-      for (const totals of await spawnSquareShards(shards, sampledSquare)) {
+      for (const totals of await spawnSquareShards(shards)) {
         for (const key of Object.keys(totals.counters) as (keyof ShardTotals['counters'])[]) counters[key] += totals.counters[key]
         for (const key of Object.keys(tally)) tally[key] += totals.tally[key]
       }

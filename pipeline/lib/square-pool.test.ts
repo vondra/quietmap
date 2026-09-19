@@ -31,10 +31,10 @@ test('a fanned-out road loader writes the serial bytes and counters, tolerates a
   const directory = mkdtempSync(join(tmpdir(), 'road-square-shards-'))
   after(() => rmSync(directory, { recursive: true, force: true }))
   const sourceId = policySourceId(NATIONAL_ROAD_POLICIES.get('CD')!)
-  // The third-smallest file is the parent's sample; of the rest, shard 0 owns two, shard 1 one, shard 2 none.
-  const squares = [['z9/276/261', 14.6, 40_000], ['z9/279/261', 16.5, 40_010],
-    ['z9/277/261', 15.322, 40_020], ['z9/278/261', 15.9, 40_030]] as const
-  assert.deepEqual([0, 1, 2].map(index => shardSquares(['z9/276/261', 'z9/279/261', 'z9/278/261'], { index, count: 3 }).length), [2, 1, 0])
+  // Shard 0 owns two squares, shard 1 none, shard 2 two.
+  const squares = [['z9/276/261', 14.6, 3], ['z9/279/261', 16.5, 4],
+    ['z9/277/261', 15.322, 5], ['z9/278/262', 15.9, 6]] as const
+  assert.deepEqual([0, 1, 2].map(index => shardSquares(squares.map(([square]) => square), { index, count: 3 }).length), [2, 0, 2])
   const fixtures = squares.map(([, longitude, rows]) => writeRoadsFixture(`shards-${longitude}.arrow`, Array<number>(rows).fill(1), {
     origin: [longitude, -4.325], sourceIds: Array.from({ length: rows }, (_, row) => (row % 2 ? sourceId : 0)),
     countryCodes: Array.from({ length: rows }, (_, row) => iso2Code(row % 3 ? 'CD' : 'CG')),
@@ -60,8 +60,8 @@ test('a fanned-out road loader writes the serial bytes and counters, tolerates a
   assert.deepEqual(shardedCounters, serialCounters)
   assert.deepEqual(sharded.bytes, serial.bytes)
 
-  const failed = run('failed', '3', 'z9/278/261')
+  const failed = run('failed', '3', 'z9/278/262')
   assert.notEqual(failed.status, 0)
   assert.equal(failed.stdout, '')
-  assert.match(failed.stderr, /shard 1\/3 exited 1/)
+  assert.match(failed.stderr, /shard 2\/3 exited 1/)
 })
