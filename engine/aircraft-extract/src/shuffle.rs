@@ -401,8 +401,7 @@ fn pass_b(
 }
 
 /// Walk `<segments_by_square_dir>/<z9>/<shard_name>` for in-scope z9s —
-/// the dual of `shuffle_per_square`'s output. Stage 1.5 / 2A / 2C each call
-/// this once per stage to drive their per-z9 par_iter.
+/// the dual of `shuffle_per_square`'s output. Stages 1.5, 2A and 2C each call this once to list their cells.
 pub fn list_square_shards(
     segments_by_square_dir: &Path,
     shard_name: &str,

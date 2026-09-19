@@ -23,7 +23,7 @@ from prepared_arrow import replace_atomically, rewrite_arrow_batches, segment_mi
 from worker_jobs import available_memory_bytes, cpu_jobs, fit_jobs  # noqa: E402
 
 # 20 workers finished the 60 GiB world-build share of square-country-city.
-WORKER_BYTES = 2 << 30
+WORKER_BYTES = 3 << 30  # measured peak 2.3 GiB per worker (Tokyo z9/454/201 and 200k-row squares alike)
 # Bounds a worker's resolve memory by rows, not by its largest file (2.1 million road rows in one square).
 RESOLVE_ROWS = 1 << 18
 
