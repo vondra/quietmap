@@ -16,6 +16,8 @@ The previous generation's geographic policy is retained: exact country polygons 
 explicit disputed-area mappings, a uniquely attributable 2 km coastal buffer,
 polar handling, and country-gated metro defaults. Shapely supplies the shared
 spatial index and polygon operations; no custom ray-casting index is needed.
+Each file is resolved in one call against prepared polygons; when the bounding box of its
+midpoints lies inside a single polygon, that polygon owns every row without a per-point test.
 Country, city and continent are baked at each road/rail segment midpoint.
 Each `z9/x/y/square-country-city.bin` supplies the receiver fallback beside its Arrow files.
 Its 13-byte record embeds the Morton identity, which the reader checks against

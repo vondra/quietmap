@@ -9,10 +9,11 @@ import unittest
 
 import numpy as np
 import pyarrow as pa
+import shapely
 
 from admin_at import AdminResolver
 from build_square_country_city import (
-    already_baked, bake_file, baked_batch, process_square, segment_midpoints,
+    COUNTRY_CONTRACT, already_baked, bake_file, baked_batch, process_square, segment_midpoints,
     square_country_city_record, write_square_country_city_record,
 )
 from qmgrid import lonlat_to_grid, square_id
@@ -51,7 +52,7 @@ class CountryBakeTests(unittest.TestCase):
 
     def test_each_segment_keeps_its_country_across_a_partition_border(self):
         batch = segment_batch([(50, 14.8), (50, 15.2)])
-        baked = baked_batch(batch, self.resolver, b"roads_contract")
+        baked = baked_batch(batch, self.resolver.resolve(*segment_midpoints(batch)), (b"roads_contract", COUNTRY_CONTRACT))
         self.assertEqual(baked.column("country_iso").to_pylist(),
                          [int.from_bytes(b"CZ", "little"), int.from_bytes(b"PL", "little")])
         for name in batch.schema.names:
@@ -115,8 +116,30 @@ class CountryBakeTests(unittest.TestCase):
             old = path.read_bytes(), path.stat()
             self.assertEqual(bake_file(path, resolver), (3, False))
             self.assertEqual(path.read_bytes(), old[0]); self.assertEqual(path.stat(), old[1])
-        road = baked_batch(segment_batch(points), resolver, b"roads_contract")
-        self.assertEqual(road.column("country_iso")[1].as_py(), int.from_bytes(b"CZ", "little"))
+        road = resolver.resolve(*segment_midpoints(segment_batch(points)))
+        self.assertEqual(road["country_iso"][1], int.from_bytes(b"CZ", "little"))
+
+    def test_land_lookup_equals_the_exact_per_point_query_around_holes_enclaves_overlaps_and_flat_boxes(self):
+        czechia = country_feature("CZE", 14, 49, 15, 51)
+        czechia["geometry"]["coordinates"].append([[14.4, 49.4], [14.6, 49.4], [14.6, 49.6], [14.4, 49.6], [14.4, 49.4]])
+        resolver = AdminResolver([czechia, country_feature("POL", 14.45, 49.45, 14.55, 49.55),
+                                  country_feature("111", 14.7, 50.5, 14.9, 50.7)])
+        code = {name: int.from_bytes(name.encode(), "little") for name in ("CZ", "PL", "SD")}
+        cases = {"box inside one polygon": ([(50.1, 14.1), (50.3, 14.3)], [code["CZ"]] * 2),
+                 "hole and enclave inside the box": ([(49.3, 14.3), (49.7, 14.65), (49.42, 14.42), (49.5, 14.5)],
+                                                     [code["CZ"], code["CZ"], 0, code["PL"]]),
+                 "overlap inside the box": ([(50.4, 14.65), (50.6, 14.8), (50.8, 14.95)], None),
+                 "box without area": ([(50, 14.5), (50.5, 14.5)], [code["CZ"]] * 2)}
+        for label, (points, expected) in cases.items():
+            with self.subTest(label):
+                latitudes, longitudes = (np.array(axis) for axis in zip(*points))
+                point_indices, part_indices = resolver.land_index.query(
+                    shapely.points(longitudes, latitudes), predicate="within")
+                reference = np.full(len(points), "", dtype=object)
+                reference[point_indices] = resolver.land_groups[part_indices]
+                self.assertEqual(resolver._land_groups(latitudes, longitudes)[3].tolist(), reference.tolist())
+                if expected is not None:
+                    self.assertEqual(resolver.resolve(latitudes, longitudes)["country_iso"].tolist(), expected)
 
     def test_partial_country_columns_leave_original_file_untouched(self):
         with tempfile.TemporaryDirectory() as directory:

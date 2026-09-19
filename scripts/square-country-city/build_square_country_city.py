@@ -32,15 +32,10 @@ _PREPARED = None
 _RESOLVER = None
 
 
-def baked_batch(batch, resolver, contract_key):
+def baked_batch(batch, values, contract):
     present = [name for name in COUNTRY_CITY_COLUMNS if name in batch.schema.names]
     if present and len(present) != len(COUNTRY_CITY_COLUMNS):
         raise ValueError("Partial country bake; country_iso/city_id/continent must be all-or-none")
-    industrial = contract_key == b"industrial_contract"
-    if industrial and (batch.schema.metadata or {}).get(b"grid") != b"z30":
-        raise ValueError("industrial Arrow requires the z30 grid contract")
-    values = (resolver.resolve_land(*grid_points(batch, "centroid")) if industrial
-              else resolver.resolve(*segment_midpoints(batch)))
     result = batch
     for name, arrow_type in COUNTRY_CITY_COLUMNS.items():
         array = pa.array(values[name], type=arrow_type)
@@ -52,13 +47,33 @@ def baked_batch(batch, resolver, contract_key):
         else:
             result = result.append_column(pa.field(name, arrow_type, nullable=False), array)
     metadata = dict(batch.schema.metadata or {})
-    metadata[contract_key] = LAND_CONTRACT if industrial else COUNTRY_CONTRACT
+    metadata[contract[0]] = contract[1]
     return result.replace_schema_metadata(metadata)
 
 
+def file_geography(path, resolver):
+    """One resolve per file: a per-batch resolve spends most of its time in fixed per-call overhead."""
+    with pa.memory_map(str(path), "r") as source:
+        rows = pa.ipc.open_file(source).read_all()
+        if path.stem != "industrial":
+            return resolver.resolve(*segment_midpoints(rows))
+        if (rows.schema.metadata or {}).get(b"grid") != b"z30":
+            raise ValueError("industrial Arrow requires the z30 grid contract")
+        return resolver.resolve_land(*grid_points(rows, "centroid"))
+
+
 def bake_file(path, resolver):
-    contract_key = (path.stem + "_contract").encode()
-    return rewrite_arrow_batches(path, lambda batch: baked_batch(batch, resolver, contract_key))
+    contract = expected_contract(path)
+    values = file_geography(path, resolver)
+    first_row = 0
+
+    def baked_next_batch(batch):
+        nonlocal first_row
+        rows = slice(first_row, first_row + batch.num_rows)
+        first_row = rows.stop
+        return baked_batch(batch, {name: column[rows] for name, column in values.items()}, contract)
+
+    return rewrite_arrow_batches(path, baked_next_batch)
 
 
 def expected_contract(path):

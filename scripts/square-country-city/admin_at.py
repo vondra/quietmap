@@ -53,6 +53,9 @@ class AdminResolver:
                     groups.append(group)
         if not polygons:
             raise ValueError("Empty CGAZ boundaries; refusing an UNKNOWN bake")
+        # Prepared polygons answer a point in O(log vertices); an unprepared country costs O(vertices) per point.
+        self.land_polygons = np.asarray(polygons, dtype=object)
+        shapely.prepare(self.land_polygons)
         self.land_index = STRtree(polygons)
         self.land_groups = np.asarray(groups, dtype=object)
 
@@ -108,6 +111,21 @@ class AdminResolver:
                 found[point].add(self.coastal_groups[edge])
         return [next(iter(groups)) if len(groups) == 1 else "" for groups in found]
 
+    def _sole_land_part_around(self, x, y):
+        """The one polygon owning every point, when the points' bounding box proves it without testing them.
+
+        A polygon can hold a point only if it meets the box, so when exactly one polygon meets the box and
+        holds all of it in its interior (no border, hole or enclave reaches in), each point is within that
+        polygon alone. A box without area proves nothing and takes the per-point path.
+        """
+        if not len(x) or x.min() == x.max() or y.min() == y.max():
+            return None
+        bounding_box = shapely.box(x.min(), y.min(), x.max(), y.max())
+        parts = self.land_index.query(bounding_box, predicate="intersects")
+        if len(parts) == 1 and shapely.contains_properly(self.land_polygons[parts[0]], bounding_box):
+            return parts[0]
+        return None
+
     def _land_groups(self, latitudes, longitudes):
         latitudes = np.asarray(latitudes, dtype=float)
         with np.errstate(invalid="ignore"):
@@ -117,9 +135,15 @@ class AdminResolver:
         valid = np.isfinite(latitudes) & np.isfinite(longitudes) & (np.abs(latitudes) <= 90)
         groups = np.full(len(latitudes), "", dtype=object)
         valid_indices = np.flatnonzero(valid)
-        points = shapely.points(longitudes[valid], latitudes[valid])
-        point_indices, part_indices = self.land_index.query(points, predicate="within")
-        groups[valid_indices[point_indices]] = self.land_groups[part_indices]
+        x, y = longitudes[valid], latitudes[valid]
+        sole_part = self._sole_land_part_around(x, y)
+        if sole_part is not None:
+            groups[valid_indices] = self.land_groups[sole_part]
+        else:
+            # Envelope candidates keep the order of the tree's own "within" query, so overlaps resolve identically.
+            point_indices, part_indices = self.land_index.query(shapely.points(x, y))
+            inside = shapely.contains_xy(self.land_polygons[part_indices], x[point_indices], y[point_indices])
+            groups[valid_indices[point_indices[inside]]] = self.land_groups[part_indices[inside]]
         for group, polygon, south, min_lat, max_lat in self.polar_parts:
             candidates = np.flatnonzero(valid & (groups == "") & (latitudes >= min_lat) & (latitudes <= max_lat))
             coordinates = polar_coordinates(np.column_stack((longitudes[candidates], latitudes[candidates])), south)
@@ -162,6 +186,8 @@ class AdminResolver:
         for metro, polygon in self.metros:
             candidates = np.flatnonzero((country_codes == int.from_bytes(metro["country"].encode(), "little"))
                                         & (cities == 0))
+            if not len(candidates):
+                continue
             inside = shapely.contains_xy(polygon, longitudes[candidates], latitudes[candidates])
             cities[candidates[inside]] = metro["id"]
         return cities
