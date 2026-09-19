@@ -39,6 +39,10 @@ export function readServiceRoads(table: Table): { roads: ServiceRoad[]; fleets: 
   if (!tunnel || !DataType.isBool(tunnel.type) || tunnel.nullCount || !length || !DataType.isFloat(length.type) || length.nullCount) {
     throw new Error('invalid service-tree tunnel/length_m columns')
   }
+  // One flat array per column: `getChild` and `get` on a 1024-batch table cost more than the whole graph walk.
+  const roadClasses = table.getChild('road_class')!.toArray() as Uint8Array, lengths = length.toArray() as Float32Array
+  const sourceIds = table.getChild('source_id')!.toArray() as Uint16Array, accesses = table.getChild('access')!.toArray() as Uint8Array
+  const tunnels = Array.from(tunnel) as boolean[], endpoints = geometry.tableLocalEndpointNumbers()
   let unknownCountryRows = 0
   const fleets: CountryFleet[] = []
   const roads = Array.from({ length: table.numRows }, (_, index) => {
@@ -46,11 +50,11 @@ export function readServiceRoads(table: Table): { roads: ServiceRoad[]; fleets: 
     if (iso !== undefined && !/^[A-Z]{2}$/.test(iso)) throw new Error(`invalid baked country at road ${index}`)
     if (iso === undefined) unknownCountryRows++
     fleets.push(fleetForIso(iso))
-    const roadClass = table.getChild('road_class')!.get(index) as number
-    const metres = length.get(index) as number
+    const roadClass = roadClasses[index], metres = lengths[index]
     if (roadClass > 12 || !Number.isFinite(metres) || metres < 0) throw new Error(`invalid service-tree road ${index}`)
-    return { ...geometry.row(index), ...geometry.endpointKeys(index), roadClass, length: metres, sourceId: table.getChild('source_id')!.get(index) as number,
-      access: table.getChild('access')!.get(index) as number, tunnel: tunnel.get(index) as boolean }
+    const { startLat, startLon, endLat, endLon } = geometry.row(index)
+    return { startLat, startLon, endLat, endLon, startNode: endpoints.start[index], endNode: endpoints.end[index],
+      roadClass, length: metres, sourceId: sourceIds[index], access: accesses[index], tunnel: tunnels[index] }
   })
   return { roads, fleets, unknownCountryRows }
 }

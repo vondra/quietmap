@@ -29,11 +29,11 @@ function city(...features: unknown[]) {
 }
 
 /** A northbound road piece of the given length centred on a point, optionally east of it. */
-function roadPiece(midLat: number, midLon: number, osmId: number | null = null, oneway = 0, lengthMetres = 20, offsetEastMetres = 0) {
+function roadPiece(midLat: number, midLon: number, osmId: number | null = null, lengthMetres = 20, offsetEastMetres = 0) {
   const longitude = midLon + offsetEastMetres / (111_320 * Math.cos(midLat * Math.PI / 180))
   const halfLength = lengthMetres / 2 / 110_540
   return { startLat: midLat - halfLength, startLon: longitude, endLat: midLat + halfLength, endLon: longitude,
-    midLat, midLon: longitude, osmId, oneway, roadClass: 2 }
+    midLat, midLon: longitude, osmId, roadClass: 2 }
 }
 
 test('the exact 50 metre flat-distance cap rejects the dev1 50-to-51 metre leak', () => {
@@ -44,25 +44,24 @@ test('the exact 50 metre flat-distance cap rejects the dev1 50-to-51 metre leak'
   }
 })
 
-test('a road piece along a long line matches far from its middle vertex, the published way wins, and the opposite carriageway is refused', () => {
+test('a road piece along a long line matches far from its middle vertex, the published way wins, and the nearest line wins whatever its direction', () => {
   const line = (osmid: number, offsetEastMetres: number, northward: boolean) => {
     const longitude = 14 + offsetEastMetres / (111_320 * Math.cos(50 * Math.PI / 180))
     const coordinates = [[longitude, 50], [longitude, 50.005], [longitude, 50.01]]
     return { type: 'Feature', properties: { AADT: 1000, raw_oneway: true, osmid },
       geometry: { type: 'LineString', coordinates: northward ? coordinates : coordinates.reverse() } }
   }
-  const source = city(line(100, 30, true), line(200, 5, true), line(300, -10, false))
-  const [publishedWay, nearerNorthbound, nearerSouthbound] = source.records
+  const source = city(line(100, 30, true), line(200, 10, true), line(300, -5, false))
+  const [publishedWay, , nearestSouthbound] = source.records
   const index = indexEuropeanTraffic(source.records)
   // 50.001 is 440 m from every middle vertex, yet lies along all three lines.
-  assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 100, 1), index), publishedWay)
-  assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 999, 1), index), nearerNorthbound)
-  assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 999, 2), index), nearerSouthbound)
-  assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 999, 0, 20, -61), index), null)
-  assert.equal(nearestEuropeanTraffic(roadPiece(50.02, 14, 999, 1), index), null)
+  assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 100), index), publishedWay)
+  assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 999), index), nearestSouthbound)
+  assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 999, 20, -61), index), null)
+  assert.equal(nearestEuropeanTraffic(roadPiece(50.02, 14, 999), index), null)
   // Proximity alone is not the counted street: a service lane beside it and a street crossing it stay unmatched.
-  assert.equal(nearestEuropeanTraffic({ ...roadPiece(50.001, 14, 999, 1), roadClass: 7 }, index), null)
-  const crossing = roadPiece(50.001, 14, 999, 0)
+  assert.equal(nearestEuropeanTraffic({ ...roadPiece(50.001, 14, 999), roadClass: 7 }, index), null)
+  const crossing = roadPiece(50.001, 14, 999)
   const halfLengthDegrees = 10 / (111_320 * Math.cos(50 * Math.PI / 180))
   assert.equal(nearestEuropeanTraffic({ ...crossing, startLat: 50.001, endLat: 50.001,
     startLon: crossing.midLon - halfLengthDegrees, endLon: crossing.midLon + halfLengthDegrees }, index), null)
@@ -138,6 +137,27 @@ test('whole road rows across a z9 boundary receive four-class totals without cha
   assert.deepEqual(readFileSync(path), beforeRerun)
   assert.equal(statSync(path).ino, stat.ino)
   assert.equal(statSync(path).mtimeMs, stat.mtimeMs)
+})
+
+test('a directional line stamps both one-way carriageways lying along it', async () => {
+  const prepared = join(temporary, 'directional-line'), path = join(prepared, 'z9/255/173/roads.arrow')
+  let table = tableFromIPC(readFileSync(writeRoadsFixture('eu-directional-line.arrow', [3, 3], { sourceIds: [0, 0] })))
+  const y = Number(table.getChild('start_gy')!.get(0)), x = 2 ** 29 - 400
+  for (const [name, values] of Object.entries({ start_gx: [x, x], end_gx: [x, x], start_gy: [y, y], end_gy: [y + 400, y + 400] })) {
+    table = table.setChild(name, vectorFromArray(values, new Int32()))
+  }
+  table = table.setChild('osm_id', vectorFromArray([100n, 200n], new Int64()))
+  const columns = Object.fromEntries(table.schema.fields.map(field => [field.name, table.getChild(field.name)!]))
+  columns.oneway = vectorFromArray([1, 2], new Uint8())
+  const shape = new Table(columns)
+  mkdirSync(join(path, '..'), { recursive: true })
+  writeFileSync(path, tableToIPC(new Table(new Schema(shape.schema.fields, table.schema.metadata), shape.batches), 'file'))
+  const row = segmentGeometryReader(table).row(0)
+  const line = city({ type: 'Feature', properties: { AADT: 1000, raw_oneway: true },
+    geometry: { type: 'LineString', coordinates: [[row.startLon, row.startLat], [row.endLon, row.endLat]] } })
+  assert.equal(line.records[0].countBasis, 'directional')
+  assert.equal((await enrichEuropeanRoads(prepared, [line])).matched, 2)
+  assert.deepEqual([...tableFromIPC(readFileSync(path)).getChild('source_id')!.toArray()], [10, 10])
 })
 
 test('one directional observation chooses one current way across owners; two-way counts remain shared', async () => {

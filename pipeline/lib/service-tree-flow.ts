@@ -2,26 +2,28 @@
 
 import { MinHeap } from './min-heap.js'
 import { shouldOverwrite, SOURCE_ID_SERVICE_TREE_HEURISTIC } from './sources.js'
-import type { SegmentEndpointKeys, SegmentGeometry } from './prepared-grid.js'
 import type { CountryFleet } from './country-fleet.js'
 import type { BuildingLoad } from './trip-rates.js'
 
-export interface ServiceRoad extends SegmentGeometry, SegmentEndpointKeys {
+export interface ServiceRoad {
+  startLat: number; startLon: number; endLat: number; endLon: number
+  /** Endpoint identities: equal numbers are one graph node. */
+  startNode: number; endNode: number
   roadClass: number; sourceId: number; tunnel: boolean; access: number; length: number
 }
 interface GraphNode { eligibleEdges: number[]; hasExitEdge: boolean }
 export interface Graph { nodes: GraphNode[]; segNodeIds: Int32Array; eligible: Uint8Array }
 
 export function buildGraph(roads: readonly ServiceRoad[]): Graph {
-  const nodes: GraphNode[] = [], ids = new Map<string, number>()
+  const nodes: GraphNode[] = [], ids = new Map<number, number>()
   const segNodeIds = new Int32Array(2 * roads.length), eligible = new Uint8Array(roads.length)
-  const intern = (key: string) => {
+  const intern = (key: number) => {
     let id = ids.get(key)
     if (id === undefined) { id = nodes.length; ids.set(key, id); nodes.push({ eligibleEdges: [], hasExitEdge: false }) }
     return id
   }
   roads.forEach((road, index) => {
-    const a = intern(road.startKey), b = intern(road.endKey)
+    const a = intern(road.startNode), b = intern(road.endNode)
     segNodeIds[index * 2] = a; segNodeIds[index * 2 + 1] = b
     const local = road.roadClass >= 5 && road.roadClass <= 9 && road.roadClass !== 8
     if (local && !road.tunnel && road.access !== 2 && road.access !== 4 &&
