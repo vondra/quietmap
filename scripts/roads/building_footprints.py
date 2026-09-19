@@ -1,4 +1,7 @@
-"""Road settlement density from the Overture screening stock in structures_v4."""
+"""Road settlement density from the Overture screening stock in structures_v4.
+
+Only footprints near a road row are decoded; geometry validity of the rest belongs to the structures builder.
+"""
 
 import math
 from pathlib import Path
@@ -63,11 +66,10 @@ def cell_footprints(path, south, north, west, east_span):
                 raise ValueError(f"{path}: null {name}")
         found = [np.zeros((3, 0))]
         for start in range(0, table.num_rows, ROWS_PER_STEP):
-            rows = table.slice(start, ROWS_PER_STEP).combine_chunks()
-            values = {name: rows.column(name).chunk(0) for name in STOCK_COLUMNS}
+            values = table.slice(start, ROWS_PER_STEP)
             building = values["kind"].to_numpy() == 0
             emission_x, emission_y, from_osm = (
-                values[name].is_valid().to_numpy(zero_copy_only=False)
+                values[name].is_valid().to_numpy()
                 for name in ("emission_centroid_gx", "emission_centroid_gy", "osm_id"))
             if (building & (emission_x != emission_y)).any():
                 raise ValueError(f"{path}: partial emission centroid")
@@ -76,8 +78,9 @@ def cell_footprints(path, south, north, west, east_span):
             lat, lon = grid_to_latlon(values["centroid_gx"].to_numpy()[stock], values["centroid_gy"].to_numpy()[stock])
             lon = qmgrid.normalize_longitude(lon)
             near = (lat >= south) & (lat <= north) & ((lon - west) % 360.0 <= east_span)
-            found.append(np.stack([lat[near], lon[near],
-                                   footprint_areas_m2(values["geom"].take(pa.array(stock[near])))]))
+            # Only the taken geometry is ever read: a neighbour cell costs its centroid columns, not its file.
+            found.append(np.stack([lat[near], lon[near], footprint_areas_m2(
+                values["geom"].take(pa.array(stock[near])).combine_chunks())]))
     return np.concatenate(found, axis=1)
 
 

@@ -20,8 +20,10 @@ from building_footprints import built_up_classes  # noqa: E402
 from worker_jobs import available_memory_bytes, cpu_jobs  # noqa: E402
 
 # A worker's peak anonymous memory stays under this base plus its roads and owner structures
-# bytes: measured 2026-09-19 on eight squares from 51 MiB of inputs (124 MiB peak) to Tokyo,
-# the world's heaviest (1122 MiB of inputs, 897 MiB peak).
+# bytes. Halo cells add only the footprints within one window of the owner's rows; the rest of a
+# neighbour file is memory-mapped, reclaimable page cache. Measured 2026-09-19 on eleven squares:
+# 51 MiB of inputs peaks at 124 MiB, Tokyo (1122 MiB, the world's heaviest) at 883 MiB, and its
+# 91 MiB western neighbour, which maps Tokyo's 1 GiB file, at 179 MiB.
 WORKER_BASE_BYTES = 256 << 20
 
 
@@ -118,17 +120,20 @@ def main():
         for name in names if (prepared / name / "roads.arrow").is_file()}
     road_names = sorted(worker_bytes, key=lambda name: (-worker_bytes[name], name))
     requested = cpu_jobs() if args.workers is None else args.workers
-    memory_bytes, workers = available_memory_bytes(), 0
+    # The parent holds the same imports as an idle worker.
+    memory_bytes, workers = available_memory_bytes() - WORKER_BASE_BYTES, 0
     while workers < min(requested, len(road_names)) and worker_bytes[road_names[workers]] <= memory_bytes:
         memory_bytes -= worker_bytes[road_names[workers]]
         workers += 1
-    workers = max(workers, 1)
+    if road_names and not workers:
+        raise MemoryError(f"{road_names[0]} needs {worker_bytes[road_names[0]]} bytes beside the parent; "
+                          f"{available_memory_bytes()} available")
     print(f"[build-built-up] workers={workers} requested={requested} "
           f"memory_bytes={available_memory_bytes()} unclaimed_memory_bytes={memory_bytes}", flush=True)
     totals = Counter()
     with (prepared / ".built-up-build.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        with ProcessPoolExecutor(max_workers=workers) as executor:
+        with ProcessPoolExecutor(max_workers=workers or 1) as executor:
             for name, result in executor.map(bake_square, [prepared] * len(road_names), road_names):
                 totals.update(result)
                 print(json.dumps({"square": name, **result}), flush=True)

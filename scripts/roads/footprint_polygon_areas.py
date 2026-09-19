@@ -13,8 +13,7 @@ METRES_PER_DEG_LAT = 111_132.0
 METRES_PER_DEG_LON_EQ = 111_320.0
 
 
-def malformed():
-    return ValueError("Malformed structures_v4 building geometry")
+MALFORMED = "Malformed structures_v4 building geometry"
 
 
 def polygon_rings(counts, blob_starts, blob_ends):
@@ -34,16 +33,16 @@ def polygon_rings(counts, blob_starts, blob_ends):
         opens_part = rings_left[active] == 0
         finished = opens_part & (parts_left[active] == 0)
         if (cursor[active[finished]] != blob_ends[active[finished]]).any():
-            raise malformed()
+            raise ValueError(MALFORMED)
         active, opens_part = active[~finished], opens_part[~finished]
         if (cursor[active] >= blob_ends[active]).any():
-            raise malformed()
+            raise ValueError(MALFORMED)
         value = counts[cursor[active]].astype(np.int64)
         cursor[active] += 1
         remaining = blob_ends[active] - cursor[active]
         headers, header_value = active[opens_part], value[opens_part]
         if ((header_value < 1) | (header_value > remaining[opens_part])).any():
-            raise malformed()
+            raise ValueError(MALFORMED)
         is_polygon_count = polygon_count_pending[headers]
         parts_left[headers[is_polygon_count]] = header_value[is_polygon_count]
         polygon_count_pending[headers] = False
@@ -52,7 +51,7 @@ def polygon_rings(counts, blob_starts, blob_ends):
         parts_left[parts] -= 1
         ringed, points = active[~opens_part], value[~opens_part]
         if ((points < 3) | (points > remaining[~opens_part] // 2)).any():
-            raise malformed()
+            raise ValueError(MALFORMED)
         found.append((ringed, cursor[ringed], points, exterior_next[ringed]))
         cursor[ringed] += 2 * points
         rings_left[ringed] -= 1
@@ -67,14 +66,14 @@ def polygon_rings(counts, blob_starts, blob_ends):
 def footprint_areas_m2(geometries):
     """Exterior minus hole shoelace area of each non-null Arrow binary polygon, in a local metric frame."""
     if geometries.null_count:
-        raise malformed()
+        raise ValueError(MALFORMED)
     if not len(geometries):
         return np.zeros(0)
     offsets = np.frombuffer(geometries.buffers()[1], dtype=np.int32)[
         geometries.offset:geometries.offset + len(geometries) + 1].astype(np.int64)
     byte_lengths = np.diff(offsets)
     if ((byte_lengths % 4 != 0) | (byte_lengths == 0)).any():
-        raise malformed()
+        raise ValueError(MALFORMED)
     data = np.frombuffer(geometries.buffers()[2], dtype=np.uint8)[offsets[0]:offsets[-1]]
     word_offsets = (offsets - offsets[0]) // 4
     blob, first_word, points, exterior = polygon_rings(data.view("<u4"), word_offsets[:-1], word_offsets[1:])
