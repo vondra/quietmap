@@ -283,13 +283,14 @@ export async function applyTmasProfileSquares(
  * the AADT step stays independently runnable). */
 export async function runUsEnrichment(options: RoadLoaderArguments) {
   const segments = await loadUsSegments(options)
-  // The TMAS writer runs its own pool over a list read from file contents, so only the fan-out parent runs it.
-  const tmas = ownSquareShard ? null : await loadTmasProfiles(options)
   const result = { segments: segments.length,
     oneWaySegments: segments.filter(segment => segment.countBasis === 'directional' && !segment.isRamp).length,
     rampSegments: segments.filter(segment => segment.isRamp).length,
     unknownScopeSegments: segments.filter(segment => segment.countBasis === 'unknown').length,
     ...await enrichUsRoads(options.preparedDirectory, segments) }
+  // The TMAS writer runs its own pool over a list read from file contents, so only the fan-out parent
+  // runs it, and loads it after the walk so that it does not count as memory every shard repeats.
+  const tmas = ownSquareShard ? null : await loadTmasProfiles(options)
   if (!tmas) return result
   const profiles = await enrichTmasTimeProfiles(options.preparedDirectory, tmas.stations)
   return {

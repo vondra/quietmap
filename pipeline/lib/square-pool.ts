@@ -1,6 +1,7 @@
 /** Shard per-square work across QM_ROAD_WORKERS child processes: world heuristics by `--shard`, national road loaders by re-spawned command line. */
 
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -29,9 +30,16 @@ export function parseShard(shard: string | undefined): { index: number; count: n
   return { index, count }
 }
 
-/** Squares are independent files, so shard `index/count` owns every count-th square. */
-export function shardSquares(squares: string[], shard: { index: number; count: number }): string[] {
-  return squares.filter((_, position) => position % shard.count === shard.index)
+/**
+ * A square's owner depends on the square alone, never on its position in one list: a loader that
+ * walks two lists (DE: Germany, then Baden-Württemberg) keeps each file in one sequential process.
+ * Measured on r260919 at 20 shards, max/mean bytes per shard: world 1.039, US 1.142, DE 1.111.
+ */
+export function shardSquares(squares: readonly string[], shard: { index: number; count: number }): string[] {
+  return squares.filter(square => {
+    const [, x, y] = square.split('/').map(Number)
+    return (x * 512 + y) % shard.count === shard.index
+  })
 }
 
 export function argvHasShard(argv: readonly string[] = process.argv): boolean {
@@ -77,19 +85,19 @@ export async function runSquareSteps(
 }
 
 const OWN_SQUARE_SHARD_ENV = 'QM_ROAD_SQUARE_SHARD'
+const SAMPLED_SQUARE_ENV = 'QM_ROAD_SQUARE_SAMPLED'
 
-/** Set only in a child of `writeRoadSquaresAcrossShards`: the share of every square walk this process owns. */
+/** Set only in a child of `writeRoadSquaresAcrossShards`: the share of the square walk this process owns. */
 export const ownSquareShard = process.env[OWN_SQUARE_SHARD_ENV] === undefined
   ? null : parseShard(process.env[OWN_SQUARE_SHARD_ENV])
 
 const squareWriteCounters = () => ({ rows: 0, matched: 0, retracted: 0, skipped: 0, skippedForeign: 0,
   squares: 0, squaresUpdated: 0 })
-export type SquareWriteCounters = ReturnType<typeof squareWriteCounters>
-type ShardWalkTotals = Record<string, number>
+export type SquareWriteCounters = ReturnType<typeof squareWriteCounters> & { shards: number }
+interface ShardTotals { counters: ReturnType<typeof squareWriteCounters>; tally: Record<string, number> }
 
 let fanOutFromThisCli = false
-let squareWalksStarted = 0
-let shardWalkTotals: Promise<ShardWalkTotals[][] | null> | undefined
+let shardedWalkStarted = false
 
 /**
  * Run a road loader when its module is the process entry point and print its receipt.
@@ -103,32 +111,48 @@ export function runRoadSquaresCli(moduleUrl: string, main: () => Promise<object>
       console.error(error instanceof Error ? error.message : error)
       process.exitCode = 1
     })
+    // The parent waits for 'close'; Node already unrefs a listener-less channel, this makes the end explicit.
+    .finally(() => { if (ownSquareShard) process.disconnect?.() })
 }
 
-/** Each shard repeats the parent's source load, so one worker costs what the parent holds now plus one decoded square. */
-function spawnSquareShards(squareCount: number): Promise<ShardWalkTotals[][] | null> {
-  const loadedBytes = process.memoryUsage().rss
-  const workers = Math.min(squareCount, workerCount(process.env, loadedBytes + SQUARE_WORKER_BYTES,
-    Math.max(1, availableMemoryBytes() - loadedBytes)))
-  if (workers <= 1) return Promise.resolve(null)
-  return Promise.all(Array.from({ length: workers }, (_, index) => new Promise<ShardWalkTotals[]>((done, fail) => {
-    const walks: ShardWalkTotals[] = []
+/**
+ * A shard repeats the parent's whole start and source load. It therefore pays only while its share of
+ * the walk lasts at least as long as that load, and it needs the parent's peak memory plus one decoded square.
+ */
+function squareShardCount(squares: number, loadSeconds: number, walkSeconds: number): number {
+  const peakBytes = process.resourceUsage().maxRSS * 1024
+  return Math.min(squares, Math.ceil(walkSeconds / loadSeconds), workerCount(process.env,
+    peakBytes + SQUARE_WORKER_BYTES, Math.max(1, availableMemoryBytes(process.memoryUsage().rss))))
+}
+
+function spawnSquareShards(shards: number, sampledSquare: string): Promise<ShardTotals[]> {
+  const children: ChildProcess[] = []
+  return Promise.all(Array.from({ length: shards }, (_, index) => new Promise<ShardTotals>((done, fail) => {
+    const reported: ShardTotals[] = []
     const child = spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-      env: { ...process.env, QM_ROAD_WORKERS: '1', [OWN_SQUARE_SHARD_ENV]: `${index}/${workers}` },
+      env: { ...process.env, QM_ROAD_WORKERS: '1', [OWN_SQUARE_SHARD_ENV]: `${index}/${shards}`,
+        [SAMPLED_SQUARE_ENV]: sampledSquare },
     })
-    child.on('message', totals => walks.push(totals as ShardWalkTotals))
+    children.push(child)
+    child.on('message', totals => reported.push(totals as ShardTotals))
     child.on('error', fail)
-    child.on('close', code => (code === 0 ? done(walks) : fail(new Error(`shard ${index}/${workers} exited ${code}`))))
-  })))
+    child.on('close', (code, signal) => (code === 0 && reported.length === 1 ? done(reported[0])
+      : fail(new Error(`shard ${index}/${shards} exited ${code ?? signal} with ${reported.length} reports`))))
+  }))).catch((error: unknown) => {
+    // A failed run prints no receipt, so its siblings must stop rewriting files at once.
+    for (const child of children) child.kill()
+    throw error
+  })
 }
 
 /**
  * Write every square once and sum the write counters plus the caller's `tally`.
- * A CLI parent re-spawns its own command line once per shard at its first walk; each child
- * repeats every walk over its share and reports totals per walk in call order. `squares`
- * must therefore be the same list in every process: derive it from the directory tree and
- * the source only, never from file contents a sibling shard is rewriting.
+ * A CLI parent first writes the square of median size itself. Its start-to-walk seconds and that
+ * square's seconds per byte decide the shard count; with more than one shard it re-spawns its own
+ * command line per shard, and each child walks the squares it owns except the sampled one.
+ * `squares` must therefore be the same list in every process: derive it from the directory tree and
+ * the source only, never from file contents a sibling shard is rewriting. One loader shards one walk.
  */
 export async function writeRoadSquaresAcrossShards(
   preparedDirectory: string,
@@ -136,36 +160,53 @@ export async function writeRoadSquaresAcrossShards(
   tally: Record<string, number>,
   writeSquare: (roadsArrowPath: string) => Promise<WriteRoadResult>,
 ): Promise<SquareWriteCounters> {
-  const walk = squareWalksStarted++
   const counters = squareWriteCounters()
-  if (fanOutFromThisCli && !ownSquareShard) {
-    const shards = await (shardWalkTotals ??= spawnSquareShards(squares.length))
-    if (shards) {
-      for (const [index, walks] of shards.entries()) {
-        const totals = walks[walk]
-        if (!totals) throw new Error(`shard ${index}/${shards.length} reported no totals for square walk ${walk}`)
-        for (const key of Object.keys(counters) as (keyof SquareWriteCounters)[]) counters[key] += totals[key]
-        for (const key of Object.keys(tally)) tally[key] += totals[key]
+  const write = async (square: string): Promise<void> => {
+    const result = await writeSquare(resolve(preparedDirectory, square, 'roads.arrow'))
+    counters.squares++
+    counters.rows += result.rows
+    counters.matched += result.matched
+    counters.retracted += result.retracted
+    counters.skipped += result.skipped
+    counters.skippedForeign += result.skippedForeign
+    if (result.updated) counters.squaresUpdated++
+  }
+  if (ownSquareShard || (fanOutFromThisCli && squares.length > 1)) {
+    if (shardedWalkStarted) throw new Error('a road loader may shard one square walk only')
+    shardedWalkStarted = true
+  }
+  let owned = squares
+  if (ownSquareShard) {
+    owned = shardSquares(squares, ownSquareShard).filter(square => square !== process.env[SAMPLED_SQUARE_ENV])
+  } else if (shardedWalkStarted) {
+    const loadSeconds = process.uptime()
+    const bytes = new Map(squares.map(square => [square, statSync(resolve(preparedDirectory, square, 'roads.arrow')).size]))
+    const sampledSquare = [...squares].sort((a, b) => bytes.get(a)! - bytes.get(b)!)[squares.length >> 1]
+    owned = squares.filter(square => square !== sampledSquare)
+    const started = performance.now()
+    await write(sampledSquare)
+    const walkSeconds = (performance.now() - started) / 1000 / bytes.get(sampledSquare)! *
+      owned.reduce((sum, square) => sum + bytes.get(square)!, 0)
+    const shards = squareShardCount(owned.length, loadSeconds, walkSeconds)
+    console.error(JSON.stringify({ squareShards: shards, loadSeconds, estimatedWalkSeconds: walkSeconds }))
+    if (shards > 1) {
+      for (const totals of await spawnSquareShards(shards, sampledSquare)) {
+        for (const key of Object.keys(totals.counters) as (keyof ShardTotals['counters'])[]) counters[key] += totals.counters[key]
+        for (const key of Object.keys(tally)) tally[key] += totals.tally[key]
       }
-      return counters
+      if (counters.squares !== squares.length) {
+        throw new Error(`shards wrote ${counters.squares} of ${squares.length} squares under ${preparedDirectory}`)
+      }
+      return { ...counters, shards }
     }
   }
-  const owned = ownSquareShard ? shardSquares([...squares], ownSquareShard) : squares
-  counters.squares = owned.length
-  for (const square of owned) {
-    const write = await writeSquare(resolve(preparedDirectory, square, 'roads.arrow'))
-    counters.rows += write.rows
-    counters.matched += write.matched
-    counters.retracted += write.retracted
-    counters.skipped += write.skipped
-    counters.skippedForeign += write.skippedForeign
-    if (write.updated) counters.squaresUpdated++
-  }
+  for (const square of owned) await write(square)
   if (ownSquareShard) {
+    if (!process.send) throw new Error(`${OWN_SQUARE_SHARD_ENV} is set but this process has no IPC channel`)
     await new Promise<void>((done, fail) =>
-      process.send!({ ...counters, ...tally }, (error: Error | null) => (error ? fail(error) : done())))
+      process.send!({ counters, tally } satisfies ShardTotals, (error: Error | null) => (error ? fail(error) : done())))
   }
-  return counters
+  return { ...counters, shards: 1 }
 }
 
 /** The national loaders' walk: every prepared square in the source's bounding box. */

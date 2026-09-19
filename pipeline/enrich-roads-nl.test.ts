@@ -162,7 +162,7 @@ test('z9 NL pass writes exact classes and preserves higher-priority provenance',
   ]
 
   const result = await enrichNetherlandsRoads(prepared, measurements)
-  assert.deepEqual(result, { rows: 2, matched: 1, retracted: 0, skipped: 0, skippedForeign: 0, squares: 1, squaresUpdated: 1 })
+  assert.deepEqual(result, { rows: 2, matched: 1, retracted: 0, skipped: 0, skippedForeign: 0, squares: 1, squaresUpdated: 1, shards: 1 })
   const table = tableFromIPC(readFileSync(target))
   assert.deepEqual(
     [...Array(2)].map((_, index) => table.getChild('country_iso')!.get(index)),
@@ -180,6 +180,6 @@ test('z9 NL pass writes exact classes and preserves higher-priority provenance',
 
   const bytes = readFileSync(target)
   const repeated = await enrichNetherlandsRoads(prepared, measurements)
-  assert.deepEqual(repeated, { rows: 2, matched: 1, retracted: 0, skipped: 0, skippedForeign: 0, squares: 1, squaresUpdated: 0 })
+  assert.deepEqual(repeated, { rows: 2, matched: 1, retracted: 0, skipped: 0, skippedForeign: 0, squares: 1, squaresUpdated: 0, shards: 1 })
   assert.deepEqual(readFileSync(target), bytes)
 })

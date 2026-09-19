@@ -14,8 +14,10 @@ export function cpuJobs(): number {
   }
 }
 
-export function availableMemoryBytes(): number {
-  return cgroupMemoryMax() ?? hostAvailableBytes()
+/** `heldBytes` is what this process already holds: a cgroup limit includes it, host MemAvailable excludes it. */
+export function availableMemoryBytes(heldBytes = 0): number {
+  const limit = cgroupMemoryMax()
+  return limit === undefined ? hostAvailableBytes() : limit - heldBytes
 }
 
 export function fitJobs(requested: number, bytesPerWorker: number, memoryBytes = availableMemoryBytes()): number {

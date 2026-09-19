@@ -10,8 +10,8 @@ import {
 } from './lib/roads-de-source.js'
 import { BW_HOURLY_SOURCE_URL, loadBwHourlyProfiles, type BwStationProfile } from './lib/roads-de-bw-hourly-source.js'
 import { listPreparedSquares } from './lib/prepared-grid.js'
-import { isSlipRoadClass, writeRoadAadt, writeRoadTimeProfiles, type RoadRow, type RoadTimeProfileEntry } from './lib/roads-arrow.js'
-import { writeNationalRoadSquares, writeRoadSquaresAcrossShards } from './lib/square-pool.js'
+import { isSlipRoadClass, writeRoadAadt, applyRoadTimeProfiles, type RoadRow, type RoadTimeProfileEntry } from './lib/roads-arrow.js'
+import { ownSquareShard, writeNationalRoadSquares } from './lib/square-pool.js'
 import { haversineM } from './lib/spatial.js'
 
 const GERMANY_BBOX = [46, 4, 56, 16] as const
@@ -187,9 +187,8 @@ export async function enrichBwTimeProfiles(
   const byRef = bwByRef(stations)
   const entries = bwProfileEntries(stations)
   const indexOf = new Map(entries.map((entry, index) => [entry.station, index + 1]))
-  return writeRoadSquaresAcrossShards(preparedDirectory, listPreparedSquares(preparedDirectory, BW_BBOX), {}, path =>
-    writeRoadTimeProfiles(path, BW_HOURLY_SOURCE_URL, entries,
-      row => indexOf.get(matchBwStation(row, byRef)?.svznr ?? '') ?? 0))
+  return applyRoadTimeProfiles(preparedDirectory, listPreparedSquares(preparedDirectory, BW_BBOX),
+    BW_HOURLY_SOURCE_URL, entries, row => indexOf.get(matchBwStation(row, byRef)?.svznr ?? '') ?? 0)
 }
 
 async function main(options: RoadLoaderArguments) {
@@ -197,7 +196,8 @@ async function main(options: RoadLoaderArguments) {
   const result = await enrichGermanRoads(options.preparedDirectory, census.sections)
   // Observed period profiles are a separate concern from AADT: absent dataset
   // (not yet pinned) skips the step without touching anything.
-  const bw = await loadBwHourlyProfiles(options)
+  // Few squares: the fan-out parent alone stamps them after its shards exit.
+  const bw = ownSquareShard ? null : await loadBwHourlyProfiles(options)
   const bwResult = bw ? await enrichBwTimeProfiles(options.preparedDirectory, bw.stations) : null
   return {
     sourceRows: census.sourceRows,
