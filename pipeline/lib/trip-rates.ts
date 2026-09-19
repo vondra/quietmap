@@ -73,8 +73,10 @@ export const BUILDING_TRIP_RATES: Readonly<Record<number, TripRateArm>> = {
   // 6 hotel — ITE 310 8.17 trips/room × 0.5 occupancy × 0.6 car mode,
   // room ≈ 25 m²; restated (divisor 38).
   6: { kind: 'trips', basis: 'gfa', per100m2: 9.7, minTrips: 8, capTrips: 1472 },
-  // 7 garage — one household's car storage; restated (1 dw × 3.68). Fixed, so
-  // amenity=parking areas that classify here stay near-silent by design.
+  // 7 garage — one household's car storage; restated (1 dw × 3.68). Fixed: a
+  // garage holds cars, it does not generate the trips. An OPEN car park is not
+  // in this lane at all (it is an open-air area source, leisure::CAR_PARK); the
+  // shop or the flats it serves carry its trips.
   7: { kind: 'fixedTrips', trips: 3.68 },
   // 8 farm — rural low mobility, restated (divisor 200, cap 50 dw).
   8: { kind: 'trips', basis: 'gfa', per100m2: 1.84, minTrips: 2, capTrips: 184 },

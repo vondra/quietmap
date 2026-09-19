@@ -98,11 +98,9 @@ fn tsv_road_ref(tags: &Tags) -> TsvText<'_> {
     })
 }
 
-/// Observability for the two SILENT failure modes of building classification (so
-/// a blind spot is never invisible — reported at the end of every extract):
-/// an unrecognised `building=*` value that fell to the residential(0) default.
-/// The routing fall-through (a functional area that vanished) is counted in
-/// `main` where the `None` happens.
+/// Observability for the SILENT failure mode of building classification (so a
+/// blind spot is never invisible — reported at the end of every extract): an
+/// unrecognised `building=*` value that fell to the residential(0) default.
 #[derive(Default)]
 pub struct ExtractAudit {
     /// `building=X` → residential(0) where X is neither recognised nor a known
@@ -352,10 +350,8 @@ impl Spiller {
         // record a silent residential-default without a second classification pass.
         let building_bt =
             matches!(ftype, FeatureType::Building).then(|| building_type_from_tags(tags));
-        // A Building feature with NO `building` tag is a FUNCTIONAL AREA (mall /
-        // hospital / school / zone routed by function). Flagged so finalize can
-        // suppress it where it merely wraps real buildings (anti-double-count).
-        let is_area_source = building_bt.is_some() && !tags.contains_key("building");
+        // What stands on this Building row (the TSV's `area_source` field).
+        let ground = building_bt.map_or(GROUND_HOLDS_A_BUILDING, |_| ground_state(tags));
         if building_bt == Some(0) {
             if let Some(b) = tags.get("building").filter(|b| {
                 !matches!(
@@ -398,7 +394,7 @@ impl Spiller {
                     tsv_tag(tags, "addr:housenumber"),
                     // settlement v2 phase 2: opening_hours → day-fraction u8.
                     classify::opening_hours_fraction(tags.get("opening_hours").map(|s| s.as_str())),
-                    is_area_source as u8,
+                    ground,
                 )?;
             }
             FeatureType::Leisure => {
@@ -546,6 +542,14 @@ fn building_type_from_tags(tags: &Tags) -> u8 {
     ) {
         return c;
     }
+    // A retail or commercial LANDUSE zone carries no `building` tag and no POI:
+    // it is the unmapped built area of a retail park or an office estate (where
+    // buildings ARE mapped inside it, finalize suppresses the zone). Commercial
+    // plant, not apartments — the residential fallback below billed every such
+    // zone as dwellings, up to the 200-dwelling cap.
+    if matches!(get("landuse"), Some("retail" | "commercial")) {
+        return 1;
+    }
     // farm_auxiliary + livestock → real farm building, not a silent shed.
     if get("building") == Some("farm_auxiliary")
         && (tags.contains_key("animal") || get("livestock").is_some())
@@ -554,6 +558,48 @@ fn building_type_from_tags(tags: &Tags) -> u8 {
     }
     // Fallback to building tag
     tags.get("building").map(|s| building_type(s)).unwrap_or(0)
+}
+
+/// A building stands on the row: it screens with its footprint and height.
+pub(crate) const GROUND_HOLDS_A_BUILDING: u8 = 0;
+/// A functional AREA with no `building` tag — school ground, retail zone, mall
+/// polygon. It emits from its ring and never screens, and because it WRAPS what
+/// is mapped inside it, finalize drops it where real buildings stand there.
+pub(crate) const GROUND_IS_A_FUNCTIONAL_AREA: u8 = 1;
+/// A car park below the ground: its vent fans radiate and nothing stands over
+/// it, but it wraps nothing — the buildings above it are not its sub-buildings,
+/// so the wrapper suppression must leave it alone.
+pub(crate) const GROUND_IS_BELOW_A_BUILDING: u8 = 2;
+
+/// Which of the three [`GROUND_*`](GROUND_HOLDS_A_BUILDING) states a Building
+/// row is in. `structures-builder-2` writes the two non-zero states without
+/// geometry, with `height_m` 0 and no screening ordinal, so they emit from their
+/// ring and screen nothing. A deck or a block of garages is NOT one of them: it
+/// stands, even where OSM left the `building` tag off it.
+fn ground_state(tags: &Tags) -> u8 {
+    let tag = |k: &str| tags.get(k).map(|s| s.as_str());
+    if classify::parking_kind(tag) == Some(classify::ParkingKind::Underground) {
+        return GROUND_IS_BELOW_A_BUILDING;
+    }
+    if !classify::has_a_building(tag) {
+        // A deck or a block of garages stands even where OSM left the `building`
+        // tag off it — unless the mapper wrote `building=no`, which says outright
+        // that nothing stands here.
+        if classify::parking_kind(tag) == Some(classify::ParkingKind::Structure)
+            && tag("building").is_none()
+        {
+            return GROUND_HOLDS_A_BUILDING;
+        }
+        return GROUND_IS_A_FUNCTIONAL_AREA;
+    }
+    // The building itself is under the ground; `location` is the only tag that
+    // says so about a building, and `parking=underground` on an ordinary one
+    // only means it HAS a basement garage.
+    if tag("location") == Some("underground") {
+        GROUND_IS_BELOW_A_BUILDING
+    } else {
+        GROUND_HOLDS_A_BUILDING
+    }
 }
 
 /// A `building=*` value naming a large / specific STRUCTURE whose emission is
@@ -667,7 +713,8 @@ fn building_type(val: &str) -> u8 {
         "house" | "detached" | "semidetached_house" | "semidetached" | "terrace" | "bungalow"
         | "houseboat" | "cabin" => ids::SETTLEMENT_HOUSE,
         // Retail buildings — malls, shops, supermarkets — are SHOPPING activity
-        // (car park + deliveries + refrigeration), the FOOD_RETAIL profile, NOT
+        // (deliveries + refrigeration; the car park is its own source now),
+        // the FOOD_RETAIL profile, NOT
         // the office-HVAC commercial one.
         "supermarket" | "retail" => ids::SETTLEMENT_FOOD_RETAIL,
         "restaurant" | "cafe" | "pub" | "bar" | "fast_food" => ids::SETTLEMENT_HOSPITALITY,
@@ -924,6 +971,83 @@ mod settlement_class_tests {
         barn.insert("building".into(), "farm_auxiliary".into());
         barn.insert("animal".into(), "cattle".into());
         assert_eq!(building_type_from_tags(&barn), 8);
+    }
+
+    #[test]
+    fn a_retail_or_commercial_zone_is_commercial_plant_not_dwellings() {
+        for landuse in ["retail", "commercial"] {
+            let mut t = Tags::new();
+            t.insert("landuse".into(), landuse.into());
+            assert_eq!(building_type_from_tags(&t), 1, "landuse={landuse}");
+            assert_eq!(ground_state(&t), GROUND_IS_A_FUNCTIONAL_AREA, "landuse={landuse}");
+        }
+        // A named function inside the zone still wins.
+        let mut shop = Tags::new();
+        shop.insert("landuse".into(), "retail".into());
+        shop.insert("shop".into(), "supermarket".into());
+        assert_eq!(building_type_from_tags(&shop), st::SETTLEMENT_FOOD_RETAIL);
+    }
+
+    /// A garage below the ground emits its vent fans and screens nothing, and is
+    /// not a wrapper: the buildings above it are not inside it. A building that
+    /// merely HAS a basement garage still stands.
+    #[test]
+    fn what_stands_on_a_row_decides_whether_it_screens() {
+        let tags = |pairs: &[(&str, &str)]| {
+            let mut t = Tags::new();
+            for (key, value) in pairs {
+                t.insert((*key).into(), (*value).into());
+            }
+            t
+        };
+        let garage = tags(&[("building", "yes"), ("amenity", "parking")]);
+        assert_eq!(
+            building_type_from_tags(&garage),
+            st::SETTLEMENT_PARKING_STRUCTURE
+        );
+        assert_eq!(
+            ground_state(&garage),
+            GROUND_HOLDS_A_BUILDING,
+            "a garage on the surface screens"
+        );
+        for below in [
+            &[("building", "yes"), ("location", "underground")] as &[(&str, &str)],
+            &[("building", "parking"), ("parking", "underground")],
+            &[("amenity", "parking"), ("parking", "underground")],
+        ] {
+            assert_eq!(ground_state(&tags(below)), GROUND_IS_BELOW_A_BUILDING, "{below:?}");
+        }
+        // An `amenity=parking` building IS a car park (class 7 above), so
+        // `parking=underground` puts THAT building below the ground. A house or a
+        // block of flats with a basement garage carries no `amenity=parking`: it
+        // never reaches the car park rule, and it keeps its wall.
+        assert_eq!(
+            ground_state(&tags(&[
+                ("building", "yes"),
+                ("amenity", "parking"),
+                ("parking", "underground")
+            ])),
+            GROUND_IS_BELOW_A_BUILDING
+        );
+        for stands in [
+            &[("building", "house"), ("parking", "underground")] as &[(&str, &str)],
+            &[("building", "apartments"), ("parking", "underground")],
+            // A deck with no `building` tag stands too.
+            &[("amenity", "parking"), ("parking", "multi-storey")],
+        ] {
+            assert_eq!(ground_state(&tags(stands)), GROUND_HOLDS_A_BUILDING, "{stands:?}");
+        }
+        // `building=no` says nothing stands here, and nothing overrides that.
+        for denied in [
+            &[("building", "no"), ("amenity", "school")] as &[(&str, &str)],
+            &[("building", "no"), ("amenity", "parking"), ("parking", "multi-storey")],
+        ] {
+            assert_eq!(
+                ground_state(&tags(denied)),
+                GROUND_IS_A_FUNCTIONAL_AREA,
+                "{denied:?}"
+            );
+        }
     }
 
     #[test]

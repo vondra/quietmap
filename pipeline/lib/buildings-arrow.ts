@@ -32,7 +32,8 @@ export async function writeBuildingEnrichment(
   path: string,
   match: (row: BuildingRow) => BuildingPatch | null,
 ) {
-  const result = { rows: 0, matched: 0, floorsAdded: 0, typesChanged: 0, typeDowngradesBlocked: 0, updated: false }
+  const result = { rows: 0, matched: 0, floorsAdded: 0, typesChanged: 0, typeDowngradesBlocked: 0,
+    areaSourcesSkipped: 0, updated: false }
   await withArrowWrite(path, table => {
     if (table.schema.metadata.get('buildings_contract') !== 'buildings_v4' ||
         table.schema.metadata.get('grid') !== 'z30') {
@@ -43,12 +44,22 @@ export async function writeBuildingEnrichment(
     const originalFloors = integerColumn(table, 'floors', 8)
     const originalTypes = integerColumn(table, 'building_type', 8)
     const originalSource = integerColumn(table, 'source_id', 16)
+    // `buildings_v4`: true where nothing stands (a school ground, a retail zone, a
+    // car park below the ground). A national survey describes BUILDINGS, and its
+    // nearest-within-30 m match would hand such a row the floors — and in Czechia
+    // the use code — of the block beside or above it. Emission scales with floors,
+    // so that row would then shout with the block's storeys.
+    const areaSource = table.getChild('area_source')
+    if (!areaSource || !DataType.isBool(areaSource.type) || areaSource.nullCount !== 0) {
+      throw new Error(`${path}: buildings Arrow 'area_source' must be non-null Bool`)
+    }
     result.rows = table.numRows
     const floors = Uint8Array.from(originalFloors)
     const types = Uint8Array.from(originalTypes)
     const sources = Uint16Array.from(originalSource)
     for (let i = 0; i < result.rows; i++) {
       if (types[i] > 13) throw new Error(`${path}: invalid building_type at row ${i}`)
+      if (areaSource.get(i)) { result.areaSourcesSkipped++; continue }
       const row: BuildingRow = {
         ...gridToLonLat(gx.get(i) as number, gy.get(i) as number),
         floors: floors[i], buildingType: types[i], existingSourceId: sources[i],

@@ -67,7 +67,7 @@ fn two_batches_with_broken_second_message(path: &Path) {
     let mut metadata = base.schema().metadata().clone();
     metadata.insert(
         "leisure_contract".into(),
-        square_store::store::LEISURE_CONTRACT_V2.into(),
+        square_store::store::LEISURE_CONTRACT_V3.into(),
     );
     metadata.insert("n_days".into(), "12".into());
     metadata.insert("rail_traffic_contract".into(), "1".into());

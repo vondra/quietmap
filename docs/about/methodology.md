@@ -79,15 +79,22 @@ type and size. Operating hours and operating status are unknown.
 
 ## Buildings
 
-**As sources.** An extension beyond the standards: buildings and leisure facilities
-(supermarkets, restaurants, heat pumps, sports grounds, stadiums) are assigned a level by
-type and floor area, with a day/night profile. These are assumptions, shown as such in the
-click panel.
+**As sources.** An extension beyond the standards: buildings, leisure facilities and car
+parks (supermarkets, restaurants, heat pumps, sports grounds, stadiums, parking lots) are
+assigned a level by type and size — floor area for a building, mapped ground area for a car
+park or a sports ground — with a day/night profile. A car park follows the
+Bavarian parking study: 63 dB(A) per space and movement per hour, 0.4 movements by day and 0.05 by
+night, over the spaces its mapped area holds, plus the study's term for the traffic driving through
+a big lot and hunting for a free space. These are assumptions, shown as such
+in the click panel.
 
-**As obstacles.** Every building screens with its actual footprint and height. Footprints
+**As obstacles.** Every building that stands screens with its actual footprint and height (an
+underground garage does not, and does not have to). Footprints
 come from OpenStreetMap and Overture Maps. Heights come from mapped height or floor count,
 from measured regional surveys where available (Prague), and otherwise from the GHSL
-average building height. Mapped noise barriers are treated the same way.
+average building height. Mapped noise barriers are treated the same way. Open ground does
+not screen: a car park, a school yard or a retail zone mapped without a building is a
+source, but nothing stands there to block sound.
 
 ## Propagation
 

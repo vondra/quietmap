@@ -63,6 +63,22 @@ pub fn load_sources(
                 square_store::structure_contract::validate_schema(&reader.schema())
                     .map_err(anyhow::Error::msg)?;
             }
+            if name == "leisure" {
+                // The painter must refuse a stamp it does not know for the same
+                // reason the popup does: `leisure_v3` added the car park classes,
+                // and an older binary would draw one as a sports pitch.
+                let metadata = reader.schema().metadata().clone();
+                for (key, expected) in [
+                    ("leisure_contract", square_store::store::LEISURE_CONTRACT_V3),
+                    ("grid", square_store::store::GRID_CONTRACT_Z30),
+                ] {
+                    let found = metadata.get(key).map(String::as_str);
+                    anyhow::ensure!(
+                        found == Some(expected),
+                        "{relative}: {key} is {found:?}, this build reads {expected}"
+                    );
+                }
+            }
             if name == "roads" {
                 let empty = RecordBatch::new_empty(reader.schema());
                 RoadDirections::read(&empty).map_err(anyhow::Error::msg)?;

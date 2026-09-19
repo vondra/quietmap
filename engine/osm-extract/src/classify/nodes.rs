@@ -78,8 +78,6 @@ const NODE_SETTLEMENT_KEYS: &[&str] = &[
     "outdoor_seating",
     "access",
     "name",
-    "capacity",
-    "seats",
     "opening_hours",
 ];
 
@@ -215,4 +213,30 @@ pub fn extract_airport_tags_dense(node: &DenseNode) -> Tags {
         }
     }
     t
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A car park NODE carries no area, so it must stay the function POI it
+    /// always was: it types the `building=yes` it sits in (a garage), and it
+    /// never becomes an open-air source with an invented reference footprint.
+    #[test]
+    fn a_parking_node_is_a_join_poi_not_an_open_air_source() {
+        let kind = |tags: &[(&str, &str)]| node_settlement_kind(tags.iter().copied());
+        assert!(matches!(
+            kind(&[("amenity", "parking")]),
+            Some(FeatureType::Poi)
+        ));
+        assert!(matches!(
+            kind(&[("amenity", "parking"), ("parking", "surface")]),
+            Some(FeatureType::Poi)
+        ));
+        // A leisure node with a real default footprint still routes as a source.
+        assert!(matches!(
+            kind(&[("leisure", "playground")]),
+            Some(FeatureType::Leisure)
+        ));
+    }
 }

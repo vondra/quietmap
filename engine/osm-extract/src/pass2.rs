@@ -177,9 +177,12 @@ fn apply_way(
     let Some(ftype) = way.class else {
         return Ok(());
     };
-    // Skip if this way is an outer member of a polygon relation;
-    // the relation's assembled multipolygon already covers it.
-    if way.is_relation_member
+    // Skip if this way is an outer member of a polygon relation; the relation's
+    // assembled multipolygon already covers it. An INNER building is not covered:
+    // the assembler keeps outer rings only, so a tagged inner way (a shop inside
+    // a campus, a house in a courtyard) is its own object and must be emitted —
+    // the parent's own row defers to the buildings mapped inside it.
+    if way.is_outer_relation_member
         && matches!(
             ftype,
             FeatureType::Building

@@ -103,14 +103,23 @@ fn only_emittable_buildings_suppress_functional_areas() {
     let ring = prague_ring_text();
     let real = format!("{key}\t1\t{gx}\t{gy}\t0\t0\t0\t0\tReal\t\t\t0\t0");
     let area = format!("{key}\t2\t{gx}\t{gy}\t0\t0\t0\t0\tArea\t\t\t0\t1\t{ring}");
+    // A car park BELOW the real building wraps nothing: it keeps emitting.
+    let below = format!(
+        "{key}\t3\t{gx}\t{gy}\t{}\t0\t0\t0\tBelow\t\t\t0\t2\t{ring}",
+        crate::ids::SETTLEMENT_PARKING_STRUCTURE
+    );
+    let garage = crate::ids::SETTLEMENT_PARKING_STRUCTURE;
     let food_retail = crate::ids::SETTLEMENT_FOOD_RETAIL;
-    for (geometry_column, expected) in [("", (2_i64, food_retail)), ("\t", (1, 0))] {
+    for (geometry_column, expected) in [
+        ("", vec![(2_i64, food_retail), (3, garage)]),
+        ("\t", vec![(1, 0), (3, garage)]),
+    ] {
         let spill = dir.join(format!("spill-{}", geometry_column.len()));
         let output = dir.join(format!("prepared-{}", geometry_column.len()));
         std::fs::create_dir_all(&spill).unwrap();
         std::fs::write(
             spill.join("buildings_000.tsv"),
-            format!("{real}{geometry_column}\n{area}\n"),
+            format!("{real}{geometry_column}\n{area}\n{below}\n"),
         )
         .unwrap();
         std::fs::write(
@@ -144,11 +153,8 @@ fn only_emittable_buildings_suppress_functional_areas() {
                 .unwrap();
             emitted.extend((0..batch.num_rows()).map(|i| (ids.value(i), classes.value(i))));
         }
-        assert_eq!(
-            emitted,
-            vec![expected],
-            "geometry column {geometry_column:?}"
-        );
+        emitted.sort_unstable();
+        assert_eq!(emitted, expected, "geometry column {geometry_column:?}");
     }
     std::fs::remove_dir_all(dir).unwrap();
 }

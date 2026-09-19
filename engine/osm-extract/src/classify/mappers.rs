@@ -5,11 +5,20 @@
 use super::Tags;
 use crate::ids;
 
-/// Map the leisure feature to its `sport` emission class (the ids in
-/// [`ids`]). `sport=*` wins; otherwise the `leisure=*`/`amenity=*` kind
-/// selects a default (playground, pool, pitch, outdoor seating, stadium).
-/// Always returns a class (PITCH is the fallback).
+/// Map the open-air feature to its emission class (the ids in [`ids`]). An open
+/// car park wins first — it carries no `sport` and its kind decides how densely
+/// its area holds spaces. Then `sport=*`, and otherwise the `leisure=*`/
+/// `amenity=*` kind selects a default (playground, pool, pitch, outdoor seating,
+/// stadium). Always returns a class (PITCH is the fallback).
 pub fn leisure_sport_class(tags: &Tags) -> u8 {
+    // A car park carries no `sport`; its own kind decides how many spaces its
+    // area holds (`leisure::CAR_PARK` 23.8 m² vs `CAR_PARK_STREET` 13.3 m²).
+    // Only open ground reaches the open-air lane; the rest never routes here.
+    match super::parking_kind(|key| tags.get(key).map(|s| s.as_str())) {
+        Some(super::ParkingKind::OpenStrip) => return ids::LEISURE_CAR_PARK_STREET,
+        Some(super::ParkingKind::OpenLot) => return ids::LEISURE_CAR_PARK,
+        _ => {}
+    }
     if let Some(sport) = tags.get("sport") {
         // Multi-value `sport=tennis;padel` → take the loudest by the static
         // anchor table; `>=` keeps the LAST maximum, mirroring max_by_key.
@@ -516,6 +525,21 @@ mod leisure_tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn car_park_kind_decides_how_many_spaces_its_area_holds() {
+        let parking = |kind: Option<&str>| {
+            let mut t = tags(&[("amenity", "parking")]);
+            if let Some(kind) = kind {
+                t.insert("parking".into(), kind.into());
+            }
+            leisure_sport_class(&t)
+        };
+        assert_eq!(parking(None), ids::LEISURE_CAR_PARK);
+        assert_eq!(parking(Some("surface")), ids::LEISURE_CAR_PARK);
+        assert_eq!(parking(Some("street_side")), ids::LEISURE_CAR_PARK_STREET);
+        assert_eq!(parking(Some("lane")), ids::LEISURE_CAR_PARK_STREET);
     }
 
     #[test]

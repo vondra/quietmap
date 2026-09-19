@@ -260,11 +260,17 @@ fn low_profile_from_structures(bytes: &[u8], label: &Path) -> Result<LowProfileL
         let egys = batch
             .column_by_name("emission_centroid_gy")
             .and_then(|c| c.as_any().downcast_ref::<Int32Array>());
+        // An emission-only row (a school ground, a retail zone, a car park below
+        // the ground) has no screening geometry. It must not seed the cap: a
+        // garage class beneath a real building would pull that building's
+        // screening height down to one floor.
+        let geoms = batch.column_by_name("geom");
         for i in 0..batch.num_rows() {
             if kinds.value(i) != STRUCTURE_KIND_BUILDING
                 || osm_ids.is_null(i)
                 || types.is_null(i)
                 || areas.is_null(i)
+                || geoms.is_none_or(|geom| geom.is_null(i))
             {
                 continue;
             }
@@ -280,6 +286,58 @@ fn low_profile_from_structures(bytes: &[u8], label: &Path) -> Result<LowProfileL
         }
     }
     Ok(lookup)
+}
+
+#[cfg(test)]
+mod low_profile_seed_tests {
+    use super::*;
+    use crate::structure_test_fixture as fx;
+
+    const LAT: f64 = 50.0755;
+    const LON: f64 = 14.4378;
+
+    fn garage(stands: bool) -> fx::StructureRow {
+        fx::StructureRow {
+            kind: square_store::store::STRUCTURE_KIND_BUILDING,
+            // A row that stands carries screening geometry; an emission-only row
+            // (a car park below the ground, a school ground) carries none.
+            ring_lonlat: stands.then(|| fx::square_ring_lonlat(LAT, LON)),
+            // Production: a row that stands carries an ordinal, an emission-only
+            // row carries none.
+            screening_ordinal: stands.then_some(0),
+            height_m: if stands { 3 } else { 0 },
+            envelope_class: 1,
+            centroid_lonlat: Some((LON, LAT)),
+            osm_id: Some(7),
+            building_type: Some(7), // garage: the low-profile class
+            area_m2: Some(450.0),
+            emission_ring_lonlat: Some(fx::square_ring_lonlat(LAT, LON)),
+            ..Default::default()
+        }
+    }
+
+    fn lookup(stands: bool) -> noise_compute::low_profile::LowProfileLookup {
+        let batch = fx::structure_batch(&[garage(stands)], true);
+        let mut bytes = Vec::new();
+        {
+            let mut writer =
+                arrow::ipc::writer::FileWriter::try_new(&mut bytes, &batch.schema()).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        low_profile_from_structures(&bytes, Path::new("fixture")).unwrap()
+    }
+
+    /// The cap pulls a matched Overture footprint down to one floor when a
+    /// garage of the same size sits on it. An emission-only row is not on it —
+    /// nothing stands there — so it must not pull a real building's wall down.
+    #[test]
+    fn only_a_garage_that_stands_caps_a_real_building() {
+        // Tier 2 is the defaulted height the cap exists for.
+        let tall = 18.0;
+        assert_eq!(lookup(true).capped_height(tall, 2, LAT, LON, 450.0), 3.0);
+        assert_eq!(lookup(false).capped_height(tall, 2, LAT, LON, 450.0), tall);
+    }
 }
 
 /// Metric origin of one square's index: the square centre, so the cache entry

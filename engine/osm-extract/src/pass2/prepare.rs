@@ -20,7 +20,14 @@ pub(super) enum Prepared {
 
 pub(super) struct PreparedWay {
     pub(super) id: i64,
+    /// A member of a multipolygon this extract assembles, in ANY role: its
+    /// coordinates are needed for the assembly even when it carries no tags.
     pub(super) is_relation_member: bool,
+    /// A member in the OUTER role (an empty role means outer). Only such a way
+    /// is represented by the assembled parent; a tagged INNER way is a separate
+    /// object standing in a hole — a shop inside a campus, a house in a
+    /// courtyard — and must still be emitted on its own.
+    pub(super) is_outer_relation_member: bool,
     pub(super) class: Option<FeatureType>,
     pub(super) resolved_nodes: Vec<(i64, Option<[f64; 2]>)>,
     pub(super) tags: Tags,
@@ -55,7 +62,13 @@ pub(super) fn prepare_blob(
         match element {
             Element::Way(way) => {
                 out.ways_seen += 1;
-                let is_relation_member = manifest.way_to_relations.contains_key(&way.id());
+                let memberships = manifest.way_to_relations.get(&way.id());
+                let is_relation_member = memberships.is_some();
+                let is_outer_relation_member = memberships.is_some_and(|relations| {
+                    relations
+                        .iter()
+                        .any(|(_, role)| role.is_empty() || role == "outer")
+                });
                 let mut way_class = classify::classify_way(&way);
                 if way_class.is_none() && !is_relation_member {
                     continue;
@@ -85,6 +98,7 @@ pub(super) fn prepare_blob(
                 out.items.push(Prepared::Way(PreparedWay {
                     id: way.id(),
                     is_relation_member,
+                    is_outer_relation_member,
                     class: way_class,
                     resolved_nodes,
                     tags,

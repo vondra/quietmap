@@ -39,7 +39,7 @@ pub struct RawIndustrialInput<'a> {
     pub nace_4digit: Option<u16>,
 }
 
-/// One `leisure.arrow` row — a sports/play/open-air-hospitality AREA source
+/// One `leisure.arrow` row — a sports/play/open-air-hospitality/car-park AREA source
 /// (settlement v2 phase 2). `sport` selects the per-type level
 /// (`leisure::leisure_profile`); the polygon `area_m2` is the only size driver
 /// (unified area-law with buildings). No floors/height — leisure is an open-air

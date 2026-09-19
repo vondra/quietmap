@@ -1,6 +1,7 @@
-//! `leisure.arrow` writer. Its own v2 per-file contract — a NEW file, never
-//! confused with buildings. No capacity column (dropped at this contract
-//! bump: the area-law unification removed capacity scaling). See `finalize`.
+//! `leisure.arrow` writer. Its own per-file contract (`leisure_v3`, which added
+//! the car park classes) — a NEW file, never confused with buildings. No
+//! capacity column: the area-law unification removed capacity scaling, and the
+//! polygon's own area is the size driver. See `finalize`.
 
 use anyhow::Result;
 use arrow::array::*;
@@ -11,11 +12,12 @@ use std::sync::Arc;
 
 use super::{
     decode_tsv_ring, parse_grid_cell, polygon_row_bbox, schema_with_contract,
-    write_arrow_z14_blocked, LEISURE_CONTRACT_V2,
+    write_arrow_z14_blocked, LEISURE_CONTRACT_V3,
 };
 
-/// `leisure.arrow`: one row per leisure AREA source (sports pitch / playground
-/// / pool / beer garden). Geometry + `sport` class drive the emission.
+/// `leisure.arrow`: one row per OPEN-AIR AREA source (sports pitch / playground
+/// / pool / beer garden / car park). Geometry + `sport` class drive the
+/// emission; nothing in this file ever screens.
 pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let n = rows.len();
     let schema = schema_with_contract(
@@ -31,7 +33,7 @@ pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
             Field::new("area_m2", DataType::Float32, true),
         ],
         "leisure_contract",
-        LEISURE_CONTRACT_V2,
+        LEISURE_CONTRACT_V3,
     );
 
     let mut osm_id = Int64Builder::with_capacity(n);

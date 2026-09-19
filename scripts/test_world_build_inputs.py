@@ -66,7 +66,7 @@ class WorldBuildInputsTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'cyclic height'):
                 list(inputs.height_inputs(source))
 
-    def test_world_audit_requires_all_squares_and_all_eight_layers(self):
+    def test_world_audit_requires_all_squares_and_every_served_layer(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(inputs.qmgrid, 'Z9_AXIS', 2):
             root = Path(directory)
             for x in range(2):
@@ -78,7 +78,9 @@ class WorldBuildInputsTest(unittest.TestCase):
                     import sys
                     sys.path.insert(0, str(Path(__file__).parent / 'structures'))
                     from structure_contract import CONTRACT_KEY, CONTRACT_VERSION
-                    structure_stamps = {CONTRACT_KEY.encode(): CONTRACT_VERSION.encode(), b'grid': b'z30'}
+                    from structure_merge import BUILDER_VERSION
+                    structure_stamps = {CONTRACT_KEY.encode(): CONTRACT_VERSION.encode(), b'grid': b'z30',
+                                        b'builder_version': BUILDER_VERSION.encode()}
                     schema = pa.schema([('value', pa.int32())], metadata=structure_stamps)
                     with pa.ipc.new_file(tile / 'structures.arrow', schema):
                         pass
@@ -88,7 +90,8 @@ class WorldBuildInputsTest(unittest.TestCase):
                     (tile / 'rail-intervals.CZ.arrow').write_bytes(b'not a served layer')
             # buildings.arrow is an input to structures.arrow, not a served
             # layer. A finalized generation does not retain that intermediate.
-            for layer in ('roads', 'railways', 'industrial', 'airborne', 'cruise', 'airport_traffic', 'ships'):
+            for layer in ('roads', 'railways', 'industrial', 'airborne', 'cruise', 'airport_traffic',
+                          'ships', 'leisure'):
                 import sys
                 sys.path.insert(0, str(Path(__file__).parent / 'square-country-city'))
                 from build_square_country_city import expected_contract
@@ -127,7 +130,7 @@ class WorldBuildInputsTest(unittest.TestCase):
             with pa.ipc.new_file(path, table.schema) as writer:
                 writer.write_table(table)
             serial = inputs.audit_world(root, jobs=1)
-            self.assertEqual(len(serial), 8)
+            self.assertEqual(len(serial), 9)
             self.assertEqual(inputs.audit_world(root, jobs=3), serial)
             structure = root / 'z9/1/1/structures.arrow'
             structure.unlink()

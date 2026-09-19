@@ -4,7 +4,9 @@
 //! `noise-compute/src/emission/{settlement,leisure}.rs`. They live here so
 //! `osm-extract` builds standalone on the green field; the `noise-compute`
 //! transfer reunites them (this module then becomes `pub use` re-exports).
-//! Values verified 2026-09-04 against dev/1 — never invent new ids here.
+//! Values verified 2026-09-04 against dev/1: a shipped id never moves, and a new
+//! one is minted in `noise-compute` together with its emission profile and only
+//! then mirrored here (leisure 8 and 9, the car parks, 2026-09-19).
 
 // settlement.rs ids
 /// Garage, carport, multi-storey car park: the profile is a structure's vent fans.
@@ -24,22 +26,32 @@ pub const LEISURE_PLAYGROUND: u8 = 4;
 pub const LEISURE_POOL: u8 = 5;
 pub const LEISURE_OUTDOOR_SEATING: u8 = 6;
 pub const LEISURE_STADIUM: u8 = 7;
+/// Open car park (`amenity=parking` AREA with no `building` tag): manoeuvring
+/// cars, doors and trolleys on open ground — a source, never an obstacle.
+pub const LEISURE_CAR_PARK: u8 = 8;
+/// Street-side / lane parking: the same movements on a strip with no aisle.
+pub const LEISURE_CAR_PARK_STREET: u8 = 9;
 
-/// Year-average Lden anchor at the class reference area, transcribed from the
-/// `leisure_profile` comments (padel 81 … seating 66). Resolves multi-sport
-/// `sport=a;b` to the loudest — the same argmax the old code computed live
-/// via `leisure_lw`, with identical last-wins tie semantics.
+/// Loudness anchor at the class reference area, transcribed from the
+/// `leisure_profile` comments: a year-average Lden for the sports (padel 81 …
+/// seating 66), the day Lw for the two car parks, which have no annualization.
+/// Resolves multi-sport `sport=a;b` to the loudest — the same argmax the old
+/// code computed live via `leisure_lw`, with identical last-wins tie semantics.
 pub fn leisure_loudness_anchor(class: u8) -> i64 {
     match class {
         LEISURE_PADEL => 81,
+        LEISURE_CAR_PARK => 79,
         LEISURE_STADIUM => 78,
         LEISURE_PITCH => 78,
         LEISURE_POOL => 76,
         LEISURE_TENNIS => 74,
         LEISURE_PLAYGROUND => 71,
         LEISURE_BASKETBALL => 68,
+        LEISURE_CAR_PARK_STREET => 68,
         LEISURE_OUTDOOR_SEATING => 66,
-        _ => 78, // unknown → pitch anchor, same fallback as the profile fn
+        // An id outside the table never reaches here: the spill writes only the
+        // classes above. The arm keeps the function total, at the pitch anchor.
+        _ => 78,
     }
 }
 

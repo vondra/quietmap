@@ -7,14 +7,15 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { test } from 'node:test'
-import { Binary, Field, makeTable, RecordBatch, Schema, Table, Utf8, vectorFromArray, tableFromIPC, tableToIPC } from 'apache-arrow'
+import { Binary, Bool, Field, makeTable, RecordBatch, Schema, Table, Utf8, vectorFromArray, tableFromIPC, tableToIPC } from 'apache-arrow'
 import { gridToLonLat } from './lib/prepared-grid.js'
 import { encodeQmBlocks } from './lib/road-test-fixture.js'
 import { writeBuildingEnrichment } from './lib/buildings-arrow.js'
 import { NATIONAL_BUILDING_SOURCES, indexNationalBuildings } from './lib/buildings-national-source.js'
 import { enrichNationalBuildings } from './enrich-buildings-national.js'
 
-function buildingTable(gx: number[], gy: number[], floors: number[], types: number[], sources: number[]) {
+function buildingTable(gx: number[], gy: number[], floors: number[], types: number[], sources: number[],
+    areaSources: boolean[] = gx.map(() => false)) {
   const n = gx.length
   const table = makeTable({ osm_id: BigInt64Array.from(gx, (_, i) => BigInt(i + 1)),
     centroid_gx: Int32Array.from(gx), centroid_gy: Int32Array.from(gy),
@@ -23,6 +24,7 @@ function buildingTable(gx: number[], gy: number[], floors: number[], types: numb
     height: Float32Array.from(gx, () => 0), name: vectorFromArray(gx.map((_, i) => `building-${i}`), new Utf8()),
     addr_street: vectorFromArray(gx.map(() => ''), new Utf8()), addr_housenumber: vectorFromArray(gx.map(() => ''), new Utf8()),
     opening_hours_frac: new Uint8Array(n), geom: vectorFromArray(gx.map(() => new Uint8Array([7, 8, 9])), new Binary()),
+    area_source: vectorFromArray(areaSources, new Bool()),
   } as never) as unknown as Table
   const fields = table.schema.fields.map(f => new Field(f.name, f.type, f.name === 'height', new Map([['field-note', f.name]])))
   const schema = new Schema(fields, new Map([
@@ -43,6 +45,31 @@ function assertUntouched(before: Table, after: Table) {
     assert.deepEqual(after.getChild(field.name)!.toArray(), before.getChild(field.name)!.toArray(), field.name)
   }
 }
+
+test('a national survey describes buildings: an emission-only row keeps its own floors and class', async () => {
+  const work = mkdtempSync(resolve(tmpdir(), 'national-area-source-'))
+  const path = resolve(work, 'z9/275/173/buildings.arrow')
+  // Two rows on the same spot: the block of flats, and the car park below it.
+  const gx = [276 * 2 ** 21 - 50, 276 * 2 ** 21 - 50]
+  const gy = [709600000, 709600000]
+  const original = buildingTable(gx, gy, [0, 0], [0, 7], [0, 0], [false, true])
+  store(path, original)
+  const source = resolve(work, 'cz.json')
+  writeFileSync(source, JSON.stringify([{ ...gridToLonLat(gx[0] + 100, gy[0]), floors: 8, useCode: 7 }]))
+  const index = await indexNationalBuildings(source, resolve(work, 'cz.sqlite'), NATIONAL_BUILDING_SOURCES[0])
+  try {
+    const result = await enrichNationalBuildings(work, index)
+    assert.equal(result.matched, 1)
+    const after = tableFromIPC(readFileSync(path))
+    // The block took the survey's storeys; the car park under it did not, and
+    // kept its own garage class.
+    assert.deepEqual([...after.getChild('floors')!], [8, 0])
+    assert.deepEqual([...after.getChild('building_type')!], [0, 7])
+    assert.deepEqual([...after.getChild('source_id')!], [200, 0])
+  } finally {
+    rmSync(work, { recursive: true, force: true })
+  }
+})
 
 test('CZ seam matches preserve specific types, existing floors, source rank and exact IPC reruns', async () => {
   const work = mkdtempSync(resolve(tmpdir(), 'national-cz-ipc-'))

@@ -54,7 +54,9 @@ use write_source_pieces::write_source_pieces;
 /// `buildings_v4` adds `area_source`, so an area without a building never screens.
 /// Stamped into arrow metadata; consumers fail loud on a mismatch.
 pub const BUILDINGS_CONTRACT_V4: &str = "buildings_v4";
-pub const LEISURE_CONTRACT_V2: &str = "leisure_v2";
+/// v3 adds the car park classes (leisure 8 and 9): an older binary must refuse
+/// the file rather than read a lot as a sports pitch.
+pub const LEISURE_CONTRACT_V3: &str = "leisure_v3";
 /// Schema metadata key pinning the coordinate grid of every file.
 pub const GRID_CONTRACT_KEY: &str = "grid";
 pub const GRID_CONTRACT_Z30: &str = "z30";

@@ -66,8 +66,27 @@ pub(crate) fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
 
     // Building (takes priority over leisure: a sports_centre tagged building=*
     // is a roofed building, not an open-air area source).
-    if tag("building").is_some() {
+    if has_a_building(tag) {
         return Some(FeatureType::Building);
+    }
+
+    // Car park with no `building` tag, decided here and not by whatever else the
+    // polygon is zoned as. Open ground emits in the open-air lane, but only where
+    // OSM mapped its AREA: `parking=lane` and many `street_side` strips are drawn
+    // as LINES, and a line's shoelace area would invent a lot out of the block it
+    // runs along. A deck or a basement keeps the building lane, where it screens
+    // or, under the ground, only emits. A parking NODE has no area at all and
+    // stays the function POI it always was.
+    match parking_kind(tag) {
+        Some(ParkingKind::OpenLot | ParkingKind::OpenStrip) => {
+            return is_a_closed_ring(&way.refs().collect::<Vec<_>>())
+                .then_some(FeatureType::Leisure)
+        }
+        Some(ParkingKind::Structure | ParkingKind::Underground) => {
+            return Some(FeatureType::Building)
+        }
+        Some(ParkingKind::NotItsOwnSource) => return None,
+        None => {}
     }
 
     // Leisure AREA (settlement v2 phase 2) — open-air activity sources with no
@@ -91,9 +110,10 @@ pub(crate) fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
         return Some(FeatureType::Industrial);
     }
 
-    // Functional AREA with no `building` tag IS a noise source and never an
-    // obstacle: a mall master polygon (shop=mall), a hospital ground, a school
-    // yard, a retail/commercial zone. FUNCTION is the gate, not just `building=`
+    // Functional AREA with no `building` tag IS a noise source, and — a parking
+    // deck aside, which stands — never an obstacle: a mall master polygon
+    // (shop=mall), a hospital ground, a school yard, a retail/commercial zone.
+    // FUNCTION is the gate, not just `building=`
     // (audit 2026-06). Reuses poi_class so the area classifies identically to
     // the same function on a building; the overlap with sub-buildings inside it
     // is suppressed in finalize (an area containing real buildings defers to them).
@@ -104,23 +124,98 @@ pub(crate) fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
     None
 }
 
-/// True if a tag set is a functional AREA worth keeping as an emission source
-/// even without a `building` tag: a noise-relevant `amenity`/`shop`/
-/// `healthcare`/`tourism` POI, or a retail/commercial landuse zone. Takes a `tag`
-/// lookup so way + relation routing share ONE definition (each already has its
-/// own closure).
+/// True if a tag set is a functional AREA worth keeping as a building row even
+/// without a `building` tag: a noise-relevant `amenity`/`shop`/`healthcare`/
+/// `tourism` POI, or a retail/commercial landuse zone. Takes a `tag` lookup so
+/// way + relation routing share ONE definition (each already has its own
+/// closure).
 pub(crate) fn is_functional_area<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool {
-    // An open car park has no walls and none of the vent fans the parking
-    // STRUCTURE class emits (per-movement Parkplatzlärm is not modelled), so
-    // without a `building` tag it is neither an obstacle nor a source.
+    // A car park is decided by [`parking_kind`], which both routers ask first.
+    // Saying so here as well costs one branch and keeps the answer right whoever
+    // calls it: `poi_class` types a lot as class 7, and a lot is not a building.
+    if parking_kind(&tag).is_some() {
+        return false;
+    }
     crate::spill::poi_class(
         tag("amenity"),
         tag("shop"),
         tag("healthcare"),
         tag("tourism"),
     )
-    .is_some_and(|class| class != crate::ids::SETTLEMENT_PARKING_STRUCTURE)
+    .is_some()
         || matches!(tag("landuse"), Some("retail" | "commercial"))
+}
+
+/// `building=no` states that there is NO building here, so it must read as an
+/// absent tag everywhere: it may not route a row by the tag's mere presence, and
+/// it may not make one screen. What the polygon IS can still keep it in the
+/// building lane — a deck says so with `parking=multi-storey` — but then it
+/// emits without a wall. Anything else, `yes` included, is a building.
+pub(crate) fn has_a_building<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool {
+    !matches!(tag("building"), None | Some("no"))
+}
+
+/// The OSM ring test: four node references or more, the last one repeating the
+/// first. An open-air AREA source is only as real as its ring — a line has no
+/// area to scale its emission by, whatever the shoelace formula would compute.
+pub(crate) fn is_a_closed_ring(refs: &[i64]) -> bool {
+    refs.len() >= 4 && refs.first() == refs.last()
+}
+
+/// What an `amenity=parking*` area is, acoustically. One decision, read by the
+/// way router, the relation router and the spill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParkingKind {
+    /// Open ground: cars manoeuvre, doors shut and trolleys roll in the open, so
+    /// it emits ([`crate::ids::LEISURE_CAR_PARK`]), and nothing stands there, so
+    /// it never screens.
+    OpenLot,
+    /// A street-side or lane strip: the same movements, packed into a strip that
+    /// borrows the street as its aisle ([`crate::ids::LEISURE_CAR_PARK_STREET`]).
+    OpenStrip,
+    /// A deck, a carport row or a block of garages: a STRUCTURE. It keeps the
+    /// building lane — it screens, and its cars are inside it, not in the open.
+    Structure,
+    /// Below the ground: its vent fans emit, but nothing stands over it.
+    Underground,
+    /// One stall inside a lot (`amenity=parking_space`), or cars on a roof the
+    /// ground-level area law cannot carry (`parking=rooftop`). Counting either
+    /// would double something already counted.
+    NotItsOwnSource,
+}
+
+/// [`ParkingKind`] of a tag set, or `None` when it is not a car park at all.
+/// A `building=parking|garage|garages|carport` is one too: the building IS the
+/// structure, and it can be the one below the ground.
+pub(crate) fn parking_kind<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> Option<ParkingKind> {
+    let building_is_the_structure = matches!(
+        tag("building"),
+        Some("parking" | "garage" | "garages" | "carport")
+    );
+    match tag("amenity") {
+        Some("parking") => {}
+        Some("parking_space") => return Some(ParkingKind::NotItsOwnSource),
+        _ if building_is_the_structure => {}
+        _ => return None,
+    }
+    // Everything reaching this point IS a car park (`amenity=parking`, or a
+    // building that is one), so `parking=underground` puts THIS object below the
+    // ground. An ordinary building that merely has a basement garage carries no
+    // `amenity=parking`, never reaches here, and keeps its wall.
+    if tag("location") == Some("underground") || tag("parking") == Some("underground") {
+        return Some(ParkingKind::Underground);
+    }
+    // A car park WITH a building — `building=parking`, or the plain `building=yes`
+    // a multi-storey deck usually carries — is that building: it stands.
+    if has_a_building(&tag) {
+        return Some(ParkingKind::Structure);
+    }
+    Some(match tag("parking") {
+        Some("multi-storey" | "carports" | "garage_boxes" | "sheds") => ParkingKind::Structure,
+        Some("rooftop") => ParkingKind::NotItsOwnSource,
+        Some("street_side" | "lane") => ParkingKind::OpenStrip,
+        _ => ParkingKind::OpenLot,
+    })
 }
 
 /// True if a tag set describes an open-air leisure AREA source (no `building`).
@@ -255,6 +350,11 @@ pub fn extract_way_tags(way: &Way, ftype: &FeatureType) -> Tags {
                         | "animal"
                         | "livestock"
                         | "opening_hours"
+                        // the zone tag that routed an area with no `building`
+                        | "landuse"
+                        // a basement garage emits, but nothing stands over it
+                        | "location"
+                        | "parking"
                 ) {
                     t.insert(k.to_string(), v.to_string());
                 }
@@ -265,11 +365,11 @@ pub fn extract_way_tags(way: &Way, ftype: &FeatureType) -> Tags {
                     "leisure"
                         | "sport"
                         | "amenity"
+                        // car park: lot or street-side strip (spaces per m²)
+                        | "parking"
                         | "outdoor_seating"
                         | "access"
                         | "name"
-                        | "capacity"
-                        | "seats"
                         | "opening_hours"
                 ) {
                     t.insert(k.to_string(), v.to_string());
@@ -307,19 +407,83 @@ pub fn extract_way_tags(way: &Way, ftype: &FeatureType) -> Tags {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_functional_area, keep_road_tag};
+    use super::{
+        has_a_building, is_a_closed_ring, is_functional_area, is_leisure_area, keep_road_tag,
+        parking_kind, ParkingKind,
+    };
+
+    fn tag_of<'a>(tags: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<&'a str> + 'a {
+        move |key: &str| tags.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
+    }
 
     /// Praha, Na Špitálce (way 1342239310): a 2 m wide `parking=street_side`
-    /// strip became a 3 m wall. A ground with a function still routes, as a source.
+    /// strip stood in the served world as a 7 m wall, and the popup called the
+    /// pavement beside it indoors. Open ground is a SOURCE and never a building
+    /// row; a deck or a basement keeps the building lane; a ground with a
+    /// function still routes as one.
     #[test]
-    fn open_car_park_without_a_building_tag_is_not_extracted() {
-        let routes = |tags: &[(&str, &str)]| {
-            is_functional_area(|key| tags.iter().find(|(k, _)| *k == key).map(|(_, v)| *v))
-        };
-        assert!(!routes(&[("amenity", "parking"), ("parking", "street_side")]));
-        assert!(!routes(&[("amenity", "parking_space")]));
-        assert!(routes(&[("amenity", "school")]));
-        assert!(routes(&[("landuse", "retail")]));
+    fn a_car_park_routes_by_what_it_physically_is() {
+        let kind = |tags: &[(&str, &str)]| parking_kind(tag_of(tags));
+        let na_spitalce: &[(&str, &str)] = &[("amenity", "parking"), ("parking", "street_side")];
+        assert_eq!(kind(na_spitalce), Some(ParkingKind::OpenStrip));
+        assert_eq!(kind(&[("amenity", "parking")]), Some(ParkingKind::OpenLot));
+        assert_eq!(
+            kind(&[("amenity", "parking"), ("parking", "surface")]),
+            Some(ParkingKind::OpenLot)
+        );
+        // A car park that IS a building stands, whatever value the tag carries.
+        assert_eq!(
+            kind(&[("amenity", "parking"), ("building", "yes")]),
+            Some(ParkingKind::Structure)
+        );
+        assert_eq!(kind(&[("building", "garage")]), Some(ParkingKind::Structure));
+        for structure in [
+            [("amenity", "parking"), ("parking", "multi-storey")],
+            [("amenity", "parking"), ("parking", "carports")],
+        ] {
+            assert_eq!(kind(&structure), Some(ParkingKind::Structure), "{structure:?}");
+        }
+        for below in [
+            [("amenity", "parking"), ("parking", "underground")],
+            [("amenity", "parking"), ("location", "underground")],
+        ] {
+            assert_eq!(kind(&below), Some(ParkingKind::Underground), "{below:?}");
+        }
+        // A single stall inside a lot, and cars on a roof: already counted.
+        for inside in [
+            [("amenity", "parking_space"), ("parking", "surface")],
+            [("amenity", "parking"), ("parking", "rooftop")],
+        ] {
+            assert_eq!(kind(&inside), Some(ParkingKind::NotItsOwnSource), "{inside:?}");
+        }
+        // Both routers ask `parking_kind` before any land use, so a lot inside a
+        // retail or industrial zone is a lot — the zone never claims it.
+        assert_eq!(
+            kind(&[("amenity", "parking"), ("landuse", "retail")]),
+            Some(ParkingKind::OpenLot)
+        );
+        assert_eq!(
+            kind(&[
+                ("amenity", "parking"),
+                ("parking", "multi-storey"),
+                ("landuse", "industrial")
+            ]),
+            Some(ParkingKind::Structure)
+        );
+        // The car park routes on its own CLOSED ring, not through the leisure
+        // tag gate: that gate is shared with nodes, which have no area at all.
+        assert!(!is_leisure_area(na_spitalce));
+        assert!(is_a_closed_ring(&[7, 8, 9, 7]));
+        assert!(!is_a_closed_ring(&[7, 8, 9, 10]), "a lane drawn as a line has no area");
+        assert!(!is_a_closed_ring(&[7, 7]));
+        // `building=no` says there is no building: it must not route one by its
+        // mere presence.
+        assert!(!has_a_building(tag_of(&[("building", "no")])));
+        assert!(has_a_building(tag_of(&[("building", "yes")])));
+        // A ground with a function is still a building-lane source.
+        assert!(is_functional_area(tag_of(&[("amenity", "school")])));
+        assert!(is_functional_area(tag_of(&[("landuse", "retail")])));
+        assert!(!is_functional_area(tag_of(&[("leisure", "pitch")])));
     }
 
     #[test]

@@ -28,9 +28,10 @@ pub enum FeatureType {
     Industrial,
     WindTurbine,
     Barrier,
-    /// Open-air leisure AREA (sports pitch / playground / pool / beer garden) —
-    /// settlement v2 phase 2. No `building=*`, so it was dropped before phase 2;
-    /// now spilled to its own `leisure.arrow` with a `sport` u8 + capacity.
+    /// Open-air AREA source (sports pitch / playground / pool / beer garden /
+    /// car park) — settlement v2 phase 2. No `building=*`, so it was dropped
+    /// before phase 2; now spilled to its own `leisure.arrow` with a class u8.
+    /// Nothing in that file ever screens.
     Leisure,
     /// A standalone function node (`amenity=`/`shop=`/`tourism=`/`healthcare=`)
     /// used ONLY by the finalize POI-in-footprint join to reclassify the

@@ -151,8 +151,10 @@ pub fn building_profile(building_type: u8) -> BuildingProfile {
             night_offset: -10.0,
         },
         7 => BuildingProfile {
-            // garage/parking structure — vent fans; keep quiet (per-movement
-            // parking noise belongs to the Parkplatzlärm lane, not here).
+            // garage/parking structure — vent fans; keep quiet. This class is the
+            // deck, the block of garages and the basement: cars are inside it.
+            // The movements of an OPEN lot are the open-air lane's
+            // ([`super::leisure::CAR_PARK`], Parkplatzlärmstudie).
             lw_fixed: 41.0,
             lw_per_m2: 18.0,
             spectrum: [-3.0, -1.0, 0.0, 1.0, 0.0, -1.0, -3.0, -6.0],
@@ -206,14 +208,17 @@ pub fn building_profile(building_type: u8) -> BuildingProfile {
             night_offset: -8.0,
         },
         FOOD_RETAIL => BuildingProfile {
-            // food retail — rooftop refrigeration condensers + car-park/trolley
-            // activity, run 24/7 → night −2 (NOT −20: the single worst phase-1
+            // food retail — rooftop refrigeration condensers, run 24/7 → night
+            // −2 (NOT −20: the single worst phase-1
             // finding, audit B2). settlement v3 (gg2): RE-ANCHORED to ONE
             // refrigeration unit (45–65 Lw, N ∝ sales area) — NOT the truck-reefer
             // Lw 102 conflation that made every shop a flat 88. fix 88→55,
             // per_m² 32→48 → SIZE scales: večerka 80 m² ~67, supermarket 1000 ~78,
             // hypermarket 5000 ~85. FOOTPRINT-scaled (is_shed_type). LF-dominant
-            // (condenser fans). Sources: Parkplatzlärmstudie (activity) + RWDI.
+            // (condenser fans). Source: RWDI. The anchor is the refrigeration
+            // unit alone; where a shop's car park is mapped it is now its own
+            // source ([`super::leisure::CAR_PARK`]), and the two overlap only by
+            // whatever trolley and door noise this fleet-average still carries.
             lw_fixed: 55.0,
             lw_per_m2: 48.0,
             spectrum: [1.0, 2.0, 1.0, 0.0, -1.0, -2.0, -4.0, -7.0],
@@ -431,7 +436,7 @@ mod tests {
                 name, p.lw_fixed, p.lw_per_m2, scale, small, large
             );
         }
-        let lnames: [(u8, &str); 8] = [
+        let lnames: [(u8, &str); 10] = [
             (leisure::PITCH, "pitch"),
             (leisure::PADEL, "padel"),
             (leisure::TENNIS, "tennis"),
@@ -440,6 +445,8 @@ mod tests {
             (leisure::POOL, "pool"),
             (leisure::OUTDOOR_SEATING, "outdoor seating"),
             (leisure::STADIUM, "stadium"),
+            (leisure::CAR_PARK, "car park"),
+            (leisure::CAR_PARK_STREET, "street parking"),
         ];
         println!("\nLEISURE  SAME area-law (now UNIFIED): Lw = 10log10(10^(fix/10) + area*10^(perm2/10))");
         println!(

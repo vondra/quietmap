@@ -84,6 +84,8 @@ const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
     outdoor_seating: 'Outdoor seating',
     stadium: 'Stadium',
     sports_pitch: 'Sports pitch',
+    car_park: 'Car park',
+    street_parking: 'Street parking',
     default: 'Building',
   },
   aircraft: { mixed: 'Aircraft', aircraft: 'Aircraft' },

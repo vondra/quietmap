@@ -88,14 +88,14 @@ pub(super) fn write_buildings(
     let mut area_source = BooleanBuilder::with_capacity(n);
     let mut row_bboxes = Vec::with_capacity(n);
 
-    // Centroids of the REAL buildings in this square (those with a `building`
-    // tag, area_source=0). A functional-AREA source that geometrically contains
-    // one of these is suppressed below. A clean area with no buildings inside
-    // survives as the only source.
+    // Centroids of the REAL buildings in this square (the rows something stands
+    // on). A functional-AREA source that geometrically contains one of these is
+    // suppressed below. A clean area with no buildings inside survives as the
+    // only source.
     let eligible_rows = rows.iter().filter(|row| row.len() >= 14);
     let real_centroids: Vec<(i32, i32)> = eligible_rows
         .clone()
-        .filter(|r| r[12] == "0")
+        .filter(|r| r[12].parse() == Ok(crate::spill::GROUND_HOLDS_A_BUILDING))
         .filter_map(|r| Some((r[2].parse().ok()?, r[3].parse().ok()?)))
         .collect();
 
@@ -106,7 +106,8 @@ pub(super) fn write_buildings(
         // Overlap and POI queries share one preparation, only if either needs it.
         let footprint = LazyCell::new(|| ring.as_deref().and_then(PreparedRing::new));
         // Overlap suppression: a functional-area source wrapping real buildings.
-        if row[12] == "1"
+        // A car park BELOW them wraps nothing and stays.
+        if row[12].parse() == Ok(crate::spill::GROUND_IS_A_FUNCTIONAL_AREA)
             && !real_centroids.is_empty()
             && footprint
                 .as_ref()
@@ -144,7 +145,9 @@ pub(super) fn write_buildings(
         street.append_value(&row[9]);
         housenumber.append_value(&row[10]);
         opening.append_value(row[11].parse().unwrap_or(0));
-        area_source.append_value(row[12] == "1");
+        // The Arrow column answers one question — does anything stand here? —
+        // so the structures builder and its readers need no third state.
+        area_source.append_value(row[12].parse() != Ok(crate::spill::GROUND_HOLDS_A_BUILDING));
         match ring.as_ref() {
             Some(ring) => {
                 match area_opt {

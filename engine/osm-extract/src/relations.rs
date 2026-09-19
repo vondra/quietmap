@@ -187,8 +187,23 @@ fn classify_multipolygon(rel: &osmpbf::Relation) -> Option<(FeatureType, Vec<(St
     if tag("type") != Some("multipolygon") {
         return None;
     }
-    let ftype = if tag("building").is_some() {
+    // A car park is what it is before it is what it is zoned as, and a lot mapped
+    // as a relation is not a source: the assembler keeps one outer ring and drops
+    // the holes, so an assembled lot would swallow the buildings inside it.
+    let parking = crate::classify::parking_kind(tag);
+    let ftype = if crate::classify::has_a_building(tag)
+        || matches!(
+            parking,
+            Some(
+                crate::classify::ParkingKind::Structure
+                    | crate::classify::ParkingKind::Underground
+            )
+        )
+    {
         FeatureType::Building
+    } else if parking.is_some() {
+        // Open ground, a stall or a rooftop: not a relation source.
+        return None;
     } else if matches!(
         tag("landuse"),
         Some("industrial" | "quarry" | "farmyard" | "landfill" | "port" | "harbour")
@@ -232,6 +247,11 @@ pub fn spill_tags_for_assembled(ftype: &FeatureType, tags: &Tags) -> Tags {
             "animal",
             "livestock",
             "opening_hours",
+            // the zone tag that routed an MP with no `building`
+            "landuse",
+            // a basement garage emits, but nothing stands over it
+            "location",
+            "parking",
         ],
         FeatureType::Industrial => &[
             "landuse",

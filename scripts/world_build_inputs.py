@@ -180,9 +180,11 @@ def verify_prepared_raster_links(source, prepared):
 
 
 def stamps_the_point_query_expects():
-    """layer -> {metadata key: value}, read from the reader's own constants. The point query
-    answers another stamp by serving without the layer (structures: by refusing), so this
-    audit is the gate that keeps such a file out of a release."""
+    """layer -> {metadata key: value}. The point query answers another stamp by serving without
+    the layer (structures: by refusing), so this audit is the gate that keeps such a file out of a
+    release. Most stamps are read from the reader's own constants; the structures BUILDER stamp is
+    read from its producer, because the reader cannot see it — builder 1 and builder 2 both write
+    `structures_v4`, so only this audit tells a repaired square from a stale one."""
     reader = Path(__file__).resolve().parent.parent / 'engine/square-store/src'
     def constants(file):
         return {name: value.encode() for name, value in
@@ -190,9 +192,13 @@ def stamps_the_point_query_expects():
     store, aircraft = constants('store.rs'), constants('aircraft_contract.rs')
     grid = {b'grid': store['GRID_CONTRACT_Z30']}
     version = {b'schema_version': aircraft['SCHEMA_VERSION']}
+    # The structures SCHEMA did not change when the builder stopped screening areas without a
+    # building tag, so only the builder stamp tells a repaired square from a stale one.
+    builder = re.search(r'BUILDER_VERSION = "([^"]+)"',
+                        (Path(__file__).parent / 'structures/structure_merge.py').read_text())
     return {
-        'structures': grid,
-        'leisure': {b'leisure_contract': store['LEISURE_CONTRACT_V2'], **grid},
+        'structures': {b'builder_version': builder.group(1).encode(), **grid},
+        'leisure': {b'leisure_contract': store['LEISURE_CONTRACT_V3'], **grid},
         'ships': {b'ships_contract': store['SHIPS_CONTRACT_V1'], **grid},
         'airborne': {b'airborne_contract': aircraft['AIRBORNE_CONTRACT'], **version},
         'cruise': {b'cruise_contract': aircraft['CRUISE_CONTRACT'], **version},
@@ -272,7 +278,8 @@ def audit_world(prepared, jobs=None):
                     pending.add(pool.submit(audit_square, square))
     if squares != qmgrid.Z9_AXIS ** 2:
         raise ValueError(f'incomplete world: {squares} structure squares')
-    for layer in ('roads', 'railways', 'structures', 'industrial', 'airborne', 'cruise', 'airport_traffic', 'ships'):
+    for layer in ('roads', 'railways', 'structures', 'industrial', 'airborne', 'cruise',
+                  'airport_traffic', 'ships', 'leisure'):
         if counts.get(layer, 0) == 0:
             raise ValueError(f'no world rows for {layer}')
     return counts
