@@ -72,6 +72,11 @@ export function lonLatToGrid(lon: number, lat: number): [number, number] {
   return [Math.floor(x / GRID_QUANTUM_M) + GRID_ORIGIN, Math.floor(y / GRID_QUANTUM_M) + GRID_ORIGIN]
 }
 
+/** z9 square axes of one z30 cell: a square spans 2^21 cells and its y axis runs north to south. */
+export function z9AxesOfGridCell(gx: number, gy: number): [x: number, y: number] {
+  return [gx >> 21, Z9_AXIS - 1 - (gy >> 21)]
+}
+
 /** Decode one global z30 cell corner to latitude/longitude. */
 export function gridToLonLat(gx: number, gy: number): { lat: number; lon: number } {
   if (!Number.isInteger(gx) || !Number.isInteger(gy)) throw new TypeError('grid coordinates must be integers')
