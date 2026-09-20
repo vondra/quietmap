@@ -94,7 +94,7 @@ export function nearestEuropeanTraffic(
   return best?.record ?? null
 }
 
-/** Choose across every owner before writes; source IDs refer to ways, not clipped rows. */
+/** Choose the physical way independently of existing traffic priority, so reruns cannot displace a count. */
 function assignDirectionalPointObservations(
   paths: readonly string[],
   records: readonly EuropeanTrafficRecord[],
@@ -113,7 +113,6 @@ function assignDirectionalPointObservations(
     }
     const rows = table.numRows
     for (let rowIndex = 0; rowIndex < rows; rowIndex++) {
-      if (!shouldOverwrite(Number(sources.get(rowIndex)), SOURCE_ID_EU_CITY_TRAFFIC)) continue
       const osmId = Number(ids.get(rowIndex))
       if (!Number.isSafeInteger(osmId) || osmId <= 0) throw new Error(`${path}: invalid OSM way identity at row ${rowIndex}`)
       for (const { record, sameWay, distance } of qualifyingObservations({ ...geometry.row(rowIndex), osmId, roadClass: Number(classes.get(rowIndex)) }, index)) {

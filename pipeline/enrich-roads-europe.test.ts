@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Int16, Int32, Int64, Uint8, RecordBatch, Schema, Table, tableFromIPC, tableToIPC, vectorFromArray } from 'apache-arrow'
 import { encodeQmBlocks, writeRoadsFixture } from './lib/road-test-fixture.js'
+import { writeRoadAadt } from './lib/roads-arrow.js'
+import { SOURCE_ID_CZ_RSD_SCITANI, SOURCE_ID_CITY_PRAHA_TSK } from './lib/sources.js'
 import { segmentGeometryReader } from './lib/prepared-grid.js'
 import { parseEuropeanCityTraffic } from './lib/roads-europe-source.js'
 import { buildOneHundredthDegreePointGrid, flatDist, nearestCompatiblePointWithin200Metres } from './lib/spatial.js'
@@ -216,5 +218,46 @@ test('one directional observation chooses one current way across owners; two-way
     const before = paths.map(path => readFileSync(path))
     assert.equal((await enrichEuropeanRoads(prepared, [observation])).squaresUpdated, 0)
     paths.forEach((path, index) => assert.deepEqual(readFileSync(path), before[index]))
+  }
+})
+
+
+test('a directional point stays on its road after a higher-priority count and retracts an earlier displaced stamp', async () => {
+  for (const sourceId of [SOURCE_ID_CZ_RSD_SCITANI, SOURCE_ID_CITY_PRAHA_TSK]) {
+    const prepared = join(temporary, `priority-rerun-${sourceId}`), path = join(prepared, 'z9/275/173/roads.arrow')
+    let table = tableFromIPC(readFileSync(writeRoadsFixture(`eu-priority-${sourceId}.arrow`, [3, 3], { sourceIds: [0, 0] })))
+    for (const name of ['start_gx', 'end_gx', 'start_gy', 'end_gy']) {
+      const first = Number(table.getChild(name)!.get(0))
+      table = table.setChild(name, vectorFromArray([first, first + (name.endsWith('gx') ? 400 : 0)], new Int32()))
+    }
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, tableToIPC(table, 'file'))
+    const observation = city(traffic(segmentGeometryReader(table).row(0)))
+    const sources = () => [...tableFromIPC(readFileSync(path)).getChild('source_id')!.toArray()]
+    await enrichEuropeanRoads(prepared, [observation])
+    assert.deepEqual(sources(), [10, 0])
+    const originalWay = Number(table.getChild('osm_id')!.get(0))
+    await writeRoadAadt(path, row => row.osmId === originalWay ? {
+      sourceId, countBasis: 'street-cross-section', observationId: 'measured-original-road',
+      light: 5000, medium: 100, heavy: 200, moto: 50,
+    } : null)
+    const measured = readFileSync(path)
+    assert.equal((await enrichEuropeanRoads(prepared, [observation])).squaresUpdated, 0)
+    assert.deepEqual(readFileSync(path), measured)
+
+    // The old rerun moved this same point to the neighbouring road after the original got a better source.
+    await writeRoadAadt(path, row => row.osmId !== originalWay ? observation.records[0] : null)
+    assert.deepEqual(sources(), [sourceId, 10])
+    await enrichEuropeanRoads(prepared, [observation])
+    assert.deepEqual(sources(), [sourceId, 0])
+    const healed = tableFromIPC(readFileSync(path)), before = tableFromIPC(measured)
+    for (const field of before.schema.fields) assert.deepEqual(healed.getChild(field.name)!.get(0), before.getChild(field.name)!.get(0))
+    for (const name of ['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'traffic_observation_source']) {
+      assert.equal(healed.getChild(name)!.get(1), 0)
+    }
+    assert.equal(healed.getChild('traffic_observation_id')!.get(1), '')
+    const stable = readFileSync(path)
+    assert.equal((await enrichEuropeanRoads(prepared, [observation])).squaresUpdated, 0)
+    assert.deepEqual(readFileSync(path), stable)
   }
 })
