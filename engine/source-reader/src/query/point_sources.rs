@@ -1,0 +1,151 @@
+//! Industrial sites and ship cells become normalized emission points.
+
+use super::spatial::{INDUSTRIAL_QUERY_RADIUS_M, SHIP_QUERY_RADIUS_M};
+use arrow::array::Array;
+use square_store::grid_cols::{
+    col_binary, col_f32, col_i32, col_i64, col_str, col_u16, col_u8, decode_geom, grid_cell_lonlat,
+};
+use square_store::store::SquareData;
+
+pub(super) fn collect_industrial(
+    data: &SquareData,
+    lat: f64,
+    lng: f64,
+    output: &mut Vec<noise_compute::types::PointSource>,
+) -> Result<(), String> {
+    for batch in &data
+        .industrial
+        .batches_within(lat, lng, INDUSTRIAL_QUERY_RADIUS_M)?
+    {
+        let n = batch.num_rows();
+        let (Some(cgx), Some(cgy)) = (col_i32(batch, "centroid_gx"), col_i32(batch, "centroid_gy"))
+        else {
+            continue;
+        };
+        let source_types = col_u8(batch, "source_type");
+        let hub_heights = col_f32(batch, "hub_height");
+        let rated_powers = col_f32(batch, "rated_power_kw");
+        let names = col_str(batch, "name");
+        let geom_col = col_binary(batch, "geom");
+        let area_col = col_f32(batch, "area_m2");
+
+        for i in 0..n {
+            let (c_lon, c_lat) = grid_cell_lonlat(cgx.value(i), cgy.value(i));
+            let dist = grid::geo::flat_dist(lat, lng, c_lat, c_lon);
+            if dist > INDUSTRIAL_QUERY_RADIUS_M {
+                continue;
+            }
+            if col_u8(batch, "suppressed").map(|a| a.value(i)).unwrap_or(0) != 0 {
+                continue;
+            }
+
+            let source_type = source_types.map(|a| a.value(i)).unwrap_or(0);
+            let name = names.map(|a| a.value(i).to_string()).unwrap_or_default();
+            let osm_id = col_i64(batch, "osm_id").map(|a| a.value(i)).unwrap_or(0);
+            // Wind turbines are point sources even when the row carries geometry.
+            let polygon_grid: grid::poly::GridRing = if source_type == 10 {
+                Vec::new()
+            } else {
+                geom_col
+                    .filter(|g| !g.is_null(i))
+                    .and_then(|g| decode_geom(Some(g.value(i))))
+                    .unwrap_or_default()
+            };
+            let positive_value = |column: Option<&arrow::array::Float32Array>| {
+                column
+                    .map(|values| values.value(i))
+                    .filter(|value| *value > 0.0)
+            };
+
+            let site_subtype = col_u8(batch, "site_subtype")
+                .map(|a| a.value(i))
+                .unwrap_or(0);
+            let prepared_points = noise_compute::normalize::prepare_industrial_points(
+                noise_compute::normalize::RawIndustrialInput {
+                    centroid_lat: c_lat,
+                    centroid_lon: c_lon,
+                    source_type,
+                    site_subtype,
+                    hub_height_m: positive_value(hub_heights),
+                    rated_power_kw: positive_value(rated_powers),
+                    area_m2: positive_value(area_col).map(f64::from),
+                    polygon_grid: &polygon_grid,
+                    nace_4digit: col_u16(batch, "nace_4digit")
+                        .map(|a| a.value(i))
+                        .filter(|&v| v > 0),
+                },
+            );
+            let row_source_id = col_u16(batch, "source_id").map(|a| a.value(i)).unwrap_or(0);
+            for prepared in prepared_points {
+                let pt_dist = grid::geo::flat_dist(lat, lng, prepared.lat, prepared.lon);
+                let mut point = prepared.with_metadata(
+                    osm_id,
+                    source_type,
+                    name.clone(),
+                    polygon_grid.clone(),
+                    pt_dist,
+                );
+                point.source_id = row_source_id;
+                output.push(point);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn collect_ships(
+    ship_batches: &[arrow::record_batch::RecordBatch],
+    lat: f64,
+    lng: f64,
+    output: &mut Vec<noise_compute::types::PointSource>,
+) -> Result<(), String> {
+    for batch in ship_batches {
+        let (Some(cgx), Some(cgy), Some(area), Some(large), Some(work), Some(leisure)) = (
+            col_i32(batch, "centroid_gx"),
+            col_i32(batch, "centroid_gy"),
+            col_f32(batch, "area_m2"),
+            col_f32(batch, "hours_large"),
+            col_f32(batch, "hours_work"),
+            col_f32(batch, "hours_leisure"),
+        ) else {
+            return Err(
+                "ships.arrow lacks its cell columns — rerun scripts/ships/build_ships.py"
+                    .to_string(),
+            );
+        };
+        let source_ids = col_u16(batch, "source_id");
+        for i in 0..batch.num_rows() {
+            let (c_lon, c_lat) = grid_cell_lonlat(cgx.value(i), cgy.value(i));
+            let dist = grid::geo::flat_dist(lat, lng, c_lat, c_lon);
+            if dist > SHIP_QUERY_RADIUS_M {
+                continue;
+            }
+            let Some((prepared_points, class)) = noise_compute::normalize::prepare_ship_points(
+                noise_compute::normalize::RawShipInput {
+                    centroid_lat: c_lat,
+                    centroid_lon: c_lon,
+                    area_m2: area.value(i),
+                    hours_per_month: [large.value(i), work.value(i), leisure.value(i)],
+                },
+            ) else {
+                continue;
+            };
+            // All sub-cells share the identity of their original z30 cell.
+            let cell_id = (i64::from(cgx.value(i)) << 32) | i64::from(cgy.value(i) as u32);
+            let row_source_id = source_ids.map(|a| a.value(i)).unwrap_or(0);
+            for prepared in prepared_points {
+                let pt_dist = grid::geo::flat_dist(lat, lng, prepared.lat, prepared.lon);
+                let mut point = prepared.with_metadata(
+                    cell_id,
+                    class as u8,
+                    String::new(),
+                    Vec::new(),
+                    pt_dist,
+                );
+                point.source_id = row_source_id;
+                output.push(point);
+            }
+        }
+    }
+    Ok(())
+}
