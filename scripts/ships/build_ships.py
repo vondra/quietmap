@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Write `ships.arrow` per z9 square from AIS vessel-density rasters: one row per water cell
-with its mean vessel-hours per month by acoustic class (EMODnet 2024 European seas today)."""
+"""Write per-z9 ship cells from EMODnet and Global Fishing Watch AIS density products."""
 
 import argparse
 import base64

@@ -11,6 +11,9 @@ is propagated to a receiver 4 m above ground over terrain and around buildings, 
 contributions of all sources are summed. The result is Lden, the annual
 day-evening-night level. Layers are computed independently and can be toggled separately.
 
+Accommodation cards show outdoor noise. Listings inside a building use the façade
+estimate before wall and window insulation.
+
 ## Roads
 
 Emission follows CNOSSOS-EU (rolling and propulsion noise per vehicle class). Inputs are

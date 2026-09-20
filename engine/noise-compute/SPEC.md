@@ -199,11 +199,13 @@ pixel and reduced the near-line contribution by approximately 3 dB.
 
 ## Ship traffic cells
 
-A `ships.arrow` row is one water cell of an AIS vessel-density product (EMODnet 2024: 1 km
-ETRS89-LAEA cells, vessel-hours per km² per month by ship type, folded into three acoustic
-classes): `centroid_gx/gy` (z30 grid), `area_m2`, `hours_large`, `hours_work`,
-`hours_leisure`, `source_id`; stamps `grid=z30`, `ships_contract=ships_v1`, `qm_blocks`.
-Cells below 0.5 vessel-hours per month are not written (at most 76 dB(A) for large ships).
+A `ships.arrow` row is one AIS water cell: EMODnet 2024 uses 1 km ETRS89-LAEA cells;
+Global Fishing Watch uses 0.01° cells with latitude-dependent area. Activity is expressed in mean
+vessel-hours per month. Rows contain `centroid_gx/gy` (z30 grid), `area_m2`, `hours_large`,
+`hours_work`, `hours_leisure`, `source_id`; stamps `grid=z30`,
+`ships_contract=ships_v1`, `qm_blocks`. GFW window totals are converted to monthly
+averages and contain large/work classes only (`hours_leisure=0`). Cells below 0.5
+vessel-hours per month are not written (at most 76 dB(A) for large ships).
 
 Emission (`emission/ships.rs`): the mean ships present per class is `hours / 730.5`
 (365.25 · 24 / 12); the cell's A-weighted sound power is the energy sum of
@@ -221,10 +223,11 @@ around its centre, gridded at 250 m by the shared area discretizer (each sub-cel
 area share of the energy and a self-screening exclusion radius √(A/π)), propagated by the
 ISO 9613-2 / CNOSSOS-EU point kernel of buildings and industry (water reads IMD 100 → G = 0).
 Reach: the Lw-derived audibility radius capped at `SHIP_MAX_RADIUS_M` = 11 800 m, inside the
-painter's 11 872 m profile cadence; the popup reads rows whose centre lies within that cap
-plus the cell half diagonal (707 m). Popup contributors group the sub-cells by the cell's
-identity `(gx << 32) | gy`. A cell beyond the cap contributes nothing; water without an AIS
-density product (inner harbours and rivers until GFW, everything outside Europe) has no rows.
+painter's 11 872 m profile cadence; the popup reads cell centres within 12 507.2 m
+(the reach cap plus a fixed 707.2 m pad). Popup contributors group sub-cells by the cell's
+identity `(gx << 32) | gy`. A cell beyond the cap contributes nothing. EMODnet takes
+precedence where its raster samples a cell centre; GFW supplies other covered waters.
+Waters absent from both products have no rows.
 
 ## Open parking and emission-only grounds
 
