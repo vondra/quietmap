@@ -13,11 +13,11 @@ Traffic volumes, both 2024 editions:
 
 An OSM motorway, trunk, primary, secondary or tertiary road takes the nearest count within 200 m with a compatible road class. The heavy share is the published percentage; one fifth of it is assigned to medium trucks, an assumed split.
 
-Local streets outside Auckland have no counts loaded and use class defaults. Motorways, trunks and primaries without a count use the world default scaled by 1.051.
+Local streets outside Auckland have no counts loaded and use class defaults. Motorways, trunks and primaries without a count use the world estimate per lane ([world defaults](/about/methodology)).
 
 ## Railways
 
-No timetable is loaded. The GTFS feeds of Auckland Transport and Metlink Wellington are not yet integrated. All lines use class defaults: 80 passenger and 20 freight trains per day on a main line, 30 and 5 on a branch. A line with no usage tag in OSM counts as a main line.
+No timetable is loaded. The GTFS feeds of Auckland Transport and Metlink Wellington are not yet integrated. All lines use the [world railway defaults](/about/methodology). Lines without a usage tag use the [unclassified railway default](/about/methodology).
 
 ## Industry
 

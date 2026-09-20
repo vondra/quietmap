@@ -33,11 +33,11 @@ The vehicle mix is an estimate:
 
 Altiplano, valleys and lowlands are divided at 67° W and 65° W. The mining corridors are two boxes around Oruro, Potosí and Uyuni.
 
-Motorways, trunks and primaries not near a mapped main route use the world default scaled by 0.705. Secondary and smaller roads use world defaults.
+Motorways, trunks and primaries not near a mapped main route use the world estimate per lane. Secondary and smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 
-No timetable is loaded; neither the western nor the eastern network publishes a schedule. All lines use class defaults: 80 passenger and 20 freight trains per day on a main line, 30 and 5 on a branch.
+No timetable is loaded; neither the western nor the eastern network publishes a schedule. All lines use the [world railway defaults](/about/methodology).
 
 ## Industry
 

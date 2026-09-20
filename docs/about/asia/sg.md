@@ -1,6 +1,6 @@
 ---
 title: Singapore
-intro: Road traffic by OpenStreetMap class, main roads scaled by 1.292. The MRT is not included; the LRT loops use the light-rail default.
+intro: Roads use the world defaults. MRT and LRT surface sections use class defaults.
 map: { center: [103.85, 1.35], zoom: 11 }
 ---
 
@@ -8,21 +8,13 @@ map: { center: [103.85, 1.35], zoom: 11 }
 
 No per-road traffic counts are published. [data.gov.sg](https://data.gov.sg/) has one annual figure, vehicles entering the city; the LTA DataMall speed data needs an API key. Traffic is set by OpenStreetMap road class.
 
-Motorways, trunk and primary roads use the world default × 1.292, from 285 vehicles per kilometre of road (Wikipedia fleet and road-length lists; factor limited to 0.7–1.3).
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 38,760 |
-| Trunk | 19,380 |
-| Primary | 11,628 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 Local streets: traffic is derived from the buildings served; motorcycles 15% (Asia-wide value, calibrated on Thailand, India and Vietnam).
 
 ## Railways
 
-The MRT lines are tagged as subway in OpenStreetMap and are not included. The map mostly shows the LRT loops at Bukit Panjang, Sengkang and Punggol, at the class default of 80 trains per day. The LTA timetable needs a registered key and is not loaded.
+Mapped surface MRT and LRT sections use the [light-rail default](/about/methodology). The LTA timetable needs a registered key and is not loaded.
 
 ## Industry
 

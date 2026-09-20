@@ -1,19 +1,12 @@
 ---
 title: Serbia
-intro: Class defaults for roads (factor 0.920), railways and Belgrade trams.
+intro: Class defaults for roads, railways and Belgrade trams.
 map: { center: [20.9, 44.2], zoom: 7 }
 ---
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 0.920 (vehicles per kilometre of road).
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 27,600 |
-| Trunk | 13,800 |
-| Primary | 8,280 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

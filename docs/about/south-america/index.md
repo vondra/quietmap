@@ -10,7 +10,7 @@ Brazil, Bolivia, Ecuador, Paraguay and Venezuela publish their road network with
 
 In counted and estimated countries alike, traffic is doubled inside manually drawn boxes around the largest cities and multiplied by 1.4 in a second list of cities. The vehicle mix is a regional estimate almost everywhere.
 
-Railways: no timetable is loaded for any South American country. A main line defaults to 80 passenger and 20 freight trains per day. Metros tagged railway=subway are not included.
+Railways: no timetable is loaded for any South American country. A main line defaults to 80 passenger and 20 freight trains per day. Surface metro sections are included; see the [railway method](/about/methodology).
 
 Industry: Chile, Bolivia, Brazil and Venezuela have national power plant registers; Chile adds tailings dams and Peru mine outlines. Elsewhere power plants come from Global Energy Monitor.
 

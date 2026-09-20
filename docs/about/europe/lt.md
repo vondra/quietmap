@@ -1,19 +1,12 @@
 ---
 title: Lithuania
-intro: No traffic counts or timetable. Class defaults for roads (factor 0.739) and railways.
+intro: No traffic counts or timetable. Class defaults for roads and railways.
 map: { center: [23.9, 55.2], zoom: 7 }
 ---
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 0.739 (vehicles per kilometre of road).
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 22,170 |
-| Trunk | 11,085 |
-| Primary | 6,651 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

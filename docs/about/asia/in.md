@@ -23,7 +23,7 @@ The 8 largest cities are Delhi, Mumbai, Bangalore, Hyderabad, Chennai, Kolkata, 
 | 33 large cities | 50% | 9% | 10% | 31% |
 | Open country | 55% | 10% | 15% | 20% |
 
-None of these values is a count. Main roads with no network line nearby get the world default × 1.042: motorway 31,260, trunk 15,630, primary 9,378. On local streets motorcycles are 30% of traffic.
+None of these values is a count. Main roads with no network line nearby get the world estimate per lane ([world defaults](/about/methodology)). On local streets motorcycles are 30% of traffic.
 
 ## Railways
 
@@ -43,7 +43,7 @@ Other lines use the official railway network map on [Esri Living Atlas India](ht
 | Slower | 8 | 5 |
 | Metre and narrow gauge | 5 | 0 |
 
-Metro lines on the map get 400 trains per day. Lines tagged as subway in OpenStreetMap are not included.
+Metro lines on the map get 400 trains per day. Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

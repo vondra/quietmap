@@ -1,23 +1,12 @@
 ---
 title: Comoros
-intro: No traffic counts and no railway; main roads use world class defaults scaled ×0.915.
+intro: No traffic counts and no railway; roads use the world defaults.
 map: { center: [43.7, -11.8], zoom: 9 }
 ---
 
 ## Roads
 
-Traffic volumes: no national counts. World defaults by OpenStreetMap class; motorway, trunk and primary are scaled ×0.915, from 51.9 registered vehicles per kilometre of road (Wikipedia country lists). Vehicle mix: world default.
-
-Resulting volumes:
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 27,450 |
-| Trunk | 13,725 |
-| Primary | 8,235 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). Vehicle mix: world default.
 
 ## Railways
 

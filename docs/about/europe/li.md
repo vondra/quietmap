@@ -1,19 +1,12 @@
 ---
 title: Liechtenstein
-intro: Class defaults for roads (factor 0.898) and for the single Feldkirch to Buchs railway line.
+intro: Class defaults for roads and for the single Feldkirch to Buchs railway line.
 map: { center: [9.55, 47.16], zoom: 11 }
 ---
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 0.898 (vehicles per kilometre of road).
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 26,940 |
-| Trunk | 13,470 |
-| Primary | 8,082 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

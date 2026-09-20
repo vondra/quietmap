@@ -43,7 +43,7 @@ No Turkish timetable is loaded. Train counts are assigned per corridor:
 | Branches | 1 | 3 |
 | Industrial sidings | 0 | 5 |
 
-Tram track gets 350 trams per day in Istanbul and 250 elsewhere; light rail gets 500 and 400. Lines tagged as subway in OpenStreetMap are not included.
+Tram track gets 350 trams per day in Istanbul and 250 elsewhere; light rail gets 500 and 400. Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

@@ -20,11 +20,11 @@ No open traffic counts. The Department of Public Works and Highways publishes it
 | 19 cities | 45% | 8% | 7% | 40% |
 | Open country | 55% | 10% | 10% | 25% |
 
-None of these values is a count. Main roads with no DPWH section nearby get the world default × 1.295: motorway 38,850, trunk 19,425, primary 11,655.
+None of these values is a count. Main roads with no DPWH section nearby get the world estimate per lane ([world defaults](/about/methodology)).
 
 ## Railways
 
-No timetable is loaded. All lines use class defaults: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branches, 80 on light rail. This includes LRT-1, LRT-2 and MRT-3 in Manila where OpenStreetMap tags them as light rail.
+No timetable is loaded. All lines use the [world railway defaults](/about/methodology). This includes LRT-1, LRT-2 and MRT-3 in Manila where OpenStreetMap tags them as light rail.
 
 ## Industry
 

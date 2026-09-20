@@ -8,23 +8,15 @@ map: { center: [121.0, 23.7], zoom: 7 }
 
 The [Freeway Bureau](https://www.freeway.gov.tw/) publishes freeway traffic per section, but sections are named in text without coordinates, and the file is not joined to the map. Traffic is set by OpenStreetMap road class.
 
-Motorways, trunk and primary roads use the world default × 1.299, from 546 vehicles per kilometre of road (Wikipedia fleet and road-length lists; factor limited to 0.7–1.3).
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 38,970 |
-| Trunk | 19,485 |
-| Primary | 11,691 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 Local streets: traffic is derived from the buildings served; motorcycles 35%, set by hand because Taiwan has more registered scooters than cars and WHO has no profile for it.
 
 ## Railways
 
-No timetable is loaded; the [TDX](https://tdx.transportdata.tw/) data hub has feeds for every operator but needs a registered account. All lines use class defaults: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branches, 15 freight on industrial sidings, 120 on tram lines, 80 on light rail. The high-speed line gets the main-line default.
+No timetable is loaded; the [TDX](https://tdx.transportdata.tw/) data hub has feeds for every operator but needs a registered account. All lines use the [world railway defaults](/about/methodology). The high-speed line gets the main-line default.
 
-The Taipei and Kaohsiung metros are tagged as subway in OpenStreetMap and are not included.
+Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

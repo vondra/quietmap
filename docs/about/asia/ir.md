@@ -40,7 +40,7 @@ No open timetable. Counts are assigned for four corridors out of Tehran; all oth
 | Tehran to Tabriz | 5 | 8 |
 | Tehran to Bandar Abbas | 3 | 10 |
 
-Tram and light-rail track gets 350 trains per day in Tehran and 80 elsewhere. Lines tagged as subway in OpenStreetMap are not included, which covers most of the Tehran Metro.
+Tram and light-rail track gets 350 trains per day in Tehran and 80 elsewhere. Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

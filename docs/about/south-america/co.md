@@ -35,9 +35,9 @@ Secondary and smaller roads use world defaults.
 
 ## Railways
 
-No timetable is loaded; the Cerrejón and FENOCO coal railways publish no schedule. All lines use class defaults: 80 passenger and 20 freight trains per day on a main line, 30 and 5 on a branch, 15 freight trains on a line tagged industrial.
+No timetable is loaded; the Cerrejón and FENOCO coal railways publish no schedule. All lines use the [world railway defaults](/about/methodology).
 
-Metro de Medellín takes the light rail default of 80 trains per day where OSM tags it as light rail. Sections tagged railway=subway are not included.
+Metro de Medellín takes the light rail default of 80 trains per day where OSM tags it as light rail. Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

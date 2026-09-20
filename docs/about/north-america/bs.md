@@ -1,24 +1,12 @@
 ---
 title: The Bahamas
-intro: Roads use OSM class defaults scaled by 1.261. No railway. Power plants from Global Energy Monitor.
+intro: Roads use the world defaults. No railway. Power plants from Global Energy Monitor.
 map: { center: [-77.5, 24.6], zoom: 7 }
 ---
 
 ## Roads
 
-No open traffic counts; roads use OSM class defaults. Motorways, trunks, primaries and their ramps are scaled by 1.261 (registered vehicles per road kilometre relative to Germany).
-
-| OSM class | Default vehicles per day |
-|---|---:|
-| Motorway | 30,000 × 1.261 = 37,830 |
-| Trunk | 15,000 × 1.261 = 18,915 |
-| Primary | 9,000 × 1.261 = 11,349 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
-| Unclassified | 1,340 |
-| Service | 250 |
-| Track | 5 |
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 Where buildings are mapped, residential, living, service and unclassified streets are instead estimated from the buildings they serve.
 

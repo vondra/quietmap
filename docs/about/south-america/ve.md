@@ -29,11 +29,11 @@ Vehicle mix: 60% light, 5% medium, 10% heavy and 25% motorcycles in the four big
 
 The estimates describe the network as archived, not current traffic; no data on changes since is available.
 
-Motorways, trunks and primaries not in the archive use the world default scaled by 0.855. Secondary and smaller roads use world defaults.
+Motorways, trunks and primaries not in the archive use the world estimate per lane. Secondary and smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 
-No timetable is loaded. Lines use class defaults: 80 passenger and 20 freight trains per day on a main line, 30 and 5 on a branch. This applies to the Caracas to Cúa commuter line and the Ferrominera ore railway alike. The Caracas, Valencia and Maracaibo metros are tagged railway=subway and are not included.
+No timetable is loaded. Lines use the [world railway defaults](/about/methodology). This applies to the Caracas to Cúa commuter line and the Ferrominera ore railway alike. Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

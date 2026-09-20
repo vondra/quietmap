@@ -8,7 +8,7 @@ map: { center: [-8.0, 39.5], zoom: 7 }
 
 Lisbon: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
-Elsewhere class defaults apply, with motorway, trunk and primary scaled by 1.175 (vehicles per kilometre of road); the motorway default is 35,250 vehicles per day.
+Elsewhere motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

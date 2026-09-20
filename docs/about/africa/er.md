@@ -1,27 +1,16 @@
 ---
 title: Eritrea
-intro: World defaults for roads, scaled ×0.864 on main roads; the Asmara to Massawa tourist railway carries the world rail default.
+intro: World defaults for roads; the Asmara to Massawa tourist railway carries the world rail default.
 map: { center: [38.5, 15.5], zoom: 6 }
 ---
 
 ## Roads
 
-Traffic volumes: no national counts. World defaults by OpenStreetMap class; motorway, trunk and primary are scaled ×0.864, from 45.3 registered vehicles per kilometre of road (Wikipedia country lists). Vehicle mix: world default.
-
-Resulting volumes:
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 25,920 |
-| Trunk | 12,960 |
-| Primary | 7,776 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). Vehicle mix: world default.
 
 ## Railways
 
-Train counts: no timetable. World default on every OpenStreetMap track: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branches, 15 freight on industrial track. The Asmara to Massawa line runs only occasional tourist trains; rail noise along it is overstated.
+Train counts: no timetable. Mapped active railways use the [world railway defaults](/about/methodology). The Asmara to Massawa line runs only occasional tourist trains; rail noise along it is overstated.
 
 ## Industry
 

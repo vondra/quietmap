@@ -1,19 +1,12 @@
 ---
 title: Bosnia and Herzegovina
-intro: Class defaults for roads (factor 0.904) and railways. Power plants from the Global Energy Monitor tracker.
+intro: Class defaults for roads and railways. Power plants from the Global Energy Monitor tracker.
 map: { center: [17.8, 44.0], zoom: 8 }
 ---
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 0.904 (vehicles per kilometre of road).
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 27,120 |
-| Trunk | 13,560 |
-| Primary | 8,136 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 
