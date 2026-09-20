@@ -1,30 +1,18 @@
 ---
 title: Barbados
-intro: Roads use OSM class defaults scaled by 1.046. No operating railway. Power plants from Global Energy Monitor.
+intro: Roads use the world defaults. No operating railway. Power plants from Global Energy Monitor.
 map: { center: [-59.6, 13.2], zoom: 11 }
 ---
 
 ## Roads
 
-No open traffic counts; roads use OSM class defaults. Motorways, trunks, primaries and their ramps are scaled by 1.046 (registered vehicles per road kilometre relative to Germany).
-
-| OSM class | Default vehicles per day |
-|---|---:|
-| Motorway | 30,000 × 1.046 = 31,380 |
-| Trunk | 15,000 × 1.046 = 15,690 |
-| Primary | 9,000 × 1.046 = 9,414 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
-| Unclassified | 1,340 |
-| Service | 250 |
-| Track | 5 |
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 Where buildings are mapped, residential, living, service and unclassified streets are instead estimated from the buildings they serve.
 
 ## Railways
 
-No operating railway. Any stretch that OSM still maps as a working railway takes the class default of 80 passenger and 20 freight trains per day.
+No operating railway. Any stretch that OSM still maps as a working railway uses the [world railway defaults](/about/methodology).
 
 ## Industry
 

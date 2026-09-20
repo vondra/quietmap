@@ -6,22 +6,11 @@ map: { center: [-14.5, 14.5], zoom: 6 }
 
 ## Roads
 
-Traffic volumes: no national counts. World defaults by OpenStreetMap class; motorway, trunk and primary are scaled ×1.078, from 76.4 registered vehicles per kilometre of road (Wikipedia country lists). Vehicle mix: world default.
-
-Resulting volumes:
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 32,340 |
-| Trunk | 16,170 |
-| Primary | 9,702 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). Vehicle mix: world default.
 
 ## Railways
 
-Train counts: no timetable. World default on every OpenStreetMap track: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branches, 15 freight on industrial track. The default is plausible for the Dakar to Diamniadio commuter TER, apart from the freight, and far too high for the old Dakar to Bamako line, where passenger service ended in 2018.
+Train counts: no timetable. Mapped active railways use the [world railway defaults](/about/methodology). The default is plausible for the Dakar to Diamniadio commuter TER, apart from the freight, and far too high for the old Dakar to Bamako line, where passenger service ended in 2018.
 
 ## Industry
 

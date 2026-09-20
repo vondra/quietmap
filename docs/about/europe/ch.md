@@ -8,7 +8,7 @@ map: { center: [8.2, 46.8], zoom: 8 }
 
 Zurich and Geneva: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
-Elsewhere class defaults apply, with motorway, trunk and primary scaled by 0.997 (vehicles per kilometre of road); the motorway default is 29,910 vehicles per day. The federal ASTRA counting stations are not loaded yet.
+Elsewhere motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). The federal ASTRA counting stations are not loaded yet.
 
 ## Railways
 

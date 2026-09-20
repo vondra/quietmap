@@ -8,6 +8,8 @@ nav: hidden
 
 - **Ships.** New worldwide layer for ship noise at sea, in ports and on inland waterways, derived from AIS vessel-density data (EMODnet 2024, Global Fishing Watch). Examples, ships only: Singapore Marina 62.5 dB, Rotterdam Waalhaven 58.0 dB, Rhine at Duisburg 48.5 dB.
 - **Railways.** Train counts recomputed worldwide from current timetables. Unmatched daily departures fell from 1,417 to 89 of 14,925 in France and from 8,419 to 194 of 43,572 in Germany. Paris Transilien added.
+- **Road estimates.** Uncounted main roads use defaults by lane count and direction; generic country multipliers are removed.
+- **Metro and parking.** Surface metro sections are included. Open car parks emit noise without screening it; underground building footprints do not create above-ground walls.
 - **New world build.** All layers rebuilt from a current OpenStreetMap planet extract; flight data covers 2 September 2025 – 1 September 2026.
 
 ## Summer 2026
@@ -21,9 +23,7 @@ nav: hidden
 
 ## In progress
 
-- Worldwide repaint of the map with all nine layers.
 - Allocation of trains across parallel tracks.
 - Freight train volumes.
-- Metro lines.
 
-*Last updated 18 September 2026.*
+*Last updated 20 September 2026.*

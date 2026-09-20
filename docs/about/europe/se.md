@@ -8,7 +8,7 @@ map: { center: [15.5, 62.0], zoom: 5 }
 
 Stockholm and Malmö: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
-Elsewhere class defaults apply, with motorway, trunk and primary scaled by 0.829 (vehicles per kilometre of road); the motorway default is 24,870 vehicles per day. Trafikverket has counts for every state road; the download requires registration and is not loaded.
+Elsewhere motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). Trafikverket has counts for every state road; the download requires registration and is not loaded.
 
 ## Railways
 

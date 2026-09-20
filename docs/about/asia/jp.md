@@ -16,9 +16,9 @@ Large vehicles are split 25% medium and 75% heavy, as the census gives no axle s
 
 ## Railways
 
-No Japanese timetable is loaded; the [ODPT](https://developer.odpt.org/) feeds for Tokyo need a registered key. All lines, the Shinkansen included, use class defaults: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branches, 15 freight on industrial sidings, 120 on tram lines, 80 on light rail.
+No Japanese timetable is loaded; the [ODPT](https://developer.odpt.org/) feeds for Tokyo need a registered key. All lines, the Shinkansen included, use the [world railway defaults](/about/methodology).
 
-Lines tagged as subway in OpenStreetMap are not included. Tokyo Metro, Toei and the Osaka Metro are missing, including their above-ground sections.
+Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

@@ -1,23 +1,12 @@
 ---
 title: Libya
-intro: Main roads use world defaults scaled ×1.160; no working railway; ship traffic from EMODnet and Global Fishing Watch.
+intro: Roads use the world defaults; no working railway; ship traffic from EMODnet and Global Fishing Watch.
 map: { center: [17, 27], zoom: 5 }
 ---
 
 ## Roads
 
-Traffic volumes: no national counts. World defaults by OpenStreetMap class; motorway, trunk and primary are scaled ×1.160, from 95.9 registered vehicles per kilometre of road (Wikipedia country lists). Vehicle mix: world default.
-
-Resulting volumes:
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 34,800 |
-| Trunk | 17,400 |
-| Primary | 10,440 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). Vehicle mix: world default.
 
 ## Railways
 

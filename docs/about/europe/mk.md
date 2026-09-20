@@ -1,19 +1,12 @@
 ---
 title: North Macedonia
-intro: No counts or timetable loaded. Roads (factor 0.902) and railways use class defaults.
+intro: No counts or timetable loaded. Roads and railways use class defaults.
 map: { center: [21.7, 41.5], zoom: 8 }
 ---
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 0.902 (vehicles per kilometre of road).
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 27,060 |
-| Trunk | 13,530 |
-| Primary | 8,118 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

@@ -1,6 +1,6 @@
 ---
 title: Uzbekistan
-intro: Road traffic assigned by road class and city; train counts assigned per corridor. The Tashkent Metro is not included.
+intro: Road traffic assigned by road class and city; train counts assigned per corridor.
 map: { center: [64, 41.5], zoom: 5 }
 ---
 
@@ -35,7 +35,7 @@ No open timetable. Train counts are assigned per corridor:
 | Branches | 2 | 5 |
 | Industrial sidings | 0 | 6 |
 
-Tram and light-rail track gets 200 trains per day. Lines tagged as subway in OpenStreetMap are not included, which covers the Tashkent Metro.
+Tram and light-rail track gets 200 trains per day. Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

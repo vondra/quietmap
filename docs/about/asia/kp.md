@@ -1,27 +1,18 @@
 ---
 title: North Korea
-intro: No public traffic or timetable data; class defaults throughout. The Pyongyang Metro is not included.
+intro: No public traffic or timetable data; class defaults throughout.
 map: { center: [127.0, 40.0], zoom: 6 }
 ---
 
 ## Roads
 
-No open traffic counts. Motorways, trunk and primary roads use the world default × 0.835, from 41 vehicles per kilometre of road (Wikipedia fleet and road-length lists; factor limited to 0.7–1.3).
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 25,050 |
-| Trunk | 12,525 |
-| Primary | 7,515 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 Local streets: traffic is derived from the buildings served; motorcycles 15% (Asia-wide value, calibrated on Thailand, India and Vietnam).
 
 ## Railways
 
-No public timetable. All lines use class defaults: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branches, 15 freight on industrial sidings. The Pyongyang Metro is tagged as subway in OpenStreetMap and is not included.
+No public timetable. All lines use the [world railway defaults](/about/methodology). Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

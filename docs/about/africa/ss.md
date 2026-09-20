@@ -1,23 +1,12 @@
 ---
 title: South Sudan
-intro: No traffic counts and no working railway; main roads use world defaults scaled ×0.717 from population density.
+intro: No traffic counts and no working railway; roads use the world defaults.
 map: { center: [31, 7], zoom: 5 }
 ---
 
 ## Roads
 
-Traffic volumes: no national counts. World defaults by OpenStreetMap class; motorway, trunk and primary are scaled ×0.717. Vehicle and road-length figures are unavailable, so the factor is derived from population density (17.4 people per km², World Bank 2022). Vehicle mix: world default.
-
-Resulting volumes:
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 21,510 |
-| Trunk | 10,755 |
-| Primary | 6,453 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). Vehicle mix: world default.
 
 ## Railways
 

@@ -1,27 +1,18 @@
 ---
 title: Cambodia
-intro: Road traffic by OpenStreetMap class, main roads scaled by 0.763. Both railway lines use class defaults.
+intro: Roads use the world defaults. Both railway lines use class defaults.
 map: { center: [105, 12.5], zoom: 7 }
 ---
 
 ## Roads
 
-No open traffic counts. Motorways, trunk and primary roads use the world default × 0.763, from 30 vehicles per kilometre of road (Wikipedia fleet and road-length lists; factor limited to 0.7–1.3).
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 22,890 |
-| Trunk | 11,445 |
-| Primary | 6,867 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 Local streets: traffic is derived from the buildings served; motorcycles 30%, a value taken from Vietnam and Thailand because the WHO profile for Cambodia has no usable breakdown.
 
 ## Railways
 
-Royal Railway publishes no timetable feed. Both lines out of Phnom Penh use class defaults: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branches, 15 freight on industrial sidings.
+Royal Railway publishes no timetable feed. Both lines out of Phnom Penh use the [world railway defaults](/about/methodology).
 
 ## Industry
 

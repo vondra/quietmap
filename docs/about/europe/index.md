@@ -9,7 +9,7 @@ map: { center: [15, 50], zoom: 4 }
 - National traffic census (motorways and main roads, rarely city streets): Czechia, Denmark, Finland, France, Germany, Great Britain, Ireland, Italy, Norway, Poland, Spain.
 - City streets: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities), 36 cities from Lisbon to Helsinki. Prague, Brno and Vienna also have their own city counts.
 
-All other roads use the class default, in vehicles per day: motorway 30,000, trunk 15,000, primary 9,000, secondary 3,000, tertiary 800, residential 500. The first three are scaled by a country factor between 0.7 and 1.3, derived from vehicles per kilometre of road (Austria 0.832, Albania 1.284). Country pages list the factor and the result.
+Other roads use the [world defaults](/about/methodology).
 
 ## Railways
 

@@ -1,6 +1,6 @@
 ---
 title: Algeria
-intro: Country-specific road and rail estimates, with separate vehicle mixes for the oil and gas road and the East-West motorway; the Algiers Metro is not modelled.
+intro: Country-specific road and rail estimates, with separate vehicle mixes for the oil and gas road and the East-West motorway.
 map: { center: [3, 28], zoom: 5 }
 ---
 
@@ -45,7 +45,7 @@ Train counts: no timetable. Per-line estimates based on services reported by SNT
 | Branch lines | 1 | 3 |
 | Any other line | 4 | 6 |
 
-The Algiers Metro is absent: subway lines are not read from OpenStreetMap.
+Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

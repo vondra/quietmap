@@ -8,7 +8,7 @@ map: { center: [5.3, 52.2], zoom: 7 }
 
 Amsterdam: the 2025 Amsterdam file of the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
-Elsewhere class defaults apply, with motorway, trunk and primary scaled by 1.048 (vehicles per kilometre of road); the motorway default is 31,440 vehicles per day. The national NDW counts require registration and are not loaded.
+Elsewhere motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). The national NDW counts require registration and are not loaded.
 
 ## Railways
 

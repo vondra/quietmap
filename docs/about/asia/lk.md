@@ -6,22 +6,13 @@ map: { center: [80.7, 7.8], zoom: 7 }
 
 ## Roads
 
-No open traffic counts. Motorways, trunk and primary roads use the world default × 1.298, from 492 vehicles per kilometre of road (Wikipedia fleet and road-length lists; factor limited to 0.7–1.3).
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 38,940 |
-| Trunk | 19,470 |
-| Primary | 11,682 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 Local streets: traffic is derived from the buildings served; motorcycles 29%, from 0.4 × the two-wheeler share of registered vehicles (WHO 2023 country profile, 2021 fleet).
 
 ## Railways
 
-Sri Lanka Railways publishes no timetable feed. All lines use class defaults: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branches, 15 freight on industrial sidings.
+Sri Lanka Railways publishes no timetable feed. All lines use the [world railway defaults](/about/methodology).
 
 ## Industry
 

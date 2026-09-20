@@ -39,9 +39,9 @@ Secondary and smaller roads use world defaults.
 
 ## Railways
 
-No timetable is loaded; PeruRail and the Southern Peru copper railway publish no loadable schedule. All lines use class defaults: 80 passenger and 20 freight trains per day on a main line, 30 and 5 on a branch, 10 trains on narrow gauge.
+No timetable is loaded; PeruRail and the Southern Peru copper railway publish no loadable schedule. All lines use the [world railway defaults](/about/methodology).
 
-Lima Metro Line 1 takes the light rail default of 80 trains per day where OSM tags it as light rail. Sections tagged railway=subway are not included.
+Lima Metro Line 1 takes the light rail default of 80 trains per day where OSM tags it as light rail. Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

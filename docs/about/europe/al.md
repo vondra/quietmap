@@ -1,19 +1,12 @@
 ---
 title: Albania
-intro: No traffic counts or timetable. Class defaults for roads (factor 1.284) and railways.
+intro: No traffic counts or timetable. Class defaults for roads and railways.
 map: { center: [20.0, 41.0], zoom: 8 }
 ---
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 1.284 (vehicles per kilometre of road).
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 38,520 |
-| Trunk | 19,260 |
-| Primary | 11,556 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

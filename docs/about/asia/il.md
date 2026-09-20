@@ -1,6 +1,6 @@
 ---
 title: Israel
-intro: Train counts from the Ministry of Transport national timetable, passenger only. Road traffic by OpenStreetMap class, main roads scaled by 1.278.
+intro: Train counts from the Ministry of Transport national timetable, passenger only. Roads use the world defaults.
 map: { center: [35.0, 31.5], zoom: 7 }
 ---
 
@@ -8,15 +8,7 @@ map: { center: [35.0, 31.5], zoom: 7 }
 
 No usable per-road traffic counts. The national road company's site blocks automated access, and the open survey file on data.gov.il contains only scattered 15-minute counts. Traffic is set by OpenStreetMap road class.
 
-Motorways, trunk and primary roads use the world default × 1.278, from 196 vehicles per kilometre of road (Wikipedia fleet and road-length lists; factor limited to 0.7–1.3).
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 38,340 |
-| Trunk | 19,170 |
-| Primary | 11,502 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 Local streets: traffic is derived from the buildings served; motorcycles 2%, from 0.4 × the two-wheeler share of registered vehicles (WHO 2023 country profile, 2021 fleet).
 

@@ -8,7 +8,7 @@ map: { center: [-95.0, 60.0], zoom: 3 }
 
 Traffic volumes, Quebec only: [Ministère des Transports](https://www.donneesquebec.ca/recherche/dataset/debit-de-circulation) DJMA (annual average daily traffic) for the provincial highway network, 2024 edition, with a published truck percentage per section. An OSM road takes the nearest counted section of the same route number and a similar road class. Motorcycles are 1% of vehicles.
 
-Canada has no national traffic database, and the Ontario, British Columbia and Alberta publications are not loaded. Roads outside Quebec use class defaults; motorways, trunks and primaries use the world default scaled by 0.999.
+Canada has no national traffic database, and the Ontario, British Columbia and Alberta publications are not loaded. Roads outside Quebec use the [world defaults](/about/methodology).
 
 ## Railways
 
@@ -25,9 +25,9 @@ Passenger trains come from eight timetables.
 | Calgary Transit | CTrain | [data.calgary.ca](https://data.calgary.ca/) |
 | Edmonton ETS | LRT | [gtfs.edmonton.ca](https://gtfs.edmonton.ca/) |
 
-Lines tagged railway=subway are not included, so the Montreal metro feed currently has no effect on the map.
+Surface metro sections are included; see the [railway method](/about/methodology).
 
-Freight is not covered: CN and CPKC publish no schedules. Their lines default to 20 freight trains per day on a main line and 5 on a branch. A line with no usage tag in OSM counts as a main line.
+Freight is not covered: CN and CPKC publish no schedules. Their lines default to 20 freight trains per day on a main line and 5 on a branch. Lines without a usage tag use the [unclassified railway default](/about/methodology).
 
 ## Industry
 

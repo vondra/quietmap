@@ -10,11 +10,11 @@ Traffic volumes: Datos Viales 2025, the annual counts of SICT and the Instituto 
 
 An OSM motorway, trunk, primary or secondary road takes the nearest counted section within 200 m with a compatible road type: a federal toll road matches a motorway or trunk, a free federal road a trunk or primary, a state road a primary or secondary. Roads outside Mexico never match.
 
-Local roads are not in the dataset and use world defaults. Motorways, trunks and primaries without a count use the world default scaled by 1.286.
+Local roads are not in the dataset and use world defaults. Motorways, trunks and primaries without a count use the world estimate per lane ([world defaults](/about/methodology)).
 
 ## Railways
 
-Mexico City: [SEMOVI unified GTFS](https://datos.cdmx.gob.mx/dataset/gtfs), covering Tren Ligero and Tren Suburbano. Headway-based entries are expanded into daily train counts. Lines tagged railway=subway, including the Metro, are not included.
+Mexico City: [SEMOVI unified GTFS](https://datos.cdmx.gob.mx/dataset/gtfs), covering Tren Ligero and Tren Suburbano. Headway-based entries are expanded into daily train counts. Surface metro sections are included; see the [railway method](/about/methodology).
 
 No timetable is loaded for the Guadalajara and Monterrey light rail or for Tren Maya, and freight railways publish no schedules. These lines use class defaults.
 

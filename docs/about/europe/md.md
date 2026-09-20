@@ -1,19 +1,12 @@
 ---
 title: Moldova
-intro: Class defaults for roads (factor 1.201) and railways. No counts or timetable loaded.
+intro: Class defaults for roads and railways. No counts or timetable loaded.
 map: { center: [28.8, 47.0], zoom: 8 }
 ---
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 1.201 (vehicles per kilometre of road).
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 36,030 |
-| Trunk | 18,015 |
-| Primary | 10,809 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

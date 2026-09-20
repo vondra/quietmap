@@ -1,19 +1,12 @@
 ---
 title: San Marino
-intro: Road class defaults scaled by 1.274. No railway. Power plants from the Global Energy Monitor tracker.
+intro: Roads use the world defaults. No railway. Power plants from the Global Energy Monitor tracker.
 map: { center: [12.46, 43.94], zoom: 12 }
 ---
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 1.274 (vehicles per kilometre of road).
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 38,220 |
-| Trunk | 19,110 |
-| Primary | 11,466 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

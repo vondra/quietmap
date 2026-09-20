@@ -18,7 +18,7 @@ The 12 largest cities are Beijing, Shanghai, Guangzhou, Shenzhen, Chengdu, Chong
 
 Vehicle split in cities: 75% cars, 10% medium, 10% heavy, 5% motorcycles. Outside cities: 65, 12, 18 and 5%. The motorcycle share is low because most large cities ban petrol motorcycles and electric scooters make almost no engine noise.
 
-None of these values is a count. Main roads with no network line nearby get the world default × 1.017: motorway 30,510, trunk 15,255, primary 9,153.
+None of these values is a count. Main roads with no network line nearby get the world estimate per lane ([world defaults](/about/methodology)).
 
 ## Railways
 
@@ -36,7 +36,7 @@ No operator publishes a timetable. A community map of the mainland network on [A
 
 Metro lines get 500 trains per day, express metro 400, light rail 300, streetcars 200, assigned by line type.
 
-Metro lines tagged as ordinary rail in OpenStreetMap are on the map. Lines tagged as subway are not included.
+Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

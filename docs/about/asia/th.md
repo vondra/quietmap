@@ -41,7 +41,7 @@ Vehicle split on roads with assigned values: 62% cars, 10% medium, 13% heavy, 15
 
 Train counts come from the national [Namtang timetable](https://namtang-api.otp.go.th/download/namtang-gtfs.zip) of the Office of Transport and Traffic Policy and Planning, busiest Wednesday. It covers the State Railway, the BTS Skytrain and the Airport Rail Link; freight is not included.
 
-The Bangkok MRT lines are tagged as subway in OpenStreetMap and are not included.
+Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 
