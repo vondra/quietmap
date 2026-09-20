@@ -78,7 +78,7 @@ export default function LayersPanel({ open, onClose, ...body }: LayersPanelProps
         <div className="w-10 h-1 bg-muted-foreground/30 rounded-full" />
       </div>
 
-      <div className="max-h-[60vh] overflow-y-auto px-4 pb-3">
+      <div className="max-h-[60vh] overflow-y-auto px-4 pb-3 [scrollbar-gutter:stable] scroll-py-1.5">
         <LayerControlsBody {...body} dividerSpacing="comfortable" />
       </div>
     </div>

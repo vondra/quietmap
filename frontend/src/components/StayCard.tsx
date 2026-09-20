@@ -2,31 +2,32 @@
 import { useEffect, useState } from 'react'
 import { X, Star } from 'lucide-react'
 import { ldenToColor } from '../utils/noise-colors'
-import { sampleTotalLdenAt } from '../lib/hm3-sample'
-import { useTileBuild } from '../lib/tile-urls'
+import { fetchExactNoiseAt, outdoorLden } from '../lib/fetch-noise-detail'
 import type { Stay } from './StayLayer'
 import { formatPerNight } from '../lib/stay-price-pills'
 
 interface StayCardProps {
   stay: Stay
+  noise: number | null | undefined
   onClose: () => void
 }
 
-export default function StayCard({ stay: s, onClose }: StayCardProps) {
-  const build = useTileBuild()
-  // The pin's colour follows the map's zoom; the card states the exact
-  // base-zoom value of this one point (one tile — cached at street zoom,
-  // one fetch from further out), so the number never depends on how far
-  // out the pin was clicked.
-  const [noise, setNoise] = useState<number | null>(null)
+/** One request shared by the desktop and mobile cards, which are both mounted. */
+export function useStayOutdoorNoise(stay: Stay | null): number | null | undefined {
+  const [result, setResult] = useState<{ stay: Stay; noise: number | null } | null>(null)
   useEffect(() => {
-    setNoise(null)
-    if (!build) return
-    let cancelled = false
-    void sampleTotalLdenAt(build, build.zoom, [s]).then(([db]) => { if (!cancelled) setNoise(db) })
-    return () => { cancelled = true }
-  }, [s, build])
+    if (!stay) return
+    const controller = new AbortController()
+    const finish = (noise: number | null) => {
+      if (!controller.signal.aborted) setResult({ stay, noise })
+    }
+    void fetchExactNoiseAt(stay, controller.signal).then(data => finish(outdoorLden(data)), () => finish(null))
+    return () => controller.abort()
+  }, [stay])
+  return result?.stay === stay ? result.noise : undefined
+}
 
+export default function StayCard({ stay: s, noise, onClose }: StayCardProps) {
   return (
     <div className="p-3">
       <div className="flex justify-between items-start mb-2">
@@ -65,17 +66,19 @@ export default function StayCard({ stay: s, onClose }: StayCardProps) {
         )}
       </div>
 
-      {noise != null && (
-        <div className="flex items-center gap-1.5 mb-2">
+      <div className="flex items-center gap-1.5 mb-2" role="status">
+        {noise != null && (
           <span
             className="inline-block w-2.5 h-2.5 rounded-full"
             style={{ backgroundColor: ldenToColor(noise) }}
           />
-          <span className="text-xs text-muted-foreground">
-            Noise: <strong className="text-foreground">{noise.toFixed(1)} dB</strong>
-          </span>
-        </div>
-      )}
+        )}
+        <span className="text-xs text-muted-foreground">
+          Outdoor noise: {noise === undefined ? 'Calculating…' : noise === null ? 'Unavailable' : (
+            <strong className="text-foreground">{noise.toFixed(1)} dB L<sub>den</sub></strong>
+          )}
+        </span>
+      </div>
 
       <a
         href={s.url}

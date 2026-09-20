@@ -9,7 +9,7 @@ import LayersPanel from './components/LayersPanel'
 import MobileDetailSheet from './components/MobileDetailSheet'
 import BasemapBar from './components/BasemapBar'
 import PropertyCard from './components/PropertyCard'
-import StayCard from './components/StayCard'
+import StayCard, { useStayOutdoorNoise } from './components/StayCard'
 import FloatingCard from './components/FloatingCard'
 import ValidationCard, { ValidationStatusCard } from './components/ValidationCard'
 import { useUrlState, EMPTY_RASTER_OVERLAYS, QUIET_THRESHOLD_DEFAULT, type UrlState } from './hooks/useUrlState'
@@ -137,6 +137,7 @@ function MapApp() {
   }))
   const stayFiltersRef = useRef(stayFilters)
   const [selectedStay, setSelectedStay] = useState<Stay | null>(null)
+  const stayOutdoorNoise = useStayOutdoorNoise(selectedStay)
   // Mobile locate box lives in the BasemapBar row (one container = one
   // baseline); it fires the map's GeolocateControl through this ref.
   const geolocateTrigger = useRef<() => void>(() => {})
@@ -451,6 +452,7 @@ function MapApp() {
               <FloatingCard>
                 <StayCard
                   stay={selectedStay}
+                  noise={stayOutdoorNoise}
                   onClose={() => setSelectedStay(null)}
                 />
               </FloatingCard>
@@ -562,6 +564,7 @@ function MapApp() {
           <div className="bg-background rounded-t-xl shadow-2xl">
             <StayCard
               stay={selectedStay}
+              noise={stayOutdoorNoise}
               onClose={() => setSelectedStay(null)}
             />
           </div>

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { fetchNoiseDetail } from '../src/lib/fetch-noise-detail.ts'
+import { fetchNoiseDetail, fetchExactNoiseAt, outdoorLden } from '../src/lib/fetch-noise-detail.ts'
 
 const position = { lat: 50, lng: 14 }
 const preview = { status: 'provisional', receiver: 'outdoor', accuracy: 'unmeasured', center: [50, 14], layers: [] }
@@ -75,4 +75,30 @@ test('a new click invalidates old data, preview and error before the effect has 
     assert.deepEqual(run.events, [])
     t.mock.restoreAll()
   }
+})
+
+test('accommodation outdoor levels never substitute indoor or incomplete estimates', () => {
+  for (const [data, expected] of [
+    [{ total_lden: 25, facade_lden: 60, envelope_class: 'commercial', envelope_delta_db: 35 }, 60],
+    [{ total_lden: 45 }, 45],
+    [{ total_lden: 0 }, 0],
+    [{ total_lden: 0, facade_lden: 18, envelope_delta_db: 35 }, 18],
+    [{ total_lden: 25, envelope_class: 'commercial' }, null],
+    [{ total_lden: 25, facade_lden: null, envelope_delta_db: 35 }, null],
+    [{ total_lden: 45, unavailable_layers: ['aircraft'] }, null],
+    [{ total_lden: null }, null],
+    [{ total_lden: Infinity }, null],
+    [null, null],
+  ]) assert.equal(outdoorLden(data), expected, JSON.stringify(data))
+})
+
+test('an exact accommodation request uses only the canonical popup endpoint and cancellation signal', async t => {
+  const controller = new AbortController()
+  const calls = []
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({ url, signal: options.signal })
+    return new Response(JSON.stringify(exact))
+  })
+  assert.deepEqual(await fetchExactNoiseAt(position, controller.signal), exact)
+  assert.deepEqual(calls, [{ url: '/api/noise-onfly-v2?lat=50&lng=14', signal: controller.signal }])
 })

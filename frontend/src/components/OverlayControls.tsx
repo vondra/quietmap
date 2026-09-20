@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { TreePine, BedDouble } from 'lucide-react'
 import type { RealEstateFilters } from './RealEstateLayer'
 import type { StayFilters } from './StayLayer'
@@ -145,7 +145,7 @@ function StayFilterBlock({ filters, onChange }: { filters: StayFilters; onChange
   }
   const stepBtn = 'flex size-5 items-center justify-center rounded-md border border-border bg-background text-foreground cursor-pointer hover:bg-black/5 disabled:opacity-40 disabled:cursor-default'
   return (
-    <div className="ml-7 mt-1 mb-1.5 grid grid-cols-[34px_1fr] items-center gap-x-2 gap-y-1.5 text-[11px]">
+    <div className="ml-7 mt-1 mb-1.5 grid grid-cols-[34px_minmax(0,1fr)] items-center gap-x-2 gap-y-1.5 text-[11px]">
       <span className="col-span-2 flex gap-1.5">
         <CheckChip
           checked={filters.hotels}
@@ -207,6 +207,11 @@ export default function OverlayControls({
   quietThreshold, onQuietThresholdChange,
   stayFilters, onStayChange,
 }: OverlayControlsProps) {
+  const staySection = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    if (stayFilters.enabled) staySection.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [stayFilters.enabled])
+
   return (
     <div>
       <ToggleRow
@@ -220,14 +225,16 @@ export default function OverlayControls({
         <NoiseSlider value={quietThreshold} onChange={onQuietThresholdChange} min={QUIET_THRESHOLD_MIN} max={QUIET_THRESHOLD_MAX} step={QUIET_THRESHOLD_STEP} testId="quiet-threshold" />
       )}
 
-      <ToggleRow
-        active={stayFilters.enabled}
-        icon={<BedDouble className="size-4" />}
-        label="Places to stay"
-        tooltip="Bookable hotels and apartments with live prices and noise levels"
-        onClick={() => onStayChange({ ...stayFilters, enabled: !stayFilters.enabled })}
-      />
-      {stayFilters.enabled && <StayFilterBlock filters={stayFilters} onChange={onStayChange} />}
+      <div ref={staySection}>
+        <ToggleRow
+          active={stayFilters.enabled}
+          icon={<BedDouble className="size-4" />}
+          label="Places to stay"
+          tooltip="Bookable hotels and apartments with live prices and noise levels"
+          onClick={() => onStayChange({ ...stayFilters, enabled: !stayFilters.enabled })}
+        />
+        {stayFilters.enabled && <StayFilterBlock filters={stayFilters} onChange={onStayChange} />}
+      </div>
 
       {/* Properties (real estate) HIDDEN before launch (owner 2026-07-15): the data
           pipeline isn't ready and a dead toggle would confuse visitors. The layer,

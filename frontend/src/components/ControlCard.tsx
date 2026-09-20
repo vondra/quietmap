@@ -23,11 +23,11 @@ export default function ControlCard(props: ControlCardProps) {
   }
 
   return (
-    <FloatingCard className="p-2.5 pointer-events-auto min-h-0 flex flex-col">
+    <FloatingCard className="py-2.5 pointer-events-auto min-h-0 flex flex-col">
       <button
         onClick={() => setCollapsed(true)}
         title="Hide layers"
-        className="flex items-center justify-between w-full px-1 py-0.5 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground"
+        className="flex items-center justify-between shrink-0 mx-2.5 px-1 py-0.5 rounded hover:bg-black/5 text-muted-foreground hover:text-foreground"
       >
         <span className="text-[11px] font-medium uppercase tracking-[0.08em]">Layers</span>
         <ChevronUp className="size-3.5" />
@@ -35,7 +35,7 @@ export default function ControlCard(props: ControlCardProps) {
 
       {/* Only the body scrolls, so the collapse header stays reachable when
           the column squeezes the card (short viewports). */}
-      <div className="min-h-0 overflow-y-auto">
+      <div className="min-h-0 overflow-y-auto px-2.5 [scrollbar-gutter:stable] scroll-py-1.5">
         <LayerControlsBody {...props} dividerSpacing="compact" />
       </div>
     </FloatingCard>

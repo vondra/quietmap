@@ -3,9 +3,6 @@ import { MapboxOverlay } from '@deck.gl/mapbox'
 import { ScatterplotLayer, TextLayer } from '@deck.gl/layers'
 import { useMap } from 'react-map-gl/maplibre'
 import { attachPinTapGuard } from '../lib/property-click-guard'
-import { paletteRgb } from '../lib/heatmap-palette'
-import { displayedTileZoom, sampleTotalLdenAt } from '../lib/hm3-sample'
-import { useTileBuild } from '../lib/tile-urls'
 import { declutterPills, formatPerNight, pillBox } from '../lib/stay-price-pills'
 
 export interface StayFilters {
@@ -35,10 +32,6 @@ export interface Stay {
   url: string
   /** Nights the quoted price covers (picked dates, else the server default). */
   nights: number
-  /** Total Lden of the heatmap cell under the pin at the zoom it was last
-   *  seen at (the pin's colour; exact at street zoom); null where nothing
-   *  is computed. The card samples the exact value itself. */
-  noise: number | null
 }
 
 interface StayLayerProps {
@@ -56,10 +49,10 @@ const MIN_ZOOM = 7
 // zoomed-out views don't churn buckets; every tier is a multiple of the
 // server's snap step (see server/src/routes/stay.ts).
 const gridFor = (rawSpan: number) => (rawSpan < 0.03 ? 0.01 : rawSpan < 3 ? 0.05 : 0.5)
-const NO_NOISE_GREY: [number, number, number] = [148, 163, 184]
+const STAY_PIN_GREY: [number, number, number] = [148, 163, 184]
 
 type StayResponse = {
-  listings: Omit<Stay, 'noise' | 'nights'>[]
+  listings: Omit<Stay, 'nights'>[]
   meta: { nights: number; partial?: boolean }
 }
 
@@ -80,11 +73,9 @@ const POOL_MAX = 1200
 const pool = new Map<string, Stay>()
 function mergeIntoPool(incoming: Stay[]): Stay[] {
   for (const s of incoming) {
-    // Re-insert so a refreshed pin is newest for eviction; a refresh carries
-    // no dB yet, so the pin keeps its last sample until it is in view again.
-    const previous = pool.get(s.id)
+    // Re-insert so a refreshed pin is newest for eviction.
     pool.delete(s.id)
-    pool.set(s.id, previous ? { ...s, noise: previous.noise } : s)
+    pool.set(s.id, s)
   }
   while (pool.size > POOL_MAX) pool.delete(pool.keys().next().value!)
   return [...pool.values()]
@@ -106,7 +97,7 @@ function loadListings(url: string): Promise<Stay[]> {
       if (!res.ok) throw new Error(`stay ${res.status}`)
       const data: StayResponse = await res.json()
       partial.v = data.meta.partial === true
-      return data.listings.map((l): Stay => ({ ...l, noise: null, nights: data.meta.nights }))
+      return data.listings.map((l): Stay => ({ ...l, nights: data.meta.nights }))
     })()
     entry = { at: Date.now(), promise }
     fetchCache.delete(url) // re-insert so a refreshed bucket is newest for eviction
@@ -123,18 +114,10 @@ function loadListings(url: string): Promise<Stay[]> {
   return entry.promise
 }
 
-/**
- * Bookable stays (hotels + vacation rentals via Stay22) as price pills over
- * dB-coloured dots. Stamps the shared click guard so the noise popup skips
- * pin clicks. Unlike the static CZ property set this is a live worldwide
- * feed — listings are fetched per viewport bucket, and each pin in view is
- * coloured by the total Lden of the `total` heatmap cell at the zoom the
- * map paints (the cell under the painted pixel when every layer is on — the
- * pixel itself blends neighbouring cells; no server round-trip per pin).
- */
+/** Live bookable stays as price pills. Neutral pins avoid presenting indoor
+ *  heatmap cells as outdoor accommodation noise; the card queries that level. */
 export default function StayLayer({ filters, onStaySelect }: StayLayerProps) {
   const { current: mapRef } = useMap()
-  const build = useTileBuild()
   const [overlay, setOverlay] = useState<MapboxOverlay | null>(null)
   const [stays, setStays] = useState<Stay[]>([])
   const [view, setView] = useState<{ w: number; s: number; e: number; n: number; z: number } | null>(null)
@@ -191,10 +174,7 @@ export default function StayLayer({ filters, onStaySelect }: StayLayerProps) {
     })
   }, [mapRef, filters.enabled, stays])
 
-  // Per moveend, two independent passes: the retained pins in view are
-  // re-coloured at the new zoom while the viewport bucket loads; its pins
-  // are published at once and coloured too. Neither a slow tile nor a slow
-  // or failed refresh delays the other.
+  // Refresh viewport listings while retaining previously seen offers.
   useEffect(() => {
     if (!filters.enabled || !view || view.z < MIN_ZOOM) { setStays([]); return }
     if (appliedTypeRef.current !== filterKey) {
@@ -222,35 +202,16 @@ export default function StayLayer({ filters, onStaySelect }: StayLayerProps) {
     if (filters.minRating != null) params.set('minrating', String(filters.minRating))
 
     let cancelled = false
-    const colourPinsInView = async (pins: Stay[]) => {
-      if (!build) return
-      const z = displayedTileZoom(build, view.z, window.devicePixelRatio)
-      // Offscreen pooled pins keep their last dB until they scroll in.
-      const inView = pins.filter(s => s.lat >= view.s && s.lat <= view.n && s.lng >= view.w && s.lng <= view.e)
-      const noise = await sampleTotalLdenAt(build, z, inView)
-      if (cancelled) return
-      // Colour the pool's CURRENT entry — the other pass may have refreshed it
-      // meanwhile — and only where it still sits at the sampled point.
-      inView.forEach((s, i) => {
-        const current = pool.get(s.id)
-        if (current && current.lat === s.lat && current.lng === s.lng) pool.set(s.id, { ...current, noise: noise[i] })
-      })
-      setStays([...pool.values()])
-    }
-    void colourPinsInView([...pool.values()])
     void (async () => {
       let listings: Stay[] = []
       try {
         listings = await loadListings(`/api/stay?${params}`)
       } catch { /* keep previous pins; the next moveend retries */ }
       if (cancelled) return
-      const pooled = mergeIntoPool(listings)
-      setStays(pooled)
-      const fetched = new Set(listings.map(l => l.id))
-      await colourPinsInView(pooled.filter(s => fetched.has(s.id)))
+      setStays(mergeIntoPool(listings))
     })()
     return () => { cancelled = true }
-  }, [filters, filterKey, view, build])
+  }, [filters, filterKey, view])
 
   // Layers rebuild per pool merge and per moveend (pill winners depend on
   // screen space) — ≤ POOL_MAX points, cheap for deck.
@@ -269,8 +230,6 @@ export default function StayLayer({ filters, onStaySelect }: StayLayerProps) {
 }
 
 function makeLayers(data: Stay[], pills: Stay[], onSelect?: (s: Stay | null) => void) {
-  const dbColor = (s: Stay): [number, number, number] =>
-    s.noise != null ? paletteRgb(s.noise) : NO_NOISE_GREY
   // No guard stamp here — attachPinTapGuard already stamped in the pointerup
   // task (deck's click pick may lag frames behind).
   const onClick = (info: { object?: unknown }) => {
@@ -282,7 +241,7 @@ function makeLayers(data: Stay[], pills: Stay[], onSelect?: (s: Stay | null) => 
       id: 'stays-dots',
       data,
       getPosition: (s) => [s.lng, s.lat],
-      getFillColor: dbColor,
+      getFillColor: STAY_PIN_GREY,
       getLineColor: [255, 255, 255],
       stroked: true,
       radiusUnits: 'pixels',
@@ -296,8 +255,7 @@ function makeLayers(data: Stay[], pills: Stay[], onSelect?: (s: Stay | null) => 
       highlightColor: [255, 255, 255, 90],
       onClick,
     }),
-    // Airbnb-style price pill above the dot; the border repeats the dot's dB
-    // colour so price and noise read together at a glance. Collision-filtered
+    // Price pills are collision-filtered
     // (owner 2026-07-29: overlapping prices were unreadable) — popular stays
     // win the spot, their dots stay visible and clickable underneath.
     new TextLayer<Stay>({
@@ -313,7 +271,7 @@ function makeLayers(data: Stay[], pills: Stay[], onSelect?: (s: Stay | null) => 
       getColor: [15, 23, 42, 255],
       background: true,
       getBackgroundColor: [255, 255, 255, 235],
-      getBorderColor: (s) => [...dbColor(s), 255] as [number, number, number, number],
+      getBorderColor: [...STAY_PIN_GREY, 255],
       getBorderWidth: 1.5,
       backgroundPadding: [6, 3, 6, 3],
       pickable: true,

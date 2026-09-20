@@ -1,13 +1,8 @@
-// Point readout of the HM3 heatmap tiles in the browser — the one decoded-tile
-// cache and dB arithmetic behind every per-point sample (the hover readout and
-// the stay pins at the displayed pyramid level, the stay card at the base
-// zoom). No server round-trip per point: a tile covers 512×512 cells and the
-// browser's HTTP cache already holds most tiles the heatmap painted.
-
+/** Cached heatmap cell readouts using the same grid and energy arithmetic as rendering. */
 import { fetchAndDecodeHM3, NO_DATA, TILE_PX } from './hm3-decoder.ts'
 import { HM3_BYTE_ENERGY } from './hm3-compose.ts'
 import { lngLatToTileFloat } from './tile-math.ts'
-import { MIN_ZOOM, WORLD_EXTENT, tileUrl, type TileBuilds } from './tile-urls.ts'
+import { MIN_ZOOM, WORLD_EXTENT, type TileBuilds } from './tile-urls.ts'
 
 /** One pyramid level finer on HiDPI screens, where one data cell ≈ one device
  *  pixel wherever a finer level exists — the renderer's TileLayer `zoomOffset`. */
@@ -119,22 +114,4 @@ export function energySumLdenDb(tiles: readonly (Uint8Array | null)[], cell: HM3
     anyData = true
   }
   return anyData ? 10 * Math.log10(sumLinear) : null
-}
-
-/**
- * Total Lden at each point from the precomputed `total` tile at tile zoom `z`
- * — at the displayed zoom it is the cell the map paints when every layer is
- * on (no fetch beyond the tiles the heatmap already loaded); at the base zoom
- * it is the exact receiver cell. `null` where the world has no computed value.
- */
-export function sampleTotalLdenAt(
-  build: TileBuilds,
-  z: number,
-  points: readonly { lat: number; lng: number }[],
-): Promise<(number | null)[]> {
-  return Promise.all(points.map(async ({ lat, lng }) => {
-    const cell = hm3CellAt(lng, lat, z)
-    if (!cell) return null
-    return energySumLdenDb([await tileCells(tileUrl(build, 'total', z, cell.tx, cell.ty))], cell)
-  }))
 }

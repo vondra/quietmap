@@ -1,4 +1,4 @@
-/** Concurrent provisional and exact point queries, guarded against stale responses. */
+/** Shared exact noise requests and stale-safe provisional popup queries. */
 import type { NoiseComputeData } from '../types/noise'
 
 export interface SurfacePreview {
@@ -21,14 +21,25 @@ type Callbacks = {
   onError: (message: string) => void
 }
 
+export async function fetchExactNoiseAt(position: Position, signal: AbortSignal): Promise<NoiseComputeData | null> {
+  const params = new URLSearchParams({ lat: String(position.lat), lng: String(position.lng) })
+  const response = await fetch(`/api/noise-onfly-v2?${params}`, { signal })
+  if (!response.ok) throw new Error(`API ${response.status}`)
+  return response.json() as Promise<NoiseComputeData | null>
+}
+
+/** Accommodation comparisons use the facade before window/wall insulation. */
+export function outdoorLden(data: NoiseComputeData | null): number | null {
+  if (!data || data.unavailable_layers?.length) return null
+  const level = data.envelope_class != null || data.envelope_delta_db != null
+    ? data.facade_lden : data.total_lden
+  return typeof level === 'number' && Number.isFinite(level) ? level : null
+}
+
 export async function fetchNoiseDetail(position: Position, signal: AbortSignal, callbacks: Callbacks): Promise<void> {
   const params = new URLSearchParams({ lat: String(position.lat), lng: String(position.lng) })
   let exactHasData = false
-  const exact = fetch(`/api/noise-onfly-v2?${params}`, { signal })
-    .then(response => {
-      if (!response.ok) throw new Error(`API ${response.status}`)
-      return response.json() as Promise<NoiseComputeData | null>
-    })
+  const exact = fetchExactNoiseAt(position, signal)
     .then(data => {
       if (signal.aborted || !callbacks.isCurrent()) return
       exactHasData = data !== null
