@@ -72,8 +72,8 @@ class FakeGlobalPrior:
     def __init__(self, input_files=()):
         self.input_files = input_files
 
-    def sample(self, _lon, _lat):
-        return 12.5
+    def sample_many(self, lons, _lats):
+        return np.full(len(lons), 12.5)
 
 
 OSM_POLY = shapely.box(14.17000, 49.78000, 14.17020, 49.78016)

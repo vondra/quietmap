@@ -42,19 +42,40 @@ class GlobalPrior:
         self.tr = Transformer.from_crs("EPSG:4326", self.crs, always_xy=True)
         self.input_files = sorted(self.ds.files)
 
-    def sample(self, lon, lat):
-        x, y = self.tr.transform(lon, lat)
-        ci = int((x - self.gt.c) / self.gt.a)
-        ri = int((y - self.gt.f) / self.gt.e)
-        if not (0 <= ci < self.w and 0 <= ri < self.h):
-            return None
-        v = float(self.ds.read(1, window=((ri, ri + 1), (ci, ci + 1)))[0, 0])
-        nodata = self.ds.nodata
-        if not math.isfinite(v) or v >= ANBH_MAX_VALID:
-            return None
-        if nodata is not None and v == nodata:
-            return None
-        return v
+    def sample_many(self, lons, lats):
+        """Sample one bounded batch by native raster block; NaN means no prior."""
+        x, y = self.tr.transform(np.asarray(lons, dtype=np.float64),
+                                 np.asarray(lats, dtype=np.float64))
+        columns = np.trunc((x - self.gt.c) / self.gt.a)
+        rows = np.trunc((y - self.gt.f) / self.gt.e)
+        finite = np.isfinite(columns) & np.isfinite(rows)
+        if not finite.all():
+            # Retain the scalar int() rejection of NaN/inf projected coordinates.
+            first = np.flatnonzero(~finite)[0]
+            int(columns[first])
+            int(rows[first])
+        values = np.full(len(columns), np.nan)
+        indices = np.flatnonzero((columns >= 0) & (columns < self.w)
+                                 & (rows >= 0) & (rows < self.h))
+        ci, ri = columns[indices].astype(np.int64), rows[indices].astype(np.int64)
+        block_height, block_width = self.ds.block_shapes[0]
+        block_columns = (self.w + block_width - 1) // block_width
+        blocks = (ri // block_height) * block_columns + ci // block_width
+        order = np.argsort(blocks)
+        cuts = np.flatnonzero(np.diff(blocks[order])) + 1
+        for group in np.split(order, cuts):
+            if not len(group):
+                continue
+            r0 = (ri[group[0]] // block_height) * block_height
+            c0 = (ci[group[0]] // block_width) * block_width
+            window = self.ds.read(1, window=((int(r0), min(int(r0) + block_height, self.h)),
+                                            (int(c0), min(int(c0) + block_width, self.w))))
+            values[indices[group]] = window[ri[group] - r0, ci[group] - c0]
+        invalid = ~np.isfinite(values) | (values >= ANBH_MAX_VALID)
+        if self.ds.nodata is not None:
+            invalid |= values == self.ds.nodata
+        values[invalid] = np.nan
+        return values
 
 
 class RegionalHeights:
@@ -214,8 +235,6 @@ def read_overture_parquet(parquet_dir, square):
     straddles the antimeridian (spans slice [-180, 180)), so no unwrapping.
 
     Returns (rows, every contributing parquet file)."""
-    from shapely import wkb as shapely_wkb
-
     rows = []
     inputs = []
     for lat, lon, src in overture_sources(parquet_dir, square):
@@ -225,34 +244,32 @@ def read_overture_parquet(parquet_dir, square):
         cols = [c for c in ("geometry", "height", "num_floors", "class",
                             "subtype", "is_underground") if c in have]
         for batch in pf.iter_batches(columns=cols):
-            t = pa.Table.from_batches([batch])
-            geoms = t.column("geometry").to_pylist()
-            n = len(geoms)
-            heights = t.column("height").to_pylist() if "height" in have else [None] * n
-            floors = t.column("num_floors").to_pylist() if "num_floors" in have else [None] * n
-            classes = t.column("class").to_pylist() if "class" in have else [None] * n
-            subtypes = t.column("subtype").to_pylist() if "subtype" in have else [None] * n
-            und = t.column("is_underground").to_pylist() if "is_underground" in have else [False] * n
-            for g, h, f, bc, st, ug in zip(geoms, heights, floors, classes, subtypes, und):
-                # Underground footprints are not above-ground obstacles or matches for an OSM building.
-                if g is None or ug:
-                    continue
-                geom = shapely_wkb.loads(bytes(g))
-                if geom.is_empty or geom.geom_type not in ("Polygon", "MultiPolygon"):
-                    continue
-                clat, clon = footprint_centroid(geom)
-                if not (math.isfinite(clat) and math.isfinite(clon)):
-                    continue
-                if not (lat <= clat < lat + 1 and lon <= clon < lon + 1):
-                    continue
-                if qmgrid.square_of(clat, clon) != square:
-                    continue
-                hh, tier = overture_height_ladder(h, f)
-                rows.append(
-                    {"wkb": bytes(g), "height_m": hh, "tier": tier,
-                     "clat": clat, "clon": clon,
-                     "envelope": envelope_class(bc, st)}
-                )
+            table = pa.Table.from_batches([batch])
+            if "is_underground" in have:
+                underground = np.asarray(table.column("is_underground").to_pylist(), dtype=bool)
+                table = table.filter(pa.array(~underground))
+            geoms = shapely.from_wkb(table.column("geometry").to_numpy())
+            polygon = np.isin(shapely.get_type_id(geoms), (3, 6)) & ~shapely.is_empty(geoms)
+            indices = np.flatnonzero(polygon)
+            footprints = geoms[indices]
+            centroids = shapely.centroid(footprints)
+            clons, clats = shapely.get_x(centroids), shapely.get_y(centroids)
+            bounds = shapely.bounds(footprints)
+            # Dateline polygons use the same short-arc centroid as scalar matching.
+            for i in np.flatnonzero(bounds[:, 2] - bounds[:, 0] > 180.0):
+                clats[i], clons[i] = footprint_centroid(footprints[i])
+            owned = (np.isfinite(clats) & np.isfinite(clons)
+                     & (clats >= lat) & (clats < lat + 1)
+                     & (clons >= lon) & (clons < lon + 1))
+            # Keep the canonical scalar grid assignment, including polar and edge rounding.
+            selected = [i for i in np.flatnonzero(owned)
+                        if qmgrid.square_of(float(clats[i]), float(clons[i])) == square]
+            values = table.take(pa.array(indices[selected], type=pa.int64())).to_pylist()
+            for i, value in zip(selected, values):
+                hh, tier = overture_height_ladder(value.get("height"), value.get("num_floors"))
+                rows.append({"wkb": bytes(value["geometry"]), "height_m": hh, "tier": tier,
+                             "clat": float(clats[i]), "clon": float(clons[i]),
+                             "envelope": envelope_class(value.get("class"), value.get("subtype"))})
     return rows, inputs
 
 def apply_raster_tiers(rows, regional, ghsl, stats):
@@ -285,9 +302,15 @@ def apply_raster_tiers(rows, regional, ghsl, stats):
                 stats["tier3"] += 1
                 continue
             stats["abstain"] += 1
-        if tier == 2:
-            v = ghsl.sample(row["clon"], row["clat"])
-            if v is not None and v >= ANBH_MIN_M:
-                row["height_m"] = min(max(v, TIER4_CLAMP[0]), TIER4_CLAMP[1])
+    # Bound temporary coordinate/index arrays even in the largest urban squares.
+    for offset in range(0, n, 65536):
+        pending = [row for row in rows[offset:offset + 65536] if row["tier"] == 2]
+        if not pending:
+            continue
+        values = ghsl.sample_many([row["clon"] for row in pending],
+                                  [row["clat"] for row in pending])
+        for row, value in zip(pending, values):
+            if value >= ANBH_MIN_M:
+                row["height_m"] = min(max(float(value), TIER4_CLAMP[0]), TIER4_CLAMP[1])
                 row["tier"] = 4
                 stats["tier4"] += 1
