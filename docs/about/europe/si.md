@@ -1,19 +1,12 @@
 ---
 title: Slovenia
-intro: Roads and railways use class defaults; the road factor is 0.770. No counts or timetable loaded.
+intro: Roads and railways use class defaults. No counts or timetable loaded.
 map: { center: [14.8, 46.1], zoom: 8 }
 ---
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 0.770 (vehicles per kilometre of road).
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 23,100 |
-| Trunk | 11,550 |
-| Primary | 6,930 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

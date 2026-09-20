@@ -6,7 +6,7 @@ map: { center: [134.0, -25.0], zoom: 4 }
 
 ## Roads
 
-No traffic counts are loaded; roads use OSM class defaults. Motorways, trunks and primaries use the world default scaled by 0.900 (registered vehicles per road kilometre).
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 Australia has no national traffic database. Five states publish counts under CC BY 4.0; loaders for them are not yet written.
 

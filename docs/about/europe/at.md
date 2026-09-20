@@ -8,7 +8,7 @@ map: { center: [13.3, 47.5], zoom: 7 }
 
 Vienna: the city's [permanent counting stations](https://www.data.gv.at/katalog/dataset/stadt-wien_verkehrszhlstellenzhlwertewien) and the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
-Elsewhere class defaults apply, with motorway, trunk and primary scaled by 0.832 (vehicles per kilometre of road); the motorway default is 24,960 vehicles per day. ASFINAG motorway counts are not loaded yet.
+Elsewhere motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). ASFINAG motorway counts are not loaded yet.
 
 ## Railways
 

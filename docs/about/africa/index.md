@@ -14,11 +14,7 @@ Morocco, Nigeria, Sudan and Tanzania. Each has volumes per road class, multiplie
 listed cities and a higher truck share along its main freight road; the tables are on the
 country pages.
 
-All other countries use the world default per class: 30,000 vehicles per day on a
-motorway, 15,000 on a trunk road, 9,000 on a primary, then 3,000, 800 and 500 for
-secondary, tertiary and residential. Motorway, trunk and primary are scaled by a country
-factor between 0.7 and 1.3, derived from vehicles per kilometre of road or, failing
-that, from population density. The vehicle mix is the world default: on a motorway, 72%
+All other countries use the [world defaults](/about/methodology). The vehicle mix is the world default: on a motorway, 72%
 cars, 8% medium vehicles, 19% heavy trucks and 1% motorcycles. The motorcycle share is
 too low for most African cities.
 
@@ -30,9 +26,9 @@ per day across Africa (2 in Egypt) against 4 in the world default, and 10% motor
 
 No African country has a timetable feed. The nine countries above use per-line estimates
 based on services reported by the operators. Elsewhere every track takes the world
-default, 80 passenger and 20 freight trains per day on a main line. Many lines here run
-a few trains per day, so treat the result as an upper bound. Metro lines are absent
-everywhere: subway tracks are not read from OpenStreetMap.
+defaults described in the [railway method](/about/methodology). These can
+overstate lightly used lines. Surface metro sections are included; underground sections
+do not emit outdoor noise.
 
 ## Industry
 

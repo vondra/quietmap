@@ -1,21 +1,12 @@
 ---
 title: Brunei
-intro: Road traffic by OpenStreetMap class, main roads scaled by 1.274. No passenger railway.
+intro: Roads use the world defaults. No passenger railway.
 map: { center: [114.7, 4.5], zoom: 9 }
 ---
 
 ## Roads
 
-No open traffic counts. Motorways, trunk and primary roads use the world default × 1.274, from 186 vehicles per kilometre of road (Wikipedia fleet and road-length lists; factor limited to 0.7–1.3).
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 38,220 |
-| Trunk | 19,110 |
-| Primary | 11,466 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 Local streets: traffic is derived from the buildings served; motorcycles 15% (Asia-wide value, calibrated on Thailand, India and Vietnam).
 

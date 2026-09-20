@@ -22,33 +22,15 @@ Train counts by source:
 
 ## The defaults
 
-Roads without a count get the values below. For motorways, trunk and primary roads the value is scaled by 0.7 to 1.3 per country, according to vehicles per kilometre of road. Each country page shows its own numbers.
+Roads without counts or national estimates use the [world defaults](/about/methodology).
 
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 30,000 |
-| Trunk | 15,000 |
-| Primary | 9,000 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
-
-Railways without a timetable get these trains per day:
-
-| Line | Passenger | Freight |
-|---|---:|---:|
-| Main line | 80 | 20 |
-| Branch | 30 | 5 |
-| Industrial siding | 0 | 15 |
-| Tram | 120 | 0 |
-| Light rail | 80 | 0 |
-| Narrow gauge | 10 | 0 |
+See the [world railway defaults](/about/methodology).
 
 The railway defaults are sized for European lines.
 
 ## What is missing across the region
 
-Metro lines tagged as subway in OpenStreetMap are not extracted. This excludes most of the metros of Tokyo, Seoul, Singapore, Taipei, Bangkok, Delhi and Dubai. Chinese metro lines tagged as ordinary rail are on the map.
+Surface metro sections are included; see the [railway method](/about/methodology).
 
 Motorcycles: where a national source gives a split, it is used: up to 60% of traffic in Jakarta, 50% in Manila, 40% in the largest Indian cities. On local streets elsewhere the share comes from WHO registration figures, or a flat 15% where WHO has none.
 

@@ -31,9 +31,9 @@ Secondary and smaller roads use world defaults.
 
 ## Railways
 
-No timetable is loaded. The only open feed is a 2019 archive of the [Buenos Aires Subte GTFS](https://buenosaires.gob.ar/sites/gcaba/files/subte_gtfs.zip), and Subte lines are tagged railway=subway, which is not included.
+No timetable is loaded, including the 2019 archive of the [Buenos Aires Subte GTFS](https://buenosaires.gob.ar/sites/gcaba/files/subte_gtfs.zip). Surface metro sections are included; see the [railway method](/about/methodology).
 
-The Trenes Argentinos commuter lines out of Retiro, Once and Constitución and the freight operators publish no loadable feed. All lines use class defaults: 80 passenger and 20 freight trains per day on a main line, 30 and 5 on a branch.
+The Trenes Argentinos commuter lines out of Retiro, Once and Constitución and the freight operators publish no loadable feed. All lines use the [world railway defaults](/about/methodology).
 
 ## Industry
 

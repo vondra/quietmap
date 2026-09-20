@@ -34,13 +34,13 @@ The vehicle mix is an estimate:
 
 Costa, sierra and oriente are divided by lines of longitude, an approximation.
 
-Motorways, trunks and primaries not near a mapped network road use the world default scaled by 1.294. Secondary and smaller roads use world defaults.
+Motorways, trunks and primaries not near a mapped network road use the world estimate per lane. Secondary and smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 
-No timetable is loaded. Lines that OSM maps as working railways take the class default, up to 80 passenger and 20 freight trains per day; disused lines are not filtered out.
+No timetable is loaded. Lines that OSM maps as working railways take the class default, up to 80 passenger and 20 freight trains per day; mapped disused or abandoned lines are excluded.
 
-The Quito Metro is tagged railway=subway and is not included.
+Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

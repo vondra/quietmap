@@ -1,23 +1,12 @@
 ---
 title: Seychelles
-intro: Island state without a railway; road traffic is the world class default, scaled ×0.861 on main roads.
+intro: Island state without a railway; roads use the world defaults.
 map: { center: [55.5, -4.6], zoom: 9 }
 ---
 
 ## Roads
 
-Traffic volumes: no national counts. World defaults by OpenStreetMap class; motorway, trunk and primary are scaled ×0.861, from 44.9 registered vehicles per kilometre of road (Wikipedia country lists). Vehicle mix: world default.
-
-Resulting volumes:
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 25,830 |
-| Trunk | 12,915 |
-| Primary | 7,749 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). Vehicle mix: world default.
 
 ## Railways
 

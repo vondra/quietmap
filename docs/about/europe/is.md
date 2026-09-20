@@ -1,19 +1,12 @@
 ---
 title: Iceland
-intro: Road class defaults scaled by 0.933. No railway. Power plants from the Global Energy Monitor tracker.
+intro: Roads use the world defaults. No railway. Power plants from the Global Energy Monitor tracker.
 map: { center: [-19.0, 65.0], zoom: 6 }
 ---
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 0.933 (vehicles per kilometre of road).
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 27,990 |
-| Trunk | 13,995 |
-| Primary | 8,397 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

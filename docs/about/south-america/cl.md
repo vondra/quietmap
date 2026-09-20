@@ -37,7 +37,7 @@ Secondary and smaller roads use world defaults.
 
 ## Railways
 
-No timetable is loaded, neither for the EFE commuter trains around Santiago, Valparaíso and Concepción nor for the freight railways of the north. All lines use class defaults: 80 passenger and 20 freight trains per day on a main line, 30 and 5 on a branch, 15 freight trains on a line tagged industrial, 10 trains on narrow gauge. The Santiago Metro is tagged railway=subway and is not included.
+No timetable is loaded, neither for the EFE commuter trains around Santiago, Valparaíso and Concepción nor for the freight railways of the north. All lines use the [world railway defaults](/about/methodology). Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

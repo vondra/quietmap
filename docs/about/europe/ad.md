@@ -1,19 +1,12 @@
 ---
 title: Andorra
-intro: Road class defaults scaled by 1.294. No railway.
+intro: Roads use the world defaults. No railway.
 map: { center: [1.52, 42.54], zoom: 11 }
 ---
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 1.294 (vehicles per kilometre of road).
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 38,820 |
-| Trunk | 19,410 |
-| Primary | 11,646 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

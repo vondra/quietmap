@@ -22,11 +22,11 @@ Motorcycles are 1% of vehicles.
 
 Day, evening and night split: [FHWA TMAS](https://www.fhwa.dot.gov/policyinformation/tables/tmasdata/) hourly station counts for 2025. A road within 200 m of a station on the same route uses that station's split. TMAS publishes hourly totals only; trucks are assumed to follow the same hourly profile as cars.
 
-Minor collectors and local streets are not in HPMS and use class defaults. Motorways, trunks and primaries without a count use the world default scaled by 0.977.
+Minor collectors and local streets are not in HPMS and use class defaults. Motorways, trunks and primaries without a count use the world estimate per lane ([world defaults](/about/methodology)).
 
 ## Railways
 
-Passenger trains: [Amtrak GTFS timetable](https://content.amtrak.com/content/gtfs/GTFS.zip). Commuter rail feeds (LIRR, NJ Transit, Metra, MBTA, Caltrain and others) are not loaded; those lines use class defaults of 80 passenger and 20 freight trains per day on a main line, 30 and 5 on a branch. A line with no usage tag in OSM counts as a main line. Lines tagged railway=subway are not included.
+Passenger trains: [Amtrak GTFS timetable](https://content.amtrak.com/content/gtfs/GTFS.zip). Commuter rail feeds (LIRR, NJ Transit, Metra, MBTA, Caltrain and others) are not loaded; those lines use the [world railway defaults](/about/methodology). Lines without a usage tag use the [unclassified railway default](/about/methodology). Surface metro sections are included; see the [railway method](/about/methodology).
 
 Freight is not covered: BNSF, Union Pacific, CSX and Norfolk Southern publish no schedules.
 

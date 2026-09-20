@@ -14,7 +14,7 @@ quietmap.org shows how loud the world really is — and helps you find the quiet
 2. **Understand noise** — see which sources contribute (roads, railways, aircraft, ships, industry) and how terrain, buildings, and forests reduce it
 3. **Build a comparable record** — each published dataset generation is frozen, so later generations can be compared honestly
 
-Human-made noise is not the same as natural sound. A forest at 50 dB with birdsong feels quiet. A road at 50 dB with traffic feels loud. quietmap.org measures environmental noise from human sources — transport, industry, and urban activity — not nature.
+Human-made noise is not the same as natural sound. A forest at 50 dB with birdsong feels quiet. A road at 50 dB with traffic feels loud. quietmap.org models environmental noise from human sources — transport, industry, and urban activity — not nature.
 
 → **[What's new](/about/news)** — recent improvements and what we are working on.
 
@@ -108,15 +108,14 @@ Below 30 dB the map is transparent (the scheme's "no color"); 80 dB is the termi
 | 75 dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#75085C"></span> | `#75085C` | 85% |
 | 80+ dB | <span style="display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:middle;border:1px solid rgba(0,0,0,.15);background:#430A4A"></span> | `#430A4A` | 90% |
 
-### Layers and overlays
+### Layers
 
 - **Source layers:** Roads, Railways, Industrial, Buildings, Ships, and Aircraft (ground ops, airborne, cruise), each toggleable independently.
-- **Quiet zones:** shades every pixel below a threshold of your choice (default 35 dB, slider 20–45) green.
 
 ## FAQ
 
 **Is this measured or computed?**
-Computed — a physics model (CNOSSOS-EU emission, ISO 9613-2 propagation) over public data. No microphone network could cover the planet at 12-meter resolution. The model is continuously checked against real monitoring stations; see [Validation](/about/methodology).
+Computed — a physics model (CNOSSOS-EU emission, ISO 9613-2 propagation) over public data. The model is continuously checked against real monitoring stations; see [Validation](/about/methodology).
 
 **How accurate is it?**
 It's an engineering estimate, not a certificate. A gap against a measurement or official map is first attributed to better input data, a justified methodology difference, or a model defect; only defects become fixes. For a single address, read the value as "around X dB" — and click the point to see exactly what the number is built from.
@@ -124,14 +123,11 @@ It's an engineering estimate, not a certificate. A gap against a measurement or 
 **Why does my quiet street show 50 dB?**
 Click it. Most surprises have a visible cause: a road with no measured traffic falls back to class defaults, a nearby factory is classified by registry sector, or the dominant source is something you've tuned out. If the inputs are genuinely wrong for your street, [tell us](mailto:info@quietmap.org) — reports with an address are how the map gets better.
 
-**Why don't I see ships on the map?**
-The ships layer currently appears in the click panel only.
-
 **Why are there no low-flying aircraft where I live?**
 The aircraft layer sees what volunteer ADS-B receivers see. Where no feeder is nearby, low-altitude flights aren't received and only high-altitude cruise noise (~20 dB) appears — a limit of the data source, not the model. Hosting a receiver in a blank spot fixes it for everyone.
 
 **Why does the map show nothing below 30 dB?**
-By design: the [color scheme](#color-scale) marks under 30 dB as "no color" — genuinely quiet. To hunt for the quietest places, use the Quiet zones overlay, which shades everything under a threshold you pick (20–45 dB).
+By design: the color scheme marks under 30 dB as "no color". A blank area can also mean missing source data.
 
 **Can I use screenshots or embed the map?**
 Yes, free, with visible "quietmap.org" attribution — details in [credits & terms](/about/credits).

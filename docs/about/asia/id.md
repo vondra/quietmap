@@ -24,7 +24,7 @@ The vehicle split is assigned; LHRT is a single total without vehicle classes. S
 
 ## Railways
 
-No Indonesian operator publishes an open timetable. All lines use class defaults: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branches, 15 freight on industrial sidings, 120 on tram lines, 80 on light rail. Underground sections of the Jakarta MRT are tagged as subway in OpenStreetMap and are not included.
+No Indonesian operator publishes an open timetable. All lines use the [world railway defaults](/about/methodology). Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

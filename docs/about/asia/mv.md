@@ -1,21 +1,12 @@
 ---
 title: Maldives
-intro: Road traffic by OpenStreetMap class, main-road factor at the 1.3 cap. The Maldives has no railway.
+intro: Roads use the world defaults. The Maldives has no railway.
 map: { center: [73.5, 3.5], zoom: 6 }
 ---
 
 ## Roads
 
-No open traffic counts. Motorways, trunk and primary roads use the world default × 1.300, from 1,409 vehicles per kilometre of road (Wikipedia fleet and road-length lists; factor limited to 0.7–1.3).
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 39,000 |
-| Trunk | 19,500 |
-| Primary | 11,700 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 Local streets: traffic is derived from the buildings served; motorcycles 35%, from 0.4 × the two-wheeler share of registered vehicles (WHO 2023 country profile, 2021 fleet).
 

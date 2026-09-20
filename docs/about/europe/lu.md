@@ -8,7 +8,7 @@ map: { center: [6.1, 49.8], zoom: 10 }
 
 Luxembourg City: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
-Elsewhere class defaults apply, with motorway, trunk and primary scaled by 1.276 (vehicles per kilometre of road); the motorway default is 38,280 vehicles per day.
+Elsewhere motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

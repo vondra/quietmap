@@ -1,27 +1,18 @@
 ---
 title: Qatar
-intro: Road traffic by OpenStreetMap class, main roads scaled by 1.275. Most of the Doha Metro is not included.
+intro: Roads use the world defaults. Rail traffic uses class defaults.
 map: { center: [51.2, 25.3], zoom: 8 }
 ---
 
 ## Roads
 
-No open traffic counts. Motorways, trunk and primary roads use the world default × 1.275, from 189 vehicles per kilometre of road (Wikipedia fleet and road-length lists; factor limited to 0.7–1.3).
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 38,250 |
-| Trunk | 19,125 |
-| Primary | 11,475 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+No open traffic counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 Local streets: traffic is derived from the buildings served; motorcycles 15% (Asia-wide value, calibrated on Thailand, India and Vietnam).
 
 ## Railways
 
-No open timetable (Qatar Rail). Most of the Doha Metro is tagged as subway in OpenStreetMap and is not included. The Lusail tram uses the class default of 120 trams per day.
+No open timetable (Qatar Rail). Surface metro sections are included; see the [railway method](/about/methodology). The Lusail tram uses the class default of 120 trams per day.
 
 ## Industry
 

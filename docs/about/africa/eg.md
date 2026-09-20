@@ -1,6 +1,6 @@
 ---
 title: Egypt
-intro: Country-specific road and rail estimates, including trams and light rail; the Cairo Metro is not modelled.
+intro: Country-specific road and rail estimates, including trams and light rail.
 map: { center: [30, 27], zoom: 5 }
 ---
 
@@ -44,7 +44,7 @@ Train counts: no timetable. Per-line estimates based on services reported by Egy
 | Branch lines | 1 | 4 |
 | Any other line | 10 | 8 |
 
-The Cairo Metro is absent: subway lines are not read from OpenStreetMap.
+Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

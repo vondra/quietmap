@@ -38,7 +38,7 @@ No open timetable. Train counts are assigned per corridor:
 | Branches | 1 | 4 |
 | Industrial sidings | 0 | 6 |
 
-Tram and light-rail track gets 80 trains per day in Almaty, 50 in Astana and 60 elsewhere. Lines tagged as subway in OpenStreetMap are not included, which covers the Almaty Metro.
+Tram and light-rail track gets 80 trains per day in Almaty, 50 in Astana and 60 elsewhere. Surface metro sections are included; see the [railway method](/about/methodology).
 
 ## Industry
 

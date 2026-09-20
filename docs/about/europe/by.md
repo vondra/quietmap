@@ -1,19 +1,12 @@
 ---
 title: Belarus
-intro: Class defaults for roads and railways. The road factor (0.886) is derived from population density.
+intro: Class defaults for roads and railways.
 map: { center: [27.9, 53.7], zoom: 6 }
 ---
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 0.886. The factor is derived from population density; fleet and road length figures are not available.
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 26,580 |
-| Trunk | 13,290 |
-| Primary | 7,974 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

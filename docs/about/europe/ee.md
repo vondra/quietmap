@@ -6,14 +6,7 @@ map: { center: [25.0, 58.6], zoom: 7 }
 
 ## Roads
 
-No traffic counts are loaded. Class defaults apply, with motorway, trunk and primary scaled by 0.781. The factor is derived from population density; fleet and road length figures are not available.
-
-| Road class | Default vehicles per day |
-|---|---:|
-| Motorway | 23,430 |
-| Trunk | 11,715 |
-| Primary | 7,029 |
-| Secondary, tertiary, residential | 3,000, 800, 500 |
+No traffic counts are loaded. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 

@@ -1,27 +1,16 @@
 ---
 title: Republic of Congo
-intro: Main roads use world defaults scaled ×0.717 from population density; the Brazzaville to Pointe-Noire railway carries the world rail default.
+intro: Roads use the world defaults; the Brazzaville to Pointe-Noire railway carries the world rail default.
 map: { center: [15, -1], zoom: 6 }
 ---
 
 ## Roads
 
-Traffic volumes: no national counts. World defaults by OpenStreetMap class; motorway, trunk and primary are scaled ×0.717. Vehicle and road-length figures are unavailable, so the factor is derived from population density (17.7 people per km², World Bank 2022). Vehicle mix: world default.
-
-Resulting volumes:
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 21,510 |
-| Trunk | 10,755 |
-| Primary | 6,453 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). Vehicle mix: world default.
 
 ## Railways
 
-Train counts: no timetable. World default on every OpenStreetMap track: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branches, 15 freight on industrial track. The Brazzaville to Pointe-Noire line runs a few trains per day; rail noise is overstated.
+Train counts: no timetable. Mapped active railways use the [world railway defaults](/about/methodology). The Brazzaville to Pointe-Noire line runs a few trains per day; rail noise is overstated.
 
 ## Industry
 

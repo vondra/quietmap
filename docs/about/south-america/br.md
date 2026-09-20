@@ -34,18 +34,9 @@ Brasília and Belo Horizonte use the Brazil column except on federal highways. R
 
 ## Railways
 
-No timetable is loaded. All lines use class defaults:
-
-| Line | Passenger trains per day | Freight trains per day |
-|---|---:|---:|
-| Main line | 80 | 20 |
-| Branch | 30 | 5 |
-| Industrial | 0 | 15 |
-| Tram | 120 | 0 |
-| Light rail | 80 | 0 |
-| Narrow gauge | 10 | 0 |
-
-A line with no usage tag in OSM counts as a main line. The defaults are not tuned to Brazil; ore railways such as Carajás and Vitória a Minas are treated like any other main line. Lines tagged railway=subway, including the São Paulo and Rio metros, are not included.
+No timetable is loaded. Railways, including surface metro sections, use the
+[world defaults](/about/methodology). These are not tuned to Brazilian ore railways
+such as Carajás and Vitória a Minas.
 
 ## Industry
 

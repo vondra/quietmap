@@ -28,11 +28,11 @@ The vehicle mix is an estimate:
 | Chaco | 60% | 10% | 20% | 10% |
 | Eastern region | 55% | 8% | 25% | 12% |
 
-Motorways, trunks and primaries that are not a national route use the world default scaled by 0.716, a factor derived from population density because no vehicles-per-kilometre figure is available. Secondary and smaller roads use world defaults.
+Motorways, trunks and primaries that are not a national route use the world estimate per lane. Secondary and smaller roads use class defaults ([world defaults](/about/methodology)).
 
 ## Railways
 
-No timetable is loaded. Any stretch that OSM still maps as a working railway takes the class default of 80 passenger and 20 freight trains per day; disused lines are not filtered out.
+No timetable is loaded. Any stretch that OSM still maps as a working railway uses the [world railway defaults](/about/methodology); mapped disused or abandoned lines are excluded.
 
 ## Industry
 

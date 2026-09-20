@@ -1,23 +1,12 @@
 ---
 title: São Tomé and Príncipe
-intro: Road traffic is the world class default, scaled ×1.252 on main roads from vehicle registrations; there is no railway.
+intro: Roads use the world defaults; there is no railway.
 map: { center: [6.6, 0.2], zoom: 9 }
 ---
 
 ## Roads
 
-Traffic volumes: no national counts. World defaults by OpenStreetMap class; motorway, trunk and primary are scaled ×1.252, from 148 registered vehicles per kilometre of road (Wikipedia country lists). Vehicle mix: world default.
-
-Resulting volumes:
-
-| Road class | Vehicles per day |
-|---|---:|
-| Motorway | 37,560 |
-| Trunk | 18,780 |
-| Primary | 11,268 |
-| Secondary | 3,000 |
-| Tertiary | 800 |
-| Residential | 500 |
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). Vehicle mix: world default.
 
 ## Railways
 
