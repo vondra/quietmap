@@ -26,7 +26,8 @@ DEFAULT_HEIGHT = 8.0      # == noise_compute::constants::BUILDING_DEFAULT_HEIGHT
 
 ENVELOPE_OUTDOOR = 0
 ENVELOPE_DEFAULT = 5
-ENVELOPE_FROM_BUILDING_USE = {0: 1, 1: 2, 2: 3}
+# OSM envelope-use codes: residential, commercial, industrial, explicit open carport.
+ENVELOPE_FROM_BUILDING_USE = {0: 1, 1: 2, 2: 3, 3: ENVELOPE_OUTDOOR}
 
 class GlobalPrior:
     """GHS-BUILT-H ANBH: nearest-pixel value at a WGS84 point (windowed reads)."""

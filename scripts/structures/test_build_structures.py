@@ -72,6 +72,28 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(row["emission_centroid_gx"], GRID.lonlat_to_grid(OSM_POLY.centroid.x, OSM_POLY.centroid.y)[0])
         self.assertEqual(row["emission_geom"], grid_polygon(OSM_POLY))
 
+    def test_explicit_open_carport_keeps_geometry_but_never_an_indoor_envelope(self):
+        source = self.prepared / SQUARE / "buildings.arrow"
+        for matched in [False, True]:
+            for overture_envelope in range(6):
+                with self.subTest(matched=matched, overture_envelope=overture_envelope):
+                    def build_use(use):
+                        # Test a fresh merge: rapid fixture rewrites can share an mtime.
+                        (self.prepared / SQUARE / "structures.arrow").unlink(missing_ok=True)
+                        buildings_arrow(source, [osm_row(0, OSM_POLY, 32.0, btype=7, use=use)])
+                        rows = [ovt_row(OVT_TWIN, envelope=overture_envelope)] if matched else []
+                        _, table = self.build(rows)
+                        return table.to_pylist()[0]
+
+                    garage = build_use(0)
+                    carport = build_use(3)
+                    self.assertEqual(garage["envelope_class"], overture_envelope if matched else 1)
+                    self.assertEqual(carport["envelope_class"], SOURCES.ENVELOPE_OUTDOOR)
+                    self.assertIsNotNone(carport["geom"])
+                    self.assertIsNotNone(carport["screening_ordinal"])
+                    for field in garage.keys() - {"building_use", "envelope_class"}:
+                        self.assertEqual(carport[field], garage[field], field)
+
     def test_school_ground_emits_but_never_screens_or_borrows_an_overture_footprint(self):
         # The ground covers the centroid of an Overture building OSM lacks: as a building row it
         # would match it, and alone it would stand as a wall with a raster height.

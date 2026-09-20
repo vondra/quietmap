@@ -42,7 +42,7 @@ def buildings_arrow(path, rows):
         ("geom", pa.binary()), ("area_m2", pa.float32()),
         ("opening_hours_frac", pa.uint8()), ("source_id", pa.uint16()),
         ("area_source", pa.bool_()),
-    ], metadata={b"buildings_contract": b"buildings_v4", b"grid": b"z30"})
+    ], metadata={b"buildings_contract": b"buildings_v5", b"grid": b"z30"})
     with ipc.new_file(path, schema) as writer:
         writer.write_table(pa.table({name: [row[name] for row in rows]
                                      for name in schema.names}, schema=schema))

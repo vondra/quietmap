@@ -25,7 +25,8 @@ IOU_MATCH_THRESHOLD = 0.5
 # text rebuilt every square of the world after a comment edit.
 # 2: an area source (buildings_v4 `area_source`) emits but never matches, screens or has a height.
 # 3: explicitly underground Overture footprints are not screening stock.
-BUILDER_VERSION = "structures-builder-3"
+# 4: explicit OSM open carports stay outdoors, including Overture-matched footprints.
+BUILDER_VERSION = "structures-builder-4"
 
 
 def structure_is_fresh(out_path, input_files):
@@ -170,6 +171,10 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
                 osm["building_use"][i_osm], ENVELOPE_DEFAULT
             )
             cgx, cgy = osm["centroid_gx"][i_osm], osm["centroid_gy"][i_osm]
+        # OSM explicitly knows the canopy is open even when Overture has only a generic class.
+        if (i_osm is not None and ENVELOPE_FROM_BUILDING_USE.get(
+                osm["building_use"][i_osm]) == ENVELOPE_OUTDOOR):
+            envelope = ENVELOPE_OUTDOOR
         out["kind"].append(KIND_BUILDING)
         out["geom"].append(geom_blob)
         out["height_m"].append(screening_height_metres(height_m))

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use super::{
     decode_tsv_ring, parse_grid_cell, polygon_row_bbox, schema_with_contract,
-    write_arrow_z14_blocked, BUILDINGS_CONTRACT_V4,
+    write_arrow_z14_blocked, BUILDINGS_CONTRACT_V5,
 };
 use crate::poi_join::{joined_building_type, JoinStats, PoiIndex};
 use grid::Square;
@@ -68,7 +68,7 @@ pub(super) fn write_buildings(
             Field::new("area_source", DataType::Boolean, false),
         ],
         "buildings_contract",
-        BUILDINGS_CONTRACT_V4,
+        BUILDINGS_CONTRACT_V5,
     );
 
     let mut osm_id = Int64Builder::with_capacity(n);

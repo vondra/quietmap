@@ -218,9 +218,62 @@ fn buildings_writer_roundtrips_geom_and_contract() {
             .metadata()
             .get("buildings_contract")
             .map(String::as_str),
-        Some(BUILDINGS_CONTRACT_V4)
+        Some(BUILDINGS_CONTRACT_V5)
     );
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn open_canopy_identity_survives_spill_and_arrow_without_erasing_garages() {
+    use crate::classify::{FeatureType, Tags};
+    use crate::spill::Spiller;
+    let dir = scratch_dir("carport-envelope");
+    let spill = dir.join("spill");
+    let output = dir.join("prepared");
+    let square = grid::square_of(50.0, 14.0);
+    let mut spiller = Spiller::new(&spill, 1).unwrap();
+    // Explicit open structures include a roofed surface car park.
+    let cases: &[(&[(&str, &str)], u8)] = &[
+        (&[("building", "carport")], 3),
+        (&[("building", "roof")], 3),
+        (&[("building", "roof"), ("amenity", "parking"), ("parking", "surface")], 3),
+        (&[("amenity", "parking"), ("parking", "carports")], 3),
+        (&[("building", "yes"), ("amenity", "parking"), ("parking", "carports")], 3),
+        (&[("building", "carport"), ("building:use", "commercial")], 3),
+        (&[("building", "garage")], 0),
+        (&[("building", "garages"), ("amenity", "parking"), ("parking", "garage_boxes")], 0),
+        (&[("amenity", "parking"), ("parking", "multi-storey")], 0),
+        (&[("building", "house"), ("parking", "carports")], 0),
+        (&[("building", "yes"), ("building:use", "industrial")], 2),
+    ];
+    for (index, (pairs, _)) in cases.iter().enumerate() {
+        let tags: Tags = pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect();
+        spiller.emit_polygon(&FeatureType::Building, square, index as i64,
+            50.0, 14.0, &tags, Some(&[
+                [50.0, 14.0], [50.0, 14.0001], [50.0001, 14.0001], [50.0, 14.0],
+            ])).unwrap();
+    }
+    crate::transport::TransportSpill::new(&spill).unwrap().finish().unwrap();
+    spiller.complete("carport-fixture").unwrap();
+    drop(spiller);
+    finalize(&spill, &output, 1).unwrap();
+    let (schema, batches) = read_ipc(&output.join(grid::square_name(square)).join("buildings.arrow"));
+    assert_eq!(schema.metadata()["buildings_contract"], BUILDINGS_CONTRACT_V5);
+    let mut seen = 0;
+    for batch in batches {
+        let ids = batch.column_by_name("osm_id").unwrap().as_any().downcast_ref::<Int64Array>().unwrap();
+        let uses = batch.column_by_name("building_use").unwrap().as_any().downcast_ref::<UInt8Array>().unwrap();
+        let geometry = batch.column_by_name("geom").unwrap().as_any().downcast_ref::<BinaryArray>().unwrap();
+        let areas = batch.column_by_name("area_source").unwrap().as_any().downcast_ref::<BooleanArray>().unwrap();
+        for row in 0..batch.num_rows() {
+            assert_eq!(uses.value(row), cases[ids.value(row) as usize].1);
+            assert!(!areas.value(row), "a canopy retains its screening geometry");
+            assert!(!geometry.value(row).is_empty());
+            seen += 1;
+        }
+    }
+    assert_eq!(seen, cases.len());
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]

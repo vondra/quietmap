@@ -49,11 +49,10 @@ use write_railways::write_railways;
 use write_roads::write_roads;
 use write_source_pieces::write_source_pieces;
 
-/// Per-file schema contracts. Bumped from the hex era (`buildings_v2`,
-/// `leisure_v1`): integer grid columns, `geom` binaries, no leisure capacity;
-/// `buildings_v4` adds `area_source`, so an area without a building never screens.
-/// Stamped into arrow metadata; consumers fail loud on a mismatch.
-pub const BUILDINGS_CONTRACT_V4: &str = "buildings_v4";
+/// Current building contract: z30 geometry, emission-only `area_source`, and
+/// `building_use` 3 for explicitly open carports (never an indoor envelope).
+/// Stamped into Arrow metadata; consumers reject older classification semantics.
+pub const BUILDINGS_CONTRACT_V5: &str = "buildings_v5";
 /// v3 adds the car park classes (leisure 8 and 9): an older binary must refuse
 /// the file rather than read a lot as a sports pitch.
 pub const LEISURE_CONTRACT_V3: &str = "leisure_v3";

@@ -380,9 +380,7 @@ impl Spiller {
                     w,
                     "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     bt,
-                    tags.get("building:use")
-                        .map(|s| building_use(s))
-                        .unwrap_or(0),
+                    building_use(tags),
                     tags.get("height")
                         .and_then(|s| parse_height(s))
                         .unwrap_or(0.0),
@@ -752,8 +750,16 @@ fn building_type(val: &str) -> u8 {
     }
 }
 
-fn building_use(val: &str) -> u8 {
-    match val {
+/// The envelope-use code: residential 0, commercial 1, industrial 2, outdoor 3.
+/// A parking function alone cannot distinguish an open carport from a garage.
+fn building_use(tags: &Tags) -> u8 {
+    let tag = |key: &str| tags.get(key).map(String::as_str);
+    if matches!(tag("building"), Some("carport" | "roof"))
+        || (tag("amenity") == Some("parking") && tag("parking") == Some("carports"))
+    {
+        return 3;
+    }
+    match tag("building:use").unwrap_or("") {
         "residential" => 0,
         "commercial" | "retail" | "office" => 1,
         "industrial" => 2,

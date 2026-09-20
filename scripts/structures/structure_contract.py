@@ -90,9 +90,9 @@ def load_osm_buildings(path):
         return {column: [] for column in [*BUILDINGS_COLUMNS, "shapely"]}
     t = ipc.open_file(path).read_all()
     contract = (t.schema.metadata or {}).get(b"buildings_contract")
-    if contract != b"buildings_v4":
+    if contract != b"buildings_v5":
         raise SystemExit(
-            f"{path}: buildings_contract mismatch (expected buildings_v4, got "
+            f"{path}: buildings_contract mismatch (expected buildings_v5, got "
             f"{contract!r}) — re-extract OSM"
         )
     require_grid_contract(t, path, ("centroid_gx", "centroid_gy"))

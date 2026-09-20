@@ -251,6 +251,15 @@ its nonzero screening height and normal building defaults. Popup traces report
 zero building height and floors for ground activities, including open parking;
 propagation still reports the actual source height.
 
+Explicit OSM open structures (`building=carport`, `building=roof`, or
+`amenity=parking` with `parking=carports`) carry outdoor `building_use=3`
+in `buildings_v5`.
+The structures builder preserves that outdoor envelope for OSM-only and
+Overture-matched rows (`structures-builder-4`), so a canopy cannot acquire an
+indoor attenuation from an absent or generic Overture class. Enclosed garages
+retain their existing classification. This changes enclosure only: screening
+geometry, height, emission and traffic remain unchanged.
+
 ## 4.7 Vector screening
 
 One source-to-receiver ray shares its bare-earth raster profile between terrain

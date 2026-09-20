@@ -1,4 +1,4 @@
-/** Atomic national building refinements on the current buildings_v4/z30 contract. */
+/** Atomic national building refinements on the current buildings_v5/z30 contract. */
 
 import { DataType, makeVector, Table, type Vector } from 'apache-arrow'
 import { withArrowWrite } from './provenance.js'
@@ -35,16 +35,16 @@ export async function writeBuildingEnrichment(
   const result = { rows: 0, matched: 0, floorsAdded: 0, typesChanged: 0, typeDowngradesBlocked: 0,
     areaSourcesSkipped: 0, updated: false }
   await withArrowWrite(path, table => {
-    if (table.schema.metadata.get('buildings_contract') !== 'buildings_v4' ||
+    if (table.schema.metadata.get('buildings_contract') !== 'buildings_v5' ||
         table.schema.metadata.get('grid') !== 'z30') {
-      throw new Error(`${path}: expected buildings_v4/z30 contract`)
+      throw new Error(`${path}: expected buildings_v5/z30 contract`)
     }
     const gx = integerColumn(table, 'centroid_gx', 32, true)
     const gy = integerColumn(table, 'centroid_gy', 32, true)
     const originalFloors = integerColumn(table, 'floors', 8)
     const originalTypes = integerColumn(table, 'building_type', 8)
     const originalSource = integerColumn(table, 'source_id', 16)
-    // `buildings_v4`: true where nothing stands (a school ground, a retail zone, a
+    // `buildings_v5`: true where nothing stands (a school ground, a retail zone, a
     // car park below the ground). A national survey describes BUILDINGS, and its
     // nearest-within-30 m match would hand such a row the floors — and in Czechia
     // the use code — of the block beside or above it. Emission scales with floors,

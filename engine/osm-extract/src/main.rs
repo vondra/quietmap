@@ -126,6 +126,8 @@ fn main() -> Result<()> {
 fn spill_input_identity(input: &Path, layers: Option<String>) -> Result<String> {
     let stat = input.metadata()?;
     Ok(serde_json::json!({
+        // A pre-carport spill has already discarded the tags that buildings_v5 needs.
+        "buildings_contract": finalize::BUILDINGS_CONTRACT_V5,
         "input": input.canonicalize()?, "layers": layers,
         "device": stat.dev(), "inode": stat.ino(), "bytes": stat.len(),
         "mtime": [stat.mtime(), stat.mtime_nsec()],

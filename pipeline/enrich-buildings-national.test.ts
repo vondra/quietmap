@@ -28,7 +28,7 @@ function buildingTable(gx: number[], gy: number[], floors: number[], types: numb
   } as never) as unknown as Table
   const fields = table.schema.fields.map(f => new Field(f.name, f.type, f.name === 'height', new Map([['field-note', f.name]])))
   const schema = new Schema(fields, new Map([
-    ['grid', 'z30'], ['buildings_contract', 'buildings_v4'], ['qm_blocks', encodeQmBlocks([[50, 14, 50.01, 14.01], [50.01, 14.01, 50.02, 14.02]])], ['extra', 'preserve'],
+    ['grid', 'z30'], ['buildings_contract', 'buildings_v5'], ['qm_blocks', encodeQmBlocks([[50, 14, 50.01, 14.01], [50.01, 14.01, 50.02, 14.02]])], ['extra', 'preserve'],
   ]))
   const parts = n > 1 ? [table.slice(0, 2), table.slice(2)] : [table]
   return new Table(schema, parts.flatMap(part => part.batches.map(batch => new RecordBatch(schema, batch.data))))
@@ -127,7 +127,7 @@ test('ES fills floors only; current empty IPC is valid but missing/legacy/malfor
     assert.deepEqual(readFileSync(empty), bytes)
     await assert.rejects(writeBuildingEnrichment(resolve(work, 'missing.arrow'), () => null), /ENOENT/)
     const legacy = resolve(work, 'legacy.arrow'); store(legacy, makeTable({ floors: new Uint8Array([0]) }))
-    await assert.rejects(writeBuildingEnrichment(legacy, () => null), /buildings_v4/)
+    await assert.rejects(writeBuildingEnrichment(legacy, () => null), /buildings_v5/)
     const prior = readFileSync(path)
     await assert.rejects(writeBuildingEnrichment(path, () => ({ floors: NaN, sourceId: 201 })), /invalid building refinement/)
     assert.deepEqual(readFileSync(path), prior)
