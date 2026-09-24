@@ -114,8 +114,8 @@ function loadListings(url: string): Promise<Stay[]> {
   return entry.promise
 }
 
-/** Live bookable stays as price pills. Neutral pins avoid presenting indoor
- *  heatmap cells as outdoor accommodation noise; the card queries that level. */
+/** Live bookable stays as neutral price pills: a stay's level comes from the
+ *  exact point query its card makes, never from a heatmap cell. */
 export default function StayLayer({ filters, onStaySelect }: StayLayerProps) {
   const { current: mapRef } = useMap()
   const [overlay, setOverlay] = useState<MapboxOverlay | null>(null)

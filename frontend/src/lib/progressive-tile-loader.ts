@@ -77,7 +77,7 @@ export function fetchAncestor(url: string): Promise<{ cells: Uint8Array } | null
  * same tile object — the caller's `onRefined` bumps deck's repaint trigger.
  * The partial energy sum transiently underestimates — a lighter shade for a
  * moment beats a blank tile — and converges to the exact sum with the last
- * layer. A failed single layer renders as that layer being empty.
+ * layer. A failed single layer renders as that layer being absent.
  *
  * While the real layers load, the z−Δ ANCESTOR (Δ = PREVIEW_DELTA) races
  * them as a preview: one ancestor serves 4^Δ children (browser-cached), so a
@@ -110,10 +110,10 @@ export async function loadTileProgressively(
   if (ctl.signal.aborted) previewCtl.abort() // the chained listener below can't fire retroactively
   ctl.signal.addEventListener('abort', () => previewCtl.abort())
   const grids: Uint8Array[] = []
-  // The decoder types them: empty 200 body = authoritative silence → null;
+  // The decoder types them: empty 200 body = tile not assessed → null;
   // HTTP/network error = throw. A single failed layer still renders as that
-  // layer being empty (best-effort), but a tile where EVERY layer hard-failed
-  // must FAIL (deck can refetch) instead of caching silence.
+  // layer being absent (best-effort), but a tile where EVERY layer hard-failed
+  // must FAIL (deck can refetch) instead of caching a blank tile.
   let hardErrors = 0
   let firstError: unknown = null
   // 'high': sharp tiles outrank basemap assets and the 'low' ancestor
@@ -192,9 +192,9 @@ export async function loadTileProgressively(
     previewCtl.abort()
     if (grids.length === 0) {
       // Nothing landed AND every miss was a hard error → surface the error
-      // so deck marks the tile failed and can refetch, instead of caching
-      // transparent "silence" for the session. All-authoritative-empty
-      // (hardErrors == 0) stays a legitimate empty tile.
+      // so deck marks the tile failed and can refetch, instead of caching a
+      // blank tile for the session. Every layer absent (hardErrors == 0) is
+      // a legitimate not-assessed tile.
       if (hardErrors === urls.length && firstError !== null) throw firstError
       return null
     }

@@ -2,7 +2,7 @@
 use crate::{
     input_manifest::InputManifest,
     surface_scene::{scene_bounds, SurfaceScene},
-    tile_receivers::TileReceivers,
+    receiver_points::ReceiverPoints,
 };
 use anyhow::{ensure, Context, Result};
 use arrow::{ipc::reader::FileReader, record_batch::RecordBatch};
@@ -293,7 +293,7 @@ impl CruiseField {
     pub fn period_powers(
         &self,
         scene: &SurfaceScene,
-        receivers: &TileReceivers,
+        receivers: &ReceiverPoints,
     ) -> Result<Vec<f32>> {
         ensure!(
             scene.owner == self.owner,

@@ -24,7 +24,8 @@ impl InputManifest {
         })
     }
 
-    pub fn read_arrow(&self, root: &Path, relative: &str) -> Result<Option<(Vec<u8>, [u8; 32])>> {
+    /// The pinned digest of one file, without reading it; `None` = not in the manifest.
+    pub fn pinned_digest(&self, relative: &str) -> Result<Option<[u8; 32]>> {
         ensure!(
             !relative.starts_with('/') && !relative.split('/').any(|part| part == ".."),
             "invalid manifest path"
@@ -37,14 +38,21 @@ impl InputManifest {
                 |row| row.get(0),
             )
             .optional()?;
+        expected
+            .map(|expected| {
+                expected
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("invalid source digest for {relative}"))
+            })
+            .transpose()
+    }
+
+    pub fn read_arrow(&self, root: &Path, relative: &str) -> Result<Option<(Vec<u8>, [u8; 32])>> {
         let path = root.join(relative);
-        let Some(expected) = expected else {
+        let Some(digest) = self.pinned_digest(relative)? else {
             ensure!(!path.try_exists()?, "unmanifested source file: {relative}");
             return Ok(None);
         };
-        let digest: [u8; 32] = expected
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid source digest for {relative}"))?;
         let bytes = std::fs::read(&path).with_context(|| format!("read {relative}"))?;
         ensure!(
             <[u8; 32]>::from(Sha256::digest(&bytes)) == digest,

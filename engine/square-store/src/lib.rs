@@ -3,13 +3,15 @@
 //! Map of submodules: [`store`] (square files + contracts), [`grid_cols`]
 //! (typed column + grid decoders), [`aircraft_contract`] (shared
 //! producer/runtime schema stamps), [`structure_contract`] (the prepared
-//! screening-height boundary), [`warn_once`] (the serve-and-log reaction of the visitor path).
+//! screening-height boundary), [`facade_exposure_contract`] (each building's
+//! noisiest façade receiver), [`warn_once`] (the serve-and-log reaction of the visitor path).
 //!
 //! Query kernels (roads/buildings/…) transfer with `noise-compute` — they
 //! need normalize/square_country_city/envelope. This crate only opens files and decodes
 //! what is on disk.
 
 pub mod aircraft_contract;
+pub mod facade_exposure_contract;
 pub mod grid_cols;
 pub mod store;
 pub mod structure_contract;

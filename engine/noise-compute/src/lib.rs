@@ -14,6 +14,7 @@ pub mod country_speed_defaults_generated;
 pub mod defaults;
 pub mod emission;
 pub mod envelope;
+pub mod facade_receivers;
 pub mod flight_id;
 pub mod low_profile;
 pub mod normalize;

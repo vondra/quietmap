@@ -3,6 +3,8 @@
  * See [`STOPS`].
  */
 
+import { HM3_COMPUTED_SILENCE } from './hm3-decoder.ts'
+
 // Beate Tomio (Weninger), the "new color scheme" v5.b for noise maps —
 // coloringnoise.com/theoretical_background/new-color-scheme (CC BY-NC-ND 4.0;
 // the 2015 EuroNoise paper tested 232 respondents). The ELEVEN class colors
@@ -35,7 +37,7 @@ const STOPS: { db: number; rgb: readonly [number, number, number]; op: number }[
 // Transparent pixels carry the lightest class color at alpha 0, NOT black:
 // MapLibre's bilinear resample blends RGB before applying alpha, so a
 // transparent-black neighbor bleeds a grey rim into every color↔floor edge
-// (30↔29 dB and NO_DATA edges, seen live 2026-07-21). Bleeding the floor
+// (30↔29 dB and silence / not-assessed edges, seen live 2026-07-21). Bleeding the floor
 // color instead fades those edges in the scheme's own hue.
 const TRANSPARENT: [number, number, number, number] = [
   STOPS[0].rgb[0], STOPS[0].rgb[1], STOPS[0].rgb[2], 0,
@@ -94,21 +96,17 @@ export function paletteRgb(db: number): [number, number, number] {
  * `TILE_PX² = 65 536` times so the avoided palette interpolation is
  * the bulk of decode cost. Size: 256 × 4 = 1 KB, cache-resident.
  *
- * Byte `255` (no-data sentinel) maps to floor-hued alpha-0 (see [`TRANSPARENT`]).
+ * Bytes 254 (computed silence) and 255 (not assessed) carry no level and map
+ * to floor-hued alpha-0 (see [`TRANSPARENT`]).
  */
 export const PALETTE_LUT: Uint8ClampedArray = (() => {
   const lut = new Uint8ClampedArray(256 * 4)
-  for (let byte = 0; byte < 255; byte++) {
-    const db = byte / 2
-    const [r, g, b, a] = paletteColor(db)
+  for (let byte = 0; byte < 256; byte++) {
+    const [r, g, b, a] = byte < HM3_COMPUTED_SILENCE ? paletteColor(byte / 2) : TRANSPARENT
     lut[byte * 4] = r
     lut[byte * 4 + 1] = g
     lut[byte * 4 + 2] = b
     lut[byte * 4 + 3] = a
   }
-  // byte 255 = NO_DATA → transparent, but floor-hued so resampling can't bleed grey.
-  lut[255 * 4] = TRANSPARENT[0]
-  lut[255 * 4 + 1] = TRANSPARENT[1]
-  lut[255 * 4 + 2] = TRANSPARENT[2]
   return lut
 })()

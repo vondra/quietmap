@@ -152,7 +152,7 @@ fn real_parts_and_courtyards_reach_native_json_and_png() {
                 "{point}"
             );
             assert_eq!(
-                super::point_inside_enclosed(&obstacles, lat, lon).is_some(),
+                obstacles.enclosed_footprint_at(lat, lon).is_some(),
                 inside,
                 "{point}"
             );

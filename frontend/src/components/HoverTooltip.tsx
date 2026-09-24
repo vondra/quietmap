@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
 
-import { displayedTileZoom, energySumLdenDb, hm3CellAt, tileCells } from '../lib/hm3-sample'
+import { displayedTileZoom, hm3CellAt, readHeatmapCell, tileCells, type HeatmapCellReadout, type SampledTile } from '../lib/hm3-sample'
 import { buildKey, tileUrl, useTileBuild } from '../lib/tile-urls'
 import { useMapHover } from '../lib/use-map-hover'
 import MapHoverBox from './MapHoverBox'
@@ -38,24 +38,37 @@ export default function HoverTooltip({ sources }: Props) {
     if (tileZ === undefined || tileX === undefined || tileY === undefined || !build) return null
     return {
       key: `${buildKey(build, sources)}|${tileZ}/${tileX}/${tileY}`,
-      urls: sources.map((s) => tileUrl(build, s, tileZ, tileX, tileY)),
+      layers: sources.map((source) => ({ source, url: tileUrl(build, source, tileZ, tileX, tileY) })),
     }
   }, [tileZ, tileX, tileY, build, sources])
-  const [loaded, setLoaded] = useState<{ key: string; tiles: (Uint8Array | null)[] } | null>(null)
+  const [loaded, setLoaded] = useState<{ key: string; layers: { source: string; tile: SampledTile }[] } | null>(null)
   useEffect(() => {
     if (!sample) return
     let cancelled = false
-    void Promise.all(sample.urls.map(tileCells)).then((tiles) => {
-      if (!cancelled) setLoaded({ key: sample.key, tiles })
+    void Promise.all(sample.layers.map(({ source, url }) => tileCells(url).then((tile) => ({ source, tile })))).then((layers) => {
+      if (!cancelled) setLoaded({ key: sample.key, layers })
     })
     return () => { cancelled = true }
   }, [sample])
 
   if (!hover || !cell || !sample) return null
-  // '…' until every source tile of this sample has landed (a partial or
-  // previous-set sum would mislead), then '—' outside the data island or
-  // 'NN.N dB'. A failed source tile reads as silence, as the renderer paints it.
-  const db = loaded?.key === sample.key ? energySumLdenDb(loaded.tiles, cell) : undefined
-  const readout = db === undefined ? '…' : db === null ? '—' : `${db.toFixed(1)} dB`
+  // '…' until every source tile of this sample has landed: a partial or
+  // previous-set sum would mislead.
+  const readout = loaded?.key === sample.key
+    ? heatmapCellReadoutText(readHeatmapCell(loaded.layers, cell))
+    : '…'
   return <MapHoverBox hover={hover} placement="above" testId="heatmap-hover">Lden: {readout}</MapHoverBox>
+}
+
+function heatmapCellReadoutText(readout: HeatmapCellReadout): string {
+  switch (readout.kind) {
+    case 'level': return `${readout.ldenDb.toFixed(1)} dB`
+    case 'no-modelled-source': return 'no modelled source'
+    case 'not-assessed': return 'not computed'
+    case 'unavailable': return `— (${readout.failedSources.map(heatmapSourceName).join(', ')} unavailable)`
+  }
+}
+
+function heatmapSourceName(source: string): string {
+  return source === 'total' ? 'all layers' : source.replace('-', ' ')
 }

@@ -688,3 +688,56 @@ pub fn write_square_structures(
     crate::structures_finalize::finalize_square_structures(&dir, square).unwrap();
     path
 }
+
+/// A square's `facade_exposure.arrow` for the rows given, stamped with the
+/// square's current `structures.arrow` length as the stage would stamp it.
+pub fn write_facade_exposure(
+    square_dir: &Path,
+    rows: &[square_store::facade_exposure_contract::FacadeExposureRow],
+) {
+    use square_store::facade_exposure_contract as contract;
+    let structures_bytes = std::fs::metadata(square_dir.join("structures.arrow"))
+        .unwrap()
+        .len();
+    let metadata = std::collections::HashMap::from([
+        (contract::CONTRACT_KEY.to_string(), contract::CONTRACT.to_string()),
+        (
+            "grid".to_string(),
+            square_store::store::GRID_CONTRACT_Z30.to_string(),
+        ),
+        (contract::LAYER_ORDER_KEY.to_string(), "road".to_string()),
+        (
+            contract::STRUCTURES_BYTES_KEY.to_string(),
+            structures_bytes.to_string(),
+        ),
+    ]);
+    let schema = std::sync::Arc::new(contract::schema(1, metadata));
+    let batch = RecordBatch::try_new(schema.clone(), contract::columns(rows, 1).unwrap()).unwrap();
+    let file = std::fs::File::create(square_dir.join(contract::FACADE_EXPOSURE_ARROW)).unwrap();
+    let mut writer = FileWriter::try_new(file, &schema).unwrap();
+    writer.write(&batch).unwrap();
+    writer.finish().unwrap();
+}
+
+/// The stage's row for a building whose exposed receivers are `receivers`,
+/// choosing `chosen` (no layer powers: the popup does not read them).
+pub fn facade_exposure_row(
+    footprint_id: u32,
+    receivers: &[noise_compute::facade_receivers::FacadeReceiverPosition],
+    chosen: Option<usize>,
+) -> square_store::facade_exposure_contract::FacadeExposureRow {
+    square_store::facade_exposure_contract::FacadeExposureRow {
+        footprint_id,
+        facade_points: receivers.len() as u32,
+        chosen: chosen.map(|i| square_store::facade_exposure_contract::ChosenFacadeReceiver {
+            canonical_index: i as u32,
+            gx: receivers[i].gx,
+            gy: receivers[i].gy,
+            ground_altitude_m: 0.0,
+            outward_bearing_deg: receivers[i].outward_bearing_deg,
+            layer_period_power: vec![0.0; 3],
+            total_lden_db: 0.0,
+            runner_up_lden_db: None,
+        }),
+    }
+}

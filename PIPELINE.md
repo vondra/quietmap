@@ -210,6 +210,19 @@ writes anything — a re-batch or an index (a `structures.arrow` changed after t
 step); the audit refuses a square whose `structures.qoix` is missing or whose
 non-empty `structures.arrow` carries no `qm_blocks`.
 
+Then run the façade-exposure stage, the last prepared stage and the only one that
+needs a CUDA card: per z9 square, `relevant-source-gpu`'s `facade-exposure
+--prepared-year YEAR --raster-root YEAR --input-manifest M --input-manifest-sha256 H
+--square z9/X/Y --output YEAR/z9/X/Y/facade_exposure.arrow`, where `M` pins the
+final Arrow inputs (`scripts/prepared_manifest.py`). It places the CNOSSOS §2.8
+façade receivers of every enclosed building the square owns (`screening_ordinal`
+of its `structures.arrow`), evaluates them exactly with the painter's kernels and
+the aircraft fields, and writes one row per building: its noisiest receiver with
+per-layer, per-period powers (`square-store/src/facade_exposure_contract.rs`). The
+popup refuses a click inside a building of a square without the file; the
+painter refuses to paint a building whose owner square lacks it. Any later change
+of structures, sources, rasters or physics reruns the stage, then the manifest.
+
 Compare actual popup levels, source provenance, counts and screening against the reference generation
 on city, airport, quiet, coast, border and polar cases. Include adjacent clicks in
 one process. A same-coordinate result-cache hit does not demonstrate nearby-click

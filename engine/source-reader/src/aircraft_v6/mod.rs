@@ -149,9 +149,9 @@ pub fn add_v6_aircraft_to_result(
     };
     let mut crossing_scratch =
         noise_compute::propagation::obstacle_index::CrossingScratch::default();
-    let receiver_is_enclosed =
-        crate::structure_store::point_inside_enclosed(obstacles, receiver.lat, receiver.lon)
-            .is_some();
+    let receiver_is_enclosed = obstacles
+        .enclosed_footprint_at(receiver.lat, receiver.lon)
+        .is_some();
     let building_horizon = (n_airborne_rows > 0 && !receiver_is_enclosed)
         .then(|| {
             noise_compute::emission::aircraft::BuildingHorizon::build(

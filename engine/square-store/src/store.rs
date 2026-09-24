@@ -315,6 +315,9 @@ pub struct SquareData {
     pub aircraft_airport_traffic: LazyArrow,
     /// OSM aeroway microsegments (`airport_lines.arrow`).
     pub airport_lines: LazyArrow,
+    /// The noisiest façade receiver of each enclosed building (`facade_exposure.arrow`);
+    /// absent only in a release built without the façade-exposure stage.
+    pub facade_exposure: LazyArrow,
     /// Emission layers whose file carries another contract stamp: read as absent and named in
     /// the response; the point query then skips that layer in every square. Never cached, so
     /// a repaired file serves on the next click. The world build audit refuses such a file.
@@ -405,6 +408,9 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         aircraft_cruise: LazyArrow::open(&dir.join("cruise.arrow"))?,
         aircraft_airport_traffic: LazyArrow::open(&dir.join("airport_traffic.arrow"))?,
         airport_lines: LazyArrow::open(&dir.join("airport_lines.arrow"))?,
+        facade_exposure: LazyArrow::open(
+            &dir.join(crate::facade_exposure_contract::FACADE_EXPOSURE_ARROW),
+        )?,
         unavailable_layers,
     })
 }

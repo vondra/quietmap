@@ -159,7 +159,7 @@ fn main() -> anyhow::Result<()> {
     let field = CruiseField::load(owner, root, &manifest, &rasters)?;
     let load_seconds = t.elapsed().as_secs_f64();
     let t = Instant::now();
-    let receivers = TileReceivers::prepare(&scene, tile_x, tile_y)?;
+    let receivers = TileReceivers::prepare(&scene, tile_x, tile_y)?.points;
     let preparation_seconds = t.elapsed().as_secs_f64();
     let t = Instant::now();
     let powers = field.period_powers(&scene, &receivers)?;
