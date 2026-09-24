@@ -370,6 +370,26 @@ impl Spiller {
         tags: &Tags,
         ring: Option<&[[f64; 2]]>,
     ) -> Result<()> {
+        let leisure_line = *ftype == FeatureType::Leisure
+            && osm_kind == "way"
+            && classify::is_leisure_line(
+                |key| tags.get(key).map(String::as_str),
+                ring.is_some_and(classify::is_a_closed_ring),
+            );
+        if matches!(
+            ftype,
+            FeatureType::Industrial | FeatureType::WindTurbine | FeatureType::Leisure
+        ) && osm_kind != "node"
+            && !ring.is_some_and(|ring| {
+                if leisure_line {
+                    ring.len() >= 2
+                } else {
+                    classify::is_a_closed_ring(ring)
+                }
+            })
+        {
+            return Ok(());
+        }
         let bucket = self.bucket(square);
         let name = ftype.name();
 
@@ -491,6 +511,10 @@ impl Spiller {
             write!(w, "\t{}\t{osm_kind}", tags_json(tags)?)?;
         }
 
+        if *ftype == FeatureType::Leisure {
+            // Preserve the original line decision: snapping can close nearby endpoints.
+            write!(w, "\t{}", u8::from(leisure_line))?;
+        }
         writeln!(w)?;
         Ok(())
     }
@@ -534,7 +558,8 @@ impl Spiller {
 pub const SPILL_COMPLETE_MARKER: &str = "complete";
 
 fn completion_identity(num_buckets: usize, input_identity: &str) -> String {
-    serde_json::json!([num_buckets, input_identity]).to_string()
+    // Version 2 retains original leisure line identity before coordinate snapping.
+    serde_json::json!([2, num_buckets, input_identity]).to_string()
 }
 
 pub fn is_complete(dir: &Path, num_buckets: usize, input_identity: &str) -> bool {
@@ -1285,6 +1310,12 @@ mod settlement_class_tests {
         assert!(is_complete(&dir, 4, "planet-a"));
         assert!(!is_complete(&dir, 8, "planet-a"));
         assert!(!is_complete(&dir, 4, "planet-b"));
+        fs::write(
+            dir.join(SPILL_COMPLETE_MARKER),
+            serde_json::json!([4, "planet-a"]).to_string(),
+        )
+        .unwrap();
+        assert!(!is_complete(&dir, 4, "planet-a"));
         fs::remove_dir_all(dir).unwrap();
     }
 }

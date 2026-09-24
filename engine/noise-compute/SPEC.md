@@ -341,13 +341,15 @@ retain solar, substation and transformer evidence for their specific models.
 They currently emit nothing pending those models. Raw power/output/rating and
 lifecycle tags survive, with OSM object kind to disambiguate IDs. Registry
 matching does not overwrite these classes. Industrial and leisure multipolygons
-retain every outer component as a separate row; inner holes remain outside the
+retain every closed outer component as a separate row; unclosed fragments are
+omitted rather than assigned an area. Inner holes remain outside the
 existing single-ring geometry contract.
 
 `leisure_v4` adds motorsport class 10 and shooting class 11, `osm_tags`, OSM kind,
 geometry kind (0 point, 1 area, 2 line) and line length. Two-node raceways and
 motor-sport tracks survive with open-chain geometry; enclosing polygons are
-separate area rows. Shooting subtype and indoor/building flags survive on nodes,
+separate area rows. Open non-motorised tracks also retain their line path;
+coordinate snapping does not change line/area identity. Shooting subtype and indoor/building flags survive on nodes,
 ways and relations. These two classes are staged and silent until the activity
 models consume them; an enclosing area must not duplicate a line's emission.
 A physical building also retains its separate source row and has no generic

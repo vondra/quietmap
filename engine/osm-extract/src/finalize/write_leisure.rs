@@ -47,14 +47,13 @@ pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
 
     for row in rows {
         // TSV: sq(0) osm_id(1) c_gx(2) c_gy(3) sport(4) opening_hours(5)
-        //      name(6) ring(7)
+        //      name(6) ring(7) osm_tags(8) osm_kind(9) line(10)
         if row.len() < 7 {
             continue;
         }
         let c_gx = parse_grid_cell(&row[2]);
         let c_gy = parse_grid_cell(&row[3]);
-        anyhow::ensure!(row.len() > 8, "old or truncated leisure spill");
-        let tags: crate::classify::Tags = serde_json::from_str(&row[8])?;
+        anyhow::ensure!(row.len() > 10, "old or truncated leisure spill");
         let ring: Option<Vec<(i32, i32)>> = row[7]
             .split(';')
             .map(|point| {
@@ -62,17 +61,11 @@ pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
                 Some((x.parse().ok()?, y.parse().ok()?))
             })
             .collect();
-        let closed = ring
-            .as_ref()
-            .is_some_and(|r| r.len() >= 4 && r.first() == r.last());
-        let line = row.get(9).map(String::as_str) == Some("way")
-            && (!closed
-                || (tags.get("area").map(String::as_str) != Some("yes")
-                    && (tags.get("highway").map(String::as_str) == Some("raceway")
-                        || (tags.get("leisure").map(String::as_str) == Some("track")
-                            && crate::classify::special_leisure_class(|key| {
-                                tags.get(key).map(String::as_str)
-                            }) == Some(10)))));
+        let line = match row[10].as_str() {
+            "0" => false,
+            "1" => true,
+            _ => anyhow::bail!("invalid leisure line marker"),
+        };
         geometry_kind.append_value(if ring.is_none() {
             0
         } else if line {

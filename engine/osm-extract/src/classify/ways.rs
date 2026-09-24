@@ -183,10 +183,10 @@ pub(crate) fn has_a_building<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool 
     !matches!(tag("building"), None | Some("no"))
 }
 
-/// The OSM ring test: four node references or more, the last one repeating the
+/// The OSM ring test: four vertices or more, the last one repeating the
 /// first. An open-air AREA source is only as real as its ring — a line has no
 /// area to scale its emission by, whatever the shoelace formula would compute.
-pub(crate) fn is_a_closed_ring(refs: &[i64]) -> bool {
+pub(crate) fn is_a_closed_ring<T: PartialEq>(refs: &[T]) -> bool {
     refs.len() >= 4 && refs.first() == refs.last()
 }
 

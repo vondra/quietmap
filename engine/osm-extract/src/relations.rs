@@ -322,14 +322,13 @@ impl RelationAssembler {
     pub fn cleanup(&mut self, rel_id: i64, manifest: &RelationManifest) {
         if let Some(info) = manifest.relations.get(&rel_id) {
             for (way_id, _) in &info.member_ways {
-                // Only remove if this way isn't needed by other pending relations
+                // Completed relations still need their ways until assembly and cleanup.
                 let still_needed = manifest
                     .way_to_relations
                     .get(way_id)
                     .map(|rels| {
-                        rels.iter().any(|(rid, _)| {
-                            *rid != rel_id && self.pending_count.get(rid).copied().unwrap_or(0) > 0
-                        })
+                        rels.iter()
+                            .any(|(rid, _)| *rid != rel_id && self.pending_count.contains_key(rid))
                     })
                     .unwrap_or(false);
                 if !still_needed {
@@ -348,20 +347,23 @@ fn merge_outer_rings(ways: Vec<Vec<[f64; 2]>>) -> Vec<Vec<[f64; 2]>> {
     let mut rings = Vec::new();
     while !remaining.is_empty() {
         let mut ring = remaining.remove(0);
-        while !(ring.len() >= 3 && points_close(ring[0], *ring.last().unwrap())) {
+        while !crate::classify::is_a_closed_ring(&ring) {
             let head = ring[0];
             let tail = *ring.last().unwrap();
             let Some((index, at_head, reverse)) =
                 remaining.iter().enumerate().find_map(|(index, way)| {
+                    if crate::classify::is_a_closed_ring(way) {
+                        return None;
+                    }
                     let first = way[0];
                     let last = *way.last().unwrap();
-                    if points_close(tail, first) {
+                    if tail == first {
                         Some((index, false, false))
-                    } else if points_close(tail, last) {
+                    } else if tail == last {
                         Some((index, false, true))
-                    } else if points_close(head, last) {
+                    } else if head == last {
                         Some((index, true, false))
-                    } else if points_close(head, first) {
+                    } else if head == first {
                         Some((index, true, true))
                     } else {
                         None
@@ -387,13 +389,69 @@ fn merge_outer_rings(ways: Vec<Vec<[f64; 2]>>) -> Vec<Vec<[f64; 2]>> {
     rings
 }
 
-fn points_close(a: [f64; 2], b: [f64; 2]) -> bool {
-    (a[0] - b[0]).abs() < 1e-7 && (a[1] - b[1]).abs() < 1e-7
-}
-
 #[cfg(test)]
 mod evidence_tests {
     use super::*;
+    #[test]
+    fn shared_last_member_survives_until_all_completed_relations_are_assembled() {
+        for order in [[100, 200], [200, 100]] {
+            let manifest = RelationManifest {
+                relations: [(100, 11), (200, 12)]
+                    .into_iter()
+                    .map(|(id, way)| {
+                        (
+                            id,
+                            RelationInfo {
+                                feature_types: vec![FeatureType::Industrial],
+                                tags: Tags::new(),
+                                member_ways: vec![(way, "outer".into()), (30, "outer".into())],
+                            },
+                        )
+                    })
+                    .collect(),
+                way_to_relations: HashMap::from([
+                    (11, vec![(100, "outer".into())]),
+                    (12, vec![(200, "outer".into())]),
+                    (
+                        30,
+                        order.into_iter().map(|id| (id, "outer".into())).collect(),
+                    ),
+                ]),
+            };
+            let mut assembler = RelationAssembler::new(&manifest);
+            assert!(assembler
+                .add_way(11, vec![[0., 0.], [0., 1.], [1., 1.]], &manifest)
+                .is_empty());
+            assert!(assembler
+                .add_way(12, vec![[0., 0.], [1., 0.], [1., 1.]], &manifest)
+                .is_empty());
+            let completed = assembler.add_way(30, vec![[1., 1.], [0., 0.]], &manifest);
+            assert_eq!(completed, order);
+            for id in completed {
+                let relation = assembler.assemble(id, &manifest).unwrap();
+                assert_eq!(relation.rings.len(), 1);
+                assert!(
+                    crate::classify::is_a_closed_ring(&relation.rings[0]),
+                    "relation {id}"
+                );
+                assembler.cleanup(id, &manifest);
+            }
+            assert!(assembler.way_geoms.is_empty());
+            assert!(assembler.pending_count.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_closed_outer_is_not_consumed_by_an_unclosed_fragment() {
+        let a = [0., 0.];
+        let b = [0., 1.];
+        let c = [1., 1.];
+        let closed = vec![a, b, c, a];
+        let rings = merge_outer_rings(vec![vec![a, b, c], closed.clone()]);
+        assert!(rings.contains(&closed));
+        assert_eq!(rings.len(), 2);
+    }
+
     #[test]
     fn outer_parts_and_reversed_members_survive() {
         let a = [0., 0.];

@@ -176,6 +176,13 @@ pub fn special_leisure_class<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> Optio
     }
 }
 
+pub fn is_leisure_line<'a>(tag: impl Fn(&str) -> Option<&'a str>, closed: bool) -> bool {
+    tag("area") != Some("yes")
+        && (tag("highway") == Some("raceway")
+            || (tag("leisure") == Some("track")
+                && (!closed || special_leisure_class(&tag) == Some(10))))
+}
+
 pub fn is_special_leisure<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool {
     special_leisure_class(tag).is_some()
 }

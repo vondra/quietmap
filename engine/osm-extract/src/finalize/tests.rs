@@ -419,7 +419,7 @@ fn multiline_osm_tags_survive_spill_and_arrow_for_every_source() {
                     50.0,
                     14.0,
                     &tags,
-                    None,
+                    Some(&[[50.0, 14.0], [50.0, 14.001], [50.001, 14.001], [50.0, 14.0]]),
                 )
                 .unwrap();
         }
