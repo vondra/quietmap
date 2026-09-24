@@ -1,8 +1,6 @@
-//! Free-field exactness, the two line-chain gaps (normalization #5, horizontal angle #28) and
-//! the node composition of the point-sum kernel.
+//! Free-field exactness and placement of the point-sum nodes.
 
 use super::*;
-use crate::propagation::geo;
 
 const FINE: NodeSpacing = NodeSpacing {
     max_angle_rad: 0.5 * std::f64::consts::PI / 180.0,
@@ -26,7 +24,7 @@ fn exact_line_integral(start: [f64; 3], end: [f64; 3], receiver: [f64; 3]) -> f6
     let length = norm(along);
     let unit = scale(along, 1.0 / length);
     let foot = dot(sub(receiver, start), unit);
-    let lever = norm(sub(receiver, add(start, scale(unit, foot)))).max(FLC_MIN_PERP_M);
+    let lever = norm(sub(receiver, add(start, scale(unit, foot)))).max(LINE_PERPENDICULAR_FLOOR_M);
     (((length - foot) / lever).atan() - (-foot / lever).atan()) / lever
 }
 
@@ -54,39 +52,7 @@ fn free_field_node_sum_is_the_exact_line_integral_for_any_mesh() {
     }
 }
 
-/// The deleted H0 fixture B4, now against the production line chain itself: over flat ground
-/// the point sum sits `10·lg(2π²/10^1.1)` = 1.9533 dB above `−10·lg(2πd) + FLC` (#5).
-#[test]
-fn point_sum_is_1_9533_db_above_the_production_line_chain() {
-    let (start, end, receiver) = ([-125.0, 0.0, 4.0], [125.0, 0.0, 4.0], [0.0, 1000.0, 4.0]);
-    let point_sum_db = db(inverse_square_sum(&line_nodes(start, end, receiver, COARSE)))
-        - POINT_SOURCE_DIVERGENCE_OFFSET_DB;
-    let line_chain_db = -db(2.0 * std::f64::consts::PI * 1000.0)
-        + geo::finite_line_correction_for_divergence(250.0, 1000.0, 0.5, 1000.0);
-    let gap = point_sum_db - line_chain_db;
-    assert!((gap - 1.9533).abs() < 0.001, "gap {gap:.4} dB");
-}
 
-/// #28: beside a road the production chain takes the subtended angle in plan while divergence
-/// runs on the slant distance. A 10 m line, receiver 1 m out and 3.95 m up: the horizontal
-/// angle is 1.90 dB louder than the slant one, which the 1.95 dB normalization gap almost
-/// exactly hides (net +0.05 dB).
-#[test]
-fn horizontal_finite_line_angle_overstates_a_near_line_by_1_90_db() {
-    let (start, end, receiver) = ([-5.0, 0.0, 0.05], [5.0, 0.0, 0.05], [0.0, 1.0, 4.0]);
-    let slant = (1.0_f64 + 3.95 * 3.95).sqrt();
-    let point_sum_db = db(inverse_square_sum(&line_nodes(start, end, receiver, COARSE)))
-        - POINT_SOURCE_DIVERGENCE_OFFSET_DB;
-    let line_chain_db =
-        -db(2.0 * std::f64::consts::PI * slant) + geo::finite_line_correction_for_divergence(10.0, 1.0, 0.5, 1.0);
-    let normalization_db = db(2.0 * std::f64::consts::PI.powi(2) / 10f64.powf(1.1));
-    let horizontal_angle_excess = line_chain_db + normalization_db - point_sum_db;
-    assert!(
-        (horizontal_angle_excess - 1.899).abs() < 0.002,
-        "{horizontal_angle_excess:.4} dB"
-    );
-    assert!((point_sum_db - line_chain_db - 0.054).abs() < 0.002);
-}
 
 /// H0 fixture B5: an end-on receiver never depends on the placement floor.
 #[test]
@@ -125,23 +91,3 @@ fn nodes_lie_on_the_piece_and_honour_the_spacing() {
     assert!(nodes.len() >= (span_deg / 3.0).ceil() as usize);
 }
 
-#[test]
-fn barrier_replaces_ground_per_band_and_divergence_is_the_point_form() {
-    let terms = NodePathTerms {
-        atmospheric_db: [0.5; NUM_BANDS],
-        ground_db: [3.0, 7.0, 3.0, 7.0, 3.0, 7.0, 3.0, -3.0],
-        terrain_db: [2.0; NUM_BANDS],
-        screening_db: [4.0; NUM_BANDS],
-        vegetation_db: [1.0; NUM_BANDS],
-    };
-    let got = node_attenuation_bands(100.0, &terms);
-    let expected = [58.5, 59.5, 58.5, 59.5, 58.5, 59.5, 58.5, 58.5];
-    for band in 0..NUM_BANDS {
-        assert!((got[band] - expected[band]).abs() < 1e-12, "band {band}");
-    }
-    let clear = NodePathTerms {
-        ground_db: [-3.0; NUM_BANDS],
-        ..NodePathTerms::default()
-    };
-    assert_eq!(node_attenuation_bands(0.2, &clear), [8.0; NUM_BANDS]);
-}

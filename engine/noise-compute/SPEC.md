@@ -3,7 +3,7 @@
 The Rust engine is the acoustic source of truth. This document specifies the
 current screening contract; it is not a claim of full CNOSSOS-EU compliance.
 The implementation and regressions live in `src/propagation/path_effects.rs`,
-`diffraction.rs` and `arc_screening.rs`.
+`diffraction.rs`, `line_quadrature.rs`, `ray_transfer.rs` and `relevance_bound.rs`.
 
 ## Receiver and prepared-source selection
 
@@ -263,6 +263,39 @@ indoor attenuation from an absent or generic Overture class. Enclosed garages
 retain their existing classification. This changes enclosure only: screening
 geometry, height, emission and traffic remain unchanged.
 
+## Line sources: the CNOSSOS point sum
+
+A road or rail piece is a straight 3D line between its endpoints' ground plus the
+source height. Directive 2015/996 §2.5.3 splits a line into incoherent points of
+`A_div = 20·lg r + 11`; for a straight piece `dx/r² = dφ/d⊥` (φ the angle in the
+plane that holds the line and the receiver, d⊥ the 3D distance from the receiver to
+the line, floored at 0.5 m), so the point sum is exactly
+`E = W′/(10^1.1·d⊥)·∫ 10^(−A_path(φ)/10) dφ`. In free field this is
+`L_W′ + 10·lg θ − 10·lg d⊥ − 11`; an infinite line reads `L_W′ − 10·lg d⊥ − 6.03`
+(the retired `−10·lg(2π·d) + 10·lg(θ_horizontal/π)` chain sat 1.9533 dB lower and took
+the finite-line angle in plan, #5 and #28).
+
+The integral uses one rule in popup and painter (`propagation::line_quadrature`,
+CUDA `relevant_source_arc.cuh`/`relevant_source_pair.cuh`): five buckets of equal Δφ,
+each node on its own ray from the piece to the receiver with its own profile, ground,
+terrain, screening, vegetation and air absorption at its own slant distance, weight
+Δφ. A bucket spanning at least 3° of horizontal azimuth replaces its node by
+geometry-placed nodes: every obstacle edge within reach that stands at least a metre
+in front of the piece marks a 128-bin blocked mask over the bucket's azimuths (walls
+lower than the source height, and grid cells whose tallest edge is, are skipped);
+every blocked run and clear gap is split into parts of at most 0.26 rad (at most nine
+per run), each part one node weighted by its own Δφ, obstacles read on blocked parts
+only. Against a fine point sum (1°/10 m nodes through the same per-ray physics,
+`point-sum-oracle`) the rule is within ±0.15 dB on straight roads over G = 0, 0.5, 1
+at 5 m–2 km and behind a roadside wall, and within ±0.13 dB per layer at ten real
+receivers.
+
+A source–receiver pair is skipped only when the relevance bound of
+`propagation::relevance_bound` stays below 0 dB in every band of every period
+(`L_W − A_div,min(d) − α·d/1000 + 3 dB`, a line bounded by its infinite line at its
+closest horizontal distance): a night-only source is never dropped by a day-only gate
+(#31). Rail reach is where that bound's Lden falls to 25 dB, clamped to 2–11 km.
+
 ## 4.7 Vector screening
 
 One source-to-receiver ray shares its bare-earth raster profile between terrain
@@ -285,8 +318,7 @@ difference before evaluating attenuation is not equivalent. Adding a candidate
 must not reduce any band's envelope. Raising a wall or building must not make
 the receiver louder in the competing-roof regression.
 
-Line-source angular integration is unchanged: interval rays use their own
-terrain and crossings, and energy-average their ground-or-barrier composite.
+Every line quadrature node runs this ray with its own terrain and crossings.
 The existing ground, vegetation, atmospheric and emission models are unchanged.
 
 ### Popup trace
@@ -294,8 +326,9 @@ The existing ground, vegetation, atmospheric and emission models are unchanged.
 The schema retains one real representative crossing: greatest incremental loss
 in any band, then greatest path difference; exact ties retain input order.
 Its position, height and path difference describe that crossing only. Other
-crossings may supply other bands, and other rays may supply the line-source fan.
-No positive increment means no representative edge. Scalar impact remains the
+crossings may supply other bands. A line piece's trace shows its loudest quadrature
+node's ray, and its fan lists every node with its horizontal azimuth stretch and 1 kHz
+terrain and screening effect. No positive increment means no representative edge. Scalar impact remains the
 A-weighted difference between full and no-screening Lden, not this edge's loss.
 
 ### Model boundary

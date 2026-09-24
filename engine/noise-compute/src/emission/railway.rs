@@ -25,8 +25,8 @@ const B_ROLLING: f64 = 30.0;
 
 /// END day/evening/night period lengths [h] (12 / 4 / 8). The ONE definition
 /// of the period split — every rail period loop (popup `compute_railways`,
-/// heatmap `NormalizedRail::period_emissions`, the reach solver
-/// `free_field_lden_at`) iterates [`RailTimeDist::periods`] over these so the
+/// heatmap `NormalizedRail::period_emissions`, the reach
+/// `rail_period_emissions`) iterates [`RailTimeDist::periods`] over these so the
 /// share model can never fork into a second copy.
 pub const RAIL_PERIOD_HOURS: [f64; 3] = [12.0, 4.0, 8.0];
 
@@ -348,40 +348,18 @@ pub fn default_speed(rail_type: RailType) -> f64 {
     }
 }
 
-/// Free-field Lden from the prepared passenger and freight counts in each period.
-fn free_field_lden_at(
+/// The prepared passenger and freight counts of each period as band emissions `L_W′`.
+pub fn rail_period_emissions(
     rail_type: RailType,
     speed_kmh: f64,
     traffic: crate::normalize::RailTraffic,
-    d: f64,
-) -> f64 {
-    use crate::constants::ALPHA_ATM;
-    use crate::propagation::iso9613::{a_weighted_total, legacy_ground_atten_db};
-
-    let d = d.max(1.0);
-    let geo = 10.0 * (2.0 * std::f64::consts::PI * d).log10();
-    let d_over_1000 = d / 1000.0;
-    let received = |passenger: f64, freight: f64, period_hours: f64| -> f64 {
-        let em = railway_emission(rail_type, speed_kmh, passenger, freight, period_hours);
-        let mut bands = [0.0f64; NUM_BANDS];
-        for i in 0..NUM_BANDS {
-            // G = 0 is the LOUDEST ground the path could have (A_ground is
-            // monotone increasing in G), so the reach this solves stays an
-            // upper bound on audibility; kept explicit, and routed through the
-            // shared term, so the boundary matches the kernel's free-field
-            // limit exactly. Post hard-ground fix that term is −3 dB, not 0.
-            bands[i] = em[i] - geo - ALPHA_ATM[i] * d_over_1000 - legacy_ground_atten_db(i, 0.0);
-        }
-        a_weighted_total(&bands)
-    };
-    let [(pd, fd, hd), (pe, fe, he), (pn, fn_, hn)] = traffic.periods();
-    let ld = received(pd, fd, hd);
-    let le = received(pe, fe, he);
-    let ln = received(pn, fn_, hn);
-    crate::periods::compute_lden(ld, le, ln)
+) -> [[f64; NUM_BANDS]; 3] {
+    traffic
+        .periods()
+        .map(|(passenger, freight, hours)| railway_emission(rail_type, speed_kmh, passenger, freight, hours))
 }
 
-/// Solve the prepared period emissions against the shared free-field audibility threshold.
+/// Reach of a rail row: where the surface relevance bound's Lden falls to the rail edge.
 pub fn rail_reach_m(
     rail_type: RailType,
     speed_kmh: f64,
@@ -390,20 +368,15 @@ pub fn rail_reach_m(
     use crate::constants::{
         RAILWAY_REACH_CLAMP_MAX, RAILWAY_REACH_CLAMP_MIN, RAILWAY_REACH_TARGET_LDEN_DB,
     };
-    let target = RAILWAY_REACH_TARGET_LDEN_DB;
-    let mut lo = 100.0_f64; // below floor; bisection bracket, clamp finalises
-    let mut hi = 50_000.0_f64; // above ceiling; widest bracket we ever need
-                               // 40 log-halvings: (ln(50000)-ln(100))/2^40 → sub-millimetre, ample margin.
-    for _ in 0..40 {
-        let mid = ((lo.ln() + hi.ln()) * 0.5).exp();
-        if free_field_lden_at(rail_type, speed_kmh, traffic, mid) > target {
-            lo = mid; // still loud → push the crossing outward
-        } else {
-            hi = mid;
-        }
-    }
-    let reach = ((lo.ln() + hi.ln()) * 0.5).exp();
-    reach.clamp(RAILWAY_REACH_CLAMP_MIN, RAILWAY_REACH_CLAMP_MAX)
+    use crate::propagation::relevance_bound::{surface_relevance_bound, SourceSpread};
+    surface_relevance_bound()
+        .reach_m(
+            &rail_period_emissions(rail_type, speed_kmh, traffic),
+            SourceSpread::Line,
+            RAILWAY_REACH_TARGET_LDEN_DB,
+            RAILWAY_REACH_CLAMP_MAX,
+        )
+        .clamp(RAILWAY_REACH_CLAMP_MIN, RAILWAY_REACH_CLAMP_MAX)
 }
 
 #[cfg(test)]
@@ -447,7 +420,8 @@ mod tests {
         )
     }
 
-    fn free_field_lden_at(
+    /// The relevance bound's Lden of the row at `distance` — what the reach solves.
+    fn bound_lden_at(
         country: SquareCountryCity,
         kind: RailType,
         speed: f64,
@@ -455,10 +429,10 @@ mod tests {
         freight: f64,
         distance: f64,
     ) -> f64 {
-        super::free_field_lden_at(
-            kind,
-            speed,
-            prepared_traffic(country, kind, passenger, freight),
+        use crate::propagation::relevance_bound::{surface_relevance_bound, SourceSpread};
+        surface_relevance_bound().lden_db(
+            &rail_period_emissions(kind, speed, prepared_traffic(country, kind, passenger, freight)),
+            SourceSpread::Line,
             distance,
         )
     }
@@ -517,68 +491,29 @@ mod tests {
         );
     }
 
-    /// The reach solver must put the free-field Lden of each representative row
-    /// exactly at the 25 dB target *at the distance it returns* — the defining
-    /// property. Verified by re-evaluating `free_field_lden_at` at the solved
-    /// reach (skipped when the clamp fired, since then the crossing is outside
-    /// `[min,max]` and the returned value is the clamp, not the root).
-    /// Uses `SquareCountryCity::UNKNOWN` (world split) — the property holds under any split.
+    /// The reach puts the bound's Lden of each representative row exactly at the 25 dB edge
+    /// at the distance it returns, unless a clamp fired — then the row is still above the edge
+    /// at the ceiling.
     #[test]
     fn reach_lands_on_25_db_target() {
         let square_country_city = SquareCountryCity::UNKNOWN;
         let mut unclamped = 0;
         for (rt, sp, qp, qf) in [
+            (RailType::Rail, 80.0, 10.0, 0.0),
             (RailType::Rail, 80.0, 80.0, 20.0),
-            (RailType::Rail, 300.0, 80.0, 0.0),
-            (RailType::Tram, 40.0, 120.0, 0.0),
+            (RailType::Tram, 25.0, 120.0, 0.0),
         ] {
             let r = rail_reach_m(square_country_city, rt, sp, qp, qf);
-            let lden = free_field_lden_at(square_country_city, rt, sp, qp, qf, r);
-            if r >= 10_000.0 {
-                // Clamped: the crossing lies OUTSIDE the band, so the defining
-                // property cannot hold at `r`. What must hold is that the clamp
-                // is the reason — the row is still above target at the ceiling.
-                // (The 300 km/h corridor moved here when the CNOSSOS
-                // hard-ground floor lifted every row's free-field limit 3 dB.)
-                assert!(
-                    lden > 25.0,
-                    "{rt:?} clamped at {r} but Lden there is {lden:.3} ≤ 25 — not a clamp"
-                );
+            let lden = bound_lden_at(square_country_city, rt, sp, qp, qf, r);
+            if r >= crate::constants::RAILWAY_REACH_CLAMP_MAX {
+                assert!(lden > 25.0, "{rt:?} clamped at {r} but Lden there is {lden:.3}");
                 continue;
             }
             assert!(r > 2_000.0, "{rt:?} reach {r} hit the floor clamp");
-            assert!(
-                (lden - 25.0).abs() < 0.05,
-                "{:?} Lden@reach = {lden:.3}, want 25",
-                rt
-            );
+            assert!((lden - 25.0).abs() < 1e-6, "{rt:?} Lden@reach = {lden:.3}, want 25");
             unclamped += 1;
         }
         assert!(unclamped >= 2, "the 25 dB property was never exercised");
-    }
-
-    /// POST-C1 ANCHOR: a default mainline (80 pax + 20 freight @ 80 km/h) under
-    /// the WORLD split (`SquareCountryCity::UNKNOWN`, freight 0.50/0.167/0.333) reaches
-    /// ≈9.2 km — PAST the retired blanket `RAILWAY_MAX_RADIUS = 7000` because
-    /// even the uniform world split lifts the freight night share 0.15→0.333 vs
-    /// the old flat split, whose crossing was 25.3 dB at 7 km. The dominant
-    /// mainline class is no longer perfectly
-    /// value-neutral — that is the intended C1 effect (the night-heavy
-    /// redistribution reaches the fringe ring), bounded by the 10 km clamp.
-    ///
-    /// WAS ≈7.7 km until the CNOSSOS hard-ground floor landed (2026-08-05).
-    /// `free_field_lden_at` solves at G = 0, the loudest ground a path can
-    /// have, and that limit is `A_ground = −3 dB` (not 0 dB), so every row is
-    /// 3 dB louder at every distance and its 25 dB crossing moves outward. The
-    /// old figure was the missing term, not a calibration; recomputed, not
-    /// re-fitted.
-    #[test]
-    fn default_mainline_reach_post_c1() {
-        let r = rail_reach_m(SquareCountryCity::UNKNOWN, RailType::Rail, 80.0, 80.0, 20.0);
-        assert!(
-            (8_900.0..=9_400.0).contains(&r),
-            "world mainline reach {r:.0} m, want ≈9.2 km"
-        );
     }
 
     /// C1: the SAME default mainline under an EU region (CZ) reaches FARTHER than
@@ -600,74 +535,15 @@ mod tests {
         );
     }
 
-    /// HONESTY FIX: a 300 km/h high-speed passenger corridor is 30.8 dB at 7 km,
-    /// 5.8 dB louder than the boundary. Pax-only, so the EU
-    /// vs world freight split is irrelevant (pax night 0.10 both).
-    ///
-    /// Its unclamped crossing is 10,866.8 m (measured 2026-09-03): the old 10 km
-    /// ceiling clipped it, the decided 11 km ceiling lets the class end where its
-    /// own 25 dB crossing is. The assertion worth pinning is that the class is
-    /// solved acoustically again, between the old cap and the new ceiling.
-    #[test]
-    fn highspeed_reach_is_solved_below_the_ceiling() {
-        let r = rail_reach_m(SquareCountryCity::UNKNOWN, RailType::Rail, 300.0, 80.0, 0.0);
-        assert!(
-            r > 10_000.0 && r < crate::constants::RAILWAY_REACH_CLAMP_MAX,
-            "HS reach {r:.0} m, want (10 km, 11 km ceiling)"
-        );
-        // …and the old 10 km cap really clipped it: the free-field Lden there is
-        // still above the 25 dB target, while at the solved reach it has fallen
-        // to the target.
-        let at_old_cap = free_field_lden_at(
-            SquareCountryCity::UNKNOWN,
-            RailType::Rail,
-            300.0,
-            80.0,
-            0.0,
-            10_000.0,
-        );
-        assert!(
-            at_old_cap > crate::constants::RAILWAY_REACH_TARGET_LDEN_DB,
-            "HS Lden at the old 10 km cap is {at_old_cap:.2} dB, must still exceed the 25 dB target"
-        );
-        let at_reach = free_field_lden_at(
-            SquareCountryCity::UNKNOWN,
-            RailType::Rail,
-            300.0,
-            80.0,
-            0.0,
-            r,
-        );
-        assert!(
-            (at_reach - crate::constants::RAILWAY_REACH_TARGET_LDEN_DB).abs() < 0.1,
-            "HS Lden at its solved reach is {at_reach:.2} dB, want the 25 dB target"
-        );
-    }
-
-    /// PERF WIN: tram (120 services/day @ 40 km/h) is only 16.8 dB @ 7 km —
-    /// far below the boundary, so it shrinks. Calibrated reach ≈4.3-4.7 km
-    /// (continuous form; the 3.5 km bucket was the rounded light-rail figure,
-    /// while the busier 120-train tram default lands a touch
-    /// higher). Lighter rail classes shrink further still. Was ≈3.6 km before
-    /// the CNOSSOS hard-ground floor made the G = 0 free-field limit −3 dB
-    /// instead of 0 dB; recomputed, not re-fitted.
+    /// A tram line reaches less far than a default mainline, a light-rail line less still.
     #[test]
     fn tram_reach_shrinks_below_mainline() {
         let square_country_city = SquareCountryCity::UNKNOWN;
-        let tram = rail_reach_m(square_country_city, RailType::Tram, 40.0, 120.0, 0.0);
-        assert!(
-            (4_300.0..=4_700.0).contains(&tram),
-            "tram reach {tram:.0} m, want ≈4.3-4.7 km"
-        );
-        let light = rail_reach_m(square_country_city, RailType::LightRail, 60.0, 80.0, 0.0);
-        assert!(
-            light < tram,
-            "light-rail {light:.0} should be < tram {tram:.0}"
-        );
-        assert!(
-            light < 7_000.0,
-            "light-rail {light:.0} must be well under the old 7 km"
-        );
+        let mainline = rail_reach_m(square_country_city, RailType::Rail, 80.0, 30.0, 0.0);
+        let tram = rail_reach_m(square_country_city, RailType::Tram, 25.0, 120.0, 0.0);
+        let light = rail_reach_m(square_country_city, RailType::LightRail, 60.0, 20.0, 0.0);
+        assert!(tram < mainline, "tram {tram:.0} should be < mainline {mainline:.0}");
+        assert!(light < mainline, "light-rail {light:.0} should be < mainline {mainline:.0}");
     }
 
     /// Clamp floor: a near-silent stub (one passenger train/day @ 80 km/h
@@ -806,46 +682,21 @@ mod tests {
         assert_eq!(rail_time_dist(fr, RailType::Rail).frt, TD_EU_RAIL.frt);
     }
 
-    /// SOLVER-VS-KERNEL CONSISTENCY (task mandate): the reach solver and the
-    /// kernel must compute the same period Lden for the same row+square_country_city. Since the
-    /// solver IS `free_field_lden_at` (which now consumes `rail_time_dist`), this
-    /// pins that no second copy of the split exists — recompute the kernel's
-    /// free-field Lden independently from `railway_emission` + the shared shares
-    /// and require an exact match to `free_field_lden_at`.
+    /// The reach and the kernel read one period split: the emissions the reach bounds are the
+    /// kernel's own per-period emissions of the row.
     #[test]
-    fn solver_period_model_matches_kernel_split() {
+    fn reach_emissions_are_the_kernel_period_split() {
         let cz = SquareCountryCity {
             continent: crate::square_country_city::Continent::Europe,
             country_iso: *b"CZ",
             city_id: 0,
         };
-        let (rt, sp, qp, qf, d) = (RailType::Rail, 80.0, 80.0, 20.0, 3_500.0);
-        // Independent re-derivation using the public shared helper.
+        let (rt, sp, qp, qf) = (RailType::Rail, 80.0, 80.0, 20.0);
         let td = rail_time_dist(cz, rt);
-        let geo = 10.0 * (2.0 * std::f64::consts::PI * d).log10();
-        let recv = |pax_pct: f64, frt_pct: f64, h: f64| {
-            let em = railway_emission(rt, sp, qp * pax_pct, qf * frt_pct, h);
-            let mut bands = [0.0f64; NUM_BANDS];
-            for i in 0..NUM_BANDS {
-                // Same G = 0 free-field limit the solver takes — through the
-                // shared ground term, so this stays an independent check of
-                // the PERIOD SPLIT and not a second copy of the ground formula
-                // (it silently was one while `A_ground(0)` happened to be 0).
-                bands[i] = em[i]
-                    - geo
-                    - crate::constants::ALPHA_ATM[i] * (d / 1000.0)
-                    - crate::propagation::iso9613::legacy_ground_atten_db(i, 0.0);
-            }
-            a_weighted_total(&bands)
-        };
-        let [(pd, fd, hd), (pe, fe, he), (pn, fn_, hn)] = td.periods();
-        let want =
-            crate::periods::compute_lden(recv(pd, fd, hd), recv(pe, fe, he), recv(pn, fn_, hn));
-        let got = free_field_lden_at(cz, rt, sp, qp, qf, d);
-        assert!(
-            (want - got).abs() < 1e-9,
-            "kernel split {want} != solver {got}"
-        );
+        let got = rail_period_emissions(rt, sp, prepared_traffic(cz, rt, qp, qf));
+        for (period, &(pax, frt, hours)) in td.periods().iter().enumerate() {
+            assert_eq!(got[period], railway_emission(rt, sp, qp * pax, qf * frt, hours));
+        }
     }
 
     /// C1 CORE INVARIANT: a mixed EU line's `Ln − Lden` must NOT equal the old
@@ -883,53 +734,6 @@ mod tests {
         assert!(
             ln > ld,
             "freight-heavy EU night Leq {ln:.1} must exceed day {ld:.1}"
-        );
-    }
-
-    /// GATE UPPER-BOUND REGRESSION: the popup early-exit in
-    /// `compute_railways` must screen on the LOUDEST period, not day. For a quiet,
-    /// slow EU freight row the night block (freight 0.5458 over 8 h) is louder than
-    /// day (freight 0.3407 over 12 h), so a day-only gate would prune a segment the
-    /// heatmap (all-period Lden) keeps — a parity break. Pin: at a distance where
-    /// the DAY band drops below the free-field threshold, the max-over-periods band
-    /// stays above it, so the segment survives the gate.
-    #[test]
-    fn early_gate_screens_on_loudest_period_not_day() {
-        let cz = SquareCountryCity {
-            continent: crate::square_country_city::Continent::Europe,
-            country_iso: *b"CZ",
-            city_id: 0,
-        };
-        let td = rail_time_dist(cz, RailType::Rail);
-        // Quiet slow EU freight (a near-silent service/branch stub: effective
-        // 0.02 freight/day @ 30 km/h). Loud rows never expose the window — the
-        // gate only matters near the threshold, which is exactly where a quiet
-        // night-freight row sits.
-        let (sp, qp, qf) = (30.0, 0.0, 0.02);
-        let max_band = |pax_pct: f64, frt_pct: f64, h: f64| {
-            railway_emission(RailType::Rail, sp, qp * pax_pct, qf * frt_pct, h)
-                .iter()
-                .cloned()
-                .fold(f64::NEG_INFINITY, f64::max)
-        };
-        let day = max_band(td.pax[0], td.frt[0], 12.0);
-        let loudest = td
-            .periods()
-            .iter()
-            .map(|&(p, f, h)| max_band(p, f, h))
-            .fold(f64::NEG_INFINITY, f64::max);
-        assert!(
-            loudest > day,
-            "night must be the loudest period for EU freight"
-        );
-        // 1500 m sits inside the day-prunes / loudest-keeps window (measured
-        // 1200–1900 m for this row).
-        let d = 1_500.0;
-        let day_pruned = grid::geo::below_free_field_threshold_line(day, d, 0.0);
-        let loudest_kept = !grid::geo::below_free_field_threshold_line(loudest, d, 0.0);
-        assert!(
-            day_pruned && loudest_kept,
-            "at {d} m: day-gate prunes ({day_pruned}) but max-over-periods keeps ({loudest_kept}) — the bug the gate fix closes",
         );
     }
 

@@ -1,10 +1,9 @@
-//! `point-sum-oracle` — reference measurements for the propagation kernel: the CNOSSOS-EU test
-//! cases (ISO/TR 17534-4) on today's kernel, and today's line chain against the CNOSSOS point
-//! sum (`noise_compute::propagation::point_sum`) with the audit's switches, on synthetic line
-//! geometries and on real receivers of a prepared release. Prints one JSON document.
+//! `point-sum-oracle` — reference measurements for the line quadrature: every road and rail
+//! piece evaluated by the production quadrature (5 in-plane buckets, each node on its own ray)
+//! and by a fine CNOSSOS point sum (§2.5.3) whose nodes run the same production ray, on
+//! synthetic line scenes and on real receivers of a prepared release. Prints one JSON document.
 //!
 //! ```text
-//! point-sum-oracle tc <cases.json>
 //! point-sum-oracle lines [<max_angle_deg> <max_length_m>]
 //! point-sum-oracle receivers <prepared-year-dir> <receivers.csv> [<max_angle_deg> <max_length_m>]
 //! ```
@@ -14,17 +13,11 @@
 //! exports only link inside the Node host, so under it this binary is an empty stub.
 
 #[cfg(not(feature = "node"))]
-mod edges;
-#[cfg(not(feature = "node"))]
 mod lines;
 #[cfg(not(feature = "node"))]
-mod ray;
+mod piece;
 #[cfg(not(feature = "node"))]
 mod receivers;
-#[cfg(not(feature = "node"))]
-mod segment;
-#[cfg(not(feature = "node"))]
-mod tc;
 
 #[cfg(not(feature = "node"))]
 use noise_compute::propagation::point_sum::NodeSpacing;
@@ -47,10 +40,6 @@ fn spacing(args: &[String]) -> NodeSpacing {
 fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
-        Some("tc") => {
-            let text = std::fs::read_to_string(args.get(1).ok_or("tc needs <cases.json>")?).map_err(|e| e.to_string())?;
-            tc::run(&serde_json::from_str(&text).map_err(|e| e.to_string())?)
-        }
         Some("lines") => lines::run(spacing(&args[1..])),
         Some("receivers") => {
             let dir = args.get(1).ok_or("receivers needs <prepared-year-dir>")?;
@@ -66,7 +55,7 @@ fn main() -> Result<(), String> {
                 .collect();
             receivers::run(Path::new(dir), &points, spacing(&args[3..]))?
         }
-        _ => return Err("usage: point-sum-oracle tc <cases.json> | lines | receivers <dir> <csv>".into()),
+        _ => return Err("usage: point-sum-oracle lines | receivers <dir> <csv>".into()),
     };
     println!("{}", serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?);
     Ok(())

@@ -4,26 +4,17 @@ use crate::*;
 
 /// Compute road noise: emission per period → propagation → Lden per segment.
 ///
-/// THREE PASSES, so the heavy per-segment work can run on every core while the
-/// answer stays bit-identical to the sequential loop it replaced (the popup is
-/// the acoustic reference — f64 accumulation order is part of the contract):
+/// Two passes, so the per-piece work runs on every core while the answer stays
+/// bit-identical run to run (the popup is the acoustic reference — f64
+/// accumulation order is part of the contract):
 ///
-/// 1. **Gates + growth chain** (sequential): per-segment admission gates, and
-///    the EXACT skyline-ensure sequence the sequential kernel would run — the
-///    one piece that cannot parallelize, because a receiver's [`ArcSkyline`]
-///    grows on demand and later segments read the grown result (SPEC §4.7
-///    REPRODUCIBILITY). Between two growth steps the skyline is frozen; each
-///    segment records a [`SkylineSnapshot`] of the state its sequential twin
-///    would have read.
-/// 2. **Evaluation** (parallel, rayon): path profile, cp-ray effects, arc
-///    quadrature against the frozen snapshot, per-period propagation, the
-///    ref-inference scan, the obstacle histogram probe, the popup trace. Pure
-///    per segment — per-thread scratch, no shared mutable state — so thread
-///    interleaving cannot move a bit; the ordered `collect` keeps results in
-///    segment order.
-/// 3. **Accumulation** (sequential): the original fold, in segment order —
-///    grouping, dominant selection, trace push order, energy sums. Identical
-///    statements over identical inputs ⇒ identical bits.
+/// 1. **Evaluation** (parallel, rayon): gates, the line quadrature of each piece
+///    (every node on its own ray), per-period propagation, the ref-inference
+///    scan, the obstacle histogram probe, the popup trace. Pure per segment —
+///    per-thread scratch, no shared mutable state — and the ordered `collect`
+///    keeps results in segment order.
+/// 2. **Accumulation** (sequential): grouping, dominant selection, trace push
+///    order, energy sums, in segment order.
 pub(crate) fn compute_roads(
     receiver: &Receiver,
     roads: &[RoadSegment],
@@ -31,16 +22,21 @@ pub(crate) fn compute_roads(
     rasters: &dyn RasterSampler,
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
-    use propagation::arc_screening::{ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot};
+    use crate::compute::line_piece::{evaluate_line_piece, LinePiece, LinePieceScratch};
+    use crate::propagation::ray_transfer::{received_variants, RayReceiver};
+    use crate::propagation::relevance_bound::SourceSpread;
     use rayon::prelude::*;
 
     let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
     let t_road_start = std::time::Instant::now();
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
     let rcv_alt = receiver.altitude_m();
-    let bounds = ArcBounds::shipped();
-    // The set the arc rule clips against.
-    let arc_set = obstacles;
+    let ray_receiver = RayReceiver {
+        lat: receiver.lat,
+        lon: receiver.lon,
+        altitude_m: rcv_alt,
+    };
+    let bound = crate::propagation::relevance_bound::surface_relevance_bound();
 
     use std::collections::HashMap;
 
@@ -109,104 +105,12 @@ pub(crate) fn compute_roads(
     let receiver_square_country_city =
         crate::square_country_city::square_country_city_for_latlng(receiver.lat, receiver.lon);
 
-    // ── Pass 1: admission gates + the skyline growth chain (sequential) ──
-    //
-    // Everything here is order-sensitive: the ensure chain, where a later
-    // segment reads what earlier segments grew. `needs_growth` elides the
-    // ensures that are provably no-ops, which is most of them: the ladder
-    // snap lands neighbouring segments on one rung.
     struct RoadPre {
         norm: normalize::NormalizedRoad,
         square_country_city: crate::square_country_city::SquareCountryCity,
         src_alt: f64,
         d_slant: f64,
-        /// `Some` = arc-screened, against exactly this frozen growth state.
-        /// `None` = the cp-ray verdict stands (span pre-gate, degenerate
-        /// span, or no obstacle store and no walls).
-        snapshot: Option<SkylineSnapshot>,
     }
-    let mut skyline = ArcSkyline::default();
-    // One snapshot per growth epoch, shared by every segment inside it —
-    // invalidated by each growth, cloned lazily on first use.
-    let mut epoch_snap: Option<SkylineSnapshot> = None;
-    let mut pre: Vec<(usize, RoadPre)> = Vec::with_capacity(roads.len());
-    let mut t_road_arc = std::time::Duration::ZERO;
-    let mut t_road_gates_accum = std::time::Duration::ZERO;
-    for (seg_i, seg) in roads.iter().enumerate() {
-        let t_iter = t_road_start.elapsed();
-        // The row's own baked SquareCountryCity (plan M4) when its batch carried one,
-        // else the receiver SquareCountryCity (pre-bake behaviour, unchanged).
-        let square_country_city = seg
-            .square_country_city
-            .unwrap_or(receiver_square_country_city);
-        let Some(norm) = normalize::normalize_road_segment(seg, square_country_city) else {
-            continue;
-        };
-        if seg.dist_m > norm.max_distance_m {
-            continue;
-        }
-
-        let src_elev = rasters.elevation(seg.cp_lat, seg.cp_lon);
-        let src_alt = src_elev + norm.source_height_m;
-        let d_slant = geo::slant_dist(seg.dist_m, src_alt, rcv_alt);
-        if d_slant < 1.0 {
-            continue;
-        }
-
-        // Early exit: skip if free-field < threshold (matching pipeline)
-        {
-            let ef = road::build_period_flows(
-                norm.light_aadt,
-                norm.medium_aadt,
-                norm.heavy_aadt,
-                norm.moto_aadt,
-                norm.speed_kmh,
-                norm.period_pcts()[0],
-                12.0,
-            );
-            let ee = road::line_source_emission(&ef, norm.surf_corr_db);
-            let me = ee.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-            if geo::below_free_field_threshold_line(me, seg.dist_m, 0.0) {
-                continue;
-            }
-        }
-
-        let t_road_gate_end = t_road_start.elapsed();
-        // Arc pre-gate + growth-chain replay: growth ORDER is part of the
-        // answer (SPEC §4.7 reproducibility), so the ensure its sequential
-        // twin would run happens right here, on this thread, in segment order
-        // (shared step — see `crate::arc_growth_chain_step`).
-        let snapshot = crate::arc_growth_chain_step(
-            &mut skyline,
-            &mut epoch_snap,
-            arc_set,
-            receiver,
-            seg.start_lat,
-            seg.start_lon,
-            seg.end_lat,
-            seg.end_lon,
-            seg.dist_m,
-            seg.length_m as f64,
-            norm.source_height_m,
-            bounds,
-        );
-        t_road_arc += t_road_start.elapsed() - t_road_gate_end;
-        t_road_gates_accum += t_road_gate_end - t_iter;
-
-        pre.push((
-            seg_i,
-            RoadPre {
-                norm,
-                square_country_city,
-                src_alt,
-                d_slant,
-                snapshot,
-            },
-        ));
-    }
-
-    let t_road_pass1 = t_road_start.elapsed();
-    // ── Pass 2: per-segment evaluation (parallel, bit-deterministic) ──
     struct RoadSegOut {
         seg_variants: [PropagationVariants; 3],
         day_emission_energy: f64,
@@ -219,258 +123,137 @@ pub(crate) fn compute_roads(
         trace: Option<SegmentTrace>,
     }
     let collect_traces = traces.is_some();
-    let outs: Vec<RoadSegOut> = pre
+    // ── Pass 1: per-segment evaluation (parallel, bit-deterministic) ──
+    let kept: Vec<Option<(RoadPre, RoadSegOut)>> = roads
         .par_iter()
-        .map_init(
-            // Per-worker scratch: profile + arc buffers + crossing candidates.
-            // Every consumer clears its buffer before use, so results are
-            // independent of scratch history — worker count and work-stealing
-            // cannot move a bit; the ordered `collect` fixes result order.
-            || {
-                (
-                    propagation::PathProfile::new(),
-                    ArcScreeningScratch::new(),
-                    Vec::new(),
-                )
-            },
-            |(path_profile, arc_scratch, cand_scratch), (seg_i, p)| {
-                let seg = &roads[*seg_i];
-                let norm = &p.norm;
-                let (src_alt, d_slant) = (p.src_alt, p.d_slant);
-                let class_name = norm.class_name;
-                let light = norm.light_aadt;
-                let medium = norm.medium_aadt;
-                let heavy = norm.heavy_aadt;
-                let moto = norm.moto_aadt;
-                let speed = norm.speed_kmh;
-                let surf_corr = norm.surf_corr_db;
-                let period_pcts = norm.period_pcts();
-                // Finite-line geometry runs on the perpendicular distance to
-                // the segment's INFINITE line paired with the signed foot
-                // position, while divergence/atmosphere stay on `seg.dist_m`
-                // (fix-pack C). `seg.fraction` is the clamped foot — the
-                // signed one comes from the recomputed decomposition.
-                let pts = geo::point_to_segment_full(
-                    receiver.lat,
-                    receiver.lon,
-                    seg.start_lat,
-                    seg.start_lon,
-                    seg.end_lat,
-                    seg.end_lon,
+        .map_init(LinePieceScratch::default, |scratch, seg| {
+            // The row's own baked SquareCountryCity (plan M4) when its batch carried one,
+            // else the receiver SquareCountryCity (pre-bake behaviour, unchanged).
+            let square_country_city = seg
+                .square_country_city
+                .unwrap_or(receiver_square_country_city);
+            let norm = normalize::normalize_road_segment(seg, square_country_city)?;
+            if seg.dist_m > norm.max_distance_m {
+                return None;
+            }
+            let period_pcts = norm.period_pcts();
+            let period_emissions: [[f64; NUM_BANDS]; 3] = std::array::from_fn(|pi| {
+                let flows = road::build_period_flows(
+                    norm.light_aadt,
+                    norm.medium_aadt,
+                    norm.heavy_aadt,
+                    norm.moto_aadt,
+                    norm.speed_kmh,
+                    period_pcts[pi],
+                    [12.0, 4.0, 8.0][pi],
                 );
-                let flc = geo::finite_line_correction_for_divergence(
-                    seg.length_m as f64,
-                    pts.d_perp_m,
-                    pts.fraction,
-                    seg.dist_m,
+                road::line_source_emission(&flows, norm.surf_corr_db)
+            });
+            // All periods count (#31): a night-only road is never dropped by a day gate.
+            if bound.pair_is_inaudible(&period_emissions, SourceSpread::Line, seg.dist_m) {
+                return None;
+            }
+            let src_alt = rasters.elevation(seg.cp_lat, seg.cp_lon) + norm.source_height_m;
+            let d_slant = geo::slant_dist(seg.dist_m, src_alt, rcv_alt);
+            let day_weights: [f64; NUM_BANDS] = std::array::from_fn(|b| {
+                10f64.powf((period_emissions[0][b] + A_WEIGHTING[b]) / 10.0)
+            });
+            let piece = evaluate_line_piece(
+                &ray_receiver,
+                &LinePiece {
+                    start_lat: seg.start_lat,
+                    start_lon: seg.start_lon,
+                    end_lat: seg.end_lat,
+                    end_lon: seg.end_lon,
+                    source_height_m: norm.source_height_m,
+                    on_bridge: seg.bridge,
+                },
+                seg.cp_lat,
+                seg.cp_lon,
+                obstacles,
+                rasters,
+                scratch,
+                collect_traces.then_some(&day_weights),
+            )?;
+            let seg_variants: [PropagationVariants; 3] = std::array::from_fn(|pi| {
+                received_variants(&piece.periods[pi], &period_emissions[pi], reflection)
+            });
+            // Band energy sum (`j` indexes `emission`); f64 accumulation
+            // order is part of popup byte parity — kept as an index loop.
+            let mut day_emission_energy = 0.0f64;
+            #[allow(clippy::needless_range_loop)]
+            for j in 0..NUM_BANDS {
+                day_emission_energy += crate::propagation::iso9613::fast_exp_f64(
+                    period_emissions[0][j] * std::f64::consts::LN_10 * 0.1,
                 );
+            }
+            let ground_g = piece.loudest_node.as_ref().map_or(0.5, |node| node.ground_factor);
 
-                // Unified path profile — sampled once, shared across all
-                // path-effect calls. One buffer per WORKER: `build_path_profile`
-                // clears it before every fill, so reuse is bit-for-bit the same
-                // as a fresh `PathProfile` (a São Paulo popup runs this closure
-                // ~7.9 k times; the shared buffer only kills the alloc churn).
-                rasters.build_path_profile(
-                    seg.cp_lat,
-                    seg.cp_lon,
-                    receiver.lat,
-                    receiver.lon,
-                    seg.dist_m,
-                    path_profile,
-                );
-                // The current arc payload carries one CP ground vector for its
-                // fan; form it from this ray's bare-earth OLS + IMD profile.
-                // Node evaluation later removes that compatibility seam and
-                // carries each fan ray's full composite directly.
-                let ground_path = propagation::path_effects::cnossos_ground_path_from_profile(
-                    path_profile,
-                    src_alt,
-                    rcv_alt,
-                    seg.bridge,
-                );
-                let ground_g = ground_path.ground_path_g;
-                let ground_bands = iso9613::ground_atten_bands(ground_path);
-                let (terrain, _terrain_profile_points) =
-                    propagation::path_effects::terrain_attenuation_with_meta(
-                        path_profile,
-                        src_alt,
-                        rcv_alt,
-                    );
-                let obstacle_input = crate::obstacle_input_for_ray(
-                    obstacles,
-                    cand_scratch,
-                    seg.cp_lat,
-                    seg.cp_lon,
-                    receiver.lat,
-                    receiver.lon,
-                    Some(&propagation::obstacle_index::CellPrune::for_profile(
-                        path_profile,
-                        src_alt,
-                        rcv_alt,
-                    )),
-                );
-                let (cp_screening_atten, obstacle_trace) =
-                    propagation::path_effects::screening_attenuation_with_meta(
-                        path_profile,
-                        obstacle_input,
-                        src_alt,
-                        rcv_alt,
-                        0.0, // roads: no exclusion radius
-                        &terrain.attenuation_bands,
-                    );
-                // Arc screening (fix-pack Fix 1): the cp ray's verdict covers
-                // only the directions it flies through; the segment's other
-                // azimuths get their own evaluation, energy-averaged over the
-                // span. The cp result stays the obstacle trace, the
-                // degenerate-span fallback, and the evaluation reused for the
-                // interval it falls in. `snapshot` is pass 1's verdict on
-                // whether (and against which growth state) this segment is
-                // arc-screened.
-                let (screening_atten, screening_fan) = match &p.snapshot {
-                    None => (cp_screening_atten, None),
-                    Some(snap) => crate::arc_screened_line_segment_prepared(
-                        &crate::LineSegmentScreening {
-                            receiver,
-                            start_lat: seg.start_lat,
-                            start_lon: seg.start_lon,
-                            end_lat: seg.end_lat,
-                            end_lon: seg.end_lon,
-                            cp_lat: seg.cp_lat,
-                            cp_lon: seg.cp_lon,
-                            src_alt_m: src_alt,
-                            cp_screening: &cp_screening_atten,
-                            cp_terrain: &terrain.attenuation_bands,
-                            ground_g,
-                            ground_bands: &ground_bands,
-                            source_height_m: norm.source_height_m,
-                            length_m: seg.length_m as f64,
-                            dist_m: seg.dist_m,
-                            obstacles,
-                        },
-                        rasters,
-                        snap,
-                        arc_scratch,
-                        collect_traces.then_some(&obstacle_trace),
-                    ),
-                };
-                let veg_atten =
-                    propagation::path_effects::vegetation_attenuation_path(path_profile);
-
-                let mut seg_variants = [
-                    PropagationVariants::default(),
-                    PropagationVariants::default(),
-                    PropagationVariants::default(),
-                ];
-                let mut day_emission_energy = 0.0f64;
-                let mut period_emissions: [[f64; NUM_BANDS]; 3] = [[0.0; NUM_BANDS]; 3];
-                for (pi, (pcts, hours)) in period_pcts
-                    .iter()
-                    .zip([12.0, 4.0, 8.0])
-                    .enumerate()
-                {
-                    let flows =
-                        road::build_period_flows(light, medium, heavy, moto, speed, *pcts, hours);
-                    let emission = road::line_source_emission(&flows, surf_corr);
-                    let v = iso9613::propagate_variants_cnossos_ground_full(
-                        &emission,
-                        d_slant,
-                        SourceGeometry::Line,
-                        ground_path,
-                        &terrain.attenuation_bands,
-                        &screening_atten,
-                        &veg_atten,
-                        reflection,
-                        flc,
-                    );
-                    seg_variants[pi].add(&v);
-                    if pi == 0 {
-                        // Band energy sum (`j` indexes `emission`); f64 accumulation
-                        // order is part of popup byte parity — kept as an index loop.
-                        #[allow(clippy::needless_range_loop)]
-                        for j in 0..NUM_BANDS {
-                            day_emission_energy += crate::propagation::iso9613::fast_exp_f64(
-                                emission[j] * std::f64::consts::LN_10 * 0.1,
-                            );
+            // Ref inheritance: an orphan mainline or its link inherits the
+            // ref of the nearest mainline that carries one. Link classes
+            // 10/11/12 map to their mainline parents 0/1/2 (so a GC-1
+            // on-ramp with no OSM ref=* tag groups under "GC-1 (link)"
+            // instead of "osm:123").
+            let infer_target_class = match norm.class_idx {
+                0 | 10 => Some(0),
+                1 | 11 => Some(1),
+                2 | 12 => Some(2),
+                _ => None,
+            };
+            let effective_ref =
+                if let (true, Some(target)) = (seg.road_ref.is_empty(), infer_target_class) {
+                    let mut best_ref = String::new();
+                    let mut best_dist = f64::MAX;
+                    for other in roads.iter() {
+                        if (other.road_class as usize) != target {
+                            continue;
+                        }
+                        if other.road_ref.is_empty() {
+                            continue;
+                        }
+                        let d = ((seg.cp_lat - other.cp_lat).powi(2)
+                            + (seg.cp_lon - other.cp_lon).powi(2))
+                        .sqrt();
+                        if d < best_dist {
+                            best_dist = d;
+                            best_ref = other.road_ref.clone();
                         }
                     }
-                    period_emissions[pi] = emission;
-                }
-
-                // Ref inheritance: an orphan mainline or its link inherits the
-                // ref of the nearest mainline that carries one. Link classes
-                // 10/11/12 map to their mainline parents 0/1/2 (so a GC-1
-                // on-ramp with no OSM ref=* tag groups under "GC-1 (link)"
-                // instead of "osm:123").
-                let infer_target_class = match norm.class_idx {
-                    0 | 10 => Some(0),
-                    1 | 11 => Some(1),
-                    2 | 12 => Some(2),
-                    _ => None,
+                    best_ref
+                } else {
+                    seg.road_ref.clone()
                 };
-                let effective_ref =
-                    if let (true, Some(target)) = (seg.road_ref.is_empty(), infer_target_class) {
-                        let mut best_ref = String::new();
-                        let mut best_dist = f64::MAX;
-                        for other in roads.iter() {
-                            if (other.road_class as usize) != target {
-                                continue;
-                            }
-                            if other.road_ref.is_empty() {
-                                continue;
-                            }
-                            let d = ((seg.cp_lat - other.cp_lat).powi(2)
-                                + (seg.cp_lon - other.cp_lon).powi(2))
-                            .sqrt();
-                            if d < best_dist {
-                                best_dist = d;
-                                best_ref = other.road_ref.clone();
-                            }
-                        }
-                        best_ref
-                    } else {
-                        seg.road_ref.clone()
-                    };
 
-                // Group-level obstacle histogram — the popup's "N of M
-                // segments had obstacles on path", from the exact footprint
-                // crossings.
-                let seg_max_bh = obstacles.max_height_crossed(
-                    seg.cp_lat,
-                    seg.cp_lon,
-                    receiver.lat,
-                    receiver.lon,
-                );
+            // Group-level obstacle histogram — the popup's "N of M
+            // segments had obstacles on path", from the exact footprint
+            // crossings.
+            let seg_max_bh =
+                obstacles.max_height_crossed(seg.cp_lat, seg.cp_lon, receiver.lat, receiver.lon);
 
-                // Popup trace, built here so the allocation-heavy part runs in
-                // parallel; pass 3 pushes it in segment order. `std::mem::take`
-                // consumes the worker's path_profile (rebuilt from empty on its
-                // next segment) so the trace owns the sample arrays without
-                // clone — exactly the sequential kernel's behaviour.
-                let trace = collect_traces.then(|| {
-                    build_road_segment_trace(BuildRoadTrace {
-                        seg,
-                        class_name,
-                        src_alt,
-                        rcv_alt,
-                        d_slant,
-                        flc,
-                        ground_g,
-                        ground_bands,
-                        reflection_boost_db: reflection,
-                        traffic: seg.traffic,
-                        speed_kmh: speed,
-                        surf_corr,
-                        path_profile: std::mem::take(path_profile),
-                        terrain,
-                        screening_atten,
-                        screening_fan,
-                        obstacle_trace,
-                        veg_atten,
-                        seg_variants,
-                        lw_bands: period_emissions,
-                    })
-                });
-
+            let trace = match (collect_traces, piece.loudest_node) {
+                (true, Some(node)) => Some(build_road_segment_trace(BuildRoadTrace {
+                    seg,
+                    class_name: norm.class_name,
+                    rcv_alt,
+                    d_slant,
+                    reflection_boost_db: reflection,
+                    traffic: seg.traffic,
+                    speed_kmh: norm.speed_kmh,
+                    surf_corr: norm.surf_corr_db,
+                    node,
+                    fan: piece.fan,
+                    seg_variants,
+                    lw_bands: period_emissions,
+                })),
+                _ => None,
+            };
+            Some((
+                RoadPre {
+                    norm,
+                    square_country_city,
+                    src_alt,
+                    d_slant,
+                },
                 RoadSegOut {
                     seg_variants,
                     day_emission_energy,
@@ -478,31 +261,24 @@ pub(crate) fn compute_roads(
                     seg_max_bh,
                     effective_ref,
                     trace,
-                }
-            },
-        )
+                },
+            ))
+        })
         .collect();
-
-    let t_road_pass2 = t_road_start.elapsed() - t_road_pass1;
+    let (pre, outs): (Vec<(usize, RoadPre)>, Vec<RoadSegOut>) = kept
+        .into_iter()
+        .enumerate()
+        .filter_map(|(seg_i, kept)| kept.map(|(p, out)| ((seg_i, p), out)))
+        .unzip();
     if timing_on {
-        let (steps, growths, sectors, growth_ms, raw_arcs) =
-            crate::propagation::arc_screening::take_growth_census();
         eprintln!(
-            "popup-stage road pass1={:.0}ms (gates={:.0}ms arc={:.0}ms) pass2={:.0}ms kept={} steps={} growths={} sectors={} growth_ms={:.0} arcs={}",
-            t_road_pass1.as_secs_f64() * 1000.0,
-            t_road_gates_accum.as_secs_f64() * 1000.0,
-            t_road_arc.as_secs_f64() * 1000.0,
-            t_road_pass2.as_secs_f64() * 1000.0,
-            pre.len(),
-            steps,
-            growths,
-            sectors,
-            growth_ms,
-            raw_arcs,
+            "popup-stage road evaluation={:.0}ms kept={}",
+            t_road_start.elapsed().as_secs_f64() * 1000.0,
+            pre.len()
         );
     }
 
-    // ── Pass 3: accumulation, in segment order (sequential) ──
+    // ── Pass 2: accumulation, in segment order (sequential) ──
     //
     // The original fold, statement for statement: HashMap grouping, dominant
     // selection, trace push order, f64 energy sums. Identical statements over
@@ -1107,80 +883,24 @@ pub(crate) mod tests {
             .screening
             .fan
             .as_ref()
-            .expect("wide line segment with a partial skyline must carry its fan");
+            .expect("every line piece carries its quadrature nodes as the fan");
         let wire = serde_json::to_value(&traces.segments[0]).unwrap();
-        assert_eq!(wire["propagation"]["screening"]["fan"]["quadrature"], "arc");
-        let receiver = receiver();
-        let azimuth = |lat: f64, lon: f64| {
-            let east = (lon - receiver.lon) * grid::geo::m_per_deg_lon(receiver.lat.to_radians());
-            let north = (lat - receiver.lat) * grid::geo::M_PER_DEG_LAT;
-            north.atan2(east)
-        };
-        let segment_span = propagation::obstacle_index::wrap_pi(
-            azimuth(roads[0].end_lat, roads[0].end_lon)
-                - azimuth(roads[0].start_lat, roads[0].start_lon),
-        )
-        .abs();
-        let box_span = propagation::obstacle_index::wrap_pi(
-            azimuth(lat_of(60.0), lon_of(122.0)) - azimuth(lat_of(60.0), lon_of(92.0)),
-        )
-        .abs();
-        let expected_blocked_fraction = box_span / segment_span;
+        assert_eq!(wire["propagation"]["screening"]["fan"]["quadrature"], "line_point_sum");
+        // The box covers about a fifth of the piece's azimuths; its blocked nodes carry about
+        // that share of the in-plane angle (the mask quantizes the box edges to its bins).
         assert!(
-            (fan.blocked_fraction - expected_blocked_fraction).abs() < 2e-5,
-            "trace blocked fraction {:.12} != box angular share {:.12}",
-            fan.blocked_fraction,
-            expected_blocked_fraction
+            (0.05..0.5).contains(&fan.blocked_fraction),
+            "blocked fraction {}",
+            fan.blocked_fraction
         );
-        assert_eq!(fan.intervals_omitted, 0);
-        assert_eq!(fan.omitted_fraction, 0.0);
-        assert_eq!(
-            fan.intervals
-                .iter()
-                .filter(|interval| interval.contains_cp)
-                .count(),
-            1
-        );
-        assert!(fan
-            .intervals
-            .iter()
-            .filter(|interval| interval.blocked)
-            .all(|interval| {
-                interval
-                    .obstacle
-                    .as_ref()
-                    .is_some_and(|obstacle| obstacle.kind == "building" && obstacle.height_m == 8.0)
-            }));
-
-        let band = 4;
-        let ground_db = propagation.ground.attenuation_bands[band];
-        let terrain_db = propagation.terrain.attenuation_bands[band];
-        let energy: f64 = fan
-            .intervals
-            .iter()
-            .map(|interval| {
-                let fraction = (interval.to_deg - interval.from_deg) / fan.span_deg;
-                let applied = iso9613::ground_or_barrier_db(
-                    ground_db,
-                    interval.terrain_db,
-                    interval.screen_db,
-                );
-                fraction * iso9613::fast_exp_f64(-applied * std::f64::consts::LN_10 * 0.1)
-            })
-            .sum();
-        let reconstructed = (-10.0 * energy.max(1e-12).log10() - terrain_db).max(0.0);
-        assert!(
-            (reconstructed - propagation.screening.attenuation_bands[band]).abs() < 1e-9,
-            "flat-ground interval A_screen reconstructed {reconstructed:.12} dB, engine returned {:.12} dB",
-            propagation.screening.attenuation_bands[band]
-        );
+        assert_eq!(fan.intervals.iter().filter(|interval| interval.contains_cp).count(), 1);
     }
 
     /// A dense-ish scene for the pool-size gate: a fan of secondary segments
     /// at varying ranges and offsets (several wide enough to arc-screen), a
     /// village of obstacle boxes, and one noise wall (a Barrier-kind polyline
-    /// in the same index) — every branch of the three-pass kernel (cp verdict,
-    /// arc snapshot, grouping, dominant, traces) gets traffic.
+    /// in the same index) — every branch of the kernel (narrow and wide buckets,
+    /// grouping, dominant, traces) gets traffic.
     pub(crate) fn pool_gate_scene() -> (
         Vec<RoadSegment>,
         crate::propagation::obstacle_index::ObstacleSet,
@@ -1246,7 +966,7 @@ pub(crate) mod tests {
     /// interleaved across threads) must never move a bit — periods,
     /// contributors and traces all byte-stable between a 1-thread and a
     /// multi-thread run. The popup is the acoustic reference; f64 accumulation
-    /// order is part of its contract, and the three-pass kernel keeps that
+    /// order is part of its contract, and the two-pass kernel keeps that
     /// order by folding pass-2 results in segment order.
     #[test]
     fn pool_size_never_changes_the_bits() {

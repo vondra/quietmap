@@ -69,6 +69,8 @@ pub(crate) fn compute_point_sources(
     }
     let mut pts_by_osm: HashMap<i64, PtAccum> = HashMap::new();
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
+    let bound = crate::propagation::relevance_bound::surface_relevance_bound();
+    use crate::propagation::relevance_bound::SourceSpread;
 
     for src in sources {
         let max_d = src.max_radius_m.max(0.0);
@@ -81,12 +83,10 @@ pub(crate) fn compute_point_sources(
         let prop_dist = geo::effective_area_source_dist(src.dist_m, src.exclusion_radius_m as f64);
         let d_slant = geo::slant_dist(prop_dist, src_alt, rcv_alt).max(1.0);
 
-        // Early exit: skip if free-field < threshold (matching pipeline)
-        {
-            let me = src.lw_day.iter().cloned().fold(f32::NEG_INFINITY, f32::max) as f64;
-            if geo::below_free_field_threshold(me, src.dist_m, 0.0) {
-                continue;
-            }
+        // All periods count (#31): a night-only source is never dropped by a day gate.
+        let period_emissions = [src.lw_day, src.lw_evening, src.lw_night].map(|bands| bands.map(f64::from));
+        if bound.pair_is_inaudible(&period_emissions, SourceSpread::Point, src.dist_m) {
+            continue;
         }
 
         // Unified path profile — one sampling, all path effects read from it.

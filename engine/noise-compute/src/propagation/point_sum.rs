@@ -1,13 +1,8 @@
 //! CNOSSOS-EU point-source decomposition of a straight line source (Directive 2015/996 Annex II
-//! §2.5.3): free-field-exact point nodes and their per-node `20·lg d + 11` attenuation chain.
-//!
-//! Recovered from the deleted H0 evaluator (`9087fa9e^`: `compute/element.rs`, `node_eval.rs`)
-//! as a reference kernel, without its hint, cap and production-selection machinery. Nodes are
-//! placed on the 3D line, so the slant geometry the finite-line angle needs is exact here.
+//! §2.5.3): free-field-exact point nodes of any spacing — the fine reference the line quadrature
+//! is measured against (`point-sum-oracle`, the quadrature tests).
 
-use super::geo::FLC_MIN_PERP_M;
-use super::iso9613::ground_or_barrier_db;
-use crate::types::NUM_BANDS;
+use super::line_quadrature::LINE_PERPENDICULAR_FLOOR_M;
 
 /// CNOSSOS-EU (2.5.12) point-source divergence offset: `10·lg 4π` = 10.99 dB, printed as 11 in
 /// the Directive and used verbatim by its reference implementation (NoiseModelling `getADiv`).
@@ -49,7 +44,7 @@ pub struct NodeSpacing {
 /// side of the foot only) gets one node at the distance `d` with `(s1 − s0)/d² = ∫ds/(D² + s²)`,
 /// `D` the 3D perpendicular distance to the infinite line. The inverse-square node sum is
 /// therefore the exact free-field line integral, whatever the cell partition. A receiver on
-/// the line itself is evaluated as a line `FLC_MIN_PERP_M` away. A zero-length piece radiates
+/// the line itself is evaluated as a line `LINE_PERPENDICULAR_FLOOR_M` away. A zero-length piece radiates
 /// nothing and yields no node.
 #[must_use]
 pub fn line_nodes(
@@ -66,7 +61,7 @@ pub fn line_nodes(
     let unit = scale(along, 1.0 / length);
     let foot_from_start = dot(sub(receiver_m, start_m), unit);
     let foot = add(start_m, scale(unit, foot_from_start));
-    let lever = norm(sub(receiver_m, foot)).max(FLC_MIN_PERP_M);
+    let lever = norm(sub(receiver_m, foot)).max(LINE_PERPENDICULAR_FLOOR_M);
     let (low, high) = (-foot_from_start, length - foot_from_start);
 
     let mut sides = vec![(low, high)];
@@ -114,34 +109,6 @@ pub fn line_nodes(
         }
     }
     nodes
-}
-
-/// Per-band attenuations of one node's own source→receiver path, dB (positive = quieter).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NodePathTerms {
-    pub atmospheric_db: [f64; NUM_BANDS],
-    pub ground_db: [f64; NUM_BANDS],
-    pub terrain_db: [f64; NUM_BANDS],
-    pub screening_db: [f64; NUM_BANDS],
-    pub vegetation_db: [f64; NUM_BANDS],
-}
-
-/// Complete per-band node attenuation: point divergence + air + the engine's
-/// `max(A_ground, A_terrain + A_screen)` composite + foliage. The barrier replaces the ground
-/// term; it is never added to it.
-#[must_use]
-pub fn node_attenuation_bands(slant_distance_m: f64, terms: &NodePathTerms) -> [f64; NUM_BANDS] {
-    let divergence_db = point_source_divergence_db(slant_distance_m);
-    std::array::from_fn(|band| {
-        divergence_db
-            + terms.atmospheric_db[band]
-            + ground_or_barrier_db(
-                terms.ground_db[band],
-                terms.terrain_db[band],
-                terms.screening_db[band],
-            )
-            + terms.vegetation_db[band]
-    })
 }
 
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
