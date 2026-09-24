@@ -101,7 +101,8 @@ const sealedAggregate = args['release-candidate'] && sealed.length
 
 const panel: Record<string, number> = {}
 for (const station of Object.values(manifest.stations)) {
-  const key = station.eligible ? station.cohort ?? `(no cohort) ${station.site_class}` : `(excluded) ${(station.exclusion_reason ?? '').split(':')[0]}`
+  const key = station.eligible ? station.cohort ?? `(no cohort) ${station.site_class}`
+    : `(excluded) ${(station.exclusion_reason ?? '').split(':')[0].replace(/ of physical station .*/, '')}`
   panel[key] = (panel[key] ?? 0) + 1
 }
 const table = objectiveTable(scored, manifest, criteria)

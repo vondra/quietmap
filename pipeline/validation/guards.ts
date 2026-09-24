@@ -101,12 +101,16 @@ export function evaluateGuardSubchecks(
     if ((match = /model AADT of the counted road \/ count\)\| <= tau when the count dataset is the row provenance, else <= (\d+) dB/.exec(text))) {
       return (guard.members ?? []).map(member => {
         const station = stations.find(row => row.key === member)
-        const comparison = station?.comparisons.find(entry => entry.kind === 'traffic' && entry.period === 'total')
-        if (!station?.model || comparison?.delta_db == null) return result(`${check.id} ${member}`, 'not_scored', null, 'no traffic comparison')
+        const traffic = station?.comparisons.filter(entry => entry.kind === 'traffic' && entry.period !== 'heavy_share_pct') ?? []
+        // A count published per vehicle class is compared as its total.
+        const total = traffic.find(entry => entry.period === 'total')
+        const counted = total ? total.measured : traffic.reduce((sum, entry) => sum + (entry.measured ?? 0), 0)
+        const modelled = total ? total.model : traffic.reduce((sum, entry) => sum + (entry.model ?? 0), 0)
+        if (!station?.model || !counted || !modelled) return result(`${check.id} ${member}`, 'not_scored', null, 'no traffic comparison')
         const measuredRow = ['city-measured', 'national-measured', 'continental-measured', 'global-measured'].includes(station.model.dominant_road?.provenance_tier ?? '')
         const limit = measuredRow ? tau : Number(match![1])
-        const quantity = Math.abs(comparison.delta_db)
-        return result(`${check.id} ${member}`, quantity <= limit ? 'pass' : 'fail', quantity, `${comparison.model}/day vs ${comparison.measured} (limit ${limit} dB)`)
+        const quantity = Math.abs(10 * Math.log10(modelled / counted))
+        return result(`${check.id} ${member}`, quantity <= limit ? 'pass' : 'fail', quantity, `${Math.round(modelled)}/day vs ${counted} (limit ${limit} dB)`)
       })
     }
     return [result(check.id, 'not_scored', null, 'predicate not machine-readable')]
