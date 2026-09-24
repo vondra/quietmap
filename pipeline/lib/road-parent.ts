@@ -9,7 +9,7 @@ import type { SourceTransportTopology } from './transport-topology.js'
 const GEOMETRY = ['start_gx', 'start_gy', 'end_gx', 'end_gy', 'length_m']
 const REBUILT = [...GEOMETRY, 'segment_idx']
 /** Every enrichment column a finalized file carries; a fresh extract has none of them. */
-const ENRICHED_TRAFFIC = new Set(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'traffic_estimated',
+const ENRICHED_TRAFFIC = new Set(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'traffic_estimated', 'cross_section_aadt',
   'speed_taper', 'traffic_profile_id'])
 
 type NumericColumn = Int32Array | Float32Array | Int16Array

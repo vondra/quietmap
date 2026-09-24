@@ -283,6 +283,7 @@ fn roads_schema(profiles: Option<&str>) -> Schema {
         Field::new("aadt_heavy", DataType::Float64, false),
         Field::new("aadt_moto", DataType::Float64, false),
         Field::new("traffic_estimated", DataType::UInt8, false),
+        Field::new("cross_section_aadt", DataType::Float64, false),
     ];
     let mut metadata = std::collections::HashMap::from([(
         "road_traffic_contract".to_owned(),
@@ -361,6 +362,9 @@ pub fn write_roads_file_opts(path: &Path, rows: &[FixtureRoad], profiles: Option
             )),
             Arc::new(UInt8Array::from_iter_values(
                 rows.iter().map(|r| r.traffic_estimated),
+            )),
+            Arc::new(Float64Array::from_iter_values(
+                rows.iter().map(|r| r.aadt_light + r.aadt_medium + r.aadt_heavy + r.aadt_moto),
             )),
         ];
         if profiles.is_some() {

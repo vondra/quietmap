@@ -345,6 +345,7 @@ mod completeness_tests {
                 ("aadt_medium", Arc::new(Float64Array::from(vec![0.0; 3]))),
                 ("aadt_heavy", Arc::new(Float64Array::from(vec![0.0; 3]))),
                 ("aadt_moto", Arc::new(Float64Array::from(vec![0.0; 3]))),
+                ("cross_section_aadt", Arc::new(Float64Array::from(vec![0.0; 3]))),
                 (
                     "traffic_estimated",
                     Arc::new(UInt8Array::from(vec![1; 3])),
@@ -573,6 +574,11 @@ mod completeness_tests {
                 ),
                 arrow::datatypes::Field::new(
                     "aadt_moto",
+                    arrow::datatypes::DataType::Float64,
+                    false,
+                ),
+                arrow::datatypes::Field::new(
+                    "cross_section_aadt",
                     arrow::datatypes::DataType::Float64,
                     false,
                 ),

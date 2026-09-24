@@ -107,6 +107,9 @@ pub struct RoadTraffic {
     /// class-default split applies (absence is genuinely unknown, never a
     /// variant of the defaults).
     pub time_profile: Option<RoadTimeProfile>,
+    /// Whole-road vehicles/day at this piece, both directions (owner decision 2: the popup headline);
+    /// 0 where only this carriageway's own direction is known. Display only: emission reads the classes.
+    pub cross_section_aadt: f64,
 }
 
 impl RoadTraffic {
@@ -450,6 +453,7 @@ mod tests {
         moto: 50.0,
         estimated: 0,
         time_profile: None,
+        cross_section_aadt: 0.0,
     };
 
     fn prepared(traffic: RoadTraffic) -> RawRoadInput {
@@ -538,7 +542,8 @@ mod tests {
                 | ROAD_ESTIMATED_HEAVY
                 | ROAD_ESTIMATED_MOTO,
             time_profile: None,
-    };
+            cross_section_aadt: 0.0,
+        };
         let road = normalize_road(prepared(prior), SquareCountryCity::UNKNOWN).unwrap();
         assert_eq!(road.light_aadt, 2640.0);
         assert_eq!(road.heavy_aadt, 180.0);
@@ -698,6 +703,7 @@ mod tests {
                 moto: 60.0,
                 estimated: 15,
                 time_profile: None,
+                cross_section_aadt: 0.0,
             },
             source_id: 0,
             name: String::new(),

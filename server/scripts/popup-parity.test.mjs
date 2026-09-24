@@ -217,7 +217,7 @@ test('road metadata and traces require prepared fractional counts and category e
   const current = payload(true)
   const traffic = { aadt_light: 0, aadt_medium: 0.125, aadt_heavy: 4.5, aadt_moto: 0, traffic_estimated: 6 }
   Object.assign(current.segments[0].emission, traffic)
-  const metadata = { kind: 'road', ...traffic, dominant_source_id: 12, speed_posted_kmh: null,
+  const metadata = { kind: 'road', ...traffic, cross_section_aadt: 9.25, dominant_source_id: 12, speed_posted_kmh: null,
     speed_kmh: 50, speed_source: 'derestricted', road_class: 'residential', surface: 'asphalt',
     surface_corr_db: 0, lanes: 2, oneway: false, dominant_segment_idx: 0, dominant_distance_m: 1,
     closest_distance_m: 1, speed_min_kmh: 50, speed_max_kmh: 50, oneway_segment_count: 0,
@@ -231,6 +231,9 @@ test('road metadata and traces require prepared fractional counts and category e
     broken.segments[0].emission[key] = value
     assert.throws(() => validatePopupPayload(broken, POINT), /traffic|finite|integer/)
     assert.throws(() => validateMetadata({ ...metadata, [key]: value }, 'road', 'metadata'), /traffic|finite|integer/)
+  }
+  for (const value of [-1, NaN, Infinity, null, undefined]) {
+    assert.throws(() => validateMetadata({ ...metadata, cross_section_aadt: value }, 'road', 'metadata'), /traffic|finite/)
   }
   const timing = { source: 'https://example.org/counts', window: '2025-01..2025-12', total_transfer: true }
   metadata.time_profile_attribution = timing

@@ -5,6 +5,15 @@ use noise_compute::defaults::MEASURED_CARRIAGEWAY_PRIORS;
 use noise_compute::sources::{provenance_of, Provenance};
 use noise_compute::square_country_city::SquareCountryCity;
 
+fn resolve<'a>(road: &'a Road, candidates: impl IntoIterator<Item = &'a Road>) -> ([f64; 4], u8) {
+    let (counts, estimated, _) = allocation::allocate(road, &candidates.into_iter().collect::<Vec<_>>());
+    (counts, estimated)
+}
+
+fn cross_section_total<'a>(road: &'a Road, candidates: &[&'a Road]) -> f64 {
+    allocation::allocate(road, candidates).2
+}
+
 fn road(id: i64, basis: u8, reverse: bool) -> Road {
     Road { way_id: id, segment_idx: 0, start: (if reverse { 10.0 } else { 0.0 }, 0.0),
         end: (if reverse { 10.0 } else { 0.0 }, 100.0), direction: if reverse { 2 } else { 1 },
@@ -19,7 +28,7 @@ fn directional_counts_never_change_with_osm_direction_or_other_carriageways() {
     for direction in 0..=2 {
         let mut observed = road(1, 1, false);
         observed.direction = direction;
-        assert_eq!(allocation::resolve(&observed, [&other]), ([10_000.0, 0.0, 0.0, 0.0], 0));
+        assert_eq!(resolve(&observed, [&other]), ([10_000.0, 0.0, 0.0, 0.0], 0));
     }
 }
 
@@ -27,8 +36,8 @@ fn directional_counts_never_change_with_osm_direction_or_other_carriageways() {
 fn section_total_is_shared_once_while_longitudinal_subdivisions_keep_through_flow() {
     let forward = road(1, 2, false);
     let reverse = road(2, 2, true);
-    let whole_forward = allocation::resolve(&forward, [&reverse]);
-    let whole_reverse = allocation::resolve(&reverse, [&forward]);
+    let whole_forward = resolve(&forward, [&reverse]);
+    let whole_reverse = resolve(&reverse, [&forward]);
     assert_eq!(whole_forward, ([5000.0, 0.0, 0.0, 0.0], 15));
     assert_eq!(whole_forward.0[0] + whole_reverse.0[0], 10_000.0);
     let mut first = forward.clone();
@@ -36,18 +45,18 @@ fn section_total_is_shared_once_while_longitudinal_subdivisions_keep_through_flo
     first.end.1 = 50.0;
     second.start.1 = 50.0;
     second.segment_idx = 1;
-    assert_eq!(allocation::resolve(&reverse, [&first, &second]), whole_reverse);
-    assert_eq!(allocation::resolve(&first, [&reverse]), whole_forward);
-    assert_eq!(allocation::resolve(&second, [&reverse]), whole_forward);
+    assert_eq!(resolve(&reverse, [&first, &second]), whole_reverse);
+    assert_eq!(resolve(&first, [&reverse]), whole_forward);
+    assert_eq!(resolve(&second, [&reverse]), whole_forward);
     let already_allocated = Road { basis: 3, counts: whole_forward.0, estimated: 15, ..forward };
-    assert_eq!(allocation::resolve(&already_allocated, [&reverse]), whole_forward);
+    assert_eq!(resolve(&already_allocated, [&reverse]), whole_forward);
 }
 
 #[test]
 fn a_cut_within_a_metre_of_a_parent_end_or_of_another_cut_leaves_no_sliver_child() {
     let long = Road { class: 3, ..road(1, 2, false) };
     let nearly_whole = Road { class: 3, start: (10.0, 0.3), end: (10.0, 99.5), ..road(2, 2, true) };
-    assert_eq!(allocation::intervals(&long, &[&nearly_whole]), [(0.0, 1.0, [5000.0, 0.0, 0.0, 0.0], 15)]);
+    assert_eq!(allocation::intervals(&long, &[&nearly_whole]), [(0.0, 1.0, [5000.0, 0.0, 0.0, 0.0], 15, 10_000.0)]);
     let staggered = Road { class: 3, start: (10.0, 0.3), end: (10.0, 40.0), ..road(2, 2, true) };
     let children = allocation::intervals(&long, &[&staggered]);
     assert_eq!(children.iter().map(|child| (child.0, child.1, child.2[0])).collect::<Vec<_>>(),
@@ -73,6 +82,13 @@ fn staggered_carriageway_ends_split_the_longer_source_and_conserve_each_cross_se
     assert_eq!((long_intervals[1].0, long_intervals[1].1), (0.4, 1.0));
     assert_eq!(long_intervals[0].2[0] + short_intervals[0].2[0], 10_000.0);
     assert_eq!(long_intervals[1].2[0], 10_000.0);
+    assert_eq!(long_intervals[0].4, 10_000.0);
+    assert_eq!(short_intervals[0].4, 10_000.0, "the short row sums its sibling at the same cross-section");
+    let directional_long = Road { basis: 1, ..long.clone() };
+    let directional_short = Road { basis: 1, ..short.clone() };
+    let directional = allocation::intervals(&directional_long, &[&directional_short]);
+    assert_eq!(directional.iter().map(|child| (child.0, child.1, child.2[0], child.4)).collect::<Vec<_>>(),
+        [(0.0, 0.4, 10_000.0, 20_000.0), (0.4, 1.0, 10_000.0, 0.0)]);
     let first = Road { end: (0.0, 30.0), ..long.clone() };
     let second = Road { start: (0.0, 30.0), segment_idx: 1, ..long };
     assert_eq!(allocation::intervals(&first, &[&short])[0].2[0], 5000.0);
@@ -83,7 +99,7 @@ fn staggered_carriageway_ends_split_the_longer_source_and_conserve_each_cross_se
     // whole row, so no cut separates the paired part from the lone part.
     let main_long = road(1, 2, false);
     let main_short = Road { end: (10.0, 40.0), ..road(2, 2, true) };
-    assert_eq!(allocation::intervals(&main_long, &[&main_short]), [(0.0, 1.0, [5000.0, 0.0, 0.0, 0.0], 15)]);
+    assert_eq!(allocation::intervals(&main_long, &[&main_short]), [(0.0, 1.0, [5000.0, 0.0, 0.0, 0.0], 15, 10_000.0)]);
 }
 
 #[test]
@@ -92,16 +108,16 @@ fn lone_one_way_main_road_row_holds_one_direction_of_a_national_two_way_total() 
     // 1.00 of the adjacent two-way count, paired rows at 0.50 (13,623 of
     // 269,552 km are lone; FR N 186 way 612785275 stored 66,586 for 33,293).
     let motorway = Road { class: 0, ..road(1, 2, false) };
-    assert_eq!(allocation::resolve(&motorway, []), ([5000.0, 0.0, 0.0, 0.0], 15));
-    assert_eq!(allocation::resolve(&Road { class: 10, ..motorway.clone() }, []).0[0], 10_000.0);
-    assert_eq!(allocation::resolve(&Road { corridor: String::new(), ..motorway.clone() }, []).0[0], 10_000.0);
-    assert_eq!(allocation::resolve(&Road { class: 4, ..motorway.clone() }, []).0[0], 10_000.0);
-    assert_eq!(allocation::resolve(&Road { basis: 1, ..motorway.clone() }, []), ([10_000.0, 0.0, 0.0, 0.0], 0));
+    assert_eq!(resolve(&motorway, []), ([5000.0, 0.0, 0.0, 0.0], 15));
+    assert_eq!(resolve(&Road { class: 10, ..motorway.clone() }, []).0[0], 10_000.0);
+    assert_eq!(resolve(&Road { corridor: String::new(), ..motorway.clone() }, []).0[0], 10_000.0);
+    assert_eq!(resolve(&Road { class: 4, ..motorway.clone() }, []).0[0], 10_000.0);
+    assert_eq!(resolve(&Road { basis: 1, ..motorway.clone() }, []), ([10_000.0, 0.0, 0.0, 0.0], 0));
     // Praha Legerova 35,800 + Sokolská 32,300 = Nuselský most 68,100: a city
     // profile counter's one-way street already holds its own direction.
     let street = Road { basis: 4, class: 2, ..motorway };
-    assert_eq!(allocation::resolve(&street, []), ([10_000.0, 0.0, 0.0, 0.0], 0));
-    assert_eq!(allocation::resolve(&street, [&Road { basis: 4, ..road(2, 4, true) }]), ([5000.0, 0.0, 0.0, 0.0], 15));
+    assert_eq!(resolve(&street, []), ([10_000.0, 0.0, 0.0, 0.0], 0));
+    assert_eq!(resolve(&street, [&Road { basis: 4, ..road(2, 4, true) }]), ([5000.0, 0.0, 0.0, 0.0], 15));
 }
 
 #[test]
@@ -110,7 +126,7 @@ fn more_than_two_alternatives_form_one_cross_section_instead_of_pairwise_divisor
     let b = Road { start: (40.0, 0.0), end: (40.0, 100.0), ..road(2, 2, true) };
     let c = Road { start: (80.0, 0.0), end: (80.0, 100.0), ..road(3, 2, false) };
     let index = crate::spatial::RoadIndex::new(vec![a.clone(), b.clone(), c.clone()]);
-    let totals = [&a, &b, &c].map(|r| allocation::resolve(r, index.alternatives(r)).0[0]);
+    let totals = [&a, &b, &c].map(|r| resolve(r, index.alternatives(r)).0[0]);
     assert!((totals.iter().sum::<f64>() - 10_000.0).abs() < 1e-9);
     assert!(totals.iter().all(|total| (*total - 10_000.0 / 3.0).abs() < 1e-9));
 }
@@ -122,7 +138,7 @@ fn unrelated_parallel_street_does_not_steal_a_section_count() {
     let mut other = Road { class: 4, ..road(2, 2, true) };
     other.corridor = "unrelated".to_owned();
     other.observation = "different counter".to_owned();
-    assert_eq!(allocation::resolve(&observed, [&other]).0[0], 10_000.0);
+    assert_eq!(resolve(&observed, [&other]).0[0], 10_000.0);
 }
 
 fn unmeasured(class: u8, lanes: u8, direction: u8) -> Road {
@@ -134,9 +150,9 @@ fn unmeasured(class: u8, lanes: u8, direction: u8) -> Road {
 fn main_class_prior_is_per_carriageway_while_hand_set_section_totals_are_shared() {
     let a = unmeasured(0, 3, 1);
     let b = Road { way_id: 2, lanes: 2, direction: 2, start: (10.0, 0.0), end: (10.0, 100.0), ..a.clone() };
-    let total = |road: &Road, others: &[&Road]| allocation::resolve(road, others.iter().copied()).0.iter().sum::<f64>();
+    let total = |road: &Road, others: &[&Road]| resolve(road, others.iter().copied()).0.iter().sum::<f64>();
     let one_way_motorway_per_lane = MEASURED_CARRIAGEWAY_PRIORS[0][0][0].vehicles_per_lane;
-    assert_eq!(allocation::resolve(&a, []).1, 15);
+    assert_eq!(resolve(&a, []).1, 15);
     assert!((total(&a, &[]) - 3.0 * one_way_motorway_per_lane).abs() < 1e-8);
     assert!((total(&a, &[&b]) - 3.0 * one_way_motorway_per_lane).abs() < 1e-8, "a matched sibling never divides a carriageway prior");
     assert!((total(&b, &[&a]) - 2.0 * one_way_motorway_per_lane).abs() < 1e-8);
@@ -145,20 +161,20 @@ fn main_class_prior_is_per_carriageway_while_hand_set_section_totals_are_shared(
     assert!((total(&c, &[]) - 60_000.0 * 1.42 * 0.5).abs() < 1e-8);
     assert!((total(&c, &[&d]) + total(&d, &[&c]) - 60_000.0 * 1.42).abs() < 1e-8);
     let local = Road { class: 8, lanes: 0, direction: 0, ..a };
-    let count = allocation::resolve(&local, []).0;
+    let count = resolve(&local, []).0;
     assert!(count.iter().any(|v| *v > 0.0 && *v < 1.0), "fractional quiet-road priors survive");
 }
 
 #[test]
 fn a_roundabout_ring_carries_its_approach_flow_whole_and_takes_the_two_way_prior() {
     let counted_ring = Road { class: 1, roundabout: true, ..road(1, 2, false) };
-    assert_eq!(allocation::resolve(&counted_ring, []).0[0], 10_000.0, "a lone numbered ring row is not one direction");
+    assert_eq!(resolve(&counted_ring, []).0[0], 10_000.0, "a lone numbered ring row is not one direction");
     // Opposite arcs of a small ring run antiparallel 10 m apart under one name: still one ring.
     let opposite_arc = Road { class: 1, roundabout: true, ..road(2, 2, true) };
-    assert_eq!(allocation::resolve(&counted_ring, [&opposite_arc]).0[0], 10_000.0);
+    assert_eq!(resolve(&counted_ring, [&opposite_arc]).0[0], 10_000.0);
     let default_ring = Road { roundabout: true, ..unmeasured(3, 0, 1) };
     let two_way_secondary = MEASURED_CARRIAGEWAY_PRIORS[3][1][0].untagged;
-    assert!((allocation::resolve(&default_ring, []).0.iter().sum::<f64>() - two_way_secondary).abs() < 1e-8);
+    assert!((resolve(&default_ring, []).0.iter().sum::<f64>() - two_way_secondary).abs() < 1e-8);
 }
 
 #[test]
@@ -167,14 +183,31 @@ fn an_uncounted_one_way_town_street_takes_the_one_way_carriageway_prior_not_half
     for class in [3_u8, 4] {
         let urban_one_way = Road { built_up: 2, ..unmeasured(class, 1, 1) };
         let expected = MEASURED_CARRIAGEWAY_PRIORS[class as usize][0][2].untagged;
-        assert!((allocation::resolve(&urban_one_way, []).0.iter().sum::<f64>() - expected).abs() < 1e-8);
+        assert!((resolve(&urban_one_way, []).0.iter().sum::<f64>() - expected).abs() < 1e-8);
     }
+}
+
+#[test]
+fn every_piece_reports_the_whole_road_or_zero_when_only_its_own_direction_is_known() {
+    let forward = road(1, 2, false);
+    let reverse = road(2, 2, true);
+    assert_eq!(cross_section_total(&forward, &[&reverse]), 10_000.0, "two carriageways of one count");
+    assert_eq!(cross_section_total(&forward, &[]), 10_000.0, "a lone halved main road row");
+    assert_eq!(cross_section_total(&Road { direction: 0, ..forward.clone() }, &[]), 10_000.0);
+    assert_eq!(cross_section_total(&road(1, 1, false), &[]), 0.0, "a lone directional count");
+    assert_eq!(cross_section_total(&road(1, 1, false), &[&road(2, 1, true)]), 20_000.0,
+        "directional counts of both carriageways add up");
+    let motorway = unmeasured(0, 2, 1);
+    let opposite = Road { way_id: 2, direction: 2, start: (10.0, 0.0), end: (10.0, 100.0), ..motorway.clone() };
+    let per_carriageway = 2.0 * MEASURED_CARRIAGEWAY_PRIORS[0][0][0].vehicles_per_lane;
+    assert!((cross_section_total(&motorway, &[&opposite]) - 2.0 * per_carriageway).abs() < 1e-6);
+    assert_eq!(cross_section_total(&motorway, &[]), 0.0, "a lone carriageway prior is one direction");
 }
 
 #[test]
 fn measured_heavy_only_keeps_positive_traffic_at_restricted_access() {
     let input = Road { counts: [0.0, 0.0, 500.0, 0.0], access: 2, ..road(1, 1, false) };
-    assert_eq!(allocation::resolve(&input, []).0, [0.0, 0.0, 500.0, 0.0]);
+    assert_eq!(resolve(&input, []).0, [0.0, 0.0, 500.0, 0.0]);
 }
 
 #[test]
@@ -190,7 +223,7 @@ fn dateline_crossing_ipc_splits_along_the_short_wrapped_segment() {
     let b = Road { start: (-half + 5.0, 0.0), end: (-half + 5.0, 100.0), ..road(2, 2, true) };
     let index = crate::spatial::RoadIndex::new(vec![a.clone(), b.clone()]);
     for road in [&a, &b] {
-        assert_eq!(allocation::resolve(road, index.alternatives(road)).0[0], 5000.0);
+        assert_eq!(resolve(road, index.alternatives(road)).0[0], 5000.0);
     }
 }
 

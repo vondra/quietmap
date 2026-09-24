@@ -10,6 +10,8 @@ use std::path::Path;
 
 pub const CONTRACT: &str = "road_traffic_contract";
 pub const COUNTS: [&str; 4] = ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"];
+/// Whole-road vehicles per day at a finalized piece; 0 where only its own direction is known.
+pub const CROSS_SECTION_AADT: &str = "cross_section_aadt";
 
 #[derive(Clone, Debug)]
 pub struct Road {

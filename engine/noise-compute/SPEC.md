@@ -148,6 +148,15 @@ or continent factor exists: vehicles per paved km measured worse than none in
 every class, and nine alternative predictors failed to beat a constant; a
 metro-size term failed leave-one-country-out and is not used.
 
+Every finalized piece also carries `cross_section_aadt`, the whole road's
+vehicles per day at that piece (owner decision 2: the popup headline shows the
+whole road, both directions, and the details the carriageway's four classes).
+It is the row itself when the row establishes the whole road (a two-way row or
+ring, a known share of a two-way total, a street's or tree's own flow), else
+the sum over the carriageways found together, and 0 where only this one
+direction is known (a lone directional count or a lone carriageway prior).
+Emission never reads it.
+
 These tables remain authoritative for that build step. Serving consumes the
 prepared counts verbatim: no traffic default, oneway share, lane or access
 factor is re-applied at runtime, and a row stamped `source_id` 0 with positive
@@ -156,7 +165,7 @@ classes; a true total zero is silent and is never resurrected by a class
 default; tunnels still do not emit. At serving time OSM direction never scales
 a count. Effective speed retains the shared posted, taper, country-legal and
 class-default rules. Contributor and segment traces report the dominant
-segment's four class values, the estimated bitmask
+segment's four class values, its `cross_section_aadt`, the estimated bitmask
 and the row dataset attribution; source and vehicles-per-day units are
 preserved end to end.
 
