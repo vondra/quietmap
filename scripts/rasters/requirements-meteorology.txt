@@ -1,0 +1,5 @@
+# Numerical producer dependencies; the raster gate exercises the same environment.
+numpy>=1.26,<3
+numba>=0.60
+numcodecs>=0.13
+pyarrow>=18

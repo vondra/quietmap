@@ -20,3 +20,6 @@ pub mod surface_gpu;
 pub mod surface_scene;
 pub mod tile_receivers;
 pub mod tile_source_incidence;
+
+#[cfg(feature = "gpu")]
+pub mod meteorology;

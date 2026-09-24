@@ -88,6 +88,7 @@ mod device_value {
     impl Sealed for f32 {}
     impl Sealed for f64 {}
     impl Sealed for raster_reader::FusedPixel {}
+    impl Sealed for raster_reader::meteorology::MeteorologyNode {}
     impl Sealed for crate::source_frame::DeviceLineSource {}
     impl Sealed for crate::obstacle_transfer::DeviceObstacleGrid {}
     impl Sealed for crate::obstacle_transfer::DeviceObstacleEdgeEndpoints {}
