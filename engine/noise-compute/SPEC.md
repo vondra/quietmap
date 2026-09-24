@@ -263,6 +263,34 @@ indoor attenuation from an absent or generic Overture class. Enclosed garages
 retain their existing classification. This changes enclosure only: screening
 geometry, height, emission and traffic remain unchanged.
 
+## Raster terrain and canopy inputs
+
+The next raster generation uses bare-earth `dem.u16le`: WGS84 one-arc-second
+nodes in `grid::raster::RasterWindow`, EGM2008 metres, decoded as −500 + v/5;
+65535 is missing. The terrain producer area-averages the source footprint at each
+node and gives national DTMs precedence over the global DTM. Runtime elevation
+remains bilinear. The old signed big-endian DEM is not accepted by this reader.
+
+`canopy.u8` records canopy top above bare earth, 0–250 metres (255 missing),
+nearest sampled into `PathProfile.canopy_m` beside `forest.u8` canopy cover.
+The CUDA upload carries this height at byte 6 of the existing eight-byte
+`FusedPixel`; `SampledRasterPoint.canopy_m` exposes it without changing attenuation.
+A zero-byte channel file denotes independently verified ocean; a missing file,
+wrong length or sampled missing node fails the operation. A producer may not
+turn missing canopy into zero. Height is for foliage only, never subtracted
+from a surface DEM to manufacture terrain.
+
+Source fetches retain URL, fetch and terms-check timestamps, SHA-256, byte count,
+licence and licence URL. A published square carries source epochs, coverage
+fractions and its output digest. National vertical transforms must use PROJ
+with ballpark operations disabled and required grids present. The geoid shift
+is evaluated at every target node after resampling; missing grids fail.
+
+Changing this generation invalidates terrain-dependent altitudes, structure
+bases, aircraft preprocessing and horizon calculations, façade exposure and
+painted tiles. Bridge-deck/railhead geometry and the canopy propagation model
+must be integrated before this generation is used for a production calculation.
+
 ## 4.7 Vector screening
 
 One source-to-receiver ray shares its bare-earth raster profile between terrain

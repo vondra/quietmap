@@ -1,7 +1,7 @@
 //! [`FusedGrid`] + [`FusedPixel`] — L3-cache-resident cropped raster grid for
 //! pipeline compute.
 //!
-//! Pre-reads DEM + forest + IMD for a bbox out of
+//! Pre-reads DEM + canopy + forest + IMD for a bbox out of
 //! [`crate::real_rasters::RealRasters`] into one contiguous `Vec<FusedPixel>`,
 //! then implements [`noise_compute::types::RasterSampler`] over it with the SAME
 //! per-raster interpolation config (DEM/IMD bilinear, forest nearest) so
@@ -24,7 +24,7 @@ fn next_grid_id() -> u64 {
 
 /// L3-cache-resident cropped raster grid for pipeline compute.
 ///
-/// Pre-reads DEM + forest + IMD for a local bbox into ONE contiguous
+/// Pre-reads DEM + canopy + forest + IMD for a local bbox into ONE contiguous
 /// Vec, cropped to the receiver region and its propagation halo.
 /// Implements RasterSampler so all existing path_effects code works unchanged.
 /// Zero algorithmic change = zero dB error vs mmap-based RealRasters.
@@ -67,9 +67,9 @@ impl Clone for FusedGrid {
 #[repr(C)]
 pub struct FusedPixel {
     pub elevation: f32, // DEM (meters, full precision bilinear)
-    pub forest: u8,     // forest cover (0 or 100)
+    pub forest: u8,     // forest cover (0-100)
     pub imd: u8,        // imperviousness 0-100
-    pub _pad: u8,       // alignment padding; total 8 bytes per pixel
+    pub canopy_m: u8,   // canopy height 0-250 m, 255 missing; total 8 bytes
 }
 
 /// The C7.1 locality receipt measured 77.7775% exact hits at this capacity.
@@ -209,6 +209,7 @@ impl FusedGrid {
         let (rows, cols, lat_lo, lon_lo) = Self::grid_dims(lat_min, lat_max, lon_min, lon_max);
         let (dem, forest, imd) = (&rasters.dem, &rasters.forest, &rasters.imd);
         let (mut dem_key, mut dem_tile) = ((i32::MIN, i32::MIN), None);
+        let (mut canopy_key, mut canopy_tile) = ((i32::MIN, i32::MIN), None);
         let (mut forest_key, mut forest_tile) = ((i32::MIN, i32::MIN), None);
         let (mut imd_key, mut imd_tile) = ((i32::MIN, i32::MIN), None);
 
@@ -218,18 +219,29 @@ impl FusedGrid {
             for co in 0..cols {
                 let lon = lon_lo + co as f64 * cell_deg;
                 let elevation = dem.sample_cached(lat, lon, &mut dem_key, &mut dem_tile);
+                let canopy =
+                    rasters
+                        .canopy
+                        .sample_cached(lat, lon, &mut canopy_key, &mut canopy_tile);
                 let forest = forest.sample_cached(lat, lon, &mut forest_key, &mut forest_tile);
                 let imd = imd.sample_cached(lat, lon, &mut imd_key, &mut imd_tile);
                 // Integer channel casts must not turn unavailable surface data into silence.
                 data[r * cols + co] = FusedPixel {
-                    elevation: if [elevation, forest, imd].iter().all(|v| v.is_finite()) {
+                    elevation: if [elevation, canopy, forest, imd]
+                        .iter()
+                        .all(|v| v.is_finite())
+                    {
                         elevation as f32
                     } else {
                         f32::NAN
                     },
                     forest: forest as u8,
                     imd: imd as u8,
-                    _pad: 0,
+                    canopy_m: if canopy.is_finite() {
+                        canopy as u8
+                    } else {
+                        255
+                    },
                 };
             }
         }
@@ -324,7 +336,7 @@ impl noise_compute::types::RasterSampler for FusedGrid {
 }
 
 impl FusedGrid {
-    /// Sample the three surface rasters at the t-values already in `out.t`,
+    /// Sample the four surface rasters at the t-values already in `out.t`,
     /// populating the profile.
     fn fill_profile_rasters(
         &self,
@@ -339,6 +351,7 @@ impl FusedGrid {
         // remaining fields, preserving t.
         let t_len = out.t.len();
         out.elevation_m.clear();
+        out.canopy_m.clear();
         out.forest_u8.clear();
         out.imd_u8.clear();
         out.elevation_f64_scratch.clear();
@@ -349,6 +362,7 @@ impl FusedGrid {
         out.rcv_lon = rcv_lon;
 
         out.elevation_m.reserve(t_len);
+        out.canopy_m.reserve(t_len);
         out.forest_u8.reserve(t_len);
         out.imd_u8.reserve(t_len);
 
@@ -359,8 +373,14 @@ impl FusedGrid {
         let d_rf = (rcv_lat - src_lat) * self.inv_cell_deg;
         let d_cf = wrapped_longitude_delta(src_lon, rcv_lon) * self.inv_cell_deg;
         for &t in &out.t {
-            let (elev, fr_u8, imd_u8) = self.lookup_fused_rc(src_rf + t * d_rf, src_cf + t * d_cf);
+            let (elev, fr_u8, imd_u8, canopy_m) =
+                self.lookup_fused_rc(src_rf + t * d_rf, src_cf + t * d_cf);
             out.elevation_m.push(elev);
+            out.canopy_m.push(if canopy_m <= 250 {
+                f32::from(canopy_m)
+            } else {
+                f32::NAN
+            });
             out.forest_u8.push(fr_u8);
             out.imd_u8.push(imd_u8);
         }
@@ -446,17 +466,17 @@ impl FusedGrid {
         )
     }
 
-    /// Bilinear elevation + IMD, nearest-neighbour forest.
+    /// Bilinear elevation + IMD, nearest-neighbour forest and canopy.
     ///
     /// Matches `RealRasters` per-raster `Interp` config: DEM bilinear, IMD
     /// bilinear, forest nearest. Earlier versions used `px00`
     /// (top-left of the bilinear quad) for both categorical rasters, biasing
     /// up-left by half a cell and producing up to 6+ dB divergence from
     /// `RealRasters` wherever a raster edge passed through the quad.
-    /// `(elev_bilinear, forest_nearest, imd_bilinear)` — the three surface
+    /// `(elev_bilinear, forest_nearest, imd_bilinear, canopy_nearest)` — the surface
     /// rasters in one lookup, used by the heatmap horizon builder.
     #[inline]
-    pub fn lookup_fused(&self, lat: f64, lon: f64) -> (f32, u8, u8) {
+    pub fn lookup_fused(&self, lat: f64, lon: f64) -> (f32, u8, u8, u8) {
         let rf = (lat - self.lat_min) * self.inv_cell_deg;
         let cf = wrapped_longitude_delta(self.lon_min, lon) * self.inv_cell_deg;
         self.lookup_fused_rc(rf, cf)
@@ -468,7 +488,7 @@ impl FusedGrid {
     /// re-deriving via per-sample lat/lon (measured 0.000 dB tile drift) and
     /// drops two multiplies + two subtracts per sample from the hot loop.
     #[inline]
-    pub fn lookup_fused_rc(&self, rf: f64, cf: f64) -> (f32, u8, u8) {
+    pub fn lookup_fused_rc(&self, rf: f64, cf: f64) -> (f32, u8, u8, u8) {
         // Clamp before floor: prevents negative wrap and OOB extrapolation.
         let rf = rf.clamp(0.0, (self.rows - 1) as f64);
         let cf = cf.clamp(0.0, (self.cols - 1) as f64);
@@ -495,7 +515,7 @@ impl FusedGrid {
         let v0i = px00.imd as f64 + fc * (px01.imd as f64 - px00.imd as f64);
         let v1i = px10.imd as f64 + fc * (px11.imd as f64 - px10.imd as f64);
         let imd = (v0i + fr * (v1i - v0i)).round().clamp(0.0, 255.0) as u8;
-        (elev, near.forest, imd)
+        (elev, near.forest, imd, near.canopy_m)
     }
 }
 
@@ -513,6 +533,7 @@ mod tests {
         for missing in [
             None,
             Some(Channel::Dem),
+            Some(Channel::Canopy),
             Some(Channel::Forest),
             Some(Channel::Imd),
         ] {

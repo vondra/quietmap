@@ -1,4 +1,4 @@
-//! Actual three-channel native-byte repack (data and 0-byte ocean files) and strict z9 mmap sampling, including seams and poles.
+//! Actual four-channel native-byte repack (data and 0-byte ocean files) and strict z9 mmap sampling, including seams and poles.
 
 use grid::raster::{RasterWindow, SOURCE_TILE_SIDE};
 use grid::{square_of, Square};
@@ -14,6 +14,7 @@ fn value(channel: Channel, latitude: i32, longitude: i32) -> i16 {
     match channel {
         Channel::Dem if latitude == -324000 => i16::MIN,
         Channel::Dem => (latitude.rem_euclid(17) * 100 + longitude.rem_euclid(19)) as i16,
+        Channel::Canopy => (latitude + longitude).rem_euclid(251) as i16,
         Channel::Forest => (latitude + longitude).rem_euclid(101) as i16,
         Channel::Imd => (latitude * 2 + longitude).rem_euclid(101) as i16,
     }
@@ -34,13 +35,17 @@ fn write_sources(root: &Path, channel: Channel, keys: &HashSet<SourceKey>) {
             Vec::with_capacity(SOURCE_TILE_SIDE * SOURCE_TILE_SIDE * channel.bytes_per_node());
         for row in 0..SOURCE_TILE_SIDE {
             for column in 0..SOURCE_TILE_SIDE {
-                let bytes = value(
+                let raw = value(
                     channel,
                     (lat + 1) * 3600 - row as i32,
                     lon * 3600 + column as i32,
-                )
-                .to_be_bytes();
-                data.extend_from_slice(&bytes[2 - channel.bytes_per_node()..]);
+                );
+                let bytes = channel.encode(if raw == i16::MIN {
+                    f64::NAN
+                } else {
+                    f64::from(raw)
+                });
+                data.extend_from_slice(&bytes[..channel.bytes_per_node()]);
             }
         }
         std::fs::write(path, data).unwrap();
@@ -89,7 +94,7 @@ fn oracle(channel: Channel, lat: f64, lon: f64, nearest: bool) -> f64 {
 }
 
 #[test]
-fn all_three_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing_data() {
+fn all_four_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing_data() {
     let work = tempfile::tempdir().unwrap();
     let prepared = work.path().join("prepared");
     let keys: HashSet<_> = [(0, 0), (0, 1), (0, 179), (0, -180), (89, 0), (-90, 0)]
@@ -244,8 +249,8 @@ fn all_three_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing
     let cli_source = work.path().join("cli-source");
     std::fs::create_dir(&cli_source).unwrap();
     std::fs::copy(
-        work.path().join("dem/N00E000.hgt"),
-        cli_source.join("N00E000.hgt"),
+        work.path().join("dem/N00E000.u16le"),
+        cli_source.join("N00E000.u16le"),
     )
     .unwrap();
     let cli_output = work.path().join("cli-output");
@@ -308,7 +313,7 @@ fn all_three_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing
     let source = work.path().join("dem");
     let mut file = std::fs::OpenOptions::new()
         .write(true)
-        .open(source.join("N00E001.hgt"))
+        .open(source.join("N00E001.u16le"))
         .unwrap();
     file.seek(SeekFrom::Start((2700 * SOURCE_TILE_SIDE * 2) as u64))
         .unwrap();

@@ -177,7 +177,7 @@ impl TileStore {
     }
 
     fn interpolation(&self) -> Interp {
-        if self.channel == Channel::Forest {
+        if matches!(self.channel, Channel::Forest | Channel::Canopy) {
             Interp::Nearest
         } else {
             Interp::Bilinear

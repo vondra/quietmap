@@ -70,13 +70,19 @@ This controller does not repaint heatmaps or change a served generation.
 
 ## Base rasters and OSM
 
-The geophysical channels are DEM, forest and IMD. Their runtime files are
-`z9/x/y/dem.i16be`, `forest.u8`, `imd.u8`, one per square and channel for all
+The geophysical channels are DEM, canopy height, forest cover and IMD. Their runtime files are
+`z9/x/y/dem.u16le`, `canopy.u8`, `forest.u8`, `imd.u8`, one per square and channel for all
 262144 z9 coordinates. A file has three states: the whole native window bytes;
 a 0-byte file, which declares coverage-verified absence and samples as the
-channel's ocean value (DEM 0, forest 0, IMD 100); and missing, which is an error,
+channel's ocean value (DEM 0, canopy 0, forest 0, IMD 100); and missing, which is an error,
 so an undeclared square never computes. There is no raster catalog or generation
 id: identity is the release name and the code version.
+
+The terrain contract is in `engine/noise-compute/SPEC.md`.
+`terrain_produce.py` consumes a reviewed source manifest and requires an explicit
+free-space reserve. It refuses missing source provenance, unresolved nodes and
+changed resumed outputs. Its bounded square outputs still need source-seam
+validation before assembling a complete release.
 
 The source converters live in `scripts/rasters/`; `scripts/rasters/repack-native-z9.py`
 derives coverage from the official source catalogs and runs `raster-repack`, which

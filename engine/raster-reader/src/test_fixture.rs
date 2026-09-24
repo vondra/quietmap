@@ -15,12 +15,16 @@ pub fn write_square(
     let mut bytes = Vec::with_capacity(channel.byte_len(window));
     for row in 0..window.rows {
         for column in 0..window.columns {
-            let raw = value(
+            let value = value(
                 window.north_node - row as i32,
                 window.west_node + column as i32,
-            )
-            .to_be_bytes();
-            bytes.extend_from_slice(&raw[2 - channel.bytes_per_node()..]);
+            );
+            let raw = channel.encode(if value == i16::MIN {
+                f64::NAN
+            } else {
+                f64::from(value)
+            });
+            bytes.extend_from_slice(&raw[..channel.bytes_per_node()]);
         }
     }
     write_file(root, channel, square, &bytes);

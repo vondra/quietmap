@@ -1,5 +1,5 @@
 /** Grid raster tiles (DEM elevation, forest cover, imperviousness) out of the
- * per-square native-lattice files (`<prepared>/z9/<x>/<y>/{dem.i16be,
+ * per-square native-lattice files (`<prepared>/z9/<x>/<y>/{dem.u16le,
  * forest.u8,imd.u8}`). Port of the proven dev1 palettes; the z9 server had
  * dropped these renderers, leaving 404 overlay switches.
  *
@@ -58,7 +58,7 @@ function normalizeLongitude(lon: number): number {
 
 function channelFile(channel: GridChannel): { file: string; bytesPerNode: number } {
   return channel === 'dem'
-    ? { file: 'dem.i16be', bytesPerNode: 2 }
+    ? { file: 'dem.u16le', bytesPerNode: 2 }
     : { file: channel === 'forest' ? 'forest.u8' : 'imd.u8', bytesPerNode: 1 }
 }
 
@@ -104,8 +104,8 @@ function sampleNearest(grid: SquareGrid, channel: GridChannel, lat: number, lon:
   if (row < 0 || row >= grid.rows || col < 0 || col >= grid.columns) return null
   const off = (row * grid.columns + col) * grid.bytesPerNode
   if (channel === 'dem') {
-    const v = grid.buf.readInt16BE(off)
-    return v === -32768 ? null : v
+    const v = grid.buf.readUInt16LE(off)
+    return v === 65535 ? null : -500 + v / 5
   }
   const v = grid.buf[off]
   return v > 100 ? null : v

@@ -56,7 +56,7 @@ data/prepared/<year>/z9/<x>/<y>/
     airport_areas.arrow  airport_lines.arrow  barriers.arrow
     square-country-city.bin                  continent, country and metro of the square
     structures.arrow  structures.qoix        screening footprints and their edge index
-    dem.i16be  forest.u8  imd.u8             terrain, canopy density, ground sealing
+    dem.u16le  canopy.u8  forest.u8  imd.u8  terrain, canopy height/cover, ground sealing
 data/tiles/<year>/pmtiles/                   one PMTiles archive per layer, plus total
 ```
 

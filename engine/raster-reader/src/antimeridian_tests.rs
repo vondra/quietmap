@@ -23,6 +23,7 @@ impl RasterFixture {
                         let centre = if lon == 15.0 { 15 * 3600 } else { 180 * 3600 };
                         (7200 + (longitude - centre + 648000).rem_euclid(1296000) - 648000) as i16
                     }
+                    Channel::Canopy => 25,
                     Channel::Forest => 55,
                     Channel::Imd => 37,
                 });

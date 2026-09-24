@@ -51,8 +51,8 @@ def input_files(roots):
 def raster_inputs(source):
     """Every channel file of every z9 square: window bytes or a 0-byte ocean file; missing is an error."""
     source = canonical_input(source)
-    for channel in ('dem', 'forest', 'imd'):
-        extension = '.i16be' if channel == 'dem' else '.u8'
+    for channel in ('dem', 'canopy', 'forest', 'imd'):
+        extension = '.u16le' if channel == 'dem' else '.u8'
         for x in range(qmgrid.Z9_AXIS):
             for y in range(qmgrid.Z9_AXIS):
                 path = source / qmgrid.square_name(x, y) / (channel + extension)
