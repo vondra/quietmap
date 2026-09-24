@@ -8,7 +8,7 @@ import shapely
 from shapely import STRtree
 
 import qmgrid
-from structure_freshness import input_content_digest, input_fingerprint, structure_input_files
+from structure_freshness import input_stamps, structure_input_files
 from structure_contract import (
     SCHEMA, CONTRACT_KEY, CONTRACT_VERSION, KIND_BUILDING, KIND_BARRIER,
     load_osm_buildings, load_barriers, wall_grid_poly, wall_centroid_grid,
@@ -29,7 +29,8 @@ IOU_MATCH_THRESHOLD = 0.5
 BUILDER_VERSION = "structures-builder-4"
 
 
-def structure_is_fresh(out_path, input_files):
+def structure_is_fresh(out_path, stamps):
+    """`stamps` = input_stamps() of the inputs now; either stamp matching skips the rebuild."""
     if not os.path.exists(out_path):
         return False
     with ipc.open_file(out_path) as output_file:
@@ -38,11 +39,9 @@ def structure_is_fresh(out_path, input_files):
             and metadata.get(CONTRACT_KEY.encode()) == CONTRACT_VERSION.encode()
             and metadata.get(b"grid") == b"z30"):
         return False
-    if metadata.get(b"input_fingerprint") == input_fingerprint(input_files).encode():
-        return True
-    # Size or mtime moved: only different bytes make the input changed.
-    stored_content = metadata.get(b"input_content_digest")
-    return stored_content is not None and stored_content == input_content_digest(input_files).encode()
+    fingerprint, content_digest = stamps
+    return (metadata.get(b"input_fingerprint") == fingerprint.encode()
+            or metadata.get(b"input_content_digest") == content_digest.encode())
 
 
 def match_pairs(osm_geoms, osm_geom_idx, overture_rows):
@@ -98,13 +97,12 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
     square_dir = os.path.join(prepared_dir, "z9", str(x), str(y))
     overture_rows = overture_rows or []
     out_path = os.path.join(square_dir, "structures.arrow")
-    input_files = structure_input_files(square_dir, overture_files, ghsl, regional)
-    if structure_is_fresh(out_path, input_files):
-        return None
     # Both stamps describe the inputs BEFORE the read: an input rewritten during the build then
     # differs from both on the next run and the square is rebuilt.
-    fingerprint_before_reading = input_fingerprint(input_files)
-    content_digest_before_reading = input_content_digest(input_files)
+    stamps_before_reading = input_stamps(
+        structure_input_files(square_dir, overture_files, ghsl, regional))
+    if structure_is_fresh(out_path, stamps_before_reading):
+        return None
     osm = load_osm_buildings(os.path.join(square_dir, "buildings.arrow"))
     barriers = load_barriers(os.path.join(square_dir, "barriers.arrow"))
 
@@ -254,8 +252,7 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
     meta[CONTRACT_KEY] = CONTRACT_VERSION
     meta["grid"] = "z30"
     meta["builder_version"] = BUILDER_VERSION
-    meta["input_fingerprint"] = fingerprint_before_reading
-    meta["input_content_digest"] = content_digest_before_reading
+    meta["input_fingerprint"], meta["input_content_digest"] = stamps_before_reading
     meta["building_rows"] = str(n_osm + n_ovt_only)
     meta["barrier_rows"] = str(len(barriers))
     schema = SCHEMA.with_metadata(meta)

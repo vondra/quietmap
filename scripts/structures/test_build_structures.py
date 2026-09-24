@@ -221,7 +221,11 @@ class BuildStructuresTests(unittest.TestCase):
         ghsl.write_bytes(b"prior")
         self.assertIsNotNone(BUILDER.build_square(
             SQUARE, self.prepared, rows, [], FakeGlobalPrior([ghsl]), None))
+        # Other bytes at the same size and mtime (a rewrite inside one mtime tick): rebuilt.
+        stamped = source.stat()
         buildings_arrow(source, [osm_row(0, OSM_POLY, 33.0)])
+        os.utime(source, ns=(stamped.st_atime_ns, stamped.st_mtime_ns))
+        self.assertEqual(source.stat().st_size, stamped.st_size)
         self.assertIsNotNone(BUILDER.build_square(
             SQUARE, self.prepared, rows, [], FakeGlobalPrior([ghsl]), None))
 
