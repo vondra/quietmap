@@ -9,7 +9,7 @@ map: { center: [118.0, -2.0], zoom: 4 }
 The highways directorate, Bina Marga, runs a public [GIS portal](https://gisportal.binamarga.pu.go.id/) with three layers. They are applied to motorways, trunk and primary roads in this order:
 
 - Toll roads: a road within 300 m of an operating toll road gets 80,000 vehicles per day, an assigned value.
-- Regional roads: the layer carries LHRT, the average daily traffic, for many provincial, regency and city roads. A road within 200 m of such a line gets the published value. Where the value is empty, the road gets 12,000 (city road), 8,000 (provincial) or 5,000 (regency).
+- Regional roads: the layer carries LHRT, the average daily traffic, for many provincial, regency and city roads. A primary road within 200 m of a provincial line gets the published value, or 8,000 where the value is empty, unless a national road lies within 50 m: most regency and city lines run beside national roads, so their counts are not used on main roads.
 - National roads: no traffic value. A road within 400 m gets 30,000.
 
 Assigned values are doubled in 8 metropolitan areas (Jakarta, Surabaya, Bandung, Medan, Semarang, Makassar, Palembang, Denpasar) and multiplied by 1.4 in 33 other cities. Published LHRT values are used unchanged.
