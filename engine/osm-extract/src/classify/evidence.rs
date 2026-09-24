@@ -114,6 +114,9 @@ pub fn industrial_class(tags: &Tags) -> Option<u8> {
     let tag = |key: &str| tags.get(key).map(String::as_str);
     if tags.iter().any(|(key, value)| {
         (lifecycle_key(key)
+            && key.split_once(':').is_none_or(|(_, feature)| {
+                matches!(feature, "power" | "landuse" | "quarry" | "man_made")
+            })
             && (!key.starts_with("historic")
                 || tag("landuse") == Some("quarry")
                 || key == "historic:landuse"))
@@ -216,6 +219,54 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
     }
+    #[test]
+    fn inactive_industry_requires_lifecycle_of_the_facility() {
+        for unrelated in [
+            "disused:railway",
+            "abandoned:railway",
+            "construction:railway",
+            "proposed:building",
+            "construction:voltage",
+            "construction:power:voltage",
+        ] {
+            let site = tags(&[("landuse", "industrial"), (unrelated, "yes")]);
+            assert_eq!(industrial_class(&site), None, "{unrelated}");
+            assert!(keep_model_tag(&FeatureType::Industrial, unrelated));
+        }
+        assert_eq!(
+            industrial_class(&tags(&[
+                ("power", "transformer"),
+                ("construction:voltage", "110000")
+            ])),
+            Some(15)
+        );
+        for (key, value) in [
+            ("disused:power", "transformer"),
+            ("abandoned:landuse", "industrial"),
+            ("construction:man_made", "works"),
+            ("disused:quarry", "yes"),
+        ] {
+            assert_eq!(industrial_class(&tags(&[(key, value)])), Some(12), "{key}");
+        }
+        assert_eq!(
+            industrial_class(&tags(&[("landuse", "quarry"), ("historic", "yes")])),
+            Some(12)
+        );
+        assert_eq!(
+            industrial_class(&tags(&[("power", "plant"), ("historic", "yes")])),
+            None
+        );
+        for value in ["no", "false", "0", ""] {
+            assert_eq!(
+                industrial_class(&tags(&[
+                    ("landuse", "industrial"),
+                    ("disused:landuse", value)
+                ])),
+                None
+            );
+        }
+    }
+
     #[test]
     fn power_classes_and_lifecycle_are_distinct() {
         for (pairs, expected) in [
