@@ -121,9 +121,10 @@ const CAR_PARK_SPECTRUM: [f64; NUM_BANDS] = [8.5, -1.0, -4.2, -5.5, -5.3, -5.8, 
 ///
 /// Active anchors (pre-annualization): padel 90 (racket "pock" on glass,
 /// padelcreations + Higgins); tennis 84 (LFmax 58.4/strike, TU München);
-/// football pitch 88 (58 LAeq,1h @10 m, Sport England AGP); basketball pitch−6
-/// (UBC/BKL); playground PROP-MEAS; pool PROP-MEAS; outdoor seating 71 dB(A)/
-/// guest (Lärmfibel Biergärten).
+/// football pitch 97.85 over a 100×64 m pitch (58 LAeq,1h @10 m, Sport
+/// England AGP, read as an area source); basketball tennis−6 at its
+/// reference court (UBC/BKL); playground PROP-MEAS; pool PROP-MEAS;
+/// outdoor seating 71 dB(A)/guest (Lärmfibel Biergärten).
 pub fn leisure_profile(sport: u8) -> LeisureProfile {
     // All leisure shares a low fixed floor; `lw_per_m2` over the polygon area
     // carries the level (shared `settlement::area_lw`). Each anchor in the
@@ -259,12 +260,17 @@ pub fn leisure_profile(sport: u8) -> LeisureProfile {
             m2_per_space: Some(13.3),
         },
         // PITCH (0) — generic ball-sport pitch, the class an untyped
-        // `leisure=pitch` gets. active 88 (58 LAeq,1h @10 m, Sport England AGP)
-        // − 9 annual → year Lden 78 @ ~7000 m² (a typical ~1100 m² pitch lands
-        // ~70).
+        // `leisure=pitch` gets. The SAME Sport England AGP measurement the old
+        // anchor used (58 dB LAeq,1h at 10 m), but read as the AREA source a
+        // pitch is: 10 m outside the touchline of a 100×64 m pitch the
+        // incoherent hemispherical area integral sits 1.8 dB under the
+        // per-m² level, so active Lw″ = 59.8 dB/m² — 97.85 dB(A) over the
+        // 6,400 m² pitch — and − 9 annual (−3 season −6 duty) → 50.8 dB/m².
+        // (The old 40 treated the 58 as a point source, −10.8 dB.) Year Lden
+        // 89.3 @ 7000 m²; a typical ~1100 m² pitch lands ~81.
         PITCH => LeisureProfile {
             lw_fixed: FLOOR,
-            lw_per_m2: 40.0,
+            lw_per_m2: 50.8,
             ref_area_m2: 7000.0,
             spectrum: [-2.0, -1.0, 0.0, 1.0, 1.0, 0.0, -2.0, -4.0],
             evening_offset: -3.0,
@@ -344,6 +350,20 @@ mod tests {
         assert!(
             anchor(TENNIS) > anchor(BASKETBALL),
             "tennis must beat basketball"
+        );
+    }
+
+    /// The pitch anchor: 58 dB LAeq,1h at 10 m (Sport England AGP) read as
+    /// an area source — active 59.8 dB/m², annualized −9 → 50.8 dB/m², i.e.
+    /// 97.85 dB(A) over a 100×64 m pitch.
+    #[test]
+    fn pitch_anchor_is_the_area_source_reading() {
+        let p = leisure_profile(PITCH);
+        assert_eq!(p.lw_per_m2, 50.8);
+        let over_100x64 = leisure_lw(&p, 6400.0);
+        assert!(
+            (over_100x64 - (97.85 - 9.0)).abs() < 0.05,
+            "annual over 6,400 m²: {over_100x64:.3}"
         );
     }
 

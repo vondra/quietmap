@@ -67,6 +67,44 @@ latitudes.
 Present aircraft schemas must carry a positive sampling-window stamp, including
 empty files; selected rows cannot redefine the observation window.
 
+## Industrial, wind and leisure emission
+
+An `industrial.arrow` row is admitted by the popup exactly when its polygon
+EDGE can reach: centroid distance minus ring radius (max vertex distance from
+the centroid; 0 for ringless point rows) ≤ `INDUSTRIAL_MAX_RADIUS` = 4 km —
+the same reach the painter's per-point cap enforces. The retired 5 km centroid
+gate dropped giant polygons (Garzweiler's east/west ends stood 5.4–5.6 km from
+the mine centroid, 250 m from its boundary). Batch prefiltering (5 km over
+geometry envelopes) and square loading (7.5 km) already cover these rows.
+
+Profile selection is NACE, then OSM subtype, then coarse source type
+(`emission/industrial.rs`). A tagged warehouse IS a NACE 52 site and uses that
+profile (86 dB(A) at 1 ha, evening −3, night −8); the old quieter subtype twin
+(−13.2 dB Lden) is deleted. Coal and lignite mining (NACE 05) runs 24/7
+(evening/night offsets 0 — bucket-wheel pits do not stop); NACE 08 quarries
+keep day-oriented hours (−8/−20).
+
+Wind turbines emit their annual operating level: the max-mode LUT
+(`turbine_lw`, 98–106.5 dB(A) by rating) plus the Dutch statutory operating
+duty ΔL = 10·lg Σ_j U_j·10^((Lw_j − Lmax)/10) (Reken- en meetvoorschrift
+windturbines, 2011) over the generic normalised LwA(v) curve — the arithmetic
+mean of (Lw−Lmax) over nine published type curves (Oliver Forest Appendix 13.2
+Table 2; Ballinagree Appendix 7.4 SG 6.0-155 AM0, N149, V150 mode 0), cut-in
+3 m/s, Lmax held above rated. Until the meteorology raster arrives the wind
+distribution is a documented placeholder: Rayleigh with 7.5 m/s hub-height
+mean, identical in every period (generic duty −2.1 dB; the published V150
+check gives −3.4). The turbine spectrum is the energy mean of five published
+max-mode octave spectra (the four modern Oliver Forest types plus SG 6.0-155
+AM0), unweighted relative to 1 kHz:
+`[13.2, 11.1, 7.8, 4.4, 0, −3.9, −9.7, −19.4]` dB. Spectrum and duty ship
+together: at 1 km they nearly cancel.
+
+A sports pitch annualizes the Sport England AGP measurement (58 dB LAeq,1h at
+10 m) as the area source it is: 10 m outside the touchline of a 100×64 m pitch
+the area integral sits 1.8 dB under the per-m² level, giving active 59.8
+dB/m² — 97.85 dB(A) over the pitch — and 50.8 dB/m² after the standard −9 dB
+annualization (−3 season, −6 duty).
+
 ## Prepared road direction and traffic
 
 Final road Arrow carries `road_traffic_contract=1`, four non-null Float64

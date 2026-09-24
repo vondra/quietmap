@@ -545,12 +545,14 @@ pub fn write_leisure_file(path: &Path, rows: &[FixtureLeisure]) {
     w.finish().unwrap();
 }
 
-/// One industrial row.
+/// One industrial row. `ring_lonlat` overrides the default ~20 m square
+/// footprint when the test needs a real polygon extent (edge-gate tests).
 pub struct FixtureIndustrial {
     pub osm_id: i64,
     pub centroid: (f64, f64),
     pub source_type: u8,
     pub name: String,
+    pub ring_lonlat: Option<Vec<(f64, f64)>>,
 }
 
 /// An industrial.arrow on disk in the osm-extract v2 (grid) layout.
@@ -592,7 +594,15 @@ pub fn write_industrial_file(path: &Path, rows: &[FixtureIndustrial]) {
             Arc::new(Float32Array::from_iter(rows.iter().map(|_| None::<f32>))),
             Arc::new(Float32Array::from_iter(rows.iter().map(|_| None::<f32>))),
             Arc::new(BinaryArray::from_iter_values(rows.iter().map(|r| {
-                encode_ring(&square_ring_lonlat(r.centroid.1, r.centroid.0))
+                let default;
+                let ring = match &r.ring_lonlat {
+                    Some(custom) => custom,
+                    None => {
+                        default = square_ring_lonlat(r.centroid.1, r.centroid.0);
+                        &default
+                    }
+                };
+                encode_ring(ring)
             }))),
             Arc::new(Float32Array::from_iter_values(
                 rows.iter().map(|_| 5000.0f32),

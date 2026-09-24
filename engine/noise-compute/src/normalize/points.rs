@@ -848,12 +848,14 @@ mod tests {
         assert_eq!(prep(Some(250.0), Some(2000.0))[0].hub_height_m, Some(175.0));
         assert_eq!(prep(Some(120.0), Some(2000.0))[0].hub_height_m, Some(120.0));
         // Implausible rated power = unknown → 2 MW default, and the emission
-        // uses the 2 MW class (LwA 105), not the ≥5 MW class (106.5).
+        // uses the 2 MW class (LwA 105), not the ≥5 MW class (106.5) — at the
+        // annual operating level (max mode plus the wind duty), not max mode.
         let points = prep(None, Some(20_000.0));
         assert_eq!(points[0].rated_power_kw, Some(2000.0));
         let day_f64: [f64; NUM_BANDS] = std::array::from_fn(|i| points[0].lw_day[i] as f64);
         let aw = crate::propagation::iso9613::a_weighted_total(&day_f64);
-        assert!((aw - 105.0).abs() < 1e-3, "clamped-power turbine LwA: {aw}");
+        let expected = 105.0 + wind::wind_duty_db();
+        assert!((aw - expected).abs() < 1e-3, "clamped-power turbine LwA: {aw}");
     }
 
     /// A leisure area source: 1.5 m height, Lw-derived reach, AREA scaling

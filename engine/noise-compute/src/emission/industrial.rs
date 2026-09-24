@@ -124,11 +124,21 @@ pub fn nace_profile(nace_4digit: u16) -> Option<IndustrialProfile> {
     Some(match nace_2 {
         // Heavy industry — high base Lw
         // Calibrated against Czech SHM 2022 + Irish Cement EIS (120.8 dBA plant total).
-        // Coal mining (NACE 05: hard coal 0510 / lignite 0520) and other
-        // mining & quarrying (NACE 08) share an acoustic class: draglines,
-        // crushers, haul trucks, conveyors, ventilation fans. Same loud
-        // open-pit/underground profile (GEM Global Coal Mine Tracker enrichment).
-        5 | 8 => IndustrialProfile {
+        // Coal and lignite mining (NACE 05: hard coal 0510 / lignite 0520)
+        // runs around the clock — bucket-wheel excavators, conveyors, spreaders
+        // cannot stop (Garzweiler: six excavators 24 h/day, 365 days/year,
+        // Rheinische Industriekultur) — so no evening/night cut, unlike the
+        // day-oriented quarries of NACE 08 below. Same loud open-pit/
+        // underground spectrum (GEM Global Coal Mine Tracker enrichment).
+        5 => IndustrialProfile {
+            base_lw: 99.0,
+            spectrum: [-3.0, -1.0, 0.0, 1.0, 0.0, -2.0, -5.0, -8.0],
+            evening_offset: 0.0,
+            night_offset: 0.0, // 24/7
+        },
+        8 => IndustrialProfile {
+            // Other mining & quarrying — draglines, crushers, haul trucks,
+            // ventilation fans. Same loud spectrum as coal, day-oriented hours.
             base_lw: 99.0,
             spectrum: [-3.0, -1.0, 0.0, 1.0, 0.0, -2.0, -5.0, -8.0],
             evening_offset: -8.0,
@@ -260,13 +270,10 @@ pub fn subtype_profile(subtype: u8) -> Option<IndustrialProfile> {
     let spec = [-3.0, -1.0, 0.0, 1.0, 0.0, -1.0, -3.0, -6.0]; // generic industrial
     match subtype {
         0 => None, // unknown — fall through to source_type
-        1 => Some(IndustrialProfile {
-            // warehouse/logistics — quiet
-            base_lw: 75.0,
-            spectrum: [-5.0, -3.0, -1.0, 0.0, 0.0, -1.0, -3.0, -6.0],
-            evening_offset: -5.0,
-            night_offset: -15.0,
-        }),
+        // warehouse/logistics — the NACE 52 profile, not its own quieter one:
+        // a tagged warehouse IS a NACE 52 site, and the old subtype value sat
+        // 13.2 dB Lden below it (reality-fixes w7-sources census). One fact.
+        1 => nace_profile(5210),
         2 => Some(IndustrialProfile {
             // factory/works — generic loud
             base_lw: 95.0,
@@ -409,6 +416,31 @@ pub fn industrial_emission_bands(profile: &IndustrialProfile, lw: f64) -> [f64; 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warehouse_subtype_is_the_nace52_profile() {
+        // A tagged warehouse IS a NACE 52 site: one fact, no quieter twin.
+        let sub = subtype_profile(1).unwrap();
+        let nace = nace_profile(5210).unwrap();
+        assert_eq!(sub.base_lw, nace.base_lw);
+        assert_eq!(sub.spectrum, nace.spectrum);
+        assert_eq!(sub.evening_offset, nace.evening_offset);
+        assert_eq!(sub.night_offset, nace.night_offset);
+        assert_eq!(sub.base_lw, 86.0);
+    }
+
+    #[test]
+    fn coal_runs_day_and_night_quarries_do_not() {
+        // NACE 05 (hard coal 0510 / lignite 0520): 24/7 open-pit/underground
+        // operation; NACE 08 quarries keep their day-oriented hours.
+        let coal = nace_profile(510).unwrap();
+        assert_eq!(coal.evening_offset, 0.0);
+        assert_eq!(coal.night_offset, 0.0);
+        assert_eq!(coal.base_lw, 99.0);
+        let quarry = nace_profile(810).unwrap();
+        assert_eq!(quarry.evening_offset, -8.0);
+        assert_eq!(quarry.night_offset, -20.0);
+    }
 
     #[test]
     fn heavy_sectors_get_the_raised_cap_low_fill_keep_50ha() {

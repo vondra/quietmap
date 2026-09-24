@@ -113,11 +113,60 @@ fn industrial_row_collects() {
             centroid: (LON, LAT),
             source_type: 0,
             name: "Plant".to_string(),
+            ring_lonlat: None,
         }],
     );
     let data = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
     assert_eq!(data.industrial.len(), 1);
     assert_eq!(data.industrial[0].osm_id, 99);
+}
+
+#[test]
+fn industrial_gate_is_the_polygon_edge_not_its_centroid() {
+    // Garzweiler east end: the mine's centroid is 5.6 km away (past the old
+    // 5 km centroid gate) but its boundary is 250 m off — the popup must see
+    // it, as the painter always has. A near-centroid point row past 4 km is
+    // correctly gone (the painter's per-point cap drops it too).
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = fx::square_dir(tmp.path(), prague());
+    std::fs::create_dir_all(&dir).unwrap();
+    let m_per_deg_lon = grid::geo::m_per_deg_lon(LAT.to_radians());
+    let mine_centroid = (LON + 5600.0 / m_per_deg_lon, LAT);
+    let mine_west_edge = LON + 250.0 / m_per_deg_lon;
+    let mine_east_edge = mine_centroid.0 + (mine_centroid.0 - mine_west_edge);
+    let half_height = 0.004;
+    fx::write_industrial_file(
+        &dir.join("industrial.arrow"),
+        &[
+            fx::FixtureIndustrial {
+                osm_id: 100,
+                centroid: mine_centroid,
+                source_type: 0,
+                name: "Mine".to_string(),
+                ring_lonlat: Some(vec![
+                    (mine_west_edge, LAT - half_height),
+                    (mine_east_edge, LAT - half_height),
+                    (mine_east_edge, LAT + half_height),
+                    (mine_west_edge, LAT + half_height),
+                    (mine_west_edge, LAT - half_height),
+                ]),
+            },
+            fx::FixtureIndustrial {
+                osm_id: 101,
+                centroid: (LON + 4500.0 / m_per_deg_lon, LAT),
+                source_type: 0,
+                name: "Far shed".to_string(),
+                ring_lonlat: None,
+            },
+        ],
+    );
+    let centroid_dist =
+        grid::geo::flat_dist(LAT, LON, mine_centroid.1, mine_centroid.0);
+    assert!(centroid_dist > 5000.0, "centroid {centroid_dist:.0} m");
+    let data = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
+    let ids: Vec<i64> = data.industrial.iter().map(|p| p.osm_id).collect();
+    assert!(ids.contains(&100), "the mine edge reaches: {ids:?}");
+    assert!(!ids.contains(&101), "a 4.5 km point is past reach: {ids:?}");
 }
 
 #[test]

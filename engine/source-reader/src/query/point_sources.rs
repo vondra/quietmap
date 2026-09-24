@@ -1,6 +1,7 @@
 //! Industrial sites and ship cells become normalized emission points.
 
 use super::spatial::{INDUSTRIAL_QUERY_RADIUS_M, SHIP_QUERY_RADIUS_M};
+use noise_compute::constants::INDUSTRIAL_MAX_RADIUS;
 use arrow::array::Array;
 use square_store::grid_cols::{
     col_binary, col_f32, col_i32, col_i64, col_str, col_u16, col_u8, decode_geom, grid_cell_lonlat,
@@ -31,10 +32,6 @@ pub(super) fn collect_industrial(
 
         for i in 0..n {
             let (c_lon, c_lat) = grid_cell_lonlat(cgx.value(i), cgy.value(i));
-            let dist = grid::geo::flat_dist(lat, lng, c_lat, c_lon);
-            if dist > INDUSTRIAL_QUERY_RADIUS_M {
-                continue;
-            }
             if col_u8(batch, "suppressed").map(|a| a.value(i)).unwrap_or(0) != 0 {
                 continue;
             }
@@ -51,6 +48,26 @@ pub(super) fn collect_industrial(
                     .and_then(|g| decode_geom(Some(g.value(i))))
                     .unwrap_or_default()
             };
+            // The gate is the polygon EDGE, not its centroid: a receiver at the
+            // east end of Garzweiler stands 5.6 km from the mine's centroid but
+            // 250 m from its boundary, and the old 5 km centroid gate dropped
+            // the mine (+32 dB at the east end once admitted). The painter
+            // never had a centroid gate — its per-point reach caps at
+            // `INDUSTRIAL_MAX_RADIUS` — so the popup admits a row exactly when
+            // its edge can reach: centroid distance minus ring radius ≤ 4 km.
+            // Rows without a ring are points (radius 0), as the painter treats
+            // them (a ringless row discretises to one centroid point).
+            let ring_radius_m = polygon_grid
+                .iter()
+                .map(|&(gx, gy)| {
+                    let (lon, lat) = grid_cell_lonlat(gx, gy);
+                    grid::geo::flat_dist(c_lat, c_lon, lat, lon)
+                })
+                .fold(0.0f64, f64::max);
+            let dist = grid::geo::flat_dist(lat, lng, c_lat, c_lon);
+            if dist - ring_radius_m > INDUSTRIAL_MAX_RADIUS {
+                continue;
+            }
             let positive_value = |column: Option<&arrow::array::Float32Array>| {
                 column
                     .map(|values| values.value(i))
