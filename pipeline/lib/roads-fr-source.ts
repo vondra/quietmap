@@ -7,6 +7,7 @@ import { parse } from 'csv-parse/sync'
 import proj4 from 'proj4'
 import { writeCacheAtomically } from './atomic-cache.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
+import { flatDist } from './spatial.js'
 
 const CACHE_DIRECTORY = 'fr'
 const CSV_2024 = 'tmja-2024.csv'
@@ -37,7 +38,8 @@ export interface CeremaFileStats {
   sourceRows: number
   accepted: number
   noTrafficSkipped: number
-  missingHeavyRatioSkipped: number
+  /** Sections kept with the heavy share of their nearest same-route section (else the census median). */
+  heavyRatioFromNeighbour: number
   invalidHeavyRatioSkipped: number
   invalidCoordinatesSkipped: number
   outsideMetropolitanFranceSkipped: number
@@ -99,13 +101,14 @@ function parseFile(
 ): { sections: CeremaCensusSection[]; stats: CeremaFileStats } {
   const rows = csvRows(csv, year)
   if (rows.length === 0) throw new Error(`Cerema ${year} census is empty`)
-  const sections: CeremaCensusSection[] = []
+  const measured: Array<Omit<CeremaCensusSection, 'ratio_pl' | 'aadt_light' | 'aadt_medium' | 'aadt_heavy' | 'aadt_moto'> &
+    { ratio: number | null }> = []
   const stats: CeremaFileStats = {
     year,
     sourceRows: rows.length,
     accepted: 0,
     noTrafficSkipped: 0,
-    missingHeavyRatioSkipped: 0,
+    heavyRatioFromNeighbour: 0,
     invalidHeavyRatioSkipped: 0,
     invalidCoordinatesSkipped: 0,
     outsideMetropolitanFranceSkipped: 0,
@@ -120,10 +123,6 @@ function parseFile(
       continue
     }
     const ratio = heavyRatio(row.ratio_PL, year)
-    if (ratio === 'missing') {
-      stats.missingHeavyRatioSkipped++
-      continue
-    }
     if (ratio === 'invalid') {
       stats.invalidHeavyRatioSkipped++
       continue
@@ -161,19 +160,36 @@ function parseFile(
       const [endLon, endLat] = proj4('EPSG:2154', 'WGS84', [xF, yF])
       coords.push([endLon, endLat])
     }
-    const aadt_moto = Math.round(tmja * 0.01)
-    const totalHeavy = Math.round(tmja * ratio)
+    measured.push({ ...roadObservation({ year, row }, 'both-directions'),
+      route, ref, lat, lon, coords, tmja, ratio: ratio === 'missing' ? null : ratio })
+  }
+  // 680 of the 2019 sections (1,352 km: A4 221,626, A86 183,813) publish TMJA without ratio_PL.
+  // The total is the measurement; only its heavy share is borrowed from the same route.
+  const published = measured.filter(section => section.ratio !== null)
+  const medianRatio = published.map(section => section.ratio!).sort((a, b) => a - b)[(published.length - 1) >> 1] ?? 0
+  const sections: CeremaCensusSection[] = []
+  for (const section of measured) {
+    let ratio = section.ratio
+    if (ratio === null) {
+      let nearest = Infinity
+      for (const other of published) {
+        const distance = other.ref === section.ref ? flatDist(section.lat, section.lon, other.lat, other.lon) : Infinity
+        if (distance < nearest) { nearest = distance; ratio = other.ratio }
+      }
+      ratio ??= medianRatio
+      stats.heavyRatioFromNeighbour++
+    }
+    const aadt_moto = Math.round(section.tmja * 0.01)
+    const totalHeavy = Math.round(section.tmja * ratio)
     const aadt_medium = Math.round(totalHeavy * 0.02)
     const aadt_heavy = totalHeavy - aadt_medium
-    const aadt_light = tmja - totalHeavy - aadt_moto
+    const aadt_light = section.tmja - totalHeavy - aadt_moto
     if (aadt_light < 0) {
       stats.invalidHeavyRatioSkipped++
       continue
     }
-    sections.push({ ...roadObservation({ year, row }, 'both-directions'),
-      route, ref, lat, lon, coords, tmja, ratio_pl: ratio,
-      aadt_light, aadt_medium, aadt_heavy, aadt_moto,
-    })
+    const { ratio: _published, ...observation } = section
+    sections.push({ ...observation, ratio_pl: ratio, aadt_light, aadt_medium, aadt_heavy, aadt_moto })
     stats.accepted++
   }
   if (stats.accepted + stats.duplicateSkipped === 0) {
