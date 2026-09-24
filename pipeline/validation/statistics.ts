@@ -1,18 +1,11 @@
 /**
- * Error statistics of model − measurement deltas with a seeded bootstrap stratified by network:
- * bias, mean absolute error, tails beyond 3/6/10 dB, P10 and P90, each with a 95 % interval.
+ * Seeded percentile bootstrap resampling stations within their network; several statistics share
+ * each draw, and paired statistics (run A vs run B) see identical station indices.
  */
 
-export type Metric = 'bias' | 'mae' | 'share_beyond_3db' | 'share_beyond_6db' | 'share_beyond_10db' | 'p10' | 'p90'
-export type MetricEstimate = { value: number; ci95: [number, number] | null }
-export type ErrorSummary = { n: number; networks: number } & Record<Metric, MetricEstimate>
-/** One delta and the network it was measured by; the bootstrap resamples within each network. */
-export type Sample = { delta: number; network: string }
-
-/** W1 criteria v1 §2: 10,000 draws, stations resampled within their network, seed 20260924. */
-export const BOOTSTRAP_RESAMPLES = 10_000
-const BOOTSTRAP_SEED = 20260924
-/** W1 criteria v1 §2 (`n_min`): below ten samples a percentile interval undercovers; none is shown under three. */
+export type BootstrapConfig = { draws: number; seed: number; level: number }
+export type Estimate = { value: number; ci95: [number, number] | null }
+/** Below this many samples no interval is reported (a percentile interval of two points is noise). */
 const MIN_SAMPLES_FOR_INTERVAL = 3
 
 /** mulberry32: a small deterministic PRNG so a rerun reproduces the same intervals. */
@@ -36,66 +29,45 @@ export function quantile(sorted: readonly number[], fraction: number): number {
   return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower)
 }
 
-function metrics(deltas: number[]): Record<Metric, number> {
-  const n = deltas.length
-  const beyond = (limit: number) => deltas.filter(delta => Math.abs(delta) > limit).length / n
-  const sorted = deltas.sort((a, b) => a - b)
-  return {
-    bias: sorted.reduce((sum, delta) => sum + delta, 0) / n,
-    mae: sorted.reduce((sum, delta) => sum + Math.abs(delta), 0) / n,
-    share_beyond_3db: beyond(3),
-    share_beyond_6db: beyond(6),
-    share_beyond_10db: beyond(10),
-    p10: quantile(sorted, 0.1),
-    p90: quantile(sorted, 0.9),
-  }
-}
-
 const round2 = (value: number): number => Math.round(value * 100) / 100
 
-/** Point estimates plus percentile-bootstrap 95 % intervals resampled within each network. */
-export function summarizeErrors(samples: readonly Sample[], resamples = BOOTSTRAP_RESAMPLES): ErrorSummary | null {
-  if (samples.length === 0) return null
-  const point = metrics(samples.map(sample => sample.delta))
-  const names = Object.keys(point) as Metric[]
-  const draws = Object.fromEntries(names.map(name => [name, [] as number[]])) as Record<Metric, number[]>
-  const byNetwork = new Map<string, number[]>()
-  for (const sample of samples) byNetwork.set(sample.network, [...(byNetwork.get(sample.network) ?? []), sample.delta])
+/**
+ * Point value and percentile interval of each statistic. Every draw resamples each network's
+ * items with replacement to that network's own count, so networks keep their weight.
+ */
+export function bootstrap<T, K extends string>(
+  items: readonly T[], networkOf: (item: T) => string, config: BootstrapConfig,
+  statistics: Record<K, (sample: readonly T[]) => number>,
+): Record<K, Estimate> {
+  const names = Object.keys(statistics) as K[]
+  const result = {} as Record<K, Estimate>
+  if (items.length === 0) throw new Error('bootstrap of an empty sample')
+  const byNetwork = new Map<string, T[]>()
+  for (const item of items) byNetwork.set(networkOf(item), [...(byNetwork.get(networkOf(item)) ?? []), item])
   const networks = [...byNetwork.values()]
-  if (samples.length >= MIN_SAMPLES_FOR_INTERVAL) {
-    const random = seededRandom(BOOTSTRAP_SEED)
-    for (let draw = 0; draw < resamples; draw += 1) {
-      const resampled: number[] = []
-      for (const deltas of networks) {
-        for (let index = 0; index < deltas.length; index += 1) resampled.push(deltas[Math.floor(random() * deltas.length)])
+  const draws = Object.fromEntries(names.map(name => [name, [] as number[]])) as Record<K, number[]>
+  if (items.length >= MIN_SAMPLES_FOR_INTERVAL) {
+    const random = seededRandom(config.seed)
+    const sample: T[] = new Array(items.length)
+    for (let draw = 0; draw < config.draws; draw += 1) {
+      let index = 0
+      for (const group of networks) {
+        for (let pick = 0; pick < group.length; pick += 1) sample[index++] = group[Math.floor(random() * group.length)]
       }
-      const estimate = metrics(resampled)
-      for (const name of names) draws[name].push(estimate[name])
+      for (const name of names) draws[name].push(statistics[name](sample))
     }
   }
-  const summary = { n: samples.length, networks: networks.length } as ErrorSummary
+  const tail = (1 - config.level) / 2
   for (const name of names) {
     const sorted = draws[name].sort((a, b) => a - b)
-    summary[name] = {
-      value: round2(point[name]),
-      ci95: sorted.length ? [round2(quantile(sorted, 0.025)), round2(quantile(sorted, 0.975))] : null,
+    result[name] = {
+      value: round2(statistics[name](items)),
+      ci95: sorted.length ? [round2(quantile(sorted, tail)), round2(quantile(sorted, 1 - tail))] : null,
     }
   }
-  return summary
+  return result
 }
 
-/** Group rows by a key and summarize each group's samples; groups are sorted by key. */
-export function summarizeGroups<T>(
-  rows: readonly T[], key: (row: T) => string | null, sample: (row: T) => Sample | null,
-): Array<{ group: string; summary: ErrorSummary }> {
-  const groups = new Map<string, Sample[]>()
-  for (const row of rows) {
-    const group = key(row)
-    const value = sample(row)
-    if (group == null || value == null) continue
-    groups.set(group, [...(groups.get(group) ?? []), value])
-  }
-  return [...groups.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([group, values]) => ({ group, summary: summarizeErrors(values)! }))
-}
+export const mean = (values: readonly number[]): number => values.reduce((sum, value) => sum + value, 0) / values.length
+export const share = (values: readonly number[], test: (value: number) => boolean): number => values.filter(test).length / values.length
+export const count = (values: readonly number[], test: (value: number) => boolean): number => values.filter(test).length

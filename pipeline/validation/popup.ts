@@ -29,7 +29,8 @@ export type PopupAnswer = {
 
 export type Contributor = { source_type: string; osm_id: number | null; name: string; subtype: string; distance_m: number; received_lden: number }
 export type LayerModel = { lden: number | null; periods: PeriodLevels; share_lden: number }
-export type RoadProvenance = 'counted' | 'service_tree' | 'continuity' | 'national_proxy' | 'class_default' | 'other'
+/** Traffic provenance in the W1 criteria vocabulary (criteria.json cohorts[].membership). */
+export type RoadProvenance = 'measured_count' | 'service_tree' | 'continuity_fill' | 'proxy' | 'class_default' | 'other'
 export type DominantRoad = {
   osm_id: number | null
   name: string
@@ -41,9 +42,10 @@ export type DominantRoad = {
   vehicle_split_estimated: boolean
   dominant_source_id: number | null
   provenance_tier: string | null
+  /** Year of the traffic dataset (the input year of the criteria's year gap); null for a prior. */
+  dataset_year: number | null
+  speed_source: string | null
   traffic_provenance: RoadProvenance
-  /** W1 road cohort: counted traffic, or estimated traffic on a local or a through road. */
-  cohort: 'counted' | 'local' | 'default'
 }
 export type StationModel = {
   receiver: { lat: number; lng: number; height_m: number | null; click_to_receiver_m: number }
@@ -53,7 +55,8 @@ export type StationModel = {
   total: { lden: number | null; periods: PeriodLevels }
   layers: Record<string, LayerModel>
   dominant_layer: string | null
-  top_contributors: Contributor[]
+  /** Every listed contributor (the popup lists the 30 loudest), loudest first. */
+  contributors: Contributor[]
   /** The loudest listed contributor of every layer (the popup lists the 30 loudest overall). */
   loudest_by_layer: Record<string, Contributor>
   dominant_road: DominantRoad | null
@@ -70,8 +73,6 @@ const CONTINUITY_SOURCE_ID = datasetId('road-continuity-heuristic')
 const MEASURED_TIERS = new Set(['city-measured', 'national-measured', 'continental-measured', 'global-measured'])
 /** `traffic_estimated` bits of light (1), medium (2) and heavy (4) vehicles; moto is 8. */
 const LIGHT_MEDIUM_HEAVY_ESTIMATED_BITS = 1 | 2 | 4
-/** Roads whose traffic is local access, not through traffic (OSM highway classes). */
-const LOCAL_ROAD_CLASSES = new Set(['residential', 'living_street', 'service', 'unclassified', 'pedestrian', 'track', 'road'])
 
 /** Flat-earth metres between two nearby points (receiver displacement is at most 100 m). */
 function metresBetween(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -88,9 +89,9 @@ export function roadTrafficProvenance(metadata: Record<string, unknown>): RoadPr
   const sourceId = typeof metadata.dominant_source_id === 'number' ? metadata.dominant_source_id : null
   const tier = (metadata.provenance as { tier?: string } | null | undefined)?.tier ?? null
   if (sourceId === SERVICE_TREE_SOURCE_ID) return 'service_tree'
-  if (sourceId === CONTINUITY_SOURCE_ID) return 'continuity'
-  if (tier && MEASURED_TIERS.has(tier)) return 'counted'
-  if (tier === 'national-proxy') return 'national_proxy'
+  if (sourceId === CONTINUITY_SOURCE_ID) return 'continuity_fill'
+  if (tier && MEASURED_TIERS.has(tier)) return 'measured_count'
+  if (tier === 'national-proxy') return 'proxy'
   if (!tier || sourceId === 0 || tier === 'baseline') return 'class_default'
   return 'other'
 }
@@ -103,7 +104,7 @@ function dominantRoad(contributors: WireContributor[]): DominantRoad | null {
   const metadata = road.metadata!
   const count = (field: string) => typeof metadata[field] === 'number' ? metadata[field] as number : 0
   const roadClass = typeof metadata.road_class === 'string' ? metadata.road_class : null
-  const trafficProvenance = roadTrafficProvenance(metadata)
+  const provenance = metadata.provenance as { tier?: string; year?: number } | null | undefined
   return {
     osm_id: road.osm_id,
     name: road.name,
@@ -117,9 +118,10 @@ function dominantRoad(contributors: WireContributor[]): DominantRoad | null {
     vehicle_split_estimated: typeof metadata.traffic_estimated !== 'number'
       || (metadata.traffic_estimated & LIGHT_MEDIUM_HEAVY_ESTIMATED_BITS) !== 0,
     dominant_source_id: typeof metadata.dominant_source_id === 'number' ? metadata.dominant_source_id : null,
-    provenance_tier: (metadata.provenance as { tier?: string } | null | undefined)?.tier ?? null,
-    traffic_provenance: trafficProvenance,
-    cohort: trafficProvenance === 'counted' ? 'counted' : roadClass && LOCAL_ROAD_CLASSES.has(roadClass) ? 'local' : 'default',
+    provenance_tier: provenance?.tier ?? null,
+    dataset_year: typeof provenance?.year === 'number' ? provenance.year : null,
+    speed_source: typeof metadata.speed_source === 'string' ? metadata.speed_source : null,
+    traffic_provenance: roadTrafficProvenance(metadata),
   }
 }
 
@@ -179,7 +181,7 @@ export function readPopupAnswer(answer: PopupAnswer, clicked: { lat: number; lng
     total: { lden: totalLden ?? ldenFromPeriods(periods.day, periods.evening, periods.night), periods },
     layers,
     dominant_layer: dominant && dominant[1].share_lden > 0 ? dominant[0] : null,
-    top_contributors: contributors.slice(0, 5),
+    contributors,
     loudest_by_layer: loudestByLayer,
     dominant_road: dominantRoad(answer.top_contributors),
     unavailable_layers: answer.unavailable_layers ?? [],

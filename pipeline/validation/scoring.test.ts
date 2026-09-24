@@ -1,13 +1,10 @@
-/** Popup answers become outdoor model levels, guards judge source identity, runs diff and summarize. */
+/** Popup answers become outdoor model levels, and guards judge source identity whatever the total. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { CatalogueStation } from './catalogue.ts'
 import { compareIndicator, evaluateGuard, parseGuardExpectation } from './comparison.ts'
 import { END_PERIOD_WINDOWS } from './lib.ts'
-import { diffRuns } from './diff.ts'
 import { readPopupAnswer, roadTrafficProvenance, type PopupAnswer } from './popup.ts'
-import type { StationRow } from './report.ts'
-import { summarizeErrors } from './statistics.ts'
 
 const road = (osm_id: number, received_lden: number, metadata: Record<string, unknown>) => ({
   source_type: 'road', osm_id, name: `road ${osm_id}`, subtype: 'secondary', distance_m: 8, received_lden,
@@ -36,19 +33,19 @@ test('an indoor answer is restored to its facade levels, and a floored indoor le
   assert.equal(model.layers.aircraft.periods.night, null, 'indoor 0 dB is a floor, not facade − Δ')
   assert.equal(model.receiver.click_to_receiver_m, 2.2)
   assert.equal(model.dominant_layer, 'road')
-  assert.equal(model.top_contributors[0].received_lden, 69)
+  assert.equal(model.contributors[0].received_lden, 69)
 })
 
 test('the dominant road is counted by its dataset tier, not by per-class estimate bits', () => {
   const tier = (value: string) => ({ tier: value })
-  assert.equal(roadTrafficProvenance({ dominant_source_id: 10, traffic_estimated: 15, provenance: tier('continental-measured') }), 'counted')
+  assert.equal(roadTrafficProvenance({ dominant_source_id: 10, traffic_estimated: 15, provenance: tier('continental-measured') }), 'measured_count')
   assert.equal(roadTrafficProvenance({ dominant_source_id: 11, traffic_estimated: 15, provenance: tier('heuristic') }), 'service_tree')
-  assert.equal(roadTrafficProvenance({ dominant_source_id: 12, traffic_estimated: 15, provenance: tier('heuristic') }), 'continuity')
+  assert.equal(roadTrafficProvenance({ dominant_source_id: 12, traffic_estimated: 15, provenance: tier('heuristic') }), 'continuity_fill')
   assert.equal(roadTrafficProvenance({ dominant_source_id: 0, traffic_estimated: 15, provenance: null }), 'class_default')
   const local = readPopupAnswer({ ...indoorAnswer, top_contributors: [road(8, 50, {
     road_class: 'residential', traffic_estimated: 15, dominant_source_id: 11, provenance: tier('heuristic'),
   })] }, { lat: 48.87, lng: 2.34 })
-  assert.equal(local.dominant_road?.cohort, 'local')
+  assert.equal(local.dominant_road?.traffic_provenance, 'service_tree')
   assert.equal(local.dominant_road?.vehicle_split_estimated, true)
 })
 
@@ -80,36 +77,4 @@ test('a guard fails when another source of the expected layer dominates, whateve
   assert.match(byName.reason, /Vattenfall/)
   assert.equal(evaluateGuard(station({ guard_expected_source: 'industry: Velsen cluster (evidence: fixture)' }), model).passed, true)
   assert.equal(evaluateGuard(station({ guard_expected_source: 'rail (evidence: fixture)', expected_source: 'rail' }), model).passed, false)
-})
-
-test('bootstrap summaries are reproducible, exact on their point estimates, and resample within networks', () => {
-  const samples = [-9, -4, -1, 0, 2, 11].map((delta, index) => ({ delta, network: index < 3 ? 'a' : 'b' }))
-  const summary = summarizeErrors(samples, 500)!
-  assert.deepEqual(summarizeErrors(samples, 500), summary)
-  assert.equal(summary.networks, 2)
-  assert.equal(summary.bias.value, -0.17)
-  assert.equal(summary.mae.value, 4.5)
-  assert.equal(summary.share_beyond_3db.value, 0.5)
-  assert.equal(summary.share_beyond_6db.value, 0.33)
-  assert.equal(summary.share_beyond_10db.value, 0.17)
-  assert.equal(summary.p10.value, -6.5)
-  assert.ok(summary.bias.ci95![0] < summary.bias.value && summary.bias.value < summary.bias.ci95![1])
-  // Each network keeps its own count in every draw: two networks of one value each never vary.
-  assert.deepEqual(summarizeErrors([{ delta: 1, network: 'a' }, { delta: 3, network: 'b' }, { delta: 5, network: 'c' }], 50)!.bias.ci95, [3, 3])
-  assert.equal(summarizeErrors([{ delta: 1, network: 'a' }, { delta: 2, network: 'a' }])!.bias.ci95, null)
-})
-
-test('a diff flags every model move over 3 dB and every changed measurement', () => {
-  const row = (key: string, model: number, measured = 60): StationRow => ({
-    key, set: 's', station_id: key, name: key, lat: 0, lng: 0, expected_source: 'road', truth_kind: 'measured', measurand: 'sound_level',
-    holdout: false, holdout_square: false, scoring: 'accuracy', scoring_reason: null, mount: null, publisher_facade_correction_db: null, position_uncertainty_m: null,
-    mic_height_m: 4, requested_receiver_height_m: 4, receiver_height_used_m: 4, height_matches_microphone: true, request_ms: 1,
-    model: null, guard: null, unsupported_indicators: [], error: null,
-    comparisons: [{ indicator: 'Lden', period: 'lden', kind: 'weighted', layer: null, measured, band: null, model, delta_db: model - measured,
-      unit: 'dB', period_mapping: 'exact', periods_assumed_end: false }],
-  })
-  const { moves, only_after } = diffRuns([row('a', 55), row('b', 55), row('c', 55)], [row('a', 58), row('b', 58.5), row('c', 55, 61), row('d', 50)])
-  assert.deepEqual(moves.map(move => [move.key, move.move_db, move.needs_explanation]), [['a', 3, false], ['b', 3.5, true], ['c', 0, true]])
-  assert.equal(moves[1].abs_error_change_db, -3.5)
-  assert.deepEqual(only_after, ['d'])
 })

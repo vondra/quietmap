@@ -15,6 +15,8 @@ export type IndicatorComparison = {
   layer: LayerSelector
   measured: number | null
   band: [number | null, number | null] | null
+  /** Local-hour windows the value averages: `06-18/18-22/22-06` for a weighted level. */
+  windows: string | null
   model: number | null
   /** model − measured (a band: distance outside it, 0 inside); traffic in 10·lg(model/measured). */
   delta_db: number | null
@@ -33,6 +35,8 @@ export type GuardResult = {
   expected: GuardExpectation
   passed: boolean
   expected_layer_share: number
+  /** Energy share of the named source among the listed contributors of its layer. */
+  identity_share: number | null
   dominant_layer: string | null
   loudest_in_expected_layer: { osm_id: number | null; name: string; distance_m: number; received_lden: number } | null
   reason: string
@@ -73,9 +77,12 @@ function compareTraffic(indicator: Indicator & { kind: 'traffic' }, model: Stati
 }
 
 export function compareIndicator(indicator: Indicator, model: StationModel): IndicatorComparison {
+  const hours = (window: { start: number; end: number }) => `${String(window.start).padStart(2, '0')}-${String(window.end).padStart(2, '0')}`
+  const windows = indicator.kind === 'weighted' ? [indicator.windows.day, indicator.windows.evening, indicator.windows.night].map(hours).join('/')
+    : indicator.kind === 'window' ? hours(indicator.window) : null
   const base = {
     indicator: indicator.key, period: indicator.period, kind: indicator.kind, layer: indicator.layer,
-    measured: indicator.value, band: indicator.band, periods_assumed_end: indicator.periods_assumed_end,
+    measured: indicator.value, band: indicator.band, windows, periods_assumed_end: indicator.periods_assumed_end,
   }
   if (indicator.kind === 'traffic') return { ...base, ...compareTraffic(indicator, model), period_mapping: 'traffic' }
   if (indicator.kind === 'percentile') {
@@ -116,22 +123,30 @@ export function nameMatches(expected: string, contributor: string): boolean {
   return words.some(word => fold(contributor).includes(word))
 }
 
+/** W1 criteria v1 guards (Tata): the named source carries at least half of its layer's energy. */
+const IDENTITY_MIN_SHARE_OF_LAYER = 0.5
+
 /**
  * A guard passes only when its expected layer carries the most energy at the receiver and, when
- * the catalogue names the source, that source is the loudest listed contributor of the layer.
+ * the catalogue names the source, that source carries at least half of the layer's energy.
  */
 export function evaluateGuard(station: CatalogueStation, model: StationModel): GuardResult {
   const expected = parseGuardExpectation(station.guard_expected_source, station.expected_source)
   const share = expected.layer ? model.layers[expected.layer]?.share_lden ?? 0 : 0
   const loudest = expected.layer ? model.loudest_by_layer[expected.layer] ?? null : null
+  const layerLden = expected.layer ? model.layers[expected.layer]?.lden ?? null : null
+  const identityShare = expected.name == null || !expected.layer || layerLden == null ? null
+    : model.contributors.filter(contributor => contributor.source_type === expected.layer && nameMatches(expected.name!, contributor.name))
+      .reduce((sum, contributor) => sum + 10 ** (contributor.received_lden / 10), 0) / 10 ** (layerLden / 10)
   const result = (passed: boolean, reason: string): GuardResult => ({
-    expected, passed, expected_layer_share: round2(share)!, dominant_layer: model.dominant_layer,
+    expected, passed, expected_layer_share: round2(share)!, identity_share: round2(identityShare), dominant_layer: model.dominant_layer,
     loudest_in_expected_layer: loudest && { osm_id: loudest.osm_id, name: loudest.name, distance_m: loudest.distance_m, received_lden: loudest.received_lden },
     reason,
   })
   if (!expected.layer) return result(false, `no model layer for expected source ${station.expected_source}`)
   if (model.dominant_layer !== expected.layer) return result(false, `dominant layer is ${model.dominant_layer ?? 'none'}`)
   if (expected.name == null) return result(true, 'expected layer dominates')
-  if (loudest && nameMatches(expected.name, loudest.name)) return result(true, 'expected source is the loudest contributor of its layer')
-  return result(false, `loudest ${expected.layer} contributor is ${loudest ? `${loudest.osm_id ?? ''} ${loudest.name}`.trim() : 'unlisted'}`)
+  if (identityShare! >= IDENTITY_MIN_SHARE_OF_LAYER) return result(true, 'the named source carries most of its layer')
+  return result(false, `${expected.name} carries ${round2(identityShare)} of the ${expected.layer} energy; loudest is `
+    + `${loudest ? `${loudest.osm_id ?? ''} ${loudest.name}`.trim() : 'unlisted'}`)
 }
