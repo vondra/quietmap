@@ -36,6 +36,7 @@ pub(crate) struct CruiseSpillRow {
     pub rep_alt_m: f32,
     pub rep_speed_kt: f32,
     pub heading_bin: u8,
+    pub secondary_only: bool,
     /// Sorted ascending. `len()` = `unique_count` for the bucket.
     pub fid_set: Vec<u64>,
     /// Per-fid top entries sorted by Lmax descending (tiebreak fid
@@ -81,6 +82,7 @@ fn spill_schema() -> Arc<Schema> {
             DataType::List(Arc::new(Field::new("item", top_struct, false))),
             false,
         ),
+        Field::new("secondary_only", DataType::UInt8, false),
     ]))
 }
 
@@ -128,6 +130,7 @@ fn write_spill_to<W: Write>(writer: W, rows: &[CruiseSpillRow]) -> Result<(W, us
     let mut rep_alt = Float32Builder::with_capacity(n);
     let mut rep_speed = Float32Builder::with_capacity(n);
     let mut heading = UInt8Builder::with_capacity(n);
+    let mut secondary_only = UInt8Builder::with_capacity(n);
 
     let total_fids: usize = rows.iter().map(|r| r.fid_set.len()).sum();
     let mut fid_off: Vec<i32> = Vec::with_capacity(n + 1);
@@ -159,6 +162,7 @@ fn write_spill_to<W: Write>(writer: W, rows: &[CruiseSpillRow]) -> Result<(W, us
         rep_alt.append_value(row.rep_alt_m);
         rep_speed.append_value(row.rep_speed_kt);
         heading.append_value(row.heading_bin);
+        secondary_only.append_value(u8::from(row.secondary_only));
         for &fid in &row.fid_set {
             fid_vals.append_value(fid);
         }
@@ -221,6 +225,7 @@ fn write_spill_to<W: Write>(writer: W, rows: &[CruiseSpillRow]) -> Result<(W, us
             Arc::new(heading.finish()),
             Arc::new(fid_list),
             Arc::new(top_list),
+            Arc::new(secondary_only.finish()),
         ],
     )?;
 
@@ -256,6 +261,7 @@ pub(crate) fn spill_file_overhead_bound() -> Result<u64> {
         rep_alt_m: 0.0,
         rep_speed_kt: 0.0,
         heading_bin: 0,
+        secondary_only: false,
         fid_set: vec![1],
         top_candidates: vec![CruiseTopCandidate {
             flight_id: 1,
@@ -308,6 +314,7 @@ pub(crate) fn for_each_cruise_spill(
         let heading = downcast::<UInt8Array>(&batch, 12)?;
         let fid_list = downcast::<ListArray>(&batch, 13)?;
         let top_list = downcast::<ListArray>(&batch, 14)?;
+        let secondary_only = downcast::<UInt8Array>(&batch, 15)?;
         let fid_vals = fid_list
             .values()
             .as_any()
@@ -378,6 +385,7 @@ pub(crate) fn for_each_cruise_spill(
                 rep_alt_m: rep_alt.value(i),
                 rep_speed_kt: rep_speed.value(i),
                 heading_bin: heading.value(i),
+                secondary_only: secondary_only.value(i) != 0,
                 fid_set,
                 top_candidates,
             })?;

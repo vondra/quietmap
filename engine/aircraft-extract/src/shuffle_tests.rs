@@ -12,6 +12,16 @@ fn write_segments(path: &Path, rows: &[FlightSegment]) -> Result<()> {
     crate::arrow_io::write_segments(path, &rows)
 }
 
+fn admitted(paths: &[PathBuf]) -> Vec<AdmittedDay> {
+    paths
+        .iter()
+        .map(|path| AdmittedDay {
+            segments: path.clone(),
+            increment: false,
+        })
+        .collect()
+}
+
 fn seg(flight_id: u64, phase: Phase, lat: f32, lon: f32) -> FlightSegment {
     let mut segment = FlightSegment::airborne_fixture(flight_id, lat, lon);
     segment.phase = phase;
@@ -49,13 +59,13 @@ fn round_trip_airborne_and_ground() {
     .unwrap();
 
     let out_dir = tmp.path().join("segments_by_square");
-    shuffle_per_square(&[day_path], &[], &out_dir, None).unwrap();
+    shuffle_per_square(&admitted(&[day_path]), &out_dir, None).unwrap();
 
     // temp_shuffle must be cleaned up.
     assert!(!tmp.path().join("temp_shuffle").exists());
-    // Single-window extract: no ga_n_days manifest (read_ga_n_days → 0).
+    // A primary-only extract has no increment days.
     assert_eq!(
-        std::fs::read_to_string(out_dir.join("ga_days")).unwrap(),
+        std::fs::read_to_string(out_dir.join(completion::INCREMENT_DAYS_MANIFEST)).unwrap(),
         ""
     );
     // Both phases: one shard, the owner of the segment's midpoint.
@@ -103,7 +113,7 @@ fn scope_filters_out_of_scope_squares() {
 
     let out_dir = tmp.path().join("segments_by_square");
     let scope = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
-    shuffle_per_square(&[day_path], &[], &out_dir, Some(&scope)).unwrap();
+    shuffle_per_square(&admitted(&[day_path]), &out_dir, Some(&scope)).unwrap();
 
     let airborne = list_square_shards(&out_dir, "airborne.arrow", None).unwrap();
     assert!(!airborne.is_empty());
@@ -119,9 +129,9 @@ fn scope_filters_out_of_scope_squares() {
 fn empty_input_writes_no_shards() {
     let tmp = tempfile::tempdir().unwrap();
     let out_dir = tmp.path().join("segments_by_square");
-    shuffle_per_square(&[], &[], &out_dir, None).unwrap();
+    shuffle_per_square(&admitted(&[]), &out_dir, None).unwrap();
     assert!(out_dir.exists(), "out_dir must be created");
-    // No z9 shard dirs — only the n_days manifest, which records a
+    // No z9 shard dirs — only the sampling manifests, which record a
     // zero-day window for empty input.
     let subdirs = std::fs::read_dir(&out_dir)
         .unwrap()
@@ -129,60 +139,58 @@ fn empty_input_writes_no_shards() {
         .filter(|e| e.path().is_dir())
         .count();
     assert_eq!(subdirs, 0, "no z9 shard dirs for empty input");
-    assert_eq!(std::fs::read_to_string(out_dir.join("days")).unwrap(), "");
-    assert_eq!(
-        std::fs::read_to_string(out_dir.join("ga_days")).unwrap(),
-        ""
-    );
+    for manifest in [
+        completion::BASELINE_DAYS_MANIFEST,
+        completion::INCREMENT_DAYS_MANIFEST,
+    ] {
+        assert_eq!(std::fs::read_to_string(out_dir.join(manifest)).unwrap(), "");
+    }
     assert!(!tmp.path().join("temp_shuffle").exists());
 }
 
-/// Hybrid merge with COLLIDING day stems — `2025-07-01` exists in
-/// both passes (first-of-month overlap). Both segments must reach
-/// the z9 shard: the former undiscriminated Pass-A
-/// temp path raced between passes and one silently vanished. Day
-/// counts come from the two input lists, never a combined `len()`.
+/// A secondary-only row enters from an increment day only; the manifests
+/// carry the admitted baseline and increment days.
 #[test]
-fn hybrid_colliding_day_stems_merge_and_write_dual_manifests() {
+fn secondary_rows_enter_only_from_increment_days_and_manifests_bind_the_window() {
     let tmp = tempfile::tempdir().unwrap();
-    let air_dir = tmp.path().join("segments");
-    let ga_dir = tmp.path().join("ga_segments");
-    std::fs::create_dir_all(&air_dir).unwrap();
-    std::fs::create_dir_all(&ga_dir).unwrap();
-    let air_day = air_dir.join("2025-07-01.arrow");
-    let ga_day = ga_dir.join("2025-07-01.arrow");
-    // Same location → same (phase, hash, day-stem) Pass-A bucket.
-    write_segments(&air_day, &[seg(1, Phase::Airborne, 50.10, 14.26)]).unwrap();
-    let mut ga = seg(2, Phase::Airborne, 50.10, 14.26);
-    ga.profile_idx = crate::profile::profile_idx("C172");
-    write_segments(&ga_day, &[ga]).unwrap();
-
+    let dir = tmp.path().join("segments");
+    let mut secondary = seg(2, Phase::Airborne, 50.10, 14.26);
+    secondary.flags |= crate::flight::segment_flags::SECONDARY_ONLY;
+    let days = ["2025-07-01", "2025-07-02"].map(|day| {
+        let path = dir.join(format!("{day}.arrow"));
+        write_segments(&path, &[seg(1, Phase::Airborne, 50.10, 14.26), secondary.clone()]).unwrap();
+        path
+    });
     let out_dir = tmp.path().join("segments_by_square");
-    shuffle_per_square(&[air_day], &[ga_day], &out_dir, None).unwrap();
-
+    let admitted = vec![
+        AdmittedDay {
+            segments: days[0].clone(),
+            increment: true,
+        },
+        AdmittedDay {
+            segments: days[1].clone(),
+            increment: false,
+        },
+    ];
+    shuffle_per_square(&admitted, &out_dir, None).unwrap();
     assert_eq!(
-        std::fs::read_to_string(out_dir.join("days")).unwrap(),
-        "2025-07-01"
+        std::fs::read_to_string(out_dir.join(completion::BASELINE_DAYS_MANIFEST)).unwrap(),
+        "2025-07-01\n2025-07-02"
     );
     assert_eq!(
-        std::fs::read_to_string(out_dir.join("ga_days")).unwrap(),
+        std::fs::read_to_string(out_dir.join(completion::INCREMENT_DAYS_MANIFEST)).unwrap(),
         "2025-07-01"
     );
+    let window = completion::sampling_window(&out_dir).unwrap();
+    assert_eq!((window.baseline_days, window.increment_days), (2, 1));
     let airborne = list_square_shards(&out_dir, "airborne.arrow", None).unwrap();
-    assert!(!airborne.is_empty());
-    for (_, path) in airborne {
-        let mut fids: Vec<u64> = read_segments(&path)
-            .unwrap()
-            .iter()
-            .map(|s| s.flight_id)
-            .collect();
-        fids.sort_unstable();
-        assert_eq!(
-            fids,
-            [1, 2],
-            "both sampling passes must survive in the owner cell"
-        );
-    }
+    let mut rows: Vec<(u64, bool)> = airborne
+        .iter()
+        .flat_map(|(_, path)| read_segments(path).unwrap())
+        .map(|s| (s.flight_id, s.is_secondary_only()))
+        .collect();
+    rows.sort_unstable();
+    assert_eq!(rows, [(1, false), (1, false), (2, true)]);
 }
 
 /// Duplicate day stems WITHIN one pass list would collide on one
@@ -199,30 +207,16 @@ fn duplicate_day_stem_within_one_pass_bails() {
     write_segments(&day_a, &[seg(1, Phase::Airborne, 50.10, 14.26)]).unwrap();
     write_segments(&day_b, &[seg(2, Phase::Airborne, 50.10, 14.26)]).unwrap();
     let out_dir = tmp.path().join("segments_by_square");
-    let err = shuffle_per_square(&[day_a, day_b], &[], &out_dir, None).unwrap_err();
+    let err = shuffle_per_square(&admitted(&[day_a, day_b]), &out_dir, None).unwrap_err();
     assert!(err.to_string().contains("duplicate day stem"), "{err}");
 }
 
 #[test]
-fn hybrid_shuffle_rejects_class_or_date_window_leakage() {
+fn shuffle_rejects_a_segment_from_another_date() {
     let tmp = tempfile::tempdir().unwrap();
-    let air = tmp.path().join("air/2025-07-01.arrow");
-    let ga = tmp.path().join("ga/2025-07-01.arrow");
-    write_segments(&air, &[seg(1, Phase::Airborne, 50.1, 14.2)]).unwrap();
-    write_segments(&ga, &[seg(2, Phase::Airborne, 50.1, 14.2)]).unwrap();
-    let error = shuffle_per_square(
-        std::slice::from_ref(&air),
-        &[ga],
-        &tmp.path().join("out"),
-        None,
-    )
-    .unwrap_err();
-    assert!(
-        format!("{error:#}").contains("other sampling window"),
-        "{error:#}"
-    );
-    crate::arrow_io::write_segments(&air, &[seg(1, Phase::Airborne, 50.1, 14.2)]).unwrap();
-    let error = shuffle_per_square(&[air], &[], &tmp.path().join("out"), None).unwrap_err();
+    let day = tmp.path().join("air/2025-07-01.arrow");
+    crate::arrow_io::write_segments(&day, &[seg(1, Phase::Airborne, 50.1, 14.2)]).unwrap();
+    let error = shuffle_per_square(&admitted(&[day]), &tmp.path().join("out"), None).unwrap_err();
     assert!(format!("{error:#}").contains("segment date"), "{error:#}");
 }
 
@@ -242,7 +236,7 @@ fn long_chord_pieces_are_owned_once_by_their_midpoint_squares() {
     let day = tmp.path().join("2025-07-01.arrow");
     write_segments(&day, &[chord.clone(), chord]).unwrap();
     let out = tmp.path().join("shuffled");
-    shuffle_per_square(&[day], &[], &out, None).unwrap();
+    shuffle_per_square(&admitted(&[day]), &out, None).unwrap();
     let shards = list_square_shards(&out, "airborne.arrow", None).unwrap();
     assert_eq!(
         shards.iter().map(|(square, _)| *square).collect::<Vec<_>>(),
@@ -284,7 +278,12 @@ fn streamed_parts_preserve_order_and_fields_across_flushes_and_input_batches() {
     let rows = read_segments(&day).unwrap();
     let temp = tmp.path().join("parts");
     let payload_limit = std::mem::size_of::<FlightSegment>() + rows[0].callsign.len();
-    let counts = scatter_day(&day, "air", false, &temp, None, payload_limit).unwrap();
+    let counts = scatter_day(
+        &AdmittedDay {
+            segments: day.clone(),
+            increment: false,
+        },
+        &temp, None, payload_limit).unwrap();
     let mut scattered_rows = 0;
     let mut largest_part_count = 0;
     for phase in ["airborne", "ground"] {
@@ -352,7 +351,12 @@ fn failed_gather_reclaims_only_completed_phases_and_restarts_from_original_days(
     write_segments(&day, &[airborne, ground.clone()]).unwrap();
     let original_bytes = std::fs::read(&day).unwrap();
     let temporary = tmp.path().join("temp_shuffle");
-    let counts = scatter_day(&day, "air", false, &temporary, None, PASS_A_SPILL_BYTES).unwrap();
+    let counts = scatter_day(
+        &AdmittedDay {
+            segments: day.clone(),
+            increment: false,
+        },
+        &temporary, None, PASS_A_SPILL_BYTES).unwrap();
     let owner = owner_square(&ground, None).unwrap();
     let hash = shuffle_bucket(owner);
     let airborne_parts =
@@ -370,10 +374,10 @@ fn failed_gather_reclaims_only_completed_phases_and_restarts_from_original_days(
         read_segments(&owner_dir.join("airborne.arrow")).unwrap()[0].flight_id,
         42
     );
-    assert!(!output.join("days").exists() && !output.join("ga_days").exists());
+    assert!(!output.join(completion::BASELINE_DAYS_MANIFEST).exists());
     assert_eq!(std::fs::read(&day).unwrap(), original_bytes);
 
-    shuffle_per_square(std::slice::from_ref(&day), &[], &output, None).unwrap();
+    shuffle_per_square(&admitted(std::slice::from_ref(&day)), &output, None).unwrap();
     assert!(!temporary.exists());
     assert_eq!(std::fs::read(&day).unwrap(), original_bytes);
     assert_eq!(
@@ -381,7 +385,7 @@ fn failed_gather_reclaims_only_completed_phases_and_restarts_from_original_days(
         99
     );
     assert_eq!(
-        std::fs::read_to_string(output.join("days")).unwrap(),
+        std::fs::read_to_string(output.join(completion::BASELINE_DAYS_MANIFEST)).unwrap(),
         "2025-07-01"
     );
 }
@@ -400,9 +404,10 @@ fn gather_budget_counts_pieces_and_reserves_each_owner() {
     }
     write_segments(&day, &vec![chord; 17]).unwrap();
     let counts = scatter_day(
-        &day,
-        "air",
-        false,
+        &AdmittedDay {
+            segments: day.clone(),
+            increment: false,
+        },
         &tmp.path().join("parts"),
         None,
         PASS_A_SPILL_BYTES,
@@ -434,7 +439,12 @@ fn gather_rejects_missing_destination_parts() {
         let mut counts = DestinationCounts::new();
         if with_survivor {
             write_segments(&day, &[row]).unwrap();
-            counts = scatter_day(&day, "air", false, &temporary, None, PASS_A_SPILL_BYTES).unwrap();
+            counts = scatter_day(
+        &AdmittedDay {
+            segments: day.clone(),
+            increment: false,
+        },
+        &temporary, None, PASS_A_SPILL_BYTES).unwrap();
         }
         // Simulate a counted destination whose complete temporary part vanished.
         counts.add(Phase::Ground, missing, 0);
@@ -459,7 +469,7 @@ fn completed_shuffle_inventory_rejects_partial_changed_and_missing_successors() 
     let source = temp.path().join("segments/2025-01-01.arrow");
     write_segments(&source, &[seg(1, Phase::Ground, 50.0, 14.0)]).unwrap();
     let root = temp.path().join("segments_by_square");
-    shuffle_per_square(std::slice::from_ref(&source), &[], &root, None).unwrap();
+    shuffle_per_square(&admitted(std::slice::from_ref(&source)), &root, None).unwrap();
     completion::validate(&root, None).unwrap();
     std::fs::remove_file(source).unwrap();
     completion::validate(&root, None).unwrap();
@@ -467,7 +477,7 @@ fn completed_shuffle_inventory_rejects_partial_changed_and_missing_successors() 
     assert!(completion::validate(&root, None).is_err());
     std::fs::remove_dir(temp.path().join("temp_shuffle")).unwrap();
     assert!(completion::validate(&root, Some(&ScopeBbox::parse("49,13,51,15").unwrap())).is_err());
-    let days = root.join("days");
+    let days = root.join(completion::BASELINE_DAYS_MANIFEST);
     std::fs::write(&days, "2025-01-02").unwrap();
     assert!(completion::validate(&root, None).is_err());
     std::fs::write(days, "2025-01-01").unwrap();

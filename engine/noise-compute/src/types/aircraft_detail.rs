@@ -81,15 +81,13 @@ pub struct AircraftAirborneDetail {
     /// ISO date of that loudest sample day ("" when none).
     pub top_day_date: String,
     pub top_flight_energy_share: f64,
-    /// Number of archive days behind the Lden average for AIRLINE classes
-    /// (`n_days`, the 12-day TTM window).
+    /// Baseline archive days behind the Lden average: complete days of the
+    /// primary provider.
     pub sample_days: u32,
-    /// Number of archive days behind GA + helicopter classes — the
-    /// GA window in a hybrid extract, equal to `sample_days` when
-    /// non-hybrid. The popup's
-    /// "Data" row renders the actual two counts so the sample basis is honest
-    /// per class.
-    pub ga_sample_days: u32,
+    /// Increment days: sample days of the secondary provider, which adds
+    /// only what the primary provider did not receive. The popup's "Data"
+    /// row renders both counts.
+    pub increment_sample_days: u32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub top_flights: Vec<AircraftTopFlight>,
 }

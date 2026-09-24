@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 use noise_compute::compute::aircraft_v6::cruise::cruise_heading_bin;
-use noise_compute::emission::aircraft::{NpdLuts, FT_PER_M};
+use noise_compute::emission::aircraft::{NpdLuts, SamplingWindow, FT_PER_M};
 use rayon::prelude::*;
 
 use crate::arrow_io::{for_each_cruise_spill, write_cruise, write_cruise_spill, CruiseSpillRow};
@@ -26,6 +26,7 @@ use crate::flight::{fl_bin_of, CruiseBucket, CruiseTopCandidate, FlightSegment, 
 use crate::geo::square_path;
 use crate::profile::noise_class_of;
 use crate::progress::{finished, human, started, ts, Milestone};
+use crate::provider_receipt::AdmittedDay;
 use crate::scope::ScopeBbox;
 use crate::spatial::cruise_transits;
 use grid::cruise::cruise_parent;
@@ -67,19 +68,19 @@ pub enum CruisePhase {
 }
 
 pub fn run_stage_2b_phase(
-    day_paths: &[PathBuf],
+    days: &[AdmittedDay],
     prepared_year_dir: &Path,
     spill_dir: &Path,
-    n_days: u16,
+    window: &SamplingWindow,
     scope: Option<&ScopeBbox>,
-    fail_on_ga_cruise: bool,
     phase: CruisePhase,
 ) -> Result<usize> {
     let stage_start = std::time::Instant::now();
     let part_id = AtomicU64::new(0);
-    let identities = receipt::input_identities(day_paths)?;
+    let day_paths: Vec<PathBuf> = days.iter().map(|day| day.segments.clone()).collect();
+    let identities = receipt::input_identities(&day_paths)?;
     if phase == CruisePhase::Finish {
-        receipt::verify(spill_dir, &identities, n_days, scope, fail_on_ga_cruise)?;
+        receipt::verify(spill_dir, &identities, window, scope)?;
     } else {
         // A fresh producer owns this directory exclusively; ambiguous partial work
         // requires a new output tree instead of silently destroying retained spill.
@@ -101,14 +102,6 @@ pub fn run_stage_2b_phase(
         );
 
         let spill_seg_counter = Milestone::new("stage2b/spill", "cruise segments", 1_000_000);
-        // GA-class flights shouldn't physically reach the 8 000 m cruise
-        // gate (`classify.rs` CRUISE_ENTER_AGL_M); any hit is a hybrid
-        // class-filter leak or a fallback-table cross on bad data (the
-        // PROP_C172 class absorbs PA**/P28*/P32*/P46* fallbacks). Counted
-        // unconditionally — processing is unchanged so plain extracts stay
-        // byte-identical — warned after the spill phase, fatal behind
-        // `fail_on_ga_cruise`.
-        let ga_class_cruise = AtomicU64::new(0);
         let npd_luts = NpdLuts::shared();
         let largest_batch = day_paths
             .iter()
@@ -139,17 +132,15 @@ pub fn run_stage_2b_phase(
             ts()
         );
         spill_pool.install(|| {
-            day_paths.par_iter().try_for_each(|day_path| -> Result<()> {
+            days.par_iter().try_for_each(|day| -> Result<()> {
+                let day_path = &day.segments;
                 let mut local: HashMap<u64, HashMap<CruiseKey, CruiseAccum>> = HashMap::new();
                 let mut charged_bytes = 0usize;
                 crate::arrow_io::for_each_segment_batch(day_path, |segments| {
                     let mut cruise_kept = 0u64;
                     for seg in &segments {
-                        if seg.phase != Phase::Cruise || seg.veh_kind != 0 {
+                        if seg.phase != Phase::Cruise || seg.veh_kind != 0 || !day.keeps(seg) {
                             continue;
-                        }
-                        if crate::profile::is_ga_sampled_profile(seg.profile_idx) {
-                            ga_class_cruise.fetch_add(1, Ordering::Relaxed);
                         }
                         let addition = allocation::transit_allocation(seg.callsign.len());
                         anyhow::ensure!(
@@ -193,35 +184,11 @@ pub fn run_stage_2b_phase(
                 human(spill_seg_counter.total())
             ),
         );
-        let ga_cruise = ga_class_cruise.load(Ordering::Relaxed);
-        if ga_cruise > 0 {
-            eprintln!(
-                "{} [stage2b] WARNING: {ga_cruise} GA-class (PROP_C172/HELICOPTER) cruise \
-             segment(s) in the Stage 2B input — hybrid class-filter leak or data error \
-             (ga-365d-hybrid-plan.md delta 4)",
-                ts()
-            );
-            // Reject a bad input pool before replacing any prepared destination.
-            if fail_on_ga_cruise {
-                anyhow::bail!(
-                    "--fail-on-ga-cruise: {ga_cruise} GA-class cruise segment(s) in Stage 2B \
-                 input (expected 0 in a hybrid airline pass)"
-                );
-            }
-        }
-
         anyhow::ensure!(
-            receipt::input_identities(day_paths)? == identities,
+            receipt::input_identities(&day_paths)? == identities,
             "primary inputs changed during cruise spill"
         );
-        receipt::create(
-            spill_dir,
-            &spill_filesystem,
-            &identities,
-            n_days,
-            scope,
-            ga_cruise,
-        )?;
+        receipt::create(spill_dir, &spill_filesystem, &identities, window, scope)?;
     }
     // Every key of one owner z9 hashes into the same bucket, so a fold worker
     // publishes complete owner files; receivers read owner squares within reach.
@@ -288,7 +255,14 @@ pub fn run_stage_2b_phase(
                     .map(|(key, accum)| accum.finalize(key))
                     .collect();
                 rows.sort_unstable_by_key(|r| {
-                    (r.cruise_cell_id, r.class, r.fl_bin, r.period, r.heading_bin)
+                    (
+                        r.cruise_cell_id,
+                        r.class,
+                        r.fl_bin,
+                        r.period,
+                        r.heading_bin,
+                        r.secondary_only,
+                    )
                 });
                 canonical_rows += rows.len() as u64;
                 write_cruise(
@@ -296,7 +270,7 @@ pub fn run_stage_2b_phase(
                         .join(square_path(square))
                         .join("cruise.arrow"),
                     &rows,
-                    n_days,
+                    window,
                 )?;
                 squares_written.fetch_add(1, Ordering::Relaxed);
             }
@@ -335,6 +309,7 @@ fn fold_raw_parts(parts: &[PathBuf]) -> Result<HashMap<u64, HashMap<CruiseKey, C
                 fl_bin: row.fl_bin,
                 period: row.period,
                 heading_bin: row.heading_bin,
+                secondary_only: row.secondary_only,
             };
             let square = row.square;
             let incoming = accum_from_spill(row);
@@ -365,6 +340,7 @@ fn add_transit(
         fl_bin: fl_bin_of((seg.start_alt_m + seg.end_alt_m) * 0.5),
         period: seg.period,
         heading_bin,
+        secondary_only: seg.is_secondary_only(),
     };
     by_square
         .entry(square)

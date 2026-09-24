@@ -81,30 +81,28 @@ fn main() -> anyhow::Result<()> {
 
     let started = Instant::now();
     let mut directs: Vec<Direct> = Vec::new();
-    let mut days: Option<u16> = None;
+    let mut window: Option<noise_compute::emission::aircraft::SamplingWindow> = None;
     for relative in &relatives {
         let Some((bytes, _)) = manifest.read_arrow(root, relative)? else {
             continue;
         };
         let reader = FileReader::try_new(Cursor::new(bytes), None)?;
-        let file_days = reader
-            .schema()
-            .metadata()
-            .get("n_days")
-            .and_then(|v| v.parse::<u16>().ok())
-            .filter(|v| *v > 0)
-            .context("cruise has no valid n_days")?;
+        let file_window = noise_compute::emission::aircraft::SamplingWindow::from_metadata(
+            reader.schema().metadata(),
+        )
+        .map_err(anyhow::Error::msg)?;
         ensure!(
-            days.is_none_or(|value| value == file_days),
-            "mixed cruise normalization windows"
+            window.as_ref().is_none_or(|seen| *seen == file_window),
+            "mixed cruise sampling windows"
         );
-        days = Some(file_days);
+        let weights = file_window.provenance_weights();
+        window = Some(file_window);
         for batch in reader {
             let decoded = CruiseRowAccum::new(&[batch?]).map_err(anyhow::Error::msg)?;
             let slices = decoded.views();
             let views = slices.as_row_views();
             for (index, row) in views.iter().enumerate() {
-                let Some((segment, density)) = cruise_segment(row, index) else {
+                let Some((segment, density)) = cruise_segment(row, index, &weights) else {
                     continue;
                 };
                 let terrain = SegmentTerrain::sample(&segment, &rasters);
@@ -138,7 +136,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
-    let days = days.context("no cruise input")?;
+    let days = window.context("no cruise input")?.baseline_days;
     let reference_seconds = started.elapsed().as_secs_f64();
 
     let bbox = TileBbox::from_xyz(13, tile_x, tile_y);

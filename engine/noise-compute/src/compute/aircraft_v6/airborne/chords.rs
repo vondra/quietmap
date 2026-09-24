@@ -34,7 +34,7 @@ pub(super) struct PieceEval {
     pub end: (i32, i32),
     pub flags: u8,
     pub period: usize,
-    pub class_weight: f64,
+    pub provenance_weight: f64,
     pub free_raw: f64,
     pub received_raw: f64,
     pub lmax: f64,
@@ -60,7 +60,7 @@ impl PieceEval {
             end: (view.end_gx[row], view.end_gy[row]),
             flags: view.flags[row],
             period: kernel.period,
-            class_weight: kernel.class_weight,
+            provenance_weight: kernel.provenance_weight,
             free_raw: raw(kernel.kernel.free_sel),
             received_raw: raw(kernel.kernel.sel),
             lmax: kernel.lmax,
@@ -132,7 +132,7 @@ pub(super) fn fold_chords(
                 flights,
                 &batches[piece.batch],
                 piece.row,
-                piece.class_weight,
+                piece.provenance_weight,
             ));
         }
         // The popup's received floor: below it the chord keeps its
@@ -148,7 +148,7 @@ pub(super) fn fold_chords(
                 flights,
                 &batches[piece.batch],
                 piece.row,
-                piece.class_weight,
+                piece.provenance_weight,
             ));
             rank_key += piece.energy * AIRBORNE_RANK_W[piece.period];
             if piece.lmax >= AIRBORNE_TRACE_CUTOFF_DB {

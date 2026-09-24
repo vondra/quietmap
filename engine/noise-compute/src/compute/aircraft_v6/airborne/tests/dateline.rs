@@ -65,7 +65,7 @@ fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f
         &receiver,
         &batches,
         1.0,
-        &aircraft::ClassWeights::uniform(),
+        &aircraft::ProvenanceWeights::PRIMARY_ONLY,
         &horizon,
         None,
         0,

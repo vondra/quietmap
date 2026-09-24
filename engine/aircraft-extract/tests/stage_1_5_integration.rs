@@ -193,8 +193,13 @@ fn stage_1_5_then_stage_2c_round_trips_synth_airport_key() {
     // Stage 2C reads both the real airport_lines.arrow (no relevant
     // coverage) and the synth file (covers the test strip), and
     // emits airport_traffic.arrow with rows under the synth key.
-    let n_days = 1u16;
-    let r2c = run_stage_2c(&by_square_dir, &areas, prepared_year_dir, n_days, 0, None).unwrap();
+    let window = noise_compute::emission::aircraft::SamplingWindow {
+        baseline_days: 1,
+        increment_days: 0,
+        baseline_days_sha256: "baseline".into(),
+        increment_days_sha256: "increment".into(),
+    };
+    let r2c = run_stage_2c(&by_square_dir, &areas, prepared_year_dir, &window, None).unwrap();
     assert_eq!(
         r2c, 1,
         "Stage 2C should write airport_traffic.arrow for one z9"

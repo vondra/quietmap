@@ -67,6 +67,7 @@ pub(super) fn spill_row_consume(square: u64, key: CruiseKey, accum: CruiseAccum)
         rep_alt_m: accum.rep_alt_m,
         rep_speed_kt: accum.rep_speed_kt,
         heading_bin: key.heading_bin,
+        secondary_only: key.secondary_only,
         fid_set,
         top_candidates,
     }

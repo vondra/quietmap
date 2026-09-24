@@ -688,3 +688,16 @@ pub fn write_square_structures(
     crate::structures_finalize::finalize_square_structures(&dir, square).unwrap();
     path
 }
+
+/// An aircraft sampling window with fixed day-list hashes.
+pub(crate) fn sampling_window(
+    baseline_days: u16,
+    increment_days: u16,
+) -> noise_compute::emission::aircraft::SamplingWindow {
+    noise_compute::emission::aircraft::SamplingWindow {
+        baseline_days,
+        increment_days,
+        baseline_days_sha256: "baseline".into(),
+        increment_days_sha256: "increment".into(),
+    }
+}

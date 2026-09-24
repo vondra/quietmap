@@ -25,6 +25,7 @@ pub struct AirportTrafficRowAccum {
     veh_kind: Vec<u8>,
     class_idx: Vec<u8>,
     period: Vec<u8>,
+    secondary_only: Vec<bool>,
     band_energy_lin: Vec<[f32; NUM_BANDS]>,
     unique_movement_count: Vec<u32>,
     unique_arr_count: Vec<u32>,
@@ -34,9 +35,10 @@ pub struct AirportTrafficRowAccum {
     microseg_unique_arr_count: Vec<u32>,
     microseg_unique_dep_count: Vec<u32>,
     microseg_unique_gse_count_per_class: Vec<[u32; NUM_GSE_CLASSES]>,
-    microseg_unique_ga_count: Vec<u32>,
-    microseg_unique_ga_arr_count: Vec<u32>,
-    microseg_unique_ga_dep_count: Vec<u32>,
+    microseg_unique_secondary_count: Vec<u32>,
+    microseg_unique_secondary_arr_count: Vec<u32>,
+    microseg_unique_secondary_dep_count: Vec<u32>,
+    microseg_unique_secondary_gse_count_per_class: Vec<[u32; NUM_GSE_CLASSES]>,
 }
 
 impl AirportTrafficRowAccum {
@@ -56,6 +58,7 @@ impl AirportTrafficRowAccum {
             veh_kind: Vec::new(),
             class_idx: Vec::new(),
             period: Vec::new(),
+            secondary_only: Vec::new(),
             band_energy_lin: Vec::new(),
             unique_movement_count: Vec::new(),
             unique_arr_count: Vec::new(),
@@ -65,9 +68,10 @@ impl AirportTrafficRowAccum {
             microseg_unique_arr_count: Vec::new(),
             microseg_unique_dep_count: Vec::new(),
             microseg_unique_gse_count_per_class: Vec::new(),
-            microseg_unique_ga_count: Vec::new(),
-            microseg_unique_ga_arr_count: Vec::new(),
-            microseg_unique_ga_dep_count: Vec::new(),
+            microseg_unique_secondary_count: Vec::new(),
+            microseg_unique_secondary_arr_count: Vec::new(),
+            microseg_unique_secondary_dep_count: Vec::new(),
+            microseg_unique_secondary_gse_count_per_class: Vec::new(),
         };
         for batch in batches {
             out.absorb(batch)?;
@@ -96,6 +100,8 @@ impl AirportTrafficRowAccum {
         let class_idx =
             required_array::<UInt8Array>(batch.column_by_name("class_idx"), "class_idx")?;
         let period = required_array::<UInt8Array>(batch.column_by_name("period"), "period")?;
+        let secondary_only =
+            required_array::<UInt8Array>(batch.column_by_name("secondary_only"), "secondary_only")?;
         let bands = required_array::<FixedSizeListArray>(
             batch.column_by_name("band_energy_lin"),
             "band_energy_lin",
@@ -132,21 +138,26 @@ impl AirportTrafficRowAccum {
             batch.column_by_name("microseg_unique_gse_count_per_class"),
             "microseg_unique_gse_count_per_class",
         )?;
-        let microseg_unique_ga = required_array::<UInt32Array>(
-            batch.column_by_name("microseg_unique_ga_count"),
-            "microseg_unique_ga_count",
+        let microseg_unique_secondary = required_array::<UInt32Array>(
+            batch.column_by_name("microseg_unique_secondary_count"),
+            "microseg_unique_secondary_count",
         )?;
-        let microseg_unique_ga_arr = required_array::<UInt32Array>(
-            batch.column_by_name("microseg_unique_ga_arr_count"),
-            "microseg_unique_ga_arr_count",
+        let microseg_unique_secondary_arr = required_array::<UInt32Array>(
+            batch.column_by_name("microseg_unique_secondary_arr_count"),
+            "microseg_unique_secondary_arr_count",
         )?;
-        let microseg_unique_ga_dep = required_array::<UInt32Array>(
-            batch.column_by_name("microseg_unique_ga_dep_count"),
-            "microseg_unique_ga_dep_count",
+        let microseg_unique_secondary_dep = required_array::<UInt32Array>(
+            batch.column_by_name("microseg_unique_secondary_dep_count"),
+            "microseg_unique_secondary_dep_count",
+        )?;
+        let microseg_secondary_gse_list = required_array::<FixedSizeListArray>(
+            batch.column_by_name("microseg_unique_secondary_gse_count_per_class"),
+            "microseg_unique_secondary_gse_count_per_class",
         )?;
         if bands.value_length() != NUM_BANDS as i32
             || gse_list.value_length() != NUM_GSE_CLASSES as i32
             || microseg_gse_list.value_length() != NUM_GSE_CLASSES as i32
+            || microseg_secondary_gse_list.value_length() != NUM_GSE_CLASSES as i32
         {
             return Err("airport_traffic fixed-size list width mismatch".into());
         }
@@ -160,6 +171,11 @@ impl AirportTrafficRowAccum {
         let microseg_gse_buf = required_array::<UInt32Array>(
             Some(microseg_gse_list.values()),
             "microseg_unique_gse_count_per_class.item",
+        )?
+        .values();
+        let microseg_secondary_gse_buf = required_array::<UInt32Array>(
+            Some(microseg_secondary_gse_list.values()),
+            "microseg_unique_secondary_gse_count_per_class.item",
         )?
         .values();
         self.airport_key.reserve(n);
@@ -183,6 +199,7 @@ impl AirportTrafficRowAccum {
             self.veh_kind.push(veh_kind.value(i));
             self.class_idx.push(class_idx.value(i));
             self.period.push(period.value(i));
+            self.secondary_only.push(secondary_only.value(i) != 0);
             let lo_b = i * NUM_BANDS;
             let mut row_bands = [0.0f32; NUM_BANDS];
             row_bands.copy_from_slice(&band_buf[lo_b..lo_b + NUM_BANDS]);
@@ -203,12 +220,17 @@ impl AirportTrafficRowAccum {
             row_microseg_gse.copy_from_slice(&microseg_gse_buf[lo_g..lo_g + NUM_GSE_CLASSES]);
             self.microseg_unique_gse_count_per_class
                 .push(row_microseg_gse);
-            self.microseg_unique_ga_count
-                .push(microseg_unique_ga.value(i));
-            self.microseg_unique_ga_arr_count
-                .push(microseg_unique_ga_arr.value(i));
-            self.microseg_unique_ga_dep_count
-                .push(microseg_unique_ga_dep.value(i));
+            self.microseg_unique_secondary_count
+                .push(microseg_unique_secondary.value(i));
+            self.microseg_unique_secondary_arr_count
+                .push(microseg_unique_secondary_arr.value(i));
+            self.microseg_unique_secondary_dep_count
+                .push(microseg_unique_secondary_dep.value(i));
+            let mut row_secondary_gse = [0u32; NUM_GSE_CLASSES];
+            row_secondary_gse
+                .copy_from_slice(&microseg_secondary_gse_buf[lo_g..lo_g + NUM_GSE_CLASSES]);
+            self.microseg_unique_secondary_gse_count_per_class
+                .push(row_secondary_gse);
         }
         Ok(())
     }
@@ -230,6 +252,7 @@ impl AirportTrafficRowAccum {
                 veh_kind: self.veh_kind[i],
                 class_idx: self.class_idx[i],
                 period: self.period[i],
+                secondary_only: self.secondary_only[i],
                 band_energy_lin: &self.band_energy_lin[i],
                 unique_movement_count: self.unique_movement_count[i],
                 unique_arr_count: self.unique_arr_count[i],
@@ -239,9 +262,11 @@ impl AirportTrafficRowAccum {
                 microseg_unique_arr_count: self.microseg_unique_arr_count[i],
                 microseg_unique_dep_count: self.microseg_unique_dep_count[i],
                 microseg_unique_gse_count_per_class: &self.microseg_unique_gse_count_per_class[i],
-                microseg_unique_ga_count: self.microseg_unique_ga_count[i],
-                microseg_unique_ga_arr_count: self.microseg_unique_ga_arr_count[i],
-                microseg_unique_ga_dep_count: self.microseg_unique_ga_dep_count[i],
+                microseg_unique_secondary_count: self.microseg_unique_secondary_count[i],
+                microseg_unique_secondary_arr_count: self.microseg_unique_secondary_arr_count[i],
+                microseg_unique_secondary_dep_count: self.microseg_unique_secondary_dep_count[i],
+                microseg_unique_secondary_gse_count_per_class: &self
+                    .microseg_unique_secondary_gse_count_per_class[i],
             })
             .collect()
     }

@@ -92,14 +92,14 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
         write_runway(&right, lat, grid::geo::normalize_longitude(lon + 0.0003), 2);
         let mut departure = movement(lat, lon, 2);
         departure.flags = 1;
-        let mut ga = movement(lat, lon, 3);
-        ga.aircraft_type = *b"C172";
-        ga.profile_idx = noise_compute::emission::profiles_generated::profile_idx("C172");
+        // A movement only the secondary provider saw (increment days).
+        let mut secondary = movement(lat, lon, 3);
+        secondary.flags |= aircraft_extract::flight::segment_flags::SECONDARY_ONLY;
         let mut gse = movement(lat, lon, 4);
         gse.veh_kind = 1;
         write_segments(
             &crate::query::square_dir(&inputs, grid::square_of(lat, lon)).join("ground.arrow"),
-            &[movement(lat, lon, 1), departure, ga, gse],
+            &[movement(lat, lon, 1), departure, secondary, gse],
         )
         .unwrap();
         let airport = AirportArea::new(
@@ -113,7 +113,7 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
             1e6,
         );
         assert_eq!(
-            run_stage_2c(&inputs, &[airport], &prepared, 12, 365, None).unwrap(),
+            run_stage_2c(&inputs, &[airport], &prepared, &crate::structure_test_fixture::sampling_window(12, 4), None).unwrap(),
             2
         );
         assert!(!prepared.join("aircraft").exists());
@@ -130,14 +130,14 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
             (
                 summary.arr_count,
                 summary.dep_count,
-                summary.ga_arr_count,
-                summary.ga_dep_count
+                summary.secondary_arr_count,
+                summary.secondary_dep_count
             ),
             (1, 1, 1, 0)
         );
         assert_eq!(summary.gse_count_per_class, [1, 0, 0]);
         assert_eq!(summary.ops_count_per_kind, [2, 0, 0]);
-        assert_eq!(summary.ga_ops_count_per_kind, [1, 0, 0]);
+        assert_eq!(summary.secondary_ops_count_per_kind, [1, 0, 0]);
         let receiver = Receiver::new(lat + 0.001, lon, 0.0);
         let obstacles = ObstacleSet::empty();
         let mut result = noise_compute::compute_at_point(
@@ -163,7 +163,7 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
             &sources.airport_summary,
             &FlatGround,
             &obstacles,
-            12,
+            Some(&crate::structure_test_fixture::sampling_window(12, 4)),
             150,
         )
         .unwrap();
@@ -172,7 +172,7 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
             panic!("aircraft metadata");
         };
         let ground = metadata.ground_ops.as_ref().unwrap();
-        assert!((ground.arrivals_per_day - (1.0 / 12.0 + 1.0 / 365.0)).abs() < 1e-12);
+        assert!((ground.arrivals_per_day - (1.0 / 12.0 + 1.0 / 4.0)).abs() < 1e-12);
         assert!((ground.departures_per_day - 1.0 / 12.0).abs() < 1e-12);
         assert_eq!(ground.gse_per_day, [1.0 / 12.0, 0.0, 0.0]);
         assert!(result.total.lden_db.is_finite());
@@ -182,13 +182,13 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
         let original = std::fs::read(&traffic_path).unwrap();
         let traffic_rows = read_airport_traffic(&traffic_path).unwrap();
         let stamp = |summaries: &std::collections::BTreeMap<_, _>| {
-            write_airport_traffic(&traffic_path, &traffic_rows, 12, 365).unwrap();
+            write_airport_traffic(&traffic_path, &traffic_rows, &crate::structure_test_fixture::sampling_window(12, 4)).unwrap();
             stamp_airport_summaries(&traffic_path, summaries).unwrap();
         };
         for defect in ["unstamped", "empty", "conflict", "stale", "corrupt"] {
             match defect {
                 "unstamped" => {
-                    write_airport_traffic(&traffic_path, &traffic_rows, 12, 365).unwrap()
+                    write_airport_traffic(&traffic_path, &traffic_rows, &crate::structure_test_fixture::sampling_window(12, 4)).unwrap()
                 }
                 "empty" => stamp(&Default::default()),
                 "conflict" => {
@@ -198,10 +198,9 @@ fn stage2c_cell_summaries_preserve_popup_unions_and_refuse_incomplete_neighbors(
                     stamp(&changed);
                 }
                 "stale" => {
-                    let schema = aircraft_extract::arrow_schemas::with_n_days_and_windows(
+                    let schema = aircraft_extract::arrow_schemas::with_sampling_window(
                         aircraft_extract::arrow_schemas::airport_traffic_schema(),
-                        12,
-                        365,
+                        &crate::structure_test_fixture::sampling_window(12, 4),
                     );
                     let mut metadata = schema.metadata().clone();
                     metadata.insert(

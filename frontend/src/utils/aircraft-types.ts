@@ -215,5 +215,5 @@ export function aircraftFlightTooltip(opts: {
     return `${base}\n\nSynthetic id — anonymous-transponder trace or cruise-cell bucket aggregate; no single per-flight identity`
   }
   const csLine = opts.callsign ? `\nCallsign: ${opts.callsign}` : ''
-  return `${base}${csLine}\n\nICAO hex: ${(opts.icaoHex ?? '').toUpperCase()}\nClick to open the flight trace (adsb.lol for GA/heli, adsbexchange for airliners)`
+  return `${base}${csLine}\n\nICAO hex: ${(opts.icaoHex ?? '').toUpperCase()}\nClick to open the flight trace on the adsb.lol globe`
 }

@@ -67,6 +67,21 @@ latitudes.
 Present aircraft schemas must carry a positive sampling-window stamp, including
 empty files; selected rows cannot redefine the observation window.
 
+## Aircraft sampling window
+
+Aircraft rows come from two ADS-B providers merged per address and UTC day: the
+primary (adsb.lol) on every admitted baseline day, the secondary (ADSBexchange)
+on the admitted increment days, adding only samples the primary did not cover.
+A row touching a secondary sample carries flag bit 6 (`SECONDARY_ONLY`; cruise
+and ground rows a `secondary_only` column). Every aircraft file stamps
+`baseline_days`, `increment_days` and the SHA-256 of each sorted day list; one
+popup or painter tile refuses files whose windows differ. The mean day is the
+difference estimator `Σ_primary E / baseline_days + Σ_secondary E /
+increment_days`: every consumer divides by `baseline_days` and weights a
+secondary-only row by `baseline_days / increment_days` (`ProvenanceWeights`),
+in energy and in movement counts. A flight counts as a baseline movement when
+any of its rows at the receiver, microsegment or airport category is primary.
+
 ## Prepared road direction and traffic
 
 Final road Arrow carries `road_traffic_contract=1`, four non-null Float64

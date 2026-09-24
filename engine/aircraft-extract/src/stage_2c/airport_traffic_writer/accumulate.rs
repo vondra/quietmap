@@ -26,8 +26,7 @@ pub(super) fn accumulate_segment(
         noise_class_of(seg.profile_idx)
     };
     let is_dep = (seg.veh_kind == 0 && seg.is_departure()) as u8;
-    let is_ga =
-        seg.veh_kind == 0 && noise_compute::emission::aircraft::is_ga_sampled_class(class_idx);
+    let secondary_only = seg.is_secondary_only();
 
     for hit in intersections.iter() {
         let Some(&line_idx) = cache.line_index.get(&(hit.osm_id, hit.segment_idx)) else {
@@ -85,6 +84,7 @@ pub(super) fn accumulate_segment(
             veh_kind: seg.veh_kind,
             class_idx,
             period: seg.period,
+            secondary_only,
         };
         if !counters.contains_key(&key) {
             budget.reserve_hash_entry::<CounterKey, CounterAcc>(counters.len())?;
@@ -128,30 +128,54 @@ pub(super) fn accumulate_segment(
                 4 * (airport_key.len() + std::mem::size_of::<AirportSummaryPartRow>()) as u64,
             )?;
         }
-        let flags = movements::hit_flags(is_ga, seg.veh_kind, class_idx, ops_kind, is_dep == 1);
+        let flags =
+            movements::hit_flags(secondary_only, seg.veh_kind, class_idx, ops_kind, is_dep == 1);
         micro_accs.entry(identity).or_default().insert(
             seg.flight_id,
-            flags & movements::MICRO_FLAGS,
+            flags & movements::with_secondary(movements::MICRO_CATEGORIES),
             budget,
         )?;
-        airport_aggs
-            .entry(airport_key.clone())
-            .or_default()
-            .insert(seg.flight_id, flags & movements::AIRPORT_FLAGS, budget)?;
+        airport_aggs.entry(airport_key.clone()).or_default().insert(
+            seg.flight_id,
+            flags & movements::with_secondary(movements::AIRPORT_CATEGORIES),
+            budget,
+        )?;
     }
     Ok(())
 }
 
+/// A secondary-only row counts the movements its matching primary row (same
+/// key but provenance) does not hold: the popup adds the two at their weights.
 pub(super) fn counters_to_rows(
     counters: HashMap<CounterKey, CounterAcc>,
     micro_accs: &HashMap<(u64, u16), MovementUnion>,
 ) -> Vec<AirportTrafficRow> {
+    let micro_counts: HashMap<(u64, u16), movements::MovementCounts> = micro_accs
+        .iter()
+        .map(|(identity, union)| (*identity, union.counts()))
+        .collect();
     let mut counters: Vec<_> = counters.into_iter().collect();
     counters.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    let primary_sets: HashMap<CounterKey, &HashSet<u64>> = counters
+        .iter()
+        .filter(|(key, _)| !key.secondary_only)
+        .map(|(key, acc)| (key.clone(), &acc.fid_set))
+        .collect();
     let mut rows = Vec::with_capacity(counters.len());
-    for (key, acc) in counters {
+    for (key, acc) in &counters {
         let bands_lin: [f32; NUM_BANDS] = std::array::from_fn(|i| acc.band_energy_lin[i] as f32);
-        let unique_movement_count = acc.fid_set.len() as u32;
+        let unique_movement_count = if key.secondary_only {
+            let primary_key = CounterKey {
+                secondary_only: false,
+                ..key.clone()
+            };
+            match primary_sets.get(&primary_key) {
+                Some(primary) => acc.fid_set.difference(primary).count() as u32,
+                None => acc.fid_set.len() as u32,
+            }
+        } else {
+            acc.fid_set.len() as u32
+        };
         let runway = key.veh_kind == 0 && key.ops_kind == GROUND_OPS_KIND_RUNWAY_ROLL;
         let unique_arr_count = if runway && key.is_departure == 0 {
             unique_movement_count
@@ -170,17 +194,12 @@ pub(super) fn counters_to_rows(
                 0
             }
         });
-        let micro = micro_accs.get(&(key.osm_id, key.segment_idx));
-        let count = |flag| micro.map_or(0, |m| m.count(flag));
-        let microseg_unique_count = count(movements::NON_GA);
-        let microseg_unique_arr_count = count(movements::ARRIVAL);
-        let microseg_unique_dep_count = count(movements::DEPARTURE);
-        let microseg_unique_gse_count_per_class = std::array::from_fn(|i| count(movements::GSE[i]));
-        let microseg_unique_ga_count = count(movements::GA);
-        let microseg_unique_ga_arr_count = count(movements::GA_ARRIVAL);
-        let microseg_unique_ga_dep_count = count(movements::GA_DEPARTURE);
+        let micro = micro_counts
+            .get(&(key.osm_id, key.segment_idx))
+            .copied()
+            .unwrap_or_default();
         rows.push(AirportTrafficRow {
-            airport_key: key.airport_key,
+            airport_key: key.airport_key.clone(),
             osm_id: key.osm_id,
             segment_idx: key.segment_idx,
             geometry_kind: GEOMETRY_KIND_LINE,
@@ -194,18 +213,24 @@ pub(super) fn counters_to_rows(
             veh_kind: key.veh_kind,
             class_idx: key.class_idx,
             period: key.period,
+            secondary_only: key.secondary_only,
             band_energy_lin: bands_lin,
             unique_movement_count,
             unique_arr_count,
             unique_dep_count,
             unique_gse_count_per_class,
-            microseg_unique_count,
-            microseg_unique_arr_count,
-            microseg_unique_dep_count,
-            microseg_unique_gse_count_per_class,
-            microseg_unique_ga_count,
-            microseg_unique_ga_arr_count,
-            microseg_unique_ga_dep_count,
+            microseg_unique_count: micro.primary(movements::ANY),
+            microseg_unique_arr_count: micro.primary(movements::ARRIVAL),
+            microseg_unique_dep_count: micro.primary(movements::DEPARTURE),
+            microseg_unique_gse_count_per_class: std::array::from_fn(|i| {
+                micro.primary(movements::GSE[i])
+            }),
+            microseg_unique_secondary_count: micro.secondary_only(movements::ANY),
+            microseg_unique_secondary_arr_count: micro.secondary_only(movements::ARRIVAL),
+            microseg_unique_secondary_dep_count: micro.secondary_only(movements::DEPARTURE),
+            microseg_unique_secondary_gse_count_per_class: std::array::from_fn(|i| {
+                micro.secondary_only(movements::GSE[i])
+            }),
         });
     }
     rows

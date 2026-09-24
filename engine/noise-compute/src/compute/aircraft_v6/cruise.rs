@@ -54,13 +54,20 @@ pub fn cruise_geometry(lat: f64, heading_bin: u8) -> (f64, f64, f64) {
 
 /// Build the representative segment and its fractional traffic weight once per bucket.
 /// Receiver admission and terrain checks remain caller-owned; geometry and density do not.
-pub fn cruise_segment(row: &CruiseRowView<'_>, index: usize) -> Option<(AircraftSegment, f64)> {
+/// The density carries the bucket's provenance weight, so a secondary-only
+/// bucket divides by the increment days like every other consumer.
+pub fn cruise_segment(
+    row: &CruiseRowView<'_>,
+    index: usize,
+    weights: &aircraft::ProvenanceWeights,
+) -> Option<(AircraftSegment, f64)> {
     let (lat, lon) = (row.lat, row.lon);
     if !lat.is_finite() || !lon.is_finite() {
         return None;
     }
     let (lat_off, lon_off, length_m) = cruise_geometry(lat, row.heading_bin);
-    let density = f64::from(row.sum_length_m) / length_m;
+    let density = f64::from(row.sum_length_m) / length_m
+        * weights.for_secondary_only(row.secondary_only);
     if !density.is_finite() || density <= 0.0 {
         return None;
     }
@@ -119,6 +126,7 @@ pub fn scatter(
     rows: &[CruiseRowView<'_>],
     rasters: &dyn RasterSampler,
     n_days_f: f64,
+    weights: &aircraft::ProvenanceWeights,
     flights: &mut HashMap<u64, FlightAccum>,
     cruise_flight_stats: &mut HashMap<u64, CruiseFlightStats>,
     top_flight_candidates: &mut HashMap<u64, TopFlightCandidate>,
@@ -157,7 +165,7 @@ pub fn scatter(
             continue;
         }
 
-        let Some((seg, density)) = cruise_segment(row, idx) else {
+        let Some((seg, density)) = cruise_segment(row, idx, weights) else {
             continue;
         };
         let synth_fid = seg.flight_id;
@@ -233,11 +241,14 @@ pub fn scatter(
         // source-side peak would discard the popup-receiver geometry.
         for cand_view in row.top_candidates.iter() {
             let fid = cand_view.flight_id;
+            let row_weight = weights.for_secondary_only(row.secondary_only);
             let entry = cruise_flight_stats.entry(fid).or_insert(CruiseFlightStats {
                 peak_lmax: f64::NEG_INFINITY,
                 alt_at_peak: 0.0,
                 class_at_peak: class_idx,
+                weight: row_weight,
             });
+            entry.weight = entry.weight.min(row_weight);
             if lmax > entry.peak_lmax {
                 entry.peak_lmax = lmax;
                 entry.alt_at_peak = disp_alt;
@@ -420,11 +431,13 @@ pub fn band_stats(cruise_flight_stats: &HashMap<u64, CruiseFlightStats>) -> [Ban
     for (_, stats) in crate::compute::key_sorted(cruise_flight_stats) {
         if stats.peak_lmax > 30.0 {
             let cls = stats.class_at_peak;
-            out[0].add_event(1.0, stats.alt_at_peak, cls, 1);
+            let (w, alt) = (stats.weight, stats.alt_at_peak * stats.weight);
+            let class_w = w.round().max(1.0) as u32;
+            out[0].add_event(w, alt, cls, class_w);
             if stats.peak_lmax > 45.0 {
-                out[1].add_event(1.0, stats.alt_at_peak, cls, 1);
+                out[1].add_event(w, alt, cls, class_w);
                 if stats.peak_lmax > 60.0 {
-                    out[2].add_event(1.0, stats.alt_at_peak, cls, 1);
+                    out[2].add_event(w, alt, cls, class_w);
                 }
             }
         }
@@ -450,6 +463,7 @@ mod tests {
             rep_speed_kt: 450.0,
             source_id: 0,
             origin: 0,
+            secondary_only: false,
             unique_count: 1,
             top_candidates: &[],
         }
@@ -460,7 +474,7 @@ mod tests {
         for lat in [0.0_f64, 49.8, 68.0, 85.0] {
             for heading in 0..8 {
                 let r = row(lat, 179.999, 11000.0, heading);
-                let (segment, density) = cruise_segment(&r, 0).unwrap();
+                let (segment, density) = cruise_segment(&r, 0, &aircraft::ProvenanceWeights::PRIMARY_ONLY).unwrap();
                 let dx = grid::geo::wrapped_longitude_delta(segment.start_lon, segment.end_lon)
                     * aircraft::M_PER_DEG_LAT
                     * lat.to_radians().cos().max(0.2);
@@ -519,7 +533,7 @@ mod tests {
                 0.0_f64, 11.25, 22.5, 33.75, 45.0, 78.75, 90.0, 123.75, 135.0, 168.75,
             ] {
                 let (sin, cos) = degrees.to_radians().sin_cos();
-                let (mut original, _) = cruise_segment(&row(lat, lon, altitude, 0), 0).unwrap();
+                let (mut original, _) = cruise_segment(&row(lat, lon, altitude, 0), 0, &aircraft::ProvenanceWeights::PRIMARY_ONLY).unwrap();
                 original.start_lat = lat - 100000.0 * sin / mlat;
                 original.end_lat = lat + 100000.0 * sin / mlat;
                 original.start_lon = lon - 100000.0 * cos / mlon;
@@ -541,7 +555,7 @@ mod tests {
                             altitude,
                             heading,
                         );
-                        let (segment, density) = cruise_segment(&r, index).unwrap();
+                        let (segment, density) = cruise_segment(&r, index, &aircraft::ProvenanceWeights::PRIMARY_ONLY).unwrap();
                         energy(&segment, density)
                     })
                     .sum();

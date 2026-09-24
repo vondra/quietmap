@@ -25,9 +25,8 @@ fn cruise_rows_are_read_from_neighbouring_owner_squares() {
             top_candidates: Vec::new(),
             source_id: 2,
             origin: 0,
-        }],
-        12,
-    )
+            secondary_only: false,
+        }], &crate::structure_test_fixture::sampling_window(12, 0))
     .unwrap();
     let near = grid::square_of(50.0, 14.0);
     assert_ne!(near, owner);
@@ -171,10 +170,10 @@ fn antimeridian_road_and_rail_survive_the_midpoint_prefilter() {
 }
 
 #[test]
-fn empty_tree_collects_nothing_with_default_n_days() {
+fn empty_tree_collects_nothing_and_no_sampling_window() {
     let tmp = tempfile::TempDir::new().unwrap();
     let data = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
     assert!(data.roads.is_empty());
     assert!(data.buildings.is_empty());
-    assert_eq!(data.n_days, 365);
+    assert_eq!(data.aircraft_sampling_window, None);
 }

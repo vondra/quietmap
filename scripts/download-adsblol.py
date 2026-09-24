@@ -280,7 +280,7 @@ def effective_assets(database, preferred, releases, requested):
                 if len(candidates) != 1:
                     raise ValueError(f'{day}: require one verified complete alternative, found {len(candidates)}')
                 assets = candidates[0]
-                print(f'GA source recovery: day={day} rejected={tag} reason={error} selected={assets[0][5]}', file=sys.stderr)
+                print(f'adsb.lol source recovery: day={day} rejected={tag} reason={error} selected={assets[0][5]}', file=sys.stderr)
         selected.extend(assets)
     return sorted(selected)
 
@@ -436,13 +436,13 @@ def validate_selected_sources(root, requested):
             raise ValueError(f'no complete source days; omitted MLAT-only dates: {insufficient}')
         resolved = resolved_assets(database, selected)
         if insufficient:
-            print(f'GA source coverage: calendar_dates={len(requested)} sampled_days={len({asset[0] for asset in selected})} omitted_mlatonly_days={insufficient}', file=sys.stderr)
+            print(f'adsb.lol source coverage: calendar_dates={len(requested)} sampled_days={len({asset[0] for asset in selected})} omitted_mlatonly_days={insufficient}', file=sys.stderr)
         return resolved
     finally:
         database.close()
 
 
-def source_receipt(work, selected, stage, class_filter, action):
+def source_receipt(work, selected, stage, action):
     """A successful native write anchors output stats to the selected publisher assets."""
     if stage == 'sources' and action != 'check':
         raise ValueError('sources-only receipt validation is read-only')
@@ -450,21 +450,21 @@ def source_receipt(work, selected, stage, class_filter, action):
     record = action == 'complete'
     if action != 'check':
         database = sqlite3.connect(path)
-        database.execute('CREATE TABLE IF NOT EXISTS sources (day, name, url, size, sha256, tag, source_id, class_filter, PRIMARY KEY(day,name))')
+        database.execute('CREATE TABLE IF NOT EXISTS sources (day, name, url, size, sha256, tag, source_id, PRIMARY KEY(day,name))')
         database.execute('CREATE TABLE IF NOT EXISTS pending (day, stage, inputs, PRIMARY KEY(day,stage))')
         database.execute('CREATE TABLE IF NOT EXISTS artifacts (day, stage, path, dev, ino, size, mtime_ns, ctime_ns, PRIMARY KEY(day,stage))')
     else:
         database = sqlite3.connect(f'{path.resolve().as_uri()}?mode=ro', uri=True)
     grouped = {}
     for asset, _, _ in selected:
-        grouped.setdefault(asset[0], []).append((*asset, 0, class_filter))
+        grouped.setdefault(asset[0], []).append((*asset, 0))
     try:
         with database:
             for day, expected in grouped.items():
                 stored = database.execute('SELECT * FROM sources WHERE day=? ORDER BY name', (day,)).fetchall()
                 if action == 'check' or stage == 'segments':
                     if stored != expected:
-                        raise ValueError(f'{day}: selected source/feed/class differs from completed Stage0 receipt')
+                        raise ValueError(f'{day}: selected source differs from completed Stage0 receipt')
                 stages = [] if stage == 'sources' else (['flights', 'segments'] if stage == 'segments' and action == 'check' else ['flights'])
                 if action == 'check' or stage == 'segments':
                     for prerequisite in stages:
@@ -487,7 +487,7 @@ def source_receipt(work, selected, stage, class_filter, action):
                     if stage == 'flights':
                         database.execute('DELETE FROM sources WHERE day=?', (day,))
                         database.execute('DELETE FROM artifacts WHERE day=?', (day,))
-                        database.executemany('INSERT INTO sources VALUES (?,?,?,?,?,?,?,?)', expected)
+                        database.executemany('INSERT INTO sources VALUES (?,?,?,?,?,?,?)', expected)
                     database.execute('INSERT OR REPLACE INTO artifacts VALUES (?,?,?,?,?,?,?,?)', actual)
                     database.execute('DELETE FROM pending WHERE day=? AND stage=?', (day, stage))
             for _, source, before in selected:
@@ -498,12 +498,11 @@ def source_receipt(work, selected, stage, class_filter, action):
 
 
 def validate_main(arguments):
-    parser = argparse.ArgumentParser(description='Validate selected GA source identity without acquisition')
+    parser = argparse.ArgumentParser(description='Validate selected primary-provider source identity without acquisition')
     parser.add_argument('--source-root', type=Path, required=True)
     parser.add_argument('--days', help='Requested dates; absent means the complete catalog calendar')
     parser.add_argument('--work-dir', type=Path)
     parser.add_argument('--stage', choices=['sources', 'flights', 'segments'])
-    parser.add_argument('--class-filter', choices=['all', 'ga', 'non-ga'], default='ga')
     parser.add_argument('--action', choices=['check', 'begin', 'complete'], default='check')
     args = parser.parse_args(arguments)
     if bool(args.work_dir) != bool(args.stage) or (args.action != 'check' and not args.stage):
@@ -521,7 +520,7 @@ def validate_main(arguments):
         if args.stage:
             if {asset[0] for asset, _, _ in selected} != requested:
                 raise ValueError('work receipts require only selected complete-source days')
-            source_receipt(args.work_dir, selected, args.stage, args.class_filter, args.action)
+            source_receipt(args.work_dir, selected, args.stage, args.action)
         # NUL-separated paths are transport for the native archive selector,
         # not another source manifest or a replacement for the SQLite authority.
         for asset, path, _ in selected:
@@ -536,12 +535,12 @@ def main():
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--verified-local', type=Path, help='Independent checksum and unchanged-stat SQLite receipt')
     parser.add_argument('--catalog-only', action='store_true')
-    parser.add_argument('--days', help='Explicit acquisition subset within the complete requested GA window')
+    parser.add_argument('--days', help='Explicit acquisition subset within the complete requested baseline window')
     parser.add_argument('--workers', type=int, default=4)
     parser.add_argument('--reserve-bytes', type=int, required=True)
     args = parser.parse_args()
     try:
-        days = sampling_days(resolve_anchor(args.anchor, datetime.now(timezone.utc).date()))[1]
+        days = sampling_days(resolve_anchor(args.anchor, datetime.now(timezone.utc).date())).baseline
         selected = set(args.days.split(',')) if args.days else {day.isoformat() for day in days}
         if not selected or not selected <= {day.isoformat() for day in days} or not 1 <= args.workers <= 8 or args.reserve_bytes < 0:
             raise ValueError('require in-window acquisition dates, 1..8 workers and nonnegative reserve')

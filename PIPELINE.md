@@ -35,13 +35,14 @@ has no prepared squares, so a regional extract (Prague, 2026-09-16) stops at
 The TOML file has `[build]` keys `as_of_date` (YYYYMMDD string), `aircraft_anchor`
 (YYYY-MM string), `memory_gib` and `threads` (positive integers). `[sources]` supplies
 absolute paths named `planet`, `rasters`, `enrichment`, `boundaries`, `city_boundaries`,
-`overture`, `ghsl`, `regional_heights`, `airline`, `general_aviation`, `ships` (EMODnet
-vessel density) and `ships_gfw` (Global Fishing Watch presence hours).
+`overture`, `ghsl`, `regional_heights`, `aircraft_primary` (the adsb.lol archive),
+`aircraft_secondary` (the ADSBexchange monthly samples), `ships` (EMODnet vessel density)
+and `ships_gfw` (Global Fishing Watch presence hours).
 `rasters` is an already published native raster year, `city_boundaries` is the ADM2
 cache, and `regional_heights` retains the measured regional raster or VRT dependencies.
 Download and validate new source versions before freezing these inputs. A fresh
-build checks the exact airline days and GA publisher receipts before pinning or
-starting OSM. This reads archive tails, not all compressed traces; extraction still
+build checks the primary publisher receipts and the secondary monthly samples before
+pinning or starting OSM. This reads archive tails, not all compressed traces; extraction still
 validates payloads. Missing or incomplete samples stop the run early.
 
 Optional `[build]` paths `osm_node_cache` and `osm_spill_dir` place the sparse node
@@ -56,7 +57,7 @@ The controller records each frozen input's device identity in `input-identities.
 `build.json` records configuration, status and resume history; filesystem locks exclude another controller. It prepares the complete z9 directory
 set before parallel writers, then runs OSM, square-country-city, national buildings, structures
 (`--jobs` workers, one square each; omit `--jobs` for all CPUs that fit memory),
-ordered road/rail/industry chains and the pinned hybrid aircraft window. Buildings
+ordered road/rail/industry chains and the pinned aircraft exposure year. Buildings
 precede structures; both precede service-tree and built-up road inference. Disjoint
 writers can overlap within the configured cgroup memory budget. Source cache changes
 invalidate completion, including replaced symlink targets or newly added files.
@@ -181,12 +182,19 @@ to z9. Reuse validated Stage 0/1 segment files; do not re-extract them just beca
 the world prepared tree has no aircraft output yet.
 
 `aircraft_anchor` (YYYY-MM) is the month after the exposure year: `scripts/aircraft_window.py`
-selects every GA day of `[anchor − 1 year, anchor)` and the 12 airline month-firsts in it,
-and `scripts/ships/download_gfw.py` requests the same days. Anchor 2027-01 is calendar
-2026; anchor 2026-10 is 2025-10-01 … 2026-09-30. Publisher receipts determine admitted GA days;
-use that recorded list and class normalization, never a hardcoded 365 divisor.
-For example, the September 2026 delivery admitted 12 airline and 364 GA days:
-May 6 contained only excluded MLAT traffic. Refresh the sources and anchor together.
+selects every day of `[anchor − 1 year, anchor)` as a baseline candidate and its 12
+month-firsts as increment candidates, and `scripts/ships/download_gfw.py` requests the
+same days. Anchor 2027-01 is calendar 2026; anchor 2026-10 is 2025-10-01 … 2026-09-30.
+Stage 0 merges the two providers per aircraft address and UTC day: every adsb.lol
+sample stays, an ADSBexchange sample only where adsb.lol has no sample within 1 s and
+no joinable pair spanning it, and anonymous (`~`) echoes of an address track go.
+Segments touching an ADSBexchange sample carry `SECONDARY_ONLY`. Each day leaves a
+provider receipt (`provider-receipts/<day>.json`: traces, corrupt members, aircraft
+per UTC hour); a day below half the same-hour median, with an unrecovered corrupt
+member or without an archive is missing, never zero. The admitted baseline and
+increment days (`segments_by_square/{baseline_days,increment_days,admission.json}`)
+are stamped into every prepared aircraft file; consumers divide primary rows by the
+baseline count and secondary-only rows by the increment count (difference estimator).
 The CLI accepts repeated `--segments-dir` arguments for split retained segments.
 Keep input paths and receipts in the execution record.
 

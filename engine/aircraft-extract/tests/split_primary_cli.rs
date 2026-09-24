@@ -1,6 +1,6 @@
 //! Multiple validated primary roots reach shuffle and cruise without copying completed input.
 
-use aircraft_extract::arrow_io::{read_record_batches, write_segments};
+use aircraft_extract::arrow_io::{read_record_batches, write_segments as write_day_segments};
 use aircraft_extract::flight::{source_id, FlightSegment, Phase};
 use aircraft_extract::spatial::square_directories;
 use std::os::unix::fs::MetadataExt;
@@ -36,6 +36,28 @@ fn segments(day: &str, id: u64) -> Vec<FlightSegment> {
             end_elev_m: 0.0,
         })
         .collect()
+}
+
+/// A day shard plus the provider receipt Stage 0 would have left in its work dir.
+fn write_segments(path: &Path, rows: &[FlightSegment]) -> anyhow::Result<()> {
+    use aircraft_extract::provider_receipt::{write_day_receipt, DayReceipt, ProviderDayReceipt};
+    write_day_segments(path, rows)?;
+    let day = path.file_stem().unwrap().to_str().unwrap().to_owned();
+    let work = path.parent().unwrap().parent().unwrap();
+    write_day_receipt(
+        work,
+        &DayReceipt {
+            day,
+            primary: Some(ProviderDayReceipt {
+                source_id: source_id::ADSB_LOL_TAR,
+                traces: 1,
+                corrupt_members: Vec::new(),
+                aircraft_per_utc_hour: vec![1; 24],
+            }),
+            secondary: None,
+            merge: Default::default(),
+        },
+    )
 }
 
 fn identity(path: &Path) -> (Vec<u8>, u64, u64, i64, i64, i64, i64) {
@@ -78,10 +100,6 @@ fn split_primary_roots_match_single_root_through_shuffle_and_cruise_and_fail_clo
                 "--max-threads",
                 "1",
                 "run-all",
-                "--feed",
-                "adsbexchange",
-                "--class-filter",
-                "non-ga",
                 "--days",
                 selected,
                 "--from-stage",
@@ -90,7 +108,6 @@ fn split_primary_roots_match_single_root_through_shuffle_and_cruise_and_fail_clo
                 until,
                 "--scope-bbox",
                 "50,14,50.2,14.5",
-                "--fail-on-ga-cruise",
             ])
             .arg("--adsb-cache")
             .arg(root.join("unused-cache"))
@@ -127,10 +144,10 @@ fn split_primary_roots_match_single_root_through_shuffle_and_cruise_and_fail_clo
             );
         }
         assert_eq!(
-            std::fs::read_to_string(work.join("segments_by_square/days")).unwrap(),
+            std::fs::read_to_string(work.join("segments_by_square/baseline_days")).unwrap(),
             days.join("\n")
         );
-        assert!(std::fs::read(work.join("segments_by_square/ga_days"))
+        assert!(std::fs::read(work.join("segments_by_square/increment_days"))
             .unwrap()
             .is_empty());
     }
@@ -171,7 +188,7 @@ fn split_primary_roots_match_single_root_through_shuffle_and_cruise_and_fail_clo
     );
     for (id, path) in expected_squares {
         let expected = read_record_batches(&path.join("cruise.arrow")).unwrap();
-        assert_eq!(expected.0.metadata()["n_days"], "2");
+        assert_eq!(expected.0.metadata()["baseline_days"], "2");
         assert!(
             expected
                 .1
@@ -210,7 +227,7 @@ fn split_primary_roots_match_single_root_through_shuffle_and_cruise_and_fail_clo
         (
             vec![split[0].clone()],
             "shuffle",
-            "segment day set mismatch",
+            "no provider receipt",
         ),
         (
             vec![split[0].clone(), split[0].clone(), split[1].clone()],
@@ -240,10 +257,10 @@ fn split_primary_roots_match_single_root_through_shuffle_and_cruise_and_fail_clo
         assert!(!rejected_work.exists());
         assert!(!rejected_output.exists());
     }
-    let wrong = root.join("wrong-feed/segments");
+    let wrong = root.join("wrong-provider/segments");
     for (index, day) in days.iter().enumerate() {
         let mut rows = segments(day, index as u64 + 1);
-        rows[0].source_id = source_id::ADSB_LOL_TAR;
+        rows[0].source_id = source_id::SCHEDULE_SYNTH;
         write_segments(&wrong.join(format!("{day}.arrow")), &rows).unwrap();
     }
     let output = run(
@@ -255,11 +272,11 @@ fn split_primary_roots_match_single_root_through_shuffle_and_cruise_and_fail_clo
         "shuffle",
     );
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("wrong date, feed, or hybrid class"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("wrong date or provider"));
     assert!(!rejected_work.exists());
     assert!(!rejected_output.exists());
     std::fs::write(
-        split_work.join("segments_by_square/days"),
+        split_work.join("segments_by_square/baseline_days"),
         "2025-01-01\n2025-03-01\n",
     )
     .unwrap();
@@ -272,7 +289,7 @@ fn split_primary_roots_match_single_root_through_shuffle_and_cruise_and_fail_clo
         "stage2b",
     );
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("requested days differ"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("differ from the shuffled sampling window"));
     assert!(!rejected_output.exists());
     for (path, before) in originals {
         assert_eq!(identity(&path), before);
@@ -293,10 +310,6 @@ fn cruise_spill_and_finish_are_real_separate_cli_phases() {
                 "--max-threads",
                 "1",
                 "run-all",
-                "--feed",
-                "adsbexchange",
-                "--class-filter",
-                "non-ga",
                 "--days",
                 "2025-01-01",
                 "--from-stage",
@@ -305,7 +318,6 @@ fn cruise_spill_and_finish_are_real_separate_cli_phases() {
                 "stage2b",
                 "--cruise-phase",
                 phase,
-                "--fail-on-ga-cruise",
             ])
             .arg("--segments-dir")
             .arg(&inputs)
@@ -373,10 +385,6 @@ fn downstream_airborne_reuses_verified_shuffle_after_day_inputs_are_retired() {
                 "--max-threads",
                 "1",
                 "run-all",
-                "--feed",
-                "adsbexchange",
-                "--class-filter",
-                "non-ga",
                 "--days",
                 day,
                 "--from-stage",
@@ -416,7 +424,7 @@ fn downstream_airborne_reuses_verified_shuffle_after_day_inputs_are_retired() {
     assert!(!squares.is_empty());
     for (square, directory) in squares {
         let expected = read_record_batches(&directory.join("airborne.arrow")).unwrap();
-        assert_eq!(expected.0.metadata()["n_days"], "1");
+        assert_eq!(expected.0.metadata()["baseline_days"], "1");
         assert!(expected.1.iter().any(|batch| batch.num_rows() > 0));
         assert_eq!(
             read_record_batches(

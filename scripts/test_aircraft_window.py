@@ -17,20 +17,20 @@ class AircraftWindowTests(unittest.TestCase):
         for year in range(2023, 2028):
             for month in range(1, 13):
                 anchor = date(year, month, 1)
-                airlines, ga = sampling_days(anchor)
+                baseline, increment = sampling_days(anchor)
                 first_day = date(year - 1, month, 1)
-                self.assertEqual(ga, tuple(first_day + timedelta(days=offset)
-                                           for offset in range((anchor - first_day).days)))
-                self.assertEqual(airlines, tuple(day for day in ga if day.day == 1))
-                self.assertEqual(len(airlines), 12)
-        airlines, ga = sampling_days(date(2027, 1, 1))
-        self.assertEqual((ga[0], ga[-1], len(ga)), (date(2026, 1, 1), date(2026, 12, 31), 365))
-        self.assertEqual(airlines, tuple(date(2026, month, 1) for month in range(1, 13)))
-        airlines, ga = sampling_days(date(2026, 10, 1))
-        self.assertEqual((ga[0], ga[-1]), (date(2025, 10, 1), date(2026, 9, 30)))
-        self.assertEqual((airlines[0], airlines[-1]), (date(2025, 10, 1), date(2026, 9, 1)))
-        self.assertEqual(len(sampling_days(date(2025, 1, 1))[1]), 366)
-        self.assertIn(date(2024, 2, 29), sampling_days(date(2024, 3, 1))[1])
+                self.assertEqual(baseline, tuple(first_day + timedelta(days=offset)
+                                                 for offset in range((anchor - first_day).days)))
+                self.assertEqual(increment, tuple(day for day in baseline if day.day == 1))
+                self.assertEqual(len(increment), 12)
+        baseline, increment = sampling_days(date(2027, 1, 1))
+        self.assertEqual((baseline[0], baseline[-1], len(baseline)), (date(2026, 1, 1), date(2026, 12, 31), 365))
+        self.assertEqual(increment, tuple(date(2026, month, 1) for month in range(1, 13)))
+        baseline, increment = sampling_days(date(2026, 10, 1))
+        self.assertEqual((baseline[0], baseline[-1]), (date(2025, 10, 1), date(2026, 9, 30)))
+        self.assertEqual((increment[0], increment[-1]), (date(2025, 10, 1), date(2026, 9, 1)))
+        self.assertEqual(len(sampling_days(date(2025, 1, 1)).baseline), 366)
+        self.assertIn(date(2024, 2, 29), sampling_days(date(2024, 3, 1)).baseline)
 
     def test_anchor_requires_the_last_window_day_to_have_finished(self):
         for today, expected in [(date(2026, 9, 1), date(2026, 9, 1)),
@@ -50,15 +50,6 @@ class AircraftWindowTests(unittest.TestCase):
         scripts.mkdir()
         for name in ["run-aircraft-extract.sh", "aircraft_window.py"]:
             shutil.copyfile(Path(__file__).with_name(name), scripts / name)
-        validator = scripts / "download-adsblol.py"
-        validator.write_text("import os,sys\n"
-                             "if os.environ.get('SOURCE_INCOMPLETE'):\n"
-                             "    sys.exit('missing publisher-verified selected asset')\n"
-                             "days=sys.argv[sys.argv.index('--days')+1].split(',')\n"
-                             "omitted=os.environ.get('MLAT_DAY')\n"
-                             "for day in days:\n"
-                             "    if day != omitted: sys.stdout.buffer.write((day+'\\0/archive/'+day+'.tar\\0').encode())\n"
-                             "if omitted: print('omitted_mlatonly_days='+omitted,file=sys.stderr)\n")
         binary = root / "engine/target/release/aircraft-extract"
         binary.parent.mkdir(parents=True)
         binary.write_text("#!/usr/bin/env python3\nimport json,os,sys\n"
@@ -71,111 +62,67 @@ class AircraftWindowTests(unittest.TestCase):
         cargo.write_text("#!/bin/sh\nexit 0\n")
         cargo.chmod(0o755)
         environment = {key: value for key, value in os.environ.items()
-                       if key not in {"DAYS", "AIRLINE_DAYS", "GA_DAYS", "FROM_STAGE", "UNTIL_STAGE", "SCOPE_BBOX"}}
-        environment.update(HYBRID="1", AIRCRAFT_ANCHOR="2024-03", MEMMAX="",
-                           AIRLINE_FEED="adsbexchange", FEED="adsblol",
+                       if key not in {"DAYS", "INCREMENT_DAYS", "FROM_STAGE", "UNTIL_STAGE", "SCOPE_BBOX"}}
+        environment.update(AIRCRAFT_ANCHOR="2024-03", MEMMAX="",
                            PREPARED_YEAR_DIR=str(root / "prepared"), PREPARED_DIR=str(root / "prepared"),
-                           AIRLINE_CACHE=str(root / "airlines"), GA_CACHE=str(root / "ga"),
+                           ADSB_CACHE=str(root / "adsblol"), SECONDARY_ADSB_CACHE=str(root / "adsbx"),
                            WORK_DIR=str(root / "work"), LOG_DIR=str(root / "logs"),
                            RECORDED_CALLS=str(root / "calls.jsonl"),
                            PATH=f"{commands}:{os.environ['PATH']}")
         return scripts / "run-aircraft-extract.sh", environment
 
-    def test_real_runner_passes_both_derived_windows_without_reading_archive_dates(self):
+    def calls(self, root):
+        return [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
+
+    def test_real_runner_passes_the_anchor_year_to_one_union_pass(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runner, environment = self.runner_fixture(root)
-            airlines, ga = sampling_days(date(2024, 3, 1))
-            omitted = ga[10]
-            environment["MLAT_DAY"] = omitted.isoformat()
-            result = subprocess.run(["bash", str(runner)], env=environment, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
-            self.assertEqual([call[0] for call in calls], ["run-all", "run-all", "run-all", "audit"])
-            ga = tuple(day for day in ga if day != omitted)
-            self.assertEqual((len(airlines), len(ga)), (12, 365), "leap year 2023-03..2024-02 minus one day")
-            self.assertIn(omitted.isoformat(), result.stderr)
-            for call, days in zip(calls[:3], [airlines, ga, airlines]):
-                self.assertEqual(call[call.index("--days") + 1].split(","),
-                                 [day.isoformat() for day in days])
-            self.assertEqual(calls[0][calls[0].index("--class-filter") + 1], "non-ga")
-            self.assertEqual(calls[1][calls[1].index("--class-filter") + 1], "ga")
-            self.assertEqual(calls[2][calls[2].index("--ga-adsb-cache") + 1], environment["GA_CACHE"])
-            self.assertEqual(calls[2][calls[2].index("--class-filter") + 1], "non-ga")
-
-    def test_downstream_runner_never_recreates_retired_ga_segments(self):
-        cases = [(stage, True, stage) for stage in ["stage1-5", "stage2a", "stage2b", "stage2c", "shuffle"]]
-        cases += [(None, False, "shuffle"), (None, True, "stage1-5"), ("environment", True, "stage2a")]
-        for override, completed_shuffle, stage in cases:
-            with self.subTest(override=override, completed_shuffle=completed_shuffle), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                runner, environment = self.runner_fixture(root)
-                if completed_shuffle:
-                    checkpoint = root / "work/airline/segments_by_square/complete.sqlite"
-                    checkpoint.parent.mkdir(parents=True)
-                    checkpoint.touch()  # Native validation, not the shell, checks its contents.
-                arguments = ["bash", str(runner)]
-                if override == "environment":
-                    environment["FROM_STAGE"] = stage
-                elif override is not None:
-                    arguments += ["--from-stage", override]
-                result = subprocess.run(arguments, env=environment, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
-                run_count = 3 if stage == "shuffle" else 1 if stage == "stage2c" else 2
-                self.assertEqual([call[0] for call in calls], ["run-all"] * run_count + ["audit"])
-                merge = calls[-2]
-                self.assertEqual(merge[merge.index("--from-stage") + 1], stage)
-                self.assertNotIn("--until-stage", merge)
-                self.assertEqual(merge[merge.index("--ga-adsb-cache") + 1], environment["GA_CACHE"])
-                self.assertEqual("--ga-segments-dir" in merge, stage == "shuffle")
-                if stage != "shuffle":
-                    self.assertTrue(all("--ga-segments-dir" not in call for call in calls))
-                if stage != "stage2c":
-                    self.assertEqual(calls[0][calls[0].index("--until-stage") + 1], "stage1")
-                    self.assertEqual(calls[0][calls[0].index("--class-filter") + 1], "non-ga")
-
-    def test_reviewed_cruise_window_runs_only_native_stage2b_and_preserves_hybrid_audit(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            runner, environment = self.runner_fixture(root)
-            environment.update(FROM_STAGE="stage2b", UNTIL_STAGE="stage2b")
-            result = subprocess.run(["bash", str(runner)], env=environment, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
-            self.assertEqual([call[0] for call in calls], ["run-all", "audit"])
-            replay = calls[0]
-            for option in ("--from-stage", "--until-stage"):
-                self.assertEqual(replay[replay.index(option) + 1], "stage2b")
-            for option in ("--ga-adsb-cache", "--ga-segments-dir"):
-                self.assertNotIn(option, replay)
-            self.assertEqual(replay[replay.index("--class-filter") + 1], "non-ga")
-            self.assertEqual(replay[replay.index("--days") + 1].split(","),
-                             [day.isoformat() for day in sampling_days(date(2024, 3, 1))[0]])
-            self.assertEqual(calls[1][-1], str(root / "work/airline/segments_by_square"))
-
-    def test_missing_ga_source_stops_before_build_or_either_pass(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            runner, environment = self.runner_fixture(root)
-            result = subprocess.run(["bash", str(runner)], env={**environment, "SOURCE_INCOMPLETE": "1"},
+            result = subprocess.run(["bash", str(runner), "--from-stage", "stage2a"], env=environment,
                                     capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("requested exposure year retained", result.stdout)
-            self.assertFalse((root / "calls.jsonl").exists())
-            self.assertFalse((root / "logs").exists())
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            calls = self.calls(root)
+            self.assertEqual([call[0] for call in calls], ["run-all", "audit"])
+            run = calls[0]
+            baseline, increment = sampling_days(date(2024, 3, 1))
+            self.assertEqual(len(baseline), 366, "leap year 2023-03..2024-02")
+            self.assertEqual(run[run.index("--days") + 1].split(","), [day.isoformat() for day in baseline])
+            self.assertEqual(run[run.index("--increment-days") + 1].split(","),
+                             [day.isoformat() for day in increment])
+            self.assertEqual(run[run.index("--adsb-cache") + 1], environment["ADSB_CACHE"])
+            self.assertEqual(run[run.index("--secondary-adsb-cache") + 1], environment["SECONDARY_ADSB_CACHE"])
+            self.assertEqual(run[run.index("--from-stage") + 1], "stage2a")
+            self.assertEqual(calls[1][-1], str(root / "work/segments_by_square"))
 
-    def test_manual_hybrid_day_lists_are_rejected_before_build_or_extract(self):
+    def test_a_primary_only_run_reads_no_increment_days(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runner, environment = self.runner_fixture(root)
-            for name in ["DAYS", "AIRLINE_DAYS", "GA_DAYS"]:
+            del environment["SECONDARY_ADSB_CACHE"]
+            result = subprocess.run(["bash", str(runner)], env=environment, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            run = self.calls(root)[0]
+            self.assertNotIn("--increment-days", run)
+            self.assertNotIn("--secondary-adsb-cache", run)
+
+    def test_manual_day_lists_are_rejected_beside_an_anchor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner, environment = self.runner_fixture(root)
+            for name in ["DAYS", "INCREMENT_DAYS"]:
                 result = subprocess.run(["bash", str(runner)], env={**environment, name: "2024-01-01"},
                                         capture_output=True, text=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("one AIRCRAFT_ANCHOR", result.stdout)
                 self.assertFalse((root / "calls.jsonl").exists())
                 self.assertFalse((root / "logs").exists())
+            del environment["AIRCRAFT_ANCHOR"]
+            del environment["SECONDARY_ADSB_CACHE"]
+            result = subprocess.run(["bash", str(runner)],
+                                    env={**environment, "DAYS": "2024-01-01", "INCREMENT_DAYS": "2024-01-01"},
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("needs SECONDARY_ADSB_CACHE", result.stdout)
 
 
 if __name__ == "__main__":

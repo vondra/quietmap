@@ -11,6 +11,7 @@ use arrow::array::{
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field};
 use noise_compute::compute::aircraft_v6::cruise::CRUISE_HEADING_BINS;
+use noise_compute::emission::aircraft::SamplingWindow;
 
 use crate::arrow_schemas;
 use crate::flight::CruiseBucket;
@@ -19,8 +20,12 @@ use super::write_record_batches;
 
 /// One owner z9's canonical buckets. Batches carry the synthetic cruise line
 /// envelopes so a receiver prunes them by distance like airborne batches.
-pub fn write_cruise(path: &Path, rows: &[CruiseBucket], n_days: u16) -> Result<()> {
-    let (schema, columns, bboxes) = cruise_columns(rows, n_days)?;
+pub fn write_cruise(path: &Path, rows: &[CruiseBucket], window: &SamplingWindow) -> Result<()> {
+    anyhow::ensure!(
+        window.increment_days > 0 || rows.iter().all(|r| !r.secondary_only),
+        "secondary-only cruise buckets without increment days"
+    );
+    let (schema, columns, bboxes) = cruise_columns(rows, window)?;
     let (schema, batches) = arrow_batching::blocked_by_z14_cell(schema, columns, &bboxes)?;
     write_record_batches(path, &schema, &batches)
 }
@@ -51,8 +56,8 @@ type CruiseColumns = (
     Vec<arrow_batching::RowBbox>,
 );
 
-fn cruise_columns(rows: &[CruiseBucket], n_days: u16) -> Result<CruiseColumns> {
-    let schema = arrow_schemas::with_n_days(arrow_schemas::cruise_schema(), n_days);
+fn cruise_columns(rows: &[CruiseBucket], window: &SamplingWindow) -> Result<CruiseColumns> {
+    let schema = arrow_schemas::with_sampling_window(arrow_schemas::cruise_schema(), window);
     let mut bboxes = Vec::with_capacity(rows.len());
     let n = rows.len();
     let mut lon = Float64Builder::with_capacity(n);
@@ -68,6 +73,7 @@ fn cruise_columns(rows: &[CruiseBucket], n_days: u16) -> Result<CruiseColumns> {
     let mut unique_count = UInt32Builder::with_capacity(n);
     let mut source_id = UInt8Builder::with_capacity(n);
     let mut origin = UInt8Builder::with_capacity(n);
+    let mut secondary_only = UInt8Builder::with_capacity(n);
 
     // Flatten top_candidates lists. The list-of-struct uses parallel
     // child arrays sharing one offset buffer.
@@ -102,6 +108,7 @@ fn cruise_columns(rows: &[CruiseBucket], n_days: u16) -> Result<CruiseColumns> {
         unique_count.append_value(r.unique_count);
         source_id.append_value(r.source_id);
         origin.append_value(r.origin);
+        secondary_only.append_value(u8::from(r.secondary_only));
         for cand in &r.top_candidates {
             cand_fid.append_value(cand.flight_id);
             cand_callsign.append_value(&cand.callsign);
@@ -151,6 +158,7 @@ fn cruise_columns(rows: &[CruiseBucket], n_days: u16) -> Result<CruiseColumns> {
         Arc::new(cand_list),
         Arc::new(source_id.finish()),
         Arc::new(origin.finish()),
+        Arc::new(secondary_only.finish()),
     ];
     Ok((schema.as_ref().clone(), columns, bboxes))
 }
@@ -199,6 +207,7 @@ mod tests {
             ],
             source_id: 0,
             origin: 0,
+            secondary_only: false,
         }
     }
 
@@ -207,7 +216,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let p = dir.path().join("cruise.arrow");
         let cs = vec![sample_bucket()];
-        write_cruise(&p, &cs, 1).unwrap();
+        write_cruise(&p, &cs, &crate::provider_receipt::window_of(1, 0)).unwrap();
         let (_, batches) = read_record_batches(&p).unwrap();
         assert_eq!(batches[0].num_rows(), 1);
     }
@@ -223,7 +232,7 @@ mod tests {
                 ..sample_bucket()
             })
             .collect();
-        write_cruise(&p, &rows, 12).unwrap();
+        write_cruise(&p, &rows, &crate::provider_receipt::window_of(12, 0)).unwrap();
         let (schema, batches) = read_record_batches(&p).unwrap();
         assert!(batches.len() > 1);
         let blocks = arrow_batching::parse_blocks(
@@ -235,7 +244,7 @@ mod tests {
         .unwrap();
         assert_eq!(blocks.len(), batches.len());
         assert_eq!(
-            schema.metadata().get("n_days").map(String::as_str),
+            schema.metadata().get("baseline_days").map(String::as_str),
             Some("12")
         );
         for heading in 0..8 {
@@ -254,7 +263,7 @@ mod tests {
             heading_bin: 8,
             ..sample_bucket()
         };
-        assert!(write_cruise(&p, &[invalid], 12).is_err());
+        assert!(write_cruise(&p, &[invalid], &crate::provider_receipt::window_of(12, 0)).is_err());
     }
 
     #[test]
@@ -262,7 +271,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let p = dir.path().join("cruise.arrow");
         let cs = vec![sample_bucket()];
-        write_cruise(&p, &cs, 1).unwrap();
+        write_cruise(&p, &cs, &crate::provider_receipt::window_of(1, 0)).unwrap();
         let (schema, _) = read_record_batches(&p).unwrap();
         assert!(schema.field_with_name("unique_count").is_ok());
         assert!(schema.field_with_name("top_candidates").is_ok());
@@ -316,7 +325,7 @@ mod tests {
                 .collect(),
             ..sample_bucket()
         };
-        write_cruise(&p, &[row_a, row_b], 1).unwrap();
+        write_cruise(&p, &[row_a, row_b], &crate::provider_receipt::window_of(1, 0)).unwrap();
         let (schema, batches) = read_record_batches(&p).unwrap();
         // The two buckets sit in different z14 cells, so they are two blocks.
         assert_eq!(batches.len(), 2);

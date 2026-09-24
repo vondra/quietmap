@@ -23,6 +23,7 @@ fn cruise_bucket(cruise_cell_id: u64, unique_count: u32) -> CruiseBucket {
         unique_count,
         source_id: 2,
         origin: 0,
+        secondary_only: false,
         top_candidates: vec![CruiseTopCandidate {
             flight_id: 42,
             callsign: "TEST42".into(),
@@ -42,7 +43,7 @@ fn stale_airborne_stamp_drops_the_whole_aircraft_layer() {
     let dir = crate::query::square_dir(prepared.path(), grid::square_of(lat, lon));
     std::fs::create_dir_all(&dir).unwrap();
     let id = grid::cruise::cruise_cell_id(lat, lon);
-    write_cruise(&dir.join("cruise.arrow"), &[cruise_bucket(id, 20)], 12).unwrap();
+    write_cruise(&dir.join("cruise.arrow"), &[cruise_bucket(id, 20)], &crate::structure_test_fixture::sampling_window(12, 0)).unwrap();
     let served = crate::collect_sources_at_point(prepared.path(), lat, lon).unwrap();
     assert!(!served.aircraft_cruise_batches.is_empty());
     assert!(served.unavailable_layers.is_empty());
@@ -56,7 +57,7 @@ fn stale_airborne_stamp_drops_the_whole_aircraft_layer() {
     let served = crate::collect_sources_at_point(prepared.path(), lat, lon).unwrap();
     assert_eq!(served.unavailable_layers, ["aircraft"]);
     assert!(served.aircraft_cruise_batches.is_empty());
-    assert_eq!(served.n_days, 365);
+    assert_eq!(served.aircraft_sampling_window, None);
 }
 
 fn flight() -> FlightSegment {
@@ -91,10 +92,11 @@ fn flight() -> FlightSegment {
 fn producer_files_decode_geometry_identity_counts_and_windows() {
     let dir = tempfile::tempdir().unwrap();
     let airborne = dir.path().join("airborne.arrow");
-    write_airborne(&airborne, &[flight()], 12, 365).unwrap();
+    write_airborne(&airborne, &[flight()], &crate::structure_test_fixture::sampling_window(12, 365)).unwrap();
     let (_, batches) = read_record_batches(&airborne).unwrap();
     assert_airborne_contract("airborne.arrow", &batches).unwrap();
-    build_class_weights(&batches, &[], 12).unwrap();
+    noise_compute::emission::aircraft::SamplingWindow::from_metadata(batches[0].schema_ref().metadata())
+        .unwrap();
     let accum = AirborneRowAccum::new(&batches).unwrap();
     let row = &accum.views()[0];
     let key = row.flight_key[0] as usize;
@@ -156,9 +158,7 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
     let id = grid::cruise::cruise_cell_id(50.1, 14.26);
     write_cruise(
         &cruise,
-        &[cruise_bucket(id, 20)],
-        12,
-    )
+        &[cruise_bucket(id, 20)], &crate::structure_test_fixture::sampling_window(12, 0))
     .unwrap();
     let (_, batches) = read_record_batches(&cruise).unwrap();
     assert_cruise_contract("cruise.arrow", &batches).unwrap();
@@ -219,6 +219,7 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
             veh_kind: 0,
             class_idx: 3,
             period: 2,
+            secondary_only: true,
             band_energy_lin: [123.0; 8],
             unique_movement_count: 9,
             unique_arr_count: 0,
@@ -228,17 +229,18 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
             microseg_unique_arr_count: 0,
             microseg_unique_dep_count: 7,
             microseg_unique_gse_count_per_class: [0; 3],
-            microseg_unique_ga_count: 2,
-            microseg_unique_ga_arr_count: 0,
-            microseg_unique_ga_dep_count: 2,
+            microseg_unique_secondary_count: 2,
+            microseg_unique_secondary_arr_count: 0,
+            microseg_unique_secondary_dep_count: 2,
+            microseg_unique_secondary_gse_count_per_class: [0; 3],
         }],
-        12,
-        365,
+        &crate::structure_test_fixture::sampling_window(12, 4),
     )
     .unwrap();
     let (_, batches) = read_record_batches(&traffic).unwrap();
     assert_airport_traffic_contract("airport_traffic.arrow", &batches).unwrap();
-    build_class_weights(&[], &batches, 12).unwrap();
+    noise_compute::emission::aircraft::SamplingWindow::from_metadata(batches[0].schema_ref().metadata())
+        .unwrap();
     let accum = AirportTrafficRowAccum::new(&batches).unwrap();
     let views = accum.views();
     assert_eq!(
@@ -248,7 +250,8 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
     assert_eq!((views[0].osm_id, views[0].segment_idx), (123, 7));
     assert_eq!(views[0].airport_key, "LKTEST");
     assert_eq!(views[0].microseg_unique_count, 7);
-    assert_eq!(views[0].microseg_unique_ga_count, 2);
+    assert_eq!(views[0].microseg_unique_secondary_count, 2);
+    assert!(views[0].secondary_only);
     assert_eq!(views[0].band_energy_lin, &[123.0; 8]);
 
     let mut summaries = std::collections::BTreeMap::new();
@@ -259,9 +262,10 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
             dep_count: 4,
             gse_count_per_class: [1, 2, 3],
             ops_count_per_kind: [5, 6, 7],
-            ga_arr_count: 8,
-            ga_dep_count: 9,
-            ga_ops_count_per_kind: [10, 11, 12],
+            secondary_arr_count: 8,
+            secondary_dep_count: 9,
+            secondary_gse_count_per_class: [4, 5, 6],
+            secondary_ops_count_per_kind: [10, 11, 12],
         },
     );
     stamp_airport_summaries(&traffic, &summaries).unwrap();
@@ -275,7 +279,7 @@ fn producer_files_decode_geometry_identity_counts_and_windows() {
 fn current_stamps_never_turn_wrong_geometry_into_zero_rows() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("airborne.arrow");
-    write_airborne(&path, &[flight()], 12, 365).unwrap();
+    write_airborne(&path, &[flight()], &crate::structure_test_fixture::sampling_window(12, 365)).unwrap();
     let (_, batches) = read_record_batches(&path).unwrap();
     let batch = &batches[0];
     let schema = batch.schema();
@@ -339,9 +343,7 @@ fn cruise_popup_names_and_highlights_the_actual_producer_cell() {
     ] {
         write_cruise(
             &path,
-            &[cruise_bucket((x << 15) | y, 1)],
-            12,
-        )
+            &[cruise_bucket((x << 15) | y, 1)], &crate::structure_test_fixture::sampling_window(12, 0))
         .unwrap();
         let (_, batches) = read_record_batches(&path).unwrap();
         let accum = CruiseRowAccum::new(&batches).unwrap();
@@ -353,6 +355,7 @@ fn cruise_popup_names_and_highlights_the_actual_producer_cell() {
             &rows,
             &SeaLevel,
             12.0,
+            &noise_compute::emission::aircraft::ProvenanceWeights::PRIMARY_ONLY,
             &mut HashMap::new(),
             &mut HashMap::new(),
             &mut HashMap::new(),
@@ -424,7 +427,7 @@ fn borrowed_geometry_preserves_sliced_rows_and_flight_keys() {
         row.end_lon = lon + 0.001;
         rows.push(row);
     }
-    write_airborne(&path, &rows, 12, 365).unwrap();
+    write_airborne(&path, &rows, &crate::structure_test_fixture::sampling_window(12, 365)).unwrap();
     let (_, batches) = read_record_batches(&path).unwrap();
     // Three rows in three z14 cells: one batch each, one shared dictionary.
     assert_eq!(batches.len(), 3);
@@ -452,7 +455,7 @@ fn borrowed_geometry_preserves_sliced_rows_and_flight_keys() {
 fn flight_keys_outside_the_dictionary_are_refused() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("airborne.arrow");
-    write_airborne(&path, &[flight()], 12, 365).unwrap();
+    write_airborne(&path, &[flight()], &crate::structure_test_fixture::sampling_window(12, 365)).unwrap();
     let (_, batches) = read_record_batches(&path).unwrap();
     let batch = &batches[0];
     let index = batch.schema().index_of("flight").unwrap();

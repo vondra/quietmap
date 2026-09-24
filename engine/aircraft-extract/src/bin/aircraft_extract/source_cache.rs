@@ -1,28 +1,35 @@
-//! The existing Python publisher authority binds native GA inputs and completed work receipts.
+//! The Python publisher authority binds primary-provider inputs and completed work receipts.
 
-use crate::ClassFilterArg;
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Publisher receipts of a primary archive root with a `catalog.sqlite`.
 pub struct SourceCache {
     root: PathBuf,
     work: PathBuf,
-    filter: ClassFilterArg,
 }
 
 impl SourceCache {
-    pub fn new(root: &Path, work: &Path, filter: ClassFilterArg) -> Self {
+    pub fn new(root: &Path, work: &Path) -> Self {
         Self {
             root: root.into(),
             work: work.into(),
-            filter,
         }
     }
 
-    pub fn class_filter(&self) -> aircraft_extract::source_adsb_tar::ClassWindowFilter {
-        self.filter.window()
+    /// The publisher authority of `root` when it holds a catalog; a plain
+    /// archive directory is read as it is.
+    pub fn open(root: &Path, work: &Path) -> Result<Option<Self>> {
+        Ok(root
+            .join("catalog.sqlite")
+            .try_exists()?
+            .then(|| Self::new(root, work)))
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn validate(
@@ -53,13 +60,7 @@ impl SourceCache {
             .arg(project.join("scripts/download-adsblol.py"))
             .arg("validate")
             .arg("--source-root")
-            .arg(&self.root)
-            .arg("--class-filter")
-            .arg(match self.filter {
-                ClassFilterArg::All => "all",
-                ClassFilterArg::Ga => "ga",
-                ClassFilterArg::NonGa => "non-ga",
-            });
+            .arg(&self.root);
         if let Some(days) = days {
             command.arg("--days").arg(days.join(","));
         }
@@ -99,763 +100,50 @@ impl SourceCache {
     }
 }
 
-pub fn validate_ga_merge(dirs: &[PathBuf], root: Option<&Path>) -> Result<()> {
-    anyhow::ensure!(
-        dirs.is_empty() == root.is_none(),
-        "GA segments and --ga-adsb-cache are required together"
-    );
-    let Some(root) = root else {
+/// Re-validate the primary publisher receipts a sealed shuffle recorded for
+/// its baseline days, without opening the day intermediates.
+pub fn validate_shuffled_sources(shuffled: &Path, primary_root: &Path) -> Result<()> {
+    use aircraft_extract::shuffle::completion::{sampling_days, source_receipts};
+    let receipts = source_receipts(shuffled)?;
+    let Some(_) = SourceCache::open(primary_root, Path::new("."))? else {
+        anyhow::ensure!(
+            receipts.is_empty(),
+            "shuffled publisher receipts require their catalog-bound primary source"
+        );
         return Ok(());
     };
-    let expected =
-        SourceCache::new(root, Path::new("."), ClassFilterArg::Ga).validate(None, None)?;
-    let paths = crate::cli_validate::list_segments_day_paths_multi(dirs)?;
-    let present: std::collections::BTreeSet<_> = paths
-        .iter()
-        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
-        .collect();
-    anyhow::ensure!(
-        present == expected.keys().cloned().collect(),
-        "GA merge must contain every selected complete-source sampling day"
-    );
-    for dir in dirs {
-        let days: Vec<_> = crate::cli_validate::list_segments_day_paths(dir)?
-            .iter()
-            .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
-            .collect();
-        crate::cli_validate::validate_segments(
-            dir,
-            &days,
-            ClassFilterArg::Ga,
-            crate::Feed::Adsblol,
-            root,
-        )?;
-    }
-    Ok(())
-}
-
-/// Validate retained publisher receipts, without opening retired day intermediates.
-pub fn validate_shuffled_sources(
-    shuffled: &Path,
-    ga_root: Option<&Path>,
-    primary_root: &Path,
-    feed: crate::Feed,
-    primary_filter: ClassFilterArg,
-) -> Result<()> {
-    let receipts = aircraft_extract::shuffle::completion::source_receipts(shuffled)?;
-    for (window, root, filter) in [
-        (
-            "days",
-            matches!(feed, crate::Feed::Adsblol).then_some(primary_root),
-            primary_filter,
-        ),
-        ("ga_days", ga_root, ClassFilterArg::Ga),
-    ] {
-        let expected = crate::cli_validate::read_window_days(shuffled, window)?;
-        if window == "ga_days" {
-            anyhow::ensure!(
-                expected.is_empty() == root.is_none(),
-                "hybrid shuffle reuse requires its canonical --ga-adsb-cache"
-            );
-        }
-        let Some(root) = root else {
-            anyhow::ensure!(
-                !receipts.iter().any(|(name, _, _)| name == window),
-                "shuffled source receipts require their original feed and source cache"
-            );
-            continue;
-        };
-        if window == "ga_days" {
-            let selected = SourceCache::new(root, Path::new("."), filter).validate(None, None)?;
-            anyhow::ensure!(
-                selected
-                    .keys()
-                    .cloned()
-                    .collect::<std::collections::BTreeSet<_>>()
-                    == expected,
-                "GA source sampling window differs from completed shuffle"
-            );
-        }
-        let mut covered = std::collections::BTreeSet::new();
-        for (_, receipt, _) in receipts.iter().filter(|(name, _, _)| name == window) {
-            let db = rusqlite::Connection::open_with_flags(
-                receipt,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-            )?;
-            let days = db
-                .prepare("SELECT DISTINCT day FROM sources ORDER BY day")?
-                .query_map([], |r| r.get::<_, String>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            let days: Vec<_> = days.into_iter().filter(|d| expected.contains(d)).collect();
-            anyhow::ensure!(!days.is_empty(), "shuffle has an unrelated source receipt");
-            for day in &days {
-                anyhow::ensure!(
-                    covered.insert(day.clone()),
-                    "duplicate shuffled source receipt for {day}"
-                );
-            }
-            SourceCache::new(
-                root,
-                receipt.parent().context("missing source receipt parent")?,
-                filter,
-            )
-            .validate(Some(&days), Some("sources"))?;
-        }
-        anyhow::ensure!(
-            covered == expected,
-            "missing source receipts for shuffled sampling window"
-        );
-    }
-    Ok(())
-}
-
-/// Called only after the global successor and its original publisher receipts validate.
-pub fn retire_validated_ga_intermediates(
-    shuffled: &Path,
-    primary_segments: &[PathBuf],
-) -> Result<()> {
-    use aircraft_extract::shuffle::completion::{artifact_identity, source_receipts};
-    let days = crate::cli_validate::read_window_days(shuffled, "ga_days")?;
-    let primary_work = primary_segments
-        .iter()
-        .map(|path| {
-            path.parent()
-                .context("missing primary work parent")?
-                .canonicalize()
-                .map_err(Into::into)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut candidates = Vec::new();
-    for (_, receipt, _) in source_receipts(shuffled)?
-        .into_iter()
-        .filter(|(window, _, _)| window == "ga_days")
-    {
-        let work = receipt.parent().context("missing GA work parent")?;
-        anyhow::ensure!(
-            !primary_work.iter().any(|primary| work == primary),
-            "GA retirement overlaps primary work"
-        );
+    let (expected, _) = sampling_days(shuffled)?;
+    let mut covered = std::collections::BTreeSet::new();
+    for (_, receipt, _) in &receipts {
         let db = rusqlite::Connection::open_with_flags(
-            &receipt,
+            receipt,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
-        let recorded_days = db
+        let days = db
             .prepare("SELECT DISTINCT day FROM sources ORDER BY day")?
-            .query_map([], |row| row.get::<_, String>(0))?
+            .query_map([], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for day in recorded_days.into_iter().filter(|day| days.contains(day)) {
-            for stage in ["flights", "segments"] {
-                let (path, saved): (String, [i64; 5]) = db.query_row(
-                    "SELECT path,dev,ino,size,mtime_ns,ctime_ns FROM artifacts WHERE day=?1 AND stage=?2",
-                    [&day, stage], |row| Ok((row.get(0)?, [row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?])))?;
-                let path = PathBuf::from(path);
-                anyhow::ensure!(
-                    path == work.join(stage).join(format!("{day}.arrow")),
-                    "GA artifact is outside its recorded work directory"
-                );
-                if !path.try_exists()? && !path.is_symlink() {
-                    continue;
-                }
-                anyhow::ensure!(
-                    artifact_identity(&path)? == saved,
-                    "GA artifact changed before retirement: {}",
-                    path.display()
-                );
-                candidates.push((path, saved));
-            }
+        let days: Vec<_> = days.into_iter().filter(|d| expected.contains(d)).collect();
+        anyhow::ensure!(!days.is_empty(), "shuffle has an unrelated source receipt");
+        for day in &days {
+            anyhow::ensure!(
+                covered.insert(day.clone()),
+                "duplicate shuffled source receipt for {day}"
+            );
         }
+        SourceCache::new(
+            primary_root,
+            receipt.parent().context("missing source receipt parent")?,
+        )
+        .validate(Some(&days), Some("sources"))?;
     }
-    let mut directories = std::collections::BTreeSet::new();
-    let mut bytes = 0_u64;
-    for (path, saved) in &candidates {
-        anyhow::ensure!(
-            artifact_identity(path)? == *saved,
-            "GA artifact changed during retirement: {}",
-            path.display()
-        );
-        std::fs::remove_file(path).with_context(|| format!("retire {}", path.display()))?;
-        directories.insert(path.parent().context("missing GA artifact parent")?);
-        bytes += u64::try_from(saved[2])?;
-    }
-    for directory in directories {
-        std::fs::File::open(directory)?.sync_all()?;
-    }
-    if !candidates.is_empty() {
-        eprintln!("{} [run-all] retired {} GA day intermediates ({bytes} logical bytes); sources, receipts, primary days and shuffle retained",
-            aircraft_extract::progress::ts(), candidates.len());
-    }
+    anyhow::ensure!(
+        covered == expected,
+        "missing source receipts for shuffled sampling window"
+    );
     Ok(())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{Feed, FromStage};
-
-    fn catalog(root: &Path, kind: &str, days: &[&str], mlat_days: &[&str]) {
-        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let output = Command::new("python3").current_dir(&project)
-            .args(["-c", "import runpy,sys; sys.path.insert(0,'scripts'); m=runpy.run_path('scripts/test_download_adsblol.py'); m['create_selected_catalog'](sys.argv[1],kind=sys.argv[2],days=sys.argv[3].split(','),mlat_days=sys.argv[4].split(','))"])
-            .arg(root).arg(kind).arg(days.join(",")).arg(mlat_days.join(",")).output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    #[test]
-    fn native_empty_ipc_requires_completed_source_and_parent_receipts_at_every_ga_entry() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("source");
-        catalog(&root, "staging", &["2026-06-06"], &[]);
-        let work = temp.path().join("work");
-        let day = "2026-06-06".to_owned();
-        let run = |from, until| {
-            crate::cli_run_all::run_all(
-                root.clone(),
-                temp.path().join("prepared-year"),
-                temp.path().join("prepared"),
-                work.clone(),
-                vec![day.clone()],
-                None,
-                from,
-                until,
-                Feed::Adsblol,
-                ClassFilterArg::Ga,
-                None,
-                None,
-                false,
-                Vec::new(),
-                aircraft_extract::stage_2b::CruisePhase::All,
-                None,
-            )
-        };
-        run(FromStage::Stage0, FromStage::Stage0).unwrap();
-        let cache = SourceCache::new(&root, &work, ClassFilterArg::Ga);
-        cache
-            .validate(Some(std::slice::from_ref(&day)), Some("flights"))
-            .unwrap();
-        assert!(
-            aircraft_extract::stage_1::read_flights(&work.join("flights/2026-06-06.arrow"))
-                .unwrap()
-                .is_empty()
-        );
-        run(FromStage::Stage1, FromStage::Stage1).unwrap();
-        let segments = work.join("segments");
-        crate::cli_validate::validate_segments(
-            &segments,
-            std::slice::from_ref(&day),
-            ClassFilterArg::Ga,
-            Feed::Adsblol,
-            &root,
-        )
-        .unwrap();
-        validate_ga_merge(std::slice::from_ref(&segments), Some(&root)).unwrap();
-        assert!(validate_ga_merge(std::slice::from_ref(&segments), None).is_err());
-        assert!(
-            aircraft_extract::arrow_io::read_segments(&segments.join("2026-06-06.arrow"))
-                .unwrap()
-                .is_empty()
-        );
-        let other = temp.path().join("other-export");
-        catalog(&other, "prod", &["2026-06-06"], &[]);
-        assert!(validate_ga_merge(std::slice::from_ref(&segments), Some(&other)).is_err());
-        let shuffled = work.join("segments_by_square");
-        aircraft_extract::shuffle::shuffle_per_square(
-            &[segments.join(format!("{day}.arrow"))],
-            &[],
-            &shuffled,
-            None,
-        )
-        .unwrap();
-        for (source, feed, accepted) in [
-            (&root, Feed::Adsblol, true),
-            (&other, Feed::Adsblol, false),
-            (&root, Feed::Adsbexchange, false),
-        ] {
-            assert_eq!(
-                validate_shuffled_sources(&shuffled, None, source, feed, ClassFilterArg::Ga,)
-                    .is_ok(),
-                accepted,
-                "single-window GA keeps its original source and feed"
-            );
-        }
-        let unreceipted = temp.path().join("unreceipted");
-        std::fs::create_dir_all(unreceipted.join("segments")).unwrap();
-        std::fs::copy(
-            segments.join("2026-06-06.arrow"),
-            unreceipted.join("segments/2026-06-06.arrow"),
-        )
-        .unwrap();
-        assert!(crate::cli_validate::validate_segments(
-            &unreceipted.join("segments"),
-            std::slice::from_ref(&day),
-            ClassFilterArg::Ga,
-            Feed::Adsblol,
-            &root
-        )
-        .is_err());
-        std::fs::write(work.join("flights/2026-06-06.arrow"), b"changed parent").unwrap();
-        assert!(run(FromStage::Stage1, FromStage::Stage1).is_err());
-        assert!(validate_ga_merge(&[segments], Some(&root)).is_err());
-    }
-
-    #[test]
-    fn fresh_days_append_in_one_work_root_without_changing_completed_days() {
-        use std::os::unix::fs::MetadataExt;
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("source");
-        let work = temp.path().join("work");
-        let days = ["2026-06-06", "2026-06-07"];
-        catalog(&root, "staging", &days, &[]);
-        let run = |work: &Path, day: &str, from, until, filter| {
-            crate::cli_run_all::run_all(
-                root.clone(),
-                temp.path().join("prepared-year"),
-                temp.path().join("prepared"),
-                work.into(),
-                vec![day.into()],
-                None,
-                from,
-                until,
-                Feed::Adsblol,
-                filter,
-                None,
-                None,
-                false,
-                Vec::new(),
-                aircraft_extract::stage_2b::CruisePhase::All,
-                None,
-            )
-        };
-        let append = |work: &Path, day: &str, until| {
-            run(work, day, FromStage::Stage0, until, ClassFilterArg::Ga)
-        };
-        let first_identity = || {
-            ["flights", "segments"].map(|stage| {
-                let path = work.join(stage).join(format!("{}.arrow", days[0]));
-                let stat = std::fs::metadata(&path).unwrap();
-                (
-                    path.clone(),
-                    std::fs::read(path).unwrap(),
-                    stat.dev(),
-                    stat.ino(),
-                    stat.size(),
-                    stat.mtime(),
-                    stat.mtime_nsec(),
-                    stat.ctime(),
-                    stat.ctime_nsec(),
-                )
-            })
-        };
-        let first_receipts = || {
-            let result = Command::new("python3")
-                .args(["-c", "import sqlite3,sys; db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); print([(t,db.execute('SELECT * FROM '+t+' WHERE day=? ORDER BY 1,2',(sys.argv[2],)).fetchall()) for t in ('sources','pending','artifacts')])"])
-                .arg(work.join("source-receipts.sqlite")).arg(days[0]).output().unwrap();
-            assert!(
-                result.status.success(),
-                "{}",
-                String::from_utf8_lossy(&result.stderr)
-            );
-            result.stdout
-        };
-        append(&work, days[0], FromStage::Stage1).unwrap();
-        let original = first_identity();
-        let receipts = first_receipts();
-        append(&work, days[1], FromStage::Stage0).unwrap();
-        assert_eq!(first_identity(), original);
-        assert_eq!(first_receipts(), receipts);
-        run(
-            &work,
-            days[1],
-            FromStage::Stage1,
-            FromStage::Stage1,
-            ClassFilterArg::Ga,
-        )
-        .unwrap();
-        validate_ga_merge(&[work.join("segments")], Some(&root)).unwrap();
-        assert_eq!(first_identity(), original);
-        assert_eq!(first_receipts(), receipts);
-        assert!(append(&work, days[0], FromStage::Stage0)
-            .unwrap_err()
-            .to_string()
-            .contains("already exists"));
-        let next = "2026-06-08";
-        assert!(append(&work, next, FromStage::Shuffle)
-            .unwrap_err()
-            .to_string()
-            .contains("cannot append"));
-        assert!(run(
-            &work,
-            next,
-            FromStage::Stage0,
-            FromStage::Stage0,
-            ClassFilterArg::NonGa
-        )
-        .is_err());
-        let legacy = temp.path().join("legacy");
-        std::fs::create_dir_all(legacy.join("flights")).unwrap();
-        std::fs::copy(
-            &original[0].0,
-            legacy.join("flights").join(format!("{}.arrow", days[0])),
-        )
-        .unwrap();
-        assert!(append(&legacy, days[1], FromStage::Stage0).is_err());
-        let collision = temp.path().join("segment-collision");
-        aircraft_extract::arrow_io::write_segments(
-            &collision
-                .join("segments")
-                .join(format!("{}.arrow", days[1])),
-            &[],
-        )
-        .unwrap();
-        assert!(append(&collision, days[1], FromStage::Stage0)
-            .unwrap_err()
-            .to_string()
-            .contains("already exists"));
-        std::fs::create_dir_all(work.join("segments_by_square")).unwrap();
-        std::fs::write(work.join("segments_by_square/days"), days.join("\n")).unwrap();
-        assert!(append(&work, next, FromStage::Stage0)
-            .unwrap_err()
-            .to_string()
-            .contains("cannot append"));
-        assert!(!work.join("flights").join(format!("{next}.arrow")).exists());
-        assert_eq!(first_identity(), original);
-        assert_eq!(first_receipts(), receipts);
-    }
-
-    #[test]
-    fn catalog_mlat_omission_flows_through_native_days_and_sampling_weights() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("source");
-        let work = temp.path().join("work");
-        let days = ["2026-06-06", "2026-06-07", "2026-06-08"];
-        catalog(&root, "staging", &days, &[days[1]]);
-        crate::cli_run_all::run_all(
-            root.clone(),
-            temp.path().join("prepared-year"),
-            temp.path().join("prepared"),
-            work.clone(),
-            days.map(str::to_owned).to_vec(),
-            None,
-            FromStage::Stage0,
-            FromStage::Stage1,
-            Feed::Adsblol,
-            ClassFilterArg::Ga,
-            None,
-            None,
-            false,
-            Vec::new(),
-            aircraft_extract::stage_2b::CruisePhase::All,
-            None,
-        )
-        .unwrap();
-        assert!(!work
-            .join("flights")
-            .join(format!("{}.arrow", days[1]))
-            .exists());
-        let segments = work.join("segments");
-        crate::cli_validate::validate_segments(
-            &segments,
-            &days.map(str::to_owned),
-            ClassFilterArg::Ga,
-            Feed::Adsblol,
-            &root,
-        )
-        .unwrap();
-        validate_ga_merge(std::slice::from_ref(&segments), Some(&root)).unwrap();
-        let ga = crate::cli_validate::list_segments_day_paths(&segments).unwrap();
-        assert_eq!(ga.len(), 2);
-        let airline = temp.path().join("airline");
-        let mut primary = Vec::new();
-        for month in 1..=12 {
-            let path = airline.join(format!("2025-{month:02}-01.arrow"));
-            aircraft_extract::arrow_io::write_segments(&path, &[]).unwrap();
-            primary.push(path);
-        }
-        let shuffled = temp.path().join("shuffled");
-        aircraft_extract::shuffle::shuffle_per_square(&primary, &ga, &shuffled, None).unwrap();
-        let n_days = crate::cli_validate::read_window_n_days(&shuffled).unwrap();
-        let ga_n_days = crate::cli_validate::read_ga_n_days(&shuffled).unwrap();
-        assert_eq!((n_days, ga_n_days), (12, 2));
-        let output = temp.path().join("airborne.arrow");
-        aircraft_extract::arrow_io::write_airborne(&output, &[], n_days, ga_n_days).unwrap();
-        let (schema, _) = aircraft_extract::arrow_io::read_record_batches(&output).unwrap();
-        use noise_compute::emission::aircraft::{ClassWeights, SAMPLE_DAYS_BY_CLASS_KEY};
-        let weights = ClassWeights::parse(
-            schema
-                .metadata()
-                .get(SAMPLE_DAYS_BY_CLASS_KEY)
-                .map(String::as_str),
-            n_days,
-        )
-        .unwrap();
-        assert_eq!(weights.ga_n_days(), 2);
-        assert_eq!(schema.metadata()["n_days"], "12");
-        assert_eq!(schema.metadata()["ga_n_days"], "2");
-    }
-
-    #[test]
-    fn corrupt_preferred_day_retries_from_verified_original_without_changing_completed_work() {
-        use std::os::unix::fs::MetadataExt;
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("source");
-        let work = temp.path().join("work");
-        let project = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let output = Command::new("python3")
-            .current_dir(&project)
-            .args(["-B", "-c", "import runpy,sys; sys.path.insert(0,'scripts'); runpy.run_path('scripts/test_download_adsblol.py')['create_recovery_catalog'](sys.argv[1])"])
-            .arg(&root).output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let control = "2026-04-16";
-        let failed = "2026-04-17";
-        let run = |day: &str| {
-            crate::cli_run_all::run_all(
-                root.clone(),
-                temp.path().join("prepared-year"),
-                temp.path().join("prepared"),
-                work.clone(),
-                vec![day.to_owned()],
-                None,
-                FromStage::Stage0,
-                FromStage::Stage0,
-                Feed::Adsblol,
-                ClassFilterArg::Ga,
-                None,
-                None,
-                false,
-                Vec::new(),
-                aircraft_extract::stage_2b::CruisePhase::All,
-                None,
-            )
-        };
-        run(control).unwrap();
-        let original = || {
-            let path = work.join("flights").join(format!("{control}.arrow"));
-            let metadata = std::fs::metadata(&path).unwrap();
-            let receipts = Command::new("python3")
-                .args(["-B", "-c", "import sqlite3,sys; db=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True); print([(t,db.execute('SELECT * FROM '+t+' WHERE day=? ORDER BY 1,2',(sys.argv[2],)).fetchall()) for t in ('sources','pending','artifacts')])"])
-                .arg(work.join("source-receipts.sqlite")).arg(control).output().unwrap();
-            assert!(receipts.status.success());
-            (
-                path.clone(),
-                std::fs::read(path).unwrap(),
-                metadata.dev(),
-                metadata.ino(),
-                metadata.mtime(),
-                metadata.mtime_nsec(),
-                metadata.ctime(),
-                metadata.ctime_nsec(),
-                receipts.stdout,
-            )
-        };
-        let before = original();
-        assert!(run(failed)
-            .unwrap_err()
-            .to_string()
-            .contains("incomplete extraction"));
-        let failed_path = work.join("flights").join(format!("{failed}.arrow"));
-        assert!(!failed_path.exists());
-        let cache = SourceCache::new(&root, &work, ClassFilterArg::Ga);
-        assert!(cache
-            .validate(Some(&[failed.into()]), Some("flights"))
-            .is_err());
-        let output = Command::new("python3")
-            .arg(project.join("scripts/download-adsblol.py"))
-            .args(["recover", "--source-root"])
-            .arg(&root)
-            .args(["--days", failed, "--reserve-bytes", "0"])
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(String::from_utf8_lossy(&output.stderr).contains("GA source recovery:"));
-        run(failed).unwrap();
-        cache
-            .validate(Some(&[control.into(), failed.into()]), Some("flights"))
-            .unwrap();
-        let selected = cache.validate(Some(&[failed.into()]), None).unwrap();
-        assert!(selected[failed]
-            .iter()
-            .all(|path| path.to_string_lossy().contains("-prod-")));
-        assert_eq!(
-            aircraft_extract::stage_1::read_flights(&failed_path)
-                .unwrap()
-                .len(),
-            2
-        );
-        assert_eq!(original(), before);
-    }
-
-    #[test]
-    fn selected_catalog_paths_cannot_silently_include_another_native_tar_export() {
-        use aircraft_extract::source::FlightSource;
-        let temp = tempfile::tempdir().unwrap();
-        catalog(temp.path(), "staging", &["2026-06-06"], &[]);
-        let cache = SourceCache::new(temp.path(), temp.path(), ClassFilterArg::Ga);
-        let selected = cache.validate(Some(&["2026-06-06".into()]), None).unwrap();
-        let parent = selected["2026-06-06"][0].parent().unwrap();
-        std::fs::write(parent.join("unselected.tar"), [0; 1024]).unwrap();
-        let source = aircraft_extract::source_adsb_tar::AdsbTarSource::new("")
-            .with_selected_archives(selected);
-        assert!(source
-            .read_day("2026-06-06")
-            .err()
-            .expect("unselected archive must fail")
-            .to_string()
-            .contains("native archive set differs"));
-    }
-    #[test]
-    fn global_shuffle_retires_only_unchanged_ga_intermediates_and_resumes_partial_retirement() {
-        for mode in ["fresh", "resume", "changed", "receipt-changed"] {
-            let temp = tempfile::tempdir().unwrap();
-            let root = temp.path().join("source");
-            catalog(&root, "staging", &["2026-06-06"], &[]);
-            let ga_work = temp.path().join("ga");
-            let work = temp.path().join("airline");
-            let day = "2026-06-06".to_owned();
-            crate::cli_run_all::run_all(
-                root.clone(),
-                temp.path().join("prepared/2026"),
-                temp.path().join("rasters"),
-                ga_work.clone(),
-                vec![day.clone()],
-                None,
-                FromStage::Stage0,
-                FromStage::Stage1,
-                Feed::Adsblol,
-                ClassFilterArg::Ga,
-                None,
-                None,
-                false,
-                Vec::new(),
-                aircraft_extract::stage_2b::CruisePhase::All,
-                None,
-            )
-            .unwrap();
-            let primary = work.join("segments").join(format!("{day}.arrow"));
-            aircraft_extract::arrow_io::write_segments(&primary, &[]).unwrap();
-            std::fs::create_dir_all(work.join("flights")).unwrap();
-            let primary_flights = work.join("flights").join(format!("{day}.arrow"));
-            std::fs::write(&primary_flights, b"primary flights retained").unwrap();
-            let primary_bytes = std::fs::read(&primary).unwrap();
-            let receipt = ga_work.join("source-receipts.sqlite");
-            let before = std::fs::read(&receipt).unwrap();
-            let cache = SourceCache::new(&root, &ga_work, ClassFilterArg::Ga);
-            let archives = cache
-                .validate(None, None)
-                .unwrap()
-                .into_values()
-                .flatten()
-                .map(|path| {
-                    let bytes = std::fs::read(&path).unwrap();
-                    (path, bytes)
-                })
-                .collect::<Vec<_>>();
-            let flights = ga_work.join("flights").join(format!("{day}.arrow"));
-            let segments = ga_work.join("segments").join(format!("{day}.arrow"));
-            let unknown = ga_work.join("segments/keep.txt");
-            std::fs::write(&unknown, b"unrecorded").unwrap();
-            let shuffled = work.join("segments_by_square");
-            let run = |from, until, scope| {
-                crate::cli_run_all::run_all(
-                    temp.path().join("primary-source"),
-                    temp.path().join("prepared/2026"),
-                    temp.path().join("rasters"),
-                    work.clone(),
-                    vec![day.clone()],
-                    scope,
-                    from,
-                    until,
-                    Feed::Adsbexchange,
-                    ClassFilterArg::NonGa,
-                    (from == FromStage::Shuffle).then(|| ga_work.join("segments")),
-                    Some(root.clone()),
-                    false,
-                    Vec::new(),
-                    aircraft_extract::stage_2b::CruisePhase::All,
-                    None,
-                )
-            };
-            if mode == "fresh" {
-                run(
-                    FromStage::Shuffle,
-                    FromStage::Shuffle,
-                    Some("49,13,51,15".into()),
-                )
-                .unwrap();
-                assert!(flights.exists() && segments.exists());
-                run(FromStage::Shuffle, FromStage::Shuffle, None).unwrap();
-            } else {
-                aircraft_extract::shuffle::shuffle_per_square(
-                    std::slice::from_ref(&primary),
-                    std::slice::from_ref(&segments),
-                    &shuffled,
-                    None,
-                )
-                .unwrap();
-                if mode == "changed" || mode == "receipt-changed" {
-                    let expected_error = if mode == "changed" {
-                        std::fs::write(&segments, b"changed intermediate").unwrap();
-                        "GA artifact changed"
-                    } else {
-                        rusqlite::Connection::open(&receipt)
-                            .unwrap()
-                            .execute("UPDATE sources SET source_id=9", [])
-                            .unwrap();
-                        "shuffle source receipt changed"
-                    };
-                    assert!(run(FromStage::Stage2a, FromStage::Stage2a, None)
-                        .unwrap_err()
-                        .to_string()
-                        .contains(expected_error));
-                    assert!(flights.exists() && segments.exists());
-                    continue;
-                }
-                let manifest = std::fs::read(shuffled.join("ga_days")).unwrap();
-                std::fs::write(shuffled.join("ga_days"), b"").unwrap();
-                assert!(run(FromStage::Stage2a, FromStage::Stage2a, None).is_err());
-                assert!(flights.exists() && segments.exists());
-                std::fs::write(shuffled.join("ga_days"), manifest).unwrap();
-                std::fs::create_dir(work.join("temp_shuffle")).unwrap();
-                assert!(run(FromStage::Stage2a, FromStage::Stage2a, None).is_err());
-                assert!(flights.exists() && segments.exists());
-                std::fs::remove_dir(work.join("temp_shuffle")).unwrap();
-                let other = temp.path().join("other");
-                catalog(&other, "prod", &[&day], &[]);
-                assert!(validate_shuffled_sources(
-                    &shuffled,
-                    Some(&other),
-                    temp.path(),
-                    Feed::Adsbexchange,
-                    ClassFilterArg::NonGa
-                )
-                .is_err());
-                // Simulate interruption after the first eligible unlink.
-                std::fs::remove_file(&flights).unwrap();
-                run(FromStage::Stage2a, FromStage::Stage2a, None).unwrap();
-            }
-            assert!(!flights.exists() && !segments.exists());
-            run(FromStage::Stage2a, FromStage::Stage2a, None).unwrap();
-            assert_eq!(std::fs::read(&receipt).unwrap(), before);
-            assert_eq!(std::fs::read(&primary).unwrap(), primary_bytes);
-            assert_eq!(
-                std::fs::read(&primary_flights).unwrap(),
-                b"primary flights retained"
-            );
-            assert_eq!(std::fs::read(&unknown).unwrap(), b"unrecorded");
-            for (path, bytes) in archives {
-                assert_eq!(std::fs::read(path).unwrap(), bytes);
-            }
-            aircraft_extract::shuffle::completion::validate(&shuffled, None).unwrap();
-        }
-    }
-}
+#[path = "source_cache_tests.rs"]
+mod tests;

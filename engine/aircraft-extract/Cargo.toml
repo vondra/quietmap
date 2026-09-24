@@ -19,6 +19,7 @@ raster-reader = { path = "../raster-reader" }
 grid = { path = "../grid" }
 square-store = { path = "../square-store" }
 arrow = { version = "54", features = ["ipc"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"

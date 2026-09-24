@@ -98,7 +98,7 @@ fn alternative_exports_preserve_one_whole_trace_and_fail_closed_before_day_write
             std::fs::write(day.join(name), bytes).unwrap();
         }
 
-        let selected = read_day_traces(&day).unwrap();
+        let selected = read_day_archive(&day).unwrap().traces;
         assert_eq!(
             selected.len(),
             9,
@@ -130,11 +130,9 @@ fn alternative_exports_preserve_one_whole_trace_and_fail_closed_before_day_write
         );
 
         let output = root.path().join("flights");
-        let sources: Vec<Box<dyn crate::source::FlightSource>> = vec![Box::new(
-            AdsbTarSource::new(root.path())
-                .with_class_filter(crate::source_adsb_tar::ClassWindowFilter::GaOnly),
-        )];
-        let count = crate::stage_0::run_stage_0(&sources, "2024-03-22", &output).unwrap();
+        let source = AdsbTarSource::new(root.path());
+        let count =
+            crate::stage_0::run_stage_0(&source, None, "2024-03-22", &output, root.path(), None).unwrap();
         let flights = crate::stage_1::read_flights(&output.join("2024-03-22.arrow")).unwrap();
         assert_eq!(count, 9);
         let mut callsigns: Vec<_> = flights.iter().map(|f| f.callsign.as_str()).collect();
@@ -156,7 +154,15 @@ fn alternative_exports_preserve_one_whole_trace_and_fail_closed_before_day_write
 
         std::fs::remove_file(day.join("export.tar.ab")).unwrap();
         let failed_output = root.path().join("failed");
-        assert!(crate::stage_0::run_stage_0(&sources, "2024-03-22", &failed_output).is_err());
+        assert!(crate::stage_0::run_stage_0(
+            &source,
+            None,
+            "2024-03-22",
+            &failed_output,
+            root.path(),
+            None
+        )
+        .is_err());
         assert!(!failed_output.join("2024-03-22.arrow").exists());
     }
 }

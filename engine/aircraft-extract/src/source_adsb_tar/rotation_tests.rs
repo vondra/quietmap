@@ -49,7 +49,7 @@ fn rotation_picks_first_in_range_callsign() {
             value: "TVS100P".into(),
         }],
     };
-    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, ClassWindowFilter::All);
+    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE);
     assert_eq!(flights.len(), 1);
     assert_eq!(flights[0].callsign, "TVS100P");
 }
@@ -126,7 +126,7 @@ fn second_rotation_without_callsign_stays_empty_not_inherited() {
             value: "ABC".into(),
         }],
     };
-    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, ClassWindowFilter::All);
+    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE);
     assert_eq!(flights.len(), 2);
     assert_eq!(flights[0].callsign, "ABC");
     assert_eq!(
@@ -213,7 +213,7 @@ fn ground_rest_splits_into_two_movements_with_distinct_ids() {
             },
         ],
     };
-    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, ClassWindowFilter::All);
+    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE);
     assert_eq!(flights.len(), 2);
     assert_ne!(flights[0].flight_id, flights[1].flight_id);
     assert_eq!(flights[0].callsign, "TVS100P");

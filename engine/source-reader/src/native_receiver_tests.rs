@@ -76,7 +76,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     std::fs::create_dir_all(&facade_dir).unwrap();
     fx::write_square_structures(root, facade_square, &[]);
     let path = facade_dir.join("airborne.arrow");
-    arrow_io::write_airborne(&path, std::slice::from_ref(&row), 12, 0).unwrap();
+    arrow_io::write_airborne(&path, std::slice::from_ref(&row), &fx::sampling_window(12, 0)).unwrap();
     let popup = |lat, lon| -> Value {
         super::reset_store(root);
         let mut value: Value =
@@ -123,10 +123,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     // is a second observation for this receiver, not a copy to ignore.
     arrow_io::write_airborne(
         &fx::square_dir(root, click_square).join("airborne.arrow"),
-        std::slice::from_ref(&row),
-        12,
-        0,
-    )
+        std::slice::from_ref(&row), &fx::sampling_window(12, 0))
     .unwrap();
     let neighbours = airborne(&popup(facade_lat, facade_lon));
     assert_eq!(neighbours["segment_count"].as_u64().unwrap(), 2);
@@ -136,7 +133,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         "second owner square increase: {increase}"
     );
     // Two original observations remain two energy contributions, even when identical.
-    arrow_io::write_airborne(&path, &[row.clone(), row.clone()], 12, 0).unwrap();
+    arrow_io::write_airborne(&path, &[row.clone(), row.clone()], &fx::sampling_window(12, 0)).unwrap();
     let tripled = airborne(&popup(facade_lat, facade_lon));
     assert_eq!(tripled["segment_count"].as_u64().unwrap(), 3);
     let increase = tripled["lden"].as_f64().unwrap() - first["lden"].as_f64().unwrap();
@@ -172,7 +169,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     );
     // Owner squares disagreeing on the sampling windows cost the visitor the aircraft layer,
     // named in the answer; the building keeps its level and the popup is never refused.
-    arrow_io::write_airborne(&path, std::slice::from_ref(&row), 12, 5).unwrap();
+    arrow_io::write_airborne(&path, std::slice::from_ref(&row), &fx::sampling_window(12, 5)).unwrap();
     let without_aircraft = popup(facade_lat, facade_lon);
     assert_eq!(
         without_aircraft["unavailable_layers"],
@@ -188,7 +185,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     );
     // The screening table is never dropped: a stale stamp refuses the popup end to end,
     // even though its paired index still maps.
-    arrow_io::write_airborne(&path, std::slice::from_ref(&row), 12, 0).unwrap();
+    arrow_io::write_airborne(&path, std::slice::from_ref(&row), &fx::sampling_window(12, 0)).unwrap();
     fx::write_structure_file(&facade_dir.join("structures.arrow"), &[], false);
     let refused = crate::query_noise_at_point(facade_lat, facade_lon).unwrap_err();
     assert!(refused.to_string().contains("structures_contract mismatch"), "{refused}");

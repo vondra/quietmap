@@ -48,7 +48,7 @@ pub struct PointQueryData {
     /// `airport_lines.arrow` OSM ids and refs used to label runway and
     /// taxiway segment traces.
     pub airport_lines_batches: Vec<arrow::record_batch::RecordBatch>,
-    pub n_days: u16,
+    pub aircraft_sampling_window: Option<noise_compute::emission::aircraft::SamplingWindow>,
     /// Emission layers dropped from the whole query because a file of theirs carried another
     /// contract; the answer lacks their noise and says so.
     pub unavailable_layers: Vec<&'static str>,
@@ -132,7 +132,7 @@ pub fn collect_from_square_data(
         aircraft_airport_traffic_batches: aircraft.airport_traffic_batches,
         airport_summary: aircraft.airport_summary,
         airport_lines_batches: aircraft.airport_lines_batches,
-        n_days: aircraft.n_days,
+        aircraft_sampling_window: aircraft.sampling_window,
         unavailable_layers,
     })
 }

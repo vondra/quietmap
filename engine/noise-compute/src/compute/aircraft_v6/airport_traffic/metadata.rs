@@ -15,16 +15,13 @@ pub(super) fn build_ground_ops_metadata(
     acc: &AirportAcc,
     periods: &crate::types::NoisePeriods,
     n_days_f: f64,
-    // GA-class divisor for the split-union counts;
-    // non-GA counts divide by `n_days_f`.
-    ga_n_days_f: f64,
+    weights: &aircraft::ProvenanceWeights,
     summary_entry: Option<AirportSummaryEntry>,
 ) -> AircraftGroundOpsDetail {
     // arr/dep/gse/observed counts come from the global union in the
     // traffic footer. Missing summary = popup refuses to display arr/dep — see
-    // function docstring. v9: each split count = `non_ga / n_days +
-    // ga / ga_n_days` so a one-off GA rotation reads at its true
-    // full-year frequency.
+    // function docstring. Each count is `primary / n_days + secondary /
+    // increment_days`.
     let (
         arrivals_per_day,
         departures_per_day,
@@ -34,21 +31,36 @@ pub(super) fn build_ground_ops_metadata(
         taxi_ops,
         apron_ops,
     ) = if let Some(entry) = summary_entry {
-        let split = |non_ga: u32, ga: u32| non_ga as f64 / n_days_f + ga as f64 / ga_n_days_f;
-        let arr = split(entry.arr_count, entry.ga_arr_count);
-        let dep = split(entry.dep_count, entry.ga_dep_count);
-        // GSE is airline-pass only — no GA split.
-        let gse: [f64; NUM_GSE_CLASSES] =
-            std::array::from_fn(|i| entry.gse_count_per_class[i] as f64 / n_days_f);
+        let secondary_weight = weights.for_secondary_only(true);
+        let split = |primary: u32, secondary: u32| {
+            (f64::from(primary) + f64::from(secondary) * secondary_weight) / n_days_f
+        };
+        let arr = split(entry.arr_count, entry.secondary_arr_count);
+        let dep = split(entry.dep_count, entry.secondary_dep_count);
+        let gse: [f64; NUM_GSE_CLASSES] = std::array::from_fn(|i| {
+            split(
+                entry.gse_count_per_class[i],
+                entry.secondary_gse_count_per_class[i],
+            )
+        });
         // observed_movements_per_day = runway ops (arr ∪ dep). The
         // summary's `ops_count_per_kind[0]` is already the airport-
         // level runway UNION (VEH_KIND=0); use it instead of
         // recomputing from arr + dep so a fid that contributed both
         // arrival AND departure rotations in n_days dedupes once.
-        let observed = split(entry.ops_count_per_kind[0], entry.ga_ops_count_per_kind[0]);
-        let runway = split(entry.ops_count_per_kind[0], entry.ga_ops_count_per_kind[0]);
-        let taxi = split(entry.ops_count_per_kind[1], entry.ga_ops_count_per_kind[1]);
-        let apron = split(entry.ops_count_per_kind[2], entry.ga_ops_count_per_kind[2]);
+        let observed = split(
+            entry.ops_count_per_kind[0],
+            entry.secondary_ops_count_per_kind[0],
+        );
+        let runway = observed;
+        let taxi = split(
+            entry.ops_count_per_kind[1],
+            entry.secondary_ops_count_per_kind[1],
+        );
+        let apron = split(
+            entry.ops_count_per_kind[2],
+            entry.secondary_ops_count_per_kind[2],
+        );
         (arr, dep, gse, observed, runway, taxi, apron)
     } else {
         // No summary → return zeros. The FE renders `arrivals_per_day

@@ -36,7 +36,7 @@ pub(super) fn select_whole_traces(traces: Vec<AircraftTrace>) -> Vec<AircraftTra
     selected
 }
 
-fn trace_identity(raw: &str) -> Option<(bool, u32)> {
+pub(crate) fn trace_identity(raw: &str) -> Option<(bool, u32)> {
     let anonymous = raw.strip_prefix('~');
     let icao = crate::profile::parse_icao24_hex(anonymous.unwrap_or(raw))?;
     // Upstream ~ IDs have their own namespace. Empty/invalid IDs and reserved

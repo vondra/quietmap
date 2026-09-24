@@ -299,14 +299,13 @@ interface AircraftAirborneDetail {
   top_day_energy_share?: number
   top_day_date?: string
   top_flight_energy_share?: number
-  /** Archive days behind the Lden average for AIRLINE classes (12-day TTM). */
+  /** Baseline days behind the Lden average: complete adsb.lol days. */
   sample_days?: number
   /**
-   * Archive days behind GA + helicopter classes — `ga_n_days` in a hybrid extract,
-   * equal to `sample_days` when non-hybrid. The "Data" row shows both so the
-   * sample basis is honest per class.
+   * Increment days: ADSBexchange sample days that add only the traffic adsb.lol
+   * did not receive. The "Data" row shows both counts.
    */
-  ga_sample_days?: number
+  increment_sample_days?: number
   top_flights?: AircraftTopFlight[]
 }
 

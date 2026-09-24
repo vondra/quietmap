@@ -39,6 +39,29 @@ impl ScopeBbox {
         })
     }
 
+    /// Whether a trace whose sane samples span `[south, north] × [west, east]`
+    /// can reach a written square: the box meets the scope grown by the
+    /// square buffer and one z9 square, so every segment, transit or ground
+    /// run a scoped stage keeps lies inside a kept trace's extent.
+    pub fn may_touch_extent(&self, south: f64, west: f64, north: f64, east: f64) -> bool {
+        let square_deg = 360.0 / f64::from(1u32 << 9);
+        let latitude_buffer = SCOPE_BUFFER_M / grid::geo::M_PER_DEG_LAT + square_deg;
+        if north < self.min_lat - latitude_buffer || south > self.max_lat + latitude_buffer {
+            return false;
+        }
+        if east - west >= 180.0 {
+            return true;
+        }
+        let extreme_latitude = (self.max_lat.abs().max(self.min_lat.abs()) + latitude_buffer).min(89.0);
+        let (_, longitude_buffer) =
+            grid::geo::reach_box_half_extents_deg(extreme_latitude, SCOPE_BUFFER_M);
+        let longitude_buffer = longitude_buffer + square_deg;
+        [-360.0, 0.0, 360.0].iter().any(|shift| {
+            east + shift >= self.min_lon - longitude_buffer
+                && west + shift <= self.max_lon + longitude_buffer
+        })
+    }
+
     pub fn contains_square(&self, id: u64) -> bool {
         if i64::try_from(id)
             .ok()

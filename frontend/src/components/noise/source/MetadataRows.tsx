@@ -276,18 +276,15 @@ export function MetadataRows({ c }: { c: Contributor }) {
     const dayShare = a.top_day_energy_share ?? 0
     const flightShare = a.top_flight_energy_share ?? 0
     const sparse = dayShare > DAY_SHARE_WARN || flightShare > FLIGHT_SHARE_WARN
-    // GA full-year hybrid: airline classes sample N days while GA +
-    // helicopters use a separate full available-year window. State both
-    // bases when they differ; otherwise the popup implies jets used the
-    // same full-year window.
+    // Every class: adsb.lol baseline days plus ADSBexchange increment days
+    // that add only the traffic adsb.lol did not receive.
     const nDays = a.sample_days
-    const gaDays = a.ga_sample_days
-    const hybrid = gaDays != null && nDays != null && gaDays !== nDays
-    const basisLine = hybrid
-      ? `jets ${nDays} d/yr · GA+heli ${gaDays} d/yr.`
-      : `Lden averaged from ${nDays ?? '–'} sample days/yr.`
+    const incrementDays = a.increment_sample_days ?? 0
+    const basisLine = incrementDays > 0
+      ? `adsb.lol ${nDays ?? '–'} d/yr + adsbexchange ${incrementDays} d/yr for what adsb.lol missed.`
+      : `Lden averaged from ${nDays ?? '–'} adsb.lol days/yr.`
     const sampleText = txtTable([
-      'ADS-B flight tracks (adsbexchange + adsb.lol).',
+      'ADS-B flight tracks (adsb.lol + adsbexchange).',
       basisLine,
       ...(sparse
         ? [
@@ -301,7 +298,7 @@ export function MetadataRows({ c }: { c: Contributor }) {
           ]
         : []),
     ], 16, 16)
-    const badge = hybrid ? `${nDays}/${gaDays} d/yr` : `${nDays ?? '–'} days/yr`
+    const badge = incrementDays > 0 ? `${nDays ?? '–'}+${incrementDays} d/yr` : `${nDays ?? '–'} days/yr`
     return lineRow(
       'Data',
       <DataPoint title="Aircraft data source" text={sampleText}>

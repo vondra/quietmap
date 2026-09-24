@@ -158,6 +158,11 @@ pub fn build_segments(
         if on_ground {
             flags |= segment_flags::ON_GROUND;
         }
+        // A pair touching a secondary-only sample exists only because the
+        // primary provider missed that stretch: the increment estimator's row.
+        if prev.is_secondary_provider() || curr.is_secondary_provider() {
+            flags |= segment_flags::SECONDARY_ONLY;
+        }
         // Ground endpoint inherits the airborne endpoint's altitude so
         // elevated-airport lift-off / flare segments pass the downstream
         // terrain-vs-altitude airborne validation. Both-ground pairs
@@ -197,7 +202,7 @@ pub fn build_segments(
 /// Direct Cruise↔Ground observations contain no measured climb/descent geometry.
 /// Reject that hole; otherwise Airborne wins to preserve takeoff/flare and approach NPD.
 #[inline]
-fn segment_phase(prev: Phase, curr: Phase) -> Option<Phase> {
+pub(crate) fn segment_phase(prev: Phase, curr: Phase) -> Option<Phase> {
     match (prev, curr) {
         (Phase::Cruise, Phase::Ground) | (Phase::Ground, Phase::Cruise) => None,
         (Phase::Airborne, _) | (_, Phase::Airborne) => Some(Phase::Airborne),
@@ -210,7 +215,7 @@ fn segment_phase(prev: Phase, curr: Phase) -> Option<Phase> {
 /// gets the cruise budget so the descent transition isn't lost; a true
 /// airborne→ground gap stays bounded at the airborne ceiling.
 #[inline]
-fn gap_budget_for(prev: Phase, curr: Phase) -> f64 {
+pub(crate) fn gap_budget_for(prev: Phase, curr: Phase) -> f64 {
     let max_phase = if (prev as u8) >= (curr as u8) {
         prev
     } else {

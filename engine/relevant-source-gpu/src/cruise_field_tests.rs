@@ -18,6 +18,17 @@ impl RasterSampler for Terrain {
         0.0
     }
 }
+/// Baseline 12 days and increment 4: a secondary-only bucket weighs 3.
+fn weights() -> aircraft::ProvenanceWeights {
+    aircraft::SamplingWindow {
+        baseline_days: 12,
+        increment_days: 4,
+        baseline_days_sha256: "baseline".into(),
+        increment_days_sha256: "increment".into(),
+    }
+    .provenance_weights()
+}
+
 fn rows(lat: f64, lon: f64, altitude: f32) -> Vec<CruiseRowView<'static>> {
     (0..3)
         .map(|p| CruiseRowView {
@@ -33,6 +44,7 @@ fn rows(lat: f64, lon: f64, altitude: f32) -> Vec<CruiseRowView<'static>> {
             rep_speed_kt: 450.0,
             source_id: 0,
             origin: 0,
+            secondary_only: p == 2,
             unique_count: 1,
             top_candidates: &[],
         })
@@ -42,7 +54,7 @@ fn groups(rows: &[CruiseRowView<'_>], rasters: &dyn RasterSampler) -> Vec<Group>
     rows.iter()
         .enumerate()
         .map(|(i, row)| {
-            let (segment, density) = cruise_segment(row, i).unwrap();
+            let (segment, density) = cruise_segment(row, i, &weights()).unwrap();
             let terrain = SegmentTerrain::sample(&segment, rasters);
             Group {
                 bounds: [row.lat, row.lon, row.lat, row.lon],
@@ -82,6 +94,7 @@ fn exact(
         rows,
         rasters,
         12.0,
+        &weights(),
         &mut flights,
         &mut HashMap::new(),
         &mut HashMap::new(),
@@ -194,9 +207,11 @@ fn absent_sources_are_silent_but_unmanifested_or_wrong_contract_inputs_fail() {
     let schema = Arc::new(Schema::new_with_metadata(
         Vec::<arrow::datatypes::Field>::new(),
         HashMap::from([
-            ("schema_version".into(), "v15".into()),
+            (
+                "schema_version".into(),
+                square_store::aircraft_contract::SCHEMA_VERSION.into(),
+            ),
             ("cruise_contract".into(), "cruise_v17".into()),
-            ("n_days".into(), "12".into()),
         ]),
     ));
     let mut writer =
@@ -342,6 +357,7 @@ mod gpu_parity {
             rep_speed_kt: 450.0,
             source_id: heading_bin + 8 * period,
             origin: 0,
+            secondary_only: false,
             unique_count: 1,
             top_candidates: &[],
         }

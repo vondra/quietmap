@@ -13,6 +13,9 @@ use crate::{flight::Phase, scope::ScopeBbox};
 
 type SourceReceipts = BTreeMap<(String, PathBuf), Vec<u8>>;
 const INVENTORY: &str = "complete.sqlite";
+/// Sampling manifests beside the shards: one admitted day per line.
+pub const BASELINE_DAYS_MANIFEST: &str = "baseline_days";
+pub const INCREMENT_DAYS_MANIFEST: &str = "increment_days";
 
 fn digest(path: &Path) -> Result<Vec<u8>> {
     let mut file = File::open(path)?;
@@ -50,9 +53,10 @@ pub fn artifact_identity(path: &Path) -> Result<[i64; 5]> {
     ])
 }
 
-pub(super) fn input_receipts(primary: &[PathBuf], ga: &[PathBuf]) -> Result<SourceReceipts> {
+pub(super) fn input_receipts(paths: &[PathBuf]) -> Result<SourceReceipts> {
     let mut receipts = BTreeMap::new();
-    for (window, paths) in [("days", primary), ("ga_days", ga)] {
+    let window = BASELINE_DAYS_MANIFEST;
+    {
         for path in paths {
             let work = path
                 .parent()
@@ -88,8 +92,7 @@ fn files(root: &Path) -> Result<Vec<(u64, Phase, PathBuf)>> {
 
 pub(super) fn publish(
     root: &Path,
-    primary: &[PathBuf],
-    ga: &[PathBuf],
+    days: &[crate::provider_receipt::AdmittedDay],
     scope: Option<&ScopeBbox>,
     receipts: &SourceReceipts,
     expected_files: u64,
@@ -103,14 +106,27 @@ pub(super) fn publish(
             .try_exists()?,
         "shuffle scatter is not retired"
     );
-    for (name, paths) in [("days", primary), ("ga_days", ga)] {
-        let mut days: Vec<_> = paths
-            .iter()
-            .map(|p| p.file_stem().unwrap().to_str().unwrap())
-            .collect();
-        days.sort_unstable();
+    let stem = |day: &crate::provider_receipt::AdmittedDay| -> Result<String> {
+        Ok(day
+            .segments
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .context("admitted day without a day stem")?
+            .to_owned())
+    };
+    let baseline: Vec<String> = days.iter().map(stem).collect::<Result<_>>()?;
+    let increment: Vec<String> = days
+        .iter()
+        .filter(|day| day.increment)
+        .map(stem)
+        .collect::<Result<_>>()?;
+    for (name, mut list) in [
+        (BASELINE_DAYS_MANIFEST, baseline),
+        (INCREMENT_DAYS_MANIFEST, increment),
+    ] {
+        list.sort_unstable();
         let mut file = File::create(root.join(name))?;
-        file.write_all(days.join("\n").as_bytes())?;
+        file.write_all(list.join("\n").as_bytes())?;
         file.sync_all()?;
     }
     let path = root.join(INVENTORY);
@@ -120,7 +136,7 @@ pub(super) fn publish(
         .open(&path)?;
     let mut db = Connection::open(&path)?;
     db.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
-        CREATE TABLE state(scope TEXT NOT NULL, days_sha256 BLOB NOT NULL, ga_days_sha256 BLOB NOT NULL);
+        CREATE TABLE state(scope TEXT NOT NULL, baseline_days_sha256 BLOB NOT NULL, increment_days_sha256 BLOB NOT NULL);
         CREATE TABLE files(path TEXT PRIMARY KEY, rows INTEGER NOT NULL, dev INTEGER, ino INTEGER, size INTEGER, mtime_ns INTEGER, ctime_ns INTEGER);
         CREATE TABLE source_receipts(window TEXT, path TEXT, sha256 BLOB, PRIMARY KEY(window,path));")?;
     let tx = db.transaction()?;
@@ -173,8 +189,8 @@ pub(super) fn publish(
         "INSERT INTO state VALUES (?1,?2,?3)",
         params![
             scope_key(scope),
-            digest(&root.join("days"))?,
-            digest(&root.join("ga_days"))?
+            digest(&root.join(BASELINE_DAYS_MANIFEST))?,
+            digest(&root.join(INCREMENT_DAYS_MANIFEST))?
         ],
     )?;
     tx.commit()?;
@@ -197,14 +213,15 @@ pub fn validate(root: &Path, scope: Option<&ScopeBbox>) -> Result<()> {
     );
     let db = Connection::open_with_flags(root.join(INVENTORY), OpenFlags::SQLITE_OPEN_READ_ONLY)
         .context("missing durable shuffle inventory; verified successor required")?;
-    let (saved_scope, days, ga): (String, Vec<u8>, Vec<u8>) = db.query_row(
-        "SELECT scope,days_sha256,ga_days_sha256 FROM state",
+    let (saved_scope, baseline, increment): (String, Vec<u8>, Vec<u8>) = db.query_row(
+        "SELECT scope,baseline_days_sha256,increment_days_sha256 FROM state",
         [],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
     anyhow::ensure!(saved_scope == scope_key(scope), "shuffle scope differs");
     anyhow::ensure!(
-        digest(&root.join("days"))? == days && digest(&root.join("ga_days"))? == ga,
+        digest(&root.join(BASELINE_DAYS_MANIFEST))? == baseline
+            && digest(&root.join(INCREMENT_DAYS_MANIFEST))? == increment,
         "shuffle sampling manifests changed"
     );
     let artifacts = files(root)?;
@@ -233,6 +250,40 @@ pub fn validate(root: &Path, scope: Option<&ScopeBbox>) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// The admitted day lists a sealed shuffle carries.
+pub fn sampling_days(root: &Path) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+    let read = |name: &str| -> Result<BTreeSet<String>> {
+        let path = root.join(name);
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("missing sampling manifest {}; rerun shuffle", path.display()))?;
+        let mut days = BTreeSet::new();
+        for day in text.lines() {
+            crate::period::parse_date_id(day)?;
+            anyhow::ensure!(days.insert(day.to_owned()), "duplicate sampling day {day}");
+        }
+        Ok(days)
+    };
+    let baseline = read(BASELINE_DAYS_MANIFEST)?;
+    let increment = read(INCREMENT_DAYS_MANIFEST)?;
+    anyhow::ensure!(!baseline.is_empty(), "empty baseline sampling window");
+    anyhow::ensure!(
+        increment.is_subset(&baseline),
+        "increment days must be baseline days"
+    );
+    Ok((baseline, increment))
+}
+
+/// The sampling window every Stage 2 output of a sealed shuffle is stamped with.
+pub fn sampling_window(root: &Path) -> Result<noise_compute::emission::aircraft::SamplingWindow> {
+    let (baseline, increment) = sampling_days(root)?;
+    Ok(noise_compute::emission::aircraft::SamplingWindow {
+        baseline_days: u16::try_from(baseline.len())?,
+        increment_days: u16::try_from(increment.len())?,
+        baseline_days_sha256: crate::provider_receipt::day_list_sha256(&baseline),
+        increment_days_sha256: crate::provider_receipt::day_list_sha256(&increment),
+    })
 }
 
 pub fn source_receipts(root: &Path) -> Result<Vec<(String, PathBuf, Vec<u8>)>> {

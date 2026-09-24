@@ -14,7 +14,9 @@ pub const AIRBORNE_REDUCTION_ROWS: usize = 8192;
 pub struct DeviceAirborneSource {
     pub endpoints: [f32; 4],
     pub physical: [f32; 12],
-    pub identity: [i32; 4],
+    /// Installation, class, departure, period, secondary-only provenance
+    /// (the index into the two-entry provenance weight table).
+    pub identity: [i32; 5],
 }
 impl DeviceAirborneSource {
     pub fn prepare(batch: &AirborneSegmentBatch<'_>, i: usize) -> Result<Option<Self>> {
@@ -62,6 +64,7 @@ impl DeviceAirborneSource {
                 p.class_idx as i32,
                 i32::from(p.is_departure),
                 i32::from(segment.period),
+                i32::from(batch.flags[i] & air::SEGMENT_FLAG_SECONDARY_ONLY != 0),
             ],
         };
         ensure!(
@@ -221,7 +224,7 @@ mod tests {
     use super::*;
     #[test]
     fn cuda_airborne_layout_and_original_horizon_entries() {
-        assert_eq!(std::mem::size_of::<DeviceAirborneSource>(), 80);
+        assert_eq!(std::mem::size_of::<DeviceAirborneSource>(), 84);
         assert_eq!(std::mem::size_of::<DeviceAirborneReceiver>(), 32);
         assert_eq!(std::mem::offset_of!(DeviceAirborneReceiver, altitude), 24);
         struct Flat;

@@ -1,6 +1,6 @@
 //! Exact day sets, typed segment validation, and prerequisites for aircraft stage reuse.
 
-use crate::{source_cache::SourceCache, ClassFilterArg, Feed, FromStage};
+use crate::{source_cache::SourceCache, FromStage};
 use aircraft_extract::{arrow_schemas, period::parse_date_id, scope::ScopeBbox};
 use anyhow::{Context, Result};
 use arrow::{
@@ -121,56 +121,20 @@ pub(crate) fn validated_days(
     Ok(set)
 }
 
-pub fn read_window_days(dir: &Path, name: &str) -> Result<BTreeSet<String>> {
-    let path = dir.join(name);
-    let contents = std::fs::read_to_string(&path).with_context(|| {
-        format!(
-            "missing sampling manifest {}; rerun shuffle",
-            path.display()
-        )
-    })?;
-    validated_days(contents.lines().map(str::to_owned), name == "ga_days")
-}
-
-pub fn read_window_n_days(dir: &Path) -> Result<u16> {
-    Ok(u16::try_from(read_window_days(dir, "days")?.len())?)
-}
-
-pub fn read_ga_n_days(dir: &Path) -> Result<u16> {
-    Ok(u16::try_from(read_window_days(dir, "ga_days")?.len())?)
-}
-
-pub fn require_matching_window_days(dir: &Path, days: &[String]) -> Result<()> {
-    let supplied: BTreeSet<_> = days.iter().cloned().collect();
-    anyhow::ensure!(
-        supplied == read_window_days(dir, "days")?,
-        "requested days differ from shuffled days; rerun shuffle for the requested day set"
-    );
-    Ok(())
-}
-
+/// Completed day shards: schema, day and provider provenance, plus the
+/// primary publisher receipts when the primary archive has a catalog.
 pub fn validate_segments(
     dir: &Path,
     days: &[String],
-    filter: ClassFilterArg,
-    feed: Feed,
-    adsb_cache: &Path,
+    primary: Option<&SourceCache>,
+    sources: [u8; 2],
 ) -> Result<()> {
-    let selected_days;
-    let days = if matches!(feed, Feed::Adsblol) {
+    if let Some(cache) = primary {
         let work = dir
             .parent()
             .context("segments directory has no work parent")?;
-        let cache = SourceCache::new(adsb_cache, work, filter);
-        selected_days = cache
-            .validate(Some(days), None)?
-            .into_keys()
-            .collect::<Vec<_>>();
-        cache.validate(Some(&selected_days), Some("segments"))?;
-        &selected_days
-    } else {
-        days
-    };
+        SourceCache::new(cache.root(), work).validate(Some(days), Some("segments"))?;
+    }
     let expected = validated_days(days.iter().cloned(), false)?;
     let paths = list_segments_day_paths(dir)?;
     let present: BTreeSet<_> = paths
@@ -178,13 +142,16 @@ pub fn validate_segments(
         .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
         .collect();
     anyhow::ensure!(
-        present == expected,
-        "segment day set mismatch: missing {:?}, unexpected {:?}",
-        expected.difference(&present).collect::<Vec<_>>(),
-        present.difference(&expected).collect::<Vec<_>>()
+        present.is_superset(&expected),
+        "segment day set misses {:?}",
+        expected.difference(&present).collect::<Vec<_>>()
     );
     for path in paths {
-        let date_id = parse_date_id(path.file_stem().unwrap().to_str().unwrap())?;
+        let day = path.file_stem().unwrap().to_str().unwrap().to_owned();
+        if !expected.contains(&day) {
+            continue;
+        }
+        let date_id = parse_date_id(&day)?;
         let reader = FileReader::try_new(File::open(&path)?, None)?;
         let schema = reader.schema();
         let expected_schema = arrow_schemas::segments_schema();
@@ -207,41 +174,19 @@ pub fn validate_segments(
                 "null segment field: {}",
                 path.display()
             );
-            let dates = batch
-                .column_by_name("date_id")
-                .unwrap()
+            let column = |name: &str| batch.column_by_name(name).unwrap();
+            let dates = column("date_id")
                 .as_any()
                 .downcast_ref::<Int16Array>()
                 .unwrap();
-            let profiles = batch
-                .column_by_name("profile_idx")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<UInt8Array>()
-                .unwrap();
-            let vehicles = batch
-                .column_by_name("veh_kind")
-                .unwrap()
-                .as_any()
-                .downcast_ref::<UInt8Array>()
-                .unwrap();
-            let sources = batch
-                .column_by_name("source_id")
-                .unwrap()
+            let providers = column("source_id")
                 .as_any()
                 .downcast_ref::<UInt8Array>()
                 .unwrap();
             for i in 0..batch.num_rows() {
-                let ga = vehicles.value(i) == 0
-                    && aircraft_extract::profile::is_ga_sampled_profile(profiles.value(i));
-                let allowed = match filter {
-                    ClassFilterArg::All => true,
-                    ClassFilterArg::Ga => ga,
-                    ClassFilterArg::NonGa => !ga,
-                };
                 anyhow::ensure!(
-                    dates.value(i) == date_id && sources.value(i) == feed.source_id() && allowed,
-                    "wrong date, feed, or hybrid class at {} row {i}",
+                    dates.value(i) == date_id && sources.contains(&providers.value(i)),
+                    "wrong date or provider at {} row {i}",
                     path.display()
                 );
             }
@@ -253,22 +198,20 @@ pub fn validate_segments(
 /// Validate one exact primary window while preserving each source work directory.
 pub fn reuse_segments_from_directories(
     dirs: &[PathBuf],
-    days: &[String],
-    filter: ClassFilterArg,
-    feed: Feed,
-    adsb_cache: &Path,
+    days: &BTreeSet<String>,
+    primary: Option<&SourceCache>,
+    sources: [u8; 2],
 ) -> Result<Vec<PathBuf>> {
     let paths = list_segments_day_paths_multi(dirs)?;
-    let expected = validated_days(days.iter().cloned(), false)?;
     let present: BTreeSet<_> = paths
         .iter()
         .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
         .collect();
     anyhow::ensure!(
-        present == expected,
+        present == *days,
         "segment day set mismatch: missing {:?}, unexpected {:?}",
-        expected.difference(&present).collect::<Vec<_>>(),
-        present.difference(&expected).collect::<Vec<_>>()
+        days.difference(&present).collect::<Vec<_>>(),
+        present.difference(days).collect::<Vec<_>>()
     );
     for dir in dirs {
         let selected: Vec<_> = paths
@@ -276,7 +219,9 @@ pub fn reuse_segments_from_directories(
             .filter(|path| path.parent() == Some(dir.as_path()))
             .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
             .collect();
-        validate_segments(dir, &selected, filter, feed, adsb_cache)?;
+        if !selected.is_empty() {
+            validate_segments(dir, &selected, primary, sources)?;
+        }
     }
     Ok(paths)
 }
@@ -304,67 +249,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sampling_windows_require_exact_valid_day_lists() {
-        let temp = tempfile::tempdir().unwrap();
-        assert!(read_ga_n_days(temp.path()).is_err());
-        std::fs::write(temp.path().join("days"), "2025-01-01\n2025-02-01\n").unwrap();
-        std::fs::write(
-            temp.path().join("ga_days"),
-            "2025-01-01\n2025-01-02\n2025-01-03\n",
-        )
-        .unwrap();
-        assert_eq!(read_window_n_days(temp.path()).unwrap(), 2);
-        assert_eq!(read_ga_n_days(temp.path()).unwrap(), 3);
-        assert!(require_matching_window_days(
-            temp.path(),
-            &["2025-01-01".into(), "2025-03-01".into()]
-        )
-        .is_err());
-        std::fs::write(temp.path().join("ga_days"), "").unwrap();
-        assert_eq!(read_ga_n_days(temp.path()).unwrap(), 0);
-        for invalid in ["2025-01-01\n2025-01-01\n", "2025-02-30\n", ""] {
-            std::fs::write(temp.path().join("days"), invalid).unwrap();
-            assert!(read_window_n_days(temp.path()).is_err());
-        }
-    }
-
-    #[test]
-    fn same_count_wrong_days_and_truncated_pass_cannot_resume() {
+    fn completed_day_shards_must_hold_every_requested_day_of_known_providers() {
+        use aircraft_extract::flight::source_id;
         let temp = tempfile::tempdir().unwrap();
         let day = temp.path().join("2025-01-01.arrow");
         aircraft_extract::arrow_io::write_segments(&day, &[]).unwrap();
-        assert!(validate_segments(
-            temp.path(),
-            &["2025-01-01".into()],
-            ClassFilterArg::Ga,
-            Feed::Adsbexchange,
-            temp.path()
-        )
-        .is_ok());
-        assert!(validate_segments(
-            temp.path(),
-            &["2025-02-01".into()],
-            ClassFilterArg::Ga,
-            Feed::Adsbexchange,
-            temp.path()
-        )
-        .is_err());
-        assert!(validate_segments(
-            temp.path(),
-            &["2025-01-01".into(), "2025-02-01".into()],
-            ClassFilterArg::Ga,
-            Feed::Adsbexchange,
-            temp.path()
-        )
-        .is_err());
+        let providers = [source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE];
+        assert!(validate_segments(temp.path(), &["2025-01-01".into()], None, providers).is_ok());
+        assert!(validate_segments(temp.path(), &["2025-02-01".into()], None, providers).is_err());
+        let mut segment = aircraft_extract::flight::FlightSegment {
+            flight_id: 1,
+            callsign: "TEST".into(),
+            aircraft_type: *b"B738",
+            profile_idx: aircraft_extract::profile::profile_idx("B738"),
+            source_id: source_id::SCHEDULE_SYNTH,
+            origin: 0,
+            veh_kind: 0,
+            gse_class: 0,
+            period: 0,
+            date_id: parse_date_id("2025-01-01").unwrap(),
+            phase: aircraft_extract::flight::Phase::Airborne,
+            flags: 0,
+            start_lat: 50.0,
+            start_lon: 14.0,
+            start_alt_m: 1000.0,
+            end_lat: 50.001,
+            end_lon: 14.001,
+            end_alt_m: 1000.0,
+            speed_kt: 250.0,
+            length_m: 100.0,
+            agl_avg_m: 1000.0,
+            start_elev_m: 0.0,
+            end_elev_m: 0.0,
+        };
+        aircraft_extract::arrow_io::write_segments(&day, std::slice::from_ref(&segment)).unwrap();
+        assert!(validate_segments(temp.path(), &["2025-01-01".into()], None, providers).is_err());
+        segment.source_id = source_id::ADSB_EXCHANGE;
+        aircraft_extract::arrow_io::write_segments(&day, &[segment]).unwrap();
+        assert!(validate_segments(temp.path(), &["2025-01-01".into()], None, providers).is_ok());
         std::fs::write(day, "broken Arrow").unwrap();
-        assert!(validate_segments(
-            temp.path(),
-            &["2025-01-01".into()],
-            ClassFilterArg::Ga,
-            Feed::Adsbexchange,
-            temp.path()
-        )
-        .is_err());
+        assert!(validate_segments(temp.path(), &["2025-01-01".into()], None, providers).is_err());
     }
 }

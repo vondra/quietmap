@@ -18,7 +18,7 @@ pub struct AirborneScene<'a> {
     pub(crate) independent: Vec<RecordBatch>,
     pub(crate) chords: Vec<RecordBatch>,
     pub(crate) days: u16,
-    pub(crate) weights: air::ClassWeights,
+    pub(crate) weights: air::ProvenanceWeights,
 }
 impl<'a> AirborneScene<'a> {
     pub fn load(
@@ -45,9 +45,9 @@ impl<'a> AirborneScene<'a> {
             independent: Vec::new(),
             chords: Vec::new(),
             days: 0,
-            weights: air::ClassWeights::uniform(),
+            weights: air::ProvenanceWeights::PRIMARY_ONLY,
         };
-        let mut stamp = None;
+        let mut stamp: Option<air::SamplingWindow> = None;
         let mut owners: Vec<_> = squares.iter().collect();
         owners.sort_by_key(|s| (s.y, s.x));
         for square in owners {
@@ -61,25 +61,15 @@ impl<'a> AirborneScene<'a> {
                 .map_err(anyhow::Error::msg)?;
             AirborneRowAccum::new(&[RecordBatch::new_empty(schema.clone())])
                 .map_err(anyhow::Error::msg)?;
-            let days = schema
-                .metadata()
-                .get("n_days")
-                .and_then(|v| v.parse::<u16>().ok())
-                .filter(|v| *v > 0)
-                .context("airborne n_days missing")?;
-            let current = schema
-                .metadata()
-                .get(air::SAMPLE_DAYS_BY_CLASS_KEY)
-                .context("airborne class windows missing")?;
+            let current =
+                air::SamplingWindow::from_metadata(schema.metadata()).map_err(anyhow::Error::msg)?;
             ensure!(
-                stamp.as_ref().is_none_or(|old| old == current)
-                    && (scene.days == 0 || scene.days == days),
-                "mixed airborne normalization windows"
+                stamp.as_ref().is_none_or(|old| *old == current),
+                "mixed airborne sampling windows"
             );
-            scene.weights =
-                air::ClassWeights::parse(Some(current), days).map_err(anyhow::Error::msg)?;
-            scene.days = days;
-            stamp = Some(current.clone());
+            scene.weights = current.provenance_weights();
+            scene.days = current.baseline_days;
+            stamp = Some(current);
             for batch in reader {
                 let batch = batch?;
                 let decoded = AirborneRowAccum::new(std::slice::from_ref(&batch))

@@ -49,12 +49,9 @@ pub fn compute_aircraft_v6(
     // (β ≥ 26.6°, see segment_sel).
     horizon: Option<&ReceiverHorizon>,
     buildings: Option<&BuildingHorizon>,
-    n_days: u16,
-    // GA hybrid per-class weight LUT, built from the arrows'
-    // `sample_days_by_class` metadata by the caller.
-    // Threads into the airborne scatter; cruise is airline-only (no GA
-    // classes reach cruise altitude) so it ignores this.
-    class_weights: &crate::emission::aircraft::ClassWeights,
+    // Baseline days divide every energy and count; the provenance weight
+    // turns a secondary-only row into increment-day normalisation.
+    window: &crate::emission::aircraft::SamplingWindow,
     // Max airborne sub-segment traces to keep in TraceCollector (the
     // bounded top-K heap). `0` = don't allocate any traces — used by
     // callers that pass `traces = None` anyway.
@@ -62,7 +59,8 @@ pub fn compute_aircraft_v6(
     traces: Option<&mut TraceCollector>,
     timings: Option<&mut crate::types::LayerTimings>,
 ) -> (NoisePeriods, Vec<Contributor>, AircraftBandData) {
-    let n_days_f = (n_days as f64).max(1.0);
+    let n_days_f = f64::from(window.baseline_days).max(1.0);
+    let weights = window.provenance_weights();
 
     // Per-layer timing probes. The print is env-gated (POPUP_TIMING=1);
     // the 4 Instant::now()/elapsed() calls run unconditionally but cost
@@ -80,7 +78,7 @@ pub fn compute_aircraft_v6(
             receiver,
             airborne_rows,
             n_days_f,
-            class_weights,
+            &weights,
             horizon,
             buildings,
             trace_cap,
@@ -107,6 +105,7 @@ pub fn compute_aircraft_v6(
         cruise_rows,
         rasters,
         n_days_f,
+        &weights,
         &mut cruise_flights,
         &mut cruise_flight_stats,
         &mut top_flight_candidates,
@@ -119,11 +118,14 @@ pub fn compute_aircraft_v6(
         airborne::build_detail(
             &flights,
             &cruise_flights,
-            cruise_flight_stats.len(),
+            crate::compute::key_sorted(&cruise_flight_stats)
+                .into_iter()
+                .map(|(_, stats)| stats.weight)
+                .sum(),
             &top_flight_candidates,
             &cruise_band,
             n_days_f,
-            (class_weights.ga_n_days() as f64).max(1.0),
+            u32::from(window.increment_days),
         );
     let t_airborne_detail = t_start.elapsed() - t_airborne_scatter - t_cruise_scatter;
 
@@ -209,7 +211,12 @@ mod tests {
     #[test]
     fn silence_when_no_data() {
         let receiver = Receiver::new(50.10, 14.262, 0.0);
-        let w = crate::emission::aircraft::ClassWeights::uniform();
+        let w = crate::emission::aircraft::SamplingWindow {
+            baseline_days: 1,
+            increment_days: 0,
+            baseline_days_sha256: String::new(),
+            increment_days_sha256: String::new(),
+        };
         let (periods, contribs, _band) = compute_aircraft_v6(
             &receiver,
             &[],
@@ -217,7 +224,6 @@ mod tests {
             &FlatGround,
             None,
             None,
-            1,
             &w,
             0,
             None,
@@ -254,7 +260,12 @@ mod tests {
 
         const N_FLIGHTS: usize = 300;
         let receiver = Receiver::new(50.0, 14.0, 300.0);
-        let w = crate::emission::aircraft::ClassWeights::uniform();
+        let w = crate::emission::aircraft::SamplingWindow {
+            baseline_days: 7,
+            increment_days: 0,
+            baseline_days_sha256: String::new(),
+            increment_days_sha256: String::new(),
+        };
         let horizon = ReceiverHorizon::build(
             |_, _| 300.0,
             receiver.lat,
@@ -382,6 +393,7 @@ mod tests {
                 rep_speed_kt: 450.0,
                 source_id: 0,
                 origin: 0,
+                secondary_only: false,
                 unique_count: 3,
                 top_candidates: &cand_store[i],
             })
@@ -395,7 +407,6 @@ mod tests {
                 &FlatGround,
                 Some(&horizon),
                 None,
-                7,
                 &w,
                 0,
                 None,

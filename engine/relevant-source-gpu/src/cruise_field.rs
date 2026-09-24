@@ -127,7 +127,7 @@ impl CruiseField {
         )
         .context("invalid cruise support")?;
         let mut groups = Vec::new();
-        let mut days = 0;
+        let mut window: Option<aircraft::SamplingWindow> = None;
         let mut owners: Vec<_> = squares.iter().collect();
         owners.sort_by_key(|square| (square.y, square.x));
         for square in owners {
@@ -138,14 +138,14 @@ impl CruiseField {
             let reader = FileReader::try_new(Cursor::new(bytes), None)?;
             assert_cruise_contract(&relative, &[RecordBatch::new_empty(reader.schema())])
                 .map_err(anyhow::Error::msg)?;
-            let file_days = reader
-                .schema()
-                .metadata()
-                .get("n_days")
-                .and_then(|v| v.parse::<u16>().ok())
-                .filter(|v| *v > 0)
-                .context("cruise has no valid n_days")?;
-            days = days.max(file_days);
+            let file_window = aircraft::SamplingWindow::from_metadata(reader.schema().metadata())
+                .map_err(anyhow::Error::msg)?;
+            ensure!(
+                window.as_ref().is_none_or(|seen| *seen == file_window),
+                "mixed cruise sampling windows"
+            );
+            let weights = file_window.provenance_weights();
+            window = Some(file_window);
             for batch in reader {
                 let rows = CruiseRowAccum::new(&[batch?]).map_err(anyhow::Error::msg)?;
                 let slices = rows.views();
@@ -161,7 +161,7 @@ impl CruiseField {
                     buckets: Vec::new(),
                 };
                 for (index, row) in views.iter().enumerate() {
-                    let Some((segment, density)) = cruise_segment(row, index) else {
+                    let Some((segment, density)) = cruise_segment(row, index, &weights) else {
                         continue;
                     };
                     let terrain = SegmentTerrain::sample(&segment, rasters);
@@ -206,6 +206,7 @@ impl CruiseField {
                 }
             }
         }
+        let days = window.map_or(0, |window| window.baseline_days);
         Self::build(owner, lattice, groups, days, rasters)
     }
     fn build(

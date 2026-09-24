@@ -1,50 +1,35 @@
-//! TAR day validation and streaming archive traversal; corrupt or incomplete inputs fail loudly.
+//! TAR day validation and streaming archive traversal; a structurally broken archive fails loudly, a corrupt trace member is recorded.
 
-use super::typecode_probe::probe_typecode_prefix;
+use super::selection::trace_identity;
 use super::{parse_trace, AircraftTrace};
 use anyhow::{Context, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+/// One provider-day archive walk: one whole trace per aircraft address plus
+/// the trace members that failed to decode.
+pub struct DayArchiveRead {
+    pub traces: Vec<AircraftTrace>,
+    pub corrupt_members: Vec<CorruptMember>,
+}
+
+/// A trace member whose gzip or JSON failed to decode.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CorruptMember {
+    pub member: String,
+    pub error: String,
+    /// Another export of the same day carries an intact trace of this address.
+    pub recovered: bool,
+}
+
 /// Read every aircraft trace from a single day's TAR archive(s).
-/// Multipart support handles `.tar.aa` + `.tar.ab` continuation files.
-pub fn read_day_traces(day_dir: &Path) -> Result<Vec<AircraftTrace>> {
-    Ok(read_day_traces_filtered(day_dir, None)?.0)
-}
-
-/// Outcome counters for the gzip typecode prefix probe in
-/// [`read_day_traces_filtered`]. The probe is an optimization ONLY —
-/// a miss falls back to the full inflate+parse and the post-parse
-/// filter, never to classification by absence.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct TypecodeProbeStats {
-    /// `"t":"…"` recovered from the inflated prefix → the probe alone
-    /// decided keep / skip.
-    pub probe_hits: u64,
-    /// Probe hit whose typecode the prefilter rejected — full
-    /// inflate+parse avoided (the GA pass's cost lever: airliner
-    /// traces are the longest files).
-    pub skipped_pre_parse: u64,
-    /// No typecode in the prefix (absent `"t"` key — e.g. `noRegData`
-    /// TIS-B targets — non-string value, value crossing the probe
-    /// window, undecodable gzip) → full parse fallback.
-    pub probe_misses: u64,
-}
-
-/// Like [`read_day_traces`], with an optional typecode prefilter that
-/// drives a gzip prefix probe: entries whose probed typecode the
-/// filter rejects skip the full inflate+parse entirely; probe misses
-/// are fully parsed and then filtered on the authoritative parsed
-/// typecode. With `None` the walk is identical to `read_day_traces`.
-pub fn read_day_traces_filtered(
-    day_dir: &Path,
-    typecode_prefilter: Option<&dyn Fn(&str) -> bool>,
-) -> Result<(Vec<AircraftTrace>, TypecodeProbeStats)> {
+/// Multipart support handles `.tar.aa` + `.tar.ab` continuation files. A
+/// member's bytes are read before decoding, so an I/O or TAR error fails the
+/// day while a corrupt member is only recorded.
+pub fn read_day_archive(day_dir: &Path) -> Result<DayArchiveRead> {
     let tar_parts = archive_parts(day_dir)?;
-    let mut stats = TypecodeProbeStats::default();
-
     let readers: Vec<File> = tar_parts
         .iter()
         .map(File::open)
@@ -55,57 +40,54 @@ pub fn read_day_traces_filtered(
     archive.set_ignore_zeros(true);
 
     let mut traces = Vec::new();
+    let mut corrupt: Vec<(String, String)> = Vec::new();
     for entry in archive.entries()? {
         let mut entry =
             entry.with_context(|| format!("read TAR entry in {}", day_dir.display()))?;
         let path = entry.path()?.into_owned();
-        let path_str = path.to_string_lossy();
+        let path_str = path.to_string_lossy().into_owned();
         if !path_str.contains("trace_full_")
             || !(path_str.ends_with(".json") || path_str.ends_with(".json.gz"))
         {
             continue;
         }
-        let Some(filter) = typecode_prefilter else {
-            if let Some(trace) =
-                parse_trace(entry).with_context(|| format!("parse {}", path.display()))?
-            {
-                traces.push(trace);
-            }
-            continue;
-        };
-        // Sequential tar reading consumes the entry either way; buffer
-        // the compressed bytes once so the prefix probe and the
-        // (conditional) full parse share a single read.
         let mut gz_bytes = Vec::with_capacity(entry.size() as usize);
-        entry.read_to_end(&mut gz_bytes)?;
-        match probe_typecode_prefix(&gz_bytes) {
-            Some(typecode) => {
-                stats.probe_hits += 1;
-                if !filter(&typecode) {
-                    stats.skipped_pre_parse += 1;
-                    continue;
-                }
-                if let Some(trace) = parse_trace(gz_bytes.as_slice())
-                    .with_context(|| format!("parse {}", path.display()))?
-                {
-                    traces.push(trace);
-                }
-            }
-            None => {
-                stats.probe_misses += 1;
-                // Never classify by absence: parse fully, then filter on
-                // the parsed typecode.
-                if let Some(trace) = parse_trace(gz_bytes.as_slice())
-                    .with_context(|| format!("parse {}", path.display()))?
-                {
-                    if filter(&trace.aircraft_type) {
-                        traces.push(trace);
-                    }
-                }
-            }
+        entry
+            .read_to_end(&mut gz_bytes)
+            .with_context(|| format!("read {path_str} in {}", day_dir.display()))?;
+        match parse_trace(gz_bytes.as_slice()) {
+            Ok(Some(trace)) => traces.push(trace),
+            Ok(None) => {}
+            Err(error) => corrupt.push((path_str, format!("{error:#}"))),
         }
     }
-    Ok((super::selection::select_whole_traces(traces), stats))
+    let traces = super::selection::select_whole_traces(traces);
+    let intact: HashSet<(bool, u32)> = traces
+        .iter()
+        .filter_map(|trace| trace_identity(&trace.icao24))
+        .collect();
+    let corrupt_members = corrupt
+        .into_iter()
+        .map(|(member, error)| CorruptMember {
+            recovered: member_address(&member)
+                .and_then(trace_identity)
+                .is_some_and(|identity| intact.contains(&identity)),
+            member,
+            error,
+        })
+        .collect();
+    Ok(DayArchiveRead {
+        traces,
+        corrupt_members,
+    })
+}
+
+/// The aircraft address a `…/trace_full_<address>.json[.gz]` member names.
+fn member_address(member: &str) -> Option<&str> {
+    let name = member.rsplit('/').next()?;
+    let name = name.strip_prefix("trace_full_")?;
+    name.strip_suffix(".json.gz")
+        .or_else(|| name.strip_suffix(".json"))
 }
 
 /// Resolve every TAR stream and require contiguous split parts plus its end marker.

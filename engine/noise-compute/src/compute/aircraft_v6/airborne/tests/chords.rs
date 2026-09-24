@@ -71,7 +71,7 @@ fn received_sel_db(flights: &HashMap<u64, FlightAccum>, fid: u64) -> f64 {
 #[test]
 fn split_chord_takes_the_event_floor_as_one_event() {
     let (receiver, horizon) = equator_receiver();
-    let weights = aircraft::ClassWeights::uniform();
+    let weights = aircraft::ProvenanceWeights::PRIMARY_ONLY;
     let fid = flight_id::pack_real(0xB738, 1_750_000_000).unwrap();
     let mut whole = SynthColumns::new();
     let key = whole.add_flight("CSA1", "B738", aircraft::profile_idx("B738"));
@@ -132,7 +132,7 @@ fn split_chord_takes_the_event_floor_as_one_event() {
 fn split_chords_hold_one_trace_slot_each_and_draw_whole() {
     const CAP: usize = 150;
     let (receiver, horizon) = equator_receiver();
-    let weights = aircraft::ClassWeights::uniform();
+    let weights = aircraft::ProvenanceWeights::PRIMARY_ONLY;
     let build = |pieces: u32| {
         let mut cols = SynthColumns::new();
         for flight in 0..200u64 {
@@ -192,7 +192,7 @@ fn split_chords_hold_one_trace_slot_each_and_draw_whole() {
 #[test]
 fn consecutive_split_chords_stay_separate_events() {
     let (receiver, horizon) = equator_receiver();
-    let weights = aircraft::ClassWeights::uniform();
+    let weights = aircraft::ProvenanceWeights::PRIMARY_ONLY;
     let fid = flight_id::pack_real(0xC0DE, 1_750_000_000).unwrap();
     let mut cols = SynthColumns::new();
     let key = cols.add_flight("TWO", "A320", aircraft::profile_idx("A320"));

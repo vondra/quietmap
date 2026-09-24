@@ -486,7 +486,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         &sources.airport_summary,
         rasters,
         &obstacle_set,
-        sources.n_days,
+        sources.aircraft_sampling_window.as_ref(),
         top_k_per_kind,
     ) {
         square_store::warn_once::warn_once(

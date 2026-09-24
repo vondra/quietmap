@@ -57,40 +57,6 @@ fn build_osm_ref_lookup(batches: &[RecordBatch]) -> HashMap<u64, String> {
     out
 }
 
-/// Every loaded aircraft batch must agree on both class windows; otherwise
-/// a mixed release can amplify full-year GA energy by the airline divisor.
-/// An empty receiver has no rows to weight.
-fn build_class_weights(
-    airborne_batches: &[RecordBatch],
-    airport_traffic_batches: &[RecordBatch],
-    n_days: u16,
-) -> Result<noise_compute::emission::aircraft::ClassWeights, String> {
-    use noise_compute::emission::aircraft::{ClassWeights, SAMPLE_DAYS_BY_CLASS_KEY};
-    if airborne_batches.is_empty() && airport_traffic_batches.is_empty() {
-        return Ok(ClassWeights::uniform());
-    }
-    let mut stamp: Option<String> = None;
-    for batch in airborne_batches
-        .iter()
-        .chain(airport_traffic_batches.iter())
-    {
-        let v = batch.schema_ref().metadata().get(SAMPLE_DAYS_BY_CLASS_KEY);
-        match (v, &stamp) {
-            (Some(v), None) => stamp = Some(v.clone()),
-            (Some(v), Some(seen)) if v != seen => {
-                return Err(format!(
-                    "{SAMPLE_DAYS_BY_CLASS_KEY} disagrees across loaded aircraft arrows \
-                     ({seen:?} vs {v:?}) — mixed/stale shards; re-extract / re-merge"
-                ));
-            }
-            (Some(_), Some(_)) => {}
-            // Current writers always carry the required normalization stamp.
-            (None, _) => return ClassWeights::parse(None, n_days),
-        }
-    }
-    ClassWeights::parse(stamp.as_deref(), n_days)
-}
-
 /// Add observed aircraft noise after the non-aircraft point computation.
 /// Traffic requires complete cell-local summaries of the global movement unions.
 #[allow(clippy::too_many_arguments)]
@@ -107,7 +73,8 @@ pub fn add_v6_aircraft_to_result(
     // Vector obstacles feed airborne building diffraction and ground-ops
     // screening. Cruise remains structurally exempt.
     obstacles: &noise_compute::propagation::obstacle_index::ObstacleSet,
-    n_days: u16,
+    // The window every opened aircraft file carries (checked at load).
+    sampling_window: Option<&noise_compute::emission::aircraft::SamplingWindow>,
     // Per-kind top-K cap for airborne sub-segment traces — passed to
     // compute_aircraft_v6 so the bounded min-heap in airborne::scatter
     // is sized correctly. query_noise_impl sets this to
@@ -118,8 +85,6 @@ pub fn add_v6_aircraft_to_result(
     assert_airborne_contract("airborne.arrow", airborne_batches)?;
     assert_cruise_contract("cruise.arrow", cruise_batches)?;
     assert_airport_traffic_contract("airport_traffic.arrow", airport_traffic_batches)?;
-    // Contracts guard geometry; the shared window stamp guards normalization.
-    let class_weights = build_class_weights(airborne_batches, airport_traffic_batches, n_days)?;
     let airborne_rows = AirborneRowAccum::new(airborne_batches)?;
     let cruise_rows = CruiseRowAccum::new(cruise_batches)?;
     let traffic_rows = AirportTrafficRowAccum::new(airport_traffic_batches)?;
@@ -135,6 +100,7 @@ pub fn add_v6_aircraft_to_result(
     if total_rows == 0 {
         return Ok(());
     }
+    let window = sampling_window.ok_or("aircraft rows without a sampling window stamp")?;
 
     // Airborne screens against one receiver horizon; cruise is exempt.
     let horizon = if n_airborne_rows == 0 {
@@ -172,8 +138,7 @@ pub fn add_v6_aircraft_to_result(
         rasters,
         horizon.as_ref(),
         building_horizon.as_ref(),
-        n_days,
-        &class_weights,
+        window,
         trace_cap,
         Some(traces),
         result.timings.as_mut(),
@@ -194,8 +159,7 @@ pub fn add_v6_aircraft_to_result(
         let traffic_contribs = compute_airport_traffic::run(
             receiver,
             &traffic_views,
-            n_days,
-            &class_weights,
+            window,
             rasters,
             obstacles,
             &osm_ref_lookup,

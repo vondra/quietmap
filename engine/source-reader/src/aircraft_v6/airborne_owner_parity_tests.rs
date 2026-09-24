@@ -210,8 +210,7 @@ fn popup(receiver: &Receiver, batches: &[AirborneSegmentBatch<'_>]) -> Popup {
         &FlatGround,
         Some(&horizon),
         None,
-        12,
-        &aircraft::ClassWeights::uniform(),
+        &crate::structure_test_fixture::sampling_window(12, 0),
         1_000,
         Some(&mut traces),
         None,
@@ -232,9 +231,9 @@ fn build_prepared(root: &Path, rows: &[FlightSegment]) -> std::path::PathBuf {
     }
     aircraft_extract::arrow_io::write_segments(&day, &rows).unwrap();
     let by_square = root.join("segments_by_square");
-    aircraft_extract::shuffle::shuffle_per_square(&[day], &[], &by_square, None).unwrap();
+    aircraft_extract::shuffle::shuffle_per_square(&[aircraft_extract::provider_receipt::AdmittedDay { segments: day, increment: false }], &by_square, None).unwrap();
     let prepared = root.join("prepared");
-    aircraft_extract::stage_2a::run_stage_2a(&by_square, &prepared, 12, 0, None).unwrap();
+    aircraft_extract::stage_2a::run_stage_2a(&by_square, &prepared, &crate::structure_test_fixture::sampling_window(12, 0), None).unwrap();
     prepared
 }
 

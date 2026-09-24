@@ -69,7 +69,9 @@ fn two_batches_with_broken_second_message(path: &Path) {
         "leisure_contract".into(),
         square_store::store::LEISURE_CONTRACT_V3.into(),
     );
-    metadata.insert("n_days".into(), "12".into());
+    for (key, value) in fx::sampling_window(12, 0).metadata() {
+        metadata.insert(key.into(), value);
+    }
     metadata.insert("rail_traffic_contract".into(), "1".into());
     metadata.insert("road_traffic_contract".into(), "1".into());
     // The one generic fixture serves every layer name; the airborne file is

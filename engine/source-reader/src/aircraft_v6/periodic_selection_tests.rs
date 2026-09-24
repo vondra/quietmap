@@ -61,8 +61,7 @@ fn output(receiver: &Receiver, rows: &[AirborneSegmentBatch<'_>]) -> serde_json:
         &FlatGround,
         Some(&horizon),
         None,
-        12,
-        &aircraft::ClassWeights::uniform(),
+        &crate::structure_test_fixture::sampling_window(12, 0),
         0,
         None,
         None,
@@ -95,7 +94,7 @@ fn periodic_producer_batches_preserve_positive_seam_flights_and_row_identity() {
         for segment in &segments {
             aircraft_extract::segment::split::split_airborne_segment(segment.clone(), &mut pieces);
         }
-        arrow_io::write_airborne(&path, &pieces, 12, 0).unwrap();
+        arrow_io::write_airborne(&path, &pieces, &crate::structure_test_fixture::sampling_window(12, 0)).unwrap();
         let (_, batches) = arrow_io::read_record_batches(&path).unwrap();
         let all = AirborneRowAccum::new(&batches).unwrap();
         let rows = all.views();

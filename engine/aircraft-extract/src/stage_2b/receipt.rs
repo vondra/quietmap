@@ -77,6 +77,16 @@ fn hash_file(path: &Path) -> Result<Vec<u8>> {
     Ok(digest.finalize().to_vec())
 }
 
+fn window_key(window: &SamplingWindow) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        window.baseline_days,
+        window.increment_days,
+        window.baseline_days_sha256,
+        window.increment_days_sha256
+    )
+}
+
 fn scope_key(scope: Option<&ScopeBbox>) -> String {
     scope
         .map(|value| {
@@ -92,9 +102,8 @@ pub(super) fn create(
     directory: &Path,
     spill_filesystem: &std::fs::File,
     inputs: &[(String, String)],
-    days: u16,
+    window: &SamplingWindow,
     scope: Option<&ScopeBbox>,
-    ga_cruise: u64,
 ) -> Result<()> {
     // The descriptor predates the raw writes; syncfs persists their data and
     // directory entries and reports writeback errors before any receipt exists.
@@ -104,7 +113,7 @@ pub(super) fn create(
     let watermark = crate::arrow_io::spill_receipt_watermark(directory)?;
     let mut db = Connection::open(directory.join("state.sqlite"))?;
     db.execute_batch("PRAGMA page_size=4096; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;
-        CREATE TABLE state(phase TEXT NOT NULL, executable_sha256 BLOB NOT NULL, n_days INTEGER NOT NULL, scope TEXT NOT NULL, ga_cruise INTEGER NOT NULL);
+        CREATE TABLE state(phase TEXT NOT NULL, executable_sha256 BLOB NOT NULL, sampling_window TEXT NOT NULL, scope TEXT NOT NULL);
         CREATE TABLE inputs(path TEXT PRIMARY KEY, stat_identity TEXT NOT NULL);
         CREATE TABLE raw_parts(path TEXT PRIMARY KEY, stat_identity TEXT NOT NULL);
         CREATE TABLE disk_reservation(start_free_bytes INTEGER NOT NULL, minimum_free_bytes INTEGER NOT NULL);
@@ -118,8 +127,8 @@ pub(super) fn create(
     )?;
     let transaction = db.transaction()?;
     transaction.execute(
-        "INSERT INTO state VALUES ('spill-complete',?1,?2,?3,?4)",
-        params![executable_digest()?, days, scope_key(scope), ga_cruise],
+        "INSERT INTO state VALUES ('spill-complete',?1,?2,?3)",
+        params![executable_digest()?, window_key(window), scope_key(scope)],
     )?;
     if let Some((start_free, minimum_free)) = watermark {
         transaction.execute(
@@ -148,30 +157,25 @@ pub(super) fn create(
 pub(super) fn verify(
     directory: &Path,
     inputs: &[(String, String)],
-    days: u16,
+    window: &SamplingWindow,
     scope: Option<&ScopeBbox>,
-    fail_on_ga: bool,
 ) -> Result<()> {
     let db = Connection::open_with_flags(
         directory.join("state.sqlite"),
         OpenFlags::SQLITE_OPEN_READ_ONLY,
     )?;
-    let (phase, saved_days, saved_scope, ga): (String, u16, String, u64) = db.query_row(
-        "SELECT phase,n_days,scope,ga_cruise FROM state",
+    let (phase, saved_window, saved_scope): (String, String, String) = db.query_row(
+        "SELECT phase,sampling_window,scope FROM state",
         [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
     anyhow::ensure!(
         phase == "spill-complete",
         "cruise spill is {phase}; partial-fold resume is not supported"
     );
     anyhow::ensure!(
-        saved_days == days && saved_scope == scope_key(scope),
+        saved_window == window_key(window) && saved_scope == scope_key(scope),
         "cruise spill sampling window or scope differs"
-    );
-    anyhow::ensure!(
-        !fail_on_ga || ga == 0,
-        "GA-class cruise found in retained spill"
     );
     let saved = db
         .prepare("SELECT path,stat_identity FROM inputs ORDER BY path")?

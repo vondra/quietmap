@@ -51,7 +51,7 @@ fn main() -> anyhow::Result<()> {
     let mut indexes = Vec::new();
     let mut exact = Vec::new();
     let mut days = 0;
-    let mut weights = air::ClassWeights::uniform();
+    let mut weights = air::ProvenanceWeights::PRIMARY_ONLY;
     let started = Instant::now();
     for square in &squares {
         let prefix = grid::square_name(*square);
@@ -70,15 +70,10 @@ fn main() -> anyhow::Result<()> {
         if let Some((bytes, _)) = manifest.read_arrow(root, &format!("{prefix}/airborne.arrow"))? {
             let reader = FileReader::try_new(Cursor::new(bytes), None)?;
             let schema = reader.schema();
-            days = schema.metadata().get("n_days").context("days")?.parse()?;
-            weights = air::ClassWeights::parse(
-                schema
-                    .metadata()
-                    .get(air::SAMPLE_DAYS_BY_CLASS_KEY)
-                    .map(String::as_str),
-                days,
-            )
-            .map_err(anyhow::Error::msg)?;
+            let window =
+                air::SamplingWindow::from_metadata(schema.metadata()).map_err(anyhow::Error::msg)?;
+            days = window.baseline_days;
+            weights = window.provenance_weights();
             for batch in reader {
                 exact.push(batch?);
             }
