@@ -92,7 +92,12 @@ const RULES: &[(&str, &[(&str, u16)])] = &[
     ),
     (
         "gb",
-        &[("nsl_single", 97), ("nsl_dual", 113), ("motorway", 113)],
+        &[
+            ("nsl_restricted", 48),
+            ("nsl_single", 97),
+            ("nsl_dual", 113),
+            ("motorway", 113),
+        ],
     ),
     (
         "hu",
@@ -206,6 +211,7 @@ const RULES: &[(&str, &[(&str, u16)])] = &[
 
 pub fn resolve(token: &str) -> Option<u16> {
     let (country, rule) = token.split_once(':')?;
+    let country = if country == "uk" { "gb" } else { country };
     if let Some((_, rules)) = RULES.iter().find(|(key, _)| *key == country) {
         if let Some((_, speed)) = rules.iter().find(|(key, _)| *key == rule) {
             return Some(*speed);
@@ -220,7 +226,15 @@ pub fn resolve(token: &str) -> Option<u16> {
         .unwrap_or(rule)
         .trim_start_matches(':');
     if number.chars().all(|c| c.is_ascii_digit()) {
-        return number.parse::<u16>().ok().filter(|v| *v > 0 && *v <= 400);
+        let speed = number.parse::<u16>().ok().filter(|v| *v > 0 && *v <= 400)?;
+        let jurisdiction = country.split('-').next()?;
+        return Some(
+            if matches!(jurisdiction, "gb" | "uk" | "us" | "gg" | "im" | "je") {
+                parse_maxspeed_kmh(&format!("{speed} mph"))
+            } else {
+                speed
+            },
+        );
     }
     None
 }
@@ -240,6 +254,30 @@ pub fn road_speed(tags: &Tags) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn implicit_mph_zones_and_restricted_roads_convert_to_kmh() {
+        for (raw, speed) in [
+            ("GB:nsl_restricted", 48),
+            ("UK:nsl_restricted", 48),
+            ("GB:zone20", 32),
+            ("UK:zone:20", 32),
+            ("US:zone:25", 40),
+            ("US-CA:zone25", 40),
+            ("GB-ENG:zone20", 32),
+            ("GG:zone25", 40),
+            ("JE:zone20", 32),
+            ("IM:zone30", 48),
+            ("DE:zone20", 20),
+            ("CZ:zone:30", 30),
+            ("CA-ON:zone40", 40),
+        ] {
+            assert_eq!(parse_maxspeed_kmh(raw), speed, "{raw}");
+        }
+        for raw in ["GB:zone0", "US:zone999", "US:zonefast"] {
+            assert_eq!(parse_maxspeed_kmh(raw), 0, "{raw}");
+        }
+    }
+
     #[test]
     fn implicit_rules_explicit_precedence_and_ambiguity() {
         for (raw, speed) in [
