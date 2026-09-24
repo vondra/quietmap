@@ -60,26 +60,29 @@ const HEAVY_SUBTYPE_NACE: Record<number, readonly number[]> = {
 const TURBINE_SOURCE_TYPE = 10
 const SUBSTATION_SOURCE_TYPE = 12
 
-// Mirror of the engine's NACE base levels (division → base_lw at 1 ha, from
-// `engine/noise-compute/src/emission/industrial.rs::nace_profile`) — ONLY for
-// the "loudest contained facility stamps it" rule. The C1 spectral debt is
-// ignored (it never flips a >2 dB base gap); ties fall through to edge.
-// Update together with the engine arms.
+// Mirror of the engine's NACE EMITTED levels (division → LwA at 1 ha =
+// base_lw + the spectrum's C1 debt, from
+// `engine/noise-compute/src/emission/industrial.rs::nace_profile` plus
+// `industrial_lw`) — ONLY for the "loudest contained facility stamps it"
+// rule. Post-norm, so close pairs order exactly as the engine emits them
+// (metallurgy 106.4 over cement 104.9 — the pre-norm bases tie at 100).
+// Ties fall through to edge. Update together with the engine arms.
 const NACE_DIVISION_BASE_LW: Record<number, number> = {
-  1: 70, 2: 70, 3: 70, 5: 99, 6: 92, 7: 99, 8: 99, 10: 90, 11: 90,
-  13: 88, 14: 88, 15: 88, 16: 93, 17: 93, 19: 96, 20: 94, 22: 90,
-  23: 100, 24: 100, 25: 93, 27: 90, 28: 90, 29: 93, 30: 93,
-  35: 97, 37: 89, 38: 95, 46: 84, 47: 84, 52: 86, 62: 60,
+  1: 75.6, 2: 75.6, 3: 75.6, 5: 103.9, 6: 97.6, 7: 103.9, 8: 103.9,
+  10: 95.6, 11: 95.6, 13: 93.6, 14: 93.6, 15: 93.6, 16: 99.4, 17: 99.4,
+  19: 101.7, 20: 99.6, 22: 95.6, 23: 104.9, 24: 106.4, 25: 99.4,
+  27: 95.6, 28: 95.6, 29: 98.6, 30: 98.6, 35: 102.7, 37: 94.2, 38: 100.6,
+  46: 89.4, 47: 89.4, 52: 91.4, 62: 65.4,
 }
 
 /** Comparator loudness of a facility NACE: 4-digit exceptions first (hydro
  * 3512 is quieter than the division-35 thermal fallback; synthetic solar 3599
- * compares at its legacy area level), then the division mirror. Unknown → −1,
- * losing to any known profile. */
+ * compares at its 1 ha per-MW value 80.4), then the division mirror.
+ * Unknown → −1, losing to any known profile. */
 export function naceBaseLw(nace4: number | undefined): number {
   if (nace4 === undefined) return -1
-  if (nace4 === 3599) return 55
-  if (nace4 === 3512) return 90
+  if (nace4 === 3599) return 80.4
+  if (nace4 === 3512) return 95.6
   return NACE_DIVISION_BASE_LW[Math.floor(nace4 / 100)] ?? -1
 }
 

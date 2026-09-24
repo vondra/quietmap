@@ -117,9 +117,11 @@ test('Tata: same-registry contained facilities resolve to the loudest NACE, not 
   assert.ok(!contestBeats(linde, steel))
   const near = { rank: 5, year: 2024, id: 310, edge: 50, contained: false, nace4: 2410 }
   assert.ok(contestBeats(linde, near), 'a contained point beats a merely near one')
-  assert.equal(naceBaseLw(2410), 100)
-  assert.equal(naceBaseLw(1920), 96)
-  assert.equal(naceBaseLw(3512), 90)
+  assert.equal(naceBaseLw(2410), 106.4)
+  assert.equal(naceBaseLw(1920), 101.7)
+  assert.equal(naceBaseLw(2011), 99.6)
+  assert.equal(naceBaseLw(3512), 95.6)
+  assert.equal(naceBaseLw(3599), 80.4)
   assert.equal(naceBaseLw(9999), -1)
 })
 
