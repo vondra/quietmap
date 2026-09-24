@@ -70,9 +70,22 @@ export function freezeManifest(rows: StationRow[], criteria: Criteria, baselineR
   const sourceHeights = { road: Number(stated(u.height.pending_term, /road ([\d.]+) m/, 'the road source height')),
     railway: Number(stated(u.height.pending_term, /rail ([\d.]+) m/, 'the rail source height')) }
   const physicalId = (row: StationRow) => row.physical_station_id ?? `${row.set.replace(/-\d{4}$/, '')}/${row.station_id.split('/').slice(1).join('/')}`
-  // One record per physical station: the smallest |year − default|, then the latest.
+  const inputYearOf = (row: StationRow) => row.model?.dominant_layer === 'road' ? row.model.dominant_road?.dataset_year ?? null : null
+  const gapOf = (row: StationRow) => row.year == null ? null : Math.abs(row.year - (inputYearOf(row) ?? defaultYear))
+  const ownExclusion = (row: StationRow): string | null => {
+    const k = gapOf(row)
+    return row.truth_kind !== 'measured' ? `truth_kind ${row.truth_kind} (cross-check)`
+      : row.measurand !== 'sound_level' ? `measurand ${row.measurand}`
+        : row.diagnostic_only ? `diagnostic: ${row.diagnostic_reason ?? ''}`
+          : row.months_covered != null && row.months_covered < 9 ? `${row.months_covered} months covered`
+            : row.year === 2020 || row.year === 2021 ? `measurement year ${row.year}`
+              : k != null && k > maxK ? `year gap ${k} > ${maxK}`
+                : row.error ? `popup failed: ${row.error}` : row.unscored ? row.unscored
+                  : Object.keys(METRIC_PERIODS).some(metric => metricComparison(row, metric)) ? null : 'no metric the model can supply'
+  }
+  // One record per physical station among the otherwise eligible: the smallest |year − default|, then the latest.
   const chosen = new Map<string, StationRow>()
-  for (const row of rows) {
+  for (const row of rows.filter(entry => ownExclusion(entry) == null)) {
     const current = chosen.get(physicalId(row))
     const rank = (candidate: StationRow) => [Math.abs((candidate.year ?? defaultYear) - defaultYear), -(candidate.year ?? 0)]
     if (!current || rank(row)[0] < rank(current)[0] || (rank(row)[0] === rank(current)[0] && rank(row)[1] < rank(current)[1])) chosen.set(physicalId(row), row)
@@ -82,18 +95,12 @@ export function freezeManifest(rows: StationRow[], criteria: Criteria, baselineR
     const { site_class, basis } = siteClass(row)
     const road = row.model?.dominant_road ?? null
     const provenance = provenanceClass(criteria, road)
-    const inputYear = row.model?.dominant_layer === 'road' ? road?.dataset_year ?? null : null
-    const k = row.year == null ? null : Math.abs(row.year - (inputYear ?? defaultYear))
+    const inputYear = inputYearOf(row)
+    const k = gapOf(row)
     const receiver = row.receiver ?? { lat: row.lat, lng: row.lng, moved_m: 0 }
     const z15 = tile(receiver.lat, receiver.lng, 15)
-    const exclusion = row.truth_kind !== 'measured' ? `truth_kind ${row.truth_kind} (cross-check)`
-      : row.measurand !== 'sound_level' ? `measurand ${row.measurand}`
-        : row.diagnostic_only ? `diagnostic: ${row.diagnostic_reason ?? ''}`
-          : row.months_covered != null && row.months_covered < 9 ? `${row.months_covered} months covered`
-            : row.year === 2020 || row.year === 2021 ? `measurement year ${row.year}`
-              : k != null && k > maxK ? `year gap ${k} > ${maxK}`
-                : row.error ? `popup failed: ${row.error}` : row.unscored ? row.unscored
-                  : chosen.get(physicalId(row)) !== row ? `another record of physical station ${physicalId(row)} is scored` : null
+    const exclusion = ownExclusion(row)
+      ?? (chosen.get(physicalId(row)) !== row ? `another record of physical station ${physicalId(row)} is scored` : null)
     const classEntry = siteClassCohorts(criteria).find(entry => entry.classes.includes(site_class))
     const cohort = !classEntry ? null : classEntry.cohort === 'road cohorts' ? roadCohort(criteria, road) : classEntry.cohort
     const heightUsed = row.receiver_height_used_m
@@ -132,7 +139,7 @@ export function freezeManifest(rows: StationRow[], criteria: Criteria, baselineR
     }
     stations[row.key] = {
       station_id: row.key, physical_station_id: physicalId(row), set: row.set, year: row.year, site_class, site_class_basis: basis,
-      cohort, eligible: exclusion == null && Object.keys(metrics).length > 0, exclusion_reason: exclusion ?? (Object.keys(metrics).length ? null : 'no metric the model can supply'),
+      cohort, eligible: exclusion == null, exclusion_reason: exclusion,
       receiver_lat: row.receiver?.lat ?? null, receiver_lng: row.receiver?.lng ?? null, receiver_moved_m: receiver.moved_m,
       height_m_used: heightUsed, height_pending: heightPending, variants, metrics,
       dominant_road_osm_id: road?.osm_id ?? null, dominant_source_id: road?.dominant_source_id ?? null, provenance_class: provenance,

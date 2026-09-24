@@ -161,7 +161,7 @@ const lines = [
   '## Objectives (reported, never merge conditions)', '',
   '| cohort | role | metric | variant | column | n (networks, clusters) | bias dB [95 %] | MAE dB [95 %] | >6 dB | >10 dB | over 2u | U_c | O2 limit | O1 | O2 | O3 |',
   '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
-  ...table.filter(shownColumns).map(({ cohort, role, metric, variant, column, objectives: o }) => `| ${cohort} | ${role.split(' ')[0]} | ${metric} | ${variant} | ${column} | `
+  ...table.filter(shownColumns).map(({ cohort, role, metric, variant, column, objectives: o }) => `| ${cohort} | ${role.split(' (')[0]} | ${metric} | ${variant} | ${column} | `
     + `${o.n} (${o.networks}, ${o.clusters}) | ${estimate(o.bias)} | ${estimate(o.mae)} | ${(100 * o.share_large).toFixed(0)} % | ${(100 * o.share_severe).toFixed(0)} % | `
     + `${o.over} | ${o.band_db} | ${o.o2_limit_db} | ${o.O1} | ${o.O2} | ${o.O3} |`), '',
   '## Guard sub-checks', '',
