@@ -103,7 +103,7 @@ async function scoreStation(station: CatalogueStation): Promise<StationRow> {
     mount: typeof station.mount === 'string' ? station.mount : null, facade_distance_m: number(station.facade_distance_m),
     publisher_facade_correction_db: number(station.publisher_facade_correction_db), position_uncertainty_m: number(station.position_uncertainty_m),
     mic_height_m: station.mic_height_m, requested_receiver_height_m: requested,
-    receiver_height_used_m: null, height_matches_microphone: false, request_ms: 0, model: null, comparisons: [], guard: null, position_samples: null,
+    receiver_basis: null, facade_restoration_check_db: null, receiver_height_used_m: null, height_matches_microphone: false, request_ms: 0, model: null, comparisons: [], guard: null, position_samples: null,
     unsupported_indicators: parsed.flatMap(entry => 'unsupported' in entry.result ? [`${entry.key}: ${entry.result.unsupported}`] : []),
     error: null,
   }
@@ -111,14 +111,24 @@ async function scoreStation(station: CatalogueStation): Promise<StationRow> {
   try {
     const answer = await popup(station.lat, station.lng, requested)
     base.request_ms = Math.round(performance.now() - started)
-    const model = readPopupAnswer(answer, station)
+    const clicked = readPopupAnswer(answer, station)
+    // Never an indoor value: inside a footprint the model value is the engine's facade point. A server
+    // that names it is asked there directly (outdoors); an older one has its facade level restored.
+    const facade = clicked.inside_footprint && answer.receiver
+      ? readPopupAnswer(await popup(answer.receiver.lat, answer.receiver.lng, requested), answer.receiver) : null
+    if (facade?.inside_footprint) throw new Error('the facade point the popup chose lies inside a footprint')
+    const model = facade ? { ...facade, receiver: { ...facade.receiver, click_to_receiver_m: clicked.receiver.click_to_receiver_m } } : clicked
+    const receiverBasis: StationRow['receiver_basis'] = !clicked.inside_footprint ? 'station point, outdoors'
+      : facade ? 'nearest facade exit, computed there outdoors' : 'nearest facade exit, facade level restored from indoor + class delta'
     // A server without the height parameter ignores it and answers at the engine default.
     const used = model.receiver.height_m ?? ENGINE_DEFAULT_RECEIVER_HEIGHT_M
     if (requested != null && model.receiver.height_m != null && Math.abs(used - requested) > 1e-9) {
       throw new Error(`server computed ${used} m for a requested ${requested} m`)
     }
     return {
-      ...base, model, receiver_height_used_m: used,
+      ...base, model, receiver_basis: receiverBasis, receiver_height_used_m: used,
+      facade_restoration_check_db: facade && clicked.total.lden != null && facade.total.lden != null
+        ? +(facade.total.lden - clicked.total.lden).toFixed(3) : null,
       height_matches_microphone: station.mic_height_m != null && Math.abs(used - station.mic_height_m) < 1e-9,
       comparisons: parsed.flatMap(entry => 'indicator' in entry.result ? [compareIndicator(entry.result.indicator, model)] : []),
       guard: station.guard ? evaluateGuard(station, model) : null,

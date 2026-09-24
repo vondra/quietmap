@@ -42,6 +42,8 @@ export type DominantRoad = {
   vehicle_split_estimated: boolean
   dominant_source_id: number | null
   provenance_tier: string | null
+  /** Name of the traffic dataset behind the dominant road; null for a class prior. */
+  dataset_name: string | null
   /** Year of the traffic dataset (the input year of the criteria's year gap); null for a prior. */
   dataset_year: number | null
   speed_source: string | null
@@ -104,7 +106,7 @@ function dominantRoad(contributors: WireContributor[]): DominantRoad | null {
   const metadata = road.metadata!
   const count = (field: string) => typeof metadata[field] === 'number' ? metadata[field] as number : 0
   const roadClass = typeof metadata.road_class === 'string' ? metadata.road_class : null
-  const provenance = metadata.provenance as { tier?: string; year?: number } | null | undefined
+  const provenance = metadata.provenance as { tier?: string; year?: number; name?: string } | null | undefined
   return {
     osm_id: road.osm_id,
     name: road.name,
@@ -119,6 +121,7 @@ function dominantRoad(contributors: WireContributor[]): DominantRoad | null {
       || (metadata.traffic_estimated & LIGHT_MEDIUM_HEAVY_ESTIMATED_BITS) !== 0,
     dominant_source_id: typeof metadata.dominant_source_id === 'number' ? metadata.dominant_source_id : null,
     provenance_tier: provenance?.tier ?? null,
+    dataset_name: provenance?.name ?? null,
     dataset_year: typeof provenance?.year === 'number' ? provenance.year : null,
     speed_source: typeof metadata.speed_source === 'string' ? metadata.speed_source : null,
     traffic_provenance: roadTrafficProvenance(metadata),

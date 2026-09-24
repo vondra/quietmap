@@ -29,6 +29,11 @@ export type StationRow = {
   position_uncertainty_m: number | null
   mic_height_m: number | null
   requested_receiver_height_m: number | null
+  /** Where the model value was computed; an indoor popup value is never scored. */
+  receiver_basis: 'station point, outdoors' | 'nearest facade exit, computed there outdoors'
+    | 'nearest facade exit, facade level restored from indoor + class delta' | null
+  /** Facade point computed directly minus the restored facade level (dB); a check of the restoration. */
+  facade_restoration_check_db: number | null
   receiver_height_used_m: number | null
   height_matches_microphone: boolean
   request_ms: number
@@ -93,8 +98,9 @@ export function renderReport(rows: StationRow[], identity: Record<string, unknow
       all.filter(({ comparison }) => comparison.kind === 'traffic')),
     ...comparisonList('Background percentiles (diagnostic; never a lower bound on modelled levels)',
       all.filter(({ comparison }) => comparison.period_mapping === 'diagnostic')),
-    `Inside a footprint (facade level restored; receiver at the nearest facade exit, finding #2): ${inside.length} — `
-      + inside.map(row => `${row.key} ${row.model!.receiver.click_to_receiver_m} m`).join(', '), '',
+    `Inside a footprint (never scored indoors; the model value is the engine's nearest facade exit, finding #2): ${inside.length} — `
+      + inside.map(row => `${row.key} ${row.model!.receiver.click_to_receiver_m} m (${row.receiver_basis}`
+        + `${row.facade_restoration_check_db == null ? '' : `, direct − restored ${row.facade_restoration_check_db} dB`})`).join(', '), '',
     `Publisher facade correction stated but not known to be applied: ${rows.filter(row => row.publisher_facade_correction_db != null).length} stations.`,
     `Receiver height differs from the microphone or the microphone height is unknown: ${heightMismatch.length} of ${rows.length - failed.length}.`,
     `Windows splitting an END period: ${all.filter(({ comparison }) => comparison.period_mapping === 'piecewise_constant').length} exact on `

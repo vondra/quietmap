@@ -57,7 +57,7 @@ function row(key: string, fields: Partial<StationRow> & { provenance?: string; d
     key, set: key.split('/')[0], station_id: key, name: key, lat: 0, lng: 0, expected_source: 'road', truth_kind: 'measured',
     measurand: 'sound_level', year: 2025, months_covered: 12, holdout: false, holdout_square: false, scoring: 'accuracy', scoring_reason: null,
     mount: 'free_field', facade_distance_m: null, publisher_facade_correction_db: null, position_uncertainty_m: null, mic_height_m: 4,
-    requested_receiver_height_m: 4, receiver_height_used_m: 4, height_matches_microphone: true, request_ms: 1, model,
+    requested_receiver_height_m: 4, receiver_basis: 'station point, outdoors', facade_restoration_check_db: null, receiver_height_used_m: 4, height_matches_microphone: true, request_ms: 1, model,
     comparisons: [lden(modelLden, fields.measured ?? 62)], guard: null, position_samples: null, unsupported_indicators: [], error: null, ...fields,
   }
 }
