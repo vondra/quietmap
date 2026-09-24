@@ -65,7 +65,6 @@ fn write_parent_arrow(path: &Path, contract: Option<&str>) {
             Field::new("ref", DataType::Utf8, false),
             Field::new("service", DataType::UInt8, false),
             Field::new("source_id", DataType::UInt16, false),
-            Field::new("trains_passenger", DataType::Int32, false),
             Field::new("country_iso", DataType::UInt16, false),
             Field::new("city_id", DataType::UInt16, false),
             Field::new("continent", DataType::UInt8, false),
@@ -88,7 +87,6 @@ fn write_parent_arrow(path: &Path, contract: Option<&str>) {
             Arc::new(StringArray::from(vec![""])),
             Arc::new(UInt8Array::from(vec![0u8])),
             Arc::new(UInt16Array::from(vec![0u16])),
-            Arc::new(Int32Array::from(vec![99i32])),
             Arc::new(UInt16Array::from(vec![u16::from_le_bytes(*b"CZ")])),
             Arc::new(UInt16Array::from(vec![0u16])),
             Arc::new(UInt8Array::from(vec![1u8])),
@@ -160,7 +158,6 @@ fn class_defaults_stamp_contract_and_skip_on_retry() {
         metadata.get("rail_traffic_contract").map(String::as_str),
         Some("1")
     );
-    assert!(batch.column_by_name("trains_passenger").is_none());
     assert!(batch.column_by_name("source_id").is_none());
     let passenger: f64 = (0..3)
         .map(|period| {
@@ -316,121 +313,5 @@ fn partial_evidence_preserves_middle_counts_and_zero_with_class_priors_on_uncove
         }
         assert_eq!((observed, defaults), (1, 2));
     }
-    let _ = std::fs::remove_dir_all(year.parent().unwrap());
-}
-
-#[test]
-fn finalized_category_repair_keeps_children_evidence_zeros_and_shared_priors() {
-    let year = year_dir();
-    let arrow = year.join("z9/276/173/railways.arrow");
-    write_parent_arrow(&arrow, None);
-    let (_, parent) = read_arrow(&arrow);
-    let raw =
-        arrow::compute::concat_batches(&parent.schema(), &[parent.clone(), parent.clone(), parent])
-            .unwrap();
-    let write = |batch: &RecordBatch| {
-        let mut writer =
-            FileWriter::try_new(File::create(&arrow).unwrap(), batch.schema().as_ref()).unwrap();
-        writer.write(batch).unwrap();
-        writer.finish().unwrap();
-    };
-    let mut columns = raw.columns().to_vec();
-    columns[raw.schema().index_of("osm_id").unwrap()] = Arc::new(Int64Array::from(vec![7, 8, 9]));
-    columns[raw.schema().index_of("ref").unwrap()] =
-        Arc::new(StringArray::from(vec!["corridor"; 3]));
-    for name in ["start_gy", "end_gy"] {
-        let index = raw.schema().index_of(name).unwrap();
-        let value = raw
-            .column(index)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap()
-            .value(0);
-        columns[index] = Arc::new(Int32Array::from(vec![value, value + 100, value + 200]));
-    }
-    write(&RecordBatch::try_new(raw.schema(), columns).unwrap());
-    finalize_square(&year, SQUARE).unwrap().unwrap();
-    let (_, finalized) = read_arrow(&arrow);
-    let mut columns = finalized.columns().to_vec();
-    for category in ["passenger", "freight"] {
-        for (period, observed) in [("day", 25.5), ("evening", 0.25), ("night", 0.125)] {
-            let name = format!("trains_{category}_{period}");
-            let index = finalized.schema().index_of(&name).unwrap();
-            let old = f64_col(&finalized, &name);
-            columns[index] = Arc::new(Float64Array::from(vec![
-                if category == "passenger" {
-                    observed
-                } else {
-                    0.0
-                },
-                old[1],
-                0.0,
-            ]));
-        }
-        let index = finalized
-            .schema()
-            .index_of(&format!("{category}_status"))
-            .unwrap();
-        columns[index] = Arc::new(UInt8Array::from(vec![
-            if category == "passenger" { 2 } else { 0 },
-            2,
-            1,
-        ]));
-        let index = finalized
-            .schema()
-            .index_of(&format!("{category}_source_id"))
-            .unwrap();
-        columns[index] = Arc::new(UInt16Array::from(vec![
-            if category == "passenger" { 100 } else { 0 },
-            0,
-            100,
-        ]));
-        let index = finalized
-            .schema()
-            .index_of(&format!("{category}_matching"))
-            .unwrap();
-        columns[index] = Arc::new(UInt8Array::from(vec![
-            if category == "passenger" { 2 } else { 0 },
-            0,
-            0,
-        ]));
-    }
-    let before = RecordBatch::try_new(finalized.schema(), columns).unwrap();
-    write(&before);
-    // Already split final rows must never be interpreted as raw topology parents.
-    for evidence in ["rail-intervals.CZ.arrow", crate::topology::PIECES_FILE] {
-        std::fs::write(arrow.with_file_name(evidence), b"not an Arrow file").unwrap();
-    }
-    let receipt = finalize_square(&year, SQUARE).unwrap().unwrap();
-    assert!(receipt.rewritten);
-    assert_eq!((receipt.rows_in, receipt.rows_out), (3, 3));
-    let (metadata, after) = read_arrow(&arrow);
-    assert_eq!(&metadata, before.schema().metadata());
-    for (index, field) in before.schema().fields().iter().enumerate() {
-        if !field.name().starts_with("trains_freight_") && !field.name().starts_with("freight_") {
-            assert_eq!(
-                before.column(index).to_data(),
-                after.column(index).to_data(),
-                "{}",
-                field.name()
-            );
-        }
-    }
-    let old = crate::rail_traffic::RailTrafficColumns::read(&before).unwrap();
-    let new = crate::rail_traffic::RailTrafficColumns::read(&after).unwrap();
-    assert!((new.row(0).freight.periods.iter().sum::<f64>() - 20.0 / 3.0).abs() < 1e-9);
-    assert_eq!(
-        (
-            new.row(0).freight.status,
-            new.row(0).freight.source_id,
-            new.row(0).freight.matching
-        ),
-        (2, 0, 0)
-    );
-    assert_eq!(new.row(1), old.row(1));
-    assert_eq!(new.row(2), old.row(2));
-    let bytes = std::fs::read(&arrow).unwrap();
-    assert!(!finalize_square(&year, SQUARE).unwrap().unwrap().rewritten);
-    assert_eq!(std::fs::read(&arrow).unwrap(), bytes);
     let _ = std::fs::remove_dir_all(year.parent().unwrap());
 }

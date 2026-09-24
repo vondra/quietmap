@@ -131,7 +131,6 @@ export function buildTramExtraMatch<S extends {
       passenger: stop.trains_passenger,
       freight: stop.trains_freight,
       sourceId,
-      divisor: 1,
     } : null
   }
 }

@@ -63,7 +63,7 @@ function segment(
   endNode: string,
 ): RailGraphSegmentInput {
   return {
-    key: `${way}:0`, osmId: way, railType: 0, usage: 0, isTraversalOnly: false, corridorToken: way,
+    key: `${way}:0`, osmId: way, railType: 0, isTraversalOnly: false,
     startKey: `node:${startNode}`, endKey: `node:${endNode}`,
     startLat: from[0], startLon: from[1], endLat: to[0], endLon: to[1],
     lengthM: flatDist(...from, ...to),

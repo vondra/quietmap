@@ -17,20 +17,18 @@ function preparedPath(name: string) {
   return join(RAIL_TEST_DIRECTORY, name)
 }
 
-test('service and baked-country gates skip rows; zero with unknown is omitted', async () => {
+test('service and baked-country gates skip rows', async () => {
   const prepared = preparedPath('writer-gates')
   const path = writePreparedRailwaySquare(prepared, SQUARE, 'writer-gates.arrow', [
     { latitude: -5.82, longitude: 13.45, country: 'CD' },
-    { latitude: -5.82, longitude: 13.45, country: 'CD', service: 2, passenger: 11, freight: 12 },
-    { latitude: -5.82, longitude: 13.45, country: 'DZ', passenger: 21, freight: 22 },
-  ], { includeTraffic: true })
+    { latitude: -5.82, longitude: 13.45, country: 'CD', service: 2 },
+    { latitude: -5.82, longitude: 13.45, country: 'DZ' },
+  ])
   writeSyntheticRailTopology(prepared, [SQUARE])
   const before = railwayBytes(path)
 
-  const result = await writeRailwayTraffic(path, (row) => {
-    if (row.existingPassenger === 11) return { passenger: 0, freight: 0, sourceId: CD_SOURCE_ID }
-    return { passenger: 2.5, freight: 0, sourceId: CD_SOURCE_ID, passengerStatus: 'estimated' }
-  }, undefined, { allowedCountryIsos: ['CD'], countryIso: 'CD' })
+  const result = await writeRailwayTraffic(path, () =>
+    ({ passenger: 2.5, freight: 0, sourceId: CD_SOURCE_ID, passengerStatus: 'estimated' }), undefined, { allowedCountryIsos: ['CD'], countryIso: 'CD' })
   assert.equal(result.matched, 1)
   assert.equal(result.skippedService, 1)
   assert.equal(result.skippedForeign, 1)

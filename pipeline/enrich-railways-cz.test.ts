@@ -45,14 +45,14 @@ test('CZ whole source admits before writes; measured, silent and foreign rows co
   const square = join(prepared, 'z9', '275', '173'); mkdirSync(square, { recursive: true })
   const path = join(square, 'railways.arrow')
   const fixture = writeRailwaysFixture('cz-source.arrow', [
-    { latitude: 50, longitude: 14, endLatitude: 50, endLongitude: 14.01, country: 'CZ', sourceId: 9863, passenger: 2, freight: 1 },
-    { latitude: 50.03, longitude: 14, endLatitude: 50.03, endLongitude: 14.01, country: 'CZ', sourceId: 110, passenger: 70 },
+    { latitude: 50, longitude: 14, endLatitude: 50, endLongitude: 14.01, country: 'CZ', sourceId: 9863 },
+    { latitude: 50.03, longitude: 14, endLatitude: 50.03, endLongitude: 14.01, country: 'CZ', sourceId: 110 },
     { latitude: 50.03007, longitude: 14, endLatitude: 50.03007, endLongitude: 14.01, country: 'CZ' },
-    { latitude: 50.06, longitude: 14, country: 'DE', sourceId: 9864, passenger: 80 },
-    { latitude: 50.07, longitude: 14, country: 'CZ', railType: 1, sourceId: 110, passenger: 90 },
-    { latitude: 50.08, longitude: 14, country: 'CZ', sourceId: 9864, passenger: 95 },
-    { latitude: 50.09, longitude: 14, country: 'CZ', sourceId: 100, passenger: 85 },
-  ], { includeTraffic: true, includeDivisor: true })
+    { latitude: 50.06, longitude: 14, country: 'DE', sourceId: 9864 },
+    { latitude: 50.07, longitude: 14, country: 'CZ', railType: 1, sourceId: 110 },
+    { latitude: 50.08, longitude: 14, country: 'CZ', sourceId: 9864 },
+    { latitude: 50.09, longitude: 14, country: 'CZ', sourceId: 100 },
+  ])
   copyFileSync(fixture, path)
   writeSyntheticRailTopology(prepared, ['z9/275/173'])
   const before = tableFromIPC(readFileSync(path))

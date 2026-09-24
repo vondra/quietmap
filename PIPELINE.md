@@ -148,7 +148,7 @@ hold the square-country-city lock shared, excluding its writer for their lifetim
 are emitted as JSON. `--from STEP` resumes within the selected family.
 `--jobs` (default: every CPU) caps square workers; omitting it, or `QM_ROAD_WORKERS`,
 uses every CPU that still fits the process memory limit. Per-square world heuristics
-(service-tree, continuity, taper, railways-parallel, industrial wind/name, built-up)
+(service-tree, continuity, taper, industrial wind/name, built-up)
 shard that way. Built-up completion is stored with the owner/halo structure identities
 and classification code; an unchanged retry reads only the Arrow header. Changed
 structure inputs invalidate that square. Country adapters, national policies and national networks load their

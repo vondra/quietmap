@@ -31,6 +31,12 @@ pub fn should_overwrite(existing_id: u16, new_id: u16) -> bool {
     }
 }
 
+/// A baseline-tier railway claim (the CZ timetable-silent residual) says a timetable runs no train
+/// on a track; it stands only on a line whose tracks carry no ranked evidence in either category.
+pub fn is_residual(source_id: u16) -> bool {
+    get_source(source_id).is_some_and(|source| matches!(source.provenance, Provenance::Baseline))
+}
+
 pub fn nationally_owned(source: &Source) -> bool {
     matches!(
         source.provenance,

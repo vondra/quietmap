@@ -80,11 +80,9 @@ function trafficToInterval(
   fromM: number,
   toM: number,
   occurrence: number,
-  traffic: Pick<RailwayTraffic, 'passenger' | 'freight' | 'sourceId' | 'passengerStatus' | 'freightStatus' | 'matching' | 'divisor'>,
+  traffic: Pick<RailwayTraffic, 'passenger' | 'freight' | 'sourceId' | 'passengerStatus' | 'freightStatus' | 'matching'>,
 ): RailSquareInterval | null {
-  const divisor = traffic.divisor && traffic.divisor > 0 ? traffic.divisor : 1
-  const passenger = traffic.passenger / divisor
-  const freight = traffic.freight / divisor
+  const { passenger, freight } = traffic
   const passengerStatus = inferredRailStatus(passenger, traffic.passengerStatus)
   const freightStatus = inferredRailStatus(freight, traffic.freightStatus)
   if (passengerStatus === 'unknown' && freightStatus === 'unknown') return null
@@ -225,9 +223,6 @@ export async function writeClippedRailPassages(
           service: 0,
           name: (names.get(index) as string | null) ?? '',
           existingSourceId: existing,
-          existingPassenger: 0,
-          existingFreight: 0,
-          existingDivisor: 1,
         }
         const silent = request.silentResidual && isWalkableRailType(row.railType)
         const candidate = silent

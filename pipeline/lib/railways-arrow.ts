@@ -18,7 +18,6 @@ export interface RailwayTraffic {
   passenger: number
   freight: number
   sourceId: number
-  divisor?: number
   passengerStatus?: RailTrafficStatus
   freightStatus?: RailTrafficStatus
   matching?: number
@@ -32,9 +31,6 @@ export interface RailwayRow extends SegmentGeometry {
   service: number
   name: string
   existingSourceId: number
-  existingPassenger: number
-  existingFreight: number
-  existingDivisor: number
 }
 
 export interface RailwayRetract {
@@ -88,22 +84,10 @@ function requiredInteger(table: Table, name: string, signed: boolean, bitWidth: 
   return vector
 }
 
-function optionalInteger(table: Table, name: string, signed: boolean, bitWidth: number): Vector | null {
-  const vector = table.getChild(name)
-  if (!vector) return null
-  if (!DataType.isInt(vector.type) || vector.type.isSigned !== signed ||
-      vector.type.bitWidth !== bitWidth || vector.nullCount !== 0) {
-    throw new Error(`railways Arrow '${name}' must be non-null ${signed ? 'Int' : 'Uint'}${bitWidth}`)
-  }
-  return vector
-}
-
 function assertTraffic(value: RailwayTraffic, index: number, path: string): void {
   if (!Number.isFinite(value.passenger) || value.passenger < 0 ||
       !Number.isFinite(value.freight) || value.freight < 0 ||
-      !Number.isInteger(value.sourceId) || value.sourceId <= 0 || value.sourceId > 0xffff ||
-      (value.divisor !== undefined &&
-        (!Number.isInteger(value.divisor) || value.divisor < 1 || value.divisor > 0xff))) {
+      !Number.isInteger(value.sourceId) || value.sourceId <= 0 || value.sourceId > 0xffff) {
     throw new Error(`writeRailwayTraffic: invalid match at row ${index} in ${path}: ${JSON.stringify(value)}`)
   }
   if (SOURCES_BY_ID.get(value.sourceId)?.layer !== 'railways') {
@@ -160,9 +144,6 @@ export async function writeRailwayTraffic(
     const usage = requiredInteger(table, 'usage', false, 8)
     const service = requiredInteger(table, 'service', false, 8)
     const existingSource = requiredInteger(table, 'source_id', false, 16)
-    const existingPassenger = optionalInteger(table, 'trains_passenger', true, 32)
-    const existingFreight = optionalInteger(table, 'trains_freight', true, 32)
-    const existingDivisor = optionalInteger(table, 'parallel_divisor', false, 8)
     const names = table.getChild('name')
     if (!names || !DataType.isUtf8(names.type)) throw new Error("railways Arrow 'name' must be Utf8")
     const countries = bakedRailwayCountryReader(table)
@@ -189,9 +170,6 @@ export async function writeRailwayTraffic(
           service: service.get(index) as number,
           name: (names.get(index) as string | null) ?? '',
           existingSourceId: rowSource,
-          existingPassenger: (existingPassenger?.get(index) as number) ?? 0,
-          existingFreight: (existingFreight?.get(index) as number) ?? 0,
-          existingDivisor: (existingDivisor?.get(index) as number) ?? 1,
         }
         if (inAllowedCountry && (row.service > 0 || options.retract.when(row, index))) {
           result.retracted += session.retract([...retractIds],
@@ -210,9 +188,6 @@ export async function writeRailwayTraffic(
         service: service.get(index) as number,
         name: (names.get(index) as string | null) ?? '',
         existingSourceId: existingSource.get(index) as number,
-        existingPassenger: (existingPassenger?.get(index) as number) ?? 0,
-        existingFreight: (existingFreight?.get(index) as number) ?? 0,
-        existingDivisor: (existingDivisor?.get(index) as number) ?? 1,
       }
       const inAllowedCountry = allowedCountryCodes === null || allowedCountryCodes.has(countries.codeAt(index))
       if (row.service > 0) {
@@ -232,9 +207,7 @@ export async function writeRailwayTraffic(
         continue
       }
       const extent = topology.pieceExtent(row.osmId, row.segmentIndex, square)
-      const divisor = candidate.divisor && candidate.divisor > 0 ? candidate.divisor : 1
-      const passenger = candidate.passenger / divisor
-      const freight = candidate.freight / divisor
+      const { passenger, freight } = candidate
       const passengerStatus = inferredRailStatus(passenger, candidate.passengerStatus)
       const freightStatus = inferredRailStatus(freight, candidate.freightStatus)
       if (passengerStatus === 'unknown' && freightStatus === 'unknown') continue

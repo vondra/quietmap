@@ -39,8 +39,6 @@ export const WALK_AMBIGUITY_SHARED_EDGE_FRACTION = 0.5
 /** Soft corridor constraint: with a GTFS `shapes.txt` polyline, edges farther
  *  than this from the shape are excluded from that pair's search entirely. */
 export const SHAPE_CORRIDOR_TOLERANCE_M = 250
-/** Parallel-track sibling search radius (segment-midpoint distance, metres). */
-export const PARALLEL_SPREAD_RADIUS_M = 50
 /** Twin-track ambiguity exemption (2026-07-16 Step-B refinement; REDESIGNED
  *  the same day in the DE v3 tuning round): before failing a pair as
  *  'ambiguous', the walk tests whether the alt path found by the penalized
@@ -134,14 +132,9 @@ export interface RailGraphSegmentInput extends SegmentEndpointKeys {
   osmId: string
   /** Engine codes: 0 rail, 1 tram, 2 light_rail, 3 narrow, 4 funicular. */
   railType: number
-  /** 0 main, 1 branch, 2 industrial. */
-  usage: number
   /** Crossover etc.: connects topology so a route CAN pass through it, but is
    *  never itself the recipient of a stamp. */
   isTraversalOnly: boolean
-  /** `ref || name || ''` — the corridor identity used to gate parallel-track
-   *  spread; '' means "no reliable corridor identity", see applyParallelSpread. */
-  corridorToken: string
   startLat: number
   startLon: number
   endLat: number
@@ -162,9 +155,7 @@ export interface RailGraphEdge {
   key: string
   osmId: string
   railType: number
-  usage: number
   isTraversalOnly: boolean
-  corridorToken: string
   startLat: number
   startLon: number
   endLat: number
@@ -252,9 +243,7 @@ export function buildRailGraph(segments: RailGraphSegmentInput[]): RailGraph {
     key: seg.key,
     osmId: seg.osmId,
     railType: seg.railType,
-    usage: seg.usage,
     isTraversalOnly: seg.isTraversalOnly,
-    corridorToken: seg.corridorToken,
     startLat: seg.startLat,
     startLon: seg.startLon,
     endLat: seg.endLat,
@@ -408,15 +397,8 @@ export interface RailStationPairCount {
 }
 
 export interface RailWalkResult {
-  stampsBySegmentKey: Map<string, { pax: number; frt: number; divisor: number }>
-  /** Parallel-track divisor for EVERY stampable segment that has >=1 sibling
-   *  (`applyParallelSpread`'s sibling probe), INDEPENDENT of `stampsBySegmentKey`
-   *  — a segment can have a sibling and carry zero traffic from either side
-   *  (both unwalked) and still needs its divisor recorded, or a silent-residual
-   *  stamp landing there later would render at the wrong (undivided) count.
-   *  Absent key = no sibling found = divisor 1 (rail-walk-enrich.ts's silent
-   *  branch reads this with `?? 1`). */
-  divisorBySegmentKey: Map<string, number>
+  /** Passages summed per walked track; railways-finalize shares each line over its tracks. */
+  stampsBySegmentKey: Map<string, { pax: number; frt: number }>
   failures: { snapFailed: number; disconnected: number; detourRejected: number; ambiguous: number }
   /** See `RailFailedPairRecord`'s doc for the reason-specific diagnostics
    *  each entry carries. */
