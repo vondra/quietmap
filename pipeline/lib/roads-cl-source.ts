@@ -162,7 +162,8 @@ export function matchChileRoad(row: RoadRow, source: ChileRoadSource) {
   const station = nearestTmda(row.midLat, row.midLon, source)
   let observation: RoadObservation | null = station
   let total: number, kind: 'tmda' | 'network'
-  if (station) { total = station.aadt * multiplier; kind = 'tmda' }
+  // A published count is never scaled by a city box (the tier multipliers were invented, 2026-06-20).
+  if (station) { total = station.aadt; kind = 'tmda' }
   else {
     const line = nearestRoadLine(row.midLat, row.midLon, source.network, 400)
     if (!line) return null

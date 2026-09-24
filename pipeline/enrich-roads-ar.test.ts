@@ -16,10 +16,10 @@ const source = (dnv: PinnedRoadLine[], tmda: PinnedRoadLine[]): ArgentinaRoadSou
 const road: RoadRow = { startLat: -34.6, startLon: -58.5, endLat: -34.6, endLon: -58.5,
   midLat: -34.6, midLon: -58.5, roadClass: 1, ref: null, name: null, osmId: 1, existingSourceId: 0 }
 
-test('Argentina prioritizes observed TMDA and applies the Buenos Aires split', () => {
+test('Argentina keeps observed TMDA unscaled inside Buenos Aires, with its split', () => {
   assert.deepEqual(matchArgentinaRoad(road, source([line({ tipo_de_superficie_de_via: 'PAVIMENTO' })],
     [line({ valor: 1000 }, 'ar/tmda-2017-18.geojson')])),
-  { countBasis: 'both-directions', observationId: 'fixture', kind: 'tmda', light: 1500, medium: 200, heavy: 200, moto: 100 })
+  { countBasis: 'both-directions', observationId: 'fixture', kind: 'tmda', light: 750, medium: 100, heavy: 100, moto: 50 })
 })
 
 test('Argentina distinguishes national and provincial DNV fallbacks', () => {

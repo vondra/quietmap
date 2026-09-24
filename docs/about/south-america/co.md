@@ -20,7 +20,7 @@ Roads without a nearby count are matched within 400 m to the INVIAS national roa
 | Other paved road | 6,000 |
 | Unpaved | 1,500 |
 
-Both counts and estimates are doubled inside Bogotá and Medellín and multiplied by 1.4 in 24 other cities: Cali, Barranquilla, Cartagena, Cúcuta, Bucaramanga, Pereira, Santa Marta, Ibagué, Manizales, Pasto, Villavicencio, Neiva, Armenia, Soledad, Soacha, Valledupar, Montería, Sincelejo, Buenaventura, Tunja, Riohacha, Quibdó, Florencia and Popayán. The city boxes are drawn manually.
+Counts are used as published. Estimates are doubled inside Bogotá and Medellín and multiplied by 1.4 in 24 other cities: Cali, Barranquilla, Cartagena, Cúcuta, Bucaramanga, Pereira, Santa Marta, Ibagué, Manizales, Pasto, Villavicencio, Neiva, Armenia, Soledad, Soacha, Valledupar, Montería, Sincelejo, Buenaventura, Tunja, Riohacha, Quibdó, Florencia and Popayán. The city boxes are drawn manually.
 
 Roads with a network estimate also take an estimated vehicle mix:
 

@@ -122,7 +122,8 @@ export function matchArgentinaRoad(row: RoadRow, source: ArgentinaRoadSource) {
   const observed = nearestRoadLine(row.midLat, row.midLon, source.tmda, 300)
   let observation = observed ? pinnedRoadObservation(observed, 'both-directions') : null
   let total: number, kind: 'tmda' | 'dnv-national' | 'dnv-provincial'
-  if (observed) { total = tmdaAadt(observed) * multiplier; kind = 'tmda' }
+  // A published count is never scaled by a city box (the tier multipliers were invented, 2026-06-20).
+  if (observed) { total = tmdaAadt(observed); kind = 'tmda' }
   else {
     const classified = nearestRoadLine(row.midLat, row.midLon, source.dnv, 400)
     if (!classified) return null

@@ -93,7 +93,8 @@ export function matchPeruRoad(row: RoadRow, source: PeruRoadSource) {
   if (!line) return null
   const tier = cityTier(row.midLat, row.midLon)
   const observed = imd(line)
-  const traffic = splitVehicles((observed || classifiedAadt(line)) * multiplier(tier), tier,
+  // A published count is never scaled by a city box (the tier multipliers were invented, 2026-06-20).
+  const traffic = splitVehicles(observed || classifiedAadt(line) * multiplier(tier), tier,
     peruRegion(row.midLat, row.midLon), tier === 0 && MINING_REGIONS.some(bbox => inBbox(row.midLat, row.midLon, bbox)))
   if (traffic.light + traffic.medium + traffic.heavy + traffic.moto === 0) return null
   return { ...pinnedRoadObservation(line, 'both-directions'), kind: observed > 0 ? 'imd' as const : 'network' as const, ...traffic }
