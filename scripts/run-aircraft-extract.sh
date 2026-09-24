@@ -121,7 +121,7 @@ if [ -n "$HYBRID" ]; then
     AIRLINE_DAYS="${WINDOW_CSV%%$'\n'*}"
     GA_DAYS="${WINDOW_CSV#*$'\n'}"
     GA_DAYS="$(selected_ga_days "$GA_CACHE" --days "$GA_DAYS")" \
-        || die "GA selected full-source assets are incomplete; requested 365-day calendar retained"
+        || die "GA selected full-source assets are incomplete; requested exposure year retained"
 else
     [ -n "$ADSB_CACHE" ] || die "requires ADSB_CACHE= with an explicit cache directory"
 fi

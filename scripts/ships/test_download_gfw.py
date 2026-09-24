@@ -1,12 +1,14 @@
 """GFW download plan: 365-day window, world tiles, class filters, resumable receipts."""
 
-from datetime import date
+from datetime import datetime, timezone
+import json
 from pathlib import Path
 import sqlite3
 import sys
 import tempfile
 import unittest
 import urllib.parse
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import download_gfw  # noqa: E402
@@ -14,7 +16,6 @@ import download_gfw  # noqa: E402
 
 class DownloadGfwTests(unittest.TestCase):
     def test_window_tiles_and_filters(self):
-        self.assertEqual(download_gfw.window_end("2026-09"), date(2026, 8, 31))
         tiles = list(download_gfw.tiles())
         self.assertEqual(len(tiles), 45 * 18)
         self.assertEqual(tiles[0], (-180, -60))
@@ -26,6 +27,24 @@ class DownloadGfwTests(unittest.TestCase):
         self.assertEqual(query["filters[0]"], ["vessel_type in ('fishing','support','gear','seismic_vessel','other')"])
         self.assertEqual(query["date-range"], ["2025-09-01,2026-08-31"])
         self.assertEqual(query["format"], ["TIF"])
+
+    def test_window_json_is_the_aircraft_exposure_year(self):
+        cases = [("2027-01", datetime(2027, 1, 1, tzinfo=timezone.utc), ("2026-01-01", "2026-12-31", 365)),
+                 ("2026-10", datetime(2026, 10, 1, tzinfo=timezone.utc), ("2025-10-01", "2026-09-30", 365)),
+                 ("2024-03", datetime(2026, 9, 24, tzinfo=timezone.utc), ("2023-03-01", "2024-02-29", 366))]
+        for anchor, now, expected in cases:
+            with self.subTest(anchor=anchor), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory)
+                (output / "token").write_text("t")
+                with patch.object(download_gfw, "datetime") as clock, \
+                        patch.object(download_gfw, "download") as download, \
+                        patch("sys.argv", ["download_gfw.py", "--output", str(output), "--anchor", anchor,
+                                           "--token-file", str(output / "token")]):
+                    clock.now.return_value = now
+                    download_gfw.main()
+                window = json.loads((output / "window.json").read_text())
+                self.assertEqual((window["first_day"], window["last_day"], window["days"]), expected)
+                self.assertEqual(download.call_args.args[2:4], expected[:2])
 
     def test_download_resumes_from_receipts_and_stores_empty_tiles(self):
         class FakeClient:

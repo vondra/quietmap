@@ -180,8 +180,10 @@ the source archive and digest, then use `--enrich-only` for national roads.
 to z9. Reuse validated Stage 0/1 segment files; do not re-extract them just because
 the world prepared tree has no aircraft output yet.
 
-`aircraft_anchor` selects 12 monthly airline samples and the preceding GA year
-through `scripts/aircraft_window.py`. Publisher receipts determine admitted GA days;
+`aircraft_anchor` (YYYY-MM) is the month after the exposure year: `scripts/aircraft_window.py`
+selects every GA day of `[anchor − 1 year, anchor)` and the 12 airline month-firsts in it,
+and `scripts/ships/download_gfw.py` requests the same days. Anchor 2027-01 is calendar
+2026; anchor 2026-10 is 2025-10-01 … 2026-09-30. Publisher receipts determine admitted GA days;
 use that recorded list and class normalization, never a hardcoded 365 divisor.
 For example, the September 2026 delivery admitted 12 airline and 364 GA days:
 May 6 contained only excluded MLAT traffic. Refresh the sources and anchor together.
