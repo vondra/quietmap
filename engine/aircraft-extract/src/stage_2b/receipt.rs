@@ -88,14 +88,7 @@ fn window_key(window: &SamplingWindow) -> String {
 }
 
 fn scope_key(scope: Option<&ScopeBbox>) -> String {
-    scope
-        .map(|value| {
-            format!(
-                "{}:{}:{}:{}",
-                value.min_lat, value.min_lon, value.max_lat, value.max_lon
-            )
-        })
-        .unwrap_or_default()
+    scope.map(ScopeBbox::key).unwrap_or_default()
 }
 
 pub(super) fn create(

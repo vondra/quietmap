@@ -33,7 +33,7 @@ fn digest(path: &Path) -> Result<Vec<u8>> {
 
 fn scope_key(scope: Option<&ScopeBbox>) -> String {
     scope
-        .map(|s| format!("{},{},{},{}", s.min_lat, s.max_lat, s.min_lon, s.max_lon))
+        .map(ScopeBbox::key)
         .unwrap_or_default()
 }
 

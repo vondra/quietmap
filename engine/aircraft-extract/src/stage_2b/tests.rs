@@ -414,7 +414,7 @@ fn fold_publishes_each_canonical_row_once_in_its_owner_square() {
         let mut expected: HashMap<u64, Vec<CruiseBucket>> = HashMap::new();
         let mut canonical_length = 0.0f64;
         for (owner, map) in canonical {
-            if scope.is_some_and(|scope| !scope.contains_square(owner)) {
+            if scope.as_ref().is_some_and(|scope| !scope.contains_square(owner)) {
                 continue;
             }
             for (key, accum) in map {

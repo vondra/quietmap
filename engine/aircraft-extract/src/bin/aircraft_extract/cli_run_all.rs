@@ -104,14 +104,7 @@ pub fn run_all(request: RunAllRequest) -> Result<()> {
         increment_candidates: &increment_candidates,
     };
     if let Some(s) = scope.as_ref() {
-        eprintln!(
-            "{} [run-all] scope bbox: lat {}..{}, lon {}..{}",
-            ts(),
-            s.min_lat,
-            s.max_lat,
-            s.min_lon,
-            s.max_lon
-        );
+        eprintln!("{} [run-all] scope boxes: {}", ts(), s.key());
     }
     let rasters = RealRasters::new(&prepared_dir);
     let external_segments = !reused_segments_dirs.is_empty();
