@@ -42,7 +42,7 @@ class BuildStructuresTests(unittest.TestCase):
         }), path)
         with unittest.mock.patch.object(SOURCES, "overture_sources", return_value=[(49, 14, path)]):
             rows, _ = BUILDER.read_overture_parquet(self.prepared, GRID.parse_square_name(SQUARE))
-        self.assertEqual([row["height_m"] for row in rows], [12.0, 15.0])
+        self.assertEqual([row["overture_height"] for row in rows], [12.0, 15.0])
         buildings_arrow(self.prepared / SQUARE / "buildings.arrow",
                         [osm_row(0, OSM_POLY, 32.0, height=6.0)])
         census, table = self.build(rows)
@@ -53,7 +53,7 @@ class BuildStructuresTests(unittest.TestCase):
     def test_matched_row_keeps_overture_geometry_and_osm_attributes(self):
         buildings_arrow(self.prepared / SQUARE / "buildings.arrow",
                         [osm_row(0, OSM_POLY, 32.0)])
-        census, t = self.build([ovt_row(OVT_TWIN, h=8.0, tier=2)])
+        census, t = self.build([ovt_row(OVT_TWIN)])
         self.assertEqual(census["both"], 1)
         self.assertEqual(t.num_rows, 1)
         row = {name: t.column(name)[0].as_py() for name in t.column_names}
@@ -61,9 +61,9 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(row["geom"], screening_polygons(OVT_TWIN))  # screening geometry
         self.assertEqual(row["osm_id"], 1000)
         self.assertEqual(row["building_type"], 11)
-        # Matched: Overture ladder height (tier 2 -> GHSL 12.5 -> tier 4), the
-        # raw OSM height stays the emission input.
-        self.assertEqual(row["height_tier"], 4)
+        # Matched without any per-building height: GHSL 12.5; the raw OSM height stays the
+        # emission input.
+        self.assertEqual(row["height_source"], CONTRACT.HEIGHT_SOURCE_GHSL)
         self.assertEqual(row["height_m"], 13)
         self.assertIsNone(row["height"])
         # The screening centroid is the Overture one; the OSM centroid rides the
@@ -72,7 +72,7 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(row["emission_centroid_gx"], GRID.lonlat_to_grid(OSM_POLY.centroid.x, OSM_POLY.centroid.y)[0])
         self.assertEqual(row["emission_geom"], grid_polygon(OSM_POLY))
 
-    def test_explicit_open_carport_keeps_geometry_but_never_an_indoor_envelope(self):
+    def test_explicit_open_carport_keeps_geometry_but_neither_walls_nor_an_indoor_envelope(self):
         source = self.prepared / SQUARE / "buildings.arrow"
         for matched in [False, True]:
             for overture_envelope in range(6):
@@ -91,7 +91,11 @@ class BuildStructuresTests(unittest.TestCase):
                     self.assertEqual(carport["envelope_class"], SOURCES.ENVELOPE_OUTDOOR)
                     self.assertIsNotNone(carport["geom"])
                     self.assertIsNotNone(carport["screening_ordinal"])
-                    for field in garage.keys() - {"building_use", "envelope_class"}:
+                    self.assertEqual((garage["height_m"], carport["height_m"]), (13, 0))
+                    self.assertEqual(carport["height_source"], CONTRACT.HEIGHT_SOURCE_OPEN_ROOF)
+                    self.assertEqual(carport["storeys"], 1)
+                    for field in garage.keys() - {"building_use", "envelope_class", "height_m",
+                                                  "height_source", "storeys", "storeys_source"}:
                         self.assertEqual(carport[field], garage[field], field)
 
     def test_school_ground_emits_but_never_screens_or_borrows_an_overture_footprint(self):
@@ -106,6 +110,8 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual((area["osm_id"], area["building_type"]), (1000, 3))
         self.assertEqual(area["emission_geom"], grid_polygon(OSM_WAREHOUSE))
         self.assertEqual((area["geom"], area["screening_ordinal"], area["height_m"]), (None, None, 0))
+        self.assertEqual((area["height_source"], area["storeys"]),
+                         (CONTRACT.HEIGHT_SOURCE_GROUND_ACTIVITY, 1))
         self.assertEqual((overture["osm_id"], overture["screening_ordinal"]), (None, 0))
         self.assertEqual(overture["geom"], screening_polygons(OVT_ANNEX_TWIN))
 
@@ -136,7 +142,7 @@ class BuildStructuresTests(unittest.TestCase):
     def test_big_osm_only_row_keeps_original_emission_ring(self):
         buildings_arrow(self.prepared / SQUARE / "buildings.arrow",
                         [osm_row(0, OSM_HALL, 5000.0)])
-        census, t = self.build([ovt_row(OVT_TWIN, h=9.0, tier=1)])
+        census, t = self.build([ovt_row(OVT_TWIN)])
         # The hall and the twin do not overlap: no match, two building rows.
         self.assertEqual(census["both"], 0)
         self.assertEqual(census["overture_only"], 1)
@@ -149,7 +155,7 @@ class BuildStructuresTests(unittest.TestCase):
         hall_twin = shapely.box(14.176004, 49.786003, 14.176404, 49.786203)
         buildings_arrow(self.prepared / SQUARE / "buildings.arrow",
                         [osm_row(0, OSM_HALL, 5000.0)])
-        census, t = self.build([ovt_row(hall_twin, h=8.0, tier=2)])
+        census, t = self.build([ovt_row(hall_twin)])
         self.assertEqual(census["both"], 1)
         row = {name: t.column(name)[0].as_py() for name in t.column_names}
         self.assertEqual(row["geom"], screening_polygons(hall_twin))
@@ -157,23 +163,53 @@ class BuildStructuresTests(unittest.TestCase):
 
     def test_osm_only_row_ladders_from_osm_tags(self):
         buildings_arrow(self.prepared / SQUARE / "buildings.arrow", [
-            osm_row(0, OSM_SHED, 16.0, height=4.5),       # mapped -> tier 0
-            osm_row(1, OSM_HALL, 5000.0, floors=5),       # floors -> tier 1, 15 m
-            osm_row(2, None, None),                       # node row, default 8 m
+            osm_row(0, OSM_SHED, 16.0, height=4.5),       # mapped height
+            osm_row(1, OSM_HALL, 5000.0, floors=5),       # 5 floors x 3 m + 3 m roof
+            osm_row(2, None, None),                       # node row: GHSL, no footprint
         ])
         census, t = self.build([])
         self.assertEqual(t.num_rows, 3)
-        self.assertEqual(t.column("height_tier").to_pylist(), [0, 1, 2])
-        self.assertEqual(t.column("height_m").to_pylist(), [5, 15, 8])
+        self.assertEqual(t.column("height_source").to_pylist(), [
+            CONTRACT.HEIGHT_SOURCE_OSM_HEIGHT, CONTRACT.HEIGHT_SOURCE_FLOORS,
+            CONTRACT.HEIGHT_SOURCE_GHSL])
+        self.assertEqual(t.column("height_m").to_pylist(), [5, 18, 4])
+        self.assertEqual(t.column("storeys").to_pylist(), [1, 5, 1])
         # The node row has no geometry; the others do.
         self.assertIsNone(t.column("geom")[2].as_py())
+
+    def test_matched_row_takes_the_first_rung_any_source_offers(self):
+        """Matched rows once ranked only Overture's values: 3.99 M national or OSM floor counts
+        and 279 k OSM heights never reached the screening height (r260919)."""
+        cases = [  # OSM height, OSM floors, Overture height, Overture floors -> height, source
+            (None, 4, 30.0, 0, 15, CONTRACT.HEIGHT_SOURCE_FLOORS),
+            (21.0, 4, 30.0, 0, 21, CONTRACT.HEIGHT_SOURCE_OSM_HEIGHT),
+            (None, 0, 30.0, 2, 9, CONTRACT.HEIGHT_SOURCE_FLOORS),
+            (None, 0, 30.0, 0, 30, CONTRACT.HEIGHT_SOURCE_OVERTURE_HEIGHT),
+            (None, 0, 0.4, 0, 13, CONTRACT.HEIGHT_SOURCE_GHSL),
+        ]
+        for osm_height, floors, height, overture_floors, expected, source in cases:
+            with self.subTest(osm_height=osm_height, floors=floors, height=height):
+                (self.prepared / SQUARE / "structures.arrow").unlink(missing_ok=True)
+                buildings_arrow(self.prepared / SQUARE / "buildings.arrow",
+                                [osm_row(0, OSM_POLY, 32.0, height=osm_height, floors=floors)])
+                _, t = self.build([ovt_row(OVT_TWIN, height=height, floors=overture_floors)])
+                self.assertEqual((t.column("height_m")[0].as_py(),
+                                  t.column("height_source")[0].as_py()), (expected, source))
+
+    def test_overture_roof_screens_nothing_while_a_greenhouse_keeps_its_walls(self):
+        _, t = self.build([ovt_row(OVT_TWIN, height=4.0, envelope=0, open_roof=True),
+                           ovt_row(OVT_LONELY, height=4.0, envelope=0)])
+        self.assertEqual(t.column("height_m").to_pylist(), [0, 4])
+        self.assertEqual(t.column("envelope_class").to_pylist(), [0, 0])
+        self.assertIsNotNone(t.column("geom")[0].as_py())
 
     def test_row_order_is_osm_then_overture_only_then_walls(self):
         buildings_arrow(self.prepared / SQUARE / "buildings.arrow",
                         [osm_row(0, OSM_POLY, 32.0), osm_row(1, OSM_SHED, 16.0)])
         barriers_arrow(self.prepared / SQUARE / "barriers.arrow", [
             {"osm_id": 55, "segment_idx": 0, "start_lat": 49.78, "start_lon": 14.17,
-             "end_lat": 49.7801, "end_lon": 14.1702, "height": 3.0, "height_tier": 2},
+             "end_lat": 49.7801, "end_lon": 14.1702, "height": 3.0, "height_tier": 2,
+             "country": "DE"},
             {"osm_id": 55, "segment_idx": 1, "start_lat": 49.7801, "start_lon": 14.1702,
              "end_lat": 49.7802, "end_lon": 14.1703, "height": 4.5, "height_tier": 0},
         ])
@@ -187,11 +223,12 @@ class BuildStructuresTests(unittest.TestCase):
         ring = GRID.decode_grid_poly(t.column("geom")[3].as_py())
         self.assertEqual(len(ring), 2)
         self.assertEqual(ring[0], GRID.lonlat_to_grid(14.17, 49.78))
-        # Unmapped buildings use GHSL; walls retain the extractor's explicit tiers.
-        self.assertEqual(t.column("height_tier").to_pylist(), [4, 4, 4, 2, 0])
-        self.assertEqual(t.column("height_m").to_pylist()[-2:], [3, 5])
+        # Unmapped buildings use GHSL; an unmapped German wall stands at the national mean.
+        self.assertEqual(t.column("height_source").to_pylist(), [4, 4, 4, 8, 0])
+        self.assertEqual(t.column("height_m").to_pylist()[-2:], [4, 5])
+        self.assertEqual(t.column("storeys").to_pylist()[-2:], [None, None])
         meta = t.schema.metadata
-        self.assertEqual(meta[b"structures_contract"], b"structures_v4")
+        self.assertEqual(meta[b"structures_contract"], b"structures_v5")
         self.assertEqual(meta[b"building_rows"], b"3")
         self.assertEqual(meta[b"barrier_rows"], b"2")
 
@@ -293,7 +330,7 @@ class BuildStructuresTests(unittest.TestCase):
             "end_lat": 0.0, "end_lon": -179.999, "height": 3.0, "height_tier": 0}])
         table = ipc.open_file(path).read_all()
         _, output = self.build([])
-        self.assertEqual(output.column("height_tier").to_pylist(), [0])
+        self.assertEqual(output.column("height_source").to_pylist(), [0])
         lon, _ = GRID.grid_to_lonlat(output.column("centroid_gx")[0].as_py(),
                                      output.column("centroid_gy")[0].as_py())
         self.assertAlmostEqual(GRID.wrapped_longitude_delta(-180.0, lon), 0.0, places=5)
@@ -302,6 +339,14 @@ class BuildStructuresTests(unittest.TestCase):
         with ipc.new_file(path, table.schema) as writer:
             writer.write_table(table)
         with self.assertRaisesRegex(SystemExit, "height_tier"):
+            self.build([])
+        barriers_arrow(path, [{
+            "osm_id": 55, "segment_idx": 0, "start_lat": 0.0, "start_lon": 179.999,
+            "end_lat": 0.0, "end_lon": -179.999, "height": 3.0, "height_tier": 2}])
+        table = ipc.open_file(path).read_all()
+        with ipc.new_file(path, table.schema.with_metadata({b"grid": b"z30"})) as writer:
+            writer.write_table(table)
+        with self.assertRaisesRegex(SystemExit, "country"):
             self.build([])
 
 
@@ -346,7 +391,7 @@ class AntimeridianTests(unittest.TestCase):
                 osm_data = osm_row(0, osm, 3000.0, height=12.0)
                 lat, lon = SOURCES.footprint_centroid(osm)
                 osm_data["centroid_gx"], osm_data["centroid_gy"] = GRID.lonlat_to_grid(lon, lat)
-                overture_data = ovt_row(overture, h=12.0, tier=0)
+                overture_data = ovt_row(overture, height=12.0)
                 overture_data["clat"], overture_data["clon"] = SOURCES.footprint_centroid(overture)
                 square = GRID.square_of(lat, lon)
                 self.assertEqual(square, GRID.square_of(overture_data["clat"], overture_data["clon"]))

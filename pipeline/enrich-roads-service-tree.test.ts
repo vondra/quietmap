@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync }
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { test } from 'node:test'
-import { Bool, Field, makeTable, RecordBatch, Schema, Table, Utf8, tableToIPC, tableFromIPC, vectorFromArray } from 'apache-arrow'
+import { Bool, Field, Float32, Int32, Int64, Uint8, makeTable, RecordBatch, Schema, Table, Utf8, tableToIPC, tableFromIPC, vectorFromArray } from 'apache-arrow'
 import { buildGraph, findComponents, flowAccumulate, type ServiceRoad } from './lib/service-tree-flow.js'
 import { assignBuildingsGlobally } from './lib/service-tree-buildings.js'
 import { iso2Code } from './lib/prepared-grid.js'
@@ -38,7 +38,7 @@ test('tracks do not root; measured locals, tunnels and access exclusions do root
 
 test('global assignment chooses one component, preserves ties and handles the dateline', () => {
   const roads = [road(0, 1), road(0, 1)]
-  const buildings = [{ lat: 50.00001, lon: 14.0005, type: 0, floors: 2, area: 400 }]
+  const buildings = [{ lat: 50.00001, lon: 14.0005, type: 0, storeys: 2, area: 400 }]
   assert.deepEqual([...assignBuildingsGlobally(roads, [1, 0], buildings)], [[1, { dwellings: 10, trips: 0 }]])
   assert.equal(assignBuildingsGlobally(roads, [0], [{ ...buildings[0], lat: 50 + 50.001 / 110540 }]).size, 0)
   assert.equal(assignBuildingsGlobally(roads, [0], [{ ...buildings[0], lat: 50 + 49.999 / 110540 }]).size, 1)
@@ -90,10 +90,24 @@ function fixture(directory: string, roads: ServiceRoad[], emptyBuildings = false
     speed_taper: Uint8Array.from(roads, () => 41), speed_limit: Uint8Array.from(roads, () => 50),
   } as never) as unknown as Table
   store(resolve(directory, 'roads.arrow'), table, new Map([['grid', 'z30'], ['roads_contract', 'country_baked_v1'], ['road_traffic_contract', '0'], ['qm_blocks', encodeQmBlocks([[50, 14, 50.01, 14.01]])]]))
+  // The structures_v5 producer contract (scripts/structures/structure_contract.py): OSM emission
+  // rows carry demand storeys; an Overture-only footprint and a wall carry no demand.
   const points = emptyBuildings ? [] : [grid(50.00001, 14.0015)]
-  const buildings = makeTable({ centroid_gx: Int32Array.from(points, r => r[0]), centroid_gy: Int32Array.from(points, r => r[1]),
-    building_type: new Uint8Array(points.length), floors: Uint8Array.from(points, () => 2), area_m2: Float32Array.from(points, () => 400) })
-  store(resolve(directory, 'buildings.arrow'), buildings, new Map([['grid', 'z30'], ['buildings_contract', 'buildings_v5']]))
+  const [overture, wall] = [grid(50.00001, 14.0005), grid(50.00001, 14.0025)]
+  const rows = [...points.map(point => ({ kind: 0, osmId: 7n, type: 0, storeys: 2, centroid: overture, emission: point })),
+    { kind: 0, osmId: null, type: null, storeys: 9, centroid: overture, emission: null },
+    { kind: 1, osmId: 8n, type: null, storeys: null, centroid: wall, emission: null }]
+  const structures = makeTable({
+    kind: Uint8Array.from(rows, r => r.kind), centroid_gx: Int32Array.from(rows, r => r.centroid[0]),
+    centroid_gy: Int32Array.from(rows, r => r.centroid[1]),
+    osm_id: vectorFromArray(rows.map(r => r.osmId), new Int64()),
+    building_type: vectorFromArray(rows.map(r => r.type), new Uint8()),
+    storeys: vectorFromArray(rows.map(r => r.storeys), new Uint8()),
+    emission_centroid_gx: vectorFromArray(rows.map(r => r.emission?.[0] ?? null), new Int32()),
+    emission_centroid_gy: vectorFromArray(rows.map(r => r.emission?.[1] ?? null), new Int32()),
+    area_m2: vectorFromArray(rows.map(r => r.kind === 0 ? 400 : null), new Float32()),
+  } as never) as unknown as Table
+  store(resolve(directory, 'structures.arrow'), structures, new Map([['grid', 'z30'], ['structures_contract', 'structures_v5']]))
 }
 
 test('real IPC preserves measured roads, all other columns and batches; retraction heals even without eligible roads', async () => {
@@ -122,7 +136,11 @@ test('real IPC preserves measured roads, all other columns and batches; retracti
     fixture(stale, [{ ...road(0, 1, 8, SELF) }], true)
     assert.equal((await enrichServiceTreeSquare(stale)).retracted, 1)
     assert.equal((await enrichServiceTreeSquare(stale)).updated, false)
-    rmSync(resolve(work, 'buildings.arrow'))
+    const structuresPath = resolve(work, 'structures.arrow'), structures = tableFromIPC(readFileSync(structuresPath))
+    // Floors before the storey fill (structures_v4) are not the demand truth.
+    store(structuresPath, structures, new Map([['grid', 'z30'], ['structures_contract', 'structures_v4']]))
+    await assert.rejects(enrichServiceTreeSquare(work), /structures_v5/)
+    rmSync(structuresPath)
     assert.equal((await enrichServiceTreeSquare(work)).retracted, 1)
     assert.deepEqual([...tableFromIPC(readFileSync(path)).getChild('source_id')!], [10, 0, 0])
     assert.equal((await enrichServiceTreeSquare(work)).updated, false)

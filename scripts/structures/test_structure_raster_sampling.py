@@ -58,37 +58,32 @@ class RasterSamplingTests(unittest.TestCase):
                     with self.assertRaises((ValueError, OverflowError)):
                         prior.sample_many([invalid], [0])
 
-    def test_prior_batch_preserves_regional_precedence_abstention_and_clamping(self):
-        rows = [dict(clon=float(i), clat=0.0, tier=tier, height_m=height,
-                     geom=shapely.Point(i, 0))
-                for i, (tier, height) in enumerate([(0, 17), (1, 9), (1, 6),
-                    (2, 8), (2, 8), (2, 8), (2, 8), (2, 8), (2, 8)])]
+    def test_survey_answers_first_and_ghsl_is_sampled_only_where_needed(self):
+        rows = [dict(clon=float(i), clat=0.0, geom=None if i == 2 else shapely.Point(i, 0),
+                     needs_ghsl=i != 4) for i in range(6)]
         regional = SimpleNamespace(
             tr=SimpleNamespace(transform=lambda xs, ys: (xs, ys)),
-            covers=lambda x, _y: x < 5,
-            zonal_measured_mean=lambda geometry: {1: 500, 3: 0.5}.get(int(geometry.x)))
-        ghsl = SimpleNamespace(sample_many=Mock(return_value=np.array([1.5, 200, 0.5, np.nan, 15])))
-        stats = dict(tier3=0, tier4=0, abstain=0)
-        SOURCES.apply_raster_tiers(rows, regional, ghsl, stats)
-        self.assertEqual([(row['tier'], row['height_m']) for row in rows],
-                         [(0, 17), (3, 250), (1, 6), (3, 2.5), (4, 3),
-                          (4, 100), (2, 8), (2, 8), (4, 15)])
-        self.assertEqual(stats, dict(tier3=2, tier4=3, abstain=2))
-        ghsl.sample_many.assert_called_once_with([4., 5., 6., 7., 8.], [0.] * 5)
+            covers=lambda x, _y: x < 3,
+            zonal_measured_mean=lambda geometry: {1: 20.5}.get(int(geometry.x)))
+        ghsl = SimpleNamespace(sample_many=Mock(return_value=np.array([7.0, 8.0, 9.0, 10.0])))
+        stats = dict(regional=0, abstain=0)
+        SOURCES.sample_raster_heights(rows, regional, ghsl, stats)
+        self.assertEqual([row['regional_m'] for row in rows], [None, 20.5, None, None, None, None])
+        np.testing.assert_array_equal([row['ghsl_m'] for row in rows],
+                                      [7.0, np.nan, 8.0, 9.0, np.nan, 10.0])
+        self.assertEqual(stats, dict(regional=1, abstain=1))
+        ghsl.sample_many.assert_called_once_with([0., 2., 3., 5.], [0.] * 4)
 
     def test_large_square_batches_preserve_row_order_and_bound_temporary_arrays(self):
-        rows = [dict(clon=float(i), clat=0.0, tier=2, height_m=8) for i in range(65539)]
+        rows = [dict(clon=float(i), clat=0.0, geom=None, needs_ghsl=True) for i in range(65539)]
         sizes = []
         def sample(lons, lats):
             sizes.append(len(lons))
             return np.asarray(lons) % 40
-        stats = dict(tier3=0, tier4=0, abstain=0)
-        SOURCES.apply_raster_tiers(rows, None, SimpleNamespace(sample_many=sample), stats)
+        SOURCES.sample_raster_heights(rows, None, SimpleNamespace(sample_many=sample),
+                                      dict(regional=0, abstain=0))
         self.assertEqual(sizes, [65536, 3])
-        self.assertEqual(stats['tier4'], sum(i % 40 >= 1 for i in range(len(rows))))
-        self.assertEqual([(r['tier'], r['height_m']) for r in rows],
-                         [(4, max(float(i % 40), 3)) if i % 40 else (2, 8)
-                          for i in range(len(rows))])
+        self.assertEqual([r['ghsl_m'] for r in rows], [float(i % 40) for i in range(len(rows))])
 
 
 if __name__ == '__main__':

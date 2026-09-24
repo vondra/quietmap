@@ -1,5 +1,6 @@
 """One-to-one OSM/Overture merge preserving emission order and screening identity."""
 
+from collections import Counter
 import os
 
 import pyarrow as pa
@@ -11,12 +12,16 @@ import qmgrid
 from structure_freshness import input_stamps, structure_input_files
 from structure_contract import (
     SCHEMA, CONTRACT_KEY, CONTRACT_VERSION, KIND_BUILDING, KIND_BARRIER,
+    HEIGHT_SOURCE_GROUND_ACTIVITY, HEIGHT_SOURCE_OPEN_ROOF,
     load_osm_buildings, load_barriers, wall_grid_poly, wall_centroid_grid,
     validate_square, screening_height_metres,
 )
+from structure_heights import (
+    demand_storeys_and_source, needs_ghsl, screening_height_and_source, wall_height_and_source,
+)
 from structure_inputs import (
-    ENVELOPE_FROM_BUILDING_USE, ENVELOPE_DEFAULT, ENVELOPE_OUTDOOR,
-    apply_raster_tiers, overture_height_ladder, footprint_in_longitude_frame,
+    BUILDING_USE_OPEN_ROOF, ENVELOPE_FROM_BUILDING_USE, ENVELOPE_DEFAULT, ENVELOPE_OUTDOOR,
+    footprint_area_m2, footprint_in_longitude_frame, sample_raster_heights,
 )
 
 IOU_MATCH_THRESHOLD = 0.5
@@ -26,7 +31,11 @@ IOU_MATCH_THRESHOLD = 0.5
 # 2: an area source (buildings_v4 `area_source`) emits but never matches, screens or has a height.
 # 3: explicitly underground Overture footprints are not screening stock.
 # 4: explicit OSM open carports stay outdoors, including Overture-matched footprints.
-BUILDER_VERSION = "structures-builder-4"
+# 5: one height ladder for every footprint, open roofs screen 0 m, demand storeys, national
+#    wall defaults (structures_v5).
+BUILDER_VERSION = "structures-builder-5"
+# barriers.arrow height_tier: 0 = the wall's own OSM height tag, 2 = none mapped.
+BARRIER_HEIGHT_TIER_MAPPED = 0
 
 
 def structure_is_fresh(out_path, stamps):
@@ -87,6 +96,33 @@ def match_pairs(osm_geoms, osm_geom_idx, overture_rows):
         pairs[j] = i
     return pairs
 
+def screening_candidate(osm, i_osm, osm_geom, ovt, ordinal):
+    """One output building row's height evidence: OSM attributes where the row is OSM's, the
+    Overture footprint and values where it is matched or Overture's alone."""
+    osm_value = (lambda column: osm[column][i_osm]) if i_osm is not None else (lambda _: None)
+    if ovt is not None:
+        if ovt.get("geom") is None:
+            ovt["geom"] = shapely.from_wkb(ovt["wkb"])
+        geom, clat, clon = ovt["geom"], ovt["clat"], ovt["clon"]
+    else:
+        geom = osm_geom
+        clon, clat = qmgrid.grid_to_lonlat(osm["centroid_gx"][i_osm], osm["centroid_gy"][i_osm])
+    floors = osm_value("floors") or (ovt["overture_floors"] if ovt is not None else 0)
+    osm_height = osm_value("height")
+    overture_height = ovt["overture_height"] if ovt is not None else None
+    return {
+        "i_osm": i_osm, "ovt": ovt, "ordinal": ordinal, "geom": geom, "clat": clat, "clon": clon,
+        "osm_height": osm_height, "floors": floors, "overture_height": overture_height,
+        "ground": bool(osm_value("area_source")),
+        "open_roof": (osm_value("building_use") == BUILDING_USE_OPEN_ROOF
+                      or (ovt is not None and ovt["open_roof"])),
+        # A footprint-less OSM node keeps its mapped area; with none it counts as the smallest.
+        "footprint_m2": (footprint_area_m2(geom, clat) if geom is not None
+                         else osm_value("area_m2") or 0.0),
+        "needs_ghsl": needs_ghsl(osm_height, floors, overture_height),
+    }
+
+
 def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, regional):
     """Write one square's structures.arrow; return the census dict, or None
     when the square is up to date (idempotent skip)."""
@@ -118,31 +154,34 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
     pairs = match_pairs(osm_geoms, osm_geom_idx, overture_rows)
     osm_to_ovt = {i: j for j, i in pairs.items()}
 
-    osm_only = {}
+    matched_ovt = set(pairs)
+    # Emission order: every OSM row (matched or alone), then Overture-only rows.
     n_osm = len(osm["osm_id"])
-    matched_osm = set(pairs.values())
-    raster_rows = list(overture_rows)
-    for i in range(n_osm):
-        if i in matched_osm:
-            continue
-        h, tier = ((0.0, 2) if osm["area_source"][i]
-                   else overture_height_ladder(osm["height"][i], osm["floors"][i]))
-        gx, gy = osm["centroid_gx"][i], osm["centroid_gy"][i]
-        clon, clat = qmgrid.grid_to_lonlat(gx, gy)
-        row = {"height_m": h, "tier": tier,
-               "clat": clat, "clon": clon, "osm_row": i}
-        row["geom"] = osm_geom_by_row.get(i)
-        osm_only[i] = row
-        if row["geom"] is not None:
-            raster_rows.append(row)
-    stats = {"tier3": 0, "tier4": 0, "abstain": 0}
-    apply_raster_tiers(raster_rows, regional, ghsl, stats)
+    candidates = [screening_candidate(osm, i, osm_geom_by_row.get(i),
+                                      overture_rows[osm_to_ovt[i]] if i in osm_to_ovt else None,
+                                      osm_to_ovt.get(i))
+                  for i in range(n_osm)]
+    candidates += [screening_candidate(osm, None, None, row, j)
+                   for j, row in enumerate(overture_rows) if j not in matched_ovt]
+    laddered = [c for c in candidates if not (c["ground"] or c["open_roof"])]
+    stats = {"regional": 0, "abstain": 0}
+    sample_raster_heights(laddered, regional, ghsl, stats)
+    for c in candidates:
+        if c["ground"] or c["open_roof"]:
+            c["height_m"] = 0.0
+            c["height_source"] = (HEIGHT_SOURCE_GROUND_ACTIVITY if c["ground"]
+                                  else HEIGHT_SOURCE_OPEN_ROOF)
+            c["storeys"] = demand_storeys_and_source(c["floors"], None)
+        else:
+            c["height_m"], c["height_source"] = screening_height_and_source(
+                c["regional_m"], c["osm_height"], c["floors"], c["overture_height"],
+                c["ghsl_m"], c["footprint_m2"])
+            c["storeys"] = demand_storeys_and_source(c["floors"], c["height_m"])
 
     out = {f: [] for f in SCHEMA.names}
-    n_both = 0
-    n_osm_only_geom = sum(
-        1 for i in osm_only if osm_geom_by_row.get(i) is not None
-    )
+    n_both = len(pairs)
+    n_osm_only_geom = sum(1 for i in range(n_osm)
+                          if i not in osm_to_ovt and i in osm_geom_by_row)
     osm_only_geom_counter = 0
     wall_counter = 0
 
@@ -153,37 +192,34 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
              for ring in [part.exterior, *part.interiors]] for part in parts
         ])
 
-    def emit(i_osm, ovt, ordinal):
+    def emit(c, ordinal):
+        i_osm, ovt = c["i_osm"], c["ovt"]
         if ovt is not None:
-            geom_blob = snap_geom(ovt_geom(ovt))
-            height_m, tier = ovt["height_m"], ovt["tier"]
+            geom_blob = snap_geom(c["geom"])
             envelope = ovt["envelope"]
             cgx, cgy = qmgrid.lonlat_to_grid(ovt["clon"], ovt["clat"])
         else:
             geom_blob = (
                 qmgrid.encode_grid_polygons([[qmgrid.decode_grid_poly(osm["geom"][i_osm])]])
                 if i_osm in osm_geom_by_row else None)
-            r = osm_only[i_osm]  # every unmatched OSM row laddered above
-            height_m, tier = r["height_m"], r["tier"]
             envelope = ENVELOPE_FROM_BUILDING_USE.get(
                 osm["building_use"][i_osm], ENVELOPE_DEFAULT
             )
             cgx, cgy = osm["centroid_gx"][i_osm], osm["centroid_gy"][i_osm]
         # OSM explicitly knows the canopy is open even when Overture has only a generic class.
-        if (i_osm is not None and ENVELOPE_FROM_BUILDING_USE.get(
-                osm["building_use"][i_osm]) == ENVELOPE_OUTDOOR):
+        if i_osm is not None and osm["building_use"][i_osm] == BUILDING_USE_OPEN_ROOF:
             envelope = ENVELOPE_OUTDOOR
         out["kind"].append(KIND_BUILDING)
         out["geom"].append(geom_blob)
-        out["height_m"].append(screening_height_metres(height_m))
-        out["height_tier"].append(tier)
+        out["height_m"].append(screening_height_metres(c["height_m"]))
+        out["height_source"].append(c["height_source"])
         out["envelope_class"].append(envelope)
         out["centroid_gx"].append(cgx)
         out["centroid_gy"].append(cgy)
-        for c in ("osm_id", "building_type", "building_use", "height", "floors",
-                  "name", "addr_street", "addr_housenumber", "area_m2",
-                  "opening_hours_frac", "source_id"):
-            out[c].append(osm[c][i_osm] if i_osm is not None else None)
+        for column in ("osm_id", "building_type", "building_use", "height", "floors",
+                       "name", "addr_street", "addr_housenumber", "area_m2",
+                       "opening_hours_frac", "source_id"):
+            out[column].append(osm[column][i_osm] if i_osm is not None else None)
         # Screening topology can differ; emission always retains the original ring.
         out["emission_geom"].append(osm["geom"][i_osm] if i_osm is not None else None)
         if i_osm is not None and ovt is not None:
@@ -192,56 +228,44 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
         else:
             out["emission_centroid_gx"].append(None)
             out["emission_centroid_gy"].append(None)
+        out["storeys"].append(c["storeys"][0])
+        out["storeys_source"].append(c["storeys"][1])
         out["segment_idx"].append(None)
         out["screening_ordinal"].append(ordinal)
 
-    def ovt_geom(ovt):
-        g = ovt.get("geom")
-        if g is None:
-            from shapely import wkb as shapely_wkb
-            g = shapely_wkb.loads(ovt["wkb"])
-            ovt["geom"] = g
-        return g
-
-    for i in range(n_osm):
-        j = osm_to_ovt.get(i)
-        if j is not None:
-            n_both += 1
-            emit(i, overture_rows[j], j)
+    for c in candidates[:n_osm]:
+        if c["ovt"] is not None:
+            emit(c, c["ordinal"])
+        elif c["i_osm"] in osm_geom_by_row:
+            emit(c, len(overture_rows) + osm_only_geom_counter)
+            osm_only_geom_counter += 1
         else:
-            has_geom = osm_geom_by_row.get(i) is not None
-            ordinal = None
-            if has_geom:
-                ordinal = len(overture_rows) + osm_only_geom_counter
-                osm_only_geom_counter += 1
-            emit(i, None, ordinal)
-    matched_ovt = set(pairs.keys())
-    n_ovt_only = 0
-    for j, row in enumerate(overture_rows):
-        if j in matched_ovt:
-            continue
-        n_ovt_only += 1
-        emit(None, row, j)
+            emit(c, None)
+    for c in candidates[n_osm:]:
+        emit(c, c["ordinal"])
+    n_ovt_only = len(candidates) - n_osm
 
-    # Walls: one row per micro-segment, grid polyline, mapped-or-default height.
+    # Walls: one row per micro-segment, grid polyline, mapped or national default height.
     for b in barriers:
         out["kind"].append(KIND_BARRIER)
         out["geom"].append(wall_grid_poly(
             b["start_gx"], b["start_gy"], b["end_gx"], b["end_gy"]))
-        h = b["height"]
-        out["height_m"].append(screening_height_metres(h))
-        out["height_tier"].append(b["height_tier"])
+        height_m, height_source = wall_height_and_source(
+            b["height"], b["height_tier"] == BARRIER_HEIGHT_TIER_MAPPED, b["country_iso"])
+        out["height_m"].append(screening_height_metres(height_m))
+        out["height_source"].append(height_source)
         out["envelope_class"].append(ENVELOPE_OUTDOOR)
         cgx, cgy = wall_centroid_grid(
             b["start_gx"], b["start_gy"], b["end_gx"], b["end_gy"])
         out["centroid_gx"].append(cgx)
         out["centroid_gy"].append(cgy)
         out["osm_id"].append(b["osm_id"])
-        for c in ("building_type", "building_use", "height", "floors", "name",
-                  "addr_street", "addr_housenumber", "area_m2",
-                  "opening_hours_frac", "source_id", "emission_geom",
-                  "emission_centroid_gx", "emission_centroid_gy"):
-            out[c].append(None)
+        for column in ("building_type", "building_use", "height", "floors", "name",
+                       "addr_street", "addr_housenumber", "area_m2",
+                       "opening_hours_frac", "source_id", "emission_geom",
+                       "emission_centroid_gx", "emission_centroid_gy",
+                       "storeys", "storeys_source"):
+            out[column].append(None)
         out["segment_idx"].append(b["segment_idx"])
         out["screening_ordinal"].append(
             len(overture_rows) + n_osm_only_geom + wall_counter
@@ -288,8 +312,8 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
         "overture_only": n_ovt_only,
         "walls": len(barriers),
         "rows": table.num_rows,
-        "tier3": stats["tier3"],
-        "tier4": stats["tier4"],
+        "regional": stats["regional"],
         "regional_abstain": stats["abstain"],
+        "height_sources": dict(sorted(Counter(out["height_source"]).items())),
         "bytes": os.path.getsize(out_path),
     }

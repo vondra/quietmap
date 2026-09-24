@@ -98,8 +98,10 @@ def already_baked(path):
 
 
 def process_square(prepared, resolver, name):
-    counts = Counter(roads_rows=0, railways_rows=0, industrial_rows=0, files_changed=0, squares=0)
-    for layer in ("roads", "railways", "industrial"):
+    counts = Counter(roads_rows=0, railways_rows=0, industrial_rows=0, barriers_rows=0,
+                     files_changed=0, squares=0)
+    # Noise walls take their national default height from their own country.
+    for layer in ("roads", "railways", "industrial", "barriers"):
         path = prepared / name / f"{layer}.arrow"
         if not path.is_file():
             continue

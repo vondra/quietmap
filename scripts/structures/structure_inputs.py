@@ -16,18 +16,13 @@ from structure_inventory import overture_sources
 MEASURED_MIN_M = 2.0      # zonal pixels below this are "not a building surface here"
 COVERAGE_MIN_FRAC = 0.30  # measured pixels must cover this share of the footprint
 COVERAGE_MIN_PX = 3
-TIER3_CLAMP = (2.5, 250.0)
-ANBH_MIN_M = 1.0          # ANBH below this = no better info than the default
 ANBH_MAX_VALID = 250.0    # GHSL NoData sentinel is 255 — belt for a missing tag
-TIER4_CLAMP = (3.0, 100.0)
-
-FLOOR_HEIGHT = 3.0        # == noise_compute::constants::BUILDING_FLOOR_HEIGHT_M
-DEFAULT_HEIGHT = 8.0      # == noise_compute::constants::BUILDING_DEFAULT_HEIGHT_M
 
 ENVELOPE_OUTDOOR = 0
 ENVELOPE_DEFAULT = 5
-# OSM envelope-use codes: residential, commercial, industrial, explicit open carport.
-ENVELOPE_FROM_BUILDING_USE = {0: 1, 1: 2, 2: 3, 3: ENVELOPE_OUTDOOR}
+# OSM envelope-use codes: residential, commercial, industrial, explicit open carport or roof.
+BUILDING_USE_OPEN_ROOF = 3
+ENVELOPE_FROM_BUILDING_USE = {0: 1, 1: 2, 2: 3, BUILDING_USE_OPEN_ROOF: ENVELOPE_OUTDOOR}
 
 class GlobalPrior:
     """GHS-BUILT-H ANBH: nearest-pixel value at a WGS84 point (windowed reads)."""
@@ -128,8 +123,10 @@ class RegionalHeights:
 
 # Overture class/subtype -> envelope_class: the builder owns the whole
 # ingest+ladder+merge, so the mapping lives here, once.
-OUTDOOR_CLASSES = {
-    "carport", "roof", "greenhouse", "glasshouse", "bridge_structure", "grandstand",
+# A roof on posts has no walls to screen with; a greenhouse, a grandstand or a garage has.
+OPEN_ROOF_CLASSES = {"carport", "roof"}
+OUTDOOR_CLASSES = OPEN_ROOF_CLASSES | {
+    "greenhouse", "glasshouse", "bridge_structure", "grandstand",
 }
 RESIDENTIAL_CLASSES = {
     "allotment_house", "apartments", "beach_hut", "boathouse", "bungalow",
@@ -219,13 +216,14 @@ def grid_ring_to_shapely(ring):
     return shapely.Polygon(qmgrid.ring_to_lonlat(ring))
 
 
-def overture_height_ladder(h, f):
-    """The ingest ladder: mapped height, floors x 3 m, else the 8 m default."""
-    if h is not None and math.isfinite(h) and h > 0:
-        return float(h), 0
-    if f is not None and math.isfinite(f) and f > 0:
-        return float(f) * FLOOR_HEIGHT, 1
-    return DEFAULT_HEIGHT, 2
+# The spherical degree the typology's reference areas were measured with (pilot 2026-09-24).
+METRES_PER_DEGREE = 111_320.0
+
+
+def footprint_area_m2(geom, lat):
+    """Plan area in square metres on the local equirectangular frame, holes excluded."""
+    local = footprint_in_longitude_frame(geom, float(shapely.get_coordinates(geom)[0][0]))
+    return local.area * METRES_PER_DEGREE ** 2 * math.cos(math.radians(lat))
 
 
 def read_overture_parquet(parquet_dir, square):
@@ -266,51 +264,39 @@ def read_overture_parquet(parquet_dir, square):
                         if qmgrid.square_of(float(clats[i]), float(clons[i])) == square]
             values = table.take(pa.array(indices[selected], type=pa.int64())).to_pylist()
             for i, value in zip(selected, values):
-                hh, tier = overture_height_ladder(value.get("height"), value.get("num_floors"))
-                rows.append({"wkb": bytes(value["geometry"]), "height_m": hh, "tier": tier,
+                floors = value.get("num_floors")
+                rows.append({"wkb": bytes(value["geometry"]), "overture_height": value.get("height"),
+                             # Above uint8 is a tagging error, not a storey count.
+                             "overture_floors": floors if floors and 0 < floors <= 255 else 0,
+                             "open_roof": value.get("class") in OPEN_ROOF_CLASSES,
                              "clat": float(clats[i]), "clon": float(clons[i]),
                              "envelope": envelope_class(value.get("class"), value.get("subtype"))})
     return rows, inputs
 
-def apply_raster_tiers(rows, regional, ghsl, stats):
-    """Tiers 3/4 over row dicts keyed (tier, height_m, clat, clon, geom): the
-    regional zonal mean replaces tiers 1/2, the ANBH prior only tier 2."""
+def sample_raster_heights(rows, regional, ghsl, stats):
+    """Fill `regional_m` (survey zonal mean or None) for every row with a footprint inside the
+    regional raster, then `ghsl_m` (cell value or NaN) for rows whose `needs_ghsl` is set and
+    that the survey did not answer. Rows are dicts keyed (clat, clon, geom, needs_ghsl)."""
     n = len(rows)
+    for row in rows:
+        row["regional_m"] = None
+        row["ghsl_m"] = math.nan
     if n == 0:
         return
-    in_regional = np.zeros(n, dtype=bool)
     if regional is not None:
-        rx, ry = regional.tr.transform(
-            [r["clon"] for r in rows], [r["clat"] for r in rows]
-        )
-        for i in range(n):
-            in_regional[i] = regional.covers(rx[i], ry[i])
-    for i, row in enumerate(rows):
-        tier = row["tier"]
-        if tier == 0:
-            continue
-        if regional is not None and in_regional[i]:
-            geom = row.get("geom")
-            if geom is None:
-                from shapely import wkb as shapely_wkb
-                geom = shapely_wkb.loads(row["wkb"])
-                row["geom"] = geom
-            h = regional.zonal_measured_mean(geom)
-            if h is not None:
-                row["height_m"] = min(max(h, TIER3_CLAMP[0]), TIER3_CLAMP[1])
-                row["tier"] = 3
-                stats["tier3"] += 1
+        rx, ry = regional.tr.transform([r["clon"] for r in rows], [r["clat"] for r in rows])
+        for i, row in enumerate(rows):
+            if row["geom"] is None or not regional.covers(rx[i], ry[i]):
                 continue
-            stats["abstain"] += 1
+            row["regional_m"] = regional.zonal_measured_mean(row["geom"])
+            stats["abstain" if row["regional_m"] is None else "regional"] += 1
     # Bound temporary coordinate/index arrays even in the largest urban squares.
     for offset in range(0, n, 65536):
-        pending = [row for row in rows[offset:offset + 65536] if row["tier"] == 2]
+        pending = [row for row in rows[offset:offset + 65536]
+                   if row["needs_ghsl"] and row["regional_m"] is None]
         if not pending:
             continue
         values = ghsl.sample_many([row["clon"] for row in pending],
                                   [row["clat"] for row in pending])
         for row, value in zip(pending, values):
-            if value >= ANBH_MIN_M:
-                row["height_m"] = min(max(float(value), TIER4_CLAMP[0]), TIER4_CLAMP[1])
-                row["tier"] = 4
-                stats["tier4"] += 1
+            row["ghsl_m"] = float(value)

@@ -1,4 +1,4 @@
-"""Bake road built_up (0 unknown, 1 rural, 2 urban) from prepared structures_v4."""
+"""Bake road built_up (0 unknown, 1 rural, 2 urban) from prepared structures_v5."""
 
 import argparse
 from concurrent.futures import ProcessPoolExecutor

@@ -333,10 +333,10 @@ mod low_profile_seed_tests {
     /// nothing stands there — so it must not pull a real building's wall down.
     #[test]
     fn only_a_garage_that_stands_caps_a_real_building() {
-        // Tier 2 is the defaulted height the cap exists for.
+        // A height that is not per building is what the cap exists for.
         let tall = 18.0;
-        assert_eq!(lookup(true).capped_height(tall, 2, LAT, LON, 450.0), 3.0);
-        assert_eq!(lookup(false).capped_height(tall, 2, LAT, LON, 450.0), tall);
+        assert_eq!(lookup(true).capped_height(tall, false, LAT, LON, 450.0), 3.0);
+        assert_eq!(lookup(false).capped_height(tall, false, LAT, LON, 450.0), tall);
     }
 }
 
@@ -444,7 +444,7 @@ pub fn build_obstacle_index_from_arrow_bytes(
                 builder.add_polygon_wkb(&wkb, height, ObstacleKind::Building, id, class);
             }
             // Walls keep their mapped height: the cap is a building-only
-            // correction (noise_compute::low_profile caps tiers 2/4), and
+            // correction (noise_compute::low_profile caps typology/GHSL heights), and
             // add_polyline never clamps to the building height ceiling.
             STRUCTURE_KIND_BARRIER => {
                 let ring = decode_geom(Some(geom.value(i))).ok_or_else(|| {
@@ -488,9 +488,10 @@ fn building_geometry_and_height(
         .filter(|column| !column.is_null(row))
         .and_then(|column| grid::poly::decode_grid_polygons(column.value(row)))
         .ok_or_else(|| format!("row {row} has invalid building topology"))?;
-    let tier = col_u8(batch, "height_tier")
+    let height_source = col_u8(batch, "height_source")
         .filter(|column| !column.is_null(row))
-        .map_or(0, |column| column.value(row));
+        .ok_or_else(|| format!("row {row} has no height_source"))?
+        .value(row);
     let mut height = raw_height;
     if let (Some(gx), Some(gy)) = (col_i32(batch, "centroid_gx"), col_i32(batch, "centroid_gy")) {
         if !gx.is_null(row) && !gy.is_null(row) {
@@ -507,10 +508,16 @@ fn building_geometry_and_height(
                         .filter_map(|rings| grid::poly::ring_area_m2(&rings[0]))
                         .fold(0.0, f64::max) as f32
                 });
-            height = low_profile.capped_height(raw_height, tier, lat, lon, area);
+            height = low_profile.capped_height(
+                raw_height,
+                structure_contract::height_is_per_building(height_source),
+                lat,
+                lon,
+                area,
+            );
         }
     }
-    Ok((polygons, height, tier, height < raw_height))
+    Ok((polygons, height, height_source, height < raw_height))
 }
 
 /// One logical footprint with all polygon rings in lat/lon and as-used height.
@@ -522,7 +529,7 @@ pub struct FootprintView {
     #[serde(rename = "h")]
     pub height_m: f32,
     #[serde(rename = "t")]
-    pub tier: u8,
+    pub height_source: u8,
     #[serde(rename = "c")]
     pub capped: bool,
 }
@@ -611,7 +618,7 @@ pub fn footprints_in_bbox(
                 {
                     continue;
                 }
-                let (polygons, height_m, tier, capped) = building_geometry_and_height(
+                let (polygons, height_m, height_source, capped) = building_geometry_and_height(
                     &batch,
                     i,
                     f32::from(heights.value(i)),
@@ -634,7 +641,7 @@ pub fn footprints_in_bbox(
                         })
                         .collect(),
                     height_m,
-                    tier,
+                    height_source,
                     capped,
                 });
             }
@@ -666,7 +673,7 @@ mod tests {
             kind: STRUCTURE_KIND_BUILDING,
             ring_lonlat: Some(fx::square_ring_lonlat(LAT, LON)),
             height_m: 12,
-            height_tier: 0,
+            height_source: 0,
             envelope_class: 1, // Residential
             centroid_lonlat: Some((LON + 0.0001, LAT + 0.0001)),
             osm_id: Some(7),
@@ -736,7 +743,7 @@ mod tests {
                 kind: STRUCTURE_KIND_BARRIER,
                 ring_lonlat: Some(vec![(LON, LAT), (LON + 0.001, LAT + 0.001)]),
                 height_m: 3,
-                height_tier: 0,
+                height_source: 0,
                 envelope_class: 0,
                 centroid_lonlat: Some((LON + 0.0005, LAT + 0.0005)),
                 osm_id: Some(11),
@@ -764,7 +771,7 @@ mod tests {
                 kind: STRUCTURE_KIND_BARRIER,
                 ring_lonlat: Some(vec![(179.999, 0.0), (-179.999, 0.0)]),
                 height_m: 3,
-                height_tier: 0,
+                height_source: 0,
                 envelope_class: 0,
                 centroid_lonlat: Some((-180.0, 0.0)),
                 osm_id: Some(11),
@@ -824,7 +831,7 @@ mod tests {
             "h={}",
             fps[0].height_m
         );
-        assert_eq!(fps[0].tier, 0);
+        assert_eq!(fps[0].height_source, 0);
         assert!(!fps[0].capped);
         assert_eq!(fps[0].polygons[0][0].len(), 5);
         assert!((fps[0].polygons[0][0][0].0 - LAT).abs() < 0.0001);

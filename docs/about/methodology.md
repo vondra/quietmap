@@ -135,14 +135,17 @@ then average these into the map's day, evening and night periods. Capacity is es
 from mapped area. These residential-parking defaults can understate busy shopping sites;
 the study's impulse rating surcharge is not included in the sound-energy calculation.
 Garages and carports share a generic emission profile; actual ventilation and vehicle
-movements are unknown. Explicitly mapped carports and open roof structures receive no
-indoor attenuation, but their footprints still screen as solid obstacles.
+movements are unknown.
 
 **As obstacles.** Mapped above-ground buildings and noise barriers screen sound. Open
-parking areas, yards and explicitly underground footprints do not. Building heights
-come from mapped heights or floor counts, measured surveys where available (Prague),
-and otherwise area averages or defaults. Footprints come from OpenStreetMap and Overture
-Maps.
+parking areas, yards, explicitly underground footprints, carports and open roofs do not:
+a roof on posts has no wall. Building heights come, in this order, from measured surveys
+(Prague), mapped heights, floor counts (3 m per floor plus 3 m for the roof), Overture
+heights, the 100 m satellite average of the GHSL (at most 4 m for footprints under
+30 m²), and finally the typical height of a building of that footprint size. Noise walls
+without a mapped height take their country's average wall height: 3.9 m in Germany,
+4.5 m in the United States, 3.6 m in Austria and 3 m elsewhere. Footprints come from
+OpenStreetMap and Overture Maps.
 
 ## Propagation
 

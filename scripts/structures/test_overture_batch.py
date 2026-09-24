@@ -32,8 +32,8 @@ class OvertureBatchTests(unittest.TestCase):
                 rows, inputs = SOURCES.read_overture_parquet(directory, GRID.parse_square_name(SQUARE))
         self.assertEqual(inputs, [path])
         self.assertEqual([r['wkb'] for r in rows], [geoms[0], geoms[-1]])
-        self.assertEqual([(r['height_m'], r['tier'], r['envelope']) for r in rows],
-                         [(4.5, 0, 0), (9., 1, 5)])
+        self.assertEqual([(r['overture_height'], r['overture_floors'], r['open_roof'], r['envelope'])
+                          for r in rows], [(4.5, 0, True, 0), (None, 3, False, 5)])
         for row, geom in zip(rows, [OSM_POLY, OVT_LONELY]):
             self.assertEqual((row['clat'], row['clon']), SOURCES.footprint_centroid(geom))
 
