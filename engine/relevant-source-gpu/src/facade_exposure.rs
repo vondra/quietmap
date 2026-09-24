@@ -40,15 +40,17 @@ pub struct FacadeExposureReceipt {
     pub cruise_seconds: f64,
 }
 
-/// One row per footprint (id order) with the footprint's bbox in degrees
-/// `[min_lat, min_lon, max_lat, max_lon]`, and the receipt.
+/// One building's row and its footprint's bbox in degrees `[min_lat, min_lon, max_lat, max_lon]`.
+pub type FacadeExposureRowWithBbox = (FacadeExposureRow, [f64; 4]);
+
+/// One row per footprint (id order) and the receipt.
 pub fn facade_exposure_rows(
     cuda: &RelevantSourceCuda,
     scene: &SurfaceGpu,
     airborne: &AirborneScene,
     cruise: &CruiseField,
     footprints: &[(u32, GridPolygons)],
-) -> Result<(Vec<(FacadeExposureRow, [f64; 4])>, FacadeExposureReceipt)> {
+) -> Result<(Vec<FacadeExposureRowWithBbox>, FacadeExposureReceipt)> {
     let owner = scene.host.owner;
     let mut receipt = FacadeExposureReceipt {
         buildings: footprints.len(),
