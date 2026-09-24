@@ -18,7 +18,7 @@ pub(crate) fn rail_type_name(rt: u8) -> &'static str {
         2 => "light_rail",
         3 => "narrow_gauge",
         4 => "funicular",
-        5 => "preserved",
+        5 => "heritage",
         _ => "rail",
     }
 }

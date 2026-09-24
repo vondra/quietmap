@@ -227,6 +227,7 @@ pub enum RailType {
     LightRail,   // 2
     NarrowGauge, // 3
     Funicular,   // 4
+    Preserved,   // 5 — heritage model not yet assessed
 }
 
 impl RailType {
@@ -236,6 +237,7 @@ impl RailType {
             2 => Self::LightRail,
             3 => Self::NarrowGauge,
             4 => Self::Funicular,
+            5 => Self::Preserved,
             _ => Self::Rail,
         }
     }
@@ -271,6 +273,9 @@ pub fn railway_emission(
     trains_freight: f64,
     period_hours: f64,
 ) -> [f64; NUM_BANDS] {
+    if matches!(rail_type, RailType::Preserved) {
+        return [f64::NEG_INFINITY; NUM_BANDS];
+    }
     let v = speed_kmh.max(20.0);
     let flow_denom = (period_hours.max(0.1) * 1000.0 * v).max(1.0);
     let mut total_energy = [0.0f64; NUM_BANDS];
@@ -315,6 +320,7 @@ pub fn default_traffic(rail_type: RailType, usage: u8) -> (f64, f64) {
         RailType::LightRail => (80.0, 0.0),   // light rail: ~80/day
         RailType::NarrowGauge => (10.0, 0.0), // narrow gauge: tourist/local
         RailType::Funicular => (40.0, 0.0),   // funicular: frequent but short
+        RailType::Preserved => (0.0, 0.0),
         RailType::Rail => match usage {
             0 => (80.0, 20.0), // main line: 80 passenger + 20 freight
             1 => (30.0, 5.0),  // branch: 30 passenger + 5 freight
@@ -345,6 +351,7 @@ pub fn default_speed(rail_type: RailType) -> f64 {
         RailType::NarrowGauge => 40.0,
         RailType::Funicular => 20.0,
         RailType::Rail => 80.0,
+        RailType::Preserved => 0.0,
     }
 }
 
