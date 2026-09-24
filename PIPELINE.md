@@ -136,6 +136,9 @@ Remove `--dry-run` only for an authorized run. A regional canary uses an isolate
 prepared tree with real copies of writable Arrows and a complete read-only halo.
 The old `--scope country:CZ` was unsafe: global writers still changed the whole
 input tree. It is rejected.
+A canary scored against held-out traffic counts runs the roads chain with
+`QM_EXCLUDE_HOLDOUT_COUNTS=1`: the road writer then stamps no measured count inside a
+holdout square of rule v1 (`pipeline/lib/count-holdout.ts`); derived flows still apply.
 
 `--layer buildings|roads|railways|industrial` selects an independent output family.
 National buildings can run during the square-country-city bake: they use their source coordinates and only

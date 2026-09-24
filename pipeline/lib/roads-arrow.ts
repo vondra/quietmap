@@ -7,8 +7,9 @@ import { Footer } from 'apache-arrow/ipc/metadata/file'
 import { ROAD_COUNT_BASES, type RoadObservation } from './road-observation.js'
 import { withArrowWrite } from './provenance.js'
 import {
-  SOURCES_BY_ID, countryIsosForNationalSource, shouldOverwrite,
+  SOURCES_BY_ID, countryIsosForNationalSource, isMeasured, shouldOverwrite,
 } from './sources.js'
+import { withholdsMeasuredCounts } from './count-holdout.js'
 import { nearestCompatiblePointWithin200Metres, type RankedPoint } from './spatial.js'
 import { bakedRoadCountryReader, iso2Code, type SegmentGeometry } from './prepared-grid.js'
 import {
@@ -424,6 +425,7 @@ export function applyRoadAadt(
     return expected
   }
   const retractCountries = new Map(retract?.sourceIds.map(id => [id, expectedCountryCodes(id)]))
+  const withholdMeasured = withholdsMeasuredCounts(arrowPath)
   let changed = false
 
   for (let index = 0; index < result.rows; index++) {
@@ -458,6 +460,10 @@ export function applyRoadAadt(
     const candidate = match(row, index)
     if (!candidate) continue
     assertMatch(candidate, index, arrowPath)
+    if (withholdMeasured && isMeasured(candidate.sourceId)) {
+      result.skipped++
+      continue
+    }
 
     const expectedCodes = expectedCountryCodes(candidate.sourceId)
     if (expectedCodes !== null) {
