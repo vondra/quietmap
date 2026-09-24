@@ -10,6 +10,7 @@ pub mod obstacle_index;
 pub mod obstacle_index_file;
 pub mod path_effects;
 pub mod path_profile;
+pub mod point_sum;
 pub mod screening_source_id;
 pub mod seg_sampling;
 pub mod vegetation;
