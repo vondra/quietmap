@@ -607,6 +607,16 @@ pub const SOURCES: &[Source] = &[
         year: Some(2024),
     },
     Source {
+        id: 1103,
+        key: "nl-amsterdam-traffic-model",
+        provenance: Provenance::NationalProxy,
+        layer: "roads",
+        name: "Amsterdam traffic model (EU Harmonized Traffic Volumes)",
+        license: Some("CC-BY-4.0"),
+        url: Some("https://github.com/XavB64/traffic-volume-data-EU-cities"),
+        year: Some(2025),
+    },
+    Source {
         id: 1113,
         key: "th-national-roads",
         provenance: Provenance::NationalMeasured,

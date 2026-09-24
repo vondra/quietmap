@@ -7,7 +7,7 @@ map: { center: [2.5, 46.6], zoom: 6 }
 ## Roads
 
 - Autoroutes and routes nationales: [Cerema TMJA census](https://www.data.gouv.fr/), 2024 for the concession motorways and 2019 for the rest of the national network (daily traffic and truck share per section). Where a section has no truck share (680 sections of 2019, including the A4 and A86 near Paris), the nearest section of the same road lends its share.
-- Paris, Lyon, Lille, Bordeaux, Marseille, Toulouse, Grenoble, Rennes, Rouen, Montpellier, Tours: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
+- Paris, Lyon, Lille, Bordeaux, Marseille, Toulouse, Grenoble, Rennes, Rouen, Montpellier: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
 Routes départementales and other city streets have no counts. Uncounted streets use the class default, adjusted for surrounding buildings and the counted roads they connect to.
 

@@ -7,10 +7,10 @@ import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { listPreparedSquares, normalizeLongitude, segmentGeometryReader } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/sources.js'
-import { SOURCE_ID_EU_CITY_TRAFFIC } from './lib/source-ids.generated.js'
-import { writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { SOURCE_ID_EU_CITY_TRAFFIC, SOURCE_ID_NL_AMSTERDAM_TRAFFIC_MODEL } from './lib/source-ids.generated.js'
+import { isSlipRoadClass, osmRoadClassRank, roadClassTakesCount, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
 import {
-  loadEuropeanCityTraffic, type EuropeanCityTraffic, type EuropeanTrafficRecord,
+  europeanTrafficAadt, loadEuropeanCityTraffic, normalizedStreetName, type EuropeanCityTraffic, type EuropeanTrafficRecord,
 } from './lib/roads-europe-source.js'
 import {
   buildOneHundredthDegreeSegmentGrid, pointGridCandidates, pointSearchReach,
@@ -19,7 +19,7 @@ import {
 
 const MAXIMUM_DISTANCE_METRES = 50
 
-type MatchedRoad = Pick<RoadRow, 'startLat' | 'startLon' | 'endLat' | 'endLon' | 'midLat' | 'midLon' | 'osmId' | 'roadClass'>
+type MatchedRoad = Pick<RoadRow, 'startLat' | 'startLon' | 'endLat' | 'endLon' | 'midLat' | 'midLon' | 'osmId' | 'roadClass' | 'name'>
 interface ObservationSegment extends SegmentCoordinates { record: EuropeanTrafficRecord }
 export interface EuropeanTrafficIndex {
   segments: ReadonlyMap<string, readonly ObservationSegment[]>
@@ -49,10 +49,15 @@ const isDirectionalPoint = (record: EuropeanTrafficRecord): boolean =>
 // A counted street is not its slip road, its service lane or a track beside it.
 const NEVER_MATCHED_BY_PROXIMITY: ReadonlySet<number> = new Set([6, 7, 8, 10, 11, 12])
 
-/** Without the publisher's way id a row must be the counted street itself: an eligible class
- *  running along the line in either direction (a cross street within 50 m is not). */
+/** Without the publisher's way id a row must be the counted street itself: an eligible class running along
+ *  the line in either direction (a cross street within 50 m is not), carrying the street's name or a class
+ *  within one rank of the publisher's own OSM match. U Dalnice (residential) took a motorway record's
+ *  64,000/day from 15-118 m by proximity alone; the gate retracts 424 km and keeps 5,328 km (r260919). */
 function liesAlongObservation(row: MatchedRoad, segment: ObservationSegment): boolean {
-  return !NEVER_MATCHED_BY_PROXIMITY.has(row.roadClass) && runsAlongSegment(row, segment)
+  if (NEVER_MATCHED_BY_PROXIMITY.has(row.roadClass) || !runsAlongSegment(row, segment)) return false
+  const { names, publisherRoadClass } = segment.record
+  return names.includes(normalizedStreetName(row.name)) || (publisherRoadClass !== null && roadClassTakesCount(row.roadClass,
+    { rank: osmRoadClassRank(publisherRoadClass), isRamp: isSlipRoadClass(publisherRoadClass) }))
 }
 
 /** The publisher's own way identity qualifies at any distance; every other row must lie along the line. */
@@ -98,6 +103,7 @@ function assignDirectionalPointObservations(
   for (const path of paths) {
     const table = tableFromIPC(readFileSync(path)), geometry = segmentGeometryReader(table)
     const ids = table.getChild('osm_id'), sources = table.getChild('source_id'), classes = table.getChild('road_class')
+    const names = table.getChild('name')
     if (!ids || !DataType.isInt(ids.type) || ids.type.bitWidth !== 64 || !ids.type.isSigned || ids.nullCount ||
         !sources || !DataType.isInt(sources.type) || sources.type.bitWidth !== 16 || sources.type.isSigned || sources.nullCount ||
         !classes || classes.nullCount) {
@@ -107,7 +113,8 @@ function assignDirectionalPointObservations(
     for (let rowIndex = 0; rowIndex < rows; rowIndex++) {
       const osmId = Number(ids.get(rowIndex))
       if (!Number.isSafeInteger(osmId) || osmId <= 0) throw new Error(`${path}: invalid OSM way identity at row ${rowIndex}`)
-      for (const { record, sameWay, distance } of qualifyingObservations({ ...geometry.row(rowIndex), osmId, roadClass: Number(classes.get(rowIndex)) }, index)) {
+      const row = { ...geometry.row(rowIndex), osmId, roadClass: Number(classes.get(rowIndex)), name: (names?.get(rowIndex) ?? null) as string | null }
+      for (const { record, sameWay, distance } of qualifyingObservations(row, index)) {
         const previous = selected.get(record.observationId)
         if (!previous || (sameWay && !previous.sameWay) || (sameWay === previous.sameWay &&
             (distance < previous.distance || (distance === previous.distance && osmId < previous.osmId)))) {
@@ -145,11 +152,14 @@ export async function enrichEuropeanRoads(preparedDirectory: string, cities: rea
   const result = { rows: 0, matched: 0, squares: squares.size, squaresUpdated: 0 }
   for (const path of paths) {
     const match = (row: RoadRow): EuropeanTrafficRecord | null => {
-      if (!shouldOverwrite(row.existingSourceId, SOURCE_ID_EU_CITY_TRAFFIC)) return null
-      return nearestEuropeanTraffic(row, index, directionalPointWays)
+      const record = nearestEuropeanTraffic(row, index, directionalPointWays)
+      return record && shouldOverwrite(row.existingSourceId, record.sourceId) ? record : null
     }
-    const written = await writeRoadAadt(path, match, undefined, undefined,
-      { sourceIds: [SOURCE_ID_EU_CITY_TRAFFIC], when: row => match(row) === null })
+    const written = await writeRoadAadt(path, row => {
+      const record = match(row)
+      return record && europeanTrafficAadt(record, row.roadClass)
+    }, undefined, undefined,
+    { sourceIds: [SOURCE_ID_EU_CITY_TRAFFIC, SOURCE_ID_NL_AMSTERDAM_TRAFFIC_MODEL], when: row => match(row) === null })
     result.rows += written.rows
     result.matched += written.matched
     if (written.updated) result.squaresUpdated++

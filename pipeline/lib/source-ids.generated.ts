@@ -48,6 +48,7 @@ export const SOURCE_ID_PH_NATIONAL_ROADS = 1095 as const // ph-national-roads
 export const SOURCE_ID_PL_NATIONAL_ROADS = 1097 as const // pl-national-roads
 export const SOURCE_ID_PY_NATIONAL_ROADS = 1098 as const // py-national-roads
 export const SOURCE_ID_SA_NATIONAL_ROADS = 1102 as const // sa-national-roads
+export const SOURCE_ID_NL_AMSTERDAM_TRAFFIC_MODEL = 1103 as const // nl-amsterdam-traffic-model
 export const SOURCE_ID_TH_NATIONAL_ROADS = 1113 as const // th-national-roads
 export const SOURCE_ID_VE_NATIONAL_ROADS = 1124 as const // ve-national-roads
 export const SOURCE_ID_AE_NATIONAL_RAILWAY = 2000 as const // ae-national-railway

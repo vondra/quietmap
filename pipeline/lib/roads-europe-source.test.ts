@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import {
-  EUROPEAN_TRAFFIC_CITIES, latestStagedCityFile, loadEuropeanCityTraffic, parseEuropeanCityTraffic,
+  EUROPEAN_TRAFFIC_CITIES, europeanTrafficAadt, latestStagedCityFile, loadEuropeanCityTraffic, parseEuropeanCityTraffic,
 } from './roads-europe-source.js'
 
 const temporary = mkdtempSync(join(tmpdir(), 'eu-traffic-source-'))
@@ -27,22 +27,38 @@ test('latest staged raw is deterministic and ignores stale normalized copies', (
 
 test('source rounding, aliases and the whole line preserve published directional counts', () => {
   const source = parseEuropeanCityTraffic('sample', 'sample.geojson', bytes(
-    feature({ AADT: 1000.4, AAWT: 2000, TR_AADT: 100.4, '2W_AADT': 50.4, raw_oneway: true }),
+    feature({ AADT: 1000.4, AAWT: 2000, TR_AADT: 100.4, '2W_AADT': 50.4, raw_oneway: true, osm_type: 'primary', osm_name: ' Main  Street' }),
     feature({ AADT: null, AAWT: 1000, TR_AADT: null, TR_AAWT: 100, raw_oneway: 'true' },
       { type: 'LineString', coordinates: [[14, 50], [14, 50], [14.001, 50.001]] }),
   ))
   // Source direction remains separate from the matched OSM road direction.
   assert.deepEqual(source.records[0], {
-    coordinates: [[14, 50]], light: 830, medium: 20, heavy: 100, moto: 50, sourceId: 10,
+    coordinates: [[14, 50]], total: 1000, heavy: 100, moto: 50, sourceId: 10,
     observationId: source.records[0].observationId, sourceOsmId: null, estimatedClasses: 3,
+    publisherRoadClass: 2, names: ['main street'],
     countBasis: 'directional', rawOneway: true, rawDirection: null, osmOneway: null, rawTechnology: null,
   })
+  // A weekday-only total becomes annual by the published AADT/AAWT ratio and is labelled estimated.
   assert.deepEqual(source.records[1], {
-    coordinates: [[14, 50], [14.001, 50.001]], light: 880, medium: 20, heavy: 100, moto: 0, sourceId: 10,
-    observationId: source.records[1].observationId, sourceOsmId: null, estimatedClasses: 11,
+    coordinates: [[14, 50], [14.001, 50.001]], total: 927, heavy: 93, moto: null, sourceId: 10,
+    observationId: source.records[1].observationId, sourceOsmId: null, estimatedClasses: 15,
+    publisherRoadClass: null, names: [],
     countBasis: 'street-cross-section', rawOneway: 'true', rawDirection: null, osmOneway: null, rawTechnology: null,
   })
   assert.equal(source.nonBooleanOneway, 1)
+})
+
+test('a missing truck count is the class prior share, never an invented zero; a published zero stays', () => {
+  const record = (city: string, properties: Record<string, unknown>) =>
+    parseEuropeanCityTraffic(city, 'raw.geojson', bytes(feature({ AADT: 3000, ...properties }))).records[0]
+  // Secondary prior: 2,640 light, 120 medium, 180 heavy, 60 motorcycles of 3,000.
+  const { light, medium, heavy, moto } = europeanTrafficAadt(record('Paris', {}), 3)
+  assert.deepEqual([light, medium, heavy, moto], [2640, 120, 180, 60])
+  assert.equal(europeanTrafficAadt(record('Stockholm', { TR_pct_AADT: 10 }), 3).heavy, 300)
+  assert.equal(europeanTrafficAadt(record('Berlin', { TR_AADT: 0 }), 3).heavy, 0)
+  assert.equal(europeanTrafficAadt(record('Marseille', { TR_AADT: 0 }), 3).heavy, 180)
+  assert.equal(record('Amsterdam', {}).sourceId, 1103)
+  assert.equal(record('Amsterdam', {}).estimatedClasses, 15)
 })
 
 test('contradictory published components and rounded-zero observations cannot become measured rows', () => {
@@ -59,7 +75,7 @@ test('contradictory published components and rounded-zero observations cannot be
   assert.equal(source.features, source.records.length + source.rejected.length)
 })
 
-test('all 36 nonempty finite city inputs are required before a load can succeed and cache identity stays unchanged', () => {
+test('all 35 nonempty finite city inputs are required before a load can succeed and cache identity stays unchanged', () => {
   const directory = mkdtempSync(join(temporary, 'all-cities-'))
   for (const city of EUROPEAN_TRAFFIC_CITIES) {
     writeFileSync(join(directory, `${city}_AADT_2023.geojson`), bytes(feature({ AADT: 100 })))
@@ -71,8 +87,8 @@ test('all 36 nonempty finite city inputs are required before a load can succeed 
   }))
   const before = identity()
   const sources = loadEuropeanCityTraffic(directory)
-  assert.equal(sources.length, 36)
-  assert.equal(sources.reduce((sum, city) => sum + city.records.length, 0), 36)
+  assert.equal(sources.length, 35)
+  assert.equal(sources.reduce((sum, city) => sum + city.records.length, 0), 35)
   assert.deepEqual(identity(), before)
   const last = join(directory, 'Cardiff_AADT_2023.geojson')
   for (const invalid of [bytes(), bytes(feature({ AADT: -1 })),
@@ -99,6 +115,6 @@ test('source basis survives OSM disagreement and heavy-only counts gain no inven
   assert.equal(source.records[0].rawTechnology, 'Estimated using previous year')
   assert.equal(source.records[1].countBasis, 'street-cross-section')
   assert.equal(source.records[1].osmOneway, 'True')
-  assert.deepEqual(['light', 'medium', 'heavy', 'moto'].map(key =>
-    source.records[2][key as 'light' | 'medium' | 'heavy' | 'moto']), [0, 0, 500, 0])
+  const { light, medium, heavy, moto } = europeanTrafficAadt(source.records[2], 3)
+  assert.deepEqual([light, medium, heavy, moto], [0, 0, 500, 0])
 })

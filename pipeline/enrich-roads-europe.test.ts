@@ -10,7 +10,7 @@ import { encodeQmBlocks, writeRoadsFixture } from './lib/road-test-fixture.js'
 import { writeRoadAadt } from './lib/roads-arrow.js'
 import { SOURCE_ID_CZ_RSD_SCITANI, SOURCE_ID_CITY_PRAHA_TSK } from './lib/sources.js'
 import { segmentGeometryReader } from './lib/prepared-grid.js'
-import { parseEuropeanCityTraffic } from './lib/roads-europe-source.js'
+import { europeanTrafficAadt, parseEuropeanCityTraffic } from './lib/roads-europe-source.js'
 import { buildOneHundredthDegreePointGrid, flatDist, nearestCompatiblePointWithin200Metres } from './lib/spatial.js'
 import { enrichEuropeanRoads, indexEuropeanTraffic, nearestEuropeanTraffic } from './enrich-roads-europe.js'
 
@@ -18,7 +18,7 @@ const temporary = mkdtempSync(join(tmpdir(), 'eu-traffic-ipc-'))
 after(() => rmSync(temporary, { recursive: true, force: true }))
 
 function traffic(point: { midLat: number; midLon: number }, offsetNorthMetres = 0, offsetEastMetres = 0) {
-  return { type: 'Feature', properties: { AADT: 1000, TR_AADT: 100, '2W_AADT': 50, raw_oneway: true },
+  return { type: 'Feature', properties: { AADT: 1000, TR_AADT: 100, '2W_AADT': 50, raw_oneway: true, osm_type: 'secondary' },
     geometry: { type: 'Point', coordinates: [
       point.midLon + offsetEastMetres / (111_320 * Math.cos(point.midLat * Math.PI / 180)),
       point.midLat + offsetNorthMetres / 110_540,
@@ -35,7 +35,7 @@ function roadPiece(midLat: number, midLon: number, osmId: number | null = null, 
   const longitude = midLon + offsetEastMetres / (111_320 * Math.cos(midLat * Math.PI / 180))
   const halfLength = lengthMetres / 2 / 110_540
   return { startLat: midLat - halfLength, startLon: longitude, endLat: midLat + halfLength, endLon: longitude,
-    midLat, midLon: longitude, osmId, roadClass: 2 }
+    midLat, midLon: longitude, osmId, roadClass: 2, name: null }
 }
 
 test('the exact 50 metre flat-distance cap rejects the dev1 50-to-51 metre leak', () => {
@@ -50,7 +50,7 @@ test('a road piece along a long line matches far from its middle vertex, the pub
   const line = (osmid: number, offsetEastMetres: number, northward: boolean) => {
     const longitude = 14 + offsetEastMetres / (111_320 * Math.cos(50 * Math.PI / 180))
     const coordinates = [[longitude, 50], [longitude, 50.005], [longitude, 50.01]]
-    return { type: 'Feature', properties: { AADT: 1000, raw_oneway: true, osmid },
+    return { type: 'Feature', properties: { AADT: 1000, raw_oneway: true, osmid, osm_type: 'primary' },
       geometry: { type: 'LineString', coordinates: northward ? coordinates : coordinates.reverse() } }
   }
   const source = city(line(100, 30, true), line(200, 10, true), line(300, -5, false))
@@ -61,8 +61,16 @@ test('a road piece along a long line matches far from its middle vertex, the pub
   assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 999), index), nearestSouthbound)
   assert.equal(nearestEuropeanTraffic(roadPiece(50.001, 14, 999, 20, -61), index), null)
   assert.equal(nearestEuropeanTraffic(roadPiece(50.02, 14, 999), index), null)
-  // Proximity alone is not the counted street: a service lane beside it and a street crossing it stay unmatched.
+  // Proximity alone is not the counted street: a service lane beside it and a street crossing it stay unmatched,
+  // and a residential street along a primary-road record needs the record's street name.
   assert.equal(nearestEuropeanTraffic({ ...roadPiece(50.001, 14, 999), roadClass: 7 }, index), null)
+  assert.equal(nearestEuropeanTraffic({ ...roadPiece(50.001, 14, 999), roadClass: 5 }, index), null)
+  const named = city({ type: 'Feature', properties: { AADT: 1000, raw_oneway: true, osm_type: 'motorway', osm_name: 'U  Dálnice' },
+    geometry: { type: 'LineString', coordinates: [[14, 50], [14, 50.01]] } })
+  assert.equal(nearestEuropeanTraffic({ ...roadPiece(50.001, 14, 999), roadClass: 5, name: 'u dálnice' },
+    indexEuropeanTraffic(named.records)), named.records[0])
+  assert.equal(nearestEuropeanTraffic({ ...roadPiece(50.001, 14, 999), roadClass: 5, name: 'Jiná' },
+    indexEuropeanTraffic(named.records)), null)
   const crossing = roadPiece(50.001, 14, 999)
   const halfLengthDegrees = 10 / (111_320 * Math.cos(50 * Math.PI / 180))
   assert.equal(nearestEuropeanTraffic({ ...crossing, startLat: 50.001, endLat: 50.001,
@@ -115,7 +123,8 @@ test('whole road rows across a z9 boundary receive four-class totals without cha
   const beforeTable = new Table(schema, batches.map(batch => new RecordBatch(schema, batch.data)))
   writeFileSync(path, Buffer.from(tableToIPC(beforeTable, 'file')))
   const result = await enrichEuropeanRoads(temporary, [source])
-  assert.equal(result.matched, 2)
+  // Row 2 is residential beside a secondary-road record: not the counted street.
+  assert.equal(result.matched, 1)
   const after = tableFromIPC(readFileSync(path))
   assert.deepEqual(after.batches.map(batch => batch.numRows), [1, 3])
   assert.deepEqual(after.schema.metadata, new Map([...beforeTable.schema.metadata, ['road_traffic_contract', '0']]))
@@ -124,11 +133,10 @@ test('whole road rows across a z9 boundary receive four-class totals without cha
     assert.deepEqual(after.schema.fields.find(candidate => candidate.name === field.name), field)
     assert.deepEqual(after.getChild(field.name)!.toArray(), beforeTable.getChild(field.name)!.toArray())
   }
-  for (const index of [2, 3]) {
-    assert.deepEqual(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id']
-      .map(name => after.getChild(name)!.get(index)), [830, 20, 100, 50, 10])
-  }
-  for (const index of [0, 1]) {
+  // Published trucks and motorcycles; buses in the secondary-road prior share (120 of 3,000).
+  assert.deepEqual(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id']
+    .map(name => after.getChild(name)!.get(3)), [810, 40, 100, 50, 10])
+  for (const index of [0, 1, 2]) {
     for (const field of beforeTable.schema.fields) {
       assert.deepEqual(after.getChild(field.name)!.get(index), beforeTable.getChild(field.name)!.get(index))
     }
@@ -155,7 +163,7 @@ test('a directional line stamps both one-way carriageways lying along it', async
   mkdirSync(join(path, '..'), { recursive: true })
   writeFileSync(path, tableToIPC(new Table(new Schema(shape.schema.fields, table.schema.metadata), shape.batches), 'file'))
   const row = segmentGeometryReader(table).row(0)
-  const line = city({ type: 'Feature', properties: { AADT: 1000, raw_oneway: true },
+  const line = city({ type: 'Feature', properties: { AADT: 1000, raw_oneway: true, osm_type: 'secondary' },
     geometry: { type: 'LineString', coordinates: [[row.startLon, row.startLat], [row.endLon, row.endLat]] } })
   assert.equal(line.records[0].countBasis, 'directional')
   assert.equal((await enrichEuropeanRoads(prepared, [line])).matched, 2)
@@ -211,7 +219,7 @@ test('one directional observation chooses one current way across owners; two-way
     })
     assert.deepEqual(output.map(row => row.source), scenario.expected, scenario.name)
     for (const row of output.filter(row => row.source === 10)) {
-      assert.deepEqual(row.counts, [8300, 200, 1000, 500], scenario.name)
+      assert.deepEqual(row.counts, [8100, 400, 1000, 500], scenario.name)
       assert.equal(row.id, observation.records[0].observationId)
       assert.equal(row.basis, scenario.directional ? 1 : 4)
     }
@@ -246,7 +254,7 @@ test('a directional point stays on its road after a higher-priority count and re
     assert.deepEqual(readFileSync(path), measured)
 
     // The old rerun moved this same point to the neighbouring road after the original got a better source.
-    await writeRoadAadt(path, row => row.osmId !== originalWay ? observation.records[0] : null)
+    await writeRoadAadt(path, row => row.osmId !== originalWay ? europeanTrafficAadt(observation.records[0], row.roadClass) : null)
     assert.deepEqual(sources(), [sourceId, 10])
     await enrichEuropeanRoads(prepared, [observation])
     assert.deepEqual(sources(), [sourceId, 0])

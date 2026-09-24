@@ -136,6 +136,19 @@ export const DATASETS: Dataset[] = [
     measurement: 'counted',
   },
   {
+    // Amsterdam's file in the EU dataset is the city's traffic model output, not counts
+    // (cities_summary.csv: techno = Model): an estimate below every measured tier.
+    id: 1103,
+    layer: 'roads',
+    key: 'nl-amsterdam-traffic-model',
+    name: 'Amsterdam traffic model (EU Harmonized Traffic Volumes)',
+    year: 2025,
+    license: 'CC-BY-4.0',
+    url: 'https://github.com/XavB64/traffic-volume-data-EU-cities',
+    priority: 80,
+    measurement: 'proxy',
+  },
+  {
     id: 11,
     layer: 'roads',
     key: 'service-tree-heuristic',

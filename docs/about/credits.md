@@ -34,7 +34,10 @@ None of this would exist without other people's open data. Thank you to everyone
   vessel density 2024 (CC BY 4.0)
 - Ships in the rest of the world: **Powered by [Global Fishing Watch](https://globalfishingwatch.org)**
   (CC BY-NC 4.0)
-- Road traffic: national censuses and city counts, listed on the country pages
+- Road traffic: national censuses and city counts, listed on the country pages. European city
+  streets: [EU harmonized traffic volumes](https://github.com/XavB64/traffic-volume-data-EU-cities)
+  (CC BY 4.0), with each city's own terms: ODbL for Paris, Grenoble, Rennes and Montpellier,
+  CC BY-SA 4.0 for Brno
 - Trains: public [GTFS](https://gtfs.org/) feeds and national timetables, listed on the country pages
 - Industry: [E-PRTR](https://industry.eea.europa.eu/) (EEA),
   [Global Power Plant Database](https://datasets.wri.org/dataset/globalpowerplantdatabase) (WRI),
