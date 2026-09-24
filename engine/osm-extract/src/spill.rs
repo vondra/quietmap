@@ -554,7 +554,7 @@ pub fn is_complete(dir: &Path, num_buckets: usize, input_identity: &str) -> bool
 /// barns. Function POIs reuse [`poi_class`] (shared with the finalize join).
 fn building_type_from_tags(tags: &Tags) -> u8 {
     let get = |k: &str| tags.get(k).map(|s| s.as_str());
-    if classify::is_special_leisure(get) || classify::is_power_or_inactive_industry(get) {
+    if classify::is_special_leisure(get) || classify::is_power_building(get) {
         return ids::SETTLEMENT_SILENT;
     }
     // A SPECIFIC structural `building=*` (warehouse, stadium, train_station, …)
@@ -949,6 +949,50 @@ pub(crate) fn tags_json(tags: &Tags) -> Result<String> {
 mod settlement_class_tests {
     use super::*;
     use crate::ids as st;
+
+    #[test]
+    fn a_building_with_a_generator_keeps_its_settlement_source() {
+        for (building, expected) in [
+            ("house", st::SETTLEMENT_HOUSE),
+            ("retail", st::SETTLEMENT_FOOD_RETAIL),
+        ] {
+            for source in ["solar", "wind", "gas"] {
+                let tags = Tags::from([
+                    ("building".into(), building.into()),
+                    ("power".into(), "generator".into()),
+                    ("generator:source".into(), source.into()),
+                ]);
+                let get = |key: &str| tags.get(key).map(String::as_str);
+                assert_eq!(building_type_from_tags(&tags), expected, "{tags:?}");
+                assert_eq!(
+                    classify::scoped_feature_types(FeatureType::Building, get),
+                    vec![FeatureType::Building]
+                );
+            }
+        }
+        for pairs in [
+            [("building", "yes"), ("power", "transformer")],
+            [("building", "yes"), ("disused:power", "substation")],
+        ] {
+            let tags: Tags = pairs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect();
+            assert!(
+                classify::scoped_feature_types(FeatureType::Building, |key| tags
+                    .get(key)
+                    .map(String::as_str))
+                .contains(&FeatureType::Industrial)
+            );
+        }
+        for power in ["plant", "substation"] {
+            let tags = Tags::from([
+                ("building".into(), "yes".into()),
+                ("power".into(), power.into()),
+            ]);
+            assert_eq!(building_type_from_tags(&tags), st::SETTLEMENT_SILENT);
+        }
+    }
 
     #[test]
     fn building_type_splits_house_from_apartments() {

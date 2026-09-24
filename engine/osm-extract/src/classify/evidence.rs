@@ -74,6 +74,11 @@ fn lifecycle_key(key: &str) -> bool {
     .any(|prefix| key == *prefix || key.strip_prefix(prefix).is_some_and(|s| s.starts_with(':')))
 }
 
+/// The building itself is power infrastructure, rather than hosting a generator.
+pub fn is_power_building<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool {
+    matches!(tag("power"), Some("plant" | "substation"))
+}
+
 pub fn is_power_or_inactive_industry<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool {
     matches!(
         tag("power"),

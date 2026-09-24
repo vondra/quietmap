@@ -31,7 +31,7 @@ pub fn scoped_feature_types<'a>(
         if is_special_leisure(&tag) {
             types.push(FeatureType::Leisure);
         }
-        if is_power_or_inactive_industry(&tag) {
+        if tag("power") != Some("generator") && is_power_or_inactive_industry(&tag) {
             types.push(FeatureType::Industrial);
         }
     }
@@ -87,15 +87,15 @@ pub(crate) fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
         return Some(FeatureType::Barrier);
     }
 
-    // Wind turbine (way — rare but possible as closed polygon)
-    if super::is_turbine(tag) {
-        return Some(FeatureType::WindTurbine);
-    }
-
     // Building (takes priority over leisure: a sports_centre tagged building=*
     // is a roofed building, not an open-air area source).
     if has_a_building(tag) {
         return Some(FeatureType::Building);
+    }
+
+    // Wind turbine (way — rare but possible as closed polygon)
+    if super::is_turbine(tag) {
+        return Some(FeatureType::WindTurbine);
     }
 
     // Car park with no `building` tag, decided here and not by whatever else the
