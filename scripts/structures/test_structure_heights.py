@@ -21,12 +21,14 @@ class HeightLadderTests(unittest.TestCase):
         self.assertEqual(ladder(), (7.4, CONTRACT.HEIGHT_SOURCE_AREA_TYPOLOGY))
 
     def test_low_overture_heights_and_the_ghsl_floor_are_no_information(self):
-        """1,002,248 Overture footprints screened at 0 m; 1.3 billion GHSL-floor rows at 3 m."""
+        """1,002,248 Overture footprints screened at 0 m; 1.3 billion GHSL rows at 3 m."""
         self.assertEqual(ladder(overture=0.0, area=40.0), (5.4, CONTRACT.HEIGHT_SOURCE_AREA_TYPOLOGY))
         self.assertEqual(ladder(overture=2.4, ghsl=2.5, area=700.0),
                          (10.6, CONTRACT.HEIGHT_SOURCE_AREA_TYPOLOGY))
         self.assertEqual(ladder(overture=2.5), (2.5, CONTRACT.HEIGHT_SOURCE_OVERTURE_HEIGHT))
-        self.assertEqual(ladder(ghsl=2.6), (3.0, CONTRACT.HEIGHT_SOURCE_GHSL))
+        self.assertEqual(ladder(ghsl=3.49), (7.4, CONTRACT.HEIGHT_SOURCE_AREA_TYPOLOGY))
+        self.assertEqual(ladder(ghsl=3.5), (3.5, CONTRACT.HEIGHT_SOURCE_GHSL))
+        self.assertEqual(ladder(ghsl=250.0), (100.0, CONTRACT.HEIGHT_SOURCE_GHSL))
         self.assertFalse(HEIGHTS.needs_ghsl(None, 0, 2.5))
         self.assertTrue(HEIGHTS.needs_ghsl(0.0, 0, 2.4))
 

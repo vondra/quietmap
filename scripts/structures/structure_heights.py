@@ -19,10 +19,12 @@ ROOF_ALLOWANCE_M = 3.0
 # screened at 0 m in r260919 (US 352,812, AU 324,692), 13,211 at exactly 1.0 m in one
 # Queensland tile.
 OVERTURE_MIN_HEIGHT_M = 2.5
-# GHS-BUILT-H ANBH R2023A: 2.5 m is the product's lowest value, the no-information floor
-# (89-95 % of built cells in rural CZ, PL, IN and KE windows).
-GHSL_NO_DATA_M = 2.5
-GHSL_CLAMP_M = (3.0, 100.0)
+# GHS-BUILT-H ANBH R2023A bottoms out at 2.5 m (89-95 % of built cells in rural CZ, PL, IN
+# and KE windows), and its values below 3.5 m, which the former 3-100 m clamp stored as 3 m,
+# are no better: 475 footprints of at least 30 m2 under them in Legden, Eslohe, Oosterwolde and
+# Auneau have median reference heights of 6.1-8.4 m (NRW LoD1, 3DBAG, BD TOPO, 2026-09-24).
+GHSL_NO_INFORMATION_BELOW_M = 3.5
+GHSL_MAX_M = 100.0
 REGIONAL_CLAMP_M = (2.5, 250.0)
 # A 100 m cell average says nothing about a shed: reference heights of footprints under
 # 30 m2 have median 2.9 m and 75th percentile 4 m (NRW LoD1, BD TOPO, 3DBAG; 3,947 rows in
@@ -64,8 +66,8 @@ def screening_height_and_source(regional_m, osm_height_m, floors, overture_heigh
     if overture_height_m is not None and math.isfinite(overture_height_m) \
             and overture_height_m >= OVERTURE_MIN_HEIGHT_M:
         return float(overture_height_m), HEIGHT_SOURCE_OVERTURE_HEIGHT
-    if ghsl_m is not None and math.isfinite(ghsl_m) and ghsl_m > GHSL_NO_DATA_M:
-        height = min(max(float(ghsl_m), GHSL_CLAMP_M[0]), GHSL_CLAMP_M[1])
+    if ghsl_m is not None and math.isfinite(ghsl_m) and ghsl_m >= GHSL_NO_INFORMATION_BELOW_M:
+        height = min(float(ghsl_m), GHSL_MAX_M)
         if footprint_m2 < SMALL_FOOTPRINT_M2:
             height = min(height, SMALL_FOOTPRINT_GHSL_CAP_M)
         return height, HEIGHT_SOURCE_GHSL

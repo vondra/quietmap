@@ -274,8 +274,9 @@ roof height, from the first available rung, and stores its `height_source`:
 3. OSM, national-register or Overture floors × 3 m + 3 m roof allowance
    (Prague LiDAR vs OSM floors, 105,957 buildings: median residual 0.0 m);
 4. Overture height of at least 2.5 m (lower values are artefacts);
-5. GHS-BUILT-H ANBH above its 2.5 m product floor, clamped to 3–100 m and to
-   at most 4 m under 30 m² of footprint;
+5. GHS-BUILT-H ANBH of at least 3.5 m (its 2.5 m floor and the values just
+   above it are no information), capped at 100 m and at 4 m under 30 m² of
+   footprint;
 6. median reference height by footprint area: < 30 m² 2.9 m, < 60 m² 5.4 m,
    < 150 m² 7.4 m, < 500 m² 8.8 m, else 10.6 m (seven EU pilot windows).
 
