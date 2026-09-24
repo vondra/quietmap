@@ -6,14 +6,13 @@ import type { RoadObservation } from './lib/road-observation.js'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { writeCacheAtomically } from './lib/atomic-cache.js'
-import { DATASETS } from './lib/enrichment-datasets.js'
 import { iso2Code, listPreparedSquares, lonLatToGrid } from './lib/prepared-grid.js'
 import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
   applyRoadTimeProfiles, osmRoadClassRank, readRoadTimeProfilesSource, roadClassTakesCount,
   ROAD_CLASS_RANK_TOLERANCE, writeRoadAadt, type RoadRow, type RoadTimeProfileEntry,
 } from './lib/roads-arrow.js'
-import { SOURCE_ID_US_FHWA_HPMS, shouldOverwrite } from './lib/sources.js'
+import { SOURCE_ID_US_FHWA_HPMS, declaredRoadCoverage, shouldOverwrite } from './lib/sources.js'
 import {
   buildOneHundredthDegreePointGrid, buildOneHundredthDegreeSegmentGrid, haversineM, pointGridCandidates, pointSearchReach,
   pointToSegmentDist, runsAlongSegment, wrapLonDeltaDeg, type RankedPoint, type SegmentCoordinates,
@@ -23,9 +22,7 @@ import { ownSquareShard, writeNationalRoadSquares } from './lib/square-pool.js'
 import { loadTmasProfiles, TMAS_SOURCE_URL, type TmasStationProfile } from './lib/roads-us-tmas-source.js'
 
 const SOURCE_ID = SOURCE_ID_US_FHWA_HPMS
-const coverage = DATASETS.find(dataset => dataset.id === SOURCE_ID)?.roadCoverage
-if (!coverage) throw new Error('FHWA source has no registered road coverage')
-const COVERED_ROAD_CLASSES = new Set(coverage)
+const COVERED_ROAD_CLASSES = declaredRoadCoverage(SOURCE_ID)
 const US_BBOX = [17.5, -180, 71.5, -65] as const
 const PAGE_SIZE = 2000
 const HPMS_BASE = 'https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/HPMS_FULL_US_2022_Sysnomulti_view/FeatureServer/0'

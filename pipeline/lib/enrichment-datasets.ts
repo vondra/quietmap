@@ -337,6 +337,7 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.bast.de/',
     priority: 80,
     measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE, // a national census never counts a local street
   },
   {
     id: 23,
@@ -348,6 +349,7 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.bast.de/',
     priority: 80,
     measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE, // a national census never counts a local street
   },
   {
     id: 24,
@@ -655,6 +657,7 @@ export const DATASETS: Dataset[] = [
     url: 'https://mapatrafico.transportes.gob.es/',
     priority: 80,
     measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE, // a national census never counts a local street
   },
   {
     id: 1039,
@@ -739,6 +742,7 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.stradeanas.it/',
     priority: 80,
     measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE, // a national census never counts a local street
   },
   {
     id: 1088,
@@ -860,6 +864,7 @@ export const DATASETS: Dataset[] = [
     priority: 80,
     measurement: 'derived',
     highMoto: true, // Thailand is motorcycle-dominant — R2 must not flag its real moto share
+    roadCoverage: MAJOR_ROAD_COVERAGE, // a national census never counts a local street
   },
   {
     id: 9876,
@@ -872,6 +877,7 @@ export const DATASETS: Dataset[] = [
     priority: 80,
     measurement: 'proxy',
     highMoto: true,
+    roadCoverage: MAJOR_ROAD_COVERAGE, // a national census never counts a local street
   },
   {
     id: 1124,
