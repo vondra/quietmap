@@ -77,7 +77,7 @@ const MEASURED_TIERS = new Set(['city-measured', 'national-measured', 'continent
 const LIGHT_MEDIUM_HEAVY_ESTIMATED_BITS = 1 | 2 | 4
 
 /** Flat-earth metres between two nearby points (receiver displacement is at most 100 m). */
-function metresBetween(lat1: number, lng1: number, lat2: number, lng2: number): number {
+export function metresBetween(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const north = (lat2 - lat1) * 111_320
   const east = (lng2 - lng1) * 111_320 * Math.cos(((lat1 + lat2) / 2) * Math.PI / 180)
   return Math.hypot(north, east)

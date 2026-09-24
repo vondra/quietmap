@@ -4,7 +4,8 @@
  *
  * Run: node --import tsx validation/run.ts --server http://127.0.0.1:8600 \
  *   --catalogue <dir of *.jsonl | file> --out <new run dir> [--identity <ops identity json>] \
- *   [--label <name>] [--receiver-height microphone|engine-default] [--concurrency 6] [--position-samples]
+ *   [--label <name>] [--receiver-height microphone|engine-default] [--concurrency 6] [--position-samples] \
+ *   [--facade-points <run dir of a server that names its facade points>]
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -12,7 +13,7 @@ import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { loadCatalogue, parseIndicator, stationDefaultLayer, type CatalogueStation } from './catalogue.ts'
 import { compareIndicator, evaluateGuard } from './comparison.ts'
-import { readPopupAnswer, type PopupAnswer } from './popup.ts'
+import { metresBetween, readPopupAnswer, type PopupAnswer } from './popup.ts'
 import { latency, renderReport, type StationRow } from './report.ts'
 
 /** The engine's receiver height (`DEFAULT_RECEIVER_HEIGHT`) and floor (`RECEIVER_HEIGHT_FLOOR_M`). */
@@ -33,8 +34,14 @@ const { values: args } = parseArgs({
     'receiver-height': { type: 'string', default: 'microphone' },
     concurrency: { type: 'string', default: '6' },
     'position-samples': { type: 'boolean', default: false },
+    'facade-points': { type: 'string' },
   },
 })
+/** Facade points a newer server named for indoor stations; an older server is then asked there. */
+const facadePoints = new Map<string, { lat: number; lng: number }>(!args['facade-points'] ? [] : readFileSync(resolve(args['facade-points'], 'stations.jsonl'), 'utf8')
+  .split('\n').filter(Boolean).map(line => JSON.parse(line) as StationRow)
+  .filter(row => row.receiver_basis === 'nearest facade exit, computed there outdoors' && row.model)
+  .map(row => [row.key, { lat: row.model!.receiver.lat, lng: row.model!.receiver.lng }]))
 /** Criteria u_pos: the model on this many points around the circle of the documented position uncertainty. */
 const POSITION_SAMPLE_BEARINGS_DEG = [0, 45, 90, 135, 180, 225, 270, 315]
 const METRES_PER_DEGREE_LATITUDE = 111_320
@@ -114,12 +121,17 @@ async function scoreStation(station: CatalogueStation): Promise<StationRow> {
     const clicked = readPopupAnswer(answer, station)
     // Never an indoor value: inside a footprint the model value is the engine's facade point. A server
     // that names it is asked there directly (outdoors); an older one has its facade level restored.
-    const facade = clicked.inside_footprint && answer.receiver
-      ? readPopupAnswer(await popup(answer.receiver.lat, answer.receiver.lng, requested), answer.receiver) : null
-    if (facade?.inside_footprint) throw new Error('the facade point the popup chose lies inside a footprint')
-    const model = facade ? { ...facade, receiver: { ...facade.receiver, click_to_receiver_m: clicked.receiver.click_to_receiver_m } } : clicked
+    const facadePoint = clicked.inside_footprint ? answer.receiver ?? facadePoints.get(station.station_id) ?? null : null
+    const facade = facadePoint ? readPopupAnswer(await popup(facadePoint.lat, facadePoint.lng, requested), facadePoint) : null
+    if (facade?.inside_footprint) throw new Error('the facade point lies inside a footprint')
+    const model = facade && facadePoint
+      ? { ...facade, receiver: { ...facade.receiver, click_to_receiver_m: +metresBetween(station.lat, station.lng, facadePoint.lat, facadePoint.lng).toFixed(1) } }
+      : clicked
+    // Restoration adds the class delta back and loses layers the indoor level floored at 0 dB.
     const receiverBasis: StationRow['receiver_basis'] = !clicked.inside_footprint ? 'station point, outdoors'
-      : facade ? 'nearest facade exit, computed there outdoors' : 'nearest facade exit, facade level restored from indoor + class delta'
+      : answer.receiver ? 'nearest facade exit, computed there outdoors'
+        : facade ? 'nearest facade exit named by another run, computed there outdoors'
+          : 'nearest facade exit, facade level restored from indoor + class delta'
     // A server without the height parameter ignores it and answers at the engine default.
     const used = model.receiver.height_m ?? ENGINE_DEFAULT_RECEIVER_HEIGHT_M
     if (requested != null && model.receiver.height_m != null && Math.abs(used - requested) > 1e-9) {

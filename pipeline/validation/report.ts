@@ -31,6 +31,7 @@ export type StationRow = {
   requested_receiver_height_m: number | null
   /** Where the model value was computed; an indoor popup value is never scored. */
   receiver_basis: 'station point, outdoors' | 'nearest facade exit, computed there outdoors'
+    | 'nearest facade exit named by another run, computed there outdoors'
     | 'nearest facade exit, facade level restored from indoor + class delta' | null
   /** Facade point computed directly minus the restored facade level (dB); a check of the restoration. */
   facade_restoration_check_db: number | null
