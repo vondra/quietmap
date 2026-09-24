@@ -130,15 +130,12 @@ pub fn industrial_class(tags: &Tags) -> Option<u8> {
         _ => {}
     }
     if tag("power") == Some("plant")
-        && ["plant:source", "generator:source"]
-            .iter()
-            .any(|key| tag(key).is_some_and(|v| v.split(';').any(|s| s.trim() == "wind")))
+        && tag("plant:source").is_some_and(|v| v.split(';').all(|s| s.trim() == "wind"))
     {
         return Some(11); // enclosing site, individual turbines own the emission
     }
-    if ["plant:source", "generator:source"]
-        .iter()
-        .any(|key| tag(key) == Some("solar"))
+    if tag("plant:source") == Some("solar")
+        || (tag("power") != Some("plant") && tag("generator:source") == Some("solar"))
     {
         return Some(13);
     }
@@ -272,6 +269,45 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn only_a_sole_wind_plant_source_makes_a_silent_outline() {
+        for pairs in [
+            vec![("power", "plant"), ("plant:source", "wind;gas")],
+            vec![("power", "plant"), ("plant:source", "gas;wind")],
+            vec![
+                ("power", "plant"),
+                ("plant:source", "gas"),
+                ("generator:source", "wind"),
+            ],
+            vec![("power", "plant"), ("generator:source", "wind")],
+            vec![
+                ("power", "plant"),
+                ("plant:source", "gas"),
+                ("generator:source", "solar"),
+            ],
+        ] {
+            let site = tags(&pairs);
+            assert_eq!(industrial_class(&site), None, "{pairs:?}");
+            assert!(!is_turbine(|key| site.get(key).map(String::as_str)));
+        }
+        for source in ["wind", " wind ", "wind;wind"] {
+            assert_eq!(
+                industrial_class(&tags(&[("power", "plant"), ("plant:source", source)])),
+                Some(11)
+            );
+        }
+        assert_eq!(
+            industrial_class(&tags(&[
+                ("power", "plant"),
+                ("plant:source", "solar"),
+                ("generator:source", "wind")
+            ])),
+            Some(13)
+        );
+        let turbine = tags(&[("power", "generator"), ("generator:source", "wind")]);
+        assert!(is_turbine(|key| turbine.get(key).map(String::as_str)));
     }
 
     #[test]

@@ -336,7 +336,9 @@ survive. Original railway node chains and piece intervals already supply curve
 geometry to rail finalization; no new curve-radius approximation is introduced.
 
 Industrial source classes 11/12 identify wind-plant outlines and inactive
-facilities: neither falls through to generic factory emission. Classes 13/14/15
+facilities: neither falls through to generic factory emission. A wind-plant
+outline requires wind as the sole `plant:source`; mixed fuels and copied
+generator tags do not silence a plant. Classes 13/14/15
 retain solar, substation and transformer evidence for their specific models.
 They currently emit nothing pending those models. Raw power/output/rating and
 lifecycle tags survive, with OSM object kind to disambiguate IDs. Registry
