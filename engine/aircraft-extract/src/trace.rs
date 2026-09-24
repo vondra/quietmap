@@ -10,14 +10,14 @@ mod selection;
 mod typecode_probe;
 pub use archive::{read_day_traces, read_day_traces_filtered, TypecodeProbeStats};
 
-/// Trace-point bit 0 — `on_ground` set by the adsb.lol bitfield.
-pub const FLAG_ON_GROUND_RAW: u8 = 1 << 0;
-/// Trace-point bit 1 — altitude column was the literal string `"ground"`.
+/// Trace-point bit 1 — altitude column was the literal string `"ground"`,
+/// readsb's only on-ground signal. The readsb bitfield (column 6) carries
+/// no on-ground bit: its bit 0 marks a stale position (no position for
+/// 20 s before this one), so it is not read.
 pub const FLAG_ALT_IS_GROUND: u8 = 1 << 1;
 
-/// One ADS-B point. `flags` packs the two ground-related raw signals so
-/// the v6 Arrow schema can carry them as a single byte without losing
-/// the distinction the composite ground inference relies on.
+/// One ADS-B point. `flags` packs the per-point signals the Arrow
+/// scratch schema carries as a single byte.
 #[derive(Clone, Debug)]
 pub struct TracePoint {
     pub timestamp: f64,
@@ -46,9 +46,6 @@ pub struct CallsignChange {
 impl TracePoint {
     pub fn alt_is_ground(&self) -> bool {
         self.flags & FLAG_ALT_IS_GROUND != 0
-    }
-    pub fn on_ground_raw(&self) -> bool {
-        self.flags & FLAG_ON_GROUND_RAW != 0
     }
     /// `Some(alt_ft)` for airborne points, `None` for `alt_is_ground`
     /// sentinel rows whose `alt_ft` is `NaN`. Funnels every alt-arithmetic
@@ -115,7 +112,6 @@ pub fn parse_trace<R: Read>(reader: R) -> Result<Option<AircraftTrace>> {
         let (alt_ft, alt_is_ground) = parse_altitude_ft(&arr[3]);
         let speed_kt = arr[4].as_f64().unwrap_or(0.0) as f32;
         let track_deg = arr[5].as_f64().unwrap_or(0.0) as f32;
-        let on_ground_bit = arr[6].as_i64().unwrap_or(0);
         let baro_rate_fpm = arr.get(7).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
 
         // Compare on `&str` before allocating — adsb.lol re-emits the
@@ -137,15 +133,7 @@ pub fn parse_trace<R: Read>(reader: R) -> Result<Option<AircraftTrace>> {
             }
         }
 
-        let mut flags = 0u8;
-        if on_ground_bit & 1 != 0 {
-            flags |= FLAG_ON_GROUND_RAW;
-        }
-        if alt_is_ground {
-            flags |= FLAG_ALT_IS_GROUND;
-            // adsb.lol semantics: "alt is ground" implies on_ground.
-            flags |= FLAG_ON_GROUND_RAW;
-        }
+        let flags = if alt_is_ground { FLAG_ALT_IS_GROUND } else { 0 };
         points.push(TracePoint {
             timestamp: base_timestamp + ts_offset,
             lat,

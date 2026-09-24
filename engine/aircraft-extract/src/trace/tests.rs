@@ -23,23 +23,10 @@ fn parses_ground_altitude_marker() {
     let t = parse_trace(raw.as_slice()).unwrap().unwrap();
     assert_eq!(t.points.len(), 2);
     assert!(t.points[0].alt_is_ground());
-    assert!(t.points[0].on_ground_raw()); // implied by alt_is_ground
     assert!(t.points[0].alt_ft.is_nan());
     assert!(t.points[0].airborne_alt_ft().is_none());
     assert!(!t.points[1].alt_is_ground());
     assert_eq!(t.points[1].alt_ft, 600.0);
-}
-
-#[test]
-fn parses_bitfield_on_ground() {
-    let raw = gz(r#"{"icao":"49c083","t":"WT9","timestamp":2000,"trace":[
-            [10,50.0,14.0,300.0,40.0,90.0,1,0],
-            [20,50.001,14.001,400.0,60.0,120.0,0,0]
-        ]}"#);
-    let t = parse_trace(raw.as_slice()).unwrap().unwrap();
-    assert!(t.points[0].on_ground_raw());
-    assert!(!t.points[0].alt_is_ground());
-    assert!(!t.points[1].on_ground_raw());
 }
 
 #[test]

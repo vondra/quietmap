@@ -57,7 +57,7 @@ fn rotation_picks_first_in_range_callsign() {
 #[test]
 fn second_rotation_without_callsign_stays_empty_not_inherited() {
     use crate::trace::{
-        AircraftTrace, CallsignChange, TracePoint, FLAG_ALT_IS_GROUND, FLAG_ON_GROUND_RAW,
+        AircraftTrace, CallsignChange, TracePoint, FLAG_ALT_IS_GROUND,
     };
     // Rotation 1 announces "ABC", lands and sits 10 min at the gate
     // (sustained on-ground rest ≥ MIN_TURNAROUND_S → leg split).
@@ -71,7 +71,7 @@ fn second_rotation_without_callsign_stays_empty_not_inherited() {
         speed_kt: 5.0,
         track_deg: 0.0,
         baro_rate_fpm: 0.0,
-        flags: FLAG_ON_GROUND_RAW | FLAG_ALT_IS_GROUND,
+        flags: FLAG_ALT_IS_GROUND,
     };
     let pts = vec![
         TracePoint {
@@ -138,7 +138,7 @@ fn second_rotation_without_callsign_stays_empty_not_inherited() {
 #[test]
 fn ground_rest_splits_into_two_movements_with_distinct_ids() {
     use crate::trace::{
-        AircraftTrace, CallsignChange, TracePoint, FLAG_ALT_IS_GROUND, FLAG_ON_GROUND_RAW,
+        AircraftTrace, CallsignChange, TracePoint, FLAG_ALT_IS_GROUND,
     };
     // Two rotations separated by a sustained on-ground rest.
     let ground = |ts, lat, lon| TracePoint {
@@ -149,7 +149,7 @@ fn ground_rest_splits_into_two_movements_with_distinct_ids() {
         speed_kt: 5.0,
         track_deg: 0.0,
         baro_rate_fpm: 0.0,
-        flags: FLAG_ON_GROUND_RAW | FLAG_ALT_IS_GROUND,
+        flags: FLAG_ALT_IS_GROUND,
     };
     let pts = vec![
         // Rotation 1 (TVS100P)

@@ -36,11 +36,11 @@ pub const GAP_S_GROUND: f64 = 60.0;
 const ROCD_SMOOTH_HALF: usize = 5;
 
 /// Index ranges of distinct flights in one aircraft's daily trace.
-/// A flight leg ends when motion-validated raw ground
-/// samples cover ≥ [`MIN_TURNAROUND_S`] of time; the next leg starts
+/// A flight leg ends when surface reports (`alt = "ground"`) cover
+/// ≥ [`MIN_TURNAROUND_S`] of time; the next leg starts
 /// at the first non-ground sample after the rest. Signal dropouts in
 /// the air — even hours-long oceanic gaps — preserve flight identity
-/// because no ground bit is set. Single-point ranges are dropped —
+/// because no surface report arrives. Single-point ranges are dropped —
 /// every emitted range has `len() >= 2`.
 pub fn split_flights(points: &[TracePoint]) -> Vec<std::ops::Range<usize>> {
     if points.len() < 2 {
@@ -56,7 +56,7 @@ pub fn split_flights(points: &[TracePoint]) -> Vec<std::ops::Range<usize>> {
     // emit as its own leg; absorb that rest into the first real leg.
     let mut leg_has_airborne = false;
     for i in 0..points.len() {
-        if crate::ground_inference::raw_ground_motion(&points[i]) {
+        if points[i].alt_is_ground() {
             ground_run_start.get_or_insert(i);
             continue;
         }
