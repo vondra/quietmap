@@ -1,175 +1,28 @@
-/** Enrich z9 road vectors with Great Britain DfT AADF count points. */
+/** Enrich z9 road vectors with Great Britain DfT AADF count points: major roads by ref, minor roads by location. */
 
-import { roadObservation, type RoadObservation } from './lib/road-observation.js'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { parse } from 'csv-parse/sync'
-import { writeCacheAtomically } from './lib/atomic-cache.js'
+import { tableFromIPC } from 'apache-arrow'
 import { SOURCE_ID_GB_NATIONAL_ROADS } from './lib/source-ids.generated.js'
 import { shouldOverwrite } from './lib/provenance.js'
 import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
-import {
-  isSlipRoadClass,
-  disjointVehicleClassCountsFitPublishedTotal, writeRoadAadt, type RoadRow,
-} from './lib/roads-arrow.js'
+import { DFT_MINOR_ROAD_RANK, loadDftCountPoints, type DftCountPoint } from './lib/roads-gb-source.js'
+import { roadClassTakesCount, writeRoadAadt, type RoadAadt, type RoadRow } from './lib/roads-arrow.js'
+import { gridToLonLat, listPreparedSquares, lonLatToGrid } from './lib/prepared-grid.js'
 import { writeNationalRoadSquares } from './lib/square-pool.js'
-import { haversineM } from './lib/spatial.js'
+import { flatDist, haversineM, pointToSegmentDist } from './lib/spatial.js'
 
 const SOURCE_ID = SOURCE_ID_GB_NATIONAL_ROADS
 const GREAT_BRITAIN_BBOX = [49, -8.5, 61, 2.5] as const
-const CACHE_DIRECTORY = 'gb'
-const CACHE_JSON = 'dft-aadf.json'
-const CACHE_ZIP = 'dft-aadf.zip'
-const EXTRACTED_CSV = 'dft_traffic_counts_aadf.csv'
-const DFT_URL = 'https://storage.googleapis.com/dft-statistics/road-traffic/downloads/data-gov-uk/dft_traffic_counts_aadf.zip'
+const MAJOR_ROAD_REF_REACH_METRES = 15_000
 
-export interface DftCountPoint extends RoadObservation {
-  ref: string
-  latitude: number
-  longitude: number
-  roadCategory: string
-  light: number
-  medium: number
-  heavy: number
-  moto: number
-  total: number
-  year: number
-}
+export type { DftCountPoint } from './lib/roads-gb-source.js'
 
-type CsvRow = Record<string, string>
-
-function nonNegativeInteger(row: CsvRow, name: string): number {
-  const raw = row[name]?.trim() ?? ''
-  if (raw === '') return 0
-  const value = Number(raw)
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`invalid DfT integer '${name}': ${JSON.stringify(raw)}`)
-  }
-  return value
-}
-
-function countPoint(row: CsvRow): DftCountPoint | null {
-  const id = row.count_point_id?.trim()
-  const year = Number(row.year)
-  const latitude = Number(row.latitude)
-  const longitude = Number(row.longitude)
-  if (!id || !Number.isSafeInteger(year) || !Number.isFinite(latitude) ||
-      !Number.isFinite(longitude) || latitude < 49 || latitude > 61 ||
-      longitude < -8.5 || longitude > 2.5) return null
-  const point: DftCountPoint = { ...roadObservation(id, 'both-directions'),
-    ref: (row.road_name ?? '').replace(/\s+/g, ''),
-    latitude,
-    longitude,
-    roadCategory: row.road_category ?? '',
-    light: nonNegativeInteger(row, 'cars_and_taxis') + nonNegativeInteger(row, 'LGVs'),
-    medium: nonNegativeInteger(row, 'buses_and_coaches'),
-    heavy: nonNegativeInteger(row, 'all_HGVs'),
-    moto: nonNegativeInteger(row, 'two_wheeled_motor_vehicles'),
-    total: nonNegativeInteger(row, 'all_motor_vehicles'),
-    year,
-  }
-  // DfT independently rounds the four class AADFs and published total, so a
-  // four-class sum may exceed total by at most two; larger excess is invalid.
-  return disjointVehicleClassCountsFitPublishedTotal(
-    point.total, [point.light, point.medium, point.heavy, point.moto], 'independently-rounded',
-  ) ? point : null
-}
-
-/** Keep the latest recent row per physical count point and require a class split. */
-export function parseDftCsv(csv: string): DftCountPoint[] {
-  const rows = parse(csv, {
-    bom: true,
-    columns: true,
-    skip_empty_lines: true,
-  }) as CsvRow[]
-  const latest = new Map<string, DftCountPoint>()
-  for (const row of rows) {
-    const point = countPoint(row)
-    if (!point) continue
-    const id = row.count_point_id.trim()
-    const existing = latest.get(id)
-    if (!existing || point.year > existing.year) latest.set(id, point)
-  }
-  const positive = [...latest.values()].filter(point => point.total > 0)
-  if (positive.length === 0) return []
-  const newestYear = Math.max(...positive.map(point => point.year))
-  return positive.filter(point => point.year > newestYear - 10 &&
-    point.light + point.medium + point.heavy + point.moto > 0)
-}
-
-function validateCachedPoints(value: unknown, path: string): DftCountPoint[] {
-  if (!Array.isArray(value)) throw new Error(`DfT cache is not an array: ${path}`)
-  return value.map((entry, index) => {
-    if (!entry || typeof entry !== 'object') throw new Error(`invalid DfT cache row ${index}: ${path}`)
-    const old = entry as Record<string, unknown>
-    if (typeof old.observationId !== 'string' || !old.observationId) throw new Error(`DfT cache row ${index} lost its original observation identity: ${path}`)
-    const id = old.observationId
-    const point: DftCountPoint = { ...roadObservation(id, 'both-directions'),
-      ref: String(old.ref ?? ''),
-      latitude: Number(old.latitude),
-      longitude: Number(old.longitude),
-      roadCategory: String(old.roadCategory ?? ''),
-      light: Number(old.light),
-      medium: Number(old.medium),
-      heavy: Number(old.heavy),
-      moto: Number(old.moto),
-      total: Number(old.total),
-      year: Number(old.year),
-    }
-    const counts = [point.light, point.medium, point.heavy, point.moto, point.total]
-    if (!point.ref || !Number.isFinite(point.latitude) || !Number.isFinite(point.longitude) ||
-        !Number.isSafeInteger(point.year) || counts.some(count => !Number.isSafeInteger(count) || count < 0)) {
-      throw new Error(`invalid DfT cache row ${index}: ${path}`)
-    }
-    return point
-  }).filter(point => point.light + point.medium + point.heavy + point.moto > 0)
-}
-
-function isCanonicalCache(value: unknown): value is DftCountPoint[] {
-  return Array.isArray(value) && (value.length === 0 ||
-    (value[0] !== null && typeof value[0] === 'object' && 'latitude' in value[0] && 'light' in value[0] && 'observationId' in value[0]))
-}
-
-async function loadDftPoints(options: RoadLoaderArguments): Promise<DftCountPoint[]> {
-  const directory = resolve(options.enrichmentDirectory, CACHE_DIRECTORY)
-  const jsonPath = resolve(directory, CACHE_JSON)
-  const csvPath = resolve(directory, EXTRACTED_CSV)
-  if (!options.forceDownload && existsSync(jsonPath)) {
-    const cached = JSON.parse(readFileSync(jsonPath, 'utf8')) as unknown
-    if (isCanonicalCache(cached)) return validateCachedPoints(cached, jsonPath)
-    if (!Array.isArray(cached)) throw new Error(`DfT cache is not an array: ${jsonPath}`)
-    if (!existsSync(csvPath)) {
-      throw new Error(`legacy DfT cache requires its raw CSV for a lossless rebuild: ${csvPath}`)
-    }
-    const rebuilt = parseDftCsv(readFileSync(csvPath, 'utf8'))
-    if (!options.enrichOnly) writeCacheAtomically(jsonPath, JSON.stringify(rebuilt))
-    return rebuilt
-  }
-  if (options.enrichOnly) {
-    if (existsSync(csvPath)) return parseDftCsv(readFileSync(csvPath, 'utf8'))
-    throw new Error(`DfT cache missing: ${jsonPath}`)
-  }
-
-  const zipPath = resolve(directory, CACHE_ZIP)
-  if (options.forceDownload || !existsSync(zipPath)) {
-    const response = await fetch(DFT_URL, { signal: AbortSignal.timeout(120_000) })
-    if (!response.ok) throw new Error(`DfT download returned HTTP ${response.status}`)
-    writeCacheAtomically(zipPath, Buffer.from(await response.arrayBuffer()))
-  }
-  if (options.forceDownload || !existsSync(csvPath)) {
-    mkdirSync(directory, { recursive: true })
-    execFileSync('unzip', ['-o', zipPath, '-d', directory], { stdio: 'pipe' })
-  }
-  const points = parseDftCsv(readFileSync(csvPath, 'utf8'))
-  writeCacheAtomically(jsonPath, JSON.stringify(points))
-  return points
-}
-
-function pointIndex(points: readonly DftCountPoint[]): ReadonlyMap<string, readonly DftCountPoint[]> {
+export function majorRoadIndex(points: readonly DftCountPoint[]): ReadonlyMap<string, readonly DftCountPoint[]> {
   const index = new Map<string, DftCountPoint[]>()
+  // A slip-road point never stands for its mainline; minor points carry only "C" or "U" as their name.
   for (const point of points) {
-    if (!point.ref) continue
+    if (!point.ref || point.isRamp || point.rank === DFT_MINOR_ROAD_RANK) continue
     const bucket = index.get(point.ref)
     if (bucket) bucket.push(point)
     else index.set(point.ref, [point])
@@ -177,20 +30,88 @@ function pointIndex(points: readonly DftCountPoint[]): ReadonlyMap<string, reado
   return index
 }
 
+/** The nearest same-ref point within 15 km whose DfT class the row can carry (a track tagged A538 takes no A-road count). */
 export function matchDftPoint(
   row: RoadRow,
   pointsByRef: ReadonlyMap<string, readonly DftCountPoint[]>,
 ): DftCountPoint | null {
-  if (isSlipRoadClass(row.roadClass)) return null
-  const ref = row.ref?.replace(/\s+/g, '') ?? ''
-  const candidates = pointsByRef.get(ref)
-  if (!candidates) return null
   let closest: DftCountPoint | null = null
-  let closestDistance = 15_000
-  for (const candidate of candidates) {
+  let closestDistance = MAJOR_ROAD_REF_REACH_METRES
+  for (const candidate of pointsByRef.get(row.ref?.replace(/\s+/g, '') ?? '') ?? []) {
+    if (!roadClassTakesCount(row.roadClass, candidate)) continue
     const distance = haversineM(row.midLat, row.midLon, candidate.latitude, candidate.longitude)
     if (distance < closestDistance) {
       closest = candidate
+      closestDistance = distance
+    }
+  }
+  return closest
+}
+
+// A minor-road point names no road ("C" or "U"): it counts the OSM way it sits on when that way is
+// unambiguous (w3-local pilot, 2026-09-24: 4,576 training and 1,616 holdout manual counts at these gates).
+const MINOR_POINT_ON_WAY_METRES = 12
+const MINOR_POINT_OTHER_CLASS_CLEARANCE_METRES = 20
+
+interface NearestRows { distance: number; roadClass: number; osmId: number; classDistances: Map<number, number> }
+
+// z30 cells span at most 0.0245 m in Great Britain (49 degrees north), so 1,000 cells cover the 20 m clearance.
+const CLEARANCE_IN_GRID_CELLS = 1_000
+const COARSE_CELL_SHIFT = 16
+
+/** Which OSM way each minor-road point counts, read from the geometry of every GB square; traffic writes never
+ *  change geometry, so sibling shards compute the same assignment. */
+export function assignMinorPointsToWays(preparedDirectory: string, points: readonly DftCountPoint[]): Map<number, DftCountPoint[]> {
+  const coarse = new Map<string, Array<{ point: DftCountPoint; gx: number; gy: number }>>()
+  for (const point of points) {
+    if (point.rank !== DFT_MINOR_ROAD_RANK) continue
+    const [gx, gy] = lonLatToGrid(point.longitude, point.latitude)
+    const key = `${gx >> COARSE_CELL_SHIFT}_${gy >> COARSE_CELL_SHIFT}`
+    coarse.set(key, [...coarse.get(key) ?? [], { point, gx, gy }])
+  }
+  const nearest = new Map<DftCountPoint, NearestRows>()
+  for (const square of coarse.size ? listPreparedSquares(preparedDirectory, GREAT_BRITAIN_BBOX) : []) {
+    const table = tableFromIPC(readFileSync(resolve(preparedDirectory, square, 'roads.arrow')))
+    const [sx, sy, ex, ey] = ['start_gx', 'start_gy', 'end_gx', 'end_gy'].map(name => table.getChild(name)!.toArray() as Int32Array)
+    const ids = table.getChild('osm_id')!, classes = table.getChild('road_class')!
+    for (let index = 0; index < table.numRows; index++) {
+      const west = Math.min(sx[index], ex[index]) - CLEARANCE_IN_GRID_CELLS, east = Math.max(sx[index], ex[index]) + CLEARANCE_IN_GRID_CELLS
+      const south = Math.min(sy[index], ey[index]) - CLEARANCE_IN_GRID_CELLS, north = Math.max(sy[index], ey[index]) + CLEARANCE_IN_GRID_CELLS
+      for (let cx = west >> COARSE_CELL_SHIFT; cx <= east >> COARSE_CELL_SHIFT; cx++) {
+        for (let cy = south >> COARSE_CELL_SHIFT; cy <= north >> COARSE_CELL_SHIFT; cy++) {
+          for (const { point, gx, gy } of coarse.get(`${cx}_${cy}`) ?? []) {
+            if (gx < west || gx > east || gy < south || gy > north) continue
+            const start = gridToLonLat(sx[index], sy[index]), end = gridToLonLat(ex[index], ey[index])
+            const distance = pointToSegmentDist(point.latitude, point.longitude, start.lat, start.lon, end.lat, end.lon)
+            if (distance > MINOR_POINT_OTHER_CLASS_CLEARANCE_METRES) continue
+            const roadClass = Number(classes.get(index)), osmId = Number(ids.get(index))
+            const best = nearest.get(point) ?? { distance: Infinity, roadClass, osmId, classDistances: new Map() }
+            best.classDistances.set(roadClass, Math.min(best.classDistances.get(roadClass) ?? Infinity, distance))
+            if (distance < best.distance || (distance === best.distance && osmId < best.osmId)) {
+              Object.assign(best, { distance, roadClass, osmId })
+            }
+            nearest.set(point, best)
+          }
+        }
+      }
+    }
+  }
+  const byWay = new Map<number, DftCountPoint[]>()
+  for (const [point, { distance, roadClass, osmId, classDistances }] of nearest) {
+    const anotherClassNearby = [...classDistances.keys()].some(otherClass => otherClass !== roadClass)
+    if (distance > MINOR_POINT_ON_WAY_METRES || anotherClassNearby || !roadClassTakesCount(roadClass, point)) continue
+    byWay.set(osmId, [...byWay.get(osmId) ?? [], point])
+  }
+  return byWay
+}
+
+/** Every piece of a counted way takes the count of that way's nearest counted point. */
+export function matchMinorRoadPoint(row: RoadRow, pointsByWay: ReadonlyMap<number, readonly DftCountPoint[]>): DftCountPoint | null {
+  let closest: DftCountPoint | null = null, closestDistance = Infinity
+  for (const point of row.osmId === null ? [] : pointsByWay.get(row.osmId) ?? []) {
+    const distance = flatDist(row.midLat, row.midLon, point.latitude, point.longitude)
+    if (distance < closestDistance || (distance === closestDistance && point.observationId < closest!.observationId)) {
+      closest = point
       closestDistance = distance
     }
   }
@@ -201,13 +122,15 @@ export async function enrichGreatBritainRoads(
   preparedDirectory: string,
   points: readonly DftCountPoint[],
 ) {
-  const pointsByRef = pointIndex(points)
+  const pointsByRef = majorRoadIndex(points)
+  const pointsByWay = assignMinorPointsToWays(preparedDirectory, points)
+  const match = (row: RoadRow): DftCountPoint | null => matchDftPoint(row, pointsByRef) ?? matchMinorRoadPoint(row, pointsByWay)
   return writeNationalRoadSquares(preparedDirectory, GREAT_BRITAIN_BBOX, 'Great Britain', {}, path =>
     writeRoadAadt(
       path,
-      (row) => {
+      (row): RoadAadt | null => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
-        const point = matchDftPoint(row, pointsByRef)
+        const point = match(row)
         return point ? { countBasis: point.countBasis, observationId: point.observationId,
           light: point.light, medium: point.medium, heavy: point.heavy,
           moto: point.moto, sourceId: SOURCE_ID, estimatedClasses: 0, // DfT publishes every class
@@ -215,14 +138,15 @@ export async function enrichGreatBritainRoads(
       },
       undefined,
       undefined,
-      { sourceIds: [SOURCE_ID], when: row => matchDftPoint(row, pointsByRef) === null },
+      { sourceIds: [SOURCE_ID], when: row => match(row) === null },
     ))
 }
 
 async function main(options: RoadLoaderArguments) {
-  const points = await loadDftPoints(options)
+  const points = await loadDftCountPoints(options)
   const result = await enrichGreatBritainRoads(options.preparedDirectory, points)
-  return { points: points.length, ...result }
+  return { points: points.length, slipRoadPoints: points.filter(point => point.isRamp).length,
+    minorRoadPoints: points.filter(point => point.rank === DFT_MINOR_ROAD_RANK).length, ...result }
 }
 
 runRoadLoaderCli(import.meta.url, main)
