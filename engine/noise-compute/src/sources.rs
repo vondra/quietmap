@@ -407,16 +407,6 @@ pub const SOURCES: &[Source] = &[
         year: Some(2024),
     },
     Source {
-        id: 1014,
-        key: "br-national-roads",
-        provenance: Provenance::NationalProxy,
-        layer: "roads",
-        name: "DNIT Rodovias Federais",
-        license: Some("public-data"),
-        url: Some("https://www.dnit.gov.br/"),
-        year: Some(2017),
-    },
-    Source {
         id: 1019,
         key: "ca-national-roads",
         provenance: Provenance::NationalMeasured,

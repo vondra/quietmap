@@ -537,18 +537,6 @@ export const DATASETS: Dataset[] = [
     roadCoverage: [0, 1, 2],
   },
   {
-    id: 1014,
-    layer: 'roads',
-    key: 'br-national-roads',
-    name: 'DNIT Rodovias Federais',
-    year: 2017,
-    license: 'public-data',
-    url: 'https://www.dnit.gov.br/',
-    priority: 80,
-    measurement: 'proxy',
-    roadCoverage: [0, 1, 2],
-  },
-  {
     id: 1019,
     layer: 'roads',
     key: 'ca-national-roads',

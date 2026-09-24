@@ -1,9 +1,9 @@
 //! Road traffic priors for rows without a count, and legal speed defaults.
 //!
 //! ```text
-//!   city arm (tier-1 metro)        São Paulo, Rio, Bangkok: hand-set section totals
+//!   city arm (tier-1 metro)        Bangkok: hand-set section totals
 //!   │   ↓
-//!   country arm                    TH, BR rural: hand-set section totals
+//!   country arm                    TH rural: hand-set section totals
 //!   │   ↓
 //!   classes 0-2                    measured world rate per lane, per carriageway
 //!   classes 3-12                   WORLD_DEFAULT section totals
@@ -44,7 +44,7 @@ pub const WORLD_DEFAULT: [Aadt; 13] = [
     (1120.5, 81.0, 121.5, 27.0),  // 12 primary_link  — 1350
 ];
 
-// Re-export the dedicated module so existing callers (`CITY_SAO_PAULO` …)
+// Re-export the dedicated module so existing callers (`CITY_BANGKOK` …)
 // keep working unchanged. Edit the JSON, then run
 // `node scripts/gen-city-consts-rs.mjs` to refresh.
 
@@ -111,16 +111,6 @@ pub fn resolve_traffic_default(
 
 fn city_default(city_id: u16, class: u8) -> Option<Aadt> {
     match (city_id, class) {
-        // ─── São Paulo + Rio — BR tier-1 (×2.0) split 70/10/15/5 ─────────
-        // Source: pipeline/enrich-roads-br.ts CLASS_AADT × tierMultiplier(1)
-        // × splitVehicles(tier=1).
-        (CITY_SAO_PAULO, 0) | (CITY_RIO, 0) => Some((70000.0, 10000.0, 15000.0, 5000.0)), // 100k motorway
-        (CITY_SAO_PAULO, 1) | (CITY_RIO, 1) => Some((35000.0, 5000.0, 7500.0, 2500.0)), // 50k trunk
-        (CITY_SAO_PAULO, 2) | (CITY_RIO, 2) => Some((16800.0, 2400.0, 3600.0, 1200.0)), // 24k primary
-        (CITY_SAO_PAULO, 3) | (CITY_RIO, 3) => Some((7000.0, 1000.0, 1500.0, 500.0)), // 10k secondary
-        (CITY_SAO_PAULO, 4) | (CITY_RIO, 4) => Some((2800.0, 400.0, 600.0, 200.0)),   // 4k tertiary
-        (CITY_SAO_PAULO, 5) | (CITY_RIO, 5) => Some((1400.0, 200.0, 300.0, 100.0)), // 2k residential
-
         // ─── Bangkok — TH metro (rural × 1.5) split 60/8/7/25 ─────────────
         // Derivation: the TH rural arm totals × 1.5, split via
         // pipeline/enrich-roads-th.ts thaiClassSplit(isBangkok=true).
@@ -149,16 +139,6 @@ fn country_default(iso: &[u8; 2], class: u8) -> Option<Aadt> {
         (b"TH", 3) => Some((3720.0, 600.0, 780.0, 900.0)),     // 6k secondary
         (b"TH", 4) => Some((1550.0, 250.0, 325.0, 375.0)),     // 2.5k tertiary
         (b"TH", 5) => Some((744.0, 120.0, 156.0, 180.0)),      // 1.2k residential
-
-        // ─── Brazil rural (tier 0) — split 60/10/25/5 ────────────────────
-        // Source: pipeline/enrich-roads-br.ts CLASS_AADT rural × splitVehicles(tier=0).
-        (b"BR", 0) => Some((30000.0, 5000.0, 12500.0, 2500.0)), // 50k motorway
-        (b"BR", 1) => Some((15000.0, 2500.0, 6250.0, 1250.0)),  // 25k trunk
-        (b"BR", 2) => Some((7200.0, 1200.0, 3000.0, 600.0)),    // 12k primary
-        (b"BR", 3) => Some((3000.0, 500.0, 1250.0, 250.0)),     // 5k secondary
-        (b"BR", 4) => Some((1200.0, 200.0, 500.0, 100.0)),      // 2k tertiary
-        (b"BR", 5) => Some((600.0, 100.0, 250.0, 50.0)),        // 1k residential
-        (b"BR", 6) => Some((240.0, 40.0, 100.0, 20.0)),         // 400 living_street
 
         _ => None,
     }
@@ -297,18 +277,6 @@ mod tests {
     }
 
     #[test]
-    fn sao_paulo_tier1_motorway_is_100k() {
-        let a = square_country_city_for(b"BR", CITY_SAO_PAULO, Continent::SouthAmerica);
-        let (l, m, h, x) = section_total(resolve_traffic_default(0, a, 3, true));
-        let total = l + m + h + x;
-        assert!(
-            (total - 100000.0).abs() < 1.0,
-            "SP motorway total should be 100k, got {}",
-            total
-        );
-    }
-
-    #[test]
     fn bangkok_motorway_is_90k_with_heavy_moto_share() {
         let a = square_country_city_for(b"TH", CITY_BANGKOK, Continent::Asia);
         let (l, m, h, x) = section_total(resolve_traffic_default(0, a, 3, true));
@@ -328,12 +296,7 @@ mod tests {
 
     #[test]
     fn unknown_city_falls_through_to_country() {
-        // Brazilian square with no metro match (city_id=0) gets BR country default.
-        let a = square_country_city_for(b"BR", 0, Continent::SouthAmerica);
-        assert_eq!(
-            section_total(resolve_traffic_default(0, a, 3, true)),
-            (30000.0, 5000.0, 12500.0, 2500.0)
-        );
+        // A Thai square with no metro match (city_id=0) gets the TH country default.
         let thailand = square_country_city_for(b"TH", 0, Continent::Asia);
         assert_eq!(
             section_total(resolve_traffic_default(3, thailand, 0, false)),

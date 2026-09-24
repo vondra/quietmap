@@ -134,10 +134,10 @@ fn main_class_prior_is_per_carriageway_while_hand_set_section_totals_are_shared(
     assert!((total(&a, &[]) - 3.0 * 6379.0).abs() < 1e-8);
     assert!((total(&a, &[&b]) - 3.0 * 6379.0).abs() < 1e-8, "a matched sibling never divides a carriageway prior");
     assert!((total(&b, &[&a]) - 2.0 * 6379.0).abs() < 1e-8);
-    let brazil = SquareCountryCity { country_iso: *b"BR", ..SquareCountryCity::UNKNOWN };
-    let (c, d) = (Road { country: brazil, ..a.clone() }, Road { country: brazil, ..b });
-    assert!((total(&c, &[]) - 50_000.0 * 1.42 * 0.5).abs() < 1e-8);
-    assert!((total(&c, &[&d]) + total(&d, &[&c]) - 50_000.0 * 1.42).abs() < 1e-8);
+    let thailand = SquareCountryCity { country_iso: *b"TH", ..SquareCountryCity::UNKNOWN };
+    let (c, d) = (Road { country: thailand, ..a.clone() }, Road { country: thailand, ..b });
+    assert!((total(&c, &[]) - 60_000.0 * 1.42 * 0.5).abs() < 1e-8);
+    assert!((total(&c, &[&d]) + total(&d, &[&c]) - 60_000.0 * 1.42).abs() < 1e-8);
     let local = Road { class: 8, lanes: 0, direction: 0, ..a };
     let count = allocation::resolve(&local, []).0;
     assert!(count.iter().any(|v| *v > 0.0 && *v < 1.0), "fractional quiet-road priors survive");

@@ -28,7 +28,6 @@ export const SOURCE_ID_GLOBAL_GEM_CEMENT = 332 as const // global-gem-cement
 export const SOURCE_ID_GLOBAL_GEM_COALMINE = 333 as const // global-gem-coalmine
 export const SOURCE_ID_AR_NATIONAL_ROADS = 1004 as const // ar-national-roads
 export const SOURCE_ID_BO_NATIONAL_ROADS = 1013 as const // bo-national-roads
-export const SOURCE_ID_BR_NATIONAL_ROADS = 1014 as const // br-national-roads
 export const SOURCE_ID_CA_NATIONAL_ROADS = 1019 as const // ca-national-roads
 export const SOURCE_ID_CL_NATIONAL_ROADS = 1023 as const // cl-national-roads
 export const SOURCE_ID_CN_NATIONAL_ROADS = 1025 as const // cn-national-roads
