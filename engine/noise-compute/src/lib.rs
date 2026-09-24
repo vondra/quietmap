@@ -11,6 +11,7 @@ pub mod compute;
 pub mod confidence;
 pub mod constants;
 pub mod country_speed_defaults_generated;
+pub mod road_traffic_priors_generated;
 pub mod defaults;
 pub mod emission;
 pub mod envelope;

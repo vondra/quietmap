@@ -22,6 +22,10 @@ pub struct Road {
     pub lanes: u8,
     pub access: u8,
     pub tunnel: bool,
+    /// 0 unknown, 1 rural, 2 urban (`noise_compute::defaults::BUILT_UP_*`).
+    pub built_up: u8,
+    /// A roundabout ring is one-way by OSM tagging, yet each point of it carries the circulating flow.
+    pub roundabout: bool,
     pub country: SquareCountryCity,
     pub source_id: u16,
     pub observation_source_id: u16,
@@ -77,6 +81,8 @@ pub fn roads(batch: &RecordBatch) -> Result<Vec<Road>, String> {
     let lanes = column::<UInt8Array>(batch, "lanes")?;
     let access = column::<UInt8Array>(batch, "access")?;
     let tunnel = column::<BooleanArray>(batch, "tunnel")?;
+    let built_up = column::<UInt8Array>(batch, "built_up")?;
+    let junction = column::<UInt8Array>(batch, "junction")?;
     let country = column::<UInt16Array>(batch, "country_iso")?;
     let city = column::<UInt16Array>(batch, "city_id")?;
     let continent = column::<UInt8Array>(batch, "continent")?;
@@ -119,7 +125,8 @@ pub fn roads(batch: &RecordBatch) -> Result<Vec<Road>, String> {
             way_id: ids.value(i), segment_idx: segments.value(i),
             start, end,
             direction: direction.value(i), class: class.value(i), lanes: lanes.value(i),
-            access: access.value(i), tunnel: tunnel.value(i),
+            access: access.value(i), tunnel: tunnel.value(i), built_up: built_up.value(i),
+            roundabout: junction.value(i) != 0,
             country: baked_square_country_city(country.value(i), city.value(i), continent.value(i)),
             source_id: source.value(i),
             observation_source_id: origins.map(|v| v.value(i)).unwrap_or(source.value(i)),

@@ -5,8 +5,8 @@
 //!   │   ↓
 //!   country arm                    TH rural: hand-set section totals
 //!   │   ↓
-//!   classes 0-2                    measured world rate per lane, per carriageway
-//!   classes 3-12                   WORLD_DEFAULT section totals
+//!   classes 0-4                    measured per carriageway, by direction and built-up
+//!   classes 5-12                   WORLD_DEFAULT section totals
 //! ```
 //!
 //! No country or continent factor exists: vehicles per paved km (clamped
@@ -23,9 +23,9 @@ use crate::square_country_city::{Continent, SquareCountryCity};
 /// Vehicle-class AADT tuple: (light, medium, heavy, moto), veh/day.
 pub type Aadt = (f64, f64, f64, f64);
 
-/// Both-directions section totals. Classes 3-12 use them as the prior;
-/// classes 0-2 contribute only their vehicle-class proportions to the
-/// measured per-lane prior below.
+/// Both-directions section totals. Classes 5-12 use them as the prior;
+/// classes 0-4 contribute only their vehicle-class proportions to the
+/// measured carriageway prior below.
 pub const WORLD_DEFAULT: [Aadt; 13] = [
     (21600.0, 2400.0, 5700.0, 300.0), // 0 motorway — 30k
     (11700.0, 1200.0, 1800.0, 300.0), // 1 trunk — 15k
@@ -59,31 +59,28 @@ pub enum TrafficDefault {
     Carriageway(Aadt),
 }
 
-// Length-weighted medians of stored per-carriageway counts over all measured
-// rows of release r260910 outside tunnels (motorway 174,178 km, trunk
-// 218,042 km, primary 200,387 km), trained separately for one-way and two-way
-// rows; leave-one-country-out MAE 3.2-3.7 dB, |bias| < 0.6 dB. Columns:
-// vehicles per lane per day for a lanes tag of 1-6 (one-way, two-way), then
-// the median whole count of rows without such a tag (one-way, two-way), which
-// sit far below lanes x rate (trunk one-way 1,810 against 2 x 4,533).
-// Lone one-way rows that still held a two-way total (18,246 km) are halved and
-// ramp-sized mainline rows (3,729 km) dropped before taking the medians.
-const MEASURED_CARRIAGEWAY_VEHICLES_PER_DAY: [[f64; 4]; 3] = [
-    [6379.0, 3010.0, 5200.0, 6019.0], // 0 motorway
-    [4533.0, 2594.0, 1810.0, 3045.0], // 1 trunk
-    [4250.0, 2800.0, 5882.0, 3719.0], // 2 primary
-];
+/// A measured prior for one stored carriageway: vehicles per lane for a lanes tag of 1-6 (0 where the class
+/// has no per-lane fit), else the whole count of a carriageway without such a tag, which sits far below
+/// lanes x rate on main roads.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CarriagewayPrior {
+    pub vehicles_per_lane: f64,
+    pub untagged: f64,
+}
+
+pub use crate::road_traffic_priors_generated::MEASURED_CARRIAGEWAY_PRIORS;
 
 /// The prior for a row without a count: city arm, country arm, then the
-/// measured per-lane carriageway prior (classes 0-2) or the world class total.
-/// `class` clamps to the WORLD_DEFAULT bounds. AUTHORITATIVE for the native
-/// producer (`roads-finalize` allocation); runtime consumers read prepared
-/// counts and never call this.
+/// measured carriageway prior (classes 0-4, by direction and `built_up`) or the
+/// world class total. `class` clamps to the WORLD_DEFAULT bounds. AUTHORITATIVE
+/// for the native producer (`roads-finalize` allocation); runtime consumers
+/// read prepared counts and never call this.
 pub fn resolve_traffic_default(
     class: u8,
     square_country_city: SquareCountryCity,
     lanes: u8,
     one_way: bool,
+    built_up: u8,
 ) -> TrafficDefault {
     let hand_set = (square_country_city.city_id != 0)
         .then(|| city_default(square_country_city.city_id, class))
@@ -93,14 +90,15 @@ pub fn resolve_traffic_default(
         return TrafficDefault::SectionBothDirections(section);
     }
     let world = WORLD_DEFAULT[(class as usize).min(WORLD_DEFAULT.len() - 1)];
-    let Some(measured) = MEASURED_CARRIAGEWAY_VEHICLES_PER_DAY.get(class as usize) else {
+    let Some(by_direction) = MEASURED_CARRIAGEWAY_PRIORS.get(class as usize) else {
         return TrafficDefault::SectionBothDirections(world);
     };
-    let direction = usize::from(!one_way);
-    let total = if (1..=6).contains(&lanes) {
-        f64::from(lanes) * measured[direction]
+    // An unknown built-up flag (0) takes the prior fitted on both kinds of place.
+    let prior = by_direction[usize::from(!one_way)][usize::from(built_up.min(BUILT_UP_URBAN))];
+    let total = if prior.vehicles_per_lane > 0.0 && (1..=6).contains(&lanes) {
+        f64::from(lanes) * prior.vehicles_per_lane
     } else {
-        measured[2 + direction]
+        prior.untagged
     };
     let scale = total / (world.0 + world.1 + world.2 + world.3);
     TrafficDefault::Carriageway((world.0 * scale, world.1 * scale, world.2 * scale, world.3 * scale))
@@ -250,36 +248,39 @@ mod tests {
     }
 
     #[test]
-    fn main_classes_take_the_measured_rate_per_lane_per_carriageway() {
+    fn main_classes_take_the_measured_carriageway_prior_by_direction_and_built_up() {
         let anywhere = square_country_city_for(b"DE", 0, Continent::Europe);
-        let TrafficDefault::Carriageway(motorway) = resolve_traffic_default(0, anywhere, 3, true) else {
+        let sum = |default| match default {
+            TrafficDefault::Carriageway(v) => v.0 + v.1 + v.2 + v.3,
+            TrafficDefault::SectionBothDirections(_) => panic!("classes 0-4 are per carriageway"),
+        };
+        let TrafficDefault::Carriageway(motorway) = resolve_traffic_default(0, anywhere, 3, true, BUILT_UP_URBAN) else {
             panic!("motorway prior is per carriageway");
         };
         let total = motorway.0 + motorway.1 + motorway.2 + motorway.3;
-        assert!((total - 3.0 * 6379.0).abs() < 1e-9);
+        assert!((total - 3.0 * MEASURED_CARRIAGEWAY_PRIORS[0][0][2].vehicles_per_lane).abs() < 1e-9);
         // WORLD_DEFAULT motorway proportions 72/8/19/1 %.
         assert!((motorway.0 / total - 0.72).abs() < 1e-12 && (motorway.2 / total - 0.19).abs() < 1e-12);
-        let sum = |default| match default {
-            TrafficDefault::Carriageway(v) => v.0 + v.1 + v.2 + v.3,
-            TrafficDefault::SectionBothDirections(_) => panic!("classes 0-2 are per carriageway"),
-        };
-        assert!((sum(resolve_traffic_default(2, anywhere, 2, false)) - 2.0 * 2800.0).abs() < 1e-9);
-        // No lanes tag (0) or an implausible one: the median of untagged measured rows.
-        assert!((sum(resolve_traffic_default(1, anywhere, 0, true)) - 1810.0).abs() < 1e-9);
-        assert!((sum(resolve_traffic_default(1, SquareCountryCity::UNKNOWN, 9, false)) - 3045.0).abs() < 1e-9);
-        for class in 3..=12 {
+        // No lanes tag (0) or an implausible one: the median of untagged measured carriageways.
+        let close = |a: f64, b: f64| assert!((a - b).abs() < 1e-9, "{a} != {b}");
+        close(sum(resolve_traffic_default(1, anywhere, 0, true, BUILT_UP_RURAL)), MEASURED_CARRIAGEWAY_PRIORS[1][0][1].untagged);
+        close(sum(resolve_traffic_default(1, SquareCountryCity::UNKNOWN, 9, false, BUILT_UP_UNKNOWN)),
+            MEASURED_CARRIAGEWAY_PRIORS[1][1][0].untagged);
+        // Secondary and tertiary have no per-lane fit: the lanes tag does not scale them.
+        close(sum(resolve_traffic_default(4, anywhere, 4, false, BUILT_UP_URBAN)), MEASURED_CARRIAGEWAY_PRIORS[4][1][2].untagged);
+        for class in 5..=12 {
             assert_eq!(
-                resolve_traffic_default(class, anywhere, 3, true),
+                resolve_traffic_default(class, anywhere, 3, true, BUILT_UP_URBAN),
                 TrafficDefault::SectionBothDirections(WORLD_DEFAULT[class as usize])
             );
         }
-        assert_eq!(section_total(resolve_traffic_default(200, anywhere, 0, false)), WORLD_DEFAULT[12]);
+        assert_eq!(section_total(resolve_traffic_default(200, anywhere, 0, false, BUILT_UP_RURAL)), WORLD_DEFAULT[12]);
     }
 
     #[test]
     fn bangkok_motorway_is_90k_with_heavy_moto_share() {
         let a = square_country_city_for(b"TH", CITY_BANGKOK, Continent::Asia);
-        let (l, m, h, x) = section_total(resolve_traffic_default(0, a, 3, true));
+        let (l, m, h, x) = section_total(resolve_traffic_default(0, a, 3, true, BUILT_UP_URBAN));
         let total = l + m + h + x;
         assert!(
             (total - 90000.0).abs() < 1.0,
@@ -299,7 +300,7 @@ mod tests {
         // A Thai square with no metro match (city_id=0) gets the TH country default.
         let thailand = square_country_city_for(b"TH", 0, Continent::Asia);
         assert_eq!(
-            section_total(resolve_traffic_default(3, thailand, 0, false)),
+            section_total(resolve_traffic_default(3, thailand, 0, false, BUILT_UP_RURAL)),
             (3720.0, 600.0, 780.0, 900.0)
         );
     }

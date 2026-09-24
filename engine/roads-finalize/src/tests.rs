@@ -1,13 +1,14 @@
 //! Regression classes: count basis, longitudinal identity, priors and cross-owner finalization.
 
 use crate::{allocation, input::Road};
+use noise_compute::defaults::MEASURED_CARRIAGEWAY_PRIORS;
 use noise_compute::sources::{provenance_of, Provenance};
 use noise_compute::square_country_city::SquareCountryCity;
 
 fn road(id: i64, basis: u8, reverse: bool) -> Road {
     Road { way_id: id, segment_idx: 0, start: (if reverse { 10.0 } else { 0.0 }, 0.0),
         end: (if reverse { 10.0 } else { 0.0 }, 100.0), direction: if reverse { 2 } else { 1 },
-        class: 2, lanes: 2, access: 0, tunnel: false, country: SquareCountryCity::UNKNOWN,
+        class: 2, lanes: 2, access: 0, tunnel: false, built_up: 0, roundabout: false, country: SquareCountryCity::UNKNOWN,
         source_id: 10, observation_source_id: 10, provenance: provenance_of(10), counts: [10_000.0, 0.0, 0.0, 0.0],
         basis, estimated: 0, observation: "counter:A".to_owned(), corridor: "R1".to_owned() }
 }
@@ -124,16 +125,21 @@ fn unrelated_parallel_street_does_not_steal_a_section_count() {
     assert_eq!(allocation::resolve(&observed, [&other]).0[0], 10_000.0);
 }
 
+fn unmeasured(class: u8, lanes: u8, direction: u8) -> Road {
+    Road { source_id: 0, provenance: Provenance::None, counts: [0.0; 4], basis: 0, estimated: 15,
+        observation: String::new(), class, lanes, direction, ..road(1, 0, false) }
+}
+
 #[test]
 fn main_class_prior_is_per_carriageway_while_hand_set_section_totals_are_shared() {
-    let a = Road { source_id: 0, provenance: Provenance::None, counts: [0.0; 4], basis: 0,
-        estimated: 15, observation: String::new(), class: 0, lanes: 3, ..road(1, 0, false) };
+    let a = unmeasured(0, 3, 1);
     let b = Road { way_id: 2, lanes: 2, direction: 2, start: (10.0, 0.0), end: (10.0, 100.0), ..a.clone() };
     let total = |road: &Road, others: &[&Road]| allocation::resolve(road, others.iter().copied()).0.iter().sum::<f64>();
+    let one_way_motorway_per_lane = MEASURED_CARRIAGEWAY_PRIORS[0][0][0].vehicles_per_lane;
     assert_eq!(allocation::resolve(&a, []).1, 15);
-    assert!((total(&a, &[]) - 3.0 * 6379.0).abs() < 1e-8);
-    assert!((total(&a, &[&b]) - 3.0 * 6379.0).abs() < 1e-8, "a matched sibling never divides a carriageway prior");
-    assert!((total(&b, &[&a]) - 2.0 * 6379.0).abs() < 1e-8);
+    assert!((total(&a, &[]) - 3.0 * one_way_motorway_per_lane).abs() < 1e-8);
+    assert!((total(&a, &[&b]) - 3.0 * one_way_motorway_per_lane).abs() < 1e-8, "a matched sibling never divides a carriageway prior");
+    assert!((total(&b, &[&a]) - 2.0 * one_way_motorway_per_lane).abs() < 1e-8);
     let thailand = SquareCountryCity { country_iso: *b"TH", ..SquareCountryCity::UNKNOWN };
     let (c, d) = (Road { country: thailand, ..a.clone() }, Road { country: thailand, ..b });
     assert!((total(&c, &[]) - 60_000.0 * 1.42 * 0.5).abs() < 1e-8);
@@ -141,6 +147,28 @@ fn main_class_prior_is_per_carriageway_while_hand_set_section_totals_are_shared(
     let local = Road { class: 8, lanes: 0, direction: 0, ..a };
     let count = allocation::resolve(&local, []).0;
     assert!(count.iter().any(|v| *v > 0.0 && *v < 1.0), "fractional quiet-road priors survive");
+}
+
+#[test]
+fn a_roundabout_ring_carries_its_approach_flow_whole_and_takes_the_two_way_prior() {
+    let counted_ring = Road { class: 1, roundabout: true, ..road(1, 2, false) };
+    assert_eq!(allocation::resolve(&counted_ring, []).0[0], 10_000.0, "a lone numbered ring row is not one direction");
+    // Opposite arcs of a small ring run antiparallel 10 m apart under one name: still one ring.
+    let opposite_arc = Road { class: 1, roundabout: true, ..road(2, 2, true) };
+    assert_eq!(allocation::resolve(&counted_ring, [&opposite_arc]).0[0], 10_000.0);
+    let default_ring = Road { roundabout: true, ..unmeasured(3, 0, 1) };
+    let two_way_secondary = MEASURED_CARRIAGEWAY_PRIORS[3][1][0].untagged;
+    assert!((allocation::resolve(&default_ring, []).0.iter().sum::<f64>() - two_way_secondary).abs() < 1e-8);
+}
+
+#[test]
+fn an_uncounted_one_way_town_street_takes_the_one_way_carriageway_prior_not_half_the_road() {
+    // Holdout one-way class 3-4 rows: half of the two-way default read -4.7 to -10.6 dB (w3-major, r260919).
+    for class in [3_u8, 4] {
+        let urban_one_way = Road { built_up: 2, ..unmeasured(class, 1, 1) };
+        let expected = MEASURED_CARRIAGEWAY_PRIORS[class as usize][0][2].untagged;
+        assert!((allocation::resolve(&urban_one_way, []).0.iter().sum::<f64>() - expected).abs() < 1e-8);
+    }
 }
 
 #[test]
@@ -204,6 +232,8 @@ fn cross_owner_ipc(dateline: bool) {
             ("lanes", Arc::new(UInt8Array::from(vec![2]))),
             ("access", Arc::new(UInt8Array::from(vec![0]))),
             ("tunnel", Arc::new(BooleanArray::from(vec![false]))),
+            ("built_up", Arc::new(UInt8Array::from(vec![0]))),
+            ("junction", Arc::new(UInt8Array::from(vec![0]))),
             ("country_iso", Arc::new(UInt16Array::from(vec![0]))),
             ("city_id", Arc::new(UInt16Array::from(vec![0]))),
             ("continent", Arc::new(UInt8Array::from(vec![0]))),
@@ -326,6 +356,8 @@ mod profile_retention {
             ("lanes", DataType::UInt8, Arc::new(UInt8Array::from(vec![2]))),
             ("access", DataType::UInt8, Arc::new(UInt8Array::from(vec![0]))),
             ("tunnel", DataType::Boolean, Arc::new(BooleanArray::from(vec![false]))),
+            ("built_up", DataType::UInt8, Arc::new(UInt8Array::from(vec![0]))),
+            ("junction", DataType::UInt8, Arc::new(UInt8Array::from(vec![0]))),
             ("country_iso", DataType::UInt16, Arc::new(UInt16Array::from(vec![0]))),
             ("city_id", DataType::UInt16, Arc::new(UInt16Array::from(vec![0]))),
             ("continent", DataType::UInt8, Arc::new(UInt8Array::from(vec![0]))),
