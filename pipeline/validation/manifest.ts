@@ -87,7 +87,7 @@ export function freezeManifest(rows: StationRow[], criteria: Criteria, baselineR
     const receiver = row.receiver ?? { lat: row.lat, lng: row.lng, moved_m: 0 }
     const z15 = tile(receiver.lat, receiver.lng, 15)
     const exclusion = row.truth_kind !== 'measured' ? `truth_kind ${row.truth_kind} (cross-check)`
-      : row.measurand !== 'sound_level' ? 'input truth (traffic count)'
+      : row.measurand !== 'sound_level' ? `measurand ${row.measurand}`
         : row.diagnostic_only ? `diagnostic: ${row.diagnostic_reason ?? ''}`
           : row.months_covered != null && row.months_covered < 9 ? `${row.months_covered} months covered`
             : row.year === 2020 || row.year === 2021 ? `measurement year ${row.year}`

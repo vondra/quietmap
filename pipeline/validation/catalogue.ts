@@ -15,8 +15,9 @@ export type CatalogueStation = {
   lat: number
   lng: number
   mic_height_m: number | null
-  truth_kind: 'measured' | 'official_map_modelled'
-  measurand?: 'sound_level' | 'traffic_count'
+  /** `identity_only`: a guard with a source identity and no published level. */
+  truth_kind: 'measured' | 'official_map_modelled' | 'identity_only'
+  measurand?: 'sound_level' | 'traffic_count' | 'source_identity'
   expected_source: string
   guard: boolean
   guard_expected_source: string | null
@@ -145,12 +146,13 @@ export function validateStation(row: unknown, label: string): asserts row is Cat
   requireField(station, 'lat', value => Number.isFinite(value) && Math.abs(value as number) <= 90, label)
   requireField(station, 'lng', value => Number.isFinite(value) && Math.abs(value as number) <= 180, label)
   requireField(station, 'mic_height_m', value => value == null || (Number.isFinite(value) && (value as number) > 0), label)
-  requireField(station, 'truth_kind', value => value === 'measured' || value === 'official_map_modelled', label)
+  requireField(station, 'truth_kind', value => value === 'measured' || value === 'official_map_modelled' || value === 'identity_only', label)
   requireField(station, 'expected_source', text, label)
   requireField(station, 'guard', value => typeof value === 'boolean', label)
   requireField(station, 'holdout', value => typeof value === 'boolean', label)
   requireField(station, 'native_periods', value => value == null || (typeof value === 'object' && !Array.isArray(value)), label)
-  requireField(station, 'indicators', value => !!value && typeof value === 'object' && Object.keys(value).length > 0, label)
+  requireField(station, 'indicators', value => !!value && typeof value === 'object'
+    && (Object.keys(value).length > 0 || station.truth_kind === 'identity_only'), label)
   for (const [key, value] of Object.entries(station.indicators as object)) {
     if (!measured(value)) throw new Error(`${label}: indicator ${key} must be a number, a [low, high] band or null`)
   }
