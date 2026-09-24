@@ -3,7 +3,9 @@
 
 use crate::encode::Expanded;
 use crate::merge::{CategoryFlow, RowTraffic, STATUS_ESTIMATED, STATUS_KNOWN, STATUS_UNKNOWN};
-use crate::sources::{blocks_foreign_national, is_residual, should_overwrite, source_applies_to_row};
+use crate::sources::{
+    blocks_foreign_national, is_residual, should_overwrite, source_applies_to_row, stamps_whole_line,
+};
 use std::collections::HashMap;
 
 // Sibling gates moved from the retired CZ graph spread (pipeline rail-graph-metrics, reviews of
@@ -194,10 +196,14 @@ fn track_share(
         .map(|&member| category(&evidence[member]))
         .filter(|flow| flow.status != STATUS_UNKNOWN && flow.source_id == line_source)
         .collect();
-    let matching = carriers.iter().fold(0, |mask, flow| mask | flow.matching);
-    // Routed passages (a matching mask) sit on the one track their train used, so the line carries
-    // their sum; a whole-line stamp (proxy, spatial feature, residual) repeats the line on each track.
-    let divisor = if matching != 0 { tracks } else { tracks * carriers.len() as f64 };
+    // A measured source counts the trains of each track (a routed trip sits on the track it used,
+    // a platform stop counts its own direction), so the line carries their sum; a proxy or residual
+    // repeats the line's value on every track it stamps.
+    let divisor = if stamps_whole_line(line_source) {
+        tracks * carriers.len() as f64
+    } else {
+        tracks
+    };
     let mut periods = [0.0; 3];
     for flow in &carriers {
         for (total, value) in periods.iter_mut().zip(flow.periods) {
@@ -212,7 +218,7 @@ fn track_share(
             STATUS_ESTIMATED
         },
         source_id: line_source,
-        matching,
+        matching: carriers.iter().fold(0, |mask, flow| mask | flow.matching),
     }
 }
 

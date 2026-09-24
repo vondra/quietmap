@@ -165,8 +165,10 @@ On non-service tracks (`service=0`), each category is allocated once per line
 cross-section: a track and each other way running beside its midpoint (same type
 and usage family, no shared node; 15 m and 10° without a common ref or name,
 50 m and 20° with one) form the cross-section. The highest-ranked evidence on
-any of its tracks sets the line value (the sum of routed passages, or the value
-of a whole-line stamp); without evidence one labelled class prior applies. Each
+any of its tracks sets the line value (the sum of what a measured source counted
+on each track, such as routed trips and platform stops, or the value a proxy or
+residual repeats on every track); a timetable's no-service residual yields to any
+ranked evidence on the line; without evidence one labelled class prior applies. Each
 track carries the line value divided by the number of tracks, so a proven zero
 stays zero and the cross-section sum equals the line value in every category.
 

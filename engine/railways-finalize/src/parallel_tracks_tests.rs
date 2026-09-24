@@ -74,6 +74,18 @@ fn routed_passages_on_one_track_and_a_prior_are_each_counted_once_per_line() {
 }
 
 #[test]
+fn platform_stop_counts_of_a_measured_feed_add_up_over_the_two_directions() {
+    // Warsaw Centrum: each tram track takes its own platform's departures (530 and 521).
+    let platform = |count| RowTraffic { passenger: flow(count, TIMETABLE, 0), freight: CategoryFlow::default() };
+    let mut rows = vec![
+        track(1, 0.0, 14.23, 14.232, platform(530.0)),
+        track(2, 1.0, 14.23, 14.232, platform(521.0)),
+    ];
+    allocate_over_parallel_tracks(&mut rows);
+    assert!((cross_section_sum(&rows, |t| t.passenger) - 1051.0).abs() < 1e-9);
+}
+
+#[test]
 fn whole_line_stamps_are_not_multiplied_by_the_number_of_tracks() {
     let stamp = RowTraffic { passenger: flow(2.0, RESIDUAL, 0), freight: flow(1.0, RESIDUAL, 0) };
     let mut rows: Vec<_> = (0..3).map(|lane| track(lane, lane as f64, 14.23, 14.232, stamp)).collect();
