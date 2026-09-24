@@ -6,7 +6,7 @@ map: { center: [-98.0, 39.0], zoom: 4 }
 
 ## Roads
 
-Traffic volumes: [FHWA Highway Performance Monitoring System](https://www.fhwa.dot.gov/policyinformation/hpms.cfm), 2022 edition, read from the public [HPMS feature service](https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/HPMS_FULL_US_2022_Sysnomulti_view/FeatureServer/0). An OSM road takes the nearest HPMS segment within 200 m with a compatible functional class.
+Traffic volumes: [FHWA Highway Performance Monitoring System](https://www.fhwa.dot.gov/policyinformation/hpms.cfm), 2022 edition, read from the public [HPMS feature service](https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/HPMS_FULL_US_2022_Sysnomulti_view/FeatureServer/0). An OSM road takes the nearest HPMS segment line within 100 m that runs along it and has a compatible functional class. A one-way segment counts one direction, unless it repeats the total of a two-way segment of the same road within 300 m; then it is that road's two-way total.
 
 HPMS publishes one total per segment. The heavy-vehicle share is assigned by functional class:
 

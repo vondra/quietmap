@@ -13,8 +13,8 @@ import {
   loadEuropeanCityTraffic, type EuropeanCityTraffic, type EuropeanTrafficRecord,
 } from './lib/roads-europe-source.js'
 import {
-  buildOneHundredthDegreeSegmentGrid, M_PER_DEG_LAT, M_PER_DEG_LON_EQ, pointGridCandidates, pointSearchReach,
-  pointToPolylineDist, pointToSegmentDist, wrapLonDeltaDeg, type SegmentCoordinates,
+  buildOneHundredthDegreeSegmentGrid, pointGridCandidates, pointSearchReach,
+  pointToPolylineDist, pointToSegmentDist, runsAlongSegment, type SegmentCoordinates,
 } from './lib/spatial.js'
 
 const MAXIMUM_DISTANCE_METRES = 50
@@ -48,19 +48,11 @@ const isDirectionalPoint = (record: EuropeanTrafficRecord): boolean =>
 
 // A counted street is not its slip road, its service lane or a track beside it.
 const NEVER_MATCHED_BY_PROXIMITY: ReadonlySet<number> = new Set([6, 7, 8, 10, 11, 12])
-const MINIMUM_ALONG_LINE_COSINE = Math.cos(30 * Math.PI / 180)
 
 /** Without the publisher's way id a row must be the counted street itself: an eligible class
  *  running along the line in either direction (a cross street within 50 m is not). */
 function liesAlongObservation(row: MatchedRoad, segment: ObservationSegment): boolean {
-  if (NEVER_MATCHED_BY_PROXIMITY.has(row.roadClass)) return false
-  const scale = M_PER_DEG_LON_EQ * Math.cos(row.midLat * Math.PI / 180)
-  const rowEast = wrapLonDeltaDeg(row.endLon - row.startLon) * scale, rowNorth = (row.endLat - row.startLat) * M_PER_DEG_LAT
-  const lineEast = wrapLonDeltaDeg(segment.endLongitude - segment.startLongitude) * scale
-  const lineNorth = (segment.endLatitude - segment.startLatitude) * M_PER_DEG_LAT
-  const lengths = Math.hypot(rowEast, rowNorth) * Math.hypot(lineEast, lineNorth)
-  if (lengths === 0) return true // a point count has no heading
-  return Math.abs(rowEast * lineEast + rowNorth * lineNorth) / lengths >= MINIMUM_ALONG_LINE_COSINE
+  return !NEVER_MATCHED_BY_PROXIMITY.has(row.roadClass) && runsAlongSegment(row, segment)
 }
 
 /** The publisher's own way identity qualifies at any distance; every other row must lie along the line. */

@@ -273,6 +273,22 @@ export function buildOneHundredthDegreeSegmentGrid<T extends SegmentCoordinates>
   return grid
 }
 
+/** A line and a road row describe one road only when they run within 30 degrees of each other (either travel
+ *  direction); a cross street within the match radius does not. A point or a zero-length line has no heading. */
+export function runsAlongSegment(
+  row: { startLat: number; startLon: number; endLat: number; endLon: number; midLat: number },
+  segment: SegmentCoordinates,
+): boolean {
+  const scale = METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR * Math.cos(row.midLat * Math.PI / 180)
+  const rowEast = wrapLonDeltaDeg(row.endLon - row.startLon) * scale
+  const rowNorth = (row.endLat - row.startLat) * METRES_PER_DEGREE_LATITUDE
+  const lineEast = wrapLonDeltaDeg(segment.endLongitude - segment.startLongitude) * scale
+  const lineNorth = (segment.endLatitude - segment.startLatitude) * METRES_PER_DEGREE_LATITUDE
+  const lengths = Math.hypot(rowEast, rowNorth) * Math.hypot(lineEast, lineNorth)
+  return lengths === 0 || Math.abs(rowEast * lineEast + rowNorth * lineNorth) / lengths >= ALONG_LINE_MINIMUM_COSINE
+}
+const ALONG_LINE_MINIMUM_COSINE = Math.cos(30 * Math.PI / 180)
+
 /** Degree reaches enclosing both shared distance models, including polar queries. */
 export function pointSearchReach(latitude: number, radiusMetres: number): [number, number] {
   const latitudeReach = radiusMetres / METRES_PER_DEGREE_LATITUDE
