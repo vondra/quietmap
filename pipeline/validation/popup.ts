@@ -27,7 +27,11 @@ export type PopupAnswer = {
   unavailable_layers?: string[]
 }
 
-export type Contributor = { source_type: string; osm_id: number | null; name: string; subtype: string; distance_m: number; received_lden: number }
+export type Contributor = {
+  source_type: string; osm_id: number | null; name: string; subtype: string; distance_m: number; received_lden: number
+  /** Road rows: total prepared daily traffic and the dataset behind it (null for a class prior). */
+  aadt_total?: number; dataset_name?: string | null
+}
 export type LayerModel = { lden: number | null; periods: PeriodLevels; share_lden: number }
 /** Traffic provenance in the W1 criteria vocabulary (criteria.json cohorts[].membership). */
 export type RoadProvenance = 'measured_count' | 'service_tree' | 'continuity_fill' | 'proxy' | 'class_default' | 'other'
@@ -104,6 +108,7 @@ function dominantRoad(contributors: WireContributor[]): DominantRoad | null {
     .sort((a, b) => b.received_lden - a.received_lden)[0]
   if (!road) return null
   const metadata = road.metadata!
+  const distance = typeof metadata.dominant_distance_m === 'number' ? metadata.dominant_distance_m : road.distance_m
   const count = (field: string) => typeof metadata[field] === 'number' ? metadata[field] as number : 0
   const roadClass = typeof metadata.road_class === 'string' ? metadata.road_class : null
   const provenance = metadata.provenance as { tier?: string; year?: number; name?: string } | null | undefined
@@ -111,7 +116,8 @@ function dominantRoad(contributors: WireContributor[]): DominantRoad | null {
     osm_id: road.osm_id,
     name: road.name,
     road_class: roadClass,
-    distance_m: road.distance_m,
+    /** Criteria v2: `metadata.dominant_distance_m`, the distance to the road's dominant segment. */
+    distance_m: +distance.toFixed(2),
     aadt: {
       light: count('aadt_light'), medium: count('aadt_medium'), heavy: count('aadt_heavy'), moto: count('aadt_moto'),
       total: count('aadt_light') + count('aadt_medium') + count('aadt_heavy') + count('aadt_moto'),
@@ -161,14 +167,23 @@ export function readPopupAnswer(answer: PopupAnswer, clicked: { lat: number; lng
   const dominant = Object.entries(layers).sort(([, a], [, b]) => b.share_lden - a.share_lden)[0]
   const contributors: Contributor[] = [...answer.top_contributors]
     .sort((a, b) => b.received_lden - a.received_lden)
-    .map(contributor => ({
-      source_type: contributor.source_type,
-      osm_id: contributor.osm_id,
-      name: contributor.name,
-      subtype: contributor.subtype,
-      distance_m: contributor.distance_m,
-      received_lden: outdoor(contributor.received_lden, delta) ?? 0,
-    }))
+    .map(contributor => {
+      const metadata = contributor.metadata ?? {}
+      const road = contributor.source_type === 'road' && metadata.kind === 'road'
+      const count = (field: string) => typeof metadata[field] === 'number' ? metadata[field] as number : 0
+      return {
+        source_type: contributor.source_type,
+        osm_id: contributor.osm_id,
+        name: contributor.name,
+        subtype: contributor.subtype,
+        distance_m: contributor.distance_m,
+        received_lden: outdoor(contributor.received_lden, delta) ?? 0,
+        ...(road ? {
+          aadt_total: count('aadt_light') + count('aadt_medium') + count('aadt_heavy') + count('aadt_moto'),
+          dataset_name: (metadata.provenance as { name?: string } | null | undefined)?.name ?? null,
+        } : {}),
+      }
+    })
   const loudestByLayer: Record<string, Contributor> = {}
   for (const contributor of contributors) loudestByLayer[contributor.source_type] ??= contributor
   return {

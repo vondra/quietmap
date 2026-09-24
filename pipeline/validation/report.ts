@@ -4,6 +4,7 @@
  */
 import type { GuardResult, IndicatorComparison } from './comparison.ts'
 import type { StationModel } from './popup.ts'
+import type { PositionSample } from './receiver.ts'
 import { quantile } from './statistics.ts'
 
 export type StationRow = {
@@ -14,38 +15,46 @@ export type StationRow = {
   lat: number
   lng: number
   expected_source: string
+  /** The catalogue's OSM identity of a guard's source (`type/id`). */
+  guard_osm: string | null
+  site_class: string | null
+  physical_station_id: string | null
+  instrument_class: string | null
   truth_kind: string
   measurand: string
   year: number | null
   months_covered: number | null
-  holdout: boolean
-  /** The station lies in a holdout z9 square (rule v1); acoustic data never fit anything anyway. */
+  /** The station lies in a holdout z9 square (rule v1, `z9_holdout_square`). */
   holdout_square: boolean
-  scoring: 'accuracy' | 'diagnostic_only'
-  scoring_reason: string | null
+  diagnostic_only: boolean
+  diagnostic_reason: string | null
+  native_periods: Record<string, unknown> | null
   mount: string | null
   facade_distance_m: number | null
   publisher_facade_correction_db: number | null
+  publisher_facade_correction_applied: boolean | null
   position_uncertainty_m: number | null
   mic_height_m: number | null
   requested_receiver_height_m: number | null
   /** Where the model value was computed; an indoor popup value is never scored. */
-  receiver_basis: 'station point, outdoors' | 'nearest facade exit, computed there outdoors'
-    | 'nearest facade exit named by another run, computed there outdoors'
-    | 'nearest facade exit, facade level restored from indoor + class delta' | null
-  /** Facade point computed directly minus the restored facade level (dB); a check of the restoration. */
-  facade_restoration_check_db: number | null
+  receiver: { lat: number; lng: number; basis: 'station point, outdoors' | 'interior rule: nearest outline moved outward'
+    moved_m: number; position_radius_m: number } | null
   receiver_height_used_m: number | null
   height_matches_microphone: boolean
   request_ms: number
   model: StationModel | null
   comparisons: IndicatorComparison[]
   guard: GuardResult | null
-  /** Model levels on the circle of the documented position uncertainty (criteria u_pos). */
-  position_samples: Array<{ bearing_deg: number; lden: number | null; inside_footprint: boolean }> | null
+  /** Model totals on the circle of the position radius (criteria u_position). */
+  position_samples: PositionSample[] | null
   unsupported_indicators: string[]
+  /** Why an answered station cannot be scored (indoor receiver, unavailable layers). */
+  unscored: string | null
   error: string | null
 }
+
+/** A guard point of the criteria (not a catalogue station) and the popup there. */
+export type GuardPointRow = { guard: string; label: string; lat: number; lng: number; model: StationModel | null; error: string | null }
 
 type Comparison = { row: StationRow; comparison: IndicatorComparison }
 
@@ -76,14 +85,14 @@ export function renderReport(rows: StationRow[], identity: Record<string, unknow
   const timing = latency(rows)
   const failed = rows.filter(row => row.error)
   const all = comparisons(rows)
-  const inside = rows.filter(row => row.model?.inside_footprint)
+  const inside = rows.filter(row => row.receiver?.basis === 'interior rule: nearest outline moved outward')
   const heightMismatch = rows.filter(row => !row.error && !row.height_matches_microphone)
   const guardRows = rows.filter(row => row.guard)
   const guardCell = (guard: GuardResult) => guard.loudest_in_expected_layer
     ? `${guard.loudest_in_expected_layer.osm_id ?? ''} ${guard.loudest_in_expected_layer.name} (${guard.loudest_in_expected_layer.distance_m} m, ${guard.loudest_in_expected_layer.received_lden} dB)` : '-'
   return [
     `# Validation run ${String(identity.label ?? '')}`, '',
-    `Stations ${rows.length} (failed ${failed.length}; diagnostic only ${rows.filter(row => row.scoring === 'diagnostic_only').length}); `
+    `Stations ${rows.length} (failed ${failed.length}; unscored ${rows.filter(row => row.unscored).length}; diagnostic only ${rows.filter(row => row.diagnostic_only).length}); `
       + `comparisons ${all.length}; run ${runSeconds.toFixed(0)} s; `
       + (timing ? `popup latency p50 ${timing.p50_ms} ms, p95 ${timing.p95_ms} ms, max ${timing.max_ms} ms (${String(identity.concurrency ?? '')} concurrent, cold cache).` : 'no popups.'),
     'Δ = model − measurement as published (a class band: distance outside it); criteria corrections, cohorts and '
@@ -99,9 +108,9 @@ export function renderReport(rows: StationRow[], identity: Record<string, unknow
       all.filter(({ comparison }) => comparison.kind === 'traffic')),
     ...comparisonList('Background percentiles (diagnostic; never a lower bound on modelled levels)',
       all.filter(({ comparison }) => comparison.period_mapping === 'diagnostic')),
-    `Inside a footprint (never scored indoors; the model value is the engine's nearest facade exit, finding #2): ${inside.length} — `
-      + inside.map(row => `${row.key} ${row.model!.receiver.click_to_receiver_m} m (${row.receiver_basis}`
-        + `${row.facade_restoration_check_db == null ? '' : `, direct − restored ${row.facade_restoration_check_db} dB`})`).join(', '), '',
+    `Interior stations (never scored indoors; receiver on the nearest outline moved outward): ${inside.length} — `
+      + inside.map(row => `${row.key} ${row.receiver!.moved_m} m`).join(', '), '',
+    `Unscored: ${rows.filter(row => row.unscored).map(row => `${row.key} (${row.unscored})`).join(', ') || 'none'}.`, '',
     `Publisher facade correction stated but not known to be applied: ${rows.filter(row => row.publisher_facade_correction_db != null).length} stations.`,
     `Receiver height differs from the microphone or the microphone height is unknown: ${heightMismatch.length} of ${rows.length - failed.length}.`,
     `Windows splitting an END period: ${all.filter(({ comparison }) => comparison.period_mapping === 'piecewise_constant').length} exact on `
