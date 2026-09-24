@@ -74,7 +74,7 @@ impl AirborneScene<'_> {
         let device_sources = (!sources.is_empty())
             .then(|| DeviceBuffer::from_slice(&sources))
             .transpose()?;
-        let npd = DeviceBuffer::from_slice(&air::NpdLuts::shared().sel_luts_flat_f32())?;
+        let npd = DeviceBuffer::from_slice(&air::NpdLuts::shared().device_luts_flat_f32())?;
         let weights = DeviceBuffer::from_slice(&self.weights.as_array().map(|v| v as f32))?;
         let chords = AirborneRowAccum::new(&self.chords).map_err(anyhow::Error::msg)?;
         // 256 horizons bound staging memory independently of the requested tile's pixel count.
@@ -209,4 +209,124 @@ fn gpu_powers(
         )
     })?;
     output.copy_to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use noise_compute::{propagation::obstacle_index::ObstacleSet, types::RasterSampler};
+
+    struct Flat;
+    impl RasterSampler for Flat {
+        fn elevation(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+        fn ground_g(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+        fn building_enclosure(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+    }
+
+    #[test]
+    fn aircraft_kernel_cpu_cuda_parity_across_classes_operations_and_slants() -> Result<()> {
+        let _cuda = RelevantSourceCuda::initialize()?;
+        let rx =
+            ReceiverScreening::build(50.0, 14.0, 4.0, &Flat, &ObstacleSet { indexes: vec![] })?;
+        let luts = air::NpdLuts::shared();
+        let npd = DeviceBuffer::from_slice(&luts.device_luts_flat_f32())?;
+        let weights = DeviceBuffer::from_slice(&[1.0f32, 1.0])?;
+        let mpdl = rx.device.metres_per_longitude_degree;
+        let mut cases = 0;
+        for class in 0..air::NUM_CLASSES {
+            let profile = &air::PROFILES[air::CLASS_REP_PROFILE_IDX[class] as usize];
+            let (installation, a, b, c) = air::delta_i_constants(profile.installation);
+            for departure in [false, true] {
+                for lateral in [0.0, 200.0, 1_000.0, 8_000.0] {
+                    for relative_alt in [-50.0, 100.0, 500.0, 9_000.0] {
+                        let endpoints = [
+                            (50.0 - 500.0 / air::M_PER_DEG_LAT) as f32,
+                            (14.0 + lateral / mpdl) as f32,
+                            (50.0 + 500.0 / air::M_PER_DEG_LAT) as f32,
+                            (14.0 + lateral / mpdl) as f32,
+                        ];
+                        let dy = (f64::from(endpoints[2]) - f64::from(endpoints[0]))
+                            * air::M_PER_DEG_LAT;
+                        let source = DeviceAirborneSource {
+                            endpoints,
+                            physical: [
+                                (relative_alt + 4.0) as f32,
+                                0.0,
+                                dy as f32,
+                                0.0,
+                                0.0,
+                                a as f32,
+                                b as f32,
+                                c as f32,
+                                16_000.0 * 16_000.0,
+                                -100_000.0,
+                                -100_000.0,
+                            ],
+                            identity: [
+                                match installation {
+                                    air::Installation::Wing => 0,
+                                    air::Installation::Fuselage => 1,
+                                    air::Installation::Propeller => 2,
+                                },
+                                class as i32,
+                                i32::from(departure),
+                                0,
+                                0,
+                            ],
+                        };
+                        let expected = air::segment_energy_kernel::<false>(
+                            (f64::from(endpoints[1]) - 14.0) * mpdl,
+                            (f64::from(endpoints[0]) - 50.0) * air::M_PER_DEG_LAT,
+                            0.0,
+                            dy,
+                            0.0,
+                            relative_alt + 4.0,
+                            1.0 / (dy * dy),
+                            dy,
+                            4.0,
+                            luts,
+                            class,
+                            departure,
+                            0.0,
+                            installation,
+                            a,
+                            b,
+                            c,
+                            false,
+                            16_000.0 * 16_000.0,
+                            -100_000.0,
+                            -100_000.0,
+                            Some(&rx.terrain),
+                            Some(&rx.buildings),
+                        )
+                        .map(|result| {
+                            noise_compute::propagation::iso9613::fast_exp_f64(
+                                result.sel * std::f64::consts::LN_10 * 0.1,
+                            ) / air::PERIOD_SECONDS[0]
+                        })
+                        .unwrap_or(0.0);
+                        let sources = DeviceBuffer::from_slice(&[source])?;
+                        let actual = f64::from(
+                            gpu_powers(&sources, std::slice::from_ref(&rx), &npd, &weights, 1)?[0],
+                        );
+                        let difference = if actual == 0.0 && expected == 0.0 {
+                            0.0
+                        } else {
+                            (10.0 * (actual / expected).log10()).abs()
+                        };
+                        assert!(difference < 0.1, "class={class} departure={departure} lateral={lateral} altitude={relative_alt}: {difference} dB, {actual} vs {expected}");
+                        cases += 1;
+                    }
+                }
+            }
+        }
+        eprintln!("aircraft CPU/CUDA parity: {cases} cases below 0.1 dB");
+        Ok(())
+    }
 }

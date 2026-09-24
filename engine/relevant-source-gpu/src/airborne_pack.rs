@@ -13,7 +13,7 @@ pub const AIRBORNE_REDUCTION_ROWS: usize = 8192;
 #[derive(Clone, Copy, Debug)]
 pub struct DeviceAirborneSource {
     pub endpoints: [f32; 4],
-    pub physical: [f32; 12],
+    pub physical: [f32; 11],
     /// Installation, class, departure, period, secondary-only provenance
     /// (the index into the two-entry provenance weight table).
     pub identity: [i32; 5],
@@ -47,7 +47,6 @@ impl DeviceAirborneSource {
                 p.sdy as f32,
                 p.sdz as f32,
                 p.dv as f32,
-                p.d_bar_m as f32,
                 p.di_a as f32,
                 p.di_b as f32,
                 p.di_c as f32,
@@ -224,7 +223,7 @@ mod tests {
     use super::*;
     #[test]
     fn cuda_airborne_layout_and_original_horizon_entries() {
-        assert_eq!(std::mem::size_of::<DeviceAirborneSource>(), 84);
+        assert_eq!(std::mem::size_of::<DeviceAirborneSource>(), 80);
         assert_eq!(std::mem::size_of::<DeviceAirborneReceiver>(), 32);
         assert_eq!(std::mem::offset_of!(DeviceAirborneReceiver, altitude), 24);
         struct Flat;

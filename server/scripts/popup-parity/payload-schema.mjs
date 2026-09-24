@@ -147,8 +147,8 @@ function validatePropagation(value, layer, path) {
   if (value.model !== expected) fail(`${path}.model`, `expected ${expected}`)
   if (expected === 'doc29') {
     const keys = ['model', 'sel_npd_db', 'delta_v_db', 'delta_i_db', 'lambda_db', 'delta_f_db',
-      'd_p_m', 'lateral_m', 'beta_deg', 'seg_len_m', 'd_bar_m', 'installation',
-      'cffk_fast_path', 'screening_kind', 'screening_db']
+      'd_p_m', 'lateral_m', 'beta_deg', 'seg_len_m', 'd_lambda_m', 'installation',
+      'screening_kind', 'screening_db']
     exactKeys(value, path, keys)
     return
   }

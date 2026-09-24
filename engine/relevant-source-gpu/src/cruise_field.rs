@@ -338,7 +338,7 @@ impl CruiseField {
                 b.prepared
                     .start_alt_m
                     .min(b.prepared.start_alt_m + b.prepared.sdz)
-                    <= max_alt + aircraft::AIRCRAFT_FAR_FIELD_THRESHOLD_M
+                    <= max_alt + 7_620.0
             })
             .collect();
         let mut nodes = self.energies.clone();

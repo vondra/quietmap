@@ -344,8 +344,7 @@ pub fn scatter(
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
             let cruise_top_flights = top_flights_for_cell(&acc.top_fids);
-            // Doc 29 placeholder: kernel breakdown not yet plumbed; cruise
-            // is always CFFK fast-path (FL250+ slant > 7.62 km).
+            // Cell aggregate placeholder: no individual kernel breakdown is retained.
             let placeholder_doc29 = crate::types::Doc29Breakdown {
                 sel_npd_db: 0.0,
                 delta_v_db: 0.0,
@@ -356,9 +355,8 @@ pub fn scatter(
                 lateral_m: 0.0,
                 beta_deg: 90.0,
                 seg_len_m: 0.0,
-                d_bar_m: acc.d_slant_m,
+                d_lambda_m: acc.d_slant_m,
                 installation: "wing",
-                cffk_fast_path: true,
                 screening_kind: "none",
                 screening_db: 0.0,
             };

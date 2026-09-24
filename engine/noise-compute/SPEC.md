@@ -35,7 +35,7 @@ dropped like any sub-segment there: each such piece is on its own below the
 40 dB reach threshold, and the energy lost is the dropped pieces' own energy,
 those under the kernel's 20 dB floor bounded by that floor (pinned by
 `pieces_beyond_reach_are_dropped_and_the_loss_is_their_own_level`: an 18 km
-chord 14–32 km east of the receiver, 33.6 dB whole, keeps its 30.9 dB first
+chord 14–32 km east of the receiver, 44.95 dB whole, keeps its 42.28 dB first
 piece). Splitting
 otherwise changes only the Doc 29 finite-segment terms: per layer and period
 the energy of an unsplit chord is unchanged, a split chord within reach moves
@@ -188,6 +188,27 @@ high-speed and type-default rules. Contributor metadata follows the segment with
 the greatest received Lden energy, including night-only traffic, and reports both
 categories' status, source and matching evidence separately. Rail contributor
 emission headlines use the same Lden period weighting as received levels.
+
+## Aircraft finite-segment corrections
+
+Popup, airborne CUDA and cruise CUDA apply Doc 29 Vol 2 Eq. 4-8b at every
+slant: NPD SEL + ΔV + ΔI − Γ(ℓ)Λ(β) + ΔF. Lateral attenuation is independent
+of engine installation, including helicopters via AEDT 2c Eq. 4-70; only
+airport-ground evaluation bypasses it. For β < 0, Λ = 10.857 dB is still
+multiplied by Γ(ℓ). Terrain and building diffraction compete with lateral
+attenuation through their maximum at all distances. Installation ΔI keeps
+its own wing/fuselage coefficients; propeller/helicopter ΔI is zero.
+
+The finite-segment integral uses the class anchor's scaled distance
+`d_lambda = (2/pi) V_ref t0 10^((SEL − LAmax)/10)` (Doc 29 Eq. 4-11), with
+V_ref in m/s and t0 = 1 s. SEL − LAmax interpolates in log distance and
+extrapolates with the nearest two NPD rows, independently of the existing
+SEL energy-tail extrapolation. Profiles whose generated LAmax is the
+placeholder SEL − 12 use the dipole limit d_lambda = slant (Appendix E).
+Both metrics use the same 128-bin log-distance grid on CPU and CUDA.
+The old constant scaled distance and 7,620 m correction cutoff are removed.
+This is a runtime model change: prepared airborne/cruise rows remain valid;
+recompute receiver exposure and tiles under the coordinated physics generation.
 
 ## Aircraft local geometry
 

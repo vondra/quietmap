@@ -268,9 +268,8 @@ pub(super) fn build_row_trace(
         lateral_m: row.cpa.lateral_m,
         beta_deg: row.cpa.beta_deg,
         seg_len_m: row.seg.segment_length_m as f64,
-        d_bar_m: kernel.d_bar_m,
+        d_lambda_m: kernel.d_lambda_m,
         installation,
-        cffk_fast_path: kernel.cffk_fast_path,
         screening_kind,
         screening_db,
     };

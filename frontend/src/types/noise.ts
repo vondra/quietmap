@@ -731,12 +731,11 @@ interface Doc29Breakdown {
   delta_f_db: number
   d_p_m: number
   lateral_m: number
-  /** Elevation angle (β) in degrees. CFFK fast path = 90.0 sentinel. */
+  /** Elevation angle (β) in degrees. */
   beta_deg: number
   seg_len_m: number
-  d_bar_m: number
+  d_lambda_m: number
   installation: 'wing' | 'fuselage' | 'propeller'
-  cffk_fast_path: boolean
   screening_kind: 'none' | 'terrain' | 'building'
   screening_db: number
 }

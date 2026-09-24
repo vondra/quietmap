@@ -17,7 +17,7 @@ use crate::types::AircraftSegment;
 use super::horizon::ReceiverHorizon;
 use super::screening::BuildingHorizon;
 
-use super::npd::{Installation, NpdLuts, NpdProfile, AIRCRAFT_FAR_FIELD_THRESHOLD_M, FT_PER_M};
+use super::npd::{Installation, NpdLuts, NpdProfile, FT_PER_M};
 
 // Doc 29 reference value — slightly higher precision than the
 // crate-wide `crate::constants::M_PER_DEG_LAT` (110_540.0) used by the
@@ -216,12 +216,12 @@ pub fn fast_atan(x: f64) -> f64 {
 
 /// Padé-atan variant of the exact ΔF (Doc 29 §4.5.6, Eq. 4-20). Max error vs exact: < 0.05 dB.
 #[inline]
-pub fn fast_delta_f(q_m: f64, seg_len_m: f64, d_bar_m: f64) -> f64 {
-    if seg_len_m < 1.0 || d_bar_m < 1.0 {
+pub fn fast_delta_f(q_m: f64, seg_len_m: f64, d_lambda_m: f64) -> f64 {
+    if seg_len_m < 1.0 || d_lambda_m < 1.0 {
         return 0.0;
     }
-    let alpha1 = -q_m / d_bar_m;
-    let alpha2 = -(q_m - seg_len_m) / d_bar_m;
+    let alpha1 = -q_m / d_lambda_m;
+    let alpha2 = -(q_m - seg_len_m) / d_lambda_m;
 
     let g1 = alpha1 / (1.0 + alpha1 * alpha1) + fast_atan(alpha1);
     let g2 = alpha2 / (1.0 + alpha2 * alpha2) + fast_atan(alpha2);
@@ -241,38 +241,28 @@ pub fn fast_delta_f(q_m: f64, seg_len_m: f64, d_bar_m: f64) -> f64 {
 /// callers Λ collapses to 0 — this kernel does the same gate.
 /// Max error vs exact: < 0.15 dB per segment.
 ///
-/// Λ(β) ≠ 0 only for **Wing-mounted jets** per Doc 29 §4.5.4 Eq. 4-19a /
-/// FAA AEDT TM §6.2.4. Fuselage-mounted engines and propeller installations
-/// (including helicopters) get Λ = 0 — engine-airframe geometry doesn't
-/// produce wing-shielding lateral attenuation in those cases.
+/// The ground-reflection term applies to every installation (Doc 29 §4.5.4),
+/// including helicopters via AEDT 2c Eq. 4-70; installation shielding is ΔI.
 #[inline]
-pub fn fast_lateral_attenuation(
-    rel_alt: f64,
-    lateral_m: f64,
-    airport_ground: bool,
-    installation: Installation,
-) -> f64 {
-    if airport_ground || !matches!(installation, Installation::Wing) {
+pub fn fast_lateral_attenuation(rel_alt: f64, lateral_m: f64, airport_ground: bool) -> f64 {
+    if airport_ground {
         return 0.0;
     }
-
     let beta_deg = fast_atan(rel_alt / lateral_m.max(0.01)).to_degrees();
-    if !(0.0..=50.0).contains(&beta_deg) {
-        return if beta_deg < 0.0 { 10.857 } else { 0.0 };
+    if beta_deg > 50.0 {
+        return 0.0;
     }
-
-    // Doc 29 Γ × Λ uses two `exp` calls per Wing accept-path pixel; route
-    // through the project's `fast_exp_f64` polynomial (Padé 5th-order, used
-    // already in road/iso9613 paths) which is ~2-3× faster than libm exp/exp2
-    // at the cost of < 0.001 dB error per call. Both args are tightly bounded
-    // (|x| ≤ 8) so well inside `EXP_CLAMP_HI`.
     let gamma = if lateral_m <= 914.0 {
         1.089 * (1.0 - fast_exp_f64(-0.00274 * lateral_m))
     } else {
         1.0
     };
 
-    let lambda_beta = 1.137 - 0.0229 * beta_deg + 9.72 * fast_exp_f64(-0.142 * beta_deg);
+    let lambda_beta = if beta_deg < 0.0 {
+        10.857
+    } else {
+        1.137 - 0.0229 * beta_deg + 9.72 * fast_exp_f64(-0.142 * beta_deg)
+    };
     gamma * lambda_beta
 }
 
@@ -318,9 +308,8 @@ pub struct AircraftKernelResult {
     pub delta_i_db: f64,
     pub lambda_db: f64,
     pub delta_f_db: f64,
-    pub d_bar_m: f64,
+    pub d_lambda_m: f64,
     pub installation: Installation,
-    pub cffk_fast_path: bool,
     /// Slant distance from receiver to CPA foot.
     pub d_p_m: f64,
     /// Signed altitude at CPA foot relative to `rcv_elev`.
@@ -331,17 +320,14 @@ pub struct AircraftKernelResult {
     pub seg_len_m: f64,
     /// Horizontal CPA distance (perpendicular to ground track).
     pub lateral_m: f64,
-    /// Elevation angle β from ground plane (degrees). For CFFK fast-path
-    /// hits we don't need β to compute λ, so the kernel sets it to a
-    /// 90° sentinel rather than paying for `fast_atan` — popup callers
-    /// that need β at cruise distance recompute it themselves.
+    /// Elevation angle β from ground plane (degrees).
     pub beta_deg: f64,
     /// Unclamped parametric projection (foot in [0,1] = inside segment).
     pub t: f64,
 }
 
 /// Shared Doc 29 per-segment kernel: CPA → reach gate → Filter D → NPD →
-/// CFFK fast path or full ΔF / Λ / ΔI corrections → SEL → energy. Inputs
+/// ΔF / Λ / ΔI corrections → SEL → energy. Inputs
 /// are pre-projected by the caller (receiver-local meters), so popup pays
 /// one cos/sin per receiver and pipeline pays them once at
 /// `ProjectedAircraft::build`.
@@ -378,8 +364,7 @@ pub struct AircraftKernelResult {
 /// attenuates real above-terrain geometry — both can act on one pair.
 ///
 /// **Vector-building screening** uses the closest physical point on the finite
-/// subsegment. Terrain and roof diffraction compete by maximum; in the full
-/// arm only their excess over the already-applied lateral attenuation is new.
+/// subsegment. Terrain and roof diffraction compete by maximum; only their excess over the already-applied lateral attenuation is new.
 // Flat signature, not a param struct: per `clippy.toml` (threshold 13) this
 // acoustic kernel takes its segment-geometry + Doc 29 emission inputs as
 // hoisted scalars — bundling them into a struct would add indirection without
@@ -401,7 +386,6 @@ pub fn segment_energy_kernel<const WANT_CPA: bool>(
     noise_class: usize,
     is_dep: bool,
     seg_dv: f64,
-    d_bar_m: f64,
     inst: Installation,
     di_a: f64,
     di_b: f64,
@@ -427,7 +411,6 @@ pub fn segment_energy_kernel<const WANT_CPA: bool>(
         noise_class,
         is_dep,
         seg_dv,
-        d_bar_m,
         inst,
         di_a,
         di_b,
@@ -460,7 +443,6 @@ pub(crate) fn segment_energy_kernel_with_screening<const WANT_CPA: bool, const F
     noise_class: usize,
     is_dep: bool,
     seg_dv: f64,
-    d_bar_m: f64,
     inst: Installation,
     di_a: f64,
     di_b: f64,
@@ -486,7 +468,6 @@ pub(crate) fn segment_energy_kernel_with_screening<const WANT_CPA: bool, const F
         noise_class,
         is_dep,
         seg_dv,
-        d_bar_m,
         inst,
         di_a,
         di_b,
@@ -522,7 +503,6 @@ fn segment_energy_kernel_inner<
     noise_class: usize,
     is_dep: bool,
     seg_dv: f64,
-    d_bar_m: f64,
     inst: Installation,
     di_a: f64,
     di_b: f64,
@@ -562,108 +542,18 @@ fn segment_energy_kernel_inner<
     let log_d = d_ft.log2() * LOG10_2;
     let sel_npd = npd_luts.lookup(noise_class, is_dep, log_d);
 
-    // CFFK fast path: above 7.62 km slant Λ and ΔI collapse to within
-    // fractions of a dB and the kernel can skip them; ΔF stays.
-    //
-    // For long aggregated segments **with the unclamped CPA foot well
-    // inside the endpoints** (t in (q_m/d_bar, (slen-q_m)/d_bar) both
-    // ≫ 1) ΔF ≈ 0 — matches the previous skip within fractions of a dB.
-    // For aggregated segments where the foot is near an endpoint or
-    // outside (e.g., receiver off the side of a 50 km cruise leg), ΔF
-    // correctly suppresses by 3-10 dB; the previous skip was a latent
-    // Doc 29 deviation, fixed here.
-    //
-    // For per-sample airborne (Commit A): one sub-segment owns the foot
-    // (ΔF ≈ 0 → full event energy); the other N-1 sub-segments project
-    // the foot far outside their endpoints (α₁, α₂ same sign, |α| ≫ 1
-    // ⇒ f → 0 ⇒ ΔF strongly negative ⇒ negligible energy). Sum across
-    // sub-segments converges to one event, avoiding the N× over-count
-    // the previous skip would produce for collinear short segments.
-    if d_p_m > AIRCRAFT_FAR_FIELD_THRESHOLD_M {
-        // ΔF ≤ 0 always (it is 10·log10 of the energy fraction f ∈ (0, 1]:
-        // g(α) = α/(1+α²) + atan(α) is monotone ⇒ g2 − g1 ∈ (0, π) ⇒ f ≤ 1).
-        // So the fast-path sel ≤ sel_npd + seg_dv; if that ceiling is already
-        // below the 20 dB floor the segment can never clear it — skip ΔF.
-        if FLOOR && sel_npd + seg_dv < 20.0 {
-            return None;
-        }
-        let q_m = t * slen;
-        let df = fast_delta_f(q_m, slen, d_bar_m);
-        let free_sel = sel_npd + seg_dv + df;
-        let mut sel = free_sel;
-        if FLOOR && sel < 20.0 {
-            return None;
-        }
-        // C2 terrain-horizon screening, CFFK arm. Precheck (delta 3):
-        // `rel_alt <= 0` routes receiver-above-aircraft geometry to the
-        // full check (squaring alone would silently pass it); otherwise
-        // sin²β ≥ max stored sin²h ⇒ above every horizon ⇒ skip. The
-        // `lateral` sqrt is paid only after the precheck passes (delta 1
-        // perf note). This branch subtracts Dz alone — CFFK never
-        // computes Λ (premise: Λ negligible above 7.62 km slant), so
-        // there is no Λ to credit back. CFFK's premise is that the omitted
-        // installation/lateral terms are negligible at this slant.
-        let terrain_dz = if let Some(hz) = horizon {
-            if rel_alt <= 0.0 || rel_alt * rel_alt < slant_sq * hz.max_sin_sq {
-                let lateral = lateral_sq.sqrt();
-                hz.screening_dz(cpx, cpy, lateral, rel_alt)
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
-        let building_dz = if let Some(buildings) = buildings {
-            let physical_t = t.clamp(0.0, 1.0);
-            buildings.screening_dz(
-                ax + physical_t * sdx,
-                ay + physical_t * sdy,
-                sz1 + physical_t * sdz - rcv_elev,
-            )
-        } else {
-            0.0
-        };
-        let diffraction_db = terrain_dz.max(building_dz);
-        sel -= diffraction_db;
-        // Floor check runs AFTER screening: a screened segment that
-        // drops below 20 dB is inaudible and must be culled exactly like
-        // an unscreened one (the pre-ΔF ceiling check above is an upper
-        // bound that screening only tightens, so it stays valid).
-        if FLOOR && !RETAIN_SCREENED && sel < 20.0 {
-            return None;
-        }
-        return Some(AircraftKernelResult {
-            sel,
-            free_sel,
-            sel_no_terrain: free_sel - building_dz,
-            sel_no_screening: free_sel - terrain_dz,
-            terrain_dz,
-            building_dz,
-            sel_npd_db: sel_npd,
-            delta_v_db: seg_dv,
-            delta_i_db: 0.0,
-            lambda_db: 0.0,
-            delta_f_db: df,
-            d_bar_m,
-            installation: inst,
-            cffk_fast_path: true,
-            d_p_m,
-            rel_alt_m: rel_alt,
-            q_m,
-            seg_len_m: slen,
-            // CPA-only (the fast-path sel ignores lateral_m); skipped for the
-            // heatmap energy-only path (`WANT_CPA = false`).
-            lateral_m: if WANT_CPA { lateral_sq.sqrt() } else { 0.0 },
-            beta_deg: 90.0, // CFFK doesn't need β; sentinel
-            t,
-        });
+    // Eq. 4-15 peaks below 0.4014 dB; every other correction is nonpositive.
+    // Split pieces bypass this bound and take the event floor after summation.
+    if FLOOR && sel_npd + seg_dv + 0.4014 < 20.0 {
+        return None;
     }
+    let d_lambda_m = npd_luts.lookup_scaled_distance(noise_class, is_dep, log_d);
 
     let q_m = t * slen;
-    let df = fast_delta_f(q_m, slen, d_bar_m);
+    let df = fast_delta_f(q_m, slen, d_lambda_m);
 
     let lateral_m = lateral_sq.sqrt();
-    let lambda = fast_lateral_attenuation(rel_alt, lateral_m, airport_ground, inst);
+    let lambda = fast_lateral_attenuation(rel_alt, lateral_m, airport_ground);
 
     // Inline ΔI: works off u² = rel_alt²/slant² (= sin²β) instead of trig
     // on β. Identical math to the exact Doc 29 §4.5.3 ΔI (Eq. 4-15) for the
@@ -690,8 +580,7 @@ fn segment_energy_kernel_inner<
     if FLOOR && sel < 20.0 {
         return None;
     }
-    // C2 terrain-horizon screening, full arm (same delta-3 precheck as
-    // the CFFK arm above). AEDT LOS-blockage bookkeeping: barrier loss
+    // AEDT LOS-blockage bookkeeping: barrier loss
     // and lateral attenuation are mutually exclusive, never summed —
     // SEL −= max(Dz, Λ) − Λ ≡ (Dz − Λ).max(0) with the kernel's Λ
     // already inside `sel` (AEDT 3f TM "Line-of-Sight Blockage";
@@ -717,7 +606,7 @@ fn segment_energy_kernel_inner<
     };
     let diffraction_db = terrain_dz.max(building_dz);
     sel -= (diffraction_db - lambda).max(0.0);
-    // Post-screening floor, same rationale as the CFFK arm.
+    // Retain screened popup effects even below the event floor.
     if FLOOR && !RETAIN_SCREENED && sel < 20.0 {
         return None;
     }
@@ -741,9 +630,8 @@ fn segment_energy_kernel_inner<
         delta_i_db: di,
         lambda_db: lambda,
         delta_f_db: df,
-        d_bar_m,
+        d_lambda_m,
         installation: inst,
-        cffk_fast_path: false,
         d_p_m,
         rel_alt_m: rel_alt,
         q_m,
@@ -945,14 +833,14 @@ mod tests {
     #[test]
     fn test_fast_lateral_directly_below() {
         // Receiver under the path (lateral≈0 ⇒ β≈90°, outside the 0–50° band) ⇒ Λ = 0.
-        let att = fast_lateral_attenuation(1000.0, 0.0, false, Installation::Wing);
+        let att = fast_lateral_attenuation(1000.0, 0.0, false);
         assert!(att.abs() < 0.01, "Expected 0, got {att}");
     }
 
     #[test]
     fn test_fast_lateral_far_side() {
         // Shallow grazing angle (small β) ⇒ Λ near its ~10.86 dB peak.
-        let att = fast_lateral_attenuation(1.0, 2000.0, false, Installation::Wing);
+        let att = fast_lateral_attenuation(1.0, 2000.0, false);
         assert!(
             att > 10.0 && att < 10.9,
             "low-β Wing Λ near peak, got {att}"
@@ -960,28 +848,18 @@ mod tests {
     }
 
     #[test]
-    fn test_fast_lateral_negative_beta() {
-        // Below the wing-shielding geometry (β < 0) ⇒ fixed 10.857 dB.
-        let att = fast_lateral_attenuation(-5.0, 100.0, false, Installation::Wing);
-        assert!((att - 10.857).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_fast_lateral_non_wing_installations_zero() {
-        for &(rel_alt, lat) in &[
-            (50.0, 500.0),
-            (200.0, 500.0),
-            (1000.0, 500.0),
-            (5000.0, 100.0),
+    fn lateral_attenuation_matches_doc29_including_negative_beta_and_far_field() {
+        for (height, lateral, expected) in [
+            (100.0, 1_000.0, 5.326),
+            (100.0, 8_000.0, 9.901),
+            (-50.0, 200.0, 4.988),
         ] {
-            assert_eq!(
-                fast_lateral_attenuation(rel_alt, lat, false, Installation::Fuselage),
-                0.0
+            let actual = fast_lateral_attenuation(height, lateral, false);
+            assert!(
+                (actual - expected).abs() < 0.005,
+                "{height}/{lateral}: {actual}"
             );
-            assert_eq!(
-                fast_lateral_attenuation(rel_alt, lat, false, Installation::Propeller),
-                0.0
-            );
+            assert_eq!(fast_lateral_attenuation(height, lateral, true), 0.0);
         }
     }
 
@@ -1002,15 +880,9 @@ mod tests {
         assert!(leq > 40.0 && leq < 80.0, "Leq = {leq}");
     }
 
-    /// Doc 29 §A.3.4 invariant: emitting N collinear sub-segments must
-    /// give the same total linear energy as one aggregated segment over
-    /// the same geometry. CFFK previously skipped ΔF in the far field
-    /// (slant > 7.62 km), which let each sub-segment re-emit the full
-    /// event and over-counted by factor N. With ΔF restored, the
-    /// off-foot sub-segments collapse to ~0 and the foot-owning piece
-    /// contributes the full event.
+    /// Collinear subdivisions retain the integral at long slant distance.
     #[test]
-    fn cffk_partition_preserves_linear_energy() {
+    fn partition_preserves_linear_energy_at_long_slant() {
         use super::super::npd::{CLASS_REP_PROFILE_IDX, REACH_SQ_TABLE};
         let npd_luts = NpdLuts::shared();
         let class_idx = 0; // WING_FALLBACK
@@ -1041,7 +913,6 @@ mod tests {
                 class_idx,
                 true,
                 dv,
-                profile.d_bar_m,
                 inst_code,
                 di_a,
                 di_b,

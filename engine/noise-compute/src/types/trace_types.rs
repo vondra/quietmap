@@ -231,9 +231,7 @@ pub struct CnossosBreakdown {
 /// SEL_seg = sel_npd_db + delta_v_db + delta_i_db − lambda_db + delta_f_db
 /// ```
 ///
-/// On the CFFK fast path (slant > 7.62 km), `lambda_db` and `delta_i_db`
-/// collapse to 0.0 per Doc 29 §A.2.7 (lateral attenuation and installation
-/// directivity become negligible at long slant).
+/// Lateral attenuation and installation corrections apply at every slant.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct Doc29Breakdown {
     pub sel_npd_db: f64,
@@ -244,14 +242,12 @@ pub struct Doc29Breakdown {
     pub d_p_m: f64,
     pub lateral_m: f64,
     /// Elevation angle (β) in degrees — receiver-to-source aspect for
-    /// lateral attenuation. CFFK fast path sets this to 90.0 sentinel
-    /// (lambda not used at long slant).
+    /// lateral attenuation.
     pub beta_deg: f64,
     pub seg_len_m: f64,
-    pub d_bar_m: f64,
+    pub d_lambda_m: f64,
     /// `wing` | `fuselage` | `propeller` — engine installation per Doc 29 §A.3.
     pub installation: &'static str,
-    pub cffk_fast_path: bool,
     /// Receiver-side winner before the mutually-exclusive Lambda credit.
     /// `none` | `terrain` | `building`.
     pub screening_kind: &'static str,
