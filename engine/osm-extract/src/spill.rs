@@ -161,6 +161,33 @@ impl Spiller {
         })
     }
 
+    pub fn emit_control_point(
+        &mut self,
+        node: &crate::model_nodes::ModelNode,
+        link: Option<(i64, &str, usize, Option<f64>)>,
+    ) -> Result<()> {
+        let square = grid::square_of(node.lat, node.lon);
+        let bucket = self.bucket(square);
+        let w = self.get_writer("transport_nodes", bucket)?;
+        let (gx, gy) = lonlat_to_grid(node.lon, node.lat);
+        write!(w, "{}\t{}\t{gx}\t{gy}\t", spill_key(square), node.id)?;
+        if let Some((way, family, vertex, metres)) = link {
+            write!(
+                w,
+                "{way}\t{family}\t{vertex}\t{}",
+                metres.map(|v| v.to_string()).unwrap_or_default()
+            )?;
+        } else {
+            write!(w, "\t\t\t")?;
+        }
+        writeln!(
+            w,
+            "\t{}",
+            tags_json(node.control.as_ref().expect("control node"))?
+        )?;
+        Ok(())
+    }
+
     fn bucket(&self, square: Square) -> usize {
         spill_key(square) as usize % self.num_buckets
     }
@@ -213,14 +240,10 @@ impl Spiller {
                     w,
                     "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     classify::road_class(highway),
-                    tags.get("maxspeed")
-                        .map(|s| match classify::parse_maxspeed_kmh(s) {
-                            // u8 column unchanged: `none` → sentinel 255,
-                            // real limits clamp to 254 so they can't collide.
-                            classify::MAXSPEED_NONE => classify::SPEED_LIMIT_DERESTRICTED,
-                            v => v.min(254) as u8,
-                        })
-                        .unwrap_or(0),
+                    match crate::implicit_speed::road_speed(tags) {
+                        classify::MAXSPEED_NONE => classify::SPEED_LIMIT_DERESTRICTED,
+                        v => v.min(254) as u8,
+                    },
                     classify::surface_type(surface),
                     classify::oneway_direction(
                         highway,
@@ -321,6 +344,9 @@ impl Spiller {
             }
             _ => {}
         }
+        if matches!(ftype, FeatureType::Road | FeatureType::Railway) {
+            write!(w, "\t{}", tags_json(tags)?)?;
+        }
         if let Some(piece_tail) = piece_tail {
             write!(w, "\t{piece_tail}")?;
         }
@@ -338,6 +364,7 @@ impl Spiller {
         ftype: &FeatureType,
         square: Square,
         osm_id: i64,
+        osm_kind: &str,
         clat: f64,
         clon: f64,
         tags: &Tags,
@@ -407,7 +434,9 @@ impl Spiller {
                 )?;
             }
             FeatureType::Industrial | FeatureType::WindTurbine => {
-                let src_type: u8 = if matches!(ftype, FeatureType::WindTurbine) {
+                let src_type: u8 = if let Some(class) = classify::industrial_class(tags) {
+                    class
+                } else if matches!(ftype, FeatureType::WindTurbine) {
                     10
                 }
                 // wind_turbine
@@ -455,6 +484,12 @@ impl Spiller {
 
         // Snapped ring as grid text (empty when the feature is a point).
         write!(w, "\t{}", encode_ring_text(&snapped))?;
+        if matches!(
+            ftype,
+            FeatureType::Industrial | FeatureType::WindTurbine | FeatureType::Leisure
+        ) {
+            write!(w, "\t{}\t{osm_kind}", tags_json(tags)?)?;
+        }
 
         writeln!(w)?;
         Ok(())
@@ -519,6 +554,9 @@ pub fn is_complete(dir: &Path, num_buckets: usize, input_identity: &str) -> bool
 /// barns. Function POIs reuse [`poi_class`] (shared with the finalize join).
 fn building_type_from_tags(tags: &Tags) -> u8 {
     let get = |k: &str| tags.get(k).map(|s| s.as_str());
+    if classify::is_special_leisure(get) || classify::is_power_or_inactive_industry(get) {
+        return ids::SETTLEMENT_SILENT;
+    }
     // A SPECIFIC structural `building=*` (warehouse, stadium, train_station, …)
     // describes the whole envelope and BEATS an amenity POI tagged inside it: a
     // `building=warehouse` + `amenity=bar` is a warehouse with a staff bar, not a
@@ -900,6 +938,13 @@ fn parse_power_kw(val: Option<&str>) -> f32 {
     }
 }
 
+/// Stable JSON escapes arbitrary tag text without losing tabs or line breaks.
+pub(crate) fn tags_json(tags: &Tags) -> Result<String> {
+    Ok(serde_json::to_string(
+        &tags.iter().collect::<std::collections::BTreeMap<_, _>>(),
+    )?)
+}
+
 #[cfg(test)]
 mod settlement_class_tests {
     use super::*;
@@ -985,7 +1030,11 @@ mod settlement_class_tests {
             let mut t = Tags::new();
             t.insert("landuse".into(), landuse.into());
             assert_eq!(building_type_from_tags(&t), 1, "landuse={landuse}");
-            assert_eq!(ground_state(&t), GROUND_IS_A_FUNCTIONAL_AREA, "landuse={landuse}");
+            assert_eq!(
+                ground_state(&t),
+                GROUND_IS_A_FUNCTIONAL_AREA,
+                "landuse={landuse}"
+            );
         }
         // A named function inside the zone still wins.
         let mut shop = Tags::new();
@@ -1021,7 +1070,11 @@ mod settlement_class_tests {
             &[("building", "parking"), ("parking", "underground")],
             &[("amenity", "parking"), ("parking", "underground")],
         ] {
-            assert_eq!(ground_state(&tags(below)), GROUND_IS_BELOW_A_BUILDING, "{below:?}");
+            assert_eq!(
+                ground_state(&tags(below)),
+                GROUND_IS_BELOW_A_BUILDING,
+                "{below:?}"
+            );
         }
         // An `amenity=parking` building IS a car park (class 7 above), so
         // `parking=underground` puts THAT building below the ground. A house or a
@@ -1041,12 +1094,20 @@ mod settlement_class_tests {
             // A deck with no `building` tag stands too.
             &[("amenity", "parking"), ("parking", "multi-storey")],
         ] {
-            assert_eq!(ground_state(&tags(stands)), GROUND_HOLDS_A_BUILDING, "{stands:?}");
+            assert_eq!(
+                ground_state(&tags(stands)),
+                GROUND_HOLDS_A_BUILDING,
+                "{stands:?}"
+            );
         }
         // `building=no` says nothing stands here, and nothing overrides that.
         for denied in [
             &[("building", "no"), ("amenity", "school")] as &[(&str, &str)],
-            &[("building", "no"), ("amenity", "parking"), ("parking", "multi-storey")],
+            &[
+                ("building", "no"),
+                ("amenity", "parking"),
+                ("parking", "multi-storey"),
+            ],
         ] {
             assert_eq!(
                 ground_state(&tags(denied)),
@@ -1147,7 +1208,7 @@ mod settlement_class_tests {
                     None,
                 ),
                 FeatureType::Building => {
-                    spiller.emit_polygon(&feature, square, 2, 50.0, 14.0, &tags, None)
+                    spiller.emit_polygon(&feature, square, 2, "way", 50.0, 14.0, &tags, None)
                 }
                 _ => spiller.emit_poi(square, 50.0, 14.0, 1),
             };

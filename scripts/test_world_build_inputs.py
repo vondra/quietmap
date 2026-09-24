@@ -97,7 +97,7 @@ class WorldBuildInputsTest(unittest.TestCase):
                 from build_square_country_city import expected_contract
                 path = root / 'z9/0/0' / f'{layer}.arrow'
                 expected_stamps, airport_summaries_key = inputs.stamps_the_point_query_expects()
-                metadata = dict([expected_contract(path)]) if layer in ('roads', 'railways', 'industrial') else {
+                metadata = {**expected_stamps[layer], **dict([expected_contract(path)])} if layer in ('roads', 'railways', 'industrial') else {
                     **expected_stamps[layer], b'qm_blocks': b'AQ==', b'n_days': b'12', airport_summaries_key: b'{}'}
                 if layer in ('airborne', 'ships'):
                     # A stamp the point query would answer by dropping the layer fails the build.

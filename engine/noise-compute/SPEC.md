@@ -231,7 +231,7 @@ Waters absent from both products have no rows.
 
 ## Open parking and emission-only grounds
 
-Open parking ways use `leisure_v3` classes 8 (lot) and 9 (street strip), with no
+Open parking ways use `leisure_v4` classes 8 (lot) and 9 (street strip), with no
 screening geometry. Their mapped area estimates spaces at 23.8 and 13.3 m² per
 space. Day sound power follows the Parkplatzlärmstudie (LfU, 6th ed. 2007):
 63 dB(A) per movement/hour, 0.40 movements/space/hour and the searching term
@@ -304,3 +304,48 @@ This envelope is Quiet Map's existing single-edge approximation applied to all
 crossings, not a multiple-diffraction path construction. Full multiple-obstacle
 geometry and split ground-reflection corrections are outside this change. The
 normative context is [Directive 2021/1226, Annex II propagation amendments](https://eur-lex.europa.eu/eli/dir_del/2021/1226/oj/eng).
+
+## Retained OSM model evidence
+
+The extraction contract constants live in `square-store::osm_contract`: spill
+format 2, roads/railways/industrial evidence 2, `leisure_v4`, and
+`transport_nodes_contract=1`. Readers reject older stamps; rebuilding requires
+fresh extraction outputs. Existing country-bake and grid contracts still apply.
+
+Road rows retain raw speed/surface/vertical-structure tags in `osm_tags` plus
+numeric `maxspeed_hgv` (u16 km/h, 0 unknown, 65535 unrestricted).
+`osm-extract::implicit_speed` owns the sourced passenger
+implicit-rule table. Explicit `maxspeed` wins; unresolvable conditional rules
+remain unknown and their original text survives. HGV implicit rules are retained
+without applying passenger limits. Direction codes are 0 two-way, 1 explicit
+forward, 2 reverse, 3 implied roundabout, 4 implied motorway; all forward codes
+participate in continuity and directional traffic matching. Whole-way endpoint
+node IDs and grid coordinates survive microsegmentation, so adjacent bridge
+ways can form runs and identify abutment candidates without mistaking piece
+boundaries for abutments. These endpoints are evidence, not a deck-height model.
+
+Transport control rows retain node identity, raw crossing/signal/whistle tags,
+and one incidence per road or rail way (vertex index and whole-way chainage).
+Unlinked controls remain explicit null incidences; there is no proximity guess.
+National whistle values and `railway:traffic_mode`, usage, service and heritage
+survive. Original railway node chains and piece intervals already supply curve
+geometry to rail finalization; no new curve-radius approximation is introduced.
+
+Industrial source classes 11/12 identify wind-plant outlines and inactive
+facilities: neither falls through to generic factory emission. Classes 13/14/15
+retain solar, substation and transformer evidence for their specific models.
+They currently emit nothing pending those models. Raw power/output/rating and
+lifecycle tags survive, with OSM object kind to disambiguate IDs. Registry
+matching does not overwrite these classes. Industrial and leisure multipolygons
+retain every outer component as a separate row; inner holes remain outside the
+existing single-ring geometry contract.
+
+`leisure_v4` adds motorsport class 10 and shooting class 11, `osm_tags`, OSM kind,
+geometry kind (0 point, 1 area, 2 line) and line length. Two-node raceways and
+motor-sport tracks survive with open-chain geometry; enclosing polygons are
+separate area rows. Shooting subtype and indoor/building flags survive on nodes,
+ways and relations. These two classes are staged and silent until the activity
+models consume them; an enclosing area must not duplicate a line's emission.
+A physical building also retains its separate source row and has no generic
+residential emission. Buildings keep `buildings_v5`, the existing roof/carport
+use code and the unchanged height ladder.

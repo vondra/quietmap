@@ -41,7 +41,10 @@ fn year_dir() -> PathBuf {
 fn write_parent_arrow(path: &Path, contract: Option<&str>) {
     let (gx, gy) = grid::lonlat_to_grid(14.0, 50.0);
     let (ex, ey) = grid::lonlat_to_grid(14.001, 50.0);
-    let mut metadata = HashMap::new();
+    let mut metadata = HashMap::from([(
+        "osm_railways_contract".to_owned(),
+        square_store::osm_contract::RAILWAYS_CONTRACT.to_owned(),
+    )]);
     metadata.insert("grid".to_owned(), "z30".to_owned());
     metadata.insert(
         "railways_contract".to_owned(),

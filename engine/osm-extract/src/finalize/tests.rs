@@ -41,7 +41,7 @@ fn roads_writer_roundtrips_grid_columns() {
     // TSV: sq osm seg s_gx s_gy e_gx e_gy len class speed surface oneway_dir
     // lanes name ref bridge tunnel toll lit junction access
     let rows = vec![
-        "100\t11\t0\t1000\t2000\t3000\t4000\t12.5\t5\t50\t0\t2\t2\tMain\t\t0\t0\t0\t0\t0\t0"
+        "100\t11\t0\t1000\t2000\t3000\t4000\t12.5\t5\t50\t0\t2\t2\tMain\t\t0\t0\t0\t0\t0\t0\t{}\t[1,2,1000,2000,3000,4000]"
             .split('\t')
             .map(str::to_string)
             .collect::<Vec<_>>(),
@@ -184,7 +184,8 @@ fn buildings_writer_roundtrips_geom_and_contract() {
     )
     .unwrap();
     let (schema, batches) = read_ipc(&path);
-    let batch = arrow::compute::concat_batches(&std::sync::Arc::new(schema.clone()), &batches).unwrap();
+    let batch =
+        arrow::compute::concat_batches(&std::sync::Arc::new(schema.clone()), &batches).unwrap();
     let column_of = |name: &str| batch.column(schema.index_of(name).unwrap()).clone();
     let osm_ids = column_of("osm_id");
     let osm_ids = osm_ids.as_any().downcast_ref::<Int64Array>().unwrap();
@@ -196,7 +197,10 @@ fn buildings_writer_roundtrips_geom_and_contract() {
     let flags: Vec<(i64, bool)> = (0..batch.num_rows())
         .map(|row| (osm_ids.value(row), area_sources.value(row)))
         .collect();
-    assert!(flags.contains(&(22, false)) && flags.contains(&(23, true)), "{flags:?}");
+    assert!(
+        flags.contains(&(22, false)) && flags.contains(&(23, true)),
+        "{flags:?}"
+    );
     let house = flags.iter().position(|&(id, _)| id == 22).unwrap();
     let geom = batch
         .column(schema.index_of("geom").unwrap())
@@ -236,35 +240,105 @@ fn open_canopy_identity_survives_spill_and_arrow_without_erasing_garages() {
     let cases: &[(&[(&str, &str)], u8)] = &[
         (&[("building", "carport")], 3),
         (&[("building", "roof")], 3),
-        (&[("building", "roof"), ("amenity", "parking"), ("parking", "surface")], 3),
+        (
+            &[
+                ("building", "roof"),
+                ("amenity", "parking"),
+                ("parking", "surface"),
+            ],
+            3,
+        ),
         (&[("amenity", "parking"), ("parking", "carports")], 3),
-        (&[("building", "yes"), ("amenity", "parking"), ("parking", "carports")], 3),
-        (&[("building", "carport"), ("building:use", "commercial")], 3),
+        (
+            &[
+                ("building", "yes"),
+                ("amenity", "parking"),
+                ("parking", "carports"),
+            ],
+            3,
+        ),
+        (
+            &[("building", "carport"), ("building:use", "commercial")],
+            3,
+        ),
         (&[("building", "garage")], 0),
-        (&[("building", "garages"), ("amenity", "parking"), ("parking", "garage_boxes")], 0),
+        (
+            &[
+                ("building", "garages"),
+                ("amenity", "parking"),
+                ("parking", "garage_boxes"),
+            ],
+            0,
+        ),
         (&[("amenity", "parking"), ("parking", "multi-storey")], 0),
         (&[("building", "house"), ("parking", "carports")], 0),
         (&[("building", "yes"), ("building:use", "industrial")], 2),
     ];
     for (index, (pairs, _)) in cases.iter().enumerate() {
-        let tags: Tags = pairs.iter().map(|(k, v)| ((*k).into(), (*v).into())).collect();
-        spiller.emit_polygon(&FeatureType::Building, square, index as i64,
-            50.0, 14.0, &tags, Some(&[
-                [50.0, 14.0], [50.0, 14.0001], [50.0001, 14.0001], [50.0, 14.0],
-            ])).unwrap();
+        let tags: Tags = pairs
+            .iter()
+            .map(|(k, v)| ((*k).into(), (*v).into()))
+            .collect();
+        spiller
+            .emit_polygon(
+                &FeatureType::Building,
+                square,
+                index as i64,
+                "way",
+                50.0,
+                14.0,
+                &tags,
+                Some(&[
+                    [50.0, 14.0],
+                    [50.0, 14.0001],
+                    [50.0001, 14.0001],
+                    [50.0, 14.0],
+                ]),
+            )
+            .unwrap();
     }
-    crate::transport::TransportSpill::new(&spill).unwrap().finish().unwrap();
+    crate::transport::TransportSpill::new(&spill)
+        .unwrap()
+        .finish()
+        .unwrap();
     spiller.complete("carport-fixture").unwrap();
     drop(spiller);
     finalize(&spill, &output, 1).unwrap();
-    let (schema, batches) = read_ipc(&output.join(grid::square_name(square)).join("buildings.arrow"));
-    assert_eq!(schema.metadata()["buildings_contract"], BUILDINGS_CONTRACT_V5);
+    let (schema, batches) = read_ipc(
+        &output
+            .join(grid::square_name(square))
+            .join("buildings.arrow"),
+    );
+    assert_eq!(
+        schema.metadata()["buildings_contract"],
+        BUILDINGS_CONTRACT_V5
+    );
     let mut seen = 0;
     for batch in batches {
-        let ids = batch.column_by_name("osm_id").unwrap().as_any().downcast_ref::<Int64Array>().unwrap();
-        let uses = batch.column_by_name("building_use").unwrap().as_any().downcast_ref::<UInt8Array>().unwrap();
-        let geometry = batch.column_by_name("geom").unwrap().as_any().downcast_ref::<BinaryArray>().unwrap();
-        let areas = batch.column_by_name("area_source").unwrap().as_any().downcast_ref::<BooleanArray>().unwrap();
+        let ids = batch
+            .column_by_name("osm_id")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let uses = batch
+            .column_by_name("building_use")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<UInt8Array>()
+            .unwrap();
+        let geometry = batch
+            .column_by_name("geom")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        let areas = batch
+            .column_by_name("area_source")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
         for row in 0..batch.num_rows() {
             assert_eq!(uses.value(row), cases[ids.value(row) as usize].1);
             assert!(!areas.value(row), "a canopy retains its screening geometry");
@@ -327,9 +401,9 @@ fn multiline_osm_tags_survive_spill_and_arrow_for_every_source() {
                     &([50.0, 14.0], [50.0001, 14.0], 11.0),
                     &tags,
                     match source {
-                        FeatureType::Road => Some("0,0,1,0,1,2"),
+                        FeatureType::Road => Some("[1,2,0,0,1,1]\t0,0,1,0,1,2"),
                         FeatureType::Railway => {
-                            Some("0,0,1,0,1,2,0,0,11.1,500000000;140000000;500001000;140000000")
+                            Some("[1,2,0,0,1,1]\t0,0,1,0,1,2,0,0,11.1,500000000;140000000;500001000;140000000")
                         }
                         _ => None,
                     },
@@ -337,7 +411,16 @@ fn multiline_osm_tags_survive_spill_and_arrow_for_every_source() {
                 .unwrap();
         } else {
             spiller
-                .emit_polygon(source, square, index as i64 + 1, 50.0, 14.0, &tags, None)
+                .emit_polygon(
+                    source,
+                    square,
+                    index as i64 + 1,
+                    "way",
+                    50.0,
+                    14.0,
+                    &tags,
+                    None,
+                )
                 .unwrap();
         }
     }

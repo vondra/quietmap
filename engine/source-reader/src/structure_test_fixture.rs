@@ -284,10 +284,9 @@ fn roads_schema(profiles: Option<&str>) -> Schema {
         Field::new("aadt_moto", DataType::Float64, false),
         Field::new("traffic_estimated", DataType::UInt8, false),
     ];
-    let mut metadata = std::collections::HashMap::from([(
-        "road_traffic_contract".to_owned(),
-        "1".to_owned(),
-    )]);
+    let mut metadata =
+        std::collections::HashMap::from([("road_traffic_contract".to_owned(), "1".to_owned())]);
+    metadata.insert("osm_roads_contract".into(), square_store::osm_contract::ROADS_CONTRACT.into());
     if let Some(dictionary) = profiles {
         fields.push(Field::new("traffic_profile_id", DataType::UInt16, false));
         metadata.insert(
@@ -310,10 +309,8 @@ pub fn write_roads_file_opts(path: &Path, rows: &[FixtureRoad], profiles: Option
     let schema = Arc::new(roads_schema(profiles));
     let starts: Vec<(i32, i32)> = rows.iter().map(|r| grid_of(r.start.0, r.start.1)).collect();
     let ends: Vec<(i32, i32)> = rows.iter().map(|r| grid_of(r.end.0, r.end.1)).collect();
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        {
-            let mut columns: Vec<Arc<dyn Array>> = vec![
+    let batch = RecordBatch::try_new(schema.clone(), {
+        let mut columns: Vec<Arc<dyn Array>> = vec![
             Arc::new(Int64Array::from_iter_values(rows.iter().map(|r| r.osm_id))),
             Arc::new(Int16Array::from_iter_values(rows.iter().map(|_| 0i16))),
             Arc::new(Int32Array::from_iter_values(
@@ -343,9 +340,7 @@ pub fn write_roads_file_opts(path: &Path, rows: &[FixtureRoad], profiles: Option
             Arc::new(BooleanArray::from(vec![false; rows.len()])),
             Arc::new(UInt8Array::from_iter_values(rows.iter().map(|_| 0u8))),
             Arc::new(UInt8Array::from_iter_values(rows.iter().map(|_| 0u8))),
-            Arc::new(UInt8Array::from_iter_values(
-                rows.iter().map(|r| r.access),
-            )),
+            Arc::new(UInt8Array::from_iter_values(rows.iter().map(|r| r.access))),
             Arc::new(UInt16Array::from_iter_values(rows.iter().map(|_| 0u16))),
             Arc::new(Float64Array::from_iter_values(
                 rows.iter().map(|r| r.aadt_light),
@@ -369,8 +364,7 @@ pub fn write_roads_file_opts(path: &Path, rows: &[FixtureRoad], profiles: Option
             )));
         }
         columns
-        }
-    )
+    })
     .unwrap();
     let file = std::fs::File::create(path).unwrap();
     let mut w = FileWriter::try_new(file, &schema).unwrap();
@@ -422,10 +416,10 @@ pub fn write_railways_file(path: &Path, rows: &[FixtureRail]) {
             Field::new("freight_source_id", DataType::UInt16, false),
             Field::new("freight_matching", DataType::UInt8, false),
         ])
-        .with_metadata(std::collections::HashMap::from([(
-            "rail_traffic_contract".to_owned(),
-            "1".to_owned(),
-        )])),
+        .with_metadata(std::collections::HashMap::from([
+            ("rail_traffic_contract".to_owned(), "1".to_owned()),
+            ("osm_railways_contract".into(), square_store::osm_contract::RAILWAYS_CONTRACT.into()),
+        ])),
     );
     let starts: Vec<(i32, i32)> = rows.iter().map(|r| grid_of(r.start.0, r.start.1)).collect();
     let ends: Vec<(i32, i32)> = rows.iter().map(|r| grid_of(r.end.0, r.end.1)).collect();
@@ -492,7 +486,7 @@ pub fn write_leisure_file(path: &Path, rows: &[FixtureLeisure]) {
     let mut metadata = std::collections::HashMap::new();
     metadata.insert(
         "leisure_contract".to_string(),
-        square_store::store::LEISURE_CONTRACT_V3.to_string(),
+        square_store::store::LEISURE_CONTRACT_V4.to_string(),
     );
     metadata.insert(
         "grid".to_string(),
@@ -567,7 +561,9 @@ pub fn write_industrial_file(path: &Path, rows: &[FixtureIndustrial]) {
         Field::new("geom", DataType::Binary, true),
         Field::new("area_m2", DataType::Float32, true),
         Field::new("source_id", DataType::UInt16, false),
-    ]));
+    ]).with_metadata(std::collections::HashMap::from([(
+        "osm_industrial_contract".into(), square_store::osm_contract::INDUSTRIAL_CONTRACT.into(),
+    )])));
     let centroids: Vec<(i32, i32)> = rows
         .iter()
         .map(|r| grid_of(r.centroid.0, r.centroid.1))

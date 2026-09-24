@@ -1,14 +1,42 @@
 //! Way classification + way tag extraction: maps an OSM `Way`'s tags to a
 //! [`FeatureType`] and pulls the per-family keys it carries into spill.
 
-use super::{scope_keeps, FeatureType, Tags};
+use super::{
+    is_power_or_inactive_industry, is_special_leisure, keep_model_tag, scope_keeps, FeatureType,
+    Tags,
+};
 use osmpbf::Way;
 
 /// Classify a way by its tags. Returns None if not noise-relevant
 /// (or out of the `QM_OSM_ONLY` scope).
 pub fn classify_way(way: &Way) -> Option<FeatureType> {
-    let ft = classify_way_unscoped(way)?;
-    scope_keeps(&ft).then_some(ft)
+    classify_way_types(way).into_iter().next()
+}
+
+pub fn classify_way_types(way: &Way) -> Vec<FeatureType> {
+    let Some(primary) = classify_way_unscoped(way) else {
+        return Vec::new();
+    };
+    scoped_feature_types(primary, |key| {
+        way.tags().find(|(k, _)| *k == key).map(|(_, v)| v)
+    })
+}
+
+pub fn scoped_feature_types<'a>(
+    primary: FeatureType,
+    tag: impl Fn(&str) -> Option<&'a str>,
+) -> Vec<FeatureType> {
+    let mut types = Vec::new();
+    if primary == FeatureType::Building {
+        if is_special_leisure(&tag) {
+            types.push(FeatureType::Leisure);
+        }
+        if is_power_or_inactive_industry(&tag) {
+            types.push(FeatureType::Industrial);
+        }
+    }
+    types.insert(0, primary);
+    types.into_iter().filter(scope_keeps).collect()
 }
 
 pub(crate) fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
@@ -60,7 +88,7 @@ pub(crate) fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
     }
 
     // Wind turbine (way — rare but possible as closed polygon)
-    if tag("generator:source") == Some("wind") || tag("man_made") == Some("wind_turbine") {
+    if super::is_turbine(tag) {
         return Some(FeatureType::WindTurbine);
     }
 
@@ -106,7 +134,7 @@ pub(crate) fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
     if let Some("works" | "wastewater_plant") = tag("man_made") {
         return Some(FeatureType::Industrial);
     }
-    if let Some("plant" | "substation") = tag("power") {
+    if is_power_or_inactive_industry(tag) {
         return Some(FeatureType::Industrial);
     }
 
@@ -223,6 +251,9 @@ pub(crate) fn parking_kind<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> Option<
 /// `swimming_area` to drop the roughly 3 million private back-yard pools.
 pub(super) fn is_leisure_area(tags: &[(&str, &str)]) -> bool {
     let tag = |k: &str| tags.iter().find(|(key, _)| *key == k).map(|(_, v)| *v);
+    if is_special_leisure(tag) {
+        return true;
+    }
     if tag("amenity") == Some("biergarten") {
         return true;
     }
@@ -269,8 +300,18 @@ fn keep_road_tag(k: &str) -> bool {
 
 /// Extract relevant tags from a way.
 pub fn extract_way_tags(way: &Way, ftype: &FeatureType) -> Tags {
+    extract_tags(way.tags(), ftype)
+}
+
+pub fn extract_tags<'a>(
+    tags: impl Iterator<Item = (&'a str, &'a str)>,
+    ftype: &FeatureType,
+) -> Tags {
     let mut t = Tags::new();
-    for (k, v) in way.tags() {
+    for (k, v) in tags {
+        if keep_model_tag(ftype, k) {
+            t.insert(k.to_string(), v.to_string());
+        }
         match ftype {
             FeatureType::Road => {
                 if keep_road_tag(k) {
@@ -436,12 +477,19 @@ mod tests {
             kind(&[("amenity", "parking"), ("building", "yes")]),
             Some(ParkingKind::Structure)
         );
-        assert_eq!(kind(&[("building", "garage")]), Some(ParkingKind::Structure));
+        assert_eq!(
+            kind(&[("building", "garage")]),
+            Some(ParkingKind::Structure)
+        );
         for structure in [
             [("amenity", "parking"), ("parking", "multi-storey")],
             [("amenity", "parking"), ("parking", "carports")],
         ] {
-            assert_eq!(kind(&structure), Some(ParkingKind::Structure), "{structure:?}");
+            assert_eq!(
+                kind(&structure),
+                Some(ParkingKind::Structure),
+                "{structure:?}"
+            );
         }
         for below in [
             [("amenity", "parking"), ("parking", "underground")],
@@ -454,7 +502,11 @@ mod tests {
             [("amenity", "parking_space"), ("parking", "surface")],
             [("amenity", "parking"), ("parking", "rooftop")],
         ] {
-            assert_eq!(kind(&inside), Some(ParkingKind::NotItsOwnSource), "{inside:?}");
+            assert_eq!(
+                kind(&inside),
+                Some(ParkingKind::NotItsOwnSource),
+                "{inside:?}"
+            );
         }
         // Both routers ask `parking_kind` before any land use, so a lot inside a
         // retail or industrial zone is a lot — the zone never claims it.
@@ -474,7 +526,10 @@ mod tests {
         // tag gate: that gate is shared with nodes, which have no area at all.
         assert!(!is_leisure_area(na_spitalce));
         assert!(is_a_closed_ring(&[7, 8, 9, 7]));
-        assert!(!is_a_closed_ring(&[7, 8, 9, 10]), "a lane drawn as a line has no area");
+        assert!(
+            !is_a_closed_ring(&[7, 8, 9, 10]),
+            "a lane drawn as a line has no area"
+        );
         assert!(!is_a_closed_ring(&[7, 7]));
         // `building=no` says there is no building: it must not route one by its
         // mere presence.

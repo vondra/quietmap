@@ -363,7 +363,7 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         "leisure.arrow",
         "leisure",
         &[
-            ("leisure_contract", LEISURE_CONTRACT_V3),
+            ("leisure_contract", LEISURE_CONTRACT_V4),
             ("grid", GRID_CONTRACT_Z30),
         ],
         "re-extract the source store",
@@ -394,11 +394,21 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
     let roads = LazyArrow::open(&dir.join("roads.arrow"))?;
     check_column_type(&roads, "start_gx", DataType::Int32, "roads.arrow")?;
 
+    let industrial = LazyArrow::open(&dir.join("industrial.arrow"))?;
+    for (family, arrow) in [
+        ("roads", &roads),
+        ("railways", &railways),
+        ("industrial", &industrial),
+    ] {
+        if let Some(schema) = arrow.schema() {
+            crate::osm_contract::validate(schema, family)?;
+        }
+    }
     Ok(SquareData {
         roads,
         railways,
         structures,
-        industrial: LazyArrow::open(&dir.join("industrial.arrow"))?,
+        industrial,
         leisure,
         ships,
         aircraft_airborne,
@@ -414,10 +424,8 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
 pub const STRUCTURE_KIND_BUILDING: u8 = 0;
 pub const STRUCTURE_KIND_BARRIER: u8 = 1;
 
-/// Per-file contract stamps (sources of truth: `osm-extract::finalize`,
-/// `scripts/structures/build-structures.py`). Mirrored here so the popup
-/// drops a stale layer whose semantics predate the current schema.
-pub const LEISURE_CONTRACT_V3: &str = "leisure_v3";
+/// Activity evidence version shared with the extractor.
+pub use crate::osm_contract::LEISURE_CONTRACT_V4;
 /// `ships.arrow` schema stamp written by `scripts/ships/build_ships.py`.
 pub const SHIPS_CONTRACT_V1: &str = "ships_v1";
 pub const GRID_CONTRACT_Z30: &str = "z30";

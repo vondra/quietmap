@@ -18,7 +18,7 @@ use crate::types::NUM_BANDS;
 
 /// Leisure `sport`/kind class ids written by `osm-extract::spill` into
 /// `leisure.arrow`. Stable once shipped: the arrow stores the raw u8, so a new
-/// id is a new file contract (`leisure_v3` carries the car parks, 8 and 9).
+/// id is a new file contract (`leisure_v4` also retains staged motorsport and shooting classes).
 /// 0 is the generic-pitch default so an untyped `leisure=pitch` still emits.
 pub const PITCH: u8 = 0;
 pub const PADEL: u8 = 1;
@@ -271,9 +271,8 @@ pub fn leisure_profile(sport: u8) -> LeisureProfile {
             night_offset: -10.0, // floodlit pitches run to ~22:00
             m2_per_space: None,
         },
-        // An id this engine does not know can only come from a file that lies
-        // about its own `leisure_v3` stamp (a new class bumps the contract). We
-        // cannot say what it is, so it says nothing: `lw` lands under the
+        // Staged motorsport/shooting and unknown ids have no activity model
+        // here yet, so they remain silent: `lw` lands under the
         // `prepare_leisure_points` audibility gate for any area, exactly as
         // `settlement::SILENT` does. Guessing "sports pitch" would put a
         // plausible, wrong level on the map instead.
@@ -369,32 +368,45 @@ mod tests {
     #[test]
     fn car_park_lw_follows_the_parking_study() {
         let study = |spaces: f64| {
-            let searching = if spaces > 10.0 { 2.5 * (spaces - 9.0).log10() } else { 0.0 };
+            let searching = if spaces > 10.0 {
+                2.5 * (spaces - 9.0).log10()
+            } else {
+                0.0
+            };
             63.0 + searching + 10.0 * (spaces * 0.40).log10()
         };
         for (class, m2_per_space, area) in [
-            (CAR_PARK, 23.8, 5_000.0),   // a supermarket lot: 210 spaces
-            (CAR_PARK, 23.8, 1_000.0),   // 42 spaces
+            (CAR_PARK, 23.8, 5_000.0),      // a supermarket lot: 210 spaces
+            (CAR_PARK, 23.8, 1_000.0),      // 42 spaces
             (CAR_PARK_STREET, 13.3, 200.0), // a long strip: 15 spaces
             (CAR_PARK_STREET, 13.3, 120.0), // 9 spaces, under the K_D threshold
         ] {
             let profile = leisure_profile(class);
             let lw = leisure_lw(&profile, area);
             let expected = study(area / m2_per_space);
-            assert!((lw - expected).abs() < 0.1, "class {class} at {area} m²: {lw:.2} != {expected:.2}");
+            assert!(
+                (lw - expected).abs() < 0.1,
+                "class {class} at {area} m²: {lw:.2} != {expected:.2}"
+            );
         }
         // The engine's clock is not the study's: its 06–22 and 22–06 blocks are
         // re-averaged onto day 07–19, evening 19–23 and night 23–07.
         let profile = leisure_profile(CAR_PARK);
         let evening = 10.0 * ((3.0 * 0.40 + 0.05) / 4.0 / 0.40f64).log10();
         let night = 10.0 * ((0.40 + 7.0 * 0.05) / 8.0 / 0.40f64).log10();
-        assert!((profile.evening_offset - evening).abs() < 0.05, "evening {evening:.2}");
-        assert!((profile.night_offset - night).abs() < 0.05, "night {night:.2}");
+        assert!(
+            (profile.evening_offset - evening).abs() < 0.05,
+            "evening {evening:.2}"
+        );
+        assert!(
+            (profile.night_offset - night).abs() < 0.05,
+            "night {night:.2}"
+        );
         // Nothing else in the lane has spaces to search for.
         assert_eq!(leisure_profile(PITCH).m2_per_space, None);
     }
 
-    /// A class id outside `leisure_v3` can only come from a file that lies about
+    /// A class id outside `leisure_v4` can only come from a file that lies about
     /// its stamp. It must say nothing rather than sound like a football pitch.
     #[test]
     fn an_unknown_class_emits_nothing() {
@@ -406,7 +418,10 @@ mod tests {
             );
         }
         let pitch = leisure_profile(PITCH);
-        assert!(leisure_lw(&pitch, 1_000.0) > 60.0, "an untyped pitch still emits");
+        assert!(
+            leisure_lw(&pitch, 1_000.0) > 60.0,
+            "an untyped pitch still emits"
+        );
     }
 
     #[test]

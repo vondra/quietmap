@@ -1,7 +1,8 @@
 //! File access for one prepared z9 square: lazily-decoded Arrow IPC files.
 //!
 //! Map of submodules: [`store`] (square files + contracts), [`grid_cols`]
-//! (typed column + grid decoders), [`aircraft_contract`] (shared
+//! (typed column + grid decoders), [`osm_contract`] (extraction versions),
+//! [`osm_evidence`] (retained tags and control incidences), [`aircraft_contract`] (shared
 //! producer/runtime schema stamps), [`structure_contract`] (the prepared
 //! screening-height boundary), [`warn_once`] (the serve-and-log reaction of the visitor path).
 //!
@@ -11,6 +12,8 @@
 
 pub mod aircraft_contract;
 pub mod grid_cols;
+pub mod osm_contract;
+pub mod osm_evidence;
 pub mod store;
 pub mod structure_contract;
 pub mod warn_once;

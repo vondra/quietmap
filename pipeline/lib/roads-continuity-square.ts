@@ -58,7 +58,7 @@ export function planSquareContinuity(prepared: string, square: string, keysTouch
     }
     seen[piece] = 1
     const oneway = Number(direction.get(planningRoad.i))
-    if (oneway > 2) throw new Error(`${square}: invalid oneway direction ${oneway}`)
+    if (oneway > 4) throw new Error(`${square}: invalid oneway direction ${oneway}`)
     const { startKey, endKey } = pieces.identity(piece)
     // Source topology replaces the snapped coordinates: equal cells do not connect distinct OSM nodes.
     const road: ContinuityRoad = Object.assign(planningRoad, { a: startKey, b: endKey, direction: oneway })

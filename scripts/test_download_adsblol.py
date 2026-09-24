@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -160,7 +161,10 @@ class PublisherIntegrity(unittest.TestCase):
                 MODULE.import_verified(database, receipt)
                 asset = ('2026-06-06', 'original.tar', 'unused', 8, digest, 'prod')
                 self.assertEqual(MODULE.verified_asset(database, asset), str(source))
+                original_stat = source.stat()
                 source.write_bytes(b'changed!')
+                # Same-size writes can share one filesystem timestamp tick.
+                os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns + 1_000_000_000))
                 with self.assertRaisesRegex(ValueError, 'changed verified'):
                     MODULE.verified_asset(database, asset)
                 with self.assertRaisesRegex(ValueError, 'changed independently'):

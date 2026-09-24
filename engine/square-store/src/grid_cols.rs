@@ -26,16 +26,16 @@ pub fn col_f32<'a>(b: &'a RecordBatch, name: &str) -> Option<&'a Float32Array> {
 pub fn col_u8<'a>(b: &'a RecordBatch, name: &str) -> Option<&'a UInt8Array> {
     b.column_by_name(name)?.as_any().downcast_ref()
 }
-/// Validated native road direction: 0 two-way, 1 forward, 2 reverse.
+/// Validated native road direction: 0 two-way, 1 forward, 2 reverse, 3 implied roundabout, 4 implied motorway.
 pub struct RoadDirections<'a>(&'a UInt8Array);
 
 impl<'a> RoadDirections<'a> {
     pub fn read(batch: &'a RecordBatch) -> Result<Self, String> {
         let codes = col_u8(batch, "oneway").ok_or_else(|| {
-            "roads require UInt8 oneway (0 two-way, 1 forward, 2 reverse)".to_owned()
+            "roads require UInt8 oneway (0 two-way, 1 forward, 2 reverse, 3 implied roundabout, 4 implied motorway)".to_owned()
         })?;
-        if codes.null_count() != 0 || codes.values().iter().any(|code| *code > 2) {
-            return Err("roads oneway must contain only non-null codes 0, 1 or 2".to_owned());
+        if codes.null_count() != 0 || codes.values().iter().any(|code| *code > 4) {
+            return Err("roads oneway must contain only non-null codes 0 through 4".to_owned());
         }
         Ok(Self(codes))
     }

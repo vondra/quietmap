@@ -1,7 +1,5 @@
-//! `leisure.arrow` writer. Its own per-file contract (`leisure_v3`, which added
-//! the car park classes) — a NEW file, never confused with buildings. No
-//! capacity column: the area-law unification removed capacity scaling, and the
-//! polygon's own area is the size driver. See `finalize`.
+//! `leisure_v4` writer: area and point sources plus retained motorsport lines,
+//! shooting subtypes and indoor flags. Activity evidence never screens.
 
 use anyhow::Result;
 use arrow::array::*;
@@ -11,13 +9,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::{
-    decode_tsv_ring, parse_grid_cell, polygon_row_bbox, schema_with_contract,
-    write_arrow_z14_blocked, LEISURE_CONTRACT_V3,
+    evidence::write_with_evidence, parse_grid_cell, polygon_row_bbox, schema_with_contract,
+    LEISURE_CONTRACT_V4,
 };
 
-/// `leisure.arrow`: one row per OPEN-AIR AREA source (sports pitch / playground
-/// / pool / beer garden / car park). Geometry + `sport` class drive the
-/// emission; nothing in this file ever screens.
 pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let n = rows.len();
     let schema = schema_with_contract(
@@ -31,9 +26,11 @@ pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
             Field::new("name", DataType::Utf8, true),
             Field::new("geom", DataType::Binary, true),
             Field::new("area_m2", DataType::Float32, true),
+            Field::new("geometry_kind", DataType::UInt8, false),
+            Field::new("length_m", DataType::Float32, true),
         ],
         "leisure_contract",
-        LEISURE_CONTRACT_V3,
+        LEISURE_CONTRACT_V4,
     );
 
     let mut osm_id = Int64Builder::with_capacity(n);
@@ -44,6 +41,8 @@ pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let mut name = StringBuilder::with_capacity(n, n * 8);
     let mut geom = BinaryBuilder::with_capacity(n, n * 100);
     let mut area_m2 = Float32Builder::with_capacity(n);
+    let mut geometry_kind = UInt8Builder::new();
+    let mut length = Float32Builder::new();
     let mut row_bboxes = Vec::with_capacity(n);
 
     for row in rows {
@@ -54,7 +53,43 @@ pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
         }
         let c_gx = parse_grid_cell(&row[2]);
         let c_gy = parse_grid_cell(&row[3]);
-        let ring = decode_tsv_ring(row.get(7).map(|s| s.as_str()).unwrap_or(""));
+        anyhow::ensure!(row.len() > 8, "old or truncated leisure spill");
+        let tags: crate::classify::Tags = serde_json::from_str(&row[8])?;
+        let ring: Option<Vec<(i32, i32)>> = row[7]
+            .split(';')
+            .map(|point| {
+                let (x, y) = point.split_once(',')?;
+                Some((x.parse().ok()?, y.parse().ok()?))
+            })
+            .collect();
+        let closed = ring
+            .as_ref()
+            .is_some_and(|r| r.len() >= 4 && r.first() == r.last());
+        let line = row.get(9).map(String::as_str) == Some("way")
+            && (!closed
+                || (tags.get("area").map(String::as_str) != Some("yes")
+                    && (tags.get("highway").map(String::as_str) == Some("raceway")
+                        || (tags.get("leisure").map(String::as_str) == Some("track")
+                            && crate::classify::special_leisure_class(|key| {
+                                tags.get(key).map(String::as_str)
+                            }) == Some(10)))));
+        geometry_kind.append_value(if ring.is_none() {
+            0
+        } else if line {
+            2
+        } else {
+            1
+        });
+        length.append_option(ring.as_ref().filter(|_| line).map(|chain| {
+            chain
+                .windows(2)
+                .map(|pair| {
+                    let a = square_store::grid_cols::grid_cell_lonlat(pair[0].0, pair[0].1);
+                    let b = square_store::grid_cols::grid_cell_lonlat(pair[1].0, pair[1].1);
+                    grid::geo::flat_dist(a.1, a.0, b.1, b.0)
+                })
+                .sum::<f64>() as f32
+        }));
         row_bboxes.push(polygon_row_bbox(ring.as_deref(), c_gx, c_gy));
         osm_id.append_value(row[1].parse().unwrap_or(0));
         cgx.append_value(c_gx);
@@ -64,7 +99,7 @@ pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
         name.append_value(row.get(6).unwrap_or(&String::new()));
         match ring {
             Some(ring) => {
-                match ring_area_m2(&ring) {
+                match (!line).then(|| ring_area_m2(&ring)).flatten() {
                     Some(a) => area_m2.append_value(a as f32),
                     None => area_m2.append_null(),
                 }
@@ -77,7 +112,7 @@ pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
         }
     }
 
-    write_arrow_z14_blocked(
+    write_with_evidence(
         path,
         schema,
         vec![
@@ -89,7 +124,11 @@ pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
             Arc::new(name.finish()),
             Arc::new(geom.finish()),
             Arc::new(area_m2.finish()),
+            Arc::new(geometry_kind.finish()),
+            Arc::new(length.finish()),
         ],
         &row_bboxes,
+        rows,
+        8,
     )
 }

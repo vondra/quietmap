@@ -3,6 +3,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DataType, Table, type Vector } from 'apache-arrow'
+import { requireOsmContract } from './osm-contract.js'
 
 // Faithful JS mirror of engine/grid, which owns these constants and formulas.
 const WEB_MERCATOR_RADIUS_M = 6_378_137
@@ -153,6 +154,7 @@ function bakedCountryReader(
   if (table.schema.metadata.get(`${layer}_contract`) !== contract) {
     throw new Error(`${layer} Arrow contract must be '${contract}' before national enrichment`)
   }
+  requireOsmContract(table, layer)
   const vector = requiredVector(table, 'country_iso')
   if (!DataType.isInt(vector.type) || vector.type.isSigned || vector.type.bitWidth !== 16 || vector.nullCount !== 0) {
     throw new Error(`${layer} Arrow 'country_iso' must be non-null Uint16`)

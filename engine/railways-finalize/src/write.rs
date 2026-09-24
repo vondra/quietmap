@@ -39,6 +39,7 @@ pub fn finalize_square(
     let reader = FileReader::try_new(Cursor::new(&bytes), None)
         .map_err(|e| format!("arrow open {}: {e}", arrow_path.display()))?;
     let schema = reader.schema();
+    square_store::osm_contract::validate(&schema, "railways")?;
     let finalized = schema.metadata().get(CONTRACT_KEY).map(String::as_str) == Some("1");
     let batches = reader
         .collect::<Result<Vec<_>, _>>()
