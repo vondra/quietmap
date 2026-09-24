@@ -141,9 +141,13 @@ class Arco:
             raise ValueError(f'Invalid chunk {variable}/{key}')
         return data, receipt
 
-    def hour(self, timestamp, executor):
+    def submit_hour(self, timestamp, executor):
         hour = int((timestamp - self.epoch).total_seconds() / 3600)
-        requests = [executor.submit(self.chunk, variable, f'{hour}.0.0') for variable in VARIABLES]
+        return [executor.submit(self.chunk, variable, f'{hour}.0.0') for variable in VARIABLES]
+
+    def collect_hour(self, requests):
+        """Receipts enter the manifest only here, in step order, so a prefetched but unconsumed hour never
+        reaches a checkpointed manifest."""
         arrays = []
         for request in requests:
             values, receipt = request.result()

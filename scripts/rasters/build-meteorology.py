@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stream the fixed ERA5 normal to global meteorology Arrow with resumable statistics."""
 import argparse
+import collections
 from concurrent.futures import ThreadPoolExecutor
 import datetime as dt
 import fcntl
@@ -18,7 +19,11 @@ os.environ['OPENBLAS_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 import numpy as np
 import numba
-from meteorology_io import Arco, Checkpoint, CONTRACT, atomic_json, sha256, timezone_rules, write_arrow
+from meteorology_io import Arco, Checkpoint, CONTRACT, VARIABLES, atomic_json, sha256, timezone_rules, write_arrow
+
+# Anonymous GCS chunk reads are latency-bound: one step's six chunks took 3.7 s against 0.55 s of compute
+# (measured 2026-09-24), so later steps are fetched while the current one is accumulated.
+PREFETCH_STEPS = 8
 
 MODEL_ROOT = Path(__file__).resolve().parents[2] / 'engine/noise-compute'
 sys.path.insert(0, str(MODEL_ROOT))
@@ -60,8 +65,7 @@ def main():
     total = int((end - first).total_seconds() / (3 * 3600))
     indices = np.arange(721 * 1440)
     latitudes, longitudes = 90 - (indices // 1440) * .25, (indices % 1440) * .25
-    io_threads = max(1, args.threads // 2)
-    numba.set_num_threads(max(1, args.threads - io_threads))
+    numba.set_num_threads(args.threads)
     stop = False
 
     def request_stop(_signum, _frame):
@@ -78,11 +82,16 @@ def main():
         manifest.truncate(manifest_bytes)
         manifest.seek(manifest_bytes)
         arco = Arco(args.source_url, args.retained, manifest) if next_step < total else None
-        with ThreadPoolExecutor(max_workers=io_threads) as executor:
+        with ThreadPoolExecutor(max_workers=PREFETCH_STEPS * len(VARIABLES)) as executor:
+            prefetched = collections.deque()
+            next_fetch = next_step
             while next_step < total and not stop:
+                while next_fetch < total and len(prefetched) < PREFETCH_STEPS:
+                    prefetched.append(arco.submit_hour(first + dt.timedelta(hours=3 * next_fetch), executor))
+                    next_fetch += 1
                 timestamp = first + dt.timedelta(hours=3 * next_step)
                 fetch_started = time.monotonic()
-                raw = arco.hour(timestamp, executor)
+                raw = arco.collect_hour(prefetched.popleft())
                 fetch_seconds = time.monotonic() - fetch_started
                 compute_started = time.monotonic()
                 hours = np.array([timestamp.astimezone(zone).hour for zone in zones])
@@ -103,6 +112,9 @@ def main():
                 if next_step % 56 == 0 or stop or next_step == total:
                     checkpoint.save(state, next_step, manifest)
                     checkpoint_step = next_step
+            for requests in prefetched:
+                for request in requests:
+                    request.cancel()
         if next_step > checkpoint_step:
             checkpoint.save(state, next_step, manifest)
         if next_step != total:
