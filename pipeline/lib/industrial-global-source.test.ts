@@ -13,14 +13,15 @@ const gem = (status: string, latitude: unknown = 50, longitude: unknown = 14) =>
   properties: { status, Latitude: latitude, Longitude: longitude },
 })
 
-test('observed fuel and Annex sector select original profiles; wind/unknown never guess thermal', () => {
+test('observed fuel and Annex sub-activity select original profiles; wind/unknown never guess thermal', () => {
   const gppd = parseGlobalIndustrialSource(csv(['Coal', 'Hydro', 'Solar', 'Geothermal', 'Wind', '', 'Other']), GLOBAL_INDUSTRIAL_SOURCES[0])
   assert.deepEqual(gppd.facilities.map(f => f.nace4), [3511, 3512, 3599, 3512])
   assert.equal(gppd.census.unclassified, 3)
-  const results = ['1(a)', '2(a)', '3(a)', '4(a)(viii)', '5(a)', '6(a)', '7(a)', '8(a)', '9(a)', 'unknown'].map(activity =>
+  const results = ['1(a)', '2(a)', '2(f)', '3(a)', '4(a)(viii)', '5(a)', '6(a)', '7(a)', '8(a)', '9(a)', 'unknown'].map(activity =>
     ({ y_4326: 50, x_4326: 14, EPRTRAnnexIMainActivity: activity }))
   const eprtr = parseGlobalIndustrialSource(JSON.stringify({ results }), GLOBAL_INDUSTRIAL_SOURCES[1])
-  assert.deepEqual(eprtr.facilities.map(f => f.nace4), [3511, 2410, 2351, 2011, 3821, 1711, 146, 1011, 1310])
+  assert.deepEqual(eprtr.facilities.map(f => f.nace4),
+    [1920, 2410, 2561, 510, 2011, 3822, 1711, 146, 1011, 1330])
   assert.equal(eprtr.census.unclassified, 1)
 })
 

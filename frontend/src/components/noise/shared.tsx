@@ -51,6 +51,8 @@ const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
     factory: 'Factory',
     wastewater: 'Wastewater plant',
     wind_turbine: 'Wind turbine',
+    solar_farm: 'Solar farm',
+    substation: 'Substation',
   },
   ship: {
     // Keys ARE the backend names (emission/ships.rs::ShipClass::name).

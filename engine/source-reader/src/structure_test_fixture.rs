@@ -546,13 +546,16 @@ pub fn write_leisure_file(path: &Path, rows: &[FixtureLeisure]) {
 }
 
 /// One industrial row. `ring_lonlat` overrides the default ~20 m square
-/// footprint when the test needs a real polygon extent (edge-gate tests).
+/// footprint when the test needs a real polygon extent (edge-gate tests);
+/// `suppressed` marks lifecycle-retired rows (disused quarries) the readers
+/// must skip.
 pub struct FixtureIndustrial {
     pub osm_id: i64,
     pub centroid: (f64, f64),
     pub source_type: u8,
     pub name: String,
     pub ring_lonlat: Option<Vec<(f64, f64)>>,
+    pub suppressed: bool,
 }
 
 /// An industrial.arrow on disk in the osm-extract v2 (grid) layout.
@@ -569,6 +572,7 @@ pub fn write_industrial_file(path: &Path, rows: &[FixtureIndustrial]) {
         Field::new("geom", DataType::Binary, true),
         Field::new("area_m2", DataType::Float32, true),
         Field::new("source_id", DataType::UInt16, false),
+        Field::new("suppressed", DataType::UInt8, false),
     ]));
     let centroids: Vec<(i32, i32)> = rows
         .iter()
@@ -608,6 +612,9 @@ pub fn write_industrial_file(path: &Path, rows: &[FixtureIndustrial]) {
                 rows.iter().map(|_| 5000.0f32),
             )),
             Arc::new(UInt16Array::from_iter_values(rows.iter().map(|_| 0u16))),
+            Arc::new(UInt8Array::from_iter_values(
+                rows.iter().map(|r| u8::from(r.suppressed)),
+            )),
         ],
     )
     .unwrap();

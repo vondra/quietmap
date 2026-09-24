@@ -118,9 +118,20 @@ at night.
 ## Industry
 
 Factories, power plants, mines, quarries and wind turbines. Sites come from OpenStreetMap;
-plant type comes from E-PRTR (Europe), the Global Power Plant Database and the Global
-Energy Monitor trackers for steel, cement and coal. Sound power is estimated from plant
-type and size. Operating hours and operating status are unknown.
+plant type comes from E-PRTR (Europe, by Annex I sub-activity), the Global Power Plant
+Database and the Global Energy Monitor trackers for steel, cement and coal. A registry
+site claims the smallest mapped polygon containing it; where several registry points fall
+inside one plant, the loudest plant type wins. Sound power is estimated from plant
+type and size. Coal and lignite mines run day and night; other mines and quarries,
+offices and warehouses keep day-oriented hours. Operating status is unknown.
+
+Wind turbines emit their annual operating level: the published maximum for their size,
+minus an operating allowance for calm and part-load hours (about 2 dB on average; the
+wind distribution used is a placeholder until measured wind data arrives). Solar farms
+emit from their inverters during daylight (about 88 dB(A) per MW, from manufacturer
+data; untagged farms assume 0.55 MW per hectare) and are silent at night. Substations
+hum around the clock from their transformers (IEC 551, from the transformer rating or
+a class median). Wind-farm outlines themselves are silent — only the turbines emit.
 
 ## Buildings
 

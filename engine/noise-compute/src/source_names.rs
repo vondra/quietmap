@@ -93,6 +93,9 @@ pub(crate) fn industrial_type_name(st: u8) -> &'static str {
         3 => "factory",
         4 => "wastewater",
         10 => "wind_turbine",
+        11 => "solar_farm",
+        12 => "substation",
+        // 13 (wind-farm outline) is silent and never reaches a contributor.
         _ => "industrial_area",
     }
 }

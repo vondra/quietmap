@@ -105,6 +105,26 @@ the area integral sits 1.8 dB under the per-m² level, giving active 59.8
 dB/m² — 97.85 dB(A) over the pitch — and 50.8 dB/m² after the standard −9 dB
 annualization (−3 season, −6 duty).
 
+Power classes (`source_type` 11–13, consumer contract v1). Solar farms emit
+per-MW, not per area: 88 dB(A)/MW + 10·lg(MW) − 5 dB day duty, day-only
+(Sungrow SG4950HV-MV 4.95 MW = 95 dB(A) anchor; MW from `capacity_mw` or area
+× 0.55 MW/ha, the tagged-farm median). Registry-confirmed solar (synthetic
+NACE 3599) takes the same branch. Substations emit per-MVA, 24/7: IEC 551
+LWA = 74 + 14·lg(MVA), 64 dB below 0.2 MVA (MVA from `capacity_mva` or the
+class median — main 25, auto 160, distribution 2 MVA). Wind-farm outlines are
+silent; disused/abandoned/historic quarries are retired by the extractor
+(`suppressed`, honoured by both readers).
+
+Registry stamping is containment-first: a facility claims the smallest polygon
+containing it (equivalent-circle edge < 0, any centroid distance — the 2 km
+radius gates proximity only); a polygon takes the loudest contained facility
+of the winning registry (Tata: steel 2410 over chemicals 2011). New NACE arms:
+06 oil/gas extraction (92, near-24/7), 07 metal-ore mining (as quarries),
+19 coke/refining (96, near-24/7), 62 office (defensive, 60). E-PRTR maps by
+Annex I sub-activity letter, not sector. The India colour feed is deleted (CPCB
+colours score air/water/waste pollution, not noise); registry points never
+stamp substations or turbines.
+
 ## Prepared road direction and traffic
 
 Final road Arrow carries `road_traffic_contract=1`, four non-null Float64

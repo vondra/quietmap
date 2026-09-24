@@ -38,6 +38,15 @@ pub struct RawIndustrialInput<'a> {
     /// Snapped z30 grid ring (empty = unavailable).
     pub polygon_grid: &'a [(i32, i32)],
     pub nace_4digit: Option<u16>,
+    /// Solar farm rated MW (`capacity_mw`, `plant:output:electricity`).
+    /// `None` = untagged → area × [`industrial::SOLAR_MW_PER_HA_UNTAGGED`].
+    pub capacity_mw: Option<f32>,
+    /// Substation total MVA (`capacity_mva`, summed transformer ratings).
+    /// `None` = unknown → [`industrial::substation_class_mva`] median.
+    pub capacity_mva: Option<f32>,
+    /// Substation class (`substation_class`): 1 main, 2 auto, 3 distribution,
+    /// 0 unknown. Only read when `capacity_mva` is `None`.
+    pub substation_class: u8,
 }
 
 /// One `leisure.arrow` row — a sports/play/open-air-hospitality/car-park AREA source
@@ -465,14 +474,54 @@ pub fn prepare_industrial_points(input: RawIndustrialInput<'_>) -> Vec<PreparedP
         }];
     }
 
+    // A wind-farm outline is silent: the turbines inside the fence emit, not
+    // the fence (Cotton Wind Farm read 43.8 dB Lden as a generic factory).
+    if input.source_type == industrial::SOURCE_WIND_OUTLINE {
+        return Vec::new();
+    }
+
     let area = resolve_area_m2(input.area_m2, input.polygon_grid, 10000.0);
-    let profile = input
-        .nace_4digit
-        .and_then(industrial::nace_profile)
-        .or_else(|| industrial::subtype_profile(input.site_subtype))
-        .unwrap_or_else(|| industrial::industrial_profile(input.source_type));
-    let area_cap = industrial::sector_area_cap_m2(input.nace_4digit, input.site_subtype);
-    let lw = industrial::industrial_lw(&profile, area, area_cap);
+    // Solar farms (OSM class 11, or registry-confirmed 3599 — including the
+    // served rows) and substations (class 12) carry their own physics: per-MW
+    // / per-MVA levels, not the area law. `base_lw` is unused on these arms
+    // (`lw` is computed directly); the spectrum + offsets still apply.
+    let is_solar =
+        input.source_type == industrial::SOURCE_SOLAR_FARM || input.nace_4digit == Some(industrial::SOLAR_NACE);
+    let is_substation = input.source_type == industrial::SOURCE_SUBSTATION;
+    let profile = if is_solar {
+        industrial::IndustrialProfile {
+            base_lw: 0.0,
+            spectrum: industrial::SOLAR_SPECTRUM,
+            evening_offset: -50.0, // day-only: inverters sleep at night
+            night_offset: -50.0,
+        }
+    } else if is_substation {
+        industrial::IndustrialProfile {
+            base_lw: 0.0,
+            spectrum: industrial::SUBSTATION_SPECTRUM,
+            evening_offset: 0.0, // 24/7
+            night_offset: 0.0,
+        }
+    } else {
+        input
+            .nace_4digit
+            .and_then(industrial::nace_profile)
+            .or_else(|| industrial::subtype_profile(input.site_subtype))
+            .unwrap_or_else(|| industrial::industrial_profile(input.source_type))
+    };
+    let lw = if is_solar {
+        industrial::solar_farm_lw(input.capacity_mw.map(f64::from), area)
+    } else if is_substation {
+        let mva = input
+            .capacity_mva
+            .filter(|mva| *mva > 0.0)
+            .map(f64::from)
+            .unwrap_or_else(|| industrial::substation_class_mva(input.substation_class));
+        industrial::substation_lw(mva)
+    } else {
+        let area_cap = industrial::sector_area_cap_m2(input.nace_4digit, input.site_subtype);
+        industrial::industrial_lw(&profile, area, area_cap)
+    };
     if lw < 10.0 {
         return Vec::new();
     }
@@ -481,13 +530,18 @@ pub fn prepare_industrial_points(input: RawIndustrialInput<'_>) -> Vec<PreparedP
     let (lw_evening, lw_night) =
         period_offset_bands(lw_day, profile.evening_offset, profile.night_offset);
 
-    let source_height_m = if input.source_type == 1 {
+    let source_height_m = if is_solar {
+        3.0 // central inverters + MV transformers
+    } else if is_substation {
+        5.0 // transformer tanks, radiators, fans
+    } else if input.source_type == 1 {
         8.0
     } else {
         match input.nace_4digit.map(|n| n / 100) {
-            // Heavy/tall sources: coal mining (05) + other mining & quarrying (08),
+            // Heavy/tall sources: coal (05) + metal-ore (07) + other mining
+            // & quarrying (08), coke/refining (19, stacks/flares),
             // cement/minerals (23), metallurgy (24), power generation (35).
-            Some(5 | 8 | 23 | 24 | 35) => 10.0,
+            Some(5 | 7 | 8 | 19 | 23 | 24 | 35) => 10.0,
             _ => 5.0,
         }
     };
@@ -750,6 +804,9 @@ mod tests {
             rated_power_kw: Some(3500.0),
             area_m2: None,
             polygon_grid: &[],
+            capacity_mw: None,
+            capacity_mva: None,
+            substation_class: 0,
         });
         assert_eq!(points.len(), 1);
         assert_eq!(points[0].hub_height_m, Some(100.0));
@@ -757,6 +814,45 @@ mod tests {
         // Buildings-only fields stay 0 on turbines.
         assert_eq!(points[0].floors, 0);
         assert_eq!(points[0].area_m2, 0.0);
+    }
+
+    #[test]
+    fn power_classes_use_per_mw_per_mva_physics_and_outlines_are_silent() {
+        let prep = |source_type: u8, nace: Option<u16>, mw: Option<f32>, mva: Option<f32>, class: u8| {
+            prepare_industrial_points(RawIndustrialInput {
+                centroid_lat: 49.0,
+                centroid_lon: 14.0,
+                source_type,
+                site_subtype: 0,
+                nace_4digit: nace,
+                hub_height_m: None,
+                rated_power_kw: None,
+                area_m2: Some(46_710.0), // Vienna airport farm footprint
+                polygon_grid: &[],
+                capacity_mw: mw,
+                capacity_mva: mva,
+                substation_class: class,
+            })
+        };
+        let day_aw = |points: &[PreparedPoint]| {
+            let day: [f64; NUM_BANDS] = std::array::from_fn(|i| points[0].lw_day[i] as f64);
+            crate::propagation::iso9613::a_weighted_total(&day)
+        };
+        // Registry-confirmed solar (served 3599 rows): 24 MW → 96.8 day-only.
+        let solar = prep(0, Some(3599), Some(24.0), None, 0);
+        assert!((day_aw(&solar) - 96.8).abs() < 0.1, "solar {}", day_aw(&solar));
+        assert_eq!(solar[0].source_height_m, 3.0);
+        assert!((solar[0].lw_night[4] - solar[0].lw_day[4] + 50.0).abs() < 1e-3);
+        // New OSM solar class without a tag: area × 0.55 MW/ha.
+        let untagged = prep(industrial::SOURCE_SOLAR_FARM, None, None, None, 0);
+        let expected = 88.0 + 10.0 * (4.671 * 0.55f64).log10() - 5.0;
+        assert!((day_aw(&untagged) - expected).abs() < 0.1);
+        // Substation: class median when MVA unknown (distribution 2 MVA).
+        let sub = prep(industrial::SOURCE_SUBSTATION, None, None, None, 0);
+        assert!((day_aw(&sub) - industrial::substation_lw(2.0)).abs() < 0.1);
+        assert_eq!(sub[0].lw_day[4], sub[0].lw_night[4]); // 24/7
+        // Wind-farm outlines emit nothing.
+        assert!(prep(industrial::SOURCE_WIND_OUTLINE, None, None, None, 0).is_empty());
     }
 
     #[test]
@@ -778,6 +874,9 @@ mod tests {
             rated_power_kw: None,
             area_m2: Some(6_000.0),
             polygon_grid: &ring,
+            capacity_mw: None,
+            capacity_mva: None,
+            substation_class: 0,
         });
 
         assert!(
@@ -838,6 +937,9 @@ mod tests {
                 rated_power_kw: power,
                 area_m2: None,
                 polygon_grid: &[],
+                capacity_mw: None,
+                capacity_mva: None,
+                substation_class: 0,
             })
         };
         // Missing hub → 105 m default, carried into source_height_m.

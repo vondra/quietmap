@@ -7,8 +7,8 @@ import { listPreparedSquares } from './prepared-grid.js'
 import { withArrowWrite, shouldOverwrite } from './provenance.js'
 import { PROVENANCE_RANK, SOURCES_BY_ID } from './sources.js'
 import { buildOneHundredthDegreePointGrid, pointGridCandidates } from './spatial.js'
-import { candidateEdgeM, contestBeats, overlapPairs, readPolygons, OVERLAP_MIN_AREA_M2,
-  type MatchFacility, type MatchPolygon, type OverlapWinner } from './facility-match.js'
+import { candidateBeats, candidateEdgeM, contestBeats, lookupRadiusM, overlapPairs, readPolygons,
+  OVERLAP_MIN_AREA_M2, type MatchFacility, type MatchPolygon, type OverlapWinner } from './facility-match.js'
 
 const SEARCH_RADIUS_M = 2000 // Default original registry centroid search horizon.
 export interface IndustrialOwnership {
@@ -16,7 +16,7 @@ export interface IndustrialOwnership {
   rowClassification?(country: string, polygon: MatchPolygon): MatchFacility | null
   countryAt(table: Table): (row: number, polygon: MatchPolygon) => string | null
 }
-interface Winner { country: string; facility: MatchFacility; square: string; row: number; edge?: number; polygon: MatchPolygon; existingSourceId: number }
+interface Winner { country: string; facility: MatchFacility; square: string; row: number; edge?: number; contained: boolean; polygon: MatchPolygon; existingSourceId: number }
 const keyOf = (winner: Winner) => `${winner.square}:${winner.row}`
 
 function stamps(table: Table, name: string, bits: number, optional = false): number[] {
@@ -95,16 +95,21 @@ export async function enrichIndustrialFacilities(
       const classification = ownership?.rowClassification?.(country, polygon)
       if (classification) {
         validateFacility(classification)
-        rowClassifications.set(`${square}:${row}`, { country, facility: classification, square, row, polygon,
-          existingSourceId: sourceIds[row] })
+        // A concession classification holds the polygon by construction.
+        rowClassifications.set(`${square}:${row}`, { country, facility: classification, square, row, contained: true,
+          polygon, existingSourceId: sourceIds[row] })
       }
-      for (const { index } of pointGridCandidates(polygon.lat, polygon.lon, searchRadiusM, grid)) {
+      const horizon = lookupRadiusM(polygon, searchRadiusM)
+      for (const { index } of pointGridCandidates(polygon.lat, polygon.lon, horizon, grid)) {
         if (ownership && ownership.facilityCountries[index] !== country) continue
         const facility = facilities[index]
-        const edge = candidateEdgeM(facility, polygon, facility.searchRadiusM ?? SEARCH_RADIUS_M)
-        if (edge === null) continue
+        const candidate = candidateEdgeM(facility, polygon, facility.searchRadiusM ?? SEARCH_RADIUS_M)
+        if (candidate === null) continue
         const previous = best.get(index)
-        if (!previous || edge < previous.edge) best.set(index, { country, facility, square, row, edge, polygon, existingSourceId: sourceIds[row] })
+        const pick = { row, areaM2: polygon.areaM2, ...candidate }
+        if (!previous || candidateBeats(pick, { ...previous, areaM2: previous.polygon.areaM2 })) {
+          best.set(index, { country, facility, square, row, ...candidate, polygon, existingSourceId: sourceIds[row] })
+        }
       }
     }
   }
@@ -113,8 +118,8 @@ export async function enrichIndustrialFacilities(
   // Original source observation order is the stable final tie breaker.
   for (const [, winner] of [...best].sort((a, b) => a[0] - b[0])) {
     const current = contested.get(keyOf(winner))
-    if (!current || contestBeats({ ...winner.facility, edge: winner.edge },
-      { ...current.facility, edge: current.edge })) contested.set(keyOf(winner), winner)
+    if (!current || contestBeats({ ...winner.facility, edge: winner.edge, contained: winner.contained },
+      { ...current.facility, edge: current.edge, contained: current.contained })) contested.set(keyOf(winner), winner)
   }
   // The original containment tier follows point matching. Its final authority
   // enters the same priority and duplicate election, without a fabricated edge.
@@ -128,7 +133,7 @@ export async function enrichIndustrialFacilities(
   }
   const overlap: Array<OverlapWinner & { country: string }> = [...applicable.values()].map(winner => ({
     ...winner.polygon, ...winner.facility, lat: winner.polygon.lat, lon: winner.polygon.lon,
-    key: keyOf(winner), country: winner.country, edge: winner.edge,
+    key: keyOf(winner), country: winner.country, edge: winner.edge, contained: winner.contained,
   }))
   overlap.push(...[...incumbents].filter(([key]) => !applicable.has(key)).map(([, row]) => row))
   const pairsByCountry = (rows: Array<OverlapWinner & { country: string }>) => {

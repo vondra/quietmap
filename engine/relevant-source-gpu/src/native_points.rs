@@ -88,6 +88,9 @@ pub(super) fn points(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<
             nace_4digit: Some(short(batch, "nace_4digit", row)).filter(|v| *v > 0),
             area_m2,
             polygon_grid: &polygon_grid,
+            capacity_mw: float(batch, "capacity_mw", row).filter(|v| *v > 0.0),
+            capacity_mva: float(batch, "capacity_mva", row).filter(|v| *v > 0.0),
+            substation_class: byte(batch, "substation_class", row),
         }),
         _ => unreachable!(),
     })

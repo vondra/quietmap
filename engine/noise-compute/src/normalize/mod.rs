@@ -85,6 +85,9 @@ mod tests {
                 nace_4digit: None,
                 area_m2,
                 polygon_grid,
+                capacity_mw: None,
+                capacity_mva: None,
+                substation_class: 0,
             }),
             prepare_leisure_points(RawLeisureInput {
                 centroid_lat: 0.0,

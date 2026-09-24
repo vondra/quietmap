@@ -114,6 +114,7 @@ fn industrial_row_collects() {
             source_type: 0,
             name: "Plant".to_string(),
             ring_lonlat: None,
+            suppressed: false,
         }],
     );
     let data = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
@@ -143,6 +144,7 @@ fn industrial_gate_is_the_polygon_edge_not_its_centroid() {
                 centroid: mine_centroid,
                 source_type: 0,
                 name: "Mine".to_string(),
+                suppressed: false,
                 ring_lonlat: Some(vec![
                     (mine_west_edge, LAT - half_height),
                     (mine_east_edge, LAT - half_height),
@@ -157,6 +159,16 @@ fn industrial_gate_is_the_polygon_edge_not_its_centroid() {
                 source_type: 0,
                 name: "Far shed".to_string(),
                 ring_lonlat: None,
+                suppressed: false,
+            },
+            // A lifecycle-retired quarry at the receiver: silent either way.
+            fx::FixtureIndustrial {
+                osm_id: 102,
+                centroid: (LON, LAT),
+                source_type: 1,
+                name: "Disused quarry".to_string(),
+                ring_lonlat: None,
+                suppressed: true,
             },
         ],
     );
@@ -167,6 +179,7 @@ fn industrial_gate_is_the_polygon_edge_not_its_centroid() {
     let ids: Vec<i64> = data.industrial.iter().map(|p| p.osm_id).collect();
     assert!(ids.contains(&100), "the mine edge reaches: {ids:?}");
     assert!(!ids.contains(&101), "a 4.5 km point is past reach: {ids:?}");
+    assert!(!ids.contains(&102), "a suppressed quarry stays silent: {ids:?}");
 }
 
 #[test]

@@ -90,6 +90,13 @@ pub(super) fn collect_industrial(
                     nace_4digit: col_u16(batch, "nace_4digit")
                         .map(|a| a.value(i))
                         .filter(|&v| v > 0),
+                    // Power-class columns (absent in served files → engine
+                    // fallbacks: area density for solar, class median for MVA).
+                    capacity_mw: positive_value(col_f32(batch, "capacity_mw")),
+                    capacity_mva: positive_value(col_f32(batch, "capacity_mva")),
+                    substation_class: col_u8(batch, "substation_class")
+                        .map(|a| a.value(i))
+                        .unwrap_or(0),
                 },
             );
             let row_source_id = col_u16(batch, "source_id").map(|a| a.value(i)).unwrap_or(0);

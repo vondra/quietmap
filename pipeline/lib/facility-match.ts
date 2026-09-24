@@ -50,7 +50,37 @@ export function readPolygons(table: Table): MatchPolygon[] {
 // OSM subtype codes are owned by osm-extract/spill.rs; compatible NACE divisions
 // retain the dev1 quiet-address and monolithic-heavy-site classification gates.
 const HEAVY_SUBTYPE_NACE: Record<number, readonly number[]> = {
-  3: [5, 8], 4: [19, 20], 5: [23], 6: [24],
+  3: [5, 7, 8], 4: [19, 20], 5: [23], 6: [24],
+}
+
+// OSM industrial source_type classes the extractor owns (consumer contract v1):
+// turbines pipe their registry parameters through the wind enricher, never a
+// NACE stamp; a substation polygon IS its class — a nearby power-plant point
+// stamping 3511 onto it was the 7,166-row Tata-class bug.
+const TURBINE_SOURCE_TYPE = 10
+const SUBSTATION_SOURCE_TYPE = 12
+
+// Mirror of the engine's NACE base levels (division → base_lw at 1 ha, from
+// `engine/noise-compute/src/emission/industrial.rs::nace_profile`) — ONLY for
+// the "loudest contained facility stamps it" rule. The C1 spectral debt is
+// ignored (it never flips a >2 dB base gap); ties fall through to edge.
+// Update together with the engine arms.
+const NACE_DIVISION_BASE_LW: Record<number, number> = {
+  1: 70, 2: 70, 3: 70, 5: 99, 6: 92, 7: 99, 8: 99, 10: 90, 11: 90,
+  13: 88, 14: 88, 15: 88, 16: 93, 17: 93, 19: 96, 20: 94, 22: 90,
+  23: 100, 24: 100, 25: 93, 27: 90, 28: 90, 29: 93, 30: 93,
+  35: 97, 37: 89, 38: 95, 46: 84, 47: 84, 52: 86, 62: 60,
+}
+
+/** Comparator loudness of a facility NACE: 4-digit exceptions first (hydro
+ * 3512 is quieter than the division-35 thermal fallback; synthetic solar 3599
+ * compares at its legacy area level), then the division mirror. Unknown → −1,
+ * losing to any known profile. */
+export function naceBaseLw(nace4: number | undefined): number {
+  if (nace4 === undefined) return -1
+  if (nace4 === 3599) return 55
+  if (nace4 === 3512) return 90
+  return NACE_DIVISION_BASE_LW[Math.floor(nace4 / 100)] ?? -1
 }
 
 export function quietGateBlocks(subtype: number, nace4: number): boolean {
@@ -64,32 +94,72 @@ export function quietGateBlocks(subtype: number, nace4: number): boolean {
 
 const equivalentCircleRadiusM = (areaM2: number) => Math.sqrt(Math.max(areaM2, 0) / Math.PI)
 
+/** Grid lookup horizon for one polygon: the registry search radius, widened
+ * to the polygon's own equivalent radius so a facility it CONTAINS is found
+ * even past the 2 km proximity horizon (containment bypasses the radius). */
+export function lookupRadiusM(polygon: MatchPolygon, radiusM: number): number {
+  return Math.max(radiusM, equivalentCircleRadiusM(polygon.areaM2))
+}
+
 export function edgeDistM(facility: { lat: number; lon: number }, polygon: MatchPolygon): number {
   return flatDist(facility.lat, facility.lon, polygon.lat, polygon.lon) - equivalentCircleRadiusM(polygon.areaM2)
 }
 
 export function contestBeats(
-  a: { rank: number; year: number; id: number; edge?: number },
-  b: { rank: number; year: number; id: number; edge?: number },
+  a: { rank: number; year: number; id: number; edge?: number; contained?: boolean; nace4?: number },
+  b: { rank: number; year: number; id: number; edge?: number; contained?: boolean; nace4?: number },
 ): boolean {
   if (a.rank !== b.rank) return a.rank > b.rank
   if (a.year !== b.year) return a.year > b.year
   if (a.id !== b.id) return a.id > b.id
+  // Same registry: a contained point beats a merely near one (it is inside
+  // the plant), and among contained points the loudest NACE stamps the site
+  // (Tata: steel 2410 over chemicals 2011) — but only when both sides carry a
+  // NACE, so legacy duplicate elections without one keep their exact order.
+  if ((a.contained ?? false) !== (b.contained ?? false)) return a.contained ?? false
+  if (a.nace4 !== undefined && b.nace4 !== undefined) {
+    const loud = naceBaseLw(a.nace4) - naceBaseLw(b.nace4)
+    if (loud !== 0) return loud > 0
+  }
   return a.edge !== undefined && b.edge !== undefined && a.edge < b.edge
 }
 
-export function candidateEdgeM(facility: MatchFacility, polygon: MatchPolygon, radiusM: number): number | null {
-  // Turbines are native point sources; a nearby registry cannot claim their identity.
-  if (polygon.sourceType === 10 || quietGateBlocks(polygon.subtype, facility.nace4) ||
-      flatDist(facility.lat, facility.lon, polygon.lat, polygon.lon) >= radiusM) return null
-  return edgeDistM(facility, polygon)
+export interface MatchCandidate {
+  edge: number
+  contained: boolean
+}
+
+export function candidateEdgeM(facility: MatchFacility, polygon: MatchPolygon, radiusM: number): MatchCandidate | null {
+  // Turbines are native point sources and substations carry their own class;
+  // a nearby registry point cannot claim either identity.
+  if (polygon.sourceType === TURBINE_SOURCE_TYPE || polygon.sourceType === SUBSTATION_SOURCE_TYPE ||
+      quietGateBlocks(polygon.subtype, facility.nace4)) return null
+  const edge = edgeDistM(facility, polygon)
+  // The 2 km radius gates proximity only: a contained facility stamps from
+  // inside no matter how far the centroid sits.
+  if (edge >= 0 && flatDist(facility.lat, facility.lon, polygon.lat, polygon.lon) >= radiusM) return null
+  return { edge, contained: edge < 0 }
+}
+
+export interface CandidatePick { row: number; edge: number; contained: boolean; areaM2: number }
+
+/** Facility → polygon preference, shared by `bestCandidate` and the global
+ * sweep: the smallest CONTAINING polygon wins; among uncontained polygons
+ * the nearest edge wins (the original rule). */
+export function candidateBeats(a: CandidatePick, b: CandidatePick): boolean {
+  if (a.contained !== b.contained) return a.contained
+  if (a.contained && a.areaM2 !== b.areaM2) return a.areaM2 < b.areaM2
+  return a.edge < b.edge
 }
 
 export function bestCandidate(facility: MatchFacility, polygons: MatchPolygon[], radiusM: number) {
-  let best: { row: number; edge: number } | null = null
+  let best: (CandidatePick) | null = null
   for (const [row, polygon] of polygons.entries()) {
-    const edge = candidateEdgeM(facility, polygon, radiusM)
-    if (edge !== null && (!best || edge < best.edge)) best = { row, edge }
+    const candidate = candidateEdgeM(facility, polygon, radiusM)
+    if (candidate !== null) {
+      const pick = { row, areaM2: polygon.areaM2, ...candidate }
+      if (!best || candidateBeats(pick, best)) best = pick
+    }
   }
   return best
 }
@@ -103,6 +173,8 @@ export interface OverlapWinner {
   year: number
   id: number
   edge?: number
+  contained?: boolean
+  nace4?: number
 }
 
 // Accepted dev1 I-07 whole-site duplicate rule: >=10 ha, similar areas, coincident
