@@ -54,32 +54,6 @@ pub static IS_JET: [bool; NUM_CLASSES] = [
     true,  // FUSE_C56X
 ];
 
-/// Runway-roll, taxi, apron per-metre `LW'` (dB re 1 pW/m), per noise
-/// class. Hand-tuned per anchor typecode (see `RUNWAY_DB_BY_ANCHOR` in
-/// the generator) — `dep@200ft` overestimates runway-roll by 6-10 dB
-/// because flyover NPDs don't include ground absorption / engine
-/// baffling. Standard offsets: taxi = runway − 12 dB, apron = runway
-/// − 18 dB. Stored values ≡ legacy 1 km event-SEL anchors + `+9.01 dB
-/// = 10·log10(25/π)`; identity at the 1 km test point holds under the
-/// CNOSSOS-EU §2.5.5 line-source receiver formula.
-pub static GROUND_OPS_REFERENCE_LW_PER_METER_DB: [[f64; 3]; NUM_CLASSES] = [
-    [113.01, 101.01, 95.01], // WING_FALLBACK
-    [113.01, 101.01, 95.01], // WING_A320
-    [113.01, 101.01, 95.01], // WING_B738
-    [101.01, 89.01, 83.01],  // PROP_C172
-    [113.01, 101.01, 95.01], // WING_B38M
-    [117.01, 105.01, 99.01], // WING_B789
-    [113.01, 101.01, 95.01], // WING_A21N
-    [106.51, 94.51, 88.51],  // WING_A321
-    [103.11, 91.11, 85.11],  // WING_A20N
-    [113.01, 101.01, 95.01], // WING_A319
-    [109.01, 97.01, 91.01],  // FUSE_CRJ9
-    [117.01, 105.01, 99.01], // WING_B748
-    [103.01, 91.01, 85.01],  // HELICOPTER
-    [106.01, 94.01, 88.01],  // PROP_DH8D
-    [108.01, 96.01, 90.01],  // FUSE_C56X
-];
-
 /// Per-profile → noise class lookup (dense u8 index). Computed by
 /// Voronoi assignment to nearest anchor (L∞ on 20-D NPD vector,
 /// constrained to same Installation; helicopters pinned).

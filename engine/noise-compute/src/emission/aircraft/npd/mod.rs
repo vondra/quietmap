@@ -175,7 +175,7 @@ impl NpdProfile {
 pub use crate::emission::profiles_generated::{
     is_negligible_noise_typecode, is_non_aircraft_typecode, noise_class_of, profile_idx,
     CLASS_NAMES, CLASS_OF_PROFILE, CLASS_REP_PROFILE_IDX, FALLBACK_NOISE_CLASS,
-    FALLBACK_PROFILE_IDX, GROUND_OPS_REFERENCE_LW_PER_METER_DB, IS_JET, NUM_CLASSES, NUM_PROFILES,
+    FALLBACK_PROFILE_IDX, IS_JET, NUM_CLASSES, NUM_PROFILES,
     PROFILES,
 };
 
