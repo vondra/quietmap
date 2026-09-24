@@ -125,6 +125,19 @@ Annex I sub-activity letter, not sector. The India colour feed is deleted (CPCB
 colours score air/water/waste pollution, not noise); registry points never
 stamp substations or turbines.
 
+`leisure_v4` adds motorsport (10–15) and shooting (16–18) formula classes
+(readers accept v3 and v4; v3 rows are the v4 subset). These carry a class-TOTAL
+annual day Lw, not the area law: motorsport LW(1) + 10·lg(n) +
+10·lg(active hours / 4,380) with UBA REP-0310 per-vehicle levels (circuit 116
+touring proxy / n=15, motocross 114/7, kart 118/8, speedway 139/4, trial 95/2,
+other 116/10), default 100 days × 6 h, pink propagation spectrum; shooting LE
++ 10·lg(shots / 15.77 Ms) with RIVM sphere sums (rifle 139.0, pistol 133.6,
+shotgun 134.8), default 20,000 shots/yr, per-weapon octave spectra. Both are
+day-only (−50 evening/night) and reach past the 2 km leisure cap (industrial
+4 km reach, edge-gated). Raceway lines carry the emission as buffered thin
+polygons; enclosing motorsport polygons go silent (dropped or `suppressed`,
+honoured by popup and painter).
+
 ## Prepared road direction and traffic
 
 Final road Arrow carries `road_traffic_contract=1`, four non-null Float64

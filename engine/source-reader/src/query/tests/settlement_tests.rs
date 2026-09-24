@@ -91,6 +91,8 @@ fn leisure_folds_into_buildings_with_sport_tag() {
             centroid: (LON, LAT),
             sport: 3,
             name: "Court".to_string(),
+            contract_v4: false,
+            suppressed: false,
         }],
     );
     let data = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
@@ -99,6 +101,45 @@ fn leisure_folds_into_buildings_with_sport_tag() {
         data.buildings[0].source_type,
         noise_compute::types::LEISURE_TYPE_BASE + 3
     );
+}
+
+#[test]
+fn leisure_v4_formula_rows_reach_past_2km_and_silenced_rows_stay_out() {
+    // A v4 file: a speedway 3 km off (past the area-class horizon) collects
+    // with industrial reach; a pitch at the same distance does not; and an
+    // extractor-silenced enclosing polygon at the receiver stays out.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dir = fx::square_dir(tmp.path(), prague());
+    std::fs::create_dir_all(&dir).unwrap();
+    let m_per_deg_lon = grid::geo::m_per_deg_lon(LAT.to_radians());
+    let row = |osm_id: i64, east_m: f64, sport: u8, suppressed: bool| fx::FixtureLeisure {
+        osm_id,
+        centroid: (LON + east_m / m_per_deg_lon, LAT),
+        sport,
+        name: String::new(),
+        contract_v4: true,
+        suppressed,
+    };
+    fx::write_leisure_file(
+        &dir.join("leisure.arrow"),
+        &[
+            row(200, 3000.0, noise_compute::emission::leisure::MOTORSPORT_SPEEDWAY, false),
+            row(201, 3000.0, noise_compute::emission::leisure::PITCH, false),
+            row(202, 0.0, noise_compute::emission::leisure::MOTORSPORT_OTHER, true),
+        ],
+    );
+    let data = collect_sources_at_point(tmp.path(), LAT, LON).unwrap();
+    let ids: Vec<i64> = data.buildings.iter().map(|b| b.osm_id).collect();
+    assert!(ids.contains(&200), "3 km speedway collects: {ids:?}");
+    assert!(!ids.contains(&201), "3 km pitch stays out: {ids:?}");
+    assert!(!ids.contains(&202), "silenced polygon stays out: {ids:?}");
+    let speedway = data.buildings.iter().find(|b| b.osm_id == 200).unwrap();
+    assert_eq!(
+        speedway.source_type,
+        noise_compute::types::LEISURE_TYPE_BASE
+            + noise_compute::emission::leisure::MOTORSPORT_SPEEDWAY
+    );
+    assert!(speedway.max_radius_m > 2_000.0, "reach {}", speedway.max_radius_m);
 }
 
 #[test]

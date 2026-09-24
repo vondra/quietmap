@@ -26,7 +26,7 @@ use aircraft::{
     read_aircraft_batches_of_square_data, read_aircraft_stamps_of_square_data,
     AircraftPointQueryData,
 };
-use spatial::{BUILDING_QUERY_RADIUS_M, SHIP_QUERY_RADIUS_M};
+use spatial::{LEISURE_QUERY_RADIUS_M, SHIP_QUERY_RADIUS_M};
 use square_store::store::{load_square, SquareData};
 use std::path::Path;
 
@@ -111,7 +111,7 @@ pub fn collect_from_square_data(
         if served("leisure") {
             let batches = data
                 .leisure
-                .batches_within(lat, lng, BUILDING_QUERY_RADIUS_M)?;
+                .batches_within(lat, lng, LEISURE_QUERY_RADIUS_M)?;
             settlement::collect_leisure(&batches, lat, lng, &mut all_buildings);
         }
         point_sources::collect_industrial(data, lat, lng, &mut all_industrial)?;

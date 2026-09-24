@@ -66,16 +66,23 @@ pub fn load_sources(
             if name == "leisure" {
                 // The painter must refuse a stamp it does not know for the same
                 // reason the popup does: `leisure_v3` added the car park classes,
-                // and an older binary would draw one as a sports pitch.
+                // and an older binary would draw one as a sports pitch. v4 adds
+                // the motorsport/shooting formula classes; the geometry contract
+                // is unchanged, so this build reads both stamps.
                 let metadata = reader.schema().metadata().clone();
+                let leisure_stamps = [
+                    square_store::store::LEISURE_CONTRACT_V3,
+                    square_store::store::LEISURE_CONTRACT_V4,
+                ];
+                let grid_stamps = [square_store::store::GRID_CONTRACT_Z30];
                 for (key, expected) in [
-                    ("leisure_contract", square_store::store::LEISURE_CONTRACT_V3),
-                    ("grid", square_store::store::GRID_CONTRACT_Z30),
+                    ("leisure_contract", leisure_stamps.as_slice()),
+                    ("grid", grid_stamps.as_slice()),
                 ] {
                     let found = metadata.get(key).map(String::as_str);
                     anyhow::ensure!(
-                        found == Some(expected),
-                        "{relative}: {key} is {found:?}, this build reads {expected}"
+                        found.is_some_and(|found| expected.contains(&found)),
+                        "{relative}: {key} is {found:?}, this build reads {expected:?}"
                     );
                 }
             }

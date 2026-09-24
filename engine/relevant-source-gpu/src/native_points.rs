@@ -18,7 +18,7 @@ pub(super) fn points(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<
     {
         return Ok(Vec::new());
     }
-    if name == "industrial" && byte(batch, "suppressed", row) != 0 {
+    if (name == "industrial" || name == "leisure") && byte(batch, "suppressed", row) != 0 {
         return Ok(Vec::new());
     }
     if name == "ships" {

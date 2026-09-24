@@ -631,7 +631,9 @@ pub fn prepare_ship_points(input: RawShipInput) -> Option<(Vec<PreparedPoint>, s
 }
 
 /// Leisure areas are LOCAL activity sources — cap reach like buildings (2 km),
-/// never the 4 km industrial-plant reach.
+/// never the 4 km industrial-plant reach. Motorsport and shooting are the
+/// exception: a speedway at 136 dB carries kilometres, so formula classes
+/// reach past the 2 km cap (industrial reach).
 const LEISURE_MAX_RADIUS_M: f64 = 2_000.0;
 
 /// Discretise one leisure AREA source into per-cell [`PreparedPoint`]s — the
@@ -640,8 +642,38 @@ const LEISURE_MAX_RADIUS_M: f64 = 2_000.0;
 /// not roof plant) with an Lw-derived reach capped at 2 km. The level is the
 /// AREA-scaled [`leisure::leisure_lw`] (UNIFIED with buildings — `settlement::area_lw`);
 /// a node with no polygon falls back to the profile's reference footprint.
-/// Returns `[]` when the source is sub-audible.
+/// Formula classes (motorsport/shooting) instead spread their class-TOTAL Lw
+/// over the row geometry (buffered raceway / range polygon) with industrial
+/// reach. Returns `[]` when the source is sub-audible.
 pub fn prepare_leisure_points(input: RawLeisureInput<'_>) -> Vec<PreparedPoint> {
+    if let Some(formula) = leisure::leisure_formula(input.sport) {
+        let lw_day = bands_to_f32(leisure::leisure_formula_bands(&formula));
+        let (lw_evening, lw_night) =
+            period_offset_bands(lw_day, formula.evening_offset, formula.night_offset);
+        // The total is geometry-independent; the area only sets the grid. A
+        // geometry-less row still emits from its centroid point.
+        let area = resolve_area_m2(input.area_m2, input.polygon_grid, 10000.0);
+        return discretize_area_source(
+            AreaSource {
+                polygon_grid: input.polygon_grid,
+                centroid_lat: input.centroid_lat,
+                centroid_lon: input.centroid_lon,
+                area_m2: area,
+                grid_threshold_m2: INDUSTRIAL_AREA_THRESHOLD_M2,
+                cell_m: INDUSTRIAL_AREA_CELL_M,
+                source_height_m: crate::constants::SOURCE_HEIGHT_LEISURE as f32,
+                reach: PointReach::LoudestDayBand {
+                    cap_m: crate::constants::INDUSTRIAL_MAX_RADIUS,
+                },
+                floors: 0,
+                hub_height_m: None,
+                rated_power_kw: None,
+            },
+            lw_day,
+            lw_evening,
+            lw_night,
+        );
+    }
     let profile = leisure::leisure_profile(input.sport);
     let area = resolve_area_m2(input.area_m2, input.polygon_grid, profile.ref_area_m2);
     let lw = leisure::leisure_lw(&profile, area);
@@ -980,6 +1012,31 @@ mod tests {
         let day: [f64; NUM_BANDS] = std::array::from_fn(|i| points[0].lw_day[i] as f64);
         let aw = crate::propagation::iso9613::a_weighted_total(&day);
         assert!((aw - 81.0).abs() < 0.2, "padel day LwA: {aw}");
+    }
+
+    /// Formula classes spread their class-TOTAL Lw (geometry-independent)
+    /// with industrial reach: a speedway point reaches past the 2 km leisure
+    /// cap, day-only.
+    #[test]
+    fn prepared_leisure_speedway_reaches_past_2km() {
+        let mk = |area: f64| {
+            prepare_leisure_points(RawLeisureInput {
+                centroid_lat: 50.0,
+                centroid_lon: 14.0,
+                sport: leisure::MOTORSPORT_SPEEDWAY,
+                area_m2: Some(area),
+                polygon_grid: &[],
+            })
+        };
+        let points = mk(20_000.0);
+        assert_eq!(points.len(), 1);
+        let day: [f64; NUM_BANDS] = std::array::from_fn(|i| points[0].lw_day[i] as f64);
+        let aw = crate::propagation::iso9613::a_weighted_total(&day);
+        // 139 + 10·lg4 + 10·lg(600/4380) = 136.4, whatever the footprint.
+        assert!((aw - 136.4).abs() < 0.1, "speedway day LwA: {aw}");
+        assert!((mk(5_000.0)[0].lw_day[4] - points[0].lw_day[4]).abs() < 1e-3);
+        assert_eq!(points[0].max_radius_m, crate::constants::INDUSTRIAL_MAX_RADIUS);
+        assert!((points[0].lw_night[4] - points[0].lw_day[4] + 50.0).abs() < 1e-3);
     }
 
     /// Unified AREA scaling (replaces the old per-seat capacity build-up): a

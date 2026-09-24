@@ -1,6 +1,6 @@
 //! Building and leisure emission rows become the settlement point sources.
 
-use super::spatial::BUILDING_QUERY_RADIUS_M;
+use super::spatial::{BUILDING_QUERY_RADIUS_M, LEISURE_QUERY_RADIUS_M};
 use arrow::array::Array;
 use square_store::grid_cols::{
     col_binary, col_f32, col_i32, col_i64, col_str, col_u8, decode_geom, grid_cell_lonlat,
@@ -136,16 +136,38 @@ pub fn query_leisure_from_batches(
         let name = col_str(batch, "name");
         let geom = col_binary(batch, "geom");
 
+        let suppressed = col_u8(batch, "suppressed");
         for i in 0..n {
-            let (c_lon, c_lat) = grid_cell_lonlat(cgx.value(i), cgy.value(i));
-            let dist = grid::geo::flat_dist(lat, lon, c_lat, c_lon);
-            if dist > max_radius {
+            // Silenced by the extractor (an enclosing motorsport polygon whose
+            // raceway lines carry the emission; an indoor range) — absent in
+            // v3 files, where no row is silenced.
+            if suppressed.map(|a| a.value(i)).unwrap_or(0) != 0 {
                 continue;
             }
+            let (c_lon, c_lat) = grid_cell_lonlat(cgx.value(i), cgy.value(i));
+            let sport_id = sport.map(|a| a.value(i)).unwrap_or(0);
             let polygon_grid: grid::poly::GridRing = geom
                 .filter(|a| !a.is_null(i))
                 .and_then(|a| decode_geom(Some(a.value(i))))
                 .unwrap_or_default();
+            // Class-aware gate: area classes keep the 2 km centroid horizon;
+            // formula classes (motorsport/shooting) reach like industrial
+            // rows — polygon edge within 4 km.
+            let dist = grid::geo::flat_dist(lat, lon, c_lat, c_lon);
+            if noise_compute::emission::leisure::leisure_formula(sport_id).is_some() {
+                let ring_radius_m = polygon_grid
+                    .iter()
+                    .map(|&(gx, gy)| {
+                        let (lon, lat) = grid_cell_lonlat(gx, gy);
+                        grid::geo::flat_dist(c_lat, c_lon, lat, lon)
+                    })
+                    .fold(0.0f64, f64::max);
+                if dist - ring_radius_m > max_radius {
+                    continue;
+                }
+            } else if dist > BUILDING_QUERY_RADIUS_M {
+                continue;
+            }
             results.push(LeisureResult {
                 osm_id: osm_id.value(i),
                 centroid_lat: c_lat,
@@ -216,7 +238,7 @@ pub(super) fn collect_leisure(
     lng: f64,
     output: &mut Vec<noise_compute::types::PointSource>,
 ) {
-    let leisure = query_leisure_from_batches(leisure_batches, lat, lng, BUILDING_QUERY_RADIUS_M);
+    let leisure = query_leisure_from_batches(leisure_batches, lat, lng, LEISURE_QUERY_RADIUS_M);
     for lz in leisure {
         let source_type = noise_compute::types::LEISURE_TYPE_BASE.saturating_add(lz.sport);
         let prepared_points = noise_compute::normalize::prepare_leisure_points(

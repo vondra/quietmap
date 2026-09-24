@@ -139,6 +139,11 @@ a class median). Wind-farm outlines themselves are silent — only the turbines 
 area and assumed operating hours. These extensions beyond the transport standards are
 not measurements of individual heat pumps, shops or sports grounds.
 
+Race circuits, motocross, kart, speedway and trial tracks use published per-vehicle
+levels with typical grids (15, 7, 8, 4 and 2 vehicles), 100 days × 6 hours a year,
+daytime only. Outdoor shooting ranges use published per-shot levels (rifle, pistol,
+shotgun) with 20,000 shots a year, daytime only.
+
 Open car parks use the [Bavarian parking study (LfU, 2007, sixth edition)](https://www.lfu.bayern.de/publikationen/get_pdf.htm?art_nr=lfu_lae_00045&pdf_nr=0),
 with 63 dB(A) sound power for one movement per hour and its searching-traffic term.
 We assume 0.4 movements per space per hour from 06:00–22:00 and 0.05 from 22:00–06:00,

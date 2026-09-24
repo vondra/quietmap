@@ -479,21 +479,28 @@ pub fn write_railways_file(path: &Path, rows: &[FixtureRail]) {
     w.finish().unwrap();
 }
 
-/// One leisure row.
+/// One leisure row. `contract_v4` stamps the FILE v4 (all rows in a file share
+/// one stamp — pass it on any row); `suppressed` marks extractor-silenced
+/// rows v4 readers must skip.
 pub struct FixtureLeisure {
     pub osm_id: i64,
     pub centroid: (f64, f64),
     pub sport: u8,
     pub name: String,
+    pub contract_v4: bool,
+    pub suppressed: bool,
 }
 
-/// A leisure.arrow on disk in the v2 (grid) layout, with the contract stamp.
+/// A leisure.arrow on disk in the v2 (grid) layout, with the contract stamp
+/// (v4 when any row asks for it — one stamp per file).
 pub fn write_leisure_file(path: &Path, rows: &[FixtureLeisure]) {
+    let stamp = if rows.iter().any(|r| r.contract_v4) {
+        square_store::store::LEISURE_CONTRACT_V4
+    } else {
+        square_store::store::LEISURE_CONTRACT_V3
+    };
     let mut metadata = std::collections::HashMap::new();
-    metadata.insert(
-        "leisure_contract".to_string(),
-        square_store::store::LEISURE_CONTRACT_V3.to_string(),
-    );
+    metadata.insert("leisure_contract".to_string(), stamp.to_string());
     metadata.insert(
         "grid".to_string(),
         square_store::store::GRID_CONTRACT_Z30.to_string(),
@@ -508,6 +515,7 @@ pub fn write_leisure_file(path: &Path, rows: &[FixtureLeisure]) {
             Field::new("name", DataType::Utf8, true),
             Field::new("geom", DataType::Binary, true),
             Field::new("area_m2", DataType::Float32, true),
+            Field::new("suppressed", DataType::UInt8, false),
         ])
         .with_metadata(metadata),
     );
@@ -535,6 +543,9 @@ pub fn write_leisure_file(path: &Path, rows: &[FixtureLeisure]) {
             }))),
             Arc::new(Float32Array::from_iter_values(
                 rows.iter().map(|_| 400.0f32),
+            )),
+            Arc::new(UInt8Array::from_iter_values(
+                rows.iter().map(|r| u8::from(r.suppressed)),
             )),
         ],
     )

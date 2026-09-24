@@ -18,7 +18,8 @@ use crate::types::NUM_BANDS;
 
 /// Leisure `sport`/kind class ids written by `osm-extract::spill` into
 /// `leisure.arrow`. Stable once shipped: the arrow stores the raw u8, so a new
-/// id is a new file contract (`leisure_v3` carries the car parks, 8 and 9).
+/// id is a new file contract (`leisure_v4` carries motorsport 10–15 and
+/// shooting 16–18 on top of the `leisure_v3` classes below).
 /// 0 is the generic-pitch default so an untyped `leisure=pitch` still emits.
 pub const PITCH: u8 = 0;
 pub const PADEL: u8 = 1;
@@ -40,9 +41,31 @@ pub const CAR_PARK: u8 = 8;
 /// Street-side / lane parking — the same movements on a strip with no aisle of
 /// its own, so it holds a space per 13.3 m² where a lot needs 23.8.
 pub const CAR_PARK_STREET: u8 = 9;
+/// Circuit car racing (touring-car proxy) — raceway lines, not the infield.
+pub const MOTORSPORT_CIRCUIT: u8 = 10;
+/// Motocross (supermoto rides along — same machines on tarmac).
+pub const MOTORSPORT_MOTOCROSS: u8 = 11;
+/// Kart tracks (race-kart default; rental-only operation is ~17 dB lower).
+pub const MOTORSPORT_KART: u8 = 12;
+/// Speedway (4 riders a heat — the FIM heat size).
+pub const MOTORSPORT_SPEEDWAY: u8 = 13;
+/// Motorcycle trials (overstates the rarer bicycle-trial parks — OSM does not
+/// split `sport=trial` — until a motor tag does).
+pub const MOTORSPORT_TRIAL: u8 = 14;
+/// Untyped motorsport — the honest middle for `sport=motor` on a polygon.
+pub const MOTORSPORT_OTHER: u8 = 15;
+/// Rifle shooting (.308) — also the default for an untyped outdoor range.
+pub const SHOOTING_RIFLE: u8 = 16;
+/// Pistol shooting (9 mm).
+pub const SHOOTING_PISTOL: u8 = 17;
+/// Shotgun shooting (12 ga, clay shot).
+pub const SHOOTING_SHOTGUN: u8 = 18;
 
 /// Map an OSM `sport=*` value (lower-cased) to a leisure class id. `leisure=*`
 /// kind is the fallback when `sport` is absent (resolved in `spill.rs`).
+/// The canonical map — `osm-extract::ids` transcribes it, and the extractor
+/// refines the type-blind arms (`motor` on a raceway LINE is a circuit; an
+/// untyped outdoor range splits by `shooting=*`/name evidence, default rifle).
 pub fn sport_class(sport: &str) -> Option<u8> {
     Some(match sport {
         "padel" => PADEL,
@@ -52,6 +75,14 @@ pub fn sport_class(sport: &str) -> Option<u8> {
         "soccer" | "football" | "american_football" | "rugby" | "rugby_union" | "rugby_league"
         | "field_hockey" | "hockey" | "baseball" | "cricket" | "multi" => PITCH,
         "swimming" => POOL,
+        "autocross" | "rallycross" | "car_racing" | "formula_one" | "road_racing" | "drifting"
+        | "stockcar" => MOTORSPORT_CIRCUIT,
+        "motocross" | "supermoto" | "enduro" => MOTORSPORT_MOTOCROSS,
+        "karting" | "kart" | "go_kart" => MOTORSPORT_KART,
+        "speedway" => MOTORSPORT_SPEEDWAY,
+        "trial" => MOTORSPORT_TRIAL,
+        "motor" | "motorsport" => MOTORSPORT_OTHER,
+        "shooting" => SHOOTING_RIFLE,
         _ => return None,
     })
 }
@@ -277,9 +308,9 @@ pub fn leisure_profile(sport: u8) -> LeisureProfile {
             night_offset: -10.0, // floodlit pitches run to ~22:00
             m2_per_space: None,
         },
-        // An id this engine does not know can only come from a file that lies
-        // about its own `leisure_v3` stamp (a new class bumps the contract). We
-        // cannot say what it is, so it says nothing: `lw` lands under the
+        // An id this engine does not know (19+, or a v4 id read from a v3
+        // file that lies about its stamp — a new class bumps the contract).
+        // We cannot say what it is, so it says nothing: `lw` lands under the
         // `prepare_leisure_points` audibility gate for any area, exactly as
         // `settlement::SILENT` does. Guessing "sports pitch" would put a
         // plausible, wrong level on the map instead.
@@ -295,10 +326,109 @@ pub fn leisure_profile(sport: u8) -> LeisureProfile {
     }
 }
 
+/// Day-period hours per year (12 h × 365) — the annualizer motorsport duty
+/// spreads active hours over, and ×3600 s the shooting annualizer.
+pub const DAY_PERIOD_HOURS_PER_YEAR: f64 = 4_380.0;
+
+/// Default motorsport activity without permit data: 100 days × 6 h, stated on
+/// /about. Bounded below by the UK permitted-development 14 days/yr (CIEH
+/// 2003) and event noise-day counts (Zandvoort 12); replaced from
+/// permits/registers where available.
+pub const MOTORSPORT_DEFAULT_ACTIVE_HOURS: f64 = 600.0;
+
+/// Default civil-range activity without register data: 20,000 shots/yr,
+/// stated on /about (Zürich range register 64-ZH carries per-range shots and
+/// half-days as the replacement source). Bounded below by the UK 28-day clay
+/// rule (CIEH 2003).
+pub const SHOOTING_DEFAULT_SHOTS_PER_YEAR: f64 = 20_000.0;
+
+/// Pink-noise reference spectrum (unweighted, rel 1 kHz) — the octave shape
+/// REP-0310 §4.2.3 mandates for motorsport propagation.
+const MOTORSPORT_SPECTRUM: [f64; NUM_BANDS] = [12.0, 9.0, 6.0, 3.0, 0.0, -3.0, -6.0, -9.0];
+
+/// Single-shot octave spectra (unweighted, rel 1 kHz): RIVM Defensie emission
+/// table 2024-10-10 (Omgevingsregeling bijlage XVIIIc data), energy-summed
+/// over the sphere per band — Glock 9 mm BALL (ID 40), Accuracy AW .308 Ball
+/// (ID 274), shotgun 12 ga No. 7 (ID 106, the clay shot). The table stops at
+/// 4 kHz; the 8 kHz entries continue the 2→4 kHz slope (marked EST). Shots are
+/// directional (9 mm reads +4.8 forward / −7 rear of the omni sum) — the
+/// engine has no direction axis, so downrange is underestimated and uprange
+/// overestimated by that much.
+const SHOT_SPECTRUM_RIFLE: [f64; NUM_BANDS] = [-15.0, -7.3, -0.2, 2.4, 0.0, -4.4, -5.7, -7.0]; // 8k EST
+const SHOT_SPECTRUM_PISTOL: [f64; NUM_BANDS] = [-25.4, -16.4, -7.5, -1.2, 0.0, -5.8, -9.7, -13.6]; // 8k EST
+const SHOT_SPECTRUM_SHOTGUN: [f64; NUM_BANDS] = [-15.6, -7.5, -0.5, 1.4, 0.0, -3.4, -6.1, -8.8]; // 8k EST
+
+/// A formula-class emission: annual day Lw (a TOTAL, not per-area — the prep
+/// path spreads it over the row geometry), spectrum, and day-only offsets.
+/// Evening/night are effectively silent (−50): racing and shooting are
+/// daytime activities; floodlit night races are unmodelled.
+pub struct FormulaEmission {
+    pub lw_day: f64,
+    pub spectrum: [f64; NUM_BANDS],
+    pub evening_offset: f64,
+    pub night_offset: f64,
+}
+
+/// Formula emission for the `leisure_v4` motorsport (10–15) and shooting
+/// (16–18) classes; `None` for the area-law classes 0–9 and unknown ids.
+///
+/// Motorsport annual Lw = LW(1) + 10·lg(n) + 10·lg(active hours / 4,380),
+/// day-only. LW(1) is the per-vehicle energy-equivalent level of UBA Austria
+/// REP-0310 Table 6 (after LfU Bayern 1999), n the simultaneously driving
+/// vehicles at full occupancy: circuit 15 (club-race grid; touring-car 116 is
+/// the proxy — REP-0310 has no road-racing car class), motocross 7, kart 8
+/// (Pop-Kart national 118 — the race use; rental-only is ~17 dB lower),
+/// speedway 4 (FIM heat), trial 2, other 10 (touring proxy). Duty is the class
+/// default 100 days × 6 h. Geometry: the extractor buffers each raceway LINE
+/// into a thin polygon carrying this total; the enclosing motorsport polygon
+/// goes silent (dropped, or `suppressed`).
+///
+/// Shooting annual Lw = LE + 10·lg(shots / 15.77 Ms), day-only: the
+/// single-shot energy LE spread over the day period's 15,768,000 s/yr. LE is
+/// the RIVM sphere sum — rifle (.308) 139.0, pistol (9 mm) 133.6, shotgun
+/// (12 ga) 134.8 — ASSUMED to be the per-shot energy level (the table states
+/// no reference quantity; TNO 2014-R10135 would confirm it). Shots default to
+/// 20,000/yr. Indoor ranges never reach this layer (they carry `building=*`).
+pub fn leisure_formula(sport: u8) -> Option<FormulaEmission> {
+    const DAY_ONLY: (f64, f64) = (-50.0, -50.0);
+    let motorsport = |lw1: f64, n: f64| FormulaEmission {
+        lw_day: lw1 + 10.0 * n.log10()
+            + 10.0 * (MOTORSPORT_DEFAULT_ACTIVE_HOURS / DAY_PERIOD_HOURS_PER_YEAR).log10(),
+        spectrum: MOTORSPORT_SPECTRUM,
+        evening_offset: DAY_ONLY.0,
+        night_offset: DAY_ONLY.1,
+    };
+    let shooting = |le: f64, spectrum: [f64; NUM_BANDS]| FormulaEmission {
+        lw_day: le
+            + 10.0
+                * (SHOOTING_DEFAULT_SHOTS_PER_YEAR / (DAY_PERIOD_HOURS_PER_YEAR * 3600.0)).log10(),
+        spectrum,
+        evening_offset: DAY_ONLY.0,
+        night_offset: DAY_ONLY.1,
+    };
+    Some(match sport {
+        MOTORSPORT_CIRCUIT => motorsport(116.0, 15.0),
+        MOTORSPORT_MOTOCROSS => motorsport(114.0, 7.0),
+        MOTORSPORT_KART => motorsport(118.0, 8.0),
+        MOTORSPORT_SPEEDWAY => motorsport(139.0, 4.0),
+        MOTORSPORT_TRIAL => motorsport(95.0, 2.0),
+        MOTORSPORT_OTHER => motorsport(116.0, 10.0),
+        SHOOTING_RIFLE => shooting(139.0, SHOT_SPECTRUM_RIFLE),
+        SHOOTING_PISTOL => shooting(133.6, SHOT_SPECTRUM_PISTOL),
+        SHOOTING_SHOTGUN => shooting(134.8, SHOT_SPECTRUM_SHOTGUN),
+        _ => return None,
+    })
+}
+
 /// Emission bands for a leisure area (day period), normalized so
 /// `a_weighted_total(bands) == lw` (same contract as buildings).
 pub fn leisure_emission_bands(profile: &LeisureProfile, lw: f64) -> [f64; NUM_BANDS] {
     super::spectrum::normalized_emission_bands(lw, &profile.spectrum)
+}
+
+/// Emission bands for a formula class (day period), same normalization.
+pub fn leisure_formula_bands(emission: &FormulaEmission) -> [f64; NUM_BANDS] {
+    super::spectrum::normalized_emission_bands(emission.lw_day, &emission.spectrum)
 }
 
 /// Leisure Lw — the shared [`crate::emission::settlement::area_lw`] over the
@@ -336,6 +466,49 @@ mod tests {
                 "sport {s}: radiated {aw:.6} != lw {lw:.6}"
             );
         }
+        for s in [
+            MOTORSPORT_CIRCUIT,
+            MOTORSPORT_MOTOCROSS,
+            MOTORSPORT_KART,
+            MOTORSPORT_SPEEDWAY,
+            MOTORSPORT_TRIAL,
+            MOTORSPORT_OTHER,
+            SHOOTING_RIFLE,
+            SHOOTING_PISTOL,
+            SHOOTING_SHOTGUN,
+        ] {
+            let emission = leisure_formula(s).unwrap();
+            let aw = a_weighted_total(&leisure_formula_bands(&emission));
+            assert!(
+                (aw - emission.lw_day).abs() < 1e-6,
+                "sport {s}: radiated {aw:.6} != lw {:.6}",
+                emission.lw_day
+            );
+        }
+    }
+
+    /// The w7-sources evidence pilots, pinned: Most/Brands D100 (circuit 116,
+    /// n=15, 600 h) → 119.1; Hodonín MX D100 (114, n≈7) → 113.6±0.2; Tatra
+    /// rifle/clay and Hodonice IPSC N20k → 110.0/105.8/104.6.
+    #[test]
+    fn formula_classes_reproduce_the_evidence_pilots() {
+        let lw = |s: u8| leisure_formula(s).unwrap().lw_day;
+        assert!((lw(MOTORSPORT_CIRCUIT) - 119.1).abs() < 0.05, "circuit {}", lw(MOTORSPORT_CIRCUIT));
+        assert!((lw(MOTORSPORT_MOTOCROSS) - 113.6).abs() < 0.25, "mx {}", lw(MOTORSPORT_MOTOCROSS));
+        assert!((lw(SHOOTING_RIFLE) - 110.0).abs() < 0.05, "rifle {}", lw(SHOOTING_RIFLE));
+        assert!((lw(SHOOTING_SHOTGUN) - 105.8).abs() < 0.05, "shotgun {}", lw(SHOOTING_SHOTGUN));
+        assert!((lw(SHOOTING_PISTOL) - 104.6).abs() < 0.05, "pistol {}", lw(SHOOTING_PISTOL));
+        // Day-only: evening and night effectively silent on every formula class.
+        for s in 10..=18u8 {
+            let emission = leisure_formula(s).unwrap();
+            assert_eq!(emission.evening_offset, -50.0, "sport {s} evening");
+            assert_eq!(emission.night_offset, -50.0, "sport {s} night");
+        }
+        // Area classes have no formula; unknown ids have neither.
+        assert!(leisure_formula(PITCH).is_none());
+        assert!(leisure_formula(CAR_PARK_STREET).is_none());
+        assert!(leisure_formula(19).is_none());
+        assert!(leisure_formula(u8::MAX).is_none());
     }
 
     /// The plan's loudness ordering must hold (each at its reference court):
@@ -414,11 +587,12 @@ mod tests {
         assert_eq!(leisure_profile(PITCH).m2_per_space, None);
     }
 
-    /// A class id outside `leisure_v3` can only come from a file that lies about
-    /// its stamp. It must say nothing rather than sound like a football pitch.
+    /// A class id outside `leisure_v4` (19+) can only come from a file that
+    /// lies about its stamp. It must say nothing rather than sound like a
+    /// football pitch.
     #[test]
     fn an_unknown_class_emits_nothing() {
-        let unknown = leisure_profile(CAR_PARK_STREET + 1);
+        let unknown = leisure_profile(SHOOTING_SHOTGUN + 1);
         for area in [10.0, 1_000.0, 100_000.0] {
             assert!(
                 leisure_lw(&unknown, area) < 10.0,
@@ -436,6 +610,13 @@ mod tests {
         assert_eq!(sport_class("soccer"), Some(PITCH));
         assert_eq!(sport_class("basketball"), Some(BASKETBALL));
         assert_eq!(sport_class("swimming"), Some(POOL));
+        assert_eq!(sport_class("motocross"), Some(MOTORSPORT_MOTOCROSS));
+        assert_eq!(sport_class("karting"), Some(MOTORSPORT_KART));
+        assert_eq!(sport_class("speedway"), Some(MOTORSPORT_SPEEDWAY));
+        assert_eq!(sport_class("trial"), Some(MOTORSPORT_TRIAL));
+        assert_eq!(sport_class("autocross"), Some(MOTORSPORT_CIRCUIT));
+        assert_eq!(sport_class("motor"), Some(MOTORSPORT_OTHER));
+        assert_eq!(sport_class("shooting"), Some(SHOOTING_RIFLE));
         assert_eq!(sport_class("chess"), None);
     }
 }
