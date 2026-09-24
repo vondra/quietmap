@@ -80,6 +80,8 @@ npm --prefix server ci
            && node scripts/activate-build.mjs && npm start)
 ```
 
+Each release directory holds `release.json`: the product commit, whether the checkout
+was dirty, build time and SHA-256 of the packaged server source, frontend and native addon.
 `PREPARED_YEAR_DIR` points the server at a prepared year outside the checkout;
 `DATA_YEAR` selects the year; `PORT` and `HOST` select the listener.
 
