@@ -3,10 +3,16 @@
 use super::selection::trace_identity;
 use super::{parse_trace, AircraftTrace};
 use anyhow::{Context, Result};
+use rayon::prelude::*;
 use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+/// Members and compressed bytes parsed together; a batch bounds the bytes
+/// held beside the parsed traces.
+const PARSE_BATCH_MEMBERS: usize = 4096;
+const PARSE_BATCH_BYTES: usize = 256 << 20;
 
 /// One provider-day archive walk: one whole trace per aircraft address plus
 /// the trace members that failed to decode.
@@ -41,6 +47,23 @@ pub fn read_day_archive(day_dir: &Path) -> Result<DayArchiveRead> {
 
     let mut traces = Vec::new();
     let mut corrupt: Vec<(String, String)> = Vec::new();
+    // TAR reading is sequential; inflating and parsing are not. Members are
+    // parsed in bounded batches, in archive order, so the output is unchanged.
+    let mut batch: Vec<(String, Vec<u8>)> = Vec::with_capacity(PARSE_BATCH_MEMBERS);
+    let mut batch_bytes = 0usize;
+    let mut parse_batch = |batch: &mut Vec<(String, Vec<u8>)>| {
+        let parsed: Vec<_> = std::mem::take(batch)
+            .into_par_iter()
+            .map(|(path, bytes)| (path, parse_trace(bytes.as_slice())))
+            .collect();
+        for (path, result) in parsed {
+            match result {
+                Ok(Some(trace)) => traces.push(trace),
+                Ok(None) => {}
+                Err(error) => corrupt.push((path, format!("{error:#}"))),
+            }
+        }
+    };
     for entry in archive.entries()? {
         let mut entry =
             entry.with_context(|| format!("read TAR entry in {}", day_dir.display()))?;
@@ -55,12 +78,14 @@ pub fn read_day_archive(day_dir: &Path) -> Result<DayArchiveRead> {
         entry
             .read_to_end(&mut gz_bytes)
             .with_context(|| format!("read {path_str} in {}", day_dir.display()))?;
-        match parse_trace(gz_bytes.as_slice()) {
-            Ok(Some(trace)) => traces.push(trace),
-            Ok(None) => {}
-            Err(error) => corrupt.push((path_str, format!("{error:#}"))),
+        batch_bytes += gz_bytes.len();
+        batch.push((path_str, gz_bytes));
+        if batch.len() >= PARSE_BATCH_MEMBERS || batch_bytes >= PARSE_BATCH_BYTES {
+            parse_batch(&mut batch);
+            batch_bytes = 0;
         }
     }
+    parse_batch(&mut batch);
     let traces = super::selection::select_whole_traces(traces);
     let intact: HashSet<(bool, u32)> = traces
         .iter()
