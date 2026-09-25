@@ -118,12 +118,12 @@ test('Swiss join keeps totals without classes and skips the unlocatable', () => 
   )
 })
 
-test('Swiss pinned loader rejects bytes outside the admitted release source', () => {
+test('Swiss pinned loader rejects bytes outside the admitted release source', async () => {
   const enrichmentDirectory = join(DIRECTORY, 'source')
   mkdirSync(join(enrichmentDirectory, 'ch'), { recursive: true })
   writeFileSync(join(enrichmentDirectory, 'ch', 'sasvz-2024-jahresergebnisse.xlsx'), 'not a workbook')
   writeFileSync(join(enrichmentDirectory, 'ch', 'sasvz-messstellen-2026-04.xlsx'), 'not a workbook')
-  assert.rejects(
+  await assert.rejects(
     () =>
       loadSwissSasvzSource({
         preparedDirectory: join(DIRECTORY, 'unused'),
