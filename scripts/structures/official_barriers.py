@@ -72,19 +72,30 @@ def replacement_tree(official_rows):
     return STRtree(framed), framed, reference
 
 
-def osm_segment_is_replaced(start_lon, start_lat, end_lon, end_lat, tree, framed, reference):
-    """An OSM micro-segment midpoint within the replace distance of an official
-    screened line is the same wall and the OSM copy goes."""
-    mid_lon = reference + (qmgrid.wrapped_longitude_delta(reference, start_lon)
-                           + qmgrid.wrapped_longitude_delta(reference, end_lon)) / 2
-    mid_lat = (start_lat + end_lat) / 2
+def point_near_official(lon, lat, tree, framed):
+    """A point within the replace distance of a screened official line."""
     reach = REPLACE_DISTANCE_M / METRES_PER_DEGREE
-    reach_lon = reach / math.cos(math.radians(max(min(mid_lat, 89.9), -89.9)))
-    box = shapely.box(mid_lon - reach_lon - 1e-9, mid_lat - reach - 1e-9,
-                      mid_lon + reach_lon + 1e-9, mid_lat + reach + 1e-9)
+    reach_lon = reach / math.cos(math.radians(max(min(lat, 89.9), -89.9)))
+    box = shapely.box(lon - reach_lon - 1e-9, lat - reach - 1e-9,
+                      lon + reach_lon + 1e-9, lat + reach + 1e-9)
     for k in tree.query(box):
-        nearest = shapely.shortest_line(shapely.Point(mid_lon, mid_lat), framed[k])
+        nearest = shapely.shortest_line(shapely.Point(lon, lat), framed[k])
         (x0, y0), (x1, y1) = shapely.get_coordinates(nearest)
         if segment_length_m(x0, y0, x1, y1) <= REPLACE_DISTANCE_M:
             return True
     return False
+
+
+def osm_segment_is_replaced(start_lon, start_lat, end_lon, end_lat, tree, framed, reference):
+    """An OSM micro-segment the official line covers end to end is the same
+    wall and the OSM copy goes. The midpoint alone is not enough: a crossing
+    wall passes within metres of the official line near mid-span while the
+    line covers none of it, and deleting it would drop real screening."""
+    mid_lon = reference + (qmgrid.wrapped_longitude_delta(reference, start_lon)
+                           + qmgrid.wrapped_longitude_delta(reference, end_lon)) / 2
+    mid_lat = (start_lat + end_lat) / 2
+    start = (reference + qmgrid.wrapped_longitude_delta(reference, start_lon), start_lat)
+    end = (reference + qmgrid.wrapped_longitude_delta(reference, end_lon), end_lat)
+    return (point_near_official(mid_lon, mid_lat, tree, framed)
+            and point_near_official(*start, tree, framed)
+            and point_near_official(*end, tree, framed))

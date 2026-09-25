@@ -42,6 +42,15 @@ class ReplacementTests(unittest.TestCase):
     def test_same_wall_is_replaced_and_a_parallel_wall_is_kept(self):
         self.assertEqual(replacement([3.0, 8.0]), [True, False])
 
+    def test_crossing_wall_is_kept(self):
+        across = {"geom": shapely.LineString([(LON - 0.002, LAT), (LON + 0.002, LAT)]),
+                  "kind": OFFICIAL.KIND_WALL}
+        tree, framed, reference = OFFICIAL.replacement_tree([across])
+        mid_lon = LON + 3.0 / LON_METRE
+        half_span = 125.0 / 111_320.0  # a 250 m stem, the OSM chord cap
+        self.assertFalse(OFFICIAL.osm_segment_is_replaced(
+            mid_lon, LAT - half_span, mid_lon, LAT + half_span, tree, framed, reference))
+
     def test_berm_never_replaces_an_osm_wall(self):
         self.assertEqual(replacement([3.0], kind=OFFICIAL.KIND_BERM), [False])
 
