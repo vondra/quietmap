@@ -9,10 +9,14 @@ import shapely
 from shapely import STRtree
 
 import qmgrid
+from measured_heights import apply_measured_heights
+from official_barriers import (
+    SCREENED_KINDS, osm_segment_is_replaced, replacement_tree, segment_length_m, split_hops,
+)
 from structure_freshness import input_content_digest, structure_input_files
 from structure_contract import (
     SCHEMA, CONTRACT_KEY, CONTRACT_VERSION, KIND_BUILDING, KIND_BARRIER,
-    HEIGHT_SOURCE_GROUND_ACTIVITY, HEIGHT_SOURCE_OPEN_ROOF,
+    HEIGHT_SOURCE_GROUND_ACTIVITY, HEIGHT_SOURCE_OFFICIAL_BARRIER, HEIGHT_SOURCE_OPEN_ROOF,
     load_osm_buildings, load_barriers, wall_grid_poly, wall_centroid_grid,
     validate_square, screening_height_metres,
 )
@@ -33,7 +37,9 @@ IOU_MATCH_THRESHOLD = 0.5
 # 4: explicit OSM open carports stay outdoors, including Overture-matched footprints.
 # 5: one height ladder for every footprint, open roofs screen 0 m, demand storeys, national
 #    wall defaults (structures_v5).
-BUILDER_VERSION = "structures-builder-5"
+# 6: official barrier inventories beside OSM (an official line replaces OSM
+#    segments on the same line) and national measured heights on ladder rung 1.
+BUILDER_VERSION = "structures-builder-6"
 # barriers.arrow height_tier: 0 = the wall's own OSM height tag, 2 = none mapped.
 BARRIER_HEIGHT_TIER_MAPPED = 0
 
@@ -121,7 +127,8 @@ def screening_candidate(osm, i_osm, osm_geom, ovt, ordinal):
     }
 
 
-def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, regional):
+def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, regional,
+                 official_rows=None, official_files=None, measured_rows=None, measured_files=None):
     """Write one square's structures.arrow; return the census dict, or None
     when the square is up to date (idempotent skip)."""
     square = qmgrid.parse_square_name(name)
@@ -134,7 +141,8 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
     # The digest describes the inputs BEFORE the read: an input rewritten during the build then
     # differs on the next run and the square is rebuilt.
     digest_before_reading = input_content_digest(
-        structure_input_files(square_dir, overture_files, ghsl, regional))
+        structure_input_files(square_dir, overture_files, ghsl, regional,
+                              official_files, measured_files))
     if structure_is_fresh(out_path, digest_before_reading):
         return None
     osm = load_osm_buildings(os.path.join(square_dir, "buildings.arrow"))
@@ -162,8 +170,9 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
     candidates += [screening_candidate(osm, None, None, row, j)
                    for j, row in enumerate(overture_rows) if j not in matched_ovt]
     laddered = [c for c in candidates if not (c["ground"] or c["open_roof"])]
-    stats = {"regional": 0, "abstain": 0}
+    stats = {"regional": 0, "abstain": 0, "measured": 0}
     sample_raster_heights(laddered, regional, ghsl, stats)
+    stats["measured"] = apply_measured_heights(laddered, measured_rows or [])
     for c in candidates:
         if c["ground"] or c["open_roof"]:
             c["height_m"] = 0.0
@@ -243,32 +252,63 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
         emit(c, c["ordinal"])
     n_ovt_only = len(candidates) - n_osm
 
-    # Walls: one row per micro-segment, grid polyline, mapped or national default height.
-    for b in barriers:
+    def emit_wall(start_gx, start_gy, end_gx, end_gy, height_m, height_source,
+                  osm_id, segment_idx):
         out["kind"].append(KIND_BARRIER)
-        out["geom"].append(wall_grid_poly(
-            b["start_gx"], b["start_gy"], b["end_gx"], b["end_gy"]))
-        height_m, height_source = wall_height_and_source(
-            b["height"], b["height_tier"] == BARRIER_HEIGHT_TIER_MAPPED, b["country_iso"])
+        out["geom"].append(wall_grid_poly(start_gx, start_gy, end_gx, end_gy))
         out["height_m"].append(screening_height_metres(height_m))
         out["height_source"].append(height_source)
         out["envelope_class"].append(ENVELOPE_OUTDOOR)
-        cgx, cgy = wall_centroid_grid(
-            b["start_gx"], b["start_gy"], b["end_gx"], b["end_gy"])
+        cgx, cgy = wall_centroid_grid(start_gx, start_gy, end_gx, end_gy)
         out["centroid_gx"].append(cgx)
         out["centroid_gy"].append(cgy)
-        out["osm_id"].append(b["osm_id"])
+        out["osm_id"].append(osm_id)
         for column in ("building_type", "building_use", "height", "floors", "name",
                        "addr_street", "addr_housenumber", "area_m2",
                        "opening_hours_frac", "source_id", "emission_geom",
                        "emission_centroid_gx", "emission_centroid_gy",
                        "storeys", "storeys_source"):
             out[column].append(None)
-        out["segment_idx"].append(b["segment_idx"])
+        out["segment_idx"].append(segment_idx)
         out["screening_ordinal"].append(
             len(overture_rows) + n_osm_only_geom + wall_counter
         )
-        wall_counter += 1
+        return wall_counter + 1
+
+    # Walls: one row per micro-segment, grid polyline, mapped or national default height.
+    # An official line replaces the OSM segments on the same line; berms stay out
+    # (terrain, not thin walls) until the terrain step consumes them.
+    replace_tree, replace_framed, replace_reference = replacement_tree(official_rows or [])
+    replaced_osm_walls, replaced_osm_wall_m = 0, 0.0
+    for b in barriers:
+        start_lon, start_lat = qmgrid.grid_to_lonlat(b["start_gx"], b["start_gy"])
+        end_lon, end_lat = qmgrid.grid_to_lonlat(b["end_gx"], b["end_gy"])
+        if replace_tree is not None and osm_segment_is_replaced(
+                start_lon, start_lat, end_lon, end_lat,
+                replace_tree, replace_framed, replace_reference):
+            replaced_osm_walls += 1
+            replaced_osm_wall_m += segment_length_m(start_lon, start_lat, end_lon, end_lat)
+            continue
+        height_m, height_source = wall_height_and_source(
+            b["height"], b["height_tier"] == BARRIER_HEIGHT_TIER_MAPPED, b["country_iso"])
+        wall_counter = emit_wall(b["start_gx"], b["start_gy"], b["end_gx"], b["end_gy"],
+                                 height_m, height_source, b["osm_id"], b["segment_idx"])
+    official_walls, official_wall_m = 0, 0.0
+    for row in official_rows or []:
+        if row["kind"] not in SCREENED_KINDS:
+            continue
+        coords = list(row["geom"].coords)
+        for segment_idx, ((lon0, lat0), (lon1, lat1), length_m) in \
+                enumerate(split_hops(coords)):
+            if segment_idx > 32767:
+                raise SystemExit(f"{name}: official barrier exceeds Int16 hop identities")
+            start_gx, start_gy = qmgrid.lonlat_to_grid(lon0, lat0)
+            end_gx, end_gy = qmgrid.lonlat_to_grid(lon1, lat1)
+            wall_counter = emit_wall(start_gx, start_gy, end_gx, end_gy,
+                                     row["height_m"], HEIGHT_SOURCE_OFFICIAL_BARRIER,
+                                     None, segment_idx)
+            official_walls += 1
+            official_wall_m += length_m
 
     meta = dict(SCHEMA.metadata or {})
     meta[CONTRACT_KEY] = CONTRACT_VERSION
@@ -276,7 +316,9 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
     meta["builder_version"] = BUILDER_VERSION
     meta["input_content_digest"] = digest_before_reading
     meta["building_rows"] = str(n_osm + n_ovt_only)
-    meta["barrier_rows"] = str(len(barriers))
+    meta["barrier_rows"] = str(len(barriers) - replaced_osm_walls + official_walls)
+    meta["official_barrier_rows"] = str(official_walls)
+    meta["replaced_osm_barrier_rows"] = str(replaced_osm_walls)
     schema = SCHEMA.with_metadata(meta)
     table = pa.table(out, schema=schema)
 
@@ -308,10 +350,15 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
         "both": n_both,
         "osm_only": n_osm - n_both,
         "overture_only": n_ovt_only,
-        "walls": len(barriers),
+        "walls": len(barriers) - replaced_osm_walls + official_walls,
         "rows": table.num_rows,
         "regional": stats["regional"],
         "regional_abstain": stats["abstain"],
+        "measured": stats["measured"],
+        "official_walls": official_walls,
+        "official_wall_km": round(official_wall_m / 1000, 3),
+        "replaced_osm_walls": replaced_osm_walls,
+        "replaced_osm_wall_km": round(replaced_osm_wall_m / 1000, 3),
         "height_sources": dict(sorted(Counter(out["height_source"]).items())),
         "bytes": os.path.getsize(out_path),
     }

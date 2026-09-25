@@ -26,6 +26,7 @@ HEIGHT_SOURCE_OVERTURE_HEIGHT = 5     # Overture height (OSM-derived or machine-
 HEIGHT_SOURCE_OPEN_ROOF = 6           # open roof or carport: footprint stays, screens 0 m
 HEIGHT_SOURCE_GROUND_ACTIVITY = 7     # emission-only ground: no screening geometry, 0 m
 HEIGHT_SOURCE_WALL_DEFAULT = 8        # unmapped noise wall at its country's mean height
+HEIGHT_SOURCE_OFFICIAL_BARRIER = 9  # official inventory line (measured or median height)
 
 # Where a building row's demand storey count came from.
 STOREYS_SOURCE_FLOORS = 0             # OSM, national or Overture floors
