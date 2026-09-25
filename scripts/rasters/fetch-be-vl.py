@@ -5,13 +5,14 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
+import urllib.error
 import urllib.request
 
 import numpy as np
 from osgeo import gdal
 
-from dem_windows import (LandMask, download_bytes, grid_windows, nodata_tag, polite_sleep,
-                         reproject_bounds, split_wcs_multipart)
+from dem_windows import (LandMask, download_bytes, grid_windows, http_error_body, nodata_tag,
+                         polite_sleep, reproject_bounds, split_wcs_multipart)
 from terrain_io import digest, fetch, provenance, publish_bytes, publish_json, publish_source_json, utc_now
 
 gdal.UseExceptions()
@@ -53,7 +54,16 @@ def fetch_window(output, window, mask, position, total):
     if mask is not None and not mask.has_land(*reproject_bounds(x0, y0, x1, y1, CRS)):
         return None
     started = time.monotonic()
-    body, headers = download_bytes(url)
+    try:
+        body, headers = download_bytes(url)
+    except urllib.error.HTTPError as error:
+        # Windows fully outside Flanders get an OWS InvalidSubsetting 404, not a
+        # nodata TIFF (observed 2026-09-25); anything else still fails the fetch.
+        if error.code != 404 or 'InvalidSubsetting' not in http_error_body(error):
+            raise
+        print(json.dumps({'skipped_nocoverage': name}), flush=True)
+        polite_sleep(started)
+        return None
     payload = split_wcs_multipart(body, headers['Content-Type'])
     publish_bytes(target, payload)
     dataset = gdal.Open(str(target))

@@ -110,6 +110,56 @@ class DownloadRetryTest(unittest.TestCase):
             urllib.request.urlopen = real
         self.assertEqual(len(calls), 1)
 
+    def test_final_retry_failure_carries_the_server_body(self):
+        import io
+        import urllib.request
+        from dem_windows import download_bytes
+        real = urllib.request.urlopen
+
+        def overloaded(request, timeout=None):
+            body = io.BytesIO(b'<Exception>reduce request rate</Exception>')
+            raise urllib.error.HTTPError(request.full_url, 400, 'Bad Request', {}, body)
+
+        urllib.request.urlopen = overloaded
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as failure:
+                download_bytes('https://example.invalid/wms', attempts=2)
+        finally:
+            urllib.request.urlopen = real
+        self.assertIn('reduce request rate', str(failure.exception))
+
+
+class FlandersNoCoverageTest(unittest.TestCase):
+    def run_window(self, body):
+        import io
+        import urllib.error
+        fetch_be_vl = load_hyphenated('fetch-be-vl')
+        real_download, real_sleep = fetch_be_vl.download_bytes, fetch_be_vl.polite_sleep
+
+        def missing(url, timeout=300, attempts=3):
+            raise urllib.error.HTTPError(url, 404, 'Not Found', {},
+                                         io.BytesIO(body))
+
+        fetch_be_vl.download_bytes = missing
+        fetch_be_vl.polite_sleep = lambda started: None
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                return fetch_be_vl.fetch_window(Path(directory), (130000, 140000, 140000, 150000),
+                                                None, 1, 1)
+        finally:
+            fetch_be_vl.download_bytes, fetch_be_vl.polite_sleep = real_download, real_sleep
+
+    def test_invalid_subsetting_skips_the_window(self):
+        body = (b'<?xml version="1.0"?><ows:ExceptionReport xmlns:ows="http://www.opengis.net/ows/2.0">'
+                b'<ows:Exception exceptionCode="InvalidSubsetting" locator="(140000,150000)"/>'
+                b'</ows:ExceptionReport>')
+        self.assertIsNone(self.run_window(body))
+
+    def test_other_404_still_fails(self):
+        import urllib.error
+        with self.assertRaises(urllib.error.HTTPError):
+            self.run_window(b'<html><body>proxy page gone</body></html>')
+
 
 class LandMaskTest(unittest.TestCase):
     def test_land_and_sea(self):

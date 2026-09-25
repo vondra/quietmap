@@ -247,6 +247,7 @@ def produce(manifest, output, binary, reserve_bytes, ocean_coverage=None):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     identity = hashlib.sha256(identity_bytes).hexdigest()
+    ocean_manifest = ocean_coverage['sha256'] if ocean_coverage else None
     input_record = dict(sources=source_records, source_specs=sources, auxiliary=auxiliary_records, geoid_grids=grids)
     input_bytes = (json.dumps(input_record, sort_keys=True) + '\n').encode()
     input_hash = hashlib.sha256(input_bytes).hexdigest()
@@ -285,7 +286,8 @@ def produce(manifest, output, binary, reserve_bytes, ocean_coverage=None):
             raise ValueError(f'z9/{x}/{y}: {missing} unavailable {channel} nodes; refusing publication')
         codes = encode(values, channel, window)
         if channel == 'dem':
-            seams.update(verify_shared_nodes(path, codes, window, binary, identity, raster_window))
+            seams.update(verify_shared_nodes(path, codes, window, binary, identity, raster_window,
+                                             ocean_manifest))
         encoded = codes.tobytes()
         record = dict(channel=channel, window=window, kernel=kernel, datum='EGM2008' if channel == 'dem' else 'above bare earth',
                       plan_sha256=identity, sha256=hashlib.sha256(encoded).hexdigest(), bytes=len(encoded),

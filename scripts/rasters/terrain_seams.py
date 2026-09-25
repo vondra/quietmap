@@ -58,11 +58,17 @@ def require_seam_gate(statistics):
     if statistics['maximum_artificial_step_bound_m'] > MAX_ARTIFICIAL_STEP_M + 1e-10:
         raise ValueError(f'artificial source seam exceeds {MAX_ARTIFICIAL_STEP_M} m: {statistics}')
 
-def verify_shared_nodes(path, encoded, window, binary, identity, raster_window):
-    """Check every already-published neighbour; later neighbours check this square in turn."""
+def verify_shared_nodes(path, encoded, window, binary, identity, raster_window, ocean_manifest_sha256=None):
+    """Check every already-published neighbour; later neighbours check this square in turn.
+
+    Shared node VALUES are the gate: a neighbour produced under another partial plan is
+    compared all the same and recorded, so the post-merge rebuild list is explicit.
+    Empty ocean files depend only on the reviewed coverage manifest, never on a DEM plan.
+    """
     x, y = int(path.parent.parent.name), int(path.parent.name)
     root = path.parents[3]
     maximum, count = 0., 0
+    cross_plan = []
     for dx, dy in ((a, b) for a in (-1, 0, 1) for b in (-1, 0, 1) if a or b):
         if not 0 <= y + dy < 512:
             continue
@@ -72,8 +78,15 @@ def verify_shared_nodes(path, encoded, window, binary, identity, raster_window):
         if not sidecar.exists():
             continue
         record = json.loads(sidecar.read_text())
-        if record['plan_sha256'] != identity or digest(neighbour) != record['sha256']:
-            raise ValueError(f'neighbour identity changed: {neighbour}')
+        if digest(neighbour) != record['sha256']:
+            raise ValueError(f'neighbour bytes changed: {neighbour}')
+        if neighbour.stat().st_size == 0:
+            if not record.get('coverage_verified_ocean'):
+                raise ValueError('empty neighbour lacks verified ocean coverage')
+            if ocean_manifest_sha256 is not None and record.get('coverage_manifest_sha256') != ocean_manifest_sha256:
+                raise ValueError(f'neighbour ocean coverage differs from reviewed manifest: {neighbour}')
+        elif record.get('plan_sha256') != identity:
+            cross_plan.append([xx, yy])
         other = raster_window(binary, xx, yy)
         if x == 0 and xx == 511:
             other['west_node'] -= 360 * window['nodes_per_degree']
@@ -100,4 +113,5 @@ def verify_shared_nodes(path, encoded, window, binary, identity, raster_window):
         count += int(delta.size)
     if maximum > .5:
         raise ValueError(f'shared square edge exceeds 0.5 m: {maximum}')
-    return dict(shared_nodes=count, maximum_shared_node_difference_m=maximum)
+    return dict(shared_nodes=count, maximum_shared_node_difference_m=maximum,
+                cross_plan_neighbours=cross_plan)

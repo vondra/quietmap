@@ -20,12 +20,25 @@ def polite_sleep(started):
     time.sleep(max(0, 1 - (time.monotonic() - started)))
 
 
+def http_error_body(error, limit=2048):
+    """Best-effort text of an HTTP error response; empty when unreadable."""
+    try:
+        body = error.read(limit)
+    except Exception:
+        return ''
+    if isinstance(body, bytes):
+        return body.decode('utf-8', 'replace')
+    return str(body)
+
+
 def download_bytes(url, timeout=300, attempts=3):
     """GET a URL with backoff on transient failures; returns (body, headers).
 
     Géoplateforme answers valid WMS windows with a transient HTTP 400 under
     sustained load (observed 2026-09-25; the identical URL succeeds on retry),
-    so 400 is retried like any other transient failure.
+    so 400 is retried like any other transient failure. The final failure
+    carries the server's first 2 KB, so a crash names its cause; fail-fast
+    errors keep their body on the original exception for the caller to read.
     """
     last = None
     for attempt in range(attempts):
@@ -34,8 +47,13 @@ def download_bytes(url, timeout=300, attempts=3):
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read(), response.headers
         except urllib.error.HTTPError as error:
-            if (error.code < 500 and error.code not in (400, 429)) or attempt + 1 == attempts:
+            if error.code < 500 and error.code not in (400, 429):
                 raise
+            if attempt + 1 == attempts:
+                detail = http_error_body(error)
+                raise urllib.error.HTTPError(error.filename, error.code,
+                                             f'{error.msg}: {detail[:2000]}',
+                                             error.hdrs, None)
             last = error
         except RETRYABLE as error:
             if attempt + 1 == attempts:

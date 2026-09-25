@@ -55,6 +55,41 @@ class SeamTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'finite fallback'):
             feather(np.full((4, 4), np.nan), np.ones((4, 4)), 2)
 
+    def test_cross_plan_neighbours_compare_values_and_stay_recorded(self):
+        def window(binary, x, y):
+            return dict(north_node=10-2*y, west_node=2*x, rows=3, columns=3,
+                        nodes_per_degree=1, dem_codes_per_metre=5, dem_offset_m=-500)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'z9/2/2/dem.u16le'
+            neighbour = Path(temp) / 'z9/1/1/dem.u16le'
+            neighbour.parent.mkdir(parents=True)
+            neighbour.write_bytes(np.full((3, 3), 2501, dtype='<u2').tobytes())
+            receipt = Path(str(neighbour) + '.provenance.json')
+            publish_json(receipt, dict(plan_sha256='other-plan', sha256=digest(neighbour)))
+            codes = np.full((3, 3), 2500, dtype='<u2')
+            result = verify_shared_nodes(path, codes, window(None, 2, 2), None, 'same', window)
+            self.assertEqual(result['cross_plan_neighbours'], [[1, 1]])
+            with self.assertRaisesRegex(ValueError, 'shared square edge'):
+                verify_shared_nodes(path, codes + 4, window(None, 2, 2), None, 'same', window)
+
+    def test_empty_ocean_neighbours_bind_to_the_coverage_manifest_not_a_plan(self):
+        def window(binary, x, y):
+            return dict(north_node=10-2*y, west_node=2*x, rows=3, columns=3,
+                        nodes_per_degree=1, dem_codes_per_metre=5, dem_offset_m=-500)
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'z9/2/2/dem.u16le'
+            neighbour = Path(temp) / 'z9/1/1/dem.u16le'
+            neighbour.parent.mkdir(parents=True)
+            neighbour.write_bytes(b'')
+            receipt = Path(str(neighbour) + '.provenance.json')
+            publish_json(receipt, dict(channel='dem', sha256=digest(neighbour),
+                                       coverage_verified_ocean=True, coverage_manifest_sha256='reviewed'))
+            codes = np.full((3, 3), 2500, dtype='<u2')
+            result = verify_shared_nodes(path, codes, window(None, 2, 2), None, 'any-plan', window, 'reviewed')
+            self.assertEqual(result['shared_nodes'], 1)
+            with self.assertRaisesRegex(ValueError, 'ocean coverage differs'):
+                verify_shared_nodes(path, codes, window(None, 2, 2), None, 'any-plan', window, 'other')
+
 
 if __name__ == '__main__':
     unittest.main()

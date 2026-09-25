@@ -57,7 +57,9 @@ def fetch_window(output, window, mask, position, total):
     if mask is not None and not mask.has_land(*reproject_bounds(x0, y0, x1, y1, CRS)):
         return window, None
     started = time.monotonic()
-    payload, _ = download_bytes(url)
+    # Six attempts ride out the sustained-load 400 bursts that killed two
+    # full-country runs (2026-09-25); a genuinely bad window still raises.
+    payload, _ = download_bytes(url, attempts=6)
     publish_bytes(target, payload)
     dataset = gdal.Open(str(target))
     if dataset is None:
