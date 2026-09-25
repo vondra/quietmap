@@ -18,8 +18,8 @@ use crate::types::NUM_BANDS;
 
 /// Leisure `sport`/kind class ids written by `osm-extract::spill` into
 /// `leisure.arrow`. Stable once shipped: the arrow stores the raw u8, so a new
-/// id is a new file contract (`leisure_v4` carries the area classes below
-/// plus motorsport 10 and shooting 11). The formula classes subdivide at
+/// id is a new file contract (`leisure_v5` carries the area classes below
+/// plus AGP 12, motorsport 10 and shooting 11). The formula classes subdivide at
 /// read time from the retained `sport` / `shooting` tags (see
 /// [`MotorsportSubtype`] / [`ShootingSubtype`]) — the extractor keeps one
 /// class per activity, not one per vehicle or weapon.
@@ -52,6 +52,11 @@ pub const MOTORSPORT: u8 = 10;
 /// Shooting: outdoor ranges. The per-shot level comes from the row's
 /// `shooting` tags and name ([`shooting_subtype`]).
 pub const SHOOTING: u8 = 11;
+/// Floodlit artificial-turf pitch (`leisure=pitch` + `surface=artificial_turf`).
+/// Same player-voice anchor as grass, booked ~40 h/week year-round, so its
+/// annual duty runs ~10 dB hotter. Takes the next id after the two formula
+/// classes (10 motorsport, 11 shooting).
+pub const AGP: u8 = 12;
 
 /// True for the two formula classes (motorsport/shooting): they carry a
 /// class-TOTAL annual Lw with industrial reach, not the area law.
@@ -135,13 +140,15 @@ const CAR_PARK_SPECTRUM: [f64; NUM_BANDS] = [8.5, -1.0, -4.2, -5.5, -5.3, -5.8, 
 ///     seasonal  : outdoor play ~6 months/yr → −3 dB (pool ~4 mo → −5; play ~−2)
 ///     daily-duty: a court is in active use ~6 of 24 h (day+evening) → −6 dB
 ///                 (stadium: match days only ~25/yr → −12)
-/// Net ≈ −9 dB for outdoor sport. Assumptions are LISTED on /about (nothing
-/// invented). Indoor halls are indistinguishable in OSM → treated as outdoor
-/// (a stated limitation). PROP-MEAS = no clean measured Lw; a flagged estimate.
+/// Net ≈ −9 dB for outdoor sport except the two pitch classes, whose arms
+/// annualize from published weekly hours instead. Assumptions are LISTED on
+/// /about (nothing invented). Indoor halls are indistinguishable in OSM →
+/// treated as outdoor (a stated limitation). PROP-MEAS = no clean measured
+/// Lw; a flagged estimate.
 ///
 /// Active anchors (pre-annualization): padel 90 (racket "pock" on glass,
 /// padelcreations + Higgins); tennis 84 (LFmax 58.4/strike, TU München);
-/// football pitch 97.85 over a 100×64 m pitch (58 LAeq,1h @10 m, Sport
+/// football pitch 97.9 over a 100×64 m pitch (58 LAeq,1h @10 m, Sport
 /// England AGP, read as an area source); basketball tennis−6 at its
 /// reference court (UBC/BKL); playground PROP-MEAS; pool PROP-MEAS;
 /// outdoor seating 71 dB(A)/guest (Lärmfibel Biergärten).
@@ -279,25 +286,41 @@ pub fn leisure_profile(sport: u8) -> LeisureProfile {
             night_offset: -6.3,
             m2_per_space: Some(13.3),
         },
-        // PITCH (0) — generic ball-sport pitch, the class an untyped
-        // `leisure=pitch` gets. The SAME Sport England AGP measurement the old
-        // anchor used (58 dB LAeq,1h at 10 m), but read as the AREA source a
-        // pitch is: 10 m outside the touchline of a 100×64 m pitch the
-        // incoherent hemispherical area integral sits 1.8 dB under the
-        // per-m² level, so active Lw″ = 59.8 dB/m² — 97.85 dB(A) over the
-        // 6,400 m² pitch — and − 9 annual (−3 season −6 duty) → 50.8 dB/m².
-        // (The old 40 treated the 58 as a point source, −10.8 dB.) Year Lden
-        // 89.3 @ 7000 m²; a typical ~1100 m² pitch lands ~81.
+        // PITCH (0) — grass (or unknown-surface) ball-sport pitch, the class an
+        // untyped `leisure=pitch` gets. Active 97.9 dB(A) over 6400 m²: the
+        // Sport England AGP Acoustics DGN (2015) typical free-field 58 dB
+        // LAeq,1h at 10 m from the sideline halfway (player voices, in use),
+        // back-calculated through the hemispherical incoherent area integral
+        // (−1.8 dB for 100×64 m). Duty from published use: natural turf
+        // tolerates 3–6 h/week (Sport England Natural Turf DGN) → 5 h over a
+        // September–May season plus summer (40 weeks), 4 h by day + 1 h on
+        // summer evenings → day −14.4, evening −15.6 rel active; night silent
+        // (unlit). Year Lden ~83.5 @ 7000 m².
         PITCH => LeisureProfile {
             lw_fixed: FLOOR,
-            lw_per_m2: 50.8,
+            lw_per_m2: 45.4,
             ref_area_m2: 7000.0,
             spectrum: [-2.0, -1.0, 0.0, 1.0, 1.0, 0.0, -2.0, -4.0],
-            evening_offset: -3.0,
-            night_offset: -10.0, // floodlit pitches run to ~22:00
+            evening_offset: -1.2,
+            night_offset: -25.0,
             m2_per_space: None,
         },
-        // An id this engine does not know (12+, or a formula class passed
+        // AGP (12) — the same voice anchor, booked like an artificial-turf
+        // pitch: 40 h/week (Sport England Hybrid Pitch Year-4: 3G AGP modelled
+        // use), year-round, on the documented peak pattern (weekday evenings +
+        // weekends; the 34 peak hours hold 26 day + 8 evening, scaled to 40)
+        // → day −4.4, evening −4.7 rel active; night silent (floodlights off
+        // ~22:00). Year Lden ~93.8 @ 7000 m².
+        AGP => LeisureProfile {
+            lw_fixed: FLOOR,
+            lw_per_m2: 55.4,
+            ref_area_m2: 7000.0,
+            spectrum: [-2.0, -1.0, 0.0, 1.0, 1.0, 0.0, -2.0, -4.0],
+            evening_offset: -0.3,
+            night_offset: -25.0,
+            m2_per_space: None,
+        },
+        // An id this engine does not know (13+, or a formula class passed
         // here instead of through its subtype emission — a new class bumps
         // the contract). We cannot say what it is, so it says nothing: `lw`
         // lands under the `prepare_leisure_points` audibility gate for any
@@ -796,20 +819,6 @@ mod tests {
         );
     }
 
-    /// The pitch anchor: 58 dB LAeq,1h at 10 m (Sport England AGP) read as
-    /// an area source — active 59.8 dB/m², annualized −9 → 50.8 dB/m², i.e.
-    /// 97.85 dB(A) over a 100×64 m pitch.
-    #[test]
-    fn pitch_anchor_is_the_area_source_reading() {
-        let p = leisure_profile(PITCH);
-        assert_eq!(p.lw_per_m2, 50.8);
-        let over_100x64 = leisure_lw(&p, 6400.0);
-        assert!(
-            (over_100x64 - (97.85 - 9.0)).abs() < 0.05,
-            "annual over 6,400 m²: {over_100x64:.3}"
-        );
-    }
-
     /// Unified area scaling (replaces the old capacity build-up): a leisure
     /// source scales with its polygon AREA, +3 dB per doubling, and the anchor
     /// holds at the profile's reference footprint.
@@ -870,12 +879,55 @@ mod tests {
         assert_eq!(leisure_profile(PITCH).m2_per_space, None);
     }
 
-    /// A class id outside `leisure_v4` (12+) can only come from a file that
-    /// lies about its stamp. It must say nothing rather than sound like a
-    /// football pitch.
+    /// Pitch duty from published use, held in place: the 58 dB LAeq,1h anchor
+    /// back-calculates to 59.8 dB/m² active through the hemispherical area
+    /// integral (−1.8 dB); grass takes 5 h/week over 40 weeks (4 day + 1
+    /// evening), an AGP 40 h/week year-round on the 26-day/8-evening peak
+    /// pattern. Night is silent on both (unlit / floodlights off ~22:00).
+    #[test]
+    fn pitch_duty_follows_published_use() {
+        let active_per_m2 = 59.8;
+        for (class, day_h, eve_h, weeks) in [
+            (PITCH, 4.0f64, 1.0, 40.0),
+            (AGP, 26.0 / 34.0 * 40.0, 8.0 / 34.0 * 40.0, 52.0),
+        ] {
+            let profile = leisure_profile(class);
+            let day: f64 = 10.0 * (day_h * weeks / (12.0 * 365.0)).log10();
+            let eve: f64 = 10.0 * (eve_h * weeks / (4.0 * 365.0)).log10();
+            assert!(
+                (profile.lw_per_m2 - (active_per_m2 + day)).abs() < 0.1,
+                "class {class} day duty {day:.2}"
+            );
+            assert!(
+                (profile.evening_offset - (eve - day)).abs() < 0.1,
+                "class {class} evening offset {:.2}",
+                eve - day
+            );
+            assert_eq!(profile.night_offset, -25.0);
+            assert_eq!(profile.m2_per_space, None);
+        }
+        // The booked pitch runs ~10 dB hotter than grass over the year.
+        let grass = leisure_profile(PITCH);
+        let agp = leisure_profile(AGP);
+        let lden = |p: &LeisureProfile| {
+            let day = leisure_lw(p, 7_000.0);
+            let eve = day + p.evening_offset + 5.0;
+            let night = day + p.night_offset + 10.0;
+            10.0 * ((12.0 * 10f64.powf(day / 10.0)
+                + 4.0 * 10f64.powf(eve / 10.0)
+                + 8.0 * 10f64.powf(night / 10.0))
+                / 24.0)
+                .log10()
+        };
+        assert!((lden(&grass) - 83.5).abs() < 0.2, "grass Lden");
+        assert!((lden(&agp) - 93.8).abs() < 0.2, "AGP Lden");
+    }
+
+    /// A class id outside `leisure_v5` can only come from a file that lies about
+    /// its stamp. It must say nothing rather than sound like a football pitch.
     #[test]
     fn an_unknown_class_emits_nothing() {
-        let unknown = leisure_profile(SHOOTING + 1);
+        let unknown = leisure_profile(AGP + 1);
         for area in [10.0, 1_000.0, 100_000.0] {
             assert!(
                 leisure_lw(&unknown, area) < 10.0,
@@ -886,6 +938,16 @@ mod tests {
         assert!(
             leisure_lw(&pitch, 1_000.0) > 60.0,
             "an untyped pitch still emits"
+        );
+        let misrouted = leisure_profile(CAR_PARK_STREET + 1);
+        assert!(
+            leisure_lw(&misrouted, 100_000.0) < 10.0,
+            "a formula class id passed here instead of its subtype path stays silent"
+        );
+        let agp = leisure_profile(AGP);
+        assert!(
+            leisure_lw(&agp, 1_000.0) > leisure_lw(&pitch, 1_000.0),
+            "the booked pitch out-emits grass"
         );
     }
 

@@ -13,7 +13,7 @@ import shapely
 import shapely.affinity
 
 from test_structures_fixtures import (
-    BUILDER, SOURCES, CONTRACT, GRID, SQUARE, FakeGlobalPrior, buildings_arrow, barriers_arrow,
+    BUILDER, SOURCES, CONTRACT, GRID, SQUARE, FakeRegional, buildings_arrow, barriers_arrow,
     grid_polygon, screening_polygons, write_topology_roundtrip, osm_row, ovt_row, OSM_POLY, OVT_TWIN, OSM_SHED, OSM_HALL,
     OVT_LONELY, OSM_WAREHOUSE, OSM_ANNEX, OVT_ANNEX_TWIN, OVT_ANNEX_LOOSE,
 )
@@ -28,7 +28,7 @@ class BuildStructuresTests(unittest.TestCase):
 
     def build(self, rows):
         census = BUILDER.build_square(
-            SQUARE, self.prepared, rows, [], FakeGlobalPrior(), None)
+            SQUARE, self.prepared, rows, [], None)
         table = ipc.open_file(self.prepared / SQUARE / "structures.arrow").read_all()
         return census, table
 
@@ -61,10 +61,10 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(row["geom"], screening_polygons(OVT_TWIN))  # screening geometry
         self.assertEqual(row["osm_id"], 1000)
         self.assertEqual(row["building_type"], 11)
-        # Matched without any per-building height: GHSL 12.5; the raw OSM height stays the
-        # emission input.
-        self.assertEqual(row["height_source"], CONTRACT.HEIGHT_SOURCE_GHSL)
-        self.assertEqual(row["height_m"], 13)
+        # Matched without any per-building height: the footprint typology (256 m2
+        # take 8.0 m); the raw OSM height stays the emission input.
+        self.assertEqual(row["height_source"], CONTRACT.HEIGHT_SOURCE_AREA_TYPOLOGY)
+        self.assertEqual(row["height_m"], 8)
         self.assertIsNone(row["height"])
         # The screening centroid is the Overture one; the OSM centroid rides the
         # emission override.
@@ -91,7 +91,7 @@ class BuildStructuresTests(unittest.TestCase):
                     self.assertEqual(carport["envelope_class"], SOURCES.ENVELOPE_OUTDOOR)
                     self.assertIsNotNone(carport["geom"])
                     self.assertIsNotNone(carport["screening_ordinal"])
-                    self.assertEqual((garage["height_m"], carport["height_m"]), (13, 0))
+                    self.assertEqual((garage["height_m"], carport["height_m"]), (8, 0))
                     self.assertEqual(carport["height_source"], CONTRACT.HEIGHT_SOURCE_OPEN_ROOF)
                     self.assertEqual(carport["storeys"], 1)
                     for field in garage.keys() - {"building_use", "envelope_class", "height_m",
@@ -164,15 +164,15 @@ class BuildStructuresTests(unittest.TestCase):
     def test_osm_only_row_ladders_from_osm_tags(self):
         buildings_arrow(self.prepared / SQUARE / "buildings.arrow", [
             osm_row(0, OSM_SHED, 16.0, height=4.5),       # mapped height
-            osm_row(1, OSM_HALL, 5000.0, floors=5),       # 5 floors x 3 m + 3 m roof
-            osm_row(2, None, None),                       # node row: GHSL, no footprint
+            osm_row(1, OSM_HALL, 5000.0, floors=5),       # 5 floors x 3 m + 2 m roof
+            osm_row(2, None, None),                       # node row: typology, no footprint
         ])
         census, t = self.build([])
         self.assertEqual(t.num_rows, 3)
         self.assertEqual(t.column("height_source").to_pylist(), [
             CONTRACT.HEIGHT_SOURCE_OSM_HEIGHT, CONTRACT.HEIGHT_SOURCE_FLOORS,
-            CONTRACT.HEIGHT_SOURCE_GHSL])
-        self.assertEqual(t.column("height_m").to_pylist(), [5, 18, 4])
+            CONTRACT.HEIGHT_SOURCE_AREA_TYPOLOGY])
+        self.assertEqual(t.column("height_m").to_pylist(), [5, 17, 3])
         self.assertEqual(t.column("storeys").to_pylist(), [1, 5, 1])
         # The node row has no geometry; the others do.
         self.assertIsNone(t.column("geom")[2].as_py())
@@ -181,11 +181,11 @@ class BuildStructuresTests(unittest.TestCase):
         """Matched rows once ranked only Overture's values: 3.99 M national or OSM floor counts
         and 279 k OSM heights never reached the screening height (r260919)."""
         cases = [  # OSM height, OSM floors, Overture height, Overture floors -> height, source
-            (None, 4, 30.0, 0, 15, CONTRACT.HEIGHT_SOURCE_FLOORS),
+            (None, 4, 30.0, 0, 14, CONTRACT.HEIGHT_SOURCE_FLOORS),
             (21.0, 4, 30.0, 0, 21, CONTRACT.HEIGHT_SOURCE_OSM_HEIGHT),
-            (None, 0, 30.0, 2, 9, CONTRACT.HEIGHT_SOURCE_FLOORS),
+            (None, 0, 30.0, 2, 6, CONTRACT.HEIGHT_SOURCE_FLOORS),
             (None, 0, 30.0, 0, 30, CONTRACT.HEIGHT_SOURCE_OVERTURE_HEIGHT),
-            (None, 0, 0.4, 0, 13, CONTRACT.HEIGHT_SOURCE_GHSL),
+            (None, 0, 0.4, 0, 8, CONTRACT.HEIGHT_SOURCE_AREA_TYPOLOGY),
         ]
         for osm_height, floors, height, overture_floors, expected, source in cases:
             with self.subTest(osm_height=osm_height, floors=floors, height=height):
@@ -223,8 +223,9 @@ class BuildStructuresTests(unittest.TestCase):
         ring = GRID.decode_grid_poly(t.column("geom")[3].as_py())
         self.assertEqual(len(ring), 2)
         self.assertEqual(ring[0], GRID.lonlat_to_grid(14.17, 49.78))
-        # Unmapped buildings use GHSL; an unmapped German wall stands at the national mean.
-        self.assertEqual(t.column("height_source").to_pylist(), [4, 4, 4, 8, 0])
+        # Unmapped buildings use the footprint typology; an unmapped German wall
+        # stands at the national mean.
+        self.assertEqual(t.column("height_source").to_pylist(), [2, 2, 2, 8, 0])
         self.assertEqual(t.column("height_m").to_pylist()[-2:], [4, 5])
         self.assertEqual(t.column("storeys").to_pylist()[-2:], [None, None])
         meta = t.schema.metadata
@@ -252,19 +253,19 @@ class BuildStructuresTests(unittest.TestCase):
         newer = output.stat().st_mtime + 5
         os.utime(source, (newer, newer))
         self.assertIsNone(BUILDER.build_square(
-            SQUARE, self.prepared, rows, [], FakeGlobalPrior(), None))
+            SQUARE, self.prepared, rows, [], None))
         self.assertEqual(output.read_bytes(), before)
-        ghsl = self.prepared / "fake-ghsl"
-        ghsl.write_bytes(b"prior")
+        survey = self.prepared / "fake-survey"
+        survey.write_bytes(b"prior")
         self.assertIsNotNone(BUILDER.build_square(
-            SQUARE, self.prepared, rows, [], FakeGlobalPrior([ghsl]), None))
+            SQUARE, self.prepared, rows, [], FakeRegional([survey])))
         # Other bytes at the same size and mtime (a rewrite inside one mtime tick): rebuilt.
         stamped = source.stat()
         buildings_arrow(source, [osm_row(0, OSM_POLY, 33.0)])
         os.utime(source, ns=(stamped.st_atime_ns, stamped.st_mtime_ns))
         self.assertEqual(source.stat().st_size, stamped.st_size)
         self.assertIsNotNone(BUILDER.build_square(
-            SQUARE, self.prepared, rows, [], FakeGlobalPrior([ghsl]), None))
+            SQUARE, self.prepared, rows, [], FakeRegional([survey])))
 
     def test_a_replaced_shared_input_with_restored_mtime_ends_the_idempotent_skip(self):
         # The shared-source digest cache once keyed on (path, size, mtime): a
@@ -276,7 +277,7 @@ class BuildStructuresTests(unittest.TestCase):
         shared.write_bytes(b"V1-00")
         rows = [ovt_row(OVT_LONELY)]
         self.assertIsNotNone(BUILDER.build_square(
-            SQUARE, self.prepared, rows, [], FakeGlobalPrior([shared]), None))
+            SQUARE, self.prepared, rows, [], FakeRegional([shared])))
         stamped = shared.stat()
         replacement = self.prepared / "replacement-input"
         replacement.write_bytes(b"V2-00")
@@ -286,7 +287,7 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertEqual(shared.stat().st_mtime_ns, stamped.st_mtime_ns)
         self.assertNotEqual(shared.stat().st_ino, stamped.st_ino)
         self.assertIsNotNone(BUILDER.build_square(
-            SQUARE, self.prepared, rows, [], FakeGlobalPrior([shared]), None))
+            SQUARE, self.prepared, rows, [], FakeRegional([shared])))
 
     def test_an_input_rewritten_during_the_build_is_rebuilt_by_the_next_run(self):
         source = self.prepared / SQUARE / "buildings.arrow"
@@ -305,9 +306,9 @@ class BuildStructuresTests(unittest.TestCase):
         with unittest.mock.patch.object(
                 structure_merge, "load_barriers", rewrite_the_buildings_after_they_were_read):
             self.assertIsNotNone(BUILDER.build_square(
-                SQUARE, self.prepared, rows, [], FakeGlobalPrior(), None))
+                SQUARE, self.prepared, rows, [], None))
         self.assertIsNotNone(BUILDER.build_square(
-            SQUARE, self.prepared, rows, [], FakeGlobalPrior(), None))
+            SQUARE, self.prepared, rows, [], None))
 
     def test_stale_buildings_contract_is_rejected(self):
         path = self.prepared / SQUARE / "buildings.arrow"
@@ -421,7 +422,7 @@ class AntimeridianTests(unittest.TestCase):
                 prepared = Path(directory)
                 (prepared / name).mkdir(parents=True)
                 buildings_arrow(prepared / name / "buildings.arrow", [osm_data])
-                census = BUILDER.build_square(name, prepared, [overture_data], [], FakeGlobalPrior(), None)
+                census = BUILDER.build_square(name, prepared, [overture_data], [], None)
                 table = ipc.open_file(prepared / name / "structures.arrow").read_all()
                 self.assertEqual((census["both"], table.num_rows), (1, 1))
                 self.assertEqual(table.column("osm_id").to_pylist(), [1000])

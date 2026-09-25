@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the one per-z9 structure table from OSM, Overture, official barriers and measured heights."""
+"""Build the one per-z9 structure table from OSM, Overture, the survey raster, official barriers and measured heights."""
 
 import argparse
 import json
@@ -13,7 +13,7 @@ import qmgrid
 import measured_heights
 import official_barriers
 from structure_inputs import (
-    GlobalPrior, RegionalHeights, read_official_cache, read_overture_parquet,
+    RegionalHeights, read_official_cache, read_overture_parquet,
 )
 from structure_freshness import input_content_digest, structure_input_files
 from structure_inventory import official_tile_sources, overture_sources, world_squares
@@ -25,7 +25,6 @@ WORKER_BYTES = 4 << 30
 
 _PREPARED = None
 _OVERTURE = None
-_GHSL = None
 _REGIONAL = None
 _OFFICIAL = None
 _MEASURED = None
@@ -39,7 +38,7 @@ def _existing_cache_dir(path, flag):
     return path
 
 
-def build_one(name, prepared_dir, overture_parquet, ghsl, regional,
+def build_one(name, prepared_dir, overture_parquet, regional,
               official_parquet=None, measured_parquet=None):
     square = qmgrid.parse_square_name(name)
     if square is None:
@@ -52,7 +51,7 @@ def build_one(name, prepared_dir, overture_parquet, ghsl, regional,
     measured_files = None if measured_parquet is None else [
         source for _, _, source in official_tile_sources(measured_parquet, square)]
     if structure_is_fresh(os.path.join(square_dir, "structures.arrow"), input_content_digest(
-            structure_input_files(square_dir, overture_files, ghsl, regional,
+            structure_input_files(square_dir, overture_files, regional,
                                   official_files, measured_files))):
         return None
     ovt, overture_files = read_overture_parquet(overture_parquet, square)
@@ -64,23 +63,22 @@ def build_one(name, prepared_dir, overture_parquet, ghsl, regional,
         measured_parquet, square, measured_heights.SCHEMA,
         measured_heights.CONTRACT_KEY, measured_heights.CONTRACT_VERSION) \
         if measured_parquet is not None else ([], None)
-    return build_square(name, prepared_dir, ovt, overture_files, ghsl, regional,
+    return build_square(name, prepared_dir, ovt, overture_files, regional,
                         official, official_files, measured, measured_files)
 
 
-def _init_worker(prepared_dir, overture_parquet, ghsl_path, regional_path,
+def _init_worker(prepared_dir, overture_parquet, regional_path,
                  official_parquet, measured_parquet):
-    global _PREPARED, _OVERTURE, _GHSL, _REGIONAL, _OFFICIAL, _MEASURED
+    global _PREPARED, _OVERTURE, _REGIONAL, _OFFICIAL, _MEASURED
     _PREPARED = prepared_dir
     _OVERTURE = overture_parquet
-    _GHSL = GlobalPrior(ghsl_path)
     _REGIONAL = RegionalHeights(regional_path) if regional_path else None
     _OFFICIAL = official_parquet
     _MEASURED = measured_parquet
 
 
 def _process_name(name):
-    return build_one(name, _PREPARED, _OVERTURE, _GHSL, _REGIONAL, _OFFICIAL, _MEASURED)
+    return build_one(name, _PREPARED, _OVERTURE, _REGIONAL, _OFFICIAL, _MEASURED)
 
 
 def accumulate(census, totals):
@@ -106,7 +104,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--prepared-dir", required=True)
     ap.add_argument("--overture-parquet", required=True)
-    ap.add_argument("--ghsl", required=True)
     ap.add_argument("--regional")
     ap.add_argument("--official-barriers",
                     help="official barrier cache dir (per-1-degree parquets)")
@@ -157,10 +154,9 @@ def main():
             census_log.flush()
 
     if jobs == 1:
-        ghsl = GlobalPrior(args.ghsl)
         regional = RegionalHeights(args.regional) if args.regional else None
         for done, name in enumerate(squares, start=1):
-            consume(build_one(name, args.prepared_dir, args.overture_parquet, ghsl, regional,
+            consume(build_one(name, args.prepared_dir, args.overture_parquet, regional,
                               official_parquet, measured_parquet))
             if done % 1000 == 0 or done == len(squares):
                 emit_progress(done, len(squares), totals)
@@ -169,7 +165,7 @@ def main():
         with context.Pool(
             processes=jobs,
             initializer=_init_worker,
-            initargs=(args.prepared_dir, args.overture_parquet, args.ghsl, args.regional,
+            initargs=(args.prepared_dir, args.overture_parquet, args.regional,
                       official_parquet, measured_parquet),
         ) as pool:
             for done, census in enumerate(pool.imap_unordered(_process_name, squares, chunksize=8), start=1):

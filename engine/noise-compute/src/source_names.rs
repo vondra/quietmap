@@ -78,7 +78,8 @@ pub(crate) fn leisure_type_name(sport: u8) -> &'static str {
         PITCH => "sports_pitch",
         MOTORSPORT => "motorsport",
         SHOOTING => "shooting",
-        // An id outside `leisure_v4`: it emits nothing (`leisure_profile`), and
+        AGP => "artificial_turf_pitch",
+        // An id outside `leisure_v5`: it emits nothing (`leisure_profile`), and
         // it is not named after something it may not be.
         _ => "unknown",
     }

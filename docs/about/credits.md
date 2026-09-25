@@ -21,8 +21,7 @@ None of this would exist without other people's open data. Thank you to everyone
   in Europe, [Hansen/UMD Global Forest Change](https://glad.earthengine.app/view/global-forest-change) elsewhere
 - Sealed ground: [ESA WorldCover 2021](https://worldcover2021.esa.int/) (CC BY 4.0), refined by
   [Copernicus Imperviousness Density](https://land.copernicus.eu/en/products/high-resolution-layer-imperviousness) in Europe
-- Building heights: [GHS-BUILT-H](https://human-settlement.emergency.copernicus.eu/ghs_buH2023.php) (JRC, CC BY 4.0),
-  and for Prague the [IPR Praha building height model](https://opendata.geoportalpraha.cz/maps/ad9aca20e9c042d2b52eb31ff18961b6) (CC BY)
+- Building heights for Prague: the [IPR Praha building height model](https://opendata.geoportalpraha.cz/maps/ad9aca20e9c042d2b52eb31ff18961b6) (CC BY)
 
 **Traffic**
 

@@ -20,4 +20,4 @@ Train, tram and metro counts: Dutch national timetable from [public-transport.ea
 
 ## Buildings and terrain
 
-[3DBAG](https://3dbag.nl/) has measured heights for every building but is not used yet. Heights: OpenStreetMap tags and the GHSL average for the block.
+[3DBAG](https://3dbag.nl/) has measured heights for every building but is not used yet. Heights: OpenStreetMap tags and the typical height for the footprint size.

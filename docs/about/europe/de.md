@@ -31,4 +31,4 @@ Wind turbines are OpenStreetMap points. A turbine within 200 m of a [Marktstammd
 
 ## Buildings and terrain
 
-The federal building model LoD1-DE is not open, and no state model is loaded. Heights: OpenStreetMap tags, Overture and the GHSL average for the block.
+The federal building model LoD1-DE is not open, and no state model is loaded. Heights: OpenStreetMap tags, Overture and the typical height for the footprint size.

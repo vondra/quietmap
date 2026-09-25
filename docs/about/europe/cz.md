@@ -38,4 +38,4 @@ Prague: measured height for every building, from the
 
 Elsewhere: floor count and building use from the
 [RÚIAN register](https://www.cuzk.cz/Uvod/Produkty-a-sluzby/RUIAN/) where a register
-point lies within 30 m of the building; otherwise the GHSL average for the block.
+point lies within 30 m of the building; otherwise the typical height for the footprint size.

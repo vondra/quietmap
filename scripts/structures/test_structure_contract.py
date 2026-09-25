@@ -9,7 +9,7 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 
 from test_structures_fixtures import (
-    BUILDER, CONTRACT, SQUARE, FakeGlobalPrior, buildings_arrow, barriers_arrow,
+    BUILDER, CONTRACT, SQUARE, buildings_arrow, barriers_arrow,
     osm_row, ovt_row, OSM_POLY, OVT_LONELY,
 )
 
@@ -24,8 +24,7 @@ class PreparedStructureContractTests(unittest.TestCase):
 
     def build(self, regional=None):
         return BUILDER.build_square(
-            SQUARE, self.prepared, [ovt_row(OVT_LONELY)], [],
-            FakeGlobalPrior(), regional)
+            SQUARE, self.prepared, [ovt_row(OVT_LONELY)], [], regional)
 
     def test_prepared_height_rounds_once_without_changing_raw_emission(self):
         buildings_arrow(self.square / "buildings.arrow",
@@ -37,9 +36,9 @@ class PreparedStructureContractTests(unittest.TestCase):
         self.build()
         table = ipc.open_file(self.square / "structures.arrow").read_all()
         self.assertEqual(table.schema.field("height_m").type, pa.int16())
-        self.assertEqual(table.column("height_m").to_pylist(), [5, 13, 3])
+        self.assertEqual(table.column("height_m").to_pylist(), [5, 7, 3])
         self.assertEqual(table.column("height").to_pylist(), [4.5, None, None])
-        self.assertEqual(table.column("height_source").to_pylist(), [0, 4, 0])
+        self.assertEqual(table.column("height_source").to_pylist(), [0, 2, 0])
 
     def test_height_quantization_is_bounded_and_refuses_invalid_source_values(self):
         values = [0.0, 0.49, 0.5, 2.5, 4.5, 12.49, 32767.0]
@@ -72,7 +71,7 @@ class PreparedStructureContractTests(unittest.TestCase):
         self.assertEqual(table.column("height_source").to_pylist(), [3])
         self.assertIsNotNone(self.build())
         table = ipc.open_file(self.square / "structures.arrow").read_all()
-        self.assertEqual(table.column("height_source").to_pylist(), [4])
+        self.assertEqual(table.column("height_source").to_pylist(), [2])
 
 
 if __name__ == "__main__":

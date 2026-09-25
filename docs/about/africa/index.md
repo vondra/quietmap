@@ -61,8 +61,7 @@ without an AIS transmitter, including most small fishing boats, are not covered.
 ## Buildings
 
 Footprints come from OpenStreetMap and [Overture](https://overturemaps.org/), heights from
-the [GHSL](https://human-settlement.emergency.copernicus.eu/ghs_buH2023.php) average
-building height. Unmapped buildings do not screen sound; where footprint coverage is
-poor, the map is too loud behind the first row of houses.
+mapped tags and the typical height for the footprint size. Unmapped buildings do not
+screen sound; where footprint coverage is poor, the map is too loud behind the first row of houses.
 
 Model description: [methodology](/about/methodology).

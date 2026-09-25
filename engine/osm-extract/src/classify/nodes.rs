@@ -80,6 +80,7 @@ const NODE_SETTLEMENT_KEYS: &[&str] = &[
     "indoor",
     "outdoor_seating",
     "access",
+    "surface",
     "name",
     "opening_hours",
 ];

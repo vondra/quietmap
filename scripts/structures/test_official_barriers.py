@@ -14,7 +14,7 @@ import normalize_barrier_cache as NORMALIZE
 import official_barriers as OFFICIAL
 from structure_inputs import read_official_cache
 from test_structures_fixtures import (
-    BUILDER, CONTRACT, GRID, SQUARE, FakeGlobalPrior, buildings_arrow, barriers_arrow,
+    BUILDER, CONTRACT, GRID, SQUARE, buildings_arrow, barriers_arrow,
     osm_row, OSM_POLY,
 )
 
@@ -133,7 +133,7 @@ class BuildSquareOfficialTests(unittest.TestCase):
         ])
         official = [official_row(LON, height_m=4.4)]
         census = BUILDER.build_square(
-            SQUARE, self.prepared, [], [], FakeGlobalPrior(), None, official, [], [], [])
+            SQUARE, self.prepared, [], [], None, official, [], [], [])
         table = ipc.open_file(self.prepared / SQUARE / "structures.arrow").read_all()
         kinds = table.column("kind").to_pylist()
         self.assertEqual(census["official_walls"], 1)
@@ -160,7 +160,7 @@ class BuildSquareOfficialTests(unittest.TestCase):
                         [osm_row(0, OSM_POLY, 32.0, height=6.0)])
         official = [official_row(LON, kind=OFFICIAL.KIND_BERM)]
         census = BUILDER.build_square(
-            SQUARE, self.prepared, [], [], FakeGlobalPrior(), None, official, [], [], [])
+            SQUARE, self.prepared, [], [], None, official, [], [], [])
         table = ipc.open_file(self.prepared / SQUARE / "structures.arrow").read_all()
         self.assertEqual(census["official_walls"], 0)
         self.assertEqual(table.column("kind").to_pylist(), [0])

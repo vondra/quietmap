@@ -15,7 +15,6 @@ class StructureJobsTests(unittest.TestCase):
                 'build-structures.py',
                 '--prepared-dir', directory,
                 '--overture-parquet', directory,
-                '--ghsl', directory,
                 '--jobs', '0',
             ]):
                 with self.assertRaisesRegex(ValueError, '--jobs must be >= 1'):

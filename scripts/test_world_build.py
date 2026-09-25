@@ -217,7 +217,7 @@ class WorldBuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sources = {name: str(root / name) for name in ('planet', 'rasters', 'enrichment', 'boundaries',
-                       'city_boundaries', 'overture', 'ghsl', 'regional_heights', 'official_barriers', 'measured_heights',
+                       'city_boundaries', 'overture', 'regional_heights', 'official_barriers', 'measured_heights',
                        'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
             for path in sources.values():
                 Path(path).touch()
@@ -263,7 +263,7 @@ class WorldBuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sources = {name: str(root / name) for name in ('planet', 'rasters', 'enrichment', 'boundaries',
-                       'city_boundaries', 'overture', 'ghsl', 'regional_heights', 'official_barriers', 'measured_heights',
+                       'city_boundaries', 'overture', 'regional_heights', 'official_barriers', 'measured_heights',
                        'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
             for path in sources.values():
                 Path(path).touch()

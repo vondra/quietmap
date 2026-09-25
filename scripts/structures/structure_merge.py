@@ -21,11 +21,11 @@ from structure_contract import (
     validate_square, screening_height_metres,
 )
 from structure_heights import (
-    demand_storeys_and_source, needs_ghsl, screening_height_and_source, wall_height_and_source,
+    demand_storeys_and_source, screening_height_and_source, wall_height_and_source,
 )
 from structure_inputs import (
     BUILDING_USE_OPEN_ROOF, ENVELOPE_FROM_BUILDING_USE, ENVELOPE_DEFAULT, ENVELOPE_OUTDOOR,
-    footprint_area_m2, footprint_in_longitude_frame, sample_raster_heights,
+    footprint_area_m2, footprint_in_longitude_frame, sample_regional_heights,
 )
 
 IOU_MATCH_THRESHOLD = 0.5
@@ -37,9 +37,13 @@ IOU_MATCH_THRESHOLD = 0.5
 # 4: explicit OSM open carports stay outdoors, including Overture-matched footprints.
 # 5: one height ladder for every footprint, open roofs screen 0 m, demand storeys, national
 #    wall defaults (structures_v5).
-# 6: official barrier inventories beside OSM (an official line replaces OSM
-#    segments on the same line) and national measured heights on ladder rung 1.
-BUILDER_VERSION = "structures-builder-6"
+# 7: official barrier inventories beside OSM (an official line replaces OSM
+#    segments on the same line) and national measured heights on ladder rung 1;
+#    no satellite rung (the typology beats it on mean-roof references), floors
+#    map 1/2-3/4+ to 6/6-9/3f+2 m, storeys invert height minus 1 m.
+#    (Two unmerged tips both stamped 6 for different rows, so 6 is skipped:
+#    no square stamped 6 is trusted fresh.)
+BUILDER_VERSION = "structures-builder-7"
 # barriers.arrow height_tier: 0 = the wall's own OSM height tag, 2 = none mapped.
 BARRIER_HEIGHT_TIER_MAPPED = 0
 
@@ -123,11 +127,10 @@ def screening_candidate(osm, i_osm, osm_geom, ovt, ordinal):
         # A footprint-less OSM node keeps its mapped area; with none it counts as the smallest.
         "footprint_m2": (footprint_area_m2(geom, clat) if geom is not None
                          else osm_value("area_m2") or 0.0),
-        "needs_ghsl": needs_ghsl(osm_height, floors, overture_height),
     }
 
 
-def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, regional,
+def build_square(name, prepared_dir, overture_rows, overture_files, regional,
                  official_rows=None, official_files=None, measured_rows=None, measured_files=None):
     """Write one square's structures.arrow; return the census dict, or None
     when the square is up to date (idempotent skip)."""
@@ -141,7 +144,7 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
     # The digest describes the inputs BEFORE the read: an input rewritten during the build then
     # differs on the next run and the square is rebuilt.
     digest_before_reading = input_content_digest(
-        structure_input_files(square_dir, overture_files, ghsl, regional,
+        structure_input_files(square_dir, overture_files, regional,
                               official_files, measured_files))
     if structure_is_fresh(out_path, digest_before_reading):
         return None
@@ -171,7 +174,7 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
                    for j, row in enumerate(overture_rows) if j not in matched_ovt]
     laddered = [c for c in candidates if not (c["ground"] or c["open_roof"])]
     stats = {"regional": 0, "abstain": 0, "measured": 0}
-    sample_raster_heights(laddered, regional, ghsl, stats)
+    sample_regional_heights(laddered, regional, stats)
     stats["measured"] = apply_measured_heights(laddered, measured_rows or [])
     for c in candidates:
         if c["ground"] or c["open_roof"]:
@@ -182,7 +185,7 @@ def build_square(name, prepared_dir, overture_rows, overture_files, ghsl, region
         else:
             c["height_m"], c["height_source"] = screening_height_and_source(
                 c["regional_m"], c["osm_height"], c["floors"], c["overture_height"],
-                c["ghsl_m"], c["footprint_m2"])
+                c["footprint_m2"])
             c["storeys"] = demand_storeys_and_source(c["floors"], c["height_m"])
 
     out = {f: [] for f in SCHEMA.names}
