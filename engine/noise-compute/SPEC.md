@@ -269,7 +269,9 @@ traffic stay. Greenhouses, grandstands and enclosed garages keep their walls.
 The structures builder gives every footprint one screening height, the mean
 roof height, from the first available rung, and stores its `height_source`:
 
-1. regional survey zonal mean (Prague LiDAR), clamped to 2.5–250 m;
+1. national measured height (NRW LoD1 `measuredHeight`, 3DBAG 70th-percentile
+   roof minus ground) where a measured footprint covers the candidate, else the
+   regional survey zonal mean (Prague LiDAR); clamped to 2.5–250 m;
 2. mapped OSM `height`;
 3. OSM, national-register or Overture floors × 3 m + 3 m roof allowance
    (Prague LiDAR vs OSM floors, 105,957 buildings: median residual 0.0 m);
@@ -285,7 +287,12 @@ cap. The demand storey count `storeys` is the floor count where one is mapped,
 else round((height − 3 m) / 3 m), at least 1; a structure without a screening
 height counts one level. The service-tree demand reads it. Noise walls keep a
 mapped OSM height; unmapped walls stand at their country's mean wall height
-(DE 3.88 m, US 4.45 m, AT 3.6 m, else 3 m).
+(DE 3.88 m, US 4.45 m, AT 3.6 m, else 3 m). Official barrier inventories
+(`structures-builder-6`) stand beside OSM: an official line replaces the OSM
+micro-segments within 5 m of it and screens at its inventoried height
+(GWV top-minus-road-edge median, else the inventory's in-range median);
+official berms stay out of the thin-wall index until the terrain step
+consumes them.
 
 ## 4.7 Vector screening
 
