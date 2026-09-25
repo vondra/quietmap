@@ -86,16 +86,18 @@ export function onCarriageway(answer: PopupAnswer): boolean {
 export type PositionSample = { bearing_deg: number; lden: number | null; ln: number | null; dropped: string | null }
 
 /** The model on the circle of the position radius; indoor and carriageway points are kept but dropped. */
-export async function positionSamples(center: Point, radiusM: number, probe: Probe, read: (answer: PopupAnswer, point: Point) => { lden: number | null; ln: number | null; inside: boolean }): Promise<PositionSample[]> {
+export async function positionSamples(center: Point, radiusM: number, probe: Probe, read: (answer: PopupAnswer, point: Point) => { lden: number | null; ln: number | null }): Promise<PositionSample[]> {
   const samples: PositionSample[] = []
   for (const bearing of POSITION_BEARINGS_DEG) {
     const point = offsetPoint(center, bearing, radiusM)
+    // A point inside a building answers its building exposure, never an outdoor sample.
+    if (await probe.inside(point)) {
+      samples.push({ bearing_deg: bearing, lden: null, ln: null, dropped: 'inside a footprint' })
+      continue
+    }
     const answer = await probe.popup(point)
     const levels = read(answer, point)
-    samples.push({
-      bearing_deg: bearing, lden: levels.lden, ln: levels.ln,
-      dropped: levels.inside ? 'inside a footprint' : onCarriageway(answer) ? 'on a carriageway' : null,
-    })
+    samples.push({ bearing_deg: bearing, lden: levels.lden, ln: levels.ln, dropped: onCarriageway(answer) ? 'on a carriageway' : null })
   }
   return samples
 }

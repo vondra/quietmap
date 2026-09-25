@@ -11,7 +11,7 @@ const road = (osm_id: number, received_lden: number, metadata: Record<string, un
   metadata: { kind: 'road', road_class: 'secondary', aadt_light: 1400, aadt_medium: 50, aadt_heavy: 50, aadt_moto: 0, ...metadata },
 })
 
-const indoorAnswer: PopupAnswer = {
+const answer: PopupAnswer = {
   center: [48.87, 2.34],
   receiver: { lat: 48.87002, lng: 2.34, height_m: 4 },
   total_lden: 40,
@@ -20,21 +20,7 @@ const indoorAnswer: PopupAnswer = {
     { source_type: 'aircraft', lden: 30.5, ld: 28, le: 27, ln: 0 },
   ],
   top_contributors: [road(7, 39, { traffic_estimated: 15, dominant_source_id: 0, provenance: null })],
-  envelope_class: 'residential',
-  envelope_delta_db: 30,
-  facade_lden: 70,
 }
-
-test('an indoor answer is restored to its facade levels, and a floored indoor level is unknown', () => {
-  const model = readPopupAnswer(indoorAnswer, { lat: 48.87, lng: 2.34 })
-  assert.equal(model.inside_footprint, true)
-  assert.equal(model.total.lden, 70)
-  assert.deepEqual(model.layers.road.periods, { day: 67, evening: 66, night: 61 })
-  assert.equal(model.layers.aircraft.periods.night, null, 'indoor 0 dB is a floor, not facade − Δ')
-  assert.equal(model.receiver.click_to_receiver_m, 2.2)
-  assert.equal(model.dominant_layer, 'road')
-  assert.equal(model.contributors[0].received_lden, 69)
-})
 
 test('the dominant road is counted by its dataset tier, not by per-class estimate bits', () => {
   const tier = (value: string) => ({ tier: value })
@@ -42,7 +28,7 @@ test('the dominant road is counted by its dataset tier, not by per-class estimat
   assert.equal(roadTrafficProvenance({ dominant_source_id: 11, traffic_estimated: 15, provenance: tier('heuristic') }), 'service_tree')
   assert.equal(roadTrafficProvenance({ dominant_source_id: 12, traffic_estimated: 15, provenance: tier('heuristic') }), 'continuity_fill')
   assert.equal(roadTrafficProvenance({ dominant_source_id: 0, traffic_estimated: 15, provenance: null }), 'class_default')
-  const local = readPopupAnswer({ ...indoorAnswer, top_contributors: [road(8, 50, {
+  const local = readPopupAnswer({ ...answer, top_contributors: [road(8, 50, {
     road_class: 'residential', traffic_estimated: 15, dominant_source_id: 11, provenance: tier('heuristic'),
   })] }, { lat: 48.87, lng: 2.34 })
   assert.equal(local.dominant_road?.traffic_provenance, 'service_tree')

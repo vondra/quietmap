@@ -1,6 +1,6 @@
 /**
- * Read one popup answer as outdoor model levels: per-layer periods and shares, the receiver
- * actually computed, indoor-to-facade restoration, and the dominant road's traffic provenance.
+ * Read one popup answer as model levels: per-layer periods and shares, the receiver actually
+ * computed, and the dominant road's traffic provenance.
  */
 import { DATASETS } from '../lib/enrichment-datasets.ts'
 import { energySumDb, ldenFromPeriods, type PeriodLevels } from './lib.ts'
@@ -21,9 +21,8 @@ export type PopupAnswer = {
   total_lden: number | null
   sources: WireSource[]
   top_contributors: WireContributor[]
-  envelope_class?: string
-  envelope_delta_db?: number
-  facade_lden?: number
+  /** Present exactly when the point lies inside an enclosed building: its noisiest façade receiver. */
+  building_exposure?: { receiver: [number, number] | null; facade_bearing_deg: number | null; facade_points: number }
   unavailable_layers?: string[]
 }
 
@@ -55,9 +54,6 @@ export type DominantRoad = {
 }
 export type StationModel = {
   receiver: { lat: number; lng: number; height_m: number | null; click_to_receiver_m: number }
-  inside_footprint: boolean
-  envelope_class: string | null
-  envelope_delta_db: number | null
   total: { lden: number | null; periods: PeriodLevels }
   layers: Record<string, LayerModel>
   dominant_layer: string | null
@@ -134,28 +130,16 @@ function dominantRoad(contributors: WireContributor[]): DominantRoad | null {
   }
 }
 
-/**
- * Inside an enclosed footprint every popup level is the indoor estimate, facade − Δ, floored
- * at 0 dB (`envelope.rs`); adding Δ back restores the outdoor facade level. A floored value
- * cannot be restored and becomes null.
- */
-function outdoor(level: number | null, delta: number | null): number | null {
-  if (level == null || delta == null) return level
-  return level > 0 ? level + delta : null
-}
-
 export function readPopupAnswer(answer: PopupAnswer, clicked: { lat: number; lng: number }): StationModel {
-  const delta = answer.envelope_class ? answer.envelope_delta_db ?? null : null
-  if (answer.envelope_class && delta == null) throw new Error('indoor answer without envelope_delta_db')
   const layers: Record<string, LayerModel> = {}
   for (const source of answer.sources) {
     layers[source.source_type] = {
-      lden: outdoor(source.lden, delta),
-      periods: { day: outdoor(source.ld, delta), evening: outdoor(source.le, delta), night: outdoor(source.ln, delta) },
+      lden: source.lden,
+      periods: { day: source.ld, evening: source.le, night: source.ln },
       share_lden: 0,
     }
   }
-  const totalLden = answer.facade_lden ?? outdoor(answer.total_lden, delta)
+  const totalLden = answer.total_lden
   const totalEnergy = Object.values(layers).reduce((sum, layer) => sum + (layer.lden == null ? 0 : 10 ** (layer.lden / 10)), 0)
   for (const layer of Object.values(layers)) layer.share_lden = totalEnergy > 0 && layer.lden != null ? 10 ** (layer.lden / 10) / totalEnergy : 0
   const periods: PeriodLevels = {
@@ -177,7 +161,7 @@ export function readPopupAnswer(answer: PopupAnswer, clicked: { lat: number; lng
         name: contributor.name,
         subtype: contributor.subtype,
         distance_m: contributor.distance_m,
-        received_lden: outdoor(contributor.received_lden, delta) ?? 0,
+        received_lden: contributor.received_lden,
         ...(road ? {
           aadt_total: count('aadt_light') + count('aadt_medium') + count('aadt_heavy') + count('aadt_moto'),
           dataset_name: (metadata.provenance as { name?: string } | null | undefined)?.name ?? null,
@@ -193,9 +177,6 @@ export function readPopupAnswer(answer: PopupAnswer, clicked: { lat: number; lng
       height_m: receiver.height_m,
       click_to_receiver_m: +metresBetween(clicked.lat, clicked.lng, receiver.lat, receiver.lng).toFixed(1),
     },
-    inside_footprint: Boolean(answer.envelope_class),
-    envelope_class: answer.envelope_class ?? null,
-    envelope_delta_db: delta,
     total: { lden: totalLden ?? ldenFromPeriods(periods.day, periods.evening, periods.night), periods },
     layers,
     dominant_layer: dominant && dominant[1].share_lden > 0 ? dominant[0] : null,

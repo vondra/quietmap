@@ -65,7 +65,7 @@ const comparison = (indicator: string, period: string, model: number, measured: 
 function row(key: string, lden: number, fields: Partial<StationRow> & { road?: RoadFields; measured?: number } = {}): StationRow {
   const layer = { lden, periods: { day: lden - 2, evening: lden - 3, night: lden - 8 }, share_lden: 1 }
   const model = {
-    total: { lden, periods: layer.periods }, layers: { road: layer }, dominant_layer: 'road', inside_footprint: false, unavailable_layers: [],
+    total: { lden, periods: layer.periods }, layers: { road: layer }, dominant_layer: 'road', unavailable_layers: [],
     contributors: [{ source_type: 'road', osm_id: 7, name: 'street', subtype: 'secondary', distance_m: 8, received_lden: lden, aadt_total: 1, dataset_name: 'counts' }],
     loudest_by_layer: {}, dominant_road: road(fields.road), receiver: { lat: 0, lng: 0, height_m: 4, click_to_receiver_m: 0 },
   } as unknown as StationModel

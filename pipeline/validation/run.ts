@@ -110,22 +110,21 @@ async function scoreStation(station: CatalogueStation): Promise<StationRow> {
   }
   const started = performance.now()
   try {
-    const atStation = await probe.popup(station)
-    base.request_ms = Math.round(performance.now() - started)
     let receiver: Point = station
-    let answer = atStation
     let basis: NonNullable<StationRow['receiver']>['basis'] = 'station point, outdoors'
     let moved = 0
-    // Criteria v2 interior rule: never an indoor value; the outline point moved outward, asked there.
-    if (atStation.envelope_class) {
+    // Criteria v2 interior rule: never a building-exposure value; the outline point moved outward, asked there.
+    if (await probe.inside(station)) {
       const interior = await interiorReceiver(station, base.facade_distance_m ?? facadeOffsetDefault, probe)
       if ('reason' in interior) return { ...base, unscored: `interior station: ${interior.reason}` }
       receiver = interior.point
       moved = interior.moved_m
       basis = 'interior rule: nearest outline moved outward'
-      answer = await probe.popup(receiver)
-      if (answer.envelope_class) return { ...base, unscored: 'interior rule receiver returned an indoor answer' }
     }
+    const popupStarted = performance.now()
+    const answer = await probe.popup(receiver)
+    base.request_ms = Math.round(performance.now() - popupStarted)
+    if (answer.building_exposure) return { ...base, unscored: 'the receiver returned a building exposure' }
     const model: StationModel = readPopupAnswer(answer, receiver)
     // A server without the height parameter ignores it and answers at the engine default.
     const used = model.receiver.height_m ?? ENGINE_DEFAULT_RECEIVER_HEIGHT_M
@@ -142,7 +141,7 @@ async function scoreStation(station: CatalogueStation): Promise<StationRow> {
       guard: station.guard ? evaluateGuard(station, model) : null,
       position_samples: sampled ? await positionSamples(receiver, radius, probe, (sample, point) => {
         const read = readPopupAnswer(sample, point)
-        return { lden: read.total.lden, ln: read.total.periods.night, inside: read.inside_footprint }
+        return { lden: read.total.lden, ln: read.total.periods.night }
       }) : null,
       unscored: model.unavailable_layers.length ? `unavailable layers: ${model.unavailable_layers.join(', ')}` : null,
     }
