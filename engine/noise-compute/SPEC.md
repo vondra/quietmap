@@ -289,9 +289,15 @@ in front of the piece marks a 128-bin blocked mask over the bucket's azimuths (w
 lower than the source height, and grid cells whose tallest edge is, are skipped);
 every blocked run and clear gap is split into parts of at most 0.26 rad (at most nine
 per run), each part one node weighted by its own Δφ, obstacles read on blocked parts
-only. A line source radiating with the CNOSSOS-EU rail track dipole `0.01 + 0.99·sin²ψ` (ψ between
-track and ray; sin²ψ = cos²φ in the in-plane angle) weights each node by the dipole's closed-form
-integral over its Δφ instead of Δφ; rail rows stay omnidirectional until W4's emission, fitted
+only. A line source radiating with the CNOSSOS-EU rail track dipole `0.01 + 0.99·sin²ψ` uses ψ
+between the **horizontal projections** of track and ray (2.3.15). Each node is weighted by the
+integral of that horizontal directivity over its 3D in-plane Δφ. With `u = tan φ`, its dipole
+part is `b² / ((u+a)²+b²)`: `a` is the projected along-track offset of the 3D perpendicular foot,
+and `b` the horizontal perpendicular distance, each divided by the horizontal track speed and
+the 3D perpendicular distance. Partial fractions integrate this against `du/(1+u²)`; near
+coincident quadratics (dimensionless denominator < 1e-2), eight-point Gauss–Legendre avoids
+cancellation. For a coplanar source and receiver this reduces to the original integral of
+`cos²φ`; an elevated receiver needs the horizontal projection. Rail rows stay omnidirectional until W4's emission, fitted
 with the dipole and the two source heights, lands (each height is then its own line source).
 Against a fine point sum (1°/10 m nodes through the same per-ray physics,
 `point-sum-oracle`) the rule is within ±0.15 dB on straight roads over G = 0, 0.5, 1
@@ -373,6 +379,24 @@ painter runs the same ray in f32 (`relevant_source_cnossos_stream.cuh`).
   wide-bucket mask bin at a wall edge moving in f32).
 - The literal standard is not monotone in obstacle height (W2 `edge-height-monotonicity.txt`);
   what holds is that adding a candidate never shortens the rubber band.
+
+Until `meteorology.arrow` is delivered, every period uses the same default absorption
+coefficients (dB/km), rounded here to two decimals; the implementation computes them from
+ISO 9613-1 at exact mid-band frequencies, 15 °C, 70 % RH and 101.325 kPa. Variance is zero,
+and each period's directional favourable probability is 0.5.
+
+| Nominal band (Hz) | 63 | 125 | 250 | 500 | 1000 | 2000 | 4000 | 8000 |
+|---|---|---|---|---|---|---|---|---|
+| Mean α (dB/km) | 0.10 | 0.38 | 1.13 | 2.36 | 4.08 | 8.75 | 26.39 | 93.71 |
+
+The W4 emission integration must supply one independently powered line per source height
+A/B. The current CPU `LinePiece.source_height_m` and CUDA `DeviceLineSource.source_height_m` are relative
+to the sampled terrain (the formation datum once bare earth lands): set them to
+`railhead_offset_m + 0.5` and `railhead_offset_m + 4.0` respectively, and attach each
+height's emission, directivity and distinct source-part identity.
+Do not duplicate today's complete row emission into both heights. The deterministic CUDA
+check exercises both heights above a raised railhead and distinct per-period, per-sector
+weather probabilities with nonzero absorption variance.
 
 The painter streams the ray: samples and crossings in chainage order (the scene's obstacles are
 one merged grid, each cell taking the crossings inside its own chainage window) feed both

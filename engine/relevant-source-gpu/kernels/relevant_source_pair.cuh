@@ -34,15 +34,74 @@ __device__ __forceinline__ RaySourceTerms ray_source_terms(const DeviceLineSourc
     return terms;
 }
 
-/// A node's weight over the in-plane angles between `a` and `b`: Δφ, or the integral of the
-/// track dipole 0.01 + 0.99·cos²φ (noise-compute LineDirectivity::weight).
-__device__ __forceinline__ float line_node_weight(const DeviceLineSource& source, float a, float b) {
+/// noise-compute horizontal_dipole_integral: horizontal directivity against the 3D
+/// angular measure. Interval differences and the coincident-case quadrature keep this path in f32.
+__device__ float horizontal_dipole_integral(float lo, float hi, float a, float b) {
+    if (b == 0.0f) return 0.0f;
+    const float b2 = b * b;
+    const float difference = a * a + b2 - 1.0f;
+    const float denominator = difference * difference + 4.0f * a * a;
+    if (denominator == 0.0f) {
+        return 0.5f * (hi - lo) + 0.25f * (sinf(2.0f * hi) - sinf(2.0f * lo));
+    }
+    float integral;
+    if (denominator < 1e-2f) {
+        const float nodes[4] = {0.1834346424956498f, 0.525532409916329f,
+                                0.7966664774136267f, 0.9602898564975363f};
+        const float weights[4] = {0.362683783378362f, 0.3137066458778873f,
+                                  0.2223810344533745f, 0.1012285362903763f};
+        const float mid = 0.5f * (lo + hi);
+        const float half = 0.5f * (hi - lo);
+        integral = 0.0f;
+        for (int k = 0; k < 4; ++k) {
+            for (int sign = -1; sign <= 1; sign += 2) {
+                const float u = tanf(mid + sign * half * nodes[k]) + a;
+                integral += weights[k] * b2 / (u * u + b2);
+            }
+        }
+        integral *= half;
+    } else {
+        const float linear = -2.0f * a * b2 / denominator;
+        const float first = b2 * difference / denominator;
+        const float second = b * (a * a - b2 + 1.0f) / denominator;
+        const float sin_lo = sinf(lo), cos_lo = cosf(lo);
+        const float sin_hi = sinf(hi), cos_hi = cosf(hi);
+        const float lower = sin_lo + a * cos_lo;
+        const float upper = sin_hi + a * cos_hi;
+        const float q_lo = lower * lower + b2 * cos_lo * cos_lo;
+        const float q_hi = upper * upper + b2 * cos_hi * cos_hi;
+        const float mid = 0.5f * (hi + lo);
+        const float sin_mid = sinf(mid), cos_mid = cosf(mid);
+        const float q_delta = 2.0f * sinf(hi - lo)
+            * ((cos_mid - a * sin_mid) * (sin_mid + a * cos_mid) - b2 * sin_mid * cos_mid);
+        const float ratio_delta = q_delta / q_lo;
+        const float log_ratio = fabsf(ratio_delta) < 0.5f ? log1pf(ratio_delta) : logf(q_hi) - logf(q_lo);
+        const float angle = atan2f(b * sinf(hi - lo), b2 * cos_lo * cos_hi + lower * upper);
+        integral = first * (hi - lo) - 0.5f * linear * log_ratio + second * angle;
+    }
+    return fminf(fmaxf(integral, 0.0f), hi - lo);
+}
+
+/// Δφ for an isotropic line, or the horizontal track dipole's integral over Δφ.
+__device__ __forceinline__ float line_node_weight(const DeviceLineSource& source,
+                                                 const LinePieceGeometry& geometry,
+                                                 float a, float b) {
     const float lo = fminf(a, b);
     const float hi = fmaxf(a, b);
     if ((source.flags & QUIETMAP_SOURCE_FLAG_TRACK_DIPOLE) == 0u) {
         return hi - lo;
     }
-    return 0.01f * (hi - lo) + 0.99f * (0.5f * (hi - lo) + 0.25f * (sinf(2.0f * hi) - sinf(2.0f * lo)));
+    const float ux = geometry.unit[0], uy = geometry.unit[1];
+    const float horizontal_sq = ux * ux + uy * uy;
+    if (horizontal_sq == 0.0f) return static_cast<float>(hi - lo);
+    const float x = geometry.start[0], y = geometry.start[1];
+    const float foot_x = x + ux * geometry.foot_along_m;
+    const float foot_y = y + uy * geometry.foot_along_m;
+    const float scale = horizontal_sq * geometry.perpendicular_m;
+    const float shift = (foot_x * ux + foot_y * uy) / scale;
+    const float width = fabsf(x * uy - y * ux) / scale;
+    return static_cast<float>(0.01f * (hi - lo)
+        + 0.99f * horizontal_dipole_integral(lo, hi, shift, width));
 }
 
 /// The source point of the line at `along_m` in the scene frame.
@@ -110,7 +169,7 @@ __device__ void line_quadrature_transfer(
                     line_source_point(geometry, receiver_x_m, receiver_y_m, along_m, x_m, y_m);
                     cnossos_ray_transfer(scene, terms, x_m, y_m, receiver_x_m, receiver_y_m,
                                          receiver_altitude_m, run_blocked, profile, transfer);
-                    const float weight = line_node_weight(source, edge_lo, edge_hi);
+                    const float weight = line_node_weight(source, geometry, edge_lo, edge_hi);
                     for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
                         for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
                             sum[period][band] = fmaf(weight, transfer[period][band],
@@ -128,7 +187,7 @@ __device__ void line_quadrature_transfer(
                           line_along_at_angle(geometry, angle_lo + 0.5f * bucket_angle), x_m, y_m);
         cnossos_ray_transfer(scene, terms, x_m, y_m, receiver_x_m, receiver_y_m, receiver_altitude_m,
                              true, profile, transfer);
-        const float weight = line_node_weight(source, angle_lo, angle_hi);
+        const float weight = line_node_weight(source, geometry, angle_lo, angle_hi);
         for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
             for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
                 sum[period][band] = fmaf(weight, transfer[period][band], sum[period][band]);

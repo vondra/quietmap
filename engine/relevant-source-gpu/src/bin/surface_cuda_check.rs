@@ -1,7 +1,8 @@
 //! Bounded CUDA numerical check on synthetic scenes: every surface pair kernel against the CPU
 //! physics it mirrors (noise-compute ray_transfer and line_piece), over flat ground of four
 //! ground factors and a relief scene with buildings and walls, for a road, a rail row at both
-//! source heights (the upper one with the track dipole) and a point; never paints tiles.
+//! source heights above a raised railhead (both with the track dipole) and a point. Checks
+//! default weather and distinct period/direction probabilities and absorption moments; never paints tiles.
 use anyhow::{ensure, Result};
 use noise_compute::{
     compute::line_piece::{evaluate_line_piece, LinePiece, LinePieceScratch},
@@ -262,7 +263,20 @@ fn relief_scene() -> Scene {
 
 fn main() -> Result<()> {
     let cuda = RelevantSourceCuda::initialize()?;
-    let weather = Meteorology::defaults();
+    let default_weather = Meteorology::defaults();
+    let mut varied_weather = default_weather.clone();
+    varied_weather.favourable_probability = std::array::from_fn(|period|
+        std::array::from_fn(|sector| ((sector + 3 * period) % 17) as f64 / 16.0));
+    varied_weather.absorption = std::array::from_fn(|period| std::array::from_fn(|band| {
+        let mean = default_weather.absorption[period][band].mean_db_per_km * (0.75 + 0.25 * period as f64);
+        noise_compute::propagation::air_absorption::AbsorptionClimate {
+            mean_db_per_km: mean,
+            variance_db2_per_km2: 0.25 * mean * mean,
+            minimum_db_per_km: 0.1 * mean,
+        }
+    }));
+    // Formation is the raster datum; this known offset puts A/B at 0.5/4.0 m above railhead.
+    let railhead_offset_m = 0.7;
     let sources = [
         Source::Line {
             start: [-125.0, 0.0],
@@ -275,75 +289,82 @@ fn main() -> Result<()> {
         Source::Line {
             start: [-300.0, -20.0],
             end: [-60.0, 30.0],
-            height_m: 0.5,
+            height_m: railhead_offset_m + 0.5,
             ground: 1.0,
             platform_m: 2.5,
-            directivity: LineDirectivity::Omnidirectional,
+            directivity: LineDirectivity::TrackDipole,
         },
         Source::Line {
             start: [-300.0, -20.0],
             end: [-60.0, 30.0],
-            height_m: 4.0,
+            height_m: railhead_offset_m + 4.0,
             ground: 1.0,
             platform_m: 2.5,
             directivity: LineDirectivity::TrackDipole,
         },
         Source::Point { at: [180.0, 250.0], height_m: 4.0, exclusion_m: 20.0 },
     ];
-    let receivers: Vec<[f32; 2]> = (-3..=3)
+    let mut receivers: Vec<[f32; 2]> = (-3..=3)
         .flat_map(|i| (-1..=5).map(move |j| [i as f32 * 140.0 + 7.0, j as f32 * 110.0 + 3.0]))
         .collect();
+    // Horizontal directivity differs most from the old 3D angle on/near the track axis;
+    // larger offsets exercise the near-coincident quadratic limit at source B's height.
+    receivers.extend([5.0, 5.001, 5.01, 5.1, 6.0, 10.0, 15.0].map(|y| [-180.0, y]));
+    receivers.extend([[-420.0, -45.0], [-420.0, -44.0]]);
     let mut worst = 0.0_f64;
-    for (scene, limit_db) in [
-        (flat_scene(100), 0.05),
-        (flat_scene(99), 0.05),
-        (flat_scene(50), 0.05),
-        (flat_scene(0), 0.05),
-        (relief_scene(), 0.5),
-    ] {
-        let devices: Vec<_> = sources.iter().map(Source::device).collect();
-        let uploaded = Uploaded::new(&scene, &devices, &weather)?;
-        let pointers = uploaded.pointers();
-        for (source_index, source) in sources.iter().enumerate() {
-            let count = receivers.len();
-            let (gpu, milliseconds) = cuda.evaluate_corners(
-                &pointers,
-                &DeviceBuffer::from_slice(&vec![1.0; count])?,
-                &DeviceBuffer::from_slice(&(0..=count as u32).collect::<Vec<_>>())?,
-                &DeviceBuffer::from_slice(&vec![source_index as u32; count])?,
-                &DeviceBuffer::from_slice(&receivers.iter().map(|r| r[0]).collect::<Vec<_>>())?,
-                &DeviceBuffer::from_slice(&receivers.iter().map(|r| r[1]).collect::<Vec<_>>())?,
-                &DeviceBuffer::from_slice(&vec![0.0; count])?,
-            )?;
-            let (mut largest, mut over_tenth, mut compared) = (0.0_f64, 0, 0);
-            for (receiver, gpu_power) in receivers.iter().zip(&gpu) {
-                let cpu_power = source.cpu_power(&scene, *receiver, &weather);
-                for period in 0..3 {
-                    let (cpu, gpu) = (cpu_power[period], f64::from(gpu_power[period]));
-                    if cpu < 1e-3 && gpu < 1e-3 {
-                        continue;
+    for (weather_name, weather) in [("default", default_weather), ("period-direction-moments", varied_weather)] {
+        println!("weather: {weather_name}");
+        for (scene, limit_db) in [
+            (flat_scene(100), 0.05),
+            (flat_scene(99), 0.05),
+            (flat_scene(50), 0.05),
+            (flat_scene(0), 0.05),
+            (relief_scene(), 0.5),
+        ] {
+            let devices: Vec<_> = sources.iter().map(Source::device).collect();
+            let uploaded = Uploaded::new(&scene, &devices, &weather)?;
+            let pointers = uploaded.pointers();
+            for (source_index, source) in sources.iter().enumerate() {
+                let count = receivers.len();
+                let (gpu, milliseconds) = cuda.evaluate_corners(
+                    &pointers,
+                    &DeviceBuffer::from_slice(&vec![1.0; count])?,
+                    &DeviceBuffer::from_slice(&(0..=count as u32).collect::<Vec<_>>())?,
+                    &DeviceBuffer::from_slice(&vec![source_index as u32; count])?,
+                    &DeviceBuffer::from_slice(&receivers.iter().map(|r| r[0]).collect::<Vec<_>>())?,
+                    &DeviceBuffer::from_slice(&receivers.iter().map(|r| r[1]).collect::<Vec<_>>())?,
+                    &DeviceBuffer::from_slice(&vec![0.0; count])?,
+                )?;
+                let (mut largest, mut over_tenth, mut compared) = (0.0_f64, 0, 0);
+                for (receiver, gpu_power) in receivers.iter().zip(&gpu) {
+                    let cpu_power = source.cpu_power(&scene, *receiver, &weather);
+                    for period in 0..3 {
+                        let (cpu, gpu) = (cpu_power[period], f64::from(gpu_power[period]));
+                        if cpu < 1e-3 && gpu < 1e-3 {
+                            continue;
+                        }
+                        let error_db = 10.0 * (gpu / cpu).log10();
+                        ensure!(error_db.is_finite(), "{}: source {source_index} at {receiver:?}: cpu {cpu} gpu {gpu}", scene.name);
+                        compared += 1;
+                        if error_db.abs() > 0.1 {
+                            over_tenth += 1;
+                            println!(
+                                "  {} source {source_index} receiver {receiver:?} period {period}: cpu {:.3} dB gpu {:.3} dB",
+                                scene.name,
+                                10.0 * cpu.log10(),
+                                10.0 * gpu.log10()
+                            );
+                        }
+                        largest = largest.max(error_db.abs());
                     }
-                    let error_db = 10.0 * (gpu / cpu).log10();
-                    ensure!(error_db.is_finite(), "{}: source {source_index} at {receiver:?}: cpu {cpu} gpu {gpu}", scene.name);
-                    compared += 1;
-                    if error_db.abs() > 0.1 {
-                        over_tenth += 1;
-                        println!(
-                            "  {} source {source_index} receiver {receiver:?} period {period}: cpu {:.3} dB gpu {:.3} dB",
-                            scene.name,
-                            10.0 * cpu.log10(),
-                            10.0 * gpu.log10()
-                        );
-                    }
-                    largest = largest.max(error_db.abs());
                 }
+                println!(
+                    "{}: source {source_index}: {compared} values, max |error| {largest:.4} dB, {over_tenth} over 0.1 dB, kernel {milliseconds:.1} ms",
+                    scene.name
+                );
+                ensure!(largest <= limit_db, "{}: source {source_index} differs by {largest:.3} dB (limit {limit_db})", scene.name);
+                worst = worst.max(largest);
             }
-            println!(
-                "{}: source {source_index}: {compared} values, max |error| {largest:.4} dB, {over_tenth} over 0.1 dB, kernel {milliseconds:.1} ms",
-                scene.name
-            );
-            ensure!(largest <= limit_db, "{}: source {source_index} differs by {largest:.3} dB (limit {limit_db})", scene.name);
-            worst = worst.max(largest);
         }
     }
     println!("all scenes within their limits; worst {worst:.4} dB");

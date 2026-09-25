@@ -143,7 +143,8 @@ fn a_wall_in_front_of_a_wide_bucket_places_blocked_and_clear_nodes() {
 #[test]
 fn the_track_dipole_weights_integrate_its_directivity() {
     let half_pi = std::f64::consts::FRAC_PI_2;
-    let whole = LineDirectivity::TrackDipole.weight(-half_pi, half_pi);
+    let geometry = LinePieceGeometry::new([-100.0, 5.0, 0.0], [100.0, 5.0, 0.0]).unwrap();
+    let whole = LineDirectivity::TrackDipole.weight(&geometry, -half_pi, half_pi);
     assert!((whole / std::f64::consts::PI - 0.505).abs() < 1e-12, "{whole}");
     let steps = 100_000;
     let (a, b) = (-0.3_f64, 1.1_f64);
@@ -153,6 +154,41 @@ fn the_track_dipole_weights_integrate_its_directivity() {
             LineDirectivity::TrackDipole.factor(phi.cos().powi(2)) * (b - a) / steps as f64
         })
         .sum();
-    assert!((LineDirectivity::TrackDipole.weight(b, a) - numeric).abs() < 1e-9);
-    assert_eq!(LineDirectivity::Omnidirectional.weight(a, b), b - a);
+    assert!((LineDirectivity::TrackDipole.weight(&geometry, b, a) - numeric).abs() < 1e-9);
+    assert_eq!(LineDirectivity::Omnidirectional.weight(&geometry, a, b), b - a);
+}
+
+/// Independent spatial point sum: horizontal directivity is evaluated in x/y, while
+/// divergence uses the 3D range. Covers both heights, slopes, near-coincident quadratics,
+/// a receiver on the track axis, finite off-end lines, rotations and endpoint reversal.
+#[test]
+fn horizontal_track_dipole_matches_a_spatial_point_sum_above_and_beside_the_track() {
+    for (start, end) in [
+        ([-100.0, 1.0, -3.5], [100.0, 1.0, -3.5]),
+        ([-100.0, 5.0, -3.5], [100.0, 5.0, -3.5]),
+        ([-100.0, 0.0, -3.5], [100.0, 0.0, -3.5]),
+        ([-100.0, 5.0, 0.001], [100.0, 5.0, 0.001]),
+        ([-100.0, 5.0, -10.0], [100.0, 5.0, 10.0]),
+        ([200.0, 1.0, -3.5], [400.0, 1.0, 6.5]),
+        ([-70.0, -71.0, -3.5], [70.0, 69.0, -3.5]),
+        ([100.0, 1.0, -3.5], [-100.0, 1.0, -3.5]),
+    ] {
+        let geometry = LinePieceGeometry::new(start, end).unwrap();
+        let mut nodes = Vec::new();
+        line_quadrature_nodes(&geometry, LineDirectivity::TrackDipole, &mut no_obstacles, &mut nodes);
+        let got = nodes.iter().map(|node| node.weight_rad).sum::<f64>() * geometry.divergence_factor();
+        let along = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
+        let horizontal_sq = along[0] * along[0] + along[1] * along[1];
+        let steps = 100_000;
+        let expected = (0..steps).map(|i| {
+            let f = (i as f64 + 0.5) / steps as f64;
+            let p = std::array::from_fn::<_, 3, _>(|axis| start[axis] + f * along[axis]);
+            let cross = p[0] * along[1] - p[1] * along[0];
+            let horizontal_range_sq = p[0] * p[0] + p[1] * p[1];
+            let sin_squared = if horizontal_range_sq == 0.0 { 0.0 }
+                else { cross * cross / (horizontal_sq * horizontal_range_sq) };
+            (0.01 + 0.99 * sin_squared) / p.iter().map(|v| v * v).sum::<f64>()
+        }).sum::<f64>() * geometry.length_m() / steps as f64 / POINT_DIVERGENCE_LINEAR;
+        assert!(db(got / expected).abs() < 1e-6, "{start:?}->{end:?}: {} dB", db(got / expected));
+    }
 }

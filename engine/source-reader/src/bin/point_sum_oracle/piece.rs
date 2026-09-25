@@ -88,11 +88,14 @@ pub fn point_sum(
         };
         let transfer =
             evaluate_ray_transfer(receiver, &source, obstacles, true, rasters, &weather, false, &mut scratch, None);
-        let to_receiver = [-node.position_m[0], -node.position_m[1], receiver.altitude_m - node.position_m[2]];
-        let along_line = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
-        let cosine = (to_receiver[0] * along_line[0] + to_receiver[1] * along_line[1] + to_receiver[2] * along_line[2])
-            / (to_receiver.iter().map(|v| v * v).sum::<f64>() * along_line.iter().map(|v| v * v).sum::<f64>()).sqrt();
-        let weight = line.directivity.factor(1.0 - cosine * cosine) * node.length_m
+        let along = [end[0] - start[0], end[1] - start[1]];
+        let horizontal_range_sq = node.position_m[0].powi(2) + node.position_m[1].powi(2);
+        let horizontal_line_sq = along[0].powi(2) + along[1].powi(2);
+        let cross = node.position_m[0] * along[1] - node.position_m[1] * along[0];
+        let sin_squared = if horizontal_line_sq == 0.0 { 1.0 }
+            else if horizontal_range_sq == 0.0 { 0.0 }
+            else { (cross * cross / (horizontal_range_sq * horizontal_line_sq)).clamp(0.0, 1.0) };
+        let weight = line.directivity.factor(sin_squared) * node.length_m
             / (divergence * node.slant_distance_m * node.slant_distance_m);
         for (period_sum, period) in sum.iter_mut().zip(&transfer.periods) {
             for (variant_sum, variant) in period_sum.iter_mut().zip(period) {

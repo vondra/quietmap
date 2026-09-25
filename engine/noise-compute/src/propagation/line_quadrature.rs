@@ -40,30 +40,90 @@ pub const POINT_DIVERGENCE_LINEAR: f64 = 12.589_254_117_941_673;
 pub enum LineDirectivity {
     Omnidirectional,
     /// The CNOSSOS-EU rail horizontal directivity (2.3.15), `10·lg(0.01 + 0.99·sin²ψ)` with ψ the
-    /// angle between the track and the ray (W4's D1 source input). With φ the in-plane angle
-    /// from the perpendicular foot, sin²ψ = cos²φ, so a node's weight is its closed-form integral.
+    /// angle between the horizontal projections of the track and ray (W4's D1 source input).
+    /// The divergence still integrates over the 3D in-plane angle, not this horizontal angle.
     TrackDipole,
 }
 
 impl LineDirectivity {
     /// `∫ directivity dφ` over the in-plane angles between `a` and `b`: a node's weight.
-    pub fn weight(self, a: f64, b: f64) -> f64 {
+    pub fn weight(self, geometry: &LinePieceGeometry, a: f64, b: f64) -> f64 {
         let (lo, hi) = (a.min(b), a.max(b));
         match self {
             LineDirectivity::Omnidirectional => hi - lo,
             LineDirectivity::TrackDipole => {
-                0.01 * (hi - lo) + 0.99 * (0.5 * (hi - lo) + 0.25 * ((2.0 * hi).sin() - (2.0 * lo).sin()))
+                let [ux, uy, _] = geometry.unit;
+                let horizontal_sq = ux * ux + uy * uy;
+                // A vertical line has no horizontal track direction. Ordinary rail pieces
+                // always have one; keep this degenerate input finite and isotropic.
+                if horizontal_sq == 0.0 { return hi - lo; }
+                let [x, y, _] = geometry.start;
+                let foot_x = x + ux * geometry.foot_along_m;
+                let foot_y = y + uy * geometry.foot_along_m;
+                let scale = horizontal_sq * geometry.perpendicular_m;
+                let shift = (foot_x * ux + foot_y * uy) / scale;
+                let width = (x * uy - y * ux).abs() / scale;
+                0.01 * (hi - lo) + 0.99 * horizontal_dipole_integral(lo, hi, shift, width)
             }
         }
     }
 
-    /// The directivity of one ray whose source point sees the receiver at `sin²ψ` to the line.
+    /// Directivity of one ray at `sin²ψ` to the horizontal track direction.
     pub fn factor(self, sin_squared_to_line: f64) -> f64 {
         match self {
             LineDirectivity::Omnidirectional => 1.0,
             LineDirectivity::TrackDipole => 0.01 + 0.99 * sin_squared_to_line,
         }
     }
+}
+
+/// With u = tan φ, horizontal sin²ψ = b² / ((u+a)²+b²). Integrate it against
+/// dφ = du/(1+u²). Partial fractions give log and atan terms; near coincident
+/// quadratics their large terms cancel, so use eight-point Gauss–Legendre there.
+/// The 1e-2 switch is numerical conditioning for the matching f32 CUDA path,
+/// not a physical length or angle gate.
+fn horizontal_dipole_integral(lo: f64, hi: f64, a: f64, b: f64) -> f64 {
+    if b == 0.0 { return 0.0; }
+    let b2 = b * b;
+    let difference = a * a + b2 - 1.0;
+    let denominator = difference * difference + 4.0 * a * a;
+    if denominator == 0.0 {
+        return 0.5 * (hi - lo) + 0.25 * ((2.0 * hi).sin() - (2.0 * lo).sin());
+    }
+    let integral = if denominator < 1e-2 {
+        const NODES: [(f64, f64); 4] = [
+            (0.183_434_642_495_649_8, 0.362_683_783_378_362),
+            (0.525_532_409_916_329, 0.313_706_645_877_887_3),
+            (0.796_666_477_413_626_7, 0.222_381_034_453_374_5),
+            (0.960_289_856_497_536_3, 0.101_228_536_290_376_3),
+        ];
+        let (mid, half) = (0.5 * (lo + hi), 0.5 * (hi - lo));
+        NODES.iter().map(|&(node, weight)| {
+            [-1.0, 1.0].iter().map(|sign| {
+                let u = (mid + sign * half * node).tan() + a;
+                weight * b2 / (u * u + b2)
+            }).sum::<f64>()
+        }).sum::<f64>() * half
+    } else {
+        let linear = -2.0 * a * b2 / denominator;
+        let first = b2 * difference / denominator;
+        let second = b * (a * a - b2 + 1.0) / denominator;
+        let (sin_lo, cos_lo) = lo.sin_cos();
+        let (sin_hi, cos_hi) = hi.sin_cos();
+        let lower = sin_lo + a * cos_lo;
+        let upper = sin_hi + a * cos_hi;
+        let q_lo = lower * lower + b2 * cos_lo * cos_lo;
+        let q_hi = upper * upper + b2 * cos_hi * cos_hi;
+        let (sin_mid, cos_mid) = (0.5 * (hi + lo)).sin_cos();
+        // Difference formed from the interval, not two almost equal endpoint primitives.
+        let q_delta = 2.0 * (hi - lo).sin()
+            * ((cos_mid - a * sin_mid) * (sin_mid + a * cos_mid) - b2 * sin_mid * cos_mid);
+        let ratio_delta = q_delta / q_lo;
+        let log_ratio = if ratio_delta.abs() < 0.5 { ratio_delta.ln_1p() } else { q_hi.ln() - q_lo.ln() };
+        let angle = (b * (hi - lo).sin()).atan2(b2 * cos_lo * cos_hi + lower * upper);
+        first * (hi - lo) - 0.5 * linear * log_ratio + second * angle
+    };
+    integral.clamp(0.0, hi - lo)
 }
 
 /// A straight piece in a receiver-centred frame: x east, y north, z altitude above the receiver,
@@ -213,7 +273,7 @@ pub fn line_quadrature_nodes(
             along_m: geometry.along_at_in_plane_angle(angle_lo + 0.5 * bucket_angle),
             along_lo_m: along_lo,
             along_hi_m: along_hi,
-            weight_rad: directivity.weight(angle_lo, angle_hi),
+            weight_rad: directivity.weight(geometry, angle_lo, angle_hi),
             obstacles_on_ray: true,
         };
         let before = nodes.len();
@@ -326,7 +386,7 @@ fn push_wide_bucket_nodes(
                 along_m: along,
                 along_lo_m: stretch_a.min(stretch_b),
                 along_hi_m: stretch_a.max(stretch_b),
-                weight_rad: directivity.weight(edge_lo, edge_hi),
+                weight_rad: directivity.weight(geometry, edge_lo, edge_hi),
                 obstacles_on_ray: run_blocked,
             });
         }
