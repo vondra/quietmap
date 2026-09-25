@@ -31,12 +31,15 @@ def content_digest_of_path_size_and_mtime(identity):
         return None
 
 
-def structure_input_files(square_dir, overture_files, ghsl, regional):
+def structure_input_files(square_dir, overture_files, ghsl, regional,
+                          official_files=None, measured_files=None):
     return {
         "osm": [str(Path(square_dir) / name) for name in ("buildings.arrow", "barriers.arrow")],
         "overture": list(overture_files),
         "ghsl": list(ghsl.input_files),
         "regional": list(regional.input_files) if regional is not None else None,
+        "official_barriers": None if official_files is None else [str(f) for f in official_files],
+        "measured_heights": None if measured_files is None else [str(f) for f in measured_files],
     }
 
 

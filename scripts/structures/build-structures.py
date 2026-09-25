@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the one per-z9 structure table from OSM, Overture and measured heights."""
+"""Build the one per-z9 structure table from OSM, Overture, official barriers and measured heights."""
 
 import argparse
 import json
@@ -10,9 +10,11 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
 import qmgrid
+from measured_heights import read_measured_parquet
+from official_barriers import read_official_parquet
 from structure_inputs import GlobalPrior, RegionalHeights, read_overture_parquet
 from structure_freshness import input_stamps, structure_input_files
-from structure_inventory import overture_sources, world_squares
+from structure_inventory import official_tile_sources, overture_sources, world_squares
 from structure_merge import build_square, structure_is_fresh
 from worker_jobs import available_memory_bytes, cpu_jobs, fit_jobs
 
@@ -23,32 +25,56 @@ _PREPARED = None
 _OVERTURE = None
 _GHSL = None
 _REGIONAL = None
+_OFFICIAL = None
+_MEASURED = None
 
 
-def build_one(name, prepared_dir, overture_parquet, ghsl, regional):
+def _existing_cache_dir(path, flag):
+    if path is None:
+        return None
+    if not os.path.isdir(path):
+        raise SystemExit(f"{path}: {flag} cache directory is missing")
+    return path
+
+
+def build_one(name, prepared_dir, overture_parquet, ghsl, regional,
+              official_parquet=None, measured_parquet=None):
     square = qmgrid.parse_square_name(name)
     if square is None:
         raise ValueError(f"not a square name: {name}")
     name = qmgrid.square_name(*square)
     square_dir = os.path.join(prepared_dir, name)
     overture_files = [source for _, _, source in overture_sources(overture_parquet, square)]
+    official_files = None if official_parquet is None else [
+        source for _, _, source in official_tile_sources(official_parquet, square)]
+    measured_files = None if measured_parquet is None else [
+        source for _, _, source in official_tile_sources(measured_parquet, square)]
     if structure_is_fresh(os.path.join(square_dir, "structures.arrow"), input_stamps(
-            structure_input_files(square_dir, overture_files, ghsl, regional))):
+            structure_input_files(square_dir, overture_files, ghsl, regional,
+                                  official_files, measured_files))):
         return None
     ovt, overture_files = read_overture_parquet(overture_parquet, square)
-    return build_square(name, prepared_dir, ovt, overture_files, ghsl, regional)
+    official, official_files = read_official_parquet(official_parquet, square) \
+        if official_parquet is not None else ([], None)
+    measured, measured_files = read_measured_parquet(measured_parquet, square) \
+        if measured_parquet is not None else ([], None)
+    return build_square(name, prepared_dir, ovt, overture_files, ghsl, regional,
+                        official, official_files, measured, measured_files)
 
 
-def _init_worker(prepared_dir, overture_parquet, ghsl_path, regional_path):
-    global _PREPARED, _OVERTURE, _GHSL, _REGIONAL
+def _init_worker(prepared_dir, overture_parquet, ghsl_path, regional_path,
+                 official_parquet, measured_parquet):
+    global _PREPARED, _OVERTURE, _GHSL, _REGIONAL, _OFFICIAL, _MEASURED
     _PREPARED = prepared_dir
     _OVERTURE = overture_parquet
     _GHSL = GlobalPrior(ghsl_path)
     _REGIONAL = RegionalHeights(regional_path) if regional_path else None
+    _OFFICIAL = official_parquet
+    _MEASURED = measured_parquet
 
 
 def _process_name(name):
-    return build_one(name, _PREPARED, _OVERTURE, _GHSL, _REGIONAL)
+    return build_one(name, _PREPARED, _OVERTURE, _GHSL, _REGIONAL, _OFFICIAL, _MEASURED)
 
 
 def accumulate(census, totals):
@@ -76,6 +102,10 @@ def main():
     ap.add_argument("--overture-parquet", required=True)
     ap.add_argument("--ghsl", required=True)
     ap.add_argument("--regional")
+    ap.add_argument("--official-barriers",
+                    help="official barrier cache dir (per-1-degree parquets)")
+    ap.add_argument("--measured-heights",
+                    help="measured building-height cache dir (per-1-degree parquets)")
     group = ap.add_mutually_exclusive_group()
     group.add_argument("--squares")
     group.add_argument("--squares-file")
@@ -101,6 +131,8 @@ def main():
             if square is None or qmgrid.square_name(*square) != name:
                 raise ValueError(f"Noncanonical prepared square: {path}")
         squares = world_squares(args.overture_parquet)
+    official_parquet = _existing_cache_dir(args.official_barriers, "--official-barriers")
+    measured_parquet = _existing_cache_dir(args.measured_heights, "--measured-heights")
     requested = cpu_jobs() if args.jobs is None else args.jobs
     jobs = min(len(squares), fit_jobs(requested, WORKER_BYTES)) if squares else 1
     print(
@@ -122,7 +154,8 @@ def main():
         ghsl = GlobalPrior(args.ghsl)
         regional = RegionalHeights(args.regional) if args.regional else None
         for done, name in enumerate(squares, start=1):
-            consume(build_one(name, args.prepared_dir, args.overture_parquet, ghsl, regional))
+            consume(build_one(name, args.prepared_dir, args.overture_parquet, ghsl, regional,
+                              official_parquet, measured_parquet))
             if done % 1000 == 0 or done == len(squares):
                 emit_progress(done, len(squares), totals)
     else:
@@ -130,7 +163,8 @@ def main():
         with context.Pool(
             processes=jobs,
             initializer=_init_worker,
-            initargs=(args.prepared_dir, args.overture_parquet, args.ghsl, args.regional),
+            initargs=(args.prepared_dir, args.overture_parquet, args.ghsl, args.regional,
+                      official_parquet, measured_parquet),
         ) as pool:
             for done, census in enumerate(pool.imap_unordered(_process_name, squares, chunksize=8), start=1):
                 consume(census)
