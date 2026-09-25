@@ -10,7 +10,7 @@ map: { center: [15, 30], zoom: 2 }
 
 quietmap.org shows how loud the world really is — and helps you find the quiet.
 
-What gets measured gets managed. Measure noise everywhere, and over time we can give the planet back its natural quiet — a world that keeps prospering, where we can still hear the birds.
+What gets measured gets managed. Mapping noise is the first step toward a quieter planet — one where nature can be heard again and people can thrive.
 
 1. **Find quiet places** — search any address, explore the map, discover where to live, work, or relax without noise
 2. **Understand noise** — see which sources contribute (roads, railways, aircraft, ships, industry) and how terrain, buildings, and forests reduce it

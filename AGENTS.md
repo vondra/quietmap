@@ -6,8 +6,8 @@ Ops/automation conventions live in the private repo and do not apply here.
 ## Why
 
 Make noise visible. Make quiet possible. What gets measured gets managed:
-measure noise everywhere, and over time the planet gets back its natural quiet —
-a world that keeps prospering, where we can still hear the birds. The owner maintains the project and judges results;
+mapping noise is the first step toward a quieter planet — one where nature can
+be heard again and people can thrive. The owner maintains the project and judges results;
 coding agents write the code and get more autonomy as they earn it. Every
 change serves a correct, fast answer for the visitor, anywhere on Earth.
 
