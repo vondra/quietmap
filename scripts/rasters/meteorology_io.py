@@ -211,13 +211,15 @@ def era5_window(x, y):
     pole_node = 90 * ERA5_NODES_PER_DEGREE
     west = x * longitude_nodes // 512 - longitude_nodes // 2
     east = ((x + 1) * longitude_nodes + 511) // 512 - longitude_nodes // 2
-    mercator = math.pi * (1.0 - 2.0 * y / 512)
-    edge = math.degrees(math.atan(math.sinh(mercator))) * ERA5_NODES_PER_DEGREE
-    north = pole_node if y == 0 else math.ceil(edge)
-    mercator = math.pi * (1.0 - 2.0 * (y + 1) / 512)
-    edge = math.degrees(math.atan(math.sinh(mercator))) * ERA5_NODES_PER_DEGREE
-    south = -pole_node if y == 511 else math.floor(edge)
+    north = pole_node if y == 0 else math.ceil(latitude_edge_node(y))
+    south = -pole_node if y == 511 else math.floor(latitude_edge_node(y + 1))
     return west, north, north - south + 1, east - west + 1
+
+
+def latitude_edge_node(row):
+    """A z9 row edge in ERA5 node units, like grid::raster's edge rule."""
+    mercator = math.pi * (1.0 - 2.0 * row / 512)
+    return math.degrees(math.atan(math.sinh(mercator))) * ERA5_NODES_PER_DEGREE
 
 
 def square_node_indices(x, y):

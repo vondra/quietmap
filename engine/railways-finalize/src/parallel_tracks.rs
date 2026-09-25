@@ -229,8 +229,7 @@ fn line_prior(
         .iter()
         .map(|&member| category(&priors[member]))
         .fold(CategoryFlow::default(), |best, flow| {
-            let total = |f: &CategoryFlow| f.periods.iter().sum::<f64>();
-            if best.status == STATUS_UNKNOWN || total(&flow) > total(&best) {
+            if best.status == STATUS_UNKNOWN || daily_total(&flow) > daily_total(&best) {
                 flow
             } else {
                 best

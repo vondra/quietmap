@@ -101,8 +101,7 @@ pub fn resolve_traffic_default(
     // gives a lone row one half; the table's class-3 one-way cells stay zero.
     if class == 3 && one_way {
         let total = by_direction[1][place].untagged;
-        let scale = total / (world.0 + world.1 + world.2 + world.3);
-        return TrafficDefault::SectionBothDirections((world.0 * scale, world.1 * scale, world.2 * scale, world.3 * scale));
+        return TrafficDefault::SectionBothDirections(split_in_world_proportions(world, total));
     }
     let prior = by_direction[usize::from(!one_way)][place];
     let total = if prior.vehicles_per_lane > 0.0 && (1..=6).contains(&lanes) {
@@ -110,8 +109,13 @@ pub fn resolve_traffic_default(
     } else {
         prior.untagged
     };
+    TrafficDefault::Carriageway(split_in_world_proportions(world, total))
+}
+
+/// A measured total split into vehicle classes in the world's proportions.
+fn split_in_world_proportions(world: Aadt, total: f64) -> Aadt {
     let scale = total / (world.0 + world.1 + world.2 + world.3);
-    TrafficDefault::Carriageway((world.0 * scale, world.1 * scale, world.2 * scale, world.3 * scale))
+    (world.0 * scale, world.1 * scale, world.2 * scale, world.3 * scale)
 }
 
 // One arm per (city_id, class). Values reflect each metro's published or
