@@ -92,18 +92,33 @@ pub fn load_sources(
             let traffic_calendar = (name == "airport_traffic")
                 .then(|| traffic::TrafficCalendar::read(&RecordBatch::new_empty(reader.schema())))
                 .transpose()?;
+            // One file's batches buffer before rows emit: industrial/leisure
+            // rows join against their whole square (a substation's
+            // transformers, a motorsport polygon's raceway lines). Order and
+            // row identities are unchanged — buffering only precedes them.
+            let batches: Vec<RecordBatch> = reader.collect::<Result<_, _>>()?;
+            let joins = match name {
+                "industrial" => points::FileJoins {
+                    transformers: square_store::osm_evidence::transformer_units(&batches),
+                    ..Default::default()
+                },
+                "leisure" => points::FileJoins {
+                    motorsport_lines: square_store::osm_evidence::motorsport_lines(&batches),
+                    ..Default::default()
+                },
+                _ => points::FileJoins::default(),
+            };
             let mut row_base = 0_u64;
-            for batch in reader {
-                let batch = batch?;
+            for batch in &batches {
                 if name == "roads" {
-                    RoadDirections::read(&batch).map_err(anyhow::Error::msg)?;
+                    RoadDirections::read(batch).map_err(anyhow::Error::msg)?;
                 }
                 let road_traffic = (name == "roads")
-                    .then(|| source_reader::road_traffic::RoadTrafficColumns::read(&batch))
+                    .then(|| source_reader::road_traffic::RoadTrafficColumns::read(batch))
                     .transpose()
                     .map_err(anyhow::Error::msg)?;
                 let rail_traffic = (name == "railways")
-                    .then(|| source_reader::rail_traffic::RailTrafficColumns::read(&batch))
+                    .then(|| source_reader::rail_traffic::RailTrafficColumns::read(batch))
                     .transpose()
                     .map_err(anyhow::Error::msg)?;
                 for row in 0..batch.num_rows() {
@@ -112,7 +127,7 @@ pub fn load_sources(
                     match name {
                         "roads" | "railways" => {
                             if let Some(device) = line(
-                                &batch,
+                                batch,
                                 row,
                                 rail_traffic.as_ref().map(|columns| columns.row(row)),
                                 road_traffic.as_ref().map(|columns| columns.row(row)),
@@ -128,7 +143,7 @@ pub fn load_sources(
                         }
                         "airport_traffic" => {
                             if let Some(device) = traffic::traffic_row(
-                                &batch,
+                                batch,
                                 row,
                                 frame,
                                 traffic_calendar.as_ref().unwrap(),
@@ -141,8 +156,9 @@ pub fn load_sources(
                             }
                         }
                         _ => {
-                            for (part, point) in
-                                points::points(&batch, row, name)?.iter().enumerate()
+                            for (part, point) in points::points(batch, row, name, &joins)?
+                                .iter()
+                                .enumerate()
                             {
                                 sources.push(SurfaceSource {
                                     identity: identity(part.try_into()?),

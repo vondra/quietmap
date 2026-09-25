@@ -477,15 +477,30 @@ pub fn write_railways_file(path: &Path, rows: &[FixtureRail]) {
     w.finish().unwrap();
 }
 
-/// One leisure row.
+/// One leisure row in the `leisure_v4` layout. `chain_lonlat` is `None` for a
+/// point row, an open chain for a raceway/track line, a closed ring for an
+/// area; `tags` are the retained OSM tags, written as stable sorted JSON
+/// like the extractor writes them.
 pub struct FixtureLeisure {
     pub osm_id: i64,
     pub centroid: (f64, f64),
     pub sport: u8,
     pub name: String,
+    pub chain_lonlat: Option<Vec<(f64, f64)>>,
+    pub tags: &'static [(&'static str, &'static str)],
 }
 
-/// A leisure.arrow on disk in the v2 (grid) layout, with the contract stamp.
+fn tags_json(tags: &[(&str, &str)]) -> String {
+    serde_json::to_string(
+        &tags
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<std::collections::BTreeMap<String, String>>(),
+    )
+    .unwrap()
+}
+
+/// A leisure.arrow on disk in the v2 (grid) layout, stamped `leisure_v4`.
 pub fn write_leisure_file(path: &Path, rows: &[FixtureLeisure]) {
     let mut metadata = std::collections::HashMap::new();
     metadata.insert(
@@ -506,12 +521,32 @@ pub fn write_leisure_file(path: &Path, rows: &[FixtureLeisure]) {
             Field::new("name", DataType::Utf8, true),
             Field::new("geom", DataType::Binary, true),
             Field::new("area_m2", DataType::Float32, true),
+            Field::new("geometry_kind", DataType::UInt8, false),
+            Field::new("length_m", DataType::Float32, true),
+            Field::new("osm_tags", DataType::Utf8, false),
+            Field::new("osm_kind", DataType::Utf8, false),
         ])
         .with_metadata(metadata),
     );
     let centroids: Vec<(i32, i32)> = rows
         .iter()
         .map(|r| grid_of(r.centroid.0, r.centroid.1))
+        .collect();
+    let chains: Vec<Option<Vec<(i32, i32)>>> = rows
+        .iter()
+        .map(|r| {
+            r.chain_lonlat.as_ref().map(|chain| {
+                chain.iter().map(|&(lon, lat)| grid_of(lon, lat)).collect()
+            })
+        })
+        .collect();
+    let kinds: Vec<u8> = rows
+        .iter()
+        .map(|r| match &r.chain_lonlat {
+            None => 0,
+            Some(chain) if chain.len() >= 4 && chain.first() == chain.last() => 1,
+            Some(_) => 2,
+        })
         .collect();
     let batch = RecordBatch::try_new(
         schema.clone(),
@@ -528,12 +563,40 @@ pub fn write_leisure_file(path: &Path, rows: &[FixtureLeisure]) {
             Arc::new(StringArray::from_iter_values(
                 rows.iter().map(|r| r.name.as_str()),
             )),
-            Arc::new(BinaryArray::from_iter_values(rows.iter().map(|r| {
-                encode_ring(&square_ring_lonlat(r.centroid.1, r.centroid.0))
+            Arc::new(BinaryArray::from_iter(chains.iter().map(|chain| {
+                chain.as_ref().map(|chain| grid::poly::encode_grid_poly(chain))
             }))),
-            Arc::new(Float32Array::from_iter_values(
-                rows.iter().map(|_| 400.0f32),
+            Arc::new(Float32Array::from_iter(rows.iter().zip(&chains).map(
+                |(r, chain)| match (r.chain_lonlat.as_ref(), chain.as_ref()) {
+                    (Some(lonlat), Some(grid))
+                        if lonlat.len() >= 4 && lonlat.first() == lonlat.last() =>
+                    {
+                        grid::poly::ring_area_m2(grid).map(|area| area as f32)
+                    }
+                    _ => None,
+                },
+            ))),
+            Arc::new(UInt8Array::from_iter_values(kinds)),
+            Arc::new(Float32Array::from_iter(rows.iter().map(|r| match &r.chain_lonlat {
+                Some(chain)
+                    if !(chain.len() >= 4 && chain.first() == chain.last()) =>
+                {
+                    Some(
+                        chain.windows(2).map(|leg| grid::geo::flat_dist(leg[0].1, leg[0].0, leg[1].1, leg[1].0)).sum::<f64>() as f32,
+                    )
+                }
+                _ => None,
+            }))),
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| tags_json(r.tags)),
             )),
+            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| {
+                if r.chain_lonlat.is_some() {
+                    "way"
+                } else {
+                    "node"
+                }
+            }))),
         ],
     )
     .unwrap();
@@ -543,31 +606,52 @@ pub fn write_leisure_file(path: &Path, rows: &[FixtureLeisure]) {
     w.finish().unwrap();
 }
 
-/// One industrial row.
+/// One industrial row in the `osm_industrial_contract = 2` layout.
+/// `ring_lonlat` is `None` for a point row (turbines, node substations,
+/// transformers); `suppressed` marks enrichment-retired rows the readers must
+/// skip; `tags` are the retained OSM tags; `rated_power_kw` covers
+/// generator-unit rows (turbines, solar units).
 pub struct FixtureIndustrial {
     pub osm_id: i64,
     pub centroid: (f64, f64),
     pub source_type: u8,
     pub name: String,
+    pub ring_lonlat: Option<Vec<(f64, f64)>>,
+    pub suppressed: bool,
+    pub tags: &'static [(&'static str, &'static str)],
+    pub rated_power_kw: Option<f32>,
 }
 
 /// An industrial.arrow on disk in the osm-extract v2 (grid) layout.
 pub fn write_industrial_file(path: &Path, rows: &[FixtureIndustrial]) {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("osm_id", DataType::Int64, false),
-        Field::new("centroid_gx", DataType::Int32, false),
-        Field::new("centroid_gy", DataType::Int32, false),
-        Field::new("source_type", DataType::UInt8, false),
-        Field::new("site_subtype", DataType::UInt8, false),
-        Field::new("name", DataType::Utf8, true),
-        Field::new("hub_height", DataType::Float32, true),
-        Field::new("rated_power_kw", DataType::Float32, true),
-        Field::new("geom", DataType::Binary, true),
-        Field::new("area_m2", DataType::Float32, true),
-        Field::new("source_id", DataType::UInt16, false),
-    ]).with_metadata(std::collections::HashMap::from([(
-        "osm_industrial_contract".into(), square_store::osm_contract::INDUSTRIAL_CONTRACT.into(),
-    )])));
+    let schema = Arc::new(
+        Schema::new(vec![
+            Field::new("osm_id", DataType::Int64, false),
+            Field::new("centroid_gx", DataType::Int32, false),
+            Field::new("centroid_gy", DataType::Int32, false),
+            Field::new("source_type", DataType::UInt8, false),
+            Field::new("site_subtype", DataType::UInt8, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("hub_height", DataType::Float32, true),
+            Field::new("rated_power_kw", DataType::Float32, true),
+            Field::new("geom", DataType::Binary, true),
+            Field::new("area_m2", DataType::Float32, true),
+            Field::new("source_id", DataType::UInt16, false),
+            Field::new("suppressed", DataType::UInt8, false),
+            Field::new("osm_tags", DataType::Utf8, false),
+            Field::new("osm_kind", DataType::Utf8, false),
+        ])
+        .with_metadata(std::collections::HashMap::from([
+            (
+                "osm_industrial_contract".into(),
+                square_store::osm_contract::INDUSTRIAL_CONTRACT.into(),
+            ),
+            (
+                "grid".into(),
+                square_store::store::GRID_CONTRACT_Z30.into(),
+            ),
+        ])),
+    );
     let centroids: Vec<(i32, i32)> = rows
         .iter()
         .map(|r| grid_of(r.centroid.0, r.centroid.1))
@@ -590,14 +674,37 @@ pub fn write_industrial_file(path: &Path, rows: &[FixtureIndustrial]) {
                 rows.iter().map(|r| r.name.as_str()),
             )),
             Arc::new(Float32Array::from_iter(rows.iter().map(|_| None::<f32>))),
-            Arc::new(Float32Array::from_iter(rows.iter().map(|_| None::<f32>))),
-            Arc::new(BinaryArray::from_iter_values(rows.iter().map(|r| {
-                encode_ring(&square_ring_lonlat(r.centroid.1, r.centroid.0))
-            }))),
-            Arc::new(Float32Array::from_iter_values(
-                rows.iter().map(|_| 5000.0f32),
+            Arc::new(Float32Array::from_iter(
+                rows.iter().map(|r| r.rated_power_kw),
             )),
+            Arc::new(BinaryArray::from_iter(rows.iter().map(|r| {
+                r.ring_lonlat.as_ref().map(|ring| {
+                    let grid: Vec<(i32, i32)> =
+                        ring.iter().map(|&(lon, lat)| grid_of(lon, lat)).collect();
+                    grid::poly::encode_grid_poly(&grid)
+                })
+            }))),
+            Arc::new(Float32Array::from_iter(rows.iter().map(|r| {
+                r.ring_lonlat.as_ref().and_then(|ring| {
+                    let grid: Vec<(i32, i32)> =
+                        ring.iter().map(|&(lon, lat)| grid_of(lon, lat)).collect();
+                    grid::poly::ring_area_m2(&grid).map(|area| area as f32)
+                })
+            }))),
             Arc::new(UInt16Array::from_iter_values(rows.iter().map(|_| 0u16))),
+            Arc::new(UInt8Array::from_iter_values(
+                rows.iter().map(|r| u8::from(r.suppressed)),
+            )),
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| tags_json(r.tags)),
+            )),
+            Arc::new(StringArray::from_iter_values(rows.iter().map(|r| {
+                if r.ring_lonlat.is_some() {
+                    "way"
+                } else {
+                    "node"
+                }
+            }))),
         ],
     )
     .unwrap();

@@ -4,6 +4,10 @@ use std::path::Path;
 
 pub(super) const BUILDING_QUERY_RADIUS_M: f64 = 2_000.0;
 pub(super) const INDUSTRIAL_QUERY_RADIUS_M: f64 = 5_000.0;
+/// Leisure prefetch horizon: 4 km so the v4 formula classes (motorsport /
+/// shooting, industrial reach) prefilter like industrial rows. The per-row
+/// gate stays class-aware (2 km centroid for area classes).
+pub(super) const LEISURE_QUERY_RADIUS_M: f64 = 4_000.0;
 /// A ship row is read when its cell centre lies within the sub-cell reach plus the cell's
 /// half diagonal (`batches_within` adds its own 2 % slack).
 pub(super) const SHIP_QUERY_RADIUS_M: f64 = noise_compute::emission::ships::SHIP_MAX_RADIUS_M
@@ -35,6 +39,7 @@ fn surface_reach_m() -> f64 {
     noise_compute::propagation::relevance_bound::LINE_REACH_CEILING_M
         .max(noise_compute::constants::GROUND_OPS_RUNWAY_MAX_RADIUS)
         .max(BUILDING_QUERY_RADIUS_M)
+        .max(LEISURE_QUERY_RADIUS_M)
         .max(INDUSTRIAL_QUERY_RADIUS_M)
         .max(SHIP_QUERY_RADIUS_M)
         * LINE_MIDPOINT_REACH_FACTOR

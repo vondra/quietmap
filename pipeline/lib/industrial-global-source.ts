@@ -32,9 +32,40 @@ const GPPD_FUEL_NACE: Record<string, number> = {
   Nuclear: 3511, Hydro: 3512, Solar: 3599, Gas: 3511, Oil: 3511,
   Coal: 3511, Petcoke: 3511, Biomass: 3511, Waste: 3511, Geothermal: 3512,
 }
-// E-PRTR Annex I activity sectors, as mapped by the actual dev1 global producer.
-const ANNEX_SECTOR_NACE: Record<number, number> = {
-  1: 3511, 2: 2410, 3: 2351, 4: 2011, 5: 3821, 6: 1711, 7: 146, 8: 1011, 9: 1310,
+// E-PRTR Annex I activity, mapped by SUB-activity letter: one NACE per sector
+// mistyped most of sector 2 (only 221 of 4,944 sector-2 facilities make steel —
+// the rest are non-ferrous, foundries, surface treatment). Three-digit codes
+// are NACE divisions with a leading zero dropped (510 = 05.10, 146 = 01.46);
+// the engine divides by 100, so they resolve to the same profile.
+const ANNEX_SUBACTIVITY_NACE: Record<string, number> = {
+  '1(a)': 1920, '1(b)': 1920, '1(c)': 3511, '1(d)': 1910, '1(e)': 2410, '1(f)': 1920,
+  '2(a)': 2410, '2(b)': 2410, '2(c)(i)': 2410, '2(c)(ii)': 2550, '2(c)(iii)': 2561,
+  '2(c)': 2410, '2(d)': 2451, '2(e)(i)': 2442, '2(e)(ii)': 2453, '2(e)': 2453, '2(f)': 2561,
+  '3(a)': 510, '3(b)': 812, '3(c)': 2351, '3(c)(i)': 2351, '3(c)(ii)': 2352,
+  '3(c)(iii)': 2352, '3(d)': 2399, '3(e)': 2311, '3(f)': 2399, '3(g)': 2332,
+  '4(a)': 2011, '4(b)': 2011, '4(c)': 2015, '4(d)': 2020, '4(e)': 2120, '4(f)': 2051,
+  '5(a)': 3822, '5(b)': 3821, '5(c)': 3821, '5(d)': 3821, '5(e)': 1011, '5(f)': 3700, '5(g)': 3700,
+  '6(a)': 1711, '6(b)': 1712, '6(c)': 1610,
+  '7(a)': 146, '7(b)': 321,
+  '8(a)': 1011, '8(b)': 1089, '8(c)': 1051,
+  '9(a)': 1330, '9(b)': 1511, '9(c)': 2561, '9(d)': 2399, '9(e)': 3011,
+}
+
+/** Longest-match the Annex I activity string against the sub-activity map:
+ * full string, then `N(x)(…)` and `N(x)` prefixes. Unknown → 0 (unclassified,
+ * never a guessed sector). */
+export function annexSubactivityNace(activity: string): number {
+  const compact = activity.replace(/\s+/g, '')
+  const prefixes = [
+    compact,
+    compact.replace(/^(\d+\([a-z]\)(\([ivx]+\))?).*$/, '$1'),
+    compact.replace(/^(\d+\([a-z]\)).*$/, '$1'),
+  ]
+  for (const prefix of prefixes) {
+    const nace = ANNEX_SUBACTIVITY_NACE[prefix]
+    if (nace !== undefined) return nace
+  }
+  return 0
 }
 const ACTIVE_GEM_STATUS = new Set(['operating', 'operating-pre-retirement'])
 const validCoordinates = (lat: unknown, lon: unknown): lat is number =>
@@ -65,8 +96,7 @@ export function parseGlobalIndustrialSource(text: string, source: GlobalIndustri
     census.raw = parsed.results.length
     for (const row of parsed.results) {
       const activity = typeof row.EPRTRAnnexIMainActivity === 'string' ? row.EPRTRAnnexIMainActivity : ''
-      const sector = activity.match(/^\s*(\d{1,2})\s*[.(]/)
-      add(row.y_4326, row.x_4326, sector ? ANNEX_SECTOR_NACE[Number(sector[1])] ?? 0 : 0)
+      add(row.y_4326, row.x_4326, annexSubactivityNace(activity))
     }
   } else {
     const parsed = JSON.parse(text) as { type?: string; features?: Array<{

@@ -8,7 +8,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { bestCandidate, contestBeats, edgeDistM, quietGateBlocks, overlapPairs, overlapsSameSite, type MatchFacility, type MatchPolygon, type OverlapWinner } from './facility-match.js'
+import { bestCandidate, candidateEdgeM, contestBeats, edgeDistM, naceBaseLw, quietGateBlocks, overlapPairs, overlapsSameSite, type MatchFacility, type MatchPolygon, type OverlapWinner } from './facility-match.js'
 import { flatDist } from './spatial.js'
 
 const overlapLosers = (rows: OverlapWinner[]) => new Set(overlapPairs(rows).map(([, loser]) => loser))
@@ -70,7 +70,7 @@ test('steel polygon rejects its on-site power block, takes metallurgy (Ostrava/N
 })
 
 test('heavy-subtype gate: quarry/chemical/cement accept only their division; port stays open', () => {
-  assert.ok(quietGateBlocks(3, 2410) && !quietGateBlocks(3, 810), 'quarry ⇐ mining 08 only')
+  assert.ok(quietGateBlocks(3, 2410) && !quietGateBlocks(3, 810) && !quietGateBlocks(3, 700), 'quarry ⇐ mining 05|07|08 only')
   assert.ok(quietGateBlocks(4, 2410) && !quietGateBlocks(4, 2011), 'chemical ⇐ 19|20 only')
   assert.ok(quietGateBlocks(5, 2410) && !quietGateBlocks(5, 2351), 'cement ⇐ 23 only')
   assert.ok(!quietGateBlocks(12, 2011) && !quietGateBlocks(12, 1011), 'port not gated — hosts many sectors')
@@ -94,6 +94,48 @@ test('polygon contest mirrors shouldOverwrite: rank, then year, then id, then di
   assert.ok(contestBeats(eprtr, gppd), 'higher rank wins regardless of distance')
   assert.ok(contestBeats(gem, gppd), 'same rank → newer year wins (GEM 2025 > GPPD 2021)')
   assert.ok(contestBeats({ ...gppd, edge: 10 }, { ...gppd, edge: 20 }), 'identical source → nearer wins')
+})
+
+test('containment first: smallest containing polygon wins, past the radius when inside', () => {
+  const zone = poly({ areaM2: 2_000_000 })                              // r ≈ 798 m
+  const tenant = poly({ lat: 50.0 + mLat(100), areaM2: 50_000 })        // r ≈ 126 m, nested
+  const shed = poly({ lat: 50.0 + mLat(300), areaM2: 100 })             // uncontained, nearer edge
+  // Inside both zone and tenant → the smaller (tenant) wins over nearer-edge shed.
+  const best = bestCandidate(fac(), [zone, tenant, shed], 2000)
+  assert.equal(best!.row, 1, 'smallest containing polygon wins')
+  assert.ok(best!.contained)
+  // Contained past the 2 km centroid horizon still stamps (radius is proximity-only).
+  const far = poly({ lat: 50.0 + mLat(3000), areaM2: 40_000_000 })      // r ≈ 3.6 km, edge ≈ −0.6 km
+  assert.ok(candidateEdgeM(fac(), far, 2000)?.contained, 'contained bypasses the radius')
+  assert.equal(candidateEdgeM(fac(), poly({ lat: 50.0 + mLat(2500) }), 2000), null, 'uncontained past radius stays out')
+})
+
+test('Tata: same-registry contained facilities resolve to the loudest NACE, not the nearest edge', () => {
+  const steel = { rank: 5, year: 2024, id: 310, edge: -100, contained: true, nace4: 2410 }
+  const linde = { rank: 5, year: 2024, id: 310, edge: -500, contained: true, nace4: 2011 }
+  assert.ok(contestBeats(steel, linde), 'steel 2410 stamps over nearer-edge chemicals 2011')
+  assert.ok(!contestBeats(linde, steel))
+  const near = { rank: 5, year: 2024, id: 310, edge: 50, contained: false, nace4: 2410 }
+  assert.ok(contestBeats(linde, near), 'a contained point beats a merely near one')
+  assert.equal(naceBaseLw(2410), 106.4)
+  assert.equal(naceBaseLw(1920), 101.7)
+  assert.equal(naceBaseLw(2011), 99.6)
+  assert.equal(naceBaseLw(3512), 95.6)
+  assert.equal(naceBaseLw(3599), 80.4)
+  assert.equal(naceBaseLw(9999), -1)
+})
+
+test('registry points never stamp dedicated power classes', () => {
+  // 10 turbine, 11 wind-plant outline, 12 inactive, 13 solar, 14 substation,
+  // 15 transformer: a nearby registry point cannot claim any of them.
+  for (const sourceType of [10, 11, 12, 13, 14, 15]) {
+    assert.equal(
+      bestCandidate(fac({ nace4: 3511 }), [poly({ sourceType })], 2000),
+      null,
+      `class ${sourceType} keeps its identity`,
+    )
+  }
+  assert.ok(bestCandidate(fac({ nace4: 3511 }), [poly({})], 2000), 'generic polygons still stamp')
 })
 
 test('spatial.flatDist sanity: 1° latitude = the canonical 110.54 km', () => {

@@ -38,13 +38,28 @@ pub struct RawIndustrialInput<'a> {
     /// Snapped z30 grid ring (empty = unavailable).
     pub polygon_grid: &'a [(i32, i32)],
     pub nace_4digit: Option<u16>,
+    /// Solar nameplate MW parsed from the row's `plant:output:electricity`
+    /// tag. `None` = untagged → area ×
+    /// [`industrial::SOLAR_MW_PER_HA_UNTAGGED`].
+    pub plant_output_mw: Option<f64>,
+    /// Substation total MVA: summed `rating` values of the class-15
+    /// transformers inside the substation polygon (per-square spatial join).
+    /// `None` = no rated transformers found → the
+    /// [`industrial::substation_class_mva`] median.
+    pub substation_mva: Option<f64>,
+    /// Substation class derived from `voltage` / autotransformer evidence:
+    /// 1 main, 2 auto, 3 distribution, 0 unknown. Only read when
+    /// `substation_mva` is `None`.
+    pub substation_class: u8,
 }
 
-/// One `leisure.arrow` row — a sports/play/open-air-hospitality/car-park AREA source
+/// One `leisure.arrow` row — a sports/play/open-air-hospitality/car-park source
 /// (settlement v2 phase 2). `sport` selects the per-type level
 /// (`leisure::leisure_profile`); the polygon `area_m2` is the only size driver
 /// (unified area-law with buildings). No floors/height — leisure is an open-air
-/// activity source at a fixed ~1.5 m, not a GFA-scaled building.
+/// activity source at a fixed ~1.5 m, not a GFA-scaled building. A formula
+/// class instead spreads its reader-resolved `formula` total over the row
+/// geometry (area, line chain, or centroid point).
 #[derive(Debug, Clone, Copy)]
 pub struct RawLeisureInput<'a> {
     pub centroid_lat: f64,
@@ -55,8 +70,15 @@ pub struct RawLeisureInput<'a> {
     /// buildings). A leisure NODE with no polygon falls back to the profile's
     /// reference footprint in `prepare_leisure_points`.
     pub area_m2: Option<f64>,
-    /// Snapped z30 grid ring (empty = unavailable).
+    /// Snapped z30 grid ring — or the open/closed raceway chain of a line
+    /// row (`is_line`; empty = unavailable).
     pub polygon_grid: &'a [(i32, i32)],
+    /// Resolved formula emission for a class-10/11 row (`None` = area-law
+    /// class, or a silenced sub-type). Resolved by the reader from the row's
+    /// retained tags so both loaders share one call.
+    pub formula: Option<leisure::FormulaEmission>,
+    /// True for a raceway/track line row (`geometry_kind = 2`).
+    pub is_line: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -356,6 +378,90 @@ fn discretize_area_source(
         .collect()
 }
 
+/// Discretise a raceway LINE source (an open or closed z30 chain) into
+/// per-segment [`PreparedPoint`]s. The chain is walked in ~`cell_m` segments
+/// (a two-node line is one segment); each point sits at its segment midpoint
+/// and carries its LENGTH FRACTION of the total (`Lw_seg = Lw − 10·lg(n)`,
+/// energy-conserving) with a half-segment exclusion radius — the line
+/// analogue of the area cells above — and the post-split loudest-day-band
+/// reach capped at the industrial horizon. A chain shorter than two vertices
+/// emits from the centroid point with the full total.
+#[allow(clippy::too_many_arguments)]
+fn discretize_line_source(
+    chain: &[(i32, i32)],
+    centroid_lat: f64,
+    centroid_lon: f64,
+    cell_m: f64,
+    source_height_m: f32,
+    lw_day: [f32; NUM_BANDS],
+    lw_evening: [f32; NUM_BANDS],
+    lw_night: [f32; NUM_BANDS],
+) -> Vec<PreparedPoint> {
+    // Segment midpoints in lon/lat with their lengths; vertices densify long
+    // legs so no segment spans more than one cell.
+    let mut cells: Vec<(f64, f64, f64)> = Vec::new();
+    if chain.len() >= 2 {
+        let legs = chain.len() - 1;
+        for leg in 0..legs {
+            let (ax, ay) = chain[leg];
+            let (bx, by) = chain[leg + 1];
+            let grid_lonlat = |gx: i32, gy: i32| {
+                let (x, y) = grid::grid_to_meters(gx, gy);
+                grid::poly::meters_to_lonlat(x, y)
+            };
+            let (alon, alat) = grid_lonlat(ax, ay);
+            let (blon, blat) = grid_lonlat(bx, by);
+            let leg_m = grid::geo::flat_dist(alat, alon, blat, blon);
+            let splits = ((leg_m / cell_m).ceil() as usize).max(1);
+            for split in 0..splits {
+                let (t0, t1) = (split as f64 / splits as f64, (split + 1) as f64 / splits as f64);
+                cells.push((
+                    alat + (blat - alat) * (t0 + t1) / 2.0,
+                    alon + (blon - alon) * (t0 + t1) / 2.0,
+                    leg_m / splits as f64,
+                ));
+            }
+        }
+    }
+    if cells.is_empty() {
+        cells.push((centroid_lat, centroid_lon, cell_m));
+    }
+    let n_points = cells.len().min(u16::MAX as usize) as u16;
+    let lw_split = 10.0 * (cells.len() as f32).log10();
+    let reach = PointReach::LoudestDayBand {
+        cap_m: crate::constants::INDUSTRIAL_MAX_RADIUS,
+    };
+    cells
+        .into_iter()
+        .map(|(lat, lon, seg_m)| {
+            let mut day = lw_day;
+            let mut evening = lw_evening;
+            let mut night = lw_night;
+            for band in 0..NUM_BANDS {
+                day[band] -= lw_split;
+                evening[band] -= lw_split;
+                night[band] -= lw_split;
+            }
+            PreparedPoint {
+                lat,
+                lon,
+                source_height_m,
+                lw_day: day,
+                lw_evening: evening,
+                lw_night: night,
+                n_points,
+                exclusion_radius_m: (seg_m / 2.0).max(1.0) as f32,
+                max_radius_m: reach.resolve(&day),
+                floors: 0,
+                area_m2: 0.0,
+                hub_height_m: None,
+                rated_power_kw: None,
+                ship_hours: None,
+            }
+        })
+        .collect()
+}
+
 pub fn prepare_building_points(input: RawBuildingInput<'_>) -> Vec<PreparedPoint> {
     let actual_height = if input.area_source {
         0.0
@@ -420,9 +526,19 @@ pub fn prepare_building_points(input: RawBuildingInput<'_>) -> Vec<PreparedPoint
 }
 
 pub fn prepare_industrial_points(input: RawIndustrialInput<'_>) -> Vec<PreparedPoint> {
-    // Dedicated power models are supplied by the source-model producer; these
-    // classes must never fall through to the generic factory area law.
-    if input.source_type >= 11 {
+    // Dedicated power classes never fall through to the generic factory area
+    // law. 11/12/15 are silent: a wind-plant outline's turbines emit, not the
+    // fence (Cotton Wind Farm read 43.8 dB Lden as a generic factory); an
+    // inactive facility is retired; a transformer's rating joins its
+    // substation instead of emitting twice. Unknown future classes stay
+    // silent until a model claims them.
+    if matches!(
+        input.source_type,
+        industrial::SOURCE_WIND_OUTLINE
+            | industrial::SOURCE_INACTIVE
+            | industrial::SOURCE_TRANSFORMER
+    ) || input.source_type > industrial::SOURCE_TRANSFORMER
+    {
         return Vec::new();
     }
     if input.source_type == 10 {
@@ -471,13 +587,59 @@ pub fn prepare_industrial_points(input: RawIndustrialInput<'_>) -> Vec<PreparedP
     }
 
     let area = resolve_area_m2(input.area_m2, input.polygon_grid, 10000.0);
-    let profile = input
-        .nace_4digit
-        .and_then(industrial::nace_profile)
-        .or_else(|| industrial::subtype_profile(input.site_subtype))
-        .unwrap_or_else(|| industrial::industrial_profile(input.source_type));
-    let area_cap = industrial::sector_area_cap_m2(input.nace_4digit, input.site_subtype);
-    let lw = industrial::industrial_lw(&profile, area, area_cap);
+    // Solar farms (OSM class 13, or registry-confirmed 3599 — including the
+    // served rows) and substations (class 14) carry their own physics: per-MW
+    // / per-MVA levels, not the area law. `base_lw` is unused on these arms
+    // (`lw` is computed directly); the spectrum + offsets still apply.
+    let is_solar =
+        input.source_type == industrial::SOURCE_SOLAR_FARM || input.nace_4digit == Some(industrial::SOLAR_NACE);
+    let is_substation = input.source_type == industrial::SOURCE_SUBSTATION;
+    let profile = if is_solar {
+        industrial::IndustrialProfile {
+            base_lw: 0.0,
+            spectrum: industrial::SOLAR_SPECTRUM,
+            evening_offset: -50.0, // day-only: inverters sleep at night
+            night_offset: -50.0,
+        }
+    } else if is_substation {
+        industrial::IndustrialProfile {
+            base_lw: 0.0,
+            spectrum: industrial::SUBSTATION_SPECTRUM,
+            evening_offset: 0.0, // 24/7
+            night_offset: 0.0,
+        }
+    } else {
+        input
+            .nace_4digit
+            .and_then(industrial::nace_profile)
+            .or_else(|| industrial::subtype_profile(input.site_subtype))
+            .unwrap_or_else(|| industrial::industrial_profile(input.source_type))
+    };
+    let lw = if is_solar {
+        // A solar generator unit (`generator:source=solar`) carries its
+        // output in `rated_power_kw`, parsed by the extractor; a plant row
+        // carries `plant:output:electricity` in its tags. Either beats the
+        // area density for point rows, which have no footprint to scale.
+        let mw = input
+            .plant_output_mw
+            .filter(|mw| *mw > 0.0)
+            .or_else(|| {
+                input
+                    .rated_power_kw
+                    .filter(|kw| *kw > 0.0)
+                    .map(|kw| f64::from(kw) / 1000.0)
+            });
+        industrial::solar_farm_lw(mw, area)
+    } else if is_substation {
+        let mva = input
+            .substation_mva
+            .filter(|mva| *mva > 0.0)
+            .unwrap_or_else(|| industrial::substation_class_mva(input.substation_class));
+        industrial::substation_lw(mva)
+    } else {
+        let area_cap = industrial::sector_area_cap_m2(input.nace_4digit, input.site_subtype);
+        industrial::industrial_lw(&profile, area, area_cap)
+    };
     if lw < 10.0 {
         return Vec::new();
     }
@@ -486,13 +648,18 @@ pub fn prepare_industrial_points(input: RawIndustrialInput<'_>) -> Vec<PreparedP
     let (lw_evening, lw_night) =
         period_offset_bands(lw_day, profile.evening_offset, profile.night_offset);
 
-    let source_height_m = if input.source_type == 1 {
+    let source_height_m = if is_solar {
+        3.0 // central inverters + MV transformers
+    } else if is_substation {
+        5.0 // transformer tanks, radiators, fans
+    } else if input.source_type == 1 {
         8.0
     } else {
         match input.nace_4digit.map(|n| n / 100) {
-            // Heavy/tall sources: coal mining (05) + other mining & quarrying (08),
+            // Heavy/tall sources: coal (05) + metal-ore (07) + other mining
+            // & quarrying (08), coke/refining (19, stacks/flares),
             // cement/minerals (23), metallurgy (24), power generation (35).
-            Some(5 | 8 | 23 | 24 | 35) => 10.0,
+            Some(5 | 7 | 8 | 19 | 23 | 24 | 35) => 10.0,
             _ => 5.0,
         }
     };
@@ -582,19 +749,68 @@ pub fn prepare_ship_points(input: RawShipInput) -> Option<(Vec<PreparedPoint>, s
 }
 
 /// Leisure areas are LOCAL activity sources — cap reach like buildings (2 km),
-/// never the 4 km industrial-plant reach.
+/// never the 4 km industrial-plant reach. Motorsport and shooting are the
+/// exception: a speedway at 136 dB carries kilometres, so formula classes
+/// reach past the 2 km cap (industrial reach).
 const LEISURE_MAX_RADIUS_M: f64 = 2_000.0;
 
-/// Discretise one leisure AREA source into per-cell [`PreparedPoint`]s — the
+/// Discretise one leisure source into per-cell [`PreparedPoint`]s — the
 /// shared [`discretize_area_source`] (same area-weighted 75 m grid + self-screening
 /// `√(cell_area/π)` exclusion as industrial), at ~1.5 m height (voices/rackets,
 /// not roof plant) with an Lw-derived reach capped at 2 km. The level is the
 /// AREA-scaled [`leisure::leisure_lw`] (UNIFIED with buildings — `settlement::area_lw`);
 /// a node with no polygon falls back to the profile's reference footprint.
-/// Returns `[]` when the source is sub-audible.
+/// Formula classes (motorsport/shooting) instead spread their reader-resolved
+/// class-TOTAL Lw over the row geometry — a raceway chain
+/// ([`discretize_line_source`]), a range polygon, or the centroid point — with
+/// industrial reach. Returns `[]` when the source is sub-audible.
 pub fn prepare_leisure_points(input: RawLeisureInput<'_>) -> Vec<PreparedPoint> {
+    if let Some(formula) = input.formula {
+        let lw_day = bands_to_f32(leisure::leisure_formula_bands(&formula));
+        let (lw_evening, lw_night) =
+            period_offset_bands(lw_day, formula.evening_offset, formula.night_offset);
+        // The total is geometry-independent; the geometry only sets the grid.
+        // A geometry-less row still emits from its centroid point.
+        if input.is_line {
+            return discretize_line_source(
+                input.polygon_grid,
+                input.centroid_lat,
+                input.centroid_lon,
+                INDUSTRIAL_AREA_CELL_M,
+                crate::constants::SOURCE_HEIGHT_LEISURE as f32,
+                lw_day,
+                lw_evening,
+                lw_night,
+            );
+        }
+        let area = resolve_area_m2(input.area_m2, input.polygon_grid, 10000.0);
+        return discretize_area_source(
+            AreaSource {
+                polygon_grid: input.polygon_grid,
+                centroid_lat: input.centroid_lat,
+                centroid_lon: input.centroid_lon,
+                area_m2: area,
+                grid_threshold_m2: INDUSTRIAL_AREA_THRESHOLD_M2,
+                cell_m: INDUSTRIAL_AREA_CELL_M,
+                source_height_m: crate::constants::SOURCE_HEIGHT_LEISURE as f32,
+                reach: PointReach::LoudestDayBand {
+                    cap_m: crate::constants::INDUSTRIAL_MAX_RADIUS,
+                },
+                floors: 0,
+                hub_height_m: None,
+                rated_power_kw: None,
+            },
+            lw_day,
+            lw_evening,
+            lw_night,
+        );
+    }
     let profile = leisure::leisure_profile(input.sport);
-    let area = resolve_area_m2(input.area_m2, input.polygon_grid, profile.ref_area_m2);
+    // An area-law line (an open non-motorised track) has no area to scale by;
+    // it emits as a node of its class from its centroid — the chain is not
+    // an area and the shoelace of an open chain is not its size.
+    let ring = if input.is_line { &[][..] } else { input.polygon_grid };
+    let area = resolve_area_m2(input.area_m2, ring, profile.ref_area_m2);
     let lw = leisure::leisure_lw(&profile, area);
     if lw < 10.0 {
         return Vec::new();
@@ -607,7 +823,7 @@ pub fn prepare_leisure_points(input: RawLeisureInput<'_>) -> Vec<PreparedPoint> 
     let max_radius_m = settlement::building_max_dist(lw).min(LEISURE_MAX_RADIUS_M);
     discretize_area_source(
         AreaSource {
-            polygon_grid: input.polygon_grid,
+            polygon_grid: ring,
             centroid_lat: input.centroid_lat,
             centroid_lon: input.centroid_lon,
             area_m2: area,
@@ -761,6 +977,9 @@ mod tests {
             rated_power_kw: Some(3500.0),
             area_m2: None,
             polygon_grid: &[],
+            plant_output_mw: None,
+            substation_mva: None,
+            substation_class: 0,
         });
         assert_eq!(points.len(), 1);
         assert_eq!(points[0].hub_height_m, Some(100.0));
@@ -768,6 +987,85 @@ mod tests {
         // Buildings-only fields stay 0 on turbines.
         assert_eq!(points[0].floors, 0);
         assert_eq!(points[0].area_m2, 0.0);
+    }
+
+    #[test]
+    fn power_classes_use_per_mw_per_mva_physics_and_outlines_are_silent() {
+        let prep = |source_type: u8, nace: Option<u16>, mw: Option<f64>, mva: Option<f64>, class: u8| {
+            prepare_industrial_points(RawIndustrialInput {
+                centroid_lat: 49.0,
+                centroid_lon: 14.0,
+                source_type,
+                site_subtype: 0,
+                nace_4digit: nace,
+                hub_height_m: None,
+                rated_power_kw: None,
+                area_m2: Some(46_710.0), // Vienna airport farm footprint
+                polygon_grid: &[],
+                plant_output_mw: mw,
+                substation_mva: mva,
+                substation_class: class,
+            })
+        };
+        let day_aw = |points: &[PreparedPoint]| {
+            let day: [f64; NUM_BANDS] = std::array::from_fn(|i| points[0].lw_day[i] as f64);
+            crate::propagation::iso9613::a_weighted_total(&day)
+        };
+        // Registry-confirmed solar (served 3599 rows): 24 MW → 96.8 day-only.
+        let solar = prep(0, Some(3599), Some(24.0), None, 0);
+        assert!((day_aw(&solar) - 96.8).abs() < 0.1, "solar {}", day_aw(&solar));
+        assert_eq!(solar[0].source_height_m, 3.0);
+        assert!((solar[0].lw_night[4] - solar[0].lw_day[4] + 50.0).abs() < 1e-3);
+        // OSM solar class without a tag: area × 0.55 MW/ha.
+        let untagged = prep(industrial::SOURCE_SOLAR_FARM, None, None, None, 0);
+        let expected = 88.0 + 10.0 * (4.671 * 0.55f64).log10() - 5.0;
+        assert!((day_aw(&untagged) - expected).abs() < 0.1);
+        // Substation: joined MVA wins, else the class median (auto 160 MVA).
+        let joined = prep(industrial::SOURCE_SUBSTATION, None, None, Some(50.0), 3);
+        assert!((day_aw(&joined) - industrial::substation_lw(50.0)).abs() < 0.1);
+        assert_eq!(joined[0].lw_day[4], joined[0].lw_night[4]); // 24/7
+        assert_eq!(joined[0].source_height_m, 5.0);
+        let median = prep(industrial::SOURCE_SUBSTATION, None, None, None, 2);
+        assert!((day_aw(&median) - industrial::substation_lw(160.0)).abs() < 0.1);
+        // Wind-plant outlines, inactive facilities and transformers emit
+        // nothing, as do unknown future classes.
+        for silent in [
+            industrial::SOURCE_WIND_OUTLINE,
+            industrial::SOURCE_INACTIVE,
+            industrial::SOURCE_TRANSFORMER,
+            16,
+            u8::MAX,
+        ] {
+            assert!(
+                prep(silent, None, None, None, 0).is_empty(),
+                "class {silent} emits"
+            );
+        }
+    }
+
+    #[test]
+    fn solar_generator_units_read_the_extractor_parsed_output() {
+        // A `generator:source=solar` point row carries no plant tag; the
+        // extractor parsed its `generator:output:electricity` into
+        // `rated_power_kw`, which beats the area density.
+        let points = prepare_industrial_points(RawIndustrialInput {
+            centroid_lat: 49.0,
+            centroid_lon: 14.0,
+            source_type: industrial::SOURCE_SOLAR_FARM,
+            site_subtype: 0,
+            nace_4digit: None,
+            hub_height_m: None,
+            rated_power_kw: Some(5.0),
+            area_m2: None,
+            polygon_grid: &[],
+            plant_output_mw: None,
+            substation_mva: None,
+            substation_class: 0,
+        });
+        let day: [f64; NUM_BANDS] = std::array::from_fn(|i| points[0].lw_day[i] as f64);
+        let aw = crate::propagation::iso9613::a_weighted_total(&day);
+        let expected = 88.0 + 10.0 * 0.005f64.log10() - 5.0;
+        assert!((aw - expected).abs() < 0.1, "5 kW unit: {aw:.2}");
     }
 
     #[test]
@@ -789,6 +1087,9 @@ mod tests {
             rated_power_kw: None,
             area_m2: Some(6_000.0),
             polygon_grid: &ring,
+            plant_output_mw: None,
+            substation_mva: None,
+            substation_class: 0,
         });
 
         assert!(
@@ -849,6 +1150,9 @@ mod tests {
                 rated_power_kw: power,
                 area_m2: None,
                 polygon_grid: &[],
+                plant_output_mw: None,
+                substation_mva: None,
+                substation_class: 0,
             })
         };
         // Missing hub → 105 m default, carried into source_height_m.
@@ -859,12 +1163,14 @@ mod tests {
         assert_eq!(prep(Some(250.0), Some(2000.0))[0].hub_height_m, Some(175.0));
         assert_eq!(prep(Some(120.0), Some(2000.0))[0].hub_height_m, Some(120.0));
         // Implausible rated power = unknown → 2 MW default, and the emission
-        // uses the 2 MW class (LwA 105), not the ≥5 MW class (106.5).
+        // uses the 2 MW class (LwA 105), not the ≥5 MW class (106.5) — at the
+        // annual operating level (max mode plus the wind duty), not max mode.
         let points = prep(None, Some(20_000.0));
         assert_eq!(points[0].rated_power_kw, Some(2000.0));
         let day_f64: [f64; NUM_BANDS] = std::array::from_fn(|i| points[0].lw_day[i] as f64);
         let aw = crate::propagation::iso9613::a_weighted_total(&day_f64);
-        assert!((aw - 105.0).abs() < 1e-3, "clamped-power turbine LwA: {aw}");
+        let expected = 105.0 + wind::wind_duty_db();
+        assert!((aw - expected).abs() < 1e-3, "clamped-power turbine LwA: {aw}");
     }
 
     /// A leisure area source: 1.5 m height, Lw-derived reach, AREA scaling
@@ -877,6 +1183,8 @@ mod tests {
             sport: leisure::PADEL,
             area_m2: Some(200.0), // reference court footprint → centroid point
             polygon_grid: &[],
+            formula: None,
+            is_line: false,
         });
         assert_eq!(points.len(), 1);
         assert!((points[0].source_height_m - 1.5).abs() < 1e-6);
@@ -887,6 +1195,106 @@ mod tests {
         let day: [f64; NUM_BANDS] = std::array::from_fn(|i| points[0].lw_day[i] as f64);
         let aw = crate::propagation::iso9613::a_weighted_total(&day);
         assert!((aw - 81.0).abs() < 0.2, "padel day LwA: {aw}");
+    }
+
+    /// Formula classes spread their class-TOTAL Lw (geometry-independent)
+    /// with industrial reach: a speedway point reaches past the 2 km leisure
+    /// cap, day-only.
+    #[test]
+    fn prepared_leisure_speedway_reaches_past_2km() {
+        let formula = leisure::motorsport_emission(leisure::MotorsportSubtype::Speedway).unwrap();
+        let mk = |area: f64| {
+            prepare_leisure_points(RawLeisureInput {
+                centroid_lat: 50.0,
+                centroid_lon: 14.0,
+                sport: leisure::MOTORSPORT,
+                area_m2: Some(area),
+                polygon_grid: &[],
+                formula: Some(formula),
+                is_line: false,
+            })
+        };
+        let points = mk(20_000.0);
+        assert_eq!(points.len(), 1);
+        let day: [f64; NUM_BANDS] = std::array::from_fn(|i| points[0].lw_day[i] as f64);
+        let aw = crate::propagation::iso9613::a_weighted_total(&day);
+        // 139 + 10·lg4 + 10·lg(600/4380) = 136.4, whatever the footprint.
+        assert!((aw - 136.4).abs() < 0.1, "speedway day LwA: {aw}");
+        assert!((mk(5_000.0)[0].lw_day[4] - points[0].lw_day[4]).abs() < 1e-3);
+        assert_eq!(points[0].max_radius_m, crate::constants::INDUSTRIAL_MAX_RADIUS);
+        assert!((points[0].lw_night[4] - points[0].lw_day[4] + 50.0).abs() < 1e-3);
+    }
+
+    /// A raceway line spreads the formula total over its segments
+    /// (energy-conserving): a 300 m two-node kart line becomes four ~75 m
+    /// cells; a short line is one midpoint point.
+    #[test]
+    fn prepared_leisure_raceway_line_splits_energy_over_segments() {
+        let formula = leisure::motorsport_emission(leisure::MotorsportSubtype::Kart).unwrap();
+        let line = grid_ring(&[(50.0, 14.0), (50.0, 14.004)]); // ~286 m
+        let points = prepare_leisure_points(RawLeisureInput {
+            centroid_lat: 50.0,
+            centroid_lon: 14.002,
+            sport: leisure::MOTORSPORT,
+            area_m2: None,
+            polygon_grid: &line,
+            formula: Some(formula),
+            is_line: true,
+        });
+        assert_eq!(points.len(), 4);
+        let energy: f64 = points
+            .iter()
+            .map(|p| 10f64.powf(f64::from(p.lw_day[4]) / 10.0))
+            .sum();
+        let total = 10f64.powf(leisure::leisure_formula_bands(&formula)[4] / 10.0);
+        assert!((10.0 * (energy / total).log10()).abs() < 1e-3, "splits {energy} vs {total}");
+        for point in &points {
+            assert!((point.lat - 50.0).abs() < 1e-4);
+            assert!(point.exclusion_radius_m > 30.0 && point.exclusion_radius_m < 45.0);
+        }
+        // A two-node line shorter than one cell: one midpoint point.
+        let short = grid_ring(&[(50.0, 14.0), (50.0, 14.0005)]); // ~36 m
+        let points = prepare_leisure_points(RawLeisureInput {
+            centroid_lat: 50.0,
+            centroid_lon: 14.00025,
+            sport: leisure::MOTORSPORT,
+            area_m2: None,
+            polygon_grid: &short,
+            formula: Some(formula),
+            is_line: true,
+        });
+        assert_eq!(points.len(), 1);
+        assert!((points[0].lon - 14.00025).abs() < 1e-6);
+    }
+
+    /// An area-law line (an open non-motorised track) emits as a node of its
+    /// class — the open chain contributes no area.
+    #[test]
+    fn prepared_leisure_area_law_line_emits_as_a_node() {
+        let line = grid_ring(&[(50.0, 14.0), (50.001, 14.001)]);
+        let mk = |is_line: bool| {
+            prepare_leisure_points(RawLeisureInput {
+                centroid_lat: 50.0005,
+                centroid_lon: 14.0005,
+                sport: leisure::PITCH,
+                area_m2: None,
+                polygon_grid: &line,
+                formula: None,
+                is_line,
+            })
+        };
+        let as_line = mk(true);
+        let as_node = prepare_leisure_points(RawLeisureInput {
+            centroid_lat: 50.0005,
+            centroid_lon: 14.0005,
+            sport: leisure::PITCH,
+            area_m2: None,
+            polygon_grid: &[],
+            formula: None,
+            is_line: false,
+        });
+        assert_eq!(as_line.len(), 1);
+        assert_eq!(as_line[0].lw_day, as_node[0].lw_day);
     }
 
     /// Unified AREA scaling (replaces the old per-seat capacity build-up): a
@@ -900,6 +1308,8 @@ mod tests {
                 sport: leisure::OUTDOOR_SEATING,
                 area_m2: Some(area),
                 polygon_grid: &[],
+                formula: None,
+                is_line: false,
             })
         };
         let small = mk(200.0);

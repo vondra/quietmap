@@ -1,6 +1,7 @@
 //! Industrial sites and ship cells become normalized emission points.
 
 use super::spatial::{INDUSTRIAL_QUERY_RADIUS_M, SHIP_QUERY_RADIUS_M};
+use noise_compute::constants::INDUSTRIAL_MAX_RADIUS;
 use arrow::array::Array;
 use square_store::grid_cols::{
     col_binary, col_f32, col_i32, col_i64, col_str, col_u16, col_u8, decode_geom, grid_cell_lonlat,
@@ -13,6 +14,7 @@ pub(super) fn collect_industrial(
     lng: f64,
     output: &mut Vec<noise_compute::types::PointSource>,
 ) -> Result<(), String> {
+    let mut transformers: Option<Vec<square_store::osm_evidence::TransformerUnit>> = None;
     for batch in &data
         .industrial
         .batches_within(lat, lng, INDUSTRIAL_QUERY_RADIUS_M)?
@@ -31,10 +33,6 @@ pub(super) fn collect_industrial(
 
         for i in 0..n {
             let (c_lon, c_lat) = grid_cell_lonlat(cgx.value(i), cgy.value(i));
-            let dist = grid::geo::flat_dist(lat, lng, c_lat, c_lon);
-            if dist > INDUSTRIAL_QUERY_RADIUS_M {
-                continue;
-            }
             if col_u8(batch, "suppressed").map(|a| a.value(i)).unwrap_or(0) != 0 {
                 continue;
             }
@@ -51,6 +49,26 @@ pub(super) fn collect_industrial(
                     .and_then(|g| decode_geom(Some(g.value(i))))
                     .unwrap_or_default()
             };
+            // The gate is the polygon EDGE, not its centroid: a receiver at the
+            // east end of Garzweiler stands 5.6 km from the mine's centroid but
+            // 250 m from its boundary, and the old 5 km centroid gate dropped
+            // the mine (+32 dB at the east end once admitted). The painter
+            // never had a centroid gate — its per-point reach caps at
+            // `INDUSTRIAL_MAX_RADIUS` — so the popup admits a row exactly when
+            // its edge can reach: centroid distance minus ring radius ≤ 4 km.
+            // Rows without a ring are points (radius 0), as the painter treats
+            // them (a ringless row discretises to one centroid point).
+            let ring_radius_m = polygon_grid
+                .iter()
+                .map(|&(gx, gy)| {
+                    let (lon, lat) = grid_cell_lonlat(gx, gy);
+                    grid::geo::flat_dist(c_lat, c_lon, lat, lon)
+                })
+                .fold(0.0f64, f64::max);
+            let dist = grid::geo::flat_dist(lat, lng, c_lat, c_lon);
+            if dist - ring_radius_m > INDUSTRIAL_MAX_RADIUS {
+                continue;
+            }
             let positive_value = |column: Option<&arrow::array::Float32Array>| {
                 column
                     .map(|values| values.value(i))
@@ -60,6 +78,44 @@ pub(super) fn collect_industrial(
             let site_subtype = col_u8(batch, "site_subtype")
                 .map(|a| a.value(i))
                 .unwrap_or(0);
+            // Power evidence comes from the retained tags, not columns: solar
+            // MW from `plant:output:electricity`, substation MVA from the
+            // per-square transformer join (built lazily, only when a
+            // substation row is admitted — most popups admit none).
+            let is_power = matches!(
+                source_type,
+                noise_compute::emission::industrial::SOURCE_SOLAR_FARM
+                    | noise_compute::emission::industrial::SOURCE_SUBSTATION
+            );
+            let row_tags = is_power.then(|| square_store::osm_evidence::optional_tags(batch, i));
+            // A gas-network station carries no transformer hum.
+            if row_tags
+                .as_ref()
+                .is_some_and(square_store::osm_evidence::is_gas_substation)
+            {
+                continue;
+            }
+            let plant_output_mw = row_tags
+                .as_ref()
+                .and_then(square_store::osm_evidence::plant_output_mw);
+            let (substation_mva, substation_class) = match row_tags.as_ref() {
+                Some(tags)
+                    if source_type
+                        == noise_compute::emission::industrial::SOURCE_SUBSTATION =>
+                {
+                    if transformers.is_none() {
+                        transformers = Some(square_store::osm_evidence::transformer_units(
+                            &data.industrial.batches_all()?,
+                        ));
+                    }
+                    let feed = square_store::osm_evidence::substation_feed(
+                        transformers.as_deref().unwrap_or(&[]),
+                        &polygon_grid,
+                    );
+                    square_store::osm_evidence::substation_power(tags, &feed)
+                }
+                _ => (None, 0),
+            };
             let prepared_points = noise_compute::normalize::prepare_industrial_points(
                 noise_compute::normalize::RawIndustrialInput {
                     centroid_lat: c_lat,
@@ -73,6 +129,9 @@ pub(super) fn collect_industrial(
                     nace_4digit: col_u16(batch, "nace_4digit")
                         .map(|a| a.value(i))
                         .filter(|&v| v > 0),
+                    plant_output_mw,
+                    substation_mva,
+                    substation_class,
                 },
             );
             let row_source_id = col_u16(batch, "source_id").map(|a| a.value(i)).unwrap_or(0);

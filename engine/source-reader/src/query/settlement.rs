@@ -1,6 +1,6 @@
 //! Building and leisure emission rows become the settlement point sources.
 
-use super::spatial::BUILDING_QUERY_RADIUS_M;
+use super::spatial::{BUILDING_QUERY_RADIUS_M, LEISURE_QUERY_RADIUS_M};
 use arrow::array::Array;
 use square_store::grid_cols::{
     col_binary, col_f32, col_i32, col_i64, col_str, col_u8, decode_geom, grid_cell_lonlat,
@@ -113,6 +113,8 @@ pub struct LeisureResult {
     pub area_m2: f32,
     pub name: String,
     pub polygon_grid: grid::poly::GridRing,
+    pub formula: Option<noise_compute::emission::leisure::FormulaEmission>,
+    pub is_line: bool,
 }
 
 pub fn query_leisure_from_batches(
@@ -138,22 +140,66 @@ pub fn query_leisure_from_batches(
 
         for i in 0..n {
             let (c_lon, c_lat) = grid_cell_lonlat(cgx.value(i), cgy.value(i));
-            let dist = grid::geo::flat_dist(lat, lon, c_lat, c_lon);
-            if dist > max_radius {
-                continue;
-            }
+            let sport_id = sport.map(|a| a.value(i)).unwrap_or(0);
+            let row_name = name.map(|a| a.value(i).to_string()).unwrap_or_default();
+            // Formula rows resolve their sub-type from the retained tags; a
+            // roofed motorsport/shooting row stays silent — its building
+            // footprint carries the emission (area classes have no indoor
+            // model and always emit).
+            let formula = if noise_compute::emission::leisure::is_formula_class(sport_id) {
+                let tags = square_store::osm_evidence::optional_tags(batch, i);
+                if square_store::osm_evidence::tags_indicate_indoor(&tags) {
+                    continue;
+                }
+                let details: Vec<&str> = tags
+                    .iter()
+                    .filter(|(key, _)| key.starts_with("shooting:"))
+                    .map(|(_, value)| value.as_str())
+                    .collect();
+                // A silent shooting sub-type resolves to `None` and the
+                // area-law fallback, which the unknown-id arm silences.
+                noise_compute::emission::leisure::formula_for_row(
+                    sport_id,
+                    tags.get("sport").map(String::as_str).unwrap_or(""),
+                    tags.get("shooting").map(String::as_str),
+                    &details,
+                    &row_name,
+                )
+            } else {
+                None
+            };
             let polygon_grid: grid::poly::GridRing = geom
                 .filter(|a| !a.is_null(i))
                 .and_then(|a| decode_geom(Some(a.value(i))))
                 .unwrap_or_default();
+            // Class-aware gate: area classes keep the 2 km centroid horizon;
+            // formula classes (motorsport/shooting) reach like industrial
+            // rows — polygon (or chain) edge within 4 km.
+            let dist = grid::geo::flat_dist(lat, lon, c_lat, c_lon);
+            if noise_compute::emission::leisure::is_formula_class(sport_id) {
+                let ring_radius_m = polygon_grid
+                    .iter()
+                    .map(|&(gx, gy)| {
+                        let (lon, lat) = grid_cell_lonlat(gx, gy);
+                        grid::geo::flat_dist(c_lat, c_lon, lat, lon)
+                    })
+                    .fold(0.0f64, f64::max);
+                if dist - ring_radius_m > max_radius {
+                    continue;
+                }
+            } else if dist > BUILDING_QUERY_RADIUS_M {
+                continue;
+            }
             results.push(LeisureResult {
                 osm_id: osm_id.value(i),
                 centroid_lat: c_lat,
                 centroid_lon: c_lon,
                 sport: sport.map(|a| a.value(i)).unwrap_or(0),
                 area_m2: area.map(|a| a.value(i)).unwrap_or(0.0),
-                name: name.map(|a| a.value(i).to_string()).unwrap_or_default(),
+                name: row_name,
                 polygon_grid,
+                formula,
+                is_line: square_store::osm_evidence::row_is_leisure_line(batch, i),
             });
         }
     }
@@ -211,13 +257,32 @@ pub(super) fn collect_buildings(
 }
 
 pub(super) fn collect_leisure(
-    leisure_batches: &[arrow::record_batch::RecordBatch],
+    data: &SquareData,
     lat: f64,
     lng: f64,
     output: &mut Vec<noise_compute::types::PointSource>,
-) {
-    let leisure = query_leisure_from_batches(leisure_batches, lat, lng, BUILDING_QUERY_RADIUS_M);
-    for lz in leisure {
+) -> Result<(), String> {
+    let leisure_batches = data
+        .leisure
+        .batches_within(lat, lng, LEISURE_QUERY_RADIUS_M)?;
+    let leisure = query_leisure_from_batches(&leisure_batches, lat, lng, LEISURE_QUERY_RADIUS_M);
+    // A motorsport polygon enclosing a raceway line goes silent — the lines
+    // carry the emission. The line index spans the square (built lazily, only
+    // when a motorsport polygon is admitted).
+    let lines = if leisure.iter().any(|lz| {
+        lz.sport == noise_compute::emission::leisure::MOTORSPORT && !lz.is_line
+    }) {
+        square_store::osm_evidence::motorsport_lines(&data.leisure.batches_all()?)
+    } else {
+        Vec::new()
+    };
+    for lz in &leisure {
+        if lz.sport == noise_compute::emission::leisure::MOTORSPORT
+            && !lz.is_line
+            && square_store::osm_evidence::encloses_motorsport_line(&lines, &lz.polygon_grid)
+        {
+            continue;
+        }
         let source_type = noise_compute::types::LEISURE_TYPE_BASE.saturating_add(lz.sport);
         let prepared_points = noise_compute::normalize::prepare_leisure_points(
             noise_compute::normalize::RawLeisureInput {
@@ -226,6 +291,8 @@ pub(super) fn collect_leisure(
                 sport: lz.sport,
                 area_m2: (lz.area_m2 > 0.0).then_some(lz.area_m2 as f64),
                 polygon_grid: &lz.polygon_grid,
+                formula: lz.formula,
+                is_line: lz.is_line,
             },
         );
         for prepared in prepared_points {
@@ -239,4 +306,5 @@ pub(super) fn collect_leisure(
             ));
         }
     }
+    Ok(())
 }

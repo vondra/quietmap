@@ -1978,6 +1978,7 @@ dependencies = [
  "arrow-batching",
  "grid",
  "memmap2 0.9.11",
+ "serde_json",
 ]
 
 [[package]]

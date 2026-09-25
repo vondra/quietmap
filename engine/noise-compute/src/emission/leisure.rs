@@ -18,7 +18,11 @@ use crate::types::NUM_BANDS;
 
 /// Leisure `sport`/kind class ids written by `osm-extract::spill` into
 /// `leisure.arrow`. Stable once shipped: the arrow stores the raw u8, so a new
-/// id is a new file contract (`leisure_v4` also retains staged motorsport and shooting classes).
+/// id is a new file contract (`leisure_v4` carries the area classes below
+/// plus motorsport 10 and shooting 11). The formula classes subdivide at
+/// read time from the retained `sport` / `shooting` tags (see
+/// [`MotorsportSubtype`] / [`ShootingSubtype`]) — the extractor keeps one
+/// class per activity, not one per vehicle or weapon.
 /// 0 is the generic-pitch default so an untyped `leisure=pitch` still emits.
 pub const PITCH: u8 = 0;
 pub const PADEL: u8 = 1;
@@ -40,9 +44,25 @@ pub const CAR_PARK: u8 = 8;
 /// Street-side / lane parking — the same movements on a strip with no aisle of
 /// its own, so it holds a space per 13.3 m² where a lot needs 23.8.
 pub const CAR_PARK_STREET: u8 = 9;
+/// Motorsport: raceway lines, track areas and points. The per-vehicle level
+/// comes from the row's `sport` tag ([`motorsport_subtype`]); raceway lines
+/// carry the emission and their enclosing polygon goes silent (resolved by
+/// the readers, which see the whole square).
+pub const MOTORSPORT: u8 = 10;
+/// Shooting: outdoor ranges. The per-shot level comes from the row's
+/// `shooting` tags and name ([`shooting_subtype`]).
+pub const SHOOTING: u8 = 11;
 
-/// Map an OSM `sport=*` value (lower-cased) to a leisure class id. `leisure=*`
-/// kind is the fallback when `sport` is absent (resolved in `spill.rs`).
+/// True for the two formula classes (motorsport/shooting): they carry a
+/// class-TOTAL annual Lw with industrial reach, not the area law.
+pub fn is_formula_class(sport: u8) -> bool {
+    matches!(sport, MOTORSPORT | SHOOTING)
+}
+
+/// Map an OSM `sport=*` value (lower-cased) to an area-law class id.
+/// The canonical map — `osm-extract::ids` transcribes it. Motor and shooting
+/// sports are NOT here: the extractor classifies them to 10/11 itself and
+/// the readers subdivide them from the raw tags below.
 pub fn sport_class(sport: &str) -> Option<u8> {
     Some(match sport {
         "padel" => PADEL,
@@ -121,9 +141,10 @@ const CAR_PARK_SPECTRUM: [f64; NUM_BANDS] = [8.5, -1.0, -4.2, -5.5, -5.3, -5.8, 
 ///
 /// Active anchors (pre-annualization): padel 90 (racket "pock" on glass,
 /// padelcreations + Higgins); tennis 84 (LFmax 58.4/strike, TU München);
-/// football pitch 88 (58 LAeq,1h @10 m, Sport England AGP); basketball pitch−6
-/// (UBC/BKL); playground PROP-MEAS; pool PROP-MEAS; outdoor seating 71 dB(A)/
-/// guest (Lärmfibel Biergärten).
+/// football pitch 97.85 over a 100×64 m pitch (58 LAeq,1h @10 m, Sport
+/// England AGP, read as an area source); basketball tennis−6 at its
+/// reference court (UBC/BKL); playground PROP-MEAS; pool PROP-MEAS;
+/// outdoor seating 71 dB(A)/guest (Lärmfibel Biergärten).
 pub fn leisure_profile(sport: u8) -> LeisureProfile {
     // All leisure shares a low fixed floor; `lw_per_m2` over the polygon area
     // carries the level (shared `settlement::area_lw`). Each anchor in the
@@ -259,23 +280,29 @@ pub fn leisure_profile(sport: u8) -> LeisureProfile {
             m2_per_space: Some(13.3),
         },
         // PITCH (0) — generic ball-sport pitch, the class an untyped
-        // `leisure=pitch` gets. active 88 (58 LAeq,1h @10 m, Sport England AGP)
-        // − 9 annual → year Lden 78 @ ~7000 m² (a typical ~1100 m² pitch lands
-        // ~70).
+        // `leisure=pitch` gets. The SAME Sport England AGP measurement the old
+        // anchor used (58 dB LAeq,1h at 10 m), but read as the AREA source a
+        // pitch is: 10 m outside the touchline of a 100×64 m pitch the
+        // incoherent hemispherical area integral sits 1.8 dB under the
+        // per-m² level, so active Lw″ = 59.8 dB/m² — 97.85 dB(A) over the
+        // 6,400 m² pitch — and − 9 annual (−3 season −6 duty) → 50.8 dB/m².
+        // (The old 40 treated the 58 as a point source, −10.8 dB.) Year Lden
+        // 89.3 @ 7000 m²; a typical ~1100 m² pitch lands ~81.
         PITCH => LeisureProfile {
             lw_fixed: FLOOR,
-            lw_per_m2: 40.0,
+            lw_per_m2: 50.8,
             ref_area_m2: 7000.0,
             spectrum: [-2.0, -1.0, 0.0, 1.0, 1.0, 0.0, -2.0, -4.0],
             evening_offset: -3.0,
             night_offset: -10.0, // floodlit pitches run to ~22:00
             m2_per_space: None,
         },
-        // Staged motorsport/shooting and unknown ids have no activity model
-        // here yet, so they remain silent: `lw` lands under the
-        // `prepare_leisure_points` audibility gate for any area, exactly as
-        // `settlement::SILENT` does. Guessing "sports pitch" would put a
-        // plausible, wrong level on the map instead.
+        // An id this engine does not know (12+, or a formula class passed
+        // here instead of through its subtype emission — a new class bumps
+        // the contract). We cannot say what it is, so it says nothing: `lw`
+        // lands under the `prepare_leisure_points` audibility gate for any
+        // area, exactly as `settlement::SILENT` does. Guessing "sports
+        // pitch" would put a plausible, wrong level on the map instead.
         _ => LeisureProfile {
             lw_fixed: f64::MIN,
             lw_per_m2: f64::MIN,
@@ -288,10 +315,308 @@ pub fn leisure_profile(sport: u8) -> LeisureProfile {
     }
 }
 
+/// Day-period hours per year (12 h × 365) — the annualizer motorsport duty
+/// spreads active hours over, and ×3600 s the shooting annualizer.
+pub const DAY_PERIOD_HOURS_PER_YEAR: f64 = 4_380.0;
+
+/// Default motorsport activity without permit data: 100 days × 6 h, stated on
+/// /about. Bounded below by the UK permitted-development 14 days/yr (CIEH
+/// 2003) and event noise-day counts (Zandvoort 12); replaced from
+/// permits/registers where available.
+pub const MOTORSPORT_DEFAULT_ACTIVE_HOURS: f64 = 600.0;
+
+/// Default civil-range activity without register data: 20,000 shots/yr,
+/// stated on /about (Zürich range register 64-ZH carries per-range shots and
+/// half-days as the replacement source). Bounded below by the UK 28-day clay
+/// rule (CIEH 2003).
+pub const SHOOTING_DEFAULT_SHOTS_PER_YEAR: f64 = 20_000.0;
+
+/// Pink-noise reference spectrum (unweighted, rel 1 kHz) — the octave shape
+/// REP-0310 §4.2.3 mandates for motorsport propagation.
+const MOTORSPORT_SPECTRUM: [f64; NUM_BANDS] = [12.0, 9.0, 6.0, 3.0, 0.0, -3.0, -6.0, -9.0];
+
+/// Single-shot octave spectra (unweighted, rel 1 kHz): RIVM Defensie emission
+/// table 2024-10-10 (Omgevingsregeling bijlage XVIIIc data), energy-summed
+/// over the sphere per band — Glock 9 mm BALL (ID 40), Accuracy AW .308 Ball
+/// (ID 274), shotgun 12 ga No. 7 (ID 106, the clay shot). The table stops at
+/// 4 kHz; the 8 kHz entries continue the 2→4 kHz slope (marked EST). Shots are
+/// directional (9 mm reads +4.8 forward / −7 rear of the omni sum) — the
+/// engine has no direction axis, so downrange is underestimated and uprange
+/// overestimated by that much.
+const SHOT_SPECTRUM_RIFLE: [f64; NUM_BANDS] = [-15.0, -7.3, -0.2, 2.4, 0.0, -4.4, -5.7, -7.0]; // 8k EST
+const SHOT_SPECTRUM_PISTOL: [f64; NUM_BANDS] = [-25.4, -16.4, -7.5, -1.2, 0.0, -5.8, -9.7, -13.6]; // 8k EST
+const SHOT_SPECTRUM_SHOTGUN: [f64; NUM_BANDS] = [-15.6, -7.5, -0.5, 1.4, 0.0, -3.4, -6.1, -8.8]; // 8k EST
+
+/// A formula-class emission: annual day Lw (a TOTAL, not per-area — the prep
+/// path spreads it over the row geometry), spectrum, and day-only offsets.
+/// Evening/night are effectively silent (−50): racing and shooting are
+/// daytime activities; floodlit night races are unmodelled.
+#[derive(Debug, Clone, Copy)]
+pub struct FormulaEmission {
+    pub lw_day: f64,
+    pub spectrum: [f64; NUM_BANDS],
+    pub evening_offset: f64,
+    pub night_offset: f64,
+}
+
+/// Motorsport sub-type of a class-10 row, read from its raw `sport` tag.
+/// Each arm carries its LW(1) provenance: the per-vehicle energy-equivalent
+/// level is UBA Austria REP-0310 Table 6 (after LfU Bayern 1999) except where
+/// noted, and n the simultaneously driving vehicles at full occupancy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotorsportSubtype {
+    /// Circuit car racing, incl. autocross/rallycross (the touring-car 116
+    /// proxy — REP-0310 has no road-racing car class; autocross shares it
+    /// until a dedicated value is evidenced). n = 15, the club-race grid.
+    Circuit,
+    /// Motocross (supermoto rides along — same machines on tarmac). n = 7.
+    Motocross,
+    /// Kart tracks (Pop-Kart national 118 — the race use; rental-only
+    /// operation is ~17 dB lower). n = 8.
+    Kart,
+    /// Speedway. n = 4, the FIM heat size.
+    Speedway,
+    /// Motorcycle trials. n = 2. LW(1) 95 is the w7 value without a
+    /// published source — the weakest motorsport anchor; it also overstates
+    /// the rarer bicycle-trial parks (OSM does not split `sport=trial`).
+    Trial,
+    /// Untyped motorsport (`sport=motor`, unknown values): the touring-car
+    /// proxy at n = 10, the honest middle.
+    Other,
+    /// Radio-controlled cars (`sport=rc_car` on a raceway): toy machines,
+    /// not race vehicles — no formula emission.
+    Silent,
+}
+
+impl MotorsportSubtype {
+    /// Per-vehicle LW(1) [dB(A)] and simultaneous vehicle count.
+    fn lw1_n(self) -> Option<(f64, f64)> {
+        match self {
+            Self::Circuit => Some((116.0, 15.0)),
+            Self::Motocross => Some((114.0, 7.0)),
+            Self::Kart => Some((118.0, 8.0)),
+            Self::Speedway => Some((139.0, 4.0)),
+            Self::Trial => Some((95.0, 2.0)),
+            Self::Other => Some((116.0, 10.0)),
+            Self::Silent => None,
+        }
+    }
+}
+
+/// Sub-type of a class-10 row from its raw `sport` tag value (any case;
+/// `-`/space spellings accepted). Multi-values (`karting;motocross`) resolve
+/// to the loudest annual Lw — the same argmax the extractor uses for
+/// multi-sport area rows — except a purely radio-controlled value, which is
+/// [`MotorsportSubtype::Silent`]. Unknown or empty tags are
+/// [`MotorsportSubtype::Other`].
+pub fn motorsport_subtype(sport_tag: &str) -> MotorsportSubtype {
+    let mut best: Option<(MotorsportSubtype, f64)> = None;
+    let mut silent = false;
+    for token in sport_tag.split(';') {
+        let token = token.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+        let subtype = match token.as_str() {
+            "autocross" | "rallycross" | "car_racing" | "formula_one" | "road_racing"
+            | "drifting" | "stockcar" | "auto_racing" | "stock_car_racing" | "drag_racing" => {
+                MotorsportSubtype::Circuit
+            }
+            "motocross" | "supermoto" | "enduro" => MotorsportSubtype::Motocross,
+            "karting" | "kart" | "go_kart" => MotorsportSubtype::Kart,
+            "speedway" => MotorsportSubtype::Speedway,
+            "trial" => MotorsportSubtype::Trial,
+            "motor" | "motorsport" | "motor_sports" | "motorcycle" => MotorsportSubtype::Other,
+            "rc_car" | "rc_racing" | "radiocontrol" | "radio_control" => MotorsportSubtype::Silent,
+            _ => continue,
+        };
+        // A real vehicle anywhere in the value beats radio-controlled: a
+        // mixed site still races.
+        let Some((lw1, n)) = subtype.lw1_n() else {
+            silent = true;
+            continue;
+        };
+        let loud = lw1 + 10.0 * n.log10();
+        if best.is_none_or(|(_, best)| loud > best) {
+            best = Some((subtype, loud));
+        }
+    }
+    match best {
+        Some((subtype, _)) => subtype,
+        None if silent => MotorsportSubtype::Silent,
+        None => MotorsportSubtype::Other,
+    }
+}
+
+/// Formula emission of a motorsport sub-type: annual Lw = LW(1) + 10·lg(n) +
+/// 10·lg(active hours / 4,380), day-only, at the class-default 100 days × 6 h.
+/// [`MotorsportSubtype::Silent`] has no emission (`None`).
+pub fn motorsport_emission(subtype: MotorsportSubtype) -> Option<FormulaEmission> {
+    let (lw1, n) = subtype.lw1_n()?;
+    Some(FormulaEmission {
+        lw_day: lw1 + 10.0 * n.log10()
+            + 10.0 * (MOTORSPORT_DEFAULT_ACTIVE_HOURS / DAY_PERIOD_HOURS_PER_YEAR).log10(),
+        spectrum: MOTORSPORT_SPECTRUM,
+        evening_offset: -50.0,
+        night_offset: -50.0,
+    })
+}
+
+/// Shooting sub-type of a class-11 row, read from its `shooting` tags and
+/// name. LE is the RIVM Defensie table sphere sum (see the spectra above),
+/// ASSUMED to be the per-shot energy level (the table states no reference
+/// quantity; TNO 2014-R10135 would confirm it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShootingSubtype {
+    /// Rifle (.308, LE 139.0) — also the default for an untyped outdoor
+    /// range (conservative: the loudest common discipline).
+    Rifle,
+    /// Pistol (9 mm, LE 133.6).
+    Pistol,
+    /// Shotgun (12 ga clay shot, LE 134.8).
+    Shotgun,
+    /// A near-silent discipline (archery, paintball, air guns): no firearm
+    /// emission, so the row stays out rather than sounding like a rifle.
+    Silent,
+}
+
+/// Sub-type of a class-11 row from its `shooting=*` tag, its `shooting:*`
+/// detail values, and the row name. Tags beat the name; across several
+/// firearm disciplines the loudest LE wins (a mixed range still fires guns);
+/// an untyped range defaults to [`ShootingSubtype::Rifle`]. Tag values follow
+/// the [OSM `shooting` key](https://wiki.openstreetmap.org/wiki/Key:shooting)
+/// (`rifle`, `pistol`, `clay_pigeon`, `paintball`, …).
+pub fn shooting_subtype(
+    shooting: Option<&str>,
+    details: &[&str],
+    name: &str,
+) -> ShootingSubtype {
+    fn firearm(token: &str) -> Option<ShootingSubtype> {
+        Some(match token {
+            "rifle" => ShootingSubtype::Rifle,
+            "pistol" | "handgun" | "ipsc" => ShootingSubtype::Pistol,
+            "shotgun" | "clay" | "clay_pigeon" | "claypigeon" | "skeet" | "trap" => {
+                ShootingSubtype::Shotgun
+            }
+            _ => return None,
+        })
+    }
+    fn quiet(token: &str) -> bool {
+        matches!(
+            token,
+            "archery" | "crossbow" | "paintball" | "airsoft" | "laser" | "laser_tag"
+                | "lasertag" | "air_gun" | "airgun" | "air_rifle" | "air_pistol"
+                | "blowgun" | "indoor" | "indoor_range" | "virtual"
+        )
+    }
+    let mut tokens: Vec<String> = Vec::new();
+    if let Some(shooting) = shooting {
+        tokens.extend(
+            shooting
+                .split(';')
+                .map(|token| token.trim().to_ascii_lowercase().replace(['-', ' '], "_")),
+        );
+    }
+    for detail in details {
+        tokens.extend(
+            detail
+                .split(';')
+                .map(|token| token.trim().to_ascii_lowercase().replace(['-', ' '], "_")),
+        );
+    }
+    // Firearm presence dominates: the loudest LE wins (rifle over shotgun
+    // over pistol); a purely quiet discipline stays silent.
+    let mut best: Option<(ShootingSubtype, f64)> = None;
+    for token in &tokens {
+        if let Some(subtype) = firearm(token) {
+            let le = match subtype {
+                ShootingSubtype::Rifle => 139.0,
+                ShootingSubtype::Shotgun => 134.8,
+                ShootingSubtype::Pistol => 133.6,
+                ShootingSubtype::Silent => continue,
+            };
+            if best.is_none_or(|(_, best)| le > best) {
+                best = Some((subtype, le));
+            }
+        }
+    }
+    if let Some((subtype, _)) = best {
+        return subtype;
+    }
+    if tokens.iter().any(|token| quiet(token)) {
+        return ShootingSubtype::Silent;
+    }
+    // No tag evidence: the loudest discipline named wins (a "rifle and
+    // pistol club" fires rifles); a purely quiet name stays silent; else the
+    // conservative rifle default.
+    let name = name.to_ascii_lowercase();
+    if name.contains("rifle") {
+        ShootingSubtype::Rifle
+    } else if name.contains("clay")
+        || name.contains("skeet")
+        || name.contains("trap")
+        || name.contains("shotgun")
+    {
+        ShootingSubtype::Shotgun
+    } else if name.contains("pistol") || name.contains("handgun") || name.contains("ipsc") {
+        ShootingSubtype::Pistol
+    } else if name.contains("archery")
+        || name.contains("crossbow")
+        || name.contains("paintball")
+        || name.contains("airsoft")
+        || name.contains("laser")
+    {
+        ShootingSubtype::Silent
+    } else {
+        ShootingSubtype::Rifle
+    }
+}
+
+/// Formula emission of one class-10/11 row — the single composition both
+/// loaders call: the motorsport sub-type from the raw `sport` tag, the
+/// shooting sub-type from `shooting` / `shooting:*` / name. `None` for
+/// area-law classes and silent shooting sub-types.
+pub fn formula_for_row(
+    sport: u8,
+    sport_tag: &str,
+    shooting: Option<&str>,
+    shooting_details: &[&str],
+    name: &str,
+) -> Option<FormulaEmission> {
+    match sport {
+        MOTORSPORT => motorsport_emission(motorsport_subtype(sport_tag)),
+        SHOOTING => shooting_emission(shooting_subtype(shooting, shooting_details, name)),
+        _ => None,
+    }
+}
+
+/// Formula emission of a shooting sub-type: annual Lw = LE +
+/// 10·lg(shots / 15.77 Ms), day-only — the single-shot energy LE spread over
+/// the day period's 15,768,000 s/yr at the default 20,000 shots/yr.
+/// [`ShootingSubtype::Silent`] has no emission (`None`).
+pub fn shooting_emission(subtype: ShootingSubtype) -> Option<FormulaEmission> {
+    let (le, spectrum) = match subtype {
+        ShootingSubtype::Rifle => (139.0, SHOT_SPECTRUM_RIFLE),
+        ShootingSubtype::Pistol => (133.6, SHOT_SPECTRUM_PISTOL),
+        ShootingSubtype::Shotgun => (134.8, SHOT_SPECTRUM_SHOTGUN),
+        ShootingSubtype::Silent => return None,
+    };
+    Some(FormulaEmission {
+        lw_day: le
+            + 10.0
+                * (SHOOTING_DEFAULT_SHOTS_PER_YEAR / (DAY_PERIOD_HOURS_PER_YEAR * 3600.0)).log10(),
+        spectrum,
+        evening_offset: -50.0,
+        night_offset: -50.0,
+    })
+}
+
 /// Emission bands for a leisure area (day period), normalized so
 /// `a_weighted_total(bands) == lw` (same contract as buildings).
 pub fn leisure_emission_bands(profile: &LeisureProfile, lw: f64) -> [f64; NUM_BANDS] {
     super::spectrum::normalized_emission_bands(lw, &profile.spectrum)
+}
+
+/// Emission bands for a formula class (day period), same normalization.
+pub fn leisure_formula_bands(emission: &FormulaEmission) -> [f64; NUM_BANDS] {
+    super::spectrum::normalized_emission_bands(emission.lw_day, &emission.spectrum)
 }
 
 /// Leisure Lw — the shared [`crate::emission::settlement::area_lw`] over the
@@ -329,6 +654,131 @@ mod tests {
                 "sport {s}: radiated {aw:.6} != lw {lw:.6}"
             );
         }
+        for subtype in [
+            MotorsportSubtype::Circuit,
+            MotorsportSubtype::Motocross,
+            MotorsportSubtype::Kart,
+            MotorsportSubtype::Speedway,
+            MotorsportSubtype::Trial,
+            MotorsportSubtype::Other,
+        ] {
+            let emission = motorsport_emission(subtype).unwrap();
+            let aw = a_weighted_total(&leisure_formula_bands(&emission));
+            assert!(
+                (aw - emission.lw_day).abs() < 1e-6,
+                "{subtype:?}: radiated {aw:.6} != lw {:.6}",
+                emission.lw_day
+            );
+        }
+        for subtype in [
+            ShootingSubtype::Rifle,
+            ShootingSubtype::Pistol,
+            ShootingSubtype::Shotgun,
+        ] {
+            let emission = shooting_emission(subtype).unwrap();
+            let aw = a_weighted_total(&leisure_formula_bands(&emission));
+            assert!(
+                (aw - emission.lw_day).abs() < 1e-6,
+                "{subtype:?}: radiated {aw:.6} != lw {:.6}",
+                emission.lw_day
+            );
+        }
+    }
+
+    /// The w7-sources evidence pilots, pinned: Most/Brands D100 (circuit 116,
+    /// n=15, 600 h) → 119.1; Hodonín MX D100 (114, n≈7) → 113.6±0.2; Tatra
+    /// rifle/clay and Hodonice IPSC N20k → 110.0/105.8/104.6.
+    #[test]
+    fn formula_subtypes_reproduce_the_evidence_pilots() {
+        let motor = |s: MotorsportSubtype| motorsport_emission(s).unwrap().lw_day;
+        let shot = |s: ShootingSubtype| shooting_emission(s).unwrap().lw_day;
+        assert!((motor(MotorsportSubtype::Circuit) - 119.1).abs() < 0.05);
+        assert!((motor(MotorsportSubtype::Motocross) - 113.6).abs() < 0.25);
+        assert!((shot(ShootingSubtype::Rifle) - 110.0).abs() < 0.05);
+        assert!((shot(ShootingSubtype::Shotgun) - 105.8).abs() < 0.05);
+        assert!((shot(ShootingSubtype::Pistol) - 104.6).abs() < 0.05);
+        // Day-only: evening and night effectively silent on every sub-type.
+        for subtype in [
+            MotorsportSubtype::Circuit,
+            MotorsportSubtype::Motocross,
+            MotorsportSubtype::Kart,
+            MotorsportSubtype::Speedway,
+            MotorsportSubtype::Trial,
+            MotorsportSubtype::Other,
+        ] {
+            let emission = motorsport_emission(subtype).unwrap();
+            assert_eq!(emission.evening_offset, -50.0, "{subtype:?} evening");
+            assert_eq!(emission.night_offset, -50.0, "{subtype:?} night");
+        }
+        for subtype in [
+            ShootingSubtype::Rifle,
+            ShootingSubtype::Pistol,
+            ShootingSubtype::Shotgun,
+        ] {
+            let emission = shooting_emission(subtype).unwrap();
+            assert_eq!(emission.evening_offset, -50.0, "{subtype:?} evening");
+            assert_eq!(emission.night_offset, -50.0, "{subtype:?} night");
+        }
+        assert!(shooting_emission(ShootingSubtype::Silent).is_none());
+        assert!(motorsport_emission(MotorsportSubtype::Silent).is_none());
+        // Only 10/11 are formula classes.
+        assert!(is_formula_class(MOTORSPORT));
+        assert!(is_formula_class(SHOOTING));
+        assert!(!is_formula_class(PITCH));
+        assert!(!is_formula_class(CAR_PARK_STREET));
+        assert!(!is_formula_class(12));
+    }
+
+    #[test]
+    fn motorsport_subtype_reads_raw_sport_tags() {
+        use MotorsportSubtype::*;
+        assert_eq!(motorsport_subtype("karting"), Kart);
+        assert_eq!(motorsport_subtype("Kart"), Kart);
+        assert_eq!(motorsport_subtype("go-kart"), Kart);
+        assert_eq!(motorsport_subtype("motocross"), Motocross);
+        assert_eq!(motorsport_subtype("supermoto"), Motocross);
+        assert_eq!(motorsport_subtype("speedway"), Speedway);
+        assert_eq!(motorsport_subtype("trial"), Trial);
+        assert_eq!(motorsport_subtype("autocross"), Circuit);
+        assert_eq!(motorsport_subtype("rallycross"), Circuit);
+        assert_eq!(motorsport_subtype("car_racing"), Circuit);
+        assert_eq!(motorsport_subtype("drag_racing"), Circuit);
+        assert_eq!(motorsport_subtype("motor"), Other);
+        assert_eq!(motorsport_subtype("motorsport"), Other);
+        assert_eq!(motorsport_subtype(""), Other);
+        assert_eq!(motorsport_subtype("chess"), Other);
+        // Multi-values resolve to the loudest (circuit over kart).
+        assert_eq!(motorsport_subtype("karting;car_racing"), Circuit);
+        assert_eq!(motorsport_subtype("motocross;karting"), Kart);
+        // Radio-controlled cars stay silent — unless a real vehicle shares
+        // the value.
+        assert_eq!(motorsport_subtype("rc_car"), Silent);
+        assert_eq!(motorsport_subtype("RC-Car"), Silent);
+        assert_eq!(motorsport_subtype("rc_car;karting"), Kart);
+    }
+
+    #[test]
+    fn shooting_subtype_reads_tags_then_name() {
+        use ShootingSubtype::*;
+        assert_eq!(shooting_subtype(Some("rifle"), &[], ""), Rifle);
+        assert_eq!(shooting_subtype(Some("pistol"), &[], ""), Pistol);
+        assert_eq!(shooting_subtype(Some("clay_pigeon"), &[], ""), Shotgun);
+        assert_eq!(shooting_subtype(Some("clay-pigeon"), &[], ""), Shotgun);
+        assert_eq!(shooting_subtype(Some("skeet"), &[], ""), Shotgun);
+        // Mixed tags: the loudest firearm wins; quiet-only stays silent.
+        assert_eq!(shooting_subtype(Some("pistol;rifle"), &[], ""), Rifle);
+        assert_eq!(shooting_subtype(Some("pistol;clay_pigeon"), &[], ""), Shotgun);
+        assert_eq!(shooting_subtype(Some("archery"), &[], ""), Silent);
+        assert_eq!(shooting_subtype(Some("paintball"), &[], ""), Silent);
+        assert_eq!(shooting_subtype(Some("indoor_range"), &[], ""), Silent);
+        assert_eq!(shooting_subtype(None, &["pistol"], ""), Pistol);
+        // No tag evidence: the name decides, else the rifle default.
+        assert_eq!(shooting_subtype(None, &[], "Tatra clay"), Shotgun);
+        assert_eq!(shooting_subtype(None, &[], "Hodonice IPSC"), Pistol);
+        assert_eq!(shooting_subtype(None, &[], "Rifle and pistol club"), Rifle);
+        assert_eq!(shooting_subtype(None, &[], "City archery club"), Silent);
+        assert_eq!(shooting_subtype(None, &[], "Střelnice"), Rifle);
+        assert_eq!(shooting_subtype(None, &[], ""), Rifle);
     }
 
     /// The plan's loudness ordering must hold (each at its reference court):
@@ -343,6 +793,20 @@ mod tests {
         assert!(
             anchor(TENNIS) > anchor(BASKETBALL),
             "tennis must beat basketball"
+        );
+    }
+
+    /// The pitch anchor: 58 dB LAeq,1h at 10 m (Sport England AGP) read as
+    /// an area source — active 59.8 dB/m², annualized −9 → 50.8 dB/m², i.e.
+    /// 97.85 dB(A) over a 100×64 m pitch.
+    #[test]
+    fn pitch_anchor_is_the_area_source_reading() {
+        let p = leisure_profile(PITCH);
+        assert_eq!(p.lw_per_m2, 50.8);
+        let over_100x64 = leisure_lw(&p, 6400.0);
+        assert!(
+            (over_100x64 - (97.85 - 9.0)).abs() < 0.05,
+            "annual over 6,400 m²: {over_100x64:.3}"
         );
     }
 
@@ -406,11 +870,12 @@ mod tests {
         assert_eq!(leisure_profile(PITCH).m2_per_space, None);
     }
 
-    /// A class id outside `leisure_v4` can only come from a file that lies about
-    /// its stamp. It must say nothing rather than sound like a football pitch.
+    /// A class id outside `leisure_v4` (12+) can only come from a file that
+    /// lies about its stamp. It must say nothing rather than sound like a
+    /// football pitch.
     #[test]
     fn an_unknown_class_emits_nothing() {
-        let unknown = leisure_profile(CAR_PARK_STREET + 1);
+        let unknown = leisure_profile(SHOOTING + 1);
         for area in [10.0, 1_000.0, 100_000.0] {
             assert!(
                 leisure_lw(&unknown, area) < 10.0,
@@ -431,6 +896,10 @@ mod tests {
         assert_eq!(sport_class("soccer"), Some(PITCH));
         assert_eq!(sport_class("basketball"), Some(BASKETBALL));
         assert_eq!(sport_class("swimming"), Some(POOL));
+        // Motor and shooting sports bypass this map: the extractor owns
+        // classes 10/11 and the readers subdivide them from the raw tags.
+        assert_eq!(sport_class("motocross"), None);
+        assert_eq!(sport_class("shooting"), None);
         assert_eq!(sport_class("chess"), None);
     }
 }

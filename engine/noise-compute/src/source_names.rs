@@ -76,6 +76,8 @@ pub(crate) fn leisure_type_name(sport: u8) -> &'static str {
         CAR_PARK => "car_park",
         CAR_PARK_STREET => "street_parking",
         PITCH => "sports_pitch",
+        MOTORSPORT => "motorsport",
+        SHOOTING => "shooting",
         // An id outside `leisure_v4`: it emits nothing (`leisure_profile`), and
         // it is not named after something it may not be.
         _ => "unknown",
@@ -95,6 +97,10 @@ pub(crate) fn industrial_type_name(st: u8) -> &'static str {
         3 => "factory",
         4 => "wastewater",
         10 => "wind_turbine",
+        13 => "solar_farm",
+        14 => "substation",
+        // 11 (wind-plant outline), 12 (inactive) and 15 (transformer) are
+        // silent and never reach a contributor.
         _ => "industrial_area",
     }
 }

@@ -115,6 +115,81 @@ secondary-only row by `baseline_days / increment_days` (`ProvenanceWeights`),
 in energy and in movement counts. A flight counts as a baseline movement when
 any of its rows at the receiver, microsegment or airport category is primary.
 
+## Industrial, wind and leisure emission
+
+An `industrial.arrow` row is admitted by the popup exactly when its polygon
+EDGE can reach: centroid distance minus ring radius (max vertex distance from
+the centroid; 0 for ringless point rows) ≤ `INDUSTRIAL_MAX_RADIUS` = 4 km —
+the same reach the painter's per-point cap enforces. The retired 5 km centroid
+gate dropped giant polygons (Garzweiler's east/west ends stood 5.4–5.6 km from
+the mine centroid, 250 m from its boundary). Batch prefiltering (5 km over
+geometry envelopes) and square loading (7.5 km) already cover these rows.
+
+Profile selection is NACE, then OSM subtype, then coarse source type
+(`emission/industrial.rs`). A tagged warehouse IS a NACE 52 site and uses that
+profile (86 dB(A) at 1 ha, evening −3, night −8); the old quieter subtype twin
+(−13.2 dB Lden) is deleted. Coal and lignite mining (NACE 05) runs 24/7
+(evening/night offsets 0 — bucket-wheel pits do not stop); NACE 08 quarries
+keep day-oriented hours (−8/−20).
+
+Wind turbines emit their annual operating level: the max-mode LUT
+(`turbine_lw`, 98–106.5 dB(A) by rating) plus the Dutch statutory operating
+duty ΔL = 10·lg Σ_j U_j·10^((Lw_j − Lmax)/10) (Reken- en meetvoorschrift
+windturbines, 2011) over the generic normalised LwA(v) curve — the arithmetic
+mean of (Lw−Lmax) over nine published type curves (Oliver Forest Appendix 13.2
+Table 2; Ballinagree Appendix 7.4 SG 6.0-155 AM0, N149, V150 mode 0), cut-in
+3 m/s, Lmax held above rated. Until the meteorology raster arrives the wind
+distribution is a documented placeholder: Rayleigh with 7.5 m/s hub-height
+mean, identical in every period (generic duty −2.1 dB; the published V150
+check gives −3.4). The turbine spectrum is the energy mean of five published
+max-mode octave spectra (the four modern Oliver Forest types plus SG 6.0-155
+AM0), unweighted relative to 1 kHz:
+`[13.2, 11.1, 7.8, 4.4, 0, −3.9, −9.7, −19.4]` dB. Spectrum and duty ship
+together: at 1 km they nearly cancel.
+
+A sports pitch annualizes the Sport England AGP measurement (58 dB LAeq,1h at
+10 m) as the area source it is: 10 m outside the touchline of a 100×64 m pitch
+the area integral sits 1.8 dB under the per-m² level, giving active 59.8
+dB/m² — 97.85 dB(A) over the pitch — and 50.8 dB/m² after the standard −9 dB
+annualization (−3 season, −6 duty).
+
+Power classes (`source_type` 11–15, `osm_industrial_contract`). Solar farms
+(13) emit per-MW, not per area: 88 dB(A)/MW + 10·lg(MW) − 5 dB day duty,
+day-only (Sungrow SG4950HV-MV 4.95 MW = 95 dB(A) anchor; MW from the row's
+`plant:output:electricity` tag, a solar generator unit's `rated_power_kw`, or
+area × 0.55 MW/ha, the tagged-farm median). Registry-confirmed solar
+(synthetic NACE 3599) takes the same branch. Substations (14) emit per-MVA,
+24/7: IEC 551 LWA = 74 + 14·lg(MVA), 64 dB below 0.2 MVA (MVA from the joined
+`rating` sum of the class-15 transformers inside the substation polygon, else
+the class median — main 25, auto 160, distribution 2 MVA; class from `voltage`
+/ autotransformer evidence). Wind-plant outlines (11), inactive facilities
+(12) and transformers (15) are silent; lifecycle-retired rows carry
+`suppressed`, honoured by both readers.
+
+Registry stamping is containment-first: a facility claims the smallest polygon
+containing it (equivalent-circle edge < 0, any centroid distance — the 2 km
+radius gates proximity only); a polygon takes the loudest contained facility
+of the winning registry (Tata: steel 2410 over chemicals 2011). New NACE arms:
+06 oil/gas extraction (92, near-24/7), 07 metal-ore mining (as quarries),
+19 coke/refining (96, near-24/7), 62 office (defensive, 60). E-PRTR maps by
+Annex I sub-activity letter, not sector. The India colour feed is deleted (CPCB
+colours score air/water/waste pollution, not noise); registry points never
+stamp substations or turbines.
+
+`leisure_v4` adds the motorsport (10) and shooting (11) formula classes.
+These carry a class-TOTAL annual day Lw, not the area law, with the sub-type
+read from the row's retained tags: motorsport LW(1) + 10·lg(n) +
+10·lg(active hours / 4,380) with UBA REP-0310 per-vehicle levels (circuit 116
+touring proxy / n=15, motocross 114/7, kart 118/8, speedway 139/4, trial 95/2,
+other 116/10), default 100 days × 6 h, pink propagation spectrum; shooting LE
++ 10·lg(shots / 15.77 Ms) with RIVM sphere sums (rifle 139.0, pistol 133.6,
+shotgun 134.8), default 20,000 shots/yr, per-weapon octave spectra. Both are
+day-only (−50 evening/night) and reach past the 2 km leisure cap (industrial
+4 km reach, edge-gated). Raceway lines carry the emission, spread over their
+chain; an enclosing motorsport polygon goes silent, as does a roofed formula
+row (its building footprint emits) or a near-silent shooting discipline
+(archery, paintball, air guns).
+
 ## Prepared road direction and traffic
 
 Local roads (residential, living street and unclassified) without a higher-priority
@@ -638,8 +713,8 @@ Industrial source classes 11/12 identify wind-plant outlines and inactive
 facilities: neither falls through to generic factory emission. A wind-plant
 outline requires wind as the sole `plant:source`; mixed fuels and copied
 generator tags do not silence a plant. Classes 13/14/15
-retain solar, substation and transformer evidence for their specific models.
-They currently emit nothing pending those models. Raw power/output/rating and
+retain solar, substation and transformer evidence for their specific models
+(see above); transformers stay silent themselves. Raw power/output/rating and
 lifecycle tags survive, with OSM object kind to disambiguate IDs. Registry
 matching does not overwrite these classes. Industrial and leisure multipolygons
 retain every closed outer component as a separate row; unclosed fragments are
@@ -651,8 +726,8 @@ geometry kind (0 point, 1 area, 2 line) and line length. Two-node raceways and
 motor-sport tracks survive with open-chain geometry; enclosing polygons are
 separate area rows. Open non-motorised tracks also retain their line path;
 coordinate snapping does not change line/area identity. Shooting subtype and indoor/building flags survive on nodes,
-ways and relations. These two classes are staged and silent until the activity
-models consume them; an enclosing area must not duplicate a line's emission.
+ways and relations. The activity models consume both classes (see above); an
+enclosing area must not duplicate a line's emission.
 A physical building also retains its separate source row and has no generic
 residential emission. Buildings keep `buildings_v5`, the existing roof/carport
 use code and the unchanged height ladder.

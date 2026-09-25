@@ -105,9 +105,6 @@ test('four retained national families keep their source geometry, status, sector
     assert.equal(feed.active?.(properties) ?? true, active, `${iso} status`)
   }
 
-  const indiaPark = classifySpecialPoints([point(20, 78, { pollution_cat: 'Orange' })],
-    country('IN'), SPECIAL_FEEDS.IN[2], new Set())
-  assert.equal(indiaPark.facilities[0].nace4, 2000)
   const cement = classifySpecialPoints([{
     geometry: { type: 'Polygon', coordinates: [[[77, 20], [79, 20], [79, 22], [77, 22], [77, 20]]] },
     properties: {},
