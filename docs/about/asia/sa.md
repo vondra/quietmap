@@ -27,7 +27,7 @@ All three use one vehicle split: 78% cars, 10% medium, 11% heavy, 1% motorcycles
 
 ## Railways
 
-No Saudi operator publishes a timetable feed. All lines use class defaults: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branches, 15 freight on industrial sidings, 80 on light rail. The Haramain high-speed line and the northern freight line both get the main-line default. The Riyadh Metro is included, at 80 trains per day, where OpenStreetMap tags it as light rail.
+No Saudi operator publishes a timetable feed. All lines use class defaults: 80 passenger and 85 freight trains per day on main lines, 30 and 5 on branches, 15 freight on industrial sidings, 80 on light rail. The Haramain high-speed line and the northern freight line both get the main-line default. The Riyadh Metro is included, at 80 trains per day, where OpenStreetMap tags it as light rail.
 
 ## Industry
 

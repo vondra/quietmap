@@ -12,7 +12,7 @@ Where buildings are mapped, residential, living, service and unclassified street
 
 ## Railways
 
-No timetable is loaded. Every line that OSM maps as a working railway takes the class default: 80 passenger and 20 freight trains per day on a main line, 30 and 5 on a branch. This applies equally to the freight-only Ferrocarril Central, opened in 2023 for the pulp mill at Paso de los Toros, and to little-used inland lines.
+No timetable is loaded. Every line that OSM maps as a working railway takes the class default: 80 passenger and 85 freight trains per day on a main line, 30 and 5 on a branch. This applies equally to the freight-only Ferrocarril Central, opened in 2023 for the pulp mill at Paso de los Toros, and to little-used inland lines.
 
 ## Industry
 

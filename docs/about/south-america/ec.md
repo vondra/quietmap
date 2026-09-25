@@ -38,7 +38,7 @@ Motorways, trunks and primaries not near a mapped network road use the world est
 
 ## Railways
 
-No timetable is loaded. Lines that OSM maps as working railways take the class default, up to 80 passenger and 20 freight trains per day; mapped disused or abandoned lines are excluded.
+No timetable is loaded. Lines that OSM maps as working railways take the class default, up to 80 passenger and 85 freight trains per day; mapped disused or abandoned lines are excluded.
 
 Surface metro sections are included; see the [railway method](/about/methodology).
 
