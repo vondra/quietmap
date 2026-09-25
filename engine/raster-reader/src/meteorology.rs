@@ -1,16 +1,22 @@
-//! Strict global ERA5 climatology loading and continuous receiver/direction sampling.
-use arrow::{
-    array::{Array, FixedSizeListArray, Float32Array, UInt16Array, UInt8Array},
-    ipc::reader::FileReader,
+//! One square's ERA5 climatology window and continuous receiver/direction sampling.
+use grid::{raster::RasterWindow, square_name, Square};
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
 };
-use std::{fs::File, path::Path};
 
 pub const ROWS: usize = 721;
 pub const COLUMNS: usize = 1440;
 pub const SECTORS: usize = 16;
+/// ERA5 lattice density: 0.25° nodes on the same z9 edge rule as the 1″ rasters.
+pub const ERA5_NODES_PER_DEGREE: i32 = 4;
 const CONTRACT: &str = include_str!("../../noise-compute/meteorology-contract.json");
+const HEADER_LEN: usize = 16;
+const NODE_BYTES: usize = 240;
 
 /// CUDA transfer layout: 48 probability bytes, then two 24-float moment arrays.
+/// The per-square file stores these records row-major, floats little-endian.
 #[derive(Clone, Copy, Default)]
 #[repr(C)]
 pub struct MeteorologyNode {
@@ -41,154 +47,136 @@ impl MeteorologySample {
 }
 
 pub struct Meteorology {
+    window: RasterWindow,
     nodes: Vec<MeteorologyNode>,
     maximum_probability: [f32; 3],
 }
 
 impl Meteorology {
-    /// Reject incomplete normals, missing cells, reordered rows, nulls and nonphysical values.
-    pub fn load(path: &Path) -> Result<Self, String> {
-        Self::read(path).map_err(|error| format!("meteorology {}: {error}", path.display()))
+    pub fn path(root: &Path, square: Square) -> PathBuf {
+        root.join(square_name(square)).join("meteorology.bin")
     }
 
-    fn read(path: &Path) -> Result<Self, String> {
-        let reader = FileReader::try_new(File::open(path).map_err(|e| e.to_string())?, None)
-            .map_err(|e| e.to_string())?;
-        let schema = reader.schema();
-        let expected: std::collections::HashMap<String, String> =
-            serde_json::from_str(CONTRACT).unwrap();
-        for (key, value) in expected {
-            if schema.metadata().get(&key) != Some(&value) {
-                return Err(format!("wrong or missing {key} metadata"));
-            }
+    /// Load one square's window: a 16-byte header (contract magic, window, dims) then row-major
+    /// node records. Rejects wrong magic, dims, lengths and nonphysical values.
+    pub fn load(path: &Path, square: Square) -> Result<Self, String> {
+        Self::read(path, square).map_err(|error| format!("meteorology {}: {error}", path.display()))
+    }
+
+    fn read(path: &Path, square: Square) -> Result<Self, String> {
+        let mut bytes = Vec::new();
+        File::open(path)
+            .map_err(|error| error.to_string())?
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        if bytes.len() < HEADER_LEN {
+            return Err("truncated meteorology header".into());
         }
-        if schema.metadata().get("complete").map(String::as_str) != Some("true")
-            || schema
-                .metadata()
-                .get("source_identity")
-                .is_none_or(String::is_empty)
+        if bytes[0..8] != expected_magic()? {
+            return Err("wrong meteorology contract magic".into());
+        }
+        let window = RasterWindow::for_square_with_density(square, ERA5_NODES_PER_DEGREE);
+        let west = i16::from_le_bytes([bytes[8], bytes[9]]) as i32;
+        let north = i16::from_le_bytes([bytes[10], bytes[11]]) as i32;
+        let columns = u16::from_le_bytes([bytes[12], bytes[13]]) as u32;
+        let rows = u16::from_le_bytes([bytes[14], bytes[15]]) as u32;
+        if west != window.west_node
+            || north != window.north_node
+            || columns != window.columns
+            || rows != window.rows
         {
-            return Err("incomplete climatology or missing source identity".into());
+            return Err("meteorology window does not match the square".into());
         }
-        let mut nodes = Vec::with_capacity(ROWS * COLUMNS);
+        if bytes.len() != HEADER_LEN + window.cell_count() * NODE_BYTES {
+            return Err("wrong meteorology window byte length".into());
+        }
+        let mut nodes = Vec::with_capacity(window.cell_count());
         let mut maxima = [0u8; 3];
-        for batch in reader {
-            let batch = batch.map_err(|e| e.to_string())?;
-            let column = |name: &str| -> Result<&dyn Array, String> {
-                let array = batch
-                    .column_by_name(name)
-                    .ok_or_else(|| format!("missing {name}"))?;
-                if array.null_count() != 0 {
-                    return Err(format!("null {name}"));
+        for cell in 0..window.cell_count() {
+            let base = HEADER_LEN + cell * NODE_BYTES;
+            let mut node = MeteorologyNode::default();
+            for period in 0..3 {
+                for sector in 0..SECTORS {
+                    let value = bytes[base + period * SECTORS + sector];
+                    if value > 100 {
+                        return Err("p outside 0..100 percent".into());
+                    }
+                    node.p_percent[period][sector] = value;
                 }
-                Ok(array.as_ref())
-            };
-            let xs = column("x")?
-                .as_any()
-                .downcast_ref::<UInt16Array>()
-                .ok_or("x must be u16")?;
-            let ys = column("y")?
-                .as_any()
-                .downcast_ref::<UInt16Array>()
-                .ok_or("y must be u16")?;
-            let begin = nodes.len();
-            for row in 0..batch.num_rows() {
-                let index = begin + row;
-                if index >= ROWS * COLUMNS
-                    || usize::from(xs.value(row)) != index % COLUMNS
-                    || usize::from(ys.value(row)) != index / COLUMNS
-                {
-                    return Err(
-                        "rows must cover the global ERA5 grid once in row-major order".into(),
-                    );
-                }
-                nodes.push(MeteorologyNode::default());
+                maxima[period] = maxima[period].max(*node.p_percent[period].iter().max().unwrap());
             }
-            for (period, name) in ["day", "evening", "night"].iter().enumerate() {
-                let p = list(column(&format!("p_{name}"))?, SECTORS)?;
-                let probabilities = p
-                    .values()
-                    .as_any()
-                    .downcast_ref::<UInt8Array>()
-                    .ok_or("p must be u8")?;
-                let maximum_column = column(&format!("p_max_{name}"))?;
-                let maximum = maximum_column
-                    .as_any()
-                    .downcast_ref::<UInt8Array>()
-                    .ok_or("p_max must be u8")?;
-                let mean = list(column(&format!("alpha_mean_{name}"))?, 8)?;
-                let variance = list(column(&format!("alpha_variance_{name}"))?, 8)?;
-                let mean_values = mean
-                    .values()
-                    .as_any()
-                    .downcast_ref::<Float32Array>()
-                    .ok_or("alpha mean must be f32")?;
-                let variance_values = variance
-                    .values()
-                    .as_any()
-                    .downcast_ref::<Float32Array>()
-                    .ok_or("alpha variance must be f32")?;
-                for row in 0..batch.num_rows() {
-                    let node = &mut nodes[begin + row];
-                    let p_offset = p.value_offset(row) as usize;
-                    for sector in 0..SECTORS {
-                        let value = probabilities.value(p_offset + sector);
-                        if value > 100 {
-                            return Err("p outside 0..100 percent".into());
-                        }
-                        node.p_percent[period][sector] = value;
+            for period in 0..3 {
+                for band in 0..8 {
+                    let mean = read_f32(&bytes, base + 48 + period * 32 + band * 4);
+                    let variance = read_f32(&bytes, base + 144 + period * 32 + band * 4);
+                    if !mean.is_finite() || mean < 0.0 || !variance.is_finite() || variance < 0.0 {
+                        return Err("nonfinite or negative absorption moment".into());
                     }
-                    let max = *node.p_percent[period].iter().max().unwrap();
-                    if maximum.value(row) != max {
-                        return Err("p_max disagrees with sectors".into());
-                    }
-                    maxima[period] = maxima[period].max(max);
-                    for band in 0..8 {
-                        let mu = mean_values.value(mean.value_offset(row) as usize + band);
-                        let var = variance_values.value(variance.value_offset(row) as usize + band);
-                        if !mu.is_finite() || mu < 0.0 || !var.is_finite() || var < 0.0 {
-                            return Err("nonfinite or negative absorption moment".into());
-                        }
-                        node.alpha_mean[period][band] = mu;
-                        node.alpha_variance[period][band] = var;
-                    }
+                    node.alpha_mean[period][band] = mean;
+                    node.alpha_variance[period][band] = variance;
                 }
             }
-        }
-        if nodes.len() != ROWS * COLUMNS {
-            return Err("incomplete global meteorology grid".into());
+            nodes.push(node);
         }
         Ok(Self {
+            window,
             nodes,
             maximum_probability: maxima.map(|p| f32::from(p) / 100.0),
         })
     }
 
-    pub fn at(&self, latitude: f64, longitude: f64) -> Result<MeteorologySample, String> {
-        sample_at(latitude, longitude, |x, y| self.nodes[y * COLUMNS + x])
+    fn local_index(&self, x: usize, y: usize) -> Option<usize> {
+        let west = self.window.west_node.rem_euclid(COLUMNS as i32) as usize;
+        let column = (x + COLUMNS - west) % COLUMNS;
+        let row = y.checked_sub((90 * ERA5_NODES_PER_DEGREE - self.window.north_node) as usize)?;
+        (column < self.window.columns as usize && row < self.window.rows as usize)
+            .then(|| row * self.window.columns as usize + column)
     }
 
-    /// Conservatively bounds every interpolation and every receiver influence halo.
+    /// The window this file covers; painters sample receivers through it alone.
+    pub fn window(&self) -> RasterWindow {
+        self.window
+    }
+
+    /// Bilinear receiver interpolation inside this square's window.
+    pub fn at(&self, latitude: f64, longitude: f64) -> Result<MeteorologySample, String> {
+        sample_at(latitude, longitude, |x, y| {
+            self.local_index(x, y).map(|index| self.nodes[index])
+        })
+    }
+
+    /// Window maxima: the largest stored sector value per period, the conservative bound for
+    /// every interpolation inside this window.
     pub fn maximum_probability(&self) -> [f32; 3] {
         self.maximum_probability
     }
 }
 
-fn list(array: &dyn Array, length: usize) -> Result<&FixedSizeListArray, String> {
-    let list = array
-        .as_any()
-        .downcast_ref::<FixedSizeListArray>()
-        .ok_or("expected fixed-size list")?;
-    if list.value_length() as usize != length || list.values().null_count() != 0 {
-        return Err("wrong list length or null child value".into());
+/// The file magic names the contract version, so a method change refuses old files.
+fn expected_magic() -> Result<[u8; 8], String> {
+    let contract: std::collections::HashMap<String, String> =
+        serde_json::from_str(CONTRACT).unwrap();
+    let version = contract
+        .get("meteorology_contract")
+        .ok_or("contract lacks meteorology_contract")?;
+    if version.len() != 1 {
+        return Err("unsupported meteorology contract version".into());
     }
-    Ok(list)
+    let mut magic = [0u8; 8];
+    magic[0..6].copy_from_slice(b"qm-met");
+    magic[6] = version.as_bytes()[0];
+    magic[7] = b'\n';
+    Ok(magic)
+}
+
+fn read_f32(bytes: &[u8], offset: usize) -> f32 {
+    f32::from_le_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]])
 }
 
 fn sample_at(
     latitude: f64,
     longitude: f64,
-    node: impl Fn(usize, usize) -> MeteorologyNode,
+    node: impl Fn(usize, usize) -> Option<MeteorologyNode>,
 ) -> Result<MeteorologySample, String> {
     if !latitude.is_finite() || !longitude.is_finite() || !(-90.0..=90.0).contains(&latitude) {
         return Err("invalid meteorology coordinate".into());
@@ -202,7 +190,9 @@ fn sample_at(
     let mut result = MeteorologySample::default();
     for (xx, wx) in [(x0, 1.0 - fx), ((x0 + 1) % COLUMNS, fx)] {
         for (yy, wy) in [(y0, 1.0 - fy), ((y0 + 1).min(ROWS - 1), fy)] {
-            let n = node(xx, yy);
+            let Some(n) = node(xx, yy) else {
+                return Err("receiver outside the square meteorology window".into());
+            };
             let weight = wx * wy;
             for period in 0..3 {
                 for sector in 0..SECTORS {
