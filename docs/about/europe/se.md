@@ -1,14 +1,18 @@
 ---
 title: Sweden
-intro: City traffic counts in Stockholm and Malmö, two national passenger timetables, turbine ratings from Vindbrukskollen. Other roads use class defaults. Rail freight not covered.
+intro: National road counts (Trafikverket), city traffic counts in Stockholm and Malmö, two national passenger timetables, turbine ratings from Vindbrukskollen. Other roads use class defaults. Rail freight not covered.
 map: { center: [15.5, 62.0], zoom: 5 }
 ---
 
 ## Roads
 
+State and municipal roads: [NVDB Trafik](https://www.trafikverket.se/e-tjanster/hamta-data-fran-trafikverket/), the Trafikverket annual-average daily traffic per road link (CC0), with light, medium-heavy and heavy vehicles from sample measurements.
+
+A road takes the nearest measured link part within 50 m running along it; divided-road carriageways carry one direction's flow each. Assessed rather than measured flows are skipped, and 1 % of each total is assigned to motorcycles.
+
 Stockholm and Malmö: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
-Elsewhere motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). Trafikverket has counts for every state road; the download requires registration and is not loaded.
+Uncounted streets use the class default, adjusted for surrounding buildings and the counted roads they connect to.
 
 ## Railways
 
