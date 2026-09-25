@@ -10,7 +10,6 @@ import json
 from pathlib import Path
 
 from terrain_io import publish_json
-from terrain_produce import bounds, raster_window
 
 from osgeo import gdal
 
@@ -19,6 +18,7 @@ gdal.UseExceptions()
 
 def squares_in_box(binary, west, south, east, north):
     """z9 squares intersecting the box; the Rust binary owns the mapping."""
+    from terrain_produce import bounds, raster_window
     xs = range(int((west + 180) / 360 * 512), int((east + 180) / 360 * 512) + 1)
     found = []
     for x in xs:
@@ -32,6 +32,7 @@ def squares_in_box(binary, west, south, east, north):
 
 def fallback_covers(fallback_path, binary, square, samples=200):
     """One coarse warp decides whether the fallback covers every node."""
+    from terrain_produce import bounds, raster_window
     window = raster_window(binary, *square)
     probe = gdal.Open(str(fallback_path))
     nodata = probe.GetRasterBand(1).GetNoDataValue()
@@ -60,7 +61,11 @@ def load_sources(root, providers):
     groups = [s.get('group', '') for s in sources]
     if len(set(groups)) != len(providers):
         raise ValueError('each provider must contribute exactly one source group')
-    if groups != sorted(groups, key=providers.index):
+    runs = []
+    for group in groups:
+        if not runs or runs[-1] != group:
+            runs.append(group)
+    if len(runs) != len(set(groups)):
         raise ValueError('source groups are not contiguous in precedence order')
     return sources
 
