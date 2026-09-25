@@ -335,16 +335,20 @@ class BuildStructuresTests(unittest.TestCase):
                     self.build([])
 
     def test_old_producer_stamp_cannot_be_a_fresh_skip(self):
-        self.build([ovt_row(OVT_LONELY)])
-        path = self.prepared / SQUARE / "structures.arrow"
-        table = ipc.open_file(path).read_all()
-        metadata = dict(table.schema.metadata)
-        metadata[b"builder_version"] = b"old-producer"
-        table = table.replace_schema_metadata(metadata)
-        with ipc.new_file(path, table.schema) as writer:
-            writer.write_table(table)
-        census, _ = self.build([ovt_row(OVT_LONELY)])
-        self.assertIsNotNone(census)
+        # structures-builder-6 was stamped by two unmerged tips for different
+        # rows, so the merged builder 7 skips it: a 6-stamped square rebuilds.
+        for stamp in (b"old-producer", b"structures-builder-6"):
+            with self.subTest(stamp=stamp):
+                self.build([ovt_row(OVT_LONELY)])
+                path = self.prepared / SQUARE / "structures.arrow"
+                table = ipc.open_file(path).read_all()
+                metadata = dict(table.schema.metadata)
+                metadata[b"builder_version"] = stamp
+                table = table.replace_schema_metadata(metadata)
+                with ipc.new_file(path, table.schema) as writer:
+                    writer.write_table(table)
+                census, _ = self.build([ovt_row(OVT_LONELY)])
+                self.assertIsNotNone(census)
 
     def test_wall_keeps_mapped_tier_and_wrapped_midpoint(self):
         path = self.prepared / SQUARE / "barriers.arrow"
