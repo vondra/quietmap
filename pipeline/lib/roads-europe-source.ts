@@ -84,8 +84,9 @@ function nonnegativeNumber(value: unknown, description: string): number {
   return value
 }
 
-// Median over the 13 staged cities publishing both of each city's median AADT/AAWT (Vienna 0.923 ... Paris 0.974;
-// 9,411 records, pooled median 0.936), computed 2026-09-24 from the files this loader reads.
+// Median of city medians of AADT/AAWT, using only training geometries of holdout rule v1:
+// 8,425 paired records in 13 staged cities, recomputed 2026-09-25 from the files this loader reads.
+// The unrounded median is 0.9274139531168848; reserved counts do not change the rounded value.
 export const ANNUAL_PER_WEEKDAY_TRAFFIC = 0.9274
 // 4,568 of Marseille's 10,819 records publish zero trucks on streets with buses and deliveries; the
 // publisher does not say they were counted (owner decision, 2026-09-24: treat as missing).
