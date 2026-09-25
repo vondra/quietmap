@@ -4,29 +4,38 @@ from functools import lru_cache
 import hashlib
 import json
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from prepared_manifest import file_identity
 
 
-def path_size_and_mtime(path):
-    """Size and mtime only: a copy or a restore changes ctime while the bytes stay the same.
-    Only retained source files, never rewritten in place, are identified this way."""
+def path_file_identity(path):
+    """Resolved path plus file_identity: a copy, restore or replacement changes
+    device, inode or ctime while the bytes stay the same, so those re-digest and
+    only a byte-identical same-file hit skips. Timestamps tick coarsely (200
+    rewrites share 3-4 distinct stamps here), so a same-size in-place rewrite
+    inside one tick stays invisible; shared sources are frozen inputs and the
+    world-build pin fails a run whose inputs moved, so the pin and this cache
+    share one identity and one residual."""
     path = Path(path).resolve()
     try:
-        stat = path.stat()
+        return (str(path), *file_identity(path))
     except FileNotFoundError:
         return (str(path), None)
-    return (str(path), stat.st_size, stat.st_mtime_ns)
 
 
-# The shared source files recur in every square and stay hot; they are never rewritten, so a
-# digest per (path, size, mtime) stays true for the life of the process.
+# The shared source files recur in every square and stay hot; they are frozen
+# inputs, never rewritten mid-run, so a digest per file identity stays true for
+# the life of the process.
 @lru_cache(maxsize=1024)
-def content_digest_of_path_size_and_mtime(identity):
+def content_digest_of_file_identity(identity):
     if identity[1] is None:
         return None
     try:
         with open(identity[0], "rb") as source:
             return hashlib.file_digest(source, "sha256").hexdigest()
-    except FileNotFoundError:  # removed since its stat: absent, as path_size_and_mtime says
+    except FileNotFoundError:  # removed since its stat: absent, as path_file_identity says
         return None
 
 
@@ -60,10 +69,10 @@ def _digest_of_each_file(input_files, describe_file):
 def input_content_digest(input_files):
     """Path-free content digest of the inputs as they are now: a byte-identical copy elsewhere is
     the same input. Enrichers rewrite the square's buildings.arrow in place at the same size, and
-    file mtimes move in 4 ms ticks (2026-09-24: 200 same-size rewrites left 14 distinct mtimes),
-    so the square's own files are digested every time; shared sources once per process."""
+    file mtimes move in 4 ms ticks (200 same-size rewrites share a handful of stamps), so the
+    square's own files are digested every time; shared sources once per file identity."""
     def content(group, file):
         return content_digest_of_file(file) if group == "osm" else \
-            content_digest_of_path_size_and_mtime(path_size_and_mtime(file))
+            content_digest_of_file_identity(path_file_identity(file))
 
     return _digest_of_each_file(input_files, content)

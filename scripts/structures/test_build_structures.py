@@ -266,6 +266,28 @@ class BuildStructuresTests(unittest.TestCase):
         self.assertIsNotNone(BUILDER.build_square(
             SQUARE, self.prepared, rows, [], FakeGlobalPrior([ghsl]), None))
 
+    def test_a_replaced_shared_input_with_restored_mtime_ends_the_idempotent_skip(self):
+        # The shared-source digest cache once keyed on (path, size, mtime): a
+        # same-size replacement with a restored mtime read as unchanged and the
+        # square kept stale bytes. The cache now keys on the full file identity.
+        buildings_arrow(self.prepared / SQUARE / "buildings.arrow",
+                        [osm_row(0, OSM_POLY, 32.0)])
+        shared = self.prepared / "shared-input"
+        shared.write_bytes(b"V1-00")
+        rows = [ovt_row(OVT_LONELY)]
+        self.assertIsNotNone(BUILDER.build_square(
+            SQUARE, self.prepared, rows, [], FakeGlobalPrior([shared]), None))
+        stamped = shared.stat()
+        replacement = self.prepared / "replacement-input"
+        replacement.write_bytes(b"V2-00")
+        os.replace(replacement, shared)  # new inode; same size, mtime restored
+        os.utime(shared, ns=(stamped.st_atime_ns, stamped.st_mtime_ns))
+        self.assertEqual(shared.stat().st_size, stamped.st_size)
+        self.assertEqual(shared.stat().st_mtime_ns, stamped.st_mtime_ns)
+        self.assertNotEqual(shared.stat().st_ino, stamped.st_ino)
+        self.assertIsNotNone(BUILDER.build_square(
+            SQUARE, self.prepared, rows, [], FakeGlobalPrior([shared]), None))
+
     def test_an_input_rewritten_during_the_build_is_rebuilt_by_the_next_run(self):
         source = self.prepared / SQUARE / "buildings.arrow"
         buildings_arrow(source, [osm_row(0, OSM_POLY, 32.0)])
