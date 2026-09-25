@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 from osgeo import gdal, osr
-from terrain_io import digest, publish_json, MAX_DOWNLOAD_BYTES
+from terrain_io import digest, publish_json, retained_bytes, MAX_DOWNLOAD_BYTES
 from terrain_produce import produce
 
 
@@ -34,7 +34,7 @@ def preflight(args):
     coverage = world_plan(args.coverage, args.coverage_sha256)
     if not args.source_root.is_dir() or not args.raster_repack.is_file():
         raise ValueError('source root and canonical raster binary must exist')
-    used = sum(p.stat().st_size for p in args.source_root.rglob('*') if p.is_file())
+    used = retained_bytes(args.source_root)
     if used > MAX_DOWNLOAD_BYTES:
         raise ValueError('combined terrain/canopy retained-source budget exceeded')
     land = [(r['x'], r['y']) for r in coverage['squares'] if r['status'] == 'land']
