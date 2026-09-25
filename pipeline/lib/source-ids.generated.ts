@@ -104,6 +104,7 @@ export const SOURCE_ID_RU_NATIONAL_RAILWAY = 9644 as const // ru-national-railwa
 export const SOURCE_ID_SI_NATIONAL_ROADS = 9705 as const // si-national-roads
 export const SOURCE_ID_SD_NATIONAL_ROADS = 9729 as const // sd-national-roads
 export const SOURCE_ID_SD_NATIONAL_RAILWAY = 9730 as const // sd-national-railway
+export const SOURCE_ID_SE_NATIONAL_ROADS = 9752 as const // se-national-roads
 export const SOURCE_ID_CH_NATIONAL_ROADS = 9756 as const // ch-national-roads
 export const SOURCE_ID_TR_NATIONAL_ROADS = 9792 as const // tr-national-roads
 export const SOURCE_ID_TR_NATIONAL_RAILWAY = 9793 as const // tr-national-railway

@@ -1167,6 +1167,16 @@ pub const SOURCES: &[Source] = &[
         year: Some(2024),
     },
     Source {
+        id: 9752,
+        key: "se-national-roads",
+        provenance: Provenance::NationalMeasured,
+        layer: "roads",
+        name: "Trafikverket NVDB Trafik ÅDT",
+        license: Some("CC0-1.0"),
+        url: Some("https://www.trafikverket.se/e-tjanster/hamta-data-fran-trafikverket/"),
+        year: Some(2026),
+    },
+    Source {
         id: 9756,
         key: "ch-national-roads",
         provenance: Provenance::NationalMeasured,

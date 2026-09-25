@@ -1148,6 +1148,18 @@ export const DATASETS: Dataset[] = [
     roadCoverage: MAJOR_ROAD_COVERAGE,
   },
   {
+    id: 9752, // SE = 752
+    layer: 'roads',
+    key: 'se-national-roads',
+    name: 'Trafikverket NVDB Trafik ÅDT',
+    year: 2026,
+    license: 'CC0-1.0',
+    url: 'https://www.trafikverket.se/e-tjanster/hamta-data-fran-trafikverket/',
+    priority: 80,
+    measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE,
+  },
+  {
     id: 9756, // CH = 756
     layer: 'roads',
     key: 'ch-national-roads',
