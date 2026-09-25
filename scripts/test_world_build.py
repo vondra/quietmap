@@ -217,7 +217,8 @@ class WorldBuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sources = {name: str(root / name) for name in ('planet', 'rasters', 'enrichment', 'boundaries',
-                       'city_boundaries', 'overture', 'ghsl', 'regional_heights', 'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
+                       'city_boundaries', 'overture', 'ghsl', 'regional_heights', 'official_barriers', 'measured_heights',
+                       'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
             for path in sources.values():
                 Path(path).touch()
             config = {'build': {'as_of_date': '20261231', 'aircraft_anchor': '2027-01',
@@ -262,7 +263,8 @@ class WorldBuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sources = {name: str(root / name) for name in ('planet', 'rasters', 'enrichment', 'boundaries',
-                       'city_boundaries', 'overture', 'ghsl', 'regional_heights', 'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
+                       'city_boundaries', 'overture', 'ghsl', 'regional_heights', 'official_barriers', 'measured_heights',
+                       'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
             for path in sources.values():
                 Path(path).touch()
             config = {'build': {'as_of_date': '20260909', 'aircraft_anchor': '2026-09',
@@ -296,6 +298,11 @@ class WorldBuildTest(unittest.TestCase):
                 world.validate_osm_storage([root / 'external-vrt'], [root / 'external-vrt/tile.tif'])
             self.assertEqual(indexed['structures'].dependencies, ('buildings', 'square-country-city'))
             self.assertEqual(indexed['structures'].argv[-2:], ('--jobs', '4'))
+            structures_argv = indexed['structures'].argv
+            self.assertEqual(structures_argv[structures_argv.index('--official-barriers') + 1],
+                             str(root / 'official_barriers'))
+            self.assertEqual(structures_argv[structures_argv.index('--measured-heights') + 1],
+                             str(root / 'measured_heights'))
             self.assertEqual(indexed['structures-finalize'].dependencies, ('structures',))
             self.assertTrue(indexed['structures-finalize'].argv[0].endswith('engine/target/release/structures-finalize'))
             self.assertEqual(set(indexed['roads'].dependencies), {'square-country-city', 'structures'})

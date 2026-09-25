@@ -499,7 +499,7 @@ traffic stay. Greenhouses, grandstands and enclosed garages keep their walls.
 The structures builder gives every footprint one screening height, the mean
 roof height, from the first available rung, and stores its `height_source`:
 
-1. national measured height (NRW LoD1 `measuredHeight`, 3DBAG 70th-percentile
+1. national measured height (NRW LoD1 `measuredHeight`, 3DBAG 50th-percentile
    roof minus ground) where a measured footprint covers the candidate, else the
    regional survey zonal mean (Prague LiDAR); clamped to 2.5–250 m;
 2. mapped OSM `height`;

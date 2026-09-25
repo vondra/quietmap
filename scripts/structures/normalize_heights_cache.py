@@ -3,8 +3,9 @@
 
 Reads the provider's retained download (local file, no network) and writes
 `measured_heights_v1` tiles beside any already cached inventories. Heights are
-mean roof heights in metres: NRW LoD1 `measuredHeight`, 3DBAG 70th-percentile
-roof minus ground. One row per building part; the ladder joins by overlap.
+mean roof heights in metres: NRW LoD1 `measuredHeight`, 3DBAG 50th-percentile
+roof minus ground (the 70th percentile overstates pitched roofs ~1 m).
+One row per building part; the ladder joins by overlap.
 """
 
 import argparse
@@ -83,7 +84,7 @@ def explode_polygons(geometry):
 
 def read_heights_geojson(paths):
     """Footprint GeoJSON with a `height_m` property per feature (the 3DBAG
-    window form: 70th-percentile roof height minus ground, metres). Rows
+    window form: 50th-percentile roof height minus ground, metres). Rows
     without a positive height (failed reconstruction, 56 of 5,966 in the
     Amersfoort/Oosterwolde windows) are skipped, not guessed."""
     rows, skipped = [], 0

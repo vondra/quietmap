@@ -1,7 +1,7 @@
 //! Long-term weather of a path (the W6 reader contract, `w2-method/CONTRACT-W6.md` with its
 //! 2026-09-24 amendment): probability of favourable propagation per period and propagation
 //! direction, and air absorption per period and band. Built-in defaults stand until
-//! `meteorology.arrow` lands.
+//! the per-square `meteorology.bin` files are consumed.
 
 use super::air_absorption::{iso_9613_1_alpha_bands, AbsorptionClimate};
 use crate::types::NUM_BANDS;
