@@ -19,9 +19,13 @@ pub use aircraft::{
     BuildAircraftAirborneSubSegmentTrace, BuildAircraftCruiseCellTrace,
 };
 
-/// Convert band-energies (linear, A-weighted) to band levels in dB(A).
+/// Convert band-energies (linear, A-weighted) to band levels in dB(A). Non-finite or
+/// negative energies fail closed like [`PropagationVariants::to_db`], never floor.
 pub fn bands_energy_to_db(bands: &[f64; NUM_BANDS]) -> [f64; NUM_BANDS] {
-    std::array::from_fn(|j| 10.0 * bands[j].max(1e-30).log10())
+    std::array::from_fn(|j| {
+        assert!(bands[j].is_finite() && bands[j] >= 0.0, "non-finite band energy: {}", bands[j]);
+        10.0 * bands[j].max(1e-30).log10()
+    })
 }
 
 /// Trace name for unnamed + ref-less OSM ways. Prefixing the class/type name

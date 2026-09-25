@@ -530,7 +530,7 @@ pub(crate) fn compute_roads(
         let ln_free = PropagationVariants::to_db(acc.variants[2].free_field_energy);
         let free_periods = periods::periods(ld_free, le_free, ln_free);
 
-        let emission_db = 10.0 * acc.emission_energy.max(1e-12).log10();
+        let emission_db = PropagationVariants::to_db(acc.emission_energy);
         let geometry = if !acc.line_coords.is_empty() {
             Some(serde_json::json!({"type": "MultiLineString", "coordinates": acc.line_coords}))
         } else {
@@ -607,7 +607,9 @@ pub(crate) fn compute_roads(
             atmospheric_impact_db: round1(impacts.atmospheric),
             ground_impact_db: round1(impacts.ground),
             received_bands: std::array::from_fn(|j| {
-                10.0 * acc.variants[0].band_energy[j].max(1e-30).log10()
+                let energy = acc.variants[0].band_energy[j];
+                assert!(energy.is_finite() && energy >= 0.0, "non-finite band energy: {energy}");
+                10.0 * energy.max(1e-30).log10()
             }),
             metadata: Some(SourceMetadata::Road(road_meta)),
         });
@@ -622,9 +624,9 @@ pub(crate) fn compute_roads(
         total_energy[1] += acc.variants[1].full_energy;
         total_energy[2] += acc.variants[2].full_energy;
     }
-    let ld = 10.0 * total_energy[0].max(1e-12).log10();
-    let le = 10.0 * total_energy[1].max(1e-12).log10();
-    let ln = 10.0 * total_energy[2].max(1e-12).log10();
+    let ld = PropagationVariants::to_db(total_energy[0]);
+    let le = PropagationVariants::to_db(total_energy[1]);
+    let ln = PropagationVariants::to_db(total_energy[2]);
 
     (periods::periods(ld, le, ln), contributors)
 }

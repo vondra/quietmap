@@ -115,18 +115,31 @@ pub(super) fn boundary_for_candidates(
         let ground_free = sr.clamp(0.0, DIFFRACTION_CAP_DB);
         // A source (receiver) below its side's plane takes its side's A_ground whole and the
         // mirrored Δdif (2021/1226 point (9)(h); ISO/TR 17534-4 §5.3).
-        let split_so = if source_side.source_side_below_plane {
+        let mut split_so = if source_side.source_side_below_plane {
             sr = source_image_db[band];
             ground_so[band]
         } else {
             ground_split_db(ground_so[band], source_image_db[band], direct_db[band])
         };
-        let split_or = if receiver_side.receiver_side_below_plane {
+        // A non-positive argument in the ground-split logarithm has no finite real value
+        // (a below-plane image can make the receiver side's numerator much smaller than the
+        // source side's denominator). Follow NoiseModelling's aDif numerical fallback: the
+        // affected side takes its whole ground term and its image diffraction, source then
+        // receiver. This supplements the below-plane rule; it is not an attenuation cap.
+        if !split_so.is_finite() {
+            split_so = ground_so[band];
+            sr = source_image_db[band];
+        }
+        let mut split_or = if receiver_side.receiver_side_below_plane {
             sr = receiver_image_db[band];
             ground_or[band]
         } else {
             ground_split_db(ground_or[band], receiver_image_db[band], sr)
         };
+        if !split_or.is_finite() {
+            split_or = ground_or[band];
+            sr = receiver_image_db[band];
+        }
         boundary.attenuation_db[band] = sr.clamp(0.0, DIFFRACTION_CAP_DB) + split_so + split_or;
         boundary.without_ground_db[band] = ground_free;
         boundary.diffracted[band] = true;

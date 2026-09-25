@@ -132,7 +132,7 @@ fn every_direct_case_matches_iso_tr_17534_4_within_a_tenth_of_a_decibel() {
             let boundary = state_boundary(&path, state, &mut scratch);
             for band in 0..NUM_BANDS {
                 let level = base[band] - boundary.attenuation_db[band];
-                if (level - reference[band]).abs() > 0.1 {
+                if !level.is_finite() || (level - reference[band]).abs() > 0.1 {
                     failures.push(format!(
                         "{} {state:?} band {band}: {level:.2} vs {:.2}",
                         case.name, reference[band]

@@ -14,6 +14,23 @@ use crate::obstacle_transfer::{
 use crate::source_frame::{DeviceLineSource, BAND_COUNT, CORNER_COUNT, PERIOD_COUNT, TILE_PIXEL_SIDE};
 use noise_compute::propagation::meteorology::{Meteorology, DIRECTION_SECTOR_COUNT};
 
+#[derive(Debug)]
+pub struct InvalidCornerEnergy {
+    pub receiver: usize,
+    pub source: usize,
+    pub period: usize,
+    pub value: f32,
+}
+
+impl std::fmt::Display for InvalidCornerEnergy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid CUDA corner energy: receiver {}, source {}, period {}, value {}",
+            self.receiver, self.source, self.period, self.value)
+    }
+}
+
+impl std::error::Error for InvalidCornerEnergy {}
+
 unsafe extern "C" {
     fn relevant_source_cuda_error_string(status: c_int) -> *const c_char;
     fn relevant_source_cuda_initialize(compute_capability: *mut c_int) -> c_int;
@@ -264,10 +281,13 @@ impl RelevantSourceCuda {
             bail!("CUDA per-ray capacity exceeded during corner production: {capacities}");
         }
         let flat = pair_energy.copy_to_vec()?;
-        anyhow::ensure!(
-            flat.iter().all(|value| value.is_finite() && *value >= 0.0),
-            "invalid CUDA corner energy"
-        );
+        if let Some((index, value)) = flat.iter().enumerate().find(|(_, value)| !value.is_finite() || **value < 0.0) {
+            let pair = index / PERIOD_COUNT;
+            let offsets = corner_offsets.copy_to_vec()?;
+            let receiver = offsets.partition_point(|&offset| offset as usize <= pair) - 1;
+            let source = corner_source_indices.copy_to_vec()?[pair];
+            bail!(InvalidCornerEnergy { receiver, source: source as usize, period: index % PERIOD_COUNT, value: *value });
+        }
         let energy = flat
             .chunks_exact(PERIOD_COUNT)
             .map(|periods| [periods[0], periods[1], periods[2]])
@@ -320,7 +340,12 @@ impl RelevantSourceCuda {
         if let Some(capacities) = self.take_profile_overflow()? {
             bail!("CUDA per-ray capacity exceeded during tile painting: {capacities}");
         }
-        Ok((output.copy_to_vec()?, elapsed_milliseconds))
+        let flat = output.copy_to_vec()?;
+        if let Some((index, value)) = flat.iter().enumerate().find(|(_, value)| !value.is_finite() || **value < 0.0) {
+            bail!("invalid CUDA tile energy: pixel {}, period {}, value {}",
+                index / PERIOD_COUNT, index % PERIOD_COUNT, value);
+        }
+        Ok((flat, elapsed_milliseconds))
     }
 
     /// The per-ray capacities any thread outran since the last call, clearing them as it reads:

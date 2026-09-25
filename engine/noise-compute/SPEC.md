@@ -347,6 +347,13 @@ painter runs the same ray in f32 (`relevant_source_cnossos_stream.cuh`).
   points spanning more than 0.3 m; the ground correction split on both sides; only Δdif(S,R)
   is capped at 25 dB; a source or receiver below its side's plane takes that side's A_ground
   whole and the mirrored Δdif. There is no minimum path length.
+  **Numerical domain:** if either ground-split logarithm has a non-positive argument and
+  hence a non-finite result, that side takes its whole A_ground and its image Δdif,
+  source then receiver. This follows NoiseModelling's `AttenuationCnossos.aDif`; the
+  published equations do not specify this fallback. It also covers the zero-argument
+  (infinite) limit. A recorded Prague two-roof path tests this domain separately from the
+  ISO accuracy fixture. Any other non-finite or negative linear energy fails its receiver
+  instead of flooring to a quiet layer.
 - The states are mixed only at the end, per period and propagation direction:
   `10^(−A/10) = p·10^(−A_F/10) + (1 − p)·10^(−A_H/10)` with p of the period and of the
   direction's 16-sector climatology (0.5 everywhere until W6 delivers it).

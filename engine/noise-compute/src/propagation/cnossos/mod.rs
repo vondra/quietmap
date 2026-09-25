@@ -144,3 +144,7 @@ mod iso_tr_17534_4_tests;
 #[cfg(test)]
 #[path = "boundary_gain_tests.rs"]
 mod boundary_gain_tests;
+
+#[cfg(test)]
+mod ground_split_regression_tests;
+

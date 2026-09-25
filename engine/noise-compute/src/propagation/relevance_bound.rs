@@ -81,6 +81,7 @@ impl RelevanceBound {
         let [day, evening, night] = period_emissions_db.map(|emission| {
             let levels = self.level_db(&emission, spread, distance_m);
             let energy: f64 = (0..NUM_BANDS).map(|b| 10f64.powf((levels[b] + A_WEIGHTING[b]) / 10.0)).sum();
+            assert!(energy.is_finite() && energy >= 0.0, "non-finite bound energy: {energy}");
             10.0 * energy.max(1e-30).log10()
         });
         crate::periods::compute_lden(day, evening, night)

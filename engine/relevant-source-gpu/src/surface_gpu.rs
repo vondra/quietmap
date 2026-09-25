@@ -163,7 +163,16 @@ impl SurfaceGpu {
                 &DeviceBuffer::from_slice(&xs)?,
                 &DeviceBuffer::from_slice(&ys)?,
                 &DeviceBuffer::from_slice(&reflections)?,
-            )?;
+            ).map_err(|error| {
+                let context = error.downcast_ref::<crate::cuda_bridge::InvalidCornerEnergy>()
+                    .and_then(|invalid| self.host.sources.get(invalid.source))
+                    .map(|source| format!("surface source layer {}, identity {:?}, input {:?}",
+                        source.layer, source.identity, source.device));
+                match context {
+                    Some(context) => error.context(context),
+                    None => error,
+                }
+            })?;
             for range in offsets.windows(2) {
                 let mut entries = Vec::new();
                 for pair in range[0] as usize..range[1] as usize {

@@ -612,15 +612,17 @@ pub(crate) fn compute_railways(
             atmospheric_impact_db: round1(impacts.atmospheric),
             ground_impact_db: round1(impacts.ground),
             received_bands: std::array::from_fn(|j| {
-                10.0 * acc.variants[0].band_energy[j].max(1e-30).log10()
+                let energy = acc.variants[0].band_energy[j];
+                assert!(energy.is_finite() && energy >= 0.0, "non-finite band energy: {energy}");
+                10.0 * energy.max(1e-30).log10()
             }),
             metadata: Some(SourceMetadata::Rail(rail_meta)),
         });
     }
 
-    let ld = 10.0 * total_energy[0].max(1e-12).log10();
-    let le = 10.0 * total_energy[1].max(1e-12).log10();
-    let ln = 10.0 * total_energy[2].max(1e-12).log10();
+    let ld = PropagationVariants::to_db(total_energy[0]);
+    let le = PropagationVariants::to_db(total_energy[1]);
+    let ln = PropagationVariants::to_db(total_energy[2]);
     (periods::periods(ld, le, ln), contributors)
 }
 

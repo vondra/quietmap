@@ -363,6 +363,12 @@ __device__ void state_boundary_bands(
                                        diffraction_db(source_image_delta, c_second, band),
                                        direct_db);
         }
+        // Match noise-compute's documented ground-split log-domain fallback, source then
+        // receiver: a non-finite split takes its whole ground term and its image diffraction.
+        if (!isfinite(split_so)) {
+            split_so = ground_so[band];
+            sr = diffraction_db(source_image_delta, c_second, band);
+        }
         float split_or;
         if (receiver_side.receiver_side_below_plane) {
             sr = diffraction_db(receiver_image_delta, c_second, band);
@@ -370,6 +376,10 @@ __device__ void state_boundary_bands(
         } else {
             split_or = ground_split_db(ground_or[band],
                                        diffraction_db(receiver_image_delta, c_second, band), sr);
+        }
+        if (!isfinite(split_or)) {
+            split_or = ground_or[band];
+            sr = diffraction_db(receiver_image_delta, c_second, band);
         }
         attenuation_db[band] = quietmap_clamp(sr, 0.0f, QUIETMAP_DIFFRACTION_CAP_DB)
                                + split_so + split_or;
