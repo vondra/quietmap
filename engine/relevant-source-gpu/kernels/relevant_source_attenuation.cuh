@@ -148,8 +148,8 @@ __device__ __forceinline__ DiffractionEdge terrain_diffraction_edge(
         const float second = hypotf((1.0f - best.t) * profile.distance_m,
                                     best.top_m - receiver_elevation);
         const float radius = fmaxf(
-            QUIETMAP_FAVOURABLE_CURVATURE_MINIMUM_M,
-            QUIETMAP_FAVOURABLE_CURVATURE_PER_DISTANCE * direct_distance);
+            QUIETMAP_FAVOURABLE_RAY_RADIUS_MINIMUM_M,
+            QUIETMAP_FAVOURABLE_RAY_RADIUS_PER_DISTANCE * direct_distance);
         best.delta_favourable_m = circular_arc_length(first, radius)
                                    + circular_arc_length(second, radius)
                                    - circular_arc_length(direct_distance, radius);
@@ -182,8 +182,8 @@ __device__ __forceinline__ void complete_explicit_edge_geometry(
     edge.delta_m = sign * (first + second - direct_distance);
     edge.delta_star_m = edge_delta_star(profile, edge, source_height, receiver_height);
     const float radius = fmaxf(
-        QUIETMAP_FAVOURABLE_CURVATURE_MINIMUM_M,
-        QUIETMAP_FAVOURABLE_CURVATURE_PER_DISTANCE * direct_distance);
+        QUIETMAP_FAVOURABLE_RAY_RADIUS_MINIMUM_M,
+        QUIETMAP_FAVOURABLE_RAY_RADIUS_PER_DISTANCE * direct_distance);
     if (sign > 0.0f) {
         edge.delta_favourable_m = circular_arc_length(first, radius)
                                    + circular_arc_length(second, radius)

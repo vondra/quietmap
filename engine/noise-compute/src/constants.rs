@@ -101,25 +101,6 @@ pub const PENUMBRA_DELTA_FLOOR_M: f64 = -SPEED_OF_SOUND / 63.0 / 20.0;
 /// and eliminate systematic -3 dB bias vs SHM across all sources.
 pub const DEFAULT_RECEIVER_HEIGHT: f64 = 4.0;
 
-/// Favourable propagation probability (CNOSSOS-EU §2.5.21, Central Europe).
-/// One value for all periods (owner 2026-07-28: no per-period p).
-pub const P_FAV: f64 = 0.5;
-
-/// Master switch for CNOSSOS long-term favourable/homogeneous mixing
-/// (2015/996 formulas (2.5.9), (2.5.24), (2.5.25)). FLIPPED ON
-/// 2026-07-28 after the gates passed (G3: 7 anchors moved toward
-/// external truth, none regressed beyond pre-existing near-barrier
-/// overshoots; G6: GPU gate pass, drift mean 0.004 dB). Flipping raises
-/// every terrain/building screened receiver, so any future change here
-/// travels with a surface-layer OUTPUT_VER bump + world repaint + the
-/// CUDA surface-kernel #define mirror — never alone.
-pub const FAVOURABLE_MIXING: bool = true;
-
-/// CNOSSOS-EU (2.5.24) favourable-ray curvature Γ = max(Γ_MIN, Γ_PER_DSR·d),
-/// d = slant source→receiver distance.
-pub const FAV_RAY_CURVATURE_MIN_M: f64 = 1000.0;
-pub const FAV_RAY_CURVATURE_PER_DSR: f64 = 8.0;
-
 /// Diffraction attenuation cap [dB] (single-edge model).
 pub const SINGLE_DIFF_CAP: f64 = 20.0;
 

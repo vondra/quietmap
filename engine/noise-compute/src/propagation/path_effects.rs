@@ -1258,7 +1258,7 @@ mod tests {
     /// STRAIGHT rays below the sight line and so returned the same ≈0 path
     /// difference. CNOSSOS-EU (2.5.27) puts that arm on its arc like every
     /// other branch: δ_F = −0.098 m on this geometry, past −λ/20 in every band,
-    /// so the favourable half of the `P_FAV` mix contributes nothing and the
+    /// so the favourable half of the mix contributes nothing and the
     /// mixed value is 1.76 dB. 4.77 was exactly the top of the step that made a
     /// TALLER screen come out LOUDER
     /// (`arc_screening::taller_screen_never_makes_the_receiver_louder`, 47/108

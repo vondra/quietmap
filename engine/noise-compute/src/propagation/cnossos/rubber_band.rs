@@ -13,6 +13,12 @@ use super::ground::MeteorologicalState;
 pub const FAVOURABLE_RAY_RADIUS_MINIMUM_M: f64 = 1000.0;
 pub const FAVOURABLE_RAY_RADIUS_PER_DISTANCE: f64 = 8.0;
 
+/// Γ of the favourable ray for the direct source–receiver distance `direct_m`.
+#[inline]
+pub fn favourable_ray_radius_m(direct_m: f64) -> f64 {
+    FAVOURABLE_RAY_RADIUS_MINIMUM_M.max(FAVOURABLE_RAY_RADIUS_PER_DISTANCE * direct_m)
+}
+
 /// A point in the vertical propagation plane: horizontal distance from the source, altitude.
 pub type PlanePoint = (f64, f64);
 
@@ -39,7 +45,7 @@ impl StateRay {
         let direct = distance(source, receiver);
         Self {
             state,
-            radius_m: FAVOURABLE_RAY_RADIUS_MINIMUM_M.max(FAVOURABLE_RAY_RADIUS_PER_DISTANCE * direct),
+            radius_m: favourable_ray_radius_m(direct),
         }
     }
 

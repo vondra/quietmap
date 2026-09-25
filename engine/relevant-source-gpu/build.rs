@@ -78,14 +78,6 @@ fn canonical_usize(source: &str, constant_name: &str) -> usize {
         })
 }
 
-fn canonical_bool(source: &str, constant_name: &str) -> bool {
-    constant_initializer(source, constant_name)
-        .parse()
-        .unwrap_or_else(|error| {
-            panic!("canonical constant {constant_name} is not literal: {error}")
-        })
-}
-
 fn canonical_f64_array<const LENGTH: usize>(source: &str, constant_name: &str) -> [f64; LENGTH] {
     let initializer = constant_initializer(source, constant_name);
     let body = initializer
@@ -142,11 +134,6 @@ fn generated_physics_header() -> String {
         constant_initializer(PATH_PROFILE_SOURCE, "CELL_M"),
         "grid::geo::M_PER_DEG_LAT / 3600.0"
     );
-    let favourable_probability = if canonical_bool(NOISE_CONSTANTS_SOURCE, "FAVOURABLE_MIXING") {
-        canonical_f64(NOISE_CONSTANTS_SOURCE, "P_FAV")
-    } else {
-        0.0
-    };
     let mut header = String::from(
         "//! Generated only from canonical noise-compute constants; do not edit.\n\n#pragma once\n\n",
     );
@@ -270,17 +257,7 @@ fn generated_physics_header() -> String {
     write_cuda_float(
         &mut header,
         "QUIETMAP_FAVOURABLE_PROBABILITY",
-        favourable_probability,
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_FAVOURABLE_CURVATURE_MINIMUM_M",
-        canonical_f64(NOISE_CONSTANTS_SOURCE, "FAV_RAY_CURVATURE_MIN_M"),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_FAVOURABLE_CURVATURE_PER_DISTANCE",
-        canonical_f64(NOISE_CONSTANTS_SOURCE, "FAV_RAY_CURVATURE_PER_DSR"),
+        canonical_f64(METEOROLOGY_SOURCE, "DEFAULT_FAVOURABLE_PROBABILITY"),
     );
     write_cuda_float(
         &mut header,
