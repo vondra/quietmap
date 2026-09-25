@@ -199,7 +199,9 @@ building of that footprint size. Noise walls come from official barrier
 inventories where one is open (the Netherlands, Washington, Florida, Virginia)
 and from OpenStreetMap elsewhere; a wall without a measured height takes its country's
 average wall height: 3.9 m in Germany, 4.5 m in the United States, 3.6 m in Austria
-and 3 m elsewhere. Footprints come from OpenStreetMap and Overture Maps.
+and 3 m elsewhere. Heights are stored as whole metres, so the three national
+averages stand as 4 m walls on the map. Footprints come from OpenStreetMap and
+Overture Maps.
 
 ## Propagation
 

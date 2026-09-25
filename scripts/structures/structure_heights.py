@@ -30,6 +30,8 @@ AREA_TYPOLOGY_HEIGHT_M = ((30.0, 2.9), (60.0, 3.5), (150.0, 7.4), (500.0, 8.0), 
 # DE BMDV/FBA "Laermschutz an Bundesfernstrassen 2022" (10.0 M m2 of walls over 2,576 km);
 # US FHWA Noise Barrier Inventory 2022 (8,783 barriers, length-weighted); AT ASFINAG
 # (about 5 km2 over about 1,406 km, end 2022). A mapped OSM height always wins.
+# Stored rounded to whole Int16 metres, so all three means stand as 4 m walls;
+# the unrounded statistics stay for provenance.
 WALL_DEFAULT_HEIGHT_M_BY_COUNTRY = {"DE": 3.88, "US": 4.45, "AT": 3.6}
 WALL_DEFAULT_HEIGHT_M = 3.0
 

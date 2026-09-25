@@ -531,7 +531,8 @@ mapped, else round((height − 1 m) / 3 m), at least 1 (registry floor counts
 vs mean height, 6,061 buildings: MAE 0.41 storeys, unbiased); a structure
 without a screening height counts one level. The service-tree demand reads it.
 Noise walls keep a mapped OSM height; unmapped walls stand at their country's
-mean wall height (DE 3.88 m, US 4.45 m, AT 3.6 m, else 3 m). Official barrier
+mean wall height (DE 3.88 m, US 4.45 m, AT 3.6 m, else 3 m), stored rounded
+to whole metres (4 m in Germany, the United States and Austria). Official barrier
 inventories (`structures-builder-7`) stand beside OSM: an official line
 replaces the OSM micro-segments within 5 m of it and screens at its
 inventoried height (GWV top-minus-road-edge median, else the inventory's

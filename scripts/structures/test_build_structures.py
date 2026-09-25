@@ -350,6 +350,17 @@ class BuildStructuresTests(unittest.TestCase):
                 census, _ = self.build([ovt_row(OVT_LONELY)])
                 self.assertIsNotNone(census)
 
+    def test_unmapped_national_wall_defaults_store_whole_metres(self):
+        path = self.prepared / SQUARE / "barriers.arrow"
+        barriers_arrow(path, [{
+            "osm_id": i, "segment_idx": 0, "start_lat": 49.78, "start_lon": 14.17,
+            "end_lat": 49.7801, "end_lon": 14.1701, "height": 0.0, "height_tier": 2,
+            "country": code} for i, code in enumerate(("DE", "US", "AT"))])
+        _, output = self.build([])
+        self.assertEqual(output.column("height_m").to_pylist(), [4, 4, 4])
+        self.assertEqual(output.column("height_source").to_pylist(),
+                         [CONTRACT.HEIGHT_SOURCE_WALL_DEFAULT] * 3)
+
     def test_wall_keeps_mapped_tier_and_wrapped_midpoint(self):
         path = self.prepared / SQUARE / "barriers.arrow"
         barriers_arrow(path, [{
