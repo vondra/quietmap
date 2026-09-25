@@ -403,7 +403,7 @@ The painter streams the ray: samples and crossings in chainage order (the scene'
 one merged grid, each cell taking the crossings inside its own chainage window) feed both
 states' monotone-chain hulls, and every hull entry carries the ground moments of its two sides,
 so the side planes of whichever points end up first and last come out without storing roofs. A
-ray that outruns a fixed capacity (64 samples, 32 hull points, 32 crossings in one cell, 16
+ray that outruns a fixed capacity (64 samples, 64 hull points, 32 crossings in one cell, 16
 open footprints) fails its cell instead of painting.
 
 ### Popup trace

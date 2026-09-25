@@ -10,8 +10,9 @@
 #include "relevant_source_cnossos_boundary.cuh"
 
 /// Hull entries per state: the 2026-09-24 oracle rays needed at most 21 (homogeneous) and 11
-/// (favourable) over 1.1 million rays; a longer hull raises `quietmap_profile_overflow`.
-constexpr int QUIETMAP_HULL_CAPACITY = 32;
+/// (favourable) over 1.1 million rays, but a dense Prague tile ray outran 32; a longer hull
+/// raises `quietmap_profile_overflow`.
+constexpr int QUIETMAP_HULL_CAPACITY = 64;
 /// Crossings of one grid cell sorted at a time (cells are at least 32 m; a fuller cell is walked
 /// again for the next ones).
 constexpr int QUIETMAP_CELL_CROSSING_CAPACITY = 32;
