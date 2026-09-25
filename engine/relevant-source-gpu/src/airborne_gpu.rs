@@ -80,10 +80,13 @@ impl AirborneScene<'_> {
         let weights = DeviceBuffer::from_slice(&self.weights.as_array().map(|v| v as f32))?;
         let chords = (!self.chords.sources.is_empty())
             .then(|| chords::DeviceChords::new(&self.chords, &self.weights)).transpose()?;
-        // 256 horizons bound staging memory independently of the requested tile's pixel count.
-        for first in (0..count).step_by(256) {
-            let end = (first + 256).min(count);
-            let screening = (first..end)
+        // Two batches of 256 horizons bound staging memory whatever the tile's pixel count.
+        let batches: Vec<_> = (0..count)
+            .step_by(256)
+            .map(|first| first..(first + 256).min(count))
+            .collect();
+        let screen = |batch: std::ops::Range<usize>| -> Result<Vec<ReceiverScreening>> {
+            batch
                 .into_par_iter()
                 .map(|i| {
                     ReceiverScreening::build_cached(
@@ -94,17 +97,30 @@ impl AirborneScene<'_> {
                         &scene.obstacles,
                     )
                 })
-                .collect::<Result<Vec<_>>>()?;
-            let uploaded = UploadedScreen::new(&screening)?;
-            if let Some(source) = &device_sources {
-                let powers = gpu_powers(source, &uploaded, &npd, &weights, self.days)?;
-                output[first * 3..end * 3].copy_from_slice(&powers);
-            }
-            if let Some(chords) = &chords {
-                let powers = chords.powers(&uploaded, self.days)?;
-                for (total, chord) in output[first * 3..end * 3].iter_mut().zip(powers) {
-                    *total += chord;
+                .collect()
+        };
+        let mut screening = screen(batches[0].clone())?;
+        for (index, batch) in batches.iter().enumerate() {
+            // The CPU builds the next batch's horizons while the card evaluates this one.
+            let next = std::thread::scope(|scope| -> Result<_> {
+                let next = batches
+                    .get(index + 1)
+                    .map(|next| scope.spawn(|| screen(next.clone())));
+                let uploaded = UploadedScreen::new(&screening)?;
+                let totals = &mut output[batch.start * 3..batch.end * 3];
+                if let Some(source) = &device_sources {
+                    totals.copy_from_slice(&gpu_powers(source, &uploaded, &npd, &weights, self.days)?);
                 }
+                if let Some(chords) = &chords {
+                    for (total, chord) in totals.iter_mut().zip(chords.powers(&uploaded, self.days)?) {
+                        *total += chord;
+                    }
+                }
+                next.map(|handle| handle.join().expect("airborne screening thread panicked"))
+                    .transpose()
+            })?;
+            if let Some(next) = next {
+                screening = next;
             }
         }
         ensure!(
