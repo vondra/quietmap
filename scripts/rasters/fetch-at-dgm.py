@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import zipfile
 
+from dem_windows import nodata_tag
 from terrain_io import fetch, provenance, publish_json, publish_path, publish_source_json, digest
 
 PROVIDER = 'at-dgm10'
@@ -43,10 +44,11 @@ def main():
             parent_sha256=record['sha256'],
             notes=('Lossless archive member extraction; 58061x31793 at 10 m, Float32, '
                    'EPSG:31287 + 5778; no resampling.')))
+    nodata = nodata_tag(target)
     publish_source_json(args.output, args.output / PROVIDER / 'country-sources.json', [dict(
         path=str(target.resolve()), horizontal_crs='EPSG:31287', vertical_crs=5778,
         epoch='ALS composite to 2018', role='national', group='AT-DGM10',
-        nodata=-3.4028234663852886e+38, datum_area_of_interest=[9.3, 46.2, 17.2, 49.2])])
+        nodata=nodata, datum_area_of_interest=[9.3, 46.2, 17.2, 49.2])])
     print(json.dumps({'path': str(target)}))
 
 

@@ -10,7 +10,8 @@ import urllib.request
 import numpy as np
 from osgeo import gdal
 
-from dem_windows import LandMask, grid_windows, reproject_bounds, split_wcs_multipart
+from dem_windows import (LandMask, download_bytes, grid_windows, nodata_tag, reproject_bounds,
+                         split_wcs_multipart)
 from terrain_io import digest, fetch, provenance, publish_bytes, publish_json, publish_source_json, utc_now
 
 gdal.UseExceptions()
@@ -52,9 +53,8 @@ def fetch_window(output, window, mask, position, total):
     if mask is not None and not mask.has_land(*reproject_bounds(x0, y0, x1, y1, CRS)):
         return None
     started = time.monotonic()
-    request = urllib.request.Request(url, headers={'User-Agent': 'QuietMap terrain producer'})
-    with urllib.request.urlopen(request, timeout=300) as response:
-        payload = split_wcs_multipart(response.read(), response.headers['Content-Type'])
+    body, headers = download_bytes(url)
+    payload = split_wcs_multipart(body, headers['Content-Type'])
     publish_bytes(target, payload)
     dataset = gdal.Open(str(target))
     transform = dataset.GetGeoTransform()
@@ -111,10 +111,15 @@ def main():
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         results = list(pool.map(worker, enumerate(windows, 1)))
     kept = [(window, record) for window, record in results if record]
+    tags = {nodata_tag(output / PROVIDER / f'dhmv2_dtm_5m_{window[0]}_{window[1]}.tif')
+            for window, _ in kept}
+    if len(tags) != 1:
+        raise ValueError(f'mixed nodata tags in DHMV windows: {tags}')
+    nodata = tags.pop()
     sources = [dict(path=str((output / PROVIDER /
                               f'dhmv2_dtm_5m_{window[0]}_{window[1]}.tif').resolve()),
                     horizontal_crs='EPSG:31370', vertical_crs=5710, epoch='ALS 2013-2015',
-                    role='national', group='BE-VL-DHMVII', nodata=-9999,
+                    role='national', group='BE-VL-DHMVII', nodata=nodata,
                     datum_area_of_interest=[2.5, 49.4, 6.5, 51.6]) for window, _ in kept]
     publish_source_json(output, output / PROVIDER / 'country-sources.json', sources)
     publish_json(output / PROVIDER / 'skipped-sea.json',

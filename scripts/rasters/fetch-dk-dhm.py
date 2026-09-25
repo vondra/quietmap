@@ -9,7 +9,7 @@ import urllib.request
 
 from osgeo import gdal
 
-from dem_windows import LandMask, grid_windows, reproject_bounds
+from dem_windows import LandMask, download_bytes, grid_windows, nodata_tag, reproject_bounds
 from terrain_io import digest, provenance, publish_bytes, publish_json, publish_source_json, utc_now
 
 gdal.UseExceptions()
@@ -53,9 +53,7 @@ def fetch_window(output, window, mask, token, position, total):
         return window, None
     started = time.monotonic()
     url = WCS + '?' + query + '&token=' + urllib.request.quote(token)
-    request = urllib.request.Request(url, headers={'User-Agent': 'QuietMap terrain producer'})
-    with urllib.request.urlopen(request, timeout=300) as response:
-        payload = response.read()
+    payload, _ = download_bytes(url)
     publish_bytes(target, payload)
     dataset = gdal.Open(str(target))
     if dataset is None:
@@ -111,10 +109,15 @@ def main():
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         results = list(pool.map(worker, enumerate(windows, 1)))
     kept = [(window, record) for window, record in results if record]
+    tags = {nodata_tag(output / PROVIDER / f'dhm_terraen_25m_{window[0]}_{window[1]}.tif')
+            for window, _ in kept}
+    if len(tags) != 1:
+        raise ValueError(f'mixed nodata tags in DHM windows: {tags}')
+    nodata = tags.pop()
     sources = [dict(path=str((output / PROVIDER /
                               f'dhm_terraen_25m_{window[0]}_{window[1]}.tif').resolve()),
                     horizontal_crs='EPSG:25832', vertical_crs=10484, epoch='ALS 2014-2015',
-                    role='national', group='DK-DHM', nodata=None,
+                    role='national', group='DK-DHM', nodata=nodata,
                     datum_area_of_interest=[7.9, 54.4, 15.7, 57.8]) for window, _ in kept]
     publish_source_json(output, output / PROVIDER / 'country-sources.json', sources)
     publish_json(output / PROVIDER / 'skipped-sea.json',

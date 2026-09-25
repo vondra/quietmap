@@ -3,16 +3,17 @@
 import argparse
 import hashlib
 import json
+import math
 from pathlib import Path
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
 
-import numpy as np
 from osgeo import gdal, osr
 
-from terrain_io import digest, provenance, publish_json, publish_source_json, utc_now
+from dem_windows import nodata_tag
+from terrain_io import digest, provenance, publish_json, publish_path, publish_source_json, utc_now
 
 gdal.UseExceptions()
 osr.UseExceptions()
@@ -23,7 +24,7 @@ ATOM = ('https://geoservices.wallonie.be/geotraitement/spwdatadownload/results/'
 LICENCE = 'CC BY 4.0'
 LICENCE_URL = 'https://creativecommons.org/licenses/by/4.0/'
 CRS = 3812
-FACTOR = 10
+RESOLUTION = 5
 
 
 def province_zips():
@@ -60,55 +61,54 @@ def download_transient(url, expected_bytes, scratch):
     return target
 
 
-def reduce_member(archive, member, output, record):
+def reduce_province(archive, member, output, record):
     dataset = gdal.Open(f'/vsizip/{archive}/{member}')
     if dataset is None or dataset.RasterCount != 1:
         raise ValueError(f'expected one band: {member}')
     transform = dataset.GetGeoTransform()
     if transform[2] or transform[4] or abs(transform[1] - 0.5) > 1e-12 or abs(transform[5] + 0.5) > 1e-12:
         raise ValueError(f'expected a north-up 0.5 m grid: {member}')
-    if abs(transform[0] / 5 - round(transform[0] / 5)) > 1e-6 or abs(transform[3] / 5 - round(transform[3] / 5)) > 1e-6:
-        raise ValueError(f'tile origin breaks the 5 m mosaic grid: {member}')
+    file_crs = osr.SpatialReference()
+    file_crs.ImportFromWkt(dataset.GetProjection())
     reference = osr.SpatialReference()
-    reference.ImportFromWkt(dataset.GetProjection())
-    if reference.GetAuthorityCode('PROJCRS') != str(CRS):
-        raise ValueError(f'expected EPSG:{CRS}: {member}')
-    rows, columns = dataset.RasterYSize, dataset.RasterXSize
-    if rows % FACTOR or columns % FACTOR:
-        raise ValueError(f'tile size breaks exact 10x reduction: {member}')
+    reference.ImportFromEPSG(CRS)
+    if not file_crs.IsSame(reference):
+        raise ValueError(f'expected Lambert 2008 parameters: {member}')
     nodata = dataset.GetRasterBand(1).GetNoDataValue()
     if nodata is None:
-        raise ValueError(f'tile lacks a nodata tag: {member}')
-    values = dataset.ReadAsArray().astype(np.float64)
-    valid = (values != nodata) & np.isfinite(values)
-    grouped = (values * valid).reshape(rows // FACTOR, FACTOR, columns // FACTOR, FACTOR)
-    counts = valid.reshape(rows // FACTOR, FACTOR, columns // FACTOR, FACTOR).sum(axis=(1, 3))
-    with np.errstate(invalid='ignore', divide='ignore'):
-        reduced = np.where(counts, grouped.sum(axis=(1, 3)) / np.maximum(counts, 1), nodata)
-    name = Path(member).stem + '_5m.tif'
+        raise ValueError(f'province file lacks a nodata tag: {member}')
+    # Snap out to absolute 5 m multiples: every province lands on one shared grid.
+    x0 = math.floor(transform[0] / RESOLUTION) * RESOLUTION
+    y1 = math.ceil(transform[3] / RESOLUTION) * RESOLUTION
+    x1 = math.ceil((transform[0] + dataset.RasterXSize * transform[1]) / RESOLUTION) * RESOLUTION
+    y0 = math.floor((transform[3] + dataset.RasterYSize * transform[5]) / RESOLUTION) * RESOLUTION
+    name = archive.stem.replace('_3812_PROV_', '_5m_') + '.tif'
     target = output / PROVIDER / name
     receipt = Path(str(target) + '.provenance.json')
+    target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists() and receipt.exists():
         kept = provenance(target)
         if kept.get('parent_sha256') != record['sha256']:
             raise ValueError(f'retained tile references another archive: {target}')
         return kept
-    driver = gdal.GetDriverByName('GTiff')
-    out = driver.Create(str(target), columns // FACTOR, rows // FACTOR, 1, gdal.GDT_Float32,
-                        options=['COMPRESS=DEFLATE', 'TILED=YES', 'PREDICTOR=2'])
-    out.SetProjection(dataset.GetProjection())
-    out.SetGeoTransform((transform[0], transform[1] * FACTOR, 0,
-                         transform[3], 0, transform[5] * FACTOR))
-    out.GetRasterBand(1).SetNoDataValue(nodata)
-    out.GetRasterBand(1).WriteArray(reduced.astype(np.float32))
-    out = None
+    warped = gdal.Warp(str(target) + '.part', dataset, format='GTiff', dstSRS=f'EPSG:{CRS}',
+                       xRes=RESOLUTION, yRes=RESOLUTION, outputBounds=(x0, y0, x1, y1),
+                       resampleAlg='average', srcNodata=nodata, dstNodata=nodata,
+                       outputType=gdal.GDT_Float32,
+                       creationOptions=['COMPRESS=DEFLATE', 'TILED=YES', 'PREDICTOR=2'],
+                       multithread=True, warpOptions=['NUM_THREADS=4', 'WarpMemoryLimit=4096'])
+    if warped is None:
+        raise ValueError(f'province reduction failed: {member}')
+    warped = None
+    publish_path(target, Path(str(target) + '.part'))
     kept = dict(url=record['url'], fetched_utc=utc_now(), sha256=digest(target),
                 bytes=target.stat().st_size, licence=LICENCE, licence_url=LICENCE_URL,
                 terms_checked_utc='2026-09-25', parent_sha256=record['sha256'],
                 parent_bytes=record['bytes'], parent_member=member, raw_bytes_retained=False,
-                notes=('Wallonie MNT 2021-2022 0.5 m tile reduced by exact 10x block means to 5 m; '
-                       'ETRS89 Lambert 2008 (EPSG:3812), Ostend/DNG heights (EPSG:5710); raw '
-                       'province bytes (212 GB total) not retained.'))
+                notes=('Wallonie MNT 2021-2022 0.5 m province file area-averaged to 5 m on the '
+                       'absolute 5 m Lambert 2008 grid (bounds snapped out); ETRS89 Lambert 2008 '
+                       '(EPSG:3812), Ostend/DNG heights (EPSG:5710); raw province bytes (212 GB '
+                       'total) not retained.'))
     publish_json(receipt, kept)
     return kept
 
@@ -118,7 +118,6 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('--scratch-dir', type=Path, default=None)
     parser.add_argument('--provinces', nargs='+', default=None)
-    parser.add_argument('--max-tiles', type=int, default=0)
     args = parser.parse_args()
     output = args.output
     scratch = args.scratch_dir or output.parent / 'dem-transient'
@@ -136,26 +135,21 @@ def main():
         print(json.dumps({'archive': name, 'sha256': record['sha256']}), flush=True)
         with zipfile.ZipFile(archive) as container:
             members = sorted(n for n in container.namelist() if n.endswith('.tif'))
-        if args.max_tiles:
-            members = members[:args.max_tiles]
-        for position, member in enumerate(members, 1):
-            reduce_member(archive, member, output, record)
-            if position % 50 == 0:
-                print(json.dumps({'archive': name, 'done': position, 'total': len(members)}),
-                      flush=True)
+        if len(members) != 1:
+            raise ValueError(f'expected one province raster in {name}: {members}')
+        reduce_province(archive, members[0], output, record)
         archive.unlink()
-        print(json.dumps({'archive': name, 'tiles': len(members),
-                          'seconds': time.monotonic() - started}), flush=True)
+        print(json.dumps({'archive': name, 'seconds': time.monotonic() - started}), flush=True)
     sources = []
     nodata_values = set()
-    for target in sorted((output / PROVIDER).glob('*_5m.tif')):
+    for target in sorted((output / PROVIDER).glob('*_5m_*.tif')):
         if not Path(str(target) + '.provenance.json').exists():
             raise ValueError(f'reduced tile lacks a receipt: {target}')
-        nodata_values.add(gdal.Open(str(target)).GetRasterBand(1).GetNoDataValue())
+        nodata_values.add(nodata_tag(target))
     if len(nodata_values) != 1:
         raise ValueError(f'mixed nodata tags in reduced tiles: {nodata_values}')
     nodata = nodata_values.pop()
-    for target in sorted((output / PROVIDER).glob('*_5m.tif')):
+    for target in sorted((output / PROVIDER).glob('*_5m_*.tif')):
         sources.append(dict(path=str(target.resolve()), horizontal_crs='EPSG:3812',
                             vertical_crs=5710, epoch='ALS 2021-2022', role='national',
                             group='BE-WA-MNT', nodata=nodata,

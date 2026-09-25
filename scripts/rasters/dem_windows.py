@@ -1,11 +1,38 @@
 """Aligned download windows and GEDTM land pre-filtering for terrain fetchers."""
 import email
+import http.client
 import math
+import time
+import urllib.error
+import urllib.request
 
 from osgeo import gdal, osr
 
 gdal.UseExceptions()
 osr.UseExceptions()
+
+RETRYABLE = (http.client.IncompleteRead, http.client.RemoteDisconnected,
+             TimeoutError, ConnectionError, urllib.error.URLError)
+
+
+def download_bytes(url, timeout=300, attempts=3):
+    """GET a URL with backoff on transient network failures; returns (body, headers)."""
+    last = None
+    for attempt in range(attempts):
+        try:
+            request = urllib.request.Request(url, headers={'User-Agent': 'QuietMap terrain producer'})
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read(), response.headers
+        except urllib.error.HTTPError as error:
+            if (error.code < 500 and error.code != 429) or attempt + 1 == attempts:
+                raise
+            last = error
+        except RETRYABLE as error:
+            if attempt + 1 == attempts:
+                raise
+            last = error
+        time.sleep(2 ** attempt)
+    raise last
 
 
 def split_wcs_multipart(body, content_type):
@@ -15,6 +42,14 @@ def split_wcs_multipart(body, content_type):
         if part.get_content_type() == 'image/tiff':
             return part.get_payload(decode=True)
     raise ValueError('WCS response holds no TIFF part')
+
+
+def nodata_tag(path):
+    """Read a single-band nodata tag while holding the dataset alive."""
+    dataset = gdal.Open(str(path))
+    if dataset is None or dataset.RasterCount != 1:
+        raise ValueError(f'expected one band: {path}')
+    return dataset.GetRasterBand(1).GetNoDataValue()
 
 
 Z9 = 512

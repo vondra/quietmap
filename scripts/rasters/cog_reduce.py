@@ -18,6 +18,8 @@ def reduce_cog_overview(url, overview_index, target, username=None, password=Non
         if username is not None:
             os.environ['GDAL_HTTP_USERPWD'] = username + ':' + password
             os.environ['GDAL_HTTP_AUTH'] = 'BASIC'
+        os.environ['GDAL_HTTP_MAX_RETRY'] = '3'
+        os.environ['GDAL_HTTP_RETRY_DELAY'] = '2'
         dataset = gdal.Open('/vsicurl/' + url)
         if dataset is None or dataset.RasterCount != 1:
             raise ValueError(f'expected one COG band: {url}')

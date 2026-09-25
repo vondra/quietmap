@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Fetch IGN RGE ALTI as retained 5 m WMS windows (mainland IGN69, Corsica IGN78)."""
+"""Fetch IGN RGE ALTI as retained 10 m WMS windows (mainland IGN69, Corsica IGN78).
+
+The HIGHRES service renders 5 m 10 km windows in 30-200 s each (measured
+2026-09-25), which puts full 5 m coverage beyond reach; 10 m windows take
+about 8 s and still oversample the 1 arc-second output grid.
+"""
 import argparse
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -10,7 +15,7 @@ import urllib.request
 import numpy as np
 from osgeo import gdal
 
-from dem_windows import LandMask, grid_windows, reproject_bounds
+from dem_windows import LandMask, download_bytes, grid_windows, nodata_tag, reproject_bounds
 from terrain_io import digest, provenance, publish_bytes, publish_json, publish_source_json, utc_now
 
 gdal.UseExceptions()
@@ -21,7 +26,7 @@ LAYER = 'ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES'
 LICENCE = 'Licence Ouverte 2.0 (Etalab)'
 LICENCE_URL = 'https://www.etalab.gouv.fr/licence-ouverte-open-licence/'
 CRS = 2154
-RESOLUTION = 5
+RESOLUTION = 10
 STEP = 10000
 EXTENT = (0, 6020000, 1260000, 7130000)
 # Corsica sits 65 km east of the mainland edge; the sea gap keeps the groups disjoint.
@@ -37,7 +42,7 @@ def group_of(x0, y1):
 
 def fetch_window(output, window, mask, position, total):
     x0, y0, x1, y1 = window
-    name = f'rgealti_5m_{x0}_{y0}'
+    name = f'rgealti_10m_{x0}_{y0}'
     target = output / PROVIDER / (name + '.tif')
     receipt = Path(str(target) + '.provenance.json')
     width, height = (x1 - x0) // RESOLUTION, (y1 - y0) // RESOLUTION
@@ -51,9 +56,7 @@ def fetch_window(output, window, mask, position, total):
     if mask is not None and not mask.has_land(*reproject_bounds(x0, y0, x1, y1, CRS)):
         return window, None
     started = time.monotonic()
-    request = urllib.request.Request(url, headers={'User-Agent': 'QuietMap terrain producer'})
-    with urllib.request.urlopen(request, timeout=300) as response:
-        payload = response.read()
+    payload, _ = download_bytes(url)
     publish_bytes(target, payload)
     dataset = gdal.Open(str(target))
     if dataset is None:
@@ -74,7 +77,7 @@ def fetch_window(output, window, mask, position, total):
                   request_url=url, fetched_utc=utc_now(), sha256=digest(target),
                   bytes=target.stat().st_size, licence=LICENCE, licence_url=LICENCE_URL,
                   terms_checked_utc='2026-09-25', raw_bytes_retained=False,
-                  notes=('RGE ALTI (2009-2021 mosaic) WMS HIGHRES window at 5 m; Lambert-93 '
+                  notes=('RGE ALTI (2009-2021 mosaic) WMS HIGHRES window at 10 m; Lambert-93 '
                          '(EPSG:2154); mainland NGF-IGN69 (EPSG:5720), Corsica NGF-IGN78 (EPSG:5721); '
                          'raw tile bytes not retained.'))
     publish_json(receipt, record)
@@ -116,14 +119,19 @@ def main():
     kept = [(window, record) for window, record in results if record]
     groups = {'FR-RGEALTI': (5720, [-5.2, 41.3, 10.0, 51.2]),
               'FR-RGEALTI-CORSE': (5721, [8.1, 41.3, 9.9, 43.1])}
+    tags = {nodata_tag(output / PROVIDER / f'rgealti_10m_{window[0]}_{window[1]}.tif')
+            for window, _ in kept}
+    if len(tags) != 1:
+        raise ValueError(f'mixed nodata tags in RGE ALTI windows: {tags}')
+    nodata = tags.pop()
     sources = []
     for window, _ in sorted(kept, key=lambda entry: group_of(entry[0][0], entry[0][3])):
         vertical, aoi = groups[group_of(window[0], window[3])]
         sources.append(dict(path=str((output / PROVIDER /
-                                      f'rgealti_5m_{window[0]}_{window[1]}.tif').resolve()),
+                                      f'rgealti_10m_{window[0]}_{window[1]}.tif').resolve()),
                             horizontal_crs='EPSG:2154', vertical_crs=vertical,
                             epoch='RGE ALTI 2009-2021 mosaic', role='national',
-                            group=group_of(window[0], window[3]), nodata=-99999,
+                            group=group_of(window[0], window[3]), nodata=nodata,
                             datum_area_of_interest=aoi))
     publish_source_json(output, output / PROVIDER / 'country-sources.json', sources)
     publish_json(output / PROVIDER / 'skipped-sea.json',

@@ -93,6 +93,8 @@ def fetch_tile(output, item, session, position, total):
     transform = dataset.GetGeoTransform()
     if (dataset.RasterXSize, dataset.RasterYSize) != (500, 500):
         raise ValueError(f'unexpected MDT tile grid: {item["id"]}')
+    if dataset.GetRasterBand(1).GetNoDataValue() != -999:
+        raise ValueError(f'unexpected MDT tile nodata: {item["id"]}')
     if not (CONTINENTAL[0] <= transform[0] <= CONTINENTAL[2]
             and CONTINENTAL[1] <= transform[3] - 1000 <= CONTINENTAL[3]):
         raise ValueError(f'MDT tile outside continental review: {item["id"]}')

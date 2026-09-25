@@ -10,7 +10,7 @@ import urllib.request
 import numpy as np
 from osgeo import gdal
 
-from dem_windows import LandMask, reproject_bounds, split_wcs_multipart
+from dem_windows import LandMask, download_bytes, nodata_tag, reproject_bounds, split_wcs_multipart
 from terrain_io import digest, fetch, provenance, publish_bytes, publish_json, publish_source_json, utc_now
 
 gdal.UseExceptions()
@@ -28,7 +28,7 @@ def window_request(x0, y0, x1, y1):
     width, height = round((x1 - x0) / RESOLUTION), round((y1 - y0) / RESOLUTION)
     query = (f'SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID={COVERAGE}'
              f'&SUBSET=x({x0},{x1})&SUBSET=y({y0},{y1})'
-             f'&SCALESIZE=x({width}),y({height})&FORMAT=image/geotiff')
+             f'&SCALESIZE=x({width}),y({height})&FORMAT=image/tiff')
     return query, width, height
 
 
@@ -50,9 +50,8 @@ def fetch_window(output, feature, mask, position, total):
         print(json.dumps({'skipped_sea': name}), flush=True)
         return None
     started = time.monotonic()
-    request = urllib.request.Request(url, headers={'User-Agent': 'QuietMap terrain producer'})
-    with urllib.request.urlopen(request, timeout=300) as response:
-        payload = split_wcs_multipart(response.read(), response.headers['Content-Type'])
+    body, headers = download_bytes(url)
+    payload = split_wcs_multipart(body, headers['Content-Type'])
     publish_bytes(target, payload)
     dataset = gdal.Open(str(target))
     transform = dataset.GetGeoTransform()
@@ -108,10 +107,16 @@ def main():
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         records = list(pool.map(worker, enumerate(features, 1)))
     kept = [(feature, record) for feature, record in zip(features, records) if record]
+    tags = {nodata_tag(output / PROVIDER /
+                       f'ahn4_dtm_5m_{feature["properties"]["name"].replace(".tif", "")}.tif')
+            for feature, _ in kept}
+    if len(tags) != 1:
+        raise ValueError(f'mixed nodata tags in AHN windows: {tags}')
+    nodata = tags.pop()
     sources = [dict(path=str((output / PROVIDER /
                               f'ahn4_dtm_5m_{feature["properties"]["name"].replace(".tif", "")}.tif').resolve()),
                     horizontal_crs='EPSG:28992', vertical_crs=5709, epoch='AHN4 2020-2022',
-                    role='national', group='NL-AHN4', nodata=3.4028235e+38,
+                    role='national', group='NL-AHN4', nodata=nodata,
                     datum_area_of_interest=[3.0, 50.7, 7.3, 53.7]) for feature, _ in kept]
     publish_source_json(output, output / PROVIDER / 'country-sources.json', sources)
     publish_json(output / PROVIDER / 'skipped-sea.json',
