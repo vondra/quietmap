@@ -19,7 +19,7 @@ CONTRACT = json.loads((Path(__file__).resolve().parents[2] / 'engine/noise-compu
 VARIABLES = ('10m_u_component_of_wind', '10m_v_component_of_wind', '2m_temperature',
              '2m_dewpoint_temperature', 'total_cloud_cover', 'surface_pressure')
 ERA5_NODES_PER_DEGREE = 4
-ERA5_ROWS, ERA5_COLUMNS = 721, 1440
+ERA5_COLUMNS = 1440
 MET_NODE_BYTES = 240
 numcodecs.blosc.set_nthreads(1)
 
