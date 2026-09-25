@@ -14,8 +14,8 @@
 //! matched first cannot change it.
 //!
 //! The cap applies only to heights that are NOT per-building knowledge (the
-//! structures builder's footprint-area typology and the GHS-BUILT-H 100 m cell
-//! average; `square_store::structure_contract::height_is_per_building` decides).
+//! structures builder's footprint-area typology;
+//! `square_store::structure_contract::height_is_per_building` decides).
 //! Mapped, floor-derived, surveyed and Overture heights never cap.
 //!
 //! `source_reader::structure_store` applies it when it builds a square's obstacle

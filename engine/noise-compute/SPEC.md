@@ -409,21 +409,22 @@ roof height, from the first available rung, and stores its `height_source`:
 
 1. regional survey zonal mean (Prague LiDAR), clamped to 2.5–250 m;
 2. mapped OSM `height`;
-3. OSM, national-register or Overture floors × 3 m + 3 m roof allowance
-   (Prague LiDAR vs OSM floors, 105,957 buildings: median residual 0.0 m);
+3. OSM, national-register or Overture floor count: 1 floor 6 m (its attic
+   counts: floor counts exclude it), 2–3 floors 6–9 m, 4+ floors 3 m each
+   plus 2 m of roof (five mean-roof references, 2026-09-25; never stations);
 4. Overture height of at least 2.5 m (lower values are artefacts);
-5. GHS-BUILT-H ANBH of at least 3.5 m (its 2.5 m floor and the values just
-   above it are no information), capped at 100 m and at 4 m under 30 m² of
-   footprint;
-6. median reference height by footprint area: < 30 m² 2.9 m, < 60 m² 5.4 m,
-   < 150 m² 7.4 m, < 500 m² 8.8 m, else 10.6 m (seven EU pilot windows).
+5. median reference mean-roof height by footprint area: < 30 m² 2.9 m,
+   < 60 m² 3.5 m, < 150 m² 7.4 m, < 500 m² 8.0 m, else 9.0 m
+   (no-information rows only, 2026-09-25).
 
-Rungs 5 and 6 are not per-building knowledge; only they take the low-profile
-cap. The demand storey count `storeys` is the floor count where one is mapped,
-else round((height − 3 m) / 3 m), at least 1; a structure without a screening
-height counts one level. The service-tree demand reads it. Noise walls keep a
-mapped OSM height; unmapped walls stand at their country's mean wall height
-(DE 3.88 m, US 4.45 m, AT 3.6 m, else 3 m).
+Rung 5 is not per-building knowledge; only it takes the low-profile cap.
+A retired satellite rung (`height_source` 4) still reads from older prepared
+squares. The demand storey count `storeys` is the floor count where one is
+mapped, else round((height − 1 m) / 3 m), at least 1 (registry floor counts
+vs mean height, 6,061 buildings: MAE 0.41 storeys, unbiased); a structure
+without a screening height counts one level. The service-tree demand reads it.
+Noise walls keep a mapped OSM height; unmapped walls stand at their country's
+mean wall height (DE 3.88 m, US 4.45 m, AT 3.6 m, else 3 m).
 
 ## Raster terrain and canopy inputs
 
@@ -647,8 +648,8 @@ coordinate snapping does not change line/area identity. Shooting subtype and ind
 ways and relations. These two classes are staged and silent until the activity
 models consume them; an enclosing area must not duplicate a line's emission.
 A physical building also retains its separate source row and has no generic
-residential emission. Buildings keep `buildings_v5`, the existing roof/carport
-use code and the unchanged height ladder.
+residential emission. Buildings keep `buildings_v5` and the existing roof/carport
+use code; screening heights follow §Screening heights.
 
 ## Meteorology climatology input
 

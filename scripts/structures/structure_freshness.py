@@ -30,11 +30,10 @@ def content_digest_of_path_size_and_mtime(identity):
         return None
 
 
-def structure_input_files(square_dir, overture_files, ghsl, regional):
+def structure_input_files(square_dir, overture_files, regional):
     return {
         "osm": [str(Path(square_dir) / name) for name in ("buildings.arrow", "barriers.arrow")],
         "overture": list(overture_files),
-        "ghsl": list(ghsl.input_files),
         "regional": list(regional.input_files) if regional is not None else None,
     }
 

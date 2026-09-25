@@ -217,7 +217,7 @@ class WorldBuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sources = {name: str(root / name) for name in ('planet', 'rasters', 'enrichment', 'boundaries',
-                       'city_boundaries', 'overture', 'ghsl', 'regional_heights', 'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
+                       'city_boundaries', 'overture', 'regional_heights', 'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
             for path in sources.values():
                 Path(path).touch()
             config = {'build': {'as_of_date': '20261231', 'aircraft_anchor': '2027-01',
@@ -262,7 +262,7 @@ class WorldBuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sources = {name: str(root / name) for name in ('planet', 'rasters', 'enrichment', 'boundaries',
-                       'city_boundaries', 'overture', 'ghsl', 'regional_heights', 'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
+                       'city_boundaries', 'overture', 'regional_heights', 'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
             for path in sources.values():
                 Path(path).touch()
             config = {'build': {'as_of_date': '20260909', 'aircraft_anchor': '2026-09',

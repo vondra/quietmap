@@ -35,7 +35,7 @@ has no prepared squares, so a regional extract (Prague, 2026-09-16) stops at
 The TOML file has `[build]` keys `as_of_date` (YYYYMMDD string), `aircraft_anchor`
 (YYYY-MM string), `memory_gib` and `threads` (positive integers). `[sources]` supplies
 absolute paths named `planet`, `rasters`, `enrichment`, `boundaries`, `city_boundaries`,
-`overture`, `ghsl`, `regional_heights`, `aircraft_primary` (the adsb.lol archive),
+`overture`, `regional_heights`, `aircraft_primary` (the adsb.lol archive),
 `aircraft_secondary` (the ADSBexchange monthly samples), `ships` (EMODnet vessel density)
 and `ships_gfw` (Global Fishing Watch presence hours).
 `rasters` is an already published native raster year, `city_boundaries` is the ADM2
@@ -106,7 +106,7 @@ These are not seven independent raster inputs.
 ## Structures and geography
 
 `scripts/structures/build-structures.py` joins OSM buildings/barriers with
-Overture footprints, GHSL heights, and regional height rasters where available.
+Overture footprints and regional height rasters where available.
 The builder writes even completed empty squares and validates the OSM emission
 view. Preserve the regional IPR input for the two Prague reference squares.
 
@@ -185,7 +185,7 @@ building demand retracts its own stale estimates and preserves measured traffic.
 National buildings writes only existing `buildings.arrow` rows.
 
 After national building refinement, refresh affected `structures.arrow` files with
-the original GHSL/regional inputs. Both emission attributes and screening heights
+the original regional input. Both emission attributes and screening heights
 are embedded in structures; enrichment alone cannot update them. Rerun
 `structures-finalize` after this step.
 

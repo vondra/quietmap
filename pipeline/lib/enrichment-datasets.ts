@@ -1612,20 +1612,9 @@ export const DATASETS: Dataset[] = [
     provenance: 'baseline', // global raster baseline, not a measurement
   },
   // Structure-table height ladder (scripts/structures/structure_heights.py):
-  // structure rows carry `height_source`, not `source_id` — these entries
-  // document the rasters' license/URL/rank for docs + attribution
-  // (height_source 4 = GHSL ANBH, 3 = regional survey).
-  {
-    id: 9866,
-    layer: 'buildings',
-    key: 'global-ghsl-built-h',
-    name: 'GHS-BUILT-H R2023A ANBH building heights (JRC)',
-    year: 2018,
-    license: 'CC-BY-4.0',
-    url: 'https://human-settlement.emergency.copernicus.eu/ghs_buH2023.php',
-    priority: 50,
-    provenance: 'baseline', // 100 m areal average, not a per-building measurement
-  },
+  // structure rows carry `height_source`, not `source_id` — this entry
+  // documents the survey raster's license/URL/rank for docs + attribution
+  // (height_source 3 = regional survey).
   {
     id: 9867,
     layer: 'buildings',

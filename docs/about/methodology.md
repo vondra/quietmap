@@ -168,9 +168,9 @@ ground for receivers.
 **As obstacles.** Mapped above-ground buildings and noise barriers screen sound. Open
 parking areas, yards, explicitly underground footprints, carports and open roofs do not:
 a roof on posts has no wall. Building heights come, in this order, from measured surveys
-(Prague), mapped heights, floor counts (3 m per floor plus 3 m for the roof), Overture
-heights, the 100 m satellite average of the GHSL (at most 4 m for footprints under
-30 m²), and finally the typical height of a building of that footprint size. Noise walls
+(Prague), mapped heights, floor counts (one floor 6 m, two to three floors 6–9 m,
+four or more 3 m each plus 2 m of roof), Overture heights, and finally the typical
+height of a building of that footprint size. Noise walls
 without a mapped height take their country's average wall height: 3.9 m in Germany,
 4.5 m in the United States, 3.6 m in Austria and 3 m elsewhere. Footprints come from
 OpenStreetMap and Overture Maps.

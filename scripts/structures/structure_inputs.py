@@ -16,61 +16,12 @@ from structure_inventory import overture_sources
 MEASURED_MIN_M = 2.0      # zonal pixels below this are "not a building surface here"
 COVERAGE_MIN_FRAC = 0.30  # measured pixels must cover this share of the footprint
 COVERAGE_MIN_PX = 3
-ANBH_MAX_VALID = 250.0    # GHSL NoData sentinel is 255 — belt for a missing tag
 
 ENVELOPE_OUTDOOR = 0
 ENVELOPE_DEFAULT = 5
 # OSM envelope-use codes: residential, commercial, industrial, explicit open carport or roof.
 BUILDING_USE_OPEN_ROOF = 3
 ENVELOPE_FROM_BUILDING_USE = {0: 1, 1: 2, 2: 3, BUILDING_USE_OPEN_ROOF: ENVELOPE_OUTDOOR}
-
-class GlobalPrior:
-    """GHS-BUILT-H ANBH: nearest-pixel value at a WGS84 point (windowed reads)."""
-
-    def __init__(self, path):
-        self.ds = rasterio.open(path)
-        self.gt = self.ds.transform
-        self.w, self.h = self.ds.width, self.ds.height
-        self.crs = self.ds.crs
-        if self.crs is None:
-            raise SystemExit(f"{path}: raster is not georeferenced — re-fetch it")
-        self.tr = Transformer.from_crs("EPSG:4326", self.crs, always_xy=True)
-        self.input_files = sorted(self.ds.files)
-
-    def sample_many(self, lons, lats):
-        """Sample one bounded batch by native raster block; NaN means no prior."""
-        x, y = self.tr.transform(np.asarray(lons, dtype=np.float64),
-                                 np.asarray(lats, dtype=np.float64))
-        columns = np.trunc((x - self.gt.c) / self.gt.a)
-        rows = np.trunc((y - self.gt.f) / self.gt.e)
-        finite = np.isfinite(columns) & np.isfinite(rows)
-        if not finite.all():
-            # Retain the scalar int() rejection of NaN/inf projected coordinates.
-            first = np.flatnonzero(~finite)[0]
-            int(columns[first])
-            int(rows[first])
-        values = np.full(len(columns), np.nan)
-        indices = np.flatnonzero((columns >= 0) & (columns < self.w)
-                                 & (rows >= 0) & (rows < self.h))
-        ci, ri = columns[indices].astype(np.int64), rows[indices].astype(np.int64)
-        block_height, block_width = self.ds.block_shapes[0]
-        block_columns = (self.w + block_width - 1) // block_width
-        blocks = (ri // block_height) * block_columns + ci // block_width
-        order = np.argsort(blocks)
-        cuts = np.flatnonzero(np.diff(blocks[order])) + 1
-        for group in np.split(order, cuts):
-            if not len(group):
-                continue
-            r0 = (ri[group[0]] // block_height) * block_height
-            c0 = (ci[group[0]] // block_width) * block_width
-            window = self.ds.read(1, window=((int(r0), min(int(r0) + block_height, self.h)),
-                                            (int(c0), min(int(c0) + block_width, self.w))))
-            values[indices[group]] = window[ri[group] - r0, ci[group] - c0]
-        invalid = ~np.isfinite(values) | (values >= ANBH_MAX_VALID)
-        if self.ds.nodata is not None:
-            invalid |= values == self.ds.nodata
-        values[invalid] = np.nan
-        return values
 
 
 class RegionalHeights:
@@ -273,30 +224,18 @@ def read_overture_parquet(parquet_dir, square):
                              "envelope": envelope_class(value.get("class"), value.get("subtype"))})
     return rows, inputs
 
-def sample_raster_heights(rows, regional, ghsl, stats):
+def sample_regional_heights(rows, regional, stats):
     """Fill `regional_m` (survey zonal mean or None) for every row with a footprint inside the
-    regional raster, then `ghsl_m` (cell value or NaN) for rows whose `needs_ghsl` is set and
-    that the survey did not answer. Rows are dicts keyed (clat, clon, geom, needs_ghsl)."""
+    regional raster. Anywhere else the ladder falls through to mapped floors, Overture, or
+    the area typology. Rows are dicts keyed (clat, clon, geom)."""
     n = len(rows)
     for row in rows:
         row["regional_m"] = None
-        row["ghsl_m"] = math.nan
-    if n == 0:
+    if n == 0 or regional is None:
         return
-    if regional is not None:
-        rx, ry = regional.tr.transform([r["clon"] for r in rows], [r["clat"] for r in rows])
-        for i, row in enumerate(rows):
-            if row["geom"] is None or not regional.covers(rx[i], ry[i]):
-                continue
-            row["regional_m"] = regional.zonal_measured_mean(row["geom"])
-            stats["abstain" if row["regional_m"] is None else "regional"] += 1
-    # Bound temporary coordinate/index arrays even in the largest urban squares.
-    for offset in range(0, n, 65536):
-        pending = [row for row in rows[offset:offset + 65536]
-                   if row["needs_ghsl"] and row["regional_m"] is None]
-        if not pending:
+    rx, ry = regional.tr.transform([r["clon"] for r in rows], [r["clat"] for r in rows])
+    for i, row in enumerate(rows):
+        if row["geom"] is None or not regional.covers(rx[i], ry[i]):
             continue
-        values = ghsl.sample_many([row["clon"] for row in pending],
-                                  [row["clat"] for row in pending])
-        for row, value in zip(pending, values):
-            row["ghsl_m"] = float(value)
+        row["regional_m"] = regional.zonal_measured_mean(row["geom"])
+        stats["abstain" if row["regional_m"] is None else "regional"] += 1
