@@ -24,8 +24,13 @@ DERIVED_METRES = 5
 DERIVED_NODATA = -9999.0
 
 
-def decode_xyz_lattice(path, spacing):
-    """Place a verified regular XYZ lattice without resampling or datum change."""
+def decode_xyz_lattice(path, spacing, nominal=None):
+    """Place a verified regular XYZ lattice without resampling or datum change.
+
+    With nominal=(x0, y0, nx, ny), nodes land on the tile's nominal lattice
+    and missing nodes stay nodata instead of failing the tile; nodes off the
+    nominal lattice, outside its extent, or landing twice are refused.
+    """
     with open(path, encoding='utf-8', errors='replace') as handle:
         first = handle.readline().split()
     try:
@@ -34,6 +39,10 @@ def decode_xyz_lattice(path, spacing):
     except ValueError:
         skip = 1
     points = np.loadtxt(path, skiprows=skip)
+    if points.ndim != 2 or not len(points):
+        raise ValueError(f'{path}: no XYZ rows to place')
+    if nominal is not None:
+        return place_nominal_lattice(path, points, spacing, nominal)
     xs, ys = np.unique(points[:, 0]), np.unique(points[:, 1])[::-1]
     if (len(xs) * len(ys) != len(points) or not np.all(np.diff(xs) == spacing)
             or not np.all(np.diff(ys) == -spacing)):
@@ -44,6 +53,26 @@ def decode_xyz_lattice(path, spacing):
     values[rows, cols] = points[:, 2]
     if not np.isfinite(values).all():
         raise ValueError(f'{path}: missing or duplicated XYZ nodes')
+    return xs, ys, values
+
+
+def place_nominal_lattice(path, points, spacing, nominal):
+    """Grid XYZ nodes onto a nominal tile extent, leaving gaps as nodata."""
+    x0, y0, nx, ny = nominal
+    xs = x0 + spacing / 2 + np.arange(nx) * spacing
+    ys = y0 + ny * spacing - spacing / 2 - np.arange(ny) * spacing
+    cols = np.rint((points[:, 0] - xs[0]) / spacing).astype(int)
+    rows = np.rint((ys[0] - points[:, 1]) / spacing).astype(int)
+    on_grid = (np.abs(points[:, 0] - (xs[0] + cols * spacing)) <= spacing * 0.01
+               ) & (np.abs(points[:, 1] - (ys[0] - rows * spacing)) <= spacing * 0.01)
+    if not on_grid.all():
+        raise ValueError(f'{path}: XYZ nodes off the nominal {spacing} m lattice')
+    if (rows < 0).any() or (rows >= ny).any() or (cols < 0).any() or (cols >= nx).any():
+        raise ValueError(f'{path}: XYZ nodes outside the nominal tile extent')
+    if len(np.unique(rows * nx + cols)) != len(points):
+        raise ValueError(f'{path}: duplicated XYZ nodes')
+    values = np.full((ny, nx), np.nan)
+    values[rows, cols] = points[:, 2]
     return xs, ys, values
 
 
@@ -114,9 +143,11 @@ def reduce_geotiff(source, target, src_nodata, factor=DERIVED_METRES, epsg=None)
 
 
 def reduce_xyz(path, target, spacing, epsg, factor=DERIVED_METRES, src_nodata=-9999.0,
-               zone_prefix=None, corner_registered=False):
+               zone_prefix=None, corner_registered=False, nominal=None):
     """Decode a verified XYZ lattice, then area-average it onto the derived grid."""
-    xs, ys, values = decode_xyz_lattice(path, spacing)
+    if nominal is not None and corner_registered:
+        raise ValueError('nominal placement assumes centre-registered XYZ nodes')
+    xs, ys, values = decode_xyz_lattice(path, spacing, nominal=nominal)
     if zone_prefix is not None and xs.min() >= zone_prefix:
         # Bremerhaven tiles prefix eastings with the UTM zone; EPSG:25832 drops it.
         xs = xs - zone_prefix

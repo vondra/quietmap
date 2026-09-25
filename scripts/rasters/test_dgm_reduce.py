@@ -69,6 +69,53 @@ class ReduceTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 decode_xyz_lattice(lattice, 5)
 
+    def test_reduce_xyz_with_nominal_extent_fills_gaps_and_keeps_alignment(self):
+        with tempfile.TemporaryDirectory() as temp:
+            lattice = Path(temp) / 'tile.xyz'
+            rows = ['x y z'] + [f'{400000 + c + 0.5:.1f} {5710000 - r - 0.5:.1f} {r * 10 + c:.1f}'
+                                for r in range(10) for c in range(10)
+                                if (r, c) != (0, 9) and (r, c) != (5, 5)]
+            lattice.write_text('\n'.join(rows) + '\n')
+            target = Path(temp) / 'tile-5m.tif'
+            stats = reduce_xyz(lattice, target, 1, 25832, factor=5,
+                               nominal=(400000, 5709990, 10, 10))
+            self.assertEqual((stats['rows'], stats['columns']), (2, 2))
+            ds = gdal.Open(str(target))
+            self.assertEqual(ds.GetGeoTransform(), (400000.0, 5.0, 0.0, 5710000.0, 0.0, -5.0))
+            grid = ds.GetRasterBand(1).ReadAsArray()
+            self.assertAlmostEqual(float(grid[0, 0]), 22.0, places=5)
+            self.assertAlmostEqual(float(grid[0, 1]), (27.0 * 25 - 9) / 24, places=5)
+            self.assertAlmostEqual(float(grid[1, 0]), 72.0, places=5)
+            self.assertAlmostEqual(float(grid[1, 1]), (77.0 * 25 - 55) / 24, places=5)
+            ds = None
+
+    def test_nominal_placement_refuses_off_grid_outside_and_duplicate_nodes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            nominal = (400000, 5709990, 10, 10)
+            base = [f'{400000 + c + 0.5:.1f} {5710000 - r - 0.5:.1f} 1.0'
+                    for r in range(10) for c in range(10)]
+            lattice = Path(temp) / 'tile.xyz'
+            lattice.write_text('\n'.join(base) + '\n')
+            xs, ys, values = decode_xyz_lattice(lattice, 1, nominal=nominal)
+            self.assertEqual(values.shape, (10, 10))
+            self.assertTrue(np.isfinite(values).all())
+            off = Path(temp) / 'off.xyz'
+            off.write_text('\n'.join(base + ['400000.60 5709999.50 1.0']) + '\n')
+            with self.assertRaises(ValueError):
+                decode_xyz_lattice(off, 1, nominal=nominal)
+            outside = Path(temp) / 'outside.xyz'
+            outside.write_text('\n'.join(base + ['400010.50 5709999.50 1.0']) + '\n')
+            with self.assertRaises(ValueError):
+                decode_xyz_lattice(outside, 1, nominal=nominal)
+            duplicate = Path(temp) / 'dupe.xyz'
+            duplicate.write_text('\n'.join(base + [base[0]]) + '\n')
+            with self.assertRaises(ValueError):
+                decode_xyz_lattice(duplicate, 1, nominal=nominal)
+            empty = Path(temp) / 'empty.xyz'
+            empty.write_text('x y z\n')
+            with self.assertRaises(ValueError):
+                decode_xyz_lattice(empty, 1, nominal=nominal)
+
     def test_reduce_xyz_strips_a_zone_prefixed_easting(self):
         with tempfile.TemporaryDirectory() as temp:
             xyz = Path(temp) / 'tile.xyz'

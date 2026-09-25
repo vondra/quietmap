@@ -151,6 +151,16 @@ class IndexTest(unittest.TestCase):
             bad.write_bytes(b'424000.50 6002999.50 -1.07\n')
             with self.assertRaises(ValueError):
                 fetch_sh.strip_footer(bad)
+            refused = Path(temp) / 'refused.xyz'
+            refused.write_bytes('Folgender Datensatz: tile.xyz konnte nicht heruntergeladen '
+                                'werden. <br>\n<!DOCTYPE html><html></html>'.encode())
+            self.assertEqual(fetch_sh.strip_footer(refused), 'refused')
+
+    def test_sh_nominal_extent_comes_from_the_tile_name(self):
+        self.assertEqual(fetch_sh.nominal_extent('dgm1_32_454_6062_1_sh_2005.xyz'),
+                         (454000, 6062000, 1000, 1000))
+        with self.assertRaises(ValueError):
+            fetch_sh.nominal_extent('dgm1_33_454_6062_1_sh_2005.xyz')
 
     def test_he_kachel_key_matches_the_metadata_table(self):
         self.assertEqual(fetch_he.kachel_of('dgm1_32_492_5509_1_he.tif'), '4925509')

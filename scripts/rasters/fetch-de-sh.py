@@ -28,6 +28,7 @@ GROUP = 'DE-SH-DGM1'
 EPSG = 25832
 VERTICAL_EPSG = 7837
 FOOTER_MARKER = b'<!DOCTYPE html>'
+REFUSAL_MARKER = 'konnte nicht heruntergeladen werden'
 USER_AGENT = {'User-Agent': 'quietmap-dem-de/1.0 (+https://quietmap.example.invalid)'}
 
 
@@ -46,17 +47,32 @@ def parse_index(data):
 
 
 def strip_footer(raw_path):
-    """Cut the portal HTML footer; a response without it is a format failure."""
+    """Cut the portal HTML footer; a response without it is a format failure.
+
+    A body carrying the portal refusal text is not a lattice at all: the
+    portal serves nothing for that tile. It returns the 'refused' sentinel so
+    the caller journals it as unserved instead of failing the run.
+    """
     blob = Path(raw_path).read_bytes()
     parts = blob.split(FOOTER_MARKER)
     if len(parts) != 2 or not parts[1].rstrip().endswith(b'</html>'):
         raise ValueError(f'{raw_path}: missing the portal footer; refusing a partial download')
+    if REFUSAL_MARKER.encode() in parts[0]:
+        return 'refused'
     data = b'\n'.join(line for line in parts[0].split(b'\n') if line.strip()) + b'\n'
     if len(data) <= 1:
         return None
     cleaned = Path(str(raw_path) + '.clean')
     cleaned.write_bytes(data)
     return cleaned
+
+
+def nominal_extent(name):
+    """Return the nominal 1 km tile extent from an SH tile name."""
+    fields = Path(name).stem.split('_')
+    if len(fields) < 4 or fields[0] != 'dgm1' or fields[1] != '32':
+        raise ValueError(f'{name}: not an SH DGM1 zone-32 tile name')
+    return int(fields[2]) * 1000, int(fields[3]) * 1000, 1000, 1000
 
 
 def process_item(root, item, delay, state, done):
@@ -78,17 +94,23 @@ def process_item(root, item, delay, state, done):
               enforce_budget=enforce)
         raw_path = Path(root) / PROVIDER / item['name']
         cleaned = strip_footer(raw_path)
-        if cleaned is None:
+        if cleaned is None or cleaned == 'refused':
+            method = ('portal refused the tile (nothing served), nothing retained'
+                      if cleaned == 'refused'
+                      else 'empty SH tile (footer only), nothing retained')
             entry = dict(url=item['url'], raw_bytes=raw_path.stat().st_size,
                          raw_sha256=digest(raw_path), derived=None, derived_sha256=None,
-                         derived_bytes=0, epoch=item['epoch'],
-                         method='empty SH tile (footer only), nothing retained')
+                         derived_bytes=0, epoch=item['epoch'], method=method)
             raw_path.unlink()
             Path(str(raw_path) + '.provenance.json').unlink()
+            stale = Path(str(raw_path) + '.clean')
+            if stale.exists():
+                stale.unlink()
             append_journal(state['journal'], entry, state['lock'])
             return entry
         method = 'Area-averaged 5 m grid from the verified DGM1 XYZ lattice'
-        stats = reduce_xyz(cleaned, out_path, 1, EPSG)
+        stats = reduce_xyz(cleaned, out_path, 1, EPSG,
+                           nominal=nominal_extent(item['name']))
         cleaned.unlink()
         assert_crs(out_path, EPSG)
         derive_provenance(raw_path, out_path, method)
