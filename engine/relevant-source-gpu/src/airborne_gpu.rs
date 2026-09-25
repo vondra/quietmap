@@ -267,6 +267,8 @@ mod tests {
                 16_000.0 * 16_000.0,
                 -100_000.0,
                 -100_000.0,
+                0.0,
+                0.0,
             ],
             identity: [
                 match installation {
@@ -276,6 +278,7 @@ mod tests {
                 },
                 class as i32,
                 i32::from(departure),
+                0,
                 0,
                 0,
             ],
@@ -293,7 +296,14 @@ mod tests {
         let source = source_beside(mpdl, 0, true, 200.0, 500.0);
         let rows: Vec<_> = (0..=AIRBORNE_REDUCTION_ROWS)
             .map(|i| DeviceAirborneSource {
-                identity: [source.identity[0], source.identity[1], source.identity[2], (i % 3) as i32, 0],
+                identity: [
+                    source.identity[0],
+                    source.identity[1],
+                    source.identity[2],
+                    (i % 3) as i32,
+                    0,
+                    0,
+                ],
                 ..source
             })
             .collect();
@@ -335,57 +345,120 @@ mod tests {
             for departure in [false, true] {
                 for lateral in [0.0, 200.0, 1_000.0, 8_000.0] {
                     for relative_alt in [-50.0, 100.0, 500.0, 9_000.0] {
-                        let source = source_beside(mpdl, class, departure, lateral, relative_alt);
-                        let endpoints = source.endpoints;
-                        let dy = f64::from(source.physical[2]);
-                        let expected = air::segment_energy_kernel::<false>(
-                            (f64::from(endpoints[1]) - 14.0) * mpdl,
-                            (f64::from(endpoints[0]) - 50.0) * air::M_PER_DEG_LAT,
-                            0.0,
-                            dy,
-                            0.0,
-                            relative_alt + 4.0,
-                            1.0 / (dy * dy),
-                            dy,
-                            4.0,
-                            luts,
-                            class,
-                            departure,
-                            0.0,
-                            installation,
-                            a,
-                            b,
-                            c,
-                            false,
-                            16_000.0 * 16_000.0,
-                            -100_000.0,
-                            -100_000.0,
-                            Some(&rx.terrain),
-                            Some(&rx.buildings),
-                        )
-                        .map(|result| {
-                            noise_compute::propagation::iso9613::fast_exp_f64(
-                                result.sel * std::f64::consts::LN_10 * 0.1,
-                            ) / air::PERIOD_SECONDS[0]
-                        })
-                        .unwrap_or(0.0);
-                        let sources = DeviceBuffer::from_slice(&[source])?;
-                        let actual = f64::from(
-                            gpu_powers(&sources, &UploadedScreen::new(std::slice::from_ref(&rx))?, &npd, &weights, 1)?[0],
-                        );
-                        let difference = if actual == 0.0 && expected == 0.0 {
-                            0.0
-                        } else {
-                            (10.0 * (actual / expected).log10()).abs()
-                        };
-                        assert!(difference < 0.1, "class={class} departure={departure} lateral={lateral} altitude={relative_alt}: {difference} dB, {actual} vs {expected}");
-                        cases += 1;
+                        // (power_row, power_w, heli_db): pinned row, an interior
+                        // Eq. 4-3 lerp, and a helicopter correction. Row 0 with
+                        // w 0.5 is safe on every class: pinned rows repeat the
+                        // anchor curve, thrust classes have ≥ 2 rows.
+                        for (power_row, power_w, heli_db) in
+                            [(0u8, 0.0, 0.0), (0, 0.5, 0.0), (0, 0.0, -5.0)]
+                        {
+                            let mut source =
+                                source_beside(mpdl, class, departure, lateral, relative_alt);
+                            source.physical[11] = power_w as f32;
+                            source.physical[12] = heli_db as f32;
+                            source.identity[5] = i32::from(power_row);
+                            cases += parity_case(
+                                &source,
+                                mpdl,
+                                luts,
+                                class,
+                                departure,
+                                lateral,
+                                relative_alt,
+                                installation,
+                                a,
+                                b,
+                                c,
+                                power_row,
+                                power_w,
+                                heli_db,
+                                &rx,
+                                &npd,
+                                &weights,
+                            )?;
+                        }
                     }
                 }
             }
         }
         eprintln!("aircraft CPU/CUDA parity: {cases} cases below 0.1 dB");
         Ok(())
+    }
+
+    /// One CPU-vs-CUDA comparison; returns 1 on success.
+    #[allow(clippy::too_many_arguments)]
+    fn parity_case(
+        source: &DeviceAirborneSource,
+        mpdl: f64,
+        luts: &air::NpdLuts,
+        class: usize,
+        departure: bool,
+        lateral: f64,
+        relative_alt: f64,
+        installation: air::Installation,
+        a: f64,
+        b: f64,
+        c: f64,
+        power_row: u8,
+        power_w: f64,
+        heli_db: f64,
+        rx: &ReceiverScreening,
+        npd: &DeviceBuffer<f32>,
+        weights: &DeviceBuffer<f32>,
+    ) -> Result<u32> {
+        let endpoints = source.endpoints;
+        let dy = f64::from(source.physical[2]);
+        let expected = air::segment_energy_kernel::<false>(
+            (f64::from(endpoints[1]) - 14.0) * mpdl,
+            (f64::from(endpoints[0]) - 50.0) * air::M_PER_DEG_LAT,
+            0.0,
+            dy,
+            0.0,
+            relative_alt + 4.0,
+            1.0 / (dy * dy),
+            dy,
+            4.0,
+            luts,
+            class,
+            departure,
+            0.0,
+            installation,
+            power_row,
+            power_w,
+            heli_db,
+            a,
+            b,
+            c,
+            false,
+            16_000.0 * 16_000.0,
+            -100_000.0,
+            -100_000.0,
+            Some(&rx.terrain),
+            Some(&rx.buildings),
+        )
+        .map(|result| {
+            noise_compute::propagation::iso9613::fast_exp_f64(
+                result.sel * std::f64::consts::LN_10 * 0.1,
+            ) / air::PERIOD_SECONDS[0]
+        })
+        .unwrap_or(0.0);
+        let sources = DeviceBuffer::from_slice(&[*source])?;
+        let actual = f64::from(
+            gpu_powers(
+                &sources,
+                &UploadedScreen::new(std::slice::from_ref(rx))?,
+                npd,
+                weights,
+                1,
+            )?[0],
+        );
+        let difference = if actual == 0.0 && expected == 0.0 {
+            0.0
+        } else {
+            (10.0 * (actual / expected).log10()).abs()
+        };
+        assert!(difference < 0.1, "class={class} departure={departure} lateral={lateral} altitude={relative_alt} row={power_row} w={power_w} heli={heli_db}: {difference} dB, {actual} vs {expected}");
+        Ok(1)
     }
 }
 

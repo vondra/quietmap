@@ -4,7 +4,7 @@ use super::*;
 use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind};
 #[test]
 fn cuda_airborne_layout_and_original_horizon_entries() {
-    assert_eq!(std::mem::size_of::<DeviceAirborneSource>(), 80);
+    assert_eq!(std::mem::size_of::<DeviceAirborneSource>(), 92);
     assert_eq!(std::mem::size_of::<DeviceAirborneReceiver>(), 32);
     assert_eq!(std::mem::offset_of!(DeviceAirborneReceiver, altitude), 24);
     struct Flat;

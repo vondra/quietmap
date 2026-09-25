@@ -6,15 +6,15 @@
 
 struct AirborneSource {
     float endpoints[4]; // start lat/lon, end lat/lon at prepared f32 precision
-    float physical[11];
-    int identity[5]; // installation, class, departure, period, secondary-only provenance
+    float physical[13]; // + power_w [11], heli_db [12]
+    int identity[6]; // installation, class, departure, period, secondary-only provenance, power_row
 };
 struct AirborneReceiver {
     double latitude, longitude, metres_per_longitude_degree;
     float altitude;
     unsigned int padding;
 };
-static_assert(sizeof(AirborneSource) == 80);
+static_assert(sizeof(AirborneSource) == 92);
 static_assert(sizeof(AirborneReceiver) == 32);
 
 template<typename Source>
@@ -96,7 +96,8 @@ __global__ void airborne_independent_parts(
             float screen_geometry[7];
             airborne_screen_geometry(source, rx, screen_geometry);
             if (aircraft_sel<float, true>(ax, ay, dx, source.physical, source.identity[1], source.identity[2],
-                             source.identity[0], rx.altitude, npd, npd + 2 * NPD_NC * (NPD_NB + 1),
+                             source.identity[0], source.identity[5], rx.altitude, npd,
+                             npd + 2 * NPD_NC * NPD_NR * (NPD_NB + 1),
                              receiver, screen, screen_geometry, &sel)) {
                 energy[source.identity[3]] += aircraft_fast_exp(sel * (float)LN10 * 0.1f) * weights[source.identity[4]];
             }

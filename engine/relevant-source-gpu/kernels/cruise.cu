@@ -6,14 +6,14 @@
 
 struct CruiseSource {
     double geography[6];
-    double physical[11];
-    int identity[4];
+    double physical[13]; // + power_w [11], heli_db [12]
+    int identity[5]; // installation, class, departure, period, power_row
 };
 struct CruiseReceiver {
     double latitude, longitude, model_metres_per_longitude_degree, altitude;
     double gate_metres_per_longitude_degree;
 };
-static_assert(sizeof(CruiseSource) == 152);
+static_assert(sizeof(CruiseSource) == 176);
 static_assert(sizeof(CruiseReceiver) == 40);
 
 __device__ double cruise_longitude_delta(double from, double to) {
@@ -44,7 +44,8 @@ __global__ void cruise_parts(const CruiseSource* sources, unsigned int source_co
         double sel;
         const AirborneScreen no_screen{};
         if (aircraft_sel<double, false>(ax, ay, dx, source.physical, source.identity[1], source.identity[2],
-            source.identity[0], rx.altitude, npd, npd + 2 * NPD_NC * (NPD_NB + 1),
+            source.identity[0], source.identity[4], rx.altitude, npd,
+            npd + 2 * NPD_NC * NPD_NR * (NPD_NB + 1),
             0, no_screen, nullptr, &sel)) {
             energy[source.identity[3]] += aircraft_fast_exp(sel * LN10 * 0.1) * source.geography[5];
         }

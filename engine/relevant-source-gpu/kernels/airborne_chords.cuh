@@ -3,10 +3,10 @@
 #include <climits>
 struct ChordSource {
     float endpoints[4];
-    double physical[11];
-    int identity[5];
+    double physical[13]; // + power_w [11], heli_db [12]
+    int identity[6]; // installation, class, departure, period, secondary-only provenance, power_row
 };
-static_assert(sizeof(ChordSource) == 128);
+static_assert(sizeof(ChordSource) == 144);
 
 __global__ void airborne_chord_evaluate(const ChordSource* sources, unsigned int rows,
     const AirborneReceiver* receivers, const double* npd, AirborneScreen screen,
@@ -27,8 +27,8 @@ __global__ void airborne_chord_evaluate(const ChordSource* sources, unsigned int
         double ay = ((double)source.endpoints[0] - rx.latitude) * MLAT;
         double by = ((double)source.endpoints[2] - rx.latitude) * MLAT;
         double dx = source.physical[1] * rx.metres_per_longitude_degree;
-        double f[11];
-        for (int i = 0; i < 11; i++) f[i] = source.physical[i];
+        double f[13];
+        for (int i = 0; i < 13; i++) f[i] = source.physical[i];
         f[2] = by - ay; // Keep the canonical CPU subtraction order.
         double length_squared = dx * dx + f[2] * f[2];
         double cross = ax * f[2] - ay * dx;
@@ -44,7 +44,8 @@ __global__ void airborne_chord_evaluate(const ChordSource* sources, unsigned int
             (float)(f[0] + physical_t * f[3] - rx.altitude)};
         double sel, free_sel;
         if (aircraft_sel<double, true, false>(ax, ay, dx, f, source.identity[1], source.identity[2],
-            source.identity[0], (double)rx.altitude, npd, npd + 2 * NPD_NC * (NPD_NB + 1),
+            source.identity[0], source.identity[5], (double)rx.altitude, npd,
+            npd + 2 * NPD_NC * NPD_NR * (NPD_NB + 1),
             receiver, screen, geometry, &sel, &free_sel)) {
             levels[index * 2] = sel;
             levels[index * 2 + 1] = free_sel;
