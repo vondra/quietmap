@@ -24,3 +24,5 @@ pub mod tile_source_incidence;
 
 #[cfg(all(test, feature = "gpu"))]
 mod raster_contract_tests;
+#[cfg(feature = "gpu")]
+pub mod meteorology;

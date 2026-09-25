@@ -507,3 +507,46 @@ models consume them; an enclosing area must not duplicate a line's emission.
 A physical building also retains its separate source row and has no generic
 residential emission. Buildings keep `buildings_v5`, the existing roof/carport
 use code and the unchanged height ladder.
+
+## Meteorology climatology input
+
+The meteorology producer streams the fixed 1991–2020 ERA5 normal at three-hour UTC
+steps. Every 0.25° node uses `aircraft_extract::period::resolve_tz` for historical
+local civil END periods, including daylight-saving transitions. Solar elevation,
+not the END period, selects the day/night stability class. Nord2000 weather
+classes use Eurasto (2006) Tables 1–7 with the dimensionally consistent logarithmic
+profile coefficient A: its temperature term does not divide by Monin–Obukhov L.
+A class is favourable when its representative c(10 m) − c(0) is positive.
+
+`meteorology-contract.json` defines the producer/reader metadata in one place.
+`meteorology.arrow` contains all 721 × 1440 nodes in north-to-south, then
+0–359.75° longitude order. `x,y` are UInt16 ERA5 node indices. Each period has
+`p_*` (16 UInt8 percentages), `p_max_*` (the row maximum), `alpha_mean_*` and
+`alpha_variance_*` (eight Float32 values each, population moments of hourly
+ISO 9613-1 coefficients in dB/km). Midbands follow ISO 266; absorption uses
+hourly temperature, dewpoint-derived liquid-water relative humidity and surface
+pressure. No missing observations are silently discarded. Sector zero is sound
+travelling north, with centres every 22.5° clockwise; meteorological wind-from
+bearings must be reversed. Exact hourly favourable counts determine stored p;
+retained 20° wind histograms do not quantize that calculation.
+
+`raster_reader::meteorology::Meteorology::at` interpolates moments and probabilities
+bilinearly at the receiver, wrapping longitude. `MeteorologySample::probability`
+interpolates circularly between sector centres. Invalid coordinates, incomplete
+global tables, nulls, nonfinite values, invalid percentages and mismatched metadata
+are errors. Global maxima conservatively bound any spatial interpolation. The
+source reader requires the file at the prepared-year root and loads it once;
+release assembly must link or copy the matching raster-release file there.
+`DeviceMeteorology::upload` transfers the same global 240-byte node records once;
+kernel consumption and the period-specific propagation formula belong to the
+coupled physics change. This input change does not itself alter propagation.
+
+The streamed producer retains period × wind-class × stability-class × direction
+histograms, exact favourable counts, Welford absorption moments and SHA-256 chunk
+receipts. Two alternating, fsynced checkpoint slots bind these statistics to a
+SHA-256-verified manifest prefix and the source, timezone and producer identities.
+The producer snapshots the actual historical TZif rules and reuses them on restart;
+Python dependency versions are also bound to the checkpoint identity. Restart replays
+only the uncommitted interval (at most seven days); it cannot count that interval
+twice. Arrow publication is atomic and only follows the full normal. The source
+licence, acquisition receipts, code and table digests enter the release identity.
