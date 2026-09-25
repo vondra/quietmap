@@ -200,8 +200,7 @@ pub fn point_inside_footprint(
 /// is built from: kind=0 rows with a valid `osm_id` are the OSM building stock
 /// (the merge's emission rows — the old buildings.arrow subsequence), matched
 /// at their emission centroid where the merge kept one, else the screening
-/// centroid. The rule itself lives in [`noise_compute::low_profile`] (shared
-/// with the tile painter's loader, so popup and tiles cap the same footprints).
+/// centroid. The rule itself lives in [`noise_compute::low_profile`].
 ///
 fn low_profile_from_structures(bytes: &[u8], label: &Path) -> Result<LowProfileLookup, String> {
     let reader = FileReader::try_new(Cursor::new(bytes), None)
@@ -416,7 +415,7 @@ pub fn build_obstacle_index_from_arrow_bytes(
         let id = next_id;
         match kinds.value(i) {
             STRUCTURE_KIND_BUILDING => {
-                let (polygons, height, _, _) = building_geometry_and_height(
+                let (polygons, height) = building_geometry_and_height(
                     batch,
                     i,
                     f32::from(heights.value(i)),
@@ -475,7 +474,7 @@ fn building_geometry_and_height(
     row: usize,
     raw_height: f32,
     low_profile: &LowProfileLookup,
-) -> Result<(grid::poly::GridPolygons, f32, u8, bool), String> {
+) -> Result<(grid::poly::GridPolygons, f32), String> {
     let polygons = col_binary(batch, "geom")
         .filter(|column| !column.is_null(row))
         .and_then(|column| grid::poly::decode_grid_polygons(column.value(row)))
@@ -509,7 +508,7 @@ fn building_geometry_and_height(
             );
         }
     }
-    Ok((polygons, height, height_source, height < raw_height))
+    Ok((polygons, height))
 }
 
 /// One logical footprint with all polygon rings in lat/lon and as-used height.
@@ -520,10 +519,6 @@ pub struct FootprintView {
     pub polygons: Vec<Vec<Vec<(f64, f64)>>>,
     #[serde(rename = "h")]
     pub height_m: f32,
-    #[serde(rename = "t")]
-    pub height_source: u8,
-    #[serde(rename = "c")]
-    pub capped: bool,
 }
 
 /// Footprints within the existing padded-centroid display gate, at as-used heights.
@@ -610,7 +605,7 @@ pub fn footprints_in_bbox(
                 {
                     continue;
                 }
-                let (polygons, height_m, height_source, capped) = building_geometry_and_height(
+                let (polygons, height_m) = building_geometry_and_height(
                     &batch,
                     i,
                     f32::from(heights.value(i)),
@@ -633,8 +628,6 @@ pub fn footprints_in_bbox(
                         })
                         .collect(),
                     height_m,
-                    height_source,
-                    capped,
                 });
             }
         }
@@ -835,8 +828,6 @@ mod tests {
             "h={}",
             fps[0].height_m
         );
-        assert_eq!(fps[0].height_source, 0);
-        assert!(!fps[0].capped);
         assert_eq!(fps[0].polygons[0][0].len(), 5);
         assert!((fps[0].polygons[0][0][0].0 - LAT).abs() < 0.0001);
         assert!((fps[0].polygons[0][0][0].1 - LON).abs() < 0.0001);

@@ -1,5 +1,4 @@
-"""Resume stamps bind every selected input, including explicit absence; prepared per-square
-inputs by their bytes."""
+"""The resume stamp binds every selected input by its bytes, including explicit absence."""
 
 from functools import lru_cache
 import hashlib
@@ -55,19 +54,13 @@ def _digest_of_each_file(input_files, describe_file):
     return hashlib.sha256(json.dumps(described, sort_keys=True).encode()).hexdigest()
 
 
-def input_stamps(input_files):
-    """(fingerprint, content digest) of the inputs as they are now. Enrichers rewrite the square's
-    buildings.arrow in place at the same size, and file mtimes move in 4 ms ticks (2026-09-24:
-    200 same-size rewrites left 14 distinct mtimes), so size and mtime cannot tell those bytes
-    apart: both stamps identify them by content. The fingerprint binds sources by path, size and
-    mtime; the content digest is path-free, so a byte-identical copy elsewhere is the same input."""
-    square_files = {file: content_digest_of_file(file) for file in input_files["osm"]}
-
-    def fingerprint(group, file):
-        return square_files[file] if group == "osm" else path_size_and_mtime(file)
-
+def input_content_digest(input_files):
+    """Path-free content digest of the inputs as they are now: a byte-identical copy elsewhere is
+    the same input. Enrichers rewrite the square's buildings.arrow in place at the same size, and
+    file mtimes move in 4 ms ticks (2026-09-24: 200 same-size rewrites left 14 distinct mtimes),
+    so the square's own files are digested every time; shared sources once per process."""
     def content(group, file):
-        return square_files[file] if group == "osm" else \
+        return content_digest_of_file(file) if group == "osm" else \
             content_digest_of_path_size_and_mtime(path_size_and_mtime(file))
 
-    return _digest_of_each_file(input_files, fingerprint), _digest_of_each_file(input_files, content)
+    return _digest_of_each_file(input_files, content)

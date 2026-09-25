@@ -8,8 +8,8 @@
 //! the cell's `buildings.arrow`) DOES know the class; a defaulted obstacle whose
 //! centroid sits within `MATCH_M` of a low-profile OSM building with a
 //! comparable footprint area is capped at `LOW_HEIGHT_M` (= one floor, the same
-//! constant family as the ingest ladder). Applied at LOAD time so the whole world heals without
-//! re-staging the obstacle store. Deterministic despite the unordered buckets:
+//! constant family as the ingest ladder). Applied where the obstacle index and the
+//! footprint overlay are built from `structures.arrow`. Deterministic despite the unordered buckets:
 //! the answer is the CONSTANT `LOW_HEIGHT_M` on any match, so which candidate
 //! matched first cannot change it.
 //!
@@ -18,11 +18,10 @@
 //! average; `square_store::structure_contract::height_is_per_building` decides).
 //! Mapped, floor-derived, surveyed and Overture heights never cap.
 //!
-//! The rule lives HERE because two loaders apply it — the tile painter's
-//! `source_loader_structure` and the popup's `structure_store` — and they must
-//! apply it identically or popup ≠ tiles at every capped footprint. Only the
-//! Arrow plumbing differs between them, and that stays in each crate; the class
-//! list, the match geometry and the cap are one definition.
+//! `source_reader::structure_store` applies it when it builds a square's obstacle
+//! index (which popup, painter and façade-exposure stage all map) and when it
+//! draws the footprint overlay; the class list, the match geometry and the cap
+//! are one definition.
 
 use std::collections::HashMap;
 

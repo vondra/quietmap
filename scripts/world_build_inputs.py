@@ -198,9 +198,9 @@ def verify_prepared_raster_links(source, prepared):
 def stamps_the_point_query_expects():
     """layer -> {metadata key: value}. The point query answers another stamp by serving without
     the layer (structures: by refusing), so this audit is the gate that keeps such a file out of a
-    release. Most stamps are read from the reader's own constants; the structures BUILDER stamp is
-    read from its producer, because the reader cannot see it — builder 1 and builder 2 both write
-    `structures_v4`, so only this audit tells a repaired square from a stale one."""
+    release. Most stamps are read from the reader's own constants; the structures builder stamp is
+    read from its producer, because the reader cannot see it — a builder change that keeps the
+    schema keeps the contract, so only this audit tells a rebuilt square from a stale one."""
     reader = Path(__file__).resolve().parent.parent / 'engine/square-store/src'
     def constants(file):
         return {name: value.encode() for name, value in
@@ -209,8 +209,6 @@ def stamps_the_point_query_expects():
     osm = constants('osm_contract.rs')
     grid = {b'grid': store['GRID_CONTRACT_Z30']}
     version = {b'schema_version': aircraft['SCHEMA_VERSION']}
-    # The structures SCHEMA did not change when the builder stopped screening areas without a
-    # building tag, so only the builder stamp tells a repaired square from a stale one.
     builder = re.search(r'BUILDER_VERSION = "([^"]+)"',
                         (Path(__file__).parent / 'structures/structure_merge.py').read_text())
     return {

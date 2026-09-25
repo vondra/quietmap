@@ -4,9 +4,10 @@
 //! Only absent optional files are empty; opening or decoding an existing file
 //! fails the query on error. A stale structures stamp refuses the square (the
 //! table is the screening geometry); a stale leisure, ships or airborne stamp
-//! drops that emission layer and names it in the answer. The structures BUILDER
-//! stamp is not one of these: builder 1 and builder 2 both write `structures_v4`,
-//! and only the world audit refuses the older one before a release is served.
+//! drops that emission layer and names it in the answer. The structures builder
+//! stamp (`builder_version`) is not one of these: a builder change that keeps the
+//! schema keeps the contract, so only the world audit refuses an older builder's
+//! square before a release is served.
 //!
 //! Batches decode through `FileDecoder` over a `Buffer` that owns the mapping,
 //! so every decoded array is a slice of the file-backed pages the kernel can

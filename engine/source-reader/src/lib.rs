@@ -273,9 +273,8 @@ fn source_square_names(squares: Result<Vec<grid::Square>, String>) -> napi::Resu
 /// Obstacle footprints intersecting a bbox with their AS-USED heights (after
 /// the low-profile cap) — the building-height debug overlay's data source,
 /// so the map shows exactly what the propagation model screens with. JSON:
-/// [{p: [polygon rings…], h, t, c}] (rings are [lat,lon] vertices, exterior
-/// first, then holes; h = height m, t = the structures `height_source` code
-/// (square_store::structure_contract), c = low-profile-capped).
+/// [{p: [polygon rings…], h}] (rings are [lat,lon] vertices, exterior first,
+/// then holes; h = height m).
 pub fn query_obstacle_footprints(
     south: f64,
     west: f64,
