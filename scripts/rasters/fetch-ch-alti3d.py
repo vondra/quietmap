@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fetch swissALTI3D 2 m tiles over the official STAC catalogue."""
 import argparse
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -10,8 +11,8 @@ import urllib.request
 
 from osgeo import gdal
 
-from dem_windows import polite_sleep
-from terrain_io import fetch, provenance, publish_source_json
+from dem_windows import download_bytes, polite_sleep
+from terrain_io import digest, provenance, publish_bytes, publish_json, publish_source_json, utc_now
 
 gdal.UseExceptions()
 
@@ -59,13 +60,22 @@ def fetch_item(output, item, position, total):
     target = output / PROVIDER / name
     receipt = Path(str(target) + '.provenance.json')
     if target.exists() and receipt.exists():
-        return provenance(target)
+        record = provenance(target)
+        if record['url'] != body['href']:
+            raise ValueError(f'retained tile references another parent: {target}')
+        return record
     started = time.monotonic()
     checksum = (body.get('file:checksum') or '')
-    record = fetch(output, PROVIDER, name, body['href'], LICENCE, LICENCE_URL, '2026-09-25',
-                   'swissALTI3D 2 m tile; LV95 (EPSG:2056), LN02 heights (EPSG:5728); '
-                   f'STAC parent checksum {checksum}; raw bytes retained.',
-                   expected_sha256=checksum if len(checksum) == 64 else None)
+    payload, _ = download_bytes(body['href'])
+    if len(checksum) == 64 and hashlib.sha256(payload).hexdigest() != checksum:
+        raise ValueError(f'swissALTI3D checksum differs from STAC catalogue: {item["id"]}')
+    publish_bytes(target, payload)
+    record = dict(url=body['href'], fetched_utc=utc_now(), sha256=digest(target),
+                  bytes=target.stat().st_size, licence=LICENCE, licence_url=LICENCE_URL,
+                  terms_checked_utc='2026-09-25', raw_bytes_retained=True,
+                  notes=('swissALTI3D 2 m tile; LV95 (EPSG:2056), LN02 heights (EPSG:5728); '
+                         f'STAC parent checksum {checksum}; raw bytes retained.'))
+    publish_json(receipt, record)
     dataset = gdal.Open(str(target))
     transform = dataset.GetGeoTransform()
     if (dataset.RasterXSize, dataset.RasterYSize) != (500, 500):

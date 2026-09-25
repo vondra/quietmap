@@ -174,6 +174,57 @@ class CHDedupeTest(unittest.TestCase):
                                        'properties': {'datetime': '2019-01-01T00:00:00Z'}}])
 
 
+class CHFetchTest(unittest.TestCase):
+    ITEM = {'id': 'swissalti3d_2019_2485-1109',
+            'assets': {'swissalti3d_2019_2485-1109_2_2056_5728.tif':
+                       {'href': 'https://example.invalid/tile'}}}
+
+    def payload(self):
+        mem = gdal.GetDriverByName('MEM').Create('', 500, 500, 1, gdal.GDT_Float32)
+        mem.SetGeoTransform((2485000, 2, 0, 1110000, 0, -2))
+        mem.GetRasterBand(1).SetNoDataValue(-9999)
+        mem.GetRasterBand(1).WriteArray(np.full((500, 500), 412.5, dtype=np.float32))
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'tile.tif')
+            gdal.Translate(path, mem, format='GTiff')
+            return Path(path).read_bytes()
+
+    def test_fetches_tile_with_verified_receipt(self):
+        fetch_ch = load_hyphenated('fetch-ch-alti3d')
+        calls = []
+        payload = self.payload()
+
+        def fake_download(url):
+            calls.append(url)
+            return payload, {}
+
+        fetch_ch.download_bytes = fake_download
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = fetch_ch.fetch_item(root, self.ITEM, 1, 1)
+            target = root / fetch_ch.PROVIDER / 'swissalti3d_2019_2485-1109_2_2056_5728.tif'
+            self.assertEqual(record['url'], 'https://example.invalid/tile')
+            self.assertTrue(record['raw_bytes_retained'])
+            self.assertEqual(record['bytes'], target.stat().st_size)
+            dataset = gdal.Open(str(target))
+            self.assertEqual(dataset.GetRasterBand(1).ReadAsArray()[0, 0], 412.5)
+            resumed = fetch_ch.fetch_item(root, self.ITEM, 1, 1)
+            self.assertEqual(resumed, record)
+            self.assertEqual(len(calls), 1)
+
+    def test_rejects_tile_of_another_parent(self):
+        fetch_ch = load_hyphenated('fetch-ch-alti3d')
+        fetch_ch.download_bytes = lambda url: (self.payload(), {})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fetch_ch.fetch_item(root, self.ITEM, 1, 1)
+            other = {'id': self.ITEM['id'],
+                     'assets': {'swissalti3d_2019_2485-1109_2_2056_5728.tif':
+                                {'href': 'https://example.invalid/elsewhere'}}}
+            with self.assertRaisesRegex(ValueError, 'another parent'):
+                fetch_ch.fetch_item(root, other, 1, 1)
+
+
 class SnapWindowTest(unittest.TestCase):
     def test_snaps_to_native_grid(self):
         crop = load_hyphenated('crop-gedtm')
