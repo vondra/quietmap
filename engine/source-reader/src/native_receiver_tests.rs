@@ -258,9 +258,9 @@ pub(super) fn building_popup_uses_its_stored_facade_receiver_and_keeps_aircraft_
     // it from another point; outdoor clicks are unaffected.
     std::fs::remove_file(click_dir.join("facade_exposure.arrow")).unwrap();
     super::reset_store(root);
-    let missing = crate::query_noise_at_point(lat, lon).unwrap_err();
+    let missing = crate::query_noise_at_point(lat, lon, None).unwrap_err();
     assert!(missing.to_string().contains("building exposure missing"), "{missing}");
-    assert!(crate::query_noise_at_point(facade_lat, facade_lon).is_ok());
+    assert!(crate::query_noise_at_point(facade_lat, facade_lon, None).is_ok());
     // The screening table is never dropped: a stale stamp refuses the popup end to end,
     // even though its paired index still maps.
     arrow_io::write_airborne(&path, std::slice::from_ref(&row), &fx::sampling_window(12, 0)).unwrap();
