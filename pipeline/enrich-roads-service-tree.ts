@@ -9,18 +9,13 @@ import { applyRoadAadt, type RoadAadt } from './lib/roads-arrow.js'
 import {bakedRoadCountryReader, segmentGeometryReader} from './lib/prepared-grid.js'
 import { SOURCE_ID_SERVICE_TREE_HEURISTIC } from './lib/source-ids.generated.js'
 import { fleetForIso, LOCAL_MEDIUM_SHARE, LOCAL_HEAVY_SHARE, type CountryFleet } from './lib/country-fleet.js'
-import { buildGraph, findComponents, flowAccumulate, type ServiceRoad } from './lib/service-tree-flow.js'
+import { buildGraph, findComponents, serviceStreetDemands, type ServiceRoad } from './lib/service-tree-flow.js'
 import { assignBuildingsGlobally, readServiceBuildings } from './lib/service-tree-buildings.js'
+import { localStreetAadt } from './lib/local-street-demand.js'
 import { runSquareSteps } from './lib/square-pool.js'
 
-// Historical empirical local-road caps; class 7's 400/day protects apartment
-// driveways from runaway routed flow. Tracks and highway links are not eligible.
-export const SERVICE_TREE_CAP_PER_CLASS: Readonly<Record<number, number>> = { 5: 1200, 6: 250, 7: 400, 9: 2000 }
-
 export function splitAADT(trips: number, fleet: CountryFleet): RoadAadt {
-  // Round only after float accumulation. The historical 20/day floor represents
-  // the quietest cul-de-sac; medium/heavy local shares have no national signal.
-  const total = Math.round(Math.max(trips, 20))
+  const total = Math.round(trips)
   const medium = Math.round(total * LOCAL_MEDIUM_SHARE), heavy = Math.round(total * LOCAL_HEAVY_SHARE)
   const moto = Math.round(total * fleet.motoTrafficShare)
   return { light: total - medium - heavy - moto, medium, heavy, moto, sourceId: SOURCE_ID_SERVICE_TREE_HEURISTIC,
@@ -29,12 +24,15 @@ export function splitAADT(trips: number, fleet: CountryFleet): RoadAadt {
 
 export function readServiceRoads(table: Table): { roads: ServiceRoad[]; fleets: CountryFleet[]; unknownCountryRows: number } {
   const geometry = segmentGeometryReader(table), countries = bakedRoadCountryReader(table)
-  for (const [name, bits] of [['road_class', 8], ['source_id', 16], ['access', 8]] as const) {
+  for (const [name, bits] of [['road_class', 8], ['source_id', 16], ['access', 8], ['built_up', 8]] as const) {
     const vector = table.getChild(name)
     if (!vector || !DataType.isInt(vector.type) || vector.type.isSigned || vector.type.bitWidth !== bits || vector.nullCount) {
       throw new Error(`invalid service-tree road column ${name}`)
     }
   }
+  const names = table.getChild('name'), osmIds = table.getChild('osm_id')
+  if (!names || !osmIds || !DataType.isInt(osmIds.type) || osmIds.type.bitWidth !== 64 ||
+      !osmIds.type.isSigned || osmIds.nullCount) throw new Error('invalid service-tree name/osm_id columns')
   const tunnel = table.getChild('tunnel'), length = table.getChild('length_m')
   if (!tunnel || !DataType.isBool(tunnel.type) || tunnel.nullCount || !length || !DataType.isFloat(length.type) || length.nullCount) {
     throw new Error('invalid service-tree tunnel/length_m columns')
@@ -42,6 +40,8 @@ export function readServiceRoads(table: Table): { roads: ServiceRoad[]; fleets: 
   // One flat array per column: `getChild` and `get` on a 1024-batch table cost more than the whole graph walk.
   const roadClasses = table.getChild('road_class')!.toArray() as Uint8Array, lengths = length.toArray() as Float32Array
   const sourceIds = table.getChild('source_id')!.toArray() as Uint16Array, accesses = table.getChild('access')!.toArray() as Uint8Array
+  const builtUp = table.getChild('built_up')!.toArray() as Uint8Array
+  const ways = osmIds.toArray() as BigInt64Array, streetNames = Array.from(names) as (string | null)[]
   const tunnels = Array.from(tunnel) as boolean[], endpoints = geometry.tableLocalEndpointNumbers()
   let unknownCountryRows = 0
   const fleets: CountryFleet[] = []
@@ -51,9 +51,10 @@ export function readServiceRoads(table: Table): { roads: ServiceRoad[]; fleets: 
     if (iso === undefined) unknownCountryRows++
     fleets.push(fleetForIso(iso))
     const roadClass = roadClasses[index], metres = lengths[index]
-    if (roadClass > 12 || !Number.isFinite(metres) || metres < 0) throw new Error(`invalid service-tree road ${index}`)
+    if ((streetNames[index] !== null && typeof streetNames[index] !== 'string') || roadClass > 12 || builtUp[index] > 2 || !Number.isFinite(metres) || metres < 0) throw new Error(`invalid service-tree road ${index}`)
     const { startLat, startLon, endLat, endLon } = geometry.row(index)
     return { startLat, startLon, endLat, endLon, startNode: endpoints.start[index], endNode: endpoints.end[index],
+      name: streetNames[index] ?? '', osmId: ways[index], builtUp: builtUp[index],
       roadClass, length: metres, sourceId: sourceIds[index], access: accesses[index], tunnel: tunnels[index] }
   })
   return { roads, fleets, unknownCountryRows }
@@ -70,16 +71,17 @@ export async function enrichServiceTreeSquare(directory: string) {
     const eligible: number[] = []
     for (const component of components) for (const index of component.segments) eligible.push(index)
     const loads = assignBuildingsGlobally(roads, eligible, buildings), aadt = new Map<number, RoadAadt>()
-    // A valid empty building table does not invent the 20/day floor. Retractions
-    // clear obsolete self-stamps on eligible or excluded roads when demand is absent.
-    if (buildings.length) for (const component of components) {
-      const flow = flowAccumulate(component, graph.segNodeIds, { get: index => roads[index].length }, loads, index => fleets[index])
-      for (const [index, trips] of flow) {
-        aadt.set(index, splitAADT(Math.min(trips, SERVICE_TREE_CAP_PER_CLASS[roads[index].roadClass]), fleets[index]))
-      }
+    const { rowTrips, streets } = serviceStreetDemands(roads, graph, components, loads, fleets)
+    for (const [index, street] of streets) {
+      const road = roads[index]
+      // Class 7 keeps the historical per-row 20..400/day rule and empty-building retraction.
+      if (road.roadClass === 7 && !buildings.length) continue
+      const trips = road.roadClass === 7 ? Math.max(20, Math.min(rowTrips[index], 400))
+        : localStreetAadt(road.roadClass, road.builtUp, street)
+      aadt.set(index, splitAADT(trips, fleets[index]))
     }
     const applied = applyRoadAadt(table, roadsPath, (_row, index) => aadt.get(index) ?? null,
-      undefined, undefined, { sourceIds: [SOURCE_ID_SERVICE_TREE_HEURISTIC], when: (_row, index) => !buildings.length || graph.eligible[index] === 0 })
+      undefined, undefined, { sourceIds: [SOURCE_ID_SERVICE_TREE_HEURISTIC], when: (_row, index) => !aadt.has(index) })
     counts = { ...counts, ...applied.result, unknownCountryRows }
     return applied.table
   })
