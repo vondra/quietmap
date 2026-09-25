@@ -97,18 +97,14 @@ fn converged_sources(original: &[SurfaceSource], receivers: &[[f32; 2]]) -> Vec<
     sources
 }
 
-/// The popup's façade receiver and its per-layer Lden, in process.
+/// The popup physics at the pixel's own outdoor receiver and its per-layer Lden, in process
+/// (the painter evaluates the same point; building pixels copy a stored façade row instead).
 fn popup(prepared: &std::path::Path, rasters: &raster_reader::RealRasters, lat: f64, lon: f64) -> Result<([f64; 2], [f64; 5])> {
-    let load = |lat, lon| source_reader::structure_store::load_obstacle_set(prepared, lat, lon).map_err(anyhow::Error::msg);
-    let mut obstacles = load(lat, lon)?;
-    let (facade_lat, facade_lon, _) = source_reader::structure_store::locate_facade_receiver(&obstacles, lat, lon);
-    if (facade_lat, facade_lon) != (lat, lon) {
-        obstacles = load(facade_lat, facade_lon)?;
-    }
-    let sources = source_reader::collect_sources_at_point(prepared, facade_lat, facade_lon).map_err(anyhow::Error::msg)?;
+    let obstacles = source_reader::structure_store::load_obstacle_set(prepared, lat, lon).map_err(anyhow::Error::msg)?;
+    let sources = source_reader::collect_sources_at_point(prepared, lat, lon).map_err(anyhow::Error::msg)?;
     let checked = raster_reader::CheckedRasters::new(rasters);
-    let sampler = noise_compute::propagation::obstacle_index::VectorReflectionSampler { inner: &checked, set: &obstacles };
-    let receiver = Receiver::new(facade_lat, facade_lon, sampler.elevation(facade_lat, facade_lon));
+    let sampler = noise_compute::propagation::obstacle_index::VectorReflectionSampler { inner: &checked, set: &obstacles, own_footprint: None };
+    let receiver = Receiver::new(lat, lon, sampler.elevation(lat, lon));
     let result = noise_compute::compute_at_point(
         &receiver,
         &sources.roads,
@@ -124,7 +120,7 @@ fn popup(prepared: &std::path::Path, rasters: &raster_reader::RealRasters, lat: 
     let levels = LAYERS.map(|(kind, _)| {
         result.sources.iter().find(|layer| layer.source_type == kind).map_or(-113.6, |layer| layer.periods.lden_db)
     });
-    Ok(([facade_lat, facade_lon], levels))
+    Ok(([lat, lon], levels))
 }
 
 /// Share of counted receivers whose |a − b| exceeds each rung.

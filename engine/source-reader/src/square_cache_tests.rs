@@ -336,7 +336,7 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
     }
     fx::write_roads_file(&dir.join("roads.arrow"), &[]);
     reset_store(tmp.path());
-    native_receiver_tests::facade_popup_preserves_aircraft_and_observation_multiplicity(tmp.path());
+    native_receiver_tests::building_popup_uses_its_stored_facade_receiver_and_keeps_aircraft_multiplicity(tmp.path());
     let initialized = tmp.path().display().to_string();
     let cached = STORE.read().unwrap().squares.len();
     assert!(super::source_init(initialized.clone())

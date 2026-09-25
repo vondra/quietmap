@@ -16,7 +16,6 @@
 //! .send(finalJson)`) after a single `String.replace` for the
 //! `compute_time_ms` placeholder.
 
-use noise_compute::envelope::indoor_level_db;
 use noise_compute::types::{
     Contributor, LayerKind, NoiseResult, PropagationBaseline, ScreeningBreakdown, SegmentTrace,
     SegmentTracesSummary, SourceMetadata, SourceResult, TerrainBreakdown, VegetationBreakdown,
@@ -29,12 +28,6 @@ use serde::Serialize;
 /// (not numeric placeholder) so it cannot collide with any dB value
 /// elsewhere in the response.
 pub const COMPUTE_TIME_MS_SENTINEL: &str = "__QM_COMPUTE_TIME_MS__";
-
-/// Envelope step for a tilted/open window, used instead of the closed-window
-/// class delta. It arrived with the interior implementation (`ea101899`) with
-/// no source cited and is not one of `EnvelopeClass`'s deltas; naming it here
-/// at least makes the unsourced value greppable.
-const OPEN_WINDOW_DELTA_DB: f64 = 15.0;
 
 #[inline]
 fn round1(v: f64) -> f64 {
@@ -201,9 +194,8 @@ pub struct WireResult {
     pub elevation_m: f64,
     pub receiver: WireReceiver,
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
-    /// Aggregate display total. Inside an enclosed footprint this is the indoor
-    /// estimate, and so are `sources` and `top_contributors`; `facade_lden`
-    /// carries the outdoor level the envelope step was taken from.
+    /// Aggregate total. Inside an enclosed footprint it, `sources` and
+    /// `top_contributors` are the building exposure's receiver's levels.
     pub total_lden: f64,
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
     pub total_lden_free: f64,
@@ -211,21 +203,9 @@ pub struct WireResult {
     pub top_contributors: Vec<WireContributor>,
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
     pub other_sources_lden: f64,
+    /// Present exactly when the click is inside an enclosed building.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub envelope_class: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub envelope_delta_db: Option<f64>,
-    /// Outdoor level at the wall, before the envelope step, and what the
-    /// frontend's "facade to indoor" explanation is built from. The indoor
-    /// counterpart is `total_lden` itself, so it is not repeated here. Emission,
-    /// per-effect and per-band figures, `segments` and the aircraft peak-event
-    /// levels also stay outdoors; see `present::project_result_to_indoor_display`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub facade_lden: Option<f64>,
-    /// The same estimate with a tilted/open window instead of the envelope's
-    /// closed-window class delta.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub indoor_lden_tilted: Option<f64>,
+    pub building_exposure: Option<WireBuildingExposure>,
     /// Unique string sentinel — Node route replaces this with the
     /// wall-time `Date.now() - t0` measurement. See
     /// [`COMPUTE_TIME_MS_SENTINEL`].
@@ -242,15 +222,40 @@ pub struct WireResult {
     pub unavailable_layers: Vec<&'static str>,
 }
 
-/// `indoor`: the winning envelope class, its effective delta, and the
-/// outdoor façade total; `None` outdoors.
+/// The façade receiver whose levels a click inside a building shows.
+#[derive(Serialize)]
+pub struct WireBuildingExposure {
+    /// `[lat, lng]` of the receiver 0.1 m in front of the façade; `null` when
+    /// the building has no exposed façade (then `total_lden` is `null` too).
+    pub receiver: Option<[f64; 2]>,
+    /// The façade's outward direction, degrees clockwise from north.
+    pub facade_bearing_deg: Option<f64>,
+    /// How many façade receivers of the building were compared.
+    pub facade_points: u32,
+}
+
+impl From<crate::building_exposure::BuildingExposure> for WireBuildingExposure {
+    fn from(exposure: crate::building_exposure::BuildingExposure) -> Self {
+        Self {
+            receiver: exposure.receiver.map(|receiver| {
+                let (lat, lon) = receiver.latitude_longitude();
+                [lat, lon]
+            }),
+            facade_bearing_deg: exposure
+                .receiver
+                .map(|receiver| round1(f64::from(receiver.outward_bearing_deg))),
+            facade_points: exposure.facade_points,
+        }
+    }
+}
+
 pub fn build_wire_result(
     result: NoiseResult,
     lat: f64,
     lng: f64,
     elevation: f64,
     receiver: &noise_compute::types::Receiver,
-    indoor: Option<(noise_compute::envelope::EnvelopeClass, f64, f64)>,
+    building_exposure: Option<WireBuildingExposure>,
     unavailable_layers: Vec<&'static str>,
 ) -> WireResult {
     WireResult {
@@ -272,14 +277,7 @@ pub fn build_wire_result(
         other_sources_lden: noise_compute::present::other_sources_for_display(
             result.other_sources_lden,
         ),
-        envelope_class: indoor.map(|(class, _, _)| class.name()),
-        envelope_delta_db: indoor.map(|(_, delta, _)| delta),
-        facade_lden: indoor.map(|(_, _, facade)| round1(facade)),
-        indoor_lden_tilted: indoor.and_then(|(_, _, facade)| {
-            facade
-                .is_finite()
-                .then(|| round1(indoor_level_db(facade, OPEN_WINDOW_DELTA_DB)))
-        }),
+        building_exposure,
         compute_time_ms: COMPUTE_TIME_MS_SENTINEL,
         segments: result.segments,
         segments_meta: result.segments_meta,

@@ -5,40 +5,40 @@
 /// mapping — alpha-compositing pre-coloured layers would be physically wrong and
 /// would break popup↔heatmap parity (the popup energy-sums the same way).
 
-import { NO_DATA } from './hm3-decoder.ts'
+import { HM3_COMPUTED_SILENCE, HM3_NOT_ASSESSED } from './hm3-decoder.ts'
 import { PALETTE_LUT } from './heatmap-palette.ts'
 
-/** Linear energy 10^(byte·0.5/10) per quantised dB byte (0..254; HM3 encodes
+/** Linear energy 10^(byte·0.5/10) per quantised dB byte (0..253; HM3 encodes
  *  dB × 2), precomputed so a per-cell sum is a table read instead of a
- *  Math.pow. The one place the byte decoding lives — every readout of a
- *  cell (renderer, hover, stay pins) sums through it. */
+ *  Math.pow. Computed silence (254) and not assessed (255) carry zero energy.
+ *  The one place the byte decoding lives — every readout of a cell (renderer,
+ *  hover) sums through it. */
 export const HM3_BYTE_ENERGY = (() => {
-  const t = new Float32Array(255)
-  for (let b = 0; b < 255; b++) t[b] = 10 ** ((b * 0.5) / 10)
+  const t = new Float32Array(256)
+  for (let b = 0; b < HM3_COMPUTED_SILENCE; b++) t[b] = 10 ** ((b * 0.5) / 10)
   return t
 })()
 
 /**
- * Per-cell linear-energy sum of N `u8 × 0.5 dB` grids of equal length. Each byte
- * decodes to dB via `b/2`; `NO_DATA` contributes zero energy. The sum lands back
- * in the same encoding, clamped at 254 so the palette saturates instead of
- * wrapping.
+ * Per-cell linear-energy sum of N `u8 × 0.5 dB` grids of equal length, back in
+ * the same encoding (clamped at 253 so the palette saturates instead of
+ * wrapping). A cell is not assessed only where every grid is; otherwise a sum
+ * below 0 dB is computed silence.
  */
 function sumEnergy(grids: Uint8Array[]): Uint8Array {
   const n = grids[0].length
-  const out = new Uint8Array(n).fill(NO_DATA)
+  const out = new Uint8Array(n).fill(HM3_NOT_ASSESSED)
   for (let i = 0; i < n; i++) {
     let sumLin = 0
-    let anyData = false
+    let anyAssessed = false
     for (const grid of grids) {
       const b = grid[i]
-      if (b === NO_DATA) continue
-      anyData = true
+      if (b !== HM3_NOT_ASSESSED) anyAssessed = true
       sumLin += HM3_BYTE_ENERGY[b]
     }
-    if (!anyData) continue
-    const q = Math.round(10 * Math.log10(sumLin) * 2)
-    out[i] = q < 0 ? NO_DATA : q > 254 ? 254 : q
+    if (!anyAssessed) continue
+    const q = Math.round(10 * Math.log10(sumLin) * 2) // −∞ for zero energy
+    out[i] = q < 0 ? HM3_COMPUTED_SILENCE : Math.min(q, HM3_COMPUTED_SILENCE - 1)
   }
   return out
 }
@@ -47,9 +47,7 @@ function sumEnergy(grids: Uint8Array[]): Uint8Array {
 function palette(cells: Uint8Array, width: number, height: number): ImageData {
   const rgba = new Uint8ClampedArray(width * height * 4)
   for (let i = 0; i < cells.length; i++) {
-    const byte = cells[i]
-    if (byte === NO_DATA) continue // leave fully transparent
-    const lutBase = byte * 4
+    const lutBase = cells[i] * 4
     const off = i * 4
     rgba[off] = PALETTE_LUT[lutBase]
     rgba[off + 1] = PALETTE_LUT[lutBase + 1]
@@ -76,8 +74,8 @@ export const PREVIEW_DELTA = 3
  * Upsample one child's sub-block of its z−Δ ancestor grid to a full 512² grid
  * — the preview painted while the child's real layers load. Bilinear in the
  * half-dB byte space so the preview reads as an out-of-focus map rather than
- * hard blocks; any NO_DATA corner falls back to nearest-neighbour so
- * transparency edges stay crisp instead of bleeding.
+ * hard blocks; a corner without a level (silence or not assessed) falls back
+ * to nearest-neighbour so transparency edges stay crisp instead of bleeding.
  */
 export function upsampleAncestorBlock(ancestor: Uint8Array, blockX: number, blockY: number): Uint8Array {
   const size = 512
@@ -101,7 +99,7 @@ export function upsampleAncestorBlock(ancestor: Uint8Array, blockX: number, bloc
       const c10 = ancestor[y0 * size + x1]
       const c01 = ancestor[y1 * size + x0]
       const c11 = ancestor[y1 * size + x1]
-      if (c00 === NO_DATA || c10 === NO_DATA || c01 === NO_DATA || c11 === NO_DATA) {
+      if (Math.max(c00, c10, c01, c11) >= HM3_COMPUTED_SILENCE) {
         out[outRow + px] = ty < 0.5 ? (tx < 0.5 ? c00 : c10) : (tx < 0.5 ? c01 : c11)
       } else {
         const top = c00 + (c10 - c00) * tx

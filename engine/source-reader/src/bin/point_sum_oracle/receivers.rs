@@ -86,19 +86,17 @@ pub fn run(prepared_year_dir: &Path, receivers: &[(String, f64, f64)], spacing: 
     let mut out = Vec::new();
     for (name, lat, lon) in receivers {
         let started = std::time::Instant::now();
-        // The popup's receiver: a click inside a building moves to its facade.
-        let mut obstacles = source_reader::structure_store::load_obstacle_set(prepared_year_dir, *lat, *lon)?;
-        let (facade_lat, facade_lon, inside) = source_reader::structure_store::locate_facade_receiver(&obstacles, *lat, *lon);
-        if (facade_lat, facade_lon) != (*lat, *lon) {
-            obstacles = source_reader::structure_store::load_obstacle_set(prepared_year_dir, facade_lat, facade_lon)?;
-        }
-        let sources = source_reader::collect_sources_at_point(prepared_year_dir, facade_lat, facade_lon)?;
+        // Both sides evaluate the named point as an outdoor receiver; a point inside a building
+        // is reported, not moved (the popup's building exposure is a stored façade receiver).
+        let obstacles = source_reader::structure_store::load_obstacle_set(prepared_year_dir, *lat, *lon)?;
+        let inside = obstacles.enclosed_footprint_at(*lat, *lon);
+        let sources = source_reader::collect_sources_at_point(prepared_year_dir, *lat, *lon)?;
         let checked = raster_reader::CheckedRasters::new(&real);
-        let rasters = VectorReflectionSampler { inner: &checked, set: &obstacles };
-        let receiver = Receiver::new(facade_lat, facade_lon, rasters.elevation(facade_lat, facade_lon));
+        let rasters = VectorReflectionSampler { inner: &checked, set: &obstacles, own_footprint: None };
+        let receiver = Receiver::new(*lat, *lon, rasters.elevation(*lat, *lon));
         let popup = noise_compute::compute_at_point(&receiver, &sources.roads, &sources.railways, &[], &[], &[], &obstacles, &rasters, None);
-        let reflection_db = rasters.building_enclosure(facade_lat, facade_lon);
-        let ray_receiver = RayReceiver { lat: facade_lat, lon: facade_lon, altitude_m: receiver.altitude_m() };
+        let reflection_db = rasters.building_enclosure(*lat, *lon);
+        let ray_receiver = RayReceiver { lat: *lat, lon: *lon, altitude_m: receiver.altitude_m() };
         let pieces = admitted_pieces(&sources, &receiver);
         let results: Vec<(LayerKind, [Bands; 3], [Bands; 3], usize)> = pieces
             .par_iter()
@@ -132,8 +130,7 @@ pub fn run(prepared_year_dir: &Path, receivers: &[(String, f64, f64)], spacing: 
             }));
         }
         out.push(json!({
-            "receiver": name, "lat": lat, "lon": lon, "facade_lat": facade_lat, "facade_lon": facade_lon,
-            "inside_building": inside.is_some(), "reflection_boost_db": reflection_db, "layers": layers,
+            "receiver": name, "lat": lat, "lon": lon, "inside_building": inside.is_some(), "reflection_boost_db": reflection_db, "layers": layers,
             "seconds": started.elapsed().as_secs_f64(),
         }));
         eprintln!("{name}: {:.1} s", started.elapsed().as_secs_f64());

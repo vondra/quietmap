@@ -11,6 +11,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub mod aircraft_v6;
+pub mod building_exposure;
 pub mod query;
 pub mod rail_traffic;
 pub mod road_traffic;
@@ -422,16 +423,53 @@ fn query_noise_impl(
 
     let initial_square_names = source_square_names(squares_within_reach(lat, lng))?;
     prune_source_cache(&initial_square_names)?;
-    let mut obstacle_set = structure_store::load_obstacle_set(year_dir()?, lat, lng)
+    let click_obstacles = structure_store::load_obstacle_set(year_dir()?, lat, lng)
         .map_err(|error| Error::new(Status::GenericFailure, error))?;
-    let (facade_lat, facade_lng, inside_envelope) =
-        structure_store::locate_facade_receiver(&obstacle_set, lat, lng);
-    if (facade_lat, facade_lng) != (lat, lng) {
-        obstacle_set = structure_store::load_obstacle_set(year_dir()?, facade_lat, facade_lng)
-            .map_err(|error| Error::new(Status::GenericFailure, error))?;
+    // Inside an enclosed building every level is the building exposure's: its
+    // stored noisiest façade receiver, evaluated exactly here.
+    let exposure = click_obstacles
+        .enclosed_footprint_at(lat, lng)
+        .map(|building| {
+            building_exposure::stored_building_exposure(
+                year_dir()?,
+                &click_obstacles,
+                building,
+                lat,
+                lng,
+            )
+            .map_err(|error| Error::new(Status::GenericFailure, error))
+        })
+        .transpose()?;
+    if exposure.is_some_and(|exposure| exposure.receiver.is_none()) {
+        let real_rasters = RASTERS
+            .get()
+            .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))?;
+        let elevation = noise_compute::types::RasterSampler::elevation(real_rasters, lat, lng);
+        let wire_result = wire::build_wire_result(
+            noise_compute::types::NoiseResult::empty(),
+            lat,
+            lng,
+            elevation,
+            &noise_compute::types::Receiver {
+                height_m: receiver_height_m,
+                ..noise_compute::types::Receiver::new(lat, lng, elevation)
+            },
+            exposure.map(Into::into),
+            Vec::new(),
+        );
+        return Ok(serde_json::to_string(&wire_result).unwrap());
     }
+    let (receiver_lat, receiver_lng) = exposure
+        .and_then(|exposure| exposure.receiver)
+        .map_or((lat, lng), |receiver| receiver.latitude_longitude());
+    let obstacle_set = if exposure.is_some() {
+        structure_store::load_obstacle_set(year_dir()?, receiver_lat, receiver_lng)
+            .map_err(|error| Error::new(Status::GenericFailure, error))?
+    } else {
+        click_obstacles
+    };
 
-    let square_names = source_square_names(squares_within_reach(facade_lat, facade_lng))?;
+    let square_names = source_square_names(squares_within_reach(receiver_lat, receiver_lng))?;
     // The returned Arcs pin this whole query without holding the global lock.
     // Concurrent popups can load or reuse their own working sets while this
     // one decodes batches and computes.
@@ -448,7 +486,7 @@ fn query_noise_impl(
         .collect();
 
     let t_load = t_start.elapsed();
-    let mut sources = collect_from_square_data(&square_refs, facade_lat, facade_lng)
+    let mut sources = collect_from_square_data(&square_refs, receiver_lat, receiver_lng)
         .map_err(|error| Error::new(Status::GenericFailure, error))?;
     let t_collect = t_start.elapsed() - t_load;
 
@@ -487,14 +525,15 @@ fn query_noise_impl(
     let vector_refl = noise_compute::propagation::obstacle_index::VectorReflectionSampler {
         inner: rasters,
         set: &obstacle_set,
+        own_footprint: exposure.map(|exposure| exposure.building),
     };
     let rasters: &dyn noise_compute::types::RasterSampler = &vector_refl;
     let receiver = noise_compute::types::Receiver {
         height_m: receiver_height_m,
         ..noise_compute::types::Receiver::new(
-            facade_lat,
-            facade_lng,
-            rasters.elevation(facade_lat, facade_lng),
+            receiver_lat,
+            receiver_lng,
+            rasters.elevation(receiver_lat, receiver_lng),
         )
     };
 
@@ -528,7 +567,7 @@ fn query_noise_impl(
     ) {
         square_store::warn_once::warn_once(
             &format!("{fault}; serving without the aircraft layer"),
-            &format!("first seen at ({facade_lat:.5}, {facade_lng:.5})"),
+            &format!("first seen at ({receiver_lat:.5}, {receiver_lng:.5})"),
         );
         sources.unavailable_layers.push("aircraft");
         sources.unavailable_layers.sort_unstable();
@@ -551,26 +590,13 @@ fn query_noise_impl(
         t.load_ms = t_load.as_secs_f64() * 1000.0;
         t.collect_ms = t_collect.as_secs_f64() * 1000.0;
     }
-    let facade_lden = result.total.lden_db;
-    let indoor = inside_envelope.and_then(|winner| {
-        winner
-            .effective_class
-            .delta_db()
-            .map(|delta| (winner.stored_class, delta))
-    });
-    // Inside a building the popup publishes the indoor estimate in every level
-    // row, derived from the outdoor facade level.
-    noise_compute::present::project_result_to_indoor_display(
-        &mut result,
-        indoor.map(|(_, delta)| delta),
-    );
     let wire_result = wire::build_wire_result(
         result,
         lat,
         lng,
         elevation,
         &receiver,
-        indoor.map(|(class, delta)| (class, delta, facade_lden)),
+        exposure.map(Into::into),
         sources.unavailable_layers,
     );
     let json = serde_json::to_string(&wire_result).unwrap();

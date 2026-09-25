@@ -16,6 +16,7 @@ raster-reader = { path = "../raster-reader" }
 rayon = "1"
 tile-painter = { path = "../tile-painter" }
 arrow = { version = "54", default-features = false, features = ["ipc"] }
+arrow-batching = { path = "../arrow-batching" }
 source-reader = { path = "../source-reader", default-features = false }
 square-store = { path = "../square-store" }
 sha2 = "0.11"
@@ -25,6 +26,11 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 [[bin]]
 name = "relevant-source-surface"
 path = "src/bin/relevant_source_surface.rs"
+required-features = ["gpu"]
+
+[[bin]]
+name = "facade-exposure"
+path = "src/bin/facade_exposure.rs"
 required-features = ["gpu"]
 
 [[bin]]

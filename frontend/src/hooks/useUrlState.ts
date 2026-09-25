@@ -64,7 +64,7 @@ const DEFAULT_RASTER_OVERLAYS: Record<string, boolean> = {
 // Quiet-zone threshold, clamped to the slider's range. parseFloat (not parseInt)
 // so the 0.5 dB step survives the URL round-trip. A malformed `qt` (NaN) would
 // otherwise make `byte > maxByte` always false downstream and paint every
-// non-NO_DATA pixel as quiet.
+// assessed pixel as quiet.
 function parseQuietThreshold(raw: string | null): number {
   const n = raw == null ? NaN : parseFloat(raw)
   return Number.isFinite(n) ? Math.min(QUIET_THRESHOLD_MAX, Math.max(QUIET_THRESHOLD_MIN, n)) : QUIET_THRESHOLD_DEFAULT

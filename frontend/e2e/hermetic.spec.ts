@@ -13,6 +13,7 @@ import {
   popupFixture,
 } from './support'
 import { screeningFanPopupFixture } from './screening-fan-fixture'
+import type { NoiseComputeData } from '../src/types/noise'
 
 const POINT = hm3PixelCenter(49.8486, 14.1639)
 
@@ -98,36 +99,36 @@ test('desktop: rendered HM3 hover and clicked popup agree', async ({ page }) => 
   }).toBeLessThanOrEqual(2)
 })
 
-// Owner decision 2026-09-02: inside a building every level the popup publishes
-// is the indoor estimate, so the popup must also SAY that, and name the facade
-// level and the envelope step it took.
-test('desktop: an enclosed point reads as indoors, naming the facade level and the step', async ({ page }) => {
-  const ENVELOPE_DELTA_DB = 20
-  const INDOOR_DB = FIXTURE_DB - ENVELOPE_DELTA_DB
-  // The map paints the indoor value at an enclosed pixel, so the fixture does
-  // too: this test is the popup half of that one agreed number.
-  await installHermeticMap(page, POINT, INDOOR_DB)
+// Inside a building the map and the popup show the level at the building's
+// noisiest façade receiver, and the popup says which façade that is.
+test('desktop: a point inside a building reads as its noisiest façade', async ({ page }) => {
+  await installHermeticMap(page, POINT, FIXTURE_DB)
+  const noisiestFacade: NoiseComputeData['building_exposure'] = {
+    receiver: [POINT.lat, POINT.lng + 0.0001], facade_bearing_deg: 140, facade_points: 12,
+  }
+  const noExposedFacade: NoiseComputeData['building_exposure'] = { receiver: null, facade_bearing_deg: null, facade_points: 0 }
+  let exposed = true
   await page.route('**/api/noise-onfly-v2?**', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify(popupFixture(POINT.lat, POINT.lng, INDOOR_DB, { road: INDOOR_DB }, {
-      envelope_class: 'default',
-      envelope_delta_db: ENVELOPE_DELTA_DB,
-      facade_lden: FIXTURE_DB,
-      indoor_lden_tilted: FIXTURE_DB - 15,
-    })),
+    body: JSON.stringify(exposed
+      ? popupFixture(POINT.lat, POINT.lng, FIXTURE_DB, { road: FIXTURE_DB }, noisiestFacade)
+      : { ...popupFixture(POINT.lat, POINT.lng, FIXTURE_DB, {}, noExposedFacade), total_lden: null, total_lden_free: null }),
   }))
 
   await page.goto(mapUrl(POINT))
   const { x, y } = await canvasCenter(page)
   await page.mouse.click(x, y)
+  await expect(page.locator('[data-testid="noise-badge"]:visible')).toHaveText(`${FIXTURE_DB.toFixed(1)} dB`)
+  const exposure = page.locator('[data-testid="building-exposure"]:visible')
+  await expect(exposure).toContainText('Noisiest façade of this building — faces SE')
+  await expect(exposure).toContainText('1 of 12 façade points')
 
-  await expect(page.locator('[data-testid="noise-badge"]:visible'))
-    .toHaveText(`${INDOOR_DB.toFixed(1)} dB`)
-  const notice = page.locator('[data-testid="indoor-calculation"]:visible')
-  await expect(notice).toContainText('Inside a building')
-  await expect(notice).toContainText(`${FIXTURE_DB.toFixed(1)} dB fa\u00e7ade`)
-  await expect(notice).toContainText(`${ENVELOPE_DELTA_DB} dB`)
+  await page.locator('button[aria-label="Close"]:visible').click()
+  exposed = false
+  await page.mouse.click(x, y)
+  await expect(page.locator('[data-testid="detail-popup"]:visible'))
+    .toContainText('Not assessed — this building has no exposed façade')
 })
 
 test('desktop: segment screening fan shows angular intervals and the characteristic ray', async ({ page }) => {

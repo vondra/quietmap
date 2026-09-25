@@ -133,11 +133,11 @@ async function readHeatmapTile(
 /**
  * GET /api/tiles/:build/:layer/:z/:x/:y.bin
  *
- * Raw HM3 v3 bytes, whole-file Brotli, `Content-Encoding: br`, addressed
+ * Raw HM3 bytes, whole-file Brotli, `Content-Encoding: br`, addressed
  * inside an immutable build: hits AND misses get `max-age=31536000,
  * immutable` — for a published generation a missing tile is a permanent fact
- * (served as 200 + empty body so the CDN caches it), and the frontend re-keys
- * the URL on the next build anyway.
+ * (every cell not assessed, served as 200 + empty body so the CDN caches it),
+ * and the frontend re-keys the URL on the next build anyway.
  */
 export async function heatmapPmtilesRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { build: string; layer: string; z: string; x: string; y: string } }>(
@@ -179,9 +179,9 @@ export async function heatmapPmtilesRoutes(app: FastifyInstance): Promise<void> 
       // Published generations are immutable → cache the miss as hard as the hit.
       reply.header('Cache-Control', 'public, max-age=31536000, immutable')
       // "No tile" is 200 + empty body, NOT 204: Cloudflare doesn't cache 204s
-      // by default, so every empty ocean/quiet tile would round-trip
-      // edge→origin for every visitor forever. The decoder maps an empty body
-      // to "no tile".
+      // by default, so every unpainted tile would round-trip edge→origin for
+      // every visitor forever. The decoder maps an empty body to a tile whose
+      // every cell is not assessed — never to silence.
       if (tile === undefined) return reply.send(Buffer.alloc(0))
       // application/octet-stream — the body is a custom binary format (HM3),
       // stored as a whole-file Brotli stream; declare it so the browser

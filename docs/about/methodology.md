@@ -11,8 +11,16 @@ is propagated to a receiver 4 m above ground over terrain and around buildings, 
 contributions of all sources are summed. The result is Lden, the annual
 day-evening-night level. Layers are computed independently and can be toggled separately.
 
-Accommodation cards show outdoor noise. Listings inside a building use the façade
-estimate before wall and window insulation.
+Inside a building, the map and the click panel show the level at its noisiest façade
+point, placed as the EU method (CNOSSOS-EU) places receivers for building exposure.
+Receivers sit at most 5 m apart along each façade, 0.1 m in front of the wall and 4 m above ground, with the façade's own
+reflection left out; the loudest by Lden of all sources is shown. Courtyards and open
+ground show the level at the point itself. No indoor attenuation is applied anywhere, and
+accommodation cards show the same level as a click at the listing.
+
+Zoomed-out views show each cell as the energy mean of the cells beneath it. Cells where no
+modelled source reaches 0 dB count as silence; cells that were not computed are left out
+of the mean and stay blank.
 
 ## Roads
 
@@ -154,7 +162,8 @@ then average these into the map's day, evening and night periods. Capacity is es
 from mapped area. These residential-parking defaults can understate busy shopping sites;
 the study's impulse rating surcharge is not included in the sound-energy calculation.
 Garages and carports share a generic emission profile; actual ventilation and vehicle
-movements are unknown.
+movements are unknown. Explicitly mapped carports and open roof structures count as open
+ground for receivers.
 
 **As obstacles.** Mapped above-ground buildings and noise barriers screen sound. Open
 parking areas, yards, explicitly underground footprints, carports and open roofs do not:

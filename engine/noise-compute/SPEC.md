@@ -11,17 +11,42 @@ until their own campaign moves them.
 
 ## Receiver and prepared-source selection
 
-Inside an enclosed building, retain the clicked footprint's envelope class and
-clicked coordinates for presentation. The existing cardinal search, one-metre
-steps up to 100 metres, selects the facade receiver before any source gate.
-Reload obstacle indexes at that receiver, and use its position and elevation
-for source selection and propagation. Project the facade result to the indoor
-estimate only after computation. If that search finds no exterior point, retain
-the clicked position as before. The receiver stands `DEFAULT_RECEIVER_HEIGHT`
-(4 m) above the DEM unless the caller names another height of at least
-`RECEIVER_HEIGHT_FLOOR_M`, as validation does for a microphone's height; every
-layer reads `Receiver::altitude_m`. The answer's `receiver` names the point and
-height computed.
+Every receiver stands `DEFAULT_RECEIVER_HEIGHT` (4 m) above the bare-earth ground
+unless the caller names another height of at least `RECEIVER_HEIGHT_FLOOR_M`, as
+validation does for a microphone's height; every layer reads `Receiver::altitude_m`
+and the answer's `receiver` names the point and height computed. Outside enclosed
+buildings (streets, open ground, water, courtyard holes, outdoor-class carports
+and roofs) the receiver is the clicked point or the pixel centre.
+
+Inside an enclosed building (the tallest enclosed footprint containing the point;
+equal heights go to the smallest (square, id) key) the receiver is the building
+exposure: CNOSSOS §2.8 case 1 façade receivers (Directive (EU) 2021/1226,
+Annex II; `facade_receivers.rs`) — every ring edge cut into the fewest equal
+intervals ≤ 5 m, one receiver mid-interval; an edge of 2.5–5 m gets one; runs of
+shorter adjacent edges together over 5 m are cut the same way as a polyline;
+lengths within one z30 quantum of a limit read as the limit. Receivers stand
+0.1 m out along the outward normal (into the courtyard for holes). A receiver
+inside any enclosed footprint (a party wall) is dropped; a footprint with no
+qualifying edge keeps one receiver mid its longest edge; a building whose every
+receiver is dropped has no exposed façade and is not assessed. Canonical order:
+parts as stored, exterior counter-clockwise and holes clockwise, each ring from
+its lexicographically smallest z30 vertex, rotated to its first edge over 2.5 m.
+At a façade receiver the density bonus (0/1.5/3 dB, nine probes at ±75 m)
+ignores probes inside its own footprint (§2.8: the façade's own reflection is
+excluded); the own building still screens sources behind it. The façade-exposure
+stage evaluates every receiver of every building on the GPU and stores the one
+with the highest all-source Lden (ties: lowest canonical index) with its layer
+and period powers in `facade_exposure.arrow`. The popup recomputes the receiver
+set, requires the stored choice to be one of its points, reloads obstacle
+indexes and sources around it and evaluates it exactly; a missing file refuses
+the click. There is no indoor attenuation anywhere.
+
+A painted z13 pixel is the outdoor receiver at its centre, or, when the centre is
+inside an enclosed building, that building's stored layer powers (every tile
+covering the building copies the same row). Tiles (HM3 v4, `tile-painter/src/hm3.rs`)
+keep coverage apart from energy: 2·Lden bytes 0–253, 254 computed silence, 255 not
+assessed; a zoomed-out cell is the energy mean of its assessed children, silence
+counting as zero energy.
 
 Prepared airborne sub-segments are stored once, as rows of the z9 square that
 owns the midpoint of their stored geometry (`airborne_segments_z9_v2`); the
@@ -364,8 +389,9 @@ Explicit OSM open structures (`building=carport`, `building=roof`, or
 `amenity=parking` with `parking=carports`) carry outdoor `building_use=3`
 in `buildings_v5`.
 The structures builder preserves that outdoor envelope for OSM-only and
-Overture-matched rows (`structures-builder-4`), so a canopy cannot acquire an
-indoor attenuation from an absent or generic Overture class. These rows and
+Overture-matched rows (`structures-builder-4`), so a point under a canopy stays
+an outdoor receiver instead of taking a building exposure from an absent or
+generic Overture class. These rows and
 Overture `roof`/`carport` classes screen at 0 m (`structures-builder-5`): a
 roof on posts has no wall to diffract over. Footprint, emission, envelope and
 traffic stay. Greenhouses, grandstands and enclosed garages keep their walls.

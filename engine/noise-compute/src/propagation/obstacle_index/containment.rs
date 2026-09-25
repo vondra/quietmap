@@ -1,7 +1,66 @@
-//! Test footprint parity and select the tallest containing envelope.
+//! Test footprint parity, name footprints across squares and select the tallest enclosed one.
 
-use super::{ObstacleIndex, ObstacleKind};
+use super::{ObstacleIndex, ObstacleKind, ObstacleSet};
 use crate::envelope::EnvelopeClass;
+
+/// One footprint of the world: the z9 square whose `structures.arrow` owns it
+/// and its dense index id there, which equals the row's `screening_ordinal`.
+/// The structures producer assigns every footprint to exactly one square (its
+/// centroid's), so this names a building once however many squares it spans.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FootprintKey {
+    pub square_y: u16,
+    pub square_x: u16,
+    pub id: u32,
+}
+
+impl FootprintKey {
+    pub fn square(self) -> grid::Square {
+        grid::Square {
+            x: self.square_x,
+            y: self.square_y,
+        }
+    }
+}
+
+/// The enclosed footprint a point belongs to, by the one winner rule the popup,
+/// the façade-exposure stage and the painter share.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EnclosedFootprint {
+    pub key: FootprintKey,
+    pub class: EnvelopeClass,
+    pub height_m: f32,
+}
+
+impl ObstacleSet {
+    /// Tallest enclosed footprint containing the point; equal heights resolve
+    /// to the smallest [`FootprintKey`], so every set holding both footprints
+    /// picks the same one whatever its index order.
+    pub fn enclosed_footprint_at(&self, lat: f64, lon: f64) -> Option<EnclosedFootprint> {
+        let mut seen = Vec::new();
+        self.indexes
+            .iter()
+            .filter_map(|index| {
+                let square = index.square();
+                index
+                    .containing_enclosed(lat, lon, 0.0, &mut seen)
+                    .map(|(class, height_m, id)| EnclosedFootprint {
+                        key: FootprintKey {
+                            square_y: square.y,
+                            square_x: square.x,
+                            id,
+                        },
+                        class,
+                        height_m,
+                    })
+            })
+            .max_by(|a, b| {
+                a.height_m
+                    .total_cmp(&b.height_m)
+                    .then_with(|| b.key.cmp(&a.key))
+            })
+    }
+}
 
 impl ObstacleIndex {
     /// Point-in-footprint test via PER-FOOTPRINT crossing parity along the
@@ -33,8 +92,28 @@ impl ObstacleIndex {
         min_height_m: f32,
         seen: &mut Vec<(u32, u32, f32)>,
     ) -> bool {
+        self.contains_built_other_than(lat, lon, min_height_m, None, seen)
+    }
+
+    /// [`Self::contains_built`] ignoring one footprint of this index (a façade
+    /// receiver's own building).
+    pub fn contains_built_other_than(
+        &self,
+        lat: f64,
+        lon: f64,
+        min_height_m: f32,
+        ignored_id: Option<u32>,
+        seen: &mut Vec<(u32, u32, f32)>,
+    ) -> bool {
         self.collect_containing_footprints(lat, lon, min_height_m, seen);
-        seen.iter().any(|(_, crossings, _)| crossings % 2 == 1)
+        seen.iter()
+            .any(|(id, crossings, _)| crossings % 2 == 1 && Some(*id) != ignored_id)
+    }
+
+    /// The z9 square this index belongs to: production indexes are built with
+    /// their square's centre as the metric origin (`structure_store`).
+    pub fn square(&self) -> grid::Square {
+        grid::square_of(self.origin_lat, self.origin_lon)
     }
 
     /// Winning enclosed footprint at a point: tallest wins, then lower ordinal.
@@ -51,15 +130,14 @@ impl ObstacleIndex {
             .filter(|(_, crossings, _)| crossings % 2 == 1)
             .filter_map(|(id, _, height)| {
                 let class = EnvelopeClass::from_u8(self.footprint_class[*id as usize]);
-                class.delta_db().map(|_| (class, *height, *id))
+                class.is_enclosed().then_some((class, *height, *id))
             })
             .max_by(|a, b| a.1.total_cmp(&b.1).then_with(|| b.2.cmp(&a.2)))
     }
 
-    /// Winning footprint at a point, including Outdoor-class structures.
-    /// Indoor estimates use [`Self::containing_enclosed`] instead because
-    /// Outdoor has no attenuation value, while the building hover still needs
-    /// to name visible carports and roof structures.
+    /// Winning footprint at a point, including Outdoor-class structures: the
+    /// building hover names visible carports and roof structures, which the
+    /// building exposure ([`Self::containing_enclosed`]) treats as open ground.
     pub fn containing_footprint(
         &self,
         lat: f64,

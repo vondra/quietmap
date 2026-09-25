@@ -141,16 +141,14 @@ impl ReceiverScreening {
             receiver.altitude_m(),
         );
         ensure!(finite.get(), "airborne horizon DEM unavailable");
-        // Match the popup if a caller supplies an enclosed point; normal TileReceivers
-        // already move that point to its exterior facade before this boundary.
+        // Match the popup if a caller supplies an enclosed point; the painter
+        // evaluates only outdoor pixel centres and façade receivers.
         let empty = ObstacleSet { indexes: vec![] };
-        let screening_obstacles =
-            if source_reader::structure_store::point_inside_enclosed(obstacles, lat, lon).is_some()
-            {
-                &empty
-            } else {
-                obstacles
-            };
+        let screening_obstacles = if obstacles.enclosed_footprint_at(lat, lon).is_some() {
+            &empty
+        } else {
+            obstacles
+        };
         let buildings = air::BuildingHorizon::build(
             screening_obstacles,
             rasters,

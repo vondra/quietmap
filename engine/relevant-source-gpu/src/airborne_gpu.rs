@@ -7,7 +7,7 @@ use crate::{
     },
     cuda_bridge::{check_cuda, DeviceBuffer, RelevantSourceCuda},
     surface_scene::SurfaceScene,
-    tile_receivers::TileReceivers,
+    receiver_points::ReceiverPoints,
 };
 use anyhow::{ensure, Result};
 use noise_compute::emission::aircraft as air;
@@ -44,7 +44,7 @@ impl AirborneScene<'_> {
     pub fn period_powers(
         &self,
         scene: &SurfaceScene,
-        receivers: &TileReceivers,
+        receivers: &ReceiverPoints,
     ) -> Result<Vec<f32>> {
         ensure!(
             scene.owner == self.owner,

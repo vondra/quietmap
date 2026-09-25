@@ -1,4 +1,4 @@
-//! Actual native popup keeps clicked metadata and accumulates airborne rows from every owner square.
+//! Actual native popup answers a building click at its stored façade receiver and accumulates airborne rows from every owner square.
 
 use aircraft_extract::{arrow_io, flight::FlightSegment};
 use raster_reader::channel::Channel;
@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::structure_test_fixture as fx;
 
-pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root: &Path) {
+pub(super) fn building_popup_uses_its_stored_facade_receiver_and_keeps_aircraft_multiplicity(root: &Path) {
     let lat = -2.0 / grid::geo::M_PER_DEG_LAT;
     let lon = 0.35;
     let north_wall = 0.5 / grid::geo::M_PER_DEG_LAT;
@@ -30,11 +30,31 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         area_m2: Some(1000.0),
         ..Default::default()
     };
-    fx::write_square_structures(root, click_square, &[house]);
+    let structures = fx::write_square_structures(root, click_square, &[house]);
     let set = crate::structure_store::load_obstacle_set(root, lat, lon).unwrap();
-    let (facade_lat, facade_lon, winner) =
-        crate::structure_store::locate_facade_receiver(&set, lat, lon);
-    assert!(winner.is_some());
+    let building = set.enclosed_footprint_at(lat, lon).expect("the click is inside the house");
+    let (_, rings) = crate::structure_store::enclosed_building_footprints(
+        &std::fs::read(&structures).unwrap(),
+        &structures,
+    )
+    .unwrap()
+    .remove(0);
+    let receivers = noise_compute::facade_receivers::exposed_facade_receivers(&rings, &set);
+    // The stage's choice, here the north-wall receiver nearest the click: it
+    // stands in the next square, so the popup must load sources around it.
+    let chosen = (0..receivers.len())
+        .filter(|&i| receivers[i].latitude_longitude().0 > 0.0)
+        .min_by(|&a, &b| {
+            let off = |i: usize| (receivers[i].latitude_longitude().1 - lon).abs();
+            off(a).total_cmp(&off(b))
+        })
+        .unwrap();
+    let click_dir = fx::square_dir(root, click_square);
+    fx::write_facade_exposure(
+        &click_dir,
+        &[fx::facade_exposure_row(building.key.id, &receivers, Some(chosen))],
+    );
+    let (facade_lat, facade_lon) = receivers[chosen].latitude_longitude();
     let facade_square = grid::square_of(facade_lat, facade_lon);
     assert_ne!(facade_square, click_square);
     for channel in Channel::ALL {
@@ -87,9 +107,36 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     let inside = popup(lat, lon);
     let outside = popup(facade_lat, facade_lon);
     assert_eq!(inside["center"], serde_json::json!([lat, lon]));
-    assert_eq!(inside["envelope_class"], "residential");
-    let outdoor_total = outside["total_lden"].as_f64().unwrap();
-    assert_eq!(inside["facade_lden"], (outdoor_total * 10.0).round() / 10.0);
+    assert_eq!(
+        inside["building_exposure"],
+        serde_json::json!({
+            "receiver": [facade_lat, facade_lon],
+            "facade_bearing_deg": 0.0,
+            "facade_points": receivers.len(),
+        })
+    );
+    assert!(outside.get("building_exposure").is_none());
+    for removed in ["envelope_class", "envelope_delta_db", "facade_lden", "indoor_lden_tilted"] {
+        assert!(inside.get(removed).is_none(), "{removed} left the popup");
+    }
+    let building_lden = |value: &Value| {
+        value["top_contributors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| source["source_type"] == "building" && source["osm_id"] == 901)
+            .unwrap()["received_lden"]
+            .as_f64()
+            .unwrap()
+    };
+    // Three of the nine density probes at the north wall fall inside the house:
+    // an outdoor point there gets 1.5 dB, its own façade's receiver none (§2.8).
+    assert!(
+        (building_lden(&outside) - building_lden(&inside) - 1.5).abs() < 0.051,
+        "own-façade bonus: outside {} inside {}",
+        building_lden(&outside),
+        building_lden(&inside)
+    );
     let building_distance = |value: &Value| {
         value["top_contributors"]
             .as_array()
@@ -104,7 +151,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     assert_eq!(
         building_distance(&inside),
         building_distance(&outside),
-        "moving an indoor receiver must update source distances before screening"
+        "a building click must measure source distances from its façade receiver"
     );
     // The answer names the point it computed: the facade point for an indoor click, 4 m up.
     let receiver = |value: &Value| {
@@ -207,6 +254,13 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         crate::STORE.read().unwrap().squares.is_empty(),
         "a square served with a fault is reloaded on the next click"
     );
+    // A release without the stage's file refuses a building click, never answers
+    // it from another point; outdoor clicks are unaffected.
+    std::fs::remove_file(click_dir.join("facade_exposure.arrow")).unwrap();
+    super::reset_store(root);
+    let missing = crate::query_noise_at_point(lat, lon).unwrap_err();
+    assert!(missing.to_string().contains("building exposure missing"), "{missing}");
+    assert!(crate::query_noise_at_point(facade_lat, facade_lon).is_ok());
     // The screening table is never dropped: a stale stamp refuses the popup end to end,
     // even though its paired index still maps.
     arrow_io::write_airborne(&path, std::slice::from_ref(&row), &fx::sampling_window(12, 0)).unwrap();

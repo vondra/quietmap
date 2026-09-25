@@ -1,10 +1,10 @@
-//! Reuse saved corners to produce the outdoor surface-power planes at shared receivers.
+//! Reuse saved corners to produce the surface-power planes at every pixel-centre receiver.
 use crate::{
     cuda_bridge::{DeviceBuffer, RelevantSourceCuda},
     relevance_partition::build_relevant_source_partition,
     source_frame::*,
     surface_gpu::SurfaceGpu,
-    tile_receivers::TileReceivers,
+    receiver_points::ReceiverPoints,
     tile_source_incidence::{build_tile_source_incidence, TileMetricLattice, TileSourceIncidence},
 };
 use anyhow::{ensure, Context, Result};
@@ -16,7 +16,7 @@ pub fn paint_tile(
     scene: &SurfaceGpu,
     x: u32,
     y: u32,
-    receivers: &TileReceivers,
+    receivers: &ReceiverPoints,
     corners: &[CornerEnergy],
 ) -> Result<[Vec<f32>; tile_painter::hm3::SURFACE_LAYERS.len()]> {
     ensure!(
@@ -35,8 +35,7 @@ pub fn paint_tile(
         .map(|source| source.device)
         .collect();
     let lattice = TileMetricLattice::for_tile(&scene.host.frame, 13, x, y);
-    let mut base = build_tile_source_incidence(&device_sources, &lattice);
-    receivers.admit_enclosed_sources(&device_sources, &mut base);
+    let base = build_tile_source_incidence(&device_sources, &lattice);
     let local_ids: BTreeMap<_, _> = scene
         .host
         .sources
@@ -87,8 +86,7 @@ pub fn paint_tile(
             db[period] = 0.0;
             10.0_f64.powf(noise_compute::periods::compute_lden(db[0], db[1], db[2]) / 10.0)
         });
-        let mut partition = build_relevant_source_partition(&incidence, &energies, weights)?;
-        receivers.clear_enclosed_background(&mut partition);
+        let partition = build_relevant_source_partition(&incidence, &energies, weights)?;
         let background: Vec<_> = partition
             .background_corner_energy
             .iter()

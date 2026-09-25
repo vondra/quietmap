@@ -147,7 +147,7 @@ impl SurfaceGpu {
                 xs.push(x);
                 ys.push(y);
                 reflections
-                    .push(enclosure_db(&self.host.obstacles, lat, lon, ENCLOSURE_RADIUS_M) as f32);
+                    .push(enclosure_db(&self.host.obstacles, lat, lon, ENCLOSURE_RADIUS_M, None) as f32);
                 floors.push(
                     noise_compute::compute::aircraft_v6::airport_traffic::popup_pixel_floor_m(lat)
                         as f32,

@@ -15,6 +15,7 @@ mod sectors;
 mod set;
 mod skyline;
 
+pub use containment::{EnclosedFootprint, FootprintKey};
 pub use geometry::wrap_pi;
 pub(crate) use geometry::{origin_to_segment_dist, segment_intersection_t};
 pub use gpu::GpuGridView;
