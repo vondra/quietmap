@@ -79,6 +79,12 @@ pub fn is_power_building<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool {
     matches!(tag("power"), Some("plant" | "substation"))
 }
 
+/// Railway yard area (landuse=railway / railway=yard): emits as a rail-yard
+/// facility. Track ways never reach this predicate (they route Railway first).
+pub fn is_railway_yard<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool {
+    tag("landuse") == Some("railway") || tag("railway") == Some("yard")
+}
+
 pub fn is_power_or_inactive_industry<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> bool {
     matches!(
         tag("power"),
@@ -223,6 +229,21 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
     }
+    #[test]
+    fn railway_yard_predicate_matches_both_tags() {
+        let yes = |pairs: &[(&str, &str)]| {
+            let t = tags(pairs);
+            is_railway_yard(|k| t.get(k).map(String::as_str))
+        };
+        assert!(yes(&[("landuse", "railway")]));
+        assert!(yes(&[("railway", "yard")]));
+        assert!(yes(&[("landuse", "railway"), ("railway", "yard")]));
+        assert!(!yes(&[("landuse", "industrial")]));
+        assert!(!yes(&[("railway", "rail")]));
+        assert!(!yes(&[("railway", "station")]));
+        assert!(!yes(&[]));
+    }
+
     #[test]
     fn inactive_industry_requires_lifecycle_of_the_facility() {
         for unrelated in [

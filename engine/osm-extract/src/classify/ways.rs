@@ -2,8 +2,8 @@
 //! [`FeatureType`] and pulls the per-family keys it carries into spill.
 
 use super::{
-    is_power_or_inactive_industry, is_special_leisure, keep_model_tag, scope_keeps, FeatureType,
-    Tags,
+    is_power_or_inactive_industry, is_railway_yard, is_special_leisure, keep_model_tag,
+    scope_keeps, FeatureType, Tags,
 };
 use osmpbf::Way;
 
@@ -129,6 +129,12 @@ pub(crate) fn classify_way_unscoped(way: &Way) -> Option<FeatureType> {
     if let Some("industrial" | "quarry" | "farmyard" | "landfill" | "port" | "harbour") =
         tag("landuse")
     {
+        return Some(FeatureType::Industrial);
+    }
+    // Railway yards emit as rail-yard facilities. Track ways (railway=rail /
+    // tram / …) return Railway above; only a mistagged linear railway=yard
+    // would land here, as a point facility.
+    if is_railway_yard(tag) {
         return Some(FeatureType::Industrial);
     }
     if let Some("works" | "wastewater_plant") = tag("man_made") {
@@ -422,6 +428,7 @@ pub fn extract_tags<'a>(
                 if matches!(
                     k,
                     "landuse"
+                        | "railway"
                         | "man_made"
                         | "name"
                         | "operator"
