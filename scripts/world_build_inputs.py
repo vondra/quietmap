@@ -26,6 +26,21 @@ def canonical_input(path):
     return resolved
 
 
+def source_paths(config):
+    required = {'planet', 'rasters', 'enrichment', 'boundaries', 'city_boundaries',
+                'overture', 'ghsl', 'regional_heights', 'airline', 'general_aviation', 'ships', 'ships_gfw'}
+    if set(config['sources']) != required:
+        raise ValueError(f'sources must be exactly {sorted(required)}')
+    return {name: canonical_input(path) for name, path in config['sources'].items()}
+
+
+def source_family_roots(sources):
+    """Source family -> the roots the pin and the freeze walk: whole trees, or exact raster and height files."""
+    return {name: list(raster_inputs(path)) if name == 'rasters'
+            else list(dict.fromkeys(height_inputs(path))) if name in ('ghsl', 'regional_heights')
+            else [path] for name, path in sources.items()}
+
+
 def input_files(roots):
     seen_files = set()
     def walk(path, ancestors):

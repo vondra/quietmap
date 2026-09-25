@@ -44,8 +44,7 @@ class WorldBuildTest(unittest.TestCase):
                                                                ('SPILL_DIR', str(output / 'spill'))))])), \
                     patch.object(world, 'code_inputs', return_value=[]), \
                     patch.object(world, 'runtime_inputs', return_value=[]), \
-                    patch.object(world, 'raster_inputs', return_value=[]), \
-                    patch.object(world, 'height_inputs', return_value=[]), \
+                    patch.object(world, 'source_family_roots', return_value={'planet': [source]}), \
                     patch.object(world, 'resume_steps', return_value=set()) as resume, \
                     patch.object(world, 'preflight_aircraft_sources') as preflight, \
                     patch.object(world, 'attach_rasters') as attach, \
@@ -55,8 +54,6 @@ class WorldBuildTest(unittest.TestCase):
                 # main changes cwd for producers; restore it even though this plan executes none.
                 previous_cwd = Path.cwd()
                 try:
-                    # The source accessors are stubbed; source keys still describe the real CLI contract.
-                    world.source_paths.return_value.update(rasters=source, ghsl=source, regional_heights=source)
                     world.main()
                 finally:
                     os.chdir(previous_cwd)

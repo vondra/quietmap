@@ -53,7 +53,13 @@ copies while rotating generations. `--plan` shows paths without admission or wri
 
 The controller records each frozen input's device identity in `input-identities.jsonl`
 (path, inode, size, mtimes — no SHA-256 of the world) and step receipts in `steps.jsonl`.
-`build.json` records configuration, status and resume history; filesystem locks exclude another controller. It prepares the complete z9 directory
+`build.json` records configuration, status, resume history and the product commit with a
+dirty flag; each step receipt carries the commit that ran it. Filesystem locks exclude another controller.
+Device identity does not survive a disk migration; content does. Before a build,
+`scripts/freeze-world-inputs.py --config <toml> --output <dir>` hashes every input the pin
+would list (two threads by default), writes `<family>.SHA256SUMS` outside the sources,
+checks every stored checksum (`SHA256SUMS`, `sha256.txt`, GFW receipts, the adsb.lol
+catalog) and prints the digests for the release record; a rerun verifies instead of rewriting. It prepares the complete z9 directory
 set before parallel writers, then runs OSM, square-country-city, national buildings, structures
 (`--jobs` workers, one square each; omit `--jobs` for all CPUs that fit memory),
 ordered road/rail/industry chains and the pinned hybrid aircraft window. Buildings
