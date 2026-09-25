@@ -670,12 +670,10 @@ retained 20° wind histograms do not quantize that calculation.
 bilinearly at the receiver, wrapping longitude. `MeteorologySample::probability`
 interpolates circularly between sector centres. Invalid coordinates, incomplete
 global tables, nulls, nonfinite values, invalid percentages and mismatched metadata
-are errors. Global maxima conservatively bound any spatial interpolation. The
-source reader requires the file at the prepared-year root and loads it once;
-release assembly must link or copy the matching raster-release file there.
-`DeviceMeteorology::upload` transfers the same global 240-byte node records once;
-kernel consumption and the period-specific propagation formula belong to the
-coupled physics change. This input change does not itself alter propagation.
+are errors. Global maxima conservatively bound any spatial interpolation. No
+serving or painting path loads the table yet: popup and painter use the built-in
+defaults above until propagation consumes it, and release assembly attaches the
+file in that same change.
 
 The streamed producer retains period × wind-class × stability-class × direction
 histograms, exact favourable counts, Welford absorption moments and SHA-256 chunk

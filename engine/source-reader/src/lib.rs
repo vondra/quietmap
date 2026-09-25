@@ -48,14 +48,6 @@ static STORE: std::sync::LazyLock<RwLock<SquareStore>> =
 
 #[cfg(feature = "node")]
 static RASTERS: std::sync::OnceLock<raster_reader::RealRasters> = std::sync::OnceLock::new();
-/// Loaded once per native process; W2 consumes this receiver climatology.
-#[cfg(feature = "node")]
-static METEOROLOGY: std::sync::OnceLock<raster_reader::meteorology::Meteorology> = std::sync::OnceLock::new();
-
-#[cfg(feature = "node")]
-pub fn meteorology() -> napi::Result<&'static raster_reader::meteorology::Meteorology> {
-    METEOROLOGY.get().ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))
-}
 
 /// The live `…/prepared/2026` dir — the structure root: every prepared
 /// square carries its own `structures.arrow` and `structures.qoix` under
@@ -235,10 +227,6 @@ pub fn source_init(prepared_dir: String) -> napi::Result<String> {
             "prepared directory cannot change within one native process; start a new process",
         ));
     }
-    let meteorology = raster_reader::meteorology::Meteorology::load(
-        &std::path::Path::new(&prepared_dir).join("meteorology.arrow"),
-    ).map_err(|error| Error::new(Status::GenericFailure, error))?;
-    METEOROLOGY.set(meteorology).map_err(|_| Error::new(Status::GenericFailure, "meteorology already initialized"))?;
     store.prepared_dir = prepared_dir.clone();
 
     // Native raster windows share `<prepared>/2026/z9/<x>/<y>/` with vector

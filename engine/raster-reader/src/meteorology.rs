@@ -172,10 +172,6 @@ impl Meteorology {
     pub fn maximum_probability(&self) -> [f32; 3] {
         self.maximum_probability
     }
-
-    pub fn nodes(&self) -> &[MeteorologyNode] {
-        &self.nodes
-    }
 }
 
 fn list(array: &dyn Array, length: usize) -> Result<&FixedSizeListArray, String> {
