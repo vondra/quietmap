@@ -189,6 +189,22 @@ def normalize_grid(raw, derived, assign_epsg=None):
     return True
 
 
+def derived_complete(path):
+    """A derived grid counts as done only with its provenance sidecar.
+
+    The sidecar is written after the grid verifies, so a grid without one
+    is a crash remnant and must be decoded again, never trusted.
+    """
+    return Path(path).exists() and Path(str(path) + '.provenance.json').exists()
+
+
+def clean_remnants(path):
+    """Remove a grid and its sidecar so a decode always starts from nothing."""
+    for candidate in (Path(path), Path(str(path) + '.provenance.json')):
+        if candidate.exists():
+            candidate.unlink()
+
+
 def derive_provenance(raw_path, derived_path, method):
     """Attach the derived grid to its verified raw parent (Bavaria pattern)."""
     record = provenance(raw_path)

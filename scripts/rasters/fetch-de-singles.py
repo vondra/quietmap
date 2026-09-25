@@ -13,8 +13,9 @@ import urllib.parse
 import zipfile
 
 from osgeo import gdal
-from dgm_reduce import (assert_crs, derive_provenance, normalize_grid, publish_country_sources,
-                        reduce_geotiff, reduce_xyz)
+from dgm_reduce import (assert_crs, clean_remnants, derive_provenance, derived_complete,
+                        normalize_grid, publish_country_sources, reduce_geotiff,
+                        reduce_xyz)
 from terrain_io import fetch, source_budget
 
 gdal.UseExceptions()
@@ -117,7 +118,8 @@ def decode_geotiff_archive(root, provider, members_of, epoch_of, method, workers
         def decode_one(member_name):
             out_name = Path(member_name).stem + '-5m.tif'
             out_path = Path(root) / provider / out_name
-            if not out_path.exists():
+            if not derived_complete(out_path):
+                clean_remnants(out_path)
                 with zipfile.ZipFile(raw) as archive:
                     payload = archive.read(member_name)
                 with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as handle:
@@ -151,7 +153,8 @@ def decode_hb(root, provider):
             for member_name in members:
                 out_name = Path(member_name).stem + '-5m.tif'
                 out_path = Path(root) / provider / out_name
-                if not out_path.exists():
+                if not derived_complete(out_path):
+                    clean_remnants(out_path)
                     with archive.open(member_name) as member:
                         xyz = Path(root) / provider / (Path(member_name).name + '.tmp')
                         xyz.write_bytes(member.read())

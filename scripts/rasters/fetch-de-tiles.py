@@ -21,9 +21,10 @@ import tempfile
 import zlib
 
 from osgeo import gdal
-from dgm_reduce import (append_journal, assert_crs, derive_provenance, digest, load_journal,
-                        manifest_entry, normalize_grid, publish_country_sources,
-                        read_zip_member, reduce_geotiff, write_manifest)
+from dgm_reduce import (append_journal, assert_crs, clean_remnants, derive_provenance,
+                        derived_complete, digest, load_journal, manifest_entry,
+                        normalize_grid, publish_country_sources, read_zip_member,
+                        reduce_geotiff, write_manifest)
 from terrain_io import fetch, publish_json, source_budget
 
 gdal.UseExceptions()
@@ -273,8 +274,9 @@ def process_item(root, provider, item, delay, state, done):
     config = PROVIDERS[provider]
     out_name = Path(item['name']).stem + '-5m.tif'
     out_path = Path(root) / provider / out_name
-    if out_name in done and out_path.exists():
+    if out_name in done and derived_complete(out_path):
         return None
+    clean_remnants(out_path)
     with state['lock']:
         wait = delay - (time.monotonic() - state['last'])
         if wait > 0:

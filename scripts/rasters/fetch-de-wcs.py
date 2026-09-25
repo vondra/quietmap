@@ -13,9 +13,10 @@ import threading
 import time
 
 from osgeo import gdal
-from dgm_reduce import (DERIVED_NODATA, append_journal, assert_crs, derive_provenance, digest,
-                        load_journal, manifest_entry, normalize_grid,
-                        publish_country_sources, write_manifest)
+from dgm_reduce import (DERIVED_NODATA, append_journal, assert_crs, clean_remnants,
+                        derive_provenance, derived_complete, digest, load_journal,
+                        manifest_entry, normalize_grid, publish_country_sources,
+                        write_manifest)
 from terrain_io import fetch, source_budget
 
 gdal.UseExceptions()
@@ -84,8 +85,9 @@ def fetch_window(root, provider, box, delay, state, done):
     raw_name = f'wcs_{west:.0f}_{south:.0f}.raw.tif'
     out_name = f'wcs_{west:.0f}_{south:.0f}.tif'
     out_path = Path(root) / provider / out_name
-    if out_name in done and out_path.exists():
+    if out_name in done and derived_complete(out_path):
         return None
+    clean_remnants(out_path)
     url = coverage_url(provider, west, south, east, north)
     if url in state['empty']:
         return None

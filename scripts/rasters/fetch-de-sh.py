@@ -13,8 +13,9 @@ import threading
 import time
 import urllib.request
 
-from dgm_reduce import (append_journal, assert_crs, derive_provenance, digest, load_journal,
-                        manifest_entry, publish_country_sources, reduce_xyz, write_manifest)
+from dgm_reduce import (append_journal, assert_crs, clean_remnants, derive_provenance,
+                        derived_complete, digest, load_journal, manifest_entry,
+                        publish_country_sources, reduce_xyz, write_manifest)
 from terrain_io import fetch, source_budget
 
 PROVIDER = 'de-sh-dgm1'
@@ -61,8 +62,9 @@ def strip_footer(raw_path):
 def process_item(root, item, delay, state, done):
     out_name = Path(item['name']).stem + '-5m.tif'
     out_path = Path(root) / PROVIDER / out_name
-    if out_name in done and out_path.exists():
+    if out_name in done and derived_complete(out_path):
         return None
+    clean_remnants(out_path)
     with state['lock']:
         wait = delay - (time.monotonic() - state['last'])
         if wait > 0:
