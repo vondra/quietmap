@@ -24,6 +24,9 @@ he.loader.exec_module(fetch_he)
 singles = importlib.util.spec_from_file_location('fetch_de_singles', 'fetch-de-singles.py')
 fetch_singles = importlib.util.module_from_spec(singles)
 singles.loader.exec_module(fetch_singles)
+by_sources = importlib.util.spec_from_file_location('build_de_by_sources', 'build-de-by-sources.py')
+build_by = importlib.util.module_from_spec(by_sources)
+by_sources.loader.exec_module(build_by)
 
 
 class ParserTest(unittest.TestCase):
@@ -257,6 +260,37 @@ class WindowTest(unittest.TestCase):
         bw = fetch_wcs.coverage_url('de-bw-dgm1', 500000.0, 5400000.0, 510000.0, 5410000.0)
         self.assertIn('SUBSET=E(500000.0,510000.0)', bw)
         self.assertIn('SCALESIZE=X(2000),Y(2000)', bw)
+
+
+class BySourcesTest(unittest.TestCase):
+    def test_by_listing_needs_sidecars_and_a_shared_grid(self):
+        from osgeo import gdal, osr
+        with tempfile.TemporaryDirectory() as temp:
+            provider = Path(temp) / build_by.PROVIDER
+            provider.mkdir()
+            crs = osr.SpatialReference()
+            crs.ImportFromEPSG(25832)
+            for name, west in (('498_5543.tif', 498000.0), ('499_5543.tif', 499000.0)):
+                ds = gdal.GetDriverByName('GTiff').Create(str(provider / name), 200, 200, 1,
+                                                          gdal.GDT_Float32)
+                ds.SetProjection(crs.ExportToWkt())
+                ds.SetGeoTransform([west, 5.0, 0.0, 5544000.0, 0.0, -5.0])
+                ds = None
+                Path(str(provider / name) + '.provenance.json').write_text('{}')
+            sliver = gdal.GetDriverByName('GTiff').Create(str(provider / '545_5268.tif'), 87, 68,
+                                                          1, gdal.GDT_Float32)
+            sliver.SetProjection(crs.ExportToWkt())
+            sliver.SetGeoTransform([545567.0, 5.0, 0.0, 5269000.0, 0.0, -5.0])
+            sliver = None
+            Path(str(provider / '545_5268.tif') + '.provenance.json').write_text('{}')
+            entries = build_by.build(temp)
+            self.assertEqual(len(entries), 2)
+            self.assertEqual({e['group'] for e in entries}, {'DE-BY-DGM5'})
+            self.assertEqual({e['role'] for e in entries}, {'national'})
+            self.assertTrue(all(e['vertical_crs'] == 7837 for e in entries))
+            (provider / '499_5543.tif.provenance.json').unlink()
+            with self.assertRaises(ValueError):
+                build_by.build(temp)
 
 
 if __name__ == '__main__':
