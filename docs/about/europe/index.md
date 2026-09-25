@@ -27,7 +27,7 @@ Wind turbines take their rated power from a national register in Germany, Denmar
 
 ## Buildings
 
-Building heights are measured in Prague. Czechia and Spain add floor counts from national registers. The rest of Europe uses OpenStreetMap tags, Overture and the typical height for the footprint size. Better data for the Netherlands, Denmark and Norway is not loaded yet.
+Building heights are measured in Prague, North Rhine-Westphalia and the Netherlands. Czechia and Spain add floor counts from national registers. The rest of Europe uses OpenStreetMap tags, Overture and the typical height for the footprint size. Better data for Denmark and Norway is not loaded yet.
 
 ## Ships
 

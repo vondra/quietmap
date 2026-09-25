@@ -13,6 +13,10 @@ None of this would exist without other people's open data. Thank you to everyone
 - Roads, railways, airports, buildings, industrial sites, noise walls:
   © [OpenStreetMap](https://www.openstreetmap.org/) contributors (ODbL)
 - Additional building outlines: [Overture Maps](https://overturemaps.org/)
+- Official noise-wall inventories: [Rijkswaterstaat geluidswerende voorzieningen](https://data.overheid.nl/dataset/15743-geluidswerende-voorzieningen--gwv-) (CC0 1.0),
+  [WSDOT Noise Walls](https://geo.wa.gov/datasets/WSDOT::wsdot-noise-walls/about),
+  [FDOT Noise Barriers](https://www.geoplan.ufl.edu/noise-barrier-inventory/) and the
+  [VDOT Noise Barrier Study](https://www.arcgis.com/home/item.html?id=695b47c2cede44aebcade31fd8bc3901)
 
 **Terrain, ground and heights**
 
@@ -22,6 +26,8 @@ None of this would exist without other people's open data. Thank you to everyone
 - Sealed ground: [ESA WorldCover 2021](https://worldcover2021.esa.int/) (CC BY 4.0), refined by
   [Copernicus Imperviousness Density](https://land.copernicus.eu/en/products/high-resolution-layer-imperviousness) in Europe
 - Building heights for Prague: the [IPR Praha building height model](https://opendata.geoportalpraha.cz/maps/ad9aca20e9c042d2b52eb31ff18961b6) (CC BY)
+- Building heights in North Rhine-Westphalia: the [NRW 3D building model LoD1](https://www.opengeodata.nrw.de/produkte/geobasis/3dg/lod1_gml/) (Datenlizenz Deutschland – Zero 2.0)
+- Building heights in the Netherlands: [3DBAG](https://3dbag.nl/) (CC BY 4.0)
 
 **Traffic**
 

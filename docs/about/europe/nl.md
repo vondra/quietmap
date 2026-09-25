@@ -1,6 +1,6 @@
 ---
 title: Netherlands
-intro: National motorway counts (INWEVA), modelled city traffic in Amsterdam, national passenger timetable. Other roads use class defaults. Rail freight not covered; 3DBAG building heights not used yet.
+intro: National motorway counts (INWEVA), modelled city traffic in Amsterdam, national passenger timetable. Other roads use class defaults. Rail freight not covered.
 map: { center: [5.3, 52.2], zoom: 7 }
 ---
 
@@ -20,4 +20,4 @@ Train, tram and metro counts: Dutch national timetable from [public-transport.ea
 
 ## Buildings and terrain
 
-[3DBAG](https://3dbag.nl/) has measured heights for every building but is not used yet. Heights: OpenStreetMap tags and the typical height for the footprint size.
+Buildings take their measured height from [3DBAG](https://3dbag.nl/) first, then OpenStreetMap tags, floor counts, Overture heights and the typical height for the footprint size. Noise walls along state roads come from the Rijkswaterstaat [barrier inventory](https://data.overheid.nl/dataset/15743-geluidswerende-voorzieningen--gwv-) (CC0).
