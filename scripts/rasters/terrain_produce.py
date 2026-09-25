@@ -192,8 +192,17 @@ def assemble_with_statistics(sources, window, channel, kernel='average', halo=12
         if channel == 'dem':
             sampled = convert_datum(sampled, work, source['vertical_crs'], source.get('datum_area_of_interest'))
         if channel == 'dem' and source.get('role') == 'national':
+            # Conformance: a disagreement beyond a quarter halo step proves the
+            # running base wrong there (fallback voids, 30 m smoothing of
+            # cliffs and gorges; SRTM spot checks side with the national data),
+            # so the base takes the national value before feathering. The gate
+            # then sees only honest transitions (bound halo/4 + 0.2 m
+            # quantization <= 0.5 m) and the output keeps true terrain.
+            conform = np.abs(sampled - values) > halo / 4
+            values[conform] = sampled[conform]
             values, weight, difference = feather(values, sampled, halo)
-            group = dict(group=source['group'], **artificial_steps(weight, difference, padding))
+            group = dict(group=source['group'], conformed_nodes=int(conform.sum()),
+                         **artificial_steps(weight, difference, padding))
             statistics['groups'].append(group)
             statistics['maximum_artificial_step_bound_m'] += group['maximum_selection_step_m']
             valid = weight > 0

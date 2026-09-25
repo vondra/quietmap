@@ -199,5 +199,46 @@ class TerrainTest(unittest.TestCase):
         finally:
             terrain_produce.datum_transform = real
 
+    def assemble_mem(self, national_value):
+        from terrain_produce import assemble_with_statistics
+        window = dict(north_node=100, west_node=0, rows=100, columns=100,
+                      nodes_per_degree=1)
+        crs = osr.SpatialReference()
+        crs.ImportFromEPSG(4326)
+        fallback = gdal.GetDriverByName('MEM').Create('', 136, 136, 1, gdal.GDT_Float32)
+        fallback.SetProjection(crs.ExportToWkt())
+        fallback.SetGeoTransform((-18, 1, 0, 118, 0, -1))
+        fallback.GetRasterBand(1).Fill(0)
+        cells = np.full((136, 136), national_value, dtype=np.float32)
+        cells[:, :40] = -9999
+        national = gdal.GetDriverByName('MEM').Create('', 136, 136, 1, gdal.GDT_Float32)
+        national.SetProjection(crs.ExportToWkt())
+        national.SetGeoTransform((-18, 1, 0, 118, 0, -1))
+        national.GetRasterBand(1).SetNoDataValue(-9999)
+        national.GetRasterBand(1).WriteArray(cells)
+        sources = [dict(path=fallback, horizontal_crs='EPSG:4326', vertical_crs=3855,
+                        role='fallback', group='fallback'),
+                   dict(path=national, horizontal_crs='EPSG:4326', vertical_crs=3855,
+                        role='national', group='national', nodata=-9999)]
+        return assemble_with_statistics(sources, window, 'dem', 'average', 16)
+
+    def test_conformance_keeps_true_terrain_past_fallback_voids(self):
+        from terrain_seams import require_seam_gate
+        values, owner, stats = self.assemble_mem(600.0)
+        self.assertEqual(stats['groups'][0]['conformed_nodes'], 96 * 136)
+        self.assertAlmostEqual(float(values[50, 90]), 600.0)
+        self.assertAlmostEqual(float(values[50, 10]), 0.0)
+        require_seam_gate(stats)
+
+    def test_agreeing_terrain_is_never_conformed(self):
+        values, owner, stats = self.assemble_mem(2.0)
+        self.assertEqual(stats['groups'][0]['conformed_nodes'], 0)
+        self.assertAlmostEqual(float(values[50, 90]), 2.0, places=5)
+        self.assertAlmostEqual(float(values[50, 10]), 0.0)
+
+    def test_conformance_threshold_is_strict(self):
+        _, _, stats = self.assemble_mem(4.0)
+        self.assertEqual(stats['groups'][0]['conformed_nodes'], 0)
+
 
 if __name__ == '__main__': unittest.main()
