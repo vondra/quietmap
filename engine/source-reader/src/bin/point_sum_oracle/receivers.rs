@@ -6,11 +6,11 @@ use crate::piece::{add, energies, lden_a, point_sum, production, Bands, Piece};
 use noise_compute::compute::line_piece::LinePiece;
 use noise_compute::constants::SOURCE_HEIGHT_RAIL;
 use noise_compute::emission::railway::{self, RailType};
-use noise_compute::emission::road;
 use noise_compute::propagation::obstacle_index::VectorReflectionSampler;
 use noise_compute::propagation::point_sum::NodeSpacing;
 use noise_compute::propagation::ray_transfer::RayReceiver;
-use noise_compute::propagation::relevance_bound::{surface_relevance_bound, SourceSpread};
+use noise_compute::propagation::meteorology::Meteorology;
+use noise_compute::propagation::relevance_bound::{surface_relevance_bound, SourceSpread, LINE_REACH_CEILING_M};
 use noise_compute::types::{LayerKind, RasterSampler, Receiver, NUM_BANDS};
 use rayon::prelude::*;
 use serde_json::{json, Value};
@@ -18,26 +18,29 @@ use std::path::Path;
 
 /// The popup's admission: class reach / rail reach and the all-period relevance gate.
 fn admitted_pieces(sources: &source_reader::PointQueryData, receiver: &Receiver) -> Vec<(LayerKind, Piece)> {
-    let bound = surface_relevance_bound();
+    let weather = Meteorology::defaults();
+    let bound = surface_relevance_bound(&weather);
     let receiver_city = noise_compute::square_country_city::square_country_city_for_latlng(receiver.lat, receiver.lon);
     let mut rows = Vec::new();
     for seg in &sources.roads {
         let Some(norm) = noise_compute::normalize::normalize_road_segment(seg, seg.square_country_city.unwrap_or(receiver_city)) else {
             continue;
         };
-        if seg.dist_m > norm.max_distance_m {
-            continue;
-        }
-        let pcts = norm.period_pcts();
-        let emission: [Bands; 3] = std::array::from_fn(|p| {
-            let flows = road::build_period_flows(norm.light_aadt, norm.medium_aadt, norm.heavy_aadt, norm.moto_aadt, norm.speed_kmh, pcts[p], [12.0, 4.0, 8.0][p]);
-            road::line_source_emission(&flows, norm.surf_corr_db)
-        });
-        if bound.pair_is_inaudible(&emission, SourceSpread::Line, seg.dist_m) {
+        let emission = norm.period_emissions_db();
+        if seg.dist_m > LINE_REACH_CEILING_M
+            || !bound.within_reach(&emission, SourceSpread::Line, seg.dist_m)
+            || bound.pair_is_inaudible(&emission, SourceSpread::Line, seg.dist_m)
+        {
             continue;
         }
         rows.push((LayerKind::Road, Piece {
-            line: LinePiece { start_lat: seg.start_lat, start_lon: seg.start_lon, end_lat: seg.end_lat, end_lon: seg.end_lon, source_height_m: norm.source_height_m, on_bridge: seg.bridge },
+            line: LinePiece {
+                start_lat: seg.start_lat, start_lon: seg.start_lon, end_lat: seg.end_lat, end_lon: seg.end_lon,
+                source_height_m: norm.source_height_m,
+                source_ground_factor: noise_compute::normalize::road::ROAD_SOURCE_GROUND_FACTOR,
+                platform_half_width_m: noise_compute::normalize::road::road_platform_half_width_m(seg.lanes),
+                directivity: noise_compute::propagation::line_quadrature::LineDirectivity::Omnidirectional,
+            },
             cp: (seg.cp_lat, seg.cp_lon),
             emission_db_per_m: emission,
         }));
@@ -47,15 +50,21 @@ fn admitted_pieces(sources: &source_reader::PointQueryData, receiver: &Receiver)
             continue;
         }
         let rail_type = RailType::from_u8(seg.rail_type);
-        if seg.dist_m > railway::rail_reach_m(rail_type, seg.speed_kmh, seg.traffic) {
-            continue;
-        }
         let emission = railway::rail_period_emissions(rail_type, seg.speed_kmh, seg.traffic);
-        if bound.pair_is_inaudible(&emission, SourceSpread::Line, seg.dist_m) {
+        if seg.dist_m > LINE_REACH_CEILING_M
+            || !bound.within_reach(&emission, SourceSpread::Line, seg.dist_m)
+            || bound.pair_is_inaudible(&emission, SourceSpread::Line, seg.dist_m)
+        {
             continue;
         }
         rows.push((LayerKind::Railway, Piece {
-            line: LinePiece { start_lat: seg.start_lat, start_lon: seg.start_lon, end_lat: seg.end_lat, end_lon: seg.end_lon, source_height_m: SOURCE_HEIGHT_RAIL, on_bridge: seg.bridge },
+            line: LinePiece {
+                start_lat: seg.start_lat, start_lon: seg.start_lon, end_lat: seg.end_lat, end_lon: seg.end_lon,
+                source_height_m: SOURCE_HEIGHT_RAIL,
+                source_ground_factor: noise_compute::normalize::rail::rail_source_ground_factor(rail_type, seg.bridge),
+                platform_half_width_m: noise_compute::normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
+                directivity: noise_compute::normalize::rail::RAIL_SOURCE_DIRECTIVITY,
+            },
             cp: (seg.cp_lat, seg.cp_lon),
             emission_db_per_m: emission,
         }));

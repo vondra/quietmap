@@ -29,6 +29,7 @@ pub fn load_sources(
 ) -> Result<(Vec<SurfaceSource>, ObstacleSet)> {
     let mut sources = Vec::new();
     let mut indexes = Vec::new();
+    let weather = noise_compute::propagation::meteorology::Meteorology::defaults();
     for square in squares {
         let mut has_surface_arrow = false;
         let mut has_structures = false;
@@ -119,6 +120,7 @@ pub fn load_sources(
                                 rail_traffic.as_ref().map(|columns| columns.row(row)),
                                 road_traffic.as_ref().map(|columns| columns.row(row)),
                                 frame,
+                                &weather,
                             )? {
                                 sources.push(SurfaceSource {
                                     identity: identity(0),
@@ -246,11 +248,16 @@ fn line(
     rail_traffic: Option<RailTraffic>,
     road_traffic: Option<RoadTraffic>,
     frame: &RegionMetricFrame,
+    weather: &noise_compute::propagation::meteorology::Meteorology,
 ) -> Result<Option<DeviceLineSource>> {
     let start = position(batch, row, "start")?;
     let end = position(batch, row, "end")?;
     let square_country_city = row_square_country_city(batch, row)?;
-    let (emission, max_distance_m, source_height_m) = if let Some(traffic) = rail_traffic {
+    let bridge = boolean(batch, "bridge", row);
+    let dipole = rail_traffic.is_some()
+        && rail::RAIL_SOURCE_DIRECTIVITY == noise_compute::propagation::line_quadrature::LineDirectivity::TrackDipole;
+    let (emission, max_distance_m, source_height_m, source_ground_factor, platform_half_width_m) =
+        if let Some(traffic) = rail_traffic {
         if traffic.is_silent() || boolean(batch, "tunnel", row) {
             return Ok(None);
         }
@@ -262,8 +269,10 @@ fn line(
         });
         (
             norm.period_emissions(),
-            norm.max_distance_m(),
+            norm.reach_m(weather),
             norm.source_height_m,
+            rail::rail_source_ground_factor(norm.rail_type, bridge),
+            rail::RAIL_PLATFORM_HALF_WIDTH_M,
         )
     } else {
         let Some(norm) = normalize_road(
@@ -283,12 +292,18 @@ fn line(
         };
         (
             norm.period_emissions(),
-            norm.max_distance_m,
+            norm.reach_m(weather),
             norm.source_height_m,
+            road::ROAD_SOURCE_GROUND_FACTOR,
+            road::road_platform_half_width_m(byte(batch, "lanes", row)),
         )
     };
     let [start_x_m, start_y_m] = frame.encode(start[0], start[1]);
     let [end_x_m, end_y_m] = frame.encode(end[0], end[1]);
+    // The reach is capped at the profile ceiling less the extract's 250 m piece limit; a piece
+    // a few centimetres longer in this frame still has to keep its far end within the profile.
+    let frame_length_m = (end_x_m - start_x_m).hypot(end_y_m - start_y_m);
+    let max_distance_m = (max_distance_m as f32).min(MAXIMUM_PROFILE_RAY_M - frame_length_m);
     Ok(Some(DeviceLineSource {
         start_x_m,
         start_y_m,
@@ -297,13 +312,12 @@ fn line(
         extent_m: float(batch, "length_m", row)
             .filter(|v| *v > 0.0)
             .unwrap_or_else(|| grid::geo::flat_dist(start[0], start[1], end[0], end[1]) as f32),
-        max_distance_m: max_distance_m as f32,
+        max_distance_m,
         source_height_m: source_height_m as f32,
-        flags: if boolean(batch, "bridge", row) {
-            SOURCE_FLAG_BRIDGE
-        } else {
-            0
-        },
+        flags: if bridge { SOURCE_FLAG_BRIDGE } else { 0 }
+            | if dipole { SOURCE_FLAG_TRACK_DIPOLE } else { 0 },
+        source_ground_factor: source_ground_factor as f32,
+        platform_half_width_m: platform_half_width_m as f32,
         emission_linear: emission_linear(emission),
     }))
 }
@@ -318,6 +332,8 @@ fn point_device(frame: &RegionMetricFrame, point: &PreparedPoint) -> DeviceLineS
         max_distance_m: point.max_radius_m as f32,
         source_height_m: point.source_height_m,
         flags: SOURCE_FLAG_POINT,
+        source_ground_factor: 0.0,
+        platform_half_width_m: 0.0,
         emission_linear: emission_linear((point.lw_day, point.lw_evening, point.lw_night)),
     }
 }
@@ -404,7 +420,7 @@ mod completeness_tests {
         let frame = RegionMetricFrame::for_latitude_longitude(0.0, 0.0);
         let devices: Vec<_> = (0..3)
             .map(|row| {
-                line(&batch, row, None, Some(traffic.row(row)), &frame)
+                line(&batch, row, None, Some(traffic.row(row)), &frame, &noise_compute::propagation::meteorology::Meteorology::defaults())
                     .unwrap()
                     .unwrap()
             })
@@ -524,7 +540,8 @@ mod completeness_tests {
         });
         let columns = source_reader::rail_traffic::RailTrafficColumns::read(&batch).unwrap();
         let frame = RegionMetricFrame::for_latitude_longitude(0.0, 0.0);
-        let device = line(&batch, 0, Some(columns.row(0)), None, &frame)
+        let weather = noise_compute::propagation::meteorology::Meteorology::defaults();
+        let device = line(&batch, 0, Some(columns.row(0)), None, &frame, &weather)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -535,8 +552,8 @@ mod completeness_tests {
             .iter()
             .all(|value| *value == 0.0));
         assert!(device.emission_linear[8..].iter().all(|value| *value > 0.0));
-        assert_eq!(device.max_distance_m, normalized.max_distance_m() as f32);
-        assert!(line(&batch, 0, Some(RailTraffic::default()), None, &frame)
+        assert_eq!(device.max_distance_m, normalized.reach_m(&weather) as f32);
+        assert!(line(&batch, 0, Some(RailTraffic::default()), None, &frame, &weather)
             .unwrap()
             .is_none());
     }

@@ -23,8 +23,8 @@ pub(crate) fn compute_roads(
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
     use crate::compute::line_piece::{evaluate_line_piece, LinePiece, LinePieceScratch};
-    use crate::propagation::ray_transfer::{received_variants, RayReceiver};
-    use crate::propagation::relevance_bound::SourceSpread;
+    use crate::propagation::ray_transfer::{received_variants, RayReceiver, RaySource, SourceGround};
+    use crate::propagation::relevance_bound::{SourceSpread, LINE_REACH_CEILING_M};
     use rayon::prelude::*;
 
     let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
@@ -36,7 +36,8 @@ pub(crate) fn compute_roads(
         lon: receiver.lon,
         altitude_m: rcv_alt,
     };
-    let bound = crate::propagation::relevance_bound::surface_relevance_bound();
+    let weather = crate::propagation::meteorology::Meteorology::defaults();
+    let bound = crate::propagation::relevance_bound::surface_relevance_bound(&weather);
 
     use std::collections::HashMap;
 
@@ -49,9 +50,7 @@ pub(crate) fn compute_roads(
         min_dist: f64,
         min_d_slant: f64,
         min_ground_g: f64,
-        closest_cp_lat: f64,
-        closest_cp_lon: f64,
-        closest_src_height: f64,
+        closest_source: RaySource,
         // Dominant-segment metadata (highest received energy — what drives the result)
         dominant_energy: f64,
         dominant_segment_idx: i16,
@@ -108,7 +107,6 @@ pub(crate) fn compute_roads(
     struct RoadPre {
         norm: normalize::NormalizedRoad,
         square_country_city: crate::square_country_city::SquareCountryCity,
-        src_alt: f64,
         d_slant: f64,
     }
     struct RoadSegOut {
@@ -133,24 +131,13 @@ pub(crate) fn compute_roads(
                 .square_country_city
                 .unwrap_or(receiver_square_country_city);
             let norm = normalize::normalize_road_segment(seg, square_country_city)?;
-            if seg.dist_m > norm.max_distance_m {
-                return None;
-            }
-            let period_pcts = norm.period_pcts();
-            let period_emissions: [[f64; NUM_BANDS]; 3] = std::array::from_fn(|pi| {
-                let flows = road::build_period_flows(
-                    norm.light_aadt,
-                    norm.medium_aadt,
-                    norm.heavy_aadt,
-                    norm.moto_aadt,
-                    norm.speed_kmh,
-                    period_pcts[pi],
-                    [12.0, 4.0, 8.0][pi],
-                );
-                road::line_source_emission(&flows, norm.surf_corr_db)
-            });
-            // All periods count (#31): a night-only road is never dropped by a day gate.
-            if bound.pair_is_inaudible(&period_emissions, SourceSpread::Line, seg.dist_m) {
+            let period_emissions = norm.period_emissions_db();
+            // The row's reach and the all-period pair gate (#31: a night-only road is never
+            // dropped by a day gate), both from the one relevance bound.
+            if seg.dist_m > LINE_REACH_CEILING_M
+                || !bound.within_reach(&period_emissions, SourceSpread::Line, seg.dist_m)
+                || bound.pair_is_inaudible(&period_emissions, SourceSpread::Line, seg.dist_m)
+            {
                 return None;
             }
             let src_alt = rasters.elevation(seg.cp_lat, seg.cp_lon) + norm.source_height_m;
@@ -166,12 +153,15 @@ pub(crate) fn compute_roads(
                     end_lat: seg.end_lat,
                     end_lon: seg.end_lon,
                     source_height_m: norm.source_height_m,
-                    on_bridge: seg.bridge,
+                    source_ground_factor: normalize::road::ROAD_SOURCE_GROUND_FACTOR,
+                    platform_half_width_m: normalize::road::road_platform_half_width_m(seg.lanes),
+                    directivity: crate::propagation::line_quadrature::LineDirectivity::Omnidirectional,
                 },
                 seg.cp_lat,
                 seg.cp_lon,
                 obstacles,
                 rasters,
+                &weather,
                 scratch,
                 collect_traces.then_some(&day_weights),
             )?;
@@ -251,7 +241,6 @@ pub(crate) fn compute_roads(
                 RoadPre {
                     norm,
                     square_country_city,
-                    src_alt,
                     d_slant,
                 },
                 RoadSegOut {
@@ -290,7 +279,7 @@ pub(crate) fn compute_roads(
         let speed = p.norm.speed_kmh;
         let base_speed = p.norm.base_speed_kmh;
         let surf_corr = p.norm.surf_corr_db;
-        let (square_country_city, src_alt, d_slant) = (p.square_country_city, p.src_alt, p.d_slant);
+        let (square_country_city, d_slant) = (p.square_country_city, p.d_slant);
         let (seg_variants, ground_g) = (out.seg_variants, out.ground_g);
         let effective_ref = std::mem::take(&mut out.effective_ref);
 
@@ -347,9 +336,14 @@ pub(crate) fn compute_roads(
                 min_dist: f64::MAX,
                 min_d_slant: 0.0,
                 min_ground_g: 0.5,
-                closest_cp_lat: seg.cp_lat,
-                closest_cp_lon: seg.cp_lon,
-                closest_src_height: src_alt,
+                closest_source: RaySource {
+                    lat: seg.cp_lat,
+                    lon: seg.cp_lon,
+                    height_m: p.norm.source_height_m,
+                    ground: SourceGround::Fixed(normalize::road::ROAD_SOURCE_GROUND_FACTOR),
+                    platform_half_width_m: normalize::road::road_platform_half_width_m(seg.lanes),
+                    exclusion_radius_m: 0.0,
+                },
                 dominant_energy: 0.0,
                 dominant_segment_idx: 0,
                 dominant_distance_m: 0.0,
@@ -431,9 +425,14 @@ pub(crate) fn compute_roads(
             acc.min_dist = seg.dist_m;
             acc.min_d_slant = d_slant;
             acc.min_ground_g = ground_g;
-            acc.closest_cp_lat = seg.cp_lat;
-            acc.closest_cp_lon = seg.cp_lon;
-            acc.closest_src_height = src_alt;
+            acc.closest_source = RaySource {
+                lat: seg.cp_lat,
+                lon: seg.cp_lon,
+                height_m: p.norm.source_height_m,
+                ground: SourceGround::Fixed(normalize::road::ROAD_SOURCE_GROUND_FACTOR),
+                platform_half_width_m: normalize::road::road_platform_half_width_m(seg.lanes),
+                exclusion_radius_m: 0.0,
+            };
         }
         // Popup trace: push pass 2's prebuilt SegmentTrace, in segment order —
         // the same order (and therefore the same top-K tie-breaking downstream)
@@ -540,16 +539,8 @@ pub(crate) fn compute_roads(
 
         let impacts = PropagationVariants::impact_deltas(&acc.variants, road_periods.lden_db);
 
-        let (nearest_terrain, nearest_screening, nearest_veg) = compute_path_effects(
-            rasters,
-            obstacles,
-            acc.closest_cp_lat,
-            acc.closest_cp_lon,
-            acc.closest_src_height,
-            receiver,
-            acc.min_dist,
-            0.0,
-        );
+        let (nearest_terrain, nearest_screening, nearest_veg) =
+            nearest_path_breakdown(rasters, obstacles, &acc.closest_source, receiver, &weather);
 
         let road_meta = RoadMetadata {
             aadt_light: acc.dominant_traffic.light,

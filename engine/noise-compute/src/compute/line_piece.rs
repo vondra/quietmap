@@ -2,23 +2,27 @@
 //! summed into per-period, per-variant band transfers, plus the trace of its loudest node.
 
 use crate::propagation::line_quadrature::{
-    line_quadrature_nodes, LineQuadratureNode, LinePieceGeometry, ReceiverSkylineArc,
+    line_quadrature_nodes, LineDirectivity, LineQuadratureNode, LinePieceGeometry, ReceiverSkylineArc,
 };
+use crate::propagation::meteorology::Meteorology;
 use crate::propagation::obstacle_index::ObstacleSet;
 use crate::propagation::ray_transfer::{
-    evaluate_ray_transfer, RayDetail, RayReceiver, RayScratch, RaySource, VariantBands,
-    VARIANT_FULL, VARIANT_NO_SCREENING, VARIANT_NO_TERRAIN,
+    evaluate_ray_transfer, RayDetail, RayReceiver, RayScratch, RaySource, SourceGround,
+    VariantBands, VARIANT_FULL, VARIANT_NO_SCREENING, VARIANT_NO_TERRAIN,
 };
 use crate::types::{RasterSampler, ScreeningFanIntervalTrace, ScreeningFanTrace, NUM_BANDS};
 
-/// The piece as prepared: endpoints, the source height above its ground, and a bridge flag.
+/// The piece as prepared: endpoints, the source height above its ground, the ground factor
+/// Gs it stands on (road platform and deck 0, ballast 1) and its platform half-width.
 pub struct LinePiece {
     pub start_lat: f64,
     pub start_lon: f64,
     pub end_lat: f64,
     pub end_lon: f64,
     pub source_height_m: f64,
-    pub on_bridge: bool,
+    pub source_ground_factor: f64,
+    pub platform_half_width_m: f64,
+    pub directivity: LineDirectivity,
 }
 
 /// Received energy per unit `10^(L_W′/10)` for each period, variant and band: the quadrature sum
@@ -49,6 +53,7 @@ pub fn evaluate_line_piece(
     cp_lon: f64,
     obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
+    weather: &Meteorology,
     scratch: &mut LinePieceScratch,
     loudness_weights: Option<&[f64; NUM_BANDS]>,
 ) -> Option<LinePieceTransfer> {
@@ -85,7 +90,7 @@ pub fn evaluate_line_piece(
             },
         );
     };
-    line_quadrature_nodes(&geometry, &mut skyline, &mut scratch.nodes);
+    line_quadrature_nodes(&geometry, piece.directivity, &mut skyline, &mut scratch.nodes);
     let divergence = geometry.divergence_factor();
     let longitude_span = grid::geo::wrapped_longitude_delta(piece.start_lon, piece.end_lon);
     let source_at = |along_m: f64| {
@@ -94,7 +99,8 @@ pub fn evaluate_line_piece(
             lat: piece.start_lat + fraction * (piece.end_lat - piece.start_lat),
             lon: grid::geo::normalize_longitude(piece.start_lon + fraction * longitude_span),
             height_m: piece.source_height_m,
-            on_bridge: piece.on_bridge,
+            ground: SourceGround::Fixed(piece.source_ground_factor),
+            platform_half_width_m: piece.platform_half_width_m,
             exclusion_radius_m: 0.0,
         }
     };
@@ -109,6 +115,8 @@ pub fn evaluate_line_piece(
             obstacles,
             node.obstacles_on_ray,
             rasters,
+            weather,
+            true,
             &mut scratch.ray,
             None,
         );
@@ -142,6 +150,8 @@ pub fn evaluate_line_piece(
                 obstacles,
                 scratch.nodes[index].obstacles_on_ray,
                 rasters,
+                weather,
+                true,
                 &mut scratch.ray,
                 Some(&mut detail),
             );

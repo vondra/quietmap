@@ -95,7 +95,7 @@ pub fn run(spacing: NodeSpacing) -> Value {
                 let x0 = -scene.half_length_m + length * i as f64;
                 let (start, end) = (to_geo(x0, 0.0), to_geo(x0 + length, 0.0));
                 let piece = Piece {
-                    line: LinePiece { start_lat: start.0, start_lon: start.1, end_lat: end.0, end_lon: end.1, source_height_m: 0.05, on_bridge: false },
+                    line: LinePiece { start_lat: start.0, start_lon: start.1, end_lat: end.0, end_lon: end.1, source_height_m: 0.05, source_ground_factor: 0.0, platform_half_width_m: 5.0, directivity: noise_compute::propagation::line_quadrature::LineDirectivity::Omnidirectional },
                     cp: to_geo(0.0_f64.clamp(x0, x0 + length), 0.0),
                     emission_db_per_m: emission,
                 };

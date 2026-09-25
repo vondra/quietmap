@@ -32,8 +32,7 @@ pub fn surface_squares_within_reach(lat: f64, lng: f64) -> Result<Vec<grid::Squa
 }
 
 fn surface_reach_m() -> f64 {
-    noise_compute::constants::RAILWAY_REACH_CEILING
-        .max(noise_compute::constants::ROAD_MAX_RADIUS[0])
+    noise_compute::propagation::relevance_bound::LINE_REACH_CEILING_M
         .max(noise_compute::constants::GROUND_OPS_RUNWAY_MAX_RADIUS)
         .max(BUILDING_QUERY_RADIUS_M)
         .max(INDUSTRIAL_QUERY_RADIUS_M)

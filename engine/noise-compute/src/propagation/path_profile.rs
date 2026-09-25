@@ -150,19 +150,6 @@ pub fn clamp_source_platform(t: &[f64], elevation_m: &mut [f64], dist_m: f64) {
     }
 }
 
-/// Read-time form of [`clamp_source_platform`] for callers that must not
-/// mutate their input (the M3b subset bound reads a caller-owned slice).
-/// f32→f64 conversion is exact, so clamping in f64 and truncating back is
-/// bit-identical to clamping in f32.
-#[inline]
-pub fn source_platform_clamped(t_i: f64, dist_m: f64, e_i: f64, e0: f64) -> f64 {
-    if t_i * dist_m < CELL_M && e_i > e0 {
-        e0
-    } else {
-        e_i
-    }
-}
-
 /// Bilateral adaptive t-values for a path of `dist_m` meters.
 ///
 /// Pattern (≥310 m paths): one near-probe per end (`NEAR_OFFSET_M`), three
@@ -521,24 +508,6 @@ mod tests {
         let before = e.clone();
         clamp_source_platform(&t, &mut e, dist);
         assert_eq!(e, before, "idempotent");
-    }
-
-    /// Read-time form agrees with the mutating form point-for-point (the M3b
-    /// subset bound must carve exactly what the exact march carves).
-    #[test]
-    fn source_platform_clamped_matches_mutating_form() {
-        let dist = 173.7;
-        let t = vec![0.0, 0.0576, 0.1468, 0.2354, 0.6, 1.0]; // 10, 25.5, 40.9 m
-        let e = vec![375.28_f64, 375.8, 372.77, 368.92, 367.0, 366.34];
-        let mut carved = e.clone();
-        clamp_source_platform(&t, &mut carved, dist);
-        for i in 0..t.len() {
-            assert_eq!(
-                source_platform_clamped(t[i], dist, e[i], e[0]),
-                carved[i],
-                "sample {i}"
-            );
-        }
     }
 
     #[test]

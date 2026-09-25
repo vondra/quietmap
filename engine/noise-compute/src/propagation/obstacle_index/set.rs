@@ -21,6 +21,38 @@ impl ObstacleSet {
     }
 
     /// Total indexed edges across the set (telemetry / emptiness check).
+    /// Every edge of the set re-framed into one index centred at `(origin_lat, origin_lon)`,
+    /// footprint ids made unique across the set (each index's ids follow those of the indexes
+    /// before it): one grid that a single ray walk crosses in chainage order, which the
+    /// painter's streaming CNOSSOS scan needs to pair a footprint's walls into roofs.
+    pub fn merged(&self, origin_lat: f64, origin_lon: f64) -> ObstacleIndex {
+        let mut builder = ObstacleIndex::builder(origin_lat, origin_lon);
+        let mut id_base = 0_u32;
+        for index in &self.indexes {
+            let Some(max_id) = index.edges.iter().map(|edge| edge.id).max() else {
+                continue;
+            };
+            let to_merged = |x: f32, y: f32| {
+                let lat = index.origin_lat + f64::from(y) / grid::geo::M_PER_DEG_LAT;
+                let lon = index.origin_lon + f64::from(x) / index.m_per_deg_lon;
+                let (x, y) = builder.local(lat, lon);
+                (x as f32, y as f32)
+            };
+            let mut edges = Vec::with_capacity(index.edges.len());
+            for edge in index.edges.iter() {
+                let (x0, y0) = to_merged(edge.x0, edge.y0);
+                let (x1, y1) = to_merged(edge.x1, edge.y1);
+                edges.push(super::ObstacleEdge { x0, y0, x1, y1, id: id_base + edge.id, ..*edge });
+            }
+            builder.edges.extend(edges);
+            let classes = &index.footprint_class;
+            builder.footprint_class.resize((id_base + max_id + 1) as usize, crate::envelope::EnvelopeClass::Default as u8);
+            builder.footprint_class[id_base as usize..id_base as usize + classes.len()].copy_from_slice(classes);
+            id_base += max_id + 1;
+        }
+        builder.build()
+    }
+
     pub fn edge_count(&self) -> usize {
         self.indexes.iter().map(|i| i.edge_count()).sum()
     }
@@ -80,11 +112,14 @@ impl ObstacleSet {
     ) {
         out.clear();
         scratch.tallest_building_m = 0.0;
-        for idx in &self.indexes {
+        for (ordinal, idx) in self.indexes.iter().enumerate() {
             if !idx.segment_may_hit(src_lat, src_lon, rcv_lat, rcv_lon) {
                 continue;
             }
+            let start = out.len();
             idx.append_crossings(src_lat, src_lon, rcv_lat, rcv_lon, gate, scratch, out);
+            let ordinal = u16::try_from(ordinal).expect("an obstacle set holds at most 65,536 indexes");
+            out[start..].iter_mut().for_each(|crossing| crossing.index = ordinal);
         }
         out.sort_unstable_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
     }

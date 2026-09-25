@@ -23,7 +23,7 @@ fn relative(point: [f64; 3], receiver: [f64; 3]) -> [f64; 3] {
 fn free_field_energy(start: [f64; 3], end: [f64; 3], receiver: [f64; 3]) -> f64 {
     let geometry = LinePieceGeometry::new(relative(start, receiver), relative(end, receiver)).unwrap();
     let mut nodes = Vec::new();
-    line_quadrature_nodes(&geometry, &mut no_obstacles, &mut nodes);
+    line_quadrature_nodes(&geometry, LineDirectivity::Omnidirectional, &mut no_obstacles, &mut nodes);
     nodes.iter().map(|node| node.weight_rad).sum::<f64>() * geometry.divergence_factor()
 }
 
@@ -93,7 +93,7 @@ fn a_receiver_on_the_line_reads_it_half_a_metre_away() {
 fn nodes_are_uniform_in_the_in_plane_angle() {
     let geometry = LinePieceGeometry::new([-125.0, 20.0, -3.95], [125.0, 20.0, -3.95]).unwrap();
     let mut nodes = Vec::new();
-    line_quadrature_nodes(&geometry, &mut no_obstacles, &mut nodes);
+    line_quadrature_nodes(&geometry, LineDirectivity::Omnidirectional, &mut no_obstacles, &mut nodes);
     assert_eq!(nodes.len(), LINE_BUCKET_COUNT);
     let angles: Vec<f64> = nodes.iter().map(|n| geometry.in_plane_angle_at(n.along_m)).collect();
     let step = geometry.subtended_angle_rad() / LINE_BUCKET_COUNT as f64;
@@ -121,7 +121,7 @@ fn a_wall_in_front_of_a_wide_bucket_places_blocked_and_clear_nodes() {
         }
     };
     let mut nodes = Vec::new();
-    line_quadrature_nodes(&geometry, &mut skyline, &mut nodes);
+    line_quadrature_nodes(&geometry, LineDirectivity::Omnidirectional, &mut skyline, &mut nodes);
     assert!(nodes.len() > LINE_BUCKET_COUNT);
     let total: f64 = nodes.iter().map(|n| n.weight_rad).sum();
     assert!((total - geometry.subtended_angle_rad()).abs() < 1e-12);
@@ -136,4 +136,23 @@ fn a_wall_in_front_of_a_wide_bucket_places_blocked_and_clear_nodes() {
         assert!(!(80.0..=100.0).contains(&a), "clear node behind the wall at {a}°");
     }
     assert!(nodes.iter().any(|n| n.obstacles_on_ray && (80.0..=100.0).contains(&azimuth(n))));
+}
+
+/// The track dipole integrates in closed form: over an infinite line its mean is
+/// 0.01 + 0.99/2, and each node's weight is the integral over its own angle interval.
+#[test]
+fn the_track_dipole_weights_integrate_its_directivity() {
+    let half_pi = std::f64::consts::FRAC_PI_2;
+    let whole = LineDirectivity::TrackDipole.weight(-half_pi, half_pi);
+    assert!((whole / std::f64::consts::PI - 0.505).abs() < 1e-12, "{whole}");
+    let steps = 100_000;
+    let (a, b) = (-0.3_f64, 1.1_f64);
+    let numeric: f64 = (0..steps)
+        .map(|i| {
+            let phi = a + (b - a) * (i as f64 + 0.5) / steps as f64;
+            LineDirectivity::TrackDipole.factor(phi.cos().powi(2)) * (b - a) / steps as f64
+        })
+        .sum();
+    assert!((LineDirectivity::TrackDipole.weight(b, a) - numeric).abs() < 1e-9);
+    assert_eq!(LineDirectivity::Omnidirectional.weight(a, b), b - a);
 }

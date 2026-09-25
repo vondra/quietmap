@@ -11,7 +11,8 @@ use raster_reader::FusedPixel;
 use crate::obstacle_transfer::{
     DeviceObstacleEdgeEndpoints, DeviceObstacleGrid, DeviceRasterGeometry,
 };
-use crate::source_frame::{DeviceLineSource, CORNER_COUNT, PERIOD_COUNT, TILE_PIXEL_SIDE};
+use crate::source_frame::{DeviceLineSource, BAND_COUNT, CORNER_COUNT, PERIOD_COUNT, TILE_PIXEL_SIDE};
+use noise_compute::propagation::meteorology::{Meteorology, DIRECTION_SECTOR_COUNT};
 
 unsafe extern "C" {
     fn relevant_source_cuda_error_string(status: c_int) -> *const c_char;
@@ -69,11 +70,42 @@ pub struct DeviceScenePointers {
     pub obstacle_edge_height_m: *const f32,
     pub obstacle_cell_maximum_heights: *const f32,
     pub obstacle_edge_is_building: *const u8,
+    /// Footprint (or wall) id per edge, unique across the region.
+    pub obstacle_edge_footprint_id: *const u32,
+    pub weather: *const DeviceWeather,
     pub source_count: u32,
     pub obstacle_grid_count: u32,
     /// Half a pixel of this tile in metres: the ground-ops divergence floor.
     pub pixel_floor_m: f32,
     pub raster_geometry: DeviceRasterGeometry,
+}
+
+/// The region's long-term weather as the kernel reads it (noise-compute Meteorology): p per
+/// period and direction sector, the hourly absorption coefficient's mean, variance and smallest
+/// hour per period and band, and the relevance bound's α_min per band.
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub struct DeviceWeather {
+    pub favourable_probability: [[f32; DIRECTION_SECTOR_COUNT]; PERIOD_COUNT],
+    pub absorption_mean_db_per_km: [[f32; BAND_COUNT]; PERIOD_COUNT],
+    pub absorption_variance_db2_per_km2: [[f32; BAND_COUNT]; PERIOD_COUNT],
+    pub absorption_minimum_db_per_km: [[f32; BAND_COUNT]; PERIOD_COUNT],
+    pub relevance_alpha_minimum_db_per_km: [f32; BAND_COUNT],
+}
+
+impl DeviceWeather {
+    pub fn from_meteorology(weather: &Meteorology) -> Self {
+        let absorption = |pick: fn(&noise_compute::propagation::air_absorption::AbsorptionClimate) -> f64| {
+            std::array::from_fn(|period| std::array::from_fn(|band| pick(&weather.absorption[period][band]) as f32))
+        };
+        Self {
+            favourable_probability: weather.favourable_probability.map(|row| row.map(|p| p as f32)),
+            absorption_mean_db_per_km: absorption(|climate| climate.mean_db_per_km),
+            absorption_variance_db2_per_km2: absorption(|climate| climate.variance_db2_per_km2),
+            absorption_minimum_db_per_km: absorption(|climate| climate.minimum_db_per_km),
+            relevance_alpha_minimum_db_per_km: weather.minimum_absorption_db_per_km().map(|a| a as f32),
+        }
+    }
 }
 
 mod device_value {
@@ -91,6 +123,7 @@ mod device_value {
     impl Sealed for crate::source_frame::DeviceLineSource {}
     impl Sealed for crate::obstacle_transfer::DeviceObstacleGrid {}
     impl Sealed for crate::obstacle_transfer::DeviceObstacleEdgeEndpoints {}
+    impl Sealed for super::DeviceWeather {}
 }
 
 /// Only plain numeric CUDA values accept every possible returned bit pattern.
@@ -227,8 +260,8 @@ impl RelevantSourceCuda {
                 &mut elapsed_milliseconds,
             )
         })?;
-        if self.take_profile_overflow()? {
-            bail!("CUDA profile overflow during corner production");
+        if let Some(capacities) = self.take_profile_overflow()? {
+            bail!("CUDA per-ray capacity exceeded during corner production: {capacities}");
         }
         let flat = pair_energy.copy_to_vec()?;
         anyhow::ensure!(
@@ -284,24 +317,33 @@ impl RelevantSourceCuda {
                 &mut elapsed_milliseconds,
             )
         })?;
-        if self.take_profile_overflow()? {
-            bail!("CUDA profile overflow during tile painting");
+        if let Some(capacities) = self.take_profile_overflow()? {
+            bail!("CUDA per-ray capacity exceeded during tile painting: {capacities}");
         }
         Ok((output.copy_to_vec()?, elapsed_milliseconds))
     }
 
-    /// Whether any thread since the last call had to drop a profile chainage,
-    /// clearing the flag as it reads.
+    /// The per-ray capacities any thread outran since the last call, clearing them as it reads:
+    /// `None`, or their names.
     ///
     /// `QUIETMAP_MAXIMUM_PROFILE_POINTS` is sized for the longest ray the world's
     /// reaches and microsegments can make, and `MAXIMUM_PROFILE_RAY_M` refuses a
-    /// source that could beat it — but that is a derivation, and this is the
-    /// device saying what actually happened. A truncated profile changes painted
-    /// bytes and shows no other sign, so the caller must fail the cell.
-    pub fn take_profile_overflow(&self) -> Result<bool> {
+    /// source that could beat it; the hull, open-footprint capacities are sized from
+    /// measured rays — but those are derivations, and this is the device saying what
+    /// actually happened. A truncated ray changes painted bytes and shows no other sign,
+    /// so the caller must fail the cell.
+    pub fn take_profile_overflow(&self) -> Result<Option<String>> {
         let mut overflowed: c_int = 0;
         check_cuda(unsafe { relevant_source_cuda_take_profile_overflow(&mut overflowed) })?;
-        Ok(overflowed != 0)
+        if overflowed == 0 {
+            return Ok(None);
+        }
+        let names: Vec<&str> = [(1, "profile chainages"), (2, "hull points"), (4, "open footprints")]
+            .into_iter()
+            .filter(|(bit, _)| overflowed & bit != 0)
+            .map(|(_, name)| name)
+            .collect();
+        Ok(Some(names.join(", ")))
     }
 }
 
@@ -329,7 +371,8 @@ mod tests {
     /// matching `static_assert`s sit beside the CUDA declaration.
     #[test]
     fn scene_pointer_layout_matches_cuda() {
-        assert_eq!(size_of::<DeviceScenePointers>(), 112);
+        assert_eq!(size_of::<DeviceScenePointers>(), 128);
+        assert_eq!(size_of::<DeviceWeather>(), 128 * size_of::<f32>());
         assert_eq!(
             std::mem::offset_of!(DeviceScenePointers, obstacle_edge_endpoints),
             40

@@ -140,11 +140,26 @@ pub struct RawRoadInput {
     pub built_up: u8,
 }
 
+/// Gs of (2.5.14) under a road source: the carriageway, and a bridge deck, are hard (#20).
+pub const ROAD_SOURCE_GROUND_FACTOR: f64 = 0.0;
+/// Lane width and shoulder of the platform rule (METHOD.md §2.2 proposal until W3 delivers
+/// measured half-widths per row; no measured provenance).
+pub const ROAD_PLATFORM_LANE_WIDTH_M: f64 = 3.5;
+pub const ROAD_PLATFORM_SHOULDER_M: f64 = 1.5;
+/// Lanes assumed where the row carries none.
+pub const ROAD_PLATFORM_DEFAULT_LANES: u8 = 2;
+
+/// Half-width of the road platform: within it the terrain may not rise above the source ground
+/// (the rule that replaced the 30.9 m source-platform clamp, which erased real berms).
+pub fn road_platform_half_width_m(lanes: u8) -> f64 {
+    let lanes = if lanes == 0 { ROAD_PLATFORM_DEFAULT_LANES } else { lanes };
+    f64::from(lanes) * ROAD_PLATFORM_LANE_WIDTH_M / 2.0 + ROAD_PLATFORM_SHOULDER_M
+}
+
 #[derive(Debug, Clone)]
 pub struct NormalizedRoad {
     pub class_idx: usize,
     pub class_name: &'static str,
-    pub max_distance_m: f64,
     pub source_height_m: f64,
     /// Speed after junction cap (≤30 km/h at roundabouts).
     pub speed_kmh: f64,
@@ -199,6 +214,36 @@ impl NormalizedRoad {
             period_hours,
         );
         bands_to_f32(road::line_source_emission(&flows, self.surf_corr_db))
+    }
+
+    /// The row's band emissions `L_W′` for day, evening and night.
+    pub fn period_emissions_db(&self) -> [[f64; NUM_BANDS]; 3] {
+        let pcts = self.period_pcts();
+        std::array::from_fn(|period| {
+            let flows = road::build_period_flows(
+                self.light_aadt,
+                self.medium_aadt,
+                self.heavy_aadt,
+                self.moto_aadt,
+                self.speed_kmh,
+                pcts[period],
+                [12.0, 4.0, 8.0][period],
+            );
+            road::line_source_emission(&flows, self.surf_corr_db)
+        })
+    }
+
+    /// How far the row reaches: where the surface relevance bound's Lden falls to the reach edge.
+    pub fn reach_m(&self, weather: &crate::propagation::meteorology::Meteorology) -> f64 {
+        use crate::propagation::relevance_bound::{
+            surface_relevance_bound, SourceSpread, LINE_REACH_CEILING_M, REACH_EDGE_LDEN_DB,
+        };
+        surface_relevance_bound(weather).reach_m(
+            &self.period_emissions_db(),
+            SourceSpread::Line,
+            REACH_EDGE_LDEN_DB,
+            LINE_REACH_CEILING_M,
+        )
     }
 
     pub fn period_emissions(&self) -> ([f32; NUM_BANDS], [f32; NUM_BANDS], [f32; NUM_BANDS]) {
@@ -258,7 +303,6 @@ pub fn normalize_road(
     Some(NormalizedRoad {
         class_idx,
         class_name,
-        max_distance_m: road_max_distance_m(input.road_class),
         source_height_m: SOURCE_HEIGHT_ROAD,
         speed_kmh,
         base_speed_kmh,
@@ -396,20 +440,11 @@ const ROAD_CLASS_NAMES: [&str; 13] = [
     "primary_link",
 ];
 
-const ROAD_MAX_DIST: [f64; 13] = crate::constants::ROAD_MAX_RADIUS;
-
-/// The raw class clamped onto the 13 class tables (names, reaches, world
-/// defaults), which therefore must stay the same length.
+/// The raw class clamped onto the 13 class tables (names, world defaults),
+/// which therefore must stay the same length.
 const _: () = assert!(ROAD_CLASS_NAMES.len() == WORLD_DEFAULT.len());
 fn road_class_idx(road_class: u8) -> usize {
     (road_class as usize).min(ROAD_CLASS_NAMES.len() - 1)
-}
-
-/// How far a road of this raw class is audible — the row's `max_distance_m`
-/// after normalization, so a reader can reject a far row before the
-/// normalize cascade and keep exactly the rows the cascade would (dev1 ba6bd59e).
-pub fn road_max_distance_m(road_class: u8) -> f64 {
-    ROAD_MAX_DIST[road_class_idx(road_class)]
 }
 
 #[cfg(test)]
@@ -655,7 +690,6 @@ mod tests {
         let make = |class_idx: usize| NormalizedRoad {
             class_idx,
             class_name: "",
-            max_distance_m: 0.0,
             source_height_m: 0.0,
             speed_kmh: 50.0,
             base_speed_kmh: 50.0,

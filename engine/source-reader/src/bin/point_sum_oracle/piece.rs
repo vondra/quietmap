@@ -3,10 +3,12 @@
 
 use noise_compute::compute::line_piece::{evaluate_line_piece, LinePiece, LinePieceScratch};
 use noise_compute::constants::A_WEIGHTING;
+use noise_compute::propagation::meteorology::Meteorology;
 use noise_compute::propagation::obstacle_index::ObstacleSet;
 use noise_compute::propagation::point_sum::{line_nodes, NodeSpacing, POINT_SOURCE_DIVERGENCE_OFFSET_DB};
 use noise_compute::propagation::ray_transfer::{
-    evaluate_ray_transfer, RayReceiver, RayScratch, RaySource, VariantBands, VARIANT_COUNT, VARIANT_FULL,
+    evaluate_ray_transfer, RayReceiver, RayScratch, RaySource, SourceGround, VariantBands, VARIANT_COUNT,
+    VARIANT_FULL,
 };
 use noise_compute::types::{RasterSampler, NUM_BANDS};
 
@@ -41,6 +43,7 @@ pub fn production(
         piece.cp.1,
         obstacles,
         rasters,
+        &Meteorology::defaults(),
         &mut LinePieceScratch::default(),
         None,
     )
@@ -71,6 +74,7 @@ pub fn point_sum(
     let divergence = 10f64.powf(POINT_SOURCE_DIVERGENCE_OFFSET_DB / 10.0);
     let mut sum = [[[0.0; NUM_BANDS]; VARIANT_COUNT]; 3];
     let mut scratch = RayScratch::default();
+    let weather = Meteorology::defaults();
     let longitude_span = grid::geo::wrapped_longitude_delta(line.start_lon, line.end_lon);
     for node in &nodes {
         let f = node.piece_fraction.clamp(0.0, 1.0);
@@ -78,11 +82,18 @@ pub fn point_sum(
             lat: line.start_lat + f * (line.end_lat - line.start_lat),
             lon: grid::geo::normalize_longitude(line.start_lon + f * longitude_span),
             height_m: line.source_height_m,
-            on_bridge: line.on_bridge,
+            ground: SourceGround::Fixed(line.source_ground_factor),
+            platform_half_width_m: line.platform_half_width_m,
             exclusion_radius_m: 0.0,
         };
-        let transfer = evaluate_ray_transfer(receiver, &source, obstacles, true, rasters, &mut scratch, None);
-        let weight = node.length_m / (divergence * node.slant_distance_m * node.slant_distance_m);
+        let transfer =
+            evaluate_ray_transfer(receiver, &source, obstacles, true, rasters, &weather, false, &mut scratch, None);
+        let to_receiver = [-node.position_m[0], -node.position_m[1], receiver.altitude_m - node.position_m[2]];
+        let along_line = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
+        let cosine = (to_receiver[0] * along_line[0] + to_receiver[1] * along_line[1] + to_receiver[2] * along_line[2])
+            / (to_receiver.iter().map(|v| v * v).sum::<f64>() * along_line.iter().map(|v| v * v).sum::<f64>()).sqrt();
+        let weight = line.directivity.factor(1.0 - cosine * cosine) * node.length_m
+            / (divergence * node.slant_distance_m * node.slant_distance_m);
         for (period_sum, period) in sum.iter_mut().zip(&transfer.periods) {
             for (variant_sum, variant) in period_sum.iter_mut().zip(period) {
                 for (value, band) in variant_sum.iter_mut().zip(variant) {

@@ -39,6 +39,27 @@ impl RailTraffic {
     }
 }
 
+/// Half-width of a single-track rail platform (METHOD.md §2.2 proposal, 2.5 m per track, until
+/// W4 delivers track counts and formation widths; no measured provenance).
+pub const RAIL_PLATFORM_HALF_WIDTH_M: f64 = 2.5;
+
+/// How a rail row radiates around the track: omnidirectional until W4's D1 emission, fitted with
+/// the CNOSSOS-EU track dipole and two source heights, lands; the kernels take
+/// `LineDirectivity::TrackDipole` (CUDA `SOURCE_FLAG_TRACK_DIPOLE`) then.
+pub const RAIL_SOURCE_DIRECTIVITY: crate::propagation::line_quadrature::LineDirectivity =
+    crate::propagation::line_quadrature::LineDirectivity::Omnidirectional;
+
+/// Gs of (2.5.14) under a rail source: ballast is porous (1); embedded tram track and a bridge
+/// deck are hard (0) (#26: the deck is Gs only). Track form defaults by rail type until W4
+/// supplies it.
+pub fn rail_source_ground_factor(rail_type: RailType, on_bridge: bool) -> f64 {
+    if on_bridge || rail_type == RailType::Tram {
+        0.0
+    } else {
+        1.0
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct RawRailInput {
     pub rail_type: u8,
@@ -69,8 +90,9 @@ impl NormalizedRail {
         (bands[0], bands[1], bands[2])
     }
 
-    pub fn max_distance_m(&self) -> f64 {
-        railway::rail_reach_m(self.rail_type, self.speed_kmh, self.traffic)
+    /// How far the row reaches: where the surface relevance bound's Lden falls to the reach edge.
+    pub fn reach_m(&self, weather: &crate::propagation::meteorology::Meteorology) -> f64 {
+        railway::rail_reach_m(self.rail_type, self.speed_kmh, self.traffic, weather)
     }
 }
 

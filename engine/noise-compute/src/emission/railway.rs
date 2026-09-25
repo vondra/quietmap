@@ -220,7 +220,7 @@ const LIGHT_RAIL: RailVehicleCoeffs = RailVehicleCoeffs {
 };
 
 /// Rail vehicle type (matches rail_type field in Arrow IPC).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RailType {
     Rail,        // 0 — mixed passenger/freight
     Tram,        // 1
@@ -359,24 +359,22 @@ pub fn rail_period_emissions(
         .map(|(passenger, freight, hours)| railway_emission(rail_type, speed_kmh, passenger, freight, hours))
 }
 
-/// Reach of a rail row: where the surface relevance bound's Lden falls to the rail edge.
+/// Reach of a rail row: where the surface relevance bound's Lden falls to the reach edge.
 pub fn rail_reach_m(
     rail_type: RailType,
     speed_kmh: f64,
     traffic: crate::normalize::RailTraffic,
+    weather: &crate::propagation::meteorology::Meteorology,
 ) -> f64 {
-    use crate::constants::{
-        RAILWAY_REACH_CLAMP_MAX, RAILWAY_REACH_CLAMP_MIN, RAILWAY_REACH_TARGET_LDEN_DB,
+    use crate::propagation::relevance_bound::{
+        surface_relevance_bound, SourceSpread, LINE_REACH_CEILING_M, REACH_EDGE_LDEN_DB,
     };
-    use crate::propagation::relevance_bound::{surface_relevance_bound, SourceSpread};
-    surface_relevance_bound()
-        .reach_m(
-            &rail_period_emissions(rail_type, speed_kmh, traffic),
-            SourceSpread::Line,
-            RAILWAY_REACH_TARGET_LDEN_DB,
-            RAILWAY_REACH_CLAMP_MAX,
-        )
-        .clamp(RAILWAY_REACH_CLAMP_MIN, RAILWAY_REACH_CLAMP_MAX)
+    surface_relevance_bound(weather).reach_m(
+        &rail_period_emissions(rail_type, speed_kmh, traffic),
+        SourceSpread::Line,
+        REACH_EDGE_LDEN_DB,
+        LINE_REACH_CEILING_M,
+    )
 }
 
 #[cfg(test)]
@@ -417,6 +415,7 @@ mod tests {
             kind,
             speed,
             prepared_traffic(country, kind, passenger, freight),
+            &crate::propagation::meteorology::Meteorology::defaults(),
         )
     }
 
@@ -430,7 +429,7 @@ mod tests {
         distance: f64,
     ) -> f64 {
         use crate::propagation::relevance_bound::{surface_relevance_bound, SourceSpread};
-        surface_relevance_bound().lden_db(
+        surface_relevance_bound(&crate::propagation::meteorology::Meteorology::defaults()).lden_db(
             &rail_period_emissions(kind, speed, prepared_traffic(country, kind, passenger, freight)),
             SourceSpread::Line,
             distance,
@@ -491,35 +490,34 @@ mod tests {
         );
     }
 
-    /// The reach puts the bound's Lden of each representative row exactly at the 25 dB edge
-    /// at the distance it returns, unless a clamp fired — then the row is still above the edge
-    /// at the ceiling.
+    /// The reach puts the bound's Lden of each representative row exactly at the 30 dB edge
+    /// at the distance it returns, unless the profile ceiling cut it — then the row is still
+    /// above the edge there.
     #[test]
-    fn reach_lands_on_25_db_target() {
+    fn reach_lands_on_the_edge_or_the_ceiling() {
+        use crate::propagation::relevance_bound::{LINE_REACH_CEILING_M, REACH_EDGE_LDEN_DB};
         let square_country_city = SquareCountryCity::UNKNOWN;
-        let mut unclamped = 0;
+        let mut on_edge = 0;
         for (rt, sp, qp, qf) in [
-            (RailType::Rail, 80.0, 10.0, 0.0),
+            (RailType::Rail, 80.0, 2.0, 0.0),
             (RailType::Rail, 80.0, 80.0, 20.0),
             (RailType::Tram, 25.0, 120.0, 0.0),
         ] {
             let r = rail_reach_m(square_country_city, rt, sp, qp, qf);
             let lden = bound_lden_at(square_country_city, rt, sp, qp, qf, r);
-            if r >= crate::constants::RAILWAY_REACH_CLAMP_MAX {
-                assert!(lden > 25.0, "{rt:?} clamped at {r} but Lden there is {lden:.3}");
+            if r >= LINE_REACH_CEILING_M {
+                assert!(lden > REACH_EDGE_LDEN_DB, "{rt:?} at the ceiling {r} but Lden there is {lden:.3}");
                 continue;
             }
-            assert!(r > 2_000.0, "{rt:?} reach {r} hit the floor clamp");
-            assert!((lden - 25.0).abs() < 1e-6, "{rt:?} Lden@reach = {lden:.3}, want 25");
-            unclamped += 1;
+            assert!((lden - REACH_EDGE_LDEN_DB).abs() < 1e-3, "{rt:?} Lden@reach = {lden:.3}");
+            on_edge += 1;
         }
-        assert!(unclamped >= 2, "the 25 dB property was never exercised");
+        assert!(on_edge >= 2, "the edge property was never exercised");
     }
 
-    /// C1: the SAME default mainline under an EU region (CZ) reaches FARTHER than
+    /// C1: the SAME quiet mainline under an EU region (CZ) reaches FARTHER than
     /// off-corridor — EU freight runs 54.6 % at night (vs 33 % world), so the
-    /// night-penalised Lden rises and the 25 dB crossing moves outward. Direction
-    /// is the whole point of C1; magnitude is bounded by the 10 km clamp.
+    /// night-penalised Lden rises and the edge crossing moves outward.
     #[test]
     fn eu_mainline_reach_exceeds_world() {
         let cz = SquareCountryCity {
@@ -527,8 +525,8 @@ mod tests {
             country_iso: *b"CZ",
             city_id: 0,
         };
-        let eu = rail_reach_m(cz, RailType::Rail, 80.0, 80.0, 20.0);
-        let world = rail_reach_m(SquareCountryCity::UNKNOWN, RailType::Rail, 80.0, 80.0, 20.0);
+        let eu = rail_reach_m(cz, RailType::Rail, 60.0, 2.0, 2.0);
+        let world = rail_reach_m(SquareCountryCity::UNKNOWN, RailType::Rail, 60.0, 2.0, 2.0);
         assert!(
             eu > world,
             "EU mainline reach {eu:.0} must exceed world {world:.0}"
@@ -539,31 +537,22 @@ mod tests {
     #[test]
     fn tram_reach_shrinks_below_mainline() {
         let square_country_city = SquareCountryCity::UNKNOWN;
-        let mainline = rail_reach_m(square_country_city, RailType::Rail, 80.0, 30.0, 0.0);
-        let tram = rail_reach_m(square_country_city, RailType::Tram, 25.0, 120.0, 0.0);
-        let light = rail_reach_m(square_country_city, RailType::LightRail, 60.0, 20.0, 0.0);
+        let mainline = rail_reach_m(square_country_city, RailType::Rail, 80.0, 4.0, 0.0);
+        let tram = rail_reach_m(square_country_city, RailType::Tram, 25.0, 20.0, 0.0);
+        let light = rail_reach_m(square_country_city, RailType::LightRail, 60.0, 4.0, 0.0);
         assert!(tram < mainline, "tram {tram:.0} should be < mainline {mainline:.0}");
         assert!(light < mainline, "light-rail {light:.0} should be < mainline {mainline:.0}");
     }
 
-    /// Clamp floor: a near-silent stub (one passenger train/day @ 80 km/h
-    /// solves to ~900 m) must still clamp UP to the 2 km floor so its near
-    /// field stays drawn. Clamp ceiling: a very loud, fast, freight-heavy
-    /// corridor solves past 11 km and must clamp DOWN to the halo budget.
+    /// A loud corridor stops at the profile ceiling; a near-silent stub reaches only metres.
     #[test]
-    fn reach_clamps_at_floor_and_ceiling() {
+    fn reach_stops_at_the_profile_ceiling() {
+        use crate::propagation::relevance_bound::LINE_REACH_CEILING_M;
         let square_country_city = SquareCountryCity::UNKNOWN;
-        let stub = rail_reach_m(square_country_city, RailType::Rail, 80.0, 1.0, 0.0);
-        assert_eq!(
-            stub, 2_000.0,
-            "degenerate-quiet row must clamp to the 2 km floor"
-        );
         let loud = rail_reach_m(square_country_city, RailType::Rail, 250.0, 200.0, 80.0);
-        assert_eq!(
-            loud,
-            crate::constants::RAILWAY_REACH_CLAMP_MAX,
-            "loud HS-freight corridor must clamp to the 11 km ceiling"
-        );
+        assert_eq!(loud, LINE_REACH_CEILING_M);
+        let stub = rail_reach_m(square_country_city, RailType::Rail, 30.0, 0.001, 0.0);
+        assert!(stub < 200.0, "stub reach {stub}");
     }
 
     // ── C1: per-region, per-category period shares ──────────────────────────

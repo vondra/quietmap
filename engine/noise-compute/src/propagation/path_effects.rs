@@ -9,10 +9,9 @@
 use super::diffraction;
 use super::diffraction::DiffractionResult;
 use super::horizon::single_edge_atten;
-use super::iso9613::GroundPath;
 use super::obstacle_index::{CrossingCandidate, ObstacleKind};
 use super::path_profile::{
-    clamp_source_platform, path_integral_u8, source_platform_clamped, vegetation_run_length,
+    clamp_source_platform, path_integral_u8, vegetation_run_length,
     PathProfile,
 };
 use super::vegetation;
@@ -124,70 +123,6 @@ fn compute_terrain_diffraction<'a>(
         t,
         n,
     })
-}
-
-/// Max-δ over a caller-supplied SUBSET of a ray's own cadence, plus the direct
-/// slant distance — the sound inputs of the M3b byte-stop terrain bound
-/// (`scatter_band`'s doc block option (b)).
-///
-/// `t`/`elevation_m` must be samples of the SAME ray the exact march would
-/// walk (bit-identical elevation values at shared `t` — the caller samples
-/// them through the same sampling path), with BOTH endpoints included so
-/// `src_h`/`rcv_h` (and hence `dsr`) match the exact evaluation exactly. A
-/// subset's max-δ edge can only be ≤ the full cadence's max-δ edge, so with
-/// `dsr` the caller derives both δ lower bounds the sound mixed-band bound
-/// needs ([`diffraction::diffraction_mixed_lower_bound`]).
-///
-/// Returns `None` when the subset shows no sample above the line of sight
-/// (no terrain term to bound). Sound ONLY for a single-cp-ray exact path,
-/// never under the angular quadrature (each bucket marches its own terrain).
-pub fn terrain_subset_delta_lower_bound(
-    t: &[f64],
-    elevation_m: &[f32],
-    dist_m: f64,
-    src_elev: f64,
-    rcv_alt: f64,
-) -> Option<(f64, f64)> {
-    let n = t.len();
-    if n < 3 || dist_m < SCREENING_MIN_PATH_M || elevation_m.len() != n {
-        return None;
-    }
-    let dz_total = rcv_alt - src_elev;
-    let e0 = elevation_m[0] as f64;
-    // Source-platform clamp, read-time form (SPEC §4.2): the exact march
-    // carves the same samples, so a subset clamped by the same rule stays a
-    // sound lower bound of the carved full march (subset-of-carved =
-    // carved-of-subset — the rule is pointwise in (t, e) given shared e0).
-    if !t.iter().zip(elevation_m.iter()).any(|(&ti, &e)| {
-        source_platform_clamped(ti, dist_m, e as f64, e0) > src_elev + dz_total * ti
-    }) {
-        return None;
-    }
-    let src_h = (src_elev - e0).max(SOURCE_HEIGHT_FLOOR_M);
-    let rcv_h = (rcv_alt - elevation_m[n - 1] as f64)
-        .max(crate::constants::DEFAULT_RECEIVER_HEIGHT.min(RECEIVER_HEIGHT_FLOOR_M));
-    let src_e = e0 + src_h;
-    let rcv_e = elevation_m[n - 1] as f64 + rcv_h;
-    let dsr = (dist_m * dist_m + (rcv_e - src_e).powi(2)).sqrt();
-    let mut best = 0.0f64;
-    let mut any = false;
-    for i in 1..n - 1 {
-        let top = source_platform_clamped(t[i], dist_m, elevation_m[i] as f64, e0);
-        let los = src_e + (rcv_e - src_e) * t[i];
-        if top <= los {
-            continue;
-        }
-        let d_sg = t[i] * dist_m;
-        let d_rg = (1.0 - t[i]) * dist_m;
-        let delta = ((d_sg * d_sg + (top - src_e).powi(2)).sqrt()
-            + (d_rg * d_rg + (top - rcv_e).powi(2)).sqrt())
-            - dsr;
-        if delta > best {
-            best = delta;
-            any = true;
-        }
-    }
-    any.then_some((best, dsr))
 }
 
 /// Terrain attenuation + single-edge trace for popup tooltips.
@@ -434,59 +369,6 @@ pub fn ground_g_from_profile(profile: &PathProfile) -> f64 {
     }
 }
 
-/// Direct CNOSSOS ground input for a sampled ray.
-///
-/// The OLS calculation is the same bare-earth regression primitive used by
-/// diffraction's `δ*` construction.  It deliberately excludes the composite
-/// building/barrier profile: those objects belong only to the screen arm of
-/// the existing `max(A_ground, A_terrain + A_screen)` composite.  Bridges pass
-/// `force_hard_ground=true`, preserving their explicit hard-surface rule.
-pub fn cnossos_ground_path_from_profile(
-    profile: &mut PathProfile,
-    src_alt_m: f64,
-    rcv_alt_m: f64,
-    force_hard_ground: bool,
-) -> GroundPath {
-    if profile.t.is_empty() || profile.elevation_m.is_empty() {
-        return GroundPath::new(0.0, 0.05, 0.5, 0.0, 0.0);
-    }
-    let ground_path_g = if force_hard_ground {
-        0.0
-    } else {
-        ground_g_from_profile(profile)
-    };
-    let source_ground_g = if force_hard_ground {
-        0.0
-    } else {
-        (1.0 - profile.imd_u8[0] as f64 / 100.0).clamp(0.0, 1.0)
-    };
-    let dist_m = profile.dist_m;
-    let PathProfile {
-        t,
-        elevation_m,
-        elevation_f64_scratch,
-        ..
-    } = profile;
-    // FORCE-REFILL, never the amortized reuse: the terrain/screening passes
-    // carve this scratch with the source-platform clamp (SPEC §4.2), and the
-    // ground mean-plane must fit the RAW profile. Those passes re-apply their
-    // clamp unconditionally after every refill, so any call order stays
-    // correct (ground → terrain or terrain → ground).
-    elevation_f64_scratch.clear();
-    elevation_f64_scratch.extend(elevation_m.iter().map(|&e| e as f64));
-    let elevation_m: &[f64] = elevation_f64_scratch;
-    let (slope, intercept) = diffraction::fit_mean_ground_plane(t, elevation_m, 0.0, dist_m);
-    let src_plane_m = intercept;
-    let rcv_plane_m = slope * dist_m + intercept;
-    GroundPath::new(
-        dist_m,
-        src_alt_m - src_plane_m,
-        rcv_alt_m - rcv_plane_m,
-        ground_path_g,
-        source_ground_g,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,11 +420,6 @@ mod tests {
             "fixture must exercise the summation residue"
         );
         assert_eq!(ground_g_from_profile(&profile), 0.0);
-        let path = cnossos_ground_path_from_profile(&mut profile, 4.0, 4.0, false);
-        assert_eq!(
-            super::super::iso9613::ground_atten_bands(path),
-            [-3.0; NUM_BANDS]
-        );
 
         let middle = profile.imd_u8.len() / 2;
         profile.imd_u8[middle] = 99;
@@ -557,27 +434,6 @@ mod tests {
         profile.dist_m = 0.0;
         profile.imd_u8.fill(100);
         assert_eq!(ground_g_from_profile(&profile), 1.0);
-    }
-
-    #[test]
-    fn cnossos_ground_path_uses_bare_earth_ols_and_path_mean_g() {
-        let mut p = build_flat_profile(1_000.0, 10.0);
-        // Make the endpoint distinguishable from the path mean: trapezoidal
-        // integration stays 0.5 in this symmetric profile while §2.5.14 sees
-        // the hard source endpoint separately.
-        p.imd_u8[0] = 100;
-        let last = p.imd_u8.len() - 1;
-        p.imd_u8[last] = 0;
-        let got = cnossos_ground_path_from_profile(&mut p, 11.0, 14.0, false);
-        assert!((got.dp_m - 1_000.0).abs() < 1e-9);
-        assert!((got.zs_h_m - 1.0).abs() < 1e-9);
-        assert!((got.zr_h_m - 4.0).abs() < 1e-9);
-        assert!((got.source_ground_g - 0.0).abs() < 1e-9);
-        assert!((got.ground_path_g - 0.5).abs() < 1e-9);
-
-        let bridge = cnossos_ground_path_from_profile(&mut p, 11.0, 14.0, true);
-        assert_eq!(bridge.ground_path_g, 0.0);
-        assert_eq!(bridge.source_ground_g, 0.0);
     }
 
     #[test]
@@ -612,35 +468,6 @@ mod tests {
     /// The ground mean-plane must read the RAW profile even after the
     /// terrain pass carved the shared scratch (SPEC §4.2): ground result is
     /// identical whether or not terrain ran first, and repeats are stable.
-    #[test]
-    fn ground_path_is_blind_to_the_platform_clamp() {
-        let build = || {
-            let mut p = PathProfile::new();
-            p.dist_m = 50.9;
-            p.t = vec![0.0, 0.1963, 0.5, 0.8037, 1.0];
-            p.elevation_m = vec![375.28, 375.80, 371.0, 369.0, 366.34];
-            p.forest_u8 = vec![0; 5];
-            p.imd_u8 = vec![50; 5];
-            p
-        };
-        let mut fresh = build();
-        let raw = cnossos_ground_path_from_profile(&mut fresh, 375.33, 370.34, false);
-        let mut used = build();
-        let _ = terrain_attenuation(&mut used, 375.33, 370.34);
-        let after_terrain = cnossos_ground_path_from_profile(&mut used, 375.33, 370.34, false);
-        let after_repeat = cnossos_ground_path_from_profile(&mut used, 375.33, 370.34, false);
-        assert_eq!(raw.dp_m, after_terrain.dp_m);
-        assert_eq!(raw.zs_h_m, after_terrain.zs_h_m, "source plane moved");
-        assert_eq!(raw.zr_h_m, after_terrain.zr_h_m, "receiver plane moved");
-        assert_eq!(raw.zs_h_m, after_repeat.zs_h_m, "repeat not stable");
-    }
-
-    /// The defect SPEC §4.2 prevents: a phantom shoulder hump one sample
-    /// (~10 m) from the source on a downhill embankment path must NOT dominate
-    /// the terrain term — after the platform clamp, only the genuine plateau
-    /// edge (source cell's own elevation) may diffract. Geometry measured on
-    /// the D4 at Voznice (owner report 2026-08-20): src cell 375.28, phantom
-    /// 375.80 at 10 m, receiver 51 m downhill at 366.34.
     #[test]
     fn phantom_shoulder_hump_is_carved_to_the_platform() {
         let dist = 50.9;
@@ -810,104 +637,6 @@ mod tests {
     /// hardening 2026-08-21): march/bound clamp agreement is pinned where the
     /// carve actually removes the hill, not just structurally guaranteed.
     #[test]
-    fn terrain_subset_bound_never_exceeds_the_full_cadence_bands() {
-        use super::super::diffraction::diffraction_mixed_lower_bound;
-        use crate::constants::{FAV_RAY_CURVATURE_MIN_M, FAV_RAY_CURVATURE_PER_DSR};
-        let src_elev = 10.05;
-        let rcv_alt = 11.5;
-        // One case: plant `hill_h` on the sample nearest `hill_t` (never the
-        // source cell itself — that would move the shared e0), run the full
-        // cadence and the K-sample subset bound, assert bound <= full per
-        // band. Returns the hill's distance so callers can assert zone side.
-        let check = |dist: f64, hill_t: f64, hill_h: f32| -> f64 {
-            let mut p = build_flat_profile(dist, 10.0);
-            let (idx, _) =
-                p.t.iter()
-                    .enumerate()
-                    .skip(1)
-                    .min_by(|(_, &a), (_, &b)| {
-                        ((a - hill_t).abs())
-                            .partial_cmp(&((b - hill_t).abs()))
-                            .unwrap()
-                    })
-                    .unwrap();
-            p.elevation_m[idx] = hill_h;
-            let hill_d = p.t[idx] * dist;
-            let full = terrain_attenuation(&mut p, src_elev, rcv_alt);
-            let n = p.t.len();
-            let k = 8usize;
-            let subset: Vec<usize> = (0..k)
-                .map(|j| ((j as f64) * (n - 1) as f64 / (k - 1) as f64).round() as usize)
-                .collect();
-            let t_sub: Vec<f64> = subset.iter().map(|&i| p.t[i]).collect();
-            let e_sub: Vec<f32> = subset.iter().map(|&i| p.elevation_m[i]).collect();
-            // No hill in the subset ⇒ no bound ⇒ sound.
-            if let Some((delta_sub, dsr)) =
-                terrain_subset_delta_lower_bound(&t_sub, &e_sub, dist, src_elev, rcv_alt)
-            {
-                let gamma = FAV_RAY_CURVATURE_MIN_M.max(FAV_RAY_CURVATURE_PER_DSR * dsr);
-                let kappa = 2.0 * gamma * (dsr / (2.0 * gamma)).asin() - dsr;
-                let bound = diffraction_mixed_lower_bound(delta_sub, delta_sub - kappa);
-                for b in 0..NUM_BANDS {
-                    assert!(
-                        bound[b] <= full[b] + 1e-9,
-                        "d={dist} hill_t={hill_t} hill_h={hill_h} band {b}: bound {:.6} > full {:.6}",
-                        bound[b],
-                        full[b]
-                    );
-                }
-            }
-            hill_d
-        };
-        for &dist in &[600.0, 1_000.0, 3_000.0] {
-            for &hill_t in &[0.2, 0.35, 0.5, 0.65, 0.8] {
-                for &hill_h in &[14.0, 20.0, 30.0, 45.0, 70.0] {
-                    check(dist, hill_t, hill_h);
-                }
-            }
-        }
-        // Near-source arm: at 600 m the 10 m near-endpoint probe sits INSIDE
-        // the carve zone (hill_d < CELL_M) — the clamp removes the hill in
-        // both the full march (in-place) and the bound (read-time), and the
-        // bound property must still hold.
-        for &hill_h in &[14.0, 20.0, 30.0, 45.0, 70.0] {
-            let hill_d = check(600.0, 0.02, hill_h);
-            assert!(
-                hill_d < CELL_M,
-                "near-source arm must land inside the carve zone, got {hill_d} m"
-            );
-        }
-    }
-
-    /// The subset march degenerates exactly like the exact path: under 3
-    /// samples or under 30 m there is no terrain term to bound, and a flat
-    /// subset yields no edge above the line of sight.
-    #[test]
-    fn terrain_subset_march_degenerate_shapes() {
-        assert!(terrain_subset_delta_lower_bound(
-            &[0.0, 0.5, 1.0],
-            &[10.0, 30.0, 10.0],
-            25.0,
-            12.0,
-            14.0
-        )
-        .is_none());
-        assert!(
-            terrain_subset_delta_lower_bound(&[0.0, 1.0], &[10.0, 10.0], 100.0, 12.0, 14.0)
-                .is_none()
-        );
-        // Flat subset: no edge above LOS ⇒ no bound.
-        assert!(terrain_subset_delta_lower_bound(
-            &[0.0, 0.25, 0.5, 0.75, 1.0],
-            &[10.0; 5],
-            1000.0,
-            12.0,
-            14.0
-        )
-        .is_none());
-    }
-
-    #[test]
     fn screening_finds_midpath_building() {
         // Tall building at t=0.4 — should produce screening attenuation.
         let mut p = build_flat_profile(1000.0, 0.0);
@@ -922,6 +651,7 @@ mod tests {
             height_m: 20.0,
             kind: ObstacleKind::Building,
             id: 1,
+            index: 0,
         }];
         let terrain_atten = [0.0_f64; NUM_BANDS];
         let (atten, trace) = screening_attenuation_with_meta(
@@ -1180,6 +910,7 @@ mod tests {
             height_m: 4.0,
             kind: ObstacleKind::Building,
             id: 1,
+            index: 0,
         };
         let wall = wall_crossings(380.0, -20.0, 380.0, 20.0, 4.0, dist_m, 2);
         let cands: Vec<CrossingCandidate> = [building].into_iter().chain(wall).collect();
@@ -1214,6 +945,7 @@ mod tests {
                 height_m: 3.0,
                 kind: ObstacleKind::Building,
                 id: 1,
+                index: 0,
             };
             let mut previous = [0.0; NUM_BANDS];
             let mut mixed_bands = false;
@@ -1223,6 +955,7 @@ mod tests {
                     height_m: 2.0 + step as f32 * 0.01,
                     kind: ObstacleKind::Barrier,
                     id: 2,
+                    index: 0,
                 };
                 let mut evaluate = |candidates: &[CrossingCandidate]| {
                     screening_attenuation_with_meta(
@@ -1335,6 +1068,7 @@ mod tests {
             height_m: 6.0,
             kind: ObstacleKind::Building,
             id: 1,
+            index: 0,
         }];
 
         let terrain = terrain_attenuation(&mut p, src_elev, rcv_alt);
@@ -1390,6 +1124,7 @@ mod tests {
             height_m: 14.0,
             kind: ObstacleKind::Building,
             id: 7,
+            index: 0,
         }];
         let terrain = terrain_attenuation(&mut p, 100.05, 104.0);
         assert!(terrain.iter().any(|&a| a > 0.0), "the hill must attenuate");
@@ -1426,6 +1161,7 @@ mod tests {
                 height_m: 10.0,
                 kind,
                 id: 1,
+                index: 0,
             }];
             let (atten, _) = screening_attenuation_with_meta(
                 &mut p,
@@ -1453,6 +1189,7 @@ mod tests {
             height_m: 9.0,
             kind: ObstacleKind::Building,
             id: 3,
+            index: 0,
         }];
         let terrain = [0.0_f64; NUM_BANDS];
         let (atten, trace) = screening_attenuation_with_meta(
@@ -1486,6 +1223,7 @@ mod tests {
                 height_m: 12.0,
                 kind: ObstacleKind::Building,
                 id: 1,
+                index: 0,
             }];
             let (a, _) = screening_attenuation_with_meta(
                 &mut p,
@@ -1536,6 +1274,7 @@ mod tests {
             height_m: 2.0,
             kind: ObstacleKind::Building,
             id: 1,
+            index: 0,
         }];
         let terrain = [0.0_f64; NUM_BANDS];
         let (atten, trace) = screening_attenuation_with_meta(
@@ -1571,6 +1310,7 @@ mod tests {
             height_m: 0.5,
             kind: ObstacleKind::Building,
             id: 1,
+            index: 0,
         }];
         let terrain = [0.0_f64; NUM_BANDS];
         let (atten, trace) = screening_attenuation_with_meta(
@@ -1596,12 +1336,14 @@ mod tests {
                 height_m: 2.0, // near miss
                 kind: ObstacleKind::Building,
                 id: 1,
+                index: 0,
             },
             CrossingCandidate {
                 t: 0.7,
                 height_m: 6.0, // real blocker
                 kind: ObstacleKind::Building,
                 id: 2,
+                index: 0,
             },
         ];
         let terrain = [0.0_f64; NUM_BANDS];
@@ -1627,18 +1369,21 @@ mod tests {
                 height_m: 6.0,
                 kind: ObstacleKind::Building,
                 id: 1,
+                index: 0,
             },
             CrossingCandidate {
                 t: 0.9, // near receiver → larger δ at same height class
                 height_m: 6.0,
                 kind: ObstacleKind::Building,
                 id: 2,
+                index: 0,
             },
             CrossingCandidate {
                 t: 0.3,
                 height_m: 0.5, // below both endpoint heights → below LOS
                 kind: ObstacleKind::Building,
                 id: 3,
+                index: 0,
             },
         ];
         let terrain = [0.0_f64; NUM_BANDS];

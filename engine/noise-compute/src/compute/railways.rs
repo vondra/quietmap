@@ -15,13 +15,6 @@ use crate::*;
 /// clustering from 58.208 ms to 8.125 ms.
 const RAIL_TRACK_LINK_M: f64 = 150.0;
 
-type ReachKey = (u8, u64, [u64; 3], [u64; 3]);
-
-thread_local! {
-    static REACH_CACHE: std::cell::RefCell<std::collections::HashMap<ReachKey, f64>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
 fn is_unnamed_track(segment: &RailSegment) -> bool {
     segment.rail_ref.is_empty() && segment.name.is_empty()
 }
@@ -157,8 +150,8 @@ pub(crate) fn compute_railways(
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
     use crate::compute::line_piece::{evaluate_line_piece, LinePiece, LinePieceScratch};
-    use crate::propagation::ray_transfer::{received_variants, RayReceiver};
-    use crate::propagation::relevance_bound::SourceSpread;
+    use crate::propagation::ray_transfer::{received_variants, RayReceiver, RaySource, SourceGround};
+    use crate::propagation::relevance_bound::{SourceSpread, LINE_REACH_CEILING_M};
     use emission::railway::{self, RailType};
     use rayon::prelude::*;
     use std::collections::HashMap;
@@ -176,9 +169,7 @@ pub(crate) fn compute_railways(
         min_dist: f64,
         min_d_slant: f64,
         min_ground_g: f64,
-        cp_lat: f64,
-        cp_lon: f64,
-        src_height: f64,
+        closest_source: RaySource,
         // Dominant-segment metadata — highest received-energy segment drives the
         // popup display, mirroring the road pattern. Earlier rail surfaced the
         // closest-segment fields, which misled whenever a busy/fast mainline
@@ -217,12 +208,12 @@ pub(crate) fn compute_railways(
         lon: receiver.lon,
         altitude_m: rcv_alt,
     };
-    let bound = crate::propagation::relevance_bound::surface_relevance_bound();
+    let weather = crate::propagation::meteorology::Meteorology::defaults();
+    let bound = crate::propagation::relevance_bound::surface_relevance_bound(&weather);
 
     struct RailPre {
         rail_type: RailType,
         speed: f64,
-        src_alt: f64,
         d_slant: f64,
     }
     struct RailSegOut {
@@ -243,24 +234,13 @@ pub(crate) fn compute_railways(
             }
             let rail_type = RailType::from_u8(seg.rail_type);
             let speed = seg.speed_kmh;
-            let reach_m = REACH_CACHE.with(|cache| {
-                let key = (
-                    seg.rail_type,
-                    speed.to_bits(),
-                    seg.traffic.passenger.periods.map(f64::to_bits),
-                    seg.traffic.freight.periods.map(f64::to_bits),
-                );
-                *cache
-                    .borrow_mut()
-                    .entry(key)
-                    .or_insert_with(|| railway::rail_reach_m(rail_type, speed, seg.traffic))
-            });
-            if seg.dist_m > reach_m {
-                return None;
-            }
             let period_emissions = railway::rail_period_emissions(rail_type, speed, seg.traffic);
-            // All periods count (#31): EU freight is loudest at night.
-            if bound.pair_is_inaudible(&period_emissions, SourceSpread::Line, seg.dist_m) {
+            // The row's reach and the all-period pair gate (#31: EU freight is loudest at
+            // night), both from the one relevance bound.
+            if seg.dist_m > LINE_REACH_CEILING_M
+                || !bound.within_reach(&period_emissions, SourceSpread::Line, seg.dist_m)
+                || bound.pair_is_inaudible(&period_emissions, SourceSpread::Line, seg.dist_m)
+            {
                 return None;
             }
             let src_alt = rasters.elevation(seg.cp_lat, seg.cp_lon) + SOURCE_HEIGHT_RAIL;
@@ -276,12 +256,15 @@ pub(crate) fn compute_railways(
                     end_lat: seg.end_lat,
                     end_lon: seg.end_lon,
                     source_height_m: SOURCE_HEIGHT_RAIL,
-                    on_bridge: seg.bridge,
+                    source_ground_factor: normalize::rail::rail_source_ground_factor(rail_type, seg.bridge),
+                    platform_half_width_m: normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
+                    directivity: normalize::rail::RAIL_SOURCE_DIRECTIVITY,
                 },
                 seg.cp_lat,
                 seg.cp_lon,
                 obstacles,
                 rasters,
+                &weather,
                 scratch,
                 collect_traces.then_some(&day_weights),
             )?;
@@ -319,7 +302,6 @@ pub(crate) fn compute_railways(
                 RailPre {
                     rail_type,
                     speed,
-                    src_alt,
                     d_slant,
                 },
                 RailSegOut {
@@ -353,7 +335,7 @@ pub(crate) fn compute_railways(
     for ((seg_i, p), mut out) in pre.iter().zip(outs) {
         let seg = &railways[*seg_i];
         let (rail_type, speed) = (p.rail_type, p.speed);
-        let (src_alt, d_slant) = (p.src_alt, p.d_slant);
+        let d_slant = p.d_slant;
         let (seg_variants, ground_g) = (out.seg_variants, out.ground_g);
         add_segment_to_total(&mut total_energy, &seg_variants);
 
@@ -395,9 +377,17 @@ pub(crate) fn compute_railways(
             min_dist: f64::MAX,
             min_d_slant: 0.0,
             min_ground_g: 0.5,
-            cp_lat: seg.cp_lat,
-            cp_lon: seg.cp_lon,
-            src_height: src_alt,
+            closest_source: RaySource {
+                    lat: seg.cp_lat,
+                    lon: seg.cp_lon,
+                    height_m: SOURCE_HEIGHT_RAIL,
+                    ground: SourceGround::Fixed(normalize::rail::rail_source_ground_factor(
+                        RailType::from_u8(seg.rail_type),
+                        seg.bridge,
+                    )),
+                    platform_half_width_m: normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
+                    exclusion_radius_m: 0.0,
+                },
             dominant_segment_idx: 0,
             dominant_distance_m: 0.0,
             dominant_traffic: crate::normalize::RailTraffic::default(),
@@ -449,9 +439,17 @@ pub(crate) fn compute_railways(
             acc.min_dist = seg.dist_m;
             acc.min_d_slant = d_slant;
             acc.min_ground_g = ground_g;
-            acc.cp_lat = seg.cp_lat;
-            acc.cp_lon = seg.cp_lon;
-            acc.src_height = src_alt;
+            acc.closest_source = RaySource {
+                lat: seg.cp_lat,
+                lon: seg.cp_lon,
+                height_m: SOURCE_HEIGHT_RAIL,
+                ground: SourceGround::Fixed(normalize::rail::rail_source_ground_factor(
+                    RailType::from_u8(seg.rail_type),
+                    seg.bridge,
+                )),
+                platform_half_width_m: normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
+                exclusion_radius_m: 0.0,
+            };
         }
         acc.line_coords
             .push([[seg.start_lon, seg.start_lat], [seg.end_lon, seg.end_lat]]);
@@ -533,16 +531,8 @@ pub(crate) fn compute_railways(
             None
         };
 
-        let rail_effects = compute_path_effects(
-            rasters,
-            obstacles,
-            acc.cp_lat,
-            acc.cp_lon,
-            acc.src_height,
-            receiver,
-            acc.min_dist,
-            0.0,
-        );
+        let rail_effects =
+            nearest_path_breakdown(rasters, obstacles, &acc.closest_source, receiver, &weather);
 
         let impacts = PropagationVariants::impact_deltas(&acc.variants, rail_periods.lden_db);
 

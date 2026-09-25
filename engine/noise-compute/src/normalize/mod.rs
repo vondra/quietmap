@@ -9,7 +9,7 @@
 use crate::types::NUM_BANDS;
 
 mod points;
-mod rail;
+pub mod rail;
 pub mod road;
 
 pub use points::{
@@ -19,7 +19,7 @@ pub use points::{
 };
 pub use rail::{normalize_rail, NormalizedRail, RailCategoryTraffic, RailTraffic, RawRailInput};
 pub use road::{
-    normalize_road, normalize_road_segment, road_max_distance_m, NormalizedRoad, RawRoadInput,
+    normalize_road, normalize_road_segment, NormalizedRoad, RawRoadInput,
     RoadTimeProfile, RoadTimeProfileAttribution, RoadTraffic, ROAD_ESTIMATED_HEAVY,
     ROAD_ESTIMATED_LIGHT, ROAD_ESTIMATED_MEDIUM,
     ROAD_ESTIMATED_MOTO,

@@ -34,7 +34,6 @@ pub(crate) fn compute_point_sources(
     source_kind: LayerKind,
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
-    let mut cand_scratch = Vec::new();
     use std::collections::HashMap;
 
     struct PtAccum {
@@ -45,8 +44,8 @@ pub(crate) fn compute_point_sources(
         min_dist: f64,
         min_d_slant: f64,
         min_ground_g: f64,
-        src_height: f64,
-        exclusion_radius_m: f32,
+        /// The ray source of the nearest grid point (the popup's path context).
+        closest_source: crate::propagation::ray_transfer::RaySource,
         variants: [PropagationVariants; 3],
         emission_energy: f64,
         polygon_grid: Vec<(i32, i32)>,
@@ -69,7 +68,17 @@ pub(crate) fn compute_point_sources(
     }
     let mut pts_by_osm: HashMap<i64, PtAccum> = HashMap::new();
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
-    let bound = crate::propagation::relevance_bound::surface_relevance_bound();
+    let weather = crate::propagation::meteorology::Meteorology::defaults();
+    let bound = crate::propagation::relevance_bound::surface_relevance_bound(&weather);
+    let ray_receiver = RayReceiver {
+        lat: receiver.lat,
+        lon: receiver.lon,
+        altitude_m: receiver.altitude_m(),
+    };
+    let mut ray_scratch = RayScratch::default();
+    use crate::propagation::ray_transfer::{
+        evaluate_ray_transfer, received_variants, RayReceiver, RayScratch, RaySource, SourceGround,
+    };
     use crate::propagation::relevance_bound::SourceSpread;
 
     for src in sources {
@@ -89,86 +98,33 @@ pub(crate) fn compute_point_sources(
             continue;
         }
 
-        // Unified path profile — one sampling, all path effects read from it.
-        let mut path_profile = propagation::PathProfile::new();
-        rasters.build_path_profile(
-            src.lat,
-            src.lon,
-            receiver.lat,
-            receiver.lon,
-            src.dist_m,
-            &mut path_profile,
-        );
-        // Point sources used receiver-local G until the literal ground core.
-        // The direct CNOSSOS path requires the same ray-mean IMD semantics as
-        // line sources, including the source-end §2.5.14 correction.
-        let ground_path = propagation::path_effects::cnossos_ground_path_from_profile(
-            &mut path_profile,
-            src_alt,
-            rcv_alt,
-            false,
-        );
-        let ground_g = ground_path.ground_path_g;
-        let ground_bands = iso9613::ground_atten_bands(ground_path);
-        let (terrain, _terrain_profile_points) =
-            propagation::path_effects::terrain_attenuation_with_meta(
-                &mut path_profile,
-                src_alt,
-                rcv_alt,
-            );
-        let obstacle_input = crate::obstacle_input_for_ray(
+        let mut detail = None;
+        let ray_source = RaySource {
+            lat: src.lat,
+            lon: src.lon,
+            height_m: f64::from(src.source_height_m),
+            ground: SourceGround::UnderSource,
+            platform_half_width_m: 0.0,
+            exclusion_radius_m: f64::from(src.exclusion_radius_m),
+        };
+        let transfer = evaluate_ray_transfer(
+            &ray_receiver,
+            &ray_source,
             obstacles,
-            &mut cand_scratch,
-            src.lat,
-            src.lon,
-            receiver.lat,
-            receiver.lon,
-            None,
+            true,
+            rasters,
+            &weather,
+            true,
+            &mut ray_scratch,
+            traces.is_some().then_some(&mut detail),
         );
-        let (screening_atten, obstacle_trace) =
-            propagation::path_effects::screening_attenuation_with_meta(
-                &mut path_profile,
-                obstacle_input,
-                src_alt,
-                rcv_alt,
-                src.exclusion_radius_m as f64,
-                &terrain.attenuation_bands,
-            );
-        let veg_atten = propagation::path_effects::vegetation_attenuation_path(&path_profile);
-
-        let v_day = iso9613::propagate_variants_cnossos_ground_full(
-            &src.lw_day.map(|v| v as f64),
-            d_slant,
-            SourceGeometry::Point,
-            ground_path,
-            &terrain.attenuation_bands,
-            &screening_atten,
-            &veg_atten,
-            reflection,
-            0.0,
-        );
-        let v_eve = iso9613::propagate_variants_cnossos_ground_full(
-            &src.lw_evening.map(|v| v as f64),
-            d_slant,
-            SourceGeometry::Point,
-            ground_path,
-            &terrain.attenuation_bands,
-            &screening_atten,
-            &veg_atten,
-            reflection,
-            0.0,
-        );
-        let v_night = iso9613::propagate_variants_cnossos_ground_full(
-            &src.lw_night.map(|v| v as f64),
-            d_slant,
-            SourceGeometry::Point,
-            ground_path,
-            &terrain.attenuation_bands,
-            &screening_atten,
-            &veg_atten,
-            reflection,
-            0.0,
-        );
+        // Spherical divergence (2.5.12) at the footprint-floored slant distance.
+        let divergence = 10f64.powf(-(20.0 * d_slant.log10() + 11.0) / 10.0);
+        let [v_day, v_eve, v_night] = [0, 1, 2].map(|period| {
+            let scaled = transfer.periods[period].map(|bands| bands.map(|t| t * divergence));
+            received_variants(&scaled, &period_emissions[period], reflection)
+        });
+        let ground_g = detail.as_ref().map_or(0.5, |d: &crate::propagation::ray_transfer::RayDetail| d.ground_factor);
 
         // Display aggregate is A-weighted so the popup's emission_db equals the
         // nominal LwA (post-C7 the bands are normalized to it; a Z-sum would
@@ -191,8 +147,7 @@ pub(crate) fn compute_point_sources(
             min_dist: f64::MAX,
             min_d_slant: 0.0,
             min_ground_g: 0.5,
-            src_height: src_alt,
-            exclusion_radius_m: src.exclusion_radius_m,
+            closest_source: ray_source,
             variants: [
                 PropagationVariants::default(),
                 PropagationVariants::default(),
@@ -217,11 +172,10 @@ pub(crate) fn compute_point_sources(
             acc.min_ground_g = ground_g;
             acc.lat = src.lat;
             acc.lon = src.lon;
-            acc.src_height = src_alt;
-            acc.exclusion_radius_m = src.exclusion_radius_m;
+            acc.closest_source = ray_source;
         }
 
-        if let Some(t) = traces.as_deref_mut() {
+        if let (Some(t), Some(node)) = (traces.as_deref_mut(), detail) {
             let seg_variants = [v_day, v_eve, v_night];
             let lw_bands: [[f64; NUM_BANDS]; 3] = [
                 std::array::from_fn(|i| src.lw_day[i] as f64),
@@ -231,18 +185,11 @@ pub(crate) fn compute_point_sources(
             let trace = build_point_segment_trace(BuildPointTrace {
                 src,
                 source_kind,
-                src_alt,
                 rcv_alt,
                 d_slant,
                 prop_dist,
-                ground_g,
-                ground_bands,
                 reflection_boost_db: reflection,
-                path_profile: std::mem::take(&mut path_profile),
-                terrain,
-                screening_atten,
-                obstacle_trace,
-                veg_atten,
+                node,
                 seg_variants,
                 lw_bands,
             });
@@ -267,16 +214,7 @@ pub(crate) fn compute_point_sources(
             "type": "Point", "coordinates": [acc.lon, acc.lat],
         })));
 
-        let pt_effects = compute_path_effects(
-            rasters,
-            obstacles,
-            acc.lat,
-            acc.lon,
-            acc.src_height,
-            receiver,
-            acc.min_dist,
-            acc.exclusion_radius_m as f64,
-        );
+        let pt_effects = nearest_path_breakdown(rasters, obstacles, &acc.closest_source, receiver, &weather);
 
         let impacts = PropagationVariants::impact_deltas(&acc.variants, pt_periods.lden_db);
 
@@ -309,7 +247,7 @@ pub(crate) fn compute_point_sources(
         } else {
             Some(SourceMetadata::Building(BuildingMetadata {
                 height_m: crate::emission::settlement::building_height_from_source(
-                    acc.src_height - rasters.elevation(acc.lat, acc.lon), acc.floors,
+                    acc.closest_source.height_m, acc.floors,
                 ),
                 floors: acc.floors,
                 area_m2: acc.area_m2 as f64,

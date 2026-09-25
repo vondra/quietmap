@@ -1,4 +1,6 @@
-//! CNOSSOS ground, vegetation, and dominant-edge diffraction over a sampled CUDA path.
+//! Airport ground operations' single dominant edge (terrain, then the exact-crossing race) and
+//! band-mean ground over a sampled CUDA path (the W5 carve-out; surface sources use
+//! relevant_source_cnossos_*).
 
 #pragma once
 
@@ -233,89 +235,6 @@ __device__ __forceinline__ void diffraction_attenuation_bands(
         const float homogeneous = maekawa_attenuation_db(edge.delta_m, band, admitted);
         const float favourable = maekawa_attenuation_db(
             edge.delta_favourable_m, band, admitted);
-        attenuation_db[band] = quietmap_attenuation_from_energy(
-            (1.0f - QUIETMAP_FAVOURABLE_PROBABILITY)
-                * quietmap_energy_from_db(-homogeneous)
-            + QUIETMAP_FAVOURABLE_PROBABILITY * quietmap_energy_from_db(-favourable));
-    }
-}
-
-__device__ __forceinline__ float ground_state_attenuation_db(
-    float frequency_hz,
-    float distance_m,
-    float source_height_m,
-    float receiver_height_m,
-    float impedance_g,
-    float ground_prime
-) {
-    const float square_root_frequency = sqrtf(frequency_hz);
-    const float frequency_pow_2_5 = frequency_hz * frequency_hz * square_root_frequency;
-    const float frequency_pow_1_5 = frequency_hz * square_root_frequency;
-    const float frequency_pow_0_75 = sqrtf(frequency_hz * square_root_frequency);
-    const float g_pow_1_3 = __powf(impedance_g, 1.3f);
-    const float g_pow_2_6 = g_pow_1_3 * g_pow_1_3;
-    const float w = 0.0185f * frequency_pow_2_5 * g_pow_2_6
-        / (frequency_pow_1_5 * g_pow_2_6
-           + 1.3e3f * frequency_pow_0_75 * g_pow_1_3 + 1.16e6f);
-    const float wd = w * distance_m;
-    const float correction = distance_m * (1.0f + 3.0f * wd * __expf(-sqrtf(wd)))
-                             / (1.0f + wd);
-    const float wave_number = 2.0f * CUDART_PI_F * frequency_hz
-        / QUIETMAP_SPEED_OF_SOUND_M_PER_S;
-    const float root_term = sqrtf(2.0f * correction / wave_number);
-    const float correction_over_wave_number = correction / wave_number;
-    const float source_image = source_height_m * source_height_m
-        - root_term * source_height_m + correction_over_wave_number;
-    const float receiver_image = receiver_height_m * receiver_height_m
-        - root_term * receiver_height_m + correction_over_wave_number;
-    const float analytic = -4.342944819032518f * __logf(
-        4.0f * wave_number * wave_number * source_image * receiver_image
-        / (distance_m * distance_m));
-    return fmaxf(analytic, QUIETMAP_GROUND_HARD_FLOOR_DB * (1.0f - ground_prime));
-}
-
-__device__ __forceinline__ void ground_attenuation_bands(
-    const PathProfile& profile,
-    float source_altitude_m,
-    float receiver_altitude_m,
-    float attenuation_db[QUIETMAP_BAND_COUNT]
-) {
-    if (profile.ground_path_g == 0.0f) {
-        for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-            attenuation_db[band] = QUIETMAP_GROUND_HARD_FLOOR_DB;
-        }
-        return;
-    }
-    const float source_height = fmaxf(
-        fabsf(source_altitude_m - profile.mean_ground_intercept_m),
-        QUIETMAP_GROUND_PATH_HEIGHT_FLOOR_M);
-    const float receiver_plane = fmaf(
-        profile.mean_ground_slope, profile.distance_m, profile.mean_ground_intercept_m);
-    const float receiver_height = fmaxf(
-        fabsf(receiver_altitude_m - receiver_plane), QUIETMAP_GROUND_PATH_HEIGHT_FLOOR_M);
-    const float height_sum = source_height + receiver_height;
-    const float short_path_form = profile.distance_m
-                                  / (QUIETMAP_GROUND_SHORT_PATH_FACTOR * height_sum);
-    const float ground_prime = short_path_form <= 1.0f
-        ? profile.ground_path_g * short_path_form
-            + profile.source_ground_g * (1.0f - short_path_form)
-        : profile.ground_path_g;
-    const float delta_height = QUIETMAP_GROUND_FAVOURABLE_DELTA_ZT * profile.distance_m
-                               / height_sum;
-    const float distance_squared_half = 0.5f * profile.distance_m * profile.distance_m;
-    const float favourable_source_height = source_height
-        + QUIETMAP_GROUND_FAVOURABLE_ALPHA0 * (source_height / height_sum)
-            * (source_height / height_sum) * distance_squared_half + delta_height;
-    const float favourable_receiver_height = receiver_height
-        + QUIETMAP_GROUND_FAVOURABLE_ALPHA0 * (receiver_height / height_sum)
-            * (receiver_height / height_sum) * distance_squared_half + delta_height;
-    for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-        const float homogeneous = ground_state_attenuation_db(
-            QUIETMAP_BAND_FREQUENCIES[band], profile.distance_m, source_height,
-            receiver_height, ground_prime, ground_prime);
-        const float favourable = ground_state_attenuation_db(
-            QUIETMAP_BAND_FREQUENCIES[band], profile.distance_m, favourable_source_height,
-            favourable_receiver_height, profile.ground_path_g, ground_prime);
         attenuation_db[band] = quietmap_attenuation_from_energy(
             (1.0f - QUIETMAP_FAVOURABLE_PROBABILITY)
                 * quietmap_energy_from_db(-homogeneous)

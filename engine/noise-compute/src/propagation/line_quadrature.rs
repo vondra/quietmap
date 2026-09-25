@@ -35,6 +35,37 @@ pub const LINE_PERPENDICULAR_FLOOR_M: f64 = 0.5;
 /// `10^1.1`: the point divergence `20·lg r + 11` of (2.5.12) folded into the line integral.
 pub const POINT_DIVERGENCE_LINEAR: f64 = 12.589_254_117_941_673;
 
+/// How a line source radiates around its own direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineDirectivity {
+    Omnidirectional,
+    /// The CNOSSOS-EU rail horizontal directivity (2.3.15), `10·lg(0.01 + 0.99·sin²ψ)` with ψ the
+    /// angle between the track and the ray (W4's D1 source input). With φ the in-plane angle
+    /// from the perpendicular foot, sin²ψ = cos²φ, so a node's weight is its closed-form integral.
+    TrackDipole,
+}
+
+impl LineDirectivity {
+    /// `∫ directivity dφ` over the in-plane angles between `a` and `b`: a node's weight.
+    pub fn weight(self, a: f64, b: f64) -> f64 {
+        let (lo, hi) = (a.min(b), a.max(b));
+        match self {
+            LineDirectivity::Omnidirectional => hi - lo,
+            LineDirectivity::TrackDipole => {
+                0.01 * (hi - lo) + 0.99 * (0.5 * (hi - lo) + 0.25 * ((2.0 * hi).sin() - (2.0 * lo).sin()))
+            }
+        }
+    }
+
+    /// The directivity of one ray whose source point sees the receiver at `sin²ψ` to the line.
+    pub fn factor(self, sin_squared_to_line: f64) -> f64 {
+        match self {
+            LineDirectivity::Omnidirectional => 1.0,
+            LineDirectivity::TrackDipole => 0.01 + 0.99 * sin_squared_to_line,
+        }
+    }
+}
+
 /// A straight piece in a receiver-centred frame: x east, y north, z altitude above the receiver,
 /// all metres. Source altitudes at the two ends make it a 3D line (#28: the in-plane angle, not
 /// the horizontal one, carries the finite-line term).
@@ -50,8 +81,8 @@ pub struct LinePieceGeometry {
 }
 
 /// One quadrature node: the position along the piece of its ray's source point, the stretch
-/// `[along_lo_m, along_hi_m]` it stands for, its weight Δφ, and whether vector obstacles can stand
-/// on its ray (false inside a clear gap of the mask).
+/// `[along_lo_m, along_hi_m]` it stands for, its weight (Δφ, or the directivity's integral over
+/// it), and whether vector obstacles can stand on its ray (false inside a clear gap of the mask).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LineQuadratureNode {
     pub along_m: f64,
@@ -163,9 +194,11 @@ impl LinePieceGeometry {
     }
 }
 
-/// The quadrature nodes of one piece; `skyline` is asked only for wide buckets.
+/// The quadrature nodes of one piece, weighted by `directivity`; `skyline` is asked only for wide
+/// buckets.
 pub fn line_quadrature_nodes(
     geometry: &LinePieceGeometry,
+    directivity: LineDirectivity,
     skyline: &mut ReceiverSkylineQuery<'_>,
     nodes: &mut Vec<LineQuadratureNode>,
 ) {
@@ -180,11 +213,11 @@ pub fn line_quadrature_nodes(
             along_m: geometry.along_at_in_plane_angle(angle_lo + 0.5 * bucket_angle),
             along_lo_m: along_lo,
             along_hi_m: along_hi,
-            weight_rad: bucket_angle,
+            weight_rad: directivity.weight(angle_lo, angle_hi),
             obstacles_on_ray: true,
         };
         let before = nodes.len();
-        push_wide_bucket_nodes(geometry, along_lo, along_hi, angle_lo, angle_hi, skyline, nodes);
+        push_wide_bucket_nodes(geometry, directivity, along_lo, along_hi, angle_lo, angle_hi, skyline, nodes);
         if nodes.len() == before {
             nodes.push(centre);
         }
@@ -193,8 +226,10 @@ pub fn line_quadrature_nodes(
 
 /// Geometry-placed nodes of one bucket, or nothing when the bucket keeps its centre node
 /// (narrow, degenerate, or nothing in front of it).
+#[allow(clippy::too_many_arguments)]
 fn push_wide_bucket_nodes(
     geometry: &LinePieceGeometry,
+    directivity: LineDirectivity,
     along_lo: f64,
     along_hi: f64,
     angle_lo: f64,
@@ -291,7 +326,7 @@ fn push_wide_bucket_nodes(
                 along_m: along,
                 along_lo_m: stretch_a.min(stretch_b),
                 along_hi_m: stretch_a.max(stretch_b),
-                weight_rad: (edge_hi - edge_lo).abs(),
+                weight_rad: directivity.weight(edge_lo, edge_hi),
                 obstacles_on_ray: run_blocked,
             });
         }

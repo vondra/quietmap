@@ -1,4 +1,5 @@
-//! Bilateral raster profile, raw-ground fit, and vegetation depth on one CUDA ray.
+//! Bilateral raster profile (elevation and sealed-surface share per sample) and vegetation depth
+//! on one CUDA ray.
 //!
 //! The chainages mirror noise-compute path_profile.rs `fill_t_values_inner` at
 //! the exact production cadence.
@@ -31,11 +32,10 @@ struct PathProfile {
     float distance_m;
     float t[QUIETMAP_MAXIMUM_PROFILE_POINTS];
     float elevation_m[QUIETMAP_MAXIMUM_PROFILE_POINTS];
+    /// Sealed-surface percentage per sample (G = 1 − imd/100).
+    uint8_t imd[QUIETMAP_MAXIMUM_PROFILE_POINTS];
     float ground_path_g;
-    float source_ground_g;
     float forest_depth_m;
-    float mean_ground_slope;
-    float mean_ground_intercept_m;
 };
 
 struct PlaneFitSums {
@@ -89,11 +89,13 @@ __device__ __forceinline__ void finish_plane_fit(
     intercept = sums.reference_z + (sums.sum_z - slope * sums.sum_x) / sums.count;
 }
 
-/// Set by any thread that had to drop a chainage; the host takes and clears it
-/// after every paint and fails the cell rather than write a truncated profile's
-/// bytes. Plain, not atomic: every writer stores the same 1, and the launch is
-/// already synchronised before the host reads it.
+/// One bit per fixed per-ray capacity any thread outran (profile chainages, hull points, open
+/// footprints); the host takes and clears it after every paint and fails the cell rather than
+/// write a truncated ray's bytes.
 __device__ int quietmap_profile_overflow = 0;
+constexpr int QUIETMAP_OVERFLOW_PROFILE_CHAINAGES = 1;
+constexpr int QUIETMAP_OVERFLOW_HULL_POINTS = 2;
+constexpr int QUIETMAP_OVERFLOW_OPEN_FOOTPRINTS = 4;
 
 __device__ __forceinline__ void append_profile_t(PathProfile& profile, float value) {
     if (profile.count > 0 && fabsf(profile.t[profile.count - 1] - value) < 1.0e-8f) {
@@ -102,7 +104,7 @@ __device__ __forceinline__ void append_profile_t(PathProfile& profile, float val
     if (profile.count < QUIETMAP_MAXIMUM_PROFILE_POINTS) {
         profile.t[profile.count++] = value;
     } else {
-        quietmap_profile_overflow = 1;
+        atomicOr(&quietmap_profile_overflow, QUIETMAP_OVERFLOW_PROFILE_CHAINAGES);
     }
 }
 
@@ -228,7 +230,6 @@ __device__ __forceinline__ void build_path_profile(
     PathProfile& profile
 ) {
     fill_profile_chainages(profile, distance_m);
-    PlaneFitSums ground_fit;
     // Integrating the complement preserves exact G=0 on hard paths: an FMA
     // of 1 - 100*0.01 instead leaves a positive residue and changes CNOSSOS branch.
     float permeable_percent_integral = 0.0f;
@@ -243,11 +244,10 @@ __device__ __forceinline__ void build_path_profile(
             fmaf(t, receiver_x_m - source_x_m, source_x_m),
             fmaf(t, receiver_y_m - source_y_m, source_y_m));
         profile.elevation_m[index] = sample.elevation_m;
+        profile.imd[index] = sample.imd;
         if (index == 0) {
-            reset_plane_fit(ground_fit, sample.elevation_m);
             previous_imd = sample.imd;
         }
-        add_plane_fit_point(ground_fit, t * distance_m, sample.elevation_m);
         if (index > 0) {
             const float interval_m = (t - profile.t[index - 1]) * distance_m;
             permeable_percent_integral += 0.5f
@@ -269,14 +269,10 @@ __device__ __forceinline__ void build_path_profile(
     if (forest_run_physical >= QUIETMAP_MINIMUM_FOREST_RUN_M) {
         forest_total += forest_run_weighted;
     }
-    finish_plane_fit(ground_fit, profile.mean_ground_slope, profile.mean_ground_intercept_m);
     const float mean_permeable_percent = distance_m > 1.0e-6f
         ? permeable_percent_integral / distance_m : 100.0f - previous_imd;
     profile.ground_path_g = force_hard_ground ? 0.0f
         : quietmap_clamp(mean_permeable_percent * 0.01f, 0.0f, 1.0f);
-    profile.source_ground_g = force_hard_ground ? 0.0f
-        : quietmap_clamp((100.0f - static_cast<float>(
-            sample_scene_raster(scene, source_x_m, source_y_m).imd)) * 0.01f, 0.0f, 1.0f);
     profile.forest_depth_m = forest_total;
 }
 

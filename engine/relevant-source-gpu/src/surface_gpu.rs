@@ -1,6 +1,6 @@
 //! Device-resident canonical scenes and bounded durable-corner production.
 use crate::{
-    cuda_bridge::{DeviceBuffer, DeviceScenePointers, RelevantSourceCuda},
+    cuda_bridge::{DeviceBuffer, DeviceScenePointers, DeviceWeather, RelevantSourceCuda},
     obstacle_transfer::{
         DeviceObstacleEdgeEndpoints, DeviceObstacleGrid, DeviceRasterGeometry,
         FlattenedObstacleGeometry,
@@ -23,7 +23,9 @@ pub struct SurfaceGpu {
     endpoints: DeviceBuffer<DeviceObstacleEdgeEndpoints>,
     heights: DeviceBuffer<f32>,
     buildings: DeviceBuffer<u8>,
+    footprints: DeviceBuffer<u32>,
     maximum_heights: DeviceBuffer<f32>,
+    weather: DeviceBuffer<DeviceWeather>,
 }
 
 impl SurfaceGpu {
@@ -44,7 +46,11 @@ impl SurfaceGpu {
             endpoints: DeviceBuffer::from_slice(&flat.edge_endpoints)?,
             heights: DeviceBuffer::from_slice(&flat.edge_height_m)?,
             buildings: DeviceBuffer::from_slice(&flat.edge_is_building)?,
+            footprints: DeviceBuffer::from_slice(&flat.edge_footprint_id)?,
             maximum_heights: DeviceBuffer::from_slice(&flat.cell_maximum_heights)?,
+            weather: DeviceBuffer::from_slice(&[DeviceWeather::from_meteorology(
+                &noise_compute::propagation::meteorology::Meteorology::defaults(),
+            )])?,
             host,
         };
         Ok(value)
@@ -61,6 +67,8 @@ impl SurfaceGpu {
             obstacle_edge_height_m: self.heights.as_ptr(),
             obstacle_cell_maximum_heights: self.maximum_heights.as_ptr(),
             obstacle_edge_is_building: self.buildings.as_ptr(),
+            obstacle_edge_footprint_id: self.footprints.as_ptr(),
+            weather: self.weather.as_ptr(),
             source_count: self.host.sources.len() as u32,
             obstacle_grid_count: self.grids.element_count() as u32,
             pixel_floor_m: 0.0,
@@ -68,7 +76,16 @@ impl SurfaceGpu {
         }
     }
 
-    /// At most 64 MiB of worst-case pair output plus source indexes per launch.
+    /// Replaces the scene's sources (the parity probe's converged lane splits lines finer).
+    pub fn replace_sources(&mut self, sources: Vec<crate::native_sources::SurfaceSource>) -> Result<()> {
+        ensure!(sources.len() <= u32::MAX as usize, "too many scene sources");
+        let devices: Vec<_> = sources.iter().map(|source| source.device).collect();
+        self.sources = DeviceBuffer::from_slice(&devices)?;
+        self.host.sources = sources;
+        Ok(())
+    }
+
+    /// Every source's period energies at the shared corners.
     pub fn evaluate_corners(
         &self,
         cuda: &RelevantSourceCuda,
@@ -80,20 +97,31 @@ impl SurfaceGpu {
                 .all(|corner| corner.owner() == self.host.owner),
             "corner frame owner mismatch"
         );
+        let positions: Vec<[f64; 2]> = corners.iter().map(|corner| corner.latitude_longitude()).collect();
+        self.evaluate_positions(cuda, &positions)
+    }
+
+    /// Every source's period energies at receivers `[lat, lon]` 4 m above the scene's ground,
+    /// with their footprint reflection: the painter's pair kernel without the relevance
+    /// partition. At most 64 MiB of worst-case pair output plus source indexes per launch.
+    pub fn evaluate_positions(
+        &self,
+        cuda: &RelevantSourceCuda,
+        positions: &[[f64; 2]],
+    ) -> Result<Vec<CornerEnergy>> {
         let pair_bytes = std::mem::size_of::<[f32; PERIOD_COUNT]>() + std::mem::size_of::<u32>();
         let pair_limit = 64 * 1024 * 1024 / pair_bytes;
-        let mut result = Vec::with_capacity(corners.len());
+        let mut result = Vec::with_capacity(positions.len());
         let mut next = 0;
-        while next < corners.len() {
+        while next < positions.len() {
             let mut offsets = vec![0_u32];
             let mut indices = Vec::new();
             let mut xs = Vec::new();
             let mut ys = Vec::new();
             let mut reflections = Vec::new();
             let mut floors = Vec::new();
-            while next < corners.len() && xs.len() < grid::surface_corner::CORNER_COUNT {
-                let corner = corners[next];
-                let [lat, lon] = corner.latitude_longitude();
+            while next < positions.len() && xs.len() < grid::surface_corner::CORNER_COUNT {
+                let [lat, lon] = positions[next];
                 let [x, y] = self.host.frame.encode(lat, lon);
                 let candidates: Vec<_> = self
                     .host

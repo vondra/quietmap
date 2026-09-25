@@ -29,7 +29,6 @@ pub mod types;
 pub mod wkb;
 
 use constants::*;
-use emission::road::{self};
 use propagation::geo;
 use propagation::iso9613::{self, SourceGeometry};
 use propagation::obstacle_index::ObstacleSet;
@@ -303,98 +302,58 @@ fn run_line_layer(
     }
 }
 
-/// Compute terrain/screening/vegetation path effects for one source-receiver pair.
-/// Returns (TerrainBreakdown, ScreeningBreakdown, VegetationBreakdown).
-#[allow(clippy::too_many_arguments)]
-pub fn compute_path_effects(
+/// The popup's terrain, obstacle and forest context of one source point: the detail of its
+/// full CNOSSOS ray (the transfer itself comes from the layer's quadrature).
+pub fn nearest_path_breakdown(
     rasters: &dyn RasterSampler,
     obstacles: &ObstacleSet,
-    src_lat: f64,
-    src_lon: f64,
-    src_height: f64,
+    source: &propagation::ray_transfer::RaySource,
     receiver: &Receiver,
-    dist_m: f64,
-    exclusion_radius_m: f64,
+    weather: &propagation::meteorology::Meteorology,
 ) -> (TerrainBreakdown, ScreeningBreakdown, VegetationBreakdown) {
-    let rcv_alt = receiver.altitude_m();
-    let mut cand_scratch = Vec::new();
-
-    // Unified path profile — one sampling, all four rasters + all metadata.
-    let mut path_profile = propagation::PathProfile::new();
-    rasters.build_path_profile(
-        src_lat,
-        src_lon,
-        receiver.lat,
-        receiver.lon,
-        dist_m,
-        &mut path_profile,
-    );
-
-    // Metadata only — the per-band attenuation arrays are consumed inside
-    // `propagate_variants_full`; popup derives A-weighted `ΔL_A` from the
-    // Contributor-level variant Lden deltas instead of any scalar here.
-    let (terrain, terrain_profile_points) =
-        propagation::path_effects::terrain_attenuation_with_meta(
-            &mut path_profile,
-            src_height,
-            rcv_alt,
-        );
-
-    let obstacle_input = obstacle_input_for_ray(
+    let ray_receiver = propagation::ray_transfer::RayReceiver {
+        lat: receiver.lat,
+        lon: receiver.lon,
+        altitude_m: receiver.altitude_m(),
+    };
+    let mut detail = None;
+    propagation::ray_transfer::evaluate_ray_transfer(
+        &ray_receiver,
+        source,
         obstacles,
-        &mut cand_scratch,
-        src_lat,
-        src_lon,
-        receiver.lat,
-        receiver.lon,
-        None,
+        true,
+        rasters,
+        weather,
+        true,
+        &mut propagation::ray_transfer::RayScratch::default(),
+        Some(&mut detail),
     );
-    let (_screening_atten, obstacle_trace) =
-        propagation::path_effects::screening_attenuation_with_meta(
-            &mut path_profile,
-            obstacle_input,
-            src_height,
-            rcv_alt,
-            exclusion_radius_m,
-            &terrain.attenuation_bands,
-        );
-
-    let forest_depth = propagation::path_profile::vegetation_run_length(
-        &path_profile.t,
-        &path_profile.forest_u8,
-        path_profile.dist_m,
-    );
-    let sampled_path_m = dist_m;
-
+    let detail = detail.expect("evaluate_ray_transfer fills the requested detail");
     (
         TerrainBreakdown {
-            delta_m: (terrain.delta_m * 100.0).round() / 100.0,
-            profile_points: terrain_profile_points,
+            delta_m: (detail.terrain.delta_m * 100.0).round() / 100.0,
+            profile_points: detail.terrain.edges.len() as u32,
         },
         ScreeningBreakdown {
-            obstacle: if obstacle_trace.edge.is_none() {
-                None
-            } else {
-                Some(obstacle_trace)
-            },
+            obstacle: detail.obstacle.edge.is_some().then_some(detail.obstacle),
         },
         VegetationBreakdown {
-            forest_depth_m: (forest_depth * 10.0).round() / 10.0,
-            sampled_path_m: (sampled_path_m * 10.0).round() / 10.0,
+            forest_depth_m: (detail.forest_depth_m * 10.0).round() / 10.0,
+            sampled_path_m: (detail.profile.dist_m * 10.0).round() / 10.0,
         },
     )
 }
 
 /// Exact vector-obstacle crossings for one source→receiver ray, as an
-/// [`path_effects::ObstacleInput`]. An empty index yields an empty candidate slice.
-fn obstacle_input_for_ray<'a>(
-    obstacles: &crate::propagation::obstacle_index::ObstacleSet,
-    scratch: &'a mut Vec<crate::propagation::obstacle_index::CrossingCandidate>,
+/// [`propagation::path_effects::ObstacleInput`] (airport ground operations' single-edge path).
+pub(crate) fn obstacle_input_for_ray<'a>(
+    obstacles: &ObstacleSet,
+    scratch: &'a mut Vec<propagation::obstacle_index::CrossingCandidate>,
     src_lat: f64,
     src_lon: f64,
     rcv_lat: f64,
     rcv_lon: f64,
-    prune: Option<&crate::propagation::obstacle_index::CellPrune<'_>>,
+    prune: Option<&propagation::obstacle_index::CellPrune<'_>>,
 ) -> propagation::path_effects::ObstacleInput<'a> {
     match prune {
         Some(p) => obstacles.crossings_pruned(src_lat, src_lon, rcv_lat, rcv_lon, p, scratch),
@@ -454,7 +413,9 @@ mod tests {
             end_lat: 50.0812,
             end_lon: 14.4220,
             source_height_m: 0.05,
-            on_bridge: false,
+            source_ground_factor: 0.0,
+            platform_half_width_m: 5.0,
+            directivity: propagation::line_quadrature::LineDirectivity::Omnidirectional,
         };
         let full_1k = |obstacles: &propagation::obstacle_index::ObstacleSet| {
             let transfer = evaluate_line_piece(
@@ -464,6 +425,7 @@ mod tests {
                 14.42,
                 obstacles,
                 &MockRasters,
+                &crate::propagation::meteorology::Meteorology::defaults(),
                 &mut LinePieceScratch::default(),
                 None,
             )

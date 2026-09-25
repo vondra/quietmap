@@ -21,6 +21,7 @@ constexpr uint32_t QUIETMAP_SOURCE_FLAG_BRIDGE = 1u;
 constexpr uint32_t QUIETMAP_SOURCE_FLAG_POINT = 2u;
 constexpr uint32_t QUIETMAP_SOURCE_FLAG_GROUND_OPS_AIRCRAFT = 4u;
 constexpr uint32_t QUIETMAP_SOURCE_FLAG_GROUND_OPS_GSE = 8u;
+constexpr uint32_t QUIETMAP_SOURCE_FLAG_TRACK_DIPOLE = 16u;
 
 struct DeviceLineSource {
     float start_x_m;
@@ -32,8 +33,39 @@ struct DeviceLineSource {
     float max_distance_m;
     float source_height_m;
     uint32_t flags;
+    /// Gs of (2.5.14) under a line source; a point samples the ground under it.
+    float source_ground_factor;
+    /// A line source's platform half-width; 0 for points.
+    float platform_half_width_m;
     float emission_linear[QUIETMAP_PERIOD_COUNT * QUIETMAP_BAND_COUNT];
 };
+
+/// The long-term weather of the region (noise-compute meteorology.rs Meteorology): p per period
+/// and direction sector (sector s centred on bearing 22.5°·s clockwise from north), the hourly
+/// absorption coefficient's mean, variance and smallest hour per period and band, and the
+/// bound's α_min per band.
+struct DeviceWeather {
+    float favourable_probability[QUIETMAP_PERIOD_COUNT][QUIETMAP_DIRECTION_SECTOR_COUNT];
+    float absorption_mean_db_per_km[QUIETMAP_PERIOD_COUNT][QUIETMAP_BAND_COUNT];
+    float absorption_variance_db2_per_km2[QUIETMAP_PERIOD_COUNT][QUIETMAP_BAND_COUNT];
+    float absorption_minimum_db_per_km[QUIETMAP_PERIOD_COUNT][QUIETMAP_BAND_COUNT];
+    float relevance_alpha_minimum_db_per_km[QUIETMAP_BAND_COUNT];
+};
+
+/// p of `period` for sound travelling along `azimuth_rad` (atan2(north, east)), linear between
+/// the two nearest sector centres (Meteorology::favourable_probability).
+__device__ __forceinline__ float favourable_probability(const DeviceWeather& weather, int period,
+                                                        float azimuth_rad) {
+    float bearing = 90.0f - azimuth_rad * 57.29577951308232f;
+    bearing -= 360.0f * floorf(bearing / 360.0f);
+    const float position = bearing / (360.0f / QUIETMAP_DIRECTION_SECTOR_COUNT);
+    const float lower_position = floorf(position);
+    const int lower = static_cast<int>(lower_position) % QUIETMAP_DIRECTION_SECTOR_COUNT;
+    const int upper = (lower + 1) % QUIETMAP_DIRECTION_SECTOR_COUNT;
+    const float fraction = position - lower_position;
+    const float* row = weather.favourable_probability[period];
+    return fmaf(fraction, row[upper] - row[lower], row[lower]);
+}
 
 __device__ __forceinline__ bool source_is_point(const DeviceLineSource& source) {
     return (source.flags & QUIETMAP_SOURCE_FLAG_POINT) != 0u;
@@ -102,6 +134,9 @@ struct DeviceScenePointers {
     const float* __restrict__ obstacle_edge_height_m;
     const float* __restrict__ obstacle_cell_maximum_heights;
     const uint8_t* __restrict__ obstacle_edge_is_building;
+    /// Footprint (or wall) id per edge, unique across the region.
+    const uint32_t* __restrict__ obstacle_edge_footprint_id;
+    const DeviceWeather* __restrict__ weather;
     uint32_t source_count;
     uint32_t obstacle_grid_count;
     /// Half a pixel of this tile in metres: the ground-ops divergence floor.
@@ -126,14 +161,15 @@ struct LineReceiverGeometry {
     float base_level_db;
 };
 
-static_assert(sizeof(DeviceLineSource) == 128, "source ABI");
+static_assert(sizeof(DeviceLineSource) == 136, "source ABI");
+static_assert(sizeof(DeviceWeather) == 128 * sizeof(float), "weather ABI");
 static_assert(sizeof(FusedPixel) == 8, "raster pixel ABI");
 static_assert(sizeof(DeviceRasterGeometry) == 24, "raster geometry ABI");
 static_assert(sizeof(DeviceObstacleGrid) == 48, "obstacle grid ABI");
 // Four floats is the shape `DeviceObstacleEdgeEndpoints` carries on the host,
 // whose own size assertion holds the other half of this record.
 static_assert(sizeof(float4) == 4 * sizeof(float), "obstacle edge endpoint record");
-static_assert(sizeof(DeviceScenePointers) == 112, "scene ABI");
+static_assert(sizeof(DeviceScenePointers) == 128, "scene ABI");
 // Two pointers of one size trade places without changing the struct's size, so the
 // two the obstacle scan reads are pinned by offset as well; `cuda_bridge`'s
 // `scene_pointer_layout_matches_cuda` holds the other side of the same claim.
@@ -206,6 +242,7 @@ __device__ __forceinline__ SampledRasterPoint sample_scene_raster(
 /// reach 0 dB at horizontal distance `distance_m` (a line bounded by its infinite line, a point
 /// by 20 lg d + 11), so skipping the pair changes no output (#31: every period counts).
 __device__ __forceinline__ bool pair_is_inaudible(
+    const DeviceScenePointers& scene,
     const DeviceLineSource& source,
     bool line,
     float distance_m
@@ -217,7 +254,7 @@ __device__ __forceinline__ bool pair_is_inaudible(
     for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
         const float allowance = quietmap_energy_from_db(
             QUIETMAP_RELEVANCE_GAIN_DB - divergence_db
-            - QUIETMAP_RELEVANCE_ALPHA_MIN_DB_PER_KM[band] * d * 0.001f);
+            - scene.weather->relevance_alpha_minimum_db_per_km[band] * d * 0.001f);
         for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
             if (source.emission_linear[period * QUIETMAP_BAND_COUNT + band] * allowance >= 1.0f) {
                 return false;

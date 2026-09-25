@@ -69,7 +69,7 @@ fn source_envelope_contains_own_square_and_high_latitude_rail() {
     let collected = collect_sources_at_point(tmp.path(), receiver_lat, 0.0).unwrap();
     assert_eq!(collected.railways.len(), 1);
     assert_eq!(collected.railways[0].osm_id, 901);
-    assert!(collected.railways[0].dist_m < noise_compute::constants::RAILWAY_REACH_CEILING);
+    assert!(collected.railways[0].dist_m < noise_compute::propagation::relevance_bound::LINE_REACH_CEILING_M);
 }
 
 #[test]

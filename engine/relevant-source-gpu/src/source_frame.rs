@@ -17,6 +17,9 @@ pub const SOURCE_FLAG_GROUND_OPS_AIRCRAFT: u32 = 4;
 /// `DeviceLineSource::flags`: the same microsegment's ground-support rows,
 /// `GROUND_OPS_REF_OFFSET_M / d` divergence.
 pub const SOURCE_FLAG_GROUND_OPS_GSE: u32 = 8;
+/// `DeviceLineSource::flags`: a line radiating with the CNOSSOS-EU track dipole
+/// (noise-compute `LineDirectivity::TrackDipole`).
+pub const SOURCE_FLAG_TRACK_DIPOLE: u32 = 16;
 
 pub use grid::surface_corner::{
     BLOCKS_PER_TILE_SIDE, BLOCK_PIXEL_SIDE, CORNERS_PER_TILE_SIDE, CORNER_COUNT, TILE_PIXEL_SIDE,
@@ -43,6 +46,10 @@ pub struct DeviceLineSource {
     pub max_distance_m: f32,
     pub source_height_m: f32,
     pub flags: u32,
+    /// Gs of (2.5.14) under a line source (road 0, ballast 1, deck 0); a point samples its own.
+    pub source_ground_factor: f32,
+    /// A line source's platform half-width (METHOD.md §2.2); 0 for points.
+    pub platform_half_width_m: f32,
     pub emission_linear: [f32; PERIOD_COUNT * BAND_COUNT],
 }
 
@@ -128,8 +135,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn device_source_layout_is_the_expected_four_cache_lines() {
-        assert_eq!(std::mem::size_of::<DeviceLineSource>(), 128);
+    fn device_source_layout_matches_the_cuda_record() {
+        assert_eq!(std::mem::size_of::<DeviceLineSource>(), 136);
     }
 
     /// The rule the profile cap rests on: a receiver at the reach of the segment's

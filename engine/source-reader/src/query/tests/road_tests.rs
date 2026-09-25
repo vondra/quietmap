@@ -34,7 +34,7 @@ fn observed_timing_attribution_survives_reader_to_result_json() {
         &square.roads.batches_all().unwrap(),
         lat,
         lon,
-        noise_compute::constants::ROAD_MAX_RADIUS[0],
+        noise_compute::propagation::relevance_bound::LINE_REACH_CEILING_M,
     )
     .unwrap();
     assert_eq!(results.len(), 2);
@@ -135,33 +135,31 @@ fn far_road_row_is_rejected() {
     assert!(data.roads.is_empty());
 }
 
+/// The loader keeps every row within the line reach ceiling; each row's own reach is the
+/// kernel's relevance bound, not a class table.
 #[test]
-fn far_row_is_rejected_by_its_own_class_reach() {
-    use noise_compute::constants::ROAD_MAX_RADIUS;
-    let between = (ROAD_MAX_RADIUS[5] + ROAD_MAX_RADIUS[0]) / 2.0;
-    let lat = LAT + between / grid::geo::M_PER_DEG_LAT;
+fn rows_beyond_the_line_reach_ceiling_are_not_loaded() {
+    use noise_compute::propagation::relevance_bound::LINE_REACH_CEILING_M;
     let tmp = tempfile::TempDir::new().unwrap();
     let dir = fx::square_dir(tmp.path(), prague());
     std::fs::create_dir_all(&dir).unwrap();
-    let road = |osm_id, road_class| fx::FixtureRoad {
+    let road = |osm_id, north_m: f64| fx::FixtureRoad {
         osm_id,
-        start: (LON, lat),
-        end: (LON + 0.002, lat),
-        road_class,
+        start: (LON, LAT + north_m / grid::geo::M_PER_DEG_LAT),
+        end: (LON + 0.002, LAT + north_m / grid::geo::M_PER_DEG_LAT),
+        road_class: 5,
         speed_limit: 50,
         lanes: 2,
         name: String::new(),
         ..Default::default()
     };
-    fx::write_roads_file(&dir.join("roads.arrow"), &[road(1, 0), road(2, 5)]);
+    fx::write_roads_file(
+        &dir.join("roads.arrow"),
+        &[road(1, LINE_REACH_CEILING_M - 500.0), road(2, LINE_REACH_CEILING_M + 500.0)],
+    );
     let square = load_square(&dir).unwrap();
-    let kept = query_roads_from_batches(
-        &square.roads.batches_all().unwrap(),
-        LAT,
-        LON,
-        ROAD_MAX_RADIUS[0],
-    )
-    .unwrap();
+    let kept = query_roads_from_batches(&square.roads.batches_all().unwrap(), LAT, LON, LINE_REACH_CEILING_M)
+        .unwrap();
     assert_eq!(kept.iter().map(|r| r.osm_id).collect::<Vec<_>>(), vec![1]);
 }
 

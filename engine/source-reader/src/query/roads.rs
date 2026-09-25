@@ -98,8 +98,9 @@ pub fn query_roads_from_batches(
             let (s_lon, s_lat) = grid_cell_lonlat(sgx.value(i), sgy.value(i));
             let (e_lon, e_lat) = grid_cell_lonlat(egx.value(i), egy.value(i));
             let road_class = rclass.map(|a| a.value(i)).unwrap_or(0);
-            let effective_radius =
-                max_radius.min(noise_compute::normalize::road_max_distance_m(road_class));
+            // The kernel applies each row's own reach (the relevance bound); this gate only
+            // drops rows beyond the line reach ceiling.
+            let effective_radius = max_radius;
             if line_midpoint_exceeds_reach(lat, lon, s_lat, s_lon, e_lat, e_lon, effective_radius) {
                 continue;
             }
@@ -122,13 +123,15 @@ pub fn query_roads_from_batches(
                 junction: junction_col.map(|a| a.value(i)).unwrap_or(0),
                 built_up: built_up_col.map(|a| a.value(i)).unwrap_or(0),
             };
-            let Some(norm) = noise_compute::normalize::normalize_road(
+            // Silent and tunnel rows never emit.
+            if noise_compute::normalize::normalize_road(
                 raw,
                 row_square_country_city.unwrap_or(square_country_city),
-            ) else {
+            )
+            .is_none()
+            {
                 continue;
-            };
-            debug_assert_eq!(effective_radius, max_radius.min(norm.max_distance_m));
+            }
 
             let cp = grid::geo::closest_point_on_segment(lat, lon, s_lat, s_lon, e_lat, e_lon);
             if cp.dist_m > effective_radius {
@@ -188,12 +191,12 @@ pub(super) fn collect_roads(
     }
     let road_batches =
         data.roads
-            .batches_within(lat, lng, noise_compute::constants::ROAD_MAX_RADIUS[0])?;
+            .batches_within(lat, lng, noise_compute::propagation::relevance_bound::LINE_REACH_CEILING_M)?;
     let roads = query_roads_from_batches(
         &road_batches,
         lat,
         lng,
-        noise_compute::constants::ROAD_MAX_RADIUS[0],
+        noise_compute::propagation::relevance_bound::LINE_REACH_CEILING_M,
     )?;
     for r in roads {
         output.push(noise_compute::types::RoadSegment {

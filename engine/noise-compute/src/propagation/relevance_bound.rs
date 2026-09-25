@@ -24,15 +24,28 @@ pub struct RelevanceBound {
     pub gain_db: f64,
 }
 
-/// Largest ground-and-diffraction gain of the surface method [dB]: every state of the literal
-/// ground core ends in `max(analytic, −3(1 − G′))` and the screening terms only attenuate, so
-/// the hard-ground −3 dB is the most a path can gain (`tests/tc_ground.rs`).
-pub const SURFACE_RELEVANCE_GAIN_DB: f64 = 3.0;
+/// Largest gain over free field the ground and diffraction terms of one state can give [dB]:
+/// the favourable state reaches 9.53 dB (edge 100 m before a 4 m receiver, 10 km, G = 0; the
+/// homogeneous 3.71 dB), found over 357,910 grid and 2,000,000 random configurations (W2
+/// BOUND.md, `boundary-gain-search.txt`) and rounded up; with p = 1 (the bound must assume it,
+/// orchestrator 2026-09-24) the mixed gain is the favourable one. `boundary_gain_is_bounded`
+/// guards the search.
+pub const SURFACE_RELEVANCE_GAIN_DB: f64 = 9.6;
+/// The reach edge: a row reaches as far as its bound's Lden stays above the 30 dB display floor
+/// (owner decision via the orchestrator, 2026-09-24).
+pub const REACH_EDGE_LDEN_DB: f64 = 30.0;
+/// Longest ray the painter's 64-sample profile cadence holds (it first needs a 65th sample at
+/// 11,872.35 m); every reach is capped so no ray outruns it.
+pub const PROFILE_RAY_CEILING_M: f64 = 11_872.0;
+/// Longest line piece the extract writes (every way is split at a hard 250 m).
+pub const LINE_PIECE_MAXIMUM_LENGTH_M: f64 = 250.0;
+/// Reach ceiling of a line piece's closest point: its farthest point stays within the profile.
+pub const LINE_REACH_CEILING_M: f64 = PROFILE_RAY_CEILING_M - LINE_PIECE_MAXIMUM_LENGTH_M;
 
-/// The bound of the surface propagation method; the air absorption is the engine table.
-pub fn surface_relevance_bound() -> RelevanceBound {
+/// The bound of the surface propagation method under the given weather.
+pub fn surface_relevance_bound(weather: &crate::propagation::meteorology::Meteorology) -> RelevanceBound {
     RelevanceBound {
-        alpha_min_db_per_km: crate::constants::ALPHA_ATM,
+        alpha_min_db_per_km: weather.minimum_absorption_db_per_km(),
         gain_db: SURFACE_RELEVANCE_GAIN_DB,
     }
 }
@@ -73,6 +86,12 @@ impl RelevanceBound {
         crate::periods::compute_lden(day, evening, night)
     }
 
+    /// True while the bound's Lden at `distance_m` exceeds the reach edge: the pair is within
+    /// the row's reach (the popup's form of [`Self::reach_m`], without solving for it).
+    pub fn within_reach(&self, period_emissions_db: &[[f64; NUM_BANDS]; 3], spread: SourceSpread, distance_m: f64) -> bool {
+        self.lden_db(period_emissions_db, spread, distance_m) > REACH_EDGE_LDEN_DB
+    }
+
     /// Smallest horizontal distance at which the bound's Lden falls to `edge_db`, capped at
     /// `ceiling_m`. The bound decreases monotonically with distance, so bisection in log distance
     /// finds it to well under a millimetre.
@@ -90,7 +109,7 @@ impl RelevanceBound {
         if self.lden_db(period_emissions_db, spread, lo) <= edge_db {
             return lo;
         }
-        for _ in 0..48 {
+        for _ in 0..24 {
             let mid = (lo * hi).sqrt();
             if self.lden_db(period_emissions_db, spread, mid) > edge_db {
                 lo = mid;
@@ -129,7 +148,7 @@ mod tests {
         assert!((level - (70.0 - 20.0 - 6.0285 + 3.0)).abs() < 1e-3, "{level}");
         let periods = [emission; 3];
         let reach = BOUND.reach_m(&periods, SourceSpread::Line, 30.0, 1e6);
-        assert!((BOUND.lden_db(&periods, SourceSpread::Line, reach) - 30.0).abs() < 1e-6);
+        assert!((BOUND.lden_db(&periods, SourceSpread::Line, reach) - 30.0).abs() < 1e-4);
         assert_eq!(BOUND.reach_m(&periods, SourceSpread::Line, 30.0, 50.0), 50.0);
     }
 }

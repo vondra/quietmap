@@ -247,6 +247,24 @@ impl FusedGrid {
         }
     }
 
+    /// A grid of given pixels, 1″ cells with row 0 at `lat_min` and column 0 at `lon_min`:
+    /// synthetic scenes for the CPU/CUDA parity checks.
+    pub fn from_pixels(lat_min: f64, lon_min: f64, rows: usize, cols: usize, data: Vec<FusedPixel>) -> Self {
+        assert_eq!(data.len(), rows * cols, "a synthetic grid needs rows × cols pixels");
+        assert!(rows >= 2 && cols >= 2, "bilinear sampling needs two rows and two columns");
+        let imd_pyramid = ImdMaxPyramid::from_imd_plane(&data, rows, cols);
+        FusedGrid {
+            data,
+            grid_id: next_grid_id(),
+            lat_min,
+            lon_min,
+            inv_cell_deg: 3600.0,
+            cols,
+            rows,
+            imd_pyramid,
+        }
+    }
+
     /// Bilinear IMD lookup — matches `RealRasters.imd` `Interp::Bilinear`
     /// config. Storage stays `u8` (0-100 range gives 0.01 G-factor quanta,
     /// worst per-band error ~0.025 dB — well below noise floor); the
