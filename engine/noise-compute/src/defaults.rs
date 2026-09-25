@@ -6,6 +6,7 @@
 //!   country arm                    TH rural: hand-set section totals
 //!   │   ↓
 //!   classes 0-4                    measured per carriageway, by direction and built-up
+//!   one-way secondary              half of the fitted two-way section, shared
 //!   classes 5-12                   WORLD_DEFAULT section totals
 //! ```
 //!
@@ -25,7 +26,8 @@ pub type Aadt = (f64, f64, f64, f64);
 
 /// Both-directions section totals. Classes 5-12 use them as the prior;
 /// classes 0-4 contribute only their vehicle-class proportions to the
-/// measured carriageway prior below.
+/// measured carriageway prior below, except one-way secondary streets, which
+/// share the fitted two-way section (see [`resolve_traffic_default`]).
 pub const WORLD_DEFAULT: [Aadt; 13] = [
     (21600.0, 2400.0, 5700.0, 300.0), // 0 motorway — 30k
     (11700.0, 1200.0, 1800.0, 300.0), // 1 trunk — 15k
@@ -91,7 +93,18 @@ pub fn resolve_traffic_default(
         return TrafficDefault::SectionBothDirections(world);
     };
     // An unknown built-up flag (0) takes the prior fitted on both kinds of place.
-    let prior = by_direction[usize::from(!one_way)][usize::from(built_up.min(BUILT_UP_URBAN))];
+    let place = usize::from(built_up.min(BUILT_UP_URBAN));
+    // A one-way secondary street takes half the fitted two-way section: the
+    // retired one-way arm read +3.0 dB on holdout genuine one-way secondary
+    // streets and doubled split-mapped two-way streets (w3-priors, 2026-09-25).
+    // The producer shares this section between the carriageways it finds and
+    // gives a lone row one half; the table's class-3 one-way cells stay zero.
+    if class == 3 && one_way {
+        let total = by_direction[1][place].untagged;
+        let scale = total / (world.0 + world.1 + world.2 + world.3);
+        return TrafficDefault::SectionBothDirections((world.0 * scale, world.1 * scale, world.2 * scale, world.3 * scale));
+    }
+    let prior = by_direction[usize::from(!one_way)][place];
     let total = if prior.vehicles_per_lane > 0.0 && (1..=6).contains(&lanes) {
         f64::from(lanes) * prior.vehicles_per_lane
     } else {
@@ -272,6 +285,29 @@ mod tests {
             );
         }
         assert_eq!(section_total(resolve_traffic_default(200, anywhere, 0, false, BUILT_UP_RURAL)), WORLD_DEFAULT[12]);
+    }
+
+    #[test]
+    fn secondary_one_way_shares_the_two_way_section_instead_of_the_one_way_arm() {
+        // Holdout counts on genuine one-way secondary streets (w3-priors, 2026-09-25):
+        // the fitted one-way arm read +3.0 dB (n=13 strict-lone, GB), and 90% of
+        // paired one-way secondary rows sit within 7 m of their pair (split-mapped
+        // two-way streets that took the arm twice). One direction takes half the
+        // two-way section in every place; the tertiary arm stays (holdout -1.0 dB).
+        let anywhere = square_country_city_for(b"DE", 0, Continent::Europe);
+        for built_up in [BUILT_UP_UNKNOWN, BUILT_UP_RURAL, BUILT_UP_URBAN] {
+            let TrafficDefault::SectionBothDirections(section) =
+                resolve_traffic_default(3, anywhere, 0, true, built_up) else {
+                panic!("one-way secondary is a shared section total");
+            };
+            let total = section.0 + section.1 + section.2 + section.3;
+            let expected = MEASURED_CARRIAGEWAY_PRIORS[3][1][usize::from(built_up)].untagged;
+            assert!((total - expected).abs() < 1e-9);
+        }
+        assert!(matches!(resolve_traffic_default(3, anywhere, 0, false, BUILT_UP_URBAN),
+            TrafficDefault::Carriageway(_)), "two-way secondary keeps its arm");
+        assert!(matches!(resolve_traffic_default(4, anywhere, 0, true, BUILT_UP_URBAN),
+            TrafficDefault::Carriageway(_)), "one-way tertiary keeps its arm");
     }
 
     #[test]
