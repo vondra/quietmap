@@ -306,15 +306,16 @@ at 5 m–2 km and behind a roadside wall, and within 0.28 dB per layer at ten re
 
 A source–receiver pair is skipped only when the relevance bound of
 `propagation::relevance_bound` stays below 0 dB in every band of every period:
-`B = L_W − A_div,min(d) − α_min·d/1000 + 9.6 dB`, a line bounded by its infinite line at its
+`B = L_W − A_div,min(d) − α_min·d/1000 + 13.3 dB`, a line bounded by its infinite line at its
 closest horizontal distance, a point by `20·lg d + 11`, α_min the smallest absorption of the
-weather, 9.6 dB the largest favourable gain of the method over flat ground (p = 1 assumed): a
-night-only source is never dropped by a day-only gate (#31). A road or rail row reaches as far
-as that bound's Lden stays above 30 dB (the display floor), capped so no ray outruns the
-painter's 64-sample profile (11,872 m, minus the 250 m longest piece for a line's closest
-point); popup and painter share the reach. Over relief the method itself gains up to 13.1 dB (a
-grazing hard crest takes the favourable floor on both sides, `boundary_gain_tests.rs`); the
-bound does not cover that yet.
+weather, 13.3 dB the largest favourable gain of the method over flat or relief ground
+(p = 1 assumed): a grazing hard crest takes the favourable floor of (2.5.20), −9 dB per
+side, with a blocked Δdif of at least 10·lg 3, so 2·9 − 10·lg 3 = 13.2 dB at most
+(13.09 dB found, `boundary_gain_tests.rs`): a night-only source is never dropped by a
+day-only gate (#31). A road or rail row reaches as far as that bound's Lden stays above
+30 dB (the display floor), capped so no ray outruns the painter's 64-sample profile
+(11,872 m, minus the 250 m longest piece for a line's closest point); popup and painter
+share the reach.
 
 ## One ray: CNOSSOS-EU per meteorological state
 

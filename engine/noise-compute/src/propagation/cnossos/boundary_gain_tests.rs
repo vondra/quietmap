@@ -6,11 +6,9 @@ use crate::propagation::relevance_bound::SURFACE_RELEVANCE_GAIN_DB;
 
 /// Homogeneous maximum of the W2 search (3.71 dB) rounded up, BOUND.md.
 const HOMOGENEOUS_GAIN_BOUND_DB: f64 = 3.8;
-/// The method's maximum over relief, above the bound (w2-physics search 2026-09-24): a grazing hard
-/// crest takes the favourable floor of (2.5.20) on both sub-paths, 2·9 − 10·lg 3 = 13.2 dB at most
-/// (13.09 dB found: 11.8 km, crest 14.57 m at 236 m, source 0.05 m, receiver 1.5 m, G = 0; the
-/// homogeneous state 3.86 dB). Whether G_max follows it is an open owner decision (reach cost).
-const RELIEF_GAIN_MAXIMUM_DB: f64 = 13.3;
+/// Flat favourable maximum (9.53 dB) rounded up: the flat search stays tight while the bound
+/// covers relief.
+const FLAT_FAVOURABLE_GAIN_BOUND_DB: f64 = 9.6;
 
 /// Largest −A_boundary over the bands of one state.
 fn gain_db(path: &VerticalPath<'_>, state: MeteorologicalState) -> f64 {
@@ -45,7 +43,7 @@ fn the_searched_extremes_stay_under_the_bound() {
     // Favourable edge 100 m before a 4 m receiver on a 10 km hard path (BOUND.md: 9.53 dB).
     let flat = Flat::new(10_000.0, 0.0);
     let favourable = gain_db(&flat.path(0.05, 4.0, &[(9_900.0, 8.96)]), MeteorologicalState::Favourable);
-    assert!((9.4..=SURFACE_RELEVANCE_GAIN_DB).contains(&favourable), "{favourable}");
+    assert!((9.4..=FLAT_FAVOURABLE_GAIN_BOUND_DB).contains(&favourable), "{favourable}");
     // Homogeneous edge 1.80 m at 19 km of 20 km (3.71 dB).
     let flat = Flat::new(20_000.0, 0.0);
     let homogeneous = gain_db(&flat.path(0.05, 4.0, &[(19_000.0, 1.80)]), MeteorologicalState::Homogeneous);
@@ -53,7 +51,22 @@ fn the_searched_extremes_stay_under_the_bound() {
     // Direct favourable over 29 km of hard ground (8.99 dB).
     let flat = Flat::new(29_000.0, 0.0);
     let direct = gain_db(&flat.path(0.05, 4.0, &[]), MeteorologicalState::Favourable);
-    assert!((8.8..=SURFACE_RELEVANCE_GAIN_DB).contains(&direct), "{direct}");
+    assert!((8.8..=FLAT_FAVOURABLE_GAIN_BOUND_DB).contains(&direct), "{direct}");
+    // Relief crest 14.57 m at 236 m of 11.8 km, source 0.05 m, receiver 1.5 m, G = 0 (13.09 dB).
+    let distance = vec![0.0, 236.0, 11_800.0];
+    let altitude = vec![0.0, 14.57, 0.0];
+    let ground = vec![0.0, 0.0, 0.0];
+    let terrain = vec![(0.0, 0.0), (236.0, 14.57), (11_800.0, 0.0)];
+    let path = VerticalPath {
+        profile: VerticalProfile { distance_m: &distance, altitude_m: &altitude, ground_factor: &ground },
+        source: (0.0, 0.05),
+        receiver: (11_800.0, 1.5),
+        source_ground_factor: 0.0,
+        terrain_candidates: &terrain,
+        obstacle_tops: &[],
+    };
+    let relief = gain_db(&path, MeteorologicalState::Favourable);
+    assert!((12.9..=SURFACE_RELEVANCE_GAIN_DB).contains(&relief), "{relief}");
 }
 
 /// xorshift64*: a fixed, dependency-free sample sequence.
@@ -75,8 +88,8 @@ impl Samples {
 }
 
 /// Flat and relief profiles, G ∈ [0, 1] with 40 % exact 0, Gs 0, 1 or random, 0–3 obstacle tops,
-/// source 0.05–4 m, receiver 1.5–30 m, 5 m–12 km: on flat ground every band of both states stays
-/// under the bound; over relief under the method's own maximum.
+/// source 0.05–4 m, receiver 1.5–30 m, 5 m–12 km: flat stays under the flat search maxima,
+/// every sampled path (flat or relief) under the relevance bound.
 #[test]
 fn no_sampled_path_gains_more_than_the_bound() {
     let mut samples = Samples(0x9E37_79B9_7F4A_7C15);
@@ -127,7 +140,9 @@ fn no_sampled_path_gains_more_than_the_bound() {
         }
     }
     assert!(worst_homogeneous <= HOMOGENEOUS_GAIN_BOUND_DB, "homogeneous {worst_homogeneous}");
-    assert!(worst_favourable <= SURFACE_RELEVANCE_GAIN_DB, "favourable {worst_favourable}");
-    assert!(worst_relief <= RELIEF_GAIN_MAXIMUM_DB, "relief {worst_relief}");
+    assert!(worst_favourable <= FLAT_FAVOURABLE_GAIN_BOUND_DB, "favourable {worst_favourable}");
+    assert!(worst_relief <= SURFACE_RELEVANCE_GAIN_DB, "relief {worst_relief}");
+    assert!(worst_homogeneous <= SURFACE_RELEVANCE_GAIN_DB, "flat homogeneous under bound");
+    assert!(worst_favourable <= SURFACE_RELEVANCE_GAIN_DB, "flat favourable under bound");
 }
 

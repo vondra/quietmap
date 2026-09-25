@@ -24,13 +24,14 @@ pub struct RelevanceBound {
     pub gain_db: f64,
 }
 
-/// Largest gain over free field the ground and diffraction terms of one state can give [dB]:
-/// the favourable state reaches 9.53 dB (edge 100 m before a 4 m receiver, 10 km, G = 0; the
-/// homogeneous 3.71 dB), found over 357,910 grid and 2,000,000 random configurations (W2
-/// BOUND.md, `boundary-gain-search.txt`) and rounded up; with p = 1 (the bound must assume it,
-/// orchestrator 2026-09-24) the mixed gain is the favourable one. `boundary_gain_is_bounded`
-/// guards the search.
-pub const SURFACE_RELEVANCE_GAIN_DB: f64 = 9.6;
+/// Largest gain over free field the ground and diffraction terms of one state can give [dB],
+/// flat or relief: a grazing hard crest takes the favourable floor of (2.5.20), -9 dB per
+/// side, with a blocked Δdif(S,R) of at least 10·lg 3, so 2·9 − 10·lg 3 = 13.2 dB at most
+/// (13.09 dB found: 11.8 km, crest 14.57 m at 236 m, source 0.05 m, receiver 1.5 m, G = 0;
+/// the flat favourable 9.53 dB, homogeneous 3.71 dB). Rounded up; with p = 1 (the bound must
+/// assume it, orchestrator 2026-09-24) the mixed gain is the favourable one.
+/// `no_sampled_path_gains_more_than_the_bound` guards the search.
+pub const SURFACE_RELEVANCE_GAIN_DB: f64 = 13.3;
 /// The reach edge: a row reaches as far as its bound's Lden stays above the 30 dB display floor
 /// (owner decision via the orchestrator, 2026-09-24).
 pub const REACH_EDGE_LDEN_DB: f64 = 30.0;
