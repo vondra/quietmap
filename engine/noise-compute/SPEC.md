@@ -567,7 +567,7 @@ painter runs the same ray in f32 (`relevant_source_cnossos_stream.cuh`).
 - The literal standard is not monotone in obstacle height (W2 `edge-height-monotonicity.txt`);
   what holds is that adding a candidate never shortens the rubber band.
 
-Until `meteorology.arrow` is delivered, every period uses the same default absorption
+Until the per-square `meteorology.bin` files are consumed, every period uses the same default absorption
 coefficients (dB/km), rounded here to two decimals; the implementation computes them from
 ISO 9613-1 at exact mid-band frequencies, 15 °C, 70 % RH and 101.325 kPa. Variance is zero,
 and each period's directional favourable probability is 0.5.
@@ -660,26 +660,32 @@ classes use Eurasto (2006) Tables 1–7 with the dimensionally consistent logari
 profile coefficient A: its temperature term does not divide by Monin–Obukhov L.
 A class is favourable when its representative c(10 m) − c(0) is positive.
 
-`meteorology-contract.json` defines the producer/reader metadata in one place.
-`meteorology.arrow` contains all 721 × 1440 nodes in north-to-south, then
-0–359.75° longitude order. `x,y` are UInt16 ERA5 node indices. Each period has
-`p_*` (16 UInt8 percentages), `p_max_*` (the row maximum), `alpha_mean_*` and
-`alpha_variance_*` (eight Float32 values each, population moments of hourly
-ISO 9613-1 coefficients in dB/km). Midbands follow ISO 266; absorption uses
-hourly temperature, dewpoint-derived liquid-water relative humidity and surface
-pressure. No missing observations are silently discarded. Sector zero is sound
-travelling north, with centres every 22.5° clockwise; meteorological wind-from
-bearings must be reversed. Exact hourly favourable counts determine stored p;
-retained 20° wind histograms do not quantize that calculation.
+`meteorology-contract.json` defines the producer/reader contract in one place.
+Each z9 square, oceans included, holds its ERA5 nodes in `meteorology.bin`: a
+16-byte header (8-byte magic naming the contract version, then the window's
+west and north nodes and its column and row counts, little-endian) followed by
+row-major 240-byte node records (48 UInt8 `p` percentages, then 24 Float32
+`alpha_mean` and 24 Float32 `alpha_variance` values, little-endian). The window
+is `grid::raster::RasterWindow::for_square_with_density` at 4 nodes per degree,
+the same floor/ceil edge bracketing as the 1″ rasters, so every square
+interpolates from its own file alone. Each period stores `p` (16 percentages)
+and `alpha_mean`/`alpha_variance` (eight population moments of hourly ISO 9613-1
+coefficients in dB/km); readers derive `p_max` as the sector maximum. Midbands
+follow ISO 266; absorption uses hourly temperature, dewpoint-derived liquid-water
+relative humidity and surface pressure. No missing observations are silently
+discarded. Sector zero is sound travelling north, with centres every 22.5°
+clockwise; meteorological wind-from bearings must be reversed. Exact hourly
+favourable counts determine stored p; retained 20° wind histograms do not
+quantize that calculation.
 
 `raster_reader::meteorology::Meteorology::at` interpolates moments and probabilities
-bilinearly at the receiver, wrapping longitude. `MeteorologySample::probability`
-interpolates circularly between sector centres. Invalid coordinates, incomplete
-global tables, nulls, nonfinite values, invalid percentages and mismatched metadata
-are errors. Global maxima conservatively bound any spatial interpolation. No
-serving or painting path loads the table yet: popup and painter use the built-in
-defaults above until propagation consumes it, and release assembly attaches the
-file in that same change.
+bilinearly at the receiver inside the owner square's window, wrapping longitude.
+`MeteorologySample::probability` interpolates circularly between sector centres.
+Invalid coordinates, wrong magic, mismatched windows, short files, nonfinite
+values and invalid percentages are errors. Window maxima conservatively bound
+any interpolation inside the window. No serving or painting path loads the
+files yet: popup and painter use the built-in defaults above until propagation
+consumes them, and release assembly attaches the files in that same change.
 
 The streamed producer retains period × wind-class × stability-class × direction
 histograms, exact favourable counts, Welford absorption moments and SHA-256 chunk
