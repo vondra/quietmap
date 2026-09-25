@@ -3,6 +3,14 @@
 These conventions bind every contributor to the public Quiet Map product.
 Ops/automation conventions live in the private repo and do not apply here.
 
+## Why
+
+Make noise visible. Make quiet possible. What we can measure, we can manage:
+over time that is how the planet gets back its natural quiet while keeping an
+advanced human society. The owner maintains the project and judges results;
+coding agents write the code and get more autonomy as they earn it. Every
+change serves a correct, fast answer for the visitor, anywhere on Earth.
+
 ## Quality gate
 
 Before every commit, run `./scripts/check-fast.sh` (`node` or `rust` selects one
@@ -10,7 +18,10 @@ half) and read the complete raw output. It must pass with zero warnings.
 
 ## Simplicity budget
 
-Every change pays rent. Before adding code, read the complete touched feature
+Every change pays rent. Design it as if writing the project anew: the cleanest
+architecture you would choose today, clear and elegant, correct and fast, so the
+code base stays easy to grow for years instead of turning into a maze of layers,
+gates and compatibility paths. Before adding code, read the complete touched feature
 and its direct callers. In that same area remove or consolidate obsolete
 branches, dormant flags/env knobs, fallbacks, compatibility shims, duplicate
 truths/tests/docs, completed migration bridges, and dead paths.

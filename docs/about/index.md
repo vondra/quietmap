@@ -10,6 +10,8 @@ map: { center: [15, 30], zoom: 2 }
 
 quietmap.org shows how loud the world really is — and helps you find the quiet.
 
+What we can measure, we can manage. Over time, that is how we can bring our planet back to the natural quiet of nature — and still keep an advanced human society.
+
 1. **Find quiet places** — search any address, explore the map, discover where to live, work, or relax without noise
 2. **Understand noise** — see which sources contribute (roads, railways, aircraft, ships, industry) and how terrain, buildings, and forests reduce it
 3. **Build a comparable record** — each published dataset generation is frozen, so later generations can be compared honestly
