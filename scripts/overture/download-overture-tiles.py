@@ -28,9 +28,12 @@ STRIP_WORKERS = 5
 # still ends with exit 3 and the caller starts a fresh process; cached tiles are skipped.
 RSS_RESTART_BYTES = 24 << 30
 EXIT_RESTART = 3
-# The columns build-structures.py reads (plus id for audits); the theme's other 16
-# columns (names, sources, roof attributes) were 90 % of a strip's memory and transfer.
-COLUMNS = ["id", "geometry", "bbox", "height", "num_floors", "class", "subtype", "is_underground"]
+# The columns build-structures.py reads, id for audits and `sources`, the per-property
+# provenance that tells a machine-learned height from a mapped one (Overture heights on NRW
+# footprints are 4 m low, 2026-09-24). The theme's other 15 columns (names, roof attributes)
+# were most of a strip's memory and transfer.
+COLUMNS = ["id", "geometry", "bbox", "height", "num_floors", "class", "subtype", "is_underground",
+           "sources"]
 
 
 def tile_bbox(tile):

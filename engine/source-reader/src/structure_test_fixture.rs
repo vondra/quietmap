@@ -1,5 +1,5 @@
 //! Test double for `scripts/structures/build-structures.py` + the osm-extract
-//! finalizers: writes the structures_v4 per-square table (kind-tagged
+//! finalizers: writes the structures_v5 per-square table (kind-tagged
 //! buildings ∪ walls) and tiny road/rail/leisure/industrial arrows that the
 //! popup readers under test consume, with the contract metadata
 //! `square_store::store::load_square` gates on. Coordinates are lon/lat floats
@@ -24,7 +24,7 @@ pub struct StructureRow {
     pub kind: u8, // square_store::store::STRUCTURE_KIND_*
     pub ring_lonlat: Option<Vec<(f64, f64)>>,
     pub height_m: i16,
-    pub height_tier: u8,
+    pub height_source: u8,
     pub envelope_class: u8,
     pub centroid_lonlat: Option<(f64, f64)>,
     pub osm_id: Option<i64>,
@@ -61,7 +61,7 @@ fn structure_schema(with_contract: bool) -> Schema {
         Field::new("kind", DataType::UInt8, false),
         Field::new("geom", DataType::Binary, true),
         Field::new("height_m", DataType::Int16, false),
-        Field::new("height_tier", DataType::UInt8, false),
+        Field::new("height_source", DataType::UInt8, false),
         Field::new("envelope_class", DataType::UInt8, false),
         Field::new("centroid_gx", DataType::Int32, false),
         Field::new("centroid_gy", DataType::Int32, false),
@@ -128,7 +128,7 @@ fn structure_columns(rows: &[StructureRow]) -> Vec<ArrayRef> {
             rows.iter().map(|r| r.height_m),
         )),
         Arc::new(UInt8Array::from_iter_values(
-            rows.iter().map(|r| r.height_tier),
+            rows.iter().map(|r| r.height_source),
         )),
         Arc::new(UInt8Array::from_iter_values(
             rows.iter().map(|r| r.envelope_class),

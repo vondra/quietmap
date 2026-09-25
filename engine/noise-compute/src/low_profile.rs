@@ -2,7 +2,7 @@
 //! Dobříš garage-colony finding; extended to the ANBH prior 2026-08-09).
 //!
 //! Overture obstacle rows carry no building class, so a footprint with no mapped
-//! height defaulted to 8 m (`height_tier == 2`) even when it is a garage /
+//! height took a default or a 100 m cell average even when it is a garage /
 //! carport / shed / greenhouse row that really stands ~2.5–3 m — hundreds of
 //! phantom 8 m walls in a 200 m grid over-screen entire neighbourhoods. OSM (via
 //! the cell's `buildings.arrow`) DOES know the class; a defaulted obstacle whose
@@ -13,14 +13,10 @@
 //! the answer is the CONSTANT `LOW_HEIGHT_M` on any match, so which candidate
 //! matched first cannot change it.
 //!
-//! Height-tier ladder (written by `scripts/obstacles/ingest-overture-obstacles.py`
-//! tiers 0–2 and `scripts/obstacles/enrich-obstacle-heights.py` tiers 3–4):
-//!   0 mapped per-building height · 1 floors×3 m · 2 flat 8 m default ·
-//!   3 city/national measured per-building zonal · 4 GHS-BUILT-H ANBH 100 m
-//!   areal prior at the centroid.
-//! The cap applies to tiers 2 AND 4 — both are NOT per-building knowledge (a
-//! world constant, resp. a 100 m pixel average that knows nothing about the
-//! individual shed under it). Tiers 0/1/3 are per-building and never cap.
+//! The cap applies only to heights that are NOT per-building knowledge (the
+//! structures builder's footprint-area typology and the GHS-BUILT-H 100 m cell
+//! average; `square_store::structure_contract::height_is_per_building` decides).
+//! Mapped, floor-derived, surveyed and Overture heights never cap.
 //!
 //! The rule lives HERE because two loaders apply it — the tile painter's
 //! `source_loader_structure` and the popup's `structure_store` — and they must
@@ -67,11 +63,17 @@ impl LowProfileLookup {
             .push((lat, lon, area_m2));
     }
 
-    /// Cap a NON-PER-BUILDING height (tier 2 default, tier 4 ANBH areal prior)
-    /// when a matching low-profile OSM building sits at (nearly) the same spot
-    /// with a comparable footprint.
-    pub fn capped_height(&self, height_m: f32, tier: u8, lat: f64, lon: f64, area_m2: f32) -> f32 {
-        if !(tier == 2 || tier == 4) || height_m <= Self::LOW_HEIGHT_M || self.buckets.is_empty() {
+    /// Cap a NON-PER-BUILDING height when a matching low-profile OSM building
+    /// sits at (nearly) the same spot with a comparable footprint.
+    pub fn capped_height(
+        &self,
+        height_m: f32,
+        height_is_per_building: bool,
+        lat: f64,
+        lon: f64,
+        area_m2: f32,
+    ) -> f32 {
+        if height_is_per_building || height_m <= Self::LOW_HEIGHT_M || self.buckets.is_empty() {
             return height_m;
         }
         let key_lat = (lat * Self::GRID).floor() as i32;
@@ -107,9 +109,9 @@ impl LowProfileLookup {
 mod tests {
     use super::*;
 
-    /// The cap's decision matrix (2026-08-02 garage-colony fix): a DEFAULTED
-    /// (tier 2) height caps to 3 m only when a low-class OSM building matches by
-    /// centroid AND comparable area; mapped heights (tier 0/1), far buildings,
+    /// The cap's decision matrix (2026-08-02 garage-colony fix): a defaulted
+    /// height caps to 3 m only when a low-class OSM building matches by
+    /// centroid AND comparable area; per-building heights, far buildings,
     /// high classes and wild area ratios all keep the original height.
     #[test]
     fn low_profile_cap_matrix() {
@@ -120,25 +122,20 @@ mod tests {
         lookup.insert_if_low(7, lat, lon, 22.0);
         lookup.insert_if_low(1, lat, lon, 22.0);
 
-        // Defaulted 8 m footprint on the garage → capped to 3 m.
-        assert_eq!(lookup.capped_height(8.0, 2, lat, lon, 24.0), 3.0);
-        // ANBH areal prior (tier 4) is equally not per-building → capped too.
-        assert_eq!(lookup.capped_height(14.5, 4, lat, lon, 24.0), 3.0);
-        // Mapped height (tier 0) never caps, even at the same spot.
-        assert_eq!(lookup.capped_height(8.0, 0, lat, lon, 24.0), 8.0);
-        // Floors-derived (tier 1) never caps.
-        assert_eq!(lookup.capped_height(9.0, 1, lat, lon, 24.0), 9.0);
-        // City-measured zonal (tier 3) is per-building truth — never caps.
-        assert_eq!(lookup.capped_height(2.6, 3, lat, lon, 24.0), 2.6);
-        assert_eq!(lookup.capped_height(21.4, 3, lat, lon, 24.0), 21.4);
+        // A defaulted or cell-average height on the garage → capped to 3 m.
+        assert_eq!(lookup.capped_height(8.0, false, lat, lon, 24.0), 3.0);
+        assert_eq!(lookup.capped_height(14.5, false, lat, lon, 24.0), 3.0);
+        // A per-building height never caps, even at the same spot.
+        assert_eq!(lookup.capped_height(8.0, true, lat, lon, 24.0), 8.0);
+        assert_eq!(lookup.capped_height(21.4, true, lat, lon, 24.0), 21.4);
         // 30 m away — outside MATCH_M — keeps the default.
-        assert_eq!(lookup.capped_height(8.0, 2, lat + 0.0003, lon, 24.0), 8.0);
+        assert_eq!(lookup.capped_height(8.0, false, lat + 0.0003, lon, 24.0), 8.0);
         // A big hall (600 m²) over a tiny garage row is NOT comparable.
-        assert_eq!(lookup.capped_height(8.0, 2, lat, lon, 600.0), 8.0);
+        assert_eq!(lookup.capped_height(8.0, false, lat, lon, 600.0), 8.0);
         // Already low stays untouched.
-        assert_eq!(lookup.capped_height(2.5, 2, lat, lon, 24.0), 2.5);
+        assert_eq!(lookup.capped_height(2.5, false, lat, lon, 24.0), 2.5);
         // Empty lookup (no buildings.arrow) = pre-fix behavior.
         let empty = LowProfileLookup::default();
-        assert_eq!(empty.capped_height(8.0, 2, lat, lon, 24.0), 8.0);
+        assert_eq!(empty.capped_height(8.0, false, lat, lon, 24.0), 8.0);
     }
 }

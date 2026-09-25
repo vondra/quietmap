@@ -115,7 +115,7 @@ mod tests {
             ("height", Arc::new(Float32Array::from(vec![Some(24.0), None, Some(0.25)]))),
             ("floors", Arc::new(UInt8Array::from(vec![8, 0, 0]))),
             ("height_m", Arc::new(Int16Array::from(vec![0, 8, 0]))),
-            ("height_tier", Arc::new(UInt8Array::from(vec![2, 2, 0]))),
+            ("height_source", Arc::new(UInt8Array::from(vec![7, 2, 0]))),
             // Missing geometry and rounded sub-metre height must preserve real-building identity.
             ("geom", Arc::new(BinaryArray::from(vec![None::<&[u8]>; 3]))),
             ("emission_geom", Arc::new(BinaryArray::from(vec![Some(ring.as_slice()); 3]))),

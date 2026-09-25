@@ -110,7 +110,7 @@ def build_plan(config, output, scratch):
              '--prepared-dir', str(year), '--boundaries', str(sources['boundaries']),
              '--jobs', str(settings['threads'])), 2),
         layer('buildings', ('osm',)),
-        Step('structures', ('buildings',), (python, str(scripts / 'structures/build-structures.py'),
+        Step('structures', ('buildings', 'square-country-city'), (python, str(scripts / 'structures/build-structures.py'),
              '--prepared-dir', str(year), '--overture-parquet', str(sources['overture']),
              '--ghsl', str(sources['ghsl']), '--regional', str(sources['regional_heights']),
              '--census-log', str(output / 'structures.jsonl'), '--jobs', str(settings['threads'])), 2),

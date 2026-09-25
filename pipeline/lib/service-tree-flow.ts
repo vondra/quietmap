@@ -9,6 +9,7 @@ export interface ServiceRoad {
   startLat: number; startLon: number; endLat: number; endLon: number
   /** Endpoint identities: equal numbers are one graph node. */
   startNode: number; endNode: number
+  name: string; osmId: bigint; builtUp: number
   roadClass: number; sourceId: number; tunnel: boolean; access: number; length: number
 }
 interface GraphNode { eligibleEdges: number[]; hasExitEdge: boolean }
@@ -94,7 +95,7 @@ export function flowAccumulate(
   lengthCol: { get(index: number): number | null },
   segLoadGlobal: Map<number, BuildingLoad>,
   fleetForSeg: (seg: number) => CountryFleet,
-): Map<number, number> {
+): { trips: Map<number, number>; exitBoundary: Set<number> } {
 
   const globalToLocal = new Map<number, number>()
   const localToGlobal: number[] = []
@@ -110,19 +111,12 @@ export function flowAccumulate(
     return local
   }
 
-  const segLocalEnds: { a: number; b: number }[] = new Array(comp.segments.length)
-  for (let i = 0; i < comp.segments.length; i++) {
-    const seg = comp.segments[i]
-    const a = intern(segNodeIds[seg * 2])
-    const b = intern(segNodeIds[seg * 2 + 1])
-    segLocalEnds[i] = { a, b }
+  const segLocalLookup = new Map<number, { a: number; b: number }>()
+  for (const seg of comp.segments) {
+    const a = intern(segNodeIds[seg * 2]), b = intern(segNodeIds[seg * 2 + 1])
+    segLocalLookup.set(seg, { a, b })
     localAdj[a].push(seg)
     localAdj[b].push(seg)
-  }
-
-  const segLocalLookup = new Map<number, { a: number; b: number }>()
-  for (let i = 0; i < comp.segments.length; i++) {
-    segLocalLookup.set(comp.segments[i], segLocalEnds[i])
   }
 
   const numLocal = localToGlobal.length
@@ -135,6 +129,8 @@ export function flowAccumulate(
 
   const dist = new Float64Array(numLocal)
   dist.fill(Infinity)
+  const exit = new Int32Array(numLocal)
+  exit.fill(-1)
   const downSeg = new Int32Array(numLocal)
   downSeg.fill(-1)
 
@@ -153,7 +149,7 @@ export function flowAccumulate(
   }
 
   const pq = new MinHeap()
-  for (const r of localRoots) { dist[r] = 0; pq.push(0, r) }
+  for (const r of localRoots) { dist[r] = 0; exit[r] = r; pq.push(0, r) }
 
   while (pq.size > 0) {
     const { dist: d, node: u } = pq.pop()
@@ -169,6 +165,7 @@ export function flowAccumulate(
       if (newDist < dist[v]) {
         dist[v] = newDist
         downSeg[v] = seg
+        exit[v] = exit[u]
         pq.push(newDist, v)
       }
     }
@@ -196,5 +193,34 @@ export function flowAccumulate(
     }
   }
 
-  return segFlow
+  const exitBoundary = new Set<number>()
+  for (const [seg, { a, b }] of segLocalLookup) {
+    if (exit[a] !== exit[b]) exitBoundary.add(seg)
+  }
+  return { trips: segFlow, exitBoundary }
+}
+
+export interface StreetDemand { trips: number; through: boolean }
+
+/** Same name inside one component, otherwise the same OSM way, including disconnected pieces. */
+export function serviceStreetDemands(
+  roads: readonly ServiceRoad[], graph: Graph, components: readonly Component[],
+  loads: Map<number, BuildingLoad>, fleets: readonly CountryFleet[],
+): { rowTrips: Float64Array; streets: Map<number, StreetDemand> } {
+  const rowTrips = new Float64Array(roads.length), streets = new Map<number, StreetDemand>()
+  const groups = new Map<string | bigint, StreetDemand>()
+  components.forEach((component, componentIndex) => {
+    const flow = flowAccumulate(component, graph.segNodeIds, { get: i => roads[i].length }, loads, i => fleets[i])
+    for (const index of component.segments) {
+      const road = roads[index], trips = flow.trips.get(index)!
+      rowTrips[index] = trips
+      const key = road.name ? `${componentIndex}/${road.name}` : road.osmId
+      let street = groups.get(key)
+      if (!street) { street = { trips: 0, through: false }; groups.set(key, street) }
+      street.trips = Math.max(street.trips, trips)
+      street.through ||= flow.exitBoundary.has(index)
+      streets.set(index, street)
+    }
+  })
+  return { rowTrips, streets }
 }

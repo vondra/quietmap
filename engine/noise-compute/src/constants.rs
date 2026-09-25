@@ -152,12 +152,10 @@ pub use grid::geo::{m_per_deg_lon, M_PER_DEG_LAT};
 /// a given latitude via [`m_per_deg_lon`]) — re-exported, single home is
 /// `grid::geo`.
 pub use grid::geo::M_PER_DEG_LON_EQ;
-/// Fallback building height (m) when a footprint has neither a mapped height
-/// nor a floor count — the last rung of the building height ladder
-/// (`height` → `floors × BUILDING_FLOOR_HEIGHT_M` → this).
+/// Emission fallback height (m) of a building with neither a mapped height nor
+/// a floor count (`height` → `floors × BUILDING_FLOOR_HEIGHT_M` → this).
 /// 8 m ≈ 2–3 storeys at `BUILDING_FLOOR_HEIGHT_M`, the dominant residential
-/// building form, and matches the engine's long-standing emission fallback so
-/// screening and emission agree on unmapped buildings.
+/// building form. Screening heights come from the structures builder's ladder.
 pub const BUILDING_DEFAULT_HEIGHT_M: f64 = 8.0;
 
 /// Maximum physical building height (m). The Burj Khalifa is the tallest
@@ -166,9 +164,7 @@ pub const BUILDING_DEFAULT_HEIGHT_M: f64 = 8.0;
 pub const BUILDING_HEIGHT_MAX_M: f64 = 828.0;
 
 /// Storey height (m) for `building:levels` / Overture `num_floors` × N
-/// height conversions — the middle rung of the building height ladder.
-/// Canonical here, mirrored by the shell rasterizer alongside
-/// [`BUILDING_DEFAULT_HEIGHT_M`].
+/// height conversions, mirrored by the structures builder's height ladder.
 pub const BUILDING_FLOOR_HEIGHT_M: f64 = 3.0;
 
 /// Half-edge of the receiver-enclosure 3×3 probe footprint (m) — a metric
