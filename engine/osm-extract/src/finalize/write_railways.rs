@@ -7,7 +7,7 @@ use arrow::datatypes::*;
 use std::path::Path;
 use std::sync::Arc;
 
-use super::{parse_grid_cell, segment_row_bbox, write_arrow_z14_blocked};
+use super::{evidence::write_with_evidence, parse_grid_cell, segment_row_bbox};
 
 pub(super) fn write_railways(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let n = rows.len();
@@ -89,7 +89,7 @@ pub(super) fn write_railways(rows: &[Vec<String>], path: &Path) -> Result<()> {
         source_id.append_value(0);
     }
 
-    write_arrow_z14_blocked(
+    write_with_evidence(
         path,
         schema,
         vec![
@@ -114,5 +114,7 @@ pub(super) fn write_railways(rows: &[Vec<String>], path: &Path) -> Result<()> {
             Arc::new(source_id.finish()),
         ],
         &row_bboxes,
+        rows,
+        19,
     )
 }

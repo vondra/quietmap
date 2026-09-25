@@ -59,19 +59,16 @@ pub fn load_sources(
                 indexes.push(index);
             }
             let reader = FileReader::try_new(Cursor::new(bytes), None)?;
+            square_store::osm_contract::validate(&reader.schema(), name)
+                .map_err(anyhow::Error::msg)?;
             if name == "structures" {
                 square_store::structure_contract::validate_schema(&reader.schema())
                     .map_err(anyhow::Error::msg)?;
             }
             if name == "leisure" {
-                // The painter must refuse a stamp it does not know for the same
-                // reason the popup does: `leisure_v3` added the car park classes,
-                // and an older binary would draw one as a sports pitch.
                 let metadata = reader.schema().metadata().clone();
-                for (key, expected) in [
-                    ("leisure_contract", square_store::store::LEISURE_CONTRACT_V3),
-                    ("grid", square_store::store::GRID_CONTRACT_Z30),
-                ] {
+                {
+                    let (key, expected) = ("grid", square_store::store::GRID_CONTRACT_Z30);
                     let found = metadata.get(key).map(String::as_str);
                     anyhow::ensure!(
                         found == Some(expected),
@@ -328,8 +325,7 @@ mod completeness_tests {
     #[test]
     fn native_road_direction_contract_rejects_invalid_data_and_matches_popup() {
         use arrow::array::{
-            ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, UInt16Array,
-            UInt8Array,
+            ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, UInt16Array, UInt8Array,
         };
         use arrow::datatypes::{Field, Schema};
         use std::sync::Arc;
@@ -345,10 +341,7 @@ mod completeness_tests {
                 ("aadt_medium", Arc::new(Float64Array::from(vec![0.0; 3]))),
                 ("aadt_heavy", Arc::new(Float64Array::from(vec![0.0; 3]))),
                 ("aadt_moto", Arc::new(Float64Array::from(vec![0.0; 3]))),
-                (
-                    "traffic_estimated",
-                    Arc::new(UInt8Array::from(vec![1; 3])),
-                ),
+                ("traffic_estimated", Arc::new(UInt8Array::from(vec![1; 3]))),
                 ("road_class", Arc::new(UInt8Array::from(vec![2; 3]))),
                 ("speed_limit", Arc::new(UInt8Array::from(vec![50; 3]))),
             ];
@@ -369,10 +362,10 @@ mod completeness_tests {
                     Field::new(*name, array.data_type().clone(), array.null_count() != 0)
                 })
                 .collect::<Vec<_>>();
-            let schema = Schema::new(fields).with_metadata(std::collections::HashMap::from([(
-                "road_traffic_contract".to_owned(),
-                "1".to_owned(),
-            )]));
+            let schema = Schema::new(fields).with_metadata(std::collections::HashMap::from([
+                ("road_traffic_contract".to_owned(), "1".to_owned()),
+                ("osm_roads_contract".into(), square_store::osm_contract::ROADS_CONTRACT.into()),
+            ]));
             RecordBatch::try_new(
                 Arc::new(schema),
                 columns.into_iter().map(|(_, column)| column).collect(),
@@ -384,7 +377,7 @@ mod completeness_tests {
             Some(Arc::new(BooleanArray::from(vec![false; 3]))),
             Some(Arc::new(UInt16Array::from(vec![0, 1, 2]))),
             Some(Arc::new(UInt8Array::from(vec![Some(0), None, Some(2)]))),
-            Some(Arc::new(UInt8Array::from(vec![0, 1, 3]))),
+            Some(Arc::new(UInt8Array::from(vec![0, 1, 5]))),
         ];
         for column in invalid {
             let invalid = batch(column);
@@ -429,9 +422,7 @@ mod completeness_tests {
         let mut columns = batch.columns().to_vec();
         columns[position] = Arc::new(Int32Array::from(vec![10_000; 3]));
         let legacy = RecordBatch::try_new(
-            Arc::new(
-                Schema::new(fields).with_metadata(batch.schema().metadata().clone()),
-            ),
+            Arc::new(Schema::new(fields).with_metadata(batch.schema().metadata().clone())),
             columns,
         )
         .unwrap();
@@ -551,11 +542,7 @@ mod completeness_tests {
         let mut writer = arrow::ipc::writer::FileWriter::try_new(
             std::fs::File::create(&path).unwrap(),
             &arrow::datatypes::Schema::new(vec![
-                arrow::datatypes::Field::new(
-                    "oneway",
-                    arrow::datatypes::DataType::UInt8,
-                    false,
-                ),
+                arrow::datatypes::Field::new("oneway", arrow::datatypes::DataType::UInt8, false),
                 arrow::datatypes::Field::new(
                     "aadt_light",
                     arrow::datatypes::DataType::Float64,
@@ -582,10 +569,10 @@ mod completeness_tests {
                     false,
                 ),
             ])
-            .with_metadata(std::collections::HashMap::from([(
-                "road_traffic_contract".to_owned(),
-                "1".to_owned(),
-            )])),
+            .with_metadata(std::collections::HashMap::from([
+                ("road_traffic_contract".to_owned(), "1".to_owned()),
+                ("osm_roads_contract".into(), square_store::osm_contract::ROADS_CONTRACT.into()),
+            ])),
         )
         .unwrap();
         writer.finish().unwrap();

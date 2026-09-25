@@ -1,4 +1,5 @@
 /** Faithful z9/z30 railways.arrow fixture shared by writer and loader tests. */
+import { osmContract } from './osm-contract.js'
 
 import { after } from 'node:test'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -103,6 +104,7 @@ export function writeRailwaysFixture(
   const metadata = new Map<string, string>([
     ['grid', 'z30'],
     ['qm_blocks', RAIL_FIXTURE_QM_BLOCKS],
+    osmContract('railways'),
     ...(!options.omitContract ? [['railways_contract', 'country_baked_v1'] as const] : []),
   ])
   const schema = new Schema(table.schema.fields, metadata)

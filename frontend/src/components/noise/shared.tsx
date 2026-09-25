@@ -34,6 +34,8 @@ const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
     rail: 'Railway',
     narrow_gauge: 'Narrow gauge',
     funicular: 'Funicular',
+    heritage: 'Heritage railway',
+    Preserved: 'Heritage railway',
     Rail: 'Railway',
     Tram: 'Tram',
     LightRail: 'Light rail',

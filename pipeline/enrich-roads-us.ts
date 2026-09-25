@@ -193,7 +193,7 @@ function tmasDirectionMatches(row: RoadRow, station: TmasStationProfile): boolea
   if (!scope) return false
   const direction = Number(scope[1])
   if (direction === 0 || direction === 9) return true
-  if (row.oneway !== 1 && row.oneway !== 2) return false
+  if (row.oneway === undefined || row.oneway < 1 || row.oneway > 4) return false
   const east = wrapLonDeltaDeg(row.endLon - row.startLon) * Math.cos(row.midLat * Math.PI / 180)
   const north = row.endLat - row.startLat
   if (east === 0 && north === 0) return false

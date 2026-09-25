@@ -41,7 +41,10 @@ fn year_dir() -> PathBuf {
 fn write_parent_arrow(path: &Path, contract: Option<&str>) {
     let (gx, gy) = grid::lonlat_to_grid(14.0, 50.0);
     let (ex, ey) = grid::lonlat_to_grid(14.001, 50.0);
-    let mut metadata = HashMap::new();
+    let mut metadata = HashMap::from([(
+        "osm_railways_contract".to_owned(),
+        square_store::osm_contract::RAILWAYS_CONTRACT.to_owned(),
+    )]);
     metadata.insert("grid".to_owned(), "z30".to_owned());
     metadata.insert(
         "railways_contract".to_owned(),
@@ -433,4 +436,26 @@ fn finalized_category_repair_keeps_children_evidence_zeros_and_shared_priors() {
     assert!(!finalize_square(&year, SQUARE).unwrap().unwrap().rewritten);
     assert_eq!(std::fs::read(&arrow).unwrap(), bytes);
     let _ = std::fs::remove_dir_all(year.parent().unwrap());
+}
+
+#[test]
+fn heritage_unknown_traffic_survives_finalization_and_retry() {
+    let year = year_dir();
+    let path = year.join("z9/276/173/railways.arrow");
+    write_parent_arrow(&path, None);
+    let (_, parent) = read_arrow(&path);
+    let mut columns = parent.columns().to_vec();
+    columns[parent.schema().index_of("rail_type").unwrap()] = Arc::new(UInt8Array::from(vec![5u8]));
+    let batch = RecordBatch::try_new(parent.schema(), columns).unwrap();
+    let mut writer = FileWriter::try_new(File::create(&path).unwrap(), batch.schema().as_ref()).unwrap();
+    writer.write(&batch).unwrap();
+    writer.finish().unwrap();
+    drop(writer);
+    assert!(finalize_square(&year, SQUARE).unwrap().unwrap().rewritten);
+    let (_, batch) = read_arrow(&path);
+    let traffic = crate::rail_traffic::RailTrafficColumns::read(&batch).unwrap().row(0);
+    assert_eq!(traffic, crate::merge::RowTraffic::default());
+    assert_eq!(u8_col(&batch, "rail_type"), vec![5]);
+    assert!(!finalize_square(&year, SQUARE).unwrap().unwrap().rewritten);
+    std::fs::remove_dir_all(year.parent().unwrap()).unwrap();
 }

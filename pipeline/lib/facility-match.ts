@@ -78,9 +78,11 @@ export function contestBeats(
   return a.edge !== undefined && b.edge !== undefined && a.edge < b.edge
 }
 
+/** Dedicated power, turbine and inactive classes never receive generic industry priors. */
+export const isGenericIndustrialSource = (sourceType: number | undefined): boolean => (sourceType ?? 0) < 10
+
 export function candidateEdgeM(facility: MatchFacility, polygon: MatchPolygon, radiusM: number): number | null {
-  // Turbines are native point sources; a nearby registry cannot claim their identity.
-  if (polygon.sourceType === 10 || quietGateBlocks(polygon.subtype, facility.nace4) ||
+  if (!isGenericIndustrialSource(polygon.sourceType) || quietGateBlocks(polygon.subtype, facility.nace4) ||
       flatDist(facility.lat, facility.lon, polygon.lat, polygon.lon) >= radiusM) return null
   return edgeDistM(facility, polygon)
 }

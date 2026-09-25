@@ -65,9 +65,13 @@ fn two_batches_with_broken_second_message(path: &Path) {
     fields.push(Arc::new(Field::new("maxspeed", DataType::UInt16, false)));
     fields.push(Arc::new(Field::new("oneway", DataType::UInt8, false)));
     let mut metadata = base.schema().metadata().clone();
+    for family in ["roads", "railways", "industrial"] {
+        let (key, value) = square_store::osm_contract::contract(family).unwrap();
+        metadata.insert(key.into(), value.into());
+    }
     metadata.insert(
         "leisure_contract".into(),
-        square_store::store::LEISURE_CONTRACT_V3.into(),
+        square_store::store::LEISURE_CONTRACT_V4.into(),
     );
     metadata.insert("n_days".into(), "12".into());
     metadata.insert("rail_traffic_contract".into(), "1".into());
@@ -103,7 +107,11 @@ fn two_batches_with_broken_second_message(path: &Path) {
         fields.push(Arc::new(Field::new(name, DataType::Float64, false)));
         columns.push(Arc::new(Float64Array::from(vec![0.125])));
     }
-    fields.push(Arc::new(Field::new("traffic_estimated", DataType::UInt8, false)));
+    fields.push(Arc::new(Field::new(
+        "traffic_estimated",
+        DataType::UInt8,
+        false,
+    )));
     columns.push(Arc::new(UInt8Array::from(vec![15])));
     for category in ["passenger", "freight"] {
         for period in ["day", "evening", "night"] {

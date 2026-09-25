@@ -16,7 +16,7 @@ use crate::junctions::{JunctionCensus, NodeIdBitmap, NodeIdSet};
 /// Info about a relation we care about.
 #[derive(Clone)]
 pub struct RelationInfo {
-    pub feature_type: FeatureType,
+    pub feature_types: Vec<FeatureType>,
     pub tags: Tags,
     pub member_ways: Vec<(i64, String)>, // (way_id, role: "outer"/"inner")
 }
@@ -50,6 +50,19 @@ pub fn scan_relations_and_junctions(
                 way_to_relations: HashMap::new(),
                 relations: HashMap::new(),
             };
+            let control_id = match &element {
+                Element::Node(node) => {
+                    crate::classify::transport_point_tags(node.tags()).map(|_| node.id())
+                }
+                Element::DenseNode(node) => {
+                    crate::classify::transport_point_tags(node.tags()).map(|_| node.id())
+                }
+                _ => None,
+            };
+            if let Some(id) = control_id {
+                junctions.record(id);
+                junctions.record(id);
+            }
             if let Element::Way(ref way) = element {
                 // Census is independent of output scope: retained families must
                 // have the same segmentation in scoped and full extractions.
@@ -68,13 +81,7 @@ pub fn scan_relations_and_junctions(
             if let Element::Relation(rel) = element {
                 // QM_OSM_ONLY scope: skip out-of-scope multipolygons here so
                 // their members never enter the assembly manifest at all.
-                if let Some((ftype, tags)) =
-                    classify_multipolygon(&rel).filter(|(ft, _)| crate::classify::scope_keeps(ft))
-                {
-                    let mut rel_tags = Tags::new();
-                    for (k, v) in &tags {
-                        rel_tags.insert(k.clone(), v.clone());
-                    }
+                if let Some((ftype, tags)) = classify_multipolygon(&rel) {
                     let mut member_ways = Vec::new();
                     for member in rel.members() {
                         if member.member_type == RelMemberType::Way {
@@ -91,8 +98,8 @@ pub fn scan_relations_and_junctions(
                         local.relations.insert(
                             rel.id(),
                             RelationInfo {
-                                feature_type: ftype,
-                                tags: rel_tags,
+                                feature_types: ftype,
+                                tags,
                                 member_ways,
                             },
                         );
@@ -174,16 +181,12 @@ fn mark_relation_member_way_nodes(
 }
 
 /// Decide whether a relation is one of the multipolygon flavours we track.
-fn classify_multipolygon(rel: &osmpbf::Relation) -> Option<(FeatureType, Vec<(String, String)>)> {
-    let tags: Vec<(String, String)> = rel
+fn classify_multipolygon(rel: &osmpbf::Relation) -> Option<(Vec<FeatureType>, Tags)> {
+    let tags: Tags = rel
         .tags()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    let tag = |k: &str| {
-        tags.iter()
-            .find(|(key, _)| key == k)
-            .map(|(_, v)| v.as_str())
-    };
+    let tag = |k: &str| tags.get(k).map(String::as_str);
     if tag("type") != Some("multipolygon") {
         return None;
     }
@@ -195,12 +198,12 @@ fn classify_multipolygon(rel: &osmpbf::Relation) -> Option<(FeatureType, Vec<(St
         || matches!(
             parking,
             Some(
-                crate::classify::ParkingKind::Structure
-                    | crate::classify::ParkingKind::Underground
+                crate::classify::ParkingKind::Structure | crate::classify::ParkingKind::Underground
             )
-        )
-    {
+        ) {
         FeatureType::Building
+    } else if crate::classify::is_special_leisure(tag) {
+        FeatureType::Leisure
     } else if parking.is_some() {
         // Open ground, a stall or a rooftop: not a relation source.
         return None;
@@ -208,7 +211,7 @@ fn classify_multipolygon(rel: &osmpbf::Relation) -> Option<(FeatureType, Vec<(St
         tag("landuse"),
         Some("industrial" | "quarry" | "farmyard" | "landfill" | "port" | "harbour")
     ) || matches!(tag("man_made"), Some("works") | Some("wastewater_plant"))
-        || matches!(tag("power"), Some("plant") | Some("substation"))
+        || crate::classify::is_power_or_inactive_industry(tag)
     {
         FeatureType::Industrial
     } else if matches!(
@@ -224,70 +227,23 @@ fn classify_multipolygon(rel: &osmpbf::Relation) -> Option<(FeatureType, Vec<(St
     } else {
         return None;
     };
-    Some((ftype, tags))
+    let types = crate::classify::scoped_feature_types(ftype, tag);
+    (!types.is_empty()).then_some((types, tags))
 }
 
 /// Tags an assembled multipolygon carries into spill. Copied from relation
 /// tags (not member ways) so a hospital MP without `building=*` still classifies.
 pub fn spill_tags_for_assembled(ftype: &FeatureType, tags: &Tags) -> Tags {
-    let keys: &[&str] = match ftype {
-        FeatureType::Building => &[
-            "building",
-            "building:use",
-            "height",
-            "building:levels",
-            "name",
-            "addr:street",
-            "addr:housenumber",
-            "amenity",
-            "shop",
-            "healthcare",
-            "tourism",
-            "leisure",
-            "animal",
-            "livestock",
-            "opening_hours",
-            // the zone tag that routed an MP with no `building`
-            "landuse",
-            // a basement garage emits, but nothing stands over it
-            "location",
-            "parking",
-        ],
-        FeatureType::Industrial => &[
-            "landuse",
-            "man_made",
-            "name",
-            "operator",
-            "product",
-            "industrial",
-        ],
-        FeatureType::AirportArea => &[
-            "aeroway",
-            "name",
-            "ref",
-            "local_ref",
-            "icao",
-            "iata",
-            "operator",
-            "surface",
-            "width",
-            "access",
-            "aerodrome",
-            "aerodrome:type",
-            "amenity",
-        ],
-        _ => return tags.clone(),
-    };
-    let mut extracted = Tags::new();
-    for (k, v) in tags {
-        if keys.contains(&k.as_str()) {
-            extracted.insert(k.clone(), v.clone());
-        }
-    }
-    extracted
+    crate::classify::extract_tags(tags.iter().map(|(k, v)| (k.as_str(), v.as_str())), ftype)
 }
 
 /// Accumulates way geometries for relation assembly.
+pub struct AssembledRelation {
+    pub rings: Vec<Vec<[f64; 2]>>,
+    pub tags: Tags,
+    pub feature_types: Vec<FeatureType>,
+}
+
 pub struct RelationAssembler {
     /// way_id → resolved coordinates
     way_geoms: HashMap<i64, Vec<[f64; 2]>>,
@@ -331,12 +287,8 @@ impl RelationAssembler {
     }
 
     /// Assemble a completed relation into a polygon.
-    /// Returns (outer_ring_coords, tags, feature_type) or None if assembly fails.
-    pub fn assemble(
-        &self,
-        rel_id: i64,
-        manifest: &RelationManifest,
-    ) -> Option<(Vec<[f64; 2]>, Tags, FeatureType)> {
+    /// Returns (outer parts, tags, feature types) or None if assembly fails.
+    pub fn assemble(&self, rel_id: i64, manifest: &RelationManifest) -> Option<AssembledRelation> {
         let info = manifest.relations.get(&rel_id)?;
 
         // Collect outer rings' coordinates
@@ -354,26 +306,29 @@ impl RelationAssembler {
         }
 
         // Try to merge outer ways into a single ring
-        let merged = merge_rings(&outer_coords);
+        let merged = merge_outer_rings(outer_coords);
         if merged.is_empty() {
             return None;
         }
 
-        Some((merged, info.tags.clone(), info.feature_type.clone()))
+        Some(AssembledRelation {
+            rings: merged,
+            tags: info.tags.clone(),
+            feature_types: info.feature_types.clone(),
+        })
     }
 
     /// Remove cached way geometries for a completed relation to free memory.
     pub fn cleanup(&mut self, rel_id: i64, manifest: &RelationManifest) {
         if let Some(info) = manifest.relations.get(&rel_id) {
             for (way_id, _) in &info.member_ways {
-                // Only remove if this way isn't needed by other pending relations
+                // Completed relations still need their ways until assembly and cleanup.
                 let still_needed = manifest
                     .way_to_relations
                     .get(way_id)
                     .map(|rels| {
-                        rels.iter().any(|(rid, _)| {
-                            *rid != rel_id && self.pending_count.get(rid).copied().unwrap_or(0) > 0
-                        })
+                        rels.iter()
+                            .any(|(rid, _)| *rid != rel_id && self.pending_count.contains_key(rid))
                     })
                     .unwrap_or(false);
                 if !still_needed {
@@ -385,70 +340,130 @@ impl RelationAssembler {
     }
 }
 
-/// Merge multiple way coordinate arrays into a single ring.
-/// OSM outer ways share endpoints — try to connect them head-to-tail.
-fn merge_rings(ways: &[Vec<[f64; 2]>]) -> Vec<[f64; 2]> {
-    if ways.len() == 1 {
-        return ways[0].clone();
+/// Keep each connected outer part separately. Extend either end because the
+/// first member need not be the first edge, and OSM member directions vary.
+fn merge_outer_rings(ways: Vec<Vec<[f64; 2]>>) -> Vec<Vec<[f64; 2]>> {
+    let mut remaining: Vec<_> = ways.into_iter().filter(|way| !way.is_empty()).collect();
+    let mut rings = Vec::new();
+    while !remaining.is_empty() {
+        let mut ring = remaining.remove(0);
+        while !crate::classify::is_a_closed_ring(&ring) {
+            let head = ring[0];
+            let tail = *ring.last().unwrap();
+            let Some((index, at_head, reverse)) =
+                remaining.iter().enumerate().find_map(|(index, way)| {
+                    if crate::classify::is_a_closed_ring(way) {
+                        return None;
+                    }
+                    let first = way[0];
+                    let last = *way.last().unwrap();
+                    if tail == first {
+                        Some((index, false, false))
+                    } else if tail == last {
+                        Some((index, false, true))
+                    } else if head == last {
+                        Some((index, true, false))
+                    } else if head == first {
+                        Some((index, true, true))
+                    } else {
+                        None
+                    }
+                })
+            else {
+                break;
+            };
+            let mut way = remaining.remove(index);
+            if reverse {
+                way.reverse();
+            }
+            if at_head {
+                way.pop();
+                way.extend(ring);
+                ring = way;
+            } else {
+                ring.extend_from_slice(&way[1..]);
+            }
+        }
+        rings.push(ring);
     }
-
-    // Build a chain: each way starts/ends at certain nodes.
-    // Try to connect them by matching last point of one to first point of next.
-    let mut remaining: Vec<Vec<[f64; 2]>> = ways.to_vec();
-    let mut result = remaining.remove(0);
-
-    let max_iters = remaining.len() * remaining.len() + 1;
-    let mut iters = 0;
-
-    while !remaining.is_empty() && iters < max_iters {
-        iters += 1;
-        let tail = *result.last().unwrap();
-        // Find a way that connects to our tail
-        let mut found = None;
-        for (i, way) in remaining.iter().enumerate() {
-            if way.is_empty() {
-                continue;
-            }
-            let way_head = way[0];
-            let way_tail = *way.last().unwrap();
-
-            if points_close(tail, way_head) {
-                // Append way as-is (skip first point — it's the same as our tail)
-                found = Some((i, false));
-                break;
-            } else if points_close(tail, way_tail) {
-                // Append way reversed
-                found = Some((i, true));
-                break;
-            }
-        }
-
-        match found {
-            Some((idx, reverse)) => {
-                let mut way = remaining.remove(idx);
-                if reverse {
-                    way.reverse();
-                }
-                // Skip first point (duplicate of our tail)
-                if !way.is_empty() {
-                    result.extend_from_slice(&way[1..]);
-                }
-            }
-            None => {
-                // Can't connect — give up on remaining pieces
-                break;
-            }
-        }
-
-        // Check if ring is closed
-        if result.len() >= 3 && points_close(result[0], *result.last().unwrap()) {
-            break;
-        }
-    }
-
-    result
+    rings
 }
 
-fn points_close(a: [f64; 2], b: [f64; 2]) -> bool {
-    (a[0] - b[0]).abs() < 1e-7 && (a[1] - b[1]).abs() < 1e-7
+#[cfg(test)]
+mod evidence_tests {
+    use super::*;
+    #[test]
+    fn shared_last_member_survives_until_all_completed_relations_are_assembled() {
+        for order in [[100, 200], [200, 100]] {
+            let manifest = RelationManifest {
+                relations: [(100, 11), (200, 12)]
+                    .into_iter()
+                    .map(|(id, way)| {
+                        (
+                            id,
+                            RelationInfo {
+                                feature_types: vec![FeatureType::Industrial],
+                                tags: Tags::new(),
+                                member_ways: vec![(way, "outer".into()), (30, "outer".into())],
+                            },
+                        )
+                    })
+                    .collect(),
+                way_to_relations: HashMap::from([
+                    (11, vec![(100, "outer".into())]),
+                    (12, vec![(200, "outer".into())]),
+                    (
+                        30,
+                        order.into_iter().map(|id| (id, "outer".into())).collect(),
+                    ),
+                ]),
+            };
+            let mut assembler = RelationAssembler::new(&manifest);
+            assert!(assembler
+                .add_way(11, vec![[0., 0.], [0., 1.], [1., 1.]], &manifest)
+                .is_empty());
+            assert!(assembler
+                .add_way(12, vec![[0., 0.], [1., 0.], [1., 1.]], &manifest)
+                .is_empty());
+            let completed = assembler.add_way(30, vec![[1., 1.], [0., 0.]], &manifest);
+            assert_eq!(completed, order);
+            for id in completed {
+                let relation = assembler.assemble(id, &manifest).unwrap();
+                assert_eq!(relation.rings.len(), 1);
+                assert!(
+                    crate::classify::is_a_closed_ring(&relation.rings[0]),
+                    "relation {id}"
+                );
+                assembler.cleanup(id, &manifest);
+            }
+            assert!(assembler.way_geoms.is_empty());
+            assert!(assembler.pending_count.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_closed_outer_is_not_consumed_by_an_unclosed_fragment() {
+        let a = [0., 0.];
+        let b = [0., 1.];
+        let c = [1., 1.];
+        let closed = vec![a, b, c, a];
+        let rings = merge_outer_rings(vec![vec![a, b, c], closed.clone()]);
+        assert!(rings.contains(&closed));
+        assert_eq!(rings.len(), 2);
+    }
+
+    #[test]
+    fn outer_parts_and_reversed_members_survive() {
+        let a = [0., 0.];
+        let b = [0., 1.];
+        let c = [1., 1.];
+        let d = [2., 2.];
+        let e = [2., 3.];
+        let f = [3., 3.];
+        let rings = merge_outer_rings(vec![vec![b, c], vec![a, b], vec![a, c], vec![d, e, f, d]]);
+        assert_eq!(rings.len(), 2);
+        assert_eq!(rings[0].first(), rings[0].last());
+        assert_eq!(rings[0].len(), 4);
+        assert_eq!(rings[1], vec![d, e, f, d]);
+    }
 }

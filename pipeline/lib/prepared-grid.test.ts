@@ -13,11 +13,13 @@ import {
   segmentGeometryReader,
 } from './prepared-grid.js'
 
+import { osmContract } from './osm-contract.js'
+
 const TMP = mkdtempSync(join(tmpdir(), 'prepared-grid-test-'))
 after(() => rmSync(TMP, { recursive: true, force: true }))
 
 function withMetadata(table: Table, metadata: Record<string, string>): Table {
-  const schema = new Schema(table.schema.fields, new Map(Object.entries(metadata)))
+  const schema = new Schema(table.schema.fields, new Map([osmContract('roads'), osmContract('railways'), ...Object.entries(metadata)]))
   return new Table(schema, table.batches.map(batch => new RecordBatch(schema, batch.data)))
 }
 

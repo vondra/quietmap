@@ -18,6 +18,7 @@ pub(crate) fn rail_type_name(rt: u8) -> &'static str {
         2 => "light_rail",
         3 => "narrow_gauge",
         4 => "funicular",
+        5 => "heritage",
         _ => "rail",
     }
 }
@@ -27,6 +28,7 @@ pub(crate) fn rail_usage_name(u: u8) -> &'static str {
         0 => "main",
         1 => "branch",
         2 => "industrial",
+        4 => "tourism",
         _ => "untagged",
     }
 }
@@ -74,7 +76,7 @@ pub(crate) fn leisure_type_name(sport: u8) -> &'static str {
         CAR_PARK => "car_park",
         CAR_PARK_STREET => "street_parking",
         PITCH => "sports_pitch",
-        // An id outside `leisure_v3`: it emits nothing (`leisure_profile`), and
+        // An id outside `leisure_v4`: it emits nothing (`leisure_profile`), and
         // it is not named after something it may not be.
         _ => "unknown",
     }
