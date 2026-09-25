@@ -103,6 +103,26 @@ class FranceGroupsTest(unittest.TestCase):
         self.assertEqual(fetch_fr.group_of(1040000, 6250000), 'FR-RGEALTI')
 
 
+class CHDedupeTest(unittest.TestCase):
+    def item(self, year, tile):
+        return {'id': f'swissalti3d_{year}_{tile}',
+                'properties': {'datetime': f'{year}-01-01T00:00:00Z'}}
+
+    def test_keeps_newest_item_per_tile(self):
+        fetch_ch = load_hyphenated('fetch-ch-alti3d')
+        items = [self.item('2019', '2485-1109'), self.item('2025', '2485-1109'),
+                 self.item('2019', '2486-1109')]
+        kept = fetch_ch.latest_per_tile(items)
+        self.assertEqual([item['id'] for item in kept],
+                         ['swissalti3d_2019_2486-1109', 'swissalti3d_2025_2485-1109'])
+
+    def test_rejects_unexpected_tile_id(self):
+        fetch_ch = load_hyphenated('fetch-ch-alti3d')
+        with self.assertRaisesRegex(ValueError, 'unexpected swissALTI3D tile id'):
+            fetch_ch.latest_per_tile([{'id': 'swissalti3d_2019_national',
+                                       'properties': {'datetime': '2019-01-01T00:00:00Z'}}])
+
+
 class SnapWindowTest(unittest.TestCase):
     def test_snaps_to_native_grid(self):
         crop = load_hyphenated('crop-gedtm')

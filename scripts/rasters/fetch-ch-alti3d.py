@@ -4,6 +4,7 @@ import argparse
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import re
 import time
 import urllib.request
 
@@ -39,6 +40,20 @@ def asset_of(item):
     return matches[0]
 
 
+def latest_per_tile(items):
+    """Keep the newest item per 1 km tile; the catalogue holds every survey year."""
+    newest = {}
+    for item in items:
+        key = re.search(r'(\d+-\d+)$', item['id'])
+        if key is None:
+            raise ValueError(f'unexpected swissALTI3D tile id: {item["id"]}')
+        tile = key.group(1)
+        if (tile not in newest
+                or item['properties']['datetime'] > newest[tile]['properties']['datetime']):
+            newest[tile] = item
+    return sorted(newest.values(), key=lambda item: item['id'])
+
+
 def fetch_item(output, item, position, total):
     name, body = asset_of(item)
     target = output / PROVIDER / name
@@ -71,7 +86,7 @@ def main():
     if not 1 <= args.jobs <= 8:
         parser.error('jobs must stay within the batch thread budget')
     output = args.output
-    items = enumerate_items()
+    items = latest_per_tile(enumerate_items())
     if args.max_items:
         items = items[:args.max_items]
     print(json.dumps({'items': len(items)}), flush=True)
