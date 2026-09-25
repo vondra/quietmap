@@ -42,7 +42,7 @@ function road(overrides: Partial<RoadRow> = {}): RoadRow {
   }
 }
 
-test('Cerema parser reads the CRLF ratio field and applies only the published 2019 correction', () => {
+test('Cerema parser reads the CRLF ratio field, applies only the published 2019 correction and keeps a total without a ratio', () => {
   const parsed = parseCeremaCsvFiles(
     csv([
       'A0001;1000;17,192;665481,08;6878892,47;665966,61;6880317,6',
@@ -58,25 +58,25 @@ test('Cerema parser reads the CRLF ratio field and applies only the published 20
       'N0007;1000;12,5;700000;6600000;701000;6601000',
       'A0004;3000;647;662254,01;6858982,54;663631,57;6858755,68',
       'N0010;4000;0;710000;6610000;711000;6611000',
+      'N0010;3000;150;720000;6620000;721000;6621000',
     ]),
   )
   assert.deepEqual(parsed.files, [
     {
-      year: 2024, sourceRows: 6, accepted: 3, noTrafficSkipped: 1,
-      missingHeavyRatioSkipped: 1, invalidHeavyRatioSkipped: 1,
+      year: 2024, sourceRows: 6, accepted: 4, noTrafficSkipped: 1,
+      heavyRatioFromNeighbour: 1, invalidHeavyRatioSkipped: 1,
       invalidCoordinatesSkipped: 0, outsideMetropolitanFranceSkipped: 0, duplicateSkipped: 0,
     },
     {
-      year: 2019, sourceRows: 5, accepted: 2, noTrafficSkipped: 0,
-      missingHeavyRatioSkipped: 1, invalidHeavyRatioSkipped: 1,
-      invalidCoordinatesSkipped: 0, outsideMetropolitanFranceSkipped: 0, duplicateSkipped: 1,
+      year: 2019, sourceRows: 6, accepted: 3, noTrafficSkipped: 0,
+      heavyRatioFromNeighbour: 1, invalidHeavyRatioSkipped: 1,
+      invalidCoordinatesSkipped: 0, outsideMetropolitanFranceSkipped: 0, duplicateSkipped: 2,
     },
   ])
-  assert.deepEqual(parsed.sections.map(value => value.ref), ['A1', 'A1', 'N6', 'A3', 'N7'])
-  assert.ok(Math.abs(parsed.sections[0].ratio_pl - 0.17192) < 1e-12)
-  assert.ok(Math.abs(parsed.sections[2].ratio_pl - 0.17) < 1e-12)
-  assert.ok(Math.abs(parsed.sections[3].ratio_pl - 0.112) < 1e-12)
-  assert.ok(Math.abs(parsed.sections[4].ratio_pl - 0.125) < 1e-12)
+  assert.deepEqual(parsed.sections.map(value => value.ref), ['A1', 'A1', 'N7', 'N6', 'A3', 'N10', 'N10'])
+  // Missing ratios: N7 2024 has no other N7 that year, so the 2024 median; N10 2019 takes its own route's 15 %.
+  assert.deepEqual(parsed.sections.map(value => Math.round(value.ratio_pl * 1e5) / 1e5),
+    [0.17192, 0.185, 0.17192, 0.17, 0.112, 0.15, 0.15])
   assert.deepEqual(
     [parsed.sections[0].aadt_light, parsed.sections[0].aadt_medium,
       parsed.sections[0].aadt_heavy, parsed.sections[0].aadt_moto],

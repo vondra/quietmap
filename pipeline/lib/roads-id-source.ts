@@ -1,6 +1,6 @@
 /** Load and match Indonesia's pinned Bina Marga network and observed LHRT values. */
 
-import { pinnedRoadObservation, loadPinnedRoadLines, buildRoadLineVertexGrid, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
+import { trainingCountLines, pinnedRoadObservation, loadPinnedRoadLines, buildRoadLineVertexGrid, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import type { RoadRow } from './roads-arrow.js'
 import { inBbox } from './spatial.js'
@@ -114,7 +114,7 @@ export function loadIndonesiaRoadSource(options: RoadLoaderArguments): Indonesia
   const national = loadPinnedRoadLines(options, [FILES.national])
   return {
     toll: buildRoadLineVertexGrid(toll.lines),
-    regional: buildRoadLineVertexGrid(regional.lines),
+    regional: buildRoadLineVertexGrid(trainingCountLines(regional.lines, line => Number(line.properties.LHRT) > 0)),
     national: buildRoadLineVertexGrid(national.lines),
     sourceRows: toll.sourceRows + regional.sourceRows + national.sourceRows,
     sourceLines: toll.lines.length + regional.lines.length + national.lines.length,
@@ -123,6 +123,16 @@ export function loadIndonesiaRoadSource(options: RoadLoaderArguments): Indonesia
 }
 
 const text = (line: PinnedRoadLine, key: string): string => String(line.properties[key] ?? '').trim()
+
+/** A district (kabupaten/kota) or provincial count describes its own regional road, not a national road
+ *  that runs beside it: 1,364 of 1,417 km of LHRT-stamped trunk lay within 50 m of a national line
+ *  (r260919). Provincial roads are at most OSM primary here, the only regional class a main row can be. */
+function regionalLineDescribesRow(row: RoadRow, regional: PinnedRoadLine, source: IndonesiaRoadSource): boolean {
+  const status = (text(regional, 'STATUS') || text(regional, 'ROAD_STATUS')).toLowerCase()
+  return row.roadClass === 2 && status.includes('provinsi') &&
+    nearestRoadLine(row.midLat, row.midLon, source.national, NATIONAL_LINE_OWNS_ROW_WITHIN_METRES) === null
+}
+const NATIONAL_LINE_OWNS_ROW_WITHIN_METRES = 50
 
 export function matchIndonesiaRoad(row: RoadRow, source: IndonesiaRoadSource) {
   if (row.roadClass > 2) return null
@@ -136,16 +146,12 @@ export function matchIndonesiaRoad(row: RoadRow, source: IndonesiaRoadSource) {
     kind = 'toll'
   } else {
     const regional = nearestRoadLine(row.midLat, row.midLon, source.regional, 200)
-    if (regional) {
+    if (regional && regionalLineDescribesRow(row, regional, source)) {
       line = regional
       const rawLhrt = Number(regional.properties.LHRT ?? 0)
       const lhrt = Number.isFinite(rawLhrt) ? Math.min(Math.max(rawLhrt, 0), 200_000) : 0
       if (lhrt > 0) { total = lhrt; kind = 'lhrt' }
-      else {
-        const status = (text(regional, 'STATUS') || text(regional, 'ROAD_STATUS')).toLowerCase()
-        total = (status.includes('kota') ? 12_000 : status.includes('provinsi') ? 8_000 : 5_000) * multiplier
-        kind = 'regional'
-      }
+      else { total = 8_000 * multiplier; kind = 'regional' }
     } else if ((line = nearestRoadLine(row.midLat, row.midLon, source.national, 400))) {
       total = 30_000 * multiplier
       kind = 'national'

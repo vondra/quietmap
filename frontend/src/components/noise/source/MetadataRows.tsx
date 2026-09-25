@@ -17,6 +17,8 @@ export function MetadataRows({ c }: { c: Contributor }) {
 
   if (m.kind === 'road') {
     const total = m.aadt_light + m.aadt_medium + m.aadt_heavy + m.aadt_moto
+    // The headline is the whole road; the classes below are the dominant carriageway's.
+    const wholeRoad = m.cross_section_aadt > 0
     const hasSpeedRange = m.speed_min_kmh < m.speed_max_kmh
     // Derestricted (maxspeed=none, e.g. German Autobahn): no number exists;
     // the engine models DERESTRICTED_SPEED_KMH and reports it in speed_kmh.
@@ -45,7 +47,10 @@ export function MetadataRows({ c }: { c: Contributor }) {
     const trafficText = txtTable([
       roadTrafficSourceLine(m.provenance),
       '',
-      'Traffic on this road segment:',
+      ...(wholeRoad
+        ? [['Whole road', `${fmtInt(Math.round(m.cross_section_aadt))}/day`] as [string, string], 'both directions', '']
+        : ['Only this direction is known.', '']),
+      'This carriageway:',
       ...([['Light', m.aadt_light, 1], ['Medium', m.aadt_medium, 2], ['Heavy', m.aadt_heavy, 4], ['Moto', m.aadt_moto, 8]] as const)
         .map(([label, value, bit]) =>
           [label, roadCategoryEstimated(m, bit) ? `${fmtInt(Math.round(value))} (est.)` : `${fmtInt(Math.round(value))}`] as [string, string],
@@ -122,8 +127,8 @@ export function MetadataRows({ c }: { c: Contributor }) {
         )}
         {lineRow(
           <MetricLabel term="aadt">Traffic</MetricLabel>,
-          <DataPoint title="Daily traffic on this road segment" text={trafficText}>
-            {`${fmtCompact(Math.round(total))}/day`}
+          <DataPoint title={wholeRoad ? 'Daily traffic on the whole road, both directions' : 'Daily traffic in this direction'} text={trafficText}>
+            {wholeRoad ? `${fmtCompact(Math.round(m.cross_section_aadt))}/day` : `${fmtCompact(Math.round(total))}/day · one direction`}
           </DataPoint>,
         )}
         {timing &&

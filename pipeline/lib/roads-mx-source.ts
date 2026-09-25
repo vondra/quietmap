@@ -1,5 +1,6 @@
 /** Parse admitted SICT/IMT Datos Viales 2025 U1 traffic and composition. */
 
+import { withholdsCountLine } from './count-holdout.js'
 import { roadObservation, type RoadObservation } from './road-observation.js'
 import { parse } from 'csv-parse/sync'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
@@ -123,6 +124,7 @@ export function parseMexicanSictSource(segmentsRaw: string, compositionRaw: stri
         String(properties?.red_ok ?? ''), String(properties?.operacion ?? '')) })
   }
   if (result.segments.length === 0) throw new Error('Mexican SICT source has no usable measurements')
+  result.segments = result.segments.filter(section => !section.lines.some(withholdsCountLine))
   return result
 }
 

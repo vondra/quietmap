@@ -17,7 +17,7 @@ Roads without a nearby count are matched within 400 m to the national and provin
 | Paved provincial route | 12,000 |
 | Gravel or dirt | 3,000 |
 
-Both counts and estimates are doubled inside Greater Buenos Aires and Córdoba, and multiplied by 1.4 in 22 other cities: Rosario, Mendoza, San Miguel de Tucumán, La Plata, Mar del Plata, Salta, Santa Fe, San Juan, Resistencia, Neuquén, Bahía Blanca, Posadas, Corrientes, Paraná, Santiago del Estero, San Salvador de Jujuy, Río Cuarto, Comodoro Rivadavia, San Luis, La Rioja, Catamarca and Formosa. The city boxes are drawn manually.
+Counts are used as published. Estimates are doubled inside Greater Buenos Aires and Córdoba, and multiplied by 1.4 in 22 other cities: Rosario, Mendoza, San Miguel de Tucumán, La Plata, Mar del Plata, Salta, Santa Fe, San Juan, Resistencia, Neuquén, Bahía Blanca, Posadas, Corrientes, Paraná, Santiago del Estero, San Salvador de Jujuy, Río Cuarto, Comodoro Rivadavia, San Luis, La Rioja, Catamarca and Formosa. The city boxes are drawn manually.
 
 The census publishes totals only. The vehicle mix is an estimate:
 

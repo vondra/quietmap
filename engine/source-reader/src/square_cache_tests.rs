@@ -103,7 +103,7 @@ fn two_batches_with_broken_second_message(path: &Path) {
     columns.push(Arc::new(Int32Array::from(vec![0])));
     columns.push(Arc::new(UInt16Array::from(vec![80])));
     columns.push(Arc::new(UInt8Array::from(vec![2])));
-    for name in ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"] {
+    for name in ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto", "cross_section_aadt"] {
         fields.push(Arc::new(Field::new(name, DataType::Float64, false)));
         columns.push(Arc::new(Float64Array::from(vec![0.125])));
     }

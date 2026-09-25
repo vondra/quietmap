@@ -35,6 +35,8 @@ pub struct RoadResult {
     pub aadt_moto: f64,
     /// Estimated AADT categories: light 1, medium 2, heavy 4, moto 8.
     pub traffic_estimated: u8,
+    /// Whole-road vehicles/day, both directions; 0 where only this carriageway's direction is known.
+    pub cross_section_aadt: f64,
     #[serde(skip_serializing)]
     pub time_profile: Option<noise_compute::normalize::RoadTimeProfile>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -160,6 +162,7 @@ pub fn query_roads_from_batches(
                 aadt_heavy: raw.traffic.heavy,
                 aadt_moto: raw.traffic.moto,
                 traffic_estimated: raw.traffic.estimated,
+                cross_section_aadt: raw.traffic.cross_section_aadt,
                 time_profile: raw.traffic.time_profile,
                 time_profile_attribution: traffic_columns.attribution(i).cloned(),
                 source_id,
@@ -218,6 +221,7 @@ pub(super) fn collect_roads(
                 moto: r.aadt_moto,
                 estimated: r.traffic_estimated,
                 time_profile: r.time_profile,
+                cross_section_aadt: r.cross_section_aadt,
             },
             time_profile_attribution: r.time_profile_attribution,
             source_id: r.source_id,

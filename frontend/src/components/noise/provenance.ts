@@ -68,12 +68,6 @@ export function roadTimingLine(attr: RoadTimingAttribution): string {
   return `Timing: ${sourceHost(attr.source)} · ${attr.window.replace('..', '–')}${caveat}`
 }
 
-export function roadTrafficLabel(traffic: RoadTrafficCounts): string {
-  const total =
-    traffic.aadt_light + traffic.aadt_medium + traffic.aadt_heavy + traffic.aadt_moto
-  return `${roadCount(total)}/day`
-}
-
 export function roadTrafficDescription(
   traffic: RoadTrafficCounts,
   provenance: DatasetProvenance | null | undefined,
@@ -87,7 +81,7 @@ export function roadTrafficDescription(
   return [
     roadTrafficSourceLine(provenance),
     '',
-    'Prepared daily traffic, this road:',
+    'Prepared daily traffic, this carriageway:',
     ...categories.map(([label, value, bit]) =>
       `  ${roadCategoryLine(label, value, roadCategoryEstimated(traffic, bit))}`,
     ),

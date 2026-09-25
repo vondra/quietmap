@@ -11,6 +11,7 @@ pub mod compute;
 pub mod confidence;
 pub mod constants;
 pub mod country_speed_defaults_generated;
+pub mod road_traffic_priors_generated;
 pub mod defaults;
 pub mod emission;
 pub mod envelope;
@@ -666,6 +667,7 @@ mod tests {
                 moto: 300.0,
                 estimated: 15,
                 time_profile: None,
+                cross_section_aadt: 0.0,
             },
             source_id: 0,
             dist_m: 500.0,
@@ -748,6 +750,7 @@ mod tests {
                 moto: 180.0,
                 estimated: 15,
                 time_profile: None,
+                cross_section_aadt: 0.0,
             },
             source_id: 0,
             dist_m: 100.0,
@@ -1004,6 +1007,7 @@ mod tests {
                 moto: 5.0,
                 estimated: 15,
                 time_profile: None,
+                cross_section_aadt: 0.0,
             },
             source_id: 0,
             dist_m: 15.0,
@@ -1174,6 +1178,7 @@ mod tests {
                 moto: 180.0,
                 estimated: 15,
                 time_profile: None,
+                cross_section_aadt: 0.0,
             },
             source_id: 0,
             dist_m: 100.0,

@@ -1,6 +1,6 @@
 /** Load and match Colombia's pinned INVIAS traffic and road-network sources. */
 
-import { pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
+import { trainingCountLines, pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import type { RoadRow } from './roads-arrow.js'
 import { inBbox } from './spatial.js'
@@ -45,7 +45,7 @@ const tpdaAadt = (line: PinnedRoadLine): number => number(line, 'conteo')
 export function loadColombiaRoadSource(options: RoadLoaderArguments): ColombiaRoadSource {
   const network = loadPinnedRoadLines(options, [FILES.network])
   const tpda = loadPinnedRoadLines(options, [FILES.tpda])
-  const usableTpda = tpda.lines.filter(line => tpdaAadt(line) >= 50)
+  const usableTpda = trainingCountLines(tpda.lines.filter(line => tpdaAadt(line) >= 50))
   return {
     network: buildRoadLineVertexGrid(network.lines),
     tpda: buildRoadLineVertexGrid(usableTpda),
@@ -87,7 +87,8 @@ export function matchColombiaRoad(row: RoadRow, source: ColombiaRoadSource) {
   if (row.roadClass > 2) return null
   const tier = cityTier(row.midLat, row.midLon)
   const observed = nearestRoadLine(row.midLat, row.midLon, source.tpda, 500)
-  if (observed) return { ...pinnedRoadObservation(observed, 'both-directions'), kind: 'tpda' as const, ...observedSplit(tpdaAadt(observed) * multiplier(tier), observed) }
+  // A published count is never scaled by a city box (the tier multipliers were invented, 2026-06-20).
+  if (observed) return { ...pinnedRoadObservation(observed, 'both-directions'), kind: 'tpda' as const, ...observedSplit(tpdaAadt(observed), observed) }
   const network = nearestRoadLine(row.midLat, row.midLon, source.network, 400)
   if (!network) return null
   const coal = tier === 0 && COAL_REGIONS.some(bbox => inBbox(row.midLat, row.midLon, bbox))

@@ -136,6 +136,19 @@ export const DATASETS: Dataset[] = [
     measurement: 'counted',
   },
   {
+    // Amsterdam's file in the EU dataset is the city's traffic model output, not counts
+    // (cities_summary.csv: techno = Model): an estimate below every measured tier.
+    id: 1103,
+    layer: 'roads',
+    key: 'nl-amsterdam-traffic-model',
+    name: 'Amsterdam traffic model (EU Harmonized Traffic Volumes)',
+    year: 2025,
+    license: 'CC-BY-4.0',
+    url: 'https://github.com/XavB64/traffic-volume-data-EU-cities',
+    priority: 80,
+    measurement: 'proxy',
+  },
+  {
     id: 11,
     layer: 'roads',
     key: 'service-tree-heuristic',
@@ -324,6 +337,7 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.bast.de/',
     priority: 80,
     measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE, // a national census never counts a local street
   },
   {
     id: 23,
@@ -335,6 +349,7 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.bast.de/',
     priority: 80,
     measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE, // a national census never counts a local street
   },
   {
     id: 24,
@@ -537,18 +552,6 @@ export const DATASETS: Dataset[] = [
     roadCoverage: [0, 1, 2],
   },
   {
-    id: 1014,
-    layer: 'roads',
-    key: 'br-national-roads',
-    name: 'DNIT Rodovias Federais',
-    year: 2017,
-    license: 'public-data',
-    url: 'https://www.dnit.gov.br/',
-    priority: 80,
-    measurement: 'proxy',
-    roadCoverage: [0, 1, 2],
-  },
-  {
     id: 1019,
     layer: 'roads',
     key: 'ca-national-roads',
@@ -654,6 +657,7 @@ export const DATASETS: Dataset[] = [
     url: 'https://mapatrafico.transportes.gob.es/',
     priority: 80,
     measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE, // a national census never counts a local street
   },
   {
     id: 1039,
@@ -738,6 +742,7 @@ export const DATASETS: Dataset[] = [
     url: 'https://www.stradeanas.it/',
     priority: 80,
     measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE, // a national census never counts a local street
   },
   {
     id: 1088,
@@ -859,6 +864,7 @@ export const DATASETS: Dataset[] = [
     priority: 80,
     measurement: 'derived',
     highMoto: true, // Thailand is motorcycle-dominant — R2 must not flag its real moto share
+    roadCoverage: MAJOR_ROAD_COVERAGE, // a national census never counts a local street
   },
   {
     id: 9876,
@@ -871,6 +877,7 @@ export const DATASETS: Dataset[] = [
     priority: 80,
     measurement: 'proxy',
     highMoto: true,
+    roadCoverage: MAJOR_ROAD_COVERAGE, // a national census never counts a local street
   },
   {
     id: 1124,

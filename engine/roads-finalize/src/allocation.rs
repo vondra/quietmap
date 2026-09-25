@@ -1,7 +1,7 @@
 //! Allocate one physical cross-section once; longitudinal pieces retain through-flow.
 
 use crate::input::Road;
-use noise_compute::defaults::{resolve_traffic_default, TrafficDefault};
+use noise_compute::defaults::{resolve_traffic_default, Aadt, TrafficDefault};
 use noise_compute::normalize::road::{access_factor, lane_ratio};
 
 // Conservative matching envelope inherited from European source admission.
@@ -10,7 +10,8 @@ const MAX_CARRIAGEWAY_SEPARATION_M: f64 = 50.0;
 const MIN_PARALLEL_COSINE: f64 = 0.9659258262890683; // cos(15 degrees)
 
 pub(crate) fn compatible_alternative(road: &Road, candidate: &Road) -> bool {
-    if road.way_id == candidate.way_id || road.direction == 0 || candidate.direction == 0
+    // Opposite arcs of one small roundabout run antiparallel within 50 m, but they are one ring, not two carriageways.
+    if road.way_id == candidate.way_id || road.direction == 0 || candidate.direction == 0 || road.roundabout || candidate.roundabout
         || road.class != candidate.class || road.country != candidate.country
         || !((!road.corridor.is_empty() && road.corridor == candidate.corridor)
             || (!road.observation.is_empty() && road.observation_source_id == candidate.observation_source_id
@@ -70,39 +71,56 @@ fn cross_section<'a>(road: &'a Road, candidates: impl IntoIterator<Item = &'a Ro
     ways.into_values().collect()
 }
 
-pub fn resolve<'a>(road: &'a Road, candidates: impl IntoIterator<Item = &'a Road>) -> ([f64; 4], u8) {
-    if road.basis == 3 { return (road.counts, road.estimated); }
+/// One stored carriageway's traffic and class status, and the whole road's four-class total when this row
+/// alone establishes it: a two-way row or a ring, a known share of a two-way total, a street's own flow.
+/// `whole` is None where only this direction is known or other carriageways carry the rest.
+struct Carriageway {
+    counts: [f64; 4],
+    estimated: u8,
+    whole: Option<f64>,
+}
+
+fn carriageway(road: &Road, members: &[&Road]) -> Carriageway {
+    let total = |counts: [f64; 4]| counts.iter().sum::<f64>();
+    if road.basis == 3 { return Carriageway { counts: road.counts, estimated: road.estimated, whole: Some(total(road.counts)) }; }
     let measured = road.provenance.is_measured() && road.counts.iter().any(|v| *v > 0.0);
     if road.tunnel || (matches!(road.access, 2 | 4) && !measured) {
-        return ([0.0; 4], 15);
+        return Carriageway { counts: [0.0; 4], estimated: 15, whole: Some(0.0) };
     }
     let access = access_factor(road.access, road.provenance, road.class);
+    // Every point of a roundabout ring carries the circulating flow, about the two-way flow of one
+    // approach: measured class 1-2 ring rows sat at a median 0.55 and 0.50 of their road's two-way count
+    // only because they were halved (w3-major census, r260919). A ring is allocated as a two-way road.
+    let one_way = road.direction != 0 && !road.roundabout;
     if road.source_id == 0 {
-        let (prior, factor) = match resolve_traffic_default(road.class, road.country, road.lanes, road.direction != 0) {
-            // A measured per-lane rate already describes this one stored carriageway.
-            TrafficDefault::Carriageway(prior) => (prior, access),
+        let scale = |prior: Aadt, factor: f64| [prior.0, prior.1, prior.2, prior.3].map(|value| value * factor);
+        return match resolve_traffic_default(road.class, road.country, road.lanes, one_way, road.built_up) {
+            // A measured prior already describes this one stored carriageway.
+            TrafficDefault::Carriageway(prior) => {
+                let counts = scale(prior, access);
+                Carriageway { counts, estimated: 15, whole: (!one_way).then(|| total(counts)) }
+            }
             TrafficDefault::SectionBothDirections(prior) => {
-                let alternatives = cross_section(road, candidates);
-                let lane_factor = alternatives.iter().map(|candidate|
+                let lane_factor = members.iter().map(|candidate|
                     lane_ratio(candidate.class as usize, candidate.lanes, candidate.direction != 0))
                     .fold(1.0, f64::max);
                 // A standalone one-way row takes one direction of the section
                 // total; evidenced carriageways share that total instead.
-                let share = if alternatives.len() > 1 { 1.0 / alternatives.len() as f64 }
-                    else if road.direction != 0 { 0.5 } else { 1.0 };
-                (prior, lane_factor * share * access)
+                let share = if members.len() > 1 { 1.0 / members.len() as f64 }
+                    else if one_way { 0.5 } else { 1.0 };
+                Carriageway { counts: scale(prior, lane_factor * share * access), estimated: 15,
+                    whole: (members.len() == 1).then(|| total(scale(prior, lane_factor * access))) }
             }
         };
-        return ([prior.0, prior.1, prior.2, prior.3].map(|value| value * factor), 15);
     }
     // Published directional traffic is already on a directional basis,
     // including when the publisher's OSM tag disagrees with the count.
-    if road.basis == 1 { return (road.counts, road.estimated); }
-    let count = cross_section(road, candidates).len();
+    if road.basis == 1 { return Carriageway { counts: road.counts, estimated: road.estimated, whole: None }; }
+    let count = members.len();
     // Neither unknown scope nor an estimated physical split is a measured
     // directional count. Keep that uncertainty in every class's status. A lone
     // one-way street's own profile (basis 4) is the counter's value unchanged.
-    let estimated = if road.basis == 0 || count > 1 || (road.direction != 0 && road.basis != 4) { 15 }
+    let estimated = if road.basis == 0 || count > 1 || (one_way && road.basis != 4) { 15 }
         else { road.estimated };
     // A national census publishes the two-way total of a numbered road
     // (release r260910, classes 0-1: paired one-way rows sit at a median 0.50
@@ -111,18 +129,33 @@ pub fn resolve<'a>(road: &'a Road, candidates: impl IntoIterator<Item = &'a Road
     // holds one direction. Classes 3+ stay whole: 30 % of their measured
     // one-way km are genuine one-way streets. A street's own cross-section
     // (basis 4, city profile counters) is already the one direction there.
-    let lone_direction_of_a_two_way_total = road.direction != 0 && road.basis != 4
+    let lone_direction_of_a_two_way_total = one_way && road.basis != 4
         && (!road.provenance.is_measured() || (road.basis == 2 && road.class <= 2 && !road.corridor.is_empty()));
     let share = if count > 1 { 1.0 / count as f64 }
         else if lone_direction_of_a_two_way_total { 0.5 } else { 1.0 };
-    (road.counts.map(|value| value * share * access), estimated)
+    Carriageway { counts: road.counts.map(|value| value * share * access), estimated,
+        whole: (count == 1).then(|| total(road.counts) * access) }
+}
+
+/// This carriageway's four classes, their status, and the whole road's total at this piece (popup headline,
+/// owner decision 2): the row itself when it establishes it, else the sum over the carriageways found
+/// together; 0 where only this one direction is known.
+pub(crate) fn allocate<'a>(road: &'a Road, candidates: &[&'a Road]) -> ([f64; 4], u8, f64) {
+    let members = cross_section(road, candidates.iter().copied());
+    let own = carriageway(road, &members);
+    let whole = own.whole.unwrap_or_else(|| {
+        if members.len() < 2 { return 0.0; }
+        members.iter().map(|member| if std::ptr::eq(*member, road) { own.counts } else { carriageway(member, &members).counts })
+            .map(|counts| counts.iter().sum::<f64>()).sum()
+    });
+    (own.counts, own.estimated, whole)
 }
 
 /// Cut where the physical alternative set changes, before resolving each child.
-pub fn intervals<'a>(road: &'a Road, candidates: &[&'a Road]) -> Vec<(f64, f64, [f64; 4], u8)> {
+pub fn intervals<'a>(road: &'a Road, candidates: &[&'a Road]) -> Vec<(f64, f64, [f64; 4], u8, f64)> {
     let mut cuts = vec![0.0, 1.0];
     let axis = (road.end.0 - road.start.0, road.end.1 - road.start.1);
-    if road.basis != 1 && road.basis != 3 {
+    if road.basis != 3 {
         let mut laterals = vec![(0.0, 0.0)];
         for candidate in candidates {
             if !compatible_alternative(road, candidate) { continue; }
@@ -142,13 +175,13 @@ pub fn intervals<'a>(road: &'a Road, candidates: &[&'a Road]) -> Vec<(f64, f64, 
     cuts.sort_by(f64::total_cmp);
     cuts.dedup();
     let point = |t: f64| (road.start.0 + axis.0 * t, road.start.1 + axis.1 * t);
-    let mut children: Vec<(f64, f64, [f64; 4], u8)> = Vec::new();
+    let mut children: Vec<(f64, f64, [f64; 4], u8, f64)> = Vec::new();
     for pair in cuts.windows(2) {
         let child = Road { start: point(pair[0]), end: point(pair[1]), ..road.clone() };
-        let (counts, estimated) = resolve(&child, candidates.iter().copied());
+        let (counts, estimated, whole) = allocate(&child, candidates);
         match children.last_mut() {
-            Some(previous) if previous.2 == counts && previous.3 == estimated => previous.1 = pair[1],
-            _ => children.push((pair[0], pair[1], counts, estimated)),
+            Some(previous) if previous.2 == counts && previous.3 == estimated && previous.4 == whole => previous.1 = pair[1],
+            _ => children.push((pair[0], pair[1], counts, estimated, whole)),
         }
     }
     merge_children_shorter_than_a_metre(&mut children, axis.0.hypot(axis.1) * road.mercator_scale());
@@ -161,9 +194,9 @@ const MIN_CHILD_LENGTH_M: f64 = 1.0;
 
 /// The shortest sliver first joins its longer neighbour and takes that neighbour's allocation,
 /// until no child is shorter than a metre unless the parent itself is.
-fn merge_children_shorter_than_a_metre(children: &mut Vec<(f64, f64, [f64; 4], u8)>, parent_length_m: f64) {
+fn merge_children_shorter_than_a_metre(children: &mut Vec<(f64, f64, [f64; 4], u8, f64)>, parent_length_m: f64) {
     let min_fraction = MIN_CHILD_LENGTH_M / parent_length_m;
-    let fraction = |child: &(f64, f64, [f64; 4], u8)| child.1 - child.0;
+    let fraction = |child: &(f64, f64, [f64; 4], u8, f64)| child.1 - child.0;
     while children.len() > 1 {
         let Some(sliver) = (0..children.len()).filter(|i| fraction(&children[*i]) < min_fraction)
             .min_by(|a, b| fraction(&children[*a]).total_cmp(&fraction(&children[*b]))) else { break };
@@ -172,7 +205,8 @@ fn merge_children_shorter_than_a_metre(children: &mut Vec<(f64, f64, [f64; 4], u
             && (sliver == 0 || fraction(&children[sliver]) > fraction(&children[sliver - 1]));
         if after_is_longer { children[sliver].0 = removed.0; } else { children[sliver - 1].1 = removed.1; }
         if sliver > 0 && sliver < children.len()
-            && (children[sliver - 1].2, children[sliver - 1].3) == (children[sliver].2, children[sliver].3) {
+            && (children[sliver - 1].2, children[sliver - 1].3, children[sliver - 1].4)
+                == (children[sliver].2, children[sliver].3, children[sliver].4) {
             children[sliver - 1].1 = children.remove(sliver).1;
         }
     }

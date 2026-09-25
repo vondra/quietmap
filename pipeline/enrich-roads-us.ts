@@ -1,30 +1,29 @@
 /** Enrich z9 US roads with class-compatible FHWA HPMS 2022 traffic measurements
  * and observed TMAS 2025 hourly TOTAL period profiles. */
 
+import { excludesHoldoutCounts, withholdsCountLine, withholdsCountPoint } from './lib/count-holdout.js'
 import { roadFeatureObservation } from './lib/pinned-road-lines.js'
 import type { RoadObservation } from './lib/road-observation.js'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { writeCacheAtomically } from './lib/atomic-cache.js'
-import { DATASETS } from './lib/enrichment-datasets.js'
 import { iso2Code, listPreparedSquares, lonLatToGrid } from './lib/prepared-grid.js'
 import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
-  applyRoadTimeProfiles, nearestCountWithin200Metres, osmRoadClassRank, readRoadTimeProfilesSource,
+  applyRoadTimeProfiles, osmRoadClassRank, readRoadTimeProfilesSource, roadClassTakesCount,
   ROAD_CLASS_RANK_TOLERANCE, writeRoadAadt, type RoadRow, type RoadTimeProfileEntry,
 } from './lib/roads-arrow.js'
-import { SOURCE_ID_US_FHWA_HPMS, shouldOverwrite } from './lib/sources.js'
+import { SOURCE_ID_US_FHWA_HPMS, declaredRoadCoverage, shouldOverwrite } from './lib/sources.js'
 import {
-  buildOneHundredthDegreePointGrid, haversineM, pointGridCandidates, pointSearchReach, wrapLonDeltaDeg, type RankedPoint,
+  buildOneHundredthDegreePointGrid, buildOneHundredthDegreeSegmentGrid, haversineM, pointGridCandidates, pointSearchReach,
+  pointToSegmentDist, runsAlongSegment, wrapLonDeltaDeg, type RankedPoint, type SegmentCoordinates,
 } from './lib/spatial.js'
 import { writeTmasProfileSquares } from './lib/roads-us-tmas-write.js'
 import { ownSquareShard, writeNationalRoadSquares } from './lib/square-pool.js'
 import { loadTmasProfiles, TMAS_SOURCE_URL, type TmasStationProfile } from './lib/roads-us-tmas-source.js'
 
 const SOURCE_ID = SOURCE_ID_US_FHWA_HPMS
-const coverage = DATASETS.find(dataset => dataset.id === SOURCE_ID)?.roadCoverage
-if (!coverage) throw new Error('FHWA source has no registered road coverage')
-const COVERED_ROAD_CLASSES = new Set(coverage)
+const COVERED_ROAD_CLASSES = declaredRoadCoverage(SOURCE_ID)
 const US_BBOX = [17.5, -180, 71.5, -65] as const
 const PAGE_SIZE = 2000
 const HPMS_BASE = 'https://services.arcgis.com/xOi1kZaI0eWDREZv/ArcGIS/rest/services/HPMS_FULL_US_2022_Sysnomulti_view/FeatureServer/0'
@@ -37,6 +36,10 @@ export interface UsRoadSegment extends RankedPoint, RoadObservation {
   medium: number
   heavy: number
   moto: number
+  /** HPMS FACILITY_TYPE: 1 one-way roadway, 2 two-way, 4 ramp, 6 two-way part of a divided road. */
+  facilityType: number | null
+  /** The section's lines as flat `[longitude, latitude, …]` vertices; `latitude`/`longitude` is their centroid. */
+  lines: readonly Float64Array[]
 }
 
 function sourceNumber(value: unknown, name: string): number {
@@ -48,7 +51,7 @@ function sourceNumber(value: unknown, name: string): number {
   return Number(value)
 }
 
-function geometryCentroid(value: unknown): readonly [number, number] {
+function sectionLines(value: unknown): { lines: Float64Array[]; latitude: number; longitude: number } {
   if (!value || typeof value !== 'object') throw new Error('FHWA geometry is missing')
   const geometry = value as { type?: unknown; coordinates?: unknown }
   const lines = geometry.type === 'LineString' ? [geometry.coordinates]
@@ -57,9 +60,11 @@ function geometryCentroid(value: unknown): readonly [number, number] {
   let latitude = 0
   let longitude = 0
   let count = 0
+  const flat: Float64Array[] = []
   for (const line of lines) {
     if (!Array.isArray(line)) throw new Error('invalid FHWA line coordinates')
-    for (const coordinate of line) {
+    const vertices = new Float64Array(line.length * 2)
+    for (const [index, coordinate] of line.entries()) {
       if (!Array.isArray(coordinate) || coordinate.length < 2 ||
           typeof coordinate[0] !== 'number' || typeof coordinate[1] !== 'number' ||
           !Number.isFinite(coordinate[0]) || !Number.isFinite(coordinate[1]) ||
@@ -69,11 +74,14 @@ function geometryCentroid(value: unknown): readonly [number, number] {
       }
       longitude += coordinate[0]
       latitude += coordinate[1]
+      vertices[2 * index] = coordinate[0]
+      vertices[2 * index + 1] = coordinate[1]
       count++
     }
+    if (line.length) flat.push(vertices)
   }
   if (count === 0) throw new Error('FHWA line geometry is empty')
-  return [latitude / count, longitude / count]
+  return { lines: flat, latitude: latitude / count, longitude: longitude / count }
 }
 
 export function parseUsPage(page: unknown): { segments: UsRoadSegment[]; features: number } {
@@ -96,7 +104,7 @@ export function parseUsPage(page: unknown): { segments: UsRoadSegment[]; feature
     if (aadt === 0) continue
     const functionalClass = sourceNumber(values.F_SYSTEM, 'F_SYSTEM')
     if (!Number.isInteger(functionalClass)) throw new Error('FHWA F_SYSTEM must be an integer')
-    const [latitude, longitude] = geometryCentroid((feature as { geometry?: unknown }).geometry)
+    const { lines, latitude, longitude } = sectionLines((feature as { geometry?: unknown }).geometry)
     if (latitude < US_BBOX[0] || latitude > US_BBOX[2] ||
         longitude < US_BBOX[1] || longitude > US_BBOX[3] ||
         functionalClass < 1 || functionalClass > HEAVY_SHARES.length) continue
@@ -113,7 +121,7 @@ export function parseUsPage(page: unknown): { segments: UsRoadSegment[]; feature
     const countBasis = facilityType === null ? 'unknown' : facilityType === 1 || facilityType === 4 ? 'directional' : 'both-directions'
     segments.push({ ...roadFeatureObservation(feature as object, countBasis),
       latitude, longitude, rank, isRamp: facilityType === 4, aadt,
-      light: aadt - totalHeavy - moto, medium, heavy: totalHeavy - medium, moto,
+      light: aadt - totalHeavy - moto, medium, heavy: totalHeavy - medium, moto, facilityType, lines,
     })
   }
   return { segments, features: features.length }
@@ -157,19 +165,87 @@ export async function loadUsSegments(options: RoadLoaderArguments): Promise<UsRo
       for (const [pendingPath, pendingBytes] of pendingDownloads) {
         writeCacheAtomically(pendingPath, pendingBytes)
       }
-      return segments
+      return withTwoWayTwinsOfOneWaySections(segments)
     }
     segments.push(...parsed.segments)
     previousPageWasPartial = parsed.features < PAGE_SIZE
   }
 }
 
+// An FT1 section that repeats the two-way total of an FT6 section of the same system a few hundred
+// metres away is the other state's or the older inventory's copy of that total, not one direction:
+// 3,189 of 7,400 km of FT1 have such a twin (centroids <= 300 m, AADT within 15 %), FT6/FT1 median 1.00.
+const TWIN_CENTROID_METRES = 300
+const TWIN_AADT_RATIO_TOLERANCE = 0.15
+
+/** Relabel FT1 sections with an equal FT6 twin as two-way totals; genuine one-way couplets stay directional. */
+export function withTwoWayTwinsOfOneWaySections(segments: UsRoadSegment[]): UsRoadSegment[] {
+  if (excludesHoldoutCounts()) segments = segments.filter(section => !section.lines.some(line =>
+    withholdsCountLine(Array.from({ length: line.length / 2 }, (_, i) => [line[2 * i], line[2 * i + 1]]))))
+  const twoWay = buildOneHundredthDegreePointGrid(segments.filter(segment => segment.facilityType === 6))
+  return segments.map(segment => {
+    if (segment.facilityType !== 1) return segment
+    for (const twin of pointGridCandidates(segment.latitude, segment.longitude, TWIN_CENTROID_METRES, twoWay)) {
+      if (twin.rank === segment.rank && Math.abs(segment.aadt / twin.aadt - 1) <= TWIN_AADT_RATIO_TOLERANCE &&
+          haversineM(segment.latitude, segment.longitude, twin.latitude, twin.longitude) <= TWIN_CENTROID_METRES) {
+        return { ...segment, countBasis: 'both-directions' as const }
+      }
+    }
+    return segment
+  })
+}
+
+// A section applies along its own line: 84 % of Interstate km lay more than 200 m from its section's
+// centroid (I-95 Miami 44 km and I-405 Los Angeles 21 km fell to defaults, r260919).
+const SECTION_LINE_REACH_METRES = 100
+
+interface SectionBounds extends SegmentCoordinates { section: UsRoadSegment }
+
+/** Index each section under every 0.01-degree cell of its bounds; exact distances come from its lines. */
+export function indexUsSections(segments: readonly UsRoadSegment[]): ReadonlyMap<string, readonly SectionBounds[]> {
+  return buildOneHundredthDegreeSegmentGrid(segments.map(section => {
+    let south = 90, west = 180, north = -90, east = -180
+    for (const line of section.lines) for (let index = 0; index < line.length; index += 2) {
+      west = Math.min(west, line[index]); east = Math.max(east, line[index])
+      south = Math.min(south, line[index + 1]); north = Math.max(north, line[index + 1])
+    }
+    return { section, startLatitude: south, startLongitude: west, endLatitude: north, endLongitude: east }
+  }))
+}
+
+/** The class-compatible section whose nearest line piece runs along the row, nearest first. */
+export function nearestUsSection(row: RoadRow, grid: ReadonlyMap<string, readonly SectionBounds[]>): UsRoadSegment | null {
+  let closest: UsRoadSegment | null = null
+  let closestDistance = SECTION_LINE_REACH_METRES
+  for (const { section } of pointGridCandidates(row.midLat, row.midLon, SECTION_LINE_REACH_METRES, grid)) {
+    if (!roadClassTakesCount(row.roadClass, section)) continue
+    let distance = Infinity, piece: SegmentCoordinates | null = null
+    for (const line of section.lines) {
+      // A single-vertex line is one zero-length piece.
+      for (let start = 0; start === 0 || start + 2 < line.length; start += 2) {
+        const end = Math.min(start + 2, line.length - 2)
+        const candidate = { startLongitude: line[start], startLatitude: line[start + 1],
+          endLongitude: line[end], endLatitude: line[end + 1] }
+        const along = pointToSegmentDist(row.midLat, row.midLon, candidate.startLatitude, candidate.startLongitude,
+          candidate.endLatitude, candidate.endLongitude)
+        if (along < distance) { distance = along; piece = candidate }
+      }
+    }
+    if (piece && (distance < closestDistance || (distance === closestDistance && closest !== null &&
+        section.observationId < closest.observationId)) && runsAlongSegment(row, piece)) {
+      closest = section
+      closestDistance = distance
+    }
+  }
+  return closest
+}
+
 export async function enrichUsRoads(preparedDirectory: string, segments: readonly UsRoadSegment[]) {
   if (segments.length === 0) throw new Error('FHWA snapshot has no usable traffic measurements')
-  const grid = buildOneHundredthDegreePointGrid(segments)
+  const grid = indexUsSections(segments)
   const match = (row: RoadRow) => {
     if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
-    const segment = nearestCountWithin200Metres(row, grid)
+    const segment = nearestUsSection(row, grid)
     return segment ? { countBasis: segment.countBasis, observationId: segment.observationId,
       light: segment.light, medium: segment.medium, heavy: segment.heavy,
       moto: segment.moto, sourceId: SOURCE_ID,
@@ -263,6 +339,7 @@ export function tmasCandidateSquares(
 export async function enrichTmasTimeProfiles(
   preparedDirectory: string, stations: readonly TmasStationProfile[],
 ): Promise<{ squares: number; rows: number; matched: number; squaresUpdated: number }> {
+  stations = stations.filter(station => !withholdsCountPoint(station.latitude, station.longitude))
   const squares = tmasCandidateSquares(stations, preparedDirectory, listPreparedSquares(preparedDirectory, US_BBOX))
   return { squares: squares.length, ...await writeTmasProfileSquares(preparedDirectory, squares, stations) }
 }

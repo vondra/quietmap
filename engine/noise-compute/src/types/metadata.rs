@@ -69,6 +69,9 @@ pub struct RoadMetadata {
     /// Per-category estimated bitmask (light 1, medium 2, heavy 4, moto 8):
     /// bit set = that category's value is an estimate/prior, clear = observed.
     pub traffic_estimated: u8,
+    /// The whole road at the dominant segment, both directions (the popup headline);
+    /// 0 where only the dominant carriageway's direction is known.
+    pub cross_section_aadt: f64,
     pub dominant_source_id: u16, // dataset identity (single source of truth: pipeline/lib/sources.ts → engine/noise-compute/src/sources.rs; 0 = unspecified, incl. producer priors). Resolved into `provenance` field below.
     pub speed_posted_kmh: Option<u8>, // raw OSM maxspeed (Some(0) = untagged); None = derestricted (maxspeed=none) — no number exists to display
 

@@ -26,25 +26,44 @@ map.
 
 ### Road defaults
 
-A three-lane one-way motorway without a count is estimated at 3 × 6,379 = 19,137
-vehicles per day. The rates below are medians of counted roads, separated by road class
-and direction. They estimate uncounted roads; they are not local measurements.
+A three-lane urban one-way motorway without a count is estimated at 3 × 12,543 = 37,629
+vehicles per day. The defaults below are length-weighted medians of counted public roads,
+fitted in September 2026 by road class, direction and surroundings. Local counts and
+national estimate tables take precedence.
 
-| Vehicles per day | Motorway | Trunk | Primary |
-|---|---:|---:|---:|
-| One-way carriageway, per lane | 6,379 | 4,533 | 4,250 |
-| Two-way road, per lane | 3,010 | 2,594 | 2,800 |
-| One-way carriageway, lane count unknown | 5,200 | 1,810 | 5,882 |
-| Two-way road, lane count unknown | 6,019 | 3,045 | 3,719 |
+Motorways, trunks and primary roads with a lane count from 1 to 6 use these rates in
+vehicles per day per lane:
 
-Lane counts from 1 to 6 use the per-lane rate; missing or implausible counts use the
-carriageway median. National estimate tables, where available, take precedence.
+| Road | Direction | Rural | Urban | Surroundings unknown |
+|---|---|---:|---:|---:|
+| Motorway | One-way | 6,174 | 12,543 | 7,331 |
+| Motorway | Two-way | 2,305 | 4,396 | 2,305 |
+| Trunk | One-way | 2,950 | 6,188 | 3,652 |
+| Trunk | Two-way | 1,959 | 4,000 | 2,205 |
+| Primary | One-way | 3,314 | 4,980 | 4,579 |
+| Primary | Two-way | 1,977 | 4,136 | 2,636 |
 
-Smaller-road defaults are section totals: secondary 3,000, tertiary 800, residential 500,
-living street 100, unclassified 1,340, service 250 and track 5 vehicles per day, before
-lane, carriageway and access adjustments. A two-way track without an access tag takes 0.5
-vehicles per day. Local streets can instead be estimated from the buildings they serve.
-Country pages list local data and estimates; no generic country multiplier is applied.
+Missing or implausible lane counts use the whole carriageway estimates below, in vehicles
+per day. Secondary and tertiary roads use these totals regardless of the lane count.
+
+| Road | Direction | Rural | Urban | Surroundings unknown |
+|---|---|---:|---:|---:|
+| Motorway | One-way | 5,208 | 30,980 | 6,008 |
+| Motorway | Two-way | 6,297 | 7,640 | 6,297 |
+| Trunk | One-way | 5,061 | 9,744 | 6,652 |
+| Trunk | Two-way | 4,260 | 8,289 | 4,840 |
+| Primary | One-way | 4,966 | 7,963 | 7,103 |
+| Primary | Two-way | 3,644 | 9,322 | 4,500 |
+| Secondary | One-way | 6,500 | 9,103 | 8,824 |
+| Secondary | Two-way | 2,061 | 6,445 | 3,000 |
+| Tertiary | One-way | 2,266 | 4,298 | 4,132 |
+| Tertiary | Two-way | 1,002 | 2,562 | 1,506 |
+
+Smaller-road defaults are section totals: residential 500, living street 100,
+unclassified 1,340, service 250 and track 5 vehicles per day, before lane, carriageway
+and access adjustments. A two-way track without an access tag takes 0.5 vehicles per day.
+Local streets can instead be estimated from the buildings they serve. Country pages
+list local data and estimates; no generic country multiplier is applied.
 
 Directional counts are kept as published; counts covering both directions are shared
 between carriageways. A divided main road can receive half a two-way count when its

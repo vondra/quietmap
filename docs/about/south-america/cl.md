@@ -20,7 +20,7 @@ Those roads are matched within 400 m to the MOP Red Vial network and estimated f
 | Other paved | 2,000 |
 | Gravel or dirt | 1,500 |
 
-Both counts and estimates are doubled inside Greater Santiago and multiplied by 1.4 in 24 other cities: Valparaíso, Viña del Mar, Concepción, Talcahuano, La Serena, Coquimbo, Antofagasta, Iquique, Arica, Temuco, Rancagua, Talca, Chillán, Puerto Montt, Osorno, Valdivia, Calama, Copiapó, Punta Arenas, Curicó, Los Ángeles, San Antonio, Quillota and Tomé. The city boxes are drawn manually.
+Counts are used as published. Estimates are doubled inside Greater Santiago and multiplied by 1.4 in 24 other cities: Valparaíso, Viña del Mar, Concepción, Talcahuano, La Serena, Coquimbo, Antofagasta, Iquique, Arica, Temuco, Rancagua, Talca, Chillán, Puerto Montt, Osorno, Valdivia, Calama, Copiapó, Punta Arenas, Curicó, Los Ángeles, San Antonio, Quillota and Tomé. The city boxes are drawn manually.
 
 The vehicle mix is an estimate:
 

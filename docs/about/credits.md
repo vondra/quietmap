@@ -34,7 +34,12 @@ None of this would exist without other people's open data. Thank you to everyone
   vessel density 2024 (CC BY 4.0)
 - Ships in the rest of the world: **Powered by [Global Fishing Watch](https://globalfishingwatch.org)**
   (CC BY-NC 4.0)
-- Road traffic: national censuses and city counts, listed on the country pages
+- Road traffic: national censuses and city counts, listed on the country pages. European city
+  streets: [EU harmonized traffic volumes](https://github.com/XavB64/traffic-volume-data-EU-cities)
+  (CC BY 4.0), with each city's own terms: ODbL for Paris, Grenoble, Rennes and Montpellier,
+  CC BY-SA 4.0 for Brno
+- Default speed limits: OpenStreetMap Wiki contributors, "Default speed limits" (CC BY-SA 2.0),
+  parsed by [osm-legal-default-speeds](https://github.com/westnordost/osm-legal-default-speeds)
 - Implicit OSM speed-rule definitions: [OpenStreetMap Wiki contributors](https://wiki.openstreetmap.org/wiki/Key:maxspeed#Implicit_maxspeed_values)
   (CC BY-SA 2.0; adapted into a table of determinate passenger-car rules)
 - Trains: public [GTFS](https://gtfs.org/) feeds and national timetables, listed on the country pages

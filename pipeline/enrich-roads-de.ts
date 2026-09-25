@@ -1,5 +1,6 @@
 /** Enrich z9 German roads with BASt SVZ 2021 measured vehicle classes. */
 
+import { withholdsCountPoint } from './lib/count-holdout.js'
 import { roadObservation } from './lib/road-observation.js'
 import {
   SOURCE_ID_DE_BAST_AUTOBAHN, SOURCE_ID_DE_BAST_BUNDESSTRASSEN,
@@ -13,8 +14,10 @@ import { listPreparedSquares } from './lib/prepared-grid.js'
 import { isSlipRoadClass, writeRoadAadt, applyRoadTimeProfiles, type RoadRow, type RoadTimeProfileEntry } from './lib/roads-arrow.js'
 import { ownSquareShard, writeNationalRoadSquares } from './lib/square-pool.js'
 import { haversineM } from './lib/spatial.js'
+import { declaredRoadCoverage } from './lib/sources.js'
 
 const GERMANY_BBOX = [46, 4, 56, 16] as const
+const MAIN_ROAD_CLASSES = declaredRoadCoverage(SOURCE_ID_DE_BAST_BUNDESSTRASSEN)
 const FALLBACK_DISTANCE_M = 2_000
 const REF_DISTANCE_M = 15_000
 const GRID_SCALE = 100
@@ -104,7 +107,7 @@ export async function enrichGermanRoads(
   preparedDirectory: string,
   sections: readonly BastCensusSection[],
 ) {
-  const census = indexBastCensus(sections)
+  const census = indexBastCensus(sections.filter(section => !withholdsCountPoint(section.lat, section.lon)))
   const tally = { matchedAutobahn: 0, matchedBundesstrasse: 0 }
   const counters = await writeNationalRoadSquares(preparedDirectory, GERMANY_BBOX, 'German', tally, path =>
     writeRoadAadt(
@@ -127,10 +130,10 @@ export async function enrichGermanRoads(
         if (applied.sourceId === SOURCE_ID_DE_BAST_AUTOBAHN) tally.matchedAutobahn++
         else tally.matchedBundesstrasse++
       },
-      undefined,
+      MAIN_ROAD_CLASSES,
       { sourceIds: [SOURCE_ID_DE_BAST_AUTOBAHN, SOURCE_ID_DE_BAST_BUNDESSTRASSEN],
         when: row => {
-          const section = matchBastSection(row, census)
+          const section = MAIN_ROAD_CLASSES.has(row.roadClass) ? matchBastSection(row, census) : null
           return section === null || sourceId(section) !== row.existingSourceId
         } },
     ))
@@ -184,6 +187,7 @@ export function matchBwStation(
 export async function enrichBwTimeProfiles(
   preparedDirectory: string, stations: readonly BwStationProfile[],
 ) {
+  stations = stations.filter(station => !withholdsCountPoint(station.lat, station.lon))
   const byRef = bwByRef(stations)
   const entries = bwProfileEntries(stations)
   const indexOf = new Map(entries.map((entry, index) => [entry.station, index + 1]))

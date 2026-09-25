@@ -407,16 +407,6 @@ pub const SOURCES: &[Source] = &[
         year: Some(2024),
     },
     Source {
-        id: 1014,
-        key: "br-national-roads",
-        provenance: Provenance::NationalProxy,
-        layer: "roads",
-        name: "DNIT Rodovias Federais",
-        license: Some("public-data"),
-        url: Some("https://www.dnit.gov.br/"),
-        year: Some(2017),
-    },
-    Source {
         id: 1019,
         key: "ca-national-roads",
         provenance: Provenance::NationalMeasured,
@@ -615,6 +605,16 @@ pub const SOURCES: &[Source] = &[
         license: Some("open-data"),
         url: Some("https://mot.gov.sa/en/open-data"),
         year: Some(2024),
+    },
+    Source {
+        id: 1103,
+        key: "nl-amsterdam-traffic-model",
+        provenance: Provenance::NationalProxy,
+        layer: "roads",
+        name: "Amsterdam traffic model (EU Harmonized Traffic Volumes)",
+        license: Some("CC-BY-4.0"),
+        url: Some("https://github.com/XavB64/traffic-volume-data-EU-cities"),
+        year: Some(2025),
     },
     Source {
         id: 1113,

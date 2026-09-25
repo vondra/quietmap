@@ -15,6 +15,7 @@ struct Child {
     length: f32,
     counts: [f64; 4],
     estimated: u8,
+    cross_section: f64,
 }
 
 fn expand(batch: &RecordBatch, index: &RoadIndex) -> Result<Vec<Child>, String> {
@@ -24,7 +25,7 @@ fn expand(batch: &RecordBatch, index: &RoadIndex) -> Result<Vec<Child>, String> 
     let mut children = Vec::new();
     for (parent, road) in input::roads(batch)?.iter().enumerate() {
         let candidates = index.alternatives(road);
-        for (from, to, counts, estimated) in allocation::intervals(road, &candidates) {
+        for (from, to, counts, estimated, cross_section) in allocation::intervals(road, &candidates) {
             let at = |axis: usize, t: f64| {
                 let start = coordinates[axis].value(parent) as f64;
                 let end = coordinates[axis + 2].value(parent) as f64;
@@ -37,7 +38,7 @@ fn expand(batch: &RecordBatch, index: &RoadIndex) -> Result<Vec<Child>, String> 
             let grid = [at(0, from), at(1, from), at(0, to), at(1, to)];
             if grid[0] == grid[2] && grid[1] == grid[3] { continue; }
             children.push(Child { parent: u32::try_from(parent).map_err(|e| e.to_string())?, grid,
-                length: lengths.value(parent) * (to - from) as f32, counts, estimated });
+                length: lengths.value(parent) * (to - from) as f32, counts, estimated, cross_section });
         }
     }
     Ok(children)
@@ -81,6 +82,8 @@ pub fn stage(path: &Path, batches: &[RecordBatch], index: &RoadIndex) -> Result<
     }
     fields.push(Field::new("traffic_estimated", DataType::UInt8, false));
     columns.push(Arc::new(UInt8Array::from(children.iter().map(|c| c.estimated).collect::<Vec<_>>())));
+    fields.push(Field::new(input::CROSS_SECTION_AADT, DataType::Float64, false));
+    columns.push(Arc::new(Float64Array::from(children.iter().map(|c| c.cross_section).collect::<Vec<_>>())));
     let mut metadata = original.metadata().clone();
     metadata.insert(input::CONTRACT.to_owned(), "1".to_owned());
     metadata.remove(arrow_batching::QM_BLOCKS_KEY);

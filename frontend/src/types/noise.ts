@@ -135,6 +135,8 @@ interface RoadMetadata {
   aadt_moto: number
   /** Bitmask: light 1, medium 2, heavy 4, moto 8 — set = estimated. */
   traffic_estimated: number
+  /** Whole road at the dominant segment, both directions; 0 where only its own direction is known. */
+  cross_section_aadt: number
   dominant_source_id: number
   provenance?: DatasetProvenance | null
   /** Observed traffic-timing attribution of the dominant segment;

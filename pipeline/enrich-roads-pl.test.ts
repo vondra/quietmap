@@ -64,15 +64,22 @@ test('Polish pinned loader rejects bytes outside the admitted release source', (
   }), /does not match the admitted release source/)
 })
 
-test('Polish matcher prefers a nearby national line and retains provincial ref matching', () => {
-  const provincial = segment({ sourceId: 'p', ref: 'DW85', isProvincial: true, coordinates: null })
+test('Polish matcher prefers a nearby national line and gives a provincial ref its median section', () => {
+  const provincial = [5, 1, 9].map(light => segment({ sourceId: `p${light}`, ref: 'DW85', isProvincial: true, coordinates: null, light }))
   const national = segment({ ref: 'DK85;85B;85' })
-  const index = indexPolishGpr([provincial, national])
+  const index = indexPolishGpr([...provincial, national])
   assert.equal(matchPolishGpr(road(), index), national)
   assert.equal(matchPolishGpr(road({ ref: '85' }), index), national)
   assert.equal(matchPolishGpr(road({ ref: 'other;85B' }), index), national)
-  assert.equal(matchPolishGpr(road({ ref: 'DW 85', midLat: 40 }), index), provincial)
+  assert.equal(matchPolishGpr(road({ ref: 'DW 85', midLat: 40 }), index), provincial[0])
   assert.equal(matchPolishGpr(road({ ref: 'DK85', midLat: 51.9 }), index), null)
+})
+
+test('a lettered national section is its numbered road, but only along it', () => {
+  const s8f = segment({ ref: 'S8F', coordinates: [[20.99, 52.2], [21.01, 52.2]] })
+  const index = indexPolishGpr([s8f])
+  assert.equal(matchPolishGpr(road({ ref: 'S8', midLat: 52.2009 }), index), s8f) // 100 m off the line
+  assert.equal(matchPolishGpr(road({ ref: 'S8', midLat: 52.3 }), index), null) // 11 km off the line
 })
 
 test('z9 Polish pass writes classes, retracts stale claims and enforces baked country', async () => {

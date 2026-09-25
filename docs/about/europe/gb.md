@@ -6,7 +6,10 @@ map: { center: [-2.5, 54.5], zoom: 6 }
 
 ## Roads
 
-Traffic volumes: [Department for Transport count points](https://roadtraffic.dft.gov.uk/) (AADF; cars, vans, buses, trucks, motorcycles), most recent year per point. The file covers Great Britain; Northern Ireland has no counts and uses class defaults.
+Traffic volumes: [Department for Transport count points](https://roadtraffic.dft.gov.uk/) (AADF; cars, vans, buses, trucks, motorcycles), most recent year per point, June 2026 release. The file covers Great Britain; Northern Ireland has no counts and uses class defaults.
+
+- Motorways, A and B roads take the nearest point of their road number within 15 km whose DfT class fits the OSM class. Slip-road points (a short link named after a slip road, or a motorway or trunk point far below its own road) are never used for the main carriageway.
+- C roads and unclassified roads take a manual count (2020 excluded) when the point lies within 12 m of an OSM way and no road of another class runs within 20 m; the whole way takes that count.
 
 London, Birmingham, Manchester, Glasgow, Edinburgh and Cardiff also have counts from the [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities). Uncounted streets use the class default, adjusted for surrounding buildings and the counted roads they connect to.
 

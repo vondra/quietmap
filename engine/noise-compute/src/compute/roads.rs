@@ -781,6 +781,7 @@ pub(crate) fn compute_roads(
             aadt_heavy: acc.dominant_traffic.heavy,
             aadt_moto: acc.dominant_traffic.moto,
             traffic_estimated: acc.dominant_traffic.estimated,
+            cross_section_aadt: acc.dominant_traffic.cross_section_aadt,
             dominant_source_id: acc.dominant_source_id,
             // Derestricted has no posted number — None keeps the popup from
             // rendering the 255 sentinel as "255 km/h" (/gg W4).
@@ -915,6 +916,7 @@ pub(crate) mod tests {
                 moto: 60.0,
                 estimated: 15,
                 time_profile: None,
+                cross_section_aadt: 0.0,
             },
             source_id: 0,
             dist_m: 200.0,
