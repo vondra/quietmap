@@ -97,21 +97,34 @@ def parse_stac_page(page):
         items.append(dict(name=feature['id'] + '.tif', url=asset,
                           epoch=f'ALS {stamp}' if stamp else 'ALS epoch in STAC item'))
     links = {link.get('rel'): link.get('href') for link in page.get('links', [])}
-    return items, 'next' in links
+    return items, links.get('next')
 
 
 def list_stac(catalogue):
-    items, offset, limit = [], 0, 500
-    while True:
-        page = json.loads(http_get(catalogue, {'limit': limit, 'offset': offset}))
-        batch, more = parse_stac_page(page)
-        if not batch:
+    # Token paging: the server ignores offset and issues opaque next links.
+    # Several vintages share a footprint; keep the newest acquisition per tile.
+    seen, best = set(), {}
+    url = catalogue + '?limit=500'
+    while url:
+        request = urllib.request.Request(url, headers=USER_AGENT)
+        with urllib.request.urlopen(request, timeout=120) as response:
+            page = json.loads(response.read())
+        batch, url = parse_stac_page(page)
+        fresh = [item for item in batch if item['name'] not in seen]
+        if not fresh:
             break
-        items.extend(batch)
-        offset += len(batch)
-        if len(batch) < limit or not more:
-            break
-    return items
+        seen.update(item['name'] for item in fresh)
+        for item in fresh:
+            footprint = tuple(item['name'].split('_')[2:4])
+            if footprint not in best or _vintage(item) > _vintage(best[footprint]):
+                best[footprint] = item
+    return sorted(best.values(), key=lambda item: item['name'])
+
+
+def _vintage(item):
+    """Newest acquisition wins; an undated item never beats a dated one."""
+    stamp = item['epoch'][4:]
+    return (stamp[:4].isdigit(), stamp)
 
 
 def parse_arcgis_page(page):
@@ -133,10 +146,12 @@ def list_arcgis(catalogue):
             'where': '1=1', 'resultOffset': offset, 'resultRecordCount': limit,
             'outFields': 'Produkt,Kachel,Download,Stand', 'returnGeometry': 'false', 'f': 'json'}))
         batch, more = parse_arcgis_page(page)
-        items.extend(batch)
-        offset += len(page.get('features', []))
-        if not more:
+        fresh = [item for item in batch if item['name'] not in {i['name'] for i in items}]
+        items.extend(fresh)
+        got = len(page.get('features', []))
+        if not more or not got or not fresh:
             break
+        offset += got
     return items
 
 
@@ -182,8 +197,11 @@ def list_dla(catalogue):
                 kachel = props['kachel_nr']
                 url = (f'{MV_DOWNLOAD}?index=2&dataset={MV_DATASET}'
                        f'&file=dgm5_{kachel}_2_gtiff.tif')
-                tiles[kachel] = dict(name=f'dgm5_{kachel}_2_gtiff.tif', url=url,
-                                     epoch=f"ALS {props.get('aktualitaet', '')}".rstrip())
+                candidate = dict(name=f'dgm5_{kachel}_2_gtiff.tif', url=url,
+                                 epoch=f"ALS {props.get('aktualitaet', '')}".rstrip())
+                # Grid cells overlap at edges; keep the newest vintage per tile.
+                if kachel not in tiles or candidate['epoch'] > tiles[kachel]['epoch']:
+                    tiles[kachel] = candidate
             x += step
         y += step
     return sorted(tiles.values(), key=lambda item: item['name'])

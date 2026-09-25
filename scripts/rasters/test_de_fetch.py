@@ -44,10 +44,19 @@ class ParserTest(unittest.TestCase):
                               'assets': {'dgm1-tif': {'href': 'https://example.invalid/t.tif'}},
                               'properties': {'datetime': '2025-03-09T00:00:00Z'}}],
                 'links': [{'rel': 'next', 'href': 'https://example.invalid/next'}]}
-        items, more = fetch_tiles.parse_stac_page(page)
-        self.assertTrue(more)
+        items, nxt = fetch_tiles.parse_stac_page(page)
+        self.assertEqual(nxt, 'https://example.invalid/next')
         self.assertEqual(items[0]['name'], 'dgm1_32_597_5909_1_ni_2025.tif')
         self.assertEqual(items[0]['epoch'], 'ALS 2025-03-09')
+        last, end = fetch_tiles.parse_stac_page({'features': [], 'links': []})
+        self.assertEqual((last, end), ([], None))
+
+    def test_stac_vintage_prefers_newest_dated_item(self):
+        old = dict(epoch='ALS 2010-05-14')
+        new = dict(epoch='ALS 2025-03-09')
+        undated = dict(epoch='ALS epoch in STAC item')
+        self.assertGreater(fetch_tiles._vintage(new), fetch_tiles._vintage(old))
+        self.assertGreater(fetch_tiles._vintage(old), fetch_tiles._vintage(undated))
 
     def test_arcgis_page_keeps_dgm1_and_transfer_flag(self):
         page = {'features': [
@@ -146,6 +155,47 @@ class IndexTest(unittest.TestCase):
     def test_he_kachel_key_matches_the_metadata_table(self):
         self.assertEqual(fetch_he.kachel_of('dgm1_32_492_5509_1_he.tif'), '4925509')
         self.assertEqual(fetch_he.excel_date(43803), '2019-12-04')
+
+    def test_he_member_decode_skips_journal_owned_tiles(self):
+        import hashlib
+        import json as json_module
+        import numpy as np
+        from osgeo import gdal, osr
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'root'
+            provider_dir = root / 'de-he-dgm1'
+            provider_dir.mkdir(parents=True)
+            source = provider_dir / 'member.tif'
+            ds = gdal.GetDriverByName('GTiff').Create(str(source), 10, 10, 1, gdal.GDT_Float32)
+            crs = osr.SpatialReference()
+            crs.ImportFromEPSG(25832)
+            ds.SetProjection(crs.ExportToWkt())
+            ds.SetGeoTransform([492000.0, 1.0, 0.0, 5510000.0, 0.0, -1.0])
+            ds.GetRasterBand(1).WriteArray(np.arange(100, dtype=np.float32).reshape(10, 10))
+            ds = None
+            member = 'dgm1_32_492_5509_1_he.tif'
+            archive_path = provider_dir / 'Town - DGM1.zip'
+            with zipfile.ZipFile(archive_path, 'w') as archive:
+                archive.write(source, member)
+            record = dict(url='https://example.invalid/zip', fetched_utc='2026-09-25T00:00:00+00:00',
+                          sha256=hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+                          bytes=archive_path.stat().st_size, licence='x', licence_url='y',
+                          terms_checked_utc='2026-09-25')
+            Path(str(archive_path) + '.provenance.json').write_text(json_module.dumps(record))
+            item = dict(name='Town - DGM1.zip', url='https://example.invalid/zip', kreis='Kreis')
+            out_path = provider_dir / 'dgm1_32_492_5509_1_he-5m.tif'
+            with zipfile.ZipFile(archive_path) as archive:
+                entry = fetch_he.decode_member(root, item, archive, set(archive.namelist()),
+                                               member, out_path, {'4925509': '2020-03-15'}, set())
+            self.assertEqual(entry['epoch'], 'ALS 2020-03-15')
+            self.assertEqual(entry['member'], member)
+            with zipfile.ZipFile(archive_path) as check:
+                self.assertEqual(entry['raw_bytes'], len(check.read(member)))
+            self.assertTrue(out_path.exists())
+            with zipfile.ZipFile(archive_path) as archive:
+                again = fetch_he.decode_member(root, item, archive, set(archive.namelist()),
+                                               member, out_path, {}, {out_path.name})
+            self.assertIsNone(again)
 
     def test_st_meta_and_hh_table_yield_per_tile_epochs(self):
         meta = 'Kachelname: dgm5_32_606_5760_2_st\r\nAktualitaet: 2019-03\r\n'

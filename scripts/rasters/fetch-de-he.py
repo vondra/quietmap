@@ -126,7 +126,7 @@ def kachel_of(member):
     return parts[2] + parts[3]
 
 
-def decode_zip(root, item, flight_dates, done):
+def decode_zip(root, item, flight_dates, done, state):
     """Reduce every 1 km member of one municipality zip to a retained 5 m grid."""
     raw_path = Path(root) / PROVIDER / item['name']
     derived = []
@@ -138,44 +138,56 @@ def decode_zip(root, item, flight_dates, done):
         for member in members:
             out_name = Path(member).stem + '-5m.tif'
             out_path = Path(root) / PROVIDER / out_name
-            if out_name in done and out_path.exists():
-                continue
-            member_bytes = archive.read(member)
-            with tempfile.TemporaryDirectory() as temp:
-                tif_path = Path(temp) / Path(member).name
-                tif_path.write_bytes(member_bytes)
-                # Plain TIFF plus world file: the world file carries the georeference.
-                world = member.rsplit('.', 1)[0] + '.tfw'
-                if world in sidecars:
-                    (Path(temp) / Path(world).name).write_bytes(archive.read(world))
-                probe = gdal.Open(str(tif_path))
-                nodata = probe.GetRasterBand(1).GetNoDataValue()
-                probe = None
-                if nodata is None:
-                    # Hessian tiles carry no nodata tag; the AdV DGM1 void
-                    # value applies, and no Hessian terrain sits at -9999 m.
-                    nodata = -9999.0
-                stats = reduce_geotiff(tif_path, out_path, nodata, epsg=EPSG)
-            assert_crs(out_path, EPSG)
-            kachel = kachel_of(member)
-            epoch = (f"ALS {flight_dates[kachel]}" if kachel in flight_dates else
-                     'unknown ALS epoch (absent from the provider metadata table)')
-            derive_provenance(raw_path, out_path,
-                              f'Decoded {member} ({item["kreis"]}), area-averaged to 5 m')
-            entry = manifest_entry(item['url'], raw_path, out_path,
-                                   'Area-averaged 5 m grid from the verified DGM1 tile')
-            # One zip holds many tiles; the manifest counts the member, not the zip.
-            entry['raw_bytes'] = len(member_bytes)
-            entry['raw_sha256'] = hashlib.sha256(member_bytes).hexdigest()
-            entry['epoch'] = epoch
-            entry['member'] = member
-            if stats['valid_fraction'] == 0:
-                entry['method'] = 'fully void tile, nothing retained'
-                entry['derived'], entry['derived_sha256'], entry['derived_bytes'] = None, None, 0
-                out_path.unlink()
-                Path(str(out_path) + '.provenance.json').unlink()
-            derived.append(entry)
+            # A border tile may sit in two municipalities; serialize its decode.
+            with state['locks'].setdefault(out_name, threading.Lock()):
+                entry = decode_member(root, item, archive, sidecars, member, out_path,
+                                      flight_dates, done)
+            if entry is not None:
+                derived.append(entry)
     return derived
+
+
+def decode_member(root, item, archive, sidecars, member, out_path, flight_dates, done):
+    """Decode one member; None when the journal already owns it."""
+    raw_path = Path(root) / PROVIDER / item['name']
+    out_name = out_path.name
+    if out_name in done and out_path.exists():
+        return None
+    member_bytes = archive.read(member)
+    with tempfile.TemporaryDirectory() as temp:
+        tif_path = Path(temp) / Path(member).name
+        tif_path.write_bytes(member_bytes)
+        # Plain TIFF plus world file: the world file carries the georeference.
+        world = member.rsplit('.', 1)[0] + '.tfw'
+        if world in sidecars:
+            (Path(temp) / Path(world).name).write_bytes(archive.read(world))
+        probe = gdal.Open(str(tif_path))
+        nodata = probe.GetRasterBand(1).GetNoDataValue()
+        probe = None
+        if nodata is None:
+            # Hessian tiles carry no nodata tag; the AdV DGM1 void
+            # value applies, and no Hessian terrain sits at -9999 m.
+            nodata = -9999.0
+        stats = reduce_geotiff(tif_path, out_path, nodata, epsg=EPSG)
+    assert_crs(out_path, EPSG)
+    kachel = kachel_of(member)
+    epoch = (f"ALS {flight_dates[kachel]}" if kachel in flight_dates else
+             'unknown ALS epoch (absent from the provider metadata table)')
+    derive_provenance(raw_path, out_path,
+                      f'Decoded {member} ({item["kreis"]}), area-averaged to 5 m')
+    entry = manifest_entry(item['url'], raw_path, out_path,
+                           'Area-averaged 5 m grid from the verified DGM1 tile')
+    # One zip holds many tiles; the manifest counts the member, not the zip.
+    entry['raw_bytes'] = len(member_bytes)
+    entry['raw_sha256'] = hashlib.sha256(member_bytes).hexdigest()
+    entry['epoch'] = epoch
+    entry['member'] = member
+    if stats['valid_fraction'] == 0:
+        entry['method'] = 'fully void tile, nothing retained'
+        entry['derived'], entry['derived_sha256'], entry['derived_bytes'] = None, None, 0
+        out_path.unlink()
+        Path(str(out_path) + '.provenance.json').unlink()
+    return entry
 
 
 def process_item(root, item, flight_dates, delay, state, done):
@@ -186,7 +198,7 @@ def process_item(root, item, flight_dates, delay, state, done):
         state['last'] = time.monotonic()
     fetch(root, PROVIDER, item['name'], item['url'], licence=LICENCE,
           licence_url=LICENCE_URL, terms_checked_utc='2026-09-25')
-    entries = decode_zip(root, item, flight_dates, done)
+    entries = decode_zip(root, item, flight_dates, done, state)
     raw_path = Path(root) / PROVIDER / item['name']
     raw_path.unlink()
     Path(str(raw_path) + '.provenance.json').unlink()
@@ -219,7 +231,7 @@ def fetch_all(root, workers=3, delay=0.5, limit=None, only=None):
     items = items[:limit]
     print(f'{PROVIDER}: {len(items)} municipality zips indexed, {len(flight_dates)} dated tiles')
     state = {'lock': threading.Lock(), 'last': 0.0, 'journal': journal,
-             'zips': zips_journal, 'entries': entries}
+             'zips': zips_journal, 'entries': entries, 'locks': {}}
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [pool.submit(process_item, root, item, flight_dates, delay, state, done)
                    for item in items]
