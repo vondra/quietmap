@@ -243,8 +243,7 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
     } else if (source_is_point(source)) {
         const float distance_m = hypotf(receiver_x_m - source.start_x_m,
                                         receiver_y_m - source.start_y_m);
-        if (distance_m > source.max_distance_m
-            || pair_is_inaudible(scene, source, false, distance_m)) {
+        if (distance_m > source.max_distance_m || point_pair_is_inaudible(scene, source, distance_m)) {
             return false;
         }
         cnossos_ray_transfer(scene, ray_source_terms(source), source.start_x_m, source.start_y_m,
@@ -259,8 +258,7 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
     } else {
         float closest_distance_m;
         if (!line_closest_horizontal_distance(source, receiver_x_m, receiver_y_m, closest_distance_m)
-            || closest_distance_m > source.max_distance_m
-            || pair_is_inaudible(scene, source, true, closest_distance_m)) {
+            || closest_distance_m > source.max_distance_m) {
             return false;
         }
         LinePieceGeometry geometry;

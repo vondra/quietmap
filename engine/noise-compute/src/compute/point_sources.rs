@@ -119,7 +119,7 @@ pub(crate) fn compute_point_sources(
             traces.is_some().then_some(&mut detail),
         );
         // Spherical divergence (2.5.12) at the footprint-floored slant distance.
-        let divergence = 10f64.powf(-(20.0 * d_slant.log10() + 11.0) / 10.0);
+        let divergence = 10f64.powf(-SourceSpread::Point.divergence_db(d_slant) / 10.0);
         let [v_day, v_eve, v_night] = [0, 1, 2].map(|period| {
             let scaled = transfer.periods[period].map(|bands| bands.map(|t| t * divergence));
             received_variants(&scaled, &period_emissions[period], reflection)
@@ -268,7 +268,7 @@ pub(crate) fn compute_point_sources(
             emission_db: PropagationVariants::to_db(acc.emission_energy),
             baseline: iso9613::compute_baseline(
                 acc.min_d_slant,
-                SourceGeometry::Point,
+                SourceSpread::Point,
                 acc.min_ground_g,
             ),
             terrain: pt_effects.0,

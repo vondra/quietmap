@@ -16,7 +16,7 @@ use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::path::Path;
 
-/// The popup's admission: class reach / rail reach and the all-period relevance gate.
+/// The popup's admission: the row's relevance-bound reach.
 fn admitted_pieces(sources: &source_reader::PointQueryData, receiver: &Receiver) -> Vec<(LayerKind, Piece)> {
     let weather = Meteorology::defaults();
     let bound = surface_relevance_bound(&weather);
@@ -29,7 +29,6 @@ fn admitted_pieces(sources: &source_reader::PointQueryData, receiver: &Receiver)
         let emission = norm.period_emissions_db();
         if seg.dist_m > LINE_REACH_CEILING_M
             || !bound.within_reach(&emission, SourceSpread::Line, seg.dist_m)
-            || bound.pair_is_inaudible(&emission, SourceSpread::Line, seg.dist_m)
         {
             continue;
         }
@@ -53,7 +52,6 @@ fn admitted_pieces(sources: &source_reader::PointQueryData, receiver: &Receiver)
         let emission = railway::rail_period_emissions(rail_type, seg.speed_kmh, seg.traffic);
         if seg.dist_m > LINE_REACH_CEILING_M
             || !bound.within_reach(&emission, SourceSpread::Line, seg.dist_m)
-            || bound.pair_is_inaudible(&emission, SourceSpread::Line, seg.dist_m)
         {
             continue;
         }

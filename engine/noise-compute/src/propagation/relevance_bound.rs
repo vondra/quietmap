@@ -1,9 +1,11 @@
-//! The one relevance bound behind every source–receiver skip and every reach (W2 BOUND.md):
+//! The one relevance bound behind every road and rail reach and every point-source pair skip
+//! (W2 BOUND.md; point reaches are still their layers' hand-set radii):
 //! `B_k,i(d) = L_W,k,i − A_div,min(d) − α_min,i·d/1000 + G_max`, never below what the method can
 //! deliver at horizontal distance `d`.
 
 use crate::constants::A_WEIGHTING;
 use crate::propagation::line_quadrature::POINT_DIVERGENCE_LINEAR;
+use crate::propagation::point_sum::POINT_SOURCE_DIVERGENCE_OFFSET_DB;
 use crate::types::NUM_BANDS;
 
 /// How a source spreads: a line piece bounds by the infinite line through it at its closest
@@ -13,6 +15,18 @@ use crate::types::NUM_BANDS;
 pub enum SourceSpread {
     Line,
     Point,
+}
+
+impl SourceSpread {
+    /// Geometric divergence `A_div` at `distance_m` floored at 1 m: an infinite line under the
+    /// CNOSSOS point sum `10·lg(10^1.1·d/π)` (`line_quadrature`), a point `20·lg d + 11` (2.5.12).
+    pub fn divergence_db(self, distance_m: f64) -> f64 {
+        let d = distance_m.max(1.0);
+        match self {
+            SourceSpread::Line => 10.0 * (POINT_DIVERGENCE_LINEAR * d / std::f64::consts::PI).log10(),
+            SourceSpread::Point => 20.0 * d.log10() + POINT_SOURCE_DIVERGENCE_OFFSET_DB,
+        }
+    }
 }
 
 /// The bound's two method-dependent terms.
@@ -55,17 +69,16 @@ impl RelevanceBound {
     /// Upper bound of the received band levels at horizontal distance `distance_m`.
     pub fn level_db(&self, emission_db: &[f64; NUM_BANDS], spread: SourceSpread, distance_m: f64) -> [f64; NUM_BANDS] {
         let d = distance_m.max(1.0);
-        let divergence = match spread {
-            SourceSpread::Line => 10.0 * (POINT_DIVERGENCE_LINEAR * d / std::f64::consts::PI).log10(),
-            SourceSpread::Point => 20.0 * d.log10() + 11.0,
-        };
+        let divergence = spread.divergence_db(d);
         std::array::from_fn(|band| {
             emission_db[band] - divergence - self.alpha_min_db_per_km[band] * d / 1000.0 + self.gain_db
         })
     }
 
     /// True when no band of any period can reach 0 dB: the pair is skipped without effect on
-    /// any output (#31: every period counts, a night-only source is not dropped).
+    /// any output (#31: every period counts, a night-only source is not dropped). Line rows need
+    /// no such test: inside their reach the bound's Lden exceeds 30 dB, which an inaudible pair
+    /// (every band below 0 dB, so each period below 7 dB(A)) cannot reach.
     pub fn pair_is_inaudible(
         &self,
         period_emissions_db: &[[f64; NUM_BANDS]; 3],
@@ -139,8 +152,8 @@ mod tests {
         let silent = [f64::NEG_INFINITY; NUM_BANDS];
         let night = [80.0; NUM_BANDS];
         let periods = [silent, silent, night];
-        assert!(!BOUND.pair_is_inaudible(&periods, SourceSpread::Line, 100.0));
-        assert!(BOUND.pair_is_inaudible(&[silent; 3], SourceSpread::Line, 100.0));
+        assert!(BOUND.within_reach(&periods, SourceSpread::Line, 100.0));
+        assert!(!BOUND.within_reach(&[silent; 3], SourceSpread::Line, 100.0));
     }
 
     #[test]

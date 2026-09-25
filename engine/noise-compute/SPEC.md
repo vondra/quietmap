@@ -484,7 +484,7 @@ Against a fine point sum (1°/10 m nodes through the same per-ray physics,
 at 5 m–2 km and behind a roadside wall, and within 0.28 dB per layer at ten real receivers
 (2026-09-24, the largest behind the M25 J17 barrier).
 
-A source–receiver pair is skipped only when the relevance bound of
+A point source–receiver pair is skipped only when the relevance bound of
 `propagation::relevance_bound` stays below 0 dB in every band of every period:
 `B = L_W − A_div,min(d) − α_min·d/1000 + 13.3 dB`, a line bounded by its infinite line at its
 closest horizontal distance, a point by `20·lg d + 11`, α_min the smallest absorption of the
@@ -495,7 +495,7 @@ side, with a blocked Δdif of at least 10·lg 3, so 2·9 − 10·lg 3 = 13.2 dB 
 day-only gate (#31). A road or rail row reaches as far as that bound's Lden stays above
 30 dB (the display floor), capped so no ray outruns the painter's 64-sample profile
 (11,872 m, minus the 250 m longest piece for a line's closest point); popup and painter
-share the reach.
+share the reach, and a pair inside it is never below 0 dB in every band.
 
 ## One ray: CNOSSOS-EU per meteorological state
 

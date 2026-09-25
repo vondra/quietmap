@@ -235,11 +235,10 @@ pub(crate) fn compute_railways(
             let rail_type = RailType::from_u8(seg.rail_type);
             let speed = seg.speed_kmh;
             let period_emissions = railway::rail_period_emissions(rail_type, speed, seg.traffic);
-            // The row's reach and the all-period pair gate (#31: EU freight is loudest at
-            // night), both from the one relevance bound.
+            // The row's reach from the one relevance bound, every period counted (#31); a pair
+            // inside it is never inaudible (the bound's Lden there exceeds 30 dB).
             if seg.dist_m > LINE_REACH_CEILING_M
                 || !bound.within_reach(&period_emissions, SourceSpread::Line, seg.dist_m)
-                || bound.pair_is_inaudible(&period_emissions, SourceSpread::Line, seg.dist_m)
             {
                 return None;
             }
@@ -600,7 +599,7 @@ pub(crate) fn compute_railways(
             ),
             baseline: iso9613::compute_baseline(
                 acc.min_d_slant,
-                SourceGeometry::Line,
+                SourceSpread::Line,
                 acc.min_ground_g,
             ),
             terrain: rail_effects.0,

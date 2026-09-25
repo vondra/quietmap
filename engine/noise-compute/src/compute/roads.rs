@@ -132,11 +132,10 @@ pub(crate) fn compute_roads(
                 .unwrap_or(receiver_square_country_city);
             let norm = normalize::normalize_road_segment(seg, square_country_city)?;
             let period_emissions = norm.period_emissions_db();
-            // The row's reach and the all-period pair gate (#31: a night-only road is never
-            // dropped by a day gate), both from the one relevance bound.
+            // The row's reach from the one relevance bound, every period counted (#31); a pair
+            // inside it is never inaudible (the bound's Lden there exceeds 30 dB).
             if seg.dist_m > LINE_REACH_CEILING_M
                 || !bound.within_reach(&period_emissions, SourceSpread::Line, seg.dist_m)
-                || bound.pair_is_inaudible(&period_emissions, SourceSpread::Line, seg.dist_m)
             {
                 return None;
             }
@@ -596,7 +595,7 @@ pub(crate) fn compute_roads(
             emission_db,
             baseline: iso9613::compute_baseline(
                 acc.min_d_slant,
-                SourceGeometry::Line,
+                SourceSpread::Line,
                 acc.min_ground_g,
             ),
             terrain: nearest_terrain,

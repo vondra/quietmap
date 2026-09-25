@@ -41,29 +41,16 @@ fn pow2_from_int(n: i64) -> f64 {
     f64::from_bits(((F64_EXPONENT_BIAS + n) as u64) << 52)
 }
 
-/// Source geometry type — affects geometric divergence formula.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SourceGeometry {
-    /// Line source (roads, railways): cylindrical spreading
-    Line,
-    /// Point source (buildings, industrial, wind turbines): spherical spreading
-    Point,
-}
-
 /// Propagation baseline tied to the closest segment — divergence + the ground
 /// factor the engine read from the raster. Atmospheric and ground *impacts*
 /// belong on the Contributor (energy-weighted across all segments, derived
 /// from the ray transfer's hypothesis variants), not here.
 pub fn compute_baseline(
     d_slant: f64,
-    source_geom: SourceGeometry,
+    source_spread: crate::propagation::relevance_bound::SourceSpread,
     ground_g: f64,
 ) -> crate::types::PropagationBaseline {
-    let d = d_slant.max(1.0);
-    let geometric_db = -match source_geom {
-        SourceGeometry::Line => crate::traces::infinite_line_divergence_db(d),
-        SourceGeometry::Point => 20.0 * d.log10() + 11.0,
-    };
+    let geometric_db = -source_spread.divergence_db(d_slant);
     crate::types::PropagationBaseline {
         geometric_db: (geometric_db * 10.0).round() / 10.0,
         ground_factor: ground_g,

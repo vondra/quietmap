@@ -32,7 +32,7 @@ pub mod wkb;
 
 use constants::*;
 use propagation::geo;
-use propagation::iso9613::{self, SourceGeometry};
+use propagation::iso9613;
 use propagation::obstacle_index::ObstacleSet;
 use traces::{
     build_point_segment_trace, build_rail_segment_trace, build_road_segment_trace, BuildPointTrace,

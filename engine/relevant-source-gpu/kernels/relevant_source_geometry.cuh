@@ -241,19 +241,16 @@ __device__ __forceinline__ SampledRasterPoint sample_scene_raster(
     return result;
 }
 
-/// The relevance bound of noise-compute relevance_bound.rs: true when no band of any period can
-/// reach 0 dB at horizontal distance `distance_m` (a line bounded by its infinite line, a point
-/// by 20 lg d + 11), so skipping the pair changes no output (#31: every period counts).
-__device__ __forceinline__ bool pair_is_inaudible(
+/// The relevance bound of noise-compute relevance_bound.rs for a point source: true when no band
+/// of any period can reach 0 dB at distance `distance_m` (20 lg d + 11), so skipping the pair
+/// changes no output (#31: every period counts). A line row's reach already implies it.
+__device__ __forceinline__ bool point_pair_is_inaudible(
     const DeviceScenePointers& scene,
     const DeviceLineSource& source,
-    bool line,
     float distance_m
 ) {
     const float d = fmaxf(distance_m, 1.0f);
-    const float divergence_db = line
-        ? 4.342944819032518f * __logf(QUIETMAP_POINT_DIVERGENCE_LINEAR * d / CUDART_PI_F)
-        : 8.685889638065036f * __logf(d) + 11.0f;
+    const float divergence_db = 8.685889638065036f * __logf(d) + 11.0f;
     for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
         const float allowance = quietmap_energy_from_db(
             QUIETMAP_RELEVANCE_GAIN_DB - divergence_db

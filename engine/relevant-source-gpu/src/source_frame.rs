@@ -28,9 +28,10 @@ pub const BLOCK_COUNT: usize = BLOCKS_PER_TILE_SIDE * BLOCKS_PER_TILE_SIDE;
 pub const PERIOD_COUNT: usize = 3;
 pub const BAND_COUNT: usize = 8;
 
-/// The 64-point CUDA cadence first needs a 65th sample at 11,872.35 m;
-/// reject longer rays and check the device overflow flag after each launch.
-pub const MAXIMUM_PROFILE_RAY_M: f32 = 11_872.0;
+/// The 64-point CUDA cadence's longest ray (noise-compute `PROFILE_RAY_CEILING_M`); reject
+/// longer rays and check the device overflow flag after each launch.
+pub const MAXIMUM_PROFILE_RAY_M: f32 =
+    noise_compute::propagation::relevance_bound::PROFILE_RAY_CEILING_M as f32;
 
 /// One source encoded once in the metric frame shared by a region's tiles and CUDA
 /// scene: a line segment, or a point (`SOURCE_FLAG_POINT`) with start == end.

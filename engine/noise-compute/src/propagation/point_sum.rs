@@ -8,13 +8,6 @@ use super::line_quadrature::LINE_PERPENDICULAR_FLOOR_M;
 /// the Directive and used verbatim by its reference implementation (NoiseModelling `getADiv`).
 pub const POINT_SOURCE_DIVERGENCE_OFFSET_DB: f64 = 11.0;
 
-/// Point-source geometric divergence `A_div = 20·lg d + 11` (2.5.12). The slant distance is
-/// floored at 1 m exactly like the engine's existing line and point chains.
-#[must_use]
-pub fn point_source_divergence_db(slant_distance_m: f64) -> f64 {
-    20.0 * slant_distance_m.max(1.0).log10() + POINT_SOURCE_DIVERGENCE_OFFSET_DB
-}
-
 /// One point source standing in for a stretch of a line source.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LineNode {

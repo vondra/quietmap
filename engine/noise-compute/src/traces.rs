@@ -4,6 +4,7 @@
 
 use crate::propagation::iso9613;
 use crate::propagation::ray_transfer::RayDetail;
+use crate::propagation::relevance_bound::SourceSpread;
 use crate::propagation::PathProfile;
 use crate::types::{
     BaselineTrace, CnossosBreakdown, EmissionTrace, ForestRun, GroundTrace, LayerKind,
@@ -206,36 +207,23 @@ pub fn ground_trace(factor_g: f64, attenuation_bands: [f64; NUM_BANDS]) -> Groun
     }
 }
 
-/// Build a `BaselineTrace` from the slant distance, source height, ground G,
-/// finite-line correction, and urban reflection boost. The reflection boost
-/// is included here for trace-API completeness even though the internal
-/// `free_field` variant (see iso9613.rs) excludes it; popup derives the
-/// per-receiver A_refl display from this field directly.
-/// A_div of an infinite line at perpendicular distance `d` under the CNOSSOS point sum,
-/// `10·lg(10^1.1·d/π)` (propagation::line_quadrature).
-pub fn infinite_line_divergence_db(d: f64) -> f64 {
-    10.0 * (crate::propagation::line_quadrature::POINT_DIVERGENCE_LINEAR * d / std::f64::consts::PI).log10()
-}
-
+/// Build a `BaselineTrace` from the slant distance, source height, ground G and urban
+/// reflection boost. The reflection boost is included here for trace-API completeness even
+/// though the internal `free_field` variant excludes it; popup derives the per-receiver A_refl
+/// display from this field directly. The line quadrature has no finite-line correction.
 pub fn baseline_trace(
     d_slant_m: f64,
     source_height_m: f64,
     ground_g: f64,
-    finite_line_corr_db: f64,
     reflection_boost_db: f64,
-    source_geometry: iso9613::SourceGeometry,
+    source_spread: SourceSpread,
 ) -> BaselineTrace {
-    let d = d_slant_m.max(1.0);
-    let geometric_db = match source_geometry {
-        iso9613::SourceGeometry::Line => infinite_line_divergence_db(d),
-        iso9613::SourceGeometry::Point => 20.0 * d.log10() + 11.0,
-    };
     BaselineTrace {
-        geometric_db,
+        geometric_db: source_spread.divergence_db(d_slant_m),
         atmospheric_bands: atmospheric_bands(d_slant_m),
         ground_factor_g: ground_g,
         source_height_m,
-        finite_line_corr_db,
+        finite_line_corr_db: 0.0,
         reflection_boost_db,
     }
 }
@@ -249,9 +237,8 @@ struct BuildCnossosPropagation {
     rcv_alt_m: f64,
     ground_g: f64,
     ground_bands: [f64; NUM_BANDS],
-    finite_line_corr_db: f64,
     reflection_boost_db: f64,
-    source_geometry: iso9613::SourceGeometry,
+    source_spread: SourceSpread,
     path_profile: PathProfile,
     terrain: TerrainTrace,
     screening_atten: [f64; NUM_BANDS],
@@ -271,9 +258,8 @@ fn build_cnossos_propagation(inputs: BuildCnossosPropagation) -> PropagationBrea
         rcv_alt_m,
         ground_g,
         ground_bands,
-        finite_line_corr_db,
         reflection_boost_db,
-        source_geometry,
+        source_spread,
         path_profile,
         terrain,
         screening_atten,
@@ -290,14 +276,7 @@ fn build_cnossos_propagation(inputs: BuildCnossosPropagation) -> PropagationBrea
         path_profile.dist_m,
     );
     PropagationBreakdown::Cnossos(Box::new(CnossosBreakdown {
-        baseline: baseline_trace(
-            d_slant_m,
-            src_alt_m,
-            ground_g,
-            finite_line_corr_db,
-            reflection_boost_db,
-            source_geometry,
-        ),
+        baseline: baseline_trace(d_slant_m, src_alt_m, ground_g, reflection_boost_db, source_spread),
         path_profile: path_profile_into_trace(path_profile, src_alt_m, rcv_alt_m),
         terrain,
         screening: screening_trace(screening_atten, obstacle_trace, screening_fan),
@@ -430,9 +409,8 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
             src_alt_m: node.source_altitude_m,
             rcv_alt_m: rcv_alt,
             ground_g: node.ground_factor,
-            finite_line_corr_db: 0.0,
             reflection_boost_db,
-            source_geometry: iso9613::SourceGeometry::Point,
+            source_spread: SourceSpread::Point,
             path_profile: node.profile,
             terrain: node.terrain,
             ground_bands: node.ground_bands,
@@ -481,9 +459,8 @@ fn line_node_propagation(
         src_alt_m: node.source_altitude_m,
         rcv_alt_m,
         ground_g: node.ground_factor,
-        finite_line_corr_db: 0.0,
         reflection_boost_db,
-        source_geometry: iso9613::SourceGeometry::Line,
+        source_spread: SourceSpread::Line,
         path_profile: node.profile,
         terrain: node.terrain,
         ground_bands: node.ground_bands,
