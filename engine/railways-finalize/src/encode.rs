@@ -29,7 +29,8 @@ const TRAFFIC: &[&str] = &[
 
 pub(crate) struct Expanded {
     pub parent: u32,
-    /// Track evidence until `allocate_over_parallel_tracks` replaces it by the track's line share.
+    /// Domestic track evidence until `allocate_over_parallel_tracks` replaces it by the track's
+    /// line share (`child.foreign` holds the neighbour-file evidence it weighs against).
     pub child: ChildRow,
     pub prior: crate::merge::RowTraffic,
     pub osm_id: i64,
@@ -37,6 +38,7 @@ pub(crate) struct Expanded {
     pub rail_type: u8,
     pub usage: u8,
     pub service: u8,
+    pub traffic_mode: u8,
     pub country_iso: [u8; 2],
 }
 

@@ -71,7 +71,7 @@ pub fn finalize_square(
         concat_batches(&schema, &batches).map_err(|e| format!("{}: {e}", arrow_path.display()))?;
     let intervals = load_square_intervals(&dir)?;
     let pieces = load_square_pieces(&dir)?;
-    let children = expand_rows(&merged, &intervals, &pieces)?;
+    let children = expand_rows(&merged, &intervals, &pieces, square)?;
     let ipc = encode_children(&merged, &children)?;
     write_atomically(&dir, &ipc)?;
     Ok(Some(SquareReceipt {
@@ -140,6 +140,7 @@ fn expand_rows(
     merged: &RecordBatch,
     intervals: &HashMap<(i64, i16), Vec<Interval>>,
     pieces: &HashMap<(i64, i16), crate::topology::Piece>,
+    square: Square,
 ) -> Result<Vec<Expanded>, String> {
     let osm_id = col_i64(merged, "osm_id")?;
     let segment_idx = col_i16(merged, "segment_idx")?;
@@ -151,6 +152,10 @@ fn expand_rows(
     let rail_type = col_u8(merged, "rail_type")?;
     let usage = col_u8(merged, "usage")?;
     let service = col_u8(merged, "service")?;
+    // Extracts before the traffic_mode column read as unknown (mixed priors).
+    let traffic_mode = merged
+        .column_by_name("traffic_mode")
+        .and_then(|column| column.as_any().downcast_ref::<UInt8Array>());
     let mut expanded = Vec::new();
     for row in 0..merged.num_rows() {
         let id = osm_id.value(row);
@@ -182,11 +187,13 @@ fn expand_rows(
         } else {
             ref_token
         };
+        let mode = traffic_mode.map(|column| column.value(row)).unwrap_or(0);
         let prior = class_prior(
             rail_type.value(row),
             usage.value(row),
             service.value(row),
             country,
+            mode,
         );
         for child in children {
             expanded.push(Expanded {
@@ -198,11 +205,12 @@ fn expand_rows(
                 rail_type: rail_type.value(row),
                 usage: usage.value(row),
                 service: service.value(row),
+                traffic_mode: mode,
                 country_iso: country.country_iso,
             });
         }
     }
-    allocate_over_parallel_tracks(&mut expanded);
+    allocate_over_parallel_tracks(&mut expanded, square);
     Ok(expanded)
 }
 

@@ -270,6 +270,22 @@ pub fn rail_service_type(service: Option<&str>) -> u8 {
     }
 }
 
+/// Map `railway:traffic_mode` to enum: 0=unknown, 1=passenger, 2=freight, 3=mixed.
+/// Planet census 2026-09-25 (planet-260831, 2.82 M railway=rail ways): mixed 207,660,
+/// passenger 116,040, freight 91,353 ways; any other value (typos, `both`, `military`)
+/// is unknown. `passenger_lines` is a track count, not a mode; `passenger=no` (4,768
+/// ways) and `usage=freight` (1,930) are undocumented and negligible, so the mode tag
+/// stands alone. The finalizer gives passenger-only lines no freight prior and
+/// freight-only lines no passenger prior; measured evidence still wins over the tag.
+pub fn rail_traffic_mode(traffic_mode: Option<&str>) -> u8 {
+    match traffic_mode {
+        Some("passenger") => 1,
+        Some("freight") => 2,
+        Some("mixed") => 3,
+        _ => 0,
+    }
+}
+
 /// Unified aeroway class used by both airport lines and airport areas.
 /// 0=runway, 1=taxiway, 2=apron, 3=helipad, 4=heliport, 5=aerodrome,
 /// 6=stopway, 7=airstrip, 255=other.
@@ -388,7 +404,31 @@ pub fn parse_maxspeed_kmh(raw: &str) -> u16 {
 
 #[cfg(test)]
 mod railway_tests {
-    use super::{rail_type, rail_usage_type, railway_carries_trains, railway_is_underground};
+    use super::{
+        rail_traffic_mode, rail_type, rail_usage_type, railway_carries_trains,
+        railway_is_underground,
+    };
+
+    #[test]
+    fn traffic_mode_maps_three_values_and_nothing_else() {
+        assert_eq!(
+            (
+                rail_traffic_mode(Some("passenger")),
+                rail_traffic_mode(Some("freight")),
+                rail_traffic_mode(Some("mixed")),
+            ),
+            (1, 2, 3)
+        );
+        for other in [
+            None,
+            Some(""),
+            Some("both"),
+            Some("military"),
+            Some("Mixed"),
+        ] {
+            assert_eq!(rail_traffic_mode(other), 0);
+        }
+    }
 
     #[test]
     fn subway_is_light_rail_family_and_underground_without_a_tunnel_tag() {

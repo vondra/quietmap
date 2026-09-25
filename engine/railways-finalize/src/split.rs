@@ -19,6 +19,7 @@ pub struct ChildGeom {
 pub struct ChildRow {
     pub geom: ChildGeom,
     pub traffic: RowTraffic,
+    pub foreign: RowTraffic,
 }
 
 const CUT_EPS_M: f64 = 1e-4;
@@ -32,22 +33,23 @@ pub fn split_parent(
     rail_type: u8,
     square_country_city: SquareCountryCity,
 ) -> Result<Vec<ChildRow>, String> {
+    let child = |geom: ChildGeom, from_m: f64, to_m: f64| {
+        let (traffic, foreign) = row_evidence(
+            intervals,
+            from_m,
+            to_m,
+            rail_type,
+            square_country_city,
+        );
+        ChildRow { geom, traffic, foreign }
+    };
     let Some(piece) = piece else {
         if !intervals.is_empty() {
             return Err(format!(
                 "rail interval for {osm_id}:{segment_idx} has no source topology piece"
             ));
         }
-        return Ok(vec![ChildRow {
-            geom: original,
-            traffic: row_evidence(
-                intervals,
-                0.0,
-                original.length_m as f64,
-                rail_type,
-                square_country_city,
-            ),
-        }]);
+        return Ok(vec![child(original, 0.0, original.length_m as f64)]);
     };
     let (piece_from, piece_to) = (piece.from_m, piece.to_m);
     let mut cuts = vec![piece_from, piece_to];
@@ -87,28 +89,10 @@ pub fn split_parent(
                 length_m: (to_m - from_m) as f32,
             }
         };
-        children.push(ChildRow {
-            geom,
-            traffic: row_evidence(
-                intervals,
-                from_m,
-                to_m,
-                rail_type,
-                square_country_city,
-            ),
-        });
+        children.push(child(geom, from_m, to_m));
     }
     if children.is_empty() {
-        children.push(ChildRow {
-            geom: original,
-            traffic: row_evidence(
-                intervals,
-                piece_from,
-                piece_to,
-                rail_type,
-                square_country_city,
-            ),
-        });
+        children.push(child(original, piece_from, piece_to));
     }
     Ok(children)
 }
