@@ -32,7 +32,17 @@ pub fn prepare<'a>(
         && classify::scope_keeps(&FeatureType::Industrial)
         && classify::is_power_or_inactive_industry(tag)
         && !classify::is_turbine(tag))
-    .then(|| classify::extract_tags(tags, &FeatureType::Industrial));
+    .then(|| classify::extract_tags(tags, &FeatureType::Industrial))
+    .filter(|kept| {
+        // A plant/generator node without a staged power class has no
+        // footprint for the generic area law: it would emit as an invented
+        // 10,000 m² factory stacked on the plant polygon. The polygon owns
+        // power emission; staged nodes (wind/solar/substation/inactive) stay.
+        !matches!(
+            kept.get("power").map(String::as_str),
+            Some("plant" | "generator")
+        ) || classify::industrial_class(kept).is_some()
+    });
     (control.is_some() || power.is_some()).then_some(ModelNode {
         id,
         lat,
@@ -87,13 +97,14 @@ mod tests {
     use super::*;
     #[test]
     fn lifecycle_nodes_survive_and_wind_plants_are_not_turbines() {
-        for pairs in [
-            vec![("disused:power", "substation")],
-            vec![("power", "plant"), ("generator:source", "wind")],
-        ] {
-            let point = prepare(1, 50., 14., pairs.iter().copied()).unwrap();
-            assert!(point.power.is_some());
-        }
+        let point = prepare(
+            1,
+            50.,
+            14.,
+            [("disused:power", "substation")].into_iter(),
+        )
+        .unwrap();
+        assert!(point.power.is_some());
         assert!(prepare(
             1,
             50.,
@@ -101,5 +112,35 @@ mod tests {
             [("power", "generator"), ("generator:source", "wind")].into_iter()
         )
         .is_none());
+    }
+    #[test]
+    fn unstaged_plant_and_generator_nodes_are_not_industrial_evidence() {
+        // A plant/generator node without a staged power class has no
+        // footprint, so emitting it would invent a generic 10,000 m² factory
+        // on top of the plant polygon (or on nothing). The polygon owns
+        // power emission; the node carries no area law input.
+        for pairs in [
+            vec![("power", "plant"), ("plant:source", "gas")],
+            vec![("power", "generator"), ("generator:source", "gas")],
+            vec![("power", "generator"), ("generator:source", "coal")],
+            // A copied generator tag stages nothing: still no footprint.
+            vec![("power", "plant"), ("generator:source", "wind")],
+        ] {
+            assert!(
+                prepare(1, 50., 14., pairs.iter().copied()).is_none(),
+                "unstaged power node must not emit: {pairs:?}"
+            );
+        }
+        // Staged power nodes stay: sole-wind outlines and inactive sites are
+        // retained silent, solar units emit per-MW, substations per-MVA.
+        for pairs in [
+            vec![("power", "plant"), ("plant:source", "wind")],
+            vec![("power", "generator"), ("generator:source", "solar")],
+            vec![("power", "substation")],
+            vec![("disused:power", "substation")],
+        ] {
+            let point = prepare(1, 50., 14., pairs.iter().copied()).unwrap();
+            assert!(point.power.is_some(), "staged power node lost: {pairs:?}");
+        }
     }
 }
