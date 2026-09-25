@@ -261,9 +261,9 @@ def audit_world(prepared, jobs=None):
                     if metadata.get(key) != value:
                         raise ValueError(f'stale {path.stem} stamp {key.decode()}={metadata.get(key)}, the point query expects {value.decode()}: {path}')
                 if path.stem in ('airborne', 'cruise', 'airport_traffic'):
-                    days = metadata.get(b'n_days', b'')
-                    if not (days.isdigit() and 0 < int(days) < 1 << 16):
-                        raise ValueError(f'invalid n_days sampling window {days}: {path}')
+                    days = [metadata.get(key, b'') for key in (b'baseline_days', b'increment_days')]
+                    if not (all(count.isdigit() and int(count) < 1 << 16 for count in days) and int(days[0]) > 0):
+                        raise ValueError(f'invalid sampling window baseline/increment days {days}: {path}')
                 # Its agreement across cells is Stage 2C's own reduce; the stamp proves it ran.
                 if path.stem == 'airport_traffic' and airport_summaries_key not in metadata:
                     raise ValueError(f'airport traffic without Stage 2C summaries: {path}')

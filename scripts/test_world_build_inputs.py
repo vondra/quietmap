@@ -98,7 +98,7 @@ class WorldBuildInputsTest(unittest.TestCase):
                 path = root / 'z9/0/0' / f'{layer}.arrow'
                 expected_stamps, airport_summaries_key = inputs.stamps_the_point_query_expects()
                 metadata = {**expected_stamps[layer], **dict([expected_contract(path)])} if layer in ('roads', 'railways', 'industrial') else {
-                    **expected_stamps[layer], b'qm_blocks': b'AQ==', b'n_days': b'12', airport_summaries_key: b'{}'}
+                    **expected_stamps[layer], b'qm_blocks': b'AQ==', b'baseline_days': b'12', b'increment_days': b'0', airport_summaries_key: b'{}'}
                 if layer in ('airborne', 'ships'):
                     # A stamp the point query would answer by dropping the layer fails the build.
                     stale_key = next(iter(expected_stamps[layer]))
