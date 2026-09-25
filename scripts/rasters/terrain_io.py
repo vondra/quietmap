@@ -70,6 +70,18 @@ def publish_json(path, value):
     publish_bytes(path, (json.dumps(value, sort_keys=True, indent=2) + '\n').encode())
 
 
+def retained_bytes(root):
+    """Bytes under root; concurrent producers delete their temporaries meanwhile, so a vanished file counts zero."""
+    used = 0
+    for directory, _, names in os.walk(root):
+        for name in names:
+            try:
+                used += os.stat(os.path.join(directory, name)).st_size
+            except FileNotFoundError:
+                pass
+    return used
+
+
 @contextmanager
 def source_budget(root):
     """Raw and derived retained files share one lock and include their temporary peak bytes."""
@@ -78,7 +90,7 @@ def source_budget(root):
     with (root / '.download.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         subprocess.run(['df', '-h', str(root)], check=True)
-        used = sum(p.stat().st_size for p in root.rglob('*') if p.is_file())
+        used = retained_bytes(root)
         available = min(MAX_DOWNLOAD_BYTES - used, shutil.disk_usage(root).free - 2_000_000_000)
         if available <= 0:
             raise ValueError('download budget or free-space reserve exhausted')
