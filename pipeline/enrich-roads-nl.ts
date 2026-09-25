@@ -6,7 +6,7 @@ import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cl
 import { loadDutchInwevaSource, type DutchInwevaObservation } from './lib/roads-nl-source.js'
 import { SOURCE_ID_NL_NATIONAL_ROADS } from './lib/source-ids.generated.js'
 import { applyRoadTimeProfiles, roadClassTakesCount, writeRoadAadt, type RoadRow, type RoadTimeProfileEntry } from './lib/roads-arrow.js'
-import { writeNationalRoadSquares } from './lib/square-pool.js'
+import { ownSquareShard, writeNationalRoadSquares } from './lib/square-pool.js'
 import {
   buildOneHundredthDegreeSegmentGrid,
   pointGridCandidates,
@@ -180,7 +180,10 @@ export async function enrichDutchTimeProfiles(
 export async function runDutchRoadEnrichment(options: RoadLoaderArguments) {
   const source = loadDutchInwevaSource(options)
   const traffic = await enrichDutchRoads(options.preparedDirectory, source.observations)
-  const profiles = await enrichDutchTimeProfiles(options.preparedDirectory, source.observations)
+  // Shards re-run this main for the AADT walk; only the parent stamps profiles (once, honest tally).
+  const profiles = ownSquareShard
+    ? { matched: 0, squaresUpdated: 0 }
+    : await enrichDutchTimeProfiles(options.preparedDirectory, source.observations)
   return {
     sourceRows: source.sourceRows,
     observations: source.observations.length,
