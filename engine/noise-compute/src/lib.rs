@@ -1,6 +1,7 @@
 //! noise-compute: Pure Rust noise computation engine.
 //!
-//! CNOSSOS-EU emission + ISO 9613-2 propagation + Doc 29 aircraft.
+//! CNOSSOS-EU emission and propagation (airport ground operations keep the ISO 9613-2
+//! single-edge path) + Doc 29 aircraft.
 //! No I/O, no files, no napi. Pure computation.
 //!
 //! Single-receiver entry point: `compute_at_point` (the popup passes a
