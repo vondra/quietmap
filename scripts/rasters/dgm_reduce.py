@@ -89,6 +89,35 @@ def block_average(values, factor):
     return mean
 
 
+def block_average_offset(values, factor):
+    """Exact area mean for half-cell-offset (k*factor+1) grids.
+
+    Point-registered 1 m tiles (RP's 1001-node revision) centre on integer
+    metres, half a cell off the derived lattice. Each derived cell straddles
+    factor+1 source cells with half weights on the shared edges; the weights
+    sum to factor**2, the same support as block_average. All-nodata blocks
+    stay nodata.
+    """
+    rows, cols = values.shape
+    if (rows - 1) % factor or (cols - 1) % factor:
+        raise ValueError(f'{values.shape} is not one-over divisible by {factor}')
+    out_rows, out_cols = (rows - 1) // factor, (cols - 1) // factor
+    mean = np.full((out_rows, out_cols), np.nan)
+    edge = np.ones(factor + 1)
+    edge[0] = edge[-1] = 0.5
+    weights = np.outer(edge, edge)
+    for row in range(out_rows):
+        part = values[row * factor:row * factor + factor + 1, :]
+        for col in range(out_cols):
+            block = part[:, col * factor:col * factor + factor + 1]
+            finite = np.isfinite(block)
+            if not finite.any():
+                continue
+            picked = weights[finite]
+            mean[row, col] = float(np.sum(block[finite] * picked) / np.sum(picked))
+    return mean
+
+
 def write_derived_grid(target, west, north, step, values, epsg):
     """Write one Float32 DEFLATE grid with pixel-centre convention documented."""
     target = Path(target)
@@ -129,15 +158,29 @@ def reduce_geotiff(source, target, src_nodata, factor=DERIVED_METRES, epsg=None)
     factor_cells = int(round(factor / step))
     if not np.isclose(factor_cells * step, factor, rtol=1e-9, atol=0):
         raise ValueError(f'{source}: {step} m cells do not divide {factor} m')
-    mean = block_average(values, factor_cells)
+    rows, cols = values.shape
+    if rows % factor_cells == 0 and cols % factor_cells == 0:
+        mean = block_average(values, factor_cells)
+        west, north = transform[0] + factor / 2, transform[3] - factor / 2
+    elif (rows - 1) % factor_cells == 0 and (cols - 1) % factor_cells == 0:
+        # Half-cell-offset tiles inset their derived edges by half a source
+        # step; the inset edges must land on the derived lattice, else refuse.
+        west_edge, north_edge = transform[0] + step / 2, transform[3] - step / 2
+        for edge, label in ((west_edge, 'west'), (north_edge, 'north')):
+            rest = edge % factor
+            if not (np.isclose(rest, 0, atol=1e-6) or np.isclose(rest, factor, atol=1e-6)):
+                raise ValueError(f'{source}: offset {label} edge {edge} misses the {factor} m lattice')
+        mean = block_average_offset(values, factor_cells)
+        west, north = west_edge + factor / 2, north_edge - factor / 2
+    else:
+        raise ValueError(f'{source}: {values.shape} fits neither the {factor_cells}-cell nor the offset lattice')
     # Outer edges stay fixed; the first derived centre sits half a step inside.
     if epsg is None:
         crs = osr.SpatialReference(wkt=dataset.GetProjection())
         epsg = int(crs.GetAttrValue('AUTHORITY', 1)) if crs.GetAttrValue('AUTHORITY', 0) == 'EPSG' else None
     if epsg is None:
         raise ValueError(f'{source}: cannot read an EPSG code from its projection')
-    write_derived_grid(target, transform[0] + factor / 2, transform[3] - factor / 2,
-                       factor, mean, epsg)
+    write_derived_grid(target, west, north, factor, mean, epsg)
     return dict(rows=int(mean.shape[0]), columns=int(mean.shape[1]),
                 valid_fraction=float(np.mean(np.isfinite(mean))))
 

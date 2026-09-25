@@ -6,9 +6,9 @@ import unittest
 
 import numpy as np
 from osgeo import gdal, osr
-from dgm_reduce import (block_average, country_epoch, decode_xyz_lattice, reduce_geotiff,
-                        reduce_xyz, manifest_entry, write_manifest, load_manifest,
-                        normalize_grid, publish_country_sources)
+from dgm_reduce import (block_average, block_average_offset, country_epoch,
+                        decode_xyz_lattice, reduce_geotiff, reduce_xyz, manifest_entry,
+                        write_manifest, load_manifest, normalize_grid, publish_country_sources)
 
 
 def write_source(path, values, west=400000.0, north=5710000.0, step=1.0, epsg=25832, nodata=-9999.0):
@@ -35,6 +35,36 @@ class ReduceTest(unittest.TestCase):
         self.assertAlmostEqual(float(partial[0, 1]), 27.0)
         with self.assertRaises(ValueError):
             block_average(np.zeros((7, 10)), 5)
+
+    def test_block_average_offset_weights_shared_edges_by_half(self):
+        values = np.ones((11, 11))
+        mean = block_average_offset(values, 5)
+        self.assertEqual(mean.shape, (2, 2))
+        self.assertTrue(np.allclose(mean, 1.0))
+        gapped = values.copy()
+        gapped[:6, :6] = np.nan
+        partial = block_average_offset(gapped, 5)
+        self.assertTrue(np.isnan(partial[0, 0]))
+        self.assertAlmostEqual(float(partial[0, 1]), 1.0)
+        with self.assertRaises(ValueError):
+            block_average_offset(np.zeros((10, 10)), 5)
+
+    def test_reduce_geotiff_insets_half_cell_offset_tiles_onto_the_lattice(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'offset.tif'
+            values = np.full((11, 11), 7.0)
+            write_source(source, values, west=399999.5, north=5710000.5)
+            target = Path(temp) / 'offset-5m.tif'
+            stats = reduce_geotiff(source, target, -9999.0, factor=5)
+            self.assertEqual((stats['rows'], stats['columns']), (2, 2))
+            ds = gdal.Open(str(target))
+            self.assertEqual(ds.GetGeoTransform(), (400000.0, 5.0, 0.0, 5710000.0, 0.0, -5.0))
+            self.assertTrue(np.allclose(ds.GetRasterBand(1).ReadAsArray(), 7.0))
+            ds = None
+            skewed = Path(temp) / 'skewed.tif'
+            write_source(skewed, values, west=399999.7, north=5710000.5)
+            with self.assertRaises(ValueError):
+                reduce_geotiff(skewed, Path(temp) / 'skewed-5m.tif', -9999.0, factor=5)
 
     def test_reduce_geotiff_keeps_edges_and_crs(self):
         with tempfile.TemporaryDirectory() as temp:
