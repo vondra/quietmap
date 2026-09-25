@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { IndicatorComparison } from './comparison.ts'
-import { roadCohort, type Criteria } from './criteria.ts'
+import { conventionVariants, roadCohort, type Criteria } from './criteria.ts'
 import { evaluateGuardSubchecks } from './guards.ts'
 import { freezeManifest } from './manifest.ts'
 import type { StationModel } from './popup.ts'
@@ -22,7 +22,7 @@ const criteria: Criteria = {
   panel: { membership: {
     order: ['nightlife -> N-nightlife', 'park_quiet, background -> Q-quiet', 'unknown -> U-unclassified', 'road -> road cohorts'],
     provenance_class: {
-      measured: 'metadata.provenance.tier in {city-measured, national-measured, continental-measured, global-measured} AND traffic_estimated bit 1 (light) clear',
+      measured: 'metadata.provenance.tier in {city-measured, national-measured, continental-measured, global-measured} whatever the traffic_estimated class bits',
       class_default: 'metadata.dominant_source_id == 0 (provenance null) OR tier == national-proxy',
       service_tree: 'metadata.dominant_source_id == 11 ("Service-tree residential flow heuristic")',
       transferred: 'everything else',
@@ -84,7 +84,9 @@ function row(key: string, lden: number, fields: Partial<StationRow> & { road?: R
 
 test('the provenance map sends counted, default, service-tree and transferred roads to their cohorts', () => {
   assert.equal(roadCohort(criteria, road()), 'R-counted')
-  assert.equal(roadCohort(criteria, road({ estimated: 15 })), 'R-transferred', 'a measured tier with estimated light traffic is transferred')
+  assert.deepEqual(conventionVariants(row('nmt/unknown', 60, { site_class: 'aircraft_nmt', mount: null })), ['as_published'])
+  assert.deepEqual(conventionVariants(row('road/unknown', 60, { mount: null })), ['as_published', 'minus3'])
+  assert.equal(roadCohort(criteria, road({ estimated: 15 })), 'R-counted', 'a counted total stays measured when its class split is estimated')
   assert.equal(roadCohort(criteria, road({ tier: null, source: 0, road_class: 'primary' })), 'R-default-major')
   assert.equal(roadCohort(criteria, road({ tier: null, source: 0 })), 'R-default-minor')
   assert.equal(roadCohort(criteria, road({ tier: 'heuristic', source: 11 })), 'R-local')

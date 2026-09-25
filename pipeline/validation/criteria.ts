@@ -78,12 +78,10 @@ export function provenanceClass(criteria: Criteria, road: NonNullable<StationRow
   if (!road) return null
   const rules = criteria.panel.membership.provenance_class
   const measuredTiers = stated(rules.measured, /\{([^}]*)\}/, 'the measured tiers').split(',').map(value => value.trim())
-  const lightBit = 1 << (Number(stated(rules.measured, /bit (\d+)/, 'the light-traffic bit')) - 1)
   const defaultIds = [...rules.class_default.matchAll(/dominant_source_id == (\d+)/g)].map(match => Number(match[1]))
   const defaultTiers = [...rules.class_default.matchAll(/tier == ([\w-]+)/g)].map(match => match[1])
   const serviceTreeId = Number(stated(rules.service_tree, /dominant_source_id == (\d+)/, 'the service-tree id'))
-  const lightEstimated = road.traffic_estimated == null || (road.traffic_estimated & lightBit) !== 0
-  if (road.provenance_tier && measuredTiers.includes(road.provenance_tier) && !lightEstimated) return 'measured'
+  if (road.provenance_tier && measuredTiers.includes(road.provenance_tier)) return 'measured'
   if ((road.dominant_source_id != null && defaultIds.includes(road.dominant_source_id) && road.provenance_tier == null)
     || (road.provenance_tier != null && defaultTiers.includes(road.provenance_tier))) return 'class_default'
   if (road.dominant_source_id === serviceTreeId) return 'service_tree'
@@ -105,6 +103,7 @@ export type Variant = 'as_published' | 'minus3'
 
 /** Criteria v2 convention variants: a facade or unknown mount is scored as published and −3 dB unless documented. */
 export function conventionVariants(row: StationRow): Variant[] {
+  if ((row.mount == null || row.mount === 'unknown') && siteClass(row).site_class === 'aircraft_nmt') return ['as_published']
   if (row.mount === 'free_field' || row.mount === 'pole' || row.mount === 'roof') return ['as_published']
   if (row.mount === 'facade' && row.publisher_facade_correction_applied === true) return ['as_published']
   if (row.mount === 'facade' && row.publisher_facade_correction_applied === false) return ['minus3']
