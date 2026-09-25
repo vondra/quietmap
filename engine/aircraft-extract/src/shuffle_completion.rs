@@ -278,12 +278,7 @@ pub fn sampling_days(root: &Path) -> Result<(BTreeSet<String>, BTreeSet<String>)
 /// The sampling window every Stage 2 output of a sealed shuffle is stamped with.
 pub fn sampling_window(root: &Path) -> Result<noise_compute::emission::aircraft::SamplingWindow> {
     let (baseline, increment) = sampling_days(root)?;
-    Ok(noise_compute::emission::aircraft::SamplingWindow {
-        baseline_days: u16::try_from(baseline.len())?,
-        increment_days: u16::try_from(increment.len())?,
-        baseline_days_sha256: crate::provider_receipt::day_list_sha256(&baseline),
-        increment_days_sha256: crate::provider_receipt::day_list_sha256(&increment),
-    })
+    crate::provider_receipt::sampling_window_of(&baseline, &increment)
 }
 
 pub fn source_receipts(root: &Path) -> Result<Vec<(String, PathBuf, Vec<u8>)>> {

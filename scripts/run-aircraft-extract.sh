@@ -5,8 +5,8 @@
 # SECONDARY_ADSB_CACHE (ADSBexchange samples) is read on increment days only and adds what the
 # primary provider did not receive. AIRCRAFT_ANCHOR=YYYY-MM selects the exposure year
 # [anchor - 1 year, anchor): every day is a baseline candidate, its month-firsts are the increment
-# candidates. Without an anchor, DAYS (and INCREMENT_DAYS) list the days explicitly, or DAYS is
-# derived from the primary cache. Days whose provider receipts fail are missing, never zero.
+# candidates. Without an anchor, DAYS (and INCREMENT_DAYS) list the days explicitly. Days whose
+# provider receipts fail are missing, never zero.
 # --from-stage controls the first stage; successful upstream work stays available after failure.
 # MEMMAX= explicitly disables the default 100G cgroup cap when the host does not offer user systemd.
 set -euo pipefail
@@ -68,19 +68,6 @@ done
 [ -n "$PREPARED_DIR" ] || die "requires PREPARED_DIR= (root containing rasters/dem, rasters/forest, rasters/imd)"
 [ -n "$ADSB_CACHE" ] || die "requires ADSB_CACHE= with an explicit primary cache directory"
 
-derive_days() {
-    local cache="$1"
-    [ -d "$cache" ] || die "$cache not found and no day list provided"
-    if [ -f "$cache/catalog.sqlite" ]; then
-        python3 "$SCRIPT_DIR/download-adsblol.py" validate --source-root "$cache" \
-            | python3 -c 'import sys; fields=sys.stdin.buffer.read().split(b"\0"); print(",".join(sorted({s.decode() for s in fields[:-1:2]})))'
-        return
-    fi
-    find "$cache" -mindepth 1 -maxdepth 4 \( -name '*.tar' -o -name '*.tar.aa' \) -printf '%h\n' \
-        | awk -F/ '{print $NF}' \
-        | sed -E 's/^v([0-9]{4})\.([0-9]{2})\.([0-9]{2})-planes-readsb-(prod|staging)-0(tmp)?$/\1-\2-\3/' \
-        | sort -u | paste -sd,
-}
 count_csv() { tr ',' '\n' <<<"$1" | wc -l; }
 
 if [ -n "$AIRCRAFT_ANCHOR" ]; then
@@ -91,13 +78,7 @@ if [ -n "$AIRCRAFT_ANCHOR" ]; then
     INCREMENT_DAYS="${WINDOW_CSV#*$'\n'}"
     [ -n "$SECONDARY_ADSB_CACHE" ] || INCREMENT_DAYS=""
 fi
-if [ -z "$DAYS" ]; then
-    DAYS="$(derive_days "$ADSB_CACHE")"
-    [ -n "$DAYS" ] || die "no ADS-B TAR days resolved from $ADSB_CACHE"
-    if [ "$(count_csv "$DAYS")" -gt 60 ] && [ "${ALLOW_FULL_ARCHIVE:-}" != 1 ]; then
-        die "derived $(count_csv "$DAYS") day(s) from $ADSB_CACHE — full-archive run. Set DAYS=… for a subset, AIRCRAFT_ANCHOR=… for a year, or ALLOW_FULL_ARCHIVE=1 to confirm."
-    fi
-fi
+[ -n "$DAYS" ] || die "requires AIRCRAFT_ANCHOR=YYYY-MM for the exposure year, or DAYS= for a subset"
 [ -z "$INCREMENT_DAYS" ] || [ -n "$SECONDARY_ADSB_CACHE" ] \
     || die "INCREMENT_DAYS needs SECONDARY_ADSB_CACHE="
 

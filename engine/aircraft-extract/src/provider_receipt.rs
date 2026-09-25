@@ -298,26 +298,22 @@ impl AdmittedDay {
 }
 
 impl Admission {
-    /// The admitted day files under `segments_dir` and the sampling window
-    /// their prepared outputs are stamped with.
-    pub fn admitted_days(&self, segments_dir: &Path) -> Vec<AdmittedDay> {
-        self.baseline_days
-            .iter()
-            .map(|day| AdmittedDay {
-                segments: segments_dir.join(format!("{day}.arrow")),
-                increment: self.increment_days.contains(day),
-            })
-            .collect()
-    }
-
     pub fn sampling_window(&self) -> Result<noise_compute::emission::aircraft::SamplingWindow> {
-        Ok(noise_compute::emission::aircraft::SamplingWindow {
-            baseline_days: u16::try_from(self.baseline_days.len())?,
-            increment_days: u16::try_from(self.increment_days.len())?,
-            baseline_days_sha256: day_list_sha256(&self.baseline_days),
-            increment_days_sha256: day_list_sha256(&self.increment_days),
-        })
+        sampling_window_of(&self.baseline_days, &self.increment_days)
     }
+}
+
+/// The window every output of these admitted day lists is stamped with.
+pub fn sampling_window_of(
+    baseline: &BTreeSet<String>,
+    increment: &BTreeSet<String>,
+) -> Result<noise_compute::emission::aircraft::SamplingWindow> {
+    Ok(noise_compute::emission::aircraft::SamplingWindow {
+        baseline_days: u16::try_from(baseline.len())?,
+        increment_days: u16::try_from(increment.len())?,
+        baseline_days_sha256: day_list_sha256(baseline),
+        increment_days_sha256: day_list_sha256(increment),
+    })
 }
 
 /// The canonical identity of a day list: SHA-256 of the sorted days joined by `\n`.

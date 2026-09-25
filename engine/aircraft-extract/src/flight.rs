@@ -154,9 +154,6 @@ impl FlightSegment {
     pub fn is_departure(&self) -> bool {
         self.flags & segment_flags::IS_DEPARTURE != 0
     }
-    pub fn is_on_ground(&self) -> bool {
-        self.flags & segment_flags::ON_GROUND != 0
-    }
     pub fn is_secondary_only(&self) -> bool {
         self.flags & segment_flags::SECONDARY_ONLY != 0
     }
