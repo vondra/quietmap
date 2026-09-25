@@ -72,14 +72,35 @@ def enumerate_items(year):
     return items
 
 
+def grid_aligned(path, item_id):
+    """Validate an MDT tile's grid; return whether it sits on the 2 m national grid."""
+    dataset = gdal.Open(str(path))
+    transform = dataset.GetGeoTransform()
+    if transform[2] or transform[4]:
+        raise ValueError(f'rotated MDT tile needs review: {item_id}')
+    if abs(transform[1] - 2) > 0.05 or abs(transform[5] + 2) > 0.05:
+        raise ValueError(f'unexpected MDT tile resolution: {item_id}')
+    if dataset.GetRasterBand(1).GetNoDataValue() != -999:
+        raise ValueError(f'unexpected MDT tile nodata: {item_id}')
+    if not (CONTINENTAL[0] <= transform[0] <= CONTINENTAL[2]
+            and CONTINENTAL[1] <= transform[3] - 1000 <= CONTINENTAL[3]):
+        raise ValueError(f'MDT tile outside continental review: {item_id}')
+    return (abs(transform[1] - 2) < 1e-9 and abs(transform[5] + 2) < 1e-9
+            and abs(transform[0] % 2) < 1e-9 and abs(transform[3] % 2) < 1e-9)
+
+
 def fetch_tile(output, item, session, position, total):
     target = output / PROVIDER / (item['id'] + '.tif')
     receipt = Path(str(target) + '.provenance.json')
     href = item['assets']['data']['href']
     if target.exists() and receipt.exists():
         record = provenance(target)
-        if record.get('item_id') != item['id']:
+        if record.get('item_id') not in (None, item['id']):
             raise ValueError(f'retained tile references another item: {target}')
+        # A tile kept by an earlier agent carries no item id; adopt it only when
+        # its grid already matches, since retained bytes are never rewritten.
+        if record.get('item_id') is None and not grid_aligned(target, item['id']):
+            raise ValueError(f'retained tile off the national grid needs review: {target}')
         return item, record, None
     started = time.monotonic()
     try:
@@ -93,23 +114,13 @@ def fetch_tile(output, item, session, position, total):
         polite_sleep(started)
         return item, None, f'{type(error).__name__}: {str(error)[:200]}'
     publish_bytes(target, payload)
-    dataset = gdal.Open(str(target))
-    transform = dataset.GetGeoTransform()
-    if transform[2] or transform[4]:
-        raise ValueError(f'rotated MDT tile needs review: {item["id"]}')
-    if abs(transform[1] - 2) > 0.05 or abs(transform[5] + 2) > 0.05:
-        raise ValueError(f'unexpected MDT tile resolution: {item["id"]}')
-    if dataset.GetRasterBand(1).GetNoDataValue() != -999:
-        raise ValueError(f'unexpected MDT tile nodata: {item["id"]}')
-    if not (CONTINENTAL[0] <= transform[0] <= CONTINENTAL[2]
-            and CONTINENTAL[1] <= transform[3] - 1000 <= CONTINENTAL[3]):
-        raise ValueError(f'MDT tile outside continental review: {item["id"]}')
-    aligned_to_grid = (abs(transform[1] - 2) < 1e-9 and abs(transform[5] + 2) < 1e-9
-                       and abs(transform[0] % 2) < 1e-9 and abs(transform[3] % 2) < 1e-9)
+    aligned_to_grid = grid_aligned(target, item['id'])
     if not aligned_to_grid:
         # Coastal edge tiles can sit half a cell off the national grid or carry
         # slightly non-square pixels; warp those rare tiles onto it (area average)
         # instead of dropping their land.
+        dataset = gdal.Open(str(target))
+        transform = dataset.GetGeoTransform()
         south = transform[3] + dataset.RasterYSize * transform[5]
         east = transform[0] + dataset.RasterXSize * transform[1]
         bounds = (math.floor(transform[0] / 2) * 2, math.floor(south / 2) * 2,
