@@ -54,14 +54,24 @@ fn orient(p: [f32; 2], q: [f32; 2], r: [f32; 2]) -> f32 {
     (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
 }
 
+fn on_segment(p: [f32; 2], q: [f32; 2], r: [f32; 2]) -> bool {
+    q[0] >= p[0].min(r[0]) && q[0] <= p[0].max(r[0]) && q[1] >= p[1].min(r[1]) && q[1] <= p[1].max(r[1])
+}
+
 fn segments_intersect(a: [f32; 2], b: [f32; 2], c: [f32; 2], d: [f32; 2]) -> bool {
     let (o1, o2, o3, o4) = (orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b));
-    (o1 == 0.0 || o2 == 0.0 || o3 == 0.0 || o4 == 0.0)
-        || ((o1 > 0.0) != (o2 > 0.0) && (o3 > 0.0) != (o4 > 0.0))
+    if o1 == 0.0 && on_segment(a, c, b) { return true; }
+    if o2 == 0.0 && on_segment(a, d, b) { return true; }
+    if o3 == 0.0 && on_segment(c, a, d) { return true; }
+    if o4 == 0.0 && on_segment(c, b, d) { return true; }
+    (o1 > 0.0) != (o2 > 0.0) && (o3 > 0.0) != (o4 > 0.0)
 }
 
 /// Distance from segment AB to axis-aligned bbox [min_x, min_y, max_x, max_y].
 fn segment_bbox_distance_m(a: [f32; 2], b: [f32; 2], bbox: [f32; 4]) -> f32 {
+    if a == b {
+        return point_bbox_distance_m(a, bbox);
+    }
     if point_bbox_distance_m(a, bbox) == 0.0 || point_bbox_distance_m(b, bbox) == 0.0 {
         return 0.0;
     }
