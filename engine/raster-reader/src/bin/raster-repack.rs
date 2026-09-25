@@ -38,8 +38,8 @@ fn run() -> Result<(), String> {
         );
         return Ok(());
     }
-    if args.len() != 3 || !["plan", "publish"].contains(&args[0].as_str()) {
-        return Err("usage: raster-repack plan|publish NATIVE_SOURCE_DIR PREPARED_ROOT < source-coverage.json".into());
+    if args.len() != 3 || !["plan", "manifest", "publish"].contains(&args[0].as_str()) {
+        return Err("usage: raster-repack plan|manifest|publish NATIVE_SOURCE_DIR PREPARED_ROOT < source-coverage.json".into());
     }
     let mut input = String::new();
     std::io::stdin()
@@ -74,6 +74,19 @@ fn run() -> Result<(), String> {
         for x in 0..512 {
             let square = Square { x, y };
             let window = RasterWindow::for_square(square);
+            if args[0] == "manifest" {
+                println!("{}", serde_json::json!({
+                    "x": x, "y": y,
+                    "status": if window_touches(window, &unknown) { "unknown" }
+                        else if window_touches(window, &expected) { "land" } else { "ocean" },
+                    "north_node": window.north_node, "west_node": window.west_node,
+                    "rows": window.rows, "columns": window.columns,
+                    "nodes_per_degree": grid::raster::NODES_PER_DEGREE,
+                    "dem_offset_m": raster_reader::channel::DEM_OFFSET_M,
+                    "dem_codes_per_metre": raster_reader::channel::DEM_CODES_PER_METRE,
+                    "dem_missing": raster_reader::channel::DEM_MISSING,
+                }));
+            }
             if window_touches(window, &unknown) {
                 unavailable += 1;
                 continue;
@@ -99,7 +112,7 @@ fn run() -> Result<(), String> {
             "maximum_window_bytes": maximum_window_bytes,
         })
     );
-    if args[0] == "plan" {
+    if args[0] != "publish" {
         return Ok(());
     }
     // Unknown land is never silently published as ocean. DEM-only publication is independent.

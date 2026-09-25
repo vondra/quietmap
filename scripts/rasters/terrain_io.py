@@ -9,10 +9,11 @@ import shutil
 import subprocess
 import tempfile
 import urllib.request
+from contextlib import contextmanager
 
 REQUIRED_PROVENANCE = {'url', 'fetched_utc', 'sha256', 'bytes', 'licence',
                        'licence_url', 'terms_checked_utc'}
-MAX_DOWNLOAD_BYTES = 1_500_000_000_000
+MAX_DOWNLOAD_BYTES = 1_200_000_000_000
 
 
 def utc_now():
@@ -69,6 +70,29 @@ def publish_json(path, value):
     publish_bytes(path, (json.dumps(value, sort_keys=True, indent=2) + '\n').encode())
 
 
+@contextmanager
+def source_budget(root):
+    """Raw and derived retained files share one lock and include their temporary peak bytes."""
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.download.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        subprocess.run(['df', '-h', str(root)], check=True)
+        used = sum(p.stat().st_size for p in root.rglob('*') if p.is_file())
+        available = min(MAX_DOWNLOAD_BYTES - used, shutil.disk_usage(root).free - 2_000_000_000)
+        if available <= 0:
+            raise ValueError('download budget or free-space reserve exhausted')
+        yield available
+
+
+def publish_source_json(root, path, value):
+    content = (json.dumps(value, sort_keys=True, indent=2) + '\n').encode()
+    with source_budget(root) as available:
+        if 2 * len(content) > available:
+            raise ValueError('source manifest exceeds the combined retained budget')
+        publish_bytes(path, content)
+
+
 def fetch(root, provider, name, url, licence, licence_url, terms_checked_utc,
           notes='', expected_sha256=None):
     """One shared ledger counts all retained bytes and refuses the total cap before downloading."""
@@ -77,19 +101,14 @@ def fetch(root, provider, name, url, licence, licence_url, terms_checked_utc,
     if Path(provider).name != provider or Path(name).name != name:
         raise ValueError('provider and filename must be simple names')
     target = root / provider / name
-    with (root / '.download.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        subprocess.run(['df', '-h', str(root)], check=True)
-        if target.exists():
+    with source_budget(root) as available:
+        if target.exists() and Path(str(target) + '.provenance.json').exists():
             record = provenance(target)
             if record['url'] != url or (expected_sha256 and record['sha256'] != expected_sha256):
                 raise ValueError('retained source differs from the requested provider identity')
             return record
-        used = sum(p.stat().st_size for p in root.rglob('*') if p.is_file())
-        reserve = 2_000_000_000
-        available = min(MAX_DOWNLOAD_BYTES - used, shutil.disk_usage(root).free - reserve)
-        if available <= 0:
-            raise ValueError('download budget or free-space reserve exhausted')
+        # Leave room for the receipt; an orphan payload is independently re-fetched and compared.
+        available -= 65536
         target.parent.mkdir(parents=True, exist_ok=True)
         request = urllib.request.Request(url, headers={'User-Agent': 'QuietMap terrain producer'})
         with urllib.request.urlopen(request, timeout=180) as response, tempfile.NamedTemporaryFile(dir=target.parent) as staged:
@@ -109,7 +128,11 @@ def fetch(root, provider, name, url, licence, licence_url, terms_checked_utc,
                 raise ValueError('provider checksum differs from official catalogue')
             staged.flush()
             os.fsync(staged.fileno())
-            os.link(staged.name, target)
+            try:
+                os.link(staged.name, target)
+            except FileExistsError:
+                if digest(target) != checksum.hexdigest():
+                    raise ValueError('orphan payload differs from independently re-fetched source') from None
         record = dict(url=url, fetched_utc=utc_now(), sha256=checksum.hexdigest(), bytes=size,
                       licence=licence, licence_url=licence_url, terms_checked_utc=terms_checked_utc,
                       notes=notes, raw_bytes_retained=True)
