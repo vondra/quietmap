@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use noise_compute::emission::aircraft::{GROUND_OPS_KIND_RUNWAY_ROLL, GROUND_OPS_KIND_TAXI};
+use noise_compute::emission::aircraft::{
+    SamplingWindow, GROUND_OPS_KIND_RUNWAY_ROLL, GROUND_OPS_KIND_TAXI,
+};
 use noise_compute::emission::airport_traffic::{
     compute_aircraft_lw_per_meter_lin, compute_gse_band_energy_lin,
 };
@@ -53,6 +55,8 @@ struct CounterKey {
     veh_kind: u8,
     class_idx: u8,
     period: u8,
+    /// Secondary-only energy accumulates apart; it carries the increment weight.
+    secondary_only: bool,
 }
 
 #[derive(Default)]
@@ -72,8 +76,7 @@ pub(crate) fn run_airport_traffic(
     airport_areas: &[AirportArea],
     prepared_year_dir: &Path,
     output_year_dir: &Path,
-    n_days: u16,
-    ga_n_days: u16,
+    window: &SamplingWindow,
     scope: Option<&ScopeBbox>,
 ) -> Result<usize> {
     let aerodrome_index = crate::airport_index::AerodromeIndex::build(airport_areas);
@@ -106,7 +109,7 @@ pub(crate) fn run_airport_traffic(
                 prepared_year_dir,
                 output_year_dir,
                 &aerodrome_index,
-                (n_days, ga_n_days),
+                window,
                 limit,
             )?;
             counter.add(1);
@@ -168,7 +171,7 @@ pub fn run_ground_traffic_work(
     prepared_year_dir: &Path,
     output_year_dir: &Path,
     aerodrome_index: &crate::airport_index::AerodromeIndex,
-    sampling_days: (u16, u16),
+    window: &SamplingWindow,
     worker_limit: u64,
 ) -> Result<GroundTrafficOutcome> {
     let mut budget = AllocationBudget::new(worker_limit, work.indexed_allocation()?)?;
@@ -214,8 +217,7 @@ pub fn run_ground_traffic_work(
                 .join(&relative)
                 .join("airport_traffic.arrow"),
             &rows,
-            sampling_days.0,
-            sampling_days.1,
+            window,
         )?;
         write_airport_summary_parts(
             &output_year_dir.join("airport_summary_parts").join(relative),

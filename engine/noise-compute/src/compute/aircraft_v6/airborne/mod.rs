@@ -20,7 +20,7 @@ use crate::types::{
 };
 
 mod chords;
-pub use chords::SPLIT_PIECE;
+pub use chords::{CHORD_START, SPLIT_PIECE};
 mod row;
 
 use chords::{ChordCandidate, PieceEval};
@@ -129,18 +129,16 @@ pub fn scatter(
     receiver: &Receiver,
     batches: &[AirborneSegmentBatch<'_>],
     n_days_f: f64,
-    // GA hybrid per-class weight LUT.
-    // Each row's energy AND its count (`flight_weight`) are multiplied by
-    // `class_weights.get(class)` so a GA one-off divides by `ga_n_days`, not
-    // `n_days`. Uniform (all-1.0) for non-hybrid extracts.
-    class_weights: &aircraft::ClassWeights,
+    // Each row's energy and its flight's count are multiplied by the row's
+    // provenance weight, so a secondary-only row divides by the increment days.
+    weights: &aircraft::ProvenanceWeights,
     horizon: &aircraft::ReceiverHorizon,
     buildings: Option<&aircraft::BuildingHorizon>,
     trace_cap: usize,
     traces: Option<&mut TraceCollector>,
 ) -> HashMap<u64, FlightAccum> {
     let want_traces = traces.is_some();
-    let ctx = ScatterContext::new(receiver, n_days_f, class_weights, horizon, buildings);
+    let ctx = ScatterContext::new(receiver, n_days_f, weights, horizon, buildings);
     let chunks: Vec<ChunkScatter> = chunk_batches(batches)
         .into_par_iter()
         .map(|(range, first_row)| {
@@ -325,7 +323,7 @@ fn scatter_chunk(
             let Some(row) = evaluate_row::<true>(ctx, batch, i) else {
                 continue;
             };
-            let acc = flight_accumulator(&mut flights, batch, i, row.class_weight);
+            let acc = flight_accumulator(&mut flights, batch, i, row.provenance_weight);
             // The retained variants deliberately run before the received
             // floor so a strong aircraft hidden by a terrain/building edge
             // still contributes to `periods_free` and its effect deltas.
@@ -382,13 +380,13 @@ fn scatter_chunk(
 pub fn build_detail(
     flights: &HashMap<u64, FlightAccum>,
     cruise_flights: &HashMap<u64, FlightAccum>,
-    cruise_transit_count: usize,
+    // Real cruise transits at this receiver, each at its provenance weight.
+    cruise_transits_weighted: f64,
     top_flight_candidates: &HashMap<u64, TopFlightCandidate>,
     cruise_band_stats: &[BandStats; 3],
     n_days_f: f64,
-    // GA-class window for the popup's per-class "Data" row;
-    // equals `n_days_f` for non-hybrid extracts.
-    ga_n_days_f: f64,
+    // Increment day count for the popup's "Data" row.
+    increment_days: u32,
 ) -> (
     NoisePeriods,
     NoisePeriods,
@@ -546,7 +544,7 @@ pub fn build_detail(
     // makes that delta legible. (Below-threshold cruise transits are
     // included here but don't enter the bands — the row is therefore
     // an upper bound on the cruise contribution, not an exact remainder.)
-    let cruise_transits_per_day = cruise_transit_count as f64 / n_days_f;
+    let cruise_transits_per_day = cruise_transits_weighted / n_days_f;
 
     let total_airborne_energy: f64 = airborne_energy.iter().sum();
     let top_flights =
@@ -590,7 +588,7 @@ pub fn build_detail(
         top_day_date,
         top_flight_energy_share: round3(top_flight_energy_share),
         sample_days: n_days_f as u32,
-        ga_sample_days: ga_n_days_f as u32,
+        increment_sample_days: increment_days,
         top_flights,
     };
 

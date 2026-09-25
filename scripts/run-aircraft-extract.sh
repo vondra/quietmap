@@ -1,39 +1,31 @@
 #!/usr/bin/env bash
 # Build observed aircraft popup data under PREPARED_YEAR_DIR/z9/x/y.
-# Required: PREPARED_YEAR_DIR (the year directory), PREPARED_DIR (root containing rasters/),
-# ADSB_CACHE and optional DAYS (comma-separated YYYY-MM-DD; defaults to cache days).
-# HYBRID=1 selects the latest 12 completed first-of-month airline samples and
-# complete GA source days within the 365-day calendar ending at that anchor. AIRCRAFT_ANCHOR=YYYY-MM pins a
-# historical run; otherwise the latest completed monthly sample is used.
-# AIRLINE_CACHE contains non-GA inputs (including GSE); GA_CACHE contains
-# adsb.lol inputs for piston GA and helicopters. Archive size never sets a window.
-# Existing passes require exact typed days and publisher-bound GA completion receipts.
-# --from-stage controls the single pass or hybrid merge stage; successful
-# upstream work stays available after failure. MEMMAX= explicitly disables
-# the default 100G cgroup cap when the host does not offer user systemd.
+# Required: PREPARED_YEAR_DIR (the year directory), PREPARED_DIR (root containing rasters/) and
+# ADSB_CACHE, the primary provider archive (adsb.lol; its catalog.sqlite binds publisher assets).
+# SECONDARY_ADSB_CACHE (ADSBexchange samples) is read on increment days only and adds what the
+# primary provider did not receive. AIRCRAFT_ANCHOR=YYYY-MM selects the exposure year
+# [anchor - 1 year, anchor): every day is a baseline candidate, its month-firsts are the increment
+# candidates. Without an anchor, DAYS (and INCREMENT_DAYS) list the days explicitly, or DAYS is
+# derived from the primary cache. Days whose provider receipts fail are missing, never zero.
+# --from-stage controls the first stage; successful upstream work stays available after failure.
+# MEMMAX= explicitly disables the default 100G cgroup cap when the host does not offer user systemd.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
-FEED="${FEED:-adsblol}"
 ADSB_CACHE="${ADSB_CACHE:-}"
+SECONDARY_ADSB_CACHE="${SECONDARY_ADSB_CACHE:-}"
 PREPARED_YEAR_DIR="${PREPARED_YEAR_DIR:-}"
 PREPARED_DIR="${PREPARED_DIR:-}"
 WORK_DIR="${WORK_DIR:-/tmp/aircraft-extract-work}"
 DAYS="${DAYS:-}"
+INCREMENT_DAYS="${INCREMENT_DAYS:-}"
 SCOPE_BBOX="${SCOPE_BBOX:-}"
 FROM_STAGE="${FROM_STAGE:-}"
 UNTIL_STAGE="${UNTIL_STAGE:-}"
-HYBRID="${HYBRID:-}"
-AIRLINE_FEED="${AIRLINE_FEED:-adsbexchange}"
-AIRLINE_CACHE="${AIRLINE_CACHE:-}"
-AIRLINE_DAYS="${AIRLINE_DAYS:-}"
-GA_CACHE="${GA_CACHE:-}"
-GA_DAYS="${GA_DAYS:-}"
 AIRCRAFT_ANCHOR="${AIRCRAFT_ANCHOR:-}"
-FAIL_ON_GA_CRUISE="${FAIL_ON_GA_CRUISE:-}"
 MEMMAX="${MEMMAX-100G}"
 MAX_THREADS="${MAX_THREADS:-}"
 
@@ -57,23 +49,13 @@ while [ $# -gt 0 ]; do
             FROM_STAGE="${1#*=}"
             shift
             ;;
-        --feed)
-            [ $# -ge 2 ] || die "--feed requires a value (adsblol|adsbexchange)"
-            FEED="$2"
-            shift 2
-            ;;
-        --feed=*)
-            FEED="${1#*=}"
-            shift
-            ;;
         -h|--help)
             awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"
             echo
-            echo "Usage: $0 [--feed <adsblol|adsbexchange>] [--from-stage <stage0|...|stage2c>]"
-            echo "Env vars: FEED, ADSB_CACHE, PREPARED_YEAR_DIR (year directory containing z9/), PREPARED_DIR, WORK_DIR,"
-            echo "          DAYS, SCOPE_BBOX, FROM_STAGE, UNTIL_STAGE, LOG_DIR, MEMMAX, MAX_THREADS"
-            echo "Hybrid:   HYBRID=1, AIRLINE_FEED, AIRLINE_CACHE, GA_CACHE, AIRCRAFT_ANCHOR,"
-            echo "          FAIL_ON_GA_CRUISE=1"
+            echo "Usage: $0 [--from-stage <stage0|...|stage2c>]"
+            echo "Env vars: ADSB_CACHE, SECONDARY_ADSB_CACHE, PREPARED_YEAR_DIR (year directory containing z9/),"
+            echo "          PREPARED_DIR, WORK_DIR, AIRCRAFT_ANCHOR or DAYS/INCREMENT_DAYS, SCOPE_BBOX,"
+            echo "          FROM_STAGE, UNTIL_STAGE, LOG_DIR, MEMMAX, MAX_THREADS"
             exit 0
             ;;
         *)
@@ -82,63 +64,42 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-CRUISE_ONLY=
-if [ "$FROM_STAGE" = stage2b ] && [ "$UNTIL_STAGE" = stage2b ]; then
-    CRUISE_ONLY=1
-fi
-
 [ -n "$PREPARED_YEAR_DIR" ] || die "requires PREPARED_YEAR_DIR= (year directory containing z9/)"
 [ -n "$PREPARED_DIR" ] || die "requires PREPARED_DIR= (root containing rasters/dem, rasters/forest, rasters/imd)"
-case "$FEED" in
-    adsblol|adsbexchange) ;;
-    *)            die "unknown --feed: $FEED (adsblol|adsbexchange)" ;;
-esac
-selected_ga_days() {
-    local cache="$1"
-    shift
-    python3 "$SCRIPT_DIR/download-adsblol.py" validate --source-root "$cache" "$@" \
-        | python3 -c 'import sys; fields=sys.stdin.buffer.read().split(b"\0"); print(",".join(sorted({s.decode() for s in fields[:-1:2]})))'
-}
-if [ -n "$HYBRID" ]; then
-    if [ -z "$FROM_STAGE" ]; then
-        FROM_STAGE=shuffle
-        if [ -f "$WORK_DIR/airline/segments_by_square/complete.sqlite" ]; then
-            FROM_STAGE=stage1-5
-        fi
-    fi
-    case "$FROM_STAGE" in
-        shuffle|stage1-5|stage2a|stage2b|stage2c) ;;
-        *) die "hybrid --from-stage must be shuffle, stage1-5, stage2a, stage2b or stage2c; omit it for a fresh extraction" ;;
-    esac
-    [ -n "$AIRLINE_CACHE" ] || die "HYBRID=1 requires AIRLINE_CACHE= with an explicit cache directory"
-    [ -n "$GA_CACHE" ] || die "HYBRID=1 requires GA_CACHE= with an explicit cache directory"
-    [ -z "$DAYS$AIRLINE_DAYS$GA_DAYS" ] \
-        || die "hybrid dates come from one AIRCRAFT_ANCHOR, not DAYS/AIRLINE_DAYS/GA_DAYS"
-    WINDOW_ARGS=()
-    [ -z "$AIRCRAFT_ANCHOR" ] || WINDOW_ARGS+=(--anchor "$AIRCRAFT_ANCHOR")
-    WINDOW_CSV="$(python3 "$SCRIPT_DIR/aircraft_window.py" "${WINDOW_ARGS[@]}")" \
-        || die "invalid aircraft sampling window"
-    AIRLINE_DAYS="${WINDOW_CSV%%$'\n'*}"
-    GA_DAYS="${WINDOW_CSV#*$'\n'}"
-    GA_DAYS="$(selected_ga_days "$GA_CACHE" --days "$GA_DAYS")" \
-        || die "GA selected full-source assets are incomplete; requested exposure year retained"
-else
-    [ -n "$ADSB_CACHE" ] || die "requires ADSB_CACHE= with an explicit cache directory"
-fi
+[ -n "$ADSB_CACHE" ] || die "requires ADSB_CACHE= with an explicit primary cache directory"
 
 derive_days() {
     local cache="$1"
     [ -d "$cache" ] || die "$cache not found and no day list provided"
-    if [ "$FEED" = adsblol ]; then
-        selected_ga_days "$cache"
+    if [ -f "$cache/catalog.sqlite" ]; then
+        python3 "$SCRIPT_DIR/download-adsblol.py" validate --source-root "$cache" \
+            | python3 -c 'import sys; fields=sys.stdin.buffer.read().split(b"\0"); print(",".join(sorted({s.decode() for s in fields[:-1:2]})))'
         return
     fi
     find "$cache" -mindepth 1 -maxdepth 4 \( -name '*.tar' -o -name '*.tar.aa' \) -printf '%h\n' \
         | awk -F/ '{print $NF}' \
-        | sed -E 's/^v([0-9]{4})\.([0-9]{2})\.([0-9]{2})-planes-readsb-prod-0(tmp)?$/\1-\2-\3/' \
+        | sed -E 's/^v([0-9]{4})\.([0-9]{2})\.([0-9]{2})-planes-readsb-(prod|staging)-0(tmp)?$/\1-\2-\3/' \
         | sort -u | paste -sd,
 }
 count_csv() { tr ',' '\n' <<<"$1" | wc -l; }
+
+if [ -n "$AIRCRAFT_ANCHOR" ]; then
+    [ -z "$DAYS$INCREMENT_DAYS" ] || die "the exposure year comes from one AIRCRAFT_ANCHOR, not DAYS/INCREMENT_DAYS"
+    WINDOW_CSV="$(python3 "$SCRIPT_DIR/aircraft_window.py" --anchor "$AIRCRAFT_ANCHOR")" \
+        || die "invalid aircraft sampling window"
+    DAYS="${WINDOW_CSV%%$'\n'*}"
+    INCREMENT_DAYS="${WINDOW_CSV#*$'\n'}"
+    [ -n "$SECONDARY_ADSB_CACHE" ] || INCREMENT_DAYS=""
+fi
+if [ -z "$DAYS" ]; then
+    DAYS="$(derive_days "$ADSB_CACHE")"
+    [ -n "$DAYS" ] || die "no ADS-B TAR days resolved from $ADSB_CACHE"
+    if [ "$(count_csv "$DAYS")" -gt 60 ] && [ "${ALLOW_FULL_ARCHIVE:-}" != 1 ]; then
+        die "derived $(count_csv "$DAYS") day(s) from $ADSB_CACHE — full-archive run. Set DAYS=… for a subset, AIRCRAFT_ANCHOR=… for a year, or ALLOW_FULL_ARCHIVE=1 to confirm."
+    fi
+fi
+[ -z "$INCREMENT_DAYS" ] || [ -n "$SECONDARY_ADSB_CACHE" ] \
+    || die "INCREMENT_DAYS needs SECONDARY_ADSB_CACHE="
 
 LOG_DIR="${LOG_DIR:-logs}"
 LOG_FILE="$LOG_DIR/aircraft-extract-$(date '+%Y%m%d-%H%M%S').log"
@@ -175,83 +136,18 @@ fi
 mkdir -p "$WORK_DIR" "$PREPARED_YEAR_DIR"
 
 stamp_gate() {
-    log "publish gate: aircraft schema and both sampling windows"
+    log "publish gate: aircraft schema and sampling window"
     "$BIN" audit --prepared-year-dir "$PREPARED_YEAR_DIR" --segments-by-square "$1" \
         2>&1 | stdbuf -oL -eL tee -a "$LOG_FILE"
 }
 
-if [ -n "$HYBRID" ]; then
-    W_AIR="$WORK_DIR/airline"
-    W_GA="$WORK_DIR/ga"
-    log "hybrid: airline $(count_csv "$AIRLINE_DAYS") day(s) from $AIRLINE_CACHE (feed=$AIRLINE_FEED) + GA $(count_csv "$GA_DAYS") day(s) from $GA_CACHE (feed=adsblol)"
-
-    run_pass() { # <label> <feed> <cache> <days> <class-filter> <work-dir>
-        local label="$1" feed="$2" cache="$3" days="$4" filter="$5" wd="$6"
-        if [ -d "$wd/segments" ] && [ -n "$(find "$wd/segments" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
-            "$BIN" validate-segments --segments-dir "$wd/segments" --days "$days" \
-                --class-filter "$filter" --feed "$feed" --adsb-cache "$cache" \
-                2>&1 | stdbuf -oL -eL tee -a "$LOG_FILE"
-            log "pass $label: complete typed day set verified — reusing $wd/segments"
-            return 0
-        fi
-        log "pass $label: feed=$feed cache=$cache class-filter=$filter until-stage=stage1 → $wd"
-        "${GUARD[@]}" "$BIN" run-all \
-            --adsb-cache "$cache" \
-            --prepared-year-dir "$PREPARED_YEAR_DIR" \
-            --prepared-dir "$PREPARED_DIR" \
-            --work-dir "$wd" \
-            --days "$days" \
-            --feed "$feed" \
-            --class-filter "$filter" \
-            --until-stage stage1 \
-            "${SCOPE_ARGS[@]}" \
-            "${THREAD_ARGS[@]}" \
-            2>&1 | stdbuf -oL -eL tee -a "$LOG_FILE"
-    }
-
-    # A bounded cruise replay requires existing primary days; native validates them once.
-    if [ "$FROM_STAGE" != stage2c ] && [ -z "$CRUISE_ONLY" ]; then
-        run_pass J "$AIRLINE_FEED" "$AIRLINE_CACHE" "$AIRLINE_DAYS" non-ga "$W_AIR"
-    fi
-    MERGE_ARGS=(--from-stage "$FROM_STAGE" --class-filter non-ga)
-    [ -z "$UNTIL_STAGE" ] || MERGE_ARGS+=(--until-stage "$UNTIL_STAGE")
-    [ -n "$CRUISE_ONLY" ] || MERGE_ARGS+=(--ga-adsb-cache "$GA_CACHE")
-    if [ "$FROM_STAGE" = shuffle ]; then
-        run_pass G adsblol "$GA_CACHE" "$GA_DAYS" ga "$W_GA"
-        MERGE_ARGS+=(--ga-segments-dir "$W_GA/segments")
-    fi
-    [ -n "$FAIL_ON_GA_CRUISE" ] && MERGE_ARGS+=(--fail-on-ga-cruise)
-    log "hybrid downstream: work-dir $W_AIR (from-stage $FROM_STAGE)"
-    "${GUARD[@]}" "$BIN" run-all \
-        --adsb-cache "$AIRLINE_CACHE" \
-        --prepared-year-dir "$PREPARED_YEAR_DIR" \
-        --prepared-dir "$PREPARED_DIR" \
-        --work-dir "$W_AIR" \
-        --days "$AIRLINE_DAYS" \
-        --feed "$AIRLINE_FEED" \
-        "${MERGE_ARGS[@]}" \
-        "${SCOPE_ARGS[@]}" \
-        "${THREAD_ARGS[@]}" \
-        2>&1 | stdbuf -oL -eL tee -a "$LOG_FILE"
-
-    stamp_gate "$W_AIR/segments_by_square"
-
-    log "done — hybrid popup arrows in $PREPARED_YEAR_DIR/z9/<x>/<y>/{airborne,cruise,airport_traffic}.arrow"
-    exit 0
-fi
-
-log "feed: $FEED  cache=$ADSB_CACHE  scope=${SCOPE_BBOX:-<global>}"
-if [ -z "$DAYS" ]; then
-    log "DAYS env var not set; deriving from ADSB_CACHE=$ADSB_CACHE"
-    DAYS="$(derive_days "$ADSB_CACHE")"
-fi
-[ -n "$DAYS" ] || die "no ADS-B TAR days resolved from $ADSB_CACHE"
-if [ "$(count_csv "$DAYS")" -gt 60 ] && [ "${ALLOW_FULL_ARCHIVE:-}" != 1 ]; then
-    die "derived $(count_csv "$DAYS") day(s) from $ADSB_CACHE — full-archive run. Set DAYS=… for a subset, or ALLOW_FULL_ARCHIVE=1 to confirm."
-fi
-
-log "running aircraft-extract run-all (DAYS=$DAYS)"
-EXTRA_ARGS=(--feed "$FEED")
+log "primary cache=$ADSB_CACHE secondary cache=${SECONDARY_ADSB_CACHE:-<none>} scope=${SCOPE_BBOX:-<global>}"
+INCREMENT_COUNT=0
+[ -z "$INCREMENT_DAYS" ] || INCREMENT_COUNT="$(count_csv "$INCREMENT_DAYS")"
+log "$(count_csv "$DAYS") baseline candidate day(s); $INCREMENT_COUNT increment candidate day(s)"
+EXTRA_ARGS=()
+[ -z "$SECONDARY_ADSB_CACHE" ] || EXTRA_ARGS+=(--secondary-adsb-cache "$SECONDARY_ADSB_CACHE")
+[ -z "$INCREMENT_DAYS" ] || EXTRA_ARGS+=(--increment-days "$INCREMENT_DAYS")
 [ -z "$UNTIL_STAGE" ] || EXTRA_ARGS+=(--until-stage "$UNTIL_STAGE")
 if [ -n "$FROM_STAGE" ]; then
     EXTRA_ARGS+=(--from-stage "$FROM_STAGE")

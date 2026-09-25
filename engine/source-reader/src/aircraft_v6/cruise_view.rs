@@ -29,6 +29,7 @@ struct OwnedCruiseRow {
     rep_speed_kt: f32,
     source_id: u8,
     origin: u8,
+    secondary_only: bool,
     unique_count: u32,
     /// Owned per-candidate identity fields. Candidate views borrow
     /// from these — same Vec-of-String lifetime trick as the v13
@@ -108,6 +109,11 @@ impl CruiseRowAccum {
                 batch_index,
                 "origin",
             )?;
+            let secondary_only = required_column::<UInt8Array>(
+                batch.column_by_name("secondary_only"),
+                batch_index,
+                "secondary_only",
+            )?;
             let cand_list = required_column::<ListArray>(
                 batch.column_by_name("top_candidates"),
                 batch_index,
@@ -181,6 +187,7 @@ impl CruiseRowAccum {
                     rep_speed_kt: rep_speed.value(i),
                     source_id: source_id.value(i),
                     origin: origin.value(i),
+                    secondary_only: secondary_only.value(i) != 0,
                     unique_count: unique_count.value(i),
                     cand_fid,
                     cand_callsign,
@@ -250,6 +257,7 @@ impl<'a> CruiseViewSlices<'a> {
                 rep_speed_kt: r.rep_speed_kt,
                 source_id: r.source_id,
                 origin: r.origin,
+                secondary_only: r.secondary_only,
                 unique_count: r.unique_count,
                 top_candidates: self.cand_views[i].as_slice(),
             })

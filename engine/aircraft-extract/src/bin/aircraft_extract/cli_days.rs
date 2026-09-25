@@ -1,129 +1,153 @@
-//! RAM-bounded day extraction preserves successful work but fails if any requested day is missing.
+//! RAM-bounded day extraction of both providers preserves successful work but fails if any available day fails.
 
-use crate::{cli_validate::*, ClassFilterArg, Feed, FromStage};
+use crate::{source_cache::SourceCache, FromStage, STAGE01_PEAK_PER_DAY_GB};
+use aircraft_extract::flight::source_id;
 use aircraft_extract::memory::max_concurrent_days;
 use aircraft_extract::{
     progress::ts, source::FlightSource, source_adsb_tar::AdsbTarSource, stage_0::run_stage_0,
     stage_1::run_stage_1,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use raster_reader::RealRasters;
 use rayon::{iter::Either, prelude::*};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-#[allow(clippy::too_many_arguments)]
-pub fn compute_ok_paths(
-    days: &[String],
-    adsb_cache: &Path,
+/// The providers of one run: the primary archive (publisher receipts when it
+/// has a catalog) and the optional secondary archive for increment days.
+pub struct Providers<'a> {
+    /// Stage 0 keeps only traces that can reach a scope square.
+    pub scope: Option<&'a aircraft_extract::scope::ScopeBbox>,
+    pub primary_root: &'a Path,
+    pub primary_receipts: Option<&'a SourceCache>,
+    pub secondary_root: Option<&'a Path>,
+    pub increment_candidates: &'a BTreeSet<String>,
+}
+
+impl Providers<'_> {
+    /// Provider ids a completed day shard may carry.
+    pub fn source_ids(&self) -> [u8; 2] {
+        [source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE]
+    }
+
+    fn secondary_for(&self, day: &str) -> Option<AdsbTarSource> {
+        let root = self.secondary_root?;
+        let source = AdsbTarSource::new(root).with_source_id(source_id::ADSB_EXCHANGE);
+        (self.increment_candidates.contains(day) && source.has_day(day)).then_some(source)
+    }
+}
+
+/// Run Stage 0/1 for every requested day the primary provider holds; a day
+/// it lacks gets a missing receipt for the admission. Returns the days run.
+pub fn extract_days(
+    days: &BTreeSet<String>,
+    providers: &Providers<'_>,
     work_dir: &Path,
-    flights_dir: &Path,
-    segments_dir: &Path,
     rasters: &RealRasters,
     from_stage: FromStage,
     until_stage: FromStage,
-    feed: Feed,
-    class_filter: ClassFilterArg,
-    runs: &impl Fn(FromStage) -> bool,
-) -> Result<Vec<PathBuf>> {
-    let source_cache = matches!(feed, Feed::Adsblol)
-        .then(|| crate::source_cache::SourceCache::new(adsb_cache, work_dir, class_filter));
-    if let Some(cache) = &source_cache {
-        let stage = match from_stage {
-            FromStage::Stage0 => None,
-            FromStage::Stage1 => Some("flights"),
-            _ => Some("segments"),
-        };
-        cache.validate(Some(days), stage)?;
-    }
-    let needs_ok_paths = runs(FromStage::Shuffle) || runs(FromStage::Stage2b);
-    let ok_paths: Vec<PathBuf> = if from_stage <= FromStage::Stage1 {
-        std::fs::create_dir_all(flights_dir)?;
-        std::fs::create_dir_all(segments_dir)?;
-        let sources: Vec<Box<dyn FlightSource>> = vec![Box::new(
-            AdsbTarSource::new(adsb_cache)
-                .with_source_id(feed.source_id())
-                .with_class_filter(class_filter.window()),
-        )];
-        let max_concurrent =
-            max_concurrent_days(days.len(), class_filter.stage01_peak_per_day_gb());
-        eprintln!(
-            "{} [run-all] Stage 0/1: {} day(s), <={} concurrent (RAM-bounded; within-day fills every core)",
-            ts(),
-            days.len(),
-            max_concurrent
-        );
-        let done_dir = if until_stage == FromStage::Stage0 {
-            flights_dir
-        } else {
-            segments_dir
-        };
-        let mut ok_paths: Vec<PathBuf> = Vec::new();
-        let mut failed_days: Vec<String> = Vec::new();
-        for chunk in days.chunks(max_concurrent) {
-            let (mut ok, mut fail): (Vec<PathBuf>, Vec<String>) =
-                chunk.par_iter().partition_map(|day| {
-                    let done_path = done_dir.join(format!("{day}.arrow"));
-                    match run_day(
-                        day,
-                        &sources,
-                        source_cache.as_ref(),
-                        flights_dir,
-                        segments_dir,
-                        rasters,
-                        from_stage,
-                        until_stage,
-                    ) {
-                        Ok(()) if done_path.exists() => Either::Left(done_path),
-                        Ok(()) => {
-                            eprintln!("{} [run-all] {day}: FAILED — no output file produced", ts());
-                            Either::Right(day.clone())
-                        }
-                        Err(e) => {
-                            eprintln!("{} [run-all] {day}: FAILED stage0/1 — {e}, skipping", ts());
-                            Either::Right(day.clone())
-                        }
-                    }
-                });
-            ok_paths.append(&mut ok);
-            failed_days.append(&mut fail);
+) -> Result<Vec<String>> {
+    let flights_dir = work_dir.join("flights");
+    let segments_dir = work_dir.join("segments");
+    std::fs::create_dir_all(&flights_dir)?;
+    std::fs::create_dir_all(&segments_dir)?;
+    let requested: Vec<String> = days.iter().cloned().collect();
+    let available: Vec<String> = match providers.primary_receipts {
+        Some(cache) => cache.validate(Some(&requested), None)?.into_keys().collect(),
+        None => {
+            let source = AdsbTarSource::new(providers.primary_root);
+            requested
+                .iter()
+                .filter(|day| source.has_day(day))
+                .cloned()
+                .collect()
         }
-
-        anyhow::ensure!(
-            failed_days.is_empty(),
-            "incomplete extraction: failed days {}; successful artifacts preserved in {}",
-            failed_days.join(","),
-            work_dir.display()
-        );
-        if ok_paths.is_empty() {
-            return Err(anyhow::anyhow!(
-                "every requested day failed Stage 0/1 — nothing produced under \
-                 {}. Check upstream errors and rerun with --days <surviving-list>",
-                work_dir.display(),
-            ));
-        }
-        ok_paths
-    } else if needs_ok_paths {
-        require_input_dir_exists("--work-dir/segments (--from-stage)", segments_dir)?;
-        validate_segments(segments_dir, days, class_filter, feed, adsb_cache)?;
-        let paths = list_segments_day_paths(segments_dir)?;
-        eprintln!(
-            "{} [run-all] reusing {} segment shard(s) from {}",
-            ts(),
-            paths.len(),
-            segments_dir.display()
-        );
-        paths
-    } else {
-        Vec::new()
     };
-    Ok(ok_paths)
+    let missing: Vec<&String> = requested
+        .iter()
+        .filter(|day| !available.contains(day))
+        .collect();
+    for day in &missing {
+        aircraft_extract::provider_receipt::write_day_receipt(
+            work_dir,
+            &aircraft_extract::provider_receipt::DayReceipt::primary_missing(day),
+        )?;
+    }
+    if !missing.is_empty() {
+        eprintln!(
+            "{} [run-all] {} requested day(s) without a primary archive stay missing: {}",
+            ts(),
+            missing.len(),
+            missing
+                .iter()
+                .map(|day| day.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+    }
+    let max_concurrent = max_concurrent_days(available.len(), STAGE01_PEAK_PER_DAY_GB);
+    eprintln!(
+        "{} [run-all] Stage 0/1: {} day(s), <={} concurrent (RAM-bounded; within-day fills every core)",
+        ts(),
+        available.len(),
+        max_concurrent
+    );
+    let done_dir = if until_stage == FromStage::Stage0 {
+        &flights_dir
+    } else {
+        &segments_dir
+    };
+    let mut ok_days: Vec<String> = Vec::new();
+    let mut failed_days: Vec<String> = Vec::new();
+    for chunk in available.chunks(max_concurrent.max(1)) {
+        let (mut ok, mut fail): (Vec<String>, Vec<String>) =
+            chunk.par_iter().partition_map(|day| {
+                let done_path = done_dir.join(format!("{day}.arrow"));
+                match run_day(
+                    day,
+                    providers,
+                    work_dir,
+                    &flights_dir,
+                    &segments_dir,
+                    rasters,
+                    from_stage,
+                    until_stage,
+                ) {
+                    Ok(()) if done_path.exists() => Either::Left(day.clone()),
+                    Ok(()) => {
+                        eprintln!("{} [run-all] {day}: FAILED — no output file produced", ts());
+                        Either::Right(day.clone())
+                    }
+                    Err(e) => {
+                        eprintln!("{} [run-all] {day}: FAILED stage0/1 — {e:#}, skipping", ts());
+                        Either::Right(day.clone())
+                    }
+                }
+            });
+        ok_days.append(&mut ok);
+        failed_days.append(&mut fail);
+    }
+    anyhow::ensure!(
+        failed_days.is_empty(),
+        "incomplete extraction: failed days {}; successful artifacts preserved in {}",
+        failed_days.join(","),
+        work_dir.display()
+    );
+    anyhow::ensure!(
+        !ok_days.is_empty(),
+        "no requested day has a primary archive under {}",
+        providers.primary_root.display()
+    );
+    ok_days.sort();
+    Ok(ok_days)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_day(
     day: &str,
-    sources: &[Box<dyn FlightSource>],
-    source_cache: Option<&crate::source_cache::SourceCache>,
+    providers: &Providers<'_>,
+    work_dir: &Path,
     flights_dir: &Path,
     segments_dir: &Path,
     rasters: &RealRasters,
@@ -131,20 +155,24 @@ fn run_day(
     until_stage: FromStage,
 ) -> Result<()> {
     let t0 = Instant::now();
+    let receipts = providers.primary_receipts;
     let stage0_log = if from_stage <= FromStage::Stage0 {
-        let selected;
-        let sources = if let Some(cache) = source_cache {
-            selected = vec![Box::new(
-                AdsbTarSource::new("")
-                    .with_class_filter(cache.class_filter())
-                    .with_selected_archives(cache.begin(day, "flights")?),
-            ) as Box<dyn FlightSource>];
-            &selected
-        } else {
-            sources
+        let primary = match receipts {
+            Some(cache) => {
+                AdsbTarSource::new("").with_selected_archives(cache.begin(day, "flights")?)
+            }
+            None => AdsbTarSource::new(providers.primary_root),
         };
-        let n0 = run_stage_0(sources, day, flights_dir)?;
-        if let Some(cache) = source_cache {
+        let secondary = providers.secondary_for(day);
+        let n0 = run_stage_0(
+            &primary,
+            secondary.as_ref().map(|s| s as &dyn FlightSource),
+            day,
+            flights_dir,
+            work_dir,
+            providers.scope,
+        )?;
+        if let Some(cache) = receipts {
             cache.complete(day, "flights")?;
         }
         format!("stage0={n0} ({:?})", t0.elapsed())
@@ -159,11 +187,11 @@ fn run_day(
         return Ok(());
     }
     let t_stage1 = Instant::now();
-    if let Some(cache) = source_cache {
+    if let Some(cache) = receipts {
         cache.begin(day, "segments")?;
     }
     let n1 = run_stage_1(flights_dir, segments_dir, day, rasters)?;
-    if let Some(cache) = source_cache {
+    if let Some(cache) = receipts {
         cache.complete(day, "segments")?;
     }
     eprintln!(
@@ -174,65 +202,19 @@ fn run_day(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resumed_day_shards_must_match_requested_feed_and_class() {
-        use aircraft_extract::flight::{FlightSegment, Phase};
-        let temp = tempfile::tempdir().unwrap();
-        let segments = temp.path().join("segments");
-        let day = "2025-01-01";
-        let segment = FlightSegment {
-            flight_id: 1,
-            callsign: "TEST".into(),
-            aircraft_type: *b"B738",
-            profile_idx: aircraft_extract::profile::profile_idx("B738"),
-            source_id: Feed::Adsbexchange.source_id(),
-            origin: 0,
-            veh_kind: 0,
-            gse_class: 0,
-            period: 0,
-            date_id: aircraft_extract::period::parse_date_id(day).unwrap(),
-            phase: Phase::Airborne,
-            flags: 0,
-            start_lat: 50.0,
-            start_lon: 14.0,
-            start_alt_m: 1000.0,
-            end_lat: 50.001,
-            end_lon: 14.001,
-            end_alt_m: 1000.0,
-            speed_kt: 250.0,
-            length_m: 100.0,
-            agl_avg_m: 1000.0,
-            start_elev_m: 0.0,
-            end_elev_m: 0.0,
-        };
-        aircraft_extract::arrow_io::write_segments(
-            &segments.join(format!("{day}.arrow")),
-            &[segment],
-        )
-        .unwrap();
-        for (feed, class, accepted) in [
-            (Feed::Adsbexchange, ClassFilterArg::NonGa, true),
-            (Feed::Adsblol, ClassFilterArg::NonGa, false),
-            (Feed::Adsblol, ClassFilterArg::Ga, false),
-        ] {
-            let result = compute_ok_paths(
-                &[day.into()],
-                temp.path(),
-                temp.path(),
-                &temp.path().join("flights"),
-                &segments,
-                &RealRasters::new(temp.path()),
-                FromStage::Shuffle,
-                FromStage::Shuffle,
-                feed,
-                class,
-                &|stage| stage == FromStage::Shuffle,
-            );
-            assert_eq!(result.is_ok(), accepted, "feed={feed:?} class={class:?}");
-        }
-    }
+/// Day shard paths of `days` across the segment directories; each day lives in exactly one.
+pub fn day_segment_paths(dirs: &[PathBuf], days: &BTreeSet<String>) -> Result<Vec<PathBuf>> {
+    let by_day: std::collections::BTreeMap<String, PathBuf> =
+        crate::cli_validate::list_segments_day_paths_multi(dirs)?
+            .into_iter()
+            .map(|path| (path.file_stem().unwrap().to_string_lossy().into_owned(), path))
+            .collect();
+    days.iter()
+        .map(|day| {
+            by_day
+                .get(day)
+                .cloned()
+                .with_context(|| format!("admitted day {day} has no completed day shard"))
+        })
+        .collect()
 }

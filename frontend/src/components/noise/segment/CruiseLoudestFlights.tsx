@@ -46,7 +46,7 @@ export function CruiseLoudestFlights({ tops }: { tops: CruiseHexTopFlight[] }) {
               icaoHex: hex,
             })
             const globeHref = hex && f.date
-              ? adsbTraceHref(hex, f.date, { noiseClass: f.class_name, typecode: f.aircraft_type })
+              ? adsbTraceHref(hex, f.date)
               : null
             const dateCell = `${f.date ? f.date.slice(5) : '—'} ${f.time_utc ? f.time_utc.slice(0, 5) : ''}`
             // Synthetic cruise rows (empty hex ⇒ empty date/time per

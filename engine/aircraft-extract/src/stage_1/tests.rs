@@ -1,7 +1,6 @@
 //! Terrain endpoint gates and optional real-source integration.
 use super::*;
 use crate::flight::{segment_flags, FlightSegment, Phase};
-use crate::source::FlightSource;
 use crate::source_adsb_tar::AdsbTarSource;
 use tempfile::tempdir;
 
@@ -89,8 +88,15 @@ fn end_to_end_one_day_against_real_dem() {
     std::fs::create_dir_all(&stage0_dir).unwrap();
     std::fs::create_dir_all(&stage1_dir).unwrap();
 
-    let sources: Vec<Box<dyn FlightSource>> = vec![Box::new(AdsbTarSource::new(cache))];
-    crate::stage_0::run_stage_0(&sources, "2025-01-21", &stage0_dir).unwrap();
+    crate::stage_0::run_stage_0(
+        &AdsbTarSource::new(cache),
+        None,
+        "2025-01-21",
+        &stage0_dir,
+        work.path(),
+        None,
+    )
+    .unwrap();
 
     let rasters = RealRasters::new(std::path::Path::new(&prepared));
     let n = run_stage_1(&stage0_dir, &stage1_dir, "2025-01-21", &rasters).unwrap();

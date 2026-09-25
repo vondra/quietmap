@@ -56,130 +56,35 @@ fn day_dir_release_naming_used_when_plain_day_absent() {
     );
 }
 
-/// Pass complementarity: across
-/// jet / airline-turboprop / GA / heli / GSE / TWR / glider / blank
-/// traces, every trace lands in EXACTLY one of (GaOnly-kept,
-/// NonGa-kept, dropped-by-both-as-designed {TWR, glider}) — and the
-/// union of the two passes equals the single-window `All` keep set.
+/// A rotation made only of secondary-provider samples is tagged with the
+/// secondary provider; any primary sample makes it a primary rotation.
 #[test]
-fn class_window_filter_complementarity() {
-    #[derive(PartialEq, Debug, Clone, Copy)]
-    enum Lands {
-        GaPass,
-        AirlinePass,
-        DroppedByBoth,
-    }
-    use Lands::*;
-    let mk = |typecode: &str| AircraftTrace {
-        icao24: "49d328".into(),
-        aircraft_type: typecode.into(),
-        points: vec![
-            TracePoint {
-                timestamp: 0.0,
-                lat: 50.0,
-                lon: 14.0,
-                alt_ft: 2000.0,
-                speed_kt: 120.0,
-                track_deg: 0.0,
-                baro_rate_fpm: 0.0,
-                flags: 0,
-            },
-            TracePoint {
-                timestamp: 10.0,
-                lat: 50.001,
-                lon: 14.001,
-                alt_ft: 2000.0,
-                speed_kt: 120.0,
-                track_deg: 0.0,
-                baro_rate_fpm: 0.0,
-                flags: 0,
-            },
-        ],
-        callsigns: Vec::new(),
+fn a_rotation_takes_the_secondary_tag_only_when_every_sample_is_secondary() {
+    let sample = |timestamp: f64, flags: u8| TracePoint {
+        timestamp,
+        lat: 50.1,
+        lon: 14.25 + (timestamp - 1_700_000_000.0) as f32 * 1e-4,
+        alt_ft: 3000.0,
+        speed_kt: 150.0,
+        track_deg: 90.0,
+        baro_rate_fpm: 0.0,
+        flags,
     };
-    let cases: &[(&str, Lands)] = &[
-        ("B738", AirlinePass),   // jet
-        ("AT72", AirlinePass),   // airline turboprop — PROP_DH8D stays 12-day
-        ("PC12", AirlinePass),   // GA turbine single → DH8D residual
-        ("GLF4", AirlinePass),   // bizjet shares FUSE_CRJ9 with regional jets
-        ("C172", GaPass),        // GA piston
-        ("WT9", GaPass),         // ultralight → PROP_C172 class
-        ("R44", GaPass),         // helicopter
-        ("GYRO", GaPass),        // rotorcraft special designator
-        ("GND", AirlinePass),    // GSE belongs to the airline pass
-        ("TWR", DroppedByBoth),  // control-tower transponder
-        ("GLID", DroppedByBoth), // sailplane
-        ("", AirlinePass),       // blank = FALLBACK, non-GA by design
-    ];
-    for &(typecode, expected) in cases {
-        let kept = |w: ClassWindowFilter| {
-            !trace_to_flight(mk(typecode), source_id::ADSB_LOL_TAR, w).is_empty()
+    let secondary = crate::trace::FLAG_SECONDARY_PROVIDER;
+    for (flags, expected) in [
+        ([secondary, secondary], source_id::ADSB_EXCHANGE),
+        ([0, secondary], source_id::ADSB_LOL_TAR),
+    ] {
+        let tr = AircraftTrace {
+            icao24: "49f001".into(),
+            aircraft_type: "B738".into(),
+            points: vec![sample(1_700_000_000.0, flags[0]), sample(1_700_000_010.0, flags[1])],
+            callsigns: Vec::new(),
         };
-        let ga = kept(ClassWindowFilter::GaOnly);
-        let non_ga = kept(ClassWindowFilter::NonGa);
-        let all = kept(ClassWindowFilter::All);
-        assert!(!(ga && non_ga), "{typecode:?} must not land in both passes");
-        assert_eq!(
-            ga || non_ga,
-            all,
-            "{typecode:?}: union of GA + airline passes must equal the All keep set"
-        );
-        let landed = match (ga, non_ga) {
-            (true, false) => GaPass,
-            (false, true) => AirlinePass,
-            (false, false) => DroppedByBoth,
-            (true, true) => unreachable!(),
-        };
-        assert_eq!(landed, expected, "{typecode:?}");
-        // The probe-side predicate must agree with the authoritative
-        // trace_to_flight outcome for both passes.
-        assert_eq!(
-            ClassWindowFilter::GaOnly.keeps_typecode(typecode),
-            ga,
-            "{typecode:?} probe/GaOnly"
-        );
-        assert_eq!(
-            ClassWindowFilter::NonGa.keeps_typecode(typecode),
-            non_ga,
-            "{typecode:?} probe/NonGa"
-        );
+        let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE);
+        assert_eq!(flights.len(), 1);
+        assert_eq!(flights[0].source_id, expected);
     }
-}
-
-/// GSE routing survives the airline pass: a GND trace kept by NonGa
-/// still becomes a `veh_kind = 1` GSE flight (not an aircraft).
-#[test]
-fn non_ga_pass_keeps_gse_routing() {
-    let tr = AircraftTrace {
-        icao24: "49f001".into(),
-        aircraft_type: "GND".into(),
-        points: vec![
-            TracePoint {
-                timestamp: 0.0,
-                lat: 50.1,
-                lon: 14.25,
-                alt_ft: 0.0,
-                speed_kt: 5.0,
-                track_deg: 0.0,
-                baro_rate_fpm: 0.0,
-                flags: 0,
-            },
-            TracePoint {
-                timestamp: 1.0,
-                lat: 50.1001,
-                lon: 14.2501,
-                alt_ft: 0.0,
-                speed_kt: 5.0,
-                track_deg: 0.0,
-                baro_rate_fpm: 0.0,
-                flags: 0,
-            },
-        ],
-        callsigns: Vec::new(),
-    };
-    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, ClassWindowFilter::NonGa);
-    assert_eq!(flights.len(), 1);
-    assert_eq!(flights[0].veh_kind, 1);
 }
 
 /// Skips unless QM_FLIGHTS_CACHE points at a radius cache root containing
@@ -193,7 +98,12 @@ fn smoke_real_praha_day() {
         return;
     }
     let s = AdsbTarSource::new(root);
-    let flights = s.read_day("2025-01-21").expect("read_day");
+    let day = s.read_provider_day("2025-01-21").expect("read_provider_day");
+    let flights: Vec<_> = day
+        .traces
+        .into_iter()
+        .flat_map(|trace| trace_to_flight(trace, source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE))
+        .collect();
     assert!(flights.len() > 100, "got {}", flights.len());
     let real = flights.iter().filter(|f| !is_synth(f.flight_id)).count();
     assert!(

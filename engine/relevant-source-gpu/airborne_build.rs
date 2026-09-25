@@ -15,7 +15,6 @@ pub fn header() -> String {
             "../noise-compute/src/emission/aircraft/npd/mod.rs",
             vec![
                 ("AIRCRAFT_MAX_HORIZONTAL_REACH_M", "AIRBORNE_REACH_M"),
-                ("AIRCRAFT_FAR_FIELD_THRESHOLD_M", "FARFIELD_M"),
                 ("FT_PER_M", "FT_PER_M"),
                 ("NPD_LUT_BINS", "NPD_NB"),
                 ("NPD_LUT_LOG_MIN", "NPD_LOG_MIN"),
@@ -100,6 +99,7 @@ pub fn compile(output: &Path, arguments: &[String]) -> Vec<std::path::PathBuf> {
         "cruise.cu",
         "airborne_energy.cuh",
         "airborne_screening.cuh",
+        "airborne_chords.cuh",
     ] {
         println!("cargo:rerun-if-changed=kernels/{file}");
     }

@@ -20,11 +20,14 @@ impl RasterSampler for FlatGround {
 /// check that energy folds correctly).
 const ZERO_GSE: [u32; NUM_GSE_CLASSES] = [0, 0, 0];
 
-/// Uniform (non-hybrid) weight LUT — these tests predate the GA
-/// hybrid, so every class weights 1.0 and the GA-split count columns
-/// stay zero (degenerates to the legacy single-window math).
-fn uniform_weights() -> crate::emission::aircraft::ClassWeights {
-    crate::emission::aircraft::ClassWeights::uniform()
+/// `baseline_days` and `increment_days` with fixed day-list hashes.
+fn window(baseline_days: u16, increment_days: u16) -> crate::emission::aircraft::SamplingWindow {
+    crate::emission::aircraft::SamplingWindow {
+        baseline_days,
+        increment_days,
+        baseline_days_sha256: "baseline".into(),
+        increment_days_sha256: "increment".into(),
+    }
 }
 
 fn run_flat(
@@ -35,8 +38,7 @@ fn run_flat(
     run(
         receiver,
         rows,
-        n_days,
-        &uniform_weights(),
+        &window(n_days, 0),
         &FlatGround,
         &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
@@ -61,6 +63,7 @@ fn make_row<'a>(bands: &'a [f32; 8]) -> AirportTrafficRowView<'a> {
         veh_kind: 0,
         class_idx: 2,
         period: 0,
+        secondary_only: false,
         band_energy_lin: bands,
         unique_movement_count: 0,
         unique_arr_count: 0,
@@ -70,9 +73,10 @@ fn make_row<'a>(bands: &'a [f32; 8]) -> AirportTrafficRowView<'a> {
         microseg_unique_arr_count: 0,
         microseg_unique_dep_count: 0,
         microseg_unique_gse_count_per_class: &ZERO_GSE,
-        microseg_unique_ga_count: 0,
-        microseg_unique_ga_arr_count: 0,
-        microseg_unique_ga_dep_count: 0,
+        microseg_unique_secondary_count: 0,
+        microseg_unique_secondary_arr_count: 0,
+        microseg_unique_secondary_dep_count: 0,
+        microseg_unique_secondary_gse_count_per_class: &ZERO_GSE,
     }
 }
 
@@ -102,6 +106,7 @@ fn metadata_populated_with_arr_dep_split_and_profile_mix() {
         veh_kind: 0,
         class_idx: 2,
         period: 0,
+        secondary_only: false,
         band_energy_lin: &bands,
         unique_movement_count: 2,
         unique_arr_count: 2,
@@ -111,9 +116,10 @@ fn metadata_populated_with_arr_dep_split_and_profile_mix() {
         microseg_unique_arr_count: 2,
         microseg_unique_dep_count: 2,
         microseg_unique_gse_count_per_class: &ZERO_GSE,
-        microseg_unique_ga_count: 0,
-        microseg_unique_ga_arr_count: 0,
-        microseg_unique_ga_dep_count: 0,
+        microseg_unique_secondary_count: 0,
+        microseg_unique_secondary_arr_count: 0,
+        microseg_unique_secondary_dep_count: 0,
+        microseg_unique_secondary_gse_count_per_class: &ZERO_GSE,
     };
     let dep_row = AirportTrafficRowView {
         is_departure: 1,
@@ -141,8 +147,7 @@ fn metadata_populated_with_arr_dep_split_and_profile_mix() {
     let out = run(
         &receiver,
         &[arr_row, dep_row],
-        2,
-        &uniform_weights(),
+        &window(2, 0),
         &FlatGround,
         &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
@@ -227,6 +232,7 @@ fn metadata_gse_per_day_populated() {
         veh_kind: 1,
         class_idx: 0,
         period: 0,
+        secondary_only: false,
         band_energy_lin: &bands,
         unique_movement_count: 3,
         unique_arr_count: 0,
@@ -236,9 +242,10 @@ fn metadata_gse_per_day_populated() {
         microseg_unique_arr_count: 0,
         microseg_unique_dep_count: 0,
         microseg_unique_gse_count_per_class: &[3, 0, 0],
-        microseg_unique_ga_count: 0,
-        microseg_unique_ga_arr_count: 0,
-        microseg_unique_ga_dep_count: 0,
+        microseg_unique_secondary_count: 0,
+        microseg_unique_secondary_arr_count: 0,
+        microseg_unique_secondary_dep_count: 0,
+        microseg_unique_secondary_gse_count_per_class: &ZERO_GSE,
     };
     let mut summary: AirportSummaryLookup = HashMap::new();
     summary.insert(
@@ -260,8 +267,7 @@ fn metadata_gse_per_day_populated() {
     let out = run(
         &receiver,
         &[row],
-        2,
-        &uniform_weights(),
+        &window(2, 0),
         &FlatGround,
         &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
@@ -324,119 +330,47 @@ fn zero_energy_skipped() {
     assert!(out.is_empty());
 }
 
-/// Hybrid LUT: GA classes → 365, airline → 12 (consumer divides by 12).
-fn hybrid_weights() -> crate::emission::aircraft::ClassWeights {
-    use crate::emission::aircraft::{is_ga_sampled_class, ClassWeights, NUM_CLASSES};
-    let vec: String = (0..NUM_CLASSES)
-        .map(|c| {
-            if is_ga_sampled_class(c as u8) {
-                "365"
-            } else {
-                "12"
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    ClassWeights::parse(Some(&vec), 12).unwrap()
-}
-
 fn ground_lden(out: &[Contributor]) -> f64 {
     out[0].periods.lden_db
 }
 
-/// GSE rows (`veh_kind == 1`) MUST weight 1.0 even under the hybrid
-/// LUT — their `class_idx` indexes the GSE class space and GSE is an
-/// airline-pass artifact. Same row → identical received Lden under hybrid
-/// vs uniform.
+/// Aircraft and ground-vehicle rows alike: a primary row divides by the
+/// baseline days, a secondary-only row by the increment days, so it reads
+/// 10·log10(baseline / increment) louder than the same primary row.
 #[test]
-fn gse_row_weight_pinned_to_one_under_hybrid() {
+fn secondary_only_ground_rows_divide_by_the_increment_days() {
     let bands: [f32; 8] = [1e6; 8];
-    let mut row = make_row(&bands);
-    row.veh_kind = 1;
-    row.class_idx = 0; // GSE LIGHT
     let receiver = Receiver {
         lat: 50.105,
         lon: 14.255,
         elevation_m: 0.0,
         height_m: 4.0,
     };
-    let uni = run(
-        &receiver,
-        &[row],
-        12,
-        &uniform_weights(),
-        &FlatGround,
-        &crate::propagation::obstacle_index::ObstacleSet::empty(),
-        &HashMap::new(),
-        None,
-        None,
-    );
-    let hyb = run(
-        &receiver,
-        &[row],
-        12,
-        &hybrid_weights(),
-        &FlatGround,
-        &crate::propagation::obstacle_index::ObstacleSet::empty(),
-        &HashMap::new(),
-        None,
-        None,
-    );
-    assert_eq!(uni.len(), 1);
-    assert_eq!(hyb.len(), 1);
-    assert!(
-        (ground_lden(&uni) - ground_lden(&hyb)).abs() < 1e-9,
-        "GSE Lden must be identical under hybrid vs uniform (weight 1.0)"
-    );
-}
-
-/// A GA-class aircraft ground row (`veh_kind == 0`, HELICOPTER) is
-/// weighted 12/365 under the hybrid LUT → its received Lden drops
-/// ~10·log10(365/12) ≈ 14.83 dB vs uniform. The Kytín ground-ops
-/// correction.
-#[test]
-fn ga_aircraft_ground_row_weighted_down() {
-    let bands: [f32; 8] = [1e6; 8];
-    let mut row = make_row(&bands);
-    row.veh_kind = 0;
-    // HELICOPTER class (GA-sampled) — resolve by name so the test
-    // survives a class-index re-sort.
-    row.class_idx =
-        crate::emission::aircraft::noise_class_of(crate::emission::aircraft::profile_idx("R44"));
-    let receiver = Receiver {
-        lat: 50.105,
-        lon: 14.255,
-        elevation_m: 0.0,
-        height_m: 4.0,
+    let lden = |row: AirportTrafficRowView<'_>| {
+        ground_lden(&run(
+            &receiver,
+            &[row],
+            &window(360, 11),
+            &FlatGround,
+            &crate::propagation::obstacle_index::ObstacleSet::empty(),
+            &HashMap::new(),
+            None,
+            None,
+        ))
     };
-    let uni = run(
-        &receiver,
-        &[row],
-        12,
-        &uniform_weights(),
-        &FlatGround,
-        &crate::propagation::obstacle_index::ObstacleSet::empty(),
-        &HashMap::new(),
-        None,
-        None,
-    );
-    let hyb = run(
-        &receiver,
-        &[row],
-        12,
-        &hybrid_weights(),
-        &FlatGround,
-        &crate::propagation::obstacle_index::ObstacleSet::empty(),
-        &HashMap::new(),
-        None,
-        None,
-    );
-    let drop = ground_lden(&uni) - ground_lden(&hyb);
-    let expected = 10.0 * (365.0f64 / 12.0).log10();
-    assert!(
-        (drop - expected).abs() < 0.05,
-        "GA ground Lden drop {drop:.2} dB != {expected:.2} dB"
-    );
+    for (vehicle, class) in [(0, 2), (1, 0)] {
+        let mut row = make_row(&bands);
+        row.veh_kind = vehicle;
+        row.class_idx = class;
+        let primary = lden(row);
+        row.secondary_only = true;
+        let secondary = lden(row);
+        let expected = 10.0 * (360.0f64 / 11.0).log10();
+        assert!(
+            (secondary - primary - expected).abs() < 1e-6,
+            "vehicle {vehicle}: secondary {secondary:.3} vs primary {primary:.3} dB"
+        );
+    }
 }
 
 /// Guard against `A_WEIGHT_LIN` drifting out of sync with
@@ -556,8 +490,7 @@ fn osm_ref_lookup_renames_runway_segment_trace() {
     run(
         &receiver,
         &[row],
-        1,
-        &uniform_weights(),
+        &window(1, 0),
         &FlatGround,
         &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &lookup,
@@ -592,8 +525,7 @@ fn osm_ref_lookup_renames_taxi_segment_trace() {
     run(
         &receiver,
         &[row],
-        1,
-        &uniform_weights(),
+        &window(1, 0),
         &FlatGround,
         &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &lookup,
@@ -626,8 +558,7 @@ fn osm_ref_lookup_missing_keeps_generic_label() {
     run(
         &receiver,
         &[row],
-        1,
-        &uniform_weights(),
+        &window(1, 0),
         &FlatGround,
         &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &empty,
@@ -721,6 +652,7 @@ fn make_path_effect_row<'a>(bands: &'a [f32; 8]) -> AirportTrafficRowView<'a> {
         veh_kind: 0,
         class_idx: 2,
         period: 0,
+        secondary_only: false,
         band_energy_lin: bands,
         unique_movement_count: 0,
         unique_arr_count: 0,
@@ -730,9 +662,10 @@ fn make_path_effect_row<'a>(bands: &'a [f32; 8]) -> AirportTrafficRowView<'a> {
         microseg_unique_arr_count: 0,
         microseg_unique_dep_count: 0,
         microseg_unique_gse_count_per_class: &ZERO_GSE,
-        microseg_unique_ga_count: 0,
-        microseg_unique_ga_arr_count: 0,
-        microseg_unique_ga_dep_count: 0,
+        microseg_unique_secondary_count: 0,
+        microseg_unique_secondary_arr_count: 0,
+        microseg_unique_secondary_dep_count: 0,
+        microseg_unique_secondary_gse_count_per_class: &ZERO_GSE,
     }
 }
 
@@ -782,8 +715,7 @@ fn terrain_path_effect_engages_max_rule() {
     let out = run(
         &pe_receiver(),
         &[row],
-        1,
-        &uniform_weights(),
+        &window(1, 0),
         &rasters,
         &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
@@ -840,8 +772,7 @@ fn screening_path_effect_engages_max_rule() {
     let out = run(
         &pe_receiver(),
         &[row],
-        1,
-        &uniform_weights(),
+        &window(1, 0),
         &rasters,
         &obstacles,
         &HashMap::new(),
@@ -890,8 +821,7 @@ fn max_rule_not_sum_rule() {
     let out = run(
         &pe_receiver(),
         &[row],
-        1,
-        &uniform_weights(),
+        &window(1, 0),
         &rasters,
         &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),
@@ -938,8 +868,7 @@ fn ground_only_when_no_obstacle() {
     let out = run(
         &pe_receiver(),
         &[row],
-        1,
-        &uniform_weights(),
+        &window(1, 0),
         &rasters,
         &crate::propagation::obstacle_index::ObstacleSet::empty(),
         &HashMap::new(),

@@ -38,7 +38,7 @@ pub(super) fn ground_pt(ts: f64, lat: f32, lon: f32, speed: f32) -> TracePoint {
         speed_kt: speed,
         track_deg: 0.0,
         baro_rate_fpm: 0.0,
-        flags: crate::trace::FLAG_ON_GROUND_RAW | crate::trace::FLAG_ALT_IS_GROUND,
+        flags: crate::trace::FLAG_ALT_IS_GROUND,
     }
 }
 
@@ -183,7 +183,7 @@ fn build_segments_flare_keeps_airborne_alt() {
     // airborne validator doesn't reject the segment for "start
     // altitude below terrain".
     let mut ground = pt(10.0, 50.001, 14.0, 0.0, 130.0, 0.0);
-    ground.flags = crate::trace::FLAG_ALT_IS_GROUND | crate::trace::FLAG_ON_GROUND_RAW;
+    ground.flags = crate::trace::FLAG_ALT_IS_GROUND;
     let points = vec![pt(0.0, 50.0, 14.0, 1_300.0, 130.0, 0.0), ground];
     let phases = vec![Phase::Airborne, Phase::Ground];
     let agl = vec![100.0, 0.0];
@@ -274,26 +274,34 @@ fn cruise_ground_holes_never_become_ground_or_cruise_chords() {
     }
 }
 
+/// readsb column 6 bit 0 marks a stale position, not ground: slow airborne
+/// points carrying it must neither be ground nor end a rotation. Only a
+/// surface report (`alt = "ground"`) rests the aircraft.
 #[test]
-fn cruise_ground_bit_cannot_split_one_flight_into_two_rotations() {
-    let mut points: Vec<_> = (0..6)
-        .map(|i| {
-            pt(
-                i as f64 * 100.0,
-                50.0,
-                14.0 + i as f32 * 0.01,
-                35_000.0,
-                450.0,
-                90.0,
-            )
-        })
-        .collect();
-    for p in &mut points[1..5] {
-        p.flags = crate::trace::FLAG_ON_GROUND_RAW;
-    }
+fn stale_position_bit_is_not_ground_and_cannot_split_a_flight() {
+    let json = r#"{"icao":"49c083","t":"C172","timestamp":0,"trace":[
+            [0,50.0,14.0,2000.0,90.0,90.0,0,0],
+            [100,50.0,14.01,2000.0,90.0,90.0,1,0],
+            [200,50.0,14.02,2000.0,90.0,90.0,1,0],
+            [300,50.0,14.03,2000.0,90.0,90.0,1,0],
+            [400,50.0,14.04,2000.0,90.0,90.0,1,0],
+            [500,50.0,14.05,2000.0,90.0,90.0,0,0]
+        ]}"#;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, json.as_bytes()).unwrap();
+    let trace = crate::trace::parse_trace(encoder.finish().unwrap().as_slice())
+        .unwrap()
+        .unwrap();
+    let mut points = trace.points;
+    assert!(points.iter().all(|p| p.flags == 0));
+    let agl_m = vec![600.0; points.len()];
+    assert!(!crate::ground_inference::ground_flags(&points, &agl_m)
+        .iter()
+        .any(|g| *g));
     assert_eq!(split_flights(&points), vec![0..6]);
     for p in &mut points[1..5] {
-        p.alt_ft = 13_325.0;
+        p.alt_ft = f32::NAN;
+        p.flags = crate::trace::FLAG_ALT_IS_GROUND;
         p.speed_kt = 5.0;
     }
     assert_eq!(split_flights(&points), vec![0..5]);

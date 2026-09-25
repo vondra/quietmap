@@ -3,7 +3,7 @@ use super::*;
 
 pub(crate) struct AirportSummaryPartRow {
     pub airport_key: String,
-    pub members: Vec<(u64, u16)>,
+    pub members: Vec<(u64, u32)>,
 }
 
 pub(super) fn write_airport_summary_parts(

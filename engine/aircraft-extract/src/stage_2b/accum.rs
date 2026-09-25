@@ -10,6 +10,8 @@ pub(super) struct CruiseKey {
     pub(super) fl_bin: u8,
     pub(super) period: u8,
     pub(super) heading_bin: u8,
+    /// Secondary-only transits accumulate apart: they carry the increment weight.
+    pub(super) secondary_only: bool,
 }
 
 /// Per-bucket worker accumulator (v14). `fid_set` tracks the full
@@ -207,6 +209,7 @@ impl CruiseAccum {
             top_candidates,
             source_id: self.source_id,
             origin: self.origin,
+            secondary_only: key.secondary_only,
         }
     }
 }

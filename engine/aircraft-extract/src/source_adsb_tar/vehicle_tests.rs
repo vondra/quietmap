@@ -36,7 +36,7 @@ fn gnd_typecode_routes_to_gse_with_class_from_callsign() {
             value: "POZAR4".into(),
         }],
     };
-    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, ClassWindowFilter::All);
+    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE);
     assert_eq!(flights.len(), 1);
     let f = &flights[0];
     assert_eq!(f.veh_kind, 1, "GND typecode should route to GSE");
@@ -84,7 +84,7 @@ fn lowercase_gnd_routes_to_gse() {
             value: "FOLLOWME".into(),
         }],
     };
-    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, ClassWindowFilter::All);
+    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE);
     assert_eq!(
         flights.len(),
         1,
@@ -128,7 +128,7 @@ fn twr_typecode_still_drops() {
         points: pts,
         callsigns: Vec::new(),
     };
-    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, ClassWindowFilter::All);
+    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE);
     assert!(
         flights.is_empty(),
         "TWR transponders carry no acoustic signal"
@@ -170,7 +170,7 @@ fn glider_typecodes_drop_blank_stays() {
             callsigns: Vec::new(),
         };
         assert!(
-            trace_to_flight(tr, source_id::ADSB_LOL_TAR, ClassWindowFilter::All).is_empty(),
+            trace_to_flight(tr, source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE).is_empty(),
             "{glider} is a sailplane — must be dropped at Stage 0"
         );
     }
@@ -182,7 +182,7 @@ fn glider_typecodes_drop_blank_stays() {
         points: pts(),
         callsigns: Vec::new(),
     };
-    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, ClassWindowFilter::All);
+    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE);
     assert_eq!(flights.len(), 1, "blank typecode must NOT be dropped");
     assert_eq!(flights[0].profile_idx, profile::FALLBACK_PROFILE_IDX);
 }
@@ -221,7 +221,7 @@ fn aircraft_typecode_stays_veh_kind_zero() {
             value: "TVS100P".into(),
         }],
     };
-    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, ClassWindowFilter::All);
+    let flights = trace_to_flight(tr, source_id::ADSB_LOL_TAR, source_id::ADSB_EXCHANGE);
     assert_eq!(flights.len(), 1);
     assert_eq!(flights[0].veh_kind, 0);
     assert_eq!(flights[0].gse_class, 0);
@@ -231,7 +231,8 @@ fn aircraft_typecode_stays_veh_kind_zero() {
 fn absent_day_is_an_input_failure_not_a_zero_traffic_day() {
     let dir = tempfile::tempdir().unwrap();
     let source = AdsbTarSource::new(dir.path());
-    assert!(source.read_day("2025-01-01").is_err());
+    assert!(!source.has_day("2025-01-01"));
+    assert!(source.read_provider_day("2025-01-01").is_err());
     std::fs::create_dir_all(dir.path().join("2025/2025-01-01")).unwrap();
-    assert!(source.read_day("2025-01-01").is_err());
+    assert!(source.read_provider_day("2025-01-01").is_err());
 }

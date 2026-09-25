@@ -1,7 +1,6 @@
-//! Parser, prefix probe, and complete TAR regression fixtures.
+//! Parser and complete TAR regression fixtures.
 
 use super::archive::ConcatReader;
-use super::typecode_probe::*;
 use super::*;
 use flate2::{write::GzEncoder, Compression};
 use std::io::BufReader;
@@ -23,23 +22,10 @@ fn parses_ground_altitude_marker() {
     let t = parse_trace(raw.as_slice()).unwrap().unwrap();
     assert_eq!(t.points.len(), 2);
     assert!(t.points[0].alt_is_ground());
-    assert!(t.points[0].on_ground_raw()); // implied by alt_is_ground
     assert!(t.points[0].alt_ft.is_nan());
     assert!(t.points[0].airborne_alt_ft().is_none());
     assert!(!t.points[1].alt_is_ground());
     assert_eq!(t.points[1].alt_ft, 600.0);
-}
-
-#[test]
-fn parses_bitfield_on_ground() {
-    let raw = gz(r#"{"icao":"49c083","t":"WT9","timestamp":2000,"trace":[
-            [10,50.0,14.0,300.0,40.0,90.0,1,0],
-            [20,50.001,14.001,400.0,60.0,120.0,0,0]
-        ]}"#);
-    let t = parse_trace(raw.as_slice()).unwrap().unwrap();
-    assert!(t.points[0].on_ground_raw());
-    assert!(!t.points[0].alt_is_ground());
-    assert!(!t.points[1].on_ground_raw());
 }
 
 #[test]
@@ -111,63 +97,6 @@ fn trace_json(icao: &str, typecode_field: &str) -> String {
     )
 }
 
-#[test]
-fn scan_json_typecode_fixtures() {
-    assert_eq!(
-        scan_json_typecode(br#"{"metadata":{"t":"B738"},"t":"C172"}"#),
-        Some("C172".into())
-    );
-    assert_eq!(scan_json_typecode(br#"{"metadata":{"t":"B738"}}"#), None);
-    // Normal compact readsb form.
-    assert_eq!(
-        scan_json_typecode(br#"{"icao":"a","r":"OK-ABC","t":"B738","trace":[]}"#),
-        Some("B738".to_string())
-    );
-    // Pretty-printed: whitespace around the colon + newlines.
-    assert_eq!(
-        scan_json_typecode(b"{\n  \"icao\": \"b\",\n  \"t\" : \"C172\",\n}"),
-        Some("C172".to_string())
-    );
-    // Empty string value is a valid HIT (blank typecode = FALLBACK).
-    assert_eq!(scan_json_typecode(br#"{"t":""}"#), Some(String::new()));
-    // No "t" key at all (noRegData TIS-B shape) → miss.
-    assert_eq!(
-        scan_json_typecode(br#"{"icao":"c","noRegData":true}"#),
-        None
-    );
-    // Non-string value → miss (full parse decides).
-    assert_eq!(scan_json_typecode(br#"{"t":null}"#), None);
-    // Value cut off by the probe window → miss, NOT a partial hit.
-    assert_eq!(scan_json_typecode(br#"{"icao":"d","t":"C17"#), None);
-    // `"t"` as a string VALUE (not a key) must not match; the real
-    // key later in the buffer still hits.
-    assert_eq!(
-        scan_json_typecode(br#"{"r":"t","t":"R44"}"#),
-        Some("R44".to_string())
-    );
-    // Escaped quotes inside an earlier value can't false-match.
-    assert_eq!(
-        scan_json_typecode(br#"{"desc":"say \"t\": hi","t":"EC35"}"#),
-        Some("EC35".to_string())
-    );
-}
-
-#[test]
-fn probe_typecode_prefix_inflates_only_the_window() {
-    // "t" within the first 512 decompressed bytes → hit.
-    let early = gz(&trace_json("aaa111", r#""t":"B738","#));
-    assert_eq!(probe_typecode_prefix(&early), Some("B738".to_string()));
-    // "t" pushed past the probe window by a long desc → miss.
-    let pad = "x".repeat(TYPECODE_PROBE_DECOMPRESSED_BYTES + 64);
-    let late = gz(&trace_json(
-        "bbb222",
-        &format!(r#""desc":"{pad}","t":"C172","#),
-    ));
-    assert_eq!(probe_typecode_prefix(&late), None);
-    // Not gzip at all → miss (full parse path decides).
-    assert_eq!(probe_typecode_prefix(b"plain bytes, not gzip"), None);
-}
-
 pub(super) fn day_dir_with_tar(entries: &[(&str, &[u8])]) -> tempfile::TempDir {
     let tmp = tempfile::tempdir().unwrap();
     let file = std::fs::File::create(tmp.path().join("subset.tar")).unwrap();
@@ -183,55 +112,6 @@ pub(super) fn day_dir_with_tar(entries: &[(&str, &[u8])]) -> tempfile::TempDir {
     tmp
 }
 
-/// End-to-end probe semantics:
-/// probe hits skip rejected traces pre-parse; probe misses (late
-/// `"t"`, absent `"t"`) ALWAYS full-parse and are filtered on the
-/// parsed typecode — a trace is never classified by absence.
-#[test]
-fn prefilter_skips_on_hit_and_full_parses_on_miss() {
-    let b738 = gz(&trace_json("aaa111", r#""t":"B738","#));
-    let c172_pretty = gz(
-        "{\n  \"icao\": \"bbb222\",\n  \"t\": \"C172\",\n  \"timestamp\": 1000,\n  \"trace\": [\n    [10,50.0,14.0,1000.0,250.0,90.0,0,0],\n    [20,50.001,14.001,1100.0,250.0,90.0,0,0]\n  ]\n}",
-    );
-    let pad = "x".repeat(TYPECODE_PROBE_DECOMPRESSED_BYTES + 64);
-    let c172_late = gz(&trace_json(
-        "ccc333",
-        &format!(r#""desc":"{pad}","t":"C172","#),
-    ));
-    let no_typecode = gz(&trace_json("ddd444", ""));
-    let dir = day_dir_with_tar(&[
-        ("traces/11/trace_full_aaa111.json", b738.as_slice()),
-        ("traces/22/trace_full_bbb222.json", c172_pretty.as_slice()),
-        ("traces/33/trace_full_ccc333.json", c172_late.as_slice()),
-        ("traces/44/trace_full_ddd444.json", no_typecode.as_slice()),
-    ]);
-    let keep_ga = |tc: &str| tc == "C172";
-    let (traces, stats) = read_day_traces_filtered(dir.path(), Some(&keep_ga)).unwrap();
-    let mut kept: Vec<&str> = traces.iter().map(|t| t.icao24.as_str()).collect();
-    kept.sort_unstable();
-    assert_eq!(
-        kept,
-        ["bbb222", "ccc333"],
-        "early + late C172 kept; B738 skipped; blank filtered post-parse"
-    );
-    assert!(traces.iter().all(|t| t.aircraft_type == "C172"));
-    assert_eq!(stats.probe_hits, 2, "B738 + pretty C172");
-    assert_eq!(
-        stats.skipped_pre_parse, 1,
-        "B738 dropped without full parse"
-    );
-    assert_eq!(
-        stats.probe_misses, 2,
-        "late-t + no-t fell back to full parse"
-    );
-
-    // Without a prefilter the same tar yields every trace and zero
-    // probe activity — the default path is untouched.
-    let (all, no_stats) = read_day_traces_filtered(dir.path(), None).unwrap();
-    assert_eq!(all.len(), 4);
-    assert_eq!(no_stats, TypecodeProbeStats::default());
-}
-
 /// Smoke test against real cached data when available — proves the
 /// parser handles the actual adsb.lol layout, not just synthetic
 /// fixtures. Skips unless QM_FLIGHTS_CACHE points at a radius cache root
@@ -245,7 +125,7 @@ fn smoke_real_praha_cache() {
     if !day.exists() {
         return;
     }
-    let traces = read_day_traces(&day).unwrap();
+    let traces = read_day_archive(&day).unwrap().traces;
     assert!(traces.len() > 100, "got only {} traces", traces.len());
     let total_pts: usize = traces.iter().map(|t| t.points.len()).sum();
     assert!(total_pts > 50_000, "got only {total_pts} pts");
@@ -262,15 +142,30 @@ fn smoke_real_praha_cache() {
     );
 }
 
+/// A broken archive fails the day; a corrupt trace member is recorded, and
+/// it counts as recovered only when another export holds that address.
 #[test]
-fn incomplete_archives_and_corrupt_traces_fail_loudly() {
+fn incomplete_archives_fail_loudly_and_corrupt_members_are_receipted() {
     let empty = tempfile::tempdir().unwrap();
-    assert!(read_day_traces(empty.path()).is_err());
-    let bad = day_dir_with_tar(&[("trace_full_bad.json", b"corrupt gzip")]);
-    assert!(read_day_traces(bad.path()).is_err());
+    assert!(read_day_archive(empty.path()).is_err());
+    let bad = day_dir_with_tar(&[("traces/bc/trace_full_abc123.json", b"corrupt gzip")]);
+    let read = read_day_archive(bad.path()).unwrap();
+    assert!(read.traces.is_empty());
+    assert_eq!(read.corrupt_members.len(), 1);
+    assert!(!read.corrupt_members[0].recovered);
     let json = gz(&trace_json("abc123", ""));
+    std::fs::copy(
+        day_dir_with_tar(&[("traces/bc/trace_full_abc123.json", &json)])
+            .path()
+            .join("subset.tar"),
+        bad.path().join("intact.tar"),
+    )
+    .unwrap();
+    let read = read_day_archive(bad.path()).unwrap();
+    assert_eq!(read.traces.len(), 1);
+    assert!(read.corrupt_members[0].recovered);
     let valid = day_dir_with_tar(&[("trace_full_abc123.json.gz", &json)]);
-    assert_eq!(read_day_traces(valid.path()).unwrap().len(), 1);
+    assert_eq!(read_day_archive(valid.path()).unwrap().traces.len(), 1);
     let path = valid.path().join("subset.tar");
     let bytes = std::fs::read(&path).unwrap();
     std::fs::remove_file(&path).unwrap();
@@ -278,7 +173,7 @@ fn incomplete_archives_and_corrupt_traces_fail_loudly() {
     std::fs::write(valid.path().join("subset.tar.aa"), &bytes[..cut]).unwrap();
     std::fs::write(valid.path().join("subset.tar.ac"), &bytes[cut..]).unwrap();
     assert!(
-        read_day_traces(valid.path()).is_err(),
+        read_day_archive(valid.path()).is_err(),
         "missing middle split part"
     );
     std::fs::rename(
@@ -286,13 +181,13 @@ fn incomplete_archives_and_corrupt_traces_fail_loudly() {
         valid.path().join("subset.tar.ab"),
     )
     .unwrap();
-    assert_eq!(read_day_traces(valid.path()).unwrap().len(), 1);
+    assert_eq!(read_day_archive(valid.path()).unwrap().traces.len(), 1);
     std::fs::write(
         valid.path().join("subset.tar.ab"),
         &bytes[cut..bytes.len() - 1],
     )
     .unwrap();
-    assert!(read_day_traces(valid.path()).is_err(), "truncated stream");
+    assert!(read_day_archive(valid.path()).is_err(), "truncated stream");
 }
 
 #[test]
@@ -300,5 +195,5 @@ fn identical_trace_exports_are_selected_once() {
     let json = gz(&trace_json("abc123", ""));
     let dir = day_dir_with_tar(&[("trace_full_abc123.json", &json)]);
     std::fs::copy(dir.path().join("subset.tar"), dir.path().join("second.tar")).unwrap();
-    assert_eq!(read_day_traces(dir.path()).unwrap().len(), 1);
+    assert_eq!(read_day_archive(dir.path()).unwrap().traces.len(), 1);
 }

@@ -19,7 +19,7 @@ fn flatten(rows: &[FlightSegment]) -> Vec<(u64, u8, i16, f32, i16)> {
         rows,
     )
     .unwrap();
-    let written = run_stage_2a(&by_square, &prepared_year, 1, 0, None).unwrap();
+    let written = run_stage_2a(&by_square, &prepared_year, &crate::provider_receipt::window_of(1, 0), None).unwrap();
     let out = prepared_year
         .join(square_path(square))
         .join("airborne.arrow");
@@ -140,7 +140,7 @@ fn stage_2a_refuses_shards_without_the_owner_stamp() {
         &[seg(1, 50.10, 14.26)],
     )
     .unwrap();
-    let error = run_stage_2a(&by_square, &prepared_year, 1, 0, None).unwrap_err();
+    let error = run_stage_2a(&by_square, &prepared_year, &crate::provider_receipt::window_of(1, 0), None).unwrap_err();
     assert!(format!("{error:#}").contains("rerun shuffle"), "{error:#}");
     assert!(
         stale.exists(),
@@ -163,7 +163,7 @@ fn stage_2a_refuses_rows_longer_than_the_length_cap() {
         &[long],
     )
     .unwrap();
-    let error = run_stage_2a(&by_square, &prepared_year, 1, 0, None).unwrap_err();
+    let error = run_stage_2a(&by_square, &prepared_year, &crate::provider_receipt::window_of(1, 0), None).unwrap_err();
     assert!(
         format!("{error:#}").contains("longer than the 4000 m cap"),
         "{error:#}"
@@ -184,7 +184,7 @@ fn written_rows_keep_length_and_altitude() {
     )
     .unwrap();
     assert_eq!(
-        run_stage_2a(&by_square, &prepared_year, 3, 12, None).unwrap(),
+        run_stage_2a(&by_square, &prepared_year, &crate::provider_receipt::window_of(3, 12), None).unwrap(),
         1
     );
     let (schema, batches) = read_record_batches(
@@ -193,8 +193,9 @@ fn written_rows_keep_length_and_altitude() {
             .join("airborne.arrow"),
     )
     .unwrap();
-    assert_eq!(schema.metadata().get("n_days").unwrap(), "3");
-    assert_eq!(schema.metadata().get("ga_n_days").unwrap(), "12");
+    let window = noise_compute::emission::aircraft::SamplingWindow::from_metadata(schema.metadata())
+        .unwrap();
+    assert_eq!(window, crate::provider_receipt::window_of(3, 12));
     let length = batches[0]
         .column_by_name("length_m")
         .unwrap()
@@ -231,7 +232,7 @@ fn run_stage_2a_wipes_in_scope_stale_airborne() {
     std::fs::write(&stale, b"stale-prev-run").unwrap();
     std::fs::create_dir_all(&by_square).unwrap();
     let scope = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
-    let n = run_stage_2a(&by_square, &prepared_year, 1, 0, Some(&scope)).unwrap();
+    let n = run_stage_2a(&by_square, &prepared_year, &crate::provider_receipt::window_of(1, 0), Some(&scope)).unwrap();
     assert_eq!(n, 0, "no z9 shards → no z9 written");
     assert!(
         !stale.exists(),
@@ -254,7 +255,7 @@ fn run_stage_2a_leaves_out_of_scope_stale_airborne() {
     std::fs::write(&stale, b"stale-prev-run").unwrap();
     std::fs::create_dir_all(&by_square).unwrap();
     let praha = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
-    let _ = run_stage_2a(&by_square, &prepared_year, 1, 0, Some(&praha)).unwrap();
+    let _ = run_stage_2a(&by_square, &prepared_year, &crate::provider_receipt::window_of(1, 0), Some(&praha)).unwrap();
     assert!(
         stale.exists(),
         "out-of-scope z9 airborne.arrow must survive a scoped reextract"

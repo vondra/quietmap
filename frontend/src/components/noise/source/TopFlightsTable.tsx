@@ -33,7 +33,7 @@ export function TopFlightsTable({ flights, detailed }: { flights: AircraftTopFli
               {detailed ? <HoverText title={`Date & period\n\n${PERIOD_TOOLTIP}`}>Date</HoverText> : 'Date'}
             </th>
             <th className="text-right">
-              {detailed ? <HoverText title={"Aircraft type + identity. Cell shows the 4-letter ICAO designator (B738, A320, …) or 'Average NPD' if no real typecode was carried in ADS-B. Click to open the flight trace on its source network's globe (adsb.lol for GA/heli, adsbexchange for airliners)."}>Aircraft</HoverText> : 'Aircraft'}
+              {detailed ? <HoverText title={"Aircraft type + identity. Cell shows the 4-letter ICAO designator (B738, A320, …) or 'Average NPD' if no real typecode was carried in ADS-B. Click to open the flight trace on the adsb.lol globe."}>Aircraft</HoverText> : 'Aircraft'}
             </th>
             <th className="text-right">
               {detailed ? <HoverText title={"Energy share (%)\n\nThis flight's contribution to total airborne Lden energy.\n100% = this single flight causes all airborne noise.\nEnergy is in linear (not dB) scale, so a flight with 90%\ndominates even if other flights have similar Lmax."}>%</HoverText> : '%'}
@@ -76,7 +76,7 @@ export function TopFlightsTable({ flights, detailed }: { flights: AircraftTopFli
               ? unixToIsoDate(f.start_unix)
               : f.date
             const globeHref = icaoHex && !isSynth && traceDate
-              ? adsbTraceHref(icaoHex, traceDate, { typecode: rawTypecode })
+              ? adsbTraceHref(icaoHex, traceDate)
               : null
             return (
               <tr key={i} className="[&_td]:text-right">

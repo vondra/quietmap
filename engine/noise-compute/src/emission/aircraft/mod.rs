@@ -30,11 +30,14 @@
 //! * [`segment_sel`] — single-shot per-segment SEL wrappers (popup +
 //!   tests).
 //! * [`support`] — the periodic receiver envelope every airborne gate shares.
+//! * [`sampling_window`] — baseline/increment day stamps and the two-entry
+//!   provenance weight every aircraft consumer applies.
 
 mod doc29;
 mod ground_ops;
 mod horizon;
 mod npd;
+mod sampling_window;
 mod screening;
 mod screening_bounds;
 mod segment_filters;
@@ -45,6 +48,7 @@ pub use doc29::*;
 pub(crate) use ground_ops::*;
 pub use horizon::*;
 pub use npd::*;
+pub use sampling_window::*;
 pub use screening::*;
 pub use screening_bounds::*;
 pub use segment_filters::*;

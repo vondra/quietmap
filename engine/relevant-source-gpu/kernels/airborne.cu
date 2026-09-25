@@ -1,4 +1,4 @@
-// Screened independent airborne rows at explicit receivers; split chord families stay in the CPU kernel.
+// Screened independent events and split chords at explicit receivers.
 #include <cuda_runtime.h>
 #include <cmath>
 #include "airborne_defines.cuh"
@@ -6,8 +6,8 @@
 
 struct AirborneSource {
     float endpoints[4]; // start lat/lon, end lat/lon at prepared f32 precision
-    float physical[12];
-    int identity[4]; // installation, class, departure, period
+    float physical[11];
+    int identity[5]; // installation, class, departure, period, secondary-only provenance
 };
 struct AirborneReceiver {
     double latitude, longitude, metres_per_longitude_degree;
@@ -17,7 +17,8 @@ struct AirborneReceiver {
 static_assert(sizeof(AirborneSource) == 80);
 static_assert(sizeof(AirborneReceiver) == 32);
 
-__device__ bool airborne_row_in_envelope(const AirborneSource& source, const AirborneReceiver& rx) {
+template<typename Source>
+__device__ bool airborne_row_in_envelope(const Source& source, const AirborneReceiver& rx) {
     float south = (float)(rx.latitude - AIRBORNE_REACH_M / MLAT);
     float north = (float)(rx.latitude + AIRBORNE_REACH_M / MLAT);
     if (fmaxf(source.endpoints[0], source.endpoints[2]) < south ||
@@ -80,9 +81,9 @@ __global__ void airborne_independent_parts(
         float screen_geometry[7];
         airborne_screen_geometry(source, rx, screen_geometry);
         if (aircraft_sel<float, true>(ax, ay, dx, source.physical, source.identity[1], source.identity[2],
-                         source.identity[0], rx.altitude, npd, npd + NPD_NC * (NPD_NB + 1),
+                         source.identity[0], rx.altitude, npd, npd + 2 * NPD_NC * (NPD_NB + 1),
                          receiver, screen, screen_geometry, &sel)) {
-            energy[source.identity[3]] += aircraft_fast_exp(sel * (float)LN10 * 0.1f) * weights[source.identity[1]];
+            energy[source.identity[3]] += aircraft_fast_exp(sel * (float)LN10 * 0.1f) * weights[source.identity[4]];
         }
     }
     for (int period = 0; period < 3; period++) sums[period][threadIdx.x] = energy[period];
@@ -123,3 +124,5 @@ extern "C" int relevant_source_cuda_airborne(
     airborne_independent_reduce<<<(receiver_count * 3 + 255) / 256, 256>>>(partial, receiver_count, parts, days, output);
     return cudaGetLastError();
 }
+
+#include "airborne_chords.cuh"

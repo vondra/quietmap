@@ -36,7 +36,8 @@ impl Phase {
 /// 3–5 mark the pieces of a split airborne chord (`segment::split`): every
 /// piece carries `SPLIT_PIECE`, the first also `CHORD_START`, the last also
 /// `CHORD_END`; consecutive pieces share their stored endpoint exactly, so
-/// the popup chains them back into one chord.
+/// the popup chains them back into one chord. Bit 6 marks a segment that
+/// touches a secondary-provider sample (normalised by the increment days).
 pub mod segment_flags {
     pub const IS_DEPARTURE: u8 = 1 << 0;
     pub const ON_GROUND: u8 = 1 << 1;
@@ -44,6 +45,8 @@ pub mod segment_flags {
     pub const SPLIT_PIECE: u8 = 1 << 3;
     pub const CHORD_START: u8 = 1 << 4;
     pub const CHORD_END: u8 = 1 << 5;
+    pub const SECONDARY_ONLY: u8 =
+        noise_compute::emission::aircraft::SEGMENT_FLAG_SECONDARY_ONLY;
 }
 
 /// Pack a variable-width ICAO typecode (`"A320"`, `"B738"`, `"PC12"`,
@@ -154,6 +157,9 @@ impl FlightSegment {
     pub fn is_on_ground(&self) -> bool {
         self.flags & segment_flags::ON_GROUND != 0
     }
+    pub fn is_secondary_only(&self) -> bool {
+        self.flags & segment_flags::SECONDARY_ONLY != 0
+    }
 }
 
 #[cfg(test)]
@@ -224,6 +230,8 @@ pub struct CruiseBucket {
     pub top_candidates: Vec<CruiseTopCandidate>,
     pub source_id: u8,
     pub origin: u8,
+    /// Every transit of the bucket touches a secondary-provider sample.
+    pub secondary_only: bool,
 }
 
 /// FL bins — five buckets covering the cruise altitude range. Tracks

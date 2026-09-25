@@ -116,8 +116,9 @@ def build_plan(config, output, scratch):
              '--prepared-dir', str(year), '--emodnet-dir', str(sources['ships']), '--gfw-dir', str(sources['ships_gfw']))),
         Step('roads-finalize', ('roads',), (str(REPO / 'engine/target/release/roads-finalize'), str(year))),
         Step('aircraft', ('osm',), ('bash', str(scripts / 'run-aircraft-extract.sh')), 2,
-             (('HYBRID', '1'), ('AIRLINE_FEED', 'adsbexchange'), ('AIRCRAFT_ANCHOR', settings['aircraft_anchor']),
-              ('AIRLINE_CACHE', str(sources['airline'])), ('GA_CACHE', str(sources['general_aviation'])),
+             (('AIRCRAFT_ANCHOR', settings['aircraft_anchor']),
+              ('ADSB_CACHE', str(sources['aircraft_primary'])),
+              ('SECONDARY_ADSB_CACHE', str(sources['aircraft_secondary'])),
               ('PREPARED_YEAR_DIR', str(year)), ('PREPARED_DIR', str(year)),
               ('WORK_DIR', str(scratch / 'aircraft')), ('LOG_DIR', str(output / 'aircraft-logs')),
               ('MEMMAX', ''), ('MAX_THREADS', str(settings['threads'])))),
@@ -273,7 +274,7 @@ def main():
         # window cannot be judged from the pin; admit the exact days read-only before
         # pinning, directory creation or any producer can start.
         admitted = preflight_aircraft_sources(
-            sources['airline'], sources['general_aviation'], settings['aircraft_anchor'])
+            sources['aircraft_primary'], sources['aircraft_secondary'], settings['aircraft_anchor'])
         print(json.dumps({'step': 'aircraft-preflight', **admitted}), flush=True)
     output.mkdir(parents=True, exist_ok=True)
     scratch.mkdir(parents=True, exist_ok=True)

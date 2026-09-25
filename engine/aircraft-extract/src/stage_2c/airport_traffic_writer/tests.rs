@@ -21,7 +21,7 @@ fn run_airport_traffic_empty_segments_writes_nothing() {
     std::fs::create_dir_all(&by_square).unwrap();
     std::fs::create_dir_all(&prepared_year).unwrap();
     let n =
-        run_airport_traffic(&by_square, &[], &prepared_year, &prepared_year, 14, 0, None).unwrap();
+        run_airport_traffic(&by_square, &[], &prepared_year, &prepared_year, &crate::provider_receipt::window_of(14, 0), None).unwrap();
     assert_eq!(n, 0);
 }
 
@@ -237,9 +237,10 @@ fn counter_row_order_uses_every_identity_field_independently_of_hash_order() {
         veh_kind: 0,
         class_idx: 0,
         period: 0,
+        secondary_only: false,
     };
     let mut keys = vec![base.clone()];
-    for field in 0..8 {
+    for field in 0..9 {
         let mut key = base.clone();
         match field {
             0 => key.airport_key = "B".into(),
@@ -249,7 +250,8 @@ fn counter_row_order_uses_every_identity_field_independently_of_hash_order() {
             4 => key.is_departure += 1,
             5 => key.veh_kind += 1,
             6 => key.class_idx += 1,
-            _ => key.period += 1,
+            7 => key.period += 1,
+            _ => key.secondary_only = true,
         }
         keys.push(key);
     }
@@ -263,6 +265,7 @@ fn counter_row_order_uses_every_identity_field_independently_of_hash_order() {
         veh_kind: row.veh_kind,
         class_idx: row.class_idx,
         period: row.period,
+        secondary_only: row.secondary_only,
     };
     for reverse in [false, true] {
         let mut insertion = keys.clone();
@@ -284,9 +287,10 @@ fn counter_row_order_uses_every_identity_field_independently_of_hash_order() {
             .collect();
         let rows = counters_to_rows(counters, &HashMap::new());
         assert!(rows.iter().map(projection).eq(keys.iter().cloned()));
-        assert!(rows
-            .iter()
-            .all(|r| r.band_energy_lin == [3.0; NUM_BANDS] && r.unique_movement_count == 2));
+        // The secondary twin of `base` holds only movements `base` already
+        // counts, so it adds none.
+        assert!(rows.iter().all(|r| r.band_energy_lin == [3.0; NUM_BANDS]
+            && r.unique_movement_count == if r.secondary_only { 0 } else { 2 }));
     }
 }
 

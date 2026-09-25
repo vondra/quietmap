@@ -46,7 +46,7 @@ pub fn census_cruise_inputs(paths: &[PathBuf], output: &Path) -> Result<()> {
         CREATE TABLE census(expected_inputs INTEGER NOT NULL, completed_inputs INTEGER NOT NULL);
         CREATE TABLE allocation_facts(name TEXT PRIMARY KEY, bytes INTEGER NOT NULL);
         CREATE TABLE inputs(path TEXT PRIMARY KEY, stat_identity TEXT NOT NULL, file_bytes INTEGER NOT NULL,
-            input_rows INTEGER NOT NULL, cruise_segments INTEGER NOT NULL, ga_cruise_segments INTEGER NOT NULL,
+            input_rows INTEGER NOT NULL, cruise_segments INTEGER NOT NULL,
             transit_rows INTEGER NOT NULL, transit_callsign_bytes INTEGER NOT NULL,
             maximum_segment_transits INTEGER NOT NULL, maximum_segment_length_m REAL NOT NULL, maximum_callsign_bytes INTEGER NOT NULL);
         CREATE TABLE hash_counts(input_path TEXT NOT NULL, hash_bucket INTEGER NOT NULL, transit_rows INTEGER NOT NULL,
@@ -86,7 +86,7 @@ pub fn census_cruise_inputs(paths: &[PathBuf], output: &Path) -> Result<()> {
                 .context("non-UTF8 input day")?,
         )?;
         let mut counts = vec![(0u64, 0u64); SPILL_HASH_BUCKETS as usize];
-        let (mut rows, mut cruise_segments, mut ga_cruise) = (0u64, 0u64, 0u64);
+        let (mut rows, mut cruise_segments) = (0u64, 0u64);
         let (mut max_transits, mut max_callsign) = (0usize, 0usize);
         let mut max_length = 0.0f32;
         let progress = Milestone::new("stage2b/census", "input rows", 10_000_000);
@@ -102,7 +102,6 @@ pub fn census_cruise_inputs(paths: &[PathBuf], output: &Path) -> Result<()> {
                     continue;
                 }
                 cruise_segments += 1;
-                ga_cruise += u64::from(crate::profile::is_ga_sampled_profile(segment.profile_idx));
                 let transits = cruise_transits(
                     segment.start_lat,
                     segment.start_lon,
@@ -128,14 +127,13 @@ pub fn census_cruise_inputs(paths: &[PathBuf], output: &Path) -> Result<()> {
         let total_callsigns: u64 = counts.iter().map(|count| count.1).sum();
         let transaction = db.transaction()?;
         transaction.execute(
-            "INSERT INTO inputs VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            "INSERT INTO inputs VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
                 path.to_str().context("non-UTF8 input path")?,
                 before,
                 path.metadata()?.len(),
                 rows,
                 cruise_segments,
-                ga_cruise,
                 total_rows,
                 total_callsigns,
                 max_transits,

@@ -1,7 +1,15 @@
-"""One anchor month selects the exposure year [anchor − 1 year, anchor): every GA day and 12 airline month-firsts."""
+"""One anchor month selects the exposure year [anchor − 1 year, anchor): every baseline day and the 12 increment month-firsts."""
 
 import argparse
 from datetime import date, datetime, timedelta, timezone
+from typing import NamedTuple
+
+
+class ExposureDays(NamedTuple):
+    """Primary-provider baseline days and the secondary-provider increment days."""
+
+    baseline: tuple[date, ...]
+    increment: tuple[date, ...]
 
 
 def resolve_anchor(month: str | None, today: date) -> date:
@@ -18,14 +26,13 @@ def resolve_anchor(month: str | None, today: date) -> date:
     return anchor
 
 
-def sampling_days(anchor: date) -> tuple[tuple[date, ...], tuple[date, ...]]:
-    """Airline month-firsts and GA days of the half-open year before `anchor` (365 or 366 GA days)."""
+def sampling_days(anchor: date) -> ExposureDays:
+    """Every day of the half-open year before `anchor` (365 or 366) and its month-firsts."""
     if anchor.day != 1:
         raise ValueError("aircraft anchor must be the first day of a month")
     first_day = anchor.replace(year=anchor.year - 1)
-    general_aviation = tuple(first_day + timedelta(days=offset) for offset in range((anchor - first_day).days))
-    airlines = tuple(day for day in general_aviation if day.day == 1)
-    return airlines, general_aviation
+    baseline = tuple(first_day + timedelta(days=offset) for offset in range((anchor - first_day).days))
+    return ExposureDays(baseline, tuple(day for day in baseline if day.day == 1))
 
 
 def main() -> None:

@@ -55,14 +55,20 @@ pub fn run_airport_summary_reduce(parts_root: &Path, prepared_year: &Path) -> Re
     let summaries: BTreeMap<String, AirportSummaryEntry> = by_airport
         .into_iter()
         .map(|(airport_key, union)| {
+            let counts = union.counts();
             let entry = AirportSummaryEntry {
-                arr_count: union.count(movements::ARRIVAL),
-                dep_count: union.count(movements::DEPARTURE),
-                gse_count_per_class: std::array::from_fn(|i| union.count(movements::GSE[i])),
-                ops_count_per_kind: std::array::from_fn(|i| union.count(movements::OPS[i])),
-                ga_arr_count: union.count(movements::GA_ARRIVAL),
-                ga_dep_count: union.count(movements::GA_DEPARTURE),
-                ga_ops_count_per_kind: std::array::from_fn(|i| union.count(movements::GA_OPS[i])),
+                arr_count: counts.primary(movements::ARRIVAL),
+                dep_count: counts.primary(movements::DEPARTURE),
+                gse_count_per_class: std::array::from_fn(|i| counts.primary(movements::GSE[i])),
+                ops_count_per_kind: std::array::from_fn(|i| counts.primary(movements::OPS[i])),
+                secondary_arr_count: counts.secondary_only(movements::ARRIVAL),
+                secondary_dep_count: counts.secondary_only(movements::DEPARTURE),
+                secondary_gse_count_per_class: std::array::from_fn(|i| {
+                    counts.secondary_only(movements::GSE[i])
+                }),
+                secondary_ops_count_per_kind: std::array::from_fn(|i| {
+                    counts.secondary_only(movements::OPS[i])
+                }),
             };
             (airport_key, entry)
         })
@@ -104,14 +110,17 @@ mod tests {
         for (square, members) in [
             (
                 "z9/276/173",
-                vec![(1, ARRIVAL | OPS[0]), (2, GA_DEPARTURE | GA_OPS[0])],
+                vec![
+                    (1, ARRIVAL | OPS[0]),
+                    (2, (DEPARTURE | OPS[0]) << SECONDARY_SHIFT),
+                ],
             ),
             (
                 "z9/277/173",
                 vec![
                     (1, DEPARTURE | OPS[1] | GSE[0]),
-                    (2, GA_ARRIVAL | GA_OPS[1]),
-                    (3, AIRPORT_FLAGS),
+                    (2, (ARRIVAL | OPS[1]) << SECONDARY_SHIFT),
+                    (3, with_secondary(AIRPORT_CATEGORIES)),
                 ],
             ),
         ] {
@@ -132,8 +141,7 @@ mod tests {
             write_airport_traffic(
                 &out.join(square).join(crate::stage_2c::AIRPORT_TRAFFIC_FILENAME),
                 &[],
-                1,
-                0,
+                &crate::provider_receipt::window_of(1, 0),
             )
             .unwrap();
         }
@@ -149,8 +157,9 @@ mod tests {
         assert_eq!((b.arr_count, b.dep_count), (2, 2));
         assert_eq!(b.gse_count_per_class, [2, 1, 1]);
         assert_eq!(b.ops_count_per_kind, [2, 2, 1]);
-        assert_eq!((b.ga_arr_count, b.ga_dep_count), (2, 2));
-        assert_eq!(b.ga_ops_count_per_kind, [2, 2, 1]);
+        assert_eq!((b.secondary_arr_count, b.secondary_dep_count), (1, 1));
+        assert_eq!(b.secondary_ops_count_per_kind, [1, 1, 0]);
+        assert_eq!(b.secondary_gse_count_per_class, [0, 0, 0]);
     }
 
     #[test]

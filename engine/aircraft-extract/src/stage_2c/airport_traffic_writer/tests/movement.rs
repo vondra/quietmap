@@ -100,11 +100,7 @@ fn flight_ids_touch_every_intersected_microseg() {
         &by_square_dir,
         std::slice::from_ref(&aerodrome),
         &prepared_year_dir,
-        &prepared_year_dir,
-        1,
-        365,
-        None,
-    )
+        &prepared_year_dir, &crate::provider_receipt::window_of(1, 365), None)
     .unwrap();
     assert!(n > 0, "writer must populate at least one z9");
 
@@ -132,8 +128,8 @@ fn flight_ids_touch_every_intersected_microseg() {
             r.segment_idx, r.microseg_unique_count,
         );
         assert_eq!(
-            r.microseg_unique_ga_count, 0,
-            "B738 (non-GA jet) must NOT land in the GA microseg split"
+            r.microseg_unique_secondary_count, 0,
+            "a primary-provider flight must not land in the secondary split"
         );
         assert!(
             r.band_energy_lin.iter().any(|b| *b > 0.0),

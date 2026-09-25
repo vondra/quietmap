@@ -164,9 +164,8 @@ pub fn within_kernel_reach(
 }
 
 /// Energy-only `segment_sel_with_terrain` for the CRUISE heatmap (which discards
-/// the CPA). SEL is bit-identical — `WANT_CPA = false` skips the kernel's CPA-only
-/// `lateral_m` sqrt. (Cruise is always the CFFK fast path, so the full-path
-/// `beta_deg` atan the airborne energy path also skips never runs here.)
+/// the CPA). SEL is bit-identical — `WANT_CPA = false` skips the CPA-only
+/// `beta_deg` atan.
 /// C2 horizon hard-wired `None` — cruise structural exemption, see
 /// [`segment_sel_with_terrain`].
 #[inline]
@@ -381,7 +380,7 @@ fn segment_kernel_with_overrides<
     horizon: Option<&ReceiverHorizon>,
     buildings: Option<&super::BuildingHorizon>,
 ) -> Option<AircraftKernelResult> {
-    // SEL/v_ref/d_bar/installation come from the class's Voronoi anchor.
+    // SEL/v_ref/installation come from the class's Voronoi anchor.
     // Per-segment acoustic error vs the segment's own per-typecode profile
     // is bounded by class spread (avg 0.76 dB across global traffic).
     let class_idx = noise_class_of(seg.profile_idx) as usize;
@@ -406,10 +405,7 @@ fn segment_kernel_with_overrides<
     let (inst_code, di_a, di_b, di_c) = delta_i_constants(anchor_profile.installation);
     let dv = delta_v(seg.speed_kt as f64, anchor_profile);
 
-    // REACH_SQ_TABLE uses the class's loudest-member reach (not the
-    // anchor's), so the pre-filter envelope covers Voronoi-assigned
-    // outliers like B752 in WING_A320 — a louder member must never be
-    // dropped at long range before the kernel sees it.
+    // Reach uses the same class anchor as the emission kernel.
     let reach_sq = REACH_SQ_TABLE[class_idx][seg.is_departure as usize];
 
     if RETAIN_SCREENED {
@@ -427,7 +423,6 @@ fn segment_kernel_with_overrides<
             class_idx,
             seg.is_departure,
             dv,
-            anchor_profile.d_bar_m,
             inst_code,
             di_a,
             di_b,
@@ -454,7 +449,6 @@ fn segment_kernel_with_overrides<
             class_idx,
             seg.is_departure,
             dv,
-            anchor_profile.d_bar_m,
             inst_code,
             di_a,
             di_b,
@@ -491,7 +485,6 @@ pub struct SegmentPrepared {
     pub sdz: f64,
     pub is_departure: bool,
     pub class_idx: usize,
-    pub d_bar_m: f64,
     pub dv: f64,
     pub inst: Installation,
     pub di_a: f64,
@@ -540,7 +533,6 @@ pub fn prepare_segment(
         sdz,
         is_departure: seg.is_departure,
         class_idx,
-        d_bar_m: anchor_profile.d_bar_m,
         dv,
         inst,
         di_a,
@@ -602,7 +594,6 @@ pub fn segment_sel_at_pixel(
         prepared.class_idx,
         prepared.is_departure,
         prepared.dv,
-        prepared.d_bar_m,
         prepared.inst,
         prepared.di_a,
         prepared.di_b,
@@ -629,8 +620,7 @@ pub fn segment_sel_at_pixel(
 
 /// Energy-only per-pixel call for the heatmap (which discards the CPA). The SEL
 /// is bit-for-bit identical to `segment_sel_at_pixel().0` — `WANT_CPA = false`
-/// only skips the CPA-only `beta_deg` atan (full path) and `lateral_m` sqrt
-/// (fast path), neither of which feeds `sel`. Returns just the SEL and skips the
+/// only skips the CPA-only `beta_deg` atan, which never feeds `sel`. Returns just the SEL and skips the
 /// `CpaResult` build. Production heatmaps pass a terrain horizon here;
 /// [`segment_sel_at_pixel_energy_screened`] adds the building horizon.
 #[inline]
@@ -695,7 +685,6 @@ fn segment_sel_at_pixel_energy_inner(
         prepared.class_idx,
         prepared.is_departure,
         prepared.dv,
-        prepared.d_bar_m,
         prepared.inst,
         prepared.di_a,
         prepared.di_b,

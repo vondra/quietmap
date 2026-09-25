@@ -13,8 +13,10 @@ pub const AIRBORNE_REDUCTION_ROWS: usize = 8192;
 #[derive(Clone, Copy, Debug)]
 pub struct DeviceAirborneSource {
     pub endpoints: [f32; 4],
-    pub physical: [f32; 12],
-    pub identity: [i32; 4],
+    pub physical: [f32; 11],
+    /// Installation, class, departure, period, secondary-only provenance
+    /// (the index into the two-entry provenance weight table).
+    pub identity: [i32; 5],
 }
 impl DeviceAirborneSource {
     pub fn prepare(batch: &AirborneSegmentBatch<'_>, i: usize) -> Result<Option<Self>> {
@@ -45,7 +47,6 @@ impl DeviceAirborneSource {
                 p.sdy as f32,
                 p.sdz as f32,
                 p.dv as f32,
-                p.d_bar_m as f32,
                 p.di_a as f32,
                 p.di_b as f32,
                 p.di_c as f32,
@@ -62,6 +63,7 @@ impl DeviceAirborneSource {
                 p.class_idx as i32,
                 i32::from(p.is_departure),
                 i32::from(segment.period),
+                i32::from(batch.flags[i] & air::SEGMENT_FLAG_SECONDARY_ONLY != 0),
             ],
         };
         ensure!(
@@ -100,6 +102,24 @@ impl ReceiverScreening {
         rasters: &dyn RasterSampler,
         obstacles: &ObstacleSet,
     ) -> Result<Self> {
+        Self::build_with_dem(lat, lon, altitude, rasters, obstacles, |lat, lon| rasters.elevation(lat, lon))
+    }
+
+    /// Keep a receiver-local DEM tile handle instead of locking the shared LRU for every march sample.
+    pub fn build_cached(
+        lat: f64, lon: f64, altitude: f32, rasters: &raster_reader::RealRasters, obstacles: &ObstacleSet,
+    ) -> Result<Self> {
+        let mut key = (i32::MIN, i32::MIN);
+        let mut tile = None;
+        Self::build_with_dem(lat, lon, altitude, rasters, obstacles, |lat, lon| {
+            rasters.dem.sample_cached(lat, lon, &mut key, &mut tile)
+        })
+    }
+
+    fn build_with_dem(
+        lat: f64, lon: f64, altitude: f32, rasters: &dyn RasterSampler, obstacles: &ObstacleSet,
+        mut dem: impl FnMut(f64, f64) -> f64,
+    ) -> Result<Self> {
         ensure!(
             lat.is_finite() && lon.is_finite() && altitude.is_finite(),
             "nonfinite airborne receiver"
@@ -112,7 +132,7 @@ impl ReceiverScreening {
         let finite = std::cell::Cell::new(true);
         let terrain = air::ReceiverHorizon::build(
             |lat, lon| {
-                let elevation = rasters.elevation(lat, lon);
+                let elevation = dem(lat, lon);
                 finite.set(finite.get() && elevation.is_finite());
                 elevation
             },
@@ -217,42 +237,5 @@ impl PackedScreening {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn cuda_airborne_layout_and_original_horizon_entries() {
-        assert_eq!(std::mem::size_of::<DeviceAirborneSource>(), 80);
-        assert_eq!(std::mem::size_of::<DeviceAirborneReceiver>(), 32);
-        assert_eq!(std::mem::offset_of!(DeviceAirborneReceiver, altitude), 24);
-        struct Flat;
-        impl RasterSampler for Flat {
-            fn elevation(&self, _: f64, _: f64) -> f64 {
-                0.0
-            }
-            fn ground_g(&self, _: f64, _: f64) -> f64 {
-                0.0
-            }
-            fn building_enclosure(&self, _: f64, _: f64) -> f64 {
-                0.0
-            }
-        }
-        let rx = ReceiverScreening::build(50.0, 14.0, 4.0, &Flat, &ObstacleSet { indexes: vec![] })
-            .unwrap();
-        let packed = PackedScreening::new(std::slice::from_ref(&rx));
-        assert_eq!(
-            packed.terrain.len(),
-            air::HORIZON_SECTORS * air::RECEIVER_HORIZON_BANDS
-        );
-        assert_eq!(
-            packed.buildings.len(),
-            air::BUILDING_LOCAL_HORIZON_SECTORS * air::BUILDING_LOCAL_HORIZON_BANDS
-        );
-        assert_eq!(packed.global_max, [u16::MAX]);
-        for (index, entry) in rx.terrain.packed_sectors().iter().flatten().enumerate() {
-            assert_eq!(
-                packed.terrain[index],
-                (u32::from(entry.0 as u16) << 16) | u32::from(entry.1)
-            );
-        }
-    }
-}
+#[path = "airborne_pack_tests.rs"]
+mod tests;

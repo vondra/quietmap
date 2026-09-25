@@ -2,20 +2,28 @@
 use super::*;
 use crate::geo::flat_dist;
 
+fn admitted(day_paths: &[PathBuf]) -> Vec<AdmittedDay> {
+    day_paths
+        .iter()
+        .map(|path| AdmittedDay {
+            segments: path.clone(),
+            increment: false,
+        })
+        .collect()
+}
+
 fn run_stage_2b(
     day_paths: &[PathBuf],
     prepared_year_dir: &Path,
     n_days: u16,
     scope: Option<&ScopeBbox>,
-    fail_on_ga_cruise: bool,
 ) -> Result<usize> {
     run_stage_2b_phase(
-        day_paths,
+        &admitted(day_paths),
         prepared_year_dir,
         &prepared_year_dir.parent().unwrap().join("spill_cruise"),
-        n_days,
+        &crate::provider_receipt::window_of(n_days, 0),
         scope,
-        fail_on_ga_cruise,
         CruisePhase::All,
     )
 }
@@ -187,7 +195,7 @@ fn run_stage_2b_spill_and_merge_one_square() {
         .collect();
     let day_path = segments_dir.join("2025-01-21.arrow");
     write_segments(&day_path, &segs).unwrap();
-    let n = run_stage_2b(&[day_path], &prepared_year, 1, None, false).unwrap();
+    let n = run_stage_2b(&[day_path], &prepared_year, 1, None).unwrap();
     assert!(n >= 1, "expected at least one z9 written, got {n}");
     // Spill dir must be cleaned up after merge.
     assert!(
@@ -210,43 +218,55 @@ fn run_stage_2b_empty_segments_writes_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let prepared_year = tmp.path().join("prepared_year");
     std::fs::create_dir_all(&prepared_year).unwrap();
-    let n = run_stage_2b(&[], &prepared_year, 1, None, false).unwrap();
+    let n = run_stage_2b(&[], &prepared_year, 1, None).unwrap();
     assert_eq!(n, 0);
     assert!(!tmp.path().join("spill_cruise").exists());
 }
 
-/// GA-class cruise cross-check:
-/// a C172-profile cruise segment warns but still processes by
-/// default (plain extracts byte-identical), and hard-fails when
-/// `fail_on_ga_cruise` is set.
+/// Secondary-only cruise transits form their own buckets (they carry the
+/// increment weight) and count only on increment days.
 #[test]
-fn ga_class_cruise_warns_by_default_and_fails_behind_flag() {
+fn secondary_cruise_transits_bucket_apart_and_only_on_increment_days() {
     use crate::arrow_io::write_segments;
-    let c172 = noise_compute::emission::aircraft::profile_idx("C172");
-    let mut seg = cruise(7, 50.10, 14.20, 50.10, 14.21);
-    seg.profile_idx = c172;
+    let mut secondary = cruise(7, 50.10, 14.20, 50.10, 14.21);
+    secondary.flags |= crate::flight::segment_flags::SECONDARY_ONLY;
     let tmp = tempfile::tempdir().unwrap();
-    let segments_dir = tmp.path().join("segments");
-    std::fs::create_dir_all(&segments_dir).unwrap();
-    let day_path = segments_dir.join("2025-07-01.arrow");
-    write_segments(&day_path, &[seg]).unwrap();
-
-    let prepared_year_warn = tmp.path().join("prepared_year_warn");
-    std::fs::create_dir_all(&prepared_year_warn).unwrap();
-    let n = run_stage_2b(
-        std::slice::from_ref(&day_path),
-        &prepared_year_warn,
-        1,
-        None,
-        false,
-    )
-    .unwrap();
-    assert!(n >= 1, "warn-only mode must still process the segment");
-
-    let prepared_year_fail = tmp.path().join("prepared_year_fail");
-    std::fs::create_dir_all(&prepared_year_fail).unwrap();
-    let err = run_stage_2b(&[day_path], &prepared_year_fail, 1, None, true).unwrap_err();
-    assert!(err.to_string().contains("GA-class cruise"), "{err}");
+    let day_path = tmp.path().join("segments/2025-07-01.arrow");
+    write_segments(&day_path, &[cruise(6, 50.10, 14.20, 50.10, 14.21), secondary]).unwrap();
+    let buckets = |increment: bool, name: &str| -> Vec<bool> {
+        let prepared = tmp.path().join(name).join("prepared");
+        run_stage_2b_phase(
+            &[AdmittedDay {
+                segments: day_path.clone(),
+                increment,
+            }],
+            &prepared,
+            &tmp.path().join(name).join("spill_cruise"),
+            &crate::provider_receipt::window_of(1, 1),
+            None,
+            CruisePhase::All,
+        )
+        .unwrap();
+        let mut flags = Vec::new();
+        for (_, dir) in crate::spatial::square_directories(&prepared).unwrap() {
+            let (_, batches) = crate::arrow_io::read_record_batches(&dir.join("cruise.arrow")).unwrap();
+            for batch in batches {
+                let column = batch
+                    .column_by_name("secondary_only")
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<arrow::array::UInt8Array>()
+                    .unwrap()
+                    .clone();
+                flags.extend(column.values().iter().map(|v| *v != 0));
+            }
+        }
+        flags.sort_unstable();
+        flags
+    };
+    let increment = buckets(true, "increment");
+    assert!(increment.contains(&true) && increment.contains(&false));
+    assert!(buckets(false, "baseline").iter().all(|secondary| !secondary));
 }
 
 #[test]
@@ -286,7 +306,7 @@ fn run_stage_2b_wipes_in_scope_stale_cruise() {
     let stale = square_dir.join("cruise.arrow");
     std::fs::write(&stale, b"stale-prev-run").unwrap();
     let scope = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
-    let n = run_stage_2b(&[], &prepared_year, 1, Some(&scope), false).unwrap();
+    let n = run_stage_2b(&[], &prepared_year, 1, Some(&scope)).unwrap();
     assert_eq!(n, 0, "no day shards → no z9 written");
     assert!(
         !stale.exists(),
@@ -309,7 +329,7 @@ fn run_stage_2b_leaves_out_of_scope_stale_cruise() {
     let stale = square_dir.join("cruise.arrow");
     std::fs::write(&stale, b"stale-prev-run").unwrap();
     let praha = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
-    let _ = run_stage_2b(&[], &prepared_year, 1, Some(&praha), false).unwrap();
+    let _ = run_stage_2b(&[], &prepared_year, 1, Some(&praha)).unwrap();
     assert!(
         stale.exists(),
         "out-of-scope z9 cruise.arrow must survive a scoped reextract"
@@ -386,7 +406,7 @@ fn fold_publishes_each_canonical_row_once_in_its_owner_square() {
         crate::arrow_io::write_segments(&day, &segments).unwrap();
         let scope = scoped.then(|| ScopeBbox::parse("50.3,14.0,50.5,14.5").unwrap());
         let prepared = directory.path().join("prepared");
-        let written = run_stage_2b(&[day], &prepared, 12, scope.as_ref(), false).unwrap();
+        let written = run_stage_2b(&[day], &prepared, 12, scope.as_ref()).unwrap();
         let mut canonical = HashMap::new();
         for segment in &segments {
             process_segment(segment, &mut canonical, NpdLuts::shared());
@@ -394,7 +414,7 @@ fn fold_publishes_each_canonical_row_once_in_its_owner_square() {
         let mut expected: HashMap<u64, Vec<CruiseBucket>> = HashMap::new();
         let mut canonical_length = 0.0f64;
         for (owner, map) in canonical {
-            if scope.is_some_and(|scope| !scope.contains_square(owner)) {
+            if scope.as_ref().is_some_and(|scope| !scope.contains_square(owner)) {
                 continue;
             }
             for (key, accum) in map {
@@ -426,7 +446,7 @@ fn fold_publishes_each_canonical_row_once_in_its_owner_square() {
                 (r.cruise_cell_id, r.class, r.fl_bin, r.period, r.heading_bin)
             });
             let reference = directory.path().join("reference.arrow");
-            write_cruise(&reference, &rows, 12).unwrap();
+            write_cruise(&reference, &rows, &crate::provider_receipt::window_of(12, 0)).unwrap();
             assert_eq!(
                 read_record_batches(&prepared.join(square_path(square)).join("cruise.arrow"))
                     .unwrap(),
@@ -480,29 +500,28 @@ fn retained_spill_checks_input_window_inventory_and_refuses_partial_fold_resume(
     let paths = [input];
     let spill = directory.path().join("work/spill_cruise");
     run_stage_2b_phase(
-        &paths,
+        &admitted(&paths),
         &prepared,
         &spill,
-        1,
+        &crate::provider_receipt::window_of(1, 0),
         None,
-        false,
         CruisePhase::Spill,
     )
     .unwrap();
     assert!(!directory.path().join("spill_cruise").exists());
     assert!(!prepared.exists());
     let identities = receipt::input_identities(&paths).unwrap();
-    assert!(receipt::verify(&spill, &identities, 2, None, false).is_err());
+    assert!(receipt::verify(&spill, &identities, &crate::provider_receipt::window_of(2, 0), None).is_err());
     let mut changed = identities.clone();
     changed[0].1.push_str("changed");
-    assert!(receipt::verify(&spill, &changed, 1, None, false).is_err());
+    assert!(receipt::verify(&spill, &changed, &crate::provider_receipt::window_of(1, 0), None).is_err());
     let parts: Vec<_> = (0..SPILL_HASH_BUCKETS)
         .flat_map(|bucket| list_spill_parts(&spill_bucket_dir(&spill, bucket)).unwrap())
         .collect();
     assert!(!parts.is_empty());
     let hidden = parts[0].with_extension("hidden");
     std::fs::rename(&parts[0], &hidden).unwrap();
-    assert!(receipt::verify(&spill, &identities, 1, None, false).is_err());
+    assert!(receipt::verify(&spill, &identities, &crate::provider_receipt::window_of(1, 0), None).is_err());
     std::fs::rename(&hidden, &parts[0]).unwrap();
     // Recreate the receipt because rename changed the recorded inode ctime.
     std::fs::remove_file(spill.join("state.sqlite")).unwrap();
@@ -512,23 +531,22 @@ fn retained_spill_checks_input_window_inventory_and_refuses_partial_fold_resume(
         .custom_flags(libc::O_PATH)
         .open(&spill)
         .unwrap();
-    assert!(receipt::create(&spill, &invalid_filesystem, &identities, 1, None, 0).is_err());
+    assert!(receipt::create(&spill, &invalid_filesystem, &identities, &crate::provider_receipt::window_of(1, 0), None).is_err());
     assert!(
         !spill.join("state.sqlite").exists(),
         "failed durability cannot seal raw spill"
     );
     let filesystem = std::fs::File::open(&spill).unwrap();
-    receipt::create(&spill, &filesystem, &identities, 1, None, 0).unwrap();
-    receipt::verify(&spill, &identities, 1, None, false).unwrap();
+    receipt::create(&spill, &filesystem, &identities, &crate::provider_receipt::window_of(1, 0), None).unwrap();
+    receipt::verify(&spill, &identities, &crate::provider_receipt::window_of(1, 0), None).unwrap();
     receipt::begin_fold(&spill).unwrap();
     assert!(receipt::begin_fold(&spill).is_err());
     let error = run_stage_2b_phase(
-        &paths,
+        &admitted(&paths),
         &prepared,
         &spill,
-        1,
+        &crate::provider_receipt::window_of(1, 0),
         None,
-        false,
         CruisePhase::Finish,
     )
     .unwrap_err();
@@ -548,12 +566,11 @@ fn old_sealed_spill_schema_is_rejected_before_prepared_outputs_are_wiped() {
     let paths = [input];
     let spill = directory.path().join("work/spill_cruise");
     run_stage_2b_phase(
-        &paths,
+        &admitted(&paths),
         &prepared,
         &spill,
-        1,
+        &crate::provider_receipt::window_of(1, 0),
         None,
-        false,
         CruisePhase::Spill,
     )
     .unwrap();
@@ -581,22 +598,17 @@ fn old_sealed_spill_schema_is_rejected_before_prepared_outputs_are_wiped() {
     receipt::create(
         &spill,
         &std::fs::File::open(&spill).unwrap(),
-        &receipt::input_identities(&paths).unwrap(),
-        1,
-        None,
-        0,
-    )
+        &receipt::input_identities(&paths).unwrap(), &crate::provider_receipt::window_of(1, 0), None)
     .unwrap();
     let retained = prepared.join("z9/275/173/cruise.arrow");
     std::fs::create_dir_all(retained.parent().unwrap()).unwrap();
     std::fs::write(&retained, b"retained prepared output").unwrap();
     let error = run_stage_2b_phase(
-        &paths,
+        &admitted(&paths),
         &prepared,
         &spill,
-        1,
+        &crate::provider_receipt::window_of(1, 0),
         None,
-        false,
         CruisePhase::Finish,
     )
     .unwrap_err();
@@ -612,10 +624,6 @@ fn old_sealed_spill_schema_is_rejected_before_prepared_outputs_are_wiped() {
     );
     receipt::verify(
         &spill,
-        &receipt::input_identities(&paths).unwrap(),
-        1,
-        None,
-        false,
-    )
+        &receipt::input_identities(&paths).unwrap(), &crate::provider_receipt::window_of(1, 0), None)
     .unwrap();
 }

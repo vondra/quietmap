@@ -1,14 +1,12 @@
-//! Composite ground-flag inference. The raw ADS-B `on_ground` bit is
-//! unreliable: jets at FL350 sometimes still report it, taxiing aircraft
-//! sometimes don't. Trusting the raw bit produced 99 dB ground-source
-//! ghosts at FL350 in v5.
+//! Composite ground-flag inference. readsb reports on-ground only as the
+//! altitude string `"ground"`; aircraft whose transponder never switches
+//! to surface reports still taxi with a numeric altitude.
 //!
 //! The composite layered inference (all altitude thresholds are AGL in
 //! metres, computed via DEM by Stage 1):
-//!   1. Rate-limits the raw bit (AGL ≤ 80 ft, speed ≤ 140 kt,
-//!      |baro_rate| ≤ 2 000 fpm) — otherwise reject as bogus.
-//!   2. Edge-window scan recovers ground prefixes / suffixes that have
-//!      NO raw bit set but match surface signatures (low AGL + low
+//!   1. A surface report (`alt = "ground"`) is ground.
+//!   2. Edge-window scan recovers ground prefixes / suffixes without
+//!      surface reports that match surface signatures (low AGL + low
 //!      speed + low baro_rate) for ≥ 3 consecutive points.
 //!   3. The edge scan terminates on the first strongly-airborne sample
 //!      (AGL ≥ 165 ft OR speed ≥ 130 kt) so cruise points never get
@@ -27,16 +25,12 @@ const SURFACE_EDGE_WINDOW_POINTS: usize = 32;
 // feet to keep the Doc 29 reasoning legible; the runtime values stay
 // in metres to match Stage 1's `agl_m` source of truth.
 //
-// The gates are asymmetric so a B738 on final at 30-150 m AGL with
-// the on_ground bit flipped early (transponder flip before flare)
-// cannot seed fake ground-ops clusters along the ILS approach
-// corridor: raw transponder is trusted ONLY up to 80 ft AGL (covers
-// DEM/baro uncertainty at landfill airports per `filters.rs:23-29`),
-// surface inference is paranoid at 30 ft (Doc 29 §B-7
-// departure-segment start altitude), and edge-airborne termination
-// drops to 165 ft (~50 m, ICAO Annex 14 obstacle limitation surface
-// at runway-end gate) so a slow climb transitions out of ground
-// inference within ~16 s of liftoff.
+// Surface inference is paranoid at 30 ft (Doc 29 §B-7 departure-segment
+// start altitude) so a B738 on final at 30-150 m AGL cannot seed fake
+// ground-ops clusters along the ILS corridor, and edge-airborne
+// termination sits at 165 ft (~50 m, ICAO Annex 14 obstacle limitation
+// surface at the runway-end gate) so a slow climb transitions out of
+// ground inference within ~16 s of liftoff.
 const SURFACE_MAX_AGL_M: f32 = 30.0 * 0.3048; // ≈ 9.14 m
 const SURFACE_MAX_SPEED_KT: f32 = 90.0;
 const SURFACE_MAX_BARO_RATE_FPM: f32 = 1200.0;
@@ -44,15 +38,13 @@ const SURFACE_MIN_INFERRED_POINTS: usize = 3;
 const SURFACE_EDGE_STRONG_AIRBORNE_AGL_M: f32 = 165.0 * 0.3048; // ≈ 50.29 m
 const SURFACE_EDGE_STRONG_AIRBORNE_SPEED_KT: f32 = 130.0;
 const SURFACE_LOCAL_WINDOW: usize = 2;
-const RAW_GROUND_FLAG_MAX_AGL_M: f32 = 80.0 * 0.3048; // ≈ 24.38 m
-const RAW_GROUND_FLAG_MAX_SPEED_KT: f32 = 140.0;
-const RAW_GROUND_FLAG_MAX_BARO_RATE_FPM: f32 = 2000.0;
 
 /// Per-point composite ground flag. Length matches `points`.
 pub fn ground_flags(points: &[TracePoint], agl_m: &[f32]) -> Vec<bool> {
     debug_assert_eq!(points.len(), agl_m.len());
-    let mut flags: Vec<bool> = (0..points.len())
-        .map(|i| raw_ground_signal(&points[i], agl_m[i]))
+    let mut flags: Vec<bool> = points
+        .iter()
+        .map(|point| point.alt_is_ground())
         .collect();
     if points.len() < 2 {
         return flags;
@@ -62,26 +54,7 @@ pub fn ground_flags(points: &[TracePoint], agl_m: &[f32]) -> Vec<bool> {
     flags
 }
 
-/// Raw on-ground signal: the surface-position sentinel `alt = "ground"`
-/// always wins (the aircraft itself has reported WoW directly); the
-/// bitfield bit is gated against AGL / speed / baro_rate so a jet at
-/// FL350 still asserting `on_ground` doesn't get treated as one.
-pub fn raw_ground_signal(pt: &TracePoint, agl_m: f32) -> bool {
-    if pt.alt_is_ground() {
-        return true;
-    }
-    raw_ground_motion(pt) && agl_m <= RAW_GROUND_FLAG_MAX_AGL_M
-}
-
-/// Stage 0 has no DEM, but a cruise-speed raw bit cannot establish a turnaround.
-pub(crate) fn raw_ground_motion(pt: &TracePoint) -> bool {
-    pt.alt_is_ground()
-        || (pt.on_ground_raw()
-            && pt.speed_kt <= RAW_GROUND_FLAG_MAX_SPEED_KT
-            && pt.baro_rate_fpm.abs() <= RAW_GROUND_FLAG_MAX_BARO_RATE_FPM)
-}
-
-/// Surface signature without consulting the raw bit — low AGL +
+/// Surface signature without a surface report — low AGL +
 /// slow + flat. Used both for the early-reject path inside
 /// [`is_surface_candidate`] and for the per-neighbour evidence the
 /// edge scan counts; the two were inlined in the previous revision
@@ -98,7 +71,7 @@ fn infer_edge_ground(points: &[TracePoint], agl_m: &[f32], flags: &mut [bool], i
     if edge_len == 0 {
         return;
     }
-    let has_raw_ground = if is_prefix {
+    let has_surface_report = if is_prefix {
         flags[..edge_len].iter().any(|g| *g)
     } else {
         flags[n - edge_len..].iter().any(|g| *g)
@@ -135,7 +108,7 @@ fn infer_edge_ground(points: &[TracePoint], agl_m: &[f32], flags: &mut [bool], i
             break;
         }
     }
-    if has_raw_ground || inferred.len() >= SURFACE_MIN_INFERRED_POINTS {
+    if has_surface_report || inferred.len() >= SURFACE_MIN_INFERRED_POINTS {
         for idx in inferred {
             flags[idx] = true;
         }
@@ -143,7 +116,7 @@ fn infer_edge_ground(points: &[TracePoint], agl_m: &[f32], flags: &mut [bool], i
 }
 
 fn is_surface_candidate(points: &[TracePoint], agl_m: &[f32], idx: usize) -> bool {
-    if raw_ground_signal(&points[idx], agl_m[idx]) {
+    if points[idx].alt_is_ground() {
         return true;
     }
     if !is_surface_signature(&points[idx], agl_m[idx]) {
@@ -156,7 +129,7 @@ fn is_surface_candidate(points: &[TracePoint], agl_m: &[f32], idx: usize) -> boo
     let hi = (idx + SURFACE_LOCAL_WINDOW + 1).min(points.len());
     let mut local_matches = 0usize;
     for j in lo..hi {
-        if raw_ground_signal(&points[j], agl_m[j]) || is_surface_signature(&points[j], agl_m[j]) {
+        if points[j].alt_is_ground() || is_surface_signature(&points[j], agl_m[j]) {
             local_matches += 1;
         }
     }
@@ -166,64 +139,26 @@ fn is_surface_candidate(points: &[TracePoint], agl_m: &[f32], idx: usize) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trace::FLAG_ON_GROUND_RAW;
+    use crate::trace::FLAG_ALT_IS_GROUND;
 
     const FT_TO_M: f32 = 0.3048;
 
-    fn pt(alt_ft: f32, speed_kt: f32, baro: f32, raw_ground: bool) -> TracePoint {
+    /// `surface_report` mirrors readsb's `alt = "ground"` (NaN altitude).
+    fn pt(alt_ft: f32, speed_kt: f32, baro: f32, surface_report: bool) -> TracePoint {
         TracePoint {
             timestamp: 0.0,
             lat: 50.0,
             lon: 14.0,
-            alt_ft,
+            alt_ft: if surface_report { f32::NAN } else { alt_ft },
             speed_kt,
             track_deg: 90.0,
             baro_rate_fpm: baro,
-            flags: if raw_ground { FLAG_ON_GROUND_RAW } else { 0 },
+            flags: if surface_report { FLAG_ALT_IS_GROUND } else { 0 },
         }
     }
 
-    #[test]
-    fn raw_signal_rejects_high_alt_jet_with_ground_bit() {
-        // Jet at FL350 spuriously asserting on_ground — must NOT be treated as ground.
-        let p = pt(35_000.0, 450.0, 0.0, true);
-        assert!(!raw_ground_signal(&p, 35_000.0 * FT_TO_M));
-    }
-
-    #[test]
-    fn raw_signal_accepts_taxi() {
-        let p = pt(0.0, 15.0, 0.0, true);
-        assert!(raw_ground_signal(&p, 0.0));
-    }
-
-    #[test]
-    fn raw_signal_la_paz_high_elevation_taxi() {
-        // SLLP La Paz (13_325 ft MSL elev). Aircraft on runway: alt_baro
-        // ≈ 13_325 ft, AGL ≈ 0. Pre-fix MSL gate would reject (13_325 >
-        // 600); AGL gate accepts.
-        let p = pt(13_325.0, 15.0, 0.0, true);
-        assert!(raw_ground_signal(&p, 0.0));
-    }
-
-    #[test]
-    fn raw_signal_high_agl_cruise_rejected_despite_bogus_bit() {
-        // Light GA cruise at FL080 over flat terrain (DEM ≈ 0).
-        // AGL ≈ 8_000 ft → must reject the bogus on_ground bit.
-        let p = pt(8_000.0, 130.0, 0.0, true);
-        assert!(!raw_ground_signal(&p, 8_000.0 * FT_TO_M));
-    }
-
-    #[test]
-    fn raw_signal_sea_level_taxi_still_works() {
-        // Regression: LKPR (1247 ft MSL) taxi — alt_baro 1247 ft, AGL 0.
-        let p = pt(1_247.0, 15.0, 0.0, true);
-        assert!(raw_ground_signal(&p, 0.0));
-    }
-
     /// Helper for `ground_flags` fixtures: AGL in metres for an
-    /// `alt_ft` sample over terrain of `terrain_msl_ft`. Tests at
-    /// sea-level use `terrain_msl_ft = 0` to reproduce the pre-fix
-    /// MSL semantics on legacy fixtures.
+    /// `alt_ft` sample over terrain of `terrain_msl_ft`.
     fn agl_m_vec(points: &[TracePoint], terrain_msl_ft: f32) -> Vec<f32> {
         points
             .iter()
@@ -290,49 +225,13 @@ mod tests {
     }
 
     #[test]
-    fn taxi_at_high_dem_bias_stays_ground() {
-        // At a landfill airport with 8 m DEM bias the computed AGL
-        // for a real taxi sample can run > 9 m even though the wheels
-        // are on the tarmac. The raw transponder bit (24 m gate)
-        // absorbs this.
-        let p = pt(1_247.0 + 26.0, 15.0, 0.0, true); // alt=1273ft, terrain msl=1247ft → AGL ≈ 7.9m
-        let agl = (26.0_f32) * FT_TO_M;
-        // 26 ft = 7.93 m, under both surface (9 m) and raw (24 m) gates.
-        assert!(raw_ground_signal(&p, agl));
-        // Even at 20 m AGL (DEM way off), raw gate still accepts.
-        assert!(raw_ground_signal(
-            &pt(1_247.0 + 66.0, 15.0, 0.0, true),
-            20.0
-        ));
-    }
-
-    #[test]
-    fn final_approach_30m_agl_stays_airborne() {
-        // A B738 on final at 30 m AGL with the on_ground bit
-        // prematurely set (transponder flip before flare) must NOT
-        // be classified ground. The raw gate (24 m) rejects on AGL
-        // grounds; even if a hypothetical implementation relaxed it,
-        // the 140 kt speed gate would also reject.
-        let p = pt(100.0, 145.0, -800.0, true); // ~30 m AGL, 145 kt, descending
-        assert!(!raw_ground_signal(&p, 30.0));
-    }
-
-    #[test]
-    fn flare_at_5m_agl_taxi_speed_is_ground() {
-        // Just before touchdown, AGL 5 m, speed 20 kt, raw bit set
-        // — still inside both gates.
-        let p = pt(16.0, 20.0, 0.0, true);
-        assert!(raw_ground_signal(&p, 5.0));
-    }
-
-    #[test]
     fn slow_climb_after_takeoff_at_45m_agl_is_airborne() {
         // The 165 ft (~50 m) edge-airborne gate must transition a
         // slow climb out of ground inference promptly — a 500 ft
         // gate would leave a slow GA climb flagged "ground" for
         // ~30 s after rotation.
         let points = vec![
-            pt(0.0, 8.0, 0.0, true),         // taxi, raw bit set → ground
+            pt(0.0, 8.0, 0.0, true),         // taxi, surface report → ground
             pt(0.0, 100.0, 200.0, true),     // accelerating
             pt(50.0, 130.0, 1500.0, false),  // rotation, 15 m AGL — still in inference window
             pt(150.0, 140.0, 1800.0, false), // 45 m AGL, 140 kt climbing — must NOT be ground
@@ -341,7 +240,7 @@ mod tests {
         ];
         let agl_m = agl_m_vec(&points, 0.0);
         let flags = ground_flags(&points, &agl_m);
-        assert!(flags[0], "taxi at 0 ft with raw bit");
+        assert!(flags[0], "taxi with a surface report");
         // 45 m AGL climb: surface signature fails (> 9 m), and
         // edge-strong-airborne (50 m) kicks in just above this,
         // terminating the inference window before this point.

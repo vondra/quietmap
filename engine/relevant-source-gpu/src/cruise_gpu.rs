@@ -11,7 +11,7 @@ const CRUISE_RECEIVER_BATCH: usize = 256;
 pub(crate) struct DeviceCruiseSource {
     // Start latitude/longitude, centroid latitude/longitude, half length, density.
     geography: [f64; 6],
-    physical: [f64; 12],
+    physical: [f64; 11],
     identity: [i32; 4],
 }
 impl DeviceCruiseSource {
@@ -32,7 +32,6 @@ impl DeviceCruiseSource {
                 prepared.sdy,
                 prepared.sdz,
                 prepared.dv,
-                prepared.d_bar_m,
                 prepared.di_a,
                 prepared.di_b,
                 prepared.di_c,
@@ -100,7 +99,7 @@ impl CruiseSources {
         let _cuda = RelevantSourceCuda::initialize()?;
         Ok(Self {
             sources: DeviceBuffer::from_slice(sources)?,
-            npd: DeviceBuffer::from_slice(&air::NpdLuts::shared().sel_luts_flat_f64())?,
+            npd: DeviceBuffer::from_slice(&air::NpdLuts::shared().device_luts_flat_f64())?,
         })
     }
     fn energies(&self, points: &[[f64; 2]], altitudes: &[f64]) -> Result<Vec<[f64; 3]>> {

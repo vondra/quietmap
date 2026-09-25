@@ -56,7 +56,7 @@ class FreezeWorldInputsTest(unittest.TestCase):
             database.execute('INSERT INTO verified VALUES (?, ?)', (f'/retired-disk/adsblol/2026/2026-06-06/{part.name}', sha256(b'part')))
             database.execute('INSERT INTO assets VALUES (?, ?)', ('replaced-by-an-alternative.tar', sha256(b'gone')))
         self.part = part
-        self.sources = {'planet': self.planet, 'ships': self.emodnet, 'ships_gfw': self.gfw, 'general_aviation': self.ga}
+        self.sources = {'planet': self.planet, 'ships': self.emodnet, 'ships_gfw': self.gfw, 'aircraft_primary': self.ga}
         self.output = self.root / 'freeze'
         # The TOML's [sources] contract belongs to source_paths; these tests stub it with four families.
         self.config = self.root / 'build.toml'
@@ -80,11 +80,11 @@ class FreezeWorldInputsTest(unittest.TestCase):
         self.assertEqual(code, 0, stderr)
         receipt = json.loads(stdout)
         self.assertEqual({family: row['stored_checksums_checked'] for family, row in receipt.items()},
-                         {'general_aviation': 2, 'planet': 0, 'ships': 1, 'ships_gfw': 1})
+                         {'aircraft_primary': 2, 'planet': 0, 'ships': 1, 'ships_gfw': 1})
         self.assertEqual((self.output / 'planet.SHA256SUMS').read_text(), f'{sha256(b"planet")}  planet.pbf\n')
-        sums = (self.output / 'general_aviation.SHA256SUMS').read_text()
+        sums = (self.output / 'aircraft_primary.SHA256SUMS').read_text()
         self.assertIn(f'{sha256(b"part")}  2026/2026-06-06/{self.part.name}\n', sums)
-        self.assertEqual(receipt['general_aviation']['sha256sums_sha256'], sha256(sums.encode()))
+        self.assertEqual(receipt['aircraft_primary']['sha256sums_sha256'], sha256(sums.encode()))
         self.assertEqual(tree_snapshot(self.root / 'sources'), before)
 
         written = (self.output / 'planet.SHA256SUMS').stat().st_mtime_ns
@@ -106,7 +106,7 @@ class FreezeWorldInputsTest(unittest.TestCase):
         self.assertIn('catalog.sqlite:assets expects', stderr)
         self.assertIn('catalog.sqlite:verified expects', stderr)
         self.assertIn('density.tif: listed by', stderr)
-        self.assertFalse((self.output / 'general_aviation.SHA256SUMS').exists())
+        self.assertFalse((self.output / 'aircraft_primary.SHA256SUMS').exists())
         self.assertFalse((self.output / 'ships.SHA256SUMS').exists())
         self.assertTrue((self.output / 'ships_gfw.SHA256SUMS').exists())
 

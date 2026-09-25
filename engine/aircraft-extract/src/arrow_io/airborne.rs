@@ -10,7 +10,7 @@ use arrow::array::{
     StringBuilder, StructArray, UInt64Builder, UInt8Builder,
 };
 use arrow::datatypes::Int32Type;
-use noise_compute::emission::aircraft::AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M;
+use noise_compute::emission::aircraft::{SamplingWindow, AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M};
 
 use crate::arrow_schemas;
 use crate::flight::{segment_flags, FlightSegment, Phase};
@@ -19,19 +19,17 @@ use super::write_record_batches;
 
 /// Write the square's airborne sub-segments (`Phase::Airborne`, aircraft only,
 /// each no longer than `AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M` — the reader pad
-/// counts on it). `n_days` (airline window) + `ga_n_days` (GA-class window,
-/// 0 = single-window) stamp the GA hybrid metadata so the popup/heatmap weight
-/// GA rows at `1/ga_n_days`. The `flight` dictionary lists distinct flights in
-/// order of first appearance; arrow's file writer refuses a replaced
-/// dictionary, so it is built once for the whole file.
-pub fn write_airborne(
-    path: &Path,
-    rows: &[FlightSegment],
-    n_days: u16,
-    ga_n_days: u16,
-) -> Result<()> {
-    let schema =
-        arrow_schemas::with_n_days_and_windows(arrow_schemas::airborne_schema(), n_days, ga_n_days);
+/// counts on it), stamped with the sampling window; flag bit 6 marks the
+/// secondary-only rows the popup/heatmap weight by the increment days. The
+/// `flight` dictionary lists distinct flights in order of first appearance;
+/// arrow's file writer refuses a replaced dictionary, so it is built once for
+/// the whole file.
+pub fn write_airborne(path: &Path, rows: &[FlightSegment], window: &SamplingWindow) -> Result<()> {
+    anyhow::ensure!(
+        window.increment_days > 0 || rows.iter().all(|r| !r.is_secondary_only()),
+        "secondary-only airborne rows without increment days"
+    );
+    let schema = arrow_schemas::with_sampling_window(arrow_schemas::airborne_schema(), window);
     let n = rows.len();
     let mut flight_id = UInt64Builder::with_capacity(n);
     let mut flight_key = Int32Builder::with_capacity(n);
@@ -122,7 +120,8 @@ pub fn write_airborne(
                 & (segment_flags::IS_DEPARTURE
                     | segment_flags::SPLIT_PIECE
                     | segment_flags::CHORD_START
-                    | segment_flags::CHORD_END),
+                    | segment_flags::CHORD_END
+                    | segment_flags::SECONDARY_ONLY),
         );
         t_start.append_value(super::height_meters(r.start_elev_m)?);
         t_end.append_value(super::height_meters(r.end_elev_m)?);
@@ -188,7 +187,7 @@ mod tests {
         rows[2].callsign = "CSA1".into();
         rows[2].aircraft_type = *b"B738";
         rows[2].flags = segment_flags::IS_DEPARTURE | segment_flags::SYNTHETIC;
-        write_airborne(&p, &rows, 1, 0).unwrap();
+        write_airborne(&p, &rows, &crate::provider_receipt::window_of(1, 0)).unwrap();
         let (_, batches) = read_record_batches(&p).unwrap();
         assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
         let mut seen = Vec::new();
@@ -256,11 +255,11 @@ mod tests {
         let p = dir.path().join("airborne.arrow");
         let mut long = FlightSegment::airborne_fixture(1, 50.0, 14.0);
         long.end_lon = 14.0 + 4_001.0 / (111_320.0 * 50.0_f32.to_radians().cos());
-        let error = write_airborne(&p, &[long], 1, 0).unwrap_err();
+        let error = write_airborne(&p, &[long], &crate::provider_receipt::window_of(1, 0)).unwrap_err();
         assert!(error.to_string().contains("rerun shuffle"), "{error}");
         let mut ground = FlightSegment::airborne_fixture(1, 50.0, 14.0);
         ground.phase = Phase::Ground;
-        assert!(write_airborne(&p, &[ground], 1, 0).is_err());
+        assert!(write_airborne(&p, &[ground], &crate::provider_receipt::window_of(1, 0)).is_err());
         assert!(!p.exists());
     }
 }

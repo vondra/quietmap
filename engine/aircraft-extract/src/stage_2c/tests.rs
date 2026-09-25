@@ -79,8 +79,7 @@ fn run_stage_2c_stamps_airport_summaries_into_traffic() {
         &by_square_dir,
         std::slice::from_ref(&aerodrome),
         &prepared_year_dir,
-        1,
-        0,
+        &crate::provider_receipt::window_of(1, 0),
         None,
     )
     .unwrap();
@@ -126,7 +125,7 @@ fn run_stage_2c_wipes_in_scope_stale_airport_traffic() {
     std::fs::create_dir_all(&by_square_dir).unwrap();
     // Praha scope.
     let scope = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
-    let n = run_stage_2c(&by_square_dir, &[], &prepared_year_dir, 1, 0, Some(&scope)).unwrap();
+    let n = run_stage_2c(&by_square_dir, &[], &prepared_year_dir, &crate::provider_receipt::window_of(1, 0), Some(&scope)).unwrap();
     assert_eq!(n, 0, "no ground segments → no z9 written");
     assert!(
         !stale.exists(),
@@ -158,7 +157,7 @@ fn run_stage_2c_aborts_on_stale_input_before_wipe() {
     std::fs::create_dir_all(&by_square_square).unwrap();
     std::fs::write(by_square_square.join("ground.arrow"), b"not-an-arrow-file").unwrap();
     let scope = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
-    let result = run_stage_2c(&by_square_dir, &[], &prepared_year_dir, 1, 0, Some(&scope));
+    let result = run_stage_2c(&by_square_dir, &[], &prepared_year_dir, &crate::provider_receipt::window_of(1, 0), Some(&scope));
     assert!(result.is_err(), "precheck must reject corrupt shard");
     assert!(
         prior.exists(),
@@ -185,7 +184,7 @@ fn scoped_run_rejects_existing_global_traffic_before_replacing_it() {
     std::fs::create_dir_all(&by_square_dir).unwrap();
     let praha = ScopeBbox::parse("48.65,12.00,51.55,16.90").unwrap();
     let error =
-        run_stage_2c(&by_square_dir, &[], &prepared_year_dir, 1, 0, Some(&praha)).unwrap_err();
+        run_stage_2c(&by_square_dir, &[], &prepared_year_dir, &crate::provider_receipt::window_of(1, 0), Some(&praha)).unwrap_err();
     assert!(error.to_string().contains("global movement union"));
     assert_eq!(std::fs::read(&stale).unwrap(), b"stale-prev-run");
 }
@@ -203,7 +202,7 @@ fn an_incomplete_ground_generation_is_never_adopted_or_allowed_to_replace_prior_
     std::fs::create_dir(&pending).unwrap();
     let partial = pending.join("diagnostic");
     std::fs::write(&partial, b"interrupted-generation").unwrap();
-    assert!(run_stage_2c(&inputs, &[], &prepared, 12, 365, None)
+    assert!(run_stage_2c(&inputs, &[], &prepared, &crate::provider_receipt::window_of(12, 365), None)
         .unwrap_err()
         .to_string()
         .contains("incomplete ground output"));

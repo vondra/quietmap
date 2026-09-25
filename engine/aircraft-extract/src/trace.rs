@@ -7,17 +7,20 @@ use std::io::Read;
 mod archive;
 pub(crate) use archive::archive_parts;
 mod selection;
-mod typecode_probe;
-pub use archive::{read_day_traces, read_day_traces_filtered, TypecodeProbeStats};
+pub use archive::{read_day_archive, CorruptMember, DayArchiveRead};
+pub(crate) use selection::trace_identity;
 
-/// Trace-point bit 0 — `on_ground` set by the adsb.lol bitfield.
-pub const FLAG_ON_GROUND_RAW: u8 = 1 << 0;
-/// Trace-point bit 1 — altitude column was the literal string `"ground"`.
+/// Trace-point bit 1 — altitude column was the literal string `"ground"`,
+/// readsb's only on-ground signal. The readsb bitfield (column 6) carries
+/// no on-ground bit: its bit 0 marks a stale position (no position for
+/// 20 s before this one), so it is not read.
 pub const FLAG_ALT_IS_GROUND: u8 = 1 << 1;
+/// Trace-point bit 2 — a secondary-provider sample kept by the provider
+/// union because the primary provider did not cover that instant.
+pub const FLAG_SECONDARY_PROVIDER: u8 = 1 << 2;
 
-/// One ADS-B point. `flags` packs the two ground-related raw signals so
-/// the v6 Arrow schema can carry them as a single byte without losing
-/// the distinction the composite ground inference relies on.
+/// One ADS-B point. `flags` packs the per-point signals the Arrow
+/// scratch schema carries as a single byte.
 #[derive(Clone, Debug)]
 pub struct TracePoint {
     pub timestamp: f64,
@@ -47,8 +50,8 @@ impl TracePoint {
     pub fn alt_is_ground(&self) -> bool {
         self.flags & FLAG_ALT_IS_GROUND != 0
     }
-    pub fn on_ground_raw(&self) -> bool {
-        self.flags & FLAG_ON_GROUND_RAW != 0
+    pub fn is_secondary_provider(&self) -> bool {
+        self.flags & FLAG_SECONDARY_PROVIDER != 0
     }
     /// `Some(alt_ft)` for airborne points, `None` for `alt_is_ground`
     /// sentinel rows whose `alt_ft` is `NaN`. Funnels every alt-arithmetic
@@ -73,6 +76,39 @@ pub struct AircraftTrace {
     /// post-`point_is_sane` indices and reduces them to one scalar
     /// callsign per emitted [`Flight`].
     pub callsigns: Vec<CallsignChange>,
+}
+
+impl AircraftTrace {
+    /// Keep the points `keep` accepts. A callsign transition on a dropped
+    /// point moves to the next kept point (the last one wins: the value
+    /// active when telemetry resumed) and equal neighbours collapse.
+    pub fn retain_points(&mut self, mut keep: impl FnMut(usize, &TracePoint) -> bool) {
+        let mut surviving: Vec<usize> = Vec::with_capacity(self.points.len());
+        let mut points = Vec::with_capacity(self.points.len());
+        for (index, point) in std::mem::take(&mut self.points).into_iter().enumerate() {
+            if keep(index, &point) {
+                surviving.push(index);
+                points.push(point);
+            }
+        }
+        let mut callsigns: Vec<CallsignChange> = Vec::with_capacity(self.callsigns.len());
+        for change in std::mem::take(&mut self.callsigns) {
+            let new_idx = surviving.partition_point(|&i| i < change.point_idx);
+            if new_idx >= surviving.len() {
+                continue;
+            }
+            match callsigns.last_mut().filter(|c| c.point_idx == new_idx) {
+                Some(last) => last.value = change.value,
+                None => callsigns.push(CallsignChange {
+                    point_idx: new_idx,
+                    value: change.value,
+                }),
+            }
+        }
+        callsigns.dedup_by(|a, b| a.value == b.value);
+        self.points = points;
+        self.callsigns = callsigns;
+    }
 }
 
 /// Parse one gzipped `trace_full_*.json` from a TAR entry. Returns
@@ -115,7 +151,6 @@ pub fn parse_trace<R: Read>(reader: R) -> Result<Option<AircraftTrace>> {
         let (alt_ft, alt_is_ground) = parse_altitude_ft(&arr[3]);
         let speed_kt = arr[4].as_f64().unwrap_or(0.0) as f32;
         let track_deg = arr[5].as_f64().unwrap_or(0.0) as f32;
-        let on_ground_bit = arr[6].as_i64().unwrap_or(0);
         let baro_rate_fpm = arr.get(7).and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
 
         // Compare on `&str` before allocating — adsb.lol re-emits the
@@ -137,15 +172,7 @@ pub fn parse_trace<R: Read>(reader: R) -> Result<Option<AircraftTrace>> {
             }
         }
 
-        let mut flags = 0u8;
-        if on_ground_bit & 1 != 0 {
-            flags |= FLAG_ON_GROUND_RAW;
-        }
-        if alt_is_ground {
-            flags |= FLAG_ALT_IS_GROUND;
-            // adsb.lol semantics: "alt is ground" implies on_ground.
-            flags |= FLAG_ON_GROUND_RAW;
-        }
+        let flags = if alt_is_ground { FLAG_ALT_IS_GROUND } else { 0 };
         points.push(TracePoint {
             timestamp: base_timestamp + ts_offset,
             lat,

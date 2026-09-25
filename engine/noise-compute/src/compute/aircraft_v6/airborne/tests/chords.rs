@@ -64,21 +64,18 @@ fn received_sel_db(flights: &HashMap<u64, FlightAccum>, fid: u64) -> f64 {
     10.0 * flights[&fid].period_energy.iter().sum::<f64>().log10()
 }
 
-/// Reviewer example: a B738 approach at 250 kt, 1 500 m up, 8–16 km east.
-/// The whole chord is 20.90 dB SEL; its two 4 km pieces are 19.95 and
-/// 13.82 dB and would each fail the per-event floor. Floored as one chord,
-/// the flight keeps the whole chord's energy (and its top-flight row).
+/// A distant low B738 approach clears 20 dB only when its pieces are summed.
 #[test]
 fn split_chord_takes_the_event_floor_as_one_event() {
     let (receiver, horizon) = equator_receiver();
-    let weights = aircraft::ClassWeights::uniform();
+    let weights = aircraft::ProvenanceWeights::PRIMARY_ONLY;
     let fid = flight_id::pack_real(0xB738, 1_750_000_000).unwrap();
     let mut whole = SynthColumns::new();
     let key = whole.add_flight("CSA1", "B738", aircraft::profile_idx("B738"));
-    equator_chord(&mut whole, fid, key, 8.0, 16.0, 1_500, 250.0, false, 1);
+    equator_chord(&mut whole, fid, key, 11.0, 16.0, 50, 250.0, false, 1);
     let mut split = SynthColumns::new();
     let key = split.add_flight("CSA1", "B738", aircraft::profile_idx("B738"));
-    equator_chord(&mut split, fid, key, 8.0, 16.0, 1_500, 250.0, false, 2);
+    equator_chord(&mut split, fid, key, 11.0, 16.0, 50, 250.0, false, 2);
     let run = |cols: &SynthColumns| {
         scatter(
             &receiver,
@@ -108,7 +105,7 @@ fn split_chord_takes_the_event_floor_as_one_event() {
         })
         .collect();
     eprintln!("floor example: whole {whole_sel:.2} dB, pieces {piece_sel:.2?} dB, chord {split_sel:.2} dB");
-    assert!((whole_sel - 20.90).abs() < 0.05, "{whole_sel}");
+    assert!((20.0..21.0).contains(&whole_sel), "{whole_sel}");
     assert!(piece_sel.iter().all(|&sel| sel < 20.0), "{piece_sel:?}");
     assert!(
         (split_sel - whole_sel).abs() <= 0.01,
@@ -121,7 +118,7 @@ fn split_chord_takes_the_event_floor_as_one_event() {
     // the kernel refuses.
     let mut faint = SynthColumns::new();
     let key = faint.add_flight("CSA1", "B738", aircraft::profile_idx("B738"));
-    equator_chord(&mut faint, fid, key, 12.0, 16.0, 1_500, 250.0, false, 2);
+    equator_chord(&mut faint, fid, key, 13.0, 16.0, 50, 250.0, false, 2);
     assert!(run(&faint).is_empty());
 }
 
@@ -132,7 +129,7 @@ fn split_chord_takes_the_event_floor_as_one_event() {
 fn split_chords_hold_one_trace_slot_each_and_draw_whole() {
     const CAP: usize = 150;
     let (receiver, horizon) = equator_receiver();
-    let weights = aircraft::ClassWeights::uniform();
+    let weights = aircraft::ProvenanceWeights::PRIMARY_ONLY;
     let build = |pieces: u32| {
         let mut cols = SynthColumns::new();
         for flight in 0..200u64 {
@@ -192,7 +189,7 @@ fn split_chords_hold_one_trace_slot_each_and_draw_whole() {
 #[test]
 fn consecutive_split_chords_stay_separate_events() {
     let (receiver, horizon) = equator_receiver();
-    let weights = aircraft::ClassWeights::uniform();
+    let weights = aircraft::ProvenanceWeights::PRIMARY_ONLY;
     let fid = flight_id::pack_real(0xC0DE, 1_750_000_000).unwrap();
     let mut cols = SynthColumns::new();
     let key = cols.add_flight("TWO", "A320", aircraft::profile_idx("A320"));

@@ -66,9 +66,8 @@ function doc29() {
     lateral_m: 0,
     beta_deg: 90,
     seg_len_m: 1,
-    d_bar_m: 1,
+    d_lambda_m: 1,
     installation: 'wing',
-    cffk_fast_path: true,
     screening_kind: 'none',
     screening_db: 0,
   }

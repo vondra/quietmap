@@ -56,23 +56,6 @@ pub const AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M: f32 = 4_000.0;
 pub const AIRBORNE_QUERY_RADIUS_M: f64 =
     AIRCRAFT_MAX_HORIZONTAL_REACH_M + AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M as f64 / 2.0;
 
-/// Slant threshold above which `segment_sel_with_overrides` (the one kernel
-/// every popup and tile call funnels through) switches to the closed-form far-field kernel
-/// (CFFK). The corrections that the per-segment Doc 29 path applies
-/// (ΔI, ΔF, lateral attenuation) are all bounded:
-///   - λ is identically 0 for elevation angle β > 50° (already gated).
-///   - ΔI peaks at ~0.4 dB for wing, ~0.8 dB for fuselage, and is < 0.3 dB
-///     for typical FL330+ overhead geometries.
-///   - ΔF approaches 0 dB for segments where the CPA is interior to the
-///     segment and the segment is several `d_bar` long — true for almost
-///     all cruise segments.
-///
-/// At 25 000 ft / 7 620 m we're at the last NPD table point, beyond which
-/// the slope is already a physical extrapolation. Switching to the closed
-/// form there is cheap (1 log + 1 mul + 1 add) and matches the Doc 29
-/// reference within ~0.3 dB.
-pub const AIRCRAFT_FAR_FIELD_THRESHOLD_M: f64 = 7620.0;
-
 /// Reference slant (meters) at the last NPD table point (25 000 ft). Anchor
 /// for physics-based extrapolation of SEL beyond the table.
 pub const AIRCRAFT_NPD_REF_SLANT_M: f64 = 7620.0;
@@ -116,7 +99,6 @@ pub struct NpdProfile {
     pub approach_lmax: [f64; 10],
     pub departure_lmax: [f64; 10],
     pub v_ref_kt: f64,
-    pub d_bar_m: f64,
     pub installation: Installation,
     /// **NPD-tail residual coefficient** (dB/m), lazily back-fitted from the
     /// last three NPD points (see `compute_alpha_eff`). NOT a generic
@@ -149,7 +131,6 @@ impl NpdProfile {
         approach_lmax: [f64; 10],
         departure_lmax: [f64; 10],
         v_ref_kt: f64,
-        d_bar_m: f64,
         installation: Installation,
     ) -> Self {
         NpdProfile {
@@ -159,13 +140,15 @@ impl NpdProfile {
             approach_lmax,
             departure_lmax,
             v_ref_kt,
-            d_bar_m,
             installation,
             alpha_eff_approach: OnceLock::new(),
             alpha_eff_departure: OnceLock::new(),
         }
     }
 }
+
+mod scaled_distance;
+pub use scaled_distance::build_scaled_distance_lut;
 
 // Per-typecode NPD profiles + per-class metadata (constants in
 // `profiles_generated.rs`) auto-generated from
@@ -175,7 +158,7 @@ impl NpdProfile {
 pub use crate::emission::profiles_generated::{
     is_negligible_noise_typecode, is_non_aircraft_typecode, noise_class_of, profile_idx,
     CLASS_NAMES, CLASS_OF_PROFILE, CLASS_REP_PROFILE_IDX, FALLBACK_NOISE_CLASS,
-    FALLBACK_PROFILE_IDX, GROUND_OPS_REFERENCE_LW_PER_METER_DB, IS_JET, NUM_CLASSES, NUM_PROFILES,
+    FALLBACK_PROFILE_IDX, IS_JET, NUM_CLASSES, NUM_PROFILES,
     PROFILES,
 };
 
@@ -196,175 +179,6 @@ pub fn clamp_profile_idx(profile_idx: u8) -> usize {
 pub fn is_helicopter_profile(profile_idx: u8) -> bool {
     let cls = noise_class_of(profile_idx) as usize;
     cls < CLASS_NAMES.len() && CLASS_NAMES[cls] == "HELICOPTER"
-}
-
-/// Classes sampled over the full available-year window in hybrid
-/// extracts; everything else keeps the 12-day first-of-month airline
-/// window. GA + helicopter traffic is
-/// sporadic and one-off-heavy, so a 12-day sample weights a single
-/// flight ×30.42 (+14.8 dB phantom — Kytín audit 2026-06-12); sampling
-/// those classes over `ga_n_days` makes a one-off contribute exactly
-/// `1/ga_n_days` of its energy while genuinely daily patterns are unchanged.
-///
-/// Deliberately not included:
-/// - `PROP_DH8D` — the *airline turboprop* class (AT72/76, DH8x, SF34,
-///   L410…): scheduled traffic that the 12-day window samples well; a
-///   plain `!is_jet` predicate would wrongly move it. GA turbine
-///   singles routed there by fallback (PC12/TBM/C208) stay 12-day because
-///   they share the airline turboprop profile.
-/// - `FUSE_C56X` / `FUSE_CRJ9` — bizjets share these classes with
-///   scheduled regional jets (CRJ2/7/9, E-jets fallback, B712,
-///   BAe146); not separable at class level. Documented residual.
-/// - `WING_FALLBACK` — blank/unknown typecode ≠ GA.
-///
-/// Name-keyed via `CLASS_NAMES` (same rationale as
-/// [`is_helicopter_profile`]): the generator reorders class indices on
-/// data updates.
-#[inline]
-pub fn is_ga_sampled_class(class_idx: u8) -> bool {
-    let cls = class_idx as usize;
-    cls < CLASS_NAMES.len() && matches!(CLASS_NAMES[cls], "PROP_C172" | "HELICOPTER")
-}
-
-/// Whether `profile_idx`'s noise class is GA-window-sampled — see
-/// [`is_ga_sampled_class`]. This is the predicate the hybrid Stage 0
-/// `ClassWindowFilter` routes on; both extract passes derive class
-/// through the same `typecode → profile_idx → noise_class_of` chain,
-/// so pass complementarity is exact by construction.
-#[inline]
-pub fn is_ga_sampled_profile(profile_idx: u8) -> bool {
-    is_ga_sampled_class(noise_class_of(profile_idx))
-}
-
-/// Schema-metadata key holding the per-class sample-day vector that the
-/// hybrid GA estimator weights against. A `NUM_CLASSES`-length comma vector
-/// indexed by
-/// noise-class idx: GA-sampled classes carry `ga_n_days`, every
-/// other class carries the airline window `n_days` (12). A single-window
-/// extract stamps the uniform `n_days` vector. Stamped by
-/// `aircraft_extract::arrow_schemas::with_n_days_and_windows`.
-pub const SAMPLE_DAYS_BY_CLASS_KEY: &str = "sample_days_by_class";
-
-/// Per-class energy/count weight LUT for the GA hybrid estimator.
-/// `w[c] = n_days / sample_days_by_class[c]`:
-/// airline classes (sampled over the same `n_days` window the consumer
-/// divides by) get `1.0`; GA classes get `n_days / ga_n_days`. Applying
-/// `÷ n_days` (unchanged everywhere) then `× w[class]` yields
-/// `E / ga_n_days` for a
-/// GA row and `E / n_days` for an airline row — so a one-off GA flight
-/// uses the full-year frequency instead of the airline-window frequency
-/// (kills the +14.8 dB
-/// Kytín phantom), while genuinely-daily GA patterns are unchanged.
-///
-/// `veh_kind = 1` (GSE) rows MUST keep weight `1.0` — their `class_idx`
-/// indexes the GSE class space, not the aircraft classes, and GSE is an
-/// airline-pass-only artifact. Callers branch on `veh_kind`.
-#[derive(Clone, Copy, Debug)]
-pub struct ClassWeights {
-    w: [f64; NUM_CLASSES],
-    /// Sample-day count of the GA-window classes (all equal by
-    /// construction — both PROP_C172 and HELICOPTER are sampled over the
-    /// same window). Equals `n_days` for a uniform (non-hybrid) vector.
-    /// The popup's split-window count math (`microseg_unique_ga_*` and the
-    /// airport-summary GA fid sets) divides by THIS, while the non-GA
-    /// counts divide by `n_days`.
-    ga_n_days: u16,
-}
-
-impl ClassWeights {
-    /// Weight for one aircraft noise class. Out-of-range indices clamp to
-    /// the last class rather than panic (defense-in-depth vs corrupt
-    /// `class_idx`); generator guarantees `class_idx < NUM_CLASSES`.
-    #[inline]
-    pub fn get(&self, class_idx: u8) -> f64 {
-        self.w[(class_idx as usize).min(NUM_CLASSES - 1)]
-    }
-
-    /// GA-window day count (divisor for the split-union GA movement
-    /// counts). `n_days` for a non-hybrid extract.
-    #[inline]
-    pub fn ga_n_days(&self) -> u16 {
-        self.ga_n_days
-    }
-
-    /// Raw `[f64; NUM_CLASSES]` for bulk upload (GPU LUT, `f32` cast at
-    /// the device boundary).
-    #[inline]
-    pub fn as_array(&self) -> &[f64; NUM_CLASSES] {
-        &self.w
-    }
-
-    /// All-`1.0` LUT — the non-hybrid identity (every class weighted at
-    /// the single `n_days` window). Test-only helper; production callers
-    /// always [`parse`](Self::parse) from arrow metadata. `ga_n_days = 1`
-    /// is a harmless placeholder — the GA-split count columns it would
-    /// divide are all-zero in any uniform-LUT path.
-    pub const fn uniform() -> Self {
-        ClassWeights {
-            w: [1.0; NUM_CLASSES],
-            ga_n_days: 1,
-        }
-    }
-
-    /// Parse a `sample_days_by_class` metadata string into the weight LUT
-    /// given the consumer's `n_days` divisor. FAILS LOUD (owner directive
-    /// 2026-06-12 — no compat shims): a `None`/missing value, wrong length,
-    /// non-integer entry, or zero day-count returns `Err` with an
-    /// operator-actionable message — the arrows predate the hybrid contract
-    /// and must be re-extracted/re-merged. The established pairing rule
-    /// (old reader + old arrows; new arrows + rebuilt reader) is what keeps
-    /// deploy-time consistency, so there is deliberately no uniform fallback.
-    pub fn parse(meta_value: Option<&str>, n_days: u16) -> Result<Self, String> {
-        let raw = meta_value.ok_or_else(|| {
-            format!(
-                "{SAMPLE_DAYS_BY_CLASS_KEY} metadata missing — re-run the extract/merge \
-                 (arrows predate the GA 365-day hybrid contract)"
-            )
-        })?;
-        let parts: Vec<&str> = raw.split(',').collect();
-        if parts.len() != NUM_CLASSES {
-            return Err(format!(
-                "{SAMPLE_DAYS_BY_CLASS_KEY} has {} entries, expected {NUM_CLASSES} \
-                 (got {raw:?}) — re-run the extract/merge",
-                parts.len()
-            ));
-        }
-        let n_days_f = (n_days as f64).max(1.0);
-        let mut w = [1.0f64; NUM_CLASSES];
-        // GA-window day count = the sample-days of the GA-sampled classes.
-        // They MUST be identical (the count split exposes one `ga_n_days`
-        // divisor) — a divergence is malformed metadata, rejected loud.
-        // Defaults to `n_days` so a uniform vector yields
-        // `ga_n_days == n_days` and the count split degenerates to legacy.
-        let mut ga_n_days: Option<u32> = None;
-        for (i, p) in parts.iter().enumerate() {
-            let days: u32 = p.trim().parse().map_err(|_| {
-                format!("{SAMPLE_DAYS_BY_CLASS_KEY}[{i}] = {p:?} is not an integer (got {raw:?})")
-            })?;
-            if days == 0 {
-                return Err(format!(
-                    "{SAMPLE_DAYS_BY_CLASS_KEY}[{i}] = 0 (invalid divisor) — re-run the extract"
-                ));
-            }
-            w[i] = n_days_f / days as f64;
-            if is_ga_sampled_class(i as u8) {
-                match ga_n_days {
-                    None => ga_n_days = Some(days),
-                    Some(prev) if prev != days => {
-                        return Err(format!(
-                            "{SAMPLE_DAYS_BY_CLASS_KEY}: GA classes carry different sample-day \
-                             counts ({prev} vs {days}) — must share one GA window; re-run the extract"
-                        ));
-                    }
-                    Some(_) => {}
-                }
-            }
-        }
-        let ga_n_days = ga_n_days
-            .unwrap_or(n_days.max(1) as u32)
-            .min(u16::MAX as u32) as u16;
-        Ok(ClassWeights { w, ga_n_days })
-    }
 }
 
 /// ICAO typecode prefix of a `PROFILES[idx].name`. Profile names are
@@ -567,7 +381,7 @@ pub fn fast_npd_lookup(lut: &[f64; NPD_LUT_BINS + 1], log_d: f64) -> f64 {
     lut[idx] + frac * (lut[idx + 1] - lut[idx])
 }
 
-/// Per-noise-class NPD LUTs (NUM_CLASSES classes × 2 directions × 2 metrics).
+/// Per-noise-class NPD LUTs (NUM_CLASSES classes × 2 directions × 3 metrics).
 /// Single global instance — built once on first access, reused across
 /// pipeline batches and popup queries. Sized by `NUM_CLASSES`: each class
 /// shares its Voronoi anchor's NPD curve, so one LUT per class is exact.
@@ -580,6 +394,8 @@ pub struct NpdLuts {
     departure: Vec<[f64; NPD_LUT_BINS + 1]>,
     approach_lmax: Vec<[f64; NPD_LUT_BINS + 1]>,
     departure_lmax: Vec<[f64; NPD_LUT_BINS + 1]>,
+    approach_scaled_distance: Vec<[f64; NPD_LUT_BINS + 1]>,
+    departure_scaled_distance: Vec<[f64; NPD_LUT_BINS + 1]>,
 }
 
 static NPD_LUTS: OnceLock<NpdLuts> = OnceLock::new();
@@ -594,18 +410,24 @@ impl NpdLuts {
         let mut departure = Vec::with_capacity(NUM_CLASSES);
         let mut approach_lmax = Vec::with_capacity(NUM_CLASSES);
         let mut departure_lmax = Vec::with_capacity(NUM_CLASSES);
+        let mut approach_scaled_distance = Vec::with_capacity(NUM_CLASSES);
+        let mut departure_scaled_distance = Vec::with_capacity(NUM_CLASSES);
         for class_idx in 0..NUM_CLASSES {
             let anchor = &PROFILES[CLASS_REP_PROFILE_IDX[class_idx] as usize];
             approach.push(build_npd_lut(anchor, false));
             departure.push(build_npd_lut(anchor, true));
             approach_lmax.push(build_lmax_lut(anchor, false));
             departure_lmax.push(build_lmax_lut(anchor, true));
+            approach_scaled_distance.push(build_scaled_distance_lut(anchor, false));
+            departure_scaled_distance.push(build_scaled_distance_lut(anchor, true));
         }
         NpdLuts {
             approach,
             departure,
             approach_lmax,
             departure_lmax,
+            approach_scaled_distance,
+            departure_scaled_distance,
         }
     }
 
@@ -619,22 +441,41 @@ impl NpdLuts {
         fast_npd_lookup(lut, log_d)
     }
 
-    /// SEL LUTs flattened for GPU upload, `f64` first: the cruise CUDA path
-    /// evaluates Doc 29 in double precision. All `NUM_CLASSES` approach LUTs
-    /// then all departure LUTs, each `NPD_LUT_BINS + 1` entries. The device
-    /// kernel indexes it identically to `lookup`:
-    /// `flat[(is_dep as usize * NUM_CLASSES + class) * (NPD_LUT_BINS + 1) + bin]`.
-    pub fn sel_luts_flat_f64(&self) -> Vec<f64> {
-        let mut v = Vec::with_capacity(2 * NUM_CLASSES * (NPD_LUT_BINS + 1));
-        for lut in self.approach.iter().chain(self.departure.iter()) {
+    /// Doc 29 scaled distance `d_λ` (m) of the class anchor at `log_d`
+    /// (log10 of the slant in feet); see [`build_scaled_distance_lut`].
+    #[inline(always)]
+    pub fn lookup_scaled_distance(&self, noise_class: usize, is_dep: bool, log_d: f64) -> f64 {
+        let lut = if is_dep {
+            &self.departure_scaled_distance[noise_class]
+        } else {
+            &self.approach_scaled_distance[noise_class]
+        };
+        fast_npd_lookup(lut, log_d)
+    }
+
+    /// SEL and scaled-distance LUTs flattened for GPU upload, `f64` first: the
+    /// cruise CUDA path evaluates Doc 29 in double precision. Four blocks of
+    /// `NUM_CLASSES` LUTs, each `NPD_LUT_BINS + 1` entries: approach SEL,
+    /// departure SEL, approach `d_λ`, departure `d_λ`. The device kernel indexes
+    /// it identically to `lookup` / `lookup_scaled_distance`:
+    /// `flat[((block * 2 + is_dep) * NUM_CLASSES + class) * (NPD_LUT_BINS + 1) + bin]`.
+    pub fn device_luts_flat_f64(&self) -> Vec<f64> {
+        let mut v = Vec::with_capacity(4 * NUM_CLASSES * (NPD_LUT_BINS + 1));
+        for lut in self
+            .approach
+            .iter()
+            .chain(&self.departure)
+            .chain(&self.approach_scaled_distance)
+            .chain(&self.departure_scaled_distance)
+        {
             v.extend(lut.iter().copied());
         }
         v
     }
 
     /// The same canonical layout narrowed for the float32 airborne kernel.
-    pub fn sel_luts_flat_f32(&self) -> Vec<f32> {
-        self.sel_luts_flat_f64().into_iter().map(|x| x as f32).collect()
+    pub fn device_luts_flat_f32(&self) -> Vec<f32> {
+        self.device_luts_flat_f64().into_iter().map(|x| x as f32).collect()
     }
 
     /// Per-event peak A-weighted SPL (LAmax) lookup — replaces the prior

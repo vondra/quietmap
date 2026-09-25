@@ -71,9 +71,7 @@ pub struct BuildAircraftAirborneSubSegmentTrace<'a> {
     /// Same energy with building screening removed.
     pub no_screening_period_energies: [f64; 3],
     pub n_days: f64,
-    /// Doc 29 Eq. 4-8b decomposition from the kernel evaluation. CFFK
-    /// fast path (slant > 7.62 km) populates `lambda_db = 0.0` and
-    /// `delta_i_db = 0.0` per Doc 29 §A.2.7 and sets `cffk_fast_path = true`.
+    /// Doc 29 Eq. 4-8b decomposition from the kernel evaluation.
     pub doc29: crate::types::Doc29Breakdown,
 }
 
@@ -159,10 +157,7 @@ pub struct BuildAircraftCruiseCellTrace {
     pub n_days: f64,
     pub cruise_buckets: Vec<CruiseBucketBreakdown>,
     pub cruise_top_flights: Vec<CruiseCellTopFlight>,
-    /// Doc 29 breakdown for the representative sub-segment (loudest
-    /// contributor to this cell's slant). CFFK fast path at cruise
-    /// altitudes — `lambda_db` and `delta_i_db` are typically 0.0 since
-    /// FL250+ implies slant ≥ 7.62 km.
+    /// Placeholder breakdown for the cell aggregate; no single event represents it.
     pub doc29: crate::types::Doc29Breakdown,
 }
 
@@ -244,9 +239,8 @@ mod tests {
                 lateral_m: 0.0,
                 beta_deg: 90.0,
                 seg_len_m: 0.0,
-                d_bar_m: 500.0,
+                d_lambda_m: 500.0,
                 installation: "wing",
-                cffk_fast_path: false,
                 screening_kind: "none",
                 screening_db: 0.0,
             },

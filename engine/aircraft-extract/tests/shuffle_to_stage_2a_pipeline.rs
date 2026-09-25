@@ -11,6 +11,25 @@ use aircraft_extract::stage_2a::run_stage_2a;
 use arrow::array::{Array, Float32Array, Int32Array, UInt64Array};
 use noise_compute::emission::aircraft::AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M;
 
+fn admitted(paths: &[PathBuf]) -> Vec<aircraft_extract::provider_receipt::AdmittedDay> {
+    paths
+        .iter()
+        .map(|path| aircraft_extract::provider_receipt::AdmittedDay {
+            segments: path.clone(),
+            increment: false,
+        })
+        .collect()
+}
+
+fn window(baseline_days: u16, increment_days: u16) -> noise_compute::emission::aircraft::SamplingWindow {
+    noise_compute::emission::aircraft::SamplingWindow {
+        baseline_days,
+        increment_days,
+        baseline_days_sha256: "baseline".into(),
+        increment_days_sha256: "increment".into(),
+    }
+}
+
 fn seg(flight_id: u64, phase: Phase, lat: f32, lon: f32) -> FlightSegment {
     FlightSegment {
         callsign: format!("FL{flight_id:04}"),
@@ -119,7 +138,7 @@ fn shuffle_then_stage_2a_writes_one_row_per_sub_segment_in_the_owner_square() {
     ];
     let day1_path = write_day(&segments_dir, "2025-01-21", &day1);
     let day2_path = write_day(&segments_dir, "2025-01-22", &day2);
-    shuffle_per_square(&[day1_path, day2_path], &[], &by_square_dir, None).unwrap();
+    shuffle_per_square(&admitted(&[day1_path, day2_path]), &by_square_dir, None).unwrap();
 
     let square_cz = square_id(cz_lat as f64, cz_lon as f64).unwrap();
     let square_nyc = square_id(nyc_lat as f64, nyc_lon as f64).unwrap();
@@ -127,7 +146,7 @@ fn shuffle_then_stage_2a_writes_one_row_per_sub_segment_in_the_owner_square() {
     expected.sort_unstable();
     assert_eq!(list_square_dirs(&by_square_dir), expected);
     assert_eq!(
-        run_stage_2a(&by_square_dir, &prepared_year_dir, 2, 0, None).unwrap(),
+        run_stage_2a(&by_square_dir, &prepared_year_dir, &window(2, 0), None).unwrap(),
         2
     );
     let rows = prepared_rows(&prepared_year_dir);
@@ -164,9 +183,9 @@ fn long_chord_is_split_once_across_its_owner_squares() {
     let short = seg(7, Phase::Airborne, 50.0, 13.95);
     let day = write_day(&segments_dir, "2025-07-01", &[chord.clone(), short]);
     let by_square = tmp.path().join("shuffled");
-    shuffle_per_square(std::slice::from_ref(&day), &[], &by_square, None).unwrap();
+    shuffle_per_square(&admitted(std::slice::from_ref(&day)), &by_square, None).unwrap();
     let prepared = tmp.path().join("prepared");
-    assert_eq!(run_stage_2a(&by_square, &prepared, 12, 0, None).unwrap(), 2);
+    assert_eq!(run_stage_2a(&by_square, &prepared, &window(12, 0), None).unwrap(), 2);
 
     let mut rows = prepared_rows(&prepared);
     rows.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -219,14 +238,14 @@ fn second_shuffle_wipes_stale_square_shards() {
             seg(2, Phase::Airborne, nyc_lat, nyc_lon),
         ],
     );
-    shuffle_per_square(std::slice::from_ref(&day_path), &[], &by_square_dir, None).unwrap();
+    shuffle_per_square(&admitted(std::slice::from_ref(&day_path)), &by_square_dir, None).unwrap();
     let square_nyc = square_id(nyc_lat as f64, nyc_lon as f64).unwrap();
     assert!(list_square_dirs(&by_square_dir).contains(&square_nyc));
 
     // Second run: only the CZ segment. NYC z9 dir must be wiped.
     let cz_only = vec![seg(99, Phase::Airborne, cz_lat, cz_lon)];
     let cz_only_path = write_day(&segments_dir, "2025-01-22", &cz_only);
-    shuffle_per_square(&[cz_only_path], &[], &by_square_dir, None).unwrap();
+    shuffle_per_square(&admitted(&[cz_only_path]), &by_square_dir, None).unwrap();
 
     assert_eq!(
         list_square_dirs(&by_square_dir),
@@ -243,12 +262,12 @@ fn empty_input_pipeline_is_a_clean_noop() {
     let by_square_dir = tmp.path().join("segments_by_square");
     let prepared_year_dir = tmp.path().join("prepared_year");
 
-    shuffle_per_square(&[], &[], &by_square_dir, None).unwrap();
+    shuffle_per_square(&admitted(&[]), &by_square_dir, None).unwrap();
     assert!(by_square_dir.exists(), "out_dir must be created");
     assert!(!tmp.path().join("temp_shuffle").exists());
     assert!(list_square_dirs(&by_square_dir).is_empty());
 
-    let n = run_stage_2a(&by_square_dir, &prepared_year_dir, 1, 0, None).unwrap();
+    let n = run_stage_2a(&by_square_dir, &prepared_year_dir, &window(1, 0), None).unwrap();
     assert_eq!(n, 0);
 }
 
@@ -281,9 +300,9 @@ fn owner_shards_preserve_multiplicity_at_polar_and_seam_midpoints_and_honour_sco
             aircraft_extract::scope::ScopeBbox::parse("50.001,14.261,50.001,14.261").unwrap()
         });
         let by_square = tmp.path().join("shuffled");
-        shuffle_per_square(std::slice::from_ref(&day), &[], &by_square, scope.as_ref()).unwrap();
+        shuffle_per_square(&admitted(std::slice::from_ref(&day)), &by_square, scope.as_ref()).unwrap();
         let output = tmp.path().join("prepared");
-        let written = run_stage_2a(&by_square, &output, 12, 0, scope.as_ref()).unwrap();
+        let written = run_stage_2a(&by_square, &output, &window(12, 0), scope.as_ref()).unwrap();
         let rows = prepared_rows(&output);
         let pieces = (airborne.length_m / AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M)
             .ceil()

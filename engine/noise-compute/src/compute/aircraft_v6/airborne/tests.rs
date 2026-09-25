@@ -408,26 +408,35 @@ fn one_subseg(fid: u64, typecode: &str) -> SynthColumns {
     cols
 }
 
-struct FlatGround;
-impl crate::types::RasterSampler for FlatGround {
-    fn elevation(&self, _: f64, _: f64) -> f64 {
-        0.0
-    }
-    fn ground_g(&self, _: f64, _: f64) -> f64 {
-        1.0
-    }
-    fn building_enclosure(&self, _: f64, _: f64) -> f64 {
-        0.0
+/// Two sub-segments of one flight at one spot: the primary one and, when
+/// `secondary`, the same geometry flagged secondary-only.
+fn primary_and_secondary_subsegs(fid: u64, typecode: &str, secondary: bool) -> SynthColumns {
+    let mut cols = SynthColumns::new();
+    let key = cols.add_flight("", typecode, aircraft::profile_idx(typecode));
+    let start = grid::lonlat_to_grid(f64::from(14.2480_f32), f64::from(50.1015_f32));
+    let end = grid::lonlat_to_grid(f64::from(14.2520_f32), f64::from(50.1015_f32));
+    let flags = if secondary {
+        aircraft::SEGMENT_FLAG_SECONDARY_ONLY
+    } else {
+        0
+    };
+    cols.push_row(fid, key, start, end, (150, 150), 120.0, 285.0, 0, flags, 0);
+    cols
+}
+
+fn window(baseline_days: u16, increment_days: u16) -> aircraft::SamplingWindow {
+    aircraft::SamplingWindow {
+        baseline_days,
+        increment_days,
+        baseline_days_sha256: "baseline".into(),
+        increment_days_sha256: "increment".into(),
     }
 }
 
-/// Mixed-window GA hybrid scatter: with a 12-day airline window and a
-/// 365-day GA window, a GA-class (C172) flight's accumulated energy +
-/// count weight must be exactly `12/365` of the same flight scattered
-/// under the uniform LUT, while an airline-class (B738) flight stays
-/// at `1.0`. This is the +14.8 dB Kytín phantom kill, in one assert.
+/// Difference estimator: a primary row divides by the baseline days, a
+/// secondary-only row by the increment days — energy and movement count.
 #[test]
-fn mixed_window_ga_weighted_airline_unchanged() {
+fn secondary_only_rows_divide_by_the_increment_days() {
     let receiver = Receiver::new(50.100, 14.250, 0.0);
     let horizon = aircraft::ReceiverHorizon::build(
         |_, _| 0.0,
@@ -435,120 +444,59 @@ fn mixed_window_ga_weighted_airline_unchanged() {
         receiver.lon,
         receiver.altitude_m(),
     );
-    // Build the hybrid LUT: GA classes → 365, airline classes → 12.
-    let vec: String = (0..aircraft::NUM_CLASSES)
-        .map(|c| {
-            if aircraft::is_ga_sampled_class(c as u8) {
-                "365"
-            } else {
-                "12"
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    let hybrid = aircraft::ClassWeights::parse(Some(&vec), 12).unwrap();
-    let uniform = aircraft::ClassWeights::uniform();
-
-    for (typecode, expect_ga) in [("C172", true), ("R44", true), ("B738", false)] {
-        let cols = one_subseg(
-            flight_id::pack_real(0xABCD01, 1_700_000_000).unwrap(),
-            typecode,
+    let weights = window(360, 11).provenance_weights();
+    let fid = flight_id::pack_real(0xABCD01, 1_700_000_000).unwrap();
+    let energy = |secondary| -> (f64, f64) {
+        let cols = primary_and_secondary_subsegs(fid, "B738", secondary);
+        let flights = scatter(
+            &receiver,
+            &cols.batches(usize::MAX),
+            360.0,
+            &weights,
+            &horizon,
+            None,
+            0,
+            None,
         );
-        let row = cols.batches(usize::MAX);
-        let uni = scatter(&receiver, &row, 12.0, &uniform, &horizon, None, 0, None);
-        let hyb = scatter(&receiver, &row, 12.0, &hybrid, &horizon, None, 0, None);
-        let e_uni: f64 = uni
-            .values()
-            .map(|a| a.period_energy.iter().sum::<f64>())
-            .sum();
-        let e_hyb: f64 = hyb
-            .values()
-            .map(|a| a.period_energy.iter().sum::<f64>())
-            .sum();
-        assert!(
-            e_uni > 0.0,
-            "{typecode}: sub-seg must be audible at the receiver"
-        );
-        let expected_ratio = if expect_ga { 12.0 / 365.0 } else { 1.0 };
-        assert!(
-            (e_hyb / e_uni - expected_ratio).abs() < 1e-9,
-            "{typecode}: hybrid/uniform energy ratio {} != {expected_ratio}",
-            e_hyb / e_uni
-        );
-        // Count weight rides the same factor (helicopter_flights_per_day,
-        // observed_flights_per_day).
-        let fw = hyb.values().next().unwrap().flight_weight;
-        assert!(
-            (fw - expected_ratio).abs() < 1e-9,
-            "{typecode}: flight_weight {fw} != {expected_ratio}"
-        );
-    }
+        let acc = flights.values().next().expect("audible sub-segment");
+        (acc.period_energy.iter().sum(), acc.flight_weight)
+    };
+    let (primary, primary_count) = energy(false);
+    let (secondary, secondary_count) = energy(true);
+    assert!(primary > 0.0);
+    assert!((secondary / primary - 360.0 / 11.0).abs() < 1e-9);
+    assert_eq!(primary_count, 1.0);
+    assert!((secondary_count - 360.0 / 11.0).abs() < 1e-9);
 }
 
-/// The popup aggregation carries the GA weight end-to-end: the aircraft
-/// periods of a lone GA flight drop ~10·log10(365/12) ≈ 14.8 dB vs the
-/// uniform window (the Kytín correction).
+/// A flight the primary provider saw anywhere at this receiver counts as a
+/// baseline movement even when some of its rows are secondary-only.
 #[test]
-fn ga_hybrid_drops_airborne_lden_by_14_8_db() {
-    use crate::compute::aircraft_v6::compute_aircraft_v6;
+fn a_flight_with_any_primary_row_counts_as_a_baseline_movement() {
     let receiver = Receiver::new(50.100, 14.250, 0.0);
-    let cols = one_subseg(
-        flight_id::pack_real(0xBEEF02, 1_700_000_000).unwrap(),
-        "R44",
-    );
-    let row = cols.batches(usize::MAX);
-    let vec: String = (0..aircraft::NUM_CLASSES)
-        .map(|c| {
-            if aircraft::is_ga_sampled_class(c as u8) {
-                "365"
-            } else {
-                "12"
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    let hybrid = aircraft::ClassWeights::parse(Some(&vec), 12).unwrap();
-    let uniform = aircraft::ClassWeights::uniform();
     let horizon = aircraft::ReceiverHorizon::build(
         |_, _| 0.0,
         receiver.lat,
         receiver.lon,
         receiver.altitude_m(),
     );
-    let uni = compute_aircraft_v6(
+    let fid = flight_id::pack_real(0xBEEF02, 1_700_000_000).unwrap();
+    let mut cols = primary_and_secondary_subsegs(fid, "B738", true);
+    let start = grid::lonlat_to_grid(f64::from(14.2520_f32), f64::from(50.1015_f32));
+    let end = grid::lonlat_to_grid(f64::from(14.2560_f32), f64::from(50.1015_f32));
+    cols.push_row(fid, 0, start, end, (150, 150), 120.0, 285.0, 0, 0, 0);
+    let flights = scatter(
         &receiver,
-        &row,
-        &[],
-        &FlatGround,
-        Some(&horizon),
+        &cols.batches(usize::MAX),
+        360.0,
+        &window(360, 11).provenance_weights(),
+        &horizon,
         None,
-        12,
-        &uniform,
         0,
         None,
-        None,
-    )
-    .0;
-    let hyb = compute_aircraft_v6(
-        &receiver,
-        &row,
-        &[],
-        &FlatGround,
-        Some(&horizon),
-        None,
-        12,
-        &hybrid,
-        0,
-        None,
-        None,
-    )
-    .0;
-    let drop = uni.lden_db - hyb.lden_db;
-    let expected = 10.0 * (365.0f64 / 12.0).log10(); // ≈ 14.83 dB
-    assert!(
-        (drop - expected).abs() < 0.05,
-        "GA hybrid airborne Lden drop {drop:.2} dB != {expected:.2} dB"
     );
+    assert_eq!(flights.len(), 1);
+    assert_eq!(flights.values().next().unwrap().flight_weight, 1.0);
 }
 
 #[test]
@@ -568,7 +516,7 @@ fn blocked_popup_retains_free_field_above_received() {
         &receiver,
         &cols.batches(usize::MAX),
         1.0,
-        &aircraft::ClassWeights::uniform(),
+        &aircraft::ProvenanceWeights::PRIMARY_ONLY,
         &horizon,
         None,
         0,
@@ -588,11 +536,11 @@ fn blocked_popup_retains_free_field_above_received() {
     let (received, free, impacts, _) = build_detail(
         &flights,
         &cruise_flights,
-        0,
+        0.0,
         &candidates,
         &cruise_bands,
         1.0,
-        1.0,
+        0,
     );
     assert!(
         free.lden_db > received.lden_db,
@@ -703,6 +651,7 @@ fn aircraft_detail_ignores_map_iteration_order() {
                     peak_lmax: 31.0 + spread(i, 13.0) * 40.0,
                     alt_at_peak: 8_000.0 + spread(i, 14.0) * 4_000.0,
                     class_at_peak: i % aircraft::NUM_CLASSES,
+                    weight: 1.0,
                 },
             );
             cands.insert(
@@ -733,11 +682,11 @@ fn aircraft_detail_ignores_map_iteration_order() {
         let (periods, periods_free, _impacts, detail) = build_detail(
             &flights,
             &cruise_flights,
-            stats.len(),
+            stats.len() as f64,
             &cands,
             &bands,
             7.0,
-            7.0,
+            0,
         );
         // JSON round-trips f64 as shortest-roundtrip decimal, which is
         // injective on f64 — equal strings mean equal bits.
@@ -857,7 +806,7 @@ fn chunked_scatter_matches_serial_within_rounding() {
     let cols = synthetic_airborne_rows(N_TRACKS, 2, N_FLIGHTS, 0x5EED_1234);
     let batches = cols.batches(1_000);
     let (receiver, horizon) = synthetic_receiver_and_horizon();
-    let weights = aircraft::ClassWeights::uniform();
+    let weights = aircraft::ProvenanceWeights::PRIMARY_ONLY;
 
     // Guard against a vacuous pass: the input must actually be split.
     let chunks = super::chunk_batches(&batches);
@@ -964,7 +913,7 @@ fn chunked_scatter_keeps_the_same_top_k_traces() {
     let cols = synthetic_airborne_rows(N_TRACKS, 2, N_FLIGHTS, 0xC0FF_EE01);
     let batches = cols.batches(4_096);
     let (receiver, horizon) = synthetic_receiver_and_horizon();
-    let weights = aircraft::ClassWeights::uniform();
+    let weights = aircraft::ProvenanceWeights::PRIMARY_ONLY;
 
     let ctx = super::ScatterContext::new(&receiver, 7.0, &weights, &horizon, None);
     let serial_chunk = super::scatter_chunk(&ctx, &batches, 0, 0, CAP, true);
@@ -1024,7 +973,7 @@ fn chunked_scatter_bytes_do_not_depend_on_the_thread_pool() {
     let cols = synthetic_airborne_rows(N_TRACKS, 2, N_FLIGHTS, 0x5EED_0042);
     let batches = cols.batches(4_096);
     let (receiver, horizon) = synthetic_receiver_and_horizon();
-    let weights = aircraft::ClassWeights::uniform();
+    let weights = aircraft::ProvenanceWeights::PRIMARY_ONLY;
     let run = |threads: usize| {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
@@ -1076,7 +1025,7 @@ fn scatter_speedup_on_150k_rows() {
     let cols = synthetic_airborne_rows(N_TRACKS, SUBSEGS_PER_TRACK, N_FLIGHTS, 0xBE_1234);
     let batches = cols.batches(4_096);
     let (receiver, horizon) = synthetic_receiver_and_horizon();
-    let weights = aircraft::ClassWeights::uniform();
+    let weights = aircraft::ProvenanceWeights::PRIMARY_ONLY;
 
     let t0 = std::time::Instant::now();
     let ctx = super::ScatterContext::new(&receiver, 7.0, &weights, &horizon, None);

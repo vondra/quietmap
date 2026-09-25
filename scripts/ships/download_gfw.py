@@ -144,7 +144,7 @@ def main():
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
     # Ships share the aircraft exposure year: the GA day list is every day of it.
-    days = sampling_days(resolve_anchor(args.anchor, datetime.now(timezone.utc).date()))[1]
+    days = sampling_days(resolve_anchor(args.anchor, datetime.now(timezone.utc).date())).baseline
     first_day, last_day = days[0], days[-1]
     (output / "window.json").write_text(json.dumps({"first_day": first_day.isoformat(), "last_day": last_day.isoformat(), "days": len(days),
                                                     "dataset": DATASET, "classes": CLASS_TYPES, "tile_deg": TILE_DEG}, indent=1))

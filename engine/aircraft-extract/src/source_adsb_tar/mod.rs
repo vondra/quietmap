@@ -16,60 +16,15 @@ use anyhow::{Context, Result};
 use crate::filters;
 use crate::flight::{origin, source_id, Flight};
 use crate::profile;
+use crate::provider_receipt::ProviderDayReceipt;
 use crate::segment::split_flights;
-use crate::source::FlightSource;
-use crate::trace::{read_day_traces, read_day_traces_filtered, AircraftTrace, TracePoint};
-
-/// Stage-0 class-window routing for the hybrid GA/airline sampling. The GA
-/// pass observes only full-year-sampled classes (PROP_C172 + HELICOPTER);
-/// the airline pass
-/// keeps the complement — including GSE: ground vehicles belong to the
-/// 12-day airline window. `All` is the single-window default,
-/// byte-identical to the pre-hybrid pipeline.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ClassWindowFilter {
-    #[default]
-    All,
-    GaOnly,
-    NonGa,
-}
-
-impl ClassWindowFilter {
-    /// Whether a trace with this raw `"t"` typecode survives this pass.
-    ///
-    /// Single decision point shared by [`trace_to_flight`] (the
-    /// authoritative drop) and the gzip prefix probe in `read_day`
-    /// (early skip of the full inflate+parse) — sharing it makes
-    /// GaOnly/NonGa complementarity and probe == full-parse consistency
-    /// hold by construction. TWR + glider traces are dropped in EVERY
-    /// pass (`trace_to_flight` drops them before the window check;
-    /// returning false here merely saves their parse).
-    pub fn keeps_typecode(self, raw_typecode: &str) -> bool {
-        if matches!(self, ClassWindowFilter::All) {
-            return true;
-        }
-        let trimmed = raw_typecode.trim();
-        if trimmed.eq_ignore_ascii_case("TWR") || profile::is_negligible_noise_typecode(trimmed) {
-            return false;
-        }
-        // GSE (GND) routes by vehicle kind, not by what `profile_idx`
-        // makes of the "GND" string — it belongs to the airline pass.
-        let is_gse = trimmed.eq_ignore_ascii_case("GND");
-        let ga_sampled =
-            !is_gse && profile::is_ga_sampled_profile(profile::profile_idx(raw_typecode));
-        match self {
-            ClassWindowFilter::All => true,
-            ClassWindowFilter::GaOnly => ga_sampled,
-            ClassWindowFilter::NonGa => !ga_sampled,
-        }
-    }
-}
+use crate::source::{FlightSource, ProviderDay};
+use crate::trace::{read_day_archive, AircraftTrace, TracePoint};
 
 pub struct AdsbTarSource {
     root: PathBuf,
     selected_archives: Option<BTreeMap<String, Vec<PathBuf>>>,
     source_id: u8,
-    class_filter: ClassWindowFilter,
 }
 
 impl AdsbTarSource {
@@ -78,7 +33,6 @@ impl AdsbTarSource {
             root: root.into(),
             selected_archives: None,
             source_id: source_id::ADSB_LOL_TAR,
-            class_filter: ClassWindowFilter::All,
         }
     }
 
@@ -110,16 +64,9 @@ impl AdsbTarSource {
 
     /// Tag the provenance `source_id` (default [`source_id::ADSB_LOL_TAR`]).
     /// The adsbexchange feed passes [`source_id::ADSB_EXCHANGE`] — same TAR
-    /// format, so only the stamped provenance (and dedup identity) differ.
+    /// format, so only the stamped provenance differs.
     pub fn with_source_id(mut self, source_id: u8) -> Self {
         self.source_id = source_id;
-        self
-    }
-
-    /// Restrict ingest to one hybrid sampling pass (default
-    /// [`ClassWindowFilter::All`] = single-window extract).
-    pub fn with_class_filter(mut self, class_filter: ClassWindowFilter) -> Self {
-        self.class_filter = class_filter;
         self
     }
 
@@ -176,7 +123,14 @@ impl FlightSource for AdsbTarSource {
         self.source_id
     }
 
-    fn read_day(&self, day_str: &str) -> Result<Vec<Flight>> {
+    fn has_day(&self, day_str: &str) -> bool {
+        match &self.selected_archives {
+            Some(selected) => selected.contains_key(day_str),
+            None => self.day_dir(day_str).is_dir(),
+        }
+    }
+
+    fn read_provider_day(&self, day_str: &str) -> Result<ProviderDay> {
         crate::period::parse_date_id(day_str)?;
         let dir = self.selected_day_dir(day_str)?;
         anyhow::ensure!(
@@ -184,50 +138,26 @@ impl FlightSource for AdsbTarSource {
             "missing ADS-B day {day_str}: {}",
             dir.display()
         );
-        // Window-filtered passes drive the gzip typecode prefix probe:
-        // traces the window would drop skip the full inflate+parse
-        // (the GA pass's cost lever — airliner traces are the longest
-        // files). Probe misses full-parse and re-filter, so
-        // `trace_to_flight` below stays the single authority.
-        let filter = self.class_filter;
-        let traces = match filter {
-            ClassWindowFilter::All => read_day_traces(&dir)
-                .with_context(|| format!("read ADS-B day {day_str} from {}", dir.display()))?,
-            _ => {
-                let keep = |typecode: &str| filter.keeps_typecode(typecode);
-                let (traces, probe) = read_day_traces_filtered(&dir, Some(&keep))?;
-                eprintln!(
-                    "{} [stage0] {day_str} typecode-probe ({filter:?}): {} hits \
-                     ({} skipped pre-parse), {} misses → full parse",
-                    crate::progress::ts(),
-                    probe.probe_hits,
-                    probe.skipped_pre_parse,
-                    probe.probe_misses,
-                );
-                traces
-            }
-        };
-        // One trace_full_<icao>.json typically covers multiple flights
-        // per day (a 737 doing 4 rotations); `trace_to_flight` splits
-        // the day on long telemetry gaps and emits one `Flight` per
-        // movement so downstream `flight_id` is per-rotation, not
-        // per-icao24-day.
-        let mut out = Vec::with_capacity(traces.len());
-        for tr in traces {
-            out.extend(trace_to_flight(tr, self.source_id, filter));
-        }
-        Ok(out)
+        let read = read_day_archive(&dir)
+            .with_context(|| format!("read ADS-B day {day_str} from {}", dir.display()))?;
+        let receipt =
+            ProviderDayReceipt::from_traces(self.source_id, day_str, &read.traces, read.corrupt_members)?;
+        Ok(ProviderDay {
+            source_id: self.source_id,
+            traces: read.traces,
+            receipt,
+        })
     }
 }
 
-/// Convert a parsed adsb.lol trace into one [`Flight`] per rotation.
+/// Convert a merged provider-day trace into one [`Flight`] per rotation.
 /// Filters structurally-bad points, splits at sustained on-ground rests
 /// (≥ `MIN_TURNAROUND_S`) via [`split_flights`], packs a per-rotation
 /// `flight_id` from `(icao24, rotation_start_ts)`, and picks the
-/// callsign active at each rotation's start from the trace's
-/// pre-rebased transition list. `window` drops the traces outside this
-/// hybrid sampling pass ([`ClassWindowFilter::All`] keeps everything).
-pub fn trace_to_flight(tr: AircraftTrace, source: u8, window: ClassWindowFilter) -> Vec<Flight> {
+/// callsign active at each rotation's start. A rotation made only of
+/// secondary-provider samples carries `secondary_source`, every other one
+/// `primary_source`; the per-sample provenance itself travels in the point flags.
+pub fn trace_to_flight(mut tr: AircraftTrace, primary_source: u8, secondary_source: u8) -> Vec<Flight> {
     // Fixed towers are silent; GND traces use vehicle emission rather than aircraft NPD.
     let typecode_trim = tr.aircraft_type.trim();
     if typecode_trim.eq_ignore_ascii_case("TWR") {
@@ -238,44 +168,12 @@ pub fn trace_to_flight(tr: AircraftTrace, source: u8, window: ClassWindowFilter)
         return Vec::new();
     }
     let is_gse = typecode_trim.eq_ignore_ascii_case("GND");
-    // Hybrid class-window routing: the GA pass keeps only GA-sampled
-    // classes (GSE → airline pass), while the
-    // airline pass drops them. Runs before the per-point work so a
-    // probe-missed trace costs no more than its parse.
-    if !window.keeps_typecode(&tr.aircraft_type) {
+    tr.retain_points(|_, point| filters::point_is_sane(point));
+    if tr.points.len() < 2 {
         return Vec::new();
     }
-    let mut surviving: Vec<u32> = Vec::with_capacity(tr.points.len());
-    let mut points: Vec<TracePoint> = Vec::with_capacity(tr.points.len());
-    for (old_idx, p) in tr.points.into_iter().enumerate() {
-        if filters::point_is_sane(&p) {
-            surviving.push(old_idx as u32);
-            points.push(p);
-        }
-    }
-    if points.len() < 2 {
-        return Vec::new();
-    }
-
-    // Several raw transitions inside a dropped span collapse onto the
-    // next surviving point — the LAST one wins (active value when
-    // telemetry resumed); subsequent `dedup_by` collapses runs that
-    // ended up identical.
-    let mut callsigns: Vec<crate::trace::CallsignChange> = Vec::with_capacity(tr.callsigns.len());
-    for ch in tr.callsigns {
-        let new_idx = surviving.partition_point(|&i| (i as usize) < ch.point_idx);
-        if new_idx >= surviving.len() {
-            continue;
-        }
-        match callsigns.last_mut().filter(|c| c.point_idx == new_idx) {
-            Some(last) => last.value = ch.value,
-            None => callsigns.push(crate::trace::CallsignChange {
-                point_idx: new_idx,
-                value: ch.value,
-            }),
-        }
-    }
-    callsigns.dedup_by(|a, b| a.value == b.value);
+    let points = tr.points;
+    let callsigns = tr.callsigns;
 
     let icao24 = profile::parse_icao24_hex(&tr.icao24).unwrap_or(0);
     let icao24_real = icao24 != 0 && icao24 != 0xFF_FFFF;
@@ -285,6 +183,11 @@ pub fn trace_to_flight(tr: AircraftTrace, source: u8, window: ClassWindowFilter)
     let mut flights = Vec::with_capacity(ranges.len());
     for rot in ranges {
         let rot_pts: Vec<TracePoint> = points[rot.clone()].to_vec();
+        let source = if rot_pts.iter().all(TracePoint::is_secondary_provider) {
+            secondary_source
+        } else {
+            primary_source
+        };
         let first_ts = rot_pts[0].timestamp as u32;
         let flight_id = if icao24_real {
             profile::pack_real(icao24, first_ts)

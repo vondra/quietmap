@@ -11,8 +11,8 @@ fn airport_summary_part_preserves_all_membership_bits_and_rejects_invalid_masks(
     let rows = vec![AirportSummaryPartRow {
         airport_key: "LKPR".into(),
         members: vec![
-            (1, AIRPORT_FLAGS),
-            (u64::MAX, ARRIVAL | GA_DEPARTURE | GSE[2]),
+            (1, with_secondary(AIRPORT_CATEGORIES)),
+            (u64::MAX, ARRIVAL | (DEPARTURE << SECONDARY_SHIFT) | GSE[2]),
         ],
     }];
     write_airport_summary_part(&path, &rows).unwrap();
@@ -23,7 +23,7 @@ fn airport_summary_part_preserves_all_membership_bits_and_rejects_invalid_masks(
         &path,
         &[AirportSummaryPartRow {
             airport_key: "A".into(),
-            members: vec![(1, NON_GA)],
+            members: vec![(1, ANY)],
         }],
     )
     .unwrap();

@@ -117,10 +117,12 @@ fn test_airport_ground_sel_recovers_bad_altitude() {
         .expect("airport ground override should compute")
         .0;
 
-    assert!(
-        corrected > normal + 10.0,
-        "normal={normal:.2} corrected={corrected:.2}"
-    );
+    let mut at_ground = seg.clone();
+    at_ground.start_alt_m = 254.0;
+    at_ground.end_alt_m = 254.0;
+    let reference = segment_sel_airport_ground(&at_ground, 50.0004, 14.0, 254.0, &FlatGround).unwrap().0;
+    assert_eq!(corrected, reference);
+    assert!(corrected > normal, "normal={normal:.2} corrected={corrected:.2}");
 }
 
 #[test]
@@ -688,75 +690,24 @@ fn kytin_class_near_overflight_unscreened_bitwise() {
     assert_eq!(sel_none.to_bits(), sel_hz.to_bits());
 }
 
-/// Delta 1 (CRITICAL): screening is branch-aware. Both pairs sit in
-/// deep shadow (Dz = 18 dB cap, identical), but the CFFK fast path
-/// never subtracted Λ so it takes the full −18, while the full branch
-/// credits its Λ back: −(18 − Λ).
+/// Terrain diffraction competes with lateral attenuation at every slant.
 #[test]
-fn screening_is_branch_aware_cffk_vs_full() {
+fn screening_credits_lateral_attenuation_at_near_and_far_slants() {
     use crate::emission::aircraft::fast_lateral_attenuation;
-    // 500 m ridge at ~1.9 km: tan ≈ 0.26, deep shadow for both pairs.
-    let hz = c2_east_ridge_horizon(1_900.0, 2_100.0, 800.0, 300.0, 300.0);
-    let npd_luts = NpdLuts::shared();
-
-    // Full-branch pair: slant ≈ 3.0 km < 7 620 m.
-    let seg_near = c2_level_segment(3_000.0, 700.0); // rel_alt 400, β ≈ 7.6°
-    let (sel_n_none, cpa_n) = segment_sel_with_cuts(
-        &seg_near, C2_RX_LAT, C2_RX_LON, 300.0, 270.0, 270.0, npd_luts, None,
-    )
-    .unwrap();
-    assert!(cpa_n.d_p_m < 7_620.0, "near pair must take the full branch");
-    let (sel_n_hz, _) = segment_sel_with_cuts(
-        &seg_near,
-        C2_RX_LAT,
-        C2_RX_LON,
-        300.0,
-        270.0,
-        270.0,
-        npd_luts,
-        Some(&hz),
-    )
-    .unwrap();
-    let lambda = fast_lateral_attenuation(
-        cpa_n.relative_alt_m,
-        cpa_n.lateral_m,
-        false,
-        Installation::Wing,
-    );
-    assert!(
-        lambda > 1.0,
-        "test geometry must carry real lateral attenuation"
-    );
-    let drop_full = sel_n_none - sel_n_hz;
-    assert!(
-        (drop_full - (18.0 - lambda)).abs() < 1e-9,
-        "full branch must net (Dz − Λ): got {drop_full:.4}, want {:.4}",
-        18.0 - lambda
-    );
-
-    // CFFK pair: slant ≈ 8.0 km > 7 620 m, same capped Dz.
-    let seg_far = c2_level_segment(8_000.0, 900.0); // rel_alt 600, β ≈ 4.3°
-    let (sel_f_none, cpa_f) = segment_sel_with_cuts(
-        &seg_far, C2_RX_LAT, C2_RX_LON, 300.0, 270.0, 270.0, npd_luts, None,
-    )
-    .unwrap();
-    assert!(cpa_f.d_p_m > 7_620.0, "far pair must take the CFFK branch");
-    let (sel_f_hz, _) = segment_sel_with_cuts(
-        &seg_far,
-        C2_RX_LAT,
-        C2_RX_LON,
-        300.0,
-        270.0,
-        270.0,
-        npd_luts,
-        Some(&hz),
-    )
-    .unwrap();
-    let drop_cffk = sel_f_none - sel_f_hz;
-    assert!(
-        (drop_cffk - 18.0).abs() < 1e-9,
-        "CFFK branch must net the plain Dz (no Λ to credit): got {drop_cffk:.4}"
-    );
+    let horizon = c2_east_ridge_horizon(1_900.0, 2_100.0, 800.0, 300.0, 300.0);
+    let luts = NpdLuts::shared();
+    for (lateral, altitude) in [(3_000.0, 700.0), (8_000.0, 900.0)] {
+        let segment = c2_level_segment(lateral, altitude);
+        let (free, cpa) = segment_sel_with_cuts(
+            &segment, C2_RX_LAT, C2_RX_LON, 300.0, 270.0, 270.0, luts, None,
+        ).unwrap();
+        let (screened, _) = segment_sel_with_cuts(
+            &segment, C2_RX_LAT, C2_RX_LON, 300.0, 270.0, 270.0, luts, Some(&horizon),
+        ).unwrap();
+        let lambda = fast_lateral_attenuation(cpa.relative_alt_m, cpa.lateral_m, false);
+        assert!(lambda > 1.0);
+        assert!((free - screened - (18.0 - lambda)).abs() < 1e-9);
+    }
 }
 
 /// Cruise-β geometry never screens:

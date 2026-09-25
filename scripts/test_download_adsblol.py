@@ -272,8 +272,8 @@ class SelectedSourceReuse(unittest.TestCase):
             flights = work / 'flights/2026-06-06.arrow'
             segments = work / 'segments/2026-06-06.arrow'
             flights.write_bytes(b'empty typed output tested by native IPC regression')
-            def receipt(stage, action, chosen=selected, filter='ga'):
-                return MODULE.source_receipt(work, chosen, stage, filter, action)
+            def receipt(stage, action, chosen=selected):
+                return MODULE.source_receipt(work, chosen, stage, action)
             with self.assertRaises(sqlite3.OperationalError):
                 receipt('flights', 'check')
             receipt('flights', 'begin')
@@ -281,15 +281,13 @@ class SelectedSourceReuse(unittest.TestCase):
                 receipt('flights', 'check')
             receipt('flights', 'complete')
             receipt('flights', 'check')
-            with self.assertRaisesRegex(ValueError, 'feed/class differs'):
-                receipt('flights', 'check', filter='non-ga')
             receipt('segments', 'begin')
             segments.write_bytes(b'new empty typed segment output')
             receipt('segments', 'complete')
             receipt('segments', 'check')
             other = create_selected_catalog(root / 'other', kind='prod')
             changed = MODULE.validate_selected_sources(root / 'other', {'2026-06-06'})
-            with self.assertRaisesRegex(ValueError, 'source/feed/class differs'):
+            with self.assertRaisesRegex(ValueError, 'selected source differs'):
                 receipt('segments', 'check', chosen=changed)
             self.assertTrue(other.exists())
             receipt('segments', 'begin')

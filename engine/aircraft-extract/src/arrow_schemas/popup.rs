@@ -77,6 +77,8 @@ pub fn cruise_schema() -> Arc<Schema> {
         ),
         Field::new("source_id", DataType::UInt8, false),
         Field::new("origin", DataType::UInt8, false),
+        // 1 when every transit of the bucket touches a secondary-provider sample.
+        Field::new("secondary_only", DataType::UInt8, false),
     ];
     Arc::new(Schema::new(fields).with_metadata(base_metadata(&[
         ("kind", "cruise"),
