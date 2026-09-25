@@ -395,7 +395,14 @@ fn reader_pad_finds_rows_owned_by_squares_seventeen_km_away() {
             RECEIVER.1 as f32 + km * 1_000.0 * lon_per_m(),
         )
     };
-    let within = chord(fid, "PAD17", east(15.0), east(19.0), 0);
+    let mut within = chord(fid, "PAD17", east(15.0), east(19.0), 0);
+    // Thrust-dependent NPD (row 3 here, not the max row) drops the end-on
+    // phantom CPA below the kernel's 20 dB floor at 400-500 m; 500-600 m
+    // restores ~6 dB of margin (the phantom foot rises out of the lateral
+    // attenuation band). The 17 km midpoint story is unchanged.
+    within.start_alt_m = 500.0;
+    within.end_alt_m = 600.0;
+    within.agl_avg_m = 550.0;
     let far_id = noise_compute::flight_id::pack_real(0x40_0012, 1_750_000_000).unwrap();
     let beyond = chord(far_id, "FAR19", east(17.0), east(21.0), 0);
     let receiver_square = grid::square_of(RECEIVER.0, RECEIVER.1);
@@ -431,15 +438,25 @@ fn reader_pad_finds_rows_owned_by_squares_seventeen_km_away() {
 }
 
 /// Reviewer example: a B738 departure at 350 kt, 1 000 m over a receiver at
-/// (0, 0), chord 14–32 km east. The whole chord passes the 16 km envelope;
-/// after the split only the first piece does. The dropped pieces lie beyond
-/// the envelope, each below the reach threshold on its own, and the energy
-/// the popup loses is exactly their own energy.
+/// (0, 0), chord 12.14–20.0 km east. The whole chord passes the 16 km
+/// envelope; after the split only the first piece does. The dropped piece
+/// lies beyond the envelope, below the reach threshold on its own, and the
+/// energy the popup loses is exactly its own energy.
+///
+/// The 12.14 km start threads two gates under thrust-dependent NPD: the
+/// kept piece's LMAX at its clamped CPA must clear the 25 dB trace cutoff
+/// (~25.5 dB at 12.14 km, 24.7 at 12.5), while the second piece must stay
+/// beyond the 16 km envelope (nearest point 16.07 km). The 7.86 km length
+/// splits robustly into 2 pieces (`ceil(len/4 km)`; an exact 8.0 km chord
+/// is f32-fragile) and the chord ends at 20.0 km so the floored kernel can
+/// still measure the dropped piece's own level: the far pieces of the old
+/// 14–32 km chord fall below the 20 dB floor and the energy account cannot
+/// close.
 #[test]
 fn pieces_beyond_reach_are_dropped_and_the_loss_is_their_own_level() {
     let fid = noise_compute::flight_id::pack_real(0xB738, 1_750_000_000).unwrap();
     let lon = |km: f32| km * 1_000.0 / 111_320.0;
-    let mut chord = chord(fid, "REACH", (0.0, lon(14.0)), (0.0, lon(32.0)), 0);
+    let mut chord = chord(fid, "REACH", (0.0, lon(12.14)), (0.0, lon(20.0)), 0);
     chord.start_alt_m = 1_000.0;
     chord.end_alt_m = 1_000.0;
     chord.speed_kt = 350.0;
@@ -450,7 +467,7 @@ fn pieces_beyond_reach_are_dropped_and_the_loss_is_their_own_level() {
     );
     let mut pieces = Vec::new();
     aircraft_extract::segment::split::split_airborne_segment(chord.clone(), &mut pieces);
-    assert_eq!(pieces.len(), 5);
+    assert_eq!(pieces.len(), 2);
     let split = popup(&receiver, &[reference_batch(&pieces).batch()]);
     // Ld = 10·log10(E / (n_days × 43 200 s)) with one day-period event.
     let sel = |p: &Popup| 10.0 * (energy(p.periods.ld_db) * 43_200.0 * 12.0).log10();
@@ -504,7 +521,13 @@ fn pieces_beyond_reach_are_dropped_and_the_loss_is_their_own_level() {
     // A piece the floored kernel refuses (-inf) is below its 20 dB floor.
     let dropped: f64 = own_sel[1..].iter().map(|&sel| 10f64.powf(sel / 10.0)).sum();
     let accounted = 10.0 * (10f64.powf(kept_sel / 10.0) + dropped).log10();
-    let remainder = 10.0 * (10f64.powf(whole_sel / 10.0) - 10f64.powf(accounted / 10.0)).log10();
+    // With two pieces the split accounts for the whole energy to fp dust;
+    // a dust-negative difference is nothing unaccounted, not a NaN.
+    let remainder = if accounted >= whole_sel {
+        f64::NEG_INFINITY
+    } else {
+        10.0 * (10f64.powf(whole_sel / 10.0) - 10f64.powf(accounted / 10.0)).log10()
+    };
     eprintln!(
         "beyond-reach bound: whole {whole_sel:.2} dB, kept {kept_sel:.2} dB, pieces {own_sel:.2?} dB, kept + dropped {accounted:.2} dB, remainder {remainder:.2} dB"
     );
@@ -521,7 +544,10 @@ fn pieces_beyond_reach_are_dropped_and_the_loss_is_their_own_level() {
     );
     // The loss is the dropped pieces' own energy: what the evaluated pieces
     // do not account for stays below the kernel's 20 dB floor.
-    assert!(accounted <= whole_sel, "{accounted} vs {whole_sel}");
+    assert!(
+        accounted <= whole_sel + 1e-6,
+        "{accounted} vs {whole_sel}"
+    );
     assert!(remainder < 20.0, "unaccounted {remainder} dB");
     assert_eq!(
         split.traces.segments.len(),
