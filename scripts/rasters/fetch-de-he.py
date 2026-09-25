@@ -67,6 +67,14 @@ def list_kreise():
     return kreise
 
 
+def iso_creation(stamp):
+    """Shop creation dates (DD.MM.YYYY) sort only as ISO."""
+    if not stamp:
+        return ''
+    day, month, year = stamp.split('.')
+    return f'{year}-{month}-{day}'
+
+
 def list_gemeinden(kreis):
     """Per-municipality zips; Kreis packages are redundant and skipped."""
     items, page = [], 1
@@ -79,7 +87,8 @@ def list_gemeinden(kreis):
             uri = download['downloadLink']['uri']
             items.append(dict(name=uri.rsplit('/', 1)[1],
                               url=DOWNLOAD_HOST + urllib.parse.quote(uri),
-                              kreis=kreis, creation=download.get('creationDate', '')))
+                              kreis=kreis,
+                              creation=iso_creation(download.get('creationDate', ''))))
         paging = result.get('paging', {})
         if not paging.get('next', False):
             break
@@ -87,6 +96,32 @@ def list_gemeinden(kreis):
     if not items:
         raise ValueError(f'{kreis}: no municipality zips in the download center')
     return items
+
+
+def footprint_of(member):
+    """1 km tile key, case-insensitive: some zips spell DGM1_ uppercase."""
+    match = re.search(r'(\d{3})_(\d{4})_1_he', member, re.IGNORECASE)
+    if not match:
+        raise ValueError(f'unexpected Hessian member name: {member}')
+    return match.group(1), match.group(2)
+
+
+def select_winners(entries):
+    """One tile per footprint: the newest municipality packaging wins.
+
+    Border tiles repeat across municipalities; reprocessed packagings
+    differ in a few cells. Newest creationDate wins, member name breaks
+    ties deterministically.
+    """
+    winners = {}
+    for entry in entries:
+        if not entry.get('derived'):
+            continue
+        key = footprint_of(entry.get('member', ''))
+        challenger = (entry.get('zip_creation', ''), entry.get('member', ''))
+        if key not in winners or challenger > winners[key][0]:
+            winners[key] = (challenger, entry)
+    return [entry for _, entry in sorted(winners.values(), key=lambda pair: pair[1]['derived'])]
 
 
 def excel_date(serial):
@@ -141,17 +176,18 @@ def decode_zip(root, item, flight_dates, done, state):
             # A border tile may sit in two municipalities; serialize its decode.
             with state['locks'].setdefault(out_name, threading.Lock()):
                 entry = decode_member(root, item, archive, sidecars, member, out_path,
-                                      flight_dates, done)
+                                      flight_dates, done, state)
             if entry is not None:
                 derived.append(entry)
     return derived
 
 
-def decode_member(root, item, archive, sidecars, member, out_path, flight_dates, done):
-    """Decode one member; None when the journal already owns it."""
+def decode_member(root, item, archive, sidecars, member, out_path, flight_dates, done, state):
+    """Decode one member; None when the journal owns it from a newer packaging."""
     raw_path = Path(root) / PROVIDER / item['name']
     out_name = out_path.name
-    if out_name in done and derived_complete(out_path):
+    recorded = state['recorded'].get(out_name, '')
+    if out_name in done and derived_complete(out_path) and recorded >= item['creation']:
         return None
     clean_remnants(out_path)
     member_bytes = archive.read(member)
@@ -183,11 +219,15 @@ def decode_member(root, item, archive, sidecars, member, out_path, flight_dates,
     entry['raw_sha256'] = hashlib.sha256(member_bytes).hexdigest()
     entry['epoch'] = epoch
     entry['member'] = member
+    entry['zip_creation'] = item['creation']
     if stats['valid_fraction'] == 0:
         entry['method'] = 'fully void tile, nothing retained'
         entry['derived'], entry['derived_sha256'], entry['derived_bytes'] = None, None, 0
         out_path.unlink()
         Path(str(out_path) + '.provenance.json').unlink()
+    else:
+        done.add(out_name)
+        state['recorded'][out_name] = item['creation']
     return entry
 
 
@@ -232,26 +272,59 @@ def fetch_all(root, workers=3, delay=0.5, limit=None, only=None):
     if only:
         items = [item for item in items if item['name'] in only]
     items = [item for item in items if item['name'] not in done_zips]
+    # Newest packaging first, so the first decode of a border tile usually wins.
+    items = sorted(items, key=lambda item: (item['creation'], item['name']), reverse=True)
     items = items[:limit]
     print(f'{PROVIDER}: {len(items)} municipality zips indexed, {len(flight_dates)} dated tiles')
+    recorded = {}
+    for entry in entries:
+        if entry.get('derived'):
+            recorded[entry['derived']] = max(recorded.get(entry['derived'], ''),
+                                             entry.get('zip_creation', ''))
     state = {'lock': threading.Lock(), 'last': 0.0, 'journal': journal,
-             'zips': zips_journal, 'entries': entries, 'locks': {}}
+             'zips': zips_journal, 'entries': entries, 'locks': {}, 'recorded': recorded}
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [pool.submit(process_item, root, item, flight_dates, delay, state, done)
                    for item in items]
         for future in futures:
             future.result()
+    final = finalize_footprints(root, entries)
     manifest = Path(root) / PROVIDER / 'stream-manifest.json'
     try:
-        write_manifest(manifest, entries)
+        write_manifest(manifest, final)
     except ValueError:
         manifest.unlink()
-        write_manifest(manifest, entries)
-    value = publish_country_sources(root, PROVIDER, entries, EPSG, VERTICAL_EPSG,
+        write_manifest(manifest, final)
+    value = publish_country_sources(root, PROVIDER, final, EPSG, VERTICAL_EPSG,
                                     GROUP, 'unknown ALS epoch')
     with source_budget(Path(root)) as available:
         print(f'{PROVIDER}: {len(value)} tiles retained, {available / 1e9:.1f} GB budget left')
     return entries
+
+
+def finalize_footprints(root, entries):
+    """Keep one tile per footprint and delete the losers' files.
+
+    The journal keeps every decode as the audit trail; the manifest and
+    the country listing reference only the winners.
+    """
+    winners = select_winners(entries)
+    keep = {entry['derived'] for entry in winners}
+    voids = [entry for entry in entries if not entry.get('derived')]
+    for entry in entries:
+        derived = entry.get('derived')
+        if derived and derived not in keep:
+            for candidate in (Path(root) / PROVIDER / derived,
+                              Path(root) / PROVIDER / (derived + '.provenance.json')):
+                if candidate.exists():
+                    candidate.unlink()
+    seen, final = set(), []
+    for entry in voids + winners:
+        key = entry.get('derived') or (entry.get('url'), entry.get('member'))
+        if key not in seen:
+            seen.add(key)
+            final.append(entry)
+    return final
 
 
 def main():

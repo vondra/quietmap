@@ -182,20 +182,45 @@ class IndexTest(unittest.TestCase):
                           bytes=archive_path.stat().st_size, licence='x', licence_url='y',
                           terms_checked_utc='2026-09-25')
             Path(str(archive_path) + '.provenance.json').write_text(json_module.dumps(record))
-            item = dict(name='Town - DGM1.zip', url='https://example.invalid/zip', kreis='Kreis')
+            item = dict(name='Town - DGM1.zip', url='https://example.invalid/zip', kreis='Kreis',
+                          creation='2024-05-06')
             out_path = provider_dir / 'dgm1_32_492_5509_1_he-5m.tif'
+            state = {'recorded': {}}
             with zipfile.ZipFile(archive_path) as archive:
                 entry = fetch_he.decode_member(root, item, archive, set(archive.namelist()),
-                                               member, out_path, {'4925509': '2020-03-15'}, set())
+                                               member, out_path, {'4925509': '2020-03-15'},
+                                               set(), state)
             self.assertEqual(entry['epoch'], 'ALS 2020-03-15')
             self.assertEqual(entry['member'], member)
+            self.assertEqual(entry['zip_creation'], '2024-05-06')
             with zipfile.ZipFile(archive_path) as check:
                 self.assertEqual(entry['raw_bytes'], len(check.read(member)))
             self.assertTrue(out_path.exists())
+            done = {out_path.name}
             with zipfile.ZipFile(archive_path) as archive:
                 again = fetch_he.decode_member(root, item, archive, set(archive.namelist()),
-                                               member, out_path, {}, {out_path.name})
+                                               member, out_path, {}, done, state)
             self.assertIsNone(again)
+            old = dict(item, creation='2020-01-01')
+            with zipfile.ZipFile(archive_path) as archive:
+                stale = fetch_he.decode_member(root, old, archive, set(archive.namelist()),
+                                               member, out_path, {}, done, state)
+            self.assertIsNone(stale)
+
+    def test_he_footprint_winners_prefer_the_newest_packaging(self):
+        self.assertEqual(fetch_he.iso_creation('05.08.2026'), '2026-08-05')
+        self.assertEqual(fetch_he.footprint_of('DGM1_32_454_5534_1_he.tif'), ('454', '5534'))
+        entries = [
+            dict(derived='dgm1_32_454_5534_1_he-5m.tif', member='dgm1_32_454_5534_1_he.tif',
+                 zip_creation='2024-05-06'),
+            dict(derived='DGM1_32_454_5534_1_he-5m.tif', member='DGM1_32_454_5534_1_he.tif',
+                 zip_creation='2026-08-05'),
+            dict(derived='dgm1_32_455_5535_1_he-5m.tif', member='dgm1_32_455_5535_1_he.tif',
+                 zip_creation='2024-05-06'),
+        ]
+        winners = fetch_he.select_winners(entries)
+        self.assertEqual([w['derived'] for w in winners],
+                         ['DGM1_32_454_5534_1_he-5m.tif', 'dgm1_32_455_5535_1_he-5m.tif'])
 
     def test_st_meta_and_hh_table_yield_per_tile_epochs(self):
         meta = 'Kachelname: dgm5_32_606_5760_2_st\r\nAktualitaet: 2019-03\r\n'
