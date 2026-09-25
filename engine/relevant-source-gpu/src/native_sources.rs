@@ -550,6 +550,109 @@ mod completeness_tests {
             .is_none());
     }
 
+    /// Horn rows paint what the popup hears: device emission matches the
+    /// normalized periods, at the 4 m horn height with the horn reach.
+    #[test]
+    fn horn_row_matches_popup_and_device_emissions() {
+        use arrow::array::{
+            ArrayRef, Float64Array, Int16Array, Int32Array, Int64Array, UInt16Array, UInt8Array,
+        };
+        use arrow::datatypes::{Field, Schema};
+        use std::sync::Arc;
+        let mut columns: Vec<(String, ArrayRef)> = Vec::new();
+        for (name, value) in [
+            ("start_gx", 1 << 29),
+            ("start_gy", 1 << 29),
+            ("end_gx", (1 << 29) + 100),
+            ("end_gy", 1 << 29),
+        ] {
+            columns.push((name.to_owned(), Arc::new(Int32Array::from(vec![value]))));
+        }
+        columns.push(("osm_id".to_owned(), Arc::new(Int64Array::from(vec![-7]))));
+        columns.push((
+            "segment_idx".to_owned(),
+            Arc::new(Int16Array::from(vec![0])),
+        ));
+        columns.push((
+            "maxspeed".to_owned(),
+            Arc::new(UInt16Array::from(vec![113])),
+        ));
+        columns.push(("rail_type".to_owned(), Arc::new(UInt8Array::from(vec![6]))));
+        columns.push(("continent".to_owned(), Arc::new(UInt8Array::from(vec![0]))));
+        for name in ["country_iso", "city_id"] {
+            columns.push((name.to_owned(), Arc::new(UInt16Array::from(vec![0]))));
+        }
+        // Soundings ride in the passenger slots (36.9/12.0/24.1 ≈ Kearney).
+        for (category, values) in [
+            ("passenger", [36.9, 12.0, 24.1]),
+            ("freight", [0.0, 0.0, 0.0]),
+        ] {
+            for (period, count) in ["day", "evening", "night"].into_iter().zip(values) {
+                columns.push((
+                    format!("trains_{category}_{period}"),
+                    Arc::new(Float64Array::from(vec![count])),
+                ));
+            }
+            columns.push((
+                format!("{category}_status"),
+                Arc::new(UInt8Array::from(vec![2])),
+            ));
+            columns.push((
+                format!("{category}_source_id"),
+                Arc::new(UInt16Array::from(vec![111])),
+            ));
+            columns.push((
+                format!("{category}_matching"),
+                Arc::new(UInt8Array::from(vec![0])),
+            ));
+        }
+        let schema = Schema::new(
+            columns
+                .iter()
+                .map(|(name, array)| Field::new(name, array.data_type().clone(), false))
+                .collect::<Vec<_>>(),
+        )
+        .with_metadata(std::collections::HashMap::from([(
+            "rail_traffic_contract".to_owned(),
+            "1".to_owned(),
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            columns.into_iter().map(|(_, column)| column).collect(),
+        )
+        .unwrap();
+        let popup = source_reader::query_railways_from_batches(
+            std::slice::from_ref(&batch),
+            0.0,
+            0.0,
+            1000.0,
+        )
+        .unwrap();
+        assert_eq!(popup.len(), 1);
+        let row = &popup[0];
+        assert_eq!(row.rail_type, 6);
+        let normalized = normalize_rail(RawRailInput {
+            rail_type: row.rail_type,
+            maxspeed: row.maxspeed,
+            highspeed: row.highspeed,
+            traffic: row.traffic,
+        });
+        assert_eq!(normalized.source_height_m, 4.0);
+        let columns = source_reader::rail_traffic::RailTrafficColumns::read(&batch).unwrap();
+        let frame = RegionMetricFrame::for_latitude_longitude(0.0, 0.0);
+        let weather = noise_compute::propagation::meteorology::Meteorology::defaults();
+        let device = line(&batch, 0, Some(columns.row(0)), None, &frame, &weather)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            device.emission_linear,
+            emission_linear(normalized.period_emissions())
+        );
+        assert_eq!(device.source_height_m, 4.0);
+        assert_eq!(device.max_distance_m, normalized.reach_m(&weather) as f32);
+        assert!(device.max_distance_m > 1000.0);
+    }
+
     #[test]
     fn manifested_surface_without_finished_structures_cannot_paint_unscreened() {
         let temp = tempfile::tempdir().unwrap();
