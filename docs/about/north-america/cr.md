@@ -12,7 +12,7 @@ Where buildings are mapped, residential, living, service and unclassified street
 
 ## Railways
 
-No timetable is loaded for the Incofer suburban trains around San José. Every line that OSM maps as a working railway, closed intercity lines included, takes the class default: 80 passenger and 85 freight trains per day on a main line, 30 and 5 on a branch.
+No timetable is loaded for the Incofer suburban trains around San José. Every line that OSM maps as a working railway, closed intercity lines included, takes the class default: 80 passenger and 20 freight trains per day on a main line, 30 and 5 on a branch.
 
 ## Industry
 

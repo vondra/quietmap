@@ -117,7 +117,10 @@ fn cross_sections(rows: &[Expanded], tracks: &[Option<Track>]) -> Vec<Vec<usize>
     for (index, track) in tracks.iter().enumerate() {
         let mut members = vec![index];
         if let Some(track) = track {
-            let middle = [(track.start[0] + track.end[0]) / 2.0, (track.start[1] + track.end[1]) / 2.0];
+            let middle = [
+                (track.start[0] + track.end[0]) / 2.0,
+                (track.start[1] + track.end[1]) / 2.0,
+            ];
             // One representative per way; ties break on grid geometry, never on input position,
             // so the sections (and everything downstream) ignore input row order.
             let mut nearest: HashMap<i64, Candidate> = HashMap::new();
@@ -239,6 +242,14 @@ fn daily_total(flow: &CategoryFlow) -> f64 {
     flow.periods.iter().sum()
 }
 
+fn carries_passengers(mode: u8) -> bool {
+    mode != 2
+}
+
+fn carries_freight(mode: u8) -> bool {
+    mode != 1
+}
+
 /// The line value of one category over a cross-section, divided among its tracks.
 ///
 /// A timetable aims at full domestic coverage, so domestic evidence is trusted where the walk
@@ -247,6 +258,10 @@ fn daily_total(flow: &CategoryFlow) -> f64 {
 /// Neighbour timetables only ever see cross-border services: they bound a line the domestic
 /// timetable missed and lose to domestic evidence, but ranked neighbour trains still mark the
 /// line active, yielding a domestic no-service stamp beside them.
+/// The class prior belongs only to the tracks whose OSM traffic mode carries the category:
+/// a passenger-only track takes no freight prior (and symmetrically), so the line prior
+/// divides among the capable tracks. Measured evidence still wins over the tag and keeps
+/// the whole cross-section as its divisor.
 fn track_share(
     own_iso: [u8; 2],
     members: &[usize],
@@ -254,6 +269,9 @@ fn track_share(
     foreign: &[RowTraffic],
     priors: &[RowTraffic],
     category: fn(&RowTraffic) -> CategoryFlow,
+    modes: &[u8],
+    own: usize,
+    allows: fn(u8) -> bool,
 ) -> CategoryFlow {
     let tracks = members.len() as f64;
     // Ranked evidence from either timetable marks the line active; a no-service stamp beside
@@ -268,25 +286,34 @@ fn track_share(
         .iter()
         .any(|flow| flow.status != STATUS_UNKNOWN && !is_residual(flow.source_id))
     });
-    let prior = line_prior(members, priors, category);
+    let capable: Vec<usize> = members
+        .iter()
+        .copied()
+        .filter(|&member| allows(modes[member]))
+        .collect();
+    let prior = line_prior(&capable, priors, category);
     let winner = scope_winner(own_iso, members, domestic, line_ranked, category);
-    let line = if winner != 0 && !is_residual(winner) {
+    let (line, divisor, from_prior) = if winner != 0 && !is_residual(winner) {
         let value = scope_value(members, domestic, winner, category);
         if stamps_whole_line(winner) {
             // A proxy estimates the line itself, not the tracks it stamps.
-            value
+            (value, tracks, false)
         } else {
             let fully_covered = members
                 .iter()
                 .all(|&member| category(&domestic[member]).status != STATUS_UNKNOWN);
             if fully_covered || daily_total(&value) > daily_total(&prior) {
-                value
+                (value, tracks, false)
             } else {
-                prior
+                (prior, capable.len() as f64, true)
             }
         }
     } else if is_residual(winner) {
-        scope_value(members, domestic, winner, category)
+        (
+            scope_value(members, domestic, winner, category),
+            tracks,
+            false,
+        )
     } else {
         let abroad = scope_winner(own_iso, members, foreign, line_ranked, category);
         let value = if abroad == 0 {
@@ -295,13 +322,21 @@ fn track_share(
             scope_value(members, foreign, abroad, category)
         };
         if daily_total(&value) > daily_total(&prior) {
-            value
+            (value, tracks, false)
         } else {
-            prior
+            (prior, capable.len() as f64, true)
         }
     };
+    if from_prior && !allows(modes[own]) {
+        return CategoryFlow {
+            periods: [0.0; 3],
+            status: STATUS_ESTIMATED,
+            source_id: 0,
+            matching: 0,
+        };
+    }
     CategoryFlow {
-        periods: line.periods.map(|value| value / tracks),
+        periods: line.periods.map(|value| value / divisor),
         ..line
     }
 }
@@ -314,6 +349,7 @@ pub(crate) fn allocate_over_parallel_tracks(rows: &mut [Expanded], square: grid:
     let domestic: Vec<RowTraffic> = rows.iter().map(|row| row.child.traffic).collect();
     let foreign: Vec<RowTraffic> = rows.iter().map(|row| row.child.foreign).collect();
     let priors: Vec<RowTraffic> = rows.iter().map(|row| row.prior).collect();
+    let modes: Vec<u8> = rows.iter().map(|row| row.traffic_mode).collect();
     for (index, row) in rows.iter_mut().enumerate() {
         if row.service != 0 {
             continue;
@@ -327,6 +363,9 @@ pub(crate) fn allocate_over_parallel_tracks(rows: &mut [Expanded], square: grid:
                 &foreign,
                 &priors,
                 |t| t.passenger,
+                &modes,
+                index,
+                carries_passengers,
             ),
             freight: track_share(
                 row.country_iso,
@@ -335,6 +374,9 @@ pub(crate) fn allocate_over_parallel_tracks(rows: &mut [Expanded], square: grid:
                 &foreign,
                 &priors,
                 |t| t.freight,
+                &modes,
+                index,
+                carries_freight,
             ),
         };
     }

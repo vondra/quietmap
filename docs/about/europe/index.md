@@ -15,7 +15,7 @@ Other roads use the [world defaults](/about/methodology).
 
 24 European countries have a passenger timetable loaded; train counts are those of one busy Wednesday. Great Britain, Romania, Slovenia, Lithuania and most of the Balkans have none.
 
-Lines without a timetable use the class default, in trains per day: main line 80 passenger and 85 freight, branch line 30 and 5, industrial siding 15 freight, tram track 120, light rail 80. Track in tunnels emits no noise.
+Lines without a timetable use the class default, in trains per day: main line 80 passenger and freight by country (Germany 24.5, France 5.5, Poland 12.0, Czechia 13.5, Austria 27.1, Switzerland 31.4, 20 elsewhere), branch line 30 and 5, industrial siding 15 freight, tram track 120, light rail 80. Lines mapped as passenger-only carry no freight. Track in tunnels emits no noise.
 
 Freight is not covered: no loaded European timetable contains freight trains.
 

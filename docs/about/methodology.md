@@ -97,7 +97,7 @@ allocation can reduce the count assigned to an individual track.
 
 | Railway | Passenger trains/day | Freight trains/day |
 |---|---:|---:|
-| Main line | 80 | 20 |
+| Main line | 80 | 20 (national rate where solved) |
 | Branch | 30 | 5 |
 | Industrial | 0 | 15 |
 | Unclassified | 40 | 10 |
@@ -105,6 +105,10 @@ allocation can reduce the count assigned to an individual track.
 | Light rail or metro | 80 | 0 |
 | Narrow gauge | 10 | 0 |
 | Funicular | 40 | 0 |
+
+The main-line freight rate conserves each solved country's official 2023 goods
+train-km: Germany 24.5, France 5.5, Poland 12.0, Czechia 13.5, Austria 27.1 and
+Switzerland 31.4 trains per day. Lines mapped as passenger-only carry no freight.
 
 ## Aircraft
 

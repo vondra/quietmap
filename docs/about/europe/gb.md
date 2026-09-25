@@ -15,7 +15,7 @@ London, Birmingham, Manchester, Glasgow, Edinburgh and Cardiff also have counts 
 
 ## Railways
 
-No timetable is loaded; the national rail timetable requires registration. Class defaults apply: 80 passenger and 85 freight trains per day on main lines, 30 and 5 on branch lines, 120 trams on tram tracks.
+No timetable is loaded; the national rail timetable requires registration. Class defaults apply: 80 passenger and 20 freight trains per day on main lines, 30 and 5 on branch lines, 120 trams on tram tracks.
 
 ## Checked against
 

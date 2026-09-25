@@ -128,12 +128,14 @@ pub fn class_prior(
     usage: u8,
     service: u8,
     square_country_city: SquareCountryCity,
+    traffic_mode: u8,
 ) -> RowTraffic {
     let rail = RailType::from_u8(rail_type);
     if service != 0 || matches!(rail, RailType::Preserved) {
         return RowTraffic::default();
     }
-    let (passenger, freight) = default_traffic(rail, usage);
+    let (passenger, freight) =
+        default_traffic(rail, usage, square_country_city.country_iso, traffic_mode);
     let shares = rail_time_dist(square_country_city, rail);
     RowTraffic {
         passenger: estimated_flow(passenger, shares.pax, 0, 0),
@@ -190,14 +192,21 @@ mod tests {
         assert_eq!(zero.freight.periods, [0.0; 3]);
         // Daily evidence, even a known zero, carries an estimated period split.
         assert_eq!(zero.freight.status, STATUS_ESTIMATED);
-        let prior = class_prior(0, 0, 0, de);
+        let prior = class_prior(0, 0, 0, de, 0);
         assert!((prior.passenger.periods.iter().sum::<f64>() - 80.0).abs() < 1e-9);
-        assert!((prior.freight.periods.iter().sum::<f64>() - 85.0).abs() < 1e-9);
+        assert!((prior.freight.periods.iter().sum::<f64>() - 24.5).abs() < 1e-9);
         assert_eq!(prior.freight.source_id, 0);
-        assert_eq!(class_prior(0, 0, 2, de), RowTraffic::default());
+        assert_eq!(class_prior(0, 0, 2, de, 0), RowTraffic::default());
         for usage in [0, 1, 2, 3, 4] {
-            assert_eq!(class_prior(5, usage, 0, de), RowTraffic::default());
+            assert_eq!(class_prior(5, usage, 0, de, 0), RowTraffic::default());
         }
+        let fr = SquareCountryCity { country_iso: *b"FR", ..de };
+        let pax_only = class_prior(0, 0, 0, fr, 1);
+        assert!((pax_only.passenger.periods.iter().sum::<f64>() - 80.0).abs() < 1e-9);
+        assert_eq!(pax_only.freight.periods, [0.0; 3]);
+        let frt_only = class_prior(0, 0, 0, fr, 2);
+        assert_eq!(frt_only.passenger.periods, [0.0; 3]);
+        assert!((frt_only.freight.periods.iter().sum::<f64>() - 5.5).abs() < 1e-9);
         let (heritage, _) =
             row_evidence(&[interval(3.0, 0.0, STATUS_UNKNOWN)], 10.0, 40.0, 5, de);
         assert!((heritage.passenger.periods.iter().sum::<f64>() - 3.0).abs() < 1e-9);

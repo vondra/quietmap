@@ -38,6 +38,7 @@ pub(crate) struct Expanded {
     pub rail_type: u8,
     pub usage: u8,
     pub service: u8,
+    pub traffic_mode: u8,
     pub country_iso: [u8; 2],
 }
 

@@ -271,8 +271,15 @@ evidence on the line, from either timetable: a no-service stamp beside ranked tr
 a walk gap on that piece, not silence. Neighbour-file evidence only ever sees
 cross-border services: it bounds a line the domestic timetable missed and loses to
 domestic evidence. Without
-evidence one labelled class prior applies. Each
-track carries the line value divided by the number of tracks, so a proven zero
+evidence one labelled class prior applies: 80 passenger trains/day on main lines
+everywhere, and freight per day per country (DE 24.5, FR 5.5, PL 12.0, CZ 13.5,
+AT 27.1, CH 31.4, 20.0 elsewhere), each solved to conserve its official 2023
+national goods train-km. The `traffic_mode` column carries OSM
+`railway:traffic_mode` (0 unknown, 1 passenger, 2 freight, 3 mixed): a
+passenger-only track takes no freight prior and a freight-only track no passenger
+prior, so a prior divides among the capable tracks only; measured evidence still
+wins over the tag with the whole cross-section as its divisor. Each
+track carries the line value divided by its divisor, so a proven zero
 stays zero and the cross-section sum equals the line value in every category.
 Heritage rows retain type 5, observed traffic and posted speed. Missing traffic
 stays zero with status 0 (unknown), with no class speed or high-speed fallback.

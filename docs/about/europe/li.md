@@ -10,7 +10,7 @@ No traffic counts are loaded. Motorways, trunk and primary roads use the world e
 
 ## Railways
 
-One line crosses the country, from Feldkirch in Austria to Buchs in Switzerland. The Austrian and Swiss timetables are applied only within their own borders, so this section uses the class default: 80 passenger and 85 freight trains per day if OpenStreetMap marks it as a main line.
+One line crosses the country, from Feldkirch in Austria to Buchs in Switzerland. The Austrian and Swiss timetables are applied only within their own borders, so this section uses the class default: 80 passenger and 20 freight trains per day if OpenStreetMap marks it as a main line.
 
 ## Industry
 

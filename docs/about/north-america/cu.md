@@ -12,7 +12,7 @@ Where buildings are mapped, residential, living, service and unclassified street
 
 ## Railways
 
-Ferrocarriles de Cuba publishes no usable timetable. Lines take the class default: 80 passenger and 85 freight trains per day on a main line, 30 and 5 on a branch. Lines without a usage tag use the [unclassified railway default](/about/methodology).
+Ferrocarriles de Cuba publishes no usable timetable. Lines take the class default: 80 passenger and 20 freight trains per day on a main line, 30 and 5 on a branch. Lines without a usage tag use the [unclassified railway default](/about/methodology).
 
 ## Industry
 

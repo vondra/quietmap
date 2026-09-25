@@ -121,7 +121,9 @@ mod tests {
     fn heritage_has_no_ordinary_traffic_speed_or_emission_prior() {
         let kind = RailType::from_u8(5);
         for usage in [0, 1, 2, 3, 4] {
-            assert_eq!(railway::default_traffic(kind, usage), (0.0, 0.0));
+            for (iso, mode) in [(*b"DE", 0), (*b"FR", 1), (*b"XX", 3)] {
+                assert_eq!(railway::default_traffic(kind, usage, iso, mode), (0.0, 0.0));
+            }
         }
         assert_eq!(railway::default_speed(kind), 0.0);
         for highspeed in [false, true] {

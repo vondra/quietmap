@@ -295,24 +295,56 @@ pub fn railway_emission(
     result
 }
 
+/// Main-line freight prior per day: the flat rate that, together with measured lines,
+/// other usages and passenger-only zeros, conserves the official 2023 national goods
+/// train-km (Eurostat `rail_tf_trainmv`, goods trains, thousand train-km: DE 247,471,
+/// FR 52,507, PL 74,090, CZ 29,898, AT 41,584, CH 27,365; fetched 2026-09-25).
+/// Solved as (official − fixed) over the prior-carrying line-km measured under these
+/// rules in a world refinalize; served-build weights would undercount the sharing on
+/// tokenless networks (CZ carries no ref on corridor twins). Planet-260831
+/// `railway:traffic_mode` zeroes passenger-only rows in the same solve. The EBA 2023
+/// median of 85 it replaces was measured on freight corridors and overcounted DE
+/// mains 3.2× (FR 10×); EBA acoustic levels stayed validation-only throughout.
+fn mainline_freight_prior(country_iso: [u8; 2]) -> f64 {
+    match &country_iso {
+        b"DE" => 24.5,
+        b"FR" => 5.5,
+        b"PL" => 12.0,
+        b"CZ" => 13.5,
+        b"AT" => 27.1,
+        b"CH" => 31.4,
+        _ => 20.0, // unevidenced fallback (pre-D2 value; no national total to solve from)
+    }
+}
+
 /// Default train counts when enrichment data is not available.
-/// Returns (passenger_per_day, freight_per_day).
-pub fn default_traffic(rail_type: RailType, usage: u8) -> (f64, f64) {
-    match rail_type {
+/// Returns (passenger_per_day, freight_per_day). `traffic_mode` is the OSM
+/// `railway:traffic_mode` enum (0 unknown, 1 passenger, 2 freight, 3 mixed):
+/// a passenger-only line gets no freight prior, a freight-only line no passenger
+/// prior; measured evidence still wins over the tag downstream.
+pub fn default_traffic(
+    rail_type: RailType,
+    usage: u8,
+    country_iso: [u8; 2],
+    traffic_mode: u8,
+) -> (f64, f64) {
+    let (passenger, freight) = match rail_type {
         RailType::Tram => (120.0, 0.0),       // urban tram: ~120 services/day
         RailType::LightRail => (80.0, 0.0),   // light rail: ~80/day
         RailType::NarrowGauge => (10.0, 0.0), // narrow gauge: tourist/local
         RailType::Funicular => (40.0, 0.0),   // funicular: frequent but short
         RailType::Preserved => (0.0, 0.0),
         RailType::Rail => match usage {
-            // Main-line freight 85: median 84.5 (mean 79.8) of EBA Lärm-Monitoring 2023 24 h
-            // freight counts at the 14 training-square stations; no timetable carries freight,
-            // so the prior is the model on unevidenced mains (the 20 it replaces was unmeasured).
-            0 => (80.0, 85.0),
+            0 => (80.0, mainline_freight_prior(country_iso)),
             1 => (30.0, 5.0),  // branch: 30 passenger + 5 freight
             2 => (0.0, 15.0),  // industrial siding: freight only
             _ => (40.0, 10.0), // unknown: moderate
         },
+    };
+    match traffic_mode {
+        1 => (passenger, 0.0),
+        2 => (0.0, freight),
+        _ => (passenger, freight),
     }
 }
 
