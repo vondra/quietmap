@@ -30,7 +30,6 @@ pub mod types;
 pub mod wkb;
 
 use constants::*;
-use emission::road::{self};
 use propagation::geo;
 use propagation::iso9613::{self, SourceGeometry};
 use propagation::obstacle_index::ObstacleSet;
@@ -161,15 +160,9 @@ pub fn compute_at_point(
         all_contributors.extend(contributors);
     };
 
-    // The road and rail kernels run concurrently: each one's pass 1 (the
-    // sequential skyline growth chain) is 80–85 % of its wall time and the
-    // two chains are independent — own skyline, own seen-edge set, own
-    // trace list. Traces are appended in the sequential order (roads,
-    // then railways), so the answer is the sequential composition bit for
-    // bit. A scoped thread, not `rayon::join`: a multi-second non-yielding
-    // chain must not sit on a pool worker that pass 2 of every concurrent
-    // popup wants to steal from. Rail stays on the calling thread, whose
-    // REACH_CACHE memo it fills.
+    // The road and rail kernels run concurrently, each with its own trace
+    // list. Traces are appended in the sequential order (roads, then
+    // railways), so the answer is the sequential composition bit for bit.
     let collecting = traces.is_some();
     let (road, rail) = std::thread::scope(|scope| {
         let road = (!roads.is_empty()).then(|| {
@@ -310,98 +303,58 @@ fn run_line_layer(
     }
 }
 
-/// Compute terrain/screening/vegetation path effects for one source-receiver pair.
-/// Returns (TerrainBreakdown, ScreeningBreakdown, VegetationBreakdown).
-#[allow(clippy::too_many_arguments)]
-pub fn compute_path_effects(
+/// The popup's terrain, obstacle and forest context of one source point: the detail of its
+/// full CNOSSOS ray (the transfer itself comes from the layer's quadrature).
+pub fn nearest_path_breakdown(
     rasters: &dyn RasterSampler,
     obstacles: &ObstacleSet,
-    src_lat: f64,
-    src_lon: f64,
-    src_height: f64,
+    source: &propagation::ray_transfer::RaySource,
     receiver: &Receiver,
-    dist_m: f64,
-    exclusion_radius_m: f64,
+    weather: &propagation::meteorology::Meteorology,
 ) -> (TerrainBreakdown, ScreeningBreakdown, VegetationBreakdown) {
-    let rcv_alt = receiver.altitude_m();
-    let mut cand_scratch = Vec::new();
-
-    // Unified path profile — one sampling, all four rasters + all metadata.
-    let mut path_profile = propagation::PathProfile::new();
-    rasters.build_path_profile(
-        src_lat,
-        src_lon,
-        receiver.lat,
-        receiver.lon,
-        dist_m,
-        &mut path_profile,
-    );
-
-    // Metadata only — the per-band attenuation arrays are consumed inside
-    // `propagate_variants_full`; popup derives A-weighted `ΔL_A` from the
-    // Contributor-level variant Lden deltas instead of any scalar here.
-    let (terrain, terrain_profile_points) =
-        propagation::path_effects::terrain_attenuation_with_meta(
-            &mut path_profile,
-            src_height,
-            rcv_alt,
-        );
-
-    let obstacle_input = obstacle_input_for_ray(
+    let ray_receiver = propagation::ray_transfer::RayReceiver {
+        lat: receiver.lat,
+        lon: receiver.lon,
+        altitude_m: receiver.altitude_m(),
+    };
+    let mut detail = None;
+    propagation::ray_transfer::evaluate_ray_transfer(
+        &ray_receiver,
+        source,
         obstacles,
-        &mut cand_scratch,
-        src_lat,
-        src_lon,
-        receiver.lat,
-        receiver.lon,
-        None,
+        true,
+        rasters,
+        weather,
+        true,
+        &mut propagation::ray_transfer::RayScratch::default(),
+        Some(&mut detail),
     );
-    let (_screening_atten, obstacle_trace) =
-        propagation::path_effects::screening_attenuation_with_meta(
-            &mut path_profile,
-            obstacle_input,
-            src_height,
-            rcv_alt,
-            exclusion_radius_m,
-            &terrain.attenuation_bands,
-        );
-
-    let forest_depth = propagation::path_profile::vegetation_run_length(
-        &path_profile.t,
-        &path_profile.forest_u8,
-        path_profile.dist_m,
-    );
-    let sampled_path_m = dist_m;
-
+    let detail = detail.expect("evaluate_ray_transfer fills the requested detail");
     (
         TerrainBreakdown {
-            delta_m: (terrain.delta_m * 100.0).round() / 100.0,
-            profile_points: terrain_profile_points,
+            delta_m: (detail.terrain.delta_m * 100.0).round() / 100.0,
+            profile_points: detail.terrain.edges.len() as u32,
         },
         ScreeningBreakdown {
-            obstacle: if obstacle_trace.edge.is_none() {
-                None
-            } else {
-                Some(obstacle_trace)
-            },
+            obstacle: detail.obstacle.edge.is_some().then_some(detail.obstacle),
         },
         VegetationBreakdown {
-            forest_depth_m: (forest_depth * 10.0).round() / 10.0,
-            sampled_path_m: (sampled_path_m * 10.0).round() / 10.0,
+            forest_depth_m: (detail.forest_depth_m * 10.0).round() / 10.0,
+            sampled_path_m: (detail.profile.dist_m * 10.0).round() / 10.0,
         },
     )
 }
 
 /// Exact vector-obstacle crossings for one source→receiver ray, as an
-/// [`path_effects::ObstacleInput`]. An empty index yields an empty candidate slice.
-fn obstacle_input_for_ray<'a>(
-    obstacles: &crate::propagation::obstacle_index::ObstacleSet,
-    scratch: &'a mut Vec<crate::propagation::obstacle_index::CrossingCandidate>,
+/// [`propagation::path_effects::ObstacleInput`] (airport ground operations' single-edge path).
+pub(crate) fn obstacle_input_for_ray<'a>(
+    obstacles: &ObstacleSet,
+    scratch: &'a mut Vec<propagation::obstacle_index::CrossingCandidate>,
     src_lat: f64,
     src_lon: f64,
     rcv_lat: f64,
     rcv_lon: f64,
-    prune: Option<&crate::propagation::obstacle_index::CellPrune<'_>>,
+    prune: Option<&propagation::obstacle_index::CellPrune<'_>>,
 ) -> propagation::path_effects::ObstacleInput<'a> {
     match prune {
         Some(p) => obstacles.crossings_pruned(src_lat, src_lon, rcv_lat, rcv_lon, p, scratch),
@@ -410,140 +363,6 @@ fn obstacle_input_for_ray<'a>(
     propagation::path_effects::ObstacleInput {
         candidates: scratch,
     }
-}
-
-/// One line microsegment's inputs to [`arc_screened_line_segment_prepared`].
-pub(crate) struct LineSegmentScreening<'a> {
-    pub receiver: &'a Receiver,
-    pub start_lat: f64,
-    pub start_lon: f64,
-    pub end_lat: f64,
-    pub end_lon: f64,
-    /// The characteristic point the caller already evaluated…
-    pub cp_lat: f64,
-    pub cp_lon: f64,
-    /// …its absolute source altitude (DEM + source height), which fixes the
-    /// sight line the skyline's grazing prune measures obstacles against…
-    pub src_alt_m: f64,
-    /// …its screening and terrain bands, plus the CP ground vector that the
-    /// current arc increment channel uses for the whole fan.
-    pub cp_screening: &'a [f64; NUM_BANDS],
-    pub cp_terrain: &'a [f64; NUM_BANDS],
-    pub ground_g: f64,
-    pub ground_bands: &'a [f64; NUM_BANDS],
-    /// Source height above ground at any point of this segment.
-    pub source_height_m: f64,
-    /// Segment length and the receiver's distance to its nearest point.
-    pub length_m: f64,
-    pub dist_m: f64,
-    pub obstacles: &'a ObstacleSet,
-}
-
-/// ONE pass-1 scheduler step of the parallel line kernels, shared by roads and
-/// railways so the growth chain cannot drift between them (their blocks were
-/// identical except the source height): replay the skyline ensure this
-/// segment's SEQUENTIAL twin would run — eliding the calls `needs_growth`
-/// proves to be no-ops — and hand back the frozen state its parallel
-/// evaluation must read. `None` = the segment is not arc-screened (span
-/// pre-gate or degenerate span).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn arc_growth_chain_step(
-    skyline: &mut propagation::arc_screening::ArcSkyline,
-    epoch_snap: &mut Option<propagation::arc_screening::SkylineSnapshot>,
-    arc_set: &ObstacleSet,
-    receiver: &Receiver,
-    seg_start_lat: f64,
-    seg_start_lon: f64,
-    seg_end_lat: f64,
-    seg_end_lon: f64,
-    seg_dist_m: f64,
-    seg_length_m: f64,
-    source_height_m: f64,
-    bounds: propagation::arc_screening::ArcBounds,
-) -> Option<propagation::arc_screening::SkylineSnapshot> {
-    if !propagation::arc_screening::segment_can_span(seg_length_m, seg_dist_m, bounds) {
-        return None;
-    }
-    let set = arc_set;
-    let p = propagation::arc_screening::planned_ensure(
-        receiver.lat,
-        receiver.lon,
-        seg_start_lat,
-        seg_start_lon,
-        seg_end_lat,
-        seg_end_lon,
-        seg_dist_m,
-        seg_length_m,
-        bounds,
-    )?;
-    let grew = skyline.needs_growth(receiver.lat, receiver.lon, &p, bounds);
-    if grew {
-        *epoch_snap = None;
-        let t_grow = std::time::Instant::now();
-        skyline.ensure_planned(receiver.lat, receiver.lon, &p, set, source_height_m, bounds);
-        propagation::arc_screening::note_growth_time(t_grow.elapsed().as_secs_f64() * 1000.0);
-    }
-    propagation::arc_screening::note_growth_step(grew);
-    Some(epoch_snap.get_or_insert_with(|| skyline.snapshot()).clone())
-}
-
-/// The [`propagation::arc_screening::ArcScreening`] query for one line
-/// microsegment — the ONE place the popup's line kernels (and any sequential
-/// caller composing `arc_screened_attenuation` directly, see the wall test)
-/// build it, so every path asks bit-identical questions.
-fn line_segment_arc_query<'a>(
-    q: &'a LineSegmentScreening<'a>,
-    set: &'a ObstacleSet,
-) -> propagation::arc_screening::ArcScreening<'a> {
-    propagation::arc_screening::ArcScreening {
-        receiver_lat: q.receiver.lat,
-        receiver_lon: q.receiver.lon,
-        receiver_alt_m: q.receiver.altitude_m(),
-        start_lat: q.start_lat,
-        start_lon: q.start_lon,
-        end_lat: q.end_lat,
-        end_lon: q.end_lon,
-        source_height_m: q.source_height_m,
-        cp_lat: q.cp_lat,
-        cp_lon: q.cp_lon,
-        src_alt_m: q.src_alt_m,
-        cp_screening: q.cp_screening,
-        cp_terrain: q.cp_terrain,
-        ground_g: q.ground_g,
-        obstacles: set,
-        length_m: q.length_m,
-        dist_m: q.dist_m,
-        // Line sources never self-screen: a road has no footprint of its
-        // own to exclude (unlike an industrial area source).
-        exclusion_radius_m: 0.0,
-        bounds: propagation::arc_screening::ArcBounds::shipped(),
-    }
-}
-
-/// Arc-clipped screening for ONE road/rail microsegment (fix-pack Fix 1),
-/// against a [`propagation::arc_screening::SkylineSnapshot`] the kernel's
-/// growth scheduler froze at exactly the state this segment's sequential twin
-/// would have read (see `compute_roads` pass 1). Both line kernels call THIS —
-/// one implementation is what keeps road and rail from drifting apart. The
-/// equivalent sequential form is `arc_screened_attenuation` on
-/// [`line_segment_arc_query`], which the growth chain + snapshot replay
-/// reproduce bit for bit.
-pub(crate) fn arc_screened_line_segment_prepared(
-    q: &LineSegmentScreening<'_>,
-    rasters: &dyn RasterSampler,
-    snapshot: &propagation::arc_screening::SkylineSnapshot,
-    scratch: &mut propagation::arc_screening::ArcScreeningScratch,
-    cp_obstacle: Option<&ScreeningObstacleTrace>,
-) -> ([f64; NUM_BANDS], Option<ScreeningFanTrace>) {
-    let query = line_segment_arc_query(q, q.obstacles);
-    propagation::arc_screening::arc_screened_attenuation_prepared_with_ground(
-        &query,
-        rasters,
-        snapshot,
-        q.ground_bands,
-        scratch,
-        cp_obstacle,
-    )
 }
 
 #[cfg(test)]
@@ -565,18 +384,14 @@ mod tests {
         }
     }
 
-    /// A noise wall screens through the SAME obstacle store as the buildings:
-    /// it is a `Barrier`-kind polyline in the index (there is no other wall
-    /// channel any more), and the line-kernel composition
-    /// (`line_segment_arc_query` + the mutable arc kernel, the pieces the
-    /// parallel kernels replay) must move the bands off the caller's cp verdict
-    /// — and leave them untouched when the store holds nothing. (Review
-    /// 2026-08-04 found the slice-era form of this defect: walls then arrived
-    /// by a side channel an absent store would silently skip.)
+    /// A noise wall screens through the SAME obstacle store as the buildings: a
+    /// `Barrier`-kind polyline between a road piece and the receiver lowers the
+    /// piece's received energy, and an empty store leaves it open.
     #[test]
     fn a_wall_is_screened_through_the_obstacle_store() {
+        use crate::compute::line_piece::{evaluate_line_piece, LinePiece, LinePieceScratch};
+        use crate::propagation::ray_transfer::{RayReceiver, VARIANT_FULL};
         use propagation::obstacle_index::{ObstacleIndex, ObstacleKind};
-        let receiver = Receiver::new(50.08, 14.42, 200.0);
         // Wall 60 m north of the receiver, running east-west across the span.
         let mut wall_index = ObstacleIndex::builder(50.08, 14.42);
         wall_index.add_polyline(
@@ -588,53 +403,41 @@ mod tests {
         let with_wall = propagation::obstacle_index::ObstacleSet {
             indexes: vec![std::sync::Arc::new(wall_index.build())],
         };
-        let cp_screening = [0.0f64; NUM_BANDS];
-        let cp_terrain = [0.0f64; NUM_BANDS];
-        let ground_bands = propagation::iso9613::legacy_ground_atten_bands(0.5);
-        let empty = propagation::obstacle_index::ObstacleSet {
-            indexes: Vec::new(),
+        let receiver = RayReceiver {
+            lat: 50.08,
+            lon: 14.42,
+            altitude_m: 204.0,
         };
-        let mk = |obstacles| LineSegmentScreening {
-            receiver: &receiver,
+        let piece = LinePiece {
             start_lat: 50.0812,
             start_lon: 14.4180,
             end_lat: 50.0812,
             end_lon: 14.4220,
-            cp_lat: 50.0812,
-            cp_lon: 14.42,
-            src_alt_m: 200.05,
-            cp_screening: &cp_screening,
-            cp_terrain: &cp_terrain,
-            ground_g: 0.5,
-            ground_bands: &ground_bands,
             source_height_m: 0.05,
-            length_m: 285.0,
-            dist_m: 133.0,
-            obstacles,
+            source_ground_factor: 0.0,
+            platform_half_width_m: 5.0,
+            directivity: propagation::line_quadrature::LineDirectivity::Omnidirectional,
         };
-        // The sequential composition of the same pieces the parallel kernels
-        // use: `line_segment_arc_query` builds the query, the mutable arc
-        // kernel grows + evaluates.
-        let run = |obstacles| {
-            let q = mk(obstacles);
-            let mut skyline = propagation::arc_screening::ArcSkyline::default();
-            let mut scratch = propagation::arc_screening::ArcScreeningScratch::default();
-            propagation::arc_screening::arc_screened_attenuation(
-                &line_segment_arc_query(&q, q.obstacles),
+        let full_1k = |obstacles: &propagation::obstacle_index::ObstacleSet| {
+            let transfer = evaluate_line_piece(
+                &receiver,
+                &piece,
+                50.0812,
+                14.42,
+                obstacles,
                 &MockRasters,
-                &mut skyline,
-                &mut scratch,
+                &crate::propagation::meteorology::Meteorology::defaults(),
+                &mut LinePieceScratch::default(),
+                None,
             )
+            .unwrap();
+            transfer.periods[0][VARIANT_FULL][4]
         };
-        let screened = run(&with_wall);
+        let open = full_1k(&propagation::obstacle_index::ObstacleSet::empty());
+        let screened = full_1k(&with_wall);
         assert!(
-            screened.iter().any(|&b| b > 0.1),
-            "the wall must screen SOMETHING — got the untouched cp bands {screened:?}"
-        );
-        let without = run(&empty);
-        assert_eq!(
-            without, cp_screening,
-            "an empty store leaves the caller's cp verdict untouched"
+            10.0 * (open / screened).log10() > 3.0,
+            "the wall must screen the piece: open {open:e}, screened {screened:e}"
         );
     }
 
@@ -811,7 +614,7 @@ mod tests {
     /// The road and rail kernels run on two threads; the answer must be the
     /// The same invariant on a scene that exercises what actually moved
     /// threads: 24 road segments in several osm groups, a 20-building
-    /// obstacle set (skyline growth, seen-edge skip, census) and six
+    /// obstacle set (wide-bucket masks and crossings) and six
     /// railway segments at varied offsets, in both trace modes.
     #[test]
     fn joined_line_layers_match_the_sequential_composition_with_obstacles() {

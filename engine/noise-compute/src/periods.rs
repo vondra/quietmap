@@ -37,10 +37,14 @@ pub fn sum_periods(items: &[NoisePeriods]) -> NoisePeriods {
     periods(ld, le, ln)
 }
 
-/// Energy sum of dB values: 10×log₁₀(Σ 10^(Li/10))
+/// Energy sum of dB values: 10×log₁₀(Σ 10^(Li/10)). Silence (-inf) contributes nothing;
+/// NaN or +inf is a bug and fails closed instead of being dropped.
 fn energy_sum(values: impl Iterator<Item = f64>) -> f64 {
     let c = std::f64::consts::LN_10 * 0.1;
     let sum: f64 = values
+        .inspect(|v| {
+            assert!(!v.is_nan() && *v != f64::INFINITY, "non-finite level in energy sum: {v}");
+        })
         .filter(|v| v.is_finite())
         .map(|v| (v * c).exp())
         .sum();
@@ -80,5 +84,11 @@ mod tests {
         let total = sum_periods(&[p1, p2]);
         // Each period: two equal sources = +3 dB
         assert!((total.ld_db - 63.01).abs() < 0.1);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-finite level")]
+    fn nan_level_in_energy_sum_fails_closed() {
+        let _ = energy_sum([60.0, f64::NAN].into_iter());
     }
 }

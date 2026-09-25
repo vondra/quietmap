@@ -1,30 +1,24 @@
-//! Arc-clipped screening of one wide fan bucket: the CUDA form of noise-compute
-//! arc_screening.rs `arc_screened_eval` under the etalon's exact bounds.
+//! The line piece as a 3D line and the geometry-placed nodes of a wide quadrature bucket: the
+//! CUDA form of noise-compute line_quadrature.rs.
 //!
-//! The receiver's skyline is the set of obstacle edges and noise walls standing in
-//! front of the sub-segment; their azimuth arcs, clipped to the bucket's span, are
-//! unioned into a fixed-resolution blocked mask over the span (its bins are never
-//! wider than the CPU's own ARC_QUADRATURE_MIN_RAD coalescing floor for a bucket).
-//! Every blocked run and every clear gap is evaluated by one ray per part of at
-//! most ESCALATE_SPAN_RAD, energy-averaged on max(A_ground, A_terrain + A_screen),
-//! and handed back as the non-negative increment over the bucket ray's terrain.
+//! Obstacle edges standing in front of the piece mark a blocked mask over a wide bucket's
+//! horizontal azimuths; every blocked run and clear gap is split into parts of at most
+//! WIDE_BUCKET_PART_MAX_SPAN_RAD, each part one node weighted by its own in-plane angle.
 
 #pragma once
 
 #include "relevant_source_obstacles.cuh"
 
-constexpr int QUIETMAP_ARC_MASK_BINS = 128;
-constexpr int QUIETMAP_ARC_MASK_WORDS = QUIETMAP_ARC_MASK_BINS / 32;
-// A bucket spans at most pi / bucket count, so a bin is never wider than the
-// window the CPU itself coalesces away.
-static_assert(
-    QUIETMAP_ARC_MASK_BINS * QUIETMAP_ARC_QUADRATURE_MIN_RAD
-        >= CUDART_PI_F / QUIETMAP_LINE_DIRECTION_COUNT,
-    "arc mask bins coarser than the CPU quadrature floor");
+static_assert(QUIETMAP_WIDE_BUCKET_MASK_BINS % 32 == 0, "mask words");
+constexpr int QUIETMAP_WIDE_BUCKET_MASK_WORDS = QUIETMAP_WIDE_BUCKET_MASK_BINS / 32;
 
 struct ArcMask {
-    uint32_t bits[QUIETMAP_ARC_MASK_WORDS];
+    uint32_t bits[QUIETMAP_WIDE_BUCKET_MASK_WORDS];
 };
+
+__device__ __forceinline__ bool arc_mask_bin(const ArcMask& mask, int bin) {
+    return ((mask.bits[bin >> 5] >> (bin & 31)) & 1u) != 0u;
+}
 
 __device__ __forceinline__ float wrap_to_pi(float angle) {
     while (angle > CUDART_PI_F) {
@@ -36,47 +30,121 @@ __device__ __forceinline__ float wrap_to_pi(float angle) {
     return angle;
 }
 
-/// The point on the segment seen from the receiver at `azimuth`: ray x line, the
-/// solved fraction clamped to the segment (CPU `SegFan::at` / `source_point_at`).
-__device__ __forceinline__ bool segment_point_at_azimuth(
+/// A straight piece relative to the receiver: x east, y north, z above the receiver.
+struct LinePieceGeometry {
+    float start[3];
+    float unit[3];
+    float length_m;
+    float foot_along_m;
+    float perpendicular_m;
+    float start_angle_rad;
+    float end_angle_rad;
+};
+
+/// The piece from its endpoints' ground plus the source height (CPU LinePieceGeometry::new);
+/// false for a piece shorter than a millimetre.
+__device__ __forceinline__ bool line_piece_geometry(
+    const DeviceScenePointers& scene,
     const DeviceLineSource& source,
     float receiver_x_m,
     float receiver_y_m,
-    float azimuth,
-    float& point_x_m,
-    float& point_y_m,
-    float& distance_m
+    float receiver_altitude_m,
+    LinePieceGeometry& g
 ) {
-    const float start_x = source.start_x_m - receiver_x_m;
-    const float start_y = source.start_y_m - receiver_y_m;
-    const float segment_x = source.end_x_m - source.start_x_m;
-    const float segment_y = source.end_y_m - source.start_y_m;
+    g.start[0] = source.start_x_m - receiver_x_m;
+    g.start[1] = source.start_y_m - receiver_y_m;
+    g.start[2] = sample_scene_raster(scene, source.start_x_m, source.start_y_m).elevation_m
+                 + source.source_height_m - receiver_altitude_m;
+    const float end_z = sample_scene_raster(scene, source.end_x_m, source.end_y_m).elevation_m
+                        + source.source_height_m - receiver_altitude_m;
+    const float along[3] = {source.end_x_m - source.start_x_m, source.end_y_m - source.start_y_m,
+                            end_z - g.start[2]};
+    g.length_m = sqrtf(fmaf(along[0], along[0], fmaf(along[1], along[1], along[2] * along[2])));
+    if (g.length_m < 1.0e-3f) {
+        return false;
+    }
+    for (int axis = 0; axis < 3; ++axis) {
+        g.unit[axis] = along[axis] / g.length_m;
+    }
+    g.foot_along_m = -(g.start[0] * g.unit[0] + g.start[1] * g.unit[1] + g.start[2] * g.unit[2]);
+    float foot_sq = 0.0f;
+    for (int axis = 0; axis < 3; ++axis) {
+        const float foot = fmaf(g.foot_along_m, g.unit[axis], g.start[axis]);
+        foot_sq = fmaf(foot, foot, foot_sq);
+    }
+    g.perpendicular_m = fmaxf(sqrtf(foot_sq), QUIETMAP_LINE_PERPENDICULAR_FLOOR_M);
+    g.start_angle_rad = atanf(-g.foot_along_m / g.perpendicular_m);
+    g.end_angle_rad = atanf((g.length_m - g.foot_along_m) / g.perpendicular_m);
+    return true;
+}
+
+__device__ __forceinline__ float line_subtended_angle(const LinePieceGeometry& g) {
+    return g.end_angle_rad - g.start_angle_rad;
+}
+
+__device__ __forceinline__ float line_in_plane_angle_at(const LinePieceGeometry& g, float along_m) {
+    return atanf((along_m - g.foot_along_m) / g.perpendicular_m);
+}
+
+__device__ __forceinline__ float line_along_at_angle(const LinePieceGeometry& g, float angle_rad) {
+    return quietmap_clamp(fmaf(g.perpendicular_m, tanf(angle_rad), g.foot_along_m), 0.0f, g.length_m);
+}
+
+__device__ __forceinline__ void line_point_at(const LinePieceGeometry& g, float along_m, float point[3]) {
+    for (int axis = 0; axis < 3; ++axis) {
+        point[axis] = fmaf(along_m, g.unit[axis], g.start[axis]);
+    }
+}
+
+/// Where the horizontal ray at `azimuth` meets the piece's ground track, clamped to the piece.
+__device__ __forceinline__ bool line_along_at_azimuth(
+    const LinePieceGeometry& g,
+    float azimuth,
+    float& along_m
+) {
     const float direction_x = cosf(azimuth);
     const float direction_y = sinf(azimuth);
-    const float denominator = direction_x * segment_y - direction_y * segment_x;
+    const float track_x = g.unit[0] * g.length_m;
+    const float track_y = g.unit[1] * g.length_m;
+    const float denominator = direction_x * track_y - direction_y * track_x;
     if (fabsf(denominator) < 1.0e-12f) {
         return false;
     }
-    const float fraction = quietmap_clamp(
-        (direction_y * start_x - direction_x * start_y) / denominator, 0.0f, 1.0f);
-    const float local_x = fmaf(fraction, segment_x, start_x);
-    const float local_y = fmaf(fraction, segment_y, start_y);
-    distance_m = hypotf(local_x, local_y);
-    point_x_m = receiver_x_m + local_x;
-    point_y_m = receiver_y_m + local_y;
-    return isfinite(distance_m) && distance_m >= 1.0f;
+    const float fraction = (direction_y * g.start[0] - direction_x * g.start[1]) / denominator;
+    along_m = quietmap_clamp(fraction, 0.0f, 1.0f) * g.length_m;
+    return true;
 }
 
-__device__ __forceinline__ float origin_to_segment_distance(
-    float x0, float y0, float x1, float y1
+__device__ __forceinline__ float line_azimuth_at(const LinePieceGeometry& g, float along_m) {
+    float point[3];
+    line_point_at(g, along_m, point);
+    return atan2f(point[1], point[0]);
+}
+
+__device__ __forceinline__ float line_horizontal_range_at(const LinePieceGeometry& g, float along_m) {
+    float point[3];
+    line_point_at(g, along_m, point);
+    return hypotf(point[0], point[1]);
+}
+
+/// Horizontal distance from the receiver to the nearest point of the piece.
+__device__ __forceinline__ bool line_closest_horizontal_distance(
+    const DeviceLineSource& source,
+    float receiver_x_m,
+    float receiver_y_m,
+    float& distance_m
 ) {
-    const float edge_x = x1 - x0;
-    const float edge_y = y1 - y0;
-    const float length_squared = fmaf(edge_x, edge_x, edge_y * edge_y);
-    const float t = length_squared > 0.0f
-        ? quietmap_clamp(-(x0 * edge_x + y0 * edge_y) / length_squared, 0.0f, 1.0f)
+    const float segment_x = source.end_x_m - source.start_x_m;
+    const float segment_y = source.end_y_m - source.start_y_m;
+    const float length_squared = fmaf(segment_x, segment_x, segment_y * segment_y);
+    const float fraction = length_squared > 1.0e-10f
+        ? quietmap_clamp(((receiver_x_m - source.start_x_m) * segment_x
+                          + (receiver_y_m - source.start_y_m) * segment_y) / length_squared,
+                         0.0f, 1.0f)
         : 0.0f;
-    return hypotf(fmaf(t, edge_x, x0), fmaf(t, edge_y, y0));
+    distance_m = hypotf(receiver_x_m - fmaf(fraction, segment_x, source.start_x_m),
+                        receiver_y_m - fmaf(fraction, segment_y, source.start_y_m));
+    return isfinite(distance_m);
 }
 
 /// Mark the bins of `[piece_lo, piece_hi]` (absolute azimuths inside the span).
@@ -90,20 +158,16 @@ __device__ __forceinline__ void mark_arc_bins(
     int first = static_cast<int>(floorf((piece_lo - span_lo) / bin_width));
     int last = static_cast<int>(ceilf((piece_hi - span_lo) / bin_width)) - 1;
     first = max(first, 0);
-    last = min(max(last, first), QUIETMAP_ARC_MASK_BINS - 1);
+    last = min(max(last, first), QUIETMAP_WIDE_BUCKET_MASK_BINS - 1);
     for (int bin = first; bin <= last; ++bin) {
         mask.bits[bin >> 5] |= 1u << (bin & 31);
     }
 }
 
-/// One skyline arc (an edge or wall in the receiver frame) clipped to the span:
-/// every piece whose obstacle stands in front of the source point seen at the
-/// piece's centre and not under the receiver's feet is marked blocked
-/// (CPU `arc_screened_eval` step 1: geometry only, no delta prefilter).
+/// One edge's arc clipped to the span: every piece whose edge stands at least a metre in front
+/// of the source point seen at the piece's centre marks its bins (CPU mark_blocked_bins).
 __device__ __forceinline__ void admit_skyline_arc(
-    const DeviceLineSource& source,
-    float receiver_x_m,
-    float receiver_y_m,
+    const LinePieceGeometry& geometry,
     float edge_x0,
     float edge_y0,
     float edge_x1,
@@ -114,8 +178,14 @@ __device__ __forceinline__ void admit_skyline_arc(
     float bin_width,
     ArcMask& mask
 ) {
-    const float nearest_m = origin_to_segment_distance(edge_x0, edge_y0, edge_x1, edge_y1);
-    if (nearest_m > need_radius_m || nearest_m < 1.0e-6f) {
+    const float edge_x = edge_x1 - edge_x0;
+    const float edge_y = edge_y1 - edge_y0;
+    const float length_squared = fmaf(edge_x, edge_x, edge_y * edge_y);
+    const float t = length_squared > 0.0f
+        ? quietmap_clamp(-(edge_x0 * edge_x + edge_y0 * edge_y) / length_squared, 0.0f, 1.0f)
+        : 0.0f;
+    const float nearest_m = hypotf(fmaf(t, edge_x, edge_x0), fmaf(t, edge_y, edge_y0));
+    if (nearest_m > need_radius_m || nearest_m < 1.0f) {
         return;
     }
     const float azimuth0 = atan2f(edge_y0, edge_x0);
@@ -130,28 +200,23 @@ __device__ __forceinline__ void admit_skyline_arc(
         if (piece_hi <= piece_lo) {
             continue;
         }
-        float point_x;
-        float point_y;
-        float source_distance_m;
-        if (!segment_point_at_azimuth(source, receiver_x_m, receiver_y_m,
-                                      0.5f * (piece_lo + piece_hi), point_x, point_y,
-                                      source_distance_m)) {
+        float along_m;
+        if (!line_along_at_azimuth(geometry, 0.5f * (piece_lo + piece_hi), along_m)) {
             continue;
         }
-        if (source_distance_m - nearest_m <= 1.0f || nearest_m < 1.0f) {
+        if (line_horizontal_range_at(geometry, along_m) - nearest_m <= 1.0f) {
             continue;
         }
         mark_arc_bins(mask, span_lo, bin_width, piece_lo, piece_hi);
     }
 }
 
-/// The blocked mask of the bucket span from every obstacle edge — buildings and
-/// walls alike, both carried by the grids — within `need_radius_m` (CPU
-/// `skyline_arcs_within`): a building is pruned on its cell's tallest edge
-/// against the sight-line floor, a WALL on its own height.
+/// The blocked mask of a bucket span from every obstacle edge within `need_radius_m` (CPU
+/// ObstacleSet::skyline_arcs_within with no grazing prune): a building cell is pruned on its
+/// tallest edge against the source height, a wall on its own height.
 __device__ void gather_blocked_mask(
     const DeviceScenePointers& scene,
-    const DeviceLineSource& source,
+    const LinePieceGeometry& geometry,
     float receiver_x_m,
     float receiver_y_m,
     float need_radius_m,
@@ -161,7 +226,7 @@ __device__ void gather_blocked_mask(
     float bin_width,
     ArcMask& mask
 ) {
-    for (int word = 0; word < QUIETMAP_ARC_MASK_WORDS; ++word) {
+    for (int word = 0; word < QUIETMAP_WIDE_BUCKET_MASK_WORDS; ++word) {
         mask.bits[word] = 0u;
     }
     const float low_x = cosf(span_lo);
@@ -227,16 +292,13 @@ __device__ void gather_blocked_mask(
                     const uint32_t local_edge = scene.obstacle_edge_references[
                         grid.edge_references_offset + position];
                     const uint32_t edge = grid.edge_index_offset + local_edge;
-                    // A wall under the sight line blocks nothing, and the cell's
-                    // tallest edge does not answer for it (CPU
-                    // `skyline_arcs_within`, third prune).
                     if (scene.obstacle_edge_is_building[edge] == 0u
                         && scene.obstacle_edge_height_m[edge] <= sight_line_floor_m) {
                         continue;
                     }
                     const float4 ends = load_obstacle_edge_endpoints(scene, edge);
                     admit_skyline_arc(
-                        source, receiver_x_m, receiver_y_m,
+                        geometry,
                         (ends.x - receiver_grid_x) * inverse_scale, ends.y - receiver_grid_y,
                         (ends.z - receiver_grid_x) * inverse_scale, ends.w - receiver_grid_y,
                         need_radius_m, span_lo, span_hi, bin_width, mask);
@@ -246,162 +308,84 @@ __device__ void gather_blocked_mask(
     }
 }
 
-/// Terrain and screening increment on the ray to the source point at `azimuth`
-/// (CPU `interval_screening`; `interval_terrain` when `with_obstacles` is false).
-/// False when the ray is degenerate, where the caller keeps the bucket ray's values.
-__device__ __forceinline__ bool azimuth_ray_bands(
+/// A wide bucket's mask and the in-plane angles its azimuth span is pinned to.
+struct WideBucketNodes {
+    ArcMask mask;
+    float span_lo;
+    float span_hi;
+    float bin_width;
+    float angle_at_span_lo;
+    float angle_at_span_hi;
+    float along_min_m;
+    float along_max_m;
+};
+
+/// True when the bucket `[angle_lo, angle_hi]` spans at least WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD of
+/// azimuth and something stands in front of it; `wide` then holds its mask.
+__device__ bool wide_bucket_nodes(
     const DeviceScenePointers& scene,
     const DeviceLineSource& source,
+    const LinePieceGeometry& geometry,
     float receiver_x_m,
     float receiver_y_m,
-    float receiver_altitude_m,
-    float azimuth,
-    bool with_obstacles,
-    PathProfile& profile,
-    float terrain_db[QUIETMAP_BAND_COUNT],
-    float screening_db[QUIETMAP_BAND_COUNT]
+    float angle_lo,
+    float angle_hi,
+    WideBucketNodes& wide
 ) {
-    float point_x;
-    float point_y;
-    float distance_m;
-    if (!segment_point_at_azimuth(source, receiver_x_m, receiver_y_m, azimuth,
-                                  point_x, point_y, distance_m)) {
+    const float along_lo = line_along_at_angle(geometry, angle_lo);
+    const float along_hi = line_along_at_angle(geometry, angle_hi);
+    const float azimuth_a = line_azimuth_at(geometry, along_lo);
+    const float turn = wrap_to_pi(line_azimuth_at(geometry, along_hi) - azimuth_a);
+    const float span = fabsf(turn);
+    if (span < QUIETMAP_WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD) {
         return false;
     }
-    build_path_profile(scene, point_x, point_y, receiver_x_m, receiver_y_m, distance_m,
-                       source_is_bridge(source), profile);
-    ray_terrain_and_screening_bands(
-        scene, point_x, point_y, receiver_x_m, receiver_y_m,
-        profile.elevation_m[0] + source.source_height_m, receiver_altitude_m,
-        with_obstacles, 0.0f, profile, terrain_db, screening_db);
-    return true;
-}
-
-/// Energy of one part of the fan: max(A_ground, A_terrain + A_screen) on the
-/// part's own ray, weighted by its share of the span.
-__device__ __forceinline__ void accumulate_fan_part(
-    const float ground_db[QUIETMAP_BAND_COUNT],
-    const float terrain_db[QUIETMAP_BAND_COUNT],
-    const float screening_db[QUIETMAP_BAND_COUNT],
-    float fraction,
-    float energy[QUIETMAP_BAND_COUNT]
-) {
-    for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-        const float barrier = terrain_db[band] + screening_db[band];
-        const float composite = barrier > 0.0f ? fmaxf(ground_db[band], barrier) : ground_db[band];
-        energy[band] += fraction * quietmap_energy_from_db(-composite);
-    }
-}
-
-__device__ __forceinline__ int fan_part_count(float width) {
-    return min(max(static_cast<int>(ceilf(width / QUIETMAP_ARC_ESCALATE_SPAN_RAD)), 1),
-               QUIETMAP_ARC_ESCALATE_MAX_PARTS);
-}
-
-/// The arc-clipped screening increment of one bucket over the terrain of its
-/// centre ray, or the centre ray's own increment when the sub-span is degenerate,
-/// under the 3 degree gate, or nothing blocks it (CPU `arc_screened_eval`).
-__device__ void arc_screened_bucket_increment(
-    const DeviceScenePointers& scene,
-    const DeviceLineSource& source,
-    float receiver_x_m,
-    float receiver_y_m,
-    float receiver_altitude_m,
-    float bucket_start_x_m,
-    float bucket_start_y_m,
-    float bucket_end_x_m,
-    float bucket_end_y_m,
-    float centre_azimuth,
-    float need_radius_m,
-    const float ground_db[QUIETMAP_BAND_COUNT],
-    const float centre_terrain_db[QUIETMAP_BAND_COUNT],
-    PathProfile& profile,
-    float screening_db[QUIETMAP_BAND_COUNT]
-) {
-    const float base = atan2f(bucket_start_y_m - receiver_y_m, bucket_start_x_m - receiver_x_m);
-    const float delta = wrap_to_pi(
-        atan2f(bucket_end_y_m - receiver_y_m, bucket_end_x_m - receiver_x_m) - base);
-    const float span = fabsf(delta);
-    if (span < QUIETMAP_ARC_DEGENERATE_SPAN_RAD || span < QUIETMAP_SEG_ARC_MIN_SPAN_RAD) {
-        return;
-    }
-    const float span_lo = delta < 0.0f ? base + delta : base;
-    const float span_hi = delta < 0.0f ? base : base + delta;
-    const float bin_width = span / QUIETMAP_ARC_MASK_BINS;
-    ArcMask mask;
-    gather_blocked_mask(scene, source, receiver_x_m, receiver_y_m, need_radius_m,
-                        fmaxf(source.source_height_m, 0.0f), span_lo, span_hi, bin_width, mask);
+    wide.span_lo = turn < 0.0f ? azimuth_a + turn : azimuth_a;
+    wide.span_hi = turn < 0.0f ? azimuth_a : azimuth_a + turn;
+    wide.angle_at_span_lo = turn < 0.0f ? angle_hi : angle_lo;
+    wide.angle_at_span_hi = turn < 0.0f ? angle_lo : angle_hi;
+    wide.along_min_m = fminf(along_lo, along_hi);
+    wide.along_max_m = fmaxf(along_lo, along_hi);
+    float point_lo[3];
+    float point_hi[3];
+    line_point_at(geometry, along_lo, point_lo);
+    line_point_at(geometry, along_hi, point_hi);
+    const float chord = hypotf(point_lo[0] - point_hi[0], point_lo[1] - point_hi[1]);
+    const float centre_range = line_horizontal_range_at(
+        geometry, line_along_at_angle(geometry, 0.5f * (angle_lo + angle_hi)));
+    const float need_radius = fminf(fminf(hypotf(point_lo[0], point_lo[1]),
+                                          hypotf(point_hi[0], point_hi[1])), centre_range) + chord;
+    wide.bin_width = span / QUIETMAP_WIDE_BUCKET_MASK_BINS;
+    gather_blocked_mask(scene, geometry, receiver_x_m, receiver_y_m, need_radius,
+                        fmaxf(source.source_height_m, 0.0f), wide.span_lo, wide.span_hi,
+                        wide.bin_width, wide.mask);
     bool blocked = false;
-    for (int word = 0; word < QUIETMAP_ARC_MASK_WORDS; ++word) {
-        blocked |= mask.bits[word] != 0u;
+    for (int word = 0; word < QUIETMAP_WIDE_BUCKET_MASK_WORDS; ++word) {
+        blocked |= wide.mask.bits[word] != 0u;
     }
-    if (!blocked) {
-        return;
-    }
-    float cp_azimuth = centre_azimuth;
-    for (int shift = 0; shift < 3; ++shift) {
-        const float shifted = centre_azimuth
-            + (shift == 0 ? 0.0f : (shift == 1 ? 2.0f * CUDART_PI_F : -2.0f * CUDART_PI_F));
-        if (shifted >= span_lo - QUIETMAP_ARC_CP_AZIMUTH_EPS
-            && shifted <= span_hi + QUIETMAP_ARC_CP_AZIMUTH_EPS) {
-            cp_azimuth = shifted;
-            break;
-        }
-    }
-    cp_azimuth = quietmap_clamp(cp_azimuth, span_lo, span_hi);
+    return blocked;
+}
 
-    float centre_screening_db[QUIETMAP_BAND_COUNT];
-    for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-        centre_screening_db[band] = screening_db[band];
+/// The run of equal mask bins starting at `bin`: its end (exclusive) and its state.
+__device__ __forceinline__ int wide_bucket_run_end(const WideBucketNodes& wide, int bin, bool& blocked) {
+    blocked = arc_mask_bin(wide.mask, bin);
+    int end = bin;
+    while (end < QUIETMAP_WIDE_BUCKET_MASK_BINS && arc_mask_bin(wide.mask, end) == blocked) {
+        ++end;
     }
-    const float zero_db[QUIETMAP_BAND_COUNT] = {};
-    float energy[QUIETMAP_BAND_COUNT] = {};
-    float covered = 0.0f;
-    float terrain_db[QUIETMAP_BAND_COUNT];
-    float part_screening_db[QUIETMAP_BAND_COUNT];
-    int bin = 0;
-    while (bin < QUIETMAP_ARC_MASK_BINS) {
-        const bool run_blocked = (mask.bits[bin >> 5] >> (bin & 31)) & 1u;
-        int run_end = bin;
-        while (run_end < QUIETMAP_ARC_MASK_BINS
-               && (((mask.bits[run_end >> 5] >> (run_end & 31)) & 1u) != 0u) == run_blocked) {
-            ++run_end;
-        }
-        const float run_lo = fmaf(static_cast<float>(bin), bin_width, span_lo);
-        const float run_hi = run_end == QUIETMAP_ARC_MASK_BINS
-            ? span_hi : fmaf(static_cast<float>(run_end), bin_width, span_lo);
-        const float width = run_hi - run_lo;
-        const int parts = fan_part_count(width);
-        const float step = width / static_cast<float>(parts);
-        for (int part = 0; part < parts; ++part) {
-            const float part_lo = fmaf(static_cast<float>(part), step, run_lo);
-            const float part_hi = part_lo + step;
-            const float fraction = step / span;
-            covered += fraction;
-            if (run_blocked
-                && cp_azimuth >= part_lo - QUIETMAP_ARC_CP_AZIMUTH_EPS
-                && cp_azimuth <= part_hi + QUIETMAP_ARC_CP_AZIMUTH_EPS) {
-                accumulate_fan_part(ground_db, centre_terrain_db, centre_screening_db, fraction, energy);
-                continue;
-            }
-            if (azimuth_ray_bands(scene, source, receiver_x_m, receiver_y_m, receiver_altitude_m,
-                                  0.5f * (part_lo + part_hi), run_blocked, profile,
-                                  terrain_db, part_screening_db)) {
-                accumulate_fan_part(ground_db, terrain_db,
-                                    run_blocked ? part_screening_db : zero_db, fraction, energy);
-            } else {
-                accumulate_fan_part(ground_db, centre_terrain_db,
-                                    run_blocked ? centre_screening_db : zero_db, fraction, energy);
-            }
-        }
-        bin = run_end;
+    return end;
+}
+
+/// In-plane angle at a mask azimuth, clamped to the bucket's stretch.
+__device__ __forceinline__ float wide_bucket_angle_at_azimuth(
+    const LinePieceGeometry& geometry,
+    const WideBucketNodes& wide,
+    float azimuth,
+    float fallback
+) {
+    float along_m;
+    if (!line_along_at_azimuth(geometry, azimuth, along_m)) {
+        return fallback;
     }
-    const float residual = fmaxf(1.0f - covered, 0.0f);
-    for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-        const float clear = centre_terrain_db[band] > 0.0f
-            ? fmaxf(ground_db[band], centre_terrain_db[band]) : ground_db[band];
-        const float mean_db = -4.342944819032518f * __logf(
-            fmaxf(energy[band] + residual * quietmap_energy_from_db(-clear), 1.0e-12f));
-        screening_db[band] = fmaxf(mean_db - centre_terrain_db[band], 0.0f);
-    }
+    return line_in_plane_angle_at(geometry, quietmap_clamp(along_m, wide.along_min_m, wide.along_max_m));
 }

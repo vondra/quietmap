@@ -121,6 +121,7 @@ fn unscreened_crossings(
                 height_m: edge.height_m,
                 kind: edge.kind(),
                 id: edge.id,
+                index: 0,
             })
         })
         .collect();

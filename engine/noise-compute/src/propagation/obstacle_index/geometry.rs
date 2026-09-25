@@ -60,7 +60,7 @@ pub(super) fn ray_cell_aabb_may_overlap(
 }
 
 /// Angle folded into `(−π, π]` — shared by the skyline walk and
-/// [`crate::propagation::arc_screening`], which must agree on the unwrapping convention.
+/// [`crate::propagation::line_quadrature`], which must agree on the unwrapping convention.
 #[inline]
 pub fn wrap_pi(a: f64) -> f64 {
     use std::f64::consts::{PI, TAU};

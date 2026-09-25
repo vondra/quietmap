@@ -100,6 +100,8 @@ pub(super) fn traffic_row(
         } else {
             SOURCE_FLAG_GROUND_OPS_GSE
         },
+        source_ground_factor: 0.0,
+        platform_half_width_m: 0.0,
         emission_linear,
     }))
 }

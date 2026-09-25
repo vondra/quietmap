@@ -12,16 +12,22 @@ use std::process::Command;
 
 const NOISE_CONSTANTS_SOURCE: &str = include_str!("../noise-compute/src/constants.rs");
 const PATH_PROFILE_SOURCE: &str = include_str!("../noise-compute/src/propagation/path_profile.rs");
-const SEGMENT_SAMPLING_SOURCE: &str =
-    include_str!("../noise-compute/src/propagation/seg_sampling.rs");
+const LINE_QUADRATURE_SOURCE: &str =
+    include_str!("../noise-compute/src/propagation/line_quadrature.rs");
+const RELEVANCE_BOUND_SOURCE: &str =
+    include_str!("../noise-compute/src/propagation/relevance_bound.rs");
+const CNOSSOS_GROUND_SOURCE: &str =
+    include_str!("../noise-compute/src/propagation/cnossos/ground.rs");
+const CNOSSOS_DIFFRACTION_SOURCE: &str =
+    include_str!("../noise-compute/src/propagation/cnossos/diffraction.rs");
+const CNOSSOS_RUBBER_BAND_SOURCE: &str =
+    include_str!("../noise-compute/src/propagation/cnossos/rubber_band.rs");
+const METEOROLOGY_SOURCE: &str = include_str!("../noise-compute/src/propagation/meteorology.rs");
 const SOURCE_FRAME_SOURCE: &str = include_str!("../grid/src/surface_corner.rs");
-const ARC_SCREENING_SOURCE: &str =
-    include_str!("../noise-compute/src/propagation/arc_screening.rs");
 const GEO_SOURCE: &str = include_str!("../grid/src/geo.rs");
 const GROUND_OPS_SOURCE: &str =
     include_str!("../noise-compute/src/emission/aircraft/ground_ops.rs");
 const PATH_EFFECTS_SOURCE: &str = include_str!("../noise-compute/src/propagation/path_effects.rs");
-const ISO9613_SOURCE: &str = include_str!("../noise-compute/src/propagation/iso9613.rs");
 const TILE_BBOX_SOURCE: &str = include_str!("../raster-reader/src/tile_bbox.rs");
 
 fn constant_initializer<'a>(source: &'a str, constant_name: &str) -> &'a str {
@@ -145,15 +151,21 @@ fn generated_physics_header() -> String {
         "//! Generated only from canonical noise-compute constants; do not edit.\n\n#pragma once\n\n",
     );
     write_cuda_array(&mut header, "QUIETMAP_BAND_FREQUENCIES", band_frequencies);
+    let a_weighting = canonical_f64_array::<8>(NOISE_CONSTANTS_SOURCE, "A_WEIGHTING");
     write_cuda_array(
         &mut header,
-        "QUIETMAP_A_WEIGHTING",
-        canonical_f64_array::<8>(NOISE_CONSTANTS_SOURCE, "A_WEIGHTING"),
+        "QUIETMAP_A_WEIGHTING_LINEAR",
+        a_weighting.map(|db| 10f64.powf(db / 10.0)),
     );
     write_cuda_array(
         &mut header,
         "QUIETMAP_ATMOSPHERIC_DB_PER_KM",
         canonical_f64_array::<8>(NOISE_CONSTANTS_SOURCE, "ALPHA_ATM"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_RELEVANCE_GAIN_DB",
+        canonical_f64(RELEVANCE_BOUND_SOURCE, "SURFACE_RELEVANCE_GAIN_DB"),
     );
     write_cuda_array(
         &mut header,
@@ -200,30 +212,54 @@ fn generated_physics_header() -> String {
         "QUIETMAP_RECEIVER_HEIGHT_FLOOR_M",
         canonical_f64(PATH_EFFECTS_SOURCE, "RECEIVER_HEIGHT_FLOOR_M"),
     );
+    for (cuda, source, rust) in [
+        ("QUIETMAP_SHORT_PATH_HEIGHT_FACTOR", CNOSSOS_GROUND_SOURCE, "SHORT_PATH_HEIGHT_FACTOR"),
+        ("QUIETMAP_FAVOURABLE_CURVATURE_A0_PER_M", CNOSSOS_GROUND_SOURCE, "FAVOURABLE_CURVATURE_A0_PER_M"),
+        (
+            "QUIETMAP_FAVOURABLE_TERRAIN_HEIGHT_COEFFICIENT",
+            CNOSSOS_GROUND_SOURCE,
+            "FAVOURABLE_TERRAIN_HEIGHT_COEFFICIENT",
+        ),
+        ("QUIETMAP_MINIMUM_HEIGHT_SUM_M", CNOSSOS_GROUND_SOURCE, "MINIMUM_HEIGHT_SUM_M"),
+        ("QUIETMAP_DIFFRACTION_CAP_DB", CNOSSOS_DIFFRACTION_SOURCE, "DIFFRACTION_CAP_DB"),
+        (
+            "QUIETMAP_MULTIPLE_DIFFRACTION_MINIMUM_SPAN_M",
+            CNOSSOS_DIFFRACTION_SOURCE,
+            "MULTIPLE_DIFFRACTION_MINIMUM_SPAN_M",
+        ),
+        (
+            "QUIETMAP_FAVOURABLE_RAY_RADIUS_MINIMUM_M",
+            CNOSSOS_RUBBER_BAND_SOURCE,
+            "FAVOURABLE_RAY_RADIUS_MINIMUM_M",
+        ),
+        (
+            "QUIETMAP_FAVOURABLE_RAY_RADIUS_PER_DISTANCE",
+            CNOSSOS_RUBBER_BAND_SOURCE,
+            "FAVOURABLE_RAY_RADIUS_PER_DISTANCE",
+        ),
+    ] {
+        write_cuda_float(&mut header, cuda, canonical_f64(source, rust));
+    }
+    writeln!(
+        header,
+        "constexpr int QUIETMAP_DIRECTION_SECTOR_COUNT = {};",
+        canonical_usize(METEOROLOGY_SOURCE, "DIRECTION_SECTOR_COUNT")
+    )
+    .unwrap();
     write_cuda_float(
         &mut header,
-        "QUIETMAP_GROUND_PATH_HEIGHT_FLOOR_M",
-        canonical_f64(ISO9613_SOURCE, "GROUND_PATH_HEIGHT_FLOOR_M"),
+        "QUIETMAP_LINE_PERPENDICULAR_FLOOR_M",
+        canonical_f64(LINE_QUADRATURE_SOURCE, "LINE_PERPENDICULAR_FLOOR_M"),
     );
     write_cuda_float(
         &mut header,
-        "QUIETMAP_GROUND_SHORT_PATH_FACTOR",
-        canonical_f64(ISO9613_SOURCE, "CNOSSOS_GROUND_SHORT_PATH_FACTOR"),
+        "QUIETMAP_POINT_DIVERGENCE_LINEAR",
+        canonical_f64(LINE_QUADRATURE_SOURCE, "POINT_DIVERGENCE_LINEAR"),
     );
     write_cuda_float(
         &mut header,
-        "QUIETMAP_GROUND_FAVOURABLE_ALPHA0",
-        canonical_f64(ISO9613_SOURCE, "CNOSSOS_GROUND_ALPHA0"),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_GROUND_FAVOURABLE_DELTA_ZT",
-        canonical_f64(ISO9613_SOURCE, "CNOSSOS_GROUND_DELTA_ZT_COEFF"),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_FINITE_LINE_MIN_PERPENDICULAR_M",
-        canonical_f64(GEO_SOURCE, "FLC_MIN_PERP_M"),
+        "QUIETMAP_WIDE_BUCKET_PART_MAX_SPAN_RAD",
+        canonical_f64(LINE_QUADRATURE_SOURCE, "WIDE_BUCKET_PART_MAX_SPAN_RAD"),
     );
     writeln!(
         header,
@@ -266,41 +302,16 @@ fn generated_physics_header() -> String {
         "QUIETMAP_MINIMUM_FOREST_RUN_M",
         canonical_f64(PATH_PROFILE_SOURCE, "VEGETATION_MIN_RUN_M"),
     );
-    let arc_gate_degrees: f64 =
-        constant_initializer(SEGMENT_SAMPLING_SOURCE, "SEG_ARC_MIN_SPAN_RAD")
+    let wide_bucket_degrees: f64 =
+        constant_initializer(LINE_QUADRATURE_SOURCE, "WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD")
             .strip_suffix("_f64.to_radians()")
-            .expect("SEG_ARC_MIN_SPAN_RAD keeps its `<deg>_f64.to_radians()` spelling")
+            .expect("WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD keeps its `<deg>_f64.to_radians()` spelling")
             .parse()
-            .expect("SEG_ARC_MIN_SPAN_RAD degree literal parses");
+            .expect("WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD degree literal parses");
     write_cuda_float(
         &mut header,
-        "QUIETMAP_SEG_ARC_MIN_SPAN_RAD",
-        arc_gate_degrees.to_radians(),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_ARC_DEGENERATE_SPAN_RAD",
-        canonical_f64(ARC_SCREENING_SOURCE, "DEGENERATE_SPAN_RAD"),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_ARC_ESCALATE_SPAN_RAD",
-        canonical_f64(ARC_SCREENING_SOURCE, "ESCALATE_SPAN_RAD"),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_ARC_CP_AZIMUTH_EPS",
-        canonical_f64(ARC_SCREENING_SOURCE, "CP_AZIMUTH_EPS"),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_ARC_QUADRATURE_MIN_RAD",
-        canonical_f64(ARC_SCREENING_SOURCE, "ARC_QUADRATURE_MIN_RAD"),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_FREE_FIELD_ATMOSPHERE_DB_PER_M",
-        canonical_f64(GEO_SOURCE, "ATM_ALPHA_A_WEIGHTED"),
+        "QUIETMAP_WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD",
+        wide_bucket_degrees.to_radians(),
     );
     write_cuda_float(
         &mut header,
@@ -312,18 +323,18 @@ fn generated_physics_header() -> String {
         "QUIETMAP_GROUND_BAND_MEAN_CF",
         canonical_f64_array::<8>(NOISE_CONSTANTS_SOURCE, "GROUND_CF"),
     );
-    writeln!(
-        header,
-        "constexpr int QUIETMAP_ARC_ESCALATE_MAX_PARTS = {};",
-        canonical_usize(ARC_SCREENING_SOURCE, "ESCALATE_MAX_PARTS")
-    )
-    .unwrap();
-    writeln!(
-        header,
-        "constexpr int QUIETMAP_LINE_DIRECTION_COUNT = {};",
-        canonical_usize(SEGMENT_SAMPLING_SOURCE, "SEG_SAMPLES_DEFAULT")
-    )
-    .unwrap();
+    for (cuda, rust) in [
+        ("QUIETMAP_WIDE_BUCKET_MAX_PARTS_PER_RUN", "WIDE_BUCKET_MAX_PARTS_PER_RUN"),
+        ("QUIETMAP_LINE_BUCKET_COUNT", "LINE_BUCKET_COUNT"),
+        ("QUIETMAP_WIDE_BUCKET_MASK_BINS", "WIDE_BUCKET_MASK_BINS"),
+    ] {
+        writeln!(
+            header,
+            "constexpr int {cuda} = {};",
+            canonical_usize(LINE_QUADRATURE_SOURCE, rust)
+        )
+        .unwrap();
+    }
     writeln!(
         header,
         "constexpr int QUIETMAP_BLOCK_PIXEL_SIDE = {};",
@@ -412,16 +423,21 @@ fn main() {
     println!("cargo:rerun-if-changed=kernels/relevant_source_obstacles.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_arc.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_pair.cuh");
-    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/arc_screening.rs");
+    println!("cargo:rerun-if-changed=kernels/relevant_source_cnossos_boundary.cuh");
+    println!("cargo:rerun-if-changed=kernels/relevant_source_cnossos_stream.cuh");
+    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/cnossos/ground.rs");
+    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/cnossos/diffraction.rs");
+    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/cnossos/rubber_band.rs");
+    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/meteorology.rs");
+    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/line_quadrature.rs");
+    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/relevance_bound.rs");
     println!("cargo:rerun-if-changed=../grid/src/geo.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/emission/aircraft/ground_ops.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/path_effects.rs");
-    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/iso9613.rs");
     println!("cargo:rerun-if-changed=../raster-reader/src/tile_bbox.rs");
     println!("cargo:rerun-if-changed=kernels/block_source_partition.cu");
     println!("cargo:rerun-if-changed=../noise-compute/src/constants.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/path_profile.rs");
-    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/seg_sampling.rs");
     println!("cargo:rerun-if-changed=../grid/src/surface_corner.rs");
     if env::var_os("CARGO_FEATURE_GPU").is_none() {
         return;
@@ -485,12 +501,15 @@ mod tests {
     fn generated_header_reads_the_canonical_physics_sources() {
         let header = generated_physics_header();
         assert!(header.contains("constexpr float QUIETMAP_DEFAULT_RECEIVER_HEIGHT_M = 4.0f;"));
-        assert!(header.contains("constexpr int QUIETMAP_LINE_DIRECTION_COUNT = 5;"));
+        assert!(header.contains("constexpr int QUIETMAP_LINE_BUCKET_COUNT = 5;"));
         assert!(header.contains("constexpr int QUIETMAP_BLOCK_PIXEL_SIDE = "));
-        assert!(header.contains("constexpr int QUIETMAP_ARC_ESCALATE_MAX_PARTS = 9;"));
+        assert!(header.contains("constexpr int QUIETMAP_WIDE_BUCKET_MAX_PARTS_PER_RUN = 9;"));
         assert!(header.contains("constexpr int QUIETMAP_TILE_PIXEL_SIDE = 512;"));
         assert!(header.contains("constexpr float QUIETMAP_RECEIVER_HEIGHT_FLOOR_M = 0.5f;"));
-        assert!(header.contains("constexpr float QUIETMAP_SEG_ARC_MIN_SPAN_RAD = 0.05235988f;"));
+        assert!(header.contains("constexpr float QUIETMAP_WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD = 0.05235988f;"));
         assert!(header.contains("constexpr float QUIETMAP_PENUMBRA_DELTA_FLOOR_M ="));
+        assert!(header.contains("constexpr float QUIETMAP_DIFFRACTION_CAP_DB = 25.0f;"));
+        assert!(header.contains("constexpr int QUIETMAP_DIRECTION_SECTOR_COUNT = 16;"));
+        assert!(header.contains("constexpr float QUIETMAP_MINIMUM_HEIGHT_SUM_M = 0.001f;"));
     }
 }

@@ -134,12 +134,12 @@ pub(super) fn collect_railways(
     // Rows apply their emission-dependent reach after this conservative batch gate.
     let railway_batches =
         data.railways
-            .batches_within(lat, lng, noise_compute::constants::RAILWAY_REACH_CEILING)?;
+            .batches_within(lat, lng, noise_compute::propagation::relevance_bound::LINE_REACH_CEILING_M)?;
     let railways = query_railways_from_batches(
         &railway_batches,
         lat,
         lng,
-        noise_compute::constants::RAILWAY_REACH_CEILING,
+        noise_compute::propagation::relevance_bound::LINE_REACH_CEILING_M,
     )?;
     for r in railways {
         let norm =

@@ -4,6 +4,7 @@
 //! boundary.
 
 pub mod aircraft_v6;
+pub mod line_piece;
 pub(crate) mod point_sources;
 pub(crate) mod railways;
 pub(crate) mod roads;

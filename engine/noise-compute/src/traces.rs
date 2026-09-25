@@ -2,8 +2,8 @@
 //! state. Every number returned here must come from values the engine already
 //! holds; this module never re-runs emission or propagation.
 
-use crate::constants::ALPHA_ATM;
 use crate::propagation::iso9613;
+use crate::propagation::ray_transfer::RayDetail;
 use crate::propagation::PathProfile;
 use crate::types::{
     BaselineTrace, CnossosBreakdown, EmissionTrace, ForestRun, GroundTrace, LayerKind,
@@ -19,9 +19,13 @@ pub use aircraft::{
     BuildAircraftAirborneSubSegmentTrace, BuildAircraftCruiseCellTrace,
 };
 
-/// Convert band-energies (linear, A-weighted) to band levels in dB(A).
+/// Convert band-energies (linear, A-weighted) to band levels in dB(A). Non-finite or
+/// negative energies fail closed like [`PropagationVariants::to_db`], never floor.
 pub fn bands_energy_to_db(bands: &[f64; NUM_BANDS]) -> [f64; NUM_BANDS] {
-    std::array::from_fn(|j| 10.0 * bands[j].max(1e-30).log10())
+    std::array::from_fn(|j| {
+        assert!(bands[j].is_finite() && bands[j] >= 0.0, "non-finite band energy: {}", bands[j]);
+        10.0 * bands[j].max(1e-30).log10()
+    })
 }
 
 /// Trace name for unnamed + ref-less OSM ways. Prefixing the class/type name
@@ -68,12 +72,11 @@ pub fn variants_to_received_bands(
     }
 }
 
-/// Atmospheric attenuation (per band, positive = dB removed) for a given
-/// slant distance. Reproduces the `ALPHA_ATM[i] * d/1000` term that
-/// [`iso9613::propagate_variants`] applies internally.
+/// Atmospheric attenuation (per band, positive = dB removed) at a slant distance: the day
+/// period's A_atm of the ray transfer (propagation::air_absorption).
 pub fn atmospheric_bands(d_slant_m: f64) -> [f64; NUM_BANDS] {
-    let d_over_1000 = d_slant_m / 1000.0;
-    std::array::from_fn(|i| ALPHA_ATM[i] * d_over_1000)
+    let weather = crate::propagation::meteorology::Meteorology::defaults();
+    std::array::from_fn(|band| weather.absorption[0][band].attenuation_db(d_slant_m))
 }
 
 /// Consumes a `PathProfile` into a serializable `PathProfileTrace` (dropping
@@ -208,6 +211,12 @@ pub fn ground_trace(factor_g: f64, attenuation_bands: [f64; NUM_BANDS]) -> Groun
 /// is included here for trace-API completeness even though the internal
 /// `free_field` variant (see iso9613.rs) excludes it; popup derives the
 /// per-receiver A_refl display from this field directly.
+/// A_div of an infinite line at perpendicular distance `d` under the CNOSSOS point sum,
+/// `10·lg(10^1.1·d/π)` (propagation::line_quadrature).
+pub fn infinite_line_divergence_db(d: f64) -> f64 {
+    10.0 * (crate::propagation::line_quadrature::POINT_DIVERGENCE_LINEAR * d / std::f64::consts::PI).log10()
+}
+
 pub fn baseline_trace(
     d_slant_m: f64,
     source_height_m: f64,
@@ -218,7 +227,7 @@ pub fn baseline_trace(
 ) -> BaselineTrace {
     let d = d_slant_m.max(1.0);
     let geometric_db = match source_geometry {
-        iso9613::SourceGeometry::Line => 10.0 * (2.0 * std::f64::consts::PI * d).log10(),
+        iso9613::SourceGeometry::Line => infinite_line_divergence_db(d),
         iso9613::SourceGeometry::Point => 20.0 * d.log10() + 11.0,
     };
     BaselineTrace {
@@ -314,23 +323,16 @@ fn build_cnossos_propagation(inputs: BuildCnossosPropagation) -> PropagationBrea
 pub(crate) struct BuildRoadTrace<'a> {
     pub seg: &'a RoadSegment,
     pub class_name: &'static str,
-    pub src_alt: f64,
     pub rcv_alt: f64,
     pub d_slant: f64,
-    pub flc: f64,
-    pub ground_g: f64,
-    pub ground_bands: [f64; NUM_BANDS],
     pub reflection_boost_db: f64,
     /// Prepared traffic as consumed (counts + estimated bitmask).
     pub traffic: crate::normalize::RoadTraffic,
     pub speed_kmh: f64,
     pub surf_corr: f64,
-    pub path_profile: PathProfile,
-    pub terrain: TerrainTrace,
-    pub screening_atten: [f64; NUM_BANDS],
-    pub screening_fan: Option<ScreeningFanTrace>,
-    pub obstacle_trace: ScreeningObstacleTrace,
-    pub veg_atten: [f64; NUM_BANDS],
+    /// The piece's loudest quadrature node, on its own ray.
+    pub node: RayDetail,
+    pub fan: Option<ScreeningFanTrace>,
     pub seg_variants: [PropagationVariants; 3],
     pub lw_bands: [[f64; NUM_BANDS]; 3],
 }
@@ -338,18 +340,12 @@ pub(crate) struct BuildRoadTrace<'a> {
 pub(crate) struct BuildPointTrace<'a> {
     pub src: &'a PointSource,
     pub source_kind: LayerKind,
-    pub src_alt: f64,
     pub rcv_alt: f64,
     pub d_slant: f64,
     pub prop_dist: f64,
-    pub ground_g: f64,
-    pub ground_bands: [f64; NUM_BANDS],
     pub reflection_boost_db: f64,
-    pub path_profile: PathProfile,
-    pub terrain: TerrainTrace,
-    pub screening_atten: [f64; NUM_BANDS],
-    pub obstacle_trace: ScreeningObstacleTrace,
-    pub veg_atten: [f64; NUM_BANDS],
+    /// The source's ray.
+    pub node: RayDetail,
     pub seg_variants: [PropagationVariants; 3],
     pub lw_bands: [[f64; NUM_BANDS]; 3],
 }
@@ -358,18 +354,11 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
     let BuildPointTrace {
         src,
         source_kind,
-        src_alt,
         rcv_alt,
         d_slant,
         prop_dist,
-        ground_g,
-        ground_bands,
         reflection_boost_db,
-        path_profile,
-        terrain,
-        screening_atten,
-        obstacle_trace,
-        veg_atten,
+        node,
         seg_variants,
         lw_bands,
     } = inputs;
@@ -438,19 +427,19 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
         emission,
         propagation: build_cnossos_propagation(BuildCnossosPropagation {
             d_slant_m: d_slant,
-            src_alt_m: src_alt,
+            src_alt_m: node.source_altitude_m,
             rcv_alt_m: rcv_alt,
-            ground_g,
+            ground_g: node.ground_factor,
             finite_line_corr_db: 0.0,
             reflection_boost_db,
             source_geometry: iso9613::SourceGeometry::Point,
-            path_profile,
-            terrain,
-            ground_bands,
-            screening_atten,
+            path_profile: node.profile,
+            terrain: node.terrain,
+            ground_bands: node.ground_bands,
+            screening_atten: node.screening_bands,
             screening_fan: None,
-            obstacle_trace,
-            veg_atten,
+            obstacle_trace: node.obstacle,
+            veg_atten: node.vegetation_bands,
             variants: seg_variants,
             lw_bands,
         }),
@@ -466,41 +455,56 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
 
 pub(crate) struct BuildRailTrace<'a> {
     pub seg: &'a RailSegment,
-    pub src_alt: f64,
     pub rcv_alt: f64,
     pub d_slant: f64,
-    pub flc: f64,
-    pub ground_g: f64,
-    pub ground_bands: [f64; NUM_BANDS],
     pub reflection_boost_db: f64,
     pub speed_kmh: f64,
-    pub path_profile: PathProfile,
-    pub terrain: TerrainTrace,
-    pub screening_atten: [f64; NUM_BANDS],
-    pub screening_fan: Option<ScreeningFanTrace>,
-    pub obstacle_trace: ScreeningObstacleTrace,
-    pub veg_atten: [f64; NUM_BANDS],
+    /// The piece's loudest quadrature node, on its own ray.
+    pub node: RayDetail,
+    pub fan: Option<ScreeningFanTrace>,
     pub seg_variants: [PropagationVariants; 3],
     pub lw_bands: [[f64; NUM_BANDS]; 3],
+}
+
+/// The CNOSSOS breakdown of a line piece from its loudest node's ray.
+fn line_node_propagation(
+    node: RayDetail,
+    fan: Option<ScreeningFanTrace>,
+    d_slant_m: f64,
+    rcv_alt_m: f64,
+    reflection_boost_db: f64,
+    variants: [PropagationVariants; 3],
+    lw_bands: [[f64; NUM_BANDS]; 3],
+) -> PropagationBreakdown {
+    build_cnossos_propagation(BuildCnossosPropagation {
+        d_slant_m,
+        src_alt_m: node.source_altitude_m,
+        rcv_alt_m,
+        ground_g: node.ground_factor,
+        finite_line_corr_db: 0.0,
+        reflection_boost_db,
+        source_geometry: iso9613::SourceGeometry::Line,
+        path_profile: node.profile,
+        terrain: node.terrain,
+        ground_bands: node.ground_bands,
+        screening_atten: node.screening_bands,
+        screening_fan: fan,
+        obstacle_trace: node.obstacle,
+        veg_atten: node.vegetation_bands,
+        variants,
+        lw_bands,
+    })
 }
 
 pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTrace {
     let BuildRailTrace {
         seg,
-        src_alt,
         rcv_alt,
         d_slant,
-        flc,
-        ground_g,
-        ground_bands,
         reflection_boost_db,
         speed_kmh,
-        path_profile,
-        terrain,
-        screening_atten,
-        screening_fan,
-        obstacle_trace,
-        veg_atten,
+        node,
+        fan,
         seg_variants,
         lw_bands,
     } = inputs;
@@ -536,24 +540,15 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
             rail_type,
             service: seg.service,
         },
-        propagation: build_cnossos_propagation(BuildCnossosPropagation {
-            d_slant_m: d_slant,
-            src_alt_m: src_alt,
-            rcv_alt_m: rcv_alt,
-            ground_g,
-            finite_line_corr_db: flc,
+        propagation: line_node_propagation(
+            node,
+            fan,
+            d_slant,
+            rcv_alt,
             reflection_boost_db,
-            source_geometry: iso9613::SourceGeometry::Line,
-            path_profile,
-            terrain,
-            ground_bands,
-            screening_atten,
-            screening_fan,
-            obstacle_trace,
-            veg_atten,
-            variants: seg_variants,
+            seg_variants,
             lw_bands,
-        }),
+        ),
         received_lden: variants_to_lden(&seg_variants),
         aircraft_subtype: 0,
         polyline: None,
@@ -568,22 +563,14 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
     let BuildRoadTrace {
         seg,
         class_name,
-        src_alt,
         rcv_alt,
         d_slant,
-        flc,
-        ground_g,
-        ground_bands,
         reflection_boost_db,
         traffic,
         speed_kmh,
         surf_corr,
-        path_profile,
-        terrain,
-        screening_atten,
-        screening_fan,
-        obstacle_trace,
-        veg_atten,
+        node,
+        fan,
         seg_variants,
         lw_bands,
     } = inputs;
@@ -629,24 +616,15 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
         bridge: seg.bridge,
         tunnel: seg.tunnel,
         emission,
-        propagation: build_cnossos_propagation(BuildCnossosPropagation {
-            d_slant_m: d_slant,
-            src_alt_m: src_alt,
-            rcv_alt_m: rcv_alt,
-            ground_g,
-            finite_line_corr_db: flc,
+        propagation: line_node_propagation(
+            node,
+            fan,
+            d_slant,
+            rcv_alt,
             reflection_boost_db,
-            source_geometry: iso9613::SourceGeometry::Line,
-            path_profile,
-            terrain,
-            ground_bands,
-            screening_atten,
-            screening_fan,
-            obstacle_trace,
-            veg_atten,
-            variants: seg_variants,
+            seg_variants,
             lw_bands,
-        }),
+        ),
         received_lden: variants_to_lden(&seg_variants),
         aircraft_subtype: 0,
         polyline: None,

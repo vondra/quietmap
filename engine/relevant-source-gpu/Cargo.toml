@@ -33,6 +33,11 @@ path = "src/bin/surface_cuda_check.rs"
 required-features = ["gpu"]
 
 [[bin]]
+name = "parity-probe"
+path = "src/bin/parity_probe.rs"
+required-features = ["gpu"]
+
+[[bin]]
 name = "surface-corner-census"
 path = "src/bin/surface_corner_census.rs"
 required-features = ["gpu"]

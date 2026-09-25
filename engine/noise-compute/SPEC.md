@@ -1,9 +1,13 @@
 # Popup propagation contract
 
 The Rust engine is the acoustic source of truth. This document specifies the
-current screening contract; it is not a claim of full CNOSSOS-EU compliance.
-The implementation and regressions live in `src/propagation/path_effects.rs`,
-`diffraction.rs` and `arc_screening.rs`.
+propagation contract of road, rail and point sources (CNOSSOS-EU 2015/996 as amended by
+2021/1226, checked against ISO/TR 17534-4) and the prepared-source rules around it. The
+implementation and regressions live in `src/propagation/cnossos/`, `ray_path.rs`,
+`ray_transfer.rs`, `line_quadrature.rs`, `relevance_bound.rs`, `meteorology.rs` and
+`air_absorption.rs`; the CUDA painter mirrors them in `relevant_source_cnossos_*.cuh`.
+Airport ground operations keep their single-edge path (`path_effects.rs`, `diffraction.rs`)
+until their own campaign moves them.
 
 ## Receiver and prepared-source selection
 
@@ -417,47 +421,153 @@ bases, aircraft preprocessing and horizon calculations, façade exposure and
 painted tiles. Bridge-deck/railhead geometry and the canopy propagation model
 must be integrated before this generation is used for a production calculation.
 
-## 4.7 Vector screening
+## Line sources: the CNOSSOS point sum
 
-One source-to-receiver ray shares its bare-earth raster profile between terrain
-and exact building/barrier crossings. The existing source-platform clamp and
-source/receiver height floors apply to both. Buildings inside the source's
-exclusion radius are omitted; explicit barriers are not. Paths shorter than
-30 m or with fewer than three profile samples have no screening term.
+A road or rail piece is a straight 3D line between its endpoints' ground plus the
+source height. Directive 2015/996 §2.5.3 splits a line into incoherent points of
+`A_div = 20·lg r + 11`; for a straight piece `dx/r² = dφ/d⊥` (φ the angle in the
+plane that holds the line and the receiver, d⊥ the 3D distance from the receiver to
+the line, floored at 0.5 m), so the point sum is exactly
+`E = W′/(10^1.1·d⊥)·∫ 10^(−A_path(φ)/10) dφ`. In free field this is
+`L_W′ + 10·lg θ − 10·lg d⊥ − 11`; an infinite line reads `L_W′ − 10·lg d⊥ − 6.03`
+(the retired `−10·lg(2π·d) + 10·lg(θ_horizontal/π)` chain sat 1.9533 dB lower and took
+the finite-line angle in plan, #5 and #28).
 
-Bare terrain retains its existing single max-path-difference edge. Every admitted
-vector crossing is evaluated at its exact path fraction, with interpolated bare
-ground plus its height. Each uses the same existing single-edge diffraction
-function, bare-earth mean-ground fit, Rayleigh admission, favourable-condition
-geometry, meteorological mixture and band caps.
+The integral uses one rule in popup and painter (`propagation::line_quadrature`,
+CUDA `relevant_source_arc.cuh`/`relevant_source_pair.cuh`): five buckets of equal Δφ,
+each node on its own ray from the piece to the receiver with its own profile, ground,
+terrain, screening, vegetation and air absorption at its own slant distance, weight
+Δφ. A bucket spanning at least 3° of horizontal azimuth replaces its node by
+geometry-placed nodes: every obstacle edge within reach that stands at least a metre
+in front of the piece marks a 128-bin blocked mask over the bucket's azimuths (walls
+lower than the source height, and grid cells whose tallest edge is, are skipped);
+every blocked run and clear gap is split into parts of at most 0.26 rad (at most nine
+per run), each part one node weighted by its own Δφ, obstacles read on blocked parts
+only. A line source radiating with the CNOSSOS-EU rail track dipole `0.01 + 0.99·sin²ψ` uses ψ
+between the **horizontal projections** of track and ray (2.3.15). Each node is weighted by the
+integral of that horizontal directivity over its 3D in-plane Δφ. With `u = tan φ`, its dipole
+part is `b² / ((u+a)²+b²)`: `a` is the projected along-track offset of the 3D perpendicular foot,
+and `b` the horizontal perpendicular distance, each divided by the horizontal track speed and
+the 3D perpendicular distance. Partial fractions integrate this against `du/(1+u²)`; near
+coincident quadratics (dimensionless denominator < 1e-2), eight-point Gauss–Legendre avoids
+cancellation. For a coplanar source and receiver this reduces to the original integral of
+`cos²φ`; an elevated receiver needs the horizontal projection. Rail rows stay omnidirectional until W4's emission, fitted
+with the dipole and the two source heights, lands (each height is then its own line source).
+Against a fine point sum (1°/10 m nodes through the same per-ray physics,
+`point-sum-oracle`) the rule is within ±0.15 dB on straight roads over G = 0, 0.5, 1
+at 5 m–2 km and behind a roadside wall, and within 0.28 dB per layer at ten real receivers
+(2026-09-24, the largest behind the M25 J17 barrier).
 
-For each frequency band, with terrain attenuation `T` and crossing attenuations
-`C_j`, return `S = max(0, max_j(C_j) - T)`. Thus `T + S` is the band envelope,
-not the sum of obstacle losses. The empty candidate set gives exactly `S = 0`.
-Different crossings can supply different bands: selecting one maximum path
-difference before evaluating attenuation is not equivalent. Adding a candidate
-must not reduce any band's envelope. Raising a wall or building must not make
-the receiver louder in the competing-roof regression.
+A source–receiver pair is skipped only when the relevance bound of
+`propagation::relevance_bound` stays below 0 dB in every band of every period:
+`B = L_W − A_div,min(d) − α_min·d/1000 + 13.3 dB`, a line bounded by its infinite line at its
+closest horizontal distance, a point by `20·lg d + 11`, α_min the smallest absorption of the
+weather, 13.3 dB the largest favourable gain of the method over flat or relief ground
+(p = 1 assumed): a grazing hard crest takes the favourable floor of (2.5.20), −9 dB per
+side, with a blocked Δdif of at least 10·lg 3, so 2·9 − 10·lg 3 = 13.2 dB at most
+(13.09 dB found, `boundary_gain_tests.rs`): a night-only source is never dropped by a
+day-only gate (#31). A road or rail row reaches as far as that bound's Lden stays above
+30 dB (the display floor), capped so no ray outruns the painter's 64-sample profile
+(11,872 m, minus the 250 m longest piece for a line's closest point); popup and painter
+share the reach.
 
-Line-source angular integration is unchanged: interval rays use their own
-terrain and crossings, and energy-average their ground-or-barrier composite.
-The existing ground, vegetation, atmospheric and emission models are unchanged.
+## One ray: CNOSSOS-EU per meteorological state
+
+Every line quadrature node and every point source runs one ray (`ray_transfer.rs`); the
+painter runs the same ray in f32 (`relevant_source_cnossos_stream.cuh`).
+
+- Profile: the bare-earth samples of the bilateral cadence, G = 1 − IMD/100 per sample, both
+  linear between samples. Within the source's platform half-width the terrain may not rise
+  above the source ground (road: lanes × 3.5 m / 2 + 1.5 m, two lanes when untagged; rail
+  2.5 m; points 0) — this replaces the 30.9 m source clamp that erased berms.
+- Obstacles: every crossing of the ray with a building wall or barrier; its top is the
+  terrain there plus its height. Building crossings nearer a point source than its footprint
+  radius are its own building. A footprint's crossings pair into roofs in chainage order
+  (entry, exit); an unpaired last crossing has none; roofs are taken in the order the ray
+  leaves them and each starts no earlier than where the roofs before it end (overlapping
+  footprints are 0.4 % of roof length on the oracle's real rays). Roofs are hard raised ground
+  (G = 0) in the mean planes and ground factors, the ISO/TR 17534-4 geometry; walls are not
+  ground. Footprints are named by index and id, so two squares' footprints never pair.
+- Candidates: the bare terrain samples and the obstacle tops.
+- Diffraction points per state: homogeneous rays are straight; favourable rays are arcs of
+  radius Γ = max(1000 m, 8·d). A candidate above the state's ray (favourable: lowered by the
+  arc's height above the chord) blocks it; the points are then the upper hull of S, the
+  blocking candidates and R (the rubber band, any number of edges). An unblocked state takes
+  the one candidate with the largest path difference (homogeneous −(SO + OR − SR) below the
+  chord; favourable (2.5.26) above the straight chord, else (2.5.27)), admitted per band by the
+  Rayleigh criterion δ > −λ/20 and δ > λ/4 − δ*, S* and R* mirrored in the side planes.
+- Mean planes: the continuous least-squares line of the roofed ground over the whole path, and
+  over the ground before the first and after the last diffraction point; heights orthogonal to
+  the plane, a negative one taken as 0 with its sign kept; dp the projected distance.
+- A_ground (2.5.14)–(2.5.20): the homogeneous state uses G′path, blending in the source ground
+  Gs on short paths; the favourable state uses the modified heights of (2.5.19) and the lower
+  bound (2.5.20) on the unmodified heights; a hard path is −3 dB homogeneous and the bound
+  favourable. Gs: road carriageway and bridge decks 0, ballast 1, embedded tram track 0; a point
+  source the ground under it.
+- A_dif (2.5.21)–(2.5.32): Δdif = 10·lg(3 + 40·C″·δ/λ) with C_h = 1 and C″ for two or more
+  points spanning more than 0.3 m; the ground correction split on both sides; only Δdif(S,R)
+  is capped at 25 dB; a source or receiver below its side's plane takes that side's A_ground
+  whole and the mirrored Δdif. There is no minimum path length.
+  **Numerical domain:** if either ground-split logarithm has a non-positive argument and
+  hence a non-finite result, that side takes its whole A_ground and its image Δdif,
+  source then receiver. This follows NoiseModelling's `AttenuationCnossos.aDif`; the
+  published equations do not specify this fallback. It also covers the zero-argument
+  (infinite) limit. A recorded Prague two-roof path tests this domain separately from the
+  ISO accuracy fixture. Any other non-finite or negative linear energy fails its receiver
+  instead of flooring to a quiet layer.
+- The states are mixed only at the end, per period and propagation direction:
+  `10^(−A/10) = p·10^(−A_F/10) + (1 − p)·10^(−A_H/10)` with p of the period and of the
+  direction's 16-sector climatology (0.5 everywhere until W6 delivers it).
+- A_atm: ISO 9613-1 at exact mid-band frequencies, per period and band from the mean μ and
+  variance σ² of the hourly coefficient: `max(μ·d − (ln 10/20)·σ²·d², α_min·d)`, d the slant
+  distance in km; until W6 delivers, 15 °C / 70 % (the CNOSSOS default) with no variance.
+- Forest: the plan-view depth rule is unchanged until the bare-earth DEM and the canopy height
+  land together (ISO 9613-2 A.2.2 on each state's ray, S4); on today's surface model the
+  canopy is terrain.
+- Popup hypotheses: free field is the whole-path A_ground alone; no terrain leaves the terrain
+  out of the candidates; no screening removes every crossing (tops and roofs); no ground drops
+  every ground term; no forest; no air absorption.
+- Acceptance: all 28 ISO/TR 17534-4 Direct cases, LH and LF, within ±0.1 dB in every band
+  (`iso_tr_17534_4_tests.rs`); the painter against the popup's CPU ray on synthetic scenes
+  (`surface-cuda-check`): flat ground of four ground factors within 0.001 dB, a ridge with
+  touching, overlapping and courtyard buildings and two walls within 0.16 dB (the largest a
+  wide-bucket mask bin at a wall edge moving in f32).
+- The literal standard is not monotone in obstacle height (W2 `edge-height-monotonicity.txt`);
+  what holds is that adding a candidate never shortens the rubber band.
+
+Until `meteorology.arrow` is delivered, every period uses the same default absorption
+coefficients (dB/km), rounded here to two decimals; the implementation computes them from
+ISO 9613-1 at exact mid-band frequencies, 15 °C, 70 % RH and 101.325 kPa. Variance is zero,
+and each period's directional favourable probability is 0.5.
+
+| Nominal band (Hz) | 63 | 125 | 250 | 500 | 1000 | 2000 | 4000 | 8000 |
+|---|---|---|---|---|---|---|---|---|
+| Mean α (dB/km) | 0.10 | 0.38 | 1.13 | 2.36 | 4.08 | 8.75 | 26.39 | 93.71 |
+
+The W4 emission integration must supply one independently powered line per source height
+A/B. The current CPU `LinePiece.source_height_m` and CUDA `DeviceLineSource.source_height_m` are relative
+to the sampled terrain (the formation datum once bare earth lands): set them to
+`railhead_offset_m + 0.5` and `railhead_offset_m + 4.0` respectively, and attach each
+height's emission, directivity and distinct source-part identity.
+Do not duplicate today's complete row emission into both heights. The deterministic CUDA
+check exercises both heights above a raised railhead and distinct per-period, per-sector
+weather probabilities with nonzero absorption variance.
+
+The painter streams the ray: samples and crossings in chainage order (the scene's obstacles are
+one merged grid, each cell taking the crossings inside its own chainage window) feed both
+states' monotone-chain hulls, and every hull entry carries the ground moments of its two sides,
+so the side planes of whichever points end up first and last come out without storing roofs. A
+ray that outruns a fixed capacity (64 samples, 32 hull points, 32 crossings in one cell, 16
+open footprints) fails its cell instead of painting.
 
 ### Popup trace
 
-The schema retains one real representative crossing: greatest incremental loss
-in any band, then greatest path difference; exact ties retain input order.
-Its position, height and path difference describe that crossing only. Other
-crossings may supply other bands, and other rays may supply the line-source fan.
-No positive increment means no representative edge. Scalar impact remains the
-A-weighted difference between full and no-screening Lden, not this edge's loss.
-
-### Model boundary
-
-This envelope is Quiet Map's existing single-edge approximation applied to all
-crossings, not a multiple-diffraction path construction. Full multiple-obstacle
-geometry and split ground-reflection corrections are outside this change. The
-normative context is [Directive 2021/1226, Annex II propagation amendments](https://eur-lex.europa.eu/eli/dir_del/2021/1226/oj/eng).
+A ray's trace shows the homogeneous state's diffraction points: terrain points as the terrain
+edges with the terrain-only path difference, and the obstacle top standing highest above the
+straight line of sight as the representative crossing with the full path difference. A line
+piece's trace shows its loudest quadrature node's ray, and its fan lists every node with its
+horizontal azimuth stretch and 1 kHz terrain and screening effect. The terrain, screening and
+forest impacts are the A-weighted differences between the full and the hypothesis Lden.
 
 ## Retained OSM model evidence
 

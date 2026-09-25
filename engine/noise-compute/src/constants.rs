@@ -40,22 +40,6 @@ pub const GROUND_CF: [f64; NUM_BANDS] = [-1.5, -0.7, 1.5, 2.5, 2.0, 1.3, 0.7, 0.
 /// this line is the only place the number exists.
 pub const GROUND_HARD_FLOOR_DB: f64 = -3.0;
 
-/// Largest ground GAIN (negative attenuation) any band can reach for any
-/// `G ∈ [0,1]` [dB]. The tile kernels' energy-budget skip needs it: their
-/// per-source upper bound assumes the most favourable ground the path could
-/// possibly have, and if that assumption under-states the real gain the bound
-/// stops being an upper bound and the pipeline silently drops audible sources.
-///
-/// WHY EXACTLY 3.0. Every literal CNOSSOS state ends in
-/// `max(analytic, FLOOR·(1−G′))`. Both IMD factors are clamped and §2.5.14
-/// makes `G′` their convex blend, so `A_gr ≥ FLOOR` for every finite path
-/// geometry; the P_FAV energy mix preserves that lower bound. Equality is the
-/// explicit `Gpath=0` hard-ground case in every band. The former per-band
-/// `max(−CF[i], 0)` (1.5 dB at 63 Hz, 0.7 at 125 Hz, 0 above) was correct only
-/// before the hard-ground floor existed; leaving it would make `ub < exact` on
-/// every hard-ground path. `tests/tc_ground.rs` and the literal-core domain
-/// test pin soundness and tightness.
-pub const GROUND_GAIN_UB_DB: f64 = -GROUND_HARD_FLOOR_DB;
 
 /// Octave band center frequencies [Hz].
 pub const BAND_FREQ: [f64; NUM_BANDS] = [63.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0];
@@ -191,72 +175,6 @@ pub const SURFACE_CORR: [f64; 5] = [
 // ── Source max-radius cutoffs (meters) ──────────────────────────
 // Single source of truth: pipeline (soa.rs), normalize.rs, and
 // source-reader (popup) all reference these constants.
-
-/// Road max propagation radius by road_class index
-/// (0=motorway .. 6=living_street, 7=service, 8=track, 9=unclassified,
-///  10=motorway_link, 11=trunk_link, 12=primary_link).
-pub const ROAD_MAX_RADIUS: [f64; 13] = [
-    10_000.0, // 0: motorway
-    7_000.0,  // 1: trunk
-    5_000.0,  // 2: primary
-    3_000.0,  // 3: secondary
-    1_600.0,  // 4: tertiary
-    800.0,    // 5: residential
-    400.0,    // 6: living_street
-    500.0,    // 7: service (parking aisles, driveways)
-    300.0,    // 8: track (agricultural / forestry)
-    2_000.0,  // 9: unclassified (rural connector between villages)
-    1_200.0,  // 10: motorway_link (ramp — 15 % traffic, shorter audible reach)
-    900.0,    // 11: trunk_link
-    600.0,    // 12: primary_link
-];
-
-/// Railway reach clamp + boundary convention.
-///
-/// Rail reach is solved PER ROW: each segment reaches exactly to the distance
-/// where ITS OWN free-field Lden falls to [`RAILWAY_REACH_TARGET_LDEN_DB`]
-/// (see `emission::railway::rail_reach_m`). The blanket 7 km that used to gate
-/// every row (commit `8540e4cb`, "all types") is retired — a quiet branch line
-/// truncating at the same distance as a 300 km/h corridor was a correctness
-/// bug, not a tuning choice. The solver reproduces the old 7 km for a *default
-/// mainline* (80 pax + 20 freight @ 80 km/h → 25.3 dB @ 7 km), so the change
-/// is value-neutral for the dominant class
-/// and only moves the 25-30 dB fringe ring on the tails (quiet rows shrink,
-/// HS/loud corridors extend to the noise we currently truncate).
-///
-/// Clamp `[2 km, 10 km]`:
-/// - **Floor 2 km**: degenerate quiet rows (a single freight wagon, a stub
-///   siding) must still cover their near field, and the 25 dB target is a
-///   *display* convention (the renderer floor sits at 30 dB), not a physics
-///   cutoff — never let the solver cull a row before its audible field is
-///   drawn.
-/// - **Ceiling 11 km**: the owner's decided rail ceiling (SPEC 2026-08-15,
-///   `[2 km, 11 km]`), landed 2026-09-03. The V2 ground-aware solve puts a plain
-///   mainline row at 10,178.8 m and a 300 km/h corridor at 10.06-11.1 km
-///   (measured 2026-06-01 three ways), so a 10 km cap clipped every loud
-///   corridor; the rail halo follows this ceiling and costs x1.21 over 10 km.
-///   Cutting the reach instead was refuted on 2026-08-18: at 5 km painted rail
-///   tiles disappear from the map.
-pub const RAILWAY_REACH_CLAMP_MIN: f64 = 2_000.0;
-pub const RAILWAY_REACH_CLAMP_MAX: f64 = 11_000.0;
-
-/// Lden boundary the per-row rail reach solves to. Mirrors the ~25 dB
-/// road/rail boundary convention (road's per-class `ROAD_MAX_RADIUS` caps sit
-/// at the same crossing — e.g. motorway 10 km, residential 800 m — so road and
-/// rail reach use one boundary). Display floor, not a physics cutoff.
-///
-/// KNOWN CONVENTION GAP shared with the road caps: the solve is free-field
-/// unreflected, while the kernels can add up to 3 dB of receiver reflection.
-/// Revisit road and rail together if measured facade points near their cutoffs
-/// show under-coverage.
-pub const RAILWAY_REACH_TARGET_LDEN_DB: f64 = 25.0;
-
-/// Widest rail reach the clamp can return — used to size the rail-only
-/// ray-march halo (`build_heatmap_surface` / `relevant-source-surface`) so a row extended
-/// to the ceiling still ray-marches terrain along its whole path. Equals
-/// [`RAILWAY_REACH_CLAMP_MAX`]; named separately so the halo's intent reads at
-/// the call site.
-pub const RAILWAY_REACH_CEILING: f64 = RAILWAY_REACH_CLAMP_MAX;
 
 /// Industrial point source max radius.
 pub const INDUSTRIAL_MAX_RADIUS: f64 = 4_000.0;

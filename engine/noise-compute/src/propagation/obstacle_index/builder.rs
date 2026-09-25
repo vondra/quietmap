@@ -20,6 +20,12 @@ impl ObstacleIndex {
 }
 
 impl Builder {
+    /// `(lat, lon)` in this builder's local metric frame.
+    #[inline]
+    pub(super) fn local(&self, lat: f64, lon: f64) -> (f64, f64) {
+        self.to_local(lat, lon)
+    }
+
     #[inline]
     fn to_local(&self, lat: f64, lon: f64) -> (f64, f64) {
         (

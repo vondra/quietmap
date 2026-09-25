@@ -1,10 +1,12 @@
-//! Full per-pair energy: the five-bucket fan quadrature of one line source at one
-//! receiver, each bucket on its own ray, wide buckets arc-clipped (CPU
-//! seg_sampling::sampled_gob_bands_with_ground under scatter_band's evaluate_exact_pair).
+//! Full per-pair energy: a line piece's CNOSSOS point sum as quadrature nodes uniform in the
+//! in-plane angle, each node on its own CNOSSOS ray, wide buckets on geometry-placed nodes (CPU
+//! noise-compute line_quadrature + compute/line_piece); a point source on one ray; airport ground
+//! operations on their closest-point single-edge ray (W5 carve-out).
 
 #pragma once
 
 #include "relevant_source_arc.cuh"
+#include "relevant_source_cnossos_stream.cuh"
 
 __device__ __forceinline__ float ground_or_barrier_attenuation_db(
     float ground_db,
@@ -15,89 +17,183 @@ __device__ __forceinline__ float ground_or_barrier_attenuation_db(
     return barrier > 0.0f ? fmaxf(ground_db, barrier) : ground_db;
 }
 
-struct FanPoint {
-    bool valid;
-    float x_m;
-    float y_m;
-    float distance_m;
-};
-
-__device__ __forceinline__ FanPoint fan_point(
-    const DeviceLineSource& source,
-    float receiver_x_m,
-    float receiver_y_m,
-    float azimuth
-) {
-    FanPoint point;
-    point.valid = segment_point_at_azimuth(source, receiver_x_m, receiver_y_m, azimuth,
-                                           point.x_m, point.y_m, point.distance_m);
-    return point;
+/// The ray terms of a line source (fixed Gs, its platform) or a point (Gs sampled under it, its
+/// footprint radius).
+__device__ __forceinline__ RaySourceTerms ray_source_terms(const DeviceLineSource& source) {
+    RaySourceTerms terms;
+    terms.height_m = source.source_height_m;
+    if (source_is_point(source)) {
+        terms.ground_factor = -1.0f;
+        terms.platform_half_width_m = 0.0f;
+        terms.exclusion_radius_m = source.extent_m;
+    } else {
+        terms.ground_factor = source.source_ground_factor;
+        terms.platform_half_width_m = source.platform_half_width_m;
+        terms.exclusion_radius_m = 0.0f;
+    }
+    return terms;
 }
 
-/// Energy-mean of max(A_ground, A_terrain + A_screen) over the fan's buckets;
-/// returns the number of buckets used (0 when the receiver sits on the segment).
-__device__ __forceinline__ int fan_ground_or_barrier_energy(
+/// noise-compute horizontal_dipole_integral: horizontal directivity against the 3D
+/// angular measure. Interval differences and the coincident-case quadrature keep this path in f32.
+__device__ float horizontal_dipole_integral(float lo, float hi, float a, float b) {
+    if (b == 0.0f) return 0.0f;
+    const float b2 = b * b;
+    const float difference = a * a + b2 - 1.0f;
+    const float denominator = difference * difference + 4.0f * a * a;
+    if (denominator == 0.0f) {
+        return 0.5f * (hi - lo) + 0.25f * (sinf(2.0f * hi) - sinf(2.0f * lo));
+    }
+    float integral;
+    if (denominator < 1e-2f) {
+        const float nodes[4] = {0.1834346424956498f, 0.525532409916329f,
+                                0.7966664774136267f, 0.9602898564975363f};
+        const float weights[4] = {0.362683783378362f, 0.3137066458778873f,
+                                  0.2223810344533745f, 0.1012285362903763f};
+        const float mid = 0.5f * (lo + hi);
+        const float half = 0.5f * (hi - lo);
+        integral = 0.0f;
+        for (int k = 0; k < 4; ++k) {
+            for (int sign = -1; sign <= 1; sign += 2) {
+                const float u = tanf(mid + sign * half * nodes[k]) + a;
+                integral += weights[k] * b2 / (u * u + b2);
+            }
+        }
+        integral *= half;
+    } else {
+        const float linear = -2.0f * a * b2 / denominator;
+        const float first = b2 * difference / denominator;
+        const float second = b * (a * a - b2 + 1.0f) / denominator;
+        const float sin_lo = sinf(lo), cos_lo = cosf(lo);
+        const float sin_hi = sinf(hi), cos_hi = cosf(hi);
+        const float lower = sin_lo + a * cos_lo;
+        const float upper = sin_hi + a * cos_hi;
+        const float q_lo = lower * lower + b2 * cos_lo * cos_lo;
+        const float q_hi = upper * upper + b2 * cos_hi * cos_hi;
+        const float mid = 0.5f * (hi + lo);
+        const float sin_mid = sinf(mid), cos_mid = cosf(mid);
+        const float q_delta = 2.0f * sinf(hi - lo)
+            * ((cos_mid - a * sin_mid) * (sin_mid + a * cos_mid) - b2 * sin_mid * cos_mid);
+        const float ratio_delta = q_delta / q_lo;
+        const float log_ratio = fabsf(ratio_delta) < 0.5f ? log1pf(ratio_delta) : logf(q_hi) - logf(q_lo);
+        const float angle = atan2f(b * sinf(hi - lo), b2 * cos_lo * cos_hi + lower * upper);
+        integral = first * (hi - lo) - 0.5f * linear * log_ratio + second * angle;
+    }
+    return fminf(fmaxf(integral, 0.0f), hi - lo);
+}
+
+/// Δφ for an isotropic line, or the horizontal track dipole's integral over Δφ.
+__device__ __forceinline__ float line_node_weight(const DeviceLineSource& source,
+                                                 const LinePieceGeometry& geometry,
+                                                 float a, float b) {
+    const float lo = fminf(a, b);
+    const float hi = fmaxf(a, b);
+    if ((source.flags & QUIETMAP_SOURCE_FLAG_TRACK_DIPOLE) == 0u) {
+        return hi - lo;
+    }
+    const float ux = geometry.unit[0], uy = geometry.unit[1];
+    const float horizontal_sq = ux * ux + uy * uy;
+    if (horizontal_sq == 0.0f) return static_cast<float>(hi - lo);
+    const float x = geometry.start[0], y = geometry.start[1];
+    const float foot_x = x + ux * geometry.foot_along_m;
+    const float foot_y = y + uy * geometry.foot_along_m;
+    const float scale = horizontal_sq * geometry.perpendicular_m;
+    const float shift = (foot_x * ux + foot_y * uy) / scale;
+    const float width = fabsf(x * uy - y * ux) / scale;
+    return static_cast<float>(0.01f * (hi - lo)
+        + 0.99f * horizontal_dipole_integral(lo, hi, shift, width));
+}
+
+/// The source point of the line at `along_m` in the scene frame.
+__device__ __forceinline__ void line_source_point(
+    const LinePieceGeometry& geometry,
+    float receiver_x_m,
+    float receiver_y_m,
+    float along_m,
+    float& x_m,
+    float& y_m
+) {
+    float point[3];
+    line_point_at(geometry, along_m, point);
+    x_m = receiver_x_m + point[0];
+    y_m = receiver_y_m + point[1];
+}
+
+/// Σ Δφ·T over the piece's quadrature nodes (CPU line_quadrature_nodes), per period and band.
+__device__ void line_quadrature_transfer(
     const DeviceScenePointers& scene,
     const DeviceLineSource& source,
+    const LinePieceGeometry& geometry,
     float receiver_x_m,
     float receiver_y_m,
     float receiver_altitude_m,
-    const float ground_db[QUIETMAP_BAND_COUNT],
     PathProfile& profile,
-    float energy[QUIETMAP_BAND_COUNT]
+    float sum[QUIETMAP_PERIOD_COUNT][QUIETMAP_BAND_COUNT]
 ) {
-    const float start_x = source.start_x_m - receiver_x_m;
-    const float start_y = source.start_y_m - receiver_y_m;
-    const float end_x = source.end_x_m - receiver_x_m;
-    const float end_y = source.end_y_m - receiver_y_m;
-    const float base_azimuth = atan2f(start_y, start_x);
-    const float span = wrap_to_pi(atan2f(end_y, end_x) - base_azimuth);
-    const float inverse_count = 1.0f / static_cast<float>(QUIETMAP_LINE_DIRECTION_COUNT);
-    const float cosine_bucket_width = cosf(fabsf(span) * inverse_count);
-    int used = 0;
-    FanPoint low = fan_point(source, receiver_x_m, receiver_y_m, base_azimuth);
-    for (int bucket = 0; bucket < QUIETMAP_LINE_DIRECTION_COUNT; ++bucket) {
-        const FanPoint high = fan_point(
-            source, receiver_x_m, receiver_y_m,
-            fmaf(static_cast<float>(bucket + 1) * inverse_count, span, base_azimuth));
-        const float centre_azimuth = fmaf(
-            (static_cast<float>(bucket) + 0.5f) * inverse_count, span, base_azimuth);
-        const FanPoint centre = fan_point(source, receiver_x_m, receiver_y_m, centre_azimuth);
-        if (!centre.valid) {
-            low = high;
+    const float bucket_angle = line_subtended_angle(geometry) / QUIETMAP_LINE_BUCKET_COUNT;
+    const RaySourceTerms terms = ray_source_terms(source);
+    float transfer[QUIETMAP_PERIOD_COUNT][QUIETMAP_BAND_COUNT];
+    for (int bucket = 0; bucket < QUIETMAP_LINE_BUCKET_COUNT; ++bucket) {
+        const float angle_lo = fmaf(static_cast<float>(bucket), bucket_angle, geometry.start_angle_rad);
+        const float angle_hi = angle_lo + bucket_angle;
+        WideBucketNodes wide;
+        if (wide_bucket_nodes(scene, source, geometry, receiver_x_m, receiver_y_m, angle_lo, angle_hi,
+                              wide)) {
+            int bin = 0;
+            while (bin < QUIETMAP_WIDE_BUCKET_MASK_BINS) {
+                bool run_blocked;
+                const int run_end = wide_bucket_run_end(wide, bin, run_blocked);
+                const float run_lo = fmaf(static_cast<float>(bin), wide.bin_width, wide.span_lo);
+                const float run_hi = run_end == QUIETMAP_WIDE_BUCKET_MASK_BINS
+                    ? wide.span_hi : fmaf(static_cast<float>(run_end), wide.bin_width, wide.span_lo);
+                const int parts = min(max(static_cast<int>(ceilf(
+                    (run_hi - run_lo) / QUIETMAP_WIDE_BUCKET_PART_MAX_SPAN_RAD)), 1),
+                    QUIETMAP_WIDE_BUCKET_MAX_PARTS_PER_RUN);
+                const float step = (run_hi - run_lo) / static_cast<float>(parts);
+                for (int part = 0; part < parts; ++part) {
+                    const bool last_part = run_end == QUIETMAP_WIDE_BUCKET_MASK_BINS && part + 1 == parts;
+                    const float part_lo = fmaf(static_cast<float>(part), step, run_lo);
+                    const float part_hi = last_part ? wide.span_hi : part_lo + step;
+                    const float edge_lo = bin == 0 && part == 0
+                        ? wide.angle_at_span_lo
+                        : wide_bucket_angle_at_azimuth(geometry, wide, part_lo, wide.angle_at_span_lo);
+                    const float edge_hi = last_part
+                        ? wide.angle_at_span_hi
+                        : wide_bucket_angle_at_azimuth(geometry, wide, part_hi, wide.angle_at_span_hi);
+                    float along_m;
+                    if (!line_along_at_azimuth(geometry, 0.5f * (part_lo + part_hi), along_m)) {
+                        along_m = line_along_at_angle(geometry, 0.5f * (edge_lo + edge_hi));
+                    }
+                    float x_m;
+                    float y_m;
+                    line_source_point(geometry, receiver_x_m, receiver_y_m, along_m, x_m, y_m);
+                    cnossos_ray_transfer(scene, terms, x_m, y_m, receiver_x_m, receiver_y_m,
+                                         receiver_altitude_m, run_blocked, profile, transfer);
+                    const float weight = line_node_weight(source, geometry, edge_lo, edge_hi);
+                    for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
+                        for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
+                            sum[period][band] = fmaf(weight, transfer[period][band],
+                                                     sum[period][band]);
+                        }
+                    }
+                }
+                bin = run_end;
+            }
             continue;
         }
-        build_path_profile(scene, centre.x_m, centre.y_m, receiver_x_m, receiver_y_m,
-                           centre.distance_m, source_is_bridge(source), profile);
-        float terrain_db[QUIETMAP_BAND_COUNT];
-        float screening_db[QUIETMAP_BAND_COUNT];
-        ray_terrain_and_screening_bands(
-            scene, centre.x_m, centre.y_m, receiver_x_m, receiver_y_m,
-            profile.elevation_m[0] + source.source_height_m, receiver_altitude_m, true, 0.0f,
-            profile, terrain_db, screening_db);
-        if (low.valid && high.valid) {
-            const float chord_m = sqrtf(fmaxf(
-                fmaf(low.distance_m, low.distance_m, high.distance_m * high.distance_m)
-                    - 2.0f * low.distance_m * high.distance_m * cosine_bucket_width,
-                0.0f));
-            const float sub_distance_m = fminf(fminf(low.distance_m, high.distance_m),
-                                               centre.distance_m);
-            if (chord_m > QUIETMAP_SEG_ARC_MIN_SPAN_RAD * sub_distance_m) {
-                arc_screened_bucket_increment(
-                    scene, source, receiver_x_m, receiver_y_m, receiver_altitude_m,
-                    low.x_m, low.y_m, high.x_m, high.y_m,
-                    atan2f(centre.y_m - receiver_y_m, centre.x_m - receiver_x_m),
-                    sub_distance_m + chord_m, ground_db, terrain_db, profile, screening_db);
+        float x_m;
+        float y_m;
+        line_source_point(geometry, receiver_x_m, receiver_y_m,
+                          line_along_at_angle(geometry, angle_lo + 0.5f * bucket_angle), x_m, y_m);
+        cnossos_ray_transfer(scene, terms, x_m, y_m, receiver_x_m, receiver_y_m, receiver_altitude_m,
+                             true, profile, transfer);
+        const float weight = line_node_weight(source, geometry, angle_lo, angle_hi);
+        for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
+            for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
+                sum[period][band] = fmaf(weight, transfer[period][band], sum[period][band]);
             }
         }
-        for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-            energy[band] += quietmap_energy_from_db(-ground_or_barrier_attenuation_db(
-                ground_db[band], terrain_db[band], screening_db[band]));
-        }
-        ++used;
-        low = high;
     }
-    return used;
 }
 
 __device__ __forceinline__ bool evaluate_source_receiver_energy(
@@ -110,83 +206,86 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
     float output_energy[QUIETMAP_PERIOD_COUNT]
 ) {
     const DeviceLineSource source = scene.sources[source_index];
-    LineReceiverGeometry geometry;
-    if (!line_receiver_geometry(scene, source, receiver_x_m, receiver_y_m,
-                                receiver_altitude_m, receiver_reflection_db, geometry)) {
-        return false;
-    }
-    // Ground ops always march the exact popup cadence (CPU ground_ops calls
-    // tile.build_path_profile) and keep the band-mean ground surrogate.
-    const bool ground_ops = source_is_ground_ops(source);
+    float transfer[QUIETMAP_PERIOD_COUNT][QUIETMAP_BAND_COUNT];
+    float divergence_linear;
     PathProfile profile;
-    build_path_profile(scene, geometry.closest_x_m, geometry.closest_y_m,
-                       receiver_x_m, receiver_y_m, geometry.endpoint_distance_m,
-                       source_is_bridge(source), profile);
-    float ground_db[QUIETMAP_BAND_COUNT];
-    if (ground_ops) {
-        ground_ops_ground_bands(profile.ground_path_g, ground_db);
-    } else {
-        ground_attenuation_bands(profile, geometry.source_altitude_m, receiver_altitude_m,
-                                 ground_db);
-    }
-    const float characteristic_forest_depth_m = profile.forest_depth_m;
-    float ground_or_barrier_energy[QUIETMAP_BAND_COUNT] = {};
-    int used_directions = 0;
-    const float segment_x = source.end_x_m - source.start_x_m;
-    const float segment_y = source.end_y_m - source.start_y_m;
-    const bool fan_exists = fmaf(segment_x, segment_x, segment_y * segment_y) >= 1.0e-6f
-                            && !ground_ops;
-    if (scene.obstacle_grid_count > 0 && fan_exists) {
-        used_directions = fan_ground_or_barrier_energy(
-            scene, source, receiver_x_m, receiver_y_m, receiver_altitude_m, ground_db,
-            profile, ground_or_barrier_energy);
-        if (used_directions == 0) {
-            // Every bucket degenerate: the receiver sits on the segment, where the
-            // characteristic ray resolves to no screening — ground alone over its terrain.
-            build_path_profile(scene, geometry.closest_x_m, geometry.closest_y_m,
-                               receiver_x_m, receiver_y_m, geometry.endpoint_distance_m,
-                               source_is_bridge(source), profile);
-            float terrain_db[QUIETMAP_BAND_COUNT];
-            float screening_db[QUIETMAP_BAND_COUNT];
-            ray_terrain_and_screening_bands(
-                scene, geometry.closest_x_m, geometry.closest_y_m, receiver_x_m, receiver_y_m,
-                geometry.source_altitude_m, receiver_altitude_m, false, 0.0f, profile,
-                terrain_db, screening_db);
-            for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-                ground_or_barrier_energy[band] = quietmap_energy_from_db(
-                    -ground_or_barrier_attenuation_db(ground_db[band], terrain_db[band], 0.0f));
-            }
-            used_directions = 1;
+    if (source_is_ground_ops(source)) {
+        // Ground ops keep their closest-point ray and band-mean ground (W5 carve-out).
+        LineReceiverGeometry geometry;
+        if (!ground_ops_receiver_geometry(scene, source, receiver_x_m, receiver_y_m,
+                                          receiver_reflection_db, geometry)) {
+            return false;
         }
-    } else {
+        build_path_profile(scene, geometry.closest_x_m, geometry.closest_y_m,
+                           receiver_x_m, receiver_y_m, geometry.endpoint_distance_m,
+                           source_is_bridge(source), profile);
+        float ground_db[QUIETMAP_BAND_COUNT];
+        ground_ops_ground_bands(profile.ground_path_g, ground_db);
+        const float forest_depth_m = profile.forest_depth_m;
         float terrain_db[QUIETMAP_BAND_COUNT];
         float screening_db[QUIETMAP_BAND_COUNT];
         ray_terrain_and_screening_bands(
             scene, geometry.closest_x_m, geometry.closest_y_m, receiver_x_m, receiver_y_m,
-            geometry.source_altitude_m, receiver_altitude_m, true,
-            source_exclusion_radius_m(source), profile, terrain_db, screening_db);
+            geometry.source_altitude_m, receiver_altitude_m, true, 0.0f, profile,
+            terrain_db, screening_db);
         for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-            ground_or_barrier_energy[band] = quietmap_energy_from_db(
-                -ground_or_barrier_attenuation_db(
-                    ground_db[band], terrain_db[band], screening_db[band]));
+            const float level = quietmap_energy_from_db(
+                geometry.base_level_db
+                - ground_or_barrier_attenuation_db(ground_db[band], terrain_db[band], screening_db[band])
+                - fminf(QUIETMAP_VEGETATION_DB_PER_M[band] * forest_depth_m,
+                        QUIETMAP_VEGETATION_CAP_DB[band])
+                - QUIETMAP_ATMOSPHERIC_DB_PER_KM[band] * geometry.slant_distance_m * 0.001f);
+            for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
+                transfer[period][band] = level;
+            }
         }
-        used_directions = 1;
+        divergence_linear = 1.0f;
+    } else if (source_is_point(source)) {
+        const float distance_m = hypotf(receiver_x_m - source.start_x_m,
+                                        receiver_y_m - source.start_y_m);
+        if (distance_m > source.max_distance_m
+            || pair_is_inaudible(scene, source, false, distance_m)) {
+            return false;
+        }
+        cnossos_ray_transfer(scene, ray_source_terms(source), source.start_x_m, source.start_y_m,
+                             receiver_x_m, receiver_y_m, receiver_altitude_m, true, profile,
+                             transfer);
+        // CPU compute_point_sources: the divergence distance never falls inside the footprint.
+        const float source_altitude_m = profile.elevation_m[0] + source.source_height_m;
+        const float slant_m = fmaxf(
+            hypotf(fmaxf(distance_m, source.extent_m), source_altitude_m - receiver_altitude_m), 1.0f);
+        divergence_linear = quietmap_energy_from_db(
+            receiver_reflection_db - (8.685889638065036f * __logf(slant_m) + 11.0f));
+    } else {
+        float closest_distance_m;
+        if (!line_closest_horizontal_distance(source, receiver_x_m, receiver_y_m, closest_distance_m)
+            || closest_distance_m > source.max_distance_m
+            || pair_is_inaudible(scene, source, true, closest_distance_m)) {
+            return false;
+        }
+        LinePieceGeometry geometry;
+        if (!line_piece_geometry(scene, source, receiver_x_m, receiver_y_m, receiver_altitude_m,
+                                 geometry)) {
+            return false;
+        }
+        for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
+            for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
+                transfer[period][band] = 0.0f;
+            }
+        }
+        line_quadrature_transfer(scene, source, geometry, receiver_x_m, receiver_y_m,
+                                 receiver_altitude_m, profile, transfer);
+        divergence_linear = quietmap_energy_from_db(receiver_reflection_db)
+            / (QUIETMAP_POINT_DIVERGENCE_LINEAR * geometry.perpendicular_m);
     }
     for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
         float period_energy = 0.0f;
         for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-            const float path_level = geometry.base_level_db
-                - QUIETMAP_ATMOSPHERIC_DB_PER_KM[band] * geometry.slant_distance_m * 0.001f
-                + QUIETMAP_A_WEIGHTING[band]
-                - fminf(QUIETMAP_VEGETATION_DB_PER_M[band] * characteristic_forest_depth_m,
-                        QUIETMAP_VEGETATION_CAP_DB[band]);
-            const float transfer = quietmap_energy_from_db(path_level)
-                * ground_or_barrier_energy[band] / static_cast<float>(used_directions);
             period_energy = fmaf(
                 source.emission_linear[period * QUIETMAP_BAND_COUNT + band],
-                transfer, period_energy);
+                transfer[period][band] * QUIETMAP_A_WEIGHTING_LINEAR[band], period_energy);
         }
-        output_energy[period] = period_energy;
+        output_energy[period] = period_energy * divergence_linear;
     }
     return true;
 }
