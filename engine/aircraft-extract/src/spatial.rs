@@ -177,7 +177,9 @@ mod tests {
 mod cruise_precision_tests {
     #[test]
     fn finer_cruise_centroids_reduce_npd_displacement_error() {
-        use noise_compute::emission::aircraft::{NpdLuts, FT_PER_M, NUM_CLASSES};
+        use noise_compute::emission::aircraft::{
+            thrust_model_for_class, NpdLuts, FT_PER_M, NUM_CLASSES,
+        };
         let luts = NpdLuts::shared();
         let radius = grid::EARTH_CIRCUMFERENCE_M / f64::from(super::CRUISE_AXIS) / 2.0_f64.sqrt();
         // The corresponding dev1 schema documented its maximum centroid offset as 1.44 km.
@@ -187,9 +189,12 @@ mod cruise_precision_tests {
                 for altitude in [7200.0_f64, 11000.0, 15000.0] {
                     for distance in (0..=15000).step_by(1000) {
                         let distance = f64::from(distance);
+                        let max_row = thrust_model_for_class(class).dep_rows - 1;
                         let baseline = luts.lookup_lmax(
                             class,
                             true,
+                            max_row,
+                            0.0,
                             (distance.hypot(altitude) * FT_PER_M).log10(),
                         );
                         for angle in 0..16 {
@@ -198,8 +203,13 @@ mod cruise_precision_tests {
                                 .hypot(offset * theta.sin())
                                 .hypot(altitude);
                             error = error.max(
-                                (luts.lookup_lmax(class, true, (shifted * FT_PER_M).log10())
-                                    - baseline)
+                                (luts.lookup_lmax(
+                                    class,
+                                    true,
+                                    max_row,
+                                    0.0,
+                                    (shifted * FT_PER_M).log10(),
+                                ) - baseline)
                                     .abs(),
                             );
                         }

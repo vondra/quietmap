@@ -148,7 +148,7 @@ impl NpdProfile {
 }
 
 mod scaled_distance;
-pub use scaled_distance::build_scaled_distance_lut;
+pub use scaled_distance::build_scaled_distance_curve_lut;
 
 // Per-typecode NPD profiles + per-class metadata (constants in
 // `profiles_generated.rs`) auto-generated from
@@ -236,7 +236,7 @@ pub fn is_jet_profile(profile_idx: u8) -> bool {
 /// last NPD point; any change to the divergence term (e.g. swapping for
 /// `−10·log10`) requires re-fitting α on the same form, not borrowing α
 /// from another standard.
-fn compute_alpha_eff(sel: &[f64; 10]) -> f64 {
+pub(crate) fn compute_alpha_eff(sel: &[f64; 10]) -> f64 {
     let d_m = [
         NPD_DIST_FT[7] / FT_PER_M, // 10 000 ft → 3 048 m
         NPD_DIST_FT[8] / FT_PER_M, // 16 000 ft → 4 877 m
@@ -285,52 +285,57 @@ impl NpdProfile {
         } else {
             &self.approach_sel
         };
-        let last = sel.len() - 1;
-
-        // Threshold louder than closest NPD point → minimal reach.
-        if threshold_db >= sel[0] {
-            return NPD_DIST_FT[0] / FT_PER_M;
-        }
-
-        // Inside the NPD table: log-linear interpolation.
-        if threshold_db > sel[last] {
-            for i in 0..last {
-                if threshold_db >= sel[i + 1] {
-                    let frac = (threshold_db - sel[i]) / (sel[i + 1] - sel[i]);
-                    let log_d = LOG_DIST[i] + frac * (LOG_DIST[i + 1] - LOG_DIST[i]);
-                    return (10.0_f64.powf(log_d) / FT_PER_M).min(AIRCRAFT_NPD_REACH_CAP_M);
-                }
-            }
-            return AIRCRAFT_NPD_REACH_CAP_M;
-        }
-
-        // Beyond the table: bisect the physics kernel in [d_ref, cap]. Kernel
-        // is strictly monotone decreasing, so a zero crossing exists when
-        // SEL(cap) < threshold; otherwise clamp at the cap.
-        let alpha = self.alpha_eff(is_departure);
-        let sel_at = |d: f64| {
-            sel[last]
-                - 20.0 * (d / AIRCRAFT_NPD_REF_SLANT_M).log10()
-                - alpha * (d - AIRCRAFT_NPD_REF_SLANT_M)
-        };
-        if sel_at(AIRCRAFT_NPD_REACH_CAP_M) >= threshold_db {
-            return AIRCRAFT_NPD_REACH_CAP_M;
-        }
-        let mut lo = AIRCRAFT_NPD_REF_SLANT_M;
-        let mut hi = AIRCRAFT_NPD_REACH_CAP_M;
-        for _ in 0..32 {
-            let mid = 0.5 * (lo + hi);
-            if sel_at(mid) > threshold_db {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-            if (hi - lo) < 0.5 {
-                break;
-            }
-        }
-        0.5 * (lo + hi)
+        estimate_reach_for_curve(sel, self.alpha_eff(is_departure), threshold_db)
     }
+}
+
+/// Slant reach of one NPD curve with its tail coefficient: the shared core of
+/// [`NpdProfile::estimate_reach_m`] and the loudest-row reach table.
+pub(crate) fn estimate_reach_for_curve(sel: &[f64; 10], alpha: f64, threshold_db: f64) -> f64 {
+    let last = sel.len() - 1;
+
+    // Threshold louder than closest NPD point → minimal reach.
+    if threshold_db >= sel[0] {
+        return NPD_DIST_FT[0] / FT_PER_M;
+    }
+
+    // Inside the NPD table: log-linear interpolation.
+    if threshold_db > sel[last] {
+        for i in 0..last {
+            if threshold_db >= sel[i + 1] {
+                let frac = (threshold_db - sel[i]) / (sel[i + 1] - sel[i]);
+                let log_d = LOG_DIST[i] + frac * (LOG_DIST[i + 1] - LOG_DIST[i]);
+                return (10.0_f64.powf(log_d) / FT_PER_M).min(AIRCRAFT_NPD_REACH_CAP_M);
+            }
+        }
+        return AIRCRAFT_NPD_REACH_CAP_M;
+    }
+
+    // Beyond the table: bisect the physics kernel in [d_ref, cap]. Kernel
+    // is strictly monotone decreasing, so a zero crossing exists when
+    // SEL(cap) < threshold; otherwise clamp at the cap.
+    let sel_at = |d: f64| {
+        sel[last]
+            - 20.0 * (d / AIRCRAFT_NPD_REF_SLANT_M).log10()
+            - alpha * (d - AIRCRAFT_NPD_REF_SLANT_M)
+    };
+    if sel_at(AIRCRAFT_NPD_REACH_CAP_M) >= threshold_db {
+        return AIRCRAFT_NPD_REACH_CAP_M;
+    }
+    let mut lo = AIRCRAFT_NPD_REF_SLANT_M;
+    let mut hi = AIRCRAFT_NPD_REACH_CAP_M;
+    for _ in 0..32 {
+        let mid = 0.5 * (lo + hi);
+        if sel_at(mid) > threshold_db {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+        if (hi - lo) < 0.5 {
+            break;
+        }
+    }
+    0.5 * (lo + hi)
 }
 
 /// Interpolate SEL at a given slant distance (Doc 29 §4.2, Eq. 4-4/4-5).
@@ -339,6 +344,34 @@ impl NpdProfile {
 pub fn interpolate_sel(profile: &NpdProfile, slant_ft: f64, is_departure: bool) -> f64 {
     let log_d = slant_ft.max(100.0).log10();
     interpolate_sel_logd(profile, log_d, is_departure)
+}
+
+/// Exact (non-LUT) SEL interpolation over one NPD curve with its tail
+/// coefficient: the shared core of [`interpolate_sel_logd`] and the LUT
+/// builder, so LUT bins match the exact curve at the bin centers.
+fn interp_curve_logd(sel: &[f64; 10], alpha: f64, log_d: f64) -> f64 {
+    let last = sel.len() - 1;
+    if log_d <= LOG_DIST[0] {
+        let slope = (sel[1] - sel[0]) / (LOG_DIST[1] - LOG_DIST[0]);
+        return sel[0] + slope * (log_d - LOG_DIST[0]);
+    }
+    // Beyond the last NPD point: physics-based extrapolation. Atmospheric
+    // absorption is linear in meters, so the log-linear Doc 29 slope
+    // underestimates loss at large slant. Use spherical divergence
+    // (−20·log10) + per-profile α_eff·(d − d_ref). See `compute_alpha_eff`.
+    if log_d >= LOG_DIST[last] {
+        let slant_m = 10.0_f64.powf(log_d) / FT_PER_M;
+        let geo = 20.0 * (slant_m / AIRCRAFT_NPD_REF_SLANT_M).log10();
+        let atm = alpha * (slant_m - AIRCRAFT_NPD_REF_SLANT_M);
+        return sel[last] - geo - atm;
+    }
+    for i in 0..last {
+        if log_d <= LOG_DIST[i + 1] {
+            let frac = (log_d - LOG_DIST[i]) / (LOG_DIST[i + 1] - LOG_DIST[i]);
+            return sel[i] + frac * (sel[i + 1] - sel[i]);
+        }
+    }
+    sel[last]
 }
 
 // NPD lookup table — pre-built at first access from `interpolate_sel_logd`.
@@ -359,14 +392,15 @@ pub const NPD_LUT_LOG_MAX: f64 = 5.5; // log10(316 k ft)
 pub const NPD_LUT_STEP: f64 = (NPD_LUT_LOG_MAX - NPD_LUT_LOG_MIN) / NPD_LUT_BINS as f64;
 pub const NPD_LUT_INV_STEP: f64 = NPD_LUT_BINS as f64 / (NPD_LUT_LOG_MAX - NPD_LUT_LOG_MIN);
 
-pub fn build_npd_lut(profile: &NpdProfile, is_departure: bool) -> [f64; NPD_LUT_BINS + 1] {
+/// Build one 128-bin SEL LUT over a single NPD curve (one power row).
+fn build_curve_lut(sel: &[f64; 10], alpha: f64) -> [f64; NPD_LUT_BINS + 1] {
     let mut lut = [0.0f64; NPD_LUT_BINS + 1];
     // `i` is both the bin value (`log_d` from `i`) and the write index — kept as a
     // range loop (init-time LUT fill; an enumerate() rewrite would still need `i`).
     #[allow(clippy::needless_range_loop)]
     for i in 0..=NPD_LUT_BINS {
         let log_d = NPD_LUT_LOG_MIN + i as f64 * NPD_LUT_STEP;
-        lut[i] = interpolate_sel_logd(profile, log_d, is_departure);
+        lut[i] = interp_curve_logd(sel, alpha, log_d);
     }
     lut
 }
@@ -381,10 +415,11 @@ pub fn fast_npd_lookup(lut: &[f64; NPD_LUT_BINS + 1], log_d: f64) -> f64 {
     lut[idx] + frac * (lut[idx + 1] - lut[idx])
 }
 
-/// Per-noise-class NPD LUTs (NUM_CLASSES classes × 2 directions × 3 metrics).
-/// Single global instance — built once on first access, reused across
-/// pipeline batches and popup queries. Sized by `NUM_CLASSES`: each class
-/// shares its Voronoi anchor's NPD curve, so one LUT per class is exact.
+/// Per-noise-class NPD LUTs (NUM_CLASSES classes × 2 directions ×
+/// MAX_POWER_ROWS power rows × 3 metrics). Single global instance — built once
+/// on first access, reused across pipeline batches and popup queries. Each
+/// class shares its Voronoi anchor's NPD curves; thrust classes additionally
+/// share the anchor's power rows, so one LUT per (class, row) is exact.
 ///
 /// SEL LUTs feed energy summation; LAmax LUTs feed per-event peak ranking
 /// (popup top-flights, band classification). LAmax replaces the hardcoded
@@ -406,20 +441,72 @@ impl NpdLuts {
     }
 
     fn build() -> Self {
-        let mut approach = Vec::with_capacity(NUM_CLASSES);
-        let mut departure = Vec::with_capacity(NUM_CLASSES);
-        let mut approach_lmax = Vec::with_capacity(NUM_CLASSES);
-        let mut departure_lmax = Vec::with_capacity(NUM_CLASSES);
-        let mut approach_scaled_distance = Vec::with_capacity(NUM_CLASSES);
-        let mut departure_scaled_distance = Vec::with_capacity(NUM_CLASSES);
+        use super::thrust::{thrust_model_for_class, MAX_POWER_ROWS};
+        let per_class = |sel_rows: &[[f64; 10]; MAX_POWER_ROWS],
+                         lmax_rows: &[[f64; 10]; MAX_POWER_ROWS],
+                         v_ref_kt: f64,
+                         sel_out: &mut Vec<[f64; NPD_LUT_BINS + 1]>,
+                         lmax_out: &mut Vec<[f64; NPD_LUT_BINS + 1]>,
+                         dl_out: &mut Vec<[f64; NPD_LUT_BINS + 1]>| {
+            for row in sel_rows.iter().take(MAX_POWER_ROWS) {
+                let alpha = compute_alpha_eff(row);
+                sel_out.push(build_curve_lut(row, alpha));
+            }
+            for (sel, lmax) in sel_rows.iter().zip(lmax_rows.iter()).take(MAX_POWER_ROWS) {
+                lmax_out.push(build_lmax_curve_lut(lmax, compute_alpha_eff(sel)));
+                dl_out.push(build_scaled_distance_curve_lut(sel, lmax, v_ref_kt));
+            }
+        };
+        let mut approach = Vec::with_capacity(NUM_CLASSES * MAX_POWER_ROWS);
+        let mut departure = Vec::with_capacity(NUM_CLASSES * MAX_POWER_ROWS);
+        let mut approach_lmax = Vec::with_capacity(NUM_CLASSES * MAX_POWER_ROWS);
+        let mut departure_lmax = Vec::with_capacity(NUM_CLASSES * MAX_POWER_ROWS);
+        let mut approach_scaled_distance = Vec::with_capacity(NUM_CLASSES * MAX_POWER_ROWS);
+        let mut departure_scaled_distance = Vec::with_capacity(NUM_CLASSES * MAX_POWER_ROWS);
         for class_idx in 0..NUM_CLASSES {
             let anchor = &PROFILES[CLASS_REP_PROFILE_IDX[class_idx] as usize];
-            approach.push(build_npd_lut(anchor, false));
-            departure.push(build_npd_lut(anchor, true));
-            approach_lmax.push(build_lmax_lut(anchor, false));
-            departure_lmax.push(build_lmax_lut(anchor, true));
-            approach_scaled_distance.push(build_scaled_distance_lut(anchor, false));
-            departure_scaled_distance.push(build_scaled_distance_lut(anchor, true));
+            let model = thrust_model_for_class(class_idx);
+            if model.has_thrust {
+                per_class(
+                    &model.app_sel,
+                    &model.app_lmax,
+                    anchor.v_ref_kt,
+                    &mut approach,
+                    &mut approach_lmax,
+                    &mut approach_scaled_distance,
+                );
+                per_class(
+                    &model.dep_sel,
+                    &model.dep_lmax,
+                    anchor.v_ref_kt,
+                    &mut departure,
+                    &mut departure_lmax,
+                    &mut departure_scaled_distance,
+                );
+            } else {
+                // Pinned classes reuse the anchor curve on every row: row 0
+                // reads bit-identical values to the pre-thrust LUTs.
+                let app = [anchor.approach_sel; MAX_POWER_ROWS];
+                let app_lmax = [anchor.approach_lmax; MAX_POWER_ROWS];
+                let dep = [anchor.departure_sel; MAX_POWER_ROWS];
+                let dep_lmax = [anchor.departure_lmax; MAX_POWER_ROWS];
+                per_class(
+                    &app,
+                    &app_lmax,
+                    anchor.v_ref_kt,
+                    &mut approach,
+                    &mut approach_lmax,
+                    &mut approach_scaled_distance,
+                );
+                per_class(
+                    &dep,
+                    &dep_lmax,
+                    anchor.v_ref_kt,
+                    &mut departure,
+                    &mut departure_lmax,
+                    &mut departure_scaled_distance,
+                );
+            }
         }
         NpdLuts {
             approach,
@@ -431,36 +518,73 @@ impl NpdLuts {
         }
     }
 
+    /// Eq. 4-3 power interpolation between two row LUT reads. `w == 0.0`
+    /// returns the single-row read (exact: pinned classes and clamped
+    /// brackets match the pre-thrust values bit for bit).
     #[inline(always)]
-    pub fn lookup(&self, noise_class: usize, is_dep: bool, log_d: f64) -> f64 {
-        let lut = if is_dep {
-            &self.departure[noise_class]
+    fn lookup_lerp(
+        block: &[[f64; NPD_LUT_BINS + 1]],
+        noise_class: usize,
+        row: u8,
+        w: f64,
+        log_d: f64,
+    ) -> f64 {
+        use super::thrust::MAX_POWER_ROWS;
+        let base = noise_class * MAX_POWER_ROWS;
+        let lo = fast_npd_lookup(
+            &block[base + usize::from(row.min(MAX_POWER_ROWS as u8 - 1))],
+            log_d,
+        );
+        if w == 0.0 {
+            return lo;
+        }
+        let hi = fast_npd_lookup(
+            &block[(base + usize::from(row) + 1).min(base + MAX_POWER_ROWS - 1)],
+            log_d,
+        );
+        lo + w * (hi - lo)
+    }
+
+    #[inline(always)]
+    pub fn lookup(&self, noise_class: usize, is_dep: bool, row: u8, w: f64, log_d: f64) -> f64 {
+        let block = if is_dep {
+            &self.departure
         } else {
-            &self.approach[noise_class]
+            &self.approach
         };
-        fast_npd_lookup(lut, log_d)
+        Self::lookup_lerp(block, noise_class, row, w, log_d)
     }
 
     /// Doc 29 scaled distance `d_λ` (m) of the class anchor at `log_d`
-    /// (log10 of the slant in feet); see [`build_scaled_distance_lut`].
+    /// (log10 of the slant in feet), power-interpolated with `(row, w)`;
+    /// see [`build_scaled_distance_curve_lut`].
     #[inline(always)]
-    pub fn lookup_scaled_distance(&self, noise_class: usize, is_dep: bool, log_d: f64) -> f64 {
-        let lut = if is_dep {
-            &self.departure_scaled_distance[noise_class]
+    pub fn lookup_scaled_distance(
+        &self,
+        noise_class: usize,
+        is_dep: bool,
+        row: u8,
+        w: f64,
+        log_d: f64,
+    ) -> f64 {
+        let block = if is_dep {
+            &self.departure_scaled_distance
         } else {
-            &self.approach_scaled_distance[noise_class]
+            &self.approach_scaled_distance
         };
-        fast_npd_lookup(lut, log_d)
+        Self::lookup_lerp(block, noise_class, row, w, log_d)
     }
 
     /// SEL and scaled-distance LUTs flattened for GPU upload, `f64` first: the
     /// cruise CUDA path evaluates Doc 29 in double precision. Four blocks of
-    /// `NUM_CLASSES` LUTs, each `NPD_LUT_BINS + 1` entries: approach SEL,
-    /// departure SEL, approach `d_λ`, departure `d_λ`. The device kernel indexes
-    /// it identically to `lookup` / `lookup_scaled_distance`:
-    /// `flat[((block * 2 + is_dep) * NUM_CLASSES + class) * (NPD_LUT_BINS + 1) + bin]`.
+    /// `NUM_CLASSES × MAX_POWER_ROWS` LUTs, each `NPD_LUT_BINS + 1` entries:
+    /// approach SEL, departure SEL, approach `d_λ`, departure `d_λ`. The device
+    /// kernel indexes it identically to `lookup` / `lookup_scaled_distance`:
+    /// `flat[((block * 2 + is_dep) * NUM_CLASSES + class) * MAX_POWER_ROWS *
+    /// (NPD_LUT_BINS + 1) + row * (NPD_LUT_BINS + 1) + bin]`.
     pub fn device_luts_flat_f64(&self) -> Vec<f64> {
-        let mut v = Vec::with_capacity(4 * NUM_CLASSES * (NPD_LUT_BINS + 1));
+        use super::thrust::MAX_POWER_ROWS;
+        let mut v = Vec::with_capacity(4 * NUM_CLASSES * MAX_POWER_ROWS * (NPD_LUT_BINS + 1));
         for lut in self
             .approach
             .iter()
@@ -475,36 +599,42 @@ impl NpdLuts {
 
     /// The same canonical layout narrowed for the float32 airborne kernel.
     pub fn device_luts_flat_f32(&self) -> Vec<f32> {
-        self.device_luts_flat_f64().into_iter().map(|x| x as f32).collect()
+        self.device_luts_flat_f64()
+            .into_iter()
+            .map(|x| x as f32)
+            .collect()
     }
 
-    /// Per-event peak A-weighted SPL (LAmax) lookup — replaces the prior
-    /// hardcoded `sel - 12.0` constant. Returns the value before any
-    /// per-segment ΔI / Λ corrections; callers may apply those if they
-    /// need full Doc 29 Eq. 4-12 fidelity (popup peak ranking does not).
+    /// Per-event peak A-weighted SPL (LAmax) lookup, power-interpolated with
+    /// `(row, w)` — replaces the prior hardcoded `sel - 12.0` constant.
+    /// Returns the value before any per-segment ΔI / Λ corrections; callers
+    /// may apply those if they need full Doc 29 Eq. 4-12 fidelity (popup peak
+    /// ranking does not).
     #[inline(always)]
-    pub fn lookup_lmax(&self, noise_class: usize, is_dep: bool, log_d: f64) -> f64 {
-        let lut = if is_dep {
-            &self.departure_lmax[noise_class]
+    pub fn lookup_lmax(
+        &self,
+        noise_class: usize,
+        is_dep: bool,
+        row: u8,
+        w: f64,
+        log_d: f64,
+    ) -> f64 {
+        let block = if is_dep {
+            &self.departure_lmax
         } else {
-            &self.approach_lmax[noise_class]
+            &self.approach_lmax
         };
-        fast_npd_lookup(lut, log_d)
+        Self::lookup_lerp(block, noise_class, row, w, log_d)
     }
 }
 
-/// Build a 128-bin LAmax LUT mirroring `build_npd_lut` for SEL. Beyond 25 000 ft
-/// we extrapolate via spherical divergence (`−20·log10(d/d_ref)`) plus the SEL
-/// per-profile `alpha_eff` for atmospheric absorption — peak SPL and integrated
-/// energy share the same source spectrum, so they share `alpha_eff`. The prior
-/// clamp at the last NPD point overstated far-cruise LAmax by ~18 dB at 50 k ft
-/// slant and caused popup-band false positives.
-pub fn build_lmax_lut(profile: &NpdProfile, is_departure: bool) -> [f64; NPD_LUT_BINS + 1] {
-    let lmax = if is_departure {
-        &profile.departure_lmax
-    } else {
-        &profile.approach_lmax
-    };
+/// Build a 128-bin LAmax LUT mirroring [`build_curve_lut`] for SEL. Beyond
+/// 25 000 ft we extrapolate via spherical divergence (`−20·log10(d/d_ref)`)
+/// plus the SEL curve's `alpha_eff` for atmospheric absorption — peak SPL and
+/// integrated energy share the same source spectrum, so they share `alpha_eff`
+/// per power row. The prior clamp at the last NPD point overstated far-cruise
+/// LAmax by ~18 dB at 50 k ft slant and caused popup-band false positives.
+fn build_lmax_curve_lut(lmax: &[f64; 10], alpha: f64) -> [f64; NPD_LUT_BINS + 1] {
     let mut lut = [0.0f64; NPD_LUT_BINS + 1];
     let last = lmax.len() - 1;
     // `i` is both the bin value (`log_d` from `i`) and the write index — kept as a
@@ -524,7 +654,7 @@ pub fn build_lmax_lut(profile: &NpdProfile, is_departure: bool) -> [f64; NPD_LUT
         if log_d >= LOG_DIST[last] {
             let slant_m = 10.0_f64.powf(log_d) / FT_PER_M;
             let geo = 20.0 * (slant_m / AIRCRAFT_NPD_REF_SLANT_M).log10();
-            let atm = profile.alpha_eff(is_departure) * (slant_m - AIRCRAFT_NPD_REF_SLANT_M);
+            let atm = alpha * (slant_m - AIRCRAFT_NPD_REF_SLANT_M);
             lut[i] = lmax[last] - geo - atm;
             continue;
         }
@@ -549,30 +679,7 @@ pub fn interpolate_sel_logd(profile: &NpdProfile, log_d: f64, is_departure: bool
     } else {
         &profile.approach_sel
     };
-    let last = sel.len() - 1;
-
-    if log_d <= LOG_DIST[0] {
-        let slope = (sel[1] - sel[0]) / (LOG_DIST[1] - LOG_DIST[0]);
-        return sel[0] + slope * (log_d - LOG_DIST[0]);
-    }
-    // Beyond the last NPD point: physics-based extrapolation. Atmospheric
-    // absorption is linear in meters, so the log-linear Doc 29 slope
-    // underestimates loss at large slant. Use spherical divergence
-    // (−20·log10) + per-profile α_eff·(d − d_ref). See `compute_alpha_eff`.
-    if log_d >= LOG_DIST[last] {
-        let slant_m = 10.0_f64.powf(log_d) / FT_PER_M;
-        let geo = 20.0 * (slant_m / AIRCRAFT_NPD_REF_SLANT_M).log10();
-        let atm = profile.alpha_eff(is_departure) * (slant_m - AIRCRAFT_NPD_REF_SLANT_M);
-        return sel[last] - geo - atm;
-    }
-
-    for i in 0..last {
-        if log_d <= LOG_DIST[i + 1] {
-            let frac = (log_d - LOG_DIST[i]) / (LOG_DIST[i + 1] - LOG_DIST[i]);
-            return sel[i] + frac * (sel[i + 1] - sel[i]);
-        }
-    }
-    sel[last]
+    interp_curve_logd(sel, profile.alpha_eff(is_departure), log_d)
 }
 
 /// Per-noise-class reach² (m²) at the standard 40 dB SEL threshold, indexed
@@ -585,14 +692,33 @@ pub fn interpolate_sel_logd(profile: &NpdProfile, log_d: f64, is_departure: bool
 /// class anchor — pre-filter and kernel must agree on which NPD curve sets
 /// the 40 dB envelope, otherwise either false negatives (envelope < kernel
 /// reach) or wasted candidates (envelope > kernel reach) leak through.
+/// Thrust classes envelope the LOUDEST power row per operation: approach
+/// segments interpolate above today's lowest row, so the old lowest-row
+/// reach would false-negative them.
 pub static REACH_SQ_TABLE: LazyLock<[[f64; 2]; NUM_CLASSES]> = LazyLock::new(|| {
     std::array::from_fn(|class_idx| {
-        let p = &PROFILES[CLASS_REP_PROFILE_IDX[class_idx] as usize];
+        let anchor = &PROFILES[CLASS_REP_PROFILE_IDX[class_idx] as usize];
+        let model = super::thrust::thrust_model_for_class(class_idx);
+        let (app_sel, dep_sel) = if model.has_thrust {
+            let app = &model.app_sel[usize::from(model.app_rows - 1)];
+            let dep = &model.dep_sel[usize::from(model.dep_rows - 1)];
+            (app, dep)
+        } else {
+            (&anchor.approach_sel, &anchor.departure_sel)
+        };
         [
-            p.estimate_reach_m(AIRCRAFT_NPD_REACH_THRESHOLD_DB, false)
-                .powi(2),
-            p.estimate_reach_m(AIRCRAFT_NPD_REACH_THRESHOLD_DB, true)
-                .powi(2),
+            estimate_reach_for_curve(
+                app_sel,
+                compute_alpha_eff(app_sel),
+                AIRCRAFT_NPD_REACH_THRESHOLD_DB,
+            )
+            .powi(2),
+            estimate_reach_for_curve(
+                dep_sel,
+                compute_alpha_eff(dep_sel),
+                AIRCRAFT_NPD_REACH_THRESHOLD_DB,
+            )
+            .powi(2),
         ]
     })
 });

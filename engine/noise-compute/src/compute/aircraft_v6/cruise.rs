@@ -221,7 +221,18 @@ pub fn scatter(
         // (ΔF needs the infinite-line `q_m`).
         let (disp_dist, disp_alt) = aircraft::clamped_display_cpa(&cpa, 0.0);
         let log_d = (disp_dist * aircraft::FT_PER_M).max(100.0).log10();
-        let lmax = npd_luts.lookup_lmax(class_idx, true, log_d);
+        let thrust = aircraft::thrust_input_for_segment(
+            &seg,
+            seg.start_alt_m as f64,
+            seg.end_alt_m as f64,
+            terrain.start_elev - 30.0,
+            terrain.end_elev - 30.0,
+        );
+        let (power_row, power_w) =
+            aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust);
+        // Cruise rep-segments are level, so the heli descent gate never fires.
+        let lmax = npd_luts.lookup_lmax(class_idx, true, power_row, power_w, log_d)
+            + aircraft::heli_correction_db(seg.profile_idx, true, 0.0);
         if lmax > acc.peak_lmax {
             acc.peak_lmax = lmax;
             acc.peak_sel = sel;

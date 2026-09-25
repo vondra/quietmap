@@ -387,6 +387,9 @@ pub fn segment_energy_kernel<const WANT_CPA: bool>(
     is_dep: bool,
     seg_dv: f64,
     inst: Installation,
+    power_row: u8,
+    power_w: f64,
+    heli_db: f64,
     di_a: f64,
     di_b: f64,
     di_c: f64,
@@ -412,6 +415,9 @@ pub fn segment_energy_kernel<const WANT_CPA: bool>(
         is_dep,
         seg_dv,
         inst,
+        power_row,
+        power_w,
+        heli_db,
         di_a,
         di_b,
         di_c,
@@ -444,6 +450,9 @@ pub(crate) fn segment_energy_kernel_with_screening<const WANT_CPA: bool, const F
     is_dep: bool,
     seg_dv: f64,
     inst: Installation,
+    power_row: u8,
+    power_w: f64,
+    heli_db: f64,
     di_a: f64,
     di_b: f64,
     di_c: f64,
@@ -469,6 +478,9 @@ pub(crate) fn segment_energy_kernel_with_screening<const WANT_CPA: bool, const F
         is_dep,
         seg_dv,
         inst,
+        power_row,
+        power_w,
+        heli_db,
         di_a,
         di_b,
         di_c,
@@ -504,6 +516,9 @@ fn segment_energy_kernel_inner<
     is_dep: bool,
     seg_dv: f64,
     inst: Installation,
+    power_row: u8,
+    power_w: f64,
+    heli_db: f64,
     di_a: f64,
     di_b: f64,
     di_c: f64,
@@ -540,14 +555,17 @@ fn segment_energy_kernel_inner<
     // the libm log10 division by ln(10) — saves a few cycles per call,
     // pipeline already shipped this way.
     let log_d = d_ft.log2() * LOG10_2;
-    let sel_npd = npd_luts.lookup(noise_class, is_dep, log_d);
+    // NPD SEL from the power rows (Doc 29 Eq. 4-3) plus the helicopter
+    // certification correction (0.0 for fixed wing).
+    let sel_npd = npd_luts.lookup(noise_class, is_dep, power_row, power_w, log_d) + heli_db;
 
     // Eq. 4-15 peaks below 0.4014 dB; every other correction is nonpositive.
     // Split pieces bypass this bound and take the event floor after summation.
     if FLOOR && sel_npd + seg_dv + 0.4014 < 20.0 {
         return None;
     }
-    let d_lambda_m = npd_luts.lookup_scaled_distance(noise_class, is_dep, log_d);
+    let d_lambda_m =
+        npd_luts.lookup_scaled_distance(noise_class, is_dep, power_row, power_w, log_d);
 
     let q_m = t * slen;
     let df = fast_delta_f(q_m, slen, d_lambda_m);
@@ -914,6 +932,9 @@ mod tests {
                 true,
                 dv,
                 inst_code,
+                0,
+                0.0,
+                0.0,
                 di_a,
                 di_b,
                 di_c,

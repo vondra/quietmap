@@ -76,10 +76,13 @@ impl CruiseAccum {
         self.origin = seg.origin;
         // Source-side peak Lmax at 25 m. Doc 29 §A.3.2 — cruise rows
         // use the Departure NPD curve. NPD `lookup_lmax` indexes by
-        // log10(d_ft); 25 m → 82 ft → log10 ≈ 1.914.
+        // log10(d_ft); 25 m → 82 ft → log10 ≈ 1.914. Display-only ranking:
+        // pinned to the max departure row (bit-identical to the pre-thrust
+        // value); the runtime popup re-ranks with the true power bracket.
         let class_idx = noise_class_of(seg.profile_idx) as usize;
         let log_d = log_d_25m_ft();
-        let lmax_db = npd_luts.lookup_lmax(class_idx, true, log_d) as f32;
+        let max_row = thrust_model_for_class(class_idx).dep_rows - 1;
+        let lmax_db = npd_luts.lookup_lmax(class_idx, true, max_row, 0.0, log_d) as f32;
         self.update_top(seg, lmax_db, mid_alt);
     }
 
