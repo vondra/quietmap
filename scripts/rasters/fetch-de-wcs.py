@@ -14,8 +14,9 @@ import time
 
 from osgeo import gdal
 from dgm_reduce import (DERIVED_NODATA, append_journal, assert_crs, derive_provenance, digest,
-                        load_journal, manifest_entry, normalize_grid, write_manifest)
-from terrain_io import fetch, publish_source_json, source_budget
+                        load_journal, manifest_entry, normalize_grid,
+                        publish_country_sources, write_manifest)
+from terrain_io import fetch, source_budget
 
 gdal.UseExceptions()
 gdal.SetConfigOption('GDAL_PAM_ENABLED', 'NO')
@@ -150,18 +151,10 @@ def fetch_all(root, provider, workers=2, delay=1.0, limit=None, box=None):
     except ValueError:
         manifest.unlink()
         write_manifest(manifest, entries)
-    sources = Path(root) / provider / 'country-sources.json'
-    names = sorted(e['derived'] for e in entries if e.get('derived'))
-    value = [dict(path=name, horizontal_crs=config['epsg'], vertical_crs=VERTICAL_EPSG,
-                  epoch=config['epoch'], role='national', group=config['group'])
-             for name in names]
-    try:
-        publish_source_json(root, sources, value)
-    except ValueError:
-        sources.unlink()
-        publish_source_json(root, sources, value)
+    value = publish_country_sources(root, provider, entries, config['epsg'],
+                                    VERTICAL_EPSG, config['group'], config['epoch'])
     with source_budget(Path(root)) as available:
-        print(f'{provider}: {len(names)} windows retained, {available / 1e9:.1f} GB budget left')
+        print(f'{provider}: {len(value)} windows retained, {available / 1e9:.1f} GB budget left')
     return entries
 
 

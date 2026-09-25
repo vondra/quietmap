@@ -22,9 +22,9 @@ import zlib
 
 from osgeo import gdal
 from dgm_reduce import (append_journal, assert_crs, derive_provenance, digest, load_journal,
-                        manifest_entry, normalize_grid, read_zip_member, reduce_geotiff,
-                        write_manifest)
-from terrain_io import fetch, publish_json, publish_source_json, source_budget
+                        manifest_entry, normalize_grid, publish_country_sources,
+                        read_zip_member, reduce_geotiff, write_manifest)
+from terrain_io import fetch, publish_json, source_budget
 
 gdal.UseExceptions()
 gdal.SetConfigOption('GDAL_PAM_ENABLED', 'NO')
@@ -349,19 +349,10 @@ def fetch_all(root, provider, workers=None, delay=None, limit=None, only=None):
     except ValueError:
         manifest.unlink()
         write_manifest(manifest, entries)
-    kept = sorted((e for e in entries if e.get('derived')), key=lambda e: e['derived'])
-    sources = Path(root) / provider / 'country-sources.json'
-    value = [dict(path=e['derived'], horizontal_crs=config['epsg'], vertical_crs=VERTICAL_EPSG,
-                  epoch=e.get('epoch', ''), role='national', group=config['group'])
-             for e in kept]
-    names = [e['derived'] for e in kept]
-    try:
-        publish_source_json(root, sources, value)
-    except ValueError:
-        sources.unlink()
-        publish_source_json(root, sources, value)
+    value = publish_country_sources(root, provider, entries, config['epsg'],
+                                    VERTICAL_EPSG, config['group'], 'unknown ALS epoch')
     with source_budget(Path(root)) as available:
-        print(f'{provider}: {len(names)} tiles retained, {available / 1e9:.1f} GB budget left')
+        print(f'{provider}: {len(value)} tiles retained, {available / 1e9:.1f} GB budget left')
     return entries
 
 

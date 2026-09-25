@@ -15,7 +15,7 @@ import zipfile
 import numpy as np
 from osgeo import gdal, osr
 
-from terrain_io import digest, provenance, publish_bytes, publish_json
+from terrain_io import digest, provenance, publish_bytes, publish_json, publish_source_json
 
 gdal.UseExceptions()
 osr.UseExceptions()
@@ -245,6 +245,38 @@ def load_manifest(path):
     if manifest['count'] != len(manifest['entries']):
         raise ValueError(f'checksum manifest miscounts its entries: {path}')
     return manifest
+
+
+def country_epoch(entries, default):
+    """One honest group epoch: the dated range, or the mosaic label, never invented."""
+    dated = sorted(e['epoch'][4:] for e in entries if e.get('epoch', '').startswith('ALS '))
+    unknown = any(e.get('epoch', '').startswith('unknown') for e in entries)
+    if not dated:
+        return 'unknown ALS epoch' if unknown else default
+    label = f'ALS {dated[0]}' if dated[0] == dated[-1] else f'ALS {dated[0]} to {dated[-1]}'
+    return label + ' (plus undated tiles)' if unknown else label
+
+
+def publish_country_sources(root, provider, entries, horizontal_epsg, vertical_epsg,
+                            group, default_epoch):
+    """Write manifest-ready source specs: absolute paths, one epoch per group.
+
+    Per-tile epochs stay in the stream manifest; the producer mosaics one
+    group at a time and requires a uniform epoch per group.
+    """
+    kept = sorted((e for e in entries if e.get('derived')), key=lambda e: e['derived'])
+    epoch = country_epoch(kept, default_epoch)
+    value = [dict(path=str(Path(root).resolve() / provider / e['derived']),
+                  horizontal_crs=f'EPSG:{horizontal_epsg}', vertical_crs=vertical_epsg,
+                  epoch=epoch, role='national', group=group)
+             for e in kept]
+    sources = Path(root) / provider / 'country-sources.json'
+    try:
+        publish_source_json(root, sources, value)
+    except ValueError:
+        sources.unlink()
+        publish_source_json(root, sources, value)
+    return value
 
 
 def load_journal(path):

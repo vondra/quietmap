@@ -14,8 +14,8 @@ import time
 import urllib.request
 
 from dgm_reduce import (append_journal, assert_crs, derive_provenance, digest, load_journal,
-                        manifest_entry, reduce_xyz, write_manifest)
-from terrain_io import fetch, publish_json, publish_source_json, source_budget
+                        manifest_entry, publish_country_sources, reduce_xyz, write_manifest)
+from terrain_io import fetch, source_budget
 
 PROVIDER = 'de-sh-dgm1'
 INDEX_URL = ('https://geodaten.schleswig-holstein.de/gaialight-sh/_apps/dladownload/'
@@ -129,18 +129,10 @@ def fetch_all(root, workers=4, delay=0.5, limit=None, only=None):
     except ValueError:
         manifest.unlink()
         write_manifest(manifest, entries)
-    kept = sorted((e for e in entries if e.get('derived')), key=lambda e: e['derived'])
-    sources = Path(root) / PROVIDER / 'country-sources.json'
-    value = [dict(path=e['derived'], horizontal_crs=EPSG, vertical_crs=VERTICAL_EPSG,
-                  epoch=e.get('epoch', ''), role='national', group=GROUP)
-             for e in kept]
-    try:
-        publish_source_json(root, sources, value)
-    except ValueError:
-        sources.unlink()
-        publish_source_json(root, sources, value)
+    value = publish_country_sources(root, PROVIDER, entries, EPSG, VERTICAL_EPSG,
+                                    GROUP, 'unknown ALS epoch')
     with source_budget(Path(root)) as available:
-        print(f'{PROVIDER}: {len(kept)} tiles retained, {len(failures)} failed, '
+        print(f'{PROVIDER}: {len(value)} tiles retained, {len(failures)} failed, '
               f'{available / 1e9:.1f} GB budget left')
     if failures:
         raise ValueError(f'{len(failures)} SH tiles failed; see {failed_path}')

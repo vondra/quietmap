@@ -6,8 +6,9 @@ import unittest
 
 import numpy as np
 from osgeo import gdal, osr
-from dgm_reduce import (block_average, decode_xyz_lattice, reduce_geotiff, reduce_xyz,
-                        manifest_entry, write_manifest, load_manifest, normalize_grid)
+from dgm_reduce import (block_average, country_epoch, decode_xyz_lattice, reduce_geotiff,
+                        reduce_xyz, manifest_entry, write_manifest, load_manifest,
+                        normalize_grid, publish_country_sources)
 
 
 def write_source(path, values, west=400000.0, north=5710000.0, step=1.0, epsg=25832, nodata=-9999.0):
@@ -104,6 +105,32 @@ class ReduceTest(unittest.TestCase):
             ds = None
             with self.assertRaises(ValueError):
                 normalize_grid(untagged, Path(temp) / 'out2.tif', assign_epsg=25832)
+
+    def test_country_epoch_ranges_dated_tiles_and_keeps_mosaic_labels(self):
+        dated = [dict(derived='b.tif', epoch='ALS 2024-05-01'),
+                 dict(derived='a.tif', epoch='ALS 2005-03-09')]
+        self.assertEqual(country_epoch(dated, 'mosaic'), 'ALS 2005-03-09 to 2024-05-01')
+        self.assertEqual(country_epoch(dated[:1], 'mosaic'), 'ALS 2024-05-01')
+        self.assertEqual(country_epoch([dict(derived='w.tif')], 'mosaic'), 'mosaic')
+        mixed = dated + [dict(derived='u.tif', epoch='unknown ALS epoch (absent)')]
+        self.assertEqual(country_epoch(mixed, 'mosaic'),
+                         'ALS 2005-03-09 to 2024-05-01 (plus undated tiles)')
+
+    def test_country_sources_are_manifest_ready_with_absolute_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            entries = [dict(derived='b-5m.tif', epoch='ALS 2024-05-01'),
+                       dict(derived='a-5m.tif', epoch='ALS 2005-03-09'),
+                       dict(derived=None, epoch='ALS 2020-01-01')]
+            value = publish_country_sources(temp, 'de-sh-dgm1', entries, 25832, 7837,
+                                            'DE-SH-DGM1', 'unknown ALS epoch')
+            self.assertEqual(len(value), 2)
+            self.assertEqual(value[0]['path'], str(Path(temp).resolve() / 'de-sh-dgm1/a-5m.tif'))
+            self.assertEqual(value[0]['horizontal_crs'], 'EPSG:25832')
+            self.assertEqual(value[0]['vertical_crs'], 7837)
+            self.assertEqual(value[0]['epoch'], 'ALS 2005-03-09 to 2024-05-01')
+            self.assertEqual(value[0]['role'], 'national')
+            stored = Path(temp) / 'de-sh-dgm1/country-sources.json'
+            self.assertTrue(stored.exists())
 
     def test_manifest_links_each_raw_source_to_its_derivative(self):
         with tempfile.TemporaryDirectory() as temp:

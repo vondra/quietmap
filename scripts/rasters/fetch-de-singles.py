@@ -13,17 +13,17 @@ import urllib.parse
 import zipfile
 
 from osgeo import gdal
-from dgm_reduce import (assert_crs, derive_provenance, normalize_grid, reduce_geotiff,
-                        reduce_xyz)
-from terrain_io import fetch, publish_source_json, source_budget
+from dgm_reduce import (assert_crs, derive_provenance, normalize_grid, publish_country_sources,
+                        reduce_geotiff, reduce_xyz)
+from terrain_io import fetch, source_budget
 
 gdal.UseExceptions()
 gdal.SetConfigOption('GDAL_PAM_ENABLED', 'NO')
 
 PROVIDERS = {
     'de-hb-dgm5': dict(
-        files={'Gitternetz_DGM5_2017_HB_ASCII_XYZ.zip': 'ALS 2017, Bremen city',
-               'Gitternetz_DGM5_2015_BHV_ASCII_XYZ.zip': 'ALS 2015, Bremerhaven'},
+        files={'Gitternetz_DGM5_2017_HB_ASCII_XYZ.zip': 'ALS 2017',
+               'Gitternetz_DGM5_2015_BHV_ASCII_XYZ.zip': 'ALS 2015'},
         base='https://gdi2.geo.bremen.de/inspire/download/DGM/data',
         licence='Creative Commons Attribution 4.0 International',
         licence_url='https://creativecommons.org/licenses/by/4.0/',
@@ -73,14 +73,9 @@ def fetch_only(root, provider):
 def publish_listing(root, provider, names):
     """country-sources.json lists derived grids; the retained zips are not sources."""
     config = PROVIDERS[provider]
-    sources = Path(root) / provider / 'country-sources.json'
-    value = [dict(path=name, horizontal_crs=config['epsg'], vertical_crs=7837, epoch=epoch,
-                  role='national', group=config['group']) for name, epoch in names]
-    try:
-        publish_source_json(root, sources, value)
-    except ValueError:
-        sources.unlink()
-        publish_source_json(root, sources, value)
+    entries = [dict(derived=name, epoch=epoch) for name, epoch in names]
+    publish_country_sources(root, provider, entries, config['epsg'], 7837,
+                            config['group'], 'unknown ALS epoch')
 
 
 def st_epoch(meta_text):
