@@ -7,15 +7,14 @@ from pathlib import Path
 import time
 import urllib.request
 
-from cog_reduce import reduce_cog_overview
+from cog_reduce import reduce_cog_to_grid
 from terrain_io import digest, provenance, publish_json, publish_source_json, utc_now
 
 PROVIDER = 'se-lm'
 COLLECTION = 'https://api.lantmateriet.se/stac-hojd/v1/collections/dtm-cog/items?limit=100'
 LICENCE = 'CC-BY-4.0'
 LICENCE_URL = 'https://creativecommons.org/licenses/by/4.0/'
-OVERVIEW_INDEX = 2
-FACTOR = 8
+RESOLUTION = 8
 
 
 def read_credentials(path):
@@ -54,25 +53,25 @@ def reduce_item(output, item, auth, position, total):
     last = None
     for attempt in range(3):
         try:
-            columns, rows, factor, nodata = reduce_cog_overview(
-                asset['href'], OVERVIEW_INDEX, target, auth['username'], auth['password'])
+            columns, rows, factor, nodata = reduce_cog_to_grid(
+                asset['href'], RESOLUTION, target, auth['username'], auth['password'])
             break
         except RuntimeError as error:
             last = error
             time.sleep(2 ** attempt)
     else:
         raise last
-    if factor != FACTOR or nodata != -9999:
-        raise ValueError(f'unexpected Markhoejdmodell overview grid: {item["id"]}')
+    if nodata != -9999:
+        raise ValueError(f'unexpected Markhoejdmodell nodata: {item["id"]}')
     record = dict(url=asset['href'], fetched_utc=utc_now(), sha256=digest(target),
                   bytes=target.stat().st_size, licence=LICENCE, licence_url=LICENCE_URL,
                   terms_checked_utc='2026-09-25', parent_href=asset['href'],
                   raw_bytes_retained=False,
-                  notes=('Markhoejdmodell 1 m COG block overview level 2 (8 m, exact 8x reduction) '
-                         f'retained ({columns}x{rows}); SWEREF 99 TM (EPSG:3006), RH2000 heights '
-                         '(EPSG:5613); raw 1 m bytes not retained; download needs a Geotorget '
-                         'account holding the Markhoejdmodell Nedladdning permission; '
-                         'attribution (c) Lantmateriet.'))
+                  notes=(f'Markhoejdmodell 1 m COG block, finest exact overview (level {factor}x) '
+                         f'area-averaged to 8 m ({columns}x{rows}) on the absolute 8 m grid; '
+                         'SWEREF 99 TM (EPSG:3006), RH2000 heights (EPSG:5613); raw 1 m bytes '
+                         'not retained; download needs a Geotorget account holding the '
+                         'Markhoejdmodell Nedladdning permission; attribution (c) Lantmateriet.'))
     publish_json(receipt, record)
     print(json.dumps(dict(done=position, total=total, path=str(target),
                            seconds=time.monotonic() - started)), flush=True)
