@@ -17,7 +17,8 @@ import scipy
 from scipy.optimize import least_squares
 
 REPO = Path(__file__).resolve().parents[2]
-PARAMETER_NAMES = ("residentialUrban", "unclassifiedUrban", "rural", "throughFactor", "demandScale")
+PARAMETER_NAMES = ("residentialUrban", "unclassifiedUrban", "rural", "throughFactor", "demandScale",
+                   "singleTrackFactor")
 
 
 def square_hash(prefix, x, y):
@@ -57,11 +58,12 @@ def fit(rows):
     if set(cells) != {0, 1, 2}:
         raise ValueError("all three S2p cells need training data")
     trips = np.array([r["trips"] for r in rows])
-    through = np.array([r["through"] for r in rows])
+    through = np.array([r["through"] and r["builtUp"] == 2 for r in rows])
+    single = np.array([r["singleTrack"] for r in rows])
     observed = np.array([r["aadf"] for r in rows])
-    initial = np.array([math.log(400)] * 3 + [0.0, 0.0])
-    result = least_squares(lambda p: np.log(np.exp(p[cells] + through * p[3]) + np.exp(p[4]) * trips)
-                           - np.log(observed), initial)
+    initial = np.array([math.log(400)] * 3 + [0.0, 0.0, 0.0])
+    result = least_squares(lambda p: np.log(np.exp(p[cells] + through * p[3] + single * p[5])
+                                             + np.exp(p[4]) * trips) - np.log(observed), initial)
     if not result.success or not np.isfinite(result.x).all():
         raise ValueError(f"S2p fit failed: {result.message}")
     return dict(zip(PARAMETER_NAMES, np.exp(result.x).tolist()))
@@ -70,8 +72,9 @@ def fit(rows):
 def predict(parameters, rows):
     return np.array([(parameters["residentialUrban"] if r["roadClass"] == 5 else parameters["unclassifiedUrban"])
                      if r["builtUp"] == 2 else parameters["rural"] for r in rows]) * np.array([
-        parameters["throughFactor"] if r["through"] else 1 for r in rows]) + parameters["demandScale"] * np.array([
-            r["trips"] for r in rows])
+        parameters["throughFactor"] if r["through"] and r["builtUp"] == 2 else 1 for r in rows]) * np.array([
+            parameters["singleTrackFactor"] if r["singleTrack"] else 1 for r in rows]
+        ) + parameters["demandScale"] * np.array([r["trips"] for r in rows])
 
 
 def cross_validate(rows):
@@ -140,7 +143,7 @@ def main():
         licence=provenance["licence"], attribution="Contains public sector information licensed under OGL v3.0; © Crown copyright, Department for Transport",
         counts="latest positive manual MCU AADF 2015–2025 excluding 2020; residential/unclassified",
         matching="nearest row <=12 m; no other class within 20 m; >30 m from square edge; source 11",
-        model="S2p: T[cell] * (through ? c : 1) + k * max_street(routed trips); structures_v5 storeys",
+        model="S2p: T[cell] * (through&urban ? c : 1) * (singleTrack ? d : 1) + k * max_street(routed trips); structures_v5 storeys",
         holdout="qm-holdout-v1/{x}/{y}: sha256 first 8 hex digits modulo 5 == 0 excluded before extraction",
         objective="least squares on ln(AADF); positive parameters via exponential transform",
         cv="five folds by sha256(w3-cv/{x}/{y}) first 8 hex digits modulo 5; no model selection",

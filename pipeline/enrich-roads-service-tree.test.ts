@@ -205,6 +205,33 @@ test('a through connector without frontage gets background times c; named pieces
   assert.ok(localStreetAadt(5, 2, result.streets.get(2)!) > 1200)
 })
 
+test('a rural through connector keeps the rural background without the urban premium', () => {
+  const roads = [road(-1, 0, 4), road(0, 1), road(1, 2), road(2, 3), road(3, 4, 4)]
+  for (const i of [1, 2, 3]) { roads[i].name = 'Farm track'; roads[i].builtUp = 1 }
+  const graph = buildGraph(roads), components = findComponents(graph)
+  const result = serviceStreetDemands(roads, graph, components, new Map(), roads.map(() => WORLD_FLEET))
+  assert.equal(result.streets.get(2)!.through, true)
+  assert.equal(localStreetAadt(5, 1, result.streets.get(2)!), PARAMETERS.rural)
+})
+
+test('a single-track street keeps only a share of the background; mixed or unknown lanes keep it all', () => {
+  const track = [road(-1, 0, 4), road(0, 1), road(1, 2), road(2, 3, 4)]
+  for (const i of [1, 2]) { track[i].name = 'Lane'; track[i].lanes = 1 }
+  const graph = buildGraph(track), components = findComponents(graph)
+  const single = serviceStreetDemands(track, graph, components, new Map(), track.map(() => WORLD_FLEET))
+  assert.equal(single.streets.get(1)!.singleTrack, true)
+  assert.equal(localStreetAadt(5, 2, single.streets.get(1)!),
+    PARAMETERS.residentialUrban * PARAMETERS.throughFactor * PARAMETERS.singleTrackFactor)
+  track[2].lanes = 2
+  const mixedGraph = buildGraph(track)
+  const mixed = serviceStreetDemands(track, mixedGraph, findComponents(mixedGraph), new Map(), track.map(() => WORLD_FLEET))
+  assert.equal(mixed.streets.get(1)!.singleTrack, false)
+  track[1].lanes = 0; track[2].lanes = 0
+  const unknownGraph = buildGraph(track)
+  const unknown = serviceStreetDemands(track, unknownGraph, findComponents(unknownGraph), new Map(), track.map(() => WORLD_FLEET))
+  assert.equal(unknown.streets.get(1)!.singleTrack, false)
+})
+
 test('an access branch has T plus kG and never inherits another street exit boundary', () => {
   const roads = [road(-1, 0, 4), road(0, 1), road(1, 2), road(2, 3, 4), road(0, 4)]
   const graph = buildGraph(roads), components = findComponents(graph)
