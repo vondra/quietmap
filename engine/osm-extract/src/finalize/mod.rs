@@ -29,6 +29,7 @@ use crate::poi_join::{JoinStats, PoiIndex};
 use crate::spill::{parse_ring_text, square_from_spill_key};
 use crate::transport::{load_node_aliases, NodeAliases};
 
+mod evidence;
 mod write_airport;
 mod write_barriers;
 mod write_buildings;
@@ -38,6 +39,7 @@ pub mod write_railway_globals;
 mod write_railways;
 mod write_roads;
 pub mod write_source_pieces;
+mod write_transport_nodes;
 
 use write_airport::{write_airport_areas, write_airport_lines};
 use write_barriers::write_barriers;
@@ -53,9 +55,8 @@ use write_source_pieces::write_source_pieces;
 /// `building_use` 3 for explicitly open carports (never an indoor envelope).
 /// Stamped into Arrow metadata; consumers reject older classification semantics.
 pub const BUILDINGS_CONTRACT_V5: &str = "buildings_v5";
-/// v3 adds the car park classes (leisure 8 and 9): an older binary must refuse
-/// the file rather than read a lot as a sports pitch.
-pub const LEISURE_CONTRACT_V3: &str = "leisure_v3";
+/// Current activity-evidence stamp, owned together with the native readers.
+pub use square_store::osm_contract::LEISURE_CONTRACT_V4;
 /// Schema metadata key pinning the coordinate grid of every file.
 pub const GRID_CONTRACT_KEY: &str = "grid";
 pub const GRID_CONTRACT_Z30: &str = "z30";
@@ -71,7 +72,8 @@ pub const GRID_CONTRACT_Z30: &str = "z30";
 pub fn finalize(spill_dir: &Path, output_dir: &Path, num_buckets: usize) -> Result<usize> {
     // `poi` is intentionally NOT a final source — it is the footprint-join
     // input consumed when finalizing `buildings`.
-    const SOURCES: [&str; 8] = [
+    const SOURCES: [&str; 9] = [
+        "transport_nodes",
         "roads",
         "railways",
         "airport_areas",
@@ -270,6 +272,7 @@ fn flush_square(
         )?;
     }
     match source {
+        "transport_nodes" => write_transport_nodes::write_transport_nodes(rows, &path),
         "roads" => write_roads(rows, &path),
         "railways" => write_railways(rows, &path),
         "airport_areas" => write_airport_areas(rows, &path),
@@ -388,3 +391,6 @@ pub(super) fn decode_tsv_ring(s: &str) -> Option<Vec<(i32, i32)>> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod evidence_tests;

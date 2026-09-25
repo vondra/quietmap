@@ -125,11 +125,16 @@ test('Tata: same-registry contained facilities resolve to the loudest NACE, not 
   assert.equal(naceBaseLw(9999), -1)
 })
 
-test('registry points never stamp turbines or substations', () => {
-  const turbine = [poly({ sourceType: 10 })]
-  const substation = [poly({ sourceType: 12 })]
-  assert.equal(bestCandidate(fac({ nace4: 3511 }), turbine, 2000), null)
-  assert.equal(bestCandidate(fac({ nace4: 3511 }), substation, 2000), null, 'a plant point cannot claim a substation')
+test('registry points never stamp dedicated power classes', () => {
+  // 10 turbine, 11 wind-plant outline, 12 inactive, 13 solar, 14 substation,
+  // 15 transformer: a nearby registry point cannot claim any of them.
+  for (const sourceType of [10, 11, 12, 13, 14, 15]) {
+    assert.equal(
+      bestCandidate(fac({ nace4: 3511 }), [poly({ sourceType })], 2000),
+      null,
+      `class ${sourceType} keeps its identity`,
+    )
+  }
   assert.ok(bestCandidate(fac({ nace4: 3511 }), [poly({})], 2000), 'generic polygons still stamp')
 })
 

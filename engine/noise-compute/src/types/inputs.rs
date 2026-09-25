@@ -111,8 +111,8 @@ pub struct RailSegment {
     pub end_lat: f64,
     pub end_lon: f64,
     pub length_m: f32,
-    pub rail_type: u8, // 0=rail, 1=tram, 2=light_rail, 3=narrow_gauge, 4=funicular
-    pub usage: u8,     // 0=main, 1=branch, 2=industrial, 3=untagged
+    pub rail_type: u8, // 0=rail, 1=tram, 2=light_rail, 3=narrow_gauge, 4=funicular, 5=preserved
+    pub usage: u8,     // 0=main, 1=branch, 2=industrial, 3=untagged, 4=tourism
     pub maxspeed: u16, // km/h (raw OSM value, 0 = none); u16 so 300+ km/h survives
     pub traffic: crate::normalize::RailTraffic,
     pub speed_kmh: f64, // effective speed used by emission (resolved); f64 not u8 — high-speed rail resolves to 300 km/h, which u8 saturated to 255 (~1.4 dB too quiet)

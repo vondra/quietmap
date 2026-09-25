@@ -1,4 +1,5 @@
 /** Service-tree graph bug classes and real z9 IPC preserve source priority and reruns. */
+import { osmContract } from './lib/osm-contract.js'
 
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs'
@@ -89,7 +90,7 @@ function fixture(directory: string, roads: ServiceRoad[], emptyBuildings = false
     traffic_estimated: Uint8Array.from(roads, () => 15),
     speed_taper: Uint8Array.from(roads, () => 41), speed_limit: Uint8Array.from(roads, () => 50),
   } as never) as unknown as Table
-  store(resolve(directory, 'roads.arrow'), table, new Map([['grid', 'z30'], ['roads_contract', 'country_baked_v1'], ['road_traffic_contract', '0'], ['qm_blocks', encodeQmBlocks([[50, 14, 50.01, 14.01]])]]))
+  store(resolve(directory, 'roads.arrow'), table, new Map([['grid', 'z30'], osmContract('roads'), ['roads_contract', 'country_baked_v1'], ['road_traffic_contract', '0'], ['qm_blocks', encodeQmBlocks([[50, 14, 50.01, 14.01]])]]))
   const points = emptyBuildings ? [] : [grid(50.00001, 14.0015)]
   const buildings = makeTable({ centroid_gx: Int32Array.from(points, r => r[0]), centroid_gy: Int32Array.from(points, r => r[1]),
     building_type: new Uint8Array(points.length), floors: Uint8Array.from(points, () => 2), area_m2: Float32Array.from(points, () => 400) })

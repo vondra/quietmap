@@ -190,6 +190,7 @@ def stamps_the_point_query_expects():
         return {name: value.encode() for name, value in
                 re.findall(r'pub const (\w+): &str = "([^"]*)";', (reader / file).read_text())}
     store, aircraft = constants('store.rs'), constants('aircraft_contract.rs')
+    osm = constants('osm_contract.rs')
     grid = {b'grid': store['GRID_CONTRACT_Z30']}
     version = {b'schema_version': aircraft['SCHEMA_VERSION']}
     # The structures SCHEMA did not change when the builder stopped screening areas without a
@@ -198,9 +199,10 @@ def stamps_the_point_query_expects():
                         (Path(__file__).parent / 'structures/structure_merge.py').read_text())
     return {
         'structures': {b'builder_version': builder.group(1).encode(), **grid},
-        # A set where the reader accepts several stamps (v3 rows are the v4
-        # subset, so both serve until the re-extract).
-        'leisure': {b'leisure_contract': (store['LEISURE_CONTRACT_V3'], store['LEISURE_CONTRACT_V4']), **grid},
+        'roads': {b'osm_roads_contract': osm['ROADS_CONTRACT'], **grid},
+        'railways': {b'osm_railways_contract': osm['RAILWAYS_CONTRACT'], **grid},
+        'industrial': {b'osm_industrial_contract': osm['INDUSTRIAL_CONTRACT'], **grid},
+        'leisure': {b'leisure_contract': osm['LEISURE_CONTRACT_V4'], **grid},
         'ships': {b'ships_contract': store['SHIPS_CONTRACT_V1'], **grid},
         'airborne': {b'airborne_contract': aircraft['AIRBORNE_CONTRACT'], **version},
         'cruise': {b'cruise_contract': aircraft['CRUISE_CONTRACT'], **version},
@@ -242,9 +244,8 @@ def audit_world(prepared, jobs=None):
                     if metadata.get(key) != value:
                         raise ValueError(f'unbaked geography: {path}')
                 for key, value in expected_stamps.get(path.stem, {}).items():
-                    accepted = value if isinstance(value, tuple) else (value,)
-                    if metadata.get(key) not in accepted:
-                        raise ValueError(f'stale {path.stem} stamp {key.decode()}={metadata.get(key)}, the point query expects {accepted}: {path}')
+                    if metadata.get(key) != value:
+                        raise ValueError(f'stale {path.stem} stamp {key.decode()}={metadata.get(key)}, the point query expects {value.decode()}: {path}')
                 if path.stem in ('airborne', 'cruise', 'airport_traffic'):
                     days = metadata.get(b'n_days', b'')
                     if not (days.isdigit() and 0 < int(days) < 1 << 16):

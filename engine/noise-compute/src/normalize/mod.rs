@@ -85,8 +85,8 @@ mod tests {
                 nace_4digit: None,
                 area_m2,
                 polygon_grid,
-                capacity_mw: None,
-                capacity_mva: None,
+                plant_output_mw: None,
+                substation_mva: None,
                 substation_class: 0,
             }),
             prepare_leisure_points(RawLeisureInput {
@@ -95,6 +95,8 @@ mod tests {
                 sport: crate::emission::leisure::PADEL,
                 area_m2,
                 polygon_grid,
+                formula: None,
+                is_line: false,
             }),
         ]
     }

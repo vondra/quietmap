@@ -33,16 +33,19 @@ pub const LEISURE_CAR_PARK: u8 = 8;
 pub const LEISURE_CAR_PARK_STREET: u8 = 9;
 
 /// Loudness anchor at the class reference area, transcribed from the
-/// `leisure_profile` comments: a year-average Lden for the sports (padel 81 …
+/// `leisure_profile` comments: a year-average Lden for the sports (pitch 89 …
 /// seating 66), the day Lw for the two car parks, which have no annualization.
 /// Resolves multi-sport `sport=a;b` to the loudest — the same argmax the old
 /// code computed live via `leisure_lw`, with identical last-wins tie semantics.
 pub fn leisure_loudness_anchor(class: u8) -> i64 {
     match class {
+        // Pitch 89: the Sport England AGP evidence (50.8 dB/m² over 7,000 m²
+        // → 89.3 Lden), not the old open-air guess 78 — a pitch now beats a
+        // padel court in a multi-sport value.
+        LEISURE_PITCH => 89,
         LEISURE_PADEL => 81,
         LEISURE_CAR_PARK => 79,
         LEISURE_STADIUM => 78,
-        LEISURE_PITCH => 78,
         LEISURE_POOL => 76,
         LEISURE_TENNIS => 74,
         LEISURE_PLAYGROUND => 71,
@@ -51,7 +54,7 @@ pub fn leisure_loudness_anchor(class: u8) -> i64 {
         LEISURE_OUTDOOR_SEATING => 66,
         // An id outside the table never reaches here: the spill writes only the
         // classes above. The arm keeps the function total, at the pitch anchor.
-        _ => 78,
+        _ => 89,
     }
 }
 

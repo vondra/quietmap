@@ -1,4 +1,5 @@
 /** Actual IPC proof of global site election, priority-safe suppression, and immutable native payload. */
+import { osmContract } from './osm-contract.js'
 
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -31,7 +32,7 @@ function stored(path: string, rows: Row[]): Table {
   }
   const fields = table.schema.fields.map(f => new Field(f.name, f.type, f.name === 'geom', new Map([['field', f.name]])))
   const parts = rows.length > 1 ? [table.slice(0, 1), table.slice(1)] : [table]
-  const schema = new Schema(fields, new Map([['grid', 'z30'], ['qm_blocks', encodeQmBlocks(parts.map(() => [49, 13, 51, 16]))], ['native', 'preserve'], ...(rows.some(row => row.country !== undefined) ? [['industrial_contract', 'country_land_baked_v1'] as [string, string]] : [])]))
+  const schema = new Schema(fields, new Map([osmContract('industrial'), ['grid', 'z30'], ['qm_blocks', encodeQmBlocks(parts.map(() => [49, 13, 51, 16]))], ['native', 'preserve'], ...(rows.some(row => row.country !== undefined) ? [['industrial_contract', 'country_land_baked_v1'] as [string, string]] : [])]))
   const result = new Table(schema, parts.flatMap(part => part.batches.map(batch => new RecordBatch(schema, batch.data))))
   mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, tableToIPC(result, 'file'))
   return tableFromIPC(readFileSync(path))
@@ -229,4 +230,19 @@ test('final containment tier participates in one priority election and retiremen
     assert.deepEqual(values(path, 'source_id'), [0, 320, 330, 330])
     assert.deepEqual(values(path, 'suppressed'), [1, 0, 1, 1])
   } finally { rmSync(work, { recursive: true, force: true }) }
+})
+
+
+test('dedicated power and inactive classes reject generic registry matches', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'industrial-registry-power-'))
+  try {
+    const gx = 276 * 2 ** 21, gy = 709600000
+    const path = resolve(root, 'z9/276/173/industrial.arrow')
+    stored(path, [11, 12, 13, 14, 15].map(sourceType => ({ gx, gy, sourceType })))
+    const before = readFileSync(path)
+    const result = await enrichIndustrialFacilities(root, [facility(gx, gy)], [300])
+    assert.equal(result.winners, 0)
+    assert.equal(result.stamped, 0)
+    assert.deepEqual(readFileSync(path), before)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

@@ -70,6 +70,7 @@ pub fn extract_features(
             )?;
         }
     }
+    std::mem::take(&mut transport.controls).finish(spiller)?;
     Ok(stats)
 }
 
@@ -95,6 +96,19 @@ fn apply_prepared(
     }
     for item in blob.items {
         match item {
+            Prepared::Evidence(mut node) => {
+                if let Some(tags) = node.power.take() {
+                    stats.features_total += emit_node(
+                        spiller,
+                        &tags,
+                        FeatureType::Industrial,
+                        node.id,
+                        node.lat,
+                        node.lon,
+                    )?;
+                }
+                transport.controls.insert(node);
+            }
             Prepared::Train(route) => transport.write_train_route(&route)?,
             Prepared::Point(point) => apply_point(point, spiller, stats)?,
             Prepared::Way(way) => {
@@ -153,21 +167,38 @@ fn apply_way(
     if way.is_relation_member && !coords.is_empty() {
         let completed = assembler.add_way(way.id, coords.clone(), manifest);
         for rel_id in completed {
-            if let Some((ring, tags, ftype)) = assembler.assemble(rel_id, manifest) {
-                let extracted_tags = relations::spill_tags_for_assembled(&ftype, &tags);
-                let (clat, clon) = centroid(&ring);
-                let square = grid::square_of(clat, clon);
-                let safe_ring = ring_for_spill(&ring, &mut stats.antimeridian_rings_omitted);
-                spiller.emit_polygon(
-                    &ftype,
-                    square,
-                    rel_id,
-                    clat,
-                    clon,
-                    &extracted_tags,
-                    safe_ring,
-                )?;
-                stats.features_total += 1;
+            if let Some(assembled) = assembler.assemble(rel_id, manifest) {
+                let relations::AssembledRelation {
+                    rings,
+                    tags,
+                    feature_types: types,
+                } = assembled;
+                for ftype in types {
+                    let extracted_tags = relations::spill_tags_for_assembled(&ftype, &tags);
+                    // New source contracts retain every outer part. Other
+                    // families keep their existing first-part behavior.
+                    let count = if matches!(ftype, FeatureType::Industrial | FeatureType::Leisure) {
+                        rings.len()
+                    } else {
+                        1
+                    };
+                    for ring in rings.iter().take(count) {
+                        let (clat, clon) = centroid(ring);
+                        let square = grid::square_of(clat, clon);
+                        let safe_ring = ring_for_spill(ring, &mut stats.antimeridian_rings_omitted);
+                        spiller.emit_polygon(
+                            &ftype,
+                            square,
+                            rel_id,
+                            "relation",
+                            clat,
+                            clon,
+                            &extracted_tags,
+                            safe_ring,
+                        )?;
+                        stats.features_total += 1;
+                    }
+                }
                 stats.rels_assembled += 1;
             }
             assembler.cleanup(rel_id, manifest);
@@ -177,26 +208,12 @@ fn apply_way(
     let Some(ftype) = way.class else {
         return Ok(());
     };
-    // Skip if this way is an outer member of a polygon relation; the relation's
-    // assembled multipolygon already covers it. An INNER building is not covered:
-    // the assembler keeps outer rings only, so a tagged inner way (a shop inside
-    // a campus, a house in a courtyard) is its own object and must be emitted —
-    // the parent's own row defers to the buildings mapped inside it.
-    if way.is_outer_relation_member
-        && matches!(
-            ftype,
-            FeatureType::Building
-                | FeatureType::Industrial
-                | FeatureType::AirportArea
-                | FeatureType::AirportLine
-        )
-    {
-        return Ok(());
-    }
-
     let is_transport = matches!(ftype, FeatureType::Road | FeatureType::Railway);
     if is_transport {
         transport.observe_way(ftype.name(), &way.resolved_nodes);
+        transport
+            .controls
+            .link_way(way.id, ftype.name(), &way.resolved_nodes, spiller)?;
     }
     let mut piece_squares = BTreeSet::new();
     if ftype.is_linear() {
@@ -215,8 +232,19 @@ fn apply_way(
     } else if !coords.is_empty() {
         let (clat, clon) = centroid(&coords);
         let square = grid::square_of(clat, clon);
-        let ring = ring_for_spill(&coords, &mut stats.antimeridian_rings_omitted);
-        spiller.emit_polygon(&ftype, square, way.id, clat, clon, &way.tags, ring)?;
+        let ring = if ftype == FeatureType::Leisure && coords.len() == 2 {
+            Some(coords.as_slice())
+        } else {
+            ring_for_spill(&coords, &mut stats.antimeridian_rings_omitted)
+        };
+        if !relation_covers_kind(way.id, &ftype, manifest) {
+            spiller.emit_polygon(&ftype, square, way.id, "way", clat, clon, &way.tags, ring)?;
+        }
+        for (kind, tags) in &way.additional {
+            if !relation_covers_kind(way.id, kind, manifest) {
+                spiller.emit_polygon(kind, square, way.id, "way", clat, clon, tags, ring)?;
+            }
+        }
         stats.features_total += 1;
     }
     if matches!(ftype, FeatureType::Railway) {
@@ -225,6 +253,20 @@ fn apply_way(
         transport.write_railway_way(way.id, &way.resolved_nodes, &piece_squares)?;
     }
     Ok(())
+}
+
+/// Suppress only the family represented by an assembled outer relation. A
+/// building member can carry a separate power/sport feature absent on its parent.
+fn relation_covers_kind(id: i64, kind: &FeatureType, manifest: &RelationManifest) -> bool {
+    manifest.way_to_relations.get(&id).is_some_and(|parents| {
+        parents.iter().any(|(id, role)| {
+            (role.is_empty() || role == "outer")
+                && manifest
+                    .relations
+                    .get(id)
+                    .is_some_and(|relation| relation.feature_types.contains(kind))
+        })
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -262,11 +304,12 @@ fn emit_linear_way(
         let mid_lon = grid::geo::wrapped_longitude_midpoint(seg.0[1], seg.1[1]);
         let square = grid::square_of(mid_lat, mid_lon);
         let piece_tail = matches!(ftype, FeatureType::Road | FeatureType::Railway).then(|| {
-            transport::piece_tail(
+            let tail = transport::piece_tail(
                 resolved_nodes,
                 interval,
                 railway_metres.as_ref().map(|metres| metres.as_deref()),
-            )
+            );
+            format!("{}\t{tail}", transport::way_extent(resolved_nodes))
         });
         spiller.emit_segment(
             ftype,
@@ -296,7 +339,7 @@ fn emit_node(
     lon: f64,
 ) -> Result<u64> {
     let square = grid::square_of(lat, lon);
-    spiller.emit_polygon(&ftype, square, osm_id, lat, lon, tags, None)?;
+    spiller.emit_polygon(&ftype, square, osm_id, "node", lat, lon, tags, None)?;
     Ok(1)
 }
 
@@ -314,7 +357,7 @@ fn emit_settlement_node(
     let square = grid::square_of(lat, lon);
     match kind {
         classify::FeatureType::Leisure => {
-            spiller.emit_polygon(&kind, square, osm_id, lat, lon, tags, None)?;
+            spiller.emit_polygon(&kind, square, osm_id, "node", lat, lon, tags, None)?;
             Ok(1)
         }
         classify::FeatureType::Poi => match spill::poi_class_from_tags(tags) {
@@ -373,6 +416,48 @@ pub(crate) fn ring_for_spill<'a>(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn outer_building_keeps_its_independent_source_family() {
+        use crate::classify::{FeatureType, Tags};
+        use crate::relations::{RelationInfo, RelationManifest};
+        let manifest = RelationManifest {
+            way_to_relations: [
+                (1, vec![(2, "outer".to_owned())]),
+                (3, vec![(2, "inner".to_owned())]),
+            ]
+            .into(),
+            relations: [(
+                2,
+                RelationInfo {
+                    feature_types: vec![FeatureType::Building],
+                    tags: Tags::new(),
+                    member_ways: vec![],
+                },
+            )]
+            .into(),
+        };
+        assert!(super::relation_covers_kind(
+            1,
+            &FeatureType::Building,
+            &manifest
+        ));
+        assert!(!super::relation_covers_kind(
+            1,
+            &FeatureType::Industrial,
+            &manifest
+        ));
+        assert!(!super::relation_covers_kind(
+            1,
+            &FeatureType::Leisure,
+            &manifest
+        ));
+        assert!(!super::relation_covers_kind(
+            3,
+            &FeatureType::Building,
+            &manifest
+        ));
+    }
+
     use super::{centroid, ring_for_spill};
 
     #[test]

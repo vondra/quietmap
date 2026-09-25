@@ -53,12 +53,11 @@ const HEAVY_SUBTYPE_NACE: Record<number, readonly number[]> = {
   3: [5, 7, 8], 4: [19, 20], 5: [23], 6: [24],
 }
 
-// OSM industrial source_type classes the extractor owns (consumer contract v1):
-// turbines pipe their registry parameters through the wind enricher, never a
-// NACE stamp; a substation polygon IS its class — a nearby power-plant point
-// stamping 3511 onto it was the 7,166-row Tata-class bug.
-const TURBINE_SOURCE_TYPE = 10
-const SUBSTATION_SOURCE_TYPE = 12
+// Dedicated power, turbine and inactive classes never receive generic industry
+// priors: turbines pipe their registry parameters through the wind enricher,
+// never a NACE stamp; a substation polygon IS its class — a nearby power-plant
+// point stamping 3511 onto it was the 7,166-row Tata-class bug.
+export const isGenericIndustrialSource = (sourceType: number | undefined): boolean => (sourceType ?? 0) < 10
 
 // Mirror of the engine's NACE EMITTED levels (division → LwA at 1 ha =
 // base_lw + the spectrum's C1 debt, from
@@ -133,9 +132,9 @@ export interface MatchCandidate {
 }
 
 export function candidateEdgeM(facility: MatchFacility, polygon: MatchPolygon, radiusM: number): MatchCandidate | null {
-  // Turbines are native point sources and substations carry their own class;
-  // a nearby registry point cannot claim either identity.
-  if (polygon.sourceType === TURBINE_SOURCE_TYPE || polygon.sourceType === SUBSTATION_SOURCE_TYPE ||
+  // Dedicated power, turbine and inactive classes carry their own identity;
+  // a nearby registry point cannot claim it.
+  if (!isGenericIndustrialSource(polygon.sourceType) ||
       quietGateBlocks(polygon.subtype, facility.nace4)) return null
   const edge = edgeDistM(facility, polygon)
   // The 2 km radius gates proximity only: a contained facility stamps from

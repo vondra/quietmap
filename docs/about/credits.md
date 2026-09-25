@@ -35,6 +35,8 @@ None of this would exist without other people's open data. Thank you to everyone
 - Ships in the rest of the world: **Powered by [Global Fishing Watch](https://globalfishingwatch.org)**
   (CC BY-NC 4.0)
 - Road traffic: national censuses and city counts, listed on the country pages
+- Implicit OSM speed-rule definitions: [OpenStreetMap Wiki contributors](https://wiki.openstreetmap.org/wiki/Key:maxspeed#Implicit_maxspeed_values)
+  (CC BY-SA 2.0; adapted into a table of determinate passenger-car rules)
 - Trains: public [GTFS](https://gtfs.org/) feeds and national timetables, listed on the country pages
 - Industry: [E-PRTR](https://industry.eea.europa.eu/) (EEA),
   [Global Power Plant Database](https://datasets.wri.org/dataset/globalpowerplantdatabase) (WRI),

@@ -332,15 +332,14 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
     }
     let mut unavailable_layers = Vec::new();
     let mut open_or_drop_layer =
-        |file: &str, layer: &'static str, stamps: &[(&str, &[&str])], recovery: &str| {
+        |file: &str, layer: &'static str, stamps: &[(&str, &str)], recovery: &str| {
             let path = dir.join(file);
             let arrow = LazyArrow::open(&path)?;
             let fault = arrow.schema().and_then(|schema| {
                 stamps.iter().find_map(|(key, expected)| {
                     let found = schema.metadata().get(*key).map(String::as_str);
-                    (!found.is_some_and(|found| expected.contains(&found))).then(|| {
-                        format!("{key} expected {expected:?}, found {found:?}")
-                    })
+                    (found != Some(*expected))
+                        .then(|| format!("{key} expected {expected}, found {found:?}"))
                 })
             });
             Ok::<_, String>(match fault {
@@ -359,15 +358,13 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
             })
         };
     // Every extract-written file pins its coordinate grid; a reader must never misread
-    // another grid. Leisure accepts v3 AND v4 (v3 rows are the v4 subset: area
-    // classes only, no formula ids) so served data keeps reading until the
-    // re-extract.
+    // another grid.
     let leisure = open_or_drop_layer(
         "leisure.arrow",
         "leisure",
         &[
-            ("leisure_contract", &[LEISURE_CONTRACT_V3, LEISURE_CONTRACT_V4] as &[_]),
-            ("grid", &[GRID_CONTRACT_Z30] as &[_]),
+            ("leisure_contract", LEISURE_CONTRACT_V4),
+            ("grid", GRID_CONTRACT_Z30),
         ],
         "re-extract the source store",
     )?;
@@ -375,8 +372,8 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         "ships.arrow",
         "ships",
         &[
-            ("ships_contract", &[SHIPS_CONTRACT_V1] as &[_]),
-            ("grid", &[GRID_CONTRACT_Z30] as &[_]),
+            ("ships_contract", SHIPS_CONTRACT_V1),
+            ("grid", GRID_CONTRACT_Z30),
         ],
         "rerun scripts/ships/build_ships.py",
     )?;
@@ -387,7 +384,7 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         "aircraft",
         &[(
             "airborne_contract",
-            &[crate::aircraft_contract::AIRBORNE_CONTRACT] as &[_],
+            crate::aircraft_contract::AIRBORNE_CONTRACT,
         )],
         "re-extract aircraft Stage 2A (shuffle + airborne flatten)",
     )?;
@@ -397,11 +394,21 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
     let roads = LazyArrow::open(&dir.join("roads.arrow"))?;
     check_column_type(&roads, "start_gx", DataType::Int32, "roads.arrow")?;
 
+    let industrial = LazyArrow::open(&dir.join("industrial.arrow"))?;
+    for (family, arrow) in [
+        ("roads", &roads),
+        ("railways", &railways),
+        ("industrial", &industrial),
+    ] {
+        if let Some(schema) = arrow.schema() {
+            crate::osm_contract::validate(schema, family)?;
+        }
+    }
     Ok(SquareData {
         roads,
         railways,
         structures,
-        industrial: LazyArrow::open(&dir.join("industrial.arrow"))?,
+        industrial,
         leisure,
         ships,
         aircraft_airborne,
@@ -417,13 +424,8 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
 pub const STRUCTURE_KIND_BUILDING: u8 = 0;
 pub const STRUCTURE_KIND_BARRIER: u8 = 1;
 
-/// Per-file contract stamps (sources of truth: `osm-extract::finalize`,
-/// `scripts/structures/build-structures.py`). Mirrored here so the popup
-/// drops a stale layer whose semantics predate the current schema.
-pub const LEISURE_CONTRACT_V3: &str = "leisure_v3";
-/// v4 adds the motorsport (10–15) and shooting (16–18) formula classes; the
-/// area-row geometry contract is unchanged, so readers accept both stamps.
-pub const LEISURE_CONTRACT_V4: &str = "leisure_v4";
+/// Activity evidence version shared with the extractor.
+pub use crate::osm_contract::LEISURE_CONTRACT_V4;
 /// `ships.arrow` schema stamp written by `scripts/ships/build_ships.py`.
 pub const SHIPS_CONTRACT_V1: &str = "ships_v1";
 pub const GRID_CONTRACT_Z30: &str = "z30";

@@ -14,6 +14,7 @@ pub(super) fn collect_industrial(
     lng: f64,
     output: &mut Vec<noise_compute::types::PointSource>,
 ) -> Result<(), String> {
+    let mut transformers: Option<Vec<square_store::osm_evidence::TransformerUnit>> = None;
     for batch in &data
         .industrial
         .batches_within(lat, lng, INDUSTRIAL_QUERY_RADIUS_M)?
@@ -77,6 +78,44 @@ pub(super) fn collect_industrial(
             let site_subtype = col_u8(batch, "site_subtype")
                 .map(|a| a.value(i))
                 .unwrap_or(0);
+            // Power evidence comes from the retained tags, not columns: solar
+            // MW from `plant:output:electricity`, substation MVA from the
+            // per-square transformer join (built lazily, only when a
+            // substation row is admitted — most popups admit none).
+            let is_power = matches!(
+                source_type,
+                noise_compute::emission::industrial::SOURCE_SOLAR_FARM
+                    | noise_compute::emission::industrial::SOURCE_SUBSTATION
+            );
+            let row_tags = is_power.then(|| square_store::osm_evidence::optional_tags(batch, i));
+            // A gas-network station carries no transformer hum.
+            if row_tags
+                .as_ref()
+                .is_some_and(square_store::osm_evidence::is_gas_substation)
+            {
+                continue;
+            }
+            let plant_output_mw = row_tags
+                .as_ref()
+                .and_then(square_store::osm_evidence::plant_output_mw);
+            let (substation_mva, substation_class) = match row_tags.as_ref() {
+                Some(tags)
+                    if source_type
+                        == noise_compute::emission::industrial::SOURCE_SUBSTATION =>
+                {
+                    if transformers.is_none() {
+                        transformers = Some(square_store::osm_evidence::transformer_units(
+                            &data.industrial.batches_all()?,
+                        ));
+                    }
+                    let feed = square_store::osm_evidence::substation_feed(
+                        transformers.as_deref().unwrap_or(&[]),
+                        &polygon_grid,
+                    );
+                    square_store::osm_evidence::substation_power(tags, &feed)
+                }
+                _ => (None, 0),
+            };
             let prepared_points = noise_compute::normalize::prepare_industrial_points(
                 noise_compute::normalize::RawIndustrialInput {
                     centroid_lat: c_lat,
@@ -90,13 +129,9 @@ pub(super) fn collect_industrial(
                     nace_4digit: col_u16(batch, "nace_4digit")
                         .map(|a| a.value(i))
                         .filter(|&v| v > 0),
-                    // Power-class columns (absent in served files → engine
-                    // fallbacks: area density for solar, class median for MVA).
-                    capacity_mw: positive_value(col_f32(batch, "capacity_mw")),
-                    capacity_mva: positive_value(col_f32(batch, "capacity_mva")),
-                    substation_class: col_u8(batch, "substation_class")
-                        .map(|a| a.value(i))
-                        .unwrap_or(0),
+                    plant_output_mw,
+                    substation_mva,
+                    substation_class,
                 },
             );
             let row_source_id = col_u16(batch, "source_id").map(|a| a.value(i)).unwrap_or(0);

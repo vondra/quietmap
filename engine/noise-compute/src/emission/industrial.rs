@@ -414,12 +414,16 @@ pub fn sector_area_cap_m2(nace_4digit: Option<u16>, site_subtype: u8) -> f64 {
 }
 
 /// OSM power classes written by the extractor (`industrial.arrow`
-/// `source_type`; consumer contract v1, reality-fixes w7-sources slice B).
-/// 11/12 carry their own physics below (per-MW / per-MVA, not the area law);
-/// 13 is silent — the turbines inside the fence emit, not the fence.
-pub const SOURCE_SOLAR_FARM: u8 = 11;
-pub const SOURCE_SUBSTATION: u8 = 12;
-pub const SOURCE_WIND_OUTLINE: u8 = 13;
+/// `source_type`; `square-store::osm_contract`, classes owned by
+/// `osm-extract::classify::industrial_class`). 13/14 carry their own physics
+/// below (per-MW / per-MVA, not the area law); 11/12/15 are silent — the
+/// turbines inside the fence emit, not the fence, and a transformer's rating
+/// joins its substation instead of emitting twice.
+pub const SOURCE_WIND_OUTLINE: u8 = 11;
+pub const SOURCE_INACTIVE: u8 = 12;
+pub const SOURCE_SOLAR_FARM: u8 = 13;
+pub const SOURCE_SUBSTATION: u8 = 14;
+pub const SOURCE_TRANSFORMER: u8 = 15;
 
 /// Synthetic NACE for registry-confirmed solar plants (not real NACE: 3512
 /// mixes solar, wind and hydro). The prep path treats it as a solar farm.
@@ -438,9 +442,10 @@ pub const SOLAR_DAY_DUTY_DB: f64 = -5.0;
 /// measured: a Sungrow SG4950HV-MV central inverter at 4.95 MW radiates 95
 /// dB(A) (Lancefield Solar Farm NIA, Urbis 2022 — 88 + 10·lg(4.95) = 94.95),
 /// daylight-only operation, MV switchgear negligible beside it. MW comes from
-/// the `capacity_mw` column (`plant:output:electricity`) or the polygon area
-/// × [`SOLAR_MW_PER_HA_UNTAGGED`]. Evening/night: silent (inverters sleep;
-/// the summer 19–21 h spillover costs Lden ≈ 0.1 dB, unmodelled).
+/// the row's `plant:output:electricity` tag (parsed by the reader) or the
+/// polygon area × [`SOLAR_MW_PER_HA_UNTAGGED`]. Evening/night: silent
+/// (inverters sleep; the summer 19–21 h spillover costs Lden ≈ 0.1 dB,
+/// unmodelled).
 pub fn solar_farm_lw(capacity_mw: Option<f64>, area_m2: f64) -> f64 {
     let mw = capacity_mw
         .filter(|mw| *mw > 0.0)
@@ -452,13 +457,19 @@ pub fn solar_farm_lw(capacity_mw: Option<f64>, area_m2: f64) -> f64 {
 /// profile — Lancefield publishes only the total, so no per-band evidence.
 pub const SOLAR_SPECTRUM: [f64; NUM_BANDS] = [-8.0, -5.0, -2.0, 0.0, 0.0, -1.0, -3.0, -6.0];
 
+/// Substation fallback classes, derived by the readers from `voltage` /
+/// autotransformer evidence (`square-store::osm_evidence::substation_power`).
+pub const SUBSTATION_MAIN: u8 = 1;
+pub const SUBSTATION_AUTO: u8 = 2;
+pub const SUBSTATION_DISTRIBUTION: u8 = 3;
+
 /// Substation class medians [MVA] over 258,524 OSM transformer ratings:
-/// 1 = main/transmission, 2 = auto, 3 = distribution. Unknown (0) takes the
+/// main/transmission 25, auto 160, distribution 2. Unknown (0) takes the
 /// distribution median — the overwhelmingly common case.
 pub fn substation_class_mva(substation_class: u8) -> f64 {
     match substation_class {
-        1 => 25.0,
-        2 => 160.0,
+        SUBSTATION_MAIN => 25.0,
+        SUBSTATION_AUTO => 160.0,
         _ => 2.0,
     }
 }

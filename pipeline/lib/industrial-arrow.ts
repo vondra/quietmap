@@ -7,8 +7,10 @@ import { listPreparedSquares } from './prepared-grid.js'
 import { withArrowWrite, shouldOverwrite } from './provenance.js'
 import { PROVENANCE_RANK, SOURCES_BY_ID } from './sources.js'
 import { buildOneHundredthDegreePointGrid, pointGridCandidates } from './spatial.js'
-import { candidateBeats, candidateEdgeM, contestBeats, lookupRadiusM, overlapPairs, readPolygons,
-  OVERLAP_MIN_AREA_M2, type MatchFacility, type MatchPolygon, type OverlapWinner } from './facility-match.js'
+import { candidateBeats, candidateEdgeM, contestBeats, isGenericIndustrialSource, lookupRadiusM, overlapPairs,
+  readPolygons, OVERLAP_MIN_AREA_M2, type MatchFacility, type MatchPolygon, type OverlapWinner } from './facility-match.js'
+
+import { requireOsmContract } from './osm-contract.js'
 
 const SEARCH_RADIUS_M = 2000 // Default original registry centroid search horizon.
 export interface IndustrialOwnership {
@@ -72,6 +74,7 @@ export async function enrichIndustrialFacilities(
     const path = resolve(preparedDirectory, square, 'industrial.arrow')
     const before = statSync(path, { bigint: true })
     const table = tableFromIPC(readFileSync(path))
+    requireOsmContract(table, 'industrial')
     const polygons = readPolygons(table)
     const countryAt = ownership?.countryAt(table) ?? (() => '')
     const sourceIds = stamps(table, 'source_id', 16)
@@ -82,7 +85,7 @@ export async function enrichIndustrialFacilities(
     result.rows += polygons.length
     for (const [row, polygon] of polygons.entries()) {
       const country = countryAt(row, polygon)
-      if (country === null || polygon.sourceType === 10) continue
+      if (country === null || !isGenericIndustrialSource(polygon.sourceType)) continue
       const source = SOURCES_BY_ID.get(sourceIds[row])
       if (source?.layer === 'industrial' && nace[row] > 0 &&
           polygon.areaM2 >= OVERLAP_MIN_AREA_M2) {
@@ -173,6 +176,7 @@ export async function enrichIndustrialFacilities(
         throw new Error(`${path}: changed after global selection; rerun against stable prepared input`)
       }
       const countryAt = ownership?.countryAt(table) ?? (() => '')
+      requireOsmContract(table, 'industrial')
       const polygons = readPolygons(table)
       const oldSource = stamps(table, 'source_id', 16)
       const oldNace = stamps(table, 'nace_4digit', 16, true)
@@ -182,7 +186,7 @@ export async function enrichIndustrialFacilities(
       const suppressedColumn = Uint8Array.from(oldSuppressed)
       const rows = table.numRows
       for (let row = 0; row < rows; row++) {
-        if (countryAt(row, polygons[row]) === null || (ownership && polygons[row].sourceType === 10)) continue
+        if (countryAt(row, polygons[row]) === null || !isGenericIndustrialSource(polygons[row].sourceType)) continue
         if (reset.has(source[row])) {
           source[row] = 0; nace[row] = 0; suppressedColumn[row] = 0
           result.reset++

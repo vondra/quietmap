@@ -105,15 +105,18 @@ the area integral sits 1.8 dB under the per-m² level, giving active 59.8
 dB/m² — 97.85 dB(A) over the pitch — and 50.8 dB/m² after the standard −9 dB
 annualization (−3 season, −6 duty).
 
-Power classes (`source_type` 11–13, consumer contract v1). Solar farms emit
-per-MW, not per area: 88 dB(A)/MW + 10·lg(MW) − 5 dB day duty, day-only
-(Sungrow SG4950HV-MV 4.95 MW = 95 dB(A) anchor; MW from `capacity_mw` or area
-× 0.55 MW/ha, the tagged-farm median). Registry-confirmed solar (synthetic
-NACE 3599) takes the same branch. Substations emit per-MVA, 24/7: IEC 551
-LWA = 74 + 14·lg(MVA), 64 dB below 0.2 MVA (MVA from `capacity_mva` or the
-class median — main 25, auto 160, distribution 2 MVA). Wind-farm outlines are
-silent; disused/abandoned/historic quarries are retired by the extractor
-(`suppressed`, honoured by both readers).
+Power classes (`source_type` 11–15, `osm_industrial_contract`). Solar farms
+(13) emit per-MW, not per area: 88 dB(A)/MW + 10·lg(MW) − 5 dB day duty,
+day-only (Sungrow SG4950HV-MV 4.95 MW = 95 dB(A) anchor; MW from the row's
+`plant:output:electricity` tag, a solar generator unit's `rated_power_kw`, or
+area × 0.55 MW/ha, the tagged-farm median). Registry-confirmed solar
+(synthetic NACE 3599) takes the same branch. Substations (14) emit per-MVA,
+24/7: IEC 551 LWA = 74 + 14·lg(MVA), 64 dB below 0.2 MVA (MVA from the joined
+`rating` sum of the class-15 transformers inside the substation polygon, else
+the class median — main 25, auto 160, distribution 2 MVA; class from `voltage`
+/ autotransformer evidence). Wind-plant outlines (11), inactive facilities
+(12) and transformers (15) are silent; lifecycle-retired rows carry
+`suppressed`, honoured by both readers.
 
 Registry stamping is containment-first: a facility claims the smallest polygon
 containing it (equivalent-circle edge < 0, any centroid distance — the 2 km
@@ -125,18 +128,19 @@ Annex I sub-activity letter, not sector. The India colour feed is deleted (CPCB
 colours score air/water/waste pollution, not noise); registry points never
 stamp substations or turbines.
 
-`leisure_v4` adds motorsport (10–15) and shooting (16–18) formula classes
-(readers accept v3 and v4; v3 rows are the v4 subset). These carry a class-TOTAL
-annual day Lw, not the area law: motorsport LW(1) + 10·lg(n) +
+`leisure_v4` adds the motorsport (10) and shooting (11) formula classes.
+These carry a class-TOTAL annual day Lw, not the area law, with the sub-type
+read from the row's retained tags: motorsport LW(1) + 10·lg(n) +
 10·lg(active hours / 4,380) with UBA REP-0310 per-vehicle levels (circuit 116
 touring proxy / n=15, motocross 114/7, kart 118/8, speedway 139/4, trial 95/2,
 other 116/10), default 100 days × 6 h, pink propagation spectrum; shooting LE
 + 10·lg(shots / 15.77 Ms) with RIVM sphere sums (rifle 139.0, pistol 133.6,
 shotgun 134.8), default 20,000 shots/yr, per-weapon octave spectra. Both are
 day-only (−50 evening/night) and reach past the 2 km leisure cap (industrial
-4 km reach, edge-gated). Raceway lines carry the emission as buffered thin
-polygons; enclosing motorsport polygons go silent (dropped or `suppressed`,
-honoured by popup and painter).
+4 km reach, edge-gated). Raceway lines carry the emission, spread over their
+chain; an enclosing motorsport polygon goes silent, as does a roofed formula
+row (its building footprint emits) or a near-silent shooting discipline
+(archery, paintball, air guns).
 
 ## Prepared road direction and traffic
 
@@ -232,9 +236,13 @@ period. The producer clips geometry and resolves counts, missing-traffic priors,
 service/parallel allocation and any estimated period split before publication.
 Daily-only timetable evidence receives an explicitly estimated period allocation.
 Unknown freight is not a known zero; a known numeric zero remains zero.
-On non-service tracks (`service=0`), each unknown category receives its own
+On non-service tracks (`service=0`) other than preserved heritage rail (type 5),
+each unknown category receives its own
 labelled class prior, independently of evidence in the other category. Existing
 category values, including zero, are preserved; new priors are shared once.
+Heritage rows retain type 5, observed traffic and posted speed. Missing traffic
+stays zero with status 0 (unknown), with no class speed or high-speed fallback.
+They are labelled heritage and emit nothing until a heritage model is available.
 
 Popup and surface loaders require this contract and use the same validator and
 normalization. Emission and audibility reach consume these period counts directly
@@ -302,7 +310,7 @@ Waters absent from both products have no rows.
 
 ## Open parking and emission-only grounds
 
-Open parking ways use `leisure_v3` classes 8 (lot) and 9 (street strip), with no
+Open parking ways use `leisure_v4` classes 8 (lot) and 9 (street strip), with no
 screening geometry. Their mapped area estimates spaces at 23.8 and 13.3 m² per
 space. Day sound power follows the Parkplatzlärmstudie (LfU, 6th ed. 2007):
 63 dB(A) per movement/hour, 0.40 movements/space/hour and the searching term
@@ -375,3 +383,52 @@ This envelope is Quiet Map's existing single-edge approximation applied to all
 crossings, not a multiple-diffraction path construction. Full multiple-obstacle
 geometry and split ground-reflection corrections are outside this change. The
 normative context is [Directive 2021/1226, Annex II propagation amendments](https://eur-lex.europa.eu/eli/dir_del/2021/1226/oj/eng).
+
+## Retained OSM model evidence
+
+The extraction contract constants live in `square-store::osm_contract`: spill
+format 2, roads/railways/industrial evidence 2, `leisure_v4`, and
+`transport_nodes_contract=1`. Readers reject older stamps; rebuilding requires
+fresh extraction outputs. Existing country-bake and grid contracts still apply.
+
+Road rows retain raw speed/surface/vertical-structure tags in `osm_tags` plus
+numeric `maxspeed_hgv` (u16 km/h, 0 unknown, 65535 unrestricted).
+`osm-extract::implicit_speed` owns the sourced passenger
+implicit-rule table. Explicit `maxspeed` wins; unresolvable conditional rules
+remain unknown and their original text survives. HGV implicit rules are retained
+without applying passenger limits. Direction codes are 0 two-way, 1 explicit
+forward, 2 reverse, 3 implied roundabout, 4 implied motorway; all forward codes
+participate in continuity and directional traffic matching. Whole-way endpoint
+node IDs and grid coordinates survive microsegmentation, so adjacent bridge
+ways can form runs and identify abutment candidates without mistaking piece
+boundaries for abutments. These endpoints are evidence, not a deck-height model.
+
+Transport control rows retain node identity, raw crossing/signal/whistle tags,
+and one incidence per road or rail way (vertex index and whole-way chainage).
+Unlinked controls remain explicit null incidences; there is no proximity guess.
+National whistle values and `railway:traffic_mode`, usage, service and heritage
+survive. Original railway node chains and piece intervals already supply curve
+geometry to rail finalization; no new curve-radius approximation is introduced.
+
+Industrial source classes 11/12 identify wind-plant outlines and inactive
+facilities: neither falls through to generic factory emission. A wind-plant
+outline requires wind as the sole `plant:source`; mixed fuels and copied
+generator tags do not silence a plant. Classes 13/14/15
+retain solar, substation and transformer evidence for their specific models
+(see above); transformers stay silent themselves. Raw power/output/rating and
+lifecycle tags survive, with OSM object kind to disambiguate IDs. Registry
+matching does not overwrite these classes. Industrial and leisure multipolygons
+retain every closed outer component as a separate row; unclosed fragments are
+omitted rather than assigned an area. Inner holes remain outside the
+existing single-ring geometry contract.
+
+`leisure_v4` adds motorsport class 10 and shooting class 11, `osm_tags`, OSM kind,
+geometry kind (0 point, 1 area, 2 line) and line length. Two-node raceways and
+motor-sport tracks survive with open-chain geometry; enclosing polygons are
+separate area rows. Open non-motorised tracks also retain their line path;
+coordinate snapping does not change line/area identity. Shooting subtype and indoor/building flags survive on nodes,
+ways and relations. The activity models consume both classes (see above); an
+enclosing area must not duplicate a line's emission.
+A physical building also retains its separate source row and has no generic
+residential emission. Buildings keep `buildings_v5`, the existing roof/carport
+use code and the unchanged height ladder.

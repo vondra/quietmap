@@ -131,6 +131,7 @@ pub fn piece_tail(
 }
 
 pub struct TransportSpill {
+    pub controls: crate::model_nodes::ControlPoints,
     spill_dir: PathBuf,
     railway_ways: BufWriter<File>,
     train_routes: BufWriter<File>,
@@ -149,6 +150,7 @@ impl TransportSpill {
             ))
         };
         Ok(Self {
+            controls: Default::default(),
             spill_dir: spill_dir.to_path_buf(),
             railway_ways: create(RAILWAY_WAYS_SPILL)?,
             train_routes: create(TRAIN_ROUTES_SPILL)?,
@@ -291,6 +293,26 @@ fn find_root(parents: &mut HashMap<i64, i64>, node: i64) -> i64 {
         walked = parent;
     }
     root
+}
+
+/// Whole original way endpoints, never a microsegment end mistaken for an abutment.
+pub fn way_extent(nodes: &[ResolvedNode]) -> String {
+    let first = nodes.first();
+    let last = nodes.last();
+    let cell = |node: Option<&ResolvedNode>| {
+        node.and_then(|n| n.1)
+            .map(|c| grid::lonlat_to_grid(c[1], c[0]))
+    };
+    let (a, b) = (cell(first), cell(last));
+    serde_json::to_string(&[
+        first.map(|n| n.0),
+        last.map(|n| n.0),
+        a.map(|c| i64::from(c.0)),
+        a.map(|c| i64::from(c.1)),
+        b.map(|c| i64::from(c.0)),
+        b.map(|c| i64::from(c.1)),
+    ])
+    .expect("integer extent")
 }
 
 #[cfg(test)]

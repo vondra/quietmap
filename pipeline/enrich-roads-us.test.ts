@@ -327,7 +327,9 @@ test('TMAS opposing carriageways retain their own hourly profiles; two-way roads
   const row: RoadRow = { startLat: 33.9999, startLon: -84, endLat: 34.0001, endLon: -84,
     midLat: 34, midLon: -84, oneway: 1, ref: 'I 5', name: null, osmId: 1,
     roadClass: 0, existingSourceId: 21, countryCode: iso2Code('US') }
-  assert.equal(matchTmasStation(row, grid)?.station, north.station)
+  for (const oneway of [1, 3, 4]) {
+    assert.equal(matchTmasStation({ ...row, oneway }, grid)?.station, north.station)
+  }
   assert.equal(matchTmasStation({ ...row, oneway: 2 }, grid)?.station, south.station)
   assert.equal(matchTmasStation({ ...row, oneway: 0 }, grid), null)
   assert.equal(matchTmasStation({ ...row, startLat: row.endLat, endLat: row.startLat }, grid)?.station, south.station)

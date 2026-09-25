@@ -59,30 +59,20 @@ pub fn load_sources(
                 indexes.push(index);
             }
             let reader = FileReader::try_new(Cursor::new(bytes), None)?;
+            square_store::osm_contract::validate(&reader.schema(), name)
+                .map_err(anyhow::Error::msg)?;
             if name == "structures" {
                 square_store::structure_contract::validate_schema(&reader.schema())
                     .map_err(anyhow::Error::msg)?;
             }
             if name == "leisure" {
-                // The painter must refuse a stamp it does not know for the same
-                // reason the popup does: `leisure_v3` added the car park classes,
-                // and an older binary would draw one as a sports pitch. v4 adds
-                // the motorsport/shooting formula classes; the geometry contract
-                // is unchanged, so this build reads both stamps.
                 let metadata = reader.schema().metadata().clone();
-                let leisure_stamps = [
-                    square_store::store::LEISURE_CONTRACT_V3,
-                    square_store::store::LEISURE_CONTRACT_V4,
-                ];
-                let grid_stamps = [square_store::store::GRID_CONTRACT_Z30];
-                for (key, expected) in [
-                    ("leisure_contract", leisure_stamps.as_slice()),
-                    ("grid", grid_stamps.as_slice()),
-                ] {
+                {
+                    let (key, expected) = ("grid", square_store::store::GRID_CONTRACT_Z30);
                     let found = metadata.get(key).map(String::as_str);
                     anyhow::ensure!(
-                        found.is_some_and(|found| expected.contains(&found)),
-                        "{relative}: {key} is {found:?}, this build reads {expected:?}"
+                        found == Some(expected),
+                        "{relative}: {key} is {found:?}, this build reads {expected}"
                     );
                 }
             }
@@ -101,18 +91,33 @@ pub fn load_sources(
             let traffic_calendar = (name == "airport_traffic")
                 .then(|| traffic::TrafficCalendar::read(&RecordBatch::new_empty(reader.schema())))
                 .transpose()?;
+            // One file's batches buffer before rows emit: industrial/leisure
+            // rows join against their whole square (a substation's
+            // transformers, a motorsport polygon's raceway lines). Order and
+            // row identities are unchanged — buffering only precedes them.
+            let batches: Vec<RecordBatch> = reader.collect::<Result<_, _>>()?;
+            let joins = match name {
+                "industrial" => points::FileJoins {
+                    transformers: square_store::osm_evidence::transformer_units(&batches),
+                    ..Default::default()
+                },
+                "leisure" => points::FileJoins {
+                    motorsport_lines: square_store::osm_evidence::motorsport_lines(&batches),
+                    ..Default::default()
+                },
+                _ => points::FileJoins::default(),
+            };
             let mut row_base = 0_u64;
-            for batch in reader {
-                let batch = batch?;
+            for batch in &batches {
                 if name == "roads" {
-                    RoadDirections::read(&batch).map_err(anyhow::Error::msg)?;
+                    RoadDirections::read(batch).map_err(anyhow::Error::msg)?;
                 }
                 let road_traffic = (name == "roads")
-                    .then(|| source_reader::road_traffic::RoadTrafficColumns::read(&batch))
+                    .then(|| source_reader::road_traffic::RoadTrafficColumns::read(batch))
                     .transpose()
                     .map_err(anyhow::Error::msg)?;
                 let rail_traffic = (name == "railways")
-                    .then(|| source_reader::rail_traffic::RailTrafficColumns::read(&batch))
+                    .then(|| source_reader::rail_traffic::RailTrafficColumns::read(batch))
                     .transpose()
                     .map_err(anyhow::Error::msg)?;
                 for row in 0..batch.num_rows() {
@@ -121,7 +126,7 @@ pub fn load_sources(
                     match name {
                         "roads" | "railways" => {
                             if let Some(device) = line(
-                                &batch,
+                                batch,
                                 row,
                                 rail_traffic.as_ref().map(|columns| columns.row(row)),
                                 road_traffic.as_ref().map(|columns| columns.row(row)),
@@ -136,7 +141,7 @@ pub fn load_sources(
                         }
                         "airport_traffic" => {
                             if let Some(device) = traffic::traffic_row(
-                                &batch,
+                                batch,
                                 row,
                                 frame,
                                 traffic_calendar.as_ref().unwrap(),
@@ -149,8 +154,9 @@ pub fn load_sources(
                             }
                         }
                         _ => {
-                            for (part, point) in
-                                points::points(&batch, row, name)?.iter().enumerate()
+                            for (part, point) in points::points(batch, row, name, &joins)?
+                                .iter()
+                                .enumerate()
                             {
                                 sources.push(SurfaceSource {
                                     identity: identity(part.try_into()?),
@@ -335,8 +341,7 @@ mod completeness_tests {
     #[test]
     fn native_road_direction_contract_rejects_invalid_data_and_matches_popup() {
         use arrow::array::{
-            ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, UInt16Array,
-            UInt8Array,
+            ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, UInt16Array, UInt8Array,
         };
         use arrow::datatypes::{Field, Schema};
         use std::sync::Arc;
@@ -352,10 +357,7 @@ mod completeness_tests {
                 ("aadt_medium", Arc::new(Float64Array::from(vec![0.0; 3]))),
                 ("aadt_heavy", Arc::new(Float64Array::from(vec![0.0; 3]))),
                 ("aadt_moto", Arc::new(Float64Array::from(vec![0.0; 3]))),
-                (
-                    "traffic_estimated",
-                    Arc::new(UInt8Array::from(vec![1; 3])),
-                ),
+                ("traffic_estimated", Arc::new(UInt8Array::from(vec![1; 3]))),
                 ("road_class", Arc::new(UInt8Array::from(vec![2; 3]))),
                 ("speed_limit", Arc::new(UInt8Array::from(vec![50; 3]))),
             ];
@@ -376,10 +378,10 @@ mod completeness_tests {
                     Field::new(*name, array.data_type().clone(), array.null_count() != 0)
                 })
                 .collect::<Vec<_>>();
-            let schema = Schema::new(fields).with_metadata(std::collections::HashMap::from([(
-                "road_traffic_contract".to_owned(),
-                "1".to_owned(),
-            )]));
+            let schema = Schema::new(fields).with_metadata(std::collections::HashMap::from([
+                ("road_traffic_contract".to_owned(), "1".to_owned()),
+                ("osm_roads_contract".into(), square_store::osm_contract::ROADS_CONTRACT.into()),
+            ]));
             RecordBatch::try_new(
                 Arc::new(schema),
                 columns.into_iter().map(|(_, column)| column).collect(),
@@ -391,7 +393,7 @@ mod completeness_tests {
             Some(Arc::new(BooleanArray::from(vec![false; 3]))),
             Some(Arc::new(UInt16Array::from(vec![0, 1, 2]))),
             Some(Arc::new(UInt8Array::from(vec![Some(0), None, Some(2)]))),
-            Some(Arc::new(UInt8Array::from(vec![0, 1, 3]))),
+            Some(Arc::new(UInt8Array::from(vec![0, 1, 5]))),
         ];
         for column in invalid {
             let invalid = batch(column);
@@ -436,9 +438,7 @@ mod completeness_tests {
         let mut columns = batch.columns().to_vec();
         columns[position] = Arc::new(Int32Array::from(vec![10_000; 3]));
         let legacy = RecordBatch::try_new(
-            Arc::new(
-                Schema::new(fields).with_metadata(batch.schema().metadata().clone()),
-            ),
+            Arc::new(Schema::new(fields).with_metadata(batch.schema().metadata().clone())),
             columns,
         )
         .unwrap();
@@ -558,11 +558,7 @@ mod completeness_tests {
         let mut writer = arrow::ipc::writer::FileWriter::try_new(
             std::fs::File::create(&path).unwrap(),
             &arrow::datatypes::Schema::new(vec![
-                arrow::datatypes::Field::new(
-                    "oneway",
-                    arrow::datatypes::DataType::UInt8,
-                    false,
-                ),
+                arrow::datatypes::Field::new("oneway", arrow::datatypes::DataType::UInt8, false),
                 arrow::datatypes::Field::new(
                     "aadt_light",
                     arrow::datatypes::DataType::Float64,
@@ -589,10 +585,10 @@ mod completeness_tests {
                     false,
                 ),
             ])
-            .with_metadata(std::collections::HashMap::from([(
-                "road_traffic_contract".to_owned(),
-                "1".to_owned(),
-            )])),
+            .with_metadata(std::collections::HashMap::from([
+                ("road_traffic_contract".to_owned(), "1".to_owned()),
+                ("osm_roads_contract".into(), square_store::osm_contract::ROADS_CONTRACT.into()),
+            ])),
         )
         .unwrap();
         writer.finish().unwrap();

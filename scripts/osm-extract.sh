@@ -32,10 +32,10 @@ if ! [[ "$NUM_BUCKETS" =~ ^[1-9][0-9]*$ ]]; then
     exit 1
 fi
 
-# Nine spill streams keep one writer per bucket open. Raise only the soft
+# Ten spill streams (including POIs and controls) keep one writer per bucket open. Raise only the soft
 # limit to the derived requirement; changing the process hard limit is neither
 # necessary nor guaranteed to be permitted.
-REQUIRED_OPEN_FILES=$((9 * NUM_BUCKETS + 64))
+REQUIRED_OPEN_FILES=$((10 * NUM_BUCKETS + 64))
 HARD_OPEN_FILES=$(ulimit -Hn)
 if [ "$HARD_OPEN_FILES" != "unlimited" ] && [ "$REQUIRED_OPEN_FILES" -gt "$HARD_OPEN_FILES" ]; then
     log "ERROR: extraction needs $REQUIRED_OPEN_FILES open files for $NUM_BUCKETS buckets; hard limit is $HARD_OPEN_FILES"

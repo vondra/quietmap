@@ -1,5 +1,6 @@
 /** Native IPC regression for complete-chain wind field priority and immutable measured payload. */
 
+import { osmContract } from './osm-contract.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, readFileSync, writeFileSync, statSync, rmSync } from 'node:fs'
@@ -34,7 +35,7 @@ test('original US global then national priority, nullable payload, exact rerun a
       rated_power_kw: vectorFromArray([null, null, null, null, null], new Float32()),
     } as never) as unknown as Table
     const fields = input.schema.fields.map(f => new Field(f.name, f.type, f.nullable, new Map([['field', f.name]])))
-    const schema = new Schema(fields, new Map([['grid', 'z30'], ['test', 'wind'], ['qm_blocks', encodeQmBlocks([[30, -120, 70, 20], [30, -120, 70, 20]])]]))
+    const schema = new Schema(fields, new Map([osmContract('industrial'), ['grid', 'z30'], ['test', 'wind'], ['qm_blocks', encodeQmBlocks([[30, -120, 70, 20], [30, -120, 70, 20]])]]))
     const table = new Table(schema, [input.slice(0, 2), input.slice(2)].flatMap(t => t.batches.map(b => new RecordBatch(schema, b.data))))
     const bytes = tableToIPC(table, 'file'), path = resolve(work, 'industrial.arrow'), fresh = resolve(work, 'fresh.arrow')
     writeFileSync(path, bytes); writeFileSync(fresh, bytes)
@@ -114,7 +115,7 @@ test('missing registry parameters never erase a positive native measurement or c
       hub_height: vectorFromArray([80, null, null], new Float32()),
       rated_power_kw: vectorFromArray([null, 2300, null], new Float32()),
     } as never) as unknown as Table
-    const schema = new Schema(input.schema.fields, new Map([['grid', 'z30'], ['test', 'missing-wind-fields']]))
+    const schema = new Schema(input.schema.fields, new Map([osmContract('industrial'), ['grid', 'z30'], ['test', 'missing-wind-fields']]))
     const table = new Table(schema, [input.slice(0, 1), input.slice(1)].flatMap(t => t.batches.map(b => new RecordBatch(schema, b.data))))
     const bytes = tableToIPC(table, 'file'), path = resolve(work, 'industrial.arrow'), fresh = resolve(work, 'fresh.arrow')
     writeFileSync(path, bytes); writeFileSync(fresh, bytes)

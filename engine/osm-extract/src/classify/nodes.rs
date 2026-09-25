@@ -75,6 +75,9 @@ const NODE_SETTLEMENT_KEYS: &[&str] = &[
     "tourism",
     "leisure",
     "sport",
+    "shooting",
+    "building",
+    "indoor",
     "outdoor_seating",
     "access",
     "name",
@@ -84,7 +87,7 @@ const NODE_SETTLEMENT_KEYS: &[&str] = &[
 fn extract_node_settlement_tags<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> Tags {
     let mut t = Tags::new();
     for (k, v) in tags {
-        if NODE_SETTLEMENT_KEYS.contains(&k) {
+        if NODE_SETTLEMENT_KEYS.contains(&k) || k.starts_with("shooting:") {
             t.insert(k.to_string(), v.to_string());
         }
     }
@@ -101,52 +104,19 @@ pub fn extract_node_settlement_tags_dense(node: &DenseNode) -> Tags {
 
 pub fn is_wind_turbine_node(node: &Node) -> bool {
     scope_keeps(&FeatureType::WindTurbine)
-        && node.tags().any(|(k, v)| {
-            (k == "generator:source" && v == "wind") || (k == "man_made" && v == "wind_turbine")
-        })
+        && super::is_turbine(|key| node.tags().find(|(k, _)| *k == key).map(|(_, v)| v))
 }
-
 pub fn is_wind_turbine_dense(node: &DenseNode) -> bool {
     scope_keeps(&FeatureType::WindTurbine)
-        && node.tags().any(|(k, v)| {
-            (k == "generator:source" && v == "wind") || (k == "man_made" && v == "wind_turbine")
-        })
+        && super::is_turbine(|key| node.tags().find(|(k, _)| *k == key).map(|(_, v)| v))
 }
 
 pub fn extract_turbine_tags_node(node: &Node) -> Tags {
-    let mut t = Tags::new();
-    for (k, v) in node.tags() {
-        if matches!(
-            k,
-            "name"
-                | "height"
-                | "generator:output:electricity"
-                | "rotor:diameter"
-                | "generator:source"
-                | "man_made"
-        ) {
-            t.insert(k.to_string(), v.to_string());
-        }
-    }
-    t
+    super::extract_tags(node.tags(), &FeatureType::WindTurbine)
 }
 
 pub fn extract_turbine_tags_dense(node: &DenseNode) -> Tags {
-    let mut t = Tags::new();
-    for (k, v) in node.tags() {
-        if matches!(
-            k,
-            "name"
-                | "height"
-                | "generator:output:electricity"
-                | "rotor:diameter"
-                | "generator:source"
-                | "man_made"
-        ) {
-            t.insert(k.to_string(), v.to_string());
-        }
-    }
-    t
+    super::extract_tags(node.tags(), &FeatureType::WindTurbine)
 }
 
 pub fn is_airport_node(node: &Node) -> bool {
@@ -218,6 +188,25 @@ pub fn extract_airport_tags_dense(node: &DenseNode) -> Tags {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shooting_subtypes_survive_node_admission() {
+        let tags = [
+            ("sport", "shooting"),
+            ("shooting", "paintball"),
+            ("shooting:range", "indoor"),
+        ];
+        assert_eq!(
+            node_settlement_kind(tags.into_iter()),
+            Some(FeatureType::Leisure)
+        );
+        let kept = extract_node_settlement_tags(tags.into_iter());
+        assert_eq!(kept.get("shooting").map(String::as_str), Some("paintball"));
+        assert_eq!(
+            kept.get("shooting:range").map(String::as_str),
+            Some("indoor")
+        );
+    }
 
     /// A car park NODE carries no area, so it must stay the function POI it
     /// always was: it types the `building=yes` it sits in (a garage), and it

@@ -1,7 +1,7 @@
 //! Per-square Arrow rewrite: split, stamp `rail_traffic_contract=1`, z14-rebatch.
 
 use crate::encode::{encode_children, Expanded, CONTRACT_KEY};
-use crate::merge::{fill_missing_priors, RowTraffic, STATUS_UNKNOWN};
+use crate::merge::{fill_missing_priors, has_class_prior, RowTraffic, STATUS_UNKNOWN};
 use crate::sharing::apply_default_sharing;
 use crate::split::{split_parent, ChildGeom, ChildRow};
 use crate::square_intervals::{load_square_intervals, Interval};
@@ -39,6 +39,7 @@ pub fn finalize_square(
     let reader = FileReader::try_new(Cursor::new(&bytes), None)
         .map_err(|e| format!("arrow open {}: {e}", arrow_path.display()))?;
     let schema = reader.schema();
+    square_store::osm_contract::validate(&schema, "railways")?;
     let finalized = schema.metadata().get(CONTRACT_KEY).map(String::as_str) == Some("1");
     let batches = reader
         .collect::<Result<Vec<_>, _>>()
@@ -50,9 +51,10 @@ pub fn finalize_square(
         for batch in &batches {
             let traffic = crate::rail_traffic::RailTrafficColumns::read(batch)?;
             let service = col_u8(batch, "service")?;
+            let rail_type = col_u8(batch, "rail_type")?;
             for row in 0..batch.num_rows() {
                 let current = traffic.row(row);
-                missing_priors |= service.value(row) == 0
+                missing_priors |= has_class_prior(rail_type.value(row), service.value(row))
                     && (current.passenger.status == STATUS_UNKNOWN
                         || current.freight.status == STATUS_UNKNOWN);
             }

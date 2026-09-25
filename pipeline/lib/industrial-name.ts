@@ -1,5 +1,6 @@
 /** Ordered dev1 name priors, with owned retirement and unchanged native industrial payload. */
 
+import { isGenericIndustrialSource } from './facility-match.js'
 import { resolve } from 'node:path'
 import { DataType, makeVector, Table, type Vector } from 'apache-arrow'
 import { bakedIndustrialCountryReader, gridToLonLat, iso2Code, listPreparedSquares } from './prepared-grid.js'
@@ -83,8 +84,8 @@ export async function enrichIndustrialNames(preparedDirectory: string, squares?:
       let changed = false
       result.rows += rows
       for (let row = 0; row < rows; row++) {
-        // Native turbines keep their independent point-source classification and measurements.
-        if (sourceType.get(row) === 10) continue
+        // Source-specific evidence keeps its classification and measurements.
+        if (!isGenericIndustrialSource(sourceType.get(row) as number)) continue
         const name = names.get(row) as string | null
         if (name?.trim()) result.named++
         const globalRule = name ? industrialNameRule(name) : null

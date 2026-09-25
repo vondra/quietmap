@@ -97,13 +97,9 @@ class WorldBuildInputsTest(unittest.TestCase):
                 from build_square_country_city import expected_contract
                 path = root / 'z9/0/0' / f'{layer}.arrow'
                 expected_stamps, airport_summaries_key = inputs.stamps_the_point_query_expects()
-                # Good files carry the newest accepted stamp (a tuple where the
-                # reader accepts several, e.g. leisure v3+v4).
-                good = {key: (value[-1] if isinstance(value, tuple) else value)
-                        for key, value in expected_stamps.get(layer, {}).items()}
-                metadata = dict([expected_contract(path)]) if layer in ('roads', 'railways', 'industrial') else {
-                    **good, b'qm_blocks': b'AQ==', b'n_days': b'12', airport_summaries_key: b'{}'}
-                if layer in ('airborne', 'ships', 'leisure'):
+                metadata = {**expected_stamps[layer], **dict([expected_contract(path)])} if layer in ('roads', 'railways', 'industrial') else {
+                    **expected_stamps[layer], b'qm_blocks': b'AQ==', b'n_days': b'12', airport_summaries_key: b'{}'}
+                if layer in ('airborne', 'ships'):
                     # A stamp the point query would answer by dropping the layer fails the build.
                     stale_key = next(iter(expected_stamps[layer]))
                     table = pa.table({'value': [37]}).replace_schema_metadata({**metadata, stale_key: b'another'})
@@ -121,16 +117,6 @@ class WorldBuildInputsTest(unittest.TestCase):
                     table = table.replace_schema_metadata({**metadata, contract: b'1', b'qm_blocks': b'AQ=='})
                     with pa.ipc.new_file(path, table.schema) as writer:
                         writer.write_table(table)
-            # A v3 leisure file audits clean too: the point query serves both
-            # stamps, so only a stamp it would drop (above) fails the build.
-            leisure_path = root / 'z9/0/0/leisure.arrow'
-            with pa.ipc.open_file(pa.memory_map(str(leisure_path), 'r')) as reader:
-                leisure_meta = dict(reader.schema.metadata)
-            legacy = expected_stamps['leisure'][b'leisure_contract'][0]
-            table = pa.table({'value': [37]}).replace_schema_metadata(
-                {**leisure_meta, b'leisure_contract': legacy})
-            with pa.ipc.new_file(leisure_path, table.schema) as writer:
-                writer.write_table(table)
             with self.assertRaisesRegex(ValueError, 'no world rows for structures'):
                 inputs.audit_world(root)
             path = root / 'z9/0/0/structures.arrow'

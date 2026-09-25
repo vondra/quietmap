@@ -1,4 +1,5 @@
 /** z9/z30 Arrow fixture shared by road-writer contract tests, and the test-side `qm_blocks` codec. */
+import { osmContract } from './osm-contract.js'
 
 import { after } from 'node:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -119,6 +120,7 @@ export function writeRoadsFixture(name: string, classes: number[], options: Road
   const metadata = new Map<string, string>([
     ['grid', 'z30'],
     ...(indices.length ? [['qm_blocks', encodeQmBlocks([bounds])] as const] : []),
+    osmContract('roads'),
     ...(!options.omitCountryContract ? [['roads_contract', 'country_baked_v1'] as const] : []),
   ])
   const schema = new Schema(table.schema.fields, metadata)

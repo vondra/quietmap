@@ -119,6 +119,10 @@ pub fn row_traffic(
     traffic
 }
 
+pub fn has_class_prior(rail_type: u8, service: u8) -> bool {
+    service == 0 && !matches!(RailType::from_u8(rail_type), RailType::Preserved)
+}
+
 pub fn fill_missing_priors(
     traffic: &mut RowTraffic,
     rail_type: u8,
@@ -126,7 +130,7 @@ pub fn fill_missing_priors(
     service: u8,
     square_country_city: SquareCountryCity,
 ) {
-    if service != 0 {
+    if !has_class_prior(rail_type, service) {
         return;
     }
     let rail = RailType::from_u8(rail_type);
@@ -183,6 +187,26 @@ mod tests {
             freight_status,
             matching: 1,
         }
+    }
+
+    #[test]
+    fn heritage_keeps_unknown_categories_and_observed_counts() {
+        for usage in [0, 1, 2, 3, 4] {
+            let traffic = row_traffic(&[], 0.0, 50.0, 5, usage, 0, SquareCountryCity::UNKNOWN);
+            assert_eq!(traffic, RowTraffic::default());
+        }
+        let traffic = row_traffic(
+            &[interval(0.0, 50.0, 3.0, 0.0, STATUS_UNKNOWN)],
+            0.0,
+            50.0,
+            5,
+            4,
+            0,
+            SquareCountryCity::UNKNOWN,
+        );
+        assert!((traffic.passenger.periods.iter().sum::<f64>() - 3.0).abs() < 1e-9);
+        assert_eq!(traffic.passenger.source_id, 100);
+        assert_eq!(traffic.freight, CategoryFlow::default());
     }
 
     #[test]

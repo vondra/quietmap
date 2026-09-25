@@ -1,4 +1,5 @@
 /** Native IPC name priors retain measured authority, duplicate suppression and repeatable lifecycle. */
+import { osmContract } from './osm-contract.js'
 
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -10,7 +11,7 @@ import { enrichIndustrialNames, industrialNameRule, koreanIndustrialNameRule } f
 import { iso2Code } from './prepared-grid.js'
 import { encodeQmBlocks } from './road-test-fixture.js'
 
-interface Row { name: string | null; source?: number; nace?: number; wind?: boolean; suppressed?: number; lat?: number; lon?: number; country?: string }
+interface Row { name: string | null; source?: number; nace?: number; wind?: boolean; sourceType?: number; suppressed?: number; lat?: number; lon?: number; country?: string }
 const gx = (longitude: number) => Math.round((longitude / 360 + .5) * 2 ** 30)
 const gy = (latitude: number) => Math.round((Math.log(Math.tan(Math.PI / 4 + latitude * Math.PI / 360)) / (2 * Math.PI) + .5) * 2 ** 30)
 function store(path: string, rows: Row[], fresh = false) {
@@ -18,7 +19,7 @@ function store(path: string, rows: Row[], fresh = false) {
     centroid_gx: Int32Array.from(rows, row => gx(row.lon ?? 14)),
     centroid_gy: Int32Array.from(rows, row => gy(row.lat ?? 50)),
     country_iso: Uint16Array.from(rows, row => iso2Code(row.country ?? 'CZ')),
-    source_id: Uint16Array.from(rows, r => r.source ?? 0), source_type: Uint8Array.from(rows, r => r.wind ? 10 : 0),
+    source_id: Uint16Array.from(rows, r => r.source ?? 0), source_type: Uint8Array.from(rows, r => r.sourceType ?? (r.wind ? 10 : 0)),
     suppressed: Uint8Array.from(rows, r => r.suppressed ?? 0),
     name: vectorFromArray(rows.map(r => r.name), new Utf8()),
     hub_height: Float32Array.from(rows, () => 80), rated_power_kw: Float32Array.from(rows, () => 2000),
@@ -26,7 +27,7 @@ function store(path: string, rows: Row[], fresh = false) {
   if (!fresh) table = table.assign(makeTable({ nace_4digit: Uint16Array.from(rows, r => r.nace ?? 0) }))
   const parts = rows.length > 1 ? [table.slice(0, 1), table.slice(1)] : [table]
   const schema = new Schema(table.schema.fields.map(f => new Field(f.name, f.type, f.nullable, new Map([['original', f.name]]))),
-    new Map([['grid', 'z30'], ['industrial_contract', 'country_land_baked_v1'], ['native', 'preserve'], ['qm_blocks', encodeQmBlocks(parts.map(() => [49, 13, 51, 16]))]]))
+    new Map([osmContract('industrial'), ['grid', 'z30'], ['industrial_contract', 'country_land_baked_v1'], ['native', 'preserve'], ['qm_blocks', encodeQmBlocks(parts.map(() => [49, 13, 51, 16]))]]))
   const result = new Table(schema, parts.flatMap(p => p.batches.map(b => new RecordBatch(schema, b.data))))
   mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, tableToIPC(result, 'file'))
   return tableFromIPC(readFileSync(path))
@@ -118,5 +119,17 @@ test('Korean names use their national sector detail, exclude North Korea and con
     const bytes = readFileSync(path)
     assert.equal((await enrichIndustrialNames(root)).squaresUpdated, 0)
     assert.deepEqual(readFileSync(path), bytes)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+
+test('dedicated power and inactive sources cannot acquire generic name priors', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'industrial-name-power-'))
+  try {
+    const path = resolve(root, 'z9/275/173/industrial.arrow')
+    store(path, [10, 11, 12, 13, 14, 15].map(sourceType => ({ name: 'Power plant quarry', sourceType })))
+    const before = readFileSync(path)
+    assert.equal((await enrichIndustrialNames(root)).classified, 0)
+    assert.deepEqual(readFileSync(path), before)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

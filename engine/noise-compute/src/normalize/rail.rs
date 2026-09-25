@@ -81,7 +81,7 @@ pub fn normalize_rail(input: RawRailInput) -> NormalizedRail {
         source_height_m: SOURCE_HEIGHT_RAIL,
         speed_kmh: if input.maxspeed > 0 {
             f64::from(input.maxspeed)
-        } else if input.highspeed {
+        } else if input.highspeed && !matches!(rail_type, RailType::Preserved) {
             300.0
         } else {
             railway::default_speed(rail_type)
@@ -93,6 +93,28 @@ pub fn normalize_rail(input: RawRailInput) -> NormalizedRail {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heritage_has_no_ordinary_traffic_speed_or_emission_prior() {
+        let kind = RailType::from_u8(5);
+        for usage in [0, 1, 2, 3, 4] {
+            assert_eq!(railway::default_traffic(kind, usage), (0.0, 0.0));
+        }
+        assert_eq!(railway::default_speed(kind), 0.0);
+        for highspeed in [false, true] {
+            let rail = normalize_rail(RawRailInput {
+                rail_type: 5,
+                maxspeed: 0,
+                highspeed,
+                traffic: RailTraffic::default(),
+            });
+            assert_eq!(rail.speed_kmh, 0.0);
+        }
+        assert!(railway::railway_emission(kind, 40.0, 2.0, 0.0, 12.0)
+            .iter()
+            .all(|band| *band == f64::NEG_INFINITY));
+        assert_eq!(crate::source_names::rail_type_name(5), "heritage");
+    }
 
     #[test]
     fn prepared_zero_and_fractional_periods_are_never_defaulted_or_resplit() {
