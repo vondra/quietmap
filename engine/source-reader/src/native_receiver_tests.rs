@@ -80,7 +80,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     let popup = |lat, lon| -> Value {
         super::reset_store(root);
         let mut value: Value =
-            serde_json::from_str(&crate::query_noise_at_point(lat, lon).unwrap()).unwrap();
+            serde_json::from_str(&crate::query_noise_at_point(lat, lon, None).unwrap()).unwrap();
         value.as_object_mut().unwrap().remove("timings");
         value
     };
@@ -106,6 +106,30 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         building_distance(&outside),
         "moving an indoor receiver must update source distances before screening"
     );
+    // The answer names the point it computed: the facade point for an indoor click, 4 m up.
+    let receiver = |value: &Value| {
+        let receiver = &value["receiver"];
+        [&receiver["lat"], &receiver["lng"], &receiver["height_m"]].map(|v| v.as_f64().unwrap())
+    };
+    let default_height = noise_compute::constants::DEFAULT_RECEIVER_HEIGHT;
+    assert_eq!(receiver(&inside), [facade_lat, facade_lon, default_height]);
+    assert_eq!(receiver(&outside), [facade_lat, facade_lon, default_height]);
+    // A microphone height is a runtime receiver choice: an explicit 4 m is the default answer,
+    // another height moves every layer's geometry, and a height under the floor is refused.
+    let popup_at_height = |height: f64| -> Value {
+        super::reset_store(root);
+        let mut value: Value = serde_json::from_str(
+            &crate::query_noise_at_point(facade_lat, facade_lon, Some(height)).unwrap(),
+        )
+        .unwrap();
+        value.as_object_mut().unwrap().remove("timings");
+        value
+    };
+    assert_eq!(popup_at_height(default_height), outside);
+    let low = popup_at_height(1.2);
+    assert_eq!(receiver(&low), [facade_lat, facade_lon, 1.2]);
+    assert_ne!(low["total_lden"], outside["total_lden"]);
+    assert!(crate::query_noise_at_point(facade_lat, facade_lon, Some(0.4)).is_err());
     let airborne = |value: &Value| {
         value["sources"]
             .as_array()
@@ -164,7 +188,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         airborne(&expected_north)["lden"]
     );
     let mut warm_north: Value =
-        serde_json::from_str(&crate::query_noise_at_point(north.0, north.1).unwrap()).unwrap();
+        serde_json::from_str(&crate::query_noise_at_point(north.0, north.1, None).unwrap()).unwrap();
     warm_north.as_object_mut().unwrap().remove("timings");
     assert_eq!(
         warm_north, expected_north,
@@ -190,6 +214,6 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     // even though its paired index still maps.
     arrow_io::write_airborne(&path, std::slice::from_ref(&row), 12, 0).unwrap();
     fx::write_structure_file(&facade_dir.join("structures.arrow"), &[], false);
-    let refused = crate::query_noise_at_point(facade_lat, facade_lon).unwrap_err();
+    let refused = crate::query_noise_at_point(facade_lat, facade_lon, None).unwrap_err();
     assert!(refused.to_string().contains("structures_contract mismatch"), "{refused}");
 }

@@ -28,10 +28,10 @@ async function waitFor(predicate: () => boolean, timeoutMs = 250): Promise<void>
 }
 
 class FakeWorker extends EventEmitter implements NoiseOnflyWorker {
-  readonly postMessages: Array<{ id: number; lat: number; lng: number; op?: string }> = []
+  readonly postMessages: Array<{ id: number; lat: number; lng: number; receiverHeightM?: number; op?: string }> = []
   terminateCalls = 0
 
-  postMessage(message: { id: number; lat: number; lng: number; op?: string }): void {
+  postMessage(message: { id: number; lat: number; lng: number; receiverHeightM?: number; op?: string }): void {
     this.postMessages.push(message)
   }
 
@@ -50,6 +50,37 @@ class FakeWorker extends EventEmitter implements NoiseOnflyWorker {
     })
   }
 }
+
+test('a receiver height travels to the worker and keys its own cached answer', async (t) => {
+  const workers: FakeWorker[] = []
+  const supervisor = new NoiseOnflySupervisor({
+    createWorker: () => {
+      const worker = new FakeWorker()
+      workers.push(worker)
+      return worker
+    },
+    maxQueue: 4,
+    queueTimeoutMs: 1000,
+    workTimeoutMs: 1000,
+  })
+  t.after(async () => {
+    await supervisor.close()
+  })
+
+  const atDefault = supervisor.queryNoiseAtPoint(50.1, 14.4)
+  await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
+  assert.equal(workers[0].postMessages[0].receiverHeightM, undefined)
+  workers[0].replyAt(0, '{"receiver":{"height_m":4}}')
+  assert.equal(await atDefault, '{"receiver":{"height_m":4}}')
+
+  const atMicrophone = supervisor.queryNoiseAtPoint(50.1, 14.4, undefined, 1.2)
+  await waitFor(() => workers[0].postMessages.length === 2)
+  assert.equal(workers[0].postMessages[1].receiverHeightM, 1.2)
+  workers[0].replyAt(1, '{"receiver":{"height_m":1.2}}')
+  assert.equal(await atMicrophone, '{"receiver":{"height_m":1.2}}')
+  assert.equal(supervisor.cachedSummary(50.1, 14.4), '{"receiver":{"height_m":4}}')
+  assert.equal(supervisor.cachedSummary(50.1, 14.4, 1.2), '{"receiver":{"height_m":1.2}}')
+})
 
 test('queue cap rejects instead of spawning extra work', async (t) => {
   const workers: FakeWorker[] = []

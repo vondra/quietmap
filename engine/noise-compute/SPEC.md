@@ -13,7 +13,11 @@ steps up to 100 metres, selects the facade receiver before any source gate.
 Reload obstacle indexes at that receiver, and use its position and elevation
 for source selection and propagation. Project the facade result to the indoor
 estimate only after computation. If that search finds no exterior point, retain
-the clicked position as before.
+the clicked position as before. The receiver stands `DEFAULT_RECEIVER_HEIGHT`
+(4 m) above the DEM unless the caller names another height of at least
+`RECEIVER_HEIGHT_FLOOR_M`, as validation does for a microphone's height; every
+layer reads `Receiver::altitude_m`. The answer's `receiver` names the point and
+height computed.
 
 Prepared airborne sub-segments are stored once, as rows of the z9 square that
 owns the midpoint of their stored geometry (`airborne_segments_z9_v2`); the

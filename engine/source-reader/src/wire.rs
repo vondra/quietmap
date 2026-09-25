@@ -186,10 +186,20 @@ impl From<noise_compute::types::LayerTimings> for WireTimings {
     }
 }
 
+/// The point the levels were computed at: the clicked point outdoors, the
+/// selected facade point inside a building, at `height_m` above the DEM.
+#[derive(Serialize)]
+pub struct WireReceiver {
+    pub lat: f64,
+    pub lng: f64,
+    pub height_m: f64,
+}
+
 #[derive(Serialize)]
 pub struct WireResult {
     pub center: [f64; 2],
     pub elevation_m: f64,
+    pub receiver: WireReceiver,
     #[serde(serialize_with = "noise_compute::types::serialize_lden_db_opt")]
     /// Aggregate display total. Inside an enclosed footprint this is the indoor
     /// estimate, and so are `sources` and `top_contributors`; `facade_lden`
@@ -239,12 +249,18 @@ pub fn build_wire_result(
     lat: f64,
     lng: f64,
     elevation: f64,
+    receiver: &noise_compute::types::Receiver,
     indoor: Option<(noise_compute::envelope::EnvelopeClass, f64, f64)>,
     unavailable_layers: Vec<&'static str>,
 ) -> WireResult {
     WireResult {
         center: [lat, lng],
         elevation_m: round1(elevation),
+        receiver: WireReceiver {
+            lat: receiver.lat,
+            lng: receiver.lon,
+            height_m: receiver.height_m,
+        },
         total_lden: result.total.lden_db,
         total_lden_free: result.total_free.lden_db,
         sources: result.sources.into_iter().map(WireSource::from).collect(),

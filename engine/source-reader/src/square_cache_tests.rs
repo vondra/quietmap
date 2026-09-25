@@ -243,7 +243,7 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
         std::fs::write(&path, b"not Arrow").unwrap();
         reset_store(tmp.path());
         let pure = super::collect_sources_at_point(tmp.path(), lat, lon).unwrap_err();
-        let native = super::query_noise_at_point(lat, lon).unwrap_err();
+        let native = super::query_noise_at_point(lat, lon, None).unwrap_err();
         assert!(pure.contains(&path.display().to_string()), "{pure}");
         assert!(
             native.reason.contains(&native_file.display().to_string()),
@@ -287,7 +287,7 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
         assert!(pure.contains("batch 1"), "{pure}");
         reset_store(tmp.path());
         for _ in 0..2 {
-            let native = super::query_noise_at_point(lat, lon).unwrap_err();
+            let native = super::query_noise_at_point(lat, lon, None).unwrap_err();
             assert!(
                 native.reason.contains(&native_file.display().to_string()),
                 "{native}"

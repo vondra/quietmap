@@ -34,7 +34,7 @@ const ROOT_KEYS = [
 ]
 const ROOT_OPTIONAL_KEYS = [
   'center', 'h3_center', 'envelope_class', 'envelope_delta_db', 'facade_lden',
-  'indoor_lden_tilted', 'segments', 'unavailable_layers',
+  'indoor_lden_tilted', 'segments', 'unavailable_layers', 'receiver',
 ]
 // Emission layers the server answered without; the comparison keeps the key, so an answer
 // that lacks a layer on one side only is a structural difference, never a quiet delta.
@@ -254,6 +254,7 @@ export function validatePopupPayload(value, point, label = 'payload') {
   const layers = array(segments, `${label}.segments`).map((segment, i) => validateSegment(segment, `${label}.segments[${i}]`))
   validateMeta(value.segments_meta, layers, `${label}.segments_meta`)
   numericObject(value.timings, `${label}.timings`, TIMING_KEYS)
+  if (Object.hasOwn(value, 'receiver')) numericObject(value.receiver, `${label}.receiver`, ['lat', 'lng', 'height_m'])
   if (Object.hasOwn(value, 'unavailable_layers')) {
     const dropped = array(value.unavailable_layers, `${label}.unavailable_layers`)
     if (dropped.length === 0 || dropped.some((layer) => !UNAVAILABLE_LAYERS.has(layer))) {

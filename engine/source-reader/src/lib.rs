@@ -361,10 +361,16 @@ mod building_type_tests {
 
 /// Compute full noise at a point using noise-compute engine.
 /// Returns JSON with total Lden, per-source breakdown, top contributors.
+/// `receiver_height_m` (above the DEM, default 4 m) lets validation score the
+/// model at a microphone's own height; every layer reads `Receiver::altitude_m`.
 #[cfg(feature = "node")]
 #[napi]
-pub fn query_noise_at_point(lat: f64, lng: f64) -> napi::Result<String> {
-    query_noise_impl(lat, lng, SEGMENT_TOP_K_PER_KIND)
+pub fn query_noise_at_point(
+    lat: f64,
+    lng: f64,
+    receiver_height_m: Option<f64>,
+) -> napi::Result<String> {
+    query_noise_impl(lat, lng, receiver_height_m, SEGMENT_TOP_K_PER_KIND)
 }
 
 /// Variant of `query_noise_at_point` with a much higher per-kind segment cap
@@ -374,11 +380,27 @@ pub fn query_noise_at_point(lat: f64, lng: f64) -> napi::Result<String> {
 #[cfg(feature = "node")]
 #[napi]
 pub fn query_noise_at_point_unfiltered(lat: f64, lng: f64) -> napi::Result<String> {
-    query_noise_impl(lat, lng, SEGMENT_TOP_K_PER_KIND_FULL)
+    query_noise_impl(lat, lng, None, SEGMENT_TOP_K_PER_KIND_FULL)
 }
 
 #[cfg(feature = "node")]
-fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<String> {
+fn query_noise_impl(
+    lat: f64,
+    lng: f64,
+    receiver_height_m: Option<f64>,
+    top_k_per_kind: usize,
+) -> napi::Result<String> {
+    let receiver_height_m =
+        receiver_height_m.unwrap_or(noise_compute::constants::DEFAULT_RECEIVER_HEIGHT);
+    if !(receiver_height_m.is_finite()
+        && receiver_height_m
+            >= noise_compute::propagation::path_effects::RECEIVER_HEIGHT_FLOOR_M)
+    {
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!("receiver height {receiver_height_m} m is below the engine's receiver floor"),
+        ));
+    }
     // Per-stage timing probes (env-gated: `POPUP_TIMING=1` to enable). Inline
     // `Instant::now()` is cheaper and less destructive than perf/flamegraph
     // for popup-scale work, and lets us watch one number per stage land in
@@ -455,11 +477,14 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         set: &obstacle_set,
     };
     let rasters: &dyn noise_compute::types::RasterSampler = &vector_refl;
-    let receiver = noise_compute::types::Receiver::new(
-        facade_lat,
-        facade_lng,
-        rasters.elevation(facade_lat, facade_lng),
-    );
+    let receiver = noise_compute::types::Receiver {
+        height_m: receiver_height_m,
+        ..noise_compute::types::Receiver::new(
+            facade_lat,
+            facade_lng,
+            rasters.elevation(facade_lat, facade_lng),
+        )
+    };
 
     let mut traces = noise_compute::types::TraceCollector::new();
     let mut result = noise_compute::compute_at_point(
@@ -532,6 +557,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         lat,
         lng,
         elevation,
+        &receiver,
         indoor.map(|(class, delta)| (class, delta, facade_lden)),
         sources.unavailable_layers,
     );
