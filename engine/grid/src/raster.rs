@@ -1,11 +1,9 @@
-//! Native one-arcsecond node windows physically partitioned by z9, including both poles.
+//! z9-partitioned node windows on a native lattice (1″ terrain, 0.25° ERA5), including both poles.
 
 use crate::{geo::normalize_longitude, Square, Z9_TILES_PER_AXIS};
 
 pub const NODES_PER_DEGREE: i32 = 3600;
 pub const SOURCE_TILE_SIDE: usize = NODES_PER_DEGREE as usize + 1;
-pub const LONGITUDE_NODES: i32 = 360 * NODES_PER_DEGREE;
-pub const POLE_NODE: i32 = 90 * NODES_PER_DEGREE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RasterWindow {
@@ -13,6 +11,7 @@ pub struct RasterWindow {
     pub west_node: i32,
     pub rows: u32,
     pub columns: u32,
+    pub nodes_per_degree: i32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -25,34 +24,44 @@ pub struct RasterSamplePosition {
     pub nearest_column: u32,
 }
 
-fn latitude_edge_node(y: u16) -> f64 {
+fn latitude_edge_node(y: u16, nodes_per_degree: i32) -> f64 {
     let mercator = std::f64::consts::PI * (1.0 - 2.0 * f64::from(y) / f64::from(Z9_TILES_PER_AXIS));
-    mercator.sinh().atan().to_degrees() * f64::from(NODES_PER_DEGREE)
+    mercator.sinh().atan().to_degrees() * f64::from(nodes_per_degree)
 }
 
 impl RasterWindow {
     pub fn for_square(square: Square) -> Self {
+        Self::for_square_with_density(square, NODES_PER_DEGREE)
+    }
+
+    /// The same floor/ceil edge bracketing on a coarser lattice (ERA5 meteorology uses 4 nodes
+    /// per degree), so every square still interpolates from its own file alone.
+    pub fn for_square_with_density(square: Square, nodes_per_degree: i32) -> Self {
         assert!(square.x < Z9_TILES_PER_AXIS && square.y < Z9_TILES_PER_AXIS);
+        assert!(nodes_per_degree >= 1);
         let axis = i32::from(Z9_TILES_PER_AXIS);
+        let longitude_nodes = 360 * nodes_per_degree;
+        let pole_node = 90 * nodes_per_degree;
         // Longitude edges have a denominator of 512; keep exact integer floor/ceil.
-        let west_node = i32::from(square.x) * LONGITUDE_NODES / axis - LONGITUDE_NODES / 2;
+        let west_node = i32::from(square.x) * longitude_nodes / axis - longitude_nodes / 2;
         let east_node =
-            ((i32::from(square.x) + 1) * LONGITUDE_NODES + axis - 1) / axis - LONGITUDE_NODES / 2;
+            ((i32::from(square.x) + 1) * longitude_nodes + axis - 1) / axis - longitude_nodes / 2;
         let north_node = if square.y == 0 {
-            POLE_NODE
+            pole_node
         } else {
-            latitude_edge_node(square.y).ceil() as i32
+            latitude_edge_node(square.y, nodes_per_degree).ceil() as i32
         };
         let south_node = if square.y == Z9_TILES_PER_AXIS - 1 {
-            -POLE_NODE
+            -pole_node
         } else {
-            latitude_edge_node(square.y + 1).floor() as i32
+            latitude_edge_node(square.y + 1, nodes_per_degree).floor() as i32
         };
         Self {
             north_node,
             west_node,
             rows: (north_node - south_node + 1) as u32,
             columns: (east_node - west_node + 1) as u32,
+            nodes_per_degree,
         }
     }
 
@@ -69,6 +78,8 @@ impl RasterWindow {
     }
 
     pub fn sample_position(self, lat: f64, lon: f64) -> Option<RasterSamplePosition> {
+        // The 1″ source-tile sampler; ERA5 windows sample by global node index instead.
+        debug_assert_eq!(self.nodes_per_degree, NODES_PER_DEGREE);
         if !lat.is_finite() || !lon.is_finite() || !(-90.0..=90.0).contains(&lat) {
             return None;
         }
@@ -241,5 +252,71 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn era5_windows_bracket_each_square_with_four_to_five_columns() {
+        // Golden windows shared with the meteorology producer, which pins the same values.
+        for ((x, y), west, north, rows, columns) in [
+            ((276, 173), 56, 202, 4, 5),
+            ((256, 256), 0, 0, 4, 4),
+            ((278, 71), 61, 313, 2, 5),
+            ((256, 0), 0, 360, 22, 4),
+            ((256, 511), 0, -339, 22, 4),
+            ((0, 256), -720, 0, 4, 4),
+            ((511, 256), 717, 0, 4, 4),
+        ] {
+            let window = RasterWindow::for_square_with_density(Square { x, y }, 4);
+            assert_eq!(
+                (
+                    window.west_node,
+                    window.north_node,
+                    window.rows,
+                    window.columns,
+                    window.nodes_per_degree
+                ),
+                (west, north, rows, columns, 4),
+                "square {x}/{y}"
+            );
+        }
+        let mut records = 0usize;
+        for x in 0..512 {
+            for y in 0..512 {
+                let window = RasterWindow::for_square_with_density(Square { x, y }, 4);
+                assert!((4..=5).contains(&window.columns), "square {x}/{y}");
+                assert!(window.rows >= 2, "square {x}/{y}");
+                records += window.cell_count();
+            }
+        }
+        assert_eq!(records, 4_236_544);
+        for index in 0..511 {
+            let west = RasterWindow::for_square_with_density(Square { x: index, y: 100 }, 4);
+            let east = RasterWindow::for_square_with_density(Square { x: index + 1, y: 100 }, 4);
+            assert!((0..=1).contains(&(west.east_node() - east.west_node)));
+            let north = RasterWindow::for_square_with_density(Square { x: 100, y: index }, 4);
+            let south = RasterWindow::for_square_with_density(Square { x: 100, y: index + 1 }, 4);
+            assert!((0..=1).contains(&(south.north_node - north.south_node())));
+        }
+    }
+
+    #[test]
+    fn density_3600_matches_for_square_exactly() {
+        for square in [
+            Square { x: 276, y: 173 },
+            Square { x: 0, y: 0 },
+            Square { x: 511, y: 511 },
+            Square { x: 256, y: 1 },
+        ] {
+            assert_eq!(
+                RasterWindow::for_square(square),
+                RasterWindow::for_square_with_density(square, NODES_PER_DEGREE)
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_density_is_rejected() {
+        RasterWindow::for_square_with_density(Square { x: 0, y: 0 }, 0);
     }
 }
