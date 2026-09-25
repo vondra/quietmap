@@ -12,6 +12,9 @@ pub struct Interval {
     pub segment_idx: i16,
     pub from_m: f64,
     pub to_m: f64,
+    /// Writing timetable's country (`rail-intervals.<ISO2>.arrow`): claims on rows of another
+    /// country are that timetable's cross-border services, never its domestic total.
+    pub country: [u8; 2],
     pub source_id: u16,
     pub passenger: f64,
     pub freight: f64,
@@ -43,6 +46,10 @@ pub fn load_square_intervals(
             continue;
         };
         let failure = |error: &dyn std::fmt::Display| format!("{}: {error}", path.display());
+        let country_iso: [u8; 2] = country
+            .as_bytes()
+            .try_into()
+            .map_err(|_| failure(&"invalid rail intervals country"))?;
         let reader = FileReader::try_new(File::open(&path).map_err(|e| failure(&e))?, None)
             .map_err(|e| failure(&e))?;
         if reader
@@ -81,6 +88,7 @@ pub fn load_square_intervals(
                     segment_idx: segment_idx.value(row),
                     from_m: from_m.value(row),
                     to_m: to_m.value(row),
+                    country: country_iso,
                     source_id: source_id.value(row),
                     passenger: passenger.value(row),
                     freight: freight.value(row),

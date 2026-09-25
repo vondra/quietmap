@@ -305,7 +305,10 @@ pub fn default_traffic(rail_type: RailType, usage: u8) -> (f64, f64) {
         RailType::Funicular => (40.0, 0.0),   // funicular: frequent but short
         RailType::Preserved => (0.0, 0.0),
         RailType::Rail => match usage {
-            0 => (80.0, 20.0), // main line: 80 passenger + 20 freight
+            // Main-line freight 85: median 84.5 (mean 79.8) of EBA Lärm-Monitoring 2023 24 h
+            // freight counts at the 14 training-square stations; no timetable carries freight,
+            // so the prior is the model on unevidenced mains (the 20 it replaces was unmeasured).
+            0 => (80.0, 85.0),
             1 => (30.0, 5.0),  // branch: 30 passenger + 5 freight
             2 => (0.0, 15.0),  // industrial siding: freight only
             _ => (40.0, 10.0), // unknown: moderate

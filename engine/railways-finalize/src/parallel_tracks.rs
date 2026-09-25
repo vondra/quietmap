@@ -143,66 +143,53 @@ fn cross_sections(rows: &[Expanded], tracks: &[Option<Track>]) -> Vec<Vec<usize>
     sections
 }
 
-/// The line value of one category over a cross-section, divided among its tracks.
-fn track_share(
+/// Highest-ranked claim of one scope (domestic or foreign) over a cross-section.
+/// A residual yields to ranked evidence elsewhere on the line: a no-service stamp where the
+/// walk routed trains is walk artifact, not silence.
+fn scope_winner(
     own_iso: [u8; 2],
     members: &[usize],
-    evidence: &[RowTraffic],
-    priors: &[RowTraffic],
+    flows: &[RowTraffic],
+    line_ranked: bool,
     category: fn(&RowTraffic) -> CategoryFlow,
-) -> CategoryFlow {
-    let tracks = members.len() as f64;
-    let line_is_evidenced = members.iter().any(|&member| {
-        [evidence[member].passenger, evidence[member].freight]
-            .iter()
-            .any(|flow| flow.status != STATUS_UNKNOWN && !is_residual(flow.source_id))
-    });
-    let mut line_source = 0u16;
+) -> u16 {
+    let mut winner = 0u16;
     for &member in members {
-        let flow = category(&evidence[member]);
+        let flow = category(&flows[member]);
         if flow.status == STATUS_UNKNOWN
             || !source_applies_to_row(flow.source_id, own_iso)
-            || (line_is_evidenced && is_residual(flow.source_id))
+            || (line_ranked && is_residual(flow.source_id))
         {
             continue;
         }
-        if line_source != 0 && blocks_foreign_national(line_source, flow.source_id) {
+        if winner != 0 && blocks_foreign_national(winner, flow.source_id) {
             continue;
         }
-        if should_overwrite(line_source, flow.source_id) {
-            line_source = flow.source_id;
+        if should_overwrite(winner, flow.source_id) {
+            winner = flow.source_id;
         }
     }
-    if line_source == 0 {
-        // No track carries evidence: the line's class prior, once (the largest of its tracks' classes).
-        let prior = members
-            .iter()
-            .map(|&member| category(&priors[member]))
-            .fold(CategoryFlow::default(), |best, flow| {
-                let total = |f: &CategoryFlow| f.periods.iter().sum::<f64>();
-                if best.status == STATUS_UNKNOWN || total(&flow) > total(&best) {
-                    flow
-                } else {
-                    best
-                }
-            });
-        return CategoryFlow {
-            periods: prior.periods.map(|value| value / tracks),
-            ..prior
-        };
-    }
+    winner
+}
+
+/// Whole-line value of one scope's winner: a measured source counts the trains of each track
+/// (a routed trip sits on the track it used, a platform stop counts its own direction), so the
+/// line carries their sum; a proxy or residual repeats the line's value on every track it stamps.
+fn scope_value(
+    members: &[usize],
+    flows: &[RowTraffic],
+    winner: u16,
+    category: fn(&RowTraffic) -> CategoryFlow,
+) -> CategoryFlow {
     let carriers: Vec<CategoryFlow> = members
         .iter()
-        .map(|&member| category(&evidence[member]))
-        .filter(|flow| flow.status != STATUS_UNKNOWN && flow.source_id == line_source)
+        .map(|&member| category(&flows[member]))
+        .filter(|flow| flow.status != STATUS_UNKNOWN && flow.source_id == winner)
         .collect();
-    // A measured source counts the trains of each track (a routed trip sits on the track it used,
-    // a platform stop counts its own direction), so the line carries their sum; a proxy or residual
-    // repeats the line's value on every track it stamps.
-    let divisor = if stamps_whole_line(line_source) {
-        tracks * carriers.len() as f64
+    let divisor = if stamps_whole_line(winner) {
+        carriers.len() as f64
     } else {
-        tracks
+        1.0
     };
     let mut periods = [0.0; 3];
     for flow in &carriers {
@@ -217,8 +204,98 @@ fn track_share(
         } else {
             STATUS_ESTIMATED
         },
-        source_id: line_source,
+        source_id: winner,
         matching: carriers.iter().fold(0, |mask, flow| mask | flow.matching),
+    }
+}
+
+/// The line's class prior, once (the largest of its tracks' classes).
+fn line_prior(
+    members: &[usize],
+    priors: &[RowTraffic],
+    category: fn(&RowTraffic) -> CategoryFlow,
+) -> CategoryFlow {
+    members
+        .iter()
+        .map(|&member| category(&priors[member]))
+        .fold(CategoryFlow::default(), |best, flow| {
+            let total = |f: &CategoryFlow| f.periods.iter().sum::<f64>();
+            if best.status == STATUS_UNKNOWN || total(&flow) > total(&best) {
+                flow
+            } else {
+                best
+            }
+        })
+}
+
+fn daily_total(flow: &CategoryFlow) -> f64 {
+    flow.periods.iter().sum()
+}
+
+/// The line value of one category over a cross-section, divided among its tracks.
+///
+/// A timetable aims at full domestic coverage, so domestic evidence is trusted where the walk
+/// covered every track (a ranked claim or a residual no-service stamp); where it covered only
+/// some tracks the walked sum is a lower bound and the class prior stands for the line.
+/// Neighbour timetables only ever see cross-border services: they bound a line the domestic
+/// timetable missed and lose to domestic evidence, but ranked neighbour trains still mark the
+/// line active, yielding a domestic no-service stamp beside them.
+fn track_share(
+    own_iso: [u8; 2],
+    members: &[usize],
+    domestic: &[RowTraffic],
+    foreign: &[RowTraffic],
+    priors: &[RowTraffic],
+    category: fn(&RowTraffic) -> CategoryFlow,
+) -> CategoryFlow {
+    let tracks = members.len() as f64;
+    // Ranked evidence from either timetable marks the line active; a no-service stamp beside
+    // it is a walk gap on that piece (Revnice segment 2), not silence.
+    let line_ranked = members.iter().any(|&member| {
+        [
+            domestic[member].passenger,
+            domestic[member].freight,
+            foreign[member].passenger,
+            foreign[member].freight,
+        ]
+        .iter()
+        .any(|flow| flow.status != STATUS_UNKNOWN && !is_residual(flow.source_id))
+    });
+    let prior = line_prior(members, priors, category);
+    let winner = scope_winner(own_iso, members, domestic, line_ranked, category);
+    let line = if winner != 0 && !is_residual(winner) {
+        let value = scope_value(members, domestic, winner, category);
+        if stamps_whole_line(winner) {
+            // A proxy estimates the line itself, not the tracks it stamps.
+            value
+        } else {
+            let fully_covered = members
+                .iter()
+                .all(|&member| category(&domestic[member]).status != STATUS_UNKNOWN);
+            if fully_covered || daily_total(&value) > daily_total(&prior) {
+                value
+            } else {
+                prior
+            }
+        }
+    } else if is_residual(winner) {
+        scope_value(members, domestic, winner, category)
+    } else {
+        let abroad = scope_winner(own_iso, members, foreign, line_ranked, category);
+        let value = if abroad == 0 {
+            CategoryFlow::default()
+        } else {
+            scope_value(members, foreign, abroad, category)
+        };
+        if daily_total(&value) > daily_total(&prior) {
+            value
+        } else {
+            prior
+        }
+    };
+    CategoryFlow {
+        periods: line.periods.map(|value| value / tracks),
+        ..line
     }
 }
 
@@ -226,7 +303,8 @@ fn track_share(
 pub(crate) fn allocate_over_parallel_tracks(rows: &mut [Expanded]) {
     let tracks = project_tracks(rows);
     let sections = cross_sections(rows, &tracks);
-    let evidence: Vec<RowTraffic> = rows.iter().map(|row| row.child.traffic).collect();
+    let domestic: Vec<RowTraffic> = rows.iter().map(|row| row.child.traffic).collect();
+    let foreign: Vec<RowTraffic> = rows.iter().map(|row| row.child.foreign).collect();
     let priors: Vec<RowTraffic> = rows.iter().map(|row| row.prior).collect();
     for (index, row) in rows.iter_mut().enumerate() {
         if row.service != 0 {
@@ -234,8 +312,22 @@ pub(crate) fn allocate_over_parallel_tracks(rows: &mut [Expanded]) {
         }
         let members = &sections[index];
         row.child.traffic = RowTraffic {
-            passenger: track_share(row.country_iso, members, &evidence, &priors, |t| t.passenger),
-            freight: track_share(row.country_iso, members, &evidence, &priors, |t| t.freight),
+            passenger: track_share(
+                row.country_iso,
+                members,
+                &domestic,
+                &foreign,
+                &priors,
+                |t| t.passenger,
+            ),
+            freight: track_share(
+                row.country_iso,
+                members,
+                &domestic,
+                &foreign,
+                &priors,
+                |t| t.freight,
+            ),
         };
     }
 }

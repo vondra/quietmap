@@ -296,7 +296,7 @@ fn partial_evidence_preserves_middle_counts_and_zero_with_class_priors_on_uncove
             if result.passenger.matching == 2 {
                 observed += 1;
                 assert!((passenger - daily_passenger).abs() < 1e-9);
-                assert!((freight - if evidence_status == 1 { 0.0 } else { 20.0 }).abs() < 1e-9);
+                assert!((freight - if evidence_status == 1 { 0.0 } else { 85.0 }).abs() < 1e-9);
                 assert_eq!(result.passenger.source_id, 100);
                 assert_eq!(result.passenger.status, 2); // Daily evidence uses estimated period shares.
                 assert_eq!(result.freight.status, 2);
@@ -304,7 +304,7 @@ fn partial_evidence_preserves_middle_counts_and_zero_with_class_priors_on_uncove
             } else {
                 defaults += 1;
                 assert!((passenger - 80.0).abs() < 1e-9);
-                assert!((freight - 20.0).abs() < 1e-9);
+                assert!((freight - 85.0).abs() < 1e-9);
                 for category in [result.passenger, result.freight] {
                     assert_eq!(
                         (category.status, category.source_id, category.matching),
