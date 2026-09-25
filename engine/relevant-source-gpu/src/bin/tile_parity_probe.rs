@@ -91,7 +91,7 @@ fn segment_bbox_distance_m(a: [f32; 2], b: [f32; 2], bbox: [f32; 4]) -> f32 {
 /// Sources with every road and rail line near `bbox` cut into pieces of at most `piece_m`.
 fn converged_sources_for_tile(original: &[SurfaceSource], bbox: [f32; 4], piece_m: f32) -> Vec<SurfaceSource> {
     let mut sources = Vec::with_capacity(original.len());
-    for source in original {
+    for (index, source) in original.iter().enumerate() {
         let d = source.device;
         let (a, b) = ([d.start_x_m, d.start_y_m], [d.end_x_m, d.end_y_m]);
         let length = (b[0] - a[0]).hypot(b[1] - a[1]);
@@ -108,6 +108,10 @@ fn converged_sources_for_tile(original: &[SurfaceSource], bbox: [f32; 4], piece_
             piece.device.end_x_m = a[0] + (b[0] - a[0]) * f1;
             piece.device.end_y_m = a[1] + (b[1] - a[1]) * f1;
             piece.device.extent_m = d.extent_m / pieces as f32;
+            // Split pieces share the parent digest; tag each with (source, piece)
+            // so paint_tile's (layer, identity) map stays injective.
+            piece.identity.0[24..28].copy_from_slice(&(index as u32).to_le_bytes());
+            piece.identity.0[28..32].copy_from_slice(&(k as u32).to_le_bytes());
             sources.push(piece);
         }
     }
