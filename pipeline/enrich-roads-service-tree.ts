@@ -24,7 +24,7 @@ export function splitAADT(trips: number, fleet: CountryFleet): RoadAadt {
 
 export function readServiceRoads(table: Table): { roads: ServiceRoad[]; fleets: CountryFleet[]; unknownCountryRows: number } {
   const geometry = segmentGeometryReader(table), countries = bakedRoadCountryReader(table)
-  for (const [name, bits] of [['road_class', 8], ['source_id', 16], ['access', 8], ['built_up', 8]] as const) {
+  for (const [name, bits] of [['road_class', 8], ['source_id', 16], ['access', 8], ['built_up', 8], ['lanes', 8]] as const) {
     const vector = table.getChild(name)
     if (!vector || !DataType.isInt(vector.type) || vector.type.isSigned || vector.type.bitWidth !== bits || vector.nullCount) {
       throw new Error(`invalid service-tree road column ${name}`)
@@ -40,7 +40,7 @@ export function readServiceRoads(table: Table): { roads: ServiceRoad[]; fleets: 
   // One flat array per column: `getChild` and `get` on a 1024-batch table cost more than the whole graph walk.
   const roadClasses = table.getChild('road_class')!.toArray() as Uint8Array, lengths = length.toArray() as Float32Array
   const sourceIds = table.getChild('source_id')!.toArray() as Uint16Array, accesses = table.getChild('access')!.toArray() as Uint8Array
-  const builtUp = table.getChild('built_up')!.toArray() as Uint8Array
+  const builtUp = table.getChild('built_up')!.toArray() as Uint8Array, lanes = table.getChild('lanes')!.toArray() as Uint8Array
   const ways = osmIds.toArray() as BigInt64Array, streetNames = Array.from(names) as (string | null)[]
   const tunnels = Array.from(tunnel) as boolean[], endpoints = geometry.tableLocalEndpointNumbers()
   let unknownCountryRows = 0
@@ -55,7 +55,8 @@ export function readServiceRoads(table: Table): { roads: ServiceRoad[]; fleets: 
     const { startLat, startLon, endLat, endLon } = geometry.row(index)
     return { startLat, startLon, endLat, endLon, startNode: endpoints.start[index], endNode: endpoints.end[index],
       name: streetNames[index] ?? '', osmId: ways[index], builtUp: builtUp[index],
-      roadClass, length: metres, sourceId: sourceIds[index], access: accesses[index], tunnel: tunnels[index] }
+      roadClass, length: metres, sourceId: sourceIds[index], access: accesses[index], tunnel: tunnels[index],
+      lanes: lanes[index] }
   })
   return { roads, fleets, unknownCountryRows }
 }

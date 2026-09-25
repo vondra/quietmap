@@ -17,7 +17,7 @@ import { enrichServiceTreeSquare, readServiceRoads, splitAADT } from './enrich-r
 
 function road(a: number, b: number, roadClass = 5, sourceId = 0): ServiceRoad {
   return { startNode: a, endNode: b, startLat: 50, endLat: 50, startLon: 14 + a * 0.001, endLon: 14 + b * 0.001,
-    name: '', osmId: BigInt(a * 100 + b), builtUp: 2, length: Math.abs(b - a) * 71, roadClass, sourceId, tunnel: false, access: 0 }
+    name: '', osmId: BigInt(a * 100 + b), builtUp: 2, length: Math.abs(b - a) * 71, roadClass, sourceId, tunnel: false, access: 0, lanes: 0 }
 }
 
 test('tracks do not root; measured locals, tunnels and access exclusions do root the retained graph', () => {
@@ -81,7 +81,8 @@ function fixture(directory: string, roads: ServiceRoad[], emptyBuildings = false
     osm_id: BigInt64Array.from(roads, r => r.osmId), built_up: Uint8Array.from(roads, r => r.builtUp),
     name: vectorFromArray(roads.map(r => r.name), new Utf8()),
     road_class: Uint8Array.from(roads, r => r.roadClass), source_id: Uint16Array.from(roads, r => r.sourceId),
-    access: Uint8Array.from(roads, r => r.access), tunnel: vectorFromArray(roads.map(r => r.tunnel), new Bool()),
+    access: Uint8Array.from(roads, r => r.access), lanes: Uint8Array.from(roads, r => r.lanes),
+    tunnel: vectorFromArray(roads.map(r => r.tunnel), new Bool()),
     length_m: Float32Array.from(roads, r => r.length), country_iso: Uint16Array.from(roads, () => iso2Code('CZ')),
     aadt_light: Float64Array.from(roads, () => 100), aadt_medium: new Float64Array(roads.length),
     aadt_heavy: new Float64Array(roads.length), aadt_moto: new Float64Array(roads.length),
@@ -208,7 +209,7 @@ test('an access branch has T plus kG and never inherits another street exit boun
   const roads = [road(-1, 0, 4), road(0, 1), road(1, 2), road(2, 3, 4), road(0, 4)]
   const graph = buildGraph(roads), components = findComponents(graph)
   const result = serviceStreetDemands(roads, graph, components, new Map([[4, { dwellings: 0, trips: 500 }]]), roads.map(() => WORLD_FLEET))
-  assert.deepEqual(result.streets.get(4), { trips: 500, through: false })
+  assert.deepEqual(result.streets.get(4), { trips: 500, through: false, singleTrack: false })
   assert.equal(localStreetAadt(5, 2, result.streets.get(4)!), PARAMETERS.residentialUrban + PARAMETERS.demandScale * 500)
 })
 
