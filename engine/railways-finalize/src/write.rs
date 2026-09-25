@@ -71,7 +71,7 @@ pub fn finalize_square(
         concat_batches(&schema, &batches).map_err(|e| format!("{}: {e}", arrow_path.display()))?;
     let intervals = load_square_intervals(&dir)?;
     let pieces = load_square_pieces(&dir)?;
-    let children = expand_rows(&merged, &intervals, &pieces)?;
+    let children = expand_rows(&merged, &intervals, &pieces, square)?;
     let ipc = encode_children(&merged, &children)?;
     write_atomically(&dir, &ipc)?;
     Ok(Some(SquareReceipt {
@@ -140,6 +140,7 @@ fn expand_rows(
     merged: &RecordBatch,
     intervals: &HashMap<(i64, i16), Vec<Interval>>,
     pieces: &HashMap<(i64, i16), crate::topology::Piece>,
+    square: Square,
 ) -> Result<Vec<Expanded>, String> {
     let osm_id = col_i64(merged, "osm_id")?;
     let segment_idx = col_i16(merged, "segment_idx")?;
@@ -202,7 +203,7 @@ fn expand_rows(
             });
         }
     }
-    allocate_over_parallel_tracks(&mut expanded);
+    allocate_over_parallel_tracks(&mut expanded, square);
     Ok(expanded)
 }
 

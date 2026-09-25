@@ -260,7 +260,8 @@ On non-service tracks (`service=0`) other than preserved heritage rail (type 5),
 each category is allocated once per line
 cross-section: a track and each other way running beside its midpoint (same type
 and usage family, no shared node; 15 m and 10° without a common ref or name,
-50 m and 20° with one) form the cross-section. The line value comes from the
+50 m and 20° with one) form the cross-section, projected in local metres scaled by
+the square centre's latitude so the sections ignore input row order. The line value comes from the
 track's own country files first: the highest-ranked domestic evidence sets it (the
 sum of what a measured source counted on each track, such as routed trips and
 platform stops, or the value a proxy repeats on every track). A measured domestic

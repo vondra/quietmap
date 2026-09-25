@@ -23,6 +23,9 @@ struct Track {
     direction: [f64; 2],
 }
 
+/// Best sibling candidate of one way: lateral metres, stable grid-geometry tiebreak, row.
+type Candidate = (f64, (i32, i32, i32, i32), usize);
+
 fn usage_family(usage: u8) -> u8 {
     // A main-tagged track and its untagged twin (usage 0 and 3) are one corridor.
     if usage == 3 {
@@ -32,13 +35,11 @@ fn usage_family(usage: u8) -> u8 {
     }
 }
 
-/// Local metres: Web Mercator scaled by the square's latitude (under 1 % error across a z9 square).
-fn project_tracks(rows: &[Expanded]) -> Vec<Option<Track>> {
-    let Some(first) = rows.first() else {
-        return Vec::new();
-    };
-    let (_, latitude) = crate::encode::grid_cell_lonlat(first.child.geom.start_gx, first.child.geom.start_gy);
-    let scale = latitude.to_radians().cos();
+/// Local metres: Web Mercator scaled by the square centre's latitude (under 1 % error
+/// across a z9 square). The scale comes from the square, never from a row, so reversing the
+/// input cannot flip near-gate sibling pairs.
+fn project_tracks(rows: &[Expanded], square: grid::Square) -> Vec<Option<Track>> {
+    let scale = grid::square_center_lat_deg(square).to_radians().cos();
     let metres = |gx: i32, gy: i32| {
         let (x, y) = grid::grid_to_meters(gx, gy);
         [x * scale, y * scale]
@@ -117,7 +118,9 @@ fn cross_sections(rows: &[Expanded], tracks: &[Option<Track>]) -> Vec<Vec<usize>
         let mut members = vec![index];
         if let Some(track) = track {
             let middle = [(track.start[0] + track.end[0]) / 2.0, (track.start[1] + track.end[1]) / 2.0];
-            let mut nearest: HashMap<i64, (f64, usize)> = HashMap::new();
+            // One representative per way; ties break on grid geometry, never on input position,
+            // so the sections (and everything downstream) ignore input row order.
+            let mut nearest: HashMap<i64, Candidate> = HashMap::new();
             for x in cell(middle[0]) - 1..=cell(middle[0]) + 1 {
                 for y in cell(middle[1]) - 1..=cell(middle[1]) + 1 {
                     for &other in buckets.get(&(x, y)).map(Vec::as_slice).unwrap_or_default() {
@@ -127,15 +130,19 @@ fn cross_sections(rows: &[Expanded], tracks: &[Option<Track>]) -> Vec<Vec<usize>
                         else {
                             continue;
                         };
-                        let best = nearest.entry(rows[other].osm_id).or_insert((lateral_m, other));
-                        if (lateral_m, other) < *best {
-                            *best = (lateral_m, other);
+                        let geom = rows[other].child.geom;
+                        let key = (geom.start_gx, geom.start_gy, geom.end_gx, geom.end_gy);
+                        let best = nearest
+                            .entry(rows[other].osm_id)
+                            .or_insert((lateral_m, key, other));
+                        if (lateral_m, key) < (best.0, best.1) {
+                            *best = (lateral_m, key, other);
                         }
                     }
                 }
             }
-            let mut siblings: Vec<_> = nearest.into_values().map(|(_, other)| other).collect();
-            siblings.sort_unstable();
+            let mut siblings: Vec<_> = nearest.into_values().map(|(_, _, other)| other).collect();
+            siblings.sort_by_key(|&other| rows[other].osm_id);
             members.extend(siblings);
         }
         sections.push(members);
@@ -300,8 +307,9 @@ fn track_share(
 }
 
 /// Replace each non-service row's evidence by its share of the line; service tracks keep theirs.
-pub(crate) fn allocate_over_parallel_tracks(rows: &mut [Expanded]) {
-    let tracks = project_tracks(rows);
+/// The square sets the projection scale, so the result ignores input row order.
+pub(crate) fn allocate_over_parallel_tracks(rows: &mut [Expanded], square: grid::Square) {
+    let tracks = project_tracks(rows, square);
     let sections = cross_sections(rows, &tracks);
     let domestic: Vec<RowTraffic> = rows.iter().map(|row| row.child.traffic).collect();
     let foreign: Vec<RowTraffic> = rows.iter().map(|row| row.child.foreign).collect();

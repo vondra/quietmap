@@ -11,6 +11,7 @@ const CZ: SquareCountryCity = SquareCountryCity {
     country_iso: *b"CZ",
     city_id: 0,
 };
+const PRAGUE: grid::Square = grid::Square { x: 276, y: 173 };
 // Registered railway sources: a CZ timetable (passages) and the CZ timetable-silent residual.
 const TIMETABLE: u16 = 110;
 const RESIDUAL: u16 = 9863;
@@ -32,15 +33,14 @@ fn track(way: i64, lane: f64, from_lon: f64, to_lon: f64, traffic: RowTraffic) -
     track_foreign(way, lane, from_lon, to_lon, traffic, RowTraffic::default())
 }
 
-fn track_foreign(
+fn track_at(
     way: i64,
-    lane: f64,
+    latitude: f64,
     from_lon: f64,
     to_lon: f64,
     traffic: RowTraffic,
     foreign: RowTraffic,
 ) -> Expanded {
-    let latitude = 49.915 + lane * TRACK_SPACING_DEG;
     let (start_gx, start_gy) = grid::lonlat_to_grid(from_lon, latitude);
     let (end_gx, end_gy) = grid::lonlat_to_grid(to_lon, latitude);
     Expanded {
@@ -60,6 +60,17 @@ fn track_foreign(
     }
 }
 
+fn track_foreign(
+    way: i64,
+    lane: f64,
+    from_lon: f64,
+    to_lon: f64,
+    traffic: RowTraffic,
+    foreign: RowTraffic,
+) -> Expanded {
+    track_at(way, 49.915 + lane * TRACK_SPACING_DEG, from_lon, to_lon, traffic, foreign)
+}
+
 fn daily(category: CategoryFlow) -> f64 {
     category.periods.iter().sum()
 }
@@ -76,7 +87,7 @@ fn routed_passages_on_one_track_and_a_prior_are_each_counted_once_per_line() {
         track(1, 0.0, 14.230, 14.232, walked),
         track(2, 1.0, 14.230, 14.232, RowTraffic::default()),
     ];
-    allocate_over_parallel_tracks(&mut rows);
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
     for row in &rows {
         assert!((daily(row.child.traffic.passenger) - 72.0).abs() < 1e-9);
         assert_eq!(row.child.traffic.passenger.source_id, TIMETABLE);
@@ -95,7 +106,7 @@ fn platform_stop_counts_of_a_measured_feed_add_up_over_the_two_directions() {
         track(1, 0.0, 14.23, 14.232, platform(530.0)),
         track(2, 1.0, 14.23, 14.232, platform(521.0)),
     ];
-    allocate_over_parallel_tracks(&mut rows);
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
     assert!((cross_section_sum(&rows, |t| t.passenger) - 1051.0).abs() < 1e-9);
 }
 
@@ -103,7 +114,7 @@ fn platform_stop_counts_of_a_measured_feed_add_up_over_the_two_directions() {
 fn whole_line_stamps_are_not_multiplied_by_the_number_of_tracks() {
     let stamp = RowTraffic { passenger: flow(2.0, RESIDUAL, 0), freight: flow(1.0, RESIDUAL, 0) };
     let mut rows: Vec<_> = (0..3).map(|lane| track(lane, lane as f64, 14.23, 14.232, stamp)).collect();
-    allocate_over_parallel_tracks(&mut rows);
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
     assert!((cross_section_sum(&rows, |t| t.passenger) - 2.0).abs() < 1e-9);
     assert!((cross_section_sum(&rows, |t| t.freight) - 1.0).abs() < 1e-9);
 }
@@ -116,7 +127,7 @@ fn evidence_on_any_track_outranks_a_residual_and_a_known_zero_stays_zero() {
         track(1, 0.0, 14.23, 14.232, walked),
         track(2, 1.0, 14.23, 14.232, residual),
     ];
-    allocate_over_parallel_tracks(&mut rows);
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
     for row in &rows {
         assert!((daily(row.child.traffic.passenger) - 30.0).abs() < 1e-9);
         assert_eq!(daily(row.child.traffic.freight), 0.0);
@@ -134,7 +145,7 @@ fn a_timetable_residual_on_the_unwalked_twin_yields_to_the_walked_line_in_both_c
         track(1, 0.0, 14.23, 14.232, walked),
         track(2, 1.0, 14.23, 14.232, residual),
     ];
-    allocate_over_parallel_tracks(&mut rows);
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
     for row in &rows {
         assert!((daily(row.child.traffic.passenger) - 72.0).abs() < 1e-9);
         assert!((daily(row.child.traffic.freight) - 42.5).abs() < 1e-9);
@@ -150,7 +161,7 @@ fn a_track_split_into_many_rows_still_meets_one_sibling_per_way() {
         let from = 14.230 + 0.0005 * part as f64;
         rows.push(track(2, 1.0, from, from + 0.0005, RowTraffic::default()));
     }
-    allocate_over_parallel_tracks(&mut rows);
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
     assert!((daily(rows[0].child.traffic.passenger) - 45.0).abs() < 1e-9);
     for row in &rows[1..] {
         assert!((daily(row.child.traffic.passenger) - 45.0).abs() < 1e-9);
@@ -166,7 +177,7 @@ fn partial_timetable_on_one_twin_keeps_the_line_prior_as_a_floor() {
         track(1, 0.0, 14.23, 14.232, walked),
         track(2, 1.0, 14.23, 14.232, RowTraffic::default()),
     ];
-    allocate_over_parallel_tracks(&mut rows);
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
     for row in &rows {
         assert!((daily(row.child.traffic.passenger) - 40.0).abs() < 1e-9);
         assert_eq!(row.child.traffic.passenger.source_id, 0);
@@ -184,7 +195,7 @@ fn cross_border_trains_alone_do_not_set_a_domestic_line() {
         track_foreign(1, 0.0, 14.23, 14.232, RowTraffic::default(), abroad(2.0)),
         track_foreign(2, 1.0, 14.23, 14.232, RowTraffic::default(), abroad(1.0)),
     ];
-    allocate_over_parallel_tracks(&mut rows);
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
     for row in &rows {
         assert!((daily(row.child.traffic.passenger) - 40.0).abs() < 1e-9);
         assert_eq!(row.child.traffic.passenger.source_id, 0);
@@ -205,7 +216,7 @@ fn fully_walked_domestic_line_is_trusted_below_the_prior_and_foreign_ignored() {
         track_foreign(1, 0.0, 14.23, 14.232, home(37.0), abroad(50.0)),
         track_foreign(2, 1.0, 14.23, 14.232, home(17.0), abroad(42.0)),
     ];
-    allocate_over_parallel_tracks(&mut rows);
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
     for row in &rows {
         assert!((daily(row.child.traffic.passenger) - 27.0).abs() < 1e-9);
         assert_eq!(row.child.traffic.passenger.source_id, TIMETABLE);
@@ -224,12 +235,53 @@ fn foreign_trains_yield_a_no_service_stamp_beside_them() {
         track_foreign(1, 0.0, 14.23, 14.232, silent, abroad),
         track_foreign(2, 1.0, 14.23, 14.232, silent, RowTraffic::default()),
     ];
-    allocate_over_parallel_tracks(&mut rows);
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
     for row in &rows {
         assert!((daily(row.child.traffic.passenger) - 40.0).abs() < 1e-9);
         assert_eq!(row.child.traffic.passenger.source_id, 0);
         assert!((daily(row.child.traffic.freight) - 42.5).abs() < 1e-9);
         assert_eq!(row.child.traffic.freight.source_id, 0);
+    }
+}
+
+#[test]
+fn projection_and_allocation_ignore_input_row_order() {
+    // A first-row latitude scale flips near-gate pairs when the input is reversed (276/173:
+    // 4 rows by up to 39 passenger trains/day). The north pair sits 14.9 m apart, just inside
+    // the 15 m tokenless gate under the square-centre scale; a first-row scale from the
+    // square's south edge would measure it over the gate.
+    let walked = RowTraffic { passenger: flow(100.0, TIMETABLE, 2), freight: CategoryFlow::default() };
+    let empty = RowTraffic::default();
+    let fixture = || {
+        vec![
+            track_at(1, 49.84, 14.230, 14.232, walked, empty),
+            track_at(2, 49.84 + TRACK_SPACING_DEG, 14.230, 14.232, empty, empty),
+            track_at(3, 50.28, 14.240, 14.242, walked, empty),
+            track_at(4, 50.28 + 0.00013400, 14.240, 14.242, empty, empty),
+        ]
+    };
+    let projected = super::project_tracks(&fixture(), PRAGUE);
+    let mut flipped = fixture();
+    flipped.reverse();
+    let reprojected = super::project_tracks(&flipped, PRAGUE);
+    for (forward, backward) in projected.iter().zip(reprojected.iter().rev()) {
+        let (a, b) = (forward.as_ref().unwrap(), backward.as_ref().unwrap());
+        assert_eq!((a.start, a.end, a.direction), (b.start, b.end, b.direction));
+    }
+    let mut forward = fixture();
+    allocate_over_parallel_tracks(&mut forward, PRAGUE);
+    // Both pairs are siblings: the walked 100 exceed the prior and split evenly.
+    for row in &forward {
+        assert!((daily(row.child.traffic.passenger) - 50.0).abs() < 1e-9, "{}", row.osm_id);
+        assert!((daily(row.child.traffic.freight) - 42.5).abs() < 1e-9, "{}", row.osm_id);
+    }
+    let mut backward = fixture();
+    backward.reverse();
+    allocate_over_parallel_tracks(&mut backward, PRAGUE);
+    for row in &backward {
+        let mate = forward.iter().find(|mate| mate.osm_id == row.osm_id).unwrap();
+        assert_eq!(row.child.traffic.passenger.periods, mate.child.traffic.passenger.periods);
+        assert_eq!(row.child.traffic.freight.periods, mate.child.traffic.freight.periods);
     }
 }
 
@@ -254,7 +306,7 @@ fn distinct_lines_spurs_distant_tracks_and_service_tracks_are_not_siblings() {
     yard.service = 1;
     yard.prior = class_prior(0, 0, 1, CZ);
     rows.push(yard);
-    allocate_over_parallel_tracks(&mut rows);
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
     for row in &rows[..5] {
         assert!((daily(row.child.traffic.passenger) - 80.0).abs() < 1e-9, "{}", row.osm_id);
     }
