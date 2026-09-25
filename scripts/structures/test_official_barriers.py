@@ -269,6 +269,20 @@ class NormalizerTests(unittest.TestCase):
         table = pq.read_table(self.root / "cache" / "N47W123.parquet")
         self.assertEqual(table.num_rows, 2)
 
+    def test_rerun_replaces_the_same_source_rows(self):
+        import pyarrow.parquet as pq
+        line = shapely.LineString([(-122.3, 47.6), (-122.29, 47.6)])
+        other = shapely.LineString([(-122.3, 47.61), (-122.29, 47.61)])
+        cache = str(self.root / "cache")
+        NORMALIZE.append_cache([(line, 3.66, True, 0)], "TEST", "2026-01-01", cache)
+        NORMALIZE.append_cache([(other, 2.0, True, 0)], "OTHER", "2026-01-01", cache)
+        kept = NORMALIZE.append_cache([(line, 3.0, True, 0)], "TEST", "2026-06-01", cache)
+        self.assertEqual(kept, 1)
+        table = pq.read_table(self.root / "cache" / "N47W123.parquet")
+        rows = sorted(table.to_pylist(), key=lambda row: row["source"])
+        self.assertEqual([(row["source"], row["as_of"], row["height_m"]) for row in rows],
+                         [("OTHER", "2026-01-01", 2.0), ("TEST", "2026-06-01", 3.0)])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -53,6 +53,26 @@ def write_official_cache(rows_by_tile, cache_dir, schema, contract_key, contract
         pq.write_table(table.replace_schema_metadata(meta), cache_dir / f"{tile}.parquet")
 
 
+def accumulate_official_cache(by_tile, source, cache_dir, schema, contract_key,
+                              contract_version):
+    """Merge new tile columns with the cached tiles. A re-run replaces its own
+    source's rows for the geometries it re-supplies, so a corrected height
+    lands and a repeated run writes identical bytes; every other row (other
+    sources, unsupplied geometries) stays, so partial top-ups accumulate."""
+    cache_dir = Path(cache_dir)
+    for tile, columns in by_tile.items():
+        path = cache_dir / f"{tile}.parquet"
+        if not path.is_file():
+            continue
+        supplied = set(columns["geometry"])
+        for row in pq.read_table(path).to_pylist():
+            if row["source"] == source and row["geometry"] in supplied:
+                continue
+            for name in schema.names:
+                columns[name].append(row[name])
+    write_official_cache(by_tile, cache_dir, schema, contract_key, contract_version)
+
+
 def world_squares(parquet_dir):
     sources = {degree_name(lat, lon)
                for lat in range(-90, 90) for lon in range(-180, 180)}

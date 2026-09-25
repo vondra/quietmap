@@ -152,6 +152,19 @@ class NormalizerTests(unittest.TestCase):
              "properties": {}}]}), encoding="utf-8")
         self.assertEqual(NORMALIZE.read_heights_geojson([str(path)]), [])
 
+    def test_rerun_replaces_the_same_source_rows(self):
+        import pyarrow.parquet as pq
+        poly = shapely.box(5.39, 52.15, 5.391, 52.151)
+        cache = str(self.root / "cache")
+        NORMALIZE.append_cache([(poly, 9.0)], "TEST", "2026-01-01", cache)
+        kept = NORMALIZE.append_cache([(poly, 7.0)], "TEST", "2026-06-01", cache)
+        self.assertEqual(kept, 1)
+        table = pq.read_table(self.root / "cache" / "N52E005.parquet")
+        self.assertEqual(table.num_rows, 1)
+        row = table.to_pylist()[0]
+        self.assertEqual((row["height_m"], row["source"], row["as_of"]),
+                         (7.0, "TEST", "2026-06-01"))
+
 
 if __name__ == "__main__":
     unittest.main()

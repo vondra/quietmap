@@ -17,12 +17,11 @@ import xml.etree.ElementTree as ET
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
 
-import pyarrow.parquet as pq
 import shapely
 from pyproj import Transformer
 
 from measured_heights import CONTRACT_KEY, CONTRACT_VERSION, SCHEMA
-from structure_inventory import degree_name, write_official_cache
+from structure_inventory import accumulate_official_cache, degree_name
 
 NS = {"bldg": "http://www.opengis.net/citygml/building/1.0",
       "gml": "http://www.opengis.net/gml"}
@@ -102,24 +101,29 @@ def read_heights_geojson(paths):
 
 
 def append_cache(rows, source, as_of, cache_dir):
-    by_tile = {}
+    # One physical footprint is one cache row: overlapping downloads repeat
+    # footprints, and the join keeps the first match on a tie anyway.
+    seen, duplicates, by_tile = set(), 0, {}
     for geom, height_m in rows:
         if geom.is_empty:
             continue
+        wkb = shapely.to_wkb(geom)
+        if wkb in seen:
+            duplicates += 1
+            continue
+        seen.add(wkb)
         centroid = geom.centroid
         tile = degree_name(math.floor(centroid.y), math.floor(centroid.x))
         columns = by_tile.setdefault(tile, {name: [] for name in SCHEMA.names})
-        columns["geometry"].append(shapely.to_wkb(geom))
+        columns["geometry"].append(wkb)
         columns["height_m"].append(float(height_m))
         columns["source"].append(source)
         columns["as_of"].append(as_of)
-    for tile, columns in by_tile.items():
-        path = os.path.join(cache_dir, f"{tile}.parquet")
-        if os.path.exists(path):
-            for row in pq.read_table(path).to_pylist():
-                for name in SCHEMA.names:
-                    columns[name].append(row[name])
-    write_official_cache(by_tile, cache_dir, SCHEMA, CONTRACT_KEY, CONTRACT_VERSION)
+    accumulate_official_cache(by_tile, source, cache_dir, SCHEMA, CONTRACT_KEY,
+                              CONTRACT_VERSION)
+    if duplicates:
+        print(f"[normalize-heights] {duplicates} duplicate footprints dropped", flush=True)
+    return len(seen)
 
 
 def main():
@@ -135,8 +139,8 @@ def main():
         else read_heights_geojson(args.input)
     if not rows:
         raise SystemExit(f"{args.input}: no footprints")
-    append_cache(rows, args.source, args.as_of, args.out)
-    print(f"[normalize-heights] wrote {len(rows)} footprints as {args.source} to {args.out}",
+    kept = append_cache(rows, args.source, args.as_of, args.out)
+    print(f"[normalize-heights] wrote {kept} footprints as {args.source} to {args.out}",
           flush=True)
 
 
