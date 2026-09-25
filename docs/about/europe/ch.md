@@ -1,14 +1,18 @@
 ---
 title: Switzerland
-intro: City traffic counts in Zurich and Geneva, national passenger timetable. Other roads use class defaults. Rail freight not covered.
+intro: Federal counting stations (ASTRA), city traffic counts in Zurich and Geneva, national passenger timetable. Other roads use class defaults. Rail freight not covered.
 map: { center: [8.2, 46.8], zoom: 8 }
 ---
 
 ## Roads
 
+Motorways and main roads: the [2024 annual results](https://www.astra.admin.ch/de/schweizerische-automatische-strassenverkehrszaehlung-sasvz) of the federal SASVZ counting stations (open use with attribution: ASTRA), with the yearly average, heavy traffic and heavy goods totals per station.
+
+A road takes the nearest station on a compatible class within 200 m; coaches form the medium class and 1 % of the non-truck total is assigned to motorcycles. Stations without a usable 2024 year are skipped.
+
 Zurich and Geneva: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 
-Elsewhere motorways, trunk and primary roads use the world estimate per lane; smaller roads use class defaults ([world defaults](/about/methodology)). The federal ASTRA counting stations are not loaded yet.
+Uncounted streets use the class default, adjusted for surrounding buildings and the counted roads they connect to.
 
 ## Railways
 

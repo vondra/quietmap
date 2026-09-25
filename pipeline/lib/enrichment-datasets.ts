@@ -1123,6 +1123,54 @@ export const DATASETS: Dataset[] = [
     measurement: 'proxy',
     roadCoverage: [0, 1, 2, 3, 4, 5, 10, 11, 12], // mirrors KZ_COVERAGE in enrich-roads-kz.ts (R1b bucket A)
   },
+  {
+    id: 9528, // NL = 528
+    layer: 'roads',
+    key: 'nl-national-roads',
+    name: 'Rijkswaterstaat INWEVA weekdagintensiteiten',
+    year: 2024,
+    license: 'CC0-1.0',
+    url: 'https://www.nationaalgeoregister.nl/geonetwork/srv/api/records/93e99016-9b53-45d6-8b3c-fc9bf8086256',
+    priority: 80,
+    measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE,
+  },
+  {
+    id: 9705, // SI = 705
+    layer: 'roads',
+    key: 'si-national-roads',
+    name: 'DRSI PLDP prometne obremenitve',
+    year: 2024,
+    license: 'CC-BY-4.0',
+    url: 'https://podatki.gov.si/dataset/pldp-karte-prometnih-obremenitev',
+    priority: 80,
+    measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE,
+  },
+  {
+    id: 9752, // SE = 752
+    layer: 'roads',
+    key: 'se-national-roads',
+    name: 'Trafikverket NVDB Trafik ÅDT',
+    year: 2026,
+    license: 'CC0-1.0',
+    url: 'https://www.trafikverket.se/e-tjanster/hamta-data-fran-trafikverket/',
+    priority: 80,
+    measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE,
+  },
+  {
+    id: 9756, // CH = 756
+    layer: 'roads',
+    key: 'ch-national-roads',
+    name: 'ASTRA SASVZ Jahresergebnisse',
+    year: 2024,
+    license: 'OGD Switzerland (open use, attribution)',
+    url: 'https://www.astra.admin.ch/de/schweizerische-automatische-strassenverkehrszaehlung-sasvz',
+    priority: 80,
+    measurement: 'counted',
+    roadCoverage: MAJOR_ROAD_COVERAGE,
+  },
 
   // ── Railways: national (OSM-only) ──
   {

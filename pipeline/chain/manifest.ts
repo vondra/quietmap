@@ -14,7 +14,7 @@ export const PHASES = [
 ] as const
 export type Phase = (typeof PHASES)[number]
 
-export const ROAD_NATIONAL = ['ar', 'ca', 'cl', 'co', 'cz', 'de', 'dk', 'es', 'fi', 'fr', 'gb', 'id', 'ie', 'it', 'jp', 'mx', 'no', 'nz', 'pe', 'pl', 'sa', 'th', 'us'] as const
+export const ROAD_NATIONAL = ['ar', 'ca', 'ch', 'cl', 'co', 'cz', 'de', 'dk', 'es', 'fi', 'fr', 'gb', 'id', 'ie', 'it', 'jp', 'mx', 'nl', 'no', 'nz', 'pe', 'pl', 'sa', 'se', 'si', 'th', 'us'] as const
 export const ROAD_NATIONAL_POLICIES = [...NATIONAL_ROAD_POLICIES.keys()].map(country => country.toLowerCase())
 export const ROAD_NATIONAL_NETWORKS = [...NATIONAL_ROAD_NETWORK_POLICIES.keys()].map(country => country.toLowerCase())
 export const GTFS_COUNTRIES = [...new Set(GLOBAL_GTFS_FEEDS.map(feed => feed.country))].sort()
