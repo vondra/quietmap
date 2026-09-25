@@ -16,7 +16,7 @@ import urllib.request
 from dgm_reduce import (append_journal, assert_crs, clean_remnants, derive_provenance,
                         derived_complete, digest, load_journal, manifest_entry,
                         publish_country_sources, reduce_xyz, write_manifest)
-from terrain_io import fetch, source_budget
+from terrain_io import BUDGET_EVERY, fetch, source_budget
 
 PROVIDER = 'de-sh-dgm1'
 INDEX_URL = ('https://geodaten.schleswig-holstein.de/gaialight-sh/_apps/dladownload/'
@@ -70,9 +70,12 @@ def process_item(root, item, delay, state, done):
         if wait > 0:
             time.sleep(wait)
         state['last'] = time.monotonic()
+        state['fetches'] = state.get('fetches', 0) + 1
+        enforce = state['fetches'] % BUDGET_EVERY == 1
     try:
         fetch(root, PROVIDER, item['name'], item['url'], licence=LICENCE,
-              licence_url=LICENCE_URL, terms_checked_utc='2026-09-25')
+              licence_url=LICENCE_URL, terms_checked_utc='2026-09-25',
+              enforce_budget=enforce)
         raw_path = Path(root) / PROVIDER / item['name']
         cleaned = strip_footer(raw_path)
         if cleaned is None:

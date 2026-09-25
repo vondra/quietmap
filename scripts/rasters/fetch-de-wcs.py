@@ -17,7 +17,7 @@ from dgm_reduce import (DERIVED_NODATA, append_journal, assert_crs, clean_remnan
                         derive_provenance, derived_complete, digest, load_journal,
                         manifest_entry, normalize_grid, publish_country_sources,
                         write_manifest)
-from terrain_io import fetch, source_budget
+from terrain_io import BUDGET_EVERY, fetch, source_budget
 
 gdal.UseExceptions()
 gdal.SetConfigOption('GDAL_PAM_ENABLED', 'NO')
@@ -96,8 +96,11 @@ def fetch_window(root, provider, box, delay, state, done):
         if wait > 0:
             time.sleep(wait)
         state['last'] = time.monotonic()
+        state['fetches'] = state.get('fetches', 0) + 1
+        enforce = state['fetches'] % BUDGET_EVERY == 1
     fetch(root, provider, raw_name, url, licence=config['licence'],
-          licence_url=config['licence_url'], terms_checked_utc='2026-09-25')
+          licence_url=config['licence_url'], terms_checked_utc='2026-09-25',
+          enforce_budget=enforce)
     raw_path = Path(root) / provider / raw_name
     dataset = gdal.Open(str(raw_path))
     band = dataset.GetRasterBand(1)

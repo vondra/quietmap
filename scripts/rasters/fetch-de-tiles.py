@@ -25,7 +25,7 @@ from dgm_reduce import (append_journal, assert_crs, clean_remnants, derive_prove
                         derived_complete, digest, load_journal, manifest_entry,
                         normalize_grid, publish_country_sources, read_zip_member,
                         reduce_geotiff, write_manifest)
-from terrain_io import fetch, publish_json, source_budget
+from terrain_io import BUDGET_EVERY, fetch, publish_json, source_budget
 
 gdal.UseExceptions()
 gdal.SetConfigOption('GDAL_PAM_ENABLED', 'NO')
@@ -282,6 +282,8 @@ def process_item(root, provider, item, delay, state, done):
         if wait > 0:
             time.sleep(wait)
         state['last'] = time.monotonic()
+        state['fetches'] = state.get('fetches', 0) + 1
+        enforce = state['fetches'] % BUDGET_EVERY == 1
     raw_path = Path(root) / provider / item['name']
     method = 'Area-averaged 5 m grid from the verified DGM1 tile'
     if config['kind'] == 'atom':
@@ -303,7 +305,7 @@ def process_item(root, provider, item, delay, state, done):
     else:
         fetch(root, provider, item['name'], item['url'], licence=config['licence'],
               licence_url=config['licence_url'], terms_checked_utc='2026-09-25',
-              expected_sha256=item.get('expected_sha256'))
+              expected_sha256=item.get('expected_sha256'), enforce_budget=enforce)
         if config['kind'] == 'arcgis':
             member_name, member_bytes = read_zip_member(raw_path, '.tif')
             with tempfile.NamedTemporaryFile(suffix='.tif', delete=False) as handle:

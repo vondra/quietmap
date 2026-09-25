@@ -25,7 +25,7 @@ from osgeo import gdal
 from dgm_reduce import (append_journal, assert_crs, clean_remnants, derive_provenance,
                         derived_complete, digest, load_journal, manifest_entry,
                         publish_country_sources, reduce_geotiff, write_manifest)
-from terrain_io import fetch, source_budget
+from terrain_io import BUDGET_EVERY, fetch, source_budget
 
 gdal.UseExceptions()
 gdal.SetConfigOption('GDAL_PAM_ENABLED', 'NO')
@@ -197,8 +197,11 @@ def process_item(root, item, flight_dates, delay, state, done):
         if wait > 0:
             time.sleep(wait)
         state['last'] = time.monotonic()
+        state['fetches'] = state.get('fetches', 0) + 1
+        enforce = state['fetches'] % BUDGET_EVERY == 1
     fetch(root, PROVIDER, item['name'], item['url'], licence=LICENCE,
-          licence_url=LICENCE_URL, terms_checked_utc='2026-09-25')
+          licence_url=LICENCE_URL, terms_checked_utc='2026-09-25',
+          enforce_budget=enforce)
     entries = decode_zip(root, item, flight_dates, done, state)
     raw_path = Path(root) / PROVIDER / item['name']
     raw_path.unlink()
