@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -57,6 +58,13 @@ def create_selected_catalog(output, days=('2026-06-06',), kind='staging', mlat_d
                 database.execute('INSERT INTO verified VALUES (?,?,?,?,?,?,?)',
                                  (str(source), chosen[4], *MODULE.identity(source)))
     return source
+
+
+def advance_mtime(path):
+    """A same-size rewrite or touch within one filesystem timestamp tick leaves the stat identity
+    unchanged; move mtime a whole second forward so the test's change is always observable."""
+    status = path.stat()
+    os.utime(path, ns=(status.st_atime_ns, status.st_mtime_ns + 1_000_000_000))
 
 
 class PublisherIntegrity(unittest.TestCase):
@@ -161,6 +169,7 @@ class PublisherIntegrity(unittest.TestCase):
                 asset = ('2026-06-06', 'original.tar', 'unused', 8, digest, 'prod')
                 self.assertEqual(MODULE.verified_asset(database, asset), str(source))
                 source.write_bytes(b'changed!')
+                advance_mtime(source)
                 with self.assertRaisesRegex(ValueError, 'changed verified'):
                     MODULE.verified_asset(database, asset)
                 with self.assertRaisesRegex(ValueError, 'changed independently'):
@@ -485,7 +494,7 @@ class StructuralRecovery(unittest.TestCase):
                     real = MODULE.check_archive_continuity
                     def changed(selected):
                         result = real(selected)
-                        Path(selected[0][1]).touch()
+                        advance_mtime(Path(selected[0][1]))
                         return result
                     with patch.object(MODULE, 'check_archive_continuity', side_effect=changed):
                         with self.assertRaisesRegex(ValueError, 'changed verified'):
