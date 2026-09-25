@@ -11,12 +11,7 @@ use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
 pub const CONTRACT_KEY: &str = "rail_traffic_contract";
-const DROPPED: &[&str] = &[
-    "trains_passenger",
-    "trains_freight",
-    "parallel_divisor",
-    "source_id",
-];
+const DROPPED: &[&str] = &["source_id"];
 const TRAFFIC: &[&str] = &[
     "trains_passenger_day",
     "trains_passenger_evening",
@@ -34,11 +29,15 @@ const TRAFFIC: &[&str] = &[
 
 pub(crate) struct Expanded {
     pub parent: u32,
+    /// Track evidence until `allocate_over_parallel_tracks` replaces it by the track's line share.
     pub child: ChildRow,
+    pub prior: crate::merge::RowTraffic,
     pub osm_id: i64,
     pub corridor: String,
     pub rail_type: u8,
     pub usage: u8,
+    pub service: u8,
+    pub country_iso: [u8; 2],
 }
 
 pub fn encode_children(merged: &RecordBatch, children: &[Expanded]) -> Result<Vec<u8>, String> {

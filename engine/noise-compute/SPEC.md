@@ -207,9 +207,16 @@ service/parallel allocation and any estimated period split before publication.
 Daily-only timetable evidence receives an explicitly estimated period allocation.
 Unknown freight is not a known zero; a known numeric zero remains zero.
 On non-service tracks (`service=0`) other than preserved heritage rail (type 5),
-each unknown category receives its own
-labelled class prior, independently of evidence in the other category. Existing
-category values, including zero, are preserved; new priors are shared once.
+each category is allocated once per line
+cross-section: a track and each other way running beside its midpoint (same type
+and usage family, no shared node; 15 m and 10° without a common ref or name,
+50 m and 20° with one) form the cross-section. The highest-ranked evidence on
+any of its tracks sets the line value (the sum of what a measured source counted
+on each track, such as routed trips and platform stops, or the value a proxy or
+residual repeats on every track); a timetable's no-service residual yields to any
+ranked evidence on the line; without evidence one labelled class prior applies. Each
+track carries the line value divided by the number of tracks, so a proven zero
+stays zero and the cross-section sum equals the line value in every category.
 Heritage rows retain type 5, observed traffic and posted speed. Missing traffic
 stays zero with status 0 (unknown), with no class speed or high-speed fallback.
 They are labelled heritage and emit nothing until a heritage model is available.
@@ -218,7 +225,9 @@ Popup and surface loaders require this contract and use the same validator and
 normalization. Emission and audibility reach consume these period counts directly
 with 12/4/8-hour periods. Serving performs no traffic fallback, daily redistribution,
 parallel division or service discount. Effective speed retains the shared posted,
-high-speed and type-default rules. Contributor metadata follows the segment with
+high-speed and type-default rules. Each category's representative speed, the
+effective speed within its vehicle range (freight at most 88.9 km/h, the EBA 2023
+train-weighted mean), sets both its per-train level and its line density. Contributor metadata follows the segment with
 the greatest received Lden energy, including night-only traffic, and reports both
 categories' status, source and matching evidence separately. Rail contributor
 emission headlines use the same Lden period weighting as received levels.

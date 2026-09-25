@@ -3,7 +3,7 @@
 
 mod encode;
 mod merge;
-mod sharing;
+mod parallel_tracks;
 // Reuse the serving contract without linking source-reader's Node addon feature.
 #[path = "../../source-reader/src/rail_traffic.rs"]
 pub mod rail_traffic;

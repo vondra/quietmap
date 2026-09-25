@@ -11,7 +11,7 @@ import {
 function seg(over: Partial<RailGraphSegmentInput> & Pick<RailGraphSegmentInput, 'key' | 'startLat' | 'startLon' | 'endLat' | 'endLon'>): RailGraphSegmentInput {
   const lengthM = flatDist(over.startLat, over.startLon, over.endLat, over.endLon)
   return {
-    osmId: over.key, railType: 0, usage: 0, isTraversalOnly: false, corridorToken: '',
+    osmId: over.key, railType: 0, isTraversalOnly: false,
     startKey: `${over.startLat},${over.startLon}`, endKey: `${over.endLat},${over.endLon}`,
     lengthM, ...over,
   }

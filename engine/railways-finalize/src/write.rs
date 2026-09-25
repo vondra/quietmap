@@ -1,9 +1,9 @@
-//! Per-square Arrow rewrite: split, stamp `rail_traffic_contract=1`, z14-rebatch.
+//! Per-square Arrow rewrite: split, allocate over parallel tracks, stamp `rail_traffic_contract=1`, z14-rebatch.
 
 use crate::encode::{encode_children, Expanded, CONTRACT_KEY};
-use crate::merge::{fill_missing_priors, has_class_prior, RowTraffic, STATUS_UNKNOWN};
-use crate::sharing::apply_default_sharing;
-use crate::split::{split_parent, ChildGeom, ChildRow};
+use crate::merge::class_prior;
+use crate::parallel_tracks::allocate_over_parallel_tracks;
+use crate::split::{split_parent, ChildGeom};
 use crate::square_intervals::{load_square_intervals, Interval};
 use crate::topology::load_square_pieces;
 use arrow::array::{
@@ -47,17 +47,8 @@ pub fn finalize_square(
     if finalized {
         crate::rail_traffic::RailTrafficColumns::read(&RecordBatch::new_empty(schema.clone()))?;
         let mut rows = 0;
-        let mut missing_priors = false;
         for batch in &batches {
-            let traffic = crate::rail_traffic::RailTrafficColumns::read(batch)?;
-            let service = col_u8(batch, "service")?;
-            let rail_type = col_u8(batch, "rail_type")?;
-            for row in 0..batch.num_rows() {
-                let current = traffic.row(row);
-                missing_priors |= has_class_prior(rail_type.value(row), service.value(row))
-                    && (current.passenger.status == STATUS_UNKNOWN
-                        || current.freight.status == STATUS_UNKNOWN);
-            }
+            crate::rail_traffic::RailTrafficColumns::read(batch)?;
             if batch.num_rows() > 0
                 && !schema
                     .metadata()
@@ -70,30 +61,17 @@ pub fn finalize_square(
             }
             rows += batch.num_rows();
         }
-        if !missing_priors {
-            return Ok(Some(SquareReceipt {
-                rewritten: false,
-                rows_in: rows,
-                rows_out: rows,
-            }));
-        }
+        return Ok(Some(SquareReceipt {
+            rewritten: false,
+            rows_in: rows,
+            rows_out: rows,
+        }));
     }
     let merged =
         concat_batches(&schema, &batches).map_err(|e| format!("{}: {e}", arrow_path.display()))?;
-    let retained = finalized
-        .then(|| crate::rail_traffic::RailTrafficColumns::read(&merged))
-        .transpose()?;
-    let intervals = if finalized {
-        HashMap::new()
-    } else {
-        load_square_intervals(&dir)?
-    };
-    let pieces = if finalized {
-        HashMap::new()
-    } else {
-        load_square_pieces(&dir)?
-    };
-    let children = expand_rows(&merged, &intervals, &pieces, retained.as_ref())?;
+    let intervals = load_square_intervals(&dir)?;
+    let pieces = load_square_pieces(&dir)?;
+    let children = expand_rows(&merged, &intervals, &pieces)?;
     let ipc = encode_children(&merged, &children)?;
     write_atomically(&dir, &ipc)?;
     Ok(Some(SquareReceipt {
@@ -162,7 +140,6 @@ fn expand_rows(
     merged: &RecordBatch,
     intervals: &HashMap<(i64, i16), Vec<Interval>>,
     pieces: &HashMap<(i64, i16), crate::topology::Piece>,
-    retained: Option<&crate::rail_traffic::RailTrafficColumns<'_>>,
 ) -> Result<Vec<Expanded>, String> {
     let osm_id = col_i64(merged, "osm_id")?;
     let segment_idx = col_i16(merged, "segment_idx")?;
@@ -185,42 +162,19 @@ fn expand_rows(
             end_gy: end_gy.value(row),
             length_m: length.value(row),
         };
-        let children = if let Some(retained) = retained {
-            let current = retained.row(row);
-            let mut priors = RowTraffic::default();
-            fill_missing_priors(
-                &mut priors,
-                rail_type.value(row),
-                usage.value(row),
-                service.value(row),
-                row_country(merged, row)?,
-            );
-            if current.passenger.status != STATUS_UNKNOWN {
-                priors.passenger = Default::default();
-            }
-            if current.freight.status != STATUS_UNKNOWN {
-                priors.freight = Default::default();
-            }
-            vec![ChildRow {
-                geom: original,
-                traffic: priors,
-            }]
-        } else {
-            split_parent(
-                id,
-                idx,
-                original,
-                pieces.get(&(id, idx)),
-                intervals
-                    .get(&(id, idx))
-                    .map(Vec::as_slice)
-                    .unwrap_or_default(),
-                rail_type.value(row),
-                usage.value(row),
-                service.value(row),
-                row_country(merged, row)?,
-            )?
-        };
+        let country = row_country(merged, row)?;
+        let children = split_parent(
+            id,
+            idx,
+            original,
+            pieces.get(&(id, idx)),
+            intervals
+                .get(&(id, idx))
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+            rail_type.value(row),
+            country,
+        )?;
         let ref_token = utf8_at(merged, "ref", row);
         let name = utf8_at(merged, "name", row);
         let corridor = if ref_token.trim().is_empty() {
@@ -228,29 +182,27 @@ fn expand_rows(
         } else {
             ref_token
         };
+        let prior = class_prior(
+            rail_type.value(row),
+            usage.value(row),
+            service.value(row),
+            country,
+        );
         for child in children {
             expanded.push(Expanded {
                 parent: row as u32,
                 child,
+                prior,
                 osm_id: id,
                 corridor: corridor.trim().to_owned(),
                 rail_type: rail_type.value(row),
                 usage: usage.value(row),
+                service: service.value(row),
+                country_iso: country.country_iso,
             });
         }
     }
-    apply_default_sharing(&mut expanded);
-    if let Some(retained) = retained {
-        for row in &mut expanded {
-            let current = retained.row(row.parent as usize);
-            if current.passenger.status != STATUS_UNKNOWN {
-                row.child.traffic.passenger = current.passenger;
-            }
-            if current.freight.status != STATUS_UNKNOWN {
-                row.child.traffic.freight = current.freight;
-            }
-        }
-    }
+    allocate_over_parallel_tracks(&mut expanded);
     Ok(expanded)
 }
 

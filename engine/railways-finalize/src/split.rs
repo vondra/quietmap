@@ -1,6 +1,6 @@
 //! Split a parent acoustic piece at every distinct evidence boundary.
 
-use crate::merge::{row_traffic, RowTraffic};
+use crate::merge::{row_evidence, RowTraffic};
 use crate::square_intervals::Interval;
 use crate::topology::Piece;
 use grid::lonlat_to_grid;
@@ -30,8 +30,6 @@ pub fn split_parent(
     piece: Option<&Piece>,
     intervals: &[Interval],
     rail_type: u8,
-    usage: u8,
-    service: u8,
     square_country_city: SquareCountryCity,
 ) -> Result<Vec<ChildRow>, String> {
     let Some(piece) = piece else {
@@ -42,13 +40,11 @@ pub fn split_parent(
         }
         return Ok(vec![ChildRow {
             geom: original,
-            traffic: row_traffic(
+            traffic: row_evidence(
                 intervals,
                 0.0,
                 original.length_m as f64,
                 rail_type,
-                usage,
-                service,
                 square_country_city,
             ),
         }]);
@@ -93,13 +89,11 @@ pub fn split_parent(
         };
         children.push(ChildRow {
             geom,
-            traffic: row_traffic(
+            traffic: row_evidence(
                 intervals,
                 from_m,
                 to_m,
                 rail_type,
-                usage,
-                service,
                 square_country_city,
             ),
         });
@@ -107,13 +101,11 @@ pub fn split_parent(
     if children.is_empty() {
         children.push(ChildRow {
             geom: original,
-            traffic: row_traffic(
+            traffic: row_evidence(
                 intervals,
                 piece_from,
                 piece_to,
                 rail_type,
-                usage,
-                service,
                 square_country_city,
             ),
         });

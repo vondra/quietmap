@@ -186,6 +186,7 @@ struct RailVehicleCoeffs {
     a_rolling: [f64; NUM_BANDS],
     a_traction: [f64; NUM_BANDS],
     v_ref: f64,
+    /// The category's representative speed never exceeds this, in its level and its density.
     v_max: f64,
 }
 
@@ -193,7 +194,10 @@ const FREIGHT: RailVehicleCoeffs = RailVehicleCoeffs {
     a_rolling: [110.0, 118.0, 126.0, 130.0, 131.0, 128.0, 120.0, 110.0],
     a_traction: [115.0, 113.0, 110.0, 105.0, 100.0, 95.0, 90.0, 85.0],
     v_ref: 80.0,
-    v_max: 120.0,
+    // Freight runs below the posted line speed: EBA Laerm-Monitoring 2023 (Table 11) measured
+    // freight pass-bys at a train-weighted mean of 88.9 km/h over its 14 training-square main-line
+    // stations (station means 78-96 km/h; holdout rule v1, 2026-09-24).
+    v_max: 88.9,
 };
 
 const PASSENGER: RailVehicleCoeffs = RailVehicleCoeffs {
@@ -243,10 +247,14 @@ impl RailType {
     }
 }
 
-/// Compute emission bands for one vehicle type at given speed [dB/vehicle].
-fn vehicle_emission(coeffs: &RailVehicleCoeffs, speed_kmh: f64) -> [f64; NUM_BANDS] {
-    let v = speed_kmh.clamp(20.0, coeffs.v_max);
-    let speed_corr = B_ROLLING * (v / coeffs.v_ref).log10();
+/// One representative speed per category on a line: the line speed within the category's range.
+fn category_speed_kmh(coeffs: &RailVehicleCoeffs, line_speed_kmh: f64) -> f64 {
+    line_speed_kmh.clamp(20.0, coeffs.v_max)
+}
+
+/// Compute emission bands for one vehicle type at its representative speed [dB/vehicle].
+fn vehicle_emission(coeffs: &RailVehicleCoeffs, category_speed_kmh: f64) -> [f64; NUM_BANDS] {
+    let speed_corr = B_ROLLING * (category_speed_kmh / coeffs.v_ref).log10();
 
     let mut bands = [0.0f64; NUM_BANDS];
     let c = std::f64::consts::LN_10 * 0.1;
@@ -265,7 +273,8 @@ fn vehicle_emission(coeffs: &RailVehicleCoeffs, speed_kmh: f64) -> [f64; NUM_BAN
 ///
 /// CNOSSOS Annex IV density: `L_W/m = L_W_per_train + 10·log₁₀(Q / (T × 1000 × v))`
 /// where Q = trains in the period, T = period hours (12 day / 4 evening / 8 night),
-/// v = km/h. Callers pass the per-period train subset and the period length.
+/// v = the category's representative speed in km/h, the same speed that sets its per-train
+/// level. Callers pass the line speed, the per-period train subset and the period length.
 pub fn railway_emission(
     rail_type: RailType,
     speed_kmh: f64,
@@ -276,26 +285,22 @@ pub fn railway_emission(
     if matches!(rail_type, RailType::Preserved) {
         return [f64::NEG_INFINITY; NUM_BANDS];
     }
-    let v = speed_kmh.max(20.0);
-    let flow_denom = (period_hours.max(0.1) * 1000.0 * v).max(1.0);
+    let passenger_coeffs = match rail_type {
+        RailType::Tram => &TRAM,
+        RailType::LightRail | RailType::NarrowGauge => &LIGHT_RAIL,
+        _ => &PASSENGER,
+    };
     let mut total_energy = [0.0f64; NUM_BANDS];
-
-    if trains_passenger > 0.0 {
-        let coeffs = match rail_type {
-            RailType::Tram => &TRAM,
-            RailType::LightRail | RailType::NarrowGauge => &LIGHT_RAIL,
-            _ => &PASSENGER,
-        };
-        let per_train = vehicle_emission(coeffs, v);
-        let q_corr = 10.0 * (trains_passenger / flow_denom).log10();
-        for i in 0..NUM_BANDS {
-            total_energy[i] += ((per_train[i] + q_corr) * std::f64::consts::LN_10 * 0.1).exp();
+    for (coeffs, trains) in [
+        (passenger_coeffs, trains_passenger),
+        (&FREIGHT, trains_freight),
+    ] {
+        if trains <= 0.0 {
+            continue;
         }
-    }
-
-    if trains_freight > 0.0 {
-        let per_train = vehicle_emission(&FREIGHT, v.min(FREIGHT.v_max));
-        let q_corr = 10.0 * (trains_freight / flow_denom).log10();
+        let v = category_speed_kmh(coeffs, speed_kmh);
+        let per_train = vehicle_emission(coeffs, v);
+        let q_corr = 10.0 * (trains / (period_hours.max(0.1) * 1000.0 * v)).log10();
         for i in 0..NUM_BANDS {
             total_energy[i] += ((per_train[i] + q_corr) * std::f64::consts::LN_10 * 0.1).exp();
         }
@@ -498,6 +503,25 @@ mod tests {
             "freight ({:.1}) should be louder than passenger ({:.1})",
             frt_aw,
             pax_aw
+        );
+    }
+
+    /// #34: freight at 160 km/h posted used a 120 km/h level with a 160 km/h density (−1.25 dB).
+    #[test]
+    fn one_representative_speed_sets_both_level_and_density_of_a_category() {
+        for line_speed in [120.0, 160.0, 300.0] {
+            assert_eq!(
+                railway_emission(RailType::Rail, line_speed, 0.0, 20.0, DAY_H),
+                railway_emission(RailType::Rail, FREIGHT.v_max, 0.0, 20.0, DAY_H)
+            );
+        }
+        assert_eq!(
+            railway_emission(RailType::Tram, 90.0, 100.0, 0.0, DAY_H),
+            railway_emission(RailType::Tram, TRAM.v_max, 100.0, 0.0, DAY_H)
+        );
+        assert_ne!(
+            railway_emission(RailType::Rail, 60.0, 0.0, 20.0, DAY_H),
+            railway_emission(RailType::Rail, FREIGHT.v_max, 0.0, 20.0, DAY_H)
         );
     }
 
