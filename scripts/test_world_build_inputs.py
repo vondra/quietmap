@@ -17,19 +17,19 @@ class WorldBuildInputsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(inputs.qmgrid, 'Z9_AXIS', 2):
             root = Path(directory)
             source = root / 'source'
-            raster = source / 'z9/0/0/dem.i16be'
+            raster = source / 'z9/0/0/dem.u16le'
             for x in range(2):
                 for y in range(2):
                     square = source / inputs.qmgrid.square_name(x, y)
                     square.mkdir(parents=True)
-                    for name in ('dem.i16be', 'forest.u8', 'imd.u8'):
+                    for name in ('dem.u16le', 'canopy.u8', 'forest.u8', 'imd.u8'):
                         (square / name).write_bytes(b'\x00\x25' if square / name == raster else b'')
             pins = root / 'pins.jsonl'
             selected = list(inputs.raster_inputs(source))
-            self.assertEqual(len(selected), 12)
+            self.assertEqual(len(selected), 16)
             self.assertIn(raster, selected)
             inputs.pin_inputs(pins, selected)
-            self.assertEqual(len(inputs.load_pin(pins)), 12)
+            self.assertEqual(len(inputs.load_pin(pins)), 16)
             output = root / 'valid'
             inputs.attach_rasters(source, output)
             inputs.attach_rasters(source, output)  # a resumed build attaches again
@@ -40,12 +40,12 @@ class WorldBuildInputsTest(unittest.TestCase):
                 inputs.attach_rasters(source, output)
             foreign.unlink()
             foreign.symlink_to(source / 'z9/1/1/imd.u8')
-            self.assertEqual((output / 'z9/0/0/dem.i16be').read_bytes(), raster.read_bytes())
+            self.assertEqual((output / 'z9/0/0/dem.u16le').read_bytes(), raster.read_bytes())
             self.assertEqual((output / 'z9/1/1/imd.u8').stat().st_size, 0)
-            self.assertEqual(len(list(output.glob('z9/*/*/*'))), 12)
+            self.assertEqual(len(list(output.glob('z9/*/*/*'))), 16)
             inputs.verify_prepared_raster_links(source, output)
-            attached = output / 'z9/0/0/dem.i16be'
-            replacement = root / 'replacement.i16be'
+            attached = output / 'z9/0/0/dem.u16le'
+            replacement = root / 'replacement.u16le'
             replacement.write_bytes(b'other generation')
             attached.unlink()
             attached.symlink_to(replacement)

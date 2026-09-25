@@ -34,7 +34,7 @@ fn check_uniform_ground(imd: u8) -> Result<()> {
             elevation: 0.0,
             forest: 0,
             imd,
-            _pad: 0
+            canopy_m: 0
         };
         256 * 256
     ])?;

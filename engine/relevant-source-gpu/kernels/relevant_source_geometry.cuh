@@ -59,7 +59,7 @@ struct FusedPixel {
     float elevation;
     uint8_t forest;
     uint8_t imd;
-    uint8_t padding;
+    uint8_t canopy_m;
 };
 
 struct DeviceRasterGeometry {
@@ -113,6 +113,7 @@ struct SampledRasterPoint {
     float elevation_m;
     uint8_t forest;
     uint8_t imd;
+    uint8_t canopy_m;
 };
 
 struct LineReceiverGeometry {
@@ -128,6 +129,7 @@ struct LineReceiverGeometry {
 
 static_assert(sizeof(DeviceLineSource) == 128, "source ABI");
 static_assert(sizeof(FusedPixel) == 8, "raster pixel ABI");
+static_assert(offsetof(FusedPixel, canopy_m) == 6, "canopy raster ABI");
 static_assert(sizeof(DeviceRasterGeometry) == 24, "raster geometry ABI");
 static_assert(sizeof(DeviceObstacleGrid) == 48, "obstacle grid ABI");
 // Four floats is the shape `DeviceObstacleEdgeEndpoints` carries on the host,
@@ -197,6 +199,7 @@ __device__ __forceinline__ SampledRasterPoint sample_scene_raster(
     SampledRasterPoint result;
     result.elevation_m = fmaf(row_fraction, elevation1 - elevation0, elevation0);
     result.forest = scene.raster_pixels[nearest].forest;
+    result.canopy_m = scene.raster_pixels[nearest].canopy_m;
     result.imd = static_cast<uint8_t>(quietmap_clamp(
         roundf(fmaf(row_fraction, imd1 - imd0, imd0)), 0.0f, 255.0f));
     return result;

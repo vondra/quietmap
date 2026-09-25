@@ -48,7 +48,9 @@ pub struct PathProfile {
     pub t: Vec<f64>,
     /// DEM ground elevation at each t (bilinear where supported).
     pub elevation_m: Vec<f32>,
-    /// WorldCover forest flag at each t (nearest cell). 0 or 100.
+    /// Canopy top above bare earth in metres (nearest cell); NaN is unavailable.
+    pub canopy_m: Vec<f32>,
+    /// Canopy cover at each t (nearest cell), 0..100 percent.
     pub forest_u8: Vec<u8>,
     /// IMD imperviousness at each t (0..100).
     pub imd_u8: Vec<u8>,
@@ -75,6 +77,7 @@ impl PathProfile {
     pub fn clear(&mut self) {
         self.t.clear();
         self.elevation_m.clear();
+        self.canopy_m.clear();
         self.forest_u8.clear();
         self.imd_u8.clear();
         self.elevation_f64_scratch.clear();
@@ -321,6 +324,7 @@ pub fn build_default<R: RasterSampler + ?Sized>(
 
     let n = out.t.len();
     out.elevation_m.reserve(n);
+    out.canopy_m.reserve(n);
     out.forest_u8.reserve(n);
     out.imd_u8.reserve(n);
 
@@ -334,6 +338,7 @@ pub fn build_default<R: RasterSampler + ?Sized>(
         // Default trait has no forest accessor; callers should override if they
         // care about vegetation — default impl stores 0 for all samples.
         out.forest_u8.push(0);
+        out.canopy_m.push(0.0);
     }
 
     out.step_m_med = median_step_m(&out.t, dist_m);

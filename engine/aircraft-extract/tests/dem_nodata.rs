@@ -25,7 +25,12 @@ fn rasters(root: &Path) -> RealRasters {
                         Channel::Dem => (lon / 18) as i16,
                         _ => channel.ocean_value(),
                     };
-                    bytes.extend_from_slice(&value.to_be_bytes()[2 - channel.bytes_per_node()..]);
+                    let raw = channel.encode(if value == i16::MIN {
+                        f64::NAN
+                    } else {
+                        f64::from(value)
+                    });
+                    bytes.extend_from_slice(&raw[..channel.bytes_per_node()]);
                 }
             }
             let path = channel.path(root, square);

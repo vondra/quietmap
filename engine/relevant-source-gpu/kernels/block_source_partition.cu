@@ -223,3 +223,27 @@ extern "C" int relevant_source_cuda_paint_tile(
             output_period_energy);
     }, elapsed_milliseconds);
 }
+
+/// Bounded reader contract probe; this launch evaluates no sources and paints no tiles.
+__global__ void sample_raster_contract_kernel(
+    DeviceScenePointers scene, uint32_t count, const float* columns, const float* rows,
+    float* elevation, uint8_t* canopy
+) {
+    const uint32_t index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index < count) {
+        const SampledRasterPoint point = sample_scene_raster(scene, columns[index], rows[index]);
+        elevation[index] = point.elevation_m;
+        canopy[index] = point.canopy_m;
+    }
+}
+
+extern "C" int relevant_source_cuda_sample_raster_contract(
+    const DeviceScenePointers* scene, uint32_t count, const float* columns, const float* rows,
+    float* elevation, uint8_t* canopy
+) {
+    if (count == 0) return cudaErrorInvalidValue;
+    sample_raster_contract_kernel<<<(count + 127) / 128, 128>>>(
+        *scene, count, columns, rows, elevation, canopy);
+    const cudaError_t status = cudaGetLastError();
+    return status == cudaSuccess ? cudaDeviceSynchronize() : status;
+}

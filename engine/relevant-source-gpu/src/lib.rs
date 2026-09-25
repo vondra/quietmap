@@ -21,3 +21,6 @@ pub mod surface_gpu;
 pub mod surface_scene;
 pub mod tile_receivers;
 pub mod tile_source_incidence;
+
+#[cfg(all(test, feature = "gpu"))]
+mod raster_contract_tests;

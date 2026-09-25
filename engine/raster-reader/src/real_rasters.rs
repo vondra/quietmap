@@ -1,7 +1,7 @@
 //! [`RealRasters`] — lazy mmap'd native-lattice z9 windows for popup and aircraft sampling.
 //!
-//! Implements [`noise_compute::types::RasterSampler`] over three [`TileStore`]s
-//! (DEM, forest, IMD), each a byte-bounded LRU cache of mmap'd windows loaded on
+//! Implements [`noise_compute::types::RasterSampler`] over four [`TileStore`]s
+//! (DEM, canopy, forest, IMD), each a byte-bounded LRU cache of mmap'd windows loaded on
 //! first access. This is the global-scale reader the per-point popup and the
 //! aircraft extract sample directly; the pipeline crops it into a
 //! [`crate::fused_grid::FusedGrid`] for L3-resident batch compute.
@@ -15,6 +15,7 @@ use std::path::Path;
 /// Real raster data from native-lattice z9 windows. Implements RasterSampler.
 pub struct RealRasters {
     pub dem: TileStore,
+    pub canopy: TileStore,
     pub forest: TileStore,
     pub imd: TileStore,
 }
@@ -23,10 +24,11 @@ impl RealRasters {
     /// Files are opened and mmap'd only on first access; every channel fails independently.
     pub fn new(data_dir: &Path) -> Self {
         // Byte bounds accommodate two 91 MB polar DEM windows without allowing
-        // a global flight sweep to retain every visited mmap (768 MiB total).
+        // a global flight sweep to retain every visited mmap (1024 MiB total).
         let cache_bytes = 256 * 1024 * 1024;
         Self {
             dem: TileStore::new(data_dir, Channel::Dem, cache_bytes),
+            canopy: TileStore::new(data_dir, Channel::Canopy, cache_bytes),
             forest: TileStore::new(data_dir, Channel::Forest, cache_bytes),
             imd: TileStore::new(data_dir, Channel::Imd, cache_bytes),
         }
@@ -37,6 +39,7 @@ impl RealRasters {
     /// to avoid per-sample cache-slot locking and LRU updates.
     pub fn preload_bbox(&self, lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) {
         self.dem.preload_bbox(lat_min, lat_max, lon_min, lon_max);
+        self.canopy.preload_bbox(lat_min, lat_max, lon_min, lon_max);
         self.forest.preload_bbox(lat_min, lat_max, lon_min, lon_max);
         self.imd.preload_bbox(lat_min, lat_max, lon_min, lon_max);
     }
@@ -119,6 +122,7 @@ impl RasterSampler for RealRasters {
 
         let n = out.t.len();
         out.elevation_m.reserve(n);
+        out.canopy_m.reserve(n);
         out.forest_u8.reserve(n);
         out.imd_u8.reserve(n);
 
@@ -126,6 +130,8 @@ impl RasterSampler for RealRasters {
         // stays warm while consecutive samples fall in the same z9 window.
         let mut dem_key = (i32::MIN, i32::MIN);
         let mut dem_tile = None;
+        let mut canopy_key = (i32::MIN, i32::MIN);
+        let mut canopy_tile = None;
         let mut for_key = (i32::MIN, i32::MIN);
         let mut for_tile = None;
         let mut imd_key = (i32::MIN, i32::MIN);
@@ -137,6 +143,9 @@ impl RasterSampler for RealRasters {
             let elev = self
                 .dem
                 .sample_cached(lat, lon, &mut dem_key, &mut dem_tile);
+            let canopy = self
+                .canopy
+                .sample_cached(lat, lon, &mut canopy_key, &mut canopy_tile);
             let fr = self
                 .forest
                 .sample_cached(lat, lon, &mut for_key, &mut for_tile);
@@ -145,11 +154,13 @@ impl RasterSampler for RealRasters {
                 .sample_cached(lat, lon, &mut imd_key, &mut imd_tile);
             // PathProfile's byte channels cannot carry NaN. Preserve an invalid
             // consumed channel in its floating plane for the operation guard.
-            out.elevation_m.push(if fr.is_finite() && imd.is_finite() {
-                elev as f32
-            } else {
-                f32::NAN
-            });
+            out.elevation_m
+                .push(if canopy.is_finite() && fr.is_finite() && imd.is_finite() {
+                    elev as f32
+                } else {
+                    f32::NAN
+                });
+            out.canopy_m.push(canopy as f32);
             out.forest_u8.push(fr as u8);
             out.imd_u8.push(imd as u8);
         }

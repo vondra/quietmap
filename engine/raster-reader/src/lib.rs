@@ -1,7 +1,7 @@
 //! Native geographic raster nodes partitioned into z9: a data file, a 0-byte ocean file, or an error.
 //!
 //! Implements noise_compute::types::RasterSampler for both popup (lazy) and pipeline (pre-loaded).
-//! Reads Copernicus DEM, continuous canopy cover, and impervious ground percentage.
+//! Reads bare-earth DEM, canopy height and cover, and impervious ground percentage.
 //!
 //! Submodules:
 //! - [`real_rasters`] — [`RealRasters`]: lazy mmap'd z9 windows for popup and extract sampling.
@@ -29,3 +29,6 @@ mod antimeridian_tests;
 
 #[cfg(test)]
 mod test_fixture;
+
+#[cfg(test)]
+mod terrain_tests;
