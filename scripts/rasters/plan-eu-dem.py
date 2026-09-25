@@ -92,6 +92,13 @@ def owns_square(vrt, mask, bounds):
 def plan(source_root, countries, work_dir):
     source_root, work_dir = Path(source_root), Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
+    # PROJ caches grid availability, so the search paths must be set before the
+    # first transform (ownership touches compound-CRS files whose vertical
+    # operations need these grids); a lookup without them poisons later ones.
+    grids = sorted((source_root / 'proj-grids').glob('*.tif'))
+    if not grids:
+        raise ValueError('no PROJ datum grids retained')
+    osr.SetPROJSearchPaths(osr.GetPROJSearchPaths() + [str((source_root / 'proj-grids').resolve())])
     fallback, national, masks, per_country = [], [], {}, {}
     for code in countries:
         entry = json.loads((source_root / 'gedtm-crops' / f'fallback-{FALLBACK_OF[code]}.json').read_text())
@@ -123,9 +130,6 @@ def plan(source_root, countries, work_dir):
                 if square not in squares and owns_square(vrt, mask, square_bounds(*square)):
                     squares.add(square)
                     print(json.dumps({'owns': square, 'group': group}), flush=True)
-    grids = sorted((source_root / 'proj-grids').glob('*.tif'))
-    if not grids:
-        raise ValueError('no PROJ datum grids retained')
     return dict(channel='dem', sources=fallback + national,
                 squares=sorted(squares), geoid_grids=[str(p) for p in grids],
                 feather_halo_nodes=256)
