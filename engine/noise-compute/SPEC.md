@@ -254,7 +254,9 @@ takeoff-uplift correction, descending rows (level-flight flag and more than
 correction, level rows the bare level correction. Traffic-weighted level SEL
 at 150 m is 83.1/84.4/89.7 dB for light/medium/heavy helicopters, against
 today's uniform 94.8. LAmax shifts with SEL (no certified LAmax exists), so
-scaled distance keeps the dipole limit. Gyroplanes take the light-class
+scaled distance keeps the dipole limit. Reference speed stays at today's
+100 kt: the certificates carry no speed, and the ACRP 129 kt alternative
+moves ΔV by only ±1.1 dB. Gyroplanes take the light-class
 traffic-weighted prior. The typecode-to-EASA-model mapping is not verified
 against ICAO Doc 8643. This is a runtime model change: prepared rows valid.
 
