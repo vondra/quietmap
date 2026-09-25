@@ -61,7 +61,7 @@ function validateAircraftMetadata(value, path) {
       'periods', 'observed_flights_per_day', 'helicopter_flights_per_day',
       'cruise_transits_per_day', 'lmax_peak', 'faint', 'audible', 'disruptive',
       'top_day_energy_share', 'top_day_date', 'top_flight_energy_share',
-      'sample_days', 'ga_sample_days',
+      'sample_days', 'increment_sample_days',
     ], ['top_flights'])
     validatePeriods(value.airborne.periods, `${p}.periods`)
     for (const key of ['faint', 'audible', 'disruptive']) {
