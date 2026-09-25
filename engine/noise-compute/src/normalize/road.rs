@@ -206,19 +206,6 @@ impl NormalizedRoad {
         std::array::from_fn(|p| std::array::from_fn(|c| columns[c][p]))
     }
 
-    pub fn period_emission(&self, period_pcts: [f64; 4], period_hours: f64) -> [f32; NUM_BANDS] {
-        let flows = road::build_period_flows(
-            self.light_aadt,
-            self.medium_aadt,
-            self.heavy_aadt,
-            self.moto_aadt,
-            self.speed_kmh,
-            period_pcts,
-            period_hours,
-        );
-        bands_to_f32(road::line_source_emission(&flows, self.surf_corr_db))
-    }
-
     /// The row's band emissions `L_W′` for day, evening and night.
     pub fn period_emissions_db(&self) -> [[f64; NUM_BANDS]; 3] {
         let pcts = self.period_pcts();
@@ -230,7 +217,7 @@ impl NormalizedRoad {
                 self.moto_aadt,
                 self.speed_kmh,
                 pcts[period],
-                [12.0, 4.0, 8.0][period],
+                crate::periods::END_PERIOD_HOURS[period],
             );
             road::line_source_emission(&flows, self.surf_corr_db)
         })
@@ -250,12 +237,8 @@ impl NormalizedRoad {
     }
 
     pub fn period_emissions(&self) -> ([f32; NUM_BANDS], [f32; NUM_BANDS], [f32; NUM_BANDS]) {
-        let [day, evening, night] = self.period_pcts();
-        (
-            self.period_emission(day, 12.0),
-            self.period_emission(evening, 4.0),
-            self.period_emission(night, 8.0),
-        )
+        let [day, evening, night] = self.period_emissions_db().map(bands_to_f32);
+        (day, evening, night)
     }
 }
 

@@ -2,6 +2,9 @@
 
 use crate::types::NoisePeriods;
 
+/// END day, evening and night period lengths [h]; every per-period emission divides by these.
+pub const END_PERIOD_HOURS: [f64; 3] = [12.0, 4.0, 8.0];
+
 /// Compute Lden from separate day/evening/night A-weighted levels.
 ///
 /// Lden = 10 × log₁₀((12×10^(Ld/10) + 4×10^((Le+5)/10) + 8×10^((Ln+10)/10)) / 24)

@@ -23,13 +23,6 @@ use crate::types::NUM_BANDS;
 
 const B_ROLLING: f64 = 30.0;
 
-/// END day/evening/night period lengths [h] (12 / 4 / 8). The ONE definition
-/// of the period split — every rail period loop (popup `compute_railways`,
-/// heatmap `NormalizedRail::period_emissions`, the reach
-/// `rail_period_emissions`) iterates [`RailTimeDist::periods`] over these so the
-/// share model can never fork into a second copy.
-pub const RAIL_PERIOD_HOURS: [f64; 3] = [12.0, 4.0, 8.0];
-
 /// Per-region, per-category day/evening/night traffic split for rail.
 ///
 /// Replaces the flat 65/20/15 that was applied to passenger AND freight alike —
@@ -41,21 +34,6 @@ pub const RAIL_PERIOD_HOURS: [f64; 3] = [12.0, 4.0, 8.0];
 pub struct RailTimeDist {
     pub pax: [f64; 3],
     pub frt: [f64; 3],
-}
-
-impl RailTimeDist {
-    /// `(pax_share, frt_share, period_hours)` per END period — the single
-    /// iterator every rail period loop consumes. Keeping the zip here (not
-    /// re-spelled at each call site) is what makes the popup kernel, the heatmap
-    /// loader, and the reach solver share one split.
-    #[inline]
-    pub fn periods(&self) -> [(f64, f64, f64); 3] {
-        [
-            (self.pax[0], self.frt[0], RAIL_PERIOD_HOURS[0]),
-            (self.pax[1], self.frt[1], RAIL_PERIOD_HOURS[1]),
-            (self.pax[2], self.frt[2], RAIL_PERIOD_HOURS[2]),
-        ]
-    }
 }
 
 /// EU-derived freight night split: **measured-derived** from EP IPOL-TRAN
@@ -392,6 +370,7 @@ pub fn rail_reach_m(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::periods::END_PERIOD_HOURS;
     use crate::propagation::iso9613::a_weighted_total;
 
     fn prepared_traffic(
@@ -714,7 +693,8 @@ mod tests {
         let (rt, sp, qp, qf) = (RailType::Rail, 80.0, 80.0, 20.0);
         let td = rail_time_dist(cz, rt);
         let got = rail_period_emissions(rt, sp, prepared_traffic(cz, rt, qp, qf));
-        for (period, &(pax, frt, hours)) in td.periods().iter().enumerate() {
+        for (period, hours) in END_PERIOD_HOURS.into_iter().enumerate() {
+            let (pax, frt) = (td.pax[period], td.frt[period]);
             assert_eq!(got[period], railway_emission(rt, sp, qp * pax, qf * frt, hours));
         }
     }
@@ -742,7 +722,7 @@ mod tests {
                 h,
             ))
         };
-        let [(pd, fd, hd), (pe, fe, he), (pn, fn_, hn)] = td.periods();
+        let ([pd, pe, pn], [fd, fe, fn_], [hd, he, hn]) = (td.pax, td.frt, END_PERIOD_HOURS);
         let (ld, le, ln) = (aw(pd, fd, hd), aw(pe, fe, he), aw(pn, fn_, hn));
         let lden = crate::periods::compute_lden(ld, le, ln);
         assert!(

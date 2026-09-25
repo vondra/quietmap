@@ -5,6 +5,7 @@ use crate::piece::{add, energies, lden_a, point_sum, production, Bands, Piece};
 use noise_compute::compute::line_piece::LinePiece;
 use noise_compute::constants::M_PER_DEG_LAT;
 use noise_compute::emission::road;
+use noise_compute::periods::END_PERIOD_HOURS;
 use noise_compute::propagation::geo;
 use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
 use noise_compute::propagation::point_sum::NodeSpacing;
@@ -34,9 +35,8 @@ fn to_geo(x: f64, y: f64) -> (f64, f64) {
 /// A secondary road, 5,000 vehicles/day at 70 km/h, urban default split: `L_W′` per period.
 fn secondary_road_emission() -> [Bands; 3] {
     let pcts = [[0.7; 4], [0.18; 4], [0.12; 4]];
-    let hours = [12.0, 4.0, 8.0];
     std::array::from_fn(|p| {
-        let flows = road::build_period_flows(4_600.0, 200.0, 150.0, 50.0, 70.0, pcts[p], hours[p]);
+        let flows = road::build_period_flows(4_600.0, 200.0, 150.0, 50.0, 70.0, pcts[p], END_PERIOD_HOURS[p]);
         road::line_source_emission(&flows, 0.0)
     })
 }

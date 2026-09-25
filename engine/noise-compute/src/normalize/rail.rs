@@ -1,7 +1,8 @@
 //! Prepared railway period traffic and speed normalization shared by popup and surface loaders.
 
 use crate::constants::SOURCE_HEIGHT_RAIL;
-use crate::emission::railway::{self, RailType, RAIL_PERIOD_HOURS};
+use crate::emission::railway::{self, RailType};
+use crate::periods::END_PERIOD_HOURS;
 use crate::types::NUM_BANDS;
 use serde::Serialize;
 
@@ -25,7 +26,7 @@ impl RailTraffic {
             (
                 self.passenger.periods[i],
                 self.freight.periods[i],
-                RAIL_PERIOD_HOURS[i],
+                END_PERIOD_HOURS[i],
             )
         })
     }
