@@ -133,7 +133,9 @@ export async function enrichGreatBritainRoads(
         const point = match(row)
         return point ? { countBasis: point.countBasis, observationId: point.observationId,
           light: point.light, medium: point.medium, heavy: point.heavy,
-          moto: point.moto, sourceId: SOURCE_ID, estimatedClasses: 0, // DfT publishes every class
+          moto: point.moto, sourceId: SOURCE_ID,
+          // DfT publishes every class; an estimated row scaled an older count, so no class is observed.
+          estimatedClasses: point.estimated ? 15 : 0,
         } : null
       },
       undefined,

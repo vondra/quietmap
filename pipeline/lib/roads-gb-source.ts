@@ -21,6 +21,8 @@ export const DFT_MINOR_ROAD_RANK = DFT_CATEGORY_RANK.MCU
 
 export interface DftCountPoint extends RoadObservation, RankedPoint {
   ref: string
+  /** True where DfT scaled an older count instead of counting (`estimation_method`). */
+  estimated: boolean
   roadCategory: string
   light: number
   medium: number
@@ -60,6 +62,7 @@ function countPoint(row: CsvRow): DftCountPoint | null {
   const link = Number(row.link_length_km)
   const point: DftCountPoint = { ...roadObservation(id, 'both-directions'),
     ref: (row.road_name ?? '').replace(/\s+/g, ''),
+    estimated: (row.estimation_method ?? '') !== 'Counted',
     latitude,
     longitude,
     roadCategory: row.road_category,
@@ -108,7 +111,7 @@ function flagSlipRoadPoints(points: DftCountPoint[]): void {
 // 2020 manual counts measured lockdown traffic, not a representative year (DfT methodology note).
 const UNREPRESENTATIVE_COUNT_YEARS = new Set([2020])
 
-/** Major roads: each point's latest row, estimates included. Minor roads: the latest manual count. Ten years at most. */
+/** Major roads: each point's latest row, estimates included and flagged. Minor roads: the latest manual count. Ten years at most. */
 export async function selectDftCountPoints(rows: Iterable<CsvRow> | AsyncIterable<CsvRow>): Promise<DftCountPoint[]> {
   const latest = new Map<string, DftCountPoint>()
   for await (const row of rows) {
