@@ -24,6 +24,13 @@ LICENCE = 'CC BY 4.0'
 LICENCE_URL = 'https://creativecommons.org/licenses/by/4.0/'
 # Continental Portugal in PT-TM06; islands need their own datum review.
 CONTINENTAL = (-120000, -300000, 200000, 300000)
+# The CDD object store stalls mid-response (two hung fetches 2026-09-25);
+# requests' own timeout only bounds idle reads, so a speed floor with a short
+# grace bounds dribbles too. A healthy 1 MB tile arrives in under a second.
+DOWNLOAD_TIMEOUT = 300
+STALL_GRACE_SECONDS = 10
+MIN_BYTES_PER_SECOND = 20000
+MAX_TILE_BYTES = 100_000_000
 
 
 def read_credentials(path):
@@ -89,6 +96,26 @@ def grid_aligned(path, item_id):
             and abs(transform[0] % 2) < 1e-9 and abs(transform[3] % 2) < 1e-9)
 
 
+def download_tile(session, href):
+    """Stream one tile with a total deadline and a speed floor against dribbles."""
+    started = time.monotonic()
+    response = session.get(href, timeout=60, stream=True)
+    response.raise_for_status()
+    if int(response.headers.get('Content-Length', 0)) > MAX_TILE_BYTES:
+        raise ValueError('MDT tile exceeds the plausible single-tile size')
+    parts, size = [], 0
+    for block in response.iter_content(1 << 20):
+        size += len(block)
+        if size > MAX_TILE_BYTES:
+            raise ValueError('MDT tile exceeds the plausible single-tile size')
+        parts.append(block)
+        elapsed = time.monotonic() - started
+        if elapsed > DOWNLOAD_TIMEOUT or (elapsed > STALL_GRACE_SECONDS
+                                          and size / elapsed < MIN_BYTES_PER_SECOND):
+            raise TimeoutError('MDT tile download stalled')
+    return b''.join(parts)
+
+
 def fetch_tile(output, item, session, position, total):
     target = output / PROVIDER / (item['id'] + '.tif')
     receipt = Path(str(target) + '.provenance.json')
@@ -104,9 +131,7 @@ def fetch_tile(output, item, session, position, total):
         return item, record, None
     started = time.monotonic()
     try:
-        response = session.get(href, timeout=300)
-        response.raise_for_status()
-        payload = response.content
+        payload = download_tile(session, href)
         if len(payload) < 10000 or payload[:2] not in (b'II', b'MM'):
             polite_sleep(started)
             return item, None, f'server returned {len(payload)} non-TIFF bytes'

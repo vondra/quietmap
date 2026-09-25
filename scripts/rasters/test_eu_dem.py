@@ -300,6 +300,48 @@ class PTRetainedTileTest(unittest.TestCase):
             self.assertEqual((root / 'pt-dgt' / (self.ITEM + '.tif')).read_bytes(), before)
 
 
+class PTStallGuardTest(unittest.TestCase):
+    def response(self, blocks):
+        class FakeResponse:
+            headers = {}
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, size):
+                yield from blocks
+
+        class FakeSession:
+            def get(self, href, timeout=None, stream=None):
+                self.seen = (href, timeout, stream)
+                return FakeResponse()
+
+        return FakeSession()
+
+    def test_healthy_download_returns_joined_bytes(self):
+        fetch_pt = load_hyphenated('fetch-pt-dgt')
+        session = self.response([b'x' * (1 << 20), b'y' * 100])
+        self.assertEqual(fetch_pt.download_tile(session, 'https://example.invalid/t'),
+                         b'x' * (1 << 20) + b'y' * 100)
+
+    def test_dribble_trips_the_speed_floor(self):
+        fetch_pt = load_hyphenated('fetch-pt-dgt')
+        real = (fetch_pt.STALL_GRACE_SECONDS, fetch_pt.MIN_BYTES_PER_SECOND)
+        fetch_pt.STALL_GRACE_SECONDS, fetch_pt.MIN_BYTES_PER_SECOND = 0, 10 ** 12
+        try:
+            with self.assertRaisesRegex(TimeoutError, 'stalled'):
+                fetch_pt.download_tile(self.response([b'x', b'y']),
+                                       'https://example.invalid/t')
+        finally:
+            fetch_pt.STALL_GRACE_SECONDS, fetch_pt.MIN_BYTES_PER_SECOND = real
+
+    def test_oversized_tile_is_refused(self):
+        fetch_pt = load_hyphenated('fetch-pt-dgt')
+        with self.assertRaisesRegex(ValueError, 'plausible single-tile size'):
+            fetch_pt.download_tile(self.response([b'x' * (fetch_pt.MAX_TILE_BYTES + 1)]),
+                                   'https://example.invalid/t')
+
+
 class DKZeroRemapTest(unittest.TestCase):
     WINDOW = (600000, 6220000, 601000, 6221000)
 
