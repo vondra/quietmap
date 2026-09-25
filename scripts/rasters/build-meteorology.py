@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Stream the fixed ERA5 normal to global meteorology Arrow with resumable statistics."""
+"""Stream the fixed ERA5 normal to per-square meteorology windows with resumable statistics."""
 import argparse
 import collections
 from concurrent.futures import ThreadPoolExecutor
 import datetime as dt
 import fcntl
-import hashlib
 from importlib.metadata import version
 import json
 import os
@@ -19,7 +18,7 @@ os.environ['OPENBLAS_NUM_THREADS'] = '1'
 os.environ['OMP_NUM_THREADS'] = '1'
 import numpy as np
 import numba
-from meteorology_io import Arco, Checkpoint, CONTRACT, VARIABLES, atomic_json, sha256, timezone_rules, write_arrow
+from meteorology_io import Arco, Checkpoint, CONTRACT, VARIABLES, atomic_json, final_nodes, sha256, timezone_rules, verify_squares, write_squares
 
 # Anonymous GCS chunk reads are latency-bound: one step's six chunks took 3.7 s against 0.55 s of compute
 # (measured 2026-09-24), so later steps are fetched while the current one is accumulated.
@@ -27,31 +26,33 @@ PREFETCH_STEPS = 8
 
 MODEL_ROOT = Path(__file__).resolve().parents[2] / 'engine/noise-compute'
 sys.path.insert(0, str(MODEL_ROOT))
-from meteorology import accumulate, empty_state, prepare_hour, solar_parameters
+from meteorology import accumulate, cell_coordinates, empty_state, periods_from_zone_hours, prepare_hour, solar_parameters
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source-url', required=True, help='Anonymous ARCO hourly global Zarr HTTPS root')
     parser.add_argument('--retained', type=Path, required=True)
-    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True, help='Per-square rasters root (receives z9/{x}/{y}/meteorology.bin)')
     parser.add_argument('--timezones', type=Path, required=True, help='meteorology-timezones JSON output')
     parser.add_argument('--threads', type=int, default=8, choices=range(1, 9))
     parser.add_argument('--stop-after', type=int, help='Stop after this many additional steps, checkpoint, do not publish')
     args = parser.parse_args()
     args.retained.mkdir(parents=True, exist_ok=True)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.mkdir(parents=True, exist_ok=True)
     lock = (args.retained / 'producer.lock').open('w')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     if shutil.disk_usage(args.retained).free < 16_000_000_000:
         raise RuntimeError('Need 16 GB free for two checkpoint slots and retained statistics')
-    if shutil.disk_usage(args.output.parent).free < 600_000_000:
-        raise RuntimeError('Need 600 MB free for atomic Arrow publication')
-    files = [Path(__file__), Path(__file__).with_name('meteorology_io.py'), MODEL_ROOT / 'meteorology.py']
+    if shutil.disk_usage(args.output).free < 4_000_000_000:
+        raise RuntimeError('Need 4 GB free for per-square publication')
     zones = json.loads(args.timezones.read_text())
     rules, rules_hash = timezone_rules(zones['zones'], args.retained)
-    identity = dict(timezone_rules=rules_hash, packages={name: version(name) for name in ('numpy', 'numba', 'numcodecs', 'pyarrow')}, contract=CONTRACT, source=args.source_url, timezones=sha256(args.timezones),
-                    code={path.name: sha256(path) for path in files})
+    # The identity covers only what determines the statistics: the model, the contract, the
+    # source, the timezones and the numeric packages. Orchestration and IO changes resume.
+    identity = dict(timezone_rules=rules_hash, packages={name: version(name) for name in ('numpy', 'numba')},
+                    contract=CONTRACT, source=args.source_url, timezones=sha256(args.timezones),
+                    code={'meteorology.py': sha256(MODEL_ROOT / 'meteorology.py')})
     checkpoint = Checkpoint(args.retained, identity)
     state, next_step, manifest_bytes = checkpoint.load()
     if state is None:
@@ -63,8 +64,7 @@ def main():
     first = dt.datetime(1991, 1, 1, tzinfo=dt.timezone.utc)
     end = dt.datetime(2021, 1, 1, tzinfo=dt.timezone.utc)
     total = int((end - first).total_seconds() / (3 * 3600))
-    indices = np.arange(721 * 1440)
-    latitudes, longitudes = 90 - (indices // 1440) * .25, (indices % 1440) * .25
+    latitudes, longitudes = cell_coordinates(721 * 1440)
     numba.set_num_threads(args.threads)
     stop = False
 
@@ -95,7 +95,7 @@ def main():
                 fetch_seconds = time.monotonic() - fetch_started
                 compute_started = time.monotonic()
                 hours = np.array([timestamp.astimezone(zone).hour for zone in zones])
-                zone_periods = np.where((hours >= 7) & (hours < 19), 0, np.where((hours >= 19) & (hours < 23), 1, 2)).astype(np.uint8)
+                zone_periods = periods_from_zone_hours(hours)
                 periods, daylight = prepare_hour(raw, zone_periods, zone_indices, latitudes, longitudes,
                                                  *solar_parameters(timestamp.timestamp()))
                 if not np.isfinite(raw).all() or np.any(raw[2] <= 0) or np.any(raw[5] <= 0):
@@ -119,14 +119,11 @@ def main():
             checkpoint.save(state, next_step, manifest)
         if next_step != total:
             return
-        digest = write_arrow(args.output, state, indices, dict(source_identity=args.source_url,
-            source_metadata_sha256=sha256(args.retained / 'arco-metadata.json'),
-            chunks_sha256=sha256(manifest_path), timezones_sha256=identity['timezones'],
-            timezone_rules_sha256=rules_hash,
-            producer_sha256=hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest(),
-            complete='true'))
+        files, total_bytes, digest = write_squares(args.output, *final_nodes(state))
+        if verify_squares(args.output) != (files, total_bytes, digest):
+            raise ValueError('Per-square publication failed its read-back')
         atomic_json(args.retained / 'meteorology.provenance.json', dict(identity=identity,
-            sha256=digest, bytes=args.output.stat().st_size, steps=total,
+            sha256=digest, files=files, bytes=total_bytes, steps=total,
             source_metadata_sha256=sha256(args.retained / 'arco-metadata.json'),
             chunks_sha256=sha256(manifest_path), licence='CC-BY-4.0',
             licence_url='https://creativecommons.org/licenses/by/4.0/',

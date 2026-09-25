@@ -2,4 +2,3 @@
 numpy>=1.26,<3
 numba>=0.60
 numcodecs>=0.13
-pyarrow>=18

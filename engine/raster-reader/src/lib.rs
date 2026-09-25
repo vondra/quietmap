@@ -10,7 +10,7 @@
 //! - [`tile`] — the underlying [`TileStore`](tile::TileStore) / [`RawTile`] mmap cache.
 //! - [`repack`] — the publisher writing every z9 square of a channel from verified source coverage.
 
-/// Global ERA5 climatology and receiver interpolation.
+/// Per-square ERA5 climatology windows and receiver interpolation.
 pub mod meteorology;
 pub mod channel;
 pub mod checked_rasters;

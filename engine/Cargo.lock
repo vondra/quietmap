@@ -1671,7 +1671,6 @@ dependencies = [
 name = "raster-reader"
 version = "0.1.0"
 dependencies = [
- "arrow",
  "grid",
  "memmap2 0.9.11",
  "noise-compute",

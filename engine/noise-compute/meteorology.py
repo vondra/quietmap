@@ -108,6 +108,18 @@ def prepare_hour(raw, zone_periods, zone_indices, latitudes, longitudes, declina
     return periods, daylight
 
 
+def cell_coordinates(cells):
+    """ERA5 node latitudes/longitudes for row-major global indices."""
+    indices = np.arange(cells)
+    return 90 - (indices // 1440) * .25, (indices % 1440) * .25
+
+
+def periods_from_zone_hours(hours):
+    """Local civil END periods: day 07-19, evening 19-23, night 23-07."""
+    return np.where((hours >= 7) & (hours < 19), 0,
+                    np.where((hours >= 19) & (hours < 23), 1, 2)).astype(np.uint8)
+
+
 def empty_state(cells):
     return dict(histograms=np.zeros((cells, 3, 5, 5, 18), dtype=np.uint32),
                 counts=np.zeros((cells, 3), dtype=np.uint32),
