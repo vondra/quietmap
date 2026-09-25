@@ -5,7 +5,7 @@ import argparse
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from contextlib import ExitStack
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import fcntl
 import json
 import os
@@ -76,8 +76,8 @@ def build_plan(config, output, scratch):
     anchor = datetime.strptime(settings['aircraft_anchor'], '%Y-%m')
     if as_of.strftime('%Y%m%d') != settings['as_of_date'] or anchor.strftime('%Y-%m') != settings['aircraft_anchor']:
         raise ValueError('as_of_date must be YYYYMMDD and aircraft_anchor must be YYYY-MM')
-    if anchor > as_of.replace(day=1):
-        raise ValueError('aircraft anchor is after the source as-of date')
+    if anchor - timedelta(days=1) > as_of:
+        raise ValueError('aircraft exposure year (ends the day before the anchor) ends after the source as-of date')
     storage = []
     for key, default in (('osm_node_cache', scratch / 'osm/osm_nodes.cache'),
                          ('osm_spill_dir', output / 'osm-spill')):

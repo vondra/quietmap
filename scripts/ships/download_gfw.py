@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """Download Global Fishing Watch AIS presence hours (4Wings TIF reports, 0.01° cells) for the
 whole world in 8° tiles, one report at a time, resumably: two reports per tile (large ships,
-work boats), 365 days ending at the build's anchor month."""
+work boats), over the aircraft exposure year of the build's anchor month."""
 
 import argparse
 import hashlib
 import json
-from datetime import date, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from aircraft_window import resolve_anchor, sampling_days  # noqa: E402
 
 API = "https://gateway.api.globalfishingwatch.org/v3"
 DATASET = "public-global-presence:latest"
@@ -28,12 +32,6 @@ CLASS_TYPES = {
 }
 REPORT_TIMEOUT_S = 180
 LAST_REPORT_POLL_S = 10
-
-
-def window_end(anchor):
-    """Last day of the month before the anchor (YYYY-MM): the aircraft window's end."""
-    year, month = (int(v) for v in anchor.split("-"))
-    return date(year, month, 1) - timedelta(days=1)
 
 
 def tiles():
@@ -140,14 +138,15 @@ def download(client, output, first_day, last_day, receipts, log):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, help="directory for <tile>-<class>.zip and receipts.sqlite")
-    parser.add_argument("--anchor", required=True, help="aircraft anchor month YYYY-MM; the 365-day window ends the day before it")
+    parser.add_argument("--anchor", required=True, help="aircraft anchor month YYYY-MM; the exposure year ends the day before it")
     parser.add_argument("--token-file", default=str(Path.home() / ".config/quietmap/gfw-token"))
     args = parser.parse_args()
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
-    last_day = window_end(args.anchor)
-    first_day = last_day - timedelta(days=364)
-    (output / "window.json").write_text(json.dumps({"first_day": first_day.isoformat(), "last_day": last_day.isoformat(), "days": 365,
+    # Ships share the aircraft exposure year: the GA day list is every day of it.
+    days = sampling_days(resolve_anchor(args.anchor, datetime.now(timezone.utc).date()))[1]
+    first_day, last_day = days[0], days[-1]
+    (output / "window.json").write_text(json.dumps({"first_day": first_day.isoformat(), "last_day": last_day.isoformat(), "days": len(days),
                                                     "dataset": DATASET, "classes": CLASS_TYPES, "tile_deg": TILE_DEG}, indent=1))
     log = lambda message: print(message, flush=True)  # noqa: E731
     client = Client(Path(args.token_file).read_text().strip(), log)

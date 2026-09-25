@@ -13,31 +13,33 @@ from aircraft_window import resolve_anchor, sampling_days
 
 
 class AircraftWindowTests(unittest.TestCase):
-    def test_calendar_window_covers_leap_days_and_year_boundaries(self):
-        for year in range(2023, 2027):
+    def test_window_is_the_half_open_year_before_the_anchor(self):
+        for year in range(2023, 2028):
             for month in range(1, 13):
                 anchor = date(year, month, 1)
                 airlines, ga = sampling_days(anchor)
-                self.assertEqual((len(set(airlines)), len(set(ga))), (12, 365))
-                self.assertEqual(airlines[-1], anchor)
-                self.assertEqual(ga[-1], anchor)
-                self.assertEqual(ga[0], anchor - timedelta(days=364))
-                self.assertTrue(set(airlines) <= set(ga))
-                self.assertTrue(all(day.day == 1 for day in airlines))
-                self.assertEqual([day.year * 12 + day.month for day in airlines],
-                                 list(range(year * 12 + month - 11, year * 12 + month + 1)))
-        airlines, ga = sampling_days(date(2026, 9, 1))
+                first_day = date(year - 1, month, 1)
+                self.assertEqual(ga, tuple(first_day + timedelta(days=offset)
+                                           for offset in range((anchor - first_day).days)))
+                self.assertEqual(airlines, tuple(day for day in ga if day.day == 1))
+                self.assertEqual(len(airlines), 12)
+        airlines, ga = sampling_days(date(2027, 1, 1))
+        self.assertEqual((ga[0], ga[-1], len(ga)), (date(2026, 1, 1), date(2026, 12, 31), 365))
+        self.assertEqual(airlines, tuple(date(2026, month, 1) for month in range(1, 13)))
+        airlines, ga = sampling_days(date(2026, 10, 1))
+        self.assertEqual((ga[0], ga[-1]), (date(2025, 10, 1), date(2026, 9, 30)))
         self.assertEqual((airlines[0], airlines[-1]), (date(2025, 10, 1), date(2026, 9, 1)))
-        self.assertEqual((ga[0], ga[-1]), (date(2025, 9, 2), date(2026, 9, 1)))
+        self.assertEqual(len(sampling_days(date(2025, 1, 1))[1]), 366)
         self.assertIn(date(2024, 2, 29), sampling_days(date(2024, 3, 1))[1])
 
-    def test_anchor_requires_a_completed_utc_sample_day(self):
-        for today, expected in [(date(2026, 9, 1), date(2026, 8, 1)),
-                                (date(2026, 9, 2), date(2026, 9, 1)),
-                                (date(2026, 1, 1), date(2025, 12, 1))]:
+    def test_anchor_requires_the_last_window_day_to_have_finished(self):
+        for today, expected in [(date(2026, 9, 1), date(2026, 9, 1)),
+                                (date(2026, 9, 24), date(2026, 9, 1)),
+                                (date(2027, 1, 1), date(2027, 1, 1))]:
             self.assertEqual(resolve_anchor(None, today), expected)
+        self.assertEqual(resolve_anchor("2026-09", date(2026, 9, 1)), date(2026, 9, 1))
         self.assertEqual(resolve_anchor("2024-03", date(2026, 9, 5)), date(2024, 3, 1))
-        for month in ["2026-09", "2026-10", "2026-13", "2026-9", "2026-09-01"]:
+        for month in ["2026-10", "2026-13", "2026-9", "2026-09-01"]:
             with self.assertRaises(ValueError):
                 resolve_anchor(month, date(2026, 9, 1))
         with self.assertRaises(ValueError):
@@ -91,7 +93,7 @@ class AircraftWindowTests(unittest.TestCase):
             calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
             self.assertEqual([call[0] for call in calls], ["run-all", "run-all", "run-all", "audit"])
             ga = tuple(day for day in ga if day != omitted)
-            self.assertEqual((len(airlines), len(ga)), (12, 364))
+            self.assertEqual((len(airlines), len(ga)), (12, 365), "leap year 2023-03..2024-02 minus one day")
             self.assertIn(omitted.isoformat(), result.stderr)
             for call, days in zip(calls[:3], [airlines, ga, airlines]):
                 self.assertEqual(call[call.index("--days") + 1].split(","),
@@ -159,7 +161,7 @@ class AircraftWindowTests(unittest.TestCase):
             result = subprocess.run(["bash", str(runner)], env={**environment, "SOURCE_INCOMPLETE": "1"},
                                     capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("365-day calendar retained", result.stdout)
+            self.assertIn("requested exposure year retained", result.stdout)
             self.assertFalse((root / "calls.jsonl").exists())
             self.assertFalse((root / "logs").exists())
 

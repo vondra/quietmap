@@ -211,10 +211,23 @@ class WorldBuildTest(unittest.TestCase):
     def test_noncanonical_or_future_dates_fail_before_any_producer(self):
         with patch.object(world, 'source_paths', return_value={}):
             for as_of, anchor in [('202699', '2026-09'), ('20260909', '2026-9'),
-                                  ('20260909', '2026-10')]:
+                                  ('20260909', '2026-10'), ('20260929', '2026-10')]:
                 with self.subTest(as_of=as_of, anchor=anchor), self.assertRaises(ValueError):
                     world.build_plan({'build': {'as_of_date': as_of, 'aircraft_anchor': anchor}},
                                      Path('/unused/output'), Path('/unused/scratch'))
+
+    def test_final_year_anchor_is_the_month_after_the_as_of_day(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = {name: str(root / name) for name in ('planet', 'rasters', 'enrichment', 'boundaries',
+                       'city_boundaries', 'overture', 'ghsl', 'regional_heights', 'airline', 'general_aviation', 'ships', 'ships_gfw')}
+            for path in sources.values():
+                Path(path).touch()
+            config = {'build': {'as_of_date': '20261231', 'aircraft_anchor': '2027-01',
+                                'memory_gib': 80, 'threads': 4}, 'sources': sources}
+            _, plan = world.build_plan(config, root / 'out', root / 'scratch')
+            aircraft = [dict(step.environment) for step in plan if 'AIRCRAFT_ANCHOR' in dict(step.environment)]
+            self.assertEqual([environment['AIRCRAFT_ANCHOR'] for environment in aircraft], ['2027-01'])
 
     def test_scheduler_does_not_start_dependents_after_failure_and_finishes_running_siblings(self):
         started, completed = set(), set()

@@ -18,7 +18,7 @@ class AircraftPreflightTest(unittest.TestCase):
     def window_csv(self, anchor):
         airlines, ga_days = sampling_days(resolve_anchor(anchor, date(2026, 9, 16)))
         self.assertEqual(len(airlines), 12)
-        self.assertEqual(airlines[-1].isoformat(), '2026-09-01')
+        self.assertEqual(airlines[-1].isoformat(), '2026-08-01')
         self.assertEqual(len(ga_days), 365)
         return (','.join(day.isoformat() for day in airlines),
                 ','.join(day.isoformat() for day in ga_days))
@@ -58,18 +58,18 @@ class AircraftPreflightTest(unittest.TestCase):
     def test_incomplete_ga_acquisition_and_identity_failures_stop_the_build(self):
         _airline_csv, _ga_csv = self.window_csv('2026-09')
         commands, run = self.recorder(
-            ga=Completed(1, stderr=b'selected source/cache validation failed: 2026-09-01: '
+            ga=Completed(1, stderr=b'selected source/cache validation failed: 2026-08-01: '
                                    b'asset remains unavailable\n'))
-        with self.assertRaisesRegex(ValueError, 'GA source window incomplete.*2026-09-01'):
+        with self.assertRaisesRegex(ValueError, 'GA source window incomplete.*2026-08-01'):
             preflight_aircraft_sources('/cache/airline', '/cache/ga', '2026-09', run=run)
         self.assertEqual(len(commands), 1)
 
     def test_missing_newest_airline_sample_stops_the_build(self):
         _airline_csv, _ga_csv = self.window_csv('2026-09')
         commands, run = self.recorder(
-            native=Completed(1, stderr=b'Error: missing ADS-B day 2026-09-01: '
-                                       b'/cache/airline/2026/2026-09-01\n'))
-        with self.assertRaisesRegex(ValueError, 'airline source window incomplete.*2026-09-01'), \
+            native=Completed(1, stderr=b'Error: missing ADS-B day 2026-08-01: '
+                                       b'/cache/airline/2026/2026-08-01\n'))
+        with self.assertRaisesRegex(ValueError, 'airline source window incomplete.*2026-08-01'), \
                 patch('aircraft_preflight.shutil.which', return_value='/usr/bin/cargo'):
             preflight_aircraft_sources('/cache/airline', '/cache/ga', '2026-09', run=run)
         self.assertEqual(len(commands), 3)
