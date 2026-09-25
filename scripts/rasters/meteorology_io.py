@@ -1,24 +1,26 @@
-"""ARCO chunk provenance, atomic checkpoints and the meteorology Arrow contract."""
+"""ARCO chunk provenance, atomic checkpoints and per-square meteorology windows."""
 import base64
 import datetime as dt
 import io
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
+import struct
 import time
 import urllib.request
 from zoneinfo import TZPATH, ZoneInfo
 
 import numcodecs
 import numpy as np
-import pyarrow as pa
-import pyarrow.ipc as ipc
 
 CONTRACT = json.loads((Path(__file__).resolve().parents[2] / 'engine/noise-compute/meteorology-contract.json').read_text())
 VARIABLES = ('10m_u_component_of_wind', '10m_v_component_of_wind', '2m_temperature',
              '2m_dewpoint_temperature', 'total_cloud_cover', 'surface_pressure')
-PERIODS = ('day', 'evening', 'night')
+ERA5_NODES_PER_DEGREE = 4
+ERA5_ROWS, ERA5_COLUMNS = 721, 1440
+MET_NODE_BYTES = 240
 numcodecs.blosc.set_nthreads(1)
 
 
@@ -192,30 +194,105 @@ class Checkpoint:
                     manifest_sha256=manifest_digest(self.directory / 'chunks.jsonl', manifest.tell())))
 
 
-def write_arrow(path, state, indices, metadata):
-    """Publish only complete rows, atomically; x/y are ERA5 node indices."""
+def meteorology_magic():
+    """File magic naming the contract version, shared with the Rust reader."""
+    version = CONTRACT['meteorology_contract']
+    if len(version) != 1:
+        raise ValueError('Unsupported meteorology contract version')
+    return b'qm-met' + version.encode('ascii') + b'\n'
+
+
+def era5_window(x, y):
+    """A square's ERA5 node window as (west, north, rows, columns): the same floor/ceil edge
+    bracketing as grid::raster::RasterWindow::for_square_with_density."""
+    if not (0 <= x < 512 and 0 <= y < 512):
+        raise ValueError('Square out of range')
+    longitude_nodes = 360 * ERA5_NODES_PER_DEGREE
+    pole_node = 90 * ERA5_NODES_PER_DEGREE
+    west = x * longitude_nodes // 512 - longitude_nodes // 2
+    east = ((x + 1) * longitude_nodes + 511) // 512 - longitude_nodes // 2
+    mercator = math.pi * (1.0 - 2.0 * y / 512)
+    edge = math.degrees(math.atan(math.sinh(mercator))) * ERA5_NODES_PER_DEGREE
+    north = pole_node if y == 0 else math.ceil(edge)
+    mercator = math.pi * (1.0 - 2.0 * (y + 1) / 512)
+    edge = math.degrees(math.atan(math.sinh(mercator))) * ERA5_NODES_PER_DEGREE
+    south = -pole_node if y == 511 else math.floor(edge)
+    return west, north, north - south + 1, east - west + 1
+
+
+def square_node_indices(x, y):
+    """A square's window plus the global row-major ERA5 indices of its nodes, north to south."""
+    west, north, rows, columns = era5_window(x, y)
+    latitudes = 90 * ERA5_NODES_PER_DEGREE - (north - np.arange(rows)[:, None])
+    indices = (latitudes * ERA5_COLUMNS + (west + np.arange(columns)) % ERA5_COLUMNS).ravel()
+    return (west, north, rows, columns), indices
+
+
+def final_nodes(state):
+    """Published per-node values from accumulated statistics: u8 percents, f32 moments."""
     if np.any(state['counts'] == 0):
         raise ValueError('Cannot publish a cell with an unobserved period')
+    probabilities = np.rint(100 * state['favourable_counts'] / state['counts'][:, :, None]).astype(np.uint8)
     means = state['means'].astype(np.float32)
     variance = (state['m2'] / state['counts'][:, :, None]).astype(np.float32)
-    probabilities = np.rint(100 * state['favourable_counts'] / state['counts'][:, :, None]).astype(np.uint8)
-    arrays = {'x': pa.array(indices % 1440, type=pa.uint16()),
-              'y': pa.array(indices // 1440, type=pa.uint16())}
-    for k, period in enumerate(PERIODS):
-        arrays['p_' + period] = pa.FixedSizeListArray.from_arrays(pa.array(probabilities[:, k].ravel()), 16)
-        arrays['p_max_' + period] = pa.array(probabilities[:, k].max(axis=1))
-        for prefix, values in [('alpha_mean_', means), ('alpha_variance_', variance)]:
-            arrays[prefix + period] = pa.FixedSizeListArray.from_arrays(pa.array(values[:, k].ravel()), 8)
-    table = pa.table(arrays)
-    # All columns and fixed-list children are present; readers validate every value.
-    schema = pa.schema([pa.field(field.name, field.type, nullable=False) for field in table.schema],
-                       metadata={**CONTRACT, **metadata})
-    temporary = path.with_suffix('.arrow.tmp')
-    with temporary.open('wb') as stream:
-        with ipc.new_file(stream, schema) as writer:
-            writer.write_table(table.cast(schema), max_chunksize=1440 * 16)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(temporary, path)
-    sync_directory(path.parent)
-    return sha256(path)
+    return probabilities, means, variance
+
+
+def square_file_bytes(window, probabilities, means, variances):
+    """A square's file bytes: 16-byte header, then row-major 240-byte node records."""
+    west, north, rows, columns = window
+    cells = rows * columns
+    if (probabilities.shape != (cells, 3, 16) or means.shape != (cells, 3, 8)
+            or variances.shape != (cells, 3, 8)):
+        raise ValueError('Node arrays do not match the window')
+    if probabilities.dtype != np.uint8 or means.dtype != np.float32 or variances.dtype != np.float32:
+        raise ValueError('Node arrays must be u8 percents and f32 moments')
+    records = np.empty((cells, MET_NODE_BYTES), dtype=np.uint8)
+    records[:, :48] = probabilities.reshape(cells, 48)
+    records[:, 48:144] = means.astype('<f4').reshape(cells, 24).view(np.uint8)
+    records[:, 144:] = variances.astype('<f4').reshape(cells, 24).view(np.uint8)
+    return meteorology_magic() + struct.pack('<2h2H', west, north, columns, rows) + records.tobytes()
+
+
+def all_squares():
+    """Every z9 square in hash order: x-major, y-minor."""
+    return ((x, y) for x in range(512) for y in range(512))
+
+
+def write_squares(root, probabilities, means, variances, squares=None):
+    """Publish each square's window file; returns (files, bytes, sha256 over the payloads)."""
+    digest = hashlib.sha256()
+    files = total = 0
+    for x, y in all_squares() if squares is None else squares:
+        window, indices = square_node_indices(x, y)
+        payload = square_file_bytes(window, probabilities[indices], means[indices], variances[indices])
+        path = root / 'z9' / str(x) / str(y) / 'meteorology.bin'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix('.bin.tmp')
+        with temporary.open('wb') as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        sync_directory(path.parent)
+        digest.update(payload)
+        files += 1
+        total += len(payload)
+    return files, total, digest.hexdigest()
+
+
+def verify_squares(root, squares=None):
+    """Re-read every window file from disk, checking magic, dims and length; same triple."""
+    digest = hashlib.sha256()
+    files = total = 0
+    for x, y in all_squares() if squares is None else squares:
+        west, north, rows, columns = era5_window(x, y)
+        payload = (root / 'z9' / str(x) / str(y) / 'meteorology.bin').read_bytes()
+        if (payload[:8] != meteorology_magic()
+                or struct.unpack('<2h2H', payload[8:16]) != (west, north, columns, rows)
+                or len(payload) != 16 + rows * columns * MET_NODE_BYTES):
+            raise ValueError(f'Window file failed verification: z9/{x}/{y}')
+        digest.update(payload)
+        files += 1
+        total += len(payload)
+    return files, total, digest.hexdigest()
