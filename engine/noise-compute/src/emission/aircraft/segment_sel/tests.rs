@@ -465,7 +465,7 @@ fn empty_building_set_is_bit_identical_to_terrain_only() {
     let mut crossings = CrossingScratch::default();
     let buildings = crate::emission::aircraft::BuildingHorizon::build(
         &obstacles,
-        &FlatGround,
+        |lat, lon| FlatGround.elevation(lat, lon),
         C2_RX_LAT,
         C2_RX_LON,
         rx_alt,
@@ -482,7 +482,7 @@ fn empty_building_set_is_bit_identical_to_terrain_only() {
     let off_ray_obstacles = c2_building_at(0.0, 100.0, 100.0);
     let off_ray_buildings = BuildingHorizon::build(
         &off_ray_obstacles,
-        &FlatGround,
+        |lat, lon| FlatGround.elevation(lat, lon),
         C2_RX_LAT,
         C2_RX_LON,
         rx_alt,
@@ -536,7 +536,7 @@ fn building_ray_stops_at_the_finite_subsegment_endpoint() {
     let mut crossings = CrossingScratch::default();
     let buildings = BuildingHorizon::build(
         &obstacles,
-        &FlatGround,
+        |lat, lon| FlatGround.elevation(lat, lon),
         C2_RX_LAT,
         C2_RX_LON,
         rx_alt,
@@ -574,7 +574,7 @@ fn terrain_and_building_diffraction_take_the_maximum() {
     let mut crossings = CrossingScratch::default();
     let buildings = BuildingHorizon::build(
         &obstacles,
-        &FlatGround,
+        |lat, lon| FlatGround.elevation(lat, lon),
         C2_RX_LAT,
         C2_RX_LON,
         receiver_alt_m,

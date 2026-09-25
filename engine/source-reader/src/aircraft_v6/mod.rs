@@ -122,7 +122,7 @@ pub fn add_v6_aircraft_to_result(
         .then(|| {
             noise_compute::emission::aircraft::BuildingHorizon::build(
                 obstacles,
-                rasters,
+                |lat, lon| rasters.elevation(lat, lon),
                 receiver.lat,
                 receiver.lon,
                 receiver.altitude_m(),
