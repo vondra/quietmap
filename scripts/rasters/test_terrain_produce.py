@@ -136,5 +136,68 @@ class TerrainTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             convert_datum(np.zeros((1,1)),window,999999)
 
+    def test_nodes_past_the_datum_grid_fall_back_without_a_shift(self):
+        import terrain_produce
+        real = terrain_produce.datum_transform
+        class GridEdge:
+            def TransformPoints(self, points):
+                if any(point[0] < 0 for point in points):
+                    raise RuntimeError('Coordinate to transform falls outside grid')
+                return [(x, y, z + 2.0) for x, y, z in points]
+        terrain_produce.datum_transform = lambda *args, **kwargs: GridEdge()
+        try:
+            window=dict(north_node=1,west_node=-1,rows=1,columns=3,nodes_per_degree=1)
+            values = convert_datum(np.full((1, 3), 10.0), window, 5778)
+            self.assertTrue(np.isnan(values[0, 0]))
+            self.assertEqual(values[0, 1], 12.0)
+            self.assertEqual(values[0, 2], 12.0)
+        finally:
+            terrain_produce.datum_transform = real
+
+    def test_silent_inf_grid_cells_fall_back_without_a_shift(self):
+        import terrain_produce
+        real = terrain_produce.datum_transform
+        class HoleyGrid:
+            def TransformPoints(self, points):
+                return [(x, y, z + 2.0) if x >= 0 else (float('inf'),) * 3
+                        for x, y, z in points]
+        terrain_produce.datum_transform = lambda *args, **kwargs: HoleyGrid()
+        try:
+            window=dict(north_node=1,west_node=-1,rows=1,columns=3,nodes_per_degree=1)
+            values = convert_datum(np.full((1, 3), 10.0), window, 5778)
+            self.assertTrue(np.isnan(values[0, 0]))
+            self.assertEqual(values[0, 1], 12.0)
+            self.assertEqual(values[0, 2], 12.0)
+        finally:
+            terrain_produce.datum_transform = real
+
+    def test_conversion_without_any_node_is_a_setup_error(self):
+        import terrain_produce
+        real = terrain_produce.datum_transform
+        class EmptyGrid:
+            def TransformPoints(self, points):
+                return [(float('inf'),) * 3 for _ in points]
+        terrain_produce.datum_transform = lambda *args, **kwargs: EmptyGrid()
+        try:
+            window=dict(north_node=1,west_node=0,rows=1,columns=2,nodes_per_degree=1)
+            with self.assertRaisesRegex(ValueError, 'not a zero shift'):
+                convert_datum(np.full((1, 2), 10.0), window, 5778)
+        finally:
+            terrain_produce.datum_transform = real
+
+    def test_unexpected_datum_error_still_raises(self):
+        import terrain_produce
+        real = terrain_produce.datum_transform
+        class Broken:
+            def TransformPoints(self, points):
+                raise RuntimeError('cannot find datum grid')
+        terrain_produce.datum_transform = lambda *args, **kwargs: Broken()
+        try:
+            window=dict(north_node=1,west_node=0,rows=1,columns=1,nodes_per_degree=1)
+            with self.assertRaisesRegex(RuntimeError, 'cannot find datum grid'):
+                convert_datum(np.full((1, 1), 10.0), window, 5778)
+        finally:
+            terrain_produce.datum_transform = real
+
 
 if __name__ == '__main__': unittest.main()

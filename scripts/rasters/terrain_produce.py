@@ -59,23 +59,62 @@ def datum_transform(vertical_crs, area_of_interest=None):
     return osr.CreateCoordinateTransformation(source, target, options)
 
 
+def past_grid_edge(error):
+    """Whether a PROJ failure means out-of-grid nodes (fall back) rather than a setup error (raise)."""
+    message = str(error)
+    return 'falls outside grid' in message or 'evaluates to nodata' in message
+
+
+def convert_row_or_none(transform, points):
+    """Convert one row, or return None when out-of-grid nodes need per-point isolation."""
+    try:
+        converted = np.asarray(transform.TransformPoints(points))
+    except RuntimeError as error:
+        if not past_grid_edge(error):
+            raise
+        return None
+    # PROJ returns inf instead of raising for nodata cells inside the grid rectangle.
+    return converted if np.isfinite(converted).all() else None
+
+
+def convert_singly(transform, row_values, valid, points):
+    """Convert one failed row point by point; out-of-grid nodes fall back, anything else raises."""
+    for index, point in zip(valid, points):
+        try:
+            _, _, height = transform.TransformPoints([point])[0]
+        except RuntimeError as error:
+            if not past_grid_edge(error):
+                raise
+            row_values[index] = np.nan
+            continue
+        row_values[index] = height if np.isfinite(height) else np.nan
+
+
 def convert_datum(values, window, vertical_crs, area_of_interest=None):
-    """Apply the geoid shift at each target node after area averaging (never a constant offset)."""
+    """Apply the geoid shift at each target node after area averaging (never a constant offset).
+
+    Feather-halo nodes can reach past the national datum grid; those nodes get
+    no shift at all (NaN, so the fallback supplies them), never a zero shift.
+    """
     if vertical_crs == 3855:
         return values
     transform = datum_transform(vertical_crs, area_of_interest)
     density = window['nodes_per_degree']
     columns = (window['west_node'] + np.arange(window['columns'])) / density
+    had = bool(np.isfinite(values).any())
     for row in range(len(values)):
         latitude = (window['north_node'] - row) / density
         valid = np.flatnonzero(np.isfinite(values[row]))
         if not len(valid):
             continue
         points = [(float(columns[c]), latitude, float(values[row, c])) for c in valid]
-        converted = np.asarray(transform.TransformPoints(points))
-        if not np.isfinite(converted).all():
-            raise ValueError('national datum conversion failed; missing grids are not a zero shift')
-        values[row, valid] = converted[:, 2]
+        converted = convert_row_or_none(transform, points)
+        if converted is None:
+            convert_singly(transform, values[row], valid, points)
+        else:
+            values[row, valid] = converted[:, 2]
+    if had and not np.isfinite(values).any():
+        raise ValueError('national datum conversion failed; missing grids are not a zero shift')
     return values
 
 
