@@ -131,6 +131,7 @@ export async function enrichEuropeanRoads(preparedDirectory: string, cities: rea
   const index = indexEuropeanTraffic(records)
   const squares = new Set<string>()
   for (const city of cities) {
+    if (!city.records.length) continue
     const [south, west, north, east] = city.records.flatMap(record => record.coordinates).reduce(
       ([south, west, north, east], [longitude, latitude]) => [
         Math.min(south, latitude), Math.min(west, longitude),

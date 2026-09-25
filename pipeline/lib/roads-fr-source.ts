@@ -1,5 +1,6 @@
 /** Cerema RRN TMJA download and source-faithful CSV parsing. */
 
+import { withholdsCountLine } from './count-holdout.js'
 import { roadObservation, type RoadObservation } from './road-observation.js'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -165,10 +166,11 @@ function parseFile(
   }
   // 680 of the 2019 sections (1,352 km: A4 221,626, A86 183,813) publish TMJA without ratio_PL.
   // The total is the measurement; only its heavy share is borrowed from the same route.
-  const published = measured.filter(section => section.ratio !== null)
+  const admitted = measured.filter(section => !withholdsCountLine(section.coords))
+  const published = admitted.filter(section => section.ratio !== null)
   const medianRatio = published.map(section => section.ratio!).sort((a, b) => a - b)[(published.length - 1) >> 1] ?? 0
   const sections: CeremaCensusSection[] = []
-  for (const section of measured) {
+  for (const section of admitted) {
     let ratio = section.ratio
     if (ratio === null) {
       let nearest = Infinity
@@ -192,7 +194,7 @@ function parseFile(
     sections.push({ ...observation, ratio_pl: ratio, aadt_light, aadt_medium, aadt_heavy, aadt_moto })
     stats.accepted++
   }
-  if (stats.accepted + stats.duplicateSkipped === 0) {
+  if (stats.accepted + stats.duplicateSkipped === 0 && measured.length === admitted.length) {
     throw new Error(`Cerema ${year} census has no usable traffic measurements`)
   }
   return { sections, stats }

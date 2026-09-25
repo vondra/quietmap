@@ -1,5 +1,6 @@
 /** Enrich z9 German roads with BASt SVZ 2021 measured vehicle classes. */
 
+import { withholdsCountPoint } from './lib/count-holdout.js'
 import { roadObservation } from './lib/road-observation.js'
 import {
   SOURCE_ID_DE_BAST_AUTOBAHN, SOURCE_ID_DE_BAST_BUNDESSTRASSEN,
@@ -106,7 +107,7 @@ export async function enrichGermanRoads(
   preparedDirectory: string,
   sections: readonly BastCensusSection[],
 ) {
-  const census = indexBastCensus(sections)
+  const census = indexBastCensus(sections.filter(section => !withholdsCountPoint(section.lat, section.lon)))
   const tally = { matchedAutobahn: 0, matchedBundesstrasse: 0 }
   const counters = await writeNationalRoadSquares(preparedDirectory, GERMANY_BBOX, 'German', tally, path =>
     writeRoadAadt(
@@ -186,6 +187,7 @@ export function matchBwStation(
 export async function enrichBwTimeProfiles(
   preparedDirectory: string, stations: readonly BwStationProfile[],
 ) {
+  stations = stations.filter(station => !withholdsCountPoint(station.lat, station.lon))
   const byRef = bwByRef(stations)
   const entries = bwProfileEntries(stations)
   const indexOf = new Map(entries.map((entry, index) => [entry.station, index + 1]))

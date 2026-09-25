@@ -1,5 +1,6 @@
 /** Enrich Thailand roads from pinned DRR counts and explicit DOH corridor policies. */
 
+import { excludesHoldoutCounts } from './lib/count-holdout.js'
 import { roadObservation } from './lib/road-observation.js'
 import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import { loadThailandDrrSource, thailandDrrTraffic, type ThailandDrrSource } from './lib/roads-th-source.js'
@@ -38,7 +39,7 @@ export function matchThailandRoad(row: RoadRow, source: ThailandDrrSource) {
   // A slip road inherits the mainline ref; the route's count was never taken on it.
   if (!ref || isSlipRoadClass(row.roadClass)) return null
   const direct = source.records.get(ref)
-  if (direct) return { ...roadObservation(direct.roadCode, 'both-directions'), kind: 'drr' as const, ...thailandDrrTraffic(direct) }
+  if (direct && !excludesHoldoutCounts()) return { ...roadObservation(direct.roadCode, 'both-directions'), kind: 'drr' as const, ...thailandDrrTraffic(direct) }
   const bangkok = inBbox(row.midLat, row.midLon, BANGKOK_BBOX)
   for (const token of ref.split(/[;,]/).map(value => value.trim()).filter(Boolean)) {
     const motorway = MOTORWAY_AADT[token]

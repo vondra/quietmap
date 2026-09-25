@@ -138,7 +138,15 @@ The old `--scope country:CZ` was unsafe: global writers still changed the whole
 input tree. It is rejected.
 A canary scored against held-out traffic counts runs the roads chain with
 `QM_EXCLUDE_HOLDOUT_COUNTS=1`: the road writer then stamps no measured count inside a
-holdout square of rule v1 (`pipeline/lib/count-holdout.ts`); derived flows still apply.
+holdout square of rule v1 (`pipeline/lib/count-holdout.ts`). Sources also withhold physical
+count points before matching, section counts whose geometry reaches a held-out square, and
+count-derived profiles and aggregates before they can transfer to a training square. Section
+edges reserve their tile rectangles conservatively; all parts of one observation stay together.
+The retained Japanese route/class aggregates, Thai DRR counts and Polish provincial medians
+lack usable count locations, so this mode omits them. A municipal street aggregate without
+coordinates is admitted only if its whole municipality lies in training squares. Derived flows
+from the remaining training observations still apply. Start from raw inputs when changing this
+switch; it is an experiment exclusion, not a cleanup of previously enriched traffic.
 
 `--layer buildings|roads|railways|industrial` selects an independent output family.
 National buildings can run during the square-country-city bake: they use their source coordinates and only

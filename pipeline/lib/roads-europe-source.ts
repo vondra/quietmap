@@ -1,5 +1,6 @@
 /** Read the 36 staged European city traffic sources without modifying the cache. */
 
+import { withholdsCountLine } from './count-holdout.js'
 import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -175,6 +176,7 @@ export function parseEuropeanCityTraffic(city: string, path: string, bytes: Buff
     })
   }
   if (!result.records.length) throw new Error(`${city}: no usable traffic observations`)
+  result.records = result.records.filter(record => !withholdsCountLine(record.coordinates))
   return result
 }
 

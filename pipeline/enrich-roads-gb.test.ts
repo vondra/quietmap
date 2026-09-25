@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { tableFromIPC } from 'apache-arrow'
 import { assignMinorPointsToWays, enrichGreatBritainRoads, majorRoadIndex, matchDftPoint } from './enrich-roads-gb.js'
 import { selectDftCountPoints, type DftCountPoint } from './lib/roads-gb-source.js'
+import { EXCLUDE_HOLDOUT_COUNTS_ENVIRONMENT } from './lib/count-holdout.js'
 import { iso2Code } from './lib/prepared-grid.js'
 import { writeRoadsFixture } from './lib/road-test-fixture.js'
 import type { RoadRow } from './lib/roads-arrow.js'
@@ -119,4 +120,20 @@ test('z9 GB pass writes domestic data and heals a matching foreign GB stamp', as
   assert.deepEqual([...Array(2)].map((_, index) => table.getChild('source_id')!.get(index)), [1041, 0])
   assert.equal(table.getChild('aadt_light')!.get(0), 1000)
   assert.equal(table.schema.metadata.get('roads_contract'), 'country_baked_v1')
+})
+
+test('a physical holdout DfT point cannot stamp an adjacent training square', async () => {
+  // The replay put point 805005 (holdout 246/154) on B887 way 24931663 in training 245/154.
+  const rows = [csvRow({ count_point_id: 805005, year: 2025, road_name: 'B887', road_category: 'MB',
+    latitude: 57.96539637, longitude: -7.00519807 })]
+  const target = road({ ref: 'B887', roadClass: 3, midLat: 57.9654, midLon: -7.04 })
+  const normal = await selectDftCountPoints(rows)
+  assert.equal(matchDftPoint(target, majorRoadIndex(normal))?.observationId, '805005')
+  process.env[EXCLUDE_HOLDOUT_COUNTS_ENVIRONMENT] = '1'
+  try {
+    const withheld = await selectDftCountPoints(rows)
+    assert.equal(matchDftPoint(target, majorRoadIndex(withheld)), null)
+  } finally {
+    delete process.env[EXCLUDE_HOLDOUT_COUNTS_ENVIRONMENT]
+  }
 })

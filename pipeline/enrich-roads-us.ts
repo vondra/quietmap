@@ -1,6 +1,7 @@
 /** Enrich z9 US roads with class-compatible FHWA HPMS 2022 traffic measurements
  * and observed TMAS 2025 hourly TOTAL period profiles. */
 
+import { excludesHoldoutCounts, withholdsCountLine, withholdsCountPoint } from './lib/count-holdout.js'
 import { roadFeatureObservation } from './lib/pinned-road-lines.js'
 import type { RoadObservation } from './lib/road-observation.js'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
@@ -179,6 +180,8 @@ const TWIN_AADT_RATIO_TOLERANCE = 0.15
 
 /** Relabel FT1 sections with an equal FT6 twin as two-way totals; genuine one-way couplets stay directional. */
 export function withTwoWayTwinsOfOneWaySections(segments: UsRoadSegment[]): UsRoadSegment[] {
+  if (excludesHoldoutCounts()) segments = segments.filter(section => !section.lines.some(line =>
+    withholdsCountLine(Array.from({ length: line.length / 2 }, (_, i) => [line[2 * i], line[2 * i + 1]]))))
   const twoWay = buildOneHundredthDegreePointGrid(segments.filter(segment => segment.facilityType === 6))
   return segments.map(segment => {
     if (segment.facilityType !== 1) return segment
@@ -336,6 +339,7 @@ export function tmasCandidateSquares(
 export async function enrichTmasTimeProfiles(
   preparedDirectory: string, stations: readonly TmasStationProfile[],
 ): Promise<{ squares: number; rows: number; matched: number; squaresUpdated: number }> {
+  stations = stations.filter(station => !withholdsCountPoint(station.latitude, station.longitude))
   const squares = tmasCandidateSquares(stations, preparedDirectory, listPreparedSquares(preparedDirectory, US_BBOX))
   return { squares: squares.length, ...await writeTmasProfileSquares(preparedDirectory, squares, stations) }
 }

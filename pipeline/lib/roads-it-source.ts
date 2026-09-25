@@ -1,5 +1,6 @@
 /** Parse the admitted Anas TGM point census for Italian state roads. */
 
+import { withholdsCountPoint } from './count-holdout.js'
 import { roadFeatureObservation } from './pinned-road-lines.js'
 import type { RoadObservation } from './road-observation.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
@@ -96,6 +97,7 @@ export function parseItalianTgmSource(raw: string): ItalianTgmSource {
     result.stations.push({ sourceRow, ...roadFeatureObservation(feature as object, 'both-directions'), ref, latitude, longitude, total: Math.round(total) })
   }
   if (result.stations.length === 0) throw new Error('Italian TGM source has no usable measurements')
+  result.stations = result.stations.filter(point => !withholdsCountPoint(point.latitude, point.longitude))
   return result
 }
 

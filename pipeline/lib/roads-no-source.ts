@@ -1,5 +1,6 @@
 /** Parse the admitted Norwegian NVDB Trafikkmengde cache. */
 
+import { withholdsCountPoint } from './count-holdout.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
 
@@ -91,6 +92,7 @@ export function parseNorwegianNvdbSource(raw: string): NorwegianNvdbSource {
     })
   }
   if (result.segments.length === 0) throw new Error('Norwegian NVDB source has no usable measurements')
+  result.segments = result.segments.filter(point => !withholdsCountPoint(point.latitude, point.longitude))
   return result
 }
 

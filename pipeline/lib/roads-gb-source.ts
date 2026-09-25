@@ -1,5 +1,6 @@
 /** Read the retained DfT AADF release: latest major-road count per point with its slip-road flag, latest manual minor-road count. */
 
+import { withholdsCountPoint } from './count-holdout.js'
 import { spawn } from 'node:child_process'
 import { resolve } from 'node:path'
 import { parse } from 'csv-parse'
@@ -120,8 +121,9 @@ export async function selectDftCountPoints(rows: Iterable<CsvRow> | AsyncIterabl
   if (latest.size === 0) return []
   const newestYear = [...latest.values()].reduce((newest, point) => Math.max(newest, point.year), 0)
   const points = [...latest.values()].filter(point => point.year > newestYear - 10)
-  flagSlipRoadPoints(points)
-  return points
+  const admitted = points.filter(point => !withholdsCountPoint(point.latitude, point.longitude))
+  flagSlipRoadPoints(admitted)
+  return admitted
 }
 
 /** Stream the pinned release's CSV out of its zip; only the selected points stay in memory. */

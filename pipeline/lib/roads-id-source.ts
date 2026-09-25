@@ -1,6 +1,6 @@
 /** Load and match Indonesia's pinned Bina Marga network and observed LHRT values. */
 
-import { pinnedRoadObservation, loadPinnedRoadLines, buildRoadLineVertexGrid, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
+import { trainingCountLines, pinnedRoadObservation, loadPinnedRoadLines, buildRoadLineVertexGrid, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import type { RoadRow } from './roads-arrow.js'
 import { inBbox } from './spatial.js'
@@ -114,7 +114,7 @@ export function loadIndonesiaRoadSource(options: RoadLoaderArguments): Indonesia
   const national = loadPinnedRoadLines(options, [FILES.national])
   return {
     toll: buildRoadLineVertexGrid(toll.lines),
-    regional: buildRoadLineVertexGrid(regional.lines),
+    regional: buildRoadLineVertexGrid(trainingCountLines(regional.lines, line => Number(line.properties.LHRT) > 0)),
     national: buildRoadLineVertexGrid(national.lines),
     sourceRows: toll.sourceRows + regional.sourceRows + national.sourceRows,
     sourceLines: toll.lines.length + regional.lines.length + national.lines.length,

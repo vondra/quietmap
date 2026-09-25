@@ -1,5 +1,6 @@
 /** Strict GeoJSON line admission and proximity index for national road sources. */
 
+import { excludesHoldoutCounts, withholdsCountLine } from './count-holdout.js'
 import { roadObservation, type RoadObservation, type RoadCountBasis } from './road-observation.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
@@ -88,6 +89,15 @@ export function loadPinnedRoadLines(
   }
   if (sourceRows === 0 || lines.length === 0) throw new Error('national road line sources have no usable geometry')
   return { lines, sourceRows, invalidGeometrySkipped }
+}
+
+/** A multipart count is one observation: reserve every part if any counted part touches a holdout. */
+export function trainingCountLines(
+  lines: readonly PinnedRoadLine[], hasCount: (line: PinnedRoadLine) => boolean = () => true,
+): readonly PinnedRoadLine[] {
+  if (!excludesHoldoutCounts()) return lines
+  const withheld = new Set(lines.filter(line => hasCount(line) && withholdsCountLine(line.coordinates)).map(line => line.observationId))
+  return lines.filter(line => !withheld.has(line.observationId))
 }
 
 const GRID_SCALE = 100

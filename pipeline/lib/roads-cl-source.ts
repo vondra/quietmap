@@ -1,5 +1,6 @@
 /** Load and match Chile's pinned TMDA stations and Red Vial classifications. */
 
+import { withholdsCountPoint } from './count-holdout.js'
 import { roadFeatureObservation, pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import type { RoadObservation } from './road-observation.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
@@ -133,7 +134,7 @@ export function loadChileRoadSource(options: RoadLoaderArguments): ChileRoadSour
   if (!Array.isArray(raw.features) || raw.features.length === 0) throw new Error('Chile TMDA source has no features')
   const points = raw.features.map(tmdaPoint).filter((point): point is TmdaPoint => point !== null)
   if (points.length === 0) throw new Error('Chile TMDA source has no usable observations')
-  return { network: buildRoadLineVertexGrid(network.lines), tmda: buildOneHundredthDegreePointGrid(points),
+  return { network: buildRoadLineVertexGrid(network.lines), tmda: buildOneHundredthDegreePointGrid(points.filter(point => !withholdsCountPoint(point.latitude, point.longitude))),
     sourceRows: network.sourceRows + raw.features.length, sourceLines: network.lines.length,
     tmdaPoints: points.length, invalidGeometrySkipped: network.invalidGeometrySkipped,
     unavailableTrafficSkipped: raw.features.length - points.length }

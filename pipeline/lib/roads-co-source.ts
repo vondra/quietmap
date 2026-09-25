@@ -1,6 +1,6 @@
 /** Load and match Colombia's pinned INVIAS traffic and road-network sources. */
 
-import { pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
+import { trainingCountLines, pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import type { RoadRow } from './roads-arrow.js'
 import { inBbox } from './spatial.js'
@@ -45,7 +45,7 @@ const tpdaAadt = (line: PinnedRoadLine): number => number(line, 'conteo')
 export function loadColombiaRoadSource(options: RoadLoaderArguments): ColombiaRoadSource {
   const network = loadPinnedRoadLines(options, [FILES.network])
   const tpda = loadPinnedRoadLines(options, [FILES.tpda])
-  const usableTpda = tpda.lines.filter(line => tpdaAadt(line) >= 50)
+  const usableTpda = trainingCountLines(tpda.lines.filter(line => tpdaAadt(line) >= 50))
   return {
     network: buildRoadLineVertexGrid(network.lines),
     tpda: buildRoadLineVertexGrid(usableTpda),
