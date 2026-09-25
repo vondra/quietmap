@@ -93,6 +93,18 @@ class WorldTest(unittest.TestCase):
             self.assertTrue(source.with_suffix('.tif').exists())
             terrain_io.provenance(source.with_suffix('.tif'))
 
+    def test_retained_bytes_skips_a_file_that_vanishes_during_the_walk(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); (root / 'kept').write_bytes(b'12345'); (root / 'temporary').write_bytes(b'1')
+            real_stat = terrain_io.os.stat
+
+            def vanishing(path, *args, **kwargs):
+                if str(path).endswith('temporary'):
+                    raise FileNotFoundError(path)
+                return real_stat(path, *args, **kwargs)
+            with patch.object(terrain_io.os, 'stat', vanishing):
+                self.assertEqual(terrain_io.retained_bytes(root), 5)
+
 
 if __name__ == '__main__':
     unittest.main()
