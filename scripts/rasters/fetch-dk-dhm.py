@@ -9,7 +9,8 @@ import urllib.request
 
 from osgeo import gdal
 
-from dem_windows import LandMask, download_bytes, grid_windows, nodata_tag, reproject_bounds
+from dem_windows import (LandMask, download_bytes, grid_windows, nodata_tag, polite_sleep,
+                         reproject_bounds)
 from terrain_io import digest, provenance, publish_bytes, publish_json, publish_source_json, utc_now
 
 gdal.UseExceptions()
@@ -76,6 +77,7 @@ def fetch_window(output, window, mask, token, position, total):
     publish_json(receipt, record)
     print(json.dumps(dict(done=position, total=total, path=str(target),
                            seconds=time.monotonic() - started)), flush=True)
+    polite_sleep(started)
     return window, record
 
 
@@ -100,11 +102,7 @@ def main():
 
     def worker(entry):
         position, window = entry
-        started = time.monotonic()
-        try:
-            return fetch_window(output, window, mask, token, position, len(windows))
-        finally:
-            time.sleep(max(0, 1 - (time.monotonic() - started)))
+        return fetch_window(output, window, mask, token, position, len(windows))
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         results = list(pool.map(worker, enumerate(windows, 1)))

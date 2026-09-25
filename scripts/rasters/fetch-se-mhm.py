@@ -8,6 +8,7 @@ import time
 import urllib.request
 
 from cog_reduce import reduce_cog_to_grid
+from dem_windows import polite_sleep
 from terrain_io import digest, provenance, publish_json, publish_source_json, utc_now
 
 PROVIDER = 'se-lm'
@@ -75,6 +76,7 @@ def reduce_item(output, item, auth, position, total):
     publish_json(receipt, record)
     print(json.dumps(dict(done=position, total=total, path=str(target),
                            seconds=time.monotonic() - started)), flush=True)
+    polite_sleep(started)
     return record
 
 
@@ -96,11 +98,7 @@ def main():
 
     def worker(entry):
         position, item = entry
-        started = time.monotonic()
-        try:
-            return reduce_item(output, item, auth, position, len(items))
-        finally:
-            time.sleep(max(0, 1 - (time.monotonic() - started)))
+        return reduce_item(output, item, auth, position, len(items))
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         list(pool.map(worker, enumerate(items, 1)))

@@ -9,6 +9,7 @@ import urllib.request
 
 from osgeo import gdal
 
+from dem_windows import polite_sleep
 from terrain_io import fetch, provenance, publish_source_json
 
 gdal.UseExceptions()
@@ -40,12 +41,16 @@ def asset_of(item):
 
 def fetch_item(output, item, position, total):
     name, body = asset_of(item)
+    target = output / PROVIDER / name
+    receipt = Path(str(target) + '.provenance.json')
+    if target.exists() and receipt.exists():
+        return provenance(target)
+    started = time.monotonic()
     checksum = (body.get('file:checksum') or '')
     record = fetch(output, PROVIDER, name, body['href'], LICENCE, LICENCE_URL, '2026-09-25',
                    'swissALTI3D 2 m tile; LV95 (EPSG:2056), LN02 heights (EPSG:5728); '
                    f'STAC parent checksum {checksum}; raw bytes retained.',
                    expected_sha256=checksum if len(checksum) == 64 else None)
-    target = output / PROVIDER / name
     dataset = gdal.Open(str(target))
     transform = dataset.GetGeoTransform()
     if (dataset.RasterXSize, dataset.RasterYSize) != (500, 500):
@@ -53,6 +58,7 @@ def fetch_item(output, item, position, total):
     if abs(transform[1] - 2) > 1e-12 or dataset.GetRasterBand(1).GetNoDataValue() != -9999:
         raise ValueError(f'unexpected swissALTI3D placement: {item["id"]}')
     print(json.dumps(dict(done=position, total=total, path=str(target))), flush=True)
+    polite_sleep(started)
     return record
 
 
@@ -72,11 +78,7 @@ def main():
 
     def worker(entry):
         position, item = entry
-        started = time.monotonic()
-        try:
-            return fetch_item(output, item, position, len(items))
-        finally:
-            time.sleep(max(0, 1 - (time.monotonic() - started)))
+        return fetch_item(output, item, position, len(items))
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         list(pool.map(worker, enumerate(items, 1)))

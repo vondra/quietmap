@@ -15,6 +15,11 @@ RETRYABLE = (http.client.IncompleteRead, http.client.RemoteDisconnected,
              TimeoutError, ConnectionError, urllib.error.URLError)
 
 
+def polite_sleep(started):
+    """Hold each worker thread to one request per second; skips never sleep."""
+    time.sleep(max(0, 1 - (time.monotonic() - started)))
+
+
 def download_bytes(url, timeout=300, attempts=3):
     """GET a URL with backoff on transient network failures; returns (body, headers)."""
     last = None

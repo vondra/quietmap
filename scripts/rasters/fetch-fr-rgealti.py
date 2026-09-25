@@ -15,7 +15,8 @@ import urllib.request
 import numpy as np
 from osgeo import gdal
 
-from dem_windows import LandMask, download_bytes, grid_windows, nodata_tag, reproject_bounds
+from dem_windows import (LandMask, download_bytes, grid_windows, nodata_tag, polite_sleep,
+                         reproject_bounds)
 from terrain_io import digest, provenance, publish_bytes, publish_json, publish_source_json, utc_now
 
 gdal.UseExceptions()
@@ -72,6 +73,7 @@ def fetch_window(output, window, mask, position, total):
     if bool(((values == nodata) | ~np.isfinite(values)).all()):
         target.unlink()
         print(json.dumps({'skipped_sea': name}), flush=True)
+        polite_sleep(started)
         return window, None
     record = dict(url='https://cartes.gouv.fr/rechercher-une-donnee/dataset/IGNF_RGE-ALTI',
                   request_url=url, fetched_utc=utc_now(), sha256=digest(target),
@@ -83,6 +85,7 @@ def fetch_window(output, window, mask, position, total):
     publish_json(receipt, record)
     print(json.dumps(dict(done=position, total=total, path=str(target),
                            seconds=time.monotonic() - started)), flush=True)
+    polite_sleep(started)
     return window, record
 
 
@@ -108,11 +111,7 @@ def main():
 
     def worker(entry):
         position, window = entry
-        started = time.monotonic()
-        try:
-            return fetch_window(output, window, mask, position, len(windows))
-        finally:
-            time.sleep(max(0, 1 - (time.monotonic() - started)))
+        return fetch_window(output, window, mask, position, len(windows))
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         results = list(pool.map(worker, enumerate(windows, 1)))

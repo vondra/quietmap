@@ -13,6 +13,7 @@ import time
 import requests
 from osgeo import gdal
 
+from dem_windows import polite_sleep
 from terrain_io import digest, provenance, publish_bytes, publish_json, publish_source_json, utc_now
 
 gdal.UseExceptions()
@@ -86,8 +87,10 @@ def fetch_tile(output, item, session, position, total):
         response.raise_for_status()
         payload = response.content
         if len(payload) < 10000 or payload[:2] not in (b'II', b'MM'):
+            polite_sleep(started)
             return item, None, f'server returned {len(payload)} non-TIFF bytes'
     except Exception as error:
+        polite_sleep(started)
         return item, None, f'{type(error).__name__}: {str(error)[:200]}'
     publish_bytes(target, payload)
     dataset = gdal.Open(str(target))
@@ -135,6 +138,7 @@ def fetch_tile(output, item, session, position, total):
     publish_json(receipt, record)
     print(json.dumps(dict(done=position, total=total, path=str(target),
                            seconds=time.monotonic() - started)), flush=True)
+    polite_sleep(started)
     return item, record, None
 
 
@@ -166,11 +170,7 @@ def main():
 
     def worker(entry):
         position, item = entry
-        started = time.monotonic()
-        try:
-            return fetch_tile(output, item, session_for_thread(), position, len(items))
-        finally:
-            time.sleep(max(0, 1 - (time.monotonic() - started)))
+        return fetch_tile(output, item, session_for_thread(), position, len(items))
 
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         results = list(pool.map(worker, enumerate(items, 1)))
