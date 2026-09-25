@@ -11,6 +11,8 @@ export interface ServiceRoad {
   startNode: number; endNode: number
   name: string; osmId: bigint; builtUp: number
   roadClass: number; sourceId: number; tunnel: boolean; access: number; length: number
+  /** Mapped lane count, 0 when untagged. */
+  lanes: number
 }
 interface GraphNode { eligibleEdges: number[]; hasExitEdge: boolean }
 export interface Graph { nodes: GraphNode[]; segNodeIds: Int32Array; eligible: Uint8Array }
@@ -200,7 +202,7 @@ export function flowAccumulate(
   return { trips: segFlow, exitBoundary }
 }
 
-export interface StreetDemand { trips: number; through: boolean }
+export interface StreetDemand { trips: number; through: boolean; singleTrack: boolean }
 
 /** Same name inside one component, otherwise the same OSM way, including disconnected pieces. */
 export function serviceStreetDemands(
@@ -209,6 +211,7 @@ export function serviceStreetDemands(
 ): { rowTrips: Float64Array; streets: Map<number, StreetDemand> } {
   const rowTrips = new Float64Array(roads.length), streets = new Map<number, StreetDemand>()
   const groups = new Map<string | bigint, StreetDemand>()
+  const laneEvidence = new Map<string | bigint, { one: boolean; multi: boolean }>()
   components.forEach((component, componentIndex) => {
     const flow = flowAccumulate(component, graph.segNodeIds, { get: i => roads[i].length }, loads, i => fleets[i])
     for (const index of component.segments) {
@@ -216,11 +219,22 @@ export function serviceStreetDemands(
       rowTrips[index] = trips
       const key = road.name ? `${componentIndex}/${road.name}` : road.osmId
       let street = groups.get(key)
-      if (!street) { street = { trips: 0, through: false }; groups.set(key, street) }
+      if (!street) { street = { trips: 0, through: false, singleTrack: false }; groups.set(key, street) }
       street.trips = Math.max(street.trips, trips)
       street.through ||= flow.exitBoundary.has(index)
+      if (road.lanes > 0) {
+        const evidence = laneEvidence.get(key) ?? { one: false, multi: false }
+        if (road.lanes === 1) evidence.one = true
+        else evidence.multi = true
+        laneEvidence.set(key, evidence)
+      }
       streets.set(index, street)
     }
   })
+  // A street is single-track only when some piece is mapped single-lane and none is mapped wider.
+  for (const [key, street] of groups) {
+    const evidence = laneEvidence.get(key)
+    street.singleTrack = evidence?.one === true && evidence.multi !== true
+  }
   return { rowTrips, streets }
 }

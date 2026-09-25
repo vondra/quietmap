@@ -1,10 +1,11 @@
 {
   "parameters": {
-    "residentialUrban": 353.0359914617904,
-    "unclassifiedUrban": 293.9305229585366,
-    "rural": 81.85838635158306,
-    "throughFactor": 1.6047880320047236,
-    "demandScale": 0.5486951405660544
+    "residentialUrban": 326.6415556963353,
+    "unclassifiedUrban": 279.95330117108733,
+    "rural": 120.60014660962563,
+    "throughFactor": 1.8072904178118965,
+    "demandScale": 0.5499480531105053,
+    "singleTrackFactor": 0.5804116444101638
   },
   "provenance": {
     "source_url": "https://storage.googleapis.com/dft-statistics/road-traffic/downloads/data-gov-uk/dft_traffic_counts_aadf.zip",
@@ -14,17 +15,17 @@
     "attribution": "Contains public sector information licensed under OGL v3.0; \u00a9 Crown copyright, Department for Transport",
     "counts": "latest positive manual MCU AADF 2015\u20132025 excluding 2020; residential/unclassified",
     "matching": "nearest row <=12 m; no other class within 20 m; >30 m from square edge; source 11",
-    "model": "S2p: T[cell] * (through ? c : 1) + k * max_street(routed trips); structures_v5 storeys",
+    "model": "S2p: T[cell] * (through&urban ? c : 1) * (singleTrack ? d : 1) + k * max_street(routed trips); structures_v5 storeys",
     "holdout": "qm-holdout-v1/{x}/{y}: sha256 first 8 hex digits modulo 5 == 0 excluded before extraction",
     "objective": "least squares on ln(AADF); positive parameters via exponential transform",
     "cv": "five folds by sha256(w3-cv/{x}/{y}) first 8 hex digits modulo 5; no model selection",
     "training_counts": 4546,
     "training_squares": 115,
     "scipy_version": "1.18.1",
-    "numpy_version": "2.5.2",
-    "feature_code_sha256": "74b94da488f54e80615d624e8729af62c0a89bff00ff14640e272eb743ac7e87",
-    "features_sha256": "42399b0d53a3426073ce444dc9083c5d43c3e500c0dac79c9cb302d5f037a938",
-    "inputs_sha256": "877febcc9f9022b2ef6c7c2498d69d992770a6cfb4b8db4b8e27cac7cb9d0725"
+    "numpy_version": "2.5.3",
+    "feature_code_sha256": "a5882efd237c36ba26073936123b5d19ef50eab9a83c183c2da6cdea1d5cec99",
+    "features_sha256": "86084a095baf759118ada0ffcbeb39b06df5af22a3773ab1882cfd2aa7473113",
+    "inputs_sha256": "50053e43c5508b9787966a69a6af24409489b6fcf911dd0d29c8e3b248fa028d"
   },
   "cross_validation": {
     "fold_counts": [
@@ -34,8 +35,8 @@
       998,
       853
     ],
-    "median_db": -0.0005416854025047941,
-    "mae_db": 3.482304177978541,
-    "share_over_5_db": 0.2545094588649362
+    "median_db": -0.03066217500688386,
+    "mae_db": 3.456699232161207,
+    "share_over_5_db": 0.2512098548174219
   }
 }

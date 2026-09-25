@@ -44,7 +44,8 @@ export function trainingSquareFeatures(directory: string, points: readonly Local
       (p.lat - latitude(p.y + 1)) * 110540, (latitude(p.y) - p.lat) * 110540)
     if (edge <= 30) return []
     return [{ id: p.id, x: p.x, y: p.y, roadClass: road.roadClass, builtUp: road.builtUp,
-      trips: street.trips, through: street.through, row: best.index, osmId: road.osmId.toString() }]
+      trips: street.trips, through: street.through, singleTrack: street.singleTrack,
+      row: best.index, osmId: road.osmId.toString() }]
   })
   const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
   return { features, roadsSha256: hash(roadBytes), structuresSha256: hash(structureBytes) }

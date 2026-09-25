@@ -118,7 +118,8 @@ any of its rows at the receiver, microsegment or airport category is primary.
 ## Prepared road direction and traffic
 
 Local roads (residential, living street and unclassified) without a higher-priority
-observation use S2p before finalization: `T[cell] × (through ? c : 1) + k × G_street`.
+observation use S2p before finalization:
+`T[cell] × (through and urban ? c : 1) × (singleTrack ? d : 1) + k × G_street`.
 The three cells are urban residential (also living street), urban unclassified and
 pooled rural (also unknown built-up). Parameters and count/source provenance live in
 `pipeline/lib/local-street-demand.json`; `scripts/roads/fit_local_street_demand.py`
@@ -131,7 +132,12 @@ multi-source Dijkstra routes that demand to motor exits. `G_street` is the maxim
 total routed demand of any piece with the same name within one tree component,
 or of the same OSM way when unnamed. `through` means that this street contains
 an edge whose ends drain to different exits; the boundary marker is not routed
-into other streets. Background cells remain row-local across class/urban boundaries.
+into other streets. The through premium applies only in built-up areas: rural
+connectors are farm tracks without through traffic (a fitted split premium is
+1.80 urban against 1.03 rural, 95% interval [0.80, 1.27]). `singleTrack` means
+some street piece is mapped single-lane and none is mapped wider; untagged
+streets keep the full background. Background cells remain row-local across
+class/urban boundaries.
 Public local streets have no 20/day floor or class cap. Class 7 keeps its historical
 per-row routed demand clamped to 20–400/day, with no traffic when buildings are absent.
 The producer rounds and splits the total once; source 11 and allocated basis 3 remain.
