@@ -44,11 +44,8 @@ pub const WORLD_DEFAULT: [Aadt; 13] = [
     (1120.5, 81.0, 121.5, 27.0),  // 12 primary_link  — 1350
 ];
 
-// Re-export the dedicated module so existing callers (`CITY_BANGKOK` …)
-// keep working unchanged. Edit the JSON, then run
-// `node scripts/gen-city-consts-rs.mjs` to refresh.
-
-pub use crate::city_consts_generated::*;
+/// Bangkok's metro id in the baked `city_id` column (`scripts/square-country-city/geography.json`).
+pub const CITY_BANGKOK: u16 = 22;
 
 /// A hand-set or world class total describes the whole two-way section and
 /// is shared between its carriageways by the producer; a measured per-lane

@@ -55,8 +55,6 @@ use write_source_pieces::write_source_pieces;
 /// `building_use` 3 for explicitly open carports (never an indoor envelope).
 /// Stamped into Arrow metadata; consumers reject older classification semantics.
 pub const BUILDINGS_CONTRACT_V5: &str = "buildings_v5";
-/// Current activity-evidence stamp, owned together with the native readers.
-pub use square_store::osm_contract::LEISURE_CONTRACT_V4;
 /// Schema metadata key pinning the coordinate grid of every file.
 pub const GRID_CONTRACT_KEY: &str = "grid";
 pub const GRID_CONTRACT_Z30: &str = "z30";

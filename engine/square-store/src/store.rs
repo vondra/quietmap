@@ -367,7 +367,7 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         "leisure.arrow",
         "leisure",
         &[
-            ("leisure_contract", LEISURE_CONTRACT_V4),
+            ("leisure_contract", crate::osm_contract::LEISURE_CONTRACT_V4),
             ("grid", GRID_CONTRACT_Z30),
         ],
         "re-extract the source store",
@@ -431,8 +431,6 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
 pub const STRUCTURE_KIND_BUILDING: u8 = 0;
 pub const STRUCTURE_KIND_BARRIER: u8 = 1;
 
-/// Activity evidence version shared with the extractor.
-pub use crate::osm_contract::LEISURE_CONTRACT_V4;
 /// `ships.arrow` schema stamp written by `scripts/ships/build_ships.py`.
 pub const SHIPS_CONTRACT_V1: &str = "ships_v1";
 pub const GRID_CONTRACT_Z30: &str = "z30";

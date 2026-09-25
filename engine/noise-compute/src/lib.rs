@@ -6,7 +6,6 @@
 //! Single-receiver entry point: `compute_at_point` (the popup passes a
 //! `TraceCollector`).
 
-pub mod city_consts_generated;
 pub mod compute;
 pub mod confidence;
 pub mod constants;

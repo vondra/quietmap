@@ -76,10 +76,6 @@ def required_supplement(catalog: dict[int, set[Tile]]) -> set[Tile]:
     return adjacent_tiles(source_gap(catalog), north=False) & catalog[90]
 
 
-def changed_outputs(catalog: dict[int, set[Tile]]) -> set[Tile]:
-    return adjacent_tiles(source_gap(catalog), north=True) & catalog[90]
-
-
 def fetch_catalog(root: Path) -> None:
     inventories = {}
     for resolution in (30, 90):

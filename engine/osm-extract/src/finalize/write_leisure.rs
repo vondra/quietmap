@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use super::{
     evidence::write_with_evidence, parse_grid_cell, polygon_row_bbox, schema_with_contract,
-    LEISURE_CONTRACT_V4,
 };
+use square_store::osm_contract::LEISURE_CONTRACT_V4;
 
 pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let n = rows.len();
