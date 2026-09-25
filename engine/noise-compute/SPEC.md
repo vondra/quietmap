@@ -210,6 +210,14 @@ The old constant scaled distance and 7,620 m correction cutoff are removed.
 This is a runtime model change: prepared airborne/cruise rows remain valid;
 recompute receiver exposure and tiles under the coordinated physics generation.
 
+Airborne fields prepare split-piece geometry and possible predecessor links once
+per scene. CUDA selects the first surviving predecessor at each receiver, then
+sums each accepted chain in source row order before applying the free and received
+20 dB event floors. Double precision keeps small finite-segment fractions and
+floor decisions aligned with the canonical CPU scatter. Receiver batches bound
+working storage; terrain marches reuse the existing bilinear DEM tile handle and
+produce the same packed horizons as the uncached sampler.
+
 ## Aircraft local geometry
 
 Doc 29 keeps its receiver-latitude scale and infinite-line CPA. Both the

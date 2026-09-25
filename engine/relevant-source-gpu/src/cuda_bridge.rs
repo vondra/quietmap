@@ -81,6 +81,7 @@ mod device_value {
     impl Sealed for u8 {}
     impl Sealed for u16 {}
     impl Sealed for crate::airborne_pack::DeviceAirborneSource {}
+    impl Sealed for crate::airborne_chords::ChordSource {}
     impl Sealed for crate::airborne_pack::DeviceAirborneReceiver {}
     impl Sealed for crate::cruise_field::gpu::DeviceCruiseSource {}
     impl Sealed for crate::cruise_field::gpu::DeviceCruiseReceiver {}

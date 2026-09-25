@@ -81,11 +81,11 @@ __device__ __forceinline__ float airborne_offset_east(double start_lon, double r
     return (float)(delta * mpdl);
 }
 
-template<typename Real, bool SCREENED>
+template<typename Real, bool SCREENED, bool FLOOR = true>
 __device__ __forceinline__ bool aircraft_sel(
     Real ax, Real ay, Real sdx, const Real* f, int cls, int departure, int installation,
     Real receiver_altitude, const Real* npd, const Real* scaled_distance, int pixel,
-    const AirborneScreen& screen, const float* screen_geometry, Real* sel_out)
+    const AirborneScreen& screen, const float* screen_geometry, Real* sel_out, Real* free_sel_out = nullptr)
 {
     Real sdy = f[2], sdz = f[3], start_altitude = f[0];
     Real length_sq = sdx * sdx + sdy * sdy;
@@ -105,7 +105,7 @@ __device__ __forceinline__ bool aircraft_sel(
     Real log_d = log2(feet) * Real(LOG10_2);
     int operation_class = departure * NPD_NC + cls;
     Real sel_npd = npd_lookup(npd, operation_class, log_d);
-    if (sel_npd + f[4] + Real(0.4014) < Real(SEL_FLOOR)) return false;
+    if (FLOOR && sel_npd + f[4] + Real(0.4014) < Real(SEL_FLOOR)) return false;
     Real d_lambda = npd_lookup(scaled_distance, operation_class, log_d);
     Real finite = fast_delta_f(t * length, length, d_lambda);
     Real lambda = fast_lat_atten(relative_altitude, lateral_sq);
@@ -120,13 +120,14 @@ __device__ __forceinline__ bool aircraft_sel(
             installation_db = (Real(10) * Real(LOG10_2)) * (f[6] * log2(x) - log2(denominator));
     }
     Real sel = sel_npd + f[4] + installation_db - lambda + finite;
-    if (sel < Real(SEL_FLOOR)) return false;
+    if (FLOOR && sel < Real(SEL_FLOOR)) return false;
+    if (free_sel_out) *free_sel_out = sel;
     if constexpr (SCREENED) {
         Real diffraction = Real(receiver_screening_db(screen, pixel,
             screen_geometry[0], screen_geometry[1], screen_geometry[2], screen_geometry[3],
             screen_geometry[4], screen_geometry[5], screen_geometry[6]));
         sel -= fmax(diffraction - lambda, Real(0));
-        if (sel < Real(SEL_FLOOR)) return false;
+        if (FLOOR && sel < Real(SEL_FLOOR)) return false;
     }
     *sel_out = sel;
     return true;

@@ -1,4 +1,5 @@
 //! Bounded z9 surface GPU scenes, canonical corner production and z13 painting.
+mod airborne_chords;
 pub mod airborne_field;
 pub mod airborne_pack;
 pub mod cruise_field;

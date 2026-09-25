@@ -99,6 +99,7 @@ pub fn compile(output: &Path, arguments: &[String]) -> Vec<std::path::PathBuf> {
         "cruise.cu",
         "airborne_energy.cuh",
         "airborne_screening.cuh",
+        "airborne_chords.cuh",
     ] {
         println!("cargo:rerun-if-changed=kernels/{file}");
     }

@@ -1,4 +1,4 @@
-//! Bounded receiver batches reuse the surface CUDA allocator and canonical CPU chord evaluator.
+//! Bounded receiver batches share exact horizons between independent events and CUDA split chords.
 use super::AirborneScene;
 use crate::{
     airborne_pack::{
@@ -10,7 +10,9 @@ use crate::{
     tile_receivers::TileReceivers,
 };
 use anyhow::{ensure, Result};
-use noise_compute::{compute::aircraft_v6::airborne, emission::aircraft as air};
+use noise_compute::emission::aircraft as air;
+#[path = "airborne_chord_gpu.rs"]
+mod chords;
 use rayon::prelude::*;
 use source_reader::aircraft_v6::AirborneRowAccum;
 
@@ -65,7 +67,7 @@ impl AirborneScene<'_> {
             "nonfinite airborne receivers"
         );
         let mut output = vec![0.0f32; count * 3];
-        if count == 0 || (self.independent.is_empty() && self.chords.is_empty()) {
+        if count == 0 || (self.independent.is_empty() && self.chords.sources.is_empty()) {
             return Ok(output);
         }
         let _cuda = RelevantSourceCuda::initialize()?;
@@ -76,14 +78,15 @@ impl AirborneScene<'_> {
             .transpose()?;
         let npd = DeviceBuffer::from_slice(&air::NpdLuts::shared().device_luts_flat_f32())?;
         let weights = DeviceBuffer::from_slice(&self.weights.as_array().map(|v| v as f32))?;
-        let chords = AirborneRowAccum::new(&self.chords).map_err(anyhow::Error::msg)?;
+        let chords = (!self.chords.sources.is_empty())
+            .then(|| chords::DeviceChords::new(&self.chords, &self.weights)).transpose()?;
         // 256 horizons bound staging memory independently of the requested tile's pixel count.
         for first in (0..count).step_by(256) {
             let end = (first + 256).min(count);
             let screening = (first..end)
                 .into_par_iter()
                 .map(|i| {
-                    ReceiverScreening::build(
+                    ReceiverScreening::build_cached(
                         points[i][0],
                         points[i][1],
                         receivers.altitude[i],
@@ -92,39 +95,15 @@ impl AirborneScene<'_> {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let uploaded = UploadedScreen::new(&screening)?;
             if let Some(source) = &device_sources {
-                let powers = gpu_powers(source, &screening, &npd, &weights, self.days)?;
+                let powers = gpu_powers(source, &uploaded, &npd, &weights, self.days)?;
                 output[first * 3..end * 3].copy_from_slice(&powers);
             }
-            let cpu = screening
-                .par_iter()
-                .map(|rx| {
-                    let flights = airborne::scatter(
-                        &rx.receiver,
-                        chords.views(),
-                        f64::from(self.days),
-                        &self.weights,
-                        &rx.terrain,
-                        Some(&rx.buildings),
-                        0,
-                        None,
-                    );
-                    let mut powers = [0.0f64; 3];
-                    // Stable flight order keeps repeated field evaluations deterministic.
-                    let mut flights: Vec<_> = flights.into_iter().collect();
-                    flights.sort_unstable_by_key(|(id, _)| *id);
-                    for (_, flight) in flights {
-                        for (period, power) in powers.iter_mut().enumerate() {
-                            *power += flight.period_energy[period]
-                                / (f64::from(self.days) * air::PERIOD_SECONDS[period]);
-                        }
-                    }
-                    powers
-                })
-                .collect::<Vec<_>>();
-            for (pixel, powers) in cpu.iter().enumerate() {
-                for period in 0..3 {
-                    output[(first + pixel) * 3 + period] += powers[period] as f32;
+            if let Some(chords) = &chords {
+                let powers = chords.powers(&uploaded, self.days)?;
+                for (total, chord) in output[first * 3..end * 3].iter_mut().zip(powers) {
+                    *total += chord;
                 }
             }
         }
@@ -162,47 +141,59 @@ impl AirborneScene<'_> {
     }
 }
 
+struct UploadedScreen {
+    terrain: DeviceBuffer<u32>,
+    terrain_max: DeviceBuffer<f32>,
+    buildings: DeviceBuffer<u32>,
+    building_max: DeviceBuffer<u16>,
+    global_max: DeviceBuffer<u16>,
+    points: DeviceBuffer<DeviceAirborneReceiver>,
+}
+impl UploadedScreen {
+    fn new(receivers: &[ReceiverScreening]) -> Result<Self> {
+        let packed = PackedScreening::new(receivers);
+        Ok(Self {
+            terrain: DeviceBuffer::from_slice(&packed.terrain)?,
+            terrain_max: DeviceBuffer::from_slice(&packed.terrain_max)?,
+            buildings: DeviceBuffer::from_slice(&packed.buildings)?,
+            building_max: DeviceBuffer::from_slice(&packed.building_max)?,
+            global_max: DeviceBuffer::from_slice(&packed.global_max)?,
+            points: DeviceBuffer::from_slice(&receivers.iter().map(|rx| rx.device).collect::<Vec<_>>())?,
+        })
+    }
+    fn pointers(&self) -> DeviceAirborneScreen {
+        DeviceAirborneScreen {
+            terrain: self.terrain.as_ptr(), terrain_max: self.terrain_max.as_ptr(),
+            buildings: self.buildings.as_ptr(), building_max: self.building_max.as_ptr(),
+            global_max: self.global_max.as_ptr(), records: self.points.element_count() as u32,
+        }
+    }
+}
+
 fn gpu_powers(
     sources: &DeviceBuffer<DeviceAirborneSource>,
-    receivers: &[ReceiverScreening],
+    receivers: &UploadedScreen,
     npd: &DeviceBuffer<f32>,
     weights: &DeviceBuffer<f32>,
     days: u16,
 ) -> Result<Vec<f32>> {
-    let packed = PackedScreening::new(receivers);
-    let terrain = DeviceBuffer::from_slice(&packed.terrain)?;
-    let terrain_max = DeviceBuffer::from_slice(&packed.terrain_max)?;
-    let buildings = DeviceBuffer::from_slice(&packed.buildings)?;
-    let building_max = DeviceBuffer::from_slice(&packed.building_max)?;
-    let global_max = DeviceBuffer::from_slice(&packed.global_max)?;
-    let points =
-        DeviceBuffer::from_slice(&receivers.iter().map(|rx| rx.device).collect::<Vec<_>>())?;
-    let screen = DeviceAirborneScreen {
-        terrain: terrain.as_ptr(),
-        terrain_max: terrain_max.as_ptr(),
-        buildings: buildings.as_ptr(),
-        building_max: building_max.as_ptr(),
-        global_max: global_max.as_ptr(),
-        records: receivers.len().try_into()?,
-    };
+    let count = receivers.points.element_count();
     let parts = sources.element_count().div_ceil(AIRBORNE_REDUCTION_ROWS);
     let partial = DeviceBuffer::<f32>::uninitialized(
-        receivers
-            .len()
-            .checked_mul(parts)
+        count.checked_mul(parts)
             .and_then(|n| n.checked_mul(3))
             .ok_or_else(|| anyhow::anyhow!("airborne reduction overflow"))?,
     )?;
-    let output = DeviceBuffer::<f32>::uninitialized(receivers.len() * 3)?;
+    let output = DeviceBuffer::<f32>::uninitialized(count * 3)?;
     check_cuda(unsafe {
         relevant_source_cuda_airborne(
             sources.as_ptr(),
             sources.element_count().try_into()?,
-            points.as_ptr(),
-            receivers.len().try_into()?,
+            receivers.points.as_ptr(),
+            count.try_into()?,
             npd.as_ptr(),
             weights.as_ptr(),
-            &screen,
+            &receivers.pointers(),
             f32::from(days),
             partial.as_mut_ptr(),
             output.as_mut_ptr(),
@@ -313,7 +304,7 @@ mod tests {
                         .unwrap_or(0.0);
                         let sources = DeviceBuffer::from_slice(&[source])?;
                         let actual = f64::from(
-                            gpu_powers(&sources, std::slice::from_ref(&rx), &npd, &weights, 1)?[0],
+                            gpu_powers(&sources, &UploadedScreen::new(std::slice::from_ref(&rx))?, &npd, &weights, 1)?[0],
                         );
                         let difference = if actual == 0.0 && expected == 0.0 {
                             0.0
@@ -330,3 +321,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "airborne_chord_tests.rs"]
+mod chord_tests;

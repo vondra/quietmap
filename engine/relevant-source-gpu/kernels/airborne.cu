@@ -1,4 +1,4 @@
-// Screened independent airborne rows at explicit receivers; split chord families stay in the CPU kernel.
+// Screened independent events and split chords at explicit receivers.
 #include <cuda_runtime.h>
 #include <cmath>
 #include "airborne_defines.cuh"
@@ -17,7 +17,8 @@ struct AirborneReceiver {
 static_assert(sizeof(AirborneSource) == 80);
 static_assert(sizeof(AirborneReceiver) == 32);
 
-__device__ bool airborne_row_in_envelope(const AirborneSource& source, const AirborneReceiver& rx) {
+template<typename Source>
+__device__ bool airborne_row_in_envelope(const Source& source, const AirborneReceiver& rx) {
     float south = (float)(rx.latitude - AIRBORNE_REACH_M / MLAT);
     float north = (float)(rx.latitude + AIRBORNE_REACH_M / MLAT);
     if (fmaxf(source.endpoints[0], source.endpoints[2]) < south ||
@@ -123,3 +124,5 @@ extern "C" int relevant_source_cuda_airborne(
     airborne_independent_reduce<<<(receiver_count * 3 + 255) / 256, 256>>>(partial, receiver_count, parts, days, output);
     return cudaGetLastError();
 }
+
+#include "airborne_chords.cuh"
