@@ -70,7 +70,8 @@ async function get(path: string): Promise<unknown> {
 }
 const probeAt = (receiverHeightM: number | null): Probe => ({
   popup: point => get(`/api/noise-onfly-v2?lat=${point.lat}&lng=${point.lng}${receiverHeightM == null ? '' : `&receiver_height_m=${receiverHeightM}`}`) as Promise<PopupAnswer>,
-  inside: async point => (await get(`/api/building-at?lat=${point.lat}&lng=${point.lng}`)) !== null,
+  inside: async point => ((await get(`/api/building-at?lat=${point.lat}&lng=${point.lng}`)) as { building_exposure?: boolean } | null)
+    ?.building_exposure === true,
 })
 
 async function cohort(): Promise<ModelCohort> {

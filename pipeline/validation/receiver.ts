@@ -7,7 +7,7 @@ import type { PopupAnswer } from './popup.ts'
 export type Point = { lat: number; lng: number }
 export type Probe = {
   popup: (point: Point) => Promise<PopupAnswer>
-  /** True when the point lies inside an enclosed footprint (`/api/building-at`). */
+  /** True when the point lies inside an enclosed footprint: `/api/building-at` answers `building_exposure`. */
   inside: (point: Point) => Promise<boolean>
 }
 

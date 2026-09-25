@@ -317,9 +317,12 @@ pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
     let result = match structure_store::point_inside_footprint(&set, lat, lng) {
         None => serde_json::Value::Null,
+        // `building_exposure`: a click here answers the building's noisiest façade (the popup's
+        // own enclosed-footprint rule), which validation never scores as an outdoor point.
         Some((class, height)) => serde_json::json!({
             "height_m": height,
             "building_type": building_type_from_envelope(class),
+            "building_exposure": set.enclosed_footprint_at(lat, lng).is_some(),
         }),
     };
     Ok(serde_json::to_string(&result).unwrap())
