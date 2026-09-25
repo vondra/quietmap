@@ -129,5 +129,101 @@ class PublishPathTest(unittest.TestCase):
                 publish_path(target, staged)
 
 
+class PTRetainedTileTest(unittest.TestCase):
+    ITEM = 'MDT-2m-110208-07-2024'
+
+    def write_tile(self, root, origin_x, receipt_extra=None):
+        from terrain_io import digest
+        target = root / 'pt-dgt' / (self.ITEM + '.tif')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        dataset = gdal.GetDriverByName('GTiff').Create(str(target), 4, 4, 1, gdal.GDT_Float32)
+        dataset.SetGeoTransform((origin_x, 2, 0, -92000, 0, -2))
+        dataset.GetRasterBand(1).SetNoDataValue(-999)
+        dataset.GetRasterBand(1).WriteArray(np.full((4, 4), 12.5, dtype=np.float32))
+        dataset = None
+        record = dict(url='https://example.invalid/search', fetched_utc='2026-09-25T00:00:00+00:00',
+                      sha256=digest(target), bytes=target.stat().st_size, licence='CC BY 4.0',
+                      licence_url='https://creativecommons.org/licenses/by/4.0/',
+                      terms_checked_utc='2026-09-25', **(receipt_extra or {}))
+        Path(str(target) + '.provenance.json').write_text(json.dumps(record))
+        return target
+
+    def item(self):
+        return {'id': self.ITEM, 'assets': {'data': {'href': 'https://example.invalid/tile'}}}
+
+    def test_adopts_earlier_tile_without_item_id(self):
+        fetch_pt = load_hyphenated('fetch-pt-dgt')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_tile(root, -90000)
+            _, record, error = fetch_pt.fetch_tile(root, self.item(), None, 1, 1)
+            self.assertIsNone(error)
+            self.assertNotIn('item_id', record)
+
+    def test_rejects_tile_of_another_item(self):
+        fetch_pt = load_hyphenated('fetch-pt-dgt')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_tile(root, -90000, {'item_id': 'MDT-2m-999999-07-2024'})
+            with self.assertRaisesRegex(ValueError, 'another item'):
+                fetch_pt.fetch_tile(root, self.item(), None, 1, 1)
+
+    def test_off_grid_earlier_tile_needs_review(self):
+        fetch_pt = load_hyphenated('fetch-pt-dgt')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            before = self.write_tile(root, -89999).read_bytes()
+            with self.assertRaisesRegex(ValueError, 'off the national grid'):
+                fetch_pt.fetch_tile(root, self.item(), None, 1, 1)
+            self.assertEqual((root / 'pt-dgt' / (self.ITEM + '.tif')).read_bytes(), before)
+
+
+class DKZeroRemapTest(unittest.TestCase):
+    WINDOW = (600000, 6220000, 601000, 6221000)
+
+    def payload(self, values):
+        fetch_dk = load_hyphenated('fetch-dk-dhm')
+        rows, columns = values.shape
+        mem = gdal.GetDriverByName('MEM').Create('', columns, rows, 1, gdal.GDT_Float32)
+        mem.SetGeoTransform((self.WINDOW[0], fetch_dk.RESOLUTION, 0, self.WINDOW[3],
+                             0, -fetch_dk.RESOLUTION))
+        mem.GetRasterBand(1).WriteArray(values)
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'wcs.tif')
+            gdal.Translate(path, mem, format='GTiff')
+            return Path(path).read_bytes()
+
+    def run_window(self, payload):
+        fetch_dk = load_hyphenated('fetch-dk-dhm')
+        fetch_dk.download_bytes = lambda url: (payload, {})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            window, record = fetch_dk.fetch_window(root, self.WINDOW, None, 'token', 1, 1)
+            target = root / fetch_dk.PROVIDER / 'dhm_terraen_25m_600000_6220000.tif'
+            if record is None:
+                return window, record, None, None, target.exists()
+            dataset = gdal.Open(str(target))
+            nodata = dataset.GetRasterBand(1).GetNoDataValue()
+            return window, record, nodata, dataset.GetRasterBand(1).ReadAsArray(), True
+
+    def test_exact_zeros_become_nodata(self):
+        values = np.full((40, 40), 7.5, dtype=np.float32)
+        values[0, 0] = 0
+        window, record, nodata, kept, _ = self.run_window(self.payload(values))
+        self.assertEqual(window, self.WINDOW)
+        self.assertIsNotNone(record)
+        self.assertEqual(nodata, -9999)
+        self.assertEqual(kept[0, 0], -9999)
+        self.assertEqual(kept[1, 1], 7.5)
+        self.assertNotIn(0, kept)
+
+    def test_all_zero_sea_window_is_skipped(self):
+        window, record, _, _, exists = self.run_window(
+            self.payload(np.zeros((40, 40), dtype=np.float32)))
+        self.assertEqual(window, self.WINDOW)
+        self.assertIsNone(record)
+        self.assertFalse(exists)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -24,6 +24,7 @@ CRS = 25832
 RESOLUTION = 25
 STEP = 10000
 EXTENT = (441000, 6049000, 894000, 6403000)
+NODATA = -9999.0
 
 
 def read_token(path):
@@ -65,15 +66,34 @@ def fetch_window(output, window, mask, token, position, total):
     if not (abs(transform[0] - x0) < 0.01 and abs(transform[3] - y1) < 0.01
             and abs(transform[1] - RESOLUTION) < 1e-9):
         raise ValueError(f'unexpected DHM window placement: {name}')
+    # The service zero-fills both sea and foreign land without a nodata tag, so
+    # exact zeros become nodata: sea falls back to identical 0 m, foreign land
+    # falls back to real GEDTM heights, and only Danish land keeps DHM values.
+    values = dataset.ReadAsArray()
+    if bool((values == 0).all()):
+        target.unlink()
+        print(json.dumps({'skipped_sea': name}), flush=True)
+        polite_sleep(started)
+        return window, None
+    dataset = None
+    raw = gdal.Open(str(target), gdal.GA_Update)
+    band = raw.GetRasterBand(1)
+    band.SetNoDataValue(NODATA)
+    cells = band.ReadAsArray()
+    cells[cells == 0] = NODATA
+    band.WriteArray(cells)
+    raw = None
     record = dict(url='https://dataforsyningen.dk/data/930', request_url=redacted,
                   fetched_utc=utc_now(), sha256=digest(target),
                   bytes=target.stat().st_size, licence=LICENCE, licence_url=LICENCE_URL,
                   terms_checked_utc='2026-09-25', raw_bytes_retained=False,
                   notes=('DHM Terraen 0.4 m (ALS 2014-2015) WCS window at 25 m, the 1 arc-second '
                          'equivalent; ETRS89/UTM32 (EPSG:25832), DVR90 heights (EPSG:10484 '
-                         'DVR90(2013) realization); sea is returned as 0; raw 0.4 m tile bytes '
-                         '(854 GB) not retained; attribution Klimadatastyrelsen. Re-fetch with the '
-                         'Dataforsyningen API token.'))
+                         'DVR90(2013) realization); exact-zero cells (sea and foreign-land '
+                         'fill) remapped to nodata -9999 so the fallback supplies sea level '
+                         'and foreign heights; raw 0.4 m tile bytes (854 GB) not retained; '
+                         'attribution Klimadatastyrelsen. Re-fetch with the Dataforsyningen '
+                         'API token.'))
     publish_json(receipt, record)
     print(json.dumps(dict(done=position, total=total, path=str(target),
                            seconds=time.monotonic() - started)), flush=True)
