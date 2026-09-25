@@ -25,3 +25,18 @@ test('priors are length-weighted medians of training rows only, per lane for mai
   assert.equal(predict(table, sample({ roadClass: 4, lanes: 3, builtUp: 0, oneWay: false })), table[4][1][0].untagged)
   assert.match(priorTableRust(table, 'fixture'), /pub const MEASURED_CARRIAGEWAY_PRIORS: \[\[\[CarriagewayPrior; 3\]; 2\]; 5\] = \[/)
 })
+
+test('one-way secondary shares the two-way section: no one-way arm is fitted and prediction halves', () => {
+  // The retired arm read +3.0 dB on holdout genuine one-way secondary streets
+  // and doubled split-mapped two-way streets (w3-priors, 2026-09-25).
+  const samples: Sample[] = []
+  for (let roadClass = 0; roadClass < 5; roadClass++) {
+    for (const oneWay of [true, false]) for (const builtUp of [1, 2]) {
+      samples.push(sample({ roadClass, oneWay, builtUp, lanes: 2, count: 2000 * builtUp, length: 3000 }),
+        sample({ roadClass, oneWay, builtUp, lanes: 0, count: 1000 * builtUp, length: 2000 }))
+    }
+  }
+  const table = fitPriors(samples)
+  assert.deepEqual(table[3][0][2], { vehiclesPerLane: 0, untagged: 0, km: 0 })
+  assert.equal(predict(table, sample({ roadClass: 3, oneWay: true, builtUp: 2, lanes: 0 })), table[3][1][2].untagged / 2)
+})

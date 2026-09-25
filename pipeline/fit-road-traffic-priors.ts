@@ -67,6 +67,9 @@ export type PriorTable = Prior[][][]
 export function fitPriors(samples: readonly Sample[]): PriorTable {
   const training = samples.filter(sample => !sample.holdout)
   return Array.from({ length: PRIOR_CLASSES }, (_, roadClass) => [true, false].map(oneWay => [0, 1, 2].map(builtUp => {
+    // A one-way secondary street shares the fitted two-way section instead of a
+    // one-way arm (w3-priors, 2026-09-25): these cells stay zero, `predict` halves.
+    if (roadClass === 3 && oneWay) return { vehiclesPerLane: 0, untagged: 0, km: 0 }
     const cell = training.filter(sample => sample.roadClass === roadClass && sample.oneWay === oneWay &&
       (builtUp === 0 || sample.builtUp === builtUp))
     const perLane = roadClass < PER_LANE_CLASSES
@@ -79,6 +82,9 @@ export function fitPriors(samples: readonly Sample[]): PriorTable {
 }
 
 export function predict(table: PriorTable, sample: Sample): number {
+  if (sample.roadClass === 3 && sample.oneWay) {
+    return predict(table, { ...sample, oneWay: false }) / 2
+  }
   const prior = table[sample.roadClass][sample.oneWay ? 0 : 1][Math.min(sample.builtUp, 2)]
   return prior.vehiclesPerLane > 0 && tagged(sample.lanes) ? sample.lanes * prior.vehiclesPerLane : prior.untagged
 }
@@ -110,7 +116,8 @@ export function priorTableRust(table: PriorTable, provenance: string): string {
 //! ${provenance}
 //! Length-weighted medians of counted public carriageways (tunnels, roundabouts and derived flows excluded)
 //! in training squares of holdout rule v1: vehicles per lane for a lanes tag of 1-6 (classes 0-2), else
-//! the whole carriageway count.
+//! the whole carriageway count. Class-3 one-way cells stay zero: one-way secondary streets share the
+//! fitted two-way section instead (w3-priors, 2026-09-25).
 
 use crate::defaults::CarriagewayPrior;
 
