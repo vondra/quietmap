@@ -71,6 +71,7 @@ pub fn finalize_square(
         concat_batches(&schema, &batches).map_err(|e| format!("{}: {e}", arrow_path.display()))?;
     let intervals = load_square_intervals(&dir)?;
     let pieces = load_square_pieces(&dir)?;
+    let merged = crate::yards::stamp_yard_service(&merged, &dir, &intervals)?;
     let children = expand_rows(&merged, &intervals, &pieces, square)?;
     let ipc = encode_children(&merged, &children)?;
     write_atomically(&dir, &ipc)?;
@@ -81,22 +82,22 @@ pub fn finalize_square(
     }))
 }
 
-fn col_i64<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a Int64Array, String> {
+pub(crate) fn col_i64<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a Int64Array, String> {
     downcast(batch, name)
 }
-fn col_i16<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a Int16Array, String> {
+pub(crate) fn col_i16<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a Int16Array, String> {
     downcast(batch, name)
 }
-fn col_i32<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a Int32Array, String> {
+pub(crate) fn col_i32<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a Int32Array, String> {
     downcast(batch, name)
 }
-fn col_u8<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a UInt8Array, String> {
+pub(crate) fn col_u8<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a UInt8Array, String> {
     downcast(batch, name)
 }
-fn col_u16<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a UInt16Array, String> {
+pub(crate) fn col_u16<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a UInt16Array, String> {
     downcast(batch, name)
 }
-fn col_f32<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a Float32Array, String> {
+pub(crate) fn col_f32<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a Float32Array, String> {
     downcast(batch, name)
 }
 
@@ -160,6 +161,14 @@ fn expand_rows(
     for row in 0..merged.num_rows() {
         let id = osm_id.value(row);
         let idx = segment_idx.value(row);
+        // Horn rows carry stamped periods, not splittable daily counts: they
+        // are appended post-finalize and must never be refinalized (their
+        // traffic would zero out). Strip and re-run append-horns instead.
+        if rail_type.value(row) == crate::horns::HORN_RAIL_TYPE {
+            return Err(format!(
+                "horn row (osm_id {id}) cannot be refinalized: strip horn rows and re-run append-horns"
+            ));
+        }
         let original = ChildGeom {
             start_gx: start_gx.value(row),
             start_gy: start_gy.value(row),
@@ -214,7 +223,7 @@ fn expand_rows(
     Ok(expanded)
 }
 
-fn write_atomically(dir: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomically(dir: &Path, bytes: &[u8]) -> Result<(), String> {
     let tmp = dir.join("railways.arrow.tmp");
     let final_path = dir.join("railways.arrow");
     {
