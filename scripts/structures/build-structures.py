@@ -10,9 +10,11 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
 import qmgrid
-from measured_heights import read_measured_parquet
-from official_barriers import read_official_parquet
-from structure_inputs import GlobalPrior, RegionalHeights, read_overture_parquet
+import measured_heights
+import official_barriers
+from structure_inputs import (
+    GlobalPrior, RegionalHeights, read_official_cache, read_overture_parquet,
+)
 from structure_freshness import input_content_digest, structure_input_files
 from structure_inventory import official_tile_sources, overture_sources, world_squares
 from structure_merge import build_square, structure_is_fresh
@@ -54,9 +56,13 @@ def build_one(name, prepared_dir, overture_parquet, ghsl, regional,
                                   official_files, measured_files))):
         return None
     ovt, overture_files = read_overture_parquet(overture_parquet, square)
-    official, official_files = read_official_parquet(official_parquet, square) \
+    official, official_files = read_official_cache(
+        official_parquet, square, official_barriers.SCHEMA,
+        official_barriers.CONTRACT_KEY, official_barriers.CONTRACT_VERSION) \
         if official_parquet is not None else ([], None)
-    measured, measured_files = read_measured_parquet(measured_parquet, square) \
+    measured, measured_files = read_official_cache(
+        measured_parquet, square, measured_heights.SCHEMA,
+        measured_heights.CONTRACT_KEY, measured_heights.CONTRACT_VERSION) \
         if measured_parquet is not None else ([], None)
     return build_square(name, prepared_dir, ovt, overture_files, ghsl, regional,
                         official, official_files, measured, measured_files)

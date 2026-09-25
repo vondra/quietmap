@@ -1,13 +1,10 @@
-"""National measured building heights: cache reader and ladder rung 1 join."""
+"""National measured building heights: cache contract and ladder rung 1 join."""
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import shapely
 from shapely import STRtree
 
-import qmgrid
-from structure_inputs import footprint_centroid, footprint_in_longitude_frame
-from structure_inventory import official_tile_sources
+from structure_inputs import footprint_in_longitude_frame
 
 CONTRACT_KEY = "measured_heights_contract"
 CONTRACT_VERSION = "measured_heights_v1"
@@ -22,30 +19,6 @@ SCHEMA = pa.schema([
 # The OSM/Overture match predicate (structure_merge.IOU_MATCH_THRESHOLD):
 # a measured footprint answers a candidate it covers or substantially overlaps.
 IOU_MATCH_THRESHOLD = 0.5
-
-
-def read_measured_parquet(cache_dir, square):
-    """The square's measured footprints from the touched 1-degree tiles,
-    assigned by centroid. Returns (rows, files)."""
-    rows, inputs = [], []
-    for _lat, _lon, src in official_tile_sources(cache_dir, square):
-        inputs.append(src)
-        table = pq.read_table(src, columns=[name for name in SCHEMA.names])
-        contract = (table.schema.metadata or {}).get(CONTRACT_KEY.encode())
-        if contract != CONTRACT_VERSION.encode():
-            raise SystemExit(f"{src}: {CONTRACT_KEY} mismatch "
-                             f"(expected {CONTRACT_VERSION}, got {contract!r})")
-        for value in table.to_pylist():
-            geom = shapely.from_wkb(value["geometry"])
-            if geom.is_empty:
-                continue
-            clat, clon = footprint_centroid(geom)
-            if qmgrid.square_of(clat, clon) != square:
-                continue
-            rows.append({"geom": geom, "clat": clat, "clon": clon,
-                         "height_m": value["height_m"], "source": value["source"],
-                         "as_of": value["as_of"]})
-    return rows, inputs
 
 
 def apply_measured_heights(candidates, measured_rows):

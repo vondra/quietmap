@@ -11,6 +11,7 @@ import shapely
 
 import measured_heights as MEASURED
 import normalize_heights_cache as NORMALIZE
+from structure_inputs import read_official_cache
 from test_structures_fixtures import (
     BUILDER, CONTRACT, GRID, SQUARE, FakeGlobalPrior, buildings_arrow, osm_row,
     OSM_POLY,
@@ -69,13 +70,15 @@ class ReaderTests(unittest.TestCase):
                 "height_m": [7.25], "source": ["TEST"], "as_of": ["2026-01-01"]}},
             self.cache, MEASURED.SCHEMA, MEASURED.CONTRACT_KEY, MEASURED.CONTRACT_VERSION)
         square = GRID.square_of(OSM_POLY.centroid.y, OSM_POLY.centroid.x)
-        rows, files = MEASURED.read_measured_parquet(self.cache, square)
+        rows, files = read_official_cache(self.cache, square, MEASURED.SCHEMA, MEASURED.CONTRACT_KEY,
+                                MEASURED.CONTRACT_VERSION)
         self.assertEqual(len(rows), 1)
         self.assertAlmostEqual(rows[0]["height_m"], 7.25)
         table = pq.read_table(files[0])
         pq.write_table(table.replace_schema_metadata({}), files[0])
         with self.assertRaises(SystemExit):
-            MEASURED.read_measured_parquet(self.cache, square)
+            read_official_cache(self.cache, square, MEASURED.SCHEMA, MEASURED.CONTRACT_KEY,
+                                MEASURED.CONTRACT_VERSION)
 
 
 class BuildSquareMeasuredTests(unittest.TestCase):

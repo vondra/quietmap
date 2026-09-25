@@ -11,7 +11,7 @@ import shapely.ops
 from pyproj import Transformer
 
 import qmgrid
-from structure_inventory import overture_sources
+from structure_inventory import official_tile_sources, overture_sources
 
 MEASURED_MIN_M = 2.0      # zonal pixels below this are "not a building surface here"
 COVERAGE_MIN_FRAC = 0.30  # measured pixels must cover this share of the footprint
@@ -272,6 +272,35 @@ def read_overture_parquet(parquet_dir, square):
                              "clat": float(clats[i]), "clon": float(clons[i]),
                              "envelope": envelope_class(value.get("class"), value.get("subtype"))})
     return rows, inputs
+
+
+def read_official_cache(cache_dir, square, schema, contract_key, contract_version):
+    """The square's rows from the touched 1-degree official-cache tiles (barrier
+    lines or measured footprints), assigned by centroid like Overture rows.
+    Every tile carries the cache contract; a tile without it fails the build.
+    Returns (rows, every contributing parquet file)."""
+    rows, inputs = [], []
+    for _lat, _lon, src in official_tile_sources(cache_dir, square):
+        inputs.append(src)
+        table = pq.read_table(src, columns=[name for name in schema.names])
+        contract = (table.schema.metadata or {}).get(contract_key.encode())
+        if contract != contract_version.encode():
+            raise SystemExit(f"{src}: {contract_key} mismatch "
+                             f"(expected {contract_version}, got {contract!r})")
+        for value in table.to_pylist():
+            geom = shapely.from_wkb(value["geometry"])
+            if geom.is_empty:
+                continue
+            clat, clon = footprint_centroid(geom)
+            if qmgrid.square_of(clat, clon) != square:
+                continue
+            row = {"geom": geom, "clat": clat, "clon": clon}
+            for name in schema.names:
+                if name != "geometry":
+                    row[name] = value[name]
+            rows.append(row)
+    return rows, inputs
+
 
 def sample_raster_heights(rows, regional, ghsl, stats):
     """Fill `regional_m` (survey zonal mean or None) for every row with a footprint inside the

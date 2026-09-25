@@ -1,17 +1,13 @@
-"""Official noise-barrier inventory: cache reader, OSM replacement, hop rows."""
+"""Official noise-barrier inventory: cache contract, OSM replacement, hop rows."""
 
 import math
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import shapely
 from shapely import STRtree
 
 import qmgrid
-from structure_inputs import (
-    METRES_PER_DEGREE, footprint_centroid, footprint_in_longitude_frame,
-)
-from structure_inventory import official_tile_sources
+from structure_inputs import METRES_PER_DEGREE, footprint_in_longitude_frame
 
 CONTRACT_KEY = "official_barriers_contract"
 CONTRACT_VERSION = "official_barriers_v1"
@@ -38,31 +34,6 @@ REPLACE_DISTANCE_M = 5.0
 # OSM linear ways chord at 250 m (engine/osm-extract/src/pass2.rs); official
 # hops never run longer, and keep their surveyed intermediate vertices.
 HOP_CAP_M = 250.0
-
-
-def read_official_parquet(cache_dir, square):
-    """The square's official barrier rows from the touched 1-degree tiles,
-    assigned by line centroid like Overture footprints. Returns (rows, files)."""
-    rows, inputs = [], []
-    for _lat, _lon, src in official_tile_sources(cache_dir, square):
-        inputs.append(src)
-        table = pq.read_table(src, columns=[name for name in SCHEMA.names])
-        contract = (table.schema.metadata or {}).get(CONTRACT_KEY.encode())
-        if contract != CONTRACT_VERSION.encode():
-            raise SystemExit(f"{src}: {CONTRACT_KEY} mismatch "
-                             f"(expected {CONTRACT_VERSION}, got {contract!r})")
-        for value in table.to_pylist():
-            geom = shapely.from_wkb(value["geometry"])
-            if geom.is_empty:
-                continue
-            clat, clon = footprint_centroid(geom)
-            if qmgrid.square_of(clat, clon) != square:
-                continue
-            rows.append({"geom": geom, "clat": clat, "clon": clon,
-                         "height_m": value["height_m"], "measured": value["measured"],
-                         "kind": value["kind"], "source": value["source"],
-                         "as_of": value["as_of"]})
-    return rows, inputs
 
 
 def segment_length_m(lon0, lat0, lon1, lat1):

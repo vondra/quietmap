@@ -12,6 +12,7 @@ import shapely
 
 import normalize_barrier_cache as NORMALIZE
 import official_barriers as OFFICIAL
+from structure_inputs import read_official_cache
 from test_structures_fixtures import (
     BUILDER, CONTRACT, GRID, SQUARE, FakeGlobalPrior, buildings_arrow, barriers_arrow,
     osm_row, OSM_POLY,
@@ -96,16 +97,19 @@ class CacheRoundtripTests(unittest.TestCase):
         write_official_cache(by_tile, self.cache, OFFICIAL.SCHEMA,
                              OFFICIAL.CONTRACT_KEY, OFFICIAL.CONTRACT_VERSION)
         square = GRID.square_of(LAT + 0.001, LON)
-        got, files = OFFICIAL.read_official_parquet(self.cache, square)
+        got, files = read_official_cache(self.cache, square, OFFICIAL.SCHEMA, OFFICIAL.CONTRACT_KEY,
+                                OFFICIAL.CONTRACT_VERSION)
         self.assertEqual(len(got), 1)
         self.assertAlmostEqual(got[0]["height_m"], 4.0)
         self.assertEqual(len(files), 1)
-        other, _ = OFFICIAL.read_official_parquet(self.cache, GRID.square_of(47.6, -122.3))
+        other, _ = read_official_cache(self.cache, GRID.square_of(47.6, -122.3), OFFICIAL.SCHEMA,
+                                OFFICIAL.CONTRACT_KEY, OFFICIAL.CONTRACT_VERSION)
         self.assertEqual(len(other), 1)
 
     def test_missing_tiles_are_absent_data(self):
         os.makedirs(self.cache)
-        got, files = OFFICIAL.read_official_parquet(self.cache, GRID.parse_square_name(SQUARE))
+        got, files = read_official_cache(self.cache, GRID.parse_square_name(SQUARE), OFFICIAL.SCHEMA,
+                                OFFICIAL.CONTRACT_KEY, OFFICIAL.CONTRACT_VERSION)
         self.assertEqual((got, files), ([], []))
 
 
