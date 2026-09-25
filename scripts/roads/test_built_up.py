@@ -21,7 +21,7 @@ import qmgrid
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "structures"))
 from structure_contract import SCHEMA  # noqa: E402
 
-STRUCTURES_SCHEMA = SCHEMA.with_metadata({b"grid": b"z30", b"structures_contract": b"structures_v4"})
+STRUCTURES_SCHEMA = SCHEMA.with_metadata({b"grid": b"z30", b"structures_contract": b"structures_v5"})
 # Two engine/arrow-batching block records (version byte; u16 z14 x, y; f64 envelope;
 # f32 altitude range, 0 for surface layers), an opaque value the enricher must copy byte-for-byte.
 QM_BLOCKS_TWO_BATCHES = base64.b64encode(
@@ -42,7 +42,7 @@ def footprint(lat, lon, side=100, stock="overture", holes=(), extra_parts=()):
     return {"kind": 0, "geom": qmgrid.encode_grid_polygons(
                 [[ring(lat, lon, side), *(ring(lat, lon, hole) for hole in holes)],
                  *([ring(lat, lon, part)] for part in extra_parts)]),
-            "height_m": 8, "height_tier": 2, "envelope_class": 5,
+            "height_m": 8, "height_source": 2, "envelope_class": 5,
             "centroid_gx": gx, "centroid_gy": gy,
             "osm_id": None if stock == "overture" else 123,
             "emission_centroid_gx": gx if stock == "matched" else None,
@@ -221,7 +221,7 @@ class BuiltUpTests(unittest.TestCase):
             self.assertEqual(reader.num_record_batches, 0)
         self.assertEqual(self.classify(*self.point), 1)
         write_structures(self.root, self.square, [], STRUCTURES_SCHEMA.remove_metadata())
-        with self.assertRaisesRegex(ValueError, "structures_v4"):
+        with self.assertRaisesRegex(ValueError, "structures_v5"):
             self.classify(*self.point)
         path.write_bytes(b"corrupt IPC")
         with self.assertRaises(pa.ArrowInvalid):
@@ -236,7 +236,7 @@ class BuiltUpTests(unittest.TestCase):
         path = self.root / qmgrid.square_name(*self.square) / "roads.arrow"
         write_roads(path, [road_batch([self.point]), road_batch([point])])
         before = path.read_bytes(), path.stat()
-        with self.assertRaisesRegex(ValueError, "Malformed structures_v4"):
+        with self.assertRaisesRegex(ValueError, "Malformed structures_v5"):
             bake_file(path, self.root)
         self.assertEqual((path.read_bytes(), path.stat()), before)
         self.assertEqual(sorted(p.name for p in path.parent.iterdir()), ["roads.arrow", "structures.arrow"])

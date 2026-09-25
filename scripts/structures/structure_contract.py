@@ -1,4 +1,4 @@
-"""The structures_v4 Arrow contract, source decoding, and emission preservation proof."""
+"""The structures_v5 Arrow contract, source decoding, and emission preservation proof."""
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -13,7 +13,24 @@ KIND_BUILDING = 0
 KIND_BARRIER = 1
 
 CONTRACT_KEY = "structures_contract"
-CONTRACT_VERSION = "structures_v4"  # z30 geometry and Int16 screening metres.
+# z30 geometry, Int16 screening metres, the height source and the demand storey count.
+CONTRACT_VERSION = "structures_v5"
+
+# Where a row's screening height came from (square_store::structure_contract mirrors these).
+HEIGHT_SOURCE_OSM_HEIGHT = 0          # mapped OSM `height` (buildings and walls)
+HEIGHT_SOURCE_FLOORS = 1              # OSM, national or Overture floors x storey + roof
+HEIGHT_SOURCE_AREA_TYPOLOGY = 2       # footprint-area typology: not per building
+HEIGHT_SOURCE_REGIONAL_MEASURED = 3   # regional survey zonal mean (Prague LiDAR)
+HEIGHT_SOURCE_GHSL = 4                # GHS-BUILT-H 100 m cell average: not per building
+HEIGHT_SOURCE_OVERTURE_HEIGHT = 5     # Overture height (OSM-derived or machine-learned)
+HEIGHT_SOURCE_OPEN_ROOF = 6           # open roof or carport: footprint stays, screens 0 m
+HEIGHT_SOURCE_GROUND_ACTIVITY = 7     # emission-only ground: no screening geometry, 0 m
+HEIGHT_SOURCE_WALL_DEFAULT = 8        # unmapped noise wall at its country's mean height
+
+# Where a building row's demand storey count came from.
+STOREYS_SOURCE_FLOORS = 0             # OSM, national or Overture floors
+STOREYS_SOURCE_LADDER_HEIGHT = 1      # inverse of the floors rung on the screening height
+STOREYS_SOURCE_SINGLE_LEVEL = 2       # ground activity or open roof without floors
 
 SCHEMA = pa.schema(
     [
@@ -21,7 +38,7 @@ SCHEMA = pa.schema(
         # Building parts/rings (encode_grid_polygons); barriers keep encode_grid_poly.
         pa.field("geom", pa.binary()),
         pa.field("height_m", pa.int16(), nullable=False),
-        pa.field("height_tier", pa.uint8(), nullable=False),
+        pa.field("height_source", pa.uint8(), nullable=False),
         pa.field("envelope_class", pa.uint8(), nullable=False),
         pa.field("centroid_gx", pa.int32(), nullable=False),
         pa.field("centroid_gy", pa.int32(), nullable=False),
@@ -41,6 +58,9 @@ SCHEMA = pa.schema(
         pa.field("emission_geom", pa.binary()),
         pa.field("emission_centroid_gx", pa.int32()),
         pa.field("emission_centroid_gy", pa.int32()),
+        # Demand storeys (building rows only): the service tree reads this, never raw floors.
+        pa.field("storeys", pa.uint8()),
+        pa.field("storeys_source", pa.uint8()),
         # Wall micro-segment index (barrier rows only).
         pa.field("segment_idx", pa.int16()),
         # Obstacle-index insertion order (see the proven v1 comment: builders
@@ -114,9 +134,13 @@ def load_barriers(path):
     t = ipc.open_file(path).read_all()
     require_grid_contract(t, path, ("start_gx", "start_gy", "end_gx", "end_gy"))
     require_column(t, path, "height_tier", pa.uint8())
+    # The wall default is national: square-country-city bakes each wall's country.
+    if (t.schema.metadata or {}).get(b"barriers_contract") != b"country_baked_v1":
+        raise SystemExit(f"{path}: walls lack their country — run square-country-city")
+    require_column(t, path, "country_iso", pa.uint16())
     cols = {c: t.column(c).to_pylist()
             for c in ("osm_id", "segment_idx", "start_gx", "start_gy",
-                      "end_gx", "end_gy", "height", "height_tier")}
+                      "end_gx", "end_gy", "height", "height_tier", "country_iso")}
     return [dict(zip(cols.keys(), vals)) for vals in zip(*cols.values())]
 
 

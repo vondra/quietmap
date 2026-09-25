@@ -272,9 +272,8 @@ fn source_square_names(squares: Result<Vec<grid::Square>, String>) -> napi::Resu
 /// the low-profile cap) — the building-height debug overlay's data source,
 /// so the map shows exactly what the propagation model screens with. JSON:
 /// [{p: [polygon rings…], h, t, c}] (rings are [lat,lon] vertices, exterior
-/// first, then holes; h = height m, t = height
-/// tier 0 mapped/1 floors/2 default/3 city-measured zonal/4 ANBH areal prior
-/// — see noise_compute::low_profile, c = low-profile-capped).
+/// first, then holes; h = height m, t = the structures `height_source` code
+/// (square_store::structure_contract), c = low-profile-capped).
 pub fn query_obstacle_footprints(
     south: f64,
     west: f64,

@@ -60,12 +60,12 @@ export function readServiceRoads(table: Table): { roads: ServiceRoad[]; fleets: 
 }
 
 export async function enrichServiceTreeSquare(directory: string) {
-  const roadsPath = resolve(directory, 'roads.arrow'), buildingsPath = resolve(directory, 'buildings.arrow')
+  const roadsPath = resolve(directory, 'roads.arrow'), structuresPath = resolve(directory, 'structures.arrow')
   let counts = { rows: 0, matched: 0, retracted: 0, updated: false, unknownCountryRows: 0 }
   await withArrowWrite(roadsPath, table => {
     const { roads, fleets, unknownCountryRows } = readServiceRoads(table)
-    const buildings = existsSync(buildingsPath)
-      ? readServiceBuildings(tableFromIPC(readFileSync(buildingsPath))) : []
+    const buildings = existsSync(structuresPath)
+      ? readServiceBuildings(tableFromIPC(readFileSync(structuresPath))) : []
     const graph = buildGraph(roads), components = findComponents(graph)
     const eligible: number[] = []
     for (const component of components) for (const index of component.segments) eligible.push(index)

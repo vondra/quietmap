@@ -316,14 +316,13 @@ impl Spiller {
                 )?;
             }
             FeatureType::Barrier => {
-                // height_tier mirrors the structure-table ladder: 0 = mapped
-                // height tag, 2 = the 3.0 m default (the merged structures.arrow
-                // carries the tier per wall; the builder reads it from here).
+                // height_tier: 0 = mapped height tag, 2 = none (height 0). The
+                // structures builder gives an unmapped wall its country's mean height.
                 let mapped = tags.get("height").and_then(|s| parse_height(s));
                 write!(
                     w,
                     "\t{}\t{}\t{}",
-                    mapped.unwrap_or(3.0),
+                    mapped.unwrap_or(0.0),
                     classify::barrier_material_type(tags.get("material").map(|s| s.as_str())),
                     if mapped.is_some() { 0 } else { 2 },
                 )?;

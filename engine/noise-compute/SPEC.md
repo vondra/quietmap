@@ -248,13 +248,13 @@ are averaged over this engine's periods: evening −1.1 dB, night −6.3 dB.
 These are model defaults, not measured traffic for an individual car park.
 
 Functional grounds and underground sources retained in structures have null
-screening geometry and zero screening height at default height tier 2
-(`structures-builder-2` and later). Explicitly underground Overture footprints
+screening geometry and zero screening height with the ground-activity height
+source (`structures_v5`). Explicitly underground Overture footprints
 are excluded from above-ground screening and matching (`structures-builder-3`);
 an independently mapped above-ground OSM building keeps its own wall. Mapped
-sub-metre building heights retain tier 0 even when the screening height rounds
-to zero. Both popup and painter preserve that distinction when normalizing
-emission: one
+sub-metre building heights keep their mapped-height source even when the
+screening height rounds to zero. Both popup and painter preserve that
+distinction when normalizing emission: one
 mapped ground area, no floor multiplier, source height 1.5 m (the existing
 open-air activity convention). Raw building height/floor tags cannot turn such
 an area into a facade source. A real building with unavailable geometry keeps
@@ -267,9 +267,33 @@ Explicit OSM open structures (`building=carport`, `building=roof`, or
 in `buildings_v5`.
 The structures builder preserves that outdoor envelope for OSM-only and
 Overture-matched rows (`structures-builder-4`), so a canopy cannot acquire an
-indoor attenuation from an absent or generic Overture class. Enclosed garages
-retain their existing classification. This changes enclosure only: screening
-geometry, height, emission and traffic remain unchanged.
+indoor attenuation from an absent or generic Overture class. These rows and
+Overture `roof`/`carport` classes screen at 0 m (`structures-builder-5`): a
+roof on posts has no wall to diffract over. Footprint, emission, envelope and
+traffic stay. Greenhouses, grandstands and enclosed garages keep their walls.
+
+## Screening heights
+
+The structures builder gives every footprint one screening height, the mean
+roof height, from the first available rung, and stores its `height_source`:
+
+1. regional survey zonal mean (Prague LiDAR), clamped to 2.5–250 m;
+2. mapped OSM `height`;
+3. OSM, national-register or Overture floors × 3 m + 3 m roof allowance
+   (Prague LiDAR vs OSM floors, 105,957 buildings: median residual 0.0 m);
+4. Overture height of at least 2.5 m (lower values are artefacts);
+5. GHS-BUILT-H ANBH of at least 3.5 m (its 2.5 m floor and the values just
+   above it are no information), capped at 100 m and at 4 m under 30 m² of
+   footprint;
+6. median reference height by footprint area: < 30 m² 2.9 m, < 60 m² 5.4 m,
+   < 150 m² 7.4 m, < 500 m² 8.8 m, else 10.6 m (seven EU pilot windows).
+
+Rungs 5 and 6 are not per-building knowledge; only they take the low-profile
+cap. The demand storey count `storeys` is the floor count where one is mapped,
+else round((height − 3 m) / 3 m), at least 1; a structure without a screening
+height counts one level. The service-tree demand reads it. Noise walls keep a
+mapped OSM height; unmapped walls stand at their country's mean wall height
+(DE 3.88 m, US 4.45 m, AT 3.6 m, else 3 m).
 
 ## 4.7 Vector screening
 

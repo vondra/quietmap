@@ -23,7 +23,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         ]),
         centroid_lonlat: Some((lon, -0.0005)),
         height_m: 12,
-        height_tier: 0,
+        height_source: 0,
         envelope_class: 1,
         osm_id: Some(901),
         building_type: Some(1),

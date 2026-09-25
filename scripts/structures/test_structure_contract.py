@@ -39,7 +39,7 @@ class PreparedStructureContractTests(unittest.TestCase):
         self.assertEqual(table.schema.field("height_m").type, pa.int16())
         self.assertEqual(table.column("height_m").to_pylist(), [5, 13, 3])
         self.assertEqual(table.column("height").to_pylist(), [4.5, None, None])
-        self.assertEqual(table.column("height_tier").to_pylist(), [0, 4, 0])
+        self.assertEqual(table.column("height_source").to_pylist(), [0, 4, 0])
 
     def test_height_quantization_is_bounded_and_refuses_invalid_source_values(self):
         values = [0.0, 0.49, 0.5, 2.5, 4.5, 12.49, 32767.0]
@@ -69,10 +69,10 @@ class PreparedStructureContractTests(unittest.TestCase):
         self.build()
         self.assertIsNotNone(self.build(regional))
         table = ipc.open_file(self.square / "structures.arrow").read_all()
-        self.assertEqual(table.column("height_tier").to_pylist(), [3])
+        self.assertEqual(table.column("height_source").to_pylist(), [3])
         self.assertIsNotNone(self.build())
         table = ipc.open_file(self.square / "structures.arrow").read_all()
-        self.assertEqual(table.column("height_tier").to_pylist(), [4])
+        self.assertEqual(table.column("height_source").to_pylist(), [4])
 
 
 if __name__ == "__main__":

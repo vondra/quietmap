@@ -294,7 +294,7 @@ class WorldBuildTest(unittest.TestCase):
                                  root / 'out', root / 'scratch')
             with self.assertRaisesRegex(ValueError, 'overlaps frozen source'):
                 world.validate_osm_storage([root / 'external-vrt'], [root / 'external-vrt/tile.tif'])
-            self.assertEqual(indexed['structures'].dependencies, ('buildings',))
+            self.assertEqual(indexed['structures'].dependencies, ('buildings', 'square-country-city'))
             self.assertEqual(indexed['structures'].argv[-2:], ('--jobs', '4'))
             self.assertEqual(indexed['structures-finalize'].dependencies, ('structures',))
             self.assertTrue(indexed['structures-finalize'].argv[0].endswith('engine/target/release/structures-finalize'))
