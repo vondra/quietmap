@@ -49,6 +49,10 @@ def file_lonlat_bounds(path):
     return (min(longitudes), min(latitudes), max(longitudes), max(latitudes))
 
 
+def _intersects(a, b):
+    return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+
 def candidate_squares(sources):
     squares = set()
     for source in sources:
@@ -105,8 +109,17 @@ def plan(source_root, countries, work_dir):
         mask = gdal.Open(masks[code])
         for group in groups:
             members = [s for s in own if s['group'] == group]
+            bounds = [file_lonlat_bounds(s['path']) for s in members]
+            west = min(b[0] for b in bounds)
+            south = min(b[1] for b in bounds)
+            east = max(b[2] for b in bounds)
+            north = max(b[3] for b in bounds)
+            candidates = [square for square in candidate_squares(members)
+                          if _intersects(square_bounds(*square), (west, south, east, north))]
+            if not candidates:
+                continue
             vrt = group_vrt(members, group)
-            for square in candidate_squares(members):
+            for square in candidates:
                 if square not in squares and owns_square(vrt, mask, square_bounds(*square)):
                     squares.add(square)
                     print(json.dumps({'owns': square, 'group': group}), flush=True)
