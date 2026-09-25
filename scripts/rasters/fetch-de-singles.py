@@ -158,7 +158,11 @@ def decode_hb(root, provider):
                     with archive.open(member_name) as member:
                         xyz = Path(root) / provider / (Path(member_name).name + '.tmp')
                         xyz.write_bytes(member.read())
-                    reduce_xyz(xyz, out_path, config['spacing'], config['epsg'])
+                    # Bremen-city XYZ lists integer lower-left corners, Bremerhaven
+                    # .5 centres; each fits its nominal 1 km tile exactly that way.
+                    corners = (name == 'Gitternetz_DGM5_2017_HB_ASCII_XYZ.zip')
+                    reduce_xyz(xyz, out_path, config['spacing'], config['epsg'],
+                               zone_prefix=32_000_000.0, corner_registered=corners)
                     xyz.unlink()
                     assert_crs(out_path, config['epsg'])
                     derive_provenance(raw, out_path,

@@ -69,6 +69,35 @@ class ReduceTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 decode_xyz_lattice(lattice, 5)
 
+    def test_reduce_xyz_strips_a_zone_prefixed_easting(self):
+        with tempfile.TemporaryDirectory() as temp:
+            xyz = Path(temp) / 'tile.xyz'
+            lines = [f'{32466000 + 5 * i}.00 5925000.00 3.5' for i in range(4)]
+            xyz.write_text('\n'.join(lines) + '\n')
+            target = Path(temp) / 'tile-5m.tif'
+            reduce_xyz(xyz, target, 5, 25832, zone_prefix=32_000_000.0)
+            ds = gdal.Open(str(target))
+            self.assertEqual(ds.GetGeoTransform()[0], 465997.5)
+            ds = None
+
+    def test_reduce_xyz_honours_corner_registered_lattices(self):
+        with tempfile.TemporaryDirectory() as temp:
+            xyz = Path(temp) / 'tile.xyz'
+            rows = [f'{465000 + 5 * i} {5896995 - 5 * j} 2.0'
+                    for j in range(2) for i in range(2)]
+            xyz.write_text('x y z\n' + '\n'.join(rows) + '\n')
+            target = Path(temp) / 'tile-5m.tif'
+            reduce_xyz(xyz, target, 5, 25832, corner_registered=True)
+            ds = gdal.Open(str(target))
+            self.assertEqual(ds.GetGeoTransform()[:2], (465000.0, 5.0))
+            self.assertEqual(ds.GetGeoTransform()[3], 5897000.0)
+            ds = None
+            plain = Path(temp) / 'tile-c-5m.tif'
+            reduce_xyz(xyz, plain, 5, 25832)
+            ds = gdal.Open(str(plain))
+            self.assertEqual(ds.GetGeoTransform()[:2], (464997.5, 5.0))
+            ds = None
+
     def test_normalize_remaps_voids_and_assigns_a_missing_crs(self):
         with tempfile.TemporaryDirectory() as temp:
             raw = Path(temp) / 'raw.tif'

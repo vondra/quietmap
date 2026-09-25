@@ -113,9 +113,13 @@ def reduce_geotiff(source, target, src_nodata, factor=DERIVED_METRES, epsg=None)
                 valid_fraction=float(np.mean(np.isfinite(mean))))
 
 
-def reduce_xyz(path, target, spacing, epsg, factor=DERIVED_METRES, src_nodata=-9999.0):
+def reduce_xyz(path, target, spacing, epsg, factor=DERIVED_METRES, src_nodata=-9999.0,
+               zone_prefix=None, corner_registered=False):
     """Decode a verified XYZ lattice, then area-average it onto the derived grid."""
     xs, ys, values = decode_xyz_lattice(path, spacing)
+    if zone_prefix is not None and xs.min() >= zone_prefix:
+        # Bremerhaven tiles prefix eastings with the UTM zone; EPSG:25832 drops it.
+        xs = xs - zone_prefix
     # XYZ carries no nodata tag; the AdV void value is void, never -9999 m terrain.
     values[values == src_nodata] = np.nan
     if spacing == factor:
@@ -124,9 +128,13 @@ def reduce_xyz(path, target, spacing, epsg, factor=DERIVED_METRES, src_nodata=-9
         mean, step = block_average(values, factor // spacing), factor
     else:
         raise ValueError(f'{path}: {spacing} m lattice does not divide {factor} m')
-    # The lattice edge sits half a source step outside the first centre.
-    write_derived_grid(target, float(xs[0]) - spacing / 2 + step / 2,
-                       float(ys[0]) + spacing / 2 - step / 2, step, mean, epsg)
+    if corner_registered:
+        west, north = float(xs[0]) + step / 2, float(ys[0]) + spacing - step / 2
+    else:
+        # The lattice edge sits half a source step outside the first centre.
+        west = float(xs[0]) - spacing / 2 + step / 2
+        north = float(ys[0]) + spacing / 2 - step / 2
+    write_derived_grid(target, west, north, step, mean, epsg)
     return dict(rows=int(mean.shape[0]), columns=int(mean.shape[1]),
                 valid_fraction=float(np.mean(np.isfinite(mean))))
 
