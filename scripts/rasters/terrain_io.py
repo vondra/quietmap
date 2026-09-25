@@ -70,6 +70,20 @@ def publish_json(path, value):
     publish_bytes(path, (json.dumps(value, sort_keys=True, indent=2) + '\n').encode())
 
 
+def publish_path(path, staged):
+    """Publish a large staged file without reading it into memory; same once-only rule."""
+    path, staged = Path(path), Path(staged)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(staged, path)
+    except FileExistsError:
+        if digest(path) != digest(staged):
+            raise ValueError(f'refusing to replace published file: {path}') from None
+    staged.unlink(missing_ok=True)
+    with open_directory(path.parent) as directory:
+        os.fsync(directory)
+
+
 @contextmanager
 def source_budget(root):
     """Raw and derived retained files share one lock and include their temporary peak bytes."""
