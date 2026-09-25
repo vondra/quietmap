@@ -21,7 +21,12 @@ def polite_sleep(started):
 
 
 def download_bytes(url, timeout=300, attempts=3):
-    """GET a URL with backoff on transient network failures; returns (body, headers)."""
+    """GET a URL with backoff on transient failures; returns (body, headers).
+
+    Géoplateforme answers valid WMS windows with a transient HTTP 400 under
+    sustained load (observed 2026-09-25; the identical URL succeeds on retry),
+    so 400 is retried like any other transient failure.
+    """
     last = None
     for attempt in range(attempts):
         try:
@@ -29,7 +34,7 @@ def download_bytes(url, timeout=300, attempts=3):
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read(), response.headers
         except urllib.error.HTTPError as error:
-            if (error.code < 500 and error.code != 429) or attempt + 1 == attempts:
+            if (error.code < 500 and error.code not in (400, 429)) or attempt + 1 == attempts:
                 raise
             last = error
         except RETRYABLE as error:

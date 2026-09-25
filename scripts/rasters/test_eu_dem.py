@@ -60,6 +60,57 @@ class SplitMultipartTest(unittest.TestCase):
             split_wcs_multipart(body, 'multipart/related; boundary=wcs')
 
 
+class DownloadRetryTest(unittest.TestCase):
+    def test_retries_transient_400_then_succeeds(self):
+        import urllib.request
+        from dem_windows import download_bytes
+        real = urllib.request.urlopen
+        calls = []
+
+        class FakeResponse:
+            headers = {}
+            def read(self):
+                return b'tiff-bytes'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def failing_twice(request, timeout=None):
+            calls.append(request)
+            if len(calls) < 3:
+                raise urllib.error.HTTPError(request.full_url, 400, 'Bad Request', {}, None)
+            return FakeResponse()
+
+        urllib.request.urlopen = failing_twice
+        try:
+            body, _ = download_bytes('https://example.invalid/wms')
+        finally:
+            urllib.request.urlopen = real
+        self.assertEqual(body, b'tiff-bytes')
+        self.assertEqual(len(calls), 3)
+
+    def test_other_client_errors_fail_fast(self):
+        import urllib.request
+        from dem_windows import download_bytes
+        real = urllib.request.urlopen
+        calls = []
+
+        def forbidden(request, timeout=None):
+            calls.append(request)
+            raise urllib.error.HTTPError(request.full_url, 403, 'Forbidden', {}, None)
+
+        urllib.request.urlopen = forbidden
+        try:
+            with self.assertRaises(urllib.error.HTTPError):
+                download_bytes('https://example.invalid/wms')
+        finally:
+            urllib.request.urlopen = real
+        self.assertEqual(len(calls), 1)
+
+
 class LandMaskTest(unittest.TestCase):
     def test_land_and_sea(self):
         with tempfile.TemporaryDirectory() as directory:
