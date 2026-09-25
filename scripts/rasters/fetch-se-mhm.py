@@ -51,8 +51,17 @@ def reduce_item(output, item, auth, position, total):
             raise ValueError(f'retained block references another parent: {target}')
         return record
     started = time.monotonic()
-    columns, rows, factor, nodata = reduce_cog_overview(
-        asset['href'], OVERVIEW_INDEX, target, auth['username'], auth['password'])
+    last = None
+    for attempt in range(3):
+        try:
+            columns, rows, factor, nodata = reduce_cog_overview(
+                asset['href'], OVERVIEW_INDEX, target, auth['username'], auth['password'])
+            break
+        except RuntimeError as error:
+            last = error
+            time.sleep(2 ** attempt)
+    else:
+        raise last
     if factor != FACTOR or nodata != -9999:
         raise ValueError(f'unexpected Markhoejdmodell overview grid: {item["id"]}')
     record = dict(url=asset['href'], fetched_utc=utc_now(), sha256=digest(target),
