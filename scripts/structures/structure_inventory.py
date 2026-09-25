@@ -13,7 +13,8 @@ def degree_name(lat, lon):
     return f"{'N' if lat >= 0 else 'S'}{abs(lat):02d}{'E' if lon >= 0 else 'W'}{abs(lon):03d}"
 
 
-def overture_sources(parquet_dir, square):
+def _touched_degree_tiles(cache_dir, square):
+    """Every 1-degree tile path a square's span touches, with its (lat, lon)."""
     lon0, lat_top, lon1, lat_bot = qmgrid.square_lonlat_span(*square)
     if square[1] == 0:
         lat_top = 90
@@ -21,27 +22,24 @@ def overture_sources(parquet_dir, square):
         lat_bot = -90
     for lat in range(math.floor(lat_bot), min(90, math.floor(lat_top) + 1)):
         for lon in range(math.floor(lon0), math.ceil(lon1)):
-            source = Path(parquet_dir) / f"{degree_name(lat, lon)}.parquet"
-            if not source.is_file():
-                raise SystemExit(
-                    f"{qmgrid.square_name(*square)}: Overture parquet {source} is missing — "
-                    "run scripts/overture/download-overture-world.sh first")
-            yield lat, lon, source
+            yield lat, lon, Path(cache_dir) / f"{degree_name(lat, lon)}.parquet"
+
+
+def overture_sources(parquet_dir, square):
+    for lat, lon, source in _touched_degree_tiles(parquet_dir, square):
+        if not source.is_file():
+            raise SystemExit(
+                f"{qmgrid.square_name(*square)}: Overture parquet {source} is missing — "
+                "run scripts/overture/download-overture-world.sh first")
+        yield lat, lon, source
 
 
 def official_tile_sources(cache_dir, square):
     """The existing cache tiles a square's span touches. Official caches cover
     only surveyed countries, so missing tiles are absent data, not an error."""
-    lon0, lat_top, lon1, lat_bot = qmgrid.square_lonlat_span(*square)
-    if square[1] == 0:
-        lat_top = 90
-    if square[1] == qmgrid.Z9_AXIS - 1:
-        lat_bot = -90
-    for lat in range(math.floor(lat_bot), min(90, math.floor(lat_top) + 1)):
-        for lon in range(math.floor(lon0), math.ceil(lon1)):
-            source = Path(cache_dir) / f"{degree_name(lat, lon)}.parquet"
-            if source.is_file():
-                yield lat, lon, source
+    for lat, lon, source in _touched_degree_tiles(cache_dir, square):
+        if source.is_file():
+            yield lat, lon, source
 
 
 def write_official_cache(rows_by_tile, cache_dir, schema, contract_key, contract_version):
