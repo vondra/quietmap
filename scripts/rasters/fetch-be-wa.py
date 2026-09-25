@@ -96,7 +96,7 @@ def reduce_province(archive, member, output, record):
                        resampleAlg='average', srcNodata=nodata, dstNodata=nodata,
                        outputType=gdal.GDT_Float32,
                        creationOptions=['COMPRESS=DEFLATE', 'TILED=YES', 'PREDICTOR=2'],
-                       multithread=True, warpOptions=['NUM_THREADS=4', 'WarpMemoryLimit=4096'])
+                       multithread=True, warpOptions=['NUM_THREADS=2', 'WarpMemoryLimit=4096'])
     if warped is None:
         raise ValueError(f'province reduction failed: {member}')
     warped = None
