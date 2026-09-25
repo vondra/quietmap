@@ -58,6 +58,19 @@ pub fn industrial_profile(site_type: u8) -> IndustrialProfile {
             evening_offset: 0.0,
             night_offset: 0.0, // 24/7
         },
+        5 => IndustrialProfile {
+            // rail yard (landuse=railway / railway=yard): open-air mechanical
+            // work (switchers, coupling, retarders) between the enclosed
+            // factory (94) and the blasting quarry (99); quarry spectrum as
+            // the closest modelled open-air mechanical analogue. Yards run
+            // around the clock (Giusti 2000: "a rail yard operates 24 hours
+            // per day, 7 days per week", CAA Vol.28 No.4). Provisional until
+            // the Schall 03 yard chapter is verified (w4-horns open question).
+            base_lw: 96.0,
+            spectrum: [-3.0, -1.0, 0.0, 1.0, 0.0, -2.0, -5.0, -8.0],
+            evening_offset: 0.0,
+            night_offset: 0.0, // 24/7
+        },
         10 => IndustrialProfile {
             // wind turbine (handled by wind.rs)
             base_lw: 0.0,
@@ -409,6 +422,15 @@ pub fn industrial_emission_bands(profile: &IndustrialProfile, lw: f64) -> [f64; 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rail_yard_profile_runs_around_the_clock() {
+        let yard = industrial_profile(5);
+        assert_eq!(yard.base_lw, 96.0);
+        assert_eq!(yard.evening_offset, 0.0);
+        assert_eq!(yard.night_offset, 0.0);
+        assert_eq!(yard.spectrum, industrial_profile(1).spectrum);
+    }
 
     #[test]
     fn heavy_sectors_get_the_raised_cap_low_fill_keep_50ha() {

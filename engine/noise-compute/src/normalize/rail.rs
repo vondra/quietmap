@@ -97,11 +97,19 @@ impl NormalizedRail {
     }
 }
 
+/// Source height per rail type: horns sound from the locomotive roof.
+pub fn rail_source_height_m(rail_type: RailType) -> f64 {
+    match rail_type {
+        RailType::Horn => crate::constants::SOURCE_HEIGHT_HORN,
+        _ => SOURCE_HEIGHT_RAIL,
+    }
+}
+
 pub fn normalize_rail(input: RawRailInput) -> NormalizedRail {
     let rail_type = RailType::from_u8(input.rail_type);
     NormalizedRail {
         rail_type,
-        source_height_m: SOURCE_HEIGHT_RAIL,
+        source_height_m: rail_source_height_m(rail_type),
         speed_kmh: if input.maxspeed > 0 {
             f64::from(input.maxspeed)
         } else if input.highspeed && !matches!(rail_type, RailType::Preserved) {

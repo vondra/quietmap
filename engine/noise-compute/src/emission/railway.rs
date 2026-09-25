@@ -201,6 +201,23 @@ const LIGHT_RAIL: RailVehicleCoeffs = RailVehicleCoeffs {
     v_max: 120.0,
 };
 
+/// Locomotive horn octave spectrum weights [dB], A-weighted sum 0.
+/// Energy mean of the normalized 1/3-octave spectra of the three horns in
+/// Volpe 1993 §6.1 (Fig. 10 Leslie RSL-3L-RF, Fig. 13 Leslie RS-3L, Fig. 16
+/// Nathan K-5-LA; 0°, 61 m), aggregated to octaves. Bands: 63, 125, 250,
+/// 500, 1000, 2000, 4000, 8000 Hz. Thirds below 50 Hz carry no horn energy
+/// (Volpe: locomotive-engine noise) and are A-negligible.
+pub const HORN_SPECTRUM: [f64; NUM_BANDS] = [-18.1, -28.5, -10.1, -2.6, -3.2, -8.4, -13.7, -21.8];
+
+/// Locomotive horn sound power level [dB(A)] — calibrated so one sounding at
+/// the median US sounding speed (40 mph; FRA inventory median typical-max over
+/// sounding crossings) on a 402 m approach yields the FRA reference SEL of
+/// 107 dBA at 100 ft abeam the approach midpoint through the engine's own
+/// propagation on flat soft ground (see the `horn_sel_reference` test).
+/// Level anchor: FRA Train Horn Noise FAQ item 7 (SEL 107 dBA at 100 ft
+/// between 1/4 and 1/8 mile of the crossing).
+pub const HORN_LW_A: f64 = 140.72;
+
 /// Rail vehicle type (matches rail_type field in Arrow IPC).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RailType {
@@ -210,6 +227,7 @@ pub enum RailType {
     NarrowGauge, // 3
     Funicular,   // 4
     Preserved,   // 5 — heritage model not yet assessed
+    Horn,        // 6 — level-crossing horn approach (soundings in passenger slots)
 }
 
 impl RailType {
@@ -220,6 +238,7 @@ impl RailType {
             3 => Self::NarrowGauge,
             4 => Self::Funicular,
             5 => Self::Preserved,
+            6 => Self::Horn,
             _ => Self::Rail,
         }
     }
@@ -263,6 +282,10 @@ pub fn railway_emission(
     if matches!(rail_type, RailType::Preserved) {
         return [f64::NEG_INFINITY; NUM_BANDS];
     }
+    if matches!(rail_type, RailType::Horn) {
+        // Horn approach: soundings ride in the passenger slots, freight unused.
+        return horn_line_emission(trains_passenger, speed_kmh, period_hours);
+    }
     let passenger_coeffs = match rail_type {
         RailType::Tram => &TRAM,
         RailType::LightRail | RailType::NarrowGauge => &LIGHT_RAIL,
@@ -293,6 +316,25 @@ pub fn railway_emission(
         };
     }
     result
+}
+
+/// Level-crossing horn line emission `L_Weq` per metre of approach.
+///
+/// A sounding spreads the horn's power over the approach it travels while
+/// sounding, so the energy per metre is `W / v` and the period level follows
+/// the same density law as rolling stock: `N / (T_h · 1000 · v)`. Slower
+/// trains sound longer per metre and are louder per sounding; the approach
+/// length only sets the spatial extent, never the level. The horn's own
+/// loudness is speed-independent, so there is no rolling-style speed term.
+/// Speed clamps to the rail floor (20 km/h) and the fastest FRA timetable
+/// speed (120 mph ≈ 193 km/h, rounded to 200).
+fn horn_line_emission(soundings: f64, speed_kmh: f64, period_hours: f64) -> [f64; NUM_BANDS] {
+    if soundings <= 0.0 || period_hours <= 0.0 {
+        return [f64::NEG_INFINITY; NUM_BANDS];
+    }
+    let v = speed_kmh.clamp(20.0, 200.0);
+    let q_corr = 10.0 * (soundings / (period_hours * 1000.0 * v)).log10();
+    HORN_SPECTRUM.map(|w| HORN_LW_A + w + q_corr)
 }
 
 /// Main-line freight prior per day: the flat rate that, together with measured lines,
@@ -334,6 +376,8 @@ pub fn default_traffic(
         RailType::NarrowGauge => (10.0, 0.0), // narrow gauge: tourist/local
         RailType::Funicular => (40.0, 0.0),   // funicular: frequent but short
         RailType::Preserved => (0.0, 0.0),
+        // Horn approaches carry producer-stamped soundings, never priors.
+        RailType::Horn => (0.0, 0.0),
         RailType::Rail => match usage {
             0 => (80.0, mainline_freight_prior(country_iso)),
             1 => (30.0, 5.0),  // branch: 30 passenger + 5 freight
@@ -370,6 +414,8 @@ pub fn default_speed(rail_type: RailType) -> f64 {
         RailType::Funicular => 20.0,
         RailType::Rail => 80.0,
         RailType::Preserved => 0.0,
+        // Median typical-max over sounding FRA crossings is 40 mph (64 km/h).
+        RailType::Horn => 60.0,
     }
 }
 
@@ -799,5 +845,46 @@ mod tests {
             (shift - (-0.8)).abs() <= 0.2,
             "pax-only Lden shift {shift:.2} dB, want -0.8±0.2"
         );
+    }
+
+    /// The Volpe horn spectrum carries its level in HORN_LW_A: A-sum ≈ 0.
+    /// 1-decimal rounding leaves a residue the calibration absorbs.
+    #[test]
+    fn horn_spectrum_a_weighted_sum_zero() {
+        let sum: f64 = HORN_SPECTRUM
+            .iter()
+            .zip(crate::constants::A_WEIGHTING.iter())
+            .map(|(w, a)| 10f64.powf((w + a) / 10.0))
+            .sum();
+        assert!(
+            10.0 * sum.log10() <= 0.1,
+            "horn spectrum A-sum {} dB, want ≈ 0",
+            10.0 * sum.log10()
+        );
+    }
+
+    /// Horn density law: twice the soundings (or half the speed) is +3 dB;
+    /// freight slots are ignored; a silent period is −inf, not a floor.
+    #[test]
+    fn horn_line_emission_density_law() {
+        let base = horn_line_emission(10.0, 80.0, 12.0);
+        let louder = horn_line_emission(20.0, 80.0, 12.0);
+        let slower = horn_line_emission(10.0, 40.0, 12.0);
+        let ignored_freight = railway_emission(RailType::Horn, 80.0, 10.0, 999.0, 12.0);
+        let three_db = 10.0 * 2f64.log10();
+        for i in 0..NUM_BANDS {
+            assert!((louder[i] - base[i] - three_db).abs() < 1e-9, "band {i}");
+            assert!((slower[i] - base[i] - three_db).abs() < 1e-9, "band {i}");
+            assert!((ignored_freight[i] - base[i]).abs() < 1e-12, "band {i}");
+        }
+        let silent = horn_line_emission(0.0, 80.0, 12.0);
+        assert!(silent.iter().all(|b| *b == f64::NEG_INFINITY));
+    }
+
+    /// Horn approaches never take line priors (the producer stamps soundings).
+    #[test]
+    fn horn_takes_no_prior() {
+        assert_eq!(default_traffic(RailType::Horn, 0, *b"US", 0), (0.0, 0.0));
+        assert_eq!(default_speed(RailType::Horn), 60.0);
     }
 }

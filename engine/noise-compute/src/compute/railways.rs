@@ -233,6 +233,7 @@ pub(crate) fn compute_railways(
                 return None;
             }
             let rail_type = RailType::from_u8(seg.rail_type);
+            let src_h = normalize::rail::rail_source_height_m(rail_type);
             let speed = seg.speed_kmh;
             let period_emissions = railway::rail_period_emissions(rail_type, speed, seg.traffic);
             // The row's reach from the one relevance bound, every period counted (#31); a pair
@@ -242,7 +243,7 @@ pub(crate) fn compute_railways(
             {
                 return None;
             }
-            let src_alt = rasters.elevation(seg.cp_lat, seg.cp_lon) + SOURCE_HEIGHT_RAIL;
+            let src_alt = rasters.elevation(seg.cp_lat, seg.cp_lon) + src_h;
             let d_slant = geo::slant_dist(seg.dist_m, src_alt, rcv_alt);
             let day_weights: [f64; NUM_BANDS] = std::array::from_fn(|b| {
                 10f64.powf((period_emissions[0][b] + A_WEIGHTING[b]) / 10.0)
@@ -254,8 +255,10 @@ pub(crate) fn compute_railways(
                     start_lon: seg.start_lon,
                     end_lat: seg.end_lat,
                     end_lon: seg.end_lon,
-                    source_height_m: SOURCE_HEIGHT_RAIL,
-                    source_ground_factor: normalize::rail::rail_source_ground_factor(rail_type, seg.bridge),
+                    source_height_m: src_h,
+                    source_ground_factor: normalize::rail::rail_source_ground_factor(
+                        rail_type, seg.bridge,
+                    ),
                     platform_half_width_m: normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
                     directivity: normalize::rail::RAIL_SOURCE_DIRECTIVITY,
                 },
@@ -377,16 +380,16 @@ pub(crate) fn compute_railways(
             min_d_slant: 0.0,
             min_ground_g: 0.5,
             closest_source: RaySource {
-                    lat: seg.cp_lat,
-                    lon: seg.cp_lon,
-                    height_m: SOURCE_HEIGHT_RAIL,
-                    ground: SourceGround::Fixed(normalize::rail::rail_source_ground_factor(
-                        RailType::from_u8(seg.rail_type),
-                        seg.bridge,
-                    )),
-                    platform_half_width_m: normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
-                    exclusion_radius_m: 0.0,
-                },
+                lat: seg.cp_lat,
+                lon: seg.cp_lon,
+                height_m: normalize::rail::rail_source_height_m(RailType::from_u8(seg.rail_type)),
+                ground: SourceGround::Fixed(normalize::rail::rail_source_ground_factor(
+                    RailType::from_u8(seg.rail_type),
+                    seg.bridge,
+                )),
+                platform_half_width_m: normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
+                exclusion_radius_m: 0.0,
+            },
             dominant_segment_idx: 0,
             dominant_distance_m: 0.0,
             dominant_traffic: crate::normalize::RailTraffic::default(),
@@ -441,7 +444,7 @@ pub(crate) fn compute_railways(
             acc.closest_source = RaySource {
                 lat: seg.cp_lat,
                 lon: seg.cp_lon,
-                height_m: SOURCE_HEIGHT_RAIL,
+                height_m: normalize::rail::rail_source_height_m(RailType::from_u8(seg.rail_type)),
                 ground: SourceGround::Fixed(normalize::rail::rail_source_ground_factor(
                     RailType::from_u8(seg.rail_type),
                     seg.bridge,
@@ -1094,5 +1097,60 @@ mod tests {
                 assert_ne!(contribs1, "[]", "the scene must produce contributors");
             }
         }
+    }
+
+    /// Flat soft-ground rasters (G=1.0) for the horn reference geometry.
+    struct SoftRasters;
+    impl RasterSampler for SoftRasters {
+        fn elevation(&self, _: f64, _: f64) -> f64 {
+            200.0
+        }
+        fn ground_g(&self, _: f64, _: f64) -> f64 {
+            1.0
+        }
+        fn building_enclosure(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+    }
+
+    /// FRA horn reference through the engine: one sounding at 40 mph on a
+    /// 402 m approach puts SEL 107 dBA at 100 ft abeam the midpoint on flat
+    /// soft ground. This test SETS HORN_LW_A (solve the constant from the
+    /// failure output, never retune the assertion): it fails if propagation
+    /// changes, forcing a documented recalibration.
+    #[test]
+    fn horn_sel_reference() {
+        use grid::geo::{m_per_deg_lon, M_PER_DEG_LAT};
+        let lat = 40.69;
+        let half_deg = 201.0 / m_per_deg_lon(lat);
+        let mut seg = mainline_segment();
+        seg.rail_type = 6;
+        seg.start_lat = lat;
+        seg.start_lon = -99.142 - half_deg;
+        seg.end_lat = lat;
+        seg.end_lon = -99.142 + half_deg;
+        seg.length_m = 402.0;
+        seg.maxspeed = 64;
+        seg.speed_kmh = 64.37376; // 40 mph, the median sounding speed
+        seg.traffic = crate::normalize::RailTraffic {
+            passenger: crate::normalize::RailCategoryTraffic {
+                periods: [1.0, 0.0, 0.0],
+                status: 2,
+                ..Default::default()
+            },
+            freight: crate::normalize::RailCategoryTraffic::default(),
+        };
+        seg.dist_m = 30.48; // 100 ft
+        seg.cp_lat = lat;
+        seg.cp_lon = -99.142;
+        seg.fraction = 0.5;
+        let rcv = Receiver::new(lat + 30.48 / M_PER_DEG_LAT, -99.142, 200.0);
+        let (periods, _) =
+            compute_railways(&rcv, &[seg], &ObstacleSet::empty(), &SoftRasters, None);
+        let sel = periods.ld_db + 10.0 * (12.0 * 3600.0f64).log10();
+        assert!(
+            (sel - 107.0).abs() < 0.15,
+            "horn SEL {sel:.2} dBA at 100 ft, want 107±0.15"
+        );
     }
 }

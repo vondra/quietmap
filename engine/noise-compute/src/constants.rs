@@ -107,6 +107,9 @@ pub const SINGLE_DIFF_CAP: f64 = 20.0;
 /// Source heights [m].
 pub const SOURCE_HEIGHT_ROAD: f64 = 0.05; // CNOSSOS-EU §2.4.1
 pub const SOURCE_HEIGHT_RAIL: f64 = 0.5; // CNOSSOS-EU §2.7.1
+/// Locomotive horn at a level crossing: roof-mounted (Volpe 1993 test setup),
+/// modelled 4.0 m above the railhead.
+pub const SOURCE_HEIGHT_HORN: f64 = 4.0;
 pub const SOURCE_HEIGHT_LEISURE: f64 = 1.5;
 
 /// Flat-earth geo math lives only in `grid::geo` (no H3 anywhere) — re-exported

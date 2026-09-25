@@ -388,6 +388,26 @@ export const DATASETS: Dataset[] = [
     priority: 80,
     railFamilies: ['rail'], // CZPTT is heavy-rail only; trams get class defaults
   },
+  {
+    id: 111,
+    layer: 'railways',
+    key: 'us-fra-crossings',
+    name: 'FRA Highway-Rail Crossing Inventory (Form 6180.71)',
+    year: 2026,
+    license: 'Public Domain (US DOT)',
+    url: 'https://data.transportation.gov/Railroads/Crossing-Inventory-Data-Form-71-Current/m2f8-22s6',
+    priority: 80, // feeds horn soundings only (no interval rank: post-finalize rows)
+  },
+  {
+    id: 112,
+    layer: 'railways',
+    key: 'ca-tc-crossings',
+    name: 'Transport Canada Grade Crossings Inventory, 2023 update (whistling cessation unknown)',
+    year: 2023,
+    license: 'OGL-Canada (attribution required)',
+    url: 'https://open.canada.ca/data/en/dataset/d0f54727-6c0b-4e5a-aa04-ea1463cf9f4c',
+    priority: 80, // feeds horn soundings only (no interval rank: post-finalize rows)
+  },
 
   // ── Buildings: national ──
   {
