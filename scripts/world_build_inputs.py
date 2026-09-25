@@ -216,7 +216,7 @@ def stamps_the_point_query_expects():
         'roads': {b'osm_roads_contract': osm['ROADS_CONTRACT'], **grid},
         'railways': {b'osm_railways_contract': osm['RAILWAYS_CONTRACT'], **grid},
         'industrial': {b'osm_industrial_contract': osm['INDUSTRIAL_CONTRACT'], **grid},
-        'leisure': {b'leisure_contract': osm['LEISURE_CONTRACT_V4'], **grid},
+        'leisure': {b'leisure_contract': osm['LEISURE_CONTRACT_V5'], **grid},
         'ships': {b'ships_contract': store['SHIPS_CONTRACT_V1'], **grid},
         'airborne': {b'airborne_contract': aircraft['AIRBORNE_CONTRACT'], **version},
         'cruise': {b'cruise_contract': aircraft['CRUISE_CONTRACT'], **version},

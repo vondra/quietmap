@@ -490,7 +490,7 @@ pub fn write_leisure_file(path: &Path, rows: &[FixtureLeisure]) {
     let mut metadata = std::collections::HashMap::new();
     metadata.insert(
         "leisure_contract".to_string(),
-        square_store::osm_contract::LEISURE_CONTRACT_V4.to_string(),
+        square_store::osm_contract::LEISURE_CONTRACT_V5.to_string(),
     );
     metadata.insert(
         "grid".to_string(),

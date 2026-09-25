@@ -1,4 +1,4 @@
-//! `leisure_v4` writer: area and point sources plus retained motorsport lines,
+//! `leisure_v5` writer: area and point sources plus retained motorsport lines,
 //! shooting subtypes and indoor flags. Activity evidence never screens.
 
 use anyhow::Result;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 use super::{
     evidence::write_with_evidence, parse_grid_cell, polygon_row_bbox, schema_with_contract,
 };
-use square_store::osm_contract::LEISURE_CONTRACT_V4;
+use square_store::osm_contract::LEISURE_CONTRACT_V5;
 
 pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let n = rows.len();
@@ -30,7 +30,7 @@ pub(super) fn write_leisure(rows: &[Vec<String>], path: &Path) -> Result<()> {
             Field::new("length_m", DataType::Float32, true),
         ],
         "leisure_contract",
-        LEISURE_CONTRACT_V4,
+        LEISURE_CONTRACT_V5,
     );
 
     let mut osm_id = Int64Builder::with_capacity(n);

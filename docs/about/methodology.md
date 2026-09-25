@@ -153,7 +153,11 @@ type and size. Operating hours and operating status are unknown.
 
 **As sources.** Buildings and leisure facilities use estimated sound power by type,
 area and assumed operating hours. These extensions beyond the transport standards are
-not measurements of individual heat pumps, shops or sports grounds.
+not measurements of individual heat pumps, shops or sports grounds. Sports pitches
+are the exception with documented hours: both kinds radiate the Sport England
+typical in-use level (58 dB LAeq,1h at 10 m from the sideline); grass pitches
+take 5 hours a week over a September–May season, floodlit artificial turf
+40 hours a week year-round, and both are silent at night.
 
 Open car parks use the [Bavarian parking study (LfU, 2007, sixth edition)](https://www.lfu.bayern.de/publikationen/get_pdf.htm?art_nr=lfu_lae_00045&pdf_nr=0),
 with 63 dB(A) sound power for one movement per hour and its searching-traffic term.

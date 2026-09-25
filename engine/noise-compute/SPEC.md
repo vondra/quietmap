@@ -368,7 +368,7 @@ Waters absent from both products have no rows.
 
 ## Open parking and emission-only grounds
 
-Open parking ways use `leisure_v4` classes 8 (lot) and 9 (street strip), with no
+Open parking ways use `leisure_v5` classes 8 (lot) and 9 (street strip), with no
 screening geometry. Their mapped area estimates spaces at 23.8 and 13.3 m² per
 space. Day sound power follows the Parkplatzlärmstudie (LfU, 6th ed. 2007):
 63 dB(A) per movement/hour, 0.40 movements/space/hour and the searching term
@@ -401,6 +401,19 @@ generic Overture class. These rows and
 Overture `roof`/`carport` classes screen at 0 m (`structures-builder-5`): a
 roof on posts has no wall to diffract over. Footprint, emission, envelope and
 traffic stay. Greenhouses, grandstands and enclosed garages keep their walls.
+
+## Sports pitches
+
+Both pitch classes share one active anchor: 97.9 dB(A) over 6400 m², the Sport
+England AGP Acoustics DGN (2015) typical free-field 58 dB LAeq,1h at 10 m from
+the sideline halfway (player voices while the pitch is in use), back-calculated
+through the hemispherical incoherent area integral (−1.8 dB for 100×64 m).
+Grass and unknown surfaces (class 0) take the seasonal club duty: 5 h/week over
+40 weeks (4 h day + 1 h summer evenings; night silent), Lden ~83.5 @ 7000 m².
+Artificial turf (class 12) takes the booked duty: 40 h/week year-round on the
+documented peak pattern (weekday evenings + weekends; night silent),
+Lden ~93.8 @ 7000 m². Day/evening/night follow the engine clock (07–19/19–23/
+23–07).
 
 ## Screening heights
 
@@ -605,7 +618,7 @@ forest impacts are the A-weighted differences between the full and the hypothesi
 ## Retained OSM model evidence
 
 The extraction contract constants live in `square-store::osm_contract`: spill
-format 2, roads/railways/industrial evidence 2, `leisure_v4`, and
+format 2, roads/railways/industrial evidence 2, `leisure_v5`, and
 `transport_nodes_contract=1`. Readers reject older stamps; rebuilding requires
 fresh extraction outputs. Existing country-bake and grid contracts still apply.
 
@@ -640,7 +653,9 @@ retain every closed outer component as a separate row; unclosed fragments are
 omitted rather than assigned an area. Inner holes remain outside the
 existing single-ring geometry contract.
 
-`leisure_v4` adds motorsport class 10 and shooting class 11, `osm_tags`, OSM kind,
+`leisure_v5` adds the artificial-turf pitch class 12 (`surface=artificial_turf`;
+grass and unknown surfaces stay class 0 with the seasonal club duty) to the
+v4 evidence: motorsport class 10 and shooting class 11, `osm_tags`, OSM kind,
 geometry kind (0 point, 1 area, 2 line) and line length. Two-node raceways and
 motor-sport tracks survive with open-chain geometry; enclosing polygons are
 separate area rows. Open non-motorised tracks also retain their line path;
