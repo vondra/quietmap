@@ -1,6 +1,7 @@
-//! CUDA packing and exact cached terrain-horizon invariants.
+//! CUDA packing and exact cached terrain- and building-horizon invariants.
 
 use super::*;
+use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind};
 #[test]
 fn cuda_airborne_layout_and_original_horizon_entries() {
     assert_eq!(std::mem::size_of::<DeviceAirborneSource>(), 80);
@@ -60,7 +61,21 @@ fn cached_dem_keeps_exact_horizons_across_tile_and_dateline_seams() {
             std::fs::write(path, bytes).unwrap();
         }
         let rasters = RealRasters::new(root.path());
-        let obstacles = ObstacleSet { indexes: vec![] };
+        // A roof straddling the latitude seam makes the building horizon sample the DEM too.
+        let degree = 1.0 / air::M_PER_DEG_LAT;
+        let mut roof = ObstacleIndex::builder(0.0, lon);
+        roof.add_ring(
+            &[
+                (-20.0 * degree, lon - 120.0 * degree),
+                (-20.0 * degree, lon - 100.0 * degree),
+                (20.0 * degree, lon - 100.0 * degree),
+                (20.0 * degree, lon - 120.0 * degree),
+            ],
+            30.0,
+            ObstacleKind::Building,
+            0,
+        );
+        let obstacles = ObstacleSet { indexes: vec![std::sync::Arc::new(roof.build())] };
         for lat in [-0.001, 0.001] {
             let plain = ReceiverScreening::build(lat, lon, 204.0, &rasters, &obstacles).unwrap();
             let cached =
@@ -73,6 +88,7 @@ fn cached_dem_keeps_exact_horizons_across_tile_and_dateline_seams() {
                 plain.terrain.max_sin_sq.to_bits(),
                 cached.terrain.max_sin_sq.to_bits()
             );
+            assert!(!cached.buildings.is_empty());
             assert_eq!(
                 plain.buildings.packed_sectors(),
                 cached.buildings.packed_sectors()

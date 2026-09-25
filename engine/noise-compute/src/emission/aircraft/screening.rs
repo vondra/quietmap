@@ -4,7 +4,6 @@ use std::f64::consts::TAU;
 use std::sync::OnceLock;
 
 use crate::propagation::obstacle_index::{CrossingScratch, ObstacleSet};
-use crate::types::RasterSampler;
 
 use super::doc29::M_PER_DEG_LAT;
 
@@ -97,10 +96,12 @@ pub struct BuildingHorizon {
 }
 
 impl BuildingHorizon {
-    /// Build once for an outdoor receiver.
+    /// Build once for an outdoor receiver. `terrain_elevation` samples the same
+    /// DEM the terrain horizon marches, so a painter can hand both horizons one
+    /// lock-free tile handle instead of the shared raster cache.
     pub fn build(
         obstacles: &ObstacleSet,
-        rasters: &dyn RasterSampler,
+        terrain_elevation: impl FnMut(f64, f64) -> f64,
         receiver_lat: f64,
         receiver_lon: f64,
         receiver_alt_m: f64,
@@ -111,7 +112,7 @@ impl BuildingHorizon {
             BUILDING_LOCAL_MAX_M,
             &BUILDING_LOCAL_RANGE_BREAK_M,
             obstacles,
-            rasters,
+            terrain_elevation,
             receiver_lat,
             receiver_lon,
             receiver_alt_m,
@@ -171,7 +172,7 @@ fn build_sector_bands<const SECTORS: usize, const BANDS: usize>(
     ray_m: f64,
     breaks_m: &[f64; BANDS],
     obstacles: &ObstacleSet,
-    rasters: &dyn RasterSampler,
+    mut terrain_elevation: impl FnMut(f64, f64) -> f64,
     receiver_lat: f64,
     receiver_lon: f64,
     receiver_alt_m: f64,
@@ -195,7 +196,7 @@ fn build_sector_bands<const SECTORS: usize, const BANDS: usize>(
             let edge_lat = receiver_lat + sin_angle * range_m / M_PER_DEG_LAT;
             let edge_lon = receiver_lon + cos_angle * range_m / m_per_deg_lon;
             let edge_rel_alt_m =
-                rasters.elevation(edge_lat, edge_lon) + f64::from(height_m) - receiver_alt_m;
+                terrain_elevation(edge_lat, edge_lon) + f64::from(height_m) - receiver_alt_m;
             let tangent = edge_rel_alt_m / range_m;
             let band = breaks_m
                 .iter()

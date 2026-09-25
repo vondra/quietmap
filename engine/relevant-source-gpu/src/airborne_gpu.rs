@@ -80,10 +80,13 @@ impl AirborneScene<'_> {
         let weights = DeviceBuffer::from_slice(&self.weights.as_array().map(|v| v as f32))?;
         let chords = (!self.chords.sources.is_empty())
             .then(|| chords::DeviceChords::new(&self.chords, &self.weights)).transpose()?;
-        // 256 horizons bound staging memory independently of the requested tile's pixel count.
-        for first in (0..count).step_by(256) {
-            let end = (first + 256).min(count);
-            let screening = (first..end)
+        // Two batches of 256 horizons bound staging memory whatever the tile's pixel count.
+        let batches: Vec<_> = (0..count)
+            .step_by(256)
+            .map(|first| first..(first + 256).min(count))
+            .collect();
+        let screen = |batch: std::ops::Range<usize>| -> Result<Vec<ReceiverScreening>> {
+            batch
                 .into_par_iter()
                 .map(|i| {
                     ReceiverScreening::build_cached(
@@ -94,17 +97,30 @@ impl AirborneScene<'_> {
                         &scene.obstacles,
                     )
                 })
-                .collect::<Result<Vec<_>>>()?;
-            let uploaded = UploadedScreen::new(&screening)?;
-            if let Some(source) = &device_sources {
-                let powers = gpu_powers(source, &uploaded, &npd, &weights, self.days)?;
-                output[first * 3..end * 3].copy_from_slice(&powers);
-            }
-            if let Some(chords) = &chords {
-                let powers = chords.powers(&uploaded, self.days)?;
-                for (total, chord) in output[first * 3..end * 3].iter_mut().zip(powers) {
-                    *total += chord;
+                .collect()
+        };
+        let mut screening = screen(batches[0].clone())?;
+        for (index, batch) in batches.iter().enumerate() {
+            // The CPU builds the next batch's horizons while the card evaluates this one.
+            let next = std::thread::scope(|scope| -> Result<_> {
+                let next = batches
+                    .get(index + 1)
+                    .map(|next| scope.spawn(|| screen(next.clone())));
+                let uploaded = UploadedScreen::new(&screening)?;
+                let totals = &mut output[batch.start * 3..batch.end * 3];
+                if let Some(source) = &device_sources {
+                    totals.copy_from_slice(&gpu_powers(source, &uploaded, &npd, &weights, self.days)?);
                 }
+                if let Some(chords) = &chords {
+                    for (total, chord) in totals.iter_mut().zip(chords.powers(&uploaded, self.days)?) {
+                        *total += chord;
+                    }
+                }
+                next.map(|handle| handle.join().expect("airborne screening thread panicked"))
+                    .transpose()
+            })?;
+            if let Some(next) = next {
+                screening = next;
             }
         }
         ensure!(
@@ -220,6 +236,89 @@ mod tests {
         }
     }
 
+    /// A departure of `class` passing `lateral` metres east of the receiver at `relative_alt`.
+    fn source_beside(
+        metres_per_longitude_degree: f64,
+        class: usize,
+        departure: bool,
+        lateral: f64,
+        relative_alt: f64,
+    ) -> DeviceAirborneSource {
+        let profile = &air::PROFILES[air::CLASS_REP_PROFILE_IDX[class] as usize];
+        let (installation, a, b, c) = air::delta_i_constants(profile.installation);
+        let endpoints = [
+            (50.0 - 500.0 / air::M_PER_DEG_LAT) as f32,
+            (14.0 + lateral / metres_per_longitude_degree) as f32,
+            (50.0 + 500.0 / air::M_PER_DEG_LAT) as f32,
+            (14.0 + lateral / metres_per_longitude_degree) as f32,
+        ];
+        let dy = (f64::from(endpoints[2]) - f64::from(endpoints[0])) * air::M_PER_DEG_LAT;
+        DeviceAirborneSource {
+            endpoints,
+            physical: [
+                (relative_alt + 4.0) as f32,
+                0.0,
+                dy as f32,
+                0.0,
+                0.0,
+                a as f32,
+                b as f32,
+                c as f32,
+                16_000.0 * 16_000.0,
+                -100_000.0,
+                -100_000.0,
+            ],
+            identity: [
+                match installation {
+                    air::Installation::Wing => 0,
+                    air::Installation::Fuselage => 1,
+                    air::Installation::Propeller => 2,
+                },
+                class as i32,
+                i32::from(departure),
+                0,
+                0,
+            ],
+        }
+    }
+
+    #[test]
+    fn independent_rows_reduce_across_parts_and_receiver_blocks() -> Result<()> {
+        let _cuda = RelevantSourceCuda::initialize()?;
+        let empty = ObstacleSet { indexes: vec![] };
+        let receivers = (0..40)
+            .map(|i| ReceiverScreening::build(50.0 + f64::from(i) * 1e-4, 14.0, 4.0, &Flat, &empty))
+            .collect::<Result<Vec<_>>>()?;
+        let mpdl = receivers[0].device.metres_per_longitude_degree;
+        let source = source_beside(mpdl, 0, true, 200.0, 500.0);
+        let rows: Vec<_> = (0..=AIRBORNE_REDUCTION_ROWS)
+            .map(|i| DeviceAirborneSource {
+                identity: [source.identity[0], source.identity[1], source.identity[2], (i % 3) as i32, 0],
+                ..source
+            })
+            .collect();
+        let npd = DeviceBuffer::from_slice(&air::NpdLuts::shared().device_luts_flat_f32())?;
+        let weights = DeviceBuffer::from_slice(&[1.0f32, 1.0])?;
+        let all = gpu_powers(&DeviceBuffer::from_slice(&rows)?, &UploadedScreen::new(&receivers)?, &npd, &weights, 1)?;
+        for (index, rx) in receivers.iter().enumerate() {
+            let single = gpu_powers(
+                &DeviceBuffer::from_slice(&[source])?,
+                &UploadedScreen::new(std::slice::from_ref(rx))?,
+                &npd,
+                &weights,
+                1,
+            )?;
+            ensure!(single[0] > 0.0, "receiver {index} hears no source");
+            for period in 0..3 {
+                let copies = rows.iter().filter(|row| row.identity[3] == period as i32).count() as f64;
+                let expected = copies * f64::from(single[0]) * air::PERIOD_SECONDS[0] / air::PERIOD_SECONDS[period];
+                let error = (10.0 * (f64::from(all[index * 3 + period]) / expected).log10()).abs();
+                ensure!(error < 0.01, "receiver {index} period {period}: {error} dB");
+            }
+        }
+        Ok(())
+    }
+
     #[test]
     fn aircraft_kernel_cpu_cuda_parity_across_classes_operations_and_slants() -> Result<()> {
         let _cuda = RelevantSourceCuda::initialize()?;
@@ -236,41 +335,9 @@ mod tests {
             for departure in [false, true] {
                 for lateral in [0.0, 200.0, 1_000.0, 8_000.0] {
                     for relative_alt in [-50.0, 100.0, 500.0, 9_000.0] {
-                        let endpoints = [
-                            (50.0 - 500.0 / air::M_PER_DEG_LAT) as f32,
-                            (14.0 + lateral / mpdl) as f32,
-                            (50.0 + 500.0 / air::M_PER_DEG_LAT) as f32,
-                            (14.0 + lateral / mpdl) as f32,
-                        ];
-                        let dy = (f64::from(endpoints[2]) - f64::from(endpoints[0]))
-                            * air::M_PER_DEG_LAT;
-                        let source = DeviceAirborneSource {
-                            endpoints,
-                            physical: [
-                                (relative_alt + 4.0) as f32,
-                                0.0,
-                                dy as f32,
-                                0.0,
-                                0.0,
-                                a as f32,
-                                b as f32,
-                                c as f32,
-                                16_000.0 * 16_000.0,
-                                -100_000.0,
-                                -100_000.0,
-                            ],
-                            identity: [
-                                match installation {
-                                    air::Installation::Wing => 0,
-                                    air::Installation::Fuselage => 1,
-                                    air::Installation::Propeller => 2,
-                                },
-                                class as i32,
-                                i32::from(departure),
-                                0,
-                                0,
-                            ],
-                        };
+                        let source = source_beside(mpdl, class, departure, lateral, relative_alt);
+                        let endpoints = source.endpoints;
+                        let dy = f64::from(source.physical[2]);
                         let expected = air::segment_energy_kernel::<false>(
                             (f64::from(endpoints[1]) - 14.0) * mpdl,
                             (f64::from(endpoints[0]) - 50.0) * air::M_PER_DEG_LAT,
