@@ -526,12 +526,6 @@ fn maekawa_bands(delta: f64, admits: &[bool; NUM_BANDS]) -> [f64; NUM_BANDS] {
     atten
 }
 
-/// Pure Maekawa band attenuation (no Rayleigh criterion) — reference-vector
-/// helper.
-pub fn diffraction_attenuation(delta: f64) -> [f64; NUM_BANDS] {
-    maekawa_bands(delta, &[true; NUM_BANDS])
-}
-
 /// The banded attenuation of a computed edge: [`maekawa_bands`] on the
 /// homogeneous δ, mixed with the favourable-ray δ_F per (2.5.9). One
 /// [`rayleigh_admits`] verdict feeds both.
@@ -568,7 +562,7 @@ mod tests {
 
     #[test]
     fn test_k6_barrier_atten() {
-        let atten = diffraction_attenuation(0.5);
+        let atten = maekawa_bands(0.5, &[true; NUM_BANDS]);
         let at_1khz = atten[4];
         assert!(
             (at_1khz - 15.28).abs() < 1.0,

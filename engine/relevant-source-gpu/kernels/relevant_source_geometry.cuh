@@ -81,12 +81,6 @@ __device__ __forceinline__ bool source_is_ground_ops(const DeviceLineSource& sou
         != 0u;
 }
 
-/// A point source's footprint radius: buildings inside it are the source itself,
-/// not a barrier, and it floors the divergence distance (CPU scatter_point).
-__device__ __forceinline__ float source_exclusion_radius_m(const DeviceLineSource& source) {
-    return source_is_point(source) ? source.extent_m : 0.0f;
-}
-
 struct FusedPixel {
     float elevation;
     uint8_t forest;

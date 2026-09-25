@@ -40,18 +40,6 @@ pub const SOURCE_HEIGHT_FLOOR_M: f64 = 0.05;
 /// Floor on the receiver height above bare earth (m) in the diffraction geometry.
 pub const RECEIVER_HEIGHT_FLOOR_M: f64 = 0.5;
 
-/// Bare-earth terrain diffraction bands; geometry is exposed by the meta variant.
-pub fn terrain_attenuation(
-    profile: &mut PathProfile,
-    src_elev: f64,
-    rcv_alt: f64,
-) -> [f64; NUM_BANDS] {
-    match compute_terrain_diffraction(profile, src_elev, rcv_alt) {
-        None => [0.0; NUM_BANDS],
-        Some(res) => res.bands,
-    }
-}
-
 #[inline]
 fn empty_terrain_trace() -> TerrainTrace {
     TerrainTrace {
@@ -62,7 +50,7 @@ fn empty_terrain_trace() -> TerrainTrace {
     }
 }
 
-/// Shared intermediate between `terrain_attenuation` and `_with_meta`: the
+/// Intermediate of `terrain_attenuation_with_meta`: the
 /// precomputed bands + the single-edge `DiffractionResult`, with the f64
 /// profile / `t` borrow the meta path indexes for the edge `EdgePoint`.
 struct TerrainDiffraction<'a> {
@@ -161,38 +149,6 @@ pub fn terrain_attenuation_with_meta(
     (trace, n as u32)
 }
 
-/// Building + barrier screening attenuation per band from a `PathProfile`.
-///
-/// Retains the strongest computed attenuation in each band across exact vector
-/// crossings and bare terrain, returning only the increment over terrain.
-///
-/// `exclusion_radius_m`: ignore building crossings closer than this distance to
-/// the source — the source polygon's own buildings are not real obstacles. Never
-/// applied to barriers: an explicit wall is always a real obstacle.
-pub fn screening_attenuation(
-    profile: &mut PathProfile,
-    obstacles: ObstacleInput<'_>,
-    src_elev: f64,
-    rcv_alt: f64,
-    exclusion_radius_m: f64,
-    terrain_atten: &[f64; NUM_BANDS],
-) -> [f64; NUM_BANDS] {
-    // Keep the tile-hot band-only path on its small return ABI instead of
-    // entering the much larger metadata routine for the rural majority.
-    if obstacles.candidates.is_empty() {
-        return [0.0; NUM_BANDS];
-    }
-    screening_attenuation_with_meta(
-        profile,
-        obstacles,
-        src_elev,
-        rcv_alt,
-        exclusion_radius_m,
-        terrain_atten,
-    )
-    .0
-}
-
 /// Vector-obstacle input for screening: the exact ray×obstacle crossings.
 ///
 /// Buildings and noise barriers arrive ONLY this way. There is no raster
@@ -203,13 +159,18 @@ pub struct ObstacleInput<'a> {
     pub candidates: &'a [CrossingCandidate],
 }
 
-/// Screening attenuation + obstacle trace for popup tooltips.
+/// Building + barrier screening attenuation per band, as the increment over terrain, and the
+/// obstacle trace for popup tooltips.
+///
+/// `exclusion_radius_m`: ignore building crossings closer than this distance to
+/// the source — the source polygon's own buildings are not real obstacles. Never
+/// applied to barriers: an explicit wall is always a real obstacle.
 ///
 /// Each crossing keeps its own Fresnel geometry and bare-earth Rayleigh fit.
 /// The per-band maximum cannot lose a stronger screen when another edge's δ
 /// overtakes it. This is the existing single-edge approximation's attenuation
 /// envelope, not a multiple-diffraction construction. `terrain_atten` comes from
-/// `terrain_attenuation[_with_meta]` on the same profile/source/receiver;
+/// `terrain_attenuation_with_meta` on the same profile/source/receiver;
 /// retaining it avoids recomputation and double-counting.
 /// The singular trace identifies a real representative crossing with the
 /// largest incremental attenuation in any band, not the whole envelope's cause.
@@ -561,7 +522,7 @@ mod tests {
         p.elevation_m = raw.to_vec();
         p.forest_u8 = vec![0; 4];
         p.imd_u8 = vec![50; 4];
-        let march = terrain_attenuation(&mut p, src_elev, rcv_alt);
+        let march = terrain_attenuation_with_meta(&mut p, src_elev, rcv_alt).0.attenuation_bands;
         assert_eq!(
             march, [0.0; NUM_BANDS],
             "carved-flat annulus must be silent"
@@ -717,9 +678,7 @@ mod tests {
         cands
     }
 
-    /// Mid-path 3 m barrier on a flat profile must screen, and the band-only
-    /// wrapper must agree with `_with_meta` (the heatmap kernels call the
-    /// wrapper; popup calls `_with_meta` — parity by construction).
+    /// Mid-path 3 m barrier on a flat profile must screen.
     #[test]
     fn screening_finds_midpath_barrier() {
         let dist_m = 200.0;
@@ -741,24 +700,10 @@ mod tests {
             atten.iter().any(|&a| a > 0.0),
             "3 m wall above the 0.05→1.5 m LOS must screen"
         );
-        let mut p2 = build_flat_profile(dist_m, 0.0);
-        let bands = screening_attenuation(
-            &mut p2,
-            ObstacleInput { candidates: &cands },
-            0.05,
-            1.5,
-            0.0,
-            &terrain_atten,
-        );
-        assert_eq!(bands, atten, "band-only wrapper == _with_meta bands");
     }
 
     /// Early-out refinement: a wall the ray cannot touch yields NO crossings
-    /// from the index walk, and with an empty candidate list both screening
-    /// entry points return exactly the empty-input result — this keeps the
-    /// rural fast path alive for heatmaps and traced popup fan rays alike.
-    /// (The sorted-slice `dist_m` horizon this test used to pin is gone with
-    /// the slice; the index answers the same question geometrically.)
+    /// from the index walk, and an empty candidate list screens nothing.
     #[test]
     fn far_barrier_never_reaches_the_candidate_list() {
         let dist_m = 200.0;
@@ -767,7 +712,7 @@ mod tests {
         let cands = wall_crossings(0.0, 500.0, 60.0, 500.0, 3.0, dist_m, 1);
         assert!(cands.is_empty(), "off-path wall must produce no crossing");
         let mut p = build_flat_profile(dist_m, 0.0);
-        let bands = screening_attenuation(
+        let (bands, trace) = screening_attenuation_with_meta(
             &mut p,
             ObstacleInput { candidates: &cands },
             0.05,
@@ -775,28 +720,7 @@ mod tests {
             0.0,
             &terrain_atten,
         );
-        let mut p2 = build_flat_profile(dist_m, 0.0);
-        let empty = screening_attenuation(
-            &mut p2,
-            ObstacleInput { candidates: &[] },
-            0.05,
-            1.5,
-            0.0,
-            &terrain_atten,
-        );
-        assert_eq!(bands, empty);
         assert!(bands.iter().all(|&a| a == 0.0));
-
-        let mut p3 = build_flat_profile(dist_m, 0.0);
-        let (traced, trace) = screening_attenuation_with_meta(
-            &mut p3,
-            ObstacleInput { candidates: &cands },
-            0.05,
-            1.5,
-            0.0,
-            &terrain_atten,
-        );
-        assert_eq!(traced, empty);
         assert!(trace.edge.is_none());
     }
 
@@ -938,7 +862,7 @@ mod tests {
             let mut p = build_flat_profile(100.0, 0.0);
             let middle = p.t.iter().position(|&t| t >= 0.5).unwrap();
             p.elevation_m[middle] = hill_height;
-            let terrain = terrain_attenuation(&mut p, 0.05, 10.0);
+            let terrain = terrain_attenuation_with_meta(&mut p, 0.05, 10.0).0.attenuation_bands;
             assert_eq!(terrain.iter().any(|&a| a > 0.0), hill_height > 0.0);
             let roof = CrossingCandidate {
                 t: 0.1,
@@ -1071,7 +995,7 @@ mod tests {
             index: 0,
         }];
 
-        let terrain = terrain_attenuation(&mut p, src_elev, rcv_alt);
+        let terrain = terrain_attenuation_with_meta(&mut p, src_elev, rcv_alt).0.attenuation_bands;
         let (screen, _) = screening_attenuation_with_meta(
             &mut p,
             ObstacleInput { candidates: &cands },
@@ -1126,7 +1050,7 @@ mod tests {
             id: 7,
             index: 0,
         }];
-        let terrain = terrain_attenuation(&mut p, 100.05, 104.0);
+        let terrain = terrain_attenuation_with_meta(&mut p, 100.05, 104.0).0.attenuation_bands;
         assert!(terrain.iter().any(|&a| a > 0.0), "the hill must attenuate");
         let (_, trace) = screening_attenuation_with_meta(
             &mut p,
