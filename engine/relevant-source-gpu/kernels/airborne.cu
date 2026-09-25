@@ -60,42 +60,56 @@ __device__ void airborne_screen_geometry(const AirborneSource& source, const Air
     result[6] = (float)(source.physical[0] + physical_t * source.physical[3] - rx.altitude);
 }
 
+// A block stages consecutive rows in shared memory once and evaluates each against
+// AIRBORNE_BLOCK_RECEIVERS neighbouring receivers: one warp takes one row for 32 receivers,
+// so its branches agree and the row is read from the L2 once per block, not once per receiver.
+#define AIRBORNE_BLOCK_RECEIVERS 32
+#define AIRBORNE_ROW_LANES 8
+#define AIRBORNE_STAGED_ROWS (AIRBORNE_BLOCK_RECEIVERS * AIRBORNE_ROW_LANES)
 __global__ void airborne_independent_parts(
     const AirborneSource* sources, unsigned int source_count,
-    const AirborneReceiver* receivers, const float* npd, const float* weights,
+    const AirborneReceiver* receivers, unsigned int receiver_count, const float* npd, const float* weights,
     AirborneScreen screen, unsigned int parts, float* output)
 {
-    __shared__ float sums[3][256];
-    unsigned int receiver = blockIdx.x;
-    const AirborneReceiver rx = receivers[receiver];
+    __shared__ AirborneSource staged[AIRBORNE_STAGED_ROWS];
+    __shared__ float sums[3][AIRBORNE_ROW_LANES][AIRBORNE_BLOCK_RECEIVERS];
+    unsigned int column = threadIdx.x % AIRBORNE_BLOCK_RECEIVERS;
+    unsigned int lane = threadIdx.x / AIRBORNE_BLOCK_RECEIVERS;
+    unsigned int receiver = blockIdx.x * AIRBORNE_BLOCK_RECEIVERS + column;
+    bool active = receiver < receiver_count;
+    const AirborneReceiver rx = receivers[active ? receiver : 0];
     unsigned int first = blockIdx.y * AIRBORNE_REDUCTION_ROWS;
     unsigned int end = min(first + AIRBORNE_REDUCTION_ROWS, source_count);
     float energy[3] = {};
-    for (unsigned int row = first + threadIdx.x; row < end; row += blockDim.x) {
-        const AirborneSource& source = sources[row];
-        if (!airborne_row_in_envelope(source, rx)) continue;
-        float ax = airborne_offset_east(source.endpoints[1], rx.longitude, rx.metres_per_longitude_degree);
-        float ay = airborne_row_offset_north(source.endpoints[0], rx.latitude);
-        float dx = airborne_row_segment_dx(source.physical[1], rx.metres_per_longitude_degree);
-        float sel;
-        float screen_geometry[7];
-        airborne_screen_geometry(source, rx, screen_geometry);
-        if (aircraft_sel<float, true>(ax, ay, dx, source.physical, source.identity[1], source.identity[2],
-                         source.identity[0], rx.altitude, npd, npd + 2 * NPD_NC * (NPD_NB + 1),
-                         receiver, screen, screen_geometry, &sel)) {
-            energy[source.identity[3]] += aircraft_fast_exp(sel * (float)LN10 * 0.1f) * weights[source.identity[4]];
-        }
-    }
-    for (int period = 0; period < 3; period++) sums[period][threadIdx.x] = energy[period];
-    __syncthreads();
-    for (unsigned int stride = 128; stride > 0; stride >>= 1) {
-        if (threadIdx.x < stride) {
-            for (int period = 0; period < 3; period++) sums[period][threadIdx.x] += sums[period][threadIdx.x + stride];
-        }
+    for (unsigned int chunk = first; chunk < end; chunk += AIRBORNE_STAGED_ROWS) {
         __syncthreads();
+        if (chunk + threadIdx.x < end) staged[threadIdx.x] = sources[chunk + threadIdx.x];
+        __syncthreads();
+        unsigned int staged_rows = min(AIRBORNE_STAGED_ROWS, end - chunk);
+        for (unsigned int row = lane; active && row < staged_rows; row += AIRBORNE_ROW_LANES) {
+            const AirborneSource& source = staged[row];
+            if (!airborne_row_in_envelope(source, rx)) continue;
+            float ax = airborne_offset_east(source.endpoints[1], rx.longitude, rx.metres_per_longitude_degree);
+            float ay = airborne_row_offset_north(source.endpoints[0], rx.latitude);
+            float dx = airborne_row_segment_dx(source.physical[1], rx.metres_per_longitude_degree);
+            float sel;
+            float screen_geometry[7];
+            airborne_screen_geometry(source, rx, screen_geometry);
+            if (aircraft_sel<float, true>(ax, ay, dx, source.physical, source.identity[1], source.identity[2],
+                             source.identity[0], rx.altitude, npd, npd + 2 * NPD_NC * (NPD_NB + 1),
+                             receiver, screen, screen_geometry, &sel)) {
+                energy[source.identity[3]] += aircraft_fast_exp(sel * (float)LN10 * 0.1f) * weights[source.identity[4]];
+            }
+        }
     }
-    if (threadIdx.x == 0) {
-        for (int period = 0; period < 3; period++) output[((size_t)receiver * parts + blockIdx.y) * 3 + period] = sums[period][0];
+    for (int period = 0; period < 3; period++) sums[period][lane][column] = energy[period];
+    __syncthreads();
+    if (lane == 0 && active) {
+        for (int period = 0; period < 3; period++) {
+            float total = 0.0f;
+            for (unsigned int l = 0; l < AIRBORNE_ROW_LANES; l++) total += sums[period][l][column];
+            output[((size_t)receiver * parts + blockIdx.y) * 3 + period] = total;
+        }
     }
 }
 __global__ void airborne_independent_reduce(const float* partial, unsigned int receivers,
@@ -118,7 +132,8 @@ extern "C" int relevant_source_cuda_airborne(
     if (!source_count || !receiver_count || receiver_count != screen->records || !(days > 0.0f)) return cudaErrorInvalidValue;
     unsigned int parts = (source_count - 1) / AIRBORNE_REDUCTION_ROWS + 1;
     if (parts > 65535 || receiver_count > 65535) return cudaErrorInvalidValue;
-    airborne_independent_parts<<<dim3(receiver_count, parts), 256>>>(sources, source_count, receivers, npd, weights, *screen, parts, partial);
+    airborne_independent_parts<<<dim3((receiver_count - 1) / AIRBORNE_BLOCK_RECEIVERS + 1, parts), AIRBORNE_STAGED_ROWS>>>(
+        sources, source_count, receivers, receiver_count, npd, weights, *screen, parts, partial);
     cudaError_t status = cudaGetLastError();
     if (status != cudaSuccess) return status;
     airborne_independent_reduce<<<(receiver_count * 3 + 255) / 256, 256>>>(partial, receiver_count, parts, days, output);
