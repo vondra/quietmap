@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import zipfile
-from fit_local_street_demand import training_points, fit
+from fit_local_street_demand import training_points, fit, predict
 
 
 class CountHoldoutTest(unittest.TestCase):
@@ -33,6 +33,14 @@ class CountHoldoutTest(unittest.TestCase):
     def test_fit_rechecks_holdout_membership_without_trusting_an_input_flag(self):
         with self.assertRaisesRegex(ValueError, 'training squares only'):
             fit([dict(x=259, y=191, holdout=False)])
+
+    def test_predict_cells_match_production_living_streets_share_residential(self):
+        parameters = dict(residentialUrban=327, unclassifiedUrban=280, rural=121,
+                          throughFactor=1.8, demandScale=0.55, singleTrackFactor=0.58)
+        rows = [dict(roadClass=6, builtUp=2, through=False, singleTrack=False, trips=0),
+                dict(roadClass=9, builtUp=2, through=False, singleTrack=False, trips=0),
+                dict(roadClass=5, builtUp=1, through=True, singleTrack=False, trips=0)]
+        self.assertEqual(list(predict(parameters, rows)), [327, 280, 121])
 
 
 if __name__ == '__main__':

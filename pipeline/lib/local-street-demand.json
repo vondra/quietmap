@@ -18,7 +18,7 @@
     "model": "S2p: T[cell] * (through&urban ? c : 1) * (singleTrack ? d : 1) + k * max_street(routed trips); structures_v5 storeys",
     "holdout": "qm-holdout-v1/{x}/{y}: sha256 first 8 hex digits modulo 5 == 0 excluded before extraction",
     "objective": "least squares on ln(AADF); positive parameters via exponential transform",
-    "cv": "five folds by sha256(w3-cv/{x}/{y}) first 8 hex digits modulo 5; no model selection",
+    "cv": "five folds by sha256(w3-cv/{x}/{y}) first 8 hex digits modulo 5; rural-through constraint and single-track factor chosen from training residuals, then refit",
     "training_counts": 4546,
     "training_squares": 115,
     "scipy_version": "1.18.1",

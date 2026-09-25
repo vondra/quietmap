@@ -1,13 +1,13 @@
 ---
 title: Europe
-intro: National road censuses in 11 countries, passenger timetables in 24, street counts in 34 cities. Rail freight not covered.
+intro: National road censuses in 11 countries, passenger timetables in 24, street counts in 35 cities. Rail freight not covered.
 map: { center: [15, 50], zoom: 4 }
 ---
 
 ## Roads
 
 - National traffic census (motorways and main roads, rarely city streets): Czechia, Denmark, Finland, France, Germany, Great Britain, Ireland, Italy, Norway, Poland, Spain.
-- City streets: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities), 35 cities from Lisbon to Helsinki. A count applies to the OSM way it was published for, or to a road along its line with the same street name or a similar road class. Where a city publishes no truck count, trucks take the class default share; weekday-only counts are scaled to the annual average by 0.93, the median ratio in cities that publish both. Prague, Brno and Vienna also have their own city counts.
+- City streets: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities), 35 cities from Lisbon to Helsinki. A count applies to the OSM way it was published for, or to a road along its line with the same street name or a similar road class. Where a city publishes no truck count, trucks take the class default share; weekday-only counts are scaled to the annual average by 0.9274, the median ratio in cities that publish both. Prague, Brno and Vienna also have their own city counts.
 
 Other roads use the [world defaults](/about/methodology).
 

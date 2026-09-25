@@ -49,7 +49,9 @@ export function MetadataRows({ c }: { c: Contributor }) {
       '',
       ...(wholeRoad
         ? [['Whole road', `${fmtInt(Math.round(m.cross_section_aadt))}/day`] as [string, string], 'both directions', '']
-        : ['Only this direction is known.', '']),
+        : total === 0
+          ? ['This carriageway carries no traffic.', '']
+          : ['Only this direction is known.', '']),
       'This carriageway:',
       ...([['Light', m.aadt_light, 1], ['Medium', m.aadt_medium, 2], ['Heavy', m.aadt_heavy, 4], ['Moto', m.aadt_moto, 8]] as const)
         .map(([label, value, bit]) =>

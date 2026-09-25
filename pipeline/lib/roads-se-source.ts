@@ -11,7 +11,6 @@ import { readPinnedRoadSource } from './pinned-road-source.js'
 const SOURCE_PATH = 'se/nvdb-trafik-2026.gpkg'
 const SOURCE_SHA256 = '9c2bff552a9a051f8e9d06a50750ac6b8b8619fbaf891053035d94a29d6950c8'
 const SWEDEN_BBOX = [55.3, 10.9, 69.1, 24.2] as const
-const FEATURE_TABLE_KIND = 'features'
 const SWEREF99_TM_SRID = 3006
 
 // SWEREF 99 TM is UTM 33 on GRS 80; ETRS 89 and WGS 84 agree far below the 50 m match radius.

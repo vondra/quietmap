@@ -1,4 +1,4 @@
-/** Read the 36 staged European city traffic sources without modifying the cache. */
+/** Read the staged European city traffic sources without modifying the cache. */
 
 import { withholdsCountLine } from './count-holdout.js'
 import { createHash } from 'node:crypto'
@@ -185,7 +185,9 @@ export function parseEuropeanCityTraffic(city: string, path: string, bytes: Buff
 export function europeanTrafficAadt(record: EuropeanTrafficRecord, roadClass: number): RoadAadt {
   const [light, medium, heavy, moto] = WORLD_DEFAULT[Math.min(roadClass, WORLD_DEFAULT.length - 1)]
   // Estimated classes never exceed what the published classes leave of the total; light takes the rest.
-  let remaining = record.total - (record.heavy ?? 0) - (record.moto ?? 0)
+  // The leave can round negative (weekday scaling rounds each part independently); estimates
+  // floor at zero instead of aborting the square, published classes untouched.
+  let remaining = Math.max(0, record.total - (record.heavy ?? 0) - (record.moto ?? 0))
   const estimate = (part: number): number => {
     const value = Math.min(remaining, Math.round(record.total * part / (light + medium + heavy + moto)))
     remaining -= value

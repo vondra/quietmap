@@ -53,8 +53,10 @@ def training_points(archive):
 def fit(rows):
     if not rows or any(square_hash("qm-holdout-v1", r["x"], r["y"]) == 0 for r in rows):
         raise ValueError("fit requires nonempty training squares only")
-    cells = np.array([0 if r["builtUp"] == 2 and r["roadClass"] == 5 else
-                      1 if r["builtUp"] == 2 else 2 for r in rows])
+    # Cells match production (`local-street-demand.ts`): urban unclassified is
+    # class 9 only — living streets share the residential cell.
+    cells = np.array([1 if r["builtUp"] == 2 and r["roadClass"] == 9 else
+                      0 if r["builtUp"] == 2 else 2 for r in rows])
     if set(cells) != {0, 1, 2}:
         raise ValueError("all three S2p cells need training data")
     trips = np.array([r["trips"] for r in rows])
@@ -70,7 +72,7 @@ def fit(rows):
 
 
 def predict(parameters, rows):
-    return np.array([(parameters["residentialUrban"] if r["roadClass"] == 5 else parameters["unclassifiedUrban"])
+    return np.array([(parameters["unclassifiedUrban"] if r["roadClass"] == 9 else parameters["residentialUrban"])
                      if r["builtUp"] == 2 else parameters["rural"] for r in rows]) * np.array([
         parameters["throughFactor"] if r["through"] and r["builtUp"] == 2 else 1 for r in rows]) * np.array([
             parameters["singleTrackFactor"] if r["singleTrack"] else 1 for r in rows]

@@ -368,7 +368,8 @@ pub const MAXSPEED_NONE: u16 = u16::MAX;
 /// `;`-token (`"50;30"` → 50; conditional/lane variants are out of scope).
 /// Units: bare number = km/h, `mph`, `knots`. `walk` → 10 km/h
 /// (OSM-wiki convention for walking pace); `none` → [`MAXSPEED_NONE`];
-/// `signals` / `variable` / zone tags / garbage → 0 (unknown → class
+/// sourced implicit zone/country rules (`DE:urban` and kin) resolve via
+/// `implicit_speed`; `signals` / `variable` / garbage → 0 (unknown → class
 /// default downstream). Numeric values clamp to 400 km/h (above any
 /// legal limit; guards typos like "999").
 pub fn parse_maxspeed_kmh(raw: &str) -> u16 {
@@ -391,7 +392,7 @@ pub fn parse_maxspeed_kmh(raw: &str) -> u16 {
         .take_while(|c| c.is_ascii_digit() || *c == '.')
         .collect();
     let Ok(value) = numeric.parse::<f64>() else {
-        return 0; // "", "signals", "variable", "DE:urban", other garbage
+        return 0; // "", "signals", "variable", other garbage
     };
     let kmh = match token[numeric.len()..].trim() {
         "" | "km/h" | "kmh" | "kph" => value,
