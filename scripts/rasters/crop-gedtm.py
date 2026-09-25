@@ -13,15 +13,19 @@ gdal.UseExceptions()
 
 PROVIDER = 'gedtm-crops'
 # Reviewed lon/lat bounds with margin beyond each national extent for seam halos.
+# Fallback crops cover owned squares plus the seam halo, about 0.9 degrees past
+# the national extent: border squares reach half a square past the border and
+# their padded windows reach further. Fetch-window pre-filtering is unaffected
+# (every fetcher extent sits deep inside both the old and the new masks).
 COUNTRY_BBOX = {
-    'at': (9.0, 46.0, 17.5, 49.5),
-    'ch': (5.5, 45.5, 11.0, 48.2),
-    'nl': (2.5, 50.5, 7.5, 54.0),
-    'be': (2.0, 49.0, 6.8, 51.8),
-    'fr': (-5.5, 41.0, 10.2, 51.5),
-    'dk': (7.5, 54.0, 16.0, 58.2),
-    'se': (8.5, 54.8, 26.0, 69.5),
-    'pt': (-10.0, 36.5, -5.5, 42.5),
+    'at': (8.4, 45.4, 18.1, 50.1),
+    'ch': (4.9, 44.9, 11.6, 48.8),
+    'nl': (1.9, 49.9, 8.1, 54.6),
+    'be': (1.4, 48.4, 7.4, 52.4),
+    'fr': (-6.1, 40.4, 10.8, 52.1),
+    'dk': (6.9, 53.4, 16.6, 58.8),
+    'se': (7.9, 54.2, 26.6, 70.1),
+    'pt': (-10.6, 35.9, -4.9, 43.1),
 }
 MASK_DOWNSAMPLE = 4
 GEDTM_NODATA = 3.4028235e+38
