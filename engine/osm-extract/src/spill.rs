@@ -291,7 +291,7 @@ impl Spiller {
                 );
                 write!(
                     w,
-                    "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     classify::rail_type(railway),
                     classify::rail_usage_type(tags.get("usage").map(|s| s.as_str())),
                     // `none` is a road concept; on rail drop it so it falls to
@@ -313,6 +313,9 @@ impl Spiller {
                         0
                     },
                     classify::rail_service_type(tags.get("service").map(|s| s.as_str())),
+                    classify::rail_traffic_mode(
+                        tags.get("railway:traffic_mode").map(|s| s.as_str())
+                    ),
                 )?;
             }
             FeatureType::Barrier => {

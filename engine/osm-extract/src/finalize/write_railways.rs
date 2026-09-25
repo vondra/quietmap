@@ -31,6 +31,8 @@ pub(super) fn write_railways(rows: &[Vec<String>], path: &Path) -> Result<()> {
         Field::new("tunnel", DataType::Boolean, false),
         Field::new("highspeed", DataType::Boolean, false),
         Field::new("service", DataType::UInt8, false), // 0=none, 1=yard, 2=siding, 3=spur, 4=crossover
+        // OSM railway:traffic_mode: 0=unknown, 1=passenger, 2=freight, 3=mixed.
+        Field::new("traffic_mode", DataType::UInt8, false),
         // Dataset provenance — 0 = unspecified, populated by enrich-railway-*.ts.
         Field::new("source_id", DataType::UInt16, false),
     ]);
@@ -53,14 +55,15 @@ pub(super) fn write_railways(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let mut rail_tunnel = BooleanBuilder::with_capacity(n);
     let mut highspeed = BooleanBuilder::with_capacity(n);
     let mut service = UInt8Builder::with_capacity(n);
+    let mut traffic_mode = UInt8Builder::with_capacity(n);
     let mut source_id = UInt16Builder::with_capacity(n);
     let mut row_bboxes = Vec::with_capacity(n);
 
     for row in rows {
         // TSV: sq(0) osm_id(1) seg_idx(2) s_gx(3) s_gy(4) e_gx(5) e_gy(6) len(7)
         //      rail_type(8) usage(9) maxspeed(10) name(11) ref(12) electrified(13) gauge(14)
-        //      bridge(15) tunnel(16) highspeed(17) service(18)
-        if row.len() < 19 {
+        //      bridge(15) tunnel(16) highspeed(17) service(18) traffic_mode(19)
+        if row.len() < 20 {
             continue;
         }
         let s_gx = parse_grid_cell(&row[3]);
@@ -86,6 +89,7 @@ pub(super) fn write_railways(rows: &[Vec<String>], path: &Path) -> Result<()> {
         rail_tunnel.append_value(row.get(16).map(|s| s == "1").unwrap_or(false));
         highspeed.append_value(row.get(17).map(|s| s == "1").unwrap_or(false));
         service.append_value(row.get(18).and_then(|s| s.parse().ok()).unwrap_or(0));
+        traffic_mode.append_value(row.get(19).and_then(|s| s.parse().ok()).unwrap_or(0));
         source_id.append_value(0);
     }
 
@@ -111,10 +115,11 @@ pub(super) fn write_railways(rows: &[Vec<String>], path: &Path) -> Result<()> {
             Arc::new(rail_tunnel.finish()),
             Arc::new(highspeed.finish()),
             Arc::new(service.finish()),
+            Arc::new(traffic_mode.finish()),
             Arc::new(source_id.finish()),
         ],
         &row_bboxes,
         rows,
-        19,
+        20,
     )
 }

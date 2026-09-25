@@ -3,7 +3,7 @@
 use arrow::datatypes::Schema;
 
 /// Spill serialization and semantics: changing this invalidates completed scratch.
-pub const EXTRACT_FORMAT: u32 = 2;
+pub const EXTRACT_FORMAT: u32 = 3;
 pub const ROADS_CONTRACT: &str = "2";
 pub const RAILWAYS_CONTRACT: &str = "2";
 pub const INDUSTRIAL_CONTRACT: &str = "2";
