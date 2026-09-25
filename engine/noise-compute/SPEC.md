@@ -214,9 +214,12 @@ and derived flows excluded) in training squares of holdout rule v1, scored on
 the holdout squares; its header records the release and kilometres. The
 vehicle-class split keeps the `WORLD_DEFAULT` proportions of the class. Such a
 prior is per carriageway by construction: no carriageway share, one-way half
-or `lane_ratio` applies, only `access_factor` (the half-share of a two-way
-default on an uncounted one-way town street read -4.7 to -10.6 dB on holdout
-rows and is gone). Classes 5-12 and every hand-set arm are both-directions
+or `lane_ratio` applies, only `access_factor`. The one exception is the
+one-way secondary street, which shares the fitted two-way section (0.5 for a
+lone row, 1/n for n matched carriageways): the retired one-way arm read
++3.0 dB on holdout genuine one-way secondary streets and doubled the
+split-mapped two-way streets that form 90% of paired one-way secondary rows
+(w3-priors, 2026-09-25). Classes 5-12 and every hand-set arm are both-directions
 section totals x `normalize::road::lane_ratio` x share (1/n matched
 carriageways, 0.5 for a standalone one-way row) x `access_factor`. No country
 or continent factor exists: vehicles per paved km measured worse than none in

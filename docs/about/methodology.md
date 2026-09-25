@@ -62,7 +62,7 @@ per day. Secondary and tertiary roads use these totals regardless of the lane co
 | Trunk | Two-way | 4,260 | 8,289 | 4,840 |
 | Primary | One-way | 4,966 | 7,963 | 7,103 |
 | Primary | Two-way | 3,644 | 9,322 | 4,500 |
-| Secondary | One-way | 6,500 | 9,103 | 8,824 |
+| Secondary | One-way | half of two-way (1,030) | half of two-way (3,222) | half of two-way (1,500) |
 | Secondary | Two-way | 2,061 | 6,445 | 3,000 |
 | Tertiary | One-way | 2,266 | 4,298 | 4,132 |
 | Tertiary | Two-way | 1,002 | 2,562 | 1,506 |

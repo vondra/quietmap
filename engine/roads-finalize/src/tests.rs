@@ -178,13 +178,28 @@ fn a_roundabout_ring_carries_its_approach_flow_whole_and_takes_the_two_way_prior
 }
 
 #[test]
-fn an_uncounted_one_way_town_street_takes_the_one_way_carriageway_prior_not_half_the_road() {
-    // Holdout one-way class 3-4 rows: half of the two-way default read -4.7 to -10.6 dB (w3-major, r260919).
-    for class in [3_u8, 4] {
-        let urban_one_way = Road { built_up: 2, ..unmeasured(class, 1, 1) };
-        let expected = MEASURED_CARRIAGEWAY_PRIORS[class as usize][0][2].untagged;
-        assert!((resolve(&urban_one_way, []).0.iter().sum::<f64>() - expected).abs() < 1e-8);
-    }
+fn an_uncounted_one_way_secondary_takes_half_the_two_way_section() {
+    // The retired one-way arm read +3.0 dB on holdout genuine one-way secondary
+    // streets and doubled split-mapped two-way streets (w3-priors, 2026-09-25);
+    // the w3-major -4.7 to -10.6 dB rejection compared half of the old 3,000
+    // world default against counted arterials, not half of the fitted section.
+    let two_way = MEASURED_CARRIAGEWAY_PRIORS[3][1][2].untagged;
+    let urban_one_way = Road { built_up: 2, ..unmeasured(3, 1, 1) };
+    assert!((resolve(&urban_one_way, []).0.iter().sum::<f64>() - two_way / 2.0).abs() < 1e-8);
+    assert!((cross_section_total(&urban_one_way, &[]) - two_way).abs() < 1e-8,
+        "a lone one-way street establishes its section total");
+    let sibling = Road { way_id: 2, direction: 2, start: (1.0, 0.0), end: (1.0, 100.0), ..urban_one_way.clone() };
+    let pair_total = resolve(&urban_one_way, [&sibling]).0.iter().sum::<f64>()
+        + resolve(&sibling, [&urban_one_way]).0.iter().sum::<f64>();
+    assert!((pair_total - two_way).abs() < 1e-8, "a split-mapped pair shares one section");
+}
+
+#[test]
+fn an_uncounted_one_way_tertiary_keeps_the_one_way_carriageway_prior() {
+    // No overshoot there: holdout one-way tertiary reads -1.0 dB (GB, n=52).
+    let urban_one_way = Road { built_up: 2, ..unmeasured(4, 1, 1) };
+    let expected = MEASURED_CARRIAGEWAY_PRIORS[4][0][2].untagged;
+    assert!((resolve(&urban_one_way, []).0.iter().sum::<f64>() - expected).abs() < 1e-8);
 }
 
 #[test]

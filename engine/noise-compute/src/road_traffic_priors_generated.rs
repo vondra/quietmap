@@ -3,7 +3,8 @@
 //! Fitted on release r260919-w3-roads, 2026-09-25: 739122 km of training rows; scored on 0 km of holdout rows.
 //! Length-weighted medians of counted public carriageways (tunnels, roundabouts and derived flows excluded)
 //! in training squares of holdout rule v1: vehicles per lane for a lanes tag of 1-6 (classes 0-2), else
-//! the whole carriageway count.
+//! the whole carriageway count. Class-3 one-way cells stay zero: one-way secondary streets share the
+//! fitted two-way section instead (w3-priors, 2026-09-25).
 
 use crate::defaults::CarriagewayPrior;
 
@@ -19,8 +20,8 @@ pub const MEASURED_CARRIAGEWAY_PRIORS: [[[CarriagewayPrior; 3]; 2]; 5] = [
     [[p(3652.0, 6652.0), p(2950.0, 5061.0), p(6188.0, 9744.0)], [p(2205.0, 4840.0), p(1959.0, 4260.0), p(4000.0, 8289.0)]],
     // class 2, km per cell: 54448/14105/40344 | 150491/101858/48633
     [[p(4579.0, 7103.0), p(3314.0, 4966.0), p(4980.0, 7963.0)], [p(2636.0, 4500.0), p(1977.0, 3644.0), p(4136.0, 9322.0)]],
-    // class 3, km per cell: 14199/2218/11980 | 59634/37719/21915
-    [[p(0.0, 8824.0), p(0.0, 6500.0), p(0.0, 9103.0)], [p(0.0, 3000.0), p(0.0, 2061.0), p(0.0, 6445.0)]],
+    // class 3, km per cell: 0/0/0 (one-way shares the two-way section) | 59634/37719/21915
+    [[p(0.0, 0.0), p(0.0, 0.0), p(0.0, 0.0)], [p(0.0, 3000.0), p(0.0, 2061.0), p(0.0, 6445.0)]],
     // class 4, km per cell: 1152/153/999 | 13933/7767/6166
     [[p(0.0, 4132.0), p(0.0, 2266.0), p(0.0, 4298.0)], [p(0.0, 1506.0), p(0.0, 1002.0), p(0.0, 2562.0)]],
 ];
