@@ -96,6 +96,23 @@ test('polygon contest mirrors shouldOverwrite: rank, then year, then id, then di
   assert.ok(contestBeats({ ...gppd, edge: 10 }, { ...gppd, edge: 20 }), 'identical source → nearer wins')
 })
 
+test('contained GEM coal beats broad E-PRTR mining for the same pit (Garzweiler rule)', () => {
+  // E-PRTR 3(b) opencast (812, rank 5) vs the GEM coal tracker (510, rank 4):
+  // the tracker says what the mine IS (24/7 coal), the registry only that it
+  // mines — the pit keeps its night term (8.5 dB Lden at the same day level).
+  const eprtrOpencast = { rank: 5, year: 2022, id: 310, edge: -500, contained: true, nace4: 812 }
+  const gemCoal = { rank: 4, year: 2025, id: 333, edge: -100, contained: true, nace4: 510 }
+  assert.ok(contestBeats(gemCoal, eprtrOpencast), 'contained coal beats broad mining despite the lower rank')
+  assert.ok(!contestBeats(eprtrOpencast, gemCoal))
+  // A merely NEAR coal point is a neighbour, not this plant: the rank ladder stands.
+  const nearCoal = { ...gemCoal, contained: false, edge: 1500 }
+  assert.ok(contestBeats(eprtrOpencast, nearCoal), 'contained mining beats near coal')
+  // Non-mining contests never see the rule: steel keeps Tata over coal.
+  const steel = { rank: 5, year: 2022, id: 310, edge: -500, contained: true, nace4: 2410 }
+  assert.ok(contestBeats(steel, gemCoal), 'contained steel beats contained coal by rank')
+  assert.ok(!contestBeats(gemCoal, steel))
+})
+
 test('containment first: smallest containing polygon wins, past the radius when inside', () => {
   const zone = poly({ areaM2: 2_000_000 })                              // r ≈ 798 m
   const tenant = poly({ lat: 50.0 + mLat(100), areaM2: 50_000 })        // r ≈ 126 m, nested

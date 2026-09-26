@@ -37,11 +37,18 @@ const GPPD_FUEL_NACE: Record<string, number> = {
 // the rest are non-ferrous, foundries, surface treatment). Three-digit codes
 // are NACE divisions with a leading zero dropped (510 = 05.10, 146 = 01.46);
 // the engine divides by 100, so they resolve to the same profile.
+// Activity wordings per Regulation (EC) 166/2006 Annex I: 1(e) is "coal
+// rolling mills" (energy sector, like 1(f) coal products → 1920 — metal
+// hot-rolling is 2(c)(i), not this); 3(a) is ALL "underground mining and
+// related operations" (potash, salt, ore — 586 of 650 points sit >20 km from
+// any GEM coal mine), so it takes division-08 other mining, not 24/7 coal;
+// 3(b) opencast stays 812 and the GEM coal tracker outranks it for coal pits
+// via the contained-coal contest rule in facility-match.ts.
 const ANNEX_SUBACTIVITY_NACE: Record<string, number> = {
-  '1(a)': 1920, '1(b)': 1920, '1(c)': 3511, '1(d)': 1910, '1(e)': 2410, '1(f)': 1920,
+  '1(a)': 1920, '1(b)': 1920, '1(c)': 3511, '1(d)': 1910, '1(e)': 1920, '1(f)': 1920,
   '2(a)': 2410, '2(b)': 2410, '2(c)(i)': 2410, '2(c)(ii)': 2550, '2(c)(iii)': 2561,
   '2(c)': 2410, '2(d)': 2451, '2(e)(i)': 2442, '2(e)(ii)': 2453, '2(e)': 2453, '2(f)': 2561,
-  '3(a)': 510, '3(b)': 812, '3(c)': 2351, '3(c)(i)': 2351, '3(c)(ii)': 2352,
+  '3(a)': 810, '3(b)': 812, '3(c)': 2351, '3(c)(i)': 2351, '3(c)(ii)': 2352,
   '3(c)(iii)': 2352, '3(d)': 2399, '3(e)': 2311, '3(f)': 2399, '3(g)': 2332,
   '4(a)': 2011, '4(b)': 2011, '4(c)': 2015, '4(d)': 2020, '4(e)': 2120, '4(f)': 2051,
   '5(a)': 3822, '5(b)': 3821, '5(c)': 3821, '5(d)': 3821, '5(e)': 1011, '5(f)': 3700, '5(g)': 3700,

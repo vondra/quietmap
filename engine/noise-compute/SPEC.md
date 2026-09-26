@@ -176,7 +176,12 @@ radius gates proximity only); a polygon takes the loudest contained facility
 of the winning registry (Tata: steel 2410 over chemicals 2011). New NACE arms:
 06 oil/gas extraction (92, near-24/7), 07 metal-ore mining (as quarries),
 19 coke/refining (96, near-24/7), 62 office (defensive, 60). E-PRTR maps by
-Annex I sub-activity letter, not sector. The India colour feed is deleted (CPCB
+Annex I sub-activity letter, not sector: 1(e) coal rolling mills → 1920 (coal
+products, like 1(f) — metal hot-rolling is 2(c)(i)), 3(a) underground mining →
+division-08 other mining (all underground commodities, not 24/7 coal), 3(b)
+opencast → 812. A contained GEM coal-tracker mine beats broad E-PRTR mining
+for the same polygon (commodity-specific over broad activity), so coal pits
+keep their 24/7 profile. The India colour feed is deleted (CPCB
 colours score air/water/waste pollution, not noise); registry points never
 stamp substations or turbines.
 
