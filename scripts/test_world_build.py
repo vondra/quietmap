@@ -218,6 +218,7 @@ class WorldBuildTest(unittest.TestCase):
             root = Path(directory)
             sources = {name: str(root / name) for name in ('planet', 'rasters', 'enrichment', 'boundaries',
                        'city_boundaries', 'overture', 'regional_heights', 'official_barriers', 'measured_heights',
+                       'fra_crossings', 'tc_crossings',
                        'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
             for path in sources.values():
                 Path(path).touch()
@@ -264,6 +265,7 @@ class WorldBuildTest(unittest.TestCase):
             root = Path(directory)
             sources = {name: str(root / name) for name in ('planet', 'rasters', 'enrichment', 'boundaries',
                        'city_boundaries', 'overture', 'regional_heights', 'official_barriers', 'measured_heights',
+                       'fra_crossings', 'tc_crossings',
                        'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
             for path in sources.values():
                 Path(path).touch()
@@ -312,6 +314,12 @@ class WorldBuildTest(unittest.TestCase):
             self.assertEqual(indexed['railways'].dependencies, ('square-country-city',))
             self.assertEqual(indexed['railways-finalize'].dependencies, ('railways',))
             self.assertTrue(indexed['railways-finalize'].argv[0].endswith('engine/target/release/railways-finalize'))
+            self.assertEqual(indexed['railways-horns'].dependencies, ('railways-finalize',))
+            horns_argv = indexed['railways-horns'].argv
+            self.assertTrue(horns_argv[0].endswith('engine/target/release/railways-finalize'))
+            self.assertEqual(horns_argv[1], 'append-horns')
+            self.assertEqual(horns_argv[horns_argv.index('--fra') + 1], str(root / 'fra_crossings'))
+            self.assertEqual(horns_argv[horns_argv.index('--tc') + 1], str(root / 'tc_crossings'))
             self.assertNotIn('repaint', indexed)
             geography_running, aircraft_running = threading.Event(), threading.Event()
             def execute(step):

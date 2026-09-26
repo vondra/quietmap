@@ -35,7 +35,7 @@ has no prepared squares, so a regional extract (Prague, 2026-09-16) stops at
 The TOML file has `[build]` keys `as_of_date` (YYYYMMDD string), `aircraft_anchor`
 (YYYY-MM string), `memory_gib` and `threads` (positive integers). `[sources]` supplies
 absolute paths named `planet`, `rasters`, `enrichment`, `boundaries`, `city_boundaries`,
-`overture`, `regional_heights`, `official_barriers` (normalized per-1-degree official barrier cache), `measured_heights` (normalized per-1-degree measured building-height cache), `aircraft_primary` (the adsb.lol archive),
+`overture`, `regional_heights`, `official_barriers` (normalized per-1-degree official barrier cache), `measured_heights` (normalized per-1-degree measured building-height cache), `fra_crossings` (the FRA crossing-inventory CSV), `tc_crossings` (the Transport Canada grade-crossings CSV), `aircraft_primary` (the adsb.lol archive),
 `aircraft_secondary` (the ADSBexchange monthly samples), `ships` (EMODnet vessel density)
 and `ships_gfw` (Global Fishing Watch presence hours).
 `rasters` is an already published native raster year, `city_boundaries` is the ADM2

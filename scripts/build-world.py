@@ -112,6 +112,8 @@ def build_plan(config, output, scratch):
         Step('structures-finalize', ('structures',), (str(REPO / 'engine/target/release/structures-finalize'), str(year))),
         layer('railways', ('square-country-city',)),
         Step('railways-finalize', ('railways',), (str(REPO / 'engine/target/release/railways-finalize'), str(year))),
+        Step('railways-horns', ('railways-finalize',), (str(REPO / 'engine/target/release/railways-finalize'), 'append-horns', str(year),
+             '--fra', str(sources['fra_crossings']), '--tc', str(sources['tc_crossings']))),
         layer('industrial', ('square-country-city',)),
         layer('roads', ('square-country-city', 'structures')),
         Step('ships', ('osm',), (python, str(scripts / 'ships/build_ships.py'),

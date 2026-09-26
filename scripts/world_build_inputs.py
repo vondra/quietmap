@@ -29,6 +29,7 @@ def canonical_input(path):
 def source_paths(config):
     required = {'planet', 'rasters', 'enrichment', 'boundaries', 'city_boundaries',
                 'overture', 'regional_heights', 'official_barriers', 'measured_heights',
+                'fra_crossings', 'tc_crossings',
                 'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw'}
     if set(config['sources']) != required:
         raise ValueError(f'sources must be exactly {sorted(required)}')

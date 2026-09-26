@@ -717,9 +717,14 @@ fn build_horn_batch(
             "passenger_matching" | "freight_matching" => {
                 Arc::new(UInt8Array::from(vec![0u8; pieces.len()]))
             }
-            // Tags + baked identity follow the matched track.
+            // Tags + baked identity follow the matched track, as does the
+            // retained OSM evidence: the approach runs along the track, and
+            // the way extent describes the parent way, not the piece.
             "usage" | "electrified" | "gauge" | "bridge" | "highspeed" | "country_iso"
-            | "city_id" | "continent" => take_col(field.name())?,
+            | "city_id" | "continent" | "osm_tags" | "way_start_node" | "way_end_node"
+            | "way_start_gx" | "way_start_gy" | "way_end_gx" | "way_end_gy" => {
+                take_col(field.name())?
+            }
             other => return Err(format!("horn rows cannot fill finalized column {other}")),
         };
         if array.data_type() != field.data_type() {
@@ -807,6 +812,73 @@ mod tests {
         assert_eq!(east_pieces[0].soundings, [30.0, 10.0, 18.0]);
         assert_eq!(east_pieces[0].frac0, 0.0);
         assert_eq!(east_pieces[1].soundings, [30.0, 10.0, 18.0]);
+    }
+
+    /// Horn rows forward the carried track columns (`osm_tags`, `way_*`)
+    /// from the matched track row; without the forwarding arm the build
+    /// fails on the finalized schema ("horn rows cannot fill finalized
+    /// column way_start_node").
+    #[test]
+    fn horn_rows_forward_carried_track_columns() {
+        use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("osm_id", DataType::Int64, false),
+            Field::new("osm_tags", DataType::Utf8, false),
+            Field::new("way_start_node", DataType::Int64, true),
+            Field::new("way_end_gx", DataType::Int32, true),
+            Field::new("trains_passenger_day", DataType::Float64, false),
+        ]));
+        let base = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![123])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["railway=rail"])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(7)])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(9)])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![80.0])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        let crossings = vec![Crossing {
+            id: "816990Y".to_string(),
+            lat: 40.69,
+            lon: -99.142,
+            soundings: [36.0, 12.0, 24.0],
+            speed_kmh: None,
+            source_id: SOURCE_ID_FRA,
+            synth_osm: -1,
+        }];
+        let approaches = vec![approach(-99.15, -99.142, 40.69, [18.0, 6.0, 12.0])];
+        let pieces = vec![MergedPiece {
+            approach_idx: 0,
+            piece_idx: 0,
+            frac0: 0.0,
+            frac1: 1.0,
+            soundings: [18.0, 6.0, 12.0],
+        }];
+        let batch = build_horn_batch(&schema, &base, &crossings, &approaches, &pieces).unwrap();
+        assert_eq!(batch.num_rows(), 1);
+        let tags = batch
+            .column_by_name("osm_tags")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(tags.value(0), "railway=rail");
+        let start = batch
+            .column_by_name("way_start_node")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(start.value(0), 7);
+        let end_gx = batch
+            .column_by_name("way_end_gx")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(end_gx.value(0), 9);
     }
 
     /// Opposite-direction approaches never merge (different trains sound).
