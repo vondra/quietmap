@@ -14,8 +14,6 @@ const NOISE_CONSTANTS_SOURCE: &str = include_str!("../noise-compute/src/constant
 const PATH_PROFILE_SOURCE: &str = include_str!("../noise-compute/src/propagation/path_profile.rs");
 const LINE_QUADRATURE_SOURCE: &str =
     include_str!("../noise-compute/src/propagation/line_quadrature.rs");
-const RELEVANCE_BOUND_SOURCE: &str =
-    include_str!("../noise-compute/src/propagation/relevance_bound.rs");
 const CNOSSOS_GROUND_SOURCE: &str =
     include_str!("../noise-compute/src/propagation/cnossos/ground.rs");
 const CNOSSOS_DIFFRACTION_SOURCE: &str =
@@ -144,16 +142,6 @@ fn generated_physics_header() -> String {
         &mut header,
         "QUIETMAP_A_WEIGHTING_LINEAR",
         a_weighting.map(|db| 10f64.powf(db / 10.0)),
-    );
-    write_cuda_array(
-        &mut header,
-        "QUIETMAP_ATMOSPHERIC_DB_PER_KM",
-        canonical_f64_array::<8>(NOISE_CONSTANTS_SOURCE, "ALPHA_ATM"),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_RELEVANCE_GAIN_DB",
-        canonical_f64(RELEVANCE_BOUND_SOURCE, "SURFACE_RELEVANCE_GAIN_DB"),
     );
     write_cuda_array(
         &mut header,

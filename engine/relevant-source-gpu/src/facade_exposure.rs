@@ -10,7 +10,7 @@
 use crate::{
     airborne_field::AirborneScene,
     cruise_field::CruiseField,
-    cuda_bridge::{DeviceBuffer, RelevantSourceCuda},
+    cuda_bridge::{DeviceBuffer, DeviceWeather, RelevantSourceCuda},
     facade_exposure_choice::*,
     receiver_points::ReceiverPoints,
     source_frame::*,
@@ -214,10 +214,20 @@ pub fn evaluate_receivers_exactly(
             })
             .collect();
         let [x, y, altitude, reflection, floor] = by_pixel.each_ref().map(|column| column.as_slice());
+        // Per-slot weather from the shuffled receiver positions (same windows the popup samples).
+        let slot_weather: Vec<DeviceWeather> = x
+            .iter()
+            .zip(y.iter())
+            .map(|(&x, &y)| {
+                let [lat, lon] = scene.host.frame.decode(x, y);
+                DeviceWeather::from_meteorology(&scene.host.receiver_weather(lat, lon))
+            })
+            .collect();
         let (x, y) = (DeviceBuffer::from_slice(x)?, DeviceBuffer::from_slice(y)?);
         let altitude = DeviceBuffer::from_slice(altitude)?;
         let reflection = DeviceBuffer::from_slice(reflection)?;
         let floor = DeviceBuffer::from_slice(floor)?;
+        let slot_weather = DeviceBuffer::from_slice(&slot_weather)?;
         for (layer, plane) in planes.iter_mut().enumerate() {
             let mut offsets = vec![0_u32];
             let mut indices = Vec::new();
@@ -235,6 +245,7 @@ pub fn evaluate_receivers_exactly(
                 &y,
                 &altitude,
                 &reflection,
+                &slot_weather,
             )?;
             ensure!(
                 energy.iter().all(|value| value.is_finite() && *value >= 0.0),

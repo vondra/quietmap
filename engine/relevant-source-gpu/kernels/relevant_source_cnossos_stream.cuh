@@ -471,9 +471,9 @@ struct RaySourceTerms {
 /// Linear transfer 10^(−A/10) per period and band of the ray from (sx, sy) to the receiver:
 /// everything but divergence and reflection (ray_transfer.rs evaluate_ray_transfer, full).
 __device__ void cnossos_ray_transfer(
-    const DeviceScenePointers& scene, const RaySourceTerms& terms, float source_x_m,
-    float source_y_m, float receiver_x_m, float receiver_y_m, float receiver_altitude_m,
-    bool obstacles_on_ray, PathProfile& profile,
+    const DeviceScenePointers& scene, const DeviceWeather& weather, const RaySourceTerms& terms,
+    float source_x_m, float source_y_m, float receiver_x_m, float receiver_y_m,
+    float receiver_altitude_m, bool obstacles_on_ray, PathProfile& profile,
     float transfer[QUIETMAP_PERIOD_COUNT][QUIETMAP_BAND_COUNT]
 ) {
     const float length = fmaxf(hypotf(receiver_x_m - source_x_m, receiver_y_m - source_y_m), 1.0f);
@@ -569,18 +569,14 @@ __device__ void cnossos_ray_transfer(
         state_boundary_bands(state, s.source, s.receiver, source_ground_factor, s.whole,
                              s.ground_origin_z, d, attenuation[state]);
     }
-    const float slant_km = 0.001f * fmaxf(hypotf(length, receiver_altitude_m - source_altitude_m),
-                                          1.0f);
+    const float slant_m = fmaxf(hypotf(length, receiver_altitude_m - source_altitude_m), 1.0f);
     const float azimuth = atan2f(receiver_y_m - source_y_m, receiver_x_m - source_x_m);
     for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
-        const float p = favourable_probability(*scene.weather, period, azimuth);
+        const float p = favourable_probability(weather, period, azimuth);
         for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-            const float air_db = fmaxf(
-                fmaf(scene.weather->absorption_mean_db_per_km[period][band], slant_km,
-                     -0.11512925464970229f
-                         * scene.weather->absorption_variance_db2_per_km2[period][band]
-                         * slant_km * slant_km),
-                scene.weather->absorption_minimum_db_per_km[period][band] * slant_km);
+            const float air_db = atmospheric_attenuation_db(
+                weather.absorption_mean_db_per_km[period][band],
+                weather.absorption_variance_db2_per_km2[period][band], slant_m);
             const float foliage_db[2] = {foliage_band_db(foliage_h_m, band),
                                            foliage_band_db(foliage_f_m, band)};
             transfer[period][band] = quietmap_energy_from_db(-air_db)

@@ -157,8 +157,8 @@ fn main() -> Result<()> {
     eprintln!("tile probe: {} sources, tile z13/{tile_x}/{tile_y}, reference pieces <= {piece_m} m within {CONVERGED_RADIUS_M} m",
         original.len());
     let receivers = relevant_source_gpu::tile_receivers::TileReceivers::prepare(&scene.host, tile_x, tile_y)?;
-    let pixels = receivers.x.len();
-    let bbox = receivers.x.iter().zip(&receivers.y).fold(
+    let pixels = receivers.points.x.len();
+    let bbox = receivers.points.x.iter().zip(&receivers.points.y).fold(
         [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY],
         |[min_x, min_y, max_x, max_y], (&x, &y)| {
             [min_x.min(x), min_y.min(y), max_x.max(x), max_y.max(y)]
@@ -173,13 +173,13 @@ fn main() -> Result<()> {
     scene.replace_sources(audible.clone())?;
     let corners = grid::surface_corner::tile_corners(tile_x, tile_y).context("tile corners")?;
     let painted_corners = scene.evaluate_corners(&cuda, &corners).context("painter corners")?;
-    let painter = paint_tile(&cuda, &scene, tile_x, tile_y, &receivers, &painted_corners).context("painter lane")?;
+    let painter = paint_tile(&cuda, &scene, tile_x, tile_y, &receivers.points, &painted_corners).context("painter lane")?;
     eprintln!("painter lane done in {:.1} s", started.elapsed().as_secs_f64());
     let converged = converged_sources_for_tile(&audible, bbox, piece_m);
     eprintln!("reference sources: {} (from {})", converged.len(), audible.len());
     scene.replace_sources(converged)?;
     let reference_corners = scene.evaluate_corners(&cuda, &corners).context("reference corners")?;
-    let reference = paint_tile(&cuda, &scene, tile_x, tile_y, &receivers, &reference_corners).context("reference lane")?;
+    let reference = paint_tile(&cuda, &scene, tile_x, tile_y, &receivers.points, &reference_corners).context("reference lane")?;
     eprintln!("reference lane done in {:.1} s", started.elapsed().as_secs_f64());
     println!("pixel\tlayer\tpainter\tconverged");
     let mut diffs: [Vec<(f64, f64)>; 5] = Default::default();

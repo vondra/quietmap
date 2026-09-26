@@ -122,6 +122,7 @@ __device__ __forceinline__ void line_source_point(
 /// Σ Δφ·T over the piece's quadrature nodes (CPU line_quadrature_nodes), per period and band.
 __device__ void line_quadrature_transfer(
     const DeviceScenePointers& scene,
+    const DeviceWeather& weather,
     const DeviceLineSource& source,
     const LinePieceGeometry& geometry,
     float receiver_x_m,
@@ -167,8 +168,9 @@ __device__ void line_quadrature_transfer(
                     float x_m;
                     float y_m;
                     line_source_point(geometry, receiver_x_m, receiver_y_m, along_m, x_m, y_m);
-                    cnossos_ray_transfer(scene, terms, x_m, y_m, receiver_x_m, receiver_y_m,
-                                         receiver_altitude_m, run_blocked, profile, transfer);
+                    cnossos_ray_transfer(scene, weather, terms, x_m, y_m, receiver_x_m,
+                                         receiver_y_m, receiver_altitude_m, run_blocked, profile,
+                                         transfer);
                     const float weight = line_node_weight(source, geometry, edge_lo, edge_hi);
                     for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
                         for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
@@ -185,8 +187,8 @@ __device__ void line_quadrature_transfer(
         float y_m;
         line_source_point(geometry, receiver_x_m, receiver_y_m,
                           line_along_at_angle(geometry, angle_lo + 0.5f * bucket_angle), x_m, y_m);
-        cnossos_ray_transfer(scene, terms, x_m, y_m, receiver_x_m, receiver_y_m, receiver_altitude_m,
-                             true, profile, transfer);
+        cnossos_ray_transfer(scene, weather, terms, x_m, y_m, receiver_x_m, receiver_y_m,
+                             receiver_altitude_m, true, profile, transfer);
         const float weight = line_node_weight(source, geometry, angle_lo, angle_hi);
         for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
             for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
@@ -198,6 +200,7 @@ __device__ void line_quadrature_transfer(
 
 __device__ __forceinline__ bool evaluate_source_receiver_energy(
     const DeviceScenePointers& scene,
+    const DeviceWeather& weather,
     uint32_t source_index,
     float receiver_x_m,
     float receiver_y_m,
@@ -242,7 +245,10 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
                 - ground_or_barrier_attenuation_db(ground_db[band], terrain_db[band], screening_db[band])
                 // Homogeneous depth: the carve-out has no states to mix.
                 - foliage_band_db(foliage_h_m, band)
-                - QUIETMAP_ATMOSPHERIC_DB_PER_KM[band] * geometry.slant_distance_m * 0.001f);
+                - atmospheric_attenuation_db(
+                    weather.absorption_mean_db_per_km[0][band],
+                    weather.absorption_variance_db2_per_km2[0][band],
+                    geometry.slant_distance_m));
             for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
                 transfer[period][band] = level;
             }
@@ -251,10 +257,10 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
     } else if (source_is_point(source)) {
         const float distance_m = hypotf(receiver_x_m - source.start_x_m,
                                         receiver_y_m - source.start_y_m);
-        if (distance_m > source.max_distance_m || point_pair_is_inaudible(scene, source, distance_m)) {
+        if (distance_m > source.max_distance_m || point_pair_is_inaudible(weather, source, distance_m)) {
             return false;
         }
-        cnossos_ray_transfer(scene, ray_source_terms(source), source.start_x_m, source.start_y_m,
+        cnossos_ray_transfer(scene, weather, ray_source_terms(source), source.start_x_m, source.start_y_m,
                              receiver_x_m, receiver_y_m, receiver_altitude_m, true, profile,
                              transfer);
         // CPU compute_point_sources: the divergence distance never falls inside the footprint.
@@ -279,7 +285,7 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
                 transfer[period][band] = 0.0f;
             }
         }
-        line_quadrature_transfer(scene, source, geometry, receiver_x_m, receiver_y_m,
+        line_quadrature_transfer(scene, weather, source, geometry, receiver_x_m, receiver_y_m,
                                  receiver_altitude_m, profile, transfer);
         divergence_linear = quietmap_energy_from_db(receiver_reflection_db)
             / (QUIETMAP_POINT_DIVERGENCE_LINEAR * geometry.perpendicular_m);

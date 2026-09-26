@@ -56,6 +56,7 @@ unsafe extern "C" {
         corner_x_m: *const f32,
         corner_y_m: *const f32,
         corner_reflection_db: *const f32,
+        corner_weather: *const DeviceWeather,
         pair_period_energy: *mut f32,
         elapsed_milliseconds: *mut f32,
     ) -> c_int;
@@ -69,6 +70,7 @@ unsafe extern "C" {
         receiver_y_m: *const f32,
         receiver_altitude_m: *const f32,
         receiver_reflection_db: *const f32,
+        receiver_weather: *const DeviceWeather,
         output_period_energy: *mut f32,
         elapsed_milliseconds: *mut f32,
     ) -> c_int;
@@ -89,7 +91,6 @@ pub struct DeviceScenePointers {
     pub obstacle_edge_is_building: *const u8,
     /// Footprint (or wall) id per edge, unique across the region.
     pub obstacle_edge_footprint_id: *const u32,
-    pub weather: *const DeviceWeather,
     pub source_count: u32,
     pub obstacle_grid_count: u32,
     /// Half a pixel of this tile in metres: the ground-ops divergence floor.
@@ -97,16 +98,17 @@ pub struct DeviceScenePointers {
     pub raster_geometry: DeviceRasterGeometry,
 }
 
-/// The region's long-term weather as the kernel reads it (noise-compute Meteorology): p per
-/// period and direction sector, the hourly absorption coefficient's mean, variance and smallest
-/// hour per period and band, and the relevance bound's α_min per band.
+/// One receiver's long-term weather as the kernel reads it (noise-compute Meteorology): p per
+/// period and direction sector, the hourly absorption coefficient's mean and variance per
+/// period and band, and the receiver square window's bound (per-period mixed gains, α_min
+/// per band).
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(C)]
 pub struct DeviceWeather {
     pub favourable_probability: [[f32; DIRECTION_SECTOR_COUNT]; PERIOD_COUNT],
     pub absorption_mean_db_per_km: [[f32; BAND_COUNT]; PERIOD_COUNT],
     pub absorption_variance_db2_per_km2: [[f32; BAND_COUNT]; PERIOD_COUNT],
-    pub absorption_minimum_db_per_km: [[f32; BAND_COUNT]; PERIOD_COUNT],
+    pub relevance_gains_db: [f32; PERIOD_COUNT],
     pub relevance_alpha_minimum_db_per_km: [f32; BAND_COUNT],
 }
 
@@ -119,8 +121,13 @@ impl DeviceWeather {
             favourable_probability: weather.favourable_probability.map(|row| row.map(|p| p as f32)),
             absorption_mean_db_per_km: absorption(|climate| climate.mean_db_per_km),
             absorption_variance_db2_per_km2: absorption(|climate| climate.variance_db2_per_km2),
-            absorption_minimum_db_per_km: absorption(|climate| climate.minimum_db_per_km),
-            relevance_alpha_minimum_db_per_km: weather.minimum_absorption_db_per_km().map(|a| a as f32),
+            relevance_gains_db: weather
+                .bound_probability_max
+                .map(noise_compute::propagation::relevance_bound::mixed_gain_bound_db)
+                .map(|gain| gain as f32),
+            relevance_alpha_minimum_db_per_km: weather
+                .bound_alpha_min_db_per_km
+                .map(|alpha| alpha as f32),
         }
     }
 }
@@ -249,6 +256,7 @@ impl RelevantSourceCuda {
         corner_x_m: &DeviceBuffer<f32>,
         corner_y_m: &DeviceBuffer<f32>,
         corner_reflection_db: &DeviceBuffer<f32>,
+        corner_weather: &DeviceBuffer<DeviceWeather>,
     ) -> Result<(Vec<[f32; PERIOD_COUNT]>, f32)> {
         let corner_count = corner_x_m.element_count();
         if corner_count == 0
@@ -257,6 +265,7 @@ impl RelevantSourceCuda {
             || corner_y_m.element_count() != corner_count
             || corner_reflection_db.element_count() != corner_count
             || corner_pixel_floor_m.element_count() != corner_count
+            || corner_weather.element_count() != corner_count
         {
             bail!("corner launch dimensions are inconsistent");
         }
@@ -274,6 +283,7 @@ impl RelevantSourceCuda {
                 corner_x_m.as_ptr(),
                 corner_y_m.as_ptr(),
                 corner_reflection_db.as_ptr(),
+                corner_weather.as_ptr(),
                 pair_energy.as_mut_ptr(),
                 &mut elapsed_milliseconds,
             )
@@ -308,12 +318,14 @@ impl RelevantSourceCuda {
         receiver_y_m: &DeviceBuffer<f32>,
         receiver_altitude_m: &DeviceBuffer<f32>,
         receiver_reflection_db: &DeviceBuffer<f32>,
+        receiver_weather: &DeviceBuffer<DeviceWeather>,
     ) -> Result<(Vec<f32>, f32)> {
         let pixel_count = TILE_PIXEL_SIDE * TILE_PIXEL_SIDE;
         if receiver_x_m.element_count() != pixel_count
             || receiver_y_m.element_count() != pixel_count
             || receiver_altitude_m.element_count() != pixel_count
             || receiver_reflection_db.element_count() != pixel_count
+            || receiver_weather.element_count() != pixel_count
             || receiver_pixel_floor_m.element_count() != pixel_count
             || block_offsets.element_count() != crate::source_frame::BLOCK_COUNT + 1
             || background_energy.element_count()
@@ -334,6 +346,7 @@ impl RelevantSourceCuda {
                 receiver_y_m.as_ptr(),
                 receiver_altitude_m.as_ptr(),
                 receiver_reflection_db.as_ptr(),
+                receiver_weather.as_ptr(),
                 output.as_mut_ptr(),
                 &mut elapsed_milliseconds,
             )
@@ -397,8 +410,8 @@ mod tests {
     /// matching `static_assert`s sit beside the CUDA declaration.
     #[test]
     fn scene_pointer_layout_matches_cuda() {
-        assert_eq!(size_of::<DeviceScenePointers>(), 128);
-        assert_eq!(size_of::<DeviceWeather>(), 128 * size_of::<f32>());
+        assert_eq!(size_of::<DeviceScenePointers>(), 120);
+        assert_eq!(size_of::<DeviceWeather>(), 107 * size_of::<f32>());
         assert_eq!(
             std::mem::offset_of!(DeviceScenePointers, obstacle_edge_endpoints),
             40

@@ -25,7 +25,6 @@ pub struct SurfaceGpu {
     buildings: DeviceBuffer<u8>,
     footprints: DeviceBuffer<u32>,
     maximum_heights: DeviceBuffer<f32>,
-    weather: DeviceBuffer<DeviceWeather>,
 }
 
 impl SurfaceGpu {
@@ -48,9 +47,6 @@ impl SurfaceGpu {
             buildings: DeviceBuffer::from_slice(&flat.edge_is_building)?,
             footprints: DeviceBuffer::from_slice(&flat.edge_footprint_id)?,
             maximum_heights: DeviceBuffer::from_slice(&flat.cell_maximum_heights)?,
-            weather: DeviceBuffer::from_slice(&[DeviceWeather::from_meteorology(
-                &noise_compute::propagation::meteorology::Meteorology::defaults(),
-            )])?,
             host,
         };
         Ok(value)
@@ -68,7 +64,6 @@ impl SurfaceGpu {
             obstacle_cell_maximum_heights: self.maximum_heights.as_ptr(),
             obstacle_edge_is_building: self.buildings.as_ptr(),
             obstacle_edge_footprint_id: self.footprints.as_ptr(),
-            weather: self.weather.as_ptr(),
             source_count: self.host.sources.len() as u32,
             obstacle_grid_count: self.grids.element_count() as u32,
             pixel_floor_m: 0.0,
@@ -120,6 +115,7 @@ impl SurfaceGpu {
             let mut ys = Vec::new();
             let mut reflections = Vec::new();
             let mut floors = Vec::new();
+            let mut weather = Vec::new();
             while next < positions.len() && xs.len() < grid::surface_corner::CORNER_COUNT {
                 let [lat, lon] = positions[next];
                 let [x, y] = self.host.frame.encode(lat, lon);
@@ -152,6 +148,9 @@ impl SurfaceGpu {
                     noise_compute::compute::aircraft_v6::airport_traffic::popup_pixel_floor_m(lat)
                         as f32,
                 );
+                weather.push(DeviceWeather::from_meteorology(
+                    &self.host.receiver_weather(lat, lon),
+                ));
                 offsets.push(indices.len().try_into()?);
                 next += 1;
             }
@@ -163,6 +162,7 @@ impl SurfaceGpu {
                 &DeviceBuffer::from_slice(&xs)?,
                 &DeviceBuffer::from_slice(&ys)?,
                 &DeviceBuffer::from_slice(&reflections)?,
+                &DeviceBuffer::from_slice(&weather)?,
             ).map_err(|error| {
                 let context = error.downcast_ref::<crate::cuda_bridge::InvalidCornerEnergy>()
                     .and_then(|invalid| self.host.sources.get(invalid.source))

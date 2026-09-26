@@ -40,15 +40,15 @@ struct DeviceLineSource {
     float emission_linear[QUIETMAP_PERIOD_COUNT * QUIETMAP_BAND_COUNT];
 };
 
-/// The long-term weather of the region (noise-compute meteorology.rs Meteorology): p per period
+/// One receiver's long-term weather (noise-compute meteorology.rs Meteorology): p per period
 /// and direction sector (sector s centred on bearing 22.5°·s clockwise from north), the hourly
-/// absorption coefficient's mean, variance and smallest hour per period and band, and the
-/// bound's α_min per band.
+/// absorption coefficient's mean and variance per period and band, and the relevance bound's
+/// per-period mixed gains and α_min per band of the receiver square's window.
 struct DeviceWeather {
     float favourable_probability[QUIETMAP_PERIOD_COUNT][QUIETMAP_DIRECTION_SECTOR_COUNT];
     float absorption_mean_db_per_km[QUIETMAP_PERIOD_COUNT][QUIETMAP_BAND_COUNT];
     float absorption_variance_db2_per_km2[QUIETMAP_PERIOD_COUNT][QUIETMAP_BAND_COUNT];
-    float absorption_minimum_db_per_km[QUIETMAP_PERIOD_COUNT][QUIETMAP_BAND_COUNT];
+    float relevance_gains_db[QUIETMAP_PERIOD_COUNT];
     float relevance_alpha_minimum_db_per_km[QUIETMAP_BAND_COUNT];
 };
 
@@ -130,7 +130,6 @@ struct DeviceScenePointers {
     const uint8_t* __restrict__ obstacle_edge_is_building;
     /// Footprint (or wall) id per edge, unique across the region.
     const uint32_t* __restrict__ obstacle_edge_footprint_id;
-    const DeviceWeather* __restrict__ weather;
     uint32_t source_count;
     uint32_t obstacle_grid_count;
     /// Half a pixel of this tile in metres: the ground-ops divergence floor.
@@ -157,7 +156,7 @@ struct LineReceiverGeometry {
 };
 
 static_assert(sizeof(DeviceLineSource) == 136, "source ABI");
-static_assert(sizeof(DeviceWeather) == 128 * sizeof(float), "weather ABI");
+static_assert(sizeof(DeviceWeather) == 107 * sizeof(float), "weather ABI");
 static_assert(sizeof(FusedPixel) == 8, "raster pixel ABI");
 static_assert(offsetof(FusedPixel, canopy_m) == 6, "canopy raster ABI");
 static_assert(sizeof(DeviceRasterGeometry) == 24, "raster geometry ABI");
@@ -165,7 +164,7 @@ static_assert(sizeof(DeviceObstacleGrid) == 48, "obstacle grid ABI");
 // Four floats is the shape `DeviceObstacleEdgeEndpoints` carries on the host,
 // whose own size assertion holds the other half of this record.
 static_assert(sizeof(float4) == 4 * sizeof(float), "obstacle edge endpoint record");
-static_assert(sizeof(DeviceScenePointers) == 128, "scene ABI");
+static_assert(sizeof(DeviceScenePointers) == 120, "scene ABI");
 // Two pointers of one size trade places without changing the struct's size, so the
 // two the obstacle scan reads are pinned by offset as well; `cuda_bridge`'s
 // `scene_pointer_layout_matches_cuda` holds the other side of the same claim.
@@ -235,21 +234,41 @@ __device__ __forceinline__ SampledRasterPoint sample_scene_raster(
     return result;
 }
 
+/// Long-term `A_atm = −10·lg E[10^(−α·d/10)]` over a slant distance, α normal with the
+/// stored mean and variance: the second cumulant with its running maximum (monotone, never
+/// amplifying; noise-compute air_absorption.rs AbsorptionClimate::attenuation_db).
+__device__ __forceinline__ float atmospheric_attenuation_db(
+    float mean_db_per_km,
+    float variance_db2_per_km2,
+    float slant_distance_m
+) {
+    const float km = fmaxf(slant_distance_m * 0.001f, 0.0f);
+    if (variance_db2_per_km2 <= 0.0f) {
+        return fmaxf(mean_db_per_km * km, 0.0f);
+    }
+    constexpr float c = 0.11512925464970229f;
+    const float peak_km = mean_db_per_km / (2.0f * c * variance_db2_per_km2);
+    if (km <= peak_km) {
+        return fmaxf(mean_db_per_km * km - c * variance_db2_per_km2 * km * km, 0.0f);
+    }
+    return mean_db_per_km * mean_db_per_km / (4.0f * c * variance_db2_per_km2);
+}
+
 /// The relevance bound of noise-compute relevance_bound.rs for a point source: true when no band
 /// of any period can reach 0 dB at distance `distance_m` (20 lg d + 11), so skipping the pair
 /// changes no output (#31: every period counts). A line row's reach already implies it.
 __device__ __forceinline__ bool point_pair_is_inaudible(
-    const DeviceScenePointers& scene,
+    const DeviceWeather& weather,
     const DeviceLineSource& source,
     float distance_m
 ) {
     const float d = fmaxf(distance_m, 1.0f);
     const float divergence_db = 8.685889638065036f * __logf(d) + 11.0f;
     for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-        const float allowance = quietmap_energy_from_db(
-            QUIETMAP_RELEVANCE_GAIN_DB - divergence_db
-            - scene.weather->relevance_alpha_minimum_db_per_km[band] * d * 0.001f);
         for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
+            const float allowance = quietmap_energy_from_db(
+                weather.relevance_gains_db[period] - divergence_db
+                - weather.relevance_alpha_minimum_db_per_km[band] * d * 0.001f);
             if (source.emission_linear[period * QUIETMAP_BAND_COUNT + band] * allowance >= 1.0f) {
                 return false;
             }

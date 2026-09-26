@@ -29,7 +29,12 @@ pub fn load_sources(
 ) -> Result<(Vec<SurfaceSource>, ObstacleSet)> {
     let mut sources = Vec::new();
     let mut indexes = Vec::new();
-    let weather = noise_compute::propagation::meteorology::Meteorology::defaults();
+    // The row envelope: window extremes over the scene squares, so a row audible under
+    // any painted receiver's weather is loaded (defaults would miss rows past their
+    // shorter reach at high-pmax sites).
+    let cache = raster_reader::meteorology::WeatherCache::new(root);
+    let (pmax, amin) = cache.envelope_maxima(squares);
+    let weather = noise_compute::propagation::meteorology::Meteorology::for_bound(pmax, amin);
     for square in squares {
         let mut has_surface_arrow = false;
         let mut has_structures = false;
