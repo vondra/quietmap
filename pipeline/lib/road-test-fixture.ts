@@ -80,6 +80,7 @@ export interface RoadFixtureOptions {
   countryCodes?: number[]
   refs?: Array<string | null>
   sourceIds?: number[]
+  oneways?: number[]
   omitCountryColumn?: boolean
   omitCountryContract?: boolean
 }
@@ -103,6 +104,7 @@ export function writeRoadsFixture(name: string, classes: number[], options: Road
     end_gy: vectorFromArray(ends.map(point => point[1]), new Int32()),
     road_class: vectorFromArray(classes, new Uint8()),
     ...(options.speeds ? { speed_limit: vectorFromArray(options.speeds, new Uint8()) } : {}),
+    ...(options.oneways ? { oneway: vectorFromArray(options.oneways, new Uint8()) } : {}),
     aadt_light: vectorFromArray(indices.map(index => 1000 + index), new Int32()),
     aadt_medium: vectorFromArray(indices.map(index => 2000 + index), new Int32()),
     aadt_heavy: vectorFromArray(indices.map(index => 3000 + index), new Int32()),

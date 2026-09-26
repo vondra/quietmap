@@ -11,6 +11,7 @@ import {
   pointGridCandidates,
   pointToSegmentDist,
   runsAlongSegment,
+  runsWithSegment,
   type SegmentCoordinates,
 } from './lib/spatial.js'
 
@@ -49,14 +50,18 @@ export function indexSwedishNvdb(observations: readonly SwedishNvdbObservation[]
  *  functional class, so the line, the heading and the nearest win alone: the publisher
  *  geometry sits on the same carriageway the OSM row traces, metres away, while a
  *  parallel road runs tens of metres off. Slip roads take nothing: without a ramp flag
- *  a link part cannot prove it was counted on the slip rather than the mainline. */
+ *  a link part cannot prove it was counted on the slip rather than the mainline. A sibling
+ *  link part counts one carriageway, so only rows travelling with its line take it (stored
+ *  lines run along travel: 'Mot' rows are reversed at parse); a Normal two-way total keeps
+ *  the unsigned gate and the finalizer shares it between the carriageways. */
 export function matchSwedishNvdb(row: RoadRow, index: SwedishNvdbIndex): SwedishNvdbObservation | null {
   let closest: SwedishNvdbObservation | null = null
   let closestDistance = MAXIMUM_DISTANCE_METRES
   let closestId = ''
   for (const edge of pointGridCandidates(row.midLat, row.midLon, MAXIMUM_DISTANCE_METRES, index.edges)) {
     const { observation } = edge
-    if (!runsAlongSegment(row, edge)) continue
+    const follows = observation.countBasis === 'directional' ? runsWithSegment(row, edge) : runsAlongSegment(row, edge)
+    if (!follows) continue
     if (!roadClassTakesCount(row.roadClass, observation)) continue
     const distance = pointToSegmentDist(
       row.midLat,
@@ -125,6 +130,7 @@ export async function runSwedishRoadEnrichment(options: RoadLoaderArguments) {
     zeroTrafficSkipped: source.zeroTrafficSkipped,
     inconsistentClassesSkipped: source.inconsistentClassesSkipped,
     invalidGeometrySkipped: source.invalidGeometrySkipped,
+    unknownDirectionSkipped: source.unknownDirectionSkipped,
     ...(await enrichSwedishRoads(options.preparedDirectory, source.observations)),
   }
 }

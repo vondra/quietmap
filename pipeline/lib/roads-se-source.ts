@@ -25,7 +25,8 @@ const MEASURED_METHODS = new Set(['Stickprovsmätning', 'Helårsmätning'])
 const DIRECTIONAL_ROLES = new Set(['Syskon fram', 'Syskon bak'])
 
 export interface SwedishNvdbObservation extends RoadObservation {
-  /** WGS 84 link-part line in [longitude, latitude] order. */
+  /** WGS 84 link-part line in [longitude, latitude] order; directional lines run along the counted
+   *  travel direction ('Mot' rows reversed at parse), which the matcher requires. */
   line: ReadonlyArray<readonly [number, number]>
   rank: null
   isRamp: false
@@ -45,12 +46,14 @@ export interface SwedishNvdbSource {
   zeroTrafficSkipped: number
   inconsistentClassesSkipped: number
   invalidGeometrySkipped: number
+  unknownDirectionSkipped: number
 }
 
 /** One GeoPackage feature row as the loader selects it; the test builds these by hand. */
 export interface SwedishNvdbRecord {
   id: unknown
   role: unknown
+  direction: unknown
   method: unknown
   total: unknown
   lightPeriods: readonly unknown[]
@@ -126,6 +129,7 @@ export function parseSwedishNvdbSource(records: readonly SwedishNvdbRecord[]): S
     zeroTrafficSkipped: 0,
     inconsistentClassesSkipped: 0,
     invalidGeometrySkipped: 0,
+    unknownDirectionSkipped: 0,
   }
   const seen = new Set<number>()
   for (const record of records) {
@@ -191,11 +195,19 @@ export function parseSwedishNvdbSource(records: readonly SwedishNvdbRecord[]): S
     }
     if (withholdsCountLine(line)) continue
     const directional = typeof record.role === 'string' && DIRECTIONAL_ROLES.has(record.role)
+    // A sibling link part counts one carriageway's flow in its DIRECTION: 'Med' with the reference
+    // line, 'Mot' against it (same-carriageway OSM rows agree with 'Med' lines and oppose 'Mot'
+    // ones). Reversal keeps every directional line on its travel direction; an unknown direction
+    // cannot be oriented and the count is skipped, never misattributed. Two-way totals need none.
+    if (directional && record.direction !== 'Med' && record.direction !== 'Mot') {
+      result.unknownDirectionSkipped++
+      continue
+    }
     if (directional) result.directionalObservations++
     else result.twoWayObservations++
     result.observations.push({
       ...roadObservation(`nvdb2026:${record.id}`, directional ? 'directional' : 'both-directions'),
-      line,
+      line: directional && record.direction === 'Mot' ? [...line].reverse() : line,
       rank: null,
       isRamp: false,
       light,
@@ -211,6 +223,7 @@ export function parseSwedishNvdbSource(records: readonly SwedishNvdbRecord[]): S
 const TRAFFIC_COLUMNS = [
   'id',
   'ROLE',
+  'DIRECTION',
   'Matmetod',
   'Adt_samtliga_fordon',
   'Adt_latta_fordon_06_18',
@@ -247,6 +260,7 @@ export function loadSwedishNvdbSource(options: RoadLoaderArguments): SwedishNvdb
       rows.map(row => ({
         id: row.id,
         role: row.ROLE,
+        direction: row.DIRECTION,
         method: row.Matmetod,
         total: row.Adt_samtliga_fordon,
         lightPeriods: [
