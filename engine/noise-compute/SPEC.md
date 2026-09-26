@@ -576,7 +576,9 @@ in front of the piece marks a 128-bin blocked mask over the bucket's azimuths (w
 lower than the source height, and grid cells whose tallest edge is, are skipped);
 every blocked run and clear gap is split into parts of at most 0.26 rad (at most nine
 per run), each part one node weighted by its own Δφ, obstacles read on blocked parts
-only. A line source radiating with the CNOSSOS-EU rail track dipole `0.01 + 0.99·sin²ψ` uses ψ
+only. There is no lower bound on the edge's distance from the receiver itself: a wall
+0.4 m away still marks its bins (dropping sub-metre edges reads 16 dB loud where the
+receiver stands just outside a wall). A line source radiating with the CNOSSOS-EU rail track dipole `0.01 + 0.99·sin²ψ` uses ψ
 between the **horizontal projections** of track and ray (2.3.15). Each node is weighted by the
 integral of that horizontal directivity over its 3D in-plane Δφ. With `u = tan φ`, its dipole
 part is `b² / ((u+a)²+b²)`: `a` is the projected along-track offset of the 3D perpendicular foot,
