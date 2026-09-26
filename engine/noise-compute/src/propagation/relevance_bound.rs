@@ -93,6 +93,22 @@ pub fn bound_for_azimuth_span(
     }
 }
 
+/// The bound for one segment row from a receiver: the span of its endpoints' sight
+/// lines, gains mixed at the largest p over that span. Points pass the same
+/// coordinates twice (a point's single azimuth).
+pub fn row_bound_for_segment(
+    weather: &crate::propagation::meteorology::Meteorology,
+    receiver_lat: f64,
+    receiver_lon: f64,
+    start_lat: f64,
+    start_lon: f64,
+    end_lat: f64,
+    end_lon: f64,
+) -> RelevanceBound {
+    let span = azimuth_span(receiver_lat, receiver_lon, start_lat, start_lon, end_lat, end_lon);
+    bound_for_azimuth_span(weather, span)
+}
+
 /// Azimuth span `(lo, hi)` of the segment from a receiver, mathematical `atan2(north, east)`
 /// radians in the local flat-earth frame (the evaluation's own convention): the endpoint
 /// azimuths in sweep order, padded 1° each side against convention rounding. The sweep of

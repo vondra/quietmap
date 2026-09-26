@@ -20,7 +20,7 @@ fn admitted_pieces(
     receiver: &Receiver,
     rasters: &dyn RasterSampler,
 ) -> Vec<(LayerKind, Piece)> {
-    use noise_compute::propagation::relevance_bound::{azimuth_span, bound_for_azimuth_span};
+    use noise_compute::propagation::relevance_bound::row_bound_for_segment;
     let weather = rasters.weather(receiver.lat, receiver.lon);
     let receiver_city = noise_compute::square_country_city::square_country_city_for_latlng(receiver.lat, receiver.lon);
     let mut rows = Vec::new();
@@ -29,10 +29,9 @@ fn admitted_pieces(
             continue;
         };
         let emission = norm.period_emissions_db();
-        let span = azimuth_span(
-            receiver.lat, receiver.lon, seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon,
+        let row_bound = row_bound_for_segment(
+            &weather, receiver.lat, receiver.lon, seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon,
         );
-        let row_bound = bound_for_azimuth_span(&weather, span);
         if seg.dist_m > LINE_REACH_CEILING_M
             || !row_bound.within_reach(&emission, SourceSpread::Line, seg.dist_m)
         {
@@ -56,10 +55,9 @@ fn admitted_pieces(
         }
         let rail_type = RailType::from_u8(seg.rail_type);
         let emission = railway::rail_period_emissions(rail_type, seg.speed_kmh, seg.traffic);
-        let span = azimuth_span(
-            receiver.lat, receiver.lon, seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon,
+        let row_bound = row_bound_for_segment(
+            &weather, receiver.lat, receiver.lon, seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon,
         );
-        let row_bound = bound_for_azimuth_span(&weather, span);
         if seg.dist_m > LINE_REACH_CEILING_M
             || !row_bound.within_reach(&emission, SourceSpread::Line, seg.dist_m)
         {

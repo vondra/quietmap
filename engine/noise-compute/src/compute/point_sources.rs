@@ -93,7 +93,8 @@ pub(crate) fn compute_point_sources(
 
         // All periods count (#31): a night-only source is never dropped by a day gate.
         let period_emissions = [src.lw_day, src.lw_evening, src.lw_night].map(|bands| bands.map(f64::from));
-        let span = crate::propagation::relevance_bound::azimuth_span(
+        let point_bound = crate::propagation::relevance_bound::row_bound_for_segment(
+            &weather,
             receiver.lat,
             receiver.lon,
             src.lat,
@@ -101,8 +102,6 @@ pub(crate) fn compute_point_sources(
             src.lat,
             src.lon,
         );
-        let point_bound =
-            crate::propagation::relevance_bound::bound_for_azimuth_span(&weather, span);
         if point_bound.pair_is_inaudible(&period_emissions, SourceSpread::Point, src.dist_m) {
             continue;
         }

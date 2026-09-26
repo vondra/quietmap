@@ -133,7 +133,8 @@ pub(crate) fn compute_roads(
             let period_emissions = norm.period_emissions_db();
             // The row's reach from its own azimuth-span bound, every period counted (#31);
             // a pair inside it is never inaudible (the bound's Lden there exceeds 30 dB).
-            let span = crate::propagation::relevance_bound::azimuth_span(
+            let row_bound = crate::propagation::relevance_bound::row_bound_for_segment(
+                &weather,
                 receiver.lat,
                 receiver.lon,
                 seg.start_lat,
@@ -141,8 +142,6 @@ pub(crate) fn compute_roads(
                 seg.end_lat,
                 seg.end_lon,
             );
-            let row_bound =
-                crate::propagation::relevance_bound::bound_for_azimuth_span(&weather, span);
             if seg.dist_m > LINE_REACH_CEILING_M
                 || !row_bound.within_reach(&period_emissions, SourceSpread::Line, seg.dist_m)
             {
