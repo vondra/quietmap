@@ -133,9 +133,9 @@ test('whole road rows across a z9 boundary receive four-class totals without cha
     assert.deepEqual(after.schema.fields.find(candidate => candidate.name === field.name), field)
     assert.deepEqual(after.getChild(field.name)!.toArray(), beforeTable.getChild(field.name)!.toArray())
   }
-  // Published trucks and motorcycles; buses in the secondary-road prior share (120 of 3,000).
+  // Published trucks and motorcycles; buses in the secondary-road urban share (31 of 3,000).
   assert.deepEqual(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto', 'source_id']
-    .map(name => after.getChild(name)!.get(3)), [810, 40, 100, 50, 10])
+    .map(name => after.getChild(name)!.get(3)), [840, 10, 100, 50, 10])
   for (const index of [0, 1, 2]) {
     for (const field of beforeTable.schema.fields) {
       assert.deepEqual(after.getChild(field.name)!.get(index), beforeTable.getChild(field.name)!.get(index))
@@ -219,7 +219,7 @@ test('one directional observation chooses one current way across owners; two-way
     })
     assert.deepEqual(output.map(row => row.source), scenario.expected, scenario.name)
     for (const row of output.filter(row => row.source === 10)) {
-      assert.deepEqual(row.counts, [8100, 400, 1000, 500], scenario.name)
+      assert.deepEqual(row.counts, [8398, 102, 1000, 500], scenario.name)
       assert.equal(row.id, observation.records[0].observationId)
       assert.equal(row.basis, scenario.directional ? 1 : 4)
     }
