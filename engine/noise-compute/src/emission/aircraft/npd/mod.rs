@@ -57,7 +57,9 @@ pub const AIRBORNE_QUERY_RADIUS_M: f64 =
     AIRCRAFT_MAX_HORIZONTAL_REACH_M + AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M as f64 / 2.0;
 
 /// Reference slant (meters) at the last NPD table point (25 000 ft). Anchor
-/// for physics-based extrapolation of SEL beyond the table.
+/// for physics-based extrapolation of SEL beyond the table, and the shared
+/// 25 000 ft anchor of the airborne/cruise phase boundary and the cruise
+/// near-field margin (a slant past it leaves the table everywhere).
 pub const AIRCRAFT_NPD_REF_SLANT_M: f64 = 7620.0;
 
 /// Standard NPD distances in feet (Doc 29 §4.2, 10 points).

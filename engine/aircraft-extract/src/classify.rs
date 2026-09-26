@@ -12,9 +12,10 @@
 
 use crate::flight::Phase;
 
-/// AGL boundary between Airborne and Cruise. Matches the
-/// `AIRCRAFT_NPD_REF_SLANT_M = 7 620` constant in `noise-compute`.
-pub const PHASE_BOUNDARY_AGL_M: f32 = 7_620.0;
+/// AGL boundary between Airborne and Cruise: the last Doc 29 NPD table anchor
+/// (25 000 ft), one constant shared with `noise-compute`.
+pub const PHASE_BOUNDARY_AGL_M: f32 =
+    noise_compute::emission::aircraft::AIRCRAFT_NPD_REF_SLANT_M as f32;
 pub const CRUISE_ENTER_AGL_M: f32 = 8_000.0;
 pub const CRUISE_EXIT_AGL_M: f32 = 7_200.0;
 
