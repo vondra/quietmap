@@ -51,12 +51,15 @@ test('source rounding, aliases and the whole line preserve published directional
 test('a missing truck count is the class prior share, never an invented zero; a published zero stays', () => {
   const record = (city: string, properties: Record<string, unknown>) =>
     parseEuropeanCityTraffic(city, 'raw.geojson', bytes(feature({ AADT: 3000, ...properties }))).records[0]
-  // Secondary prior: 2,640 light, 120 medium, 180 heavy, 60 motorcycles of 3,000.
+  // Secondary urban prior: 2,829 light, 31 medium, 117 heavy, 23 motorcycles of 3,000.
   const { light, medium, heavy, moto } = europeanTrafficAadt(record('Paris', {}), 3)
-  assert.deepEqual([light, medium, heavy, moto], [2640, 120, 180, 60])
+  assert.deepEqual([light, medium, heavy, moto], [2829, 31, 117, 23])
   assert.equal(europeanTrafficAadt(record('Stockholm', { TR_pct_AADT: 10 }), 3).heavy, 300)
   assert.equal(europeanTrafficAadt(record('Berlin', { TR_AADT: 0 }), 3).heavy, 0)
-  assert.equal(europeanTrafficAadt(record('Marseille', { TR_AADT: 0 }), 3).heavy, 180)
+  assert.equal(europeanTrafficAadt(record('Marseille', { TR_AADT: 0 }), 3).heavy, 117)
+  // Primary urban prior: 2,858 light, 31 medium, 81 heavy, 30 motorcycles of 3,000.
+  assert.deepEqual((({ light, medium, heavy, moto }) => [light, medium, heavy, moto])(europeanTrafficAadt(record('Madrid', {}), 2)),
+    [2858, 31, 81, 30])
   assert.equal(record('Amsterdam', {}).sourceId, 1103)
   assert.equal(record('Amsterdam', {}).estimatedClasses, 15)
 })

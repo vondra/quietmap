@@ -6,7 +6,6 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { SOURCE_ID_EU_CITY_TRAFFIC, SOURCE_ID_NL_AMSTERDAM_TRAFFIC_MODEL } from './source-ids.generated.js'
 import type { RoadAadt } from './roads-arrow.js'
-import { WORLD_DEFAULT } from './road-planning-defaults.generated.js'
 import { roadObservation, type RoadObservation } from './road-observation.js'
 
 // Tours is left out: its upstream terms require written authorisation (w3-major licence review, 2026-09-24).
@@ -181,9 +180,37 @@ export function parseEuropeanCityTraffic(city: string, path: string, bytes: Buff
   return result
 }
 
-/** Four classes on one row: published classes as counted, the rest in the row class's prior proportions. */
+// Urban [light, medium, heavy, moto] shares for city-counted totals with unpublished
+// classes, by engine road class (links inherit their mainline). Heavy and moto are the
+// per-class medians over the staged EU-city records publishing trucks (3,052 records)
+// and motorcycles (859) in training squares of holdout rule v1, computed 2026-09-26;
+// Amsterdam and Marseille are traffic models and Tours is licence-excluded, so none of
+// the three trains the shares. Classes with fewer than 30 publishing records take the
+// pooled median (heavy 0.0304, moto 0.0076). Medium is the median bus share over 415
+// Praha TSK streets (953 sections, intenzity-2025, a training square), the only staged
+// urban source publishing it; light is the remainder. This replaces the interurban
+// WORLD_DEFAULT split, which overstated heavies on city streets (trunk 20%, primary
+// 15%): Madrid's permanent-detector network, the upstream of its EU-city file, publishes
+// totals only, so every Madrid row took those priors.
+const URBAN_CLASS_SHARES = [
+  [0.9147, 0.0102, 0.0731, 0.0020], // 0 motorway
+  [0.9492, 0.0102, 0.0344, 0.0062], // 1 trunk
+  [0.9528, 0.0102, 0.0270, 0.0100], // 2 primary
+  [0.9432, 0.0102, 0.0390, 0.0076], // 3 secondary
+  [0.9453, 0.0102, 0.0374, 0.0071], // 4 tertiary
+  [0.9651, 0.0102, 0.0166, 0.0081], // 5 residential
+  [0.9518, 0.0102, 0.0304, 0.0076], // 6 living_street (pooled)
+  [0.9600, 0.0102, 0.0222, 0.0076], // 7 service
+  [0.9518, 0.0102, 0.0304, 0.0076], // 8 track (pooled)
+  [0.9607, 0.0102, 0.0215, 0.0076], // 9 unclassified
+  [0.9147, 0.0102, 0.0731, 0.0020], // 10 motorway_link
+  [0.9492, 0.0102, 0.0344, 0.0062], // 11 trunk_link
+  [0.9528, 0.0102, 0.0270, 0.0100], // 12 primary_link
+] as const
+
+/** Four classes on one row: published classes as counted, the rest in the row class's urban shares. */
 export function europeanTrafficAadt(record: EuropeanTrafficRecord, roadClass: number): RoadAadt {
-  const [light, medium, heavy, moto] = WORLD_DEFAULT[Math.min(roadClass, WORLD_DEFAULT.length - 1)]
+  const [light, medium, heavy, moto] = URBAN_CLASS_SHARES[Math.min(roadClass, URBAN_CLASS_SHARES.length - 1)]
   // Estimated classes never exceed what the published classes leave of the total; light takes the rest.
   // The leave can round negative (weekday scaling rounds each part independently); estimates
   // floor at zero instead of aborting the square, published classes untouched.
