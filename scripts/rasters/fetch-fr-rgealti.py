@@ -4,6 +4,10 @@
 The HIGHRES service renders 5 m 10 km windows in 30-200 s each (measured
 2026-09-25), which puts full 5 m coverage beyond reach; 10 m windows take
 about 8 s and still oversample the 1 arc-second output grid.
+
+The service blends nodata into coastal pixels across the full continuum
+(-99999 down to -10 observed 2026-09-26), so kept windows scrub sub-floor
+cells back to nodata before their receipts are written.
 """
 import argparse
 import json
@@ -28,6 +32,11 @@ LICENCE = 'Licence Ouverte 2.0 (Etalab)'
 LICENCE_URL = 'https://www.etalab.gouv.fr/licence-ouverte-open-licence/'
 CRS = 2154
 RESOLUTION = 10
+# No bare land in France sits below -4 m (Les Moëres polder, -2.5 m), while
+# Géoplateforme blends nodata into coastal pixels across the full continuum
+# (-99999 down to -10 observed 2026-09-26); anything under the floor is blend
+# garbage, never terrain.
+FR_FLOOR_M = -5.
 STEP = 10000
 EXTENT = (0, 6020000, 1260000, 7130000)
 # Corsica sits 65 km east of the mainland edge; the sea gap keeps the groups disjoint.
@@ -39,6 +48,21 @@ def group_of(x0, y1):
     if x0 >= CORSICA_X0 and y1 <= CORSICA_Y1:
         return 'FR-RGEALTI-CORSE'
     return 'FR-RGEALTI'
+
+
+def scrub_window(path):
+    """Reset sub-floor blend garbage to nodata in place; returns the count."""
+    dataset = gdal.Open(str(path), gdal.GA_Update)
+    band = dataset.GetRasterBand(1)
+    values = band.ReadAsArray()
+    garbage = values < FR_FLOOR_M
+    count = int(garbage.sum())
+    if count:
+        values[garbage] = band.GetNoDataValue()
+        band.WriteArray(values)
+        band.FlushCache()
+    dataset = None
+    return count
 
 
 def fetch_window(output, window, mask, position, total):
@@ -77,6 +101,8 @@ def fetch_window(output, window, mask, position, total):
         print(json.dumps({'skipped_sea': name}), flush=True)
         polite_sleep(started)
         return window, None
+    dataset = None
+    scrub_window(target)
     record = dict(url='https://cartes.gouv.fr/rechercher-une-donnee/dataset/IGNF_RGE-ALTI',
                   request_url=url, fetched_utc=utc_now(), sha256=digest(target),
                   bytes=target.stat().st_size, licence=LICENCE, licence_url=LICENCE_URL,

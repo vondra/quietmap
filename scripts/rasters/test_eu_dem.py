@@ -256,6 +256,29 @@ class SquareMathTest(unittest.TestCase):
         self.assertTrue(edges[0] > edges[1] > edges[2])
 
 
+class FranceScrubTest(unittest.TestCase):
+    def test_sub_floor_blend_garbage_returns_to_nodata(self):
+        import numpy as np
+        from osgeo import gdal
+        fetch_fr = load_hyphenated('fetch-fr-rgealti')
+        pixels = np.array([[-99999., -49999.5, -500.03, -10.09, -5.01, -4.99, -2.5, 0., 50.]],
+                          dtype=np.float32)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'window.tif'
+            driver = gdal.GetDriverByName('GTiff')
+            dataset = driver.Create(str(path), 9, 1, 1, gdal.GDT_Float32)
+            dataset.GetRasterBand(1).SetNoDataValue(-99999.)
+            dataset.GetRasterBand(1).WriteArray(pixels)
+            dataset = None
+            self.assertEqual(fetch_fr.scrub_window(path), 5)
+            dataset = gdal.Open(str(path))
+            got = dataset.GetRasterBand(1).ReadAsArray().tolist()[0]
+            for value, want in zip(got, [-99999., -99999., -99999., -99999., -99999.,
+                                         -4.99, -2.5, 0., 50.]):
+                self.assertAlmostEqual(value, want, places=4)
+            dataset = None
+
+
 class FranceGroupsTest(unittest.TestCase):
     def test_mainland_and_corsica(self):
         fetch_fr = load_hyphenated('fetch-fr-rgealti')
