@@ -33,6 +33,25 @@ def feather(base, national, halo):
     return base + weight * difference, weight, difference
 
 
+def _induced_steps(weight, difference):
+    """Per-edge selection-weight steps |Δw|·bound for both lattice orientations."""
+    steps = []
+    for axis in (0, 1):
+        low = [slice(None), slice(None)]
+        high = low.copy()
+        low[axis], high[axis] = slice(None, -1), slice(1, None)
+        low, high = tuple(low), tuple(high)
+        # At coverage limits, continue the last available residual across the boundary.
+        # Weight is zero there; this affects only the conservative error bound.
+        bound = np.maximum(np.abs(difference[low]), np.abs(difference[high]))
+        steps.append(np.abs(np.diff(weight, axis=axis)) * bound)
+    return steps
+
+
+def _core(field, halo):
+    return field[halo - 1:field.shape[0] - halo + 1, halo - 1:field.shape[1] - halo + 1]
+
+
 def axial_slopes(national, base, axis):
     low = [slice(None), slice(None)]
     high = low.copy()
@@ -76,14 +95,36 @@ def hides_in_relief(steps, natural):
             & (steps <= np.minimum(SLOPE_EXEMPT_RATIO * natural, EXEMPT_CAP_M)))
 
 
-def artificial_steps(weight, difference, halo, national, base):
+def exclusion_edges(rows, columns, bounds, exclusions):
+    """Per-edge exclusion masks for proven-real waiver discs.
+
+    bounds is (west, south, east, north) of the rows-by-columns node grid;
+    exclusions is [(lon, lat, radius_m)]. An edge is excluded when either
+    endpoint node falls inside a disc. Returns one mask per orientation.
+    """
+    west, south, east, north = bounds
+    lons = west + (np.arange(columns) + .5) / columns * (east - west)
+    lats = north - (np.arange(rows) + .5) / rows * (north - south)
+    mean_lat = (south + north) / 2
+    nodes = np.zeros((rows, columns), bool)
+    for lon, lat, radius in exclusions:
+        # Equirectangular metres; waivers span metres, squares span degrees.
+        dx = (lons - lon) * 111320 * np.cos(np.radians(mean_lat))
+        dy = (lats - lat) * 110540
+        inside = dy[:, None] ** 2 + dx[None, :] ** 2 <= radius ** 2
+        nodes |= inside
+    return [nodes[:-1, :] | nodes[1:, :], nodes[:, :-1] | nodes[:, 1:]]
+
+
+def artificial_steps(weight, difference, halo, national, base, exclude=None):
     """Decompose Δ(w*d) = mean(w)*Δd + mean(d)*Δw; gate the selection-weight term.
 
     Returns the group statistics plus the gated per-edge steps on both axes, so the
     caller stacks groups edge by edge: maxima stack only where transitions colocate.
     A ramp under a tenth of the local relief hides in the terrain (cliffs resolve
     30 m against 5 m there), so steep-slope edges exempt up to a metre; anything
-    beyond that, and every flat edge over budget, still trips.
+    beyond that, and every flat edge over budget, still trips. Waiver discs drop
+    proven-real features from the fold and the stacks alike.
     """
     naturals = core_relief(national, base, halo)
     steps = []
@@ -91,19 +132,12 @@ def artificial_steps(weight, difference, halo, national, base):
     stacks = []
     exempted = 0
     max_exempted = 0.
-    for axis in (0, 1):
-        low = [slice(None), slice(None)]
-        high = low.copy()
-        low[axis], high[axis] = slice(None, -1), slice(1, None)
-        low, high = tuple(low), tuple(high)
-        # At coverage limits, continue the last available residual across the boundary.
-        # Weight is zero there; this affects only the conservative error bound.
-        bound = np.maximum(np.abs(difference[low]), np.abs(difference[high]))
-        induced = np.abs(np.diff(weight, axis=axis)) * bound
-        core = induced[halo - 1:induced.shape[0] - halo + 1,
-                       halo - 1:induced.shape[1] - halo + 1]
+    for axis, induced in enumerate(_induced_steps(weight, difference)):
+        core = _core(induced, halo)
         natural = naturals[axis]
         fold = np.isfinite(core) & (core > 0)
+        if exclude is not None:
+            fold &= ~_core(exclude[axis], halo)
         selected = core[fold]
         steps.append(selected)
         exempt = hides_in_relief(selected, natural[fold])
@@ -125,6 +159,7 @@ def artificial_steps(weight, difference, halo, national, base):
                 maximum_artificial_step_bound_m=gated_maximum + QUANTIZATION_STEP_BUDGET_M,
                 maximum_gated_step_m=gated_maximum, selection_exempt_edges=exempted,
                 maximum_exempted_step_m=max_exempted), stacks[0], stacks[1]
+
 
 
 def require_seam_gate(statistics):

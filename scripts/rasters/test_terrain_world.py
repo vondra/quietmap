@@ -93,6 +93,44 @@ class WorldTest(unittest.TestCase):
             self.assertTrue(source.with_suffix('.tif').exists())
             terrain_io.provenance(source.with_suffix('.tif'))
 
+    def test_bavaria_decode_masks_official_voids_but_keeps_duplicate_detection(self):
+        spec = importlib.util.spec_from_file_location('bavaria', Path(__file__).with_name('fetch-bavaria.py'))
+        bavaria = importlib.util.module_from_spec(spec); spec.loader.exec_module(bavaria)
+        from osgeo import gdal
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); provider = root / 'provider'; provider.mkdir()
+            source = provider / 'void.zip'
+            with zipfile.ZipFile(source, 'w') as archive:
+                archive.writestr('void.txt', '500000 5500000 100\n500005 5500000 -9999\n'
+                                  '500010 5500000 101\n500000 5499995 102\n'
+                                  '500005 5499995 0\n500010 5499995 13.9\n')
+            terrain_io.publish_json(str(source) + '.provenance.json', dict(url='https://example.org/void',
+                fetched_utc='2026-09-24', sha256=terrain_io.digest(source), bytes=source.stat().st_size,
+                licence='fixture', licence_url='https://example.org/licence', terms_checked_utc='2026-09-24'))
+            bavaria.decode_archive(source)
+            target = source.with_suffix('.tif')
+            ds = gdal.Open(str(target))
+            band = ds.GetRasterBand(1)
+            grid = band.ReadAsArray()
+            self.assertTrue(np.isnan(band.GetNoDataValue()))
+            self.assertTrue(np.isnan(grid[0, 1]))
+            self.assertEqual(grid[0, 0], 100.0)
+            self.assertEqual(grid[0, 2], 101.0)
+            self.assertEqual(grid[1, 0], 102.0)
+            self.assertTrue(np.isnan(grid[1, 1]))
+            self.assertTrue(np.isnan(grid[1, 2]))
+            band = None
+            ds = None
+            double = provider / 'double.zip'
+            with zipfile.ZipFile(double, 'w') as archive:
+                archive.writestr('double.txt', '500000 5500000 100\n500000 5500000 101\n'
+                                  '500000 5499995 102\n500005 5499995 103\n')
+            terrain_io.publish_json(str(double) + '.provenance.json', dict(url='https://example.org/double',
+                fetched_utc='2026-09-24', sha256=terrain_io.digest(double), bytes=double.stat().st_size,
+                licence='fixture', licence_url='https://example.org/licence', terms_checked_utc='2026-09-24'))
+            with self.assertRaisesRegex(ValueError, 'duplicated DGM5 XYZ nodes'):
+                bavaria.decode_archive(double)
+
     def test_retained_bytes_skips_a_file_that_vanishes_during_the_walk(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); (root / 'kept').write_bytes(b'12345'); (root / 'temporary').write_bytes(b'1')

@@ -13,7 +13,8 @@ from osgeo import gdal, osr
 from canopy_average import canopy_average
 from terrain_io import digest, provenance, publish_bytes, publish_json
 from terrain_seams import (expanded, feather, artificial_steps, core_relief, hides_in_relief,
-                           require_seam_gate, verify_shared_nodes, QUANTIZATION_STEP_BUDGET_M)
+                           exclusion_edges, require_seam_gate, verify_shared_nodes,
+                           QUANTIZATION_STEP_BUDGET_M)
 
 gdal.UseExceptions()
 osr.UseExceptions()
@@ -202,7 +203,7 @@ def grouped_sources(sources):
     return result
 
 
-def assemble_with_statistics(sources, window, channel, kernel='average', halo=128):
+def assemble_with_statistics(sources, window, channel, kernel='average', halo=128, exclusions=()):
     national = channel == 'dem' and any(s.get('role') == 'national' for s in sources)
     padding = halo + 2 if national else 0
     work = expanded(window, padding)
@@ -210,6 +211,11 @@ def assemble_with_statistics(sources, window, channel, kernel='average', halo=12
     owner = np.full(values.shape, -1, dtype=np.int16)
     statistics = dict(halo_nodes=halo if national else 0, groups=[],
                       maximum_artificial_step_bound_m=QUANTIZATION_STEP_BUDGET_M)
+    exclude = None
+    if exclusions and padding:
+        # Waiver discs cover proven-real features (quarries, gorges); every other
+        # edge stays gated. The sidecar records the waivers, not the exclusion.
+        exclude = exclusion_edges(work['rows'], work['columns'], bounds(work), exclusions)
     stack, relief_stack = None, None
     for index, source in enumerate(sources):
         sampled = (canopy_average(source, work, read_average) if channel == 'canopy'
@@ -229,7 +235,7 @@ def assemble_with_statistics(sources, window, channel, kernel='average', halo=12
             base = values
             values, weight, difference = feather(base, sampled, halo)
             group_stats, stack0, stack1 = artificial_steps(weight, difference, padding,
-                                                           sampled, base)
+                                                           sampled, base, exclude)
             group = dict(group=source['group'], conformed_nodes=int(conform.sum()),
                          **group_stats)
             if stack is None:
@@ -252,7 +258,8 @@ def assemble_with_statistics(sources, window, channel, kernel='average', halo=12
         # Colocated sub-budget ramps stack past the budget where two national
         # coverages cross one steep feature (the ENCI quarry straddles the
         # NL/BE border); the stacked ramp hides in the stacked relief like a
-        # single-group one, so it exempts under the same rule.
+        # single-group one, so it exempts under the same rule. Waiver discs
+        # already read zero in every stack, so the gate needs no mask here.
         exempted, max_exempted, gated_maximum = 0, 0., 0.
         for total, natural in zip(stack, relief_stack):
             hidden = hides_in_relief(total, natural)
@@ -271,13 +278,37 @@ def assemble_with_statistics(sources, window, channel, kernel='average', halo=12
     return values, owner, statistics
 
 
-def produce(manifest, output, binary, reserve_bytes, ocean_coverage=None):
+def load_waivers(path, squares):
+    """Proven-real seam waivers: [{x, y, lon, lat, radius_m, reason, evidence}].
+
+    Each waiver excludes one disc from the gate's maximum-step search after an
+    independent DEM proved the excess is real terrain, not an artificial seam.
+    """
+    waivers = json.loads(Path(path).read_bytes())
+    if not isinstance(waivers, list):
+        raise ValueError('waivers file must hold a list')
+    for waiver in waivers:
+        if (waiver['x'], waiver['y']) not in squares:
+            raise ValueError(f'waiver outside the plan squares: {waiver}')
+        if not 50 <= waiver['radius_m'] <= 5000:
+            raise ValueError(f'waiver disc must span 50-5000 m: {waiver}')
+        if not (-180 <= waiver['lon'] <= 180 and -90 <= waiver['lat'] <= 90):
+            raise ValueError(f'waiver coordinates out of range: {waiver}')
+        if not waiver.get('reason') or not isinstance(waiver.get('evidence'), dict):
+            raise ValueError(f'waiver needs a reason and evidence: {waiver}')
+    return waivers
+
+
+def produce(manifest, output, binary, reserve_bytes, ocean_coverage=None, waivers=None):
     kernel = 'average'
     manifest_bytes = Path(manifest).read_bytes()
     plan = json.loads(manifest_bytes)
     channel = plan['channel']
     if channel not in ('dem', 'canopy'):
         raise ValueError('expected dem or canopy')
+    planned = {tuple(square) for square in plan['squares']}
+    waiver_list = load_waivers(waivers, planned) if waivers else []
+    waiver_bytes = Path(waivers).read_bytes() if waivers else b'none'
     sources = plan['sources']
     if channel == 'dem' and any(s.get('role') not in ('fallback', 'national') for s in sources):
         raise ValueError('DEM sources must declare fallback or national role')
@@ -299,6 +330,7 @@ def produce(manifest, output, binary, reserve_bytes, ocean_coverage=None):
     producer_sha256 = hashlib.sha256(json.dumps(producer_hashes, sort_keys=True).encode()).hexdigest()
     identity_bytes += (producer_sha256 + digest(binary)).encode()
     identity_bytes += json.dumps(ocean_coverage['sha256'] if ocean_coverage else None).encode()
+    identity_bytes += waiver_bytes
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     identity = hashlib.sha256(identity_bytes).hexdigest()
@@ -333,7 +365,10 @@ def produce(manifest, output, binary, reserve_bytes, ocean_coverage=None):
                 raise ValueError(f'published square differs from resumed plan: {path}')
             print(json.dumps({'x': x, 'y': y, 'resumed': True}), flush=True)
             continue
-        values, owner, seams = assemble_with_statistics(mosaics, window, channel, kernel, plan.get('feather_halo_nodes', 128))
+        applied = [w for w in waiver_list if (w['x'], w['y']) == (x, y)]
+        exclusions = [(w['lon'], w['lat'], w['radius_m']) for w in applied]
+        values, owner, seams = assemble_with_statistics(mosaics, window, channel, kernel,
+                                                        plan.get('feather_halo_nodes', 128), exclusions)
         if channel == 'dem':
             require_seam_gate(seams)
         missing = int(np.count_nonzero(~np.isfinite(values)))
@@ -346,7 +381,7 @@ def produce(manifest, output, binary, reserve_bytes, ocean_coverage=None):
         encoded = codes.tobytes()
         record = dict(channel=channel, window=window, kernel=kernel, datum='EGM2008' if channel == 'dem' else 'above bare earth',
                       plan_sha256=identity, sha256=hashlib.sha256(encoded).hexdigest(), bytes=len(encoded),
-                      source_manifest=dict(path=input_name, sha256=input_hash),
+                      seam_waivers=applied, source_manifest=dict(path=input_name, sha256=input_hash),
                       sources=[dict(group=s['group'], acquisition_epoch=s['epoch'],
                                     coverage_fraction=float(np.mean(owner == i))) for i, s in enumerate(mosaics)],
                       missing_nodes=missing, seam_statistics=seams, geoid_grids=grids, producer_sha256=producer_sha256,
@@ -363,12 +398,13 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('--raster-repack', type=Path, required=True)
     parser.add_argument('--reserve-bytes', type=int, required=True, help='Space reserved for prepared, rollback and scratch')
+    parser.add_argument('--waivers', type=Path, default=None, help='Proven-real seam waivers (reviewed JSON list)')
     args = parser.parse_args()
     if args.reserve_bytes < 0:
         parser.error('reserve must be nonnegative')
     osr.SetPROJEnableNetwork(False)
     gdal.SetCacheMax(256 * 1024 * 1024)
-    produce(args.manifest, args.output, args.raster_repack, args.reserve_bytes)
+    produce(args.manifest, args.output, args.raster_repack, args.reserve_bytes, waivers=args.waivers)
 
 
 if __name__ == '__main__':

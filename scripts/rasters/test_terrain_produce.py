@@ -366,5 +366,62 @@ class TerrainTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'artificial source seam'):
             require_seam_gate(flat)
 
+    def test_waivers_cover_reviewed_sites_not_squares(self):
+        import json
+        from terrain_produce import load_waivers
+        good = [dict(x=266, y=173, lon=7.7344, lat=50.1078, radius_m=1500,
+                     reason='Rhine gorge at Boppard: independent DEM agrees',
+                     evidence=dict(national_m=88.5, fallback_m=171.3, glo30_m=161.0))]
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'waivers.json'
+            path.write_text(json.dumps(good))
+            self.assertEqual(load_waivers(path, {(266, 173)}), good)
+            for bad in (dict(good[0], x=1), dict(good[0], radius_m=40),
+                        dict(good[0], radius_m=6000), dict(good[0], reason=''),
+                        dict(good[0], evidence=[])):
+                path.write_text(json.dumps([bad]))
+                with self.assertRaises(ValueError):
+                    load_waivers(path, {(266, 173)})
+
+    def test_waiver_disc_clears_only_its_proven_real_seam(self):
+        import terrain_produce
+        from terrain_produce import assemble_with_statistics
+        from terrain_seams import expanded, require_seam_gate
+        window = dict(north_node=0, west_node=0, rows=1, columns=60, nodes_per_degree=1)
+        fallback = dict(path='fallback', role='fallback', group='sea', vertical_crs=3855, epoch='2020')
+        groups = [dict(path=name, role='national', group=name, vertical_crs=3855, epoch='2020')
+                  for name in ('west', 'east', 'north')]
+
+        def fake_average(source, work, kernel='average'):
+            shape = (work['rows'], work['columns'])
+            if source['role'] == 'fallback':
+                return np.full(shape, 10.)
+            out = np.full(shape, np.nan)
+            out[:, :15] = 10.24
+            return out
+
+        def assemble(exclusions=()):
+            with patch.object(terrain_produce, 'read_average', side_effect=fake_average):
+                return assemble_with_statistics([fallback, *groups], window, 'dem', halo=2,
+                                                exclusions=exclusions)
+
+        # Three colocated 0.24 ramps stack past the budget on the flat.
+        _, _, bare = assemble()
+        with self.assertRaisesRegex(ValueError, 'artificial source seam'):
+            require_seam_gate(bare)
+        # A waiver disc over the seam clears it; one far away does not.
+        work = expanded(window, 4)
+        west, south, east, north = bounds(work)
+        node_lon = lambda c: west + (c + .5) / work['columns'] * (east - west)
+        node_lat = lambda r: north - (r + .5) / work['rows'] * (north - south)
+        spacing_m = (east - west) / work['columns'] * 111320
+        seam = [(node_lon(15), node_lat(work['rows'] // 2), 4 * spacing_m)]
+        _, _, cleared = assemble(seam)
+        require_seam_gate(cleared)
+        far = [(node_lon(60), node_lat(work['rows'] // 2), 4 * spacing_m)]
+        _, _, elsewhere = assemble(far)
+        with self.assertRaisesRegex(ValueError, 'artificial source seam'):
+            require_seam_gate(elsewhere)
+
 
 if __name__ == '__main__': unittest.main()

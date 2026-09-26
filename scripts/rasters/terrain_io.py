@@ -11,11 +11,13 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 
 REQUIRED_PROVENANCE = {'url', 'fetched_utc', 'sha256', 'bytes', 'licence',
                        'licence_url', 'terms_checked_utc'}
 MAX_DOWNLOAD_BYTES = 1_200_000_000_000
+# High-volume streams enforce the shared budget every BUDGET_EVERY files.
+BUDGET_EVERY = 25
 
 
 def utc_now():
@@ -130,21 +132,28 @@ def publish_source_json(root, path, value):
 
 
 def fetch(root, provider, name, url, licence, licence_url, terms_checked_utc,
-          notes='', expected_sha256=None):
-    """One shared ledger counts all retained bytes and refuses the total cap before downloading."""
+          notes='', expected_sha256=None, enforce_budget=True):
+    """Fetch one file with provenance; the shared ledger refuses the total cap.
+
+    High-volume small-file streams may pass enforce_budget=False for most
+    calls and True every K files; the overshoot between checks is then
+    bounded by K times the largest file, tiny against the free headroom.
+    """
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     if Path(provider).name != provider or Path(name).name != name:
         raise ValueError('provider and filename must be simple names')
     target = root / provider / name
-    with source_budget(root) as available:
+    with ExitStack() as stack:
+        available = stack.enter_context(source_budget(root)) if enforce_budget else None
         if target.exists() and Path(str(target) + '.provenance.json').exists():
             record = provenance(target)
             if record['url'] != url or (expected_sha256 and record['sha256'] != expected_sha256):
                 raise ValueError('retained source differs from the requested provider identity')
             return record
         # Leave room for the receipt; an orphan payload is independently re-fetched and compared.
-        available -= 65536
+        if available is not None:
+            available -= 65536
         target.parent.mkdir(parents=True, exist_ok=True)
         request = urllib.request.Request(url, headers={'User-Agent': 'QuietMap terrain producer'})
         with tempfile.NamedTemporaryFile(dir=target.parent) as staged:
@@ -152,14 +161,14 @@ def fetch(root, provider, name, url, licence, licence_url, terms_checked_utc,
                 try:
                     with urllib.request.urlopen(request, timeout=180) as response:
                         expected_bytes = response.headers.get('Content-Length')
-                        if expected_bytes and int(expected_bytes) > available:
+                        if available is not None and expected_bytes and int(expected_bytes) > available:
                             raise ValueError('provider file exceeds remaining budget')
                         staged.seek(0)
                         staged.truncate()
                         checksum, size = hashlib.sha256(), 0
                         while block := response.read(1 << 20):
                             size += len(block)
-                            if size > available:
+                            if available is not None and size > available:
                                 raise ValueError('provider stream exceeds remaining budget')
                             checksum.update(block)
                             staged.write(block)

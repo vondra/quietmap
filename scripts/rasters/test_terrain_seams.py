@@ -4,7 +4,8 @@ import tempfile
 from pathlib import Path
 from terrain_io import publish_json, digest
 import numpy as np
-from terrain_seams import feather, artificial_steps, require_seam_gate, verify_shared_nodes
+from terrain_seams import (feather, artificial_steps, exclusion_edges, require_seam_gate,
+                           verify_shared_nodes)
 
 
 class SeamTest(unittest.TestCase):
@@ -123,6 +124,42 @@ class SeamTest(unittest.TestCase):
             self.assertEqual(result['shared_nodes'], 1)
             with self.assertRaisesRegex(ValueError, 'ocean coverage differs'):
                 verify_shared_nodes(path, codes, window(None, 2, 2), None, 'any-plan', window, 'other')
+
+    def test_stacked_bound_sums_per_edge_not_per_group_maxima(self):
+        halo = 2
+        flat = np.zeros((8, 8))
+        first_weight = np.zeros((8, 8))
+        first_weight[:, 4:] = 1.
+        _, _, first = artificial_steps(first_weight, np.full((8, 8), .4), halo, flat, flat)
+        second_weight = np.zeros((8, 8))
+        second_weight[:, 6:] = 1.
+        _, _, second = artificial_steps(second_weight, np.full((8, 8), .4), halo, flat, flat)
+        # Each group peaks at 0.4 on its own edge; the edges never coincide.
+        self.assertAlmostEqual(float(np.maximum(first, second).max()), .4, places=6)
+        self.assertAlmostEqual(float((first + second).max()), .4, places=6)
+        # Coinciding worst cases still sum at their shared edge.
+        self.assertAlmostEqual(float((first + first).max()), .8, places=6)
+
+    def test_waiver_disc_excludes_only_edges_touching_it(self):
+        # 8x8 nodes over 0.008 degrees: 111 m node spacing at the equator.
+        masks = exclusion_edges(8, 8, (0., 0., .008, .008), [(.0045, .0035, 10.)])
+        # Only node (4, 4) sits inside the 10 m disc; each orientation keeps
+        # the two edges touching it.
+        self.assertEqual([int(mask.sum()) for mask in masks], [2, 2])
+        self.assertTrue(masks[0][3, 4] and masks[0][4, 4])
+        self.assertTrue(masks[1][4, 3] and masks[1][4, 4])
+        halo = 2
+        flat = np.zeros((8, 8))
+        tall = np.zeros((8, 8))
+        tall[:, 4:] = 1.
+        exclude = [np.zeros((7, 8), bool), np.zeros((8, 7), bool)]
+        exclude[1][:, 3] = True
+        steps, stack0, stack1 = artificial_steps(tall, np.full((8, 8), .4), halo, flat, flat,
+                                                 exclude)
+        self.assertEqual(steps['evaluated_transition_edges'], 0)
+        self.assertEqual(steps['maximum_selection_step_m'], 0)
+        self.assertEqual(stack0.max(), 0)
+        self.assertEqual(stack1.max(), 0)
 
 
 if __name__ == '__main__':

@@ -42,10 +42,17 @@ def _decode_archive(path, available):
         raise ValueError('DGM5 source is not a complete 5 m lattice')
     rows = np.rint((ys[0] - points[:, 1]) / 5).astype(int)
     cols = np.rint((points[:, 0] - xs[0]) / 5).astype(int)
+    if len(np.unique(rows * len(xs) + cols)) != len(points):
+        raise ValueError('duplicated DGM5 XYZ nodes')
     values = np.full((len(ys), len(xs)), np.nan)
-    values[rows, cols] = points[:, 2]
-    if not np.isfinite(values).all():
-        raise ValueError('missing or duplicated DGM5 XYZ nodes')
+    # The official XYZ marks voids as -9999 outside Bavaria and 0.0 over water,
+    # fringed by interpolation garbage up to 92.9 m; Bavarian terrain never
+    # drops below 101.7 m, so everything under 95 m stays nodata.
+    void = (points[:, 2] == -9999.0) | (points[:, 2] < 95.0)
+    heights = np.where(void, np.nan, points[:, 2])
+    values[rows, cols] = heights
+    if not np.isfinite(values).any():
+        raise ValueError('DGM5 source has no valid nodes')
     # An uncompressed float grid bounds the compressed output, with TIFF/receipt overhead.
     if 2 * values.size * 4 + 131072 > available:
         raise ValueError('decoded terrain would exceed the shared source budget')
@@ -61,7 +68,7 @@ def _decode_archive(path, available):
             raise ValueError('decoded terrain exceeds its reserved peak space')
         publish_bytes(target, staged.read_bytes())
     publish_json(str(target) + '.provenance.json', dict(record, sha256=digest(target), bytes=target.stat().st_size,
-                 parent_sha256=record['sha256'], notes='Lossless grid placement of verified DGM5 XYZ; EPSG:25832 + 7837; no resampling.'))
+                 parent_sha256=record['sha256'], notes='Lossless grid placement of verified DGM5 XYZ with official -9999/0.0 voids as nodata; EPSG:25832 + 7837; no resampling.'))
 
 
 def main():
