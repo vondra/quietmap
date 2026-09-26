@@ -263,7 +263,8 @@ while the yard facility carries the area. On non-service tracks (`service=0`)
 other than preserved heritage rail (type 5),
 each category is allocated once per line
 cross-section: a track and each other way running beside its midpoint (same type
-and usage family, no shared node; 15 m and 10° without a common ref or name,
+and usage family, no shared node; longitudinal overlap at least the greater of
+30 m and 30% of that track's own length; 15 m and 10° without a common ref or name,
 50 m and 20° with one) form the cross-section, projected in local metres scaled by
 the square centre's latitude so the sections ignore input row order. The line value comes from the
 track's own country files first: the highest-ranked domestic evidence sets it (the
