@@ -159,7 +159,8 @@ export function ContributorDetail({ c }: { c: Contributor }) {
         ['A-weighted ΔL_A', `${fmt(c.terrain_impact_db)} dB`],
         '',
         'ISO 9613-2 §7.3 + C₃ frequency term',
-        'Copernicus GLO-30 DEM (30 m raster).',
+        'Bare-earth DTM: GEDTM30 (30 m),',
+        'national LiDAR where surveyed.',
         'Shared bilateral terrain profile — SPEC §4.2.',
       ], 18, 14)
     : txtTable([

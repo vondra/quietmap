@@ -21,7 +21,7 @@
 use crate::trace::TracePoint;
 
 /// 4× the combined error envelope of barometric altitude (~50 m) +
-/// Copernicus DEM (~30 m) + transient pressure offsets (~50 m). Below
+/// release DEM (~30 m) + transient pressure offsets (~50 m). Below
 /// this we treat the whole tail as fabricated rather than try to rescue
 /// individual points — the popup's previous filter D dropped only the
 /// underground sub-segment and let the bogus low-AGL approach segments
