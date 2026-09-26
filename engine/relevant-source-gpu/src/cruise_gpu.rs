@@ -11,8 +11,8 @@ const CRUISE_RECEIVER_BATCH: usize = 256;
 pub(crate) struct DeviceCruiseSource {
     // Start latitude/longitude, centroid latitude/longitude, half length, density.
     geography: [f64; 6],
-    physical: [f64; 11],
-    identity: [i32; 4],
+    physical: [f64; 13],
+    identity: [i32; 5],
 }
 impl DeviceCruiseSource {
     fn from_bucket(bucket: &super::Bucket) -> Self {
@@ -38,6 +38,8 @@ impl DeviceCruiseSource {
                 prepared.reach_sq,
                 prepared.terrain_start_cut_m,
                 prepared.terrain_end_cut_m,
+                prepared.power_w,
+                prepared.heli_db,
             ],
             identity: [
                 match prepared.inst {
@@ -48,6 +50,7 @@ impl DeviceCruiseSource {
                 prepared.class_idx as i32,
                 i32::from(prepared.is_departure),
                 bucket.period as i32,
+                i32::from(prepared.power_row),
             ],
         }
     }

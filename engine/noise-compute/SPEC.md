@@ -458,6 +458,54 @@ floor decisions aligned with the canonical CPU scatter. Receiver batches bound
 working storage; terrain marches reuse the existing bilinear DEM tile handle and
 produce the same packed horizons as the uncached sampler.
 
+## Aircraft thrust-dependent NPD interpolation
+
+Fixed-wing jet departures no longer read the max-thrust NPD row. Each segment
+computes its corrected net thrust per engine Fn/δ (Doc 29 Vol 2 Eq. B-1/B-12)
+and interpolates the bracketing power rows linearly in power (Eq. 4-3), for
+SEL, LAmax and scaled distance alike (SEL − LAmax is nearly flat across rows,
+so d_λ lerps in metres). Ground rolls use their rating (takeoff/idle); initial
+climb below the ANP cutback height above the departure field flies MaxTakeoff;
+everything else follows force balance `(W/δ)(sin γ/K + R)/N` within
+[Idle, MaxClimb], with K = 1.01 at Vc ≤ 200 kt else 0.95. The field is the
+terrain under the flight's own takeoff roll, stamped per flight by Stage 1;
+when the roll was not observed (overflights, coverage gaps at the airport)
+the gate falls back to local AGL. Speed is ground speed times √σ (no wind);
+weight is the anchor's median DEFAULT stage weight; R is the clean-configuration
+drag ratio. The (row, weight) bracket is receiver-independent (stored length,
+barometric altitude, Filter-D cuts, departure field), computed once per segment
+and shared by popup, CPU painter and CUDA pack; the kernels do two LUT reads
+plus a lerp. Example: B738 at 3,000 ft AFE after cutback reads 93.77 dB SEL
+at 1,000 ft instead of 99.3.
+
+Reach envelopes the loudest power row per operation (approach reach grows;
+departure reach is unchanged). Fallback proxy, piston, turboprop (% power) and
+helicopter classes stay pinned to today's curves. Stage-2B source-side ranking
+stays pinned to the max departure row (display-only). Acceleration and flap
+schedule stay unmodelled; takeoff derate stays unmodelled (full MaxTakeoff
+below cutback). This is a producer and runtime model change: `airborne.arrow`
+carries the departure field elevation per flight (v4 contract), so aircraft
+prepared outputs rebuild; the gate itself evaluates in the shared bracket.
+
+## Helicopter certification levels
+
+Helicopters keep the MV-22 distance shape with an additive per-typecode,
+per-state correction from EASA Certification Noise Levels – Helicopters,
+Issue 52 (26 Jun 2026; reproduction authorised provided the source is
+acknowledged): Chapter 11 SEL energy mean over representative records, else
+Chapter 8 overflight EPNL energy mean minus 2.65 dB (median over same-model
+and -engine pairs, grouped by engine). Climbing rows take the typecode's
+takeoff-uplift correction, descending rows (level-flight flag and more than
+10 m segment altitude loss, past one 25-ft barometric step) the BVI approach
+correction, level rows the bare level correction. Traffic-weighted level SEL
+at 150 m is 83.1/84.4/89.7 dB for light/medium/heavy helicopters, against
+today's uniform 94.8. LAmax shifts with SEL (no certified LAmax exists), so
+scaled distance keeps the dipole limit. Reference speed stays at today's
+100 kt: the certificates carry no speed, and the ACRP 129 kt alternative
+moves ΔV by only ±1.1 dB. Gyroplanes take the light-class
+traffic-weighted prior. The typecode-to-EASA-model mapping is not verified
+against ICAO Doc 8643. This is a runtime model change: prepared rows valid.
+
 ## Aircraft local geometry
 
 Doc 29 keeps its receiver-latitude scale and infinite-line CPA. Both the

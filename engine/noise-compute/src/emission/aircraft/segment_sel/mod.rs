@@ -17,6 +17,9 @@ use super::npd::{
     noise_class_of, Installation, NpdLuts, CLASS_REP_PROFILE_IDX, PROFILES, REACH_SQ_TABLE,
 };
 use super::segment_filters::SegmentTerrain;
+use super::thrust::{
+    heli_correction_db, power_bracket, thrust_input_for_segment, thrust_model_for_class,
+};
 
 /// Compute SEL for a single aircraft segment at a receiver point.
 /// Returns (SEL_dB, CpaResult) or None if segment is too far / inaudible.
@@ -404,6 +407,18 @@ fn segment_kernel_with_overrides<
 
     let (inst_code, di_a, di_b, di_c) = delta_i_constants(anchor_profile.installation);
     let dv = delta_v(seg.speed_kt as f64, anchor_profile);
+    let (power_row, power_w) = power_bracket(
+        thrust_model_for_class(class_idx),
+        &thrust_input_for_segment(
+            seg,
+            start_alt_m,
+            end_alt_m,
+            terrain_start_cut_m,
+            terrain_end_cut_m,
+            f64::from(seg.departure_field_elev_m),
+        ),
+    );
+    let heli_db = heli_correction_db(seg.profile_idx, seg.is_departure, sdz);
 
     // Reach uses the same class anchor as the emission kernel.
     let reach_sq = REACH_SQ_TABLE[class_idx][seg.is_departure as usize];
@@ -424,6 +439,9 @@ fn segment_kernel_with_overrides<
             seg.is_departure,
             dv,
             inst_code,
+            power_row,
+            power_w,
+            heli_db,
             di_a,
             di_b,
             di_c,
@@ -450,6 +468,9 @@ fn segment_kernel_with_overrides<
             seg.is_departure,
             dv,
             inst_code,
+            power_row,
+            power_w,
+            heli_db,
             di_a,
             di_b,
             di_c,
@@ -487,6 +508,9 @@ pub struct SegmentPrepared {
     pub class_idx: usize,
     pub dv: f64,
     pub inst: Installation,
+    pub power_row: u8,
+    pub power_w: f64,
+    pub heli_db: f64,
     pub di_a: f64,
     pub di_b: f64,
     pub di_c: f64,
@@ -523,6 +547,18 @@ pub fn prepare_segment(
     let d_lon = wrapped_longitude_delta(seg.start_lon, seg.end_lon);
     let sdy = (seg.end_lat - seg.start_lat) * M_PER_DEG_LAT;
     let sdz = (seg.end_alt_m as f64) - (seg.start_alt_m as f64);
+    let (power_row, power_w) = power_bracket(
+        thrust_model_for_class(class_idx),
+        &thrust_input_for_segment(
+            seg,
+            seg.start_alt_m as f64,
+            seg.end_alt_m as f64,
+            terrain_start_cut_m,
+            terrain_end_cut_m,
+            f64::from(seg.departure_field_elev_m),
+        ),
+    );
+    let heli_db = heli_correction_db(seg.profile_idx, seg.is_departure, sdz);
 
     SegmentPrepared {
         start_lat: seg.start_lat,
@@ -535,6 +571,9 @@ pub fn prepare_segment(
         class_idx,
         dv,
         inst,
+        power_row,
+        power_w,
+        heli_db,
         di_a,
         di_b,
         di_c,
@@ -595,6 +634,9 @@ pub fn segment_sel_at_pixel(
         prepared.is_departure,
         prepared.dv,
         prepared.inst,
+        prepared.power_row,
+        prepared.power_w,
+        prepared.heli_db,
         prepared.di_a,
         prepared.di_b,
         prepared.di_c,
@@ -686,6 +728,9 @@ fn segment_sel_at_pixel_energy_inner(
         prepared.is_departure,
         prepared.dv,
         prepared.inst,
+        prepared.power_row,
+        prepared.power_w,
+        prepared.heli_db,
         prepared.di_a,
         prepared.di_b,
         prepared.di_c,

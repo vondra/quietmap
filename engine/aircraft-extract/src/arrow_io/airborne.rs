@@ -17,6 +17,16 @@ use crate::flight::{segment_flags, FlightSegment, Phase};
 
 use super::write_record_batches;
 
+/// Flight-dictionary encoding of the departure field: integer metres, with
+/// `i16::MIN` (below any terrain) for an unobserved takeoff roll.
+fn flight_field_elev_m(value: f32) -> Result<i16> {
+    if value.is_nan() {
+        Ok(i16::MIN)
+    } else {
+        super::height_meters(value)
+    }
+}
+
 /// Write the square's airborne sub-segments (`Phase::Airborne`, aircraft only,
 /// each no longer than `AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M` — the reader pad
 /// counts on it), stamped with the sampling window; flag bit 6 marks the
@@ -39,6 +49,7 @@ pub fn write_airborne(path: &Path, rows: &[FlightSegment], window: &SamplingWind
     let mut profile_idx = UInt8Builder::new();
     let mut source_id = UInt8Builder::new();
     let mut origin = UInt8Builder::new();
+    let mut field_elev = Int16Builder::new();
     let mut sgx = Int32Builder::with_capacity(n);
     let mut sgy = Int32Builder::with_capacity(n);
     let mut sal = Int16Builder::with_capacity(n);
@@ -81,6 +92,7 @@ pub fn write_airborne(path: &Path, rows: &[FlightSegment], window: &SamplingWind
             profile_idx.append_value(r.profile_idx);
             source_id.append_value(r.source_id);
             origin.append_value(r.origin);
+            field_elev.append_value(flight_field_elev_m(r.departure_field_elev_m)?);
         }
         flight_key.append_value(key);
         let mut bounds = [
@@ -134,6 +146,7 @@ pub fn write_airborne(path: &Path, rows: &[FlightSegment], window: &SamplingWind
             Arc::new(profile_idx.finish()),
             Arc::new(source_id.finish()),
             Arc::new(origin.finish()),
+            Arc::new(field_elev.finish()),
         ],
         None,
     );
@@ -187,6 +200,8 @@ mod tests {
         rows[2].callsign = "CSA1".into();
         rows[2].aircraft_type = *b"B738";
         rows[2].flags = segment_flags::IS_DEPARTURE | segment_flags::SYNTHETIC;
+        rows[0].departure_field_elev_m = 355.5;
+        rows[1].departure_field_elev_m = 355.5;
         write_airborne(&p, &rows, &crate::provider_receipt::window_of(1, 0)).unwrap();
         let (_, batches) = read_record_batches(&p).unwrap();
         assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
@@ -216,6 +231,12 @@ mod tests {
                 .as_any()
                 .downcast_ref::<FixedSizeBinaryArray>()
                 .unwrap();
+            let field_elev = identity
+                .column_by_name("departure_field_elev_m")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int16Array>()
+                .unwrap();
             let flags = batch
                 .column_by_name("flags")
                 .unwrap()
@@ -235,6 +256,7 @@ mod tests {
                     types.value(key).to_vec(),
                     flags.value(i),
                     t_start.value(i),
+                    field_elev.value(key),
                 ));
             }
         }
@@ -242,9 +264,9 @@ mod tests {
         assert_eq!(
             seen,
             [
-                ("CSA1".to_string(), b"B738".to_vec(), 1, 250),
-                ("TVS100P".to_string(), b"A320".to_vec(), 0, 250),
-                ("TVS100P".to_string(), b"A320".to_vec(), 0, 250),
+                ("CSA1".to_string(), b"B738".to_vec(), 1, 250, i16::MIN),
+                ("TVS100P".to_string(), b"A320".to_vec(), 0, 250, 356),
+                ("TVS100P".to_string(), b"A320".to_vec(), 0, 250, 356),
             ]
         );
     }

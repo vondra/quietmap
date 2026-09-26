@@ -11,6 +11,54 @@ use crate::propagation::obstacle_index::{
 use crate::sources::AIRCRAFT_ADSB_SOURCE_ID;
 use crate::types::default_receiver_altitude_m;
 
+/// Helicopter climb/level/descent states route to the EASA-certified curves
+/// end to end: three symmetric EC35 rows over one overhead receiver differ by
+/// the certification uplifts (takeoff +3.4, BVI approach +8.7 dB).
+/// Propeller installation zeroes ΔI and the ±11 m symmetric altitudes keep
+/// the slant/ΔF spread inside ±0.5 dB; the descent row sits just past the
+/// −10 m BVI gate, so a gate change fails loudly here.
+#[test]
+fn heli_states_differ_by_certification_uplifts() {
+    let row = |is_departure: bool, end_alt_m: f32| AircraftSegment {
+        flight_id: 1,
+        profile_idx: crate::emission::aircraft::profile_idx("EC35"),
+        is_departure,
+        on_ground: false,
+        period: 0,
+        date_id: 0,
+        start_lat: 50.0,
+        start_lon: 14.0,
+        start_alt_m: 150.0,
+        end_lat: 50.0045,
+        end_lon: 14.0,
+        end_alt_m,
+        speed_kt: 100.0,
+        segment_length_m: 500.0,
+        departure_field_elev_m: f32::NAN,
+        ground_context: GROUND_CONTEXT_NONE,
+        ground_ops_kind: GROUND_OPS_KIND_NONE,
+        count_weight: 1.0,
+        surface_model: false,
+        source_id: AIRCRAFT_ADSB_SOURCE_ID,
+    };
+    let sel = |seg: &AircraftSegment| {
+        segment_sel(seg, 50.00225, 14.0, 0.0, &FlatGround)
+            .expect("overhead heli row should compute")
+            .0
+    };
+    let level = sel(&row(false, 150.0));
+    let descent = sel(&row(false, 139.0));
+    let climb = sel(&row(true, 161.0));
+    assert!(
+        (descent - level - 8.7).abs() < 0.5,
+        "descent {descent:.2} vs level {level:.2}"
+    );
+    assert!(
+        (climb - level - 3.4).abs() < 0.5,
+        "climb {climb:.2} vs level {level:.2}"
+    );
+}
+
 struct FlatGround;
 
 impl RasterSampler for FlatGround {
@@ -42,6 +90,7 @@ fn test_segment_sel_b738_approach() {
         end_alt_m: 900.0,
         speed_kt: 150.0,
         segment_length_m: 1100.0,
+        departure_field_elev_m: f32::NAN,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -76,6 +125,7 @@ fn test_segment_sel_far_away() {
         end_alt_m: 10000.0,
         speed_kt: 250.0,
         segment_length_m: 1100.0,
+        departure_field_elev_m: f32::NAN,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -103,6 +153,7 @@ fn test_airport_ground_sel_recovers_bad_altitude() {
         end_alt_m: 200.0,
         speed_kt: 35.0,
         segment_length_m: 90.0,
+        departure_field_elev_m: f32::NAN,
         ground_context: GROUND_CONTEXT_AIRPORT_LINE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -145,6 +196,7 @@ fn test_ground_ops_model_avoids_doc29_near_field_extrapolation() {
         end_alt_m: 0.0,
         speed_kt: 70.0,
         segment_length_m: 650.0,
+        departure_field_elev_m: f32::NAN,
         ground_context: GROUND_CONTEXT_AIRPORT_LINE,
         ground_ops_kind: 1, // RUNWAY_ROLL
         count_weight: 1.0,
@@ -183,6 +235,7 @@ fn hoisted_matches_segment_sel_with_cuts() {
         end_alt_m: 1700.0,
         speed_kt: 220.0,
         segment_length_m: 4500.0,
+        departure_field_elev_m: f32::NAN,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -262,8 +315,12 @@ fn display_clamp_does_not_touch_sel() {
         end_lat: 50.1711,
         end_lon: 14.4204,
         end_alt_m: 1532.0,
-        speed_kt: 180.0,
+        // 100 kt (not 180): steep-climb thrust interpolates below the max
+        // NPD row, so the phantom needs the +2.5 dB ΔV to stay above the
+        // 20 dB event floor (sel 22.0, geometry and assertions unchanged).
+        speed_kt: 100.0,
         segment_length_m: 131.0,
+        departure_field_elev_m: f32::NAN,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -332,6 +389,7 @@ fn c2_level_segment(lateral_m: f64, alt_m: f32) -> AircraftSegment {
         end_alt_m: alt_m,
         speed_kt: 160.0,
         segment_length_m: 6670.0,
+        departure_field_elev_m: f32::NAN,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -524,6 +582,7 @@ fn building_ray_stops_at_the_finite_subsegment_endpoint() {
         end_alt_m: 330.0,
         speed_kt: 160.0,
         segment_length_m: 1_000.0,
+        departure_field_elev_m: f32::NAN,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -843,6 +902,7 @@ fn reach_gate_matches_kernel_rejection() {
                         end_alt_m: rep_alt_m,
                         speed_kt: 450.0,
                         segment_length_m: rep_len_m as f32,
+                        departure_field_elev_m: f32::NAN,
                         count_weight: 1.0,
                         surface_model: false,
                         ground_context: crate::emission::aircraft::GROUND_CONTEXT_NONE,

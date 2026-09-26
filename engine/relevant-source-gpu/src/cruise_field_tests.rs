@@ -372,7 +372,7 @@ mod gpu_parity {
 
     #[test]
     fn layouts_match_the_cuda_static_asserts() {
-        assert_eq!(std::mem::size_of::<gpu::DeviceCruiseSource>(), 152);
+        assert_eq!(std::mem::size_of::<gpu::DeviceCruiseSource>(), 176);
         assert_eq!(std::mem::size_of::<gpu::DeviceCruiseReceiver>(), 40);
     }
 

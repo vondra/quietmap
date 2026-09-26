@@ -17,6 +17,9 @@ pub struct AirborneFlightTable<'a> {
     pub profile_idx: &'a [u8],
     pub source_id: &'a [u8],
     pub origin: &'a [u8],
+    /// Departure field elevation in metres per flight; `i16::MIN` means the
+    /// takeoff roll was not observed.
+    pub departure_field_elev_m: &'a [i16],
 }
 
 impl AirborneFlightTable<'_> {
@@ -100,6 +103,7 @@ impl AirborneSegmentBatch<'_> {
         [end_lat, end_lon]: [f32; 2],
     ) -> crate::types::AircraftSegment {
         let key = self.flight_key[i] as usize;
+        let field_elev = self.flights.departure_field_elev_m[key];
         crate::types::AircraftSegment {
             flight_id: self.flight_id[i],
             profile_idx: self.flights.profile_idx[key],
@@ -115,6 +119,11 @@ impl AirborneSegmentBatch<'_> {
             end_alt_m: f32::from(self.end_alt_m[i]),
             speed_kt: self.speed_kt[i],
             segment_length_m: self.length_m[i],
+            departure_field_elev_m: if field_elev == i16::MIN {
+                f32::NAN
+            } else {
+                f32::from(field_elev)
+            },
             count_weight: 1.0,
             surface_model: false,
             ground_context: crate::emission::aircraft::GROUND_CONTEXT_NONE,

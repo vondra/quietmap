@@ -16,7 +16,7 @@ use crate::flight::{typecode_bytes, Flight, FlightSegment};
 use crate::ground_inference::ground_flags;
 use crate::period::parse_date_id;
 use crate::progress::{finished, started, Milestone};
-use crate::segment::{build_segments, SegmentMeta};
+use crate::segment::{build_segments, suppress_covered_secondary_points, SegmentMeta};
 use raster_reader::{CheckedRasters, RealRasters};
 
 /// Run Stage 1 for one day. Reads `input_dir/<day>.arrow`, writes
@@ -62,6 +62,19 @@ pub fn run_stage_1(
         ),
     );
     Ok(segments.len())
+}
+
+/// Departure field elevation of one flight: the terrain under its takeoff
+/// roll — the leg's first point when that point is on the ground — or NaN
+/// when the roll was not observed (overflights, coverage gaps at the
+/// airport). Computed before secondary suppression, which never moves the
+/// first point.
+fn departure_field_elev_m(ground_flags: &[bool], elev_m: &[f32]) -> f32 {
+    if ground_flags.first() == Some(&true) {
+        elev_m[0]
+    } else {
+        f32::NAN
+    }
 }
 
 fn stage_1_one_flight(
@@ -110,10 +123,21 @@ fn stage_1_one_flight(
     }
 
     let g_flags = ground_flags(&points, &agl_m);
-    let phases = classify::classify_points(ClassifyInput {
+    let departure_field_elev_m = departure_field_elev_m(&g_flags, &elev_m);
+    let mut phases = classify::classify_points(ClassifyInput {
         on_ground: &g_flags,
         agl_m: &agl_m,
     });
+    // With DEM phases known, secondary samples inside a primary pair Stage 1
+    // will actually join add no coverage; dropping them here keeps the
+    // stretch on the baseline estimator instead of the noisier increment one.
+    suppress_covered_secondary_points(
+        &mut points,
+        &mut agl_m,
+        &mut elev_m,
+        &mut phases,
+        flight.profile_idx,
+    );
 
     let meta = SegmentMeta {
         flight_id: flight.flight_id,
@@ -125,6 +149,7 @@ fn stage_1_one_flight(
         veh_kind: flight.veh_kind,
         gse_class: flight.gse_class,
         date_id,
+        departure_field_elev_m,
     };
     let segments = build_segments(&points, &agl_m, &elev_m, &phases, &meta);
     // K3 + tightening: chord q1/mid/q3 check from the v15 popup is
@@ -136,31 +161,11 @@ fn stage_1_one_flight(
     // the Praha-150km scope, revisit for global extracts. The
     // jet 150 m AGL floor (popup `segment_filters.rs:252-255`) is
     // not at Stage 1 either — moves to Stage 2A where the resolved
-    // aerodrome centroid is available.
-    Ok(segments
-        .into_iter()
-        .filter(airborne_endpoints_above_terrain)
-        .collect())
-}
-
-/// Endpoint AGL ≥ −30 m gate. Catches Mode-S altitude decode errors
-/// and "transponder on but aircraft already landed somewhere unmapped"
-/// leakage. Ground-flagged segments bypass — they re-enter through
-/// Stage 2C ground ops. The popup's airport-context bypass
-/// (`segment_filters.rs:219` `ground_context != GROUND_CONTEXT_NONE`)
-/// is NOT mirrored — that field is resolved per-receiver at Stage 2A.
-/// The −30 m slack absorbs DEM error near runways and sub-sea airports
-/// (AMS −4 m, Atyrau −22 m). NaN-bearing endpoints drop here
-/// (popup kept them under `<` semantics, but NaN propagation downstream
-/// is worse than early drop).
-fn airborne_endpoints_above_terrain(seg: &crate::flight::FlightSegment) -> bool {
-    use crate::flight::{segment_flags, Phase};
-    if seg.phase == Phase::Ground || (seg.flags & segment_flags::ON_GROUND) != 0 {
-        return true;
-    }
-    let start_agl = (seg.start_alt_m - seg.start_elev_m) as f64;
-    let end_agl = (seg.end_alt_m - seg.end_elev_m) as f64;
-    start_agl >= -30.0 && end_agl >= -30.0
+    // aerodrome centroid is available. The popup's airport-context
+    // bypass (`segment_filters.rs:219`
+    // `ground_context != GROUND_CONTEXT_NONE`) is NOT mirrored either —
+    // that field is resolved per-receiver at Stage 2A.
+    Ok(segments)
 }
 
 #[path = "stage_1/flight_reader.rs"]

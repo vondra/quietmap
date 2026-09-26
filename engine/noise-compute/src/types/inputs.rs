@@ -208,6 +208,9 @@ pub struct AircraftSegment {
     pub end_alt_m: f32,
     pub speed_kt: f32,
     pub segment_length_m: f32,
+    /// Terrain under the flight's takeoff roll (m); NaN when the roll was not
+    /// observed. The Doc 29 cutback gate compares height above this field.
+    pub departure_field_elev_m: f32,
     pub count_weight: f32, // 1.0 = one observed flight segment; >1 = synthetic aggregated operations
     pub surface_model: bool, // synthetic airport-surface model contribution
     pub ground_context: u8, // 0=none, 1=airport_line

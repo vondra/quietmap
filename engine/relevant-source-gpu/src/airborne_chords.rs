@@ -12,8 +12,8 @@ use std::collections::HashMap;
 #[derive(Clone, Copy)]
 pub(crate) struct ChordSource {
     pub endpoints: [f32; 4],
-    pub physical: [f64; 11],
-    pub identity: [i32; 5],
+    pub physical: [f64; 13],
+    pub identity: [i32; 6],
 }
 
 impl ChordSource {
@@ -42,9 +42,11 @@ impl ChordSource {
                 prepared.reach_sq,
                 prepared.terrain_start_cut_m,
                 prepared.terrain_end_cut_m,
+                prepared.power_w,
+                prepared.heli_db,
             ],
             // Stale ground pieces remain in the graph, but can never be accepted.
-            identity: checked.map_or([0, -1, 0, 0, 0], |source| source.identity),
+            identity: checked.map_or([0, -1, 0, 0, 0, 0], |source| source.identity),
         })
     }
 }

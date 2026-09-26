@@ -212,7 +212,20 @@ pub(super) fn evaluate_row<const FLOOR: bool>(
     let (disp_dist, disp_alt) = aircraft::clamped_display_cpa(&cpa, sdz);
     // log2 × LOG10_2 ≡ log10 at f64; matches the kernel's NPD-lookup idiom.
     let log_d = (disp_dist * aircraft::FT_PER_M).max(100.0).log2() * std::f64::consts::LOG10_2;
-    let lmax = ctx.npd_luts.lookup_lmax(class_idx, seg.is_departure, log_d);
+    let thrust = aircraft::thrust_input_for_segment(
+        &seg,
+        seg.start_alt_m as f64,
+        seg.end_alt_m as f64,
+        start_elev - 30.0,
+        end_elev - 30.0,
+        f64::from(seg.departure_field_elev_m),
+    );
+    let (power_row, power_w) =
+        aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust);
+    let lmax = ctx
+        .npd_luts
+        .lookup_lmax(class_idx, seg.is_departure, power_row, power_w, log_d)
+        + aircraft::heli_correction_db(seg.profile_idx, seg.is_departure, sdz);
     Some(RowKernel {
         period: (seg.period.min(2)) as usize,
         energy: energy_for_sel(kernel.sel),

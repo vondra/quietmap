@@ -17,7 +17,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 use noise_compute::compute::aircraft_v6::cruise::cruise_heading_bin;
-use noise_compute::emission::aircraft::{NpdLuts, SamplingWindow, FT_PER_M};
+use noise_compute::emission::aircraft::{
+    thrust_model_for_class, NpdLuts, SamplingWindow, FT_PER_M,
+};
 use rayon::prelude::*;
 
 use crate::arrow_io::{for_each_cruise_spill, write_cruise, write_cruise_spill, CruiseSpillRow};

@@ -89,6 +89,8 @@ pub fn cruise_segment(
         end_alt_m: row.rep_alt_m,
         speed_kt: row.rep_speed_kt,
         segment_length_m: length_m as f32,
+        // Buckets aggregate many flights; cutback never fires at cruise altitudes anyway.
+        departure_field_elev_m: f32::NAN,
         count_weight: density as f32,
         surface_model: false,
         ground_context: aircraft::GROUND_CONTEXT_NONE,
@@ -221,7 +223,19 @@ pub fn scatter(
         // (ΔF needs the infinite-line `q_m`).
         let (disp_dist, disp_alt) = aircraft::clamped_display_cpa(&cpa, 0.0);
         let log_d = (disp_dist * aircraft::FT_PER_M).max(100.0).log10();
-        let lmax = npd_luts.lookup_lmax(class_idx, true, log_d);
+        let thrust = aircraft::thrust_input_for_segment(
+            &seg,
+            seg.start_alt_m as f64,
+            seg.end_alt_m as f64,
+            terrain.start_elev - 30.0,
+            terrain.end_elev - 30.0,
+            f64::from(seg.departure_field_elev_m),
+        );
+        let (power_row, power_w) =
+            aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust);
+        // Cruise rep-segments are level, so the heli descent gate never fires.
+        let lmax = npd_luts.lookup_lmax(class_idx, true, power_row, power_w, log_d)
+            + aircraft::heli_correction_db(seg.profile_idx, true, 0.0);
         if lmax > acc.peak_lmax {
             acc.peak_lmax = lmax;
             acc.peak_sel = sel;

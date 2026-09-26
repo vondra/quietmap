@@ -13,7 +13,7 @@ class ExposureDays(NamedTuple):
 
 
 def resolve_anchor(month: str | None, today: date) -> date:
-    """The first day after the window; the default is this month, so the window ends yesterday."""
+    """The first day after the window; the default is this month, so the window ends on the last day of the previous month."""
     if month is None:
         anchor = today.replace(day=1)
     else:

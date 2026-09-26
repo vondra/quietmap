@@ -13,10 +13,12 @@ pub const AIRBORNE_REDUCTION_ROWS: usize = 8192;
 #[derive(Clone, Copy, Debug)]
 pub struct DeviceAirborneSource {
     pub endpoints: [f32; 4],
-    pub physical: [f32; 11],
+    /// start_alt, d_lon, sdy, sdz, dv, di_a, di_b, di_c, reach_sq, cuts,
+    /// then the Eq. 4-3 power weight [11] and the helicopter correction [12].
+    pub physical: [f32; 13],
     /// Installation, class, departure, period, secondary-only provenance
-    /// (the index into the two-entry provenance weight table).
-    pub identity: [i32; 5],
+    /// (the index into the two-entry provenance weight table), power row.
+    pub identity: [i32; 6],
 }
 impl DeviceAirborneSource {
     pub fn prepare(batch: &AirborneSegmentBatch<'_>, i: usize) -> Result<Option<Self>> {
@@ -53,6 +55,8 @@ impl DeviceAirborneSource {
                 p.reach_sq as f32,
                 p.terrain_start_cut_m as f32,
                 p.terrain_end_cut_m as f32,
+                p.power_w as f32,
+                p.heli_db as f32,
             ],
             identity: [
                 match p.inst {
@@ -64,6 +68,7 @@ impl DeviceAirborneSource {
                 i32::from(p.is_departure),
                 i32::from(segment.period),
                 i32::from(batch.flags[i] & air::SEGMENT_FLAG_SECONDARY_ONLY != 0),
+                i32::from(p.power_row),
             ],
         };
         ensure!(

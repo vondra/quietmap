@@ -34,6 +34,7 @@ fn segments(day: &str, id: u64) -> Vec<FlightSegment> {
             agl_avg_m: 11_000.0,
             start_elev_m: 0.0,
             end_elev_m: 0.0,
+            departure_field_elev_m: f32::NAN,
         })
         .collect()
 }

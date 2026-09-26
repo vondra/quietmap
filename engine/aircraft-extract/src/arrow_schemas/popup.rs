@@ -4,6 +4,8 @@ use super::*;
 
 /// Values of the `flight` dictionary column: one entry per distinct
 /// `flight_id` of the file. Hex, start time and date derive from the id.
+/// `departure_field_elev_m` is integer metres of the terrain under the
+/// flight's takeoff roll, `i16::MIN` when the roll was not observed.
 pub fn airborne_flight_fields() -> Fields {
     Fields::from(vec![
         Field::new("callsign", DataType::Utf8, false),
@@ -11,6 +13,7 @@ pub fn airborne_flight_fields() -> Fields {
         Field::new("profile_idx", DataType::UInt8, false),
         Field::new("source_id", DataType::UInt8, false),
         Field::new("origin", DataType::UInt8, false),
+        Field::new("departure_field_elev_m", DataType::Int16, false),
     ])
 }
 

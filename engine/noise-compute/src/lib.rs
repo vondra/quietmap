@@ -908,6 +908,7 @@ mod tests {
                 profile_idx: &vec![0u8; n_flights],
                 source_id: &vec![AIRCRAFT_ADSB_SOURCE_ID as u8; n_flights],
                 origin: &vec![0u8; n_flights],
+                departure_field_elev_m: &vec![i16::MIN; n_flights],
             },
             start_gy: &start_gy,
             start_gx: &start_gx,

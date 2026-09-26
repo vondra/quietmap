@@ -334,6 +334,7 @@ mod tests {
                 profile_idx: &profile,
                 source_id: &zero_u8,
                 origin: &zero_u8,
+                departure_field_elev_m: &vec![i16::MIN; N_FLIGHTS],
             },
             start_gy: &start_gy,
             start_gx: &start_gx,

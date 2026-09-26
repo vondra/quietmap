@@ -309,3 +309,108 @@ fn test_as_prefix_helicopters_still_ec35() {
         "IAI Astra is a bizjet"
     );
 }
+
+/// Doc 29 Eq. 4-3 headline check: B738 at 3,000 ft AFE after cutback
+/// (MaxClimb Fn/δ 18,093 lb, rows 16,000/19,000 lb, w 0.6977) reads
+/// 93.77 dB SEL at 1,000 ft — not the 99.3 dB max-thrust row.
+#[test]
+fn test_b738_cutback_interpolation_reads_93_77_db() {
+    use crate::emission::aircraft::thrust::{bracket_power, thrust_model_for_class};
+    let class = noise_class_of(profile_idx("B738")) as usize;
+    let model = thrust_model_for_class(class);
+    let (row, w) = bracket_power(&model.dep_power, model.dep_rows, 18_093.0);
+    assert_eq!((row, (w * 10_000.0).round() as u32), (2, 6977));
+    let sel = NpdLuts::shared().lookup(class, true, row, w, 1000.0_f64.log10());
+    assert!(
+        (sel - 93.77).abs() < 0.06,
+        "B738 cutback SEL@1000ft = {sel}"
+    );
+    let max_row =
+        NpdLuts::shared().lookup(class, true, model.dep_rows - 1, 0.0, 1000.0_f64.log10());
+    assert!(
+        (max_row - 99.3).abs() < 0.06,
+        "B738 max-row SEL@1000ft = {max_row}"
+    );
+}
+
+/// Cross-check between the two generators: every thrust class's edge power
+/// rows must reproduce the ANP merge already checked into PROFILES (max
+/// departure row = `departure_sel`, min approach row = `approach_sel`).
+/// A wrong ACFT_ID/NPD_ID in the thrust generator fails here at dB scale;
+/// the 0.1 dB tolerance is LUT bin sag only (worst at the 25,000 ft edge).
+#[test]
+fn test_power_row_edges_reproduce_anchor_curves() {
+    use crate::emission::aircraft::thrust::thrust_model_for_class;
+    let luts = NpdLuts::shared();
+    for class in 0..NUM_CLASSES {
+        let model = thrust_model_for_class(class);
+        if !model.has_thrust {
+            continue;
+        }
+        let anchor = &PROFILES[CLASS_REP_PROFILE_IDX[class] as usize];
+        for (node, curve) in NPD_DIST_FT.iter().zip(anchor.departure_sel.iter()) {
+            let actual = luts.lookup(class, true, model.dep_rows - 1, 0.0, node.log10());
+            assert!(
+                (actual - curve).abs() < 0.1,
+                "{} dep edge @ {node} ft: {actual} vs {curve}",
+                model.class_name
+            );
+        }
+        for (node, curve) in NPD_DIST_FT.iter().zip(anchor.approach_sel.iter()) {
+            let actual = luts.lookup(class, false, 0, 0.0, node.log10());
+            assert!(
+                (actual - curve).abs() < 0.1,
+                "{} app edge @ {node} ft: {actual} vs {curve}",
+                model.class_name
+            );
+        }
+    }
+}
+
+/// Pinned classes (fallback, piston, turboprop, helicopter) read their
+/// anchor curve at row 0: bit-identical to the pre-thrust LUT at bin
+/// centers (frac = 0 takes the exact bin value).
+#[test]
+fn test_pinned_rows_match_anchor_lut_bit_for_bit() {
+    use crate::emission::aircraft::thrust::thrust_model_for_class;
+    let luts = NpdLuts::shared();
+    for class in 0..NUM_CLASSES {
+        if thrust_model_for_class(class).has_thrust {
+            continue;
+        }
+        let anchor = &PROFILES[CLASS_REP_PROFILE_IDX[class] as usize];
+        for departure in [false, true] {
+            for bin in [0, 1, 64, 127, 128] {
+                let log_d = NPD_LUT_LOG_MIN + bin as f64 * NPD_LUT_STEP;
+                assert_eq!(
+                    luts.lookup(class, departure, 0, 0.0, log_d),
+                    interpolate_sel_logd(anchor, log_d, departure),
+                    "class {class} dep={departure} bin {bin}"
+                );
+            }
+        }
+    }
+}
+
+/// Reach envelopes the loudest power row per operation: departure reach is
+/// unchanged (max row = today's curve), approach reach grows (min row →
+/// loudest approach row) so interpolated approach segments never gate out.
+#[test]
+fn test_reach_envelopes_loudest_power_row() {
+    use crate::emission::aircraft::thrust::thrust_model_for_class;
+    for class in 0..NUM_CLASSES {
+        let anchor = &PROFILES[CLASS_REP_PROFILE_IDX[class] as usize];
+        let model = thrust_model_for_class(class);
+        let old_dep = anchor.estimate_reach_m(AIRCRAFT_NPD_REACH_THRESHOLD_DB, true);
+        let old_app = anchor.estimate_reach_m(AIRCRAFT_NPD_REACH_THRESHOLD_DB, false);
+        let new_dep = REACH_SQ_TABLE[class][1].sqrt();
+        let new_app = REACH_SQ_TABLE[class][0].sqrt();
+        if model.has_thrust {
+            assert_eq!(new_dep, old_dep, "{} dep reach moved", model.class_name);
+            assert!(new_app >= old_app, "{} app reach shrank", model.class_name);
+        } else {
+            assert_eq!(new_dep, old_dep, "{} dep reach moved", model.class_name);
+            assert_eq!(new_app, old_app, "{} app reach moved", model.class_name);
+        }
+    }
+}

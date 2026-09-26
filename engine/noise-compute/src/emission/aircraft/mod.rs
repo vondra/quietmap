@@ -29,6 +29,8 @@
 //! * [`support`] — the periodic receiver envelope every airborne gate shares.
 //! * [`sampling_window`] — baseline/increment day stamps and the two-entry
 //!   provenance weight every aircraft consumer applies.
+//! * [`thrust`] — thrust-dependent NPD power brackets (Doc 29 Eq. 4-3/B-1/B-12)
+//!   and helicopter certification corrections.
 
 mod doc29;
 mod ground_ops;
@@ -39,6 +41,7 @@ mod screening;
 mod segment_filters;
 mod segment_sel;
 mod support;
+mod thrust;
 
 pub use doc29::*;
 pub(crate) use ground_ops::*;
@@ -49,3 +52,4 @@ pub use screening::*;
 pub use segment_filters::*;
 pub use segment_sel::*;
 pub use support::*;
+pub use thrust::*;

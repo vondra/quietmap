@@ -139,10 +139,13 @@ fn compare(pieces: &[Piece], receiver_lon: f64) -> Result<Vec<f32>> {
 
 #[test]
 fn chord_event_floor_is_after_piece_sum() -> Result<()> {
+    // 12–17 km (not 11–16): level-approach thrust interpolates above the old
+    // min NPD row, so the floor boundary moved ~1 km out (mirrors the CPU
+    // split_chord_takes_the_event_floor_as_one_event fixture).
     let start = airborne::CHORD_START;
-    let together = compare(&[(11.0, 13.5, 50, start, 42), (13.5, 16.0, 50, 0, 42)], 0.0)?;
+    let together = compare(&[(12.0, 14.5, 50, start, 42), (14.5, 17.0, 50, 0, 42)], 0.0)?;
     let separate = compare(
-        &[(11.0, 13.5, 50, start, 42), (13.5, 16.0, 50, start, 42)],
+        &[(12.0, 14.5, 50, start, 42), (14.5, 17.0, 50, start, 42)],
         0.0,
     )?;
     assert!(together[..3].iter().any(|v| *v > 0.0));
@@ -203,8 +206,8 @@ fn chord_reduction_spans_parts_and_keeps_period_weights() -> Result<()> {
         })
         .collect();
     compare(&pieces, 0.0)?;
-    assert_eq!(std::mem::size_of::<ChordSource>(), 128);
+    assert_eq!(std::mem::size_of::<ChordSource>(), 144);
     assert_eq!(std::mem::offset_of!(ChordSource, physical), 16);
-    assert_eq!(std::mem::offset_of!(ChordSource, identity), 104);
+    assert_eq!(std::mem::offset_of!(ChordSource, identity), 120);
     Ok(())
 }

@@ -90,6 +90,19 @@ pub fn header() -> String {
         line.split_once('=').unwrap().1.trim().trim_end_matches(';')
     )
     .unwrap();
+    let thrust = "../noise-compute/src/emission/aircraft/thrust.rs";
+    println!("cargo:rerun-if-changed={thrust}");
+    let source = fs::read_to_string(thrust).expect("canonical power rows");
+    let line = source
+        .lines()
+        .find(|line| line.contains("const MAX_POWER_ROWS:"))
+        .unwrap();
+    writeln!(
+        out,
+        "#define NPD_NR {}",
+        line.split_once('=').unwrap().1.trim().trim_end_matches(';')
+    )
+    .unwrap();
     out
 }
 

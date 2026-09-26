@@ -1,66 +1,16 @@
-//! Terrain endpoint gates and optional real-source integration.
+//! Optional real-source integration (the terrain endpoint gate moved into
+//! `segment::pair_segment_phase` and is pinned there).
 use super::*;
-use crate::flight::{segment_flags, FlightSegment, Phase};
 use crate::source_adsb_tar::AdsbTarSource;
 use tempfile::tempdir;
 
-fn airborne_seg(start_alt: f32, start_elev: f32, end_alt: f32, end_elev: f32) -> FlightSegment {
-    FlightSegment {
-        flight_id: 0,
-        callsign: String::new(),
-        aircraft_type: [0; 4],
-        profile_idx: 0,
-        source_id: 0,
-        origin: 0,
-        veh_kind: 0,
-        gse_class: 0,
-        period: 0,
-        date_id: 0,
-        phase: Phase::Airborne,
-        flags: 0,
-        start_lat: 50.0,
-        start_lon: 14.0,
-        start_alt_m: start_alt,
-        end_lat: 50.0,
-        end_lon: 14.01,
-        end_alt_m: end_alt,
-        speed_kt: 100.0,
-        length_m: 700.0,
-        agl_avg_m: ((start_alt + end_alt) * 0.5) - ((start_elev + end_elev) * 0.5),
-        start_elev_m: start_elev,
-        end_elev_m: end_elev,
-    }
-}
-
+/// The departure field is the terrain under the leg's first point when it is
+/// on the ground; a leg first seen airborne carries no field.
 #[test]
-fn endpoints_above_terrain_drops_underground_airborne() {
-    // Endpoint 100 m below terrain — transponder spike, should drop.
-    let seg = airborne_seg(500.0, 600.0, 500.0, 500.0);
-    assert!(!airborne_endpoints_above_terrain(&seg));
-}
-
-#[test]
-fn endpoints_above_terrain_keeps_minus_30_boundary() {
-    // Exactly at -30 m AGL on both endpoints — inclusive boundary
-    // pins behavior against a future `>` rewrite that would flip it.
-    let seg = airborne_seg(470.0, 500.0, 470.0, 500.0);
-    assert!(airborne_endpoints_above_terrain(&seg));
-}
-
-#[test]
-fn endpoints_above_terrain_bypasses_on_ground_flag() {
-    // ON_GROUND flag wins even when AGL nominally fails.
-    let mut seg = airborne_seg(0.0, 500.0, 0.0, 500.0);
-    seg.flags |= segment_flags::ON_GROUND;
-    assert!(airborne_endpoints_above_terrain(&seg));
-}
-
-#[test]
-fn endpoints_above_terrain_bypasses_ground_phase() {
-    // `Phase::Ground` wins even when AGL nominally fails.
-    let mut seg = airborne_seg(0.0, 500.0, 0.0, 500.0);
-    seg.phase = Phase::Ground;
-    assert!(airborne_endpoints_above_terrain(&seg));
+fn departure_field_is_the_takeoff_roll_terrain_or_unknown() {
+    assert_eq!(departure_field_elev_m(&[true, false], &[355.5, 360.0]), 355.5);
+    assert!(departure_field_elev_m(&[false, false], &[355.5, 360.0]).is_nan());
+    assert!(departure_field_elev_m(&[], &[]).is_nan());
 }
 
 /// Skips unless QM_FLIGHTS_CACHE (radius cache with 2025/2025-01-21) and

@@ -18,11 +18,11 @@ pub const ADMISSION_FILE: &str = "admission.json";
 
 /// A provider-day is complete only when every UTC hour shows at least this
 /// share of the provider's median aircraft count for that hour over the
-/// requested days. W5 hourly receipts 2026-09-24 (`evidence/hourly-receipts.json`,
-/// adsb.lol): a broken export falls to 0 (2026-05-07 00–17 UTC) or to
-/// 0.067–0.075 of the previous day (2026-08-01 16–23 UTC), while the most
-/// distant complete days, 2026-02-01 against 2026-07-31, stay at 0.52–0.90
-/// hour by hour; against a whole-year median the seasonal spread is smaller.
+/// requested days. W5 hourly receipts 2026-09-24 (adsb.lol): a broken export
+/// falls to 0 (2026-05-07 00–17 UTC) or to 0.067–0.075 of the previous day
+/// (2026-08-01 16–23 UTC), while the most distant complete days, 2026-02-01
+/// against 2026-07-31, stay at 0.52–0.90 hour by hour; against a whole-year
+/// median the seasonal spread is smaller.
 pub const HOURLY_AIRCRAFT_MIN_SHARE_OF_MEDIAN: f64 = 0.5;
 
 /// Content of one provider's archive for one UTC day.
@@ -91,6 +91,19 @@ impl DayReceipt {
             secondary: None,
             merge: MergeCounts::default(),
         }
+    }
+
+    /// True when Stage 0 merged secondary content into this day's flights but
+    /// admission rejected it as an increment day: the flights must be
+    /// rewritten from the primary archive alone, or the interleaved secondary
+    /// points split primary chords into `SECONDARY_ONLY` segments that
+    /// shuffle drops while the suppressed `~` echoes stay deleted. A merge
+    /// that kept no secondary content is already primary-only and needs no
+    /// rewrite, which also makes the repair idempotent.
+    pub fn needs_primary_only_rewrite(&self, increment_days: &BTreeSet<String>) -> bool {
+        !increment_days.contains(&self.day)
+            && self.secondary.is_some()
+            && (self.merge.secondary_points_kept > 0 || self.merge.secondary_only_addresses > 0)
     }
 }
 

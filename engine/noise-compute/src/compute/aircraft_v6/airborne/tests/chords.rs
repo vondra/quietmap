@@ -65,6 +65,8 @@ fn received_sel_db(flights: &HashMap<u64, FlightAccum>, fid: u64) -> f64 {
 }
 
 /// A distant low B738 approach clears 20 dB only when its pieces are summed.
+/// The chord sits at 12–17 km (not 11–16): level-approach thrust interpolates
+/// above the old min NPD row, so the floor boundary moved ~1 km out.
 #[test]
 fn split_chord_takes_the_event_floor_as_one_event() {
     let (receiver, horizon) = equator_receiver();
@@ -72,10 +74,10 @@ fn split_chord_takes_the_event_floor_as_one_event() {
     let fid = flight_id::pack_real(0xB738, 1_750_000_000).unwrap();
     let mut whole = SynthColumns::new();
     let key = whole.add_flight("CSA1", "B738", aircraft::profile_idx("B738"));
-    equator_chord(&mut whole, fid, key, 11.0, 16.0, 50, 250.0, false, 1);
+    equator_chord(&mut whole, fid, key, 12.0, 17.0, 50, 250.0, false, 1);
     let mut split = SynthColumns::new();
     let key = split.add_flight("CSA1", "B738", aircraft::profile_idx("B738"));
-    equator_chord(&mut split, fid, key, 11.0, 16.0, 50, 250.0, false, 2);
+    equator_chord(&mut split, fid, key, 12.0, 17.0, 50, 250.0, false, 2);
     let run = |cols: &SynthColumns| {
         scatter(
             &receiver,

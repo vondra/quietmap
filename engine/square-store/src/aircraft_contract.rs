@@ -2,7 +2,9 @@
 
 pub const SCHEMA_VERSION: &str = "v16";
 /// v3: baseline/increment sampling window stamps; flag bit 6 marks secondary-only rows.
-pub const AIRBORNE_CONTRACT: &str = "airborne_segments_z9_v3";
+/// v4: the flight dictionary also carries the departure field elevation
+/// (integer metres, `i16::MIN` when the takeoff roll was not observed).
+pub const AIRBORNE_CONTRACT: &str = "airborne_segments_z9_v4";
 /// v3: baseline/increment sampling window stamps and a `secondary_only` column.
 pub const CRUISE_CONTRACT: &str = "cruise_owner_z9_v3";
 /// v2: per-airport global movement unions live in the file footer under

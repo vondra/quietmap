@@ -59,12 +59,21 @@ __device__ __forceinline__ Real fast_lat_atten(Real relative_alt, Real lateral_s
 }
 
 template<typename Real>
-__device__ __forceinline__ Real npd_lookup(const Real* base, int cls, Real log_d) {
-    const Real* lut = base + cls * (NPD_NB + 1);
+__device__ __forceinline__ Real npd_row_lookup(const Real* base, int cls, int row, Real log_d) {
+    const Real* lut = base + ((size_t)cls * NPD_NR + row) * (NPD_NB + 1);
     Real t = fmax((log_d - Real(NPD_LOG_MIN)) * Real(NPD_INV_STEP), Real(0));
     int index = min((int)t, NPD_NB - 1);
     Real fraction = t - Real(index);
     return lut[index] + fraction * (lut[index + 1] - lut[index]);
+}
+
+// Doc 29 Eq. 4-3: lerp between the bracketing power rows. w == 0 keeps the
+// single-row read bit-exact (lo + 0 * (hi - lo) == lo for finite LUTs).
+template<typename Real>
+__device__ __forceinline__ Real npd_lookup(const Real* base, int cls, int row, Real w, Real log_d) {
+    Real lo = npd_row_lookup(base, cls, row, log_d);
+    Real hi = npd_row_lookup(base, cls, row + 1 < NPD_NR ? row + 1 : row, log_d);
+    return lo + w * (hi - lo);
 }
 
 // Airborne input coordinates are stored f32; subtraction stays f64 before its existing f32 kernel.
@@ -83,7 +92,7 @@ __device__ __forceinline__ float airborne_offset_east(double start_lon, double r
 
 template<typename Real, bool SCREENED, bool FLOOR = true>
 __device__ __forceinline__ bool aircraft_sel(
-    Real ax, Real ay, Real sdx, const Real* f, int cls, int departure, int installation,
+    Real ax, Real ay, Real sdx, const Real* f, int cls, int departure, int installation, int power_row,
     Real receiver_altitude, const Real* npd, const Real* scaled_distance, int pixel,
     const AirborneScreen& screen, const float* screen_geometry, Real* sel_out, Real* free_sel_out = nullptr)
 {
@@ -104,9 +113,9 @@ __device__ __forceinline__ bool aircraft_sel(
     Real feet = fmax(distance * Real(FT_PER_M), Real(100));
     Real log_d = log2(feet) * Real(LOG10_2);
     int operation_class = departure * NPD_NC + cls;
-    Real sel_npd = npd_lookup(npd, operation_class, log_d);
+    Real sel_npd = npd_lookup(npd, operation_class, power_row, f[11], log_d) + f[12];
     if (FLOOR && sel_npd + f[4] + Real(0.4014) < Real(SEL_FLOOR)) return false;
-    Real d_lambda = npd_lookup(scaled_distance, operation_class, log_d);
+    Real d_lambda = npd_lookup(scaled_distance, operation_class, power_row, f[11], log_d);
     Real finite = fast_delta_f(t * length, length, d_lambda);
     Real lambda = fast_lat_atten(relative_altitude, lateral_sq);
     Real installation_db = Real(0);

@@ -85,6 +85,7 @@ fn flight() -> FlightSegment {
         agl_avg_m: 800.0,
         start_elev_m: 234.6,
         end_elev_m: 250.4,
+        departure_field_elev_m: f32::NAN,
     }
 }
 

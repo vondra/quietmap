@@ -1,7 +1,6 @@
 //! Provider union: a duplicate provider adds nothing, gaps fill from the secondary, `~` echoes of address tracks go.
 
 use super::*;
-use crate::trace::FLAG_ALT_IS_GROUND;
 
 fn point(timestamp: f64, lat: f32, lon: f32, alt_ft: f32) -> TracePoint {
     TracePoint {
@@ -87,8 +86,11 @@ fn a_copy_of_the_primary_provider_keeps_no_sample() {
     assert!(counts.secondary_points_covered > 0);
 }
 
+/// Stage 0 keeps every secondary sample outside ±1 s of a primary one; gap
+/// judgement belongs to Stage 1 with DEM phases (see
+/// `segment::suppress_covered_secondary_points`).
 #[test]
-fn secondary_samples_fill_only_what_the_primary_provider_missed() {
+fn secondary_samples_outside_one_second_survive_stage_0() {
     let secondary = vec![
         // 2.5 s off every primary sample of 4ca001 and 30 s beyond its end.
         trace("4ca001", &every(2.5, 630.0, 5.0), 50.0, 14.0),
@@ -106,12 +108,19 @@ fn secondary_samples_fill_only_what_the_primary_provider_missed() {
             .map(|p| p.timestamp - 1_700_000_000.0)
             .collect()
     };
-    // 4ca001: only the samples after the last primary one (595 s + 1 s).
-    assert_eq!(kept("4ca001"), every(597.5, 630.0, 5.0));
-    // 4ca002: the hole between 20 s and 300 s, never near a primary sample.
-    let hole = kept("4ca002");
-    assert_eq!(hole, every(30.0, 300.0, 10.0));
-    assert_eq!(counts.secondary_points_kept as usize, 7 + hole.len());
+    // 4ca001: 2.5 s off the primary grid — everything survives Stage 0 (Stage 1
+    // drops what joinable primary pairs span).
+    assert_eq!(kept("4ca001"), every(2.5, 630.0, 5.0));
+    // 4ca002: only the samples within 1 s of a primary sample go.
+    let expected: Vec<f64> = every(0.0, 320.0, 10.0)
+        .into_iter()
+        .filter(|t| ![0.0, 10.0, 20.0, 300.0, 310.0].contains(t))
+        .collect();
+    assert_eq!(kept("4ca002"), expected);
+    assert_eq!(
+        counts.secondary_points_kept as usize,
+        every(2.5, 630.0, 5.0).len() + expected.len()
+    );
     for trace in &merged {
         assert!(trace
             .points
@@ -127,24 +136,6 @@ fn secondary_samples_fill_only_what_the_primary_provider_missed() {
             .collect();
         assert_eq!(unflagged, primary.points.iter().map(|p| p.timestamp.to_bits()).collect::<Vec<_>>());
     }
-}
-
-#[test]
-fn a_ground_stop_needs_its_own_sixty_second_budget() {
-    // Two surface reports 90 s apart: Stage 1 joins ground pairs only within 60 s.
-    let mut ground = trace("4ca003", &[0.0, 90.0], 50.0, 14.0);
-    for p in &mut ground.points {
-        p.alt_ft = f32::NAN;
-        p.flags = FLAG_ALT_IS_GROUND;
-        p.speed_kt = 10.0;
-    }
-    let mut secondary = trace("4ca003", &[45.0], 50.0, 14.0);
-    secondary.points[0].alt_ft = f32::NAN;
-    secondary.points[0].flags = FLAG_ALT_IS_GROUND;
-    let (merged, counts) = merge_provider_traces(vec![ground], vec![secondary]);
-    assert_eq!(counts.secondary_points_kept, 1);
-    assert_eq!(merged[0].points.len(), 3);
-    assert!(merged[0].points[1].is_secondary_provider());
 }
 
 #[test]
@@ -191,6 +182,23 @@ fn anonymous_echoes_of_an_address_track_are_suppressed() {
     assert!(!addresses.contains(&"~4ca010"), "{addresses:?}");
     assert!(addresses.contains(&"~aa0001") && addresses.contains(&"~aa0002"));
     assert_eq!(counts.anonymous_points_suppressed, 30);
+}
+
+/// Stage 0 never spans gaps: a level FL280 pair looks like Cruise to a
+/// barometric eye, but over high terrain Stage 1 classifies it Airborne and
+/// will not bridge a 200 s hole — so the secondary sample inside survives.
+#[test]
+fn stage_0_keeps_secondary_inside_gaps_only_stage_1_can_judge() {
+    let mut primary = trace("4ca020", &[0.0, 200.0], 50.0, 14.0);
+    for p in &mut primary.points {
+        p.alt_ft = 28_000.0;
+        p.speed_kt = 450.0;
+    }
+    let mut secondary = trace("4ca020", &[100.0], 50.0, 14.0);
+    secondary.points[0].alt_ft = 28_000.0;
+    secondary.points[0].speed_kt = 450.0;
+    let (_, counts) = merge_provider_traces(vec![primary], vec![secondary]);
+    assert_eq!(counts.secondary_points_kept, 1);
 }
 
 /// The echo test also holds across providers: a primary `~` track riding a

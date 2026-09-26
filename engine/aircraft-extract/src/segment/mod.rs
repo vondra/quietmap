@@ -78,7 +78,7 @@ pub fn split_flights(points: &[TracePoint]) -> Vec<std::ops::Range<usize>> {
 }
 
 /// Fixed-per-flight metadata copied onto every segment this flight
-/// emits. Bundled to avoid threading 7 individual params through
+/// emits. Bundled to avoid threading 8 individual params through
 /// [`build_segments`].
 pub struct SegmentMeta<'a> {
     pub flight_id: u64,
@@ -90,6 +90,135 @@ pub struct SegmentMeta<'a> {
     pub veh_kind: u8,
     pub gse_class: u8,
     pub date_id: i16,
+    pub departure_field_elev_m: f32,
+}
+
+/// The whole join decision for one sample-pair, shared by
+/// [`build_segments`] and Stage 1's secondary suppression: a positive time
+/// step, a defined segment phase, within the phase gap budget, keepable
+/// geometry, and — for airborne pairs — both endpoints at or above the
+/// −30 m AGL gate (which absorbs DEM error near runways and sub-sea
+/// airports; ground pairs bypass and re-enter through Stage 2C ground
+/// ops). Returns the segment phase when the pair emits. NaN-bearing
+/// airborne endpoints drop (`>=` is false for NaN).
+pub(crate) fn pair_segment_phase(
+    points: &[TracePoint],
+    agl_m: &[f32],
+    elev_m: &[f32],
+    phases: &[Phase],
+    profile_idx: u8,
+    prev: usize,
+    curr: usize,
+) -> Option<Phase> {
+    let dt = points[curr].timestamp - points[prev].timestamp;
+    if dt <= 0.0 {
+        return None;
+    }
+    let phase = segment_phase(phases[prev], phases[curr])?;
+    if dt > gap_budget_for(phases[prev], phases[curr]) {
+        return None;
+    }
+    let on_ground = phase == Phase::Ground;
+    let (before, after) = (&points[prev], &points[curr]);
+    if !filters::segment_is_keepable(
+        flat_dist(before.lat, before.lon, after.lat, after.lon),
+        dt as f32,
+        agl_m[prev],
+        agl_m[curr],
+        (before.speed_kt + after.speed_kt) * 0.5,
+        profile_idx,
+        !on_ground,
+    ) {
+        return None;
+    }
+    if !on_ground {
+        // A ground endpoint inherits the airborne endpoint's altitude, as in
+        // `build_segments`, so elevated-airport lift-off/flare pairs pass.
+        let start_alt_m =
+            before.airborne_alt_ft().or(after.airborne_alt_ft()).unwrap_or(0.0) * 0.3048;
+        let end_alt_m =
+            after.airborne_alt_ft().or(before.airborne_alt_ft()).unwrap_or(0.0) * 0.3048;
+        if !(start_alt_m - elev_m[prev] >= -30.0 && end_alt_m - elev_m[curr] >= -30.0) {
+            return None;
+        }
+    }
+    Some(phase)
+}
+
+/// Drop secondary-provider points spanned by a primary pair Stage 1 will
+/// actually join ([`pair_segment_phase`]): those samples add no coverage and
+/// would only move the stretch onto the noisier increment estimator. A
+/// secondary point survives exactly where no joinable primary pair spans it —
+/// a real coverage gap — or outside the primary trace. The parallel `agl_m`,
+/// `elev_m` and `phases` stay aligned with `points`.
+pub(crate) fn suppress_covered_secondary_points(
+    points: &mut Vec<TracePoint>,
+    agl_m: &mut Vec<f32>,
+    elev_m: &mut Vec<f32>,
+    phases: &mut Vec<Phase>,
+    profile_idx: u8,
+) {
+    debug_assert_eq!(points.len(), agl_m.len());
+    debug_assert_eq!(points.len(), elev_m.len());
+    debug_assert_eq!(points.len(), phases.len());
+    let primary: Vec<usize> = points
+        .iter()
+        .enumerate()
+        .filter_map(|(index, point)| (!point.is_secondary_provider()).then_some(index))
+        .collect();
+    if primary.len() < 2 {
+        return;
+    }
+    let mut spans: Vec<(f64, f64)> = Vec::new();
+    for pair in primary.windows(2) {
+        if pair_segment_phase(
+            points,
+            agl_m,
+            elev_m,
+            phases,
+            profile_idx,
+            pair[0],
+            pair[1],
+        )
+        .is_some()
+        {
+            spans.push((points[pair[0]].timestamp, points[pair[1]].timestamp));
+        }
+    }
+    if spans.is_empty() {
+        return;
+    }
+    // Non-strict: a secondary coinciding exactly with a primary endpoint is
+    // the same observation twice (Stage 0's ±1 s already took the rest).
+    let mut keep = vec![true; points.len()];
+    for (index, point) in points.iter().enumerate() {
+        if point.is_secondary_provider()
+            && spans
+                .iter()
+                .any(|&(start, end)| start <= point.timestamp && point.timestamp <= end)
+        {
+            keep[index] = false;
+        }
+    }
+    if keep.iter().all(|&kept| kept) {
+        return;
+    }
+    let mut kept = 0;
+    for (index, &retain) in keep.iter().enumerate() {
+        if retain {
+            if kept != index {
+                points.swap(kept, index);
+                agl_m.swap(kept, index);
+                elev_m.swap(kept, index);
+                phases.swap(kept, index);
+            }
+            kept += 1;
+        }
+    }
+    points.truncate(kept);
+    agl_m.truncate(kept);
+    elev_m.truncate(kept);
+    phases.truncate(kept);
 }
 
 /// Build [`FlightSegment`] rows for one flight by emitting one segment
@@ -116,32 +245,16 @@ pub fn build_segments(
     let is_dep_per_sample = classify_is_departure_per_sample(points, &alts_ft, phases);
     let mut out = Vec::with_capacity(points.len() - 1);
     for i in 1..points.len() {
-        let dt = points[i].timestamp - points[i - 1].timestamp;
-        if dt <= 0.0 {
-            continue;
-        }
-        let Some(phase) = segment_phase(phases[i - 1], phases[i]) else {
+        let Some(phase) =
+            pair_segment_phase(points, agl_m, elev_m, phases, meta.profile_idx, i - 1, i)
+        else {
             continue;
         };
-        if dt > gap_budget_for(phases[i - 1], phases[i]) {
-            continue;
-        }
         let on_ground = phase == Phase::Ground;
         let prev = &points[i - 1];
         let curr = &points[i];
         let length_m = flat_dist(prev.lat, prev.lon, curr.lat, curr.lon);
         let avg_speed = (prev.speed_kt + curr.speed_kt) * 0.5;
-        if !filters::segment_is_keepable(
-            length_m,
-            dt as f32,
-            agl_m[i - 1],
-            agl_m[i],
-            avg_speed,
-            meta.profile_idx,
-            !on_ground,
-        ) {
-            continue;
-        }
         let mid_time = (prev.timestamp + curr.timestamp) * 0.5;
         let (mid_lat, mid_lon) = midpoint(prev.lat, prev.lon, curr.lat, curr.lon);
         let period = period_from_timestamp(mid_time, mid_lat as f64, mid_lon as f64);
@@ -194,6 +307,7 @@ pub fn build_segments(
             agl_avg_m: (agl_m[i - 1] + agl_m[i]) * 0.5,
             start_elev_m: elev_m[i - 1],
             end_elev_m: elev_m[i],
+            departure_field_elev_m: meta.departure_field_elev_m,
         });
     }
     out

@@ -58,6 +58,7 @@ fn segments_round_trip() {
         agl_avg_m: 700.0,
         start_elev_m: 250.0,
         end_elev_m: 280.0,
+        departure_field_elev_m: 355.5,
     }];
     write_segments(&p, &segs).unwrap();
     let read = read_segments(&p).unwrap();
@@ -72,6 +73,7 @@ fn segments_round_trip() {
     assert_eq!(r.gse_class, 2);
     assert!((r.start_elev_m - 250.0).abs() < 1e-3);
     assert!((r.end_elev_m - 280.0).abs() < 1e-3);
+    assert!((r.departure_field_elev_m - 355.5).abs() < 1e-3);
 }
 
 fn seg_with_id(id: u64) -> FlightSegment {
@@ -99,6 +101,7 @@ fn seg_with_id(id: u64) -> FlightSegment {
         agl_avg_m: 0.0,
         start_elev_m: 0.0,
         end_elev_m: 0.0,
+        departure_field_elev_m: f32::NAN,
     }
 }
 
