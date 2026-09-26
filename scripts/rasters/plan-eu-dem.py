@@ -146,6 +146,8 @@ def main():
     parser.add_argument('--max-squares', type=int, default=0)
     parser.add_argument('--exclude', action='append', default=[], metavar='X,Y',
                         help='owned square to defer (repeatable; cross-plan conflict)')
+    parser.add_argument('--plan-only', action='store_true',
+                        help='write the manifest and exit without producing')
     args = parser.parse_args()
     excluded = set()
     for item in args.exclude:
@@ -164,6 +166,8 @@ def main():
     manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
     print(json.dumps({'squares': len(manifest['squares']),
                       'sources': len(manifest['sources'])}), flush=True)
+    if args.plan_only:
+        return
     produce(manifest_path, args.output, args.raster_repack, args.reserve_bytes)
 
 

@@ -286,6 +286,39 @@ class FranceGroupsTest(unittest.TestCase):
         self.assertEqual(fetch_fr.group_of(1180000, 6100000), 'FR-RGEALTI-CORSE')
         self.assertEqual(fetch_fr.group_of(1040000, 6250000), 'FR-RGEALTI')
 
+    def test_cap_corse_stays_corsica_and_menton_stays_mainland(self):
+        fetch_fr = load_hyphenated('fetch-fr-rgealti')
+        self.assertEqual(fetch_fr.group_of(1220000, 6240000), 'FR-RGEALTI-CORSE')
+        self.assertEqual(fetch_fr.group_of(1080000, 6270000), 'FR-RGEALTI')
+
+
+class PlanOnlyTest(unittest.TestCase):
+    def run_main(self, extra):
+        import sys
+        plan_eu = load_hyphenated('plan-eu-dem')
+        calls = []
+        plan_eu.plan = lambda *args: {'squares': [[258, 171]], 'sources': []}
+        plan_eu.produce = lambda *args: calls.append(args)
+        argv = ['plan-eu-dem.py', '--source-root', 'src', '--output', 'out',
+               '--raster-repack', 'rep', '--reserve-bytes', '1'] + extra
+        with tempfile.TemporaryDirectory() as temp:
+            real_argv = sys.argv
+            sys.argv = argv[:5] + ['--work-dir', temp] + argv[5:]
+            try:
+                plan_eu.main()
+            finally:
+                sys.argv = real_argv
+            manifest = Path(temp) / 'eu-dem-manifest.json'
+            self.assertTrue(manifest.exists())
+            self.assertEqual(json.loads(manifest.read_text())['squares'], [[258, 171]])
+        return calls
+
+    def test_plan_only_skips_produce(self):
+        self.assertEqual(self.run_main(['--plan-only']), [])
+
+    def test_default_still_produces(self):
+        self.assertEqual(len(self.run_main([])), 1)
+
 
 class CHDedupeTest(unittest.TestCase):
     def item(self, year, tile):
