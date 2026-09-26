@@ -366,6 +366,17 @@ pub(crate) fn compute_railways(
             seg.rail_type,
             cluster_id,
         );
+        let source_here = RaySource {
+            lat: seg.cp_lat,
+            lon: seg.cp_lon,
+            height_m: SOURCE_HEIGHT_RAIL,
+            ground: SourceGround::Fixed(normalize::rail::rail_source_ground_factor(
+                RailType::from_u8(seg.rail_type),
+                seg.bridge,
+            )),
+            platform_half_width_m: normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
+            exclusion_radius_m: 0.0,
+        };
         let acc = rails_by_key.entry(key).or_insert_with(|| RailAccum {
             name: {
                 // Build display name: "Line 250 — Brno–Havlíčkův Brod" or "Line 250" or name or "Rail"
@@ -386,17 +397,7 @@ pub(crate) fn compute_railways(
             min_dist: f64::MAX,
             min_d_slant: 0.0,
             min_ground_g: 0.5,
-            closest_source: RaySource {
-                    lat: seg.cp_lat,
-                    lon: seg.cp_lon,
-                    height_m: SOURCE_HEIGHT_RAIL,
-                    ground: SourceGround::Fixed(normalize::rail::rail_source_ground_factor(
-                        RailType::from_u8(seg.rail_type),
-                        seg.bridge,
-                    )),
-                    platform_half_width_m: normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
-                    exclusion_radius_m: 0.0,
-                },
+            closest_source: source_here,
             dominant_segment_idx: 0,
             dominant_distance_m: 0.0,
             dominant_traffic: crate::normalize::RailTraffic::default(),
@@ -448,17 +449,7 @@ pub(crate) fn compute_railways(
             acc.min_dist = seg.dist_m;
             acc.min_d_slant = d_slant;
             acc.min_ground_g = ground_g;
-            acc.closest_source = RaySource {
-                lat: seg.cp_lat,
-                lon: seg.cp_lon,
-                height_m: SOURCE_HEIGHT_RAIL,
-                ground: SourceGround::Fixed(normalize::rail::rail_source_ground_factor(
-                    RailType::from_u8(seg.rail_type),
-                    seg.bridge,
-                )),
-                platform_half_width_m: normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
-                exclusion_radius_m: 0.0,
-            };
+            acc.closest_source = source_here;
         }
         acc.line_coords
             .push([[seg.start_lon, seg.start_lat], [seg.end_lon, seg.end_lat]]);
@@ -620,11 +611,7 @@ pub(crate) fn compute_railways(
             vegetation_impact_db: round1(impacts.vegetation),
             atmospheric_impact_db: round1(impacts.atmospheric),
             ground_impact_db: round1(impacts.ground),
-            received_bands: std::array::from_fn(|j| {
-                let energy = acc.variants[0].band_energy[j];
-                assert!(energy.is_finite() && energy >= 0.0, "non-finite band energy: {energy}");
-                10.0 * energy.max(1e-30).log10()
-            }),
+            received_bands: bands_energy_to_db(&acc.variants[0].band_energy),
             metadata: Some(SourceMetadata::Rail(rail_meta)),
         });
     }

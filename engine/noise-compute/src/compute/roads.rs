@@ -304,6 +304,14 @@ pub(crate) fn compute_roads(
             10..=12 => " (link)",
             _ => "",
         };
+        let source_here = RaySource {
+            lat: seg.cp_lat,
+            lon: seg.cp_lon,
+            height_m: p.norm.source_height_m,
+            ground: SourceGround::Fixed(normalize::road::ROAD_SOURCE_GROUND_FACTOR),
+            platform_half_width_m: normalize::road::road_platform_half_width_m(seg.lanes),
+            exclusion_radius_m: 0.0,
+        };
         let acc = roads_by_key.entry(key).or_insert_with(|| {
             let display_name = if !effective_ref.is_empty() && !seg.name.is_empty() {
                 format!("{} — {}{}", effective_ref, seg.name, link_suffix)
@@ -345,14 +353,7 @@ pub(crate) fn compute_roads(
                 min_dist: f64::MAX,
                 min_d_slant: 0.0,
                 min_ground_g: 0.5,
-                closest_source: RaySource {
-                    lat: seg.cp_lat,
-                    lon: seg.cp_lon,
-                    height_m: p.norm.source_height_m,
-                    ground: SourceGround::Fixed(normalize::road::ROAD_SOURCE_GROUND_FACTOR),
-                    platform_half_width_m: normalize::road::road_platform_half_width_m(seg.lanes),
-                    exclusion_radius_m: 0.0,
-                },
+                closest_source: source_here,
                 dominant_energy: 0.0,
                 dominant_segment_idx: 0,
                 dominant_distance_m: 0.0,
@@ -434,14 +435,7 @@ pub(crate) fn compute_roads(
             acc.min_dist = seg.dist_m;
             acc.min_d_slant = d_slant;
             acc.min_ground_g = ground_g;
-            acc.closest_source = RaySource {
-                lat: seg.cp_lat,
-                lon: seg.cp_lon,
-                height_m: p.norm.source_height_m,
-                ground: SourceGround::Fixed(normalize::road::ROAD_SOURCE_GROUND_FACTOR),
-                platform_half_width_m: normalize::road::road_platform_half_width_m(seg.lanes),
-                exclusion_radius_m: 0.0,
-            };
+            acc.closest_source = source_here;
         }
         // Popup trace: push pass 2's prebuilt SegmentTrace, in segment order —
         // the same order (and therefore the same top-K tie-breaking downstream)
@@ -616,11 +610,7 @@ pub(crate) fn compute_roads(
             vegetation_impact_db: round1(impacts.vegetation),
             atmospheric_impact_db: round1(impacts.atmospheric),
             ground_impact_db: round1(impacts.ground),
-            received_bands: std::array::from_fn(|j| {
-                let energy = acc.variants[0].band_energy[j];
-                assert!(energy.is_finite() && energy >= 0.0, "non-finite band energy: {energy}");
-                10.0 * energy.max(1e-30).log10()
-            }),
+            received_bands: bands_energy_to_db(&acc.variants[0].band_energy),
             metadata: Some(SourceMetadata::Road(road_meta)),
         });
     }

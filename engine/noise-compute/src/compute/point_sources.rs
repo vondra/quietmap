@@ -289,11 +289,7 @@ pub(crate) fn compute_point_sources(
             vegetation_impact_db: round1(impacts.vegetation),
             atmospheric_impact_db: round1(impacts.atmospheric),
             ground_impact_db: round1(impacts.ground),
-            received_bands: std::array::from_fn(|j| {
-                let energy = acc.variants[0].band_energy[j];
-                assert!(energy.is_finite() && energy >= 0.0, "non-finite band energy: {energy}");
-                10.0 * energy.max(1e-30).log10()
-            }),
+            received_bands: bands_energy_to_db(&acc.variants[0].band_energy),
             metadata,
         });
     }
