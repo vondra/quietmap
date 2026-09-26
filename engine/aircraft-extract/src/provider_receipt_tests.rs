@@ -131,6 +131,33 @@ fn unreceipted_days_and_foreign_increment_candidates_are_refused() {
     assert!(admit(&requested, &BTreeSet::new(), &missing).is_err());
 }
 
+/// A merged increment candidate that fails admission must be rewritten
+/// primary-only — unless its merge kept no secondary content, in which case
+/// the flights already equal a primary-only run and the rewrite is skipped.
+#[test]
+fn rejected_merges_need_a_primary_only_rewrite() {
+    let merged = |kept: u64, addresses: u64| DayReceipt {
+        day: DAY.into(),
+        primary: Some(receipt(0, [1000; 24])),
+        secondary: Some(receipt(2, [100; 24])),
+        merge: MergeCounts {
+            secondary_points_kept: kept,
+            secondary_only_addresses: addresses,
+            ..MergeCounts::default()
+        },
+    };
+    let rejected = BTreeSet::new();
+    assert!(merged(10, 0).needs_primary_only_rewrite(&rejected));
+    assert!(merged(0, 1).needs_primary_only_rewrite(&rejected));
+    assert!(!merged(0, 0).needs_primary_only_rewrite(&rejected));
+    // Admitted increment days and primary-only days are never rewritten.
+    assert!(!merged(10, 1).needs_primary_only_rewrite(&days(&[DAY])));
+    let mut primary_only = merged(10, 1);
+    primary_only.secondary = None;
+    assert!(!primary_only.needs_primary_only_rewrite(&rejected));
+    assert!(!DayReceipt::primary_missing(DAY).needs_primary_only_rewrite(&rejected));
+}
+
 #[test]
 fn secondary_rows_count_only_on_increment_days() {
     let mut segment = FlightSegment::airborne_fixture(1, 50.0, 14.0);

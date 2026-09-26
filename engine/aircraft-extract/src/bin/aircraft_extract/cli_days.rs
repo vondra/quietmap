@@ -4,13 +4,17 @@ use crate::{source_cache::SourceCache, FromStage, STAGE01_PEAK_PER_DAY_GB};
 use aircraft_extract::flight::source_id;
 use aircraft_extract::memory::max_concurrent_days;
 use aircraft_extract::{
-    progress::ts, source::FlightSource, source_adsb_tar::AdsbTarSource, stage_0::run_stage_0,
+    progress::ts,
+    provider_receipt::{read_day_receipt, write_day_receipt, DayReceipt},
+    source::FlightSource,
+    source_adsb_tar::AdsbTarSource,
+    stage_0::run_stage_0,
     stage_1::run_stage_1,
 };
 use anyhow::{Context, Result};
 use raster_reader::RealRasters;
 use rayon::{iter::Either, prelude::*};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -143,6 +147,56 @@ pub fn extract_days(
     Ok(ok_days)
 }
 
+/// Rewrite every merged-but-rejected increment candidate from its primary
+/// archive alone, with Stage 1 to match. Stage 0 merges increment candidates
+/// speculatively, before admission is known; without the rewrite the day's
+/// interleaved secondary points split primary chords into `SECONDARY_ONLY`
+/// segments that shuffle drops, and its suppressed `~` echoes stay deleted.
+/// The day's secondary content receipt is kept (it is admission provenance);
+/// only the merge counts revert to the primary-only run. Days whose merge
+/// kept no secondary content are already primary-only and skipped, which
+/// makes the repair idempotent. Returns the repaired days.
+pub fn repair_rejected_increment_merges(
+    receipts: &BTreeMap<String, DayReceipt>,
+    increment_days: &BTreeSet<String>,
+    providers: &Providers<'_>,
+    work_dir: &Path,
+    rasters: &RealRasters,
+) -> Result<Vec<String>> {
+    let flights_dir = work_dir.join("flights");
+    let segments_dir = work_dir.join("segments");
+    let mut repaired = Vec::new();
+    for (day, receipt) in receipts {
+        if !receipt.needs_primary_only_rewrite(increment_days) {
+            continue;
+        }
+        eprintln!("{} [run-all] {day}: increment rejected — rewriting primary-only", ts());
+        let primary = match providers.primary_receipts {
+            Some(cache) => {
+                AdsbTarSource::new("").with_selected_archives(cache.begin(day, "flights")?)
+            }
+            None => AdsbTarSource::new(providers.primary_root),
+        };
+        run_stage_0(&primary, None, day, &flights_dir, work_dir, providers.scope)?;
+        if let Some(cache) = providers.primary_receipts {
+            cache.complete(day, "flights")?;
+        }
+        let mut rewritten = read_day_receipt(work_dir, day)?
+            .with_context(|| format!("{day}: missing rewritten provider receipt"))?;
+        rewritten.secondary = receipt.secondary.clone();
+        write_day_receipt(work_dir, &rewritten)?;
+        if let Some(cache) = providers.primary_receipts {
+            cache.begin(day, "segments")?;
+        }
+        run_stage_1(&flights_dir, &segments_dir, day, rasters)?;
+        if let Some(cache) = providers.primary_receipts {
+            cache.complete(day, "segments")?;
+        }
+        repaired.push(day.clone());
+    }
+    Ok(repaired)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_day(
     day: &str,
@@ -218,3 +272,7 @@ pub fn day_segment_paths(dirs: &[PathBuf], days: &BTreeSet<String>) -> Result<Ve
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "cli_days_tests.rs"]
+mod tests;

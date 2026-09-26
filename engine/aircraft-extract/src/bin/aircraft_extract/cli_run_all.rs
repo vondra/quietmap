@@ -1,7 +1,7 @@
 //! Ordered aircraft orchestration: provider days, their admission, then shuffle and Stage 2 under one sampling window.
 
 use crate::{
-    cli_days::{day_segment_paths, extract_days, Providers},
+    cli_days::{day_segment_paths, extract_days, repair_rejected_increment_merges, Providers},
     cli_validate::*,
     from_stage_name,
     source_cache::SourceCache,
@@ -21,7 +21,8 @@ use aircraft_extract::{
 use anyhow::{Context, Result};
 use noise_compute::types::AirportArea;
 use raster_reader::RealRasters;
-use std::collections::BTreeSet;
+use aircraft_extract::provider_receipt::DayReceipt;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 pub struct RunAllRequest {
@@ -143,9 +144,26 @@ pub fn run_all(request: RunAllRequest) -> Result<()> {
         runs(FromStage::Stage1_5) || runs(FromStage::Stage2a) || runs(FromStage::Stage2c);
     let reads_day_segments = runs(FromStage::Shuffle) || runs(FromStage::Stage2b);
     let admitted = if reads_day_segments {
-        let admission =
+        let (admission, receipts) =
             admit_from_receipts(&segments_dirs, &requested, &increment_candidates)?;
         report_admission(&admission);
+        if !external_segments && from_stage <= FromStage::Stage1 {
+            let repaired = repair_rejected_increment_merges(
+                &receipts,
+                &admission.increment_days,
+                &providers,
+                &work_dir,
+                &rasters,
+            )?;
+            if !repaired.is_empty() {
+                eprintln!(
+                    "{} [admission] rewrote {} rejected day(s) primary-only: {}",
+                    ts(),
+                    repaired.len(),
+                    repaired.join(",")
+                );
+            }
+        }
         let paths = day_segment_paths(&segments_dirs, &admission.baseline_days)?;
         if external_segments {
             reuse_segments_from_directories(
@@ -288,8 +306,8 @@ fn admit_from_receipts(
     segments_dirs: &[PathBuf],
     requested: &BTreeSet<String>,
     increment_candidates: &BTreeSet<String>,
-) -> Result<Admission> {
-    let mut receipts = std::collections::BTreeMap::new();
+) -> Result<(Admission, BTreeMap<String, DayReceipt>)> {
+    let mut receipts: BTreeMap<String, DayReceipt> = BTreeMap::new();
     let mut works: Vec<&Path> = segments_dirs
         .iter()
         .map(|dir| dir.parent().context("segments directory has no work parent"))
@@ -304,7 +322,7 @@ fn admit_from_receipts(
             );
         }
     }
-    admit(requested, increment_candidates, &receipts)
+    Ok((admit(requested, increment_candidates, &receipts)?, receipts))
 }
 
 fn report_admission(admission: &Admission) {
