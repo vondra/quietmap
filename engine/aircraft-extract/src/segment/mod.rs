@@ -264,6 +264,13 @@ pub fn build_segments(
         // branches live in classify_is_departure_per_sample so the
         // build_segments loop is phase-blind here.
         let is_dep = is_dep_per_sample[i];
+        // Ground endpoint inherits the airborne endpoint's altitude so
+        // elevated-airport lift-off / flare segments pass the downstream
+        // terrain-vs-altitude airborne validation. Both-ground pairs
+        // emit 0 m alt — segments.arrow consumers gate on the
+        // on_ground flag and read elevation from the raster.
+        let start_alt_m = alts_ft[i - 1].or(alts_ft[i]).unwrap_or(0.0) * 0.3048;
+        let end_alt_m = alts_ft[i].or(alts_ft[i - 1]).unwrap_or(0.0) * 0.3048;
         let mut flags = 0u8;
         if is_dep {
             flags |= segment_flags::IS_DEPARTURE;
@@ -276,13 +283,15 @@ pub fn build_segments(
         if prev.is_secondary_provider() || curr.is_secondary_provider() {
             flags |= segment_flags::SECONDARY_ONLY;
         }
-        // Ground endpoint inherits the airborne endpoint's altitude so
-        // elevated-airport lift-off / flare segments pass the downstream
-        // terrain-vs-altitude airborne validation. Both-ground pairs
-        // emit 0 m alt — segments.arrow consumers gate on the
-        // on_ground flag and read elevation from the raster.
-        let start_alt_m = alts_ft[i - 1].or(alts_ft[i]).unwrap_or(0.0) * 0.3048;
-        let end_alt_m = alts_ft[i].or(alts_ft[i - 1]).unwrap_or(0.0) * 0.3048;
+        // The BVI descent state is whole-chord geometry: stamp it before
+        // storage splitting, whose pieces inherit it through `flags`, so a
+        // steep descent keeps its approach correction at any sample cadence.
+        if noise_compute::emission::aircraft::is_helicopter_profile(meta.profile_idx)
+            && f64::from(end_alt_m) - f64::from(start_alt_m)
+                < noise_compute::emission::aircraft::HELI_DESCENT_SDZ_M
+        {
+            flags |= segment_flags::HELI_DESCENT;
+        }
         out.push(FlightSegment {
             flight_id: meta.flight_id,
             callsign: meta.callsign.to_string(),

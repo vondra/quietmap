@@ -38,6 +38,8 @@ impl Phase {
 /// `CHORD_END`; consecutive pieces share their stored endpoint exactly, so
 /// the popup chains them back into one chord. Bit 6 marks a segment that
 /// touches a secondary-provider sample (normalised by the increment days).
+/// Bit 7 marks a helicopter chord losing more than 10 m end to end
+/// (stamped before the split, inherited by every piece).
 pub mod segment_flags {
     pub const IS_DEPARTURE: u8 = 1 << 0;
     pub const ON_GROUND: u8 = 1 << 1;
@@ -47,6 +49,7 @@ pub mod segment_flags {
     pub const CHORD_END: u8 = 1 << 5;
     pub const SECONDARY_ONLY: u8 =
         noise_compute::emission::aircraft::SEGMENT_FLAG_SECONDARY_ONLY;
+    pub const HELI_DESCENT: u8 = noise_compute::emission::aircraft::SEGMENT_FLAG_HELI_DESCENT;
 }
 
 /// Pack a variable-width ICAO typecode (`"A320"`, `"B738"`, `"PC12"`,

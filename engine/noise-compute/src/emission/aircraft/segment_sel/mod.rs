@@ -417,8 +417,8 @@ fn segment_kernel_with_overrides<
             terrain_end_cut_m,
             f64::from(seg.departure_field_elev_m),
         ),
-    );
-    let heli_db = heli_correction_db(seg.profile_idx, seg.is_departure, sdz);
+    )?;
+    let heli_db = heli_correction_db(seg.profile_idx, seg.is_departure, seg.heli_descent);
 
     // Reach uses the same class anchor as the emission kernel.
     let reach_sq = REACH_SQ_TABLE[class_idx][seg.is_departure as usize];
@@ -532,13 +532,14 @@ pub struct SegmentRowState {
 
 /// Hoist of the sub-segment-constant work from
 /// `segment_sel_with_overrides`. `terrain_*_cut_m` are typically
-/// `terrain_*_elev_m − 30`.
+/// `terrain_*_elev_m − 30`. `None` rejects a segment outside the thrust
+/// model's domain, exactly as the kernel does.
 #[inline]
 pub fn prepare_segment(
     seg: &AircraftSegment,
     terrain_start_cut_m: f64,
     terrain_end_cut_m: f64,
-) -> SegmentPrepared {
+) -> Option<SegmentPrepared> {
     let class_idx = noise_class_of(seg.profile_idx) as usize;
     let anchor_profile = &PROFILES[CLASS_REP_PROFILE_IDX[class_idx] as usize];
     let (inst, di_a, di_b, di_c) = delta_i_constants(anchor_profile.installation);
@@ -557,10 +558,10 @@ pub fn prepare_segment(
             terrain_end_cut_m,
             f64::from(seg.departure_field_elev_m),
         ),
-    );
-    let heli_db = heli_correction_db(seg.profile_idx, seg.is_departure, sdz);
+    )?;
+    let heli_db = heli_correction_db(seg.profile_idx, seg.is_departure, seg.heli_descent);
 
-    SegmentPrepared {
+    Some(SegmentPrepared {
         start_lat: seg.start_lat,
         start_lon: seg.start_lon,
         start_alt_m: seg.start_alt_m as f64,
@@ -580,7 +581,7 @@ pub fn prepare_segment(
         reach_sq,
         terrain_start_cut_m,
         terrain_end_cut_m,
-    }
+    })
 }
 
 /// Hoist of the per-row work from `segment_sel_with_overrides` (minus

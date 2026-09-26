@@ -15,11 +15,11 @@ use crate::types::default_receiver_altitude_m;
 /// end to end: three symmetric EC35 rows over one overhead receiver differ by
 /// the certification uplifts (takeoff +3.4, BVI approach +8.7 dB).
 /// Propeller installation zeroes ΔI and the ±11 m symmetric altitudes keep
-/// the slant/ΔF spread inside ±0.5 dB; the descent row sits just past the
-/// −10 m BVI gate, so a gate change fails loudly here.
+/// the slant/ΔF spread inside ±0.5 dB; the descent row carries the stored
+/// whole-chord state the producer stamps past the −10 m chord gate.
 #[test]
 fn heli_states_differ_by_certification_uplifts() {
-    let row = |is_departure: bool, end_alt_m: f32| AircraftSegment {
+    let row = |is_departure: bool, end_alt_m: f32, heli_descent: bool| AircraftSegment {
         flight_id: 1,
         profile_idx: crate::emission::aircraft::profile_idx("EC35"),
         is_departure,
@@ -35,6 +35,7 @@ fn heli_states_differ_by_certification_uplifts() {
         speed_kt: 100.0,
         segment_length_m: 500.0,
         departure_field_elev_m: f32::NAN,
+        heli_descent,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -46,9 +47,9 @@ fn heli_states_differ_by_certification_uplifts() {
             .expect("overhead heli row should compute")
             .0
     };
-    let level = sel(&row(false, 150.0));
-    let descent = sel(&row(false, 139.0));
-    let climb = sel(&row(true, 161.0));
+    let level = sel(&row(false, 150.0, false));
+    let descent = sel(&row(false, 139.0, true));
+    let climb = sel(&row(true, 161.0, false));
     assert!(
         (descent - level - 8.7).abs() < 0.5,
         "descent {descent:.2} vs level {level:.2}"
@@ -91,6 +92,7 @@ fn test_segment_sel_b738_approach() {
         speed_kt: 150.0,
         segment_length_m: 1100.0,
         departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -126,6 +128,7 @@ fn test_segment_sel_far_away() {
         speed_kt: 250.0,
         segment_length_m: 1100.0,
         departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -154,6 +157,7 @@ fn test_airport_ground_sel_recovers_bad_altitude() {
         speed_kt: 35.0,
         segment_length_m: 90.0,
         departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_AIRPORT_LINE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -197,6 +201,7 @@ fn test_ground_ops_model_avoids_doc29_near_field_extrapolation() {
         speed_kt: 70.0,
         segment_length_m: 650.0,
         departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_AIRPORT_LINE,
         ground_ops_kind: 1, // RUNWAY_ROLL
         count_weight: 1.0,
@@ -236,6 +241,7 @@ fn hoisted_matches_segment_sel_with_cuts() {
         speed_kt: 220.0,
         segment_length_m: 4500.0,
         departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -245,7 +251,7 @@ fn hoisted_matches_segment_sel_with_cuts() {
     let start_cut = 200.0;
     let end_cut = 210.0;
     let npd_luts = NpdLuts::shared();
-    let prepared = prepare_segment(&seg, start_cut, end_cut);
+    let prepared = prepare_segment(&seg, start_cut, end_cut).unwrap();
 
     // Sample on a grid that exercises far-field, near-field, and
     // out-of-reach pixels in one sweep.
@@ -321,6 +327,7 @@ fn display_clamp_does_not_touch_sel() {
         speed_kt: 100.0,
         segment_length_m: 131.0,
         departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -390,6 +397,7 @@ fn c2_level_segment(lateral_m: f64, alt_m: f32) -> AircraftSegment {
         speed_kt: 160.0,
         segment_length_m: 6670.0,
         departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -583,6 +591,7 @@ fn building_ray_stops_at_the_finite_subsegment_endpoint() {
         speed_kt: 160.0,
         segment_length_m: 1_000.0,
         departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -903,6 +912,7 @@ fn reach_gate_matches_kernel_rejection() {
                         speed_kt: 450.0,
                         segment_length_m: rep_len_m as f32,
                         departure_field_elev_m: f32::NAN,
+                        heli_descent: false,
                         count_weight: 1.0,
                         surface_model: false,
                         ground_context: crate::emission::aircraft::GROUND_CONTEXT_NONE,

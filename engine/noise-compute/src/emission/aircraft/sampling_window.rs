@@ -9,6 +9,10 @@ use std::collections::HashMap;
 
 /// Segment / row flag bit 6: the row touches a secondary-provider sample.
 pub const SEGMENT_FLAG_SECONDARY_ONLY: u8 = 1 << 6;
+/// Segment / row flag bit 7: a helicopter chord that loses more than 10 m
+/// end to end. Stamped before storage splitting and inherited by every
+/// piece, so split pieces keep the whole chord's BVI approach correction.
+pub const SEGMENT_FLAG_HELI_DESCENT: u8 = 1 << 7;
 
 pub const BASELINE_DAYS_KEY: &str = "baseline_days";
 pub const INCREMENT_DAYS_KEY: &str = "increment_days";
