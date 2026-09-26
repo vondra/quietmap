@@ -17,11 +17,15 @@ test('observed fuel and Annex sub-activity select original profiles; wind/unknow
   const gppd = parseGlobalIndustrialSource(csv(['Coal', 'Hydro', 'Solar', 'Geothermal', 'Wind', '', 'Other']), GLOBAL_INDUSTRIAL_SOURCES[0])
   assert.deepEqual(gppd.facilities.map(f => f.nace4), [3511, 3512, 3599, 3512])
   assert.equal(gppd.census.unclassified, 3)
-  const results = ['1(a)', '2(a)', '2(f)', '3(a)', '4(a)(viii)', '5(a)', '6(a)', '7(a)', '8(a)', '9(a)', 'unknown'].map(activity =>
+  // 3(a) is ALL underground mining (Regulation (EC) 166/2006 Annex I), not hard
+  // coal — 586 of 650 points sit >20 km from any GEM coal mine — so it stamps
+  // division-08 other mining; 1(e) is coal rolling mills (energy sector), not
+  // steel. The old 510/2410 expectations were the mapping bug.
+  const results = ['1(a)', '1(e)', '2(a)', '2(f)', '3(a)', '3(b)', '4(a)(viii)', '5(a)', '6(a)', '7(a)', '8(a)', '9(a)', 'unknown'].map(activity =>
     ({ y_4326: 50, x_4326: 14, EPRTRAnnexIMainActivity: activity }))
   const eprtr = parseGlobalIndustrialSource(JSON.stringify({ results }), GLOBAL_INDUSTRIAL_SOURCES[1])
   assert.deepEqual(eprtr.facilities.map(f => f.nace4),
-    [1920, 2410, 2561, 510, 2011, 3822, 1711, 146, 1011, 1330])
+    [1920, 1920, 2410, 2561, 810, 812, 2011, 3822, 1711, 146, 1011, 1330])
   assert.equal(eprtr.census.unclassified, 1)
 })
 

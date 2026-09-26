@@ -15,6 +15,7 @@ pub(super) fn collect_industrial(
     output: &mut Vec<noise_compute::types::PointSource>,
 ) -> Result<(), String> {
     let mut transformers: Option<Vec<square_store::osm_evidence::TransformerUnit>> = None;
+    let mut solar_plants: Option<Vec<grid::poly::PreparedRing>> = None;
     for batch in &data
         .industrial
         .batches_within(lat, lng, INDUSTRIAL_QUERY_RADIUS_M)?
@@ -94,6 +95,28 @@ pub(super) fn collect_industrial(
                 .is_some_and(square_store::osm_evidence::is_gas_substation)
             {
                 continue;
+            }
+            // A class-13 generator inside its plant polygon stays silent —
+            // the plant (nameplate, else its own area × density) owns the
+            // emission. The plant index spans the square (built lazily, only
+            // when a generator row is admitted).
+            if source_type == noise_compute::emission::industrial::SOURCE_SOLAR_FARM
+                && row_tags.as_ref().is_some_and(|tags| {
+                    !square_store::osm_evidence::tags_is_solar_plant(tags)
+                })
+            {
+                if solar_plants.is_none() {
+                    solar_plants = Some(square_store::osm_evidence::solar_plants(
+                        &data.industrial.batches_all()?,
+                    ));
+                }
+                if square_store::osm_evidence::inside_solar_plant(
+                    solar_plants.as_deref().unwrap_or(&[]),
+                    cgx.value(i),
+                    cgy.value(i),
+                ) {
+                    continue;
+                }
             }
             let plant_output_mw = row_tags
                 .as_ref()

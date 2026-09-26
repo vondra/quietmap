@@ -115,6 +115,7 @@ pub struct LeisureResult {
     pub polygon_grid: grid::poly::GridRing,
     pub formula: Option<noise_compute::emission::leisure::FormulaEmission>,
     pub is_line: bool,
+    pub length_m: f32,
 }
 
 pub fn query_leisure_from_batches(
@@ -137,6 +138,7 @@ pub fn query_leisure_from_batches(
         let area = col_f32(batch, "area_m2");
         let name = col_str(batch, "name");
         let geom = col_binary(batch, "geom");
+        let length = col_f32(batch, "length_m");
 
         for i in 0..n {
             let (c_lon, c_lat) = grid_cell_lonlat(cgx.value(i), cgy.value(i));
@@ -200,6 +202,10 @@ pub fn query_leisure_from_batches(
                 polygon_grid,
                 formula,
                 is_line: square_store::osm_evidence::row_is_leisure_line(batch, i),
+                length_m: length
+                    .filter(|a| !a.is_null(i))
+                    .map(|a| a.value(i))
+                    .unwrap_or(0.0),
             });
         }
     }
@@ -266,22 +272,36 @@ pub(super) fn collect_leisure(
         .leisure
         .batches_within(lat, lng, LEISURE_QUERY_RADIUS_M)?;
     let leisure = query_leisure_from_batches(&leisure_batches, lat, lng, LEISURE_QUERY_RADIUS_M);
-    // A motorsport polygon enclosing a raceway line goes silent — the lines
-    // carry the emission. The line index spans the square (built lazily, only
-    // when a motorsport polygon is admitted).
-    let lines = if leisure.iter().any(|lz| {
-        lz.sport == noise_compute::emission::leisure::MOTORSPORT && !lz.is_line
-    }) {
-        square_store::osm_evidence::motorsport_lines(&data.leisure.batches_all()?)
+    // Motorsport venues span the square (built lazily, only when a class-10
+    // row is admitted): an enclosing polygon goes silent and the fragments of
+    // one circuit share its single formula total by chain length.
+    let venues = if leisure
+        .iter()
+        .any(|lz| lz.sport == noise_compute::emission::leisure::MOTORSPORT)
+    {
+        square_store::osm_evidence::MotorsportVenues::build(&data.leisure.batches_all()?)
     } else {
-        Vec::new()
+        square_store::osm_evidence::MotorsportVenues::default()
     };
     for lz in &leisure {
         if lz.sport == noise_compute::emission::leisure::MOTORSPORT
             && !lz.is_line
-            && square_store::osm_evidence::encloses_motorsport_line(&lines, &lz.polygon_grid)
+            && venues.encloses_line(&lz.polygon_grid)
         {
             continue;
+        }
+        let mut formula = lz.formula;
+        if lz.sport == noise_compute::emission::leisure::MOTORSPORT && lz.is_line {
+            if let Some(emission) = formula.as_mut() {
+                let share = venues.line_share(
+                    square_store::osm_evidence::chain_ends(&lz.polygon_grid),
+                    square_store::osm_evidence::leisure_line_length_m(
+                        (lz.length_m > 0.0).then_some(lz.length_m),
+                        &lz.polygon_grid,
+                    ),
+                );
+                emission.lw_day += 10.0 * share.log10();
+            }
         }
         let source_type = noise_compute::types::LEISURE_TYPE_BASE.saturating_add(lz.sport);
         let prepared_points = noise_compute::normalize::prepare_leisure_points(
@@ -291,7 +311,7 @@ pub(super) fn collect_leisure(
                 sport: lz.sport,
                 area_m2: (lz.area_m2 > 0.0).then_some(lz.area_m2 as f64),
                 polygon_grid: &lz.polygon_grid,
-                formula: lz.formula,
+                formula,
                 is_line: lz.is_line,
             },
         );

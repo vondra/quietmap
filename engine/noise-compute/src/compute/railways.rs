@@ -162,7 +162,6 @@ pub(crate) fn compute_railways(
 
     struct RailAccum {
         name: String,
-        rail_type: RailType,
         rail_type_u8: u8,
         dominant_usage_u8: u8,
         dominant_osm_id: i64,
@@ -212,7 +211,6 @@ pub(crate) fn compute_railways(
     let bound = crate::propagation::relevance_bound::surface_relevance_bound(&weather);
 
     struct RailPre {
-        rail_type: RailType,
         speed: f64,
         d_slant: f64,
     }
@@ -299,7 +297,6 @@ pub(crate) fn compute_railways(
             };
             Some((
                 RailPre {
-                    rail_type,
                     speed,
                     d_slant,
                 },
@@ -333,7 +330,7 @@ pub(crate) fn compute_railways(
     // ── Pass 2: accumulation, in segment order (sequential) ──
     for ((seg_i, p), mut out) in pre.iter().zip(outs) {
         let seg = &railways[*seg_i];
-        let (rail_type, speed) = (p.rail_type, p.speed);
+        let speed = p.speed;
         let d_slant = p.d_slant;
         let (seg_variants, ground_g) = (out.seg_variants, out.ground_g);
         add_segment_to_total(&mut total_energy, &seg_variants);
@@ -358,7 +355,7 @@ pub(crate) fn compute_railways(
         );
         let acc = rails_by_key.entry(key).or_insert_with(|| RailAccum {
             name: {
-                // Build display name: "Line 250 — Brno–Havlíčkův Brod" or "Line 250" or name or "Rail"
+                // Build display name: "Line 250 — Brno–Havlíčkův Brod" or "Line 250" or name or empty
                 if !seg.rail_ref.is_empty() && !seg.name.is_empty() {
                     format!("Line {} — {}", seg.rail_ref, seg.name)
                 } else if !seg.rail_ref.is_empty() {
@@ -369,7 +366,6 @@ pub(crate) fn compute_railways(
                     String::new()
                 }
             },
-            rail_type,
             rail_type_u8: seg.rail_type,
             dominant_usage_u8: seg.usage,
             dominant_osm_id: seg.osm_id,
@@ -582,11 +578,11 @@ pub(crate) fn compute_railways(
                 acc.name.clone()
             },
             subtype: {
-                let base = format!("{:?}", acc.rail_type);
+                let base = rail_type_name(acc.rail_type_u8);
                 if acc.dominant_bridge {
-                    format!("{} (bridge)", base)
+                    format!("{base} (bridge)")
                 } else {
-                    base
+                    base.to_string()
                 }
             },
             distance_m: acc.min_dist,
@@ -885,7 +881,7 @@ mod tests {
         assert!(tram.name.is_empty());
         assert_eq!(tram.osm_id, Some(100));
         assert_eq!(tram.distance_m, 80.0);
-        assert_eq!(tram.subtype, "Tram (bridge)");
+        assert_eq!(tram.subtype, "tram (bridge)");
         let Some(SourceMetadata::Rail(metadata)) = &tram.metadata else {
             panic!("tram contributor must carry rail metadata");
         };
@@ -933,9 +929,9 @@ mod tests {
         assert_eq!(contribs.len(), 2);
         assert!(contribs
             .iter()
-            .any(|contributor| contributor.subtype == "Tram" && contributor.distance_m == 85.0));
+            .any(|contributor| contributor.subtype == "tram" && contributor.distance_m == 85.0));
         assert!(contribs.iter().any(|contributor| {
-            contributor.subtype == "Rail" && contributor.distance_m == 784.0
+            contributor.subtype == "rail" && contributor.distance_m == 784.0
         }));
 
         // A railway between two tram closest points must not bridge those

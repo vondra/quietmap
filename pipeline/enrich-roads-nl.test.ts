@@ -6,7 +6,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { tableFromIPC } from 'apache-arrow'
-import { enrichDutchRoads, indexDutchInweva, matchDutchInweva } from './enrich-roads-nl.js'
+import { enrichDutchRoads, enrichDutchTimeProfiles, indexDutchInweva, matchDutchInweva } from './enrich-roads-nl.js'
 import { iso2Code } from './lib/prepared-grid.js'
 import { loadDutchInwevaSource, parseDutchInwevaSource } from './lib/roads-nl-source.js'
 import { writeRoadsFixture } from './lib/road-test-fixture.js'
@@ -230,4 +230,92 @@ test('z9 Dutch pass writes classes, retracts stale claims and enforces baked cou
     [5286, 286, 18, 56],
   )
   assert.deepEqual([...table.getChild('traffic_estimated')!], [8, 15, 15])
+})
+
+test('Dutch parser carries class-specific period shares, summed over twins, default where unpublished', () => {
+  // l1 2671 = 2000+400+271, l2 143 = 100+30+13, l3 9 = 6+2+1.
+  const periods = {
+    l1_d_wk: 2000, l1_a_wk: 400, l1_n_wk: 271,
+    l2_d_wk: 100, l2_a_wk: 30, l2_n_wk: 13,
+    l3_d_wk: 6, l3_a_wk: 2, l3_n_wk: 1,
+  }
+  const parsed = parseDutchInwevaSource(
+    featureCollection([
+      section({ vbn_id: 'complete', ...periods }),
+      section({ vbn_id: 'missing', l1_d_wk: null }),
+      section({ vbn_id: 'twin-a', vbn_id_tgn: 'twin-b', ...periods }),
+      section({
+        vbn_id: 'twin-b',
+        vbn_id_tgn: 'twin-a',
+        l1_e_wk: 2671, l2_e_wk: 143, l3_e_wk: 9,
+        l1_d_wk: 1000, l1_a_wk: 200, l1_n_wk: 1471,
+        l2_d_wk: 100, l2_a_wk: 30, l2_n_wk: 13,
+        l3_d_wk: 6, l3_a_wk: 2, l3_n_wk: 1,
+      }),
+    ]),
+  )
+  assert.equal(parsed.observations.length, 3)
+  const [complete, missing, twins] = parsed.observations
+  assert.deepEqual(complete.timeProfile?.shares, {
+    light: [2000 / 2671, 400 / 2671, 271 / 2671],
+    medium: [100 / 143, 30 / 143, 13 / 143],
+    heavy: [6 / 9, 2 / 9, 1 / 9],
+    moto: [2000 / 2671, 400 / 2671, 271 / 2671],
+  })
+  assert.equal(missing.timeProfile, undefined)
+  // Twin volumes sum per class and period before the shares: l1 day 3000 of 5342.
+  assert.deepEqual(twins.timeProfile?.shares.light, [3000 / 5342, 600 / 5342, 1742 / 5342])
+  assert.deepEqual(twins.timeProfile?.shares.moto, twins.timeProfile?.shares.light)
+})
+
+test('Dutch parser caps the imputed moto share at the light class, conserving the total', () => {
+  const parsed = parseDutchInwevaSource(
+    featureCollection([section({ vbn_id: 'no-light', l1_e_wk: 0, l2_e_wk: 500, l3_e_wk: 500 })]),
+  )
+  const [observation] = parsed.observations
+  assert.deepEqual(
+    { light: observation.light, medium: observation.medium, heavy: observation.heavy, moto: observation.moto },
+    { light: 0, medium: 500, heavy: 500, moto: 0 },
+  )
+})
+
+test('Dutch time profiles stamp matched rows with the section shares, nothing else', async () => {
+  const prepared = join(DIRECTORY, 'profiles')
+  const square = join(prepared, 'z9', '263', '169')
+  mkdirSync(square, { recursive: true })
+  const fixture = writeRoadsFixture('nl-profiles.arrow', [0, 0], {
+    origin: [5, 52],
+    refs: ['A2', 'A12'],
+    countryCodes: [iso2Code('NL'), iso2Code('NL')],
+    sourceIds: [0, 0],
+  })
+  const target = join(square, 'roads.arrow')
+  copyFileSync(fixture, target)
+  const parsed = parseDutchInwevaSource(
+    featureCollection([
+      section({
+        vbn_id: '100',
+        l1_d_wk: 2000, l1_a_wk: 400, l1_n_wk: 271,
+        l2_d_wk: 100, l2_a_wk: 30, l2_n_wk: 13,
+        l3_d_wk: 6, l3_a_wk: 2, l3_n_wk: 1,
+        geometry: {
+          type: 'LineString',
+          coordinates: [
+            [4.999, 51.999],
+            [5.004, 52.004],
+          ],
+        },
+      }),
+    ]),
+  )
+  const result = await enrichDutchTimeProfiles(prepared, parsed.observations)
+  assert.equal(result.matched, 1)
+  const table = tableFromIPC(readFileSync(target))
+  assert.deepEqual([...table.getChild('traffic_profile_id')!], [1, 0])
+  const dictionary = JSON.parse(table.schema.metadata.get('roads_time_profiles')!)
+  assert.equal(dictionary.entries.length, 1)
+  assert.equal(dictionary.entries[0].station, '100')
+  assert.deepEqual(dictionary.entries[0].profile.light, [2000 / 2671, 400 / 2671, 271 / 2671])
+  // Traffic columns are untouched by profile stamping.
+  assert.deepEqual([...table.getChild('source_id')!], [0, 0])
 })

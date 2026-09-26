@@ -269,3 +269,14 @@ test('a directional point stays on its road after a higher-priority count and re
     assert.deepEqual(readFileSync(path), stable)
   }
 })
+
+test('weekday rounding overflow floors estimates at zero instead of aborting the square', () => {
+  // AAWT 7 with truck 1 and moto 6 scales to total 6, heavy 1, moto 6: the rounded
+  // parts exceed the rounded total, and the medium estimate must floor, not negate.
+  const [record] = city({ type: 'Feature',
+    properties: { AAWT: 7, TR_AAWT: 1, '2W_AAWT': 6, raw_oneway: false, osm_type: 'secondary' },
+    geometry: { type: 'Point', coordinates: [14, 50] } }).records
+  assert.deepEqual([record.total, record.heavy, record.moto], [6, 1, 6])
+  const aadt = europeanTrafficAadt(record, 3)
+  assert.deepEqual([aadt.light, aadt.medium, aadt.heavy, aadt.moto], [0, 0, 1, 6])
+})

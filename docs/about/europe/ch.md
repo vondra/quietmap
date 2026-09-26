@@ -8,7 +8,7 @@ map: { center: [8.2, 46.8], zoom: 8 }
 
 Motorways and main roads: the [2024 annual results](https://www.astra.admin.ch/de/schweizerische-automatische-strassenverkehrszaehlung-sasvz) of the federal SASVZ counting stations (open use with attribution: ASTRA), with the yearly average, heavy traffic and heavy goods totals per station.
 
-A road takes the nearest station on a compatible class within 200 m; coaches form the medium class and 1 % of the non-truck total is assigned to motorcycles. Stations without a usable 2024 year are skipped.
+A road takes the nearest station on a compatible class within 200 m; coaches form the medium class and 1 % of the station total is assigned to motorcycles. Stations without a usable 2024 year are skipped.
 
 Zurich and Geneva: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities).
 

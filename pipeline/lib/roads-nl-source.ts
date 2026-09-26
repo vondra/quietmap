@@ -1,6 +1,7 @@
 /** Parse admitted RWS INWEVA 2024 weekdag section intensities. */
 
 import { withholdsCountLine } from './count-holdout.js'
+import type { RoadTimeProfileEntry } from './roads-arrow.js'
 import { roadObservation, type RoadObservation } from './road-observation.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
@@ -26,6 +27,16 @@ export interface DutchInwevaObservation extends RoadObservation {
   medium: number
   heavy: number
   moto: number
+  /** Observed class timing; absent where RWS published no usable periods (the class default applies). */
+  timeProfile?: DutchInwevaTimeProfile
+}
+
+/** Class-specific day/evening/night shares from the section's published period
+ *  volumes, ready for the `roads_time_profiles` dictionary. Motorcycles follow
+ *  light: loops cannot see them, so the 1 % moto share is imputed from l1. */
+export interface DutchInwevaTimeProfile {
+  shares: RoadTimeProfileEntry['profile']
+  status: string
 }
 
 export interface DutchInwevaSource {
@@ -82,12 +93,80 @@ interface InwevaSection {
   l1: number
   l2: number
   l3: number
+  /** Published dag/avond/nacht volumes per loop class; null where RWS published none. */
+  periods: readonly [
+    readonly [number, number, number] | null,
+    readonly [number, number, number] | null,
+    readonly [number, number, number] | null,
+  ]
+  /** Raw RWS valid-day flags, kept for the profile status audit. */
+  quality: string
 }
 
 function sectionRank(ref: string): number | null {
   if (ref.startsWith('A')) return 0
   if (ref.startsWith('N')) return 1
   return null
+}
+
+// RWS INWEVA periods are the engine's local periods: dag 07–19, avond 19–23,
+// nacht 23–07 (RWS INWEVA layer field aliases "Vrachtpercentage dag (7 - 19)"
+// and "Motorvoertuigen avond (19 - 23)"). dag+avond+nacht reproduce the etmaal
+// within one vehicle on the pinned file, so these fields are period volumes.
+function periodTriple(
+  properties: UnknownRecord | null,
+  prefix: 'l1' | 'l2' | 'l3',
+): readonly [number, number, number] | null {
+  const day = properties?.[`${prefix}_d_wk`],
+    evening = properties?.[`${prefix}_a_wk`],
+    night = properties?.[`${prefix}_n_wk`]
+  return isCount(day) && isCount(evening) && isCount(night) ? [day, evening, night] : null
+}
+
+function qualityFlags(properties: UnknownRecord | null): string {
+  const flag = (value: unknown): string => (typeof value === 'string' && value ? value : 'unknown')
+  return `kwal_al=${flag(properties?.kwal_al)} kwal_vc=${flag(properties?.kwal_vc)}`
+}
+
+const PERIOD_CLASS_NAMES = ['light', 'medium', 'heavy'] as const
+
+/** Class-specific period shares of one lonely or twin-paired observation: twin
+ *  volumes sum per class and period first (a both-directions total), a class
+ *  without usable periods keeps the class default, motorcycles follow light.
+ *  Undefined where no class has usable periods. */
+function sectionTimeProfile(sections: readonly InwevaSection[]): DutchInwevaTimeProfile | undefined {
+  const shares: RoadTimeProfileEntry['profile'] = {}
+  const notes: string[] = []
+  PERIOD_CLASS_NAMES.forEach((name, index) => {
+    const triples = sections.map(section => section.periods[index])
+    const etmaal = sections.reduce((sum, section) => sum + [section.l1, section.l2, section.l3][index], 0)
+    if (triples.some(triple => triple === null)) {
+      notes.push(`${name} periods unpublished`)
+      return
+    }
+    const day = triples.reduce((sum, triple) => sum + triple![0], 0)
+    const evening = triples.reduce((sum, triple) => sum + triple![1], 0)
+    const night = triples.reduce((sum, triple) => sum + triple![2], 0)
+    if (day + evening + night > 0 && etmaal > 0) {
+      const total = day + evening + night
+      shares[name] = [day / total, evening / total, night / total]
+    } else if (day + evening + night === 0 && etmaal === 0) {
+      // Consistent zero: no traffic, nothing to time.
+    } else {
+      notes.push(`${name} periods inconsistent with etmaal`)
+    }
+  })
+  if (Object.keys(shares).length === 0) return undefined
+  if (shares.light) shares.moto = [...shares.light]
+  const scope = sections.length > 1 ? 'twin sections, both-directions volumes summed' : 'single section'
+  return {
+    shares,
+    status:
+      `RWS INWEVA 2024 weekdag-gemiddelde (${scope}); class shares from published l1/l2/l3 ` +
+      `dag/avond/nacht volumes, motorcycles follow light; per-section valid-day coverage ` +
+      `unpublished (${sections.map(section => section.quality).join(' + ')})` +
+      (notes.length ? `; ${notes.join('; ')}` : ''),
+  }
 }
 
 function splitDutchTraffic(
@@ -97,7 +176,9 @@ function splitDutchTraffic(
 ): { light: number; medium: number; heavy: number; moto: number } {
   // RWS loop length classes map onto light/medium/heavy; loops cannot see motorcycles,
   // so 1 % of the total rides as moto exactly as on the Danish and Finnish censuses.
-  const moto = Math.round((l1 + l2 + l3) * 0.01)
+  // The share comes out of l1 and can never exceed it (a tiny l1 would otherwise
+  // drive light negative and abort the square).
+  const moto = Math.min(Math.round((l1 + l2 + l3) * 0.01), l1)
   return { light: l1 - moto, medium: l2, heavy: l3, moto }
 }
 
@@ -155,6 +236,7 @@ export function parseDutchInwevaSource(raw: string): DutchInwevaSource {
       result.missingValuesSkipped++
       continue
     }
+
     const refs = new Set<string>()
     for (const road of [properties?.wegnrhmp_b, properties?.wegnrhmp_e]) {
       if (typeof road === 'string' && road.trim()) refs.add(road.trim().toUpperCase().replace(/\s+/g, ''))
@@ -178,6 +260,8 @@ export function parseDutchInwevaSource(raw: string): DutchInwevaSource {
       l1,
       l2,
       l3,
+      periods: [periodTriple(properties, 'l1'), periodTriple(properties, 'l2'), periodTriple(properties, 'l3')],
+      quality: qualityFlags(properties),
     })
   }
   const paired = new Set<string>()
@@ -198,6 +282,7 @@ export function parseDutchInwevaSource(raw: string): DutchInwevaSource {
       rank: section.rank,
       isRamp: RAMP_BAANSOORT.has(section.baansoort),
       ...splitDutchTraffic(l1, l2, l3),
+      timeProfile: sectionTimeProfile([section]),
     })
   }
   for (const section of sections.values()) {
@@ -220,6 +305,7 @@ export function parseDutchInwevaSource(raw: string): DutchInwevaSource {
         rank: Math.max(section.rank, twin.rank),
         isRamp: false,
         ...splitDutchTraffic(section.l1 + twin.l1, section.l2 + twin.l2, section.l3 + twin.l3),
+        timeProfile: sectionTimeProfile([section, twin]),
       })
       continue
     }

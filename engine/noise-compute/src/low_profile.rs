@@ -5,7 +5,7 @@
 //! height took a default or a 100 m cell average even when it is a garage /
 //! carport / shed / greenhouse row that really stands ~2.5–3 m — hundreds of
 //! phantom 8 m walls in a 200 m grid over-screen entire neighbourhoods. OSM (via
-//! the cell's `buildings.arrow`) DOES know the class; a defaulted obstacle whose
+//! the cell's `structures.arrow`) DOES know the class; a defaulted obstacle whose
 //! centroid sits within `MATCH_M` of a low-profile OSM building with a
 //! comparable footprint area is capped at `LOW_HEIGHT_M` (= one floor, the same
 //! constant family as the ingest ladder). Applied where the obstacle index and the
@@ -29,8 +29,8 @@ use std::collections::HashMap;
 type LowProfileBuckets = HashMap<(i32, i32), Vec<(f64, f64, f32)>>;
 
 /// ~55 m spatial hash over (lat, lon) → (centroid, area_m2) of low-class OSM
-/// buildings. Empty when the cell has no `buildings.arrow` (ML-only coverage) —
-/// then nothing is capped, exactly the pre-fix behavior.
+/// buildings. Empty when the square's `structures.arrow` holds none
+/// (ML-only coverage) — then nothing is capped, exactly the pre-fix behavior.
 #[derive(Default)]
 pub struct LowProfileLookup {
     buckets: LowProfileBuckets,

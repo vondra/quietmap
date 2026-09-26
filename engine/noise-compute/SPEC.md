@@ -157,7 +157,11 @@ Power classes (`source_type` 11–15, `osm_industrial_contract`). Solar farms
 (13) emit per-MW, not per area: 88 dB(A)/MW + 10·lg(MW) − 5 dB day duty,
 day-only (Sungrow SG4950HV-MV 4.95 MW = 95 dB(A) anchor; MW from the row's
 `plant:output:electricity` tag, a solar generator unit's `rated_power_kw`, or
-area × 0.55 MW/ha, the tagged-farm median). Registry-confirmed solar
+area × 0.55 MW/ha, the tagged-farm median). A solar row with no nameplate and
+no footprint (a bare `generator:source=solar` node) stays silent — the generic
+10,000 m² default must not invent 0.55 MW / 80.4 dB for a rooftop panel — and
+a generator inside its plant polygon stays silent too (the plant owns the
+emission). Registry-confirmed solar
 (synthetic NACE 3599) takes the same branch. Substations (14) emit per-MVA,
 24/7: IEC 551 LWA = 74 + 14·lg(MVA), 64 dB below 0.2 MVA (MVA from the joined
 `rating` sum of the class-15 transformers inside the substation polygon, else
@@ -172,7 +176,12 @@ radius gates proximity only); a polygon takes the loudest contained facility
 of the winning registry (Tata: steel 2410 over chemicals 2011). New NACE arms:
 06 oil/gas extraction (92, near-24/7), 07 metal-ore mining (as quarries),
 19 coke/refining (96, near-24/7), 62 office (defensive, 60). E-PRTR maps by
-Annex I sub-activity letter, not sector. The India colour feed is deleted (CPCB
+Annex I sub-activity letter, not sector: 1(e) coal rolling mills → 1920 (coal
+products, like 1(f) — metal hot-rolling is 2(c)(i)), 3(a) underground mining →
+division-08 other mining (all underground commodities, not 24/7 coal), 3(b)
+opencast → 812. A contained GEM coal-tracker mine beats broad E-PRTR mining
+for the same polygon (commodity-specific over broad activity), so coal pits
+keep their 24/7 profile. The India colour feed is deleted (CPCB
 colours score air/water/waste pollution, not noise); registry points never
 stamp substations or turbines.
 
@@ -188,7 +197,11 @@ day-only (−50 evening/night) and reach past the 2 km leisure cap (industrial
 4 km reach, edge-gated). Raceway lines carry the emission, spread over their
 chain; an enclosing motorsport polygon goes silent, as does a roofed formula
 row (its building footprint emits) or a near-silent shooting discipline
-(archery, paintball, air guns).
+(archery, paintball, air guns). One venue carries one formula total: fragments
+of a circuit stored as N ways — touching chains, or lines in one class-10
+polygon — share the total by chain length instead of each radiating it
+(+10·lg N). A line in no venue keeps one total; mixed-subtype venues scale
+each line's own total by its length share.
 
 ## Prepared road direction and traffic
 
@@ -242,7 +255,9 @@ day/evening/night shares of the 24 h volume (local periods 07–19/19–23/23–
 an absent class in an entry is unmeasured and keeps the class default, and an
 optional `total` share of the unclassified volume backs every class without a
 class-specific observation as an explicitly transferred estimate (US TMAS
-hourly totals) — never a measured class profile.
+hourly totals) — never a measured class profile. RWS INWEVA 2024 sections
+stamp class-specific shares from their published dag/avond/nacht volumes
+(motorcycles follow light); sections without published periods keep the default.
 One canonical validation lives in `normalize::RoadTimeProfile::validate`.
 The reader rejects a wrong-typed/null column, an id past the dictionary,
 unknown class keys and malformed entries — malformed never degrades to
@@ -722,6 +737,7 @@ boundaries for abutments. These endpoints are evidence, not a deck-height model.
 Transport control rows retain node identity, raw crossing/signal/whistle tags,
 and one incidence per road or rail way (vertex index and whole-way chainage).
 Unlinked controls remain explicit null incidences; there is no proximity guess.
+Orphan controls flush in node-id order, so identical extracts spill identically.
 National whistle values and `railway:traffic_mode`, usage, service and heritage
 survive. Original railway node chains and piece intervals already supply curve
 geometry to rail finalization; no new curve-radius approximation is introduced.
@@ -729,7 +745,10 @@ geometry to rail finalization; no new curve-radius approximation is introduced.
 Industrial source classes 11/12 identify wind-plant outlines and inactive
 facilities: neither falls through to generic factory emission. A wind-plant
 outline requires wind as the sole `plant:source`; mixed fuels and copied
-generator tags do not silence a plant. Classes 13/14/15
+generator tags do not silence a plant polygon. Plant and generator nodes
+without a staged power class are omitted instead: a node has no footprint
+for the generic area law, so emitting one would invent a 10,000 m² factory
+stacked on the plant polygon; the polygon owns power emission. Classes 13/14/15
 retain solar, substation and transformer evidence for their specific models
 (see above); transformers stay silent themselves. Raw power/output/rating and
 lifecycle tags survive, with OSM object kind to disambiguate IDs. Registry

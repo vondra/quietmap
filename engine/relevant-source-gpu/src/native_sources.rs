@@ -100,10 +100,13 @@ pub fn load_sources(
             let joins = match name {
                 "industrial" => points::FileJoins {
                     transformers: square_store::osm_evidence::transformer_units(&batches),
+                    solar_plants: square_store::osm_evidence::solar_plants(&batches),
                     ..Default::default()
                 },
                 "leisure" => points::FileJoins {
-                    motorsport_lines: square_store::osm_evidence::motorsport_lines(&batches),
+                    motorsport_venues: square_store::osm_evidence::MotorsportVenues::build(
+                        &batches,
+                    ),
                     ..Default::default()
                 },
                 _ => points::FileJoins::default(),

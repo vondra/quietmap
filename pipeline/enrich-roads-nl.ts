@@ -1,11 +1,12 @@
 /** Enrich z9 Dutch roads with RWS INWEVA 2024 section measurements. */
 
 import { shouldOverwrite } from './lib/provenance.js'
+import { listPreparedSquares } from './lib/prepared-grid.js'
 import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import { loadDutchInwevaSource, type DutchInwevaObservation } from './lib/roads-nl-source.js'
 import { SOURCE_ID_NL_NATIONAL_ROADS } from './lib/source-ids.generated.js'
-import { roadClassTakesCount, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
-import { writeNationalRoadSquares } from './lib/square-pool.js'
+import { applyRoadTimeProfiles, roadClassTakesCount, writeRoadAadt, type RoadRow, type RoadTimeProfileEntry } from './lib/roads-arrow.js'
+import { ownSquareShard, writeNationalRoadSquares } from './lib/square-pool.js'
 import {
   buildOneHundredthDegreeSegmentGrid,
   pointGridCandidates,
@@ -124,8 +125,65 @@ export async function enrichDutchRoads(preparedDirectory: string, observations: 
   )
 }
 
+/** RWS INWEVA 2024 weekdag-gemiddelde section intensities, Nationaal Georegister
+ *  record 93e99016-9b53-45d6-8b3c-fc9bf8086256 (CC0, "Geen beperkingen"). */
+export const INWEVA_PROFILE_SOURCE_URL =
+  'https://www.nationaalgeoregister.nl/geonetwork/srv/dut/catalog.search#/metadata/93e99016-9b53-45d6-8b3c-fc9bf8086256'
+const INWEVA_PROFILE_WINDOW = '2024-01..2024-12'
+// 2024 is a leap year; weekdag-gemiddelde averages all days (RWS Toelichting
+// INWEVA distinguishes it from the werkdag average). Per-section valid-day
+// coverage is unpublished — each entry's status carries its kwal flags.
+const INWEVA_PROFILE_DAYS = 366
+
+/** One dictionary entry per observation with published periods, with its
+ *  1-based position for the row matcher (observations without periods match 0). */
+export function inwevaProfileEntries(observations: readonly DutchInwevaObservation[]): {
+  entries: RoadTimeProfileEntry[]
+  indexOf: ReadonlyMap<string, number>
+} {
+  const entries: RoadTimeProfileEntry[] = []
+  const indexOf = new Map<string, number>()
+  for (const observation of observations) {
+    if (!observation.timeProfile) continue
+    indexOf.set(observation.observationId, entries.length + 1)
+    entries.push({
+      station: observation.observationId.replace(/^inweva2024:/, ''),
+      window: INWEVA_PROFILE_WINDOW,
+      days: INWEVA_PROFILE_DAYS,
+      status: observation.timeProfile.status,
+      profile: observation.timeProfile.shares,
+    })
+  }
+  return { entries, indexOf }
+}
+
+/** Stamp observed INWEVA period profiles next to (never onto) the AADT columns. */
+export async function enrichDutchTimeProfiles(
+  preparedDirectory: string,
+  observations: readonly DutchInwevaObservation[],
+) {
+  const { entries, indexOf } = inwevaProfileEntries(observations)
+  if (entries.length === 0) return { rows: 0, matched: 0, squaresUpdated: 0 }
+  const index = indexDutchInweva(observations)
+  return applyRoadTimeProfiles(
+    preparedDirectory,
+    listPreparedSquares(preparedDirectory, NETHERLANDS_BBOX),
+    INWEVA_PROFILE_SOURCE_URL,
+    entries,
+    row => {
+      const matched = matchDutchInweva(row, index)
+      return matched ? (indexOf.get(matched.observationId) ?? 0) : 0
+    },
+  )
+}
+
 export async function runDutchRoadEnrichment(options: RoadLoaderArguments) {
   const source = loadDutchInwevaSource(options)
+  const traffic = await enrichDutchRoads(options.preparedDirectory, source.observations)
+  // Shards re-run this main for the AADT walk; only the parent stamps profiles (once, honest tally).
+  const profiles = ownSquareShard
+    ? { matched: 0, squaresUpdated: 0 }
+    : await enrichDutchTimeProfiles(options.preparedDirectory, source.observations)
   return {
     sourceRows: source.sourceRows,
     observations: source.observations.length,
@@ -137,7 +195,10 @@ export async function runDutchRoadEnrichment(options: RoadLoaderArguments) {
     lonelyNationalRoadSkipped: source.lonelyNationalRoadSkipped,
     missingRefSkipped: source.missingRefSkipped,
     invalidGeometrySkipped: source.invalidGeometrySkipped,
-    ...(await enrichDutchRoads(options.preparedDirectory, source.observations)),
+    profileEntries: inwevaProfileEntries(source.observations).entries.length,
+    profileMatched: profiles.matched,
+    profileSquaresUpdated: profiles.squaresUpdated,
+    ...traffic,
   }
 }
 

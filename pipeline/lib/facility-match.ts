@@ -2,6 +2,7 @@
 
 import { DataType, Table, type Vector } from 'apache-arrow'
 import { gridToLonLat } from './prepared-grid.js'
+import { SOURCE_ID_GLOBAL_GEM_COALMINE } from './source-ids.generated.js'
 import { buildOneHundredthDegreePointGrid, flatDist, pointGridCandidates } from './spatial.js'
 
 export interface MatchFacility {
@@ -111,6 +112,19 @@ export function contestBeats(
   a: { rank: number; year: number; id: number; edge?: number; contained?: boolean; nace4?: number },
   b: { rank: number; year: number; id: number; edge?: number; contained?: boolean; nace4?: number },
 ): boolean {
+  // A contained commodity-specific coal mine beats broad mining activity for
+  // the same polygon: the GEM tracker says what the mine IS (24/7 coal), the
+  // registry only that it mines (E-PRTR 3(a)/3(b) → division 07/08). Without
+  // this the continental rank beats the global rank and Garzweiler-class pits
+  // lose their night term (8.5 dB Lden at the same day level). The coal side
+  // must be contained (inside this plant, not a neighbour); the mining side
+  // may be contained or near. Every other pairing keeps the rank ladder.
+  const containedCoal = (f: typeof a) => (f.contained ?? false) && f.id === SOURCE_ID_GLOBAL_GEM_COALMINE &&
+    Math.floor((f.nace4 ?? 0) / 100) === 5
+  const broadMining = (f: typeof a) => f.id !== SOURCE_ID_GLOBAL_GEM_COALMINE &&
+    [7, 8].includes(Math.floor((f.nace4 ?? -100) / 100))
+  if (containedCoal(a) && broadMining(b)) return true
+  if (containedCoal(b) && broadMining(a)) return false
   if (a.rank !== b.rank) return a.rank > b.rank
   if (a.year !== b.year) return a.year > b.year
   if (a.id !== b.id) return a.id > b.id

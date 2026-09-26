@@ -87,6 +87,15 @@ impl JunctionCensus {
         }
     }
 
+    /// Mark a node a junction outright: control points must survive
+    /// simplification whether or not any way references them twice.
+    pub fn preserve(&self, node_id: i64) {
+        self.seen.insert(node_id);
+        if self.repeated.insert(node_id) {
+            self.count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     pub fn count(&self) -> u64 {
         self.count.load(Ordering::Relaxed)
     }

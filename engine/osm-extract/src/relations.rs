@@ -60,8 +60,7 @@ pub fn scan_relations_and_junctions(
                 _ => None,
             };
             if let Some(id) = control_id {
-                junctions.record(id);
-                junctions.record(id);
+                junctions.preserve(id);
             }
             if let Element::Way(ref way) = element {
                 // Census is independent of output scope: retained families must

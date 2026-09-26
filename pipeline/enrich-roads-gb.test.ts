@@ -35,6 +35,7 @@ function point(overrides: Partial<DftCountPoint> = {}): DftCountPoint {
   return {
     countBasis: 'both-directions', observationId: '1',
     ref: 'A1', latitude: 51.505, longitude: -0.095, roadCategory: 'PA', rank: 2, isRamp: false,
+    estimated: false,
     light: 1000, medium: 40, heavy: 100, moto: 10, total: 1150, year: 2024,
     startJunction: '', endJunction: '', linkLengthKm: 5,
     ...overrides,
@@ -52,8 +53,8 @@ test('DfT selection keeps the latest major row, the latest manual minor count an
     csvRow({ count_point_id: 5, year: 2025, road_name: 'U', road_category: 'MCU', estimation_method: 'Estimated' }),
     csvRow({ count_point_id: 6, year: 2020, road_name: 'C', road_category: 'MCU' }),
   ])
-  assert.deepEqual(points.map(({ observationId, ref, year, rank }) => [observationId, ref, year, rank]),
-    [['1', 'A1', 2025, 2], ['3', 'A3', 2025, 2], ['5', 'U', 2024, 5]])
+  assert.deepEqual(points.map(({ observationId, ref, year, rank, estimated }) => [observationId, ref, year, rank, estimated]),
+    [['1', 'A1', 2025, 2, true], ['3', 'A3', 2025, 2, false], ['5', 'U', 2024, 5, false]])
 })
 
 test('slip-road points by junction name or by a share of their own road never stamp a mainline', async () => {
@@ -119,7 +120,26 @@ test('z9 GB pass writes domestic data and heals a matching foreign GB stamp', as
   const table = tableFromIPC(readFileSync(target))
   assert.deepEqual([...Array(2)].map((_, index) => table.getChild('source_id')!.get(index)), [1041, 0])
   assert.equal(table.getChild('aadt_light')!.get(0), 1000)
+  assert.equal(table.getChild('traffic_estimated')!.get(0), 0)
   assert.equal(table.schema.metadata.get('roads_contract'), 'country_baked_v1')
+})
+
+test('a DfT estimated row stamps its values with every class marked estimated', async () => {
+  const prepared = join(TEST_DIRECTORY, 'estimated')
+  const square = join(prepared, 'z9', '255', '170')
+  mkdirSync(square, { recursive: true })
+  const target = join(square, 'roads.arrow')
+  copyFileSync(writeRoadsFixture('gb-estimated.arrow', [1], {
+    refs: ['A1'],
+    countryCodes: [iso2Code('GB')],
+    sourceIds: [0],
+  }), target)
+  // Fixture row 0 spans (14, 50)-(14.0005, 50.0005); the point sits on its midpoint.
+  const result = await enrichGreatBritainRoads(prepared, [point({ estimated: true, latitude: 50.00025, longitude: 14.00025 })])
+  assert.equal(result.matched, 1)
+  const table = tableFromIPC(readFileSync(target))
+  assert.equal(table.getChild('aadt_light')!.get(0), 1000)
+  assert.equal(table.getChild('traffic_estimated')!.get(0), 15)
 })
 
 test('a physical holdout DfT point cannot stamp an adjacent training square', async () => {

@@ -12,13 +12,15 @@ fn polygon(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<(i32, i32)
 }
 
 /// Per-square join contexts for one industrial/leisure file: the transformer
-/// units a substation polygon joins against, and the raceway lines that
-/// silence their enclosing motorsport polygon. Built once per file in
-/// `load_sources`; empty for every other layer.
+/// units a substation polygon joins against, the solar plant polygons that
+/// silence their contained generators, and the raceway lines that silence
+/// their enclosing motorsport polygon. Built once per file in `load_sources`;
+/// empty for every other layer.
 #[derive(Default)]
 pub(super) struct FileJoins {
     pub transformers: Vec<square_store::osm_evidence::TransformerUnit>,
-    pub motorsport_lines: Vec<square_store::osm_evidence::MotorsportLine>,
+    pub solar_plants: Vec<grid::poly::PreparedRing>,
+    pub motorsport_venues: square_store::osm_evidence::MotorsportVenues,
 }
 
 pub(super) fn points(
@@ -48,10 +50,9 @@ pub(super) fn points(
         }
         if byte(batch, "sport", row) == noise_compute::emission::leisure::MOTORSPORT
             && !square_store::osm_evidence::row_is_leisure_line(batch, row)
-            && square_store::osm_evidence::encloses_motorsport_line(
-                &joins.motorsport_lines,
-                &polygon(batch, row, "geom")?,
-            )
+            && joins
+                .motorsport_venues
+                .encloses_line(&polygon(batch, row, "geom")?)
         {
             return Ok(Vec::new());
         }
@@ -112,7 +113,7 @@ pub(super) fn points(
                 .filter(|c| !c.is_null(row))
                 .map(|c| c.value(row))
                 .unwrap_or("");
-            let formula = if noise_compute::emission::leisure::is_formula_class(sport) {
+            let mut formula = if noise_compute::emission::leisure::is_formula_class(sport) {
                 let tags = square_store::osm_evidence::optional_tags(batch, row);
                 let details: Vec<&str> = tags
                     .iter()
@@ -129,6 +130,21 @@ pub(super) fn points(
             } else {
                 None
             };
+            // Fragments of one circuit share its single formula total by
+            // chain length (same venue join as the popup).
+            let is_line = square_store::osm_evidence::row_is_leisure_line(batch, row);
+            if sport == noise_compute::emission::leisure::MOTORSPORT && is_line {
+                if let Some(emission) = formula.as_mut() {
+                    let share = joins.motorsport_venues.line_share(
+                        square_store::osm_evidence::chain_ends(&polygon_grid),
+                        square_store::osm_evidence::leisure_line_length_m(
+                            float(batch, "length_m", row),
+                            &polygon_grid,
+                        ),
+                    );
+                    emission.lw_day += 10.0 * share.log10();
+                }
+            }
             prepare_leisure_points(RawLeisureInput {
                 centroid_lat,
                 centroid_lon,
@@ -136,7 +152,7 @@ pub(super) fn points(
                 area_m2,
                 polygon_grid: &polygon_grid,
                 formula,
-                is_line: square_store::osm_evidence::row_is_leisure_line(batch, row),
+                is_line,
             })
         }
         "industrial" => {
@@ -153,6 +169,30 @@ pub(super) fn points(
                 .is_some_and(square_store::osm_evidence::is_gas_substation)
             {
                 return Ok(Vec::new());
+            }
+            // A class-13 generator inside its plant polygon stays silent —
+            // the plant owns the emission (same join as the popup).
+            if source_type == noise_compute::emission::industrial::SOURCE_SOLAR_FARM
+                && row_tags.as_ref().is_some_and(|tags| {
+                    !square_store::osm_evidence::tags_is_solar_plant(tags)
+                })
+            {
+                // Without centroid columns there is no containment evidence;
+                // the row emits (current behaviour).
+                if let (Some(cgx), Some(cgy)) =
+                    (col_i32(batch, "centroid_gx"), col_i32(batch, "centroid_gy"))
+                {
+                    if !cgx.is_null(row)
+                        && !cgy.is_null(row)
+                        && square_store::osm_evidence::inside_solar_plant(
+                            &joins.solar_plants,
+                            cgx.value(row),
+                            cgy.value(row),
+                        )
+                    {
+                        return Ok(Vec::new());
+                    }
+                }
             }
             let plant_output_mw = row_tags
                 .as_ref()
