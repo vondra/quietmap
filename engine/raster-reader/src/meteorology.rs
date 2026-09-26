@@ -131,11 +131,11 @@ impl Meteorology {
         assert!(!nodes.is_empty(), "meteorology window without nodes");
         let mut maxima = [0u8; 3];
         for node in &nodes {
-            for period in 0..3 {
+            for (period, maximum) in maxima.iter_mut().enumerate() {
                 for sector in 0..SECTORS {
                     assert!(node.p_percent[period][sector] <= 100, "p outside 0..100 percent");
                 }
-                maxima[period] = maxima[period].max(*node.p_percent[period].iter().max().unwrap());
+                *maximum = (*maximum).max(*node.p_percent[period].iter().max().unwrap());
                 for band in 0..8 {
                     let (mean, variance) = (node.alpha_mean[period][band], node.alpha_variance[period][band]);
                     assert!(

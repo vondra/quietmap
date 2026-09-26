@@ -88,7 +88,7 @@ pub fn point_sum(
             exclusion_radius_m: 0.0,
         };
         let transfer =
-            evaluate_ray_transfer(receiver, &source, obstacles, true, rasters, &weather, false, &mut scratch, None);
+            evaluate_ray_transfer(receiver, &source, obstacles, true, rasters, weather, false, &mut scratch, None);
         let along = [end[0] - start[0], end[1] - start[1]];
         let horizontal_range_sq = node.position_m[0].powi(2) + node.position_m[1].powi(2);
         let horizontal_line_sq = along[0].powi(2) + along[1].powi(2);
