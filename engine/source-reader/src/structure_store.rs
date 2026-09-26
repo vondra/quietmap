@@ -435,7 +435,7 @@ pub fn build_obstacle_index_from_arrow_bytes(
                 builder.add_polygon_wkb(&wkb, height, ObstacleKind::Building, id, class);
             }
             // Walls keep their mapped height: the cap is a building-only
-            // correction (noise_compute::low_profile caps typology/GHSL heights), and
+            // correction (noise_compute::low_profile caps typology heights), and
             // add_polyline never clamps to the building height ceiling.
             STRUCTURE_KIND_BARRIER => {
                 let ring = decode_geom(Some(geom.value(i))).ok_or_else(|| {

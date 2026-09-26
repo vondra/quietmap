@@ -97,6 +97,7 @@ class CacheRoundtripTests(unittest.TestCase):
             tile = degree_name(math.floor(row["clat"]), math.floor(row["clon"]))
             columns = by_tile.setdefault(tile, {name: [] for name in OFFICIAL.SCHEMA.names})
             columns["geometry"].append(shapely.to_wkb(row["geom"]))
+            columns["hop_idx"].append(0)
             columns["height_m"].append(row["height_m"])
             columns["measured"].append(row["measured"])
             columns["kind"].append(row["kind"])
@@ -173,6 +174,61 @@ class BuildSquareOfficialTests(unittest.TestCase):
         table = ipc.open_file(self.prepared / SQUARE / "structures.arrow").read_all()
         self.assertEqual(census["official_walls"], 0)
         self.assertEqual(table.column("kind").to_pylist(), [0])
+
+    def test_long_wall_across_a_square_border_screens_once_per_side(self):
+        # A 600 m official wall (400 m in z9/276/174, 200 m in z9/277/174)
+        # with an OSM segment on the same line in each square. Assigning the
+        # line by centroid but emitting it whole screens the far side twice
+        # (whole official hops plus the unreplaced OSM twin); per-hop
+        # assignment emits each square's hops and replaces the OSM locally.
+        border_lon = 14.765625
+        lat = 49.6
+        metre_lon = 111_320.0 * math.cos(math.radians(lat))
+        west = border_lon - 400.0 / metre_lon
+        east = border_lon + 200.0 / metre_lon
+        wall = shapely.LineString([(west, lat), (east, lat)])
+        cache = os.path.join(self.temporary.name, "barriers")
+        NORMALIZE.append_cache([(wall, 4.0, True, OFFICIAL.KIND_WALL)],
+                               "TEST", "2026-01-01", cache)
+        squares = ("z9/276/174", "z9/277/174")
+        osm_spans = [("z9/276/174", west + 50.0 / metre_lon, west + 250.0 / metre_lon),
+                     ("z9/277/174", border_lon + 50.0 / metre_lon, border_lon + 150.0 / metre_lon)]
+        censuses = {}
+        for name, lon0, lon1 in osm_spans:
+            square_dir = self.prepared / name
+            square_dir.mkdir(parents=True, exist_ok=True)
+            buildings_arrow(square_dir / "buildings.arrow", [])
+            barriers_arrow(square_dir / "barriers.arrow", [{
+                "osm_id": 1, "segment_idx": 0, "start_lat": lat + 2.0 / 111_320.0,
+                "start_lon": lon0, "end_lat": lat + 2.0 / 111_320.0, "end_lon": lon1,
+                "height": 0.0, "height_tier": 2}])
+            official, _ = read_official_cache(
+                cache, GRID.parse_square_name(name), OFFICIAL.SCHEMA,
+                OFFICIAL.CONTRACT_KEY, OFFICIAL.CONTRACT_VERSION)
+            censuses[name] = BUILDER.build_square(
+                name, self.prepared, [], [], None, official, [], [], [])
+        self.assertEqual(
+            [(censuses[name]["official_walls"], censuses[name]["replaced_osm_walls"])
+             for name in squares], [(2, 1), (1, 1)])
+        # Every emitted official hop stays in its square: no whole-line
+        # spill across the border.
+        for name in squares:
+            table = ipc.open_file(self.prepared / name / "structures.arrow").read_all()
+            kinds = table.column("kind").to_pylist()
+            sources = table.column("height_source").to_pylist()
+            cgx = table.column("centroid_gx").to_pylist()
+            cgy = table.column("centroid_gy").to_pylist()
+            square = GRID.parse_square_name(name)
+            for i, kind in enumerate(kinds):
+                if kind != 1 or sources[i] != CONTRACT.HEIGHT_SOURCE_OFFICIAL_BARRIER:
+                    continue
+                lon, lat = GRID.grid_to_lonlat(cgx[i], cgy[i])
+                self.assertEqual(GRID.square_of(lat, lon), square, name)
+        # Both squares together screen the 600 m once: 3 hops, no OSM twin.
+        total_m = sum(censuses[name]["official_wall_km"] for name in squares) * 1000.0
+        self.assertAlmostEqual(total_m, 600.0, delta=5.0)
+        self.assertEqual(
+            sum(censuses[name]["replaced_osm_walls"] for name in squares), 2)
 
 
 class NormalizerTests(unittest.TestCase):
@@ -267,7 +323,11 @@ class NormalizerTests(unittest.TestCase):
             "TEST", "2026-01-01", cache)
         self.assertEqual(kept, 2)
         table = pq.read_table(self.root / "cache" / "N47W123.parquet")
-        self.assertEqual(table.num_rows, 2)
+        # The 751 m line caches as 4 hops × 2 kept lines, each hop carrying
+        # its within-line identity.
+        self.assertEqual(table.num_rows, 8)
+        self.assertEqual(sorted(table.column("hop_idx").to_pylist()),
+                         [0, 0, 1, 1, 2, 2, 3, 3])
 
     def test_rerun_replaces_the_same_source_rows(self):
         import pyarrow.parquet as pq
@@ -279,9 +339,9 @@ class NormalizerTests(unittest.TestCase):
         kept = NORMALIZE.append_cache([(line, 3.0, True, 0)], "TEST", "2026-06-01", cache)
         self.assertEqual(kept, 1)
         table = pq.read_table(self.root / "cache" / "N47W123.parquet")
-        rows = sorted(table.to_pylist(), key=lambda row: row["source"])
+        rows = sorted(table.to_pylist(), key=lambda row: (row["source"], row["hop_idx"]))
         self.assertEqual([(row["source"], row["as_of"], row["height_m"]) for row in rows],
-                         [("OTHER", "2026-01-01", 2.0), ("TEST", "2026-06-01", 3.0)])
+                         [("OTHER", "2026-01-01", 2.0)] * 4 + [("TEST", "2026-06-01", 3.0)] * 4)
 
 
 if __name__ == "__main__":

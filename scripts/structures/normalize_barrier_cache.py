@@ -2,7 +2,7 @@
 """Normalize one official noise-barrier inventory into the per-1-degree cache.
 
 Reads the provider's retained download (local file, no network) and writes
-`official_barriers_v1` tiles beside any already cached inventories. Heights are
+`official_barriers_v2` hop tiles beside any already cached inventories. Heights are
 metres above the road; out-of-range measurements fall back to the inventory's
 own in-range median and are marked unmeasured. Only standing walls are kept:
 proposed, removed and replaced records are not noise protection.
@@ -21,7 +21,7 @@ import shapely
 from pyproj import Transformer
 
 import qmgrid
-from official_barriers import CONTRACT_KEY, CONTRACT_VERSION, KIND_BERM, KIND_COMBINED, KIND_WALL, SCHEMA
+from official_barriers import CONTRACT_KEY, CONTRACT_VERSION, KIND_BERM, KIND_COMBINED, KIND_WALL, SCHEMA, split_hops
 from structure_inventory import accumulate_official_cache, degree_name
 
 FT_TO_M = 0.3048  # exact
@@ -160,7 +160,9 @@ READERS = {"gwv": read_gwv, "wsdot": read_wsdot, "fdot": read_fdot, "vdot": read
 
 def append_cache(rows, source, as_of, cache_dir):
     # Inventories repeat records: WSDOT publishes 742 existing-wall features for
-    # 317 distinct geometries (2026-09-25). One physical wall is one cache row.
+    # 317 distinct geometries (2026-09-25). One physical wall is one line;
+    # lines cache as per-hop rows (split_hops, ≤250 m each) tiled by hop
+    # centroid, so square assignment and emission agree per hop.
     seen, duplicates = set(), 0
     by_tile = {}
     for geom, height_m, measured, kind in rows:
@@ -171,15 +173,19 @@ def append_cache(rows, source, as_of, cache_dir):
             duplicates += 1
             continue
         seen.add(key)
-        centroid = geom.centroid
-        tile = degree_name(math.floor(centroid.y), math.floor(centroid.x))
-        columns = by_tile.setdefault(tile, {name: [] for name in SCHEMA.names})
-        columns["geometry"].append(shapely.to_wkb(geom))
-        columns["height_m"].append(float(height_m))
-        columns["measured"].append(bool(measured))
-        columns["kind"].append(kind)
-        columns["source"].append(source)
-        columns["as_of"].append(as_of)
+        for hop_idx, ((lon0, lat0), (lon1, lat1), _) in \
+                enumerate(split_hops(list(geom.coords))):
+            hop = shapely.LineString([(lon0, lat0), (lon1, lat1)])
+            centroid = hop.centroid
+            tile = degree_name(math.floor(centroid.y), math.floor(centroid.x))
+            columns = by_tile.setdefault(tile, {name: [] for name in SCHEMA.names})
+            columns["geometry"].append(shapely.to_wkb(hop))
+            columns["hop_idx"].append(hop_idx)
+            columns["height_m"].append(float(height_m))
+            columns["measured"].append(bool(measured))
+            columns["kind"].append(kind)
+            columns["source"].append(source)
+            columns["as_of"].append(as_of)
     accumulate_official_cache(by_tile, source, cache_dir, SCHEMA, CONTRACT_KEY,
                               CONTRACT_VERSION)
     if duplicates:
