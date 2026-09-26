@@ -2,7 +2,9 @@
 
 use super::*;
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+use crate::flight::CruiseBucket;
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Ord, PartialOrd)]
 #[cfg_attr(test, derive(Debug))]
 pub(super) struct CruiseKey {
     pub(super) cruise_cell_id: u64,
@@ -98,31 +100,6 @@ impl CruiseAccum {
             peak_lmax_25m_db: lmax_db,
             altitude_m,
         });
-    }
-
-    /// Symmetric merge for the Stage 2B fold/reduce. Both `add` and
-    /// `merge` must produce the same final accumulator state regardless
-    /// of split point — tested by `merge_matches_sequential`.
-    pub(super) fn merge(&mut self, other: CruiseAccum) {
-        self.sum_length_m += other.sum_length_m;
-        self.rep_alt_m += other.rep_alt_m;
-        self.rep_speed_kt += other.rep_speed_kt;
-        self.weight += other.weight;
-        for fid in other.fid_set {
-            self.fid_set.insert(fid);
-        }
-        // Replay other's top entries through the cap-K logic so the
-        // final accumulator has the true top-K of the union (rev 2
-        // accepts that two capped top-50 lists union to top-50 of
-        // top-100 — bounded rank pollution at the Kth slot).
-        for cand in other.top.into_values() {
-            self.merge_top_entry(cand);
-        }
-        // `rep_profile_idx` / `source_id` / `origin` are NOT
-        // invariant per bucket key — different `profile_idx` can map
-        // to the same `class`. Both `add` and `merge` pick
-        // arbitrarily; downstream remaps `profile_idx` → class so
-        // the pick has no measurable effect.
     }
 
     /// Cap-K + re-entrant top-K maintenance. If the fid is already in

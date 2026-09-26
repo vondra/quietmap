@@ -8,9 +8,10 @@ pub use census::census_cruise_inputs;
 pub(crate) use receipt::receipt_page_limit as spill_receipt_page_limit;
 mod spill;
 use accum::*;
+mod fold;
+use fold::*;
 use spill::*;
 
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,9 +23,9 @@ use noise_compute::emission::aircraft::{
 };
 use rayon::prelude::*;
 
-use crate::arrow_io::{for_each_cruise_spill, write_cruise, write_cruise_spill, CruiseSpillRow};
+use crate::arrow_io::{write_cruise, write_cruise_spill, CruiseSpillRow};
 use crate::arrow_schemas::CRUISE_TOP_K;
-use crate::flight::{fl_bin_of, CruiseBucket, CruiseTopCandidate, FlightSegment, Phase};
+use crate::flight::{fl_bin_of, CruiseTopCandidate, FlightSegment, Phase};
 use crate::geo::square_path;
 use crate::profile::noise_class_of;
 use crate::progress::{finished, human, started, ts, Milestone};
@@ -43,6 +44,10 @@ fn log_d_25m_ft() -> f64 {
 /// Spill accumulation target; allocation admission includes coexisting serialization buffers.
 const SPILL_TRIGGER_BYTES: usize = 512 * 1024 * 1024;
 
+/// Buffered spill rows per day worker past which the largest bucket buffer
+/// reaches disk. One file per (day, bucket) in the common case.
+const SPILL_ROW_BUFFER_CAP_BYTES: usize = 1024 * 1024 * 1024;
+
 /// Partition routing; actual bucket counts determine concurrency.
 const SPILL_HASH_BUCKETS: u64 = 1024;
 
@@ -58,8 +63,15 @@ fn spill_bucket_dir(spill_dir: &Path, bucket: u64) -> std::path::PathBuf {
     spill_dir.join(format!("hash_{bucket:04x}"))
 }
 
-fn spill_part_path(spill_dir: &Path, bucket: u64, id: u64) -> std::path::PathBuf {
-    spill_bucket_dir(spill_dir, bucket).join(format!("part_{id:016x}.arrow"))
+/// Part names sort in deterministic fold order: day, then chunk sequence.
+/// Days are admission-ordered; chunks per (day, bucket) sequence writes.
+fn spill_part_path(
+    spill_dir: &Path,
+    bucket: u64,
+    day: usize,
+    chunk: u32,
+) -> std::path::PathBuf {
+    spill_bucket_dir(spill_dir, bucket).join(format!("part_{day:04x}_{chunk:06x}.arrow"))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -78,7 +90,7 @@ pub fn run_stage_2b_phase(
     phase: CruisePhase,
 ) -> Result<usize> {
     let stage_start = std::time::Instant::now();
-    let part_id = AtomicU64::new(0);
+    let files_written = AtomicU64::new(0);
     let day_paths: Vec<PathBuf> = days.iter().map(|day| day.segments.clone()).collect();
     let identities = receipt::input_identities(&day_paths)?;
     if phase == CruisePhase::Finish {
@@ -118,6 +130,7 @@ pub fn run_stage_2b_phase(
             0
         } else {
             4 * SPILL_TRIGGER_BYTES as u64
+                + SPILL_ROW_BUFFER_CAP_BYTES as u64
                 + 2 * largest_batch
                 + (crate::arrow_io::SEGMENT_READ_CHUNK_ROWS
                     * (std::mem::size_of::<FlightSegment>() + 32)) as u64
@@ -134,9 +147,10 @@ pub fn run_stage_2b_phase(
             ts()
         );
         spill_pool.install(|| {
-            days.par_iter().try_for_each(|day| -> Result<()> {
+            days.par_iter().enumerate().try_for_each(|(day_idx, day)| -> Result<()> {
                 let day_path = &day.segments;
                 let mut local: HashMap<u64, HashMap<CruiseKey, CruiseAccum>> = HashMap::new();
+                let mut buffers = SpillBuffers::new(day_idx);
                 let mut charged_bytes = 0usize;
                 crate::arrow_io::for_each_segment_batch(day_path, |segments| {
                     let mut cruise_kept = 0u64;
@@ -159,7 +173,10 @@ pub fn run_stage_2b_phase(
                             cruise_transits(seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon)
                         {
                             if charged_bytes + addition > SPILL_TRIGGER_BYTES {
-                                flush_to_spill(&mut local, spill_dir, &part_id)?;
+                                buffers.buffer_flush(&mut local);
+                                while buffers.bytes() > SPILL_ROW_BUFFER_CAP_BYTES {
+                                    buffers.write_largest_buffer(spill_dir, &files_written)?;
+                                }
                                 charged_bytes = 0;
                             }
                             add_transit(seg, cell, clip_m, heading, &mut local, npd_luts);
@@ -172,13 +189,14 @@ pub fn run_stage_2b_phase(
                 })
                 .with_context(|| format!("stage2b spill day {}", day_path.display()))?;
                 if !local.is_empty() {
-                    flush_to_spill(&mut local, spill_dir, &part_id)?;
+                    buffers.buffer_flush(&mut local);
                 }
+                buffers.write_all_buffers(spill_dir, &files_written)?;
                 Ok(())
             })
         })?;
         let t_phase1 = stage_start.elapsed();
-        let parts_written = part_id.load(Ordering::Relaxed);
+        let parts_written = files_written.load(Ordering::Relaxed);
         finished(
             "stage2b/spill",
             &format!(
@@ -247,26 +265,9 @@ pub fn run_stage_2b_phase(
                 fold_bucket_counter.add(1);
                 return Ok(());
             }
-            let mut canonical_rows = 0;
-            for (square, buckets) in fold_raw_parts(parts)? {
-                if scope.is_some_and(|scope| !scope.contains_square(square)) {
-                    continue;
-                }
-                let mut rows: Vec<CruiseBucket> = buckets
-                    .into_iter()
-                    .map(|(key, accum)| accum.finalize(key))
-                    .collect();
-                rows.sort_unstable_by_key(|r| {
-                    (
-                        r.cruise_cell_id,
-                        r.class,
-                        r.fl_bin,
-                        r.period,
-                        r.heading_bin,
-                        r.secondary_only,
-                    )
-                });
-                canonical_rows += rows.len() as u64;
+            // Rows arrive pre-sorted by (square, key): no per-square map,
+            // no second sort, one live key accumulator at a time.
+            let bucket_rows = fold_bucket_sorted(parts, scope, input.counts, |square, rows| {
                 write_cruise(
                     &prepared_year_dir
                         .join(square_path(square))
@@ -275,7 +276,9 @@ pub fn run_stage_2b_phase(
                     window,
                 )?;
                 squares_written.fetch_add(1, Ordering::Relaxed);
-            }
+                Ok(())
+            })?;
+            let canonical_rows = bucket_rows;
             // Published owner files are durable before their raw input retires.
             for path in parts {
                 std::fs::remove_file(path)?;
@@ -299,32 +302,6 @@ pub fn run_stage_2b_phase(
         ),
     );
     Ok(n)
-}
-
-fn fold_raw_parts(parts: &[PathBuf]) -> Result<HashMap<u64, HashMap<CruiseKey, CruiseAccum>>> {
-    let mut by_square: HashMap<u64, HashMap<CruiseKey, CruiseAccum>> = HashMap::new();
-    for path in parts {
-        for_each_cruise_spill(path, |row| {
-            let key = CruiseKey {
-                cruise_cell_id: row.cruise_cell_id,
-                class: row.class,
-                fl_bin: row.fl_bin,
-                period: row.period,
-                heading_bin: row.heading_bin,
-                secondary_only: row.secondary_only,
-            };
-            let square = row.square;
-            let incoming = accum_from_spill(row);
-            match by_square.entry(square).or_default().entry(key) {
-                Entry::Vacant(v) => {
-                    v.insert(incoming);
-                }
-                Entry::Occupied(mut o) => o.get_mut().merge(incoming),
-            }
-            Ok(())
-        })?;
-    }
-    Ok(by_square)
 }
 
 fn add_transit(

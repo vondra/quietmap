@@ -29,13 +29,17 @@ impl CruiseSpillCounts {
 
     pub fn encoded_buffers_bytes(self) -> usize {
         // Arrow IPC writes validity bitmaps even for these non-null arrays:
-        // 15 row arrays, the flight-id child, and six candidate struct/children.
-        47 * self.rows
+        // 16 row arrays (14 fixed plus the two list parents), the flight-id
+        // child, and six candidate struct/children. Fixed bytes per row are
+        // 40 of values plus 8 of list offsets; the trailing +12 closes the
+        // three offset arrays. Exact at any row count: the residual against
+        // real files is the constant schema/footer/batch overhead.
+        48 * self.rows
             + 8 * self.fids
             + 24 * self.candidates
             + self.callsign_bytes
             + 12
-            + 15 * self.rows.div_ceil(8)
+            + 16 * self.rows.div_ceil(8)
             + self.fids.div_ceil(8)
             + 6 * self.candidates.div_ceil(8)
     }

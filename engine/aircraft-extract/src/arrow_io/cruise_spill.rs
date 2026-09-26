@@ -39,10 +39,11 @@ pub(crate) struct CruiseSpillRow {
     pub secondary_only: bool,
     /// Sorted ascending. `len()` = `unique_count` for the bucket.
     pub fid_set: Vec<u64>,
-    /// Per-fid top entries sorted by Lmax descending (tiebreak fid
-    /// ascending). At most CRUISE_TOP_K elements; tail fids beyond
-    /// the cap are silently dropped at finalisation but still tracked
-    /// in `fid_set` for `unique_count`.
+    /// Per-fid top entries as an unordered set (at most CRUISE_TOP_K
+    /// elements; tail fids beyond the cap are silently dropped at
+    /// finalisation but still tracked in `fid_set` for `unique_count`).
+    /// The fold replays them through the re-entrant cap-K logic, whose
+    /// total order makes the surviving set independent of row order.
     pub top_candidates: Vec<CruiseTopCandidate>,
 }
 

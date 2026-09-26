@@ -7,9 +7,30 @@ use std::os::unix::fs::MetadataExt;
 
 pub(super) struct FoldBucket {
     pub parts: Vec<PathBuf>,
+    pub counts: CruiseSpillCounts,
     pub file_bytes: u64,
     pub allocated_bytes: u64,
     pub allocation_bytes: u64,
+}
+
+/// Sorted-streaming fold working set: the slim sort array plus the packed
+/// arenas, reserved exactly (no Vec doubling transient), with 5/4 slack for
+/// the live key accumulator, per-square row vecs and allocator rounding.
+/// The decoded Arrow batch and the per-square output builders coexist.
+pub(super) fn fold_sort_allocation(counts: CruiseSpillCounts, largest_batch: u64) -> u64 {
+    let slim = counts.rows.saturating_mul(super::fold::SLIM_ROW_BYTES);
+    let arena = counts
+        .fids
+        .saturating_mul(size_of::<u64>())
+        .saturating_add(counts.candidates.saturating_mul(super::fold::ARENA_CAND_BYTES))
+        .saturating_add(counts.callsign_bytes);
+    // Per-square finalized rows and Arrow builders before each square file.
+    const SQUARE_BUILDERS_BYTES: u64 = 1024 * 1024 * 1024;
+    (slim.saturating_add(arena) as u64)
+        .saturating_mul(5)
+        .saturating_div(4)
+        .saturating_add(largest_batch)
+        .saturating_add(SQUARE_BUILDERS_BYTES)
 }
 
 // A separately allocated one-entry table has four slots; larger tables need
@@ -50,14 +71,14 @@ pub(super) fn fold_inputs(spill_dir: &Path) -> Result<Vec<FoldBucket>> {
                 allocated_bytes += path.metadata()?.blocks() * 512;
                 largest_batch = largest_batch.max(ipc.largest_batch_bytes);
             }
-            // Remaining maps coexist with the largest owner's Arrow builders and IPC buffers.
             let allocation_bytes = if parts.is_empty() {
                 0
             } else {
-                fold_map_allocation(counts) as u64 + largest_batch + 4 * SPILL_TRIGGER_BYTES as u64
+                fold_sort_allocation(counts, largest_batch)
             };
             Ok(FoldBucket {
                 parts,
+                counts,
                 file_bytes,
                 allocated_bytes,
                 allocation_bytes,
