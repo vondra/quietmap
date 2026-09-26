@@ -128,11 +128,7 @@ fn converged_sources_for_tile(original: &[SurfaceSource], bbox: [f32; 4], piece_
 }
 
 /// Share of counted pixels whose |a − b| exceeds each rung, with denominators.
-fn ladder(diffs: &[(f64, f64)]) -> String {
-    let counted: Vec<f64> = diffs.iter()
-        .filter(|(a, b)| a.max(*b) >= COUNTED_FLOOR_DB)
-        .map(|(a, b)| (a - b).abs())
-        .collect();
+fn ladder(counted: &[f64]) -> String {
     let share = |rung: f64| 100.0 * counted.iter().filter(|&&d| d > rung).count() as f64 / counted.len().max(1) as f64;
     let count = |rung: f64| counted.iter().filter(|&&d| d > rung).count();
     format!(
@@ -191,7 +187,7 @@ fn main() -> Result<()> {
     let reference = paint_tile(&cuda, &scene, tile_x, tile_y, &receivers.points, &reference_corners).context("reference lane")?;
     eprintln!("reference lane done in {:.1} s", started.elapsed().as_secs_f64());
     println!("pixel\tlayer\tpainter\tconverged");
-    let mut diffs: [Vec<(f64, f64)>; 5] = Default::default();
+    let mut diffs: [Vec<f64>; 5] = Default::default();
     for pixel in 0..pixels {
         let outdoor = receivers.buildings[pixel].is_none();
         for (index, (_, layer)) in LAYERS.iter().enumerate() {
@@ -200,11 +196,9 @@ fn main() -> Result<()> {
             let painter_periods = [f64::from(plane_painter[pixel * 3]), f64::from(plane_painter[pixel * 3 + 1]), f64::from(plane_painter[pixel * 3 + 2])];
             let reference_periods = [f64::from(plane_reference[pixel * 3]), f64::from(plane_reference[pixel * 3 + 1]), f64::from(plane_reference[pixel * 3 + 2])];
             let (a, b) = (lden(painter_periods), lden(reference_periods));
-            if outdoor {
-                diffs[index].push((a, b));
-            }
-            // Only print counted pixels to keep output small (quiet pixels dominate).
+            // Only counted pixels feed the ladder and the printout (quiet pixels dominate).
             if counts_for_ladder(a, b, outdoor) {
+                diffs[index].push((a - b).abs());
                 println!("{pixel}\t{layer}\t{a:.6}\t{b:.6}");
             }
         }
