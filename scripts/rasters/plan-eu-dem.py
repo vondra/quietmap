@@ -144,10 +144,22 @@ def main():
     parser.add_argument('--reserve-bytes', type=int, required=True)
     parser.add_argument('--countries', nargs='+', choices=COUNTRIES, default=list(COUNTRIES))
     parser.add_argument('--max-squares', type=int, default=0)
+    parser.add_argument('--exclude', action='append', default=[], metavar='X,Y',
+                        help='owned square to defer (repeatable; cross-plan conflict)')
     args = parser.parse_args()
+    excluded = set()
+    for item in args.exclude:
+        try:
+            x, y = (int(v) for v in item.split(','))
+        except ValueError:
+            parser.error(f'malformed --exclude square: {item!r}')
+        excluded.add((x, y))
     manifest = plan(args.source_root, args.countries, args.work_dir)
     if args.max_squares:
         manifest['squares'] = manifest['squares'][:args.max_squares]
+    if excluded:
+        manifest['squares'] = [s for s in manifest['squares'] if tuple(s) not in excluded]
+        print(json.dumps({'excluded': sorted(excluded)}), flush=True)
     manifest_path = args.work_dir / 'eu-dem-manifest.json'
     manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
     print(json.dumps({'squares': len(manifest['squares']),
