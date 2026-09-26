@@ -131,6 +131,20 @@ test('paired rules fire on a worse gated cohort and its stations, and the target
   assert.ok(upper.fired.includes('upper_bound') && upper.fired.includes('severe_station'))
 })
 
+test('an empty target cohort cannot pass: insufficient_data, never met', () => {
+  const baseline = Array.from({ length: 12 }, (_, index) => row(`net${index % 2}/s${index}`, 60 + (index % 4) * 0.3))
+  const manifest = freezeManifest(baseline, criteria, 'baseline', null)
+  // A misspelled cohort matches no station...
+  const typo = targetMet([], [], manifest, criteria, 'R-typo', false)
+  assert.equal(typo.met, 'insufficient_data')
+  assert.match(typo.detail, /n = 0/)
+  // ...nor does a real cohort the candidate failed to score.
+  assert.equal(targetMet(baseline, [], manifest, criteria, 'R-counted', false).met, 'insufficient_data')
+  const identity = { server_cohort: { runtime_sha256: 'r' }, ops: { code: { native_sha256: 'n' }, prepared: { content_sha256: 'p', verified_current: true }, rasters: { station_square_rasters_sha256: 'x' }, definitions: {} } }
+  const outcome = gate({ target: { kind: 'cohort', ...typo }, rules: [], moves: [], guardRegressions: [], unscored: [], guardErrors: [], identity }).outcome
+  assert.equal(outcome, 'insufficient_data')
+})
+
 test('an unscored frozen station makes the outcome incomplete, never a pass', () => {
   const identity = { server_cohort: { runtime_sha256: 'r' }, ops: { code: { native_sha256: 'n' }, prepared: { content_sha256: 'p', verified_current: true }, rasters: { station_square_rasters_sha256: 'x' }, definitions: {} } }
   const outcome = (unscored: Array<{ key: string; reason: string }>) =>
