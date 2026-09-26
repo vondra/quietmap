@@ -157,7 +157,11 @@ Power classes (`source_type` 11–15, `osm_industrial_contract`). Solar farms
 (13) emit per-MW, not per area: 88 dB(A)/MW + 10·lg(MW) − 5 dB day duty,
 day-only (Sungrow SG4950HV-MV 4.95 MW = 95 dB(A) anchor; MW from the row's
 `plant:output:electricity` tag, a solar generator unit's `rated_power_kw`, or
-area × 0.55 MW/ha, the tagged-farm median). Registry-confirmed solar
+area × 0.55 MW/ha, the tagged-farm median). A solar row with no nameplate and
+no footprint (a bare `generator:source=solar` node) stays silent — the generic
+10,000 m² default must not invent 0.55 MW / 80.4 dB for a rooftop panel — and
+a generator inside its plant polygon stays silent too (the plant owns the
+emission). Registry-confirmed solar
 (synthetic NACE 3599) takes the same branch. Substations (14) emit per-MVA,
 24/7: IEC 551 LWA = 74 + 14·lg(MVA), 64 dB below 0.2 MVA (MVA from the joined
 `rating` sum of the class-15 transformers inside the substation polygon, else
@@ -188,7 +192,11 @@ day-only (−50 evening/night) and reach past the 2 km leisure cap (industrial
 4 km reach, edge-gated). Raceway lines carry the emission, spread over their
 chain; an enclosing motorsport polygon goes silent, as does a roofed formula
 row (its building footprint emits) or a near-silent shooting discipline
-(archery, paintball, air guns).
+(archery, paintball, air guns). One venue carries one formula total: fragments
+of a circuit stored as N ways — touching chains, or lines in one class-10
+polygon — share the total by chain length instead of each radiating it
+(+10·lg N). A line in no venue keeps one total; mixed-subtype venues scale
+each line's own total by its length share.
 
 ## Prepared road direction and traffic
 

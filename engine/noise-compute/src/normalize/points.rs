@@ -586,7 +586,6 @@ pub fn prepare_industrial_points(input: RawIndustrialInput<'_>) -> Vec<PreparedP
         }];
     }
 
-    let area = resolve_area_m2(input.area_m2, input.polygon_grid, 10000.0);
     // Solar farms (OSM class 13, or registry-confirmed 3599 — including the
     // served rows) and substations (class 14) carry their own physics: per-MW
     // / per-MVA levels, not the area law. `base_lw` is unused on these arms
@@ -594,6 +593,21 @@ pub fn prepare_industrial_points(input: RawIndustrialInput<'_>) -> Vec<PreparedP
     let is_solar =
         input.source_type == industrial::SOURCE_SOLAR_FARM || input.nace_4digit == Some(industrial::SOLAR_NACE);
     let is_substation = input.source_type == industrial::SOURCE_SUBSTATION;
+    // A solar row with no nameplate and no footprint is a bare point (an
+    // untagged `generator:source=solar` node): the per-MW model has no MW and
+    // the area density has no area, so the generic 10,000 m² factory default
+    // below would invent 0.55 MW / 80.4 dB for a rooftop panel. Such rows stay
+    // silent; a tagged unit (`rated_power_kw` / `plant:output:electricity`) or
+    // a polygon (ring area) still emits.
+    if is_solar
+        && input.plant_output_mw.filter(|mw| *mw > 0.0).is_none()
+        && input.rated_power_kw.filter(|kw| *kw > 0.0).is_none()
+        && input.area_m2.filter(|area| *area > 0.0).is_none()
+        && grid::poly::ring_area_m2(input.polygon_grid).is_none()
+    {
+        return Vec::new();
+    }
+    let area = resolve_area_m2(input.area_m2, input.polygon_grid, 10000.0);
     let profile = if is_solar {
         industrial::IndustrialProfile {
             base_lw: 0.0,
@@ -1066,6 +1080,42 @@ mod tests {
         let aw = crate::propagation::iso9613::a_weighted_total(&day);
         let expected = 88.0 + 10.0 * 0.005f64.log10() - 5.0;
         assert!((aw - expected).abs() < 0.1, "5 kW unit: {aw:.2}");
+    }
+
+    #[test]
+    fn untagged_solar_points_without_a_footprint_are_silent() {
+        // No nameplate (`plant:output:electricity` / `rated_power_kw`) and no
+        // footprint (stored area or ring): the 10,000 m² factory default must
+        // not invent 0.55 MW / 80.4 dB for a bare `generator:source=solar`
+        // node (157,825 such rows over 120 canary squares).
+        let row = |area_m2: Option<f64>, polygon_grid: &[(i32, i32)]| {
+            prepare_industrial_points(RawIndustrialInput {
+                centroid_lat: 49.0,
+                centroid_lon: 14.0,
+                source_type: industrial::SOURCE_SOLAR_FARM,
+                site_subtype: 0,
+                nace_4digit: None,
+                hub_height_m: None,
+                rated_power_kw: None,
+                area_m2,
+                polygon_grid,
+                plant_output_mw: None,
+                substation_mva: None,
+                substation_class: 0,
+            })
+        };
+        assert!(row(None, &[]).is_empty());
+        assert!(row(Some(0.0), &[]).is_empty());
+        assert!(row(Some(-5.0), &[]).is_empty());
+        // A polygon without a nameplate still emits from area × density.
+        let ring = grid_ring(&[
+            (50.000, 14.000),
+            (50.000, 14.002),
+            (50.002, 14.002),
+            (50.002, 14.000),
+            (50.000, 14.000),
+        ]);
+        assert!(!row(None, &ring).is_empty());
     }
 
     #[test]
