@@ -4,8 +4,9 @@ The Rust engine is the acoustic source of truth. This document specifies the
 propagation contract of road, rail and point sources (CNOSSOS-EU 2015/996 as amended by
 2021/1226, checked against ISO/TR 17534-4) and the prepared-source rules around it. The
 implementation and regressions live in `src/propagation/cnossos/`, `ray_path.rs`,
-`ray_transfer.rs`, `line_quadrature.rs`, `relevance_bound.rs`, `meteorology.rs` and
-`air_absorption.rs`; the CUDA painter mirrors them in `relevant_source_cnossos_*.cuh`.
+`ray_transfer.rs`, `line_quadrature.rs`, `relevance_bound.rs`, `meteorology.rs`,
+`air_absorption.rs` and `vegetation.rs`; the CUDA painter mirrors them in
+`relevant_source_cnossos_*.cuh`.
 Airport ground operations keep their single-edge path (`path_effects.rs`, `diffraction.rs`)
 until their own campaign moves them.
 
@@ -535,7 +536,7 @@ remains bilinear. The old signed big-endian DEM is not accepted by this reader.
 `canopy.u8` records canopy top above bare earth, 0–250 metres (255 missing),
 nearest sampled into `PathProfile.canopy_m` beside `forest.u8` canopy cover.
 The CUDA upload carries this height at byte 6 of the existing eight-byte
-`FusedPixel`; `SampledRasterPoint.canopy_m` exposes it without changing attenuation.
+`FusedPixel`; `SampledRasterPoint.canopy_m` exposes it to the foliage kernel.
 A zero-byte channel file denotes independently verified ocean; a missing file,
 wrong length or sampled missing node fails the operation. A producer may not
 turn missing canopy into zero. Height is for foliage only, never subtracted
@@ -549,8 +550,9 @@ is evaluated at every target node after resampling; missing grids fail.
 
 Changing this generation invalidates terrain-dependent altitudes, structure
 bases, aircraft preprocessing and horizon calculations, façade exposure and
-painted tiles. Bridge-deck/railhead geometry and the canopy propagation model
-must be integrated before this generation is used for a production calculation.
+painted tiles. Bridge-deck/railhead geometry must be integrated before this
+generation is used for a production calculation; the canopy-height foliage
+model already reads this generation.
 
 ## Line sources: the CNOSSOS point sum
 
@@ -648,25 +650,36 @@ painter runs the same ray in f32 (`relevant_source_cnossos_stream.cuh`).
   instead of flooring to a quiet layer.
 - The states are mixed only at the end, per period and propagation direction:
   `10^(−A/10) = p·10^(−A_F/10) + (1 − p)·10^(−A_H/10)` with p of the period and of the
-  direction's 16-sector climatology (0.5 everywhere until W6 delivers it).
+  direction's 16-sector climatology: the receiver square's `meteorology.bin` window sampled
+  bilinearly at the receiver, then linearly between the two nearest sector centres (0.5
+  everywhere only where the square has no file).
 - A_atm: ISO 9613-1 at exact mid-band frequencies, per period and band from the mean μ and
-  variance σ² of the hourly coefficient: `max(μ·d − (ln 10/20)·σ²·d², α_min·d)`, d the slant
-  distance in km; until W6 delivers, 15 °C / 70 % (the CNOSSOS default) with no variance.
-- Forest: the plan-view depth rule is unchanged until the bare-earth DEM and the canopy height
-  land together (ISO 9613-2 A.2.2 on each state's ray, S4); on today's surface model the
-  canopy is terrain.
+  variance σ² of the hourly coefficient of the receiver square's window: the second cumulant
+  `μ·d − (ln 10/20)·σ²·d²` with its running maximum (monotone, never amplifying), in closed
+  form the cumulant up to d_peak = μ/(2cσ²) and the peak value beyond, d the slant distance
+  in km; 15 °C / 70 % (the CNOSSOS default) with no variance only where the square has no
+  file.
+- Foliage: ISO 9613-2:2024 Table A.1 literally, from the ray's cover-weighted metres in
+  canopy height per state (straight ray homogeneous, Γ arc favourable): nothing below 10 m,
+  the short row below 20 m, the per-metre rate times the depth capped at 200 m above (the
+  table's own step at 20 m stands). Every profile interval contributes its slant length times
+  the fraction of its ends inside the canopy volume times the mean forest cover; the two
+  state attenuations mix in energy at p. A missing canopy height poisons the depth, and the
+  production samplers poison the elevation with it, so the popup fails instead of publishing.
 - Popup hypotheses: free field is the whole-path A_ground alone; no terrain leaves the terrain
   out of the candidates; no screening removes every crossing (tops and roofs); no ground drops
   every ground term; no forest; no air absorption.
 - Acceptance: all 28 ISO/TR 17534-4 Direct cases, LH and LF, within ±0.1 dB in every band
   (`iso_tr_17534_4_tests.rs`); the painter against the popup's CPU ray on synthetic scenes
-  (`surface-cuda-check`): flat ground of four ground factors within 0.001 dB, a ridge with
-  touching, overlapping and courtyard buildings and two walls within 0.16 dB (the largest a
-  wide-bucket mask bin at a wall edge moving in f32).
+  (`surface-cuda-check`, gates 0.05 dB flat / 0.5 dB relief): flat ground of four ground
+  factors within 0.033 dB, a ridge with touching, overlapping and courtyard buildings and two
+  walls within 0.18 dB (the largest a wide-bucket mask bin at a wall edge moving in f32),
+  under both default and distinct per-period, per-sector weather with nonzero absorption
+  variance and varied window bounds.
 - The literal standard is not monotone in obstacle height (W2 `edge-height-monotonicity.txt`);
   what holds is that adding a candidate never shortens the rubber band.
 
-Until the per-square `meteorology.bin` files are consumed, every period uses the same default absorption
+Where a square has no `meteorology.bin` file, every period uses the same default absorption
 coefficients (dB/km), rounded here to two decimals; the implementation computes them from
 ISO 9613-1 at exact mid-band frequencies, 15 °C, 70 % RH and 101.325 kPa. Variance is zero,
 and each period's directional favourable probability is 0.5.
@@ -682,7 +695,22 @@ to the sampled terrain (the formation datum once bare earth lands): set them to
 height's emission, directivity and distinct source-part identity.
 Do not duplicate today's complete row emission into both heights. The deterministic CUDA
 check exercises both heights above a raised railhead and distinct per-period, per-sector
-weather probabilities with nonzero absorption variance.
+weather probabilities with nonzero absorption variance and varied window bounds, uploaded
+per receiver as in production.
+
+One relevance bound stands behind every road and rail reach and every point-source pair
+skip: `B = L_W − A_div,min(d) − α_min·d/1000 + G_max`, never below what the method can
+deliver at horizontal distance d. The state gains are 18 dB favourable (the below-plane
+corner: the capped Δdif replaced by the image path's ≥ 0 dB while both sides sit at the
+−9 dB floor) and 6 dB homogeneous (the same corner at the −3 dB floor); each period mixes
+them in energy at the largest p over the row's azimuth span (exact: p is piecewise linear
+with breakpoints at the sector centres, so the maximum sits at an endpoint or an enclosed
+centre), never above the window p_max the extract-time envelope was built at, and α_min
+is the window's linear absorption bound per band (the peak-region line only where every
+node and period peaks inside the ceiling; elsewhere it overshoots the unreached peak).
+A row reaches as far as its bound's Lden stays above the 30 dB display edge; no ray
+outruns the 11,872 m profile cadence ceiling. The painter's pair gate evaluates the
+window-maximum bound per receiver from the uploaded extremes.
 
 The painter streams the ray: samples and crossings in chainage order (the scene's obstacles are
 one merged grid, each cell taking the crossings inside its own chainage window) feed both
@@ -778,13 +806,16 @@ favourable counts determine stored p; retained 20° wind histograms do not
 quantize that calculation.
 
 `raster_reader::meteorology::Meteorology::at` interpolates moments and probabilities
-bilinearly at the receiver inside the owner square's window, wrapping longitude.
+bilinearly at the receiver inside the receiver square's window, wrapping longitude.
 `MeteorologySample::probability` interpolates circularly between sector centres.
 Invalid coordinates, wrong magic, mismatched windows, short files, nonfinite
 values and invalid percentages are errors. Window maxima conservatively bound
-any interpolation inside the window. No serving or painting path loads the
-files yet: popup and painter use the built-in defaults above until propagation
-consumes them, and release assembly attaches the files in that same change.
+any interpolation inside the window. The popup samples its receiver's window through
+`RealRasters::weather`; the painter uploads the same per-receiver weather to the card
+(one `DeviceWeather` per receiver: p, absorption moments, and the window's per-period
+mixed gains with α_min for the pair gate), so the two agree. A present but unreadable
+file is refused loudly and falls back to the built-in defaults above, as does a square
+with no file.
 
 The streamed producer retains period × wind-class × stability-class × direction
 histograms, exact favourable counts, Welford absorption moments and SHA-256 chunk
