@@ -431,7 +431,9 @@ impl MotorsportSubtype {
 /// to the loudest annual Lw — the same argmax the extractor uses for
 /// multi-sport area rows — except a purely radio-controlled value, which is
 /// [`MotorsportSubtype::Silent`]. Unknown or empty tags are
-/// [`MotorsportSubtype::Other`].
+/// [`MotorsportSubtype::Other`]. The token list is shared by convention with
+/// the extractor classifier (`osm-extract::classify::is_motorsport_token`):
+/// keep both in step.
 pub fn motorsport_subtype(sport_tag: &str) -> MotorsportSubtype {
     let mut best: Option<(MotorsportSubtype, f64)> = None;
     let mut silent = false;
