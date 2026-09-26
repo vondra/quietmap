@@ -202,7 +202,10 @@ the source archive and digest, then use `--enrich-only` for national roads.
 
 `engine/aircraft-extract` and `scripts/run-aircraft-extract.sh` are already ported
 to z9. Reuse validated Stage 0/1 segment files; do not re-extract them just because
-the world prepared tree has no aircraft output yet.
+the world prepared tree has no aircraft output yet. Reuse needs v4-era files:
+segments without `departure_field_elev_m` and `airborne.arrow` without
+`airborne_contract` v4 are refused (Stage 1 judges provider gaps with DEM phases
+and stamps each flight's departure field elevation for the Doc 29 cutback gate).
 
 `aircraft_anchor` (YYYY-MM) is the month after the exposure year: `scripts/aircraft_window.py`
 selects every day of `[anchor − 1 year, anchor)` as a baseline candidate and its 12
