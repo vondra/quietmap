@@ -83,4 +83,8 @@ impl crate::types::RasterSampler for VectorReflectionSampler<'_> {
         self.inner
             .build_path_profile(src_lat, src_lon, rcv_lat, rcv_lon, dist_m, out)
     }
+
+    fn weather(&self, lat: f64, lon: f64) -> crate::propagation::meteorology::Meteorology {
+        self.inner.weather(lat, lon)
+    }
 }

@@ -85,6 +85,36 @@ impl RealRasters {
         self.dem
             .sample_cached_with(lat, lon, Interp::Nearest, cached_key, cached_tile)
     }
+
+    /// One square's meteorology window from beside the prepared files. A release without
+    /// the files gets a synthetic window of the long-standing defaults (p = 0.5, steady
+    /// 15 °C / 70 %); a present but unreadable file is refused loudly and falls back the
+    /// same way, the popup staying alive.
+    pub fn climatology(&self, square: grid::Square) -> crate::meteorology::Meteorology {
+        use crate::meteorology::{Meteorology, MeteorologyNode, ERA5_NODES_PER_DEGREE};
+        let path = Meteorology::path(self.dem.root(), square);
+        match Meteorology::load(&path, square) {
+            Ok(window) => window,
+            Err(error) => {
+                if std::fs::metadata(&path).is_ok() {
+                    eprintln!("raster-reader: REFUSED square {square:?}: {error}");
+                }
+                let window =
+                    grid::raster::RasterWindow::for_square_with_density(square, ERA5_NODES_PER_DEGREE);
+                let alpha = noise_compute::propagation::air_absorption::iso_9613_1_alpha_bands(
+                    noise_compute::propagation::meteorology::DEFAULT_ABSORPTION_TEMPERATURE_C,
+                    noise_compute::propagation::meteorology::DEFAULT_ABSORPTION_RELATIVE_HUMIDITY_PCT,
+                );
+                let means = alpha.map(|a| a as f32);
+                let node = MeteorologyNode {
+                    p_percent: [[50; crate::meteorology::SECTORS]; 3],
+                    alpha_mean: [means; 3],
+                    alpha_variance: [[0.0; 8]; 3],
+                };
+                Meteorology::from_nodes(window, vec![node; window.cell_count()])
+            }
+        }
+    }
 }
 
 impl RasterSampler for RealRasters {
@@ -171,5 +201,15 @@ impl RasterSampler for RealRasters {
         // terrain the cadence deliberately coarsens, undercutting the cadence's
         // purpose, for a refinement the cadence already largely captures.
         out.step_m_med = noise_compute::propagation::path_profile::median_step_m(&out.t, dist_m);
+    }
+
+    fn weather(&self, lat: f64, lon: f64) -> noise_compute::propagation::meteorology::Meteorology {
+        use noise_compute::propagation::meteorology::Meteorology;
+        let square = grid::square_of(lat, lon);
+        let window = self.climatology(square);
+        window.receiver_weather(lat, lon).unwrap_or_else(|error| {
+            eprintln!("raster-reader: REFUSED square {square:?}: {error}");
+            Meteorology::defaults()
+        })
     }
 }

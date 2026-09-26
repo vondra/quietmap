@@ -107,4 +107,8 @@ impl RasterSampler for CheckedRasters<'_> {
             let _ = self.validate(lat, lon, f64::from(out.elevation_m[index]));
         }
     }
+
+    fn weather(&self, lat: f64, lon: f64) -> noise_compute::propagation::meteorology::Meteorology {
+        self.inner.weather(lat, lon)
+    }
 }

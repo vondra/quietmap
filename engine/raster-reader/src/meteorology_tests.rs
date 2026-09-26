@@ -300,3 +300,41 @@ fn missing_and_malformed_windows_are_errors() {
     assert!(table.at(0.0, 0.0).is_err());
     assert!(table.at(91.0, 0.0).is_err());
 }
+
+#[test]
+fn calm_bands_keep_the_linear_bound_and_stormy_bands_take_the_peak_line() {
+    use noise_compute::propagation::air_absorption::AbsorptionClimate;
+    let node = |mu: f32, var: f32| MeteorologyNode {
+        p_percent: [[50; SECTORS]; 3],
+        alpha_mean: [[mu; 8]; 3],
+        alpha_variance: [[var; 8]; 3],
+    };
+    // Dublin's calm band 1 (μ ≈ 0.36, σ² ≈ 0.0015): nothing peaks within the
+    // ceiling, so the peak line (15 dB/km) must not apply; the bound stays at μ.
+    let alpha = window_alpha_min_db_per_km(&[node(0.36, 0.0015)]);
+    assert!((alpha[1] - 0.34).abs() < 0.03, "calm band: {}", alpha[1]);
+    // Two stormy nodes peaking inside the ceiling: the peak line tightens the
+    // deeply negative linear bound, and stays under every interpolation's
+    // running maximum to the ceiling.
+    let (a, b) = (node(10.0, 100.0), node(6.0, 80.0));
+    let alpha = window_alpha_min_db_per_km(&[a, b]);
+    // Peak line 6/(4c·11.622·13.33) ≈ 0.084 over the deeply negative linear bound.
+    assert!((alpha[1] - 0.084).abs() < 0.005, "stormy band: {}", alpha[1]);
+    let ceiling_km =
+        noise_compute::propagation::relevance_bound::LINE_REACH_CEILING_M / 1000.0;
+    let slope = f64::from(alpha[1]);
+    for weight in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        let climate = AbsorptionClimate {
+            mean_db_per_km: 10.0 + weight * (6.0 - 10.0),
+            variance_db2_per_km2: 100.0 + weight * (80.0 - 100.0),
+        };
+        for metres in [100, 1_000, 5_000, 11_000] {
+            let bound = slope * f64::from(metres) / 1000.0;
+            assert!(
+                bound <= climate.attenuation_db(f64::from(metres)) + 1e-6,
+                "weight {weight} at {metres} m: {bound} over the curve"
+            );
+        }
+        assert!(slope * ceiling_km <= climate.attenuation_db(ceiling_km * 1000.0) + 1e-6);
+    }
+}
