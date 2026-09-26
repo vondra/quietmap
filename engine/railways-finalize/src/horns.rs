@@ -413,14 +413,17 @@ fn build_approaches(
     })
 }
 
-/// Split overlapping same-direction approaches at shared boundaries; pieces
-/// under several approaches take the max soundings (one train sounds once).
+/// Split overlapping same-direction approaches at shared boundaries; each
+/// shared window is emitted once, with the per-period max soundings (one
+/// train sounds once through). The covering approach with the most soundings
+/// owns the window; ties break by input order (crossing osm, approach).
 fn merge_overlaps(approaches: &[Approach]) -> Vec<MergedPiece> {
+    let totals: Vec<f64> = approaches.iter().map(|a| a.soundings.iter().sum()).collect();
     let mut pieces = Vec::new();
     for (idx, approach) in approaches.iter().enumerate() {
         // Split fractions along this approach from overlapping neighbours.
         let mut splits = vec![0.0, 1.0];
-        let mut neighbours: Vec<(f64, f64, [f64; 3])> = Vec::new();
+        let mut neighbours: Vec<(f64, f64, [f64; 3], usize)> = Vec::new();
         for (other_idx, other) in approaches.iter().enumerate() {
             if other_idx == idx {
                 continue;
@@ -454,7 +457,7 @@ fn merge_overlaps(approaches: &[Approach]) -> Vec<MergedPiece> {
             }
             splits.push(a.clamp(0.0, 1.0));
             splits.push(b.clamp(0.0, 1.0));
-            neighbours.push((a, b, other.soundings));
+            neighbours.push((a, b, other.soundings, other_idx));
         }
         splits.sort_by(f64::total_cmp);
         splits.dedup();
@@ -466,12 +469,21 @@ fn merge_overlaps(approaches: &[Approach]) -> Vec<MergedPiece> {
             }
             let mid = (a + b) / 2.0;
             let mut soundings = approach.soundings;
-            for (na, nb, ns) in &neighbours {
+            let mut owner = idx;
+            for (na, nb, ns, other) in &neighbours {
                 if *na <= mid && mid <= *nb {
                     for (period, max) in soundings.iter_mut().enumerate() {
                         *max = max.max(ns[period]);
                     }
+                    if totals[*other] > totals[owner]
+                        || (totals[*other] == totals[owner] && *other < owner)
+                    {
+                        owner = *other;
+                    }
                 }
+            }
+            if owner != idx {
+                continue; // the louder (or earlier) approach emits this window
             }
             pieces.push(MergedPiece {
                 approach_idx: idx,
@@ -764,7 +776,9 @@ mod tests {
     }
 
     /// Two same-direction 402 m approaches 200 m apart share 202 m: the
-    /// shared piece takes the max soundings, the tails keep their own.
+    /// shared window is emitted once, on the louder approach at the max
+    /// soundings, and the tails keep their own. Emitting it twice would
+    /// double the energy on shared ground (+3.01 dB).
     #[test]
     fn overlapping_same_direction_approaches_share_max() {
         let lat: f64 = 40.69;
@@ -778,19 +792,20 @@ mod tests {
             [30.0, 10.0, 18.0],
         );
         let pieces = merge_overlaps(&[west, east]);
-        // West approach splits into tail + overlap; east into overlap + tail.
-        assert_eq!(pieces.len(), 4, "{pieces:?}");
+        // West tail + shared once (on east) + east tail.
+        assert_eq!(pieces.len(), 3, "{pieces:?}");
         let west_pieces: Vec<&MergedPiece> =
             pieces.iter().filter(|p| p.approach_idx == 0).collect();
         let east_pieces: Vec<&MergedPiece> =
             pieces.iter().filter(|p| p.approach_idx == 1).collect();
-        assert_eq!(west_pieces.len(), 2);
+        assert_eq!(west_pieces.len(), 1);
         assert_eq!(east_pieces.len(), 2);
-        // Overlap pieces (west's far end, east's near start) take the max.
-        assert_eq!(west_pieces[1].soundings, [30.0, 10.0, 18.0]);
-        assert_eq!(east_pieces[0].soundings, [30.0, 10.0, 18.0]);
-        // Tails keep their own.
+        // The shared window sits on east (the louder approach) at the max;
+        // west keeps only its tail.
         assert_eq!(west_pieces[0].soundings, [20.0, 6.0, 12.0]);
+        assert!(west_pieces[0].frac1 < 1.0);
+        assert_eq!(east_pieces[0].soundings, [30.0, 10.0, 18.0]);
+        assert_eq!(east_pieces[0].frac0, 0.0);
         assert_eq!(east_pieces[1].soundings, [30.0, 10.0, 18.0]);
     }
 
