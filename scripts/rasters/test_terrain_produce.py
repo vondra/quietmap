@@ -265,6 +265,26 @@ class TerrainTest(unittest.TestCase):
         # A per-group sum would reach 0.44; disjoint edges stack to 0.12.
         self.assertAlmostEqual(stats['maximum_artificial_step_bound_m'], .32)
 
+    def test_french_frames_fall_through_past_clipped_onshore_extents(self):
+        import terrain_produce
+        from unittest.mock import MagicMock, patch
+        seen = {}
+
+        def fake_options():
+            options = MagicMock()
+            options.SetOnlyBest.side_effect = lambda flag: seen.setdefault('flags', []).append(flag)
+            return options
+
+        with patch.object(terrain_produce.osr, 'SpatialReference', return_value=MagicMock()), \
+                patch.object(terrain_produce.osr, 'CoordinateTransformationOptions',
+                             side_effect=fake_options), \
+                patch.object(terrain_produce.osr, 'CreateCoordinateTransformation',
+                             return_value=MagicMock()):
+            terrain_produce.datum_transform(5720, [-5.2, 41.3, 10.0, 51.2])
+            terrain_produce.datum_transform(5721, [8.1, 41.3, 9.9, 43.1])
+            terrain_produce.datum_transform(5778, None)
+        self.assertEqual(seen['flags'], [False, False, True])
+
     def test_colocated_ramps_exempt_in_relief_but_trip_on_the_flat(self):
         import terrain_produce
         from terrain_produce import assemble_with_statistics

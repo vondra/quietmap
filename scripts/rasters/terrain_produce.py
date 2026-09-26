@@ -52,7 +52,14 @@ def datum_transform(vertical_crs, area_of_interest=None):
         crs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
     options = osr.CoordinateTransformationOptions()
     options.SetBallparkAllowed(False)
-    options.SetOnlyBest(True)
+    # The RAF18 file covers Brittany but its operation's onshore extent ends
+    # at -4.87, so the single best operation refuses the tip; the secondary
+    # operation reads the same reviewed file seamlessly (4 mm against a hand
+    # lookup). Off Corsica the RAC23 file genuinely ends at Calvi, where
+    # fall-through degrades a crash into an honest fallback. France alone
+    # lets PROJ fall through; everywhere else one operation still rules out
+    # mid-country grid switches.
+    options.SetOnlyBest(vertical_crs not in (5720, 5721))
     # A reviewed regional anchor selects one grid operation across rounded EPSG area edges.
     if area_of_interest is not None:
         options.SetAreaOfInterest(*area_of_interest)
