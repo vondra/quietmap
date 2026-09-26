@@ -468,7 +468,11 @@ SEL, LAmax and scaled distance alike (SEL − LAmax is nearly flat across rows,
 so d_λ lerps in metres). Ground rolls use their rating (takeoff/idle); initial
 climb below the ANP cutback height above the departure field flies MaxTakeoff;
 everything else follows force balance `(W/δ)(sin γ/K + R)/N` within
-[Idle, MaxClimb], with K = 1.01 at Vc ≤ 200 kt else 0.95. The field is the
+[Idle, MaxClimb], with K = 1.01 at Vc ≤ 200 kt else 0.95. A segment outside
+the rating model's domain — an ADS-B outlier whose Idle/MaxClimb bounds
+invert or leave the finite range — is rejected: the bracket returns no row
+and the kernel, packs and painters drop the segment instead of clamping
+into crossed bounds. The field is the
 terrain under the flight's own takeoff roll, stamped per flight by Stage 1;
 when the roll was not observed (overflights, coverage gaps at the airport)
 the gate falls back to local AGL. Speed is ground speed times √σ (no wind);
@@ -496,16 +500,22 @@ Issue 52 (26 Jun 2026; reproduction authorised provided the source is
 acknowledged): Chapter 11 SEL energy mean over representative records, else
 Chapter 8 overflight EPNL energy mean minus 2.65 dB (median over same-model
 and -engine pairs, grouped by engine). Climbing rows take the typecode's
-takeoff-uplift correction, descending rows (level-flight flag and more than
-10 m segment altitude loss, past one 25-ft barometric step) the BVI approach
-correction, level rows the bare level correction. Traffic-weighted level SEL
+takeoff-uplift correction, descending rows (level-flight flag and the stored
+whole-chord descent state: the chord lost more than 10 m end to end, past
+one 25-ft barometric step) the BVI approach correction, level rows the bare
+level correction. Stage 1 stamps the state before storage splitting and
+every piece inherits it, so a steep descent keeps its correction at any
+sample cadence. Traffic-weighted level SEL
 at 150 m is 83.1/84.4/89.7 dB for light/medium/heavy helicopters, against
 today's uniform 94.8. LAmax shifts with SEL (no certified LAmax exists), so
 scaled distance keeps the dipole limit. Reference speed stays at today's
 100 kt: the certificates carry no speed, and the ACRP 129 kt alternative
 moves ΔV by only ±1.1 dB. Gyroplanes take the light-class
 traffic-weighted prior. The typecode-to-EASA-model mapping is not verified
-against ICAO Doc 8643. This is a runtime model change: prepared rows valid.
+against ICAO Doc 8643. This is a producer and runtime model change:
+`airborne.arrow` carries the descent state in flag bit 7 (v5 contract), so
+aircraft prepared outputs rebuild; the gate itself evaluates in the shared
+correction from the stored state.
 
 ## Aircraft local geometry
 

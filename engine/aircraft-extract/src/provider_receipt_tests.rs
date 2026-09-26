@@ -21,6 +21,7 @@ fn day(name: &str, primary: ProviderDayReceipt, secondary: Option<ProviderDayRec
         primary: Some(primary),
         secondary,
         merge: MergeCounts::default(),
+        scope: None,
     }
 }
 
@@ -145,6 +146,7 @@ fn rejected_merges_need_a_primary_only_rewrite() {
             secondary_only_addresses: addresses,
             ..MergeCounts::default()
         },
+        scope: None,
     };
     let rejected = BTreeSet::new();
     assert!(merged(10, 0).needs_primary_only_rewrite(&rejected));

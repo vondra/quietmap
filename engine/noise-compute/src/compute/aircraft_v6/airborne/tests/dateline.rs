@@ -96,6 +96,7 @@ fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f
         speed_kt: columns.speed[0],
         segment_length_m: columns.length[0],
         departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         count_weight: 1.0,
         surface_model: false,
         ground_context: aircraft::GROUND_CONTEXT_NONE,
@@ -127,7 +128,7 @@ fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f
         receiver_lon,
         receiver_alt
     ));
-    let prepared = aircraft::prepare_segment(&segment, -30.0, -30.0);
+    let prepared = aircraft::prepare_segment(&segment, -30.0, -30.0).unwrap();
     let row_state = aircraft::prepare_row(&prepared, receiver_lat, longitude_scale);
     let (sel, _) = aircraft::segment_sel_at_pixel(
         &prepared,

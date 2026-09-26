@@ -35,7 +35,10 @@ impl DeviceAirborneSource {
         if air::is_ground_stale_with_terrain(&segment, &terrain) {
             return Ok(None);
         }
-        let p = air::prepare_segment(&segment, terrain.start_elev - 30.0, terrain.end_elev - 30.0);
+        let Some(p) = air::prepare_segment(&segment, terrain.start_elev - 30.0, terrain.end_elev - 30.0)
+        else {
+            return Ok(None);
+        };
         let result = Self {
             endpoints: [
                 segment.start_lat as f32,

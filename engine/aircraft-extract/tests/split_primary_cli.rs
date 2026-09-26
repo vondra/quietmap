@@ -57,6 +57,7 @@ fn write_segments(path: &Path, rows: &[FlightSegment]) -> anyhow::Result<()> {
             }),
             secondary: None,
             merge: Default::default(),
+            scope: None,
         },
     )
 }

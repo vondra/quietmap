@@ -21,15 +21,28 @@ impl ChordSource {
         let checked = crate::airborne_pack::DeviceAirborneSource::prepare(batch, row)?;
         let segment = batch.segment(row);
         let terrain = batch.terrain(row);
-        let prepared =
-            air::prepare_segment(&segment, terrain.start_elev - 30.0, terrain.end_elev - 30.0);
+        let endpoints = [
+            segment.start_lat as f32,
+            segment.start_lon as f32,
+            segment.end_lat as f32,
+            segment.end_lon as f32,
+        ];
+        // Stale ground pieces remain in the graph, but can never be accepted.
+        let identity = checked.map_or([0, -1, 0, 0, 0, 0], |source| source.identity);
+        // A segment outside the thrust model's domain keeps its graph row
+        // with zeroed physics; the kernel skips it on its identity before
+        // reading any physical value (`airborne_chords.cuh`).
+        let Some(prepared) =
+            air::prepare_segment(&segment, terrain.start_elev - 30.0, terrain.end_elev - 30.0)
+        else {
+            return Ok(Self {
+                endpoints,
+                physical: [0.0; 13],
+                identity: [0, -1, 0, 0, 0, 0],
+            });
+        };
         Ok(Self {
-            endpoints: [
-                segment.start_lat as f32,
-                segment.start_lon as f32,
-                segment.end_lat as f32,
-                segment.end_lon as f32,
-            ],
+            endpoints,
             physical: [
                 prepared.start_alt_m,
                 prepared.d_lon,
@@ -45,8 +58,7 @@ impl ChordSource {
                 prepared.power_w,
                 prepared.heli_db,
             ],
-            // Stale ground pieces remain in the graph, but can never be accepted.
-            identity: checked.map_or([0, -1, 0, 0, 0, 0], |source| source.identity),
+            identity,
         })
     }
 }

@@ -73,13 +73,17 @@ impl ProviderDayReceipt {
 /// Everything Stage 0 learned about one UTC day's inputs; `None` is a
 /// provider without an archive that day (missing, never observed-empty).
 /// Every requested day carries one, so a day without a receipt is
-/// incomplete work, not missing data.
+/// incomplete work, not missing data. `scope` is the canonical extraction
+/// scope ([`crate::scope::ScopeBbox::key`]), `None` for a global extract:
+/// Stage 0 already deleted out-of-scope traces, so only a covering scope
+/// may reuse the shards.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DayReceipt {
     pub day: String,
     pub primary: Option<ProviderDayReceipt>,
     pub secondary: Option<ProviderDayReceipt>,
     pub merge: MergeCounts,
+    pub scope: Option<String>,
 }
 
 impl DayReceipt {
@@ -90,7 +94,16 @@ impl DayReceipt {
             primary: None,
             secondary: None,
             merge: MergeCounts::default(),
+            scope: None,
         }
+    }
+
+    /// Whether this day's extracted artifacts cover a run under `scope`
+    /// (`None` = global): global artifacts cover any scope, scoped
+    /// artifacts only their own scope. A day without a primary archive
+    /// extracted nothing and constrains nothing.
+    pub fn covers_scope(&self, scope: Option<&str>) -> bool {
+        self.primary.is_none() || self.scope.is_none() || self.scope.as_deref() == scope
     }
 
     /// True when Stage 0 merged secondary content into this day's flights but

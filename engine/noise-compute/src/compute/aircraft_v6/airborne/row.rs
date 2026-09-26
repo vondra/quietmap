@@ -220,12 +220,14 @@ pub(super) fn evaluate_row<const FLOOR: bool>(
         end_elev - 30.0,
         f64::from(seg.departure_field_elev_m),
     );
+    // The kernel admitted the same segment above, so this bracket cannot
+    // reject; the `?` only carries its `Option` type.
     let (power_row, power_w) =
-        aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust);
+        aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust)?;
     let lmax = ctx
         .npd_luts
         .lookup_lmax(class_idx, seg.is_departure, power_row, power_w, log_d)
-        + aircraft::heli_correction_db(seg.profile_idx, seg.is_departure, sdz);
+        + aircraft::heli_correction_db(seg.profile_idx, seg.is_departure, seg.heli_descent);
     Some(RowKernel {
         period: (seg.period.min(2)) as usize,
         energy: energy_for_sel(kernel.sel),

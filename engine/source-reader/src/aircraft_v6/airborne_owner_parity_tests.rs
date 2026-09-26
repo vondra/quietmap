@@ -513,13 +513,14 @@ fn pieces_beyond_reach_are_dropped_and_the_loss_is_their_own_level() {
                 speed_kt: 350.0,
                 segment_length_m: piece.length_m,
                 departure_field_elev_m: f32::NAN,
+                heli_descent: false,
                 count_weight: 1.0,
                 surface_model: false,
                 ground_context: aircraft::GROUND_CONTEXT_NONE,
                 ground_ops_kind: aircraft::GROUND_OPS_KIND_NONE,
                 source_id: 2,
             };
-            let mut prepared = aircraft::prepare_segment(&segment, -30.0, -30.0);
+            let mut prepared = aircraft::prepare_segment(&segment, -30.0, -30.0).unwrap();
             prepared.reach_sq = f64::INFINITY;
             let row = aircraft::prepare_row(&prepared, 0.0, aircraft::M_PER_DEG_LAT);
             aircraft::segment_sel_at_pixel(&prepared, &row, 0.0, rx_elev, luts, Some(&horizon))

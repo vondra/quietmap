@@ -188,12 +188,15 @@ impl CruiseField {
                     group.half_length = group
                         .half_length
                         .max(f64::from(segment.segment_length_m) * 0.5);
+                    let Some(prepared) = aircraft::prepare_segment(
+                        &segment,
+                        terrain.start_elev - 30.0,
+                        terrain.end_elev - 30.0,
+                    ) else {
+                        continue;
+                    };
                     group.buckets.push(Bucket {
-                        prepared: aircraft::prepare_segment(
-                            &segment,
-                            terrain.start_elev - 30.0,
-                            terrain.end_elev - 30.0,
-                        ),
+                        prepared,
                         lat: row.lat,
                         lon: row.lon,
                         half_length: f64::from(segment.segment_length_m) * 0.5,

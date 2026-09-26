@@ -124,6 +124,8 @@ impl AirborneSegmentBatch<'_> {
             } else {
                 f32::from(field_elev)
             },
+            heli_descent: self.flags[i] & crate::emission::aircraft::SEGMENT_FLAG_HELI_DESCENT
+                != 0,
             count_weight: 1.0,
             surface_model: false,
             ground_context: crate::emission::aircraft::GROUND_CONTEXT_NONE,

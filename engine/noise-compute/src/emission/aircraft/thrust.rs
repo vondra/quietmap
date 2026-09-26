@@ -19,10 +19,12 @@ pub const MAX_POWER_ROWS: usize = 6;
 /// Meters per foot.
 const M_PER_FT: f64 = 0.3048;
 
-/// Helicopter descent gate (m of segment altitude loss). ADS-B barometric
+/// Helicopter descent gate (m of whole-chord altitude loss). ADS-B barometric
 /// altitude quantizes to 25 ft (7.62 m): level flight flickers by at most one
-/// step, so anything past −10 m is a real descent carrying BVI. Shallow
-/// descents missed here keep the level curve; their BVI is physically small.
+/// step, so anything past −10 m is a real descent carrying BVI. The producer
+/// evaluates this on the unsplit chord and stores the state in the row, so
+/// split pieces keep the chord's correction at any sample cadence; shallow
+/// descents missed here keep the level curve, and their BVI is physically small.
 pub const HELI_DESCENT_SDZ_M: f64 = -10.0;
 
 /// Per-noise-class thrust model (generated data, see `thrust_generated.rs`).
@@ -185,14 +187,20 @@ pub fn thrust_input_for_segment(
 /// climb below the cutback height above the field flies MaxTakeoff;
 /// everything else follows force balance within [Idle, MaxClimb].
 /// Out-of-table thrust clamps to the edge row.
-pub fn power_bracket(model: &ThrustModel, input: &ThrustInput) -> (u8, f64) {
+/// `None` when the segment lies outside the rating model's domain: the Doc 29
+/// Appendix B polynomials are fit for the normal flight envelope, and an
+/// ADS-B outlier (a B789 record at FL510 and 525 kt) inverts the Idle/MaxClimb
+/// bounds the force-balance thrust clamps into. Callers reject the segment —
+/// the kernel returns `None`, packs skip the row — instead of clamping into
+/// crossed bounds; every consumer shares this admission.
+pub fn power_bracket(model: &ThrustModel, input: &ThrustInput) -> Option<(u8, f64)> {
     let (powers, rows) = if input.is_departure {
         (&model.dep_power, model.dep_rows)
     } else {
         (&model.app_power, model.app_rows)
     };
     if !model.has_thrust {
-        return (0, 0.0);
+        return Some((0, 0.0));
     }
     let h_ft = input.alt_m / M_PER_FT;
     let delta = isa_delta(h_ft);
@@ -215,12 +223,14 @@ pub fn power_bracket(model: &ThrustModel, input: &ThrustInput) -> (u8, f64) {
         rated_thrust_lb(&model.takeoff_coef, vc_kt, h_ft, temp_c)
     } else {
         let k = if vc_kt <= 200.0 { 1.01 } else { 0.95 };
-        force_balance_thrust_lb(model, input.sin_gamma, k, delta).clamp(
-            rated_thrust_lb(&model.idle_coef, vc_kt, h_ft, temp_c),
-            rated_thrust_lb(&model.climb_coef, vc_kt, h_ft, temp_c),
-        )
+        let idle = rated_thrust_lb(&model.idle_coef, vc_kt, h_ft, temp_c);
+        let climb = rated_thrust_lb(&model.climb_coef, vc_kt, h_ft, temp_c);
+        if !(idle.is_finite() && climb.is_finite() && idle <= climb) {
+            return None;
+        }
+        force_balance_thrust_lb(model, input.sin_gamma, k, delta).clamp(idle, climb)
     };
-    bracket_power(powers, rows, thrust_lb)
+    Some(bracket_power(powers, rows, thrust_lb))
 }
 
 /// Doc 29 Eq. 4-3 bracket of corrected thrust `p_lb` over `rows` tabulated
@@ -248,15 +258,18 @@ pub fn bracket_power(powers: &[f64; MAX_POWER_ROWS], rows: u8, p_lb: f64) -> (u8
 /// Helicopter certification correction (dB) for one segment: climbing rows
 /// take the takeoff uplift, descending rows the BVI approach uplift, level
 /// rows the bare level correction. Zero for every fixed-wing profile.
+/// `heli_descent` is the stored whole-chord state, never the row's own
+/// altitude loss: a per-row gate would lose steep descents cut into short
+/// storage pieces.
 #[inline]
-pub fn heli_correction_db(profile_idx: u8, is_departure: bool, sdz_m: f64) -> f64 {
+pub fn heli_correction_db(profile_idx: u8, is_departure: bool, heli_descent: bool) -> f64 {
     if !is_helicopter_profile(profile_idx) {
         return 0.0;
     }
     let correction = &HELI_CORRECTIONS[(profile_idx as usize).min(HELI_CORRECTIONS.len() - 1)];
     if is_departure {
         correction.climb_db
-    } else if sdz_m < HELI_DESCENT_SDZ_M {
+    } else if heli_descent {
         correction.descent_db
     } else {
         correction.level_db
@@ -272,8 +285,10 @@ pub fn thrust_model_for_class(class_idx: usize) -> &'static ThrustModel {
 #[cfg(test)]
 mod tests {
     use super::super::npd::{
-        interpolate_sel, noise_class_of, profile_idx, CLASS_NAMES, CLASS_REP_PROFILE_IDX, PROFILES,
+        interpolate_sel, noise_class_of, profile_idx, NpdLuts, CLASS_NAMES, CLASS_REP_PROFILE_IDX,
+        PROFILES,
     };
+    use super::super::segment_sel_with_cuts;
     use super::*;
 
     #[test]
@@ -311,7 +326,7 @@ mod tests {
             sin_gamma: 0.0,
             height_above_field_m: 0.0,
         };
-        let (row, _) = power_bracket(model, &roll);
+        let (row, _) = power_bracket(model, &roll).unwrap();
         assert!(row >= model.dep_rows - 2, "roll row = {row}");
         // Initial climb below the 2,040 ft cutback: MaxTakeoff as well.
         let initial = ThrustInput {
@@ -322,7 +337,7 @@ mod tests {
             height_above_field_m: 500.0 * M_PER_FT,
             ..roll
         };
-        let (row, _) = power_bracket(model, &initial);
+        let (row, _) = power_bracket(model, &initial).unwrap();
         assert!(row >= model.dep_rows - 2, "initial-climb row = {row}");
         // Level cruise at FL360: force balance reads a high departure row.
         // Corrected thrust is actual thrust divided by δ = 0.22, so the NPD
@@ -336,14 +351,14 @@ mod tests {
             height_above_field_m: 10500.0,
             ..roll
         };
-        let (row, w) = power_bracket(model, &cruise);
+        let (row, w) = power_bracket(model, &cruise).unwrap();
         assert!(
             row >= 2 && (0.0..=1.0).contains(&w),
             "cruise = ({row}, {w})"
         );
         // Pinned classes never interpolate.
         let pinned = thrust_model_for_class(noise_class_of(profile_idx("DH8D")) as usize);
-        assert_eq!(power_bracket(pinned, &cruise), (0, 0.0));
+        assert_eq!(power_bracket(pinned, &cruise), Some((0, 0.0)));
     }
 
     /// Cutback compares height above the field, not local AGL: a B738 7°
@@ -364,9 +379,15 @@ mod tests {
         };
         let bracket = |(row, w): (u8, f64)| (row, (w * 10000.0).round() as i64);
         // Past cutback: force balance on the 13,000/16,000 lb rows.
-        assert_eq!(bracket(power_bracket(model, &climb(700.0, 700.0))), (1, 5142));
+        assert_eq!(
+            bracket(power_bracket(model, &climb(700.0, 700.0)).unwrap()),
+            (1, 5142)
+        );
         // Below cutback: MaxTakeoff rating on the 19,000/23,500 lb rows.
-        assert_eq!(bracket(power_bracket(model, &climb(900.0, 500.0))), (3, 5239));
+        assert_eq!(
+            bracket(power_bracket(model, &climb(900.0, 500.0)).unwrap()),
+            (3, 5239)
+        );
     }
 
     /// The cutback height is altitude minus the departure field, falling back
@@ -390,6 +411,7 @@ mod tests {
             speed_kt: 185.0,
             segment_length_m: 1000.0,
             departure_field_elev_m: 400.0,
+            heli_descent: false,
             count_weight: 1.0,
             surface_model: false,
             ground_context: 0,
@@ -400,6 +422,91 @@ mod tests {
         assert_eq!(known.height_above_field_m, 500.0);
         let unknown = thrust_input_for_segment(&seg, 900.0, 900.0, 70.0, 70.0, f64::NAN);
         assert_eq!(unknown.height_above_field_m, 800.0);
+    }
+
+    /// An ADS-B outlier the filters admit (a B789 record at FL510 and
+    /// 525 kt: sane point, keepable segment, valid airborne, within reach)
+    /// inverts the Idle/MaxClimb ratings the force-balance thrust clamps
+    /// into. The bracket rejects it instead of panicking in the clamp, and
+    /// the acoustic kernel drops the segment — a visitor request never panics.
+    #[test]
+    fn inverted_idle_climb_ratings_reject_the_segment() {
+        let model = thrust_model_for_class(noise_class_of(profile_idx("B789")) as usize);
+        assert_eq!(model.class_name, "WING_B789");
+        let h_ft = 51_000.0;
+        let vc_kt = 525.0 * isa_sigma(h_ft).sqrt();
+        let temp_c = isa_temp_c(h_ft);
+        let idle = rated_thrust_lb(&model.idle_coef, vc_kt, h_ft, temp_c);
+        let climb = rated_thrust_lb(&model.climb_coef, vc_kt, h_ft, temp_c);
+        assert!(idle > climb, "idle = {idle}, climb = {climb}");
+        let input = ThrustInput {
+            is_departure: true,
+            on_ground: false,
+            speed_kt: 525.0,
+            alt_m: h_ft * M_PER_FT,
+            sin_gamma: 0.0,
+            height_above_field_m: h_ft * M_PER_FT,
+        };
+        assert_eq!(power_bracket(model, &input), None);
+        let seg = crate::types::AircraftSegment {
+            flight_id: 1,
+            profile_idx: profile_idx("B789"),
+            is_departure: true,
+            on_ground: false,
+            period: 0,
+            date_id: 0,
+            start_lat: 50.5,
+            start_lon: 14.0,
+            start_alt_m: (h_ft * M_PER_FT) as f32,
+            end_lat: 50.5,
+            end_lon: 14.003,
+            end_alt_m: (h_ft * M_PER_FT) as f32,
+            speed_kt: 525.0,
+            segment_length_m: 212.4,
+            departure_field_elev_m: f32::NAN,
+            heli_descent: false,
+            count_weight: 1.0,
+            surface_model: false,
+            ground_context: 0,
+            ground_ops_kind: 0,
+            source_id: 0,
+        };
+        assert!(
+            segment_sel_with_cuts(&seg, 50.501, 14.0015, 0.0, -30.0, -30.0, NpdLuts::shared(), None)
+                .is_none()
+        );
+        // The whole 1,000-ft/25-kt sweep through 60,000 ft never panics:
+        // exactly the inverted-bound combinations reject, in every class.
+        let mut inverted = 0u32;
+        for model in THRUST.iter().filter(|m| m.has_thrust) {
+            for alt_ft in (-1000..=60_000).step_by(1000) {
+                for speed_kt in (100..=600).step_by(25) {
+                    let h = alt_ft as f64;
+                    let vc = speed_kt as f64 * isa_sigma(h).sqrt();
+                    let temp_c = isa_temp_c(h);
+                    let idle = rated_thrust_lb(&model.idle_coef, vc, h, temp_c);
+                    let climb = rated_thrust_lb(&model.climb_coef, vc, h, temp_c);
+                    let input = ThrustInput {
+                        is_departure: false,
+                        on_ground: false,
+                        speed_kt: speed_kt as f64,
+                        alt_m: h * M_PER_FT,
+                        sin_gamma: 0.0,
+                        height_above_field_m: h * M_PER_FT,
+                    };
+                    let outside =
+                        !(idle.is_finite() && climb.is_finite() && idle <= climb);
+                    assert_eq!(
+                        power_bracket(model, &input).is_none(),
+                        outside,
+                        "{} h={alt_ft} v={speed_kt}",
+                        model.class_name
+                    );
+                    inverted += u32::from(outside);
+                }
+            }
+        }
+        assert!(inverted > 0, "the sweep must exercise rejections");
     }
 
     #[test]
@@ -427,17 +534,17 @@ mod tests {
         assert!(ec35.level_db < -10.0 && ec35.descent_db > ec35.level_db);
         let b412 = &HELI_CORRECTIONS[profile_idx("B412") as usize];
         assert!(b412.level_db < -3.0 && b412.level_db > ec35.level_db);
-        assert_eq!(heli_correction_db(profile_idx("B738"), false, -100.0), 0.0);
+        assert_eq!(heli_correction_db(profile_idx("B738"), false, true), 0.0);
         assert_eq!(
-            heli_correction_db(profile_idx("EC35"), true, 0.0),
+            heli_correction_db(profile_idx("EC35"), true, false),
             HELI_CORRECTIONS[profile_idx("EC35") as usize].climb_db
         );
         assert_eq!(
-            heli_correction_db(profile_idx("EC35"), false, -11.0),
+            heli_correction_db(profile_idx("EC35"), false, true),
             HELI_CORRECTIONS[profile_idx("EC35") as usize].descent_db
         );
         assert_eq!(
-            heli_correction_db(profile_idx("EC35"), false, -7.62),
+            heli_correction_db(profile_idx("EC35"), false, false),
             HELI_CORRECTIONS[profile_idx("EC35") as usize].level_db
         );
     }

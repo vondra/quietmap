@@ -206,6 +206,12 @@ fn neighbouring_cells(cell: (i64, i32, i32)) -> impl Iterator<Item = (i64, i32, 
 
 /// Drop `~` samples that coincide with one address track for at least
 /// [`ANONYMOUS_MATCH_MIN_BINS`] ten-second bins; address–address pairs stay.
+/// A suppressed primary sample transfers its baseline provenance to the
+/// coincident address samples: the surviving representative of an already
+/// observed stretch stays baseline-weighted, and only genuinely additional
+/// stretches keep the increment weight. Transfers leave [`MergeCounts`]
+/// untouched — the counts record that secondary content entered the day, and
+/// the admission repair still purges it from rejected increment days.
 fn suppress_anonymous_echoes(traces: &mut [AircraftTrace]) -> u64 {
     let anonymous: Vec<usize> = (0..traces.len())
         .filter(|&i| trace_identity(&traces[i].icao24).is_some_and(|(tilde, _)| tilde))
@@ -234,7 +240,10 @@ fn suppress_anonymous_echoes(traces: &mut [AircraftTrace]) -> u64 {
             }
         }
     }
-    let mut suppressed = 0u64;
+    // Drops and transfers are decided under shared borrows, then applied:
+    // matching reads positions only, so the flag transfer cannot move a match.
+    let mut drops: Vec<(usize, Vec<bool>)> = Vec::with_capacity(anonymous.len());
+    let mut transfers: Vec<(usize, usize)> = Vec::new();
     for index in anonymous {
         let mut candidates: Vec<usize> = Vec::new();
         let mut seen_cells = HashSet::new();
@@ -255,51 +264,80 @@ fn suppress_anonymous_echoes(traces: &mut [AircraftTrace]) -> u64 {
             let matched = coinciding_samples(&traces[index].points, &traces[candidate].points);
             let bins: HashSet<i64> = matched
                 .iter()
-                .map(|&i| (traces[index].points[i].timestamp / ANONYMOUS_MATCH_BIN_S).floor() as i64)
+                .map(|&(i, _, _)| {
+                    (traces[index].points[i].timestamp / ANONYMOUS_MATCH_BIN_S).floor() as i64
+                })
                 .collect();
             if bins.len() >= ANONYMOUS_MATCH_MIN_BINS {
-                for i in matched {
+                for (i, first, second) in matched {
                     drop[i] = true;
+                    if !traces[index].points[i].is_secondary_provider() {
+                        transfers.push((candidate, first));
+                        if let Some(second) = second {
+                            transfers.push((candidate, second));
+                        }
+                    }
                 }
             }
         }
+        drops.push((index, drop));
+    }
+    let mut suppressed = 0u64;
+    for (index, drop) in drops {
         let before = traces[index].points.len();
         traces[index].retain_points(|i, _| !drop[i]);
         suppressed += (before - traces[index].points.len()) as u64;
     }
+    for (trace_index, point_index) in transfers {
+        traces[trace_index].points[point_index].flags &= !FLAG_SECONDARY_PROVIDER;
+    }
     suppressed
 }
 
-/// Indices of `anonymous` samples lying on the `address` track: the address
-/// position interpolated between samples at most 30 s apart (or a sample
-/// within 1 s) within 450 m, and within 400 ft when both are airborne.
-fn coinciding_samples(anonymous: &[TracePoint], address: &[TracePoint]) -> Vec<usize> {
-    let mut track: Vec<&TracePoint> = address.iter().filter(|p| point_is_sane(p)).collect();
-    track.sort_by(|a, b| a.timestamp.total_cmp(&b.timestamp));
+/// `anonymous` samples lying on the `address` track: the address position
+/// interpolated between samples at most 30 s apart (or a sample within 1 s)
+/// within 450 m, and within 400 ft when both are airborne. Each match also
+/// carries the one or two address samples it interpolates between, so the
+/// caller can transfer baseline provenance to the surviving representative.
+fn coinciding_samples(
+    anonymous: &[TracePoint],
+    address: &[TracePoint],
+) -> Vec<(usize, usize, Option<usize>)> {
+    let mut track: Vec<(usize, &TracePoint)> = address
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| point_is_sane(p))
+        .collect();
+    track.sort_by(|a, b| a.1.timestamp.total_cmp(&b.1.timestamp));
     let mut matched = Vec::new();
     for (index, point) in anonymous.iter().enumerate() {
         if !point_is_sane(point) {
             continue;
         }
         let t = point.timestamp;
-        let after = track.partition_point(|p| p.timestamp < t);
-        let reference = match (after.checked_sub(1).map(|i| track[i]), track.get(after)) {
-            (Some(a), Some(b)) if b.timestamp - a.timestamp <= ANONYMOUS_MATCH_BRACKET_S => {
-                interpolate(a, b, t)
+        let after = track.partition_point(|(_, p)| p.timestamp < t);
+        let reference = match (
+            after.checked_sub(1).map(|i| track[i]),
+            track.get(after).copied(),
+        ) {
+            (Some(a), Some(b))
+                if b.1.timestamp - a.1.timestamp <= ANONYMOUS_MATCH_BRACKET_S =>
+            {
+                (interpolate(a.1, b.1, t), (a.0, Some(b.0)))
             }
             (a, b) => {
-                let nearest = [a, b.copied()]
+                let nearest = [a, b]
                     .into_iter()
                     .flatten()
-                    .filter(|p| (p.timestamp - t).abs() <= SAME_OBSERVATION_TOLERANCE_S)
-                    .min_by(|x, y| (x.timestamp - t).abs().total_cmp(&(y.timestamp - t).abs()));
+                    .filter(|(_, p)| (p.timestamp - t).abs() <= SAME_OBSERVATION_TOLERANCE_S)
+                    .min_by(|x, y| (x.1.timestamp - t).abs().total_cmp(&(y.1.timestamp - t).abs()));
                 match nearest {
-                    Some(p) => (p.lat, p.lon, p.airborne_alt_ft()),
+                    Some((original, p)) => ((p.lat, p.lon, p.airborne_alt_ft()), (original, None)),
                     None => continue,
                 }
             }
         };
-        let (lat, lon, alt_ft) = reference;
+        let ((lat, lon, alt_ft), (first, second)) = reference;
         if flat_dist(point.lat, point.lon, lat, lon) > ANONYMOUS_MATCH_DISTANCE_M {
             continue;
         }
@@ -309,7 +347,7 @@ fn coinciding_samples(anonymous: &[TracePoint], address: &[TracePoint]) -> Vec<u
             _ => false,
         };
         if same_level {
-            matched.push(index);
+            matched.push((index, first, second));
         }
     }
     matched

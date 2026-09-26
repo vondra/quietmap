@@ -211,6 +211,10 @@ pub struct AircraftSegment {
     /// Terrain under the flight's takeoff roll (m); NaN when the roll was not
     /// observed. The Doc 29 cutback gate compares height above this field.
     pub departure_field_elev_m: f32,
+    /// Stored whole-chord descent state (flag bit 7): the producer's chord
+    /// lost more than 10 m end to end. Helicopter arrivals read their BVI
+    /// approach correction from this, never from the row's own altitude loss.
+    pub heli_descent: bool,
     pub count_weight: f32, // 1.0 = one observed flight segment; >1 = synthetic aggregated operations
     pub surface_model: bool, // synthetic airport-surface model contribution
     pub ground_context: u8, // 0=none, 1=airport_line

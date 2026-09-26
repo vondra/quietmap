@@ -214,3 +214,60 @@ fn a_primary_anonymous_track_riding_a_secondary_address_track_goes() {
     assert_eq!(merged[0].icao24, "4ca011");
     assert_eq!(counts.anonymous_points_suppressed, 30);
 }
+
+/// A secondary address track duplicating a primary `~` echo is the same
+/// physical observation under another identity: the suppressed primary
+/// samples transfer their baseline provenance to the surviving address
+/// samples, so the duplicate adds no increment energy or movement. With
+/// 365 baseline and 12 increment days the mean-day energy stays exactly E
+/// instead of inflating 1.967× (+2.94 dB).
+#[test]
+fn duplicate_provider_with_anonymous_identity_adds_no_increment_energy() {
+    use crate::segment::{build_segments, SegmentMeta};
+    use noise_compute::emission::aircraft::SamplingWindow;
+
+    let times: Vec<f64> = (0..7).map(|k| 10.0 * k as f64).collect();
+    let (merged, counts) = merge_provider_traces(
+        vec![trace("~4ca011", &times, 50.5, 14.0)],
+        vec![trace("4ca011", &times, 50.5, 14.0)],
+    );
+    assert_eq!(counts.anonymous_points_suppressed, 7);
+    assert_eq!(merged.len(), 1);
+    let surviving = &merged[0];
+    assert_eq!(surviving.icao24, "4ca011");
+    assert!(
+        surviving.points.iter().all(|p| !p.is_secondary_provider()),
+        "coincident duplicate samples stay baseline-weighted"
+    );
+    let meta = SegmentMeta {
+        flight_id: 1,
+        callsign: "",
+        aircraft_type: *b"B738",
+        profile_idx: crate::profile::profile_idx("B738"),
+        source_id: 0,
+        origin: 0,
+        veh_kind: 0,
+        gse_class: 0,
+        date_id: 0,
+        departure_field_elev_m: f32::NAN,
+    };
+    let phases = vec![crate::flight::Phase::Airborne; surviving.points.len()];
+    let rows = build_segments(
+        &surviving.points,
+        &vec![1219.2; surviving.points.len()],
+        &vec![0.0; surviving.points.len()],
+        &phases,
+        &meta,
+    );
+    assert_eq!(rows.len(), 6);
+    assert!(rows.iter().all(|s| !s.is_secondary_only()));
+    let weights = SamplingWindow {
+        baseline_days: 365,
+        increment_days: 12,
+        baseline_days_sha256: String::new(),
+        increment_days_sha256: String::new(),
+    }
+    .provenance_weights();
+    // The duplicate observation rides the baseline divisor on every day.
+    assert_eq!(weights.for_flags(rows[0].flags), 1.0);
+}

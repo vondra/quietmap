@@ -91,6 +91,8 @@ pub fn cruise_segment(
         segment_length_m: length_m as f32,
         // Buckets aggregate many flights; cutback never fires at cruise altitudes anyway.
         departure_field_elev_m: f32::NAN,
+        // Level rep-segments: the descent state never fires.
+        heli_descent: false,
         count_weight: density as f32,
         surface_model: false,
         ground_context: aircraft::GROUND_CONTEXT_NONE,
@@ -231,11 +233,17 @@ pub fn scatter(
             terrain.end_elev - 30.0,
             f64::from(seg.departure_field_elev_m),
         );
-        let (power_row, power_w) =
-            aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust);
-        // Cruise rep-segments are level, so the heli descent gate never fires.
+        // The kernel admitted the same segment above, so this bracket cannot
+        // reject; the `else` only carries its `Option` type.
+        let Some((power_row, power_w)) =
+            aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust)
+        else {
+            continue;
+        };
+        // Cruise rep-segments are level, so their stored descent state is
+        // always false; departures take the climb correction regardless.
         let lmax = npd_luts.lookup_lmax(class_idx, true, power_row, power_w, log_d)
-            + aircraft::heli_correction_db(seg.profile_idx, true, 0.0);
+            + aircraft::heli_correction_db(seg.profile_idx, true, seg.heli_descent);
         if lmax > acc.peak_lmax {
             acc.peak_lmax = lmax;
             acc.peak_sel = sel;

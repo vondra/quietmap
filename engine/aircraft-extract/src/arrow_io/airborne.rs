@@ -133,7 +133,8 @@ pub fn write_airborne(path: &Path, rows: &[FlightSegment], window: &SamplingWind
                     | segment_flags::SPLIT_PIECE
                     | segment_flags::CHORD_START
                     | segment_flags::CHORD_END
-                    | segment_flags::SECONDARY_ONLY),
+                    | segment_flags::SECONDARY_ONLY
+                    | segment_flags::HELI_DESCENT),
         );
         t_start.append_value(super::height_meters(r.start_elev_m)?);
         t_end.append_value(super::height_meters(r.end_elev_m)?);

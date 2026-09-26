@@ -64,7 +64,8 @@ fn groups(rows: &[CruiseRowView<'_>], rasters: &dyn RasterSampler) -> Vec<Group>
                         &segment,
                         terrain.start_elev - 30.0,
                         terrain.end_elev - 30.0,
-                    ),
+                    )
+                    .unwrap(),
                     lat: row.lat,
                     lon: row.lon,
                     half_length: f64::from(segment.segment_length_m) * 0.5,
