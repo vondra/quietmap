@@ -838,10 +838,10 @@ fn site_type_from_tags(tags: &Tags) -> u8 {
             "industrial" => return 0,
             "quarry" => return 1,
             "farmyard" => return 2,
-            "railway" => return 5,
             _ => {}
         }
     }
+    // Only `railway=yard` is a yard; `landuse=railway` alone is the corridor.
     if tags.get("railway").is_some_and(|r| r == "yard") {
         return 5;
     }
@@ -988,9 +988,16 @@ mod site_type_tests {
     }
 
     #[test]
-    fn railway_land_routes_to_the_yard_site_type() {
-        assert_eq!(site_type_from_tags(&tags_of(&[("landuse", "railway")])), 5);
+    fn only_the_yard_tag_routes_to_the_yard_site_type() {
+        assert_eq!(site_type_from_tags(&tags_of(&[("landuse", "railway")])), 0);
         assert_eq!(site_type_from_tags(&tags_of(&[("railway", "yard")])), 5);
+        assert_eq!(
+            site_type_from_tags(&tags_of(&[
+                ("landuse", "railway"),
+                ("railway", "yard")
+            ])),
+            5
+        );
         assert_eq!(
             site_type_from_tags(&tags_of(&[("landuse", "industrial")])),
             0

@@ -59,7 +59,7 @@ pub fn industrial_profile(site_type: u8) -> IndustrialProfile {
             night_offset: 0.0, // 24/7
         },
         5 => IndustrialProfile {
-            // rail yard (landuse=railway / railway=yard): open-air mechanical
+            // rail yard (railway=yard): open-air mechanical
             // work (switchers, coupling, retarders) between the enclosed
             // factory (94) and the blasting quarry (99); quarry spectrum as
             // the closest modelled open-air mechanical analogue. Yards run

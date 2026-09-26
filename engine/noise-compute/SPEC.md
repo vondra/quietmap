@@ -328,10 +328,11 @@ above the railhead over ballast ground.
 
 ## Rail yards
 
-`landuse=railway` / `railway=yard` polygons extract as industrial source_type 5
-and emit as CNOSSOS 2.3.3 facility sources at Lw 96 dB(A) with the quarry octave
+`railway=yard` polygons extract as industrial source_type 5
+and emit as CNOSSOS 2.3.3 facility sources at base Lw 96 dB(A) with the quarry octave
 spectrum (the closest modelled open-air mechanical analogue: switchers,
-coupling, retarders), running 24/7. The level is provisional until the Schall
+coupling, retarders), running 24/7. `landuse=railway` alone is the railway
+corridor, not a yard, and emits nothing. The level is provisional until the Schall
 03 yard chapter is verified. Untagged non-through tracks inside the polygon
 lose the line prior (the yard stamp) so the area is not counted twice.
 

@@ -1,5 +1,5 @@
 //! Yard tracks lose the line prior: an untagged, non-through track inside a
-//! `landuse=railway` / `railway=yard` polygon is yard infrastructure, and the
+//! `railway=yard` polygon is yard infrastructure, and the
 //! yard polygon itself emits as a rail-yard facility (industrial source_type
 //! 5). Stamping `service = yard` here routes those rows through the existing
 //! service rules (no class prior, own evidence kept, excluded from other
