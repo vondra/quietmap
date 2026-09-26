@@ -6,7 +6,7 @@ use crate::{
     transport::ResolvedNode,
 };
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 pub struct ModelNode {
     pub id: i64,
@@ -52,8 +52,12 @@ pub fn prepare<'a>(
     })
 }
 
+/// Retained control points keyed by node id. A `BTreeMap`, not a `HashMap`:
+/// unlinked orphans flush in `finish` in iteration order, so per-process
+/// hashing would make spill bytes (and any unsorted consumer) differ between
+/// identical extracts. Node-id order is deterministic by construction.
 #[derive(Default)]
-pub struct ControlPoints(HashMap<i64, (ModelNode, bool)>);
+pub struct ControlPoints(BTreeMap<i64, (ModelNode, bool)>);
 
 impl ControlPoints {
     pub fn insert(&mut self, node: ModelNode) {

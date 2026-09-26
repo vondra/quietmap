@@ -724,6 +724,7 @@ boundaries for abutments. These endpoints are evidence, not a deck-height model.
 Transport control rows retain node identity, raw crossing/signal/whistle tags,
 and one incidence per road or rail way (vertex index and whole-way chainage).
 Unlinked controls remain explicit null incidences; there is no proximity guess.
+Orphan controls flush in node-id order, so identical extracts spill identically.
 National whistle values and `railway:traffic_mode`, usage, service and heritage
 survive. Original railway node chains and piece intervals already supply curve
 geometry to rail finalization; no new curve-radius approximation is introduced.
