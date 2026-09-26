@@ -209,7 +209,8 @@ fn classify_multipolygon(rel: &osmpbf::Relation) -> Option<(Vec<FeatureType>, Ta
     } else if matches!(
         tag("landuse"),
         Some("industrial" | "quarry" | "farmyard" | "landfill" | "port" | "harbour")
-    ) || matches!(tag("man_made"), Some("works") | Some("wastewater_plant"))
+    ) || crate::classify::is_railway_yard(tag)
+        || matches!(tag("man_made"), Some("works") | Some("wastewater_plant"))
         || crate::classify::is_power_or_inactive_industry(tag)
     {
         FeatureType::Industrial

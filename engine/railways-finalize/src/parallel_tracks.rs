@@ -13,6 +13,10 @@ use std::collections::HashMap;
 // tighter radius and heading stand in for identity (CZ: 0 of about 5,000 corridor segments
 // carry either); equal tokens allow 50 m and 20 degrees; different tokens are never siblings.
 const TOKENLESS_LATERAL_M: f64 = 15.0;
+// A neighbour counts only when the shared run is at least this long, or this fraction of
+// the track's own length, whichever is greater (2026-07-16 review of the retired spread).
+const MIN_OVERLAP_M: f64 = 30.0;
+const MIN_OVERLAP_FRACTION: f64 = 0.3;
 const TOKENLESS_HEADING_DEG: f64 = 10.0;
 const SAME_TOKEN_LATERAL_M: f64 = 50.0;
 const SAME_TOKEN_HEADING_DEG: f64 = 20.0;
@@ -60,7 +64,8 @@ fn project_tracks(rows: &[Expanded], square: grid::Square) -> Vec<Option<Track>>
 }
 
 /// Distance to the foot of the perpendicular when it lands on the segment's body, else None:
-/// a neighbour must run beside the track's midpoint, not end before it (stagger- and cut-immune).
+/// a neighbour must run beside the track's midpoint, not end before it. Length is gated
+/// separately: a scrap that only covers the midpoint must not halve the whole microsegment.
 fn abreast_distance_m(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> Option<f64> {
     let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
     let t = ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / (dx * dx + dy * dy);
@@ -69,8 +74,8 @@ fn abreast_distance_m(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> Option
         .then(|| (point[0] - start[0] - t * dx).hypot(point[1] - start[1] - t * dy))
 }
 
-/// Lateral distance from `a`'s midpoint to `b`'s body when `b` runs beside `a`, else None.
-fn sibling_lateral_m(a: &Expanded, ta: &Track, b: &Expanded, tb: &Track) -> Option<f64> {
+/// Identity, heading and lateral limit when `b` may run beside `a`, else None.
+fn sibling_limit(a: &Expanded, ta: &Track, b: &Expanded, tb: &Track) -> Option<f64> {
     if a.osm_id == b.osm_id
         || a.rail_type != b.rail_type
         || usage_family(a.usage) != usage_family(b.usage)
@@ -93,11 +98,59 @@ fn sibling_lateral_m(a: &Expanded, ta: &Track, b: &Expanded, tb: &Track) -> Opti
     };
     let cross = ta.direction[0] * tb.direction[1] - ta.direction[1] * tb.direction[0];
     let dot = ta.direction[0] * tb.direction[0] + ta.direction[1] * tb.direction[1];
-    if cross.abs().atan2(dot.abs()).to_degrees() >= max_heading_deg {
-        return None;
-    }
+    (cross.abs().atan2(dot.abs()).to_degrees() < max_heading_deg).then_some(max_lateral_m)
+}
+
+/// Lateral distance from `a`'s midpoint to `b`'s body when `b` runs beside `a`, else None.
+fn sibling_lateral_m(a: &Expanded, ta: &Track, b: &Expanded, tb: &Track) -> Option<f64> {
+    let max_lateral_m = sibling_limit(a, ta, b, tb)?;
     let middle = [(ta.start[0] + ta.end[0]) / 2.0, (ta.start[1] + ta.end[1]) / 2.0];
     abreast_distance_m(middle, tb.start, tb.end).filter(|lateral_m| *lateral_m < max_lateral_m)
+}
+
+/// How far `way` actually runs beside `a`, summing every row of that way. One way is stored as
+/// many rows, and the cross-section keeps only the row under the midpoint, so the length gate
+/// has to see the whole way: a 36 m cut of a full twin still accompanies the track, while a 10 m
+/// scrap that merely covers the midpoint does not.
+fn way_overlap_m(
+    a: &Expanded,
+    ta: &Track,
+    way: &[usize],
+    rows: &[Expanded],
+    tracks: &[Option<Track>],
+) -> f64 {
+    let scalar = |p: [f64; 2]| p[0] * ta.direction[0] + p[1] * ta.direction[1];
+    let (a0, a1) = (scalar(ta.start), scalar(ta.end));
+    let (a_min, a_max) = (a0.min(a1), a0.max(a1));
+    let mut spans: Vec<(f64, f64)> = way
+        .iter()
+        .filter_map(|&index| {
+            let tb = tracks[index].as_ref()?;
+            let limit = sibling_limit(a, ta, &rows[index], tb)?;
+            let (dx, dy) = (tb.start[0] - ta.start[0], tb.start[1] - ta.start[1]);
+            let separation = (dx * ta.direction[1] - dy * ta.direction[0]).abs();
+            if separation >= limit {
+                return None;
+            }
+            let (s, e) = (scalar(tb.start), scalar(tb.end));
+            Some((s.min(e).max(a_min), s.max(e).min(a_max)))
+        })
+        .filter(|(start, end)| end > start)
+        .collect();
+    spans.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let mut total = 0.0;
+    let mut open: Option<(f64, f64)> = None;
+    for (start, end) in spans {
+        match open {
+            Some((from, to)) if start <= to => open = Some((from, to.max(end))),
+            Some((from, to)) => {
+                total += to - from;
+                open = Some((start, end));
+            }
+            None => open = Some((start, end)),
+        }
+    }
+    total + open.map_or(0.0, |(from, to)| to - from)
 }
 
 /// For every track: itself first, then the laterally nearest row of each other way beside it.
@@ -111,6 +164,12 @@ fn cross_sections(rows: &[Expanded], tracks: &[Option<Track>]) -> Vec<Vec<usize>
             {
                 buckets.entry((x, y)).or_default().push(index);
             }
+        }
+    }
+    let mut rows_of_way: HashMap<i64, Vec<usize>> = HashMap::new();
+    for (index, track) in tracks.iter().enumerate() {
+        if track.is_some() {
+            rows_of_way.entry(rows[index].osm_id).or_default().push(index);
         }
     }
     let mut sections = Vec::with_capacity(rows.len());
@@ -145,6 +204,12 @@ fn cross_sections(rows: &[Expanded], tracks: &[Option<Track>]) -> Vec<Vec<usize>
                 }
             }
             let mut siblings: Vec<_> = nearest.into_values().map(|(_, _, other)| other).collect();
+            let span_m = (track.end[0] - track.start[0]).hypot(track.end[1] - track.start[1]);
+            let min_overlap = MIN_OVERLAP_M.max(MIN_OVERLAP_FRACTION * span_m);
+            siblings.retain(|&other| {
+                way_overlap_m(&rows[index], track, &rows_of_way[&rows[other].osm_id], rows, tracks)
+                    >= min_overlap
+            });
             siblings.sort_by_key(|&other| rows[other].osm_id);
             members.extend(siblings);
         }

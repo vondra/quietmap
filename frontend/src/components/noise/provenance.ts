@@ -115,9 +115,14 @@ export function railTrafficDescription(
   traffic: RailTraffic,
   passengerProvenance: DatasetProvenance | null,
   freightProvenance: DatasetProvenance | null,
+  // Horn approaches carry soundings (not trains) in the passenger slots.
+  soundings = false,
 ): string {
-  return ([['Passenger', traffic.passenger, passengerProvenance],
-    ['Freight', traffic.freight, freightProvenance]] as const).map(([label, category, provenance]) => {
+  const rows: Array<[string, RailTraffic['passenger'], DatasetProvenance | null]> = soundings
+    ? [['Soundings', traffic.passenger, passengerProvenance]]
+    : [['Passenger', traffic.passenger, passengerProvenance],
+      ['Freight', traffic.freight, freightProvenance]]
+  return rows.map(([label, category, provenance]) => {
     const periods = category.status === 0 ? '' : '\nDay / evening / night: ' + category.periods.map(railCount).join(' / ')
     return `${label}: ${railTrainSourceLine(category, provenance)}${periods}`
   }).join('\n\n')

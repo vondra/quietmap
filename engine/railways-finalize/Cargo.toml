@@ -9,6 +9,7 @@ edition = "2021"
 [dependencies]
 arrow = { version = "54", default-features = false, features = ["ipc"] }
 arrow-batching = { path = "../arrow-batching" }
+csv = "1"
 grid = { path = "../grid" }
 square-store = { path = "../square-store" }
 noise-compute = { path = "../noise-compute" }

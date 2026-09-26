@@ -177,7 +177,7 @@ export function MetadataRows({ c }: { c: Contributor }) {
       { sep: true },
       ['Effective', `${m.speed_kmh.toFixed(0)} km/h`],
     ], 18, 14)
-    const trainsText = railTrafficDescription(m.traffic, m.passenger_provenance, m.freight_provenance)
+    const trainsText = railTrafficDescription(m.traffic, m.passenger_provenance, m.freight_provenance, m.rail_type === 'horn')
     const segmentsText = txtTable([
       ['Microsegments', String(m.segment_count)],
       ['Total length', `${(m.total_length_m / 1000).toFixed(2)} km`],

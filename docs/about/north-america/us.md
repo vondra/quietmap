@@ -1,6 +1,6 @@
 ---
 title: United States
-intro: FHWA HPMS 2022 traffic counts on federal-aid highways, Amtrak timetable, USGS wind turbine database. Local streets, commuter rail and freight use class defaults.
+intro: FHWA HPMS 2022 traffic counts on federal-aid highways, Amtrak timetable, FRA crossing horns, USGS wind turbine database. Local streets, commuter rail and freight use class defaults.
 map: { center: [-98.0, 39.0], zoom: 4 }
 ---
 
@@ -29,6 +29,8 @@ Minor collectors and local streets are not in HPMS and use class defaults. Motor
 Passenger trains: [Amtrak GTFS timetable](https://content.amtrak.com/content/gtfs/GTFS.zip). Commuter rail feeds (LIRR, NJ Transit, Metra, MBTA, Caltrain and others) are not loaded; those lines use the [world railway defaults](/about/methodology). Lines without a usage tag use the [unclassified railway default](/about/methodology). Surface metro sections are included; see the [railway method](/about/methodology).
 
 Freight is not covered: BNSF, Union Pacific, CSX and Norfolk Southern publish no schedules.
+
+Level-crossing horns: [FRA Highway-Rail Crossing Inventory](https://data.transportation.gov/Railroads/Crossing-Inventory-Data-Form-71-Current/m2f8-22s6) (Form 6180.71). Public at-grade crossings with trains sound on approach; full-day quiet zones and Chicago-excused crossings stay silent, partial zones at night. Rail yards mapped in OpenStreetMap emit as round-the-clock industrial sites.
 
 ## Industry
 

@@ -110,6 +110,13 @@ The main-line freight rate conserves each solved country's official 2023 goods
 train-km: Germany 24.5, France 5.5, Poland 12.0, Czechia 13.5, Austria 27.1 and
 Switzerland 31.4 trains per day. Lines mapped as passenger-only carry no freight.
 
+At US and Canadian public level crossings with trains, locomotives sound their
+horns on approach: each travel direction is a line segment up to a quarter mile
+long ending at the crossing, with half the crossing's trains sounding. Full-day
+quiet zones stay silent, as do partial zones at night. Rail yards mapped in
+OpenStreetMap emit as industrial sites that run around the clock, and their
+untagged tracks carry no line estimate.
+
 ## Aircraft
 
 Aircraft noise is computed from recorded ADS-B flights: twelve full days of worldwide

@@ -48,6 +48,9 @@ None of this would exist without other people's open data. Thank you to everyone
 - Implicit OSM speed-rule definitions: [OpenStreetMap Wiki contributors](https://wiki.openstreetmap.org/wiki/Key:maxspeed#Implicit_maxspeed_values)
   (CC BY-SA 2.0; adapted into a table of determinate passenger-car rules)
 - Trains: public [GTFS](https://gtfs.org/) feeds and national timetables, listed on the country pages
+- Level-crossing horns: [FRA Highway-Rail Crossing Inventory](https://data.transportation.gov/Railroads/Crossing-Inventory-Data-Form-71-Current/m2f8-22s6)
+  (public domain) and [Transport Canada Grade Crossings Inventory](https://open.canada.ca/data/en/dataset/d0f54727-6c0b-4e5a-aa04-ea1463cf9f4c)
+  (contains information licensed under the Open Government Licence – Canada)
 - Industry: [E-PRTR](https://industry.eea.europa.eu/) (EEA),
   [Global Power Plant Database](https://datasets.wri.org/dataset/globalpowerplantdatabase) (WRI),
   [Global Energy Monitor](https://globalenergymonitor.org/) trackers, national wind turbine registries

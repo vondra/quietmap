@@ -349,10 +349,15 @@ period. The producer clips geometry and resolves counts, missing-traffic priors,
 service/parallel allocation and any estimated period split before publication.
 Daily-only timetable evidence receives an explicitly estimated period allocation.
 Unknown freight is not a known zero; a known numeric zero remains zero.
-On non-service tracks (`service=0`) other than preserved heritage rail (type 5),
+The yard stamp marks untagged non-through tracks inside rail-yard polygons
+`service=yard` before allocation (no ref or name, not usage-main, no timetable
+intervals, way fully inside the polygon), so they keep only their own evidence
+while the yard facility carries the area. On non-service tracks (`service=0`)
+other than preserved heritage rail (type 5),
 each category is allocated once per line
 cross-section: a track and each other way running beside its midpoint (same type
-and usage family, no shared node; 15 m and 10° without a common ref or name,
+and usage family, no shared node; longitudinal overlap at least the greater of
+30 m and 30% of that track's own length; 15 m and 10° without a common ref or name,
 50 m and 20° with one) form the cross-section, projected in local metres scaled by
 the square centre's latitude so the sections ignore input row order. The line value comes from the
 track's own country files first: the highest-ranked domestic evidence sets it (the
@@ -388,6 +393,41 @@ train-weighted mean), sets both its per-train level and its line density. Contri
 the greatest received Lden energy, including night-only traffic, and reports both
 categories' status, source and matching evidence separately. Rail contributor
 emission headlines use the same Lden period weighting as received levels.
+
+## Level-crossing horns
+
+US and Canadian public at-grade crossings with trains sound horns as rail rows
+of type 6: one approach segment per travel direction ends at the crossing,
+oriented along the nearest finalized track within 60 m and min(1/4 mi, v·20 s)
+long (49 CFR 222.21; CROR 14(l)). Each approach carries half the crossing's
+soundings in the passenger slots; freight is estimated zero. FRA day (6a–6p) /
+night (6p–6a) thru counts map to END periods uniform within blocks; full-day
+quiet zones and Chicago-excused crossings are silent and partial zones silent
+22–07. Transport Canada daily totals split flat 12/4/8; TC carries no cessation
+data (labelled in its dataset name). Overlapping same-direction approaches
+merge onto shared pieces with the max soundings. Horn rows are appended
+post-finalize and never take priors or daily splits; refinalizing a square
+refuses horn rows (strip them and re-run the horns step).
+
+A sounding spreads the horn's power over the approach it travels, so the line
+emission follows the rolling-stock density law (N / (T·1000·v)) with the horn's
+own loudness independent of speed; slower trains sound longer per metre. The
+octave spectrum is the energy mean of the three normalized Volpe 1993 horn
+spectra (Figs. 10/13/16, 0°, 61 m), and the sound power level is calibrated so
+one sounding at the median US sounding speed (40 mph) yields the FRA reference
+SEL of 107 dBA at 100 ft abeam a 402 m approach through the engine's own
+propagation on flat soft ground. Horns radiate omnidirectionally from 4.0 m
+above the railhead over ballast ground.
+
+## Rail yards
+
+`railway=yard` polygons extract as industrial source_type 5
+and emit as CNOSSOS 2.3.3 facility sources at base Lw 96 dB(A) with the quarry octave
+spectrum (the closest modelled open-air mechanical analogue: switchers,
+coupling, retarders), running 24/7. `landuse=railway` alone is the railway
+corridor, not a yard, and emits nothing. The level is provisional until the Schall
+03 yard chapter is verified. Untagged non-through tracks inside the polygon
+lose the line prior (the yard stamp) so the area is not counted twice.
 
 ## Aircraft finite-segment corrections
 

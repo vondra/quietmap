@@ -346,3 +346,35 @@ fn distinct_lines_spurs_distant_tracks_and_service_tracks_are_not_siblings() {
     assert_eq!(rows[5].child.traffic.passenger.status, STATUS_UNKNOWN);
     assert_eq!(daily(rows[5].child.traffic.freight), 0.0);
 }
+
+#[test]
+fn parallel_siblings_need_longitudinal_overlap() {
+    // 250 m track, 100 passenger trains, and a 10 m parallel scrap centred on its midpoint.
+    // The midpoint foot lands on the scrap (lateral ~4 m), but the overlap is 10 m, under
+    // max(30 m, 30% of 250 m). The long track keeps 100; the scrap takes the class prior.
+    let walked = RowTraffic { passenger: flow(100.0, TIMETABLE, 2), freight: CategoryFlow::default() };
+    let base = 14.230;
+    let long = 250.0 / 71_681.54751518813;
+    let scrap = 10.0 / 71_681.54751518813;
+    let mid = base + long / 2.0;
+    let mut rows = vec![
+        track(1, 0.0, base, base + long, walked),
+        track(2, 1.0, mid - scrap / 2.0, mid + scrap / 2.0, RowTraffic::default()),
+    ];
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
+    let long = daily(rows[0].child.traffic.passenger);
+    let scrap = daily(rows[1].child.traffic.passenger);
+    assert!((long - 100.0).abs() < 1e-6, "long {long} scrap {scrap}");
+    assert!((scrap - 80.0).abs() < 1e-6, "long {long} scrap {scrap}");
+    // Asymmetric bound of the same gate: A is 0–250 m stamped 100; B is 200–300 m.
+    // Overlap 50 m is 20% of A (A stays 100) and 50% of B (B renders 50).
+    // 100 is above the class prior, so the partial-coverage floor does not replace it.
+    let m = |metres: f64| 14.230 + metres / 71_681.54751518813;
+    let mut rows = vec![
+        track(1, 0.0, m(0.0), m(250.0), walked),
+        track(2, 1.0, m(200.0), m(300.0), RowTraffic::default()),
+    ];
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
+    assert!((daily(rows[0].child.traffic.passenger) - 100.0).abs() < 1e-6);
+    assert!((daily(rows[1].child.traffic.passenger) - 50.0).abs() < 1e-6);
+}

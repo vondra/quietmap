@@ -4,7 +4,6 @@
 
 use crate::piece::{add, energies, lden_a, point_sum, production, Bands, Piece};
 use noise_compute::compute::line_piece::LinePiece;
-use noise_compute::constants::SOURCE_HEIGHT_RAIL;
 use noise_compute::emission::railway::{self, RailType};
 use noise_compute::propagation::obstacle_index::VectorReflectionSampler;
 use noise_compute::propagation::point_sum::NodeSpacing;
@@ -58,7 +57,7 @@ fn admitted_pieces(sources: &source_reader::PointQueryData, receiver: &Receiver)
         rows.push((LayerKind::Railway, Piece {
             line: LinePiece {
                 start_lat: seg.start_lat, start_lon: seg.start_lon, end_lat: seg.end_lat, end_lon: seg.end_lon,
-                source_height_m: SOURCE_HEIGHT_RAIL,
+                source_height_m: noise_compute::normalize::rail::rail_source_height_m(rail_type),
                 source_ground_factor: noise_compute::normalize::rail::rail_source_ground_factor(rail_type, seg.bridge),
                 platform_half_width_m: noise_compute::normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
                 directivity: noise_compute::normalize::rail::RAIL_SOURCE_DIRECTIVITY,

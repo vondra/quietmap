@@ -19,6 +19,7 @@ pub(crate) fn rail_type_name(rt: u8) -> &'static str {
         3 => "narrow_gauge",
         4 => "funicular",
         5 => "heritage",
+        6 => "horn",
         _ => "rail",
     }
 }
@@ -97,6 +98,7 @@ pub(crate) fn industrial_type_name(st: u8) -> &'static str {
         2 => "farm",
         3 => "factory",
         4 => "wastewater",
+        5 => "rail_yard",
         10 => "wind_turbine",
         13 => "solar_farm",
         14 => "substation",

@@ -841,6 +841,10 @@ fn site_type_from_tags(tags: &Tags) -> u8 {
             _ => {}
         }
     }
+    // Only `railway=yard` is a yard; `landuse=railway` alone is the corridor.
+    if tags.get("railway").is_some_and(|r| r == "yard") {
+        return 5;
+    }
     if let Some(mm) = tags.get("man_made") {
         match mm.as_str() {
             "works" => return 3,
@@ -970,6 +974,38 @@ pub(crate) fn tags_json(tags: &Tags) -> Result<String> {
     Ok(serde_json::to_string(
         &tags.iter().collect::<std::collections::BTreeMap<_, _>>(),
     )?)
+}
+
+#[cfg(test)]
+mod site_type_tests {
+    use super::*;
+
+    fn tags_of(pairs: &[(&str, &str)]) -> Tags {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn only_the_yard_tag_routes_to_the_yard_site_type() {
+        assert_eq!(site_type_from_tags(&tags_of(&[("landuse", "railway")])), 0);
+        assert_eq!(site_type_from_tags(&tags_of(&[("railway", "yard")])), 5);
+        assert_eq!(
+            site_type_from_tags(&tags_of(&[
+                ("landuse", "railway"),
+                ("railway", "yard")
+            ])),
+            5
+        );
+        assert_eq!(
+            site_type_from_tags(&tags_of(&[("landuse", "industrial")])),
+            0
+        );
+        assert_eq!(site_type_from_tags(&tags_of(&[("landuse", "quarry")])), 1);
+        assert_eq!(site_type_from_tags(&tags_of(&[("landuse", "farmyard")])), 2);
+        assert_eq!(site_type_from_tags(&tags_of(&[("man_made", "works")])), 3);
+    }
 }
 
 #[cfg(test)]
