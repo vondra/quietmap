@@ -144,10 +144,18 @@ pub fn run_all(request: RunAllRequest) -> Result<()> {
         runs(FromStage::Stage1_5) || runs(FromStage::Stage2a) || runs(FromStage::Stage2c);
     let reads_day_segments = runs(FromStage::Shuffle) || runs(FromStage::Stage2b);
     let admitted = if reads_day_segments {
-        let (admission, receipts) =
-            admit_from_receipts(&segments_dirs, &requested, &increment_candidates)?;
+        let (admission, receipts) = admit_from_receipts(
+            &segments_dirs,
+            &requested,
+            &increment_candidates,
+            scope.as_ref(),
+        )?;
         report_admission(&admission);
-        if !external_segments && from_stage <= FromStage::Stage1 {
+        // Primary-only repair is an admission prerequisite, not a Stage 0/1
+        // step: a resumed shuffle or Stage 2B must see the same repaired
+        // days as a continuous run. Externally reused shards cannot be
+        // repaired in place and must already be repaired (checked below).
+        if !external_segments {
             let repaired = repair_rejected_increment_merges(
                 &receipts,
                 &admission.increment_days,
@@ -166,6 +174,27 @@ pub fn run_all(request: RunAllRequest) -> Result<()> {
         }
         let paths = day_segment_paths(&segments_dirs, &admission.baseline_days)?;
         if external_segments {
+            // Owned work is repaired above; externally reused shards cannot
+            // be repaired in place, so refuse merged-but-rejected days
+            // instead of silently sealing their dropped primary rows.
+            let unrepaired: Vec<&String> = receipts
+                .iter()
+                .filter(|(day, receipt)| {
+                    admission.baseline_days.contains(*day)
+                        && receipt.needs_primary_only_rewrite(&admission.increment_days)
+                })
+                .map(|(day, _)| day)
+                .collect();
+            anyhow::ensure!(
+                unrepaired.is_empty(),
+                "externally reused day(s) {} still hold rejected secondary content; \
+                 rerun their Stage 0/1 in owned work so admission repairs them",
+                unrepaired
+                    .iter()
+                    .map(|day| day.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
             reuse_segments_from_directories(
                 &segments_dirs,
                 &admission.baseline_days,
@@ -302,10 +331,13 @@ pub fn run_all(request: RunAllRequest) -> Result<()> {
 }
 
 /// Day receipts live beside each segments directory, in its work dir.
+/// Receipts also bind the extraction scope: a scoped shard reused under a
+/// foreign scope would seal deleted traffic as observed silence.
 fn admit_from_receipts(
     segments_dirs: &[PathBuf],
     requested: &BTreeSet<String>,
     increment_candidates: &BTreeSet<String>,
+    scope: Option<&aircraft_extract::scope::ScopeBbox>,
 ) -> Result<(Admission, BTreeMap<String, DayReceipt>)> {
     let mut receipts: BTreeMap<String, DayReceipt> = BTreeMap::new();
     let mut works: Vec<&Path> = segments_dirs
@@ -321,6 +353,16 @@ fn admit_from_receipts(
                 "{day}: provider receipts in more than one work directory"
             );
         }
+    }
+    let run_scope = scope.map(|s| s.key());
+    for (day, receipt) in &receipts {
+        anyhow::ensure!(
+            receipt.covers_scope(run_scope.as_deref()),
+            "{day}: day shard was extracted under scope '{}' but this run reuses it under scope '{}'; \
+             rerun Stage 0/1 under one scope",
+            receipt.scope.as_deref().unwrap_or("global"),
+            run_scope.as_deref().unwrap_or("global"),
+        );
     }
     Ok((admit(requested, increment_candidates, &receipts)?, receipts))
 }

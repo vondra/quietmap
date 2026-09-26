@@ -20,8 +20,9 @@ use crate::trace::AircraftTrace;
 
 /// Merge `primary` with `secondary` (when given) for `day_str`, write
 /// `flights_dir/<day>.arrow` and the day receipt under `work_dir`. Receipts
-/// always describe the whole provider-day; a `scope` then keeps only merged
-/// traces whose extent can reach a written square. Returns the number of flights.
+/// always describe the whole provider-day and record the extraction scope;
+/// a `scope` then keeps only merged traces whose extent can reach a written
+/// square. Returns the number of flights.
 pub fn run_stage_0(
     primary: &dyn FlightSource,
     secondary: Option<&dyn FlightSource>,
@@ -72,6 +73,7 @@ pub fn run_stage_0(
             primary: Some(primary_day.receipt),
             secondary: secondary_receipt,
             merge,
+            scope: scope.map(ScopeBbox::key),
         },
     )?;
     let MergeCounts {
@@ -242,5 +244,6 @@ mod tests {
         assert_eq!(run_stage_0(&primary, None, day, &scoped, &scoped, Some(&scope)).unwrap(), 0);
         let whole = crate::provider_receipt::read_day_receipt(&scoped, day).unwrap().unwrap();
         assert_eq!(whole.primary.unwrap().traces, 2);
+        assert_eq!(whole.scope.as_deref(), Some("27,-18.5,29.5,-13"));
     }
 }
