@@ -6,8 +6,8 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import tempfile
+import time
 import urllib.request
 from contextlib import contextmanager
 
@@ -70,6 +70,24 @@ def publish_json(path, value):
     publish_bytes(path, (json.dumps(value, sort_keys=True, indent=2) + '\n').encode())
 
 
+def retained_bytes(root):
+    """Bytes under root; concurrent producers delete their temporaries meanwhile, so a vanished file counts zero."""
+    used = 0
+    for directory, _, names in os.walk(root):
+        for name in names:
+            try:
+                used += os.stat(os.path.join(directory, name)).st_size
+            except FileNotFoundError:
+                pass
+    return used
+
+
+# A walk of 160,885 files took 0.6 s (2026-09-25); walking before each of Bavaria's 71,979 tiles would
+# dominate the fetch, so the budget reuses one walk per minute and the live free-space check stays exact.
+BUDGET_WALK_SECONDS = 60
+_budget_walks = {}
+
+
 @contextmanager
 def source_budget(root):
     """Raw and derived retained files share one lock and include their temporary peak bytes."""
@@ -77,8 +95,10 @@ def source_budget(root):
     root.mkdir(parents=True, exist_ok=True)
     with (root / '.download.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        subprocess.run(['df', '-h', str(root)], check=True)
-        used = sum(p.stat().st_size for p in root.rglob('*') if p.is_file())
+        walked_at, used = _budget_walks.get(root, (float('-inf'), 0))
+        if time.monotonic() - walked_at > BUDGET_WALK_SECONDS:
+            used = retained_bytes(root)
+            _budget_walks[root] = (time.monotonic(), used)
         available = min(MAX_DOWNLOAD_BYTES - used, shutil.disk_usage(root).free - 2_000_000_000)
         if available <= 0:
             raise ValueError('download budget or free-space reserve exhausted')

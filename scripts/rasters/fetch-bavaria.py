@@ -83,17 +83,19 @@ def main():
             continue
         if name in wanted or args.all:
             started = time.monotonic()
+            path = args.output / provider / name
+            retained = Path(str(path) + '.provenance.json').exists()
             url = entry.find('{*}url').text
             sha = entry.find("{*}hash[@type='sha-256']")
             fetch(args.output, provider, name, url, 'CC BY 4.0', LICENCE_URL, '2026-09-24',
                   'Bayerische Vermessungsverwaltung DGM5 XYZ; ETRS89/UTM32, DHHN2016 (EPSG:7837).',
                   expected_sha256=sha.text if sha is not None else None)
-            path = args.output / provider / name
             decode_archive(path)
             sources.append(dict(path=str(path.with_suffix('.tif').resolve()), horizontal_crs='EPSG:25832',
                                 vertical_crs=7837, epoch='ALS epoch unavailable in download catalogue', group='DE-BY-DGM5', role='national'))
             print(json.dumps(dict(done=len(sources), total=len(selected), path=str(path), seconds=time.monotonic() - started)), flush=True)
-            time.sleep(max(0, 1 - (time.monotonic() - started)))
+            if not retained:
+                time.sleep(max(0, 1 - (time.monotonic() - started)))
     absent = wanted - {entry.attrib['name'] for entry in files}
     if absent:
         raise ValueError(f'not in official catalogue: {sorted(absent)}')
