@@ -298,35 +298,6 @@ fn field_and_receiver_parallelism_keep_identical_power_bytes() {
 #[cfg(feature = "gpu")]
 mod gpu_parity {
     use super::*;
-    use noise_compute::propagation::iso9613::fast_exp_f64;
-
-    fn reference_energy(bucket: &Bucket, lat: f64, lon: f64, altitude: f64) -> f64 {
-        let north = (bucket.lat - lat) * aircraft::M_PER_DEG_LAT;
-        let east =
-            grid::geo::wrapped_longitude_delta(lon, bucket.lon)
-                * grid::geo::m_per_deg_lon(lat.to_radians());
-        if north * north + east * east
-            > (aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M + bucket.half_length).powi(2)
-        {
-            return 0.0;
-        }
-        let row = aircraft::prepare_row(
-            &bucket.prepared,
-            lat,
-            aircraft::M_PER_DEG_LAT * lat.to_radians().cos().max(0.2),
-        );
-        aircraft::segment_sel_at_pixel_energy(
-            &bucket.prepared,
-            &row,
-            lon,
-            altitude,
-            aircraft::NpdLuts::shared(),
-            None,
-        )
-        .map_or(0.0, |sel| {
-            fast_exp_f64(sel * std::f64::consts::LN_10 * 0.1) * bucket.density
-        })
-    }
 
     fn db_error(observed: f64, wanted: f64) -> f64 {
         if observed == wanted {
@@ -432,7 +403,7 @@ mod gpu_parity {
             ];
             let gpu = gpu::evaluate(std::slice::from_ref(&bucket), &points, &altitudes).unwrap();
             for (i, &[lat, lon]) in points.iter().enumerate() {
-                let wanted = reference_energy(bucket, lat, lon, altitudes[i]);
+                let wanted = bucket.energy(lat, lon, altitudes[i], aircraft::NpdLuts::shared());
                 let observed = gpu[i][bucket.period];
                 assert!(
                     observed == 0.0 || wanted > 0.0,
@@ -487,13 +458,14 @@ mod gpu_parity {
             .map(|&[lat, lon]| terrain.elevation(lat, lon) + DEFAULT_RECEIVER_HEIGHT)
             .collect();
         let gpu = gpu::evaluate(&selected, &points, &altitudes).unwrap();
+        let npd = aircraft::NpdLuts::shared();
         let reference: Vec<_> = points
             .par_iter()
             .zip(&altitudes)
             .map(|(&[lat, lon], &altitude)| {
                 let mut sums = [0.0f64; 3];
                 for bucket in &buckets {
-                    sums[bucket.period] += reference_energy(bucket, lat, lon, altitude);
+                    sums[bucket.period] += bucket.energy(lat, lon, altitude, npd);
                 }
                 sums
             })

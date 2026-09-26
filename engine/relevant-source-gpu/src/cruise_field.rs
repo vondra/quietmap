@@ -35,7 +35,7 @@ struct Bucket {
     period: usize,
 }
 impl Bucket {
-    #[cfg(not(feature = "gpu"))]
+    #[cfg(any(not(feature = "gpu"), test))]
     fn energy(&self, lat: f64, lon: f64, altitude: f64, npd: &aircraft::NpdLuts) -> f64 {
         let row = aircraft::prepare_row(
             &self.prepared,
@@ -44,7 +44,7 @@ impl Bucket {
         );
         self.energy_at_row(lat, lon, altitude, npd, &row)
     }
-    #[cfg(not(feature = "gpu"))]
+    #[cfg(any(not(feature = "gpu"), test))]
     fn energy_at_row(
         &self,
         lat: f64,
