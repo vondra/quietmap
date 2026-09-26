@@ -2,14 +2,14 @@
 
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { tableFromIPC } from 'apache-arrow'
+import { Int32, Int64, Table, Uint8, tableFromIPC, tableToIPC, vectorFromArray } from 'apache-arrow'
 import { assignMinorPointsToWays, enrichGreatBritainRoads, majorRoadIndex, matchDftPoint } from './enrich-roads-gb.js'
 import { selectDftCountPoints, type DftCountPoint } from './lib/roads-gb-source.js'
 import { EXCLUDE_HOLDOUT_COUNTS_ENVIRONMENT } from './lib/count-holdout.js'
-import { iso2Code } from './lib/prepared-grid.js'
+import { iso2Code, lonLatToGrid } from './lib/prepared-grid.js'
 import { writeRoadsFixture } from './lib/road-test-fixture.js'
 import type { RoadRow } from './lib/roads-arrow.js'
 
@@ -97,6 +97,33 @@ test('a minor-road count stamps the whole way it sits on, unless another class r
   const ways = assignMinorPointsToWays(prepared, [minor('on-way', 50.00005, 14.00004), minor('beside-tertiary', 50.00105, 14.00104),
     minor('off-way', 50.0003, 14.0001)])
   assert.deepEqual([...ways].map(([way, points]) => [way, points.map(each => each.observationId)]), [[10_000, ['on-way']]])
+})
+
+test('the 20 m ambiguity exclusion holds at northern latitudes, in metres, not cells', () => {
+  for (const lat of [50, 60]) {
+    const lon = -3
+    const offset = 19 / 111132
+    const starts = [lat, lat + offset].map(y => lonLatToGrid(lon - 0.001, y))
+    const ends = [lat, lat + offset].map(y => lonLatToGrid(lon + 0.001, y))
+    const table = new Table({
+      osm_id: vectorFromArray([1n, 2n], new Int64()),
+      road_class: vectorFromArray([5, 4], new Uint8()),
+      start_gx: vectorFromArray(starts.map(point => point[0]), new Int32()),
+      start_gy: vectorFromArray(starts.map(point => point[1]), new Int32()),
+      end_gx: vectorFromArray(ends.map(point => point[0]), new Int32()),
+      end_gy: vectorFromArray(ends.map(point => point[1]), new Int32()),
+    })
+    const x = Math.floor((lon + 180) / 360 * 512)
+    const y = Math.floor((1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) * 256)
+    const prepared = join(TEST_DIRECTORY, `north-${lat}`)
+    const dir = join(prepared, `z9/${x}/${y}`)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'roads.arrow'), tableToIPC(table, 'file'))
+    // The point sits on the residential way; a tertiary road 19 m away must reject it at any latitude.
+    const ways = assignMinorPointsToWays(prepared, [point({ observationId: `minor-${lat}`, ref: 'U',
+      roadCategory: 'MCU', rank: 5, latitude: lat, longitude: lon, linkLengthKm: null })])
+    assert.equal(ways.size, 0, `a tertiary road 19 m away rejects the count at ${lat}N`)
+  }
 })
 
 test('z9 GB pass writes domestic data and heals a matching foreign GB stamp', async () => {

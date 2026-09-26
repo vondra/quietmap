@@ -4,6 +4,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DataType, Table, type Vector } from 'apache-arrow'
 import { requireOsmContract } from './osm-contract.js'
+import { M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './spatial.js'
 
 // Faithful JS mirror of engine/grid, which owns these constants and formulas.
 const WEB_MERCATOR_RADIUS_M = 6_378_137
@@ -79,6 +80,23 @@ export function lonLatToGrid(lon: number, lat: number): [number, number] {
 /** z9 square axes of one z30 cell: a square spans 2^21 cells and its y axis runs north to south. */
 export function z9AxesOfGridCell(gx: number, gy: number): [x: number, y: number] {
   return [gx >> 21, Z9_AXIS - 1 - (gy >> 21)]
+}
+
+/** How many z30 cells span `metres` measured by the loaders' shared flat-earth model
+ *  (`M_PER_DEG_LAT` per degree latitude, `M_PER_DEG_LON_EQ` times cosine per degree longitude)
+ *  at grid row `gy`: a degree of latitude spans R sec(φ) projected metres there (sec(φ) is
+ *  cosh(y/R)), a degree of longitude R, so northern rows need more cells for the same flat
+ *  metres. Rounded up with one cell of quantization slack, so a bbox padded by this never
+ *  prunes a point within `metres` of the row. Pass the row's extreme endpoint (northernmost
+ *  in Great Britain) so the whole row is covered. */
+export function gridCellsForMetresAtGy(metres: number, gy: number): number {
+  const secant = Math.cosh((gy - GRID_ORIGIN) * GRID_QUANTUM_M / WEB_MERCATOR_RADIUS_M)
+  const cellsPerDegree = ((WEB_MERCATOR_RADIUS_M * Math.PI) / 180 / GRID_QUANTUM_M)
+  const cellsPerFlatMetre = Math.max(
+    (cellsPerDegree * secant) / M_PER_DEG_LAT,
+    cellsPerDegree / (M_PER_DEG_LON_EQ / secant),
+  )
+  return Math.ceil(metres * cellsPerFlatMetre) + 1
 }
 
 /** Decode one global z30 cell corner to latitude/longitude. */

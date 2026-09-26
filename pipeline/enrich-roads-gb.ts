@@ -8,7 +8,7 @@ import { shouldOverwrite } from './lib/provenance.js'
 import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import { DFT_MINOR_ROAD_RANK, loadDftCountPoints, type DftCountPoint } from './lib/roads-gb-source.js'
 import { roadClassTakesCount, writeRoadAadt, type RoadAadt, type RoadRow } from './lib/roads-arrow.js'
-import { gridToLonLat, listPreparedSquares, lonLatToGrid } from './lib/prepared-grid.js'
+import { gridCellsForMetresAtGy, gridToLonLat, listPreparedSquares, lonLatToGrid } from './lib/prepared-grid.js'
 import { writeNationalRoadSquares } from './lib/square-pool.js'
 import { flatDist, haversineM, pointToSegmentDist } from './lib/spatial.js'
 
@@ -55,8 +55,6 @@ const MINOR_POINT_OTHER_CLASS_CLEARANCE_METRES = 20
 
 interface NearestRows { distance: number; roadClass: number; osmId: number; classDistances: Map<number, number> }
 
-// z30 cells span at most 0.0245 m in Great Britain (49 degrees north), so 1,000 cells cover the 20 m clearance.
-const CLEARANCE_IN_GRID_CELLS = 1_000
 const COARSE_CELL_SHIFT = 16
 
 /** Which OSM way each minor-road point counts, read from the geometry of every GB square; traffic writes never
@@ -75,8 +73,11 @@ export function assignMinorPointsToWays(preparedDirectory: string, points: reado
     const [sx, sy, ex, ey] = ['start_gx', 'start_gy', 'end_gx', 'end_gy'].map(name => table.getChild(name)!.toArray() as Int32Array)
     const ids = table.getChild('osm_id')!, classes = table.getChild('road_class')!
     for (let index = 0; index < table.numRows; index++) {
-      const west = Math.min(sx[index], ex[index]) - CLEARANCE_IN_GRID_CELLS, east = Math.max(sx[index], ex[index]) + CLEARANCE_IN_GRID_CELLS
-      const south = Math.min(sy[index], ey[index]) - CLEARANCE_IN_GRID_CELLS, north = Math.max(sy[index], ey[index]) + CLEARANCE_IN_GRID_CELLS
+      // Cells span fewer metres up north, so the 20 m clearance is derived in metres at the row's own
+      // latitude (its northernmost endpoint: Great Britain lies north of the equator), never a fixed count.
+      const padding = gridCellsForMetresAtGy(MINOR_POINT_OTHER_CLASS_CLEARANCE_METRES, Math.max(sy[index], ey[index]))
+      const west = Math.min(sx[index], ex[index]) - padding, east = Math.max(sx[index], ex[index]) + padding
+      const south = Math.min(sy[index], ey[index]) - padding, north = Math.max(sy[index], ey[index]) + padding
       for (let cx = west >> COARSE_CELL_SHIFT; cx <= east >> COARSE_CELL_SHIFT; cx++) {
         for (let cy = south >> COARSE_CELL_SHIFT; cy <= north >> COARSE_CELL_SHIFT; cy++) {
           for (const { point, gx, gy } of coarse.get(`${cx}_${cy}`) ?? []) {
