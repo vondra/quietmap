@@ -348,6 +348,24 @@ fn distinct_lines_spurs_distant_tracks_and_service_tracks_are_not_siblings() {
 }
 
 #[test]
+fn three_tracks_in_a_row_conserve_the_line_value() {
+    // 0, 10 and 20 m: the outer tracks are beyond the 15 m tokenless gate
+    // from each other but both run beside the middle one. Without transitive
+    // closure each outer track splits the line with the middle track only
+    // (V/2 + V/3 + V/2 = 4V/3); the closed cross-section renders V/3 each.
+    let mut rows = vec![
+        track(1, 0.0, 14.23, 14.232, RowTraffic::default()),
+        track(2, 2.25, 14.23, 14.232, RowTraffic::default()),
+        track(3, 4.5, 14.23, 14.232, RowTraffic::default()),
+    ];
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
+    for row in &rows {
+        assert!((daily(row.child.traffic.passenger) - 80.0 / 3.0).abs() < 1e-9, "{}", row.osm_id);
+    }
+    assert!((cross_section_sum(&rows, |t| t.passenger) - 80.0).abs() < 1e-9);
+}
+
+#[test]
 fn parallel_siblings_need_longitudinal_overlap() {
     // 250 m track, 100 passenger trains, and a 10 m parallel scrap centred on its midpoint.
     // The midpoint foot lands on the scrap (lateral ~4 m), but the overlap is 10 m, under

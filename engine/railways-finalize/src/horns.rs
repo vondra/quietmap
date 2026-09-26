@@ -689,7 +689,10 @@ fn build_horn_batch(
             )),
             "ref" => Arc::new(StringArray::from(vec![""; pieces.len()])),
             // Horn rows are at grade by construction: never inherit tunnel.
-            "tunnel" => Arc::new(BooleanArray::from(vec![false; pieces.len()])),
+            // Horn rows never inherit highspeed either: the sounding speed
+            // comes from the crossing inventory (or the 60 km/h horn
+            // default), never from the line's high-speed flag.
+            "tunnel" | "highspeed" => Arc::new(BooleanArray::from(vec![false; pieces.len()])),
             "service" => Arc::new(UInt8Array::from(vec![0u8; pieces.len()])),
             "traffic_mode" => Arc::new(UInt8Array::from(vec![0u8; pieces.len()])),
             "trains_passenger_day" => Arc::new(Float64Array::from(
@@ -720,8 +723,8 @@ fn build_horn_batch(
             // Tags + baked identity follow the matched track, as does the
             // retained OSM evidence: the approach runs along the track, and
             // the way extent describes the parent way, not the piece.
-            "usage" | "electrified" | "gauge" | "bridge" | "highspeed" | "country_iso"
-            | "city_id" | "continent" | "osm_tags" | "way_start_node" | "way_end_node"
+            "usage" | "electrified" | "gauge" | "bridge" | "country_iso" | "city_id"
+            | "continent" | "osm_tags" | "way_start_node" | "way_end_node"
             | "way_start_gx" | "way_start_gy" | "way_end_gx" | "way_end_gy" => {
                 take_col(field.name())?
             }
@@ -879,6 +882,57 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .unwrap();
         assert_eq!(end_gx.value(0), 9);
+    }
+
+    /// Horn rows never inherit the matched track's highspeed flag: a
+    /// crossing without an inventory speed on a `highspeed=yes` track would
+    /// otherwise emit at 300 km/h while its approach is sized at the 60 km/h
+    /// horn default (and no 300 km/h line has grade crossings).
+    #[test]
+    fn horn_rows_emit_highspeed_false() {
+        use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("osm_id", DataType::Int64, false),
+            Field::new("highspeed", DataType::Boolean, false),
+            Field::new("maxspeed", DataType::UInt16, false),
+            Field::new("trains_passenger_day", DataType::Float64, false),
+        ]));
+        let base = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![123])) as ArrayRef,
+                Arc::new(BooleanArray::from(vec![true])) as ArrayRef,
+                Arc::new(UInt16Array::from(vec![0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![80.0])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        let crossings = vec![Crossing {
+            id: "816990Y".to_string(),
+            lat: 40.69,
+            lon: -99.142,
+            soundings: [36.0, 12.0, 24.0],
+            speed_kmh: None,
+            source_id: SOURCE_ID_FRA,
+            synth_osm: -1,
+        }];
+        let approaches = vec![approach(-99.15, -99.142, 40.69, [18.0, 6.0, 12.0])];
+        let pieces = vec![MergedPiece {
+            approach_idx: 0,
+            piece_idx: 0,
+            frac0: 0.0,
+            frac1: 1.0,
+            soundings: [18.0, 6.0, 12.0],
+        }];
+        let batch = build_horn_batch(&schema, &base, &crossings, &approaches, &pieces).unwrap();
+        assert_eq!(batch.num_rows(), 1);
+        let highspeed = batch
+            .column_by_name("highspeed")
+            .unwrap()
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        assert!(!highspeed.value(0), "horn rows must not inherit highspeed");
     }
 
     /// Opposite-direction approaches never merge (different trains sound).
