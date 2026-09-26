@@ -166,8 +166,8 @@ emission). Registry-confirmed solar
 (synthetic NACE 3599) takes the same branch. Substations (14) emit per-MVA,
 24/7: IEC 551 LWA = 74 + 14·lg(MVA), 64 dB below 0.2 MVA (MVA from the joined
 `rating` sum of the class-15 transformers inside the substation polygon, else
-the class median — main 25, auto 160, distribution 2 MVA; class from `voltage`
-/ autotransformer evidence). Wind-plant outlines (11), inactive facilities
+the class median — main 25, auto 160, distribution 2, minor 0.4 MVA; class from
+the `substation` tag, then `voltage` / autotransformer evidence). Wind-plant outlines (11), inactive facilities
 (12) and transformers (15) are silent; lifecycle-retired rows carry
 `suppressed`, honoured by both readers.
 
@@ -196,7 +196,8 @@ other 116/10), default 100 days × 6 h, pink propagation spectrum; shooting LE
 shotgun 134.8), default 20,000 shots/yr, per-weapon octave spectra. Both are
 day-only (−50 evening/night) and reach past the 2 km leisure cap (industrial
 4 km reach, edge-gated). Raceway lines carry the emission, spread over their
-chain; an enclosing motorsport polygon goes silent, as does a roofed formula
+chain segments by segment length (OSM noding sets the vertices, so a count
+split would mistune per-metre power); an enclosing motorsport polygon goes silent, as does a roofed formula
 row (its building footprint emits) or a near-silent shooting discipline
 (archery, paintball, air guns). One venue carries one formula total: fragments
 of a circuit stored as N ways — touching chains, or lines in one class-10
@@ -359,7 +360,9 @@ each category is allocated once per line
 cross-section: a track and each other way running beside its midpoint (same type
 and usage family, no shared node; longitudinal overlap at least the greater of
 30 m and 30% of that track's own length; 15 m and 10° without a common ref or name,
-50 m and 20° with one) form the cross-section, projected in local metres scaled by
+50 m and 20° with one), closed transitively over ways (a way beside a sibling's
+midpoint joins even past the lateral gate, so the division conserves the line
+value for any sibling graph), form the cross-section, projected in local metres scaled by
 the square centre's latitude so the sections ignore input row order. The line value comes from the
 track's own country files first: the highest-ranked domestic evidence sets it (the
 sum of what a measured source counted on each track, such as routed trips and
