@@ -7,7 +7,7 @@ use std::path::Path;
 pub(crate) mod admission;
 pub mod airport_summary_reduce;
 pub mod airport_traffic;
-pub mod airport_line_index;
+pub mod airport_line_grid;
 pub mod airport_traffic_writer;
 pub(crate) mod movements;
 pub const AIRPORT_TRAFFIC_FILENAME: &str = "airport_traffic.arrow";

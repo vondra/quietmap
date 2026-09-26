@@ -69,6 +69,7 @@ pub fn project_leg_onto_airport_lines(
     candidates: &[AirportLineSegment],
     max_perp_m: f32,
 ) -> Vec<LegIntersection> {
+    let mut out = Vec::new();
     collect_intersections(
         flat_dist(leg_start_lat, leg_start_lon, leg_end_lat, leg_end_lon),
         candidates.len(),
@@ -85,15 +86,22 @@ pub fn project_leg_onto_airport_lines(
                 ),
             )
         }),
-    )
+        &mut out,
+    );
+    out
 }
 
 pub(super) fn collect_intersections<'a>(
     leg_len_m: f32,
     candidate_count: usize,
     overlaps: impl Iterator<Item = (&'a AirportLineSegment, f32)>,
-) -> Vec<LegIntersection> {
-    let mut out = Vec::with_capacity(candidate_count.min(8));
+    out: &mut Vec<LegIntersection>,
+) {
+    out.clear();
+    let want = candidate_count.min(8);
+    if out.capacity() < want {
+        out.reserve(want - out.capacity());
+    }
     let mut total = 0.0f32;
     for (seg, overlap) in overlaps {
         if overlap > 0.0 {
@@ -111,7 +119,6 @@ pub(super) fn collect_intersections<'a>(
             h.length_within_segment_m *= scale;
         }
     }
-    out
 }
 
 #[derive(Clone, Copy, Debug)]

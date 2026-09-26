@@ -9,7 +9,10 @@ use crate::synth_airport_io::{is_synthetic_osm_id, read_synth_airport_lines, SYN
 pub(super) struct SquareCache {
     pub lines: Vec<AirportLineSegment>,
     pub line_index: HashMap<(u64, u16), usize>,
-    pub airport_keys: Vec<String>,
+    /// Per-line airport as an interned id. The table is sorted, so id order
+    /// is key order and counter keys sort exactly as with owned strings.
+    pub airport_ids: Vec<u32>,
+    pub airports: Vec<String>,
     pub owners: Vec<u64>,
 }
 
@@ -83,6 +86,20 @@ impl SquareCache {
                 cache.insert(line, row.airport_key, owner)?;
             }
         }
+        let mut airports = cache.airports.clone();
+        airports.sort();
+        airports.dedup();
+        cache.airport_ids = cache
+            .airports
+            .iter()
+            .map(|key| {
+                airports
+                    .binary_search(key)
+                    .map(|id| id as u32)
+                    .map_err(|_| anyhow::anyhow!("interned airport key missing"))
+            })
+            .collect::<Result<_>>()?;
+        cache.airports = airports;
         Ok(cache)
     }
 
@@ -118,7 +135,8 @@ impl SquareCache {
         );
         self.line_index.insert(identity, self.lines.len());
         self.lines.push(line);
-        self.airport_keys.push(key);
+        // Per-line until `load_many` interns the table below.
+        self.airports.push(key);
         self.owners.push(owner);
         Ok(())
     }
