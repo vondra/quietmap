@@ -318,6 +318,7 @@ mod tests {
             end_alt_m: 2000.0, // higher end (still below peak)
             speed_kt: 200.0,   // jet ≥ 80 kt
             segment_length_m: 5000.0,
+            departure_field_elev_m: f32::NAN,
             ground_context: GROUND_CONTEXT_NONE,
             ground_ops_kind: GROUND_OPS_KIND_NONE,
             count_weight: 1.0,
@@ -359,6 +360,7 @@ mod tests {
             end_alt_m: 2000.0,
             speed_kt: 200.0,
             segment_length_m: 1400.0,
+            departure_field_elev_m: f32::NAN,
             ground_context: GROUND_CONTEXT_NONE,
             ground_ops_kind: GROUND_OPS_KIND_NONE,
             count_weight: 1.0,
@@ -397,6 +399,7 @@ mod tests {
             end_alt_m: 259.0,
             speed_kt: 35.0,
             segment_length_m: 300.0,
+            departure_field_elev_m: f32::NAN,
             ground_context: GROUND_CONTEXT_NONE,
             ground_ops_kind: GROUND_OPS_KIND_NONE,
             count_weight: 1.0,
@@ -430,6 +433,7 @@ mod tests {
             end_alt_m: 255.0,
             speed_kt: 35.0,
             segment_length_m: 90.0,
+            departure_field_elev_m: f32::NAN,
             ground_context: GROUND_CONTEXT_NONE,
             ground_ops_kind: GROUND_OPS_KIND_NONE,
             count_weight: 1.0,
@@ -469,6 +473,7 @@ mod tests {
             end_alt_m: 252.0,
             speed_kt: 60.0,          // would trigger RUNWAY_ROLL for fixed-wing
             segment_length_m: 800.0, // ditto
+            departure_field_elev_m: f32::NAN,
             ground_context: GROUND_CONTEXT_AIRPORT_LINE,
             ground_ops_kind: GROUND_OPS_KIND_NONE,
             count_weight: 1.0,
@@ -480,6 +485,7 @@ mod tests {
         let slow_seg = AircraftSegment {
             speed_kt: 3.0,
             segment_length_m: 50.0,
+            departure_field_elev_m: f32::NAN,
             ..fast_seg.clone()
         };
         assert_eq!(

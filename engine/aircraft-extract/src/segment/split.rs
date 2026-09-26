@@ -114,6 +114,7 @@ mod tests {
             agl_avg_m: 900.0,
             start_elev_m: 300.0,
             end_elev_m: 400.0,
+            departure_field_elev_m: f32::NAN,
         }
     }
 

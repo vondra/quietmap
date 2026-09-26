@@ -76,6 +76,7 @@ fn movement(lat: f64, lon: f64, flight_id: u64) -> FlightSegment {
         agl_avg_m: 0.0,
         start_elev_m: 0.0,
         end_elev_m: 0.0,
+        departure_field_elev_m: f32::NAN,
     }
 }
 

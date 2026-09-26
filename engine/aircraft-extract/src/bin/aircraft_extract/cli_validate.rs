@@ -281,6 +281,7 @@ mod tests {
             agl_avg_m: 1000.0,
             start_elev_m: 0.0,
             end_elev_m: 0.0,
+            departure_field_elev_m: f32::NAN,
         };
         aircraft_extract::arrow_io::write_segments(&day, std::slice::from_ref(&segment)).unwrap();
         assert!(validate_segments(temp.path(), &["2025-01-01".into()], None, providers).is_err());

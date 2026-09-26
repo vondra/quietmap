@@ -62,6 +62,7 @@ fn run_stage_2c_stamps_airport_summaries_into_traffic() {
         agl_avg_m: 0.0,
         start_elev_m: 0.0,
         end_elev_m: 0.0,
+        departure_field_elev_m: f32::NAN,
     };
     let aerodrome = AirportArea::new(
         1,

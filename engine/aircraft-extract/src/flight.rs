@@ -110,6 +110,10 @@ pub struct Flight {
 /// sub-segments so the popup kernel can skip `SegmentTerrain::sample`
 /// on the hot path. For ground-flagged endpoints the popup ignores
 /// the elev value (it gates on the `ON_GROUND` flag earlier).
+///
+/// `departure_field_elev_m` is the terrain under the flight's own takeoff
+/// roll (NaN when the roll was not observed): the Doc 29 cutback gate
+/// compares height above this field, not above the local ground.
 #[derive(Clone)]
 pub struct FlightSegment {
     pub flight_id: u64,
@@ -135,6 +139,7 @@ pub struct FlightSegment {
     pub agl_avg_m: f32,
     pub start_elev_m: f32,
     pub end_elev_m: f32,
+    pub departure_field_elev_m: f32,
 }
 
 impl FlightSegment {
@@ -190,6 +195,7 @@ impl FlightSegment {
             agl_avg_m: 500.0,
             start_elev_m: 250.0,
             end_elev_m: 260.0,
+            departure_field_elev_m: f32::NAN,
         }
     }
 }

@@ -64,6 +64,19 @@ pub fn run_stage_1(
     Ok(segments.len())
 }
 
+/// Departure field elevation of one flight: the terrain under its takeoff
+/// roll — the leg's first point when that point is on the ground — or NaN
+/// when the roll was not observed (overflights, coverage gaps at the
+/// airport). Computed before secondary suppression, which never moves the
+/// first point.
+fn departure_field_elev_m(ground_flags: &[bool], elev_m: &[f32]) -> f32 {
+    if ground_flags.first() == Some(&true) {
+        elev_m[0]
+    } else {
+        f32::NAN
+    }
+}
+
 fn stage_1_one_flight(
     flight: &Flight,
     rasters: &CheckedRasters<'_>,
@@ -110,6 +123,7 @@ fn stage_1_one_flight(
     }
 
     let g_flags = ground_flags(&points, &agl_m);
+    let departure_field_elev_m = departure_field_elev_m(&g_flags, &elev_m);
     let mut phases = classify::classify_points(ClassifyInput {
         on_ground: &g_flags,
         agl_m: &agl_m,
@@ -135,6 +149,7 @@ fn stage_1_one_flight(
         veh_kind: flight.veh_kind,
         gse_class: flight.gse_class,
         date_id,
+        departure_field_elev_m,
     };
     let segments = build_segments(&points, &agl_m, &elev_m, &phases, &meta);
     // K3 + tightening: chord q1/mid/q3 check from the v15 popup is

@@ -78,7 +78,7 @@ pub fn split_flights(points: &[TracePoint]) -> Vec<std::ops::Range<usize>> {
 }
 
 /// Fixed-per-flight metadata copied onto every segment this flight
-/// emits. Bundled to avoid threading 7 individual params through
+/// emits. Bundled to avoid threading 8 individual params through
 /// [`build_segments`].
 pub struct SegmentMeta<'a> {
     pub flight_id: u64,
@@ -90,6 +90,7 @@ pub struct SegmentMeta<'a> {
     pub veh_kind: u8,
     pub gse_class: u8,
     pub date_id: i16,
+    pub departure_field_elev_m: f32,
 }
 
 /// The whole join decision for one sample-pair, shared by
@@ -306,6 +307,7 @@ pub fn build_segments(
             agl_avg_m: (agl_m[i - 1] + agl_m[i]) * 0.5,
             start_elev_m: elev_m[i - 1],
             end_elev_m: elev_m[i],
+            departure_field_elev_m: meta.departure_field_elev_m,
         });
     }
     out

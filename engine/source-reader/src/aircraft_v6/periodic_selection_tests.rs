@@ -44,6 +44,7 @@ fn segment(start_lon: f32, end_lon: f32) -> FlightSegment {
         agl_avg_m: 1000.0,
         start_elev_m: 0.0,
         end_elev_m: 0.0,
+        departure_field_elev_m: f32::NAN,
     }
 }
 

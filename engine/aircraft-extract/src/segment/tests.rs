@@ -26,6 +26,7 @@ fn test_meta() -> SegmentMeta<'static> {
         veh_kind: 0,
         gse_class: 0,
         date_id: 1234,
+        departure_field_elev_m: f32::NAN,
     }
 }
 

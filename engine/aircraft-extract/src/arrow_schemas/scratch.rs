@@ -57,6 +57,7 @@ pub fn segments_schema() -> Arc<Schema> {
         Field::new("agl_avg_m", DataType::Float32, false),
         Field::new("start_elev_m", DataType::Float32, false),
         Field::new("end_elev_m", DataType::Float32, false),
+        Field::new("departure_field_elev_m", DataType::Float32, false),
     ];
     Arc::new(Schema::new(fields).with_metadata(base_metadata(&[("kind", "segments")])))
 }

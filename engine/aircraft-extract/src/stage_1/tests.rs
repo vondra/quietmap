@@ -4,6 +4,15 @@ use super::*;
 use crate::source_adsb_tar::AdsbTarSource;
 use tempfile::tempdir;
 
+/// The departure field is the terrain under the leg's first point when it is
+/// on the ground; a leg first seen airborne carries no field.
+#[test]
+fn departure_field_is_the_takeoff_roll_terrain_or_unknown() {
+    assert_eq!(departure_field_elev_m(&[true, false], &[355.5, 360.0]), 355.5);
+    assert!(departure_field_elev_m(&[false, false], &[355.5, 360.0]).is_nan());
+    assert!(departure_field_elev_m(&[], &[]).is_nan());
+}
+
 /// Skips unless QM_FLIGHTS_CACHE (radius cache with 2025/2025-01-21) and
 /// QM_PREPARED_DIR (the prepared data root, cf. PREPARED_DIR in
 /// scripts/run-aircraft-extract.sh) are both set and present.

@@ -137,40 +137,54 @@ pub struct ThrustInput {
     pub speed_kt: f64,
     pub alt_m: f64,
     pub sin_gamma: f64,
-    pub agl_m: f64,
+    /// Height above the departure field (m): mean altitude minus the terrain
+    /// under the flight's own takeoff roll. Falls back to local AGL when the
+    /// roll was not observed (overflights, coverage gaps at the airport).
+    pub height_above_field_m: f64,
 }
 
 /// Build the [`ThrustInput`] from a stored segment, its effective endpoint
 /// altitudes (callers with altitude overrides pass the overridden values, so
-/// thrust sees the same geometry as the kernel) and its Filter-D terrain cuts
-/// (`terrain_elev − 30`). Climb angle comes from the stored horizontal length,
-/// never from a receiver projection, so the bracket is bit-identical on every
-/// path.
+/// thrust sees the same geometry as the kernel), its Filter-D terrain cuts
+/// (`terrain_elev − 30`) and the departure field elevation (NaN when the
+/// takeoff roll was not observed). Climb angle comes from the stored
+/// horizontal length, never from a receiver projection, so the bracket is
+/// bit-identical on every path.
 pub fn thrust_input_for_segment(
     seg: &AircraftSegment,
     start_alt_m: f64,
     end_alt_m: f64,
     terrain_start_cut_m: f64,
     terrain_end_cut_m: f64,
+    departure_field_elev_m: f64,
 ) -> ThrustInput {
     let sdz = end_alt_m - start_alt_m;
     let slen = f64::from(seg.segment_length_m);
     let len3d = slen.hypot(sdz);
+    let alt_m = 0.5 * (start_alt_m + end_alt_m);
+    // The Filter-D `elev − 30` cuts cancel, so this is real height above
+    // local ground — the fallback when the departure field is unknown.
+    let agl_m = 0.5 * (start_alt_m + end_alt_m - terrain_start_cut_m - terrain_end_cut_m) - 30.0;
     ThrustInput {
         is_departure: seg.is_departure,
         on_ground: seg.on_ground,
         speed_kt: f64::from(seg.speed_kt),
-        alt_m: 0.5 * (start_alt_m + end_alt_m),
+        alt_m,
         sin_gamma: if len3d > 1e-9 { sdz / len3d } else { 0.0 },
-        agl_m: 0.5 * (start_alt_m + end_alt_m - terrain_start_cut_m - terrain_end_cut_m) - 30.0,
+        height_above_field_m: if departure_field_elev_m.is_nan() {
+            agl_m
+        } else {
+            alt_m - departure_field_elev_m
+        },
     }
 }
 
 /// Eq. 4-3 power bracket `(row, w)` for one segment: interpolating the NPD rows
 /// costs two LUT reads plus a lerp in the kernel. Rules: pinned classes stay
 /// on today's curves; ground rolls use their rating (takeoff/idle); initial
-/// climb below cutback flies MaxTakeoff; everything else follows force balance
-/// within [Idle, MaxClimb]. Out-of-table thrust clamps to the edge row.
+/// climb below the cutback height above the field flies MaxTakeoff;
+/// everything else follows force balance within [Idle, MaxClimb].
+/// Out-of-table thrust clamps to the edge row.
 pub fn power_bracket(model: &ThrustModel, input: &ThrustInput) -> (u8, f64) {
     let (powers, rows) = if input.is_departure {
         (&model.dep_power, model.dep_rows)
@@ -197,7 +211,7 @@ pub fn power_bracket(model: &ThrustModel, input: &ThrustInput) -> (u8, f64) {
             h_ft,
             temp_c,
         )
-    } else if input.is_departure && input.agl_m < model.cutback_ft_afe * M_PER_FT {
+    } else if input.is_departure && input.height_above_field_m < model.cutback_ft_afe * M_PER_FT {
         rated_thrust_lb(&model.takeoff_coef, vc_kt, h_ft, temp_c)
     } else {
         let k = if vc_kt <= 200.0 { 1.01 } else { 0.95 };
@@ -255,12 +269,6 @@ pub fn thrust_model_for_class(class_idx: usize) -> &'static ThrustModel {
     &THRUST[class_idx.min(THRUST.len() - 1)]
 }
 
-/// True when the class interpolates power rows (false pins row 0, w 0).
-#[inline]
-pub fn class_has_thrust(class_idx: usize) -> bool {
-    thrust_model_for_class(class_idx).has_thrust
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::npd::{
@@ -301,7 +309,7 @@ mod tests {
             speed_kt: 160.0,
             alt_m: 355.5,
             sin_gamma: 0.0,
-            agl_m: 0.0,
+            height_above_field_m: 0.0,
         };
         let (row, _) = power_bracket(model, &roll);
         assert!(row >= model.dep_rows - 2, "roll row = {row}");
@@ -311,7 +319,7 @@ mod tests {
             speed_kt: 185.0,
             alt_m: 355.5 + 500.0 * M_PER_FT,
             sin_gamma: 0.12,
-            agl_m: 500.0 * M_PER_FT,
+            height_above_field_m: 500.0 * M_PER_FT,
             ..roll
         };
         let (row, _) = power_bracket(model, &initial);
@@ -325,7 +333,7 @@ mod tests {
             speed_kt: 450.0,
             alt_m: 11000.0,
             sin_gamma: 0.0,
-            agl_m: 10500.0,
+            height_above_field_m: 10500.0,
             ..roll
         };
         let (row, w) = power_bracket(model, &cruise);
@@ -336,6 +344,62 @@ mod tests {
         // Pinned classes never interpolate.
         let pinned = thrust_model_for_class(noise_class_of(profile_idx("DH8D")) as usize);
         assert_eq!(power_bracket(pinned, &cruise), (0, 0.0));
+    }
+
+    /// Cutback compares height above the field, not local AGL: a B738 7°
+    /// climb 700 m above the aerodrome has passed the 622 m cutback even
+    /// when the ground under the track sits 270 m above the runway (AGL
+    /// 430 m) — while 500 m above the field over ground 300 m below it
+    /// (AGL 800 m) still flies MaxTakeoff.
+    #[test]
+    fn cutback_compares_height_above_the_field() {
+        let model = thrust_model_for_class(noise_class_of(profile_idx("B738")) as usize);
+        let climb = |alt_m: f64, height_above_field_m: f64| ThrustInput {
+            is_departure: true,
+            on_ground: false,
+            speed_kt: 185.0,
+            alt_m,
+            sin_gamma: 0.122,
+            height_above_field_m,
+        };
+        let bracket = |(row, w): (u8, f64)| (row, (w * 10000.0).round() as i64);
+        // Past cutback: force balance on the 13,000/16,000 lb rows.
+        assert_eq!(bracket(power_bracket(model, &climb(700.0, 700.0))), (1, 5142));
+        // Below cutback: MaxTakeoff rating on the 19,000/23,500 lb rows.
+        assert_eq!(bracket(power_bracket(model, &climb(900.0, 500.0))), (3, 5239));
+    }
+
+    /// The cutback height is altitude minus the departure field, falling back
+    /// to local AGL (Filter-D cuts cancelled) when the takeoff roll was not
+    /// observed.
+    #[test]
+    fn cutback_height_falls_back_to_agl_without_a_takeoff_roll() {
+        let seg = crate::types::AircraftSegment {
+            flight_id: 1,
+            profile_idx: 0,
+            is_departure: true,
+            on_ground: false,
+            period: 0,
+            date_id: 0,
+            start_lat: 50.0,
+            start_lon: 14.0,
+            start_alt_m: 900.0,
+            end_lat: 50.01,
+            end_lon: 14.01,
+            end_alt_m: 900.0,
+            speed_kt: 185.0,
+            segment_length_m: 1000.0,
+            departure_field_elev_m: 400.0,
+            count_weight: 1.0,
+            surface_model: false,
+            ground_context: 0,
+            ground_ops_kind: 0,
+            source_id: 1,
+        };
+        let known = thrust_input_for_segment(&seg, 900.0, 900.0, 70.0, 70.0, 400.0);
+        assert_eq!(known.height_above_field_m, 500.0);
+        let unknown = thrust_input_for_segment(&seg, 900.0, 900.0, 70.0, 70.0, f64::NAN);
+        assert_eq!(unknown.height_above_field_m, 800.0);
     }
 
     #[test]

@@ -225,21 +225,27 @@ computes its corrected net thrust per engine Fn/δ (Doc 29 Vol 2 Eq. B-1/B-12)
 and interpolates the bracketing power rows linearly in power (Eq. 4-3), for
 SEL, LAmax and scaled distance alike (SEL − LAmax is nearly flat across rows,
 so d_λ lerps in metres). Ground rolls use their rating (takeoff/idle); initial
-climb below the ANP cutback height flies MaxTakeoff; everything else follows
-force balance `(W/δ)(sin γ/K + R)/N` within [Idle, MaxClimb], with K = 1.01 at
-Vc ≤ 200 kt else 0.95. Speed is ground speed times √σ (no wind); weight is the
-anchor's median DEFAULT stage weight; R is the clean-configuration drag ratio.
-The (row, weight) bracket is receiver-independent (stored length, barometric
-altitude, Filter-D cuts), computed once per segment and shared by popup, CPU
-painter and CUDA pack; the kernels do two LUT reads plus a lerp. Example: B738
-at 3,000 ft AFE after cutback reads 93.77 dB SEL at 1,000 ft instead of 99.3.
+climb below the ANP cutback height above the departure field flies MaxTakeoff;
+everything else follows force balance `(W/δ)(sin γ/K + R)/N` within
+[Idle, MaxClimb], with K = 1.01 at Vc ≤ 200 kt else 0.95. The field is the
+terrain under the flight's own takeoff roll, stamped per flight by Stage 1;
+when the roll was not observed (overflights, coverage gaps at the airport)
+the gate falls back to local AGL. Speed is ground speed times √σ (no wind);
+weight is the anchor's median DEFAULT stage weight; R is the clean-configuration
+drag ratio. The (row, weight) bracket is receiver-independent (stored length,
+barometric altitude, Filter-D cuts, departure field), computed once per segment
+and shared by popup, CPU painter and CUDA pack; the kernels do two LUT reads
+plus a lerp. Example: B738 at 3,000 ft AFE after cutback reads 93.77 dB SEL
+at 1,000 ft instead of 99.3.
 
 Reach envelopes the loudest power row per operation (approach reach grows;
 departure reach is unchanged). Fallback proxy, piston, turboprop (% power) and
 helicopter classes stay pinned to today's curves. Stage-2B source-side ranking
 stays pinned to the max departure row (display-only). Acceleration and flap
 schedule stay unmodelled; takeoff derate stays unmodelled (full MaxTakeoff
-below cutback). This is a runtime model change: prepared rows remain valid.
+below cutback). This is a producer and runtime model change: `airborne.arrow`
+carries the departure field elevation per flight (v4 contract), so aircraft
+prepared outputs rebuild; the gate itself evaluates in the shared bracket.
 
 ## Helicopter certification levels
 

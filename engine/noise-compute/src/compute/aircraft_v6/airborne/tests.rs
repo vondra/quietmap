@@ -284,6 +284,7 @@ struct SynthColumns {
     profile: Vec<u8>,
     source: Vec<u8>,
     origin: Vec<u8>,
+    field_elev: Vec<i16>,
 }
 
 impl SynthColumns {
@@ -309,6 +310,7 @@ impl SynthColumns {
             profile: Vec::new(),
             source: Vec::new(),
             origin: Vec::new(),
+            field_elev: Vec::new(),
         }
     }
 
@@ -321,6 +323,7 @@ impl SynthColumns {
         self.profile.push(profile);
         self.source.push(0);
         self.origin.push(0);
+        self.field_elev.push(i16::MIN);
         self.profile.len() as i32 - 1
     }
 
@@ -362,6 +365,7 @@ impl SynthColumns {
             profile_idx: &self.profile,
             source_id: &self.source,
             origin: &self.origin,
+            departure_field_elev_m: &self.field_elev,
         }
     }
 

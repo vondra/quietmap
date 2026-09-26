@@ -95,6 +95,7 @@ fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f
         end_alt_m: f32::from(columns.end_alt[0]),
         speed_kt: columns.speed[0],
         segment_length_m: columns.length[0],
+        departure_field_elev_m: f32::NAN,
         count_weight: 1.0,
         surface_model: false,
         ground_context: aircraft::GROUND_CONTEXT_NONE,

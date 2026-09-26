@@ -218,6 +218,7 @@ pub(super) fn evaluate_row<const FLOOR: bool>(
         seg.end_alt_m as f64,
         start_elev - 30.0,
         end_elev - 30.0,
+        f64::from(seg.departure_field_elev_m),
     );
     let (power_row, power_w) =
         aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust);

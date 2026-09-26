@@ -89,6 +89,8 @@ pub fn cruise_segment(
         end_alt_m: row.rep_alt_m,
         speed_kt: row.rep_speed_kt,
         segment_length_m: length_m as f32,
+        // Buckets aggregate many flights; cutback never fires at cruise altitudes anyway.
+        departure_field_elev_m: f32::NAN,
         count_weight: density as f32,
         surface_model: false,
         ground_context: aircraft::GROUND_CONTEXT_NONE,
@@ -227,6 +229,7 @@ pub fn scatter(
             seg.end_alt_m as f64,
             terrain.start_elev - 30.0,
             terrain.end_elev - 30.0,
+            f64::from(seg.departure_field_elev_m),
         );
         let (power_row, power_w) =
             aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust);

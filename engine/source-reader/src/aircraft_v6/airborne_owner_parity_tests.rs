@@ -63,6 +63,7 @@ fn chord(
         agl_avg_m: 450.0,
         start_elev_m: 0.0,
         end_elev_m: 0.0,
+        departure_field_elev_m: f32::NAN,
     }
 }
 
@@ -109,6 +110,11 @@ fn reference_batch(rows: &[FlightSegment]) -> ReferenceColumns {
                 cols.profile.push(row.profile_idx);
                 cols.source.push(row.source_id);
                 cols.origin.push(row.origin);
+                cols.field_elev.push(if row.departure_field_elev_m.is_nan() {
+                    i16::MIN
+                } else {
+                    row.departure_field_elev_m.round() as i16
+                });
                 cols.flight_ids.len() - 1
             }
         };
@@ -157,6 +163,7 @@ struct ReferenceColumns {
     profile: Vec<u8>,
     source: Vec<u8>,
     origin: Vec<u8>,
+    field_elev: Vec<i16>,
 }
 
 impl ReferenceColumns {
@@ -171,6 +178,7 @@ impl ReferenceColumns {
                 profile_idx: &self.profile,
                 source_id: &self.source,
                 origin: &self.origin,
+                departure_field_elev_m: &self.field_elev,
             },
             start_gy: &self.start_gy,
             start_gx: &self.start_gx,
@@ -504,6 +512,7 @@ fn pieces_beyond_reach_are_dropped_and_the_loss_is_their_own_level() {
                 end_alt_m: 1_000.0,
                 speed_kt: 350.0,
                 segment_length_m: piece.length_m,
+                departure_field_elev_m: f32::NAN,
                 count_weight: 1.0,
                 surface_model: false,
                 ground_context: aircraft::GROUND_CONTEXT_NONE,

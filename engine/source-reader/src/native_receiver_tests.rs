@@ -71,6 +71,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         agl_avg_m: 1000.0,
         start_elev_m: 0.0,
         end_elev_m: 0.0,
+        departure_field_elev_m: f32::NAN,
     };
     let facade_dir = fx::square_dir(root, facade_square);
     std::fs::create_dir_all(&facade_dir).unwrap();

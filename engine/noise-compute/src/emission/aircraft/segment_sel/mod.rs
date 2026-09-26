@@ -415,6 +415,7 @@ fn segment_kernel_with_overrides<
             end_alt_m,
             terrain_start_cut_m,
             terrain_end_cut_m,
+            f64::from(seg.departure_field_elev_m),
         ),
     );
     let heli_db = heli_correction_db(seg.profile_idx, seg.is_departure, sdz);
@@ -554,6 +555,7 @@ pub fn prepare_segment(
             seg.end_alt_m as f64,
             terrain_start_cut_m,
             terrain_end_cut_m,
+            f64::from(seg.departure_field_elev_m),
         ),
     );
     let heli_db = heli_correction_db(seg.profile_idx, seg.is_departure, sdz);
