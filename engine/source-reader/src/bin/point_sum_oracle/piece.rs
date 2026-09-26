@@ -35,6 +35,7 @@ pub fn production(
     piece: &Piece,
     obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
+    weather: &Meteorology,
 ) -> Option<[VariantBands; 3]> {
     evaluate_line_piece(
         receiver,
@@ -43,7 +44,7 @@ pub fn production(
         piece.cp.1,
         obstacles,
         rasters,
-        &Meteorology::defaults(),
+        weather,
         &mut LinePieceScratch::default(),
         None,
     )
@@ -57,6 +58,7 @@ pub fn point_sum(
     piece: &Piece,
     obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
+    weather: &Meteorology,
     spacing: NodeSpacing,
 ) -> ([VariantBands; 3], usize) {
     let line = &piece.line;
@@ -74,7 +76,6 @@ pub fn point_sum(
     let divergence = 10f64.powf(POINT_SOURCE_DIVERGENCE_OFFSET_DB / 10.0);
     let mut sum = [[[0.0; NUM_BANDS]; VARIANT_COUNT]; 3];
     let mut scratch = RayScratch::default();
-    let weather = Meteorology::defaults();
     let longitude_span = grid::geo::wrapped_longitude_delta(line.start_lon, line.end_lon);
     for node in &nodes {
         let f = node.piece_fraction.clamp(0.0, 1.0);
@@ -87,7 +88,7 @@ pub fn point_sum(
             exclusion_radius_m: 0.0,
         };
         let transfer =
-            evaluate_ray_transfer(receiver, &source, obstacles, true, rasters, &weather, false, &mut scratch, None);
+            evaluate_ray_transfer(receiver, &source, obstacles, true, rasters, weather, false, &mut scratch, None);
         let along = [end[0] - start[0], end[1] - start[1]];
         let horizontal_range_sq = node.position_m[0].powi(2) + node.position_m[1].powi(2);
         let horizontal_line_sq = along[0].powi(2) + along[1].powi(2);

@@ -1,15 +1,18 @@
 //! Linear transfer of one source→receiver ray per period, band and popup variant (everything
 //! but divergence and the receiver reflection) — the per-node physics of the line quadrature and
 //! of point sources. CNOSSOS-EU per meteorological state (`cnossos`), states mixed per period
-//! with that period's p for the ray's direction (2.5.9), air absorption per period, forest on the
-//! plan-view depth.
+//! with that period's p for the ray's direction (2.5.9), air absorption per period, foliage per
+//! state from the ray's metres in canopy.
 
 use super::cnossos::{state_boundary, MeteorologicalState, StateBoundary, VerticalPathScratch};
 use super::meteorology::Meteorology;
 use super::obstacle_index::{CrossingCandidate, ObstacleKind, ObstacleSet};
 use super::ray_path::{RayPathBuffers, RayPathInputs};
+use super::vegetation::{canopy_depth_on_ray, canopy_runs_on_ray, foliage_attenuation, mixed_foliage_bands};
 use super::PathProfile;
-use crate::types::{EdgePoint, ObstacleEdge, RasterSampler, ScreeningObstacleTrace, TerrainTrace, NUM_BANDS};
+use crate::types::{
+    EdgePoint, ForestRun, ObstacleEdge, RasterSampler, ScreeningObstacleTrace, TerrainTrace, NUM_BANDS,
+};
 
 /// The popup's "what if this effect were off" hypotheses, in [`VariantBands`] order.
 pub const VARIANT_COUNT: usize = 7;
@@ -83,9 +86,10 @@ pub struct RayDetail {
     /// Level the buildings and walls take away (full minus no-obstacle boundary, day mix).
     pub screening_bands: [f64; NUM_BANDS],
     pub obstacle: ScreeningObstacleTrace,
+    /// Day-mixed foliage attenuation; homogeneous ray depth and runs behind it.
     pub vegetation_bands: [f64; NUM_BANDS],
-    /// Density-weighted forest depth behind `vegetation_bands`.
     pub forest_depth_m: f64,
+    pub foliage_runs: Vec<ForestRun>,
     pub profile: PathProfile,
 }
 
@@ -117,10 +121,12 @@ pub fn evaluate_ray_transfer(
     rasters.build_path_profile(source.lat, source.lon, receiver.lat, receiver.lon, horizontal_m, profile);
     let source_altitude = f64::from(profile.elevation_m[0]) + source.height_m;
     let slant = horizontal_m.hypot(receiver.altitude_m - source_altitude).max(1.0);
-    // Plan-view forest depth until the canopy channel and the bare-earth DEM land together (S4):
-    // on today's surface model the canopy is part of the terrain, which this term was sized for.
-    let forest_depth_m = super::path_profile::vegetation_run_length(&profile.t, &profile.forest_u8, profile.dist_m);
-    let vegetation = super::vegetation::vegetation_attenuation(forest_depth_m);
+    let foliage_depth_h =
+        canopy_depth_on_ray(profile, source_altitude, receiver.altitude_m, MeteorologicalState::Homogeneous);
+    let foliage_depth_f =
+        canopy_depth_on_ray(profile, source_altitude, receiver.altitude_m, MeteorologicalState::Favourable);
+    let foliage_h = foliage_attenuation(foliage_depth_h);
+    let foliage_f = foliage_attenuation(foliage_depth_f);
     let source_ground_factor = match source.ground {
         SourceGround::Fixed(g) => g,
         SourceGround::UnderSource => 1.0 - f64::from(profile.imd_u8[0].min(100)) / 100.0,
@@ -159,7 +165,11 @@ pub fn evaluate_ray_transfer(
         let north = (receiver.lat - source.lat) * grid::geo::M_PER_DEG_LAT;
         north.atan2(east)
     };
+    let add = |a: [f64; NUM_BANDS], b: &[f64; NUM_BANDS]| std::array::from_fn(|i| a[i] + b[i]);
     let pair = |boundaries: &[StateBoundary; 2], pick: fn(&StateBoundary) -> [f64; NUM_BANDS]| {
+        (add(pick(&boundaries[0]), &foliage_h), add(pick(&boundaries[1]), &foliage_f))
+    };
+    let bare = |boundaries: &[StateBoundary; 2], pick: fn(&StateBoundary) -> [f64; NUM_BANDS]| {
         (pick(&boundaries[0]), pick(&boundaries[1]))
     };
     let attenuation = |b: &StateBoundary| b.attenuation_db;
@@ -168,7 +178,7 @@ pub fn evaluate_ray_transfer(
         pair(&full, |b| b.whole_path_ground_db),
         pair(&no_terrain, attenuation),
         pair(&no_screening, attenuation),
-        pair(&full, attenuation),
+        bare(&full, attenuation),
         pair(&full, |b| b.without_ground_db),
         pair(&full, attenuation),
     ];
@@ -180,8 +190,7 @@ pub fn evaluate_ray_transfer(
             let (homogeneous, favourable) = &hypotheses[variant];
             std::array::from_fn(|band| {
                 let air = if variant == VARIANT_NO_ATMOSPHERE { 1.0 } else { absorption[band] };
-                let forest = if variant == VARIANT_NO_VEGETATION { 1.0 } else { energy(vegetation[band]) };
-                air * forest * (p * energy(favourable[band]) + (1.0 - p) * energy(homogeneous[band]))
+                air * (p * energy(favourable[band]) + (1.0 - p) * energy(homogeneous[band]))
             })
         })
     });
@@ -239,8 +248,9 @@ pub fn evaluate_ray_transfer(
                     obstacle_id: crossing.id,
                 }),
             },
-            vegetation_bands: vegetation,
-            forest_depth_m,
+            vegetation_bands: mixed_foliage_bands(&foliage_h, &foliage_f, p),
+            forest_depth_m: foliage_depth_h,
+            foliage_runs: canopy_runs_on_ray(profile, source_altitude, receiver.altitude_m),
             profile: std::mem::take(profile),
         });
     }

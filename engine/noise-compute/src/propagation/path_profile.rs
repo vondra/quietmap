@@ -33,11 +33,6 @@ pub const CELL_M: f64 = grid::geo::M_PER_DEG_LAT / 3600.0;
 /// enough to be useful for edge detection.
 pub const NEAR_OFFSET_M: f64 = 10.0;
 
-/// Shortest PHYSICAL forest run (meters) that counts as a stand: a shorter run is
-/// scattered trees and adds no vegetation depth (the geodata-v2 2a gate in
-/// [`vegetation_run_length`]). The CUDA surface kernel mirrors it as a literal.
-pub const VEGETATION_MIN_RUN_M: f64 = 10.0;
-
 /// Unified path profile: one bilateral sample set, all four rasters.
 ///
 /// Per source→receiver path, built once by `RasterSampler::build_path_profile`
@@ -352,47 +347,6 @@ pub fn path_integral_u8(t: &[f64], vals: &[u8], dist_m: f64) -> f64 {
     }
 }
 
-/// Density-weighted forest depth in metres: `Σ Δlen × forest[i]/100` over
-/// contiguous `forest_u8 > 0` intervals (right-endpoint sampling — interval
-/// `[t[i-1], t[i]]` takes sample `i`'s canopy fraction). Runs whose PHYSICAL
-/// extent is shorter than 10 m are discarded (scattered-tree gate,
-/// unchanged). On binary rasters (v ∈ {0, 100}) bit-identical to the
-/// pre-2a boolean run length.
-pub fn vegetation_run_length(t: &[f64], forest: &[u8], dist_m: f64) -> f64 {
-    if t.len() < 2 || forest.len() < 2 {
-        return 0.0;
-    }
-    let mut total = 0.0;
-    let mut run_phys = 0.0;
-    let mut run_weighted = 0.0;
-    for i in 1..t.len() {
-        let len = (t[i] - t[i - 1]) * dist_m;
-        // Interval density = sample i's canopy fraction (inclusive-endpoint
-        // convention, unchanged). CONTINUOUS semantics (geodata-v2 2a):
-        // attenuation scales with foliage density along the path, so the
-        // accumulated depth is density-weighted `len × v/100`, while the
-        // ≥10 m scattered-tree gate stays on the PHYSICAL run extent. On the
-        // binary rasters in production today (v ∈ {0, 100}) this is
-        // BIT-IDENTICAL to the old boolean run (100/100.0 = 1.0 exactly,
-        // len × 1.0 = len) — output changes only when continuous density
-        // tiles land (the Wave-1 data swap).
-        if forest[i] > 0 {
-            run_phys += len;
-            run_weighted += len * (forest[i] as f64 / 100.0);
-        } else {
-            if run_phys >= VEGETATION_MIN_RUN_M {
-                total += run_weighted;
-            }
-            run_phys = 0.0;
-            run_weighted = 0.0;
-        }
-    }
-    if run_phys >= VEGETATION_MIN_RUN_M {
-        total += run_weighted;
-    }
-    total
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,90 +494,5 @@ mod tests {
             integral < 40.0,
             "interval weighting should deprioritise endpoint cluster, got {integral}"
         );
-    }
-
-    #[test]
-    fn veg_run_length_skips_short_runs() {
-        // Steps: each 100 m, so interval lengths are 100 m.
-        // Convention: an interval counts as forested when its END sample is >0.
-        let t = vec![0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
-        //   intervals: [0→1] [1→2] [2→3] [3→4] [4→5] [5→6] [6→7] [7→8] [8→9] [9→10]
-        //   end-sample:  100   100   100    0     0    100   100   100    0     0
-        //   runs:        ──── first run (3×100 = 300) ────    ── second run (3×100 = 300) ──
-        let vals = vec![0u8, 100, 100, 100, 0, 0, 100, 100, 100, 0, 0];
-        let total = vegetation_run_length(&t, &vals, 1000.0);
-        assert!((total - 600.0).abs() < 1.0, "got {total}");
-    }
-
-    #[test]
-    fn veg_run_length_drops_short_run_below_10m() {
-        // A single 5-m forested interval should be dropped (threshold 10 m).
-        let t = vec![0.0, 0.005, 0.01, 0.5, 1.0];
-        let vals = vec![0u8, 100, 0, 100, 0];
-        let total = vegetation_run_length(&t, &vals, 1000.0);
-        // First run: interval [0→1] is 5 m with end=100 → only 5 m, under 10 → dropped
-        // Second run: interval [2→3] (end=100) = 490 m, kept
-        // Interval [3→4] end=0 → close; no further runs
-        assert!((total - 490.0).abs() < 1.0, "got {total}");
-    }
-
-    /// Binary rasters (v ∈ {0, 100}) must yield BIT-identical depth under
-    /// the density-weighted accumulator — 100/100.0 = 1.0 and len × 1.0 =
-    /// len are exact in IEEE, so the Wave-1 code can land before the
-    /// continuous data with zero output change (geodata-v2 2a).
-    #[test]
-    fn veg_density_weighting_is_bit_identical_on_binary() {
-        let t: Vec<f64> = (0..=20).map(|i| i as f64 / 20.0).collect();
-        let vals: Vec<u8> = (0..=20).map(|i| if i % 3 == 0 { 0 } else { 100 }).collect();
-        let old_semantics = {
-            // the pre-2a boolean accumulator, inlined as the oracle
-            let (mut total, mut run) = (0.0_f64, 0.0_f64);
-            for i in 1..t.len() {
-                let len = (t[i] - t[i - 1]) * 5000.0;
-                if vals[i] > 0 {
-                    run += len;
-                } else {
-                    if run >= 10.0 {
-                        total += run;
-                    }
-                    run = 0.0;
-                }
-            }
-            if run >= 10.0 {
-                total += run;
-            }
-            total
-        };
-        let new = vegetation_run_length(&t, &vals, 5000.0);
-        assert!(
-            new == old_semantics,
-            "binary parity: {new} vs {old_semantics}"
-        );
-    }
-
-    /// Continuous density: depth scales with v/100, while the ≥10 m gate
-    /// stays on the PHYSICAL extent — a sparse 40 % stand longer than 10 m
-    /// still counts (at 40 % of its length), it is not dropped as
-    /// scattered trees.
-    #[test]
-    fn veg_density_weighting_scales_continuous() {
-        // Two 100-m intervals at 40 % density: physical run 200 m (≥ 10 m ✓),
-        // weighted depth 80 m.
-        let t = vec![0.0, 0.5, 1.0];
-        let vals = vec![0u8, 40, 40];
-        let total = vegetation_run_length(&t, &vals, 200.0);
-        assert!((total - 80.0).abs() < 1e-9, "got {total}");
-        // A 5-m sliver at 100 % still drops (physical gate unchanged).
-        let t2 = vec![0.0, 0.025, 1.0];
-        let vals2 = vec![0u8, 100, 0];
-        assert_eq!(vegetation_run_length(&t2, &vals2, 200.0), 0.0);
-        // Discriminator (gg review): the gate is on the PHYSICAL extent,
-        // never the weighted depth — a 20 m run at 1 % density yields a
-        // weighted 0.2 m and MUST be kept (a `run_weighted >= 10` bug
-        // would drop it).
-        let t3 = vec![0.0, 0.5, 1.0];
-        let vals3 = vec![0u8, 1, 1];
-        let total3 = vegetation_run_length(&t3, &vals3, 20.0);
-        assert!((total3 - 0.2).abs() < 1e-12, "got {total3}");
     }
 }

@@ -1,11 +1,12 @@
 //! BOUND.md invariant 1: no path gains more over free field from ground and diffraction than the
-//! relevance bound's G_max, in either state; the searched extremes are pinned.
+//! relevance bound's state maxima (18 dB favourable, 6 dB homogeneous: the (9)(h) below-plane
+//! limit of image Δdif ≥ 0 plus both sides at the ground floor); the searched extremes are pinned.
 
 use super::*;
-use crate::propagation::relevance_bound::SURFACE_RELEVANCE_GAIN_DB;
+use crate::propagation::relevance_bound::{FAVOURABLE_GAIN_BOUND_DB, HOMOGENEOUS_GAIN_BOUND_DB};
 
-/// Homogeneous maximum of the W2 search (3.71 dB) rounded up, BOUND.md.
-const HOMOGENEOUS_GAIN_BOUND_DB: f64 = 3.8;
+/// Flat homogeneous maximum of the W2 search (3.71 dB) rounded up, BOUND.md.
+const FLAT_HOMOGENEOUS_GAIN_BOUND_DB: f64 = 3.8;
 /// Flat favourable maximum (9.53 dB) rounded up: the flat search stays tight while the bound
 /// covers relief.
 const FLAT_FAVOURABLE_GAIN_BOUND_DB: f64 = 9.6;
@@ -47,7 +48,7 @@ fn the_searched_extremes_stay_under_the_bound() {
     // Homogeneous edge 1.80 m at 19 km of 20 km (3.71 dB).
     let flat = Flat::new(20_000.0, 0.0);
     let homogeneous = gain_db(&flat.path(0.05, 4.0, &[(19_000.0, 1.80)]), MeteorologicalState::Homogeneous);
-    assert!((3.5..=HOMOGENEOUS_GAIN_BOUND_DB).contains(&homogeneous), "{homogeneous}");
+    assert!((3.5..=FLAT_HOMOGENEOUS_GAIN_BOUND_DB).contains(&homogeneous), "{homogeneous}");
     // Direct favourable over 29 km of hard ground (8.99 dB).
     let flat = Flat::new(29_000.0, 0.0);
     let direct = gain_db(&flat.path(0.05, 4.0, &[]), MeteorologicalState::Favourable);
@@ -66,7 +67,48 @@ fn the_searched_extremes_stay_under_the_bound() {
         obstacle_tops: &[],
     };
     let relief = gain_db(&path, MeteorologicalState::Favourable);
-    assert!((12.9..=SURFACE_RELEVANCE_GAIN_DB).contains(&relief), "{relief}");
+    assert!((12.9..=13.3).contains(&relief), "{relief}");
+}
+
+/// The (9)(h) below-plane corner that voids the pre-slice-2 13.3 dB derivation: a blocked
+/// grazing path over hard ground with the receiver below its side plane takes the image
+/// Δdif (≈ 0 dB) plus both sides at the ground floor. Seeds 920892/1744332 of the 2M-sample
+/// relief search (w2-slice2), rounded to 1 mm / 1 mm / 0.001 G.
+#[test]
+fn below_plane_corners_stay_under_the_state_bounds() {
+    // Favourable 17.60 dB: 6.2 km, source 0.23 m up, receiver 7.24 m up in a dip.
+    let distance = vec![0.0, 1325.533, 3827.411, 4293.855, 6218.238];
+    let altitude = vec![-85.685, -7.088, 28.333, 12.712, -44.696];
+    let ground = vec![0.0, 0.0, 0.0, 0.0, 0.146];
+    let terrain: Vec<PlanePoint> =
+        distance.iter().copied().zip(altitude.iter().copied()).collect();
+    let path = VerticalPath {
+        profile: VerticalProfile { distance_m: &distance, altitude_m: &altitude, ground_factor: &ground },
+        source: (0.0, -85.685 + 0.228),
+        receiver: (6218.238, -44.696 + 7.241),
+        source_ground_factor: 0.0,
+        terrain_candidates: &terrain,
+        obstacle_tops: &[],
+    };
+    let favourable = gain_db(&path, MeteorologicalState::Favourable);
+    assert!((17.4..=FAVOURABLE_GAIN_BOUND_DB).contains(&favourable), "{favourable}");
+    // Homogeneous 6.00 dB: 7.6 km, source 1.81 m up, receiver 7.67 m up in a dip.
+    let distance = vec![0.0, 2003.806, 3406.244, 3462.741, 4428.192, 4645.091, 4888.823, 5042.429, 7571.335];
+    let altitude = vec![123.543, 105.373, -146.72, 13.508, -72.448, -52.391, 25.951, 72.715, 102.924];
+    let ground = vec![0.0, 0.0, 0.004, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let terrain: Vec<PlanePoint> =
+        distance.iter().copied().zip(altitude.iter().copied()).collect();
+    let tops = vec![(743.466, 124.829), (2706.498, 123.986), (3843.265, 14.608)];
+    let path = VerticalPath {
+        profile: VerticalProfile { distance_m: &distance, altitude_m: &altitude, ground_factor: &ground },
+        source: (0.0, 123.543 + 1.814),
+        receiver: (7571.335, 102.924 + 7.67),
+        source_ground_factor: 0.0,
+        terrain_candidates: &terrain,
+        obstacle_tops: &tops,
+    };
+    let homogeneous = gain_db(&path, MeteorologicalState::Homogeneous);
+    assert!((5.8..=HOMOGENEOUS_GAIN_BOUND_DB).contains(&homogeneous), "{homogeneous}");
 }
 
 /// xorshift64*: a fixed, dependency-free sample sequence.
@@ -87,27 +129,53 @@ impl Samples {
     }
 }
 
-/// Flat and relief profiles, G ∈ [0, 1] with 40 % exact 0, Gs 0, 1 or random, 0–3 obstacle tops,
-/// source 0.05–4 m, receiver 1.5–30 m, 5 m–12 km: flat stays under the flat search maxima,
-/// every sampled path (flat or relief) under the relevance bound.
+/// Flat paths stay under the flat search maxima (3.8/9.6 dB); relief paths — rolling
+/// ground plus single crests over hard ground, the (9)(h) below-plane shape — stay under
+/// the state bounds per state (6/18 dB). G ∈ [0, 1] with 40 % exact 0 on flat paths,
+/// 70 % on relief; Gs 0, 1 or random; 0–3 obstacle tops; source 0.05–4 m, receiver
+/// 1.5–30 m; flat 5 m–12 km, relief 300 m–12 km.
 #[test]
 fn no_sampled_path_gains_more_than_the_bound() {
     let mut samples = Samples(0x9E37_79B9_7F4A_7C15);
-    let (mut worst_homogeneous, mut worst_favourable, mut worst_relief) =
-        (f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for _ in 0..20_000 {
-        let length = 10f64.powf(samples.between(0.7, 4.08));
+    let (mut worst_homogeneous, mut worst_favourable) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    let (mut worst_relief_homogeneous, mut worst_relief_favourable) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for sample in 0..30_000 {
+        let relief = sample >= 10_000;
+        let length = 10f64.powf(samples.between(if relief { 2.5 } else { 0.7 }, 4.08));
         let vertices = 2 + (samples.unit() * 8.0) as usize;
-        let relief = samples.unit() < 0.5;
         let mut distance: Vec<f64> = (0..vertices).map(|_| samples.between(0.0, length)).collect();
         distance[0] = 0.0;
         distance[vertices - 1] = length;
         distance.sort_by(f64::total_cmp);
+        let crest = relief && samples.unit() < 0.5;
+        let (crest_x, crest_h) = (samples.between(0.05, 0.95) * length, samples.between(1.0, 30.0));
         let altitude: Vec<f64> = distance
             .iter()
-            .map(|_| if relief { samples.between(-0.02, 0.02) * length } else { 0.0 })
+            .map(|&x| {
+                if crest {
+                    crest_h * (1.0 - ((x - crest_x) / (0.5 * length)).abs()).max(0.0)
+                        + samples.between(-0.005, 0.005) * length
+                } else if relief {
+                    samples.between(-0.02, 0.02) * length
+                } else {
+                    0.0
+                }
+            })
             .collect();
-        let ground: Vec<f64> = distance.iter().map(|_| samples.ground()).collect();
+        let ground: Vec<f64> = distance
+            .iter()
+            .map(|_| {
+                if relief {
+                    if samples.unit() < 0.7 {
+                        0.0
+                    } else {
+                        samples.unit() * 0.3
+                    }
+                } else {
+                    samples.ground()
+                }
+            })
+            .collect();
         let source_ground_factor = match (samples.unit() * 3.0) as usize {
             0 => 0.0,
             1 => 1.0,
@@ -133,16 +201,22 @@ fn no_sampled_path_gains_more_than_the_bound() {
         let (homogeneous, favourable) =
             (gain_db(&path, MeteorologicalState::Homogeneous), gain_db(&path, MeteorologicalState::Favourable));
         if relief {
-            worst_relief = worst_relief.max(homogeneous.max(favourable));
+            worst_relief_homogeneous = worst_relief_homogeneous.max(homogeneous);
+            worst_relief_favourable = worst_relief_favourable.max(favourable);
         } else {
             worst_homogeneous = worst_homogeneous.max(homogeneous);
             worst_favourable = worst_favourable.max(favourable);
         }
     }
-    assert!(worst_homogeneous <= HOMOGENEOUS_GAIN_BOUND_DB, "homogeneous {worst_homogeneous}");
+    assert!(worst_homogeneous <= FLAT_HOMOGENEOUS_GAIN_BOUND_DB, "homogeneous {worst_homogeneous}");
     assert!(worst_favourable <= FLAT_FAVOURABLE_GAIN_BOUND_DB, "favourable {worst_favourable}");
-    assert!(worst_relief <= SURFACE_RELEVANCE_GAIN_DB, "relief {worst_relief}");
-    assert!(worst_homogeneous <= SURFACE_RELEVANCE_GAIN_DB, "flat homogeneous under bound");
-    assert!(worst_favourable <= SURFACE_RELEVANCE_GAIN_DB, "flat favourable under bound");
+    assert!(
+        worst_relief_homogeneous <= HOMOGENEOUS_GAIN_BOUND_DB,
+        "relief homogeneous {worst_relief_homogeneous}"
+    );
+    assert!(
+        worst_relief_favourable <= FAVOURABLE_GAIN_BOUND_DB,
+        "relief favourable {worst_relief_favourable}"
+    );
 }
 

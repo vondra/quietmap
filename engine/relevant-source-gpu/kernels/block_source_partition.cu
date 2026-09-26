@@ -12,6 +12,7 @@ __global__ void evaluate_corner_source_pairs_kernel(
     const float* __restrict__ corner_x_m,
     const float* __restrict__ corner_y_m,
     const float* __restrict__ corner_reflection_db,
+    const DeviceWeather* __restrict__ corner_weather,
     float* __restrict__ pair_period_energy
 ) {
     const uint32_t corner = blockIdx.x;
@@ -25,7 +26,7 @@ __global__ void evaluate_corner_source_pairs_kernel(
          pair += blockDim.x) {
         float energy[QUIETMAP_PERIOD_COUNT] = {};
         evaluate_source_receiver_energy(
-            scene, corner_source_indices[pair], receiver_x, receiver_y,
+            scene, corner_weather[corner], corner_source_indices[pair], receiver_x, receiver_y,
             receiver_altitude, corner_reflection_db[corner], energy);
         for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
             pair_period_energy[pair * QUIETMAP_PERIOD_COUNT + period] = energy[period];
@@ -43,6 +44,7 @@ __global__ void paint_relevant_sources_kernel(
     const float* __restrict__ receiver_y_m,
     const float* __restrict__ receiver_altitude_m,
     const float* __restrict__ receiver_reflection_db,
+    const DeviceWeather* __restrict__ receiver_weather,
     float* __restrict__ output_period_energy
 ) {
     const uint32_t block = blockIdx.x;
@@ -75,8 +77,9 @@ __global__ void paint_relevant_sources_kernel(
     for (uint32_t position = block_offsets[block]; position < block_offsets[block + 1]; ++position) {
         float source_energy[QUIETMAP_PERIOD_COUNT] = {};
         if (!evaluate_source_receiver_energy(
-                scene, relevant_source_indices[position], receiver_x_m[pixel], receiver_y_m[pixel],
-                receiver_altitude_m[pixel], receiver_reflection_db[pixel], source_energy)) {
+                scene, receiver_weather[pixel], relevant_source_indices[position], receiver_x_m[pixel],
+                receiver_y_m[pixel], receiver_altitude_m[pixel], receiver_reflection_db[pixel],
+                source_energy)) {
             continue;
         }
         for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
@@ -191,13 +194,14 @@ extern "C" int relevant_source_cuda_evaluate_corners(
     const float* corner_x_m,
     const float* corner_y_m,
     const float* corner_reflection_db,
+    const DeviceWeather* corner_weather,
     float* pair_period_energy,
     float* elapsed_milliseconds
 ) {
     return timed_cuda_launch([&] {
         evaluate_corner_source_pairs_kernel<<<corner_count, 256>>>(
             *scene, corner_pixel_floor_m, corner_offsets, corner_source_indices, corner_x_m, corner_y_m,
-            corner_reflection_db, pair_period_energy);
+            corner_reflection_db, corner_weather, pair_period_energy);
     }, elapsed_milliseconds);
 }
 
@@ -211,6 +215,7 @@ extern "C" int relevant_source_cuda_paint_tile(
     const float* receiver_y_m,
     const float* receiver_altitude_m,
     const float* receiver_reflection_db,
+    const DeviceWeather* receiver_weather,
     float* output_period_energy,
     float* elapsed_milliseconds
 ) {
@@ -219,7 +224,7 @@ extern "C" int relevant_source_cuda_paint_tile(
     return timed_cuda_launch([&] {
         paint_relevant_sources_kernel<<<blocks, threads>>>(
             *scene, receiver_pixel_floor_m, block_offsets, relevant_source_indices, background_energy,
-            receiver_x_m, receiver_y_m, receiver_altitude_m, receiver_reflection_db,
+            receiver_x_m, receiver_y_m, receiver_altitude_m, receiver_reflection_db, receiver_weather,
             output_period_energy);
     }, elapsed_milliseconds);
 }

@@ -3,6 +3,7 @@
 //! holds; this module never re-runs emission or propagation.
 
 use crate::propagation::iso9613;
+use crate::propagation::meteorology::Meteorology;
 use crate::propagation::ray_transfer::RayDetail;
 use crate::propagation::relevance_bound::SourceSpread;
 use crate::propagation::PathProfile;
@@ -75,8 +76,10 @@ pub fn variants_to_received_bands(
 
 /// Atmospheric attenuation (per band, positive = dB removed) at a slant distance: the day
 /// period's A_atm of the ray transfer (propagation::air_absorption).
-pub fn atmospheric_bands(d_slant_m: f64) -> [f64; NUM_BANDS] {
-    let weather = crate::propagation::meteorology::Meteorology::defaults();
+pub fn atmospheric_bands(
+    d_slant_m: f64,
+    weather: &Meteorology,
+) -> [f64; NUM_BANDS] {
     std::array::from_fn(|band| weather.absorption[0][band].attenuation_db(d_slant_m))
 }
 
@@ -104,62 +107,6 @@ pub fn path_profile_into_trace(
     }
 }
 
-/// Contiguous forested intervals along a path plus their total depth.
-/// `ForestRun.t_start/t_end` are fractional (0..1); `len_m` is the run's
-/// DENSITY-WEIGHTED depth in metres (geodata-v2 2a: `Σ len × v/100` — equal
-/// to the physical extent on binary rasters, the effective foliage metres
-/// once continuous density tiles land; the frontend renders only the total
-/// depth + run count and draws tufts from raw `forest_u8` samples — no
-/// consumer reads `len_m` as geometry; gates stay `> 0`). The ≥10 m scattered-tree gate
-/// stays on the PHYSICAL extent — the same threshold, mirror and parity
-/// contract as `vegetation_run_length`; single pass so callers don't walk
-/// the path twice.
-pub fn vegetation_runs_and_depth(t: &[f64], forest: &[u8], dist_m: f64) -> (Vec<ForestRun>, f64) {
-    if t.len() < 2 || forest.len() < 2 {
-        return (Vec::new(), 0.0);
-    }
-    let mut runs = Vec::new();
-    let mut total_depth = 0.0;
-    let mut run_start_t: Option<f64> = None;
-    let mut run_phys = 0.0;
-    let mut run_weighted = 0.0;
-    for i in 1..t.len() {
-        let len = (t[i] - t[i - 1]) * dist_m;
-        if forest[i] > 0 {
-            if run_start_t.is_none() {
-                run_start_t = Some(t[i - 1]);
-            }
-            run_phys += len;
-            run_weighted += len * (forest[i] as f64 / 100.0);
-        } else {
-            if run_phys >= 10.0 {
-                if let Some(start) = run_start_t {
-                    runs.push(ForestRun {
-                        t_start: start,
-                        t_end: t[i - 1],
-                        len_m: run_weighted,
-                    });
-                    total_depth += run_weighted;
-                }
-            }
-            run_start_t = None;
-            run_phys = 0.0;
-            run_weighted = 0.0;
-        }
-    }
-    if run_phys >= 10.0 {
-        if let Some(start) = run_start_t {
-            runs.push(ForestRun {
-                t_start: start,
-                t_end: t[t.len() - 1],
-                len_m: run_weighted,
-            });
-            total_depth += run_weighted;
-        }
-    }
-    (runs, total_depth)
-}
-
 /// Build a `ScreeningTrace` from the values already returned by
 /// `screening_attenuation_with_meta`.
 pub fn screening_trace(
@@ -178,16 +125,16 @@ pub fn screening_trace(
     }
 }
 
-/// Build a `VegetationTrace` from per-band attenuation + forest sample arrays.
-/// Computes forest depth (total) and runs on the way in so callers don't have
-/// to walk the profile a second time.
+/// Build a `VegetationTrace` from the kernel's day-mixed foliage attenuation and the
+/// homogeneous ray's runs and depth: the display shows the same metres the kernel
+/// attenuated (the frontend renders only the total depth + run count and draws tufts
+/// from raw `forest_u8` samples).
 pub fn vegetation_trace(
     atten_bands: [f64; NUM_BANDS],
-    t: &[f64],
-    forest_u8: &[u8],
+    forest_runs: Vec<ForestRun>,
+    forest_depth_m: f64,
     dist_m: f64,
 ) -> VegetationTrace {
-    let (forest_runs, forest_depth_m) = vegetation_runs_and_depth(t, forest_u8, dist_m);
     VegetationTrace {
         forest_depth_m,
         sampled_path_m: dist_m,
@@ -217,10 +164,11 @@ pub fn baseline_trace(
     ground_g: f64,
     reflection_boost_db: f64,
     source_spread: SourceSpread,
+    weather: &Meteorology,
 ) -> BaselineTrace {
     BaselineTrace {
         geometric_db: source_spread.divergence_db(d_slant_m),
-        atmospheric_bands: atmospheric_bands(d_slant_m),
+        atmospheric_bands: atmospheric_bands(d_slant_m, weather),
         ground_factor_g: ground_g,
         source_height_m,
         finite_line_corr_db: 0.0,
@@ -245,6 +193,9 @@ struct BuildCnossosPropagation {
     screening_fan: Option<ScreeningFanTrace>,
     obstacle_trace: ScreeningObstacleTrace,
     veg_atten: [f64; NUM_BANDS],
+    veg_runs: Vec<ForestRun>,
+    veg_depth_m: f64,
+    weather: Meteorology,
     variants: [PropagationVariants; 3],
     lw_bands: [[f64; NUM_BANDS]; 3],
 }
@@ -266,17 +217,15 @@ fn build_cnossos_propagation(inputs: BuildCnossosPropagation) -> PropagationBrea
         screening_fan,
         obstacle_trace,
         veg_atten,
+        veg_runs,
+        veg_depth_m,
+        weather,
         variants,
         lw_bands,
     } = inputs;
-    let vegetation = vegetation_trace(
-        veg_atten,
-        &path_profile.t,
-        &path_profile.forest_u8,
-        path_profile.dist_m,
-    );
+    let vegetation = vegetation_trace(veg_atten, veg_runs, veg_depth_m, path_profile.dist_m);
     PropagationBreakdown::Cnossos(Box::new(CnossosBreakdown {
-        baseline: baseline_trace(d_slant_m, src_alt_m, ground_g, reflection_boost_db, source_spread),
+        baseline: baseline_trace(d_slant_m, src_alt_m, ground_g, reflection_boost_db, source_spread, &weather),
         path_profile: path_profile_into_trace(path_profile, src_alt_m, rcv_alt_m),
         terrain,
         screening: screening_trace(screening_atten, obstacle_trace, screening_fan),
@@ -314,6 +263,7 @@ pub(crate) struct BuildRoadTrace<'a> {
     pub fan: Option<ScreeningFanTrace>,
     pub seg_variants: [PropagationVariants; 3],
     pub lw_bands: [[f64; NUM_BANDS]; 3],
+    pub weather: Meteorology,
 }
 
 pub(crate) struct BuildPointTrace<'a> {
@@ -327,6 +277,7 @@ pub(crate) struct BuildPointTrace<'a> {
     pub node: RayDetail,
     pub seg_variants: [PropagationVariants; 3],
     pub lw_bands: [[f64; NUM_BANDS]; 3],
+    pub weather: Meteorology,
 }
 
 pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentTrace {
@@ -340,6 +291,7 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
         node,
         seg_variants,
         lw_bands,
+        weather,
     } = inputs;
 
     let (subtype_label, emission) = match source_kind {
@@ -418,6 +370,9 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
             screening_fan: None,
             obstacle_trace: node.obstacle,
             veg_atten: node.vegetation_bands,
+            veg_runs: node.foliage_runs,
+            veg_depth_m: node.forest_depth_m,
+            weather,
             variants: seg_variants,
             lw_bands,
         }),
@@ -442,6 +397,7 @@ pub(crate) struct BuildRailTrace<'a> {
     pub fan: Option<ScreeningFanTrace>,
     pub seg_variants: [PropagationVariants; 3],
     pub lw_bands: [[f64; NUM_BANDS]; 3],
+    pub weather: Meteorology,
 }
 
 /// The CNOSSOS breakdown of a line piece from its loudest node's ray.
@@ -453,6 +409,7 @@ fn line_node_propagation(
     reflection_boost_db: f64,
     variants: [PropagationVariants; 3],
     lw_bands: [[f64; NUM_BANDS]; 3],
+    weather: Meteorology,
 ) -> PropagationBreakdown {
     build_cnossos_propagation(BuildCnossosPropagation {
         d_slant_m,
@@ -468,6 +425,9 @@ fn line_node_propagation(
         screening_fan: fan,
         obstacle_trace: node.obstacle,
         veg_atten: node.vegetation_bands,
+        veg_runs: node.foliage_runs,
+        veg_depth_m: node.forest_depth_m,
+        weather,
         variants,
         lw_bands,
     })
@@ -484,6 +444,7 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
         fan,
         seg_variants,
         lw_bands,
+        weather,
     } = inputs;
 
     let rail_type = rail_type_name(seg.rail_type);
@@ -525,6 +486,7 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
             reflection_boost_db,
             seg_variants,
             lw_bands,
+            weather,
         ),
         received_lden: variants_to_lden(&seg_variants),
         aircraft_subtype: 0,
@@ -550,6 +512,7 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
         fan,
         seg_variants,
         lw_bands,
+        weather,
     } = inputs;
 
     let seg_name = seg_name_from_tags(&seg.road_ref, &seg.name, class_name, seg.osm_id);
@@ -601,6 +564,7 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
             reflection_boost_db,
             seg_variants,
             lw_bands,
+            weather,
         ),
         received_lden: variants_to_lden(&seg_variants),
         aircraft_subtype: 0,
@@ -690,7 +654,7 @@ mod tests {
 
     #[test]
     fn vegetation_trace_shape() {
-        assert_bands_no_scalar(&vegetation_trace([0.0; NUM_BANDS], &[], &[], 0.0));
+        assert_bands_no_scalar(&vegetation_trace([0.0; NUM_BANDS], Vec::new(), 0.0, 0.0));
     }
 
     #[test]
@@ -698,27 +662,19 @@ mod tests {
         assert_bands_no_scalar(&ground_trace(0.5, [0.0; NUM_BANDS]));
     }
 
-    /// The popup trace accumulator mirrors `vegetation_run_length` exactly:
-    /// total depth equal on binary AND continuous inputs, and each run's
-    /// `len_m` carries the density-weighted depth (physical geometry stays
-    /// in t_start/t_end).
+    /// The trace shows the kernel's own runs and depth (no second walk): a run's
+    /// `len_m` sums to the total, geometry stays in t_start/t_end.
     #[test]
-    fn vegetation_runs_mirror_run_length() {
-        use crate::propagation::path_profile::vegetation_run_length;
-        let t: Vec<f64> = (0..=10).map(|i| i as f64 / 10.0).collect();
-        for vals in [
-            vec![0u8, 100, 100, 0, 0, 100, 100, 100, 0, 40, 40],
-            vec![0u8, 40, 40, 40, 0, 0, 100, 0, 0, 0, 0],
-        ] {
-            let (runs, depth) = vegetation_runs_and_depth(&t, &vals, 2000.0);
-            let expected = vegetation_run_length(&t, &vals, 2000.0);
-            // identical arithmetic in identical order ⇒ bit-equal, not just close
-            assert!(
-                depth == expected,
-                "trace depth {depth} != kernel depth {expected}"
-            );
-            let sum: f64 = runs.iter().map(|r| r.len_m).sum();
-            assert!(sum == depth);
-        }
+    fn vegetation_trace_shows_the_kernel_runs() {
+        let runs = vec![
+            ForestRun { t_start: 0.1, t_end: 0.4, len_m: 60.0 },
+            ForestRun { t_start: 0.7, t_end: 0.8, len_m: 20.0 },
+        ];
+        let trace = vegetation_trace([1.0; NUM_BANDS], runs, 80.0, 2000.0);
+        assert_eq!(trace.forest_depth_m, 80.0);
+        assert_eq!(trace.sampled_path_m, 2000.0);
+        assert_eq!(trace.forest_runs.len(), 2);
+        let sum: f64 = trace.forest_runs.iter().map(|r| r.len_m).sum();
+        assert_eq!(sum, trace.forest_depth_m);
     }
 }

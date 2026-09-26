@@ -1,6 +1,6 @@
 //! Reuse saved corners to produce the surface-power planes at every pixel-centre receiver.
 use crate::{
-    cuda_bridge::{DeviceBuffer, RelevantSourceCuda},
+    cuda_bridge::{DeviceBuffer, DeviceWeather, RelevantSourceCuda},
     relevance_partition::build_relevant_source_partition,
     source_frame::*,
     surface_gpu::SurfaceGpu,
@@ -48,6 +48,18 @@ pub fn paint_tile(
     let altitude = DeviceBuffer::from_slice(&receivers.altitude)?;
     let reflection = DeviceBuffer::from_slice(&receivers.reflection)?;
     let floor = DeviceBuffer::from_slice(&receivers.floor)?;
+    // Per-pixel weather from the receiver squares' windows (the popup samples the same
+    // windows, so the two agree); the metric frame inverts exactly, up to f32 rounding.
+    let weather: Vec<DeviceWeather> = receivers
+        .x
+        .iter()
+        .zip(&receivers.y)
+        .map(|(&x, &y)| {
+            let [lat, lon] = scene.host.frame.decode(x, y);
+            DeviceWeather::from_meteorology(&scene.host.receiver_weather(lat, lon))
+        })
+        .collect();
+    let weather = DeviceBuffer::from_slice(&weather)?;
     let mut planes = std::array::from_fn(|_| Vec::new());
     for (layer, plane) in planes.iter_mut().enumerate() {
         let mut incidence = TileSourceIncidence {
@@ -104,6 +116,7 @@ pub fn paint_tile(
             &dy,
             &altitude,
             &reflection,
+            &weather,
         )?;
         *plane = energy;
     }

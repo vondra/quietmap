@@ -152,6 +152,7 @@ fn main() -> anyhow::Result<()> {
             bbox.west_lon,
             bbox.east_lon,
         ),
+        weather: raster_reader::meteorology::WeatherCache::new(rasters.dem.root()),
     };
     let t = Instant::now();
     let field = CruiseField::load(owner, root, &manifest, &rasters)?;

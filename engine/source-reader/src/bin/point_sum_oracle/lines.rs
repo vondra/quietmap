@@ -87,6 +87,7 @@ pub fn run(spacing: NodeSpacing) -> Value {
             let set = obstacles(scene);
             let (lat, lon) = to_geo(0.0, scene.offset_m);
             let receiver = RayReceiver { lat, lon, altitude_m: scene.receiver_height_m };
+            let weather = world.weather(lat, lon);
             let pieces = ((2.0 * scene.half_length_m) / 250.0).ceil().max(1.0) as usize;
             let length = 2.0 * scene.half_length_m / pieces as f64;
             let (mut quadrature, mut reference) = ([[0.0; NUM_BANDS]; 3], [[0.0; NUM_BANDS]; 3]);
@@ -99,10 +100,10 @@ pub fn run(spacing: NodeSpacing) -> Value {
                     cp: to_geo(0.0_f64.clamp(x0, x0 + length), 0.0),
                     emission_db_per_m: emission,
                 };
-                if let Some(transfer) = production(&receiver, &piece, &set, &world) {
+                if let Some(transfer) = production(&receiver, &piece, &set, &world, &weather) {
                     add(&mut quadrature, &energies(&transfer, &piece.emission_db_per_m, 0.0));
                 }
-                let (transfer, count) = point_sum(&receiver, &piece, &set, &world, spacing);
+                let (transfer, count) = point_sum(&receiver, &piece, &set, &world, &weather, spacing);
                 nodes += count;
                 add(&mut reference, &energies(&transfer, &piece.emission_db_per_m, 0.0));
             }

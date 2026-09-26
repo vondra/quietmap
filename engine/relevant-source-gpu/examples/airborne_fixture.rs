@@ -92,6 +92,7 @@ fn main() -> anyhow::Result<()> {
             bbox.west_lon - 0.002,
             bbox.east_lon + 0.002,
         ),
+        weather: raster_reader::meteorology::WeatherCache::new(rasters.dem.root()),
     };
     let tile = TileReceivers::prepare(&scene, tile_x, tile_y)?;
     let mut selected = Vec::new();

@@ -29,6 +29,7 @@ pub(super) fn emit_segment_traces(
     recv_lon: f64,
     refl_db: f64,
     osm_ref_lookup: &HashMap<u64, String>,
+    weather: &crate::propagation::meteorology::Meteorology,
 ) {
     // Mirror the hot loop's half-pixel divergence floor so the trace's
     // `dist_m`, `flc_delta_trace`, and `geometric_db` match the energy
@@ -268,14 +269,14 @@ pub(super) fn emit_segment_traces(
         let mut ground_g = 0.0;
         if let Some(p) = path {
             ground_g = p.ground_g;
-            let d_km = (dist_m - GROUND_OPS_REF_OFFSET_M).max(0.0) / 1000.0;
             // Road/airborne convention: POSITIVE = attenuation (loss),
             // NEGATIVE = boost (rare, soft-ground LF interference can
             // give A_gr < 0 per CNOSSOS-EU §2.5.15). The per-band
             // tooltips render with `signed=true` so the +/- direction
             // matches between road and ground rows.
+            let d_slant_m = (dist_m - GROUND_OPS_REF_OFFSET_M).max(0.0);
             for i in 0..NUM_BANDS {
-                atmospheric_bands[i] = ALPHA_ATM[i] * d_km;
+                atmospheric_bands[i] = weather.absorption[0][i].attenuation_db(d_slant_m);
                 ground_bands[i] =
                     crate::propagation::iso9613::aircraft_ground_atten_db(i, p.ground_g);
                 terrain_bands[i] = p.terrain_atten_db[i];

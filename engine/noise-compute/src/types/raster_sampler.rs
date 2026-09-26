@@ -50,4 +50,11 @@ pub trait RasterSampler: Send + Sync {
             self, src_lat, src_lon, rcv_lat, rcv_lon, dist_m, out,
         );
     }
+
+    /// The receiver's meteorology: the receiver square's window sampled at the receiver,
+    /// with the window's extremes behind the relevance bound. Only `RealRasters` has
+    /// the files; synthetic samplers keep the long-standing defaults.
+    fn weather(&self, _lat: f64, _lon: f64) -> crate::propagation::meteorology::Meteorology {
+        crate::propagation::meteorology::Meteorology::defaults()
+    }
 }

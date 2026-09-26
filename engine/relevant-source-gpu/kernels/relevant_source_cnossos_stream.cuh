@@ -8,10 +8,12 @@
 #pragma once
 
 #include "relevant_source_cnossos_boundary.cuh"
+#include "relevant_source_foliage.cuh"
 
 /// Hull entries per state: the 2026-09-24 oracle rays needed at most 21 (homogeneous) and 11
-/// (favourable) over 1.1 million rays; a longer hull raises `quietmap_profile_overflow`.
-constexpr int QUIETMAP_HULL_CAPACITY = 32;
+/// (favourable) over 1.1 million rays, but a dense Prague tile ray outran 32; a longer hull
+/// raises `quietmap_profile_overflow`.
+constexpr int QUIETMAP_HULL_CAPACITY = 64;
 /// Crossings of one grid cell sorted at a time (cells are at least 32 m; a fuller cell is walked
 /// again for the next ones).
 constexpr int QUIETMAP_CELL_CROSSING_CAPACITY = 32;
@@ -137,23 +139,6 @@ __device__ void stream_piece(CnossosStream& s, const GroundPiece& p) {
     }
 }
 
-/// rubber_band.rs ray_height_above_chord.
-__device__ __forceinline__ float ray_height_above_chord(const CnossosStream& s, int state,
-                                                        float x) {
-    if (state == QUIETMAP_STATE_HOMOGENEOUS) {
-        return 0.0f;
-    }
-    const float horizontal = s.length;
-    const float chord = hypotf(s.receiver.x - s.source.x, s.receiver.z - s.source.z);
-    const float along = x * chord / horizontal;
-    const float gamma = s.states[state].radius;
-    const float offset = along - 0.5f * chord;
-    const float perpendicular = along * (chord - along)
-        / (sqrtf(fmaxf(gamma * gamma - offset * offset, 0.0f))
-           + sqrtf(gamma * gamma - 0.25f * chord * chord));
-    return perpendicular * chord / horizontal;
-}
-
 __device__ __forceinline__ HullEntry fresh_entry(const CnossosStream& s, PlanePoint point,
                                                  float hull_z) {
     HullEntry e;
@@ -170,7 +155,9 @@ __device__ void stream_candidate(CnossosStream& s, PlanePoint point) {
     const float chord_z = s.source.z + (s.receiver.z - s.source.z) * point.x / s.length;
     for (int state = 0; state < 2; ++state) {
         StateStream& st = s.states[state];
-        const float lowered = point.z - ray_height_above_chord(s, state, point.x);
+        const float lowered = point.z
+            - ray_height_above_chord(
+                s.length, s.source, s.receiver, s.states[state].radius, state, point.x);
         if (lowered > chord_z) {
             st.blocked = true;
             while (st.depth >= 2) {
@@ -484,9 +471,9 @@ struct RaySourceTerms {
 /// Linear transfer 10^(−A/10) per period and band of the ray from (sx, sy) to the receiver:
 /// everything but divergence and reflection (ray_transfer.rs evaluate_ray_transfer, full).
 __device__ void cnossos_ray_transfer(
-    const DeviceScenePointers& scene, const RaySourceTerms& terms, float source_x_m,
-    float source_y_m, float receiver_x_m, float receiver_y_m, float receiver_altitude_m,
-    bool obstacles_on_ray, PathProfile& profile,
+    const DeviceScenePointers& scene, const DeviceWeather& weather, const RaySourceTerms& terms,
+    float source_x_m, float source_y_m, float receiver_x_m, float receiver_y_m,
+    float receiver_altitude_m, bool obstacles_on_ray, PathProfile& profile,
     float transfer[QUIETMAP_PERIOD_COUNT][QUIETMAP_BAND_COUNT]
 ) {
     const float length = fmaxf(hypotf(receiver_x_m - source_x_m, receiver_y_m - source_y_m), 1.0f);
@@ -494,6 +481,14 @@ __device__ void cnossos_ray_transfer(
                        profile);
     const float source_ground_m = profile.elevation_m[0];
     const float source_altitude_m = source_ground_m + terms.height_m;
+    const float radius = fmaxf(QUIETMAP_FAVOURABLE_RAY_RADIUS_MINIMUM_M,
+                               QUIETMAP_FAVOURABLE_RAY_RADIUS_PER_DISTANCE
+                                   * hypotf(length, receiver_altitude_m - source_altitude_m));
+    float foliage_h_m = 0.0f;
+    float foliage_f_m = 0.0f;
+    canopy_foliage_depths(scene, source_x_m, source_y_m, receiver_x_m, receiver_y_m,
+                          source_altitude_m, receiver_altitude_m, length, radius, profile,
+                          &foliage_h_m, &foliage_f_m);
     for (int index = 1; index < profile.count; ++index) {
         if (profile_x(profile, index) < terms.platform_half_width_m) {
             profile.elevation_m[index] = fminf(profile.elevation_m[index], source_ground_m);
@@ -512,9 +507,6 @@ __device__ void cnossos_ray_transfer(
     s.covered_to = -CUDART_INF_F;
     s.open_count = 0;
     s.recent_count = 0;
-    const float radius = fmaxf(QUIETMAP_FAVOURABLE_RAY_RADIUS_MINIMUM_M,
-                               QUIETMAP_FAVOURABLE_RAY_RADIUS_PER_DISTANCE
-                                   * hypotf(length, receiver_altitude_m - source_altitude_m));
     for (int state = 0; state < 2; ++state) {
         StateStream& st = s.states[state];
         st.depth = 1;
@@ -577,23 +569,25 @@ __device__ void cnossos_ray_transfer(
         state_boundary_bands(state, s.source, s.receiver, source_ground_factor, s.whole,
                              s.ground_origin_z, d, attenuation[state]);
     }
-    const float slant_km = 0.001f * fmaxf(hypotf(length, receiver_altitude_m - source_altitude_m),
-                                          1.0f);
+    const float slant_m = fmaxf(hypotf(length, receiver_altitude_m - source_altitude_m), 1.0f);
     const float azimuth = atan2f(receiver_y_m - source_y_m, receiver_x_m - source_x_m);
     for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
-        const float p = favourable_probability(*scene.weather, period, azimuth);
+        const float p = favourable_probability(weather, period, azimuth);
         for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-            const float air_db = fmaxf(
-                fmaf(scene.weather->absorption_mean_db_per_km[period][band], slant_km,
-                     -0.11512925464970229f
-                         * scene.weather->absorption_variance_db2_per_km2[period][band]
-                         * slant_km * slant_km),
-                scene.weather->absorption_minimum_db_per_km[period][band] * slant_km);
-            const float forest_db = fminf(QUIETMAP_VEGETATION_DB_PER_M[band] * profile.forest_depth_m,
-                                          QUIETMAP_VEGETATION_CAP_DB[band]);
-            transfer[period][band] = quietmap_energy_from_db(-(air_db + forest_db))
-                * (p * quietmap_energy_from_db(-attenuation[QUIETMAP_STATE_FAVOURABLE][band])
-                   + (1.0f - p) * quietmap_energy_from_db(-attenuation[QUIETMAP_STATE_HOMOGENEOUS][band]));
+            const float air_db = atmospheric_attenuation_db(
+                weather.absorption_mean_db_per_km[period][band],
+                weather.absorption_variance_db2_per_km2[period][band], slant_m);
+            const float foliage_db[2] = {foliage_band_db(foliage_h_m, band),
+                                           foliage_band_db(foliage_f_m, band)};
+            transfer[period][band] = quietmap_energy_from_db(-air_db)
+                * (p
+                       * quietmap_energy_from_db(
+                           -(attenuation[QUIETMAP_STATE_FAVOURABLE][band]
+                             + foliage_db[QUIETMAP_STATE_FAVOURABLE]))
+                   + (1.0f - p)
+                         * quietmap_energy_from_db(
+                             -(attenuation[QUIETMAP_STATE_HOMOGENEOUS][band]
+                               + foliage_db[QUIETMAP_STATE_HOMOGENEOUS])));
         }
     }
 }

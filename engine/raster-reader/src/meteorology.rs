@@ -1,9 +1,11 @@
 //! One square's ERA5 climatology window and continuous receiver/direction sampling.
 use grid::{raster::RasterWindow, square_name, Square};
 use std::{
+    collections::HashMap,
     fs::File,
     io::Read,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 pub const ROWS: usize = 721;
@@ -50,6 +52,7 @@ pub struct Meteorology {
     window: RasterWindow,
     nodes: Vec<MeteorologyNode>,
     maximum_probability: [f32; 3],
+    alpha_min_db_per_km: [f32; 8],
 }
 
 impl Meteorology {
@@ -118,11 +121,36 @@ impl Meteorology {
             }
             nodes.push(node);
         }
-        Ok(Self {
-            window,
-            nodes,
-            maximum_probability: maxima.map(|p| f32::from(p) / 100.0),
-        })
+        Ok(Self::build(window, nodes, maxima.map(|p| f32::from(p) / 100.0)))
+    }
+
+    /// A window from already-parsed nodes (the synthetic defaults window of a release
+    /// without files, test fixtures): panics on contract-invalid values, a programming
+    /// error, not data.
+    pub fn from_nodes(window: RasterWindow, nodes: Vec<MeteorologyNode>) -> Self {
+        assert!(!nodes.is_empty(), "meteorology window without nodes");
+        let mut maxima = [0u8; 3];
+        for node in &nodes {
+            for (period, maximum) in maxima.iter_mut().enumerate() {
+                for sector in 0..SECTORS {
+                    assert!(node.p_percent[period][sector] <= 100, "p outside 0..100 percent");
+                }
+                *maximum = (*maximum).max(*node.p_percent[period].iter().max().unwrap());
+                for band in 0..8 {
+                    let (mean, variance) = (node.alpha_mean[period][band], node.alpha_variance[period][band]);
+                    assert!(
+                        mean.is_finite() && mean >= 0.0 && variance.is_finite() && variance >= 0.0,
+                        "nonfinite or negative absorption moment"
+                    );
+                }
+            }
+        }
+        Self::build(window, nodes, maxima.map(|p| f32::from(p) / 100.0))
+    }
+
+    fn build(window: RasterWindow, nodes: Vec<MeteorologyNode>, maximum_probability: [f32; 3]) -> Self {
+        let alpha_min_db_per_km = window_alpha_min_db_per_km(&nodes);
+        Self { window, nodes, maximum_probability, alpha_min_db_per_km }
     }
 
     fn local_index(&self, x: usize, y: usize) -> Option<usize> {
@@ -150,6 +178,72 @@ impl Meteorology {
     pub fn maximum_probability(&self) -> [f32; 3] {
         self.maximum_probability
     }
+
+    /// The window's absorption minima per band [dB/km]: the linear bound of the long-term
+    /// A_atm up to the profile ceiling, sound for every interpolated (μ, σ²).
+    pub fn alpha_min_db_per_km(&self) -> [f32; 8] {
+        self.alpha_min_db_per_km
+    }
+
+    /// The receiver's weather: this window sampled at (latitude, longitude), widened to
+    /// the propagation struct, with the window's extremes behind the relevance bound.
+    pub fn receiver_weather(
+        &self,
+        latitude: f64,
+        longitude: f64,
+    ) -> Result<noise_compute::propagation::meteorology::Meteorology, String> {
+        use noise_compute::propagation::{air_absorption::AbsorptionClimate, meteorology::Meteorology};
+        let sample = self.at(latitude, longitude)?;
+        Ok(Meteorology {
+            favourable_probability: sample.p.map(|row| row.map(f64::from)),
+            absorption: std::array::from_fn(|period| {
+                std::array::from_fn(|band| AbsorptionClimate {
+                    mean_db_per_km: f64::from(sample.alpha_mean[period][band]),
+                    variance_db2_per_km2: f64::from(sample.alpha_variance[period][band]),
+                })
+            }),
+            bound_probability_max: self.maximum_probability.map(f64::from),
+            bound_alpha_min_db_per_km: self.alpha_min_db_per_km.map(f64::from),
+        })
+    }
+}
+
+/// Per band, a linear absorption slope α with α·d ≤ A_atm(d) for every distance to the
+/// profile ceiling and every interpolated (μ, σ²): the unfloored line μ − c·σ²·ceiling,
+/// linear in (μ, σ²) so minimal at a node. Where every node and period peaks inside the
+/// ceiling, the peak-region line tightens it: the receiver's peak μ̄/(4c·r̄) stays above
+/// μ_min/(4c·r_max) (the receiver's ratio stays under the nodes' maximum), so that over
+/// the ceiling lower-bounds the running maximum everywhere too. Anywhere else the peak
+/// line overshoots the unreached peak (Dublin's calm bands read 15 dB/km against a true
+/// 0.4) and must not apply. Rounded down one float.
+fn window_alpha_min_db_per_km(nodes: &[MeteorologyNode]) -> [f32; 8] {
+    const C: f64 = std::f64::consts::LN_10 / 20.0;
+    const CEILING_KM: f64 = noise_compute::propagation::relevance_bound::LINE_REACH_CEILING_M / 1000.0;
+    std::array::from_fn(|band| {
+        let mut linear_min = f64::INFINITY;
+        let mut mean_min = f64::INFINITY;
+        let mut ratio_max = 0.0f64;
+        let mut all_past_peak = true;
+        for node in nodes {
+            for period in 0..3 {
+                let mu = f64::from(node.alpha_mean[period][band]);
+                let var = f64::from(node.alpha_variance[period][band]);
+                linear_min = linear_min.min(mu - C * var * CEILING_KM);
+                mean_min = mean_min.min(mu);
+                if mu > 0.0 {
+                    ratio_max = ratio_max.max(var / mu);
+                }
+                // d_peak = μ/(2c·σ²) inside the ceiling, without dividing by zero.
+                all_past_peak = all_past_peak && var > 0.0 && mu <= 2.0 * C * CEILING_KM * var;
+            }
+        }
+        let peak = if all_past_peak && ratio_max > 0.0 {
+            mean_min / (4.0 * C * CEILING_KM * ratio_max)
+        } else {
+            0.0
+        };
+        (linear_min.max(peak).max(0.0) as f32).next_down().max(0.0)
+    })
 }
 
 /// The file magic names the contract version, so a method change refuses old files.
@@ -207,6 +301,84 @@ fn sample_at(
         }
     }
     Ok(result)
+}
+
+/// Per-square meteorology windows beside the prepared rasters, loaded once: the painter's
+/// receiver weather (the popup samples the same windows through `RealRasters::weather`).
+pub struct WeatherCache {
+    root: PathBuf,
+    /// By receiver square (`None` = missing or refused file, the long-standing defaults;
+    /// warned once per square).
+    windows: Mutex<HashMap<Square, Option<Arc<Meteorology>>>>,
+}
+
+impl WeatherCache {
+    pub fn new(root: &Path) -> Self {
+        Self { root: root.to_path_buf(), windows: Mutex::new(HashMap::new()) }
+    }
+
+    /// One receiver's weather: its own square's window sampled at the receiver, the
+    /// long-standing defaults where the square has no (readable) file.
+    pub fn weather(
+        &self,
+        latitude: f64,
+        longitude: f64,
+    ) -> noise_compute::propagation::meteorology::Meteorology {
+        use noise_compute::propagation::meteorology::Meteorology;
+        let square = grid::square_of(latitude, longitude);
+        self.window(square)
+            .as_ref()
+            .and_then(|window| window.receiver_weather(latitude, longitude).ok())
+            .unwrap_or_else(Meteorology::defaults)
+    }
+
+    /// The bound extremes over squares: per-period p maxima, per-band α minima
+    /// (a square without a file contributes the defaults, matching the receiver
+    /// fallback). The painter's row envelope: every painted receiver samples one of
+    /// these windows, so no receiver's bound outruns it.
+    pub fn envelope_maxima(&self, squares: &[Square]) -> ([f64; 3], [f64; 8]) {
+        use noise_compute::propagation::meteorology::Meteorology;
+        let mut pmax = [0.0f64; 3];
+        let mut amin = [f64::INFINITY; 8];
+        for square in squares {
+            let (p, a) = match self.window(*square) {
+                Some(window) => (
+                    window.maximum_probability().map(f64::from),
+                    window.alpha_min_db_per_km().map(f64::from),
+                ),
+                None => {
+                    let defaults = Meteorology::defaults();
+                    (defaults.bound_probability_max, defaults.bound_alpha_min_db_per_km)
+                }
+            };
+            for period in 0..3 {
+                pmax[period] = pmax[period].max(p[period]);
+            }
+            for band in 0..8 {
+                amin[band] = amin[band].min(a[band]);
+            }
+        }
+        (pmax, amin)
+    }
+
+    fn window(&self, square: Square) -> Option<Arc<Meteorology>> {
+        let mut windows = self.windows.lock().unwrap();
+        if let Some(cached) = windows.get(&square) {
+            return cached.clone();
+        }
+        let path = Meteorology::path(&self.root, square);
+        let loaded = match Meteorology::load(&path, square) {
+            Ok(window) => Some(Arc::new(window)),
+            Err(error) => {
+                if std::fs::metadata(&path).is_ok() {
+                    eprintln!("raster-reader: REFUSED square {square:?}: {error}");
+                }
+                None
+            }
+        };
+        windows.insert(square, loaded.clone());
+        loaded
+    }
 }
 
 #[cfg(test)]

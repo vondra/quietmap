@@ -205,6 +205,23 @@ __device__ __forceinline__ float state_length(int state, float radius, PlanePoin
     return state == QUIETMAP_STATE_HOMOGENEOUS ? chord : chord + arc_excess(chord, radius);
 }
 
+/// rubber_band.rs ray_height_above_chord: height the state's direct ray stands above the
+/// S-R chord at horizontal distance `x` (the stream and the foliage walk share it).
+__device__ __forceinline__ float ray_height_above_chord(float length, PlanePoint source,
+                                                        PlanePoint receiver, float gamma,
+                                                        int state, float x) {
+    if (state == QUIETMAP_STATE_HOMOGENEOUS) {
+        return 0.0f;
+    }
+    const float chord = hypotf(receiver.x - source.x, receiver.z - source.z);
+    const float along = x * chord / length;
+    const float offset = along - 0.5f * chord;
+    const float perpendicular = along * (chord - along)
+        / (sqrtf(fmaxf(gamma * gamma - offset * offset, 0.0f))
+           + sqrtf(gamma * gamma - 0.25f * chord * chord));
+    return perpendicular * chord / length;
+}
+
 /// rubber_band.rs StateRay::path_difference over points[0..count): Σ state lengths − |from to|
 /// with the single-point sign rules (homogeneous −excess below the chord; favourable (2.5.26)
 /// above the straight chord, else (2.5.27) with A on the straight chord).

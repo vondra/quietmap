@@ -101,6 +101,11 @@ impl StateRay {
         }
     }
 
+    /// Absolute altitude of the state's direct ray above horizontal distance `x`.
+    pub(crate) fn altitude_at(&self, source: PlanePoint, receiver: PlanePoint, x: f64) -> f64 {
+        chord_altitude(source, receiver, x) + self.ray_height_above_chord(source, receiver, x)
+    }
+
     /// Height the state's ray stands above the S–R chord at horizontal distance `x`.
     fn ray_height_above_chord(&self, source: PlanePoint, receiver: PlanePoint, x: f64) -> f64 {
         match self.state {

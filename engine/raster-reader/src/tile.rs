@@ -121,6 +121,11 @@ impl TileStore {
         }
     }
 
+    /// The rasters root the store reads (the meteorology files sit next to the channels).
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     fn get_tile(&self, square: Square) -> Option<Arc<RawTile>> {
         let touched = self.use_counter.fetch_add(1, Ordering::Relaxed);
         {

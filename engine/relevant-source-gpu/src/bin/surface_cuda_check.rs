@@ -147,13 +147,12 @@ struct Uploaded {
     buildings: DeviceBuffer<u8>,
     footprints: DeviceBuffer<u32>,
     maximum_heights: DeviceBuffer<f32>,
-    weather: DeviceBuffer<DeviceWeather>,
     raster_geometry: DeviceRasterGeometry,
     source_count: u32,
 }
 
 impl Uploaded {
-    fn new(scene: &Scene, sources: &[DeviceLineSource], weather: &Meteorology) -> Result<Self> {
+    fn new(scene: &Scene, sources: &[DeviceLineSource]) -> Result<Self> {
         let flat = FlattenedObstacleGeometry::from_set(&scene.frame, &scene.obstacles);
         Ok(Self {
             sources: DeviceBuffer::from_slice(sources)?,
@@ -166,7 +165,6 @@ impl Uploaded {
             buildings: DeviceBuffer::from_slice(&flat.edge_is_building)?,
             footprints: DeviceBuffer::from_slice(&flat.edge_footprint_id)?,
             maximum_heights: DeviceBuffer::from_slice(&flat.cell_maximum_heights)?,
-            weather: DeviceBuffer::from_slice(&[DeviceWeather::from_meteorology(weather)])?,
             raster_geometry: DeviceRasterGeometry::for_grid(&scene.frame, &scene.grid),
             source_count: sources.len() as u32,
         })
@@ -184,7 +182,6 @@ impl Uploaded {
             obstacle_cell_maximum_heights: self.maximum_heights.as_ptr(),
             obstacle_edge_is_building: self.buildings.as_ptr(),
             obstacle_edge_footprint_id: self.footprints.as_ptr(),
-            weather: self.weather.as_ptr(),
             source_count: self.source_count,
             obstacle_grid_count: self.grids.element_count() as u32,
             pixel_floor_m: 1.0,
@@ -193,8 +190,13 @@ impl Uploaded {
     }
 }
 
-/// A raster of `half_extent_m` around the origin with elevation and IMD from `pixel(x, y)`.
-fn raster(frame: &RegionMetricFrame, half_extent_m: f64, pixel: impl Fn(f64, f64) -> (f32, u8)) -> FusedGrid {
+/// A raster of `half_extent_m` around the origin with elevation, IMD, forest cover and
+/// canopy height from `pixel(x, y)`.
+fn raster(
+    frame: &RegionMetricFrame,
+    half_extent_m: f64,
+    pixel: impl Fn(f64, f64) -> (f32, u8, u8, u8),
+) -> FusedGrid {
     let cell_deg = 1.0 / 3600.0;
     let rows = (2.0 * half_extent_m / (cell_deg * grid::geo::M_PER_DEG_LAT)).ceil() as usize + 2;
     let cols = (2.0 * half_extent_m / (cell_deg * frame.metres_per_longitude_degree())).ceil() as usize + 2;
@@ -204,8 +206,8 @@ fn raster(frame: &RegionMetricFrame, half_extent_m: f64, pixel: impl Fn(f64, f64
     for row in 0..rows {
         for column in 0..cols {
             let [x, y] = frame.encode(lat_min + row as f64 * cell_deg, lon_min + column as f64 * cell_deg);
-            let (elevation, imd) = pixel(f64::from(x), f64::from(y));
-            data.push(FusedPixel { elevation, forest: 0, imd, canopy_m: 0 });
+            let (elevation, imd, forest, canopy_m) = pixel(f64::from(x), f64::from(y));
+            data.push(FusedPixel { elevation, forest, imd, canopy_m });
         }
     }
     FusedGrid::from_pixels(lat_min, lon_min, rows, cols, data)
@@ -215,7 +217,12 @@ fn flat_scene(imd: u8) -> Scene {
     let frame = RegionMetricFrame::for_latitude_longitude(ORIGIN.0, ORIGIN.1);
     Scene {
         name: format!("flat imd={imd}"),
-        grid: raster(&frame, 1500.0, |_, _| (0.0, imd)),
+        grid: raster(&frame, 1500.0, |_, y| {
+            // A 15 m closed stand north of the sources: rays to the far receivers
+            // cross its edge, near ones stay out — both lanes walk the same samples.
+            let (forest, canopy_m) = if y > 150.0 { (100, 15) } else { (0, 0) };
+            (0.0, imd, forest, canopy_m)
+        }),
         frame,
         obstacles: ObstacleSet::empty(),
     }
@@ -234,7 +241,7 @@ fn relief_scene() -> Scene {
         } else {
             0
         };
-        (ridge as f32, imd)
+        (ridge as f32, imd, 0, 0)
     });
     let at = |x: f64, y: f64| {
         let [lat, lon] = frame.decode(x as f32, y as f32);
@@ -272,9 +279,11 @@ fn main() -> Result<()> {
         noise_compute::propagation::air_absorption::AbsorptionClimate {
             mean_db_per_km: mean,
             variance_db2_per_km2: 0.25 * mean * mean,
-            minimum_db_per_km: 0.1 * mean,
         }
     }));
+    varied_weather.bound_probability_max = [0.3, 0.6, 0.9];
+    varied_weather.bound_alpha_min_db_per_km =
+        default_weather.bound_alpha_min_db_per_km.map(|alpha| 0.5 * alpha);
     // Formation is the raster datum; this known offset puts A/B at 0.5/4.0 m above railhead.
     let railhead_offset_m = 0.7;
     let sources = [
@@ -322,7 +331,7 @@ fn main() -> Result<()> {
             (relief_scene(), 0.5),
         ] {
             let devices: Vec<_> = sources.iter().map(Source::device).collect();
-            let uploaded = Uploaded::new(&scene, &devices, &weather)?;
+            let uploaded = Uploaded::new(&scene, &devices)?;
             let pointers = uploaded.pointers();
             for (source_index, source) in sources.iter().enumerate() {
                 let count = receivers.len();
@@ -334,6 +343,7 @@ fn main() -> Result<()> {
                     &DeviceBuffer::from_slice(&receivers.iter().map(|r| r[0]).collect::<Vec<_>>())?,
                     &DeviceBuffer::from_slice(&receivers.iter().map(|r| r[1]).collect::<Vec<_>>())?,
                     &DeviceBuffer::from_slice(&vec![0.0; count])?,
+                    &DeviceBuffer::from_slice(&vec![DeviceWeather::from_meteorology(&weather); count])?,
                 )?;
                 let (mut largest, mut over_tenth, mut compared) = (0.0_f64, 0, 0);
                 for (receiver, gpu_power) in receivers.iter().zip(&gpu) {

@@ -393,7 +393,9 @@ impl FusedGrid {
         for &t in &out.t {
             let (elev, fr_u8, imd_u8, canopy_m) =
                 self.lookup_fused_rc(src_rf + t * d_rf, src_cf + t * d_cf);
-            out.elevation_m.push(elev);
+            // A missing canopy height poisons the elevation with it (mirrors
+            // RealRasters): no consumer may read past a 255 sample.
+            out.elevation_m.push(if canopy_m <= 250 { elev } else { f32::NAN });
             out.canopy_m.push(if canopy_m <= 250 {
                 f32::from(canopy_m)
             } else {
