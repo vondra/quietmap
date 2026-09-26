@@ -27,7 +27,8 @@ struct DeviceLineSource {
     float start_y_m;
     float end_x_m;
     float end_y_m;
-    /// Segment length for a line; footprint exclusion radius for a point.
+    /// 0 for a surface line (its length comes from the endpoints); footprint exclusion
+    /// radius for a point, segment length for a ground-ops microsegment.
     float extent_m;
     float max_distance_m;
     float source_height_m;

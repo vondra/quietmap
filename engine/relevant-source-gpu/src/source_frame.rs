@@ -40,7 +40,8 @@ pub struct DeviceLineSource {
     pub start_y_m: f32,
     pub end_x_m: f32,
     pub end_y_m: f32,
-    /// Segment length for a line; footprint exclusion radius for a point.
+    /// 0 for a surface line (its length comes from the endpoints); footprint exclusion
+    /// radius for a point, segment length for a ground-ops microsegment.
     pub extent_m: f32,
     pub max_distance_m: f32,
     pub source_height_m: f32,
