@@ -200,6 +200,54 @@ class TerrainTest(unittest.TestCase):
         finally:
             terrain_produce.datum_transform = real
 
+    def test_suppressed_grid_edge_errors_fall_back_after_fresh_probe(self):
+        # OSR collapses repeated failures on one transform object into a bare
+        # suppressed message; the fresh probe must recover the grid-edge cause.
+        import terrain_produce
+        real = terrain_produce.datum_transform
+        class Suppressing:
+            def __init__(self):
+                self.errors = 0
+            def TransformPoints(self, points):
+                if any(point[0] < 0 for point in points):
+                    self.errors += 1
+                    if self.errors > 1:
+                        raise RuntimeError('Reprojection failed, err = 2052, further '
+                                           'errors will be suppressed on the transform object.')
+                    raise RuntimeError('Coordinate to transform falls outside grid')
+                return [(x, y, z + 2.0) for x, y, z in points]
+        class GridEdge:
+            def TransformPoints(self, points):
+                if any(point[0] < 0 for point in points):
+                    raise RuntimeError('Coordinate to transform falls outside grid')
+                return [(x, y, z + 2.0) for x, y, z in points]
+        made = []
+        def factory(*args, **kwargs):
+            made.append(True)
+            return Suppressing() if len(made) == 1 else GridEdge()
+        terrain_produce.datum_transform = factory
+        try:
+            window=dict(north_node=2,west_node=-1,rows=2,columns=3,nodes_per_degree=1)
+            values = convert_datum(np.full((2, 3), 10.0), window, 5778)
+            self.assertTrue(np.isnan(values[:, 0]).all())
+            self.assertTrue((values[:, 1:] == 12.0).all())
+        finally:
+            terrain_produce.datum_transform = real
+
+    def test_fresh_probe_keeps_unexpected_datum_errors_loud(self):
+        import terrain_produce
+        real = terrain_produce.datum_transform
+        class Broken:
+            def TransformPoints(self, points):
+                raise RuntimeError('cannot find datum grid')
+        terrain_produce.datum_transform = lambda *args, **kwargs: Broken()
+        try:
+            window=dict(north_node=1,west_node=0,rows=1,columns=1,nodes_per_degree=1)
+            with self.assertRaisesRegex(RuntimeError, 'cannot find datum grid'):
+                convert_datum(np.full((1, 1), 10.0), window, 5778)
+        finally:
+            terrain_produce.datum_transform = real
+
     def assemble_mem(self, national_value):
         from terrain_produce import assemble_with_statistics
         window = dict(north_node=100, west_node=0, rows=100, columns=100,

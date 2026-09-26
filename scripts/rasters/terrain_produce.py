@@ -72,28 +72,44 @@ def past_grid_edge(error):
     return 'falls outside grid' in message or 'evaluates to nodata' in message
 
 
-def convert_row_or_none(transform, points):
-    """Convert one row, or return None when out-of-grid nodes need per-point isolation."""
+def convert_row_or_none(transform, points, fresh):
+    """Convert one row, or return None when out-of-grid nodes need per-point isolation.
+
+    OSR collapses repeated failures on one transform object into a bare
+    suppressed message that hides the grid-edge cause; one fresh probe
+    recovers the true verdict for that row.
+    """
     try:
         converted = np.asarray(transform.TransformPoints(points))
     except RuntimeError as error:
-        if not past_grid_edge(error):
+        if past_grid_edge(error):
+            return None
+        try:
+            converted = np.asarray(fresh().TransformPoints(points))
+        except RuntimeError as fresh_error:
+            if past_grid_edge(fresh_error):
+                return None
             raise
-        return None
     # PROJ returns inf instead of raising for nodata cells inside the grid rectangle.
     return converted if np.isfinite(converted).all() else None
 
 
-def convert_singly(transform, row_values, valid, points):
+def convert_singly(transform, row_values, valid, points, fresh):
     """Convert one failed row point by point; out-of-grid nodes fall back, anything else raises."""
     for index, point in zip(valid, points):
         try:
             _, _, height = transform.TransformPoints([point])[0]
         except RuntimeError as error:
-            if not past_grid_edge(error):
-                raise
-            row_values[index] = np.nan
-            continue
+            if past_grid_edge(error):
+                row_values[index] = np.nan
+                continue
+            try:
+                _, _, height = fresh().TransformPoints([point])[0]
+            except RuntimeError as fresh_error:
+                if not past_grid_edge(fresh_error):
+                    raise
+                row_values[index] = np.nan
+                continue
         row_values[index] = height if np.isfinite(height) else np.nan
 
 
@@ -106,6 +122,7 @@ def convert_datum(values, window, vertical_crs, area_of_interest=None):
     if vertical_crs == 3855:
         return values
     transform = datum_transform(vertical_crs, area_of_interest)
+    fresh = lambda: datum_transform(vertical_crs, area_of_interest)
     density = window['nodes_per_degree']
     columns = (window['west_node'] + np.arange(window['columns'])) / density
     had = bool(np.isfinite(values).any())
@@ -115,9 +132,9 @@ def convert_datum(values, window, vertical_crs, area_of_interest=None):
         if not len(valid):
             continue
         points = [(float(columns[c]), latitude, float(values[row, c])) for c in valid]
-        converted = convert_row_or_none(transform, points)
+        converted = convert_row_or_none(transform, points, fresh)
         if converted is None:
-            convert_singly(transform, values[row], valid, points)
+            convert_singly(transform, values[row], valid, points, fresh)
         else:
             values[row, valid] = converted[:, 2]
     if had and not np.isfinite(values).any():
