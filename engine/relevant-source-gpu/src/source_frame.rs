@@ -49,7 +49,7 @@ pub struct DeviceLineSource {
     pub flags: u32,
     /// Gs of (2.5.14) under a line source (road 0, ballast 1, deck 0); a point samples its own.
     pub source_ground_factor: f32,
-    /// A line source's platform half-width (METHOD.md §2.2); 0 for points.
+    /// A line source's platform half-width; 0 for points.
     pub platform_half_width_m: f32,
     pub emission_linear: [f32; PERIOD_COUNT * BAND_COUNT],
 }

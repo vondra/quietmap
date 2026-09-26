@@ -637,8 +637,9 @@ painter runs the same ray in f32 (`relevant_source_cnossos_stream.cuh`).
 - A_ground (2.5.14)–(2.5.20): the homogeneous state uses G′path, blending in the source ground
   Gs on short paths; the favourable state uses the modified heights of (2.5.19) and the lower
   bound (2.5.20) on the unmodified heights; a hard path is −3 dB homogeneous and the bound
-  favourable. Gs: road carriageway and bridge decks 0, ballast 1, embedded tram track 0; a point
-  source the ground under it.
+  favourable. Height sums below one millimetre use one millimetre in the ratios of (2.5.14),
+  (2.5.19) and (2.5.20). Gs: road carriageway and bridge decks 0, ballast 1, embedded tram
+  track 0; a point source the ground under it.
 - A_dif (2.5.21)–(2.5.32): Δdif = 10·lg(3 + 40·C″·δ/λ) with C_h = 1 and C″ for two or more
   points spanning more than 0.3 m; the ground correction split on both sides; only Δdif(S,R)
   is capped at 25 dB; a source or receiver below its side's plane takes that side's A_ground
@@ -678,7 +679,7 @@ painter runs the same ray in f32 (`relevant_source_cnossos_stream.cuh`).
   walls within 0.18 dB (the largest a wide-bucket mask bin at a wall edge moving in f32),
   under both default and distinct per-period, per-sector weather with nonzero absorption
   variance and varied window bounds.
-- The literal standard is not monotone in obstacle height (W2 `edge-height-monotonicity.txt`);
+- The literal standard is not monotone in obstacle height;
   what holds is that adding a candidate never shortens the rubber band.
 
 Where a square has no `meteorology.bin` file, every period uses the same default absorption
@@ -711,7 +712,8 @@ centre), never above the window p_max the extract-time envelope was built at, an
 is the window's linear absorption bound per band (the peak-region line only where every
 node and period peaks inside the ceiling; elsewhere it overshoots the unreached peak).
 A row reaches as far as its bound's Lden stays above the 30 dB display edge; no ray
-outruns the 11,872 m profile cadence ceiling. The painter's pair gate evaluates the
+outruns the 11,872 m profile cadence ceiling. Point-layer reach radii stay hand-set per
+layer; only the pair skip uses the bound. The painter's pair gate evaluates the
 window-maximum bound per receiver from the uploaded extremes.
 
 The painter streams the ray: samples and crossings in chainage order (the scene's obstacles are

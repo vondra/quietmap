@@ -14,7 +14,7 @@ pub struct RayPathInputs {
     /// Gs of (2.5.14).
     pub source_ground_factor: f64,
     /// Within this distance of the source the terrain may not rise above the source ground
-    /// (METHOD.md §2.2 platform rule; 0 for point sources).
+    /// (the platform rule; 0 for point sources).
     pub platform_half_width_m: f64,
     /// Building crossings nearer the source than this are its own footprint.
     pub exclusion_radius_m: f64,

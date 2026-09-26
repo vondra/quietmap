@@ -40,8 +40,8 @@ impl RailTraffic {
     }
 }
 
-/// Half-width of a single-track rail platform (METHOD.md §2.2 proposal, 2.5 m per track, until
-/// W4 delivers track counts and formation widths; no measured provenance).
+/// Half-width of a single-track rail platform: 2.5 m per track, without measured
+/// provenance, until the extract carries per-row track counts and formation widths.
 pub const RAIL_PLATFORM_HALF_WIDTH_M: f64 = 2.5;
 
 /// How a rail row radiates around the track: omnidirectional until W4's D1 emission, fitted with
