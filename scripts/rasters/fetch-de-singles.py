@@ -41,7 +41,11 @@ PROVIDERS = {
         base='https://daten-hamburg.de/opendata/fernerkundung_hoehenmodelle/dgm',
         licence='Datenlizenz Deutschland - Namensnennung - Version 2.0',
         licence_url='https://www.govdata.de/dl-de/by-2-0',
-        group='DE-HH-DGM1', epsg=25832, spacing=1),
+        group='DE-HH-DGM1', epsg=25832, spacing=1,
+        # Members declare float-min nodata but mark most voids as AdV -9999
+        # (two tiles use float-min pixels); trusting the tag alone averages
+        # the -9999 voids into the terrain.
+        src_nodata=(-9999.0, -3.4028234663852886e+38)),
     'de-sl-dgm1': dict(
         files={f'DGM1_tif_{lk}_EPSG-25832_Entstehung-2025.zip': f'ALS 2025, district {lk}'
                for lk in ('MZG', 'NK', 'SB', 'SLS', 'SPK', 'WND')},
@@ -127,6 +131,8 @@ def decode_geotiff_archive(root, provider, members_of, epoch_of, method, workers
                     tmp = handle.name
                 if config['spacing'] == 5:
                     normalize_grid(tmp, out_path, assign_epsg=config['epsg'])
+                elif 'src_nodata' in config:
+                    reduce_geotiff(tmp, out_path, config['src_nodata'])
                 else:
                     reduce_geotiff(tmp, out_path, band_nodata(tmp))
                 Path(tmp).unlink()
@@ -136,7 +142,12 @@ def decode_geotiff_archive(root, provider, members_of, epoch_of, method, workers
 
         with ThreadPoolExecutor(max_workers=workers) as pool:
             names.extend(pool.map(decode_one, members))
-    names.sort()
+    # One tile can ship in two Kreise zips; the first zip's bytes are kept
+    # (later decodes skip complete grids), so list it once with its epoch.
+    deduped = {}
+    for name, epoch in names:
+        deduped.setdefault(name, epoch)
+    names = sorted(deduped.items())
     publish_listing(root, provider, names)
     return names
 

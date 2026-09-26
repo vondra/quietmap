@@ -38,7 +38,10 @@ PROVIDERS = {
         extent=(387999.5, 5263999.5, 611000.5, 5520000.5), epsg=25832,
         licence='Datenlizenz Deutschland - Namensnennung - Version 2.0',
         licence_url='https://www.govdata.de/dl-de/by-2-0', group='DE-BW-DGM1',
-        epoch='mixed ALS epochs served as the current WCS mosaic'),
+        epoch='mixed ALS epochs served as the current WCS mosaic',
+        # Out-of-coverage responses carry 32768 (besides the declared tag);
+        # no terrain in Baden-Württemberg sits there.
+        void_value=32768.0),
     'de-bb-dgm1': dict(
         endpoint='https://isk.geobasis-bb.de/ows/dgm_wcs', coverage='bb_dgm', axes=('x', 'y'),
         scale_axes=('x', 'y'),
@@ -106,12 +109,15 @@ def fetch_window(root, provider, box, delay, state, done):
     band = dataset.GetRasterBand(1)
     nodata = band.GetNoDataValue()
     size = (dataset.RasterXSize, dataset.RasterYSize)
+    exact = config.get('void_value') is not None
     try:
-        minimum, maximum, _, _ = band.ComputeStatistics(False)
+        minimum, maximum, _, _ = band.ComputeStatistics(exact)
     except RuntimeError:
         minimum = maximum = nodata
+    band = None
     dataset = None
-    if nodata is not None and minimum == maximum == nodata:
+    voids = {nodata} | ({config['void_value']} if exact else set())
+    if nodata is not None and minimum == maximum and minimum in voids:
         # A fully empty window adds no coverage; the manifest still records it.
         entry = dict(url=url, raw_bytes=raw_path.stat().st_size, raw_sha256=digest(raw_path),
                      derived=None, derived_sha256=None, derived_bytes=0,
@@ -123,7 +129,8 @@ def fetch_window(root, provider, box, delay, state, done):
     if min(size) < 2:
         raise ValueError(f'{raw_path}: degenerate WCS window')
     # Brandenburg answers carry no projection; the documented request CRS is assigned.
-    normalize_grid(raw_path, out_path, assign_epsg=config['epsg'])
+    extras = (config['void_value'],) if exact else ()
+    normalize_grid(raw_path, out_path, assign_epsg=config['epsg'], extra_nodata=extras)
     assert_crs(out_path, config['epsg'], VERTICAL_EPSG)
     derive_provenance(raw_path, out_path,
                       f'Normalised {RESOLUTION_METRES} m WCS window from the verified DGM1 response')

@@ -152,7 +152,9 @@ def reduce_geotiff(source, target, src_nodata, factor=DERIVED_METRES, epsg=None)
         raise ValueError(f'{source}: non-square pixels {transform[1:6:4]}')
     values = dataset.GetRasterBand(1).ReadAsArray().astype(np.float64)
     nodata = src_nodata if src_nodata is not None else dataset.GetRasterBand(1).GetNoDataValue()
-    if nodata is not None and np.isfinite(nodata):
+    if isinstance(nodata, (tuple, list)):
+        values[np.isin(values, nodata)] = np.nan
+    elif nodata is not None and np.isfinite(nodata):
         values[values == nodata] = np.nan
     # Block averaging needs whole blocks from the tile's west/north edges.
     factor_cells = int(round(factor / step))
@@ -213,12 +215,13 @@ def reduce_xyz(path, target, spacing, epsg, factor=DERIVED_METRES, src_nodata=-9
                 valid_fraction=float(np.mean(np.isfinite(mean))))
 
 
-def normalize_grid(raw, derived, assign_epsg=None):
+def normalize_grid(raw, derived, assign_epsg=None, extra_nodata=()):
     """Compress an already-5 m grid, remap its nodata and verify or assign its CRS.
 
     gdal.Translate's nodata flag only retags; the source void value (0 in
     UInt16 coverages, 3.4e38 in Float32 ones) is remapped to the derived
-    nodata explicitly so voids never become 0 m or 3.4e38 m terrain. A grid
+    nodata explicitly so voids never become 0 m or 3.4e38 m terrain, as is
+    any provider-documented extra void fill passed in extra_nodata. A grid
     without any projection (the Brandenburg WCS answers carry none) is
     assigned the documented request CRS; a grid whose embedded EPSG
     contradicts the expectation is refused. Samples never move.
@@ -261,12 +264,17 @@ def normalize_grid(raw, derived, assign_epsg=None):
     if translated is None:
         raise ValueError(f'{raw}: the 5 m grid is unreadable')
     translated = None
-    if not np.isclose(float(src_nodata), DERIVED_NODATA):
+    targets = [] if np.isclose(float(src_nodata), DERIVED_NODATA) else [np.float32(src_nodata)]
+    targets += [np.float32(value) for value in extra_nodata]
+    targets = [value for value in targets if value == value]
+    if targets:
         # The retag above left the void pixels untouched; remap them now.
         fixed = gdal.Open(str(derived), gdal.GA_Update)
-        values = fixed.GetRasterBand(1).ReadAsArray()
-        values[values == np.float32(src_nodata)] = np.float32(DERIVED_NODATA)
-        fixed.GetRasterBand(1).WriteArray(values)
+        band = fixed.GetRasterBand(1)
+        values = band.ReadAsArray()
+        values[np.isin(values, targets)] = np.float32(DERIVED_NODATA)
+        band.WriteArray(values)
+        band = None
         fixed = None
     return True
 

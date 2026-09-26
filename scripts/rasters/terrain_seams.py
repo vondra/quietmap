@@ -30,8 +30,8 @@ def feather(base, national, halo):
     return base + weight * difference, weight, difference
 
 
-def artificial_steps(weight, difference, halo):
-    """Decompose Δ(w*d) = mean(w)*Δd + mean(d)*Δw; gate the selection-weight term."""
+def _induced_steps(weight, difference):
+    """Per-edge selection-weight steps |Δw|·bound for both lattice orientations."""
     steps = []
     for axis in (0, 1):
         low = [slice(None), slice(None)]
@@ -41,10 +41,49 @@ def artificial_steps(weight, difference, halo):
         # At coverage limits, continue the last available residual across the boundary.
         # Weight is zero there; this affects only the conservative error bound.
         bound = np.maximum(np.abs(difference[low]), np.abs(difference[high]))
-        induced = np.abs(np.diff(weight, axis=axis)) * bound
-        core = induced[halo - 1:induced.shape[0] - halo + 1,
-                       halo - 1:induced.shape[1] - halo + 1]
-        steps.append(core[np.isfinite(core) & (core > 0)])
+        steps.append(np.abs(np.diff(weight, axis=axis)) * bound)
+    return steps
+
+
+def _core(field, halo):
+    return field[halo - 1:field.shape[0] - halo + 1, halo - 1:field.shape[1] - halo + 1]
+
+
+def exclusion_edges(rows, columns, bounds, exclusions):
+    """Per-edge exclusion masks for proven-real waiver discs.
+
+    bounds is (west, south, east, north) of the rows-by-columns node grid;
+    exclusions is [(lon, lat, radius_m)]. An edge is excluded when either
+    endpoint node falls inside a disc. Returns one mask per orientation.
+    """
+    west, south, east, north = bounds
+    lons = west + (np.arange(columns) + .5) / columns * (east - west)
+    lats = north - (np.arange(rows) + .5) / rows * (north - south)
+    mean_lat = (south + north) / 2
+    nodes = np.zeros((rows, columns), bool)
+    for lon, lat, radius in exclusions:
+        # Equirectangular metres; waivers span metres, squares span degrees.
+        dx = (lons - lon) * 111320 * np.cos(np.radians(mean_lat))
+        dy = (lats - lat) * 110540
+        inside = dy[:, None] ** 2 + dx[None, :] ** 2 <= radius ** 2
+        nodes |= inside
+    return [nodes[:-1, :] | nodes[1:, :], nodes[:, :-1] | nodes[:, 1:]]
+
+
+def _selected(induced, halo, exclude):
+    core = _core(induced, halo)
+    keep = np.isfinite(core) & (core > 0)
+    if exclude is not None:
+        keep &= ~_core(exclude, halo)
+    return core[keep]
+
+
+def artificial_steps(weight, difference, halo, exclude=None):
+    """Decompose Δ(w*d) = mean(w)*Δd + mean(d)*Δw; gate the selection-weight term."""
+    steps = []
+    for axis, induced in enumerate(_induced_steps(weight, difference)):
+        mask = None if exclude is None else exclude[axis]
+        steps.append(_selected(induced, halo, mask))
     nonzero = np.concatenate(steps)
     maximum = float(nonzero.max(initial=0))
     return dict(evaluated_transition_edges=int(len(nonzero)),
@@ -52,6 +91,34 @@ def artificial_steps(weight, difference, halo):
                 p95_selection_step_m=float(np.percentile(nonzero, 95)) if len(nonzero) else 0,
                 quantization_budget_m=QUANTIZATION_STEP_BUDGET_M,
                 maximum_artificial_step_bound_m=maximum + QUANTIZATION_STEP_BUDGET_M)
+
+
+def accumulate_selection_steps(totals, weight, difference):
+    """Add one group's induced steps to the per-edge running totals, in place."""
+    for axis, induced in enumerate(_induced_steps(weight, difference)):
+        if totals[axis] is None:
+            totals[axis] = induced
+        else:
+            totals[axis] += induced
+
+
+def combined_selection_maximum(totals, halo, exclude=None):
+    """Largest per-edge sum of induced steps: the tight multi-group bound.
+
+    Sequential feathers superpose per edge (triangle inequality), so the true
+    artificial step at an edge never exceeds the summed induced steps there.
+    Summing per-group maxima instead assumes every worst case coincides at one
+    edge; the per-edge sum measures the same bound where it actually occurs.
+    """
+    best = 0.
+    for axis, total in enumerate(totals):
+        if total is None:
+            continue
+        mask = None if exclude is None else exclude[axis]
+        selected = _selected(total, halo, mask)
+        if len(selected):
+            best = max(best, float(selected.max()))
+    return best
 
 
 def require_seam_gate(statistics):

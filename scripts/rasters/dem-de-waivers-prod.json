@@ -1,0 +1,1503 @@
+[
+ {
+  "evidence": {
+   "fallback_m": 350.6,
+   "glo30_c": 350.2,
+   "glo30_med": 332.6,
+   "glo30_min": 232.3,
+   "national_m": 239.9,
+   "tile_cell": 241.4,
+   "tile_center_vs_ring_m": -77.0
+  },
+  "lat": 49.5533,
+  "lon": 6.6097,
+  "radius_m": 1000,
+  "reason": "Quarry: national shows a smooth extended -77 m pit; GLO-30 minimum (232 m) touches the pit floor.",
+  "x": 265,
+  "y": 174
+ },
+ {
+  "evidence": {
+   "fallback_m": 296.7,
+   "glo30_c": 291.2,
+   "national_m": 240.2,
+   "second_national": "RP 240.2 and SL 240.2 agree"
+  },
+  "lat": 49.5264,
+  "lon": 6.6133,
+  "radius_m": 1000,
+  "reason": "Pit -56 m; RP and SL surveys agree.",
+  "x": 265,
+  "y": 174
+ },
+ {
+  "evidence": {
+   "fallback_m": 206.9,
+   "glo30_c": 216.7,
+   "glo30_med": 209.5,
+   "glo30_min": 125.2,
+   "national_m": 146.0,
+   "second_national": "NW 158.0 and RP 146.0 both see the pit"
+  },
+  "lat": 50.7714,
+  "lon": 7.6239,
+  "radius_m": 1000,
+  "reason": "Quarry seen by both Laender surveys (146/158 m) vs globals ~207 m; GLO-30 minimum touches.",
+  "x": 266,
+  "y": 171
+ },
+ {
+  "evidence": {
+   "fallback_m": 171.3,
+   "glo30_med": 161.0,
+   "glo30_range": [
+    66.0,
+    281.0
+   ],
+   "national_m": 88.5,
+   "national_note": "river level 69 m matches the Rhine at Boppard; walls to 316 m"
+  },
+  "lat": 50.1078,
+  "lon": 7.7344,
+  "radius_m": 1500,
+  "reason": "Rhine gorge: national resolves river and walls; 30 m products average across the gorge.",
+  "x": 266,
+  "y": 173
+ },
+ {
+  "evidence": {
+   "fallback_m": 176.4,
+   "fallback_note": "fallback spikes +52 m above its own 21-cell median",
+   "glo30_c": 179.0,
+   "glo30_min": 87.6,
+   "national_m": 70.3,
+   "tile_note": "small 1.6 ha pit (sand/gravel extraction)"
+  },
+  "lat": 52.3189,
+  "lon": 8.0156,
+  "radius_m": 500,
+  "reason": "Small real pit plus an isolated GEDTM30 spike at the same site.",
+  "x": 267,
+  "y": 168
+ },
+ {
+  "evidence": {
+   "fallback_m": 318.9,
+   "glo30_c": 323.0,
+   "glo30_min": 215.6,
+   "national_m": 227.1,
+   "tile_cell": 226.3,
+   "tile_center_vs_ring_m": -83.3,
+   "tile_note": "17 ha quarry"
+  },
+  "lat": 50.4719,
+  "lon": 8.3856,
+  "radius_m": 1000,
+  "reason": "Large quarry (-83 m); GLO-30 minimum touches the pit.",
+  "x": 267,
+  "y": 172
+ },
+ {
+  "evidence": {
+   "fallback_m": 171.3,
+   "glo30_med": 161.0,
+   "national_m": 88.5
+  },
+  "lat": 50.1078,
+  "lon": 7.7344,
+  "radius_m": 1500,
+  "reason": "Rhine gorge, RP side (same gorge as 266/173).",
+  "x": 267,
+  "y": 173
+ },
+ {
+  "evidence": {
+   "fallback_m": 276.7,
+   "glo30_c": 272.0,
+   "national_m": 212.7,
+   "second_national": "RP 213.7 agrees with HE 212.7"
+  },
+  "lat": 50.016,
+  "lon": 7.826,
+  "radius_m": 1000,
+  "reason": "Steep Rhine slope: HE and RP surveys agree; fallback smooths +64 m.",
+  "x": 267,
+  "y": 173
+ },
+ {
+  "evidence": {
+   "fallback_m": 303.4,
+   "glo30_c": 321.5,
+   "national_m": 264.8,
+   "second_national": "HE 264.8 and RP 264.8 agree"
+  },
+  "lat": 50.0139,
+  "lon": 7.8606,
+  "radius_m": 1000,
+  "reason": "Dip -35 m on the Rhine slope; HE and RP surveys agree.",
+  "x": 267,
+  "y": 173
+ },
+ {
+  "evidence": {
+   "glo30_note": "GLO-30 straddles the active face (94-152 m)",
+   "national_m": 79.2,
+   "ni_tile_2016_m": 141.8,
+   "nw_current_m": 79.2
+  },
+  "lat": 52.1529,
+  "lon": 9.05,
+  "radius_m": 800,
+  "reason": "Obernkirchen quarry straddling the NI/NW border; NI 2016 tile shows the pre-expansion plateau (142 m), the current NW survey the expanded pit (79 m).",
+  "x": 268,
+  "y": 168
+ },
+ {
+  "evidence": {
+   "fallback_m": 359.5,
+   "glo30_c": 394.7,
+   "glo30_med": 373.0,
+   "national_m": 417.7,
+   "second_national": "HE 416.9 and NW 418.5 agree"
+  },
+  "lat": 51.3719,
+  "lon": 8.7267,
+  "radius_m": 1000,
+  "reason": "Hill/heap +58 m; HE and NW surveys agree.",
+  "x": 268,
+  "y": 170
+ },
+ {
+  "evidence": {
+   "fallback_m": 397.2,
+   "glo30_c": 398.6,
+   "national_m": 344.2,
+   "tile_center_vs_ring_m": -31.0
+  },
+  "lat": 51.3803,
+  "lon": 8.8053,
+  "radius_m": 800,
+  "reason": "Quarry pit (-31 m vs surroundings).",
+  "x": 268,
+  "y": 170
+ },
+ {
+  "evidence": {
+   "fallback_m": 353.8,
+   "glo30_c": 360.0,
+   "national_m": 319.0,
+   "second_national": "HE 319.0 and NW 319.0 agree"
+  },
+  "lat": 51.5133,
+  "lon": 8.9667,
+  "radius_m": 1000,
+  "reason": "Pit -35 m; HE and NW surveys agree.",
+  "x": 268,
+  "y": 170
+ },
+ {
+  "evidence": {
+   "fallback_m": 206.9,
+   "glo30_med": 226.0,
+   "glo30_min": 127.1,
+   "glo30_range": [
+    127.1,
+    398.5
+   ],
+   "national_m": 141.7,
+   "second_national": "BW 128.1 and HE 127.5 agree at the valley floor"
+  },
+  "lat": 49.5515,
+  "lon": 8.6912,
+  "radius_m": 1500,
+  "reason": "Neckar gorge: BW and HE surveys agree; GLO-30 minimum touches the valley floor.",
+  "x": 268,
+  "y": 174
+ },
+ {
+  "evidence": {
+   "fallback_m": 193.7,
+   "glo30_c": 198.4,
+   "national_m": 130.2,
+   "second_national": "BW 130.0 and HE 130.3 agree"
+  },
+  "lat": 49.4506,
+  "lon": 8.9139,
+  "radius_m": 1000,
+  "reason": "Pit -63 m; BW and HE surveys agree.",
+  "x": 268,
+  "y": 174
+ },
+ {
+  "evidence": {
+   "fallback_m": 173.0,
+   "glo30_c": 170.0,
+   "glo30_med": 148.3,
+   "glo30_min": 120.0,
+   "glo30_range": [
+    120.0,
+    243.8
+   ],
+   "national_m": 125.8,
+   "second_national": "BW 125.0 and HE 125.8 agree at the valley floor"
+  },
+  "lat": 49.4419,
+  "lon": 8.9258,
+  "radius_m": 1000,
+  "reason": "Neckar gorge slope: nationals agree at the valley floor; fallback smooths across the gorge; GLO-30 minimum touches the floor.",
+  "x": 268,
+  "y": 174
+ },
+ {
+  "evidence": {
+   "fallback_m": 1744.2,
+   "glo30_c": 1752.5,
+   "glo30_med": 1785.6,
+   "glo30_range": [
+    1483.5,
+    2120.0
+   ],
+   "national_m": 1971.4
+  },
+  "lat": 47.5122,
+  "lon": 12.9231,
+  "radius_m": 1500,
+  "reason": "Watzmann south face: BY resolves the wall (1971 m); 30 m products smooth across it (1744-1752 m).",
+  "x": 274,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 2091.4,
+   "glo30_c": 2092.1,
+   "glo30_med": 2094.7,
+   "glo30_range": [
+    1788.4,
+    2449.9
+   ],
+   "national_m": 2330.0
+  },
+  "lat": 47.4481,
+  "lon": 11.3531,
+  "radius_m": 1500,
+  "reason": "Karwendel wall: BY resolves the face (2330 m); 30 m products smooth across it (2091-2092 m).",
+  "x": 272,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 301.4,
+   "glo30_c": 300.1,
+   "glo30_med": 338.5,
+   "glo30_range": [
+    276.9,
+    507.8
+   ],
+   "national_m": 487.9,
+   "second_national": "HE 487.9 and TH 500.1 agree"
+  },
+  "lat": 50.9111,
+  "lon": 9.9919,
+  "radius_m": 1500,
+  "reason": "Monte Kali spoil heap: HE (488 m) and TH (500 m) agree on the heap; globals predate it (300-301 m); GLO-30 maximum (508 m) touches the heap top.",
+  "x": 270,
+  "y": 171
+ },
+ {
+  "evidence": {
+   "fallback_m": 1787.3,
+   "glo30_c": 1801.1,
+   "glo30_med": 1689.5,
+   "glo30_range": [
+    1472.4,
+    1919.1
+   ],
+   "national_m": 1604.7
+  },
+  "lat": 47.5375,
+  "lon": 10.5628,
+  "radius_m": 1500,
+  "reason": "Ammergau cirque wall: BY resolves the floor (1605 m); 30 m products average across the walls (1787-1801 m).",
+  "x": 271,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1185.2,
+   "glo30_c": 1207.2,
+   "glo30_med": 1192.8,
+   "glo30_range": [
+    928.3,
+    1500.2
+   ],
+   "national_m": 1193.8
+  },
+  "lat": 47.7481,
+  "lon": 12.4117,
+  "radius_m": 1500,
+  "reason": "Chiemgau steep slope: BY (1194 m) matches fallback/GLO-30 at center; 30 m products span 928-1500 m across the relief; trip is the halo ramp on the gradient.",
+  "x": 273,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1337.9,
+   "glo30_c": 1332.0,
+   "glo30_med": 1383.0,
+   "glo30_range": [
+    1032.7,
+    1786.6
+   ],
+   "national_m": 1238.6
+  },
+  "lat": 47.5514,
+  "lon": 11.5817,
+  "radius_m": 1500,
+  "reason": "Bavarian Prealps wall: BY resolves the face (1239 m); 30 m products smooth across it (1332-1338 m).",
+  "x": 272,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 153.2,
+   "glo30_c": 151.6,
+   "glo30_med": 147.3,
+   "glo30_range": [
+    110.7,
+    154.5
+   ],
+   "national_m": 40.3
+  },
+  "lat": 51.5719,
+  "lon": 14.1961,
+  "radius_m": 1500,
+  "reason": "Lusatian lignite pit: BB shows the pit floor (40 m); globals predate the mine (151-153 m).",
+  "x": 276,
+  "y": 170
+ },
+ {
+  "evidence": {
+   "fallback_m": 63.6,
+   "glo30_c": 67.0,
+   "glo30_med": 84.8,
+   "glo30_range": [
+    65.6,
+    109.9
+   ],
+   "national_m": 117.8,
+   "second_national": "SN 117.8 and ST 117.6 agree"
+  },
+  "lat": 51.1636,
+  "lon": 12.2028,
+  "radius_m": 1500,
+  "reason": "Leipzig-south recultivation: SN (117.8 m) and ST (117.6 m) agree; globals show the former pit (64-67 m).",
+  "x": 273,
+  "y": 171
+ },
+ {
+  "evidence": {
+   "fallback_m": 90.1,
+   "glo30_c": 91.5,
+   "glo30_med": 93.4,
+   "glo30_range": [
+    89.4,
+    104.0
+   ],
+   "national_m": -3.0
+  },
+  "lat": 51.8736,
+  "lon": 14.59,
+  "radius_m": 2000,
+  "reason": "Janschwalde pit: BB shows the sub-sea-level floor (-3 m); globals predate it (90-92 m).",
+  "x": 276,
+  "y": 169
+ },
+ {
+  "evidence": {
+   "fallback_m": 490.9,
+   "glo30_c": 497.4,
+   "glo30_med": 531.9,
+   "glo30_range": [
+    446.1,
+    620.6
+   ],
+   "national_m": 452.0,
+   "second_national": "BY 452.0 and TH 452.0 agree"
+  },
+  "lat": 50.4839,
+  "lon": 11.4192,
+  "radius_m": 1000,
+  "reason": "Frankenwald quarry: BY (452.0 m) and TH (452.0 m) agree; globals smooth over it (491-497 m).",
+  "x": 272,
+  "y": 172
+ },
+ {
+  "evidence": {
+   "fallback_m": 227.1,
+   "glo30_c": 228.3,
+   "glo30_med": 203.3,
+   "glo30_range": [
+    154.0,
+    241.2
+   ],
+   "national_m": 185.6,
+   "second_national": "HE 185.6 and NW 185.6 agree"
+  },
+  "lat": 51.5378,
+  "lon": 9.3169,
+  "radius_m": 1000,
+  "reason": "Weser quarry: HE (185.6 m) and NW (185.6 m) agree; globals smooth over it (227-228 m).",
+  "x": 269,
+  "y": 170
+ },
+ {
+  "evidence": {
+   "fallback_m": 1302.3,
+   "glo30_c": 1303.8,
+   "glo30_med": 1349.2,
+   "glo30_range": [
+    1031.0,
+    1477.9
+   ],
+   "national_m": 1293.0
+  },
+  "lat": 47.5189,
+  "lon": 10.3811,
+  "radius_m": 1000,
+  "reason": "Tannheim steep slope, marginal trip: BY (1293 m) matches fallback/GLO-30 at center; relief spans 1031-1478 m; halo ramp on the gradient.",
+  "x": 270,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 475.3,
+   "glo30_c": 469.3,
+   "glo30_med": 506.8,
+   "glo30_range": [
+    408.0,
+    545.5
+   ],
+   "national_m": 447.3,
+   "second_national": "ST 447.3 and TH 440.4 agree"
+  },
+  "lat": 51.6322,
+  "lon": 10.8258,
+  "radius_m": 1000,
+  "reason": "Harz quarry: ST (447.3 m) and TH (440.4 m) agree; globals smooth over it (469-475 m).",
+  "x": 271,
+  "y": 169
+ },
+ {
+  "evidence": {
+   "fallback_m": 223.8,
+   "glo30_c": 226.6,
+   "glo30_med": 217.6,
+   "glo30_range": [
+    104.7,
+    283.2
+   ],
+   "national_m": 221.1,
+   "second_national": "HE 221.1, NI 221.1, NW 220.0 agree"
+  },
+  "lat": 51.6511,
+  "lon": 9.4456,
+  "radius_m": 1000,
+  "reason": "Weser slope, marginal trip: HE/NI/NW agree (~221 m) with fallback/GLO-30 at center; relief spans 105-283 m; halo ramp on the gradient.",
+  "x": 269,
+  "y": 169
+ },
+ {
+  "evidence": {
+   "fallback_m": 122.4,
+   "glo30_c": 125.1,
+   "glo30_med": 103.3,
+   "glo30_range": [
+    80.8,
+    125.1
+   ],
+   "national_m": 81.3,
+   "second_national": "NI 81.3 and ST 81.7 agree"
+  },
+  "lat": 52.3,
+  "lon": 11.0381,
+  "radius_m": 1000,
+  "reason": "Quarry: NI (81.3 m) and ST (81.7 m) agree; globals smooth over it (122-125 m).",
+  "x": 271,
+  "y": 168
+ },
+ {
+  "evidence": {
+   "fallback_m": 2161.9,
+   "glo30_c": 2173.2,
+   "glo30_med": 2156.1,
+   "glo30_range": [
+    1665.8,
+    2506.2
+   ],
+   "national_m": 1918.8
+  },
+  "lat": 47.4494,
+  "lon": 11.4119,
+  "radius_m": 1500,
+  "reason": "Karwendel east wall: BY resolves the face (1919 m); 30 m products smooth across it (2162-2173 m).",
+  "x": 272,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 1312.5,
+   "glo30_c": 1321.3,
+   "glo30_med": 1208.4,
+   "glo30_range": [
+    1121.8,
+    1386.1
+   ],
+   "national_m": 1433.2
+  },
+  "lat": 47.6367,
+  "lon": 11.7158,
+  "radius_m": 1500,
+  "reason": "Prealps secondary crest: BY resolves the ridge (1433 m); 30 m products smooth it (1313-1321 m).",
+  "x": 272,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1554.5,
+   "glo30_c": 1570.1,
+   "glo30_med": 1477.3,
+   "glo30_range": [
+    1334.1,
+    1628.5
+   ],
+   "national_m": 1595.2
+  },
+  "lat": 47.7564,
+  "lon": 12.3683,
+  "radius_m": 1000,
+  "reason": "Chiemgau secondary slope, marginal: BY (1595 m) near fallback/GLO-30 (1555-1570 m); relief spans 1334-1666 m; halo ramp on the gradient.",
+  "x": 273,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 926.3,
+   "glo30_c": 926.8,
+   "glo30_med": 853.9,
+   "glo30_range": [
+    646.7,
+    1174.8
+   ],
+   "national_m": 836.4
+  },
+  "lat": 47.7408,
+  "lon": 12.3122,
+  "radius_m": 1000,
+  "reason": "Chiemgau gorge wall: BY resolves the face (836 m); 30 m products smooth across it (926-927 m).",
+  "x": 273,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1651.4,
+   "glo30_c": 1662.7,
+   "glo30_med": 1596.0,
+   "glo30_range": [
+    1268.9,
+    1766.7
+   ],
+   "national_m": 1570.1
+  },
+  "lat": 47.6747,
+  "lon": 12.6097,
+  "radius_m": 1000,
+  "reason": "Chiemgau secondary wall: BY resolves the face (1570 m); 30 m products smooth across it (1651-1663 m).",
+  "x": 273,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 146.6,
+   "glo30_c": 142.0,
+   "glo30_med": 143.9,
+   "glo30_range": [
+    135.3,
+    158.4
+   ],
+   "national_m": 38.0
+  },
+  "lat": 51.5717,
+  "lon": 14.2456,
+  "radius_m": 1500,
+  "reason": "Lusatian pit second lobe: BB shows the floor (38 m); globals predate the mine (143-147 m).",
+  "x": 276,
+  "y": 170
+ },
+ {
+  "evidence": {
+   "fallback_m": 1065.5,
+   "glo30_c": 1070.6,
+   "glo30_med": 644.9,
+   "glo30_range": [
+    0.0,
+    1641.1
+   ],
+   "national_m": 1273.9
+  },
+  "lat": 47.5164,
+  "lon": 12.9994,
+  "radius_m": 2000,
+  "reason": "Berchtesgaden east wall: BY resolves the face (1274 m); 30 m products smooth across it (1066-1071 m).",
+  "x": 274,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 2070.3,
+   "glo30_c": 2085.4,
+   "glo30_med": 2044.5,
+   "glo30_range": [
+    1810.5,
+    2243.0
+   ],
+   "national_m": 2262.8
+  },
+  "lat": 47.4894,
+  "lon": 13.0372,
+  "radius_m": 1500,
+  "reason": "Berchtesgaden southeast crest: BY resolves the ridge (2263 m); 30 m products smooth it (2070-2085 m).",
+  "x": 274,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 191.4,
+   "glo30_c": 193.9,
+   "glo30_med": 156.2,
+   "glo30_range": [
+    127.7,
+    199.1
+   ],
+   "national_m": 88.0
+  },
+  "lat": 51.1178,
+  "lon": 12.1861,
+  "radius_m": 1500,
+  "reason": "Profen mine lobe: ST shows the pit floor (88 m); globals predate the mine (191-194 m).",
+  "x": 273,
+  "y": 171
+ },
+ {
+  "evidence": {
+   "fallback_m": 344.2,
+   "glo30_c": 343.1,
+   "glo30_med": 350.7,
+   "glo30_range": [
+    310.0,
+    512.9
+   ],
+   "national_m": 431.5,
+   "second_national": "HE 431.5 and TH 430.7 agree"
+  },
+  "lat": 50.8328,
+  "lon": 9.9633,
+  "radius_m": 1500,
+  "reason": "Hattorf spoil heap: HE (431.5 m) and TH (430.7 m) agree on the heap; globals predate it (343-344 m).",
+  "x": 270,
+  "y": 171
+ },
+ {
+  "evidence": {
+   "fallback_m": 1703.4,
+   "glo30_c": 1710.0,
+   "glo30_med": 1578.5,
+   "glo30_range": [
+    1277.5,
+    1846.6
+   ],
+   "national_m": 1850.6
+  },
+  "lat": 47.5619,
+  "lon": 10.8303,
+  "radius_m": 1500,
+  "reason": "Zugspitze forebay crest: BY resolves the ridge (1851 m); 30 m products smooth it (1703-1710 m).",
+  "x": 271,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1593.0,
+   "glo30_c": 1599.9,
+   "glo30_med": 1544.9,
+   "glo30_range": [
+    1327.1,
+    1751.7
+   ],
+   "national_m": 1750.9
+  },
+  "lat": 47.5383,
+  "lon": 10.7417,
+  "radius_m": 1500,
+  "reason": "Ammergau east crest: BY resolves the ridge (1751 m); 30 m products smooth it (1593-1600 m).",
+  "x": 271,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 348.2,
+   "glo30_c": 348.3,
+   "glo30_med": 349.7,
+   "glo30_range": [
+    341.7,
+    415.5
+   ],
+   "national_m": 348.1,
+   "national_note": "BY void at the water patch, median over valid shore pixels"
+  },
+  "lat": 48.3219,
+  "lon": 13.1967,
+  "radius_m": 1000,
+  "reason": "Passau Danube gorge slope, marginal: BY (348 m) matches fallback/GLO-30 at center after void repair; relief spans 342-415 m; halo ramp on the gradient.",
+  "x": 274,
+  "y": 177
+ },
+ {
+  "evidence": {
+   "fallback_m": 1845.6,
+   "glo30_c": 1859.6,
+   "glo30_med": 1836.4,
+   "glo30_range": [
+    1376.8,
+    2226.0
+   ],
+   "national_m": 2025.2
+  },
+  "lat": 47.4372,
+  "lon": 11.3022,
+  "radius_m": 1500,
+  "reason": "Karwendel west crest: BY resolves the ridge (2025 m); 30 m products smooth it (1846-1860 m).",
+  "x": 272,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 2115.7,
+   "glo30_c": 2136.9,
+   "glo30_med": 2008.9,
+   "glo30_range": [
+    1665.3,
+    2264.6
+   ],
+   "national_m": 1945.4
+  },
+  "lat": 47.4789,
+  "lon": 13.0231,
+  "radius_m": 1500,
+  "reason": "Berchtesgaden south cirque: BY resolves the floor (1945 m); 30 m products average across the walls (2116-2137 m).",
+  "x": 274,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 1673.5,
+   "glo30_c": 1669.4,
+   "glo30_med": 1620.4,
+   "glo30_range": [
+    1135.3,
+    1887.6
+   ],
+   "national_m": 1495.7
+  },
+  "lat": 47.5061,
+  "lon": 13.0208,
+  "radius_m": 1500,
+  "reason": "Berchtesgaden north wall: BY resolves the face (1496 m); 30 m products smooth across it (1669-1674 m).",
+  "x": 274,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 1212.2,
+   "glo30_c": 1222.1,
+   "glo30_med": 1154.1,
+   "glo30_range": [
+    830.1,
+    1497.2
+   ],
+   "national_m": 1095.8
+  },
+  "lat": 47.56,
+  "lon": 10.7603,
+  "radius_m": 1500,
+  "reason": "Ammergau north gorge: BY resolves the floor (1096 m); 30 m products average across the walls (1212-1222 m).",
+  "x": 271,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1563.7,
+   "glo30_c": 1619.1,
+   "glo30_med": 1562.3,
+   "glo30_range": [
+    1382.7,
+    1818.7
+   ],
+   "national_m": 1716.4
+  },
+  "lat": 47.5294,
+  "lon": 10.7672,
+  "radius_m": 1500,
+  "reason": "Ammergau east crest: BY resolves the ridge (1716 m); 30 m products smooth it (1564-1619 m).",
+  "x": 271,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1165.3,
+   "glo30_c": 1181.7,
+   "glo30_med": 1130.8,
+   "glo30_range": [
+    856.0,
+    1260.3
+   ],
+   "national_m": 1042.8
+  },
+  "lat": 47.6983,
+  "lon": 12.5556,
+  "radius_m": 1000,
+  "reason": "Chiemgau north wall: BY resolves the face (1043 m); 30 m products smooth across it (1165-1182 m).",
+  "x": 273,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1294.8,
+   "glo30_c": 1296.8,
+   "glo30_med": 1337.5,
+   "glo30_range": [
+    1060.5,
+    1595.6
+   ],
+   "national_m": 1224.7
+  },
+  "lat": 47.6817,
+  "lon": 12.6278,
+  "radius_m": 1000,
+  "reason": "Chiemgau northeast slope: BY resolves the face (1225 m); 30 m products smooth across it (1295-1297 m).",
+  "x": 273,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 17.5,
+   "glo30_c": 16.6,
+   "glo30_med": 64.2,
+   "glo30_range": [
+    16.6,
+    97.5
+   ],
+   "national_m": 117.5
+  },
+  "lat": 51.6078,
+  "lon": 14.1911,
+  "radius_m": 1500,
+  "reason": "Lusatian spoil heap: BB shows the dump (118 m); globals predate it (17-18 m). Inverted relief vs the pit lobes.",
+  "x": 276,
+  "y": 170
+ },
+ {
+  "evidence": {
+   "fallback_m": 1514.2,
+   "glo30_c": 1530.5,
+   "glo30_med": 1505.2,
+   "glo30_range": [
+    1355.7,
+    1816.2
+   ],
+   "national_m": 1572.9
+  },
+  "lat": 47.6408,
+  "lon": 11.8056,
+  "radius_m": 1000,
+  "reason": "Prealps northeast slope, marginal: BY (1573 m) near fallback/GLO-30 (1514-1531 m); relief spans 1356-1816 m; halo ramp on the gradient.",
+  "x": 272,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1215.8,
+   "glo30_c": 1198.7,
+   "glo30_med": 1275.1,
+   "glo30_range": [
+    1005.3,
+    1478.2
+   ],
+   "national_m": 1138.6
+  },
+  "lat": 47.6014,
+  "lon": 11.7769,
+  "radius_m": 1000,
+  "reason": "Prealps east wall: BY resolves the face (1139 m); 30 m products smooth across it (1216-1199 m).",
+  "x": 272,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 165.1,
+   "glo30_c": 165.2,
+   "glo30_med": 164.3,
+   "glo30_range": [
+    150.7,
+    168.1
+   ],
+   "national_m": 62.1
+  },
+  "lat": 51.1003,
+  "lon": 12.1611,
+  "radius_m": 1500,
+  "reason": "Profen south pit lobe: ST shows the floor (62 m); globals predate the mine (165 m, both agree).",
+  "x": 273,
+  "y": 171
+ },
+ {
+  "evidence": {
+   "fallback_m": 1113.1,
+   "glo30_c": 1119.5,
+   "glo30_med": 1056.7,
+   "glo30_range": [
+    606.1,
+    1618.0
+   ],
+   "national_m": 1257.9
+  },
+  "lat": 47.5156,
+  "lon": 12.9717,
+  "radius_m": 1500,
+  "reason": "Konigssee east wall: BY resolves the face (1258 m); 30 m products smooth across it (1113-1120 m).",
+  "x": 274,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 1787.2,
+   "glo30_c": 1795.8,
+   "glo30_med": 1758.1,
+   "glo30_range": [
+    1510.8,
+    2240.3
+   ],
+   "national_m": 1680.8
+  },
+  "lat": 47.4497,
+  "lon": 11.3842,
+  "radius_m": 1500,
+  "reason": "Karwendel central cirque: BY resolves the floor (1681 m); 30 m products average across the walls (1787-1796 m).",
+  "x": 272,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 2122.9,
+   "glo30_c": 2110.9,
+   "glo30_med": 2037.0,
+   "glo30_range": [
+    1802.1,
+    2307.2
+   ],
+   "national_m": 2025.3
+  },
+  "lat": 47.4439,
+  "lon": 11.3283,
+  "radius_m": 1500,
+  "reason": "Karwendel west cirque: BY resolves the floor (2025 m); 30 m products average across the walls (2111-2123 m).",
+  "x": 272,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 1571.0,
+   "glo30_c": 1582.1,
+   "glo30_med": 1562.0,
+   "glo30_range": [
+    1327.5,
+    1907.6
+   ],
+   "national_m": 1682.5
+  },
+  "lat": 47.5772,
+  "lon": 10.9131,
+  "radius_m": 1500,
+  "reason": "Estergebirge crest: BY resolves the ridge (1683 m); 30 m products smooth it (1571-1582 m).",
+  "x": 271,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 149.4,
+   "glo30_c": 156.2,
+   "glo30_med": 145.4,
+   "glo30_range": [
+    131.6,
+    156.4
+   ],
+   "national_m": 45.0
+  },
+  "lat": 51.495,
+  "lon": 14.5633,
+  "radius_m": 2500,
+  "reason": "Nochten pit east lobe: SN shows the floor (45 m); globals predate the mine (149-156 m).",
+  "x": 276,
+  "y": 170
+ },
+ {
+  "evidence": {
+   "fallback_m": 1688.1,
+   "glo30_c": 1694.3,
+   "glo30_med": 1659.2,
+   "glo30_range": [
+    1481.1,
+    1796.4
+   ],
+   "national_m": 1774.9
+  },
+  "lat": 47.6483,
+  "lon": 11.9472,
+  "radius_m": 1000,
+  "reason": "Mangfallgebirge crest, marginal: BY (1775 m) near fallback/GLO-30 (1688-1694 m); relief spans 1481-1816 m; halo ramp on the gradient.",
+  "x": 272,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1069.7,
+   "glo30_c": 1069.9,
+   "glo30_med": 1101.7,
+   "glo30_range": [
+    777.5,
+    1296.6
+   ],
+   "national_m": 997.5
+  },
+  "lat": 47.5739,
+  "lon": 11.5022,
+  "radius_m": 1000,
+  "reason": "Benediktenwand wall: BY resolves the face (998 m); 30 m products smooth across it (1070 m, both agree).",
+  "x": 272,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 769.0,
+   "glo30_c": 782.3,
+   "glo30_med": 666.5,
+   "glo30_range": [
+    473.4,
+    981.8
+   ],
+   "national_m": 681.6
+  },
+  "lat": 47.7025,
+  "lon": 12.1725,
+  "radius_m": 1000,
+  "reason": "Chiemgau west gorge: BY resolves the floor (682 m); 30 m products average across the walls (769-782 m).",
+  "x": 273,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 941.2,
+   "glo30_c": 932.4,
+   "glo30_med": 870.8,
+   "glo30_range": [
+    739.2,
+    1171.2
+   ],
+   "national_m": 872.8
+  },
+  "lat": 47.7036,
+  "lon": 12.6194,
+  "radius_m": 1000,
+  "reason": "Chiemgau northeast gorge: BY resolves the floor (873 m); 30 m products average across the walls (932-941 m).",
+  "x": 273,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 56.2,
+   "glo30_c": 59.1,
+   "glo30_med": 76.4,
+   "glo30_range": [
+    54.8,
+    94.2
+   ],
+   "national_m": 133.4
+  },
+  "lat": 51.1239,
+  "lon": 12.4067,
+  "radius_m": 1500,
+  "reason": "Peres spoil heap: SN shows the dump (133 m); globals predate it (56-59 m, both agree). Inverted relief.",
+  "x": 273,
+  "y": 171
+ },
+ {
+  "evidence": {
+   "fallback_m": 2169.4,
+   "glo30_c": 2181.0,
+   "glo30_med": 2156.7,
+   "glo30_range": [
+    1879.4,
+    2410.4
+   ],
+   "national_m": 2331.4
+  },
+  "lat": 47.4897,
+  "lon": 12.9828,
+  "radius_m": 1500,
+  "reason": "Berchtesgaden south crest: BY resolves the ridge (2331 m); 30 m products smooth it (2169-2181 m).",
+  "x": 274,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 1465.4,
+   "glo30_c": 1455.1,
+   "glo30_med": 1469.0,
+   "glo30_range": [
+    1193.7,
+    1744.8
+   ],
+   "national_m": 1370.3
+  },
+  "lat": 47.3994,
+  "lon": 11.2764,
+  "radius_m": 1000,
+  "reason": "Karwendel southwest wall, marginal: BY (1370 m) near fallback/GLO-30 (1455-1465 m); relief spans 1194-1745 m; halo ramp on the gradient.",
+  "x": 272,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 2205.5,
+   "glo30_c": 2206.8,
+   "glo30_med": 2020.2,
+   "glo30_range": [
+    1615.9,
+    2294.3
+   ],
+   "national_m": 2116.0
+  },
+  "lat": 47.4272,
+  "lon": 11.2853,
+  "radius_m": 1000,
+  "reason": "Karwendel northwest cirque, marginal: BY (2116 m) near fallback/GLO-30 (2206-2207 m); relief spans 1616-2307 m; halo ramp on the gradient.",
+  "x": 272,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 1893.6,
+   "glo30_c": 1898.1,
+   "glo30_med": 1846.1,
+   "glo30_range": [
+    1469.2,
+    2053.6
+   ],
+   "national_m": 1798.8
+  },
+  "lat": 47.5561,
+  "lon": 10.8486,
+  "radius_m": 1000,
+  "reason": "Estergebirge west wall, marginal: BY (1799 m) near fallback/GLO-30 (1894-1898 m); relief spans 1469-2054 m; halo ramp on the gradient.",
+  "x": 271,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1679.4,
+   "glo30_c": 1689.3,
+   "glo30_med": 1648.9,
+   "glo30_range": [
+    1326.0,
+    1919.0
+   ],
+   "national_m": 1582.1
+  },
+  "lat": 47.5194,
+  "lon": 10.9322,
+  "radius_m": 1000,
+  "reason": "Estergebirge south wall, marginal: BY (1582 m) near fallback/GLO-30 (1679-1689 m); relief spans 1326-1919 m; halo ramp on the gradient.",
+  "x": 271,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 37.3,
+   "glo30_c": 36.1,
+   "glo30_med": 78.9,
+   "glo30_range": [
+    32.1,
+    133.4
+   ],
+   "national_m": 121.4
+  },
+  "lat": 51.5944,
+  "lon": 14.2114,
+  "radius_m": 1500,
+  "reason": "Lusatian north heap lobe: BB shows the dump (121 m); globals predate it (36-37 m).",
+  "x": 276,
+  "y": 170
+ },
+ {
+  "evidence": {
+   "fallback_m": 141.4,
+   "glo30_c": 143.4,
+   "glo30_med": 142.0,
+   "glo30_range": [
+    105.0,
+    155.3
+   ],
+   "national_m": 45.5
+  },
+  "lat": 51.5583,
+  "lon": 14.2417,
+  "radius_m": 1500,
+  "reason": "Lusatian central pit lobe: BB shows the floor (46 m); globals predate the mine (141-143 m).",
+  "x": 276,
+  "y": 170
+ },
+ {
+  "evidence": {
+   "fallback_m": 1307.1,
+   "glo30_c": 1318.8,
+   "glo30_med": 1322.3,
+   "glo30_range": [
+    1166.0,
+    1436.6
+   ],
+   "national_m": 1280.6
+  },
+  "lat": 47.7464,
+  "lon": 12.3583,
+  "radius_m": 1000,
+  "reason": "Chiemgau central slope, marginal: BY (1281 m) matches fallback/GLO-30 (1307-1319 m); relief spans 1166-1437 m; halo ramp on the gradient.",
+  "x": 273,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1162.0,
+   "glo30_c": 1168.3,
+   "glo30_med": 1160.3,
+   "glo30_range": [
+    855.4,
+    1369.4
+   ],
+   "national_m": 1244.3
+  },
+  "lat": 47.7228,
+  "lon": 12.1844,
+  "radius_m": 1000,
+  "reason": "Chiemgau far-west wall, marginal: BY (1244 m) near fallback/GLO-30 (1162-1168 m); relief spans 855-1369 m; halo ramp on the gradient.",
+  "x": 273,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1160.8,
+   "glo30_c": 1163.3,
+   "glo30_med": 1134.3,
+   "glo30_range": [
+    808.5,
+    1525.6
+   ],
+   "national_m": 1077.0
+  },
+  "lat": 47.6819,
+  "lon": 12.6564,
+  "radius_m": 1000,
+  "reason": "Reiteralpe wall, marginal: BY (1077 m) near fallback/GLO-30 (1161-1163 m); relief spans 809-1526 m; halo ramp on the gradient.",
+  "x": 273,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 2025.3,
+   "glo30_c": 2039.8,
+   "glo30_med": 1946.0,
+   "glo30_range": [
+    1618.6,
+    2145.1
+   ],
+   "national_m": 2088.2
+  },
+  "lat": 47.4886,
+  "lon": 12.9336,
+  "radius_m": 1000,
+  "reason": "Steinernes Meer crest, marginal: BY (2088 m) near fallback/GLO-30 (2025-2040 m); relief spans 1619-2157 m; halo ramp on the gradient.",
+  "x": 274,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 2269.6,
+   "glo30_c": 2282.4,
+   "glo30_med": 2186.2,
+   "glo30_range": [
+    1996.0,
+    2362.5
+   ],
+   "national_m": 2333.5
+  },
+  "lat": 47.5125,
+  "lon": 12.8936,
+  "radius_m": 1000,
+  "reason": "Watzmann southwest crest, marginal: BY (2334 m) near fallback/GLO-30 (2270-2282 m); relief spans 1996-2387 m; halo ramp on the gradient.",
+  "x": 274,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 1751.7,
+   "glo30_c": 1743.7,
+   "glo30_med": 1738.5,
+   "glo30_range": [
+    1532.4,
+    1939.8
+   ],
+   "national_m": 1674.0
+  },
+  "lat": 47.5506,
+  "lon": 10.8167,
+  "radius_m": 1000,
+  "reason": "Estergebirge central wall, marginal: BY (1674 m) near fallback/GLO-30 (1744-1752 m); relief spans 1532-1940 m; halo ramp on the gradient.",
+  "x": 271,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1501.7,
+   "glo30_c": 1519.3,
+   "glo30_med": 1479.1,
+   "glo30_range": [
+    1248.0,
+    1858.9
+   ],
+   "national_m": 1574.5
+  },
+  "lat": 47.5475,
+  "lon": 10.7867,
+  "radius_m": 1000,
+  "reason": "Estergebirge west wall, marginal: BY (1575 m) near fallback/GLO-30 (1502-1519 m); relief spans 1248-1859 m; halo ramp on the gradient.",
+  "x": 271,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1771.4,
+   "glo30_c": 1774.2,
+   "glo30_med": 1926.4,
+   "glo30_range": [
+    1605.9,
+    2221.8
+   ],
+   "national_m": 1855.3
+  },
+  "lat": 47.4161,
+  "lon": 11.2867,
+  "radius_m": 1500,
+  "reason": "Karwendel southwest cirque: BY resolves the floor (1855 m); 30 m products average across the walls (1771-1774 m).",
+  "x": 272,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 140.1,
+   "glo30_c": 141.1,
+   "glo30_med": 138.6,
+   "glo30_range": [
+    106.0,
+    145.5
+   ],
+   "national_m": 47.2
+  },
+  "lat": 51.5622,
+  "lon": 14.2117,
+  "radius_m": 1500,
+  "reason": "Lusatian west pit lobe: BB shows the floor (47 m); globals predate the mine (140-141 m).",
+  "x": 276,
+  "y": 170
+ },
+ {
+  "evidence": {
+   "fallback_m": 856.8,
+   "glo30_c": 867.4,
+   "glo30_med": 847.0,
+   "glo30_range": [
+    636.1,
+    1024.4
+   ],
+   "national_m": 784.2
+  },
+  "lat": 47.7028,
+  "lon": 12.4676,
+  "radius_m": 1000,
+  "reason": "Chiemgau Saalach wall, marginal: BY (784 m) near fallback/GLO-30 (857-867 m); relief spans 636-1024 m; halo ramp on the gradient.",
+  "x": 273,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 1427.1,
+   "glo30_c": 1434.7,
+   "glo30_med": 1541.7,
+   "glo30_range": [
+    1211.1,
+    1876.5
+   ],
+   "national_m": 1404.9
+  },
+  "lat": 47.5106,
+  "lon": 11.4997,
+  "radius_m": 1000,
+  "reason": "Karwendel northeast slope, marginal: BY (1405 m) near fallback/GLO-30 (1427-1435 m); relief spans 1211-1877 m; halo ramp on the gradient.",
+  "x": 272,
+  "y": 179
+ },
+ {
+  "evidence": {
+   "fallback_m": 1518.8,
+   "glo30_c": 1527.9,
+   "glo30_med": 1554.0,
+   "glo30_range": [
+    1397.7,
+    1797.4
+   ],
+   "national_m": 1559.8
+  },
+  "lat": 47.5847,
+  "lon": 10.8897,
+  "radius_m": 1000,
+  "reason": "Estergebirge northeast slope, marginal: BY (1560 m) near fallback/GLO-30 (1519-1528 m); relief spans 1398-1797 m; halo ramp on the gradient.",
+  "x": 271,
+  "y": 178
+ },
+ {
+  "evidence": {
+   "fallback_m": 387.3,
+   "glo30_c": 389.0,
+   "glo30_med": 387.3,
+   "glo30_range": [
+    370.0,
+    400.9
+   ],
+   "national_m": 387.1,
+   "national_note": "BY void at the water patch, median over valid shore pixels"
+  },
+  "lat": 48.4758,
+  "lon": 13.2383,
+  "radius_m": 1000,
+  "reason": "Repaired water-void rim: BY voids the lake (was 0.0/garbage fill); BY median (387.1 m) matches GLO-30 (387.3 m); trip is the halo ramp on the shore slope.",
+  "x": 274,
+  "y": 176
+ }
+]

@@ -136,5 +136,22 @@ class TerrainTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             convert_datum(np.zeros((1,1)),window,999999)
 
+    def test_waivers_cover_reviewed_sites_not_squares(self):
+        import json
+        from terrain_produce import load_waivers
+        good = [dict(x=266, y=173, lon=7.7344, lat=50.1078, radius_m=1500,
+                     reason='Rhine gorge at Boppard: independent DEM agrees',
+                     evidence=dict(national_m=88.5, fallback_m=171.3, glo30_m=161.0))]
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'waivers.json'
+            path.write_text(json.dumps(good))
+            self.assertEqual(load_waivers(path, {(266, 173)}), good)
+            for bad in (dict(good[0], x=1), dict(good[0], radius_m=40),
+                        dict(good[0], radius_m=6000), dict(good[0], reason=''),
+                        dict(good[0], evidence=[])):
+                path.write_text(json.dumps([bad]))
+                with self.assertRaises(ValueError):
+                    load_waivers(path, {(266, 173)})
+
 
 if __name__ == '__main__': unittest.main()

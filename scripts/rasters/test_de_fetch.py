@@ -261,6 +261,56 @@ class WindowTest(unittest.TestCase):
         self.assertIn('SUBSET=E(500000.0,510000.0)', bw)
         self.assertIn('SCALESIZE=X(2000),Y(2000)', bw)
 
+    def test_window_remaps_bw_void_fill_and_skips_fully_void_windows(self):
+        import numpy as np
+        from osgeo import gdal, osr
+        from unittest.mock import patch
+        import terrain_io
+
+        def serve(grids):
+            def fake(root, provider, name, url, **kwargs):
+                target = Path(root) / provider / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                grid = grids[name]
+                ds = gdal.GetDriverByName('GTiff').Create(str(target), grid.shape[1], grid.shape[0],
+                                                          1, gdal.GDT_Float32)
+                crs = osr.SpatialReference()
+                crs.ImportFromEPSG(25832)
+                ds.SetProjection(crs.ExportToWkt())
+                ds.SetGeoTransform([400000.0, 5.0, 0.0, 5710000.0, 0.0, -5.0])
+                ds.GetRasterBand(1).SetNoDataValue(0)
+                ds.GetRasterBand(1).WriteArray(grid.astype(np.float32))
+                ds = None
+                terrain_io.publish_json(str(target) + '.provenance.json', dict(
+                    url=url, fetched_utc='2026-09-24', sha256=terrain_io.digest(target),
+                    bytes=target.stat().st_size, licence='fixture',
+                    licence_url='https://example.org/licence', terms_checked_utc='2026-09-24'))
+            return fake
+
+        partial = np.array([[285, 0, 300, 32768]] * 2, dtype=np.float64)
+        empty = np.full((2, 4), 32768.0)
+        grids = {'wcs_400000_5700000.raw.tif': partial, 'wcs_410000_5700000.raw.tif': empty}
+        with tempfile.TemporaryDirectory() as temp:
+            journal = Path(temp) / 'de-bw-dgm1' / 'stream-manifest.journal.jsonl'
+            journal.parent.mkdir(parents=True, exist_ok=True)
+            state = {'lock': threading.Lock(), 'last': 0.0, 'journal': journal, 'empty': set()}
+            with patch.object(fetch_wcs, 'fetch', serve(grids)):
+                entry = fetch_wcs.fetch_window(temp, 'de-bw-dgm1',
+                                               (400000.0, 5700000.0, 410000.0, 5710000.0),
+                                               0, state, set())
+                self.assertIsNotNone(entry['derived'])
+                ds = gdal.Open(str(Path(temp) / 'de-bw-dgm1' / 'wcs_400000_5700000.tif'))
+                try:
+                    self.assertEqual(ds.GetRasterBand(1).ReadAsArray().tolist(),
+                                     [[285.0, -9999.0, 300.0, -9999.0]] * 2)
+                finally:
+                    ds = None
+                vacant = fetch_wcs.fetch_window(temp, 'de-bw-dgm1',
+                                                (410000.0, 5700000.0, 420000.0, 5710000.0),
+                                                0, state, set())
+                self.assertIsNone(vacant['derived'])
+                self.assertFalse((Path(temp) / 'de-bw-dgm1' / 'wcs_410000_5700000.tif').exists())
+
 
 class BySourcesTest(unittest.TestCase):
     def test_by_listing_needs_sidecars_and_a_shared_grid(self):
@@ -291,6 +341,98 @@ class BySourcesTest(unittest.TestCase):
             (provider / '499_5543.tif.provenance.json').unlink()
             with self.assertRaises(ValueError):
                 build_by.build(temp)
+
+
+class SinglesVoidTest(unittest.TestCase):
+    def test_hh_decode_masks_adv_voids_despite_a_lying_nodata_tag(self):
+        import numpy as np
+        from osgeo import gdal, osr
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            provider = Path(temp) / 'de-hh-dgm1'
+            provider.mkdir()
+            member = 'tile.tif'
+            raw = provider / 'hh.zip'
+            with zipfile.ZipFile(raw, 'w') as archive:
+                with tempfile.TemporaryDirectory() as stage:
+                    member_path = Path(stage) / member
+                    ds = gdal.GetDriverByName('GTiff').Create(str(member_path), 10, 10, 1,
+                                                              gdal.GDT_Float32)
+                    crs = osr.SpatialReference()
+                    crs.ImportFromEPSG(25832)
+                    ds.SetProjection(crs.ExportToWkt())
+                    ds.SetGeoTransform([500000.0, 1.0, 0.0, 5600000.0, 0.0, -1.0])
+                    ds.GetRasterBand(1).SetNoDataValue(-3.4028234663852886e+38)
+                    grid = np.full((10, 10), 10.0, dtype=np.float32)
+                    grid[0, 0] = -9999.0
+                    grid[0, 5] = -3.4028234663852886e+38
+                    ds.GetRasterBand(1).WriteArray(grid)
+                    ds = None
+                    archive.write(member_path, member)
+            import terrain_io
+            terrain_io.publish_json(str(raw) + '.provenance.json', dict(url='https://example.org/hh',
+                fetched_utc='2026-09-24', sha256=terrain_io.digest(raw), bytes=raw.stat().st_size,
+                licence='fixture', licence_url='https://example.org/licence', terms_checked_utc='2026-09-24'))
+            patched = dict(fetch_singles.PROVIDERS['de-hh-dgm1'])
+            patched['files'] = {'hh.zip': 'fixture'}
+            with patch.dict(fetch_singles.PROVIDERS, {'de-hh-dgm1': patched}):
+                fetch_singles.decode_geotiff_archive(
+                    temp, 'de-hh-dgm1', lambda archive: [member], lambda archive: lambda name: 'fixture',
+                    'fixture', workers=1)
+            ds = gdal.Open(str(provider / 'tile-5m.tif'))
+            try:
+                got = np.asarray(ds.GetRasterBand(1).ReadAsArray(), dtype=np.float64)
+            finally:
+                ds = None
+            self.assertEqual(got.shape, (2, 2))
+            self.assertTrue(np.allclose(got, 10.0))
+
+    def test_shared_tile_across_zips_is_listed_once(self):
+        import numpy as np
+        from osgeo import gdal, osr
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temp:
+            provider = Path(temp) / 'de-hh-dgm1'
+            provider.mkdir()
+
+            def member_bytes():
+                ds = gdal.GetDriverByName('GTiff').Create('/vsimem/shared.tif', 5, 5, 1,
+                                                          gdal.GDT_Float32)
+                crs = osr.SpatialReference()
+                crs.ImportFromEPSG(25832)
+                ds.SetProjection(crs.ExportToWkt())
+                ds.SetGeoTransform([500000.0, 1.0, 0.0, 5600000.0, 0.0, -1.0])
+                ds.GetRasterBand(1).SetNoDataValue(-9999.0)
+                ds.GetRasterBand(1).WriteArray(np.full((5, 5), 10.0, dtype=np.float32))
+                ds = None
+                handle = gdal.VSIFOpenL('/vsimem/shared.tif', 'rb')
+                gdal.VSIFSeekL(handle, 0, 2)
+                size = gdal.VSIFTellL(handle)
+                gdal.VSIFSeekL(handle, 0, 0)
+                payload = gdal.VSIFReadL(1, size, handle)
+                gdal.VSIFCloseL(handle)
+                gdal.Unlink('/vsimem/shared.tif')
+                return payload
+
+            payload = member_bytes()
+            import terrain_io
+            for zip_name in ('a.zip', 'b.zip'):
+                raw = provider / zip_name
+                with zipfile.ZipFile(raw, 'w') as archive:
+                    archive.writestr('shared.tif', payload)
+                terrain_io.publish_json(str(raw) + '.provenance.json', dict(
+                    url=f'https://example.org/{zip_name}', fetched_utc='2026-09-24',
+                    sha256=terrain_io.digest(raw), bytes=raw.stat().st_size, licence='fixture',
+                    licence_url='https://example.org/licence', terms_checked_utc='2026-09-24'))
+            patched = dict(fetch_singles.PROVIDERS['de-hh-dgm1'])
+            patched['files'] = {'a.zip': 'fixture', 'b.zip': 'fixture'}
+            with patch.dict(fetch_singles.PROVIDERS, {'de-hh-dgm1': patched}):
+                names = fetch_singles.decode_geotiff_archive(
+                    temp, 'de-hh-dgm1', lambda archive: ['shared.tif'],
+                    lambda archive: lambda name: 'fixture', 'fixture', workers=1)
+            self.assertEqual(names, [('shared-5m.tif', 'fixture')])
+            listing = json.loads((provider / 'country-sources.json').read_text())
+            self.assertEqual(len(listing), 1)
 
 
 if __name__ == '__main__':

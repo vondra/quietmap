@@ -195,6 +195,26 @@ class ReduceTest(unittest.TestCase):
             ds = None
             self.assertEqual(crs.GetAuthorityCode('PROJCS'), '25832')
 
+    def test_normalize_remaps_documented_extra_void_fill(self):
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp) / 'raw.tif'
+            ds = gdal.GetDriverByName('GTiff').Create(str(raw), 4, 2, 1, gdal.GDT_Float32)
+            crs = osr.SpatialReference()
+            crs.ImportFromEPSG(25832)
+            ds.SetProjection(crs.ExportToWkt())
+            ds.SetGeoTransform([400000.0, 5.0, 0.0, 5710000.0, 0.0, -5.0])
+            ds.GetRasterBand(1).SetNoDataValue(0)
+            ds.GetRasterBand(1).WriteArray(np.array([[285, 0, 300, 32768]] * 2, dtype=np.float32))
+            ds = None
+            target = Path(temp) / 'norm.tif'
+            self.assertTrue(normalize_grid(raw, target, assign_epsg=25832, extra_nodata=(32768.0,)))
+            ds = gdal.Open(str(target))
+            try:
+                self.assertEqual(ds.GetRasterBand(1).ReadAsArray().tolist(),
+                                 [[285.0, -9999.0, 300.0, -9999.0]] * 2)
+            finally:
+                ds = None
+
     def test_normalize_refuses_a_contradicting_crs_and_untagged_voids(self):
         with tempfile.TemporaryDirectory() as temp:
             raw = Path(temp) / 'raw.tif'
