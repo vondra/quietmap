@@ -48,7 +48,6 @@ pub(crate) fn compute_roads(
         // Closest segment (for distance display, baseline, path-effect context)
         min_dist: f64,
         min_d_slant: f64,
-        min_ground_g: f64,
         closest_source: RaySource,
         // Dominant-segment metadata (highest received energy — what drives the result)
         dominant_energy: f64,
@@ -111,7 +110,6 @@ pub(crate) fn compute_roads(
     struct RoadSegOut {
         seg_variants: [PropagationVariants; 3],
         day_emission_energy: f64,
-        ground_g: f64,
         /// Tallest vector obstacle on the characteristic-point path.
         seg_max_bh: f64,
         /// Ref inherited from the nearest refed mainline (orphan mainlines
@@ -185,8 +183,6 @@ pub(crate) fn compute_roads(
                     period_emissions[0][j] * std::f64::consts::LN_10 * 0.1,
                 );
             }
-            let ground_g = piece.loudest_node.as_ref().map_or(0.5, |node| node.ground_factor);
-
             // Ref inheritance: an orphan mainline or its link inherits the
             // ref of the nearest mainline that carries one. Link classes
             // 10/11/12 map to their mainline parents 0/1/2 (so a GC-1
@@ -255,7 +251,6 @@ pub(crate) fn compute_roads(
                 RoadSegOut {
                     seg_variants,
                     day_emission_energy,
-                    ground_g,
                     seg_max_bh,
                     effective_ref,
                     trace,
@@ -289,7 +284,7 @@ pub(crate) fn compute_roads(
         let base_speed = p.norm.base_speed_kmh;
         let surf_corr = p.norm.surf_corr_db;
         let (square_country_city, d_slant) = (p.square_country_city, p.d_slant);
-        let (seg_variants, ground_g) = (out.seg_variants, out.ground_g);
+        let seg_variants = out.seg_variants;
         let effective_ref = std::mem::take(&mut out.effective_ref);
 
         // For unnamed roads: group per osm_id, not catch-all
@@ -352,7 +347,6 @@ pub(crate) fn compute_roads(
                 first_osm_id: seg.osm_id,
                 min_dist: f64::MAX,
                 min_d_slant: 0.0,
-                min_ground_g: 0.5,
                 closest_source: source_here,
                 dominant_energy: 0.0,
                 dominant_segment_idx: 0,
@@ -434,7 +428,6 @@ pub(crate) fn compute_roads(
         if seg.dist_m < acc.min_dist {
             acc.min_dist = seg.dist_m;
             acc.min_d_slant = d_slant;
-            acc.min_ground_g = ground_g;
             acc.closest_source = source_here;
         }
         // Popup trace: push pass 2's prebuilt SegmentTrace, in segment order —
@@ -542,7 +535,7 @@ pub(crate) fn compute_roads(
 
         let impacts = PropagationVariants::impact_deltas(&acc.variants, road_periods.lden_db);
 
-        let (nearest_terrain, nearest_screening, nearest_veg) =
+        let (nearest_terrain, nearest_screening, nearest_veg, nearest_ground_g) =
             nearest_path_breakdown(rasters, obstacles, &acc.closest_source, receiver, &weather);
 
         let road_meta = RoadMetadata {
@@ -600,7 +593,7 @@ pub(crate) fn compute_roads(
             baseline: iso9613::compute_baseline(
                 acc.min_d_slant,
                 SourceSpread::Line,
-                acc.min_ground_g,
+                nearest_ground_g,
             ),
             terrain: nearest_terrain,
             screening: nearest_screening,
@@ -1002,5 +995,49 @@ pub(crate) mod tests {
                 assert_ne!(contribs1, "[]", "the scene must produce contributors");
             }
         }
+    }
+
+    /// Hard-ground rasters (200 m, G=0): the sample-mean ground factor of any ray is 0,
+    /// so a trace-gated 0.5 default cannot hide behind the fallback value.
+    struct HardRasters;
+    impl RasterSampler for HardRasters {
+        fn elevation(&self, _: f64, _: f64) -> f64 {
+            200.0
+        }
+        fn ground_g(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+        fn building_enclosure(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+    }
+
+    /// Contributors are trace-independent: the same scene with and without a trace collector
+    /// yields identical contributors (levels, baseline, context) — the baseline ground factor
+    /// comes from the always-evaluated closest ray, not from trace detail.
+    #[test]
+    fn contributors_are_identical_with_and_without_traces() {
+        let roads = [secondary_segment()];
+        let (_, plain) =
+            compute_roads(&receiver(), &roads, &ObstacleSet::empty(), &HardRasters, None);
+        let mut traces = TraceCollector::new();
+        let (_, traced) = compute_roads(
+            &receiver(),
+            &roads,
+            &ObstacleSet::empty(),
+            &HardRasters,
+            Some(&mut traces),
+        );
+        assert_eq!(plain.len(), 1);
+        assert!(!traces.segments.is_empty(), "the traced run must collect");
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            serde_json::to_string(&traced).unwrap()
+        );
+        assert!(
+            (plain[0].baseline.ground_factor - 0.0).abs() < 1e-9,
+            "hard ground must read 0, not the retired 0.5 default: {}",
+            plain[0].baseline.ground_factor
+        );
     }
 }

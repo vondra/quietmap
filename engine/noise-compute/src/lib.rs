@@ -305,14 +305,16 @@ fn run_line_layer(
 }
 
 /// The popup's terrain, obstacle and forest context of one source point: the detail of its
-/// full CNOSSOS ray (the transfer itself comes from the layer's quadrature).
+/// full CNOSSOS ray (the transfer itself comes from the layer's quadrature), plus the ray's
+/// path-mean ground factor for the contributor baseline. Trace-independent: this ray is
+/// always evaluated, with or without a trace collector.
 pub fn nearest_path_breakdown(
     rasters: &dyn RasterSampler,
     obstacles: &ObstacleSet,
     source: &propagation::ray_transfer::RaySource,
     receiver: &Receiver,
     weather: &propagation::meteorology::Meteorology,
-) -> (TerrainBreakdown, ScreeningBreakdown, VegetationBreakdown) {
+) -> (TerrainBreakdown, ScreeningBreakdown, VegetationBreakdown, f64) {
     let ray_receiver = propagation::ray_transfer::RayReceiver {
         lat: receiver.lat,
         lon: receiver.lon,
@@ -343,6 +345,7 @@ pub fn nearest_path_breakdown(
             forest_depth_m: (detail.forest_depth_m * 10.0).round() / 10.0,
             sampled_path_m: (detail.profile.dist_m * 10.0).round() / 10.0,
         },
+        detail.ground_factor,
     )
 }
 
