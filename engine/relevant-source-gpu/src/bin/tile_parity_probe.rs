@@ -1,7 +1,9 @@
 //! Painter parity through the actual `paint_tile` path: one z13 tile painted with production
 //! sources and again with every road and rail line near the tile cut into converged pieces.
-//! Compares outdoor Lden per pixel per layer (partition and background interpolation included,
-//! display-byte quantization excluded) and reports the ladder per layer on stderr.
+//! Compares outdoor Lden per outdoor pixel per layer (partition and background interpolation
+//! included, display-byte quantization excluded) and reports the ladder per layer on stderr.
+//! Indoor pixels show their building's stored exposure on published tiles, not outdoor point
+//! levels, so visitor parity outdoors is the only ladder that matters here.
 use anyhow::{ensure, Context, Result};
 use noise_compute::types::LayerKind;
 use relevant_source_gpu::{
@@ -27,6 +29,13 @@ const TILE_MARGIN_M: f32 = 405.0;
 const CONVERGED_PIECE_LENGTH_M: f32 = 1.0;
 /// A pixel counts for a layer when either side reaches the display floor.
 const COUNTED_FLOOR_DB: f64 = 30.0;
+
+/// A pixel counts for the ladder when it is outdoors and either side reaches the display floor.
+/// Published tiles replace indoor pixels by their building's stored exposure, so the outdoor
+/// point levels compared here are what visitors see only outdoors.
+fn counts_for_ladder(painter_lden: f64, converged_lden: f64, outdoor: bool) -> bool {
+    outdoor && painter_lden.max(converged_lden) >= COUNTED_FLOOR_DB
+}
 
 fn lden(periods: [f64; 3]) -> f64 {
     let db = |energy: f64| 10.0 * energy.max(1e-30).log10();
@@ -184,15 +193,18 @@ fn main() -> Result<()> {
     println!("pixel\tlayer\tpainter\tconverged");
     let mut diffs: [Vec<(f64, f64)>; 5] = Default::default();
     for pixel in 0..pixels {
+        let outdoor = receivers.buildings[pixel].is_none();
         for (index, (_, layer)) in LAYERS.iter().enumerate() {
             let plane_painter = &painter[*layer as usize];
             let plane_reference = &reference[*layer as usize];
             let painter_periods = [f64::from(plane_painter[pixel * 3]), f64::from(plane_painter[pixel * 3 + 1]), f64::from(plane_painter[pixel * 3 + 2])];
             let reference_periods = [f64::from(plane_reference[pixel * 3]), f64::from(plane_reference[pixel * 3 + 1]), f64::from(plane_reference[pixel * 3 + 2])];
             let (a, b) = (lden(painter_periods), lden(reference_periods));
-            diffs[index].push((a, b));
+            if outdoor {
+                diffs[index].push((a, b));
+            }
             // Only print counted pixels to keep output small (quiet pixels dominate).
-            if a.max(b) >= COUNTED_FLOOR_DB {
+            if counts_for_ladder(a, b, outdoor) {
                 println!("{pixel}\t{layer}\t{a:.6}\t{b:.6}");
             }
         }
@@ -208,6 +220,14 @@ mod tests {
     use super::*;
     use relevant_source_gpu::source_frame::DeviceLineSource;
     use tile_painter::corner_store::SourceIdentity;
+
+    #[test]
+    fn ladder_counts_outdoor_audible_pixels_only() {
+        assert!(counts_for_ladder(35.0, 25.0, true));
+        assert!(counts_for_ladder(25.0, 35.0, true));
+        assert!(!counts_for_ladder(35.0, 35.0, false));
+        assert!(!counts_for_ladder(25.0, 25.0, true));
+    }
 
     #[test]
     fn segment_bbox_distance_is_zero_when_crossing() {
