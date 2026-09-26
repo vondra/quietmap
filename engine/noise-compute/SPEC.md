@@ -931,7 +931,6 @@ quantize that calculation.
 
 `raster_reader::meteorology::Meteorology::at` interpolates moments and probabilities
 bilinearly at the receiver inside the receiver square's window, wrapping longitude.
-`MeteorologySample::probability` interpolates circularly between sector centres.
 Invalid coordinates, wrong magic, mismatched windows, short files, nonfinite
 values and invalid percentages are errors. Window maxima conservatively bound
 any interpolation inside the window. The popup samples its receiver's window through

@@ -104,13 +104,7 @@ fn probabilities_and_moments_are_continuous_at_grid_sector_and_square_edges() {
         .unwrap();
         for k in 0..3 {
             for s in 0..SECTORS {
-                let angle = s as f64 * 22.5;
-                assert!(
-                    (a.probability(k, angle - eps).unwrap()
-                        - b.probability(k, angle + eps).unwrap())
-                    .abs()
-                        < 1e-5
-                );
+                assert!((a.p[k][s] - b.p[k][s]).abs() < 1e-5, "period {k} sector {s}");
             }
             for band in 0..8 {
                 assert!((a.alpha_mean[k][band] - b.alpha_mean[k][band]).abs() < 1e-3);
@@ -120,17 +114,6 @@ fn probabilities_and_moments_are_continuous_at_grid_sector_and_square_edges() {
     }
     let at = sample_at(50., 14.25, |x, y| Some(field(x, y))).unwrap();
     assert_eq!(at.alpha_mean[0][0], field(57, 160).alpha_mean[0][0]);
-    assert_eq!(
-        at.probability(0, 0.).unwrap(),
-        at.probability(0, 360.).unwrap()
-    );
-    assert!((at.probability(0, 11.25).unwrap() - (at.p[0][0] + at.p[0][1]) / 2.).abs() < 1e-7);
-    assert_eq!(
-        at.probability(0, -1e-20).unwrap(),
-        at.probability(0, 0.).unwrap()
-    );
-    assert!(at.probability(3, 0.).is_err());
-    assert!(at.probability(0, f64::NAN).is_err());
     assert!(sample_at(91., 0., |x, y| Some(field(x, y))).is_err());
     assert!(sample_at(0., f64::INFINITY, |x, y| Some(field(x, y))).is_err());
     assert_eq!(std::mem::size_of::<MeteorologyNode>(), 240);

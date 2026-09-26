@@ -34,20 +34,6 @@ pub struct MeteorologySample {
     pub alpha_variance: [[f32; 8]; 3],
 }
 
-impl MeteorologySample {
-    /// Linear circular interpolation; azimuth is source→receiver clockwise from north.
-    pub fn probability(&self, period: usize, azimuth_degrees: f64) -> Result<f32, String> {
-        if period >= 3 || !azimuth_degrees.is_finite() {
-            return Err("invalid meteorology period or azimuth".into());
-        }
-        let sector = azimuth_degrees.rem_euclid(360.0) / (360.0 / SECTORS as f64);
-        let first = sector.floor() as usize % SECTORS;
-        let fraction = (sector - sector.floor()) as f32;
-        Ok(self.p[period][first] * (1.0 - fraction)
-            + self.p[period][(first + 1) % SECTORS] * fraction)
-    }
-}
-
 pub struct Meteorology {
     window: RasterWindow,
     nodes: Vec<MeteorologyNode>,
