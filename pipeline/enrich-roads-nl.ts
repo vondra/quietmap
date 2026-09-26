@@ -12,6 +12,7 @@ import {
   pointGridCandidates,
   pointToSegmentDist,
   runsAlongSegment,
+  runsWithSegment,
   type SegmentCoordinates,
 } from './lib/spatial.js'
 
@@ -59,7 +60,10 @@ function rowRefs(ref: string | null): Set<string> {
 
 /** A row takes the nearest section of its own road number running along it; ramps carry no
  *  OSM ref, so they match by line and slip class alone. A cross street within 50 m never
- *  qualifies: the section and the row must run within 30 degrees of each other. */
+ *  qualifies: the section and the row must run within 30 degrees of each other. A lonely
+ *  directional section counts one carriageway, so only rows travelling with its line take it
+ *  (INWEVA lines run along travel: every reciprocal twin pair runs antiparallel); a paired
+ *  two-way total keeps the unsigned gate and the finalizer shares it between the carriageways. */
 export function matchDutchInweva(row: RoadRow, index: DutchInwevaIndex): DutchInwevaObservation | null {
   let closest: DutchInwevaObservation | null = null
   let closestDistance = MAXIMUM_DISTANCE_METRES
@@ -68,7 +72,8 @@ export function matchDutchInweva(row: RoadRow, index: DutchInwevaIndex): DutchIn
   for (const edge of pointGridCandidates(row.midLat, row.midLon, MAXIMUM_DISTANCE_METRES, index.edges)) {
     const { observation } = edge
     if (!observation.isRamp && ![...observation.refs].some(ref => refs.has(ref))) continue
-    if (!runsAlongSegment(row, edge)) continue
+    const follows = observation.countBasis === 'directional' ? runsWithSegment(row, edge) : runsAlongSegment(row, edge)
+    if (!follows) continue
     if (!roadClassTakesCount(row.roadClass, observation)) continue
     const distance = pointToSegmentDist(
       row.midLat,

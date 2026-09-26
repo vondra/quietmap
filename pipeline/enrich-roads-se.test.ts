@@ -56,6 +56,7 @@ const STOCKHOLM_LINE: (readonly [number, number])[] = [
 const record = (overrides: Partial<SwedishNvdbRecord> = {}): SwedishNvdbRecord => ({
   id: 761,
   role: 'Normal',
+  direction: 'Med',
   method: 'Stickprovsmätning',
   total: 1477,
   lightPeriods: [1131, 193, 86],
@@ -156,6 +157,31 @@ test('Swedish parser keeps only measured link parts with consistent splits', () 
     { assessed: 2, incomplete: 1, zero: 1, inconsistent: 1, geometry: 1, observations: 1 },
   )
   assert.throws(() => parseSwedishNvdbSource([record({ id: 1 }), record({ id: 1 })]), /invalid section identity/)
+})
+
+test('a directional sibling stamps only the carriageway travelling with its line, reversing Mot rows', () => {
+  const parsed = parseSwedishNvdbSource([
+    record({ id: 761, role: 'Syskon fram', direction: 'Med' }),
+    record({ id: 762, role: 'Syskon bak', direction: 'Mot' }),
+    record({ id: 763, role: 'Syskon fram', direction: 'Sideways' }),
+  ])
+  // An unknown direction cannot be oriented: the count is skipped, never misattributed.
+  assert.equal(parsed.unknownDirectionSkipped, 1)
+  assert.deepEqual(
+    parsed.observations.map(observation => observation.observationId),
+    ['nvdb2026:761', 'nvdb2026:762'],
+  )
+  const [med, mot] = parsed.observations
+  assert.deepEqual(mot.line, [...med.line].reverse())
+  // The fixture row runs north-east with the Med line; the reversed row runs south-west with the flipped Mot line.
+  const against = { startLat: 59.324117, startLon: 18.07325, endLat: 59.323617, endLon: 18.07275 }
+  const medIndex = indexSwedishNvdb([med])
+  assert.equal(matchSwedishNvdb(road({ oneway: 1 }), medIndex), med)
+  assert.equal(matchSwedishNvdb(road({ ...against, oneway: 1 }), medIndex), null)
+  assert.equal(matchSwedishNvdb(road({ oneway: 0 }), medIndex), null)
+  const motIndex = indexSwedishNvdb([mot])
+  assert.equal(matchSwedishNvdb(road({ ...against, oneway: 1 }), motIndex), mot)
+  assert.equal(matchSwedishNvdb(road({ oneway: 1 }), motIndex), null)
 })
 
 test('Swedish pinned loader rejects bytes outside the admitted release source', () => {

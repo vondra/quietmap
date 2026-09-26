@@ -171,9 +171,34 @@ test('Dutch matcher requires the road number, the heading and the class', () => 
   )
   // A residential row beside the motorway takes neither the pair nor the ramp.
   assert.equal(matchDutchInweva(road({ roadClass: 6 }), index), null)
-  // The ramp stamps a slip road, never the mainline.
-  assert.equal(matchDutchInweva(road({ roadClass: 10, ref: null }), index)?.isRamp, true)
-  assert.equal(matchDutchInweva(road({ roadClass: 10 }), index)?.isRamp, true)
+  // The ramp stamps a one-way slip road, never the mainline.
+  assert.equal(matchDutchInweva(road({ roadClass: 10, ref: null, oneway: 1 }), index)?.isRamp, true)
+  assert.equal(matchDutchInweva(road({ roadClass: 10, oneway: 1 }), index)?.isRamp, true)
+})
+
+test('a directional section stamps only the carriageway travelling with its line; a pair stamps both', () => {
+  const lonely = parseDutchInwevaSource(featureCollection([section({ vbn_id: 'lonely' })]))
+  const lonelyIndex = indexDutchInweva(lonely.observations)
+  const [observation] = lonely.observations
+  assert.equal(observation.countBasis, 'directional')
+  // The fixture row runs north-east with the section line; the reversed row runs south-west against it.
+  const against = { startLat: 52.006, startLon: 5.006, endLat: 52.004, endLon: 5.004 }
+  assert.equal(matchDutchInweva(road({ oneway: 1 }), lonelyIndex), observation)
+  assert.equal(matchDutchInweva(road({ ...against, oneway: 1 }), lonelyIndex), null)
+  // A reverse-tagged row travels with the line although its geometry runs against it.
+  assert.equal(matchDutchInweva(road({ ...against, oneway: 2 }), lonelyIndex), observation)
+  // A two-way row proves no travel direction and takes no directional count, like a TMAS compass station.
+  assert.equal(matchDutchInweva(road({ oneway: 0 }), lonelyIndex), null)
+  assert.equal(matchDutchInweva(road(), lonelyIndex), null)
+  const pair = parseDutchInwevaSource(
+    featureCollection([
+      section({ vbn_id: 'twin-a', vbn_id_tgn: 'twin-b' }),
+      section({ vbn_id: 'twin-b', vbn_id_tgn: 'twin-a' }),
+    ]),
+  )
+  const pairIndex = indexDutchInweva(pair.observations)
+  assert.equal(matchDutchInweva(road({ oneway: 1 }), pairIndex), pair.observations[0])
+  assert.equal(matchDutchInweva(road({ ...against, oneway: 1 }), pairIndex), pair.observations[0])
 })
 
 test('z9 Dutch pass writes classes, retracts stale claims and enforces baked country', async () => {
@@ -288,6 +313,7 @@ test('Dutch time profiles stamp matched rows with the section shares, nothing el
     refs: ['A2', 'A12'],
     countryCodes: [iso2Code('NL'), iso2Code('NL')],
     sourceIds: [0, 0],
+    oneways: [1, 1],
   })
   const target = join(square, 'roads.arrow')
   copyFileSync(fixture, target)

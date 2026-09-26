@@ -163,7 +163,8 @@ export function changeRules(before: StationRow[], after: StationRow[], manifest:
   return { results, ledger, unscored: [...unscored.values()] }
 }
 
-/** Criteria v2 `rules.target` on one cohort: MAE down by at least τ with its interval below 0, in every variant. */
+/** Criteria v2 `rules.target` on one cohort: MAE down by at least τ with its interval below 0, in every variant.
+ *  An empty cohort shows no improvement: it reports insufficient_data with its sample count, never met. */
 export function targetMet(before: StationRow[], after: StationRow[], manifest: Manifest, criteria: Criteria, cohort: string, geometryOnly: boolean):
   { met: boolean | 'insufficient_data'; detail: string } {
   const details: string[] = []
@@ -171,7 +172,6 @@ export function targetMet(before: StationRow[], after: StationRow[], manifest: M
   for (const variant of ['as_published', 'minus3'] as Variant[]) {
     const a = samples(before, manifest, cohort, 'lden', variant, geometryOnly).values
     const b = samples(after, manifest, cohort, 'lden', variant, geometryOnly).values
-    if (b.length === 0) continue
     if (b.length < criteria.constants.n_min.value) {
       met = met === false ? false : 'insufficient_data'
       details.push(`${variant}: n = ${b.length}`)
@@ -182,5 +182,5 @@ export function targetMet(before: StationRow[], after: StationRow[], manifest: M
     if (!improved || rule.fired.length) met = false
     details.push(`${variant}: ΔMAE ${(rule.mae_after - rule.mae_before).toFixed(2)} CI ${JSON.stringify(rule.mae_change.ci95)}, rules ${rule.fired.join('+') || 'none'}`)
   }
-  return { met, detail: `${cohort}${geometryOnly ? ' (documented heights only)' : ''}: ${details.join('; ') || 'no stations'}` }
+  return { met, detail: `${cohort}${geometryOnly ? ' (documented heights only)' : ''}: ${details.join('; ')}` }
 }
