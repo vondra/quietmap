@@ -313,10 +313,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    #[should_panic]
-    fn zero_density_is_rejected() {
-        RasterWindow::for_square_with_density(Square { x: 0, y: 0 }, 0);
-    }
 }

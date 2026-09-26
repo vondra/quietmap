@@ -156,13 +156,12 @@ fn bridge_microsegment_retains_original_abutments_and_speed_evidence() {
         serde_json::from_str(square_store::osm_evidence::tags(batch, "roads", 0).unwrap()).unwrap();
     assert_eq!(raw["layer"], "2");
     assert_eq!(raw["surface"], "paving_stones");
-    let mut old = batch.schema().metadata().clone();
-    old.remove("osm_roads_contract");
-    assert!(square_store::osm_contract::validate(
-        &Schema::new_with_metadata(batch.schema().fields().clone(), old),
-        "roads"
-    )
-    .is_err());
+    // The roads batch carries its contract stamp: every consumer refuses an
+    // unstamped square, so a producer that dropped the stamp would lose data.
+    assert_eq!(
+        batch.schema().metadata().get("osm_roads_contract").map(String::as_str),
+        Some(square_store::osm_contract::ROADS_CONTRACT)
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]

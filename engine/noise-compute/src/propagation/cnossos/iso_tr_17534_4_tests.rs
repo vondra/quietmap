@@ -29,25 +29,30 @@ struct Case {
     lf: [f64; NUM_BANDS],
 }
 
-fn bands(value: &Value) -> [f64; NUM_BANDS] {
-    std::array::from_fn(|i| value[i].as_f64().unwrap())
+fn bands(rows: &[&Value], lh: usize, lf: usize) -> ([f64; NUM_BANDS], [f64; NUM_BANDS]) {
+    let column = |index: usize| {
+        std::array::from_fn(|band| rows[band][index].as_f64().unwrap())
+    };
+    (column(lh), column(lf))
 }
 
-fn parse(case: &Value) -> Case {
+fn parse(case: &Value, rows: &[&Value], lh: usize, lf: usize) -> Case {
     let f = |v: &Value| v.as_f64().unwrap();
-    // (distance, altitude, ground factor of the stretch that starts here)
+    // (distance, altitude, ground factor of the stretch that starts here);
+    // cut rows are [type, s_m, z_ground_m, ground_g].
     let mut vertices: Vec<(f64, f64, f64)> = case["cut_points"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|p| (f(&p["s_m"]), f(&p["z_ground_m"]), f(&p["ground_g"])))
+        .map(|p| (f(&p[1]), f(&p[2]), f(&p[3])))
         .collect();
     let terrain: Vec<PlanePoint> = vertices.iter().map(|v| (v.0, v.1)).collect();
     let walls = case["walls"].as_array().unwrap();
     let mut enter: Option<(f64, f64)> = None;
+    // Wall rows are [s_m, top_z_m, z_ground_m, intersection].
     for wall in walls {
-        let (x, top) = (f(&wall["s_m"]), f(&wall["top_z_m"]));
-        match wall["intersection"].as_str().unwrap() {
+        let (x, top) = (f(&wall[0]), f(&wall[1]));
+        match wall[3].as_str().unwrap() {
             "BUILDING_ENTER" => enter = Some((x, top)),
             "BUILDING_EXIT" => {
                 let (x0, top0) = enter.take().unwrap();
@@ -85,19 +90,21 @@ fn parse(case: &Value) -> Case {
         stepped.push((x, z, g));
     }
     let vertices = stepped;
+    let (lh, lf) = bands(rows, lh, lf);
     Case {
         name: case["name"].as_str().unwrap().to_owned(),
         sound_power_db: f(&case["sound_power_db"]),
-        source: (0.0, f(&case["source"]["z_m"])),
-        receiver: (f(&case["horizontal_distance_m"]), f(&case["receiver"]["z_m"])),
-        source_ground_factor: f(&case["cut_points"][0]["ground_g"]),
+        // Points are [x_m, y_m, z_m, z_ground_m].
+        source: (0.0, f(&case["source"][2])),
+        receiver: (f(&case["horizontal_distance_m"]), f(&case["receiver"][2])),
+        source_ground_factor: f(&case["cut_points"][0][3]),
         distance: vertices.iter().map(|v| v.0).collect(),
         altitude: vertices.iter().map(|v| v.1).collect(),
         ground: vertices.iter().map(|v| v.2).collect(),
         terrain,
-        tops: walls.iter().map(|w| (f(&w["s_m"]), f(&w["top_z_m"]))).collect(),
-        lh: bands(&case["reference_direct"]["LH"]),
-        lf: bands(&case["reference_direct"]["LF"]),
+        tops: walls.iter().map(|w| (f(&w[0]), f(&w[1]))).collect(),
+        lh,
+        lf,
     }
 }
 
@@ -105,10 +112,19 @@ fn parse(case: &Value) -> Case {
 fn every_direct_case_matches_iso_tr_17534_4_within_a_tenth_of_a_decibel() {
     let fixture: Value = serde_json::from_str(&std::fs::read_to_string(FIXTURE).unwrap()).unwrap();
     let alpha = iso_9613_1_alpha_bands(10.0, 70.0);
+    let columns = fixture["band_columns"].as_array().unwrap();
+    let at = |name: &str| columns.iter().position(|c| c == name).unwrap();
+    let (lh, lf) = (at("LH"), at("LF"));
+    let rows = fixture["bands"].as_array().unwrap();
+    assert_eq!(rows.len(), 28 * NUM_BANDS, "one row per case and band");
     let mut scratch = VerticalPathScratch::default();
     let mut failures = Vec::new();
     for raw in fixture["cases"].as_array().unwrap() {
-        let case = parse(raw);
+        let name = raw["name"].as_str().unwrap();
+        let case_rows: Vec<&Value> =
+            rows.iter().filter(|row| row[0].as_str().unwrap() == name).collect();
+        assert_eq!(case_rows.len(), NUM_BANDS, "{name} has one row per band");
+        let case = parse(raw, &case_rows, lh, lf);
         let path = VerticalPath {
             profile: VerticalProfile {
                 distance_m: &case.distance,
