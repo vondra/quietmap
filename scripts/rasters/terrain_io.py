@@ -2,12 +2,14 @@
 import datetime
 import fcntl
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
 import shutil
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from contextlib import contextmanager
 
@@ -68,6 +70,20 @@ def open_directory(path):
 
 def publish_json(path, value):
     publish_bytes(path, (json.dumps(value, sort_keys=True, indent=2) + '\n').encode())
+
+
+def publish_path(path, staged):
+    """Publish a large staged file without reading it into memory; same once-only rule."""
+    path, staged = Path(path), Path(staged)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.link(staged, path)
+    except FileExistsError:
+        if digest(path) != digest(staged):
+            raise ValueError(f'refusing to replace published file: {path}') from None
+    staged.unlink(missing_ok=True)
+    with open_directory(path.parent) as directory:
+        os.fsync(directory)
 
 
 def retained_bytes(root):
@@ -131,19 +147,32 @@ def fetch(root, provider, name, url, licence, licence_url, terms_checked_utc,
         available -= 65536
         target.parent.mkdir(parents=True, exist_ok=True)
         request = urllib.request.Request(url, headers={'User-Agent': 'QuietMap terrain producer'})
-        with urllib.request.urlopen(request, timeout=180) as response, tempfile.NamedTemporaryFile(dir=target.parent) as staged:
-            expected_bytes = response.headers.get('Content-Length')
-            if expected_bytes and int(expected_bytes) > available:
-                raise ValueError('provider file exceeds remaining budget')
-            checksum, size = hashlib.sha256(), 0
-            while block := response.read(1 << 20):
-                size += len(block)
-                if size > available:
-                    raise ValueError('provider stream exceeds remaining budget')
-                checksum.update(block)
-                staged.write(block)
-            if expected_bytes and size != int(expected_bytes):
-                raise ValueError('incomplete provider response')
+        with tempfile.NamedTemporaryFile(dir=target.parent) as staged:
+            for attempt in range(3):
+                try:
+                    with urllib.request.urlopen(request, timeout=180) as response:
+                        expected_bytes = response.headers.get('Content-Length')
+                        if expected_bytes and int(expected_bytes) > available:
+                            raise ValueError('provider file exceeds remaining budget')
+                        staged.seek(0)
+                        staged.truncate()
+                        checksum, size = hashlib.sha256(), 0
+                        while block := response.read(1 << 20):
+                            size += len(block)
+                            if size > available:
+                                raise ValueError('provider stream exceeds remaining budget')
+                            checksum.update(block)
+                            staged.write(block)
+                        if expected_bytes and size != int(expected_bytes):
+                            raise ValueError('incomplete provider response')
+                    break
+                except (http.client.IncompleteRead, http.client.RemoteDisconnected,
+                        TimeoutError, ConnectionError, urllib.error.URLError) as error:
+                    if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code != 429:
+                        raise
+                    if attempt == 2:
+                        raise
+                    time.sleep(2 ** attempt)
             if expected_sha256 and checksum.hexdigest() != expected_sha256:
                 raise ValueError('provider checksum differs from official catalogue')
             staged.flush()

@@ -12,8 +12,8 @@ import numpy as np
 from osgeo import gdal, osr
 from canopy_average import canopy_average
 from terrain_io import digest, provenance, publish_bytes, publish_json
-from terrain_seams import (expanded, feather, artificial_steps, require_seam_gate,
-                           verify_shared_nodes, QUANTIZATION_STEP_BUDGET_M)
+from terrain_seams import (expanded, feather, artificial_steps, core_relief, hides_in_relief,
+                           require_seam_gate, verify_shared_nodes, QUANTIZATION_STEP_BUDGET_M)
 
 gdal.UseExceptions()
 osr.UseExceptions()
@@ -52,30 +52,93 @@ def datum_transform(vertical_crs, area_of_interest=None):
         crs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
     options = osr.CoordinateTransformationOptions()
     options.SetBallparkAllowed(False)
-    options.SetOnlyBest(True)
+    # The RAF18 file covers Brittany but its operation's onshore extent ends
+    # at -4.87, so the single best operation refuses the tip; the secondary
+    # operation reads the same reviewed file seamlessly (4 mm against a hand
+    # lookup). Off Corsica the RAC23 file genuinely ends at Calvi, where
+    # fall-through degrades a crash into an honest fallback. France alone
+    # lets PROJ fall through; everywhere else one operation still rules out
+    # mid-country grid switches.
+    options.SetOnlyBest(vertical_crs not in (5720, 5721))
     # A reviewed regional anchor selects one grid operation across rounded EPSG area edges.
     if area_of_interest is not None:
         options.SetAreaOfInterest(*area_of_interest)
     return osr.CreateCoordinateTransformation(source, target, options)
 
 
+def past_grid_edge(error):
+    """Whether a PROJ failure means out-of-grid nodes (fall back) rather than a setup error (raise)."""
+    message = str(error)
+    return 'falls outside grid' in message or 'evaluates to nodata' in message
+
+
+def convert_row_or_none(transform, points, fresh):
+    """Convert one row, or return None when out-of-grid nodes need per-point isolation.
+
+    OSR collapses repeated failures on one transform object into a bare
+    suppressed message that hides the grid-edge cause; one fresh probe
+    recovers the true verdict for that row.
+    """
+    try:
+        converted = np.asarray(transform.TransformPoints(points))
+    except RuntimeError as error:
+        if past_grid_edge(error):
+            return None
+        try:
+            converted = np.asarray(fresh().TransformPoints(points))
+        except RuntimeError as fresh_error:
+            if past_grid_edge(fresh_error):
+                return None
+            raise
+    # PROJ returns inf instead of raising for nodata cells inside the grid rectangle.
+    return converted if np.isfinite(converted).all() else None
+
+
+def convert_singly(transform, row_values, valid, points, fresh):
+    """Convert one failed row point by point; out-of-grid nodes fall back, anything else raises."""
+    for index, point in zip(valid, points):
+        try:
+            _, _, height = transform.TransformPoints([point])[0]
+        except RuntimeError as error:
+            if past_grid_edge(error):
+                row_values[index] = np.nan
+                continue
+            try:
+                _, _, height = fresh().TransformPoints([point])[0]
+            except RuntimeError as fresh_error:
+                if not past_grid_edge(fresh_error):
+                    raise
+                row_values[index] = np.nan
+                continue
+        row_values[index] = height if np.isfinite(height) else np.nan
+
+
 def convert_datum(values, window, vertical_crs, area_of_interest=None):
-    """Apply the geoid shift at each target node after area averaging (never a constant offset)."""
+    """Apply the geoid shift at each target node after area averaging (never a constant offset).
+
+    Feather-halo nodes can reach past the national datum grid; those nodes get
+    no shift at all (NaN, so the fallback supplies them), never a zero shift.
+    """
     if vertical_crs == 3855:
         return values
     transform = datum_transform(vertical_crs, area_of_interest)
+    fresh = lambda: datum_transform(vertical_crs, area_of_interest)
     density = window['nodes_per_degree']
     columns = (window['west_node'] + np.arange(window['columns'])) / density
+    had = bool(np.isfinite(values).any())
     for row in range(len(values)):
         latitude = (window['north_node'] - row) / density
         valid = np.flatnonzero(np.isfinite(values[row]))
         if not len(valid):
             continue
         points = [(float(columns[c]), latitude, float(values[row, c])) for c in valid]
-        converted = np.asarray(transform.TransformPoints(points))
-        if not np.isfinite(converted).all():
-            raise ValueError('national datum conversion failed; missing grids are not a zero shift')
-        values[row, valid] = converted[:, 2]
+        converted = convert_row_or_none(transform, points, fresh)
+        if converted is None:
+            convert_singly(transform, values[row], valid, points, fresh)
+        else:
+            values[row, valid] = converted[:, 2]
+    if had and not np.isfinite(values).any():
+        raise ValueError('national datum conversion failed; missing grids are not a zero shift')
     return values
 
 
@@ -147,21 +210,61 @@ def assemble_with_statistics(sources, window, channel, kernel='average', halo=12
     owner = np.full(values.shape, -1, dtype=np.int16)
     statistics = dict(halo_nodes=halo if national else 0, groups=[],
                       maximum_artificial_step_bound_m=QUANTIZATION_STEP_BUDGET_M)
+    stack, relief_stack = None, None
     for index, source in enumerate(sources):
         sampled = (canopy_average(source, work, read_average) if channel == 'canopy'
                    else read_average(source, work, kernel))
         if channel == 'dem':
             sampled = convert_datum(sampled, work, source['vertical_crs'], source.get('datum_area_of_interest'))
         if channel == 'dem' and source.get('role') == 'national':
-            values, weight, difference = feather(values, sampled, halo)
-            group = dict(group=source['group'], **artificial_steps(weight, difference, padding))
+            # Conformance: a disagreement beyond an eighth-halo step proves the
+            # running base wrong there (fallback voids, 30 m smoothing of
+            # cliffs and gorges; SRTM spot checks side with the national data),
+            # so the base takes the national value before feathering. Residuals
+            # past conforming stay under halo/8, so one group induces at most
+            # 1/8 m per edge and two colocated groups (a quarry straddling a
+            # border) stack to 0.25 + 0.2 m quantization <= 0.5 m.
+            conform = np.abs(sampled - values) > halo / 8
+            values[conform] = sampled[conform]
+            base = values
+            values, weight, difference = feather(base, sampled, halo)
+            group_stats, stack0, stack1 = artificial_steps(weight, difference, padding,
+                                                           sampled, base)
+            group = dict(group=source['group'], conformed_nodes=int(conform.sum()),
+                         **group_stats)
+            if stack is None:
+                # Sum in float64: float32 accumulation rounds an exact-budget
+                # 0.3 past the gate by an ulp under NEP 50 weak promotion.
+                stack = [stack0.astype(np.float64), stack1.astype(np.float64)]
+                relief_stack = core_relief(sampled, base, padding)
+            else:
+                stack[0] += stack0
+                stack[1] += stack1
+                for axis, natural in enumerate(core_relief(sampled, base, padding)):
+                    relief_stack[axis] = np.maximum(relief_stack[axis], natural)
             statistics['groups'].append(group)
-            statistics['maximum_artificial_step_bound_m'] += group['maximum_selection_step_m']
             valid = weight > 0
         else:
             valid = np.isfinite(sampled)
             values[valid] = sampled[valid]
         owner[valid] = index
+    if stack is not None:
+        # Colocated sub-budget ramps stack past the budget where two national
+        # coverages cross one steep feature (the ENCI quarry straddles the
+        # NL/BE border); the stacked ramp hides in the stacked relief like a
+        # single-group one, so it exempts under the same rule.
+        exempted, max_exempted, gated_maximum = 0, 0., 0.
+        for total, natural in zip(stack, relief_stack):
+            hidden = hides_in_relief(total, natural)
+            exempted += int(hidden.sum())
+            if hidden.any():
+                max_exempted = max(max_exempted, float(total[hidden].max()))
+            visible = total[~hidden]
+            if len(visible):
+                gated_maximum = max(gated_maximum, float(visible.max()))
+        statistics['selection_exempt_stacked_edges'] = exempted
+        statistics['maximum_exempted_stacked_step_m'] = max_exempted
+        statistics['maximum_artificial_step_bound_m'] = gated_maximum + QUANTIZATION_STEP_BUDGET_M
     if padding:
         values = values[padding:-padding, padding:-padding]
         owner = owner[padding:-padding, padding:-padding]
@@ -199,6 +302,7 @@ def produce(manifest, output, binary, reserve_bytes, ocean_coverage=None):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     identity = hashlib.sha256(identity_bytes).hexdigest()
+    ocean_manifest = ocean_coverage['sha256'] if ocean_coverage else None
     input_record = dict(sources=source_records, source_specs=sources, auxiliary=auxiliary_records, geoid_grids=grids)
     input_bytes = (json.dumps(input_record, sort_keys=True) + '\n').encode()
     input_hash = hashlib.sha256(input_bytes).hexdigest()
@@ -237,7 +341,8 @@ def produce(manifest, output, binary, reserve_bytes, ocean_coverage=None):
             raise ValueError(f'z9/{x}/{y}: {missing} unavailable {channel} nodes; refusing publication')
         codes = encode(values, channel, window)
         if channel == 'dem':
-            seams.update(verify_shared_nodes(path, codes, window, binary, identity, raster_window))
+            seams.update(verify_shared_nodes(path, codes, window, binary, identity, raster_window,
+                                             ocean_manifest))
         encoded = codes.tobytes()
         record = dict(channel=channel, window=window, kernel=kernel, datum='EGM2008' if channel == 'dem' else 'above bare earth',
                       plan_sha256=identity, sha256=hashlib.sha256(encoded).hexdigest(), bytes=len(encoded),

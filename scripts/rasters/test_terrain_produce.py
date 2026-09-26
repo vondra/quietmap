@@ -2,6 +2,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from osgeo import gdal, osr
@@ -135,6 +136,235 @@ class TerrainTest(unittest.TestCase):
         window=dict(north_node=0,west_node=0,rows=1,columns=1,nodes_per_degree=3600)
         with self.assertRaises(RuntimeError):
             convert_datum(np.zeros((1,1)),window,999999)
+
+    def test_nodes_past_the_datum_grid_fall_back_without_a_shift(self):
+        import terrain_produce
+        real = terrain_produce.datum_transform
+        class GridEdge:
+            def TransformPoints(self, points):
+                if any(point[0] < 0 for point in points):
+                    raise RuntimeError('Coordinate to transform falls outside grid')
+                return [(x, y, z + 2.0) for x, y, z in points]
+        terrain_produce.datum_transform = lambda *args, **kwargs: GridEdge()
+        try:
+            window=dict(north_node=1,west_node=-1,rows=1,columns=3,nodes_per_degree=1)
+            values = convert_datum(np.full((1, 3), 10.0), window, 5778)
+            self.assertTrue(np.isnan(values[0, 0]))
+            self.assertEqual(values[0, 1], 12.0)
+            self.assertEqual(values[0, 2], 12.0)
+        finally:
+            terrain_produce.datum_transform = real
+
+    def test_silent_inf_grid_cells_fall_back_without_a_shift(self):
+        import terrain_produce
+        real = terrain_produce.datum_transform
+        class HoleyGrid:
+            def TransformPoints(self, points):
+                return [(x, y, z + 2.0) if x >= 0 else (float('inf'),) * 3
+                        for x, y, z in points]
+        terrain_produce.datum_transform = lambda *args, **kwargs: HoleyGrid()
+        try:
+            window=dict(north_node=1,west_node=-1,rows=1,columns=3,nodes_per_degree=1)
+            values = convert_datum(np.full((1, 3), 10.0), window, 5778)
+            self.assertTrue(np.isnan(values[0, 0]))
+            self.assertEqual(values[0, 1], 12.0)
+            self.assertEqual(values[0, 2], 12.0)
+        finally:
+            terrain_produce.datum_transform = real
+
+    def test_conversion_without_any_node_is_a_setup_error(self):
+        import terrain_produce
+        real = terrain_produce.datum_transform
+        class EmptyGrid:
+            def TransformPoints(self, points):
+                return [(float('inf'),) * 3 for _ in points]
+        terrain_produce.datum_transform = lambda *args, **kwargs: EmptyGrid()
+        try:
+            window=dict(north_node=1,west_node=0,rows=1,columns=2,nodes_per_degree=1)
+            with self.assertRaisesRegex(ValueError, 'not a zero shift'):
+                convert_datum(np.full((1, 2), 10.0), window, 5778)
+        finally:
+            terrain_produce.datum_transform = real
+
+    def test_unexpected_datum_error_still_raises(self):
+        import terrain_produce
+        real = terrain_produce.datum_transform
+        class Broken:
+            def TransformPoints(self, points):
+                raise RuntimeError('cannot find datum grid')
+        terrain_produce.datum_transform = lambda *args, **kwargs: Broken()
+        try:
+            window=dict(north_node=1,west_node=0,rows=1,columns=1,nodes_per_degree=1)
+            with self.assertRaisesRegex(RuntimeError, 'cannot find datum grid'):
+                convert_datum(np.full((1, 1), 10.0), window, 5778)
+        finally:
+            terrain_produce.datum_transform = real
+
+    def test_suppressed_grid_edge_errors_fall_back_after_fresh_probe(self):
+        # OSR collapses repeated failures on one transform object into a bare
+        # suppressed message; the fresh probe must recover the grid-edge cause.
+        import terrain_produce
+        real = terrain_produce.datum_transform
+        class Suppressing:
+            def __init__(self):
+                self.errors = 0
+            def TransformPoints(self, points):
+                if any(point[0] < 0 for point in points):
+                    self.errors += 1
+                    if self.errors > 1:
+                        raise RuntimeError('Reprojection failed, err = 2052, further '
+                                           'errors will be suppressed on the transform object.')
+                    raise RuntimeError('Coordinate to transform falls outside grid')
+                return [(x, y, z + 2.0) for x, y, z in points]
+        class GridEdge:
+            def TransformPoints(self, points):
+                if any(point[0] < 0 for point in points):
+                    raise RuntimeError('Coordinate to transform falls outside grid')
+                return [(x, y, z + 2.0) for x, y, z in points]
+        made = []
+        def factory(*args, **kwargs):
+            made.append(True)
+            return Suppressing() if len(made) == 1 else GridEdge()
+        terrain_produce.datum_transform = factory
+        try:
+            window=dict(north_node=2,west_node=-1,rows=2,columns=3,nodes_per_degree=1)
+            values = convert_datum(np.full((2, 3), 10.0), window, 5778)
+            self.assertTrue(np.isnan(values[:, 0]).all())
+            self.assertTrue((values[:, 1:] == 12.0).all())
+        finally:
+            terrain_produce.datum_transform = real
+
+    def test_fresh_probe_keeps_unexpected_datum_errors_loud(self):
+        import terrain_produce
+        real = terrain_produce.datum_transform
+        class Broken:
+            def TransformPoints(self, points):
+                raise RuntimeError('cannot find datum grid')
+        terrain_produce.datum_transform = lambda *args, **kwargs: Broken()
+        try:
+            window=dict(north_node=1,west_node=0,rows=1,columns=1,nodes_per_degree=1)
+            with self.assertRaisesRegex(RuntimeError, 'cannot find datum grid'):
+                convert_datum(np.full((1, 1), 10.0), window, 5778)
+        finally:
+            terrain_produce.datum_transform = real
+
+    def assemble_mem(self, national_value):
+        from terrain_produce import assemble_with_statistics
+        window = dict(north_node=100, west_node=0, rows=100, columns=100,
+                      nodes_per_degree=1)
+        crs = osr.SpatialReference()
+        crs.ImportFromEPSG(4326)
+        fallback = gdal.GetDriverByName('MEM').Create('', 136, 136, 1, gdal.GDT_Float32)
+        fallback.SetProjection(crs.ExportToWkt())
+        fallback.SetGeoTransform((-18, 1, 0, 118, 0, -1))
+        fallback.GetRasterBand(1).Fill(0)
+        cells = np.full((136, 136), national_value, dtype=np.float32)
+        cells[:, :40] = -9999
+        national = gdal.GetDriverByName('MEM').Create('', 136, 136, 1, gdal.GDT_Float32)
+        national.SetProjection(crs.ExportToWkt())
+        national.SetGeoTransform((-18, 1, 0, 118, 0, -1))
+        national.GetRasterBand(1).SetNoDataValue(-9999)
+        national.GetRasterBand(1).WriteArray(cells)
+        sources = [dict(path=fallback, horizontal_crs='EPSG:4326', vertical_crs=3855,
+                        role='fallback', group='fallback'),
+                   dict(path=national, horizontal_crs='EPSG:4326', vertical_crs=3855,
+                        role='national', group='national', nodata=-9999)]
+        return assemble_with_statistics(sources, window, 'dem', 'average', 16)
+
+    def test_conformance_keeps_true_terrain_past_fallback_voids(self):
+        from terrain_seams import require_seam_gate
+        values, owner, stats = self.assemble_mem(600.0)
+        self.assertEqual(stats['groups'][0]['conformed_nodes'], 96 * 136)
+        self.assertAlmostEqual(float(values[50, 90]), 600.0)
+        self.assertAlmostEqual(float(values[50, 10]), 0.0)
+        require_seam_gate(stats)
+
+    def test_agreeing_terrain_is_never_conformed(self):
+        values, owner, stats = self.assemble_mem(1.0)
+        self.assertEqual(stats['groups'][0]['conformed_nodes'], 0)
+        self.assertAlmostEqual(float(values[50, 90]), 1.0, places=5)
+        self.assertAlmostEqual(float(values[50, 10]), 0.0)
+
+    def test_conformance_threshold_is_strict(self):
+        _, _, stats = self.assemble_mem(2.0)
+        self.assertEqual(stats['groups'][0]['conformed_nodes'], 0)
+
+    def test_disjoint_group_seams_stack_per_edge_not_per_group(self):
+        import terrain_produce
+        from terrain_produce import assemble_with_statistics
+        window = dict(north_node=0, west_node=0, rows=1, columns=60, nodes_per_degree=1)
+        fallback = dict(path='fallback', role='fallback', group='sea', vertical_crs=3855, epoch='2020')
+        west = dict(path='west', role='national', group='west', vertical_crs=3855, epoch='2020')
+        east = dict(path='east', role='national', group='east', vertical_crs=3855, epoch='2020')
+        def fake_average(source, work, kernel='average'):
+            shape = (work['rows'], work['columns'])
+            if source['role'] == 'fallback':
+                return np.full(shape, 10.)
+            out = np.full(shape, np.nan)
+            if source['group'] == 'west':
+                out[:, :15] = 10.24
+            else:
+                out[:, -15:] = 10.24
+            return out
+        with patch.object(terrain_produce, 'read_average', side_effect=fake_average):
+            _, _, stats = assemble_with_statistics([fallback, west, east], window, 'dem', halo=2)
+        self.assertAlmostEqual(stats['groups'][0]['maximum_selection_step_m'], .12)
+        self.assertAlmostEqual(stats['groups'][1]['maximum_selection_step_m'], .12)
+        # A per-group sum would reach 0.44; disjoint edges stack to 0.12.
+        self.assertAlmostEqual(stats['maximum_artificial_step_bound_m'], .32)
+
+    def test_french_frames_fall_through_past_clipped_onshore_extents(self):
+        import terrain_produce
+        from unittest.mock import MagicMock, patch
+        seen = {}
+
+        def fake_options():
+            options = MagicMock()
+            options.SetOnlyBest.side_effect = lambda flag: seen.setdefault('flags', []).append(flag)
+            return options
+
+        with patch.object(terrain_produce.osr, 'SpatialReference', return_value=MagicMock()), \
+                patch.object(terrain_produce.osr, 'CoordinateTransformationOptions',
+                             side_effect=fake_options), \
+                patch.object(terrain_produce.osr, 'CreateCoordinateTransformation',
+                             return_value=MagicMock()):
+            terrain_produce.datum_transform(5720, [-5.2, 41.3, 10.0, 51.2])
+            terrain_produce.datum_transform(5721, [8.1, 41.3, 9.9, 43.1])
+            terrain_produce.datum_transform(5778, None)
+        self.assertEqual(seen['flags'], [False, False, True])
+
+    def test_colocated_ramps_exempt_in_relief_but_trip_on_the_flat(self):
+        import terrain_produce
+        from terrain_produce import assemble_with_statistics
+        from terrain_seams import require_seam_gate
+        window = dict(north_node=0, west_node=0, rows=1, columns=60, nodes_per_degree=1)
+        fallback = dict(path='fallback', role='fallback', group='sea', vertical_crs=3855, epoch='2020')
+        groups = [dict(path=name, role='national', group=name, vertical_crs=3855, epoch='2020')
+                  for name in ('west', 'east', 'north')]
+
+        def assemble(slope):
+            def fake_average(source, work, kernel='average'):
+                shape = (work['rows'], work['columns'])
+                base = np.broadcast_to(np.arange(shape[1], dtype=float) * slope, shape).copy()
+                if source['role'] == 'fallback':
+                    return base
+                out = np.full(shape, np.nan)
+                out[:, :15] = base[:, :15] + .24
+                return out
+            with patch.object(terrain_produce, 'read_average', side_effect=fake_average):
+                return assemble_with_statistics([fallback, *groups], window, 'dem', halo=2)
+
+        # Three colocated 0.12 ramps stack past the 0.3 selection budget; the
+        # stack hides in steep relief and trips on the flat.
+        _, _, steep = assemble(50.)
+        for group in steep['groups']:
+            self.assertGreater(group['maximum_selection_step_m'], 0)
+        self.assertGreater(steep['selection_exempt_stacked_edges'], 0)
+        require_seam_gate(steep)
+        _, _, flat = assemble(0.)
+        self.assertEqual(flat['selection_exempt_stacked_edges'], 0)
+        with self.assertRaisesRegex(ValueError, 'artificial source seam'):
+            require_seam_gate(flat)
 
 
 if __name__ == '__main__': unittest.main()
