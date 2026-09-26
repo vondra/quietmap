@@ -274,6 +274,124 @@ fn cruise_ground_holes_never_become_ground_or_cruise_chords() {
     }
 }
 
+/// A secondary sample inside a primary gap Stage 1 will not bridge is real
+/// coverage: FL280 over 2,000 m terrain is 6,534 m AGL (Airborne), so the
+/// 200 s hole keeps its secondary sample and the primary pair stays unbridged.
+#[test]
+fn suppression_keeps_secondary_in_an_airborne_gap() {
+    let mut points = vec![
+        pt(0.0, 50.0, 14.0, 28_000.0, 450.0, 90.0),
+        pt(100.0, 50.0, 14.02, 28_000.0, 450.0, 90.0),
+        pt(200.0, 50.0, 14.04, 28_000.0, 450.0, 90.0),
+    ];
+    points[1].flags = crate::trace::FLAG_SECONDARY_PROVIDER;
+    let mut agl = vec![6534.0; 3];
+    let mut elev = vec![2000.0; 3];
+    let mut phases = vec![Phase::Airborne; 3];
+    suppress_covered_secondary_points(&mut points, &mut agl, &mut elev, &mut phases, 0);
+    assert_eq!(points.len(), 3);
+    let segs = build_segments(&points, &agl, &elev, &phases, &test_meta());
+    assert_eq!(segs.len(), 2);
+    assert!(
+        segs.iter()
+            .all(|s| s.flags & crate::flight::segment_flags::SECONDARY_ONLY != 0),
+        "the rescued stretch rides the increment estimator"
+    );
+}
+
+/// A 90 s numeric-altitude taxi gap keeps its secondary sample: Stage 1
+/// infers Ground (60 s budget) where Stage 0 only saw Airborne (120 s).
+#[test]
+fn suppression_keeps_secondary_in_a_ground_gap() {
+    let mut points = vec![
+        pt(0.0, 50.0, 14.0, 1_200.0, 10.0, 90.0),
+        pt(45.0, 50.0, 14.001, 1_200.0, 10.0, 90.0),
+        pt(90.0, 50.0, 14.002, 1_200.0, 10.0, 90.0),
+    ];
+    points[1].flags = crate::trace::FLAG_SECONDARY_PROVIDER;
+    let mut agl = vec![5.0; 3];
+    let mut elev = vec![360.0; 3];
+    let mut phases = vec![Phase::Ground; 3];
+    suppress_covered_secondary_points(&mut points, &mut agl, &mut elev, &mut phases, 0);
+    assert_eq!(points.len(), 3);
+    let segs = build_segments(&points, &agl, &elev, &phases, &test_meta());
+    assert_eq!(segs.len(), 2);
+}
+
+/// A secondary sample inside a primary pair Stage 1 will bridge only moves
+/// the stretch onto the noisier increment estimator: a descent holding Cruise
+/// through 7,400 m AGL joins a 200 s gap, so the secondary sample goes and
+/// one primary chord remains — as in any short airborne gap.
+#[test]
+fn suppression_drops_secondary_inside_a_joinable_gap() {
+    for (times, alts_ft, agls_m, phases) in [
+        (
+            [0.0, 100.0, 200.0],
+            [24_500.0, 24_300.0, 24_100.0],
+            [7400.0, 7350.0, 7300.0],
+            Phase::Cruise,
+        ),
+        (
+            [0.0, 50.0, 100.0],
+            [5_000.0, 5_000.0, 5_000.0],
+            [1500.0, 1500.0, 1500.0],
+            Phase::Airborne,
+        ),
+    ] {
+        let mut points = vec![
+            pt(times[0], 50.0, 14.0, alts_ft[0], 450.0, 90.0),
+            pt(times[1], 50.0, 14.02, alts_ft[1], 450.0, 90.0),
+            pt(times[2], 50.0, 14.04, alts_ft[2], 450.0, 90.0),
+        ];
+        points[1].flags = crate::trace::FLAG_SECONDARY_PROVIDER;
+        let mut agl = agls_m.to_vec();
+        let mut elev = vec![0.0; 3];
+        let mut phases = vec![phases; 3];
+        suppress_covered_secondary_points(&mut points, &mut agl, &mut elev, &mut phases, 0);
+        assert_eq!(points.len(), 2, "phases {phases:?}");
+        assert!(!points.iter().any(|p| p.is_secondary_provider()));
+        let segs = build_segments(&points, &agl, &elev, &phases, &test_meta());
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].flags & crate::flight::segment_flags::SECONDARY_ONLY, 0);
+    }
+}
+
+/// The −30 m endpoint gate lives in the pair predicate now: an airborne
+/// pair 100 m under the terrain drops, exactly −30 m AGL keeps (the
+/// inclusive boundary pins against a future `>` rewrite), and ground pairs
+/// bypass even when nominally underground (they re-enter via Stage 2C).
+#[test]
+fn pair_gate_drops_underground_airborne_and_bypasses_ground() {
+    let pair = |alt_ft: f32, elev_m: f32, phase: Phase| {
+        let points = vec![
+            pt(0.0, 50.0, 14.0, alt_ft, 250.0, 0.0),
+            pt(10.0, 50.001, 14.001, alt_ft, 250.0, 0.0),
+        ];
+        let agl = vec![alt_ft * 0.3048 - elev_m; 2];
+        let elev = vec![elev_m; 2];
+        let phases = vec![phase; 2];
+        (points, agl, elev, phases)
+    };
+    // 100 m under the terrain: a transponder spike, drops.
+    let (points, agl, elev, phases) = pair(1312.0, 500.0, Phase::Airborne);
+    assert_eq!(
+        pair_segment_phase(&points, &agl, &elev, &phases, 0, 0, 1),
+        None
+    );
+    // Exactly −30 m AGL on both endpoints: keeps.
+    let (points, agl, elev, phases) = pair(1542.0, 500.0, Phase::Airborne);
+    assert_eq!(
+        pair_segment_phase(&points, &agl, &elev, &phases, 0, 0, 1),
+        Some(Phase::Airborne)
+    );
+    // Ground pairs bypass the gate.
+    let (points, agl, elev, phases) = pair(1312.0, 500.0, Phase::Ground);
+    assert_eq!(
+        pair_segment_phase(&points, &agl, &elev, &phases, 0, 0, 1),
+        Some(Phase::Ground)
+    );
+}
+
 /// readsb column 6 bit 0 marks a stale position, not ground: slow airborne
 /// points carrying it must neither be ground nor end a rotation. Only a
 /// surface report (`alt = "ground"`) rests the aircraft.

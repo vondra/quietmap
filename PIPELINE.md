@@ -186,8 +186,10 @@ selects every day of `[anchor − 1 year, anchor)` as a baseline candidate and i
 month-firsts as increment candidates, and `scripts/ships/download_gfw.py` requests the
 same days. Anchor 2027-01 is calendar 2026; anchor 2026-10 is 2025-10-01 … 2026-09-30.
 Stage 0 merges the two providers per aircraft address and UTC day: every adsb.lol
-sample stays, an ADSBexchange sample only where adsb.lol has no sample within 1 s and
-no joinable pair spanning it, and anonymous (`~`) echoes of an address track go.
+sample stays, an ADSBexchange sample only where adsb.lol has no sample within 1 s,
+and anonymous (`~`) echoes of an address track go. Stage 1 then drops the
+ADSBexchange samples a joinable primary pair spans — judged with DEM phases,
+which Stage 0 cannot see — so only real coverage gaps ride the increment days.
 Segments touching an ADSBexchange sample carry `SECONDARY_ONLY`. Each day leaves a
 provider receipt (`provider-receipts/<day>.json`: traces, corrupt members, aircraft
 per UTC hour); a day below half the same-hour median, with an unrecovered corrupt

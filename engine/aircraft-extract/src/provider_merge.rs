@@ -7,16 +7,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::classify::PHASE_BOUNDARY_AGL_M;
 use crate::filters::point_is_sane;
-use crate::flight::Phase;
 use crate::geo::flat_dist;
-use crate::segment::{gap_budget_for, segment_phase};
 use crate::trace::{trace_identity, AircraftTrace, CallsignChange, TracePoint, FLAG_SECONDARY_PROVIDER};
 
-/// Two providers' samples closer than this in time are one observation. W5
-/// overlap pilot 2026-09-24 (`research/reality-fixes-20260924/w5-aircraft`):
-/// adsb.lol merged with itself keeps 0 of 99,908,590 points at 1 s.
+/// Two providers' samples closer than this in time are one observation.
+/// Overlap pilot 2026-09-24: adsb.lol merged with itself keeps 0 of
+/// 99,908,590 points at 1 s.
 pub const SAME_OBSERVATION_TOLERANCE_S: f64 = 1.0;
 
 /// Anonymous-track coincidence, from the same pilot's track pairing (10 s ×
@@ -83,37 +80,23 @@ pub fn merge_provider_traces(
     (merged, counts)
 }
 
-/// Stage 0 has no terrain, so coverage classifies a sample by its
-/// barometric altitude as if it were AGL; the Stage-1 gap budgets then apply.
-fn coverage_phase(point: &TracePoint) -> Phase {
-    match point.airborne_alt_ft() {
-        None => Phase::Ground,
-        Some(alt_ft) if alt_ft * 0.3048 >= PHASE_BOUNDARY_AGL_M => Phase::Cruise,
-        Some(_) => Phase::Airborne,
-    }
-}
-
 /// Disjoint, time-ordered intervals where the primary provider observed the
-/// aircraft: ±1 s around every sane sample and every pair Stage 1 could join.
+/// aircraft: ±1 s around every sane sample. Gap judgement belongs to Stage 1,
+/// which classifies phases from DEM AGL with ground inference and hysteresis;
+/// a barometric guess here would delete secondary samples from gaps Stage 1
+/// will not bridge and keep ones inside gaps it will bridge.
 fn primary_coverage(points: &[TracePoint]) -> Vec<(f64, f64)> {
     let mut sane: Vec<&TracePoint> = points.iter().filter(|p| point_is_sane(p)).collect();
     sane.sort_by(|a, b| a.timestamp.total_cmp(&b.timestamp));
     let mut intervals: Vec<(f64, f64)> = Vec::with_capacity(sane.len());
-    let mut push = |start: f64, end: f64| match intervals.last_mut() {
-        Some(last) if start <= last.1 => last.1 = last.1.max(end),
-        _ => intervals.push((start, end)),
-    };
-    for (index, point) in sane.iter().enumerate() {
-        push(
+    for point in sane {
+        let (start, end) = (
             point.timestamp - SAME_OBSERVATION_TOLERANCE_S,
             point.timestamp + SAME_OBSERVATION_TOLERANCE_S,
         );
-        if let Some(next) = sane.get(index + 1) {
-            let (from, to) = (coverage_phase(point), coverage_phase(next));
-            let dt = next.timestamp - point.timestamp;
-            if dt > 0.0 && segment_phase(from, to).is_some() && dt <= gap_budget_for(from, to) {
-                push(point.timestamp, next.timestamp);
-            }
+        match intervals.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => intervals.push((start, end)),
         }
     }
     intervals
