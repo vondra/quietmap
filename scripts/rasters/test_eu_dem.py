@@ -320,6 +320,37 @@ class PlanOnlyTest(unittest.TestCase):
         self.assertEqual(len(self.run_main([])), 1)
 
 
+class ExcludeTest(unittest.TestCase):
+    def run_main(self, extra):
+        import sys
+        plan_eu = load_hyphenated('plan-eu-dem')
+        calls = []
+        plan_eu.plan = lambda *args: {'squares': [[258, 171], [259, 170], [259, 171]],
+                                      'sources': []}
+        plan_eu.produce = lambda *args: calls.append(args)
+        argv = ['plan-eu-dem.py', '--source-root', 'src', '--output', 'out',
+               '--raster-repack', 'rep', '--reserve-bytes', '1'] + extra
+        with tempfile.TemporaryDirectory() as temp:
+            real_argv = sys.argv
+            sys.argv = argv[:5] + ['--work-dir', temp] + argv[5:]
+            try:
+                plan_eu.main()
+            finally:
+                sys.argv = real_argv
+            manifest = Path(temp) / 'eu-dem-manifest.json'
+            squares = json.loads(manifest.read_text())['squares'] if manifest.exists() else None
+        return calls, squares
+
+    def test_exclude_defers_the_square_but_still_produces(self):
+        calls, squares = self.run_main(['--exclude', '258,171', '--exclude', '259,170'])
+        self.assertEqual(squares, [[259, 171]])
+        self.assertEqual(len(calls), 1)
+
+    def test_malformed_exclude_fails_fast(self):
+        with self.assertRaises(SystemExit):
+            self.run_main(['--exclude', 'banana'])
+
+
 class CHDedupeTest(unittest.TestCase):
     def item(self, year, tile):
         return {'id': f'swissalti3d_{year}_{tile}',
