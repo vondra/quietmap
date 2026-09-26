@@ -16,7 +16,7 @@ class SeamTest(unittest.TestCase):
         full, weight, difference = feather(base, national, h)
         part, _, _ = feather(base[10:90, 20:150], national[10:90, 20:150], h)
         np.testing.assert_array_equal(part[20:-20, 20:-20], full[30:70, 40:130])
-        stats = artificial_steps(weight, difference, h)
+        stats, _, _ = artificial_steps(weight, difference, h, national, base)
         require_seam_gate(stats)
         self.assertGreater(float(np.max(np.diff(full[50]))), 20)
         self.assertLessEqual(stats['maximum_artificial_step_bound_m'], .5)
@@ -27,7 +27,41 @@ class SeamTest(unittest.TestCase):
         national[:, :40] = np.nan
         _, weight, difference = feather(base, national, 16)
         with self.assertRaisesRegex(ValueError, 'artificial source seam'):
-            require_seam_gate(artificial_steps(weight, difference, 16))
+            require_seam_gate(artificial_steps(weight, difference, 16, national, base)[0])
+
+    def test_cliff_ramp_hides_in_the_slope_but_capped_ramps_still_trip(self):
+        base = np.broadcast_to(np.arange(100.) * 50, (60, 100)).copy()
+        national = base + 10
+        national[:, :40] = np.nan
+        _, weight, difference = feather(base, national, 16)
+        stats, _, _ = artificial_steps(weight, difference, 18, national, base)
+        self.assertGreater(stats['maximum_selection_step_m'], .3)
+        self.assertGreater(stats['selection_exempt_edges'], 0)
+        require_seam_gate(stats)
+        national = base + 30
+        national[:, :40] = np.nan
+        _, weight, difference = feather(base, national, 16)
+        with self.assertRaisesRegex(ValueError, 'artificial source seam'):
+            require_seam_gate(artificial_steps(weight, difference, 18, national, base)[0])
+
+    def test_along_strike_cliff_ramp_exempts_on_cross_axis_relief(self):
+        # Tenerife's west cliff runs along the edge: axial slope is flat but the
+        # face drops 50 m/node across it, so the 10 m ramp hides like an
+        # across-strike one; a flat-terrain ramp of the same size still trips.
+        base = np.broadcast_to((np.arange(100.) * 50)[:, None], (100, 100)).copy()
+        national = base + 10
+        national[:, :40] = np.nan
+        _, weight, difference = feather(base, national, 16)
+        stats, _, _ = artificial_steps(weight, difference, 18, national, base)
+        self.assertGreater(stats['maximum_selection_step_m'], .3)
+        self.assertGreater(stats['selection_exempt_edges'], 0)
+        require_seam_gate(stats)
+        flat = np.zeros((100, 100))
+        national = np.full_like(flat, 10)
+        national[:, :40] = np.nan
+        _, weight, difference = feather(flat, national, 16)
+        with self.assertRaisesRegex(ValueError, 'artificial source seam'):
+            require_seam_gate(artificial_steps(weight, difference, 18, national, flat)[0])
 
     def test_diagonal_nodes_and_verified_empty_ocean_are_checked(self):
         def window(binary, x, y):

@@ -12,8 +12,8 @@ import numpy as np
 from osgeo import gdal, osr
 from canopy_average import canopy_average
 from terrain_io import digest, provenance, publish_bytes, publish_json
-from terrain_seams import (expanded, feather, artificial_steps, require_seam_gate,
-                           verify_shared_nodes, QUANTIZATION_STEP_BUDGET_M)
+from terrain_seams import (expanded, feather, artificial_steps, core_relief, hides_in_relief,
+                           require_seam_gate, verify_shared_nodes, QUANTIZATION_STEP_BUDGET_M)
 
 gdal.UseExceptions()
 osr.UseExceptions()
@@ -186,30 +186,61 @@ def assemble_with_statistics(sources, window, channel, kernel='average', halo=12
     owner = np.full(values.shape, -1, dtype=np.int16)
     statistics = dict(halo_nodes=halo if national else 0, groups=[],
                       maximum_artificial_step_bound_m=QUANTIZATION_STEP_BUDGET_M)
+    stack, relief_stack = None, None
     for index, source in enumerate(sources):
         sampled = (canopy_average(source, work, read_average) if channel == 'canopy'
                    else read_average(source, work, kernel))
         if channel == 'dem':
             sampled = convert_datum(sampled, work, source['vertical_crs'], source.get('datum_area_of_interest'))
         if channel == 'dem' and source.get('role') == 'national':
-            # Conformance: a disagreement beyond a quarter halo step proves the
+            # Conformance: a disagreement beyond an eighth-halo step proves the
             # running base wrong there (fallback voids, 30 m smoothing of
             # cliffs and gorges; SRTM spot checks side with the national data),
-            # so the base takes the national value before feathering. The gate
-            # then sees only honest transitions (bound halo/4 + 0.2 m
-            # quantization <= 0.5 m) and the output keeps true terrain.
-            conform = np.abs(sampled - values) > halo / 4
+            # so the base takes the national value before feathering. Residuals
+            # past conforming stay under halo/8, so one group induces at most
+            # 1/8 m per edge and two colocated groups (a quarry straddling a
+            # border) stack to 0.25 + 0.2 m quantization <= 0.5 m.
+            conform = np.abs(sampled - values) > halo / 8
             values[conform] = sampled[conform]
-            values, weight, difference = feather(values, sampled, halo)
+            base = values
+            values, weight, difference = feather(base, sampled, halo)
+            group_stats, stack0, stack1 = artificial_steps(weight, difference, padding,
+                                                           sampled, base)
             group = dict(group=source['group'], conformed_nodes=int(conform.sum()),
-                         **artificial_steps(weight, difference, padding))
+                         **group_stats)
+            if stack is None:
+                # Sum in float64: float32 accumulation rounds an exact-budget
+                # 0.3 past the gate by an ulp under NEP 50 weak promotion.
+                stack = [stack0.astype(np.float64), stack1.astype(np.float64)]
+                relief_stack = core_relief(sampled, base, padding)
+            else:
+                stack[0] += stack0
+                stack[1] += stack1
+                for axis, natural in enumerate(core_relief(sampled, base, padding)):
+                    relief_stack[axis] = np.maximum(relief_stack[axis], natural)
             statistics['groups'].append(group)
-            statistics['maximum_artificial_step_bound_m'] += group['maximum_selection_step_m']
             valid = weight > 0
         else:
             valid = np.isfinite(sampled)
             values[valid] = sampled[valid]
         owner[valid] = index
+    if stack is not None:
+        # Colocated sub-budget ramps stack past the budget where two national
+        # coverages cross one steep feature (the ENCI quarry straddles the
+        # NL/BE border); the stacked ramp hides in the stacked relief like a
+        # single-group one, so it exempts under the same rule.
+        exempted, max_exempted, gated_maximum = 0, 0., 0.
+        for total, natural in zip(stack, relief_stack):
+            hidden = hides_in_relief(total, natural)
+            exempted += int(hidden.sum())
+            if hidden.any():
+                max_exempted = max(max_exempted, float(total[hidden].max()))
+            visible = total[~hidden]
+            if len(visible):
+                gated_maximum = max(gated_maximum, float(visible.max()))
+        statistics['selection_exempt_stacked_edges'] = exempted
+        statistics['maximum_exempted_stacked_step_m'] = max_exempted
+        statistics['maximum_artificial_step_bound_m'] = gated_maximum + QUANTIZATION_STEP_BUDGET_M
     if padding:
         values = values[padding:-padding, padding:-padding]
         owner = owner[padding:-padding, padding:-padding]

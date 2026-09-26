@@ -2,6 +2,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from osgeo import gdal, osr
@@ -231,14 +232,71 @@ class TerrainTest(unittest.TestCase):
         require_seam_gate(stats)
 
     def test_agreeing_terrain_is_never_conformed(self):
-        values, owner, stats = self.assemble_mem(2.0)
+        values, owner, stats = self.assemble_mem(1.0)
         self.assertEqual(stats['groups'][0]['conformed_nodes'], 0)
-        self.assertAlmostEqual(float(values[50, 90]), 2.0, places=5)
+        self.assertAlmostEqual(float(values[50, 90]), 1.0, places=5)
         self.assertAlmostEqual(float(values[50, 10]), 0.0)
 
     def test_conformance_threshold_is_strict(self):
-        _, _, stats = self.assemble_mem(4.0)
+        _, _, stats = self.assemble_mem(2.0)
         self.assertEqual(stats['groups'][0]['conformed_nodes'], 0)
+
+    def test_disjoint_group_seams_stack_per_edge_not_per_group(self):
+        import terrain_produce
+        from terrain_produce import assemble_with_statistics
+        window = dict(north_node=0, west_node=0, rows=1, columns=60, nodes_per_degree=1)
+        fallback = dict(path='fallback', role='fallback', group='sea', vertical_crs=3855, epoch='2020')
+        west = dict(path='west', role='national', group='west', vertical_crs=3855, epoch='2020')
+        east = dict(path='east', role='national', group='east', vertical_crs=3855, epoch='2020')
+        def fake_average(source, work, kernel='average'):
+            shape = (work['rows'], work['columns'])
+            if source['role'] == 'fallback':
+                return np.full(shape, 10.)
+            out = np.full(shape, np.nan)
+            if source['group'] == 'west':
+                out[:, :15] = 10.24
+            else:
+                out[:, -15:] = 10.24
+            return out
+        with patch.object(terrain_produce, 'read_average', side_effect=fake_average):
+            _, _, stats = assemble_with_statistics([fallback, west, east], window, 'dem', halo=2)
+        self.assertAlmostEqual(stats['groups'][0]['maximum_selection_step_m'], .12)
+        self.assertAlmostEqual(stats['groups'][1]['maximum_selection_step_m'], .12)
+        # A per-group sum would reach 0.44; disjoint edges stack to 0.12.
+        self.assertAlmostEqual(stats['maximum_artificial_step_bound_m'], .32)
+
+    def test_colocated_ramps_exempt_in_relief_but_trip_on_the_flat(self):
+        import terrain_produce
+        from terrain_produce import assemble_with_statistics
+        from terrain_seams import require_seam_gate
+        window = dict(north_node=0, west_node=0, rows=1, columns=60, nodes_per_degree=1)
+        fallback = dict(path='fallback', role='fallback', group='sea', vertical_crs=3855, epoch='2020')
+        groups = [dict(path=name, role='national', group=name, vertical_crs=3855, epoch='2020')
+                  for name in ('west', 'east', 'north')]
+
+        def assemble(slope):
+            def fake_average(source, work, kernel='average'):
+                shape = (work['rows'], work['columns'])
+                base = np.broadcast_to(np.arange(shape[1], dtype=float) * slope, shape).copy()
+                if source['role'] == 'fallback':
+                    return base
+                out = np.full(shape, np.nan)
+                out[:, :15] = base[:, :15] + .24
+                return out
+            with patch.object(terrain_produce, 'read_average', side_effect=fake_average):
+                return assemble_with_statistics([fallback, *groups], window, 'dem', halo=2)
+
+        # Three colocated 0.12 ramps stack past the 0.3 selection budget; the
+        # stack hides in steep relief and trips on the flat.
+        _, _, steep = assemble(50.)
+        for group in steep['groups']:
+            self.assertGreater(group['maximum_selection_step_m'], 0)
+        self.assertGreater(steep['selection_exempt_stacked_edges'], 0)
+        require_seam_gate(steep)
+        _, _, flat = assemble(0.)
+        self.assertEqual(flat['selection_exempt_stacked_edges'], 0)
+        with self.assertRaisesRegex(ValueError, 'artificial source seam'):
+            require_seam_gate(flat)
 
 
 if __name__ == '__main__': unittest.main()
