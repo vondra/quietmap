@@ -49,6 +49,8 @@ fn compare(pieces: &[Piece], receiver_lon: f64) -> Result<Vec<f32>> {
             profile_idx: &profile,
             source_id: &[2],
             origin: &[0],
+            // Chord geometry only: the takeoff roll is unobserved.
+            departure_field_elev_m: &[i16::MIN],
         },
         start_gx: &sx,
         start_gy: &sy,
