@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Fetch Wallonie MNT 2021-2022 province zips transiently as retained 5 m tiles."""
 import argparse
-import hashlib
+import http.client
 import json
 import math
 from pathlib import Path
 import time
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
@@ -41,24 +42,36 @@ def province_zips():
     return sorted(set(zips))
 
 
-def download_transient(url, expected_bytes, scratch):
+def download_transient(url, expected_bytes, scratch, attempts=3):
     scratch.mkdir(parents=True, exist_ok=True)
     target = scratch / url.rsplit('/', 1)[1]
     if target.exists() and target.stat().st_size == expected_bytes:
         return target
     if target.exists():
         target.unlink()
-    checksum = hashlib.sha256()
-    size = 0
     request = urllib.request.Request(url, headers={'User-Agent': 'QuietMap terrain producer'})
-    with urllib.request.urlopen(request, timeout=600) as response, open(target, 'wb') as out:
-        while block := response.read(1 << 20):
-            size += len(block)
-            checksum.update(block)
-            out.write(block)
-    if size != expected_bytes:
-        raise ValueError(f'incomplete province archive: {target}')
-    return target
+    last = None
+    for attempt in range(attempts):
+        # A 50 GB province pull always trips a transient stall (IncompleteRead
+        # killed the Luxembourg pull 2026-09-26), so restart the pull, not the run.
+        try:
+            with urllib.request.urlopen(request, timeout=600) as response, open(target, 'wb') as out:
+                size = 0
+                while block := response.read(1 << 20):
+                    size += len(block)
+                    out.write(block)
+                if size != expected_bytes:
+                    raise ValueError(f'incomplete province archive: {target}')
+            return target
+        except (http.client.IncompleteRead, http.client.RemoteDisconnected,
+                TimeoutError, ConnectionError, urllib.error.URLError) as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code < 500 and error.code != 429:
+                raise
+            if attempt + 1 == attempts:
+                raise
+            last = error
+        time.sleep(2 ** attempt)
+    raise last
 
 
 def reduce_province(archive, member, output, record):

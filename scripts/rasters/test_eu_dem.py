@@ -161,6 +161,66 @@ class FlandersNoCoverageTest(unittest.TestCase):
             self.run_window(b'<html><body>proxy page gone</body></html>')
 
 
+class WalloniaRetryTest(unittest.TestCase):
+    def test_restarts_after_a_transient_stall(self):
+        import http.client
+        import urllib.request
+        from unittest.mock import patch
+        fetch_be_wa = load_hyphenated('fetch-be-wa')
+        real = urllib.request.urlopen
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def read(self, size=-1):
+                block, self.payload = self.payload[:size], self.payload[size:]
+                return block
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def stalling_once(request, timeout=None):
+            calls.append(request)
+            if len(calls) == 1:
+                raise http.client.IncompleteRead(b'half', 8)
+            return FakeResponse(b'province')
+
+        urllib.request.urlopen = stalling_once
+        try:
+            with tempfile.TemporaryDirectory() as directory, patch('time.sleep'):
+                target = fetch_be_wa.download_transient(
+                    'https://example.invalid/PROV_X.zip', 8, Path(directory))
+                self.assertEqual(target.read_bytes(), b'province')
+        finally:
+            urllib.request.urlopen = real
+        self.assertEqual(len(calls), 2)
+
+    def test_client_errors_fail_fast(self):
+        import urllib.request
+        fetch_be_wa = load_hyphenated('fetch-be-wa')
+        real = urllib.request.urlopen
+        calls = []
+
+        def gone(request, timeout=None):
+            calls.append(request)
+            raise urllib.error.HTTPError(request.full_url, 404, 'Not Found', {}, None)
+
+        urllib.request.urlopen = gone
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(urllib.error.HTTPError):
+                    fetch_be_wa.download_transient(
+                        'https://example.invalid/PROV_X.zip', 8, Path(directory))
+        finally:
+            urllib.request.urlopen = real
+        self.assertEqual(len(calls), 1)
+
+
 class LandMaskTest(unittest.TestCase):
     def test_land_and_sea(self):
         with tempfile.TemporaryDirectory() as directory:
