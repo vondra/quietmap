@@ -470,19 +470,24 @@ pub fn solar_farm_lw(capacity_mw: Option<f64>, area_m2: f64) -> f64 {
 /// profile — Lancefield publishes only the total, so no per-band evidence.
 pub const SOLAR_SPECTRUM: [f64; NUM_BANDS] = [-8.0, -5.0, -2.0, 0.0, 0.0, -1.0, -3.0, -6.0];
 
-/// Substation fallback classes, derived by the readers from `voltage` /
-/// autotransformer evidence (`square-store::osm_evidence::substation_power`).
+/// Substation fallback classes, derived by the readers from the `substation`
+/// tag, `voltage` and autotransformer evidence
+/// (`square-store::osm_evidence::substation_power`).
 pub const SUBSTATION_MAIN: u8 = 1;
 pub const SUBSTATION_AUTO: u8 = 2;
 pub const SUBSTATION_DISTRIBUTION: u8 = 3;
+pub const SUBSTATION_MINOR: u8 = 4;
 
-/// Substation class medians [MVA] over 258,524 OSM transformer ratings:
-/// main/transmission 25, auto 160, distribution 2. Unknown (0) takes the
+/// Substation class medians [MVA] over OSM ratings: main/transmission 25,
+/// auto 160, distribution 2 (258,524 transformer ratings), minor 0.4 (median
+/// of the 109 explicitly rated `minor_distribution` stations over 120 canary
+/// reach squares — mode 400 kVA, range 100 kVA–2 MVA). Unknown (0) takes the
 /// distribution median — the overwhelmingly common case.
 pub fn substation_class_mva(substation_class: u8) -> f64 {
     match substation_class {
         SUBSTATION_MAIN => 25.0,
         SUBSTATION_AUTO => 160.0,
+        SUBSTATION_MINOR => 0.4,
         _ => 2.0,
     }
 }
@@ -600,9 +605,10 @@ mod tests {
                 substation_class_mva(1),
                 substation_class_mva(2),
                 substation_class_mva(3),
+                substation_class_mva(4),
                 substation_class_mva(0)
             ),
-            (25.0, 160.0, 2.0, 2.0)
+            (25.0, 160.0, 2.0, 0.4, 2.0)
         );
     }
 
