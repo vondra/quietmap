@@ -39,13 +39,15 @@ RESOLUTION = 10
 FR_FLOOR_M = -5.
 STEP = 10000
 EXTENT = (0, 6020000, 1260000, 7130000)
-# Corsica sits 65 km east of the mainland edge; the sea gap keeps the groups disjoint.
+# Corsica sits east of a tile-free sea gap (kept mainland ends at x0 1080000,
+# Corsica starts at 1180000); only the easting separates the RAF18 and RAC23
+# frames. A northing cap here cut Cap Corse (up to N 6240000) into the
+# mainland group, where RAF18 has no grid and production dies in convert_datum.
 CORSICA_X0 = 1090000
-CORSICA_Y1 = 6190000
 
 
 def group_of(x0, y1):
-    if x0 >= CORSICA_X0 and y1 <= CORSICA_Y1:
+    if x0 >= CORSICA_X0:
         return 'FR-RGEALTI-CORSE'
     return 'FR-RGEALTI'
 
