@@ -10,10 +10,8 @@ use super::diffraction;
 use super::diffraction::DiffractionResult;
 use super::horizon::single_edge_atten;
 use super::obstacle_index::{CrossingCandidate, ObstacleKind};
-use super::path_profile::{
-    clamp_source_platform, path_integral_u8, vegetation_run_length,
-    PathProfile,
-};
+use super::cnossos::ground::MeteorologicalState;
+use super::path_profile::{clamp_source_platform, path_integral_u8, PathProfile};
 use super::vegetation;
 use crate::types::{EdgePoint, ObstacleEdge, ScreeningObstacleTrace, TerrainTrace, NUM_BANDS};
 
@@ -305,16 +303,21 @@ pub fn screening_attenuation_with_meta(
     ([0.0; NUM_BANDS], make_empty())
 }
 
-/// Vegetation (forest) attenuation per band from a `PathProfile`.
-///
-/// Depth = `Σ Δlen × forest[i]/100` (right-endpoint density sampling) over
-/// contiguous forested runs, keeping only runs whose PHYSICAL extent is
-/// ≥ 10 m (`vegetation_run_length`). Non-uniform t spacing is weighted by
-/// interval length so endpoints (dense) don't dominate — fixes the
-/// pre-existing FusedGrid bias.
-pub fn vegetation_attenuation_path(profile: &PathProfile) -> [f64; NUM_BANDS] {
-    let forest_depth = vegetation_run_length(&profile.t, &profile.forest_u8, profile.dist_m);
-    vegetation::vegetation_attenuation(forest_depth)
+/// Foliage attenuation per band from a `PathProfile` on the single straight ray: the
+/// airport ground-ops carve-out has no meteorological states to mix, so it takes the
+/// homogeneous depth (ISO 9613-2:2024 Table A.1, no calibration factor).
+pub fn vegetation_attenuation_path(
+    profile: &PathProfile,
+    source_altitude_m: f64,
+    receiver_altitude_m: f64,
+) -> [f64; NUM_BANDS] {
+    let depth = vegetation::canopy_depth_on_ray(
+        profile,
+        source_altitude_m,
+        receiver_altitude_m,
+        MeteorologicalState::Homogeneous,
+    );
+    vegetation::foliage_attenuation(depth)
 }
 
 /// Path-averaged ground factor G (0 = hard, 1 = soft) from `profile.imd_u8[]`.

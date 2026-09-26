@@ -221,7 +221,15 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
                            source_is_bridge(source), profile);
         float ground_db[QUIETMAP_BAND_COUNT];
         ground_ops_ground_bands(profile.ground_path_g, ground_db);
-        const float forest_depth_m = profile.forest_depth_m;
+        const float gamma_m = fmaxf(QUIETMAP_FAVOURABLE_RAY_RADIUS_MINIMUM_M,
+                                    QUIETMAP_FAVOURABLE_RAY_RADIUS_PER_DISTANCE
+                                        * geometry.slant_distance_m);
+        float foliage_h_m = 0.0f;
+        float foliage_f_m = 0.0f;
+        canopy_foliage_depths(scene, geometry.closest_x_m, geometry.closest_y_m,
+                              receiver_x_m, receiver_y_m, geometry.source_altitude_m,
+                              receiver_altitude_m, geometry.endpoint_distance_m, gamma_m, profile,
+                              &foliage_h_m, &foliage_f_m);
         float terrain_db[QUIETMAP_BAND_COUNT];
         float screening_db[QUIETMAP_BAND_COUNT];
         ray_terrain_and_screening_bands(
@@ -232,8 +240,8 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
             const float level = quietmap_energy_from_db(
                 geometry.base_level_db
                 - ground_or_barrier_attenuation_db(ground_db[band], terrain_db[band], screening_db[band])
-                - fminf(QUIETMAP_VEGETATION_DB_PER_M[band] * forest_depth_m,
-                        QUIETMAP_VEGETATION_CAP_DB[band])
+                // Homogeneous depth: the carve-out has no states to mix.
+                - foliage_band_db(foliage_h_m, band)
                 - QUIETMAP_ATMOSPHERIC_DB_PER_KM[band] * geometry.slant_distance_m * 0.001f);
             for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
                 transfer[period][band] = level;

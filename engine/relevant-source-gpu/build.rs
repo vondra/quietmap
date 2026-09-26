@@ -23,6 +23,7 @@ const CNOSSOS_DIFFRACTION_SOURCE: &str =
 const CNOSSOS_RUBBER_BAND_SOURCE: &str =
     include_str!("../noise-compute/src/propagation/cnossos/rubber_band.rs");
 const METEOROLOGY_SOURCE: &str = include_str!("../noise-compute/src/propagation/meteorology.rs");
+const VEGETATION_SOURCE: &str = include_str!("../noise-compute/src/propagation/vegetation.rs");
 const SOURCE_FRAME_SOURCE: &str = include_str!("../grid/src/surface_corner.rs");
 const GEO_SOURCE: &str = include_str!("../grid/src/geo.rs");
 const GROUND_OPS_SOURCE: &str =
@@ -156,13 +157,28 @@ fn generated_physics_header() -> String {
     );
     write_cuda_array(
         &mut header,
-        "QUIETMAP_VEGETATION_DB_PER_M",
-        canonical_f64_array::<8>(NOISE_CONSTANTS_SOURCE, "ALPHA_VEG"),
+        "QUIETMAP_FOLIAGE_SHORT_DB",
+        canonical_f64_array::<8>(VEGETATION_SOURCE, "FOLIAGE_SHORT_DB"),
     );
     write_cuda_array(
         &mut header,
-        "QUIETMAP_VEGETATION_CAP_DB",
-        canonical_f64_array::<8>(NOISE_CONSTANTS_SOURCE, "MAX_VEG_ATTEN"),
+        "QUIETMAP_FOLIAGE_DB_PER_M",
+        canonical_f64_array::<8>(VEGETATION_SOURCE, "FOLIAGE_DB_PER_M"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_FOLIAGE_MIN_DEPTH_M",
+        canonical_f64(VEGETATION_SOURCE, "FOLIAGE_MIN_DEPTH_M"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_FOLIAGE_RATE_DEPTH_M",
+        canonical_f64(VEGETATION_SOURCE, "FOLIAGE_RATE_DEPTH_M"),
+    );
+    write_cuda_float(
+        &mut header,
+        "QUIETMAP_FOLIAGE_MAX_DEPTH_M",
+        canonical_f64(VEGETATION_SOURCE, "FOLIAGE_MAX_DEPTH_M"),
     );
     write_cuda_float(
         &mut header,
@@ -273,11 +289,6 @@ fn generated_physics_header() -> String {
         &mut header,
         "QUIETMAP_NEAR_SAMPLE_M",
         canonical_f64(PATH_PROFILE_SOURCE, "NEAR_OFFSET_M"),
-    );
-    write_cuda_float(
-        &mut header,
-        "QUIETMAP_MINIMUM_FOREST_RUN_M",
-        canonical_f64(PATH_PROFILE_SOURCE, "VEGETATION_MIN_RUN_M"),
     );
     let wide_bucket_degrees: f64 =
         constant_initializer(LINE_QUADRATURE_SOURCE, "WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD")
@@ -400,12 +411,14 @@ fn main() {
     println!("cargo:rerun-if-changed=kernels/relevant_source_obstacles.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_arc.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_pair.cuh");
+    println!("cargo:rerun-if-changed=kernels/relevant_source_foliage.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_cnossos_boundary.cuh");
     println!("cargo:rerun-if-changed=kernels/relevant_source_cnossos_stream.cuh");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/cnossos/ground.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/cnossos/diffraction.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/cnossos/rubber_band.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/meteorology.rs");
+    println!("cargo:rerun-if-changed=../noise-compute/src/propagation/vegetation.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/line_quadrature.rs");
     println!("cargo:rerun-if-changed=../noise-compute/src/propagation/relevance_bound.rs");
     println!("cargo:rerun-if-changed=../grid/src/geo.rs");
@@ -488,5 +501,10 @@ mod tests {
         assert!(header.contains("constexpr float QUIETMAP_DIFFRACTION_CAP_DB = 25.0f;"));
         assert!(header.contains("constexpr int QUIETMAP_DIRECTION_SECTOR_COUNT = 16;"));
         assert!(header.contains("constexpr float QUIETMAP_MINIMUM_HEIGHT_SUM_M = 0.001f;"));
+        assert!(header.contains("constexpr float QUIETMAP_FOLIAGE_MIN_DEPTH_M = 10.0f;"));
+        assert!(header.contains("constexpr float QUIETMAP_FOLIAGE_RATE_DEPTH_M = 20.0f;"));
+        assert!(header.contains("constexpr float QUIETMAP_FOLIAGE_MAX_DEPTH_M = 200.0f;"));
+        assert!(header.contains("__device__ __constant__ float QUIETMAP_FOLIAGE_SHORT_DB[QUIETMAP_BAND_COUNT]"));
+        assert!(header.contains("__device__ __constant__ float QUIETMAP_FOLIAGE_DB_PER_M[QUIETMAP_BAND_COUNT]"));
     }
 }

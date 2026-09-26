@@ -193,8 +193,13 @@ impl Uploaded {
     }
 }
 
-/// A raster of `half_extent_m` around the origin with elevation and IMD from `pixel(x, y)`.
-fn raster(frame: &RegionMetricFrame, half_extent_m: f64, pixel: impl Fn(f64, f64) -> (f32, u8)) -> FusedGrid {
+/// A raster of `half_extent_m` around the origin with elevation, IMD, forest cover and
+/// canopy height from `pixel(x, y)`.
+fn raster(
+    frame: &RegionMetricFrame,
+    half_extent_m: f64,
+    pixel: impl Fn(f64, f64) -> (f32, u8, u8, u8),
+) -> FusedGrid {
     let cell_deg = 1.0 / 3600.0;
     let rows = (2.0 * half_extent_m / (cell_deg * grid::geo::M_PER_DEG_LAT)).ceil() as usize + 2;
     let cols = (2.0 * half_extent_m / (cell_deg * frame.metres_per_longitude_degree())).ceil() as usize + 2;
@@ -204,8 +209,8 @@ fn raster(frame: &RegionMetricFrame, half_extent_m: f64, pixel: impl Fn(f64, f64
     for row in 0..rows {
         for column in 0..cols {
             let [x, y] = frame.encode(lat_min + row as f64 * cell_deg, lon_min + column as f64 * cell_deg);
-            let (elevation, imd) = pixel(f64::from(x), f64::from(y));
-            data.push(FusedPixel { elevation, forest: 0, imd, canopy_m: 0 });
+            let (elevation, imd, forest, canopy_m) = pixel(f64::from(x), f64::from(y));
+            data.push(FusedPixel { elevation, forest, imd, canopy_m });
         }
     }
     FusedGrid::from_pixels(lat_min, lon_min, rows, cols, data)
@@ -215,7 +220,12 @@ fn flat_scene(imd: u8) -> Scene {
     let frame = RegionMetricFrame::for_latitude_longitude(ORIGIN.0, ORIGIN.1);
     Scene {
         name: format!("flat imd={imd}"),
-        grid: raster(&frame, 1500.0, |_, _| (0.0, imd)),
+        grid: raster(&frame, 1500.0, |_, y| {
+            // A 15 m closed stand north of the sources: rays to the far receivers
+            // cross its edge, near ones stay out — both lanes walk the same samples.
+            let (forest, canopy_m) = if y > 150.0 { (100, 15) } else { (0, 0) };
+            (0.0, imd, forest, canopy_m)
+        }),
         frame,
         obstacles: ObstacleSet::empty(),
     }
@@ -234,7 +244,7 @@ fn relief_scene() -> Scene {
         } else {
             0
         };
-        (ridge as f32, imd)
+        (ridge as f32, imd, 0, 0)
     });
     let at = |x: f64, y: f64| {
         let [lat, lon] = frame.decode(x as f32, y as f32);

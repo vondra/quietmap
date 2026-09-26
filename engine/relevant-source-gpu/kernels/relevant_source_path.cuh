@@ -1,5 +1,4 @@
-//! Bilateral raster profile (elevation and sealed-surface share per sample) and vegetation depth
-//! on one CUDA ray.
+//! Bilateral raster profile (elevation and sealed-surface share per sample) on one CUDA ray.
 //!
 //! The chainages mirror noise-compute path_profile.rs `fill_t_values_inner` at
 //! the exact production cadence.
@@ -35,7 +34,6 @@ struct PathProfile {
     /// Sealed-surface percentage per sample (G = 1 − imd/100).
     uint8_t imd[QUIETMAP_MAXIMUM_PROFILE_POINTS];
     float ground_path_g;
-    float forest_depth_m;
 };
 
 struct PlaneFitSums {
@@ -233,9 +231,6 @@ __device__ __forceinline__ void build_path_profile(
     // Integrating the complement preserves exact G=0 on hard paths: an FMA
     // of 1 - 100*0.01 instead leaves a positive residue and changes CNOSSOS branch.
     float permeable_percent_integral = 0.0f;
-    float forest_total = 0.0f;
-    float forest_run_physical = 0.0f;
-    float forest_run_weighted = 0.0f;
     uint8_t previous_imd = 0;
     for (int index = 0; index < profile.count; ++index) {
         const float t = profile.t[index];
@@ -253,27 +248,13 @@ __device__ __forceinline__ void build_path_profile(
             permeable_percent_integral += 0.5f
                 * ((100.0f - static_cast<float>(previous_imd))
                    + (100.0f - static_cast<float>(sample.imd))) * interval_m;
-            if (sample.forest > 0) {
-                forest_run_physical += interval_m;
-                forest_run_weighted += interval_m * static_cast<float>(sample.forest) * 0.01f;
-            } else {
-                if (forest_run_physical >= QUIETMAP_MINIMUM_FOREST_RUN_M) {
-                    forest_total += forest_run_weighted;
-                }
-                forest_run_physical = 0.0f;
-                forest_run_weighted = 0.0f;
-            }
             previous_imd = sample.imd;
         }
-    }
-    if (forest_run_physical >= QUIETMAP_MINIMUM_FOREST_RUN_M) {
-        forest_total += forest_run_weighted;
     }
     const float mean_permeable_percent = distance_m > 1.0e-6f
         ? permeable_percent_integral / distance_m : 100.0f - previous_imd;
     profile.ground_path_g = force_hard_ground ? 0.0f
         : quietmap_clamp(mean_permeable_percent * 0.01f, 0.0f, 1.0f);
-    profile.forest_depth_m = forest_total;
 }
 
 /// The terrain of one built profile at chainage `t`, interpolated between the two samples

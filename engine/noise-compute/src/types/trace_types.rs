@@ -29,14 +29,13 @@ pub struct LdenVariants {
     pub no_atmospheric: f64,
 }
 
-/// One contiguous forested interval along a source→receiver path.
+/// One contiguous interval the homogeneous ray spends inside the canopy volume.
 #[derive(Debug, Clone, Serialize)]
 pub struct ForestRun {
     pub t_start: f64,
     pub t_end: f64,
-    /// DENSITY-WEIGHTED depth in metres (`Σ Δlen × forest/100`, geodata-v2
-    /// 2a) — equals the physical extent on binary rasters; geometry lives
-    /// in `t_start`/`t_end`.
+    /// COVER-WEIGHTED ray metres (`Σ Δslant × cover`, fraction of the interval's
+    /// ends in canopy); geometry lives in `t_start`/`t_end`.
     pub len_m: f64,
 }
 
