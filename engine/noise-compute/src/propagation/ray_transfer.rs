@@ -285,3 +285,7 @@ pub fn received_variants(
         band_energy: std::array::from_fn(|band| source[band] * transfer[VARIANT_FULL][band] * reflection),
     }
 }
+
+#[cfg(test)]
+#[path = "ray_transfer_tests.rs"]
+mod tests;

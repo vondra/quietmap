@@ -220,10 +220,9 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
             return false;
         }
         build_path_profile(scene, geometry.closest_x_m, geometry.closest_y_m,
-                           receiver_x_m, receiver_y_m, geometry.endpoint_distance_m,
-                           source_is_bridge(source), profile);
+                           receiver_x_m, receiver_y_m, geometry.endpoint_distance_m, profile);
         float ground_db[QUIETMAP_BAND_COUNT];
-        ground_ops_ground_bands(profile.ground_path_g, ground_db);
+        ground_ops_ground_bands(profile_mean_ground_factor(profile), ground_db);
         const float gamma_m = fmaxf(QUIETMAP_FAVOURABLE_RAY_RADIUS_MINIMUM_M,
                                     QUIETMAP_FAVOURABLE_RAY_RADIUS_PER_DISTANCE
                                         * geometry.slant_distance_m);

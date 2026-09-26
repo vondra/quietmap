@@ -1,11 +1,11 @@
-//! BOUND.md invariant 1: no path gains more over free field from ground and diffraction than the
-//! relevance bound's state maxima (18 dB favourable, 6 dB homogeneous: the (9)(h) below-plane
-//! limit of image Δdif ≥ 0 plus both sides at the ground floor); the searched extremes are pinned.
+//! No path gains more over free field from ground and diffraction than the relevance
+//! bound's state maxima (18 dB favourable, 6 dB homogeneous: the (9)(h) below-plane limit of
+//! image Δdif ≥ 0 plus both sides at the ground floor); the searched extremes are pinned.
 
 use super::*;
 use crate::propagation::relevance_bound::{FAVOURABLE_GAIN_BOUND_DB, HOMOGENEOUS_GAIN_BOUND_DB};
 
-/// Flat homogeneous maximum of the W2 search (3.71 dB) rounded up, BOUND.md.
+/// Flat homogeneous maximum of the boundary-gain search (3.71 dB) rounded up.
 const FLAT_HOMOGENEOUS_GAIN_BOUND_DB: f64 = 3.8;
 /// Flat favourable maximum (9.53 dB) rounded up: the flat search stays tight while the bound
 /// covers relief.
@@ -41,7 +41,7 @@ impl Flat {
 
 #[test]
 fn the_searched_extremes_stay_under_the_bound() {
-    // Favourable edge 100 m before a 4 m receiver on a 10 km hard path (BOUND.md: 9.53 dB).
+    // Favourable edge 100 m before a 4 m receiver on a 10 km hard path (9.53 dB).
     let flat = Flat::new(10_000.0, 0.0);
     let favourable = gain_db(&flat.path(0.05, 4.0, &[(9_900.0, 8.96)]), MeteorologicalState::Favourable);
     assert!((9.4..=FLAT_FAVOURABLE_GAIN_BOUND_DB).contains(&favourable), "{favourable}");
@@ -73,7 +73,7 @@ fn the_searched_extremes_stay_under_the_bound() {
 /// The (9)(h) below-plane corner that voids the pre-slice-2 13.3 dB derivation: a blocked
 /// grazing path over hard ground with the receiver below its side plane takes the image
 /// Δdif (≈ 0 dB) plus both sides at the ground floor. Seeds 920892/1744332 of the 2M-sample
-/// relief search (w2-slice2), rounded to 1 mm / 1 mm / 0.001 G.
+/// relief search, rounded to 1 mm / 1 mm / 0.001 G.
 #[test]
 fn below_plane_corners_stay_under_the_state_bounds() {
     // Favourable 17.60 dB: 6.2 km, source 0.23 m up, receiver 7.24 m up in a dip.

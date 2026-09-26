@@ -33,7 +33,6 @@ struct PathProfile {
     float elevation_m[QUIETMAP_MAXIMUM_PROFILE_POINTS];
     /// Sealed-surface percentage per sample (G = 1 − imd/100).
     uint8_t imd[QUIETMAP_MAXIMUM_PROFILE_POINTS];
-    float ground_path_g;
 };
 
 struct PlaneFitSums {
@@ -224,14 +223,9 @@ __device__ __forceinline__ void build_path_profile(
     float receiver_x_m,
     float receiver_y_m,
     float distance_m,
-    bool force_hard_ground,
     PathProfile& profile
 ) {
     fill_profile_chainages(profile, distance_m);
-    // Integrating the complement preserves exact G=0 on hard paths: an FMA
-    // of 1 - 100*0.01 instead leaves a positive residue and changes CNOSSOS branch.
-    float permeable_percent_integral = 0.0f;
-    uint8_t previous_imd = 0;
     for (int index = 0; index < profile.count; ++index) {
         const float t = profile.t[index];
         const SampledRasterPoint sample = sample_scene_raster(
@@ -240,21 +234,25 @@ __device__ __forceinline__ void build_path_profile(
             fmaf(t, receiver_y_m - source_y_m, source_y_m));
         profile.elevation_m[index] = sample.elevation_m;
         profile.imd[index] = sample.imd;
-        if (index == 0) {
-            previous_imd = sample.imd;
-        }
-        if (index > 0) {
-            const float interval_m = (t - profile.t[index - 1]) * distance_m;
-            permeable_percent_integral += 0.5f
-                * ((100.0f - static_cast<float>(previous_imd))
-                   + (100.0f - static_cast<float>(sample.imd))) * interval_m;
-            previous_imd = sample.imd;
-        }
     }
-    const float mean_permeable_percent = distance_m > 1.0e-6f
-        ? permeable_percent_integral / distance_m : 100.0f - previous_imd;
-    profile.ground_path_g = force_hard_ground ? 0.0f
-        : quietmap_clamp(mean_permeable_percent * 0.01f, 0.0f, 1.0f);
+}
+
+/// Path-mean ground factor G of a built profile (ground ops' band-mean ground): the
+/// trapezoidal mean of the samples' sealed share. Integrating the complement preserves
+/// exact G=0 on hard paths: an FMA of 1 - 100*0.01 instead leaves a positive residue.
+__device__ __forceinline__ float profile_mean_ground_factor(const PathProfile& profile) {
+    float permeable_percent_integral = 0.0f;
+    uint8_t previous_imd = profile.imd[0];
+    for (int index = 1; index < profile.count; ++index) {
+        const float interval_m = (profile.t[index] - profile.t[index - 1]) * profile.distance_m;
+        permeable_percent_integral += 0.5f
+            * ((100.0f - static_cast<float>(previous_imd))
+               + (100.0f - static_cast<float>(profile.imd[index]))) * interval_m;
+        previous_imd = profile.imd[index];
+    }
+    const float mean_permeable_percent = profile.distance_m > 1.0e-6f
+        ? permeable_percent_integral / profile.distance_m : 100.0f - previous_imd;
+    return quietmap_clamp(mean_permeable_percent * 0.01f, 0.0f, 1.0f);
 }
 
 /// The terrain of one built profile at chainage `t`, interpolated between the two samples

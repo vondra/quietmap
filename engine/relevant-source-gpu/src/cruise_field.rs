@@ -35,7 +35,7 @@ struct Bucket {
     period: usize,
 }
 impl Bucket {
-    #[cfg(not(feature = "gpu"))]
+    #[cfg(any(not(feature = "gpu"), test))]
     fn energy(&self, lat: f64, lon: f64, altitude: f64, npd: &aircraft::NpdLuts) -> f64 {
         let row = aircraft::prepare_row(
             &self.prepared,
@@ -44,7 +44,7 @@ impl Bucket {
         );
         self.energy_at_row(lat, lon, altitude, npd, &row)
     }
-    #[cfg(not(feature = "gpu"))]
+    #[cfg(any(not(feature = "gpu"), test))]
     fn energy_at_row(
         &self,
         lat: f64,
@@ -330,6 +330,9 @@ impl CruiseField {
             .map(|&[lat, lon]| self.lattice.bracket(lat, lon))
             .collect::<Result<Vec<_>>>()?;
         let max_alt = altitudes.iter().copied().fold(f32::NEG_INFINITY, f32::max) as f64;
+        // Near field: a bucket whose low end is within one NPD table length above the highest
+        // receiver can still slant inside the table, so it is replaced exactly; higher buckets
+        // extrapolate smoothly and the lattice interpolation suffices.
         let near: Vec<_> = self
             .groups
             .iter()
@@ -338,7 +341,7 @@ impl CruiseField {
                 b.prepared
                     .start_alt_m
                     .min(b.prepared.start_alt_m + b.prepared.sdz)
-                    <= max_alt + 7_620.0
+                    <= max_alt + aircraft::AIRCRAFT_NPD_REF_SLANT_M
             })
             .collect();
         let mut nodes = self.energies.clone();

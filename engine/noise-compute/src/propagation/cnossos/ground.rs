@@ -12,8 +12,8 @@ pub const SHORT_PATH_HEIGHT_FACTOR: f64 = 30.0;
 pub const FAVOURABLE_CURVATURE_A0_PER_M: f64 = 2e-4;
 /// (2.5.19) terrain-height term δz_T coefficient.
 pub const FAVOURABLE_TERRAIN_HEIGHT_COEFFICIENT: f64 = 6e-3;
-/// Height-sum guard of METHOD.md §2.2: below one millimetre the ratios of (2.5.14), (2.5.19)
-/// and (2.5.20) use one millimetre.
+/// Height-sum guard: below one millimetre the ratios of (2.5.14), (2.5.19) and (2.5.20)
+/// use one millimetre.
 const MINIMUM_HEIGHT_SUM_M: f64 = 1e-3;
 
 /// One of the two CNOSSOS-EU meteorological states (2.5.5 homogeneous, 2.5.7 favourable).

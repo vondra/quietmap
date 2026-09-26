@@ -145,8 +145,8 @@ pub struct RawRoadInput {
 
 /// Gs of (2.5.14) under a road source: the carriageway, and a bridge deck, are hard (#20).
 pub const ROAD_SOURCE_GROUND_FACTOR: f64 = 0.0;
-/// Lane width and shoulder of the platform rule (METHOD.md §2.2 proposal until W3 delivers
-/// measured half-widths per row; no measured provenance).
+/// Lane width and shoulder of the platform rule, without measured provenance, until the
+/// extract carries measured half-widths per row.
 pub const ROAD_PLATFORM_LANE_WIDTH_M: f64 = 3.5;
 pub const ROAD_PLATFORM_SHOULDER_M: f64 = 1.5;
 /// Lanes assumed where the row carries none.

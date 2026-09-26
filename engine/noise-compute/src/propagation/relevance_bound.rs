@@ -1,5 +1,5 @@
 //! The one relevance bound behind every road and rail reach and every point-source pair skip
-//! (W2 BOUND.md; point reaches are still their layers' hand-set radii):
+//! (point reaches are still their layers' hand-set radii):
 //! `B_k,i(d) = L_W,k,i − A_div,min(d) − α_min,i·d/1000 + G_max`, never below what the method can
 //! deliver at horizontal distance `d`.
 
@@ -224,7 +224,7 @@ mod tests {
         gains_db: [3.0; 3],
     };
 
-    /// T1 of BOUND.md: a road carrying all its traffic at night is kept at a distance where
+    /// A road carrying all its traffic at night is kept at a distance where
     /// the day-only gate it replaces dropped it (Lnight 53.8 dB there).
     #[test]
     fn a_night_only_road_is_not_skipped() {

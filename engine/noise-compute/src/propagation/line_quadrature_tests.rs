@@ -138,6 +138,38 @@ fn a_wall_in_front_of_a_wide_bucket_places_blocked_and_clear_nodes() {
     assert!(nodes.iter().any(|n| n.obstacles_on_ray && (80.0..=100.0).contains(&azimuth(n))));
 }
 
+/// A wall 0.5 m from the receiver still blocks its span: there is no lower distance bound on the
+/// wide-bucket mask (z13 tile 4417/2775 pixel 62174 reads 16 dB loud when sub-metre edges are
+/// dropped, the receiver 0.4 m outside a 6 m wall).
+#[test]
+fn a_sub_metre_wall_in_front_of_a_wide_bucket_blocks_its_span() {
+    let geometry = LinePieceGeometry::new([-125.0, 20.0, 0.0], [125.0, 20.0, 0.0]).unwrap();
+    let wall = ReceiverSkylineArc {
+        lo_rad: 80.0_f64.to_radians(),
+        hi_rad: 100.0_f64.to_radians(),
+        nearest_m: 0.5,
+    };
+    let mut skyline = |lo: f64, hi: f64, _radius: f64, visit: &mut dyn FnMut(ReceiverSkylineArc)| {
+        if wall.hi_rad > lo && wall.lo_rad < hi {
+            visit(wall);
+        }
+    };
+    let mut nodes = Vec::new();
+    line_quadrature_nodes(&geometry, LineDirectivity::Omnidirectional, &mut skyline, &mut nodes);
+    assert!(nodes.len() > LINE_BUCKET_COUNT);
+    let total: f64 = nodes.iter().map(|n| n.weight_rad).sum();
+    assert!((total - geometry.subtended_angle_rad()).abs() < 1e-12);
+    let azimuth = |node: &LineQuadratureNode| {
+        let p = geometry.point_at(node.along_m);
+        p[1].atan2(p[0]).to_degrees()
+    };
+    for node in nodes.iter().filter(|n| !n.obstacles_on_ray) {
+        let a = azimuth(node);
+        assert!(!(80.0..=100.0).contains(&a), "clear node behind the sub-metre wall at {a}°");
+    }
+    assert!(nodes.iter().any(|n| n.obstacles_on_ray && (80.0..=100.0).contains(&azimuth(n))));
+}
+
 /// The track dipole integrates in closed form: over an infinite line its mean is
 /// 0.01 + 0.99/2, and each node's weight is the integral over its own angle interval.
 #[test]

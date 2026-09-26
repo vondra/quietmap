@@ -395,7 +395,10 @@ fn push_wide_bucket_nodes(
 }
 
 /// Marks the mask bins one edge blocks: the parts of its arc inside the span whose edge stands
-/// in front of the piece (at least a metre nearer than the source point seen there).
+/// in front of the piece (at least a metre nearer than the source point seen there). There is no
+/// lower distance bound: a wall 0.4 m from an outdoor receiver still screens the source (z13
+/// tile 4417/2775 pixel 62174 reads 16 dB loud when sub-metre edges are dropped), and the skyline
+/// already excludes the degenerate origin-on-edge case.
 fn mark_blocked_bins(
     geometry: &LinePieceGeometry,
     arc: ReceiverSkylineArc,
@@ -405,7 +408,7 @@ fn mark_blocked_bins(
     bin_width: f64,
     blocked: &mut [bool; WIDE_BUCKET_MASK_BINS],
 ) {
-    if arc.nearest_m > need_radius || arc.nearest_m < 1.0 {
+    if arc.nearest_m > need_radius {
         return;
     }
     for shift in [0.0, 2.0 * PI, -2.0 * PI] {

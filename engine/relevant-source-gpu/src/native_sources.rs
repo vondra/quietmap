@@ -330,13 +330,12 @@ fn line(
         start_y_m,
         end_x_m,
         end_y_m,
-        extent_m: float(batch, "length_m", row)
-            .filter(|v| *v > 0.0)
-            .unwrap_or_else(|| grid::geo::flat_dist(start[0], start[1], end[0], end[1]) as f32),
+        // A surface line carries no extent: its length comes from the endpoints, and no
+        // kernel reads this field for one (points: footprint radius; ground ops: length).
+        extent_m: 0.0,
         max_distance_m,
         source_height_m: source_height_m as f32,
-        flags: if bridge { SOURCE_FLAG_BRIDGE } else { 0 }
-            | if dipole { SOURCE_FLAG_TRACK_DIPOLE } else { 0 },
+        flags: if dipole { SOURCE_FLAG_TRACK_DIPOLE } else { 0 },
         source_ground_factor: source_ground_factor as f32,
         platform_half_width_m: platform_half_width_m as f32,
         emission_linear: emission_linear(emission),

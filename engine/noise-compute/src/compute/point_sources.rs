@@ -43,7 +43,6 @@ pub(crate) fn compute_point_sources(
         lon: f64,
         min_dist: f64,
         min_d_slant: f64,
-        min_ground_g: f64,
         /// The ray source of the nearest grid point (the popup's path context).
         closest_source: crate::propagation::ray_transfer::RaySource,
         variants: [PropagationVariants; 3],
@@ -132,8 +131,6 @@ pub(crate) fn compute_point_sources(
             let scaled = transfer.periods[period].map(|bands| bands.map(|t| t * divergence));
             received_variants(&scaled, &period_emissions[period], reflection)
         });
-        let ground_g = detail.as_ref().map_or(0.5, |d: &crate::propagation::ray_transfer::RayDetail| d.ground_factor);
-
         // Display aggregate is A-weighted so the popup's emission_db equals the
         // nominal LwA (post-C7 the bands are normalized to it; a Z-sum would
         // read ~+2 dB over the rated value — Codex C7 review).
@@ -154,7 +151,6 @@ pub(crate) fn compute_point_sources(
             lon: src.lon,
             min_dist: f64::MAX,
             min_d_slant: 0.0,
-            min_ground_g: 0.5,
             closest_source: ray_source,
             variants: [
                 PropagationVariants::default(),
@@ -177,7 +173,6 @@ pub(crate) fn compute_point_sources(
         if src.dist_m < acc.min_dist {
             acc.min_dist = src.dist_m;
             acc.min_d_slant = d_slant;
-            acc.min_ground_g = ground_g;
             acc.lat = src.lat;
             acc.lon = src.lon;
             acc.closest_source = ray_source;
@@ -224,6 +219,7 @@ pub(crate) fn compute_point_sources(
         })));
 
         let pt_effects = nearest_path_breakdown(rasters, obstacles, &acc.closest_source, receiver, &weather);
+        let nearest_ground_g = pt_effects.3;
 
         let impacts = PropagationVariants::impact_deltas(&acc.variants, pt_periods.lden_db);
 
@@ -278,7 +274,7 @@ pub(crate) fn compute_point_sources(
             baseline: iso9613::compute_baseline(
                 acc.min_d_slant,
                 SourceSpread::Point,
-                acc.min_ground_g,
+                nearest_ground_g,
             ),
             terrain: pt_effects.0,
             screening: pt_effects.1,
@@ -288,11 +284,7 @@ pub(crate) fn compute_point_sources(
             vegetation_impact_db: round1(impacts.vegetation),
             atmospheric_impact_db: round1(impacts.atmospheric),
             ground_impact_db: round1(impacts.ground),
-            received_bands: std::array::from_fn(|j| {
-                let energy = acc.variants[0].band_energy[j];
-                assert!(energy.is_finite() && energy >= 0.0, "non-finite band energy: {energy}");
-                10.0 * energy.max(1e-30).log10()
-            }),
+            received_bands: bands_energy_to_db(&acc.variants[0].band_energy),
             metadata,
         });
     }

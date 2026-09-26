@@ -6,8 +6,6 @@ use grid::{
 };
 use noise_compute::constants::{m_per_deg_lon, M_PER_DEG_LAT};
 
-/// `DeviceLineSource::flags`: the segment propagates over hard ground (a bridge).
-pub const SOURCE_FLAG_BRIDGE: u32 = 1;
 /// `DeviceLineSource::flags`: a point source (industrial, building): start == end,
 /// spherical divergence, `extent_m` is its footprint exclusion radius.
 pub const SOURCE_FLAG_POINT: u32 = 2;
@@ -42,14 +40,15 @@ pub struct DeviceLineSource {
     pub start_y_m: f32,
     pub end_x_m: f32,
     pub end_y_m: f32,
-    /// Segment length for a line; footprint exclusion radius for a point.
+    /// 0 for a surface line (its length comes from the endpoints); footprint exclusion
+    /// radius for a point, segment length for a ground-ops microsegment.
     pub extent_m: f32,
     pub max_distance_m: f32,
     pub source_height_m: f32,
     pub flags: u32,
     /// Gs of (2.5.14) under a line source (road 0, ballast 1, deck 0); a point samples its own.
     pub source_ground_factor: f32,
-    /// A line source's platform half-width (METHOD.md §2.2); 0 for points.
+    /// A line source's platform half-width; 0 for points.
     pub platform_half_width_m: f32,
     pub emission_linear: [f32; PERIOD_COUNT * BAND_COUNT],
 }

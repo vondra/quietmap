@@ -165,7 +165,8 @@ __device__ __forceinline__ void mark_arc_bins(
 }
 
 /// One edge's arc clipped to the span: every piece whose edge stands at least a metre in front
-/// of the source point seen at the piece's centre marks its bins (CPU mark_blocked_bins).
+/// of the source point seen at the piece's centre marks its bins (CPU mark_blocked_bins). No lower
+/// distance bound beside the degenerate origin-on-edge guard: a sub-metre wall still screens.
 __device__ __forceinline__ void admit_skyline_arc(
     const LinePieceGeometry& geometry,
     float edge_x0,
@@ -185,7 +186,7 @@ __device__ __forceinline__ void admit_skyline_arc(
         ? quietmap_clamp(-(edge_x0 * edge_x + edge_y0 * edge_y) / length_squared, 0.0f, 1.0f)
         : 0.0f;
     const float nearest_m = hypotf(fmaf(t, edge_x, edge_x0), fmaf(t, edge_y, edge_y0));
-    if (nearest_m > need_radius_m || nearest_m < 1.0f) {
+    if (nearest_m > need_radius_m || nearest_m < 1.0e-6f) {
         return;
     }
     const float azimuth0 = atan2f(edge_y0, edge_x0);

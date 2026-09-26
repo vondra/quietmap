@@ -14,7 +14,7 @@ pub struct RayPathInputs {
     /// Gs of (2.5.14).
     pub source_ground_factor: f64,
     /// Within this distance of the source the terrain may not rise above the source ground
-    /// (METHOD.md §2.2 platform rule; 0 for point sources).
+    /// (the platform rule; 0 for point sources).
     pub platform_half_width_m: f64,
     /// Building crossings nearer the source than this are its own footprint.
     pub exclusion_radius_m: f64,
@@ -169,3 +169,7 @@ fn interpolate(points: &[PlanePoint], at: f64) -> f64 {
     let f = if x1 > x0 { ((at - x0) / (x1 - x0)).clamp(0.0, 1.0) } else { 0.0 };
     y0 + f * (y1 - y0)
 }
+
+#[cfg(test)]
+#[path = "ray_path_tests.rs"]
+mod tests;

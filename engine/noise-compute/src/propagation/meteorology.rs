@@ -1,7 +1,6 @@
-//! Long-term weather of a path (the W6 reader contract, `w2-method/CONTRACT-W6.md` with its
-//! 2026-09-24 amendment): probability of favourable propagation per period and propagation
-//! direction, and air absorption per period and band. Sampled from the receiver square's
-//! `meteorology.bin` window; built-in defaults stand only where the square has no file.
+//! Long-term weather of a path: probability of favourable propagation per period and
+//! propagation direction, and air absorption per period and band. Sampled from the receiver
+//! square's `meteorology.bin` window; built-in defaults stand only where the square has no file.
 
 use super::air_absorption::{iso_9613_1_alpha_bands, AbsorptionClimate};
 use crate::types::NUM_BANDS;
@@ -13,7 +12,7 @@ pub const DIRECTION_SECTOR_COUNT: usize = 16;
 /// engine has carried since 2026-07-28 (owner, one p for all periods).
 pub const DEFAULT_FAVOURABLE_PROBABILITY: f64 = 0.5;
 /// Default absorption climate where a square has no file: ISO 9613-1 at the CNOSSOS-EU
-/// §2.5.6 default 15 °C / 70 % RH (W2 METHOD.md, BOUND.md), no hourly variance.
+/// §2.5.6 default 15 °C / 70 % RH, no hourly variance.
 pub const DEFAULT_ABSORPTION_TEMPERATURE_C: f64 = 15.0;
 pub const DEFAULT_ABSORPTION_RELATIVE_HUMIDITY_PCT: f64 = 70.0;
 
