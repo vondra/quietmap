@@ -79,7 +79,7 @@ fn repair_rewrites_a_rejected_day_primary_only_and_restores_the_echo() {
     let dem_dir = prepared.join(grid::square_name(square));
     std::fs::create_dir_all(&dem_dir).unwrap();
     let dem_len = grid::raster::RasterWindow::for_square(square).cell_count() * 2;
-    std::fs::write(dem_dir.join("dem.i16be"), vec![0u8; dem_len]).unwrap();
+    std::fs::write(dem_dir.join("dem.u16le"), vec![0u8; dem_len]).unwrap();
 
     let work = temp.path().join("work");
     let flights_dir = work.join("flights");
