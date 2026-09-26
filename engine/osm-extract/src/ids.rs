@@ -31,18 +31,20 @@ pub const LEISURE_STADIUM: u8 = 7;
 pub const LEISURE_CAR_PARK: u8 = 8;
 /// Street-side / lane parking: the same movements on a strip with no aisle.
 pub const LEISURE_CAR_PARK_STREET: u8 = 9;
+/// Floodlit artificial-turf pitch (`surface=artificial_turf`): same voice
+/// anchor as grass at ~10 dB hotter annual duty. 10/11 stay the
+/// motorsport/shooting formula classes.
+pub const LEISURE_AGP: u8 = 12;
 
 /// Loudness anchor at the class reference area, transcribed from the
-/// `leisure_profile` comments: a year-average Lden for the sports (pitch 89 …
+/// `leisure_profile` comments: a year-average Lden for the sports (AGP 94 …
 /// seating 66), the day Lw for the two car parks, which have no annualization.
 /// Resolves multi-sport `sport=a;b` to the loudest — the same argmax the old
 /// code computed live via `leisure_lw`, with identical last-wins tie semantics.
 pub fn leisure_loudness_anchor(class: u8) -> i64 {
     match class {
-        // Pitch 89: the Sport England AGP evidence (50.8 dB/m² over 7,000 m²
-        // → 89.3 Lden), not the old open-air guess 78 — a pitch now beats a
-        // padel court in a multi-sport value.
-        LEISURE_PITCH => 89,
+        LEISURE_AGP => 94,
+        LEISURE_PITCH => 83,
         LEISURE_PADEL => 81,
         LEISURE_CAR_PARK => 79,
         LEISURE_STADIUM => 78,
@@ -54,7 +56,7 @@ pub fn leisure_loudness_anchor(class: u8) -> i64 {
         LEISURE_OUTDOOR_SEATING => 66,
         // An id outside the table never reaches here: the spill writes only the
         // classes above. The arm keeps the function total, at the pitch anchor.
-        _ => 89,
+        _ => 83,
     }
 }
 

@@ -14,7 +14,7 @@ import normalize_barrier_cache as NORMALIZE
 import official_barriers as OFFICIAL
 from structure_inputs import read_official_cache
 from test_structures_fixtures import (
-    BUILDER, CONTRACT, GRID, SQUARE, FakeGlobalPrior, buildings_arrow, barriers_arrow,
+    BUILDER, CONTRACT, GRID, SQUARE, buildings_arrow, barriers_arrow,
     osm_row, OSM_POLY,
 )
 
@@ -41,6 +41,15 @@ def replacement(offsets_m, kind=0):
 class ReplacementTests(unittest.TestCase):
     def test_same_wall_is_replaced_and_a_parallel_wall_is_kept(self):
         self.assertEqual(replacement([3.0, 8.0]), [True, False])
+
+    def test_crossing_wall_is_kept(self):
+        across = {"geom": shapely.LineString([(LON - 0.002, LAT), (LON + 0.002, LAT)]),
+                  "kind": OFFICIAL.KIND_WALL}
+        tree, framed, reference = OFFICIAL.replacement_tree([across])
+        mid_lon = LON + 3.0 / LON_METRE
+        half_span = 125.0 / 111_320.0  # a 250 m stem, the OSM chord cap
+        self.assertFalse(OFFICIAL.osm_segment_is_replaced(
+            mid_lon, LAT - half_span, mid_lon, LAT + half_span, tree, framed, reference))
 
     def test_berm_never_replaces_an_osm_wall(self):
         self.assertEqual(replacement([3.0], kind=OFFICIAL.KIND_BERM), [False])
@@ -133,7 +142,7 @@ class BuildSquareOfficialTests(unittest.TestCase):
         ])
         official = [official_row(LON, height_m=4.4)]
         census = BUILDER.build_square(
-            SQUARE, self.prepared, [], [], FakeGlobalPrior(), None, official, [], [], [])
+            SQUARE, self.prepared, [], [], None, official, [], [], [])
         table = ipc.open_file(self.prepared / SQUARE / "structures.arrow").read_all()
         kinds = table.column("kind").to_pylist()
         self.assertEqual(census["official_walls"], 1)
@@ -160,7 +169,7 @@ class BuildSquareOfficialTests(unittest.TestCase):
                         [osm_row(0, OSM_POLY, 32.0, height=6.0)])
         official = [official_row(LON, kind=OFFICIAL.KIND_BERM)]
         census = BUILDER.build_square(
-            SQUARE, self.prepared, [], [], FakeGlobalPrior(), None, official, [], [], [])
+            SQUARE, self.prepared, [], [], None, official, [], [], [])
         table = ipc.open_file(self.prepared / SQUARE / "structures.arrow").read_all()
         self.assertEqual(census["official_walls"], 0)
         self.assertEqual(table.column("kind").to_pylist(), [0])
@@ -259,6 +268,20 @@ class NormalizerTests(unittest.TestCase):
         self.assertEqual(kept, 2)
         table = pq.read_table(self.root / "cache" / "N47W123.parquet")
         self.assertEqual(table.num_rows, 2)
+
+    def test_rerun_replaces_the_same_source_rows(self):
+        import pyarrow.parquet as pq
+        line = shapely.LineString([(-122.3, 47.6), (-122.29, 47.6)])
+        other = shapely.LineString([(-122.3, 47.61), (-122.29, 47.61)])
+        cache = str(self.root / "cache")
+        NORMALIZE.append_cache([(line, 3.66, True, 0)], "TEST", "2026-01-01", cache)
+        NORMALIZE.append_cache([(other, 2.0, True, 0)], "OTHER", "2026-01-01", cache)
+        kept = NORMALIZE.append_cache([(line, 3.0, True, 0)], "TEST", "2026-06-01", cache)
+        self.assertEqual(kept, 1)
+        table = pq.read_table(self.root / "cache" / "N47W123.parquet")
+        rows = sorted(table.to_pylist(), key=lambda row: row["source"])
+        self.assertEqual([(row["source"], row["as_of"], row["height_m"]) for row in rows],
+                         [("OTHER", "2026-01-01", 2.0), ("TEST", "2026-06-01", 3.0)])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,6 @@
 """National measured heights: cache join, reader and normalizer regressions."""
 
 import json
-import math
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,14 +12,13 @@ import measured_heights as MEASURED
 import normalize_heights_cache as NORMALIZE
 from structure_inputs import read_official_cache
 from test_structures_fixtures import (
-    BUILDER, CONTRACT, GRID, SQUARE, FakeGlobalPrior, buildings_arrow, osm_row,
+    BUILDER, CONTRACT, GRID, SQUARE, buildings_arrow, osm_row,
     OSM_POLY,
 )
 
 
 def candidate(polygon):
-    return {"geom": polygon, "regional_m": None, "ghsl_m": math.nan, "needs_ghsl": True,
-            "osm_height": None, "floors": 0, "overture_height": None}
+    return {"geom": polygon, "regional_m": None}
 
 
 def measured_row(polygon, height_m=9.5):
@@ -92,7 +90,7 @@ class BuildSquareMeasuredTests(unittest.TestCase):
         buildings_arrow(self.prepared / SQUARE / "buildings.arrow",
                         [osm_row(0, OSM_POLY, 32.0)])
         census = BUILDER.build_square(
-            SQUARE, self.prepared, [], [], FakeGlobalPrior(), None,
+            SQUARE, self.prepared, [], [], None,
             [], [], [measured_row(OSM_POLY, height_m=7.25)], [])
         table = ipc.open_file(self.prepared / SQUARE / "structures.arrow").read_all()
         self.assertEqual(census["measured"], 1)
@@ -153,6 +151,19 @@ class NormalizerTests(unittest.TestCase):
                 [[[5.39, 52.15], [5.391, 52.15], [5.391, 52.151], [5.39, 52.15]]]},
              "properties": {}}]}), encoding="utf-8")
         self.assertEqual(NORMALIZE.read_heights_geojson([str(path)]), [])
+
+    def test_rerun_replaces_the_same_source_rows(self):
+        import pyarrow.parquet as pq
+        poly = shapely.box(5.39, 52.15, 5.391, 52.151)
+        cache = str(self.root / "cache")
+        NORMALIZE.append_cache([(poly, 9.0)], "TEST", "2026-01-01", cache)
+        kept = NORMALIZE.append_cache([(poly, 7.0)], "TEST", "2026-06-01", cache)
+        self.assertEqual(kept, 1)
+        table = pq.read_table(self.root / "cache" / "N52E005.parquet")
+        self.assertEqual(table.num_rows, 1)
+        row = table.to_pylist()[0]
+        self.assertEqual((row["height_m"], row["source"], row["as_of"]),
+                         (7.0, "TEST", "2026-06-01"))
 
 
 if __name__ == "__main__":

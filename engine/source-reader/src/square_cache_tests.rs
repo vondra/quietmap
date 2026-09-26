@@ -71,7 +71,7 @@ fn two_batches_with_broken_second_message(path: &Path) {
     }
     metadata.insert(
         "leisure_contract".into(),
-        square_store::osm_contract::LEISURE_CONTRACT_V4.into(),
+        square_store::osm_contract::LEISURE_CONTRACT_V5.into(),
     );
     for (key, value) in fx::sampling_window(12, 0).metadata() {
         metadata.insert(key.into(), value);

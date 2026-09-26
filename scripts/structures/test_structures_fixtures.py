@@ -74,12 +74,16 @@ def barriers_arrow(path, rows):
                                      for name in schema.names}, schema=schema))
 
 
-class FakeGlobalPrior:
-    def __init__(self, input_files=()):
-        self.input_files = input_files
+class FakeRegional:
+    """A survey raster covering nothing: only its input files enter the digest."""
 
-    def sample_many(self, lons, _lats):
-        return np.full(len(lons), 12.5)
+    def __init__(self, input_files=()):
+        from types import SimpleNamespace
+        self.input_files = input_files
+        self.tr = SimpleNamespace(transform=lambda xs, ys: (xs, ys))
+
+    def covers(self, _x, _y):
+        return False
 
 
 OSM_POLY = shapely.box(14.17000, 49.78000, 14.17020, 49.78016)
@@ -126,8 +130,7 @@ def write_prepared_roundtrip(root):
     barriers_arrow(square / "barriers.arrow", [{
         "osm_id": 77, "segment_idx": 0, "start_lat": 49.78, "start_lon": 14.17,
         "end_lat": 49.7801, "end_lon": 14.1701, "height": 2.5, "height_tier": 0}])
-    BUILDER.build_square(SQUARE, root, [ovt_row(OVT_LONELY)], [],
-                         FakeGlobalPrior(), None)
+    BUILDER.build_square(SQUARE, root, [ovt_row(OVT_LONELY)], [], None)
 
 
 # Actual Overture N49E014 source polygons; preserve every source coordinate.
@@ -161,7 +164,7 @@ def write_topology_roundtrip(root):
                 lat, lon = SOURCES.footprint_centroid(osm_geometry)
                 osm["centroid_gx"], osm["centroid_gy"] = GRID.lonlat_to_grid(lon, lat)
             buildings_arrow(case_root / square / "buildings.arrow", [osm])
-            BUILDER.build_square(square, case_root, [row], [], FakeGlobalPrior(), None)
+            BUILDER.build_square(square, case_root, [row], [], None)
             points = []
             for part in original.geoms:
                 points.append([part.representative_point().y, part.representative_point().x, True])

@@ -475,7 +475,7 @@ Waters absent from both products have no rows.
 
 ## Open parking and emission-only grounds
 
-Open parking ways use `leisure_v4` classes 8 (lot) and 9 (street strip), with no
+Open parking ways use `leisure_v5` classes 8 (lot) and 9 (street strip), with no
 screening geometry. Their mapped area estimates spaces at 23.8 and 13.3 m² per
 space. Day sound power follows the Parkplatzlärmstudie (LfU, 6th ed. 2007):
 63 dB(A) per movement/hour, 0.40 movements/space/hour and the searching term
@@ -509,6 +509,19 @@ Overture `roof`/`carport` classes screen at 0 m (`structures-builder-5`): a
 roof on posts has no wall to diffract over. Footprint, emission, envelope and
 traffic stay. Greenhouses, grandstands and enclosed garages keep their walls.
 
+## Sports pitches
+
+Both pitch classes share one active anchor: 97.9 dB(A) over 6400 m², the Sport
+England AGP Acoustics DGN (2015) typical free-field 58 dB LAeq,1h at 10 m from
+the sideline halfway (player voices while the pitch is in use), back-calculated
+through the hemispherical incoherent area integral (−1.8 dB for 100×64 m).
+Grass and unknown surfaces (class 0) take the seasonal club duty: 5 h/week over
+40 weeks (4 h day + 1 h summer evenings; night silent), Lden ~83.5 @ 7000 m².
+Artificial turf (class 12) takes the booked duty: 40 h/week year-round on the
+documented peak pattern (weekday evenings + weekends; night silent),
+Lden ~93.8 @ 7000 m². Day/evening/night follow the engine clock (07–19/19–23/
+23–07).
+
 ## Screening heights
 
 The structures builder gives every footprint one screening height, the mean
@@ -518,26 +531,28 @@ roof height, from the first available rung, and stores its `height_source`:
    roof minus ground) where a measured footprint covers the candidate, else the
    regional survey zonal mean (Prague LiDAR); clamped to 2.5–250 m;
 2. mapped OSM `height`;
-3. OSM, national-register or Overture floors × 3 m + 3 m roof allowance
-   (Prague LiDAR vs OSM floors, 105,957 buildings: median residual 0.0 m);
+3. OSM, national-register or Overture floor count: 1 floor 6 m (its attic
+   counts: floor counts exclude it), 2–3 floors 6–9 m, 4+ floors 3 m each
+   plus 2 m of roof (five mean-roof references, 2026-09-25; never stations);
 4. Overture height of at least 2.5 m (lower values are artefacts);
-5. GHS-BUILT-H ANBH of at least 3.5 m (its 2.5 m floor and the values just
-   above it are no information), capped at 100 m and at 4 m under 30 m² of
-   footprint;
-6. median reference height by footprint area: < 30 m² 2.9 m, < 60 m² 5.4 m,
-   < 150 m² 7.4 m, < 500 m² 8.8 m, else 10.6 m (seven EU pilot windows).
+5. median reference mean-roof height by footprint area: < 30 m² 2.9 m,
+   < 60 m² 3.5 m, < 150 m² 7.4 m, < 500 m² 8.0 m, else 9.0 m
+   (no-information rows only, 2026-09-25).
 
-Rungs 5 and 6 are not per-building knowledge; only they take the low-profile
-cap. The demand storey count `storeys` is the floor count where one is mapped,
-else round((height − 3 m) / 3 m), at least 1; a structure without a screening
-height counts one level. The service-tree demand reads it. Noise walls keep a
-mapped OSM height; unmapped walls stand at their country's mean wall height
-(DE 3.88 m, US 4.45 m, AT 3.6 m, else 3 m). Official barrier inventories
-(`structures-builder-6`) stand beside OSM: an official line replaces the OSM
-micro-segments within 5 m of it and screens at its inventoried height
-(GWV top-minus-road-edge median, else the inventory's in-range median);
-official berms stay out of the thin-wall index until the terrain step
-consumes them.
+Rung 5 is not per-building knowledge; only it takes the low-profile cap.
+A retired satellite rung (`height_source` 4) still reads from older prepared
+squares. The demand storey count `storeys` is the floor count where one is
+mapped, else round((height − 1 m) / 3 m), at least 1 (registry floor counts
+vs mean height, 6,061 buildings: MAE 0.41 storeys, unbiased); a structure
+without a screening height counts one level. The service-tree demand reads it.
+Noise walls keep a mapped OSM height; unmapped walls stand at their country's
+mean wall height (DE 3.88 m, US 4.45 m, AT 3.6 m, else 3 m), stored rounded
+to whole metres (4 m in Germany, the United States and Austria). Official barrier
+inventories (`structures-builder-7`) stand beside OSM: an official line
+replaces the OSM micro-segments within 5 m of it and screens at its
+inventoried height (GWV top-minus-road-edge median, else the inventory's
+in-range median); official berms stay out of the thin-wall index until the
+terrain step consumes them.
 
 ## Raster terrain and canopy inputs
 
@@ -718,7 +733,7 @@ forest impacts are the A-weighted differences between the full and the hypothesi
 ## Retained OSM model evidence
 
 The extraction contract constants live in `square-store::osm_contract`: spill
-format 2, roads/railways/industrial evidence 2, `leisure_v4`, and
+format 2, roads/railways/industrial evidence 2, `leisure_v5`, and
 `transport_nodes_contract=1`. Readers reject older stamps; rebuilding requires
 fresh extraction outputs. Existing country-bake and grid contracts still apply.
 
@@ -757,7 +772,9 @@ retain every closed outer component as a separate row; unclosed fragments are
 omitted rather than assigned an area. Inner holes remain outside the
 existing single-ring geometry contract.
 
-`leisure_v4` adds motorsport class 10 and shooting class 11, `osm_tags`, OSM kind,
+`leisure_v5` adds the artificial-turf pitch class 12 (`surface=artificial_turf`;
+grass and unknown surfaces stay class 0 with the seasonal club duty) to the
+v4 evidence: motorsport class 10 and shooting class 11, `osm_tags`, OSM kind,
 geometry kind (0 point, 1 area, 2 line) and line length. Two-node raceways and
 motor-sport tracks survive with open-chain geometry; enclosing polygons are
 separate area rows. Open non-motorised tracks also retain their line path;
@@ -765,8 +782,8 @@ coordinate snapping does not change line/area identity. Shooting subtype and ind
 ways and relations. The activity models consume both classes (see above); an
 enclosing area must not duplicate a line's emission.
 A physical building also retains its separate source row and has no generic
-residential emission. Buildings keep `buildings_v5`, the existing roof/carport
-use code and the unchanged height ladder.
+residential emission. Buildings keep `buildings_v5` and the existing roof/carport
+use code; screening heights follow §Screening heights.
 
 ## Meteorology climatology input
 

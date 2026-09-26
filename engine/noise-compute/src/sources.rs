@@ -1327,16 +1327,6 @@ pub const SOURCES: &[Source] = &[
         year: Some(2021),
     },
     Source {
-        id: 9866,
-        key: "global-ghsl-built-h",
-        provenance: Provenance::Baseline,
-        layer: "buildings",
-        name: "GHS-BUILT-H R2023A ANBH building heights (JRC)",
-        license: Some("CC-BY-4.0"),
-        url: Some("https://human-settlement.emergency.copernicus.eu/ghs_buH2023.php"),
-        year: Some(2018),
-    },
-    Source {
         id: 9867,
         key: "cz-ipr-praha-vysky",
         provenance: Provenance::CityMeasured,

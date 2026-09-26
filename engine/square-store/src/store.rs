@@ -367,7 +367,7 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         "leisure.arrow",
         "leisure",
         &[
-            ("leisure_contract", crate::osm_contract::LEISURE_CONTRACT_V4),
+            ("leisure_contract", crate::osm_contract::LEISURE_CONTRACT_V5),
             ("grid", GRID_CONTRACT_Z30),
         ],
         "re-extract the source store",

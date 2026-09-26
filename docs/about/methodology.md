@@ -168,7 +168,11 @@ a class median). Wind-farm outlines themselves are silent — only the turbines 
 
 **As sources.** Buildings and leisure facilities use estimated sound power by type,
 area and assumed operating hours. These extensions beyond the transport standards are
-not measurements of individual heat pumps, shops or sports grounds.
+not measurements of individual heat pumps, shops or sports grounds. Sports pitches
+are the exception with documented hours: both kinds radiate the Sport England
+typical in-use level (58 dB LAeq,1h at 10 m from the sideline); grass pitches
+take 5 hours a week over a September–May season, floodlit artificial turf
+40 hours a week year-round, and both are silent at night.
 
 Race circuits, motocross, kart, speedway and trial tracks use published per-vehicle
 levels with typical grids (15, 7, 8, 4 and 2 vehicles), 100 days × 6 hours a year,
@@ -187,15 +191,17 @@ ground for receivers.
 
 **As obstacles.** Mapped above-ground buildings and noise barriers screen sound. Open
 parking areas, yards, explicitly underground footprints, carports and open roofs do not:
-a roof on posts has no wall. Building heights come, in this order, from national
-building surveys (North Rhine-Westphalia, the Netherlands, Prague), mapped heights,
-floor counts (3 m per floor plus 3 m for the roof), Overture heights, the 100 m
-satellite average of the GHSL (at most 4 m for footprints under 30 m²), and finally
-the typical height of a building of that footprint size. Noise walls come from official
-barrier inventories where one is open (the Netherlands, Washington, Florida, Virginia)
+a roof on posts has no wall. Building heights come, in this order, from measured
+surveys (North Rhine-Westphalia, the Netherlands, Prague), mapped heights,
+floor counts (one floor 6 m, two to three floors 6–9 m, four or more 3 m each
+plus 2 m of roof), Overture heights, and finally the typical height of a
+building of that footprint size. Noise walls come from official barrier
+inventories where one is open (the Netherlands, Washington, Florida, Virginia)
 and from OpenStreetMap elsewhere; a wall without a measured height takes its country's
 average wall height: 3.9 m in Germany, 4.5 m in the United States, 3.6 m in Austria
-and 3 m elsewhere. Footprints come from OpenStreetMap and Overture Maps.
+and 3 m elsewhere. Heights are stored as whole metres, so the three national
+averages stand as 4 m walls on the map. Footprints come from OpenStreetMap and
+Overture Maps.
 
 ## Propagation
 

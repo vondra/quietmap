@@ -22,6 +22,10 @@ pub fn leisure_sport_class(tags: &Tags) -> u8 {
         Some(super::ParkingKind::OpenLot) => return ids::LEISURE_CAR_PARK,
         _ => {}
     }
+    // An artificial-turf pitch is booked year-round; grass (or an unmapped
+    // surface) follows the seasonal club pattern. Only pitch classes remap —
+    // a turf tennis court keeps the tennis duty.
+    let agp_surface = tags.get("surface").is_some_and(|s| s == "artificial_turf");
     if let Some(sport) = tags.get("sport") {
         // Multi-value `sport=tennis;padel` → take the loudest by the static
         // anchor table; `>=` keeps the LAST maximum, mirroring max_by_key.
@@ -36,6 +40,9 @@ pub fn leisure_sport_class(tags: &Tags) -> u8 {
             }
         }
         if let Some((_, c)) = best {
+            if c == ids::LEISURE_PITCH && agp_surface {
+                return ids::LEISURE_AGP;
+            }
             return c;
         }
     }
@@ -49,6 +56,7 @@ pub fn leisure_sport_class(tags: &Tags) -> u8 {
         Some("swimming_pool" | "swimming_area" | "water_park") => ids::LEISURE_POOL,
         Some("stadium") => ids::LEISURE_STADIUM,
         Some("outdoor_seating") => ids::LEISURE_OUTDOOR_SEATING,
+        Some("pitch") if agp_surface => ids::LEISURE_AGP,
         _ => ids::LEISURE_PITCH,
     }
 }
@@ -657,6 +665,32 @@ mod leisure_tests {
         assert_eq!(
             leisure_sport_class(&tags(&[("sport", "tennis;padel")])),
             lz::LEISURE_PADEL
+        );
+        // Artificial turf remaps only pitch classes to the booked duty.
+        assert_eq!(
+            leisure_sport_class(&tags(&[
+                ("leisure", "pitch"),
+                ("surface", "artificial_turf")
+            ])),
+            lz::LEISURE_AGP
+        );
+        assert_eq!(
+            leisure_sport_class(&tags(&[
+                ("sport", "soccer"),
+                ("surface", "artificial_turf")
+            ])),
+            lz::LEISURE_AGP
+        );
+        assert_eq!(
+            leisure_sport_class(&tags(&[("sport", "soccer"), ("surface", "grass")])),
+            lz::LEISURE_PITCH
+        );
+        assert_eq!(
+            leisure_sport_class(&tags(&[
+                ("sport", "tennis"),
+                ("surface", "artificial_turf")
+            ])),
+            lz::LEISURE_TENNIS
         );
     }
 

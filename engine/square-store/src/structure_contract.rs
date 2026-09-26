@@ -9,10 +9,12 @@ pub const CONTRACT: &str = "structures_v5";
 
 /// `height_source` codes, mirroring `scripts/structures/structure_contract.py`.
 pub const HEIGHT_SOURCE_AREA_TYPOLOGY: u8 = 2;
+/// Retired 2026-09-25 (the producer emits only the codes above and below this
+/// one now); older prepared squares still carry it, so readers keep accepting it.
 pub const HEIGHT_SOURCE_GHSL: u8 = 4;
 pub const HEIGHT_SOURCE_GROUND_ACTIVITY: u8 = 7;
 
-/// A footprint-area typology or a 100 m cell average knows nothing about the
+/// A footprint-area typology or a retired 100 m cell average knows nothing about the
 /// individual shed under it; every other source measured or mapped the building.
 pub fn height_is_per_building(height_source: u8) -> bool {
     !matches!(

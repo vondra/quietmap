@@ -17,13 +17,12 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "lib"))
 
-import pyarrow.parquet as pq
 import shapely
 from pyproj import Transformer
 
 import qmgrid
 from official_barriers import CONTRACT_KEY, CONTRACT_VERSION, KIND_BERM, KIND_COMBINED, KIND_WALL, SCHEMA
-from structure_inventory import degree_name, write_official_cache
+from structure_inventory import accumulate_official_cache, degree_name
 
 FT_TO_M = 0.3048  # exact
 
@@ -181,15 +180,8 @@ def append_cache(rows, source, as_of, cache_dir):
         columns["kind"].append(kind)
         columns["source"].append(source)
         columns["as_of"].append(as_of)
-    # Inventories accumulate: keep what the tile already holds.
-    for tile, columns in by_tile.items():
-        path = os.path.join(cache_dir, f"{tile}.parquet")
-        if os.path.exists(path):
-            old = pq.read_table(path).to_pylist()
-            for row in old:
-                for name in SCHEMA.names:
-                    columns[name].append(row[name])
-    write_official_cache(by_tile, cache_dir, SCHEMA, CONTRACT_KEY, CONTRACT_VERSION)
+    accumulate_official_cache(by_tile, source, cache_dir, SCHEMA, CONTRACT_KEY,
+                              CONTRACT_VERSION)
     if duplicates:
         print(f"[normalize-barriers] {duplicates} duplicate lines dropped", flush=True)
     return len(seen)

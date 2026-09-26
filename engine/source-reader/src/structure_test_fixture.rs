@@ -477,7 +477,7 @@ pub fn write_railways_file(path: &Path, rows: &[FixtureRail]) {
     w.finish().unwrap();
 }
 
-/// One leisure row in the `leisure_v4` layout. `chain_lonlat` is `None` for a
+/// One leisure row in the `leisure_v5` layout. `chain_lonlat` is `None` for a
 /// point row, an open chain for a raceway/track line, a closed ring for an
 /// area; `tags` are the retained OSM tags, written as stable sorted JSON
 /// like the extractor writes them.
@@ -500,12 +500,12 @@ fn tags_json(tags: &[(&str, &str)]) -> String {
     .unwrap()
 }
 
-/// A leisure.arrow on disk in the v2 (grid) layout, stamped `leisure_v4`.
+/// A leisure.arrow on disk in the v2 (grid) layout, stamped `leisure_v5`.
 pub fn write_leisure_file(path: &Path, rows: &[FixtureLeisure]) {
     let mut metadata = std::collections::HashMap::new();
     metadata.insert(
         "leisure_contract".to_string(),
-        square_store::osm_contract::LEISURE_CONTRACT_V4.to_string(),
+        square_store::osm_contract::LEISURE_CONTRACT_V5.to_string(),
     );
     metadata.insert(
         "grid".to_string(),
