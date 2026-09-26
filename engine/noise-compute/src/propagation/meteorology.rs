@@ -17,13 +17,21 @@ pub const DEFAULT_FAVOURABLE_PROBABILITY: f64 = 0.5;
 pub const DEFAULT_ABSORPTION_TEMPERATURE_C: f64 = 15.0;
 pub const DEFAULT_ABSORPTION_RELATIVE_HUMIDITY_PCT: f64 = 70.0;
 
-/// The weather every path of one receiver meets.
+/// The weather every path of one receiver meets: the receiver's own sample (p per
+/// period and direction sector, absorption per period and band) plus the owner
+/// window's extremes behind the relevance bound.
 #[derive(Debug, Clone)]
 pub struct Meteorology {
     /// Per period (day, evening, night) and direction sector.
     pub favourable_probability: [[f64; DIRECTION_SECTOR_COUNT]; 3],
     /// Per period and band.
     pub absorption: [[AbsorptionClimate; NUM_BANDS]; 3],
+    /// Largest stored p per period over the owner square's window (every
+    /// interpolation inside the window stays under it).
+    pub bound_probability_max: [f64; 3],
+    /// Smallest absorption slope per band over the window (the linear bound of
+    /// the long-term A_atm up to the profile ceiling).
+    pub bound_alpha_min_db_per_km: [f64; NUM_BANDS],
 }
 
 impl Meteorology {
@@ -32,6 +40,18 @@ impl Meteorology {
         Self {
             favourable_probability: [[DEFAULT_FAVOURABLE_PROBABILITY; DIRECTION_SECTOR_COUNT]; 3],
             absorption: [alpha.map(AbsorptionClimate::steady); 3],
+            bound_probability_max: [DEFAULT_FAVOURABLE_PROBABILITY; 3],
+            bound_alpha_min_db_per_km: alpha,
+        }
+    }
+
+    /// A window's bound with default receiver fields: the reach uses the bound
+    /// fields only (the painter's rows cover receivers across the square).
+    pub fn for_bound(probability_max: [f64; 3], alpha_min_db_per_km: [f64; NUM_BANDS]) -> Self {
+        Self {
+            bound_probability_max: probability_max,
+            bound_alpha_min_db_per_km: alpha_min_db_per_km,
+            ..Self::defaults()
         }
     }
 

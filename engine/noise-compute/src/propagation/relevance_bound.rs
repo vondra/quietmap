@@ -34,18 +34,24 @@ impl SourceSpread {
 pub struct RelevanceBound {
     /// Smallest air absorption any path of the source can meet, per band [dB/km].
     pub alpha_min_db_per_km: [f64; NUM_BANDS],
-    /// Largest ground-and-diffraction gain over free field any path can reach [dB].
-    pub gain_db: f64,
+    /// Largest mixed ground-and-diffraction gain over free field any path of the
+    /// period can reach [dB], at the window's p_max of that period.
+    pub gains_db: [f64; 3],
 }
 
-/// Largest gain over free field the ground and diffraction terms of one state can give [dB],
-/// flat or relief: a grazing hard crest takes the favourable floor of (2.5.20), -9 dB per
-/// side, with a blocked Δdif(S,R) of at least 10·lg 3, so 2·9 − 10·lg 3 = 13.2 dB at most
-/// (13.09 dB found: 11.8 km, crest 14.57 m at 236 m, source 0.05 m, receiver 1.5 m, G = 0;
-/// the flat favourable 9.53 dB, homogeneous 3.71 dB). Rounded up; with p = 1 (the bound must
-/// assume it, orchestrator 2026-09-24) the mixed gain is the favourable one.
-/// `no_sampled_path_gains_more_than_the_bound` guards the search.
-pub const SURFACE_RELEVANCE_GAIN_DB: f64 = 13.3;
+/// Largest favourable-state gain over free field [dB]: the (9)(h) below-plane corner, where
+/// the capped Δdif(S,R) is replaced by the image path's (≥ 0 dB) while both sides sit at
+/// the (2.5.20) floor (−9 dB each), so 0 + 9 + 9 = 18 dB at most (17.60 dB found: 6.2 km
+/// hard path, receiver 7 m up in a dip below its side plane, image path grazing;
+/// `below_plane_corners_stay_under_the_state_bounds`). The pre-slice-2 13.3 dB assumed a
+/// blocked Δdif of at least 10·lg 3, which the replacement voids.
+pub const FAVOURABLE_GAIN_BOUND_DB: f64 = 18.0;
+/// Largest homogeneous-state gain [dB]: the same corner with the −3 dB homogeneous floor
+/// per side (6.00 dB found).
+pub const HOMOGENEOUS_GAIN_BOUND_DB: f64 = 6.0;
+/// The p = 1 endpoint of [`mixed_gain_bound_db`]: the CUDA pair gate's constant until the
+/// window gains land with the meteorology upload.
+pub const SURFACE_RELEVANCE_GAIN_DB: f64 = 18.0;
 /// The reach edge: a row reaches as far as its bound's Lden stays above the 30 dB display floor
 /// (owner decision via the orchestrator, 2026-09-24).
 pub const REACH_EDGE_LDEN_DB: f64 = 30.0;
@@ -57,21 +63,36 @@ pub const LINE_PIECE_MAXIMUM_LENGTH_M: f64 = 250.0;
 /// Reach ceiling of a line piece's closest point: its farthest point stays within the profile.
 pub const LINE_REACH_CEILING_M: f64 = PROFILE_RAY_CEILING_M - LINE_PIECE_MAXIMUM_LENGTH_M;
 
+/// Largest mixed gain at favourable probability `p`: mixing the two state maxima
+/// bounds the mixed gain, and the mix increases in `p`, so the window's p_max
+/// covers every path of the period.
+pub fn mixed_gain_bound_db(p: f64) -> f64 {
+    10.0 * (p * 10f64.powf(FAVOURABLE_GAIN_BOUND_DB / 10.0)
+        + (1.0 - p) * 10f64.powf(HOMOGENEOUS_GAIN_BOUND_DB / 10.0))
+        .log10()
+}
+
 /// The bound of the surface propagation method under the given weather.
 pub fn surface_relevance_bound(weather: &crate::propagation::meteorology::Meteorology) -> RelevanceBound {
     RelevanceBound {
-        alpha_min_db_per_km: weather.minimum_absorption_db_per_km(),
-        gain_db: SURFACE_RELEVANCE_GAIN_DB,
+        alpha_min_db_per_km: weather.bound_alpha_min_db_per_km,
+        gains_db: weather.bound_probability_max.map(mixed_gain_bound_db),
     }
 }
 
 impl RelevanceBound {
-    /// Upper bound of the received band levels at horizontal distance `distance_m`.
-    pub fn level_db(&self, emission_db: &[f64; NUM_BANDS], spread: SourceSpread, distance_m: f64) -> [f64; NUM_BANDS] {
+    /// Upper bound of the received band levels of one period at horizontal distance `distance_m`.
+    pub fn level_db(
+        &self,
+        emission_db: &[f64; NUM_BANDS],
+        spread: SourceSpread,
+        distance_m: f64,
+        period: usize,
+    ) -> [f64; NUM_BANDS] {
         let d = distance_m.max(1.0);
         let divergence = spread.divergence_db(d);
         std::array::from_fn(|band| {
-            emission_db[band] - divergence - self.alpha_min_db_per_km[band] * d / 1000.0 + self.gain_db
+            emission_db[band] - divergence - self.alpha_min_db_per_km[band] * d / 1000.0 + self.gains_db[period]
         })
     }
 
@@ -85,15 +106,15 @@ impl RelevanceBound {
         spread: SourceSpread,
         distance_m: f64,
     ) -> bool {
-        period_emissions_db.iter().all(|emission| {
-            self.level_db(emission, spread, distance_m).iter().all(|&level| level < 0.0)
+        period_emissions_db.iter().enumerate().all(|(period, emission)| {
+            self.level_db(emission, spread, distance_m, period).iter().all(|&level| level < 0.0)
         })
     }
 
     /// Upper bound of the A-weighted Lden at `distance_m`.
     pub fn lden_db(&self, period_emissions_db: &[[f64; NUM_BANDS]; 3], spread: SourceSpread, distance_m: f64) -> f64 {
-        let [day, evening, night] = period_emissions_db.map(|emission| {
-            let levels = self.level_db(&emission, spread, distance_m);
+        let [day, evening, night] = [0, 1, 2].map(|period| {
+            let levels = self.level_db(&period_emissions_db[period], spread, distance_m, period);
             let energy: f64 = (0..NUM_BANDS).map(|b| 10f64.powf((levels[b] + A_WEIGHTING[b]) / 10.0)).sum();
             assert!(energy.is_finite() && energy >= 0.0, "non-finite bound energy: {energy}");
             10.0 * energy.max(1e-30).log10()
@@ -142,7 +163,7 @@ mod tests {
 
     const BOUND: RelevanceBound = RelevanceBound {
         alpha_min_db_per_km: [0.0; NUM_BANDS],
-        gain_db: 3.0,
+        gains_db: [3.0; 3],
     };
 
     /// T1 of BOUND.md: a road carrying all its traffic at night is kept at a distance where
@@ -157,9 +178,18 @@ mod tests {
     }
 
     #[test]
+    fn the_mixed_gain_runs_from_the_homogeneous_to_the_favourable_maximum() {
+        assert_eq!(mixed_gain_bound_db(0.0), HOMOGENEOUS_GAIN_BOUND_DB);
+        assert_eq!(mixed_gain_bound_db(1.0), FAVOURABLE_GAIN_BOUND_DB);
+        let half = mixed_gain_bound_db(0.5);
+        assert!((half - 15.26).abs() < 0.01, "{half}");
+        assert!(mixed_gain_bound_db(0.25) < half && half < mixed_gain_bound_db(0.75));
+    }
+
+    #[test]
     fn the_line_bound_is_the_infinite_line_and_reach_inverts_it() {
         let emission = [70.0; NUM_BANDS];
-        let level = BOUND.level_db(&emission, SourceSpread::Line, 100.0)[0];
+        let level = BOUND.level_db(&emission, SourceSpread::Line, 100.0, 0)[0];
         assert!((level - (70.0 - 20.0 - 6.0285 + 3.0)).abs() < 1e-3, "{level}");
         let periods = [emission; 3];
         let reach = BOUND.reach_m(&periods, SourceSpread::Line, 30.0, 1e6);
