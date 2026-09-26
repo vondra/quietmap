@@ -23,8 +23,8 @@ const LAYERS: [(LayerKind, u8); 5] = [
 ];
 /// Lines within this distance of the tile are cut finer for the converged lane.
 const CONVERGED_RADIUS_M: f32 = 400.0;
-/// Tile bbox margin covering the pixel grid (400 m plus half a diagonal cell).
-const TILE_MARGIN_M: f32 = 405.0;
+/// Tile bbox margin covering the pixel grid (the converged radius plus half a diagonal cell).
+const TILE_MARGIN_M: f32 = CONVERGED_RADIUS_M + 5.0;
 /// Maximum reference piece length; rerun at 0.25 m to check convergence.
 const CONVERGED_PIECE_LENGTH_M: f32 = 1.0;
 /// A pixel counts for a layer when either side reaches the display floor.
