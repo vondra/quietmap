@@ -6,8 +6,6 @@ use grid::{
 };
 use noise_compute::constants::{m_per_deg_lon, M_PER_DEG_LAT};
 
-/// `DeviceLineSource::flags`: the segment propagates over hard ground (a bridge).
-pub const SOURCE_FLAG_BRIDGE: u32 = 1;
 /// `DeviceLineSource::flags`: a point source (industrial, building): start == end,
 /// spherical divergence, `extent_m` is its footprint exclusion radius.
 pub const SOURCE_FLAG_POINT: u32 = 2;

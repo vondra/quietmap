@@ -477,7 +477,7 @@ __device__ void cnossos_ray_transfer(
     float transfer[QUIETMAP_PERIOD_COUNT][QUIETMAP_BAND_COUNT]
 ) {
     const float length = fmaxf(hypotf(receiver_x_m - source_x_m, receiver_y_m - source_y_m), 1.0f);
-    build_path_profile(scene, source_x_m, source_y_m, receiver_x_m, receiver_y_m, length, false,
+    build_path_profile(scene, source_x_m, source_y_m, receiver_x_m, receiver_y_m, length,
                        profile);
     const float source_ground_m = profile.elevation_m[0];
     const float source_altitude_m = source_ground_m + terms.height_m;

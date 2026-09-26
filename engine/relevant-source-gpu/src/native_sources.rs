@@ -332,8 +332,7 @@ fn line(
             .unwrap_or_else(|| grid::geo::flat_dist(start[0], start[1], end[0], end[1]) as f32),
         max_distance_m,
         source_height_m: source_height_m as f32,
-        flags: if bridge { SOURCE_FLAG_BRIDGE } else { 0 }
-            | if dipole { SOURCE_FLAG_TRACK_DIPOLE } else { 0 },
+        flags: if dipole { SOURCE_FLAG_TRACK_DIPOLE } else { 0 },
         source_ground_factor: source_ground_factor as f32,
         platform_half_width_m: platform_half_width_m as f32,
         emission_linear: emission_linear(emission),

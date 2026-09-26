@@ -17,7 +17,6 @@ constexpr int QUIETMAP_CORNER_COUNT =
     (QUIETMAP_BLOCKS_PER_TILE_SIDE + 1) * (QUIETMAP_BLOCKS_PER_TILE_SIDE + 1);
 static_assert(QUIETMAP_TILE_PIXEL_SIDE % QUIETMAP_BLOCK_PIXEL_SIDE == 0, "block tiles the tile");
 
-constexpr uint32_t QUIETMAP_SOURCE_FLAG_BRIDGE = 1u;
 constexpr uint32_t QUIETMAP_SOURCE_FLAG_POINT = 2u;
 constexpr uint32_t QUIETMAP_SOURCE_FLAG_GROUND_OPS_AIRCRAFT = 4u;
 constexpr uint32_t QUIETMAP_SOURCE_FLAG_GROUND_OPS_GSE = 8u;
@@ -69,10 +68,6 @@ __device__ __forceinline__ float favourable_probability(const DeviceWeather& wea
 
 __device__ __forceinline__ bool source_is_point(const DeviceLineSource& source) {
     return (source.flags & QUIETMAP_SOURCE_FLAG_POINT) != 0u;
-}
-
-__device__ __forceinline__ bool source_is_bridge(const DeviceLineSource& source) {
-    return (source.flags & QUIETMAP_SOURCE_FLAG_BRIDGE) != 0u;
 }
 
 __device__ __forceinline__ bool source_is_ground_ops(const DeviceLineSource& source) {
