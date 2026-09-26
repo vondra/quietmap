@@ -54,11 +54,12 @@ def scrub_window(path):
     """Reset sub-floor blend garbage to nodata in place; returns the count."""
     dataset = gdal.Open(str(path), gdal.GA_Update)
     band = dataset.GetRasterBand(1)
+    nodata = band.GetNoDataValue()
     values = band.ReadAsArray()
-    garbage = values < FR_FLOOR_M
+    garbage = (values < FR_FLOOR_M) & (values != nodata)
     count = int(garbage.sum())
     if count:
-        values[garbage] = band.GetNoDataValue()
+        values[garbage] = nodata
         band.WriteArray(values)
         band.FlushCache()
     dataset = None

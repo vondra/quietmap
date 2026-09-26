@@ -270,7 +270,7 @@ class FranceScrubTest(unittest.TestCase):
             dataset.GetRasterBand(1).SetNoDataValue(-99999.)
             dataset.GetRasterBand(1).WriteArray(pixels)
             dataset = None
-            self.assertEqual(fetch_fr.scrub_window(path), 5)
+            self.assertEqual(fetch_fr.scrub_window(path), 4)
             dataset = gdal.Open(str(path))
             got = dataset.GetRasterBand(1).ReadAsArray().tolist()[0]
             for value, want in zip(got, [-99999., -99999., -99999., -99999., -99999.,
