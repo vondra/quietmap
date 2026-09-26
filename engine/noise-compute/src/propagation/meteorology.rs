@@ -1,7 +1,7 @@
 //! Long-term weather of a path (the W6 reader contract, `w2-method/CONTRACT-W6.md` with its
 //! 2026-09-24 amendment): probability of favourable propagation per period and propagation
-//! direction, and air absorption per period and band. Built-in defaults stand until
-//! the per-square `meteorology.bin` files are consumed.
+//! direction, and air absorption per period and band. Sampled from the receiver square's
+//! `meteorology.bin` window; built-in defaults stand only where the square has no file.
 
 use super::air_absorption::{iso_9613_1_alpha_bands, AbsorptionClimate};
 use crate::types::NUM_BANDS;
@@ -9,24 +9,24 @@ use crate::types::NUM_BANDS;
 /// Direction sectors of the favourable-condition table: 22.5° each, sector s centred on the
 /// propagation azimuth 22.5°·s clockwise from north (source→receiver).
 pub const DIRECTION_SECTOR_COUNT: usize = 16;
-/// Default probability of favourable conditions until W6 delivers climatology: the value the
+/// Default probability of favourable conditions where a square has no file: the value the
 /// engine has carried since 2026-07-28 (owner, one p for all periods).
 pub const DEFAULT_FAVOURABLE_PROBABILITY: f64 = 0.5;
-/// Default absorption climate until W6 delivers it: ISO 9613-1 at the CNOSSOS-EU §2.5.6 default
-/// 15 °C / 70 % RH (W2 METHOD.md, BOUND.md), no hourly variance.
+/// Default absorption climate where a square has no file: ISO 9613-1 at the CNOSSOS-EU
+/// §2.5.6 default 15 °C / 70 % RH (W2 METHOD.md, BOUND.md), no hourly variance.
 pub const DEFAULT_ABSORPTION_TEMPERATURE_C: f64 = 15.0;
 pub const DEFAULT_ABSORPTION_RELATIVE_HUMIDITY_PCT: f64 = 70.0;
 
 /// The weather every path of one receiver meets: the receiver's own sample (p per
-/// period and direction sector, absorption per period and band) plus the owner
-/// window's extremes behind the relevance bound.
+/// period and direction sector, absorption per period and band) plus the receiver
+/// square window's extremes behind the relevance bound.
 #[derive(Debug, Clone)]
 pub struct Meteorology {
     /// Per period (day, evening, night) and direction sector.
     pub favourable_probability: [[f64; DIRECTION_SECTOR_COUNT]; 3],
     /// Per period and band.
     pub absorption: [[AbsorptionClimate; NUM_BANDS]; 3],
-    /// Largest stored p per period over the owner square's window (every
+    /// Largest stored p per period over the receiver square's window (every
     /// interpolation inside the window stays under it).
     pub bound_probability_max: [f64; 3],
     /// Smallest absorption slope per band over the window (the linear bound of
@@ -45,8 +45,8 @@ impl Meteorology {
         }
     }
 
-    /// A window's bound with default receiver fields: the reach uses the bound
-    /// fields only (the painter's rows cover receivers across the square).
+    /// A bound-only weather from window extremes: the painter's row envelope spans
+    /// receivers across squares, so no single receiver sample covers it; the maxima do.
     pub fn for_bound(probability_max: [f64; 3], alpha_min_db_per_km: [f64; NUM_BANDS]) -> Self {
         Self {
             bound_probability_max: probability_max,
@@ -67,21 +67,63 @@ impl Meteorology {
         row[lower] + fraction * (row[upper] - row[lower])
     }
 
-    /// The smallest absorption any hour of any period reaches, per band (the relevance bound's
-    /// α_min).
-    pub fn minimum_absorption_db_per_km(&self) -> [f64; NUM_BANDS] {
-        std::array::from_fn(|band| {
-            self.absorption
-                .iter()
-                .map(|period| period[band].minimum_db_per_km)
-                .fold(f64::INFINITY, f64::min)
-        })
+    /// The largest p of `period` over the azimuth interval [`lo_rad`, `hi_rad`], exact:
+    /// p is piecewise linear with breakpoints at the sector centres, so the maximum
+    /// sits at an endpoint or an enclosed centre. Never below the evaluation's p at
+    /// any covered node (gains mixed at this cover every node) and never above the
+    /// window maximum (the extract-time envelope was built at the window maximum, so
+    /// a popup reach beyond it would miss unloaded rows).
+    pub fn max_probability_over_span(&self, period: usize, lo_rad: f64, hi_rad: f64) -> f64 {
+        use std::f64::consts::TAU;
+        let window_max = self.bound_probability_max[period];
+        if (hi_rad - lo_rad).abs() >= TAU - 1e-9 {
+            return window_max;
+        }
+        let span = (hi_rad - lo_rad).rem_euclid(TAU);
+        let mut max = self
+            .favourable_probability(period, lo_rad)
+            .max(self.favourable_probability(period, hi_rad));
+        // Sector s is centred on bearing 22.5°·s, azimuth π/2 − s·π/8.
+        for s in 0..DIRECTION_SECTOR_COUNT {
+            let centre = std::f64::consts::FRAC_PI_2 - s as f64 * TAU / DIRECTION_SECTOR_COUNT as f64;
+            let shift = (centre - lo_rad).rem_euclid(TAU);
+            if shift > 0.0 && shift < span {
+                max = max.max(self.favourable_probability(period, centre));
+            }
+        }
+        max.min(window_max)
     }
+
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn span_maximum_is_exact_and_clamped_to_the_window() {
+        let mut weather = Meteorology::defaults();
+        // One hot sector (due east, sector 4) at 0.9, the rest 0.1.
+        weather.favourable_probability[0] = std::array::from_fn(|s| if s == 4 { 0.9 } else { 0.1 });
+        weather.bound_probability_max[0] = 0.9;
+        // A span covering due east sees the peak.
+        let hit = weather.max_probability_over_span(0, -0.2, 0.2);
+        assert!((hit - 0.9).abs() < 1e-12, "{hit}");
+        // A span due west sees only 0.1 (centres excluded at the endpoints).
+        let miss = weather.max_probability_over_span(0, std::f64::consts::PI - 0.1, std::f64::consts::PI + 0.1);
+        assert!((miss - 0.1).abs() < 1e-12, "{miss}");
+        // Dense sampling never exceeds the span maximum anywhere.
+        for k in 0..720 {
+            let az = k as f64 * std::f64::consts::TAU / 720.0;
+            assert!(weather.favourable_probability(0, az) <= hit + 1e-12);
+        }
+        // A degenerate span is the point value; a full circle is the window max.
+        assert!((weather.max_probability_over_span(0, 0.0, 0.0) - 0.9).abs() < 1e-12);
+        assert!((weather.max_probability_over_span(0, 0.0, std::f64::consts::TAU) - 0.9).abs() < 1e-12);
+        // The clamp holds even when the table overshoots the recorded window max.
+        weather.bound_probability_max[0] = 0.5;
+        assert!((weather.max_probability_over_span(0, -0.2, 0.2) - 0.5).abs() < 1e-12);
+    }
 
     #[test]
     fn favourable_probability_is_continuous_across_sectors_and_north() {

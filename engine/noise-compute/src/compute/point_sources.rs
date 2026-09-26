@@ -68,8 +68,7 @@ pub(crate) fn compute_point_sources(
     }
     let mut pts_by_osm: HashMap<i64, PtAccum> = HashMap::new();
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
-    let weather = crate::propagation::meteorology::Meteorology::defaults();
-    let bound = crate::propagation::relevance_bound::surface_relevance_bound(&weather);
+    let weather = rasters.weather(receiver.lat, receiver.lon);
     let ray_receiver = RayReceiver {
         lat: receiver.lat,
         lon: receiver.lon,
@@ -94,7 +93,17 @@ pub(crate) fn compute_point_sources(
 
         // All periods count (#31): a night-only source is never dropped by a day gate.
         let period_emissions = [src.lw_day, src.lw_evening, src.lw_night].map(|bands| bands.map(f64::from));
-        if bound.pair_is_inaudible(&period_emissions, SourceSpread::Point, src.dist_m) {
+        let span = crate::propagation::relevance_bound::azimuth_span(
+            receiver.lat,
+            receiver.lon,
+            src.lat,
+            src.lon,
+            src.lat,
+            src.lon,
+        );
+        let point_bound =
+            crate::propagation::relevance_bound::bound_for_azimuth_span(&weather, span);
+        if point_bound.pair_is_inaudible(&period_emissions, SourceSpread::Point, src.dist_m) {
             continue;
         }
 
@@ -192,6 +201,7 @@ pub(crate) fn compute_point_sources(
                 node,
                 seg_variants,
                 lw_bands,
+                weather: weather.clone(),
             });
             t.segments.push(trace);
         }

@@ -6,9 +6,6 @@ use crate::types::NUM_BANDS;
 /// Bands: 63, 125, 250, 500, 1000, 2000, 4000, 8000 Hz
 pub const A_WEIGHTING: [f64; NUM_BANDS] = [-26.2, -16.1, -8.6, -3.2, 0.0, 1.2, 1.0, -1.1];
 
-/// Atmospheric absorption [dB/km] (ISO 9613-1, 15°C, 70% RH, 101.325 kPa).
-pub const ALPHA_ATM: [f64; NUM_BANDS] = [0.1, 0.4, 1.0, 1.9, 3.7, 8.7, 22.0, 58.4];
-
 /// Band-mean ground correction factors (CNOSSOS-EU §2.5.15) — one number per
 /// octave band standing in for the analytic `A_ground,H(G, f, h_s, h_r, d)`.
 /// NEVER used on its own: the term the engine applies is

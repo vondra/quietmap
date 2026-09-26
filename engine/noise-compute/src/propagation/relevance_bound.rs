@@ -49,9 +49,6 @@ pub const FAVOURABLE_GAIN_BOUND_DB: f64 = 18.0;
 /// Largest homogeneous-state gain [dB]: the same corner with the −3 dB homogeneous floor
 /// per side (6.00 dB found).
 pub const HOMOGENEOUS_GAIN_BOUND_DB: f64 = 6.0;
-/// The p = 1 endpoint of [`mixed_gain_bound_db`]: the CUDA pair gate's constant until the
-/// window gains land with the meteorology upload.
-pub const SURFACE_RELEVANCE_GAIN_DB: f64 = 18.0;
 /// The reach edge: a row reaches as far as its bound's Lden stays above the 30 dB display floor
 /// (owner decision via the orchestrator, 2026-09-24).
 pub const REACH_EDGE_LDEN_DB: f64 = 30.0;
@@ -77,6 +74,51 @@ pub fn surface_relevance_bound(weather: &crate::propagation::meteorology::Meteor
     RelevanceBound {
         alpha_min_db_per_km: weather.bound_alpha_min_db_per_km,
         gains_db: weather.bound_probability_max.map(mixed_gain_bound_db),
+    }
+}
+
+/// The bound for one row: gains mixed at the largest p over the row's azimuth span
+/// (a point's single azimuth), never above the window maximum the extract-time
+/// envelope was built at. A straight piece's node azimuths sweep monotonically
+/// inside its endpoint span, so the span maximum covers every quadrature node.
+pub fn bound_for_azimuth_span(
+    weather: &crate::propagation::meteorology::Meteorology,
+    span_rad: (f64, f64),
+) -> RelevanceBound {
+    RelevanceBound {
+        alpha_min_db_per_km: weather.bound_alpha_min_db_per_km,
+        gains_db: std::array::from_fn(|period| {
+            mixed_gain_bound_db(weather.max_probability_over_span(period, span_rad.0, span_rad.1))
+        }),
+    }
+}
+
+/// Azimuth span `(lo, hi)` of the segment from a receiver, mathematical `atan2(north, east)`
+/// radians in the local flat-earth frame (the evaluation's own convention): the endpoint
+/// azimuths in sweep order, padded 1° each side against convention rounding. The sweep of
+/// a straight segment seen from off the line is under π; a receiver on the line sees both
+/// endpoints near ±π apart and the padded span still covers both.
+pub fn azimuth_span(
+    receiver_lat: f64,
+    receiver_lon: f64,
+    start_lat: f64,
+    start_lon: f64,
+    end_lat: f64,
+    end_lon: f64,
+) -> (f64, f64) {
+    use crate::propagation::geo::{m_per_deg_lon, wrapped_longitude_delta, M_PER_DEG_LAT};
+    let mid = receiver_lat.to_radians();
+    let azimuth = |lat: f64, lon: f64| {
+        ((lat - receiver_lat) * M_PER_DEG_LAT)
+            .atan2(wrapped_longitude_delta(receiver_lon, lon) * m_per_deg_lon(mid))
+    };
+    let pad = 1.0_f64.to_radians();
+    let (a, b) = (azimuth(start_lat, start_lon), azimuth(end_lat, end_lon));
+    let sweep = (b - a).rem_euclid(std::f64::consts::TAU);
+    if sweep <= std::f64::consts::PI {
+        (a - pad, a + sweep + pad)
+    } else {
+        (b - pad, b + (std::f64::consts::TAU - sweep) + pad)
     }
 }
 
@@ -184,6 +226,46 @@ mod tests {
         let half = mixed_gain_bound_db(0.5);
         assert!((half - 15.26).abs() < 0.01, "{half}");
         assert!(mixed_gain_bound_db(0.25) < half && half < mixed_gain_bound_db(0.75));
+    }
+
+    #[test]
+    fn span_bounds_tighten_quiet_sectors_and_never_exceed_the_window() {
+        use crate::propagation::meteorology::Meteorology;
+        let mut weather = Meteorology::defaults();
+        weather.favourable_probability = [[0.1; 16], [0.5; 16], [0.9; 16]];
+        weather.bound_probability_max = [0.1, 0.5, 0.9];
+        // Due east sees p 0.1/0.5/0.9; due west the same table (uniform rows).
+        let east = bound_for_azimuth_span(&weather, (-0.05, 0.05));
+        assert!((east.gains_db[0] - mixed_gain_bound_db(0.1)).abs() < 1e-9);
+        assert!((east.gains_db[2] - mixed_gain_bound_db(0.9)).abs() < 1e-9);
+        // One hot eastern sector in every period: a western span mixes low.
+        let hot = std::array::from_fn(|s: usize| if s == 4 { 0.9 } else { 0.1 });
+        weather.favourable_probability = [hot; 3];
+        weather.bound_probability_max = [0.9; 3];
+        let west = bound_for_azimuth_span(&weather, (2.0, 4.0));
+        let full = surface_relevance_bound(&weather);
+        assert!(west.gains_db[1] < full.gains_db[1] - 1.0);
+        for period in 0..3 {
+            assert!(west.gains_db[period] <= full.gains_db[period] + 1e-9);
+        }
+        // A far upwind row the window bound keeps, the span bound skips.
+        let emission = [75.0; NUM_BANDS];
+        let periods = [emission; 3];
+        let dist = 11_000.0;
+        assert!(full.within_reach(&periods, SourceSpread::Line, dist));
+        assert!(!west.within_reach(&periods, SourceSpread::Line, dist));
+    }
+
+    #[test]
+    fn azimuth_spans_follow_the_sight_lines() {
+        // Due east / west / north of the receiver.
+        let (lo, hi) = azimuth_span(50.0, 14.0, 50.0, 14.1, 50.0, 14.2);
+        assert!(lo < 0.0 && hi > 0.0 && hi - lo < 0.1, "{lo} {hi}");
+        let (lo, hi) = azimuth_span(50.0, 14.0, 50.1, 14.0, 50.2, 14.0);
+        assert!((lo - std::f64::consts::FRAC_PI_2).abs() < 0.05, "{lo} {hi}");
+        // A segment across the ±π branch cut spans narrowly, not the long way round.
+        let (lo, hi) = azimuth_span(50.0, 14.0, 50.0, 13.9, 50.001, 13.9);
+        assert!(hi - lo < 0.1, "{lo} {hi}");
     }
 
     #[test]

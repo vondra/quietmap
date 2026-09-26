@@ -9,7 +9,7 @@
 //!
 //! ```text
 //! prop_band[i] = 10^((geo_rel_db                                  // 25m → d divergence
-//!                   + ALPHA_ATM[i] · (d - 25)/1000               // ISO 9613-2 atm
+//!                   + A_atm[i](d - 25, row period)                 // receiver weather
 //!                   + terrain_atten_db[i]                         // DEM-derived
 //!                   + screening_atten_db[i]                       // building diffraction
 //!                   + veg_atten_db[i]                             // forest mask
@@ -48,7 +48,6 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use crate::compute::aircraft_v6::views::AirportTrafficRowView;
-use crate::constants::ALPHA_ATM;
 use crate::emission::aircraft::{
     self, GROUND_OPS_KIND_APRON_MOVEMENT, GROUND_OPS_KIND_RUNWAY_ROLL, GROUND_OPS_KIND_TAXI,
     GROUND_OPS_REF_OFFSET_M, GROUND_OPS_SOURCE_HEIGHT_M,
@@ -406,6 +405,7 @@ pub fn run(
     // mode the sampler is the 1.4b wrapper (VectorReflectionSampler),
     // so this probe answers from exact footprints like every kernel.
     let refl_db = rasters.building_enclosure(recv_lat, recv_lon);
+    let weather = rasters.weather(recv_lat, recv_lon);
     // Heatmap-parity divergence floor: the user reads popup numbers
     // off a base HM3 pixel, so the popup uses the same half-pixel floor on
     // `d_perp`/`d_endpoint` as `tile_painter::ground_ops::scatter_tile`.
@@ -501,6 +501,7 @@ pub fn run(
             10.0 * (GROUND_OPS_REF_OFFSET_M / d_to_recv).log10()
         };
         let d_minus_ref_km = (d_to_recv - GROUND_OPS_REF_OFFSET_M).max(0.0) / 1000.0;
+        let period = row.period.min(2) as usize;
         let mut prop_full = [0.0f64; NUM_BANDS];
         let mut prop_no_terrain = [0.0f64; NUM_BANDS];
         let mut prop_no_screening = [0.0f64; NUM_BANDS];
@@ -519,7 +520,8 @@ pub fn run(
             // of A_bar). Atmospheric loss is added at the source
             // distance (here, from the 25 m line-source anchor
             // outward).
-            let atm_atten_db = ALPHA_ATM[i] * d_minus_ref_km;
+            let atm_atten_db =
+                weather.absorption[period][i].attenuation_db(d_minus_ref_km * 1000.0);
             let a_gr = aircraft_ground_atten_db(i, path.ground_g);
             let a_terr = path.terrain_atten_db[i];
             let a_scr = path.screening_atten_db[i];
@@ -596,7 +598,6 @@ pub fn run(
         if !aw_band_sum.is_finite() || aw_band_sum <= 0.0 {
             continue;
         }
-        let period = row.period.min(2) as usize;
         let acc = if let Some(acc) = by_airport.get_mut(row.airport_key) {
             acc
         } else {
@@ -840,6 +841,7 @@ pub fn run(
             recv_lon,
             refl_db,
             osm_ref_lookup,
+            &weather,
         );
     }
     out

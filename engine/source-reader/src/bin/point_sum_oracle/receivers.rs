@@ -9,17 +9,20 @@ use noise_compute::emission::railway::{self, RailType};
 use noise_compute::propagation::obstacle_index::VectorReflectionSampler;
 use noise_compute::propagation::point_sum::NodeSpacing;
 use noise_compute::propagation::ray_transfer::RayReceiver;
-use noise_compute::propagation::meteorology::Meteorology;
-use noise_compute::propagation::relevance_bound::{surface_relevance_bound, SourceSpread, LINE_REACH_CEILING_M};
+use noise_compute::propagation::relevance_bound::{SourceSpread, LINE_REACH_CEILING_M};
 use noise_compute::types::{LayerKind, RasterSampler, Receiver, NUM_BANDS};
 use rayon::prelude::*;
 use serde_json::{json, Value};
 use std::path::Path;
 
-/// The popup's admission: the row's relevance-bound reach.
-fn admitted_pieces(sources: &source_reader::PointQueryData, receiver: &Receiver) -> Vec<(LayerKind, Piece)> {
-    let weather = Meteorology::defaults();
-    let bound = surface_relevance_bound(&weather);
+/// The popup's admission: the row's relevance-bound reach at the receiver's weather.
+fn admitted_pieces(
+    sources: &source_reader::PointQueryData,
+    receiver: &Receiver,
+    rasters: &dyn RasterSampler,
+) -> Vec<(LayerKind, Piece)> {
+    use noise_compute::propagation::relevance_bound::{azimuth_span, bound_for_azimuth_span};
+    let weather = rasters.weather(receiver.lat, receiver.lon);
     let receiver_city = noise_compute::square_country_city::square_country_city_for_latlng(receiver.lat, receiver.lon);
     let mut rows = Vec::new();
     for seg in &sources.roads {
@@ -27,8 +30,12 @@ fn admitted_pieces(sources: &source_reader::PointQueryData, receiver: &Receiver)
             continue;
         };
         let emission = norm.period_emissions_db();
+        let span = azimuth_span(
+            receiver.lat, receiver.lon, seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon,
+        );
+        let row_bound = bound_for_azimuth_span(&weather, span);
         if seg.dist_m > LINE_REACH_CEILING_M
-            || !bound.within_reach(&emission, SourceSpread::Line, seg.dist_m)
+            || !row_bound.within_reach(&emission, SourceSpread::Line, seg.dist_m)
         {
             continue;
         }
@@ -50,8 +57,12 @@ fn admitted_pieces(sources: &source_reader::PointQueryData, receiver: &Receiver)
         }
         let rail_type = RailType::from_u8(seg.rail_type);
         let emission = railway::rail_period_emissions(rail_type, seg.speed_kmh, seg.traffic);
+        let span = azimuth_span(
+            receiver.lat, receiver.lon, seg.start_lat, seg.start_lon, seg.end_lat, seg.end_lon,
+        );
+        let row_bound = bound_for_azimuth_span(&weather, span);
         if seg.dist_m > LINE_REACH_CEILING_M
-            || !bound.within_reach(&emission, SourceSpread::Line, seg.dist_m)
+            || !row_bound.within_reach(&emission, SourceSpread::Line, seg.dist_m)
         {
             continue;
         }
@@ -95,13 +106,14 @@ pub fn run(prepared_year_dir: &Path, receivers: &[(String, f64, f64)], spacing: 
         let popup = noise_compute::compute_at_point(&receiver, &sources.roads, &sources.railways, &[], &[], &[], &obstacles, &rasters, None);
         let reflection_db = rasters.building_enclosure(*lat, *lon);
         let ray_receiver = RayReceiver { lat: *lat, lon: *lon, altitude_m: receiver.altitude_m() };
-        let pieces = admitted_pieces(&sources, &receiver);
+        let weather = rasters.weather(*lat, *lon);
+        let pieces = admitted_pieces(&sources, &receiver, &rasters);
         let results: Vec<(LayerKind, [Bands; 3], [Bands; 3], usize)> = pieces
             .par_iter()
             .map(|(layer, piece)| {
-                let quadrature = production(&ray_receiver, piece, &obstacles, &rasters)
+                let quadrature = production(&ray_receiver, piece, &obstacles, &rasters, &weather)
                     .map_or([[0.0; NUM_BANDS]; 3], |t| energies(&t, &piece.emission_db_per_m, reflection_db));
-                let (transfer, nodes) = point_sum(&ray_receiver, piece, &obstacles, &rasters, spacing);
+                let (transfer, nodes) = point_sum(&ray_receiver, piece, &obstacles, &rasters, &weather, spacing);
                 (*layer, quadrature, energies(&transfer, &piece.emission_db_per_m, reflection_db), nodes)
             })
             .collect();

@@ -3,6 +3,7 @@
 //! holds; this module never re-runs emission or propagation.
 
 use crate::propagation::iso9613;
+use crate::propagation::meteorology::Meteorology;
 use crate::propagation::ray_transfer::RayDetail;
 use crate::propagation::relevance_bound::SourceSpread;
 use crate::propagation::PathProfile;
@@ -75,8 +76,10 @@ pub fn variants_to_received_bands(
 
 /// Atmospheric attenuation (per band, positive = dB removed) at a slant distance: the day
 /// period's A_atm of the ray transfer (propagation::air_absorption).
-pub fn atmospheric_bands(d_slant_m: f64) -> [f64; NUM_BANDS] {
-    let weather = crate::propagation::meteorology::Meteorology::defaults();
+pub fn atmospheric_bands(
+    d_slant_m: f64,
+    weather: &Meteorology,
+) -> [f64; NUM_BANDS] {
     std::array::from_fn(|band| weather.absorption[0][band].attenuation_db(d_slant_m))
 }
 
@@ -161,10 +164,11 @@ pub fn baseline_trace(
     ground_g: f64,
     reflection_boost_db: f64,
     source_spread: SourceSpread,
+    weather: &Meteorology,
 ) -> BaselineTrace {
     BaselineTrace {
         geometric_db: source_spread.divergence_db(d_slant_m),
-        atmospheric_bands: atmospheric_bands(d_slant_m),
+        atmospheric_bands: atmospheric_bands(d_slant_m, weather),
         ground_factor_g: ground_g,
         source_height_m,
         finite_line_corr_db: 0.0,
@@ -191,6 +195,7 @@ struct BuildCnossosPropagation {
     veg_atten: [f64; NUM_BANDS],
     veg_runs: Vec<ForestRun>,
     veg_depth_m: f64,
+    weather: Meteorology,
     variants: [PropagationVariants; 3],
     lw_bands: [[f64; NUM_BANDS]; 3],
 }
@@ -214,12 +219,13 @@ fn build_cnossos_propagation(inputs: BuildCnossosPropagation) -> PropagationBrea
         veg_atten,
         veg_runs,
         veg_depth_m,
+        weather,
         variants,
         lw_bands,
     } = inputs;
     let vegetation = vegetation_trace(veg_atten, veg_runs, veg_depth_m, path_profile.dist_m);
     PropagationBreakdown::Cnossos(Box::new(CnossosBreakdown {
-        baseline: baseline_trace(d_slant_m, src_alt_m, ground_g, reflection_boost_db, source_spread),
+        baseline: baseline_trace(d_slant_m, src_alt_m, ground_g, reflection_boost_db, source_spread, &weather),
         path_profile: path_profile_into_trace(path_profile, src_alt_m, rcv_alt_m),
         terrain,
         screening: screening_trace(screening_atten, obstacle_trace, screening_fan),
@@ -257,6 +263,7 @@ pub(crate) struct BuildRoadTrace<'a> {
     pub fan: Option<ScreeningFanTrace>,
     pub seg_variants: [PropagationVariants; 3],
     pub lw_bands: [[f64; NUM_BANDS]; 3],
+    pub weather: Meteorology,
 }
 
 pub(crate) struct BuildPointTrace<'a> {
@@ -270,6 +277,7 @@ pub(crate) struct BuildPointTrace<'a> {
     pub node: RayDetail,
     pub seg_variants: [PropagationVariants; 3],
     pub lw_bands: [[f64; NUM_BANDS]; 3],
+    pub weather: Meteorology,
 }
 
 pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentTrace {
@@ -283,6 +291,7 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
         node,
         seg_variants,
         lw_bands,
+        weather,
     } = inputs;
 
     let (subtype_label, emission) = match source_kind {
@@ -363,6 +372,7 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
             veg_atten: node.vegetation_bands,
             veg_runs: node.foliage_runs,
             veg_depth_m: node.forest_depth_m,
+            weather,
             variants: seg_variants,
             lw_bands,
         }),
@@ -387,6 +397,7 @@ pub(crate) struct BuildRailTrace<'a> {
     pub fan: Option<ScreeningFanTrace>,
     pub seg_variants: [PropagationVariants; 3],
     pub lw_bands: [[f64; NUM_BANDS]; 3],
+    pub weather: Meteorology,
 }
 
 /// The CNOSSOS breakdown of a line piece from its loudest node's ray.
@@ -398,6 +409,7 @@ fn line_node_propagation(
     reflection_boost_db: f64,
     variants: [PropagationVariants; 3],
     lw_bands: [[f64; NUM_BANDS]; 3],
+    weather: Meteorology,
 ) -> PropagationBreakdown {
     build_cnossos_propagation(BuildCnossosPropagation {
         d_slant_m,
@@ -415,6 +427,7 @@ fn line_node_propagation(
         veg_atten: node.vegetation_bands,
         veg_runs: node.foliage_runs,
         veg_depth_m: node.forest_depth_m,
+        weather,
         variants,
         lw_bands,
     })
@@ -431,6 +444,7 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
         fan,
         seg_variants,
         lw_bands,
+        weather,
     } = inputs;
 
     let rail_type = rail_type_name(seg.rail_type);
@@ -472,6 +486,7 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
             reflection_boost_db,
             seg_variants,
             lw_bands,
+            weather,
         ),
         received_lden: variants_to_lden(&seg_variants),
         aircraft_subtype: 0,
@@ -497,6 +512,7 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
         fan,
         seg_variants,
         lw_bands,
+        weather,
     } = inputs;
 
     let seg_name = seg_name_from_tags(&seg.road_ref, &seg.name, class_name, seg.osm_id);
@@ -548,6 +564,7 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
             reflection_boost_db,
             seg_variants,
             lw_bands,
+            weather,
         ),
         received_lden: variants_to_lden(&seg_variants),
         aircraft_subtype: 0,

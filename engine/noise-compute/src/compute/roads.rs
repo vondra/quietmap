@@ -36,8 +36,7 @@ pub(crate) fn compute_roads(
         lon: receiver.lon,
         altitude_m: rcv_alt,
     };
-    let weather = crate::propagation::meteorology::Meteorology::defaults();
-    let bound = crate::propagation::relevance_bound::surface_relevance_bound(&weather);
+    let weather = rasters.weather(receiver.lat, receiver.lon);
 
     use std::collections::HashMap;
 
@@ -132,10 +131,20 @@ pub(crate) fn compute_roads(
                 .unwrap_or(receiver_square_country_city);
             let norm = normalize::normalize_road_segment(seg, square_country_city)?;
             let period_emissions = norm.period_emissions_db();
-            // The row's reach from the one relevance bound, every period counted (#31); a pair
-            // inside it is never inaudible (the bound's Lden there exceeds 30 dB).
+            // The row's reach from its own azimuth-span bound, every period counted (#31);
+            // a pair inside it is never inaudible (the bound's Lden there exceeds 30 dB).
+            let span = crate::propagation::relevance_bound::azimuth_span(
+                receiver.lat,
+                receiver.lon,
+                seg.start_lat,
+                seg.start_lon,
+                seg.end_lat,
+                seg.end_lon,
+            );
+            let row_bound =
+                crate::propagation::relevance_bound::bound_for_azimuth_span(&weather, span);
             if seg.dist_m > LINE_REACH_CEILING_M
-                || !bound.within_reach(&period_emissions, SourceSpread::Line, seg.dist_m)
+                || !row_bound.within_reach(&period_emissions, SourceSpread::Line, seg.dist_m)
             {
                 return None;
             }
@@ -233,6 +242,7 @@ pub(crate) fn compute_roads(
                     fan: piece.fan,
                     seg_variants,
                     lw_bands: period_emissions,
+                    weather: weather.clone(),
                 })),
                 _ => None,
             };

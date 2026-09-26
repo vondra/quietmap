@@ -35,6 +35,7 @@ pub fn production(
     piece: &Piece,
     obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
+    weather: &Meteorology,
 ) -> Option<[VariantBands; 3]> {
     evaluate_line_piece(
         receiver,
@@ -43,7 +44,7 @@ pub fn production(
         piece.cp.1,
         obstacles,
         rasters,
-        &Meteorology::defaults(),
+        weather,
         &mut LinePieceScratch::default(),
         None,
     )
@@ -57,6 +58,7 @@ pub fn point_sum(
     piece: &Piece,
     obstacles: &ObstacleSet,
     rasters: &dyn RasterSampler,
+    weather: &Meteorology,
     spacing: NodeSpacing,
 ) -> ([VariantBands; 3], usize) {
     let line = &piece.line;
@@ -74,7 +76,6 @@ pub fn point_sum(
     let divergence = 10f64.powf(POINT_SOURCE_DIVERGENCE_OFFSET_DB / 10.0);
     let mut sum = [[[0.0; NUM_BANDS]; VARIANT_COUNT]; 3];
     let mut scratch = RayScratch::default();
-    let weather = Meteorology::defaults();
     let longitude_span = grid::geo::wrapped_longitude_delta(line.start_lon, line.end_lon);
     for node in &nodes {
         let f = node.piece_fraction.clamp(0.0, 1.0);
