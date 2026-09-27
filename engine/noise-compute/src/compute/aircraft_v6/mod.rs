@@ -11,7 +11,7 @@
 //! Ground operations live in the parallel `airport_traffic` compute
 //! path invoked by source-reader after this function returns.
 
-use std::collections::HashMap;
+use crate::fxhash::{FxBuildHasher, FxHashMap};
 
 use crate::compute::aircraft_v6::state::{FlightAccum, TopFlightCandidate};
 use crate::emission::aircraft::{BuildingHorizon, ReceiverHorizon};
@@ -71,7 +71,7 @@ pub fn compute_aircraft_v6(
 
     let mut traces = traces;
     let (flights, air_stats) = if airborne_row_count(airborne_rows) == 0 {
-        (HashMap::new(), airborne::AirborneScatterStats::default())
+        (FxHashMap::default(), airborne::AirborneScatterStats::default())
     } else {
         let horizon = horizon.expect("non-empty airborne rows require a receiver terrain horizon");
         airborne::scatter(
@@ -88,7 +88,8 @@ pub fn compute_aircraft_v6(
     let t_airborne_scatter = t_start.elapsed();
     // Pre-sized: every consumer sorts (key_sorted / explicit sorts), so capacity
     // never leaks into output order; it only skips rehashing on ~10^5 inserts.
-    let mut cruise_flight_stats = HashMap::with_capacity(cruise_rows.len() / 4 + 1);
+    let mut cruise_flight_stats =
+        FxHashMap::with_capacity_and_hasher(cruise_rows.len() / 4 + 1, FxBuildHasher);
     // Cruise gets its own FlightAccum table — the cruise synth fids
     // (`flight_id::pack_synth(idx)` with idx = row index) share the
     // SYNTHETIC_BIT tagging used by airborne TIS-B / anonymous flights
@@ -100,10 +101,10 @@ pub fn compute_aircraft_v6(
     // independent. Cruise contributions to airborne periods come from
     // accumulating their `period_energy` into `airborne_energy`; cruise
     // band counters come from `cruise_flight_stats` (real fid dedup).
-    let mut cruise_flights: HashMap<u64, FlightAccum> =
-        HashMap::with_capacity(cruise_rows.len());
-    let mut top_flight_candidates: HashMap<u64, TopFlightCandidate> =
-        HashMap::with_capacity(cruise_rows.len() / 4 + 1);
+    let mut cruise_flights: FxHashMap<u64, FlightAccum> =
+        FxHashMap::with_capacity_and_hasher(cruise_rows.len(), FxBuildHasher);
+    let mut top_flight_candidates: FxHashMap<u64, TopFlightCandidate> =
+        FxHashMap::with_capacity_and_hasher(cruise_rows.len() / 4 + 1, FxBuildHasher);
     let cruise_stats = cruise::scatter(
         receiver,
         cruise_rows,

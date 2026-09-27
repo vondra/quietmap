@@ -22,13 +22,13 @@ use super::*;
 pub(super) fn emit_segment_traces(
     traces: &mut crate::types::TraceCollector,
     microsegs_by_id: Vec<((u64, u16), MicrosegAcc)>,
-    microseg_cache: &HashMap<(u64, u16), MicrosegPath>,
+    microseg_cache: &HashMap<(u64, u16), MicrosegPath, impl BuildHasher>,
     n_days_f: f64,
     weights: &aircraft::ProvenanceWeights,
     recv_lat: f64,
     recv_lon: f64,
     refl_db: f64,
-    osm_ref_lookup: &HashMap<u64, String>,
+    osm_ref_lookup: &HashMap<u64, String, impl BuildHasher>,
     weather: &crate::propagation::meteorology::Meteorology,
 ) {
     // Mirror the hot loop's half-pixel divergence floor so the trace's
@@ -137,7 +137,7 @@ pub(super) fn emit_segment_traces(
     // The input is key-sorted (see the doc comment), so the input index
     // is the stable per-(kind, subtype) row id for the total order.
     let mut by_lden: Vec<((u64, u16), f64, usize)> = Vec::with_capacity(microsegs_by_id.len());
-    let mut dominant_lden: HashMap<(String, u8), f64> = HashMap::new();
+    let mut dominant_lden: FxHashMap<(String, u8), f64> = FxHashMap::default();
     for (seq, ((osm_id, segment_idx), acc)) in microsegs_by_id.iter().enumerate() {
         let lden = periods_from_energy(acc.period_energy_full).lden_db;
         if !lden.is_finite() {
@@ -160,7 +160,7 @@ pub(super) fn emit_segment_traces(
     by_lden.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
     traces.aircraft_ground_total = by_lden.len() as u32;
     by_lden.truncate(ground_cap);
-    let keep: std::collections::HashSet<(u64, u16)> =
+    let keep: crate::fxhash::FxHashSet<(u64, u16)> =
         by_lden.into_iter().map(|(k, _, _)| k).collect();
 
     for (seq, ((osm_id, segment_idx), acc)) in microsegs_by_id.into_iter().enumerate() {

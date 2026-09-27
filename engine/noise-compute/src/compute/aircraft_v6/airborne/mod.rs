@@ -8,6 +8,9 @@
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
+use std::hash::BuildHasher;
+
+use crate::fxhash::FxHashMap;
 
 use rayon::prelude::*;
 
@@ -141,7 +144,7 @@ pub fn scatter(
     buildings: Option<&aircraft::BuildingHorizon>,
     trace_cap: usize,
     traces: Option<&mut TraceCollector>,
-) -> (HashMap<u64, FlightAccum>, AirborneScatterStats) {
+) -> (FxHashMap<u64, FlightAccum>, AirborneScatterStats) {
     let want_traces = traces.is_some();
     let ctx = ScatterContext::new(receiver, n_days_f, weights, horizon, buildings);
     let chunks: Vec<ChunkScatter> = chunk_batches(batches)
@@ -192,7 +195,7 @@ fn chunk_batches(batches: &[AirborneSegmentBatch<'_>]) -> Vec<(std::ops::Range<u
 /// One chunk's private accumulators. Every field recombines associatively
 /// (sum / max / min / count), which is what makes the split legal.
 struct ChunkScatter {
-    flights: HashMap<u64, FlightAccum>,
+    flights: FxHashMap<u64, FlightAccum>,
     /// Bounded top-K heap over this chunk's unsplit rows only. Ranks form a
     /// total order (rank, then input position), so a trace in the global
     /// top-K is inside its own chunk's top-K and merging the heaps drops
@@ -224,12 +227,12 @@ fn merge_chunks(
     chunks: Vec<ChunkScatter>,
     trace_cap: usize,
     traces: Option<&mut TraceCollector>,
-) -> (HashMap<u64, FlightAccum>, AirborneScatterStats) {
+) -> (FxHashMap<u64, FlightAccum>, AirborneScatterStats) {
     use std::collections::hash_map::Entry;
 
     let mut chunks = chunks.into_iter();
     let Some(first) = chunks.next() else {
-        return (HashMap::new(), AirborneScatterStats::default());
+        return (FxHashMap::default(), AirborneScatterStats::default());
     };
     let mut flights = first.flights;
     let mut above_cutoff = first.above_cutoff;
@@ -350,7 +353,7 @@ fn scatter_chunk(
     trace_cap: usize,
     want_traces: bool,
 ) -> ChunkScatter {
-    let mut flights: HashMap<u64, FlightAccum> = HashMap::new();
+    let mut flights: FxHashMap<u64, FlightAccum> = FxHashMap::default();
     let mut above_cutoff: u32 = 0;
     let mut pieces = Vec::new();
     let mut n_eval: u64 = 0;
@@ -446,11 +449,11 @@ fn scatter_chunk(
 /// separate `cruise_flights` table, whose synth-fid namespace is disjoint.
 #[allow(clippy::too_many_arguments)]
 pub fn build_detail(
-    flights: &HashMap<u64, FlightAccum>,
-    cruise_flights: &HashMap<u64, FlightAccum>,
+    flights: &HashMap<u64, FlightAccum, impl BuildHasher>,
+    cruise_flights: &HashMap<u64, FlightAccum, impl BuildHasher>,
     // Real cruise transits at this receiver, each at its provenance weight.
     cruise_transits_weighted: f64,
-    top_flight_candidates: &HashMap<u64, TopFlightCandidate>,
+    top_flight_candidates: &HashMap<u64, TopFlightCandidate, impl BuildHasher>,
     cruise_band_stats: &[BandStats; 3],
     n_days_f: f64,
     // Increment day count for the popup's "Data" row.
@@ -670,7 +673,7 @@ pub fn build_detail(
 /// real fids and per-fid energy split would be artificial.
 fn build_top_flights(
     flights_by_id: &[(&u64, &FlightAccum)],
-    cruise_candidates: &HashMap<u64, TopFlightCandidate>,
+    cruise_candidates: &HashMap<u64, TopFlightCandidate, impl BuildHasher>,
     total_airborne_energy: f64,
 ) -> Vec<AircraftTopFlight> {
     use std::cmp::Ordering;

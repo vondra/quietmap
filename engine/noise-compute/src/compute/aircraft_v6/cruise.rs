@@ -1,6 +1,9 @@
 //! Shared cell-local cruise geometry and density-weighted Doc 29 scatter.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
+
+use crate::fxhash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use rayon::prelude::*;
 
@@ -117,14 +120,14 @@ struct CellTopFlight {
 }
 
 struct CellAccum {
-    n_unique_flights: std::collections::HashSet<u64>,
+    n_unique_flights: FxHashSet<u64>,
     rep_alt_m: f32,
     centroid_lat: f64,
     centroid_lon: f64,
     d_slant_m: f64,
     period_energy: [f64; 3],
     buckets: Vec<CruiseBucketBreakdown>,
-    top_fids: HashMap<u64, CellTopFlight>,
+    top_fids: FxHashMap<u64, CellTopFlight>,
 }
 
 /// Evaluated-vs-considered counts of one [`scatter`] call, plus the parallel
@@ -155,16 +158,17 @@ pub fn scatter(
     rasters: &dyn RasterSampler,
     n_days_f: f64,
     weights: &aircraft::ProvenanceWeights,
-    flights: &mut HashMap<u64, FlightAccum>,
-    cruise_flight_stats: &mut HashMap<u64, CruiseFlightStats>,
-    top_flight_candidates: &mut HashMap<u64, TopFlightCandidate>,
+    flights: &mut HashMap<u64, FlightAccum, impl BuildHasher>,
+    cruise_flight_stats: &mut HashMap<u64, CruiseFlightStats, impl BuildHasher>,
+    top_flight_candidates: &mut HashMap<u64, TopFlightCandidate, impl BuildHasher>,
     traces: Option<&mut TraceCollector>,
 ) -> CruiseScatterStats {
     let rx_elev = receiver.altitude_m();
     let npd_luts = aircraft::NpdLuts::shared();
     // Trace aggregates keyed by the (i32, i32) z30 cell pair of the
     // bucket centroid via the grid crate. Pre-sized (consumers sort by key).
-    let mut cell_accums: HashMap<(i32, i32), CellAccum> = HashMap::with_capacity(2048);
+    let mut cell_accums: FxHashMap<(i32, i32), CellAccum> =
+        FxHashMap::with_capacity_and_hasher(2048, FxBuildHasher);
 
     // The cell-local segment extends at most half a cell diagonal from its centre.
     let m_per_lat = crate::constants::M_PER_DEG_LAT;
@@ -367,14 +371,14 @@ pub fn scatter(
             let received_lden = sel + 10.0 * density.max(1e-9).log10();
             let cell_key = grid::lonlat_to_grid(lon, lat);
             let entry = cell_accums.entry(cell_key).or_insert(CellAccum {
-                n_unique_flights: std::collections::HashSet::new(),
+                n_unique_flights: FxHashSet::default(),
                 rep_alt_m: row.rep_alt_m,
                 centroid_lat: lat,
                 centroid_lon: lon,
                 d_slant_m: disp_dist.max(SLANT_FLOOR_M),
                 period_energy: [0.0; 3],
                 buckets: Vec::new(),
-                top_fids: HashMap::new(),
+                top_fids: FxHashMap::default(),
             });
             for cand_view in row.top_candidates.iter() {
                 entry.n_unique_flights.insert(cand_view.flight_id);
@@ -467,7 +471,7 @@ pub fn scatter(
 
 const TOP_FLIGHTS_PER_CELL: usize = 5;
 
-fn top_flights_for_cell(top_fids: &HashMap<u64, CellTopFlight>) -> Vec<CruiseCellTopFlight> {
+fn top_flights_for_cell(top_fids: &FxHashMap<u64, CellTopFlight>) -> Vec<CruiseCellTopFlight> {
     let mut entries: Vec<(u64, &CellTopFlight)> = top_fids.iter().map(|(f, t)| (*f, t)).collect();
     entries.sort_by(|a, b| {
         b.1.peak_lmax
@@ -508,7 +512,9 @@ fn round1(v: f64) -> f64 {
 /// touching multiple grid-cell buckets dedupes naturally via HashMap insert.
 /// Tail fids outside the per-row top-K cap silently undercount; this is a
 /// documented display-only regression.
-pub fn band_stats(cruise_flight_stats: &HashMap<u64, CruiseFlightStats>) -> [BandStats; 3] {
+pub fn band_stats(
+    cruise_flight_stats: &std::collections::HashMap<u64, CruiseFlightStats, impl std::hash::BuildHasher>,
+) -> [BandStats; 3] {
     let mut out = [BandStats::new(), BandStats::new(), BandStats::new()];
     // Ascending fid: `add_event` sums `alt_sum` in f64, so HashMap order
     // would move the popup's `avg_altitude_m` by ±1 ULP per run.

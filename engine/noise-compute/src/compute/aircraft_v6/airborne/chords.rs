@@ -13,9 +13,11 @@
 //! were never evaluated: they are dropped, each below the reach threshold.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
 use crate::compute::aircraft_v6::state::FlightAccum;
 use crate::compute::aircraft_v6::views::AirborneSegmentBatch;
+use crate::fxhash::FxHashMap;
 use crate::types::SegmentTrace;
 
 use super::row::{build_row_trace, evaluate_row, flight_accumulator, RowKernel, ScatterContext};
@@ -84,10 +86,10 @@ pub(super) struct ChordCandidate {
 pub(super) fn fold_chords(
     pieces: &[PieceEval],
     batches: &[AirborneSegmentBatch<'_>],
-    flights: &mut HashMap<u64, FlightAccum>,
+    flights: &mut HashMap<u64, FlightAccum, impl BuildHasher>,
     want_traces: bool,
 ) -> (Vec<ChordCandidate>, u32) {
-    let mut by_end: HashMap<(u64, i32, i32), usize> = HashMap::new();
+    let mut by_end: FxHashMap<(u64, i32, i32), usize> = FxHashMap::default();
     for (index, piece) in pieces.iter().enumerate() {
         by_end
             .entry((piece.flight_id, piece.end.0, piece.end.1))
@@ -96,7 +98,7 @@ pub(super) fn fold_chords(
     // Chord key: the first evaluated piece of the chain (a piece before it may
     // lie beyond reach); chords are visited in first-appearance order.
     let mut chords: Vec<(usize, Vec<usize>)> = Vec::new();
-    let mut chord_of_head: HashMap<usize, usize> = HashMap::new();
+    let mut chord_of_head: FxHashMap<usize, usize> = FxHashMap::default();
     for index in 0..pieces.len() {
         let mut head = index;
         let mut steps = 0;

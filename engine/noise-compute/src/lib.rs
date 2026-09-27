@@ -17,6 +17,7 @@ pub mod emission;
 pub mod envelope;
 pub mod facade_receivers;
 pub mod flight_id;
+pub mod fxhash;
 pub mod low_profile;
 pub mod normalize;
 pub mod periods;

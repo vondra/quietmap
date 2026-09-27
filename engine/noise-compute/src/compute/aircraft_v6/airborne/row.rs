@@ -112,7 +112,7 @@ impl RowKernel {
 /// provider anywhere at this receiver counts as a baseline movement, so
 /// its count weight is the smallest row weight.
 pub(super) fn flight_accumulator<'m>(
-    flights: &'m mut std::collections::HashMap<u64, FlightAccum>,
+    flights: &'m mut std::collections::HashMap<u64, FlightAccum, impl std::hash::BuildHasher>,
     batch: &AirborneSegmentBatch<'_>,
     row: usize,
     provenance_weight: f64,

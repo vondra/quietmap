@@ -38,7 +38,7 @@ pub(crate) fn compute_roads(
     };
     let weather = rasters.weather(receiver.lat, receiver.lon);
 
-    use std::collections::HashMap;
+    use crate::fxhash::FxHashMap;
 
     // Group segments by (ref, name, class): accumulate energy + collect geometry
     struct RoadAccum {
@@ -92,7 +92,7 @@ pub(crate) fn compute_roads(
     // For unnamed roads (ref="" && name=""): group per osm_id to avoid merging
     // all unnamed residential streets into one mega-contributor (unnamed rail
     // tracks, by contrast, merge per type — see compute/railways.rs).
-    let mut roads_by_key: HashMap<(String, String, u8), RoadAccum> = HashMap::new();
+    let mut roads_by_key: FxHashMap<(String, String, u8), RoadAccum> = FxHashMap::default();
 
     // SquareCountryCity resolved once per compute_roads call — receiver position is
     // constant across segments. Uses the process-wide square-country-city cache

@@ -31,7 +31,7 @@ struct UnnamedWayClosestPoint {
 fn unnamed_way_closest_points<'a>(
     segments: impl Iterator<Item = &'a RailSegment>,
 ) -> Vec<UnnamedWayClosestPoint> {
-    let mut closest_by_way = std::collections::HashMap::new();
+    let mut closest_by_way = crate::fxhash::FxHashMap::default();
     for segment in segments.filter(|segment| is_unnamed_track(segment)) {
         let point = UnnamedWayClosestPoint {
             rail_type: segment.rail_type,
@@ -83,7 +83,7 @@ fn union_toward_smaller(parents: &mut [usize], left: usize, right: usize) {
 /// linkable pair is at most one cell apart on each axis at every latitude.
 fn unnamed_track_cluster_ids<'a>(
     segments: impl Iterator<Item = &'a RailSegment>,
-) -> std::collections::HashMap<(u8, i64), i64> {
+) -> crate::fxhash::FxHashMap<(u8, i64), i64> {
     let ways = unnamed_way_closest_points(segments);
     let mut parents: Vec<_> = (0..ways.len()).collect();
 
@@ -96,8 +96,8 @@ fn unnamed_track_cluster_ids<'a>(
             (way.lon * m_per_deg_lon / RAIL_TRACK_LINK_M).floor() as i64,
         )
     };
-    let mut cells: std::collections::HashMap<(u8, i64, i64), Vec<usize>> =
-        std::collections::HashMap::new();
+    let mut cells: crate::fxhash::FxHashMap<(u8, i64, i64), Vec<usize>> =
+        crate::fxhash::FxHashMap::default();
     for (index, way) in ways.iter().enumerate() {
         cells.entry(cell_of(way)).or_default().push(index);
     }
@@ -156,7 +156,7 @@ pub(crate) fn compute_railways(
     use crate::propagation::relevance_bound::{SourceSpread, LINE_REACH_CEILING_M};
     use emission::railway::{self, RailType};
     use rayon::prelude::*;
-    use std::collections::HashMap;
+    use crate::fxhash::FxHashMap;
 
     let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
     let t_rail_start = std::time::Instant::now();
@@ -200,7 +200,8 @@ pub(crate) fn compute_railways(
         dominant_lden_db: f64,
         dominant_trace_idx: Option<usize>,
     }
-    let mut rails_by_key: HashMap<(String, String, u8, Option<i64>), RailAccum> = HashMap::new();
+    let mut rails_by_key: FxHashMap<(String, String, u8, Option<i64>), RailAccum> =
+        FxHashMap::default();
 
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
     let ray_receiver = RayReceiver {
@@ -784,7 +785,7 @@ mod tests {
     /// two subtly different clustering rules.
     fn brute_force_cluster_ids<'a>(
         segments: impl Iterator<Item = &'a RailSegment>,
-    ) -> std::collections::HashMap<(u8, i64), i64> {
+    ) -> crate::fxhash::FxHashMap<(u8, i64), i64> {
         let ways = unnamed_way_closest_points(segments);
         let mut parents: Vec<_> = (0..ways.len()).collect();
         for left in 0..ways.len() {

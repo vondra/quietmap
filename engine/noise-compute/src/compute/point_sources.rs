@@ -34,7 +34,7 @@ pub(crate) fn compute_point_sources(
     source_kind: LayerKind,
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
-    use std::collections::HashMap;
+    use crate::fxhash::FxHashMap;
 
     struct PtAccum {
         name: String,
@@ -65,7 +65,7 @@ pub(crate) fn compute_point_sources(
         /// Ship cell hours by class (zero outside the ship layer).
         ship_hours: [f32; 3],
     }
-    let mut pts_by_osm: HashMap<i64, PtAccum> = HashMap::new();
+    let mut pts_by_osm: FxHashMap<i64, PtAccum> = FxHashMap::default();
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
     let weather = rasters.weather(receiver.lat, receiver.lon);
     let ray_receiver = RayReceiver {
