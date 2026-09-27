@@ -1,167 +1,80 @@
-/**
- * Selection-rule tests for facility-match.ts — the /gg-mandated cases
- * (cross-hex max-one, farm+livestock allowed, farm+meat blocked,
- * big-plant-vs-shed edge distance, contest ordering).
- *
- * Run: `cd pipeline && npx tsx --test lib/facility-match.test.ts`
- */
+/** Footprint ownership, registry authority and duplicate-site election. */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { bestCandidate, candidateEdgeM, contestBeats, edgeDistM, naceBaseLw, quietGateBlocks, overlapPairs, overlapsSameSite, type MatchFacility, type MatchPolygon, type OverlapWinner } from './facility-match.js'
-import { flatDist } from './spatial.js'
+import { containsFacility, containingPolygonBeats, contestBeats, footprintAcceptsRegistryClass, lookupRadiusM, naceBaseLw,
+  quietGateBlocks, overlapPairs, overlapsSameSite, type MatchFacility, type MatchPolygon, type OverlapWinner } from './facility-match.js'
 
 const overlapLosers = (rows: OverlapWinner[]) => new Set(overlapPairs(rows).map(([, loser]) => loser))
-
 const fac = (over: Partial<MatchFacility> = {}): MatchFacility =>
-  ({ lat: 50.0, lon: 14.0, nace4: 1011, id: 310, rank: 5, year: 2022, ...over })
-
-// ~meters → degrees latitude at 50°N (1° lat ≈ 111.2 km)
+  ({ lat: 50, lon: 14, nace4: 1011, id: 310, rank: 5, year: 2022, ...over })
 const mLat = (m: number) => m / 111_195
-
 const poly = (over: Partial<MatchPolygon> = {}): MatchPolygon =>
-  ({ lat: 50.0, lon: 14.0, areaM2: 10_000, subtype: 0, ...over })
+  ({ lat: 50, lon: 14, areaM2: 10_000, subtype: 0,
+    ring: [[13.999, 49.999], [14.001, 49.999], [14.001, 50.001], [13.999, 50.001]], ...over })
 
-test('big plant beats the nearer shed (edge distance, Gemini CRITICAL case)', () => {
-  const polygons = [
-    poly({ lat: 50.0 + mLat(50), areaM2: 100 }),        // 10 m shed, centroid 50 m away
-    poly({ lat: 50.0 + mLat(400), areaM2: 500_000 }),   // 50 ha plant, centroid 400 m away (edge ≈ 0)
-  ]
-  const best = bestCandidate(fac(), polygons, 2000)
-  assert.equal(best!.row, 1, 'the big plant whose boundary reaches the point must win')
-  assert.ok(edgeDistM(fac(), polygons[1]) < 10, 'plant boundary ≈ at the point (400 m − √(50ha/π) ≈ 1 m)')
-  assert.ok(edgeDistM(fac(), polygons[0]) > 40, 'shed boundary stays ~44 m away')
+test('registry identity uses the actual footprint, never a neighbouring equivalent circle', () => {
+  // A long narrow site has a large equivalent circle but does not own a point beside it.
+  const longSite = poly({ areaM2: 500_000,
+    ring: [[13.999, 49.98], [14.001, 49.98], [14.001, 50.02], [13.999, 50.02]] })
+  assert.equal(containsFacility(fac({ lon: 14.002 }), longSite), false)
+  assert.equal(containsFacility(fac({ lat: 50.019 }), longSite), true)
+  assert.ok(lookupRadiusM(longSite) > 2000, 'an actual footprint is not clipped by a proximity horizon')
+  const tenant = poly({ areaM2: 1000 })
+  assert.ok(containingPolygonBeats(fac(), tenant, longSite))
+  assert.ok(containingPolygonBeats(fac(), poly({ sourceType: 13 }), poly()))
+  assert.equal(containingPolygonBeats(fac(), poly(), poly({ sourceType: 13 })), false)
+  const seam = poly({ lon: 179.999,
+    ring: [[179.998, 49.999], [180.002, 49.999], [180.002, 50.001], [179.998, 50.001]] })
+  assert.ok(containsFacility(fac({ lon: -179.999 }), seam))
 })
 
-test('farm never inherits meat processing by proximity (the York bug)', () => {
-  const farm = [poly({ lat: 50.0 + mLat(300), subtype: 10, areaM2: 5_000 })]
-  assert.equal(bestCandidate(fac({ nace4: 1011 }), farm, 2000), null)
-  assert.ok(quietGateBlocks(10, 1011), 'farm + meat = blocked')
-})
-
-test('farm accepts a livestock facility (Annex 7 → NACE 0146) by nearest', () => {
-  const farm = [poly({ lat: 50.0 + mLat(300), subtype: 10, areaM2: 5_000 })]
-  const best = bestCandidate(fac({ nace4: 146 }), farm, 2000)   // 0146 → division 1
-  assert.ok(best, 'agriculture NACE passes the farm gate')
-})
-
-test('the quiet gate holds even inside the polygon (HQ-address failure mode)', () => {
-  // equivalent-circle "inside" is unreliable on big blobs and a registry point ON
-  // an office/farm is typically a registered ADDRESS, not the plant (/gg Gemini)
-  const farm = [poly({ subtype: 10, areaM2: 500_000 })]         // point at centroid of 50 ha farm
-  assert.equal(bestCandidate(fac({ nace4: 1011 }), farm, 2000), null, 'farm + meat blocked even at centroid')
-  assert.ok(bestCandidate(fac({ nace4: 146 }), farm, 2000), 'farm + livestock still allowed (family)')
-})
-
-test('office blocks everything outside containment; radius excludes far polygons', () => {
+test('mapped source identity constrains registry activity even at a contained address', () => {
+  for (const [subtype, allowed, blocked] of [[10, 146, 1011], [3, 810, 2410], [4, 2011, 2410],
+    [5, 2351, 2410], [6, 2410, 3511], [1, 5210, 3511]]) {
+    assert.ok(footprintAcceptsRegistryClass(fac({ nace4: allowed }), poly({ subtype })))
+    assert.equal(footprintAcceptsRegistryClass(fac({ nace4: blocked }), poly({ subtype })), false)
+  }
   assert.ok(quietGateBlocks(11, 3511))
-  assert.equal(bestCandidate(fac(), [poly({ lat: 50.0 + mLat(2500) })], 2000), null)
+  assert.ok(footprintAcceptsRegistryClass(fac({ nace4: 3700 }), poly({ sourceType: 4 })))
+  assert.equal(footprintAcceptsRegistryClass(fac({ nace4: 3800 }), poly({ sourceType: 4 })), false)
+  for (const sourceType of [10, 11, 12, 13, 14, 15]) {
+    assert.equal(footprintAcceptsRegistryClass(fac(), poly({ sourceType })), false)
+  }
 })
 
-test('steel polygon rejects its on-site power block, takes metallurgy (Ostrava/Nová huť, Codex CRITICAL 6)', () => {
-  // A giant steel polygon (subtype 6) is the smallest edge distance for miles.
-  // The on-site power facility (NACE 3511) must NOT capture it; a metallurgy
-  // facility (2410) must. Rejected → the polygon keeps its steel profile.
-  const steel = [poly({ subtype: 6, areaM2: 5_379_612 })]
-  assert.ok(quietGateBlocks(6, 3511), 'steel + power (3511) blocked')
-  assert.equal(bestCandidate(fac({ nace4: 3511 }), steel, 2000), null, 'power block cannot stamp the steelworks')
-  assert.ok(!quietGateBlocks(6, 2410), 'steel + metallurgy (2410) allowed')
-  assert.ok(bestCandidate(fac({ nace4: 2410 }), steel, 2000), 'metallurgy stamps the steelworks')
-})
-
-test('heavy-subtype gate: quarry/chemical/cement accept only their division; port stays open', () => {
-  assert.ok(quietGateBlocks(3, 2410) && !quietGateBlocks(3, 810) && !quietGateBlocks(3, 700), 'quarry ⇐ mining 05|07|08 only')
-  assert.ok(quietGateBlocks(4, 2410) && !quietGateBlocks(4, 2011), 'chemical ⇐ 19|20 only')
-  assert.ok(quietGateBlocks(5, 2410) && !quietGateBlocks(5, 2351), 'cement ⇐ 23 only')
-  assert.ok(!quietGateBlocks(12, 2011) && !quietGateBlocks(12, 1011), 'port not gated — hosts many sectors')
-  assert.ok(!quietGateBlocks(0, 3511) && !quietGateBlocks(2, 3511), 'generic/factory still accept any NACE')
-})
-
-test('cross-hex reduce keeps exactly one winner per facility', () => {
-  // simulate two hexes: caller keeps the min-edge candidate across both
-  const hexA = [poly({ lat: 50.0 + mLat(900) })]
-  const hexB = [poly({ lat: 50.0 + mLat(200) })]
-  const a = bestCandidate(fac(), hexA, 2000)!
-  const b = bestCandidate(fac(), hexB, 2000)!
-  const winner = a.edge < b.edge ? { hex: 'A', ...a } : { hex: 'B', ...b }
-  assert.equal(winner.hex, 'B', 'the globally nearer hex wins — one winner total')
-})
-
-test('polygon contest mirrors shouldOverwrite: rank, then year, then id, then distance', () => {
-  const eprtr = { rank: 5, year: 2022, id: 310, edge: 900 }
-  const gppd = { rank: 4, year: 2021, id: 300, edge: 10 }
-  const gem = { rank: 4, year: 2025, id: 331, edge: 500 }
-  assert.ok(contestBeats(eprtr, gppd), 'higher rank wins regardless of distance')
-  assert.ok(contestBeats(gem, gppd), 'same rank → newer year wins (GEM 2025 > GPPD 2021)')
-  assert.ok(contestBeats({ ...gppd, edge: 10 }, { ...gppd, edge: 20 }), 'identical source → nearer wins')
-})
-
-test('contained GEM coal beats broad E-PRTR mining for the same pit (Garzweiler rule)', () => {
-  // E-PRTR 3(b) opencast (812, rank 5) vs the GEM coal tracker (510, rank 4):
-  // the tracker says what the mine IS (24/7 coal), the registry only that it
-  // mines — the pit keeps its night term (8.5 dB Lden at the same day level).
-  const eprtrOpencast = { rank: 5, year: 2022, id: 310, edge: -500, contained: true, nace4: 812 }
-  const gemCoal = { rank: 4, year: 2025, id: 333, edge: -100, contained: true, nace4: 510 }
-  assert.ok(contestBeats(gemCoal, eprtrOpencast), 'contained coal beats broad mining despite the lower rank')
-  assert.ok(!contestBeats(eprtrOpencast, gemCoal))
-  // A merely NEAR coal point is a neighbour, not this plant: the rank ladder stands.
-  const nearCoal = { ...gemCoal, contained: false, edge: 1500 }
-  assert.ok(contestBeats(eprtrOpencast, nearCoal), 'contained mining beats near coal')
-  // Non-mining contests never see the rule: steel keeps Tata over coal.
-  const steel = { rank: 5, year: 2022, id: 310, edge: -500, contained: true, nace4: 2410 }
-  assert.ok(contestBeats(steel, gemCoal), 'contained steel beats contained coal by rank')
-  assert.ok(!contestBeats(gemCoal, steel))
-})
-
-test('containment first: smallest containing polygon wins, past the radius when inside', () => {
-  const zone = poly({ areaM2: 2_000_000 })                              // r ≈ 798 m
-  const tenant = poly({ lat: 50.0 + mLat(100), areaM2: 50_000 })        // r ≈ 126 m, nested
-  const shed = poly({ lat: 50.0 + mLat(300), areaM2: 100 })             // uncontained, nearer edge
-  // Inside both zone and tenant → the smaller (tenant) wins over nearer-edge shed.
-  const best = bestCandidate(fac(), [zone, tenant, shed], 2000)
-  assert.equal(best!.row, 1, 'smallest containing polygon wins')
-  assert.ok(best!.contained)
-  // Contained past the 2 km centroid horizon still stamps (radius is proximity-only).
-  const far = poly({ lat: 50.0 + mLat(3000), areaM2: 40_000_000 })      // r ≈ 3.6 km, edge ≈ −0.6 km
-  assert.ok(candidateEdgeM(fac(), far, 2000)?.contained, 'contained bypasses the radius')
-  assert.equal(candidateEdgeM(fac(), poly({ lat: 50.0 + mLat(2500) }), 2000), null, 'uncontained past radius stays out')
-})
-
-test('Tata: same-registry contained facilities resolve to the loudest NACE, not the nearest edge', () => {
-  const steel = { rank: 5, year: 2024, id: 310, edge: -100, contained: true, nace4: 2410 }
-  const linde = { rank: 5, year: 2024, id: 310, edge: -500, contained: true, nace4: 2011 }
-  assert.ok(contestBeats(steel, linde), 'steel 2410 stamps over nearer-edge chemicals 2011')
-  assert.ok(!contestBeats(linde, steel))
-  const near = { rank: 5, year: 2024, id: 310, edge: 50, contained: false, nace4: 2410 }
-  assert.ok(contestBeats(linde, near), 'a contained point beats a merely near one')
+test('registry contests retain authority, contained coal identity, and the loudest contained sector', () => {
+  const eprtr = { rank: 5, year: 2022, id: 310, nace4: 812 }
+  const gppd = { rank: 4, year: 2021, id: 300, nace4: 3511 }
+  const coal = { rank: 4, year: 2025, id: 333, nace4: 510 }
+  assert.ok(contestBeats(eprtr, gppd))
+  assert.ok(contestBeats(coal, eprtr))
+  const steel = { ...eprtr, nace4: 2410 }, chemicals = { ...eprtr, nace4: 2011 }
+  assert.ok(contestBeats(steel, coal))
+  assert.ok(contestBeats(steel, chemicals))
+  assert.equal(contestBeats(chemicals, steel), false)
   assert.equal(naceBaseLw(2410), 106.4)
-  assert.equal(naceBaseLw(1920), 101.7)
-  assert.equal(naceBaseLw(2011), 99.6)
   assert.equal(naceBaseLw(3512), 95.6)
   assert.equal(naceBaseLw(3599), 80.4)
   assert.equal(naceBaseLw(9999), -1)
 })
 
-test('registry points never stamp dedicated power classes', () => {
-  // 10 turbine, 11 wind-plant outline, 12 inactive, 13 solar, 14 substation,
-  // 15 transformer: a nearby registry point cannot claim any of them.
-  for (const sourceType of [10, 11, 12, 13, 14, 15]) {
-    assert.equal(
-      bestCandidate(fac({ nace4: 3511 }), [poly({ sourceType })], 2000),
-      null,
-      `class ${sourceType} keeps its identity`,
-    )
-  }
-  assert.ok(bestCandidate(fac({ nace4: 3511 }), [poly({})], 2000), 'generic polygons still stamp')
-})
-
-test('spatial.flatDist sanity: 1° latitude = the canonical 110.54 km', () => {
-  assert.ok(Math.abs(flatDist(50, 14, 51, 14) - 110_540) < 1)   // spatial.ts M_PER_DEG_LAT
-})
-
 // ── I-07 dual-registry overlap dedup (Wave 2 B) ──────────────────────────────
-const win = (over: Partial<OverlapWinner> = {}): OverlapWinner =>
-  ({ key: 'k', lat: 49.18, lon: 14.376, areaM2: 1_200_000, rank: 5, year: 2022, id: 310, edge: 0, ...over })
+const win = (over: Partial<OverlapWinner> = {}): OverlapWinner => {
+  const row = { key: 'k', lat: 49.18, lon: 14.376, areaM2: 1_200_000, rank: 5, year: 2022, id: 310, ...over }
+  const dy = mLat(Math.sqrt(row.areaM2) / 2), dx = dy / Math.cos(row.lat * Math.PI / 180)
+  return { ...row, ring: over.ring ?? [[row.lon - dx, row.lat - dy], [row.lon + dx, row.lat - dy],
+    [row.lon + dx, row.lat + dy], [row.lon - dx, row.lat + dy]] }
+}
+
+test('disjoint parallel industrial strips cannot suppress one another as duplicate sites', () => {
+  const a = win({ key: 'A', lat: 50, lon: 14, areaM2: 150_000,
+    ring: [[13.9998, 49.98], [14.0002, 49.98], [14.0002, 50.02], [13.9998, 50.02]] })
+  const b = win({ key: 'B', lat: 50, lon: 14.001, areaM2: 100_000,
+    ring: [[14.0008, 49.98], [14.0012, 49.98], [14.0012, 50.02], [14.0008, 50.02]] })
+  assert.equal(overlapsSameSite(a, b), false)
+  assert.deepEqual(overlapPairs([a, b]), [])
+})
 
 test('I-07: two coincident different-registry polygons → the lower-provenance row is suppressed', () => {
   const eprtr = win({ key: 'A', areaM2: 1_231_457, rank: 5, id: 310 })              // Temelín E-PRTR 123 ha

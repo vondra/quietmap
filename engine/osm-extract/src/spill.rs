@@ -837,26 +837,16 @@ fn building_use(tags: &Tags) -> u8 {
 }
 
 fn site_type_from_tags(tags: &Tags) -> u8 {
-    if let Some(lu) = tags.get("landuse") {
-        match lu.as_str() {
-            "industrial" => return 0,
-            "quarry" => return 1,
-            "farmyard" => return 2,
-            _ => {}
-        }
+    let tag = |key: &str| tags.get(key).map(String::as_str);
+    // A mapped facility describes its activity more precisely than its land use.
+    match (tag("man_made"), tag("railway"), tag("landuse")) {
+        (Some("wastewater_plant"), _, _) => 4,
+        (Some("works"), _, _) => 3,
+        (_, Some("yard"), _) => 5,
+        (_, _, Some("quarry")) => 1,
+        (_, _, Some("farmyard")) => 2,
+        _ => 0,
     }
-    // Only `railway=yard` is a yard; `landuse=railway` alone is the corridor.
-    if tags.get("railway").is_some_and(|r| r == "yard") {
-        return 5;
-    }
-    if let Some(mm) = tags.get("man_made") {
-        match mm.as_str() {
-            "works" => return 3,
-            "wastewater_plant" => return 4,
-            _ => {}
-        }
-    }
-    0
 }
 
 /// Classify industrial site subtype from OSM `industrial=*` and `product=*` tags.
@@ -1009,6 +999,19 @@ mod site_type_tests {
         assert_eq!(site_type_from_tags(&tags_of(&[("landuse", "quarry")])), 1);
         assert_eq!(site_type_from_tags(&tags_of(&[("landuse", "farmyard")])), 2);
         assert_eq!(site_type_from_tags(&tags_of(&[("man_made", "works")])), 3);
+    }
+
+    #[test]
+    fn facility_activity_survives_generic_industrial_landuse() {
+        for (activity, expected) in [("wastewater_plant", 4), ("works", 3)] {
+            assert_eq!(
+                site_type_from_tags(&tags_of(&[
+                    ("landuse", "industrial"),
+                    ("man_made", activity)
+                ])),
+                expected
+            );
+        }
     }
 }
 

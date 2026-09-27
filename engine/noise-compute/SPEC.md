@@ -173,10 +173,19 @@ the `substation` tag, then `voltage` / autotransformer evidence). Wind-plant out
 (12) and transformers (15) are silent; lifecycle-retired rows carry
 `suppressed`, honoured by both readers.
 
-Registry stamping is containment-first: a facility claims the smallest polygon
-containing it (equivalent-circle edge < 0, any centroid distance — the 2 km
-radius gates proximity only); a polygon takes the loudest contained facility
-of the winning registry (Tata: steel 2410 over chemicals 2011). New NACE arms:
+A registry point belongs to the smallest mapped footprint containing it, of any
+class; equal-area outlines prefer dedicated identity. Neither an area-equivalent
+circle nor proximity identifies a facility.
+Only a generic footprint whose subtype admits the activity takes the registry
+class: a dedicated source or incompatible subtype keeps its identity and never
+passes the point to an enclosing zone, and uncontained points leave the OSM
+classification in place. A polygon takes the loudest contained facility
+of the winning registry (Tata: steel 2410 over chemicals 2011). Whole-site duplicate
+suppression requires footprints of at least 10 ha, an area ratio at most 2.5,
+and each centre inside the other footprint; only mutual-nearest pairs collapse.
+Rebuild registry classifications from extracted inputs when changing this rule,
+so stale higher-authority stamps cannot block an earlier source in the chain.
+New NACE arms:
 06 oil/gas extraction (92, near-24/7), 07 metal-ore mining (as quarries),
 19 coke/refining (96, near-24/7), 62 office (defensive, 60). E-PRTR maps by
 Annex I sub-activity letter, not sector: 1(e) coal rolling mills → 1920 (coal
@@ -187,6 +196,14 @@ for the same polygon (commodity-specific over broad activity), so coal pits
 keep their 24/7 profile. The India colour feed is deleted (CPCB
 colours score air/water/waste pollution, not noise); registry points never
 stamp substations or turbines.
+
+Explicit wastewater/works activity takes precedence over generic industrial land
+use. Sewage and wastewater name priors select NACE 37 (continuous treatment),
+separate from NACE 38 solid-waste handling; an unspecified treatment plant does
+not establish either activity. Registry and name priors share the mapped-activity
+gate, so neither can replace an explicit wastewater class with another sector.
+Farm place names do not establish agricultural activity; the mapped farmyard
+class owns that emission, including when the name also labels a non-farm plant.
 
 `leisure_v4` adds the motorsport (10) and shooting (11) formula classes.
 These carry a class-TOTAL annual day Lw, not the area law, with the sub-type

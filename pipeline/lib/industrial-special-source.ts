@@ -4,12 +4,12 @@ import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { MatchFacility } from './facility-match.js'
-import { gemAreaContains } from './industrial-gem-countries.js'
+import { gemAreaContains, type GemCountry } from './industrial-gem-countries.js'
 import { gemIndustrialOwnership, strictGemCountries } from './industrial-gem-source.js'
 import { iso2Code } from './prepared-grid.js'
 import { geoJsonAreaCentroid } from './spatial.js'
 import { PROVENANCE_RANK, SOURCES_BY_ID, SOURCE_ID_GLOBAL_INDUSTRIAL_NATIONAL_MIX } from './sources.js'
-import { SPECIAL_COUNTRIES, type SpecialCountry } from './industrial-special-countries.js'
+import { SPECIAL_COUNTRIES } from './industrial-special-countries.js'
 import { SPECIAL_CONTAINMENT_FEEDS, SPECIAL_FEEDS, type SpecialFeed } from './industrial-special-policy.js'
 import { colombianConcessions, concessionClassifier, nationalContainmentAreas,
   type IndustrialConcession } from './industrial-special-polygons.js'
@@ -33,7 +33,7 @@ export function readSpecialFeatures(path: string) {
 
 
 
-export function specialPoints(features: readonly SpecialFeature[], country: SpecialCountry, feed: SpecialFeed) {
+export function specialPoints(features: readonly SpecialFeature[], country: GemCountry, feed: SpecialFeed) {
   const points = [], counts = { raw: features.length, unlocated: 0 }
   const geometryTypes = feed.geometry ?? ['Point']
   for (const [index, feature] of features.entries()) {
@@ -57,7 +57,7 @@ export function specialPoints(features: readonly SpecialFeature[], country: Spec
 }
 
 export function classifySpecialPoints(
-  features: readonly SpecialFeature[], country: SpecialCountry, feed: SpecialFeed,
+  features: readonly SpecialFeature[], country: GemCountry, feed: SpecialFeed,
   seen: Set<string>, landCodes?: readonly number[],
 ) {
   const { points, counts: geometryCounts } = specialPoints(features, country, feed)
@@ -82,7 +82,7 @@ export function classifySpecialPoints(
       if (key !== null) seen.add(key)
     }
     if (nace4 === null) { counts.unclassified++; continue }
-    facilities.push({ lat, lon, nace4, ...authority, searchRadiusM: country.radiusM }); counts.emitted++
+    facilities.push({ lat, lon, nace4, ...authority }); counts.emitted++
   }
   if (!counts[feed.require]) throw new Error(`${country.country}/${feed.file}: empty ${feed.require} source; refusing a partial reset`)
   return { facilities, counts }
