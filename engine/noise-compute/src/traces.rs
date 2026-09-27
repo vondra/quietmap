@@ -264,6 +264,8 @@ pub(crate) struct BuildRoadTrace<'a> {
     pub seg_variants: [PropagationVariants; 3],
     pub lw_bands: [[f64; NUM_BANDS]; 3],
     pub weather: Meteorology,
+    /// Stable per-kind row index for the top-K total-order tiebreak.
+    pub sort_seq: u64,
 }
 
 pub(crate) struct BuildPointTrace<'a> {
@@ -278,6 +280,8 @@ pub(crate) struct BuildPointTrace<'a> {
     pub seg_variants: [PropagationVariants; 3],
     pub lw_bands: [[f64; NUM_BANDS]; 3],
     pub weather: Meteorology,
+    /// Stable per-kind row index for the top-K total-order tiebreak.
+    pub sort_seq: u64,
 }
 
 pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentTrace {
@@ -292,6 +296,7 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
         seg_variants,
         lw_bands,
         weather,
+        sort_seq,
     } = inputs;
 
     let (subtype_label, emission) = match source_kind {
@@ -383,6 +388,7 @@ pub(crate) fn build_point_segment_trace(inputs: BuildPointTrace<'_>) -> SegmentT
         cruise_buckets: None,
         cruise_top_flights: None,
         length_m_per_kind: None,
+        sort_seq,
     }
 }
 
@@ -392,6 +398,8 @@ pub(crate) struct BuildRailTrace<'a> {
     pub d_slant: f64,
     pub reflection_boost_db: f64,
     pub speed_kmh: f64,
+    /// Stable per-kind row index for the top-K total-order tiebreak.
+    pub sort_seq: u64,
     /// The piece's loudest quadrature node, on its own ray.
     pub node: RayDetail,
     pub fan: Option<ScreeningFanTrace>,
@@ -445,6 +453,7 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
         seg_variants,
         lw_bands,
         weather,
+        sort_seq,
     } = inputs;
 
     let rail_type = rail_type_name(seg.rail_type);
@@ -495,6 +504,7 @@ pub(crate) fn build_rail_segment_trace(inputs: BuildRailTrace<'_>) -> SegmentTra
         cruise_buckets: None,
         cruise_top_flights: None,
         length_m_per_kind: None,
+        sort_seq,
     }
 }
 
@@ -513,6 +523,7 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
         seg_variants,
         lw_bands,
         weather,
+        sort_seq,
     } = inputs;
 
     let seg_name = seg_name_from_tags(&seg.road_ref, &seg.name, class_name, seg.osm_id);
@@ -573,6 +584,7 @@ pub(crate) fn build_road_segment_trace(inputs: BuildRoadTrace<'_>) -> SegmentTra
         cruise_buckets: None,
         cruise_top_flights: None,
         length_m_per_kind: None,
+        sort_seq,
     }
 }
 

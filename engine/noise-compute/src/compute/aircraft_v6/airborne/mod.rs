@@ -374,7 +374,7 @@ fn scatter_chunk(
                         let scored = ScoredTrace {
                             rank_key,
                             order,
-                            trace: build_row_trace(ctx, batch, i, &row),
+                            trace: build_row_trace(ctx, batch, i, &row, order),
                         };
                         if heap.len() < trace_cap {
                             heap.push(Reverse(scored));

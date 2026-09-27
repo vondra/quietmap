@@ -79,7 +79,7 @@ pub(crate) fn compute_point_sources(
     };
     use crate::propagation::relevance_bound::SourceSpread;
 
-    for src in sources {
+    for (src_i, src) in sources.iter().enumerate() {
         let max_d = src.max_radius_m.max(0.0);
         if src.dist_m > max_d {
             continue;
@@ -196,6 +196,7 @@ pub(crate) fn compute_point_sources(
                 seg_variants,
                 lw_bands,
                 weather: weather.clone(),
+                sort_seq: src_i as u64,
             });
             t.segments.push(trace);
         }

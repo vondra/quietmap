@@ -181,7 +181,7 @@ pub(super) fn chord_traces(
             let piece = &pieces[i];
             let batch = &batches[piece.batch];
             let row = evaluate_row::<false>(ctx, batch, piece.row)?;
-            Some(build_row_trace(ctx, batch, piece.row, &row))
+            Some(build_row_trace(ctx, batch, piece.row, &row, piece.order))
         })
         .collect()
 }

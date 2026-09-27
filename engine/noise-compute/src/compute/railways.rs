@@ -233,7 +233,8 @@ pub(crate) fn compute_railways(
     // ── Pass 1: per-segment evaluation (parallel, bit-deterministic) ──
     let kept: Vec<Option<(RailPre, RailSegOut)>> = railways
         .par_iter()
-        .map_init(LinePieceScratch::default, |scratch, seg| {
+        .enumerate()
+        .map_init(LinePieceScratch::default, |scratch, (seg_i, seg)| {
             if seg.tunnel || seg.traffic.is_silent() {
                 if timing_on {
                     n_silent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -327,6 +328,7 @@ pub(crate) fn compute_railways(
                     seg_variants,
                     lw_bands: period_emissions,
                     weather: weather.clone(),
+                    sort_seq: seg_i as u64,
                 })),
                 _ => None,
             };

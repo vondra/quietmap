@@ -142,7 +142,8 @@ pub(crate) fn compute_roads(
     // ── Pass 1: per-segment evaluation (parallel, bit-deterministic) ──
     let kept: Vec<Option<(RoadPre, RoadSegOut)>> = roads
         .par_iter()
-        .map_init(LinePieceScratch::default, |scratch, seg| {
+        .enumerate()
+        .map_init(LinePieceScratch::default, |scratch, (seg_i, seg)| {
             // The row's own baked SquareCountryCity (plan M4) when its batch carried one,
             // else the receiver SquareCountryCity (pre-bake behaviour, unchanged).
             let square_country_city = seg
@@ -277,6 +278,7 @@ pub(crate) fn compute_roads(
                     seg_variants,
                     lw_bands: period_emissions,
                     weather: weather.clone(),
+                    sort_seq: seg_i as u64,
                 })),
                 _ => None,
             };

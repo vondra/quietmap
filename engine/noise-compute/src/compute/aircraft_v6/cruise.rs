@@ -411,7 +411,7 @@ pub fn scatter(
     if let Some(t) = traces {
         let mut cell_keys: Vec<(i32, i32)> = cell_accums.keys().copied().collect();
         cell_keys.sort();
-        for cell_key in cell_keys {
+        for (cell_i, cell_key) in cell_keys.into_iter().enumerate() {
             let mut acc = cell_accums
                 .remove(&cell_key)
                 .expect("sorted key from live map");
@@ -450,6 +450,7 @@ pub fn scatter(
                         cruise_buckets: acc.buckets,
                         cruise_top_flights,
                         doc29: placeholder_doc29,
+                        sort_seq: cell_i as u64,
                     },
                 ));
         }

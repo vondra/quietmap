@@ -73,6 +73,8 @@ pub struct BuildAircraftAirborneSubSegmentTrace<'a> {
     pub n_days: f64,
     /// Doc 29 Eq. 4-8b decomposition from the kernel evaluation.
     pub doc29: crate::types::Doc29Breakdown,
+    /// Stable per-(kind, subtype) row index for the top-K total-order tiebreak.
+    pub sort_seq: u64,
 }
 
 pub fn build_aircraft_airborne_subsegment_trace(
@@ -140,6 +142,7 @@ pub fn build_aircraft_airborne_subsegment_trace(
         cruise_buckets: None,
         cruise_top_flights: None,
         length_m_per_kind: None,
+        sort_seq: inputs.sort_seq,
     }
 }
 
@@ -159,6 +162,8 @@ pub struct BuildAircraftCruiseCellTrace {
     pub cruise_top_flights: Vec<CruiseCellTopFlight>,
     /// Placeholder breakdown for the cell aggregate; no single event represents it.
     pub doc29: crate::types::Doc29Breakdown,
+    /// Stable per-(kind, subtype) row index for the top-K total-order tiebreak.
+    pub sort_seq: u64,
 }
 
 pub fn build_aircraft_cruise_cell_trace(inputs: BuildAircraftCruiseCellTrace) -> SegmentTrace {
@@ -200,6 +205,7 @@ pub fn build_aircraft_cruise_cell_trace(inputs: BuildAircraftCruiseCellTrace) ->
         cruise_buckets: Some(inputs.cruise_buckets),
         cruise_top_flights: Some(inputs.cruise_top_flights),
         length_m_per_kind: None,
+        sort_seq: inputs.sort_seq,
     }
 }
 
@@ -229,6 +235,7 @@ mod tests {
             no_terrain_period_energies: period_energies,
             no_screening_period_energies: period_energies,
             n_days,
+            sort_seq: 7,
             doc29: crate::types::Doc29Breakdown {
                 sel_npd_db: 0.0,
                 delta_v_db: 0.0,
