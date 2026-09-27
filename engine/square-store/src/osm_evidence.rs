@@ -239,8 +239,8 @@ pub struct TransformerUnit {
     pub voltage_kv: Option<f64>,
 }
 
-/// Every transformer unit of a square's industrial batches (the per-square
-/// substation join reads this once, lazily, only when a substation row is
+/// Every transformer unit of the loaded squares' industrial batches (the
+/// facility join reads this once, lazily, only when a substation row is
 /// admitted). Rows without a centroid are skipped, never an error.
 pub fn transformer_units(batches: &[RecordBatch]) -> Vec<TransformerUnit> {
     let mut units = Vec::new();
@@ -579,10 +579,10 @@ pub fn tags_is_solar_plant(tags: &BTreeMap<String, String>) -> bool {
     tags.get("power").map(String::as_str) == Some("plant")
 }
 
-/// Every class-13 solar plant polygon of a square's industrial batches,
-/// prepared for containment queries (the generator-silence join reads this
-/// once, lazily, only when a class-13 non-plant row is admitted). Rows
-/// without a decodable ring are skipped, never an error.
+/// Every class-13 solar plant polygon of the loaded squares' industrial
+/// batches, prepared for containment queries (the generator-silence join
+/// reads this once, lazily, only when a class-13 non-plant row is admitted).
+/// Rows without a decodable ring are skipped, never an error.
 pub fn solar_plants(batches: &[RecordBatch]) -> Vec<grid::poly::PreparedRing> {
     let mut plants = Vec::new();
     for batch in batches {

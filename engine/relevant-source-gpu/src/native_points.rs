@@ -11,11 +11,11 @@ fn polygon(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<(i32, i32)
     decode_geom(Some(bytes)).with_context(|| format!("invalid {name} emission polygon"))
 }
 
-/// Per-square join contexts for one industrial/leisure file: the transformer
-/// units a substation polygon joins against, the solar plant polygons that
-/// silence their contained generators, and the raceway lines that silence
-/// their enclosing motorsport polygon. Built once per file in `load_sources`;
-/// empty for every other layer.
+/// Join contexts for one file's rows: the transformer units a substation
+/// polygon joins against and the solar plant polygons that silence their
+/// contained generators (both span every scene square), plus the raceway
+/// lines that silence their enclosing motorsport polygon (one square).
+/// Built in `load_sources`; empty for every other layer.
 #[derive(Default)]
 pub(super) struct FileJoins {
     pub transformers: Vec<square_store::osm_evidence::TransformerUnit>,

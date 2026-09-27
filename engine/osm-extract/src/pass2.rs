@@ -12,7 +12,7 @@ use anyhow::Result;
 use osmpbf::BlobReader;
 use prepare::{prepare_blob, Prepared, PreparedBlob, PreparedPoint, PreparedWay};
 use rayon::prelude::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 pub struct Pass2Stats {
@@ -182,7 +182,15 @@ fn apply_way(
                     } else {
                         1
                     };
-                    for ring in rings.iter().take(count) {
+                    // A facility nameplate describes the whole relation: share it
+                    // by area over the emitting parts, so two 24 MW halves become
+                    // two 12 MW sources instead of two 24 MW sources (+3.01 dB).
+                    let part_tags = if matches!(ftype, FeatureType::Industrial) {
+                        shared_part_tags(&rings, &extracted_tags)
+                    } else {
+                        vec![extracted_tags.clone(); rings.len()]
+                    };
+                    for (ring, tags) in rings.iter().zip(part_tags.iter()).take(count) {
                         let (clat, clon) = centroid(ring);
                         let square = grid::square_of(clat, clon);
                         let safe_ring = ring_for_spill(ring, &mut stats.antimeridian_rings_omitted);
@@ -193,7 +201,7 @@ fn apply_way(
                             "relation",
                             clat,
                             clon,
-                            &extracted_tags,
+                            tags,
                             safe_ring,
                         )?;
                         stats.features_total += 1;
@@ -414,6 +422,71 @@ pub(crate) fn ring_for_spill<'a>(
     }
 }
 
+/// One tag set per outer part with the facility nameplate shared by area.
+/// A relation's `plant:output:electricity` (solar) and `rating` (substation
+/// own nameplate) describe the whole facility, not each part: without sharing,
+/// a two-part 24 MW solar relation becomes two 24 MW sources (+3.01 dB).
+/// Each closed part gets its area fraction of the parsed total, formatted back
+/// in the parser's canonical units (MW, MVA); unclosed fragments keep the
+/// original tags (the spill drops them) and single-part or untagged relations
+/// keep theirs byte-identical. Areas use the same snapped-grid shoelace as the
+/// stored `area_m2`, falling back to an equal split when nothing measures.
+fn shared_part_tags(rings: &[Vec<[f64; 2]>], tags: &Tags) -> Vec<Tags> {
+    let closed: Vec<bool> = rings
+        .iter()
+        .map(|ring| crate::classify::is_a_closed_ring(ring))
+        .collect();
+    let emitting = closed.iter().filter(|&&c| c).count();
+    if emitting < 2 {
+        return vec![tags.clone(); rings.len()];
+    }
+    let btree: BTreeMap<String, String> = tags.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let total_mw = square_store::osm_evidence::plant_output_mw(&btree);
+    let total_mva = square_store::osm_evidence::transformer_rating_mva(&btree);
+    if total_mw.is_none() && total_mva.is_none() {
+        return vec![tags.clone(); rings.len()];
+    }
+    let areas: Vec<f64> = rings
+        .iter()
+        .zip(closed.iter())
+        .map(|(ring, &is_closed)| {
+            if !is_closed {
+                return 0.0;
+            }
+            let snapped: Vec<(i32, i32)> =
+                ring.iter().map(|c| grid::lonlat_to_grid(c[1], c[0])).collect();
+            grid::poly::ring_area_m2(&snapped).unwrap_or(0.0)
+        })
+        .collect();
+    let total_area: f64 = areas.iter().sum();
+    rings
+        .iter()
+        .zip(closed.iter())
+        .zip(areas.iter())
+        .map(|((_, &is_closed), &area)| {
+            if !is_closed {
+                return tags.clone();
+            }
+            let share = if total_area > 0.0 {
+                area / total_area
+            } else {
+                1.0 / emitting as f64
+            };
+            let mut part = tags.clone();
+            if let Some(mw) = total_mw {
+                part.insert(
+                    "plant:output:electricity".to_string(),
+                    format!("{} MW", mw * share),
+                );
+            }
+            if let Some(mva) = total_mva {
+                part.insert("rating".to_string(), format!("{} MVA", mva * share));
+            }
+            part
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -458,7 +531,59 @@ mod tests {
         ));
     }
 
-    use super::{centroid, ring_for_spill};
+    use super::{centroid, ring_for_spill, shared_part_tags};
+
+    #[test]
+    fn multipolygon_nameplate_is_shared_by_area_over_the_parts() {
+        use crate::classify::Tags;
+        use std::collections::BTreeMap;
+        // Two equal closed halves plus one unclosed fragment: the halves split
+        // the 24 MW total (12 MW each, energy-conserving), the fragment keeps
+        // the original tags (the spill drops it) and a single part stays
+        // byte-identical.
+        let half = |lon0: f64| {
+            vec![
+                [50.0, lon0],
+                [50.0, lon0 + 0.0001],
+                [50.0001, lon0 + 0.0001],
+                [50.0001, lon0],
+                [50.0, lon0],
+            ]
+        };
+        let tags: Tags =
+            [("plant:output:electricity".to_string(), "24 MW".to_string())].into();
+        let parts = shared_part_tags(&[half(14.0), half(14.0002)], &tags);
+        assert_eq!(parts.len(), 2);
+        for part in &parts {
+            let btree: BTreeMap<String, String> =
+                part.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            assert_eq!(
+                square_store::osm_evidence::plant_output_mw(&btree),
+                Some(12.0)
+            );
+        }
+        let double = vec![
+            [50.0, 14.0],
+            [50.0, 14.0002],
+            [50.0001, 14.0002],
+            [50.0001, 14.0],
+            [50.0, 14.0],
+        ];
+        let open = vec![[50.0, 14.0], [50.0, 14.0001]];
+        let parts = shared_part_tags(&[half(14.0), double, open], &tags);
+        let mw = |part: &Tags| {
+            let btree: BTreeMap<String, String> =
+                part.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            square_store::osm_evidence::plant_output_mw(&btree).unwrap()
+        };
+        // The double-area part carries twice the single-area part (8 + 16 MW,
+        // within snapped-grid rounding).
+        assert!((mw(&parts[0]) - 8.0).abs() < 0.02, "{}", mw(&parts[0]));
+        assert!((mw(&parts[1]) - 16.0).abs() < 0.02, "{}", mw(&parts[1]));
+        assert_eq!(parts[2].get("plant:output:electricity").unwrap(), "24 MW");
+        let single = shared_part_tags(&[half(14.0)], &tags);
+        assert_eq!(single[0].get("plant:output:electricity").unwrap(), "24 MW");
+    }
 
     #[test]
     fn antimeridian_ring_keeps_its_centroid_but_not_unsafe_geometry() {

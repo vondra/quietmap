@@ -104,6 +104,11 @@ pub fn collect_from_square_data(
     unavailable_layers.dedup();
     let served = |layer: &str| !unavailable_layers.contains(&layer);
 
+    // Facility joins span every loaded square, so a polygon in one square sees
+    // the units in the neighbours it touches; rows still emit once each.
+    let all_refs: Vec<&SquareData> = square_data.iter().map(|(_, data)| *data).collect();
+    let mut global_transformers = None;
+    let mut global_solar = None;
     for (_, data) in square_data {
         railways::collect_railways(data, lat, lng, &mut all_railways)?;
         roads::collect_roads(data, lat, lng, &mut all_roads)?;
@@ -111,7 +116,15 @@ pub fn collect_from_square_data(
         if served("leisure") {
             settlement::collect_leisure(data, lat, lng, &mut all_buildings)?;
         }
-        point_sources::collect_industrial(data, lat, lng, &mut all_industrial)?;
+        point_sources::collect_industrial(
+            data,
+            &all_refs,
+            &mut global_transformers,
+            &mut global_solar,
+            lat,
+            lng,
+            &mut all_industrial,
+        )?;
         if served("ships") {
             let batches = data.ships.batches_within(lat, lng, SHIP_QUERY_RADIUS_M)?;
             point_sources::collect_ships(&batches, lat, lng, &mut all_ships)?;

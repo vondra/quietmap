@@ -493,6 +493,114 @@ fn power_classes_read_tags_and_join_transformers() {
 }
 
 #[test]
+fn facility_joins_span_the_neighbour_square_they_touch() {
+    // A plant and a substation in one square still silence and join the
+    // generator and transformer stored in the neighbour: per-square joins
+    // would emit the generator beside its plant and fall the 160 MVA unit
+    // back to the 25 MVA median (−11.29 dB).
+    let tmp = tempfile::TempDir::new().unwrap();
+    let west = prague();
+    let east = grid::Square {
+        x: west.x + 1,
+        y: west.y,
+    };
+    let west_dir = fx::square_dir(tmp.path(), west);
+    let east_dir = fx::square_dir(tmp.path(), east);
+    std::fs::create_dir_all(&west_dir).unwrap();
+    std::fs::create_dir_all(&east_dir).unwrap();
+    let m_per_deg_lon = grid::geo::m_per_deg_lon(LAT.to_radians());
+    let yard = |cx: f64| {
+        let (dx, dy) = (200.0 / m_per_deg_lon, 200.0 / 111_320.0);
+        vec![
+            (cx - dx, LAT - dy),
+            (cx + dx, LAT - dy),
+            (cx + dx, LAT + dy),
+            (cx - dx, LAT + dy),
+            (cx - dx, LAT - dy),
+        ]
+    };
+    let plant_cx = LON;
+    let sub_cx = LON + 800.0 / m_per_deg_lon;
+    fx::write_industrial_file(
+        &west_dir.join("industrial.arrow"),
+        &[
+            fx::FixtureIndustrial {
+                osm_id: 400,
+                centroid: (plant_cx, LAT),
+                source_type: noise_compute::emission::industrial::SOURCE_SOLAR_FARM,
+                name: "Plant".to_string(),
+                ring_lonlat: Some(yard(plant_cx)),
+                suppressed: false,
+                tags: &[
+                    ("power", "plant"),
+                    ("plant:source", "solar"),
+                    ("plant:output:electricity", "24 MW"),
+                ],
+                rated_power_kw: None,
+            },
+            fx::FixtureIndustrial {
+                osm_id: 401,
+                centroid: (sub_cx, LAT),
+                source_type: noise_compute::emission::industrial::SOURCE_SUBSTATION,
+                name: "Yard".to_string(),
+                ring_lonlat: Some(yard(sub_cx)),
+                suppressed: false,
+                tags: &[("power", "substation"), ("voltage", "220000")],
+                rated_power_kw: None,
+            },
+        ],
+    );
+    fx::write_industrial_file(
+        &east_dir.join("industrial.arrow"),
+        &[
+            fx::FixtureIndustrial {
+                osm_id: 402,
+                centroid: (plant_cx, LAT),
+                source_type: noise_compute::emission::industrial::SOURCE_SOLAR_FARM,
+                name: "Gen".to_string(),
+                ring_lonlat: None,
+                suppressed: false,
+                tags: &[("power", "generator"), ("generator:source", "solar")],
+                // A 5 MW unit: it would emit beside its plant without the
+                // cross-square silence join.
+                rated_power_kw: Some(5000.0),
+            },
+            fx::FixtureIndustrial {
+                osm_id: 403,
+                centroid: (sub_cx, LAT),
+                source_type: noise_compute::emission::industrial::SOURCE_TRANSFORMER,
+                name: "T".to_string(),
+                ring_lonlat: None,
+                suppressed: false,
+                tags: &[("power", "transformer"), ("rating", "160 MVA")],
+                rated_power_kw: None,
+            },
+        ],
+    );
+    let west_data = square_store::store::load_square(&west_dir).unwrap();
+    let east_data = square_store::store::load_square(&east_dir).unwrap();
+    let data = collect_from_square_data(&[(west, &west_data), (east, &east_data)], LAT, LON).unwrap();
+    let mut ids: Vec<i64> = data.industrial.iter().map(|p| p.osm_id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids, vec![400, 401]);
+    let total_aw = |id: i64| {
+        let energy: f64 = data
+            .industrial
+            .iter()
+            .filter(|p| p.osm_id == id)
+            .map(|p| {
+                let day: [f64; 8] = std::array::from_fn(|i| f64::from(p.lw_day[i]));
+                10f64.powf(noise_compute::propagation::iso9613::a_weighted_total(&day) / 10.0)
+            })
+            .sum();
+        10.0 * energy.log10()
+    };
+    let joined = noise_compute::emission::industrial::substation_lw(160.0);
+    assert!((total_aw(401) - joined).abs() < 0.5, "joined {}", total_aw(401));
+}
+
+#[test]
 fn unstamped_structures_fail_loud() {
     let tmp = tempfile::TempDir::new().unwrap();
     let dir = fx::square_dir(tmp.path(), prague());
