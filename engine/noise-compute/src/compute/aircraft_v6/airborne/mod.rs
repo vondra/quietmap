@@ -168,8 +168,14 @@ pub fn scatter(
 /// summation order are a pure function of the input: the same click gives
 /// the same bytes on any machine or pool. Below a few thousand rows the
 /// per-chunk `HashMap` + heap allocation and the merge cost more than the
-/// split saves, so sparse z14 batches are grouped up to this size.
-const SCATTER_CHUNK_ROWS: usize = 4_096;
+/// split saves, so sparse z14 batches are grouped up to this size. 16 384
+/// (4× the old 4 096): a flight's ~150 sub-segments span dozens of batches,
+/// so narrow chunks only multiply duplicate accumulators (one `String` alloc
+/// + free per duplicate at merge) and candidate stubs for the global top-K
+/// select; wider chunks halve both while keeping hundreds of tasks per
+/// popup. Trace/peaks/counts are chunking-independent (proven at the select);
+/// energies re-associate within the parity test's 1e-9.
+const SCATTER_CHUNK_ROWS: usize = 16_384;
 
 /// Consecutive batch runs holding at least [`SCATTER_CHUNK_ROWS`] rows (the
 /// last run may be shorter), each with the global index of its first row.
@@ -230,11 +236,15 @@ fn merge_chunks(
 ) -> (FxHashMap<u64, FlightAccum>, AirborneScatterStats) {
     use std::collections::hash_map::Entry;
 
+    // Exact upper bound on distinct flights (dedup only shrinks it), so the
+    // merge target never rehashes; consumers sort by key, capacity is order-free.
+    let total_entries: usize = chunks.iter().map(|c| c.flights.len()).sum();
     let mut chunks = chunks.into_iter();
     let Some(first) = chunks.next() else {
         return (FxHashMap::default(), AirborneScatterStats::default());
     };
     let mut flights = first.flights;
+    flights.reserve(total_entries);
     let mut above_cutoff = first.above_cutoff;
     let mut pieces = first.pieces;
     let mut stats = AirborneScatterStats {
@@ -276,6 +286,9 @@ fn merge_chunks(
     if let Some(t) = traces {
         // One total order (rank, then input position) over unsplit rows and
         // whole chords: the exact global top-K the serial heap keeps.
+        // Chunking-independent: a global top-K row is top-K in its own chunk
+        // (else 150 chunk-mates would outrank it globally), so the union of
+        // chunk heaps always covers the global set however chunks split.
         // `apply_segment_top_k_with_cap` (source-reader) re-sorts by
         // `received_lden.full` afterwards because road / rail / cruise
         // traces are mixed in.

@@ -819,8 +819,10 @@ fn chunked_scatter_matches_serial_within_rounding() {
         "input not chunked — parity test would be vacuous"
     );
     assert!(
-        chunks.iter().all(|(range, _)| range.len() == 5) && chunks.len() == batches.len() / 5,
-        "five 1 000-row batches fill one 4 096-row chunk: {chunks:?}"
+        chunks.len() == 6
+            && chunks[..5].iter().all(|(range, _)| range.len() == 17)
+            && chunks[5].0.len() == 15,
+        "seventeen 1 000-row batches fill one 16 384-row chunk: {chunks:?}"
     );
 
     let ctx = super::ScatterContext::new(&receiver, 7.0, &weights, &horizon, None);
