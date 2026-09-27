@@ -14,9 +14,6 @@ pub struct GroundTrafficWork {
     pub input_rows: u64,
     pub input_bytes: u64,
     pub cached_lines: usize,
-    pub owned_lines: usize,
-    pub maximum_counter_rows: usize,
-    pub maximum_airport_key_bytes: usize,
 }
 
 impl GroundTrafficWork {
@@ -62,7 +59,7 @@ pub fn plan_ground_traffic(
     let mut lines = Vec::new();
     let mut line_ids = HashSet::new();
     let mut broadphase: HashMap<u64, Vec<usize>> = HashMap::new();
-    // bytes, line count, maximum CounterKey rows, maximum actual/fallback key bytes.
+    // Decoded-cache bytes and line count per cached owner.
     let mut cache_allocations = HashMap::new();
     for (owner, directory) in crate::spatial::square_directories(prepared_root)? {
         anyhow::ensure!(!(scope.is_some_and(|scope| !scope.contains_square(owner)) && directory.join("airport_traffic.arrow").try_exists()?),
@@ -102,33 +99,11 @@ pub fn plan_ground_traffic(
             + index.maximum_airport_key_bytes()) as u128;
         let cache_bytes =
             file_bytes as u128 * 2 + cache.lines.len() as u128 * per_line * 2;
-        let maximum_counter_rows = cache
-            .lines
-            .iter()
-            .try_fold(0usize, |total, line| {
-                let directions = usize::from(
-                    ops_kind_from_aeroway(line.aeroway_type) == Some(GROUND_OPS_KIND_RUNWAY_ROLL),
-                ) + 1;
-                total.checked_add(
-                    3 * (noise_compute::emission::profiles_generated::NUM_CLASSES * directions
-                        + NUM_GSE_CLASSES),
-                )
-            })
-            .context("ground counter row bound overflow")?;
-        let maximum_key_bytes = cache
-            .airports
-            .iter()
-            .map(String::len)
-            .max()
-            .unwrap_or(0)
-            .max(index.maximum_airport_key_bytes());
         cache_allocations.insert(
             owner,
             (
                 u64::try_from(cache_bytes).context("airport cache size overflow")?,
                 cache.lines.len(),
-                maximum_counter_rows,
-                maximum_key_bytes,
             ),
         );
         let mut extent = Extent::empty(owner);
@@ -273,8 +248,6 @@ pub fn plan_ground_traffic(
             .iter()
             .try_fold(0usize, |n, id| n.checked_add(cache_allocations[id].1))
             .context("ground cached line count overflow")?;
-        let (_, owned_lines, maximum_counter_rows, maximum_airport_key_bytes) =
-            cache_allocations[&owner];
         works.push(GroundTrafficWork {
             owner,
             inputs,
@@ -283,9 +256,6 @@ pub fn plan_ground_traffic(
             input_rows,
             input_bytes,
             cached_lines,
-            owned_lines,
-            maximum_counter_rows,
-            maximum_airport_key_bytes,
         });
     }
     works.sort_unstable_by_key(|work| work.owner);

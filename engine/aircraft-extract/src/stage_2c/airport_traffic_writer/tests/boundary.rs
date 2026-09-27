@@ -93,9 +93,6 @@ fn partitioned_run(lat: f64, lon: f64, split: bool) -> Vec<AirportTrafficRow> {
         assert_eq!(work.input_bytes, input.metadata().unwrap().len());
         assert_eq!(work.candidates.len(), if split { 2 } else { 1 });
         assert_eq!(work.cached_lines, 2);
-        assert_eq!(work.owned_lines, if split { 1 } else { 2 });
-        assert_eq!(work.maximum_counter_rows, 54 * work.owned_lines);
-        assert!(work.maximum_airport_key_bytes >= "TEST".len());
     }
     assert!(!prepared.join(".airport_traffic_pending").exists());
     let n = run_stage_2c(&inputs, &[area], &prepared, &crate::provider_receipt::window_of(12, 365), None).unwrap();
@@ -242,7 +239,6 @@ fn one_flight_of_both_provenances_keeps_every_counter_row_and_counts_as_primary(
     let index = crate::airport_index::AerodromeIndex::build(std::slice::from_ref(&area));
     let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap().works;
     assert_eq!(plan.len(), 1);
-    assert_eq!(plan[0].maximum_counter_rows, 99);
     run_stage_2c(&inputs, &[area], &prepared, &crate::provider_receipt::window_of(12, 365), None).unwrap();
     let rows = read_airport_traffic(&dir.join("airport_traffic.arrow")).unwrap();
     assert_eq!(rows.len(), 7);
