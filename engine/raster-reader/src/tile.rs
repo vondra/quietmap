@@ -159,8 +159,9 @@ impl TileStore {
                 .min_by_key(|(_, entry)| entry.touched)
                 .map(|(&key, _)| key);
             let Some(oldest) = oldest else { break };
-            let removed = cache.tiles.remove(&oldest).unwrap();
-            cache.bytes -= removed.bytes;
+            if let Some(removed) = cache.tiles.remove(&oldest) {
+                cache.bytes -= removed.bytes;
+            }
         }
         if bytes <= self.max_bytes {
             cache.bytes += bytes;

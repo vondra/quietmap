@@ -4,9 +4,9 @@
 //! the Γ arc in the favourable one), not in plan view: every profile interval contributes
 //! its slant length times the fraction of its ends inside the canopy volume (above the
 //! bare-earth ground, at or below ground plus canopy height) times the mean forest cover.
-//! The CUDA foliage kernel walks the same samples. A missing canopy height (NaN) poisons
-//! the depth to NaN: production samplers poison the elevation with it, so CheckedRasters
-//! fails the popup before the NaN can publish.
+//! The CUDA foliage kernel walks the same samples. A missing canopy height records a
+//! fault in CheckedRasters, which substitutes finite fallbacks so the computation
+//! completes and then refuses the click before anything publishes.
 
 use crate::propagation::cnossos::ground::MeteorologicalState;
 use crate::propagation::cnossos::rubber_band::StateRay;

@@ -238,9 +238,10 @@ fn all_four_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing_
             checked.ensure_valid().is_err(),
             "{channel:?} cannot publish a falsely empty profile"
         );
-        assert!(profile.elevation_m.iter().any(|value| value.is_nan()));
+        assert!(profile.elevation_m.iter().all(|value| value.is_finite()));
+        assert!(profile.canopy_m.iter().all(|value| value.is_finite()));
         if channel == Channel::Imd {
-            assert!(checked.ground_g(0.25, 0.25).is_nan());
+            assert!(checked.ground_g(0.25, 0.25).is_finite());
         }
         std::fs::write(channel.path(&prepared, square), &bytes).unwrap();
     }
@@ -305,7 +306,7 @@ fn all_four_channels_repack_exact_nodes_and_preserve_sampling_or_report_missing_
         oracle(Channel::Dem, 0.25, 0.25, false)
     );
     assert!(checked.ensure_valid().is_ok());
-    assert!(checked.ground_g(0.25, 0.25).is_nan());
+    assert!(checked.ground_g(0.25, 0.25).is_finite());
     assert!(checked.ensure_valid().is_err());
 
     // A source disagreement cannot publish a partial file.
