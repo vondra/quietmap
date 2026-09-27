@@ -88,6 +88,7 @@ mod tests {
                 plant_output_mw: None,
                 substation_mva: None,
                 substation_class: 0,
+                facility_share: 1.0,
             }),
             prepare_leisure_points(RawLeisureInput {
                 centroid_lat: 0.0,

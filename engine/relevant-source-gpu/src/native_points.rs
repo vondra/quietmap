@@ -12,14 +12,16 @@ fn polygon(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<(i32, i32)
 }
 
 /// Join contexts for one file's rows: the transformer units a substation
-/// polygon joins against and the solar plant polygons that silence their
-/// contained generators (both span every scene square), plus the raceway
+/// facility joins against, the solar plant polygons that silence their
+/// contained generators, and the substation facility parts whose union is
+/// one rating truth (all three span every scene square), plus the raceway
 /// lines that silence their enclosing motorsport polygon (one square).
 /// Built in `load_sources`; empty for every other layer.
 #[derive(Default)]
 pub(super) struct FileJoins {
     pub transformers: Vec<square_store::osm_evidence::TransformerUnit>,
     pub solar_plants: Vec<grid::poly::PreparedRing>,
+    pub substation_facilities: square_store::osm_evidence::SubstationFacilities,
     pub motorsport_venues: square_store::osm_evidence::MotorsportVenues,
 }
 
@@ -202,14 +204,28 @@ pub(super) fn points(
                     if source_type
                         == noise_compute::emission::industrial::SOURCE_SUBSTATION =>
                 {
-                    let feed = square_store::osm_evidence::substation_feed(
-                        &joins.transformers,
+                    let kind = col_str(batch, "osm_kind")
+                        .filter(|kinds| !kinds.is_null(row))
+                        .map(|kinds| kinds.value(row))
+                        .unwrap_or("");
+                    let osm_id = col_i64(batch, "osm_id")
+                        .filter(|ids| !ids.is_null(row))
+                        .map(|ids| ids.value(row))
+                        .unwrap_or(0);
+                    let feed = joins.substation_facilities.feed(
+                        kind,
+                        osm_id,
                         &polygon_grid,
+                        &joins.transformers,
                     );
                     square_store::osm_evidence::substation_power(tags, &feed)
                 }
                 _ => (None, 0),
             };
+            let facility_share = row_tags
+                .as_ref()
+                .map(square_store::osm_evidence::facility_share)
+                .unwrap_or(1.0);
             prepare_industrial_points(RawIndustrialInput {
                 centroid_lat,
                 centroid_lon,
@@ -223,6 +239,7 @@ pub(super) fn points(
                 plant_output_mw,
                 substation_mva,
                 substation_class,
+                facility_share,
             })
         }
         _ => unreachable!(),

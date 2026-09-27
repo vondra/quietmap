@@ -107,8 +107,7 @@ pub fn collect_from_square_data(
     // Facility joins span every loaded square, so a polygon in one square sees
     // the units in the neighbours it touches; rows still emit once each.
     let all_refs: Vec<&SquareData> = square_data.iter().map(|(_, data)| *data).collect();
-    let mut global_transformers = None;
-    let mut global_solar = None;
+    let mut industrial_joins = None;
     for (_, data) in square_data {
         railways::collect_railways(data, lat, lng, &mut all_railways)?;
         roads::collect_roads(data, lat, lng, &mut all_roads)?;
@@ -119,8 +118,7 @@ pub fn collect_from_square_data(
         point_sources::collect_industrial(
             data,
             &all_refs,
-            &mut global_transformers,
-            &mut global_solar,
+            &mut industrial_joins,
             lat,
             lng,
             &mut all_industrial,

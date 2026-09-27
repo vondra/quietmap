@@ -43,14 +43,23 @@ pub struct RawIndustrialInput<'a> {
     /// [`industrial::SOLAR_MW_PER_HA_UNTAGGED`].
     pub plant_output_mw: Option<f64>,
     /// Substation total MVA: summed `rating` values of the class-15
-    /// transformers inside the substation polygon (per-square spatial join).
-    /// `None` = no rated transformers found → the
+    /// transformers inside ANY part of the facility (loaded-squares spatial
+    /// join), else the row's own `rating` (the full facility nameplate).
+    /// `None` = no rated transformers and no nameplate → the
     /// [`industrial::substation_class_mva`] median.
     pub substation_mva: Option<f64>,
     /// Substation class derived from `voltage` / autotransformer evidence:
     /// 1 main, 2 auto, 3 distribution, 0 unknown. Only read when
     /// `substation_mva` is `None`.
     pub substation_class: u8,
+    /// This part's area share of its facility's single acoustic power (the
+    /// extractor's `qm:facility_share`, validated inside (0, 1]; 1.0 for
+    /// single parts). The solar plant nameplate and every substation level
+    /// are facility totals shared by area: `lw_part = lw_total + 10·lg`.
+    /// Sharing the MVA itself cannot conserve power (the substation law is
+    /// logarithmic), and solar ignores the share unless the plant-nameplate
+    /// branch applies (unit output and area density are already per-part).
+    pub facility_share: f64,
 }
 
 /// One `leisure.arrow` row — a sports/play/open-air-hospitality/car-park source
@@ -640,22 +649,28 @@ pub fn prepare_industrial_points(input: RawIndustrialInput<'_>) -> Vec<PreparedP
         // output in `rated_power_kw`, parsed by the extractor; a plant row
         // carries `plant:output:electricity` in its tags. Either beats the
         // area density for point rows, which have no footprint to scale.
-        let mw = input
-            .plant_output_mw
-            .filter(|mw| *mw > 0.0)
-            .or_else(|| {
-                input
-                    .rated_power_kw
-                    .filter(|kw| *kw > 0.0)
-                    .map(|kw| f64::from(kw) / 1000.0)
-            });
-        industrial::solar_farm_lw(mw, area)
+        // Only the plant nameplate is a facility total shared by area; unit
+        // output and area density are already per-part.
+        let tagged_mw = input.plant_output_mw.filter(|mw| *mw > 0.0);
+        let mw = tagged_mw.or_else(|| {
+            input
+                .rated_power_kw
+                .filter(|kw| *kw > 0.0)
+                .map(|kw| f64::from(kw) / 1000.0)
+        });
+        let mut lw = industrial::solar_farm_lw(mw, area);
+        if tagged_mw.is_some() {
+            lw += 10.0 * input.facility_share.log10();
+        }
+        lw
     } else if is_substation {
+        // One facility power from one rating truth (joined units, tag, or
+        // class median), shared by area over the parts.
         let mva = input
             .substation_mva
             .filter(|mva| *mva > 0.0)
             .unwrap_or_else(|| industrial::substation_class_mva(input.substation_class));
-        industrial::substation_lw(mva)
+        industrial::substation_lw(mva) + 10.0 * input.facility_share.log10()
     } else {
         let area_cap = industrial::sector_area_cap_m2(input.nace_4digit, input.site_subtype);
         industrial::industrial_lw(&profile, area, area_cap)
@@ -1000,6 +1015,7 @@ mod tests {
             plant_output_mw: None,
             substation_mva: None,
             substation_class: 0,
+            facility_share: 1.0,
         });
         assert_eq!(points.len(), 1);
         assert_eq!(points[0].hub_height_m, Some(100.0));
@@ -1025,6 +1041,7 @@ mod tests {
                 plant_output_mw: mw,
                 substation_mva: mva,
                 substation_class: class,
+                facility_share: 1.0,
             })
         };
         let day_aw = |points: &[PreparedPoint]| {
@@ -1064,6 +1081,74 @@ mod tests {
     }
 
     #[test]
+    fn facility_parts_share_one_acoustic_power_by_area() {
+        // Ten equal parts of a 100 MVA facility (full nameplate + 0.1 share
+        // each) conserve the facility's power against one whole part — above
+        // the 64 dB floor (100 MVA, where per-part evaluation under-read by
+        // the measured −4.00 dB) and across it (0.4 MVA, where the floor
+        // bound per part instead of once).
+        let prep = |mva: f64, share: f64| {
+            prepare_industrial_points(RawIndustrialInput {
+                centroid_lat: 49.0,
+                centroid_lon: 14.0,
+                source_type: industrial::SOURCE_SUBSTATION,
+                site_subtype: 0,
+                nace_4digit: None,
+                hub_height_m: None,
+                rated_power_kw: None,
+                area_m2: Some(4_671.0),
+                polygon_grid: &[],
+                plant_output_mw: None,
+                substation_mva: Some(mva),
+                substation_class: 1,
+                facility_share: share,
+            })
+        };
+        let energy = |points: &[PreparedPoint]| {
+            let day: [f64; NUM_BANDS] = std::array::from_fn(|i| points[0].lw_day[i] as f64);
+            10.0f64.powf(crate::propagation::iso9613::a_weighted_total(&day) / 10.0)
+        };
+        for mva in [100.0, 0.4] {
+            let parts: f64 = (0..10).map(|_| energy(&prep(mva, 0.1))).sum();
+            let whole = energy(&prep(mva, 1.0));
+            let error_db = 10.0 * (parts / whole).log10();
+            assert!(error_db.abs() < 0.15, "{mva} MVA: {error_db:+.2} dB");
+        }
+        // Solar nameplate sharing is power-neutral (10·lg MW is linear in
+        // MW): two 0.5-share 24 MW parts equal one whole part. Untagged
+        // area-density and unit-output rows ignore the share (already
+        // per-part): a 0.5 share changes nothing there.
+        let solar = |mw: Option<f64>, kw: Option<f32>, share: f64| {
+            prepare_industrial_points(RawIndustrialInput {
+                centroid_lat: 49.0,
+                centroid_lon: 14.0,
+                source_type: industrial::SOURCE_SOLAR_FARM,
+                site_subtype: 0,
+                nace_4digit: None,
+                hub_height_m: None,
+                rated_power_kw: kw,
+                area_m2: Some(46_710.0),
+                polygon_grid: &[],
+                plant_output_mw: mw,
+                substation_mva: None,
+                substation_class: 0,
+                facility_share: share,
+            })
+        };
+        let tagged_parts = energy(&solar(Some(24.0), None, 0.5)) * 2.0;
+        let tagged_whole = energy(&solar(Some(24.0), None, 1.0));
+        assert!((10.0 * (tagged_parts / tagged_whole).log10()).abs() < 0.15);
+        assert_eq!(
+            energy(&solar(None, None, 0.5)),
+            energy(&solar(None, None, 1.0))
+        );
+        assert_eq!(
+            energy(&solar(None, Some(5.0), 0.5)),
+            energy(&solar(None, Some(5.0), 1.0))
+        );
+    }
+
+    #[test]
     fn solar_generator_units_read_the_extractor_parsed_output() {
         // A `generator:source=solar` point row carries no plant tag; the
         // extractor parsed its `generator:output:electricity` into
@@ -1081,6 +1166,7 @@ mod tests {
             plant_output_mw: None,
             substation_mva: None,
             substation_class: 0,
+            facility_share: 1.0,
         });
         let day: [f64; NUM_BANDS] = std::array::from_fn(|i| points[0].lw_day[i] as f64);
         let aw = crate::propagation::iso9613::a_weighted_total(&day);
@@ -1108,6 +1194,7 @@ mod tests {
                 plant_output_mw: None,
                 substation_mva: None,
                 substation_class: 0,
+                facility_share: 1.0,
             })
         };
         assert!(row(None, &[]).is_empty());
@@ -1146,6 +1233,7 @@ mod tests {
             plant_output_mw: None,
             substation_mva: None,
             substation_class: 0,
+            facility_share: 1.0,
         });
 
         assert!(
@@ -1209,6 +1297,7 @@ mod tests {
                 plant_output_mw: None,
                 substation_mva: None,
                 substation_class: 0,
+                facility_share: 1.0,
             })
         };
         // Missing hub → 105 m default, carried into source_height_m.
