@@ -121,6 +121,18 @@ pub(crate) fn compute_roads(
         tail_ns: u64,
     }
     let collect_traces = traces.is_some();
+    // Ref-inheritance candidates, hoisted out of the per-segment scan: the refed
+    // class 0/1/2 rows in road order. Scanning one of these finds the same nearest
+    // row as scanning all of `roads` (same elements, same order, same strict-less
+    // comparison), at a fraction of the cost.
+    let mut refed: [Vec<(f64, f64, &str)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for seg in roads {
+        if !seg.road_ref.is_empty() {
+            if let Some(bucket) = refed.get_mut(seg.road_class as usize) {
+                bucket.push((seg.cp_lat, seg.cp_lon, seg.road_ref.as_str()));
+            }
+        }
+    }
     // Skip-path totals (the `POPUP_TIMING` per-row breakdown): atomics because
     // skipped rows return no per-row record; touched only while `timing_on`.
     let norm_ns = std::sync::atomic::AtomicU64::new(0);
@@ -228,19 +240,15 @@ pub(crate) fn compute_roads(
                 if let (true, Some(target)) = (seg.road_ref.is_empty(), infer_target_class) {
                     let mut best_ref = String::new();
                     let mut best_dist = f64::MAX;
-                    for other in roads.iter() {
-                        if (other.road_class as usize) != target {
-                            continue;
-                        }
-                        if other.road_ref.is_empty() {
-                            continue;
-                        }
-                        let d = ((seg.cp_lat - other.cp_lat).powi(2)
-                            + (seg.cp_lon - other.cp_lon).powi(2))
+                    // The hoisted per-class Vec: same rows in the same order the
+                    // full scan would visit after its class/ref filters.
+                    for &(cp_lat, cp_lon, road_ref) in &refed[target] {
+                        let d = ((seg.cp_lat - cp_lat).powi(2)
+                            + (seg.cp_lon - cp_lon).powi(2))
                         .sqrt();
                         if d < best_dist {
                             best_dist = d;
-                            best_ref = other.road_ref.clone();
+                            best_ref = road_ref.to_string();
                         }
                     }
                     best_ref
@@ -572,7 +580,24 @@ pub(crate) fn compute_roads(
     // Ascending group key, not HashMap order — the contributor sequence
     // is summed downstream and its JSON order is part of the popup
     // reference output. See `crate::compute::key_sorted`.
-    for (_, acc) in crate::compute::key_sorted(&roads_by_key) {
+    //
+    // The per-group breakdown rays are pure functions of each group's closest
+    // source, so they run up front in parallel (rayon preserves order) and the
+    // sequential emit below consumes them in the same key order: bit-identical.
+    let t_breakdowns = timing_on.then(std::time::Instant::now);
+    let breakdowns: Vec<_> = crate::compute::key_sorted(&roads_by_key)
+        .into_iter()
+        .map(|(_, acc)| &acc.closest_source)
+        .collect::<Vec<_>>()
+        .par_iter()
+        .map(|closest| nearest_path_breakdown(rasters, obstacles, closest, receiver, &weather))
+        .collect();
+    if let Some(t) = t_breakdowns {
+        breakdown_ns += t.elapsed().as_nanos() as u64;
+    }
+    for ((_, acc), (nearest_terrain, nearest_screening, nearest_veg, nearest_ground_g)) in
+        crate::compute::key_sorted(&roads_by_key).into_iter().zip(breakdowns)
+    {
         // Full energy from variants (includes all path effects per-band)
         let ld = PropagationVariants::to_db(acc.variants[0].full_energy);
         let le = PropagationVariants::to_db(acc.variants[1].full_energy);
@@ -593,13 +618,6 @@ pub(crate) fn compute_roads(
         };
 
         let impacts = PropagationVariants::impact_deltas(&acc.variants, road_periods.lden_db);
-
-        let t_breakdown = timing_on.then(std::time::Instant::now);
-        let (nearest_terrain, nearest_screening, nearest_veg, nearest_ground_g) =
-            nearest_path_breakdown(rasters, obstacles, &acc.closest_source, receiver, &weather);
-        if let Some(t) = t_breakdown {
-            breakdown_ns += t.elapsed().as_nanos() as u64;
-        }
 
         let road_meta = RoadMetadata {
             aadt_light: acc.dominant_traffic.light,

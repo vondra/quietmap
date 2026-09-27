@@ -113,9 +113,14 @@ pub fn evaluate_line_piece(
     };
     let mut periods = [[[0.0; NUM_BANDS]; crate::propagation::ray_transfer::VARIANT_COUNT]; 3];
     let mut loudest: Option<(f64, usize)> = None;
+    // The loudest node's detail is built inline, in its node ray: the old code
+    // re-evaluated that identical ray afterwards (same source point, same flags,
+    // scratch reuse holds no state between rays), one wasted ray per piece.
+    let mut loudest_detail: Option<RayDetail> = None;
     let mut slices = Vec::new();
     for (index, node) in scratch.nodes.iter().enumerate() {
         let source = source_at(node.along_m);
+        let mut detail_slot = None;
         let transfer = evaluate_ray_transfer(
             receiver,
             &source,
@@ -125,7 +130,7 @@ pub fn evaluate_line_piece(
             weather,
             true,
             &mut scratch.ray,
-            None,
+            loudness_weights.is_some().then_some(&mut detail_slot),
         );
         let weight = node.weight_rad * divergence;
         for (period, sum) in periods.iter_mut().enumerate() {
@@ -140,6 +145,7 @@ pub fn evaluate_line_piece(
             let loudness: f64 = (0..NUM_BANDS).map(|b| weights[b] * weight * full[b]).sum();
             if loudest.is_none_or(|(best, _)| loudness > best) {
                 loudest = Some((loudness, index));
+                loudest_detail = detail_slot;
             }
             let t = &transfer.periods[0];
             let ratio_db = |variant: usize| 10.0 * (t[variant][4] / t[VARIANT_FULL][4]).log10();
@@ -149,22 +155,9 @@ pub fn evaluate_line_piece(
     let (loudest_node, fan) = match loudest {
         None => (None, None),
         Some((_, index)) => {
-            let mut detail = None;
-            let source = source_at(scratch.nodes[index].along_m);
-            evaluate_ray_transfer(
-                receiver,
-                &source,
-                obstacles,
-                scratch.nodes[index].obstacles_on_ray,
-                rasters,
-                weather,
-                true,
-                &mut scratch.ray,
-                Some(&mut detail),
-            );
             let cp = local(cp_lat, cp_lon, receiver.altitude_m);
             let cp_azimuth = cp[1].atan2(cp[0]);
-            (detail, Some(fan_trace(&geometry, &slices, index, cp_azimuth)))
+            (loudest_detail, Some(fan_trace(&geometry, &slices, index, cp_azimuth)))
         }
     };
     Some(LinePieceTransfer {

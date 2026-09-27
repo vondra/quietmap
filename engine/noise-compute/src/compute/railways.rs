@@ -555,7 +555,18 @@ pub(crate) fn compute_railways(
 
     let mut contributors = Vec::new();
     // Ascending group key, not HashMap order — see `crate::compute::key_sorted`.
-    for (_, acc) in crate::compute::key_sorted(&rails_by_key) {
+    //
+    // The per-group breakdown rays are pure functions of each group's closest
+    // source, so they run up front in parallel (rayon preserves order) and the
+    // sequential emit below consumes them in the same key order: bit-identical.
+    let breakdowns: Vec<_> = crate::compute::key_sorted(&rails_by_key)
+        .into_iter()
+        .map(|(_, acc)| &acc.closest_source)
+        .collect::<Vec<_>>()
+        .par_iter()
+        .map(|closest| nearest_path_breakdown(rasters, obstacles, closest, receiver, &weather))
+        .collect();
+    for ((_, acc), rail_effects) in crate::compute::key_sorted(&rails_by_key).into_iter().zip(breakdowns) {
         let ld = PropagationVariants::to_db(acc.variants[0].full_energy);
         let le = PropagationVariants::to_db(acc.variants[1].full_energy);
         let ln = PropagationVariants::to_db(acc.variants[2].full_energy);
@@ -572,8 +583,6 @@ pub(crate) fn compute_railways(
             None
         };
 
-        let rail_effects =
-            nearest_path_breakdown(rasters, obstacles, &acc.closest_source, receiver, &weather);
         let nearest_ground_g = rail_effects.3;
 
         let impacts = PropagationVariants::impact_deltas(&acc.variants, rail_periods.lden_db);
