@@ -1061,3 +1061,35 @@ fn scatter_speedup_on_150k_rows() {
         parallel.len(),
     );
 }
+
+/// Ignored microbench: per-row cost of the real popup path — the row gates,
+/// the hoisted Doc 29 kernel and the lmax tail of `evaluate_row`.
+/// Run with `cargo test --release -p noise-compute popup_row_ns_per_row -- --ignored --nocapture`.
+/// Rotates 8 admitted approach/departure rows so no branch predictor learns
+/// a single shape.
+#[test]
+#[ignore = "benchmark, not a gate — prints popup evaluate_row ns/row"]
+fn popup_row_ns_per_row() {
+    let cols = synthetic_airborne_rows(8, 1, 8, 0xBE_9274);
+    let batches = cols.batches(8);
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    let (receiver, horizon) = synthetic_receiver_and_horizon();
+    let weights = aircraft::ProvenanceWeights::PRIMARY_ONLY;
+    let ctx = super::ScatterContext::new(&receiver, 7.0, &weights, &horizon, None);
+    for i in 0..batch.len() {
+        assert!(
+            super::row::evaluate_row::<true>(&ctx, batch, i).is_some(),
+            "fixture row {i} must be admitted"
+        );
+    }
+    const ITERS: usize = 200_000;
+    let mut acc = 0u64;
+    let t = std::time::Instant::now();
+    for i in 0..ITERS {
+        let row = super::row::evaluate_row::<true>(&ctx, batch, i & 7).unwrap();
+        acc ^= row.kernel.sel.to_bits() ^ row.lmax.to_bits();
+    }
+    let ns = t.elapsed().as_nanos() as f64 / ITERS as f64;
+    println!("popup evaluate_row: {ns:.1} ns/row (xor {acc:#x})");
+}

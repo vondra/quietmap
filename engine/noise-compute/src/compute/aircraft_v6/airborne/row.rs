@@ -184,15 +184,62 @@ pub(super) fn evaluate_row<const FLOOR: bool>(
     if aircraft::is_ground_stale_with_terrain(&seg, &terrain) {
         return None;
     }
-    let kernel = aircraft::segment_kernel_with_cuts::<FLOOR>(
-        &seg,
-        receiver.lat,
-        receiver.lon,
+    // One computation of every kernel scalar: the geometry above already
+    // matches `segment_kernel_with_overrides` op-for-op (same metre factors,
+    // same endpoint values), so the length terms finish it here and the
+    // emission inputs are derived once for both the kernel and the lmax
+    // tail below. Bit-identical to the old two-call shape (deleted
+    // recompute: geometry + thrust in the kernel, thrust in the tail).
+    let slen = seg_len_sq.sqrt().max(1.0);
+    let inv_lsq = if seg_len_sq > 1e-6 {
+        1.0 / seg_len_sq
+    } else {
+        0.0
+    };
+    let start_alt_m = seg.start_alt_m as f64;
+    let sdz = seg.end_alt_m as f64 - start_alt_m;
+    let anchor_profile =
+        &aircraft::PROFILES[aircraft::CLASS_REP_PROFILE_IDX[class_idx] as usize];
+    let (inst, di_a, di_b, di_c) = aircraft::delta_i_constants(anchor_profile.installation);
+    let dv = aircraft::delta_v(seg.speed_kt as f64, anchor_profile);
+    let (power_row, power_w) = aircraft::power_bracket(
+        aircraft::thrust_model_for_class(class_idx),
+        &aircraft::thrust_input_for_segment(
+            &seg,
+            start_alt_m,
+            seg.end_alt_m as f64,
+            start_elev - 30.0,
+            end_elev - 30.0,
+            f64::from(seg.departure_field_elev_m),
+        ),
+    )?;
+    let heli_db = aircraft::heli_correction_db(seg.profile_idx, seg.is_departure, seg.heli_descent);
+    let kernel = aircraft::segment_energy_kernel_with_screening::<true, FLOOR>(
+        ax,
+        ay,
+        sdx,
+        sdy,
+        sdz,
+        start_alt_m,
+        inv_lsq,
+        slen,
         ctx.rx_elev,
+        ctx.npd_luts,
+        class_idx,
+        seg.is_departure,
+        dv,
+        inst,
+        power_row,
+        power_w,
+        heli_db,
+        di_a,
+        di_b,
+        di_c,
+        false,
+        reach_sq_class[is_departure as usize],
         start_elev - 30.0,
         end_elev - 30.0,
-        ctx.npd_luts,
-        ctx.horizon,
+        Some(ctx.horizon),
         ctx.buildings,
     )?;
     // The provenance weight is folded into every energy here so each
@@ -208,26 +255,13 @@ pub(super) fn evaluate_row<const FLOOR: bool>(
         seg_len_m: kernel.seg_len_m,
         t: kernel.t,
     };
-    let sdz = seg.end_alt_m as f64 - seg.start_alt_m as f64;
     let (disp_dist, disp_alt) = aircraft::clamped_display_cpa(&cpa, sdz);
     // log2 × LOG10_2 ≡ log10 at f64; matches the kernel's NPD-lookup idiom.
     let log_d = (disp_dist * aircraft::FT_PER_M).max(100.0).log2() * std::f64::consts::LOG10_2;
-    let thrust = aircraft::thrust_input_for_segment(
-        &seg,
-        seg.start_alt_m as f64,
-        seg.end_alt_m as f64,
-        start_elev - 30.0,
-        end_elev - 30.0,
-        f64::from(seg.departure_field_elev_m),
-    );
-    // The kernel admitted the same segment above, so this bracket cannot
-    // reject; the `?` only carries its `Option` type.
-    let (power_row, power_w) =
-        aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust)?;
     let lmax = ctx
         .npd_luts
         .lookup_lmax(class_idx, seg.is_departure, power_row, power_w, log_d)
-        + aircraft::heli_correction_db(seg.profile_idx, seg.is_departure, seg.heli_descent);
+        + heli_db;
     Some(RowKernel {
         period: (seg.period.min(2)) as usize,
         energy: energy_for_sel(kernel.sel),
