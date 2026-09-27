@@ -75,8 +75,10 @@ pub struct AirportLineGrid<'a> {
     cell_deg: f64,
     nx: usize,
     ny: usize,
-    /// Dateline clusters unwrap into a +360-shifted frame; legs shift the same way.
-    shifted: bool,
+    /// Longitude anchor of the grid frame: every line box and leg box
+    /// unwraps into this frame, so neighbours agree across ±180° whether
+    /// or not the lines themselves straddle the seam.
+    reference: f64,
     buffer: f32,
 }
 
@@ -121,7 +123,7 @@ impl<'a> AirportLineGrid<'a> {
             cell_deg: BASE_CELL_DEG,
             nx: 0,
             ny: 0,
-            shifted: false,
+            reference: 0.0,
             buffer,
         };
         grid.build(buffer);
@@ -143,20 +145,19 @@ impl<'a> AirportLineGrid<'a> {
     }
 
     /// Short-arc longitude range of one segment in the grid frame. Both ends
-    /// unwrap together first (a dateline leg's raw min/max would invert),
-    /// then shift together so the box never inverts.
+    /// unwrap together first (a raw min/max would invert across the seam),
+    /// then the whole range translates into the reference frame, so the box
+    /// never inverts and lines and legs always share one frame.
     fn shift_range(&self, lon1: f64, lon2: f64) -> (f64, f64) {
         let unwrapped = lon1 + wrapped_longitude_delta(lon1, lon2);
-        let (mut lo, mut hi) = if unwrapped < lon1 {
+        let (lo, hi) = if unwrapped < lon1 {
             (unwrapped, lon1)
         } else {
             (lon1, unwrapped)
         };
-        if self.shifted && (lo + hi) * 0.5 < 0.0 {
-            lo += 360.0;
-            hi += 360.0;
-        }
-        (lo, hi)
+        let len = hi - lo;
+        let lo = self.reference + wrapped_longitude_delta(self.reference, lo);
+        (lo, lo + len)
     }
 
     fn is_global(&self, index: usize) -> bool {
@@ -165,15 +166,16 @@ impl<'a> AirportLineGrid<'a> {
 
     fn build(&mut self, buffer: f32) {
         let reach = f64::from(buffer) + BBOX_SLACK_M;
-        // Unwrap dateline clusters into one frame: a raw span over 180° means
-        // the lines straddle ±180°, not that they span the planet.
-        let mut lon_min = f64::INFINITY;
-        let mut lon_max = f64::NEG_INFINITY;
-        for line in self.lines.iter() {
-            lon_min = lon_min.min(f64::from(line.start_lon).min(f64::from(line.end_lon)));
-            lon_max = lon_max.max(f64::from(line.start_lon).max(f64::from(line.end_lon)));
-        }
-        self.shifted = lon_max - lon_min > 180.0;
+        // One reference frame for lines and legs: the first line's longitude
+        // anchors it, and every range unwraps short-arc into it — a cluster
+        // hugging either side of ±180° frames correctly without detecting
+        // the straddle, and a truly planetary extent still trips the span
+        // fallback below.
+        self.reference = self
+            .lines
+            .first()
+            .map(|line| f64::from(line.start_lon))
+            .unwrap_or(0.0);
         let mut valid = 0usize;
         let mut ext_min_lat = f64::INFINITY;
         let mut ext_max_lat = f64::NEG_INFINITY;
