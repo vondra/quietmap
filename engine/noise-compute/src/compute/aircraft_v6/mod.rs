@@ -86,7 +86,9 @@ pub fn compute_aircraft_v6(
         )
     };
     let t_airborne_scatter = t_start.elapsed();
-    let mut cruise_flight_stats = HashMap::new();
+    // Pre-sized: every consumer sorts (key_sorted / explicit sorts), so capacity
+    // never leaks into output order; it only skips rehashing on ~10^5 inserts.
+    let mut cruise_flight_stats = HashMap::with_capacity(cruise_rows.len() / 4 + 1);
     // Cruise gets its own FlightAccum table — the cruise synth fids
     // (`flight_id::pack_synth(idx)` with idx = row index) share the
     // SYNTHETIC_BIT tagging used by airborne TIS-B / anonymous flights
@@ -98,8 +100,10 @@ pub fn compute_aircraft_v6(
     // independent. Cruise contributions to airborne periods come from
     // accumulating their `period_energy` into `airborne_energy`; cruise
     // band counters come from `cruise_flight_stats` (real fid dedup).
-    let mut cruise_flights: HashMap<u64, FlightAccum> = HashMap::new();
-    let mut top_flight_candidates: HashMap<u64, TopFlightCandidate> = HashMap::new();
+    let mut cruise_flights: HashMap<u64, FlightAccum> =
+        HashMap::with_capacity(cruise_rows.len());
+    let mut top_flight_candidates: HashMap<u64, TopFlightCandidate> =
+        HashMap::with_capacity(cruise_rows.len() / 4 + 1);
     let cruise_stats = cruise::scatter(
         receiver,
         cruise_rows,
@@ -133,10 +137,12 @@ pub fn compute_aircraft_v6(
     if timing_on {
         let t_total = t_start.elapsed();
         eprintln!(
-            "ac-v6 total={:.0}ms airb_scatter={:.0}ms cr_scatter={:.0}ms airb_detail={:.0}ms (n_airb={} eval={} rcvd={} n_cr={} cr_eval={})",
+            "ac-v6 total={:.0}ms airb_scatter={:.0}ms cr_scatter={:.0}ms cr_pass1={:.0}ms cr_pass2={:.0}ms airb_detail={:.0}ms (n_airb={} eval={} rcvd={} n_cr={} cr_eval={})",
             ms(t_total),
             ms(t_airborne_scatter),
             ms(t_cruise_scatter),
+            cruise_stats.pass1_ns as f64 / 1e6,
+            cruise_stats.pass2_ns as f64 / 1e6,
             ms(t_airborne_detail),
             airborne_row_count(airborne_rows),
             air_stats.n_eval,

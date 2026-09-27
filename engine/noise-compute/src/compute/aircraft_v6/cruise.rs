@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use rayon::prelude::*;
+
 use crate::compute::aircraft_v6::dates::{date_from_unix, time_from_unix};
 use crate::compute::aircraft_v6::state::{
     BandStats, CruiseFlightStats, FlightAccum, TopFlightCandidate,
@@ -125,10 +127,26 @@ struct CellAccum {
     top_fids: HashMap<u64, CellTopFlight>,
 }
 
-/// Evaluated-vs-considered counts of one [`scatter`] call.
+/// Evaluated-vs-considered counts of one [`scatter`] call, plus the parallel
+/// kernel / serial fold split (the `POPUP_TIMING` cruise drill-down).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CruiseScatterStats {
     pub n_eval: u64,
+    pub pass1_ns: u64,
+    pub pass2_ns: u64,
+}
+
+/// One bucket's Doc 29 outcome: everything pass 1's parallel kernel computes
+/// and pass 2's serial fold consumes. Pure per-row data — no cross-row state.
+struct KernelOut {
+    idx: usize,
+    seg: crate::types::AircraftSegment,
+    density: f64,
+    sel: f64,
+    disp_dist: f64,
+    disp_alt: f64,
+    lmax: f64,
+    class_idx: usize,
 }
 
 pub fn scatter(
@@ -145,69 +163,127 @@ pub fn scatter(
     let rx_elev = receiver.altitude_m();
     let npd_luts = aircraft::NpdLuts::shared();
     // Trace aggregates keyed by the (i32, i32) z30 cell pair of the
-    // bucket centroid via the grid crate.
-    let mut cell_accums: HashMap<(i32, i32), CellAccum> = HashMap::new();
-    let mut n_eval: u64 = 0;
+    // bucket centroid via the grid crate. Pre-sized (consumers sort by key).
+    let mut cell_accums: HashMap<(i32, i32), CellAccum> = HashMap::with_capacity(2048);
 
     // The cell-local segment extends at most half a cell diagonal from its centre.
     let m_per_lat = crate::constants::M_PER_DEG_LAT;
     let m_per_lon = crate::constants::m_per_deg_lon(receiver.lat.to_radians());
 
-    for (idx, row) in rows.iter().enumerate() {
-        // Explicit centroid straight off the row — no cell-id lookup.
+    // ── Pass 1: the Doc 29 kernel per row (parallel, pure) ──
+    //
+    // Every statement below is a pure function of its row (DEM reads through
+    // the shared tile cache return the same bytes on every thread), so running
+    // rows in parallel and folding the admitted ones in row order afterwards
+    // reproduces the old serial loop bit-for-bit (rayon preserves order).
+    let t_pass1 = std::time::Instant::now();
+    let admitted: Vec<KernelOut> = rows
+        .par_iter()
+        .enumerate()
+        .filter_map(|(idx, row)| {
+            // Explicit centroid straight off the row — no cell-id lookup.
+            let (lat, lon) = (row.lat, row.lon);
+            if !lat.is_finite() || !lon.is_finite() {
+                return None;
+            }
+            let half_len_m =
+                aircraft::CRUISE_CELL_DIAGONAL_EQUATOR_M * lat.to_radians().cos() * 0.5;
+
+            // Wrap longitude before the cheap centre-distance gate at the dateline.
+            let dlat_m = (lat - receiver.lat) * m_per_lat;
+            let mut dlon = lon - receiver.lon;
+            if dlon > 180.0 {
+                dlon -= 360.0;
+            } else if dlon < -180.0 {
+                dlon += 360.0;
+            }
+            let dlon_m = dlon * m_per_lon;
+            let dist2_m2 = dlat_m * dlat_m + dlon_m * dlon_m;
+            let cap_m = aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M + half_len_m;
+            if dist2_m2 > cap_m * cap_m {
+                return None;
+            }
+
+            let (seg, density) = cruise_segment(row, idx, weights)?;
+            // Terrain first cost five DEM probes — each through the tile
+            // cache's per-tile lock — for buckets the kernel then dropped on
+            // distance alone. The kernel's own first gate is purely geometric,
+            // so run it here, before the rasters are touched. Measured at
+            // Dobříš: 7 611 of 9 622 buckets that clear the centroid
+            // prefilter die here. Bit-identical arithmetic, so no bucket that
+            // used to contribute stops contributing (see `within_kernel_reach`).
+            if !aircraft::within_kernel_reach(&seg, receiver.lat, receiver.lon, rx_elev) {
+                return None;
+            }
+            let terrain = aircraft::SegmentTerrain::sample(&seg, rasters);
+            if !aircraft::is_valid_airborne_with_terrain(&seg, &terrain) {
+                return None;
+            }
+            // C2 horizon screening: cruise never screens — `with_terrain`
+            // hard-wires `horizon = None` (structural exemption: cruise AGL
+            // floor 7 200 m + 16 km slant cap ⇒ β ≥ 26.6° > any horizon).
+            let (sel, cpa) = aircraft::segment_sel_with_terrain(
+                &seg,
+                receiver.lat,
+                receiver.lon,
+                rx_elev,
+                &terrain,
+                npd_luts,
+            )?;
+            let class_idx = aircraft::noise_class_of(seg.profile_idx) as usize;
+            // Clamp the DISPLAY CPA onto the observed segment so an off-segment
+            // infinite-line foot can't report a phantom near pass. Cruise synthetic
+            // segments are level (start == end == rep_alt_m), so the altitude clamp
+            // is a no-op (sdz = 0) today — but both distance and altitude go through
+            // the helper to stay symmetric with airborne and stay correct if a
+            // gradient is ever modelled. `sel` / `energy` keep the unclamped `cpa`
+            // (ΔF needs the infinite-line `q_m`).
+            let (disp_dist, disp_alt) = aircraft::clamped_display_cpa(&cpa, 0.0);
+            let log_d = (disp_dist * aircraft::FT_PER_M).max(100.0).log10();
+            let thrust = aircraft::thrust_input_for_segment(
+                &seg,
+                seg.start_alt_m as f64,
+                seg.end_alt_m as f64,
+                terrain.start_elev - 30.0,
+                terrain.end_elev - 30.0,
+                f64::from(seg.departure_field_elev_m),
+            );
+            // The kernel admitted the same segment above, so this bracket cannot
+            // reject; the `else` only carries its `Option` type.
+            let (power_row, power_w) =
+                aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust)?;
+            // Cruise rep-segments are level, so their stored descent state is
+            // always false; departures take the climb correction regardless.
+            let lmax = npd_luts.lookup_lmax(class_idx, true, power_row, power_w, log_d)
+                + aircraft::heli_correction_db(seg.profile_idx, true, seg.heli_descent);
+            Some(KernelOut {
+                idx,
+                seg,
+                density,
+                sel,
+                disp_dist,
+                disp_alt,
+                lmax,
+                class_idx,
+            })
+        })
+        .collect();
+    let pass1_ns = t_pass1.elapsed().as_nanos() as u64;
+    let n_eval = admitted.len() as u64;
+
+    // ── Pass 2: accumulation in row order (sequential) ──
+    //
+    // The original fold, statement for statement: HashMap grouping, f64 energy
+    // sums, first-row-wins cell fields, candidate ranking. Identical statements
+    // over identical inputs in identical order ⇒ identical bits.
+    let t_pass2 = std::time::Instant::now();
+    for out in &admitted {
+        let row = &rows[out.idx];
+        let seg = &out.seg;
+        let (density, sel, disp_dist, disp_alt, lmax, class_idx) =
+            (out.density, out.sel, out.disp_dist, out.disp_alt, out.lmax, out.class_idx);
         let (lat, lon) = (row.lat, row.lon);
-        if !lat.is_finite() || !lon.is_finite() {
-            continue;
-        }
-        let half_len_m = aircraft::CRUISE_CELL_DIAGONAL_EQUATOR_M * lat.to_radians().cos() * 0.5;
-
-        // Wrap longitude before the cheap centre-distance gate at the dateline.
-        let dlat_m = (lat - receiver.lat) * m_per_lat;
-        let mut dlon = lon - receiver.lon;
-        if dlon > 180.0 {
-            dlon -= 360.0;
-        } else if dlon < -180.0 {
-            dlon += 360.0;
-        }
-        let dlon_m = dlon * m_per_lon;
-        let dist2_m2 = dlat_m * dlat_m + dlon_m * dlon_m;
-        let cap_m = aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M + half_len_m;
-        if dist2_m2 > cap_m * cap_m {
-            continue;
-        }
-
-        let Some((seg, density)) = cruise_segment(row, idx, weights) else {
-            continue;
-        };
         let synth_fid = seg.flight_id;
-        // Terrain first cost five DEM probes — each through the tile
-        // cache's per-tile lock — for buckets the kernel then dropped on
-        // distance alone. The kernel's own first gate is purely geometric,
-        // so run it here, before the rasters are touched. Measured at
-        // Dobříš: 7 611 of 9 622 buckets that clear the centroid
-        // prefilter die here. Bit-identical arithmetic, so no bucket that
-        // used to contribute stops contributing (see `within_kernel_reach`).
-        if !aircraft::within_kernel_reach(&seg, receiver.lat, receiver.lon, rx_elev) {
-            continue;
-        }
-        let terrain = aircraft::SegmentTerrain::sample(&seg, rasters);
-        if !aircraft::is_valid_airborne_with_terrain(&seg, &terrain) {
-            continue;
-        }
-        // C2 horizon screening: cruise never screens — `with_terrain`
-        // hard-wires `horizon = None` (structural exemption: cruise AGL
-        // floor 7 200 m + 16 km slant cap ⇒ β ≥ 26.6° > any horizon).
-        let Some((sel, cpa)) = aircraft::segment_sel_with_terrain(
-            &seg,
-            receiver.lat,
-            receiver.lon,
-            rx_elev,
-            &terrain,
-            npd_luts,
-        ) else {
-            continue;
-        };
-        n_eval += 1;
         let energy = fast_exp_f64(sel * std::f64::consts::LN_10 * 0.1) * density;
         let period = (row.period.min(2)) as usize;
         let acc = flights.entry(synth_fid).or_insert_with(|| {
@@ -223,35 +299,6 @@ pub fn scatter(
         acc.no_screening_period_energy[period] += energy;
         acc.flight_weight = acc.flight_weight.max(density);
 
-        let class_idx = aircraft::noise_class_of(seg.profile_idx) as usize;
-        // Clamp the DISPLAY CPA onto the observed segment so an off-segment
-        // infinite-line foot can't report a phantom near pass. Cruise synthetic
-        // segments are level (start == end == rep_alt_m), so the altitude clamp
-        // is a no-op (sdz = 0) today — but both distance and altitude go through
-        // the helper to stay symmetric with airborne and stay correct if a
-        // gradient is ever modelled. `sel` / `energy` keep the unclamped `cpa`
-        // (ΔF needs the infinite-line `q_m`).
-        let (disp_dist, disp_alt) = aircraft::clamped_display_cpa(&cpa, 0.0);
-        let log_d = (disp_dist * aircraft::FT_PER_M).max(100.0).log10();
-        let thrust = aircraft::thrust_input_for_segment(
-            &seg,
-            seg.start_alt_m as f64,
-            seg.end_alt_m as f64,
-            terrain.start_elev - 30.0,
-            terrain.end_elev - 30.0,
-            f64::from(seg.departure_field_elev_m),
-        );
-        // The kernel admitted the same segment above, so this bracket cannot
-        // reject; the `else` only carries its `Option` type.
-        let Some((power_row, power_w)) =
-            aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust)
-        else {
-            continue;
-        };
-        // Cruise rep-segments are level, so their stored descent state is
-        // always false; departures take the climb correction regardless.
-        let lmax = npd_luts.lookup_lmax(class_idx, true, power_row, power_w, log_d)
-            + aircraft::heli_correction_db(seg.profile_idx, true, seg.heli_descent);
         if lmax > acc.peak_lmax {
             acc.peak_lmax = lmax;
             acc.peak_sel = sel;
@@ -407,7 +454,11 @@ pub fn scatter(
                 ));
         }
     }
-    CruiseScatterStats { n_eval }
+    CruiseScatterStats {
+        n_eval,
+        pass1_ns,
+        pass2_ns: t_pass2.elapsed().as_nanos() as u64,
+    }
 }
 
 const TOP_FLIGHTS_PER_CELL: usize = 5;

@@ -98,7 +98,9 @@ fn main() -> anyhow::Result<()> {
         let weights = file_window.provenance_weights();
         window = Some(file_window);
         for batch in reader {
-            let decoded = CruiseRowAccum::new(&[batch?]).map_err(anyhow::Error::msg)?;
+            let batch = batch?;
+            let decoded = CruiseRowAccum::new(std::slice::from_ref(&batch))
+                .map_err(anyhow::Error::msg)?;
             let slices = decoded.views();
             let views = slices.as_row_views();
             for (index, row) in views.iter().enumerate() {
