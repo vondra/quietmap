@@ -42,6 +42,18 @@ pub fn m_per_deg_lon(lat_rad: f64) -> f64 {
     M_PER_DEG_LON_EQ * lat_rad.cos().max(0.01)
 }
 
+/// Propagation azimuth from `from` to `to` in the local flat-earth frame:
+/// `atan2(north, east)` radians, the longitude scale at the origin latitude.
+/// Sound travels source→receiver, so the ray transfer and the relevance
+/// bound both call this with (source, receiver): one convention behind
+/// evaluation and pruning, which cannot disagree again.
+#[inline]
+pub fn propagation_azimuth_rad(from_lat: f64, from_lon: f64, to_lat: f64, to_lon: f64) -> f64 {
+    let east = wrapped_longitude_delta(from_lon, to_lon) * m_per_deg_lon(from_lat.to_radians());
+    let north = (to_lat - from_lat) * M_PER_DEG_LAT;
+    north.atan2(east)
+}
+
 /// Flat-earth distance in meters (accurate <0.3% at <50km).
 pub fn flat_dist(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let mid_lat = ((lat1 + lat2) / 2.0).to_radians();

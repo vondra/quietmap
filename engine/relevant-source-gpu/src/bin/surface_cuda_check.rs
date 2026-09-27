@@ -1,8 +1,9 @@
 //! Bounded CUDA numerical check on synthetic scenes: every surface pair kernel against the CPU
-//! physics it mirrors (noise-compute ray_transfer and line_piece), over flat ground of four
-//! ground factors and a relief scene with buildings and walls, for a road, a rail row at both
-//! source heights above a raised railhead (both with the track dipole) and a point. Checks
-//! default weather and distinct period/direction probabilities and absorption moments; never paints tiles.
+//! physics it mirrors (noise-compute ray_transfer and line_piece, the ground-ops carve-out
+//! against its closed form), over flat ground of four ground factors and a relief scene with
+//! buildings and walls, for a road, a rail row at both source heights above a raised railhead
+//! (both with the track dipole), a point, and a ground-support microsegment. Checks default
+//! weather and distinct period/direction probabilities and absorption moments; never paints tiles.
 use anyhow::{ensure, Result};
 use noise_compute::{
     compute::line_piece::{evaluate_line_piece, LinePiece, LinePieceScratch},
@@ -19,7 +20,10 @@ use raster_reader::{FusedGrid, FusedPixel};
 use relevant_source_gpu::{
     cuda_bridge::{DeviceBuffer, DeviceScenePointers, DeviceWeather, RelevantSourceCuda},
     obstacle_transfer::{DeviceRasterGeometry, FlattenedObstacleGeometry},
-    source_frame::{DeviceLineSource, RegionMetricFrame, SOURCE_FLAG_POINT, SOURCE_FLAG_TRACK_DIPOLE},
+    source_frame::{
+        DeviceLineSource, RegionMetricFrame, SOURCE_FLAG_GROUND_OPS_GSE, SOURCE_FLAG_POINT,
+        SOURCE_FLAG_TRACK_DIPOLE,
+    },
 };
 
 const ORIGIN: (f64, f64) = (50.0, 14.0);
@@ -268,22 +272,126 @@ fn relief_scene() -> Scene {
     }
 }
 
-fn main() -> Result<()> {
-    let cuda = RelevantSourceCuda::initialize()?;
-    let default_weather = Meteorology::defaults();
-    let mut varied_weather = default_weather.clone();
-    varied_weather.favourable_probability = std::array::from_fn(|period|
+/// Distinct per-period, per-sector weather with absorption variance: the climate that
+/// separates a period-aware painter from a day-climate one.
+fn varied_weather(default_weather: &Meteorology) -> Meteorology {
+    let mut varied = default_weather.clone();
+    varied.favourable_probability = std::array::from_fn(|period|
         std::array::from_fn(|sector| ((sector + 3 * period) % 17) as f64 / 16.0));
-    varied_weather.absorption = std::array::from_fn(|period| std::array::from_fn(|band| {
+    varied.absorption = std::array::from_fn(|period| std::array::from_fn(|band| {
         let mean = default_weather.absorption[period][band].mean_db_per_km * (0.75 + 0.25 * period as f64);
         noise_compute::propagation::air_absorption::AbsorptionClimate {
             mean_db_per_km: mean,
             variance_db2_per_km2: 0.25 * mean * mean,
         }
     }));
-    varied_weather.bound_probability_max = [0.3, 0.6, 0.9];
-    varied_weather.bound_alpha_min_db_per_km =
+    varied.bound_probability_max = [0.3, 0.6, 0.9];
+    varied.bound_alpha_min_db_per_km =
         default_weather.bound_alpha_min_db_per_km.map(|alpha| 0.5 * alpha);
+    varied
+}
+
+/// The airport ground-ops pair kernel against the popup carve-out it mirrors, on sealed
+/// flat ground with no obstacles and no forest (terrain, screening and foliage are zero,
+/// so the CPU lane is the closed form below): a ground-support microsegment diverges as
+/// 25/d, takes the band-mean ground, and breathes each period's own absorption over
+/// (d − 25 m). Under the varied weather a day-climate painter misses the night by tens
+/// of dB at 8 kHz; the flat gate is 0.05 dB.
+fn ground_ops_pair_check(cuda: &RelevantSourceCuda) -> Result<()> {
+    use noise_compute::emission::aircraft::GROUND_OPS_REF_OFFSET_M;
+    use noise_compute::propagation::iso9613::aircraft_ground_atten_db;
+
+    let scene = flat_scene(100);
+    let (start, end) = ([-50.0_f32, -500.0_f32], [50.0_f32, -500.0_f32]);
+    let device = DeviceLineSource {
+        start_x_m: start[0],
+        start_y_m: start[1],
+        end_x_m: end[0],
+        end_y_m: end[1],
+        extent_m: 100.0,
+        max_distance_m: 5000.0,
+        source_height_m: 1.0,
+        flags: SOURCE_FLAG_GROUND_OPS_GSE,
+        source_ground_factor: 0.0,
+        platform_half_width_m: 0.0,
+        emission_linear: std::array::from_fn(|i| 10f32.powf(EMISSION_DB[i % 8] as f32 / 10.0)),
+    };
+    // South of the forest stand (y < 150), 100–1500 m out.
+    let receivers: Vec<[f32; 2]> = vec![
+        [0.0, -400.0],
+        [0.0, -300.0],
+        [0.0, 0.0],
+        [300.0, -500.0],
+        [-400.0, -350.0],
+        [800.0, -200.0],
+        [-900.0, -600.0],
+        [200.0, 100.0],
+        [-200.0, 100.0],
+        [1000.0, -500.0],
+    ];
+    let default_weather = Meteorology::defaults();
+    let mut worst = 0.0_f64;
+    for (weather_name, weather) in
+        [("default", default_weather.clone()), ("period-direction-moments", varied_weather(&default_weather))]
+    {
+        let uploaded = Uploaded::new(&scene, std::slice::from_ref(&device))?;
+        let pointers = uploaded.pointers();
+        let count = receivers.len();
+        let (gpu, _) = cuda.evaluate_corners(
+            &pointers,
+            &DeviceBuffer::from_slice(&vec![1.0; count])?,
+            &DeviceBuffer::from_slice(&(0..=count as u32).collect::<Vec<_>>())?,
+            &DeviceBuffer::from_slice(&vec![0u32; count])?,
+            &DeviceBuffer::from_slice(&receivers.iter().map(|r| r[0]).collect::<Vec<_>>())?,
+            &DeviceBuffer::from_slice(&receivers.iter().map(|r| r[1]).collect::<Vec<_>>())?,
+            &DeviceBuffer::from_slice(&vec![0.0; count])?,
+            &DeviceBuffer::from_slice(&vec![DeviceWeather::from_meteorology(&weather); count])?,
+        )?;
+        let (mut largest, mut compared) = (0.0_f64, 0);
+        for (receiver, gpu_power) in receivers.iter().zip(&gpu) {
+            let (sx, sy) = (f64::from(end[0] - start[0]), f64::from(end[1] - start[1]));
+            let t = ((f64::from(receiver[0] - start[0]) * sx + f64::from(receiver[1] - start[1]) * sy)
+                / (sx * sx + sy * sy))
+                .clamp(0.0, 1.0);
+            let d = (f64::from(receiver[0]) - (f64::from(start[0]) + t * sx))
+                .hypot(f64::from(receiver[1]) - (f64::from(start[1]) + t * sy))
+                .max(1.0);
+            let past_anchor_m = (d - GROUND_OPS_REF_OFFSET_M).max(0.0);
+            for (period, gpu_value) in gpu_power.iter().enumerate() {
+                let cpu: f64 = (0..8)
+                    .map(|band| {
+                        let emission = 10f64.powf((EMISSION_DB[band] + A_WEIGHTING[band]) / 10.0);
+                        let level_db = 10.0 * (GROUND_OPS_REF_OFFSET_M / d).log10()
+                            - aircraft_ground_atten_db(band, 0.0)
+                            - weather.absorption[period][band].attenuation_db(past_anchor_m);
+                        emission * 10f64.powf(level_db / 10.0)
+                    })
+                    .sum();
+                let gpu = f64::from(*gpu_value);
+                if cpu < 1e-3 && gpu < 1e-3 {
+                    continue;
+                }
+                let error_db = 10.0 * (gpu / cpu).log10();
+                ensure!(
+                    error_db.is_finite(),
+                    "ground ops {weather_name} at {receiver:?} period {period}: cpu {cpu} gpu {gpu}"
+                );
+                compared += 1;
+                largest = largest.max(error_db.abs());
+            }
+        }
+        println!("ground ops GSE ({weather_name}): {compared} values, max |error| {largest:.4} dB");
+        ensure!(largest <= 0.05, "ground ops GSE ({weather_name}) differs by {largest:.3} dB");
+        worst = worst.max(largest);
+    }
+    println!("ground ops within the flat limit; worst {worst:.4} dB");
+    Ok(())
+}
+
+fn main() -> Result<()> {
+    let cuda = RelevantSourceCuda::initialize()?;
+    let default_weather = Meteorology::defaults();
+    let varied = varied_weather(&default_weather);
     // Formation is the raster datum; this known offset puts A/B at 0.5/4.0 m above railhead.
     let railhead_offset_m = 0.7;
     let sources = [
@@ -321,7 +429,7 @@ fn main() -> Result<()> {
     receivers.extend([5.0, 5.001, 5.01, 5.1, 6.0, 10.0, 15.0].map(|y| [-180.0, y]));
     receivers.extend([[-420.0, -45.0], [-420.0, -44.0]]);
     let mut worst = 0.0_f64;
-    for (weather_name, weather) in [("default", default_weather), ("period-direction-moments", varied_weather)] {
+    for (weather_name, weather) in [("default", default_weather), ("period-direction-moments", varied)] {
         println!("weather: {weather_name}");
         for (scene, limit_db) in [
             (flat_scene(100), 0.05),
@@ -378,5 +486,6 @@ fn main() -> Result<()> {
         }
     }
     println!("all scenes within their limits; worst {worst:.4} dB");
+    ground_ops_pair_check(&cuda)?;
     Ok(())
 }

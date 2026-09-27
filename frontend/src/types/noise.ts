@@ -530,7 +530,7 @@ export interface PathProfileTrace {
 
 interface BaselineTrace {
   geometric_db: number
-  atmospheric_bands: number[]
+  atmospheric_bands: PerPeriod<number[]>
   ground_factor_g: number
   source_height_m: number
   finite_line_corr_db: number

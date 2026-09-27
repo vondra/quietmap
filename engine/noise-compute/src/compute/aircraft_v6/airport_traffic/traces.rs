@@ -261,7 +261,7 @@ pub(super) fn emit_segment_traces(
         // ≪ 5 % of microsegment energy, so the aircraft decomposition dominates.
         let d_perp_disp = pts_trace.d_perp_m.max(pixel_floor_m);
         let geometric_db = 10.0 * (d_perp_disp / std::f64::consts::PI).log10();
-        let mut atmospheric_bands = zero_bands;
+        let mut atmospheric_bands = crate::traces::atmospheric_bands(0.0, weather);
         let mut ground_bands = zero_bands;
         let mut terrain_bands = zero_bands;
         let mut screening_bands = zero_bands;
@@ -275,8 +275,8 @@ pub(super) fn emit_segment_traces(
             // tooltips render with `signed=true` so the +/- direction
             // matches between road and ground rows.
             let d_slant_m = (dist_m - GROUND_OPS_REF_OFFSET_M).max(0.0);
+            atmospheric_bands = crate::traces::atmospheric_bands(d_slant_m, weather);
             for i in 0..NUM_BANDS {
-                atmospheric_bands[i] = weather.absorption[0][i].attenuation_db(d_slant_m);
                 ground_bands[i] =
                     crate::propagation::iso9613::aircraft_ground_atten_db(i, p.ground_g);
                 terrain_bands[i] = p.terrain_atten_db[i];

@@ -239,17 +239,18 @@ __device__ __forceinline__ bool evaluate_source_receiver_energy(
             geometry.source_altitude_m, receiver_altitude_m, true, 0.0f, profile,
             terrain_db, screening_db);
         for (int band = 0; band < QUIETMAP_BAND_COUNT; ++band) {
-            const float level = quietmap_energy_from_db(
-                geometry.base_level_db
+            // Geometry, ground-or-barrier and foliage are period-independent; the air
+            // absorption is the row period's climate, like the popup (airport_traffic).
+            const float base_level_db = geometry.base_level_db
                 - ground_or_barrier_attenuation_db(ground_db[band], terrain_db[band], screening_db[band])
                 // Homogeneous depth: the carve-out has no states to mix.
-                - foliage_band_db(foliage_h_m, band)
-                - atmospheric_attenuation_db(
-                    weather.absorption_mean_db_per_km[0][band],
-                    weather.absorption_variance_db2_per_km2[0][band],
-                    geometry.slant_distance_m));
+                - foliage_band_db(foliage_h_m, band);
             for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
-                transfer[period][band] = level;
+                transfer[period][band] = quietmap_energy_from_db(
+                    base_level_db - atmospheric_attenuation_db(
+                        weather.absorption_mean_db_per_km[period][band],
+                        weather.absorption_variance_db2_per_km2[period][band],
+                        geometry.slant_distance_m));
             }
         }
         divergence_linear = 1.0f;

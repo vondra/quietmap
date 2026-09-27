@@ -954,3 +954,94 @@ fn ground_divergence_floor_tracks_the_actual_surface_pixel_spacing() {
         (popup_pixel_floor_m(first[0]) * 2.0 * BLOCK_PIXEL_SIDE as f64 - block_metres).abs() < 1e-8
     );
 }
+
+/// A night ground-ops row breathes the night climate: its received night level
+/// moves by exactly the night absorption over (d − 25 m), and the segment chart
+/// draws each period's own curve. The painter evaluates the same period climate
+/// (surface-cuda-check covers the pair kernel).
+#[test]
+fn ground_ops_level_and_chart_follow_the_row_period_climate() {
+    use crate::propagation::air_absorption::AbsorptionClimate;
+    use crate::propagation::meteorology::Meteorology;
+
+    struct ClimateGround {
+        weather: Meteorology,
+    }
+    impl RasterSampler for ClimateGround {
+        fn elevation(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+        fn ground_g(&self, _: f64, _: f64) -> f64 {
+            1.0
+        }
+        fn building_enclosure(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+        fn weather(&self, _lat: f64, _lon: f64) -> Meteorology {
+            self.weather.clone()
+        }
+    }
+
+    fn climate(day_db_per_km: f64, night_db_per_km: f64) -> Meteorology {
+        let mut weather = Meteorology::defaults();
+        weather.absorption = [
+            [AbsorptionClimate::steady(day_db_per_km); NUM_BANDS],
+            [AbsorptionClimate::steady(day_db_per_km); NUM_BANDS],
+            [AbsorptionClimate::steady(night_db_per_km); NUM_BANDS],
+        ];
+        weather
+    }
+
+    let bands: [f32; 8] = [1e6, 2e6, 3e6, 4e6, 5e6, 6e6, 7e6, 8e6];
+    let mut row = make_row(&bands);
+    row.period = 2;
+    let receiver = Receiver {
+        lat: 50.105,
+        lon: 14.255,
+        elevation_m: 0.0,
+        height_m: 4.0,
+    };
+    let run_case = |weather: &Meteorology, traces: Option<&mut crate::types::TraceCollector>| {
+        run(
+            &receiver,
+            std::slice::from_ref(&row),
+            &window(2, 0),
+            &ClimateGround {
+                weather: weather.clone(),
+            },
+            &crate::propagation::obstacle_index::ObstacleSet::empty(),
+            &HashMap::new(),
+            None,
+            traces,
+        )
+    };
+    // The review's example: day 1, night 3 dB/km on every band.
+    let distinct = climate(1.0, 3.0);
+    let mut traces = crate::types::TraceCollector::default();
+    let out_distinct = run_case(&distinct, Some(&mut traces));
+    let out_uniform = run_case(&climate(1.0, 1.0), None);
+    assert_eq!(out_distinct.len(), 1);
+    assert_eq!(out_uniform.len(), 1);
+    assert_eq!(traces.segments.len(), 1);
+    // Every band shifts by the same 2 dB/km over (d − 25 m), so the A-weighted
+    // night Leq shifts by exactly that; the day climate never enters it.
+    let trace = &traces.segments[0];
+    let past_anchor_m = (trace.dist_m - GROUND_OPS_REF_OFFSET_M).max(0.0);
+    let shift_db = 2.0 * past_anchor_m / 1000.0;
+    let (night_distinct, night_uniform) = (out_distinct[0].periods.ln_db, out_uniform[0].periods.ln_db);
+    assert!(
+        (night_uniform - night_distinct - shift_db).abs() < 1e-9,
+        "{night_distinct} {night_uniform} {shift_db}"
+    );
+    // The chart draws the row period's own curve in every period slot.
+    let crate::types::PropagationBreakdown::Cnossos(breakdown) = &trace.propagation else {
+        panic!("a ground-ops trace is a CNOSSOS breakdown");
+    };
+    for band in 0..NUM_BANDS {
+        let chart = &breakdown.baseline.atmospheric_bands;
+        let expected = |period: usize| distinct.absorption[period][band].attenuation_db(past_anchor_m);
+        assert!((chart.day[band] - expected(0)).abs() < 1e-12, "band {band}");
+        assert!((chart.evening[band] - expected(1)).abs() < 1e-12, "band {band}");
+        assert!((chart.night[band] - expected(2)).abs() < 1e-12, "band {band}");
+    }
+}

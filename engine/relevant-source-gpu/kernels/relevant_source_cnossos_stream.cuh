@@ -570,6 +570,7 @@ __device__ void cnossos_ray_transfer(
                              s.ground_origin_z, d, attenuation[state]);
     }
     const float slant_m = fmaxf(hypotf(length, receiver_altitude_m - source_altitude_m), 1.0f);
+    // Propagation direction (source→receiver), the grid::geo::propagation_azimuth_rad convention.
     const float azimuth = atan2f(receiver_y_m - source_y_m, receiver_x_m - source_x_m);
     for (int period = 0; period < QUIETMAP_PERIOD_COUNT; ++period) {
         const float p = favourable_probability(weather, period, azimuth);
