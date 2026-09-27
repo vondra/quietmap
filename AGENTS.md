@@ -26,6 +26,8 @@ and its direct callers. In that same area remove or consolidate obsolete
 branches, dormant flags/env knobs, fallbacks, compatibility shims, duplicate
 truths/tests/docs, completed migration bridges, and dead paths.
 Ship the smallest complete design; never speculative scaffolding.
+A defect or new evidence is a design lesson: rewrite the touched feature as you would
+from scratch with that knowledge, instead of adding a special case beside the old path.
 
 - This is active development: activate the selected behavior and delete the old
   path in the same logical wave. Preserve compatibility only for irreplaceable
