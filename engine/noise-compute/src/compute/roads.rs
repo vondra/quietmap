@@ -175,7 +175,7 @@ pub(crate) fn compute_roads(
                 seg.end_lon,
             );
             let in_reach = seg.dist_m <= LINE_REACH_CEILING_M
-                && row_bound.within_reach(&period_emissions, SourceSpread::Line, seg.dist_m);
+                && row_bound.line_piece_within_reach(&period_emissions, seg.length_m, seg.dist_m);
             if timing_on {
                 bound_ns.fetch_add(t_gate.unwrap().elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
             }
