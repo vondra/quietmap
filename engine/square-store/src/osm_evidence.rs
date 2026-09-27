@@ -298,10 +298,13 @@ pub fn is_gas_substation(tags: &BTreeMap<String, String>) -> bool {
 /// joined transformer feed. The MVA is the joined `rating` sum when at least
 /// one contained transformer carries one; else the row's own `rating` (a
 /// station-level nameplate, the only evidence a node substation can carry);
-/// else the class median applies. The class follows the w7 rule: an
-/// autotransformer unit (own tag or contained) makes it auto (2); else
-/// ≥ 220 kV highest voltage makes it main (1); else distribution (3).
-/// Classes are shared by convention with
+/// else the class median applies. An autotransformer unit (own tag or
+/// contained) makes it auto (2, architecture rather than class); else the
+/// retained `substation` tag decides: transmission is main (1),
+/// minor_distribution at distribution voltage (below 60 kV — MV/LV kiosks,
+/// not the rare mistagged 115 kV stations) is minor (4); else ≥ 220 kV
+/// highest voltage makes it main (1); else distribution (3). Classes are
+/// shared by convention with
 /// `noise-compute::emission::industrial::substation_class_mva`, like the
 /// `source_type` ids the extractor writes as raw numbers.
 pub fn substation_power(
@@ -316,8 +319,21 @@ pub fn substation_power(
         .into_iter()
         .chain(feed.max_contained_voltage_kv)
         .fold(0.0f64, f64::max);
+    let tag: Vec<String> = own_tags
+        .get("substation")
+        .map(|value| {
+            value
+                .split(';')
+                .map(|token| token.trim().to_ascii_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
     let class = if auto {
         2
+    } else if tag.iter().any(|token| token == "transmission") {
+        1
+    } else if tag.iter().any(|token| token == "minor_distribution") && kv < 60.0 {
+        4
     } else if kv >= 220.0 {
         1
     } else {
@@ -697,6 +713,44 @@ mod tests {
         assert_eq!((mva, class), (None, 2));
         // Untagged: distribution.
         assert_eq!(substation_power(&tags(&[]), &feed(0.0, 0)), (None, 3));
+    }
+
+    #[test]
+    fn substation_class_comes_from_the_substation_tag() {
+        // 45,534 of 86,804 substation rows over 120 canary reach squares are
+        // minor_distribution kiosks; 45,425 carry no rating, so they took the
+        // 2 MVA distribution median — +7 to +14 dB over plausible kiosk MVA
+        // (the 109 explicitly rated ones run 100 kVA–2 MVA, mode 400 kVA).
+        let feed = |kv: Option<f64>| SubstationFeed {
+            rated_mva_sum: 0.0,
+            rated_count: 0,
+            has_autotransformer: false,
+            max_contained_voltage_kv: kv,
+        };
+        let minor = tags(&[("substation", "minor_distribution")]);
+        assert_eq!(substation_power(&minor, &feed(None)), (None, 4));
+        let minor_mv = tags(&[("substation", "minor_distribution"), ("voltage", "20000;400")]);
+        assert_eq!(substation_power(&minor_mv, &feed(None)), (None, 4));
+        // A 115 kV "minor_distribution" is a mistagged sub-transmission
+        // station (41 in the canary), not a kiosk: voltage rules still apply.
+        let minor_hv = tags(&[("substation", "minor_distribution"), ("voltage", "115000")]);
+        assert_eq!(substation_power(&minor_hv, &feed(None)), (None, 3));
+        // An explicit transmission tag wins over sub-220 kV voltage.
+        let tx = tags(&[("substation", "transmission"), ("voltage", "110000")]);
+        assert_eq!(substation_power(&tx, &feed(None)), (None, 1));
+        // Multi-values: transmission wins; mixed minor stays minor.
+        let mixed = tags(&[("substation", "transmission;distribution")]);
+        assert_eq!(substation_power(&mixed, &feed(None)), (None, 1));
+        let mixed_minor = tags(&[("substation", "yes;minor_distribution")]);
+        assert_eq!(substation_power(&mixed_minor, &feed(None)), (None, 4));
+        // Autotransformer architecture still wins over the tag.
+        assert_eq!(
+            substation_power(
+                &tags(&[("substation", "transmission"), ("transformer", "auto")]),
+                &feed(None)
+            ),
+            (None, 2)
+        );
     }
 
     #[test]

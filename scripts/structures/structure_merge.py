@@ -43,7 +43,9 @@ IOU_MATCH_THRESHOLD = 0.5
 #    map 1/2-3/4+ to 6/6-9/3f+2 m, storeys invert height minus 1 m.
 #    (Two unmerged tips both stamped 6 for different rows, so 6 is skipped:
 #    no square stamped 6 is trusted fresh.)
-BUILDER_VERSION = "structures-builder-7"
+# 8: official barrier cache rows are hops (official_barriers_v2), tiled and
+#    assigned per hop instead of whole lines by line centroid.
+BUILDER_VERSION = "structures-builder-8"
 # barriers.arrow height_tier: 0 = the wall's own OSM height tag, 2 = none mapped.
 BARRIER_HEIGHT_TIER_MAPPED = 0
 
@@ -301,8 +303,12 @@ def build_square(name, prepared_dir, overture_rows, overture_files, regional,
         if row["kind"] not in SCREENED_KINDS:
             continue
         coords = list(row["geom"].coords)
+        # Cache rows are hops carrying their within-line identity; a bare
+        # multi-hop geometry (tests) enumerates from zero as before.
+        hop_base = row.get("hop_idx") or 0
         for segment_idx, ((lon0, lat0), (lon1, lat1), length_m) in \
                 enumerate(split_hops(coords)):
+            segment_idx += hop_base
             if segment_idx > 32767:
                 raise SystemExit(f"{name}: official barrier exceeds Int16 hop identities")
             start_gx, start_gy = qmgrid.lonlat_to_grid(lon0, lat0)

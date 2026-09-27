@@ -150,30 +150,62 @@ pub fn industrial_class(tags: &Tags) -> Option<u8> {
     None
 }
 
+/// One `sport` token in the engine's spelling (lowercase, `-`/space as `_`),
+/// matching `noise-compute::emission::leisure::motorsport_subtype`.
+fn normalized_sport_token(token: &str) -> String {
+    token
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' '], "_")
+}
+
+/// True for every `sport` token the engine subtypes as motorsport — the same
+/// list as `motorsport_subtype` (osm-extract must not depend on noise-compute,
+/// so the list is shared by convention): circuit, motocross, kart, speedway,
+/// trial and untyped motor variants, plus radio-controlled (the engine
+/// silences those rows; area law would invent a generic leisure source).
+fn is_motorsport_token(token: &str) -> bool {
+    matches!(
+        token,
+        "autocross"
+            | "rallycross"
+            | "car_racing"
+            | "formula_one"
+            | "road_racing"
+            | "drifting"
+            | "stockcar"
+            | "auto_racing"
+            | "stock_car_racing"
+            | "drag_racing"
+            | "motocross"
+            | "supermoto"
+            | "enduro"
+            | "karting"
+            | "kart"
+            | "go_kart"
+            | "speedway"
+            | "trial"
+            | "motor"
+            | "motorsport"
+            | "motor_sports"
+            | "motorcycle"
+            | "rc_car"
+            | "rc_racing"
+            | "radiocontrol"
+            | "radio_control"
+    )
+}
+
 pub fn special_leisure_class<'a>(tag: impl Fn(&str) -> Option<&'a str>) -> Option<u8> {
     let sports: Vec<_> = tag("sport")
         .unwrap_or("")
         .split(';')
-        .map(str::trim)
+        .map(normalized_sport_token)
         .collect();
-    if tag("leisure") == Some("shooting_ground") || sports.contains(&"shooting") {
+    if tag("leisure") == Some("shooting_ground") || sports.iter().any(|sport| sport == "shooting") {
         Some(11)
     } else if tag("highway") == Some("raceway")
-        || sports.iter().any(|sport| {
-            matches!(
-                *sport,
-                "motor"
-                    | "motorsport"
-                    | "motor_sports"
-                    | "karting"
-                    | "motocross"
-                    | "motorcycle"
-                    | "auto_racing"
-                    | "speedway"
-                    | "stock_car_racing"
-                    | "drag_racing"
-            )
-        })
+        || sports.iter().any(|sport| is_motorsport_token(sport))
     {
         Some(10)
     } else {
@@ -354,10 +386,53 @@ mod tests {
     }
     #[test]
     fn special_sports_keep_indoor_and_motor_variants() {
-        for sport in ["motor", "karting", "motocross", "motor_sports", "speedway"] {
+        // The classifier accepts every token the engine subtypes (including
+        // radio-controlled, which the engine silences, and trial, which OSM
+        // does not split from bicycle trials) with the engine's normalization
+        // (case, `-`/space spellings); anything else is area-law leisure.
+        for sport in [
+            "motor",
+            "karting",
+            "motocross",
+            "motor_sports",
+            "speedway",
+            "autocross",
+            "rallycross",
+            "car_racing",
+            "formula_one",
+            "road_racing",
+            "drifting",
+            "stockcar",
+            "supermoto",
+            "enduro",
+            "kart",
+            "go_kart",
+            "trial",
+            "motorsport",
+            "motorcycle",
+            "auto_racing",
+            "stock_car_racing",
+            "drag_racing",
+            "rc_car",
+            "rc_racing",
+            "radiocontrol",
+            "radio_control",
+            "Kart",
+            "go-kart",
+            "RC-Car",
+            "karting;chess",
+        ] {
             assert_eq!(
                 special_leisure_class(|key| (key == "sport").then_some(sport)),
-                Some(10)
+                Some(10),
+                "{sport}"
+            );
+        }
+        for sport in ["", "chess", "soccer", "athletics", "cycling"] {
+            assert_eq!(
+                special_leisure_class(|key| (key == "sport").then_some(sport)),
+                None,
+                "{sport}"
             );
         }
         assert_eq!(

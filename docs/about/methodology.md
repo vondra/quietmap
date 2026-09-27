@@ -214,11 +214,13 @@ Overture Maps.
 
 ISO 9613-2 in eight octave bands: geometric spreading, atmospheric absorption, ground
 effect (per CNOSSOS-EU, verified against the standard's test cases), diffraction over
-terrain and buildings, and attenuation by forest according to canopy density.
+terrain and buildings, and attenuation by forest according to canopy height and density.
 
-Terrain is the Copernicus GLO-30 elevation model; canopy density and ground sealing come
-from satellite land-cover data. All inputs can be inspected in the map's Advanced panel.
-Meteorology is a fixed long-term average.
+Terrain is a bare-earth model: national LiDAR surveys (see the credits page) over the
+GEDTM30 world model; tree screening uses satellite canopy height and density, ground
+sealing comes from imperviousness data. All inputs can be inspected in the map's
+Advanced panel. Meteorology (favourable-weather probability, temperature, humidity)
+is a 1991–2020 ERA5 climatology.
 
 ## Standards
 

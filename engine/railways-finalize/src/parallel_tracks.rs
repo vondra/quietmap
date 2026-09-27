@@ -6,7 +6,7 @@ use crate::merge::{CategoryFlow, RowTraffic, STATUS_ESTIMATED, STATUS_KNOWN, STA
 use crate::sources::{
     blocks_foreign_national, is_residual, should_overwrite, source_applies_to_row, stamps_whole_line,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // Sibling gates moved from the retired CZ graph spread (pipeline rail-graph-metrics, reviews of
 // 2026-07-15/16): track pairs of one corridor sit 4-10 m apart. Without a shared ref or name a
@@ -153,7 +153,13 @@ fn way_overlap_m(
     total + open.map_or(0.0, |(from, to)| to - from)
 }
 
-/// For every track: itself first, then the laterally nearest row of each other way beside it.
+/// For every track: itself first, then the laterally nearest row of each
+/// other way beside it, closed transitively over ways (a track beside a
+/// sibling's midpoint joins the section even past the lateral gate from this
+/// midpoint, so three tracks at 0/10/20 m share one three-track section
+/// instead of rendering 4/3 of the line value). One representative per way
+/// keeps split tracks local: a way cut into many rows still meets its twin
+/// once per cross-section.
 fn cross_sections(rows: &[Expanded], tracks: &[Option<Track>]) -> Vec<Vec<usize>> {
     let cell = |value: f64| (value / SAME_TOKEN_LATERAL_M).floor() as i64;
     let mut buckets: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
@@ -215,7 +221,31 @@ fn cross_sections(rows: &[Expanded], tracks: &[Option<Track>]) -> Vec<Vec<usize>
         }
         sections.push(members);
     }
+    // Transitive closure over ways: for each row, every way reachable
+    // through members' direct sections joins with the representative its
+    // discoverer already holds (nearest beside a member midpoint, already
+    // overlap-gated). Discovery order is fixed (self first, then members in
+    // section order), so closures ignore input row order like the direct
+    // sections do.
     sections
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            let mut seen: HashSet<i64> = HashSet::from([rows[index].osm_id]);
+            let mut grown = vec![index];
+            let mut queue = vec![index];
+            while let Some(member) = queue.pop() {
+                for &other in &sections[member] {
+                    if seen.insert(rows[other].osm_id) {
+                        queue.push(other);
+                        grown.push(other);
+                    }
+                }
+            }
+            grown[1..].sort_by_key(|&other| rows[other].osm_id);
+            grown
+        })
+        .collect()
 }
 
 /// Highest-ranked claim of one scope (domestic or foreign) over a cross-section.

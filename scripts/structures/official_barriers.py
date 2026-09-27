@@ -10,7 +10,7 @@ import qmgrid
 from structure_inputs import METRES_PER_DEGREE, footprint_in_longitude_frame
 
 CONTRACT_KEY = "official_barriers_contract"
-CONTRACT_VERSION = "official_barriers_v1"
+CONTRACT_VERSION = "official_barriers_v2"
 
 KIND_WALL = 0
 KIND_BERM = 1
@@ -18,8 +18,13 @@ KIND_COMBINED = 2
 # A berm is terrain, not a thin wall: its screening waits for the terrain step.
 SCREENED_KINDS = frozenset({KIND_WALL, KIND_COMBINED})
 
+# Cache rows are HOPS (≤250 m two-point lines), one per 1-degree tile by hop
+# centroid — like OSM micro-segments, one row per square by midpoint. Caching
+# whole lines by line centroid but emitting them whole screened square
+# borders twice (the far side kept its OSM twin beside the spilled hops).
 SCHEMA = pa.schema([
-    pa.field("geometry", pa.binary(), nullable=False),  # WKB LineString lon/lat
+    pa.field("geometry", pa.binary(), nullable=False),  # WKB hop LineString lon/lat
+    pa.field("hop_idx", pa.uint32(), nullable=False),   # within-line hop identity
     pa.field("height_m", pa.float32(), nullable=False),
     pa.field("measured", pa.bool_(), nullable=False),  # else the inventory median
     pa.field("kind", pa.uint8(), nullable=False),      # wall 0, berm 1, combined 2

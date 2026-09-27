@@ -381,11 +381,13 @@ fn discretize_area_source(
 /// Discretise a raceway LINE source (an open or closed z30 chain) into
 /// per-segment [`PreparedPoint`]s. The chain is walked in ~`cell_m` segments
 /// (a two-node line is one segment); each point sits at its segment midpoint
-/// and carries its LENGTH FRACTION of the total (`Lw_seg = Lw − 10·lg(n)`,
-/// energy-conserving) with a half-segment exclusion radius — the line
-/// analogue of the area cells above — and the post-split loudest-day-band
-/// reach capped at the industrial horizon. A chain shorter than two vertices
-/// emits from the centroid point with the full total.
+/// and carries its LENGTH FRACTION of the total
+/// (`Lw_seg = Lw − 10·lg(total_m/seg_m)`, energy-conserving — OSM noding sets
+/// the vertices, so a count split would mistune per-metre power by leg
+/// length) with a half-segment exclusion radius — the line analogue of the
+/// area cells above — and the post-split loudest-day-band reach capped at
+/// the industrial horizon. A chain shorter than two vertices, or with no
+/// measurable leg, emits from the centroid point with the full total.
 #[allow(clippy::too_many_arguments)]
 fn discretize_line_source(
     chain: &[(i32, i32)],
@@ -412,6 +414,9 @@ fn discretize_line_source(
             let (alon, alat) = grid_lonlat(ax, ay);
             let (blon, blat) = grid_lonlat(bx, by);
             let leg_m = grid::geo::flat_dist(alat, alon, blat, blon);
+            if leg_m <= 0.0 {
+                continue; // a repeated snapped vertex carries no length
+            }
             let splits = ((leg_m / cell_m).ceil() as usize).max(1);
             for split in 0..splits {
                 let (t0, t1) = (split as f64 / splits as f64, (split + 1) as f64 / splits as f64);
@@ -427,13 +432,14 @@ fn discretize_line_source(
         cells.push((centroid_lat, centroid_lon, cell_m));
     }
     let n_points = cells.len().min(u16::MAX as usize) as u16;
-    let lw_split = 10.0 * (cells.len() as f32).log10();
+    let total_m: f64 = cells.iter().map(|(_, _, seg_m)| seg_m).sum();
     let reach = PointReach::LoudestDayBand {
         cap_m: crate::constants::INDUSTRIAL_MAX_RADIUS,
     };
     cells
         .into_iter()
         .map(|(lat, lon, seg_m)| {
+            let lw_split = 10.0 * ((total_m / seg_m) as f32).log10();
             let mut day = lw_day;
             let mut evening = lw_evening;
             let mut night = lw_night;
@@ -1315,6 +1321,47 @@ mod tests {
         });
         assert_eq!(points.len(), 1);
         assert!((points[0].lon - 14.00025).abs() < 1e-6);
+    }
+
+    /// A raceway chain shares the formula total by SEGMENT LENGTH, not by
+    /// segment count: OSM noding sets the vertices, so a 10 m leg beside a
+    /// 200 m leg would otherwise radiate the same power from 1/20th of the
+    /// length (~8 dB too hot per metre beside the short leg). Each segment
+    /// carries its length fraction of the total (energy-conserving).
+    #[test]
+    fn prepared_leisure_raceway_line_shares_energy_by_segment_length() {
+        let formula = leisure::motorsport_emission(leisure::MotorsportSubtype::Kart).unwrap();
+        // Three nodes: a ~10 m leg then a ~200 m leg (one 10 m cell beside
+        // three ~67 m cells).
+        let line = grid_ring(&[(50.0, 14.0), (50.0, 14.00014), (50.0, 14.00294)]);
+        let points = prepare_leisure_points(RawLeisureInput {
+            centroid_lat: 50.0,
+            centroid_lon: 14.00147,
+            sport: leisure::MOTORSPORT,
+            area_m2: None,
+            polygon_grid: &line,
+            formula: Some(formula),
+            is_line: true,
+        });
+        assert_eq!(points.len(), 4);
+        let energy: f64 = points
+            .iter()
+            .map(|p| 10f64.powf(f64::from(p.lw_day[4]) / 10.0))
+            .sum();
+        let total = 10f64.powf(leisure::leisure_formula_bands(&formula)[4] / 10.0);
+        assert!((10.0 * (energy / total).log10()).abs() < 1e-3, "splits {energy} vs {total}");
+        // Per-metre energy is uniform: each segment's exclusion diameter is
+        // its length (all legs well over the 2 m clamp floor).
+        let per_metre: Vec<f64> = points
+            .iter()
+            .map(|p| {
+                10f64.powf(f64::from(p.lw_day[4]) / 10.0) / f64::from(p.exclusion_radius_m * 2.0)
+            })
+            .collect();
+        for (index, density) in per_metre.iter().enumerate().skip(1) {
+            let ratio_db = 10.0 * (density / per_metre[0]).log10();
+            assert!(ratio_db.abs() < 0.01, "segment {index}: {ratio_db:.2} dB/m off");
+        }
     }
 
     /// An area-law line (an open non-motorised track) emits as a node of its

@@ -16,7 +16,7 @@
 //! MSL elevation), Lhasa, Cusco, Quito etc. sit far above 600 ft MSL.
 //! Using absolute MSL would reject every legitimate ground sample
 //! there. Stage 1 (`stage_1::stage_1_one_flight`) computes per-point
-//! AGL from Copernicus DEM and passes it through `ground_flags`.
+//! AGL from the release DEM and passes it through `ground_flags`.
 
 use crate::trace::TracePoint;
 
