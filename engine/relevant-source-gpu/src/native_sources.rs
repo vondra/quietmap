@@ -35,6 +35,25 @@ pub fn load_sources(
     let cache = raster_reader::meteorology::WeatherCache::new(root);
     let (pmax, amin) = cache.envelope_maxima(squares);
     let weather = noise_compute::propagation::meteorology::Meteorology::for_bound(pmax, amin);
+    // Facility joins span every scene square, so a polygon in one square sees
+    // the units in the neighbours it touches; rows still emit once each.
+    let mut global_transformers = Vec::new();
+    let mut global_solar = Vec::new();
+    for square in squares {
+        let relative = format!("z9/{}/{}/industrial.arrow", square.x, square.y);
+        if let Some((bytes, _)) = manifest.read_arrow(root, &relative)? {
+            let reader = FileReader::try_new(Cursor::new(bytes), None)?;
+            let batches: Vec<RecordBatch> = reader.collect::<Result<_, _>>()?;
+            global_transformers
+                .extend(square_store::osm_evidence::transformer_units(&batches));
+            global_solar.extend(square_store::osm_evidence::solar_plants(&batches));
+        }
+    }
+    let global_industrial_joins = points::FileJoins {
+        transformers: global_transformers,
+        solar_plants: global_solar,
+        ..Default::default()
+    };
     for square in squares {
         let mut has_surface_arrow = false;
         let mut has_structures = false;
@@ -97,17 +116,13 @@ pub fn load_sources(
             let traffic_calendar = (name == "airport_traffic")
                 .then(|| traffic::TrafficCalendar::read(&RecordBatch::new_empty(reader.schema())))
                 .transpose()?;
-            // One file's batches buffer before rows emit: industrial/leisure
-            // rows join against their whole square (a substation's
-            // transformers, a motorsport polygon's raceway lines). Order and
-            // row identities are unchanged — buffering only precedes them.
+            // One file's batches buffer before rows emit: leisure rows join
+            // against their square (a motorsport polygon's raceway lines);
+            // industrial rows join against every scene square (a substation's
+            // transformers across the edge). Order and row identities are
+            // unchanged — buffering only precedes them.
             let batches: Vec<RecordBatch> = reader.collect::<Result<_, _>>()?;
-            let joins = match name {
-                "industrial" => points::FileJoins {
-                    transformers: square_store::osm_evidence::transformer_units(&batches),
-                    solar_plants: square_store::osm_evidence::solar_plants(&batches),
-                    ..Default::default()
-                },
+            let local_joins = match name {
                 "leisure" => points::FileJoins {
                     motorsport_venues: square_store::osm_evidence::MotorsportVenues::build(
                         &batches,
@@ -115,6 +130,11 @@ pub fn load_sources(
                     ..Default::default()
                 },
                 _ => points::FileJoins::default(),
+            };
+            let joins = if name == "industrial" {
+                &global_industrial_joins
+            } else {
+                &local_joins
             };
             let mut row_base = 0_u64;
             for batch in &batches {
@@ -164,7 +184,7 @@ pub fn load_sources(
                             }
                         }
                         _ => {
-                            for (part, point) in points::points(batch, row, name, &joins)?
+                            for (part, point) in points::points(batch, row, name, joins)?
                                 .iter()
                                 .enumerate()
                             {
