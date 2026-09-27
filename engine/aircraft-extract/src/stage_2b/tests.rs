@@ -1,5 +1,6 @@
 //! Cruise aggregation and spill regressions.
 use super::*;
+use crate::flight::CruiseBucket;
 use crate::geo::flat_dist;
 
 fn admitted(day_paths: &[PathBuf]) -> Vec<AdmittedDay> {
@@ -10,6 +11,36 @@ fn admitted(day_paths: &[PathBuf]) -> Vec<AdmittedDay> {
             increment: false,
         })
         .collect()
+}
+
+/// Spill each shard to its own day dir under `root`, then list every part
+/// with merged counts — the fold's `(parts, counts)` input pair.
+fn spill_shards_to_parts(
+    root: &Path,
+    shards: [&mut HashMap<u64, HashMap<CruiseKey, CruiseAccum>>; 2],
+) -> (Vec<PathBuf>, crate::arrow_io::CruiseSpillCounts) {
+    for (day, shard) in shards.into_iter().enumerate() {
+        let mut buffers = SpillBuffers::new(day);
+        buffers.buffer_flush(shard);
+        buffers
+            .write_all_buffers(&root.join(format!("spill{day}")), &AtomicU64::new(0))
+            .unwrap();
+    }
+    let parts: Vec<PathBuf> = (0..SPILL_HASH_BUCKETS)
+        .flat_map(|bucket| {
+            (0..2)
+                .flat_map(|day| {
+                    list_spill_parts(&spill_bucket_dir(&root.join(format!("spill{day}")), bucket))
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut counts = crate::arrow_io::CruiseSpillCounts::default();
+    for part in &parts {
+        counts.merge(crate::arrow_io::CruiseSpillCounts::read(part).unwrap());
+    }
+    (parts, counts)
 }
 
 fn run_stage_2b(
@@ -132,43 +163,62 @@ fn merge_matches_sequential() {
     process_segment(&segs[1], &mut shard_a, luts);
     process_segment(&segs[2], &mut shard_b, luts);
     process_segment(&segs[3], &mut shard_b, luts);
-    let par = merge_by_square(shard_a, shard_b);
-
-    // Same z9 cells produced; iterate in sorted-by-key order so
-    // HashMap iteration noise can't masquerade as a real bug.
-    let mut seq_squares: Vec<u64> = seq.keys().copied().collect();
-    let mut par_squares: Vec<u64> = par.keys().copied().collect();
-    seq_squares.sort_unstable();
-    par_squares.sort_unstable();
-    assert_eq!(seq_squares, par_squares);
-
-    for square in seq_squares {
-        let seq_inner = seq.get(&square).unwrap();
-        let par_inner = par.get(&square).unwrap();
-        let mut seq_keys: Vec<CruiseKey> = seq_inner.keys().copied().collect();
-        let mut par_keys: Vec<CruiseKey> = par_inner.keys().copied().collect();
-        seq_keys.sort_unstable_by_key(|k| {
-            (k.cruise_cell_id, k.class, k.fl_bin, k.period, k.heading_bin)
-        });
-        par_keys.sort_unstable_by_key(|k| {
-            (k.cruise_cell_id, k.class, k.fl_bin, k.period, k.heading_bin)
-        });
-        assert_eq!(seq_keys, par_keys);
-
-        for k in seq_keys {
-            let sa = seq_inner.get(&k).unwrap();
-            let pa = par_inner.get(&k).unwrap();
-            let close = |a: f32, b: f32| {
-                let denom = a.abs().max(b.abs()).max(1.0);
-                (a - b).abs() <= denom * 1e-3
-            };
-            assert!(close(sa.sum_length_m, pa.sum_length_m), "sum_length_m");
-            assert!(close(sa.weight, pa.weight), "weight");
-            assert!(close(sa.rep_alt_m, pa.rep_alt_m), "rep_alt_m");
-            assert!(close(sa.rep_speed_kt, pa.rep_speed_kt), "rep_speed_kt");
-            assert_eq!(sa.fid_set.len(), pa.fid_set.len(), "fid_set size");
-            assert_eq!(sa.top.len(), pa.top.len(), "top size");
+    // Both shards round-trip through spill files; the fold merges them.
+    let directory = tempfile::tempdir().unwrap();
+    let (parts, counts) = spill_shards_to_parts(directory.path(), [&mut shard_a, &mut shard_b]);
+    let mut folded: Vec<(u64, crate::flight::CruiseBucket)> = Vec::new();
+    fold_bucket_sorted(&parts, None, counts, |square, mut rows| {
+        for row in rows.drain(..) {
+            folded.push((square, row));
         }
+        Ok(())
+    })
+    .unwrap();
+
+    let mut seq_rows: Vec<(u64, crate::flight::CruiseBucket)> = seq
+        .into_iter()
+        .flat_map(|(square, inner)| {
+            inner
+                .into_iter()
+                .map(move |(key, accum)| (square, accum.finalize(key)))
+        })
+        .collect();
+    seq_rows.sort_by_key(|(square, row)| {
+        (
+            *square,
+            row.cruise_cell_id,
+            row.class,
+            row.fl_bin,
+            row.period,
+            row.heading_bin,
+        )
+    });
+    folded.sort_by_key(|(square, row)| {
+        (
+            *square,
+            row.cruise_cell_id,
+            row.class,
+            row.fl_bin,
+            row.period,
+            row.heading_bin,
+        )
+    });
+    assert_eq!(seq_rows.len(), folded.len());
+    for ((seq_square, sa), (par_square, pa)) in seq_rows.iter().zip(folded.iter()) {
+        assert_eq!(seq_square, par_square);
+        let close = |a: f32, b: f32| {
+            let denom = a.abs().max(b.abs()).max(1.0);
+            (a - b).abs() <= denom * 1e-3
+        };
+        assert!(close(sa.sum_length_m, pa.sum_length_m), "sum_length_m");
+        assert!(close(sa.rep_alt_m, pa.rep_alt_m), "rep_alt_m");
+        assert!(close(sa.rep_speed_kt, pa.rep_speed_kt), "rep_speed_kt");
+        assert_eq!(sa.unique_count, pa.unique_count, "fid_set size");
+        assert_eq!(
+            sa.top_candidates.len(),
+            pa.top_candidates.len(),
+            "top size"
+        );
     }
 }
 
@@ -273,7 +323,7 @@ fn secondary_cruise_transits_bucket_apart_and_only_on_increment_days() {
 #[test]
 fn merge_dedup_same_flight_id_across_shards() {
     // Same flight_id in two shards must collapse to one entry
-    // in `fid_set` (and `top`) after `merge_by_square`.
+    // in `unique_count` (and `top_candidates`) after the fold.
     let s1 = cruise(99, 50.10, 14.20, 50.10, 14.205);
     let s2 = cruise(99, 50.10, 14.205, 50.10, 14.21);
     let mut shard_a: HashMap<u64, HashMap<CruiseKey, CruiseAccum>> = HashMap::new();
@@ -281,13 +331,19 @@ fn merge_dedup_same_flight_id_across_shards() {
     let luts = NpdLuts::shared();
     process_segment(&s1, &mut shard_a, luts);
     process_segment(&s2, &mut shard_b, luts);
-    let merged = merge_by_square(shard_a, shard_b);
-    for inner in merged.values() {
-        for accum in inner.values() {
-            assert_eq!(accum.fid_set.len(), 1, "fid 99 must dedupe across shards");
-            assert!(accum.top.len() <= 1, "top entry for fid 99 also dedupes");
+    let directory = tempfile::tempdir().unwrap();
+    let (parts, counts) = spill_shards_to_parts(directory.path(), [&mut shard_a, &mut shard_b]);
+    fold_bucket_sorted(&parts, None, counts, |_, rows| {
+        for row in &rows {
+            assert_eq!(row.unique_count, 1, "fid 99 must dedupe across shards");
+            assert!(
+                row.top_candidates.len() <= 1,
+                "top entry for fid 99 also dedupes"
+            );
         }
-    }
+        Ok(())
+    })
+    .unwrap();
 }
 
 /// Regression for the wipe-on-scope bug applied to cruise: a stale
@@ -356,30 +412,6 @@ fn equal_rank_top_candidates_are_order_independent() {
     };
     assert_eq!(make((0..60).collect()), (0..50).collect::<Vec<_>>());
     assert_eq!(make((0..60).rev().collect()), (0..50).collect::<Vec<_>>());
-}
-
-/// Test-only symmetric merger over two `(z9 → bucket)` maps, used to
-/// verify `CruiseAccum::merge` matches the sequential `add` path. The
-/// production spill-merge does the same per-entry `merge` inline.
-fn merge_by_square(
-    mut a: HashMap<u64, HashMap<CruiseKey, CruiseAccum>>,
-    mut b: HashMap<u64, HashMap<CruiseKey, CruiseAccum>>,
-) -> HashMap<u64, HashMap<CruiseKey, CruiseAccum>> {
-    if a.len() < b.len() {
-        std::mem::swap(&mut a, &mut b);
-    }
-    for (square, b_inner) in b {
-        let entry = a.entry(square).or_default();
-        for (key, b_accum) in b_inner {
-            match entry.get_mut(&key) {
-                Some(existing) => existing.merge(b_accum),
-                None => {
-                    entry.insert(key, b_accum);
-                }
-            }
-        }
-    }
-    a
 }
 
 /// Each finalized bucket is published once, in its owner z9, sorted by key,
@@ -474,15 +506,24 @@ fn axial_buckets_merge_opposite_tracks_and_preserve_crossing_length_through_spil
         process_segment(segment, &mut by_square, NpdLuts::shared());
     }
     let directory = tempfile::tempdir().unwrap();
-    flush_to_spill(&mut by_square, directory.path(), &AtomicU64::new(0)).unwrap();
+    let mut buffers = SpillBuffers::new(0);
+    buffers.buffer_flush(&mut by_square);
+    buffers
+        .write_all_buffers(directory.path(), &AtomicU64::new(0))
+        .unwrap();
     let parts: Vec<_> = (0..SPILL_HASH_BUCKETS)
         .flat_map(|bucket| list_spill_parts(&spill_bucket_dir(directory.path(), bucket)).unwrap())
         .collect();
-    let folded = fold_raw_parts(&parts).unwrap();
-    let mut rows: Vec<_> = folded
-        .into_values()
-        .flat_map(|map| map.into_iter().map(|(key, accum)| accum.finalize(key)))
-        .collect();
+    let mut counts = crate::arrow_io::CruiseSpillCounts::default();
+    for part in &parts {
+        counts.merge(crate::arrow_io::CruiseSpillCounts::read(part).unwrap());
+    }
+    let mut rows = Vec::new();
+    fold_bucket_sorted(&parts, None, counts, |_, mut square_rows| {
+        rows.append(&mut square_rows);
+        Ok(())
+    })
+    .unwrap();
     rows.sort_unstable_by_key(|row| row.heading_bin);
     assert_eq!(rows.len(), 2);
     assert_eq!((rows[0].heading_bin, rows[0].unique_count), (0, 2));
@@ -627,4 +668,104 @@ fn old_sealed_spill_schema_is_rejected_before_prepared_outputs_are_wiped() {
         &spill,
         &receipt::input_identities(&paths).unwrap(), &crate::provider_receipt::window_of(1, 0), None)
     .unwrap();
+}
+
+#[test]
+fn spill_buffers_write_sorted_chunks_in_deterministic_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut first = cruise(7, 50.1, 14.2, 50.1001, 14.2001);
+    first.callsign = "SORT7".into();
+    let mut second = cruise(8, 51.1, 15.2, 51.1001, 15.2001);
+    second.callsign = "SORT8".into();
+    // Identical accumulator states built twice: HashMap drain order differs,
+    // the written rows must not.
+    let mut rows = Vec::new();
+    for _ in 0..2 {
+        let mut local = HashMap::new();
+        process_segment(&first, &mut local, NpdLuts::shared());
+        process_segment(&second, &mut local, NpdLuts::shared());
+        let mut buffers = SpillBuffers::new(3);
+        buffers.buffer_flush(&mut local);
+        assert!(local.is_empty());
+        let spill = directory.path().join(format!("spill{}", rows.len()));
+        buffers
+            .write_all_buffers(&spill, &AtomicU64::new(0))
+            .unwrap();
+        let mut parts = Vec::new();
+        for bucket in 0..SPILL_HASH_BUCKETS {
+            parts.extend(list_spill_parts(&spill_bucket_dir(&spill, bucket)).unwrap());
+        }
+        assert!(parts.iter().all(|part| part
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("part_0003_")));
+        let mut back = Vec::new();
+        for part in &parts {
+            crate::arrow_io::for_each_cruise_spill(part, |row| {
+                // Bitwise fingerprint: floats by bits, so -0.0/NaN
+                // differences fail loudly instead of hiding in ==.
+                back.push(format!(
+                    "{}|{}|{}|{}|{}|{}|{}|{}|{:x}|{:x}|{:x}|{:x}|{:?}|{:?}",
+                    part.file_name().unwrap().to_str().unwrap(),
+                    row.square,
+                    row.cruise_cell_id,
+                    row.class,
+                    row.fl_bin,
+                    row.period,
+                    row.heading_bin,
+                    row.secondary_only,
+                    row.sum_length_m.to_bits(),
+                    row.weight.to_bits(),
+                    row.rep_alt_m.to_bits(),
+                    row.rep_speed_kt.to_bits(),
+                    row.fid_set,
+                    row.top_candidates,
+                ));
+                Ok(())
+            })
+            .unwrap();
+        }
+        rows.push(back);
+    }
+    assert_eq!(rows[0], rows[1]);
+    assert!(!rows[0].is_empty());
+}
+
+#[test]
+fn repeated_extracts_publish_identical_cruise_rows() {
+    use crate::arrow_io::read_record_batches;
+    let mut outputs = Vec::new();
+    for _ in 0..2 {
+        let directory = tempfile::tempdir().unwrap();
+        let segments: Vec<_> = (0..50)
+            .map(|i| {
+                cruise(
+                    100 + i as u64,
+                    50.0 + 0.002 * i as f32,
+                    14.0,
+                    50.001 + 0.002 * i as f32,
+                    14.001,
+                )
+            })
+            .collect();
+        let day = directory.path().join("segments.arrow");
+        crate::arrow_io::write_segments(&day, &segments).unwrap();
+        let prepared = directory.path().join("prepared");
+        let written = run_stage_2b(&[day], &prepared, 12, None).unwrap();
+        assert!(written > 0);
+        let mut files = Vec::new();
+        for (square, _) in crate::spatial::square_directories(&prepared).unwrap() {
+            let path = prepared.join(square_path(square)).join("cruise.arrow");
+            files.push((square_path(square), read_record_batches(&path).unwrap()));
+        }
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        outputs.push(files);
+    }
+    assert_eq!(outputs[0].len(), outputs[1].len());
+    for (a, b) in outputs[0].iter().zip(outputs[1].iter()) {
+        assert_eq!(a.0, b.0);
+        assert_eq!(a.1, b.1, "cruise rows at {}", a.0);
+    }
 }

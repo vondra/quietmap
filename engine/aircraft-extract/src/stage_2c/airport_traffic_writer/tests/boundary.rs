@@ -84,7 +84,7 @@ fn partitioned_run(lat: f64, lon: f64, split: bool) -> Vec<AirportTrafficRow> {
         1e6,
     );
     let index = crate::airport_index::AerodromeIndex::build(std::slice::from_ref(&area));
-    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap();
+    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap().works;
     assert_eq!(plan.len(), if split { 2 } else { 1 });
     let input = inputs.join(square_path(right)).join("ground.arrow");
     for work in &plan {
@@ -240,7 +240,7 @@ fn one_flight_of_both_provenances_keeps_every_counter_row_and_counts_as_primary(
         0.0,
     );
     let index = crate::airport_index::AerodromeIndex::build(std::slice::from_ref(&area));
-    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap();
+    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap().works;
     assert_eq!(plan.len(), 1);
     assert_eq!(plan[0].maximum_counter_rows, 99);
     run_stage_2c(&inputs, &[area], &prepared, &crate::provider_receipt::window_of(12, 365), None).unwrap();
@@ -281,7 +281,7 @@ fn one_flight_of_both_provenances_keeps_every_counter_row_and_counts_as_primary(
 }
 
 #[test]
-fn oversized_ground_owner_retries_alone_without_rewriting_successes_or_retrying_corruption() {
+fn oversized_ground_owner_retries_within_a_bounded_pool_without_rewriting_successes_or_retrying_corruption() {
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Mutex,
@@ -329,7 +329,7 @@ fn oversized_ground_owner_retries_alone_without_rewriting_successes_or_retrying_
         ));
     }
     let index = crate::airport_index::AerodromeIndex::build(&areas);
-    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap();
+    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap().works;
     assert_eq!(plan.len(), 2);
     let charges: Vec<_> = plan
         .iter()
@@ -356,9 +356,16 @@ fn oversized_ground_owner_retries_alone_without_rewriting_successes_or_retrying_
         .unwrap();
     let count = pool
         .install(|| {
-            run_with_serial_retry(&plan, worker_limit, process_limit, |work, limit| {
+            run_with_retry_pool(&plan, worker_limit, process_limit, |work, limit| {
                 let concurrent = active.fetch_add(1, Ordering::SeqCst) + 1;
-                assert!(concurrent as u64 * limit <= process_limit);
+                if limit == worker_limit {
+                    // Phase 1 packs worker allowances inside the process limit.
+                    assert!(concurrent as u64 * limit <= process_limit);
+                } else {
+                    // Retries run on a narrow pool with the process cap each.
+                    assert_eq!(limit, process_limit);
+                    assert!(concurrent <= 8);
+                }
                 calls.lock().unwrap().push((work.owner, limit));
                 let result =
                     run_ground_traffic_work(work, &prepared, &output, &index, &crate::provider_receipt::window_of(12, 365), limit);
@@ -401,7 +408,7 @@ fn oversized_ground_owner_retries_alone_without_rewriting_successes_or_retrying_
     let work = &plan[..1];
     let base = work[0].indexed_allocation().unwrap();
     let attempts = AtomicUsize::new(0);
-    let refused = run_with_serial_retry(work, base, base + 1, |work, limit| {
+    let refused = run_with_retry_pool(work, base, base + 1, |work, limit| {
         attempts.fetch_add(1, Ordering::SeqCst);
         run_ground_traffic_work(work, &prepared, &output, &index, &crate::provider_receipt::window_of(12, 365), limit)
             .map(|outcome| outcome.counter_rows > 0)
@@ -412,7 +419,7 @@ fn oversized_ground_owner_retries_alone_without_rewriting_successes_or_retrying_
     // Corruption after the routing precheck must not trigger the memory retry.
     std::fs::write(&work[0].inputs[0], b"corrupt").unwrap();
     attempts.store(0, Ordering::SeqCst);
-    let corrupt = run_with_serial_retry(work, worker_limit, process_limit, |work, limit| {
+    let corrupt = run_with_retry_pool(work, worker_limit, process_limit, |work, limit| {
         attempts.fetch_add(1, Ordering::SeqCst);
         run_ground_traffic_work(work, &prepared, &output, &index, &crate::provider_receipt::window_of(12, 365), limit)
             .map(|outcome| outcome.counter_rows > 0)

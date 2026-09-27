@@ -64,7 +64,7 @@ pub fn census_cruise_inputs(paths: &[PathBuf], output: &Path) -> Result<()> {
         ),
         (
             "spill_workers_fixed_buffers",
-            4 * SPILL_TRIGGER_BYTES as u64,
+            4 * SPILL_TRIGGER_BYTES as u64 + SPILL_ROW_BUFFER_CAP_BYTES as u64,
         ),
         (
             "decoded_segment_rows",

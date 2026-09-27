@@ -6,6 +6,7 @@
 //! rows did: the difference estimator's `N_union − N_primary`.
 use super::admission::AllocationBudget;
 use anyhow::Result;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 /// Any movement on a microsegment (aircraft or ground vehicle).
@@ -59,19 +60,24 @@ impl MovementUnion {
         flags: u32,
         budget: &mut AllocationBudget,
     ) -> Result<()> {
-        if let Some(value) = self.members.get_mut(&fid) {
-            *value |= flags;
-            return Ok(());
+        let len = self.members.len();
+        match self.members.entry(fid) {
+            Entry::Occupied(occupied) => {
+                *occupied.into_mut() |= flags;
+                Ok(())
+            }
+            Entry::Vacant(vacant) => {
+                anyhow::ensure!(
+                    len < u32::MAX as usize,
+                    "ground movement count exceeds UInt32"
+                );
+                budget.reserve_hash_entry::<u64, u32>(len)?;
+                // Sorted part rows, Arrow builders and their transient growth coexist.
+                budget.reserve(4 * std::mem::size_of::<(u64, u32)>() as u64)?;
+                vacant.insert(flags);
+                Ok(())
+            }
         }
-        anyhow::ensure!(
-            self.members.len() < u32::MAX as usize,
-            "ground movement count exceeds UInt32"
-        );
-        budget.reserve_hash_entry::<u64, u32>(self.members.len())?;
-        // Sorted part rows, Arrow builders and their transient growth coexist.
-        budget.reserve(4 * std::mem::size_of::<(u64, u32)>() as u64)?;
-        self.members.insert(fid, flags);
-        Ok(())
     }
 
     pub(crate) fn counts(&self) -> MovementCounts {

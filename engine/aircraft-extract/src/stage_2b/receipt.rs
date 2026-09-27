@@ -132,13 +132,14 @@ pub(super) fn create(
     for (path, identity) in inputs {
         transaction.execute("INSERT INTO inputs VALUES (?1,?2)", params![path, identity])?;
     }
+    // Prepare once: millions of parts re-preparing each INSERT burn
+    // minutes on the world build for identical statements.
+    let mut insert_part = transaction.prepare("INSERT INTO raw_parts VALUES (?1,?2)")?;
     visit_raw_parts(directory, |path, identity| {
-        transaction.execute(
-            "INSERT INTO raw_parts VALUES (?1,?2)",
-            params![path, identity],
-        )?;
+        insert_part.execute(params![path, identity])?;
         Ok(())
     })?;
+    drop(insert_part);
     transaction.commit()?;
     std::fs::File::open(directory)?.sync_all()?;
     crate::arrow_io::spill_receipt_committed(directory)?;
