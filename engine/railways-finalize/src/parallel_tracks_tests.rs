@@ -366,6 +366,68 @@ fn three_tracks_in_a_row_conserve_the_line_value() {
 }
 
 #[test]
+fn an_unnamed_track_never_bridges_two_differently_named_corridors() {
+    // S1 / unnamed / S2 at 0/10/20 m with 60 / 0 / 600 timetabled
+    // passenger trains. The outer rows name explicitly different lines, so
+    // the transitive closure must stop at the unnamed middle: pooling all
+    // three rendered 220 on every row (+8.65 dB of S2's trains on the S1 row).
+    let named = |way, lane, corridor: &str, daily_trains: f64| {
+        let mut row = track(
+            way,
+            lane,
+            14.23,
+            14.232,
+            RowTraffic {
+                passenger: flow(daily_trains, TIMETABLE, 2),
+                freight: CategoryFlow::default(),
+            },
+        );
+        row.corridor = corridor.to_owned();
+        row
+    };
+    let middle = track(
+        2,
+        2.25,
+        14.23,
+        14.232,
+        RowTraffic {
+            passenger: flow(0.0, TIMETABLE, 2),
+            freight: CategoryFlow::default(),
+        },
+    );
+    let mut rows = vec![named(1, 0.0, "S1", 60.0), middle, named(3, 4.5, "S2", 600.0)];
+    // Mechanism: neither outer row's section reaches the other named line,
+    // while the unnamed middle still sees both (its pre-existing ambiguity).
+    let tracks = super::project_tracks(&rows, PRAGUE);
+    let sections = super::cross_sections(&rows, &tracks);
+    let ways = |members: &[usize]| {
+        let mut ways: Vec<i64> = members.iter().map(|&member| rows[member].osm_id).collect();
+        ways.sort_unstable();
+        ways
+    };
+    assert_eq!(ways(&sections[0]), vec![1, 2]);
+    assert_eq!(ways(&sections[1]), vec![1, 2, 3]);
+    assert_eq!(ways(&sections[2]), vec![2, 3]);
+    // Effect: each outer row splits only with the middle (30/300), the
+    // middle pools all three (220) — the pre-closure 30/220/300.
+    allocate_over_parallel_tracks(&mut rows, PRAGUE);
+    let passenger: Vec<f64> = rows.iter().map(|row| daily(row.child.traffic.passenger)).collect();
+    assert!(
+        (passenger[0] - 30.0).abs() < 1e-9
+            && (passenger[1] - 220.0).abs() < 1e-9
+            && (passenger[2] - 300.0).abs() < 1e-9,
+        "passenger pooling across named lines: {passenger:?}"
+    );
+    let freight: Vec<f64> = rows.iter().map(|row| daily(row.child.traffic.freight)).collect();
+    assert!(
+        (freight[0] - 6.75).abs() < 1e-9
+            && (freight[1] - 4.5).abs() < 1e-9
+            && (freight[2] - 6.75).abs() < 1e-9,
+        "freight prior split across named lines: {freight:?}"
+    );
+}
+
+#[test]
 fn parallel_siblings_need_longitudinal_overlap() {
     // 250 m track, 100 passenger trains, and a 10 m parallel scrap centred on its midpoint.
     // The midpoint foot lands on the scrap (lateral ~4 m), but the overlap is 10 m, under
