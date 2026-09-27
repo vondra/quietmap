@@ -959,7 +959,7 @@ fn chunked_scatter_keeps_the_same_top_k_traces() {
         .heap
         .into_vec()
         .into_iter()
-        .map(|r| key(&r.0.trace))
+        .map(|r| key(&super::materialize_stub(&ctx, &batches, &r.0)))
         .collect();
     let mut got: Vec<_> = parallel_traces.segments.iter().map(key).collect();
     want.sort_unstable();

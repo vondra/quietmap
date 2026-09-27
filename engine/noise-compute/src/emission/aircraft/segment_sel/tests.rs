@@ -962,3 +962,99 @@ fn reach_gate_matches_kernel_rejection() {
         "kernel never kept anything ({kernel_some}/{checked})"
     );
 }
+
+/// Ignored microbench: per-row cost of the popup Doc 29 kernel path.
+/// Run with `cargo test --release -p noise-compute kernel_popup_path_ns_per_row -- --ignored --nocapture`.
+/// Rotates 8 approach/departure segments (all admitted) so no branch predictor
+/// learns a single shape; prints ns/row for the full kernel, without horizon,
+/// and for the evaluate_row lmax tail (thrust + bracket + LUT) alone.
+#[test]
+#[ignore]
+fn kernel_popup_path_ns_per_row() {
+    let seg_at = |d_lat: f64, alt0: f32, alt1: f32, dep: bool| AircraftSegment {
+        flight_id: 1,
+        profile_idx: 0,
+        is_departure: dep,
+        on_ground: false,
+        period: 0,
+        date_id: 0,
+        start_lat: 50.0,
+        start_lon: 14.0,
+        start_alt_m: alt0,
+        end_lat: 50.0 + d_lat,
+        end_lon: 14.001,
+        end_alt_m: alt1,
+        speed_kt: 160.0,
+        segment_length_m: 500.0,
+        departure_field_elev_m: f32::NAN,
+        heli_descent: false,
+        ground_context: GROUND_CONTEXT_NONE,
+        ground_ops_kind: GROUND_OPS_KIND_NONE,
+        count_weight: 1.0,
+        surface_model: false,
+        source_id: AIRCRAFT_ADSB_SOURCE_ID,
+    };
+    let segs = [
+        seg_at(0.0045, 640.0, 600.0, false),
+        seg_at(0.0090, 900.0, 850.0, false),
+        seg_at(0.0020, 400.0, 420.0, true),
+        seg_at(0.0135, 1200.0, 1150.0, false),
+        seg_at(0.0060, 700.0, 760.0, true),
+        seg_at(0.0180, 1500.0, 1450.0, true),
+        seg_at(0.0030, 500.0, 480.0, false),
+        seg_at(0.0110, 1000.0, 1060.0, true),
+    ];
+    let (rx_lat, rx_lon, rx_elev) = (50.00225, 14.0005, 250.0);
+    let horizon = ReceiverHorizon::build(|_, _| rx_elev - 4.0, rx_lat, rx_lon, rx_elev);
+    let luts = NpdLuts::shared();
+    for seg in &segs {
+        assert!(
+            segment_kernel_with_cuts::<true>(
+                seg, rx_lat, rx_lon, rx_elev, 220.0, 220.0, luts, &horizon, None
+            )
+            .is_some(),
+            "fixture segment must be admitted"
+        );
+    }
+    const ITERS: usize = 200_000;
+    fn bench(label: &str, mut f: impl FnMut(usize) -> u64) {
+        let mut acc = 0u64;
+        let t = std::time::Instant::now();
+        for i in 0..ITERS {
+            acc ^= f(i);
+        }
+        let ns = t.elapsed().as_nanos() as f64 / ITERS as f64;
+        println!("{label}: {ns:.1} ns/row (xor {acc:#x})");
+    }
+    bench("kernel+horizon", |i| {
+        segment_kernel_with_cuts::<true>(
+            &segs[i & 7], rx_lat, rx_lon, rx_elev, 220.0, 220.0, luts, &horizon, None,
+        )
+        .map(|k| k.sel.to_bits())
+        .unwrap_or(0)
+    });
+    let ridge = ReceiverHorizon::build(|_, _| rx_elev + 60.0, rx_lat, rx_lon, rx_elev);
+    bench("kernel+ridge", |i| {
+        segment_kernel_with_cuts::<true>(
+            &segs[i & 7], rx_lat, rx_lon, rx_elev, 220.0, 220.0, luts, &ridge, None,
+        )
+        .map(|k| k.sel.to_bits())
+        .unwrap_or(0)
+    });
+    bench("lmax-tail", |i| {
+        let seg = &segs[i & 7];
+        let thrust = thrust_input_for_segment(
+            seg,
+            seg.start_alt_m as f64,
+            seg.end_alt_m as f64,
+            220.0,
+            220.0,
+            f64::from(seg.departure_field_elev_m),
+        );
+        let class_idx = noise_class_of(seg.profile_idx) as usize;
+        let (power_row, power_w) =
+            power_bracket(thrust_model_for_class(class_idx), &thrust).unwrap();
+        luts.lookup_lmax(class_idx, seg.is_departure, power_row, power_w, 3.5)
+            .to_bits()
+    });
+}

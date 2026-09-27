@@ -332,9 +332,11 @@ pub fn scatter(
                 entry.class_at_peak = class_idx;
             }
 
+            // `or_insert_with`: the candidate string allocates only on first
+            // touch — `or_insert` built and dropped it for every row.
             let cand = top_flight_candidates
                 .entry(fid)
-                .or_insert(TopFlightCandidate {
+                .or_insert_with(|| TopFlightCandidate {
                     peak_lmax: f64::NEG_INFINITY,
                     peak_altitude_m: 0.0,
                     peak_period: row.period,
@@ -376,10 +378,11 @@ pub fn scatter(
             });
             for cand_view in row.top_candidates.iter() {
                 entry.n_unique_flights.insert(cand_view.flight_id);
+                // `or_insert_with`: same first-touch saving as above.
                 let cand = entry
                     .top_fids
                     .entry(cand_view.flight_id)
-                    .or_insert(CellTopFlight {
+                    .or_insert_with(|| CellTopFlight {
                         peak_lmax: f64::NEG_INFINITY,
                         altitude_m: 0.0,
                         class_idx: class_idx as u8,
