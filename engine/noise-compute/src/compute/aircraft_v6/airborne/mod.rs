@@ -10,7 +10,7 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
 use std::hash::BuildHasher;
 
-use crate::fxhash::FxHashMap;
+use crate::fxhash::{FxBuildHasher, FxHashMap};
 
 use rayon::prelude::*;
 
@@ -353,7 +353,11 @@ fn scatter_chunk(
     trace_cap: usize,
     want_traces: bool,
 ) -> ChunkScatter {
-    let mut flights: FxHashMap<u64, FlightAccum> = FxHashMap::default();
+    // Pre-sized: distinct flights only grow to the chunk's row count, and the
+    // merge sorts by key, so capacity never leaks into output order.
+    let chunk_rows: usize = batches.iter().map(AirborneSegmentBatch::len).sum();
+    let mut flights: FxHashMap<u64, FlightAccum> =
+        FxHashMap::with_capacity_and_hasher(chunk_rows / 4 + 1, FxBuildHasher);
     let mut above_cutoff: u32 = 0;
     let mut pieces = Vec::new();
     let mut n_eval: u64 = 0;

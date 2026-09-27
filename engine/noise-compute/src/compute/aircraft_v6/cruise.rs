@@ -223,18 +223,90 @@ pub fn scatter(
             if !aircraft::is_valid_airborne_with_terrain(&seg, &terrain) {
                 return None;
             }
-            // C2 horizon screening: cruise never screens — `with_terrain`
-            // hard-wires `horizon = None` (structural exemption: cruise AGL
-            // floor 7 200 m + 16 km slant cap ⇒ β ≥ 26.6° > any horizon).
-            let (sel, cpa) = aircraft::segment_sel_with_terrain(
-                &seg,
-                receiver.lat,
-                receiver.lon,
-                rx_elev,
-                &terrain,
-                npd_luts,
-            )?;
+            // One computation of every kernel scalar (the airborne row's shape):
+            // geometry with the kernel's own metre factor and formulas, emission
+            // inputs once for the kernel and the lmax tail. Bit-identical to the
+            // old `segment_sel_with_terrain` + tail recompute.
+            // C2 horizon screening: cruise never screens — horizon `None`
+            // (structural exemption: cruise AGL floor 7 200 m + 16 km slant
+            // cap ⇒ β ≥ 26.6° > any horizon).
             let class_idx = aircraft::noise_class_of(seg.profile_idx) as usize;
+            let cos_lat = receiver.lat.to_radians().cos().max(0.2);
+            let m_per_lon = aircraft::M_PER_DEG_LAT * cos_lat;
+            let ax =
+                grid::geo::wrapped_longitude_delta(receiver.lon, seg.start_lon) * m_per_lon;
+            let ay = (seg.start_lat - receiver.lat) * aircraft::M_PER_DEG_LAT;
+            let by = (seg.end_lat - receiver.lat) * aircraft::M_PER_DEG_LAT;
+            let sdx =
+                grid::geo::wrapped_longitude_delta(seg.start_lon, seg.end_lon) * m_per_lon;
+            let sdy = by - ay;
+            let seg_len_sq = sdx * sdx + sdy * sdy;
+            let slen = seg_len_sq.sqrt().max(1.0);
+            let inv_lsq = if seg_len_sq > 1e-6 {
+                1.0 / seg_len_sq
+            } else {
+                0.0
+            };
+            let start_alt_m = seg.start_alt_m as f64;
+            let sdz = seg.end_alt_m as f64 - start_alt_m;
+            let anchor = &aircraft::PROFILES[aircraft::CLASS_REP_PROFILE_IDX[class_idx] as usize];
+            let (inst, di_a, di_b, di_c) = aircraft::delta_i_constants(anchor.installation);
+            let dv = aircraft::delta_v(seg.speed_kt as f64, anchor);
+            let cut_s = terrain.start_elev - 30.0;
+            let cut_e = terrain.end_elev - 30.0;
+            let (power_row, power_w) = aircraft::power_bracket(
+                aircraft::thrust_model_for_class(class_idx),
+                &aircraft::thrust_input_for_segment(
+                    &seg,
+                    start_alt_m,
+                    seg.end_alt_m as f64,
+                    cut_s,
+                    cut_e,
+                    f64::from(seg.departure_field_elev_m),
+                ),
+            )?;
+            // `true`: cruise rep-segments are departures by construction
+            // (`cruise_segment` hard-wires `is_departure`), mirrored here.
+            let heli_db =
+                aircraft::heli_correction_db(seg.profile_idx, true, seg.heli_descent);
+            let kernel = aircraft::segment_energy_kernel::<true>(
+                ax,
+                ay,
+                sdx,
+                sdy,
+                sdz,
+                start_alt_m,
+                inv_lsq,
+                slen,
+                rx_elev,
+                npd_luts,
+                class_idx,
+                seg.is_departure,
+                dv,
+                inst,
+                power_row,
+                power_w,
+                heli_db,
+                di_a,
+                di_b,
+                di_c,
+                false,
+                aircraft::REACH_SQ_TABLE[class_idx][seg.is_departure as usize],
+                cut_s,
+                cut_e,
+                None,
+                None,
+            )?;
+            let sel = kernel.sel;
+            let cpa = aircraft::CpaResult {
+                q_m: kernel.q_m,
+                d_p_m: kernel.d_p_m,
+                lateral_m: kernel.lateral_m,
+                relative_alt_m: kernel.rel_alt_m,
+                beta_deg: kernel.beta_deg,
+                seg_len_m: kernel.seg_len_m,
+                t: kernel.t,
+            };
             // Clamp the DISPLAY CPA onto the observed segment so an off-segment
             // infinite-line foot can't report a phantom near pass. Cruise synthetic
             // segments are level (start == end == rep_alt_m), so the altitude clamp
@@ -244,22 +316,10 @@ pub fn scatter(
             // (ΔF needs the infinite-line `q_m`).
             let (disp_dist, disp_alt) = aircraft::clamped_display_cpa(&cpa, 0.0);
             let log_d = (disp_dist * aircraft::FT_PER_M).max(100.0).log10();
-            let thrust = aircraft::thrust_input_for_segment(
-                &seg,
-                seg.start_alt_m as f64,
-                seg.end_alt_m as f64,
-                terrain.start_elev - 30.0,
-                terrain.end_elev - 30.0,
-                f64::from(seg.departure_field_elev_m),
-            );
-            // The kernel admitted the same segment above, so this bracket cannot
-            // reject; the `else` only carries its `Option` type.
-            let (power_row, power_w) =
-                aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust)?;
             // Cruise rep-segments are level, so their stored descent state is
             // always false; departures take the climb correction regardless.
-            let lmax = npd_luts.lookup_lmax(class_idx, true, power_row, power_w, log_d)
-                + aircraft::heli_correction_db(seg.profile_idx, true, seg.heli_descent);
+            // Power bracket and heli term are the hoisted kernel inputs above.
+            let lmax = npd_luts.lookup_lmax(class_idx, true, power_row, power_w, log_d) + heli_db;
             Some(KernelOut {
                 idx,
                 seg,
@@ -292,11 +352,19 @@ pub fn scatter(
     let folds: Vec<CruiseChunkFold> = admitted
         .par_chunks(CRUISE_FOLD_CHUNK_ROWS)
         .map(|chunk| {
+            // Pre-sized: a chunk holds at most CRUISE_FOLD_CHUNK_ROWS rows, so
+            // its maps never rehash (consumers sort, capacity is order-free).
             let mut fold = CruiseChunkFold {
-                flights: FxHashMap::default(),
-                stats: FxHashMap::default(),
-                candidates: FxHashMap::default(),
-                cells: FxHashMap::default(),
+                flights: FxHashMap::with_capacity_and_hasher(
+                    chunk.len(),
+                    FxBuildHasher,
+                ),
+                stats: FxHashMap::with_capacity_and_hasher(chunk.len(), FxBuildHasher),
+                candidates: FxHashMap::with_capacity_and_hasher(
+                    chunk.len(),
+                    FxBuildHasher,
+                ),
+                cells: FxHashMap::with_capacity_and_hasher(chunk.len() / 4 + 1, FxBuildHasher),
             };
             for out in chunk {
                 let cells = if want_traces {
