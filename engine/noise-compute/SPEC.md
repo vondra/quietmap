@@ -162,7 +162,9 @@ area × 0.55 MW/ha, the tagged-farm median). A solar row with no nameplate and
 no footprint (a bare `generator:source=solar` node) stays silent — the generic
 10,000 m² default must not invent 0.55 MW / 80.4 dB for a rooftop panel — and
 a generator inside its plant polygon stays silent too (the plant owns the
-emission). Registry-confirmed solar
+emission). Both the plant containment and the transformer feed span every
+loaded square, so a facility across a square edge still sees its units in the
+neighbour. Registry-confirmed solar
 (synthetic NACE 3599) takes the same branch. Substations (14) emit per-MVA,
 24/7: IEC 551 LWA = 74 + 14·lg(MVA), 64 dB below 0.2 MVA (MVA from the joined
 `rating` sum of the class-15 transformers inside the substation polygon, else
@@ -899,7 +901,10 @@ retain solar, substation and transformer evidence for their specific models
 lifecycle tags survive, with OSM object kind to disambiguate IDs. Registry
 matching does not overwrite these classes. Industrial and leisure multipolygons
 retain every closed outer component as a separate row; unclosed fragments are
-omitted rather than assigned an area. Inner holes remain outside the
+omitted rather than assigned an area. A facility nameplate
+(`plant:output:electricity`, substation `rating`) is shared by area over the
+emitting parts, so a two-part 24 MW solar relation emits two 12 MW sources,
+not two 24 MW sources. Inner holes remain outside the
 existing single-ring geometry contract.
 
 `leisure_v5` adds the artificial-turf pitch class 12 (`surface=artificial_turf`;
