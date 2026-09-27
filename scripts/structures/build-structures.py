@@ -47,7 +47,8 @@ def build_one(name, prepared_dir, overture_parquet, regional,
     square_dir = os.path.join(prepared_dir, name)
     overture_files = [source for _, _, source in overture_sources(overture_parquet, square)]
     official_files = None if official_parquet is None else [
-        source for _, _, source in official_tile_sources(official_parquet, square)]
+        source for _, _, source in official_tile_sources(
+            official_parquet, square, expand_m=official_barriers.SUPPORT_HALO_M)]
     measured_files = None if measured_parquet is None else [
         source for _, _, source in official_tile_sources(measured_parquet, square)]
     if structure_is_fresh(os.path.join(square_dir, "structures.arrow"), input_content_digest(
@@ -57,7 +58,8 @@ def build_one(name, prepared_dir, overture_parquet, regional,
     ovt, overture_files = read_overture_parquet(overture_parquet, square)
     official, official_files = read_official_cache(
         official_parquet, square, official_barriers.SCHEMA,
-        official_barriers.CONTRACT_KEY, official_barriers.CONTRACT_VERSION) \
+        official_barriers.CONTRACT_KEY, official_barriers.CONTRACT_VERSION,
+        halo_m=official_barriers.SUPPORT_HALO_M) \
         if official_parquet is not None else ([], None)
     measured, measured_files = read_official_cache(
         measured_parquet, square, measured_heights.SCHEMA,

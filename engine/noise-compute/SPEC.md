@@ -652,11 +652,13 @@ without a screening height counts one level. The service-tree demand reads it.
 Noise walls keep a mapped OSM height; unmapped walls stand at their country's
 mean wall height (DE 3.88 m, US 4.45 m, AT 3.6 m, else 3 m), stored rounded
 to whole metres (4 m in Germany, the United States and Austria). Official barrier
-inventories (`structures-builder-7`) stand beside OSM: an official line
+inventories (`structures-builder-9`) stand beside OSM: an official line
 replaces the OSM micro-segments within 5 m of it and screens at its
 inventoried height (GWV top-minus-road-edge median, else the inventory's
-in-range median); official berms stay out of the thin-wall index until the
-terrain step consumes them.
+in-range median); replacement reads a 375 m support halo past the square
+border while owned hops still emit alone, so a cross-square survey
+replaces its OSM twin instead of screening twice. Official berms stay out
+of the thin-wall index until the terrain step consumes them.
 
 ## Raster terrain and canopy inputs
 

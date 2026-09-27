@@ -39,6 +39,14 @@ REPLACE_DISTANCE_M = 5.0
 # OSM linear ways chord at 250 m (engine/osm-extract/src/pass2.rs); official
 # hops never run longer, and keep their surveyed intermediate vertices.
 HOP_CAP_M = 250.0
+# Replacement support reaches past the square border: an OSM micro-segment
+# (<=250 m, midpoint-owned) extends <=125 m outside the square, the probe
+# reaches REPLACE_DISTANCE_M past its endpoints, and a supporting hop
+# (<=250 m) extends <=125 m past its centroid — support centroids live
+# within 255 m. The loader keeps hops whose centroid is within
+# SUPPORT_HALO_M of the square span for replacement support (owned=False);
+# emission still uses owned hops only, so no hop screens twice.
+SUPPORT_HALO_M = 375.0
 
 
 def segment_length_m(lon0, lat0, lon1, lat1):
