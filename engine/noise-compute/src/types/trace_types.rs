@@ -175,7 +175,7 @@ pub struct GroundTrace {
 #[derive(Debug, Clone, Serialize)]
 pub struct BaselineTrace {
     pub geometric_db: f64,
-    pub atmospheric_bands: [f64; NUM_BANDS],
+    pub atmospheric_bands: PerPeriod<[f64; NUM_BANDS]>,
     pub ground_factor_g: f64,
     pub source_height_m: f64,
     pub finite_line_corr_db: f64,

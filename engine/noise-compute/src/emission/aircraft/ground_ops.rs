@@ -6,7 +6,10 @@ use crate::types::NUM_BANDS;
 pub(crate) const SURFACE_RUNWAY_SPEED_KT: f32 = 70.0;
 pub(crate) const SURFACE_TAXIWAY_SPEED_KT: f32 = 18.0;
 pub(crate) const SURFACE_APRON_SPEED_KT: f32 = 12.0;
-pub(crate) const GROUND_OPS_REF_OFFSET_M: f64 = 25.0;
+/// Line-source anchor of the ground-ops carve-out: emission lives at 25 m, atmosphere
+/// integrates past it. Public: the painter's generated header and surface-cuda-check
+/// read this same line, so the anchor cannot drift between lanes.
+pub const GROUND_OPS_REF_OFFSET_M: f64 = 25.0;
 pub(crate) const GROUND_OPS_SPEED_CLAMP_DB: f64 = 3.0;
 pub(crate) const GROUND_OPS_RUNWAY_DEPARTURE_BONUS_DB: f64 = 2.0;
 pub(crate) const GROUND_OPS_RUNWAY_SPECTRUM_SHAPE: [f64; NUM_BANDS] =

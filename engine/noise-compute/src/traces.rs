@@ -74,13 +74,17 @@ pub fn variants_to_received_bands(
     }
 }
 
-/// Atmospheric attenuation (per band, positive = dB removed) at a slant distance: the day
-/// period's A_atm of the ray transfer (propagation::air_absorption).
+/// Atmospheric attenuation per period (per band, positive = dB removed) over a
+/// distance: each period's A_atm of the ray transfer (propagation::air_absorption).
+/// Ground ops pass the distance past the 25 m anchor, every other layer the slant.
+/// The one chart path behind every popup atmospheric spectrum, so the chart and the
+/// period-aware levels cannot disagree again.
 pub fn atmospheric_bands(
     d_slant_m: f64,
     weather: &Meteorology,
-) -> [f64; NUM_BANDS] {
-    std::array::from_fn(|band| weather.absorption[0][band].attenuation_db(d_slant_m))
+) -> PerPeriod<[f64; NUM_BANDS]> {
+    let bands = |period: usize| std::array::from_fn(|band| weather.absorption[period][band].attenuation_db(d_slant_m));
+    PerPeriod { day: bands(0), evening: bands(1), night: bands(2) }
 }
 
 /// Consumes a `PathProfile` into a serializable `PathProfileTrace` (dropping
@@ -660,6 +664,26 @@ mod tests {
     #[test]
     fn ground_trace_shape() {
         assert_bands_no_scalar(&ground_trace(0.5, [0.0; NUM_BANDS]));
+    }
+
+    /// The atmospheric chart follows each period's own climate: with 1/2/3 dB/km
+    /// day/evening/night, one kilometre reads 1/2/3 dB per band. A single day
+    /// array cannot describe an evening or night row.
+    #[test]
+    fn atmospheric_chart_follows_each_period_climate() {
+        use crate::propagation::air_absorption::AbsorptionClimate;
+        let mut weather = Meteorology::defaults();
+        weather.absorption = [
+            [AbsorptionClimate::steady(1.0); NUM_BANDS],
+            [AbsorptionClimate::steady(2.0); NUM_BANDS],
+            [AbsorptionClimate::steady(3.0); NUM_BANDS],
+        ];
+        let bands = atmospheric_bands(1000.0, &weather);
+        for band in 0..NUM_BANDS {
+            assert_eq!(bands.day[band], 1.0);
+            assert_eq!(bands.evening[band], 2.0);
+            assert_eq!(bands.night[band], 3.0);
+        }
     }
 
     /// The trace shows the kernel's own runs and depth (no second walk): a run's

@@ -952,7 +952,9 @@ values and invalid percentages are errors. Window maxima conservatively bound
 any interpolation inside the window. The popup samples its receiver's window through
 `RealRasters::weather`; the painter uploads the same per-receiver weather to the card
 (one `DeviceWeather` per receiver: p, absorption moments, and the window's per-period
-mixed gains with α_min for the pair gate), so the two agree. A present but unreadable
+mixed gains with α_min for the pair gate), so the two agree. Airport ground-ops pairs
+evaluate A_atm in the row's period over (d − 25 m) on both lanes, and the popup
+atmospheric chart draws each period's own curve. A present but unreadable
 file is refused loudly and falls back to the built-in defaults above, as does a square
 with no file.
 

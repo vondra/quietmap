@@ -44,6 +44,7 @@ mod support;
 mod thrust;
 
 pub use doc29::*;
+pub use ground_ops::GROUND_OPS_REF_OFFSET_M;
 pub(crate) use ground_ops::*;
 pub use horizon::*;
 pub use npd::*;
