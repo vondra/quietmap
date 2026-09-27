@@ -33,14 +33,19 @@ def feather(base, national, halo):
     return base + weight * difference, weight, difference
 
 
+def _edge_slices(axis):
+    """The low/high node slices straddling every edge along one axis."""
+    low = [slice(None), slice(None)]
+    high = low.copy()
+    low[axis], high[axis] = slice(None, -1), slice(1, None)
+    return tuple(low), tuple(high)
+
+
 def _induced_steps(weight, difference):
     """Per-edge selection-weight steps |Δw|·bound for both lattice orientations."""
     steps = []
     for axis in (0, 1):
-        low = [slice(None), slice(None)]
-        high = low.copy()
-        low[axis], high[axis] = slice(None, -1), slice(1, None)
-        low, high = tuple(low), tuple(high)
+        low, high = _edge_slices(axis)
         # At coverage limits, continue the last available residual across the boundary.
         # Weight is zero there; this affects only the conservative error bound.
         bound = np.maximum(np.abs(difference[low]), np.abs(difference[high]))
@@ -53,10 +58,7 @@ def _core(field, halo):
 
 
 def axial_slopes(national, base, axis):
-    low = [slice(None), slice(None)]
-    high = low.copy()
-    low[axis], high[axis] = slice(None, -1), slice(1, None)
-    low, high = tuple(low), tuple(high)
+    low, high = _edge_slices(axis)
     slope = np.abs(base[high] - base[low])
     both = np.isfinite(national[low]) & np.isfinite(national[high])
     return np.maximum(slope, np.where(both, np.abs(national[high] - national[low]), 0.))
@@ -81,12 +83,7 @@ def relief(slopes, axis):
 def core_relief(national, base, halo):
     """Per-edge natural relief on the gated core, matching artificial_steps' crop."""
     slopes = [axial_slopes(national, base, axis) for axis in (0, 1)]
-    cores = []
-    for axis in (0, 1):
-        slope = relief(slopes, axis)
-        cores.append(slope[halo - 1:slope.shape[0] - halo + 1,
-                           halo - 1:slope.shape[1] - halo + 1])
-    return cores
+    return [_core(relief(slopes, axis), halo) for axis in (0, 1)]
 
 
 def hides_in_relief(steps, natural):
