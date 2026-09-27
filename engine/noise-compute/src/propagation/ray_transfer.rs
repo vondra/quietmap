@@ -73,6 +73,50 @@ pub struct RayScratch {
     path: RayPathBuffers,
     bare_path: RayPathBuffers,
     vertical: VerticalPathScratch,
+    /// Section totals of every ray evaluated through this scratch since the
+    /// last reset. Written only while `time_phase` (the `POPUP_TIMING`
+    /// per-ray breakdown); readers snapshot the delta around their own rays.
+    pub phase: RayPhaseTotals,
+    pub time_phase: bool,
+}
+
+/// Nanoseconds per ray section, summed over many rays (the `POPUP_TIMING` drill-down).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RayPhaseTotals {
+    pub n_rays: u64,
+    pub profile_ns: u64,
+    pub canopy_ns: u64,
+    pub crossings_ns: u64,
+    pub fill_ns: u64,
+    pub boundary_ns: u64,
+    pub mix_ns: u64,
+    pub detail_ns: u64,
+}
+
+impl RayPhaseTotals {
+    pub fn add(&mut self, other: &Self) {
+        self.n_rays += other.n_rays;
+        self.profile_ns += other.profile_ns;
+        self.canopy_ns += other.canopy_ns;
+        self.crossings_ns += other.crossings_ns;
+        self.fill_ns += other.fill_ns;
+        self.boundary_ns += other.boundary_ns;
+        self.mix_ns += other.mix_ns;
+        self.detail_ns += other.detail_ns;
+    }
+
+    pub fn sub(&self, before: &Self) -> Self {
+        Self {
+            n_rays: self.n_rays - before.n_rays,
+            profile_ns: self.profile_ns - before.profile_ns,
+            canopy_ns: self.canopy_ns - before.canopy_ns,
+            crossings_ns: self.crossings_ns - before.crossings_ns,
+            fill_ns: self.fill_ns - before.fill_ns,
+            boundary_ns: self.boundary_ns - before.boundary_ns,
+            mix_ns: self.mix_ns - before.mix_ns,
+            detail_ns: self.detail_ns - before.detail_ns,
+        }
+    }
 }
 
 /// What the popup trace shows of one ray.
@@ -116,24 +160,46 @@ pub fn evaluate_ray_transfer(
     scratch: &mut RayScratch,
     detail: Option<&mut Option<RayDetail>>,
 ) -> RayTransfer {
+    // Section timers: one bool check per section when off (the `POPUP_TIMING`
+    // per-ray breakdown); field-disjoint from the buffers timed around.
+    let tp = scratch.time_phase;
+    macro_rules! stamp {
+        ($field:ident, $from:expr) => {
+            if tp {
+                scratch.phase.$field += $from.elapsed().as_nanos() as u64;
+            }
+        };
+    }
     let horizontal_m = grid::geo::flat_dist(source.lat, source.lon, receiver.lat, receiver.lon).max(1.0);
+    let t_section = tp.then(std::time::Instant::now);
     let profile = &mut scratch.profile;
     rasters.build_path_profile(source.lat, source.lon, receiver.lat, receiver.lon, horizontal_m, profile);
     let source_altitude = f64::from(profile.elevation_m[0]) + source.height_m;
     let slant = horizontal_m.hypot(receiver.altitude_m - source_altitude).max(1.0);
+    if let Some(t) = t_section {
+        stamp!(profile_ns, t);
+    }
+    let t_section = tp.then(std::time::Instant::now);
     let foliage_depth_h =
         canopy_depth_on_ray(profile, source_altitude, receiver.altitude_m, MeteorologicalState::Homogeneous);
     let foliage_depth_f =
         canopy_depth_on_ray(profile, source_altitude, receiver.altitude_m, MeteorologicalState::Favourable);
     let foliage_h = foliage_attenuation(foliage_depth_h);
     let foliage_f = foliage_attenuation(foliage_depth_f);
+    if let Some(t) = t_section {
+        stamp!(canopy_ns, t);
+    }
     let source_ground_factor = match source.ground {
         SourceGround::Fixed(g) => g,
         SourceGround::UnderSource => 1.0 - f64::from(profile.imd_u8[0].min(100)) / 100.0,
     };
+    let t_section = tp.then(std::time::Instant::now);
     scratch.crossings.clear();
     if obstacles_on_ray {
         obstacles.crossings(source.lat, source.lon, receiver.lat, receiver.lon, &mut scratch.crossings);
+    }
+    if let Some(t) = t_section {
+        stamp!(crossings_ns, t);
     }
     let inputs = RayPathInputs {
         source_altitude_m: source_altitude,
@@ -142,18 +208,40 @@ pub fn evaluate_ray_transfer(
         platform_half_width_m: source.platform_half_width_m,
         exclusion_radius_m: source.exclusion_radius_m,
     };
+    let t_fill = tp.then(std::time::Instant::now);
     scratch.path.fill(profile, &scratch.crossings, &inputs, true);
+    if let Some(t) = t_fill {
+        stamp!(fill_ns, t);
+    }
     let states = [MeteorologicalState::Homogeneous, MeteorologicalState::Favourable];
+    let t_boundary = tp.then(std::time::Instant::now);
     let full: [StateBoundary; 2] =
         states.map(|state| state_boundary(&scratch.path.path(&inputs, true), state, &mut scratch.vertical));
+    if let Some(t) = t_boundary {
+        stamp!(boundary_ns, t);
+    }
     let (no_terrain, no_screening) = if variants {
+        let t_boundary = tp.then(std::time::Instant::now);
         let no_terrain =
             states.map(|state| state_boundary(&scratch.path.path(&inputs, false), state, &mut scratch.vertical));
+        if let Some(t) = t_boundary {
+            stamp!(boundary_ns, t);
+        }
         let no_screening = if scratch.crossings.is_empty() {
             full.clone()
         } else {
+            let t_fill = tp.then(std::time::Instant::now);
             scratch.bare_path.fill(profile, &scratch.crossings, &inputs, false);
-            states.map(|state| state_boundary(&scratch.bare_path.path(&inputs, true), state, &mut scratch.vertical))
+            if let Some(t) = t_fill {
+                stamp!(fill_ns, t);
+            }
+            let t_boundary = tp.then(std::time::Instant::now);
+            let no_screening =
+                states.map(|state| state_boundary(&scratch.bare_path.path(&inputs, true), state, &mut scratch.vertical));
+            if let Some(t) = t_boundary {
+                stamp!(boundary_ns, t);
+            }
+            no_screening
         };
         (no_terrain, no_screening)
     } else {
@@ -182,6 +270,7 @@ pub fn evaluate_ray_transfer(
         pair(&full, |b| b.without_ground_db),
         pair(&full, attenuation),
     ];
+    let t_mix = tp.then(std::time::Instant::now);
     let periods: [VariantBands; 3] = std::array::from_fn(|period| {
         let p = weather.favourable_probability(period, azimuth);
         let absorption: [f64; NUM_BANDS] =
@@ -194,6 +283,10 @@ pub fn evaluate_ray_transfer(
             })
         })
     });
+    if let Some(t) = t_mix {
+        stamp!(mix_ns, t);
+    }
+    let t_detail = tp.then(std::time::Instant::now);
     if let Some(slot) = detail {
         let p = weather.favourable_probability(0, azimuth);
         let boundary_full = mixed_db(p, &full[0].attenuation_db, &full[1].attenuation_db);
@@ -253,6 +346,12 @@ pub fn evaluate_ray_transfer(
             foliage_runs: canopy_runs_on_ray(profile, source_altitude, receiver.altitude_m),
             profile: std::mem::take(profile),
         });
+    }
+    if let Some(t) = t_detail {
+        stamp!(detail_ns, t);
+    }
+    if tp {
+        scratch.phase.n_rays += 1;
     }
     RayTransfer {
         slant_distance_m: slant,

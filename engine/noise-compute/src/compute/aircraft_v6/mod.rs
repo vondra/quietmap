@@ -70,8 +70,8 @@ pub fn compute_aircraft_v6(
     let t_start = std::time::Instant::now();
 
     let mut traces = traces;
-    let flights = if airborne_row_count(airborne_rows) == 0 {
-        HashMap::new()
+    let (flights, air_stats) = if airborne_row_count(airborne_rows) == 0 {
+        (HashMap::new(), airborne::AirborneScatterStats::default())
     } else {
         let horizon = horizon.expect("non-empty airborne rows require a receiver terrain horizon");
         airborne::scatter(
@@ -100,7 +100,7 @@ pub fn compute_aircraft_v6(
     // band counters come from `cruise_flight_stats` (real fid dedup).
     let mut cruise_flights: HashMap<u64, FlightAccum> = HashMap::new();
     let mut top_flight_candidates: HashMap<u64, TopFlightCandidate> = HashMap::new();
-    cruise::scatter(
+    let cruise_stats = cruise::scatter(
         receiver,
         cruise_rows,
         rasters,
@@ -133,13 +133,16 @@ pub fn compute_aircraft_v6(
     if timing_on {
         let t_total = t_start.elapsed();
         eprintln!(
-            "ac-v6 total={:.0}ms airb_scatter={:.0}ms cr_scatter={:.0}ms airb_detail={:.0}ms (n_airb={} n_cr={})",
+            "ac-v6 total={:.0}ms airb_scatter={:.0}ms cr_scatter={:.0}ms airb_detail={:.0}ms (n_airb={} eval={} rcvd={} n_cr={} cr_eval={})",
             ms(t_total),
             ms(t_airborne_scatter),
             ms(t_cruise_scatter),
             ms(t_airborne_detail),
             airborne_row_count(airborne_rows),
+            air_stats.n_eval,
+            air_stats.n_received,
             cruise_rows.len(),
+            cruise_stats.n_eval,
         );
     }
     if let Some(t) = timings {

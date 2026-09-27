@@ -433,6 +433,7 @@ mod tests {
                 &crate::propagation::meteorology::Meteorology::defaults(),
                 &mut LinePieceScratch::default(),
                 None,
+                false,
             )
             .unwrap();
             transfer.periods[0][VARIANT_FULL][4]

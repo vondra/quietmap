@@ -7,8 +7,8 @@ use crate::propagation::line_quadrature::{
 use crate::propagation::meteorology::Meteorology;
 use crate::propagation::obstacle_index::ObstacleSet;
 use crate::propagation::ray_transfer::{
-    evaluate_ray_transfer, RayDetail, RayReceiver, RayScratch, RaySource, SourceGround,
-    VariantBands, VARIANT_FULL, VARIANT_NO_SCREENING, VARIANT_NO_TERRAIN,
+    evaluate_ray_transfer, RayDetail, RayPhaseTotals, RayReceiver, RayScratch, RaySource,
+    SourceGround, VariantBands, VARIANT_FULL, VARIANT_NO_SCREENING, VARIANT_NO_TERRAIN,
 };
 use crate::types::{RasterSampler, ScreeningFanIntervalTrace, ScreeningFanTrace, NUM_BANDS};
 
@@ -33,6 +33,9 @@ pub struct LinePieceTransfer {
     pub loudest_node: Option<RayDetail>,
     /// Every node as a fan slice, when a trace was asked for.
     pub fan: Option<ScreeningFanTrace>,
+    /// Ray section totals of this piece's nodes (and the loudest-node detail ray), all zero
+    /// unless `time_phase` (the `POPUP_TIMING` per-ray breakdown).
+    pub phase: RayPhaseTotals,
 }
 
 /// Per-thread buffers of [`evaluate_line_piece`].
@@ -43,8 +46,9 @@ pub struct LinePieceScratch {
 }
 
 /// Evaluates `piece` at `receiver`. `loudness_weights` rank the nodes for the trace (the day
-/// emission, A-weighted, linear); `None` when no trace is wanted. `None` for a piece of zero
-/// length.
+/// emission, A-weighted, linear); `None` when no trace is wanted. `time_phase` fills the
+/// returned ray section totals (the `POPUP_TIMING` per-ray breakdown). `None` for a piece of
+/// zero length.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_line_piece(
     receiver: &RayReceiver,
@@ -56,6 +60,7 @@ pub fn evaluate_line_piece(
     weather: &Meteorology,
     scratch: &mut LinePieceScratch,
     loudness_weights: Option<&[f64; NUM_BANDS]>,
+    time_phase: bool,
 ) -> Option<LinePieceTransfer> {
     let m_per_deg_lon = grid::geo::m_per_deg_lon(receiver.lat.to_radians());
     let local = |lat: f64, lon: f64, altitude: f64| {
@@ -91,6 +96,8 @@ pub fn evaluate_line_piece(
         );
     };
     line_quadrature_nodes(&geometry, piece.directivity, &mut skyline, &mut scratch.nodes);
+    scratch.ray.time_phase = time_phase;
+    let phase_before = scratch.ray.phase;
     let divergence = geometry.divergence_factor();
     let longitude_span = grid::geo::wrapped_longitude_delta(piece.start_lon, piece.end_lon);
     let source_at = |along_m: f64| {
@@ -164,6 +171,7 @@ pub fn evaluate_line_piece(
         periods,
         loudest_node,
         fan,
+        phase: scratch.ray.phase.sub(&phase_before),
     })
 }
 

@@ -136,7 +136,7 @@ pub fn scatter(
     buildings: Option<&aircraft::BuildingHorizon>,
     trace_cap: usize,
     traces: Option<&mut TraceCollector>,
-) -> HashMap<u64, FlightAccum> {
+) -> (HashMap<u64, FlightAccum>, AirborneScatterStats) {
     let want_traces = traces.is_some();
     let ctx = ScatterContext::new(receiver, n_days_f, weights, horizon, buildings);
     let chunks: Vec<ChunkScatter> = chunk_batches(batches)
@@ -196,6 +196,18 @@ struct ChunkScatter {
     above_cutoff: u32,
     /// Split pieces in row order; their chords are only known after the merge.
     pieces: Vec<PieceEval>,
+    /// Rows the Doc 29 kernel admitted (split pieces included), and unsplit
+    /// rows that also cleared the 20 dB event floor into their flight's
+    /// received energy (the `POPUP_TIMING` evaluated-vs-considered counts).
+    n_eval: u64,
+    n_received: u64,
+}
+
+/// Evaluated-vs-considered counts of one [`scatter`] call.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AirborneScatterStats {
+    pub n_eval: u64,
+    pub n_received: u64,
 }
 
 /// Merge the chunk tables in chunk order, fold the split chords, and, when
@@ -207,16 +219,20 @@ fn merge_chunks(
     chunks: Vec<ChunkScatter>,
     trace_cap: usize,
     traces: Option<&mut TraceCollector>,
-) -> HashMap<u64, FlightAccum> {
+) -> (HashMap<u64, FlightAccum>, AirborneScatterStats) {
     use std::collections::hash_map::Entry;
 
     let mut chunks = chunks.into_iter();
     let Some(first) = chunks.next() else {
-        return HashMap::new();
+        return (HashMap::new(), AirborneScatterStats::default());
     };
     let mut flights = first.flights;
     let mut above_cutoff = first.above_cutoff;
     let mut pieces = first.pieces;
+    let mut stats = AirborneScatterStats {
+        n_eval: first.n_eval,
+        n_received: first.n_received,
+    };
     // `into_vec` is the heap's backing array: arbitrary order, but a pure
     // function of this chunk's insertion sequence, hence run-to-run stable.
     let mut scored: Vec<ScoredTrace> = first.heap.into_vec().into_iter().map(|r| r.0).collect();
@@ -232,6 +248,8 @@ fn merge_chunks(
             }
         }
         above_cutoff = above_cutoff.saturating_add(chunk.above_cutoff);
+        stats.n_eval += chunk.n_eval;
+        stats.n_received += chunk.n_received;
         scored.extend(chunk.heap.into_vec().into_iter().map(|r| r.0));
         pieces.extend(chunk.pieces);
     }
@@ -273,7 +291,7 @@ fn merge_chunks(
             }
         }
     }
-    flights
+    (flights, stats)
 }
 
 /// The Doc 29 kernel loop over one contiguous batch run starting at global
@@ -291,6 +309,8 @@ fn scatter_chunk(
     let mut flights: HashMap<u64, FlightAccum> = HashMap::new();
     let mut above_cutoff: u32 = 0;
     let mut pieces = Vec::new();
+    let mut n_eval: u64 = 0;
+    let mut n_received: u64 = 0;
     // Bounded top-K min-heap (size `trace_cap`). We rank by `rank_key`
     // (monotone with received_lden.full) and use `Reverse` so the heap
     // root is the *weakest* kept trace — pop+push replaces it when a
@@ -310,6 +330,7 @@ fn scatter_chunk(
             row_order += 1;
             if batch.flags[i] & chords::SPLIT_PIECE != 0 {
                 if let Some(row) = evaluate_row::<false>(ctx, batch, i) {
+                    n_eval += 1;
                     pieces.push(PieceEval::new(
                         first_batch + batch_offset,
                         i,
@@ -323,6 +344,7 @@ fn scatter_chunk(
             let Some(row) = evaluate_row::<true>(ctx, batch, i) else {
                 continue;
             };
+            n_eval += 1;
             let acc = flight_accumulator(&mut flights, batch, i, row.provenance_weight);
             // The retained variants deliberately run before the received
             // floor so a strong aircraft hidden by a terrain/building edge
@@ -331,6 +353,7 @@ fn scatter_chunk(
             if row.below_event_floor() {
                 continue;
             }
+            n_received += 1;
             row.apply_received(acc);
 
             if want_traces && row.lmax >= AIRBORNE_TRACE_CUTOFF_DB {
@@ -369,6 +392,8 @@ fn scatter_chunk(
         heap,
         above_cutoff,
         pieces,
+        n_eval,
+        n_received,
     }
 }
 

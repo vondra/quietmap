@@ -125,6 +125,12 @@ struct CellAccum {
     top_fids: HashMap<u64, CellTopFlight>,
 }
 
+/// Evaluated-vs-considered counts of one [`scatter`] call.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CruiseScatterStats {
+    pub n_eval: u64,
+}
+
 pub fn scatter(
     receiver: &Receiver,
     rows: &[CruiseRowView<'_>],
@@ -135,12 +141,13 @@ pub fn scatter(
     cruise_flight_stats: &mut HashMap<u64, CruiseFlightStats>,
     top_flight_candidates: &mut HashMap<u64, TopFlightCandidate>,
     traces: Option<&mut TraceCollector>,
-) {
+) -> CruiseScatterStats {
     let rx_elev = receiver.altitude_m();
     let npd_luts = aircraft::NpdLuts::shared();
     // Trace aggregates keyed by the (i32, i32) z30 cell pair of the
     // bucket centroid via the grid crate.
     let mut cell_accums: HashMap<(i32, i32), CellAccum> = HashMap::new();
+    let mut n_eval: u64 = 0;
 
     // The cell-local segment extends at most half a cell diagonal from its centre.
     let m_per_lat = crate::constants::M_PER_DEG_LAT;
@@ -200,6 +207,7 @@ pub fn scatter(
         ) else {
             continue;
         };
+        n_eval += 1;
         let energy = fast_exp_f64(sel * std::f64::consts::LN_10 * 0.1) * density;
         let period = (row.period.min(2)) as usize;
         let acc = flights.entry(synth_fid).or_insert_with(|| {
@@ -399,6 +407,7 @@ pub fn scatter(
                 ));
         }
     }
+    CruiseScatterStats { n_eval }
 }
 
 const TOP_FLIGHTS_PER_CELL: usize = 5;

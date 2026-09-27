@@ -594,7 +594,7 @@ fn query_noise_impl(
 
     if timing_on {
         eprintln!(
-            "popup-timing total={:.0}ms load={:.0}ms collect={:.0}ms compute={:.0}ms (ground={:.0}ms air={:.0}ms) json={:.0}ms (rd={} rl={} ac={})",
+            "popup-timing total={:.0}ms load={:.0}ms collect={:.0}ms compute={:.0}ms (ground={:.0}ms air={:.0}ms) json={:.0}ms (sq={} rd={} rl={} ac={})",
             t_total.as_secs_f64() * 1000.0,
             t_load.as_secs_f64() * 1000.0,
             t_collect.as_secs_f64() * 1000.0,
@@ -602,6 +602,7 @@ fn query_noise_impl(
             t_ground.as_secs_f64() * 1000.0,
             (t_compute - t_ground).as_secs_f64() * 1000.0,
             (t_total - t_load - t_collect - t_compute).as_secs_f64() * 1000.0,
+            square_names.len(),
             n_roads,
             n_railways,
             n_aircraft,

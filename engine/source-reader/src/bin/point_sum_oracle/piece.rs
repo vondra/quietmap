@@ -47,6 +47,7 @@ pub fn production(
         weather,
         &mut LinePieceScratch::default(),
         None,
+        false,
     )
     .map(|transfer| transfer.periods)
 }
