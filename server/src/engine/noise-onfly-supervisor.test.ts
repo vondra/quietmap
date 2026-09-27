@@ -157,7 +157,6 @@ const FULL = '{"total_lden":70.3,"segments":[{"a":1}],"segments_meta":{"n":1},"c
 
 function timeoutSupervisor(t: TestContext) {
   const workers: FakeWorker[] = []
-  let exits = 0
   const supervisor = new NoiseOnflySupervisor({
     createWorker: () => {
       const worker = new FakeWorker()
@@ -167,10 +166,9 @@ function timeoutSupervisor(t: TestContext) {
     maxQueue: 4,
     queueTimeoutMs: 1000,
     workTimeoutMs: 25,
-    exitProcess: () => { exits += 1 },
   })
   t.after(async () => supervisor.close())
-  return { workers, supervisor, exits: () => exits }
+  return { workers, supervisor }
 }
 
 test('a work timeout answers 504, never terminates the worker, and reuses it after the late reply', async (t) => {
@@ -228,24 +226,30 @@ test('aborting an active request keeps its slot busy until the late reply', asyn
   assert.equal(await second, '{"second":true}')
 })
 
-test('a worker that neither replies nor exits after its 504 makes the process exit for a unit restart', async (t) => {
-  const { workers, supervisor, exits } = timeoutSupervisor(t)
+test('a worker that never replies after its 504 parks its slot without exiting; a late reply still frees it', async (t) => {
+  const { workers, supervisor } = timeoutSupervisor(t)
   const first = supervisor.queryNoiseAtPoint(50.1, 14.4)
   await waitFor(() => workers.length === 1 && workers[0].postMessages.length === 1)
   await assert.rejects(first, (error: unknown) => error instanceof NoiseOnflyRequestError && error.statusCode === 504)
 
-  // Ten work timeouts (25 ms each) after the client gave up: still no reply,
-  // no error, no exit — the slot can never be freed without dlclosing the
-  // addon, so the whole process goes instead. Never a terminate.
-  await new Promise((resolve) => setTimeout(resolve, 150))
-  assert.equal(exits(), 0)
-  await waitFor(() => exits() === 1, 500)
+  // Far past ten work timeouts with no reply, no error, no exit: the slot
+  // stays parked, the worker is never terminated, and the process never
+  // exits itself — a starved-but-healthy call must not take every visitor
+  // down with it. Never a terminate, never an exit.
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  assert.equal(workers.length, 1)
+  assert.equal(workers[0].postMessages.length, 1)
   assert.equal(workers[0].terminateCalls, 0)
 
-  // A late reply after the deadline is still just a reply: no second exit.
-  workers[0].replyAt(0, '{"late":true}')
-  await new Promise((resolve) => setTimeout(resolve, 300))
-  assert.equal(exits(), 1)
+  // The late reply frees the parked slot like any other reply and still
+  // fills the point cache.
+  workers[0].replyAt(0, FULL)
+  const second = supervisor.queryNoiseAtPoint(50.2, 14.5)
+  await waitFor(() => workers[0].postMessages.length === 2)
+  assert.equal(supervisor.cachedFull(50.1, 14.4), FULL)
+  workers[0].replyAt(1, '{"second":true}')
+  assert.equal(await second, '{"second":true}')
+  assert.equal(workers[0].terminateCalls, 0)
 })
 
 test('a worker that dies while parked after a 504 frees its slot and is replaced', async (t) => {

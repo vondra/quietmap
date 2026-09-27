@@ -34,6 +34,26 @@ fn canopy_nodes_reach_both_profiles_and_missing_nodes_fail() {
     let checked = CheckedRasters::new(&missing);
     let mut profile = PathProfile::new();
     checked.build_path_profile(50.0, 14.0, 50.001, 14.001, 130.0, &mut profile);
-    assert!(profile.canopy_m.iter().all(|v| v.is_nan()));
+    // No NaN escapes into the kernels: the planes are sanitized to finite
+    // and the click is refused by name via `ensure_valid`.
+    assert!(profile.canopy_m.iter().all(|v| v.is_finite()));
+    assert!(profile.elevation_m.iter().all(|v| v.is_finite()));
     assert!(checked.ensure_valid().is_err());
+}
+
+#[test]
+fn missing_raster_files_emit_finite_fallbacks_and_refuse_by_name() {
+    let root = tempfile::tempdir().unwrap();
+    let real = RealRasters::new(root.path());
+    let checked = CheckedRasters::new(&real);
+    let elevation = checked.elevation(50.0, 14.0);
+    let ground_g = checked.ground_g(50.0, 14.0);
+    assert!(elevation.is_finite(), "{elevation}");
+    assert!(ground_g.is_finite(), "{ground_g}");
+    let mut profile = PathProfile::new();
+    checked.build_path_profile(50.0, 14.0, 50.001, 14.001, 130.0, &mut profile);
+    assert!(profile.elevation_m.iter().all(|v| v.is_finite()));
+    assert!(profile.canopy_m.iter().all(|v| v.is_finite()));
+    let error = checked.ensure_valid().unwrap_err();
+    assert!(error.to_string().contains("50"), "{error}");
 }

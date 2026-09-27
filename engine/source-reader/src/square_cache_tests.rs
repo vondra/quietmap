@@ -10,7 +10,7 @@ use arrow::ipc::{reader::FileReader, writer::FileWriter};
 use arrow::record_batch::RecordBatch;
 use square_store::store::load_square;
 
-use super::{acquire_squares_parallel, STORE};
+use super::{acquire_squares_parallel, forget_squares_served_with_a_fault, STORE};
 use crate::structure_test_fixture as fx;
 
 #[path = "native_receiver_tests.rs"]
@@ -213,11 +213,42 @@ fn scan_to_insert_interleaving_preserves_hits_and_active_pins() {
     reset_store(Path::new(""));
 }
 
+fn forget_keeps_squares_pinned_by_a_concurrent_acquire() {
+    let tmp = tempfile::tempdir().unwrap();
+    reset_store(tmp.path());
+    let a = "z9/0/0".to_string();
+
+    let warmed = acquire_squares_parallel(std::slice::from_ref(&a)).unwrap();
+    drop(warmed);
+    // A concurrent query scans and pins A, then loads its own misses outside
+    // the lock; a served-with-fault query forgetting A in between must not
+    // pull it out from under the waiting acquire.
+    let (scan_pins, missing) = STORE.read().unwrap().pin_cached(std::slice::from_ref(&a));
+    assert!(missing.is_empty());
+    forget_squares_served_with_a_fault(std::slice::from_ref(&a)).unwrap();
+    {
+        let store = STORE.read().unwrap();
+        assert!(
+            store.squares.contains_key(&a),
+            "forget must keep a square pinned by a concurrent acquire"
+        );
+    }
+    let repinned = acquire_squares_parallel(std::slice::from_ref(&a)).unwrap();
+    assert!(Arc::ptr_eq(&scan_pins[0], &repinned[0]));
+    drop(scan_pins);
+    drop(repinned);
+    // Unpinned, the faulted square leaves the cache so a repaired file serves next.
+    forget_squares_served_with_a_fault(std::slice::from_ref(&a)).unwrap();
+    assert!(!STORE.read().unwrap().squares.contains_key(&a));
+    reset_store(Path::new(""));
+}
+
 #[test]
 fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
     // One test owns STORE; no competing process-wide cache fixture.
     parallel_square_load_error_leaves_cache_unchanged();
     scan_to_insert_interleaving_preserves_hits_and_active_pins();
+    forget_keeps_squares_pinned_by_a_concurrent_acquire();
     let tmp = tempfile::tempdir().unwrap();
     super::YEAR_DIR.set(tmp.path().to_path_buf()).unwrap();
     let (lat, lon) = (60.0, 20.0);

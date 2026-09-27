@@ -1,4 +1,12 @@
 //! Operation-local validation of consumed raster channels over shared lazy caches.
+//!
+//! A missing or corrupt raster square refuses the click that needs it, with
+//! the square's coordinates named. The numeric kernels cannot carry that
+//! refusal (a NaN through a line integral panics the whole server), so this
+//! guard records the first fault and emits a finite fallback instead: the
+//! computation always completes on finite inputs, and the caller refuses the
+//! click via [`CheckedRasters::ensure_valid`] before publishing anything.
+//! Healthy squares never touch the fallback and compute bit-identical levels.
 
 use crate::{RawTile, RealRasters};
 use noise_compute::propagation::PathProfile;
@@ -23,8 +31,13 @@ impl std::fmt::Display for RasterUnavailable {
 
 impl std::error::Error for RasterUnavailable {}
 
+/// Fallback elevation (m) emitted after a fault is recorded. Sea level keeps
+/// every downstream kernel finite; the answer is discarded by `ensure_valid`.
+const FALLBACK_ELEVATION_M: f64 = 0.0;
+/// Fallback ground factor emitted after a fault. Mixed ground; discarded too.
+const FALLBACK_GROUND_G: f64 = 0.5;
+
 /// One calculation owns this guard; the underlying mmap caches remain shared.
-/// Numeric kernels may discard NaNs, so callers must check it before publication.
 pub struct CheckedRasters<'a> {
     inner: &'a RealRasters,
     first_error: Mutex<Option<RasterUnavailable>>,
@@ -38,17 +51,19 @@ impl<'a> CheckedRasters<'a> {
         }
     }
 
-    fn validate(&self, lat: f64, lon: f64, elevation: f64) -> Result<f64, RasterUnavailable> {
-        if elevation.is_finite() {
-            return Ok(elevation);
-        }
-        let error = RasterUnavailable { lat, lon };
-        self.first_error.lock().unwrap().get_or_insert(error);
-        Err(error)
+    fn record_fault(&self, lat: f64, lon: f64) {
+        self.first_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_or_insert(RasterUnavailable { lat, lon });
     }
 
     pub fn ensure_valid(&self) -> Result<(), RasterUnavailable> {
-        match *self.first_error.lock().unwrap() {
+        match *self
+            .first_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        {
             Some(error) => Err(error),
             None => Ok(()),
         }
@@ -61,24 +76,37 @@ impl<'a> CheckedRasters<'a> {
         cached_key: &mut (i32, i32),
         cached_tile: &mut Option<Arc<RawTile>>,
     ) -> Result<f64, RasterUnavailable> {
-        self.validate(
-            lat,
-            lon,
-            self.inner
-                .elevation_nearest_cached(lat, lon, cached_key, cached_tile),
-        )
+        let elevation = self
+            .inner
+            .elevation_nearest_cached(lat, lon, cached_key, cached_tile);
+        if elevation.is_finite() {
+            Ok(elevation)
+        } else {
+            self.record_fault(lat, lon);
+            Err(RasterUnavailable { lat, lon })
+        }
     }
 }
 
 impl RasterSampler for CheckedRasters<'_> {
     fn elevation(&self, lat: f64, lon: f64) -> f64 {
-        self.validate(lat, lon, self.inner.elevation(lat, lon))
-            .unwrap_or(f64::NAN)
+        let elevation = self.inner.elevation(lat, lon);
+        if elevation.is_finite() {
+            elevation
+        } else {
+            self.record_fault(lat, lon);
+            FALLBACK_ELEVATION_M
+        }
     }
 
     fn ground_g(&self, lat: f64, lon: f64) -> f64 {
-        self.validate(lat, lon, self.inner.ground_g(lat, lon))
-            .unwrap_or(f64::NAN)
+        let ground_g = self.inner.ground_g(lat, lon);
+        if ground_g.is_finite() {
+            ground_g
+        } else {
+            self.record_fault(lat, lon);
+            FALLBACK_GROUND_G
+        }
     }
 
     fn building_enclosure(&self, lat: f64, lon: f64) -> f64 {
@@ -96,15 +124,26 @@ impl RasterSampler for CheckedRasters<'_> {
     ) {
         self.inner
             .build_path_profile(src_lat, src_lon, rcv_lat, rcv_lon, dist_m, out);
-        if let Some(index) = out
-            .elevation_m
-            .iter()
-            .position(|elevation| !elevation.is_finite())
-        {
+        // The floating planes cannot carry NaN into the kernels: record the
+        // first fault's coordinates, then sanitize every plane to finite so
+        // the computation completes and `ensure_valid` refuses the click.
+        let mut first_bad: Option<usize> = None;
+        for (index, elevation) in out.elevation_m.iter_mut().enumerate() {
+            if !elevation.is_finite() {
+                first_bad.get_or_insert(index);
+                *elevation = FALLBACK_ELEVATION_M as f32;
+            }
+        }
+        for canopy in out.canopy_m.iter_mut() {
+            if !canopy.is_finite() {
+                *canopy = 0.0;
+            }
+        }
+        if let Some(index) = first_bad {
             let t = out.t[index];
             let lat = src_lat + t * (rcv_lat - src_lat);
             let lon = grid::geo::interpolate_longitude_short_arc(src_lon, rcv_lon, t);
-            let _ = self.validate(lat, lon, f64::from(out.elevation_m[index]));
+            self.record_fault(lat, lon);
         }
     }
 

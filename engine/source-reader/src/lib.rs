@@ -106,36 +106,60 @@ impl SquareStore {
     }
 
     /// Clone every requested square before evicting anything. The returned
-    /// Arcs keep the query valid without holding the global lock.
-    fn pin_working_set(&mut self, square_names: &[String]) -> Vec<Arc<SquareData>> {
-        let acquired: Vec<_> =
-            square_names
-                .iter()
-                .map(|id| {
-                    Arc::clone(self.squares.get(id.as_str()).expect(
-                        "a successful working-set load must contain every requested square",
-                    ))
-                })
-                .collect();
+    /// Arcs keep the query valid without holding the global lock. A square
+    /// that left the cache mid-acquisition refuses this click; it never
+    /// panics the server (pin-aware forget and retain make this unreachable
+    /// in practice, but a concurrent eviction must still fail safe).
+    fn pin_working_set(
+        &mut self,
+        square_names: &[String],
+    ) -> napi::Result<Vec<Arc<SquareData>>> {
+        let mut acquired = Vec::with_capacity(square_names.len());
+        for id in square_names {
+            match self.squares.get(id.as_str()) {
+                Some(data) => acquired.push(Arc::clone(data)),
+                None => {
+                    return Err(Error::new(
+                        Status::GenericFailure,
+                        format!(
+                            "square {id} left the cache during its own acquisition; retry the click"
+                        ),
+                    ));
+                }
+            }
+        }
         self.retain_working_set(square_names);
-        acquired
+        Ok(acquired)
     }
 }
 
 /// Load outside the store lock, then atomically pin the complete requested set.
 /// Successful acquisition drops old areas that no active query has pinned, so
 /// decoded Arrow bodies grow with concurrent working sets rather than process
-/// history. First insert wins on a race; a load error changes nothing.
+/// history. First insert wins on a race; a load error changes nothing. Every
+/// failure refuses this click with a named error; nothing here panics.
 #[cfg(feature = "node")]
 fn acquire_squares_parallel(square_names: &[String]) -> napi::Result<Vec<Arc<SquareData>>> {
     let (cached_pins, missing, prepared_dir) = {
-        let store = STORE.read().expect("square store poisoned");
+        let store = STORE
+            .read()
+            .map_err(|error| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("square store lock poisoned: {error}"),
+                )
+            })?;
         let (cached_pins, missing) = store.pin_cached(square_names);
         (cached_pins, missing, store.prepared_dir.clone())
     };
     if missing.is_empty() {
-        let mut store = STORE.write().expect("square store poisoned");
-        let acquired = store.pin_working_set(square_names);
+        let mut store = STORE.write().map_err(|error| {
+            Error::new(
+                Status::GenericFailure,
+                format!("square store lock poisoned: {error}"),
+            )
+        })?;
+        let acquired = store.pin_working_set(square_names)?;
         drop(cached_pins);
         return Ok(acquired);
     }
@@ -160,16 +184,27 @@ fn acquire_squares_parallel(square_names: &[String]) -> napi::Result<Vec<Arc<Squ
             .collect();
         handles
             .into_iter()
-            .map(|handle| handle.join().expect("square load panicked"))
+            .map(|handle| match handle.join() {
+                Ok(loaded) => loaded,
+                Err(_) => Err(format!(
+                    "square loader panicked while loading [{}]; retry the click",
+                    missing.join(", ")
+                )),
+            })
             .collect::<Result<Vec<_>, _>>()
             .map(|chunks| chunks.into_iter().flatten().collect())
     });
     let loaded = loaded.map_err(|error| Error::new(Status::GenericFailure, error))?;
-    let mut store = STORE.write().expect("square store poisoned");
+    let mut store = STORE.write().map_err(|error| {
+        Error::new(
+            Status::GenericFailure,
+            format!("square store lock poisoned: {error}"),
+        )
+    })?;
     for (id, data) in loaded {
         store.squares.entry(id).or_insert_with(|| Arc::new(data));
     }
-    let acquired = store.pin_working_set(square_names);
+    let acquired = store.pin_working_set(square_names)?;
     drop(cached_pins);
     Ok(acquired)
 }
@@ -185,14 +220,19 @@ fn prune_source_cache(square_names: &[String]) -> napi::Result<()> {
     Ok(())
 }
 
-/// A square answered without one of its layers leaves the cache with its query (the pins keep
-/// the running query valid), so a repaired file serves on the next click.
+/// A square answered without one of its layers leaves the cache with its
+/// query, so a repaired file serves on the next click. Squares pinned by a
+/// concurrent acquire stay: their pins keep both queries valid, and the next
+/// served-with-fault forget evicts them once unpinned. Forgetting a pinned
+/// square used to abort a concurrent acquire at pin time.
 #[cfg(feature = "node")]
 fn forget_squares_served_with_a_fault(square_names: &[String]) -> napi::Result<()> {
     let mut store = STORE
         .write()
         .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
-    store.squares.retain(|id, _| !square_names.contains(id));
+    store
+        .squares
+        .retain(|id, data| !square_names.contains(id) || Arc::strong_count(data) > 1);
     Ok(())
 }
 
@@ -284,7 +324,8 @@ pub fn query_obstacle_footprints(
     prune_source_cache(&[])?;
     let fps = structure_store::footprints_in_bbox(year_dir()?, south, west, north, east)
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
-    Ok(serde_json::to_string(&fps).unwrap())
+    serde_json::to_string(&fps)
+        .map_err(|error| Error::new(Status::GenericFailure, format!("failed to encode footprints: {error}")))
 }
 
 /// Map the engine's envelope class to the small plain-language vocabulary
@@ -325,7 +366,8 @@ pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
             "building_exposure": set.enclosed_footprint_at(lat, lng).is_some(),
         }),
     };
-    Ok(serde_json::to_string(&result).unwrap())
+    serde_json::to_string(&result)
+        .map_err(|error| Error::new(Status::GenericFailure, format!("failed to encode building: {error}")))
 }
 
 #[cfg(test)]
@@ -434,7 +476,12 @@ fn query_noise_impl(
         let real_rasters = RASTERS
             .get()
             .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))?;
-        let elevation = noise_compute::types::RasterSampler::elevation(real_rasters, lat, lng);
+        let checked = raster_reader::CheckedRasters::new(real_rasters);
+        let elevation =
+            noise_compute::types::RasterSampler::elevation(&checked, lat, lng);
+        checked
+            .ensure_valid()
+            .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))?;
         let wire_result = wire::build_wire_result(
             noise_compute::types::NoiseResult::empty(),
             lat,
@@ -447,7 +494,12 @@ fn query_noise_impl(
             exposure.map(Into::into),
             Vec::new(),
         );
-        return Ok(serde_json::to_string(&wire_result).unwrap());
+        return serde_json::to_string(&wire_result).map_err(|error| {
+            Error::new(
+                Status::GenericFailure,
+                format!("failed to encode empty popup: {error}"),
+            )
+        });
     }
     let (receiver_lat, receiver_lng) = exposure
         .and_then(|exposure| exposure.receiver)
@@ -460,24 +512,35 @@ fn query_noise_impl(
     };
 
     let square_names = source_square_names(squares_within_reach(receiver_lat, receiver_lng))?;
-    // The returned Arcs pin this whole query without holding the global lock.
-    // Concurrent popups can load or reuse their own working sets while this
-    // one decodes batches and computes.
-    let squares = acquire_squares_parallel(&square_names)?;
-    let square_refs: Vec<_> = square_names
-        .iter()
-        .zip(&squares)
-        .map(|(id, data)| {
-            (
-                grid::parse_square_name(id).expect("canonical square name"),
-                data.as_ref(),
-            )
-        })
-        .collect();
+    // The acquired Arcs pin this query's working set without holding the
+    // global lock while batches decode. Collection clones what compute needs
+    // (segments, batches with mmap-backed arrays), so the pins drop here:
+    // compute runs unpinned, and a served-with-fault forget below evicts
+    // unless a *concurrent* query still pins — the query's own pins must not
+    // protect its own forget.
+    let t_load;
+    let mut sources;
+    {
+        let squares = acquire_squares_parallel(&square_names)?;
+        let square_refs: Vec<_> = square_names
+            .iter()
+            .zip(&squares)
+            .map(|(id, data)| {
+                grid::parse_square_name(id)
+                    .map(|square| (square, data.as_ref()))
+                    .ok_or_else(|| {
+                        Error::new(
+                            Status::GenericFailure,
+                            format!("invalid square name {id} in its own acquisition"),
+                        )
+                    })
+            })
+            .collect::<napi::Result<_>>()?;
 
-    let t_load = t_start.elapsed();
-    let mut sources = collect_from_square_data(&square_refs, receiver_lat, receiver_lng)
-        .map_err(|error| Error::new(Status::GenericFailure, error))?;
+        t_load = t_start.elapsed();
+        sources = collect_from_square_data(&square_refs, receiver_lat, receiver_lng)
+            .map_err(|error| Error::new(Status::GenericFailure, error))?;
+    }
     let t_collect = t_start.elapsed() - t_load;
 
     let real_rasters = RASTERS
@@ -589,7 +652,12 @@ fn query_noise_impl(
         exposure.map(Into::into),
         sources.unavailable_layers,
     );
-    let json = serde_json::to_string(&wire_result).unwrap();
+    let json = serde_json::to_string(&wire_result).map_err(|error| {
+        Error::new(
+            Status::GenericFailure,
+            format!("failed to encode popup: {error}"),
+        )
+    })?;
     let t_total = t_start.elapsed();
 
     if timing_on {
