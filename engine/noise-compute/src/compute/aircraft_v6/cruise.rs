@@ -365,7 +365,32 @@ pub fn scatter(
     if let Some(t) = traces {
         let mut cell_keys: Vec<(i32, i32)> = cell_accums.keys().copied().collect();
         cell_keys.sort();
-        for (cell_i, cell_key) in cell_keys.into_iter().enumerate() {
+        // Pre-selection: rank cells by the exact Lden the builder would
+        // emit (shared pure function — see `cruise_cell_lden_full`) and
+        // build only the survivors. (Lden desc, input-seq asc) is the
+        // global order restricted to cruise, so these are exactly the
+        // cells the global cap would keep; `None` (tests, oracle) builds
+        // every cell, the old behaviour.
+        let mut stubs: Vec<(f64, u64, (i32, i32))> = cell_keys
+            .into_iter()
+            .enumerate()
+            .map(|(cell_i, cell_key)| {
+                let acc = &cell_accums[&cell_key];
+                (
+                    crate::traces::cruise_cell_lden_full(acc.period_energy, n_days_f),
+                    cell_i as u64,
+                    cell_key,
+                )
+            })
+            .collect();
+        if let Some(cap) = t.trace_cap {
+            t.aircraft_cruise_total = stubs.len() as u32;
+            if stubs.len() > cap {
+                stubs.sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+                stubs.truncate(cap);
+            }
+        }
+        for (_, cell_i, cell_key) in stubs {
             let mut acc = cell_accums
                 .remove(&cell_key)
                 .expect("sorted key from live map");
@@ -404,7 +429,7 @@ pub fn scatter(
                         cruise_buckets: acc.buckets,
                         cruise_top_flights,
                         doc29: placeholder_doc29,
-                        sort_seq: cell_i as u64,
+                        sort_seq: cell_i,
                     },
                 ));
         }

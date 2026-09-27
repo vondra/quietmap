@@ -20,6 +20,8 @@ pub use aircraft::{
     build_aircraft_airborne_subsegment_trace, build_aircraft_cruise_cell_trace,
     BuildAircraftAirborneSubSegmentTrace, BuildAircraftCruiseCellTrace,
 };
+// Emit-time Lden probe for the cruise pre-selection stub; crate-internal.
+pub(crate) use aircraft::cruise_cell_lden_full;
 
 /// Convert band-energies (linear, A-weighted) to band levels in dB(A). Non-finite or
 /// negative energies fail closed like [`PropagationVariants::to_db`], never floor.

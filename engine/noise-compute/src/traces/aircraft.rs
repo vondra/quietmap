@@ -21,6 +21,15 @@ fn aircraft_period_variants(period_energies: [f64; 3], n_days: f64) -> [Propagat
     )
 }
 
+/// A cruise cell's `received_lden.full` without building the trace: the exact
+/// expression [`build_aircraft_cruise_cell_trace`] stores, shared so the
+/// emission pre-selection ranks by the built value bit-for-bit. Covered by
+/// `cruise_stub_matches_built_trace_lden` below — if either path is edited,
+/// the test fails.
+pub(crate) fn cruise_cell_lden_full(period_energies: [f64; 3], n_days: f64) -> f64 {
+    variants_to_lden(&aircraft_period_variants(period_energies, n_days)).full
+}
+
 fn aircraft_period_variants_with_effects(
     period_energies: [f64; 3],
     free_period_energies: [f64; 3],
@@ -252,6 +261,57 @@ mod tests {
                 screening_db: 0.0,
             },
         })
+    }
+
+    /// Pre-selection contract: the stub rank equals the built trace's
+    /// `received_lden.full` bit-for-bit, over loud/faint/empty/silent
+    /// cells and degenerate day counts. Inputs stay inside the builder's
+    /// accepted domain (finite, non-negative — `to_db` fail-closes
+    /// outside it, and production energies are finite f64 sums).
+    #[test]
+    fn cruise_stub_matches_built_trace_lden() {
+        let doc29 = || crate::types::Doc29Breakdown {
+            sel_npd_db: 0.0,
+            delta_v_db: 0.0,
+            delta_i_db: 0.0,
+            lambda_db: 0.0,
+            delta_f_db: 0.0,
+            d_p_m: 500.0,
+            lateral_m: 0.0,
+            beta_deg: 90.0,
+            seg_len_m: 0.0,
+            d_lambda_m: 500.0,
+            installation: "wing",
+            screening_kind: "none",
+            screening_db: 0.0,
+        };
+        for (energies, n_days) in [
+            ([1.0e9, 5.0e8, 2.0e8], 365.0),
+            ([1.0, 0.0, 0.0], 1.0),
+            ([0.0, 0.0, 0.0], 365.0),
+            ([1.0e300, 0.0, 0.0], 365.0),
+            ([1.0e9, 5.0e8, 2.0e8], 0.0),
+            ([1.0e-300, 2.0e-300, 3.0e-300], 365.0),
+        ] {
+            let trace = build_aircraft_cruise_cell_trace(BuildAircraftCruiseCellTrace {
+                lon: 14.0,
+                lat: 50.0,
+                n_unique_flights: 3,
+                rep_alt_m: 8000.0,
+                d_slant_m: 9000.0,
+                period_energies: energies,
+                n_days,
+                cruise_buckets: Vec::new(),
+                cruise_top_flights: Vec::new(),
+                doc29: doc29(),
+                sort_seq: 11,
+            });
+            assert_eq!(
+                cruise_cell_lden_full(energies, n_days).to_bits(),
+                trace.received_lden.full.to_bits(),
+                "energies={energies:?} n_days={n_days}"
+            );
+        }
     }
 
     /// Popup invariant: segments add up to the source aggregate. The

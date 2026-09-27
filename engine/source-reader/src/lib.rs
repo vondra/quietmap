@@ -528,6 +528,9 @@ fn query_noise_impl(
     };
 
     let mut traces = noise_compute::types::TraceCollector::new();
+    // In-kernel trace pre-selection (ground, cruise) keeps the same top-K
+    // the global cap keeps; the kernels report kept totals for denominators.
+    traces.trace_cap = Some(top_k_per_kind);
     let mut result = noise_compute::compute_at_point(
         &receiver,
         &sources.roads,

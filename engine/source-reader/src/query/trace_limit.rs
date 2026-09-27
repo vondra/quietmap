@@ -42,21 +42,51 @@ pub(crate) fn apply_segment_top_k_with_cap(
             _ => {}
         }
     }
-    summary.road_total = *per_kind_total.get(&LayerKind::Road).unwrap_or(&0);
-    summary.railway_total = *per_kind_total.get(&LayerKind::Railway).unwrap_or(&0);
-    summary.aircraft_ground_total = aircraft_ground_total;
-    summary.building_total = *per_kind_total.get(&LayerKind::Building).unwrap_or(&0);
-    summary.industrial_total = *per_kind_total.get(&LayerKind::Industrial).unwrap_or(&0);
-    summary.ship_total = *per_kind_total.get(&LayerKind::Ship).unwrap_or(&0);
+    // Kernels that pre-select (ground always; cruise when `trace_cap` is
+    // set; road/rail/point once they do) report kept-row counts; a zero
+    // report means pre-selection stayed off and the pushed count stands.
+    // `max` is exact either way: reported kept >= pushed survivors.
+    let pushed_road = *per_kind_total.get(&LayerKind::Road).unwrap_or(&0);
+    let pushed_railway = *per_kind_total.get(&LayerKind::Railway).unwrap_or(&0);
+    let pushed_building = *per_kind_total.get(&LayerKind::Building).unwrap_or(&0);
+    let pushed_industrial = *per_kind_total.get(&LayerKind::Industrial).unwrap_or(&0);
+    let pushed_ship = *per_kind_total.get(&LayerKind::Ship).unwrap_or(&0);
+    summary.road_total = traces.road_total.max(pushed_road);
+    summary.railway_total = traces.railway_total.max(pushed_railway);
+    summary.aircraft_ground_total = traces.aircraft_ground_total.max(aircraft_ground_total);
+    summary.building_total = traces.building_total.max(pushed_building);
+    summary.industrial_total = traces.industrial_total.max(pushed_industrial);
+    summary.ship_total = traces.ship_total.max(pushed_ship);
     summary.aircraft_airborne_total = traces.airborne_above_cutoff;
-    summary.aircraft_cruise_total = aircraft_cruise_total;
+    summary.aircraft_cruise_total = traces.aircraft_cruise_total.max(aircraft_cruise_total);
+    // Kept-totals, not pushed: pre-selected rows never reached the vec.
+    // (Ground was already pre-capped at emission, so the base undercounted
+    // it here; the denominator fix surfaces the true kept count.)
+    summary.total_count = (traces.segments.len() as u32)
+        .saturating_add(summary.road_total.saturating_sub(pushed_road))
+        .saturating_add(summary.railway_total.saturating_sub(pushed_railway))
+        .saturating_add(
+            summary
+                .aircraft_ground_total
+                .saturating_sub(aircraft_ground_total),
+        )
+        .saturating_add(summary.building_total.saturating_sub(pushed_building))
+        .saturating_add(summary.industrial_total.saturating_sub(pushed_industrial))
+        .saturating_add(summary.ship_total.saturating_sub(pushed_ship))
+        .saturating_add(
+            summary
+                .aircraft_cruise_total
+                .saturating_sub(aircraft_cruise_total),
+        );
 
-    traces.segments.sort_unstable_by(|a, b| {
-        b.received_lden
-            .full
-            .partial_cmp(&a.received_lden.full)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // Total order (Lden desc, kind, subtype, stable row index): the exact
+    // order the in-kernel pre-selections rank by, so their survivors are
+    // precisely this cap's — unlike the old Lden-only unstable sort, whose
+    // tied order was input order (a pdqsort artifact). No NaN is possible
+    // here (`received_lden.full` is always finite on pushed traces).
+    traces
+        .segments
+        .sort_unstable_by(noise_compute::types::cmp_traces_for_top_k);
 
     let mut per_kind: std::collections::HashMap<LayerKind, u32> = std::collections::HashMap::new();
     let mut aircraft_ground_count = 0u32;
@@ -89,11 +119,27 @@ pub(crate) fn apply_segment_top_k_with_cap(
     summary.ship_count = *per_kind.get(&LayerKind::Ship).unwrap_or(&0);
     summary.aircraft_airborne_count = aircraft_airborne_subseg_count;
     summary.aircraft_cruise_count = aircraft_cruise_count;
-    // Airborne pre-capping in `airborne::scatter` drops most above-cutoff
-    // candidates before they reach `traces.segments`, so the cap-loop
-    // above never sees them and can't flip `truncated` for that case.
-    // Detect it here by comparing total above-cutoff vs returned count.
-    if traces.airborne_above_cutoff > summary.aircraft_airborne_count {
+    // In-kernel pre-selection drops kept rows before they reach
+    // `traces.segments`, so the cap-loop above never sees them and can't
+    // flip `truncated` there. Detect it by comparing kept-totals against
+    // returned counts (airborne included).
+    let reported_total = summary.road_total as u64
+        + summary.railway_total as u64
+        + summary.aircraft_ground_total as u64
+        + summary.building_total as u64
+        + summary.industrial_total as u64
+        + summary.ship_total as u64
+        + summary.aircraft_airborne_total as u64
+        + summary.aircraft_cruise_total as u64;
+    let returned_total = summary.road_count as u64
+        + summary.railway_count as u64
+        + summary.aircraft_ground_count as u64
+        + summary.building_count as u64
+        + summary.industrial_count as u64
+        + summary.ship_count as u64
+        + summary.aircraft_airborne_count as u64
+        + summary.aircraft_cruise_count as u64;
+    if reported_total > returned_total {
         summary.truncated = true;
     }
 

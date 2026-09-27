@@ -531,6 +531,8 @@ pub struct TraceCollector {
     pub ship_total: u32,
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub aircraft_ground_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub aircraft_cruise_total: u32,
     /// Per-kind trace budget for in-kernel pre-selection. `None` (tests,
     /// oracle) keeps the old behaviour: every kept row pushes a trace.
     /// The popup sets `Some(150)` (summary) or `Some(1000)` (all segments);
