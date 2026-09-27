@@ -112,7 +112,7 @@ impl RowKernel {
 /// provider anywhere at this receiver counts as a baseline movement, so
 /// its count weight is the smallest row weight.
 pub(super) fn flight_accumulator<'m>(
-    flights: &'m mut std::collections::HashMap<u64, FlightAccum>,
+    flights: &'m mut std::collections::HashMap<u64, FlightAccum, impl std::hash::BuildHasher>,
     batch: &AirborneSegmentBatch<'_>,
     row: usize,
     provenance_weight: f64,
@@ -251,6 +251,7 @@ pub(super) fn build_row_trace(
     batch: &AirborneSegmentBatch<'_>,
     i: usize,
     row: &RowKernel,
+    sort_seq: u64,
 ) -> SegmentTrace {
     let kernel = &row.kernel;
     let mut period_energies = [0.0f64; 3];
@@ -310,6 +311,7 @@ pub(super) fn build_row_trace(
             no_screening_period_energies,
             n_days: ctx.n_days_f,
             doc29,
+            sort_seq,
         },
     )
 }

@@ -60,7 +60,10 @@ fn equator_receiver() -> (Receiver, aircraft::ReceiverHorizon) {
     (receiver, horizon)
 }
 
-fn received_sel_db(flights: &HashMap<u64, FlightAccum>, fid: u64) -> f64 {
+fn received_sel_db(
+    flights: &HashMap<u64, FlightAccum, impl std::hash::BuildHasher>,
+    fid: u64,
+) -> f64 {
     10.0 * flights[&fid].period_energy.iter().sum::<f64>().log10()
 }
 
@@ -89,6 +92,7 @@ fn split_chord_takes_the_event_floor_as_one_event() {
             0,
             None,
         )
+        .0
     };
     let whole_flights = run(&whole);
     let split_flights = run(&split);
@@ -147,7 +151,7 @@ fn split_chords_hold_one_trace_slot_each_and_draw_whole() {
     };
     let drawn = |cols: &SynthColumns| {
         let mut traces = TraceCollector::new();
-        let flights = scatter(
+        let (flights, _) = scatter(
             &receiver,
             &cols.batches(4_096),
             1.0,

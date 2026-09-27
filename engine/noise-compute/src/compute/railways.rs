@@ -31,7 +31,7 @@ struct UnnamedWayClosestPoint {
 fn unnamed_way_closest_points<'a>(
     segments: impl Iterator<Item = &'a RailSegment>,
 ) -> Vec<UnnamedWayClosestPoint> {
-    let mut closest_by_way = std::collections::HashMap::new();
+    let mut closest_by_way = crate::fxhash::FxHashMap::default();
     for segment in segments.filter(|segment| is_unnamed_track(segment)) {
         let point = UnnamedWayClosestPoint {
             rail_type: segment.rail_type,
@@ -83,7 +83,7 @@ fn union_toward_smaller(parents: &mut [usize], left: usize, right: usize) {
 /// linkable pair is at most one cell apart on each axis at every latitude.
 fn unnamed_track_cluster_ids<'a>(
     segments: impl Iterator<Item = &'a RailSegment>,
-) -> std::collections::HashMap<(u8, i64), i64> {
+) -> crate::fxhash::FxHashMap<(u8, i64), i64> {
     let ways = unnamed_way_closest_points(segments);
     let mut parents: Vec<_> = (0..ways.len()).collect();
 
@@ -96,8 +96,8 @@ fn unnamed_track_cluster_ids<'a>(
             (way.lon * m_per_deg_lon / RAIL_TRACK_LINK_M).floor() as i64,
         )
     };
-    let mut cells: std::collections::HashMap<(u8, i64, i64), Vec<usize>> =
-        std::collections::HashMap::new();
+    let mut cells: crate::fxhash::FxHashMap<(u8, i64, i64), Vec<usize>> =
+        crate::fxhash::FxHashMap::default();
     for (index, way) in ways.iter().enumerate() {
         cells.entry(cell_of(way)).or_default().push(index);
     }
@@ -156,7 +156,7 @@ pub(crate) fn compute_railways(
     use crate::propagation::relevance_bound::{SourceSpread, LINE_REACH_CEILING_M};
     use emission::railway::{self, RailType};
     use rayon::prelude::*;
-    use std::collections::HashMap;
+    use crate::fxhash::FxHashMap;
 
     let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
     let t_rail_start = std::time::Instant::now();
@@ -200,7 +200,8 @@ pub(crate) fn compute_railways(
         dominant_lden_db: f64,
         dominant_trace_idx: Option<usize>,
     }
-    let mut rails_by_key: HashMap<(String, String, u8, Option<i64>), RailAccum> = HashMap::new();
+    let mut rails_by_key: FxHashMap<(String, String, u8, Option<i64>), RailAccum> =
+        FxHashMap::default();
 
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
     let ray_receiver = RayReceiver {
@@ -220,13 +221,25 @@ pub(crate) fn compute_railways(
         /// Tallest vector obstacle on the characteristic-point path.
         seg_max_bh: f64,
         trace: Option<SegmentTrace>,
+        ray_phase: crate::propagation::ray_transfer::RayPhaseTotals,
+        piece_ns: u64,
+        tail_ns: u64,
     }
     let collect_traces = traces.is_some();
+    // Skip-path totals (the `POPUP_TIMING` per-row breakdown): atomics because
+    // skipped rows return no per-row record; touched only while `timing_on`.
+    let bound_ns = std::sync::atomic::AtomicU64::new(0);
+    let n_silent = std::sync::atomic::AtomicU64::new(0);
+    let n_bound_skip = std::sync::atomic::AtomicU64::new(0);
     // ── Pass 1: per-segment evaluation (parallel, bit-deterministic) ──
     let kept: Vec<Option<(RailPre, RailSegOut)>> = railways
         .par_iter()
-        .map_init(LinePieceScratch::default, |scratch, seg| {
+        .enumerate()
+        .map_init(LinePieceScratch::default, |scratch, (seg_i, seg)| {
             if seg.tunnel || seg.traffic.is_silent() {
+                if timing_on {
+                    n_silent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 return None;
             }
             let rail_type = RailType::from_u8(seg.rail_type);
@@ -235,6 +248,7 @@ pub(crate) fn compute_railways(
             let period_emissions = railway::rail_period_emissions(rail_type, speed, seg.traffic);
             // The row's reach from its own azimuth-span bound, every period counted (#31);
             // a pair inside it is never inaudible (the bound's Lden there exceeds 30 dB).
+            let t_gate = timing_on.then(std::time::Instant::now);
             let row_bound = crate::propagation::relevance_bound::row_bound_for_segment(
                 &weather,
                 receiver.lat,
@@ -244,9 +258,15 @@ pub(crate) fn compute_railways(
                 seg.end_lat,
                 seg.end_lon,
             );
-            if seg.dist_m > LINE_REACH_CEILING_M
-                || !row_bound.within_reach(&period_emissions, SourceSpread::Line, seg.dist_m)
-            {
+            let in_reach = seg.dist_m <= LINE_REACH_CEILING_M
+                && row_bound.line_piece_within_reach(&period_emissions, seg.length_m, seg.dist_m);
+            if timing_on {
+                bound_ns.fetch_add(t_gate.unwrap().elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+            if !in_reach {
+                if timing_on {
+                    n_bound_skip.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 return None;
             }
             let src_alt = rasters.elevation(seg.cp_lat, seg.cp_lon) + src_h;
@@ -254,6 +274,7 @@ pub(crate) fn compute_railways(
             let day_weights: [f64; NUM_BANDS] = std::array::from_fn(|b| {
                 10f64.powf((period_emissions[0][b] + A_WEIGHTING[b]) / 10.0)
             });
+            let t_piece = timing_on.then(std::time::Instant::now);
             let piece = evaluate_line_piece(
                 &ray_receiver,
                 &LinePiece {
@@ -275,7 +296,10 @@ pub(crate) fn compute_railways(
                 &weather,
                 scratch,
                 collect_traces.then_some(&day_weights),
+                timing_on,
             )?;
+            let piece_ns = t_piece.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
+            let t_tail = timing_on.then(std::time::Instant::now);
             let seg_variants: [PropagationVariants; 3] = std::array::from_fn(|pi| {
                 received_variants(&piece.periods[pi], &period_emissions[pi], reflection)
             });
@@ -305,9 +329,11 @@ pub(crate) fn compute_railways(
                     seg_variants,
                     lw_bands: period_emissions,
                     weather: weather.clone(),
+                    sort_seq: seg_i as u64,
                 })),
                 _ => None,
             };
+            let tail_ns = t_tail.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
             Some((
                 RailPre { speed, d_slant },
                 RailSegOut {
@@ -315,6 +341,9 @@ pub(crate) fn compute_railways(
                     period_emission_energy,
                     seg_max_bh,
                     trace,
+                    ray_phase: piece.phase,
+                    piece_ns,
+                    tail_ns,
                 },
             ))
         })
@@ -325,10 +354,32 @@ pub(crate) fn compute_railways(
         .filter_map(|(seg_i, kept)| kept.map(|(p, out)| ((seg_i, p), out)))
         .unzip();
     if timing_on {
+        let mut ray = crate::propagation::ray_transfer::RayPhaseTotals::default();
+        let mut piece_ns: u64 = 0;
+        let mut tail_ns: u64 = 0;
+        for out in &outs {
+            ray.add(&out.ray_phase);
+            piece_ns += out.piece_ns;
+            tail_ns += out.tail_ns;
+        }
+        let ms = |ns: u64| ns as f64 / 1e6;
         eprintln!(
-            "popup-stage rail evaluation={:.0}ms kept={}",
+            "popup-stage rail evaluation={:.0}ms kept={} silent={} bound={:.0}ms({}) rays={} profile={:.0} canopy={:.0} cross={:.0} fill={:.0} bnd={:.0} mix={:.0} detail={:.0} piece={:.0} tail={:.0}",
             t_rail_start.elapsed().as_secs_f64() * 1000.0,
-            pre.len()
+            pre.len(),
+            n_silent.load(std::sync::atomic::Ordering::Relaxed),
+            ms(bound_ns.load(std::sync::atomic::Ordering::Relaxed)),
+            n_bound_skip.load(std::sync::atomic::Ordering::Relaxed),
+            ray.n_rays,
+            ms(ray.profile_ns),
+            ms(ray.canopy_ns),
+            ms(ray.crossings_ns),
+            ms(ray.fill_ns),
+            ms(ray.boundary_ns),
+            ms(ray.mix_ns),
+            ms(ray.detail_ns),
+            ms(piece_ns),
+            ms(tail_ns),
         );
     }
 
@@ -507,7 +558,18 @@ pub(crate) fn compute_railways(
 
     let mut contributors = Vec::new();
     // Ascending group key, not HashMap order — see `crate::compute::key_sorted`.
-    for (_, acc) in crate::compute::key_sorted(&rails_by_key) {
+    //
+    // The per-group breakdown rays are pure functions of each group's closest
+    // source, so they run up front in parallel (rayon preserves order) and the
+    // sequential emit below consumes them in the same key order: bit-identical.
+    let breakdowns: Vec<_> = crate::compute::key_sorted(&rails_by_key)
+        .into_iter()
+        .map(|(_, acc)| &acc.closest_source)
+        .collect::<Vec<_>>()
+        .par_iter()
+        .map(|closest| nearest_path_breakdown(rasters, obstacles, closest, receiver, &weather))
+        .collect();
+    for ((_, acc), rail_effects) in crate::compute::key_sorted(&rails_by_key).into_iter().zip(breakdowns) {
         let ld = PropagationVariants::to_db(acc.variants[0].full_energy);
         let le = PropagationVariants::to_db(acc.variants[1].full_energy);
         let ln = PropagationVariants::to_db(acc.variants[2].full_energy);
@@ -524,8 +586,6 @@ pub(crate) fn compute_railways(
             None
         };
 
-        let rail_effects =
-            nearest_path_breakdown(rasters, obstacles, &acc.closest_source, receiver, &weather);
         let nearest_ground_g = rail_effects.3;
 
         let impacts = PropagationVariants::impact_deltas(&acc.variants, rail_periods.lden_db);
@@ -725,7 +785,7 @@ mod tests {
     /// two subtly different clustering rules.
     fn brute_force_cluster_ids<'a>(
         segments: impl Iterator<Item = &'a RailSegment>,
-    ) -> std::collections::HashMap<(u8, i64), i64> {
+    ) -> crate::fxhash::FxHashMap<(u8, i64), i64> {
         let ways = unnamed_way_closest_points(segments);
         let mut parents: Vec<_> = (0..ways.len()).collect();
         for left in 0..ways.len() {

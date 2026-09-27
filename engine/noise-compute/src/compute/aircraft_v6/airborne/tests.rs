@@ -452,7 +452,7 @@ fn secondary_only_rows_divide_by_the_increment_days() {
     let fid = flight_id::pack_real(0xABCD01, 1_700_000_000).unwrap();
     let energy = |secondary| -> (f64, f64) {
         let cols = primary_and_secondary_subsegs(fid, "B738", secondary);
-        let flights = scatter(
+        let (flights, _) = scatter(
             &receiver,
             &cols.batches(usize::MAX),
             360.0,
@@ -489,7 +489,7 @@ fn a_flight_with_any_primary_row_counts_as_a_baseline_movement() {
     let start = grid::lonlat_to_grid(f64::from(14.2520_f32), f64::from(50.1015_f32));
     let end = grid::lonlat_to_grid(f64::from(14.2560_f32), f64::from(50.1015_f32));
     cols.push_row(fid, 0, start, end, (150, 150), 120.0, 285.0, 0, 0, 0);
-    let flights = scatter(
+    let (flights, _) = scatter(
         &receiver,
         &cols.batches(usize::MAX),
         360.0,
@@ -516,7 +516,7 @@ fn blocked_popup_retains_free_field_above_received() {
         flight_id::pack_real(0xBEEF03, 1_700_000_000).unwrap(),
         "R44",
     );
-    let flights = scatter(
+    let (flights, _) = scatter(
         &receiver,
         &cols.batches(usize::MAX),
         1.0,
@@ -825,7 +825,7 @@ fn chunked_scatter_matches_serial_within_rounding() {
 
     let ctx = super::ScatterContext::new(&receiver, 7.0, &weights, &horizon, None);
     let serial = super::scatter_chunk(&ctx, &batches, 0, 0, 0, false);
-    let parallel = scatter(&receiver, &batches, 7.0, &weights, &horizon, None, 0, None);
+    let (parallel, _) = scatter(&receiver, &batches, 7.0, &weights, &horizon, None, 0, None);
 
     assert_eq!(serial.flights.len(), N_FLIGHTS, "every fid must accumulate");
     assert_eq!(serial.flights.len(), parallel.len());
@@ -959,7 +959,7 @@ fn chunked_scatter_keeps_the_same_top_k_traces() {
         .heap
         .into_vec()
         .into_iter()
-        .map(|r| key(&r.0.trace))
+        .map(|r| key(&super::materialize_stub(&ctx, &batches, &r.0)))
         .collect();
     let mut got: Vec<_> = parallel_traces.segments.iter().map(key).collect();
     want.sort_unstable();
@@ -985,7 +985,7 @@ fn chunked_scatter_bytes_do_not_depend_on_the_thread_pool() {
             .unwrap();
         pool.install(|| {
             let mut traces = TraceCollector::new();
-            let flights = scatter(
+            let (flights, _) = scatter(
                 &receiver,
                 &batches,
                 7.0,
@@ -1038,7 +1038,7 @@ fn scatter_speedup_on_150k_rows() {
 
     let mut traces = TraceCollector::new();
     let t1 = std::time::Instant::now();
-    let parallel = scatter(
+    let (parallel, _) = scatter(
         &receiver,
         &batches,
         7.0,

@@ -728,16 +728,26 @@ at 5 m–2 km and behind a roadside wall, and within 0.28 dB per layer at ten re
 
 A point source–receiver pair is skipped only when the relevance bound of
 `propagation::relevance_bound` stays below 0 dB in every band of every period:
-`B = L_W − A_div,min(d) − α_min·d/1000 + 13.3 dB`, a line bounded by its infinite line at its
+`B = L_W − A_div,min(d) − α_min·d/1000 + G_max`, a line bounded by its infinite line at its
 closest horizontal distance, a point by `20·lg d + 11`, α_min the smallest absorption of the
-weather, 13.3 dB the largest favourable gain of the method over flat or relief ground
-(p = 1 assumed): a grazing hard crest takes the favourable floor of (2.5.20), −9 dB per
-side, with a blocked Δdif of at least 10·lg 3, so 2·9 − 10·lg 3 = 13.2 dB at most
-(13.09 dB found, `boundary_gain_tests.rs`): a night-only source is never dropped by a
-day-only gate (#31). A road or rail row reaches as far as that bound's Lden stays above
-30 dB (the display floor), capped so no ray outruns the painter's 64-sample profile
-(11,872 m, minus the 250 m longest piece for a line's closest point); popup and painter
-share the reach, and a pair inside it is never below 0 dB in every band.
+weather window, G_max the two state maxima mixed at the window's p_max per period (18 dB
+favourable, 6 dB homogeneous: the (9)(h) below-plane corner takes the image path's Δdif
+near 0 dB with both sides at the (2.5.20) floor, 0 + 9 + 9 in the limit; 17.60/6.00 dB
+found, `boundary_gain_tests.rs`, voiding the older 13.3 dB derivation): a night-only source
+is never dropped by a day-only gate (#31). A road or rail row reaches as far as that
+bound's Lden stays above 30 dB (the display floor), capped so no ray outruns the painter's
+64-sample profile (11,872 m, minus the 250 m longest piece for a line's closest point);
+popup and painter share the reach, and a pair inside it is never below 0 dB in every band.
+Past 20 piece lengths the row must also pass the finite-piece cap: the point spread at
+the piece's total power `L_W′ + 10·lg(1.01·L)`, which drops the short far rows the
+infinite-line bound keeps to the ceiling (a 40 m residential piece at 5 km: line bound
+≈ 47 dB Lden, cap ≈ 21 dB). The cap is sound because the kernel's incoherent point sum
+`W′/(10^1.1·d⊥)·Σw·T` there runs on uniform buckets (under 3° subtended, so no wide-bucket
+path), the weights partition the subtended angle, and `dx/r² = dφ/d⊥` with every node at
+3D distance ≥ the horizontal closest point gives `E ≤ W′·L·G·A/(10^1.1·d²)`; the 1% length
+margin covers the planimetric length, the f32 rounding, and the weight dust, and
+directivity never exceeds 1 (omnidirectional today, `0.01 + 0.99·sin²` in the planned
+track dipole).
 
 ## One ray: CNOSSOS-EU per meteorological state
 

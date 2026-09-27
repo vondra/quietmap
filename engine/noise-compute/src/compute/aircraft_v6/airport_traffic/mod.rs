@@ -45,6 +45,9 @@
 //! that contributed energy.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
+
+use crate::fxhash::FxHashMap;
 use std::fmt::Write as _;
 
 use crate::compute::aircraft_v6::views::AirportTrafficRowView;
@@ -386,7 +389,7 @@ pub fn run(
     // Ground-ops screening uses the same exact vector-obstacle crossings as
     // every other popup surface kernel.
     obstacles: &crate::propagation::obstacle_index::ObstacleSet,
-    osm_ref_lookup: &HashMap<u64, String>,
+    osm_ref_lookup: &HashMap<u64, String, impl BuildHasher>,
     airport_summary: Option<&AirportSummaryLookup>,
     traces: Option<&mut crate::types::TraceCollector>,
 ) -> Vec<Contributor> {
@@ -414,14 +417,14 @@ pub fn run(
     // receivers (line-source 1/d singularity sampled at a point).
     let pixel_floor_m = popup_pixel_floor_m(recv_lat);
 
-    let mut by_airport: HashMap<String, AirportAcc> = HashMap::new();
-    let mut microseg_cache: HashMap<(u64, u16), MicrosegPath> = HashMap::new();
+    let mut by_airport: FxHashMap<String, AirportAcc> = FxHashMap::default();
+    let mut microseg_cache: FxHashMap<(u64, u16), MicrosegPath> = FxHashMap::default();
     // Per-microsegment energy accumulator for SegmentTrace emission.
     // Key (osm_id, segment_idx). Rows sharing the same microsegment
     // (different period / class / ops_kind / etc) fold into one trace
     // row, emitted at the end as `aircraft_subtype = 1` in the Noise
     // Segments tab.
-    let mut by_microseg: HashMap<(u64, u16), MicrosegAcc> = HashMap::new();
+    let mut by_microseg: FxHashMap<(u64, u16), MicrosegAcc> = FxHashMap::default();
     for row in rows {
         // Three-semantic decomposition:
         //  - `d_endpoint`: Euclidean to nearest endpoint, used for the

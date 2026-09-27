@@ -61,7 +61,7 @@ fn scene(receiver_lat: f64, receiver_lon: f64, eastbound: bool, side: f64) -> [f
     );
     let batches = columns.batches(usize::MAX);
     let row = &batches[0];
-    let flights = scatter(
+    let (flights, _) = scatter(
         &receiver,
         &batches,
         1.0,

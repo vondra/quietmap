@@ -17,6 +17,7 @@ pub mod emission;
 pub mod envelope;
 pub mod facade_receivers;
 pub mod flight_id;
+pub mod fxhash;
 pub mod low_profile;
 pub mod normalize;
 pub mod periods;
@@ -433,6 +434,7 @@ mod tests {
                 &crate::propagation::meteorology::Meteorology::defaults(),
                 &mut LinePieceScratch::default(),
                 None,
+                false,
             )
             .unwrap();
             transfer.periods[0][VARIANT_FULL][4]
