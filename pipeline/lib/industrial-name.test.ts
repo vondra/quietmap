@@ -47,12 +47,41 @@ test('ordered multilingual rules retain wind skip, solar precedence and all orig
   const examples: Array<[string, number | undefined]> = [
     ['SOLÁRNÍ elektrárna', 3599], ['wind farm power plant', 0], ['Elektrárna', 3511], ['Kamenolom ', 700],
     ['Pivovar', 1000], ['Textile', 1300], ['Sägewerk', 1600], ['Rafinérie', 2000], ['Betonárna', 2300],
-    ['Foundry', 2400], ['Car factory', 2900], ['Čistírna', 3800], ['Logistics', 5200], ['Farma', 100],
+    ['Foundry', 2400], ['Car factory', 2900], ['Čistírna', 3700], ['Logistics', 5200], ['Farma', undefined],
     ['Wind turbine factory', 0], ['Unnamed industrial site', undefined],
   ]
   for (const [name, nace] of examples) assert.equal(industrialNameRule(name)?.nace4, nace, name)
   assert.equal(koreanIndustrialNameRule('포항제철소')?.nace4, 2410)
   assert.equal(koreanIndustrialNameRule('여수국가산업단지')?.nace4, 2011)
+})
+
+test('wastewater names select continuous sewage activity and retract obsolete waste handling', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'industrial-name-wastewater-'))
+  try {
+    const path = resolve(root, 'z9/275/173/industrial.arrow')
+    store(path, ['Blackbirds Sewage Treatment Works', 'Wastewater treatment plant', 'Klärwerk',
+      'Waste recycling plant', 'Water treatment plant'].map(name => ({ name, source: 9000, nace: 3800 })))
+    await enrichIndustrialNames(root)
+    assert.deepEqual(values(path, 'nace_4digit'), [3700, 3700, 3700, 3800, 0])
+    assert.equal((await enrichIndustrialNames(root)).squaresUpdated, 0)
+    store(path, [{ name: 'Power plant', sourceType: 4, source: 9000, nace: 3800 },
+      { name: 'Sewage treatment works', sourceType: 4 }])
+    await enrichIndustrialNames(root)
+    assert.deepEqual(values(path, 'nace_4digit'), [0, 3700], 'a name cannot replace explicit wastewater activity')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('farm place names cannot classify industrial activity', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'industrial-name-farm-'))
+  try {
+    const path = resolve(root, 'z9/275/173/industrial.arrow')
+    store(path, [{ name: 'Trumps Farm Anaerobic Digestion Plant', source: 9000, nace: 100 },
+      { name: 'Manor Farm', sourceType: 2, source: 9000, nace: 100 }])
+    await enrichIndustrialNames(root)
+    assert.deepEqual(values(path, 'nace_4digit'), [0, 0])
+    assert.deepEqual(values(path, 'source_type'), [0, 2], 'mapped farmyard activity remains authoritative')
+    assert.equal((await enrichIndustrialNames(root)).squaresUpdated, 0)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 test('native names preserve authority and suppression while owned retirement, wind and re-extraction converge', async () => {

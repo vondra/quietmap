@@ -15,7 +15,7 @@ import { PROVENANCE_RANK, SOURCES_BY_ID } from './sources.js'
 import { enrichIndustrialFacilities } from './industrial-arrow.js'
 import { type MatchFacility } from './facility-match.js'
 
-interface Row { gx: number; gy: number; subtype?: number; source?: number; nace?: number; area?: number; sourceType?: number; suppressed?: number; country?: string }
+interface Row { gx: number; gy: number; half?: number; subtype?: number; source?: number; nace?: number; area?: number; sourceType?: number; suppressed?: number; country?: string }
 function stored(path: string, rows: Row[]): Table {
   let table = makeTable({
     osm_id: BigInt64Array.from(rows, (_, i) => BigInt(i + 1)),
@@ -25,7 +25,15 @@ function stored(path: string, rows: Row[]): Table {
     nace_4digit: Uint16Array.from(rows, r => r.nace ?? 0), suppressed: Uint8Array.from(rows, r => r.suppressed ?? 0),
     name: vectorFromArray(rows.map((_, i) => `site-${i}`), new Utf8()),
     hub_height: Float32Array.from(rows, () => 80), rated_power_kw: Float32Array.from(rows, () => 2000),
-    geom: vectorFromArray(rows.map(() => new Uint8Array([1, 2, 3])), new Binary()),
+    geom: vectorFromArray(rows.map(r => {
+      const bytes = new Uint8Array(4 + 4 * 8), view = new DataView(bytes.buffer)
+      view.setUint32(0, 4, true)
+      for (const [i, [dx, dy]] of [[-1, -1], [1, -1], [1, 1], [-1, 1]].entries()) {
+        view.setInt32(4 + i * 8, r.gx + dx * (r.half ?? 4000), true)
+        view.setInt32(8 + i * 8, r.gy + dy * (r.half ?? 4000), true)
+      }
+      return bytes
+    }), new Binary()),
   } as never) as unknown as Table
   if (rows.some(row => row.country !== undefined)) {
     table = table.assign(makeTable({ country_iso: Uint16Array.from(rows, row => row.country ? iso2Code(row.country) : 0) }))
@@ -58,7 +66,7 @@ test('one original facility elects one site across z9 seam; native payload, retr
     const gx = 276 * 2 ** 21, gy = 709600000
     const a = resolve(work, 'z9/275/173/industrial.arrow'), b = resolve(work, 'z9/276/173/industrial.arrow')
     const original = stored(a, [{ gx: gx - 500, gy }, { gx: gx - 10000, gy, source: 300, nace: 3511 },
-      { gx: gx - 50, gy, sourceType: 10 }])
+      { gx: gx - 100000, gy, sourceType: 10 }])
     stored(b, [{ gx: gx + 100, gy }])
     const f = facility(gx + 50, gy)
     const run = await enrichIndustrialFacilities(work, [f], [300])
@@ -97,7 +105,7 @@ test('duplicate suppression uses published incumbent authority in both direction
     for (const retainedId of [330, 9000]) {
       const retained = stored(path, [{ ...rows[0], source: retainedId }, rows[1],
         { gx, gy: gy + 1_000_000, source: 330, nace: 2410, suppressed: 1 },
-        { gx, gy, source: 330, nace: 3511, sourceType: 10, suppressed: 1 }])
+        { gx: gx + 100_000, gy, source: 330, nace: 3511, sourceType: 10, suppressed: 1 }])
       await enrichIndustrialFacilities(work, [facilities[1]], [310, 331])
       assert.deepEqual(values(path, 'source_id'), [retainedId, 310, 330, 330])
       assert.deepEqual(values(path, 'nace_4digit'), [2410, 3511, 2410, 3511])
@@ -158,7 +166,7 @@ test('shared330 scopes survive sibling reruns, foreign rows and retirement resto
       { gx, gy, country: 'BR', source: 330, nace: 3512, suppressed: 1 },
       { gx, gy, country: '', source: 330, nace: 3512 },
       { gx, gy: gy + 1_000_000, country: 'BF', source: 300, nace: 3511, area: 1_200_000, suppressed: 1 },
-      { gx, gy, country: 'BF', source: 330, nace: 3511, sourceType: 10, suppressed: 1 },
+      { gx: gx + 100_000, gy, country: 'BF', source: 330, nace: 3511, sourceType: 10, suppressed: 1 },
     ]
     const original = stored(path, rows)
     const bf = GEM_COUNTRIES.find(p => p.country === 'BF')!, ml = GEM_COUNTRIES.find(p => p.country === 'ML')!
@@ -177,30 +185,6 @@ test('shared330 scopes survive sibling reruns, foreign rows and retirement resto
     stored(path, [{ gx, gy }]); const missing = readFileSync(path)
     await assert.rejects(enrichIndustrialFacilities(work, [facility(gx, gy, 330)], [330], gemIndustrialOwnership([bf], ['BF'])), /country_land_baked_v1/)
     assert.deepEqual(readFileSync(path), missing)
-  } finally { rmSync(work, { recursive: true, force: true }) }
-})
-
-test('national facility horizon reaches Paraguay border registry beyond the global default, without claiming foreign rows', async () => {
-  const work = mkdtempSync(resolve(tmpdir(), 'industrial-horizon-'))
-  try {
-    const gx = Math.round((-58 / 360 + .5) * 2 ** 30)
-    const gy = Math.round((Math.log(Math.tan(Math.PI / 4 - 25 * Math.PI / 360)) / (2 * Math.PI) + .5) * 2 ** 30)
-    const origin = facility(gx, gy, 330, 3512)
-    // 0.025 degrees longitude is between two and three kilometres here.
-    const targetGx = gx + Math.round(.025 / 360 * 2 ** 30)
-    const path = resolve(work, 'z9/173/292/industrial.arrow')
-    const before = stored(path, [{ gx: targetGx, gy, country: 'PY' }, { gx, gy, country: 'BR', source: 330, nace: 3511 }])
-    const scope = [{ country: 'PY', bbox: [-27.7, -62.7, -19.3, -54.2] as const }]
-    const ownership = gemIndustrialOwnership(scope, ['PY'])
-    await enrichIndustrialFacilities(work, [{ ...origin, searchRadiusM: 3000 }], [330], ownership)
-    assert.deepEqual(values(path, 'source_id'), [330, 330])
-    assert.deepEqual(values(path, 'nace_4digit'), [3512, 3511])
-    unchangedNative(before, tableFromIPC(readFileSync(path)))
-    const bytes = readFileSync(path)
-    assert.equal((await enrichIndustrialFacilities(work, [{ ...origin, searchRadiusM: 3000 }], [330], ownership)).squaresUpdated, 0)
-    assert.deepEqual(readFileSync(path), bytes)
-    await enrichIndustrialFacilities(work, [{ ...origin, searchRadiusM: 1500 }], [330], ownership)
-    assert.deepEqual(values(path, 'source_id'), [0, 330], 'each facility retains its own horizon and admitted retirement scope')
   } finally { rmSync(work, { recursive: true, force: true }) }
 })
 
@@ -233,11 +217,36 @@ test('final containment tier participates in one priority election and retiremen
 })
 
 
-test('dedicated power and inactive classes reject generic registry matches', async () => {
+test('concession and point classifications respect the same mapped activity', async () => {
+  const work = mkdtempSync(resolve(tmpdir(), 'industrial-concession-gate-'))
+  try {
+    const gx = Math.round((-74 / 360 + .5) * 2 ** 30)
+    const gy = Math.round((Math.log(Math.tan(Math.PI / 4 + 5 * Math.PI / 360)) / (2 * Math.PI) + .5) * 2 ** 30)
+    const path = resolve(work, 'z9/150/248/industrial.arrow')
+    stored(path, [{ gx, gy, subtype: 6, country: 'CO', area: 1_200_000 },
+      { gx, gy: gy + 1_000_000, subtype: 6, country: 'CO', area: 200_000 }])
+    const ownership = gemIndustrialOwnership([{ country: 'CO', bbox: [-4.3, -82, 13.5, -66.8] }], [])
+    ownership.rowClassification = (_country, polygon) => ({
+      ...facility(gx, gy, 330, polygon.areaM2 > 500_000 ? 700 : 2410), lat: polygon.lat, lon: polygon.lon,
+    })
+    await enrichIndustrialFacilities(work, [], [330], ownership)
+    assert.deepEqual(values(path, 'source_id'), [0, 330])
+    assert.deepEqual(values(path, 'nace_4digit'), [0, 2410])
+  } finally { rmSync(work, { recursive: true, force: true }) }
+})
+
+test('dedicated power and inactive footprints own contained registry points without passing them to an enclosing zone', async () => {
   const root = mkdtempSync(resolve(tmpdir(), 'industrial-registry-power-'))
   try {
     const gx = 276 * 2 ** 21, gy = 709600000
     const path = resolve(root, 'z9/276/173/industrial.arrow')
+    for (const sourceType of [10, 11, 12, 13, 14, 15]) {
+      stored(path, [{ gx, gy, sourceType }, { gx, gy, half: 40_000, area: 1_000_000 }])
+      const before = readFileSync(path)
+      const result = await enrichIndustrialFacilities(root, [facility(gx, gy)], [300])
+      assert.equal(result.stamped, 0, `class ${sourceType} keeps the point from its enclosing generic zone`)
+      assert.deepEqual(readFileSync(path), before)
+    }
     stored(path, [11, 12, 13, 14, 15].map(sourceType => ({ gx, gy, sourceType })))
     const before = readFileSync(path)
     const result = await enrichIndustrialFacilities(root, [facility(gx, gy)], [300])

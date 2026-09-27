@@ -7,18 +7,17 @@ import { listPreparedSquares } from './prepared-grid.js'
 import { withArrowWrite, shouldOverwrite } from './provenance.js'
 import { PROVENANCE_RANK, SOURCES_BY_ID } from './sources.js'
 import { buildOneHundredthDegreePointGrid, pointGridCandidates } from './spatial.js'
-import { candidateBeats, candidateEdgeM, contestBeats, isGenericIndustrialSource, lookupRadiusM, overlapPairs,
-  readPolygons, OVERLAP_MIN_AREA_M2, type MatchFacility, type MatchPolygon, type OverlapWinner } from './facility-match.js'
+import { containsFacility, containingPolygonBeats, contestBeats, footprintAcceptsRegistryClass, isGenericIndustrialSource,
+  lookupRadiusM, overlapPairs, readPolygons, OVERLAP_MIN_AREA_M2, type MatchFacility, type MatchPolygon, type OverlapWinner } from './facility-match.js'
 
 import { requireOsmContract } from './osm-contract.js'
 
-const SEARCH_RADIUS_M = 2000 // Default original registry centroid search horizon.
 export interface IndustrialOwnership {
   facilityCountries: readonly string[]
   rowClassification?(country: string, polygon: MatchPolygon): MatchFacility | null
   countryAt(table: Table): (row: number, polygon: MatchPolygon) => string | null
 }
-interface Winner { country: string; facility: MatchFacility; square: string; row: number; edge?: number; contained: boolean; polygon: MatchPolygon; existingSourceId: number }
+interface Winner { country: string; facility: MatchFacility; square: string; row: number; polygon: MatchPolygon; existingSourceId: number }
 const keyOf = (winner: Winner) => `${winner.square}:${winner.row}`
 
 function stamps(table: Table, name: string, bits: number, optional = false): number[] {
@@ -49,19 +48,15 @@ export async function enrichIndustrialFacilities(
       throw new Error('industrial facility has no admitted source or valid NACE')
     }
   }
-  let searchRadiusM = 0
   for (const f of facilities) {
     validateFacility(f)
-    const radius = f.searchRadiusM ?? SEARCH_RADIUS_M
-    if (!Number.isFinite(radius) || radius <= 0) throw new Error('invalid industrial search radius')
-    searchRadiusM = Math.max(searchRadiusM, radius)
   }
   const squares = listPreparedSquares(preparedDirectory, [-90, -180, 90, 180], 'industrial.arrow')
   if (!squares.length) throw new Error(`${preparedDirectory}: no industrial Arrow scope`)
   const identities = new Map<string, BigIntStats>()
   const grid = buildOneHundredthDegreePointGrid(facilities.map((facility, index) =>
     ({ latitude: facility.lat, longitude: facility.lon, index })))
-  const best = new Map<number, Winner & { edge: number }>()
+  const best = new Map<number, Winner>()
   const rowClassifications = new Map<string, Winner>()
   const incumbents = new Map<string, OverlapWinner & { country: string }>()
   const previousOwned = new Map<string, OverlapWinner & { country: string }>()
@@ -85,47 +80,46 @@ export async function enrichIndustrialFacilities(
     result.rows += polygons.length
     for (const [row, polygon] of polygons.entries()) {
       const country = countryAt(row, polygon)
-      if (country === null || !isGenericIndustrialSource(polygon.sourceType)) continue
+      if (country === null) continue
+      const generic = isGenericIndustrialSource(polygon.sourceType)
       const source = SOURCES_BY_ID.get(sourceIds[row])
-      if (source?.layer === 'industrial' && nace[row] > 0 &&
+      if (generic && source?.layer === 'industrial' && nace[row] > 0 &&
           polygon.areaM2 >= OVERLAP_MIN_AREA_M2) {
         const key = `${square}:${row}`
-        // The stored classification has authority but no retained registry-edge measurement.
         const target = reset.has(sourceIds[row]) ? previousOwned : incumbents
-        target.set(key, { ...polygon, key, country, id: source.id,
+        target.set(key, { lat: polygon.lat, lon: polygon.lon, areaM2: polygon.areaM2, ring: polygon.ring, key, country, id: source.id,
           rank: PROVENANCE_RANK[source.provenance], year: source.year ?? 0 })
       }
-      const classification = ownership?.rowClassification?.(country, polygon)
+      const classification = generic ? ownership?.rowClassification?.(country, polygon) : null
       if (classification) {
         validateFacility(classification)
-        // A concession classification holds the polygon by construction.
-        rowClassifications.set(`${square}:${row}`, { country, facility: classification, square, row, contained: true,
-          polygon, existingSourceId: sourceIds[row] })
+        if (footprintAcceptsRegistryClass(classification, polygon)) {
+          rowClassifications.set(`${square}:${row}`, { country, facility: classification, square, row,
+            polygon, existingSourceId: sourceIds[row] })
+        }
       }
-      const horizon = lookupRadiusM(polygon, searchRadiusM)
+      const horizon = lookupRadiusM(polygon)
       for (const { index } of pointGridCandidates(polygon.lat, polygon.lon, horizon, grid)) {
         if (ownership && ownership.facilityCountries[index] !== country) continue
         const facility = facilities[index]
-        const candidate = candidateEdgeM(facility, polygon, facility.searchRadiusM ?? SEARCH_RADIUS_M)
-        if (candidate === null) continue
+        if (!containsFacility(facility, polygon)) continue
         const previous = best.get(index)
-        const pick = { row, areaM2: polygon.areaM2, ...candidate }
-        if (!previous || candidateBeats(pick, { ...previous, areaM2: previous.polygon.areaM2 })) {
-          best.set(index, { country, facility, square, row, ...candidate, polygon, existingSourceId: sourceIds[row] })
+        if (!previous || containingPolygonBeats(facility, polygon, previous.polygon)) {
+          best.set(index, { country, facility, square, row, polygon, existingSourceId: sourceIds[row] })
         }
       }
     }
   }
-  result.winners = best.size
   const contested = new Map<string, Winner>()
   // Original source observation order is the stable final tie breaker.
   for (const [, winner] of [...best].sort((a, b) => a[0] - b[0])) {
+    if (!footprintAcceptsRegistryClass(winner.facility, winner.polygon)) continue
+    result.winners++
     const current = contested.get(keyOf(winner))
-    if (!current || contestBeats({ ...winner.facility, edge: winner.edge, contained: winner.contained },
-      { ...current.facility, edge: current.edge, contained: current.contained })) contested.set(keyOf(winner), winner)
+    if (!current || contestBeats(winner.facility, current.facility)) contested.set(keyOf(winner), winner)
   }
   // The original containment tier follows point matching. Its final authority
-  // enters the same priority and duplicate election, without a fabricated edge.
+  // enters the same priority and duplicate election.
   for (const [key, classification] of rowClassifications) contested.set(key, classification)
   // Only published classifications participate: rejected global candidates cannot
   // lend their authority to an incumbent. Its actual source owns that decision.
@@ -136,7 +130,7 @@ export async function enrichIndustrialFacilities(
   }
   const overlap: Array<OverlapWinner & { country: string }> = [...applicable.values()].map(winner => ({
     ...winner.polygon, ...winner.facility, lat: winner.polygon.lat, lon: winner.polygon.lon,
-    key: keyOf(winner), country: winner.country, edge: winner.edge, contained: winner.contained,
+    key: keyOf(winner), country: winner.country,
   }))
   overlap.push(...[...incumbents].filter(([key]) => !applicable.has(key)).map(([, row]) => row))
   const pairsByCountry = (rows: Array<OverlapWinner & { country: string }>) => {

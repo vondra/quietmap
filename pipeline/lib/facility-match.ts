@@ -1,14 +1,13 @@
-/** One facility, one industrial polygon; dev1 edge scoring and mutual-best site deduplication. */
+/** Registry coordinates classify their smallest containing footprint; mutual-best site deduplication. */
 
 import { DataType, Table, type Vector } from 'apache-arrow'
 import { gridToLonLat } from './prepared-grid.js'
 import { SOURCE_ID_GLOBAL_GEM_COALMINE } from './source-ids.generated.js'
-import { buildOneHundredthDegreePointGrid, flatDist, pointGridCandidates } from './spatial.js'
+import { buildOneHundredthDegreePointGrid, flatDist, M_PER_DEG_LAT, M_PER_DEG_LON_EQ, pointGridCandidates, pointInRing, wrapLonDeltaDeg } from './spatial.js'
 
 export interface MatchFacility {
   lat: number
   lon: number
-  searchRadiusM?: number
   nace4: number
   id: number
   rank: number
@@ -21,6 +20,7 @@ export interface MatchPolygon {
   areaM2: number
   subtype: number
   sourceType?: number
+  ring: readonly (readonly [number, number])[]
 }
 
 function integerColumn(table: Table, name: string, bits: number, signed = false): Vector {
@@ -38,12 +38,27 @@ export function readPolygons(table: Table): MatchPolygon[] {
   const gy = integerColumn(table, 'centroid_gy', 32, true)
   const subtype = integerColumn(table, 'site_subtype', 8)
   const sourceType = integerColumn(table, 'source_type', 8)
+  const geometry = table.getChild('geom')
+  if (!geometry || !DataType.isBinary(geometry.type)) throw new Error('industrial Arrow requires binary geom')
   const area = table.getChild('area_m2')
   if (!area || !DataType.isFloat(area.type)) throw new Error('industrial Arrow requires floating area_m2')
   return Array.from({ length: table.numRows }, (_, row) => {
     const areaM2 = (area.get(row) as number | null) ?? 0
     if (!Number.isFinite(areaM2) || areaM2 < 0) throw new Error(`invalid industrial area at row ${row}`)
-    return { ...gridToLonLat(gx.get(row) as number, gy.get(row) as number), areaM2,
+    const center = gridToLonLat(gx.get(row) as number, gy.get(row) as number)
+    const bytes = geometry.get(row) as Uint8Array | null
+    const ring: Array<[number, number]> = []
+    if (bytes !== null) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      if (bytes.byteLength < 4 || bytes.byteLength !== 4 + view.getUint32(0, true) * 8) {
+        throw new Error(`invalid industrial geometry at row ${row}`)
+      }
+      for (let offset = 4; offset < bytes.byteLength; offset += 8) {
+        const { lon, lat } = gridToLonLat(view.getInt32(offset, true), view.getInt32(offset + 4, true))
+        ring.push([center.lon + longitudeDelta(lon, center.lon), lat])
+      }
+    }
+    return { ...center, areaM2, ring,
       subtype: subtype.get(row) as number, sourceType: sourceType.get(row) as number }
   })
 }
@@ -53,6 +68,7 @@ export function readPolygons(table: Table): MatchPolygon[] {
 const HEAVY_SUBTYPE_NACE: Record<number, readonly number[]> = {
   3: [5, 7, 8], 4: [19, 20], 5: [23], 6: [24],
 }
+const SOURCE_TYPE_NACE: Record<number, readonly number[]> = { 4: [37] }
 
 // Dedicated power, turbine and inactive classes never receive generic industry
 // priors: turbines pipe their registry parameters through the wind enricher,
@@ -66,7 +82,7 @@ export const isGenericIndustrialSource = (sourceType: number | undefined): boole
 // `industrial_lw`) — ONLY for the "loudest contained facility stamps it"
 // rule. Post-norm, so close pairs order exactly as the engine emits them
 // (metallurgy 106.4 over cement 104.9 — the pre-norm bases tie at 100).
-// Ties fall through to edge. Update together with the engine arms.
+// Equal levels retain observation order. Update together with the engine arms.
 const NACE_DIVISION_BASE_LW: Record<number, number> = {
   1: 75.6, 2: 75.6, 3: 75.6, 5: 103.9, 6: 97.6, 7: 103.9, 8: 103.9,
   10: 95.6, 11: 95.6, 13: 93.6, 14: 93.6, 15: 93.6, 16: 99.4, 17: 99.4,
@@ -95,115 +111,73 @@ export function quietGateBlocks(subtype: number, nace4: number): boolean {
   return heavy !== undefined && !heavy.includes(division)
 }
 
-const equivalentCircleRadiusM = (areaM2: number) => Math.sqrt(Math.max(areaM2, 0) / Math.PI)
+const longitudeDelta = (a: number, b: number) => wrapLonDeltaDeg(a - b)
 
-/** Grid lookup horizon for one polygon: the registry search radius, widened
- * to the polygon's own equivalent radius so a facility it CONTAINS is found
- * even past the 2 km proximity horizon (containment bypasses the radius). */
-export function lookupRadiusM(polygon: MatchPolygon, radiusM: number): number {
-  return Math.max(radiusM, equivalentCircleRadiusM(polygon.areaM2))
+/** Every containing footprint vertex lies within this conservative metric box. */
+export function lookupRadiusM(polygon: Pick<MatchPolygon, 'lat' | 'lon' | 'ring'>): number {
+  return polygon.ring.reduce((radius, [lon, lat]) => Math.max(radius,
+    Math.hypot((lat - polygon.lat) * M_PER_DEG_LAT, longitudeDelta(lon, polygon.lon) * M_PER_DEG_LON_EQ)), 0)
 }
 
-export function edgeDistM(facility: { lat: number; lon: number }, polygon: MatchPolygon): number {
-  return flatDist(facility.lat, facility.lon, polygon.lat, polygon.lon) - equivalentCircleRadiusM(polygon.areaM2)
+export function containsFacility(facility: MatchFacility, polygon: MatchPolygon): boolean {
+  return pointInRing(polygon.lon + longitudeDelta(facility.lon, polygon.lon), facility.lat, polygon.ring)
 }
 
-export function contestBeats(
-  a: { rank: number; year: number; id: number; edge?: number; contained?: boolean; nace4?: number },
-  b: { rank: number; year: number; id: number; edge?: number; contained?: boolean; nace4?: number },
+/** The owning footprint keeps a dedicated or incompatible mapped identity; the point never falls through to an enclosing zone. */
+export function footprintAcceptsRegistryClass(
+  facility: Pick<MatchFacility, 'nace4'>, polygon: Pick<MatchPolygon, 'sourceType' | 'subtype'>,
 ): boolean {
-  // A contained commodity-specific coal mine beats broad mining activity for
-  // the same polygon: the GEM tracker says what the mine IS (24/7 coal), the
-  // registry only that it mines (E-PRTR 3(a)/3(b) → division 07/08). Without
-  // this the continental rank beats the global rank and Garzweiler-class pits
-  // lose their night term (8.5 dB Lden at the same day level). The coal side
-  // must be contained (inside this plant, not a neighbour); the mining side
-  // may be contained or near. Every other pairing keeps the rank ladder.
-  const containedCoal = (f: typeof a) => (f.contained ?? false) && f.id === SOURCE_ID_GLOBAL_GEM_COALMINE &&
-    Math.floor((f.nace4 ?? 0) / 100) === 5
+  const activity = SOURCE_TYPE_NACE[polygon.sourceType ?? 0]
+  return isGenericIndustrialSource(polygon.sourceType) && !quietGateBlocks(polygon.subtype, facility.nace4)
+    && (activity === undefined || activity.includes(Math.floor(facility.nace4 / 100)))
+}
+
+/** Source authority selects the registry; its loudest activity represents the footprint. */
+export function contestBeats(
+  a: { rank: number; year: number; id: number; nace4?: number },
+  b: { rank: number; year: number; id: number; nace4?: number },
+): boolean {
+  // Commodity-specific GEM coal evidence is more informative than a broad
+  // E-PRTR mining activity for the same footprint.
+  const coal = (f: typeof a) => f.id === SOURCE_ID_GLOBAL_GEM_COALMINE && Math.floor((f.nace4 ?? 0) / 100) === 5
   const broadMining = (f: typeof a) => f.id !== SOURCE_ID_GLOBAL_GEM_COALMINE &&
     [7, 8].includes(Math.floor((f.nace4 ?? -100) / 100))
-  if (containedCoal(a) && broadMining(b)) return true
-  if (containedCoal(b) && broadMining(a)) return false
+  if (coal(a) && broadMining(b)) return true
+  if (coal(b) && broadMining(a)) return false
   if (a.rank !== b.rank) return a.rank > b.rank
   if (a.year !== b.year) return a.year > b.year
   if (a.id !== b.id) return a.id > b.id
-  // Same registry: a contained point beats a merely near one (it is inside
-  // the plant), and among contained points the loudest NACE stamps the site
-  // (Tata: steel 2410 over chemicals 2011) — but only when both sides carry a
-  // NACE, so legacy duplicate elections without one keep their exact order.
-  if ((a.contained ?? false) !== (b.contained ?? false)) return a.contained ?? false
-  if (a.nace4 !== undefined && b.nace4 !== undefined) {
-    const loud = naceBaseLw(a.nace4) - naceBaseLw(b.nace4)
-    if (loud !== 0) return loud > 0
-  }
-  return a.edge !== undefined && b.edge !== undefined && a.edge < b.edge
+  return a.nace4 !== undefined && b.nace4 !== undefined && naceBaseLw(a.nace4) > naceBaseLw(b.nace4)
 }
 
-export interface MatchCandidate {
-  edge: number
-  contained: boolean
+/** Nested footprints resolve to the tenant; equal-area outlines preserve dedicated identity. */
+export function containingPolygonBeats(facility: MatchFacility, candidate: MatchPolygon, previous: MatchPolygon): boolean {
+  if (candidate.areaM2 !== previous.areaM2) return candidate.areaM2 < previous.areaM2
+  const generic = isGenericIndustrialSource(candidate.sourceType)
+  if (generic !== isGenericIndustrialSource(previous.sourceType)) return !generic
+  return flatDist(facility.lat, facility.lon, candidate.lat, candidate.lon)
+    < flatDist(facility.lat, facility.lon, previous.lat, previous.lon)
 }
 
-export function candidateEdgeM(facility: MatchFacility, polygon: MatchPolygon, radiusM: number): MatchCandidate | null {
-  // Dedicated power, turbine and inactive classes carry their own identity;
-  // a nearby registry point cannot claim it.
-  if (!isGenericIndustrialSource(polygon.sourceType) ||
-      quietGateBlocks(polygon.subtype, facility.nace4)) return null
-  const edge = edgeDistM(facility, polygon)
-  // The 2 km radius gates proximity only: a contained facility stamps from
-  // inside no matter how far the centroid sits.
-  if (edge >= 0 && flatDist(facility.lat, facility.lon, polygon.lat, polygon.lon) >= radiusM) return null
-  return { edge, contained: edge < 0 }
-}
-
-export interface CandidatePick { row: number; edge: number; contained: boolean; areaM2: number }
-
-/** Facility → polygon preference, shared by `bestCandidate` and the global
- * sweep: the smallest CONTAINING polygon wins; among uncontained polygons
- * the nearest edge wins (the original rule). */
-export function candidateBeats(a: CandidatePick, b: CandidatePick): boolean {
-  if (a.contained !== b.contained) return a.contained
-  if (a.contained && a.areaM2 !== b.areaM2) return a.areaM2 < b.areaM2
-  return a.edge < b.edge
-}
-
-export function bestCandidate(facility: MatchFacility, polygons: MatchPolygon[], radiusM: number) {
-  let best: (CandidatePick) | null = null
-  for (const [row, polygon] of polygons.entries()) {
-    const candidate = candidateEdgeM(facility, polygon, radiusM)
-    if (candidate !== null) {
-      const pick = { row, areaM2: polygon.areaM2, ...candidate }
-      if (!best || candidateBeats(pick, best)) best = pick
-    }
-  }
-  return best
-}
-
-export interface OverlapWinner {
+export interface OverlapWinner extends Pick<MatchPolygon, 'lat' | 'lon' | 'areaM2' | 'ring'> {
   key: string
-  lat: number
-  lon: number
-  areaM2: number
   rank: number
   year: number
   id: number
-  edge?: number
-  contained?: boolean
   nace4?: number
 }
 
-// Accepted dev1 I-07 whole-site duplicate rule: >=10 ha, similar areas, coincident
-// centroids. Equivalent circles deliberately do not claim exact polygon intersection.
+// Similar whole-site outlines must contain each other's centres. Nearby disjoint
+// footprints cannot suppress one another, however large their equivalent circles.
 export const OVERLAP_MIN_AREA_M2 = 100_000
 export const OVERLAP_AREA_RATIO_MAX = 2.5
-export const OVERLAP_CENTROID_RADIUS_FACTOR = 0.5
 
 export function overlapsSameSite(a: OverlapWinner, b: OverlapWinner): boolean {
   const minimumArea = Math.min(a.areaM2, b.areaM2)
   return minimumArea >= OVERLAP_MIN_AREA_M2 &&
     Math.max(a.areaM2, b.areaM2) / minimumArea <= OVERLAP_AREA_RATIO_MAX &&
-    flatDist(a.lat, a.lon, b.lat, b.lon) <= OVERLAP_CENTROID_RADIUS_FACTOR * equivalentCircleRadiusM(minimumArea)
+    pointInRing(a.lon + longitudeDelta(b.lon, a.lon), b.lat, a.ring) &&
+    pointInRing(b.lon + longitudeDelta(a.lon, b.lon), a.lat, b.ring)
 }
 
 export function overlapPairs(winners: OverlapWinner[]): Array<[string, string]> {
@@ -213,9 +187,8 @@ export function overlapPairs(winners: OverlapWinner[]): Array<[string, string]> 
   for (const [i, winner] of winners.entries()) {
     if (winner.areaM2 < OVERLAP_MIN_AREA_M2) continue
     let nearest = Infinity
-    // The smaller radius controls each pair, so this winner's radius is a safe
-    // bound. Metric lookup also covers high latitudes, seams and very large sites.
-    const reach = OVERLAP_CENTROID_RADIUS_FACTOR * equivalentCircleRadiusM(winner.areaM2)
+    // A partner's centre must lie in this footprint.
+    const reach = lookupRadiusM(winner)
     for (const { index: j } of pointGridCandidates(winner.lat, winner.lon, reach, grid)) {
       if (i === j || !overlapsSameSite(winner, winners[j])) continue
       const distance = flatDist(winner.lat, winner.lon, winners[j].lat, winners[j].lon)
