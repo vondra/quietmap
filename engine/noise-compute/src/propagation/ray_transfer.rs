@@ -159,12 +159,7 @@ pub fn evaluate_ray_transfer(
     } else {
         (full.clone(), full.clone())
     };
-    let azimuth = {
-        let m_per_deg_lon = grid::geo::m_per_deg_lon(source.lat.to_radians());
-        let east = grid::geo::wrapped_longitude_delta(source.lon, receiver.lon) * m_per_deg_lon;
-        let north = (receiver.lat - source.lat) * grid::geo::M_PER_DEG_LAT;
-        north.atan2(east)
-    };
+    let azimuth = grid::geo::propagation_azimuth_rad(source.lat, source.lon, receiver.lat, receiver.lon);
     let add = |a: [f64; NUM_BANDS], b: &[f64; NUM_BANDS]| std::array::from_fn(|i| a[i] + b[i]);
     let pair = |boundaries: &[StateBoundary; 2], pick: fn(&StateBoundary) -> [f64; NUM_BANDS]| {
         (add(pick(&boundaries[0]), &foliage_h), add(pick(&boundaries[1]), &foliage_f))

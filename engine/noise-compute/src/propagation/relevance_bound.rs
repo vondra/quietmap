@@ -77,10 +77,10 @@ pub fn surface_relevance_bound(weather: &crate::propagation::meteorology::Meteor
     }
 }
 
-/// The bound for one row: gains mixed at the largest p over the row's azimuth span
-/// (a point's single azimuth), never above the window maximum the extract-time
-/// envelope was built at. A straight piece's node azimuths sweep monotonically
-/// inside its endpoint span, so the span maximum covers every quadrature node.
+/// The bound for one row: gains mixed at the largest p over the row's propagation-direction
+/// azimuth span (a point's single azimuth), never above the window maximum the extract-time
+/// envelope was built at. A straight piece's node azimuths sweep monotonically inside its
+/// endpoint span, so the span maximum covers every quadrature node.
 pub fn bound_for_azimuth_span(
     weather: &crate::propagation::meteorology::Meteorology,
     span_rad: (f64, f64),
@@ -93,8 +93,9 @@ pub fn bound_for_azimuth_span(
     }
 }
 
-/// The bound for one segment row from a receiver: the span of its endpoints' sight
-/// lines, gains mixed at the largest p over that span. Points pass the same
+/// The bound for one segment row from a receiver: the span of its endpoints'
+/// propagation azimuths (each endpoint→receiver, the direction sound travels),
+/// gains mixed at the largest p over that span. Points pass the same
 /// coordinates twice (a point's single azimuth).
 pub fn row_bound_for_segment(
     weather: &crate::propagation::meteorology::Meteorology,
@@ -109,11 +110,13 @@ pub fn row_bound_for_segment(
     bound_for_azimuth_span(weather, span)
 }
 
-/// Azimuth span `(lo, hi)` of the segment from a receiver, mathematical `atan2(north, east)`
-/// radians in the local flat-earth frame (the evaluation's own convention): the endpoint
-/// azimuths in sweep order, padded 1° each side against convention rounding. The sweep of
-/// a straight segment seen from off the line is under π; a receiver on the line sees both
-/// endpoints near ±π apart and the padded span still covers both.
+/// Propagation-azimuth span `(lo, hi)` of the segment toward a receiver, mathematical
+/// `atan2(north, east)` radians: each endpoint through the same
+/// [`propagation_azimuth_rad`](crate::propagation::geo::propagation_azimuth_rad) the ray
+/// transfer evaluates, in sweep order, padded 1° each side (the padding also covers the
+/// endpoint-vs-node longitude scale). The sweep of a straight segment seen from off the
+/// line is under π; a receiver on the line sees both endpoints near ±π apart and the
+/// padded span still covers both.
 pub fn azimuth_span(
     receiver_lat: f64,
     receiver_lon: f64,
@@ -122,12 +125,8 @@ pub fn azimuth_span(
     end_lat: f64,
     end_lon: f64,
 ) -> (f64, f64) {
-    use crate::propagation::geo::{m_per_deg_lon, wrapped_longitude_delta, M_PER_DEG_LAT};
-    let mid = receiver_lat.to_radians();
-    let azimuth = |lat: f64, lon: f64| {
-        ((lat - receiver_lat) * M_PER_DEG_LAT)
-            .atan2(wrapped_longitude_delta(receiver_lon, lon) * m_per_deg_lon(mid))
-    };
+    use crate::propagation::geo::propagation_azimuth_rad;
+    let azimuth = |lat: f64, lon: f64| propagation_azimuth_rad(lat, lon, receiver_lat, receiver_lon);
     let pad = 1.0_f64.to_radians();
     let (a, b) = (azimuth(start_lat, start_lon), azimuth(end_lat, end_lon));
     let sweep = (b - a).rem_euclid(std::f64::consts::TAU);
@@ -273,15 +272,52 @@ mod tests {
     }
 
     #[test]
-    fn azimuth_spans_follow_the_sight_lines() {
-        // Due east / west / north of the receiver.
+    fn azimuth_spans_follow_the_propagation_direction() {
+        // Sound travels segment→receiver: a road east of the receiver spans
+        // around ±π (west), one north around −π/2 (south).
         let (lo, hi) = azimuth_span(50.0, 14.0, 50.0, 14.1, 50.0, 14.2);
-        assert!(lo < 0.0 && hi > 0.0 && hi - lo < 0.1, "{lo} {hi}");
+        assert!(hi - lo < 0.1 && ((lo + hi) / 2.0 - std::f64::consts::PI).abs() < 0.05, "{lo} {hi}");
         let (lo, hi) = azimuth_span(50.0, 14.0, 50.1, 14.0, 50.2, 14.0);
-        assert!((lo - std::f64::consts::FRAC_PI_2).abs() < 0.05, "{lo} {hi}");
+        assert!((lo + std::f64::consts::FRAC_PI_2).abs() < 0.05, "{lo} {hi}");
         // A segment across the ±π branch cut spans narrowly, not the long way round.
         let (lo, hi) = azimuth_span(50.0, 14.0, 50.0, 13.9, 50.001, 13.9);
         assert!(hi - lo < 0.1, "{lo} {hi}");
+    }
+
+    /// The row bound queries weather in the propagation direction (source→receiver),
+    /// like the ray it bounds: a road east of the receiver under a westerly
+    /// climatology mixes the favourable gain and stays within reach. On the
+    /// reversed (receiver→source) bearing the same row reads the calm sectors,
+    /// mixes 6 dB and prunes away audible energy.
+    #[test]
+    fn row_bound_queries_the_propagation_direction() {
+        use crate::propagation::meteorology::Meteorology;
+        let mut weather = Meteorology::defaults();
+        // Westerlies: sectors 11–13 (centred on 247.5°–292.5°) favourable.
+        weather.favourable_probability = [[0.0; 16]; 3];
+        for row in &mut weather.favourable_probability {
+            row[11] = 1.0;
+            row[12] = 1.0;
+            row[13] = 1.0;
+        }
+        weather.bound_probability_max = [1.0; 3];
+        weather.bound_alpha_min_db_per_km = [0.0; NUM_BANDS];
+        // A short road piece due east of the receiver: sound travels west.
+        let bound = row_bound_for_segment(&weather, 50.0, 14.0, 50.0, 14.02, 50.0, 14.021);
+        for period in 0..3 {
+            assert!(
+                (bound.gains_db[period] - FAVOURABLE_GAIN_BOUND_DB).abs() < 1e-9,
+                "period {period}: {}",
+                bound.gains_db[period]
+            );
+        }
+        // The ray evaluates p = 1 on this path; the bound covers it.
+        let azimuth = crate::propagation::geo::propagation_azimuth_rad(50.0, 14.02, 50.0, 14.0);
+        assert!((weather.favourable_probability(0, azimuth) - 1.0).abs() < 1e-9);
+        // At the review's threshold emission the row stays audible (bound Lden
+        // 41 dB); the reversed bearing reads 29 dB and drops it.
+        let emission = [[45.646127; NUM_BANDS]; 3];
+        assert!(bound.within_reach(&emission, SourceSpread::Line, 1000.0));
     }
 
     #[test]

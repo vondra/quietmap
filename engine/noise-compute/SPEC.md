@@ -834,9 +834,11 @@ skip: `B = L_W − A_div,min(d) − α_min·d/1000 + G_max`, never below what th
 deliver at horizontal distance d. The state gains are 18 dB favourable (the below-plane
 corner: the capped Δdif replaced by the image path's ≥ 0 dB while both sides sit at the
 −9 dB floor) and 6 dB homogeneous (the same corner at the −3 dB floor); each period mixes
-them in energy at the largest p over the row's azimuth span (exact: p is piecewise linear
-with breakpoints at the sector centres, so the maximum sits at an endpoint or an enclosed
-centre), never above the window p_max the extract-time envelope was built at, and α_min
+them in energy at the largest p over the row's propagation-direction azimuth span
+(source→receiver, the same `propagation_azimuth_rad` the ray transfer evaluates; exact: p
+is piecewise linear with breakpoints at the sector centres, so the maximum sits at an
+endpoint or an enclosed centre), never above the window p_max the extract-time envelope
+was built at, and α_min
 is the window's linear absorption bound per band (the peak-region line only where every
 node and period peaks inside the ceiling; elsewhere it overshoots the unreached peak).
 A row reaches as far as its bound's Lden stays above the 30 dB display edge; no ray
