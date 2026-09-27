@@ -9,12 +9,18 @@ pub const CONTRACT: &str = "structures_v5";
 
 /// `height_source` codes, mirroring `scripts/structures/structure_contract.py`.
 pub const HEIGHT_SOURCE_AREA_TYPOLOGY: u8 = 2;
+/// Retired 2026-09-25 (the producer emits only the codes above and below this
+/// one now); older prepared squares still carry it, so readers keep accepting it.
+pub const HEIGHT_SOURCE_GHSL: u8 = 4;
 pub const HEIGHT_SOURCE_GROUND_ACTIVITY: u8 = 7;
 
-/// A footprint-area typology knows nothing about the individual shed under
-/// it; every other source measured or mapped the building.
+/// A footprint-area typology or a retired 100 m cell average knows nothing about the
+/// individual shed under it; every other source measured or mapped the building.
 pub fn height_is_per_building(height_source: u8) -> bool {
-    height_source != HEIGHT_SOURCE_AREA_TYPOLOGY
+    !matches!(
+        height_source,
+        HEIGHT_SOURCE_AREA_TYPOLOGY | HEIGHT_SOURCE_GHSL
+    )
 }
 
 pub fn validate_schema(schema: &Schema) -> Result<(), String> {
@@ -84,6 +90,18 @@ mod tests {
             (CONTRACT, DataType::Int16, true),
         ] {
             assert!(validate_schema(&schema(stamp, dtype, nullable)).is_err());
+        }
+    }
+
+    #[test]
+    fn only_typology_and_retired_ghsl_skip_the_per_building_cap() {
+        // Older prepared squares still carry code 4 (the retired 100 m
+        // satellite average); reading it as a measured building would lift
+        // the 3 m low-profile cap it was capped under.
+        assert!(!height_is_per_building(HEIGHT_SOURCE_AREA_TYPOLOGY));
+        assert!(!height_is_per_building(HEIGHT_SOURCE_GHSL));
+        for source in [0, 1, 3, 5, 6, 7, 8, 9] {
+            assert!(height_is_per_building(source), "source {source}");
         }
     }
 

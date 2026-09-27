@@ -643,9 +643,10 @@ roof height, from the first available rung, and stores its `height_source`:
    < 60 m² 3.5 m, < 150 m² 7.4 m, < 500 m² 8.0 m, else 9.0 m
    (no-information rows only, 2026-09-25).
 
-Rung 5 is not per-building knowledge; only it takes the low-profile cap.
-A retired satellite rung (`height_source` 4) still reads from older prepared
-squares. The demand storey count `storeys` is the floor count where one is
+Rung 5 is not per-building knowledge, and neither is the retired
+satellite rung (`height_source` 4, read from older prepared squares only):
+both take the low-profile cap; every other source measured or mapped the
+building. The demand storey count `storeys` is the floor count where one is
 mapped, else round((height − 1 m) / 3 m), at least 1 (registry floor counts
 vs mean height, 6,061 buildings: MAE 0.41 storeys, unbiased); a structure
 without a screening height counts one level. The service-tree demand reads it.
