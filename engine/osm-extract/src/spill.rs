@@ -581,7 +581,11 @@ pub fn is_complete(dir: &Path, num_buckets: usize, input_identity: &str) -> bool
 /// barns. Function POIs reuse [`poi_class`] (shared with the finalize join).
 fn building_type_from_tags(tags: &Tags) -> u8 {
     let get = |k: &str| tags.get(k).map(|s| s.as_str());
-    if classify::is_special_leisure(get) || classify::is_power_building(get) {
+    // Power infrastructure stays silent (its Industrial row owns the emission),
+    // but a special-leisure building emits: SPEC silences the roofed formula
+    // row BECAUSE its building footprint emits, so silencing both leaves an
+    // indoor karting hall with no path at all.
+    if classify::is_power_building(get) {
         return ids::SETTLEMENT_SILENT;
     }
     // A SPECIFIC structural `building=*` (warehouse, stadium, train_station, …)
@@ -1055,6 +1059,25 @@ mod settlement_class_tests {
             ]);
             assert_eq!(building_type_from_tags(&tags), st::SETTLEMENT_SILENT);
         }
+    }
+
+    #[test]
+    fn an_indoor_karting_hall_keeps_its_building_emission() {
+        // SPEC silences the roofed formula row BECAUSE its building emits: the
+        // building must not be silent too, or the hall emits nothing at all.
+        let tags = Tags::from([
+            ("building".into(), "sports_hall".into()),
+            ("leisure".into(), "sports_centre".into()),
+            ("sport".into(), "karting".into()),
+            ("indoor".into(), "yes".into()),
+        ]);
+        assert_eq!(building_type_from_tags(&tags), 9);
+        // Power buildings stay silent (their Industrial row owns the emission).
+        let power = Tags::from([
+            ("building".into(), "yes".into()),
+            ("power".into(), "substation".into()),
+        ]);
+        assert_eq!(building_type_from_tags(&power), st::SETTLEMENT_SILENT);
     }
 
     #[test]
