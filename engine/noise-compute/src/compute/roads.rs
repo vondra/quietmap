@@ -38,7 +38,7 @@ pub(crate) fn compute_roads(
     };
     let weather = rasters.weather(receiver.lat, receiver.lon);
 
-    use std::collections::HashMap;
+    use crate::fxhash::FxHashMap;
 
     // Group segments by (ref, name, class): accumulate energy + collect geometry
     struct RoadAccum {
@@ -92,7 +92,7 @@ pub(crate) fn compute_roads(
     // For unnamed roads (ref="" && name=""): group per osm_id to avoid merging
     // all unnamed residential streets into one mega-contributor (unnamed rail
     // tracks, by contrast, merge per type — see compute/railways.rs).
-    let mut roads_by_key: HashMap<(String, String, u8), RoadAccum> = HashMap::new();
+    let mut roads_by_key: FxHashMap<(String, String, u8), RoadAccum> = FxHashMap::default();
 
     // SquareCountryCity resolved once per compute_roads call — receiver position is
     // constant across segments. Uses the process-wide square-country-city cache
@@ -116,21 +116,55 @@ pub(crate) fn compute_roads(
         /// and their links) — the O(segments) scan, off the sequential path.
         effective_ref: String,
         trace: Option<SegmentTrace>,
+        ray_phase: crate::propagation::ray_transfer::RayPhaseTotals,
+        piece_ns: u64,
+        tail_ns: u64,
     }
     let collect_traces = traces.is_some();
+    // Ref-inheritance candidates, hoisted out of the per-segment scan: the refed
+    // class 0/1/2 rows in road order. Scanning one of these finds the same nearest
+    // row as scanning all of `roads` (same elements, same order, same strict-less
+    // comparison), at a fraction of the cost.
+    let mut refed: [Vec<(f64, f64, &str)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for seg in roads {
+        if !seg.road_ref.is_empty() {
+            if let Some(bucket) = refed.get_mut(seg.road_class as usize) {
+                bucket.push((seg.cp_lat, seg.cp_lon, seg.road_ref.as_str()));
+            }
+        }
+    }
+    // Skip-path totals (the `POPUP_TIMING` per-row breakdown): atomics because
+    // skipped rows return no per-row record; touched only while `timing_on`.
+    let norm_ns = std::sync::atomic::AtomicU64::new(0);
+    let bound_ns = std::sync::atomic::AtomicU64::new(0);
+    let n_norm_none = std::sync::atomic::AtomicU64::new(0);
+    let n_bound_skip = std::sync::atomic::AtomicU64::new(0);
     // ── Pass 1: per-segment evaluation (parallel, bit-deterministic) ──
     let kept: Vec<Option<(RoadPre, RoadSegOut)>> = roads
         .par_iter()
-        .map_init(LinePieceScratch::default, |scratch, seg| {
+        .enumerate()
+        .map_init(LinePieceScratch::default, |scratch, (seg_i, seg)| {
             // The row's own baked SquareCountryCity (plan M4) when its batch carried one,
             // else the receiver SquareCountryCity (pre-bake behaviour, unchanged).
             let square_country_city = seg
                 .square_country_city
                 .unwrap_or(receiver_square_country_city);
-            let norm = normalize::normalize_road_segment(seg, square_country_city)?;
+            let t_gate = timing_on.then(std::time::Instant::now);
+            let norm = normalize::normalize_road_segment(seg, square_country_city);
+            let Some(norm) = norm else {
+                if timing_on {
+                    norm_ns.fetch_add(t_gate.unwrap().elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+                    n_norm_none.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                return None;
+            };
+            if timing_on {
+                norm_ns.fetch_add(t_gate.unwrap().elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
             let period_emissions = norm.period_emissions_db();
             // The row's reach from its own azimuth-span bound, every period counted (#31);
             // a pair inside it is never inaudible (the bound's Lden there exceeds 30 dB).
+            let t_gate = timing_on.then(std::time::Instant::now);
             let row_bound = crate::propagation::relevance_bound::row_bound_for_segment(
                 &weather,
                 receiver.lat,
@@ -140,9 +174,15 @@ pub(crate) fn compute_roads(
                 seg.end_lat,
                 seg.end_lon,
             );
-            if seg.dist_m > LINE_REACH_CEILING_M
-                || !row_bound.within_reach(&period_emissions, SourceSpread::Line, seg.dist_m)
-            {
+            let in_reach = seg.dist_m <= LINE_REACH_CEILING_M
+                && row_bound.line_piece_within_reach(&period_emissions, seg.length_m, seg.dist_m);
+            if timing_on {
+                bound_ns.fetch_add(t_gate.unwrap().elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+            if !in_reach {
+                if timing_on {
+                    n_bound_skip.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
                 return None;
             }
             let src_alt = rasters.elevation(seg.cp_lat, seg.cp_lon) + norm.source_height_m;
@@ -150,6 +190,7 @@ pub(crate) fn compute_roads(
             let day_weights: [f64; NUM_BANDS] = std::array::from_fn(|b| {
                 10f64.powf((period_emissions[0][b] + A_WEIGHTING[b]) / 10.0)
             });
+            let t_piece = timing_on.then(std::time::Instant::now);
             let piece = evaluate_line_piece(
                 &ray_receiver,
                 &LinePiece {
@@ -169,7 +210,10 @@ pub(crate) fn compute_roads(
                 &weather,
                 scratch,
                 collect_traces.then_some(&day_weights),
+                timing_on,
             )?;
+            let piece_ns = t_piece.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
+            let t_tail = timing_on.then(std::time::Instant::now);
             let seg_variants: [PropagationVariants; 3] = std::array::from_fn(|pi| {
                 received_variants(&piece.periods[pi], &period_emissions[pi], reflection)
             });
@@ -197,19 +241,15 @@ pub(crate) fn compute_roads(
                 if let (true, Some(target)) = (seg.road_ref.is_empty(), infer_target_class) {
                     let mut best_ref = String::new();
                     let mut best_dist = f64::MAX;
-                    for other in roads.iter() {
-                        if (other.road_class as usize) != target {
-                            continue;
-                        }
-                        if other.road_ref.is_empty() {
-                            continue;
-                        }
-                        let d = ((seg.cp_lat - other.cp_lat).powi(2)
-                            + (seg.cp_lon - other.cp_lon).powi(2))
+                    // The hoisted per-class Vec: same rows in the same order the
+                    // full scan would visit after its class/ref filters.
+                    for &(cp_lat, cp_lon, road_ref) in &refed[target] {
+                        let d = ((seg.cp_lat - cp_lat).powi(2)
+                            + (seg.cp_lon - cp_lon).powi(2))
                         .sqrt();
                         if d < best_dist {
                             best_dist = d;
-                            best_ref = other.road_ref.clone();
+                            best_ref = road_ref.to_string();
                         }
                     }
                     best_ref
@@ -238,9 +278,11 @@ pub(crate) fn compute_roads(
                     seg_variants,
                     lw_bands: period_emissions,
                     weather: weather.clone(),
+                    sort_seq: seg_i as u64,
                 })),
                 _ => None,
             };
+            let tail_ns = t_tail.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
             Some((
                 RoadPre {
                     norm,
@@ -253,6 +295,9 @@ pub(crate) fn compute_roads(
                     seg_max_bh,
                     effective_ref,
                     trace,
+                    ray_phase: piece.phase,
+                    piece_ns,
+                    tail_ns,
                 },
             ))
         })
@@ -263,10 +308,33 @@ pub(crate) fn compute_roads(
         .filter_map(|(seg_i, kept)| kept.map(|(p, out)| ((seg_i, p), out)))
         .unzip();
     if timing_on {
+        let mut ray = crate::propagation::ray_transfer::RayPhaseTotals::default();
+        let mut piece_ns: u64 = 0;
+        let mut tail_ns: u64 = 0;
+        for out in &outs {
+            ray.add(&out.ray_phase);
+            piece_ns += out.piece_ns;
+            tail_ns += out.tail_ns;
+        }
+        let ms = |ns: u64| ns as f64 / 1e6;
         eprintln!(
-            "popup-stage road evaluation={:.0}ms kept={}",
+            "popup-stage road evaluation={:.0}ms kept={} norm={:.0}ms({}) bound={:.0}ms({}) rays={} profile={:.0} canopy={:.0} cross={:.0} fill={:.0} bnd={:.0} mix={:.0} detail={:.0} piece={:.0} tail={:.0}",
             t_road_start.elapsed().as_secs_f64() * 1000.0,
-            pre.len()
+            pre.len(),
+            ms(norm_ns.load(std::sync::atomic::Ordering::Relaxed)),
+            n_norm_none.load(std::sync::atomic::Ordering::Relaxed),
+            ms(bound_ns.load(std::sync::atomic::Ordering::Relaxed)),
+            n_bound_skip.load(std::sync::atomic::Ordering::Relaxed),
+            ray.n_rays,
+            ms(ray.profile_ns),
+            ms(ray.canopy_ns),
+            ms(ray.crossings_ns),
+            ms(ray.fill_ns),
+            ms(ray.boundary_ns),
+            ms(ray.mix_ns),
+            ms(ray.detail_ns),
+            ms(piece_ns),
+            ms(tail_ns),
         );
     }
 
@@ -275,6 +343,8 @@ pub(crate) fn compute_roads(
     // The original fold, statement for statement: HashMap grouping, dominant
     // selection, trace push order, f64 energy sums. Identical statements over
     // identical inputs in identical order ⇒ identical bits.
+    let t_pass2 = timing_on.then(std::time::Instant::now);
+    let mut breakdown_ns: u64 = 0;
     for ((seg_i, p), mut out) in pre.iter().zip(outs) {
         let seg = &roads[*seg_i];
         let class_idx = p.norm.class_idx;
@@ -512,7 +582,24 @@ pub(crate) fn compute_roads(
     // Ascending group key, not HashMap order — the contributor sequence
     // is summed downstream and its JSON order is part of the popup
     // reference output. See `crate::compute::key_sorted`.
-    for (_, acc) in crate::compute::key_sorted(&roads_by_key) {
+    //
+    // The per-group breakdown rays are pure functions of each group's closest
+    // source, so they run up front in parallel (rayon preserves order) and the
+    // sequential emit below consumes them in the same key order: bit-identical.
+    let t_breakdowns = timing_on.then(std::time::Instant::now);
+    let breakdowns: Vec<_> = crate::compute::key_sorted(&roads_by_key)
+        .into_iter()
+        .map(|(_, acc)| &acc.closest_source)
+        .collect::<Vec<_>>()
+        .par_iter()
+        .map(|closest| nearest_path_breakdown(rasters, obstacles, closest, receiver, &weather))
+        .collect();
+    if let Some(t) = t_breakdowns {
+        breakdown_ns += t.elapsed().as_nanos() as u64;
+    }
+    for ((_, acc), (nearest_terrain, nearest_screening, nearest_veg, nearest_ground_g)) in
+        crate::compute::key_sorted(&roads_by_key).into_iter().zip(breakdowns)
+    {
         // Full energy from variants (includes all path effects per-band)
         let ld = PropagationVariants::to_db(acc.variants[0].full_energy);
         let le = PropagationVariants::to_db(acc.variants[1].full_energy);
@@ -533,9 +620,6 @@ pub(crate) fn compute_roads(
         };
 
         let impacts = PropagationVariants::impact_deltas(&acc.variants, road_periods.lden_db);
-
-        let (nearest_terrain, nearest_screening, nearest_veg, nearest_ground_g) =
-            nearest_path_breakdown(rasters, obstacles, &acc.closest_source, receiver, &weather);
 
         let road_meta = RoadMetadata {
             aadt_light: acc.dominant_traffic.light,
@@ -620,6 +704,14 @@ pub(crate) fn compute_roads(
     let le = PropagationVariants::to_db(total_energy[1]);
     let ln = PropagationVariants::to_db(total_energy[2]);
 
+    if let Some(t) = t_pass2 {
+        eprintln!(
+            "popup-stage road pass2={:.0}ms breakdown={:.0}ms groups={}",
+            t.elapsed().as_secs_f64() * 1000.0,
+            breakdown_ns as f64 / 1e6,
+            roads_by_key.len(),
+        );
+    }
     (periods::periods(ld, le, ln), contributors)
 }
 

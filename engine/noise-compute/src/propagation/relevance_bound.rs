@@ -59,6 +59,17 @@ pub const PROFILE_RAY_CEILING_M: f64 = 11_872.0;
 pub const LINE_PIECE_MAXIMUM_LENGTH_M: f64 = 250.0;
 /// Reach ceiling of a line piece's closest point: its farthest point stays within the profile.
 pub const LINE_REACH_CEILING_M: f64 = PROFILE_RAY_CEILING_M - LINE_PIECE_MAXIMUM_LENGTH_M;
+/// Far-field gate of the finite-piece cap, in piece lengths: beyond 20 lengths the piece
+/// subtends under 3° (span ≤ L/d < 0.05 rad), so every quadrature bucket keeps its uniform
+/// centre node — the wide-bucket path needs ≥ 3° per bucket — and the node weights partition
+/// the subtended angle up to f64 rounding. Inside the gate the line bound stands alone.
+pub const POINT_CAP_FAR_FIELD_LENGTHS: f64 = 20.0;
+/// Length margin of the finite-piece cap: the f32 `length_m` rounding (≤ 2.6e-7 dB), the
+/// extract's planimetric length versus the true geodesic (≤ 0.4% → 0.017 dB), and the
+/// quadrature weight-partition dust (~1e-15) sum to under 0.02 dB; 1% overestimates the
+/// piece power by 0.04 dB, covering all three with headroom. Sound direction: the margin
+/// only ever keeps rows, never drops them.
+pub const POINT_CAP_LENGTH_MARGIN: f64 = 1.01;
 
 /// Largest mixed gain at favourable probability `p`: mixing the two state maxima
 /// bounds the mixed gain, and the mix increases in `p`, so the window's p_max
@@ -185,6 +196,47 @@ impl RelevanceBound {
         self.lden_db(period_emissions_db, spread, distance_m) > REACH_EDGE_LDEN_DB
     }
 
+    /// Reach test for one finite line piece of `length_m` (per-metre `L_W′` emissions, closest-
+    /// point `distance_m`): the line bound AND the finite-piece cap. The infinite-line bound
+    /// suits long pieces up close but wastes ~10·lg(d/L) dB on a short piece far away (a 40 m
+    /// residential piece at 5 km: line bound ≈ 47 dB Lden, cap ≈ 21 dB); the cap drops exactly those
+    /// rows, which the line bound alone keeps to the profile ceiling.
+    ///
+    /// Soundness: the kernel evaluates the piece as the incoherent CNOSSOS point sum
+    /// `E = W′/(10^1.1·d⊥)·Σ w_j·T_j` (`line_quadrature`). Past the far-field gate every
+    /// bucket is uniform, so `Σ w_j` is the subtended angle Φ up to f64 dust, and
+    /// `dx/r² = dφ/d⊥` gives `E ≤ W′·L·G·A/(10^1.1·d²)`: every node sits at 3D distance
+    /// ≥ the horizontal closest point `d`, its transfer `T_j` is under the same mixed gain
+    /// `G` and min absorption `A` the line bound assumes (directivity ≤ 1, omnidirectional
+    /// today and `0.01 + 0.99·sin²` in the planned track dipole), and the 1% length margin
+    /// covers the planimetric length, the f32 rounding, and the weight dust. In dB that is
+    /// the point spread at the piece's total power `L_W′ + 10·lg(L)`, evaluated by the same
+    /// [`Self::within_reach`] — a second sound upper bound, so the row is dropped only when
+    /// BOTH bounds agree it sits below the reach edge. Degenerate lengths (≤ 0, NaN) fail
+    /// closed to the line bound, exactly the old behaviour.
+    pub fn line_piece_within_reach(
+        &self,
+        period_emissions_db: &[[f64; NUM_BANDS]; 3],
+        length_m: f32,
+        distance_m: f64,
+    ) -> bool {
+        if !self.within_reach(period_emissions_db, SourceSpread::Line, distance_m) {
+            return false;
+        }
+        // NaN-safe: a non-positive or NaN length fails closed to the line bound.
+        if length_m.is_nan() || length_m <= 0.0 {
+            return true;
+        }
+        let eff_len = f64::from(length_m) * POINT_CAP_LENGTH_MARGIN;
+        if distance_m <= POINT_CAP_FAR_FIELD_LENGTHS * eff_len {
+            return true;
+        }
+        let total_db = 10.0 * eff_len.log10();
+        let point_emissions: [[f64; NUM_BANDS]; 3] =
+            period_emissions_db.map(|bands| bands.map(|lw| lw + total_db));
+        self.within_reach(&point_emissions, SourceSpread::Point, distance_m)
+    }
+
     /// Smallest horizontal distance at which the bound's Lden falls to `edge_db`, capped at
     /// `ceiling_m`. The bound decreases monotonically with distance, so bisection in log distance
     /// finds it to well under a millimetre.
@@ -232,6 +284,100 @@ mod tests {
         let periods = [silent, silent, night];
         assert!(BOUND.within_reach(&periods, SourceSpread::Line, 100.0));
         assert!(!BOUND.within_reach(&[silent; 3], SourceSpread::Line, 100.0));
+    }
+
+    /// Worst-case meteorology (favourable everywhere, no absorption): the bound at its
+    /// loosest, where the finite-piece cap bites deepest.
+    const LOUD_BOUND: RelevanceBound = RelevanceBound {
+        alpha_min_db_per_km: [0.0; NUM_BANDS],
+        gains_db: [FAVOURABLE_GAIN_BOUND_DB; 3],
+    };
+
+    fn flat_emissions(lw_per_m: f64) -> [[f64; NUM_BANDS]; 3] {
+        [[lw_per_m; NUM_BANDS]; 3]
+    }
+
+    /// A 40 m residential piece (65 dB/m) at 5 km: the line bound keeps it (Lden ≈ 47 dB)
+    /// but the finite-piece cap drops it (point Lden ≈ 21 dB) — the rows that used to
+    /// fill the popup to the profile ceiling.
+    #[test]
+    fn the_cap_drops_a_short_quiet_piece_the_line_bound_keeps() {
+        let periods = flat_emissions(65.0);
+        assert!(LOUD_BOUND.within_reach(&periods, SourceSpread::Line, 5_000.0));
+        assert!(!LOUD_BOUND.line_piece_within_reach(&periods, 40.0, 5_000.0));
+    }
+
+    /// A 250 m motorway piece (90 dB/m) at 9 km stays: past the far-field gate, both
+    /// bounds agree it reaches (point Lden ≈ 49 dB).
+    #[test]
+    fn the_cap_keeps_a_long_loud_piece_far_away() {
+        let periods = flat_emissions(90.0);
+        assert!(LOUD_BOUND.line_piece_within_reach(&periods, 250.0, 9_000.0));
+    }
+
+    /// Inside the far-field gate the cap never bites: the piece test equals the line
+    /// test at 500 m for the 40 m piece (gate at 808 m).
+    #[test]
+    fn inside_the_gate_the_piece_test_is_the_line_test() {
+        let periods = flat_emissions(65.0);
+        assert!(LOUD_BOUND.line_piece_within_reach(&periods, 40.0, 500.0));
+        assert_eq!(
+            LOUD_BOUND.line_piece_within_reach(&periods, 40.0, 500.0),
+            LOUD_BOUND.within_reach(&periods, SourceSpread::Line, 500.0)
+        );
+    }
+
+    /// Degenerate lengths fail closed to the line bound, keep and drop alike.
+    #[test]
+    fn degenerate_lengths_keep_the_old_answer() {
+        let loud = flat_emissions(90.0);
+        let quiet = flat_emissions(20.0);
+        for length in [0.0f32, -40.0, f32::NAN, f32::INFINITY] {
+            // +inf length: the gate `d ≤ 20·L` is true, so the line answer stands.
+            assert_eq!(
+                LOUD_BOUND.line_piece_within_reach(&loud, length, 5_000.0),
+                LOUD_BOUND.within_reach(&loud, SourceSpread::Line, 5_000.0),
+                "length {length}"
+            );
+            assert_eq!(
+                LOUD_BOUND.line_piece_within_reach(&quiet, length, 5_000.0),
+                LOUD_BOUND.within_reach(&quiet, SourceSpread::Line, 5_000.0),
+                "length {length}"
+            );
+        }
+    }
+
+    /// Grid property: the cap only ever drops (piece ⟹ line), matches the line test
+    /// inside the gate exactly, and stays monotone in distance (the kept set is a
+    /// distance prefix — no gate-boundary flicker).
+    #[test]
+    fn the_cap_is_a_monotone_subset_of_the_line_bound() {
+        let mut dist = 10.0f64;
+        let mut dists = Vec::new();
+        while dist <= 12_000.0 {
+            dists.push(dist);
+            dist *= 1.15;
+        }
+        for lw in [50.0, 65.0, 80.0, 95.0] {
+            let periods = flat_emissions(lw);
+            for length in [5.0f32, 40.0, 150.0, 250.0] {
+                let mut seen_drop = false;
+                for d in &dists {
+                    let line = LOUD_BOUND.within_reach(&periods, SourceSpread::Line, *d);
+                    let piece = LOUD_BOUND.line_piece_within_reach(&periods, length, *d);
+                    assert!(!piece || line, "cap keeps what line drops: lw={lw} L={length} d={d}");
+                    let eff = f64::from(length) * POINT_CAP_LENGTH_MARGIN;
+                    if *d <= POINT_CAP_FAR_FIELD_LENGTHS * eff {
+                        assert_eq!(piece, line, "gate mismatch: lw={lw} L={length} d={d}");
+                    }
+                    if !piece {
+                        seen_drop = true;
+                    } else {
+                        assert!(!seen_drop, "non-monotone: lw={lw} L={length} d={d}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

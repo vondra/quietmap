@@ -3,11 +3,68 @@
 use crate::channel::Channel;
 use grid::{raster::RasterWindow, square_of, Square};
 use memmap2::Mmap;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// Never-reused store identities for the thread-local shortcut below: an
+/// address could be recycled after a store drops (tests build many), but a
+/// counter id cannot name the wrong store's tile.
+static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(1);
+
+/// One shortcut entry: (store id, square, tile).
+type ShortcutEntry = (u64, Square, Option<Arc<RawTile>>);
+
+thread_local! {
+    /// Per-thread tile shortcut: the last squares seen, so hot parallel loops
+    /// (cruise kernel, line quadrature) skip the shared mutex on every sample.
+    /// The Arc keeps the tile mapped even after shared-cache eviction, and tile
+    /// bytes are immutable release files, so a hit returns the same bytes the
+    /// locked path would. Bounded (8 entries/thread) and unordered — a scan,
+    /// not a map. A contended borrow falls back to the locked path, never waits.
+    static TILE_SHORTCUT: RefCell<Vec<ShortcutEntry>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Entries held per thread; popup rays walk 1–4 squares, cruise rows one.
+const SHORTCUT_CAP: usize = 8;
+
+fn shortcut_get(store_id: u64, square: Square) -> Option<Option<Arc<RawTile>>> {
+    TILE_SHORTCUT
+        .try_with(|cache| {
+            cache
+                .try_borrow()
+                .ok()
+                .and_then(|cache| {
+                    cache
+                        .iter()
+                        .find(|(id, sq, _)| *id == store_id && *sq == square)
+                        .map(|(_, _, tile)| tile.clone())
+                })
+        })
+        .ok()
+        .flatten()
+}
+
+fn shortcut_put(store_id: u64, square: Square, tile: Option<Arc<RawTile>>) {
+    let _ = TILE_SHORTCUT.try_with(|cache| {
+        let Ok(mut cache) = cache.try_borrow_mut() else {
+            return;
+        };
+        if cache
+            .iter()
+            .any(|(id, sq, _)| *id == store_id && *sq == square)
+        {
+            return;
+        }
+        if cache.len() >= SHORTCUT_CAP {
+            cache.remove(0);
+        }
+        cache.push((store_id, square, tile));
+    });
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Interp {
@@ -108,6 +165,7 @@ pub struct TileStore {
     cache: Mutex<Cache>,
     use_counter: AtomicU64,
     max_bytes: usize,
+    id: u64,
 }
 
 impl TileStore {
@@ -118,6 +176,7 @@ impl TileStore {
             cache: Mutex::new(Cache::default()),
             use_counter: AtomicU64::new(0),
             max_bytes,
+            id: NEXT_STORE_ID.fetch_add(1, Ordering::Relaxed),
         }
     }
 
@@ -128,11 +187,19 @@ impl TileStore {
 
     fn get_tile(&self, square: Square) -> Option<Arc<RawTile>> {
         let touched = self.use_counter.fetch_add(1, Ordering::Relaxed);
+        // The shortcut holds the same immutable bytes the locked path would
+        // return; its LRU `touched` stamp stays stale, which only perturbs
+        // eviction order, never values.
+        if let Some(tile) = shortcut_get(self.id, square) {
+            return tile;
+        }
         {
             let mut cache = self.cache.lock().unwrap_or_else(|error| error.into_inner());
             if let Some(entry) = cache.tiles.get_mut(&square) {
                 entry.touched = touched;
-                return entry.tile.clone();
+                let tile = entry.tile.clone();
+                shortcut_put(self.id, square, tile.clone());
+                return tile;
             }
         }
         // File opens stay outside the shared lock: unrelated warm visitors keep moving.
@@ -150,7 +217,9 @@ impl TileStore {
                 .map_or(0, |pixels| pixels.len());
         let mut cache = self.cache.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(entry) = cache.tiles.get(&square) {
-            return entry.tile.clone();
+            let tile = entry.tile.clone();
+            shortcut_put(self.id, square, tile.clone());
+            return tile;
         }
         while cache.bytes.saturating_add(bytes) > self.max_bytes {
             let oldest = cache
@@ -174,6 +243,7 @@ impl TileStore {
                 },
             );
         }
+        shortcut_put(self.id, square, tile.clone());
         tile
     }
 

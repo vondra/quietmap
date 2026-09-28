@@ -1,6 +1,11 @@
 //! Shared cell-local cruise geometry and density-weighted Doc 29 scatter.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
+
+use crate::fxhash::{FxBuildHasher, FxHashMap, FxHashSet};
+
+use rayon::prelude::*;
 
 use crate::compute::aircraft_v6::dates::{date_from_unix, time_from_unix};
 use crate::compute::aircraft_v6::state::{
@@ -115,14 +120,36 @@ struct CellTopFlight {
 }
 
 struct CellAccum {
-    n_unique_flights: std::collections::HashSet<u64>,
+    n_unique_flights: FxHashSet<u64>,
     rep_alt_m: f32,
     centroid_lat: f64,
     centroid_lon: f64,
     d_slant_m: f64,
     period_energy: [f64; 3],
     buckets: Vec<CruiseBucketBreakdown>,
-    top_fids: HashMap<u64, CellTopFlight>,
+    top_fids: FxHashMap<u64, CellTopFlight>,
+}
+
+/// Evaluated-vs-considered counts of one [`scatter`] call, plus the parallel
+/// kernel / serial fold split (the `POPUP_TIMING` cruise drill-down).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CruiseScatterStats {
+    pub n_eval: u64,
+    pub pass1_ns: u64,
+    pub pass2_ns: u64,
+}
+
+/// One bucket's Doc 29 outcome: everything pass 1's parallel kernel computes
+/// and pass 2's serial fold consumes. Pure per-row data — no cross-row state.
+struct KernelOut {
+    idx: usize,
+    seg: crate::types::AircraftSegment,
+    density: f64,
+    sel: f64,
+    disp_dist: f64,
+    disp_alt: f64,
+    lmax: f64,
+    class_idx: usize,
 }
 
 pub fn scatter(
@@ -131,232 +158,301 @@ pub fn scatter(
     rasters: &dyn RasterSampler,
     n_days_f: f64,
     weights: &aircraft::ProvenanceWeights,
-    flights: &mut HashMap<u64, FlightAccum>,
-    cruise_flight_stats: &mut HashMap<u64, CruiseFlightStats>,
-    top_flight_candidates: &mut HashMap<u64, TopFlightCandidate>,
+    flights: &mut HashMap<u64, FlightAccum, impl BuildHasher>,
+    cruise_flight_stats: &mut HashMap<u64, CruiseFlightStats, impl BuildHasher>,
+    top_flight_candidates: &mut HashMap<u64, TopFlightCandidate, impl BuildHasher>,
     traces: Option<&mut TraceCollector>,
-) {
+) -> CruiseScatterStats {
     let rx_elev = receiver.altitude_m();
     let npd_luts = aircraft::NpdLuts::shared();
     // Trace aggregates keyed by the (i32, i32) z30 cell pair of the
-    // bucket centroid via the grid crate.
-    let mut cell_accums: HashMap<(i32, i32), CellAccum> = HashMap::new();
+    // bucket centroid via the grid crate. Pre-sized (consumers sort by key).
+    let mut cell_accums: FxHashMap<(i32, i32), CellAccum> =
+        FxHashMap::with_capacity_and_hasher(2048, FxBuildHasher);
 
     // The cell-local segment extends at most half a cell diagonal from its centre.
     let m_per_lat = crate::constants::M_PER_DEG_LAT;
     let m_per_lon = crate::constants::m_per_deg_lon(receiver.lat.to_radians());
 
-    for (idx, row) in rows.iter().enumerate() {
-        // Explicit centroid straight off the row — no cell-id lookup.
-        let (lat, lon) = (row.lat, row.lon);
-        if !lat.is_finite() || !lon.is_finite() {
-            continue;
-        }
-        let half_len_m = aircraft::CRUISE_CELL_DIAGONAL_EQUATOR_M * lat.to_radians().cos() * 0.5;
+    // ── Pass 1: the Doc 29 kernel per row (parallel, pure) ──
+    //
+    // Every statement below is a pure function of its row (DEM reads through
+    // the shared tile cache return the same bytes on every thread), so running
+    // rows in parallel and folding the admitted ones in row order afterwards
+    // reproduces the old serial loop bit-for-bit (rayon preserves order).
+    let t_pass1 = std::time::Instant::now();
+    let admitted: Vec<KernelOut> = rows
+        .par_iter()
+        .enumerate()
+        .filter_map(|(idx, row)| {
+            // Explicit centroid straight off the row — no cell-id lookup.
+            let (lat, lon) = (row.lat, row.lon);
+            if !lat.is_finite() || !lon.is_finite() {
+                return None;
+            }
+            let half_len_m =
+                aircraft::CRUISE_CELL_DIAGONAL_EQUATOR_M * lat.to_radians().cos() * 0.5;
 
-        // Wrap longitude before the cheap centre-distance gate at the dateline.
-        let dlat_m = (lat - receiver.lat) * m_per_lat;
-        let mut dlon = lon - receiver.lon;
-        if dlon > 180.0 {
-            dlon -= 360.0;
-        } else if dlon < -180.0 {
-            dlon += 360.0;
-        }
-        let dlon_m = dlon * m_per_lon;
-        let dist2_m2 = dlat_m * dlat_m + dlon_m * dlon_m;
-        let cap_m = aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M + half_len_m;
-        if dist2_m2 > cap_m * cap_m {
-            continue;
-        }
-
-        let Some((seg, density)) = cruise_segment(row, idx, weights) else {
-            continue;
-        };
-        let synth_fid = seg.flight_id;
-        // Terrain first cost five DEM probes — each through the tile
-        // cache's per-tile lock — for buckets the kernel then dropped on
-        // distance alone. The kernel's own first gate is purely geometric,
-        // so run it here, before the rasters are touched. Measured at
-        // Dobříš: 7 611 of 9 622 buckets that clear the centroid
-        // prefilter die here. Bit-identical arithmetic, so no bucket that
-        // used to contribute stops contributing (see `within_kernel_reach`).
-        if !aircraft::within_kernel_reach(&seg, receiver.lat, receiver.lon, rx_elev) {
-            continue;
-        }
-        let terrain = aircraft::SegmentTerrain::sample(&seg, rasters);
-        if !aircraft::is_valid_airborne_with_terrain(&seg, &terrain) {
-            continue;
-        }
-        // C2 horizon screening: cruise never screens — `with_terrain`
-        // hard-wires `horizon = None` (structural exemption: cruise AGL
-        // floor 7 200 m + 16 km slant cap ⇒ β ≥ 26.6° > any horizon).
-        let Some((sel, cpa)) = aircraft::segment_sel_with_terrain(
-            &seg,
-            receiver.lat,
-            receiver.lon,
-            rx_elev,
-            &terrain,
-            npd_luts,
-        ) else {
-            continue;
-        };
-        let energy = fast_exp_f64(sel * std::f64::consts::LN_10 * 0.1) * density;
-        let period = (row.period.min(2)) as usize;
-        let acc = flights.entry(synth_fid).or_insert_with(|| {
-            // Cruise rows have no per-flight callsign / typecode (one
-            // grid-cell bucket aggregates many flights), so leave both empty.
-            FlightAccum::new(row.rep_profile_idx, density, true, [0; 4], String::new())
-        });
-        acc.period_energy[period] += energy;
-        // Cruise is structurally above the terrain/building screening
-        // envelope, so all popup variants are the same received energy.
-        acc.free_period_energy[period] += energy;
-        acc.no_terrain_period_energy[period] += energy;
-        acc.no_screening_period_energy[period] += energy;
-        acc.flight_weight = acc.flight_weight.max(density);
-
-        let class_idx = aircraft::noise_class_of(seg.profile_idx) as usize;
-        // Clamp the DISPLAY CPA onto the observed segment so an off-segment
-        // infinite-line foot can't report a phantom near pass. Cruise synthetic
-        // segments are level (start == end == rep_alt_m), so the altitude clamp
-        // is a no-op (sdz = 0) today — but both distance and altitude go through
-        // the helper to stay symmetric with airborne and stay correct if a
-        // gradient is ever modelled. `sel` / `energy` keep the unclamped `cpa`
-        // (ΔF needs the infinite-line `q_m`).
-        let (disp_dist, disp_alt) = aircraft::clamped_display_cpa(&cpa, 0.0);
-        let log_d = (disp_dist * aircraft::FT_PER_M).max(100.0).log10();
-        let thrust = aircraft::thrust_input_for_segment(
-            &seg,
-            seg.start_alt_m as f64,
-            seg.end_alt_m as f64,
-            terrain.start_elev - 30.0,
-            terrain.end_elev - 30.0,
-            f64::from(seg.departure_field_elev_m),
-        );
-        // The kernel admitted the same segment above, so this bracket cannot
-        // reject; the `else` only carries its `Option` type.
-        let Some((power_row, power_w)) =
-            aircraft::power_bracket(aircraft::thrust_model_for_class(class_idx), &thrust)
-        else {
-            continue;
-        };
-        // Cruise rep-segments are level, so their stored descent state is
-        // always false; departures take the climb correction regardless.
-        let lmax = npd_luts.lookup_lmax(class_idx, true, power_row, power_w, log_d)
-            + aircraft::heli_correction_db(seg.profile_idx, true, seg.heli_descent);
-        if lmax > acc.peak_lmax {
-            acc.peak_lmax = lmax;
-            acc.peak_sel = sel;
-            acc.peak_altitude_m = disp_alt;
-            acc.peak_period = row.period;
-            acc.peak_seg_start = [seg.start_lon, seg.start_lat];
-            acc.peak_seg_end = [seg.end_lon, seg.end_lat];
-        }
-        if disp_dist < acc.min_dist_m {
-            acc.min_dist_m = disp_dist;
-        }
-        // v14: walk the row's bounded top-K candidate slice instead of
-        // per-fid lists. Identity (typecode / callsign / fid) comes
-        // from the candidate; receiver-side ranking (`lmax`, `disp_alt`)
-        // comes from the row's already-computed values per Codex W2 —
-        // re-deriving Lmax from candidate's
-        // source-side peak would discard the popup-receiver geometry.
-        for cand_view in row.top_candidates.iter() {
-            let fid = cand_view.flight_id;
-            let row_weight = weights.for_secondary_only(row.secondary_only);
-            let entry = cruise_flight_stats.entry(fid).or_insert(CruiseFlightStats {
-                peak_lmax: f64::NEG_INFINITY,
-                alt_at_peak: 0.0,
-                class_at_peak: class_idx,
-                weight: row_weight,
-            });
-            entry.weight = entry.weight.min(row_weight);
-            if lmax > entry.peak_lmax {
-                entry.peak_lmax = lmax;
-                entry.alt_at_peak = disp_alt;
-                entry.class_at_peak = class_idx;
+            // Wrap longitude before the cheap centre-distance gate at the dateline.
+            let dlat_m = (lat - receiver.lat) * m_per_lat;
+            let mut dlon = lon - receiver.lon;
+            if dlon > 180.0 {
+                dlon -= 360.0;
+            } else if dlon < -180.0 {
+                dlon += 360.0;
+            }
+            let dlon_m = dlon * m_per_lon;
+            let dist2_m2 = dlat_m * dlat_m + dlon_m * dlon_m;
+            let cap_m = aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M + half_len_m;
+            if dist2_m2 > cap_m * cap_m {
+                return None;
             }
 
-            let cand = top_flight_candidates
-                .entry(fid)
-                .or_insert(TopFlightCandidate {
-                    peak_lmax: f64::NEG_INFINITY,
-                    peak_altitude_m: 0.0,
-                    peak_period: row.period,
-                    peak_seg_start: [0.0; 2],
-                    peak_seg_end: [0.0; 2],
-                    min_dist_m: f64::MAX,
-                    profile_idx: row.rep_profile_idx,
-                    aircraft_type: *cand_view.aircraft_type,
-                    callsign: cand_view.callsign.to_string(),
-                });
-            if lmax > cand.peak_lmax {
-                cand.peak_lmax = lmax;
-                cand.peak_altitude_m = disp_alt;
-                cand.peak_period = row.period;
-                cand.peak_seg_start = [seg.start_lon, seg.start_lat];
-                cand.peak_seg_end = [seg.end_lon, seg.end_lat];
+            let (seg, density) = cruise_segment(row, idx, weights)?;
+            // Terrain first cost five DEM probes — each through the tile
+            // cache's per-tile lock — for buckets the kernel then dropped on
+            // distance alone. The kernel's own first gate is purely geometric,
+            // so run it here, before the rasters are touched. Measured at
+            // Dobříš: 7 611 of 9 622 buckets that clear the centroid
+            // prefilter die here. Bit-identical arithmetic, so no bucket that
+            // used to contribute stops contributing (see `within_kernel_reach`).
+            if !aircraft::within_kernel_reach(&seg, receiver.lat, receiver.lon, rx_elev) {
+                return None;
             }
-            if disp_dist < cand.min_dist_m {
-                cand.min_dist_m = disp_dist;
+            let terrain = aircraft::SegmentTerrain::sample(&seg, rasters);
+            if !aircraft::is_valid_airborne_with_terrain(&seg, &terrain) {
+                return None;
             }
-        }
+            // One computation of every kernel scalar (the airborne row's shape):
+            // geometry with the kernel's own metre factor and formulas, emission
+            // inputs once for the kernel and the lmax tail. Bit-identical to the
+            // old `segment_sel_with_terrain` + tail recompute.
+            // C2 horizon screening: cruise never screens — horizon `None`
+            // (structural exemption: cruise AGL floor 7 200 m + 16 km slant
+            // cap ⇒ β ≥ 26.6° > any horizon).
+            let class_idx = aircraft::noise_class_of(seg.profile_idx) as usize;
+            let cos_lat = receiver.lat.to_radians().cos().max(0.2);
+            let m_per_lon = aircraft::M_PER_DEG_LAT * cos_lat;
+            let ax =
+                grid::geo::wrapped_longitude_delta(receiver.lon, seg.start_lon) * m_per_lon;
+            let ay = (seg.start_lat - receiver.lat) * aircraft::M_PER_DEG_LAT;
+            let by = (seg.end_lat - receiver.lat) * aircraft::M_PER_DEG_LAT;
+            let sdx =
+                grid::geo::wrapped_longitude_delta(seg.start_lon, seg.end_lon) * m_per_lon;
+            let sdy = by - ay;
+            let seg_len_sq = sdx * sdx + sdy * sdy;
+            let slen = seg_len_sq.sqrt().max(1.0);
+            let inv_lsq = if seg_len_sq > 1e-6 {
+                1.0 / seg_len_sq
+            } else {
+                0.0
+            };
+            let start_alt_m = seg.start_alt_m as f64;
+            let sdz = seg.end_alt_m as f64 - start_alt_m;
+            let anchor = &aircraft::PROFILES[aircraft::CLASS_REP_PROFILE_IDX[class_idx] as usize];
+            let (inst, di_a, di_b, di_c) = aircraft::delta_i_constants(anchor.installation);
+            let dv = aircraft::delta_v(seg.speed_kt as f64, anchor);
+            let cut_s = terrain.start_elev - 30.0;
+            let cut_e = terrain.end_elev - 30.0;
+            let (power_row, power_w) = aircraft::power_bracket(
+                aircraft::thrust_model_for_class(class_idx),
+                &aircraft::thrust_input_for_segment(
+                    &seg,
+                    start_alt_m,
+                    seg.end_alt_m as f64,
+                    cut_s,
+                    cut_e,
+                    f64::from(seg.departure_field_elev_m),
+                ),
+            )?;
+            // `true`: cruise rep-segments are departures by construction
+            // (`cruise_segment` hard-wires `is_departure`), mirrored here.
+            let heli_db =
+                aircraft::heli_correction_db(seg.profile_idx, true, seg.heli_descent);
+            let kernel = aircraft::segment_energy_kernel::<true>(
+                ax,
+                ay,
+                sdx,
+                sdy,
+                sdz,
+                start_alt_m,
+                inv_lsq,
+                slen,
+                rx_elev,
+                npd_luts,
+                class_idx,
+                seg.is_departure,
+                dv,
+                inst,
+                power_row,
+                power_w,
+                heli_db,
+                di_a,
+                di_b,
+                di_c,
+                false,
+                aircraft::REACH_SQ_TABLE[class_idx][seg.is_departure as usize],
+                cut_s,
+                cut_e,
+                None,
+                None,
+            )?;
+            let sel = kernel.sel;
+            let cpa = aircraft::CpaResult {
+                q_m: kernel.q_m,
+                d_p_m: kernel.d_p_m,
+                lateral_m: kernel.lateral_m,
+                relative_alt_m: kernel.rel_alt_m,
+                beta_deg: kernel.beta_deg,
+                seg_len_m: kernel.seg_len_m,
+                t: kernel.t,
+            };
+            // Clamp the DISPLAY CPA onto the observed segment so an off-segment
+            // infinite-line foot can't report a phantom near pass. Cruise synthetic
+            // segments are level (start == end == rep_alt_m), so the altitude clamp
+            // is a no-op (sdz = 0) today — but both distance and altitude go through
+            // the helper to stay symmetric with airborne and stay correct if a
+            // gradient is ever modelled. `sel` / `energy` keep the unclamped `cpa`
+            // (ΔF needs the infinite-line `q_m`).
+            let (disp_dist, disp_alt) = aircraft::clamped_display_cpa(&cpa, 0.0);
+            let log_d = (disp_dist * aircraft::FT_PER_M).max(100.0).log10();
+            // Cruise rep-segments are level, so their stored descent state is
+            // always false; departures take the climb correction regardless.
+            // Power bracket and heli term are the hoisted kernel inputs above.
+            let lmax = npd_luts.lookup_lmax(class_idx, true, power_row, power_w, log_d) + heli_db;
+            Some(KernelOut {
+                idx,
+                seg,
+                density,
+                sel,
+                disp_dist,
+                disp_alt,
+                lmax,
+                class_idx,
+            })
+        })
+        .collect();
+    let pass1_ns = t_pass1.elapsed().as_nanos() as u64;
+    let n_eval = admitted.len() as u64;
 
-        if traces.is_some() {
-            // Per-bucket received_lden uses the row's energy density; the
-            // popup tab only renders relative ordering inside one cell,
-            // so a stable proxy (received_lden ≈ SEL on a per-event basis)
-            // is enough.
-            let received_lden = sel + 10.0 * density.max(1e-9).log10();
-            let cell_key = grid::lonlat_to_grid(lon, lat);
-            let entry = cell_accums.entry(cell_key).or_insert(CellAccum {
-                n_unique_flights: std::collections::HashSet::new(),
-                rep_alt_m: row.rep_alt_m,
-                centroid_lat: lat,
-                centroid_lon: lon,
-                d_slant_m: disp_dist.max(SLANT_FLOOR_M),
-                period_energy: [0.0; 3],
-                buckets: Vec::new(),
-                top_fids: HashMap::new(),
-            });
-            for cand_view in row.top_candidates.iter() {
-                entry.n_unique_flights.insert(cand_view.flight_id);
-                let cand = entry
-                    .top_fids
-                    .entry(cand_view.flight_id)
-                    .or_insert(CellTopFlight {
-                        peak_lmax: f64::NEG_INFINITY,
-                        altitude_m: 0.0,
-                        class_idx: class_idx as u8,
-                        aircraft_type: *cand_view.aircraft_type,
-                        callsign: cand_view.callsign.to_string(),
-                    });
-                if lmax > cand.peak_lmax {
-                    cand.peak_lmax = lmax;
-                    cand.altitude_m = disp_alt;
-                    cand.class_idx = class_idx as u8;
+    // ── Pass 2: accumulation over admitted rows (parallel chunks, ordered merge) ──
+    //
+    // `admitted` splits into fixed 2 048-row chunks (input-determined shape,
+    // like the airborne scatter chunks); each chunk folds privately via
+    // `fold_cruise_row` and the folds merge in chunk order. Within a chunk
+    // the statements run in row order; across chunks the strict `>` / `<`
+    // merges let the earlier chunk win every tie exactly as the earlier row
+    // did serially, first-row-wins creation fields keep the earliest chunk's,
+    // buckets concatenate in order, and sets union — so everything is
+    // bit-identical except the f64 energy sums, which add in chunk order
+    // (last-bit differences, the same standing contract as the airborne
+    // chunked scatter). One chunk degenerates to the serial order exactly.
+    let t_pass2 = std::time::Instant::now();
+    let want_traces = traces.is_some();
+    let folds: Vec<CruiseChunkFold> = admitted
+        .par_chunks(CRUISE_FOLD_CHUNK_ROWS)
+        .map(|chunk| {
+            // Grown, never pre-sized (see the airborne chunk map): hundreds of
+            // live folds times per-fold capacity OOMs 6 concurrent popups.
+            let mut fold = CruiseChunkFold {
+                flights: FxHashMap::default(),
+                stats: FxHashMap::default(),
+                candidates: FxHashMap::default(),
+                cells: FxHashMap::default(),
+            };
+            for out in chunk {
+                let cells = if want_traces {
+                    Some(&mut fold.cells)
+                } else {
+                    None
+                };
+                fold_cruise_row(
+                    &mut fold.flights,
+                    &mut fold.stats,
+                    &mut fold.candidates,
+                    cells,
+                    rows,
+                    weights,
+                    out,
+                );
+            }
+            fold
+        })
+        .collect();
+    for fold in folds {
+        for (fid, other) in fold.flights {
+            match flights.entry(fid) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(other);
+                }
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    merge_cruise_flight(e.get_mut(), other);
                 }
             }
-            entry.period_energy[period] += energy;
-            if disp_dist < entry.d_slant_m {
-                entry.d_slant_m = disp_dist.max(SLANT_FLOOR_M);
+        }
+        for (fid, other) in fold.stats {
+            match cruise_flight_stats.entry(fid) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(other);
+                }
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    merge_cruise_stats(e.get_mut(), other);
+                }
             }
-            entry.buckets.push(CruiseBucketBreakdown {
-                class: row.class,
-                fl_bin: row.fl_bin,
-                period: row.period,
-                // v14: `unique_count` is the full bucket count (not
-                // just top-K) — display semantics match v13.
-                n_flights: row.unique_count,
-                received_lden,
-            });
+        }
+        for (fid, other) in fold.candidates {
+            match top_flight_candidates.entry(fid) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(other);
+                }
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    merge_cruise_candidate(e.get_mut(), other);
+                }
+            }
+        }
+        if want_traces {
+            for (key, other) in fold.cells {
+                match cell_accums.entry(key) {
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(other);
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        merge_cruise_cell(e.get_mut(), other);
+                    }
+                }
+            }
         }
     }
 
     if let Some(t) = traces {
         let mut cell_keys: Vec<(i32, i32)> = cell_accums.keys().copied().collect();
         cell_keys.sort();
-        for cell_key in cell_keys {
+        // Pre-selection: rank cells by the exact Lden the builder would
+        // emit (shared pure function — see `cruise_cell_lden_full`) and
+        // build only the survivors. (Lden desc, input-seq asc) is the
+        // global order restricted to cruise, so these are exactly the
+        // cells the global cap would keep; `None` (tests, oracle) builds
+        // every cell, the old behaviour.
+        let mut stubs: Vec<(f64, u64, (i32, i32))> = cell_keys
+            .into_iter()
+            .enumerate()
+            .map(|(cell_i, cell_key)| {
+                let acc = &cell_accums[&cell_key];
+                (
+                    crate::traces::cruise_cell_lden_full(acc.period_energy, n_days_f),
+                    cell_i as u64,
+                    cell_key,
+                )
+            })
+            .collect();
+        if let Some(cap) = t.trace_cap {
+            t.aircraft_cruise_total = stubs.len() as u32;
+            if stubs.len() > cap {
+                stubs.sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+                stubs.truncate(cap);
+            }
+        }
+        for (_, cell_i, cell_key) in stubs {
             let mut acc = cell_accums
                 .remove(&cell_key)
                 .expect("sorted key from live map");
@@ -395,15 +491,263 @@ pub fn scatter(
                         cruise_buckets: acc.buckets,
                         cruise_top_flights,
                         doc29: placeholder_doc29,
+                        sort_seq: cell_i,
                     },
                 ));
+        }
+    }
+    CruiseScatterStats {
+        n_eval,
+        pass1_ns,
+        pass2_ns: t_pass2.elapsed().as_nanos() as u64,
+    }
+}
+
+/// Pass-2 fold granularity: fixed row count, so the chunk shape (and hence
+/// every merged byte) is an input-determined constant, never a thread count.
+const CRUISE_FOLD_CHUNK_ROWS: usize = 2048;
+
+/// One chunk's private pass-2 accumulators; merged in chunk order.
+struct CruiseChunkFold {
+    flights: FxHashMap<u64, FlightAccum>,
+    stats: FxHashMap<u64, CruiseFlightStats>,
+    candidates: FxHashMap<u64, TopFlightCandidate>,
+    cells: FxHashMap<(i32, i32), CellAccum>,
+}
+
+/// Fold one admitted row into accumulators: the exact pass-2 statements,
+/// shared by every chunk (row order within a chunk, chunk order across).
+#[allow(clippy::too_many_arguments)]
+fn fold_cruise_row(
+    flights: &mut HashMap<u64, FlightAccum, impl BuildHasher>,
+    cruise_flight_stats: &mut HashMap<u64, CruiseFlightStats, impl BuildHasher>,
+    top_flight_candidates: &mut HashMap<u64, TopFlightCandidate, impl BuildHasher>,
+    cell_accums: Option<&mut FxHashMap<(i32, i32), CellAccum>>,
+    rows: &[CruiseRowView<'_>],
+    weights: &aircraft::ProvenanceWeights,
+    out: &KernelOut,
+) {
+    let row = &rows[out.idx];
+    let seg = &out.seg;
+    let (density, sel, disp_dist, disp_alt, lmax, class_idx) =
+        (out.density, out.sel, out.disp_dist, out.disp_alt, out.lmax, out.class_idx);
+    let (lat, lon) = (row.lat, row.lon);
+    let synth_fid = seg.flight_id;
+    let energy = fast_exp_f64(sel * std::f64::consts::LN_10 * 0.1) * density;
+    let period = (row.period.min(2)) as usize;
+    let acc = flights.entry(synth_fid).or_insert_with(|| {
+        // Cruise rows have no per-flight callsign / typecode (one
+        // grid-cell bucket aggregates many flights), so leave both empty.
+        FlightAccum::new(row.rep_profile_idx, density, true, [0; 4], String::new())
+    });
+    acc.period_energy[period] += energy;
+    // Cruise is structurally above the terrain/building screening
+    // envelope, so all popup variants are the same received energy.
+    acc.free_period_energy[period] += energy;
+    acc.no_terrain_period_energy[period] += energy;
+    acc.no_screening_period_energy[period] += energy;
+    acc.flight_weight = acc.flight_weight.max(density);
+
+    if lmax > acc.peak_lmax {
+        acc.peak_lmax = lmax;
+        acc.peak_sel = sel;
+        acc.peak_altitude_m = disp_alt;
+        acc.peak_period = row.period;
+        acc.peak_seg_start = [seg.start_lon, seg.start_lat];
+        acc.peak_seg_end = [seg.end_lon, seg.end_lat];
+    }
+    if disp_dist < acc.min_dist_m {
+        acc.min_dist_m = disp_dist;
+    }
+    // v14: walk the row's bounded top-K candidate slice instead of
+    // per-fid lists. Identity (typecode / callsign / fid) comes
+    // from the candidate; receiver-side ranking (`lmax`, `disp_alt`)
+    // comes from the row's already-computed values per Codex W2 —
+    // re-deriving Lmax from candidate's
+    // source-side peak would discard the popup-receiver geometry.
+    for cand_view in row.top_candidates.iter() {
+        let fid = cand_view.flight_id;
+        let row_weight = weights.for_secondary_only(row.secondary_only);
+        let entry = cruise_flight_stats.entry(fid).or_insert(CruiseFlightStats {
+            peak_lmax: f64::NEG_INFINITY,
+            alt_at_peak: 0.0,
+            class_at_peak: class_idx,
+            weight: row_weight,
+        });
+        entry.weight = entry.weight.min(row_weight);
+        if lmax > entry.peak_lmax {
+            entry.peak_lmax = lmax;
+            entry.alt_at_peak = disp_alt;
+            entry.class_at_peak = class_idx;
+        }
+
+        // `or_insert_with`: the candidate string allocates only on first
+        // touch — `or_insert` built and dropped it for every row.
+        let cand = top_flight_candidates
+            .entry(fid)
+            .or_insert_with(|| TopFlightCandidate {
+                peak_lmax: f64::NEG_INFINITY,
+                peak_altitude_m: 0.0,
+                peak_period: row.period,
+                peak_seg_start: [0.0; 2],
+                peak_seg_end: [0.0; 2],
+                min_dist_m: f64::MAX,
+                profile_idx: row.rep_profile_idx,
+                aircraft_type: *cand_view.aircraft_type,
+                callsign: cand_view.callsign.to_string(),
+            });
+        if lmax > cand.peak_lmax {
+            cand.peak_lmax = lmax;
+            cand.peak_altitude_m = disp_alt;
+            cand.peak_period = row.period;
+            cand.peak_seg_start = [seg.start_lon, seg.start_lat];
+            cand.peak_seg_end = [seg.end_lon, seg.end_lat];
+        }
+        if disp_dist < cand.min_dist_m {
+            cand.min_dist_m = disp_dist;
+        }
+    }
+
+    let Some(cell_accums) = cell_accums else {
+        return;
+    };
+    // Per-bucket received_lden uses the row's energy density; the
+    // popup tab only renders relative ordering inside one cell,
+    // so a stable proxy (received_lden ≈ SEL on a per-event basis)
+    // is enough.
+    let received_lden = sel + 10.0 * density.max(1e-9).log10();
+    let cell_key = grid::lonlat_to_grid(lon, lat);
+    let entry = cell_accums.entry(cell_key).or_insert(CellAccum {
+        n_unique_flights: FxHashSet::default(),
+        rep_alt_m: row.rep_alt_m,
+        centroid_lat: lat,
+        centroid_lon: lon,
+        d_slant_m: disp_dist.max(SLANT_FLOOR_M),
+        period_energy: [0.0; 3],
+        buckets: Vec::new(),
+        top_fids: FxHashMap::default(),
+    });
+    for cand_view in row.top_candidates.iter() {
+        entry.n_unique_flights.insert(cand_view.flight_id);
+        // `or_insert_with`: same first-touch saving as above.
+        let cand = entry
+            .top_fids
+            .entry(cand_view.flight_id)
+            .or_insert_with(|| CellTopFlight {
+                peak_lmax: f64::NEG_INFINITY,
+                altitude_m: 0.0,
+                class_idx: class_idx as u8,
+                aircraft_type: *cand_view.aircraft_type,
+                callsign: cand_view.callsign.to_string(),
+            });
+        if lmax > cand.peak_lmax {
+            cand.peak_lmax = lmax;
+            cand.altitude_m = disp_alt;
+            cand.class_idx = class_idx as u8;
+        }
+    }
+    entry.period_energy[period] += energy;
+    if disp_dist < entry.d_slant_m {
+        entry.d_slant_m = disp_dist.max(SLANT_FLOOR_M);
+    }
+    entry.buckets.push(CruiseBucketBreakdown {
+        class: row.class,
+        fl_bin: row.fl_bin,
+        period: row.period,
+        // v14: `unique_count` is the full bucket count (not
+        // just top-K) — display semantics match v13.
+        n_flights: row.unique_count,
+        received_lden,
+    });
+}
+
+/// Merge a later chunk's flight fold into the earlier one: energies add in
+/// chunk order (the only last-bit difference vs serial); the strict peak /
+/// distance comparisons let the earlier chunk win ties exactly as the
+/// earlier row did; creation identity (`profile_idx`) keeps the earliest
+/// chunk's. NOTE: `flight_weight` takes the max here — cruise density, not
+/// the airborne provenance min that `FlightAccum::merge_chunk` folds.
+fn merge_cruise_flight(acc: &mut FlightAccum, other: FlightAccum) {
+    for p in 0..3 {
+        acc.period_energy[p] += other.period_energy[p];
+        acc.free_period_energy[p] += other.free_period_energy[p];
+        acc.no_terrain_period_energy[p] += other.no_terrain_period_energy[p];
+        acc.no_screening_period_energy[p] += other.no_screening_period_energy[p];
+    }
+    acc.flight_weight = acc.flight_weight.max(other.flight_weight);
+    if other.peak_lmax > acc.peak_lmax {
+        acc.peak_lmax = other.peak_lmax;
+        acc.peak_sel = other.peak_sel;
+        acc.peak_altitude_m = other.peak_altitude_m;
+        acc.peak_period = other.peak_period;
+        acc.peak_seg_start = other.peak_seg_start;
+        acc.peak_seg_end = other.peak_seg_end;
+    }
+    if other.min_dist_m < acc.min_dist_m {
+        acc.min_dist_m = other.min_dist_m;
+    }
+}
+
+/// Merge a later chunk's stats fold: the weight is an order-free min; the
+/// strict peak comparison reproduces the serial first-update-wins,
+/// including the never-updated case (both `NEG_INFINITY` keeps the
+/// earliest chunk's first-row class).
+fn merge_cruise_stats(acc: &mut CruiseFlightStats, other: CruiseFlightStats) {
+    acc.weight = acc.weight.min(other.weight);
+    if other.peak_lmax > acc.peak_lmax {
+        acc.peak_lmax = other.peak_lmax;
+        acc.alt_at_peak = other.alt_at_peak;
+        acc.class_at_peak = other.class_at_peak;
+    }
+}
+
+/// Merge a later chunk's candidate fold: strict peak / distance wins for
+/// the earlier chunk, creation identity keeps the earliest chunk's.
+fn merge_cruise_candidate(acc: &mut TopFlightCandidate, other: TopFlightCandidate) {
+    if other.peak_lmax > acc.peak_lmax {
+        acc.peak_lmax = other.peak_lmax;
+        acc.peak_altitude_m = other.peak_altitude_m;
+        acc.peak_period = other.peak_period;
+        acc.peak_seg_start = other.peak_seg_start;
+        acc.peak_seg_end = other.peak_seg_end;
+    }
+    if other.min_dist_m < acc.min_dist_m {
+        acc.min_dist_m = other.min_dist_m;
+    }
+}
+
+/// Merge a later chunk's cell fold: energies add in chunk order; buckets
+/// concatenate in order; the flight set unions; per-fid tops merge by the
+/// strict peak rule; first-row creation fields keep the earliest chunk's.
+fn merge_cruise_cell(acc: &mut CellAccum, mut other: CellAccum) {
+    for p in 0..3 {
+        acc.period_energy[p] += other.period_energy[p];
+    }
+    if other.d_slant_m < acc.d_slant_m {
+        acc.d_slant_m = other.d_slant_m;
+    }
+    acc.buckets.append(&mut other.buckets);
+    acc.n_unique_flights.extend(other.n_unique_flights.drain());
+    for (fid, other_top) in other.top_fids {
+        match acc.top_fids.entry(fid) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(other_top);
+            }
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                let cand = e.get_mut();
+                if other_top.peak_lmax > cand.peak_lmax {
+                    cand.peak_lmax = other_top.peak_lmax;
+                    cand.altitude_m = other_top.altitude_m;
+                    cand.class_idx = other_top.class_idx;
+                }
+            }
         }
     }
 }
 
 const TOP_FLIGHTS_PER_CELL: usize = 5;
 
-fn top_flights_for_cell(top_fids: &HashMap<u64, CellTopFlight>) -> Vec<CruiseCellTopFlight> {
+fn top_flights_for_cell(top_fids: &FxHashMap<u64, CellTopFlight>) -> Vec<CruiseCellTopFlight> {
     let mut entries: Vec<(u64, &CellTopFlight)> = top_fids.iter().map(|(f, t)| (*f, t)).collect();
     entries.sort_by(|a, b| {
         b.1.peak_lmax
@@ -444,7 +788,9 @@ fn round1(v: f64) -> f64 {
 /// touching multiple grid-cell buckets dedupes naturally via HashMap insert.
 /// Tail fids outside the per-row top-K cap silently undercount; this is a
 /// documented display-only regression.
-pub fn band_stats(cruise_flight_stats: &HashMap<u64, CruiseFlightStats>) -> [BandStats; 3] {
+pub fn band_stats(
+    cruise_flight_stats: &std::collections::HashMap<u64, CruiseFlightStats, impl std::hash::BuildHasher>,
+) -> [BandStats; 3] {
     let mut out = [BandStats::new(), BandStats::new(), BandStats::new()];
     // Ascending fid: `add_event` sums `alt_sum` in f64, so HashMap order
     // would move the popup's `avg_altitude_m` by ±1 ULP per run.
@@ -468,6 +814,135 @@ pub fn band_stats(cruise_flight_stats: &HashMap<u64, CruiseFlightStats>) -> [Ban
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Chunk-merge contract: energies add; strict peak / distance lets the
+    /// earlier chunk win ties (as the earlier row did serially); creation
+    /// identity keeps the earliest chunk's; cruise weight takes the max
+    /// (density — unlike the airborne provenance min).
+    #[test]
+    fn cruise_flight_merge_is_earlier_wins_ties() {
+        let mut acc = FlightAccum::new(3, 0.5, true, [0; 4], String::new());
+        acc.period_energy = [1.0, 2.0, 4.0];
+        acc.peak_lmax = 60.0;
+        acc.peak_sel = 61.0;
+        acc.min_dist_m = 1000.0;
+        let mut other = FlightAccum::new(7, 0.8, true, [0; 4], String::new());
+        other.period_energy = [8.0, 16.0, 32.0];
+        other.peak_lmax = 60.0; // tie: earlier wins
+        other.peak_sel = 99.0;
+        other.min_dist_m = 1000.0; // tie: earlier wins
+        merge_cruise_flight(&mut acc, other);
+        assert_eq!(acc.period_energy, [9.0, 18.0, 36.0]);
+        assert_eq!(acc.peak_lmax, 60.0);
+        assert_eq!(acc.peak_sel, 61.0);
+        assert_eq!(acc.min_dist_m, 1000.0);
+        assert_eq!(acc.profile_idx, 3);
+        assert_eq!(acc.flight_weight, 0.8);
+
+        let mut later = FlightAccum::new(9, 0.1, true, [0; 4], String::new());
+        later.peak_lmax = 70.0;
+        later.peak_sel = 71.0;
+        later.peak_seg_start = [1.0, 2.0];
+        later.min_dist_m = 500.0;
+        merge_cruise_flight(&mut acc, later);
+        assert_eq!(acc.peak_lmax, 70.0);
+        assert_eq!(acc.peak_sel, 71.0);
+        assert_eq!(acc.peak_seg_start, [1.0, 2.0]);
+        assert_eq!(acc.min_dist_m, 500.0);
+        assert_eq!(acc.profile_idx, 3);
+        assert_eq!(acc.flight_weight, 0.8);
+    }
+
+    /// Stats merge: order-free min weight; strict peak; the never-updated
+    /// case (both `NEG_INFINITY`) keeps the earliest chunk's first-row class.
+    #[test]
+    fn cruise_stats_merge_keeps_first_row_class_when_never_updated() {
+        let mut acc = CruiseFlightStats {
+            peak_lmax: f64::NEG_INFINITY,
+            alt_at_peak: 0.0,
+            class_at_peak: 2,
+            weight: 0.5,
+        };
+        let other = CruiseFlightStats {
+            peak_lmax: f64::NEG_INFINITY,
+            alt_at_peak: 0.0,
+            class_at_peak: 5,
+            weight: 0.25,
+        };
+        merge_cruise_stats(&mut acc, other);
+        assert_eq!(acc.class_at_peak, 2);
+        assert_eq!(acc.weight, 0.25);
+
+        let mut peaked = CruiseFlightStats {
+            peak_lmax: 50.0,
+            alt_at_peak: 8000.0,
+            class_at_peak: 2,
+            weight: 1.0,
+        };
+        let higher = CruiseFlightStats {
+            peak_lmax: 55.0,
+            alt_at_peak: 9000.0,
+            class_at_peak: 5,
+            weight: 1.0,
+        };
+        merge_cruise_stats(&mut peaked, higher);
+        assert_eq!(peaked.class_at_peak, 5);
+        assert_eq!(peaked.alt_at_peak, 9000.0);
+
+        let tied = CruiseFlightStats {
+            peak_lmax: 55.0,
+            alt_at_peak: 9500.0,
+            class_at_peak: 1,
+            weight: 1.0,
+        };
+        merge_cruise_stats(&mut peaked, tied);
+        assert_eq!(peaked.class_at_peak, 5);
+        assert_eq!(peaked.alt_at_peak, 9000.0);
+    }
+
+    /// Cell merge: energies add; buckets concatenate in chunk order; the
+    /// flight set unions; per-fid tops take the strict peak rule; d_slant
+    /// takes the min; creation fields keep the earliest chunk's.
+    #[test]
+    fn cruise_cell_merge_concatenates_and_unions() {
+        let bucket = |lden: f64| CruiseBucketBreakdown {
+            class: 5,
+            fl_bin: 1,
+            period: 0,
+            n_flights: 1,
+            received_lden: lden,
+        };
+        let mut acc = CellAccum {
+            n_unique_flights: FxHashSet::default(),
+            rep_alt_m: 8000.0,
+            centroid_lat: 50.0,
+            centroid_lon: 14.0,
+            d_slant_m: 9000.0,
+            period_energy: [1.0, 0.0, 0.0],
+            buckets: vec![bucket(50.0)],
+            top_fids: FxHashMap::default(),
+        };
+        acc.n_unique_flights.insert(7);
+        let mut other = CellAccum {
+            n_unique_flights: FxHashSet::default(),
+            rep_alt_m: 8100.0,
+            centroid_lat: 51.0,
+            centroid_lon: 15.0,
+            d_slant_m: 8000.0,
+            period_energy: [2.0, 0.0, 0.0],
+            buckets: vec![bucket(55.0)],
+            top_fids: FxHashMap::default(),
+        };
+        other.n_unique_flights.insert(7);
+        other.n_unique_flights.insert(9);
+        merge_cruise_cell(&mut acc, other);
+        assert_eq!(acc.period_energy[0], 3.0);
+        assert_eq!(acc.d_slant_m, 8000.0);
+        assert_eq!(acc.rep_alt_m, 8000.0);
+        assert_eq!(acc.n_unique_flights.len(), 2);
+        let ldens: Vec<f64> = acc.buckets.iter().map(|b| b.received_lden).collect();
+        assert_eq!(ldens, vec![50.0, 55.0]);
+    }
 
     fn row(lat: f64, lon: f64, altitude: f32, heading_bin: u8) -> CruiseRowView<'static> {
         CruiseRowView {

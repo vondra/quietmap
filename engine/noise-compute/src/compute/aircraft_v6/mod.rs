@@ -11,7 +11,7 @@
 //! Ground operations live in the parallel `airport_traffic` compute
 //! path invoked by source-reader after this function returns.
 
-use std::collections::HashMap;
+use crate::fxhash::{FxBuildHasher, FxHashMap};
 
 use crate::compute::aircraft_v6::state::{FlightAccum, TopFlightCandidate};
 use crate::emission::aircraft::{BuildingHorizon, ReceiverHorizon};
@@ -70,8 +70,8 @@ pub fn compute_aircraft_v6(
     let t_start = std::time::Instant::now();
 
     let mut traces = traces;
-    let flights = if airborne_row_count(airborne_rows) == 0 {
-        HashMap::new()
+    let (flights, air_stats) = if airborne_row_count(airborne_rows) == 0 {
+        (FxHashMap::default(), airborne::AirborneScatterStats::default())
     } else {
         let horizon = horizon.expect("non-empty airborne rows require a receiver terrain horizon");
         airborne::scatter(
@@ -86,7 +86,10 @@ pub fn compute_aircraft_v6(
         )
     };
     let t_airborne_scatter = t_start.elapsed();
-    let mut cruise_flight_stats = HashMap::new();
+    // Pre-sized: every consumer sorts (key_sorted / explicit sorts), so capacity
+    // never leaks into output order; it only skips rehashing on ~10^5 inserts.
+    let mut cruise_flight_stats =
+        FxHashMap::with_capacity_and_hasher(cruise_rows.len() / 4 + 1, FxBuildHasher);
     // Cruise gets its own FlightAccum table — the cruise synth fids
     // (`flight_id::pack_synth(idx)` with idx = row index) share the
     // SYNTHETIC_BIT tagging used by airborne TIS-B / anonymous flights
@@ -98,9 +101,11 @@ pub fn compute_aircraft_v6(
     // independent. Cruise contributions to airborne periods come from
     // accumulating their `period_energy` into `airborne_energy`; cruise
     // band counters come from `cruise_flight_stats` (real fid dedup).
-    let mut cruise_flights: HashMap<u64, FlightAccum> = HashMap::new();
-    let mut top_flight_candidates: HashMap<u64, TopFlightCandidate> = HashMap::new();
-    cruise::scatter(
+    let mut cruise_flights: FxHashMap<u64, FlightAccum> =
+        FxHashMap::with_capacity_and_hasher(cruise_rows.len(), FxBuildHasher);
+    let mut top_flight_candidates: FxHashMap<u64, TopFlightCandidate> =
+        FxHashMap::with_capacity_and_hasher(cruise_rows.len() / 4 + 1, FxBuildHasher);
+    let cruise_stats = cruise::scatter(
         receiver,
         cruise_rows,
         rasters,
@@ -133,13 +138,18 @@ pub fn compute_aircraft_v6(
     if timing_on {
         let t_total = t_start.elapsed();
         eprintln!(
-            "ac-v6 total={:.0}ms airb_scatter={:.0}ms cr_scatter={:.0}ms airb_detail={:.0}ms (n_airb={} n_cr={})",
+            "ac-v6 total={:.0}ms airb_scatter={:.0}ms cr_scatter={:.0}ms cr_pass1={:.0}ms cr_pass2={:.0}ms airb_detail={:.0}ms (n_airb={} eval={} rcvd={} n_cr={} cr_eval={})",
             ms(t_total),
             ms(t_airborne_scatter),
             ms(t_cruise_scatter),
+            cruise_stats.pass1_ns as f64 / 1e6,
+            cruise_stats.pass2_ns as f64 / 1e6,
             ms(t_airborne_detail),
             airborne_row_count(airborne_rows),
+            air_stats.n_eval,
+            air_stats.n_received,
             cruise_rows.len(),
+            cruise_stats.n_eval,
         );
     }
     if let Some(t) = timings {

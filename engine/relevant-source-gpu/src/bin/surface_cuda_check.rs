@@ -104,6 +104,7 @@ impl Source {
                     weather,
                     &mut LinePieceScratch::default(),
                     None,
+                    false,
                 )
                 .expect("the piece has length")
                 .periods

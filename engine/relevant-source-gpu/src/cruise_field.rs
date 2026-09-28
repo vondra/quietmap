@@ -147,7 +147,9 @@ impl CruiseField {
             let weights = file_window.provenance_weights();
             window = Some(file_window);
             for batch in reader {
-                let rows = CruiseRowAccum::new(&[batch?]).map_err(anyhow::Error::msg)?;
+                let batch = batch?;
+                let rows =
+                    CruiseRowAccum::new(std::slice::from_ref(&batch)).map_err(anyhow::Error::msg)?;
                 let slices = rows.views();
                 let views = slices.as_row_views();
                 let mut group = Group {

@@ -456,6 +456,10 @@ pub struct SegmentTrace {
     /// `None` for airborne / cruise rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length_m_per_kind: Option<[f32; 3]>,
+    /// Stable per-kind row index (kept position for surface rows, input order
+    /// for aircraft): the top-K total-order tiebreak. Never on the wire.
+    #[serde(skip)]
+    pub sort_seq: u64,
 }
 
 #[inline]
@@ -511,6 +515,31 @@ pub struct TraceCollector {
     /// longer a valid denominator.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub airborne_above_cutoff: u32,
+    /// Kept-row counts per surface kind, set by the kernels when they
+    /// pre-select (see `trace_cap`): the summary's `*_total` denominators.
+    /// Zero when the kind pushed every kept row (pre-selection off).
+    /// Ground always pre-selects (legacy 150 cap), so its total is always set.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub road_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub railway_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub building_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub industrial_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub ship_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub aircraft_ground_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub aircraft_cruise_total: u32,
+    /// Per-kind trace budget for in-kernel pre-selection. `None` (tests,
+    /// oracle) keeps the old behaviour: every kept row pushes a trace.
+    /// The popup sets `Some(150)` (summary) or `Some(1000)` (all segments);
+    /// kernels then push only that kind's top-K survivors and report the
+    /// kept count via the `*_total` fields above.
+    #[serde(skip)]
+    pub trace_cap: Option<usize>,
 }
 
 #[inline]

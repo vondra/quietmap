@@ -85,6 +85,8 @@ pub fn add_v6_aircraft_to_result(
     assert_airborne_contract("airborne.arrow", airborne_batches)?;
     assert_cruise_contract("cruise.arrow", cruise_batches)?;
     assert_airport_traffic_contract("airport_traffic.arrow", airport_traffic_batches)?;
+    let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
+    let t_accum = timing_on.then(std::time::Instant::now);
     let airborne_rows = AirborneRowAccum::new(airborne_batches)?;
     let cruise_rows = CruiseRowAccum::new(cruise_batches)?;
     let traffic_rows = AirportTrafficRowAccum::new(airport_traffic_batches)?;
@@ -94,6 +96,7 @@ pub fn add_v6_aircraft_to_result(
     let cruise_view_slices = cruise_rows.views();
     let cruise_views = cruise_view_slices.as_row_views();
     let traffic_views = traffic_rows.views();
+    let t_accum_ms = t_accum.map(|t| t.elapsed().as_secs_f64() * 1000.0);
 
     let n_airborne_rows = noise_compute::compute::aircraft_v6::airborne_row_count(airborne_views);
     let total_rows = n_airborne_rows + cruise_views.len() + traffic_views.len();
@@ -103,6 +106,7 @@ pub fn add_v6_aircraft_to_result(
     let window = sampling_window.ok_or("aircraft rows without a sampling window stamp")?;
 
     // Airborne screens against one receiver horizon; cruise is exempt.
+    let t_horizon = timing_on.then(std::time::Instant::now);
     let horizon = if n_airborne_rows == 0 {
         None
     } else {
@@ -130,6 +134,13 @@ pub fn add_v6_aircraft_to_result(
             )
         })
         .filter(|horizon| !horizon.is_empty());
+    if timing_on {
+        eprintln!(
+            "popup-stage aircraft accum={:.0}ms horizon={:.0}ms",
+            t_accum_ms.unwrap_or(0.0),
+            t_horizon.map(|t| t.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0),
+        );
+    }
 
     let (mut air_periods, mut air_contribs, band_data) = compute_aircraft_v6(
         receiver,
@@ -147,7 +158,6 @@ pub fn add_v6_aircraft_to_result(
     // airport_traffic → Doc 29 line-source contributors; fold their
     // per-period Lden into `air_periods` so the top-of-popup Aircraft
     // total includes ground-ops energy (not just its contributor row).
-    let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
     let t_traffic_start = std::time::Instant::now();
     let mut n_traffic_rows: usize = 0;
     if !traffic_views.is_empty() {

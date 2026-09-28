@@ -333,37 +333,6 @@ fn segment_sel_with_overrides<const WANT_CPA: bool>(
     Some((kernel.sel, cpa))
 }
 
-/// Popup-only detailed result. It retains a segment whose screened SEL falls
-/// below the 20 dB display floor so the caller can keep its pre-screen energy;
-/// production wrappers still reject that segment before exposing it.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn segment_kernel_with_cuts<const FLOOR: bool>(
-    seg: &AircraftSegment,
-    rx_lat: f64,
-    rx_lon: f64,
-    rx_elev_m: f64,
-    terrain_start_cut_m: f64,
-    terrain_end_cut_m: f64,
-    npd_luts: &NpdLuts,
-    horizon: &ReceiverHorizon,
-    buildings: Option<&super::BuildingHorizon>,
-) -> Option<AircraftKernelResult> {
-    segment_kernel_with_overrides::<true, true, FLOOR>(
-        seg,
-        rx_lat,
-        rx_lon,
-        rx_elev_m,
-        seg.start_alt_m as f64,
-        seg.end_alt_m as f64,
-        false,
-        terrain_start_cut_m,
-        terrain_end_cut_m,
-        npd_luts,
-        Some(horizon),
-        buildings,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn segment_kernel_with_overrides<
     const WANT_CPA: bool,
