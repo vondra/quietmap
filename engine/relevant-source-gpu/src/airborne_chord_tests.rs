@@ -115,6 +115,7 @@ fn compare(pieces: &[Piece], receiver_lon: f64) -> Result<Vec<f32>> {
             0,
             None,
         )
+        .0
         .into_iter()
         .collect();
         flights.sort_unstable_by_key(|(id, _)| *id);

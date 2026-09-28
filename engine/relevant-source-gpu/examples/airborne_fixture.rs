@@ -182,6 +182,7 @@ fn main() -> anyhow::Result<()> {
             0,
             None,
         )
+        .0
         .into_iter()
         .collect();
         flights.sort_unstable_by_key(|(id, _)| *id);
