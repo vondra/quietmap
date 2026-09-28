@@ -352,19 +352,13 @@ pub fn scatter(
     let folds: Vec<CruiseChunkFold> = admitted
         .par_chunks(CRUISE_FOLD_CHUNK_ROWS)
         .map(|chunk| {
-            // Pre-sized: a chunk holds at most CRUISE_FOLD_CHUNK_ROWS rows, so
-            // its maps never rehash (consumers sort, capacity is order-free).
+            // Grown, never pre-sized (see the airborne chunk map): hundreds of
+            // live folds times per-fold capacity OOMs 6 concurrent popups.
             let mut fold = CruiseChunkFold {
-                flights: FxHashMap::with_capacity_and_hasher(
-                    chunk.len(),
-                    FxBuildHasher,
-                ),
-                stats: FxHashMap::with_capacity_and_hasher(chunk.len(), FxBuildHasher),
-                candidates: FxHashMap::with_capacity_and_hasher(
-                    chunk.len(),
-                    FxBuildHasher,
-                ),
-                cells: FxHashMap::with_capacity_and_hasher(chunk.len() / 4 + 1, FxBuildHasher),
+                flights: FxHashMap::default(),
+                stats: FxHashMap::default(),
+                candidates: FxHashMap::default(),
+                cells: FxHashMap::default(),
             };
             for out in chunk {
                 let cells = if want_traces {

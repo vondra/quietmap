@@ -10,7 +10,7 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
 use std::hash::BuildHasher;
 
-use crate::fxhash::{FxBuildHasher, FxHashMap};
+use crate::fxhash::FxHashMap;
 
 use rayon::prelude::*;
 
@@ -236,15 +236,11 @@ fn merge_chunks(
 ) -> (FxHashMap<u64, FlightAccum>, AirborneScatterStats) {
     use std::collections::hash_map::Entry;
 
-    // Exact upper bound on distinct flights (dedup only shrinks it), so the
-    // merge target never rehashes; consumers sort by key, capacity is order-free.
-    let total_entries: usize = chunks.iter().map(|c| c.flights.len()).sum();
     let mut chunks = chunks.into_iter();
     let Some(first) = chunks.next() else {
         return (FxHashMap::default(), AirborneScatterStats::default());
     };
     let mut flights = first.flights;
-    flights.reserve(total_entries);
     let mut above_cutoff = first.above_cutoff;
     let mut pieces = first.pieces;
     let mut stats = AirborneScatterStats {
@@ -366,11 +362,11 @@ fn scatter_chunk(
     trace_cap: usize,
     want_traces: bool,
 ) -> ChunkScatter {
-    // Pre-sized: distinct flights only grow to the chunk's row count, and the
-    // merge sorts by key, so capacity never leaks into output order.
-    let chunk_rows: usize = batches.iter().map(AirborneSegmentBatch::len).sum();
-    let mut flights: FxHashMap<u64, FlightAccum> =
-        FxHashMap::with_capacity_and_hasher(chunk_rows / 4 + 1, FxBuildHasher);
+    // Grown, never pre-sized: one chunk's map is small, but thousands of
+    // chunks are alive at once and 6 concurrent popups share 8 GB — per-chunk
+    // capacity multiplies into gigabytes of transient (OOM-killed 2026-09-28).
+    // The merge sorts by key, so growth never leaks into output order.
+    let mut flights: FxHashMap<u64, FlightAccum> = FxHashMap::default();
     let mut above_cutoff: u32 = 0;
     let mut pieces = Vec::new();
     let mut n_eval: u64 = 0;
