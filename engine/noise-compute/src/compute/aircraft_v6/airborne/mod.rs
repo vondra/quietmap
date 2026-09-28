@@ -170,10 +170,11 @@ pub fn scatter(
 /// per-chunk `HashMap` + heap allocation and the merge cost more than the
 /// split saves, so sparse z14 batches are grouped up to this size. 16 384
 /// (4× the old 4 096): a flight's ~150 sub-segments span dozens of batches,
-/// so narrow chunks only multiply duplicate accumulators (one `String` alloc
-/// + free per duplicate at merge) and candidate stubs for the global top-K
-/// select; wider chunks halve both while keeping hundreds of tasks per
-/// popup. Trace/peaks/counts are chunking-independent (proven at the select);
+/// so narrow chunks only multiply duplicate accumulators (one `String`
+/// allocation and free per duplicate at merge) plus candidate stubs for the
+/// global top-K select; wider chunks halve both while keeping hundreds of
+/// tasks per popup. Trace/peaks/counts are chunking-independent (proven at
+/// the select);
 /// energies re-associate within the parity test's 1e-9.
 const SCATTER_CHUNK_ROWS: usize = 16_384;
 
