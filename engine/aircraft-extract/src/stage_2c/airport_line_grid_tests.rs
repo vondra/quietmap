@@ -104,6 +104,38 @@ fn grid_matches_brute_force_across_the_dateline() {
 }
 
 #[test]
+fn grid_keeps_legs_whose_only_neighbour_sits_across_the_seam() {
+    // One-sided cluster: the line endpoints never straddle ±180°, but the
+    // 50 m snap buffer reaches across. The leg 22 m past the seam is a
+    // neighbour (66.324 m of scalar overlap), not 360° away.
+    let lines = vec![line(1, 0, 0.0, 179.9999, 0.001, 179.9999)];
+    let reported = [0.0002, -179.9999, 0.0008, -179.9999];
+    let allowance = AirportLineGrid::allocation_allowance(lines.len()).unwrap();
+    let mut grid = AirportLineGrid::new(&lines, 50.0, allowance).unwrap();
+    let mut hits = Vec::new();
+    grid.project(reported, &mut hits);
+    let expected =
+        project_leg_onto_airport_lines(reported[0], reported[1], reported[2], reported[3], &lines, 50.0);
+    assert_eq!(expected.len(), 1);
+    assert!((expected[0].length_within_segment_m - 66.324).abs() < 0.01);
+    assert_eq!(hits, expected);
+    // Both one-sided directions plus far legs that must still miss.
+    for lines in [
+        vec![line(1, 0, 0.0, 179.9999, 0.001, 179.9999)],
+        vec![line(1, 0, 0.0, -179.9999, 0.001, -179.9999)],
+    ] {
+        let legs = vec![
+            [0.0002, -179.9999, 0.0008, -179.9999],
+            [0.0002, 179.9999, 0.0008, 179.9999],
+            [0.0002, 179.9992, 0.0008, -179.9997],
+            [-0.05, -179.9, -0.049, -179.9],
+            [-0.05, 179.9, -0.049, 179.9],
+        ];
+        check_matches_brute_force(&lines, &legs, 50.0);
+    }
+}
+
+#[test]
 fn grid_matches_brute_force_near_the_pole() {
     // 78°N (Svalbard): longitude padding is wide but finite.
     let lines = vec![

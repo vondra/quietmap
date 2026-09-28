@@ -23,10 +23,11 @@ LON = 14.17
 LON_METRE = 111_320.0 * math.cos(math.radians(LAT))
 
 
-def official_row(lon, height_m=4.0, kind=0, span=0.002, lat=LAT):
+def official_row(lon, height_m=4.0, kind=0, span=0.002, lat=LAT, owned=True):
     return {"geom": shapely.LineString([(lon, lat), (lon, lat + span)]),
             "clat": lat + span / 2, "clon": lon, "height_m": height_m,
-            "measured": True, "kind": kind, "source": "TEST", "as_of": "2026-01-01"}
+            "measured": True, "kind": kind, "source": "TEST", "as_of": "2026-01-01",
+            "owned": owned}
 
 
 def replacement(offsets_m, kind=0):
@@ -204,7 +205,8 @@ class BuildSquareOfficialTests(unittest.TestCase):
                 "height": 0.0, "height_tier": 2}])
             official, _ = read_official_cache(
                 cache, GRID.parse_square_name(name), OFFICIAL.SCHEMA,
-                OFFICIAL.CONTRACT_KEY, OFFICIAL.CONTRACT_VERSION)
+                OFFICIAL.CONTRACT_KEY, OFFICIAL.CONTRACT_VERSION,
+                halo_m=OFFICIAL.SUPPORT_HALO_M)
             censuses[name] = BUILDER.build_square(
                 name, self.prepared, [], [], None, official, [], [], [])
         self.assertEqual(
@@ -229,6 +231,52 @@ class BuildSquareOfficialTests(unittest.TestCase):
         self.assertAlmostEqual(total_m, 600.0, delta=5.0)
         self.assertEqual(
             sum(censuses[name]["replaced_osm_walls"] for name in squares), 2)
+
+    def test_cross_square_replacement_uses_neighbour_hops(self):
+        # The 600 m survey wall (-350..+250 m) chops into hops owned
+        # [-350,-150] [-150,+50] west and [+50,+250] east; the 200 m OSM wall
+        # (-120..+80 m) is west-owned but needs the east hop for end-to-end
+        # coverage. Owned-hops-only replacement keeps the obsolete 8 m OSM
+        # wall screening beside its 4 m surveyed replacement.
+        border_lon = 14.765625
+        lat = 49.6
+        metre_lon = 111_320.0 * math.cos(math.radians(lat))
+        west_end = border_lon - 350.0 / metre_lon
+        east_end = border_lon + 250.0 / metre_lon
+        wall = shapely.LineString([(west_end, lat), (east_end, lat)])
+        cache = os.path.join(self.temporary.name, "barriers")
+        NORMALIZE.append_cache([(wall, 4.0, True, OFFICIAL.KIND_WALL)],
+                               "TEST", "2026-01-01", cache)
+        west, east = "z9/276/174", "z9/277/174"
+        for name in (west, east):
+            square_dir = self.prepared / name
+            square_dir.mkdir(parents=True, exist_ok=True)
+            buildings_arrow(square_dir / "buildings.arrow", [])
+        barriers_arrow(self.prepared / west / "barriers.arrow", [{
+            "osm_id": 1, "segment_idx": 0, "start_lat": lat + 2.0 / 111_320.0,
+            "start_lon": border_lon - 120.0 / metre_lon,
+            "end_lat": lat + 2.0 / 111_320.0, "end_lon": border_lon + 80.0 / metre_lon,
+            "height": 8.0, "height_tier": 0}])
+        barriers_arrow(self.prepared / east / "barriers.arrow", [])
+        official, _ = read_official_cache(
+            cache, GRID.parse_square_name(west), OFFICIAL.SCHEMA,
+            OFFICIAL.CONTRACT_KEY, OFFICIAL.CONTRACT_VERSION,
+            halo_m=OFFICIAL.SUPPORT_HALO_M)
+        self.assertEqual([row["owned"] for row in official], [True, True, False])
+        census = BUILDER.build_square(
+            west, self.prepared, [], [], None, official, [], [], [])
+        self.assertEqual(census["replaced_osm_walls"], 1)
+        table = ipc.open_file(self.prepared / west / "structures.arrow").read_all()
+        self.assertEqual(table.column("height_m").to_pylist(), [4.0, 4.0])
+        self.assertEqual(table.column("osm_id").to_pylist(), [None, None])
+        official, _ = read_official_cache(
+            cache, GRID.parse_square_name(east), OFFICIAL.SCHEMA,
+            OFFICIAL.CONTRACT_KEY, OFFICIAL.CONTRACT_VERSION,
+            halo_m=OFFICIAL.SUPPORT_HALO_M)
+        BUILDER.build_square(east, self.prepared, [], [], None, official, [], [], [])
+        table = ipc.open_file(self.prepared / east / "structures.arrow").read_all()
+        self.assertEqual(table.column("height_m").to_pylist(), [4.0])
+        self.assertEqual(table.column("osm_id").to_pylist(), [None])
 
 
 class NormalizerTests(unittest.TestCase):

@@ -154,22 +154,29 @@ the area integral sits 1.8 dB under the per-m² level, giving active 59.8
 dB/m² — 97.85 dB(A) over the pitch — and 50.8 dB/m² after the standard −9 dB
 annualization (−3 season, −6 duty).
 
-Power classes (`source_type` 11–15, `osm_industrial_contract`). Solar farms
-(13) emit per-MW, not per area: 88 dB(A)/MW + 10·lg(MW) − 5 dB day duty,
-day-only (Sungrow SG4950HV-MV 4.95 MW = 95 dB(A) anchor; MW from the row's
-`plant:output:electricity` tag, a solar generator unit's `rated_power_kw`, or
-area × 0.55 MW/ha, the tagged-farm median). A solar row with no nameplate and
-no footprint (a bare `generator:source=solar` node) stays silent — the generic
-10,000 m² default must not invent 0.55 MW / 80.4 dB for a rooftop panel — and
+Power classes (`source_type` 11–15, `osm_industrial_contract`). A facility
+gets its sound power once, from one rating truth, and its parts share that
+acoustic power by area (`lw_part = lw_total + 10·lg(share)`); sharing the
+MVA/MW itself cannot conserve power (the substation law is logarithmic).
+Solar farms (13) emit per-MW, not per area: 88 dB(A)/MW + 10·lg(MW) − 5 dB
+day duty, day-only (Sungrow SG4950HV-MV 4.95 MW = 95 dB(A) anchor; MW from
+the row's `plant:output:electricity` tag, a solar generator unit's
+`rated_power_kw`, or area × 0.55 MW/ha, the tagged-farm median). Only the
+plant nameplate is a facility total shared by area; unit output and area
+density are already per part. A solar row with no nameplate and no footprint
+(a bare `generator:source=solar` node) stays silent — the generic 10,000 m²
+default must not invent 0.55 MW / 80.4 dB for a rooftop panel — and
 a generator inside its plant polygon stays silent too (the plant owns the
 emission). Both the plant containment and the transformer feed span every
 loaded square, so a facility across a square edge still sees its units in the
 neighbour. Registry-confirmed solar
 (synthetic NACE 3599) takes the same branch. Substations (14) emit per-MVA,
 24/7: IEC 551 LWA = 74 + 14·lg(MVA), 64 dB below 0.2 MVA (MVA from the joined
-`rating` sum of the class-15 transformers inside the substation polygon, else
-the class median — main 25, auto 160, distribution 2, minor 0.4 MVA; class from
-the `substation` tag, then `voltage` / autotransformer evidence). Wind-plant outlines (11), inactive facilities
+`rating` sum of the class-15 transformers inside ANY part of the facility
+when at least one part contains a rated unit, else the full facility
+nameplate tag, else the class median — main 25, auto 160, distribution 2,
+minor 0.4 MVA; class from the `substation` tag, then `voltage` /
+autotransformer evidence). Wind-plant outlines (11), inactive facilities
 (12) and transformers (15) are silent; lifecycle-retired rows carry
 `suppressed`, honoured by both readers.
 
@@ -660,20 +667,23 @@ roof height, from the first available rung, and stores its `height_source`:
    < 60 m² 3.5 m, < 150 m² 7.4 m, < 500 m² 8.0 m, else 9.0 m
    (no-information rows only, 2026-09-25).
 
-Rung 5 is not per-building knowledge; only it takes the low-profile cap.
-A retired satellite rung (`height_source` 4) still reads from older prepared
-squares. The demand storey count `storeys` is the floor count where one is
+Rung 5 is not per-building knowledge, and neither is the retired
+satellite rung (`height_source` 4, read from older prepared squares only):
+both take the low-profile cap; every other source measured or mapped the
+building. The demand storey count `storeys` is the floor count where one is
 mapped, else round((height − 1 m) / 3 m), at least 1 (registry floor counts
 vs mean height, 6,061 buildings: MAE 0.41 storeys, unbiased); a structure
 without a screening height counts one level. The service-tree demand reads it.
 Noise walls keep a mapped OSM height; unmapped walls stand at their country's
 mean wall height (DE 3.88 m, US 4.45 m, AT 3.6 m, else 3 m), stored rounded
 to whole metres (4 m in Germany, the United States and Austria). Official barrier
-inventories (`structures-builder-7`) stand beside OSM: an official line
+inventories (`structures-builder-9`) stand beside OSM: an official line
 replaces the OSM micro-segments within 5 m of it and screens at its
 inventoried height (GWV top-minus-road-edge median, else the inventory's
-in-range median); official berms stay out of the thin-wall index until the
-terrain step consumes them.
+in-range median); replacement reads a 375 m support halo past the square
+border while owned hops still emit alone, so a cross-square survey
+replaces its OSM twin instead of screening twice. Official berms stay out
+of the thin-wall index until the terrain step consumes them.
 
 ## Raster terrain and canopy inputs
 
@@ -923,10 +933,10 @@ retain solar, substation and transformer evidence for their specific models
 lifecycle tags survive, with OSM object kind to disambiguate IDs. Registry
 matching does not overwrite these classes. Industrial and leisure multipolygons
 retain every closed outer component as a separate row; unclosed fragments are
-omitted rather than assigned an area. A facility nameplate
-(`plant:output:electricity`, substation `rating`) is shared by area over the
-emitting parts, so a two-part 24 MW solar relation emits two 12 MW sources,
-not two 24 MW sources. Inner holes remain outside the
+omitted rather than assigned an area. Every emitting part of an industrial
+relation keeps the full facility nameplate byte-identical and carries its
+area fraction in `qm:facility_share`, so readers evaluate the one facility
+power and share it by area. Inner holes remain outside the
 existing single-ring geometry contract.
 
 `leisure_v5` adds the artificial-turf pitch class 12 (`surface=artificial_turf`;

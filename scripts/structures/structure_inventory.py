@@ -13,16 +13,27 @@ def degree_name(lat, lon):
     return f"{'N' if lat >= 0 else 'S'}{abs(lat):02d}{'E' if lon >= 0 else 'W'}{abs(lon):03d}"
 
 
-def _touched_degree_tiles(cache_dir, square):
-    """Every 1-degree tile path a square's span touches, with its (lat, lon)."""
+def _touched_degree_tiles(cache_dir, square, expand_m=0.0):
+    """Every 1-degree tile path a square's span touches, with its (lat, lon).
+    expand_m widens the span first (replacement-support halo); tile indices
+    wrap at the antimeridian and clamp at the poles."""
     lon0, lat_top, lon1, lat_bot = qmgrid.square_lonlat_span(*square)
     if square[1] == 0:
         lat_top = 90
     if square[1] == qmgrid.Z9_AXIS - 1:
         lat_bot = -90
+    if expand_m > 0:
+        lat_pad = expand_m / 111_320.0
+        mid_lat = (lat_top + lat_bot) / 2
+        lon_pad = expand_m / (111_320.0 * max(0.01, math.cos(math.radians(mid_lat))))
+        lat_bot = max(-90.0, lat_bot - lat_pad)
+        lat_top = min(90.0, lat_top + lat_pad)
+        lon0 -= lon_pad
+        lon1 += lon_pad
     for lat in range(math.floor(lat_bot), min(90, math.floor(lat_top) + 1)):
         for lon in range(math.floor(lon0), math.ceil(lon1)):
-            yield lat, lon, Path(cache_dir) / f"{degree_name(lat, lon)}.parquet"
+            wrapped = ((lon + 180) % 360) - 180
+            yield lat, wrapped, Path(cache_dir) / f"{degree_name(lat, wrapped)}.parquet"
 
 
 def overture_sources(parquet_dir, square):
@@ -34,10 +45,10 @@ def overture_sources(parquet_dir, square):
         yield lat, lon, source
 
 
-def official_tile_sources(cache_dir, square):
+def official_tile_sources(cache_dir, square, expand_m=0.0):
     """The existing cache tiles a square's span touches. Official caches cover
     only surveyed countries, so missing tiles are absent data, not an error."""
-    for lat, lon, source in _touched_degree_tiles(cache_dir, square):
+    for lat, lon, source in _touched_degree_tiles(cache_dir, square, expand_m):
         if source.is_file():
             yield lat, lon, source
 

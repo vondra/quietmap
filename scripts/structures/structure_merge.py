@@ -45,7 +45,10 @@ IOU_MATCH_THRESHOLD = 0.5
 #    no square stamped 6 is trusted fresh.)
 # 8: official barrier cache rows are hops (official_barriers_v2), tiled and
 #    assigned per hop instead of whole lines by line centroid.
-BUILDER_VERSION = "structures-builder-8"
+# 9: replacement reads a 375 m support halo past the square border (owned
+#    hops still emit alone), so a cross-square survey replaces the OSM wall
+#    beside it instead of screening twice.
+BUILDER_VERSION = "structures-builder-9"
 # barriers.arrow height_tier: 0 = the wall's own OSM height tag, 2 = none mapped.
 BARRIER_HEIGHT_TIER_MAPPED = 0
 
@@ -300,6 +303,8 @@ def build_square(name, prepared_dir, overture_rows, overture_files, regional,
                                  height_m, height_source, b["osm_id"], b["segment_idx"])
     official_walls, official_wall_m = 0, 0.0
     for row in official_rows or []:
+        if not row["owned"]:
+            continue
         if row["kind"] not in SCREENED_KINDS:
             continue
         coords = list(row["geom"].coords)

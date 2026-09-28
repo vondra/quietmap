@@ -114,7 +114,7 @@ pub(crate) fn run_airport_traffic(
     );
     let counter = Milestone::new("stage2c/airport_traffic", "line-owner squares", 50);
     let count = pool.install(|| {
-        run_with_retry_pool(&plan.works, worker_limit, process_limit - shared, |work, limit| {
+        run_with_serial_retry(&plan.works, worker_limit, process_limit - shared, |work, limit| {
             let outcome = run_ground_traffic_work(
                 work,
                 prepared_year_dir,
@@ -134,12 +134,9 @@ pub(crate) fn run_airport_traffic(
     Ok(count)
 }
 
-/// Phase 1 runs every owner on the current pool with the worker cap; owners
-/// refused there retry with the process cap on a narrow pool. Retries are
-/// growth-dominated (charged ≥3× actual: hash tables at 4× plus coexistence),
-/// so 8 concurrent retries peak far below the process limit, while a serial
-/// tail would stall the stage on every heavy airport square.
-fn run_with_retry_pool(
+/// Retry oversized owners serially after all capped parallel workers finish.
+/// Each retry may consume the remaining process allowance, so it must run alone.
+fn run_with_serial_retry(
     plan: &[GroundTrafficWork],
     worker_limit: u64,
     process_limit: u64,
@@ -161,29 +158,12 @@ fn run_with_retry_pool(
         .collect::<Result<_>>()?;
     // All parallel accumulators are gone. Admission failures precede output writes.
     let mut count = 0;
-    let mut deferred = Vec::new();
     for (work, result) in plan.iter().zip(results) {
-        match result {
-            Some(written) => count += usize::from(written),
-            None => deferred.push(work),
-        }
+        count += usize::from(match result {
+            Some(written) => written,
+            None => run(work, process_limit)?,
+        });
     }
-    if deferred.is_empty() {
-        return Ok(count);
-    }
-    let width = rayon::current_num_threads()
-        .clamp(1, 8)
-        .min(deferred.len());
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(width)
-        .build()?;
-    let retried: Vec<bool> = pool.install(|| {
-        deferred
-            .par_iter()
-            .map(|work| run(work, process_limit))
-            .collect::<Result<_>>()
-    })?;
-    count += retried.iter().map(|written| usize::from(*written)).sum::<usize>();
     Ok(count)
 }
 

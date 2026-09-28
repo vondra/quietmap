@@ -8,11 +8,21 @@ use square_store::grid_cols::{
 };
 use square_store::store::SquareData;
 
+/// The facility joins over every loaded square's industrial batches: the
+/// transformer units, the solar plant polygons that silence their contained
+/// generators, and the substation facility parts whose union is one
+/// rating truth. One value, built once on first need, so the three indexes
+/// never drift.
+pub(super) struct IndustrialJoins {
+    pub transformers: Vec<square_store::osm_evidence::TransformerUnit>,
+    pub solar_plants: Vec<grid::poly::PreparedRing>,
+    pub substation_facilities: square_store::osm_evidence::SubstationFacilities,
+}
+
 pub(super) fn collect_industrial(
     data: &SquareData,
     all_data: &[&SquareData],
-    global_transformers: &mut Option<Vec<square_store::osm_evidence::TransformerUnit>>,
-    global_solar: &mut Option<Vec<grid::poly::PreparedRing>>,
+    joins: &mut Option<IndustrialJoins>,
     lat: f64,
     lng: f64,
     output: &mut Vec<noise_compute::types::PointSource>,
@@ -107,9 +117,9 @@ pub(super) fn collect_industrial(
                     !square_store::osm_evidence::tags_is_solar_plant(tags)
                 })
             {
-                ensure_global_industrial_joins(all_data, global_transformers, global_solar)?;
+                let joins = ensure_global_industrial_joins(all_data, joins)?;
                 if square_store::osm_evidence::inside_solar_plant(
-                    global_solar.as_deref().unwrap_or(&[]),
+                    &joins.solar_plants,
                     cgx.value(i),
                     cgy.value(i),
                 ) {
@@ -124,15 +134,25 @@ pub(super) fn collect_industrial(
                     if source_type
                         == noise_compute::emission::industrial::SOURCE_SUBSTATION =>
                 {
-                    ensure_global_industrial_joins(all_data, global_transformers, global_solar)?;
-                    let feed = square_store::osm_evidence::substation_feed(
-                        global_transformers.as_deref().unwrap_or(&[]),
+                    let joins = ensure_global_industrial_joins(all_data, joins)?;
+                    let kind = col_str(batch, "osm_kind")
+                        .filter(|kinds| !kinds.is_null(i))
+                        .map(|kinds| kinds.value(i))
+                        .unwrap_or("");
+                    let feed = joins.substation_facilities.feed(
+                        kind,
+                        osm_id,
                         &polygon_grid,
+                        &joins.transformers,
                     );
                     square_store::osm_evidence::substation_power(tags, &feed)
                 }
                 _ => (None, 0),
             };
+            let facility_share = row_tags
+                .as_ref()
+                .map(square_store::osm_evidence::facility_share)
+                .unwrap_or(1.0);
             let prepared_points = noise_compute::normalize::prepare_industrial_points(
                 noise_compute::normalize::RawIndustrialInput {
                     centroid_lat: c_lat,
@@ -149,6 +169,7 @@ pub(super) fn collect_industrial(
                     plant_output_mw,
                     substation_mva,
                     substation_class,
+                    facility_share,
                 },
             );
             let row_source_id = col_u16(batch, "source_id").map(|a| a.value(i)).unwrap_or(0);
@@ -171,27 +192,26 @@ pub(super) fn collect_industrial(
 
 /// Build the facility joins once from every loaded square's industrial file:
 /// a polygon stored in its centroid square still sees the transformer and
-/// generator units in the neighbour squares it touches. Both indexes build
-/// together from one batch collection, on first need only.
-fn ensure_global_industrial_joins(
+/// generator units in the neighbour squares it touches. All three indexes
+/// build together from one batch collection, on first need only.
+fn ensure_global_industrial_joins<'a>(
     all_data: &[&SquareData],
-    global_transformers: &mut Option<Vec<square_store::osm_evidence::TransformerUnit>>,
-    global_solar: &mut Option<Vec<grid::poly::PreparedRing>>,
-) -> Result<(), String> {
-    if global_transformers.is_some() && global_solar.is_some() {
-        return Ok(());
+    joins: &'a mut Option<IndustrialJoins>,
+) -> Result<&'a IndustrialJoins, String> {
+    if joins.is_none() {
+        let mut batches = Vec::new();
+        for data in all_data {
+            batches.extend(data.industrial.batches_all()?);
+        }
+        *joins = Some(IndustrialJoins {
+            transformers: square_store::osm_evidence::transformer_units(&batches),
+            solar_plants: square_store::osm_evidence::solar_plants(&batches),
+            substation_facilities: square_store::osm_evidence::SubstationFacilities::build(
+                &batches,
+            ),
+        });
     }
-    let mut batches = Vec::new();
-    for data in all_data {
-        batches.extend(data.industrial.batches_all()?);
-    }
-    if global_transformers.is_none() {
-        *global_transformers = Some(square_store::osm_evidence::transformer_units(&batches));
-    }
-    if global_solar.is_none() {
-        *global_solar = Some(square_store::osm_evidence::solar_plants(&batches));
-    }
-    Ok(())
+    Ok(joins.as_ref().expect("built above"))
 }
 
 pub(super) fn collect_ships(

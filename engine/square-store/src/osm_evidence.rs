@@ -295,16 +295,17 @@ pub fn is_gas_substation(tags: &BTreeMap<String, String>) -> bool {
 }
 
 /// Substation MVA plus its fallback class from the row's own tags and its
-/// joined transformer feed. The MVA is the joined `rating` sum when at least
-/// one contained transformer carries one; else the row's own `rating` (a
-/// station-level nameplate, the only evidence a node substation can carry);
-/// else the class median applies. An autotransformer unit (own tag or
-/// contained) makes it auto (2, architecture rather than class); else the
-/// retained `substation` tag decides: transmission is main (1),
-/// minor_distribution at distribution voltage (below 60 kV — MV/LV kiosks,
-/// not the rare mistagged 115 kV stations) is minor (4); else ≥ 220 kV
-/// highest voltage makes it main (1); else distribution (3). Classes are
-/// shared by convention with
+/// facility's joined transformer feed. The MVA is the joined `rating` sum
+/// when at least one transformer in ANY part of the facility carries one;
+/// else the row's own `rating` (the full facility nameplate, identical on
+/// every part — the only evidence a node substation can carry); else the
+/// class median applies. One rating truth — tag or joined units, never
+/// both. An autotransformer unit (own tag or contained) makes it auto (2,
+/// architecture rather than class); else the retained `substation` tag
+/// decides: transmission is main (1), minor_distribution at distribution
+/// voltage (below 60 kV — MV/LV kiosks, not the rare mistagged 115 kV
+/// stations) is minor (4); else ≥ 220 kV highest voltage makes it main (1);
+/// else distribution (3). Classes are shared by convention with
 /// `noise-compute::emission::industrial::substation_class_mva`, like the
 /// `source_type` ids the extractor writes as raw numbers.
 pub fn substation_power(
@@ -342,11 +343,31 @@ pub fn substation_power(
     (mva, class)
 }
 
-/// Join the square's transformers against one substation polygon. A point
-/// substation (no polygon) contains nothing and falls back to its own tags.
-pub fn substation_feed(
+/// Builder-computed area fraction of one multipolygon facility part: the
+/// extractor writes it on every closed part of a multi-part industrial
+/// relation, so readers evaluate the facility's sound power once and share
+/// it by area. Not an OSM tag — the `qm:` namespace marks extractor
+/// measurement, never mapper input.
+pub const QM_FACILITY_SHARE: &str = "qm:facility_share";
+
+/// One part's area share of its facility's single acoustic power: the stored
+/// fraction when it parses inside (0, 1], else the whole facility (single
+/// parts and pre-share extracts carry no key; garbage must not silence or
+/// NaN a source).
+pub fn facility_share(tags: &BTreeMap<String, String>) -> f64 {
+    tags.get(QM_FACILITY_SHARE)
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|share| *share > 0.0 && *share <= 1.0)
+        .unwrap_or(1.0)
+}
+
+/// Join the loaded squares' transformers against a whole substation
+/// facility: a unit inside ANY part polygon counts once toward the
+/// facility's single rating truth. An overlap between parts still counts
+/// each unit once (one containment pass, not one sum per part).
+pub fn substation_facility_feed(
     units: &[TransformerUnit],
-    polygon: &[(i32, i32)],
+    parts: &[grid::poly::PreparedRing],
 ) -> SubstationFeed {
     let mut feed = SubstationFeed {
         rated_mva_sum: 0.0,
@@ -354,11 +375,8 @@ pub fn substation_feed(
         has_autotransformer: false,
         max_contained_voltage_kv: None,
     };
-    let Some(prepared) = grid::poly::PreparedRing::new(polygon) else {
-        return feed;
-    };
     for unit in units {
-        if !prepared.contains(unit.gx, unit.gy) {
+        if !parts.iter().any(|part| part.contains(unit.gx, unit.gy)) {
             continue;
         }
         if let Some(rating) = unit.rating_mva {
@@ -375,6 +393,87 @@ pub fn substation_feed(
             });
     }
     feed
+}
+
+/// Join the square's transformers against one substation polygon. A point
+/// substation (no polygon) contains nothing and falls back to its own tags.
+pub fn substation_feed(units: &[TransformerUnit], polygon: &[(i32, i32)]) -> SubstationFeed {
+    let prepared = grid::poly::PreparedRing::new(polygon);
+    substation_facility_feed(units, prepared.as_slice())
+}
+
+/// Substation facility parts of loaded industrial batches, keyed by (OSM
+/// kind, OSM id): every closed part of a multipolygon relation shares its
+/// relation id, so the facility's transformer feed is the union over its
+/// parts while each part emits its [`QM_FACILITY_SHARE`] of the one
+/// facility power. Single-part rows group alone; node rows (no polygon)
+/// contribute no parts and read their own tags. Built once per
+/// query/scene, lazily, only when a substation row is admitted. Rows
+/// without a decodable ring or id are skipped, never an error.
+#[derive(Default)]
+pub struct SubstationFacilities {
+    parts: BTreeMap<(String, i64), Vec<grid::poly::PreparedRing>>,
+}
+
+impl SubstationFacilities {
+    pub fn build(batches: &[RecordBatch]) -> Self {
+        let mut facilities = Self::default();
+        facilities.extend(batches);
+        facilities
+    }
+
+    pub fn extend(&mut self, batches: &[RecordBatch]) {
+        for batch in batches {
+            let (Some(kinds), Some(geom)) =
+                (col_u8(batch, "source_type"), col_binary(batch, "geom"))
+            else {
+                continue;
+            };
+            let ids = col_i64(batch, "osm_id");
+            let obj_kinds = col_str(batch, "osm_kind");
+            for row in 0..batch.num_rows() {
+                if kinds.is_null(row) || kinds.value(row) != 14 {
+                    continue;
+                }
+                let id = ids
+                    .filter(|ids| !ids.is_null(row))
+                    .map(|ids| ids.value(row))
+                    .unwrap_or(0);
+                if id == 0 || geom.is_null(row) {
+                    continue;
+                }
+                let kind = obj_kinds
+                    .filter(|kinds| !kinds.is_null(row))
+                    .map(|kinds| kinds.value(row))
+                    .unwrap_or("");
+                let Some(prepared) = decode_geom(Some(geom.value(row)))
+                    .and_then(|ring| grid::poly::PreparedRing::new(&ring))
+                else {
+                    continue;
+                };
+                self.parts
+                    .entry((kind.to_string(), id))
+                    .or_default()
+                    .push(prepared);
+            }
+        }
+    }
+
+    /// The transformer feed for one substation row: the union over its
+    /// facility's indexed parts, else the row's own polygon (node rows and
+    /// rows from batches outside the index read their own tags).
+    pub fn feed(
+        &self,
+        kind: &str,
+        osm_id: i64,
+        own_polygon: &[(i32, i32)],
+        units: &[TransformerUnit],
+    ) -> SubstationFeed {
+        match self.parts.get(&(kind.to_string(), osm_id)) {
+            Some(parts) => substation_facility_feed(units, parts),
+            None => substation_feed(units, own_polygon),
+        }
+    }
 }
 
 /// First and last grid cell of a leisure chain (`None` under two points).
@@ -645,6 +744,99 @@ mod tests {
             .iter()
             .map(|(key, value)| (key.to_string(), value.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn facility_share_defaults_to_whole_and_rejects_garbage() {
+        assert_eq!(facility_share(&tags(&[])), 1.0);
+        assert_eq!(facility_share(&tags(&[(QM_FACILITY_SHARE, "0.5")])), 0.5);
+        assert_eq!(facility_share(&tags(&[(QM_FACILITY_SHARE, "1")])), 1.0);
+        for garbage in ["0", "-0.5", "1.5", "abc", "", "NaN", "inf"] {
+            assert_eq!(
+                facility_share(&tags(&[(QM_FACILITY_SHARE, garbage)])),
+                1.0,
+                "{garbage:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn facility_feed_unions_rated_units_across_parts_once() {
+        use arrow::array::{
+            ArrayRef, BinaryArray, Int32Array, Int64Array, StringArray, UInt8Array,
+        };
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::sync::Arc;
+        // Two parts of relation 7 (plus an unrelated substation way and a
+        // transformer row): the 100 MVA unit in part A is the facility
+        // truth for BOTH parts, counted once even where parts overlap.
+        let ring = |points: &[(i32, i32)]| grid::poly::encode_grid_poly(points);
+        let part_a = ring(&[(0, 0), (100, 0), (100, 100), (0, 100)]);
+        let part_b = ring(&[(50, 50), (150, 50), (150, 150), (50, 150)]);
+        let other = ring(&[(5000, 5000), (5100, 5000), (5100, 5100), (5000, 5100)]);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("source_type", DataType::UInt8, false),
+            Field::new("osm_id", DataType::Int64, false),
+            Field::new("osm_kind", DataType::Utf8, true),
+            Field::new("centroid_gx", DataType::Int32, false),
+            Field::new("centroid_gy", DataType::Int32, false),
+            Field::new("geom", DataType::Binary, true),
+            Field::new("osm_tags", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(UInt8Array::from(vec![14, 14, 14, 15])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![7, 7, 9, 11])) as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    Some("relation"),
+                    Some("relation"),
+                    Some("way"),
+                    Some("node"),
+                ])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![50, 100, 5050, 70])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![50, 100, 5050, 60])) as ArrayRef,
+                Arc::new(BinaryArray::from(vec![
+                    Some(part_a.as_slice()),
+                    Some(part_b.as_slice()),
+                    Some(other.as_slice()),
+                    None,
+                ])) as ArrayRef,
+                Arc::new(StringArray::from(vec![
+                    Some(r#"{"rating":"100 MVA"}"#),
+                    Some(r#"{"rating":"100 MVA"}"#),
+                    Some(r#"{"rating":"10 MVA"}"#),
+                    Some(r#"{"rating":"100 MVA"}"#),
+                ])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        let batches = std::slice::from_ref(&batch);
+        let facilities = SubstationFacilities::build(batches);
+        let units = transformer_units(batches);
+        assert_eq!(units.len(), 1);
+        // The unit at (70, 60) sits in the parts' overlap: one count.
+        let feed_a = facilities.feed("relation", 7, &[], &units);
+        assert_eq!(feed_a.rated_count, 1);
+        assert_eq!(feed_a.rated_mva_sum, 100.0);
+        // Part B reads the same union (its own polygon is empty here, so a
+        // per-part feed would find nothing): one truth, never tag + units.
+        let feed_b = facilities.feed("relation", 7, &[], &units);
+        assert_eq!((feed_b.rated_mva_sum, feed_b.rated_count), (100.0, 1));
+        let (mva, _) = substation_power(&tags(&[("rating", "100 MVA")]), &feed_b);
+        assert_eq!(mva, Some(100.0));
+        // The unrelated way groups alone and reads its own tags.
+        let feed_other = facilities.feed(
+            "way",
+            9,
+            &[(5000, 5000), (5100, 5000), (5100, 5100), (5000, 5100)],
+            &units,
+        );
+        assert_eq!(feed_other.rated_count, 0);
+        // Unknown rows fall back to their own polygon, not an empty union.
+        let feed_fallback =
+            facilities.feed("way", 404, &[(0, 0), (100, 0), (100, 100), (0, 100)], &units);
+        assert_eq!(feed_fallback.rated_count, 1);
     }
 
     #[test]

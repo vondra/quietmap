@@ -39,6 +39,7 @@ pub fn load_sources(
     // the units in the neighbours it touches; rows still emit once each.
     let mut global_transformers = Vec::new();
     let mut global_solar = Vec::new();
+    let mut global_facilities = square_store::osm_evidence::SubstationFacilities::default();
     for square in squares {
         let relative = format!("z9/{}/{}/industrial.arrow", square.x, square.y);
         if let Some((bytes, _)) = manifest.read_arrow(root, &relative)? {
@@ -47,11 +48,13 @@ pub fn load_sources(
             global_transformers
                 .extend(square_store::osm_evidence::transformer_units(&batches));
             global_solar.extend(square_store::osm_evidence::solar_plants(&batches));
+            global_facilities.extend(&batches);
         }
     }
     let global_industrial_joins = points::FileJoins {
         transformers: global_transformers,
         solar_plants: global_solar,
+        substation_facilities: global_facilities,
         ..Default::default()
     };
     for square in squares {

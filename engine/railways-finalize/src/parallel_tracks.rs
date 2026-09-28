@@ -111,13 +111,17 @@ fn sibling_lateral_m(a: &Expanded, ta: &Track, b: &Expanded, tb: &Track) -> Opti
 /// How far `way` actually runs beside `a`, summing every row of that way. One way is stored as
 /// many rows, and the cross-section keeps only the row under the midpoint, so the length gate
 /// has to see the whole way: a 36 m cut of a full twin still accompanies the track, while a 10 m
-/// scrap that merely covers the midpoint does not.
+/// scrap that merely covers the midpoint does not. Identity, heading and
+/// shared-node gates always apply per row; the lateral gate only when
+/// `lateral_gate` is set — the transitive closure passes false, since
+/// lateral distance is the one gate it relaxes.
 fn way_overlap_m(
     a: &Expanded,
     ta: &Track,
     way: &[usize],
     rows: &[Expanded],
     tracks: &[Option<Track>],
+    lateral_gate: bool,
 ) -> f64 {
     let scalar = |p: [f64; 2]| p[0] * ta.direction[0] + p[1] * ta.direction[1];
     let (a0, a1) = (scalar(ta.start), scalar(ta.end));
@@ -127,10 +131,12 @@ fn way_overlap_m(
         .filter_map(|&index| {
             let tb = tracks[index].as_ref()?;
             let limit = sibling_limit(a, ta, &rows[index], tb)?;
-            let (dx, dy) = (tb.start[0] - ta.start[0], tb.start[1] - ta.start[1]);
-            let separation = (dx * ta.direction[1] - dy * ta.direction[0]).abs();
-            if separation >= limit {
-                return None;
+            if lateral_gate {
+                let (dx, dy) = (tb.start[0] - ta.start[0], tb.start[1] - ta.start[1]);
+                let separation = (dx * ta.direction[1] - dy * ta.direction[0]).abs();
+                if separation >= limit {
+                    return None;
+                }
             }
             let (s, e) = (scalar(tb.start), scalar(tb.end));
             Some((s.min(e).max(a_min), s.max(e).min(a_max)))
@@ -157,9 +163,12 @@ fn way_overlap_m(
 /// other way beside it, closed transitively over ways (a track beside a
 /// sibling's midpoint joins the section even past the lateral gate from this
 /// midpoint, so three tracks at 0/10/20 m share one three-track section
-/// instead of rendering 4/3 of the line value). One representative per way
-/// keeps split tracks local: a way cut into many rows still meets its twin
-/// once per cross-section.
+/// instead of rendering 4/3 of the line value). The closure relaxes only
+/// the lateral gate: identity, heading, shared-node and overlap gates still
+/// apply against the section owner, so an unnamed middle never bridges two
+/// differently named corridors. One representative per way keeps split
+/// tracks local: a way cut into many rows still meets its twin once per
+/// cross-section.
 fn cross_sections(rows: &[Expanded], tracks: &[Option<Track>]) -> Vec<Vec<usize>> {
     let cell = |value: f64| (value / SAME_TOKEN_LATERAL_M).floor() as i64;
     let mut buckets: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
@@ -213,8 +222,14 @@ fn cross_sections(rows: &[Expanded], tracks: &[Option<Track>]) -> Vec<Vec<usize>
             let span_m = (track.end[0] - track.start[0]).hypot(track.end[1] - track.start[1]);
             let min_overlap = MIN_OVERLAP_M.max(MIN_OVERLAP_FRACTION * span_m);
             siblings.retain(|&other| {
-                way_overlap_m(&rows[index], track, &rows_of_way[&rows[other].osm_id], rows, tracks)
-                    >= min_overlap
+                way_overlap_m(
+                    &rows[index],
+                    track,
+                    &rows_of_way[&rows[other].osm_id],
+                    rows,
+                    tracks,
+                    true,
+                ) >= min_overlap
             });
             siblings.sort_by_key(|&other| rows[other].osm_id);
             members.extend(siblings);
@@ -223,10 +238,12 @@ fn cross_sections(rows: &[Expanded], tracks: &[Option<Track>]) -> Vec<Vec<usize>
     }
     // Transitive closure over ways: for each row, every way reachable
     // through members' direct sections joins with the representative its
-    // discoverer already holds (nearest beside a member midpoint, already
-    // overlap-gated). Discovery order is fixed (self first, then members in
-    // section order), so closures ignore input row order like the direct
-    // sections do.
+    // discoverer already holds (nearest beside a member midpoint), provided
+    // it passes every non-lateral sibling gate against the section owner:
+    // corridor identity, heading, shared nodes (sibling_limit) and the
+    // owner's overlap bar. Discovery order is fixed (self first, then
+    // members in section order), so closures ignore input row order like
+    // the direct sections do.
     sections
         .iter()
         .enumerate()
@@ -234,12 +251,38 @@ fn cross_sections(rows: &[Expanded], tracks: &[Option<Track>]) -> Vec<Vec<usize>
             let mut seen: HashSet<i64> = HashSet::from([rows[index].osm_id]);
             let mut grown = vec![index];
             let mut queue = vec![index];
+            let own = tracks[index].as_ref();
+            let min_overlap = own.map(|track| {
+                let span_m =
+                    (track.end[0] - track.start[0]).hypot(track.end[1] - track.start[1]);
+                MIN_OVERLAP_M.max(MIN_OVERLAP_FRACTION * span_m)
+            });
             while let Some(member) = queue.pop() {
                 for &other in &sections[member] {
-                    if seen.insert(rows[other].osm_id) {
-                        queue.push(other);
-                        grown.push(other);
+                    if !seen.insert(rows[other].osm_id) {
+                        continue;
                     }
+                    let (Some(own), Some(candidate), Some(bar)) =
+                        (own, tracks[other].as_ref(), min_overlap)
+                    else {
+                        continue;
+                    };
+                    if sibling_limit(&rows[index], own, &rows[other], candidate).is_none() {
+                        continue;
+                    }
+                    if way_overlap_m(
+                        &rows[index],
+                        own,
+                        &rows_of_way[&rows[other].osm_id],
+                        rows,
+                        tracks,
+                        false,
+                    ) < bar
+                    {
+                        continue;
+                    }
+                    queue.push(other);
+                    grown.push(other);
                 }
             }
             grown[1..].sort_by_key(|&other| rows[other].osm_id);

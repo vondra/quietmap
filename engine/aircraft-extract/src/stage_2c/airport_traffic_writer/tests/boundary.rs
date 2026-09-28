@@ -93,9 +93,6 @@ fn partitioned_run(lat: f64, lon: f64, split: bool) -> Vec<AirportTrafficRow> {
         assert_eq!(work.input_bytes, input.metadata().unwrap().len());
         assert_eq!(work.candidates.len(), if split { 2 } else { 1 });
         assert_eq!(work.cached_lines, 2);
-        assert_eq!(work.owned_lines, if split { 1 } else { 2 });
-        assert_eq!(work.maximum_counter_rows, 54 * work.owned_lines);
-        assert!(work.maximum_airport_key_bytes >= "TEST".len());
     }
     assert!(!prepared.join(".airport_traffic_pending").exists());
     let n = run_stage_2c(&inputs, &[area], &prepared, &crate::provider_receipt::window_of(12, 365), None).unwrap();
@@ -242,7 +239,6 @@ fn one_flight_of_both_provenances_keeps_every_counter_row_and_counts_as_primary(
     let index = crate::airport_index::AerodromeIndex::build(std::slice::from_ref(&area));
     let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap().works;
     assert_eq!(plan.len(), 1);
-    assert_eq!(plan[0].maximum_counter_rows, 99);
     run_stage_2c(&inputs, &[area], &prepared, &crate::provider_receipt::window_of(12, 365), None).unwrap();
     let rows = read_airport_traffic(&dir.join("airport_traffic.arrow")).unwrap();
     assert_eq!(rows.len(), 7);
@@ -281,7 +277,7 @@ fn one_flight_of_both_provenances_keeps_every_counter_row_and_counts_as_primary(
 }
 
 #[test]
-fn oversized_ground_owner_retries_within_a_bounded_pool_without_rewriting_successes_or_retrying_corruption() {
+fn oversized_ground_owner_retries_alone_without_rewriting_successes_or_retrying_corruption() {
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Mutex,
@@ -350,21 +346,24 @@ fn oversized_ground_owner_retries_within_a_bounded_pool_without_rewriting_succes
     assert!(charges.iter().all(|&bytes| bytes < process_limit));
     let calls = Mutex::new(Vec::new());
     let active = AtomicUsize::new(0);
+    let caller_thread = Mutex::new(None);
+    let retry_threads = Mutex::new(Vec::new());
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(2)
         .build()
         .unwrap();
     let count = pool
         .install(|| {
-            run_with_retry_pool(&plan, worker_limit, process_limit, |work, limit| {
+            *caller_thread.lock().unwrap() = Some(std::thread::current().id());
+            run_with_serial_retry(&plan, worker_limit, process_limit, |work, limit| {
                 let concurrent = active.fetch_add(1, Ordering::SeqCst) + 1;
-                if limit == worker_limit {
-                    // Phase 1 packs worker allowances inside the process limit.
-                    assert!(concurrent as u64 * limit <= process_limit);
-                } else {
-                    // Retries run on a narrow pool with the process cap each.
+                // Live workers × their allowance never exceed the process
+                // allowance, in phase 1 or on retry: a retry admitted to the
+                // whole remaining process allowance must run alone.
+                assert!(concurrent as u64 * limit <= process_limit);
+                if limit != worker_limit {
+                    retry_threads.lock().unwrap().push(std::thread::current().id());
                     assert_eq!(limit, process_limit);
-                    assert!(concurrent <= 8);
                 }
                 calls.lock().unwrap().push((work.owner, limit));
                 let result =
@@ -375,6 +374,17 @@ fn oversized_ground_owner_retries_within_a_bounded_pool_without_rewriting_succes
         })
         .unwrap();
     assert_eq!(count, 2);
+    // The heavy owner retried, and every retry ran on the calling thread:
+    // a second pool would admit the whole process allowance again per
+    // thread (8 threads × the cap), which the charge arithmetic (≥3×
+    // actual) cannot cover.
+    let retries = retry_threads.lock().unwrap();
+    assert_eq!(retries.len(), 1);
+    assert!(
+        retries.iter().all(|id| Some(*id) == *caller_thread.lock().unwrap()),
+        "retries left the calling thread: {retries:?}"
+    );
+    drop(retries);
     for (work, charged) in plan.iter().zip(charges) {
         assert_eq!(
             calls
@@ -408,7 +418,7 @@ fn oversized_ground_owner_retries_within_a_bounded_pool_without_rewriting_succes
     let work = &plan[..1];
     let base = work[0].indexed_allocation().unwrap();
     let attempts = AtomicUsize::new(0);
-    let refused = run_with_retry_pool(work, base, base + 1, |work, limit| {
+    let refused = run_with_serial_retry(work, base, base + 1, |work, limit| {
         attempts.fetch_add(1, Ordering::SeqCst);
         run_ground_traffic_work(work, &prepared, &output, &index, &crate::provider_receipt::window_of(12, 365), limit)
             .map(|outcome| outcome.counter_rows > 0)
@@ -419,7 +429,7 @@ fn oversized_ground_owner_retries_within_a_bounded_pool_without_rewriting_succes
     // Corruption after the routing precheck must not trigger the memory retry.
     std::fs::write(&work[0].inputs[0], b"corrupt").unwrap();
     attempts.store(0, Ordering::SeqCst);
-    let corrupt = run_with_retry_pool(work, worker_limit, process_limit, |work, limit| {
+    let corrupt = run_with_serial_retry(work, worker_limit, process_limit, |work, limit| {
         attempts.fetch_add(1, Ordering::SeqCst);
         run_ground_traffic_work(work, &prepared, &output, &index, &crate::provider_receipt::window_of(12, 365), limit)
             .map(|outcome| outcome.counter_rows > 0)

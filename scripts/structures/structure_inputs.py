@@ -225,13 +225,28 @@ def read_overture_parquet(parquet_dir, square):
     return rows, inputs
 
 
-def read_official_cache(cache_dir, square, schema, contract_key, contract_version):
+def centroid_within_halo_m(clat, clon, span, halo_m):
+    """The centroid is within halo_m of the square span (a replacement-support
+    hop from a neighbour square). Longitude wraps at the antimeridian."""
+    lon0, lat_top, lon1, lat_bot = span
+    dlat = 0.0 if lat_bot <= clat <= lat_top else min(abs(clat - lat_bot), abs(clat - lat_top))
+    east = qmgrid.wrapped_longitude_delta(lon0, clon)
+    width = qmgrid.wrapped_longitude_delta(lon0, lon1)
+    dlon = 0.0 if 0.0 <= east <= width else min(abs(east), abs(east - width))
+    metres_per_deg = 111_320.0 * max(0.01, math.cos(math.radians(clat)))
+    return math.hypot(dlat * 111_320.0, dlon * metres_per_deg) <= halo_m
+
+
+def read_official_cache(cache_dir, square, schema, contract_key, contract_version, halo_m=0.0):
     """The square's rows from the touched 1-degree official-cache tiles (barrier
     lines or measured footprints), assigned by centroid like Overture rows.
-    Every tile carries the cache contract; a tile without it fails the build.
-    Returns (rows, every contributing parquet file)."""
+    With halo_m the loader also keeps rows whose centroid is within halo_m
+    of the square span for replacement support; those rows carry owned=False
+    and must never emit. Every tile carries the cache contract; a tile
+    without it fails the build. Returns (rows, every contributing file)."""
     rows, inputs = [], []
-    for _lat, _lon, src in official_tile_sources(cache_dir, square):
+    span = qmgrid.square_lonlat_span(*square) if halo_m > 0 else None
+    for _lat, _lon, src in official_tile_sources(cache_dir, square, expand_m=halo_m):
         inputs.append(src)
         table = pq.read_table(src, columns=[name for name in schema.names])
         contract = (table.schema.metadata or {}).get(contract_key.encode())
@@ -243,9 +258,10 @@ def read_official_cache(cache_dir, square, schema, contract_key, contract_versio
             if geom.is_empty:
                 continue
             clat, clon = footprint_centroid(geom)
-            if qmgrid.square_of(clat, clon) != square:
+            owned = qmgrid.square_of(clat, clon) == square
+            if not owned and (span is None or not centroid_within_halo_m(clat, clon, span, halo_m)):
                 continue
-            row = {"geom": geom, "clat": clat, "clon": clon}
+            row = {"geom": geom, "clat": clat, "clon": clon, "owned": owned}
             for name in schema.names:
                 if name != "geometry":
                     row[name] = value[name]
