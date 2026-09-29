@@ -41,7 +41,7 @@ impl Receiver<'_, '_> {
 }
 
 /// The ray ends of a source at this receiver.
-fn ray_ends(receiver: &Receiver, source: &tiles::sources::Attribute) -> RayEnds {
+fn ray_ends(receiver: &Receiver, source: &SourceAttribute) -> RayEnds {
     RayEnds {
         source_height_m: source.height_m,
         receiver_altitude_m: receiver.altitude_m,
@@ -59,7 +59,7 @@ pub fn trace(
     source: &SourceAttribute,
     scratch: &mut Scratch,
 ) -> Result<RayTerms, String> {
-    let ends = ray_ends(receiver, &source.attribute);
+    let ends = ray_ends(receiver, source);
     receiver
         .ground
         .fill_profile(point, receiver.position, &mut scratch.profile)?;
@@ -84,12 +84,11 @@ pub fn received_energy(
     scratch: &mut Scratch,
 ) -> Result<[f64; PERIODS], String> {
     let emission = &source.energy;
-    let source = &source.attribute;
     let reflection = energy(receiver.reflection_db);
     let mut received = [0.0; PERIODS];
     let ends = ray_ends(receiver, source);
     let [a, b] = candidate.ends_m;
-    if !candidate.piece.is_line() {
+    if !candidate.line {
         let transfer = ray(receiver, a, true, &ends, scratch)?;
         let distance = candidate
             .distance_m

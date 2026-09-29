@@ -2,7 +2,7 @@
 //! everything left out stay below (10^(0.1/10) - 1) times the energy evaluated, per period and
 //! across all rings. Never a per-piece threshold (dev4's false-quiet bug 62e7daa2).
 
-use crate::candidates::{Candidate, SourceAttribute};
+use crate::candidates::{Attributes, Candidate};
 use crate::evaluate::{Receiver, Scratch, received_energy};
 use crate::listing::EvaluatedPiece;
 use crate::update::Contributor;
@@ -81,7 +81,7 @@ impl LayerSelection {
 pub fn select(
     selections: &mut [LayerSelection],
     receiver: &Receiver,
-    attributes: &[SourceAttribute],
+    attributes: &Attributes,
     exact: bool,
     keep_pieces: bool,
 ) -> Result<(), String> {

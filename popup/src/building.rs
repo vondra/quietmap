@@ -5,7 +5,7 @@
 //! what stands behind it, and its footprint does not count for the reflection bonus (2.8).
 
 use crate::answer::RECEIVER_HEIGHT_M;
-use crate::candidates::{Candidate, SourceAttribute, lden_weighted};
+use crate::candidates::{Attributes, Candidate, lden_weighted};
 use crate::evaluate::{Receiver, Scratch, received_energy};
 use crate::obstacles::{FacadeReceiver, Footprint, Scene};
 use crate::scene::Ground;
@@ -63,7 +63,7 @@ pub fn loudest_facade(
     footprint: &Footprint,
     receivers: &[FacadeReceiver],
     candidates: &[&Candidate],
-    attributes: &[SourceAttribute],
+    attributes: &Attributes,
     ground: &Ground<'_>,
     obstacles: &Scene<'_>,
     weather: FavourableProbability,

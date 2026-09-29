@@ -4,7 +4,7 @@
 
 use crate::building::{BuildingClick, loudest_facade};
 use crate::candidates::{
-    Candidate, DisplayRef, GROUND_REACH_M, SourceAttribute, TileCandidates, collect,
+    Attributes, Candidate, DisplayRef, GROUND_REACH_M, TileCandidates, collect,
 };
 use crate::evaluate::Receiver;
 use crate::listing::list_pieces;
@@ -97,7 +97,7 @@ pub fn answer(
     let (mut candidate_seconds, mut evaluate_seconds) = (0.0f64, 0.0f64);
     let mut station: Option<Station> = None;
     let mut building: Option<BuildingClick> = None;
-    let mut attributes: Vec<SourceAttribute> = Vec::new();
+    let mut attributes = Attributes::default();
     let weather = release.weather.at(lat, lon);
     let mut ring = 0;
     while ring < max_ring {
@@ -196,7 +196,7 @@ pub fn answer(
                 collect(
                     sources,
                     *tile,
-                    (ring as usize, *tile_index),
+                    (ring as u16, *tile_index as u16),
                     &ground,
                     collect_at,
                     reach,
@@ -204,20 +204,21 @@ pub fn answer(
                 )
             })
             .collect();
-        let mut ring_candidates: Vec<Candidate> = Vec::new();
         for result in collected {
             let (tile_attributes, candidates) = result?;
-            let first = attributes.len();
-            attributes.extend(tile_attributes);
-            ring_candidates.extend(candidates.into_iter().map(|mut candidate| {
-                candidate.attribute += first;
-                candidate
-            }));
+            let list = attributes.push(tile_attributes);
+            for mut candidate in candidates {
+                candidate.attribute.list = list;
+                selections[candidate.layer as usize].pending.push(candidate);
+            }
         }
         candidate_seconds += candidates_started.elapsed().as_secs_f64();
         let evaluate_started = std::time::Instant::now();
         if let Some(footprint) = &enclosing {
-            let everything: Vec<&Candidate> = ring_candidates.iter().collect();
+            let everything: Vec<&Candidate> = selections
+                .iter()
+                .flat_map(|selection| selection.pending.iter())
+                .collect();
             let facade = loudest_facade(
                 footprint,
                 &facade_receivers,
@@ -240,16 +241,15 @@ pub fn answer(
                 reflection_db: facade.reflection_db,
             };
             let gain = receiver_gain(weather.maximum(), chosen.reflection_db);
-            ring_candidates.retain_mut(|candidate| {
-                candidate.bound_at(chosen.position, &attributes[candidate.attribute], &gain)
-            });
+            for selection in &mut selections {
+                selection.pending.retain_mut(|candidate| {
+                    candidate.bound_at(chosen.position, &attributes[candidate.attribute], &gain)
+                });
+            }
             max_ring = rings_needed(&frame, centre, chosen.position).min(most_rings);
             station = Some(chosen);
         }
         let station = station.expect("chosen after the first read");
-        for candidate in ring_candidates {
-            selections[candidate.layer as usize].pending.push(candidate);
-        }
         let evaluation = Receiver {
             ground: &ground,
             obstacles: &obstacles,
@@ -272,11 +272,11 @@ pub fn answer(
             Vec::new()
         };
         let display_json = |display: DisplayRef, layer: Layer| -> Result<String, String> {
-            let read = rings[display.ring]
+            let read = rings[usize::from(display.ring)]
                 .get()
                 .ok_or("display of an unread ring")?;
             let bytes = read
-                .file(display.tile, Kind::Sources)
+                .file(usize::from(display.tile), Kind::Sources)
                 .ok_or("display of an absent sources file")?;
             let sources = Sources::parse(bytes).map_err(|e| e.to_string())?;
             let values: Vec<serde_json::Value> = serde_json::from_str(

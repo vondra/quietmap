@@ -2,7 +2,7 @@
 //! layer with their emission, the buildings and walls on the ray from their closest point and the
 //! terms of that ray, for piece-by-piece comparisons with dev4. Never part of a visitor's answer.
 
-use crate::candidates::{Candidate, SourceAttribute, lden_weighted};
+use crate::candidates::{AttributeRef, Attributes, Candidate, lden_weighted};
 use crate::evaluate::{Receiver, Scratch, trace};
 use crate::selection::LayerSelection;
 use physics::bands::{BANDS, PERIODS, energy};
@@ -18,8 +18,7 @@ pub struct EvaluatedPiece {
     /// A-weighted emission per period (per metre for lines), linear.
     pub emission: [f64; PERIODS],
     pub group_key: u64,
-    /// Index into the click's attribute list.
-    pub attribute: usize,
+    pub attribute: AttributeRef,
     /// Buildings and walls crossed by the ray from the piece's closest point: distance from the
     /// receiver (m) and height (m), filled when listed.
     pub crossings: Vec<(f64, f64)>,
@@ -41,11 +40,7 @@ pub struct PieceTrace {
 }
 
 impl EvaluatedPiece {
-    pub fn of(
-        candidate: &Candidate,
-        attributes: &[SourceAttribute],
-        energy: [f64; PERIODS],
-    ) -> Self {
+    pub fn of(candidate: &Candidate, attributes: &Attributes, energy: [f64; PERIODS]) -> Self {
         EvaluatedPiece {
             layer: candidate.layer,
             ends_m: candidate.ends_m,
@@ -79,7 +74,7 @@ pub fn list_pieces(
     selections: &mut [LayerSelection],
     count: usize,
     receiver: &Receiver,
-    attributes: &[SourceAttribute],
+    attributes: &Attributes,
 ) -> Result<Vec<EvaluatedPiece>, String> {
     let mut listed = Vec::new();
     let mut scratch = Scratch::default();

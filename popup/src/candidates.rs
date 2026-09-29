@@ -5,8 +5,12 @@ use crate::scene::Ground;
 use physics::bands::BANDS;
 use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy};
 use physics::bound::{Spread, emission_energy, received_energy_bound};
+use rayon::prelude::*;
 use tiles::geo::TileId;
-use tiles::sources::{Attribute, Layer, Piece, Sources};
+use tiles::sources::{Layer, Sources};
+
+/// Attributes or pieces per parallel task of one tile.
+const PARALLEL_CHUNK: usize = 4_096;
 
 /// Ground sources beyond this horizontal distance are never evaluated, in any mode, so the answer
 /// never depends on which tiles were read (dev4's ceiling was 11,622 m).
@@ -15,26 +19,62 @@ pub const GROUND_REACH_M: f64 = 12_000.0;
 /// Where a candidate's display text lives: ring, tile index in the ring, attribute in the tile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DisplayRef {
-    pub ring: usize,
-    pub tile: usize,
+    pub ring: u16,
+    pub tile: u16,
     pub attribute: u32,
 }
 
-/// An attribute with its A-weighted linear band energies, computed once per click.
+/// What the physics needs of a source's attribute, with its A-weighted linear band energies
+/// (per metre for lines), computed once per click.
 pub struct SourceAttribute {
-    pub attribute: Attribute,
+    pub layer: Layer,
+    pub height_m: f64,
+    pub ground_percent: u8,
+    pub platform_half_width_m: f64,
+    pub exclusion_radius_m: f64,
+    pub footprint_id: u64,
+    pub group_key: u64,
     pub energy: [[f64; BANDS]; PERIODS],
 }
 
-/// A sources file's attributes and its candidates (indexing those attributes).
+/// Which attribute a candidate carries: one list per sources file read, then the index in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttributeRef {
+    pub list: u32,
+    pub index: u32,
+}
+
+/// The attributes of every sources file a click has read, one list per file, never copied.
+#[derive(Default)]
+pub struct Attributes {
+    lists: Vec<Vec<SourceAttribute>>,
+}
+
+impl Attributes {
+    /// Keeps a file's attributes; returns the list number its candidates refer to.
+    pub fn push(&mut self, list: Vec<SourceAttribute>) -> u32 {
+        self.lists.push(list);
+        (self.lists.len() - 1) as u32
+    }
+}
+
+impl std::ops::Index<AttributeRef> for Attributes {
+    type Output = SourceAttribute;
+
+    fn index(&self, at: AttributeRef) -> &SourceAttribute {
+        &self.lists[at.list as usize][at.index as usize]
+    }
+}
+
+/// A sources file's attributes and its candidates (their `attribute.list` still to be set).
 pub type TileCandidates = (Vec<SourceAttribute>, Vec<Candidate>);
 
 #[derive(Clone)]
 pub struct Candidate {
     pub layer: Layer,
-    pub piece: Piece,
-    /// Index into the click's attribute list.
-    pub attribute: usize,
+    /// A line piece, else a point.
+    pub line: bool,
+    pub attribute: AttributeRef,
     pub ends_m: [[f64; 2]; 2],
     pub ground_m: [f64; 2],
     pub distance_m: f64,
@@ -76,7 +116,7 @@ pub fn lden_weighted(periods: &[f64; PERIODS]) -> f64 {
 impl Candidate {
     /// How the piece spreads (a line's length is its 3D length).
     fn spread(&self) -> Spread {
-        if self.piece.is_line() {
+        if self.line {
             let [a, b] = self.ends_m;
             let horizontal = (b[0] - a[0]).hypot(b[1] - a[1]);
             Spread::Line {
@@ -90,7 +130,7 @@ impl Candidate {
     /// Horizontal distance from `receiver` (click metres) to the piece.
     pub fn distance_from(&self, receiver: [f64; 2]) -> f64 {
         let [a, b] = self.ends_m;
-        if self.piece.is_line() {
+        if self.line {
             distance_from(receiver, a, b)
         } else {
             (a[0] - receiver[0]).hypot(a[1] - receiver[1])
@@ -128,64 +168,82 @@ impl Candidate {
 pub fn collect(
     sources: &Sources<'_>,
     tile: TileId,
-    display: (usize, usize),
+    display: (u16, u16),
     ground: &Ground<'_>,
     receiver: [f64; 2],
     reach_m: f64,
     receiver_gain: &[f64; PERIODS],
 ) -> Result<TileCandidates, String> {
+    // Both loops run in parallel chunks: a dense tile holds a million sources.
     let attributes = (0..sources.attribute_count())
+        .into_par_iter()
+        .with_min_len(PARALLEL_CHUNK)
         .map(|index| {
             let attribute = sources
                 .attribute(index as u32)
                 .map_err(|error| error.to_string())?;
             Ok(SourceAttribute {
+                layer: attribute.layer,
+                height_m: attribute.height_m,
+                ground_percent: attribute.ground_percent,
+                platform_half_width_m: attribute.platform_half_width_m,
+                exclusion_radius_m: attribute.exclusion_radius_m,
+                footprint_id: attribute.footprint_id,
+                group_key: attribute.group_key,
                 energy: emission_energy(&attribute.emission),
-                attribute,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let mut candidates = Vec::with_capacity(sources.piece_count());
-    for index in 0..sources.piece_count() {
-        let piece = sources.piece(index).map_err(|error| error.to_string())?;
-        let source = &attributes[piece.attribute as usize];
-        let ends_m = piece.ends.map(|local| {
-            let global = tile.global(local);
-            ground
-                .frame
-                .metres_of_steps([global.x as f64, global.y as f64])
-        });
-        let near = if piece.is_line() {
-            distance_from(receiver, ends_m[0], ends_m[1])
-        } else {
-            (ends_m[0][0] - receiver[0]).hypot(ends_m[0][1] - receiver[1])
-        };
-        if near > reach_m {
-            continue;
-        }
-        let ground_m = [
-            ground.at(ends_m[0])?.height_m,
-            ground.at(ends_m[1])?.height_m,
-        ];
-        let mut candidate = Candidate {
-            layer: source.attribute.layer,
-            order: 0.0,
-            display: DisplayRef {
-                ring: display.0,
-                tile: display.1,
-                attribute: piece.attribute,
-            },
-            group_key: source.attribute.group_key,
-            attribute: piece.attribute as usize,
-            piece,
-            ends_m,
-            ground_m,
-            distance_m: near,
-            bound: [0.0; PERIODS],
-        };
-        candidate.bound_at(receiver, source, receiver_gain);
-        candidates.push(candidate);
-    }
+    let candidates = (0..sources.piece_count())
+        .into_par_iter()
+        .with_min_len(PARALLEL_CHUNK)
+        .map(|index| -> Result<Option<Candidate>, String> {
+            let piece = sources.piece(index).map_err(|error| error.to_string())?;
+            let source = &attributes[piece.attribute as usize];
+            let ends_m = piece.ends.map(|local| {
+                let global = tile.global(local);
+                ground
+                    .frame
+                    .metres_of_steps([global.x as f64, global.y as f64])
+            });
+            let near = if piece.is_line() {
+                distance_from(receiver, ends_m[0], ends_m[1])
+            } else {
+                (ends_m[0][0] - receiver[0]).hypot(ends_m[0][1] - receiver[1])
+            };
+            if near > reach_m {
+                return Ok(None);
+            }
+            let start_ground = ground.at(ends_m[0])?.height_m;
+            let ground_m = if piece.is_line() {
+                [start_ground, ground.at(ends_m[1])?.height_m]
+            } else {
+                [start_ground; 2]
+            };
+            let mut candidate = Candidate {
+                layer: source.layer,
+                line: piece.is_line(),
+                order: 0.0,
+                display: DisplayRef {
+                    ring: display.0,
+                    tile: display.1,
+                    attribute: piece.attribute,
+                },
+                group_key: source.group_key,
+                attribute: AttributeRef {
+                    list: 0,
+                    index: piece.attribute,
+                },
+                ends_m,
+                ground_m,
+                distance_m: near,
+                bound: [0.0; PERIODS],
+            };
+            candidate.bound_at(receiver, source, receiver_gain);
+            Ok(Some(candidate))
+        })
+        .filter_map(Result::transpose)
+        .collect::<Result<Vec<_>, String>>()?;
     Ok((attributes, candidates))
 }
 
