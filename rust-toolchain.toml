@@ -1,0 +1,5 @@
+# Pinned so lint and format rules change only by a reviewed toolchain bump.
+[toolchain]
+channel = "1.96.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

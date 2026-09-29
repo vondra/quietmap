@@ -18,6 +18,6 @@
   {"name": "courtyard", "lat": 50.07651, "lon": 14.44107, "what": "closed courtyard of a Vinohrady block"},
   {"name": "building_click", "lat": 50.07646, "lon": 14.44097, "what": "click on the building beside the courtyard"},
   {"name": "approach_path", "lat": 50.1456, "lon": 14.3787, "what": "under the Prague runway 24 approach, Suchdol"},
-  {"name": "railway_side", "lat": 49.9134, "lon": 14.2403, "what": "beside the Prague-Beroun main line, Revnice"},
+  {"name": "railway_side", "lat": 49.91686, "lon": 14.23987, "what": "30 m from the Prague-Beroun main line in clear sight, Revnice"},
   {"name": "harbour", "lat": 53.54545, "lon": 9.96909, "what": "Hamburg harbour, Landungsbruecken"}
 ]

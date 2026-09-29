@@ -1,0 +1,14 @@
+# One workspace: physics kernels, tile formats, builders, the popup and the server.
+# Build with `cargo build --release`; binaries land in target/release/.
+[workspace]
+resolver = "3"
+members = ["tiles", "physics", "build", "popup"]
+
+[workspace.package]
+edition = "2024"
+publish = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+debug = "line-tables-only"

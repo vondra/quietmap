@@ -1,0 +1,17 @@
+[package]
+name = "build"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "qm-build"
+path = "src/main.rs"
+
+[dependencies]
+tiles = { path = "../tiles" }
+arrow-array = "60"
+arrow-ipc = "60"
+rayon = "1.12"
+serde_json = "1"
+physics = { path = "../physics" }

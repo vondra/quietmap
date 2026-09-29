@@ -1,0 +1,168 @@
+//! The full physics of one source at the receiver: a line piece through the point-sum quadrature,
+//! each node on its own ray, or a point on one ray; received A-weighted energy per period,
+//! including the receiver reflection.
+
+use crate::candidates::Candidate;
+use crate::candidates::SourceAttribute;
+use crate::obstacles::Scene;
+use crate::scene::Ground;
+use physics::bands::{BANDS, PERIODS, energy};
+use physics::bound::POINT_DIVERGENCE_OFFSET_DB;
+use physics::line::{LinePieceGeometry, LineQuadratureNode, SkylineArc, line_quadrature_nodes};
+use physics::profile::Profile;
+use physics::ray::{Crossing, RayEnds, RayScratch, RayTerms, ray_terms, ray_transfer};
+use physics::weather::FavourableProbability;
+
+/// What every source of one click shares.
+pub struct Receiver<'s, 'a> {
+    pub ground: &'s Ground<'a>,
+    pub obstacles: &'s Scene<'a>,
+    pub altitude_m: f64,
+    pub weather: FavourableProbability,
+    pub reflection_db: f64,
+}
+
+/// Per-thread buffers.
+#[derive(Default)]
+pub struct Scratch {
+    nodes: Vec<LineQuadratureNode>,
+    profile: Profile,
+    crossings: Vec<Crossing>,
+    ray: RayScratch,
+}
+
+/// The ray ends of a source at this receiver.
+fn ray_ends(receiver: &Receiver, source: &tiles::sources::Attribute) -> RayEnds {
+    RayEnds {
+        source_height_m: source.height_m,
+        receiver_altitude_m: receiver.altitude_m,
+        source_ground_factor: (source.ground_percent != tiles::sources::GROUND_FROM_TERRAIN)
+            .then(|| f64::from(source.ground_percent) / 100.0),
+        platform_half_width_m: source.platform_half_width_m,
+        own_footprint: source.footprint_id,
+    }
+}
+
+/// The terms of the ray from `point` of `source` to the receiver (traces and comparisons).
+pub fn trace(
+    receiver: &Receiver,
+    point: [f64; 2],
+    source: &SourceAttribute,
+    scratch: &mut Scratch,
+) -> Result<RayTerms, String> {
+    let ends = ray_ends(receiver, &source.attribute);
+    receiver.ground.fill_profile(point, &mut scratch.profile)?;
+    receiver
+        .obstacles
+        .crossings(point, [0.0, 0.0], &mut scratch.crossings)?;
+    let azimuth = (-point[1]).atan2(-point[0]);
+    let p = std::array::from_fn(|period| receiver.weather.at(period, azimuth));
+    Ok(ray_terms(
+        &scratch.profile,
+        &scratch.crossings,
+        &ends,
+        p,
+        &mut scratch.ray,
+    ))
+}
+
+/// Received A-weighted energy per period of one candidate with its attribute.
+pub fn received_energy(
+    receiver: &Receiver,
+    candidate: &Candidate,
+    source: &SourceAttribute,
+    scratch: &mut Scratch,
+) -> Result<[f64; PERIODS], String> {
+    let emission = &source.energy;
+    let source = &source.attribute;
+    let reflection = energy(receiver.reflection_db);
+    let mut received = [0.0; PERIODS];
+    let ends = ray_ends(receiver, source);
+    let [a, b] = candidate.ends_m;
+    if !candidate.piece.is_line() {
+        let transfer = ray(receiver, a, true, &ends, scratch)?;
+        let distance = candidate
+            .distance_m
+            .max(source.exclusion_radius_m)
+            .hypot(receiver.altitude_m - (candidate.ground_m[0] + source.height_m))
+            .max(1.0);
+        let divergence = 1.0 / (distance * distance * energy(POINT_DIVERGENCE_OFFSET_DB));
+        for (period, total) in received.iter_mut().enumerate() {
+            *total = divergence
+                * (0..BANDS)
+                    .map(|band| emission[period][band] * transfer[period][band])
+                    .sum::<f64>();
+        }
+        return Ok(received.map(|e| e * reflection));
+    }
+    let altitude = |end: usize| candidate.ground_m[end] + source.height_m - receiver.altitude_m;
+    let Some(geometry) =
+        LinePieceGeometry::new([a[0], a[1], altitude(0)], [b[0], b[1], altitude(1)])
+    else {
+        return Ok(received);
+    };
+    let obstacles = receiver.obstacles;
+    let mut skyline = |lo: f64, hi: f64, radius: f64, visit: &mut dyn FnMut(SkylineArc)| {
+        obstacles.skyline_arcs(
+            [0.0, 0.0],
+            lo,
+            hi,
+            radius,
+            source.height_m.max(0.0),
+            &mut |arc| {
+                visit(SkylineArc {
+                    lo_rad: arc.lo_rad,
+                    hi_rad: arc.hi_rad,
+                    nearest_m: arc.nearest_m,
+                })
+            },
+        );
+    };
+    let mut nodes = std::mem::take(&mut scratch.nodes);
+    line_quadrature_nodes(&geometry, &mut skyline, &mut nodes);
+    let divergence = geometry.divergence_factor();
+    for node in &nodes {
+        let fraction = node.along_m / geometry.length_m();
+        let point = [
+            a[0] + fraction * (b[0] - a[0]),
+            a[1] + fraction * (b[1] - a[1]),
+        ];
+        let transfer = ray(receiver, point, node.obstacles_on_ray, &ends, scratch)?;
+        let weight = node.weight_rad * divergence;
+        for (period, total) in received.iter_mut().enumerate() {
+            *total += weight
+                * (0..BANDS)
+                    .map(|band| emission[period][band] * transfer[period][band])
+                    .sum::<f64>();
+        }
+    }
+    scratch.nodes = nodes;
+    Ok(received.map(|e| e * reflection))
+}
+
+/// The transfer of one ray from `point` to the receiver at the origin.
+fn ray(
+    receiver: &Receiver,
+    point: [f64; 2],
+    obstacles_on_ray: bool,
+    ends: &RayEnds,
+    scratch: &mut Scratch,
+) -> Result<[[f64; BANDS]; PERIODS], String> {
+    receiver.ground.fill_profile(point, &mut scratch.profile)?;
+    scratch.crossings.clear();
+    if obstacles_on_ray {
+        receiver
+            .obstacles
+            .crossings(point, [0.0, 0.0], &mut scratch.crossings)?;
+    }
+    let azimuth = (-point[1]).atan2(-point[0]);
+    let p = std::array::from_fn(|period| receiver.weather.at(period, azimuth));
+    Ok(ray_transfer(
+        &scratch.profile,
+        &scratch.crossings,
+        ends,
+        p,
+        &mut scratch.ray,
+    )
+    .periods)
+}
