@@ -91,10 +91,10 @@ fn own_footprint_crossings_are_skipped_and_tops_stand_on_interpolated_terrain() 
     let path = buffers.path(&profile, &ends(), 104.0);
     // Terrain at 10 m is 100.0 (the platform), at 12 m 100.0, at 60 m 101.8, at 100 m 100.0.
     assert_eq!(path.obstacle_tops.len(), 4);
-    for (got, want) in path
-        .obstacle_tops
-        .iter()
-        .zip([(10.0, 105.0), (12.0, 105.0), (60.0, 104.8), (100.0, 104.0)])
+    for (got, want) in
+        path.obstacle_tops
+            .iter()
+            .zip([(10.0, 105.0), (12.0, 105.0), (60.0, 104.8), (100.0, 104.0)])
     {
         assert!(
             (got.0 - want.0).abs() < 1e-9 && (got.1 - want.1).abs() < 1e-9,
