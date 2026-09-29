@@ -90,7 +90,11 @@ impl<'a> SceneTile<'a> {
             .map(|cell| {
                 obstacles
                     .cell_run_range(cell)
-                    .map(|index| obstacles.outline(obstacles.run(index).outline as usize).height_m)
+                    .map(|index| {
+                        obstacles
+                            .outline(obstacles.run(index).outline as usize)
+                            .height_m
+                    })
                     .fold(0.0, f64::max)
             })
             .collect();

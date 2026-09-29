@@ -116,13 +116,26 @@ pub fn answer(
             read_seconds + read.read_seconds,
         );
         let candidates_started = std::time::Instant::now();
-        type Parsed<'a> = (Option<Terrain<'a>>, Option<Obstacles<'a>>, Option<Sources<'a>>);
+        type Parsed<'a> = (
+            Option<Terrain<'a>>,
+            Option<Obstacles<'a>>,
+            Option<Sources<'a>>,
+        );
         let parsed: Vec<Result<Parsed, String>> = (0..read.tiles.len())
             .into_par_iter()
             .map(|index| {
-                let terrain = read.file(index, Kind::Terrain).map(Terrain::parse).transpose();
-                let obstacles = read.file(index, Kind::Obstacles).map(Obstacles::parse).transpose();
-                let sources = read.file(index, Kind::Sources).map(Sources::parse).transpose();
+                let terrain = read
+                    .file(index, Kind::Terrain)
+                    .map(Terrain::parse)
+                    .transpose();
+                let obstacles = read
+                    .file(index, Kind::Obstacles)
+                    .map(Obstacles::parse)
+                    .transpose();
+                let sources = read
+                    .file(index, Kind::Sources)
+                    .map(Sources::parse)
+                    .transpose();
                 Ok((
                     terrain.map_err(|e| e.to_string())?,
                     obstacles.map_err(|e| e.to_string())?,
