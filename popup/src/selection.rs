@@ -75,6 +75,16 @@ impl LayerSelection {
     }
 }
 
+/// Ascending bound, ties broken by the source itself so every run evaluates in the same order.
+fn evaluation_order(a: &Candidate, b: &Candidate) -> std::cmp::Ordering {
+    a.order
+        .total_cmp(&b.order)
+        .then(a.attribute.list.cmp(&b.attribute.list))
+        .then(a.attribute.index.cmp(&b.attribute.index))
+        .then(a.ends_m[0][0].total_cmp(&b.ends_m[0][0]))
+        .then(a.ends_m[0][1].total_cmp(&b.ends_m[0][1]))
+}
+
 /// Evaluates candidates from the loudest bound, in parallel batches over all unsatisfied layers,
 /// until every layer's omitted-energy account allows it to stop (`exact`: until none is left).
 /// `keep_pieces` keeps every evaluated piece for the benchmark's listing.
@@ -86,9 +96,7 @@ pub fn select(
     keep_pieces: bool,
 ) -> Result<(), String> {
     for selection in selections.iter_mut() {
-        selection
-            .pending
-            .sort_by(|a, b| a.order.total_cmp(&b.order));
+        selection.pending.par_sort_unstable_by(evaluation_order);
     }
     loop {
         let mut work: Vec<(usize, Candidate)> = Vec::new();
