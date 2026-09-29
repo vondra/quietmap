@@ -116,27 +116,31 @@ pub fn answer(
             read_seconds + read.read_seconds,
         );
         let candidates_started = std::time::Instant::now();
+        type Parsed<'a> = (Option<Terrain<'a>>, Option<Obstacles<'a>>, Option<Sources<'a>>);
+        let parsed: Vec<Result<Parsed, String>> = (0..read.tiles.len())
+            .into_par_iter()
+            .map(|index| {
+                let terrain = read.file(index, Kind::Terrain).map(Terrain::parse).transpose();
+                let obstacles = read.file(index, Kind::Obstacles).map(Obstacles::parse).transpose();
+                let sources = read.file(index, Kind::Sources).map(Sources::parse).transpose();
+                Ok((
+                    terrain.map_err(|e| e.to_string())?,
+                    obstacles.map_err(|e| e.to_string())?,
+                    sources.map_err(|e| e.to_string())?,
+                ))
+            })
+            .collect();
         let mut ring_sources = Vec::new();
-        for (index, &tile) in read.tiles.iter().enumerate() {
-            let terrain = read
-                .file(index, Kind::Terrain)
-                .map(Terrain::parse)
-                .transpose()
-                .map_err(|e| e.to_string())?;
+        let mut ring_obstacles = Vec::new();
+        for (index, (&tile, parsed)) in read.tiles.iter().zip(parsed).enumerate() {
+            let (terrain, tile_obstacles, sources) = parsed?;
             ground.insert(tile, terrain);
-            if let Some(bytes) = read.file(index, Kind::Obstacles) {
-                obstacles.insert(tile, Obstacles::parse(bytes).map_err(|e| e.to_string())?);
-            } else {
-                obstacles.insert_empty(tile);
-            }
-            if let Some(bytes) = read.file(index, Kind::Sources) {
-                ring_sources.push((
-                    index,
-                    tile,
-                    Sources::parse(bytes).map_err(|e| e.to_string())?,
-                ));
+            ring_obstacles.push((tile, tile_obstacles));
+            if let Some(sources) = sources {
+                ring_sources.push((index, tile, sources));
             }
         }
+        obstacles.insert_all(ring_obstacles);
         let enclosing = if ring == 1 {
             obstacles.enclosing_building([0.0, 0.0])?
         } else {

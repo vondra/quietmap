@@ -20,6 +20,7 @@ pub use facades::FacadeReceiver;
 
 use tile::SceneTile;
 
+use rayon::prelude::*;
 use tiles::geo::{LATTICE_SNAP_STEPS, LocalFrame, STEPS_PER_TILE, TILES_PER_AXIS, TileId};
 use tiles::obstacles::{CELL_STEPS, CELLS_PER_SIDE, Obstacles};
 
@@ -133,14 +134,34 @@ impl<'a> Scene<'a> {
     }
 
     pub fn insert(&mut self, tile: TileId, obstacles: Obstacles<'a>) {
-        let (scene_tile, widest) = SceneTile::new(obstacles, self.lattice.tile_offset(tile));
-        self.widest_footprint_steps = self.widest_footprint_steps.max(widest);
-        self.put(tile, Slot::Read(scene_tile));
+        self.insert_all(vec![(tile, Some(obstacles))]);
     }
 
     /// A tile that was read and has no obstacles file.
     pub fn insert_empty(&mut self, tile: TileId) {
         self.put(tile, Slot::Empty);
+    }
+
+    /// Inserts a ring's tiles (`None`: read, no obstacles file), preparing them in parallel.
+    pub fn insert_all(&mut self, tiles: Vec<(TileId, Option<Obstacles<'a>>)>) {
+        let lattice = &self.lattice;
+        let prepared: Vec<(TileId, Option<(SceneTile<'a>, i64)>)> = tiles
+            .into_par_iter()
+            .map(|(tile, obstacles)| {
+                let prepared =
+                    obstacles.map(|obstacles| SceneTile::new(obstacles, lattice.tile_offset(tile)));
+                (tile, prepared)
+            })
+            .collect();
+        for (tile, prepared) in prepared {
+            match prepared {
+                Some((scene_tile, widest)) => {
+                    self.widest_footprint_steps = self.widest_footprint_steps.max(widest);
+                    self.put(tile, Slot::Read(scene_tile));
+                }
+                None => self.put(tile, Slot::Empty),
+            }
+        }
     }
 
     fn slot_index(&self, offset: [i64; 2]) -> Option<usize> {

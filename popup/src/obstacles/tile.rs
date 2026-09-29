@@ -1,6 +1,13 @@
 //! One read tile of a scene: its parsed file and what the walks need beyond it, computed once.
 
+use rayon::prelude::*;
 use tiles::obstacles::{CELLS, Obstacles, OutlineKind};
+
+/// Outlines per parallel task when a tile is prepared (extended to a footprint's end).
+const FOOTPRINT_CHUNK: usize = 16_384;
+/// Cells and runs per parallel task.
+const CELL_CHUNK: usize = 1_024;
+const RUN_CHUNK: usize = 65_536;
 
 /// One read tile with what the walks need beyond its file.
 pub(super) struct SceneTile<'a> {
@@ -17,40 +24,76 @@ pub(super) struct SceneTile<'a> {
 }
 
 impl<'a> SceneTile<'a> {
-    /// The tile and the east-west extent of its widest building, in steps.
+    /// The tile and the east-west extent of its widest building, in steps. A dense tile holds
+    /// millions of outlines: footprints and cells are prepared in parallel chunks.
     pub(super) fn new(obstacles: Obstacles<'a>, offset: [i64; 2]) -> (Self, i64) {
         let count = obstacles.outline_count();
-        let mut footprint_west = vec![0; count];
-        let mut widest = 0;
-        let mut start = 0;
-        while start < count {
-            let id = obstacles.outline(start).footprint_id;
-            let (mut west, mut east, mut end) = (i16::MAX, i16::MIN, start);
-            while end < count && obstacles.outline(end).footprint_id == id {
-                let record = obstacles.outline(end);
-                for index in record.first_vertex..record.first_vertex + record.vertex_count {
-                    let [x, _] = obstacles.vertex(index);
-                    (west, east) = (west.min(x), east.max(x));
-                }
-                end += 1;
+        // Chunks start at footprint boundaries, so each footprint lies in one chunk.
+        let mut starts = vec![0];
+        while let Some(&last) = starts.last() {
+            let mut next = last + FOOTPRINT_CHUNK;
+            if next >= count {
+                break;
             }
-            footprint_west[start..end].fill(west);
-            if obstacles.outline(start).kind != OutlineKind::Wall {
-                widest = widest.max(i64::from(east) - i64::from(west));
+            let id = obstacles.outline(next - 1).footprint_id;
+            while next < count && obstacles.outline(next).footprint_id == id {
+                next += 1;
             }
-            start = end;
+            if next >= count {
+                break;
+            }
+            starts.push(next);
         }
-        let mut run_first_vertex = vec![0; obstacles.run_count()];
-        let mut cell_max_height_m = vec![0.0; CELLS];
-        for (cell, max_height_m) in cell_max_height_m.iter_mut().enumerate() {
-            for index in obstacles.cell_run_range(cell) {
+        starts.push(count);
+        let chunks: Vec<(Vec<i16>, i64)> = starts
+            .par_windows(2)
+            .map(|range| {
+                let (from, to) = (range[0], range[1]);
+                let mut footprint_west = vec![0; to - from];
+                let mut widest = 0;
+                let mut start = from;
+                while start < to {
+                    let id = obstacles.outline(start).footprint_id;
+                    let (mut west, mut east, mut end) = (i16::MAX, i16::MIN, start);
+                    while end < to && obstacles.outline(end).footprint_id == id {
+                        let record = obstacles.outline(end);
+                        for index in record.first_vertex..record.first_vertex + record.vertex_count
+                        {
+                            let [x, _] = obstacles.vertex(index);
+                            (west, east) = (west.min(x), east.max(x));
+                        }
+                        end += 1;
+                    }
+                    footprint_west[start - from..end - from].fill(west);
+                    if obstacles.outline(start).kind != OutlineKind::Wall {
+                        widest = widest.max(i64::from(east) - i64::from(west));
+                    }
+                    start = end;
+                }
+                (footprint_west, widest)
+            })
+            .collect();
+        let widest = chunks.iter().map(|chunk| chunk.1).max().unwrap_or(0);
+        let footprint_west = chunks.into_iter().flat_map(|chunk| chunk.0).collect();
+        let run_first_vertex = (0..obstacles.run_count())
+            .into_par_iter()
+            .with_min_len(RUN_CHUNK)
+            .map(|index| {
                 let run = obstacles.run(index);
                 let record = obstacles.outline(run.outline as usize);
-                run_first_vertex[index] =
-                    (record.first_vertex + usize::from(run.first_edge)) as u32;
-                *max_height_m = record.height_m.max(*max_height_m);
-            }
-        }
+                (record.first_vertex + usize::from(run.first_edge)) as u32
+            })
+            .collect();
+        let cell_max_height_m = (0..CELLS)
+            .into_par_iter()
+            .with_min_len(CELL_CHUNK)
+            .map(|cell| {
+                obstacles
+                    .cell_run_range(cell)
+                    .map(|index| obstacles.outline(obstacles.run(index).outline as usize).height_m)
+                    .fold(0.0, f64::max)
+            })
+            .collect();
         let tile = SceneTile {
             obstacles,
             offset,
