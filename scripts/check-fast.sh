@@ -17,4 +17,8 @@ if [ -f frontend/package.json ]; then
   npm --prefix frontend run --silent check
 fi
 
+if [ -f server/package.json ]; then
+  npm --prefix server run --silent check
+fi
+
 echo "check-fast: ok"

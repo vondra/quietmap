@@ -1,0 +1,256 @@
+// Hermetic browser fixtures: a one-cell HM3 world, a black basemap, and a streamed popup the test
+// writes line by line.
+import { expect, type Page } from '@playwright/test'
+import { TILE_PX } from '../src/lib/hm3-decoder'
+import type { Contributor, PopupUpdate } from '../src/types/noise'
+
+export const FIXTURE_DB = 63
+export const SOURCE_DB = 60
+/** The hermetic world's published zoom (a z12 world, while the served heatmap is z13: the
+ *  frontend must take its tile ceiling from the manifest). */
+export const TILE_Z = 12
+
+const BLACK_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64',
+)
+
+export type PixelCenter = {
+  lat: number
+  lng: number
+  tx: number
+  ty: number
+  px: number
+  py: number
+}
+
+/** Snap a geographic point to the exact HM3 receiver lattice at tile zoom `z`. */
+export function hm3PixelCenter(lat: number, lng: number, z = TILE_Z): PixelCenter {
+  const worldPixels = 2 ** z * TILE_PX
+  const latRad = lat * Math.PI / 180
+  const gx = Math.floor((lng + 180) / 360 * worldPixels)
+  const gy = Math.floor(
+    (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * worldPixels,
+  )
+  const x = (gx + 0.5) / worldPixels
+  const y = (gy + 0.5) / worldPixels
+  return {
+    lat: Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI,
+    lng: x * 360 - 180,
+    tx: Math.floor(gx / TILE_PX),
+    ty: Math.floor(gy / TILE_PX),
+    px: gx % TILE_PX,
+    py: gy % TILE_PX,
+  }
+}
+
+export function mapUrl(point: PixelCenter, layers = 'road', zoom = TILE_Z): string {
+  return `/#lat=${point.lat}&lng=${point.lng}&z=${zoom}&bm=terrain&ro=${layers}`
+}
+
+/** A tile without levels but at most one audible receiver at the expected pixel. */
+function hm3Tile(point?: PixelCenter, db?: number): Buffer {
+  const tile = Buffer.alloc(6 + TILE_PX * TILE_PX, 255)
+  tile.write('HM3 ', 0, 'ascii')
+  tile[4] = 3
+  tile[5] = 1
+  if (point && db != null) tile[6 + point.py * TILE_PX + point.px] = Math.round(db * 2)
+  return tile
+}
+
+/** One road contributor at `db`. */
+export function roadContributor(db: number): Contributor {
+  return {
+    id: '00000000000000aa',
+    source_type: 'road',
+    name: 'Fixture street',
+    subtype: 'tertiary',
+    distance_m: 12,
+    received_lden: db,
+    received: { ld: db - 2, le: db - 3, ln: db - 8, lden: db },
+    metadata: {
+      name: 'Fixture street', ref: '', road_class: 'tertiary',
+      aadt_light: 9000, aadt_medium: 300, aadt_heavy: 200, aadt_moto: 50, traffic_estimated: 8,
+      cross_section_aadt: 9550, speed_posted_kmh: 50, speed_kmh: 50, speed_source: 'osm_posted',
+      surface: 'asphalt', surface_corr_db: 0, lanes: 2, oneway: false, bridge: false, source_id: 1,
+    },
+  }
+}
+
+/** One streamed update of the popup contract. */
+export function popupUpdate(
+  seq: number,
+  partial: boolean,
+  lat: number,
+  lng: number,
+  db: number | null,
+  building: PopupUpdate['building'] = null,
+): PopupUpdate {
+  const levels = { ld: db, le: db, ln: db, lden: db }
+  return {
+    seq,
+    partial,
+    center: [lat, lng],
+    elevation_m: 350,
+    building,
+    total_lden: db,
+    total: levels,
+    sources: [{ source_type: 'road', ...levels, lden_upper: db, evaluated: 1, candidates: 1 }],
+    top_contributors: db == null ? [] : [roadContributor(db)],
+    stats: { rings: seq, files: 27, bytes: 1e6, read_ms: 3, candidate_ms: 4, evaluate_ms: 20, elapsed_ms: 30 },
+  }
+}
+
+/** Replace the third-party basemap with a stable opaque-black tile. */
+export async function mockTerrainBasemap(page: Page): Promise<void> {
+  await page.route(/https:\/\/[abc]\.tile\.opentopomap\.org\/.*/, route => route.fulfill({
+    status: 200,
+    contentType: 'image/png',
+    body: BLACK_PNG,
+  }))
+}
+
+type PopupSeam = {
+  requests: string[]
+  /** Requests aborted while their stream was still open. */
+  aborted: number
+  streams: { controller: ReadableStreamDefaultController<Uint8Array>; open: boolean }[]
+}
+
+/**
+ * `/api/popup` answered in the page: every request gets a stream the test writes with
+ * `sendPopupLine` and closes with `endPopup`. A route fulfilment would deliver the whole body at
+ * once; this seam shows each streamed update the way the server sends it.
+ */
+async function installPopupSeam(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const seam: PopupSeam = { requests: [], aborted: 0, streams: [] }
+    ;(window as unknown as { __popup: PopupSeam }).__popup = seam
+    const realFetch = window.fetch.bind(window)
+    window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (!url.startsWith('/api/popup')) return realFetch(input, init)
+      let controller!: ReadableStreamDefaultController<Uint8Array>
+      const body = new ReadableStream<Uint8Array>({ start(c) { controller = c } })
+      const stream = { controller, open: true }
+      seam.requests.push(url)
+      seam.streams.push(stream)
+      init?.signal?.addEventListener('abort', () => {
+        if (!stream.open) return
+        stream.open = false
+        seam.aborted += 1
+        controller.error(new DOMException('aborted', 'AbortError'))
+      })
+      return Promise.resolve(new Response(body, { status: 200, headers: { 'content-type': 'application/x-ndjson' } }))
+    }
+  })
+}
+
+/** The points the page requested from `/api/popup`, in order. */
+export async function popupRequests(page: Page): Promise<{ lat: number; lng: number }[]> {
+  const urls = await page.evaluate(() => (window as unknown as { __popup: PopupSeam }).__popup.requests)
+  return urls.map(url => {
+    const params = new URL(url, 'http://localhost').searchParams
+    return { lat: Number(params.get('lat')), lng: Number(params.get('lon')) }
+  })
+}
+
+export async function abortedPopupRequests(page: Page): Promise<number> {
+  return page.evaluate(() => (window as unknown as { __popup: PopupSeam }).__popup.aborted)
+}
+
+/** Write one line into the latest popup request's stream. */
+export async function sendPopupLine(page: Page, line: object): Promise<void> {
+  await page.evaluate((text) => {
+    const { streams } = (window as unknown as { __popup: PopupSeam }).__popup
+    streams[streams.length - 1].controller.enqueue(new TextEncoder().encode(`${text}\n`))
+  }, JSON.stringify(line))
+}
+
+/** End the latest popup request's stream, as the server does after the final or error line. */
+export async function endPopup(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const { streams } = (window as unknown as { __popup: PopupSeam }).__popup
+    const stream = streams[streams.length - 1]
+    stream.open = false
+    stream.controller.close()
+  })
+}
+
+/** `paintedDb` is the level the road/rail tiles carry at `point`. */
+export async function installHermeticMap(
+  page: Page,
+  point: PixelCenter,
+  paintedDb = SOURCE_DB,
+): Promise<void> {
+  await mockTerrainBasemap(page)
+  await installPopupSeam(page)
+  await page.route('**/api/tiles-manifest', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      build: 'b1',
+      zoom: TILE_Z,
+      layers: {
+        road: { build: 'b1', file: 'road.b1.pmtiles' },
+        rail: { build: 'b1', file: 'rail.b1.pmtiles' },
+      },
+    }),
+  }))
+  await page.route('**/api/tiles/b1/**/*.bin', route => {
+    const match = new URL(route.request().url()).pathname
+      .match(/^\/api\/tiles\/b1\/([^/]+)\/(\d+)\/(\d+)\/(\d+)\.bin$/)
+    const source = match?.[1]
+    const atPoint = match != null
+      && Number(match[2]) === TILE_Z && Number(match[3]) === point.tx && Number(match[4]) === point.ty
+    const level = source === 'road' || source === 'rail' ? paintedDb : undefined
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/octet-stream',
+      body: atPoint && level != null ? hm3Tile(point, level) : hm3Tile(),
+    })
+  })
+  await page.route('**/api/reverse?**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ place: 'E2E fixture' }),
+  }))
+}
+
+export async function canvasCenter(page: Page): Promise<{
+  canvas: ReturnType<Page['locator']>
+  x: number
+  y: number
+}> {
+  const canvas = page.locator('canvas.maplibregl-canvas')
+  await expect(canvas).toBeVisible()
+  const box = await canvas.boundingBox()
+  expect(box).not.toBeNull()
+  return {
+    canvas,
+    x: box!.x + box!.width / 2,
+    y: box!.y + box!.height / 2,
+  }
+}
+
+/** Two animation frames: synchronize with the actual WebGL paint, not a timer. */
+export async function afterPaint(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  }))
+}
+
+/** Decode a locator screenshot in-browser and return its exact centre RGBA. */
+export async function pngCenterPixel(page: Page, png: Buffer): Promise<number[]> {
+  return page.evaluate(async (source) => {
+    const image = new Image()
+    image.src = source
+    await image.decode()
+    const canvas = document.createElement('canvas')
+    canvas.width = image.width
+    canvas.height = image.height
+    const context = canvas.getContext('2d')!
+    context.drawImage(image, 0, 0)
+    return [...context.getImageData(Math.floor(image.width / 2), Math.floor(image.height / 2), 1, 1).data]
+  }, `data:image/png;base64,${png.toString('base64')}`)
+}

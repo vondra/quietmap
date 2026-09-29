@@ -1,0 +1,152 @@
+/* The map's global styles: Tailwind, the Geist font, MapLibre control placement, theme tokens. */
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.maplibregl-ctrl-bottom-left {
+  bottom: 10px !important;
+}
+
+/* Google-like spacing in the bottom-left stack: +/- at the bottom, a gap,
+   then the locate button (BasemapBar floats above with its own gap). */
+.maplibregl-ctrl-bottom-left .maplibregl-ctrl-group:has(button.maplibregl-ctrl-geolocate) {
+  margin-bottom: 12px;
+}
+
+/* Restyle the maplibre locate icon to the app's icon language (16 px,
+   1.75 stroke, #333 — same as the BasemapBar icons); blue when active. */
+.maplibregl-ctrl button.maplibregl-ctrl-geolocate .maplibregl-ctrl-icon {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23333333' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='2' x2='5' y1='12' y2='12'/%3E%3Cline x1='19' x2='22' y1='12' y2='12'/%3E%3Cline x1='12' x2='12' y1='2' y2='5'/%3E%3Cline x1='12' x2='12' y1='19' y2='22'/%3E%3Ccircle cx='12' cy='12' r='7'/%3E%3C/svg%3E") !important;
+  background-size: 16px 16px;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+.maplibregl-ctrl button.maplibregl-ctrl-geolocate-active .maplibregl-ctrl-icon,
+.maplibregl-ctrl button.maplibregl-ctrl-geolocate-background .maplibregl-ctrl-icon {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231565c0' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cline x1='2' x2='5' y1='12' y2='12'/%3E%3Cline x1='19' x2='22' y1='12' y2='12'/%3E%3Cline x1='12' x2='12' y1='2' y2='5'/%3E%3Cline x1='12' x2='12' y1='19' y2='22'/%3E%3Ccircle cx='12' cy='12' r='7'/%3E%3Ccircle cx='12' cy='12' r='2.5' fill='%231565c0' stroke='none'/%3E%3C/svg%3E") !important;
+}
+
+/* Mobile: pinch replaces +/- and the LOCATE button lives INSIDE the
+   BasemapBar row (one container = one baseline — owner report 2026-07-16:
+   the separately-positioned maplibre button drifted below the row and
+   clipped under Safari's toolbar). The maplibre control still exists for its
+   geolocation machinery (triggered from the row's button); only its own
+   bottom-left widget stack is desktop-only. */
+@media (max-width: 767px) {
+  .maplibregl-ctrl-bottom-left {
+    display: none !important;
+  }
+  /* Attribution ⓘ tucks into the corner strip BELOW the 44px control row
+     (which starts 16px up): right of nothing, left of the layers button's
+     column, never on the controls' baseline. */
+  .maplibregl-ctrl-bottom-right {
+    bottom: 0 !important;
+    right: 64px !important;
+  }
+  .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib {
+    margin: 0 0 2px 0;
+  }
+}
+
+/* Search bar: one horizontal placement. Below md a
+   gutter-wide bar capped at 28rem, centered. From md up the bar stays
+   centered while that leaves the card column untouched, otherwise slides left
+   to sit one gutter before the column, and narrows once even that no longer
+   fits (clamp with min > max resolves to min). Audit 2026-09-06: the centered
+   bar covered the Layers header between 768 and 1112 px. */
+.map-top-bar {
+  position: fixed;
+  left: 50%;
+  translate: -50% 0;
+  width: calc(100% - 2 * var(--map-gutter));
+  max-width: 28rem;
+}
+@media (width >= theme(--breakpoint-md)) {
+  .map-top-bar {
+    --bar: min(28rem, calc(100% - var(--map-card-column) - 3 * var(--map-gutter)));
+    width: var(--bar);
+    left: clamp(
+      calc(var(--map-gutter) + var(--bar) / 2),
+      50%,
+      calc(100% - var(--map-card-column) - 2 * var(--map-gutter) - var(--bar) / 2)
+    );
+  }
+}
+
+:root {
+  /* The right-hand card column (App.tsx) and the gutter every floating
+     control keeps from the viewport edge; .map-top-bar is placed against them. */
+  --map-card-column: 320px;
+  --map-gutter: 0.75rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --radius: 0.625rem;
+}
+
+@theme inline {
+  --font-sans: 'Geist Variable', sans-serif;
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}

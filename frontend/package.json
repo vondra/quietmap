@@ -1,0 +1,38 @@
+{
+  "name": "frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b && vite build && node scripts/precompress.mjs dist",
+    "watch": "vite build --watch",
+    "check": "tsc -b && eslint . --max-warnings 0 && node --test test/*.test.mjs",
+    "e2e": "vite build --outDir dist.check && playwright test"
+  },
+  "dependencies": {
+    "@deck.gl/core": "^9.2.11",
+    "@deck.gl/geo-layers": "^9.2.11",
+    "@deck.gl/layers": "^9.2.11",
+    "@deck.gl/mapbox": "^9.2.11",
+    "@fontsource-variable/geist": "^5.2.8",
+    "lucide-react": "^0.577.0",
+    "maplibre-gl": "^5.20.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-map-gl": "^8.1.0",
+    "tailwindcss": "^4.2.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@tailwindcss/vite": "^4.2.1",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "eslint": "^10.4.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.6.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.60.1",
+    "vite": "^7.3.1"
+  }
+}

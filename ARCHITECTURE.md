@@ -74,6 +74,15 @@ lines of JSON (each <= 100 KB).
 6. Until every ring is read the answer says it is partial. A failed read is an error, never a
    quieter answer. Exact mode (benchmark only) is the same loop with the stop rule off.
 
+## Web
+
+`server/` runs `qm-popup` once per click (a few clicks at once, a short queue, 503 when it is
+full) and forwards its lines as `application/x-ndjson`, flushed at once and never compressed; a
+visitor who leaves has the child killed, and a failed click ends with one `{"error"}` line. It
+also serves the heatmap tiles and the built map. `frontend/` redraws the popup on every line,
+marks a partial answer as still refining, shows an error line as an error, and aborts the
+previous request on a new click. `server/README.md` has the routes and the environment.
+
 ## Budgets (checked by `bench/` after every change)
 
 | cold | NVMe | HDD RAID10 |
