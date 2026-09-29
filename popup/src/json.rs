@@ -58,6 +58,17 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         let mut object = Map::new();
         object.insert("source_type".into(), json!(layer.layer.name()));
         periods(&mut object, &layer.energy);
+        // Unrounded Lden for the benchmark's error measurement (fast against exact).
+        let weighted: f64 = (0..PERIODS)
+            .map(|p| PERIOD_HOURS[p] * layer.energy[p] * energy(PERIOD_PENALTY_DB[p]))
+            .sum::<f64>()
+            / 24.0;
+        if weighted > 0.0 {
+            object.insert(
+                "lden_precise".into(),
+                json!((10_000.0 * weighted.log10()).round() / 1000.0),
+            );
+        }
         let omitted = lden(&[0, 1, 2].map(|p| layer.energy[p] + layer.omitted_bound[p]));
         object.insert("lden_upper".into(), omitted);
         object.insert("evaluated".into(), json!(layer.evaluated));

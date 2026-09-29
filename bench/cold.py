@@ -115,7 +115,7 @@ def summary(point, lines, resident_before, repeat, exact):
         "rings": last["stats"]["rings"],
         "total_lden": last["total_lden"],
         "first_total_lden": first["total_lden"],
-        "layers": {s["source_type"]: s["lden"] for s in last["sources"] if s["lden"] is not None},
+        "layers": {s["source_type"]: s.get("lden_precise", s["lden"]) for s in last["sources"] if s["lden"] is not None},
         "evaluated": {s["source_type"]: [s["evaluated"], s["candidates"]] for s in last["sources"] if s["candidates"]},
     }
 
