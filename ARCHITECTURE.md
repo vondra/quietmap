@@ -33,8 +33,9 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
 
 - Coordinates are int16 relative to the tile centre, step = tile width / 32,768: the tile spans
   +-16,384 steps and half a tile of margin fits on every side. Longer geometry is split.
-- Ownership: every emission piece lives in exactly one tile, the one holding its midpoint.
-  An outline is listed in every 50 m cell it crosses, the traversal running on into cells of
+- Ownership: every emission piece lives in exactly one tile: a line is split at tile edges and
+  each part stored in the tile it lies in, a point in the tile holding it, so the sources of a
+  ring never reach into a ring not yet read. An outline is listed in every 50 m cell it crosses, the traversal running on into cells of
   neighbouring tiles within the margin, so every tile's file lists every outline that crosses
   its cells. Footprint and source ids are global and stable across tiles; a popup meeting one
   outline in two files sees one footprint. Holes are kept; edges created by a split are marked
@@ -44,7 +45,9 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
 - Global tables ship with the program: physics tables (NPD, CNOSSOS coefficients) and one
   weather table (favourable probability per period and 16 sectors, 0.5 deg). Air absorption is
   ISO 9613-1 at 15 C and 70 %; road emission is frozen at the CNOSSOS reference temperature.
-- Reading is always whole files (mmap with MADV_WILLNEED), all files of a ring requested at once.
+- Reading is always whole files with plain reads, all files of a ring at once, one reader per
+  file (cold on NVMe 5-8x faster than mmap with MADV_WILLNEED, whose faults read 32 KB at a
+  time).
 
 ## Popup
 
@@ -54,17 +57,20 @@ A ring beyond a kind's reach skips that kind's files. One HTTP response streams 
 lines of JSON (each <= 100 KB).
 
 1. Upper bound per source: free field plus the mixed ground and diffraction gain (6 dB
-   homogeneous, 18 dB favourable, mixed at the global p_max) plus the 3 dB receiver
-   reflection; aircraft boxes use their own bound. Sort per layer.
+   homogeneous, 18 dB favourable, mixed at the largest favourable probability of the
+   receiver's weather row) plus the receiver reflection; aircraft boxes use their own bound.
+   Sort per layer.
 2. Full physics from the loudest. One omitted-energy account per layer and period runs across
    all rings: a source is skipped only while the bounds of everything skipped so far stay below
    (10^(0.1/10) - 1) x the energy evaluated. Never a per-source threshold.
 3. Lines through the point-sum quadrature; aircraft boxes by the click-time equation.
 4. One parallel pool over all layers and rays; totals first, then display details (what-if
    variants, traces) only for the contributors shown.
-5. A click inside a building answers for its loudest facade receiver (no indoor attenuation);
-   rings accumulate per facade receiver before the loudest is chosen. A building never screens
-   its own emission.
+5. A click inside a building answers at its loudest CNOSSOS-EU 2.8 facade receiver, without
+   indoor attenuation: after the first read, the eleven sources with the greatest bound at any
+   facade are evaluated at every facade, the highest Lden wins, and the ring loop answers there.
+   A building's source is never screened by a footprint containing it (its own, or another
+   outline of the same building).
 6. Until every ring is read the answer says it is partial. A failed read is an error, never a
    quieter answer. Exact mode (benchmark only) is the same loop with the stop rule off.
 
