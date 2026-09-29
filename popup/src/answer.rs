@@ -281,6 +281,7 @@ pub fn answer(
             &attributes,
             options.exact,
             options.pieces > 0,
+            (lat.to_bits() ^ lon.to_bits().rotate_left(32)) ^ u64::from(ring),
         )?;
         evaluate_seconds += evaluate_started.elapsed().as_secs_f64();
         let pieces = if ring == max_ring && options.pieces > 0 {
