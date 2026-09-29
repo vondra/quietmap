@@ -259,7 +259,8 @@ fn sample_rest(
     seed: u64,
 ) -> Result<(), String> {
     let mut rest = std::mem::take(&mut selection.pending);
-    rest.sort_by(|a, b| b.order.total_cmp(&a.order));
+    // Pending stays sorted ascending (only its loudest end is ever drained).
+    rest.reverse();
     let mut evaluated: HashMap<usize, [f64; PERIODS]> = HashMap::new();
     let mut size = SAMPLE_START;
     let mut first = 0;
