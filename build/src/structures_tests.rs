@@ -1,4 +1,4 @@
-//! structures.arrow decoding: z30 geometry, footprint ids and the antimeridian.
+//! structures.arrow decoding: z30 geometry, footprint ids, the antimeridian and wall heights.
 
 use super::*;
 
@@ -48,4 +48,11 @@ fn footprint_ids_name_the_owner_square_and_outlines_run_across_the_antimeridian(
     assert_eq!(nearest_copy(at(east_edge, 9), 100), at(-3, 9));
     assert_eq!(nearest_copy(at(2, 9), east_edge), at(WORLD_STEPS + 2, 9));
     assert_eq!(nearest_copy(at(2, 9), 5_000), at(2, 9));
+}
+
+#[test]
+fn an_unmapped_wall_stands_four_metres_and_a_mapped_one_its_own_height() {
+    assert_eq!(wall_height_m(HEIGHT_SOURCE_WALL_DEFAULT, 2), 4.0);
+    assert_eq!(wall_height_m(HEIGHT_SOURCE_WALL_DEFAULT, 6), 4.0);
+    assert_eq!(wall_height_m(0, 6), 6.0);
 }

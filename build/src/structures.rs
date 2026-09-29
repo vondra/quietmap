@@ -21,6 +21,10 @@ use tiles::obstacles::EnvelopeClass;
 
 const KIND_BUILDING: u8 = 0;
 const KIND_WALL: u8 = 1;
+/// dev4 `height_source` of an unmapped noise wall, stored at its country's mean height.
+const HEIGHT_SOURCE_WALL_DEFAULT: u8 = 8;
+/// The one height of an unmapped wall (PLAN-z13 SIMPLIFY).
+const UNMAPPED_WALL_HEIGHT_M: f32 = 4.0;
 const WORLD_STEPS: i64 = STEPS_PER_TILE as i64 * TILES_PER_AXIS as i64;
 
 /// A ring or wall as stored: z30 (x east, y north) pairs.
@@ -217,13 +221,21 @@ impl<'b> Rows<'b> {
             KIND_WALL => {
                 let points = decode_wall(self.geom.value(row))
                     .ok_or_else(|| format!("row {row} has invalid wall geometry"))?;
-                Ok((
-                    f32::from(self.height.value(row)),
-                    RowGeometry::Wall(lattice(points)),
-                ))
+                let height_m = wall_height_m(self.height_source.value(row), self.height.value(row));
+                Ok((height_m, RowGeometry::Wall(lattice(points))))
             }
             other => Err(format!("row {row} has unknown structure kind {other}")),
         }
+    }
+}
+
+/// A wall's screening height: an unmapped wall stands 4 m everywhere (PLAN-z13 SIMPLIFY; dev4
+/// stored its country's mean), any other its stored height.
+fn wall_height_m(height_source: u8, stored_m: i16) -> f32 {
+    if height_source == HEIGHT_SOURCE_WALL_DEFAULT {
+        UNMAPPED_WALL_HEIGHT_M
+    } else {
+        f32::from(stored_m)
     }
 }
 
