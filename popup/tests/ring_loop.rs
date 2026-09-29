@@ -231,6 +231,86 @@ fn a_source_on_the_edge_of_the_read_block_is_answered() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// Many point sources, far more than the proven rule's per-call limit: the sampled rest keeps
+/// the answer within 0.05 dB of exact with a fraction of the evaluations, identically every time.
+#[test]
+fn the_sampled_answer_is_within_a_twentieth_of_a_decibel_and_reproducible() {
+    let root = release_root("sampled");
+    let steps_per_metre = steps_per_metre();
+    // 6,000 points on a spiral 20 m to 2.9 km out, levels varying by 20 dB.
+    let pieces: Vec<Piece> = (0..6_000)
+        .map(|i| {
+            let f = f64::from(i);
+            let radius = 20.0 * (2_900.0f64 / 20.0).powf(f / 6_000.0);
+            let angle = f * 2.399_963;
+            let point = [
+                (radius * angle.cos() * steps_per_metre).round() as i16,
+                (radius * angle.sin() * steps_per_metre).round() as i16,
+            ];
+            Piece {
+                ends: [point, point],
+                attribute: (i % 4) as u32,
+            }
+        })
+        .collect();
+    let attributes: Vec<Attribute> = (0..4)
+        .map(|level| Attribute {
+            layer: Layer::Industry,
+            height_m: 2.0,
+            ground_percent: 50,
+            platform_half_width_m: 0.0,
+            exclusion_radius_m: 0.0,
+            footprint_id: 0,
+            group_key: 10 + level,
+            emission: [[70.0 + 20.0 * level as f64 / 3.0; BANDS]; PERIODS],
+            display: r#"["point"]"#.into(),
+        })
+        .collect();
+    let path = tile_path(&root.join("2026"), TILE, Kind::Sources);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, encode(&pieces, &attributes)).unwrap();
+    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    let release = Release::open(&root, "2026").unwrap();
+    let industry = |exact: bool| {
+        let (lat, lon) = TILE.centre().to_degrees();
+        let mut last = None;
+        answer(
+            &release,
+            lat,
+            lon,
+            &Options { exact, pieces: 0 },
+            &mut |update| {
+                let layer = update
+                    .layers
+                    .iter()
+                    .find(|layer| layer.layer == Layer::Industry)
+                    .unwrap();
+                last = Some((layer.energy, layer.evaluated, layer.candidates));
+                Ok(())
+            },
+        )
+        .unwrap();
+        last.unwrap()
+    };
+    let (exact, exact_count, candidates) = industry(true);
+    let (sampled, sampled_count, sampled_candidates) = industry(false);
+    assert_eq!(
+        (exact_count, candidates, sampled_candidates),
+        (6_000, 6_000, 6_000)
+    );
+    assert!(sampled_count < exact_count / 2, "{sampled_count} evaluated");
+    for period in 0..PERIODS {
+        let difference = 10.0 * (sampled[period] / exact[period]).log10();
+        assert!(difference.abs() <= 0.05, "period {period}: {difference} dB");
+    }
+    assert_eq!(
+        industry(false).0,
+        sampled,
+        "the same click, the same sample"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn an_incomplete_release_is_never_served() {
     let root = release_root("incomplete");

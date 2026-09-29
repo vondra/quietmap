@@ -74,7 +74,7 @@ pub fn layer_answers(selections: &[LayerSelection]) -> Vec<LayerAnswer> {
             energy: selection.answer_energy(),
             omitted_bound: selection.uncertainty(),
             evaluated: selection.evaluated,
-            candidates: selection.evaluated + selection.pending.len(),
+            candidates: selection.covered + selection.pending.len(),
         })
         .collect()
 }

@@ -39,7 +39,10 @@ pub struct LayerSelection {
     /// Estimated energy of the sampled rest, and the variance of that estimate.
     pub estimate: [f64; PERIODS],
     pub variance: [f64; PERIODS],
+    /// Pieces put through the full physics (certain and sampled).
     pub evaluated: usize,
+    /// Pieces no longer pending: evaluated with certainty or covered by an estimate.
+    pub covered: usize,
     pub contributors: HashMap<u64, Contributor>,
     /// Every evaluated piece, kept only when the benchmark lists pieces.
     pub pieces: Vec<EvaluatedPiece>,
@@ -54,6 +57,7 @@ impl LayerSelection {
             estimate: [0.0; PERIODS],
             variance: [0.0; PERIODS],
             evaluated: 0,
+            covered: 0,
             contributors: HashMap::new(),
             pieces: Vec::new(),
         }
@@ -115,6 +119,7 @@ impl LayerSelection {
         keep_pieces: bool,
     ) {
         self.evaluated += 1;
+        self.covered += 1;
         for (total, value) in self.energy.iter_mut().zip(energy) {
             *total += value;
         }
@@ -344,6 +349,9 @@ fn sample_rest(
             for period in 0..PERIODS {
                 selection.estimate[period] += estimate[period];
                 selection.variance[period] += variance[period];
+            }
+            if !exhaustive {
+                selection.covered += population;
             }
             let mut shown = std::collections::BTreeSet::new();
             for &index in &draws {
