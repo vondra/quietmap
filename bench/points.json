@@ -1,0 +1,23 @@
+[
+  {"name": "prague_vinohrady", "lat": 50.07553, "lon": 14.43781, "what": "city street, Namesti Miru"},
+  {"name": "prague_old_town", "lat": 50.0873, "lon": 14.4208, "what": "pedestrian square, Old Town Square"},
+  {"name": "lany", "lat": 50.1283, "lon": 13.9594, "what": "small town, quiet"},
+  {"name": "brdy", "lat": 49.758, "lon": 13.865, "what": "forest, far from roads; aircraft reach beyond ring 1"},
+  {"name": "zurich_oberglatt", "lat": 47.4755, "lon": 8.5189, "what": "suburb under the ZRH runway 14 approach"},
+  {"name": "new_york_midtown", "lat": 40.7536, "lon": -73.9834, "what": "dense city, Bryant Park"},
+  {"name": "new_york_queens", "lat": 40.7557, "lon": -73.8831, "what": "residential, Jackson Heights"},
+  {"name": "phoenix", "lat": 33.4484, "lon": -112.074, "what": "downtown near PHX; the densest aircraft data"},
+  {"name": "los_angeles", "lat": 34.04777, "lon": -118.25016, "what": "downtown street"},
+  {"name": "sao_paulo", "lat": -23.5505, "lon": -46.6333, "what": "densest surface window, Praca da Se"},
+  {"name": "bogota", "lat": 4.5981, "lon": -74.076, "what": "dense city, Plaza de Bolivar"},
+  {"name": "jakarta", "lat": -6.1862, "lon": 106.823, "what": "dense city, Jalan MH Thamrin"},
+  {"name": "heathrow", "lat": 51.47, "lon": -0.4543, "what": "airport, between the runways"},
+  {"name": "tokyo", "lat": 35.68996, "lon": 139.7006, "what": "dense city, Shinjuku"},
+  {"name": "oslo", "lat": 59.9127, "lon": 10.7461, "what": "city centre, high latitude"},
+  {"name": "noise_barrier", "lat": 51.6443, "lon": -0.4995, "what": "120 m behind the M25 barrier at junction 17"},
+  {"name": "courtyard", "lat": 50.07651, "lon": 14.44107, "what": "closed courtyard of a Vinohrady block"},
+  {"name": "building_click", "lat": 50.07646, "lon": 14.44097, "what": "click on the building beside the courtyard"},
+  {"name": "approach_path", "lat": 50.1456, "lon": 14.3787, "what": "under the Prague runway 24 approach, Suchdol"},
+  {"name": "railway_side", "lat": 49.9134, "lon": 14.2403, "what": "beside the Prague-Beroun main line, Revnice"},
+  {"name": "harbour", "lat": 53.54545, "lon": 9.96909, "what": "Hamburg harbour, Landungsbruecken"}
+]

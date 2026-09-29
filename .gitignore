@@ -1,0 +1,6 @@
+/target
+__pycache__/
+.venv/
+node_modules/
+frontend/dist/
+*.log
