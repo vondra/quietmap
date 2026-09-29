@@ -20,8 +20,10 @@ pub struct EvaluatedPiece {
     pub group_key: u64,
     pub attribute: AttributeRef,
     /// Buildings and walls crossed by the ray from the piece's closest point: distance from the
-    /// receiver (m) and height (m), filled when listed.
-    pub crossings: Vec<(f64, f64)>,
+    /// receiver (m), height (m) and footprint id, filled when listed.
+    pub crossings: Vec<(f64, f64, u64)>,
+    /// The source's own footprint (0: none).
+    pub footprint_id: u64,
     /// The ray from the closest point, filled when listed.
     pub trace: Option<PieceTrace>,
 }
@@ -52,6 +54,7 @@ impl EvaluatedPiece {
             group_key: candidate.group_key,
             attribute: candidate.attribute,
             crossings: Vec::new(),
+            footprint_id: attributes[candidate.attribute].footprint_id,
             trace: None,
         }
     }
@@ -92,7 +95,13 @@ pub fn list_pieces(
             let length = (from[0] - receiver.position[0]).hypot(from[1] - receiver.position[1]);
             piece.crossings = crossings
                 .iter()
-                .map(|crossing| ((1.0 - crossing.t) * length, crossing.height_m))
+                .map(|crossing| {
+                    (
+                        (1.0 - crossing.t) * length,
+                        crossing.height_m,
+                        crossing.footprint_id,
+                    )
+                })
                 .collect();
             let source = &attributes[piece.attribute];
             let terms = trace(receiver, from, source, &mut scratch)?;

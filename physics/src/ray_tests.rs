@@ -1,5 +1,6 @@
-//! Pins of the ray: the platform clamp, ground-factor interpolation, the own footprint by id,
-//! overlapping roofs, and the flat-ground transfer with state mixing and air absorption.
+//! Pins of the ray: the platform clamp, ground-factor interpolation, the own footprint by id and
+//! every footprint containing a building's source, overlapping roofs, and the flat-ground transfer
+//! with state mixing and air absorption.
 
 use super::*;
 
@@ -80,6 +81,7 @@ fn own_footprint_crossings_are_skipped_and_tops_stand_on_interpolated_terrain() 
     let crossings = [
         building(0.05, 6.0, 1),
         building(0.1, 5.0, 3),
+        building(0.12, 5.0, 3),
         barrier(0.6, 3.0, 2),
         building(0.9, 6.0, 1),
         barrier(1.0, 4.0, 4),
@@ -87,18 +89,47 @@ fn own_footprint_crossings_are_skipped_and_tops_stand_on_interpolated_terrain() 
     let mut buffers = PathBuffers::default();
     buffers.fill(&profile, &crossings, &ends());
     let path = buffers.path(&profile, &ends(), 104.0);
-    // Terrain at 10 m is 100.0 (the platform), at 60 m 101.8, at 100 m 100.0.
-    assert_eq!(path.obstacle_tops.len(), 3);
+    // Terrain at 10 m is 100.0 (the platform), at 12 m 100.0, at 60 m 101.8, at 100 m 100.0.
+    assert_eq!(path.obstacle_tops.len(), 4);
     for (got, want) in path
         .obstacle_tops
         .iter()
-        .zip([(10.0, 105.0), (60.0, 104.8), (100.0, 104.0)])
+        .zip([(10.0, 105.0), (12.0, 105.0), (60.0, 104.8), (100.0, 104.0)])
     {
         assert!(
             (got.0 - want.0).abs() < 1e-9 && (got.1 - want.1).abs() < 1e-9,
             "{got:?} vs {want:?}"
         );
     }
+}
+
+/// A building's source inside another outline of the same building too (a part mapped twice):
+/// the ray leaves that footprint once, so it contains the source and does not screen it; a
+/// footprint the ray enters and leaves still screens. Other sources keep every crossing.
+#[test]
+fn footprints_containing_a_buildings_source_do_not_screen_it() {
+    let profile = profile();
+    let crossings = [
+        building(0.02, 20.0, 5),
+        building(0.05, 20.0, 1),
+        building(0.4, 8.0, 6),
+        building(0.45, 8.0, 6),
+    ];
+    let mut buffers = PathBuffers::default();
+    buffers.fill(&profile, &crossings, &ends());
+    let tops: Vec<f64> = buffers
+        .path(&profile, &ends(), 104.0)
+        .obstacle_tops
+        .iter()
+        .map(|top| top.0)
+        .collect();
+    assert_close(&tops, &[40.0, 45.0]);
+    let road = RayEnds {
+        own_footprint: 0,
+        ..ends()
+    };
+    buffers.fill(&profile, &crossings, &road);
+    assert_eq!(buffers.path(&profile, &road, 104.0).obstacle_tops.len(), 4);
 }
 
 /// Overlapping footprints never stack: roofs clip in closing order (earliest exit wins), a roof

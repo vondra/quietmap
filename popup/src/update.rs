@@ -53,6 +53,8 @@ pub struct Update<'u> {
     pub lon: f64,
     pub frame: LocalFrame,
     pub receiver_altitude_m: f64,
+    /// The receiver reflection bonus of the surroundings (dB, 0, 1.5 or 3).
+    pub reflection_db: f64,
     /// The building the click stands in, and its chosen façade.
     pub building: Option<BuildingClick>,
     pub layers: Vec<LayerAnswer>,
@@ -112,6 +114,7 @@ pub fn empty_answer(
         lon,
         frame,
         receiver_altitude_m: ground.at([0.0, 0.0])?.height_m + RECEIVER_HEIGHT_M,
+        reflection_db: 0.0,
         building: Some(click),
         layers: layer_answers(selections),
         contributors: Vec::new(),

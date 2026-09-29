@@ -298,6 +298,7 @@ pub fn answer(
             lon,
             frame,
             receiver_altitude_m: station.altitude_m,
+            reflection_db: station.reflection_db,
             building,
             layers: layer_answers(&selections),
             contributors: loudest_contributors(&selections),

@@ -138,9 +138,14 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             "distance_m": (piece.distance_m * 10.0).round() / 10.0,
             "received": received,
             "emission": emission,
-            "crossings": piece.crossings.iter().map(|(distance_m, height_m)| {
-                [(distance_m * 10.0).round() / 10.0, (height_m * 10.0).round() / 10.0]
+            "crossings": piece.crossings.iter().map(|(distance_m, height_m, footprint)| {
+                json!([
+                    (distance_m * 10.0).round() / 10.0,
+                    (height_m * 10.0).round() / 10.0,
+                    format!("{footprint:016x}"),
+                ])
             }).collect::<Vec<_>>(),
+            "footprint": format!("{:016x}", piece.footprint_id),
         }));
     }
     let mut totals = Map::new();
@@ -167,6 +172,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 "facade": facade,
             })
         }),
+        "reflection_db": update.reflection_db,
         "total_lden": totals.get("lden"),
         "total": totals,
         "sources": layers,

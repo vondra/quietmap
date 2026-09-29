@@ -66,6 +66,8 @@ struct PathBuffers {
     tops: Vec<PlanePoint>,
     roofs: Vec<Roof>,
     buildings: Vec<(u64, f64, f64)>,
+    /// Footprints containing a building's source (its own among them).
+    containing: Vec<u64>,
 }
 
 /// One roof span along the ray: from the wall at `x0` (top `top0`) to the wall at `x1`.
@@ -221,9 +223,37 @@ impl PathBuffers {
         self.tops.clear();
         self.roofs.clear();
         self.buildings.clear();
+        // A building's source sits inside its footprint, sometimes inside another outline of the
+        // same building too (a part mapped twice). The receiver stands outside every enclosed
+        // footprint, so a footprint the ray crosses an odd number of times contains the source:
+        // it is the source's own and does not screen it.
+        let mut containing = std::mem::take(&mut self.containing);
+        containing.clear();
+        if ends.own_footprint != 0 {
+            containing.extend(
+                crossings
+                    .iter()
+                    .filter(|c| c.building)
+                    .map(|c| c.footprint_id),
+            );
+            containing.sort_unstable();
+            let (mut odd, mut start) = (0, 0);
+            while start < containing.len() {
+                let id = containing[start];
+                let end = start + containing[start..].partition_point(|&other| other == id);
+                if (end - start) % 2 == 1 {
+                    containing[odd] = id;
+                    odd += 1;
+                }
+                start = end;
+            }
+            containing.truncate(odd);
+            containing.push(ends.own_footprint);
+            containing.sort_unstable();
+        }
         for crossing in crossings
             .iter()
-            .filter(|c| ends.own_footprint == 0 || c.footprint_id != ends.own_footprint)
+            .filter(|c| containing.binary_search(&c.footprint_id).is_err())
         {
             let x = crossing.t * length;
             let top = terrain_at(x) + crossing.height_m;
@@ -246,6 +276,7 @@ impl PathBuffers {
                 });
             }
         }
+        self.containing = containing;
         clip_roofs_in_closing_order(&mut self.roofs);
         let (d, z, g) = (&mut self.distance_m, &mut self.altitude_m, &mut self.ground);
         d.clear();
