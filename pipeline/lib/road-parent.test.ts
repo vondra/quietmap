@@ -1,4 +1,5 @@
 /** A finalized road generation restores to raw parents that the shared traffic writer accepts. */
+import { osmContract } from './osm-contract.js'
 
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -38,7 +39,7 @@ function finalizedFixture(name: string, secondChildName: string, orphanWay?: str
     aadt_light: vectorFromArray([500, 250, 40, 40], new Float64()),
     traffic_estimated: vectorFromArray([0, 15, 15, 15], new Uint8()),
   })
-  const schema = new Schema(finalized.schema.fields, new Map([['grid', 'z30'], ['roads_contract', 'country_baked_v1'],
+  const schema = new Schema(finalized.schema.fields, new Map([osmContract('roads'), ['grid', 'z30'], ['roads_contract', 'country_baked_v1'],
     ['road_traffic_contract', '1'], ['qm_blocks', 'stale'], ['roads_time_profiles', '{"source":"https://example.test/profiles","entries":[]}']]))
   writeFileSync(path, tableToIPC(new Table(schema, finalized.batches.map(batch => new RecordBatch(schema, batch.data))), 'file'))
   const whole = { segment: 0, square: SQUARE, start: [0, 0] as [number, number], end: [1, 0] as [number, number] }
@@ -60,7 +61,7 @@ test('finalized children restore to raw parents that enrichment accepts, and a r
   const raw = tableFromIPC(readFileSync(path))
   assert.deepEqual(raw.schema.fields.map(field => field.name), ['osm_id', 'segment_idx', 'start_gx', 'start_gy',
     'end_gx', 'end_gy', 'length_m', 'road_class', 'name', 'country_iso', 'source_id'])
-  assert.deepEqual([...raw.schema.metadata.keys()].sort(), ['grid', 'roads_contract'])
+  assert.deepEqual([...raw.schema.metadata.keys()].sort(), ['grid', 'osm_roads_contract', 'roads_contract'])
   assert.deepEqual([...raw.getChild('source_id')!], [0, 0, 0, 0])
   assert.deepEqual([...raw.getChild('segment_idx')!], [0, 0, 0, 1])
   assert.deepEqual([...raw.getChild('road_class')!], [0, 5, 5, 5])

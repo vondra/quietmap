@@ -4,7 +4,7 @@ import { TileLayer } from '@deck.gl/geo-layers'
 import { BitmapLayer } from '@deck.gl/layers'
 import { useMap } from 'react-map-gl/maplibre'
 
-import { fetchAndDecodeHM3, TILE_PX, NO_DATA } from '../lib/hm3-decoder'
+import { fetchAndDecodeHM3, HM3_COMPUTED_SILENCE, HM3_NOT_ASSESSED, TILE_PX } from '../lib/hm3-decoder'
 import { buildKey, tileUrl, useTileBuild, type TileBuilds } from '../lib/tile-urls'
 
 // Translucent green wash over pixels whose total Lden is at or below the
@@ -21,8 +21,8 @@ const MIN_ZOOM = 5
 
 interface Props {
   enabled: boolean
-  /** Quiet if total Lden ≤ this (dB). NO_DATA pixels are excluded so the
-   *  slider cleanly controls the highlighted band. */
+  /** Quiet if total Lden ≤ this (dB) or computed silence; not-assessed
+   *  pixels are excluded. */
   threshold: number
 }
 
@@ -111,17 +111,16 @@ function makeQuietLayer(threshold: number, build: TileBuilds) {
 }
 
 /**
- * Paint cells with a computed Lden ≤ `maxByte` green; leave the rest
- * transparent. NO_DATA stays transparent — "no computed value" is not the
- * same as "quiet", and treating it as quiet would flood every gap between
- * sources and make the threshold slider meaningless.
+ * Paint cells with a computed Lden ≤ `maxByte`, and computed silence, green;
+ * leave the rest transparent. Not assessed stays transparent: an unknown level
+ * is not a quiet one.
  */
 function quietMaskToImageData(cells: Uint8Array, maxByte: number): ImageData {
   const rgba = new Uint8ClampedArray(TILE_PX * TILE_PX * 4)
   const [r, g, b, a] = QUIET_RGBA
   for (let i = 0; i < cells.length; i++) {
     const byte = cells[i]
-    if (byte === NO_DATA || byte > maxByte) continue
+    if (byte === HM3_NOT_ASSESSED || (byte > maxByte && byte !== HM3_COMPUTED_SILENCE)) continue
     const off = i * 4
     rgba[off] = r
     rgba[off + 1] = g

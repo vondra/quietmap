@@ -1,5 +1,6 @@
 /** Parse the admitted Quebec MTQ DJMA line census. */
 
+import { withholdsCountPoint, withholdsCountGeometry } from './count-holdout.js'
 import { roadFeatureObservation } from './pinned-road-lines.js'
 import type { RoadObservation } from './road-observation.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
@@ -97,6 +98,7 @@ export function parseQuebecDjmaSource(raw: string): QuebecDjmaSource {
   }
   const result: QuebecDjmaSource = { sections: [], sourceRows: parsed.features.length,
     unavailableTrafficSkipped: 0, invalidRouteSkipped: 0, invalidGeometrySkipped: 0 }
+  let withheldSections = 0
   for (let sourceRow = 0; sourceRow < parsed.features.length; sourceRow++) {
     const feature = parsed.features[sourceRow]
     const properties = isRecord(feature) && isRecord(feature.properties) ? feature.properties : null
@@ -116,11 +118,13 @@ export function parseQuebecDjmaSource(raw: string): QuebecDjmaSource {
       result.invalidGeometrySkipped++
       continue
     }
+    if (withholdsCountGeometry((feature as { geometry: { coordinates: unknown } }).geometry.coordinates)) { withheldSections++; continue }
     result.sections.push({ sourceRow, ...roadFeatureObservation(feature as object, 'both-directions'), route, rank: quebecRouteRank(route),
       latitude: centroid[0], longitude: centroid[1], ...traffic,
       ...splitQuebecDjma(traffic.total, traffic.truckPercent) })
   }
-  if (result.sections.length === 0) throw new Error('Quebec DJMA source has no usable measurements')
+  if (result.sections.length === 0 && withheldSections === 0) throw new Error('Quebec DJMA source has no usable measurements')
+  result.sections = result.sections.filter(point => !withholdsCountPoint(point.latitude, point.longitude))
   return result
 }
 

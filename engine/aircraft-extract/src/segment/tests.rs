@@ -26,6 +26,7 @@ fn test_meta() -> SegmentMeta<'static> {
         veh_kind: 0,
         gse_class: 0,
         date_id: 1234,
+        departure_field_elev_m: f32::NAN,
     }
 }
 
@@ -38,7 +39,7 @@ pub(super) fn ground_pt(ts: f64, lat: f32, lon: f32, speed: f32) -> TracePoint {
         speed_kt: speed,
         track_deg: 0.0,
         baro_rate_fpm: 0.0,
-        flags: crate::trace::FLAG_ON_GROUND_RAW | crate::trace::FLAG_ALT_IS_GROUND,
+        flags: crate::trace::FLAG_ALT_IS_GROUND,
     }
 }
 
@@ -183,7 +184,7 @@ fn build_segments_flare_keeps_airborne_alt() {
     // airborne validator doesn't reject the segment for "start
     // altitude below terrain".
     let mut ground = pt(10.0, 50.001, 14.0, 0.0, 130.0, 0.0);
-    ground.flags = crate::trace::FLAG_ALT_IS_GROUND | crate::trace::FLAG_ON_GROUND_RAW;
+    ground.flags = crate::trace::FLAG_ALT_IS_GROUND;
     let points = vec![pt(0.0, 50.0, 14.0, 1_300.0, 130.0, 0.0), ground];
     let phases = vec![Phase::Airborne, Phase::Ground];
     let agl = vec![100.0, 0.0];
@@ -274,27 +275,246 @@ fn cruise_ground_holes_never_become_ground_or_cruise_chords() {
     }
 }
 
+/// A secondary sample inside a primary gap Stage 1 will not bridge is real
+/// coverage: FL280 over 2,000 m terrain is 6,534 m AGL (Airborne), so the
+/// 200 s hole keeps its secondary sample and the primary pair stays unbridged.
 #[test]
-fn cruise_ground_bit_cannot_split_one_flight_into_two_rotations() {
-    let mut points: Vec<_> = (0..6)
-        .map(|i| {
-            pt(
-                i as f64 * 100.0,
-                50.0,
-                14.0 + i as f32 * 0.01,
-                35_000.0,
-                450.0,
-                90.0,
-            )
-        })
-        .collect();
-    for p in &mut points[1..5] {
-        p.flags = crate::trace::FLAG_ON_GROUND_RAW;
+fn suppression_keeps_secondary_in_an_airborne_gap() {
+    let mut points = vec![
+        pt(0.0, 50.0, 14.0, 28_000.0, 450.0, 90.0),
+        pt(100.0, 50.0, 14.02, 28_000.0, 450.0, 90.0),
+        pt(200.0, 50.0, 14.04, 28_000.0, 450.0, 90.0),
+    ];
+    points[1].flags = crate::trace::FLAG_SECONDARY_PROVIDER;
+    let mut agl = vec![6534.0; 3];
+    let mut elev = vec![2000.0; 3];
+    let mut phases = vec![Phase::Airborne; 3];
+    suppress_covered_secondary_points(&mut points, &mut agl, &mut elev, &mut phases, 0);
+    assert_eq!(points.len(), 3);
+    let segs = build_segments(&points, &agl, &elev, &phases, &test_meta());
+    assert_eq!(segs.len(), 2);
+    assert!(
+        segs.iter()
+            .all(|s| s.flags & crate::flight::segment_flags::SECONDARY_ONLY != 0),
+        "the rescued stretch rides the increment estimator"
+    );
+}
+
+/// A 90 s numeric-altitude taxi gap keeps its secondary sample: Stage 1
+/// infers Ground (60 s budget) where Stage 0 only saw Airborne (120 s).
+#[test]
+fn suppression_keeps_secondary_in_a_ground_gap() {
+    let mut points = vec![
+        pt(0.0, 50.0, 14.0, 1_200.0, 10.0, 90.0),
+        pt(45.0, 50.0, 14.001, 1_200.0, 10.0, 90.0),
+        pt(90.0, 50.0, 14.002, 1_200.0, 10.0, 90.0),
+    ];
+    points[1].flags = crate::trace::FLAG_SECONDARY_PROVIDER;
+    let mut agl = vec![5.0; 3];
+    let mut elev = vec![360.0; 3];
+    let mut phases = vec![Phase::Ground; 3];
+    suppress_covered_secondary_points(&mut points, &mut agl, &mut elev, &mut phases, 0);
+    assert_eq!(points.len(), 3);
+    let segs = build_segments(&points, &agl, &elev, &phases, &test_meta());
+    assert_eq!(segs.len(), 2);
+}
+
+/// A secondary sample inside a primary pair Stage 1 will bridge only moves
+/// the stretch onto the noisier increment estimator: a descent holding Cruise
+/// through 7,400 m AGL joins a 200 s gap, so the secondary sample goes and
+/// one primary chord remains — as in any short airborne gap.
+#[test]
+fn suppression_drops_secondary_inside_a_joinable_gap() {
+    for (times, alts_ft, agls_m, phases) in [
+        (
+            [0.0, 100.0, 200.0],
+            [24_500.0, 24_300.0, 24_100.0],
+            [7400.0, 7350.0, 7300.0],
+            Phase::Cruise,
+        ),
+        (
+            [0.0, 50.0, 100.0],
+            [5_000.0, 5_000.0, 5_000.0],
+            [1500.0, 1500.0, 1500.0],
+            Phase::Airborne,
+        ),
+    ] {
+        let mut points = vec![
+            pt(times[0], 50.0, 14.0, alts_ft[0], 450.0, 90.0),
+            pt(times[1], 50.0, 14.02, alts_ft[1], 450.0, 90.0),
+            pt(times[2], 50.0, 14.04, alts_ft[2], 450.0, 90.0),
+        ];
+        points[1].flags = crate::trace::FLAG_SECONDARY_PROVIDER;
+        let mut agl = agls_m.to_vec();
+        let mut elev = vec![0.0; 3];
+        let mut phases = vec![phases; 3];
+        suppress_covered_secondary_points(&mut points, &mut agl, &mut elev, &mut phases, 0);
+        assert_eq!(points.len(), 2, "phases {phases:?}");
+        assert!(!points.iter().any(|p| p.is_secondary_provider()));
+        let segs = build_segments(&points, &agl, &elev, &phases, &test_meta());
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].flags & crate::flight::segment_flags::SECONDARY_ONLY, 0);
     }
+}
+
+/// The −30 m endpoint gate lives in the pair predicate now: an airborne
+/// pair 100 m under the terrain drops, exactly −30 m AGL keeps (the
+/// inclusive boundary pins against a future `>` rewrite), and ground pairs
+/// bypass even when nominally underground (they re-enter via Stage 2C).
+#[test]
+fn pair_gate_drops_underground_airborne_and_bypasses_ground() {
+    let pair = |alt_ft: f32, elev_m: f32, phase: Phase| {
+        let points = vec![
+            pt(0.0, 50.0, 14.0, alt_ft, 250.0, 0.0),
+            pt(10.0, 50.001, 14.001, alt_ft, 250.0, 0.0),
+        ];
+        let agl = vec![alt_ft * 0.3048 - elev_m; 2];
+        let elev = vec![elev_m; 2];
+        let phases = vec![phase; 2];
+        (points, agl, elev, phases)
+    };
+    // 100 m under the terrain: a transponder spike, drops.
+    let (points, agl, elev, phases) = pair(1312.0, 500.0, Phase::Airborne);
+    assert_eq!(
+        pair_segment_phase(&points, &agl, &elev, &phases, 0, 0, 1),
+        None
+    );
+    // Exactly −30 m AGL on both endpoints: keeps.
+    let (points, agl, elev, phases) = pair(1542.0, 500.0, Phase::Airborne);
+    assert_eq!(
+        pair_segment_phase(&points, &agl, &elev, &phases, 0, 0, 1),
+        Some(Phase::Airborne)
+    );
+    // Ground pairs bypass the gate.
+    let (points, agl, elev, phases) = pair(1312.0, 500.0, Phase::Ground);
+    assert_eq!(
+        pair_segment_phase(&points, &agl, &elev, &phases, 0, 0, 1),
+        Some(Phase::Ground)
+    );
+}
+
+/// readsb column 6 bit 0 marks a stale position, not ground: slow airborne
+/// points carrying it must neither be ground nor end a rotation. Only a
+/// surface report (`alt = "ground"`) rests the aircraft.
+#[test]
+fn stale_position_bit_is_not_ground_and_cannot_split_a_flight() {
+    let json = r#"{"icao":"49c083","t":"C172","timestamp":0,"trace":[
+            [0,50.0,14.0,2000.0,90.0,90.0,0,0],
+            [100,50.0,14.01,2000.0,90.0,90.0,1,0],
+            [200,50.0,14.02,2000.0,90.0,90.0,1,0],
+            [300,50.0,14.03,2000.0,90.0,90.0,1,0],
+            [400,50.0,14.04,2000.0,90.0,90.0,1,0],
+            [500,50.0,14.05,2000.0,90.0,90.0,0,0]
+        ]}"#;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, json.as_bytes()).unwrap();
+    let trace = crate::trace::parse_trace(encoder.finish().unwrap().as_slice())
+        .unwrap()
+        .unwrap();
+    let mut points = trace.points;
+    assert!(points.iter().all(|p| p.flags == 0));
+    let agl_m = vec![600.0; points.len()];
+    assert!(!crate::ground_inference::ground_flags(&points, &agl_m)
+        .iter()
+        .any(|g| *g));
     assert_eq!(split_flights(&points), vec![0..6]);
     for p in &mut points[1..5] {
-        p.alt_ft = 13_325.0;
+        p.alt_ft = f32::NAN;
+        p.flags = crate::trace::FLAG_ALT_IS_GROUND;
         p.speed_kt = 5.0;
     }
     assert_eq!(split_flights(&points), vec![0..5]);
+}
+
+/// A steep helicopter descent keeps its BVI approach correction when storage
+/// splitting cuts it into short pieces: Stage 1 stamps the whole-chord state
+/// and every piece inherits it, so the split SEL matches the whole chord.
+/// The gate reads whole-chord loss: ±0.5 m around −10 m stamps or clears.
+#[test]
+fn split_heli_descent_keeps_the_approach_correction() {
+    use crate::flight::segment_flags;
+    use noise_compute::emission::aircraft::{segment_sel_with_cuts, NpdLuts};
+
+    let mut meta = test_meta();
+    meta.profile_idx = crate::profile::profile_idx("EC35");
+    // One sample pair: a 3° EC35 descent, 4.6 km losing 235 m — past the
+    // 4 km storage cap, so the shuffle splits it.
+    let points = [
+        pt(0.0, 50.5, 14.0, 1000.0, 150.0, 90.0),
+        pt(60.0, 50.5, 14.065, 230.0, 150.0, 90.0),
+    ];
+    let chords = build_segments(
+        &points,
+        &[304.8, 70.1],
+        &[0.0, 0.0],
+        &[Phase::Airborne, Phase::Airborne],
+        &meta,
+    );
+    assert_eq!(chords.len(), 1);
+    let chord = &chords[0];
+    assert!(!chord.is_departure());
+    assert!(chord.flags & segment_flags::HELI_DESCENT != 0);
+    let mut pieces = Vec::new();
+    super::split::split_airborne_segment(chord.clone(), &mut pieces);
+    assert!(pieces.len() >= 2, "expected a split, got {}", pieces.len());
+    assert!(
+        pieces.iter().all(|p| p.flags & segment_flags::HELI_DESCENT != 0),
+        "every piece inherits the chord state"
+    );
+
+    let m_to_ft = |m: f32| m / 0.3048;
+    for (loss_m, stamped) in [(10.5, true), (9.5, false)] {
+        let pts = [
+            pt(0.0, 50.5, 14.0, m_to_ft(300.0), 100.0, 90.0),
+            pt(10.0, 50.5, 14.005, m_to_ft(300.0 - loss_m), 100.0, 90.0),
+        ];
+        let segs = build_segments(
+            &pts,
+            &[300.0, 290.0],
+            &[0.0, 0.0],
+            &[Phase::Airborne, Phase::Airborne],
+            &meta,
+        );
+        assert_eq!(segs.len(), 1);
+        assert_eq!(
+            segs[0].flags & segment_flags::HELI_DESCENT != 0,
+            stamped,
+            "loss {loss_m} m"
+        );
+    }
+
+    let acoustic = |seg: &FlightSegment| noise_compute::types::AircraftSegment {
+        flight_id: seg.flight_id,
+        profile_idx: seg.profile_idx,
+        is_departure: seg.is_departure(),
+        on_ground: false,
+        period: seg.period,
+        date_id: seg.date_id,
+        start_lat: f64::from(seg.start_lat),
+        start_lon: f64::from(seg.start_lon),
+        start_alt_m: seg.start_alt_m,
+        end_lat: f64::from(seg.end_lat),
+        end_lon: f64::from(seg.end_lon),
+        end_alt_m: seg.end_alt_m,
+        speed_kt: seg.speed_kt,
+        segment_length_m: seg.length_m,
+        departure_field_elev_m: seg.departure_field_elev_m,
+        heli_descent: seg.flags & segment_flags::HELI_DESCENT != 0,
+        count_weight: 1.0,
+        surface_model: false,
+        ground_context: 0,
+        ground_ops_kind: 0,
+        source_id: u16::from(seg.source_id),
+    };
+    let luts = NpdLuts::shared();
+    let energy = |seg: &FlightSegment| {
+        let (sel, _) =
+            segment_sel_with_cuts(&acoustic(seg), 50.5, 14.0325, 0.0, -30.0, -30.0, luts, None)
+                .expect("heli row computes");
+        10.0f64.powf(sel / 10.0)
+    };
+    let whole = energy(chord);
+    let split: f64 = pieces.iter().map(energy).sum();
+    let delta_db = 10.0 * (whole / split).log10();
+    assert!(delta_db.abs() < 0.05, "whole-vs-split {delta_db:.4} dB");
 }

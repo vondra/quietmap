@@ -21,7 +21,7 @@ fn run_airport_traffic_empty_segments_writes_nothing() {
     std::fs::create_dir_all(&by_square).unwrap();
     std::fs::create_dir_all(&prepared_year).unwrap();
     let n =
-        run_airport_traffic(&by_square, &[], &prepared_year, &prepared_year, 14, 0, None).unwrap();
+        run_airport_traffic(&by_square, &[], &prepared_year, &prepared_year, &crate::provider_receipt::window_of(14, 0), None).unwrap();
     assert_eq!(n, 0);
 }
 
@@ -77,11 +77,11 @@ fn squarecache_load_concatenates_real_and_synth_lines() {
     .unwrap();
     assert_eq!(cache.lines.len(), 1, "synth line should be loaded");
     assert_eq!(
-        cache.airport_keys[0], synth_key,
+        cache.airports[cache.airport_ids[0] as usize], synth_key,
         "synth row must keep its pre-resolved airport_key (no re-resolution)"
     );
     assert_ne!(
-        cache.airport_keys[0], "REDHERRING",
+        cache.airports[cache.airport_ids[0] as usize], "REDHERRING",
         "synth row must NOT be re-resolved via nearest_aerodrome_within"
     );
     let idx = cache
@@ -214,8 +214,8 @@ fn squarecache_load_unions_real_and_synth_with_correct_keys() {
     )
     .unwrap();
     assert_eq!(cache.lines.len(), 2, "real + synth both loaded");
-    assert_eq!(cache.airport_keys[0], "LKPR");
-    assert_eq!(cache.airport_keys[1], "auto-synthetic");
+    assert_eq!(cache.airports[cache.airport_ids[0] as usize], "LKPR");
+    assert_eq!(cache.airports[cache.airport_ids[1] as usize], "auto-synthetic");
     assert_eq!(cache.line_index.get(&(42, 0)), Some(&0));
     assert_eq!(cache.line_index.get(&(synth_osm_id, 0)), Some(&1));
 }
@@ -228,8 +228,9 @@ mod movement;
 
 #[test]
 fn counter_row_order_uses_every_identity_field_independently_of_hash_order() {
+    let airports = ["A".to_string(), "B".to_string()];
     let base = CounterKey {
-        airport_key: "A".into(),
+        airport: 0,
         osm_id: 1,
         segment_idx: 0,
         ops_kind: 0,
@@ -237,25 +238,30 @@ fn counter_row_order_uses_every_identity_field_independently_of_hash_order() {
         veh_kind: 0,
         class_idx: 0,
         period: 0,
+        secondary_only: false,
     };
     let mut keys = vec![base.clone()];
-    for field in 0..8 {
+    for field in 0..9 {
         let mut key = base.clone();
         match field {
-            0 => key.airport_key = "B".into(),
+            0 => key.airport += 1,
             1 => key.osm_id += 1,
             2 => key.segment_idx += 1,
             3 => key.ops_kind += 1,
             4 => key.is_departure += 1,
             5 => key.veh_kind += 1,
             6 => key.class_idx += 1,
-            _ => key.period += 1,
+            7 => key.period += 1,
+            _ => key.secondary_only = true,
         }
         keys.push(key);
     }
     keys.sort();
     let projection = |row: &AirportTrafficRow| CounterKey {
-        airport_key: row.airport_key.clone(),
+        airport: airports
+            .iter()
+            .position(|key| *key == row.airport_key)
+            .unwrap() as u32,
         osm_id: row.osm_id,
         segment_idx: row.segment_idx,
         ops_kind: row.ops_kind,
@@ -263,6 +269,7 @@ fn counter_row_order_uses_every_identity_field_independently_of_hash_order() {
         veh_kind: row.veh_kind,
         class_idx: row.class_idx,
         period: row.period,
+        secondary_only: row.secondary_only,
     };
     for reverse in [false, true] {
         let mut insertion = keys.clone();
@@ -282,11 +289,12 @@ fn counter_row_order_uses_every_identity_field_independently_of_hash_order() {
                 )
             })
             .collect();
-        let rows = counters_to_rows(counters, &HashMap::new());
+        let rows = counters_to_rows(counters, &HashMap::new(), &airports);
         assert!(rows.iter().map(projection).eq(keys.iter().cloned()));
-        assert!(rows
-            .iter()
-            .all(|r| r.band_energy_lin == [3.0; NUM_BANDS] && r.unique_movement_count == 2));
+        // The secondary twin of `base` holds only movements `base` already
+        // counts, so it adds none.
+        assert!(rows.iter().all(|r| r.band_energy_lin == [3.0; NUM_BANDS]
+            && r.unique_movement_count == if r.secondary_only { 0 } else { 2 }));
     }
 }
 
@@ -324,10 +332,10 @@ fn indexed_real_line_identity_preserves_ties_name_only_and_empty_plan() {
     ] {
         let index = crate::airport_index::AerodromeIndex::build(&areas);
         let cache = SquareCache::load(dir.path(), owner, &index).unwrap();
-        assert_eq!(cache.airport_keys.len(), 1);
+        assert_eq!(cache.airport_ids.len(), 1);
         match expected {
-            Some(key) => assert_eq!(cache.airport_keys[0], key),
-            None => assert!(cache.airport_keys[0].starts_with("strip:z15:")),
+            Some(key) => assert_eq!(cache.airports[cache.airport_ids[0] as usize], key),
+            None => assert!(cache.airports[cache.airport_ids[0] as usize].starts_with("strip:z15:")),
         }
     }
 }

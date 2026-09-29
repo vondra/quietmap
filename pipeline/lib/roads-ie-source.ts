@@ -1,5 +1,6 @@
 /** Parse admitted TII counter sites and one pre-COVID weekday class aggregate. */
 
+import { withholdsCountPoint } from './count-holdout.js'
 import { parse } from 'csv-parse/sync'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
@@ -85,7 +86,7 @@ export function parseIrishTiiSource(sitesRaw: string, countsRaw: string): IrishT
       heavy: classes[4] + classes[5] + classes[6] })
   }
   if (observations.length === 0) throw new Error('TII source has no usable traffic observations')
-  return { observations, siteRows: parsedSites.length, countRows: rows.length,
+  return { observations: observations.filter(point => !withholdsCountPoint(point.latitude, point.longitude)), siteRows: parsedSites.length, countRows: rows.length,
     usableSites: sites.size, countedSites: counts.size, unsupportedClassRows }
 }
 

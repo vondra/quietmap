@@ -61,7 +61,7 @@ function validateAircraftMetadata(value, path) {
       'periods', 'observed_flights_per_day', 'helicopter_flights_per_day',
       'cruise_transits_per_day', 'lmax_peak', 'faint', 'audible', 'disruptive',
       'top_day_energy_share', 'top_day_date', 'top_flight_energy_share',
-      'sample_days', 'ga_sample_days',
+      'sample_days', 'increment_sample_days',
     ], ['top_flights'])
     validatePeriods(value.airborne.periods, `${p}.periods`)
     for (const key of ['faint', 'audible', 'disruptive']) {
@@ -95,7 +95,7 @@ export function validateMetadata(value, sourceType, path) {
   if (value.kind === 'aircraft') return validateAircraftMetadata(value, path)
   const definitions = {
     road: [
-      ['kind', ...ROAD_TRAFFIC_KEYS, 'dominant_source_id', 'speed_posted_kmh', 'speed_kmh', 'speed_source', 'road_class', 'surface',
+      ['kind', ...ROAD_TRAFFIC_KEYS, 'cross_section_aadt', 'dominant_source_id', 'speed_posted_kmh', 'speed_kmh', 'speed_source', 'road_class', 'surface',
         'surface_corr_db', 'lanes', 'oneway', 'dominant_segment_idx',
         'dominant_distance_m', 'closest_distance_m', 'speed_min_kmh', 'speed_max_kmh',
         'oneway_segment_count', 'twoway_segment_count', 'segment_count', 'total_length_m',
@@ -116,6 +116,8 @@ export function validateMetadata(value, sourceType, path) {
   exactKeys(value, path, definition[0], definition[1])
   if (expectedKind === 'road') {
     validateRoadTraffic(value, path)
+    finite(value.cross_section_aadt, `${path}.cross_section_aadt`)
+    if (value.cross_section_aadt < 0) fail(`${path}.cross_section_aadt`, 'negative traffic')
     if (Object.hasOwn(value, 'profiled_segment_count')) {
       integer(value.profiled_segment_count, `${path}.profiled_segment_count`, 0)
       if (value.profiled_segment_count > value.segment_count) fail(path, 'profiled_segment_count exceeds segment_count')

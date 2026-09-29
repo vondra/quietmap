@@ -1,5 +1,6 @@
 /** Fill native turbine parameters in original global-then-national order under one Arrow lock. */
 
+import { requireOsmContract } from './osm-contract.js'
 import { DataType, Float32, Table, vectorFromArray } from 'apache-arrow'
 import { withArrowWrite } from './provenance.js'
 import { gridToLonLat, GRID_CONTRACT } from './prepared-grid.js'
@@ -49,6 +50,7 @@ export function windParameterMatcher(registers: readonly WindRegister[]) {
 export async function enrichWindSquare(path: string, match: ReturnType<typeof windParameterMatcher>) {
   const result = { rows: 0, turbines: 0, changed: 0, updated: false }
   await withArrowWrite(path, table => {
+    requireOsmContract(table, 'industrial')
     if (table.schema.metadata.get('grid') !== GRID_CONTRACT) throw new Error('wind Arrow must use the native z30 grid contract')
     const type = table.getChild('source_type'), gx = table.getChild('centroid_gx'), gy = table.getChild('centroid_gy')
     if (!type || !DataType.isInt(type.type) || type.type.isSigned || type.type.bitWidth !== 8 || type.nullCount) throw new Error('wind source_type must be non-null Uint8')

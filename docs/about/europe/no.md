@@ -20,4 +20,4 @@ Wind turbines are OpenStreetMap points, matched within 500 m to turbines of oper
 
 ## Buildings and terrain
 
-Kartverket has measured building heights, available only as county files behind an order form; they are not loaded. Heights: OpenStreetMap tags and the GHSL average for the block.
+Kartverket has measured building heights, available only as county files behind an order form; they are not loaded. Heights: OpenStreetMap tags and the typical height for the footprint size.

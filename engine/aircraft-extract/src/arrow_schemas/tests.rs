@@ -93,9 +93,11 @@ fn airport_traffic_schema_has_required_columns() {
         "microseg_unique_arr_count",
         "microseg_unique_dep_count",
         "microseg_unique_gse_count_per_class",
-        "microseg_unique_ga_count",
-        "microseg_unique_ga_arr_count",
-        "microseg_unique_ga_dep_count",
+        "secondary_only",
+        "microseg_unique_secondary_count",
+        "microseg_unique_secondary_arr_count",
+        "microseg_unique_secondary_dep_count",
+        "microseg_unique_secondary_gse_count_per_class",
     ] {
         assert!(
             s.field_with_name(required).is_ok(),

@@ -8,21 +8,27 @@ pub struct GroundTrafficWork {
     pub owner: u64,
     pub inputs: Vec<PathBuf>,
     pub candidates: Vec<u64>,
+    /// Per-worker base without the shared plan: streamed input buffers plus
+    /// decoded candidate lines. Accumulation growth reserves on top at runtime.
     pub allocation: u64,
     pub input_rows: u64,
     pub input_bytes: u64,
     pub cached_lines: usize,
-    pub owned_lines: usize,
-    pub maximum_counter_rows: usize,
-    pub maximum_airport_key_bytes: usize,
 }
 
 impl GroundTrafficWork {
     pub fn indexed_allocation(&self) -> Result<u64> {
         self.allocation
-            .checked_add(AirportLineIndex::allocation_allowance(self.cached_lines)?)
+            .checked_add(AirportLineGrid::allocation_allowance(self.cached_lines)?)
             .context("indexed ground worker allowance overflow")
     }
+}
+
+/// Routed owners plus the shared structures they all read: workers size off
+/// their own base each, and the shared bytes are charged once process-wide.
+pub struct GroundTrafficPlan {
+    pub works: Vec<GroundTrafficWork>,
+    pub shared_bytes: u64,
 }
 
 #[derive(Default)]
@@ -39,7 +45,7 @@ pub fn plan_ground_traffic(
     prepared_root: &Path,
     scope: Option<&ScopeBbox>,
     index: &crate::airport_index::AerodromeIndex,
-) -> Result<Vec<GroundTrafficWork>> {
+) -> Result<GroundTrafficPlan> {
     anyhow::ensure!(
         input_root.is_dir(),
         "ground shard directory missing: {}",
@@ -53,7 +59,7 @@ pub fn plan_ground_traffic(
     let mut lines = Vec::new();
     let mut line_ids = HashSet::new();
     let mut broadphase: HashMap<u64, Vec<usize>> = HashMap::new();
-    // bytes, line count, maximum CounterKey rows, maximum actual/fallback key bytes.
+    // Decoded-cache bytes and line count per cached owner.
     let mut cache_allocations = HashMap::new();
     for (owner, directory) in crate::spatial::square_directories(prepared_root)? {
         anyhow::ensure!(!(scope.is_some_and(|scope| !scope.contains_square(owner)) && directory.join("airport_traffic.arrow").try_exists()?),
@@ -76,47 +82,28 @@ pub fn plan_ground_traffic(
                 .reserved()
                 .checked_add(
                     file_bytes
-                        .checked_mul(8)
+                        .checked_mul(2)
                         .context("airport decode allowance overflow")?,
                 )
                 .context("airport cache allowance overflow")?,
         )?;
         let cache = SquareCache::load(prepared_root, owner, &empty_index)?;
-        let cache_bytes = file_bytes as u128 * 8
-            + cache.lines.len() as u128
-                * (8 * size_of::<AirportLineSegment>()
-                    + 4 * index.maximum_airport_key_bytes()
-                    + 4 * size_of::<((u64, u16), usize)>()
-                    + 4 * size_of::<String>()
-                    + 3 * size_of::<crate::stage_2c::airport_traffic::LegIntersection>())
-                    as u128;
-        let maximum_counter_rows = cache
-            .lines
-            .iter()
-            .try_fold(0usize, |total, line| {
-                let directions = usize::from(
-                    ops_kind_from_aeroway(line.aeroway_type) == Some(GROUND_OPS_KIND_RUNWAY_ROLL),
-                ) + 1;
-                total.checked_add(
-                    3 * (noise_compute::emission::profiles_generated::NUM_CLASSES * directions
-                        + NUM_GSE_CLASSES),
-                )
-            })
-            .context("ground counter row bound overflow")?;
-        let maximum_key_bytes = cache
-            .airport_keys
-            .iter()
-            .map(String::len)
-            .max()
-            .unwrap_or(0)
-            .max(index.maximum_airport_key_bytes());
+        // Live at once per cached owner: the decoded lines, their lookup map,
+        // airport keys and owner ids, with the Arrow buffers coexisting with
+        // the decoded rows during load. Doubled for hash/vec growth slack —
+        // tables at most double while resizing into their final capacity.
+        let per_line = (size_of::<AirportLineSegment>()
+            + size_of::<((u64, u16), usize)>()
+            + size_of::<String>()
+            + size_of::<u64>()
+            + index.maximum_airport_key_bytes()) as u128;
+        let cache_bytes =
+            file_bytes as u128 * 2 + cache.lines.len() as u128 * per_line * 2;
         cache_allocations.insert(
             owner,
             (
                 u64::try_from(cache_bytes).context("airport cache size overflow")?,
                 cache.lines.len(),
-                maximum_counter_rows,
-                maximum_key_bytes,
             ),
         );
         let mut extent = Extent::empty(owner);
@@ -148,14 +135,15 @@ pub fn plan_ground_traffic(
     let mut by_owner: HashMap<u64, RoutedGroundInputs> = HashMap::new();
     for (owner, path) in inputs {
         let file_bytes = path.metadata()?.len();
-        let validation = file_bytes
-            .checked_mul(4)
-            .and_then(|n| {
-                n.checked_add(
-                    (2 * crate::arrow_io::SEGMENT_READ_CHUNK_ROWS * size_of::<FlightSegment>())
-                        as u64,
-                )
-            })
+        // The reader streams one Arrow batch at a time and decodes it in
+        // chunks, so a worker holds one batch plus one decoded chunk — never
+        // the whole file. Charge the footer's largest batch plus a decoded
+        // chunk with allocator slack, not a multiple of the file size.
+        let largest_batch = crate::arrow_io::inspect_ipc_allocation(&path)?.largest_batch_bytes;
+        let chunk_estimate =
+            (2 * crate::arrow_io::SEGMENT_READ_CHUNK_ROWS * size_of::<FlightSegment>()) as u64;
+        let validation = largest_batch
+            .checked_add(chunk_estimate)
             .context("ground input allowance overflow")?;
         AllocationBudget::new(
             limit,
@@ -195,9 +183,8 @@ pub fn plan_ground_traffic(
             Ok(())
         })
         .with_context(|| format!("validate {}", path.display()))?;
-        let input_allocation = file_bytes
-            .checked_mul(4)
-            .and_then(|n| n.checked_add(2 * decoded_batch as u64))
+        let input_allocation = largest_batch
+            .checked_add(2 * decoded_batch as u64)
             .context("ground input allowance overflow")?;
         let mut candidates = HashSet::new();
         for square in extent.squares() {
@@ -239,7 +226,7 @@ pub fn plan_ground_traffic(
         }
     }
     let plan_allocation = budget.reserved();
-    let mut plan = Vec::new();
+    let mut works = Vec::new();
     for (owner, work) in by_owner {
         let RoutedGroundInputs {
             inputs,
@@ -254,17 +241,14 @@ pub fn plan_ground_traffic(
             .iter()
             .try_fold(0u64, |n, owner| n.checked_add(cache_allocations[owner].0))
             .context("ground cache sum overflow")?;
-        let allocation = plan_allocation
-            .checked_add(input_allocation)
-            .and_then(|n| n.checked_add(cache))
+        let allocation = input_allocation
+            .checked_add(cache)
             .context("ground worker allowance overflow")?;
         let cached_lines = candidates
             .iter()
             .try_fold(0usize, |n, id| n.checked_add(cache_allocations[id].1))
             .context("ground cached line count overflow")?;
-        let (_, owned_lines, maximum_counter_rows, maximum_airport_key_bytes) =
-            cache_allocations[&owner];
-        plan.push(GroundTrafficWork {
+        works.push(GroundTrafficWork {
             owner,
             inputs,
             candidates,
@@ -272,11 +256,22 @@ pub fn plan_ground_traffic(
             input_rows,
             input_bytes,
             cached_lines,
-            owned_lines,
-            maximum_counter_rows,
-            maximum_airport_key_bytes,
         });
     }
-    plan.sort_unstable_by_key(|work| work.owner);
-    Ok(plan)
+    works.sort_unstable_by_key(|work| work.owner);
+    // The routing tables stay resident beside every worker; the per-owner
+    // candidate lists are collected fresh here. Charged once process-wide.
+    let mut shared_bytes = plan_allocation;
+    for work in &works {
+        shared_bytes = shared_bytes
+            .checked_add(size_of::<GroundTrafficWork>() as u64)
+            .and_then(|n| {
+                n.checked_add((work.candidates.len() * size_of::<u64>()) as u64)
+            })
+            .context("ground shared allowance overflow")?;
+    }
+    Ok(GroundTrafficPlan {
+        works,
+        shared_bytes,
+    })
 }

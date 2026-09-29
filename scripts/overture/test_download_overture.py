@@ -40,6 +40,8 @@ class OvertureDownloadTests(unittest.TestCase):
             pa.field("height", pa.float64()), pa.field("num_floors", pa.int32()),
             pa.field("class", pa.string()), pa.field("subtype", pa.string()),
             pa.field("is_underground", pa.bool_()),
+            pa.field("sources", pa.list_(pa.struct([pa.field("property", pa.string()),
+                                                    pa.field("dataset", pa.string())]))),
         ], metadata={b"source": b"independent-fixture"})
         boxes = [(0.1, 0.1, 0.2, 0.2), (0.9, 0.1, 1.1, 0.2),
                  (1.1, 0.1, 1.2, 0.2), (-0.2, 0.1, 0.0, 0.2),
@@ -48,7 +50,8 @@ class OvertureDownloadTests(unittest.TestCase):
         rows = [{"id": str(index), "geometry": bytes([index]) * 100,
                  "bbox": dict(zip(["xmin", "ymin", "xmax", "ymax"], box)) if box else None,
                  "height": None if index % 2 else 12.5, "num_floors": index,
-                 "class": "house", "subtype": "residential", "is_underground": False}
+                 "class": "house", "subtype": "residential", "is_underground": False,
+                 "sources": [{"property": "", "dataset": "OpenStreetMap"}]}
                 for index, box in enumerate(boxes)]
         rows = [{**row, "id": str(index)} for index, row in enumerate(rows * 20_000)]
         table = pa.Table.from_pylist(rows, schema=schema)

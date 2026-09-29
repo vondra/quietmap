@@ -8,6 +8,8 @@ map: { center: [19.4, 52.0], zoom: 6 }
 
 National and provincial roads: [General Traffic Measurement 2020/2021](https://www.gov.pl/web/gddkia/generalny-pomiar-ruchu-20202021) of GDDKiA (motorcycles, cars, vans, trucks, buses).
 
+A national road takes the counted section of its number within 500 m; lettered sections such as S8F count as their road. Provincial sections are published without locations, so a provincial road takes the median section of its number, marked as estimated.
+
 The census excludes cities with county rights, so the main streets of Warsaw, Kraków, Łódź and Wrocław, among others, have no counts. Uncounted streets use the class default, adjusted for surrounding buildings and the counted roads they connect to.
 
 ## Railways

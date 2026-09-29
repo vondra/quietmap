@@ -15,8 +15,6 @@ mod cli_days;
 mod cli_preflight;
 #[path = "aircraft_extract/cli_run_all.rs"]
 mod cli_run_all;
-#[path = "aircraft_extract/cli_runners.rs"]
-mod cli_runners;
 #[path = "aircraft_extract/cli_validate.rs"]
 mod cli_validate;
 
@@ -35,67 +33,39 @@ fn main() -> Result<()> {
             let paths = cli_validate::list_segments_day_paths_multi(&segments_dir)?;
             aircraft_extract::stage_2b::census_cruise_inputs(&paths, &output)?;
         }
-        Cmd::ValidateSegments {
-            adsb_cache,
-            segments_dir,
-            days,
-            class_filter,
-            feed,
-        } => {
-            cli_validate::validate_segments(&segments_dir, &days, class_filter, feed, &adsb_cache)?
-        }
         Cmd::Audit {
             prepared_year_dir,
             segments_by_square,
         } => cli_audit::audit_prepared(&prepared_year_dir, &segments_by_square)?,
-        Cmd::Shuffle {
-            segments_dir,
-            ga_segments_dir,
-            ga_adsb_cache,
-            out_dir,
-            scope_bbox,
-        } => cli_runners::run_subcmd_shuffle(
-            segments_dir,
-            ga_segments_dir,
-            ga_adsb_cache,
-            out_dir,
-            scope_bbox,
-        )?,
         Cmd::RunAll {
             adsb_cache,
+            secondary_adsb_cache,
             prepared_year_dir,
             prepared_dir,
             work_dir,
             segments_dir,
             days,
+            increment_days,
             scope_bbox,
             from_stage,
             until_stage,
-            feed,
-            class_filter,
-            ga_segments_dir,
-            ga_adsb_cache,
-            fail_on_ga_cruise,
             cruise_phase,
             cruise_spill_disk_budget_bytes,
-        } => cli_run_all::run_all(
-            adsb_cache,
+        } => cli_run_all::run_all(cli_run_all::RunAllRequest {
+            primary_cache: adsb_cache,
+            secondary_cache: secondary_adsb_cache,
             prepared_year_dir,
             prepared_dir,
             work_dir,
+            reused_segments_dirs: segments_dir,
             days,
+            increment_days,
             scope_bbox,
             from_stage,
             until_stage,
-            feed,
-            class_filter,
-            ga_segments_dir,
-            ga_adsb_cache,
-            fail_on_ga_cruise,
-            segments_dir,
             cruise_phase,
             cruise_spill_disk_budget_bytes,
-        )?,
+        })?,
     }
     Ok(())
 }

@@ -1,5 +1,6 @@
 /** Enrich z9 road vectors with Finnish Väylävirasto 2024 KVL measurements. */
 
+import { withholdsCountPoint, withholdsCountGeometry } from './lib/count-holdout.js'
 import { roadFeatureObservation } from './lib/pinned-road-lines.js'
 import type { RoadObservation } from './lib/road-observation.js'
 import { existsSync, readFileSync, statSync } from 'node:fs'
@@ -125,6 +126,7 @@ export function parseFiPages(pages: readonly unknown[]): ParsedFiPages {
         inconsistentClassTotalsSkipped++
         continue
       }
+      if (withholdsCountGeometry((feature as { geometry: { coordinates: unknown } }).geometry.coordinates)) continue
       segments.push({ ...roadFeatureObservation(feature as object, 'both-directions'),
         roadNumber,
         latitude,
@@ -138,7 +140,7 @@ export function parseFiPages(pages: readonly unknown[]): ParsedFiPages {
       })
     }
   }
-  return { segments, inconsistentClassTotalsSkipped }
+  return { segments: segments.filter(point => !withholdsCountPoint(point.latitude, point.longitude)), inconsistentClassTotalsSkipped }
 }
 
 function pagePath(enrichmentDirectory: string, offset: number): string {

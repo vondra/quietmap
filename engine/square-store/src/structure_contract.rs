@@ -1,11 +1,27 @@
-//! Current prepared screening heights, shared by the obstacle index, the finalize step and the footprint overlay.
+//! Current prepared screening heights and their sources, shared by the obstacle index, the finalize step and the footprint overlay.
 
 use arrow::array::{Array, Int16Array, UInt8Array};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
 /// Mirrors the Python producer; actual IPC roundtrips protect this boundary.
-pub const CONTRACT: &str = "structures_v4";
+pub const CONTRACT: &str = "structures_v5";
+
+/// `height_source` codes, mirroring `scripts/structures/structure_contract.py`.
+pub const HEIGHT_SOURCE_AREA_TYPOLOGY: u8 = 2;
+/// Retired 2026-09-25 (the producer emits only the codes above and below this
+/// one now); older prepared squares still carry it, so readers keep accepting it.
+pub const HEIGHT_SOURCE_GHSL: u8 = 4;
+pub const HEIGHT_SOURCE_GROUND_ACTIVITY: u8 = 7;
+
+/// A footprint-area typology or a retired 100 m cell average knows nothing about the
+/// individual shed under it; every other source measured or mapped the building.
+pub fn height_is_per_building(height_source: u8) -> bool {
+    !matches!(
+        height_source,
+        HEIGHT_SOURCE_AREA_TYPOLOGY | HEIGHT_SOURCE_GHSL
+    )
+}
 
 pub fn validate_schema(schema: &Schema) -> Result<(), String> {
     for (key, expected) in [
@@ -40,17 +56,15 @@ pub fn heights(batch: &RecordBatch) -> Result<&Int16Array, String> {
     Ok(heights)
 }
 
-/// Builder 2 marks a ground activity or underground source with no wall and zero
-/// screening height at the default tier (2). Mapped sub-metre building heights
-/// can round to zero too, but retain their explicit-height tier (0).
+/// The builder marks a ground activity or underground source (no wall, zero
+/// screening height) with its own height source. Mapped sub-metre building
+/// heights and open roofs round to zero too, but are real structures.
 pub fn is_emission_only_area(batch: &RecordBatch, row: usize) -> bool {
-    batch.column_by_name("geom").is_some_and(|geometry| geometry.is_null(row))
-        && batch.column_by_name("height_m")
-            .and_then(|column| column.as_any().downcast_ref::<Int16Array>())
-            .is_some_and(|height| !height.is_null(row) && height.value(row) == 0)
-        && batch.column_by_name("height_tier")
-            .and_then(|column| column.as_any().downcast_ref::<UInt8Array>())
-            .is_some_and(|tier| !tier.is_null(row) && tier.value(row) == 2)
+    batch.column_by_name("height_source")
+        .and_then(|column| column.as_any().downcast_ref::<UInt8Array>())
+        .is_some_and(|source| {
+            !source.is_null(row) && source.value(row) == HEIGHT_SOURCE_GROUND_ACTIVITY
+        })
 }
 
 #[cfg(test)]
@@ -76,6 +90,18 @@ mod tests {
             (CONTRACT, DataType::Int16, true),
         ] {
             assert!(validate_schema(&schema(stamp, dtype, nullable)).is_err());
+        }
+    }
+
+    #[test]
+    fn only_typology_and_retired_ghsl_skip_the_per_building_cap() {
+        // Older prepared squares still carry code 4 (the retired 100 m
+        // satellite average); reading it as a measured building would lift
+        // the 3 m low-profile cap it was capped under.
+        assert!(!height_is_per_building(HEIGHT_SOURCE_AREA_TYPOLOGY));
+        assert!(!height_is_per_building(HEIGHT_SOURCE_GHSL));
+        for source in [0, 1, 3, 5, 6, 7, 8, 9] {
+            assert!(height_is_per_building(source), "source {source}");
         }
     }
 

@@ -15,19 +15,20 @@ Airborne and ground geometry uses exact Int32 z30 coordinates; airborne heights
 use Int16 metres. Cruise rows carry explicit Float64 centroids. The producer and
 runtime share current contracts through `square-store::aircraft_contract`.
 
-Hybrid extraction keeps the non-GA airline/GSE and full-year GA class windows
-disjoint; `days` and `ga_days` are the only shuffle manifests. Wrong classes,
-wrong dates, corrupt archives or malformed Arrow inputs fail loudly.
+Every day of the exposure year reads the primary provider (adsb.lol); its
+month-firsts also read the secondary provider (ADSBexchange), which adds only
+what the primary did not receive. Stage 0 writes a content receipt per
+provider-day; a day failing its receipts is missing, never observed-empty.
+`baseline_days` and `increment_days` are the only shuffle manifests, and every
+output carries their counts and SHA-256 (`SamplingWindow`). Wrong dates,
+corrupt archives or malformed Arrow inputs fail loudly.
 
 Run `scripts/run-aircraft-extract.sh --help` for the wrapper. It requires explicit
 source, raster-root and year-output paths. To execute one phase use
 `run-all --from-stage <phase> --until-stage <phase>`; single phases share its
-validation. Standalone `shuffle` combines explicit segment directories.
-A regional build needs a fresh year output tree: regional flight identities
-cannot replace an existing global union. To recover a hybrid pass after Stage0,
-invoke the binary with that pass's same inputs and
-`run-all --from-stage stage1 --until-stage stage1`, then rerun the wrapper.
-The wrapper preserves partial passes and never deletes them to force a restart.
+validation. A regional build needs a fresh year output tree: regional flight
+identities cannot replace an existing global union. The wrapper preserves
+partial work and never deletes it to force a restart.
 
 Acoustic kernels live in `engine/noise-compute`. Tests cover
 archive corruption, window routing, actual producer-to-popup IPC roundtrips,

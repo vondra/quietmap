@@ -10,10 +10,12 @@
 
 use std::collections::HashMap;
 
+mod evidence;
 mod mappers;
 mod nodes;
 mod ways;
 
+pub use evidence::*;
 pub use mappers::*;
 pub use nodes::*;
 pub use ways::*;

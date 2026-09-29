@@ -11,6 +11,9 @@ use crate::ids;
 /// `amenity=*` kind selects a default (playground, pool, pitch, outdoor seating,
 /// stadium). Always returns a class (PITCH is the fallback).
 pub fn leisure_sport_class(tags: &Tags) -> u8 {
+    if let Some(class) = super::special_leisure_class(|key| tags.get(key).map(String::as_str)) {
+        return class;
+    }
     // A car park carries no `sport`; its own kind decides how many spaces its
     // area holds (`leisure::CAR_PARK` 23.8 m² vs `CAR_PARK_STREET` 13.3 m²).
     // Only open ground reaches the open-air lane; the rest never routes here.
@@ -19,6 +22,10 @@ pub fn leisure_sport_class(tags: &Tags) -> u8 {
         Some(super::ParkingKind::OpenLot) => return ids::LEISURE_CAR_PARK,
         _ => {}
     }
+    // An artificial-turf pitch is booked year-round; grass (or an unmapped
+    // surface) follows the seasonal club pattern. Only pitch classes remap —
+    // a turf tennis court keeps the tennis duty.
+    let agp_surface = tags.get("surface").is_some_and(|s| s == "artificial_turf");
     if let Some(sport) = tags.get("sport") {
         // Multi-value `sport=tennis;padel` → take the loudest by the static
         // anchor table; `>=` keeps the LAST maximum, mirroring max_by_key.
@@ -33,6 +40,9 @@ pub fn leisure_sport_class(tags: &Tags) -> u8 {
             }
         }
         if let Some((_, c)) = best {
+            if c == ids::LEISURE_PITCH && agp_surface {
+                return ids::LEISURE_AGP;
+            }
             return c;
         }
     }
@@ -46,6 +56,7 @@ pub fn leisure_sport_class(tags: &Tags) -> u8 {
         Some("swimming_pool" | "swimming_area" | "water_park") => ids::LEISURE_POOL,
         Some("stadium") => ids::LEISURE_STADIUM,
         Some("outdoor_seating") => ids::LEISURE_OUTDOOR_SEATING,
+        Some("pitch") if agp_surface => ids::LEISURE_AGP,
         _ => ids::LEISURE_PITCH,
     }
 }
@@ -131,6 +142,7 @@ pub fn rail_type(railway: &str) -> u8 {
         "light_rail" | "subway" => 2,
         "narrow_gauge" => 3,
         "funicular" => 4,
+        "preserved" => 5,
         _ => 0,
     }
 }
@@ -138,9 +150,17 @@ pub fn rail_type(railway: &str) -> u8 {
 /// Whether a way is a railway that carries trains. Subway is included for its above-ground
 /// sections (the spill marks the underground ones as tunnel, which emits nothing); a line
 /// mapped as disused or abandoned carries no trains.
-pub fn railway_carries_trains(railway: Option<&str>, disused: Option<&str>, abandoned: Option<&str>) -> bool {
-    matches!(railway, Some("rail" | "tram" | "light_rail" | "subway" | "narrow_gauge" | "funicular"))
-        && disused != Some("yes")
+pub fn railway_carries_trains(
+    railway: Option<&str>,
+    disused: Option<&str>,
+    abandoned: Option<&str>,
+) -> bool {
+    matches!(
+        railway,
+        Some(
+            "rail" | "tram" | "light_rail" | "subway" | "narrow_gauge" | "funicular" | "preserved"
+        )
+    ) && disused != Some("yes")
         && abandoned != Some("yes")
 }
 
@@ -157,7 +177,9 @@ pub fn railway_is_underground(
         return true;
     }
     railway == "subway"
-        && (layer.and_then(|value| value.trim().parse::<i32>().ok()).is_some_and(|value| value < 0)
+        && (layer
+            .and_then(|value| value.trim().parse::<i32>().ok())
+            .is_some_and(|value| value < 0)
             || location == Some("underground")
             || covered == Some("yes"))
 }
@@ -169,6 +191,7 @@ pub fn rail_usage_type(usage: Option<&str>) -> u8 {
         Some("main") => 0,
         Some("branch") => 1,
         Some("industrial") => 2,
+        Some("tourism") => 4,
         _ => 3,
     }
 }
@@ -210,12 +233,13 @@ pub fn oneway_direction(highway: &str, oneway: Option<&str>, junction: Option<&s
         Some("yes" | "true" | "1") => return 1,
         Some("-1" | "reverse") => return 2,
         Some("no" | "false" | "0" | "alternating") => return 0,
+        Some(value) if !value.is_empty() => return 0,
         _ => {}
     }
-    if matches!(junction, Some("roundabout") | Some("mini_roundabout"))
-        || matches!(highway, "motorway" | "motorway_link")
-    {
-        1
+    if matches!(junction, Some("roundabout") | Some("mini_roundabout")) {
+        3
+    } else if matches!(highway, "motorway" | "motorway_link") {
+        4
     } else {
         0
     }
@@ -250,6 +274,22 @@ pub fn rail_service_type(service: Option<&str>) -> u8 {
         Some("siding") => 2,
         Some("spur") => 3,
         Some("crossover") => 4,
+        _ => 0,
+    }
+}
+
+/// Map `railway:traffic_mode` to enum: 0=unknown, 1=passenger, 2=freight, 3=mixed.
+/// Planet census 2026-09-25 (planet-260831, 2.82 M railway=rail ways): mixed 207,660,
+/// passenger 116,040, freight 91,353 ways; any other value (typos, `both`, `military`)
+/// is unknown. `passenger_lines` is a track count, not a mode; `passenger=no` (4,768
+/// ways) and `usage=freight` (1,930) are undocumented and negligible, so the mode tag
+/// stands alone. The finalizer gives passenger-only lines no freight prior and
+/// freight-only lines no passenger prior; measured evidence still wins over the tag.
+pub fn rail_traffic_mode(traffic_mode: Option<&str>) -> u8 {
+    match traffic_mode {
+        Some("passenger") => 1,
+        Some("freight") => 2,
+        Some("mixed") => 3,
         _ => 0,
     }
 }
@@ -336,7 +376,8 @@ pub const MAXSPEED_NONE: u16 = u16::MAX;
 /// `;`-token (`"50;30"` → 50; conditional/lane variants are out of scope).
 /// Units: bare number = km/h, `mph`, `knots`. `walk` → 10 km/h
 /// (OSM-wiki convention for walking pace); `none` → [`MAXSPEED_NONE`];
-/// `signals` / `variable` / zone tags / garbage → 0 (unknown → class
+/// sourced implicit zone/country rules (`DE:urban` and kin) resolve via
+/// `implicit_speed`; `signals` / `variable` / garbage → 0 (unknown → class
 /// default downstream). Numeric values clamp to 400 km/h (above any
 /// legal limit; guards typos like "999").
 pub fn parse_maxspeed_kmh(raw: &str) -> u16 {
@@ -351,12 +392,15 @@ pub fn parse_maxspeed_kmh(raw: &str) -> u16 {
         "walk" => return 10,
         _ => {}
     }
+    if let Some(speed) = crate::implicit_speed::resolve(&token) {
+        return speed;
+    }
     let numeric: String = token
         .chars()
         .take_while(|c| c.is_ascii_digit() || *c == '.')
         .collect();
     let Ok(value) = numeric.parse::<f64>() else {
-        return 0; // "", "signals", "variable", "DE:urban", other garbage
+        return 0; // "", "signals", "variable", other garbage
     };
     let kmh = match token[numeric.len()..].trim() {
         "" | "km/h" | "kmh" | "kph" => value,
@@ -369,21 +413,78 @@ pub fn parse_maxspeed_kmh(raw: &str) -> u16 {
 
 #[cfg(test)]
 mod railway_tests {
-    use super::{rail_type, rail_usage_type, railway_carries_trains, railway_is_underground};
+    use super::{
+        rail_traffic_mode, rail_type, rail_usage_type, railway_carries_trains,
+        railway_is_underground,
+    };
+
+    #[test]
+    fn traffic_mode_maps_three_values_and_nothing_else() {
+        assert_eq!(
+            (
+                rail_traffic_mode(Some("passenger")),
+                rail_traffic_mode(Some("freight")),
+                rail_traffic_mode(Some("mixed")),
+            ),
+            (1, 2, 3)
+        );
+        for other in [
+            None,
+            Some(""),
+            Some("both"),
+            Some("military"),
+            Some("Mixed"),
+        ] {
+            assert_eq!(rail_traffic_mode(other), 0);
+        }
+    }
 
     #[test]
     fn subway_is_light_rail_family_and_underground_without_a_tunnel_tag() {
         assert_eq!(rail_type("subway"), rail_type("light_rail"));
-        assert_eq!((rail_usage_type(Some("main")), rail_usage_type(None)), (0, 3));
+        assert_eq!(
+            (rail_usage_type(Some("main")), rail_usage_type(None)),
+            (0, 3)
+        );
         assert!(railway_carries_trains(Some("subway"), None, None));
         assert!(!railway_carries_trains(Some("rail"), Some("yes"), None));
         assert!(!railway_carries_trains(Some("rail"), None, Some("yes")));
         assert!(!railway_carries_trains(Some("platform"), None, None));
-        assert!(railway_is_underground("subway", None, Some("-2"), None, None));
-        assert!(railway_is_underground("subway", None, None, Some("underground"), None));
-        assert!(!railway_is_underground("subway", None, Some("1"), None, None));
-        assert!(!railway_is_underground("rail", None, Some("-1"), None, None));
-        assert!(railway_is_underground("rail", Some("yes"), None, None, None));
+        assert!(railway_is_underground(
+            "subway",
+            None,
+            Some("-2"),
+            None,
+            None
+        ));
+        assert!(railway_is_underground(
+            "subway",
+            None,
+            None,
+            Some("underground"),
+            None
+        ));
+        assert!(!railway_is_underground(
+            "subway",
+            None,
+            Some("1"),
+            None,
+            None
+        ));
+        assert!(!railway_is_underground(
+            "rail",
+            None,
+            Some("-1"),
+            None,
+            None
+        ));
+        assert!(railway_is_underground(
+            "rail",
+            Some("yes"),
+            None,
+            None,
+            None
+        ));
     }
 }
 
@@ -426,7 +527,7 @@ mod parse_maxspeed_kmh_tests {
         assert_eq!(parse_maxspeed_kmh("signals"), 0);
         assert_eq!(parse_maxspeed_kmh("variable"), 0);
         assert_eq!(parse_maxspeed_kmh(""), 0);
-        assert_eq!(parse_maxspeed_kmh("DE:urban"), 0);
+        assert_eq!(parse_maxspeed_kmh("XX:urban"), 0);
         assert_eq!(parse_maxspeed_kmh("50 apples"), 0);
     }
 
@@ -565,6 +666,32 @@ mod leisure_tests {
             leisure_sport_class(&tags(&[("sport", "tennis;padel")])),
             lz::LEISURE_PADEL
         );
+        // Artificial turf remaps only pitch classes to the booked duty.
+        assert_eq!(
+            leisure_sport_class(&tags(&[
+                ("leisure", "pitch"),
+                ("surface", "artificial_turf")
+            ])),
+            lz::LEISURE_AGP
+        );
+        assert_eq!(
+            leisure_sport_class(&tags(&[
+                ("sport", "soccer"),
+                ("surface", "artificial_turf")
+            ])),
+            lz::LEISURE_AGP
+        );
+        assert_eq!(
+            leisure_sport_class(&tags(&[("sport", "soccer"), ("surface", "grass")])),
+            lz::LEISURE_PITCH
+        );
+        assert_eq!(
+            leisure_sport_class(&tags(&[
+                ("sport", "tennis"),
+                ("surface", "artificial_turf")
+            ])),
+            lz::LEISURE_TENNIS
+        );
     }
 
     #[test]
@@ -602,7 +729,10 @@ mod oneway_direction_tests {
     #[test]
     fn explicit_values_win_over_everything() {
         for value in ["yes", "true", "1"] {
-            assert_eq!(oneway_direction("residential", Some(value), Some("roundabout")), 1);
+            assert_eq!(
+                oneway_direction("residential", Some(value), Some("roundabout")),
+                1
+            );
             assert_eq!(oneway_direction("motorway", Some(value), None), 1);
         }
         for value in ["-1", "reverse"] {
@@ -611,16 +741,22 @@ mod oneway_direction_tests {
             assert_eq!(oneway_direction("motorway", Some(value), None), 2);
         }
         for value in ["no", "false", "0"] {
-            assert_eq!(oneway_direction("motorway", Some(value), Some("roundabout")), 0);
+            assert_eq!(
+                oneway_direction("motorway", Some(value), Some("roundabout")),
+                0
+            );
         }
     }
 
     #[test]
     fn implicit_roundabout_and_motorway_are_single_direction() {
-        assert_eq!(oneway_direction("trunk", None, Some("roundabout")), 1);
-        assert_eq!(oneway_direction("residential", None, Some("mini_roundabout")), 1);
-        assert_eq!(oneway_direction("motorway", None, None), 1);
-        assert_eq!(oneway_direction("motorway_link", None, None), 1);
+        assert_eq!(oneway_direction("trunk", None, Some("roundabout")), 3);
+        assert_eq!(
+            oneway_direction("residential", None, Some("mini_roundabout")),
+            3
+        );
+        assert_eq!(oneway_direction("motorway", None, None), 4);
+        assert_eq!(oneway_direction("motorway_link", None, None), 4);
         // Nothing implies two-way carriageways become single-direction.
         assert_eq!(oneway_direction("trunk", None, None), 0);
         assert_eq!(oneway_direction("primary", None, Some("circular")), 0);
@@ -632,7 +768,7 @@ mod oneway_direction_tests {
         // Alternating/tidal flow and malformed values must not become a
         // one-way carriageway, and they suppress the implicit cases.
         assert_eq!(oneway_direction("motorway", Some("alternating"), None), 0);
-        assert_eq!(oneway_direction("trunk", Some(""), Some("roundabout")), 1);
+        assert_eq!(oneway_direction("trunk", Some(""), Some("roundabout")), 3);
         assert_eq!(oneway_direction("residential", Some("maybe"), None), 0);
     }
 }

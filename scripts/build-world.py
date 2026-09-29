@@ -5,7 +5,7 @@ import argparse
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, replace
 from contextlib import ExitStack
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import fcntl
 import json
 import os
@@ -33,14 +33,15 @@ if __name__ == '__main__':
     sys.dont_write_bytecode = True
 
 from world_build_inputs import (
-    attach_rasters, audit_world, canonical_input, height_inputs,
-    pin_digest, pin_inputs, raster_inputs, verify_inputs, verify_prepared_raster_links,
+    attach_rasters, audit_world, canonical_input, pin_digest, pin_inputs, source_family_roots,
+    source_paths, verify_inputs, verify_prepared_raster_links,
 )
 
 from aircraft_preflight import preflight_aircraft_sources
 
 from world_build_state import (
-    STATE_NAME, PIN_NAME, producer_command, record_steps, resume_steps, scope_unit, step_identity, write_state,
+    STATE_NAME, PIN_NAME, producer_command, product_code_identity, record_steps, resume_steps, scope_unit,
+    step_identity, write_state,
 )
 
 
@@ -51,14 +52,6 @@ class Step:
     argv: tuple[str, ...]
     slots: int = 1
     environment: tuple[tuple[str, str], ...] = ()
-
-
-def source_paths(config):
-    required = {'planet', 'rasters', 'enrichment', 'boundaries', 'city_boundaries',
-                'overture', 'ghsl', 'regional_heights', 'airline', 'general_aviation', 'ships', 'ships_gfw'}
-    if set(config['sources']) != required:
-        raise ValueError(f'sources must be exactly {sorted(required)}')
-    return {name: canonical_input(path) for name, path in config['sources'].items()}
 
 
 def validate_osm_storage(paths, sources):
@@ -76,8 +69,8 @@ def build_plan(config, output, scratch):
     anchor = datetime.strptime(settings['aircraft_anchor'], '%Y-%m')
     if as_of.strftime('%Y%m%d') != settings['as_of_date'] or anchor.strftime('%Y-%m') != settings['aircraft_anchor']:
         raise ValueError('as_of_date must be YYYYMMDD and aircraft_anchor must be YYYY-MM')
-    if anchor > as_of.replace(day=1):
-        raise ValueError('aircraft anchor is after the source as-of date')
+    if anchor - timedelta(days=1) > as_of:
+        raise ValueError('aircraft exposure year (ends the day before the anchor) ends after the source as-of date')
     storage = []
     for key, default in (('osm_node_cache', scratch / 'osm/osm_nodes.cache'),
                          ('osm_spill_dir', output / 'osm-spill')):
@@ -110,21 +103,26 @@ def build_plan(config, output, scratch):
              '--prepared-dir', str(year), '--boundaries', str(sources['boundaries']),
              '--jobs', str(settings['threads'])), 2),
         layer('buildings', ('osm',)),
-        Step('structures', ('buildings',), (python, str(scripts / 'structures/build-structures.py'),
+        Step('structures', ('buildings', 'square-country-city'), (python, str(scripts / 'structures/build-structures.py'),
              '--prepared-dir', str(year), '--overture-parquet', str(sources['overture']),
-             '--ghsl', str(sources['ghsl']), '--regional', str(sources['regional_heights']),
+             '--regional', str(sources['regional_heights']),
+             '--official-barriers', str(sources['official_barriers']),
+             '--measured-heights', str(sources['measured_heights']),
              '--census-log', str(output / 'structures.jsonl'), '--jobs', str(settings['threads'])), 2),
         Step('structures-finalize', ('structures',), (str(REPO / 'engine/target/release/structures-finalize'), str(year))),
         layer('railways', ('square-country-city',)),
         Step('railways-finalize', ('railways',), (str(REPO / 'engine/target/release/railways-finalize'), str(year))),
+        Step('railways-horns', ('railways-finalize',), (str(REPO / 'engine/target/release/railways-finalize'), 'append-horns', str(year),
+             '--fra', str(sources['fra_crossings']), '--tc', str(sources['tc_crossings']))),
         layer('industrial', ('square-country-city',)),
         layer('roads', ('square-country-city', 'structures')),
         Step('ships', ('osm',), (python, str(scripts / 'ships/build_ships.py'),
              '--prepared-dir', str(year), '--emodnet-dir', str(sources['ships']), '--gfw-dir', str(sources['ships_gfw']))),
         Step('roads-finalize', ('roads',), (str(REPO / 'engine/target/release/roads-finalize'), str(year))),
         Step('aircraft', ('osm',), ('bash', str(scripts / 'run-aircraft-extract.sh')), 2,
-             (('HYBRID', '1'), ('AIRLINE_FEED', 'adsbexchange'), ('AIRCRAFT_ANCHOR', settings['aircraft_anchor']),
-              ('AIRLINE_CACHE', str(sources['airline'])), ('GA_CACHE', str(sources['general_aviation'])),
+             (('AIRCRAFT_ANCHOR', settings['aircraft_anchor']),
+              ('ADSB_CACHE', str(sources['aircraft_primary'])),
+              ('SECONDARY_ADSB_CACHE', str(sources['aircraft_secondary'])),
               ('PREPARED_YEAR_DIR', str(year)), ('PREPARED_DIR', str(year)),
               ('WORK_DIR', str(scratch / 'aircraft')), ('LOG_DIR', str(output / 'aircraft-logs')),
               ('MEMMAX', ''), ('MAX_THREADS', str(settings['threads'])))),
@@ -137,7 +135,7 @@ def producer_environment(threads):
                  'DBUS_SESSION_BUS_ADDRESS', 'CARGO_HOME', 'RUSTUP_HOME',
                  'GDAL_DATA', 'PROJ_DATA', 'PROJ_LIB') if key in os.environ}
     # A host-sized GDAL cache per spawned worker can exceed the whole producer cgroup.
-    # 256 MiB retains 1024 GHSL 256x256 float32 blocks and leaves memory for vector geometry.
+    # 256 MiB retains 1024 raster 256x256 float32 blocks and leaves memory for vector geometry.
     return dict(inherited, LC_ALL='C', TZ='UTC', PYTHONHASHSEED='0', PROJ_NETWORK='OFF',
                 GDAL_CACHEMAX='256',
                 OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', RAYON_NUM_THREADS=str(threads),
@@ -280,7 +278,7 @@ def main():
         # window cannot be judged from the pin; admit the exact days read-only before
         # pinning, directory creation or any producer can start.
         admitted = preflight_aircraft_sources(
-            sources['airline'], sources['general_aviation'], settings['aircraft_anchor'])
+            sources['aircraft_primary'], sources['aircraft_secondary'], settings['aircraft_anchor'])
         print(json.dumps({'step': 'aircraft-preflight', **admitted}), flush=True)
     output.mkdir(parents=True, exist_ok=True)
     scratch.mkdir(parents=True, exist_ok=True)
@@ -298,9 +296,7 @@ def main():
         pin_path = output / PIN_NAME
         receipts_lock = threading.Lock()
         def frozen_roots():
-            ordinary = [path for name, path in sources.items() if name not in ('rasters', 'ghsl', 'regional_heights')]
-            return [*ordinary, *raster_inputs(sources['rasters']), *height_inputs(sources['ghsl']),
-                    *height_inputs(sources['regional_heights'])]
+            return [root for roots in source_family_roots(sources).values() for root in roots]
         def current_roots():
             return [*frozen_roots(), *code_inputs(), *runtime_inputs(),
                     *(canonical_input(environment[key]) for key in ('GDAL_DATA', 'PROJ_DATA', 'PROJ_LIB')
@@ -327,7 +323,8 @@ def main():
             def execute(step):
                 command = producer_command(step, settings)
                 started = time.time()
-                receipt = dict(name=step.name, started=started,
+                # A resumed build adopts steps produced by earlier commits; each receipt keeps its own.
+                receipt = dict(name=step.name, started=started, **product_code_identity(),
                                **step_identity(step, settings, input_pin_sha256))
                 with receipts_lock:
                     record_steps(output, [dict(receipt, exit=None)])

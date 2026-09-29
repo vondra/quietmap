@@ -10,7 +10,7 @@ use arrow::ipc::{reader::FileReader, writer::FileWriter};
 use arrow::record_batch::RecordBatch;
 use square_store::store::load_square;
 
-use super::{acquire_squares_parallel, STORE};
+use super::{acquire_squares_parallel, forget_squares_served_with_a_fault, STORE};
 use crate::structure_test_fixture as fx;
 
 #[path = "native_receiver_tests.rs"]
@@ -65,11 +65,17 @@ fn two_batches_with_broken_second_message(path: &Path) {
     fields.push(Arc::new(Field::new("maxspeed", DataType::UInt16, false)));
     fields.push(Arc::new(Field::new("oneway", DataType::UInt8, false)));
     let mut metadata = base.schema().metadata().clone();
+    for family in ["roads", "railways", "industrial"] {
+        let (key, value) = square_store::osm_contract::contract(family).unwrap();
+        metadata.insert(key.into(), value.into());
+    }
     metadata.insert(
         "leisure_contract".into(),
-        square_store::store::LEISURE_CONTRACT_V3.into(),
+        square_store::osm_contract::LEISURE_CONTRACT_V5.into(),
     );
-    metadata.insert("n_days".into(), "12".into());
+    for (key, value) in fx::sampling_window(12, 0).metadata() {
+        metadata.insert(key.into(), value);
+    }
     metadata.insert("rail_traffic_contract".into(), "1".into());
     metadata.insert("road_traffic_contract".into(), "1".into());
     // The one generic fixture serves every layer name; the airborne file is
@@ -99,11 +105,15 @@ fn two_batches_with_broken_second_message(path: &Path) {
     columns.push(Arc::new(Int32Array::from(vec![0])));
     columns.push(Arc::new(UInt16Array::from(vec![80])));
     columns.push(Arc::new(UInt8Array::from(vec![2])));
-    for name in ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"] {
+    for name in ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto", "cross_section_aadt"] {
         fields.push(Arc::new(Field::new(name, DataType::Float64, false)));
         columns.push(Arc::new(Float64Array::from(vec![0.125])));
     }
-    fields.push(Arc::new(Field::new("traffic_estimated", DataType::UInt8, false)));
+    fields.push(Arc::new(Field::new(
+        "traffic_estimated",
+        DataType::UInt8,
+        false,
+    )));
     columns.push(Arc::new(UInt8Array::from(vec![15])));
     for category in ["passenger", "freight"] {
         for period in ["day", "evening", "night"] {
@@ -203,11 +213,42 @@ fn scan_to_insert_interleaving_preserves_hits_and_active_pins() {
     reset_store(Path::new(""));
 }
 
+fn forget_keeps_squares_pinned_by_a_concurrent_acquire() {
+    let tmp = tempfile::tempdir().unwrap();
+    reset_store(tmp.path());
+    let a = "z9/0/0".to_string();
+
+    let warmed = acquire_squares_parallel(std::slice::from_ref(&a)).unwrap();
+    drop(warmed);
+    // A concurrent query scans and pins A, then loads its own misses outside
+    // the lock; a served-with-fault query forgetting A in between must not
+    // pull it out from under the waiting acquire.
+    let (scan_pins, missing) = STORE.read().unwrap().pin_cached(std::slice::from_ref(&a));
+    assert!(missing.is_empty());
+    forget_squares_served_with_a_fault(std::slice::from_ref(&a)).unwrap();
+    {
+        let store = STORE.read().unwrap();
+        assert!(
+            store.squares.contains_key(&a),
+            "forget must keep a square pinned by a concurrent acquire"
+        );
+    }
+    let repinned = acquire_squares_parallel(std::slice::from_ref(&a)).unwrap();
+    assert!(Arc::ptr_eq(&scan_pins[0], &repinned[0]));
+    drop(scan_pins);
+    drop(repinned);
+    // Unpinned, the faulted square leaves the cache so a repaired file serves next.
+    forget_squares_served_with_a_fault(std::slice::from_ref(&a)).unwrap();
+    assert!(!STORE.read().unwrap().squares.contains_key(&a));
+    reset_store(Path::new(""));
+}
+
 #[test]
 fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
     // One test owns STORE; no competing process-wide cache fixture.
     parallel_square_load_error_leaves_cache_unchanged();
     scan_to_insert_interleaving_preserves_hits_and_active_pins();
+    forget_keeps_squares_pinned_by_a_concurrent_acquire();
     let tmp = tempfile::tempdir().unwrap();
     super::YEAR_DIR.set(tmp.path().to_path_buf()).unwrap();
     let (lat, lon) = (60.0, 20.0);
@@ -243,7 +284,7 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
         std::fs::write(&path, b"not Arrow").unwrap();
         reset_store(tmp.path());
         let pure = super::collect_sources_at_point(tmp.path(), lat, lon).unwrap_err();
-        let native = super::query_noise_at_point(lat, lon).unwrap_err();
+        let native = super::query_noise_at_point(lat, lon, None).unwrap_err();
         assert!(pure.contains(&path.display().to_string()), "{pure}");
         assert!(
             native.reason.contains(&native_file.display().to_string()),
@@ -287,7 +328,7 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
         assert!(pure.contains("batch 1"), "{pure}");
         reset_store(tmp.path());
         for _ in 0..2 {
-            let native = super::query_noise_at_point(lat, lon).unwrap_err();
+            let native = super::query_noise_at_point(lat, lon, None).unwrap_err();
             assert!(
                 native.reason.contains(&native_file.display().to_string()),
                 "{native}"
@@ -326,7 +367,7 @@ fn native_queries_preserve_receiver_sources_and_reject_broken_arrow() {
     }
     fx::write_roads_file(&dir.join("roads.arrow"), &[]);
     reset_store(tmp.path());
-    native_receiver_tests::facade_popup_preserves_aircraft_and_observation_multiplicity(tmp.path());
+    native_receiver_tests::building_popup_uses_its_stored_facade_receiver_and_keeps_aircraft_multiplicity(tmp.path());
     let initialized = tmp.path().display().to_string();
     let cached = STORE.read().unwrap().squares.len();
     assert!(super::source_init(initialized.clone())

@@ -34,15 +34,15 @@ const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
     rail: 'Railway',
     narrow_gauge: 'Narrow gauge',
     funicular: 'Funicular',
-    Rail: 'Railway',
-    Tram: 'Tram',
-    LightRail: 'Light rail',
-    NarrowGauge: 'Narrow gauge',
-    Funicular: 'Funicular',
-    'Rail (bridge)': 'Railway (bridge)',
-    'Tram (bridge)': 'Tram (bridge)',
-    'LightRail (bridge)': 'Light rail (bridge)',
-    'NarrowGauge (bridge)': 'Narrow gauge (bridge)',
+    heritage: 'Heritage railway',
+    horn: 'Level-crossing horn',
+    'rail (bridge)': 'Railway (bridge)',
+    'tram (bridge)': 'Tram (bridge)',
+    'light_rail (bridge)': 'Light rail (bridge)',
+    'narrow_gauge (bridge)': 'Narrow gauge (bridge)',
+    'funicular (bridge)': 'Funicular (bridge)',
+    'heritage (bridge)': 'Heritage railway (bridge)',
+    'horn (bridge)': 'Level-crossing horn (bridge)',
   },
   industrial: {
     industrial_area: 'Industrial area',
@@ -50,7 +50,10 @@ const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
     farm: 'Farm',
     factory: 'Factory',
     wastewater: 'Wastewater plant',
+    rail_yard: 'Rail yard',
     wind_turbine: 'Wind turbine',
+    solar_farm: 'Solar farm',
+    substation: 'Substation',
   },
   ship: {
     // Keys ARE the backend names (emission/ships.rs::ShipClass::name).
@@ -86,6 +89,16 @@ const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
     sports_pitch: 'Sports pitch',
     car_park: 'Car park',
     street_parking: 'Street parking',
+    motorsport_circuit: 'Race circuit',
+    motorsport_motocross: 'Motocross track',
+    motorsport_kart: 'Kart track',
+    motorsport_speedway: 'Speedway track',
+    motorsport_trial: 'Trial park',
+    motorsport: 'Motorsport',
+    shooting: 'Shooting range',
+    shooting_rifle: 'Rifle range',
+    shooting_pistol: 'Pistol range',
+    shooting_shotgun: 'Shotgun range',
     default: 'Building',
   },
   aircraft: { mixed: 'Aircraft', aircraft: 'Aircraft' },
@@ -160,7 +173,7 @@ export const DIAGRAM_COLORS = {
 // Noise-sources and Noise-segments tabs so wording stays identical. Kept in a
 // pure TypeScript module so its trust-sensitive wording has dependency-free
 // unit tests.
-export { formatProv, railTrainSourceLine, railTrafficLabel, railTrafficDescription, roadCategoryEstimated, roadCategoryLine, roadTimingLine, roadTrafficLabel, roadTrafficDescription, roadTrafficSourceLine, sourceHost } from './provenance'
+export { formatProv, railTrainSourceLine, railTrafficLabel, railTrafficDescription, roadCategoryEstimated, roadCategoryLine, roadTimingLine, roadTrafficDescription, roadTrafficSourceLine, sourceHost } from './provenance'
 
 /**
  * GeoJSON LineString from two lat/lon pairs (input order [lat, lon]). Used to

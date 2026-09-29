@@ -16,4 +16,4 @@ Train, DART and Luas counts: [Transport for Ireland timetable](https://www.trans
 
 ## Buildings and terrain
 
-Ireland has open building outlines but no open heights or floor counts. Heights: OpenStreetMap tags and the GHSL average for the block.
+Ireland has open building outlines but no open heights or floor counts. Heights: OpenStreetMap tags and the typical height for the footprint size.

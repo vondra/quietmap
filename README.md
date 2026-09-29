@@ -56,7 +56,8 @@ data/prepared/<year>/z9/<x>/<y>/
     airport_areas.arrow  airport_lines.arrow  barriers.arrow
     square-country-city.bin                  continent, country and metro of the square
     structures.arrow  structures.qoix        screening footprints and their edge index
-    dem.i16be  forest.u8  imd.u8             terrain, canopy density, ground sealing
+    facade_exposure.arrow                    each owned building's noisiest façade receiver
+    dem.u16le  canopy.u8  forest.u8  imd.u8  terrain, canopy height/cover, ground sealing
 data/tiles/<year>/pmtiles/                   one PMTiles archive per layer, plus total
 ```
 
@@ -80,6 +81,8 @@ npm --prefix server ci
            && node scripts/activate-build.mjs && npm start)
 ```
 
+Each release directory holds `release.json`: the product commit, whether the checkout
+was dirty, build time and SHA-256 of the packaged server source, frontend and native addon.
 `PREPARED_YEAR_DIR` points the server at a prepared year outside the checkout;
 `DATA_YEAR` selects the year; `PORT` and `HOST` select the listener.
 

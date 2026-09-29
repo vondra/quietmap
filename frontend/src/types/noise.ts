@@ -135,6 +135,8 @@ interface RoadMetadata {
   aadt_moto: number
   /** Bitmask: light 1, medium 2, heavy 4, moto 8 — set = estimated. */
   traffic_estimated: number
+  /** Whole road at the dominant segment, both directions; 0 where only its own direction is known. */
+  cross_section_aadt: number
   dominant_source_id: number
   provenance?: DatasetProvenance | null
   /** Observed traffic-timing attribution of the dominant segment;
@@ -299,14 +301,13 @@ interface AircraftAirborneDetail {
   top_day_energy_share?: number
   top_day_date?: string
   top_flight_energy_share?: number
-  /** Archive days behind the Lden average for AIRLINE classes (12-day TTM). */
+  /** Baseline days behind the Lden average: complete adsb.lol days. */
   sample_days?: number
   /**
-   * Archive days behind GA + helicopter classes — `ga_n_days` in a hybrid extract,
-   * equal to `sample_days` when non-hybrid. The "Data" row shows both so the
-   * sample basis is honest per class.
+   * Increment days: ADSBexchange sample days that add only the traffic adsb.lol
+   * did not receive. The "Data" row shows both counts.
    */
-  ga_sample_days?: number
+  increment_sample_days?: number
   top_flights?: AircraftTopFlight[]
 }
 
@@ -421,6 +422,16 @@ export interface Contributor {
   geometry: any | null
 }
 
+/** The façade receiver whose levels a click inside a building shows. */
+export interface BuildingExposure {
+  /** [lat, lng] 0.1 m in front of the wall, 4 m above ground; null when no façade is exposed. */
+  receiver: [number, number] | null
+  /** The façade's outward direction, degrees clockwise from north. */
+  facade_bearing_deg: number | null
+  /** Façade receivers compared; the one shown is the noisiest by all-source Lden. */
+  facade_points: number
+}
+
 export interface NoiseComputeData {
   center: [number, number]
   elevation_m: number
@@ -429,18 +440,10 @@ export interface NoiseComputeData {
   sources: SourceSummary[]
   top_contributors: Contributor[]
   other_sources_lden: number | null
-  /** Present only when the query point is inside an enclosed building. Then
-   * `total_lden`, every `sources` row and each contributor's received LEVELS are
-   * the INDOOR estimate — the same quantity the painted tile stores per layer.
-   * Emission, per-effect and per-band figures, `segments` and the aircraft
-   * peak-event levels stay outdoors. */
-  envelope_class?: 'residential' | 'commercial' | 'industrial' | 'historic' | 'default'
-  /** Envelope step in dB already subtracted from every level above. */
-  envelope_delta_db?: number
-  /** Outdoor level at the wall, before that step. */
-  facade_lden?: number
-  /** The estimate with a tilted/open window instead of the closed-window class. */
-  indoor_lden_tilted?: number
+  /** Present only when the click is inside an enclosed building footprint:
+   * `total_lden`, `sources` and `top_contributors` are then the levels at the
+   * building's noisiest façade receiver. */
+  building_exposure?: BuildingExposure
   compute_time_ms: number
   segments?: SegmentTrace[]
   segments_meta?: SegmentTracesSummary | null
@@ -527,7 +530,7 @@ export interface PathProfileTrace {
 
 interface BaselineTrace {
   geometric_db: number
-  atmospheric_bands: number[]
+  atmospheric_bands: PerPeriod<number[]>
   ground_factor_g: number
   source_height_m: number
   finite_line_corr_db: number
@@ -732,12 +735,11 @@ interface Doc29Breakdown {
   delta_f_db: number
   d_p_m: number
   lateral_m: number
-  /** Elevation angle (β) in degrees. CFFK fast path = 90.0 sentinel. */
+  /** Elevation angle (β) in degrees. */
   beta_deg: number
   seg_len_m: number
-  d_bar_m: number
+  d_lambda_m: number
   installation: 'wing' | 'fuselage' | 'propeller'
-  cffk_fast_path: boolean
   screening_kind: 'none' | 'terrain' | 'building'
   screening_db: number
 }

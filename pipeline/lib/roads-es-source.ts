@@ -1,5 +1,6 @@
 /** MITMA 2022 state-road census download and source-faithful parsing. */
 
+import { withholdsCountLine } from './count-holdout.js'
 import { roadFeatureObservation } from './pinned-road-lines.js'
 import { existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -183,6 +184,7 @@ export function parseMitmaRoadSource(raw: string): MitmaRoadCensus {
     census.accepted++
     if (lines.length > 1) census.multipartSections++
   }
+  census.sections = census.sections.filter(section => !section.lines.some(withholdsCountLine))
   return census
 }
 

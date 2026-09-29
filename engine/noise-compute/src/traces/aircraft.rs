@@ -21,6 +21,15 @@ fn aircraft_period_variants(period_energies: [f64; 3], n_days: f64) -> [Propagat
     )
 }
 
+/// A cruise cell's `received_lden.full` without building the trace: the exact
+/// expression [`build_aircraft_cruise_cell_trace`] stores, shared so the
+/// emission pre-selection ranks by the built value bit-for-bit. Covered by
+/// `cruise_stub_matches_built_trace_lden` below — if either path is edited,
+/// the test fails.
+pub(crate) fn cruise_cell_lden_full(period_energies: [f64; 3], n_days: f64) -> f64 {
+    variants_to_lden(&aircraft_period_variants(period_energies, n_days)).full
+}
+
 fn aircraft_period_variants_with_effects(
     period_energies: [f64; 3],
     free_period_energies: [f64; 3],
@@ -71,10 +80,10 @@ pub struct BuildAircraftAirborneSubSegmentTrace<'a> {
     /// Same energy with building screening removed.
     pub no_screening_period_energies: [f64; 3],
     pub n_days: f64,
-    /// Doc 29 Eq. 4-8b decomposition from the kernel evaluation. CFFK
-    /// fast path (slant > 7.62 km) populates `lambda_db = 0.0` and
-    /// `delta_i_db = 0.0` per Doc 29 §A.2.7 and sets `cffk_fast_path = true`.
+    /// Doc 29 Eq. 4-8b decomposition from the kernel evaluation.
     pub doc29: crate::types::Doc29Breakdown,
+    /// Stable per-(kind, subtype) row index for the top-K total-order tiebreak.
+    pub sort_seq: u64,
 }
 
 pub fn build_aircraft_airborne_subsegment_trace(
@@ -142,6 +151,7 @@ pub fn build_aircraft_airborne_subsegment_trace(
         cruise_buckets: None,
         cruise_top_flights: None,
         length_m_per_kind: None,
+        sort_seq: inputs.sort_seq,
     }
 }
 
@@ -159,11 +169,10 @@ pub struct BuildAircraftCruiseCellTrace {
     pub n_days: f64,
     pub cruise_buckets: Vec<CruiseBucketBreakdown>,
     pub cruise_top_flights: Vec<CruiseCellTopFlight>,
-    /// Doc 29 breakdown for the representative sub-segment (loudest
-    /// contributor to this cell's slant). CFFK fast path at cruise
-    /// altitudes — `lambda_db` and `delta_i_db` are typically 0.0 since
-    /// FL250+ implies slant ≥ 7.62 km.
+    /// Placeholder breakdown for the cell aggregate; no single event represents it.
     pub doc29: crate::types::Doc29Breakdown,
+    /// Stable per-(kind, subtype) row index for the top-K total-order tiebreak.
+    pub sort_seq: u64,
 }
 
 pub fn build_aircraft_cruise_cell_trace(inputs: BuildAircraftCruiseCellTrace) -> SegmentTrace {
@@ -205,6 +214,7 @@ pub fn build_aircraft_cruise_cell_trace(inputs: BuildAircraftCruiseCellTrace) ->
         cruise_buckets: Some(inputs.cruise_buckets),
         cruise_top_flights: Some(inputs.cruise_top_flights),
         length_m_per_kind: None,
+        sort_seq: inputs.sort_seq,
     }
 }
 
@@ -234,6 +244,7 @@ mod tests {
             no_terrain_period_energies: period_energies,
             no_screening_period_energies: period_energies,
             n_days,
+            sort_seq: 7,
             doc29: crate::types::Doc29Breakdown {
                 sel_npd_db: 0.0,
                 delta_v_db: 0.0,
@@ -244,13 +255,63 @@ mod tests {
                 lateral_m: 0.0,
                 beta_deg: 90.0,
                 seg_len_m: 0.0,
-                d_bar_m: 500.0,
+                d_lambda_m: 500.0,
                 installation: "wing",
-                cffk_fast_path: false,
                 screening_kind: "none",
                 screening_db: 0.0,
             },
         })
+    }
+
+    /// Pre-selection contract: the stub rank equals the built trace's
+    /// `received_lden.full` bit-for-bit, over loud/faint/empty/silent
+    /// cells and degenerate day counts. Inputs stay inside the builder's
+    /// accepted domain (finite, non-negative — `to_db` fail-closes
+    /// outside it, and production energies are finite f64 sums).
+    #[test]
+    fn cruise_stub_matches_built_trace_lden() {
+        let doc29 = || crate::types::Doc29Breakdown {
+            sel_npd_db: 0.0,
+            delta_v_db: 0.0,
+            delta_i_db: 0.0,
+            lambda_db: 0.0,
+            delta_f_db: 0.0,
+            d_p_m: 500.0,
+            lateral_m: 0.0,
+            beta_deg: 90.0,
+            seg_len_m: 0.0,
+            d_lambda_m: 500.0,
+            installation: "wing",
+            screening_kind: "none",
+            screening_db: 0.0,
+        };
+        for (energies, n_days) in [
+            ([1.0e9, 5.0e8, 2.0e8], 365.0),
+            ([1.0, 0.0, 0.0], 1.0),
+            ([0.0, 0.0, 0.0], 365.0),
+            ([1.0e300, 0.0, 0.0], 365.0),
+            ([1.0e9, 5.0e8, 2.0e8], 0.0),
+            ([1.0e-300, 2.0e-300, 3.0e-300], 365.0),
+        ] {
+            let trace = build_aircraft_cruise_cell_trace(BuildAircraftCruiseCellTrace {
+                lon: 14.0,
+                lat: 50.0,
+                n_unique_flights: 3,
+                rep_alt_m: 8000.0,
+                d_slant_m: 9000.0,
+                period_energies: energies,
+                n_days,
+                cruise_buckets: Vec::new(),
+                cruise_top_flights: Vec::new(),
+                doc29: doc29(),
+                sort_seq: 11,
+            });
+            assert_eq!(
+                cruise_cell_lden_full(energies, n_days).to_bits(),
+                trace.received_lden.full.to_bits(),
+                "energies={energies:?} n_days={n_days}"
+            );
+        }
     }
 
     /// Popup invariant: segments add up to the source aggregate. The

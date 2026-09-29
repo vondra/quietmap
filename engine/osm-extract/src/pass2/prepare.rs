@@ -14,6 +14,7 @@ pub(super) struct PreparedBlob {
 
 pub(super) enum Prepared {
     Way(PreparedWay),
+    Evidence(crate::model_nodes::ModelNode),
     Point(PreparedPoint),
     Train(TrainRouteRecord),
 }
@@ -23,14 +24,10 @@ pub(super) struct PreparedWay {
     /// A member of a multipolygon this extract assembles, in ANY role: its
     /// coordinates are needed for the assembly even when it carries no tags.
     pub(super) is_relation_member: bool,
-    /// A member in the OUTER role (an empty role means outer). Only such a way
-    /// is represented by the assembled parent; a tagged INNER way is a separate
-    /// object standing in a hole — a shop inside a campus, a house in a
-    /// courtyard — and must still be emitted on its own.
-    pub(super) is_outer_relation_member: bool,
     pub(super) class: Option<FeatureType>,
     pub(super) resolved_nodes: Vec<(i64, Option<[f64; 2]>)>,
     pub(super) tags: Tags,
+    pub(super) additional: Vec<(FeatureType, Tags)>,
 }
 
 pub(super) struct PreparedPoint {
@@ -64,12 +61,14 @@ pub(super) fn prepare_blob(
                 out.ways_seen += 1;
                 let memberships = manifest.way_to_relations.get(&way.id());
                 let is_relation_member = memberships.is_some();
-                let is_outer_relation_member = memberships.is_some_and(|relations| {
-                    relations
-                        .iter()
-                        .any(|(_, role)| role.is_empty() || role == "outer")
-                });
-                let mut way_class = classify::classify_way(&way);
+                let mut kinds = classify::classify_way_types(&way).into_iter();
+                let mut way_class = kinds.next();
+                let additional = kinds
+                    .map(|kind| {
+                        let tags = classify::extract_way_tags(&way, &kind);
+                        (kind, tags)
+                    })
+                    .collect();
                 if way_class.is_none() && !is_relation_member {
                     continue;
                 }
@@ -98,13 +97,18 @@ pub(super) fn prepare_blob(
                 out.items.push(Prepared::Way(PreparedWay {
                     id: way.id(),
                     is_relation_member,
-                    is_outer_relation_member,
-                    class: way_class,
+                    class: way_class.clone(),
                     resolved_nodes,
+                    additional,
                     tags,
                 }));
             }
             Element::Node(node) => {
+                if let Some(point) =
+                    crate::model_nodes::prepare(node.id(), node.lat(), node.lon(), node.tags())
+                {
+                    out.items.push(Prepared::Evidence(point));
+                }
                 if let Some(point) = prepare_point(
                     node.id(),
                     node.lat(),
@@ -120,6 +124,11 @@ pub(super) fn prepare_blob(
                 }
             }
             Element::DenseNode(node) => {
+                if let Some(point) =
+                    crate::model_nodes::prepare(node.id(), node.lat(), node.lon(), node.tags())
+                {
+                    out.items.push(Prepared::Evidence(point));
+                }
                 if let Some(point) = prepare_point(
                     node.id(),
                     node.lat(),

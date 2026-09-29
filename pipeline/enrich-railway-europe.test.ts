@@ -127,7 +127,6 @@ test('real GTFS files stamp heavy rail and tram through one z9 writer and rerun 
   assert.equal(retracted.walk.retracted, 2)
   assert.equal(listRailIntervals(prepared, square).length, 0)
   assert.deepEqual(readFileSync(path), before)
-  assert.equal(tableFromIPC(readFileSync(path)).getChild('parallel_divisor'), null)
 })
 
 test('an incomplete rail snapshot cannot replace or retract previously prepared traffic', async () => {

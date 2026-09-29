@@ -1,4 +1,4 @@
-//! Manifest-bound airborne rows, GPU independent events and exact CPU split chords.
+//! Manifest-bound airborne rows and scene-constant CUDA chord topology.
 use crate::{input_manifest::InputManifest, surface_scene::scene_bounds};
 use anyhow::{ensure, Context, Result};
 use arrow::{
@@ -16,9 +16,9 @@ pub struct AirborneScene<'a> {
     pub(crate) owner: Square,
     pub(crate) rasters: &'a RealRasters,
     pub(crate) independent: Vec<RecordBatch>,
-    pub(crate) chords: Vec<RecordBatch>,
+    pub(crate) chords: crate::airborne_chords::ChordSources,
     pub(crate) days: u16,
-    pub(crate) weights: air::ClassWeights,
+    pub(crate) weights: air::ProvenanceWeights,
 }
 impl<'a> AirborneScene<'a> {
     pub fn load(
@@ -43,11 +43,12 @@ impl<'a> AirborneScene<'a> {
             owner,
             rasters,
             independent: Vec::new(),
-            chords: Vec::new(),
+            chords: crate::airborne_chords::ChordSources::default(),
             days: 0,
-            weights: air::ClassWeights::uniform(),
+            weights: air::ProvenanceWeights::PRIMARY_ONLY,
         };
-        let mut stamp = None;
+        let mut chords = Vec::new();
+        let mut stamp: Option<air::SamplingWindow> = None;
         let mut owners: Vec<_> = squares.iter().collect();
         owners.sort_by_key(|s| (s.y, s.x));
         for square in owners {
@@ -61,25 +62,15 @@ impl<'a> AirborneScene<'a> {
                 .map_err(anyhow::Error::msg)?;
             AirborneRowAccum::new(&[RecordBatch::new_empty(schema.clone())])
                 .map_err(anyhow::Error::msg)?;
-            let days = schema
-                .metadata()
-                .get("n_days")
-                .and_then(|v| v.parse::<u16>().ok())
-                .filter(|v| *v > 0)
-                .context("airborne n_days missing")?;
-            let current = schema
-                .metadata()
-                .get(air::SAMPLE_DAYS_BY_CLASS_KEY)
-                .context("airborne class windows missing")?;
+            let current =
+                air::SamplingWindow::from_metadata(schema.metadata()).map_err(anyhow::Error::msg)?;
             ensure!(
-                stamp.as_ref().is_none_or(|old| old == current)
-                    && (scene.days == 0 || scene.days == days),
-                "mixed airborne normalization windows"
+                stamp.as_ref().is_none_or(|old| *old == current),
+                "mixed airborne sampling windows"
             );
-            scene.weights =
-                air::ClassWeights::parse(Some(current), days).map_err(anyhow::Error::msg)?;
-            scene.days = days;
-            stamp = Some(current.clone());
+            scene.weights = current.provenance_weights();
+            scene.days = current.baseline_days;
+            stamp = Some(current);
             for batch in reader {
                 let batch = batch?;
                 let decoded = AirborneRowAccum::new(std::slice::from_ref(&batch))
@@ -94,7 +85,7 @@ impl<'a> AirborneScene<'a> {
                     let selected = filter_record_batch(&batch, &mask)?;
                     if selected.num_rows() > 0 {
                         if split {
-                            scene.chords.push(selected);
+                            chords.push(selected);
                         } else {
                             scene.independent.push(selected);
                         }
@@ -102,12 +93,13 @@ impl<'a> AirborneScene<'a> {
                 }
             }
         }
+        scene.chords = crate::airborne_chords::ChordSources::from_batches(&chords)?;
         Ok(scene)
     }
     pub fn row_counts(&self) -> (usize, usize) {
         (
             self.independent.iter().map(RecordBatch::num_rows).sum(),
-            self.chords.iter().map(RecordBatch::num_rows).sum(),
+            self.chords.sources.len(),
         )
     }
 }

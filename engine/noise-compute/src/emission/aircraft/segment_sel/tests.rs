@@ -11,6 +11,55 @@ use crate::propagation::obstacle_index::{
 use crate::sources::AIRCRAFT_ADSB_SOURCE_ID;
 use crate::types::default_receiver_altitude_m;
 
+/// Helicopter climb/level/descent states route to the EASA-certified curves
+/// end to end: three symmetric EC35 rows over one overhead receiver differ by
+/// the certification uplifts (takeoff +3.4, BVI approach +8.7 dB).
+/// Propeller installation zeroes ΔI and the ±11 m symmetric altitudes keep
+/// the slant/ΔF spread inside ±0.5 dB; the descent row carries the stored
+/// whole-chord state the producer stamps past the −10 m chord gate.
+#[test]
+fn heli_states_differ_by_certification_uplifts() {
+    let row = |is_departure: bool, end_alt_m: f32, heli_descent: bool| AircraftSegment {
+        flight_id: 1,
+        profile_idx: crate::emission::aircraft::profile_idx("EC35"),
+        is_departure,
+        on_ground: false,
+        period: 0,
+        date_id: 0,
+        start_lat: 50.0,
+        start_lon: 14.0,
+        start_alt_m: 150.0,
+        end_lat: 50.0045,
+        end_lon: 14.0,
+        end_alt_m,
+        speed_kt: 100.0,
+        segment_length_m: 500.0,
+        departure_field_elev_m: f32::NAN,
+        heli_descent,
+        ground_context: GROUND_CONTEXT_NONE,
+        ground_ops_kind: GROUND_OPS_KIND_NONE,
+        count_weight: 1.0,
+        surface_model: false,
+        source_id: AIRCRAFT_ADSB_SOURCE_ID,
+    };
+    let sel = |seg: &AircraftSegment| {
+        segment_sel(seg, 50.00225, 14.0, 0.0, &FlatGround)
+            .expect("overhead heli row should compute")
+            .0
+    };
+    let level = sel(&row(false, 150.0, false));
+    let descent = sel(&row(false, 139.0, true));
+    let climb = sel(&row(true, 161.0, false));
+    assert!(
+        (descent - level - 8.7).abs() < 0.5,
+        "descent {descent:.2} vs level {level:.2}"
+    );
+    assert!(
+        (climb - level - 3.4).abs() < 0.5,
+        "climb {climb:.2} vs level {level:.2}"
+    );
+}
+
 struct FlatGround;
 
 impl RasterSampler for FlatGround {
@@ -42,6 +91,8 @@ fn test_segment_sel_b738_approach() {
         end_alt_m: 900.0,
         speed_kt: 150.0,
         segment_length_m: 1100.0,
+        departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -76,6 +127,8 @@ fn test_segment_sel_far_away() {
         end_alt_m: 10000.0,
         speed_kt: 250.0,
         segment_length_m: 1100.0,
+        departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -103,6 +156,8 @@ fn test_airport_ground_sel_recovers_bad_altitude() {
         end_alt_m: 200.0,
         speed_kt: 35.0,
         segment_length_m: 90.0,
+        departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_AIRPORT_LINE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -117,10 +172,12 @@ fn test_airport_ground_sel_recovers_bad_altitude() {
         .expect("airport ground override should compute")
         .0;
 
-    assert!(
-        corrected > normal + 10.0,
-        "normal={normal:.2} corrected={corrected:.2}"
-    );
+    let mut at_ground = seg.clone();
+    at_ground.start_alt_m = 254.0;
+    at_ground.end_alt_m = 254.0;
+    let reference = segment_sel_airport_ground(&at_ground, 50.0004, 14.0, 254.0, &FlatGround).unwrap().0;
+    assert_eq!(corrected, reference);
+    assert!(corrected > normal, "normal={normal:.2} corrected={corrected:.2}");
 }
 
 #[test]
@@ -143,6 +200,8 @@ fn test_ground_ops_model_avoids_doc29_near_field_extrapolation() {
         end_alt_m: 0.0,
         speed_kt: 70.0,
         segment_length_m: 650.0,
+        departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_AIRPORT_LINE,
         ground_ops_kind: 1, // RUNWAY_ROLL
         count_weight: 1.0,
@@ -181,6 +240,8 @@ fn hoisted_matches_segment_sel_with_cuts() {
         end_alt_m: 1700.0,
         speed_kt: 220.0,
         segment_length_m: 4500.0,
+        departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -190,7 +251,7 @@ fn hoisted_matches_segment_sel_with_cuts() {
     let start_cut = 200.0;
     let end_cut = 210.0;
     let npd_luts = NpdLuts::shared();
-    let prepared = prepare_segment(&seg, start_cut, end_cut);
+    let prepared = prepare_segment(&seg, start_cut, end_cut).unwrap();
 
     // Sample on a grid that exercises far-field, near-field, and
     // out-of-reach pixels in one sweep.
@@ -260,8 +321,13 @@ fn display_clamp_does_not_touch_sel() {
         end_lat: 50.1711,
         end_lon: 14.4204,
         end_alt_m: 1532.0,
-        speed_kt: 180.0,
+        // 100 kt (not 180): steep-climb thrust interpolates below the max
+        // NPD row, so the phantom needs the +2.5 dB ΔV to stay above the
+        // 20 dB event floor (sel 22.0, geometry and assertions unchanged).
+        speed_kt: 100.0,
         segment_length_m: 131.0,
+        departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -330,6 +396,8 @@ fn c2_level_segment(lateral_m: f64, alt_m: f32) -> AircraftSegment {
         end_alt_m: alt_m,
         speed_kt: 160.0,
         segment_length_m: 6670.0,
+        departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -463,7 +531,7 @@ fn empty_building_set_is_bit_identical_to_terrain_only() {
     let mut crossings = CrossingScratch::default();
     let buildings = crate::emission::aircraft::BuildingHorizon::build(
         &obstacles,
-        &FlatGround,
+        |lat, lon| FlatGround.elevation(lat, lon),
         C2_RX_LAT,
         C2_RX_LON,
         rx_alt,
@@ -480,7 +548,7 @@ fn empty_building_set_is_bit_identical_to_terrain_only() {
     let off_ray_obstacles = c2_building_at(0.0, 100.0, 100.0);
     let off_ray_buildings = BuildingHorizon::build(
         &off_ray_obstacles,
-        &FlatGround,
+        |lat, lon| FlatGround.elevation(lat, lon),
         C2_RX_LAT,
         C2_RX_LON,
         rx_alt,
@@ -522,6 +590,8 @@ fn building_ray_stops_at_the_finite_subsegment_endpoint() {
         end_alt_m: 330.0,
         speed_kt: 160.0,
         segment_length_m: 1_000.0,
+        departure_field_elev_m: f32::NAN,
+        heli_descent: false,
         ground_context: GROUND_CONTEXT_NONE,
         ground_ops_kind: GROUND_OPS_KIND_NONE,
         count_weight: 1.0,
@@ -534,7 +604,7 @@ fn building_ray_stops_at_the_finite_subsegment_endpoint() {
     let mut crossings = CrossingScratch::default();
     let buildings = BuildingHorizon::build(
         &obstacles,
-        &FlatGround,
+        |lat, lon| FlatGround.elevation(lat, lon),
         C2_RX_LAT,
         C2_RX_LON,
         rx_alt,
@@ -572,7 +642,7 @@ fn terrain_and_building_diffraction_take_the_maximum() {
     let mut crossings = CrossingScratch::default();
     let buildings = BuildingHorizon::build(
         &obstacles,
-        &FlatGround,
+        |lat, lon| FlatGround.elevation(lat, lon),
         C2_RX_LAT,
         C2_RX_LON,
         receiver_alt_m,
@@ -688,75 +758,24 @@ fn kytin_class_near_overflight_unscreened_bitwise() {
     assert_eq!(sel_none.to_bits(), sel_hz.to_bits());
 }
 
-/// Delta 1 (CRITICAL): screening is branch-aware. Both pairs sit in
-/// deep shadow (Dz = 18 dB cap, identical), but the CFFK fast path
-/// never subtracted Λ so it takes the full −18, while the full branch
-/// credits its Λ back: −(18 − Λ).
+/// Terrain diffraction competes with lateral attenuation at every slant.
 #[test]
-fn screening_is_branch_aware_cffk_vs_full() {
+fn screening_credits_lateral_attenuation_at_near_and_far_slants() {
     use crate::emission::aircraft::fast_lateral_attenuation;
-    // 500 m ridge at ~1.9 km: tan ≈ 0.26, deep shadow for both pairs.
-    let hz = c2_east_ridge_horizon(1_900.0, 2_100.0, 800.0, 300.0, 300.0);
-    let npd_luts = NpdLuts::shared();
-
-    // Full-branch pair: slant ≈ 3.0 km < 7 620 m.
-    let seg_near = c2_level_segment(3_000.0, 700.0); // rel_alt 400, β ≈ 7.6°
-    let (sel_n_none, cpa_n) = segment_sel_with_cuts(
-        &seg_near, C2_RX_LAT, C2_RX_LON, 300.0, 270.0, 270.0, npd_luts, None,
-    )
-    .unwrap();
-    assert!(cpa_n.d_p_m < 7_620.0, "near pair must take the full branch");
-    let (sel_n_hz, _) = segment_sel_with_cuts(
-        &seg_near,
-        C2_RX_LAT,
-        C2_RX_LON,
-        300.0,
-        270.0,
-        270.0,
-        npd_luts,
-        Some(&hz),
-    )
-    .unwrap();
-    let lambda = fast_lateral_attenuation(
-        cpa_n.relative_alt_m,
-        cpa_n.lateral_m,
-        false,
-        Installation::Wing,
-    );
-    assert!(
-        lambda > 1.0,
-        "test geometry must carry real lateral attenuation"
-    );
-    let drop_full = sel_n_none - sel_n_hz;
-    assert!(
-        (drop_full - (18.0 - lambda)).abs() < 1e-9,
-        "full branch must net (Dz − Λ): got {drop_full:.4}, want {:.4}",
-        18.0 - lambda
-    );
-
-    // CFFK pair: slant ≈ 8.0 km > 7 620 m, same capped Dz.
-    let seg_far = c2_level_segment(8_000.0, 900.0); // rel_alt 600, β ≈ 4.3°
-    let (sel_f_none, cpa_f) = segment_sel_with_cuts(
-        &seg_far, C2_RX_LAT, C2_RX_LON, 300.0, 270.0, 270.0, npd_luts, None,
-    )
-    .unwrap();
-    assert!(cpa_f.d_p_m > 7_620.0, "far pair must take the CFFK branch");
-    let (sel_f_hz, _) = segment_sel_with_cuts(
-        &seg_far,
-        C2_RX_LAT,
-        C2_RX_LON,
-        300.0,
-        270.0,
-        270.0,
-        npd_luts,
-        Some(&hz),
-    )
-    .unwrap();
-    let drop_cffk = sel_f_none - sel_f_hz;
-    assert!(
-        (drop_cffk - 18.0).abs() < 1e-9,
-        "CFFK branch must net the plain Dz (no Λ to credit): got {drop_cffk:.4}"
-    );
+    let horizon = c2_east_ridge_horizon(1_900.0, 2_100.0, 800.0, 300.0, 300.0);
+    let luts = NpdLuts::shared();
+    for (lateral, altitude) in [(3_000.0, 700.0), (8_000.0, 900.0)] {
+        let segment = c2_level_segment(lateral, altitude);
+        let (free, cpa) = segment_sel_with_cuts(
+            &segment, C2_RX_LAT, C2_RX_LON, 300.0, 270.0, 270.0, luts, None,
+        ).unwrap();
+        let (screened, _) = segment_sel_with_cuts(
+            &segment, C2_RX_LAT, C2_RX_LON, 300.0, 270.0, 270.0, luts, Some(&horizon),
+        ).unwrap();
+        let lambda = fast_lateral_attenuation(cpa.relative_alt_m, cpa.lateral_m, false);
+        assert!(lambda > 1.0);
+        assert!((free - screened - (18.0 - lambda)).abs() < 1e-9);
+    }
 }
 
 /// Cruise-β geometry never screens:
@@ -892,6 +911,8 @@ fn reach_gate_matches_kernel_rejection() {
                         end_alt_m: rep_alt_m,
                         speed_kt: 450.0,
                         segment_length_m: rep_len_m as f32,
+                        departure_field_elev_m: f32::NAN,
+                        heli_descent: false,
                         count_weight: 1.0,
                         surface_model: false,
                         ground_context: crate::emission::aircraft::GROUND_CONTEXT_NONE,

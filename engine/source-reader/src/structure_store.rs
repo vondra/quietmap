@@ -23,7 +23,7 @@ use arrow::array::{
 };
 use arrow::ipc::reader::FileReader;
 use grid::Square;
-use noise_compute::envelope::{effective_envelope_class, EnvelopeClass};
+use noise_compute::envelope::EnvelopeClass;
 use noise_compute::low_profile::LowProfileLookup;
 use noise_compute::propagation::obstacle_index::{ObstacleIndex, ObstacleKind, ObstacleSet};
 
@@ -80,25 +80,15 @@ const MAX_PROBE_HEIGHT_M: f32 = 1_000.0;
 /// popup would display.
 const HEIGHT_PROBE_RESOLUTION_M: f32 = 0.05;
 
-/// Height of the tallest vector footprint containing the receiver, regardless
-/// of envelope class. This is CNOSSOS fix-pack Fix 4's popup half and the
-/// lockstep twin of tile-painter's `bake_tile_interior_mask`: change one,
-/// change both so popup and heatmap keep shared inside/hole/overlap semantics.
-/// The indoor calculation uses [`point_inside_enclosed`].
-///
-/// DISPLAY ONLY: the popup keeps computing and reporting the same dB values;
-/// this function only labels them. What an indoor receiver should report
-/// (facade exposure rather than interior noise) is a separate product decision.
+/// Height of the tallest vector footprint containing the point, regardless of
+/// envelope class (the building-height hover).
 ///
 /// Runs on the already-loaded query set — zero extra I/O. The height comes out
 /// of the containment test itself: `ObstacleIndex::contains_built(…, min_h)`
 /// answers "inside a footprint TALLER than `min_h`", which is monotone in
 /// `min_h`, so the tallest containing footprint is the threshold where it
-/// flips — ~15 in-memory probes. That keeps the exact same polygon test (and
-/// its hole/overlap semantics) as the heatmap mask and enclosure probe;
-/// a height-returning containment query on `ObstacleIndex` itself would be
-/// the cheaper shape, and is the named follow-up for whoever next opens
-/// `propagation::obstacle_index`.
+/// flips — ~15 in-memory probes, with the exact polygon test (and its
+/// hole/overlap semantics) every other containment probe uses.
 pub fn point_inside_obstacle(set: &ObstacleSet, lat: f64, lon: f64) -> Option<f32> {
     let mut seen: Vec<(u32, u32, f32)> = Vec::new();
     let mut inside = |min_h: f32| {
@@ -123,83 +113,76 @@ pub fn point_inside_obstacle(set: &ObstacleSet, lat: f64, lon: f64) -> Option<f3
     Some(0.5 * (lo + hi))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct EnclosedEnvelopeWinner {
-    pub stored_class: EnvelopeClass,
-    pub effective_class: EnvelopeClass,
-    pub height_m: f32,
-}
-
-/// Select the display-envelope winner using the painter's exact order: only
-/// enclosed footprints participate, then tallest height, lower index ordinal,
-/// and lower footprint ordinal win. `stored_class` is the source
-/// classification; `effective_class` is the paint/popup delta choice and is
-/// never written back to the Arrow data.
-pub fn point_inside_enclosed(
-    set: &ObstacleSet,
+/// The rings of one footprint of a square's `structures.arrow`, found among the
+/// batches whose envelope holds `(lat, lon)` (a point inside the footprint).
+pub fn footprint_polygons_at(
+    structures: &square_store::store::LazyArrow,
+    footprint_id: u32,
     lat: f64,
     lon: f64,
-) -> Option<EnclosedEnvelopeWinner> {
-    let mut seen = Vec::new();
-    set.indexes
-        .iter()
-        .enumerate()
-        .filter_map(|(index_ordinal, index)| {
-            index.containing_enclosed(lat, lon, 0.0, &mut seen).map(
-                |(stored_class, height_m, footprint_ordinal)| {
-                    (stored_class, height_m, index_ordinal, footprint_ordinal)
-                },
-            )
-        })
-        .max_by(|a, b| {
-            a.1.total_cmp(&b.1)
-                .then_with(|| b.2.cmp(&a.2))
-                .then_with(|| b.3.cmp(&a.3))
-        })
-        .map(|(stored_class, height_m, _, _)| EnclosedEnvelopeWinner {
-            stored_class,
-            effective_class: effective_envelope_class(stored_class, height_m),
-            height_m,
-        })
+) -> Result<grid::poly::GridPolygons, String> {
+    for batch in structures.batches_within(lat, lon, 0.0)? {
+        let ordinals = square_store::grid_cols::col_u32(&batch, "screening_ordinal")
+            .ok_or("structures.arrow: missing screening_ordinal")?;
+        if let Some(row) = (0..batch.num_rows())
+            .find(|&row| !ordinals.is_null(row) && ordinals.value(row) == footprint_id)
+        {
+            return col_binary(&batch, "geom")
+                .filter(|column| !column.is_null(row))
+                .and_then(|column| grid::poly::decode_grid_polygons(column.value(row)))
+                .ok_or_else(|| format!("structures.arrow: footprint {footprint_id} has no rings"));
+        }
+    }
+    Err(format!(
+        "structures.arrow: footprint {footprint_id} not found at ({lat:.6}, {lon:.6})"
+    ))
 }
 
-/// Preserve clicked enclosure metadata while selecting the point used by every source gate.
-pub fn locate_facade_receiver(
-    obstacle_set: &ObstacleSet,
-    lat: f64,
-    lng: f64,
-) -> (f64, f64, Option<EnclosedEnvelopeWinner>) {
-    let inside_envelope = point_inside_enclosed(obstacle_set, lat, lng);
-    let (facade_lat, facade_lng) = if inside_envelope.is_some() {
-        let step_lat = 1.0 / grid::geo::M_PER_DEG_LAT;
-        let step_lon = 1.0 / grid::geo::m_per_deg_lon(lat.to_radians());
-        let mut outside = None;
-        for distance in 1..=100 {
-            for (dy, dx) in [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)] {
-                let candidate = (
-                    lat + dy * distance as f64 * step_lat,
-                    lng + dx * distance as f64 * step_lon,
-                );
-                if point_inside_enclosed(obstacle_set, candidate.0, candidate.1).is_none() {
-                    outside = Some(candidate);
-                    break;
-                }
+/// Every enclosed building footprint the square's index holds, as (index id,
+/// rings): the buildings the façade-exposure stage writes one row for. The
+/// same admission as [`build_obstacle_index_from_arrow_bytes`]: a geometry,
+/// a positive screening height and an enclosed envelope class.
+pub fn enclosed_building_footprints(
+    bytes: &[u8],
+    structures_arrow: &Path,
+) -> Result<Vec<(u32, grid::poly::GridPolygons)>, String> {
+    let reader = FileReader::try_new(Cursor::new(bytes), None)
+        .map_err(|e| format!("arrow open {}: {e}", structures_arrow.display()))?;
+    let mut footprints = Vec::new();
+    for batch in reader {
+        let batch =
+            batch.map_err(|e| format!("arrow batch {}: {e}", structures_arrow.display()))?;
+        let heights = structure_contract::heights(&batch)?;
+        let (Some(kinds), Some(classes), Some(ordinals)) = (
+            col_u8(&batch, "kind"),
+            col_u8(&batch, "envelope_class"),
+            square_store::grid_cols::col_u32(&batch, "screening_ordinal"),
+        ) else {
+            return Err(format!("{}: missing structure columns", structures_arrow.display()));
+        };
+        for row in 0..batch.num_rows() {
+            if kinds.value(row) != STRUCTURE_KIND_BUILDING
+                || heights.value(row) <= 0
+                || !EnvelopeClass::from_u8(classes.value(row)).is_enclosed()
+                || ordinals.is_null(row)
+            {
+                continue;
             }
-            if outside.is_some() {
-                break;
+            if let Some(polygons) = col_binary(&batch, "geom")
+                .filter(|column| !column.is_null(row))
+                .and_then(|column| grid::poly::decode_grid_polygons(column.value(row)))
+            {
+                footprints.push((ordinals.value(row), polygons));
             }
         }
-        outside.unwrap_or((lat, lng))
-    } else {
-        (lat, lng)
-    };
-    (facade_lat, facade_lng, inside_envelope)
+    }
+    footprints.sort_unstable_by_key(|(id, _)| *id);
+    Ok(footprints)
 }
 
 /// Hover-only winner over every visible footprint, including Outdoor-class
-/// carports and roof structures. The popup's indoor calculation deliberately
-/// keeps using [`point_inside_enclosed`] so Outdoor does not become an indoor
-/// attenuation estimate.
+/// carports and roof structures, which the building exposure
+/// (`ObstacleSet::enclosed_footprint_at`) treats as open ground.
 pub fn point_inside_footprint(
     set: &ObstacleSet,
     lat: f64,
@@ -217,8 +200,7 @@ pub fn point_inside_footprint(
 /// is built from: kind=0 rows with a valid `osm_id` are the OSM building stock
 /// (the merge's emission rows — the old buildings.arrow subsequence), matched
 /// at their emission centroid where the merge kept one, else the screening
-/// centroid. The rule itself lives in [`noise_compute::low_profile`] (shared
-/// with the tile painter's loader, so popup and tiles cap the same footprints).
+/// centroid. The rule itself lives in [`noise_compute::low_profile`].
 ///
 fn low_profile_from_structures(bytes: &[u8], label: &Path) -> Result<LowProfileLookup, String> {
     let reader = FileReader::try_new(Cursor::new(bytes), None)
@@ -333,10 +315,10 @@ mod low_profile_seed_tests {
     /// nothing stands there — so it must not pull a real building's wall down.
     #[test]
     fn only_a_garage_that_stands_caps_a_real_building() {
-        // Tier 2 is the defaulted height the cap exists for.
+        // A height that is not per building is what the cap exists for.
         let tall = 18.0;
-        assert_eq!(lookup(true).capped_height(tall, 2, LAT, LON, 450.0), 3.0);
-        assert_eq!(lookup(false).capped_height(tall, 2, LAT, LON, 450.0), tall);
+        assert_eq!(lookup(true).capped_height(tall, false, LAT, LON, 450.0), 3.0);
+        assert_eq!(lookup(false).capped_height(tall, false, LAT, LON, 450.0), tall);
     }
 }
 
@@ -410,7 +392,16 @@ pub fn build_obstacle_index_from_arrow_bytes(
     }
     index_rows.sort_unstable_by_key(|&(ordinal, _, _)| ordinal);
     let mut next_id: u32 = 0;
-    for &(_, batch_idx, i) in &index_rows {
+    for &(ordinal, batch_idx, i) in &index_rows {
+        // The façade-exposure rows name footprints by `screening_ordinal`; the
+        // index names them by id. The producer numbers geometry rows densely,
+        // so the two are one number.
+        if ordinal != next_id {
+            return Err(format!(
+                "{}: screening_ordinal {ordinal} where {next_id} was due (ordinals must be dense)",
+                structures_arrow.display()
+            ));
+        }
         let batch = &batches[batch_idx];
         let kinds = batch
             .column_by_name("kind")
@@ -424,7 +415,7 @@ pub fn build_obstacle_index_from_arrow_bytes(
         let id = next_id;
         match kinds.value(i) {
             STRUCTURE_KIND_BUILDING => {
-                let (polygons, height, _, _) = building_geometry_and_height(
+                let (polygons, height) = building_geometry_and_height(
                     batch,
                     i,
                     f32::from(heights.value(i)),
@@ -444,7 +435,7 @@ pub fn build_obstacle_index_from_arrow_bytes(
                 builder.add_polygon_wkb(&wkb, height, ObstacleKind::Building, id, class);
             }
             // Walls keep their mapped height: the cap is a building-only
-            // correction (noise_compute::low_profile caps tiers 2/4), and
+            // correction (noise_compute::low_profile caps typology heights), and
             // add_polyline never clamps to the building height ceiling.
             STRUCTURE_KIND_BARRIER => {
                 let ring = decode_geom(Some(geom.value(i))).ok_or_else(|| {
@@ -483,14 +474,15 @@ fn building_geometry_and_height(
     row: usize,
     raw_height: f32,
     low_profile: &LowProfileLookup,
-) -> Result<(grid::poly::GridPolygons, f32, u8, bool), String> {
+) -> Result<(grid::poly::GridPolygons, f32), String> {
     let polygons = col_binary(batch, "geom")
         .filter(|column| !column.is_null(row))
         .and_then(|column| grid::poly::decode_grid_polygons(column.value(row)))
         .ok_or_else(|| format!("row {row} has invalid building topology"))?;
-    let tier = col_u8(batch, "height_tier")
+    let height_source = col_u8(batch, "height_source")
         .filter(|column| !column.is_null(row))
-        .map_or(0, |column| column.value(row));
+        .ok_or_else(|| format!("row {row} has no height_source"))?
+        .value(row);
     let mut height = raw_height;
     if let (Some(gx), Some(gy)) = (col_i32(batch, "centroid_gx"), col_i32(batch, "centroid_gy")) {
         if !gx.is_null(row) && !gy.is_null(row) {
@@ -507,10 +499,16 @@ fn building_geometry_and_height(
                         .filter_map(|rings| grid::poly::ring_area_m2(&rings[0]))
                         .fold(0.0, f64::max) as f32
                 });
-            height = low_profile.capped_height(raw_height, tier, lat, lon, area);
+            height = low_profile.capped_height(
+                raw_height,
+                structure_contract::height_is_per_building(height_source),
+                lat,
+                lon,
+                area,
+            );
         }
     }
-    Ok((polygons, height, tier, height < raw_height))
+    Ok((polygons, height))
 }
 
 /// One logical footprint with all polygon rings in lat/lon and as-used height.
@@ -521,10 +519,6 @@ pub struct FootprintView {
     pub polygons: Vec<Vec<Vec<(f64, f64)>>>,
     #[serde(rename = "h")]
     pub height_m: f32,
-    #[serde(rename = "t")]
-    pub tier: u8,
-    #[serde(rename = "c")]
-    pub capped: bool,
 }
 
 /// Footprints within the existing padded-centroid display gate, at as-used heights.
@@ -611,7 +605,7 @@ pub fn footprints_in_bbox(
                 {
                     continue;
                 }
-                let (polygons, height_m, tier, capped) = building_geometry_and_height(
+                let (polygons, height_m) = building_geometry_and_height(
                     &batch,
                     i,
                     f32::from(heights.value(i)),
@@ -634,8 +628,6 @@ pub fn footprints_in_bbox(
                         })
                         .collect(),
                     height_m,
-                    tier,
-                    capped,
                 });
             }
         }
@@ -666,7 +658,7 @@ mod tests {
             kind: STRUCTURE_KIND_BUILDING,
             ring_lonlat: Some(fx::square_ring_lonlat(LAT, LON)),
             height_m: 12,
-            height_tier: 0,
+            height_source: 0,
             envelope_class: 1, // Residential
             centroid_lonlat: Some((LON + 0.0001, LAT + 0.0001)),
             osm_id: Some(7),
@@ -691,30 +683,40 @@ mod tests {
         let set = ObstacleSet {
             indexes: vec![Arc::new(index)],
         };
-        let winner = point_inside_enclosed(&set, LAT + 0.0001, LON + 0.0001).unwrap();
-        assert_eq!(winner.stored_class, EnvelopeClass::Residential);
+        let winner = set.enclosed_footprint_at(LAT + 0.0001, LON + 0.0001).unwrap();
+        assert_eq!(winner.class, EnvelopeClass::Residential);
         assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
     }
 
     #[test]
-    fn enclosed_winner_reports_stored_class_and_height() {
+    fn enclosed_winner_names_its_square_row_class_and_height() {
         let tmp = TempDir::new().unwrap();
         fx::write_square_structures(tmp.path(), prague(), &[house_row()]);
         let set = obstacle_set(tmp.path());
         assert!(!set.indexes.is_empty());
-        let winner = point_inside_enclosed(&set, LAT + 0.0001, LON + 0.0001)
+        let winner = set
+            .enclosed_footprint_at(LAT + 0.0001, LON + 0.0001)
             .expect("click inside the footprint must be enclosed");
-        assert_eq!(winner.stored_class, EnvelopeClass::Residential);
+        assert_eq!(winner.class, EnvelopeClass::Residential);
+        assert_eq!(winner.key.square(), prague());
+        assert_eq!(winner.key.id, 0);
         assert!(
             (winner.height_m - 12.0).abs() < 0.5,
             "h={}",
             winner.height_m
         );
-        assert!(point_inside_enclosed(&set, LAT + 0.5, LON + 0.5).is_none());
+        assert!(set.enclosed_footprint_at(LAT + 0.5, LON + 0.5).is_none());
+        let bytes = std::fs::read(fx::square_dir(tmp.path(), prague()).join(STRUCTURES_ARROW)).unwrap();
+        let footprints = enclosed_building_footprints(&bytes, Path::new("fixture")).unwrap();
+        assert_eq!(footprints.len(), 1);
+        assert_eq!(footprints[0].0, winner.key.id);
+        let square = square_store::store::load_square(&fx::square_dir(tmp.path(), prague())).unwrap();
+        let rings = footprint_polygons_at(&square.structures, 0, LAT + 0.0001, LON + 0.0001).unwrap();
+        assert_eq!(rings, footprints[0].1);
     }
 
     #[test]
-    fn hover_winner_names_outdoor_footprints_that_indoor_ignores() {
+    fn hover_winner_names_outdoor_footprints_that_building_exposure_ignores() {
         let tmp = TempDir::new().unwrap();
         let mut row = house_row();
         row.envelope_class = 0; // Outdoor carport
@@ -723,7 +725,9 @@ mod tests {
         let (class, _) = point_inside_footprint(&set, LAT + 0.0001, LON + 0.0001)
             .expect("hover must see the carport");
         assert_eq!(class, EnvelopeClass::Outdoor);
-        assert!(point_inside_enclosed(&set, LAT + 0.0001, LON + 0.0001).is_none());
+        assert!(set.enclosed_footprint_at(LAT + 0.0001, LON + 0.0001).is_none());
+        let bytes = std::fs::read(fx::square_dir(tmp.path(), prague()).join(STRUCTURES_ARROW)).unwrap();
+        assert!(enclosed_building_footprints(&bytes, Path::new("fixture")).unwrap().is_empty());
     }
 
     #[test]
@@ -736,7 +740,7 @@ mod tests {
                 kind: STRUCTURE_KIND_BARRIER,
                 ring_lonlat: Some(vec![(LON, LAT), (LON + 0.001, LAT + 0.001)]),
                 height_m: 3,
-                height_tier: 0,
+                height_source: 0,
                 envelope_class: 0,
                 centroid_lonlat: Some((LON + 0.0005, LAT + 0.0005)),
                 osm_id: Some(11),
@@ -764,7 +768,7 @@ mod tests {
                 kind: STRUCTURE_KIND_BARRIER,
                 ring_lonlat: Some(vec![(179.999, 0.0), (-179.999, 0.0)]),
                 height_m: 3,
-                height_tier: 0,
+                height_source: 0,
                 envelope_class: 0,
                 centroid_lonlat: Some((-180.0, 0.0)),
                 osm_id: Some(11),
@@ -824,8 +828,6 @@ mod tests {
             "h={}",
             fps[0].height_m
         );
-        assert_eq!(fps[0].tier, 0);
-        assert!(!fps[0].capped);
         assert_eq!(fps[0].polygons[0][0].len(), 5);
         assert!((fps[0].polygons[0][0][0].0 - LAT).abs() < 0.0001);
         assert!((fps[0].polygons[0][0][0].1 - LON).abs() < 0.0001);

@@ -11,71 +11,17 @@ import shapely.ops
 from pyproj import Transformer
 
 import qmgrid
-from structure_inventory import overture_sources
+from structure_inventory import official_tile_sources, overture_sources
 
 MEASURED_MIN_M = 2.0      # zonal pixels below this are "not a building surface here"
 COVERAGE_MIN_FRAC = 0.30  # measured pixels must cover this share of the footprint
 COVERAGE_MIN_PX = 3
-TIER3_CLAMP = (2.5, 250.0)
-ANBH_MIN_M = 1.0          # ANBH below this = no better info than the default
-ANBH_MAX_VALID = 250.0    # GHSL NoData sentinel is 255 — belt for a missing tag
-TIER4_CLAMP = (3.0, 100.0)
-
-FLOOR_HEIGHT = 3.0        # == noise_compute::constants::BUILDING_FLOOR_HEIGHT_M
-DEFAULT_HEIGHT = 8.0      # == noise_compute::constants::BUILDING_DEFAULT_HEIGHT_M
 
 ENVELOPE_OUTDOOR = 0
 ENVELOPE_DEFAULT = 5
-# OSM envelope-use codes: residential, commercial, industrial, explicit open carport.
-ENVELOPE_FROM_BUILDING_USE = {0: 1, 1: 2, 2: 3, 3: ENVELOPE_OUTDOOR}
-
-class GlobalPrior:
-    """GHS-BUILT-H ANBH: nearest-pixel value at a WGS84 point (windowed reads)."""
-
-    def __init__(self, path):
-        self.ds = rasterio.open(path)
-        self.gt = self.ds.transform
-        self.w, self.h = self.ds.width, self.ds.height
-        self.crs = self.ds.crs
-        if self.crs is None:
-            raise SystemExit(f"{path}: raster is not georeferenced — re-fetch it")
-        self.tr = Transformer.from_crs("EPSG:4326", self.crs, always_xy=True)
-        self.input_files = sorted(self.ds.files)
-
-    def sample_many(self, lons, lats):
-        """Sample one bounded batch by native raster block; NaN means no prior."""
-        x, y = self.tr.transform(np.asarray(lons, dtype=np.float64),
-                                 np.asarray(lats, dtype=np.float64))
-        columns = np.trunc((x - self.gt.c) / self.gt.a)
-        rows = np.trunc((y - self.gt.f) / self.gt.e)
-        finite = np.isfinite(columns) & np.isfinite(rows)
-        if not finite.all():
-            # Retain the scalar int() rejection of NaN/inf projected coordinates.
-            first = np.flatnonzero(~finite)[0]
-            int(columns[first])
-            int(rows[first])
-        values = np.full(len(columns), np.nan)
-        indices = np.flatnonzero((columns >= 0) & (columns < self.w)
-                                 & (rows >= 0) & (rows < self.h))
-        ci, ri = columns[indices].astype(np.int64), rows[indices].astype(np.int64)
-        block_height, block_width = self.ds.block_shapes[0]
-        block_columns = (self.w + block_width - 1) // block_width
-        blocks = (ri // block_height) * block_columns + ci // block_width
-        order = np.argsort(blocks)
-        cuts = np.flatnonzero(np.diff(blocks[order])) + 1
-        for group in np.split(order, cuts):
-            if not len(group):
-                continue
-            r0 = (ri[group[0]] // block_height) * block_height
-            c0 = (ci[group[0]] // block_width) * block_width
-            window = self.ds.read(1, window=((int(r0), min(int(r0) + block_height, self.h)),
-                                            (int(c0), min(int(c0) + block_width, self.w))))
-            values[indices[group]] = window[ri[group] - r0, ci[group] - c0]
-        invalid = ~np.isfinite(values) | (values >= ANBH_MAX_VALID)
-        if self.ds.nodata is not None:
-            invalid |= values == self.ds.nodata
-        values[invalid] = np.nan
-        return values
+# OSM envelope-use codes: residential, commercial, industrial, explicit open carport or roof.
+BUILDING_USE_OPEN_ROOF = 3
+ENVELOPE_FROM_BUILDING_USE = {0: 1, 1: 2, 2: 3, BUILDING_USE_OPEN_ROOF: ENVELOPE_OUTDOOR}
 
 
 class RegionalHeights:
@@ -128,8 +74,10 @@ class RegionalHeights:
 
 # Overture class/subtype -> envelope_class: the builder owns the whole
 # ingest+ladder+merge, so the mapping lives here, once.
-OUTDOOR_CLASSES = {
-    "carport", "roof", "greenhouse", "glasshouse", "bridge_structure", "grandstand",
+# A roof on posts has no walls to screen with; a greenhouse, a grandstand or a garage has.
+OPEN_ROOF_CLASSES = {"carport", "roof"}
+OUTDOOR_CLASSES = OPEN_ROOF_CLASSES | {
+    "greenhouse", "glasshouse", "bridge_structure", "grandstand",
 }
 RESIDENTIAL_CLASSES = {
     "allotment_house", "apartments", "beach_hut", "boathouse", "bungalow",
@@ -219,13 +167,14 @@ def grid_ring_to_shapely(ring):
     return shapely.Polygon(qmgrid.ring_to_lonlat(ring))
 
 
-def overture_height_ladder(h, f):
-    """The ingest ladder: mapped height, floors x 3 m, else the 8 m default."""
-    if h is not None and math.isfinite(h) and h > 0:
-        return float(h), 0
-    if f is not None and math.isfinite(f) and f > 0:
-        return float(f) * FLOOR_HEIGHT, 1
-    return DEFAULT_HEIGHT, 2
+# The spherical degree the typology's reference areas were measured with (pilot 2026-09-24).
+METRES_PER_DEGREE = 111_320.0
+
+
+def footprint_area_m2(geom, lat):
+    """Plan area in square metres on the local equirectangular frame, holes excluded."""
+    local = footprint_in_longitude_frame(geom, float(shapely.get_coordinates(geom)[0][0]))
+    return local.area * METRES_PER_DEGREE ** 2 * math.cos(math.radians(lat))
 
 
 def read_overture_parquet(parquet_dir, square):
@@ -266,51 +215,72 @@ def read_overture_parquet(parquet_dir, square):
                         if qmgrid.square_of(float(clats[i]), float(clons[i])) == square]
             values = table.take(pa.array(indices[selected], type=pa.int64())).to_pylist()
             for i, value in zip(selected, values):
-                hh, tier = overture_height_ladder(value.get("height"), value.get("num_floors"))
-                rows.append({"wkb": bytes(value["geometry"]), "height_m": hh, "tier": tier,
+                floors = value.get("num_floors")
+                rows.append({"wkb": bytes(value["geometry"]), "overture_height": value.get("height"),
+                             # Above uint8 is a tagging error, not a storey count.
+                             "overture_floors": floors if floors and 0 < floors <= 255 else 0,
+                             "open_roof": value.get("class") in OPEN_ROOF_CLASSES,
                              "clat": float(clats[i]), "clon": float(clons[i]),
                              "envelope": envelope_class(value.get("class"), value.get("subtype"))})
     return rows, inputs
 
-def apply_raster_tiers(rows, regional, ghsl, stats):
-    """Tiers 3/4 over row dicts keyed (tier, height_m, clat, clon, geom): the
-    regional zonal mean replaces tiers 1/2, the ANBH prior only tier 2."""
-    n = len(rows)
-    if n == 0:
-        return
-    in_regional = np.zeros(n, dtype=bool)
-    if regional is not None:
-        rx, ry = regional.tr.transform(
-            [r["clon"] for r in rows], [r["clat"] for r in rows]
-        )
-        for i in range(n):
-            in_regional[i] = regional.covers(rx[i], ry[i])
-    for i, row in enumerate(rows):
-        tier = row["tier"]
-        if tier == 0:
-            continue
-        if regional is not None and in_regional[i]:
-            geom = row.get("geom")
-            if geom is None:
-                from shapely import wkb as shapely_wkb
-                geom = shapely_wkb.loads(row["wkb"])
-                row["geom"] = geom
-            h = regional.zonal_measured_mean(geom)
-            if h is not None:
-                row["height_m"] = min(max(h, TIER3_CLAMP[0]), TIER3_CLAMP[1])
-                row["tier"] = 3
-                stats["tier3"] += 1
+
+def centroid_within_halo_m(clat, clon, span, halo_m):
+    """The centroid is within halo_m of the square span (a replacement-support
+    hop from a neighbour square). Longitude wraps at the antimeridian."""
+    lon0, lat_top, lon1, lat_bot = span
+    dlat = 0.0 if lat_bot <= clat <= lat_top else min(abs(clat - lat_bot), abs(clat - lat_top))
+    east = qmgrid.wrapped_longitude_delta(lon0, clon)
+    width = qmgrid.wrapped_longitude_delta(lon0, lon1)
+    dlon = 0.0 if 0.0 <= east <= width else min(abs(east), abs(east - width))
+    metres_per_deg = 111_320.0 * max(0.01, math.cos(math.radians(clat)))
+    return math.hypot(dlat * 111_320.0, dlon * metres_per_deg) <= halo_m
+
+
+def read_official_cache(cache_dir, square, schema, contract_key, contract_version, halo_m=0.0):
+    """The square's rows from the touched 1-degree official-cache tiles (barrier
+    lines or measured footprints), assigned by centroid like Overture rows.
+    With halo_m the loader also keeps rows whose centroid is within halo_m
+    of the square span for replacement support; those rows carry owned=False
+    and must never emit. Every tile carries the cache contract; a tile
+    without it fails the build. Returns (rows, every contributing file)."""
+    rows, inputs = [], []
+    span = qmgrid.square_lonlat_span(*square) if halo_m > 0 else None
+    for _lat, _lon, src in official_tile_sources(cache_dir, square, expand_m=halo_m):
+        inputs.append(src)
+        table = pq.read_table(src, columns=[name for name in schema.names])
+        contract = (table.schema.metadata or {}).get(contract_key.encode())
+        if contract != contract_version.encode():
+            raise SystemExit(f"{src}: {contract_key} mismatch "
+                             f"(expected {contract_version}, got {contract!r})")
+        for value in table.to_pylist():
+            geom = shapely.from_wkb(value["geometry"])
+            if geom.is_empty:
                 continue
-            stats["abstain"] += 1
-    # Bound temporary coordinate/index arrays even in the largest urban squares.
-    for offset in range(0, n, 65536):
-        pending = [row for row in rows[offset:offset + 65536] if row["tier"] == 2]
-        if not pending:
+            clat, clon = footprint_centroid(geom)
+            owned = qmgrid.square_of(clat, clon) == square
+            if not owned and (span is None or not centroid_within_halo_m(clat, clon, span, halo_m)):
+                continue
+            row = {"geom": geom, "clat": clat, "clon": clon, "owned": owned}
+            for name in schema.names:
+                if name != "geometry":
+                    row[name] = value[name]
+            rows.append(row)
+    return rows, inputs
+
+
+def sample_regional_heights(rows, regional, stats):
+    """Fill `regional_m` (survey zonal mean or None) for every row with a footprint inside the
+    regional raster. Anywhere else the ladder falls through to mapped floors, Overture, or
+    the area typology. Rows are dicts keyed (clat, clon, geom)."""
+    n = len(rows)
+    for row in rows:
+        row["regional_m"] = None
+    if n == 0 or regional is None:
+        return
+    rx, ry = regional.tr.transform([r["clon"] for r in rows], [r["clat"] for r in rows])
+    for i, row in enumerate(rows):
+        if row["geom"] is None or not regional.covers(rx[i], ry[i]):
             continue
-        values = ghsl.sample_many([row["clon"] for row in pending],
-                                  [row["clat"] for row in pending])
-        for row, value in zip(pending, values):
-            if value >= ANBH_MIN_M:
-                row["height_m"] = min(max(float(value), TIER4_CLAMP[0]), TIER4_CLAMP[1])
-                row["tier"] = 4
-                stats["tier4"] += 1
+        row["regional_m"] = regional.zonal_measured_mean(row["geom"])
+        stats["abstain" if row["regional_m"] is None else "regional"] += 1

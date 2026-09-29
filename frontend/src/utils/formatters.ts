@@ -48,7 +48,7 @@ export function metersToKm(m: number, digits = 2): string {
   return (m / 1000).toFixed(digits)
 }
 
-/** Unix seconds → "YYYY-MM-DD" (UTC). Used for globe.adsbexchange.com
+/** Unix seconds → "YYYY-MM-DD" (UTC). Used for the adsb.lol globe
  *  trace deep-links whose `showTrace=` query parameter expects an ISO
  *  date. */
 export function unixToIsoDate(unix: number): string {
@@ -62,32 +62,14 @@ export function unixToIsoDateTimeUtc(unix: number): string {
   return new Date(unix * 1000).toISOString().replace('T', ' ').replace(/\..+/, ' UTC')
 }
 
-import { PROFILE_CLASS } from './profile-class.generated'
-
-/** Flight-tracker trace deep-link for an ICAO 24-bit hex, routed to the
- *  network that actually SOURCED the flight (feeder communities differ, so
- *  the sourcing network's globe is the one guaranteed to hold the trace):
- *  GA + helicopter classes come from the adsb.lol full available-year archive →
- *  adsb.lol globe; every other class comes from the ADSBexchange
- *  first-of-month TAR samples (12 d/yr) → globe.adsbexchange.com. The GA
- *  set mirrors the engine's `is_ga_sampled_class` (npd/mod.rs); class is
- *  taken from the wire `class_name` when present, else derived from the
- *  typecode via the generated PROFILE_CLASS table (same table the extract
- *  uses). Both globes verified to replay per-day traces via
- *  `?icao=…&showTrace=YYYY-MM-DD` (owner + live check, 2026-07-03).
- *  Callers pass raw wire hex (lowercase) or display hex (uppercase);
- *  normalize here so every href is identical. */
-export function adsbTraceHref(
-  icaoHex: string,
-  date?: string | null,
-  opts?: { noiseClass?: string | null; typecode?: string | null },
-): string {
-  const cls = opts?.noiseClass || (opts?.typecode ? PROFILE_CLASS[opts.typecode.toUpperCase()] : undefined)
-  const host = cls === 'PROP_C172' || cls === 'HELICOPTER'
-    ? 'https://adsb.lol/'
-    : 'https://globe.adsbexchange.com/'
+/** Flight-tracker trace deep-link for an ICAO 24-bit hex on the adsb.lol
+ *  globe, the baseline provider that sourced every flight it received
+ *  (`?icao=…&showTrace=YYYY-MM-DD` replays per-day traces, owner + live
+ *  check 2026-07-03). Callers pass raw wire hex (lowercase) or display hex
+ *  (uppercase); normalize here so every href is identical. */
+export function adsbTraceHref(icaoHex: string, date?: string | null): string {
   const hex = icaoHex.toUpperCase()
-  return date ? `${host}?icao=${hex}&showTrace=${date}` : `${host}?icao=${hex}`
+  return date ? `https://adsb.lol/?icao=${hex}&showTrace=${date}` : `https://adsb.lol/?icao=${hex}`
 }
 
 /**

@@ -55,22 +55,23 @@ test('Italian matcher requires the normalized ref and strict 30 kilometre cap', 
   assert.equal(matchItalianTgm(road({ midLat: 42.273 }), index), null)
 })
 
-test('z9 Italian pass writes split classes, retracts stale claims and enforces baked country', async () => {
+test('z9 Italian pass writes split classes, retracts stale claims, enforces baked country and never stamps a local street', async () => {
   const prepared = join(DIRECTORY, 'prepared')
   const square = join(prepared, 'z9', '273', '190')
   mkdirSync(square, { recursive: true })
-  const fixture = writeRoadsFixture('it-loader.arrow', [0, 0, 0], {
-    origin: [12, 42], refs: ['A1', 'A1', 'A2'],
-    countryCodes: [iso2Code('IT'), iso2Code('CH'), iso2Code('IT')],
-    sourceIds: [0, SOURCE_ID_IT_NATIONAL_ROADS, SOURCE_ID_IT_NATIONAL_ROADS],
+  // Row 3 is a residential street that also carries the A1 ref (and an earlier stamp).
+  const fixture = writeRoadsFixture('it-loader.arrow', [0, 0, 0, 5], {
+    origin: [12, 42], refs: ['A1', 'A1', 'A2', 'A1'],
+    countryCodes: [iso2Code('IT'), iso2Code('CH'), iso2Code('IT'), iso2Code('IT')],
+    sourceIds: [0, SOURCE_ID_IT_NATIONAL_ROADS, SOURCE_ID_IT_NATIONAL_ROADS, SOURCE_ID_IT_NATIONAL_ROADS],
   })
   const target = join(square, 'roads.arrow')
   copyFileSync(fixture, target)
   const result = await enrichItalianRoads(prepared, [station()])
   assert.deepEqual({ matched: result.matched, retracted: result.retracted,
-    skippedForeign: result.skippedForeign }, { matched: 1, retracted: 2, skippedForeign: 1 })
+    skippedForeign: result.skippedForeign }, { matched: 1, retracted: 3, skippedForeign: 1 })
   const table = tableFromIPC(readFileSync(target))
-  assert.deepEqual([...table.getChild('source_id')!], [SOURCE_ID_IT_NATIONAL_ROADS, 0, 0])
+  assert.deepEqual([...table.getChild('source_id')!], [SOURCE_ID_IT_NATIONAL_ROADS, 0, 0, 0])
   assert.deepEqual(['aadt_light', 'aadt_medium', 'aadt_heavy', 'aadt_moto']
     .map(name => table.getChild(name)!.get(0)), [780, 36, 144, 40])
 })

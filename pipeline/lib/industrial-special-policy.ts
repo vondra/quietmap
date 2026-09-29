@@ -46,11 +46,6 @@ const brazilOperating = (p: Properties) => !text(p.ESTAGIO) || /opera|sim/.test(
 const chinaOperating = (p: Properties) => !text(p.Status || p.status) || /operating|运营中|in operation/.test(text(p.Status || p.status).toLowerCase())
 const chileOperating = (p: Properties) => text(p.ESTADO).toUpperCase() === 'OPERATIVA'
 const chileTailingsActive = (p: Properties) => /^(ACT|EN CONST)/.test(text(p.ESTADO_INS).toUpperCase())
-const indianParkNace = (p: Properties) => {
-  const category = text(p.pollution_cat).toLowerCase()
-  return category.includes('red') ? 2400 : category.includes('orange') ? 2000
-    : category.includes('green') ? 1300 : category.includes('white') ? 6200 : 2500
-}
 const peruMineActive = (p: Properties) => ['activa', 'produccion', 'ampliacion', 'desarrollo', 'exploracionavz']
   .some(status => text(p.ESTADO).toLowerCase().includes(status))
 const eskomNace = (p: Properties) => {
@@ -84,10 +79,12 @@ export const SPECIAL_FEEDS: Readonly<Record<string, readonly SpecialFeed[]>> = {
   CO: [gemExplicit],
   FJ: [{ file: 'power-plants-gem.geojson', active: operating, classify: p => gemFuelNace(fuel(p)), require: 'area' }],
   ID: [{ file: 'power-plants.geojson', active: operatingOrBlank, classify: p => gemFuelNace(fuel(p)), require: 'area' }],
+  // No industrial-parks.geojson: the CPCB red/orange/green/white colours score
+  // air/water/waste pollution, not noise (PIB release 137373) — red→steel
+  // stamped +12.3 dB onto 174 parks with no acoustic basis.
   IN: [
     { ...constantFeed('cement-plants.geojson', 2300), geometry: ['Polygon', 'MultiPolygon'] },
     { file: 'power-plants.geojson', classify: p => gemFuelNace(fuel(p)), require: 'classified' },
-    { file: 'industrial-parks.geojson', classify: indianParkNace, require: 'active', geometry: ['Point', 'Polygon', 'MultiPolygon'] },
   ],
   PE: [
     { file: 'power-plants-gem.geojson', active: operating, classify: p => gemFuelNace(fuel(p)), require: 'classified' },

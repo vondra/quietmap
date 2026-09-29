@@ -16,6 +16,8 @@ pub struct SurfaceScene {
     pub sources: Vec<SurfaceSource>,
     pub obstacles: ObstacleSet,
     pub raster: FusedGrid,
+    /// Per-square meteorology windows for the per-receiver weather upload.
+    pub weather: raster_reader::meteorology::WeatherCache,
 }
 
 pub fn scene_bounds(owner: Square) -> [f64; 4] {
@@ -63,6 +65,17 @@ impl SurfaceScene {
             sources,
             obstacles,
             raster,
+            weather: raster_reader::meteorology::WeatherCache::new(rasters.dem.root()),
         })
+    }
+
+    /// One receiver's weather: its own square's window sampled at the receiver (the popup
+    /// samples the same window through `RealRasters::weather`, so the two agree).
+    pub fn receiver_weather(
+        &self,
+        latitude: f64,
+        longitude: f64,
+    ) -> noise_compute::propagation::meteorology::Meteorology {
+        self.weather.weather(latitude, longitude)
     }
 }

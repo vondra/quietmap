@@ -115,6 +115,7 @@ fn build_segments_batch(rows: &[FlightSegment], schema: &Arc<Schema>) -> Result<
     let mut agl = Float32Builder::with_capacity(n);
     let mut s_elev = Float32Builder::with_capacity(n);
     let mut e_elev = Float32Builder::with_capacity(n);
+    let mut field_elev = Float32Builder::with_capacity(n);
     for r in rows {
         flight_id.append_value(r.flight_id);
         callsign.append_value(&r.callsign);
@@ -139,6 +140,7 @@ fn build_segments_batch(rows: &[FlightSegment], schema: &Arc<Schema>) -> Result<
         agl.append_value(r.agl_avg_m);
         s_elev.append_value(r.start_elev_m);
         e_elev.append_value(r.end_elev_m);
+        field_elev.append_value(r.departure_field_elev_m);
     }
     let columns: Vec<ArrayRef> = vec![
         Arc::new(flight_id.finish()),
@@ -164,6 +166,7 @@ fn build_segments_batch(rows: &[FlightSegment], schema: &Arc<Schema>) -> Result<
         Arc::new(agl.finish()),
         Arc::new(s_elev.finish()),
         Arc::new(e_elev.finish()),
+        Arc::new(field_elev.finish()),
     ];
     Ok(RecordBatch::try_new(schema.clone(), columns)?)
 }
@@ -201,6 +204,7 @@ fn segments_from_batch(b: &RecordBatch) -> Result<Vec<FlightSegment>> {
         let agl = required_column::<Float32Array>(b, "agl_avg_m")?;
         let s_elev = required_column::<Float32Array>(b, "start_elev_m")?;
         let e_elev = required_column::<Float32Array>(b, "end_elev_m")?;
+        let field_elev = required_column::<Float32Array>(b, "departure_field_elev_m")?;
         for i in 0..b.num_rows() {
             anyhow::ensure!(
                 [
@@ -219,6 +223,11 @@ fn segments_from_batch(b: &RecordBatch) -> Result<Vec<FlightSegment>> {
                 .iter()
                 .all(|value| value.is_finite()),
                 "segment {i} contains non-finite values"
+            );
+            // NaN is the unknown-field sentinel; only infinities are corrupt.
+            anyhow::ensure!(
+                !field_elev.value(i).is_infinite(),
+                "segment {i} has an infinite departure field elevation"
             );
             anyhow::ensure!(
                 (-90.0..=90.0).contains(&sla.value(i))
@@ -255,6 +264,7 @@ fn segments_from_batch(b: &RecordBatch) -> Result<Vec<FlightSegment>> {
                 agl_avg_m: agl.value(i),
                 start_elev_m: s_elev.value(i),
                 end_elev_m: e_elev.value(i),
+                departure_field_elev_m: field_elev.value(i),
             });
         }
     }

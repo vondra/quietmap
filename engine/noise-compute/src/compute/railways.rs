@@ -15,13 +15,6 @@ use crate::*;
 /// clustering from 58.208 ms to 8.125 ms.
 const RAIL_TRACK_LINK_M: f64 = 150.0;
 
-type ReachKey = (u8, u64, [u64; 3], [u64; 3]);
-
-thread_local! {
-    static REACH_CACHE: std::cell::RefCell<std::collections::HashMap<ReachKey, f64>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
-}
-
 fn is_unnamed_track(segment: &RailSegment) -> bool {
     segment.rail_ref.is_empty() && segment.name.is_empty()
 }
@@ -38,7 +31,7 @@ struct UnnamedWayClosestPoint {
 fn unnamed_way_closest_points<'a>(
     segments: impl Iterator<Item = &'a RailSegment>,
 ) -> Vec<UnnamedWayClosestPoint> {
-    let mut closest_by_way = std::collections::HashMap::new();
+    let mut closest_by_way = crate::fxhash::FxHashMap::default();
     for segment in segments.filter(|segment| is_unnamed_track(segment)) {
         let point = UnnamedWayClosestPoint {
             rail_type: segment.rail_type,
@@ -90,7 +83,7 @@ fn union_toward_smaller(parents: &mut [usize], left: usize, right: usize) {
 /// linkable pair is at most one cell apart on each axis at every latitude.
 fn unnamed_track_cluster_ids<'a>(
     segments: impl Iterator<Item = &'a RailSegment>,
-) -> std::collections::HashMap<(u8, i64), i64> {
+) -> crate::fxhash::FxHashMap<(u8, i64), i64> {
     let ways = unnamed_way_closest_points(segments);
     let mut parents: Vec<_> = (0..ways.len()).collect();
 
@@ -103,8 +96,8 @@ fn unnamed_track_cluster_ids<'a>(
             (way.lon * m_per_deg_lon / RAIL_TRACK_LINK_M).floor() as i64,
         )
     };
-    let mut cells: std::collections::HashMap<(u8, i64, i64), Vec<usize>> =
-        std::collections::HashMap::new();
+    let mut cells: crate::fxhash::FxHashMap<(u8, i64, i64), Vec<usize>> =
+        crate::fxhash::FxHashMap::default();
     for (index, way) in ways.iter().enumerate() {
         cells.entry(cell_of(way)).or_default().push(index);
     }
@@ -147,10 +140,8 @@ fn add_segment_to_total(total_energy: &mut [f64; 3], variants: &[PropagationVari
 /// Compute railway noise — named tracks keep (ref, name, type); unnamed ways use
 /// proximity-connected track clusters. Contributor geometry contains every segment.
 ///
-/// Same three-pass parallel structure as `compute_roads` (see its docstring):
-/// sequential gates + skyline growth chain, parallel per-segment evaluation
-/// against frozen [`SkylineSnapshot`]s, sequential accumulation in segment
-/// order. Bit-identical to the sequential loop by construction.
+/// Same two-pass structure as `compute_roads` (see its docstring): parallel
+/// per-segment evaluation, sequential accumulation in segment order.
 pub(crate) fn compute_railways(
     receiver: &Receiver,
     railways: &[RailSegment],
@@ -158,30 +149,27 @@ pub(crate) fn compute_railways(
     rasters: &dyn RasterSampler,
     mut traces: Option<&mut TraceCollector>,
 ) -> (NoisePeriods, Vec<Contributor>) {
+    use crate::compute::line_piece::{evaluate_line_piece, LinePiece, LinePieceScratch};
+    use crate::propagation::ray_transfer::{
+        received_variants, RayReceiver, RaySource, SourceGround,
+    };
+    use crate::propagation::relevance_bound::{SourceSpread, LINE_REACH_CEILING_M};
     use emission::railway::{self, RailType};
-    use propagation::arc_screening::{ArcBounds, ArcScreeningScratch, ArcSkyline, SkylineSnapshot};
     use rayon::prelude::*;
-    use std::collections::HashMap;
+    use crate::fxhash::FxHashMap;
 
     let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
     let t_rail_start = std::time::Instant::now();
     let rcv_alt = receiver.altitude_m();
-    let bounds = ArcBounds::shipped();
-    // The set the arc rule clips against.
-    let arc_set = obstacles;
 
     struct RailAccum {
         name: String,
-        rail_type: RailType,
         rail_type_u8: u8,
         dominant_usage_u8: u8,
         dominant_osm_id: i64,
         min_dist: f64,
         min_d_slant: f64,
-        min_ground_g: f64,
-        cp_lat: f64,
-        cp_lon: f64,
-        src_height: f64,
+        closest_source: RaySource,
         // Dominant-segment metadata — highest received-energy segment drives the
         // popup display, mirroring the road pattern. Earlier rail surfaced the
         // closest-segment fields, which misled whenever a busy/fast mainline
@@ -212,339 +200,186 @@ pub(crate) fn compute_railways(
         dominant_lden_db: f64,
         dominant_trace_idx: Option<usize>,
     }
-    let mut rails_by_key: HashMap<(String, String, u8, Option<i64>), RailAccum> = HashMap::new();
+    let mut rails_by_key: FxHashMap<(String, String, u8, Option<i64>), RailAccum> =
+        FxHashMap::default();
 
     let reflection = rasters.building_enclosure(receiver.lat, receiver.lon);
+    let ray_receiver = RayReceiver {
+        lat: receiver.lat,
+        lon: receiver.lon,
+        altitude_m: rcv_alt,
+    };
+    let weather = rasters.weather(receiver.lat, receiver.lon);
 
-    // ── Pass 1: admission gates + the skyline growth chain (sequential) ──
-    //
-    // Order-sensitive (the ensure chain) — see `compute_roads`.
     struct RailPre {
-        rail_type: RailType,
         speed: f64,
-        periods: [(f64, f64, f64); 3],
-        src_alt: f64,
         d_slant: f64,
-        /// `Some` = arc-screened, against exactly this frozen growth state.
-        snapshot: Option<SkylineSnapshot>,
     }
-    let mut skyline = ArcSkyline::default();
-    let mut epoch_snap: Option<SkylineSnapshot> = None;
-    let mut pre: Vec<(usize, RailPre)> = Vec::with_capacity(railways.len());
-    let mut t_rail_arc = std::time::Duration::ZERO;
-    let mut t_rail_gates = std::time::Duration::ZERO;
-    for (seg_i, seg) in railways.iter().enumerate() {
-        let t_iter = t_rail_start.elapsed();
-        if seg.tunnel {
-            continue;
-        }
-
-        let rail_type = RailType::from_u8(seg.rail_type);
-        let speed = seg.speed_kmh;
-        if seg.traffic.is_silent() {
-            continue;
-        }
-        let reach_m = REACH_CACHE.with(|cache| {
-            let key = (
-                seg.rail_type,
-                speed.to_bits(),
-                seg.traffic.passenger.periods.map(f64::to_bits),
-                seg.traffic.freight.periods.map(f64::to_bits),
-            );
-            *cache
-                .borrow_mut()
-                .entry(key)
-                .or_insert_with(|| railway::rail_reach_m(rail_type, speed, seg.traffic))
-        });
-        if seg.dist_m > reach_m {
-            continue;
-        }
-
-        let src_elev = rasters.elevation(seg.cp_lat, seg.cp_lon);
-        let src_alt = src_elev + SOURCE_HEIGHT_RAIL;
-        let d_slant = geo::slant_dist(seg.dist_m, src_alt, rcv_alt);
-        if d_slant < 1.0 {
-            continue;
-        }
-
-        let periods = seg.traffic.periods();
-
-        // Early exit: skip only if the LOUDEST period's free-field is below
-        // threshold — a true upper bound, so no audible-in-any-period segment is
-        // dropped. Pre-C1 the day block was always loudest (flat 65/20/15), but
-        // C1's EU freight night share (0.5458 over 8 h) can beat day, so a
-        // day-only gate would prune audible quiet/slow night-freight rows that
-        // the heatmap (Lden over all periods) keeps — a parity break (Codex /gg).
-        {
-            let me = periods
-                .iter()
-                .map(|&(passenger, freight, hours)| {
-                    railway::railway_emission(rail_type, speed, passenger, freight, hours)
-                        .iter()
-                        .cloned()
-                        .fold(f64::NEG_INFINITY, f64::max)
-                })
-                .fold(f64::NEG_INFINITY, f64::max);
-            if geo::below_free_field_threshold_line(me, seg.dist_m, 0.0) {
-                continue;
-            }
-        }
-
-        let t_rail_gate_start = t_rail_start.elapsed();
-        // Arc pre-gate + growth-chain replay (shared step — see
-        // `crate::arc_growth_chain_step`). Rail segments are the longest in
-        // the extract (p90 182 m vs roads' 106 m), so this is where the
-        // stripe defect was worst.
-        let snapshot = crate::arc_growth_chain_step(
-            &mut skyline,
-            &mut epoch_snap,
-            arc_set,
-            receiver,
-            seg.start_lat,
-            seg.start_lon,
-            seg.end_lat,
-            seg.end_lon,
-            seg.dist_m,
-            seg.length_m as f64,
-            SOURCE_HEIGHT_RAIL,
-            bounds,
-        );
-        t_rail_arc += t_rail_start.elapsed() - t_rail_gate_start;
-        t_rail_gates += t_rail_gate_start - t_iter;
-
-        pre.push((
-            seg_i,
-            RailPre {
-                rail_type,
-                speed,
-                periods,
-                src_alt,
-                d_slant,
-                snapshot,
-            },
-        ));
-    }
-
-    let t_rail_pass1 = t_rail_start.elapsed();
-    // ── Pass 2: per-segment evaluation (parallel, bit-deterministic) ──
     struct RailSegOut {
         seg_variants: [PropagationVariants; 3],
         period_emission_energy: [f64; 3],
-        ground_g: f64,
         /// Tallest vector obstacle on the characteristic-point path.
         seg_max_bh: f64,
         trace: Option<SegmentTrace>,
+        ray_phase: crate::propagation::ray_transfer::RayPhaseTotals,
+        piece_ns: u64,
+        tail_ns: u64,
     }
     let collect_traces = traces.is_some();
-    let outs: Vec<RailSegOut> = pre
+    // Skip-path totals (the `POPUP_TIMING` per-row breakdown): atomics because
+    // skipped rows return no per-row record; touched only while `timing_on`.
+    let bound_ns = std::sync::atomic::AtomicU64::new(0);
+    let n_silent = std::sync::atomic::AtomicU64::new(0);
+    let n_bound_skip = std::sync::atomic::AtomicU64::new(0);
+    // ── Pass 1: per-segment evaluation (parallel, bit-deterministic) ──
+    let kept: Vec<Option<(RailPre, RailSegOut)>> = railways
         .par_iter()
-        .map_init(
-            // Per-worker scratch — see the twin comment in compute_roads.
-            || {
-                (
-                    propagation::PathProfile::new(),
-                    ArcScreeningScratch::new(),
-                    Vec::new(),
-                )
-            },
-            |(path_profile, arc_scratch, cand_scratch), (seg_i, p)| {
-                let seg = &railways[*seg_i];
-                let (rail_type, speed) = (p.rail_type, p.speed);
-                let (src_alt, d_slant) = (p.src_alt, p.d_slant);
-                // Finite-line geometry runs on the perpendicular distance to
-                // the segment's INFINITE line paired with the signed foot
-                // position, while divergence/atmosphere stay on `seg.dist_m`
-                // (fix-pack C). `seg.fraction` is the clamped foot — the
-                // signed one comes from the recomputed decomposition.
-                let pts = geo::point_to_segment_full(
-                    receiver.lat,
-                    receiver.lon,
-                    seg.start_lat,
-                    seg.start_lon,
-                    seg.end_lat,
-                    seg.end_lon,
-                );
-                let flc = geo::finite_line_correction_for_divergence(
-                    seg.length_m as f64,
-                    pts.d_perp_m,
-                    pts.fraction,
-                    seg.dist_m,
-                );
-
-                // Unified path profile — one sampling, four rasters. One buffer
-                // per WORKER; `build_path_profile` clears before every fill.
-                rasters.build_path_profile(
-                    seg.cp_lat,
-                    seg.cp_lon,
-                    receiver.lat,
-                    receiver.lon,
-                    seg.dist_m,
-                    path_profile,
-                );
-                // The current arc payload carries one CP ground vector for its
-                // fan; form it from this ray's bare-earth OLS + IMD profile.
-                // Node evaluation later removes that compatibility seam and
-                // carries each fan ray's full composite directly.
-                let ground_path = propagation::path_effects::cnossos_ground_path_from_profile(
-                    path_profile,
-                    src_alt,
-                    rcv_alt,
-                    seg.bridge,
-                );
-                let ground_g = ground_path.ground_path_g;
-                let ground_bands = iso9613::ground_atten_bands(ground_path);
-                let (terrain, _terrain_profile_points) =
-                    propagation::path_effects::terrain_attenuation_with_meta(
-                        path_profile,
-                        src_alt,
-                        rcv_alt,
-                    );
-                let obstacle_input = crate::obstacle_input_for_ray(
-                    obstacles,
-                    cand_scratch,
-                    seg.cp_lat,
-                    seg.cp_lon,
-                    receiver.lat,
-                    receiver.lon,
-                    Some(&propagation::obstacle_index::CellPrune::for_profile(
-                        path_profile,
-                        src_alt,
-                        rcv_alt,
-                    )),
-                );
-                let (cp_screening_atten, obstacle_trace) =
-                    propagation::path_effects::screening_attenuation_with_meta(
-                        path_profile,
-                        obstacle_input,
-                        src_alt,
-                        rcv_alt,
-                        0.0, // railways: no exclusion radius
-                        &terrain.attenuation_bands,
-                    );
-                // Arc screening (fix-pack Fix 1) — the snapshot is pass 1's
-                // verdict on whether (and against which growth state) this
-                // segment is arc-screened; see the twin block in roads.rs.
-                let (screening_atten, screening_fan) = match &p.snapshot {
-                    None => (cp_screening_atten, None),
-                    Some(snap) => crate::arc_screened_line_segment_prepared(
-                        &crate::LineSegmentScreening {
-                            receiver,
-                            start_lat: seg.start_lat,
-                            start_lon: seg.start_lon,
-                            end_lat: seg.end_lat,
-                            end_lon: seg.end_lon,
-                            cp_lat: seg.cp_lat,
-                            cp_lon: seg.cp_lon,
-                            src_alt_m: src_alt,
-                            cp_screening: &cp_screening_atten,
-                            cp_terrain: &terrain.attenuation_bands,
-                            ground_g,
-                            ground_bands: &ground_bands,
-                            source_height_m: SOURCE_HEIGHT_RAIL,
-                            length_m: seg.length_m as f64,
-                            dist_m: seg.dist_m,
-                            obstacles,
-                        },
-                        rasters,
-                        snap,
-                        arc_scratch,
-                        collect_traces.then_some(&obstacle_trace),
-                    ),
-                };
-                let veg_atten =
-                    propagation::path_effects::vegetation_attenuation_path(path_profile);
-
-                let mut seg_variants = [
-                    PropagationVariants::default(),
-                    PropagationVariants::default(),
-                    PropagationVariants::default(),
-                ];
-                let mut period_emission_energy = [0.0f64; 3];
-                let mut period_emissions: [[f64; NUM_BANDS]; 3] = [[0.0; NUM_BANDS]; 3];
-                for (pi, &(passenger, freight, hours)) in p.periods.iter().enumerate() {
-                    let emission =
-                        railway::railway_emission(rail_type, speed, passenger, freight, hours);
-                    let v = iso9613::propagate_variants_cnossos_ground_full(
-                        &emission,
-                        d_slant,
-                        SourceGeometry::Line,
-                        ground_path,
-                        &terrain.attenuation_bands,
-                        &screening_atten,
-                        &veg_atten,
-                        reflection,
-                        flc,
-                    );
-                    seg_variants[pi].add(&v);
-                    for band in emission {
-                        period_emission_energy[pi] += crate::propagation::iso9613::fast_exp_f64(
-                            band * std::f64::consts::LN_10 * 0.1,
-                        );
-                    }
-                    period_emissions[pi] = emission;
+        .enumerate()
+        .map_init(LinePieceScratch::default, |scratch, (seg_i, seg)| {
+            if seg.tunnel || seg.traffic.is_silent() {
+                if timing_on {
+                    n_silent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
-
-                // Group-level obstacle histogram probe — vector crossings in
-                // vector mode, raster walk only on the fallback path (twin of
-                // the roads histogram; popup transparency only, no dB).
-                let seg_max_bh = obstacles.max_height_crossed(
-                    seg.cp_lat,
-                    seg.cp_lon,
-                    receiver.lat,
-                    receiver.lon,
-                );
-
-                // Popup trace, built here so the allocation-heavy part runs in
-                // parallel; pass 3 pushes it in segment order.
-                let trace = collect_traces.then(|| {
-                    build_rail_segment_trace(BuildRailTrace {
-                        seg,
-                        src_alt,
-                        rcv_alt,
-                        d_slant,
-                        flc,
-                        ground_g,
-                        ground_bands,
-                        reflection_boost_db: reflection,
-                        speed_kmh: speed,
-                        path_profile: std::mem::take(path_profile),
-                        terrain,
-                        screening_atten,
-                        screening_fan,
-                        obstacle_trace,
-                        veg_atten,
-                        seg_variants,
-                        lw_bands: period_emissions,
+                return None;
+            }
+            let rail_type = RailType::from_u8(seg.rail_type);
+            let src_h = normalize::rail::rail_source_height_m(rail_type);
+            let speed = seg.speed_kmh;
+            let period_emissions = railway::rail_period_emissions(rail_type, speed, seg.traffic);
+            // The row's reach from its own azimuth-span bound, every period counted (#31);
+            // a pair inside it is never inaudible (the bound's Lden there exceeds 30 dB).
+            let t_gate = timing_on.then(std::time::Instant::now);
+            let row_bound = crate::propagation::relevance_bound::row_bound_for_segment(
+                &weather,
+                receiver.lat,
+                receiver.lon,
+                seg.start_lat,
+                seg.start_lon,
+                seg.end_lat,
+                seg.end_lon,
+            );
+            let in_reach = seg.dist_m <= LINE_REACH_CEILING_M
+                && row_bound.line_piece_within_reach(&period_emissions, seg.length_m, seg.dist_m);
+            if timing_on {
+                bound_ns.fetch_add(t_gate.unwrap().elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+            if !in_reach {
+                if timing_on {
+                    n_bound_skip.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                return None;
+            }
+            let src_alt = rasters.elevation(seg.cp_lat, seg.cp_lon) + src_h;
+            let d_slant = geo::slant_dist(seg.dist_m, src_alt, rcv_alt);
+            let day_weights: [f64; NUM_BANDS] = std::array::from_fn(|b| {
+                10f64.powf((period_emissions[0][b] + A_WEIGHTING[b]) / 10.0)
+            });
+            let t_piece = timing_on.then(std::time::Instant::now);
+            let piece = evaluate_line_piece(
+                &ray_receiver,
+                &LinePiece {
+                    start_lat: seg.start_lat,
+                    start_lon: seg.start_lon,
+                    end_lat: seg.end_lat,
+                    end_lon: seg.end_lon,
+                    source_height_m: src_h,
+                    source_ground_factor: normalize::rail::rail_source_ground_factor(
+                        rail_type, seg.bridge,
+                    ),
+                    platform_half_width_m: normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
+                    directivity: normalize::rail::RAIL_SOURCE_DIRECTIVITY,
+                },
+                seg.cp_lat,
+                seg.cp_lon,
+                obstacles,
+                rasters,
+                &weather,
+                scratch,
+                collect_traces.then_some(&day_weights),
+                timing_on,
+            )?;
+            let piece_ns = t_piece.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
+            let t_tail = timing_on.then(std::time::Instant::now);
+            let seg_variants: [PropagationVariants; 3] = std::array::from_fn(|pi| {
+                received_variants(&piece.periods[pi], &period_emissions[pi], reflection)
+            });
+            let period_emission_energy: [f64; 3] = std::array::from_fn(|pi| {
+                period_emissions[pi]
+                    .iter()
+                    .map(|band| {
+                        crate::propagation::iso9613::fast_exp_f64(
+                            band * std::f64::consts::LN_10 * 0.1,
+                        )
                     })
-                });
-
+                    .sum()
+            });
+            // Group-level obstacle histogram probe — vector crossings of the
+            // characteristic-point ray (popup transparency only, no dB).
+            let seg_max_bh =
+                obstacles.max_height_crossed(seg.cp_lat, seg.cp_lon, receiver.lat, receiver.lon);
+            let trace = match (collect_traces, piece.loudest_node) {
+                (true, Some(node)) => Some(build_rail_segment_trace(BuildRailTrace {
+                    seg,
+                    rcv_alt,
+                    d_slant,
+                    reflection_boost_db: reflection,
+                    speed_kmh: speed,
+                    node,
+                    fan: piece.fan,
+                    seg_variants,
+                    lw_bands: period_emissions,
+                    weather: weather.clone(),
+                    sort_seq: seg_i as u64,
+                })),
+                _ => None,
+            };
+            let tail_ns = t_tail.map(|t| t.elapsed().as_nanos() as u64).unwrap_or(0);
+            Some((
+                RailPre { speed, d_slant },
                 RailSegOut {
                     seg_variants,
                     period_emission_energy,
-                    ground_g,
                     seg_max_bh,
                     trace,
-                }
-            },
-        )
+                    ray_phase: piece.phase,
+                    piece_ns,
+                    tail_ns,
+                },
+            ))
+        })
         .collect();
-
-    let t_rail_pass2 = t_rail_start.elapsed() - t_rail_pass1;
+    let (pre, outs): (Vec<(usize, RailPre)>, Vec<RailSegOut>) = kept
+        .into_iter()
+        .enumerate()
+        .filter_map(|(seg_i, kept)| kept.map(|(p, out)| ((seg_i, p), out)))
+        .unzip();
     if timing_on {
-        let (steps, growths, sectors, growth_ms, raw_arcs) =
-            crate::propagation::arc_screening::take_growth_census();
+        let mut ray = crate::propagation::ray_transfer::RayPhaseTotals::default();
+        let mut piece_ns: u64 = 0;
+        let mut tail_ns: u64 = 0;
+        for out in &outs {
+            ray.add(&out.ray_phase);
+            piece_ns += out.piece_ns;
+            tail_ns += out.tail_ns;
+        }
+        let ms = |ns: u64| ns as f64 / 1e6;
         eprintln!(
-            "popup-stage rail pass1={:.0}ms (gates={:.0}ms arc={:.0}ms) pass2={:.0}ms kept={} steps={} growths={} sectors={} growth_ms={:.0} arcs={}",
-            t_rail_pass1.as_secs_f64() * 1000.0,
-            t_rail_gates.as_secs_f64() * 1000.0,
-            t_rail_arc.as_secs_f64() * 1000.0,
-            t_rail_pass2.as_secs_f64() * 1000.0,
+            "popup-stage rail evaluation={:.0}ms kept={} silent={} bound={:.0}ms({}) rays={} profile={:.0} canopy={:.0} cross={:.0} fill={:.0} bnd={:.0} mix={:.0} detail={:.0} piece={:.0} tail={:.0}",
+            t_rail_start.elapsed().as_secs_f64() * 1000.0,
             pre.len(),
-            steps,
-            growths,
-            sectors,
-            growth_ms,
-            raw_arcs,
+            n_silent.load(std::sync::atomic::Ordering::Relaxed),
+            ms(bound_ns.load(std::sync::atomic::Ordering::Relaxed)),
+            n_bound_skip.load(std::sync::atomic::Ordering::Relaxed),
+            ray.n_rays,
+            ms(ray.profile_ns),
+            ms(ray.canopy_ns),
+            ms(ray.crossings_ns),
+            ms(ray.fill_ns),
+            ms(ray.boundary_ns),
+            ms(ray.mix_ns),
+            ms(ray.detail_ns),
+            ms(piece_ns),
+            ms(tail_ns),
         );
     }
 
@@ -552,12 +387,12 @@ pub(crate) fn compute_railways(
         unnamed_track_cluster_ids(pre.iter().map(|(seg_i, _)| &railways[*seg_i]));
     let mut total_energy = [0.0f64; 3];
 
-    // ── Pass 3: accumulation, in segment order (sequential) ──
+    // ── Pass 2: accumulation, in segment order (sequential) ──
     for ((seg_i, p), mut out) in pre.iter().zip(outs) {
         let seg = &railways[*seg_i];
-        let (rail_type, speed) = (p.rail_type, p.speed);
-        let (src_alt, d_slant) = (p.src_alt, p.d_slant);
-        let (seg_variants, ground_g) = (out.seg_variants, out.ground_g);
+        let speed = p.speed;
+        let d_slant = p.d_slant;
+        let seg_variants = out.seg_variants;
         add_segment_to_total(&mut total_energy, &seg_variants);
 
         // Named/ref'd tracks keep the exact historical tuple. Unnamed ways use
@@ -578,9 +413,20 @@ pub(crate) fn compute_railways(
             seg.rail_type,
             cluster_id,
         );
+        let source_here = RaySource {
+            lat: seg.cp_lat,
+            lon: seg.cp_lon,
+            height_m: normalize::rail::rail_source_height_m(RailType::from_u8(seg.rail_type)),
+            ground: SourceGround::Fixed(normalize::rail::rail_source_ground_factor(
+                RailType::from_u8(seg.rail_type),
+                seg.bridge,
+            )),
+            platform_half_width_m: normalize::rail::RAIL_PLATFORM_HALF_WIDTH_M,
+            exclusion_radius_m: 0.0,
+        };
         let acc = rails_by_key.entry(key).or_insert_with(|| RailAccum {
             name: {
-                // Build display name: "Line 250 — Brno–Havlíčkův Brod" or "Line 250" or name or "Rail"
+                // Build display name: "Line 250 — Brno–Havlíčkův Brod" or "Line 250" or name or empty
                 if !seg.rail_ref.is_empty() && !seg.name.is_empty() {
                     format!("Line {} — {}", seg.rail_ref, seg.name)
                 } else if !seg.rail_ref.is_empty() {
@@ -591,16 +437,12 @@ pub(crate) fn compute_railways(
                     String::new()
                 }
             },
-            rail_type,
             rail_type_u8: seg.rail_type,
             dominant_usage_u8: seg.usage,
             dominant_osm_id: seg.osm_id,
             min_dist: f64::MAX,
             min_d_slant: 0.0,
-            min_ground_g: 0.5,
-            cp_lat: seg.cp_lat,
-            cp_lon: seg.cp_lon,
-            src_height: src_alt,
+            closest_source: source_here,
             dominant_segment_idx: 0,
             dominant_distance_m: 0.0,
             dominant_traffic: crate::normalize::RailTraffic::default(),
@@ -651,10 +493,7 @@ pub(crate) fn compute_railways(
         if seg.dist_m < acc.min_dist {
             acc.min_dist = seg.dist_m;
             acc.min_d_slant = d_slant;
-            acc.min_ground_g = ground_g;
-            acc.cp_lat = seg.cp_lat;
-            acc.cp_lon = seg.cp_lon;
-            acc.src_height = src_alt;
+            acc.closest_source = source_here;
         }
         acc.line_coords
             .push([[seg.start_lon, seg.start_lat], [seg.end_lon, seg.end_lat]]);
@@ -719,7 +558,18 @@ pub(crate) fn compute_railways(
 
     let mut contributors = Vec::new();
     // Ascending group key, not HashMap order — see `crate::compute::key_sorted`.
-    for (_, acc) in crate::compute::key_sorted(&rails_by_key) {
+    //
+    // The per-group breakdown rays are pure functions of each group's closest
+    // source, so they run up front in parallel (rayon preserves order) and the
+    // sequential emit below consumes them in the same key order: bit-identical.
+    let breakdowns: Vec<_> = crate::compute::key_sorted(&rails_by_key)
+        .into_iter()
+        .map(|(_, acc)| &acc.closest_source)
+        .collect::<Vec<_>>()
+        .par_iter()
+        .map(|closest| nearest_path_breakdown(rasters, obstacles, closest, receiver, &weather))
+        .collect();
+    for ((_, acc), rail_effects) in crate::compute::key_sorted(&rails_by_key).into_iter().zip(breakdowns) {
         let ld = PropagationVariants::to_db(acc.variants[0].full_energy);
         let le = PropagationVariants::to_db(acc.variants[1].full_energy);
         let ln = PropagationVariants::to_db(acc.variants[2].full_energy);
@@ -736,25 +586,16 @@ pub(crate) fn compute_railways(
             None
         };
 
-        let rail_effects = compute_path_effects(
-            rasters,
-            obstacles,
-            acc.cp_lat,
-            acc.cp_lon,
-            acc.src_height,
-            receiver,
-            acc.min_dist,
-            0.0,
-        );
+        let nearest_ground_g = rail_effects.3;
 
         let impacts = PropagationVariants::impact_deltas(&acc.variants, rail_periods.lden_db);
 
         // Headline rail metadata: dominant (loudest) segment, mirroring the
-        // road-contributor pattern. `closest_*` is still tracked on the
-        // accumulator for the propagation baseline (`min_dist`, `cp_lat/lon`,
-        // `min_d_slant`, `min_ground_g`) but no longer feeds these display
-        // fields — closest mis-represented audible traffic whenever a busy
-        // mainline sat farther than a quiet siding.
+        // road-contributor pattern. The closest segment is still tracked on the
+        // accumulator for the propagation baseline (`min_dist`, `min_d_slant`,
+        // `closest_source`) but no longer feeds these display fields — closest
+        // mis-represented audible traffic whenever a busy mainline sat farther
+        // than a quiet siding.
         let rail_meta = RailMetadata {
             traffic: acc.dominant_traffic,
             passenger_provenance: crate::sources::dataset_meta(
@@ -796,11 +637,11 @@ pub(crate) fn compute_railways(
                 acc.name.clone()
             },
             subtype: {
-                let base = format!("{:?}", acc.rail_type);
+                let base = rail_type_name(acc.rail_type_u8);
                 if acc.dominant_bridge {
-                    format!("{} (bridge)", base)
+                    format!("{base} (bridge)")
                 } else {
-                    base
+                    base.to_string()
                 }
             },
             distance_m: acc.min_dist,
@@ -813,8 +654,8 @@ pub(crate) fn compute_railways(
             ),
             baseline: iso9613::compute_baseline(
                 acc.min_d_slant,
-                SourceGeometry::Line,
-                acc.min_ground_g,
+                SourceSpread::Line,
+                nearest_ground_g,
             ),
             terrain: rail_effects.0,
             screening: rail_effects.1,
@@ -824,16 +665,14 @@ pub(crate) fn compute_railways(
             vegetation_impact_db: round1(impacts.vegetation),
             atmospheric_impact_db: round1(impacts.atmospheric),
             ground_impact_db: round1(impacts.ground),
-            received_bands: std::array::from_fn(|j| {
-                10.0 * acc.variants[0].band_energy[j].max(1e-30).log10()
-            }),
+            received_bands: bands_energy_to_db(&acc.variants[0].band_energy),
             metadata: Some(SourceMetadata::Rail(rail_meta)),
         });
     }
 
-    let ld = 10.0 * total_energy[0].max(1e-12).log10();
-    let le = 10.0 * total_energy[1].max(1e-12).log10();
-    let ln = 10.0 * total_energy[2].max(1e-12).log10();
+    let ld = PropagationVariants::to_db(total_energy[0]);
+    let le = PropagationVariants::to_db(total_energy[1]);
+    let ln = PropagationVariants::to_db(total_energy[2]);
     (periods::periods(ld, le, ln), contributors)
 }
 
@@ -946,7 +785,7 @@ mod tests {
     /// two subtly different clustering rules.
     fn brute_force_cluster_ids<'a>(
         segments: impl Iterator<Item = &'a RailSegment>,
-    ) -> std::collections::HashMap<(u8, i64), i64> {
+    ) -> crate::fxhash::FxHashMap<(u8, i64), i64> {
         let ways = unnamed_way_closest_points(segments);
         let mut parents: Vec<_> = (0..ways.len()).collect();
         for left in 0..ways.len() {
@@ -1097,7 +936,7 @@ mod tests {
         assert!(tram.name.is_empty());
         assert_eq!(tram.osm_id, Some(100));
         assert_eq!(tram.distance_m, 80.0);
-        assert_eq!(tram.subtype, "Tram (bridge)");
+        assert_eq!(tram.subtype, "tram (bridge)");
         let Some(SourceMetadata::Rail(metadata)) = &tram.metadata else {
             panic!("tram contributor must carry rail metadata");
         };
@@ -1145,9 +984,9 @@ mod tests {
         assert_eq!(contribs.len(), 2);
         assert!(contribs
             .iter()
-            .any(|contributor| contributor.subtype == "Tram" && contributor.distance_m == 85.0));
+            .any(|contributor| contributor.subtype == "tram" && contributor.distance_m == 85.0));
         assert!(contribs.iter().any(|contributor| {
-            contributor.subtype == "Rail" && contributor.distance_m == 784.0
+            contributor.subtype == "rail" && contributor.distance_m == 784.0
         }));
 
         // A railway between two tram closest points must not bridge those
@@ -1306,5 +1145,109 @@ mod tests {
                 assert_ne!(contribs1, "[]", "the scene must produce contributors");
             }
         }
+    }
+
+    /// Flat soft-ground rasters (G=1.0) for the horn reference geometry.
+    struct SoftRasters;
+    impl RasterSampler for SoftRasters {
+        fn elevation(&self, _: f64, _: f64) -> f64 {
+            200.0
+        }
+        fn ground_g(&self, _: f64, _: f64) -> f64 {
+            1.0
+        }
+        fn building_enclosure(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+    }
+
+    /// Hard-ground rasters (200 m, G=0): the sample-mean ground factor of any ray is 0,
+    /// so a trace-gated 0.5 default cannot hide behind the fallback value.
+    struct HardRasters;
+    impl RasterSampler for HardRasters {
+        fn elevation(&self, _: f64, _: f64) -> f64 {
+            200.0
+        }
+        fn ground_g(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+        fn building_enclosure(&self, _: f64, _: f64) -> f64 {
+            0.0
+        }
+    }
+
+    /// FRA horn reference through the engine: one sounding at 40 mph on a
+    /// 402 m approach puts SEL 107 dBA at 100 ft abeam the midpoint on flat
+    /// soft ground. This test SETS HORN_LW_A (solve the constant from the
+    /// failure output, never retune the assertion): it fails if propagation
+    /// changes, forcing a documented recalibration.
+    #[test]
+    fn horn_sel_reference() {
+        use grid::geo::{m_per_deg_lon, M_PER_DEG_LAT};
+        let lat = 40.69;
+        let half_deg = 201.0 / m_per_deg_lon(lat);
+        let mut seg = mainline_segment();
+        seg.rail_type = 6;
+        seg.start_lat = lat;
+        seg.start_lon = -99.142 - half_deg;
+        seg.end_lat = lat;
+        seg.end_lon = -99.142 + half_deg;
+        seg.length_m = 402.0;
+        seg.maxspeed = 64;
+        seg.speed_kmh = 64.37376; // 40 mph, the median sounding speed
+        seg.traffic = crate::normalize::RailTraffic {
+            passenger: crate::normalize::RailCategoryTraffic {
+                periods: [1.0, 0.0, 0.0],
+                status: 2,
+                ..Default::default()
+            },
+            freight: crate::normalize::RailCategoryTraffic::default(),
+        };
+        seg.dist_m = 30.48; // 100 ft
+        seg.cp_lat = lat;
+        seg.cp_lon = -99.142;
+        seg.fraction = 0.5;
+        let rcv = Receiver::new(lat + 30.48 / M_PER_DEG_LAT, -99.142, 200.0);
+        let (periods, _) =
+            compute_railways(&rcv, &[seg], &ObstacleSet::empty(), &SoftRasters, None);
+        let sel = periods.ld_db + 10.0 * (12.0 * 3600.0f64).log10();
+        assert!(
+            (sel - 107.0).abs() < 0.15,
+            "horn SEL {sel:.2} dBA at 100 ft, want 107±0.15"
+        );
+    }
+
+    /// Contributors are trace-independent: the same scene with and without a trace collector
+    /// yields identical contributors (levels, baseline, context) — the baseline ground factor
+    /// comes from the always-evaluated closest ray, not from trace detail.
+    #[test]
+    fn contributors_are_identical_with_and_without_traces() {
+        let railways = [mainline_segment()];
+        let (_, plain) = compute_railways(
+            &receiver(),
+            &railways,
+            &ObstacleSet::empty(),
+            &HardRasters,
+            None,
+        );
+        let mut traces = TraceCollector::new();
+        let (_, traced) = compute_railways(
+            &receiver(),
+            &railways,
+            &ObstacleSet::empty(),
+            &HardRasters,
+            Some(&mut traces),
+        );
+        assert_eq!(plain.len(), 1);
+        assert!(!traces.segments.is_empty(), "the traced run must collect");
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            serde_json::to_string(&traced).unwrap()
+        );
+        assert!(
+            (plain[0].baseline.ground_factor - 0.0).abs() < 1e-9,
+            "hard ground must read 0, not the retired 0.5 default: {}",
+            plain[0].baseline.ground_factor
+        );
     }
 }

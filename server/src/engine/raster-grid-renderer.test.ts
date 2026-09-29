@@ -9,7 +9,7 @@ import { demColor, forestColor, imdColor, renderGridTile } from './raster-grid-r
 // A published native raster year (RASTER_YEAR_DIR); the real-file tests skip without it.
 const PRAGUE_PREPARED = process.env.RASTER_YEAR_DIR ?? ''
 const PRAGUE_RASTERS = {
-  skip: !['dem.i16be', 'forest.u8', 'imd.u8'].every((file) => existsSync(`${PRAGUE_PREPARED}/z9/276/173/${file}`)),
+  skip: !['dem.u16le', 'forest.u8', 'imd.u8'].every((file) => existsSync(`${PRAGUE_PREPARED}/z9/276/173/${file}`)),
 }
 
 test('dem palette: lowlands green, peaks white, water dark', () => {
@@ -42,7 +42,7 @@ test('square window matches the stored file size (geometry cross-check)', PRAGUE
   const { statSync } = await import('node:fs')
   const { squareWindow } = await import('./raster-grid-renderer.js')
   const cases: [string, number, number, number][] = [
-    ['dem.i16be', 276, 173, 2],
+    ['dem.u16le', 276, 173, 2],
     ['forest.u8', 276, 173, 1],
     ['imd.u8', 276, 173, 1],
   ]

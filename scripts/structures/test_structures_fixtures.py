@@ -48,10 +48,15 @@ def buildings_arrow(path, rows):
                                      for name in schema.names}, schema=schema))
 
 
+def country_iso(code):
+    return ord(code[0]) | ord(code[1]) << 8
+
+
 def barriers_arrow(path, rows):
     converted = []
     for row in rows:
         values = {name: row[name] for name in ("osm_id", "segment_idx", "height", "height_tier")}
+        values["country_iso"] = country_iso(row.get("country", "CZ"))
         for end in ("start", "end"):
             gx, gy = GRID.lonlat_to_grid(row[end + "_lon"], row[end + "_lat"])
             values[end + "_gx"], values[end + "_gy"] = gx, gy
@@ -62,18 +67,23 @@ def barriers_arrow(path, rows):
         ("end_gx", pa.int32()), ("end_gy", pa.int32()),
         ("height", pa.float32()),
         ("height_tier", pa.uint8()),
-    ], metadata={b"grid": b"z30"})
+        ("country_iso", pa.uint16()),
+    ], metadata={b"grid": b"z30", b"barriers_contract": b"country_baked_v1"})
     with ipc.new_file(path, schema) as writer:
         writer.write_table(pa.table({name: [row[name] for row in converted]
                                      for name in schema.names}, schema=schema))
 
 
-class FakeGlobalPrior:
-    def __init__(self, input_files=()):
-        self.input_files = input_files
+class FakeRegional:
+    """A survey raster covering nothing: only its input files enter the digest."""
 
-    def sample_many(self, lons, _lats):
-        return np.full(len(lons), 12.5)
+    def __init__(self, input_files=()):
+        from types import SimpleNamespace
+        self.input_files = input_files
+        self.tr = SimpleNamespace(transform=lambda xs, ys: (xs, ys))
+
+    def covers(self, _x, _y):
+        return False
 
 
 OSM_POLY = shapely.box(14.17000, 49.78000, 14.17020, 49.78016)
@@ -105,10 +115,10 @@ def osm_row(index, polygon, area, height=None, floors=0, use=0, btype=11, area_s
     }
 
 
-def ovt_row(polygon, h=8.0, tier=2, envelope=1):
+def ovt_row(polygon, height=None, floors=0, envelope=1, open_roof=False):
     centroid = polygon.centroid
-    return {"wkb": shapely.to_wkb(polygon), "height_m": h, "tier": tier,
-            "clat": centroid.y, "clon": centroid.x, "envelope": envelope}
+    return {"wkb": shapely.to_wkb(polygon), "overture_height": height, "overture_floors": floors,
+            "open_roof": open_roof, "clat": centroid.y, "clon": centroid.x, "envelope": envelope}
 
 
 def write_prepared_roundtrip(root):
@@ -120,8 +130,7 @@ def write_prepared_roundtrip(root):
     barriers_arrow(square / "barriers.arrow", [{
         "osm_id": 77, "segment_idx": 0, "start_lat": 49.78, "start_lon": 14.17,
         "end_lat": 49.7801, "end_lon": 14.1701, "height": 2.5, "height_tier": 0}])
-    BUILDER.build_square(SQUARE, root, [ovt_row(OVT_LONELY)], [],
-                         FakeGlobalPrior(), None)
+    BUILDER.build_square(SQUARE, root, [ovt_row(OVT_LONELY)], [], None)
 
 
 # Actual Overture N49E014 source polygons; preserve every source coordinate.
@@ -141,7 +150,7 @@ def write_topology_roundtrip(root):
             placed = shapely.transform(original, lambda xy: np.column_stack((
                 GRID.normalize_longitude(xy[:, 0] - reference + 180.0) if seam else xy[:, 0], xy[:, 1])))
             case_root = root / f"{name}-{'seam' if seam else 'original'}"
-            row = ovt_row(placed, h=12.0, tier=0)
+            row = ovt_row(placed, height=12.0)
             row["clat"], row["clon"] = SOURCES.footprint_centroid(placed)
             square = GRID.square_name(*GRID.square_of(row["clat"], row["clon"]))
             (case_root / square).mkdir(parents=True)
@@ -155,7 +164,7 @@ def write_topology_roundtrip(root):
                 lat, lon = SOURCES.footprint_centroid(osm_geometry)
                 osm["centroid_gx"], osm["centroid_gy"] = GRID.lonlat_to_grid(lon, lat)
             buildings_arrow(case_root / square / "buildings.arrow", [osm])
-            BUILDER.build_square(square, case_root, [row], [], FakeGlobalPrior(), None)
+            BUILDER.build_square(square, case_root, [row], [], None)
             points = []
             for part in original.geoms:
                 points.append([part.representative_point().y, part.representative_point().x, True])

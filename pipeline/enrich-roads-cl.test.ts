@@ -16,9 +16,9 @@ const source = (tmda: Array<{ latitude: number; longitude: number; aadt: number 
 const road: RoadRow = { startLat: -33.5, startLon: -70.7, endLat: -33.5, endLon: -70.7,
   midLat: -33.5, midLon: -70.7, roadClass: 1, ref: null, name: null, osmId: 1, existingSourceId: 0 }
 
-test('Chile prioritizes observed TMDA and applies the Santiago split', () => {
+test('Chile keeps observed TMDA unscaled inside Santiago, with its split', () => {
   assert.deepEqual(matchChileRoad(road, source([{ latitude: -33.5, longitude: -70.7, aadt: 1000 }])),
-    { countBasis: 'both-directions', observationId: 'fixture', kind: 'tmda', light: 1500, medium: 200, heavy: 200, moto: 100 })
+    { countBasis: 'both-directions', observationId: 'fixture', kind: 'tmda', light: 750, medium: 100, heavy: 100, moto: 50 })
 })
 
 test('Chile uses Vialidad classifications only for major roads', () => {

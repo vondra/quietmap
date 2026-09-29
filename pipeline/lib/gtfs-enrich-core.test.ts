@@ -289,9 +289,8 @@ test('dedupeStopsByLocation: sums same coord+family, keeps distinct coords and f
   assert.equal(out.find(s => s.family === 'tram')!.trains_passenger, 7)
 })
 
-const FAKE_RAIL_ROW = (railType: number, existingDivisor = 1): RailwayRow => ({
+const FAKE_RAIL_ROW = (railType: number): RailwayRow => ({
   osmId: '1', segmentIndex: 0, railType, usage: 0, service: 0, existingSourceId: 0,
-  existingPassenger: 0, existingFreight: 0, existingDivisor,
   startLat: 50.0, startLon: 14.0, endLat: 50.0, endLon: 14.0, midLat: 50.0, midLon: 14.0, name: '',
 })
 
@@ -299,8 +298,8 @@ test('buildTramExtraMatch crosses z9 square boundaries because the stop index is
   const tramStops: StopTrainCount[] = [
     { stop_id: 'S1', lat: 50.0001, lon: 14.0001, name: 'Adjacent stop', family: 'tram', trains_passenger: 42, trains_freight: 1 },
   ]
-  const result = buildTramExtraMatch(tramStops, 12345)(FAKE_RAIL_ROW(2, 3), 0, 'z9/275/173')
-  assert.deepEqual(result, { passenger: 42, freight: 1, sourceId: 12345, divisor: 1 })
+  const result = buildTramExtraMatch(tramStops, 12345)(FAKE_RAIL_ROW(2), 0, 'z9/275/173')
+  assert.deepEqual(result, { passenger: 42, freight: 1, sourceId: 12345 })
 })
 
 test('buildTramExtraMatch never offers tram counts to heavy rail', () => {

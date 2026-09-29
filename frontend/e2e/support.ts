@@ -46,22 +46,14 @@ export function mapUrl(point: PixelCenter, overlays = 'road', zoom = TILE_Z): st
   return `/#lat=${point.lat}&lng=${point.lng}&z=${zoom}&bm=terrain&ro=${overlays}`
 }
 
-/** A no-data tile with at most one audible receiver at the expected pixel. */
+/** A not-assessed tile with at most one audible receiver at the expected pixel. */
 function hm3Tile(point?: PixelCenter, db?: number): Buffer {
   const tile = Buffer.alloc(6 + TILE_PX * TILE_PX, 255)
   tile.write('HM3 ', 0, 'ascii')
-  tile[4] = 3
+  tile[4] = 4
   tile[5] = 1
   if (point && db != null) tile[6 + point.py * TILE_PX + point.px] = Math.round(db * 2)
   return tile
-}
-
-/** The enclosed-receiver half of the popup payload; omitted outdoors. */
-export type IndoorEnvelope = {
-  envelope_class: 'residential' | 'commercial' | 'industrial' | 'historic' | 'default'
-  envelope_delta_db: number
-  facade_lden: number
-  indoor_lden_tilted: number
 }
 
 export function popupFixture(
@@ -69,10 +61,10 @@ export function popupFixture(
   lng: number,
   db: number,
   sourceLevels: Record<string, number> = { road: db },
-  indoor?: IndoorEnvelope,
+  building_exposure?: NoiseComputeData['building_exposure'],
 ): NoiseComputeData {
   return {
-    ...indoor,
+    ...(building_exposure && { building_exposure }),
     center: [lat, lng],
     elevation_m: 350,
     total_lden: db,

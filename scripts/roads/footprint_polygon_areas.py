@@ -1,4 +1,4 @@
-"""Ground areas of whole columns of structures_v4 grid polygons, decoded without a per-row loop."""
+"""Ground areas of whole columns of structures_v5 grid polygons, decoded without a per-row loop."""
 
 from pathlib import Path
 import sys
@@ -13,7 +13,7 @@ METRES_PER_DEG_LAT = 111_132.0
 METRES_PER_DEG_LON_EQ = 111_320.0
 
 
-MALFORMED = "Malformed structures_v4 building geometry"
+MALFORMED = "Malformed structures_v5 building geometry"
 
 
 def polygon_rings(counts, blob_starts, blob_ends):

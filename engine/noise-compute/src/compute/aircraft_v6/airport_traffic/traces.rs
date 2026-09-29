@@ -22,14 +22,14 @@ use super::*;
 pub(super) fn emit_segment_traces(
     traces: &mut crate::types::TraceCollector,
     microsegs_by_id: Vec<((u64, u16), MicrosegAcc)>,
-    microseg_cache: &HashMap<(u64, u16), MicrosegPath>,
+    microseg_cache: &HashMap<(u64, u16), MicrosegPath, impl BuildHasher>,
     n_days_f: f64,
-    // GA-class divisor for the split-union microsegment movement counts.
-    ga_n_days_f: f64,
+    weights: &aircraft::ProvenanceWeights,
     recv_lat: f64,
     recv_lon: f64,
     refl_db: f64,
-    osm_ref_lookup: &HashMap<u64, String>,
+    osm_ref_lookup: &HashMap<u64, String, impl BuildHasher>,
+    weather: &crate::propagation::meteorology::Meteorology,
 ) {
     // Mirror the hot loop's half-pixel divergence floor so the trace's
     // `dist_m`, `flc_delta_trace`, and `geometric_db` match the energy
@@ -127,15 +127,23 @@ pub(super) fn emit_segment_traces(
     // at emission avoids ~2 800 SegmentTrace + Box<PropagationBreakdown>
     // allocations per LKPR popup (≈ 100 ms cascade drop cost
     // previously paid in `apply_segment_top_k_with_cap`).
+    //
+    // The popup's `trace_cap` (150 summary / 1000 "show all") overrides
+    // the legacy constant; `None` (tests, oracle) keeps it, so the only
+    // behaviour change is the "show all" path keeping 1 000 ground rows
+    // instead of 150 like every other kind already does.
     const GROUND_TRACE_CAP: usize = 150;
-    let mut by_lden: Vec<((u64, u16), f64)> = Vec::with_capacity(microsegs_by_id.len());
-    let mut dominant_lden: HashMap<(String, u8), f64> = HashMap::new();
-    for ((osm_id, segment_idx), acc) in microsegs_by_id.iter() {
+    let ground_cap = traces.trace_cap.unwrap_or(GROUND_TRACE_CAP);
+    // The input is key-sorted (see the doc comment), so the input index
+    // is the stable per-(kind, subtype) row id for the total order.
+    let mut by_lden: Vec<((u64, u16), f64, usize)> = Vec::with_capacity(microsegs_by_id.len());
+    let mut dominant_lden: FxHashMap<(String, u8), f64> = FxHashMap::default();
+    for (seq, ((osm_id, segment_idx), acc)) in microsegs_by_id.iter().enumerate() {
         let lden = periods_from_energy(acc.period_energy_full).lden_db;
         if !lden.is_finite() {
             continue;
         }
-        by_lden.push(((*osm_id, *segment_idx), lden));
+        by_lden.push(((*osm_id, *segment_idx), lden, seq));
         let key = (acc.airport_key.clone(), acc.ops_kind);
         dominant_lden
             .entry(key)
@@ -146,11 +154,16 @@ pub(super) fn emit_segment_traces(
             })
             .or_insert(lden);
     }
-    by_lden.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    by_lden.truncate(GROUND_TRACE_CAP);
-    let keep: std::collections::HashSet<(u64, u16)> = by_lden.into_iter().map(|(k, _)| k).collect();
+    // Total order (Lden desc, input index asc): the exact survivors the
+    // global re-sort keeps, ties included — unlike the old Lden-only
+    // unstable sort, whose tied order was a pdqsort artifact.
+    by_lden.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+    traces.aircraft_ground_total = by_lden.len() as u32;
+    by_lden.truncate(ground_cap);
+    let keep: crate::fxhash::FxHashSet<(u64, u16)> =
+        by_lden.into_iter().map(|(k, _, _)| k).collect();
 
-    for ((osm_id, segment_idx), acc) in microsegs_by_id {
+    for (seq, ((osm_id, segment_idx), acc)) in microsegs_by_id.into_iter().enumerate() {
         if !keep.contains(&(osm_id, segment_idx)) {
             continue;
         }
@@ -261,7 +274,7 @@ pub(super) fn emit_segment_traces(
         // ≪ 5 % of microsegment energy, so the aircraft decomposition dominates.
         let d_perp_disp = pts_trace.d_perp_m.max(pixel_floor_m);
         let geometric_db = 10.0 * (d_perp_disp / std::f64::consts::PI).log10();
-        let mut atmospheric_bands = zero_bands;
+        let mut atmospheric_bands = crate::traces::atmospheric_bands(0.0, weather);
         let mut ground_bands = zero_bands;
         let mut terrain_bands = zero_bands;
         let mut screening_bands = zero_bands;
@@ -269,14 +282,14 @@ pub(super) fn emit_segment_traces(
         let mut ground_g = 0.0;
         if let Some(p) = path {
             ground_g = p.ground_g;
-            let d_km = (dist_m - GROUND_OPS_REF_OFFSET_M).max(0.0) / 1000.0;
             // Road/airborne convention: POSITIVE = attenuation (loss),
             // NEGATIVE = boost (rare, soft-ground LF interference can
             // give A_gr < 0 per CNOSSOS-EU §2.5.15). The per-band
             // tooltips render with `signed=true` so the +/- direction
             // matches between road and ground rows.
+            let d_slant_m = (dist_m - GROUND_OPS_REF_OFFSET_M).max(0.0);
+            atmospheric_bands = crate::traces::atmospheric_bands(d_slant_m, weather);
             for i in 0..NUM_BANDS {
-                atmospheric_bands[i] = ALPHA_ATM[i] * d_km;
                 ground_bands[i] =
                     crate::propagation::iso9613::aircraft_ground_atten_db(i, p.ground_g);
                 terrain_bands[i] = p.terrain_atten_db[i];
@@ -293,15 +306,20 @@ pub(super) fn emit_segment_traces(
         // v5: per-microsegment counts are row-replicated scalars
         // (`microseg_unique_*`) captured into MicrosegAcc on first
         // insert — popup reads them directly without HashSet union.
-        // v9: each split into `non_ga / n_days + ga / ga_n_days` so a
-        // one-off GA movement reads at its full-year frequency.
-        let split = |non_ga: u32, ga: u32| non_ga as f64 / n_days_f + ga as f64 / ga_n_days_f;
-        let observed_movements = split(acc.unique_count, acc.unique_ga_count);
-        let arrivals_per_day = split(acc.unique_arr_count, acc.unique_ga_arr_count);
-        let departures_per_day = split(acc.unique_dep_count, acc.unique_ga_dep_count);
-        // GSE is airline-pass only — no GA split.
-        let gse_per_day: [f64; NUM_GSE_CLASSES] =
-            std::array::from_fn(|i| acc.unique_gse_count_per_class[i] as f64 / n_days_f);
+        // Each count is `primary / n_days + secondary / increment_days`.
+        let secondary_weight = weights.for_secondary_only(true);
+        let split = |primary: u32, secondary: u32| {
+            (f64::from(primary) + f64::from(secondary) * secondary_weight) / n_days_f
+        };
+        let observed_movements = split(acc.unique_count, acc.unique_secondary_count);
+        let arrivals_per_day = split(acc.unique_arr_count, acc.unique_secondary_arr_count);
+        let departures_per_day = split(acc.unique_dep_count, acc.unique_secondary_dep_count);
+        let gse_per_day: [f64; NUM_GSE_CLASSES] = std::array::from_fn(|i| {
+            split(
+                acc.unique_gse_count_per_class[i],
+                acc.unique_secondary_gse_count_per_class[i],
+            )
+        });
         // Top-3 aircraft classes by energy share at this microsegment.
         // Mirrors the airport-level `profile_mix` so the popup row
         // can use the same renderer.
@@ -421,6 +439,7 @@ pub(super) fn emit_segment_traces(
             cruise_buckets: None,
             cruise_top_flights: None,
             length_m_per_kind: None,
+            sort_seq: seq as u64,
         });
     }
 }

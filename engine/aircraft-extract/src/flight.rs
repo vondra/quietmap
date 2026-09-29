@@ -36,7 +36,10 @@ impl Phase {
 /// 3–5 mark the pieces of a split airborne chord (`segment::split`): every
 /// piece carries `SPLIT_PIECE`, the first also `CHORD_START`, the last also
 /// `CHORD_END`; consecutive pieces share their stored endpoint exactly, so
-/// the popup chains them back into one chord.
+/// the popup chains them back into one chord. Bit 6 marks a segment that
+/// touches a secondary-provider sample (normalised by the increment days).
+/// Bit 7 marks a helicopter chord losing more than 10 m end to end
+/// (stamped before the split, inherited by every piece).
 pub mod segment_flags {
     pub const IS_DEPARTURE: u8 = 1 << 0;
     pub const ON_GROUND: u8 = 1 << 1;
@@ -44,6 +47,9 @@ pub mod segment_flags {
     pub const SPLIT_PIECE: u8 = 1 << 3;
     pub const CHORD_START: u8 = 1 << 4;
     pub const CHORD_END: u8 = 1 << 5;
+    pub const SECONDARY_ONLY: u8 =
+        noise_compute::emission::aircraft::SEGMENT_FLAG_SECONDARY_ONLY;
+    pub const HELI_DESCENT: u8 = noise_compute::emission::aircraft::SEGMENT_FLAG_HELI_DESCENT;
 }
 
 /// Pack a variable-width ICAO typecode (`"A320"`, `"B738"`, `"PC12"`,
@@ -107,6 +113,10 @@ pub struct Flight {
 /// sub-segments so the popup kernel can skip `SegmentTerrain::sample`
 /// on the hot path. For ground-flagged endpoints the popup ignores
 /// the elev value (it gates on the `ON_GROUND` flag earlier).
+///
+/// `departure_field_elev_m` is the terrain under the flight's own takeoff
+/// roll (NaN when the roll was not observed): the Doc 29 cutback gate
+/// compares height above this field, not above the local ground.
 #[derive(Clone)]
 pub struct FlightSegment {
     pub flight_id: u64,
@@ -132,6 +142,7 @@ pub struct FlightSegment {
     pub agl_avg_m: f32,
     pub start_elev_m: f32,
     pub end_elev_m: f32,
+    pub departure_field_elev_m: f32,
 }
 
 impl FlightSegment {
@@ -151,8 +162,8 @@ impl FlightSegment {
     pub fn is_departure(&self) -> bool {
         self.flags & segment_flags::IS_DEPARTURE != 0
     }
-    pub fn is_on_ground(&self) -> bool {
-        self.flags & segment_flags::ON_GROUND != 0
+    pub fn is_secondary_only(&self) -> bool {
+        self.flags & segment_flags::SECONDARY_ONLY != 0
     }
 }
 
@@ -184,6 +195,7 @@ impl FlightSegment {
             agl_avg_m: 500.0,
             start_elev_m: 250.0,
             end_elev_m: 260.0,
+            departure_field_elev_m: f32::NAN,
         }
     }
 }
@@ -224,6 +236,8 @@ pub struct CruiseBucket {
     pub top_candidates: Vec<CruiseTopCandidate>,
     pub source_id: u8,
     pub origin: u8,
+    /// Every transit of the bucket touches a secondary-provider sample.
+    pub secondary_only: bool,
 }
 
 /// FL bins — five buckets covering the cruise altitude range. Tracks

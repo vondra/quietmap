@@ -25,8 +25,8 @@ def source_coverage(channel: str, dem_source: Path, worldcover_source: Path | No
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("plan", "publish"))
-    parser.add_argument("--channel", choices=("dem", "forest", "imd"), required=True)
-    parser.add_argument("--source-dir", type=Path, required=True, help="Verified, frozen 3601-square native HGT/raw tree")
+    parser.add_argument("--channel", choices=("dem", "canopy", "forest", "imd"), required=True)
+    parser.add_argument("--source-dir", type=Path, required=True, help="Verified, frozen 3601-square native u16le/raw tree")
     parser.add_argument("--dem-source", type=Path, required=True, help="Official GLO30/GLO90 catalog root")
     parser.add_argument("--worldcover-source", type=Path)
     parser.add_argument("--output", type=Path, required=True, help="Prepared root receiving z9/<x>/<y> channel files; 0-byte marks verified absence")

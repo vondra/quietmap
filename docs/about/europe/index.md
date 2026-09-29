@@ -1,13 +1,13 @@
 ---
 title: Europe
-intro: National road censuses in 11 countries, passenger timetables in 24, street counts in 36 cities. Rail freight not covered.
+intro: National road censuses in 11 countries, passenger timetables in 24, street counts in 35 cities. Rail freight not covered.
 map: { center: [15, 50], zoom: 4 }
 ---
 
 ## Roads
 
 - National traffic census (motorways and main roads, rarely city streets): Czechia, Denmark, Finland, France, Germany, Great Britain, Ireland, Italy, Norway, Poland, Spain.
-- City streets: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities), 36 cities from Lisbon to Helsinki. Prague, Brno and Vienna also have their own city counts.
+- City streets: [EU city traffic dataset](https://github.com/XavB64/traffic-volume-data-EU-cities), 35 cities from Lisbon to Helsinki. A count applies to the OSM way it was published for, or to a road along its line with the same street name or a similar road class. Where a city publishes no truck count, trucks take the class default share; weekday-only counts are scaled to the annual average by 0.9274, the median ratio in cities that publish both. Prague, Brno and Vienna also have their own city counts.
 
 Other roads use the [world defaults](/about/methodology).
 
@@ -15,7 +15,7 @@ Other roads use the [world defaults](/about/methodology).
 
 24 European countries have a passenger timetable loaded; train counts are those of one busy Wednesday. Great Britain, Romania, Slovenia, Lithuania and most of the Balkans have none.
 
-Lines without a timetable use the class default, in trains per day: main line 80 passenger and 20 freight, branch line 30 and 5, industrial siding 15 freight, tram track 120, light rail 80. Track in tunnels emits no noise.
+Lines without a timetable use the class default, in trains per day: main line 80 passenger and freight by country (Germany 24.5, France 5.5, Poland 12.0, Czechia 13.5, Austria 27.1, Switzerland 31.4, 20 elsewhere), branch line 30 and 5, industrial siding 15 freight, tram track 120, light rail 80. Lines mapped as passenger-only carry no freight. Track in tunnels emits no noise.
 
 Freight is not covered: no loaded European timetable contains freight trains.
 
@@ -27,7 +27,7 @@ Wind turbines take their rated power from a national register in Germany, Denmar
 
 ## Buildings
 
-Building heights are measured in Prague. Czechia and Spain add floor counts from national registers. The rest of Europe uses OpenStreetMap tags, Overture and the GHSL average height for the block. Better data for the Netherlands, Denmark and Norway is not loaded yet.
+Building heights are measured in Prague, North Rhine-Westphalia and the Netherlands. Czechia and Spain add floor counts from national registers. The rest of Europe uses OpenStreetMap tags, Overture and the typical height for the footprint size. Better data for Denmark and Norway is not loaded yet.
 
 ## Ships
 

@@ -72,9 +72,11 @@ pub struct DeviceObstacleEdgeEndpoints {
     pub end_y_m: f32,
 }
 
-/// All obstacle-grid arrays concatenated once for a region.
+/// The region's obstacles as one CSR grid in the region frame (the set merged, so one ray walk
+/// meets every crossing in chainage order).
 #[derive(Default)]
 pub struct FlattenedObstacleGeometry {
+    /// Zero grids for a region without obstacles, else one.
     pub grids: Vec<DeviceObstacleGrid>,
     pub cell_starts: Vec<u32>,
     pub edge_references: Vec<u32>,
@@ -82,72 +84,56 @@ pub struct FlattenedObstacleGeometry {
     /// edge's endpoints across two memory sectors, and the height it carried is
     /// read only for an edge the ray actually crosses.
     pub edge_endpoints: Vec<DeviceObstacleEdgeEndpoints>,
-    /// Edge height, one per edge, under the same `edge_index_offset`.
+    /// Edge height, one per edge.
     pub edge_height_m: Vec<f32>,
-    /// Building flag, one per edge, under the same `edge_index_offset`.
+    /// Building flag, one per edge.
     pub edge_is_building: Vec<u8>,
+    /// Footprint (or wall) id per edge, unique across the region: a footprint's walls pair
+    /// into roofs by it.
+    pub edge_footprint_id: Vec<u32>,
     pub cell_maximum_heights: Vec<f32>,
 }
 
 impl FlattenedObstacleGeometry {
     pub fn from_set(frame: &RegionMetricFrame, set: &ObstacleSet) -> Self {
         let mut flattened = Self::default();
-        for index in &set.indexes {
-            let view = index.gpu_view();
-            let grid = DeviceObstacleGrid {
-                query_x_scale: (view.m_per_deg_lon / frame.metres_per_longitude_degree()) as f32,
-                query_x_offset_m: (grid::geo::wrapped_longitude_delta(
-                    view.origin_lon,
-                    frame.reference_longitude(),
-                ) * view.m_per_deg_lon) as f32,
-                query_y_offset_m: ((frame.reference_latitude() - view.origin_lat) * M_PER_DEG_LAT)
-                    as f32,
-                cell_m: view.cell_m as f32,
-                minimum_x_m: view.min_x as f32,
-                minimum_y_m: view.min_y as f32,
-                columns: view.cols as u32,
-                rows: view.rows as u32,
-                cell_starts_offset: flattened.cell_starts.len() as u32,
-                edge_references_offset: flattened.edge_references.len() as u32,
-                edge_index_offset: flattened.edge_height_m.len() as u32,
-                cell_maximum_height_offset: flattened.cell_maximum_heights.len() as u32,
-            };
-            flattened.grids.push(grid);
-            flattened.cell_starts.extend_from_slice(view.cell_starts);
-            flattened.edge_references.extend_from_slice(view.edge_refs);
-            // `gpu_view` materialises the edge arrays in one pass over the same
-            // edge slice, so they concatenate in the same order and answer to the
-            // same edge index. A view that disagreed would slide every later edge's
-            // endpoints under another edge's height and paint the result with no
-            // other sign, so it ends the process here instead.
-            assert_eq!(
-                view.edges_xyxyh.len() % 5,
-                0,
-                "an obstacle view's xyxyh array is not whole edges"
-            );
-            let edge_count = view.edges_xyxyh.len() / 5;
-            assert_eq!(
-                view.edge_is_building.len(),
-                edge_count,
-                "an obstacle view carries {} building flags for {edge_count} edges",
-                view.edge_is_building.len()
-            );
-            for edge in view.edges_xyxyh.chunks_exact(5) {
-                flattened.edge_endpoints.push(DeviceObstacleEdgeEndpoints {
-                    start_x_m: edge[0],
-                    start_y_m: edge[1],
-                    end_x_m: edge[2],
-                    end_y_m: edge[3],
-                });
-                flattened.edge_height_m.push(edge[4]);
-            }
-            flattened
-                .edge_is_building
-                .extend_from_slice(&view.edge_is_building);
-            flattened
-                .cell_maximum_heights
-                .extend_from_slice(view.cell_max_h);
+        if set.edge_count() == 0 {
+            return flattened;
         }
+        let merged = set.merged(frame.reference_latitude(), frame.reference_longitude());
+        let view = merged.gpu_view();
+        flattened.grids.push(DeviceObstacleGrid {
+            query_x_scale: (view.m_per_deg_lon / frame.metres_per_longitude_degree()) as f32,
+            query_x_offset_m: (grid::geo::wrapped_longitude_delta(
+                view.origin_lon,
+                frame.reference_longitude(),
+            ) * view.m_per_deg_lon) as f32,
+            query_y_offset_m: ((frame.reference_latitude() - view.origin_lat) * M_PER_DEG_LAT)
+                as f32,
+            cell_m: view.cell_m as f32,
+            minimum_x_m: view.min_x as f32,
+            minimum_y_m: view.min_y as f32,
+            columns: view.cols as u32,
+            rows: view.rows as u32,
+            cell_starts_offset: 0,
+            edge_references_offset: 0,
+            edge_index_offset: 0,
+            cell_maximum_height_offset: 0,
+        });
+        flattened.cell_starts.extend_from_slice(view.cell_starts);
+        flattened.edge_references.extend_from_slice(view.edge_refs);
+        for edge in view.edges_xyxyh.chunks_exact(5) {
+            flattened.edge_endpoints.push(DeviceObstacleEdgeEndpoints {
+                start_x_m: edge[0],
+                start_y_m: edge[1],
+                end_x_m: edge[2],
+                end_y_m: edge[3],
+            });
+            flattened.edge_height_m.push(edge[4]);
+        }
+        flattened.edge_is_building = view.edge_is_building;
+        flattened.edge_footprint_id = view.edge_ids;
+        flattened.cell_maximum_heights.extend_from_slice(view.cell_max_h);
         flattened
     }
 }

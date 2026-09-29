@@ -4,9 +4,10 @@
 //! Only absent optional files are empty; opening or decoding an existing file
 //! fails the query on error. A stale structures stamp refuses the square (the
 //! table is the screening geometry); a stale leisure, ships or airborne stamp
-//! drops that emission layer and names it in the answer. The structures BUILDER
-//! stamp is not one of these: builder 1 and builder 2 both write `structures_v4`,
-//! and only the world audit refuses the older one before a release is served.
+//! drops that emission layer and names it in the answer. The structures builder
+//! stamp (`builder_version`) is not one of these: a builder change that keeps the
+//! schema keeps the contract, so only the world audit refuses an older builder's
+//! square before a release is served.
 //!
 //! Batches decode through `FileDecoder` over a `Buffer` that owns the mapping,
 //! so every decoded array is a slice of the file-backed pages the kernel can
@@ -315,6 +316,9 @@ pub struct SquareData {
     pub aircraft_airport_traffic: LazyArrow,
     /// OSM aeroway microsegments (`airport_lines.arrow`).
     pub airport_lines: LazyArrow,
+    /// The noisiest façade receiver of each enclosed building (`facade_exposure.arrow`);
+    /// absent only in a release built without the façade-exposure stage.
+    pub facade_exposure: LazyArrow,
     /// Emission layers whose file carries another contract stamp: read as absent and named in
     /// the response; the point query then skips that layer in every square. Never cached, so
     /// a repaired file serves on the next click. The world build audit refuses such a file.
@@ -363,7 +367,7 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
         "leisure.arrow",
         "leisure",
         &[
-            ("leisure_contract", LEISURE_CONTRACT_V3),
+            ("leisure_contract", crate::osm_contract::LEISURE_CONTRACT_V5),
             ("grid", GRID_CONTRACT_Z30),
         ],
         "re-extract the source store",
@@ -394,17 +398,30 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
     let roads = LazyArrow::open(&dir.join("roads.arrow"))?;
     check_column_type(&roads, "start_gx", DataType::Int32, "roads.arrow")?;
 
+    let industrial = LazyArrow::open(&dir.join("industrial.arrow"))?;
+    for (family, arrow) in [
+        ("roads", &roads),
+        ("railways", &railways),
+        ("industrial", &industrial),
+    ] {
+        if let Some(schema) = arrow.schema() {
+            crate::osm_contract::validate(schema, family)?;
+        }
+    }
     Ok(SquareData {
         roads,
         railways,
         structures,
-        industrial: LazyArrow::open(&dir.join("industrial.arrow"))?,
+        industrial,
         leisure,
         ships,
         aircraft_airborne,
         aircraft_cruise: LazyArrow::open(&dir.join("cruise.arrow"))?,
         aircraft_airport_traffic: LazyArrow::open(&dir.join("airport_traffic.arrow"))?,
         airport_lines: LazyArrow::open(&dir.join("airport_lines.arrow"))?,
+        facade_exposure: LazyArrow::open(
+            &dir.join(crate::facade_exposure_contract::FACADE_EXPOSURE_ARROW),
+        )?,
         unavailable_layers,
     })
 }
@@ -414,10 +431,6 @@ pub fn load_square(dir: &Path) -> Result<SquareData, String> {
 pub const STRUCTURE_KIND_BUILDING: u8 = 0;
 pub const STRUCTURE_KIND_BARRIER: u8 = 1;
 
-/// Per-file contract stamps (sources of truth: `osm-extract::finalize`,
-/// `scripts/structures/build-structures.py`). Mirrored here so the popup
-/// drops a stale layer whose semantics predate the current schema.
-pub const LEISURE_CONTRACT_V3: &str = "leisure_v3";
 /// `ships.arrow` schema stamp written by `scripts/ships/build_ships.py`.
 pub const SHIPS_CONTRACT_V1: &str = "ships_v1";
 pub const GRID_CONTRACT_Z30: &str = "z30";

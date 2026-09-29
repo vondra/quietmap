@@ -56,25 +56,10 @@ pub const AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M: f32 = 4_000.0;
 pub const AIRBORNE_QUERY_RADIUS_M: f64 =
     AIRCRAFT_MAX_HORIZONTAL_REACH_M + AIRBORNE_SUB_SEGMENT_MAX_LENGTH_M as f64 / 2.0;
 
-/// Slant threshold above which `segment_sel_with_overrides` (the one kernel
-/// every popup and tile call funnels through) switches to the closed-form far-field kernel
-/// (CFFK). The corrections that the per-segment Doc 29 path applies
-/// (ΔI, ΔF, lateral attenuation) are all bounded:
-///   - λ is identically 0 for elevation angle β > 50° (already gated).
-///   - ΔI peaks at ~0.4 dB for wing, ~0.8 dB for fuselage, and is < 0.3 dB
-///     for typical FL330+ overhead geometries.
-///   - ΔF approaches 0 dB for segments where the CPA is interior to the
-///     segment and the segment is several `d_bar` long — true for almost
-///     all cruise segments.
-///
-/// At 25 000 ft / 7 620 m we're at the last NPD table point, beyond which
-/// the slope is already a physical extrapolation. Switching to the closed
-/// form there is cheap (1 log + 1 mul + 1 add) and matches the Doc 29
-/// reference within ~0.3 dB.
-pub const AIRCRAFT_FAR_FIELD_THRESHOLD_M: f64 = 7620.0;
-
 /// Reference slant (meters) at the last NPD table point (25 000 ft). Anchor
-/// for physics-based extrapolation of SEL beyond the table.
+/// for physics-based extrapolation of SEL beyond the table, and the shared
+/// 25 000 ft anchor of the airborne/cruise phase boundary and the cruise
+/// near-field margin (a slant past it leaves the table everywhere).
 pub const AIRCRAFT_NPD_REF_SLANT_M: f64 = 7620.0;
 
 /// Standard NPD distances in feet (Doc 29 §4.2, 10 points).
@@ -116,7 +101,6 @@ pub struct NpdProfile {
     pub approach_lmax: [f64; 10],
     pub departure_lmax: [f64; 10],
     pub v_ref_kt: f64,
-    pub d_bar_m: f64,
     pub installation: Installation,
     /// **NPD-tail residual coefficient** (dB/m), lazily back-fitted from the
     /// last three NPD points (see `compute_alpha_eff`). NOT a generic
@@ -149,7 +133,6 @@ impl NpdProfile {
         approach_lmax: [f64; 10],
         departure_lmax: [f64; 10],
         v_ref_kt: f64,
-        d_bar_m: f64,
         installation: Installation,
     ) -> Self {
         NpdProfile {
@@ -159,13 +142,15 @@ impl NpdProfile {
             approach_lmax,
             departure_lmax,
             v_ref_kt,
-            d_bar_m,
             installation,
             alpha_eff_approach: OnceLock::new(),
             alpha_eff_departure: OnceLock::new(),
         }
     }
 }
+
+mod scaled_distance;
+pub use scaled_distance::build_scaled_distance_curve_lut;
 
 // Per-typecode NPD profiles + per-class metadata (constants in
 // `profiles_generated.rs`) auto-generated from
@@ -175,7 +160,7 @@ impl NpdProfile {
 pub use crate::emission::profiles_generated::{
     is_negligible_noise_typecode, is_non_aircraft_typecode, noise_class_of, profile_idx,
     CLASS_NAMES, CLASS_OF_PROFILE, CLASS_REP_PROFILE_IDX, FALLBACK_NOISE_CLASS,
-    FALLBACK_PROFILE_IDX, GROUND_OPS_REFERENCE_LW_PER_METER_DB, IS_JET, NUM_CLASSES, NUM_PROFILES,
+    FALLBACK_PROFILE_IDX, IS_JET, NUM_CLASSES, NUM_PROFILES,
     PROFILES,
 };
 
@@ -196,175 +181,6 @@ pub fn clamp_profile_idx(profile_idx: u8) -> usize {
 pub fn is_helicopter_profile(profile_idx: u8) -> bool {
     let cls = noise_class_of(profile_idx) as usize;
     cls < CLASS_NAMES.len() && CLASS_NAMES[cls] == "HELICOPTER"
-}
-
-/// Classes sampled over the full available-year window in hybrid
-/// extracts; everything else keeps the 12-day first-of-month airline
-/// window. GA + helicopter traffic is
-/// sporadic and one-off-heavy, so a 12-day sample weights a single
-/// flight ×30.42 (+14.8 dB phantom — Kytín audit 2026-06-12); sampling
-/// those classes over `ga_n_days` makes a one-off contribute exactly
-/// `1/ga_n_days` of its energy while genuinely daily patterns are unchanged.
-///
-/// Deliberately not included:
-/// - `PROP_DH8D` — the *airline turboprop* class (AT72/76, DH8x, SF34,
-///   L410…): scheduled traffic that the 12-day window samples well; a
-///   plain `!is_jet` predicate would wrongly move it. GA turbine
-///   singles routed there by fallback (PC12/TBM/C208) stay 12-day because
-///   they share the airline turboprop profile.
-/// - `FUSE_C56X` / `FUSE_CRJ9` — bizjets share these classes with
-///   scheduled regional jets (CRJ2/7/9, E-jets fallback, B712,
-///   BAe146); not separable at class level. Documented residual.
-/// - `WING_FALLBACK` — blank/unknown typecode ≠ GA.
-///
-/// Name-keyed via `CLASS_NAMES` (same rationale as
-/// [`is_helicopter_profile`]): the generator reorders class indices on
-/// data updates.
-#[inline]
-pub fn is_ga_sampled_class(class_idx: u8) -> bool {
-    let cls = class_idx as usize;
-    cls < CLASS_NAMES.len() && matches!(CLASS_NAMES[cls], "PROP_C172" | "HELICOPTER")
-}
-
-/// Whether `profile_idx`'s noise class is GA-window-sampled — see
-/// [`is_ga_sampled_class`]. This is the predicate the hybrid Stage 0
-/// `ClassWindowFilter` routes on; both extract passes derive class
-/// through the same `typecode → profile_idx → noise_class_of` chain,
-/// so pass complementarity is exact by construction.
-#[inline]
-pub fn is_ga_sampled_profile(profile_idx: u8) -> bool {
-    is_ga_sampled_class(noise_class_of(profile_idx))
-}
-
-/// Schema-metadata key holding the per-class sample-day vector that the
-/// hybrid GA estimator weights against. A `NUM_CLASSES`-length comma vector
-/// indexed by
-/// noise-class idx: GA-sampled classes carry `ga_n_days`, every
-/// other class carries the airline window `n_days` (12). A single-window
-/// extract stamps the uniform `n_days` vector. Stamped by
-/// `aircraft_extract::arrow_schemas::with_n_days_and_windows`.
-pub const SAMPLE_DAYS_BY_CLASS_KEY: &str = "sample_days_by_class";
-
-/// Per-class energy/count weight LUT for the GA hybrid estimator.
-/// `w[c] = n_days / sample_days_by_class[c]`:
-/// airline classes (sampled over the same `n_days` window the consumer
-/// divides by) get `1.0`; GA classes get `n_days / ga_n_days`. Applying
-/// `÷ n_days` (unchanged everywhere) then `× w[class]` yields
-/// `E / ga_n_days` for a
-/// GA row and `E / n_days` for an airline row — so a one-off GA flight
-/// uses the full-year frequency instead of the airline-window frequency
-/// (kills the +14.8 dB
-/// Kytín phantom), while genuinely-daily GA patterns are unchanged.
-///
-/// `veh_kind = 1` (GSE) rows MUST keep weight `1.0` — their `class_idx`
-/// indexes the GSE class space, not the aircraft classes, and GSE is an
-/// airline-pass-only artifact. Callers branch on `veh_kind`.
-#[derive(Clone, Copy, Debug)]
-pub struct ClassWeights {
-    w: [f64; NUM_CLASSES],
-    /// Sample-day count of the GA-window classes (all equal by
-    /// construction — both PROP_C172 and HELICOPTER are sampled over the
-    /// same window). Equals `n_days` for a uniform (non-hybrid) vector.
-    /// The popup's split-window count math (`microseg_unique_ga_*` and the
-    /// airport-summary GA fid sets) divides by THIS, while the non-GA
-    /// counts divide by `n_days`.
-    ga_n_days: u16,
-}
-
-impl ClassWeights {
-    /// Weight for one aircraft noise class. Out-of-range indices clamp to
-    /// the last class rather than panic (defense-in-depth vs corrupt
-    /// `class_idx`); generator guarantees `class_idx < NUM_CLASSES`.
-    #[inline]
-    pub fn get(&self, class_idx: u8) -> f64 {
-        self.w[(class_idx as usize).min(NUM_CLASSES - 1)]
-    }
-
-    /// GA-window day count (divisor for the split-union GA movement
-    /// counts). `n_days` for a non-hybrid extract.
-    #[inline]
-    pub fn ga_n_days(&self) -> u16 {
-        self.ga_n_days
-    }
-
-    /// Raw `[f64; NUM_CLASSES]` for bulk upload (GPU LUT, `f32` cast at
-    /// the device boundary).
-    #[inline]
-    pub fn as_array(&self) -> &[f64; NUM_CLASSES] {
-        &self.w
-    }
-
-    /// All-`1.0` LUT — the non-hybrid identity (every class weighted at
-    /// the single `n_days` window). Test-only helper; production callers
-    /// always [`parse`](Self::parse) from arrow metadata. `ga_n_days = 1`
-    /// is a harmless placeholder — the GA-split count columns it would
-    /// divide are all-zero in any uniform-LUT path.
-    pub const fn uniform() -> Self {
-        ClassWeights {
-            w: [1.0; NUM_CLASSES],
-            ga_n_days: 1,
-        }
-    }
-
-    /// Parse a `sample_days_by_class` metadata string into the weight LUT
-    /// given the consumer's `n_days` divisor. FAILS LOUD (owner directive
-    /// 2026-06-12 — no compat shims): a `None`/missing value, wrong length,
-    /// non-integer entry, or zero day-count returns `Err` with an
-    /// operator-actionable message — the arrows predate the hybrid contract
-    /// and must be re-extracted/re-merged. The established pairing rule
-    /// (old reader + old arrows; new arrows + rebuilt reader) is what keeps
-    /// deploy-time consistency, so there is deliberately no uniform fallback.
-    pub fn parse(meta_value: Option<&str>, n_days: u16) -> Result<Self, String> {
-        let raw = meta_value.ok_or_else(|| {
-            format!(
-                "{SAMPLE_DAYS_BY_CLASS_KEY} metadata missing — re-run the extract/merge \
-                 (arrows predate the GA 365-day hybrid contract)"
-            )
-        })?;
-        let parts: Vec<&str> = raw.split(',').collect();
-        if parts.len() != NUM_CLASSES {
-            return Err(format!(
-                "{SAMPLE_DAYS_BY_CLASS_KEY} has {} entries, expected {NUM_CLASSES} \
-                 (got {raw:?}) — re-run the extract/merge",
-                parts.len()
-            ));
-        }
-        let n_days_f = (n_days as f64).max(1.0);
-        let mut w = [1.0f64; NUM_CLASSES];
-        // GA-window day count = the sample-days of the GA-sampled classes.
-        // They MUST be identical (the count split exposes one `ga_n_days`
-        // divisor) — a divergence is malformed metadata, rejected loud.
-        // Defaults to `n_days` so a uniform vector yields
-        // `ga_n_days == n_days` and the count split degenerates to legacy.
-        let mut ga_n_days: Option<u32> = None;
-        for (i, p) in parts.iter().enumerate() {
-            let days: u32 = p.trim().parse().map_err(|_| {
-                format!("{SAMPLE_DAYS_BY_CLASS_KEY}[{i}] = {p:?} is not an integer (got {raw:?})")
-            })?;
-            if days == 0 {
-                return Err(format!(
-                    "{SAMPLE_DAYS_BY_CLASS_KEY}[{i}] = 0 (invalid divisor) — re-run the extract"
-                ));
-            }
-            w[i] = n_days_f / days as f64;
-            if is_ga_sampled_class(i as u8) {
-                match ga_n_days {
-                    None => ga_n_days = Some(days),
-                    Some(prev) if prev != days => {
-                        return Err(format!(
-                            "{SAMPLE_DAYS_BY_CLASS_KEY}: GA classes carry different sample-day \
-                             counts ({prev} vs {days}) — must share one GA window; re-run the extract"
-                        ));
-                    }
-                    Some(_) => {}
-                }
-            }
-        }
-        let ga_n_days = ga_n_days
-            .unwrap_or(n_days.max(1) as u32)
-            .min(u16::MAX as u32) as u16;
-        Ok(ClassWeights { w, ga_n_days })
-    }
 }
 
 /// ICAO typecode prefix of a `PROFILES[idx].name`. Profile names are
@@ -422,7 +238,7 @@ pub fn is_jet_profile(profile_idx: u8) -> bool {
 /// last NPD point; any change to the divergence term (e.g. swapping for
 /// `−10·log10`) requires re-fitting α on the same form, not borrowing α
 /// from another standard.
-fn compute_alpha_eff(sel: &[f64; 10]) -> f64 {
+pub(crate) fn compute_alpha_eff(sel: &[f64; 10]) -> f64 {
     let d_m = [
         NPD_DIST_FT[7] / FT_PER_M, // 10 000 ft → 3 048 m
         NPD_DIST_FT[8] / FT_PER_M, // 16 000 ft → 4 877 m
@@ -471,52 +287,57 @@ impl NpdProfile {
         } else {
             &self.approach_sel
         };
-        let last = sel.len() - 1;
-
-        // Threshold louder than closest NPD point → minimal reach.
-        if threshold_db >= sel[0] {
-            return NPD_DIST_FT[0] / FT_PER_M;
-        }
-
-        // Inside the NPD table: log-linear interpolation.
-        if threshold_db > sel[last] {
-            for i in 0..last {
-                if threshold_db >= sel[i + 1] {
-                    let frac = (threshold_db - sel[i]) / (sel[i + 1] - sel[i]);
-                    let log_d = LOG_DIST[i] + frac * (LOG_DIST[i + 1] - LOG_DIST[i]);
-                    return (10.0_f64.powf(log_d) / FT_PER_M).min(AIRCRAFT_NPD_REACH_CAP_M);
-                }
-            }
-            return AIRCRAFT_NPD_REACH_CAP_M;
-        }
-
-        // Beyond the table: bisect the physics kernel in [d_ref, cap]. Kernel
-        // is strictly monotone decreasing, so a zero crossing exists when
-        // SEL(cap) < threshold; otherwise clamp at the cap.
-        let alpha = self.alpha_eff(is_departure);
-        let sel_at = |d: f64| {
-            sel[last]
-                - 20.0 * (d / AIRCRAFT_NPD_REF_SLANT_M).log10()
-                - alpha * (d - AIRCRAFT_NPD_REF_SLANT_M)
-        };
-        if sel_at(AIRCRAFT_NPD_REACH_CAP_M) >= threshold_db {
-            return AIRCRAFT_NPD_REACH_CAP_M;
-        }
-        let mut lo = AIRCRAFT_NPD_REF_SLANT_M;
-        let mut hi = AIRCRAFT_NPD_REACH_CAP_M;
-        for _ in 0..32 {
-            let mid = 0.5 * (lo + hi);
-            if sel_at(mid) > threshold_db {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-            if (hi - lo) < 0.5 {
-                break;
-            }
-        }
-        0.5 * (lo + hi)
+        estimate_reach_for_curve(sel, self.alpha_eff(is_departure), threshold_db)
     }
+}
+
+/// Slant reach of one NPD curve with its tail coefficient: the shared core of
+/// [`NpdProfile::estimate_reach_m`] and the loudest-row reach table.
+pub(crate) fn estimate_reach_for_curve(sel: &[f64; 10], alpha: f64, threshold_db: f64) -> f64 {
+    let last = sel.len() - 1;
+
+    // Threshold louder than closest NPD point → minimal reach.
+    if threshold_db >= sel[0] {
+        return NPD_DIST_FT[0] / FT_PER_M;
+    }
+
+    // Inside the NPD table: log-linear interpolation.
+    if threshold_db > sel[last] {
+        for i in 0..last {
+            if threshold_db >= sel[i + 1] {
+                let frac = (threshold_db - sel[i]) / (sel[i + 1] - sel[i]);
+                let log_d = LOG_DIST[i] + frac * (LOG_DIST[i + 1] - LOG_DIST[i]);
+                return (10.0_f64.powf(log_d) / FT_PER_M).min(AIRCRAFT_NPD_REACH_CAP_M);
+            }
+        }
+        return AIRCRAFT_NPD_REACH_CAP_M;
+    }
+
+    // Beyond the table: bisect the physics kernel in [d_ref, cap]. Kernel
+    // is strictly monotone decreasing, so a zero crossing exists when
+    // SEL(cap) < threshold; otherwise clamp at the cap.
+    let sel_at = |d: f64| {
+        sel[last]
+            - 20.0 * (d / AIRCRAFT_NPD_REF_SLANT_M).log10()
+            - alpha * (d - AIRCRAFT_NPD_REF_SLANT_M)
+    };
+    if sel_at(AIRCRAFT_NPD_REACH_CAP_M) >= threshold_db {
+        return AIRCRAFT_NPD_REACH_CAP_M;
+    }
+    let mut lo = AIRCRAFT_NPD_REF_SLANT_M;
+    let mut hi = AIRCRAFT_NPD_REACH_CAP_M;
+    for _ in 0..32 {
+        let mid = 0.5 * (lo + hi);
+        if sel_at(mid) > threshold_db {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+        if (hi - lo) < 0.5 {
+            break;
+        }
+    }
+    0.5 * (lo + hi)
 }
 
 /// Interpolate SEL at a given slant distance (Doc 29 §4.2, Eq. 4-4/4-5).
@@ -525,6 +346,34 @@ impl NpdProfile {
 pub fn interpolate_sel(profile: &NpdProfile, slant_ft: f64, is_departure: bool) -> f64 {
     let log_d = slant_ft.max(100.0).log10();
     interpolate_sel_logd(profile, log_d, is_departure)
+}
+
+/// Exact (non-LUT) SEL interpolation over one NPD curve with its tail
+/// coefficient: the shared core of [`interpolate_sel_logd`] and the LUT
+/// builder, so LUT bins match the exact curve at the bin centers.
+fn interp_curve_logd(sel: &[f64; 10], alpha: f64, log_d: f64) -> f64 {
+    let last = sel.len() - 1;
+    if log_d <= LOG_DIST[0] {
+        let slope = (sel[1] - sel[0]) / (LOG_DIST[1] - LOG_DIST[0]);
+        return sel[0] + slope * (log_d - LOG_DIST[0]);
+    }
+    // Beyond the last NPD point: physics-based extrapolation. Atmospheric
+    // absorption is linear in meters, so the log-linear Doc 29 slope
+    // underestimates loss at large slant. Use spherical divergence
+    // (−20·log10) + per-profile α_eff·(d − d_ref). See `compute_alpha_eff`.
+    if log_d >= LOG_DIST[last] {
+        let slant_m = 10.0_f64.powf(log_d) / FT_PER_M;
+        let geo = 20.0 * (slant_m / AIRCRAFT_NPD_REF_SLANT_M).log10();
+        let atm = alpha * (slant_m - AIRCRAFT_NPD_REF_SLANT_M);
+        return sel[last] - geo - atm;
+    }
+    for i in 0..last {
+        if log_d <= LOG_DIST[i + 1] {
+            let frac = (log_d - LOG_DIST[i]) / (LOG_DIST[i + 1] - LOG_DIST[i]);
+            return sel[i] + frac * (sel[i + 1] - sel[i]);
+        }
+    }
+    sel[last]
 }
 
 // NPD lookup table — pre-built at first access from `interpolate_sel_logd`.
@@ -545,14 +394,15 @@ pub const NPD_LUT_LOG_MAX: f64 = 5.5; // log10(316 k ft)
 pub const NPD_LUT_STEP: f64 = (NPD_LUT_LOG_MAX - NPD_LUT_LOG_MIN) / NPD_LUT_BINS as f64;
 pub const NPD_LUT_INV_STEP: f64 = NPD_LUT_BINS as f64 / (NPD_LUT_LOG_MAX - NPD_LUT_LOG_MIN);
 
-pub fn build_npd_lut(profile: &NpdProfile, is_departure: bool) -> [f64; NPD_LUT_BINS + 1] {
+/// Build one 128-bin SEL LUT over a single NPD curve (one power row).
+fn build_curve_lut(sel: &[f64; 10], alpha: f64) -> [f64; NPD_LUT_BINS + 1] {
     let mut lut = [0.0f64; NPD_LUT_BINS + 1];
     // `i` is both the bin value (`log_d` from `i`) and the write index — kept as a
     // range loop (init-time LUT fill; an enumerate() rewrite would still need `i`).
     #[allow(clippy::needless_range_loop)]
     for i in 0..=NPD_LUT_BINS {
         let log_d = NPD_LUT_LOG_MIN + i as f64 * NPD_LUT_STEP;
-        lut[i] = interpolate_sel_logd(profile, log_d, is_departure);
+        lut[i] = interp_curve_logd(sel, alpha, log_d);
     }
     lut
 }
@@ -567,10 +417,11 @@ pub fn fast_npd_lookup(lut: &[f64; NPD_LUT_BINS + 1], log_d: f64) -> f64 {
     lut[idx] + frac * (lut[idx + 1] - lut[idx])
 }
 
-/// Per-noise-class NPD LUTs (NUM_CLASSES classes × 2 directions × 2 metrics).
-/// Single global instance — built once on first access, reused across
-/// pipeline batches and popup queries. Sized by `NUM_CLASSES`: each class
-/// shares its Voronoi anchor's NPD curve, so one LUT per class is exact.
+/// Per-noise-class NPD LUTs (NUM_CLASSES classes × 2 directions ×
+/// MAX_POWER_ROWS power rows × 3 metrics). Single global instance — built once
+/// on first access, reused across pipeline batches and popup queries. Each
+/// class shares its Voronoi anchor's NPD curves; thrust classes additionally
+/// share the anchor's power rows, so one LUT per (class, row) is exact.
 ///
 /// SEL LUTs feed energy summation; LAmax LUTs feed per-event peak ranking
 /// (popup top-flights, band classification). LAmax replaces the hardcoded
@@ -580,6 +431,8 @@ pub struct NpdLuts {
     departure: Vec<[f64; NPD_LUT_BINS + 1]>,
     approach_lmax: Vec<[f64; NPD_LUT_BINS + 1]>,
     departure_lmax: Vec<[f64; NPD_LUT_BINS + 1]>,
+    approach_scaled_distance: Vec<[f64; NPD_LUT_BINS + 1]>,
+    departure_scaled_distance: Vec<[f64; NPD_LUT_BINS + 1]>,
 }
 
 static NPD_LUTS: OnceLock<NpdLuts> = OnceLock::new();
@@ -590,80 +443,200 @@ impl NpdLuts {
     }
 
     fn build() -> Self {
-        let mut approach = Vec::with_capacity(NUM_CLASSES);
-        let mut departure = Vec::with_capacity(NUM_CLASSES);
-        let mut approach_lmax = Vec::with_capacity(NUM_CLASSES);
-        let mut departure_lmax = Vec::with_capacity(NUM_CLASSES);
+        use super::thrust::{thrust_model_for_class, MAX_POWER_ROWS};
+        let per_class = |sel_rows: &[[f64; 10]; MAX_POWER_ROWS],
+                         lmax_rows: &[[f64; 10]; MAX_POWER_ROWS],
+                         v_ref_kt: f64,
+                         sel_out: &mut Vec<[f64; NPD_LUT_BINS + 1]>,
+                         lmax_out: &mut Vec<[f64; NPD_LUT_BINS + 1]>,
+                         dl_out: &mut Vec<[f64; NPD_LUT_BINS + 1]>| {
+            for row in sel_rows.iter().take(MAX_POWER_ROWS) {
+                let alpha = compute_alpha_eff(row);
+                sel_out.push(build_curve_lut(row, alpha));
+            }
+            for (sel, lmax) in sel_rows.iter().zip(lmax_rows.iter()).take(MAX_POWER_ROWS) {
+                lmax_out.push(build_lmax_curve_lut(lmax, compute_alpha_eff(sel)));
+                dl_out.push(build_scaled_distance_curve_lut(sel, lmax, v_ref_kt));
+            }
+        };
+        let mut approach = Vec::with_capacity(NUM_CLASSES * MAX_POWER_ROWS);
+        let mut departure = Vec::with_capacity(NUM_CLASSES * MAX_POWER_ROWS);
+        let mut approach_lmax = Vec::with_capacity(NUM_CLASSES * MAX_POWER_ROWS);
+        let mut departure_lmax = Vec::with_capacity(NUM_CLASSES * MAX_POWER_ROWS);
+        let mut approach_scaled_distance = Vec::with_capacity(NUM_CLASSES * MAX_POWER_ROWS);
+        let mut departure_scaled_distance = Vec::with_capacity(NUM_CLASSES * MAX_POWER_ROWS);
         for class_idx in 0..NUM_CLASSES {
             let anchor = &PROFILES[CLASS_REP_PROFILE_IDX[class_idx] as usize];
-            approach.push(build_npd_lut(anchor, false));
-            departure.push(build_npd_lut(anchor, true));
-            approach_lmax.push(build_lmax_lut(anchor, false));
-            departure_lmax.push(build_lmax_lut(anchor, true));
+            let model = thrust_model_for_class(class_idx);
+            if model.has_thrust {
+                per_class(
+                    &model.app_sel,
+                    &model.app_lmax,
+                    anchor.v_ref_kt,
+                    &mut approach,
+                    &mut approach_lmax,
+                    &mut approach_scaled_distance,
+                );
+                per_class(
+                    &model.dep_sel,
+                    &model.dep_lmax,
+                    anchor.v_ref_kt,
+                    &mut departure,
+                    &mut departure_lmax,
+                    &mut departure_scaled_distance,
+                );
+            } else {
+                // Pinned classes reuse the anchor curve on every row: row 0
+                // reads bit-identical values to the pre-thrust LUTs.
+                let app = [anchor.approach_sel; MAX_POWER_ROWS];
+                let app_lmax = [anchor.approach_lmax; MAX_POWER_ROWS];
+                let dep = [anchor.departure_sel; MAX_POWER_ROWS];
+                let dep_lmax = [anchor.departure_lmax; MAX_POWER_ROWS];
+                per_class(
+                    &app,
+                    &app_lmax,
+                    anchor.v_ref_kt,
+                    &mut approach,
+                    &mut approach_lmax,
+                    &mut approach_scaled_distance,
+                );
+                per_class(
+                    &dep,
+                    &dep_lmax,
+                    anchor.v_ref_kt,
+                    &mut departure,
+                    &mut departure_lmax,
+                    &mut departure_scaled_distance,
+                );
+            }
         }
         NpdLuts {
             approach,
             departure,
             approach_lmax,
             departure_lmax,
+            approach_scaled_distance,
+            departure_scaled_distance,
         }
     }
 
+    /// Eq. 4-3 power interpolation between two row LUT reads. `w == 0.0`
+    /// returns the single-row read (exact: pinned classes and clamped
+    /// brackets match the pre-thrust values bit for bit).
     #[inline(always)]
-    pub fn lookup(&self, noise_class: usize, is_dep: bool, log_d: f64) -> f64 {
-        let lut = if is_dep {
-            &self.departure[noise_class]
-        } else {
-            &self.approach[noise_class]
-        };
-        fast_npd_lookup(lut, log_d)
+    fn lookup_lerp(
+        block: &[[f64; NPD_LUT_BINS + 1]],
+        noise_class: usize,
+        row: u8,
+        w: f64,
+        log_d: f64,
+    ) -> f64 {
+        use super::thrust::MAX_POWER_ROWS;
+        let base = noise_class * MAX_POWER_ROWS;
+        let lo = fast_npd_lookup(
+            &block[base + usize::from(row.min(MAX_POWER_ROWS as u8 - 1))],
+            log_d,
+        );
+        if w == 0.0 {
+            return lo;
+        }
+        let hi = fast_npd_lookup(
+            &block[(base + usize::from(row) + 1).min(base + MAX_POWER_ROWS - 1)],
+            log_d,
+        );
+        lo + w * (hi - lo)
     }
 
-    /// SEL LUTs flattened for GPU upload, `f64` first: the cruise CUDA path
-    /// evaluates Doc 29 in double precision. All `NUM_CLASSES` approach LUTs
-    /// then all departure LUTs, each `NPD_LUT_BINS + 1` entries. The device
-    /// kernel indexes it identically to `lookup`:
-    /// `flat[(is_dep as usize * NUM_CLASSES + class) * (NPD_LUT_BINS + 1) + bin]`.
-    pub fn sel_luts_flat_f64(&self) -> Vec<f64> {
-        let mut v = Vec::with_capacity(2 * NUM_CLASSES * (NPD_LUT_BINS + 1));
-        for lut in self.approach.iter().chain(self.departure.iter()) {
+    #[inline(always)]
+    pub fn lookup(&self, noise_class: usize, is_dep: bool, row: u8, w: f64, log_d: f64) -> f64 {
+        let block = if is_dep {
+            &self.departure
+        } else {
+            &self.approach
+        };
+        Self::lookup_lerp(block, noise_class, row, w, log_d)
+    }
+
+    /// Doc 29 scaled distance `d_λ` (m) of the class anchor at `log_d`
+    /// (log10 of the slant in feet), power-interpolated with `(row, w)`;
+    /// see [`build_scaled_distance_curve_lut`].
+    #[inline(always)]
+    pub fn lookup_scaled_distance(
+        &self,
+        noise_class: usize,
+        is_dep: bool,
+        row: u8,
+        w: f64,
+        log_d: f64,
+    ) -> f64 {
+        let block = if is_dep {
+            &self.departure_scaled_distance
+        } else {
+            &self.approach_scaled_distance
+        };
+        Self::lookup_lerp(block, noise_class, row, w, log_d)
+    }
+
+    /// SEL and scaled-distance LUTs flattened for GPU upload, `f64` first: the
+    /// cruise CUDA path evaluates Doc 29 in double precision. Four blocks of
+    /// `NUM_CLASSES × MAX_POWER_ROWS` LUTs, each `NPD_LUT_BINS + 1` entries:
+    /// approach SEL, departure SEL, approach `d_λ`, departure `d_λ`. The device
+    /// kernel indexes it identically to `lookup` / `lookup_scaled_distance`:
+    /// `flat[((block * 2 + is_dep) * NUM_CLASSES + class) * MAX_POWER_ROWS *
+    /// (NPD_LUT_BINS + 1) + row * (NPD_LUT_BINS + 1) + bin]`.
+    pub fn device_luts_flat_f64(&self) -> Vec<f64> {
+        use super::thrust::MAX_POWER_ROWS;
+        let mut v = Vec::with_capacity(4 * NUM_CLASSES * MAX_POWER_ROWS * (NPD_LUT_BINS + 1));
+        for lut in self
+            .approach
+            .iter()
+            .chain(&self.departure)
+            .chain(&self.approach_scaled_distance)
+            .chain(&self.departure_scaled_distance)
+        {
             v.extend(lut.iter().copied());
         }
         v
     }
 
     /// The same canonical layout narrowed for the float32 airborne kernel.
-    pub fn sel_luts_flat_f32(&self) -> Vec<f32> {
-        self.sel_luts_flat_f64().into_iter().map(|x| x as f32).collect()
+    pub fn device_luts_flat_f32(&self) -> Vec<f32> {
+        self.device_luts_flat_f64()
+            .into_iter()
+            .map(|x| x as f32)
+            .collect()
     }
 
-    /// Per-event peak A-weighted SPL (LAmax) lookup — replaces the prior
-    /// hardcoded `sel - 12.0` constant. Returns the value before any
-    /// per-segment ΔI / Λ corrections; callers may apply those if they
-    /// need full Doc 29 Eq. 4-12 fidelity (popup peak ranking does not).
+    /// Per-event peak A-weighted SPL (LAmax) lookup, power-interpolated with
+    /// `(row, w)` — replaces the prior hardcoded `sel - 12.0` constant.
+    /// Returns the value before any per-segment ΔI / Λ corrections; callers
+    /// may apply those if they need full Doc 29 Eq. 4-12 fidelity (popup peak
+    /// ranking does not).
     #[inline(always)]
-    pub fn lookup_lmax(&self, noise_class: usize, is_dep: bool, log_d: f64) -> f64 {
-        let lut = if is_dep {
-            &self.departure_lmax[noise_class]
+    pub fn lookup_lmax(
+        &self,
+        noise_class: usize,
+        is_dep: bool,
+        row: u8,
+        w: f64,
+        log_d: f64,
+    ) -> f64 {
+        let block = if is_dep {
+            &self.departure_lmax
         } else {
-            &self.approach_lmax[noise_class]
+            &self.approach_lmax
         };
-        fast_npd_lookup(lut, log_d)
+        Self::lookup_lerp(block, noise_class, row, w, log_d)
     }
 }
 
-/// Build a 128-bin LAmax LUT mirroring `build_npd_lut` for SEL. Beyond 25 000 ft
-/// we extrapolate via spherical divergence (`−20·log10(d/d_ref)`) plus the SEL
-/// per-profile `alpha_eff` for atmospheric absorption — peak SPL and integrated
-/// energy share the same source spectrum, so they share `alpha_eff`. The prior
-/// clamp at the last NPD point overstated far-cruise LAmax by ~18 dB at 50 k ft
-/// slant and caused popup-band false positives.
-pub fn build_lmax_lut(profile: &NpdProfile, is_departure: bool) -> [f64; NPD_LUT_BINS + 1] {
-    let lmax = if is_departure {
-        &profile.departure_lmax
-    } else {
-        &profile.approach_lmax
-    };
+/// Build a 128-bin LAmax LUT mirroring [`build_curve_lut`] for SEL. Beyond
+/// 25 000 ft we extrapolate via spherical divergence (`−20·log10(d/d_ref)`)
+/// plus the SEL curve's `alpha_eff` for atmospheric absorption — peak SPL and
+/// integrated energy share the same source spectrum, so they share `alpha_eff`
+/// per power row. The prior clamp at the last NPD point overstated far-cruise
+/// LAmax by ~18 dB at 50 k ft slant and caused popup-band false positives.
+fn build_lmax_curve_lut(lmax: &[f64; 10], alpha: f64) -> [f64; NPD_LUT_BINS + 1] {
     let mut lut = [0.0f64; NPD_LUT_BINS + 1];
     let last = lmax.len() - 1;
     // `i` is both the bin value (`log_d` from `i`) and the write index — kept as a
@@ -683,7 +656,7 @@ pub fn build_lmax_lut(profile: &NpdProfile, is_departure: bool) -> [f64; NPD_LUT
         if log_d >= LOG_DIST[last] {
             let slant_m = 10.0_f64.powf(log_d) / FT_PER_M;
             let geo = 20.0 * (slant_m / AIRCRAFT_NPD_REF_SLANT_M).log10();
-            let atm = profile.alpha_eff(is_departure) * (slant_m - AIRCRAFT_NPD_REF_SLANT_M);
+            let atm = alpha * (slant_m - AIRCRAFT_NPD_REF_SLANT_M);
             lut[i] = lmax[last] - geo - atm;
             continue;
         }
@@ -708,30 +681,7 @@ pub fn interpolate_sel_logd(profile: &NpdProfile, log_d: f64, is_departure: bool
     } else {
         &profile.approach_sel
     };
-    let last = sel.len() - 1;
-
-    if log_d <= LOG_DIST[0] {
-        let slope = (sel[1] - sel[0]) / (LOG_DIST[1] - LOG_DIST[0]);
-        return sel[0] + slope * (log_d - LOG_DIST[0]);
-    }
-    // Beyond the last NPD point: physics-based extrapolation. Atmospheric
-    // absorption is linear in meters, so the log-linear Doc 29 slope
-    // underestimates loss at large slant. Use spherical divergence
-    // (−20·log10) + per-profile α_eff·(d − d_ref). See `compute_alpha_eff`.
-    if log_d >= LOG_DIST[last] {
-        let slant_m = 10.0_f64.powf(log_d) / FT_PER_M;
-        let geo = 20.0 * (slant_m / AIRCRAFT_NPD_REF_SLANT_M).log10();
-        let atm = profile.alpha_eff(is_departure) * (slant_m - AIRCRAFT_NPD_REF_SLANT_M);
-        return sel[last] - geo - atm;
-    }
-
-    for i in 0..last {
-        if log_d <= LOG_DIST[i + 1] {
-            let frac = (log_d - LOG_DIST[i]) / (LOG_DIST[i + 1] - LOG_DIST[i]);
-            return sel[i] + frac * (sel[i + 1] - sel[i]);
-        }
-    }
-    sel[last]
+    interp_curve_logd(sel, profile.alpha_eff(is_departure), log_d)
 }
 
 /// Per-noise-class reach² (m²) at the standard 40 dB SEL threshold, indexed
@@ -744,14 +694,33 @@ pub fn interpolate_sel_logd(profile: &NpdProfile, log_d: f64, is_departure: bool
 /// class anchor — pre-filter and kernel must agree on which NPD curve sets
 /// the 40 dB envelope, otherwise either false negatives (envelope < kernel
 /// reach) or wasted candidates (envelope > kernel reach) leak through.
+/// Thrust classes envelope the LOUDEST power row per operation: approach
+/// segments interpolate above today's lowest row, so the old lowest-row
+/// reach would false-negative them.
 pub static REACH_SQ_TABLE: LazyLock<[[f64; 2]; NUM_CLASSES]> = LazyLock::new(|| {
     std::array::from_fn(|class_idx| {
-        let p = &PROFILES[CLASS_REP_PROFILE_IDX[class_idx] as usize];
+        let anchor = &PROFILES[CLASS_REP_PROFILE_IDX[class_idx] as usize];
+        let model = super::thrust::thrust_model_for_class(class_idx);
+        let (app_sel, dep_sel) = if model.has_thrust {
+            let app = &model.app_sel[usize::from(model.app_rows - 1)];
+            let dep = &model.dep_sel[usize::from(model.dep_rows - 1)];
+            (app, dep)
+        } else {
+            (&anchor.approach_sel, &anchor.departure_sel)
+        };
         [
-            p.estimate_reach_m(AIRCRAFT_NPD_REACH_THRESHOLD_DB, false)
-                .powi(2),
-            p.estimate_reach_m(AIRCRAFT_NPD_REACH_THRESHOLD_DB, true)
-                .powi(2),
+            estimate_reach_for_curve(
+                app_sel,
+                compute_alpha_eff(app_sel),
+                AIRCRAFT_NPD_REACH_THRESHOLD_DB,
+            )
+            .powi(2),
+            estimate_reach_for_curve(
+                dep_sel,
+                compute_alpha_eff(dep_sel),
+                AIRCRAFT_NPD_REACH_THRESHOLD_DB,
+            )
+            .powi(2),
         ]
     })
 });

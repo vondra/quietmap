@@ -13,6 +13,6 @@ server/dist/
 frontend/dist.*/
 server/dist
 server/dist.*
-server/tsconfig.tsbuildinfo
+*.tsbuildinfo
 /data/
 .pi/

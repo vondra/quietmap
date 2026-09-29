@@ -8,3 +8,4 @@ arrow = { version = "54", default-features = false, features = ["ipc"] }
 arrow-batching = { path = "../arrow-batching" }
 memmap2 = "0.9"
 grid = { path = "../grid" }
+serde_json = "1"

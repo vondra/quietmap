@@ -1,5 +1,6 @@
 /** Enrich Thailand roads from pinned DRR counts and explicit DOH corridor policies. */
 
+import { excludesHoldoutCounts } from './lib/count-holdout.js'
 import { roadObservation } from './lib/road-observation.js'
 import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import { loadThailandDrrSource, thailandDrrTraffic, type ThailandDrrSource } from './lib/roads-th-source.js'
@@ -7,8 +8,10 @@ import { inBbox } from './lib/spatial.js'
 import { SOURCE_ID_TH_ROAD_CLASSIFICATION_FALLBACK, SOURCE_ID_TH_NATIONAL_ROADS } from './lib/source-ids.generated.js'
 import { isSlipRoadClass, writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
 import { writeNationalRoadSquares } from './lib/square-pool.js'
+import { declaredRoadCoverage } from './lib/sources.js'
 
 const THAILAND_BBOX = [5.5, 97.3, 20.5, 105.7] as const
+const COVERED_ROAD_CLASSES = declaredRoadCoverage(SOURCE_ID_TH_NATIONAL_ROADS)
 const BANGKOK_BBOX = [13.5, 100.3, 14.2, 100.9] as const
 const MOTORWAY_AADT: Readonly<Record<string, number>> = {
   '7': 120_000, '9': 100_000, '81': 50_000, '82': 40_000,
@@ -36,7 +39,7 @@ export function matchThailandRoad(row: RoadRow, source: ThailandDrrSource) {
   // A slip road inherits the mainline ref; the route's count was never taken on it.
   if (!ref || isSlipRoadClass(row.roadClass)) return null
   const direct = source.records.get(ref)
-  if (direct) return { ...roadObservation(direct.roadCode, 'both-directions'), kind: 'drr' as const, ...thailandDrrTraffic(direct) }
+  if (direct && !excludesHoldoutCounts()) return { ...roadObservation(direct.roadCode, 'both-directions'), kind: 'drr' as const, ...thailandDrrTraffic(direct) }
   const bangkok = inBbox(row.midLat, row.midLon, BANGKOK_BBOX)
   for (const token of ref.split(/[;,]/).map(value => value.trim()).filter(Boolean)) {
     const motorway = MOTORWAY_AADT[token]
@@ -63,7 +66,9 @@ export async function enrichThailandRoads(preparedDirectory: string, source: Tha
       if (kind === 'drr') tally.matchedDrr++
       else if (kind === 'motorway') tally.matchedMotorway++
       else if (kind === 'trunk') tally.matchedTrunk++
-    }, undefined, { sourceIds: [SOURCE_ID_TH_NATIONAL_ROADS, SOURCE_ID_TH_ROAD_CLASSIFICATION_FALLBACK], when: row => { const traffic = match(row); return traffic === null ||
+    }, COVERED_ROAD_CLASSES, { sourceIds: [SOURCE_ID_TH_NATIONAL_ROADS, SOURCE_ID_TH_ROAD_CLASSIFICATION_FALLBACK], when: row => {
+      const traffic = COVERED_ROAD_CLASSES.has(row.roadClass) ? match(row) : null
+      return traffic === null ||
         (traffic.kind === 'drr' ? SOURCE_ID_TH_NATIONAL_ROADS : SOURCE_ID_TH_ROAD_CLASSIFICATION_FALLBACK) !== row.existingSourceId } }))
   return { ...counters, ...tally }
 }

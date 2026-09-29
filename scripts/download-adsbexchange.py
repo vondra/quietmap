@@ -195,7 +195,7 @@ def main():
     today = datetime.now(timezone.utc).date()
     try:
         if args.last_12:
-            days = sampling_days(resolve_anchor(args.anchor, today))[0]
+            days = sampling_days(resolve_anchor(args.anchor, today)).increment
         else:
             if args.anchor:
                 raise ValueError('--anchor requires --last-12')

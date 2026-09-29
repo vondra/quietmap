@@ -3,16 +3,17 @@ use super::*;
 
 pub(crate) struct AirportSummaryPartRow {
     pub airport_key: String,
-    pub members: Vec<(u64, u16)>,
+    pub members: Vec<(u64, u32)>,
 }
 
 pub(super) fn write_airport_summary_parts(
     out_dir: &Path,
-    airport_aggs: &HashMap<String, MovementUnion>,
+    airport_aggs: &HashMap<u32, MovementUnion>,
+    airports: &[String],
 ) -> Result<()> {
     let mut rows: Vec<_> = airport_aggs
         .iter()
-        .map(|(key, acc)| {
+        .map(|(&airport, acc)| {
             let mut members: Vec<_> = acc
                 .members
                 .iter()
@@ -20,7 +21,7 @@ pub(super) fn write_airport_summary_parts(
                 .collect();
             members.sort_unstable_by_key(|row| row.0);
             AirportSummaryPartRow {
-                airport_key: key.clone(),
+                airport_key: airports[airport as usize].clone(),
                 members,
             }
         })

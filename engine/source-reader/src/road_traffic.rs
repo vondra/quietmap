@@ -12,6 +12,7 @@ pub const ROAD_PROFILES_METADATA_KEY: &str = "roads_time_profiles";
 
 pub struct RoadTrafficColumns<'a> {
     counts: [&'a Float64Array; 4],
+    cross_section: &'a Float64Array,
     estimated: &'a UInt8Array,
     profile_ids: Option<&'a UInt16Array>,
     entries: Vec<RoadProfileEntry>,
@@ -68,6 +69,7 @@ impl<'a> RoadTrafficColumns<'a> {
                 required(batch, "aadt_moto")?,
             ],
             estimated: required(batch, "traffic_estimated")?,
+            cross_section: required(batch, "cross_section_aadt")?,
             profile_ids,
             entries: profiles,
         };
@@ -75,6 +77,7 @@ impl<'a> RoadTrafficColumns<'a> {
             if result
                 .counts
                 .iter()
+                .chain([&result.cross_section])
                 .any(|column| !column.value(row).is_finite() || column.value(row) < 0.0)
                 || result.estimated.value(row) > 15
                 || result.profile_ids.is_some_and(|ids| ids.value(row) as usize > result.entries.len())
@@ -101,6 +104,7 @@ impl<'a> RoadTrafficColumns<'a> {
             heavy: self.counts[2].value(row),
             moto: self.counts[3].value(row),
             estimated: self.estimated.value(row),
+            cross_section_aadt: self.cross_section.value(row),
             time_profile: self
                 .entry_index(row)
                 .and_then(|i| self.entries.get(i).map(|e| e.profile)),
@@ -230,12 +234,14 @@ mod tests {
             .map(|name| Field::new(*name, DataType::Float64, false))
             .collect();
         fields.push(Field::new("traffic_estimated", DataType::UInt8, false));
+        fields.push(Field::new("cross_section_aadt", DataType::Float64, false));
         let columns: Vec<Arc<dyn Array>> = vec![
             Arc::new(Float64Array::from(vec![10_000.0])),
             Arc::new(Float64Array::from(vec![0.0])),
             Arc::new(Float64Array::from(vec![500.0])),
             Arc::new(Float64Array::from(vec![12.5])),
             Arc::new(UInt8Array::from(vec![0b0101])),
+            Arc::new(Float64Array::from(vec![21_025.0])),
         ];
         (
             Schema::new(fields).with_metadata(std::collections::HashMap::from([(
@@ -255,6 +261,8 @@ mod tests {
         assert_eq!(traffic.heavy, 500.0);
         assert_eq!(traffic.moto, 12.5);
         assert_eq!(traffic.estimated, 0b0101);
+        assert_eq!(traffic.cross_section_aadt, 21_025.0);
+        assert!(RoadTrafficColumns::read(&batch.project(&[0, 1, 2, 3, 4]).unwrap()).is_err());
         // Missing contract metadata on an otherwise valid schema.
         assert!(RoadTrafficColumns::read(
             &RecordBatch::try_new(
@@ -268,14 +276,16 @@ mod tests {
         assert!(
             RoadTrafficColumns::read(&batch.project(&[0, 1, 2, 4]).unwrap()).is_err()
         );
+        for (index, name) in [(0, "aadt_light"), (5, "cross_section_aadt")] {
         for value in [Some(f64::NAN), Some(f64::INFINITY), Some(-0.25), None] {
             let mut invalid = columns.clone();
-            invalid[0] = Arc::new(Float64Array::from(vec![value]));
+            invalid[index] = Arc::new(Float64Array::from(vec![value]));
             let mut fields = schema.fields().to_vec();
-            fields[0] = Arc::new(Field::new("aadt_light", DataType::Float64, true));
+            fields[index] = Arc::new(Field::new(name, DataType::Float64, true));
             let invalid_schema = Schema::new(fields).with_metadata(schema.metadata().clone());
             let invalid = RecordBatch::try_new(Arc::new(invalid_schema), invalid).unwrap();
             assert!(RoadTrafficColumns::read(&invalid).is_err());
+        }
         }
         // Out-of-domain bitmask.
         let mut invalid = columns.clone();
@@ -307,6 +317,7 @@ mod tests {
             .collect();
         fields.push(Field::new("traffic_estimated", DataType::UInt8, false));
         fields.push(Field::new("traffic_profile_id", DataType::UInt16, false));
+        fields.push(Field::new("cross_section_aadt", DataType::Float64, false));
         let columns: Vec<Arc<dyn Array>> = vec![
             Arc::new(Float64Array::from(vec![20_000.0])),
             Arc::new(Float64Array::from(vec![0.0])),
@@ -314,6 +325,7 @@ mod tests {
             Arc::new(Float64Array::from(vec![0.0])),
             Arc::new(UInt8Array::from(vec![0])),
             Arc::new(UInt16Array::from(vec![1])),
+            Arc::new(Float64Array::from(vec![22_000.0])),
         ];
         let metadata = std::collections::HashMap::from([
             ("road_traffic_contract".to_owned(), "1".to_owned()),
@@ -360,6 +372,7 @@ mod tests {
             .collect();
         fields.push(Field::new("traffic_estimated", DataType::UInt8, false));
         fields.push(Field::new("traffic_profile_id", DataType::UInt16, false));
+        fields.push(Field::new("cross_section_aadt", DataType::Float64, false));
         // Row 0 carries the profile reference; row 1 is the mixed case: id 0
         // (no observed profile) inside a file that HAS a dictionary.
         let columns: Vec<Arc<dyn Array>> = vec![
@@ -369,6 +382,7 @@ mod tests {
             Arc::new(Float64Array::from(vec![0.0, 0.0])),
             Arc::new(UInt8Array::from(vec![0, 0])),
             Arc::new(UInt16Array::from(vec![1, 0])),
+            Arc::new(Float64Array::from(vec![22_000.0, 22_000.0])),
         ];
         let metadata = std::collections::HashMap::from([
             ("road_traffic_contract".to_owned(), "1".to_owned()),
@@ -433,7 +447,7 @@ mod tests {
 
         // A column without a dictionary is a producer bug; absence of both is
         // a legal legacy arrow (no observed profile anywhere).
-        let orphan = batch.project(&[0, 1, 2, 3, 4]).unwrap();
+        let orphan = batch.project(&[0, 1, 2, 3, 4, 6]).unwrap();
         let orphan_schema = Arc::new(
             Schema::new(orphan.schema().fields().to_vec()).with_metadata(
                 std::collections::HashMap::from([("road_traffic_contract".to_owned(), "1".to_owned())]),
@@ -483,6 +497,7 @@ mod tests {
             Arc::new(Float64Array::from(vec![0.0, 0.0])),
             Arc::new(UInt8Array::from(vec![0, 0])),
             Arc::new(Float64Array::from(vec![1.0, 0.0])),
+            Arc::new(Float64Array::from(vec![22_000.0, 22_000.0])),
         ]).unwrap();
         assert!(RoadTrafficColumns::read(&replaced).is_err(), "wrong-typed profile column rejected");
     }

@@ -25,4 +25,4 @@ Freight is not covered: the timetable is passenger-only.
 
 ## Buildings and terrain
 
-The national topographic database has building data; the bulk download requires an API key and is not loaded. Heights: OpenStreetMap tags and the GHSL average for the block.
+The national topographic database has building data; the bulk download requires an API key and is not loaded. Heights: OpenStreetMap tags and the typical height for the footprint size.

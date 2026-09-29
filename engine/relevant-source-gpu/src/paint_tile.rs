@@ -1,10 +1,10 @@
-//! Reuse saved corners to produce the outdoor surface-power planes at shared receivers.
+//! Reuse saved corners to produce the surface-power planes at every pixel-centre receiver.
 use crate::{
-    cuda_bridge::{DeviceBuffer, RelevantSourceCuda},
+    cuda_bridge::{DeviceBuffer, DeviceWeather, RelevantSourceCuda},
     relevance_partition::build_relevant_source_partition,
     source_frame::*,
     surface_gpu::SurfaceGpu,
-    tile_receivers::TileReceivers,
+    receiver_points::ReceiverPoints,
     tile_source_incidence::{build_tile_source_incidence, TileMetricLattice, TileSourceIncidence},
 };
 use anyhow::{ensure, Context, Result};
@@ -16,7 +16,7 @@ pub fn paint_tile(
     scene: &SurfaceGpu,
     x: u32,
     y: u32,
-    receivers: &TileReceivers,
+    receivers: &ReceiverPoints,
     corners: &[CornerEnergy],
 ) -> Result<[Vec<f32>; tile_painter::hm3::SURFACE_LAYERS.len()]> {
     ensure!(
@@ -35,8 +35,7 @@ pub fn paint_tile(
         .map(|source| source.device)
         .collect();
     let lattice = TileMetricLattice::for_tile(&scene.host.frame, 13, x, y);
-    let mut base = build_tile_source_incidence(&device_sources, &lattice);
-    receivers.admit_enclosed_sources(&device_sources, &mut base);
+    let base = build_tile_source_incidence(&device_sources, &lattice);
     let local_ids: BTreeMap<_, _> = scene
         .host
         .sources
@@ -49,6 +48,18 @@ pub fn paint_tile(
     let altitude = DeviceBuffer::from_slice(&receivers.altitude)?;
     let reflection = DeviceBuffer::from_slice(&receivers.reflection)?;
     let floor = DeviceBuffer::from_slice(&receivers.floor)?;
+    // Per-pixel weather from the receiver squares' windows (the popup samples the same
+    // windows, so the two agree); the metric frame inverts exactly, up to f32 rounding.
+    let weather: Vec<DeviceWeather> = receivers
+        .x
+        .iter()
+        .zip(&receivers.y)
+        .map(|(&x, &y)| {
+            let [lat, lon] = scene.host.frame.decode(x, y);
+            DeviceWeather::from_meteorology(&scene.host.receiver_weather(lat, lon))
+        })
+        .collect();
+    let weather = DeviceBuffer::from_slice(&weather)?;
     let mut planes = std::array::from_fn(|_| Vec::new());
     for (layer, plane) in planes.iter_mut().enumerate() {
         let mut incidence = TileSourceIncidence {
@@ -87,8 +98,7 @@ pub fn paint_tile(
             db[period] = 0.0;
             10.0_f64.powf(noise_compute::periods::compute_lden(db[0], db[1], db[2]) / 10.0)
         });
-        let mut partition = build_relevant_source_partition(&incidence, &energies, weights)?;
-        receivers.clear_enclosed_background(&mut partition);
+        let partition = build_relevant_source_partition(&incidence, &energies, weights)?;
         let background: Vec<_> = partition
             .background_corner_energy
             .iter()
@@ -106,6 +116,7 @@ pub fn paint_tile(
             &dy,
             &altitude,
             &reflection,
+            &weather,
         )?;
         *plane = energy;
     }

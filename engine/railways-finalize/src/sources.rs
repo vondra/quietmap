@@ -31,6 +31,19 @@ pub fn should_overwrite(existing_id: u16, new_id: u16) -> bool {
     }
 }
 
+/// A baseline-tier railway claim (the CZ timetable-silent residual) says a timetable runs no train
+/// on a track; it stands only on a line whose tracks carry no ranked evidence in either category.
+pub fn is_residual(source_id: u16) -> bool {
+    get_source(source_id).is_some_and(|source| matches!(source.provenance, Provenance::Baseline))
+}
+
+/// Proxy, heuristic and residual railway claims repeat one whole-line value on every track they
+/// stamp; measured sources observe the track itself (routed trips, platform stop counts).
+pub fn stamps_whole_line(source_id: u16) -> bool {
+    get_source(source_id)
+        .is_some_and(|source| source.provenance.rank() <= Provenance::NationalProxy.rank())
+}
+
 pub fn nationally_owned(source: &Source) -> bool {
     matches!(
         source.provenance,

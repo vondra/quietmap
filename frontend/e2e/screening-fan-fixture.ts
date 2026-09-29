@@ -42,7 +42,11 @@ export function screeningFanPopupFixture(lat: number, lng: number): NoiseCompute
       model: 'cnossos',
       baseline: {
         geometric_db: 31,
-        atmospheric_bands: [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28],
+        atmospheric_bands: {
+          day: [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28],
+          evening: [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28],
+          night: [0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28],
+        },
         ground_factor_g: 0.5,
         source_height_m: 0.05,
         finite_line_corr_db: -1.2,

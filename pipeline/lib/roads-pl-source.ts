@@ -1,5 +1,6 @@
 /** Parse the admitted GDDKiA GPR 2020/2021 segment cache. */
 
+import { withholdsCountLine, excludesHoldoutCounts } from './count-holdout.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import { readPinnedRoadSource } from './pinned-road-source.js'
 
@@ -77,6 +78,8 @@ export function parsePolishGprSource(raw: string): PolishGprSource {
     })
   }
   if (result.segments.length === 0) throw new Error('Polish GPR source has no usable measurements')
+  result.segments = result.segments.filter(section => section.coordinates
+    ? !withholdsCountLine(section.coordinates) : !excludesHoldoutCounts())
   return result
 }
 

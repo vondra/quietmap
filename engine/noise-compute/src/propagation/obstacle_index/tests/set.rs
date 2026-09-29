@@ -113,3 +113,31 @@ fn dateline_sector_scan_uses_the_short_receiver_frame() {
         "sector hits: {hits:?}"
     );
 }
+
+/// Two indexes on different origins whose footprints reuse id 0: the merged index crosses the
+/// same walls at the same chainages, and the two footprints keep distinct ids.
+#[test]
+fn a_merged_set_crosses_the_same_walls_with_set_unique_ids() {
+    let mut west = ObstacleIndex::builder(OLAT, OLON);
+    west.add_ring(&square(0.0, 0.0, 10.0), 12.0, ObstacleKind::Building, 0);
+    west.add_polyline(&[ll(40.0, -20.0), ll(40.0, 20.0)], 3.0, ObstacleKind::Barrier, 1);
+    let east_origin = ll(500.0, 0.0);
+    let mut east = ObstacleIndex::builder(east_origin.0, east_origin.1);
+    east.add_ring(&square(300.0, 0.0, 15.0), 20.0, ObstacleKind::Building, 0);
+    let set = ObstacleSet { indexes: vec![std::sync::Arc::new(west.build()), std::sync::Arc::new(east.build())] };
+    let merged = set.merged(OLAT, OLON + 0.001);
+    let (from, to) = (ll(-100.0, 1.0), ll(400.0, 2.0));
+    let mut expected = Vec::new();
+    set.crossings(from.0, from.1, to.0, to.1, &mut expected);
+    let got = run(&merged, from, to);
+    assert_eq!(got.len(), expected.len());
+    assert_eq!(got.len(), 5);
+    for (g, e) in got.iter().zip(&expected) {
+        assert!((g.t - e.t).abs() * 500.0 < 1e-3, "{} vs {}", g.t, e.t);
+        assert_eq!((g.kind, g.height_m), (e.kind, e.height_m));
+    }
+    let ids: Vec<u32> = got.iter().map(|c| c.id).collect();
+    assert_eq!(ids[0], ids[1]);
+    assert_eq!(ids[3], ids[4]);
+    assert_ne!(ids[0], ids[3]);
+}

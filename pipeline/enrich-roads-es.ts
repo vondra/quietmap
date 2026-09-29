@@ -3,6 +3,7 @@
 import { roadObservation } from './lib/road-observation.js'
 import { SOURCE_ID_ES_NATIONAL_ROADS } from './lib/source-ids.generated.js'
 import { shouldOverwrite } from './lib/provenance.js'
+import { declaredRoadCoverage } from './lib/sources.js'
 import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
   loadMitmaRoadCensus, normalizeSpanishRoadRef, SPAIN_ROAD_SOURCE_BBOX,
@@ -14,6 +15,7 @@ import { pointToPolylineDist } from './lib/spatial.js'
 
 const SOURCE_ID = SOURCE_ID_ES_NATIONAL_ROADS
 const MAXIMUM_MATCH_DISTANCE_M = 30_000
+const COVERED_ROAD_CLASSES = declaredRoadCoverage(SOURCE_ID)
 
 export function indexMitmaRoadCensus(
   sections: readonly MitmaRoadSection[],
@@ -72,8 +74,8 @@ export async function enrichSpanishRoads(
         } : null
       },
       undefined,
-      undefined,
-      { sourceIds: [SOURCE_ID], when: row => match(row) === null },
+      COVERED_ROAD_CLASSES,
+      { sourceIds: [SOURCE_ID], when: row => !COVERED_ROAD_CLASSES.has(row.roadClass) || match(row) === null },
     ))
 }
 

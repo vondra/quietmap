@@ -1,6 +1,5 @@
-//! Validate prepared aircraft schemas and both sampling windows against shuffle manifests.
+//! Validate prepared aircraft schemas and the sampling window against shuffle manifests.
 
-use crate::cli_validate::{read_ga_n_days, read_window_n_days};
 use aircraft_extract::{arrow_schemas as schemas, spatial::square_directories};
 use anyhow::{Context, Result};
 use arrow::{datatypes::Schema, ipc::reader::FileReader};
@@ -12,20 +11,19 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub fn audit_prepared(prepared_year: &Path, shuffled: &Path) -> Result<()> {
-    let primary = read_window_n_days(shuffled)?;
-    let ga = read_ga_n_days(shuffled)?;
+    let window = aircraft_extract::shuffle::completion::sampling_window(shuffled)?;
     let kinds = [
         (
             "airborne.arrow",
-            schemas::with_n_days_and_windows(schemas::airborne_schema(), primary, ga),
+            schemas::with_sampling_window(schemas::airborne_schema(), &window),
         ),
         (
             "airport_traffic.arrow",
-            schemas::with_n_days_and_windows(schemas::airport_traffic_schema(), primary, ga),
+            schemas::with_sampling_window(schemas::airport_traffic_schema(), &window),
         ),
         (
             "cruise.arrow",
-            schemas::with_n_days(schemas::cruise_schema(), primary),
+            schemas::with_sampling_window(schemas::cruise_schema(), &window),
         ),
         (
             "synth_airport_lines.arrow",
@@ -71,7 +69,9 @@ pub fn audit_prepared(prepared_year: &Path, shuffled: &Path) -> Result<()> {
         "prepared airborne census differs from sealed shuffle: files {airborne_files}/{expected_airborne_files}, rows {airborne_rows}/{expected_airborne_rows}"
     );
     eprintln!(
-        "aircraft audit: {files} files; {airborne_files} airborne files; {airborne_rows} sub-segment rows; airline days={primary}, GA days={ga}"
+        "aircraft audit: {files} files; {airborne_files} airborne files; {airborne_rows} sub-segment rows; baseline days={}, increment days={}",
+        window.baseline_days,
+        window.increment_days
     );
     Ok(())
 }
@@ -166,19 +166,17 @@ mod tests {
         let shuffled = temp.path().join("shuffled");
         std::fs::create_dir_all(year.join("z9/276/173")).unwrap();
         std::fs::create_dir_all(&shuffled).unwrap();
-        std::fs::write(shuffled.join("days"), "2025-01-01\n").unwrap();
-        std::fs::write(shuffled.join("ga_days"), "").unwrap();
+        let window = write_manifests(&shuffled);
         write_airborne_inventory(&shuffled, 0);
         aircraft_extract::arrow_io::write_airborne(
             &year.join("z9/276/173/airborne.arrow"),
             &[],
-            1,
-            0,
+            &window,
         )
         .unwrap();
         audit_prepared(&year, &shuffled).unwrap();
         let traffic = year.join("z9/276/173/airport_traffic.arrow");
-        aircraft_extract::arrow_io::write_airport_traffic(&traffic, &[], 1, 0).unwrap();
+        aircraft_extract::arrow_io::write_airport_traffic(&traffic, &[], &window).unwrap();
         let error = audit_prepared(&year, &shuffled).unwrap_err();
         assert!(error.to_string().contains(AIRPORT_SUMMARIES_KEY));
         aircraft_extract::arrow_io::stamp_airport_summaries(&traffic, &Default::default()).unwrap();
@@ -192,14 +190,12 @@ mod tests {
         let shuffled = temp.path().join("shuffled");
         std::fs::create_dir_all(year.join("z9/276/173")).unwrap();
         std::fs::create_dir_all(&shuffled).unwrap();
-        std::fs::write(shuffled.join("days"), "2025-01-01\n").unwrap();
-        std::fs::write(shuffled.join("ga_days"), "").unwrap();
+        let window = write_manifests(&shuffled);
         write_airborne_inventory(&shuffled, 1);
         aircraft_extract::arrow_io::write_airborne(
             &year.join("z9/276/173/airborne.arrow"),
             &[],
-            1,
-            0,
+            &window,
         )
         .unwrap();
         let error = audit_prepared(&year, &shuffled).unwrap_err();
@@ -207,20 +203,32 @@ mod tests {
     }
 
     #[test]
-    fn both_class_windows_must_match_even_when_no_rows() {
+    fn the_sampling_window_must_match_even_when_no_rows() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("airborne.arrow");
-        let actual = schemas::with_n_days_and_windows(schemas::airborne_schema(), 12, 365);
+        let shuffled = temp.path().join("shuffled");
+        std::fs::create_dir_all(&shuffled).unwrap();
+        let window = write_manifests(&shuffled);
+        let actual = schemas::with_sampling_window(schemas::airborne_schema(), &window);
         FileWriter::try_new(File::create(&path).unwrap(), &actual)
             .unwrap()
             .finish()
             .unwrap();
         assert!(audit_file(&path, &actual).is_ok());
-        for wrong in [
-            schemas::with_n_days_and_windows(schemas::airborne_schema(), 11, 365),
-            schemas::with_n_days_and_windows(schemas::airborne_schema(), 12, 364),
-        ] {
-            assert!(audit_file(&path, &wrong).is_err());
+        let mut other_increment = window.clone();
+        other_increment.increment_days_sha256 = "another day list".into();
+        let mut other_baseline = window;
+        other_baseline.baseline_days += 1;
+        for wrong in [other_increment, other_baseline] {
+            let expected = schemas::with_sampling_window(schemas::airborne_schema(), &wrong);
+            assert!(audit_file(&path, &expected).is_err());
         }
+    }
+
+    fn write_manifests(shuffled: &Path) -> noise_compute::emission::aircraft::SamplingWindow {
+        use aircraft_extract::shuffle::completion::*;
+        std::fs::write(shuffled.join(BASELINE_DAYS_MANIFEST), "2025-01-01\n2025-01-02").unwrap();
+        std::fs::write(shuffled.join(INCREMENT_DAYS_MANIFEST), "2025-01-01").unwrap();
+        sampling_window(shuffled).unwrap()
     }
 }

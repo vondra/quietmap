@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 import tempfile
 import unittest
@@ -103,6 +104,24 @@ class WorldBuildStateTests(unittest.TestCase):
             self.assertEqual(updated['status'], status)
             self.assertNotIn('remaining', updated)
             self.assertEqual(updated['rows'], counts)
+            self.assertEqual({key: updated[key] for key in ('product_commit', 'product_dirty')},
+                             state.product_code_identity())
+
+    def test_code_identity_names_head_and_marks_edits_and_untracked_files_dirty(self):
+        def git(*arguments):
+            return subprocess.check_output(['git', '-c', 'user.name=test', '-c', 'user.email=test@example.invalid',
+                                            *arguments], cwd=self.repo, text=True).strip()
+        git('init', '-q')
+        git('add', 'scripts/writer.py')
+        git('commit', '-q', '-m', 'writer')
+        commit = git('rev-parse', 'HEAD')
+        identity = state.product_code_identity.__wrapped__
+        self.assertEqual(identity(self.repo), {'product_commit': commit, 'product_dirty': False})
+        self.code.write_text('edited code')
+        self.assertEqual(identity(self.repo), {'product_commit': commit, 'product_dirty': True})
+        git('checkout', '-q', '--', 'scripts/writer.py')
+        (self.repo / 'scripts/new.py').write_text('untracked')
+        self.assertTrue(identity(self.repo)['product_dirty'])
 
     def test_source_change_needs_review_then_rebuilds_only_the_steps_the_review_leaves_out(self):
         before = (self.output / state.PIN_NAME).read_bytes()

@@ -11,6 +11,7 @@
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 pub mod aircraft_v6;
+pub mod building_exposure;
 pub mod query;
 pub mod rail_traffic;
 pub mod road_traffic;
@@ -47,6 +48,7 @@ static STORE: std::sync::LazyLock<RwLock<SquareStore>> =
 
 #[cfg(feature = "node")]
 static RASTERS: std::sync::OnceLock<raster_reader::RealRasters> = std::sync::OnceLock::new();
+
 /// The live `…/prepared/2026` dir — the structure root: every prepared
 /// square carries its own `structures.arrow` and `structures.qoix` under
 /// `z9/<x>/<y>/` beside its other arrows.
@@ -104,36 +106,60 @@ impl SquareStore {
     }
 
     /// Clone every requested square before evicting anything. The returned
-    /// Arcs keep the query valid without holding the global lock.
-    fn pin_working_set(&mut self, square_names: &[String]) -> Vec<Arc<SquareData>> {
-        let acquired: Vec<_> =
-            square_names
-                .iter()
-                .map(|id| {
-                    Arc::clone(self.squares.get(id.as_str()).expect(
-                        "a successful working-set load must contain every requested square",
-                    ))
-                })
-                .collect();
+    /// Arcs keep the query valid without holding the global lock. A square
+    /// that left the cache mid-acquisition refuses this click; it never
+    /// panics the server (pin-aware forget and retain make this unreachable
+    /// in practice, but a concurrent eviction must still fail safe).
+    fn pin_working_set(
+        &mut self,
+        square_names: &[String],
+    ) -> napi::Result<Vec<Arc<SquareData>>> {
+        let mut acquired = Vec::with_capacity(square_names.len());
+        for id in square_names {
+            match self.squares.get(id.as_str()) {
+                Some(data) => acquired.push(Arc::clone(data)),
+                None => {
+                    return Err(Error::new(
+                        Status::GenericFailure,
+                        format!(
+                            "square {id} left the cache during its own acquisition; retry the click"
+                        ),
+                    ));
+                }
+            }
+        }
         self.retain_working_set(square_names);
-        acquired
+        Ok(acquired)
     }
 }
 
 /// Load outside the store lock, then atomically pin the complete requested set.
 /// Successful acquisition drops old areas that no active query has pinned, so
 /// decoded Arrow bodies grow with concurrent working sets rather than process
-/// history. First insert wins on a race; a load error changes nothing.
+/// history. First insert wins on a race; a load error changes nothing. Every
+/// failure refuses this click with a named error; nothing here panics.
 #[cfg(feature = "node")]
 fn acquire_squares_parallel(square_names: &[String]) -> napi::Result<Vec<Arc<SquareData>>> {
     let (cached_pins, missing, prepared_dir) = {
-        let store = STORE.read().expect("square store poisoned");
+        let store = STORE
+            .read()
+            .map_err(|error| {
+                Error::new(
+                    Status::GenericFailure,
+                    format!("square store lock poisoned: {error}"),
+                )
+            })?;
         let (cached_pins, missing) = store.pin_cached(square_names);
         (cached_pins, missing, store.prepared_dir.clone())
     };
     if missing.is_empty() {
-        let mut store = STORE.write().expect("square store poisoned");
-        let acquired = store.pin_working_set(square_names);
+        let mut store = STORE.write().map_err(|error| {
+            Error::new(
+                Status::GenericFailure,
+                format!("square store lock poisoned: {error}"),
+            )
+        })?;
+        let acquired = store.pin_working_set(square_names)?;
         drop(cached_pins);
         return Ok(acquired);
     }
@@ -158,16 +184,27 @@ fn acquire_squares_parallel(square_names: &[String]) -> napi::Result<Vec<Arc<Squ
             .collect();
         handles
             .into_iter()
-            .map(|handle| handle.join().expect("square load panicked"))
+            .map(|handle| match handle.join() {
+                Ok(loaded) => loaded,
+                Err(_) => Err(format!(
+                    "square loader panicked while loading [{}]; retry the click",
+                    missing.join(", ")
+                )),
+            })
             .collect::<Result<Vec<_>, _>>()
             .map(|chunks| chunks.into_iter().flatten().collect())
     });
     let loaded = loaded.map_err(|error| Error::new(Status::GenericFailure, error))?;
-    let mut store = STORE.write().expect("square store poisoned");
+    let mut store = STORE.write().map_err(|error| {
+        Error::new(
+            Status::GenericFailure,
+            format!("square store lock poisoned: {error}"),
+        )
+    })?;
     for (id, data) in loaded {
         store.squares.entry(id).or_insert_with(|| Arc::new(data));
     }
-    let acquired = store.pin_working_set(square_names);
+    let acquired = store.pin_working_set(square_names)?;
     drop(cached_pins);
     Ok(acquired)
 }
@@ -183,14 +220,19 @@ fn prune_source_cache(square_names: &[String]) -> napi::Result<()> {
     Ok(())
 }
 
-/// A square answered without one of its layers leaves the cache with its query (the pins keep
-/// the running query valid), so a repaired file serves on the next click.
+/// A square answered without one of its layers leaves the cache with its
+/// query, so a repaired file serves on the next click. Squares pinned by a
+/// concurrent acquire stay: their pins keep both queries valid, and the next
+/// served-with-fault forget evicts them once unpinned. Forgetting a pinned
+/// square used to abort a concurrent acquire at pin time.
 #[cfg(feature = "node")]
 fn forget_squares_served_with_a_fault(square_names: &[String]) -> napi::Result<()> {
     let mut store = STORE
         .write()
         .map_err(|e| Error::new(Status::GenericFailure, format!("{e}")))?;
-    store.squares.retain(|id, _| !square_names.contains(id));
+    store
+        .squares
+        .retain(|id, data| !square_names.contains(id) || Arc::strong_count(data) > 1);
     Ok(())
 }
 
@@ -271,10 +313,8 @@ fn source_square_names(squares: Result<Vec<grid::Square>, String>) -> napi::Resu
 /// Obstacle footprints intersecting a bbox with their AS-USED heights (after
 /// the low-profile cap) — the building-height debug overlay's data source,
 /// so the map shows exactly what the propagation model screens with. JSON:
-/// [{p: [polygon rings…], h, t, c}] (rings are [lat,lon] vertices, exterior
-/// first, then holes; h = height m, t = height
-/// tier 0 mapped/1 floors/2 default/3 city-measured zonal/4 ANBH areal prior
-/// — see noise_compute::low_profile, c = low-profile-capped).
+/// [{p: [polygon rings…], h}] (rings are [lat,lon] vertices, exterior first,
+/// then holes; h = height m).
 pub fn query_obstacle_footprints(
     south: f64,
     west: f64,
@@ -284,7 +324,8 @@ pub fn query_obstacle_footprints(
     prune_source_cache(&[])?;
     let fps = structure_store::footprints_in_bbox(year_dir()?, south, west, north, east)
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
-    Ok(serde_json::to_string(&fps).unwrap())
+    serde_json::to_string(&fps)
+        .map_err(|error| Error::new(Status::GenericFailure, format!("failed to encode footprints: {error}")))
 }
 
 /// Map the engine's envelope class to the small plain-language vocabulary
@@ -317,12 +358,16 @@ pub fn query_building_at(lat: f64, lng: f64) -> napi::Result<String> {
         .map_err(|e| Error::new(Status::GenericFailure, e))?;
     let result = match structure_store::point_inside_footprint(&set, lat, lng) {
         None => serde_json::Value::Null,
+        // `building_exposure`: a click here answers the building's noisiest façade (the popup's
+        // own enclosed-footprint rule), which validation never scores as an outdoor point.
         Some((class, height)) => serde_json::json!({
             "height_m": height,
             "building_type": building_type_from_envelope(class),
+            "building_exposure": set.enclosed_footprint_at(lat, lng).is_some(),
         }),
     };
-    Ok(serde_json::to_string(&result).unwrap())
+    serde_json::to_string(&result)
+        .map_err(|error| Error::new(Status::GenericFailure, format!("failed to encode building: {error}")))
 }
 
 #[cfg(test)]
@@ -361,10 +406,16 @@ mod building_type_tests {
 
 /// Compute full noise at a point using noise-compute engine.
 /// Returns JSON with total Lden, per-source breakdown, top contributors.
+/// `receiver_height_m` (above the DEM, default 4 m) lets validation score the
+/// model at a microphone's own height; every layer reads `Receiver::altitude_m`.
 #[cfg(feature = "node")]
 #[napi]
-pub fn query_noise_at_point(lat: f64, lng: f64) -> napi::Result<String> {
-    query_noise_impl(lat, lng, SEGMENT_TOP_K_PER_KIND)
+pub fn query_noise_at_point(
+    lat: f64,
+    lng: f64,
+    receiver_height_m: Option<f64>,
+) -> napi::Result<String> {
+    query_noise_impl(lat, lng, receiver_height_m, SEGMENT_TOP_K_PER_KIND)
 }
 
 /// Variant of `query_noise_at_point` with a much higher per-kind segment cap
@@ -374,11 +425,27 @@ pub fn query_noise_at_point(lat: f64, lng: f64) -> napi::Result<String> {
 #[cfg(feature = "node")]
 #[napi]
 pub fn query_noise_at_point_unfiltered(lat: f64, lng: f64) -> napi::Result<String> {
-    query_noise_impl(lat, lng, SEGMENT_TOP_K_PER_KIND_FULL)
+    query_noise_impl(lat, lng, None, SEGMENT_TOP_K_PER_KIND_FULL)
 }
 
 #[cfg(feature = "node")]
-fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<String> {
+fn query_noise_impl(
+    lat: f64,
+    lng: f64,
+    receiver_height_m: Option<f64>,
+    top_k_per_kind: usize,
+) -> napi::Result<String> {
+    let receiver_height_m =
+        receiver_height_m.unwrap_or(noise_compute::constants::DEFAULT_RECEIVER_HEIGHT);
+    if !(receiver_height_m.is_finite()
+        && receiver_height_m
+            >= noise_compute::propagation::path_effects::RECEIVER_HEIGHT_FLOOR_M)
+    {
+        return Err(Error::new(
+            Status::InvalidArg,
+            format!("receiver height {receiver_height_m} m is below the engine's receiver floor"),
+        ));
+    }
     // Per-stage timing probes (env-gated: `POPUP_TIMING=1` to enable). Inline
     // `Instant::now()` is cheaper and less destructive than perf/flamegraph
     // for popup-scale work, and lets us watch one number per stage land in
@@ -388,34 +455,92 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
 
     let initial_square_names = source_square_names(squares_within_reach(lat, lng))?;
     prune_source_cache(&initial_square_names)?;
-    let mut obstacle_set = structure_store::load_obstacle_set(year_dir()?, lat, lng)
+    let click_obstacles = structure_store::load_obstacle_set(year_dir()?, lat, lng)
         .map_err(|error| Error::new(Status::GenericFailure, error))?;
-    let (facade_lat, facade_lng, inside_envelope) =
-        structure_store::locate_facade_receiver(&obstacle_set, lat, lng);
-    if (facade_lat, facade_lng) != (lat, lng) {
-        obstacle_set = structure_store::load_obstacle_set(year_dir()?, facade_lat, facade_lng)
+    // Inside an enclosed building every level is the building exposure's: its
+    // stored noisiest façade receiver, evaluated exactly here.
+    let exposure = click_obstacles
+        .enclosed_footprint_at(lat, lng)
+        .map(|building| {
+            building_exposure::stored_building_exposure(
+                year_dir()?,
+                &click_obstacles,
+                building,
+                lat,
+                lng,
+            )
+            .map_err(|error| Error::new(Status::GenericFailure, error))
+        })
+        .transpose()?;
+    if exposure.is_some_and(|exposure| exposure.receiver.is_none()) {
+        let real_rasters = RASTERS
+            .get()
+            .ok_or_else(|| Error::new(Status::GenericFailure, "source_init was never called"))?;
+        let checked = raster_reader::CheckedRasters::new(real_rasters);
+        let elevation =
+            noise_compute::types::RasterSampler::elevation(&checked, lat, lng);
+        checked
+            .ensure_valid()
+            .map_err(|error| Error::new(Status::GenericFailure, error.to_string()))?;
+        let wire_result = wire::build_wire_result(
+            noise_compute::types::NoiseResult::empty(),
+            lat,
+            lng,
+            elevation,
+            &noise_compute::types::Receiver {
+                height_m: receiver_height_m,
+                ..noise_compute::types::Receiver::new(lat, lng, elevation)
+            },
+            exposure.map(Into::into),
+            Vec::new(),
+        );
+        return serde_json::to_string(&wire_result).map_err(|error| {
+            Error::new(
+                Status::GenericFailure,
+                format!("failed to encode empty popup: {error}"),
+            )
+        });
+    }
+    let (receiver_lat, receiver_lng) = exposure
+        .and_then(|exposure| exposure.receiver)
+        .map_or((lat, lng), |receiver| receiver.latitude_longitude());
+    let obstacle_set = if exposure.is_some() {
+        structure_store::load_obstacle_set(year_dir()?, receiver_lat, receiver_lng)
+            .map_err(|error| Error::new(Status::GenericFailure, error))?
+    } else {
+        click_obstacles
+    };
+
+    let square_names = source_square_names(squares_within_reach(receiver_lat, receiver_lng))?;
+    // The acquired Arcs pin this query's working set without holding the
+    // global lock while batches decode. Collection clones what compute needs
+    // (segments, batches with mmap-backed arrays), so the pins drop here:
+    // compute runs unpinned, and a served-with-fault forget below evicts
+    // unless a *concurrent* query still pins — the query's own pins must not
+    // protect its own forget.
+    let t_load;
+    let mut sources;
+    {
+        let squares = acquire_squares_parallel(&square_names)?;
+        let square_refs: Vec<_> = square_names
+            .iter()
+            .zip(&squares)
+            .map(|(id, data)| {
+                grid::parse_square_name(id)
+                    .map(|square| (square, data.as_ref()))
+                    .ok_or_else(|| {
+                        Error::new(
+                            Status::GenericFailure,
+                            format!("invalid square name {id} in its own acquisition"),
+                        )
+                    })
+            })
+            .collect::<napi::Result<_>>()?;
+
+        t_load = t_start.elapsed();
+        sources = collect_from_square_data(&square_refs, receiver_lat, receiver_lng)
             .map_err(|error| Error::new(Status::GenericFailure, error))?;
     }
-
-    let square_names = source_square_names(squares_within_reach(facade_lat, facade_lng))?;
-    // The returned Arcs pin this whole query without holding the global lock.
-    // Concurrent popups can load or reuse their own working sets while this
-    // one decodes batches and computes.
-    let squares = acquire_squares_parallel(&square_names)?;
-    let square_refs: Vec<_> = square_names
-        .iter()
-        .zip(&squares)
-        .map(|(id, data)| {
-            (
-                grid::parse_square_name(id).expect("canonical square name"),
-                data.as_ref(),
-            )
-        })
-        .collect();
-
-    let t_load = t_start.elapsed();
-    let mut sources = collect_from_square_data(&square_refs, facade_lat, facade_lng)
-        .map_err(|error| Error::new(Status::GenericFailure, error))?;
     let t_collect = t_start.elapsed() - t_load;
 
     let real_rasters = RASTERS
@@ -453,15 +578,22 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
     let vector_refl = noise_compute::propagation::obstacle_index::VectorReflectionSampler {
         inner: rasters,
         set: &obstacle_set,
+        own_footprint: exposure.map(|exposure| exposure.building),
     };
     let rasters: &dyn noise_compute::types::RasterSampler = &vector_refl;
-    let receiver = noise_compute::types::Receiver::new(
-        facade_lat,
-        facade_lng,
-        rasters.elevation(facade_lat, facade_lng),
-    );
+    let receiver = noise_compute::types::Receiver {
+        height_m: receiver_height_m,
+        ..noise_compute::types::Receiver::new(
+            receiver_lat,
+            receiver_lng,
+            rasters.elevation(receiver_lat, receiver_lng),
+        )
+    };
 
     let mut traces = noise_compute::types::TraceCollector::new();
+    // In-kernel trace pre-selection (ground, cruise) keeps the same top-K
+    // the global cap keeps; the kernels report kept totals for denominators.
+    traces.trace_cap = Some(top_k_per_kind);
     let mut result = noise_compute::compute_at_point(
         &receiver,
         &sources.roads,
@@ -486,12 +618,12 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         &sources.airport_summary,
         rasters,
         &obstacle_set,
-        sources.n_days,
+        sources.aircraft_sampling_window.as_ref(),
         top_k_per_kind,
     ) {
         square_store::warn_once::warn_once(
             &format!("{fault}; serving without the aircraft layer"),
-            &format!("first seen at ({facade_lat:.5}, {facade_lng:.5})"),
+            &format!("first seen at ({receiver_lat:.5}, {receiver_lng:.5})"),
         );
         sources.unavailable_layers.push("aircraft");
         sources.unavailable_layers.sort_unstable();
@@ -514,33 +646,26 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
         t.load_ms = t_load.as_secs_f64() * 1000.0;
         t.collect_ms = t_collect.as_secs_f64() * 1000.0;
     }
-    let facade_lden = result.total.lden_db;
-    let indoor = inside_envelope.and_then(|winner| {
-        winner
-            .effective_class
-            .delta_db()
-            .map(|delta| (winner.stored_class, delta))
-    });
-    // Inside a building the popup publishes the indoor estimate in every level
-    // row, derived from the outdoor facade level.
-    noise_compute::present::project_result_to_indoor_display(
-        &mut result,
-        indoor.map(|(_, delta)| delta),
-    );
     let wire_result = wire::build_wire_result(
         result,
         lat,
         lng,
         elevation,
-        indoor.map(|(class, delta)| (class, delta, facade_lden)),
+        &receiver,
+        exposure.map(Into::into),
         sources.unavailable_layers,
     );
-    let json = serde_json::to_string(&wire_result).unwrap();
+    let json = serde_json::to_string(&wire_result).map_err(|error| {
+        Error::new(
+            Status::GenericFailure,
+            format!("failed to encode popup: {error}"),
+        )
+    })?;
     let t_total = t_start.elapsed();
 
     if timing_on {
         eprintln!(
-            "popup-timing total={:.0}ms load={:.0}ms collect={:.0}ms compute={:.0}ms (ground={:.0}ms air={:.0}ms) json={:.0}ms (rd={} rl={} ac={})",
+            "popup-timing total={:.0}ms load={:.0}ms collect={:.0}ms compute={:.0}ms (ground={:.0}ms air={:.0}ms) json={:.0}ms (sq={} rd={} rl={} ac={})",
             t_total.as_secs_f64() * 1000.0,
             t_load.as_secs_f64() * 1000.0,
             t_collect.as_secs_f64() * 1000.0,
@@ -548,6 +673,7 @@ fn query_noise_impl(lat: f64, lng: f64, top_k_per_kind: usize) -> napi::Result<S
             t_ground.as_secs_f64() * 1000.0,
             (t_compute - t_ground).as_secs_f64() * 1000.0,
             (t_total - t_load - t_collect - t_compute).as_secs_f64() * 1000.0,
+            square_names.len(),
             n_roads,
             n_railways,
             n_aircraft,

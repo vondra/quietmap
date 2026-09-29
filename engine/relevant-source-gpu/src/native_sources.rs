@@ -29,6 +29,34 @@ pub fn load_sources(
 ) -> Result<(Vec<SurfaceSource>, ObstacleSet)> {
     let mut sources = Vec::new();
     let mut indexes = Vec::new();
+    // The row envelope: window extremes over the scene squares, so a row audible under
+    // any painted receiver's weather is loaded (defaults would miss rows past their
+    // shorter reach at high-pmax sites).
+    let cache = raster_reader::meteorology::WeatherCache::new(root);
+    let (pmax, amin) = cache.envelope_maxima(squares);
+    let weather = noise_compute::propagation::meteorology::Meteorology::for_bound(pmax, amin);
+    // Facility joins span every scene square, so a polygon in one square sees
+    // the units in the neighbours it touches; rows still emit once each.
+    let mut global_transformers = Vec::new();
+    let mut global_solar = Vec::new();
+    let mut global_facilities = square_store::osm_evidence::SubstationFacilities::default();
+    for square in squares {
+        let relative = format!("z9/{}/{}/industrial.arrow", square.x, square.y);
+        if let Some((bytes, _)) = manifest.read_arrow(root, &relative)? {
+            let reader = FileReader::try_new(Cursor::new(bytes), None)?;
+            let batches: Vec<RecordBatch> = reader.collect::<Result<_, _>>()?;
+            global_transformers
+                .extend(square_store::osm_evidence::transformer_units(&batches));
+            global_solar.extend(square_store::osm_evidence::solar_plants(&batches));
+            global_facilities.extend(&batches);
+        }
+    }
+    let global_industrial_joins = points::FileJoins {
+        transformers: global_transformers,
+        solar_plants: global_solar,
+        substation_facilities: global_facilities,
+        ..Default::default()
+    };
     for square in squares {
         let mut has_surface_arrow = false;
         let mut has_structures = false;
@@ -59,19 +87,16 @@ pub fn load_sources(
                 indexes.push(index);
             }
             let reader = FileReader::try_new(Cursor::new(bytes), None)?;
+            square_store::osm_contract::validate(&reader.schema(), name)
+                .map_err(anyhow::Error::msg)?;
             if name == "structures" {
                 square_store::structure_contract::validate_schema(&reader.schema())
                     .map_err(anyhow::Error::msg)?;
             }
             if name == "leisure" {
-                // The painter must refuse a stamp it does not know for the same
-                // reason the popup does: `leisure_v3` added the car park classes,
-                // and an older binary would draw one as a sports pitch.
                 let metadata = reader.schema().metadata().clone();
-                for (key, expected) in [
-                    ("leisure_contract", square_store::store::LEISURE_CONTRACT_V3),
-                    ("grid", square_store::store::GRID_CONTRACT_Z30),
-                ] {
+                {
+                    let (key, expected) = ("grid", square_store::store::GRID_CONTRACT_Z30);
                     let found = metadata.get(key).map(String::as_str);
                     anyhow::ensure!(
                         found == Some(expected),
@@ -94,18 +119,37 @@ pub fn load_sources(
             let traffic_calendar = (name == "airport_traffic")
                 .then(|| traffic::TrafficCalendar::read(&RecordBatch::new_empty(reader.schema())))
                 .transpose()?;
+            // One file's batches buffer before rows emit: leisure rows join
+            // against their square (a motorsport polygon's raceway lines);
+            // industrial rows join against every scene square (a substation's
+            // transformers across the edge). Order and row identities are
+            // unchanged — buffering only precedes them.
+            let batches: Vec<RecordBatch> = reader.collect::<Result<_, _>>()?;
+            let local_joins = match name {
+                "leisure" => points::FileJoins {
+                    motorsport_venues: square_store::osm_evidence::MotorsportVenues::build(
+                        &batches,
+                    ),
+                    ..Default::default()
+                },
+                _ => points::FileJoins::default(),
+            };
+            let joins = if name == "industrial" {
+                &global_industrial_joins
+            } else {
+                &local_joins
+            };
             let mut row_base = 0_u64;
-            for batch in reader {
-                let batch = batch?;
+            for batch in &batches {
                 if name == "roads" {
-                    RoadDirections::read(&batch).map_err(anyhow::Error::msg)?;
+                    RoadDirections::read(batch).map_err(anyhow::Error::msg)?;
                 }
                 let road_traffic = (name == "roads")
-                    .then(|| source_reader::road_traffic::RoadTrafficColumns::read(&batch))
+                    .then(|| source_reader::road_traffic::RoadTrafficColumns::read(batch))
                     .transpose()
                     .map_err(anyhow::Error::msg)?;
                 let rail_traffic = (name == "railways")
-                    .then(|| source_reader::rail_traffic::RailTrafficColumns::read(&batch))
+                    .then(|| source_reader::rail_traffic::RailTrafficColumns::read(batch))
                     .transpose()
                     .map_err(anyhow::Error::msg)?;
                 for row in 0..batch.num_rows() {
@@ -114,11 +158,12 @@ pub fn load_sources(
                     match name {
                         "roads" | "railways" => {
                             if let Some(device) = line(
-                                &batch,
+                                batch,
                                 row,
                                 rail_traffic.as_ref().map(|columns| columns.row(row)),
                                 road_traffic.as_ref().map(|columns| columns.row(row)),
                                 frame,
+                                &weather,
                             )? {
                                 sources.push(SurfaceSource {
                                     identity: identity(0),
@@ -129,7 +174,7 @@ pub fn load_sources(
                         }
                         "airport_traffic" => {
                             if let Some(device) = traffic::traffic_row(
-                                &batch,
+                                batch,
                                 row,
                                 frame,
                                 traffic_calendar.as_ref().unwrap(),
@@ -142,8 +187,9 @@ pub fn load_sources(
                             }
                         }
                         _ => {
-                            for (part, point) in
-                                points::points(&batch, row, name)?.iter().enumerate()
+                            for (part, point) in points::points(batch, row, name, joins)?
+                                .iter()
+                                .enumerate()
                             {
                                 sources.push(SurfaceSource {
                                     identity: identity(part.try_into()?),
@@ -246,11 +292,16 @@ fn line(
     rail_traffic: Option<RailTraffic>,
     road_traffic: Option<RoadTraffic>,
     frame: &RegionMetricFrame,
+    weather: &noise_compute::propagation::meteorology::Meteorology,
 ) -> Result<Option<DeviceLineSource>> {
     let start = position(batch, row, "start")?;
     let end = position(batch, row, "end")?;
     let square_country_city = row_square_country_city(batch, row)?;
-    let (emission, max_distance_m, source_height_m) = if let Some(traffic) = rail_traffic {
+    let bridge = boolean(batch, "bridge", row);
+    let dipole = rail_traffic.is_some()
+        && rail::RAIL_SOURCE_DIRECTIVITY == noise_compute::propagation::line_quadrature::LineDirectivity::TrackDipole;
+    let (emission, max_distance_m, source_height_m, source_ground_factor, platform_half_width_m) =
+        if let Some(traffic) = rail_traffic {
         if traffic.is_silent() || boolean(batch, "tunnel", row) {
             return Ok(None);
         }
@@ -262,8 +313,10 @@ fn line(
         });
         (
             norm.period_emissions(),
-            norm.max_distance_m(),
+            norm.reach_m(weather),
             norm.source_height_m,
+            rail::rail_source_ground_factor(norm.rail_type, bridge),
+            rail::RAIL_PLATFORM_HALF_WIDTH_M,
         )
     } else {
         let Some(norm) = normalize_road(
@@ -283,27 +336,31 @@ fn line(
         };
         (
             norm.period_emissions(),
-            norm.max_distance_m,
+            norm.reach_m(weather),
             norm.source_height_m,
+            road::ROAD_SOURCE_GROUND_FACTOR,
+            road::road_platform_half_width_m(byte(batch, "lanes", row)),
         )
     };
     let [start_x_m, start_y_m] = frame.encode(start[0], start[1]);
     let [end_x_m, end_y_m] = frame.encode(end[0], end[1]);
+    // The reach is capped at the profile ceiling less the extract's 250 m piece limit; a piece
+    // a few centimetres longer in this frame still has to keep its far end within the profile.
+    let frame_length_m = (end_x_m - start_x_m).hypot(end_y_m - start_y_m);
+    let max_distance_m = (max_distance_m as f32).min(MAXIMUM_PROFILE_RAY_M - frame_length_m);
     Ok(Some(DeviceLineSource {
         start_x_m,
         start_y_m,
         end_x_m,
         end_y_m,
-        extent_m: float(batch, "length_m", row)
-            .filter(|v| *v > 0.0)
-            .unwrap_or_else(|| grid::geo::flat_dist(start[0], start[1], end[0], end[1]) as f32),
-        max_distance_m: max_distance_m as f32,
+        // A surface line carries no extent: its length comes from the endpoints, and no
+        // kernel reads this field for one (points: footprint radius; ground ops: length).
+        extent_m: 0.0,
+        max_distance_m,
         source_height_m: source_height_m as f32,
-        flags: if boolean(batch, "bridge", row) {
-            SOURCE_FLAG_BRIDGE
-        } else {
-            0
-        },
+        flags: if dipole { SOURCE_FLAG_TRACK_DIPOLE } else { 0 },
+        source_ground_factor: source_ground_factor as f32,
+        platform_half_width_m: platform_half_width_m as f32,
         emission_linear: emission_linear(emission),
     }))
 }
@@ -318,6 +375,8 @@ fn point_device(frame: &RegionMetricFrame, point: &PreparedPoint) -> DeviceLineS
         max_distance_m: point.max_radius_m as f32,
         source_height_m: point.source_height_m,
         flags: SOURCE_FLAG_POINT,
+        source_ground_factor: 0.0,
+        platform_half_width_m: 0.0,
         emission_linear: emission_linear((point.lw_day, point.lw_evening, point.lw_night)),
     }
 }
@@ -328,8 +387,7 @@ mod completeness_tests {
     #[test]
     fn native_road_direction_contract_rejects_invalid_data_and_matches_popup() {
         use arrow::array::{
-            ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, UInt16Array,
-            UInt8Array,
+            ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, UInt16Array, UInt8Array,
         };
         use arrow::datatypes::{Field, Schema};
         use std::sync::Arc;
@@ -345,10 +403,8 @@ mod completeness_tests {
                 ("aadt_medium", Arc::new(Float64Array::from(vec![0.0; 3]))),
                 ("aadt_heavy", Arc::new(Float64Array::from(vec![0.0; 3]))),
                 ("aadt_moto", Arc::new(Float64Array::from(vec![0.0; 3]))),
-                (
-                    "traffic_estimated",
-                    Arc::new(UInt8Array::from(vec![1; 3])),
-                ),
+                ("cross_section_aadt", Arc::new(Float64Array::from(vec![0.0; 3]))),
+                ("traffic_estimated", Arc::new(UInt8Array::from(vec![1; 3]))),
                 ("road_class", Arc::new(UInt8Array::from(vec![2; 3]))),
                 ("speed_limit", Arc::new(UInt8Array::from(vec![50; 3]))),
             ];
@@ -369,10 +425,10 @@ mod completeness_tests {
                     Field::new(*name, array.data_type().clone(), array.null_count() != 0)
                 })
                 .collect::<Vec<_>>();
-            let schema = Schema::new(fields).with_metadata(std::collections::HashMap::from([(
-                "road_traffic_contract".to_owned(),
-                "1".to_owned(),
-            )]));
+            let schema = Schema::new(fields).with_metadata(std::collections::HashMap::from([
+                ("road_traffic_contract".to_owned(), "1".to_owned()),
+                ("osm_roads_contract".into(), square_store::osm_contract::ROADS_CONTRACT.into()),
+            ]));
             RecordBatch::try_new(
                 Arc::new(schema),
                 columns.into_iter().map(|(_, column)| column).collect(),
@@ -384,7 +440,7 @@ mod completeness_tests {
             Some(Arc::new(BooleanArray::from(vec![false; 3]))),
             Some(Arc::new(UInt16Array::from(vec![0, 1, 2]))),
             Some(Arc::new(UInt8Array::from(vec![Some(0), None, Some(2)]))),
-            Some(Arc::new(UInt8Array::from(vec![0, 1, 3]))),
+            Some(Arc::new(UInt8Array::from(vec![0, 1, 5]))),
         ];
         for column in invalid {
             let invalid = batch(column);
@@ -404,7 +460,7 @@ mod completeness_tests {
         let frame = RegionMetricFrame::for_latitude_longitude(0.0, 0.0);
         let devices: Vec<_> = (0..3)
             .map(|row| {
-                line(&batch, row, None, Some(traffic.row(row)), &frame)
+                line(&batch, row, None, Some(traffic.row(row)), &frame, &noise_compute::propagation::meteorology::Meteorology::defaults())
                     .unwrap()
                     .unwrap()
             })
@@ -429,9 +485,7 @@ mod completeness_tests {
         let mut columns = batch.columns().to_vec();
         columns[position] = Arc::new(Int32Array::from(vec![10_000; 3]));
         let legacy = RecordBatch::try_new(
-            Arc::new(
-                Schema::new(fields).with_metadata(batch.schema().metadata().clone()),
-            ),
+            Arc::new(Schema::new(fields).with_metadata(batch.schema().metadata().clone())),
             columns,
         )
         .unwrap();
@@ -524,7 +578,8 @@ mod completeness_tests {
         });
         let columns = source_reader::rail_traffic::RailTrafficColumns::read(&batch).unwrap();
         let frame = RegionMetricFrame::for_latitude_longitude(0.0, 0.0);
-        let device = line(&batch, 0, Some(columns.row(0)), None, &frame)
+        let weather = noise_compute::propagation::meteorology::Meteorology::defaults();
+        let device = line(&batch, 0, Some(columns.row(0)), None, &frame, &weather)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -535,10 +590,113 @@ mod completeness_tests {
             .iter()
             .all(|value| *value == 0.0));
         assert!(device.emission_linear[8..].iter().all(|value| *value > 0.0));
-        assert_eq!(device.max_distance_m, normalized.max_distance_m() as f32);
-        assert!(line(&batch, 0, Some(RailTraffic::default()), None, &frame)
+        assert_eq!(device.max_distance_m, normalized.reach_m(&weather) as f32);
+        assert!(line(&batch, 0, Some(RailTraffic::default()), None, &frame, &weather)
             .unwrap()
             .is_none());
+    }
+
+    /// Horn rows paint what the popup hears: device emission matches the
+    /// normalized periods, at the 4 m horn height with the horn reach.
+    #[test]
+    fn horn_row_matches_popup_and_device_emissions() {
+        use arrow::array::{
+            ArrayRef, Float64Array, Int16Array, Int32Array, Int64Array, UInt16Array, UInt8Array,
+        };
+        use arrow::datatypes::{Field, Schema};
+        use std::sync::Arc;
+        let mut columns: Vec<(String, ArrayRef)> = Vec::new();
+        for (name, value) in [
+            ("start_gx", 1 << 29),
+            ("start_gy", 1 << 29),
+            ("end_gx", (1 << 29) + 100),
+            ("end_gy", 1 << 29),
+        ] {
+            columns.push((name.to_owned(), Arc::new(Int32Array::from(vec![value]))));
+        }
+        columns.push(("osm_id".to_owned(), Arc::new(Int64Array::from(vec![-7]))));
+        columns.push((
+            "segment_idx".to_owned(),
+            Arc::new(Int16Array::from(vec![0])),
+        ));
+        columns.push((
+            "maxspeed".to_owned(),
+            Arc::new(UInt16Array::from(vec![113])),
+        ));
+        columns.push(("rail_type".to_owned(), Arc::new(UInt8Array::from(vec![6]))));
+        columns.push(("continent".to_owned(), Arc::new(UInt8Array::from(vec![0]))));
+        for name in ["country_iso", "city_id"] {
+            columns.push((name.to_owned(), Arc::new(UInt16Array::from(vec![0]))));
+        }
+        // Soundings ride in the passenger slots (36.9/12.0/24.1 ≈ Kearney).
+        for (category, values) in [
+            ("passenger", [36.9, 12.0, 24.1]),
+            ("freight", [0.0, 0.0, 0.0]),
+        ] {
+            for (period, count) in ["day", "evening", "night"].into_iter().zip(values) {
+                columns.push((
+                    format!("trains_{category}_{period}"),
+                    Arc::new(Float64Array::from(vec![count])),
+                ));
+            }
+            columns.push((
+                format!("{category}_status"),
+                Arc::new(UInt8Array::from(vec![2])),
+            ));
+            columns.push((
+                format!("{category}_source_id"),
+                Arc::new(UInt16Array::from(vec![111])),
+            ));
+            columns.push((
+                format!("{category}_matching"),
+                Arc::new(UInt8Array::from(vec![0])),
+            ));
+        }
+        let schema = Schema::new(
+            columns
+                .iter()
+                .map(|(name, array)| Field::new(name, array.data_type().clone(), false))
+                .collect::<Vec<_>>(),
+        )
+        .with_metadata(std::collections::HashMap::from([(
+            "rail_traffic_contract".to_owned(),
+            "1".to_owned(),
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            columns.into_iter().map(|(_, column)| column).collect(),
+        )
+        .unwrap();
+        let popup = source_reader::query_railways_from_batches(
+            std::slice::from_ref(&batch),
+            0.0,
+            0.0,
+            1000.0,
+        )
+        .unwrap();
+        assert_eq!(popup.len(), 1);
+        let row = &popup[0];
+        assert_eq!(row.rail_type, 6);
+        let normalized = normalize_rail(RawRailInput {
+            rail_type: row.rail_type,
+            maxspeed: row.maxspeed,
+            highspeed: row.highspeed,
+            traffic: row.traffic,
+        });
+        assert_eq!(normalized.source_height_m, 4.0);
+        let columns = source_reader::rail_traffic::RailTrafficColumns::read(&batch).unwrap();
+        let frame = RegionMetricFrame::for_latitude_longitude(0.0, 0.0);
+        let weather = noise_compute::propagation::meteorology::Meteorology::defaults();
+        let device = line(&batch, 0, Some(columns.row(0)), None, &frame, &weather)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            device.emission_linear,
+            emission_linear(normalized.period_emissions())
+        );
+        assert_eq!(device.source_height_m, 4.0);
+        assert_eq!(device.max_distance_m, normalized.reach_m(&weather) as f32);
+        assert!(device.max_distance_m > 1000.0);
     }
 
     #[test]
@@ -551,11 +709,7 @@ mod completeness_tests {
         let mut writer = arrow::ipc::writer::FileWriter::try_new(
             std::fs::File::create(&path).unwrap(),
             &arrow::datatypes::Schema::new(vec![
-                arrow::datatypes::Field::new(
-                    "oneway",
-                    arrow::datatypes::DataType::UInt8,
-                    false,
-                ),
+                arrow::datatypes::Field::new("oneway", arrow::datatypes::DataType::UInt8, false),
                 arrow::datatypes::Field::new(
                     "aadt_light",
                     arrow::datatypes::DataType::Float64,
@@ -577,15 +731,20 @@ mod completeness_tests {
                     false,
                 ),
                 arrow::datatypes::Field::new(
+                    "cross_section_aadt",
+                    arrow::datatypes::DataType::Float64,
+                    false,
+                ),
+                arrow::datatypes::Field::new(
                     "traffic_estimated",
                     arrow::datatypes::DataType::UInt8,
                     false,
                 ),
             ])
-            .with_metadata(std::collections::HashMap::from([(
-                "road_traffic_contract".to_owned(),
-                "1".to_owned(),
-            )])),
+            .with_metadata(std::collections::HashMap::from([
+                ("road_traffic_contract".to_owned(), "1".to_owned()),
+                ("osm_roads_contract".into(), square_store::osm_contract::ROADS_CONTRACT.into()),
+            ])),
         )
         .unwrap();
         writer.finish().unwrap();

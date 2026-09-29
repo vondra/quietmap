@@ -18,6 +18,8 @@ pub(crate) fn rail_type_name(rt: u8) -> &'static str {
         2 => "light_rail",
         3 => "narrow_gauge",
         4 => "funicular",
+        5 => "heritage",
+        6 => "horn",
         _ => "rail",
     }
 }
@@ -27,6 +29,7 @@ pub(crate) fn rail_usage_name(u: u8) -> &'static str {
         0 => "main",
         1 => "branch",
         2 => "industrial",
+        4 => "tourism",
         _ => "untagged",
     }
 }
@@ -74,7 +77,10 @@ pub(crate) fn leisure_type_name(sport: u8) -> &'static str {
         CAR_PARK => "car_park",
         CAR_PARK_STREET => "street_parking",
         PITCH => "sports_pitch",
-        // An id outside `leisure_v3`: it emits nothing (`leisure_profile`), and
+        MOTORSPORT => "motorsport",
+        SHOOTING => "shooting",
+        AGP => "artificial_turf_pitch",
+        // An id outside `leisure_v5`: it emits nothing (`leisure_profile`), and
         // it is not named after something it may not be.
         _ => "unknown",
     }
@@ -92,7 +98,12 @@ pub(crate) fn industrial_type_name(st: u8) -> &'static str {
         2 => "farm",
         3 => "factory",
         4 => "wastewater",
+        5 => "rail_yard",
         10 => "wind_turbine",
+        13 => "solar_farm",
+        14 => "substation",
+        // 11 (wind-plant outline), 12 (inactive) and 15 (transformer) are
+        // silent and never reach a contributor.
         _ => "industrial_area",
     }
 }

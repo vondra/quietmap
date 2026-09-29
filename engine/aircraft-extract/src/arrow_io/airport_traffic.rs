@@ -21,6 +21,7 @@ use noise_compute::compute::aircraft_v6::airport_traffic::{
     decode_airport_summaries, encode_airport_summaries, AirportSummaryEntry,
     AirportSummaryLookup,
 };
+use noise_compute::emission::aircraft::SamplingWindow;
 use noise_compute::emission::gse::NUM_GSE_CLASSES;
 use noise_compute::types::NUM_BANDS;
 use square_store::aircraft_contract::AIRPORT_SUMMARIES_KEY;
@@ -60,6 +61,9 @@ pub struct AirportTrafficRow {
     pub class_idx: u8,
     /// 0 = day, 1 = evening, 2 = night.
     pub period: u8,
+    /// Every movement of the row touches a secondary-provider sample; its
+    /// counts exclude movements the matching primary row already holds.
+    pub secondary_only: bool,
     /// Per-band **raw Σ** of linear Z-weighted energy contribution
     /// from this microsegment for this period, summed over the n_days
     /// extraction window. Units depend on `veh_kind`:
@@ -87,40 +91,33 @@ pub struct AirportTrafficRow {
     /// only when `veh_kind=1`.
     pub unique_gse_count_per_class: [u32; NUM_GSE_CLASSES],
     /// UNION across ALL rows of this microsegment `(osm_id,
-    /// segment_idx)` regardless of period / class / ops_kind. v9: these
-    /// three count NON-GA-class fids only — the GA-class union lives in
-    /// `microseg_unique_ga_*`. Replicated on every row of the same
-    /// microsegment so the popup loader can populate per-microseg
-    /// observed_movements without a HashSet UNION join, and divide each
-    /// window by its own day count.
+    /// segment_idx)` regardless of period / class / ops_kind: movements
+    /// with a primary-provider row in the category. Replicated on every
+    /// row of the same microsegment so the popup loader can populate
+    /// per-microseg observed_movements without a HashSet UNION join.
     pub microseg_unique_count: u32,
     pub microseg_unique_arr_count: u32,
     pub microseg_unique_dep_count: u32,
     pub microseg_unique_gse_count_per_class: [u32; NUM_GSE_CLASSES],
-    /// v9 GA-class (PROP_C172 + HELICOPTER) microsegment UNION — the
-    /// full-year-window split of the three counts above. Zero on a
-    /// non-hybrid extract. (GSE has no GA split — airline-pass only.)
-    pub microseg_unique_ga_count: u32,
-    pub microseg_unique_ga_arr_count: u32,
-    pub microseg_unique_ga_dep_count: u32,
+    /// Movements seen in the category only through secondary-provider rows.
+    pub microseg_unique_secondary_count: u32,
+    pub microseg_unique_secondary_arr_count: u32,
+    pub microseg_unique_secondary_dep_count: u32,
+    pub microseg_unique_secondary_gse_count_per_class: [u32; NUM_GSE_CLASSES],
 }
 
-/// Write one z9 square's traffic counters. `n_days` (airline window) +
-/// `ga_n_days` (GA-class window, 0 = single-window extract) stamp the GA
-/// hybrid metadata (`n_days`, `ga_n_days`, `sample_days_by_class`) so the
-/// popup consumer weights GA energy at `1/ga_n_days` and divides the GA-split
-/// movement counts by their own window.
+/// Write one z9 square's traffic counters stamped with the sampling window.
 pub fn write_airport_traffic(
     path: &Path,
     rows: &[AirportTrafficRow],
-    n_days: u16,
-    ga_n_days: u16,
+    window: &SamplingWindow,
 ) -> Result<()> {
-    let schema = arrow_schemas::with_n_days_and_windows(
-        arrow_schemas::airport_traffic_schema(),
-        n_days,
-        ga_n_days,
+    anyhow::ensure!(
+        window.increment_days > 0 || rows.iter().all(|r| !r.secondary_only),
+        "secondary-only ground rows without increment days"
     );
+    let schema =
+        arrow_schemas::with_sampling_window(arrow_schemas::airport_traffic_schema(), window);
     let n = rows.len();
     let mut airport_key = StringBuilder::with_capacity(n, 8 * n);
     let mut osm_id = UInt64Builder::with_capacity(n);
@@ -136,19 +133,21 @@ pub fn write_airport_traffic(
     let mut veh_kind = UInt8Builder::with_capacity(n);
     let mut class_idx = UInt8Builder::with_capacity(n);
     let mut period = UInt8Builder::with_capacity(n);
+    let mut secondary_only = UInt8Builder::with_capacity(n);
     let mut unique_mov = UInt32Builder::with_capacity(n);
     let mut unique_arr = UInt32Builder::with_capacity(n);
     let mut unique_dep = UInt32Builder::with_capacity(n);
     let mut microseg_unique = UInt32Builder::with_capacity(n);
     let mut microseg_unique_arr = UInt32Builder::with_capacity(n);
     let mut microseg_unique_dep = UInt32Builder::with_capacity(n);
-    let mut microseg_unique_ga = UInt32Builder::with_capacity(n);
-    let mut microseg_unique_ga_arr = UInt32Builder::with_capacity(n);
-    let mut microseg_unique_ga_dep = UInt32Builder::with_capacity(n);
+    let mut microseg_unique_secondary = UInt32Builder::with_capacity(n);
+    let mut microseg_unique_secondary_arr = UInt32Builder::with_capacity(n);
+    let mut microseg_unique_secondary_dep = UInt32Builder::with_capacity(n);
 
     let mut band_values: Vec<f32> = Vec::with_capacity(n * NUM_BANDS);
     let mut gse_values: Vec<u32> = Vec::with_capacity(n * NUM_GSE_CLASSES);
     let mut microseg_gse_values: Vec<u32> = Vec::with_capacity(n * NUM_GSE_CLASSES);
+    let mut microseg_secondary_gse_values: Vec<u32> = Vec::with_capacity(n * NUM_GSE_CLASSES);
     // Each microsegment gets an endpoint box; f32→f64 is exact.
     let mut row_bboxes = Vec::with_capacity(n);
 
@@ -177,6 +176,7 @@ pub fn write_airport_traffic(
         veh_kind.append_value(r.veh_kind);
         class_idx.append_value(r.class_idx);
         period.append_value(r.period);
+        secondary_only.append_value(u8::from(r.secondary_only));
         band_values.extend_from_slice(&r.band_energy_lin);
         unique_mov.append_value(r.unique_movement_count);
         unique_arr.append_value(r.unique_arr_count);
@@ -186,9 +186,11 @@ pub fn write_airport_traffic(
         microseg_unique_arr.append_value(r.microseg_unique_arr_count);
         microseg_unique_dep.append_value(r.microseg_unique_dep_count);
         microseg_gse_values.extend_from_slice(&r.microseg_unique_gse_count_per_class);
-        microseg_unique_ga.append_value(r.microseg_unique_ga_count);
-        microseg_unique_ga_arr.append_value(r.microseg_unique_ga_arr_count);
-        microseg_unique_ga_dep.append_value(r.microseg_unique_ga_dep_count);
+        microseg_unique_secondary.append_value(r.microseg_unique_secondary_count);
+        microseg_unique_secondary_arr.append_value(r.microseg_unique_secondary_arr_count);
+        microseg_unique_secondary_dep.append_value(r.microseg_unique_secondary_dep_count);
+        microseg_secondary_gse_values
+            .extend_from_slice(&r.microseg_unique_secondary_gse_count_per_class);
     }
 
     let band_list = FixedSizeListArray::new(
@@ -205,9 +207,15 @@ pub fn write_airport_traffic(
         None,
     );
     let microseg_gse_list = FixedSizeListArray::new(
-        gse_field,
+        gse_field.clone(),
         NUM_GSE_CLASSES as i32,
         Arc::new(UInt32Array::from(microseg_gse_values)),
+        None,
+    );
+    let microseg_secondary_gse_list = FixedSizeListArray::new(
+        gse_field,
+        NUM_GSE_CLASSES as i32,
+        Arc::new(UInt32Array::from(microseg_secondary_gse_values)),
         None,
     );
 
@@ -226,6 +234,7 @@ pub fn write_airport_traffic(
         Arc::new(veh_kind.finish()),
         Arc::new(class_idx.finish()),
         Arc::new(period.finish()),
+        Arc::new(secondary_only.finish()),
         Arc::new(band_list),
         Arc::new(unique_mov.finish()),
         Arc::new(unique_arr.finish()),
@@ -235,9 +244,10 @@ pub fn write_airport_traffic(
         Arc::new(microseg_unique_arr.finish()),
         Arc::new(microseg_unique_dep.finish()),
         Arc::new(microseg_gse_list),
-        Arc::new(microseg_unique_ga.finish()),
-        Arc::new(microseg_unique_ga_arr.finish()),
-        Arc::new(microseg_unique_ga_dep.finish()),
+        Arc::new(microseg_unique_secondary.finish()),
+        Arc::new(microseg_unique_secondary_arr.finish()),
+        Arc::new(microseg_unique_secondary_dep.finish()),
+        Arc::new(microseg_secondary_gse_list),
     ];
     let (schema, batches) =
         arrow_batching::blocked_by_z14_cell(schema.as_ref().clone(), columns, &row_bboxes)?;
@@ -303,6 +313,7 @@ pub fn read_airport_traffic(path: &Path) -> Result<Vec<AirportTrafficRow>> {
         let veh_kind = column::<UInt8Array>(&b, "veh_kind")?;
         let class_idx = column::<UInt8Array>(&b, "class_idx")?;
         let period = column::<UInt8Array>(&b, "period")?;
+        let secondary_only = column::<UInt8Array>(&b, "secondary_only")?;
         let band_list = column::<FixedSizeListArray>(&b, "band_energy_lin")?;
         let band_buf = band_list
             .values()
@@ -331,9 +342,22 @@ pub fn read_airport_traffic(path: &Path) -> Result<Vec<AirportTrafficRow>> {
             .downcast_ref::<UInt32Array>()
             .ok_or_else(|| anyhow::anyhow!("microseg_unique_gse_count_per_class inner type"))?
             .values();
-        let microseg_unique_ga = column::<UInt32Array>(&b, "microseg_unique_ga_count")?;
-        let microseg_unique_ga_arr = column::<UInt32Array>(&b, "microseg_unique_ga_arr_count")?;
-        let microseg_unique_ga_dep = column::<UInt32Array>(&b, "microseg_unique_ga_dep_count")?;
+        let microseg_unique_secondary =
+            column::<UInt32Array>(&b, "microseg_unique_secondary_count")?;
+        let microseg_unique_secondary_arr =
+            column::<UInt32Array>(&b, "microseg_unique_secondary_arr_count")?;
+        let microseg_unique_secondary_dep =
+            column::<UInt32Array>(&b, "microseg_unique_secondary_dep_count")?;
+        let microseg_secondary_gse_list =
+            column::<FixedSizeListArray>(&b, "microseg_unique_secondary_gse_count_per_class")?;
+        let microseg_secondary_gse_buf = microseg_secondary_gse_list
+            .values()
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .ok_or_else(|| {
+                anyhow::anyhow!("microseg_unique_secondary_gse_count_per_class inner type")
+            })?
+            .values();
 
         for i in 0..b.num_rows() {
             let lo_b = i * NUM_BANDS;
@@ -344,6 +368,9 @@ pub fn read_airport_traffic(path: &Path) -> Result<Vec<AirportTrafficRow>> {
             gse.copy_from_slice(&gse_buf[lo_g..lo_g + NUM_GSE_CLASSES]);
             let mut microseg_gse = [0u32; NUM_GSE_CLASSES];
             microseg_gse.copy_from_slice(&microseg_gse_buf[lo_g..lo_g + NUM_GSE_CLASSES]);
+            let mut microseg_secondary_gse = [0u32; NUM_GSE_CLASSES];
+            microseg_secondary_gse
+                .copy_from_slice(&microseg_secondary_gse_buf[lo_g..lo_g + NUM_GSE_CLASSES]);
             out.push(AirportTrafficRow {
                 airport_key: airport_key.value(i).to_string(),
                 osm_id: osm_id.value(i),
@@ -359,6 +386,7 @@ pub fn read_airport_traffic(path: &Path) -> Result<Vec<AirportTrafficRow>> {
                 veh_kind: veh_kind.value(i),
                 class_idx: class_idx.value(i),
                 period: period.value(i),
+                secondary_only: secondary_only.value(i) != 0,
                 band_energy_lin: bands,
                 unique_movement_count: unique_mov.value(i),
                 unique_arr_count: unique_arr.value(i),
@@ -368,9 +396,10 @@ pub fn read_airport_traffic(path: &Path) -> Result<Vec<AirportTrafficRow>> {
                 microseg_unique_arr_count: microseg_unique_arr.value(i),
                 microseg_unique_dep_count: microseg_unique_dep.value(i),
                 microseg_unique_gse_count_per_class: microseg_gse,
-                microseg_unique_ga_count: microseg_unique_ga.value(i),
-                microseg_unique_ga_arr_count: microseg_unique_ga_arr.value(i),
-                microseg_unique_ga_dep_count: microseg_unique_ga_dep.value(i),
+                microseg_unique_secondary_count: microseg_unique_secondary.value(i),
+                microseg_unique_secondary_arr_count: microseg_unique_secondary_arr.value(i),
+                microseg_unique_secondary_dep_count: microseg_unique_secondary_dep.value(i),
+                microseg_unique_secondary_gse_count_per_class: microseg_secondary_gse,
             });
         }
     }

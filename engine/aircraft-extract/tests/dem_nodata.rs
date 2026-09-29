@@ -25,7 +25,12 @@ fn rasters(root: &Path) -> RealRasters {
                         Channel::Dem => (lon / 18) as i16,
                         _ => channel.ocean_value(),
                     };
-                    bytes.extend_from_slice(&value.to_be_bytes()[2 - channel.bytes_per_node()..]);
+                    let raw = channel.encode(if value == i16::MIN {
+                        f64::NAN
+                    } else {
+                        f64::from(value)
+                    });
+                    bytes.extend_from_slice(&raw[..channel.bytes_per_node()]);
                 }
             }
             let path = channel.path(root, square);
@@ -62,7 +67,7 @@ fn nodata_cannot_publish_a_day_or_masquerade_as_sea_level() {
             assert_eq!(elevation, expected);
             assert!(json.is_ok());
         } else {
-            assert!(elevation.is_nan());
+            assert!(elevation.is_finite());
             assert!(json.is_err());
         }
     }
@@ -91,10 +96,7 @@ fn nodata_cannot_publish_a_day_or_masquerade_as_sea_level() {
         let distance = 0.8 * grid::geo::M_PER_DEG_LAT;
         checked.build_path_profile(0.1, lon, 0.9, lon, distance, &mut profile);
         assert_eq!(checked.ensure_valid().is_err(), crosses_void);
-        assert_eq!(
-            profile.elevation_m.iter().any(|height| height.is_nan()),
-            crosses_void
-        );
+        assert!(profile.elevation_m.iter().all(|height| height.is_finite()));
     }
     std::thread::scope(|scope| {
         let bad = scope.spawn(|| {

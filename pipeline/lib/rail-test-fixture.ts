@@ -1,4 +1,5 @@
 /** Faithful z9/z30 railways.arrow fixture shared by writer and loader tests. */
+import { osmContract } from './osm-contract.js'
 
 import { after } from 'node:test'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -41,9 +42,6 @@ export interface RailwayFixtureRow {
   name?: string
   ref?: string
   sourceId?: number
-  passenger?: number
-  freight?: number
-  divisor?: number
   country?: string
 }
 
@@ -51,8 +49,6 @@ export interface RailwayFixtureOptions {
   omitContract?: boolean
   omitCountry?: boolean
   omitRailType?: boolean
-  includeTraffic?: boolean
-  includeDivisor?: boolean
 }
 
 export function writeRailwaysFixture(
@@ -87,13 +83,6 @@ export function writeRailwaysFixture(
     highspeed: vectorFromArray(rows.map(() => false), new Bool()),
     service: vectorFromArray(rows.map(row => row.service ?? 0), new Uint8()),
     source_id: vectorFromArray(rows.map(row => row.sourceId ?? 0), new Uint16()),
-    ...(options.includeTraffic ? {
-      trains_passenger: vectorFromArray(rows.map(row => row.passenger ?? 0), new Int32()),
-      trains_freight: vectorFromArray(rows.map(row => row.freight ?? 0), new Int32()),
-    } : {}),
-    ...(options.includeDivisor ? {
-      parallel_divisor: vectorFromArray(rows.map(row => row.divisor ?? 1), new Uint8()),
-    } : {}),
     ...(options.omitCountry ? {} : {
       country_iso: vectorFromArray(rows.map(row => iso2Code(row.country ?? 'CD')), new Uint16()),
       city_id: vectorFromArray(rows.map(() => 0), new Uint16()),
@@ -103,6 +92,7 @@ export function writeRailwaysFixture(
   const metadata = new Map<string, string>([
     ['grid', 'z30'],
     ['qm_blocks', RAIL_FIXTURE_QM_BLOCKS],
+    osmContract('railways'),
     ...(!options.omitContract ? [['railways_contract', 'country_baked_v1'] as const] : []),
   ])
   const schema = new Schema(table.schema.fields, metadata)

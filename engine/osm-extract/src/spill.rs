@@ -161,6 +161,33 @@ impl Spiller {
         })
     }
 
+    pub fn emit_control_point(
+        &mut self,
+        node: &crate::model_nodes::ModelNode,
+        link: Option<(i64, &str, usize, Option<f64>)>,
+    ) -> Result<()> {
+        let square = grid::square_of(node.lat, node.lon);
+        let bucket = self.bucket(square);
+        let w = self.get_writer("transport_nodes", bucket)?;
+        let (gx, gy) = lonlat_to_grid(node.lon, node.lat);
+        write!(w, "{}\t{}\t{gx}\t{gy}\t", spill_key(square), node.id)?;
+        if let Some((way, family, vertex, metres)) = link {
+            write!(
+                w,
+                "{way}\t{family}\t{vertex}\t{}",
+                metres.map(|v| v.to_string()).unwrap_or_default()
+            )?;
+        } else {
+            write!(w, "\t\t\t")?;
+        }
+        writeln!(
+            w,
+            "\t{}",
+            tags_json(node.control.as_ref().expect("control node"))?
+        )?;
+        Ok(())
+    }
+
     fn bucket(&self, square: Square) -> usize {
         spill_key(square) as usize % self.num_buckets
     }
@@ -213,14 +240,10 @@ impl Spiller {
                     w,
                     "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     classify::road_class(highway),
-                    tags.get("maxspeed")
-                        .map(|s| match classify::parse_maxspeed_kmh(s) {
-                            // u8 column unchanged: `none` → sentinel 255,
-                            // real limits clamp to 254 so they can't collide.
-                            classify::MAXSPEED_NONE => classify::SPEED_LIMIT_DERESTRICTED,
-                            v => v.min(254) as u8,
-                        })
-                        .unwrap_or(0),
+                    match crate::implicit_speed::road_speed(tags) {
+                        classify::MAXSPEED_NONE => classify::SPEED_LIMIT_DERESTRICTED,
+                        v => v.min(254) as u8,
+                    },
                     classify::surface_type(surface),
                     classify::oneway_direction(
                         highway,
@@ -268,7 +291,7 @@ impl Spiller {
                 );
                 write!(
                     w,
-                    "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                     classify::rail_type(railway),
                     classify::rail_usage_type(tags.get("usage").map(|s| s.as_str())),
                     // `none` is a road concept; on rail drop it so it falls to
@@ -290,17 +313,19 @@ impl Spiller {
                         0
                     },
                     classify::rail_service_type(tags.get("service").map(|s| s.as_str())),
+                    classify::rail_traffic_mode(
+                        tags.get("railway:traffic_mode").map(|s| s.as_str())
+                    ),
                 )?;
             }
             FeatureType::Barrier => {
-                // height_tier mirrors the structure-table ladder: 0 = mapped
-                // height tag, 2 = the 3.0 m default (the merged structures.arrow
-                // carries the tier per wall; the builder reads it from here).
+                // height_tier: 0 = mapped height tag, 2 = none (height 0). The
+                // structures builder gives an unmapped wall its country's mean height.
                 let mapped = tags.get("height").and_then(|s| parse_height(s));
                 write!(
                     w,
                     "\t{}\t{}\t{}",
-                    mapped.unwrap_or(3.0),
+                    mapped.unwrap_or(0.0),
                     classify::barrier_material_type(tags.get("material").map(|s| s.as_str())),
                     if mapped.is_some() { 0 } else { 2 },
                 )?;
@@ -321,6 +346,9 @@ impl Spiller {
             }
             _ => {}
         }
+        if matches!(ftype, FeatureType::Road | FeatureType::Railway) {
+            write!(w, "\t{}", tags_json(tags)?)?;
+        }
         if let Some(piece_tail) = piece_tail {
             write!(w, "\t{piece_tail}")?;
         }
@@ -338,11 +366,32 @@ impl Spiller {
         ftype: &FeatureType,
         square: Square,
         osm_id: i64,
+        osm_kind: &str,
         clat: f64,
         clon: f64,
         tags: &Tags,
         ring: Option<&[[f64; 2]]>,
     ) -> Result<()> {
+        let leisure_line = *ftype == FeatureType::Leisure
+            && osm_kind == "way"
+            && classify::is_leisure_line(
+                |key| tags.get(key).map(String::as_str),
+                ring.is_some_and(classify::is_a_closed_ring),
+            );
+        if matches!(
+            ftype,
+            FeatureType::Industrial | FeatureType::WindTurbine | FeatureType::Leisure
+        ) && osm_kind != "node"
+            && !ring.is_some_and(|ring| {
+                if leisure_line {
+                    ring.len() >= 2
+                } else {
+                    classify::is_a_closed_ring(ring)
+                }
+            })
+        {
+            return Ok(());
+        }
         let bucket = self.bucket(square);
         let name = ftype.name();
 
@@ -407,7 +456,9 @@ impl Spiller {
                 )?;
             }
             FeatureType::Industrial | FeatureType::WindTurbine => {
-                let src_type: u8 = if matches!(ftype, FeatureType::WindTurbine) {
+                let src_type: u8 = if let Some(class) = classify::industrial_class(tags) {
+                    class
+                } else if matches!(ftype, FeatureType::WindTurbine) {
                     10
                 }
                 // wind_turbine
@@ -455,7 +506,17 @@ impl Spiller {
 
         // Snapped ring as grid text (empty when the feature is a point).
         write!(w, "\t{}", encode_ring_text(&snapped))?;
+        if matches!(
+            ftype,
+            FeatureType::Industrial | FeatureType::WindTurbine | FeatureType::Leisure
+        ) {
+            write!(w, "\t{}\t{osm_kind}", tags_json(tags)?)?;
+        }
 
+        if *ftype == FeatureType::Leisure {
+            // Preserve the original line decision: snapping can close nearby endpoints.
+            write!(w, "\t{}", u8::from(leisure_line))?;
+        }
         writeln!(w)?;
         Ok(())
     }
@@ -499,7 +560,8 @@ impl Spiller {
 pub const SPILL_COMPLETE_MARKER: &str = "complete";
 
 fn completion_identity(num_buckets: usize, input_identity: &str) -> String {
-    serde_json::json!([num_buckets, input_identity]).to_string()
+    // Version 2 retains original leisure line identity before coordinate snapping.
+    serde_json::json!([2, num_buckets, input_identity]).to_string()
 }
 
 pub fn is_complete(dir: &Path, num_buckets: usize, input_identity: &str) -> bool {
@@ -519,6 +581,13 @@ pub fn is_complete(dir: &Path, num_buckets: usize, input_identity: &str) -> bool
 /// barns. Function POIs reuse [`poi_class`] (shared with the finalize join).
 fn building_type_from_tags(tags: &Tags) -> u8 {
     let get = |k: &str| tags.get(k).map(|s| s.as_str());
+    // Power infrastructure stays silent (its Industrial row owns the emission),
+    // but a special-leisure building emits: SPEC silences the roofed formula
+    // row BECAUSE its building footprint emits, so silencing both leaves an
+    // indoor karting hall with no path at all.
+    if classify::is_power_building(get) {
+        return ids::SETTLEMENT_SILENT;
+    }
     // A SPECIFIC structural `building=*` (warehouse, stadium, train_station, …)
     // describes the whole envelope and BEATS an amenity POI tagged inside it: a
     // `building=warehouse` + `amenity=bar` is a warehouse with a staff bar, not a
@@ -768,22 +837,16 @@ fn building_use(tags: &Tags) -> u8 {
 }
 
 fn site_type_from_tags(tags: &Tags) -> u8 {
-    if let Some(lu) = tags.get("landuse") {
-        match lu.as_str() {
-            "industrial" => return 0,
-            "quarry" => return 1,
-            "farmyard" => return 2,
-            _ => {}
-        }
+    let tag = |key: &str| tags.get(key).map(String::as_str);
+    // A mapped facility describes its activity more precisely than its land use.
+    match (tag("man_made"), tag("railway"), tag("landuse")) {
+        (Some("wastewater_plant"), _, _) => 4,
+        (Some("works"), _, _) => 3,
+        (_, Some("yard"), _) => 5,
+        (_, _, Some("quarry")) => 1,
+        (_, _, Some("farmyard")) => 2,
+        _ => 0,
     }
-    if let Some(mm) = tags.get("man_made") {
-        match mm.as_str() {
-            "works" => return 3,
-            "wastewater_plant" => return 4,
-            _ => {}
-        }
-    }
-    0
 }
 
 /// Classify industrial site subtype from OSM `industrial=*` and `product=*` tags.
@@ -900,10 +963,125 @@ fn parse_power_kw(val: Option<&str>) -> f32 {
     }
 }
 
+/// Stable JSON escapes arbitrary tag text without losing tabs or line breaks.
+pub(crate) fn tags_json(tags: &Tags) -> Result<String> {
+    Ok(serde_json::to_string(
+        &tags.iter().collect::<std::collections::BTreeMap<_, _>>(),
+    )?)
+}
+
+#[cfg(test)]
+mod site_type_tests {
+    use super::*;
+
+    fn tags_of(pairs: &[(&str, &str)]) -> Tags {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn only_the_yard_tag_routes_to_the_yard_site_type() {
+        assert_eq!(site_type_from_tags(&tags_of(&[("landuse", "railway")])), 0);
+        assert_eq!(site_type_from_tags(&tags_of(&[("railway", "yard")])), 5);
+        assert_eq!(
+            site_type_from_tags(&tags_of(&[
+                ("landuse", "railway"),
+                ("railway", "yard")
+            ])),
+            5
+        );
+        assert_eq!(
+            site_type_from_tags(&tags_of(&[("landuse", "industrial")])),
+            0
+        );
+        assert_eq!(site_type_from_tags(&tags_of(&[("landuse", "quarry")])), 1);
+        assert_eq!(site_type_from_tags(&tags_of(&[("landuse", "farmyard")])), 2);
+        assert_eq!(site_type_from_tags(&tags_of(&[("man_made", "works")])), 3);
+    }
+
+    #[test]
+    fn facility_activity_survives_generic_industrial_landuse() {
+        for (activity, expected) in [("wastewater_plant", 4), ("works", 3)] {
+            assert_eq!(
+                site_type_from_tags(&tags_of(&[
+                    ("landuse", "industrial"),
+                    ("man_made", activity)
+                ])),
+                expected
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod settlement_class_tests {
     use super::*;
     use crate::ids as st;
+
+    #[test]
+    fn a_building_with_a_generator_keeps_its_settlement_source() {
+        for (building, expected) in [
+            ("house", st::SETTLEMENT_HOUSE),
+            ("retail", st::SETTLEMENT_FOOD_RETAIL),
+        ] {
+            for source in ["solar", "wind", "gas"] {
+                let tags = Tags::from([
+                    ("building".into(), building.into()),
+                    ("power".into(), "generator".into()),
+                    ("generator:source".into(), source.into()),
+                ]);
+                let get = |key: &str| tags.get(key).map(String::as_str);
+                assert_eq!(building_type_from_tags(&tags), expected, "{tags:?}");
+                assert_eq!(
+                    classify::scoped_feature_types(FeatureType::Building, get),
+                    vec![FeatureType::Building]
+                );
+            }
+        }
+        for pairs in [
+            [("building", "yes"), ("power", "transformer")],
+            [("building", "yes"), ("disused:power", "substation")],
+        ] {
+            let tags: Tags = pairs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect();
+            assert!(
+                classify::scoped_feature_types(FeatureType::Building, |key| tags
+                    .get(key)
+                    .map(String::as_str))
+                .contains(&FeatureType::Industrial)
+            );
+        }
+        for power in ["plant", "substation"] {
+            let tags = Tags::from([
+                ("building".into(), "yes".into()),
+                ("power".into(), power.into()),
+            ]);
+            assert_eq!(building_type_from_tags(&tags), st::SETTLEMENT_SILENT);
+        }
+    }
+
+    #[test]
+    fn an_indoor_karting_hall_keeps_its_building_emission() {
+        // SPEC silences the roofed formula row BECAUSE its building emits: the
+        // building must not be silent too, or the hall emits nothing at all.
+        let tags = Tags::from([
+            ("building".into(), "sports_hall".into()),
+            ("leisure".into(), "sports_centre".into()),
+            ("sport".into(), "karting".into()),
+            ("indoor".into(), "yes".into()),
+        ]);
+        assert_eq!(building_type_from_tags(&tags), 9);
+        // Power buildings stay silent (their Industrial row owns the emission).
+        let power = Tags::from([
+            ("building".into(), "yes".into()),
+            ("power".into(), "substation".into()),
+        ]);
+        assert_eq!(building_type_from_tags(&power), st::SETTLEMENT_SILENT);
+    }
 
     #[test]
     fn building_type_splits_house_from_apartments() {
@@ -985,7 +1163,11 @@ mod settlement_class_tests {
             let mut t = Tags::new();
             t.insert("landuse".into(), landuse.into());
             assert_eq!(building_type_from_tags(&t), 1, "landuse={landuse}");
-            assert_eq!(ground_state(&t), GROUND_IS_A_FUNCTIONAL_AREA, "landuse={landuse}");
+            assert_eq!(
+                ground_state(&t),
+                GROUND_IS_A_FUNCTIONAL_AREA,
+                "landuse={landuse}"
+            );
         }
         // A named function inside the zone still wins.
         let mut shop = Tags::new();
@@ -1021,7 +1203,11 @@ mod settlement_class_tests {
             &[("building", "parking"), ("parking", "underground")],
             &[("amenity", "parking"), ("parking", "underground")],
         ] {
-            assert_eq!(ground_state(&tags(below)), GROUND_IS_BELOW_A_BUILDING, "{below:?}");
+            assert_eq!(
+                ground_state(&tags(below)),
+                GROUND_IS_BELOW_A_BUILDING,
+                "{below:?}"
+            );
         }
         // An `amenity=parking` building IS a car park (class 7 above), so
         // `parking=underground` puts THAT building below the ground. A house or a
@@ -1041,12 +1227,20 @@ mod settlement_class_tests {
             // A deck with no `building` tag stands too.
             &[("amenity", "parking"), ("parking", "multi-storey")],
         ] {
-            assert_eq!(ground_state(&tags(stands)), GROUND_HOLDS_A_BUILDING, "{stands:?}");
+            assert_eq!(
+                ground_state(&tags(stands)),
+                GROUND_HOLDS_A_BUILDING,
+                "{stands:?}"
+            );
         }
         // `building=no` says nothing stands here, and nothing overrides that.
         for denied in [
             &[("building", "no"), ("amenity", "school")] as &[(&str, &str)],
-            &[("building", "no"), ("amenity", "parking"), ("parking", "multi-storey")],
+            &[
+                ("building", "no"),
+                ("amenity", "parking"),
+                ("parking", "multi-storey"),
+            ],
         ] {
             assert_eq!(
                 ground_state(&tags(denied)),
@@ -1147,7 +1341,7 @@ mod settlement_class_tests {
                     None,
                 ),
                 FeatureType::Building => {
-                    spiller.emit_polygon(&feature, square, 2, 50.0, 14.0, &tags, None)
+                    spiller.emit_polygon(&feature, square, 2, "way", 50.0, 14.0, &tags, None)
                 }
                 _ => spiller.emit_poi(square, 50.0, 14.0, 1),
             };
@@ -1180,6 +1374,12 @@ mod settlement_class_tests {
         assert!(is_complete(&dir, 4, "planet-a"));
         assert!(!is_complete(&dir, 8, "planet-a"));
         assert!(!is_complete(&dir, 4, "planet-b"));
+        fs::write(
+            dir.join(SPILL_COMPLETE_MARKER),
+            serde_json::json!([4, "planet-a"]).to_string(),
+        )
+        .unwrap();
+        assert!(!is_complete(&dir, 4, "planet-a"));
         fs::remove_dir_all(dir).unwrap();
     }
 }

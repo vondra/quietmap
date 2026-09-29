@@ -1,6 +1,6 @@
 /** Load and match Argentina's pinned TMDA observations and DNV road classifications. */
 
-import { pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
+import { trainingCountLines, pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import type { RoadRow } from './roads-arrow.js'
 import { inBbox } from './spatial.js'
@@ -94,7 +94,7 @@ export function loadArgentinaRoadSource(options: RoadLoaderArguments): Argentina
   const national = loadPinnedRoadLines(options, [FILES.national])
   const provincial = loadPinnedRoadLines(options, [FILES.provincial])
   const tmda = loadPinnedRoadLines(options, [FILES.tmda])
-  const usableTmda = tmda.lines.filter(line => tmdaAadt(line) >= 50)
+  const usableTmda = trainingCountLines(tmda.lines.filter(line => tmdaAadt(line) >= 50))
   return {
     dnv: buildRoadLineVertexGrid([...national.lines, ...provincial.lines]),
     tmda: buildRoadLineVertexGrid(usableTmda),
@@ -122,7 +122,8 @@ export function matchArgentinaRoad(row: RoadRow, source: ArgentinaRoadSource) {
   const observed = nearestRoadLine(row.midLat, row.midLon, source.tmda, 300)
   let observation = observed ? pinnedRoadObservation(observed, 'both-directions') : null
   let total: number, kind: 'tmda' | 'dnv-national' | 'dnv-provincial'
-  if (observed) { total = tmdaAadt(observed) * multiplier; kind = 'tmda' }
+  // A published count is never scaled by a city box (the tier multipliers were invented, 2026-06-20).
+  if (observed) { total = tmdaAadt(observed); kind = 'tmda' }
   else {
     const classified = nearestRoadLine(row.midLat, row.midLon, source.dnv, 400)
     if (!classified) return null

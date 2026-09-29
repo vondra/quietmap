@@ -26,6 +26,23 @@ def canonical_input(path):
     return resolved
 
 
+def source_paths(config):
+    required = {'planet', 'rasters', 'enrichment', 'boundaries', 'city_boundaries',
+                'overture', 'regional_heights', 'official_barriers', 'measured_heights',
+                'fra_crossings', 'tc_crossings',
+                'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw'}
+    if set(config['sources']) != required:
+        raise ValueError(f'sources must be exactly {sorted(required)}')
+    return {name: canonical_input(path) for name, path in config['sources'].items()}
+
+
+def source_family_roots(sources):
+    """Source family -> the roots the pin and the freeze walk: whole trees, or exact raster and height files."""
+    return {name: list(raster_inputs(path)) if name == 'rasters'
+            else list(dict.fromkeys(height_inputs(path))) if name == 'regional_heights'
+            else [path] for name, path in sources.items()}
+
+
 def input_files(roots):
     seen_files = set()
     def walk(path, ancestors):
@@ -51,8 +68,8 @@ def input_files(roots):
 def raster_inputs(source):
     """Every channel file of every z9 square: window bytes or a 0-byte ocean file; missing is an error."""
     source = canonical_input(source)
-    for channel in ('dem', 'forest', 'imd'):
-        extension = '.i16be' if channel == 'dem' else '.u8'
+    for channel in ('dem', 'canopy', 'forest', 'imd'):
+        extension = '.u16le' if channel == 'dem' else '.u8'
         for x in range(qmgrid.Z9_AXIS):
             for y in range(qmgrid.Z9_AXIS):
                 path = source / qmgrid.square_name(x, y) / (channel + extension)
@@ -182,23 +199,25 @@ def verify_prepared_raster_links(source, prepared):
 def stamps_the_point_query_expects():
     """layer -> {metadata key: value}. The point query answers another stamp by serving without
     the layer (structures: by refusing), so this audit is the gate that keeps such a file out of a
-    release. Most stamps are read from the reader's own constants; the structures BUILDER stamp is
-    read from its producer, because the reader cannot see it — builder 1 and builder 2 both write
-    `structures_v4`, so only this audit tells a repaired square from a stale one."""
+    release. Most stamps are read from the reader's own constants; the structures builder stamp is
+    read from its producer, because the reader cannot see it — a builder change that keeps the
+    schema keeps the contract, so only this audit tells a rebuilt square from a stale one."""
     reader = Path(__file__).resolve().parent.parent / 'engine/square-store/src'
     def constants(file):
         return {name: value.encode() for name, value in
                 re.findall(r'pub const (\w+): &str = "([^"]*)";', (reader / file).read_text())}
     store, aircraft = constants('store.rs'), constants('aircraft_contract.rs')
+    osm = constants('osm_contract.rs')
     grid = {b'grid': store['GRID_CONTRACT_Z30']}
     version = {b'schema_version': aircraft['SCHEMA_VERSION']}
-    # The structures SCHEMA did not change when the builder stopped screening areas without a
-    # building tag, so only the builder stamp tells a repaired square from a stale one.
     builder = re.search(r'BUILDER_VERSION = "([^"]+)"',
                         (Path(__file__).parent / 'structures/structure_merge.py').read_text())
     return {
         'structures': {b'builder_version': builder.group(1).encode(), **grid},
-        'leisure': {b'leisure_contract': store['LEISURE_CONTRACT_V3'], **grid},
+        'roads': {b'osm_roads_contract': osm['ROADS_CONTRACT'], **grid},
+        'railways': {b'osm_railways_contract': osm['RAILWAYS_CONTRACT'], **grid},
+        'industrial': {b'osm_industrial_contract': osm['INDUSTRIAL_CONTRACT'], **grid},
+        'leisure': {b'leisure_contract': osm['LEISURE_CONTRACT_V5'], **grid},
         'ships': {b'ships_contract': store['SHIPS_CONTRACT_V1'], **grid},
         'airborne': {b'airborne_contract': aircraft['AIRBORNE_CONTRACT'], **version},
         'cruise': {b'cruise_contract': aircraft['CRUISE_CONTRACT'], **version},
@@ -243,9 +262,9 @@ def audit_world(prepared, jobs=None):
                     if metadata.get(key) != value:
                         raise ValueError(f'stale {path.stem} stamp {key.decode()}={metadata.get(key)}, the point query expects {value.decode()}: {path}')
                 if path.stem in ('airborne', 'cruise', 'airport_traffic'):
-                    days = metadata.get(b'n_days', b'')
-                    if not (days.isdigit() and 0 < int(days) < 1 << 16):
-                        raise ValueError(f'invalid n_days sampling window {days}: {path}')
+                    days = [metadata.get(key, b'') for key in (b'baseline_days', b'increment_days')]
+                    if not (all(count.isdigit() and int(count) < 1 << 16 for count in days) and int(days[0]) > 0):
+                        raise ValueError(f'invalid sampling window baseline/increment days {days}: {path}')
                 # Its agreement across cells is Stage 2C's own reduce; the stamp proves it ran.
                 if path.stem == 'airport_traffic' and airport_summaries_key not in metadata:
                     raise ValueError(f'airport traffic without Stage 2C summaries: {path}')

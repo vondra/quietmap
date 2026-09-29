@@ -161,7 +161,7 @@ impl ReceiverHorizon {
     /// equirectangular projection (`M_PER_DEG_LAT`, cos at receiver
     /// latitude) so horizon-space distances match kernel `lateral`.
     pub fn build(
-        sampler: impl Fn(f64, f64) -> f64,
+        mut sampler: impl FnMut(f64, f64) -> f64,
         lat: f64,
         lon: f64,
         receiver_alt_m: f64,

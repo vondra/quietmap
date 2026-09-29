@@ -2,7 +2,7 @@
 
 import { deflateSync, crc32 } from 'node:zlib'
 
-type FootprintRow = { p: [number, number][][][]; h: number; t: number; c: boolean }
+type FootprintRow = { p: [number, number][][][]; h: number }
 export type QueryObstacleFootprints = (
   south: number, west: number, north: number, east: number,
 ) => Promise<string>

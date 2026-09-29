@@ -26,7 +26,7 @@ export function chainContinuesThroughEndpoint(a: ContinuityChainEnd, b: Continui
       !(a.osmId === b.osmId || sameSignedRoad(a, b))) return false
   if (a.direction === 0 || b.direction === 0) return a.direction === b.direction
   // A permitted arrival must meet a permitted departure; two opposing one-way ends do not connect.
-  return ((a.direction === 1 ? a.b : a.a) === endpoint) !== ((b.direction === 1 ? b.b : b.a) === endpoint)
+  return ((a.direction !== 2 ? a.b : a.a) === endpoint) !== ((b.direction !== 2 ? b.b : b.a) === endpoint)
 }
 
 export function roadContinuityComponent<T extends ContinuityRoad>(seed: T, touching: (endpoint: string) => T[]): T[] {

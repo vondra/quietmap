@@ -29,7 +29,7 @@ Wind turbines are OpenStreetMap points. A turbine within 200 m of an entry in th
 
 ## Buildings and terrain
 
-Floor counts: [Catastro](https://www.catastro.hacienda.gob.es/INSPIRE/buildings/ES.SDGC.BU.atom.xml), where a cadastre building lies within 30 m of the OpenStreetMap building. The file does not cover every province; elsewhere the height is the GHSL average for the block.
+Floor counts: [Catastro](https://www.catastro.hacienda.gob.es/INSPIRE/buildings/ES.SDGC.BU.atom.xml), where a cadastre building lies within 30 m of the OpenStreetMap building. The file does not cover every province; elsewhere the height is the typical height for the footprint size.
 
 ## Checked against
 

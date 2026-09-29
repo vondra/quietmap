@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use arrow::array::{
-    Array, ListArray, ListBuilder, StringArray, StringBuilder, UInt16Array, UInt16Builder,
+    Array, ListArray, ListBuilder, StringArray, StringBuilder, UInt32Array, UInt32Builder,
     UInt64Array, UInt64Builder,
 };
 use arrow::datatypes::{DataType, Field, Schema};
@@ -27,7 +27,7 @@ fn part_schema() -> Arc<Schema> {
         ),
         Field::new(
             "membership_flags",
-            DataType::List(Arc::new(Field::new("item", DataType::UInt16, true))),
+            DataType::List(Arc::new(Field::new("item", DataType::UInt32, true))),
             false,
         ),
     ]))
@@ -47,7 +47,7 @@ pub(crate) fn write_airport_summary_part(
     );
     let mut keys = StringBuilder::new();
     let mut fids = ListBuilder::new(UInt64Builder::new());
-    let mut flags = ListBuilder::new(UInt16Builder::new());
+    let mut flags = ListBuilder::new(UInt32Builder::new());
     for row in rows {
         keys.append_value(&row.airport_key);
         for &(fid, mask) in &row.members {
@@ -90,7 +90,7 @@ pub(crate) fn read_airport_summary_part(path: &Path) -> Result<Vec<AirportSummar
         let flags = masks
             .values()
             .as_any()
-            .downcast_ref::<UInt16Array>()
+            .downcast_ref::<UInt32Array>()
             .ok_or_else(|| anyhow::anyhow!("airport membership type"))?;
         anyhow::ensure!(
             ids.null_count() == 0 && flags.null_count() == 0,
@@ -104,7 +104,11 @@ pub(crate) fn read_airport_summary_part(path: &Path) -> Result<Vec<AirportSummar
             anyhow::ensure!(
                 members.iter().all(|&(fid, mask)| fid != 0
                     && mask != 0
-                    && mask & !crate::stage_2c::movements::AIRPORT_FLAGS == 0),
+                    && mask
+                        & !crate::stage_2c::movements::with_secondary(
+                            crate::stage_2c::movements::AIRPORT_CATEGORIES
+                        )
+                        == 0),
                 "invalid airport flight identity or flags"
             );
             out.push(AirportSummaryPartRow {

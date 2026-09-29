@@ -37,9 +37,6 @@ function row(
     service: 0,
     name,
     existingSourceId: 0,
-    existingPassenger: 0,
-    existingFreight: 0,
-    existingDivisor: 1,
   }
 }
 

@@ -31,39 +31,16 @@ fn base_metadata(extra: &[(&str, &str)]) -> HashMap<String, String> {
     md
 }
 
-pub fn with_n_days(schema: Arc<Schema>, n_days: u16) -> Arc<Schema> {
+/// Stamp the admitted baseline/increment window every aircraft consumer
+/// normalises by.
+pub fn with_sampling_window(
+    schema: Arc<Schema>,
+    window: &noise_compute::emission::aircraft::SamplingWindow,
+) -> Arc<Schema> {
     let mut md = schema.metadata().clone();
-    md.insert("n_days".to_string(), n_days.to_string());
-    Arc::new((*schema).clone().with_metadata(md))
-}
-
-pub fn sample_days_by_class_vector(n_days: u16, ga_n_days: u16) -> String {
-    use noise_compute::emission::aircraft::{is_ga_sampled_class, NUM_CLASSES};
-    let ga = if ga_n_days == 0 { n_days } else { ga_n_days };
-    (0..NUM_CLASSES)
-        .map(|c| {
-            if is_ga_sampled_class(c as u8) {
-                ga
-            } else {
-                n_days
-            }
-            .to_string()
-        })
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-pub fn with_n_days_and_windows(schema: Arc<Schema>, n_days: u16, ga_n_days: u16) -> Arc<Schema> {
-    use noise_compute::emission::aircraft::SAMPLE_DAYS_BY_CLASS_KEY;
-    let mut md = schema.metadata().clone();
-    md.insert("n_days".to_string(), n_days.to_string());
-    if ga_n_days > 0 {
-        md.insert("ga_n_days".to_string(), ga_n_days.to_string());
+    for (key, value) in window.metadata() {
+        md.insert(key.to_string(), value);
     }
-    md.insert(
-        SAMPLE_DAYS_BY_CLASS_KEY.to_string(),
-        sample_days_by_class_vector(n_days, ga_n_days),
-    );
     Arc::new((*schema).clone().with_metadata(md))
 }
 

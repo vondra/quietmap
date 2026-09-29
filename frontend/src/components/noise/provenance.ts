@@ -68,12 +68,6 @@ export function roadTimingLine(attr: RoadTimingAttribution): string {
   return `Timing: ${sourceHost(attr.source)} · ${attr.window.replace('..', '–')}${caveat}`
 }
 
-export function roadTrafficLabel(traffic: RoadTrafficCounts): string {
-  const total =
-    traffic.aadt_light + traffic.aadt_medium + traffic.aadt_heavy + traffic.aadt_moto
-  return `${roadCount(total)}/day`
-}
-
 export function roadTrafficDescription(
   traffic: RoadTrafficCounts,
   provenance: DatasetProvenance | null | undefined,
@@ -87,7 +81,7 @@ export function roadTrafficDescription(
   return [
     roadTrafficSourceLine(provenance),
     '',
-    'Prepared daily traffic, this road:',
+    'Prepared daily traffic, this carriageway:',
     ...categories.map(([label, value, bit]) =>
       `  ${roadCategoryLine(label, value, roadCategoryEstimated(traffic, bit))}`,
     ),
@@ -121,9 +115,14 @@ export function railTrafficDescription(
   traffic: RailTraffic,
   passengerProvenance: DatasetProvenance | null,
   freightProvenance: DatasetProvenance | null,
+  // Horn approaches carry soundings (not trains) in the passenger slots.
+  soundings = false,
 ): string {
-  return ([['Passenger', traffic.passenger, passengerProvenance],
-    ['Freight', traffic.freight, freightProvenance]] as const).map(([label, category, provenance]) => {
+  const rows: Array<[string, RailTraffic['passenger'], DatasetProvenance | null]> = soundings
+    ? [['Soundings', traffic.passenger, passengerProvenance]]
+    : [['Passenger', traffic.passenger, passengerProvenance],
+      ['Freight', traffic.freight, freightProvenance]]
+  return rows.map(([label, category, provenance]) => {
     const periods = category.status === 0 ? '' : '\nDay / evening / night: ' + category.periods.map(railCount).join(' / ')
     return `${label}: ${railTrainSourceLine(category, provenance)}${periods}`
   }).join('\n\n')

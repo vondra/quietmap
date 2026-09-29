@@ -51,6 +51,11 @@ fn decode_batch(batch: &RecordBatch) -> Result<AirborneSegmentBatch<'_>, String>
         .values(),
         origin: required_array::<UInt8Array>(identity.column_by_name("origin"), "flight.origin")?
             .values(),
+        departure_field_elev_m: required_array::<Int16Array>(
+            identity.column_by_name("departure_field_elev_m"),
+            "flight.departure_field_elev_m",
+        )?
+        .values(),
     };
     // The kernel indexes the table by key without a bounds branch per row.
     let flight_key = flight.keys().values();

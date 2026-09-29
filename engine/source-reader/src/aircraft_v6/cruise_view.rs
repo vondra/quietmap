@@ -1,4 +1,9 @@
-//! Strict cruise rows with owned candidate buffers and borrowed acoustic views.
+//! Strict cruise rows with per-batch borrowed views.
+//!
+//! One batch decodes to typed arrow slices plus ONE materialized candidate
+//! vector (identity structs borrowing the arrow strings/bytes); row views
+//! borrow per-row slices of it. No per-row Vecs, no per-row Strings — the old
+//! owned copy cost ~0.3 s per popup on cruise-heavy squares.
 
 use arrow::array::*;
 use noise_compute::compute::aircraft_v6::{CruiseRowView, CruiseTopCandidateView};
@@ -12,248 +17,249 @@ fn required_column<'a, T: Array + 'static>(
         .map_err(|error| format!("cruise.arrow[batch {batch_index}] {error}"))
 }
 
-pub struct CruiseRowAccum {
-    rows: Vec<OwnedCruiseRow>,
+/// One decoded `cruise.arrow` batch: typed scalar slices borrowed from the
+/// arrow batch plus the row-major candidate structs (which borrow the arrow
+/// callsign/typecode buffers). Row `i`'s candidates are `cands[lo..hi]` with
+/// `lo/hi` from the arrow list offsets — no per-row allocation.
+pub struct CruiseBatchViews<'a> {
+    lon: &'a Float64Array,
+    lat: &'a Float64Array,
+    class: &'a UInt8Array,
+    rep_profile_idx: &'a UInt8Array,
+    fl_bin: &'a UInt8Array,
+    period: &'a UInt8Array,
+    sum_length_m: &'a Float32Array,
+    heading_bin: &'a UInt8Array,
+    rep_alt_m: &'a Float32Array,
+    rep_speed_kt: &'a Float32Array,
+    unique_count: &'a UInt32Array,
+    source_id: &'a UInt8Array,
+    origin: &'a UInt8Array,
+    secondary_only: &'a UInt8Array,
+    cand_offsets: &'a [i32],
+    cands: Vec<CruiseTopCandidateView<'a>>,
+    n: usize,
 }
 
-struct OwnedCruiseRow {
-    lon: f64,
-    lat: f64,
-    class: u8,
-    rep_profile_idx: u8,
-    fl_bin: u8,
-    period: u8,
-    sum_length_m: f32,
-    heading_bin: u8,
-    rep_alt_m: f32,
-    rep_speed_kt: f32,
-    source_id: u8,
-    origin: u8,
-    unique_count: u32,
-    /// Owned per-candidate identity fields. Candidate views borrow
-    /// from these — same Vec-of-String lifetime trick as the v13
-    /// per-fid arrays.
-    cand_fid: Vec<u64>,
-    cand_callsign: Vec<String>,
-    cand_typecode: Vec<[u8; 4]>,
-    cand_lmax: Vec<f32>,
-    cand_alt: Vec<f32>,
-}
+impl<'a> CruiseBatchViews<'a> {
+    pub fn len(&self) -> usize {
+        self.n
+    }
 
-impl CruiseRowAccum {
-    pub fn new(batches: &[arrow::record_batch::RecordBatch]) -> Result<Self, String> {
-        let mut rows = Vec::new();
-        for (batch_index, batch) in batches.iter().enumerate() {
-            let n = batch.num_rows();
-            let lon =
-                required_column::<Float64Array>(batch.column_by_name("lon"), batch_index, "lon")?;
-            let lat =
-                required_column::<Float64Array>(batch.column_by_name("lat"), batch_index, "lat")?;
-            let class =
-                required_column::<UInt8Array>(batch.column_by_name("class"), batch_index, "class")?;
-            let rep_pi = required_column::<UInt8Array>(
-                batch.column_by_name("rep_profile_idx"),
-                batch_index,
-                "rep_profile_idx",
-            )?;
-            let fl_bin = required_column::<UInt8Array>(
-                batch.column_by_name("fl_bin"),
-                batch_index,
-                "fl_bin",
-            )?;
-            let period = required_column::<UInt8Array>(
-                batch.column_by_name("period"),
-                batch_index,
-                "period",
-            )?;
-            let sum_len = required_column::<Float32Array>(
-                batch.column_by_name("sum_length_m"),
-                batch_index,
-                "sum_length_m",
-            )?;
-            let heading = required_column::<UInt8Array>(
-                batch.column_by_name("heading_bin"),
-                batch_index,
-                "heading_bin",
-            )?;
-            if heading.values().iter().any(|&value| {
-                value >= noise_compute::compute::aircraft_v6::cruise::CRUISE_HEADING_BINS
-            }) {
-                return Err(format!(
-                    "cruise.arrow[batch {batch_index}] heading_bin must be in 0..8"
-                ));
-            }
-            let rep_alt = required_column::<Float32Array>(
-                batch.column_by_name("rep_alt_m"),
-                batch_index,
-                "rep_alt_m",
-            )?;
-            let rep_speed = required_column::<Float32Array>(
-                batch.column_by_name("rep_speed_kt"),
-                batch_index,
-                "rep_speed_kt",
-            )?;
-            let unique_count = required_column::<UInt32Array>(
-                batch.column_by_name("unique_count"),
-                batch_index,
-                "unique_count",
-            )?;
-            let source_id = required_column::<UInt8Array>(
-                batch.column_by_name("source_id"),
-                batch_index,
-                "source_id",
-            )?;
-            let origin = required_column::<UInt8Array>(
-                batch.column_by_name("origin"),
-                batch_index,
-                "origin",
-            )?;
-            let cand_list = required_column::<ListArray>(
-                batch.column_by_name("top_candidates"),
-                batch_index,
-                "top_candidates",
-            )?;
-            let cand_struct = required_column::<StructArray>(
-                Some(cand_list.values()),
-                batch_index,
-                "top_candidates.item",
-            )?;
-            let cand_fid_arr = required_column::<UInt64Array>(
-                cand_struct.column_by_name("flight_id"),
-                batch_index,
-                "top_candidates.flight_id",
-            )?;
-            let cand_callsign_arr = required_column::<StringArray>(
-                cand_struct.column_by_name("callsign"),
-                batch_index,
-                "top_candidates.callsign",
-            )?;
-            let cand_tc_arr = required_column::<FixedSizeBinaryArray>(
-                cand_struct.column_by_name("aircraft_type"),
-                batch_index,
-                "top_candidates.aircraft_type",
-            )?;
-            if cand_tc_arr.value_length() != 4 {
-                return Err(format!(
-                    "cruise.arrow[batch {batch_index}] `top_candidates.aircraft_type` \
-                     must be FixedSizeBinary(4) — rebuild the cruise z9 data"
-                ));
-            }
-            let cand_lmax_arr = required_column::<Float32Array>(
-                cand_struct.column_by_name("peak_lmax_25m_db"),
-                batch_index,
-                "top_candidates.peak_lmax_25m_db",
-            )?;
-            let cand_alt_arr = required_column::<Float32Array>(
-                cand_struct.column_by_name("altitude_m"),
-                batch_index,
-                "top_candidates.altitude_m",
-            )?;
-            let cand_offsets = cand_list.value_offsets();
-            for i in 0..n {
-                let lo = cand_offsets[i] as usize;
-                let hi = cand_offsets[i + 1] as usize;
-                let len = hi - lo;
-                let mut cand_fid = Vec::with_capacity(len);
-                let mut cand_callsign = Vec::with_capacity(len);
-                let mut cand_typecode = Vec::with_capacity(len);
-                let mut cand_lmax = Vec::with_capacity(len);
-                let mut cand_alt = Vec::with_capacity(len);
-                for j in lo..hi {
-                    cand_fid.push(cand_fid_arr.value(j));
-                    cand_callsign.push(cand_callsign_arr.value(j).to_string());
-                    let mut tc = [0u8; 4];
-                    tc.copy_from_slice(cand_tc_arr.value(j));
-                    cand_typecode.push(tc);
-                    cand_lmax.push(cand_lmax_arr.value(j));
-                    cand_alt.push(cand_alt_arr.value(j));
-                }
-                rows.push(OwnedCruiseRow {
-                    lon: lon.value(i),
-                    lat: lat.value(i),
-                    class: class.value(i),
-                    rep_profile_idx: rep_pi.value(i),
-                    fl_bin: fl_bin.value(i),
-                    period: period.value(i),
-                    sum_length_m: sum_len.value(i),
-                    heading_bin: heading.value(i),
-                    rep_alt_m: rep_alt.value(i),
-                    rep_speed_kt: rep_speed.value(i),
-                    source_id: source_id.value(i),
-                    origin: origin.value(i),
-                    unique_count: unique_count.value(i),
-                    cand_fid,
-                    cand_callsign,
-                    cand_typecode,
-                    cand_lmax,
-                    cand_alt,
-                });
-            }
+    fn row_view(&'a self, i: usize) -> CruiseRowView<'a> {
+        let lo = self.cand_offsets[i] as usize;
+        let hi = self.cand_offsets[i + 1] as usize;
+        CruiseRowView {
+            lon: self.lon.value(i),
+            lat: self.lat.value(i),
+            class: self.class.value(i),
+            rep_profile_idx: self.rep_profile_idx.value(i),
+            fl_bin: self.fl_bin.value(i),
+            period: self.period.value(i),
+            sum_length_m: self.sum_length_m.value(i),
+            heading_bin: self.heading_bin.value(i),
+            rep_alt_m: self.rep_alt_m.value(i),
+            rep_speed_kt: self.rep_speed_kt.value(i),
+            source_id: self.source_id.value(i),
+            origin: self.origin.value(i),
+            secondary_only: self.secondary_only.value(i) != 0,
+            unique_count: self.unique_count.value(i),
+            top_candidates: &self.cands[lo..hi],
         }
-        Ok(Self { rows })
+    }
+}
+
+pub struct CruiseRowAccum<'a> {
+    batches: Vec<CruiseBatchViews<'a>>,
+}
+
+impl<'a> CruiseRowAccum<'a> {
+    pub fn new(batches: &'a [arrow::record_batch::RecordBatch]) -> Result<Self, String> {
+        batches
+            .iter()
+            .enumerate()
+            .map(|(batch_index, batch)| decode_batch(batch, batch_index))
+            .collect::<Result<_, _>>()
+            .map(|batches| Self { batches })
     }
 
-    /// Returns the owned candidate slice per row. Caller borrows
-    /// into these to build `CruiseRowView<'_>` instances — the
-    /// `CruiseTopCandidateView` slice must live as long as the
-    /// `CruiseRowAccum`, hence the materialisation here instead of
-    /// per-call construction.
-    fn build_candidate_views<'a>(row: &'a OwnedCruiseRow) -> Vec<CruiseTopCandidateView<'a>> {
-        (0..row.cand_fid.len())
-            .map(|j| CruiseTopCandidateView {
-                flight_id: row.cand_fid[j],
-                callsign: row.cand_callsign[j].as_str(),
-                aircraft_type: &row.cand_typecode[j],
-                peak_lmax_25m_db: row.cand_lmax[j],
-                altitude_m: row.cand_alt[j],
-            })
-            .collect()
+    pub fn len(&self) -> usize {
+        self.batches.iter().map(CruiseBatchViews::len).sum()
     }
 
-    /// Materialise per-row candidate views into a parallel
-    /// `Vec<Vec<...>>` so the per-row borrow is contiguous in memory
-    /// and noise-compute's per-row `&[CruiseTopCandidateView]` doesn't
-    /// need to be reconstructed on each access.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn views(&self) -> CruiseViewSlices<'_> {
-        let cand_views: Vec<Vec<CruiseTopCandidateView<'_>>> =
-            self.rows.iter().map(Self::build_candidate_views).collect();
         CruiseViewSlices {
-            rows: &self.rows,
-            cand_views,
+            batches: &self.batches,
         }
     }
 }
 
-/// Pair of owned candidate-view vectors + a slice into the rows.
-/// `as_row_views` borrows from both to hand noise-compute the
-/// `Vec<CruiseRowView<'a>>` it expects.
+fn decode_batch(
+    batch: &arrow::record_batch::RecordBatch,
+    batch_index: usize,
+) -> Result<CruiseBatchViews<'_>, String> {
+    let n = batch.num_rows();
+    let lon = required_column::<Float64Array>(batch.column_by_name("lon"), batch_index, "lon")?;
+    let lat = required_column::<Float64Array>(batch.column_by_name("lat"), batch_index, "lat")?;
+    let class =
+        required_column::<UInt8Array>(batch.column_by_name("class"), batch_index, "class")?;
+    let rep_pi = required_column::<UInt8Array>(
+        batch.column_by_name("rep_profile_idx"),
+        batch_index,
+        "rep_profile_idx",
+    )?;
+    let fl_bin = required_column::<UInt8Array>(
+        batch.column_by_name("fl_bin"),
+        batch_index,
+        "fl_bin",
+    )?;
+    let period = required_column::<UInt8Array>(
+        batch.column_by_name("period"),
+        batch_index,
+        "period",
+    )?;
+    let sum_len = required_column::<Float32Array>(
+        batch.column_by_name("sum_length_m"),
+        batch_index,
+        "sum_length_m",
+    )?;
+    let heading = required_column::<UInt8Array>(
+        batch.column_by_name("heading_bin"),
+        batch_index,
+        "heading_bin",
+    )?;
+    if heading.values().iter().any(|&value| {
+        value >= noise_compute::compute::aircraft_v6::cruise::CRUISE_HEADING_BINS
+    }) {
+        return Err(format!(
+            "cruise.arrow[batch {batch_index}] heading_bin must be in 0..8"
+        ));
+    }
+    let rep_alt = required_column::<Float32Array>(
+        batch.column_by_name("rep_alt_m"),
+        batch_index,
+        "rep_alt_m",
+    )?;
+    let rep_speed = required_column::<Float32Array>(
+        batch.column_by_name("rep_speed_kt"),
+        batch_index,
+        "rep_speed_kt",
+    )?;
+    let unique_count = required_column::<UInt32Array>(
+        batch.column_by_name("unique_count"),
+        batch_index,
+        "unique_count",
+    )?;
+    let source_id = required_column::<UInt8Array>(
+        batch.column_by_name("source_id"),
+        batch_index,
+        "source_id",
+    )?;
+    let origin = required_column::<UInt8Array>(
+        batch.column_by_name("origin"),
+        batch_index,
+        "origin",
+    )?;
+    let secondary_only = required_column::<UInt8Array>(
+        batch.column_by_name("secondary_only"),
+        batch_index,
+        "secondary_only",
+    )?;
+    let cand_list = required_column::<ListArray>(
+        batch.column_by_name("top_candidates"),
+        batch_index,
+        "top_candidates",
+    )?;
+    let cand_struct = required_column::<StructArray>(
+        Some(cand_list.values()),
+        batch_index,
+        "top_candidates.item",
+    )?;
+    let cand_fid_arr = required_column::<UInt64Array>(
+        cand_struct.column_by_name("flight_id"),
+        batch_index,
+        "top_candidates.flight_id",
+    )?;
+    let cand_callsign_arr = required_column::<StringArray>(
+        cand_struct.column_by_name("callsign"),
+        batch_index,
+        "top_candidates.callsign",
+    )?;
+    let cand_tc_arr = required_column::<FixedSizeBinaryArray>(
+        cand_struct.column_by_name("aircraft_type"),
+        batch_index,
+        "top_candidates.aircraft_type",
+    )?;
+    if cand_tc_arr.value_length() != 4 {
+        return Err(format!(
+            "cruise.arrow[batch {batch_index}] `top_candidates.aircraft_type` \
+             must be FixedSizeBinary(4) — rebuild the cruise z9 data"
+        ));
+    }
+    let cand_lmax_arr = required_column::<Float32Array>(
+        cand_struct.column_by_name("peak_lmax_25m_db"),
+        batch_index,
+        "top_candidates.peak_lmax_25m_db",
+    )?;
+    let cand_alt_arr = required_column::<Float32Array>(
+        cand_struct.column_by_name("altitude_m"),
+        batch_index,
+        "top_candidates.altitude_m",
+    )?;
+    let cand_offsets = cand_list.value_offsets();
+    let typecodes = cand_tc_arr.value_data();
+    let n_cands = cand_offsets[n] as usize;
+    let mut cands = Vec::with_capacity(n_cands);
+    for j in 0..n_cands {
+        cands.push(CruiseTopCandidateView {
+            flight_id: cand_fid_arr.value(j),
+            callsign: cand_callsign_arr.value(j),
+            aircraft_type: typecodes[j * 4..j * 4 + 4].try_into().expect(
+                "FixedSizeBinary(4) verified above carries four typecode bytes per candidate",
+            ),
+            peak_lmax_25m_db: cand_lmax_arr.value(j),
+            altitude_m: cand_alt_arr.value(j),
+        });
+    }
+    Ok(CruiseBatchViews {
+        lon,
+        lat,
+        class,
+        rep_profile_idx: rep_pi,
+        fl_bin,
+        period,
+        sum_length_m: sum_len,
+        heading_bin: heading,
+        rep_alt_m: rep_alt,
+        rep_speed_kt: rep_speed,
+        unique_count,
+        source_id,
+        origin,
+        secondary_only,
+        cand_offsets,
+        cands,
+        n,
+    })
+}
+
+/// Borrowed row views over the accumulator's batches.
+/// `as_row_views` hands noise-compute the `Vec<CruiseRowView<'a>>` it expects.
 pub struct CruiseViewSlices<'a> {
-    rows: &'a [OwnedCruiseRow],
-    cand_views: Vec<Vec<CruiseTopCandidateView<'a>>>,
+    batches: &'a [CruiseBatchViews<'a>],
 }
 
 impl<'a> CruiseViewSlices<'a> {
     pub fn as_row_views(&'a self) -> Vec<CruiseRowView<'a>> {
-        self.rows
-            .iter()
-            .enumerate()
-            .map(|(i, r)| CruiseRowView {
-                lon: r.lon,
-                lat: r.lat,
-                class: r.class,
-                rep_profile_idx: r.rep_profile_idx,
-                fl_bin: r.fl_bin,
-                period: r.period,
-                sum_length_m: r.sum_length_m,
-                heading_bin: r.heading_bin,
-                rep_alt_m: r.rep_alt_m,
-                rep_speed_kt: r.rep_speed_kt,
-                source_id: r.source_id,
-                origin: r.origin,
-                unique_count: r.unique_count,
-                top_candidates: self.cand_views[i].as_slice(),
-            })
-            .collect()
+        let n: usize = self.batches.iter().map(CruiseBatchViews::len).sum();
+        let mut rows = Vec::with_capacity(n);
+        for batch in self.batches {
+            rows.extend((0..batch.len()).map(|i| batch.row_view(i)));
+        }
+        rows
     }
 }
 

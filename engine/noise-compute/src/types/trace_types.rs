@@ -29,14 +29,13 @@ pub struct LdenVariants {
     pub no_atmospheric: f64,
 }
 
-/// One contiguous forested interval along a source→receiver path.
+/// One contiguous interval the homogeneous ray spends inside the canopy volume.
 #[derive(Debug, Clone, Serialize)]
 pub struct ForestRun {
     pub t_start: f64,
     pub t_end: f64,
-    /// DENSITY-WEIGHTED depth in metres (`Σ Δlen × forest/100`, geodata-v2
-    /// 2a) — equals the physical extent on binary rasters; geometry lives
-    /// in `t_start`/`t_end`.
+    /// COVER-WEIGHTED ray metres (`Σ Δslant × cover`, fraction of the interval's
+    /// ends in canopy); geometry lives in `t_start`/`t_end`.
     pub len_m: f64,
 }
 
@@ -176,7 +175,7 @@ pub struct GroundTrace {
 #[derive(Debug, Clone, Serialize)]
 pub struct BaselineTrace {
     pub geometric_db: f64,
-    pub atmospheric_bands: [f64; NUM_BANDS],
+    pub atmospheric_bands: PerPeriod<[f64; NUM_BANDS]>,
     pub ground_factor_g: f64,
     pub source_height_m: f64,
     pub finite_line_corr_db: f64,
@@ -231,9 +230,7 @@ pub struct CnossosBreakdown {
 /// SEL_seg = sel_npd_db + delta_v_db + delta_i_db − lambda_db + delta_f_db
 /// ```
 ///
-/// On the CFFK fast path (slant > 7.62 km), `lambda_db` and `delta_i_db`
-/// collapse to 0.0 per Doc 29 §A.2.7 (lateral attenuation and installation
-/// directivity become negligible at long slant).
+/// Lateral attenuation and installation corrections apply at every slant.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct Doc29Breakdown {
     pub sel_npd_db: f64,
@@ -244,14 +241,12 @@ pub struct Doc29Breakdown {
     pub d_p_m: f64,
     pub lateral_m: f64,
     /// Elevation angle (β) in degrees — receiver-to-source aspect for
-    /// lateral attenuation. CFFK fast path sets this to 90.0 sentinel
-    /// (lambda not used at long slant).
+    /// lateral attenuation.
     pub beta_deg: f64,
     pub seg_len_m: f64,
-    pub d_bar_m: f64,
+    pub d_lambda_m: f64,
     /// `wing` | `fuselage` | `propeller` — engine installation per Doc 29 §A.3.
     pub installation: &'static str,
-    pub cffk_fast_path: bool,
     /// Receiver-side winner before the mutually-exclusive Lambda credit.
     /// `none` | `terrain` | `building`.
     pub screening_kind: &'static str,
@@ -461,6 +456,10 @@ pub struct SegmentTrace {
     /// `None` for airborne / cruise rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length_m_per_kind: Option<[f32; 3]>,
+    /// Stable per-kind row index (kept position for surface rows, input order
+    /// for aircraft): the top-K total-order tiebreak. Never on the wire.
+    #[serde(skip)]
+    pub sort_seq: u64,
 }
 
 #[inline]
@@ -516,6 +515,31 @@ pub struct TraceCollector {
     /// longer a valid denominator.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub airborne_above_cutoff: u32,
+    /// Kept-row counts per surface kind, set by the kernels when they
+    /// pre-select (see `trace_cap`): the summary's `*_total` denominators.
+    /// Zero when the kind pushed every kept row (pre-selection off).
+    /// Ground always pre-selects (legacy 150 cap), so its total is always set.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub road_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub railway_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub building_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub industrial_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub ship_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub aircraft_ground_total: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub aircraft_cruise_total: u32,
+    /// Per-kind trace budget for in-kernel pre-selection. `None` (tests,
+    /// oracle) keeps the old behaviour: every kept row pushes a trace.
+    /// The popup sets `Some(150)` (summary) or `Some(1000)` (all segments);
+    /// kernels then push only that kind's top-K survivors and report the
+    /// kept count via the `*_total` fields above.
+    #[serde(skip)]
+    pub trace_cap: Option<usize>,
 }
 
 #[inline]

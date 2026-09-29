@@ -10,6 +10,8 @@ use std::path::Path;
 
 pub const CONTRACT: &str = "road_traffic_contract";
 pub const COUNTS: [&str; 4] = ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"];
+/// Whole-road vehicles per day at a finalized piece; 0 where only its own direction is known.
+pub const CROSS_SECTION_AADT: &str = "cross_section_aadt";
 
 #[derive(Clone, Debug)]
 pub struct Road {
@@ -22,6 +24,10 @@ pub struct Road {
     pub lanes: u8,
     pub access: u8,
     pub tunnel: bool,
+    /// 0 unknown, 1 rural, 2 urban (`noise_compute::defaults::BUILT_UP_*`).
+    pub built_up: u8,
+    /// A roundabout ring is one-way by OSM tagging, yet each point of it carries the circulating flow.
+    pub roundabout: bool,
     pub country: SquareCountryCity,
     pub source_id: u16,
     pub observation_source_id: u16,
@@ -59,6 +65,7 @@ pub fn load(path: &Path) -> Result<Vec<RecordBatch>, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let reader = FileReader::try_new(file, None).map_err(|e| e.to_string())?;
     let schema = reader.schema();
+    square_store::osm_contract::validate(&schema, "roads")?;
     let mut batches = reader.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
     if batches.is_empty() { batches.push(RecordBatch::new_empty(schema)); }
     Ok(batches)
@@ -77,6 +84,8 @@ pub fn roads(batch: &RecordBatch) -> Result<Vec<Road>, String> {
     let lanes = column::<UInt8Array>(batch, "lanes")?;
     let access = column::<UInt8Array>(batch, "access")?;
     let tunnel = column::<BooleanArray>(batch, "tunnel")?;
+    let built_up = column::<UInt8Array>(batch, "built_up")?;
+    let junction = column::<UInt8Array>(batch, "junction")?;
     let country = column::<UInt16Array>(batch, "country_iso")?;
     let city = column::<UInt16Array>(batch, "city_id")?;
     let continent = column::<UInt8Array>(batch, "continent")?;
@@ -105,7 +114,7 @@ pub fn roads(batch: &RecordBatch) -> Result<Vec<Road>, String> {
         let count_basis = basis.map(|v| v.value(i)).unwrap_or(if finalized { 3 } else { 0 });
         let observation = observations.map(|v| v.value(i)).unwrap_or("").to_owned();
         let status = estimated.map(|v| v.value(i)).unwrap_or(15);
-        if direction.value(i) > 2 || class.value(i) > 12 || count_basis > 4 || status > 15
+        if direction.value(i) > 4 || class.value(i) > 12 || count_basis > 4 || status > 15
             || count_values.iter().any(|v| !v.is_finite() || *v < 0.0)
             || (source.value(i) != 0 && count_basis != 3 && observation.is_empty()) {
             return Err(format!("invalid road traffic at {}:{}", ids.value(i), segments.value(i)));
@@ -119,7 +128,8 @@ pub fn roads(batch: &RecordBatch) -> Result<Vec<Road>, String> {
             way_id: ids.value(i), segment_idx: segments.value(i),
             start, end,
             direction: direction.value(i), class: class.value(i), lanes: lanes.value(i),
-            access: access.value(i), tunnel: tunnel.value(i),
+            access: access.value(i), tunnel: tunnel.value(i), built_up: built_up.value(i),
+            roundabout: junction.value(i) != 0,
             country: baked_square_country_city(country.value(i), city.value(i), continent.value(i)),
             source_id: source.value(i),
             observation_source_id: origins.map(|v| v.value(i)).unwrap_or(source.value(i)),

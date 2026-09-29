@@ -113,6 +113,17 @@ pub fn square_name(square: Square) -> String {
     format!("z9/{}/{}", square.x, square.y)
 }
 
+/// Latitude of a z9 square's centre, degrees: the local projection scale of
+/// per-square geometry code. One scale per square keeps sibling tests
+/// independent of input row order (a first-row scale flips near-gate pairs
+/// when the input is reversed).
+pub fn square_center_lat_deg(square: Square) -> f64 {
+    let northing =
+        (0.5 - (f64::from(square.y) + 0.5) / f64::from(Z9_TILES_PER_AXIS)) * EARTH_CIRCUMFERENCE_M;
+    (2.0 * (northing / WEB_MERCATOR_RADIUS_M).exp().atan() - std::f64::consts::FRAC_PI_2)
+        .to_degrees()
+}
+
 /// Parse [`square_name`] back. Rejects anything else — one naming, no aliases.
 pub fn parse_square_name(name: &str) -> Option<Square> {
     let rest = name.strip_prefix("z9/")?;
@@ -219,6 +230,22 @@ mod tests {
         assert_eq!(square_id(Square { x: 276, y: 173 }), 100_786);
         assert_eq!(square_from_id(-1), None);
         assert_eq!(square_from_id(MAX_SQUARE_ID + 1), None);
+    }
+
+    #[test]
+    fn square_centre_latitude_roundtrips_through_its_own_square() {
+        let prague = Square { x: 276, y: 173 };
+        let lat = square_center_lat_deg(prague);
+        assert!((lat - 50.0642).abs() < 1e-3, "{lat}");
+        assert_eq!(square_of(lat, 14.25), prague);
+        assert_eq!(
+            square_of(square_center_lat_deg(Square { x: 0, y: 0 }), -179.9).y,
+            0
+        );
+        assert_eq!(
+            square_of(square_center_lat_deg(Square { x: 511, y: 511 }), 179.9).y,
+            511
+        );
     }
 
     #[test]

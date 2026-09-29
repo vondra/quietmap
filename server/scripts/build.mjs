@@ -26,6 +26,7 @@ import {
   serverRoot,
 } from './release-layout.mjs'
 import { ensureReleaseLock } from './release-lock.mjs'
+import { productCodeIdentity, writeReleaseIdentity } from './release-identity.mjs'
 import { assertInstalledDependenciesMatchLock } from './dependency-lock.mjs'
 
 ensureReleaseLock(fileURLToPath(import.meta.url))
@@ -83,6 +84,7 @@ function treeFingerprint(root) {
 
 const nativeSource = resolve(serverRoot, '..', 'engine/target/release/libsource_reader.so')
 const sourceInputsBefore = sourceInputFingerprint()
+const codeIdentity = productCodeIdentity(repoRoot)
 const dependencyLock = readFileSync(resolve(serverRoot, 'package-lock.json'))
 // A release is named after package-lock.json, so copying modules installed
 // from a different lock would permanently mislabel and cache stale code.
@@ -141,7 +143,8 @@ assertInstalledDependenciesMatchLock(serverRoot, {
   ...dependencyLockOptions,
   nodeModulesRoot: dependencyModules,
 })
-const releaseName = `release-${new Date().toISOString().replace(/[^0-9TZ]/g, '')}-${process.pid}`
+const builtAt = new Date()
+const releaseName = `release-${builtAt.toISOString().replace(/[^0-9TZ]/g, '')}-${process.pid}`
 const stage = resolve(releaseRoot, `.stage-${releaseName}`)
 const release = resolve(releaseRoot, releaseName)
 let published = false
@@ -250,6 +253,13 @@ if (nativeInputAfter !== nativeInputBefore || nativeCopy !== nativeInputBefore) 
   throw new Error('native addon changed while being copied; refusing to publish a mixed release')
 }
 
+writeReleaseIdentity(stage, {
+  ...codeIdentity,
+  built_utc: builtAt.toISOString(),
+  server_source_sha256: sourceInputsBefore,
+  frontend_tree_sha256: frontendInputBefore,
+  native_sha256: nativeCopy,
+})
 renameSync(stage, release)
 published = true
 prepareRelease(release)

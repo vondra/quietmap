@@ -1,14 +1,28 @@
 //! Industrial sites and ship cells become normalized emission points.
 
 use super::spatial::{INDUSTRIAL_QUERY_RADIUS_M, SHIP_QUERY_RADIUS_M};
+use noise_compute::constants::INDUSTRIAL_MAX_RADIUS;
 use arrow::array::Array;
 use square_store::grid_cols::{
     col_binary, col_f32, col_i32, col_i64, col_str, col_u16, col_u8, decode_geom, grid_cell_lonlat,
 };
 use square_store::store::SquareData;
 
+/// The facility joins over every loaded square's industrial batches: the
+/// transformer units, the solar plant polygons that silence their contained
+/// generators, and the substation facility parts whose union is one
+/// rating truth. One value, built once on first need, so the three indexes
+/// never drift.
+pub(super) struct IndustrialJoins {
+    pub transformers: Vec<square_store::osm_evidence::TransformerUnit>,
+    pub solar_plants: Vec<grid::poly::PreparedRing>,
+    pub substation_facilities: square_store::osm_evidence::SubstationFacilities,
+}
+
 pub(super) fn collect_industrial(
     data: &SquareData,
+    all_data: &[&SquareData],
+    joins: &mut Option<IndustrialJoins>,
     lat: f64,
     lng: f64,
     output: &mut Vec<noise_compute::types::PointSource>,
@@ -31,10 +45,6 @@ pub(super) fn collect_industrial(
 
         for i in 0..n {
             let (c_lon, c_lat) = grid_cell_lonlat(cgx.value(i), cgy.value(i));
-            let dist = grid::geo::flat_dist(lat, lng, c_lat, c_lon);
-            if dist > INDUSTRIAL_QUERY_RADIUS_M {
-                continue;
-            }
             if col_u8(batch, "suppressed").map(|a| a.value(i)).unwrap_or(0) != 0 {
                 continue;
             }
@@ -51,6 +61,26 @@ pub(super) fn collect_industrial(
                     .and_then(|g| decode_geom(Some(g.value(i))))
                     .unwrap_or_default()
             };
+            // The gate is the polygon EDGE, not its centroid: a receiver at the
+            // east end of Garzweiler stands 5.6 km from the mine's centroid but
+            // 250 m from its boundary, and the old 5 km centroid gate dropped
+            // the mine (+32 dB at the east end once admitted). The painter
+            // never had a centroid gate — its per-point reach caps at
+            // `INDUSTRIAL_MAX_RADIUS` — so the popup admits a row exactly when
+            // its edge can reach: centroid distance minus ring radius ≤ 4 km.
+            // Rows without a ring are points (radius 0), as the painter treats
+            // them (a ringless row discretises to one centroid point).
+            let ring_radius_m = polygon_grid
+                .iter()
+                .map(|&(gx, gy)| {
+                    let (lon, lat) = grid_cell_lonlat(gx, gy);
+                    grid::geo::flat_dist(c_lat, c_lon, lat, lon)
+                })
+                .fold(0.0f64, f64::max);
+            let dist = grid::geo::flat_dist(lat, lng, c_lat, c_lon);
+            if dist - ring_radius_m > INDUSTRIAL_MAX_RADIUS {
+                continue;
+            }
             let positive_value = |column: Option<&arrow::array::Float32Array>| {
                 column
                     .map(|values| values.value(i))
@@ -60,6 +90,69 @@ pub(super) fn collect_industrial(
             let site_subtype = col_u8(batch, "site_subtype")
                 .map(|a| a.value(i))
                 .unwrap_or(0);
+            // Power evidence comes from the retained tags, not columns: solar
+            // MW from `plant:output:electricity`, substation MVA from the
+            // transformer join over all loaded squares (built lazily, only
+            // when a substation row is admitted — most popups admit none).
+            let is_power = matches!(
+                source_type,
+                noise_compute::emission::industrial::SOURCE_SOLAR_FARM
+                    | noise_compute::emission::industrial::SOURCE_SUBSTATION
+            );
+            let row_tags = is_power.then(|| square_store::osm_evidence::optional_tags(batch, i));
+            // A gas-network station carries no transformer hum.
+            if row_tags
+                .as_ref()
+                .is_some_and(square_store::osm_evidence::is_gas_substation)
+            {
+                continue;
+            }
+            // A class-13 generator inside its plant polygon stays silent —
+            // the plant (nameplate, else its own area × density) owns the
+            // emission. The plant index spans all loaded squares (built
+            // lazily, only when a generator row is admitted): a plant across
+            // a square edge still silences its generator in the neighbour.
+            if source_type == noise_compute::emission::industrial::SOURCE_SOLAR_FARM
+                && row_tags.as_ref().is_some_and(|tags| {
+                    !square_store::osm_evidence::tags_is_solar_plant(tags)
+                })
+            {
+                let joins = ensure_global_industrial_joins(all_data, joins)?;
+                if square_store::osm_evidence::inside_solar_plant(
+                    &joins.solar_plants,
+                    cgx.value(i),
+                    cgy.value(i),
+                ) {
+                    continue;
+                }
+            }
+            let plant_output_mw = row_tags
+                .as_ref()
+                .and_then(square_store::osm_evidence::plant_output_mw);
+            let (substation_mva, substation_class) = match row_tags.as_ref() {
+                Some(tags)
+                    if source_type
+                        == noise_compute::emission::industrial::SOURCE_SUBSTATION =>
+                {
+                    let joins = ensure_global_industrial_joins(all_data, joins)?;
+                    let kind = col_str(batch, "osm_kind")
+                        .filter(|kinds| !kinds.is_null(i))
+                        .map(|kinds| kinds.value(i))
+                        .unwrap_or("");
+                    let feed = joins.substation_facilities.feed(
+                        kind,
+                        osm_id,
+                        &polygon_grid,
+                        &joins.transformers,
+                    );
+                    square_store::osm_evidence::substation_power(tags, &feed)
+                }
+                _ => (None, 0),
+            };
+            let facility_share = row_tags
+                .as_ref()
+                .map(square_store::osm_evidence::facility_share)
+                .unwrap_or(1.0);
             let prepared_points = noise_compute::normalize::prepare_industrial_points(
                 noise_compute::normalize::RawIndustrialInput {
                     centroid_lat: c_lat,
@@ -73,6 +166,10 @@ pub(super) fn collect_industrial(
                     nace_4digit: col_u16(batch, "nace_4digit")
                         .map(|a| a.value(i))
                         .filter(|&v| v > 0),
+                    plant_output_mw,
+                    substation_mva,
+                    substation_class,
+                    facility_share,
                 },
             );
             let row_source_id = col_u16(batch, "source_id").map(|a| a.value(i)).unwrap_or(0);
@@ -91,6 +188,30 @@ pub(super) fn collect_industrial(
         }
     }
     Ok(())
+}
+
+/// Build the facility joins once from every loaded square's industrial file:
+/// a polygon stored in its centroid square still sees the transformer and
+/// generator units in the neighbour squares it touches. All three indexes
+/// build together from one batch collection, on first need only.
+fn ensure_global_industrial_joins<'a>(
+    all_data: &[&SquareData],
+    joins: &'a mut Option<IndustrialJoins>,
+) -> Result<&'a IndustrialJoins, String> {
+    if joins.is_none() {
+        let mut batches = Vec::new();
+        for data in all_data {
+            batches.extend(data.industrial.batches_all()?);
+        }
+        *joins = Some(IndustrialJoins {
+            transformers: square_store::osm_evidence::transformer_units(&batches),
+            solar_plants: square_store::osm_evidence::solar_plants(&batches),
+            substation_facilities: square_store::osm_evidence::SubstationFacilities::build(
+                &batches,
+            ),
+        });
+    }
+    Ok(joins.as_ref().expect("built above"))
 }
 
 pub(super) fn collect_ships(

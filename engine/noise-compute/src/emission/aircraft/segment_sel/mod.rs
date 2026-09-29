@@ -17,6 +17,9 @@ use super::npd::{
     noise_class_of, Installation, NpdLuts, CLASS_REP_PROFILE_IDX, PROFILES, REACH_SQ_TABLE,
 };
 use super::segment_filters::SegmentTerrain;
+use super::thrust::{
+    heli_correction_db, power_bracket, thrust_input_for_segment, thrust_model_for_class,
+};
 
 /// Compute SEL for a single aircraft segment at a receiver point.
 /// Returns (SEL_dB, CpaResult) or None if segment is too far / inaudible.
@@ -164,9 +167,8 @@ pub fn within_kernel_reach(
 }
 
 /// Energy-only `segment_sel_with_terrain` for the CRUISE heatmap (which discards
-/// the CPA). SEL is bit-identical — `WANT_CPA = false` skips the kernel's CPA-only
-/// `lateral_m` sqrt. (Cruise is always the CFFK fast path, so the full-path
-/// `beta_deg` atan the airborne energy path also skips never runs here.)
+/// the CPA). SEL is bit-identical — `WANT_CPA = false` skips the CPA-only
+/// `beta_deg` atan.
 /// C2 horizon hard-wired `None` — cruise structural exemption, see
 /// [`segment_sel_with_terrain`].
 #[inline]
@@ -331,37 +333,6 @@ fn segment_sel_with_overrides<const WANT_CPA: bool>(
     Some((kernel.sel, cpa))
 }
 
-/// Popup-only detailed result. It retains a segment whose screened SEL falls
-/// below the 20 dB display floor so the caller can keep its pre-screen energy;
-/// production wrappers still reject that segment before exposing it.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn segment_kernel_with_cuts<const FLOOR: bool>(
-    seg: &AircraftSegment,
-    rx_lat: f64,
-    rx_lon: f64,
-    rx_elev_m: f64,
-    terrain_start_cut_m: f64,
-    terrain_end_cut_m: f64,
-    npd_luts: &NpdLuts,
-    horizon: &ReceiverHorizon,
-    buildings: Option<&super::BuildingHorizon>,
-) -> Option<AircraftKernelResult> {
-    segment_kernel_with_overrides::<true, true, FLOOR>(
-        seg,
-        rx_lat,
-        rx_lon,
-        rx_elev_m,
-        seg.start_alt_m as f64,
-        seg.end_alt_m as f64,
-        false,
-        terrain_start_cut_m,
-        terrain_end_cut_m,
-        npd_luts,
-        Some(horizon),
-        buildings,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn segment_kernel_with_overrides<
     const WANT_CPA: bool,
@@ -381,7 +352,7 @@ fn segment_kernel_with_overrides<
     horizon: Option<&ReceiverHorizon>,
     buildings: Option<&super::BuildingHorizon>,
 ) -> Option<AircraftKernelResult> {
-    // SEL/v_ref/d_bar/installation come from the class's Voronoi anchor.
+    // SEL/v_ref/installation come from the class's Voronoi anchor.
     // Per-segment acoustic error vs the segment's own per-typecode profile
     // is bounded by class spread (avg 0.76 dB across global traffic).
     let class_idx = noise_class_of(seg.profile_idx) as usize;
@@ -405,11 +376,20 @@ fn segment_kernel_with_overrides<
 
     let (inst_code, di_a, di_b, di_c) = delta_i_constants(anchor_profile.installation);
     let dv = delta_v(seg.speed_kt as f64, anchor_profile);
+    let (power_row, power_w) = power_bracket(
+        thrust_model_for_class(class_idx),
+        &thrust_input_for_segment(
+            seg,
+            start_alt_m,
+            end_alt_m,
+            terrain_start_cut_m,
+            terrain_end_cut_m,
+            f64::from(seg.departure_field_elev_m),
+        ),
+    )?;
+    let heli_db = heli_correction_db(seg.profile_idx, seg.is_departure, seg.heli_descent);
 
-    // REACH_SQ_TABLE uses the class's loudest-member reach (not the
-    // anchor's), so the pre-filter envelope covers Voronoi-assigned
-    // outliers like B752 in WING_A320 — a louder member must never be
-    // dropped at long range before the kernel sees it.
+    // Reach uses the same class anchor as the emission kernel.
     let reach_sq = REACH_SQ_TABLE[class_idx][seg.is_departure as usize];
 
     if RETAIN_SCREENED {
@@ -427,8 +407,10 @@ fn segment_kernel_with_overrides<
             class_idx,
             seg.is_departure,
             dv,
-            anchor_profile.d_bar_m,
             inst_code,
+            power_row,
+            power_w,
+            heli_db,
             di_a,
             di_b,
             di_c,
@@ -454,8 +436,10 @@ fn segment_kernel_with_overrides<
             class_idx,
             seg.is_departure,
             dv,
-            anchor_profile.d_bar_m,
             inst_code,
+            power_row,
+            power_w,
+            heli_db,
             di_a,
             di_b,
             di_c,
@@ -491,9 +475,11 @@ pub struct SegmentPrepared {
     pub sdz: f64,
     pub is_departure: bool,
     pub class_idx: usize,
-    pub d_bar_m: f64,
     pub dv: f64,
     pub inst: Installation,
+    pub power_row: u8,
+    pub power_w: f64,
+    pub heli_db: f64,
     pub di_a: f64,
     pub di_b: f64,
     pub di_c: f64,
@@ -515,13 +501,14 @@ pub struct SegmentRowState {
 
 /// Hoist of the sub-segment-constant work from
 /// `segment_sel_with_overrides`. `terrain_*_cut_m` are typically
-/// `terrain_*_elev_m − 30`.
+/// `terrain_*_elev_m − 30`. `None` rejects a segment outside the thrust
+/// model's domain, exactly as the kernel does.
 #[inline]
 pub fn prepare_segment(
     seg: &AircraftSegment,
     terrain_start_cut_m: f64,
     terrain_end_cut_m: f64,
-) -> SegmentPrepared {
+) -> Option<SegmentPrepared> {
     let class_idx = noise_class_of(seg.profile_idx) as usize;
     let anchor_profile = &PROFILES[CLASS_REP_PROFILE_IDX[class_idx] as usize];
     let (inst, di_a, di_b, di_c) = delta_i_constants(anchor_profile.installation);
@@ -530,8 +517,20 @@ pub fn prepare_segment(
     let d_lon = wrapped_longitude_delta(seg.start_lon, seg.end_lon);
     let sdy = (seg.end_lat - seg.start_lat) * M_PER_DEG_LAT;
     let sdz = (seg.end_alt_m as f64) - (seg.start_alt_m as f64);
+    let (power_row, power_w) = power_bracket(
+        thrust_model_for_class(class_idx),
+        &thrust_input_for_segment(
+            seg,
+            seg.start_alt_m as f64,
+            seg.end_alt_m as f64,
+            terrain_start_cut_m,
+            terrain_end_cut_m,
+            f64::from(seg.departure_field_elev_m),
+        ),
+    )?;
+    let heli_db = heli_correction_db(seg.profile_idx, seg.is_departure, seg.heli_descent);
 
-    SegmentPrepared {
+    Some(SegmentPrepared {
         start_lat: seg.start_lat,
         start_lon: seg.start_lon,
         start_alt_m: seg.start_alt_m as f64,
@@ -540,16 +539,18 @@ pub fn prepare_segment(
         sdz,
         is_departure: seg.is_departure,
         class_idx,
-        d_bar_m: anchor_profile.d_bar_m,
         dv,
         inst,
+        power_row,
+        power_w,
+        heli_db,
         di_a,
         di_b,
         di_c,
         reach_sq,
         terrain_start_cut_m,
         terrain_end_cut_m,
-    }
+    })
 }
 
 /// Hoist of the per-row work from `segment_sel_with_overrides` (minus
@@ -602,8 +603,10 @@ pub fn segment_sel_at_pixel(
         prepared.class_idx,
         prepared.is_departure,
         prepared.dv,
-        prepared.d_bar_m,
         prepared.inst,
+        prepared.power_row,
+        prepared.power_w,
+        prepared.heli_db,
         prepared.di_a,
         prepared.di_b,
         prepared.di_c,
@@ -629,8 +632,7 @@ pub fn segment_sel_at_pixel(
 
 /// Energy-only per-pixel call for the heatmap (which discards the CPA). The SEL
 /// is bit-for-bit identical to `segment_sel_at_pixel().0` — `WANT_CPA = false`
-/// only skips the CPA-only `beta_deg` atan (full path) and `lateral_m` sqrt
-/// (fast path), neither of which feeds `sel`. Returns just the SEL and skips the
+/// only skips the CPA-only `beta_deg` atan, which never feeds `sel`. Returns just the SEL and skips the
 /// `CpaResult` build. Production heatmaps pass a terrain horizon here;
 /// [`segment_sel_at_pixel_energy_screened`] adds the building horizon.
 #[inline]
@@ -695,8 +697,10 @@ fn segment_sel_at_pixel_energy_inner(
         prepared.class_idx,
         prepared.is_departure,
         prepared.dv,
-        prepared.d_bar_m,
         prepared.inst,
+        prepared.power_row,
+        prepared.power_w,
+        prepared.heli_db,
         prepared.di_a,
         prepared.di_b,
         prepared.di_c,

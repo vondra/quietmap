@@ -1,117 +1,210 @@
-/** Enrich z9 Amsterdam roads with the pinned EU-city 2025 AADT source. */
+/** Enrich z9 Dutch roads with RWS INWEVA 2024 section measurements. */
 
-import { SOURCE_ID_EU_CITY_TRAFFIC } from './lib/source-ids.generated.js'
-import type { PreparedBbox } from './lib/prepared-grid.js'
 import { shouldOverwrite } from './lib/provenance.js'
+import { listPreparedSquares } from './lib/prepared-grid.js'
 import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
+import { loadDutchInwevaSource, type DutchInwevaObservation } from './lib/roads-nl-source.js'
+import { SOURCE_ID_NL_NATIONAL_ROADS } from './lib/source-ids.generated.js'
+import { applyRoadTimeProfiles, roadClassTakesCount, writeRoadAadt, type RoadRow, type RoadTimeProfileEntry } from './lib/roads-arrow.js'
+import { ownSquareShard, writeNationalRoadSquares } from './lib/square-pool.js'
 import {
-  loadAmsterdamTrafficCensus, type AmsterdamTrafficRecord,
-} from './lib/roads-nl-source.js'
-import { writeRoadAadt, type RoadRow } from './lib/roads-arrow.js'
-import { writeNationalRoadSquares } from './lib/square-pool.js'
-import { flatDist } from './lib/spatial.js'
+  buildOneHundredthDegreeSegmentGrid,
+  pointGridCandidates,
+  pointToSegmentDist,
+  runsAlongSegment,
+  runsWithSegment,
+  type SegmentCoordinates,
+} from './lib/spatial.js'
 
-const SOURCE_ID = SOURCE_ID_EU_CITY_TRAFFIC
-const GRID_CELL_DEGREES = 0.001
-const MAXIMUM_MATCH_DISTANCE_M = 50
+const SOURCE_ID = SOURCE_ID_NL_NATIONAL_ROADS
+const NETHERLANDS_BBOX = [50.7, 3.2, 53.7, 7.3] as const
+const COVERED_ROAD_CLASSES: ReadonlySet<number> = new Set([0, 1, 2, 3, 4, 10, 11, 12])
+const MAXIMUM_DISTANCE_METRES = 50
 
-const gridKey = (latitudeCell: number, longitudeCell: number): string =>
-  `${latitudeCell},${longitudeCell}`
-
-export function indexAmsterdamTraffic(
-  records: readonly AmsterdamTrafficRecord[],
-): ReadonlyMap<string, readonly AmsterdamTrafficRecord[]> {
-  const grid = new Map<string, AmsterdamTrafficRecord[]>()
-  for (const record of records) {
-    const key = gridKey(
-      Math.floor(record.latitude / GRID_CELL_DEGREES),
-      Math.floor(record.longitude / GRID_CELL_DEGREES),
-    )
-    const bucket = grid.get(key)
-    if (bucket) bucket.push(record)
-    else grid.set(key, [record])
-  }
-  return grid
+interface ObservationEdge extends SegmentCoordinates {
+  observation: DutchInwevaObservation
 }
 
-/** Match the road midpoint to the nearest treated-source representative point. */
-export function matchAmsterdamTrafficRecord(
-  row: RoadRow,
-  grid: ReadonlyMap<string, readonly AmsterdamTrafficRecord[]>,
-): AmsterdamTrafficRecord | null {
-  const latitudeCell = Math.floor(row.midLat / GRID_CELL_DEGREES)
-  const longitudeCell = Math.floor(row.midLon / GRID_CELL_DEGREES)
-  let closest: AmsterdamTrafficRecord | null = null
-  let closestDistance = MAXIMUM_MATCH_DISTANCE_M
-  for (let latitudeOffset = -1; latitudeOffset <= 1; latitudeOffset++) {
-    for (let longitudeOffset = -1; longitudeOffset <= 1; longitudeOffset++) {
-      const candidates = grid.get(gridKey(
-        latitudeCell + latitudeOffset,
-        longitudeCell + longitudeOffset,
-      ))
-      if (!candidates) continue
-      for (const candidate of candidates) {
-        const distance = flatDist(
-          row.midLat, row.midLon, candidate.latitude, candidate.longitude,
-        )
-        if (distance < closestDistance) {
-          closest = candidate
-          closestDistance = distance
-        }
+export interface DutchInwevaIndex {
+  edges: ReadonlyMap<string, readonly ObservationEdge[]>
+}
+
+export function indexDutchInweva(observations: readonly DutchInwevaObservation[]): DutchInwevaIndex {
+  const edges: ObservationEdge[] = []
+  for (const observation of observations) {
+    for (const line of observation.lines) {
+      for (let index = 1; index < line.length; index++) {
+        const [startLon, startLat] = line[index - 1]
+        const [endLon, endLat] = line[index]
+        edges.push({
+          observation,
+          startLatitude: startLat,
+          startLongitude: startLon,
+          endLatitude: endLat,
+          endLongitude: endLon,
+        })
       }
     }
+  }
+  return { edges: buildOneHundredthDegreeSegmentGrid(edges) }
+}
+
+function rowRefs(ref: string | null): Set<string> {
+  const refs = new Set<string>()
+  for (const token of (ref ?? '').split(/[;,]/)) {
+    const key = token.trim().toUpperCase().replace(/\s+/g, '')
+    if (key) refs.add(key)
+  }
+  return refs
+}
+
+/** A row takes the nearest section of its own road number running along it; ramps carry no
+ *  OSM ref, so they match by line and slip class alone. A cross street within 50 m never
+ *  qualifies: the section and the row must run within 30 degrees of each other. A lonely
+ *  directional section counts one carriageway, so only rows travelling with its line take it
+ *  (INWEVA lines run along travel: every reciprocal twin pair runs antiparallel); a paired
+ *  two-way total keeps the unsigned gate and the finalizer shares it between the carriageways. */
+export function matchDutchInweva(row: RoadRow, index: DutchInwevaIndex): DutchInwevaObservation | null {
+  let closest: DutchInwevaObservation | null = null
+  let closestDistance = MAXIMUM_DISTANCE_METRES
+  let closestId = ''
+  const refs = rowRefs(row.ref)
+  for (const edge of pointGridCandidates(row.midLat, row.midLon, MAXIMUM_DISTANCE_METRES, index.edges)) {
+    const { observation } = edge
+    if (!observation.isRamp && ![...observation.refs].some(ref => refs.has(ref))) continue
+    const follows = observation.countBasis === 'directional' ? runsWithSegment(row, edge) : runsAlongSegment(row, edge)
+    if (!follows) continue
+    if (!roadClassTakesCount(row.roadClass, observation)) continue
+    const distance = pointToSegmentDist(
+      row.midLat,
+      row.midLon,
+      edge.startLatitude,
+      edge.startLongitude,
+      edge.endLatitude,
+      edge.endLongitude,
+    )
+    if (
+      distance > MAXIMUM_DISTANCE_METRES ||
+      distance > closestDistance ||
+      (distance === closestDistance && observation.observationId >= closestId)
+    )
+      continue
+    closest = observation
+    closestDistance = distance
+    closestId = observation.observationId
   }
   return closest
 }
 
-function sourceBbox(records: readonly AmsterdamTrafficRecord[]): PreparedBbox {
-  if (records.length === 0) throw new Error('Amsterdam traffic source has no records')
-  let south = 90
-  let west = 180
-  let north = -90
-  let east = -180
-  for (const record of records) {
-    south = Math.min(south, record.latitude)
-    west = Math.min(west, record.longitude)
-    north = Math.max(north, record.latitude)
-    east = Math.max(east, record.longitude)
-  }
-  // At Amsterdam latitudes, one grid cell includes every midpoint eligible under 50 m.
-  return [
-    Math.max(-90, south - GRID_CELL_DEGREES),
-    Math.max(-180, west - GRID_CELL_DEGREES),
-    Math.min(90, north + GRID_CELL_DEGREES),
-    Math.min(180, east + GRID_CELL_DEGREES),
-  ]
-}
-
-export async function enrichNetherlandsRoads(
-  preparedDirectory: string,
-  records: readonly AmsterdamTrafficRecord[],
-) {
-  const grid = indexAmsterdamTraffic(records)
-  return writeNationalRoadSquares(preparedDirectory, sourceBbox(records), 'Amsterdam', {}, path =>
+export async function enrichDutchRoads(preparedDirectory: string, observations: readonly DutchInwevaObservation[]) {
+  if (observations.length === 0) throw new Error('Dutch INWEVA source has no usable measurements')
+  const index = indexDutchInweva(observations)
+  const match = (row: RoadRow): DutchInwevaObservation | null => matchDutchInweva(row, index)
+  return writeNationalRoadSquares(preparedDirectory, NETHERLANDS_BBOX, 'Dutch', {}, path =>
     writeRoadAadt(
       path,
-      (row) => {
+      row => {
         if (!shouldOverwrite(row.existingSourceId, SOURCE_ID)) return null
-        const record = matchAmsterdamTrafficRecord(row, grid)
-        return record ? { countBasis: record.countBasis, observationId: record.observationId,
-          light: record.aadt_light,
-          medium: record.aadt_medium,
-          heavy: record.aadt_heavy,
-          moto: record.aadt_moto,
-          sourceId: SOURCE_ID,
-        } : null
+        const observation = match(row)
+        return observation
+          ? {
+              countBasis: observation.countBasis,
+              observationId: observation.observationId,
+              light: observation.light,
+              medium: observation.medium,
+              heavy: observation.heavy,
+              // Loops count the length classes; only the 1 % moto share is imputed.
+              moto: observation.moto,
+              sourceId: SOURCE_ID,
+              estimatedClasses: 8,
+            }
+          : null
       },
-    ))
+      undefined,
+      COVERED_ROAD_CLASSES,
+      {
+        sourceIds: [SOURCE_ID],
+        when: row => !COVERED_ROAD_CLASSES.has(row.roadClass) || match(row) === null,
+      },
+    ),
+  )
 }
 
-async function main(options: RoadLoaderArguments) {
-  const census = await loadAmsterdamTrafficCensus(options)
-  const result = await enrichNetherlandsRoads(options.preparedDirectory, census.records)
-  const { records, ...source } = census
-  return { ...source, records: records.length, ...result }
+/** RWS INWEVA 2024 weekdag-gemiddelde section intensities, Nationaal Georegister
+ *  record 93e99016-9b53-45d6-8b3c-fc9bf8086256 (CC0, "Geen beperkingen"). */
+export const INWEVA_PROFILE_SOURCE_URL =
+  'https://www.nationaalgeoregister.nl/geonetwork/srv/dut/catalog.search#/metadata/93e99016-9b53-45d6-8b3c-fc9bf8086256'
+const INWEVA_PROFILE_WINDOW = '2024-01..2024-12'
+// 2024 is a leap year; weekdag-gemiddelde averages all days (RWS Toelichting
+// INWEVA distinguishes it from the werkdag average). Per-section valid-day
+// coverage is unpublished — each entry's status carries its kwal flags.
+const INWEVA_PROFILE_DAYS = 366
+
+/** One dictionary entry per observation with published periods, with its
+ *  1-based position for the row matcher (observations without periods match 0). */
+export function inwevaProfileEntries(observations: readonly DutchInwevaObservation[]): {
+  entries: RoadTimeProfileEntry[]
+  indexOf: ReadonlyMap<string, number>
+} {
+  const entries: RoadTimeProfileEntry[] = []
+  const indexOf = new Map<string, number>()
+  for (const observation of observations) {
+    if (!observation.timeProfile) continue
+    indexOf.set(observation.observationId, entries.length + 1)
+    entries.push({
+      station: observation.observationId.replace(/^inweva2024:/, ''),
+      window: INWEVA_PROFILE_WINDOW,
+      days: INWEVA_PROFILE_DAYS,
+      status: observation.timeProfile.status,
+      profile: observation.timeProfile.shares,
+    })
+  }
+  return { entries, indexOf }
 }
 
-runRoadLoaderCli(import.meta.url, main)
+/** Stamp observed INWEVA period profiles next to (never onto) the AADT columns. */
+export async function enrichDutchTimeProfiles(
+  preparedDirectory: string,
+  observations: readonly DutchInwevaObservation[],
+) {
+  const { entries, indexOf } = inwevaProfileEntries(observations)
+  if (entries.length === 0) return { rows: 0, matched: 0, squaresUpdated: 0 }
+  const index = indexDutchInweva(observations)
+  return applyRoadTimeProfiles(
+    preparedDirectory,
+    listPreparedSquares(preparedDirectory, NETHERLANDS_BBOX),
+    INWEVA_PROFILE_SOURCE_URL,
+    entries,
+    row => {
+      const matched = matchDutchInweva(row, index)
+      return matched ? (indexOf.get(matched.observationId) ?? 0) : 0
+    },
+  )
+}
+
+export async function runDutchRoadEnrichment(options: RoadLoaderArguments) {
+  const source = loadDutchInwevaSource(options)
+  const traffic = await enrichDutchRoads(options.preparedDirectory, source.observations)
+  // Shards re-run this main for the AADT walk; only the parent stamps profiles (once, honest tally).
+  const profiles = ownSquareShard
+    ? { matched: 0, squaresUpdated: 0 }
+    : await enrichDutchTimeProfiles(options.preparedDirectory, source.observations)
+  return {
+    sourceRows: source.sourceRows,
+    observations: source.observations.length,
+    pairedSections: source.pairedSections,
+    lonelySections: source.lonelySections,
+    derivedSectionsSkipped: source.derivedSectionsSkipped,
+    missingValuesSkipped: source.missingValuesSkipped,
+    unsupportedBaansoortSkipped: source.unsupportedBaansoortSkipped,
+    lonelyNationalRoadSkipped: source.lonelyNationalRoadSkipped,
+    missingRefSkipped: source.missingRefSkipped,
+    invalidGeometrySkipped: source.invalidGeometrySkipped,
+    profileEntries: inwevaProfileEntries(source.observations).entries.length,
+    profileMatched: profiles.matched,
+    profileSquaresUpdated: profiles.squaresUpdated,
+    ...traffic,
+  }
+}
+
+runRoadLoaderCli(import.meta.url, runDutchRoadEnrichment)

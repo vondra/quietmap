@@ -26,7 +26,7 @@ use aircraft::{
     read_aircraft_batches_of_square_data, read_aircraft_stamps_of_square_data,
     AircraftPointQueryData,
 };
-use spatial::{BUILDING_QUERY_RADIUS_M, SHIP_QUERY_RADIUS_M};
+use spatial::SHIP_QUERY_RADIUS_M;
 use square_store::store::{load_square, SquareData};
 use std::path::Path;
 
@@ -48,7 +48,7 @@ pub struct PointQueryData {
     /// `airport_lines.arrow` OSM ids and refs used to label runway and
     /// taxiway segment traces.
     pub airport_lines_batches: Vec<arrow::record_batch::RecordBatch>,
-    pub n_days: u16,
+    pub aircraft_sampling_window: Option<noise_compute::emission::aircraft::SamplingWindow>,
     /// Emission layers dropped from the whole query because a file of theirs carried another
     /// contract; the answer lacks their noise and says so.
     pub unavailable_layers: Vec<&'static str>,
@@ -86,9 +86,15 @@ pub fn collect_from_square_data(
         .iter()
         .flat_map(|(_, data)| data.unavailable_layers.iter().copied())
         .collect();
+    let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
+    let mut t_air_sel = std::time::Duration::ZERO;
     let mut aircraft = AircraftPointQueryData::none();
     if !unavailable_layers.contains(&"aircraft") {
+        let t = timing_on.then(std::time::Instant::now);
         aircraft = read_aircraft_batches_of_square_data(square_data, lat, lng)?;
+        if let Some(t) = t {
+            t_air_sel = t.elapsed();
+        }
         if let Err(fault) =
             read_aircraft_stamps_of_square_data(square_data, lat, lng, &mut aircraft)
         {
@@ -104,21 +110,65 @@ pub fn collect_from_square_data(
     unavailable_layers.dedup();
     let served = |layer: &str| !unavailable_layers.contains(&layer);
 
+    // Facility joins span every loaded square, so a polygon in one square sees
+    // the units in the neighbours it touches; rows still emit once each.
+    let all_refs: Vec<&SquareData> = square_data.iter().map(|(_, data)| *data).collect();
+    let mut industrial_joins = None;
+    let mut t_rail = std::time::Duration::ZERO;
+    let mut t_road = std::time::Duration::ZERO;
+    let mut t_settle = std::time::Duration::ZERO;
+    let mut t_ind = std::time::Duration::ZERO;
+    let mut t_ship = std::time::Duration::ZERO;
     for (_, data) in square_data {
+        let t = timing_on.then(std::time::Instant::now);
         railways::collect_railways(data, lat, lng, &mut all_railways)?;
+        if let Some(t) = t {
+            t_rail += t.elapsed();
+        }
+        let t = timing_on.then(std::time::Instant::now);
         roads::collect_roads(data, lat, lng, &mut all_roads)?;
+        if let Some(t) = t {
+            t_road += t.elapsed();
+        }
+        let t = timing_on.then(std::time::Instant::now);
         settlement::collect_buildings(data, lat, lng, &mut all_buildings)?;
         if served("leisure") {
-            let batches = data
-                .leisure
-                .batches_within(lat, lng, BUILDING_QUERY_RADIUS_M)?;
-            settlement::collect_leisure(&batches, lat, lng, &mut all_buildings);
+            settlement::collect_leisure(data, lat, lng, &mut all_buildings)?;
         }
-        point_sources::collect_industrial(data, lat, lng, &mut all_industrial)?;
+        if let Some(t) = t {
+            t_settle += t.elapsed();
+        }
+        let t = timing_on.then(std::time::Instant::now);
+        point_sources::collect_industrial(
+            data,
+            &all_refs,
+            &mut industrial_joins,
+            lat,
+            lng,
+            &mut all_industrial,
+        )?;
+        if let Some(t) = t {
+            t_ind += t.elapsed();
+        }
+        let t = timing_on.then(std::time::Instant::now);
         if served("ships") {
             let batches = data.ships.batches_within(lat, lng, SHIP_QUERY_RADIUS_M)?;
             point_sources::collect_ships(&batches, lat, lng, &mut all_ships)?;
         }
+        if let Some(t) = t {
+            t_ship += t.elapsed();
+        }
+    }
+    if timing_on {
+        eprintln!(
+            "popup-stage collect airsel={:.0}ms rail={:.0}ms road={:.0}ms settle={:.0}ms ind={:.0}ms ship={:.0}ms",
+            t_air_sel.as_secs_f64() * 1000.0,
+            t_rail.as_secs_f64() * 1000.0,
+            t_road.as_secs_f64() * 1000.0,
+            t_settle.as_secs_f64() * 1000.0,
+            t_ind.as_secs_f64() * 1000.0,
+            t_ship.as_secs_f64() * 1000.0,
+        );
     }
 
     Ok(PointQueryData {
@@ -132,7 +182,7 @@ pub fn collect_from_square_data(
         aircraft_airport_traffic_batches: aircraft.airport_traffic_batches,
         airport_summary: aircraft.airport_summary,
         airport_lines_batches: aircraft.airport_lines_batches,
-        n_days: aircraft.n_days,
+        aircraft_sampling_window: aircraft.sampling_window,
         unavailable_layers,
     })
 }

@@ -18,9 +18,6 @@
 //!   the airborne kernel.
 //! * [`screening`] — receiver-local vector-building horizon and the shared
 //!   anchored single-edge diffraction rule.
-//! * [`screening_bounds`] — the obstacle-height criterion used by the GPU
-//!   building-horizon prune: a roof screens only aircraft below its own
-//!   elevation angle, taken per azimuth group.
 //! * [`segment_filters`] — per-segment validity gates (airborne / ground
 //!   stale / airport ground), `SegmentTerrain` cache, ground-ops kind /
 //!   context constants.
@@ -30,23 +27,30 @@
 //! * [`segment_sel`] — single-shot per-segment SEL wrappers (popup +
 //!   tests).
 //! * [`support`] — the periodic receiver envelope every airborne gate shares.
+//! * [`sampling_window`] — baseline/increment day stamps and the two-entry
+//!   provenance weight every aircraft consumer applies.
+//! * [`thrust`] — thrust-dependent NPD power brackets (Doc 29 Eq. 4-3/B-1/B-12)
+//!   and helicopter certification corrections.
 
 mod doc29;
 mod ground_ops;
 mod horizon;
 mod npd;
+mod sampling_window;
 mod screening;
-mod screening_bounds;
 mod segment_filters;
 mod segment_sel;
 mod support;
+mod thrust;
 
 pub use doc29::*;
+pub use ground_ops::GROUND_OPS_REF_OFFSET_M;
 pub(crate) use ground_ops::*;
 pub use horizon::*;
 pub use npd::*;
+pub use sampling_window::*;
 pub use screening::*;
-pub use screening_bounds::*;
 pub use segment_filters::*;
 pub use segment_sel::*;
 pub use support::*;
+pub use thrust::*;

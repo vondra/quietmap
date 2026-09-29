@@ -226,6 +226,13 @@ export function isNationallyOwnedSource(id: number): boolean {
   return SOURCES_BY_ID.get(id)?.nationallyOwned === true
 }
 
+/** The road classes a source may stamp (its registry `roadCoverage`); its writer skips every other class. */
+export function declaredRoadCoverage(id: number): ReadonlySet<number> {
+  const coverage = DATASETS.find(dataset => dataset.id === id)?.roadCoverage
+  if (!coverage) throw new Error(`road source ${id} declares no roadCoverage`)
+  return new Set(coverage)
+}
+
 // Overwrite decision
 
 /**

@@ -7,30 +7,59 @@ import type { ServiceRoad } from './service-tree-flow.js'
 
 // Inherited service-tree frontage heuristic: one block's plot depth, not a standard.
 export const MAX_BUFFER_M = 50
-export interface ServiceBuilding { lat: number; lon: number; type: number; floors: number; area: number | null }
+export interface ServiceBuilding { lat: number; lon: number; type: number; storeys: number; area: number | null }
 
+const STRUCTURE_KIND_BUILDING = 0
+
+/**
+ * The OSM buildings of a structures_v5 table (its emission rows: building kind with an
+ * osm_id, at the OSM centroid) with the demand storeys the structures builder derived from
+ * its height ladder. Sorted by osm_id and position: the finalize step may permute rows, and
+ * float load sums must not depend on file order.
+ */
 export function readServiceBuildings(table: Table): ServiceBuilding[] {
-  if (table.schema.metadata.get('buildings_contract') !== 'buildings_v5' || table.schema.metadata.get('grid') !== 'z30') {
-    throw new Error('service-tree requires original buildings_v5/z30')
+  if (table.schema.metadata.get('structures_contract') !== 'structures_v5' || table.schema.metadata.get('grid') !== 'z30') {
+    throw new Error('service-tree requires structures_v5/z30')
   }
-  for (const [name, bits, signed] of [['centroid_gx', 32, true], ['centroid_gy', 32, true],
-    ['building_type', 8, false], ['floors', 8, false]] as const) {
-    const column = table.getChild(name)
-    if (!column || !DataType.isInt(column.type) || column.type.bitWidth !== bits ||
-        column.type.isSigned !== signed || column.nullCount) throw new Error(`invalid building column ${name}`)
-  }
-  const area = table.getChild('area_m2')
-  if (!area || !DataType.isFloat(area.type)) throw new Error('invalid building area_m2')
-  const centroidGx = table.getChild('centroid_gx')!.toArray() as Int32Array, centroidGy = table.getChild('centroid_gy')!.toArray() as Int32Array
-  const types = table.getChild('building_type')!.toArray() as Uint8Array, floors = table.getChild('floors')!.toArray() as Uint8Array
-  const areas = Array.from(area) as (number | null)[]
-  return Array.from({ length: table.numRows }, (_, index) => {
-    const type = types[index], footprint = areas[index]
-    if (type > 13 || (footprint !== null && (!Number.isFinite(footprint) || footprint < 0))) {
-      throw new Error(`invalid building load at row ${index}`)
+  for (const [name, bits, signed] of [['kind', 8, false], ['osm_id', 64, true], ['building_type', 8, false],
+    ['storeys', 8, false], ['centroid_gx', 32, true], ['centroid_gy', 32, true],
+    ['emission_centroid_gx', 32, true], ['emission_centroid_gy', 32, true]] as const) {
+    const type = table.schema.fields.find(field => field.name === name)?.type
+    if (!type || !DataType.isInt(type) || type.bitWidth !== bits || type.isSigned !== signed) {
+      throw new Error(`invalid structures column ${name}`)
     }
-    return { ...gridToLonLat(centroidGx[index], centroidGy[index]), type, floors: floors[index], area: footprint }
-  })
+  }
+  const areaType = table.schema.fields.find(field => field.name === 'area_m2')?.type
+  if (!areaType || !DataType.isFloat(areaType)) throw new Error('invalid structures area_m2')
+  const rows: { osmId: bigint; gx: number; gy: number; building: ServiceBuilding }[] = []
+  let row = 0
+  // One flat array per batch column: per-row `get` on a chunked table costs more than the tree.
+  for (const batch of table.batches) {
+    const child = (name: string) => batch.getChild(name)!
+    const kinds = child('kind').toArray() as Uint8Array, osmIds = child('osm_id')
+    const types = child('building_type'), storeys = child('storeys'), areas = child('area_m2')
+    const centroidGx = child('centroid_gx').toArray() as Int32Array, centroidGy = child('centroid_gy').toArray() as Int32Array
+    const emissionGx = child('emission_centroid_gx'), emissionGy = child('emission_centroid_gy')
+    const osmIdValues = osmIds.toArray() as BigInt64Array, typeValues = types.toArray() as Uint8Array
+    const storeyValues = storeys.toArray() as Uint8Array, areaValues = areas.toArray() as Float32Array | Float64Array
+    const emissionGxValues = emissionGx.toArray() as Int32Array, emissionGyValues = emissionGy.toArray() as Int32Array
+    for (let index = 0; index < batch.numRows; index++, row++) {
+      if (kinds[index] !== STRUCTURE_KIND_BUILDING || !osmIds.isValid(index)) continue
+      const type = typeValues[index], storeyCount = storeyValues[index]
+      const footprint = areas.isValid(index) ? areaValues[index] : null
+      if (!types.isValid(index) || type > 13 || !storeys.isValid(index) || storeyCount < 1 ||
+          (footprint !== null && (!Number.isFinite(footprint) || footprint < 0))) {
+        throw new Error(`invalid building load at row ${row}`)
+      }
+      const emission = emissionGx.isValid(index) && emissionGy.isValid(index)
+      const gx = emission ? emissionGxValues[index] : centroidGx[index]
+      const gy = emission ? emissionGyValues[index] : centroidGy[index]
+      rows.push({ osmId: osmIdValues[index], gx, gy,
+        building: { ...gridToLonLat(gx, gy), type, storeys: storeyCount, area: footprint } })
+    }
+  }
+  rows.sort((a, b) => (a.osmId < b.osmId ? -1 : a.osmId > b.osmId ? 1 : a.gx - b.gx || a.gy - b.gy))
+  return rows.map(entry => entry.building)
 }
 
 export function assignBuildingsGlobally(
@@ -79,7 +108,7 @@ export function assignBuildingsGlobally(
       if (nextDistance <= MAX_BUFFER_M && nextDistance < distance) { distance = nextDistance; best = index }
     }
     if (best < 0) continue
-    const load = estimateBuildingLoad(building.type, building.floors, building.area)
+    const load = estimateBuildingLoad(building.type, building.storeys, building.area)
     const existing = loads.get(best)
     if (existing) { existing.dwellings += load.dwellings; existing.trips += load.trips }
     else loads.set(best, load)

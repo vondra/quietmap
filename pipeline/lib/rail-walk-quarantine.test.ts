@@ -20,9 +20,9 @@ test('disconnected station pairs cannot retract existing own counts around eithe
   mkdirSync(square, { recursive: true })
   const path = join(square, 'railways.arrow')
   copyFileSync(writeRailwaysFixture('quarantined-own.arrow', [
-    { latitude: 55.67, longitude: 12.57, endLatitude: 55.671, endLongitude: 12.57, country: 'DK', sourceId: SOURCE_ID_DK_NATIONAL_RAILWAY, passenger: 70, divisor: 2 },
-    { latitude: 55.72, longitude: 12.62, endLatitude: 55.721, endLongitude: 12.62, country: 'DK', sourceId: SOURCE_ID_DK_NATIONAL_RAILWAY, passenger: 60, divisor: 3 },
-  ], { includeTraffic: true, includeDivisor: true }), path)
+    { latitude: 55.67, longitude: 12.57, endLatitude: 55.671, endLongitude: 12.57, country: 'DK', sourceId: SOURCE_ID_DK_NATIONAL_RAILWAY },
+    { latitude: 55.72, longitude: 12.62, endLatitude: 55.721, endLongitude: 12.62, country: 'DK', sourceId: SOURCE_ID_DK_NATIONAL_RAILWAY },
+  ]), path)
   writeSyntheticRailTopology(prepared, ['z9/273/160'])
   const before = readFileSync(path)
   const result = await enrichZ9RailwaysByGraphWalk({
@@ -35,6 +35,5 @@ test('disconnected station pairs cannot retract existing own counts around eithe
   assert.equal(result.failures.disconnected, 1)
   assert.equal(result.failedPairs[0].reason, 'disconnected')
   assert.equal(result.retracted, 0)
-  assert.deepEqual([...tableFromIPC(readFileSync(path)).getChild('trains_passenger')!], [70, 60])
   assert.deepEqual(readFileSync(path), before)
 })

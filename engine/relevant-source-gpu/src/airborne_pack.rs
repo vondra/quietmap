@@ -13,8 +13,12 @@ pub const AIRBORNE_REDUCTION_ROWS: usize = 8192;
 #[derive(Clone, Copy, Debug)]
 pub struct DeviceAirborneSource {
     pub endpoints: [f32; 4],
-    pub physical: [f32; 12],
-    pub identity: [i32; 4],
+    /// start_alt, d_lon, sdy, sdz, dv, di_a, di_b, di_c, reach_sq, cuts,
+    /// then the Eq. 4-3 power weight [11] and the helicopter correction [12].
+    pub physical: [f32; 13],
+    /// Installation, class, departure, period, secondary-only provenance
+    /// (the index into the two-entry provenance weight table), power row.
+    pub identity: [i32; 6],
 }
 impl DeviceAirborneSource {
     pub fn prepare(batch: &AirborneSegmentBatch<'_>, i: usize) -> Result<Option<Self>> {
@@ -31,7 +35,10 @@ impl DeviceAirborneSource {
         if air::is_ground_stale_with_terrain(&segment, &terrain) {
             return Ok(None);
         }
-        let p = air::prepare_segment(&segment, terrain.start_elev - 30.0, terrain.end_elev - 30.0);
+        let Some(p) = air::prepare_segment(&segment, terrain.start_elev - 30.0, terrain.end_elev - 30.0)
+        else {
+            return Ok(None);
+        };
         let result = Self {
             endpoints: [
                 segment.start_lat as f32,
@@ -45,13 +52,14 @@ impl DeviceAirborneSource {
                 p.sdy as f32,
                 p.sdz as f32,
                 p.dv as f32,
-                p.d_bar_m as f32,
                 p.di_a as f32,
                 p.di_b as f32,
                 p.di_c as f32,
                 p.reach_sq as f32,
                 p.terrain_start_cut_m as f32,
                 p.terrain_end_cut_m as f32,
+                p.power_w as f32,
+                p.heli_db as f32,
             ],
             identity: [
                 match p.inst {
@@ -62,6 +70,8 @@ impl DeviceAirborneSource {
                 p.class_idx as i32,
                 i32::from(p.is_departure),
                 i32::from(segment.period),
+                i32::from(batch.flags[i] & air::SEGMENT_FLAG_SECONDARY_ONLY != 0),
+                i32::from(p.power_row),
             ],
         };
         ensure!(
@@ -100,6 +110,26 @@ impl ReceiverScreening {
         rasters: &dyn RasterSampler,
         obstacles: &ObstacleSet,
     ) -> Result<Self> {
+        Self::build_with_dem(lat, lon, altitude, obstacles, |lat, lon| rasters.elevation(lat, lon))
+    }
+
+    /// Keep a receiver-local DEM tile handle for the terrain march and every roof
+    /// edge instead of locking the shared LRU per sample: in central Prague the
+    /// locked roof-edge lookups made building horizons 4.8x slower on four threads.
+    pub fn build_cached(
+        lat: f64, lon: f64, altitude: f32, rasters: &raster_reader::RealRasters, obstacles: &ObstacleSet,
+    ) -> Result<Self> {
+        let mut key = (i32::MIN, i32::MIN);
+        let mut tile = None;
+        Self::build_with_dem(lat, lon, altitude, obstacles, |lat, lon| {
+            rasters.dem.sample_cached(lat, lon, &mut key, &mut tile)
+        })
+    }
+
+    fn build_with_dem(
+        lat: f64, lon: f64, altitude: f32, obstacles: &ObstacleSet,
+        mut dem: impl FnMut(f64, f64) -> f64,
+    ) -> Result<Self> {
         ensure!(
             lat.is_finite() && lon.is_finite() && altitude.is_finite(),
             "nonfinite airborne receiver"
@@ -112,7 +142,7 @@ impl ReceiverScreening {
         let finite = std::cell::Cell::new(true);
         let terrain = air::ReceiverHorizon::build(
             |lat, lon| {
-                let elevation = rasters.elevation(lat, lon);
+                let elevation = dem(lat, lon);
                 finite.set(finite.get() && elevation.is_finite());
                 elevation
             },
@@ -121,19 +151,17 @@ impl ReceiverScreening {
             receiver.altitude_m(),
         );
         ensure!(finite.get(), "airborne horizon DEM unavailable");
-        // Match the popup if a caller supplies an enclosed point; normal TileReceivers
-        // already move that point to its exterior facade before this boundary.
+        // Match the popup if a caller supplies an enclosed point; the painter
+        // evaluates only outdoor pixel centres and façade receivers.
         let empty = ObstacleSet { indexes: vec![] };
-        let screening_obstacles =
-            if source_reader::structure_store::point_inside_enclosed(obstacles, lat, lon).is_some()
-            {
-                &empty
-            } else {
-                obstacles
-            };
+        let screening_obstacles = if obstacles.enclosed_footprint_at(lat, lon).is_some() {
+            &empty
+        } else {
+            obstacles
+        };
         let buildings = air::BuildingHorizon::build(
             screening_obstacles,
-            rasters,
+            &mut dem,
             lat,
             lon,
             receiver.altitude_m(),
@@ -217,42 +245,5 @@ impl PackedScreening {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn cuda_airborne_layout_and_original_horizon_entries() {
-        assert_eq!(std::mem::size_of::<DeviceAirborneSource>(), 80);
-        assert_eq!(std::mem::size_of::<DeviceAirborneReceiver>(), 32);
-        assert_eq!(std::mem::offset_of!(DeviceAirborneReceiver, altitude), 24);
-        struct Flat;
-        impl RasterSampler for Flat {
-            fn elevation(&self, _: f64, _: f64) -> f64 {
-                0.0
-            }
-            fn ground_g(&self, _: f64, _: f64) -> f64 {
-                0.0
-            }
-            fn building_enclosure(&self, _: f64, _: f64) -> f64 {
-                0.0
-            }
-        }
-        let rx = ReceiverScreening::build(50.0, 14.0, 4.0, &Flat, &ObstacleSet { indexes: vec![] })
-            .unwrap();
-        let packed = PackedScreening::new(std::slice::from_ref(&rx));
-        assert_eq!(
-            packed.terrain.len(),
-            air::HORIZON_SECTORS * air::RECEIVER_HORIZON_BANDS
-        );
-        assert_eq!(
-            packed.buildings.len(),
-            air::BUILDING_LOCAL_HORIZON_SECTORS * air::BUILDING_LOCAL_HORIZON_BANDS
-        );
-        assert_eq!(packed.global_max, [u16::MAX]);
-        for (index, entry) in rx.terrain.packed_sectors().iter().flatten().enumerate() {
-            assert_eq!(
-                packed.terrain[index],
-                (u32::from(entry.0 as u16) << 16) | u32::from(entry.1)
-            );
-        }
-    }
-}
+#[path = "airborne_pack_tests.rs"]
+mod tests;

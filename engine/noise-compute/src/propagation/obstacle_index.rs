@@ -15,6 +15,7 @@ mod sectors;
 mod set;
 mod skyline;
 
+pub use containment::{EnclosedFootprint, FootprintKey};
 pub use geometry::wrap_pi;
 pub(crate) use geometry::{origin_to_segment_dist, segment_intersection_t};
 pub use gpu::GpuGridView;
@@ -88,14 +89,17 @@ impl ObstacleKind {
 }
 
 /// One exact ray×edge crossing: chainage `t ∈ (0, 1)` along the ray plus the
-/// obstacle's height above local ground. `path_effects` turns it into a
-/// dominant-edge candidate `z = terrain(t) + height_m`.
+/// obstacle's height above local ground; its top is `terrain(t) + height_m`.
 #[derive(Clone, Copy, Debug)]
 pub struct CrossingCandidate {
     pub t: f64,
     pub height_m: f32,
     pub kind: ObstacleKind,
+    /// Footprint or wall id, unique within one index only.
     pub id: u32,
+    /// Position of the crossing's index in its [`ObstacleSet`]: `(index, id)` names one
+    /// footprint across the set.
+    pub index: u16,
 }
 
 /// What lets the ray walk skip a whole grid cell.

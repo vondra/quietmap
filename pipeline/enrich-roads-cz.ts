@@ -1,5 +1,6 @@
 /** Enrich z9 road vectors with Czech ŘSD traffic census measurements. */
 
+import { withholdsCountLine } from './lib/count-holdout.js'
 import { roadFeatureObservation } from './lib/pinned-road-lines.js'
 import type { RoadObservation } from './lib/road-observation.js'
 import { existsSync, readFileSync } from 'node:fs'
@@ -90,6 +91,7 @@ export function parseCensus(features: readonly unknown[]): ParsedCensus {
       zeroSectionsSkipped++
       continue
     }
+    if (section.paths.some(withholdsCountLine)) continue
     const sections = byRef.get(ref)
     if (sections) sections.push(section)
     else byRef.set(ref, [section])

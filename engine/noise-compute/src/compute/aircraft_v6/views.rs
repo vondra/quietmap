@@ -17,6 +17,9 @@ pub struct AirborneFlightTable<'a> {
     pub profile_idx: &'a [u8],
     pub source_id: &'a [u8],
     pub origin: &'a [u8],
+    /// Departure field elevation in metres per flight; `i16::MIN` means the
+    /// takeoff roll was not observed.
+    pub departure_field_elev_m: &'a [i16],
 }
 
 impl AirborneFlightTable<'_> {
@@ -100,6 +103,7 @@ impl AirborneSegmentBatch<'_> {
         [end_lat, end_lon]: [f32; 2],
     ) -> crate::types::AircraftSegment {
         let key = self.flight_key[i] as usize;
+        let field_elev = self.flights.departure_field_elev_m[key];
         crate::types::AircraftSegment {
             flight_id: self.flight_id[i],
             profile_idx: self.flights.profile_idx[key],
@@ -115,6 +119,13 @@ impl AirborneSegmentBatch<'_> {
             end_alt_m: f32::from(self.end_alt_m[i]),
             speed_kt: self.speed_kt[i],
             segment_length_m: self.length_m[i],
+            departure_field_elev_m: if field_elev == i16::MIN {
+                f32::NAN
+            } else {
+                f32::from(field_elev)
+            },
+            heli_descent: self.flags[i] & crate::emission::aircraft::SEGMENT_FLAG_HELI_DESCENT
+                != 0,
             count_weight: 1.0,
             surface_model: false,
             ground_context: crate::emission::aircraft::GROUND_CONTEXT_NONE,
@@ -191,6 +202,8 @@ pub struct AirportTrafficRowView<'a> {
     pub veh_kind: u8,
     pub class_idx: u8,
     pub period: u8,
+    /// Every movement of this row touches a secondary-provider sample.
+    pub secondary_only: bool,
     pub band_energy_lin: &'a [f32; 8],
     /// Distinct fids that crossed this row, regardless of
     /// `ops_kind / is_departure / veh_kind`.
@@ -203,20 +216,18 @@ pub struct AirportTrafficRowView<'a> {
     /// Per-GSE-class distinct fids; populated only on `veh_kind=1`
     /// rows.
     pub unique_gse_count_per_class: &'a [u32; NUM_GSE_CLASSES],
-    /// UNION across ALL rows of this `(osm_id, segment_idx)`. v9: these
-    /// three count NON-GA-class fids only — the GA-class union is below.
-    /// Same value on every row of the microsegment — popup reads first
-    /// row's value to populate per-microseg observed_movements, dividing
-    /// each window by its own day count.
+    /// UNION across ALL rows of this `(osm_id, segment_idx)`: movements with
+    /// a primary-provider row in the category. Same value on every row of
+    /// the microsegment — popup reads first row's value.
     pub microseg_unique_count: u32,
     pub microseg_unique_arr_count: u32,
     pub microseg_unique_dep_count: u32,
     pub microseg_unique_gse_count_per_class: &'a [u32; NUM_GSE_CLASSES],
-    /// v9 GA-class full-year-window microseg UNION split. Zero on
-    /// non-hybrid extracts.
-    pub microseg_unique_ga_count: u32,
-    pub microseg_unique_ga_arr_count: u32,
-    pub microseg_unique_ga_dep_count: u32,
+    /// Movements seen in the category only through secondary-provider rows.
+    pub microseg_unique_secondary_count: u32,
+    pub microseg_unique_secondary_arr_count: u32,
+    pub microseg_unique_secondary_dep_count: u32,
+    pub microseg_unique_secondary_gse_count_per_class: &'a [u32; NUM_GSE_CLASSES],
 }
 
 /// One entry of `top_candidates` (v14). Identity + ranking dimension
@@ -250,6 +261,8 @@ pub struct CruiseRowView<'a> {
     pub rep_speed_kt: f32,
     pub source_id: u8,
     pub origin: u8,
+    /// Every transit of this bucket touches a secondary-provider sample.
+    pub secondary_only: bool,
     /// Number of distinct real fids that contributed to this bucket.
     /// Display-only — band counter dedup uses `top_candidates` instead.
     pub unique_count: u32,

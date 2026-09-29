@@ -49,6 +49,7 @@ dependencies = [
  "raster-reader",
  "rayon",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "square-store",
@@ -1429,6 +1430,7 @@ dependencies = [
  "rayon",
  "rusqlite",
  "serde_json",
+ "square-store",
 ]
 
 [[package]]
@@ -1659,9 +1661,11 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "arrow-batching",
+ "csv",
  "grid",
  "noise-compute",
  "rayon",
+ "square-store",
 ]
 
 [[package]]
@@ -1731,6 +1735,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "arrow-batching",
  "clap",
  "grid",
  "noise-compute",
@@ -1753,6 +1758,7 @@ dependencies = [
  "grid",
  "noise-compute",
  "rayon",
+ "square-store",
 ]
 
 [[package]]
@@ -1972,6 +1978,7 @@ dependencies = [
  "arrow-batching",
  "grid",
  "memmap2 0.9.11",
+ "serde_json",
 ]
 
 [[package]]

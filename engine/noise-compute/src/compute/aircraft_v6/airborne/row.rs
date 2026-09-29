@@ -22,7 +22,7 @@ pub(super) struct ScatterContext<'a> {
     /// bit-identical to `segment_sel_with_overrides`.
     pub rx_m_per_lon: f64,
     pub rx_m_per_lat: f64,
-    pub class_weights: &'a aircraft::ClassWeights,
+    pub weights: &'a aircraft::ProvenanceWeights,
     pub horizon: &'a aircraft::ReceiverHorizon,
     pub buildings: Option<&'a aircraft::BuildingHorizon>,
     pub n_days_f: f64,
@@ -32,7 +32,7 @@ impl<'a> ScatterContext<'a> {
     pub fn new(
         receiver: &'a Receiver,
         n_days_f: f64,
-        class_weights: &'a aircraft::ClassWeights,
+        weights: &'a aircraft::ProvenanceWeights,
         horizon: &'a aircraft::ReceiverHorizon,
         buildings: Option<&'a aircraft::BuildingHorizon>,
     ) -> Self {
@@ -44,7 +44,7 @@ impl<'a> ScatterContext<'a> {
             envelope: aircraft::AirborneEnvelope::new(receiver.lat, receiver.lon),
             rx_m_per_lon: aircraft::M_PER_DEG_LAT * cos_lat,
             rx_m_per_lat: aircraft::M_PER_DEG_LAT,
-            class_weights,
+            weights,
             horizon,
             buildings,
             n_days_f,
@@ -57,9 +57,10 @@ pub(super) struct RowKernel {
     pub seg: AircraftSegment,
     pub kernel: AircraftKernelResult,
     pub class_idx: usize,
-    /// GA hybrid weight of the row's class, already folded into the four
-    /// energies below and carried as the flight's count weight.
-    pub class_weight: f64,
+    /// Provenance weight of the row (baseline or increment divisor), already
+    /// folded into the four energies below; the flight's count weight is
+    /// the smallest weight among its rows.
+    pub provenance_weight: f64,
     pub period: usize,
     pub energy: f64,
     pub free_energy: f64,
@@ -107,23 +108,27 @@ impl RowKernel {
 }
 
 /// The flight accumulator a row belongs to, created from the file's flight
-/// table when the flight first contributes.
+/// table when the flight first contributes. A flight seen by the primary
+/// provider anywhere at this receiver counts as a baseline movement, so
+/// its count weight is the smallest row weight.
 pub(super) fn flight_accumulator<'m>(
-    flights: &'m mut std::collections::HashMap<u64, FlightAccum>,
+    flights: &'m mut std::collections::HashMap<u64, FlightAccum, impl std::hash::BuildHasher>,
     batch: &AirborneSegmentBatch<'_>,
     row: usize,
-    class_weight: f64,
+    provenance_weight: f64,
 ) -> &'m mut FlightAccum {
     let key = batch.flight_key[row] as usize;
-    flights.entry(batch.flight_id[row]).or_insert_with(|| {
+    let acc = flights.entry(batch.flight_id[row]).or_insert_with(|| {
         FlightAccum::new(
             batch.flights.profile_idx[key],
-            class_weight,
+            provenance_weight,
             false,
             batch.flights.aircraft_type(key),
             batch.flights.callsign(key).to_string(),
         )
-    })
+    });
+    acc.flight_weight = acc.flight_weight.min(provenance_weight);
+    acc
 }
 
 /// Evaluate row `i` of `batch`: `None` when the envelope, the class reach,
@@ -145,7 +150,6 @@ pub(super) fn evaluate_row<const FLOOR: bool>(
     // exactly) cannot false-reject anything the kernel would accept.
     let class_idx = aircraft::noise_class_of(profile_idx) as usize;
     let reach_sq_class = aircraft::REACH_SQ_TABLE[class_idx];
-    let class_weight = ctx.class_weights.get(class_idx as u8);
     // Unlike aggregate min/max bounds, these endpoints identify the short
     // arc used by the kernel and by the batch envelope gate.
     let [s_lat_f, s_lon_f] = batch.start_lat_lon(i);
@@ -165,6 +169,7 @@ pub(super) fn evaluate_row<const FLOOR: bool>(
     let seg_len_sq = sdx * sdx + sdy * sdy;
     let flags = batch.flags[i];
     let is_departure = flags & 0b001 != 0;
+    let provenance_weight = ctx.weights.for_flags(flags);
     // Degenerate sub-segments are covered by the envelope check alone.
     if seg_len_sq > 1.0 {
         let cross = ax * sdy - ay * sdx;
@@ -179,21 +184,68 @@ pub(super) fn evaluate_row<const FLOOR: bool>(
     if aircraft::is_ground_stale_with_terrain(&seg, &terrain) {
         return None;
     }
-    let kernel = aircraft::segment_kernel_with_cuts::<FLOOR>(
-        &seg,
-        receiver.lat,
-        receiver.lon,
+    // One computation of every kernel scalar: the geometry above already
+    // matches `segment_kernel_with_overrides` op-for-op (same metre factors,
+    // same endpoint values), so the length terms finish it here and the
+    // emission inputs are derived once for both the kernel and the lmax
+    // tail below. Bit-identical to the old two-call shape (deleted
+    // recompute: geometry + thrust in the kernel, thrust in the tail).
+    let slen = seg_len_sq.sqrt().max(1.0);
+    let inv_lsq = if seg_len_sq > 1e-6 {
+        1.0 / seg_len_sq
+    } else {
+        0.0
+    };
+    let start_alt_m = seg.start_alt_m as f64;
+    let sdz = seg.end_alt_m as f64 - start_alt_m;
+    let anchor_profile =
+        &aircraft::PROFILES[aircraft::CLASS_REP_PROFILE_IDX[class_idx] as usize];
+    let (inst, di_a, di_b, di_c) = aircraft::delta_i_constants(anchor_profile.installation);
+    let dv = aircraft::delta_v(seg.speed_kt as f64, anchor_profile);
+    let (power_row, power_w) = aircraft::power_bracket(
+        aircraft::thrust_model_for_class(class_idx),
+        &aircraft::thrust_input_for_segment(
+            &seg,
+            start_alt_m,
+            seg.end_alt_m as f64,
+            start_elev - 30.0,
+            end_elev - 30.0,
+            f64::from(seg.departure_field_elev_m),
+        ),
+    )?;
+    let heli_db = aircraft::heli_correction_db(seg.profile_idx, seg.is_departure, seg.heli_descent);
+    let kernel = aircraft::segment_energy_kernel_with_screening::<true, FLOOR>(
+        ax,
+        ay,
+        sdx,
+        sdy,
+        sdz,
+        start_alt_m,
+        inv_lsq,
+        slen,
         ctx.rx_elev,
+        ctx.npd_luts,
+        class_idx,
+        seg.is_departure,
+        dv,
+        inst,
+        power_row,
+        power_w,
+        heli_db,
+        di_a,
+        di_b,
+        di_c,
+        false,
+        reach_sq_class[is_departure as usize],
         start_elev - 30.0,
         end_elev - 30.0,
-        ctx.npd_luts,
-        ctx.horizon,
+        Some(ctx.horizon),
         ctx.buildings,
     )?;
-    // The GA hybrid weight is folded into every energy here so each
-    // downstream consumer sees the `1/ga_n_days`-scaled value.
+    // The provenance weight is folded into every energy here so each
+    // downstream consumer sees the increment-normalised value.
     let energy_for_sel =
-        |sel: f64| fast_exp_f64(sel * std::f64::consts::LN_10 * 0.1) * class_weight;
+        |sel: f64| fast_exp_f64(sel * std::f64::consts::LN_10 * 0.1) * provenance_weight;
     let cpa = CpaResult {
         q_m: kernel.q_m,
         d_p_m: kernel.d_p_m,
@@ -203,11 +255,13 @@ pub(super) fn evaluate_row<const FLOOR: bool>(
         seg_len_m: kernel.seg_len_m,
         t: kernel.t,
     };
-    let sdz = seg.end_alt_m as f64 - seg.start_alt_m as f64;
     let (disp_dist, disp_alt) = aircraft::clamped_display_cpa(&cpa, sdz);
     // log2 × LOG10_2 ≡ log10 at f64; matches the kernel's NPD-lookup idiom.
     let log_d = (disp_dist * aircraft::FT_PER_M).max(100.0).log2() * std::f64::consts::LOG10_2;
-    let lmax = ctx.npd_luts.lookup_lmax(class_idx, seg.is_departure, log_d);
+    let lmax = ctx
+        .npd_luts
+        .lookup_lmax(class_idx, seg.is_departure, power_row, power_w, log_d)
+        + heli_db;
     Some(RowKernel {
         period: (seg.period.min(2)) as usize,
         energy: energy_for_sel(kernel.sel),
@@ -217,7 +271,7 @@ pub(super) fn evaluate_row<const FLOOR: bool>(
         seg,
         kernel,
         class_idx,
-        class_weight,
+        provenance_weight,
         cpa,
         disp_dist,
         disp_alt,
@@ -231,6 +285,7 @@ pub(super) fn build_row_trace(
     batch: &AirborneSegmentBatch<'_>,
     i: usize,
     row: &RowKernel,
+    sort_seq: u64,
 ) -> SegmentTrace {
     let kernel = &row.kernel;
     let mut period_energies = [0.0f64; 3];
@@ -263,9 +318,8 @@ pub(super) fn build_row_trace(
         lateral_m: row.cpa.lateral_m,
         beta_deg: row.cpa.beta_deg,
         seg_len_m: row.seg.segment_length_m as f64,
-        d_bar_m: kernel.d_bar_m,
+        d_lambda_m: kernel.d_lambda_m,
         installation,
-        cffk_fast_path: kernel.cffk_fast_path,
         screening_kind,
         screening_db,
     };
@@ -291,6 +345,7 @@ pub(super) fn build_row_trace(
             no_screening_period_energies,
             n_days: ctx.n_days_f,
             doc29,
+            sort_seq,
         },
     )
 }

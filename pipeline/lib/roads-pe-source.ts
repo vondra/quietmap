@@ -1,6 +1,6 @@
 /** Load and match Peru's pinned MTC national and departmental road sources. */
 
-import { pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
+import { trainingCountLines, pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
 import type { RoadRow } from './roads-arrow.js'
 import { inBbox } from './spatial.js'
@@ -43,7 +43,7 @@ export function loadPeruRoadSource(options: RoadLoaderArguments): PeruRoadSource
   const national = loadPinnedRoadLines(options, [FILES.national])
   const departmental = loadPinnedRoadLines(options, [FILES.departmental])
   return {
-    roads: buildRoadLineVertexGrid([...national.lines, ...departmental.lines]),
+    roads: buildRoadLineVertexGrid(trainingCountLines([...national.lines, ...departmental.lines], line => imd(line) > 0)),
     sourceRows: national.sourceRows + departmental.sourceRows,
     sourceLines: national.lines.length + departmental.lines.length,
     invalidGeometrySkipped: national.invalidGeometrySkipped + departmental.invalidGeometrySkipped,
@@ -93,7 +93,8 @@ export function matchPeruRoad(row: RoadRow, source: PeruRoadSource) {
   if (!line) return null
   const tier = cityTier(row.midLat, row.midLon)
   const observed = imd(line)
-  const traffic = splitVehicles((observed || classifiedAadt(line)) * multiplier(tier), tier,
+  // A published count is never scaled by a city box (the tier multipliers were invented, 2026-06-20).
+  const traffic = splitVehicles(observed || classifiedAadt(line) * multiplier(tier), tier,
     peruRegion(row.midLat, row.midLon), tier === 0 && MINING_REGIONS.some(bbox => inBbox(row.midLat, row.midLon, bbox)))
   if (traffic.light + traffic.medium + traffic.heavy + traffic.moto === 0) return null
   return { ...pinnedRoadObservation(line, 'both-directions'), kind: observed > 0 ? 'imd' as const : 'network' as const, ...traffic }

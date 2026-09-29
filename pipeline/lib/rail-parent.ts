@@ -13,7 +13,6 @@ const TRAFFIC = new Set([
   'trains_freight_day', 'trains_freight_evening', 'trains_freight_night',
   'passenger_status', 'freight_status', 'passenger_source_id', 'freight_source_id',
   'passenger_matching', 'freight_matching', 'source_id',
-  'trains_passenger', 'trains_freight', 'parallel_divisor',
 ])
 
 /** Caller holds the existing railway enrichment lock; a raw file is deliberately unpublishable until finalization. */

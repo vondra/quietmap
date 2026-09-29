@@ -1,4 +1,4 @@
-//! Read-only prepared airborne GPU/CPU acceptance at distributed facade-aware tile receivers.
+//! Read-only prepared airborne GPU/CPU acceptance at outdoor pixel centres and façade receivers.
 #[cfg(feature = "gpu")]
 fn main() -> anyhow::Result<()> {
     use anyhow::{ensure, Context};
@@ -15,6 +15,7 @@ fn main() -> anyhow::Result<()> {
         input_manifest::{parse_digest, InputManifest},
         source_frame::RegionMetricFrame,
         surface_scene::SurfaceScene,
+        receiver_points::ReceiverPoints,
         tile_receivers::TileReceivers,
     };
     use source_reader::aircraft_v6::AirborneRowAccum;
@@ -51,7 +52,7 @@ fn main() -> anyhow::Result<()> {
     let mut indexes = Vec::new();
     let mut exact = Vec::new();
     let mut days = 0;
-    let mut weights = air::ClassWeights::uniform();
+    let mut weights = air::ProvenanceWeights::PRIMARY_ONLY;
     let started = Instant::now();
     for square in &squares {
         let prefix = grid::square_name(*square);
@@ -70,15 +71,10 @@ fn main() -> anyhow::Result<()> {
         if let Some((bytes, _)) = manifest.read_arrow(root, &format!("{prefix}/airborne.arrow"))? {
             let reader = FileReader::try_new(Cursor::new(bytes), None)?;
             let schema = reader.schema();
-            days = schema.metadata().get("n_days").context("days")?.parse()?;
-            weights = air::ClassWeights::parse(
-                schema
-                    .metadata()
-                    .get(air::SAMPLE_DAYS_BY_CLASS_KEY)
-                    .map(String::as_str),
-                days,
-            )
-            .map_err(anyhow::Error::msg)?;
+            let window =
+                air::SamplingWindow::from_metadata(schema.metadata()).map_err(anyhow::Error::msg)?;
+            days = window.baseline_days;
+            weights = window.provenance_weights();
             for batch in reader {
                 exact.push(batch?);
             }
@@ -96,41 +92,66 @@ fn main() -> anyhow::Result<()> {
             bbox.west_lon - 0.002,
             bbox.east_lon + 0.002,
         ),
+        weather: raster_reader::meteorology::WeatherCache::new(rasters.dem.root()),
     };
-    let mut receivers = TileReceivers::prepare(&scene, tile_x, tile_y)?;
+    let tile = TileReceivers::prepare(&scene, tile_x, tile_y)?;
     let mut selected = Vec::new();
     for y in [37usize, 141, 253, 371, 479] {
         for x in [29usize, 137, 269, 389, 491] {
             selected.push(y * 512 + x);
         }
     }
-    // Add actual indoor pixel centres, whose shared receiver preparation moves to real facades.
-    selected.extend(
-        receivers
-            .indoor_attenuation
-            .iter()
-            .enumerate()
-            .filter(|(_, v)| **v > 0.0)
-            .step_by(97)
-            .take(8)
-            .map(|(i, _)| i),
-    );
-    selected.sort_unstable();
-    selected.dedup();
-    let moved = selected
+    selected.retain(|&pixel| tile.buildings[pixel].is_none());
+    let pixels = tile.points.select(&selected);
+    // Add real façade receivers 0.1 m in front of walls, where building horizons matter most.
+    let structures = format!("z9/{}/{}/structures.arrow", owner.x, owner.y);
+    let (bytes, _) = manifest
+        .read_arrow(root, &structures)?
+        .context("owner has no structures.arrow")?;
+    let footprints = source_reader::structure_store::enclosed_building_footprints(
+        &bytes,
+        Path::new(&structures),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let inside_tile = |lat: f64, lon: f64| {
+        (bbox.south_lat..bbox.north_lat).contains(&lat) && (bbox.west_lon..bbox.east_lon).contains(&lon)
+    };
+    let facade_points: Vec<_> = footprints
         .iter()
-        .filter(|&&i| receivers.indoor_attenuation[i] > 0.0)
-        .count();
-    for values in [
-        &mut receivers.x,
-        &mut receivers.y,
-        &mut receivers.altitude,
-        &mut receivers.reflection,
-        &mut receivers.floor,
-        &mut receivers.indoor_attenuation,
-    ] {
-        *values = selected.iter().map(|&i| values[i]).collect();
-    }
+        .filter(|(_, polygons)| {
+            let (gx, gy) = polygons[0][0][0];
+            let (lon, lat) = square_store::grid_cols::grid_cell_lonlat(gx, gy);
+            inside_tile(lat, lon)
+        })
+        .filter_map(|(id, polygons)| {
+            let receiver = noise_compute::facade_receivers::exposed_facade_receivers(
+                polygons,
+                &scene.obstacles,
+            )
+            .into_iter()
+            .next()?;
+            let (lat, lon) = receiver.latitude_longitude();
+            if !inside_tile(lat, lon) {
+                return None;
+            }
+            let key = noise_compute::propagation::obstacle_index::FootprintKey {
+                square_y: owner.y,
+                square_x: owner.x,
+                id: *id,
+            };
+            Some((lat, lon, Some(key)))
+        })
+        .step_by(97)
+        .take(8)
+        .collect();
+    let facades = facade_points.len();
+    let facade_receivers = ReceiverPoints::prepare(&scene, &facade_points)?;
+    let mut receivers = pixels;
+    receivers.x.extend(facade_receivers.x);
+    receivers.y.extend(facade_receivers.y);
+    receivers.altitude.extend(facade_receivers.altitude);
+    receivers.reflection.extend(facade_receivers.reflection);
+    receivers.floor.extend(facade_receivers.floor);
     let prepared_seconds = started.elapsed().as_secs_f64();
     let t = Instant::now();
     let airborne = AirborneScene::load(owner, root, &manifest, &rasters)?;
@@ -161,6 +182,7 @@ fn main() -> anyhow::Result<()> {
             0,
             None,
         )
+        .0
         .into_iter()
         .collect();
         flights.sort_unstable_by_key(|(id, _)| *id);
@@ -186,10 +208,10 @@ fn main() -> anyhow::Result<()> {
         }
         chord_positive += usize::from(reference.iter().any(|v| *v > 0.0));
     }
-    println!("{{\"receivers\":{},\"facade_moved\":{moved},\"building_horizons\":{screened},\"positive_receivers\":{chord_positive},\"independent_rows\":{},\"split_rows\":{},\"preparation_seconds\":{prepared_seconds},\"load_seconds\":{load_seconds},\"field_seconds\":{field_seconds},\"reference_seconds\":{},\"compared_periods\":{compared},\"max_db_error\":{max_db},\"mean_db_error\":{},\"failures\":{failures}}}", receivers.x.len(),airborne.row_counts().0,airborne.row_counts().1,t.elapsed().as_secs_f64(),sum_db/compared as f64);
+    println!("{{\"receivers\":{},\"facade_receivers\":{facades},\"building_horizons\":{screened},\"positive_receivers\":{chord_positive},\"independent_rows\":{},\"split_rows\":{},\"preparation_seconds\":{prepared_seconds},\"load_seconds\":{load_seconds},\"field_seconds\":{field_seconds},\"reference_seconds\":{},\"compared_periods\":{compared},\"max_db_error\":{max_db},\"mean_db_error\":{},\"failures\":{failures}}}", receivers.x.len(),airborne.row_counts().0,airborne.row_counts().1,t.elapsed().as_secs_f64(),sum_db/compared as f64);
     ensure!(
-        moved > 0 && screened > 0,
-        "fixture must exercise real facade moves and building horizons"
+        facades > 0 && screened > 0,
+        "fixture must exercise real façade receivers and building horizons"
     );
     ensure!(failures == 0, "airborne GPU/CPU mismatch");
     Ok(())

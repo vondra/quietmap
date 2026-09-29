@@ -8,6 +8,7 @@ import { buildRailGraph, isWalkableRailType, type RailGraphSegmentInput, type Ra
 import { walkRailStationPairs } from './rail-graph-metrics.js'
 import { writeRailwayTraffic, type RailwayRow, type RailwayTraffic } from './railways-arrow.js'
 import { writeClippedRailPassages } from './rail-passage.js'
+import { railMatchingMask } from './rail-traffic-store.js'
 import { routeRailServices, type RailServiceRoutingCounts } from './rail-service-route.js'
 import { isNationallyOwnedSource } from './sources.js'
 import { SourceTransportTopology, transportPieceKey } from './transport-topology.js'
@@ -34,11 +35,8 @@ export function collectZ9RailGraphSegments(
       const table = restoreRailwayParentsForEnrichment(path, square, source)
       const geometry = segmentGeometryReader(table)
       const railType = requiredVector(table, 'rail_type')
-      const usage = requiredVector(table, 'usage')
       const service = requiredVector(table, 'service')
       const length = requiredVector(table, 'length_m')
-      const name = requiredVector(table, 'name')
-      const ref = requiredVector(table, 'ref')
       const osmId = requiredVector(table, 'osm_id')
       const segmentIndex = requiredVector(table, 'segment_idx')
       const pieces = source.squarePieces(square), seen = new Set<number>()
@@ -50,8 +48,6 @@ export function collectZ9RailGraphSegments(
         const isTraversalOnly = serviceCode === 4
         if (!isTraversalOnly && !(isWalkableRailType(type) && serviceCode === 0)) continue
         const row = geometry.row(index)
-        const corridorRef = (ref.get(index) as string | null) ?? ''
-        const corridorName = (name.get(index) as string | null) ?? ''
         const key = transportPieceKey(String(osmId.get(index)), segmentIndex.get(index) as number)
         const piece = pieces.row(String(osmId.get(index)), segmentIndex.get(index) as number)
         if (piece < 0 || seen.has(piece)) throw new Error(`source topology missing or repeated railway piece ${key} in ${square}`)
@@ -61,9 +57,7 @@ export function collectZ9RailGraphSegments(
           key,
           osmId: String(osmId.get(index)),
           railType: type,
-          usage: usage.get(index) as number,
           isTraversalOnly,
-          corridorToken: corridorRef || corridorName,
           startLat: row.startLat,
           startLon: row.startLon,
           endLat: row.endLat,
@@ -171,14 +165,16 @@ export async function enrichZ9RailwaysByGraphWalk(
         const stamp = walk.stampsBySegmentKey.get(key)
         const silent = !stamp && options.silentResidual && isWalkableRailType(row.railType) &&
           !walk.quarantinedSegmentKeys.has(key)
+        // Walked passages sit on the track the walk chose (a matching mask); railways-finalize
+        // counts them once per line and shares the line over its parallel tracks.
         const candidate = stamp
           ? {
               passenger: stamp.pax,
               freight: stamp.frt,
               sourceId: options.sourceId,
-              divisor: stamp.divisor,
+              matching: railMatchingMask('graph_estimated'),
             }
-          : silent ? { ...options.silentResidual!, divisor: walk.divisorBySegmentKey.get(key) ?? 1 }
+          : silent ? { ...options.silentResidual! }
           : options.extraMatch?.(row, index, square) ?? null
         if (!candidate) return null
         if (!ownSourceIds.includes(row.existingSourceId) &&

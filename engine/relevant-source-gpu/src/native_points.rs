@@ -11,7 +11,26 @@ fn polygon(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<(i32, i32)
     decode_geom(Some(bytes)).with_context(|| format!("invalid {name} emission polygon"))
 }
 
-pub(super) fn points(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<PreparedPoint>> {
+/// Join contexts for one file's rows: the transformer units a substation
+/// facility joins against, the solar plant polygons that silence their
+/// contained generators, and the substation facility parts whose union is
+/// one rating truth (all three span every scene square), plus the raceway
+/// lines that silence their enclosing motorsport polygon (one square).
+/// Built in `load_sources`; empty for every other layer.
+#[derive(Default)]
+pub(super) struct FileJoins {
+    pub transformers: Vec<square_store::osm_evidence::TransformerUnit>,
+    pub solar_plants: Vec<grid::poly::PreparedRing>,
+    pub substation_facilities: square_store::osm_evidence::SubstationFacilities,
+    pub motorsport_venues: square_store::osm_evidence::MotorsportVenues,
+}
+
+pub(super) fn points(
+    batch: &RecordBatch,
+    row: usize,
+    name: &str,
+    joins: &FileJoins,
+) -> Result<Vec<PreparedPoint>> {
     if name == "structures"
         && (byte(batch, "kind", row) != square_store::store::STRUCTURE_KIND_BUILDING
             || col_i64(batch, "osm_id").is_none_or(|c| c.is_null(row)))
@@ -20,6 +39,25 @@ pub(super) fn points(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<
     }
     if name == "industrial" && byte(batch, "suppressed", row) != 0 {
         return Ok(Vec::new());
+    }
+    // A roofed motorsport/shooting row stays silent (its building footprint
+    // carries the emission), as does a motorsport polygon enclosing a
+    // raceway line (the lines carry the emission).
+    if name == "leisure"
+        && noise_compute::emission::leisure::is_formula_class(byte(batch, "sport", row))
+    {
+        let tags = square_store::osm_evidence::optional_tags(batch, row);
+        if square_store::osm_evidence::tags_indicate_indoor(&tags) {
+            return Ok(Vec::new());
+        }
+        if byte(batch, "sport", row) == noise_compute::emission::leisure::MOTORSPORT
+            && !square_store::osm_evidence::row_is_leisure_line(batch, row)
+            && joins
+                .motorsport_venues
+                .encloses_line(&polygon(batch, row, "geom")?)
+        {
+            return Ok(Vec::new());
+        }
     }
     if name == "ships" {
         let [centroid_lat, centroid_lon] = position(batch, row, "centroid")?;
@@ -71,24 +109,139 @@ pub(super) fn points(batch: &RecordBatch, row: usize, name: &str) -> Result<Vec<
             area_m2,
             polygon_grid: &polygon_grid,
         }),
-        "leisure" => prepare_leisure_points(RawLeisureInput {
-            centroid_lat,
-            centroid_lon,
-            sport: byte(batch, "sport", row),
-            area_m2,
-            polygon_grid: &polygon_grid,
-        }),
-        "industrial" => prepare_industrial_points(RawIndustrialInput {
-            centroid_lat,
-            centroid_lon,
-            source_type: byte(batch, "source_type", row),
-            site_subtype: byte(batch, "site_subtype", row),
-            hub_height_m: float(batch, "hub_height", row).filter(|v| *v > 0.0),
-            rated_power_kw: float(batch, "rated_power_kw", row).filter(|v| *v > 0.0),
-            nace_4digit: Some(short(batch, "nace_4digit", row)).filter(|v| *v > 0),
-            area_m2,
-            polygon_grid: &polygon_grid,
-        }),
+        "leisure" => {
+            let sport = byte(batch, "sport", row);
+            let row_name = col_str(batch, "name")
+                .filter(|c| !c.is_null(row))
+                .map(|c| c.value(row))
+                .unwrap_or("");
+            let mut formula = if noise_compute::emission::leisure::is_formula_class(sport) {
+                let tags = square_store::osm_evidence::optional_tags(batch, row);
+                let details: Vec<&str> = tags
+                    .iter()
+                    .filter(|(key, _)| key.starts_with("shooting:"))
+                    .map(|(_, value)| value.as_str())
+                    .collect();
+                noise_compute::emission::leisure::formula_for_row(
+                    sport,
+                    tags.get("sport").map(String::as_str).unwrap_or(""),
+                    tags.get("shooting").map(String::as_str),
+                    &details,
+                    row_name,
+                )
+            } else {
+                None
+            };
+            // Fragments of one circuit share its single formula total by
+            // chain length (same venue join as the popup).
+            let is_line = square_store::osm_evidence::row_is_leisure_line(batch, row);
+            if sport == noise_compute::emission::leisure::MOTORSPORT && is_line {
+                if let Some(emission) = formula.as_mut() {
+                    let share = joins.motorsport_venues.line_share(
+                        square_store::osm_evidence::chain_ends(&polygon_grid),
+                        square_store::osm_evidence::leisure_line_length_m(
+                            float(batch, "length_m", row),
+                            &polygon_grid,
+                        ),
+                    );
+                    emission.lw_day += 10.0 * share.log10();
+                }
+            }
+            prepare_leisure_points(RawLeisureInput {
+                centroid_lat,
+                centroid_lon,
+                sport,
+                area_m2,
+                polygon_grid: &polygon_grid,
+                formula,
+                is_line,
+            })
+        }
+        "industrial" => {
+            let source_type = byte(batch, "source_type", row);
+            let row_tags = matches!(
+                source_type,
+                noise_compute::emission::industrial::SOURCE_SOLAR_FARM
+                    | noise_compute::emission::industrial::SOURCE_SUBSTATION
+            )
+            .then(|| square_store::osm_evidence::optional_tags(batch, row));
+            // A gas-network station carries no transformer hum.
+            if row_tags
+                .as_ref()
+                .is_some_and(square_store::osm_evidence::is_gas_substation)
+            {
+                return Ok(Vec::new());
+            }
+            // A class-13 generator inside its plant polygon stays silent —
+            // the plant owns the emission (same join as the popup).
+            if source_type == noise_compute::emission::industrial::SOURCE_SOLAR_FARM
+                && row_tags.as_ref().is_some_and(|tags| {
+                    !square_store::osm_evidence::tags_is_solar_plant(tags)
+                })
+            {
+                // Without centroid columns there is no containment evidence;
+                // the row emits (current behaviour).
+                if let (Some(cgx), Some(cgy)) =
+                    (col_i32(batch, "centroid_gx"), col_i32(batch, "centroid_gy"))
+                {
+                    if !cgx.is_null(row)
+                        && !cgy.is_null(row)
+                        && square_store::osm_evidence::inside_solar_plant(
+                            &joins.solar_plants,
+                            cgx.value(row),
+                            cgy.value(row),
+                        )
+                    {
+                        return Ok(Vec::new());
+                    }
+                }
+            }
+            let plant_output_mw = row_tags
+                .as_ref()
+                .and_then(square_store::osm_evidence::plant_output_mw);
+            let (substation_mva, substation_class) = match row_tags.as_ref() {
+                Some(tags)
+                    if source_type
+                        == noise_compute::emission::industrial::SOURCE_SUBSTATION =>
+                {
+                    let kind = col_str(batch, "osm_kind")
+                        .filter(|kinds| !kinds.is_null(row))
+                        .map(|kinds| kinds.value(row))
+                        .unwrap_or("");
+                    let osm_id = col_i64(batch, "osm_id")
+                        .filter(|ids| !ids.is_null(row))
+                        .map(|ids| ids.value(row))
+                        .unwrap_or(0);
+                    let feed = joins.substation_facilities.feed(
+                        kind,
+                        osm_id,
+                        &polygon_grid,
+                        &joins.transformers,
+                    );
+                    square_store::osm_evidence::substation_power(tags, &feed)
+                }
+                _ => (None, 0),
+            };
+            let facility_share = row_tags
+                .as_ref()
+                .map(square_store::osm_evidence::facility_share)
+                .unwrap_or(1.0);
+            prepare_industrial_points(RawIndustrialInput {
+                centroid_lat,
+                centroid_lon,
+                source_type,
+                site_subtype: byte(batch, "site_subtype", row),
+                hub_height_m: float(batch, "hub_height", row).filter(|v| *v > 0.0),
+                rated_power_kw: float(batch, "rated_power_kw", row).filter(|v| *v > 0.0),
+                nace_4digit: Some(short(batch, "nace_4digit", row)).filter(|v| *v > 0),
+                area_m2,
+                polygon_grid: &polygon_grid,
+                plant_output_mw,
+                substation_mva,
+                substation_class,
+                facility_share,
+            })
+        }
         _ => unreachable!(),
     })
 }
@@ -115,7 +268,7 @@ mod tests {
             ("height", Arc::new(Float32Array::from(vec![Some(24.0), None, Some(0.25)]))),
             ("floors", Arc::new(UInt8Array::from(vec![8, 0, 0]))),
             ("height_m", Arc::new(Int16Array::from(vec![0, 8, 0]))),
-            ("height_tier", Arc::new(UInt8Array::from(vec![2, 2, 0]))),
+            ("height_source", Arc::new(UInt8Array::from(vec![7, 2, 0]))),
             // Missing geometry and rounded sub-metre height must preserve real-building identity.
             ("geom", Arc::new(BinaryArray::from(vec![None::<&[u8]>; 3]))),
             ("emission_geom", Arc::new(BinaryArray::from(vec![Some(ring.as_slice()); 3]))),
@@ -135,7 +288,7 @@ mod tests {
                 building_type: row.building_type, area_m2: Some(row.area_m2 as f64),
                 polygon_grid: &row.polygon_grid,
             });
-            let painter = points(&batch, index, "structures").unwrap();
+            let painter = points(&batch, index, "structures", &FileJoins::default()).unwrap();
             assert_eq!(painter.len(), 1);
             assert_eq!(painter[0].lw_day, popup_points[0].lw_day);
             assert_eq!(painter[0].source_height_m, popup_points[0].source_height_m);

@@ -94,6 +94,7 @@
 //! changing the shared received-level contract.
 
 use crate::constants::*;
+use crate::propagation::meteorology::DEFAULT_FAVOURABLE_PROBABILITY;
 use crate::types::NUM_BANDS;
 
 /// Single-edge diffraction geometry + the CNOSSOS Rayleigh δ\*.
@@ -104,8 +105,7 @@ pub struct DiffractionResult {
     /// arches ABOVE the straight chord and so shortens the detour over the top —
     /// δ_F < δ (and can go negative, i.e. the curved ray clears the edge
     /// entirely). (2.5.26) when the straight SR is broken,
-    /// (2.5.27) when it is not. Consumed only when
-    /// [`FAVOURABLE_MIXING`] is on; the edge itself stays max-δ-selected on
+    /// (2.5.27) when it is not. The edge itself stays max-δ-selected on
     /// straight geometry (a second-order simplification).
     pub delta_fav: f64,
     /// Rayleigh δ\* of 2021/1226 point (9)(c): path difference over the
@@ -180,7 +180,7 @@ pub(crate) fn curved_path_difference_near_miss(
 /// other term of the level chain (emission, divergence, atmosphere, ground,
 /// vegetation), so mixing the diffraction attenuation is algebraically
 /// identical to mixing the received levels — and with the single flat
-/// [`P_FAV`] it is also identical to mixing per period or mixing Lden.
+/// [`DEFAULT_FAVOURABLE_PROBABILITY`] it is also identical to mixing per period or mixing Lden.
 /// Mixing leans to the LOUDER (favourable)
 /// state, which is the standard's point.
 pub(crate) fn mix_fav_hom(
@@ -229,7 +229,7 @@ pub(super) fn compute_single_edge(
         source_height,
         receiver_height,
     );
-    let gamma = FAV_RAY_CURVATURE_MIN_M.max(FAV_RAY_CURVATURE_PER_DSR * dsr);
+    let gamma = crate::propagation::cnossos::rubber_band::favourable_ray_radius_m(dsr);
     DiffractionResult {
         delta: d_sb + d_br - dsr,
         delta_fav: curved_path_difference(d_sb, d_br, dsr, gamma),
@@ -316,7 +316,7 @@ pub(super) fn compute_single_edge_at(
     let d_sr = (total_dist * total_dist + (r_star_z - s_star_z).powi(2)).sqrt();
     let delta_star = (d_sd + d_dr - d_sr).max(0.0);
 
-    let gamma = FAV_RAY_CURVATURE_MIN_M.max(FAV_RAY_CURVATURE_PER_DSR * dsr);
+    let gamma = crate::propagation::cnossos::rubber_band::favourable_ray_radius_m(dsr);
     let straight = d_sb + d_br - dsr;
     // WHICH WAY THE FAVOURABLE RAY BENDS. Downward refraction makes the
     // (2.5.24) ray a circular arc CONCAVE TOWARD THE GROUND, so between its
@@ -526,43 +526,9 @@ fn maekawa_bands(delta: f64, admits: &[bool; NUM_BANDS]) -> [f64; NUM_BANDS] {
     atten
 }
 
-/// Pure Maekawa band attenuation (no Rayleigh criterion) — reference-vector
-/// helper.
-pub fn diffraction_attenuation(delta: f64) -> [f64; NUM_BANDS] {
-    maekawa_bands(delta, &[true; NUM_BANDS])
-}
-
-/// PROVABLE per-band lower bound on [`diffraction_attenuation_mixed`] for ANY
-/// edge whose homogeneous path difference is `≥ delta_lb` and whose favourable
-/// path difference is `≥ delta_fav_lb` — the M3b byte-stop bound input.
-///
-/// Each `maekawa_bands` arm is monotone in its δ and `mix_fav_hom` is monotone
-/// in each arm, so evaluating the mix AT the two lower bounds cannot exceed
-/// the mix at the real edge. Both δ's of a real above-LOS edge are handled:
-/// the Rayleigh `admits` verdict is all-true whenever the edge's δ ≥ 0, which
-/// the caller guarantees by only passing max-δ edges from above-LOS samples.
-///
-/// This exists because the naive subset evaluation — running the full mixed
-/// core on the subset's own argmax edge — is NOT sound: the favourable δ_F is
-/// not monotone across different edge positions (the arc construction
-/// compresses mid-path detours and stretches near-endpoint ones), so a
-/// subset edge with smaller δ can carry a LARGER δ_F than the exact path's
-/// dominant edge (measured on Dobris industrial: 20 851 of 259 496 pairs
-/// over-reading, up to 2.9 dB, before this form).
-pub fn diffraction_mixed_lower_bound(delta_lb: f64, delta_fav_lb: f64) -> [f64; NUM_BANDS] {
-    let admits = [true; NUM_BANDS];
-    let hom = maekawa_bands(delta_lb, &admits);
-    let fav = maekawa_bands(delta_fav_lb, &admits);
-    if FAVOURABLE_MIXING {
-        mix_fav_hom(&hom, &fav, P_FAV)
-    } else {
-        hom
-    }
-}
-
 /// The banded attenuation of a computed edge: [`maekawa_bands`] on the
-/// homogeneous δ, mixed with the favourable-ray δ_F per (2.5.9) when
-/// [`FAVOURABLE_MIXING`] is on. One [`rayleigh_admits`] verdict feeds both.
+/// homogeneous δ, mixed with the favourable-ray δ_F per (2.5.9). One
+/// [`rayleigh_admits`] verdict feeds both.
 pub fn diffraction_attenuation_mixed(result: &DiffractionResult) -> [f64; NUM_BANDS] {
     // NO EDGE means NO ATTENUATION, and it has to be spelled out: `n_edges == 0`
     // is a clear path (`empty_result`), but `maekawa_bands(δ = 0, admitted)` is
@@ -575,11 +541,8 @@ pub fn diffraction_attenuation_mixed(result: &DiffractionResult) -> [f64; NUM_BA
     }
     let admits = rayleigh_admits(result.delta, result.delta_star);
     let hom = maekawa_bands(result.delta, &admits);
-    if !FAVOURABLE_MIXING {
-        return hom;
-    }
     let fav = maekawa_bands(result.delta_fav, &admits);
-    mix_fav_hom(&hom, &fav, P_FAV)
+    mix_fav_hom(&hom, &fav, DEFAULT_FAVOURABLE_PROBABILITY)
 }
 
 #[cfg(test)]
@@ -599,7 +562,7 @@ mod tests {
 
     #[test]
     fn test_k6_barrier_atten() {
-        let atten = diffraction_attenuation(0.5);
+        let atten = maekawa_bands(0.5, &[true; NUM_BANDS]);
         let at_1khz = atten[4];
         assert!(
             (at_1khz - 15.28).abs() < 1.0,
@@ -632,7 +595,7 @@ mod tests {
             delta_h > 0.5 && delta_h < 1.0,
             "fixture δ_H ≈ 0.58 m, got {delta_h:.3}"
         );
-        let gamma = FAV_RAY_CURVATURE_MIN_M.max(FAV_RAY_CURVATURE_PER_DSR * dsr);
+        let gamma = crate::propagation::cnossos::rubber_band::favourable_ray_radius_m(dsr);
         let delta_f = curved_path_difference(d_sb, d_br, dsr, gamma);
         assert!(delta_f < delta_h, "δ_F must be smaller than δ_H");
         assert!(
@@ -676,14 +639,9 @@ mod tests {
         assert!((mh[0] - (fav[0] + 2.61)).abs() < 0.05, "got {:.3}", mh[0]);
     }
 
-    /// Flag ON (the shipped state since the 2026-07-28 flip): the public band
-    /// function must equal the explicit favourable/homogeneous mix. The
-    /// constant assert forces whoever flips the flag again to rewrite this
-    /// test consciously (the OFF-era twin did the same job in reverse).
-    #[allow(clippy::assertions_on_constants)]
+    /// The public band function equals the explicit favourable/homogeneous mix.
     #[test]
-    fn flag_on_matches_explicit_mix() {
-        assert!(FAVOURABLE_MIXING, "shipped state is ON (flip 2026-07-28)");
+    fn public_bands_match_explicit_mix() {
         let r = DiffractionResult {
             delta: 0.7,
             delta_fav: -0.1,
@@ -695,7 +653,7 @@ mod tests {
         let admits = rayleigh_admits(r.delta, r.delta_star);
         let hom = maekawa_bands(r.delta, &admits);
         let fav = maekawa_bands(r.delta_fav, &admits);
-        assert_eq!(public, mix_fav_hom(&hom, &fav, P_FAV));
+        assert_eq!(public, mix_fav_hom(&hom, &fav, DEFAULT_FAVOURABLE_PROBABILITY));
     }
 
     /// A flat bare-earth profile at elevation 0 with `n` cadence samples.
@@ -792,7 +750,7 @@ mod tests {
         // O ON the sight line ⇒ A = O ⇒ d_SA = d_SO and d_AR = d_OR.
         let d_sb = (d_sg * d_sg + (los - src_elev).powi(2)).sqrt();
         let d_br = (d_rg * d_rg + (los - rcv_elev).powi(2)).sqrt();
-        let gamma = FAV_RAY_CURVATURE_MIN_M.max(FAV_RAY_CURVATURE_PER_DSR * dsr);
+        let gamma = crate::propagation::cnossos::rubber_band::favourable_ray_radius_m(dsr);
         let blocked = curved_path_difference(d_sb, d_br, dsr, gamma);
         let near_miss = curved_path_difference_near_miss(d_sb, d_br, d_sb, d_br, dsr, gamma);
         assert!(
@@ -982,14 +940,14 @@ mod tests {
             let d_sb = (d_sg * d_sg + rise * rise).sqrt();
             let d_br = (d_rg * d_rg + rise * rise).sqrt();
             let dsr = d_sg + d_rg;
-            let gamma = FAV_RAY_CURVATURE_MIN_M.max(FAV_RAY_CURVATURE_PER_DSR * dsr);
+            let gamma = crate::propagation::cnossos::rubber_band::favourable_ray_radius_m(dsr);
             let delta_h = d_sb + d_br - dsr;
             let delta_f = curved_path_difference(d_sb, d_br, dsr, gamma);
             assert!(delta_f < delta_h);
             let admits = rayleigh_admits(delta_h, 0.0);
             let hom = maekawa_bands(delta_h, &admits);
             let fav = maekawa_bands(delta_f, &admits);
-            let mixed = mix_fav_hom(&hom, &fav, P_FAV);
+            let mixed = mix_fav_hom(&hom, &fav, DEFAULT_FAVOURABLE_PROBABILITY);
             for i in 0..NUM_BANDS {
                 assert!(mixed[i] <= hom[i] + 1e-9 && mixed[i] >= fav[i] - 1e-9);
             }

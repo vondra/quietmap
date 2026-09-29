@@ -1,4 +1,7 @@
 //! Produce canonical surface corners or one complete z9 eight-layer noise result.
+//!
+//! Building pixels copy their building's `facade_exposure.arrow` row, so the
+//! façade-exposure stage must have run for the owner and its neighbours.
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
 use grid::surface_corner::{
@@ -6,10 +9,13 @@ use grid::surface_corner::{
 };
 use relevant_source_gpu::{
     airborne_field::AirborneScene,
+    building_exposure_table::BuildingExposureTables,
     cruise_field::CruiseField,
     cuda_bridge::RelevantSourceCuda,
     input_manifest::{file_digest, parse_digest, InputManifest},
     paint_tile::paint_tile,
+    receiver_points::scatter_period_powers,
+    source_frame::{PERIOD_COUNT, TILE_PIXEL_SIDE},
     surface_gpu::SurfaceGpu,
     surface_scene::SurfaceScene,
     tile_receivers::TileReceivers,
@@ -212,6 +218,7 @@ fn paint_owner(
             SurfaceGpu::upload(SurfaceScene::load(owner, prepared_year, manifest, rasters)?)?;
         let airborne = AirborneScene::load(owner, prepared_year, manifest, rasters)?;
         let cruise = CruiseField::load(owner, prepared_year, manifest, rasters)?;
+        let mut exposures = BuildingExposureTables::new(prepared_year, manifest);
         let mut produced = 0usize;
         for (x, y) in pending {
             let vertices = tile_corners(x, y).expect("owned z13 tile");
@@ -225,21 +232,34 @@ fn paint_owner(
                 Ok(values)
             })?;
             let receivers = TileReceivers::prepare(&scene.host, x, y)?;
-            let surface = paint_tile(cuda, &scene, x, y, &receivers, &corners)?;
-            let airborne_power = airborne.period_powers(&scene.host, &receivers)?;
-            let cruise_power = cruise.period_powers(&scene.host, &receivers)?;
+            let [road, rail, industrial, building, aircraft_ground, ship] =
+                paint_tile(cuda, &scene, x, y, &receivers.points, &corners)?;
+            // The aircraft fields evaluate outdoor pixels only; building pixels
+            // take their building's stored exposure below.
+            let outdoor = receivers.outdoor_pixels();
+            let outdoor_points = receivers.points.select(&outdoor);
+            let plane = || vec![0.0_f32; TILE_PIXEL_SIDE * TILE_PIXEL_SIDE * PERIOD_COUNT];
+            let (mut airborne_power, mut cruise_power) = (plane(), plane());
+            if !outdoor.is_empty() {
+                let powers = airborne.period_powers(&scene.host, &outdoor_points)?;
+                scatter_period_powers(&outdoor, &powers, &mut airborne_power);
+                let powers = cruise.period_powers(&scene.host, &outdoor_points)?;
+                scatter_period_powers(&outdoor, &powers, &mut cruise_power);
+            }
+            let mut planes = [
+                road,
+                rail,
+                industrial,
+                building,
+                aircraft_ground,
+                airborne_power,
+                cruise_power,
+                ship,
+            ];
+            let assessed = receivers.apply_building_exposure(&mut planes, &mut exposures)?;
             let tiles = encode_all_period_powers(
-                [
-                    &surface[0],
-                    &surface[1],
-                    &surface[2],
-                    &surface[3],
-                    &surface[4],
-                    &airborne_power,
-                    &cruise_power,
-                    &surface[5],
-                ],
-                &receivers.indoor_attenuation,
+                planes.each_ref().map(|plane| plane.as_slice()),
+                &assessed,
             )?;
             let committed = directory.write(x, y, &tiles)?;
             directory.release(committed)?;

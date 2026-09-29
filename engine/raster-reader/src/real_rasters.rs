@@ -1,7 +1,7 @@
 //! [`RealRasters`] — lazy mmap'd native-lattice z9 windows for popup and aircraft sampling.
 //!
-//! Implements [`noise_compute::types::RasterSampler`] over three [`TileStore`]s
-//! (DEM, forest, IMD), each a byte-bounded LRU cache of mmap'd windows loaded on
+//! Implements [`noise_compute::types::RasterSampler`] over four [`TileStore`]s
+//! (DEM, canopy, forest, IMD), each a byte-bounded LRU cache of mmap'd windows loaded on
 //! first access. This is the global-scale reader the per-point popup and the
 //! aircraft extract sample directly; the pipeline crops it into a
 //! [`crate::fused_grid::FusedGrid`] for L3-resident batch compute.
@@ -15,6 +15,7 @@ use std::path::Path;
 /// Real raster data from native-lattice z9 windows. Implements RasterSampler.
 pub struct RealRasters {
     pub dem: TileStore,
+    pub canopy: TileStore,
     pub forest: TileStore,
     pub imd: TileStore,
 }
@@ -23,10 +24,11 @@ impl RealRasters {
     /// Files are opened and mmap'd only on first access; every channel fails independently.
     pub fn new(data_dir: &Path) -> Self {
         // Byte bounds accommodate two 91 MB polar DEM windows without allowing
-        // a global flight sweep to retain every visited mmap (768 MiB total).
+        // a global flight sweep to retain every visited mmap (1024 MiB total).
         let cache_bytes = 256 * 1024 * 1024;
         Self {
             dem: TileStore::new(data_dir, Channel::Dem, cache_bytes),
+            canopy: TileStore::new(data_dir, Channel::Canopy, cache_bytes),
             forest: TileStore::new(data_dir, Channel::Forest, cache_bytes),
             imd: TileStore::new(data_dir, Channel::Imd, cache_bytes),
         }
@@ -37,6 +39,7 @@ impl RealRasters {
     /// to avoid per-sample cache-slot locking and LRU updates.
     pub fn preload_bbox(&self, lat_min: f64, lat_max: f64, lon_min: f64, lon_max: f64) {
         self.dem.preload_bbox(lat_min, lat_max, lon_min, lon_max);
+        self.canopy.preload_bbox(lat_min, lat_max, lon_min, lon_max);
         self.forest.preload_bbox(lat_min, lat_max, lon_min, lon_max);
         self.imd.preload_bbox(lat_min, lat_max, lon_min, lon_max);
     }
@@ -82,6 +85,36 @@ impl RealRasters {
         self.dem
             .sample_cached_with(lat, lon, Interp::Nearest, cached_key, cached_tile)
     }
+
+    /// One square's meteorology window from beside the prepared files. A release without
+    /// the files gets a synthetic window of the long-standing defaults (p = 0.5, steady
+    /// 15 °C / 70 %); a present but unreadable file is refused loudly and falls back the
+    /// same way, the popup staying alive.
+    pub fn climatology(&self, square: grid::Square) -> crate::meteorology::Meteorology {
+        use crate::meteorology::{Meteorology, MeteorologyNode, ERA5_NODES_PER_DEGREE};
+        let path = Meteorology::path(self.dem.root(), square);
+        match Meteorology::load(&path, square) {
+            Ok(window) => window,
+            Err(error) => {
+                if std::fs::metadata(&path).is_ok() {
+                    eprintln!("raster-reader: REFUSED square {square:?}: {error}");
+                }
+                let window =
+                    grid::raster::RasterWindow::for_square_with_density(square, ERA5_NODES_PER_DEGREE);
+                let alpha = noise_compute::propagation::air_absorption::iso_9613_1_alpha_bands(
+                    noise_compute::propagation::meteorology::DEFAULT_ABSORPTION_TEMPERATURE_C,
+                    noise_compute::propagation::meteorology::DEFAULT_ABSORPTION_RELATIVE_HUMIDITY_PCT,
+                );
+                let means = alpha.map(|a| a as f32);
+                let node = MeteorologyNode {
+                    p_percent: [[50; crate::meteorology::SECTORS]; 3],
+                    alpha_mean: [means; 3],
+                    alpha_variance: [[0.0; 8]; 3],
+                };
+                Meteorology::from_nodes(window, vec![node; window.cell_count()])
+            }
+        }
+    }
 }
 
 impl RasterSampler for RealRasters {
@@ -119,6 +152,7 @@ impl RasterSampler for RealRasters {
 
         let n = out.t.len();
         out.elevation_m.reserve(n);
+        out.canopy_m.reserve(n);
         out.forest_u8.reserve(n);
         out.imd_u8.reserve(n);
 
@@ -126,6 +160,8 @@ impl RasterSampler for RealRasters {
         // stays warm while consecutive samples fall in the same z9 window.
         let mut dem_key = (i32::MIN, i32::MIN);
         let mut dem_tile = None;
+        let mut canopy_key = (i32::MIN, i32::MIN);
+        let mut canopy_tile = None;
         let mut for_key = (i32::MIN, i32::MIN);
         let mut for_tile = None;
         let mut imd_key = (i32::MIN, i32::MIN);
@@ -137,6 +173,9 @@ impl RasterSampler for RealRasters {
             let elev = self
                 .dem
                 .sample_cached(lat, lon, &mut dem_key, &mut dem_tile);
+            let canopy = self
+                .canopy
+                .sample_cached(lat, lon, &mut canopy_key, &mut canopy_tile);
             let fr = self
                 .forest
                 .sample_cached(lat, lon, &mut for_key, &mut for_tile);
@@ -145,11 +184,13 @@ impl RasterSampler for RealRasters {
                 .sample_cached(lat, lon, &mut imd_key, &mut imd_tile);
             // PathProfile's byte channels cannot carry NaN. Preserve an invalid
             // consumed channel in its floating plane for the operation guard.
-            out.elevation_m.push(if fr.is_finite() && imd.is_finite() {
-                elev as f32
-            } else {
-                f32::NAN
-            });
+            out.elevation_m
+                .push(if canopy.is_finite() && fr.is_finite() && imd.is_finite() {
+                    elev as f32
+                } else {
+                    f32::NAN
+                });
+            out.canopy_m.push(canopy as f32);
             out.forest_u8.push(fr as u8);
             out.imd_u8.push(imd as u8);
         }
@@ -160,5 +201,15 @@ impl RasterSampler for RealRasters {
         // terrain the cadence deliberately coarsens, undercutting the cadence's
         // purpose, for a refinement the cadence already largely captures.
         out.step_m_med = noise_compute::propagation::path_profile::median_step_m(&out.t, dist_m);
+    }
+
+    fn weather(&self, lat: f64, lon: f64) -> noise_compute::propagation::meteorology::Meteorology {
+        use noise_compute::propagation::meteorology::Meteorology;
+        let square = grid::square_of(lat, lon);
+        let window = self.climatology(square);
+        window.receiver_weather(lat, lon).unwrap_or_else(|error| {
+            eprintln!("raster-reader: REFUSED square {square:?}: {error}");
+            Meteorology::defaults()
+        })
     }
 }

@@ -20,7 +20,7 @@ function arrow(prepared: string, rows: RailwayFixtureRow[]): string {
   const directory = join(prepared, square)
   mkdirSync(directory, { recursive: true })
   const path = join(directory, 'railways.arrow')
-  copyFileSync(writeRailwaysFixture('source-topology.arrow', rows, { includeTraffic: true }), path)
+  copyFileSync(writeRailwaysFixture('source-topology.arrow', rows), path)
   return path
 }
 
@@ -65,7 +65,7 @@ test('source identities preserve large IDs, fractional joins and explicit zero h
 
 test('missing or unmatched topology fails before existing traffic is changed', async () => {
   const prepared = join(TEMP, 'incomplete')
-  const path = arrow(prepared, [{ ...row(10n, 0, 14, 14.001), sourceId: 100, passenger: 7 }])
+  const path = arrow(prepared, [{ ...row(10n, 0, 14, 14.001), sourceId: 100 }])
   const before = readFileSync(path)
   const options = { preparedDirectory: prepared, bbox: [49.99, 13.99, 50.01, 14.01] as const,
     pairs: [], sourceId: 100, countryIso: 'CD', retractSafe: true }

@@ -78,84 +78,68 @@ fn estimated_flow(daily: f64, shares: [f64; 3], source_id: u16, matching: u8) ->
     }
 }
 
-pub fn row_traffic(
+/// Per-track evidence of one child, split by timetable ownership: the winning source per
+/// category among the track's own country files (domestic) and among neighbour files
+/// (foreign cross-border services), no priors yet.
+pub fn row_evidence(
     intervals: &[Interval],
     from_m: f64,
     to_m: f64,
     rail_type: u8,
-    usage: u8,
-    service: u8,
     square_country_city: SquareCountryCity,
-) -> RowTraffic {
+) -> (RowTraffic, RowTraffic) {
     let row_iso = square_country_city.country_iso;
-    let passenger_claims: Vec<Claim> = overlapping(intervals, from_m, to_m)
-        .map(|interval| Claim {
-            source_id: interval.source_id,
-            trains: interval.passenger,
-            status: interval.passenger_status,
-            matching: interval.matching,
-        })
-        .collect();
-    let freight_claims: Vec<Claim> = overlapping(intervals, from_m, to_m)
-        .map(|interval| Claim {
-            source_id: interval.source_id,
-            trains: interval.freight,
-            status: interval.freight_status,
-            matching: interval.matching,
-        })
-        .collect();
-    let rail = RailType::from_u8(rail_type);
-    let shares = rail_time_dist(square_country_city, rail);
-    let mut traffic = RowTraffic::default();
-    if let Some(winner) = pick_winner(passenger_claims, row_iso) {
-        traffic.passenger =
-            estimated_flow(winner.trains, shares.pax, winner.source_id, winner.matching);
+    let claims =
+        |category: fn(&Interval) -> (f64, u8), domestic: bool| -> Vec<Claim> {
+            overlapping(intervals, from_m, to_m)
+                .filter(|interval| (interval.country == row_iso) == domestic)
+                .map(|interval| {
+                    let (trains, status) = category(interval);
+                    Claim {
+                        source_id: interval.source_id,
+                        trains,
+                        status,
+                        matching: interval.matching,
+                    }
+                })
+                .collect()
+        };
+    let shares = rail_time_dist(square_country_city, RailType::from_u8(rail_type));
+    let mut traffic = (RowTraffic::default(), RowTraffic::default());
+    for (domestic, scope) in [(true, &mut traffic.0), (false, &mut traffic.1)] {
+        if let Some(winner) = pick_winner(claims(|i| (i.passenger, i.passenger_status), domestic), row_iso)
+        {
+            scope.passenger =
+                estimated_flow(winner.trains, shares.pax, winner.source_id, winner.matching);
+        }
+        if let Some(winner) = pick_winner(claims(|i| (i.freight, i.freight_status), domestic), row_iso)
+        {
+            scope.freight =
+                estimated_flow(winner.trains, shares.frt, winner.source_id, winner.matching);
+        }
     }
-    if let Some(winner) = pick_winner(freight_claims, row_iso) {
-        traffic.freight =
-            estimated_flow(winner.trains, shares.frt, winner.source_id, winner.matching);
-    }
-    fill_missing_priors(&mut traffic, rail_type, usage, service, square_country_city);
     traffic
 }
 
-pub fn fill_missing_priors(
-    traffic: &mut RowTraffic,
+/// The labelled class prior of one line (source 0); service tracks and preserved heritage
+/// rail (type 5, silent until a heritage model exists) have none.
+pub fn class_prior(
     rail_type: u8,
     usage: u8,
     service: u8,
     square_country_city: SquareCountryCity,
-) {
-    if service != 0 {
-        return;
-    }
+    traffic_mode: u8,
+) -> RowTraffic {
     let rail = RailType::from_u8(rail_type);
-    let (passenger, freight) = default_traffic(rail, usage);
+    if service != 0 || matches!(rail, RailType::Preserved) {
+        return RowTraffic::default();
+    }
+    let (passenger, freight) =
+        default_traffic(rail, usage, square_country_city.country_iso, traffic_mode);
     let shares = rail_time_dist(square_country_city, rail);
-    if traffic.passenger.status == STATUS_UNKNOWN {
-        traffic.passenger = estimated_flow(passenger, shares.pax, 0, 0);
-    }
-    if traffic.freight.status == STATUS_UNKNOWN {
-        traffic.freight = estimated_flow(freight, shares.frt, 0, 0);
-    }
-}
-
-pub fn share_class_defaults(rows: &mut [RowTraffic], group_size: usize) {
-    if group_size <= 1 {
-        return;
-    }
-    let scale = 1.0 / group_size as f64;
-    for row in rows {
-        if row.passenger.source_id == 0 && row.passenger.status == STATUS_ESTIMATED {
-            for value in &mut row.passenger.periods {
-                *value *= scale;
-            }
-        }
-        if row.freight.source_id == 0 && row.freight.status == STATUS_ESTIMATED {
-            for value in &mut row.freight.periods {
-                *value *= scale;
-            }
-        }
+    RowTraffic {
+        passenger: estimated_flow(passenger, shares.pax, 0, 0),
+        freight: estimated_flow(freight, shares.frt, 0, 0),
     }
 }
 
@@ -164,18 +148,13 @@ mod tests {
     use super::*;
     use crate::square_intervals::Interval;
 
-    fn interval(
-        from_m: f64,
-        to_m: f64,
-        passenger: f64,
-        freight: f64,
-        freight_status: u8,
-    ) -> Interval {
+    fn interval(passenger: f64, freight: f64, freight_status: u8) -> Interval {
         Interval {
             osm_id: 1,
             segment_idx: 0,
-            from_m,
-            to_m,
+            from_m: 10.0,
+            to_m: 40.0,
+            country: *b"DE",
             source_id: 100,
             passenger,
             freight,
@@ -185,46 +164,53 @@ mod tests {
         }
     }
 
+    fn foreign_interval(passenger: f64) -> Interval {
+        Interval { country: *b"AT", ..interval(passenger, 0.0, STATUS_UNKNOWN) }
+    }
+
     #[test]
-    fn repeats_sum_and_only_unknown_categories_receive_shared_priors() {
-        let intervals = [
-            interval(10.0, 40.0, 2.0, 0.0, STATUS_UNKNOWN),
-            interval(10.0, 40.0, 3.0, 9.0, STATUS_UNKNOWN),
-        ];
-        let cz = SquareCountryCity {
+    fn repeats_sum_unknown_categories_stay_unknown_and_zero_is_known() {
+        let de = SquareCountryCity {
             continent: noise_compute::square_country_city::Continent::Europe,
             country_iso: *b"DE",
             city_id: 0,
         };
-        let mut traffic = row_traffic(&intervals, 10.0, 40.0, 0, 0, 0, cz);
-        let passenger_day = traffic.passenger.periods.iter().sum::<f64>();
-        assert!((passenger_day - 5.0).abs() < 1e-9);
-        assert_eq!(traffic.passenger.matching, 1);
-        assert_eq!(traffic.freight.status, STATUS_ESTIMATED);
-        assert!((traffic.freight.periods.iter().sum::<f64>() - 20.0).abs() < 1e-9);
-        share_class_defaults(std::slice::from_mut(&mut traffic), 2);
-        assert!((traffic.freight.periods.iter().sum::<f64>() - 10.0).abs() < 1e-9);
+        let intervals = [
+            interval(2.0, 0.0, STATUS_UNKNOWN),
+            interval(3.0, 9.0, STATUS_UNKNOWN),
+            foreign_interval(7.0),
+        ];
+        let (traffic, foreign) = row_evidence(&intervals, 10.0, 40.0, 0, de);
         assert!((traffic.passenger.periods.iter().sum::<f64>() - 5.0).abs() < 1e-9);
-        let service = row_traffic(&intervals, 10.0, 40.0, 0, 0, 2, cz);
-        assert_eq!(service.freight.status, STATUS_UNKNOWN);
-        let zero = row_traffic(
-            &[interval(10.0, 40.0, 0.0, 0.0, STATUS_KNOWN)],
-            10.0,
-            40.0,
-            0,
-            0,
-            0,
-            cz,
-        );
-        assert_eq!(zero.passenger.periods, [0.0; 3]);
+        assert_eq!(traffic.passenger.matching, 1);
+        assert_eq!(traffic.freight.status, STATUS_UNKNOWN);
+        // Neighbour-file claims stay separate: cross-border trains are not the domestic total.
+        assert!((foreign.passenger.periods.iter().sum::<f64>() - 7.0).abs() < 1e-9);
+        assert_eq!(foreign.passenger.source_id, 100);
+        assert_eq!(foreign.freight.status, STATUS_UNKNOWN);
+        let (zero, _) = row_evidence(&[interval(0.0, 0.0, STATUS_KNOWN)], 10.0, 40.0, 0, de);
         assert_eq!(zero.freight.periods, [0.0; 3]);
-        assert_eq!(traffic.freight.source_id, 0);
-        let mut freight_only = interval(10.0, 40.0, 99.0, 7.0, STATUS_KNOWN);
-        freight_only.passenger_status = STATUS_UNKNOWN;
-        let traffic = row_traffic(&[freight_only], 10.0, 40.0, 0, 0, 0, cz);
-        assert!((traffic.passenger.periods.iter().sum::<f64>() - 80.0).abs() < 1e-9);
-        assert_eq!(traffic.passenger.source_id, 0);
-        assert!((traffic.freight.periods.iter().sum::<f64>() - 7.0).abs() < 1e-9);
-        assert_eq!(traffic.freight.source_id, 100);
+        // Daily evidence, even a known zero, carries an estimated period split.
+        assert_eq!(zero.freight.status, STATUS_ESTIMATED);
+        let prior = class_prior(0, 0, 0, de, 0);
+        assert!((prior.passenger.periods.iter().sum::<f64>() - 80.0).abs() < 1e-9);
+        assert!((prior.freight.periods.iter().sum::<f64>() - 24.5).abs() < 1e-9);
+        assert_eq!(prior.freight.source_id, 0);
+        assert_eq!(class_prior(0, 0, 2, de, 0), RowTraffic::default());
+        for usage in [0, 1, 2, 3, 4] {
+            assert_eq!(class_prior(5, usage, 0, de, 0), RowTraffic::default());
+        }
+        let fr = SquareCountryCity { country_iso: *b"FR", ..de };
+        let pax_only = class_prior(0, 0, 0, fr, 1);
+        assert!((pax_only.passenger.periods.iter().sum::<f64>() - 80.0).abs() < 1e-9);
+        assert_eq!(pax_only.freight.periods, [0.0; 3]);
+        let frt_only = class_prior(0, 0, 0, fr, 2);
+        assert_eq!(frt_only.passenger.periods, [0.0; 3]);
+        assert!((frt_only.freight.periods.iter().sum::<f64>() - 5.5).abs() < 1e-9);
+        let (heritage, _) =
+            row_evidence(&[interval(3.0, 0.0, STATUS_UNKNOWN)], 10.0, 40.0, 5, de);
+        assert!((heritage.passenger.periods.iter().sum::<f64>() - 3.0).abs() < 1e-9);
+        assert_eq!(heritage.passenger.source_id, 100);
+        assert_eq!(heritage.freight, CategoryFlow::default());
     }
 }

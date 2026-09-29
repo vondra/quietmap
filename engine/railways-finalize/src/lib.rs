@@ -2,8 +2,9 @@
 //! source pieces and write `rail_traffic_contract=1`.
 
 mod encode;
+pub mod horns;
 mod merge;
-mod sharing;
+mod parallel_tracks;
 // Reuse the serving contract without linking source-reader's Node addon feature.
 #[path = "../../source-reader/src/rail_traffic.rs"]
 pub mod rail_traffic;
@@ -12,6 +13,7 @@ mod split;
 mod square_intervals;
 mod topology;
 mod write;
+mod yards;
 
 use grid::Square;
 use rayon::prelude::*;

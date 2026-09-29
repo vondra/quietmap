@@ -69,13 +69,27 @@ export function Section4PathEffects({ trace }: { trace: SegmentTrace }) {
         Atmosphere
       </HoverText>,
       <HoverText
-        title={bandsTooltip(baseline.atmospheric_bands, {
-          title: 'A_atm per band — α[i] × d_slant / 1000',
-          signed: true,
-          note:
-            `d_slant = ${trace.d_slant_m.toFixed(1)} m.\n` +
-            'Scalar = A-weighted ΔL_A (full − no_atmospheric Lden).',
-        })}
+        title={
+          (
+            [
+              ['day', baseline.atmospheric_bands.day],
+              ['evening', baseline.atmospheric_bands.evening],
+              ['night', baseline.atmospheric_bands.night],
+            ] as const
+          )
+            .map(([period, bands], index, all) =>
+              bandsTooltip(bands, {
+                title: `A_atm per band (${period}) — α[i] × d / 1000`,
+                signed: true,
+                note:
+                  index === all.length - 1
+                    ? `d = ${trace.d_slant_m.toFixed(1)} m (ground ops: past the 25 m anchor).\n` +
+                      'Scalar = A-weighted ΔL_A (full − no_atmospheric Lden).'
+                    : undefined,
+              }),
+            )
+            .join('\n\n')
+        }
       >
         {fmtDbSigned(atmosphericDelta)}
       </HoverText>,

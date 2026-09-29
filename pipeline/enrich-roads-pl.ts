@@ -11,25 +11,47 @@ import { writeNationalRoadSquares } from './lib/square-pool.js'
 
 const SOURCE_ID = SOURCE_ID_PL_NATIONAL_ROADS
 const POLAND_BBOX = [49, 14, 55, 24.5] as const
-const MAXIMUM_NATIONAL_DISTANCE_M = 30_000
+// A row takes a national section only along it: at the former 30 km, 2,467 km of rows took a
+// section more than 5 km away (Warsaw S8 at 27,857 from sections 11-18 km off, r260919).
+const MAXIMUM_NATIONAL_DISTANCE_M = 500
 const COVERED_ROAD_CLASSES: ReadonlySet<number> = new Set([0, 1, 2, 3, 4, 10, 11, 12])
 
 export interface PolishRoadIndex {
-  byRef: ReadonlyMap<string, readonly PolishGprSegment[]>
+  national: ReadonlyMap<string, readonly PolishGprSegment[]>
+  /** Provincial sections carry no geometry, so a ref stands for its median section by total. */
+  provincialMedian: ReadonlyMap<string, PolishGprSegment>
+}
+
+const total = (segment: PolishGprSegment): number => segment.light + segment.medium + segment.heavy + segment.moto
+
+/** A lettered section (S8F, DK12N, 62B) is a carriageway or variant of its numbered road: OSM tags the number. */
+function indexKeys(ref: string): Set<string> {
+  const keys = new Set<string>()
+  for (const token of ref.split(';')) {
+    const key = token.trim().toUpperCase().replace(/\s+/g, '')
+    if (!key) continue
+    keys.add(key)
+    const lettered = /^([A-Z]*\d+)[A-Z]$/.exec(key)
+    if (lettered) keys.add(lettered[1])
+  }
+  return keys
 }
 
 export function indexPolishGpr(segments: readonly PolishGprSegment[]): PolishRoadIndex {
-  const byRef = new Map<string, PolishGprSegment[]>()
+  const national = new Map<string, PolishGprSegment[]>(), provincial = new Map<string, PolishGprSegment[]>()
   for (const segment of segments) {
-    const keys = new Set(segment.ref.split(';')
-      .map(ref => ref.trim().toUpperCase().replace(/\s+/g, '')).filter(Boolean))
-    for (const key of keys) {
+    const byRef = segment.isProvincial ? provincial : national
+    for (const key of indexKeys(segment.ref)) {
       const bucket = byRef.get(key)
       if (bucket) bucket.push(segment)
       else byRef.set(key, [segment])
     }
   }
-  return { byRef }
+  const provincialMedian = new Map([...provincial].map(([ref, sections]) => {
+    const sorted = [...sections].sort((a, b) => total(a) - total(b) || (a.sourceId < b.sourceId ? -1 : 1))
+    return [ref, sorted[(sorted.length - 1) >> 1]] as const
+  }))
+  return { national, provincialMedian }
 }
 
 function candidateRefs(ref: string | null): string[] {
@@ -47,7 +69,7 @@ function candidateRefs(ref: string | null): string[] {
 }
 
 
-/** National polylines win by distance; geometry-less DW rows retain dev1 ref matching. */
+/** The nearest national polyline of the row's ref wins; a geometry-less provincial ref gives its median section. */
 export function matchPolishGpr(
   row: RoadRow,
   index: PolishRoadIndex,
@@ -57,11 +79,8 @@ export function matchPolishGpr(
   let closestDistance = MAXIMUM_NATIONAL_DISTANCE_M
   let provincial: PolishGprSegment | null = null
   for (const ref of candidateRefs(row.ref)) {
-    for (const segment of index.byRef.get(ref) ?? []) {
-      if (segment.isProvincial) {
-        provincial ??= segment
-        continue
-      }
+    provincial ??= index.provincialMedian.get(ref) ?? null
+    for (const segment of index.national.get(ref) ?? []) {
       const distance = pointToPolylineDist(row.midLat, row.midLon, segment.coordinates ?? [])
       if (distance < closestDistance) {
         closestNational = segment
@@ -87,7 +106,8 @@ export async function enrichPolishRoads(
         const segment = match(row)
         return segment ? { ...roadObservation(segment.sourceId, 'both-directions'),
           light: segment.light, medium: segment.medium, heavy: segment.heavy,
-          moto: segment.moto, sourceId: SOURCE_ID, estimatedClasses: 0, // GPR publishes every category
+          // GPR counts every category; a provincial ref median is not this row's own section.
+          moto: segment.moto, sourceId: SOURCE_ID, estimatedClasses: segment.isProvincial ? 15 : 0,
         } : null
       },
       undefined,

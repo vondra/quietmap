@@ -8,7 +8,7 @@ use grid::poly::{encode_grid_poly, ring_area_m2};
 use std::path::Path;
 use std::sync::Arc;
 
-use super::{decode_tsv_ring, parse_grid_cell, polygon_row_bbox, write_arrow_z14_blocked};
+use super::{decode_tsv_ring, evidence::write_with_evidence, parse_grid_cell, polygon_row_bbox};
 
 pub(super) fn write_industrial(rows: &[Vec<String>], path: &Path) -> Result<()> {
     let n = rows.len();
@@ -85,7 +85,7 @@ pub(super) fn write_industrial(rows: &[Vec<String>], path: &Path) -> Result<()> 
         source_id.append_value(0);
     }
 
-    write_arrow_z14_blocked(
+    write_with_evidence(
         path,
         schema,
         vec![
@@ -102,5 +102,7 @@ pub(super) fn write_industrial(rows: &[Vec<String>], path: &Path) -> Result<()> 
             Arc::new(source_id.finish()),
         ],
         &row_bboxes,
+        rows,
+        10,
     )
 }

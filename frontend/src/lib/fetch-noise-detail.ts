@@ -28,12 +28,11 @@ export async function fetchExactNoiseAt(position: Position, signal: AbortSignal)
   return response.json() as Promise<NoiseComputeData | null>
 }
 
-/** Accommodation comparisons use the facade before window/wall insulation. */
+/** Accommodation level: the popup total (inside a building already its noisiest
+ *  façade), refused when a layer is missing. */
 export function outdoorLden(data: NoiseComputeData | null): number | null {
   if (!data || data.unavailable_layers?.length) return null
-  const level = data.envelope_class != null || data.envelope_delta_db != null
-    ? data.facade_lden : data.total_lden
-  return typeof level === 'number' && Number.isFinite(level) ? level : null
+  return typeof data.total_lden === 'number' && Number.isFinite(data.total_lden) ? data.total_lden : null
 }
 
 export async function fetchNoiseDetail(position: Position, signal: AbortSignal, callbacks: Callbacks): Promise<void> {

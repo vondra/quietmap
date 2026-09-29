@@ -19,6 +19,7 @@ fn sample_row() -> AirportTrafficRow {
         veh_kind: 0,
         class_idx: 2, // WING_B738
         period: 0,    // day
+        secondary_only: false,
         // 8 strictly distinct values — a transposition of any two
         // positions changes the read-back.
         band_energy_lin: [1.0e6, 2.0e6, 3.0e6, 4.0e6, 5.0e6, 6.0e6, 7.0e6, 8.0e6],
@@ -30,9 +31,10 @@ fn sample_row() -> AirportTrafficRow {
         microseg_unique_arr_count: 25,
         microseg_unique_dep_count: 25,
         microseg_unique_gse_count_per_class: [0, 0, 0],
-        microseg_unique_ga_count: 3,
-        microseg_unique_ga_arr_count: 1,
-        microseg_unique_ga_dep_count: 2,
+        microseg_unique_secondary_count: 3,
+        microseg_unique_secondary_arr_count: 1,
+        microseg_unique_secondary_dep_count: 2,
+        microseg_unique_secondary_gse_count_per_class: [0, 0, 0],
     }
 }
 
@@ -41,7 +43,7 @@ fn round_trip_preserves_all_fields() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("airport_traffic.arrow");
     let rows = vec![sample_row()];
-    write_airport_traffic(&path, &rows, 14, 365).unwrap();
+    write_airport_traffic(&path, &rows, &crate::provider_receipt::window_of(14, 365)).unwrap();
     let read = read_airport_traffic(&path).unwrap();
     assert_eq!(read.len(), 1);
     assert_eq!(read[0], rows[0], "every field must round-trip exactly");
@@ -63,16 +65,18 @@ fn round_trip_two_rows_distinguishable() {
     row_gse.microseg_unique_arr_count = 0;
     row_gse.microseg_unique_dep_count = 0;
     row_gse.microseg_unique_gse_count_per_class = [1, 2, 6];
-    // GSE row: no GA aircraft split (airline-pass only).
-    row_gse.microseg_unique_ga_count = 0;
-    row_gse.microseg_unique_ga_arr_count = 0;
-    row_gse.microseg_unique_ga_dep_count = 0;
+    // Secondary-only GSE row with its own secondary union counts.
+    row_gse.secondary_only = true;
+    row_gse.microseg_unique_secondary_count = 4;
+    row_gse.microseg_unique_secondary_arr_count = 0;
+    row_gse.microseg_unique_secondary_dep_count = 0;
+    row_gse.microseg_unique_secondary_gse_count_per_class = [0, 3, 1];
     // Distinct band values so a row offset bug surfaces.
     row_gse.band_energy_lin = [
         10.0e6, 20.0e6, 30.0e6, 40.0e6, 50.0e6, 60.0e6, 70.0e6, 80.0e6,
     ];
     let rows = vec![sample_row(), row_gse.clone()];
-    write_airport_traffic(&path, &rows, 14, 365).unwrap();
+    write_airport_traffic(&path, &rows, &crate::provider_receipt::window_of(14, 365)).unwrap();
     let read = read_airport_traffic(&path).unwrap();
     assert_eq!(read.len(), 2);
     assert_eq!(read[0], rows[0], "row 0 round-trip");
@@ -83,40 +87,33 @@ fn round_trip_two_rows_distinguishable() {
 fn empty_rows_writes_valid_arrow_file() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("airport_traffic.arrow");
-    write_airport_traffic(&path, &[], 14, 0).unwrap();
+    write_airport_traffic(&path, &[], &crate::provider_receipt::window_of(14, 0)).unwrap();
     let read = read_airport_traffic(&path).unwrap();
     assert!(read.is_empty());
 }
 
+/// The sampling window is stamped once per file; secondary-only rows need
+/// increment days to be normalised at all.
 #[test]
-fn hybrid_window_metadata_stamped() {
-    // Hybrid extract stamps n_days, ga_n_days, and the per-class vector
-    // the consumer's ClassWeights parses.
+fn sampling_window_is_stamped_and_secondary_rows_need_increment_days() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("airport_traffic.arrow");
-    write_airport_traffic(&path, &[sample_row()], 12, 365).unwrap();
+    let window = crate::provider_receipt::window_of(360, 11);
+    write_airport_traffic(&path, &[sample_row()], &window).unwrap();
     let (schema, _) = crate::arrow_io::read_record_batches(&path).unwrap();
-    let md = schema.metadata();
-    assert_eq!(md.get("n_days").map(String::as_str), Some("12"));
-    assert_eq!(md.get("ga_n_days").map(String::as_str), Some("365"));
-    let vec = md
-        .get("sample_days_by_class")
-        .expect("sample_days_by_class stamped");
-    assert_eq!(vec.split(',').count(), 15, "15-class vector");
-    assert!(vec.contains("365"), "GA classes carry 365: {vec}");
-    assert!(vec.contains("12"), "airline classes carry 12: {vec}");
-
-    // Single-window extract: no ga_n_days, uniform vector.
-    let p2 = dir.path().join("single.arrow");
-    write_airport_traffic(&p2, &[sample_row()], 14, 0).unwrap();
-    let (s2, _) = crate::arrow_io::read_record_batches(&p2).unwrap();
-    assert!(s2.metadata().get("ga_n_days").is_none());
-    assert!(s2
-        .metadata()
-        .get("sample_days_by_class")
-        .unwrap()
-        .split(',')
-        .all(|d| d == "14"));
+    assert_eq!(
+        noise_compute::emission::aircraft::SamplingWindow::from_metadata(schema.metadata()).unwrap(),
+        window
+    );
+    let mut secondary = sample_row();
+    secondary.secondary_only = true;
+    let error = write_airport_traffic(
+        &dir.path().join("refused.arrow"),
+        &[secondary],
+        &crate::provider_receipt::window_of(360, 0),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("without increment days"), "{error}");
 }
 
 #[test]
@@ -156,7 +153,7 @@ fn reader_rejects_wrong_contract() {
 fn footer_summaries_round_trip_and_an_unstamped_file_names_the_reduce_step() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("airport_traffic.arrow");
-    write_airport_traffic(&path, &[sample_row()], 12, 365).unwrap();
+    write_airport_traffic(&path, &[sample_row()], &crate::provider_receipt::window_of(12, 365)).unwrap();
     let error = read_airport_summaries(&path).unwrap_err().to_string();
     assert!(
         error.contains("qm_airport_summaries") && error.contains("Stage 2C"),
@@ -170,9 +167,10 @@ fn footer_summaries_round_trip_and_an_unstamped_file_names_the_reduce_step() {
             dep_count: 105,
             gse_count_per_class: [12, 34, 56],
             ops_count_per_kind: [205, 1100, 800],
-            ga_arr_count: 7,
-            ga_dep_count: 8,
-            ga_ops_count_per_kind: [15, 4, 0],
+            secondary_arr_count: 7,
+            secondary_dep_count: 8,
+            secondary_gse_count_per_class: [1, 0, 2],
+            secondary_ops_count_per_kind: [15, 4, 0],
         },
     );
     summaries.insert("AAAA".to_string(), AirportSummaryEntry::default());

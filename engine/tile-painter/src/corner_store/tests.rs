@@ -16,7 +16,12 @@ fn value() -> CornerEnergy {
 }
 
 fn tiles() -> Vec<EncodedHm3> {
-    hm3::silent_tiles().unwrap()
+    let side = grid::surface_corner::TILE_PIXEL_SIDE;
+    let quiet = vec![hm3::COMPUTED_SILENCE; side * side];
+    hm3::ALL_LAYERS
+        .into_iter()
+        .map(|layer| hm3::encode_cells(&quiet, layer).unwrap())
+        .collect()
 }
 
 #[test]

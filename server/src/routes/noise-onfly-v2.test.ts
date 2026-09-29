@@ -1,4 +1,4 @@
-//! Route-level tests for the containment-only building hover lookup.
+//! Route-level tests for the building hover lookup and popup parameter validation.
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -35,4 +35,16 @@ test('building-at validates, passes through null/object JSON, and maps worker er
   const failure = await app.inject('/api/building-at?lat=49.7910&lng=14.1963')
   assert.equal(failure.statusCode, 500)
   assert.deepEqual(failure.json(), { error: 'worker failed' })
+})
+
+test('popup rejects a receiver height outside the engine floor and the public ceiling', async (t) => {
+  const app = Fastify({ logger: false })
+  await noiseOnflyV2Routes(app)
+  t.after(async () => app.close())
+  for (const query of ['receiver_height_m=0.4', 'receiver_height_m=101', 'receiver_height_m=x',
+    'receiver_height_m=1.2&detail=all']) {
+    const response = await app.inject(`/api/noise-onfly-v2?lat=50.0755&lng=14.4378&${query}`)
+    assert.equal(response.statusCode, 400, query)
+    assert.match(response.json().error, /receiver_height_m/)
+  }
 })

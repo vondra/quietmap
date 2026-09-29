@@ -133,9 +133,10 @@ impl NativeSources {
         output: &mut [u8],
     ) -> Result<(), String> {
         let width = self.channel.bytes_per_node();
-        let ocean = self.channel.ocean_value().to_be_bytes();
+        let percentage = matches!(self.channel, Channel::Forest | Channel::Imd);
+        let ocean = self.channel.encode(f64::from(self.channel.ocean_value()));
         for pixel in output.chunks_exact_mut(width) {
-            pixel.copy_from_slice(&ocean[2 - width..]);
+            pixel.copy_from_slice(&ocean[..width]);
         }
         let keys = Self::keys_for_row(window, latitude_node);
         self.open
@@ -166,7 +167,7 @@ impl NativeSources {
                     return Err(format!("native source seam disagrees at latitude node {latitude_node}, source {lat}/{lon}"));
                 }
             }
-            if width == 1 && bytes.iter().any(|&value| value > 100) {
+            if percentage && bytes.iter().any(|&value| value > 100) {
                 return Err(format!("invalid percentage in native source {lat}/{lon}"));
             }
             output[begin..end].copy_from_slice(bytes);

@@ -4,6 +4,7 @@
 //! boundary.
 
 pub mod aircraft_v6;
+pub mod line_piece;
 pub(crate) mod point_sources;
 pub(crate) mod railways;
 pub(crate) mod roads;
@@ -31,7 +32,9 @@ pub(crate) mod roads;
 /// source in receiver radius) and the sort runs once per popup. Railway layer
 /// totals intentionally fold kept segments in input order instead of
 /// reconstructing that total from these group accumulators.
-pub(crate) fn key_sorted<K: Ord, V>(map: &std::collections::HashMap<K, V>) -> Vec<(&K, &V)> {
+pub(crate) fn key_sorted<K: Ord, V, S: std::hash::BuildHasher>(
+    map: &std::collections::HashMap<K, V, S>,
+) -> Vec<(&K, &V)> {
     let mut pairs: Vec<(&K, &V)> = map.iter().collect();
     pairs.sort_unstable_by(|a, b| a.0.cmp(b.0));
     pairs
@@ -39,7 +42,9 @@ pub(crate) fn key_sorted<K: Ord, V>(map: &std::collections::HashMap<K, V>) -> Ve
 
 /// Owning [`key_sorted`] — consumes the map, yields entries in ascending
 /// key order. Same rationale.
-pub(crate) fn into_key_sorted<K: Ord, V>(map: std::collections::HashMap<K, V>) -> Vec<(K, V)> {
+pub(crate) fn into_key_sorted<K: Ord, V, S: std::hash::BuildHasher>(
+    map: std::collections::HashMap<K, V, S>,
+) -> Vec<(K, V)> {
     let mut pairs: Vec<(K, V)> = map.into_iter().collect();
     pairs.sort_unstable_by(|a, b| a.0.cmp(&b.0));
     pairs

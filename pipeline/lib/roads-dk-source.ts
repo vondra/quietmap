@@ -1,5 +1,6 @@
 /** Parse admitted Vejdirektoratet Mastra traffic-count pages. */
 
+import { withholdsCountPoint } from './count-holdout.js'
 import { roadFeatureObservation } from './pinned-road-lines.js'
 import type { RoadObservation } from './road-observation.js'
 import proj4 from 'proj4'
@@ -132,6 +133,7 @@ export function parseDanishMastraPages(rawPages: readonly string[]): DanishMastr
   result.observations = [...latest.values()]
   result.supersededRecords = result.admittedRecords - result.observations.length
   if (result.observations.length === 0) throw new Error('Mastra source has no usable traffic observations')
+  result.observations = result.observations.filter(point => !withholdsCountPoint(point.latitude, point.longitude))
   return result
 }
 

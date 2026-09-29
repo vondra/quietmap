@@ -26,7 +26,7 @@ fn stored_coordinates_decode_to_the_bounded_endpoints() {
         .collect();
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("airborne.arrow");
-    crate::arrow_io::write_airborne(&path, &rows, 12, 0).unwrap();
+    crate::arrow_io::write_airborne(&path, &rows, &crate::provider_receipt::window_of(12, 0)).unwrap();
     let (_, batches) = crate::arrow_io::read_record_batches(&path).unwrap();
     let mut decoded = Vec::new();
     for batch in &batches {

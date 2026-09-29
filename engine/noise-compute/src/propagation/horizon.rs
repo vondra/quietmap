@@ -206,8 +206,8 @@ mod tests {
             "63 Hz over a blocking crest is not gated, got {:.3}",
             atten[0]
         );
-        // Mixed values (FAVOURABLE_MIXING on since 2026-07-28); monotone in
-        // frequency, which is the invariant worth pinning.
+        // Favourable/homogeneous mixed values; monotone in frequency, which is
+        // the invariant worth pinning.
         assert!(atten[4] > 2.0, "1 kHz, got {:.3}", atten[4]);
         for i in 1..atten.len() {
             assert!(

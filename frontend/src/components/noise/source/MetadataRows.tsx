@@ -17,6 +17,8 @@ export function MetadataRows({ c }: { c: Contributor }) {
 
   if (m.kind === 'road') {
     const total = m.aadt_light + m.aadt_medium + m.aadt_heavy + m.aadt_moto
+    // The headline is the whole road; the classes below are the dominant carriageway's.
+    const wholeRoad = m.cross_section_aadt > 0
     const hasSpeedRange = m.speed_min_kmh < m.speed_max_kmh
     // Derestricted (maxspeed=none, e.g. German Autobahn): no number exists;
     // the engine models DERESTRICTED_SPEED_KMH and reports it in speed_kmh.
@@ -45,7 +47,12 @@ export function MetadataRows({ c }: { c: Contributor }) {
     const trafficText = txtTable([
       roadTrafficSourceLine(m.provenance),
       '',
-      'Traffic on this road segment:',
+      ...(wholeRoad
+        ? [['Whole road', `${fmtInt(Math.round(m.cross_section_aadt))}/day`] as [string, string], 'both directions', '']
+        : total === 0
+          ? ['This carriageway carries no traffic.', '']
+          : ['Only this direction is known.', '']),
+      'This carriageway:',
       ...([['Light', m.aadt_light, 1], ['Medium', m.aadt_medium, 2], ['Heavy', m.aadt_heavy, 4], ['Moto', m.aadt_moto, 8]] as const)
         .map(([label, value, bit]) =>
           [label, roadCategoryEstimated(m, bit) ? `${fmtInt(Math.round(value))} (est.)` : `${fmtInt(Math.round(value))}`] as [string, string],
@@ -122,8 +129,8 @@ export function MetadataRows({ c }: { c: Contributor }) {
         )}
         {lineRow(
           <MetricLabel term="aadt">Traffic</MetricLabel>,
-          <DataPoint title="Daily traffic on this road segment" text={trafficText}>
-            {`${fmtCompact(Math.round(total))}/day`}
+          <DataPoint title={wholeRoad ? 'Daily traffic on the whole road, both directions' : 'Daily traffic in this direction'} text={trafficText}>
+            {wholeRoad ? `${fmtCompact(Math.round(m.cross_section_aadt))}/day` : `${fmtCompact(Math.round(total))}/day · one direction`}
           </DataPoint>,
         )}
         {timing &&
@@ -170,7 +177,7 @@ export function MetadataRows({ c }: { c: Contributor }) {
       { sep: true },
       ['Effective', `${m.speed_kmh.toFixed(0)} km/h`],
     ], 18, 14)
-    const trainsText = railTrafficDescription(m.traffic, m.passenger_provenance, m.freight_provenance)
+    const trainsText = railTrafficDescription(m.traffic, m.passenger_provenance, m.freight_provenance, m.rail_type === 'horn')
     const segmentsText = txtTable([
       ['Microsegments', String(m.segment_count)],
       ['Total length', `${(m.total_length_m / 1000).toFixed(2)} km`],
@@ -276,18 +283,15 @@ export function MetadataRows({ c }: { c: Contributor }) {
     const dayShare = a.top_day_energy_share ?? 0
     const flightShare = a.top_flight_energy_share ?? 0
     const sparse = dayShare > DAY_SHARE_WARN || flightShare > FLIGHT_SHARE_WARN
-    // GA full-year hybrid: airline classes sample N days while GA +
-    // helicopters use a separate full available-year window. State both
-    // bases when they differ; otherwise the popup implies jets used the
-    // same full-year window.
+    // Every class: adsb.lol baseline days plus ADSBexchange increment days
+    // that add only the traffic adsb.lol did not receive.
     const nDays = a.sample_days
-    const gaDays = a.ga_sample_days
-    const hybrid = gaDays != null && nDays != null && gaDays !== nDays
-    const basisLine = hybrid
-      ? `jets ${nDays} d/yr · GA+heli ${gaDays} d/yr.`
-      : `Lden averaged from ${nDays ?? '–'} sample days/yr.`
+    const incrementDays = a.increment_sample_days ?? 0
+    const basisLine = incrementDays > 0
+      ? `adsb.lol ${nDays ?? '–'} d/yr + adsbexchange ${incrementDays} d/yr for what adsb.lol missed.`
+      : `Lden averaged from ${nDays ?? '–'} adsb.lol days/yr.`
     const sampleText = txtTable([
-      'ADS-B flight tracks (adsbexchange + adsb.lol).',
+      'ADS-B flight tracks (adsb.lol + adsbexchange).',
       basisLine,
       ...(sparse
         ? [
@@ -301,7 +305,7 @@ export function MetadataRows({ c }: { c: Contributor }) {
           ]
         : []),
     ], 16, 16)
-    const badge = hybrid ? `${nDays}/${gaDays} d/yr` : `${nDays ?? '–'} days/yr`
+    const badge = incrementDays > 0 ? `${nDays ?? '–'}+${incrementDays} d/yr` : `${nDays ?? '–'} days/yr`
     return lineRow(
       'Data',
       <DataPoint title="Aircraft data source" text={sampleText}>

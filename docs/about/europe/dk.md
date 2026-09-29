@@ -20,4 +20,4 @@ Wind turbines are OpenStreetMap points. A turbine within 200 m of an [Energistyr
 
 ## Buildings and terrain
 
-The building register BBR has floors and heights for every building; the bulk download requires an account and is not loaded. Heights: OpenStreetMap tags and the GHSL average for the block.
+The building register BBR has floors and heights for every building; the bulk download requires an account and is not loaded. Heights: OpenStreetMap tags and the typical height for the footprint size.

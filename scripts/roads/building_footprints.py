@@ -1,4 +1,4 @@
-"""Road settlement density from the Overture screening stock in structures_v4.
+"""Road settlement density from the Overture screening stock in structures_v5.
 
 Only footprints near a road row are decoded; geometry validity of the rest belongs to the structures builder.
 """
@@ -54,8 +54,8 @@ def cell_footprints(path, south, north, west, east_span):
     with source:
         reader = pa.ipc.open_file(source)
         metadata = reader.schema.metadata or {}
-        if metadata.get(b"structures_contract") != b"structures_v4" or metadata.get(b"grid") != b"z30":
-            raise ValueError(f"{path}: expected grid z30 structures_v4")
+        if metadata.get(b"structures_contract") != b"structures_v5" or metadata.get(b"grid") != b"z30":
+            raise ValueError(f"{path}: expected grid z30 structures_v5")
         for name, arrow_type in STOCK_COLUMNS.items():
             index = reader.schema.get_field_index(name)
             if index < 0 or reader.schema.field(index).type != arrow_type:

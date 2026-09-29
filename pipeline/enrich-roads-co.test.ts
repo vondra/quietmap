@@ -16,10 +16,10 @@ const source = (network: PinnedRoadLine[], tpda: PinnedRoadLine[]): ColombiaRoad
 const road: RoadRow = { startLat: 4.6, startLon: -74.1, endLat: 4.6, endLon: -74.1,
   midLat: 4.6, midLon: -74.1, roadClass: 1, ref: null, name: null, osmId: 1, existingSourceId: 0 }
 
-test('Colombia prioritizes TPDA and preserves its observed vehicle percentages', () => {
+test('Colombia keeps TPDA unscaled inside a city box, with its observed vehicle percentages', () => {
   assert.deepEqual(matchColombiaRoad(road, source([line({ superficie: '1', administrador: '2', calzada: '2' })],
     [line({ conteo: 1000, au_p: 60, bu_p: 10, ca_p: 30 })])),
-  { countBasis: 'both-directions', observationId: 'fixture', kind: 'tpda', light: 1140, medium: 190, heavy: 570, moto: 100 })
+  { countBasis: 'both-directions', observationId: 'fixture', kind: 'tpda', light: 570, medium: 95, heavy: 285, moto: 50 })
 })
 
 test('Colombia uses Red Vial defaults only for major roads', () => {

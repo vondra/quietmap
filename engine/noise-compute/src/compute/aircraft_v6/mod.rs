@@ -11,7 +11,7 @@
 //! Ground operations live in the parallel `airport_traffic` compute
 //! path invoked by source-reader after this function returns.
 
-use std::collections::HashMap;
+use crate::fxhash::{FxBuildHasher, FxHashMap};
 
 use crate::compute::aircraft_v6::state::{FlightAccum, TopFlightCandidate};
 use crate::emission::aircraft::{BuildingHorizon, ReceiverHorizon};
@@ -49,12 +49,9 @@ pub fn compute_aircraft_v6(
     // (β ≥ 26.6°, see segment_sel).
     horizon: Option<&ReceiverHorizon>,
     buildings: Option<&BuildingHorizon>,
-    n_days: u16,
-    // GA hybrid per-class weight LUT, built from the arrows'
-    // `sample_days_by_class` metadata by the caller.
-    // Threads into the airborne scatter; cruise is airline-only (no GA
-    // classes reach cruise altitude) so it ignores this.
-    class_weights: &crate::emission::aircraft::ClassWeights,
+    // Baseline days divide every energy and count; the provenance weight
+    // turns a secondary-only row into increment-day normalisation.
+    window: &crate::emission::aircraft::SamplingWindow,
     // Max airborne sub-segment traces to keep in TraceCollector (the
     // bounded top-K heap). `0` = don't allocate any traces — used by
     // callers that pass `traces = None` anyway.
@@ -62,7 +59,8 @@ pub fn compute_aircraft_v6(
     traces: Option<&mut TraceCollector>,
     timings: Option<&mut crate::types::LayerTimings>,
 ) -> (NoisePeriods, Vec<Contributor>, AircraftBandData) {
-    let n_days_f = (n_days as f64).max(1.0);
+    let n_days_f = f64::from(window.baseline_days).max(1.0);
+    let weights = window.provenance_weights();
 
     // Per-layer timing probes. The print is env-gated (POPUP_TIMING=1);
     // the 4 Instant::now()/elapsed() calls run unconditionally but cost
@@ -72,15 +70,15 @@ pub fn compute_aircraft_v6(
     let t_start = std::time::Instant::now();
 
     let mut traces = traces;
-    let flights = if airborne_row_count(airborne_rows) == 0 {
-        HashMap::new()
+    let (flights, air_stats) = if airborne_row_count(airborne_rows) == 0 {
+        (FxHashMap::default(), airborne::AirborneScatterStats::default())
     } else {
         let horizon = horizon.expect("non-empty airborne rows require a receiver terrain horizon");
         airborne::scatter(
             receiver,
             airborne_rows,
             n_days_f,
-            class_weights,
+            &weights,
             horizon,
             buildings,
             trace_cap,
@@ -88,7 +86,10 @@ pub fn compute_aircraft_v6(
         )
     };
     let t_airborne_scatter = t_start.elapsed();
-    let mut cruise_flight_stats = HashMap::new();
+    // Pre-sized: every consumer sorts (key_sorted / explicit sorts), so capacity
+    // never leaks into output order; it only skips rehashing on ~10^5 inserts.
+    let mut cruise_flight_stats =
+        FxHashMap::with_capacity_and_hasher(cruise_rows.len() / 4 + 1, FxBuildHasher);
     // Cruise gets its own FlightAccum table — the cruise synth fids
     // (`flight_id::pack_synth(idx)` with idx = row index) share the
     // SYNTHETIC_BIT tagging used by airborne TIS-B / anonymous flights
@@ -100,13 +101,16 @@ pub fn compute_aircraft_v6(
     // independent. Cruise contributions to airborne periods come from
     // accumulating their `period_energy` into `airborne_energy`; cruise
     // band counters come from `cruise_flight_stats` (real fid dedup).
-    let mut cruise_flights: HashMap<u64, FlightAccum> = HashMap::new();
-    let mut top_flight_candidates: HashMap<u64, TopFlightCandidate> = HashMap::new();
-    cruise::scatter(
+    let mut cruise_flights: FxHashMap<u64, FlightAccum> =
+        FxHashMap::with_capacity_and_hasher(cruise_rows.len(), FxBuildHasher);
+    let mut top_flight_candidates: FxHashMap<u64, TopFlightCandidate> =
+        FxHashMap::with_capacity_and_hasher(cruise_rows.len() / 4 + 1, FxBuildHasher);
+    let cruise_stats = cruise::scatter(
         receiver,
         cruise_rows,
         rasters,
         n_days_f,
+        &weights,
         &mut cruise_flights,
         &mut cruise_flight_stats,
         &mut top_flight_candidates,
@@ -119,11 +123,14 @@ pub fn compute_aircraft_v6(
         airborne::build_detail(
             &flights,
             &cruise_flights,
-            cruise_flight_stats.len(),
+            crate::compute::key_sorted(&cruise_flight_stats)
+                .into_iter()
+                .map(|(_, stats)| stats.weight)
+                .sum(),
             &top_flight_candidates,
             &cruise_band,
             n_days_f,
-            (class_weights.ga_n_days() as f64).max(1.0),
+            u32::from(window.increment_days),
         );
     let t_airborne_detail = t_start.elapsed() - t_airborne_scatter - t_cruise_scatter;
 
@@ -131,13 +138,18 @@ pub fn compute_aircraft_v6(
     if timing_on {
         let t_total = t_start.elapsed();
         eprintln!(
-            "ac-v6 total={:.0}ms airb_scatter={:.0}ms cr_scatter={:.0}ms airb_detail={:.0}ms (n_airb={} n_cr={})",
+            "ac-v6 total={:.0}ms airb_scatter={:.0}ms cr_scatter={:.0}ms cr_pass1={:.0}ms cr_pass2={:.0}ms airb_detail={:.0}ms (n_airb={} eval={} rcvd={} n_cr={} cr_eval={})",
             ms(t_total),
             ms(t_airborne_scatter),
             ms(t_cruise_scatter),
+            cruise_stats.pass1_ns as f64 / 1e6,
+            cruise_stats.pass2_ns as f64 / 1e6,
             ms(t_airborne_detail),
             airborne_row_count(airborne_rows),
+            air_stats.n_eval,
+            air_stats.n_received,
             cruise_rows.len(),
+            cruise_stats.n_eval,
         );
     }
     if let Some(t) = timings {
@@ -209,7 +221,12 @@ mod tests {
     #[test]
     fn silence_when_no_data() {
         let receiver = Receiver::new(50.10, 14.262, 0.0);
-        let w = crate::emission::aircraft::ClassWeights::uniform();
+        let w = crate::emission::aircraft::SamplingWindow {
+            baseline_days: 1,
+            increment_days: 0,
+            baseline_days_sha256: String::new(),
+            increment_days_sha256: String::new(),
+        };
         let (periods, contribs, _band) = compute_aircraft_v6(
             &receiver,
             &[],
@@ -217,7 +234,6 @@ mod tests {
             &FlatGround,
             None,
             None,
-            1,
             &w,
             0,
             None,
@@ -254,7 +270,12 @@ mod tests {
 
         const N_FLIGHTS: usize = 300;
         let receiver = Receiver::new(50.0, 14.0, 300.0);
-        let w = crate::emission::aircraft::ClassWeights::uniform();
+        let w = crate::emission::aircraft::SamplingWindow {
+            baseline_days: 7,
+            increment_days: 0,
+            baseline_days_sha256: String::new(),
+            increment_days_sha256: String::new(),
+        };
         let horizon = ReceiverHorizon::build(
             |_, _| 300.0,
             receiver.lat,
@@ -323,6 +344,7 @@ mod tests {
                 profile_idx: &profile,
                 source_id: &zero_u8,
                 origin: &zero_u8,
+                departure_field_elev_m: &vec![i16::MIN; N_FLIGHTS],
             },
             start_gy: &start_gy,
             start_gx: &start_gx,
@@ -382,6 +404,7 @@ mod tests {
                 rep_speed_kt: 450.0,
                 source_id: 0,
                 origin: 0,
+                secondary_only: false,
                 unique_count: 3,
                 top_candidates: &cand_store[i],
             })
@@ -395,7 +418,6 @@ mod tests {
                 &FlatGround,
                 Some(&horizon),
                 None,
-                7,
                 &w,
                 0,
                 None,

@@ -1,7 +1,7 @@
 //! `barriers.arrow` writer: one row per barrier microsegment (walls/fences/noise
 //! barriers) with integer grid geometry + height + material + height tier
-//! (0 mapped / 2 defaulted — the structure-table ladder tier the merge carries
-//! through). See `finalize` for dispatch.
+//! (0 mapped / 2 unmapped with height 0: the structures builder applies the
+//! national wall default). See `finalize` for dispatch.
 
 use anyhow::Result;
 use arrow::array::*;
@@ -54,10 +54,10 @@ pub(super) fn write_barriers(rows: &[Vec<String>], path: &Path) -> Result<()> {
         egx.append_value(e_gx);
         egy.append_value(e_gy);
         len.append_value(row[7].parse().unwrap_or(0.0));
-        height.append_value(row[8].parse().unwrap_or(3.0));
+        height.append_value(row[8].parse().unwrap_or(0.0));
         material.append_value(row[9].parse().unwrap_or(0));
         // The tier is spilled with the row; a pre-tier TSV (a finalize rerun
-        // over an old spill) marks the defaulted height as tier 2.
+        // over an old spill) marks the height as unmapped (tier 2).
         height_tier.append_value(row.get(10).and_then(|v| v.parse().ok()).unwrap_or(2));
     }
 

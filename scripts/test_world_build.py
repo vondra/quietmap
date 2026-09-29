@@ -44,8 +44,7 @@ class WorldBuildTest(unittest.TestCase):
                                                                ('SPILL_DIR', str(output / 'spill'))))])), \
                     patch.object(world, 'code_inputs', return_value=[]), \
                     patch.object(world, 'runtime_inputs', return_value=[]), \
-                    patch.object(world, 'raster_inputs', return_value=[]), \
-                    patch.object(world, 'height_inputs', return_value=[]), \
+                    patch.object(world, 'source_family_roots', return_value={'planet': [source]}), \
                     patch.object(world, 'resume_steps', return_value=set()) as resume, \
                     patch.object(world, 'preflight_aircraft_sources') as preflight, \
                     patch.object(world, 'attach_rasters') as attach, \
@@ -55,8 +54,6 @@ class WorldBuildTest(unittest.TestCase):
                 # main changes cwd for producers; restore it even though this plan executes none.
                 previous_cwd = Path.cwd()
                 try:
-                    # The source accessors are stubbed; source keys still describe the real CLI contract.
-                    world.source_paths.return_value.update(rasters=source, ghsl=source, regional_heights=source)
                     world.main()
                 finally:
                     os.chdir(previous_cwd)
@@ -73,9 +70,9 @@ class WorldBuildTest(unittest.TestCase):
             output, scratch = root / 'output', root / 'scratch'
             source = root / 'planet.pbf'
             source.write_text('frozen')
-            airline, ga = root / 'adsbexchange', root / 'adsblol'
-            airline.mkdir()
-            ga.mkdir()
+            primary, secondary = root / 'adsblol', root / 'adsbexchange'
+            primary.mkdir()
+            secondary.mkdir()
             config = root / 'build.toml'
             config.write_text('[build]\nas_of_date="20260910"\naircraft_anchor="2026-09"\n'
                               'memory_gib=80\nthreads=4\n[sources]\n')
@@ -86,14 +83,14 @@ class WorldBuildTest(unittest.TestCase):
                     patch.object(world, 'build_plan', return_value=(output / 'prepared/2026', [
                         world.Step('osm', (), ('osm-extract',))])), \
                     patch.object(world, 'preflight_aircraft_sources', side_effect=ValueError(
-                        'airline source window incomplete: missing ADS-B day 2026-09-01')) as preflight, \
+                        'secondary source window incomplete: missing ADS-B day 2026-09-01')) as preflight, \
                     patch.object(world, 'pin_inputs') as pin, \
                     patch.object(world.subprocess, 'run') as run, \
                     patch.dict(os.environ, {}, clear=True):
-                paths.return_value.update(airline=airline, general_aviation=ga)
+                paths.return_value.update(aircraft_primary=primary, aircraft_secondary=secondary)
                 with self.assertRaisesRegex(ValueError, 'missing ADS-B day 2026-09-01'):
                     world.main()
-                self.assertEqual(preflight.call_args.args, (airline, ga, '2026-09'))
+                self.assertEqual(preflight.call_args.args, (primary, secondary, '2026-09'))
                 self.assertFalse(output.exists())
                 pin.assert_not_called()
                 run.assert_not_called()
@@ -211,10 +208,25 @@ class WorldBuildTest(unittest.TestCase):
     def test_noncanonical_or_future_dates_fail_before_any_producer(self):
         with patch.object(world, 'source_paths', return_value={}):
             for as_of, anchor in [('202699', '2026-09'), ('20260909', '2026-9'),
-                                  ('20260909', '2026-10')]:
+                                  ('20260909', '2026-10'), ('20260929', '2026-10')]:
                 with self.subTest(as_of=as_of, anchor=anchor), self.assertRaises(ValueError):
                     world.build_plan({'build': {'as_of_date': as_of, 'aircraft_anchor': anchor}},
                                      Path('/unused/output'), Path('/unused/scratch'))
+
+    def test_final_year_anchor_is_the_month_after_the_as_of_day(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = {name: str(root / name) for name in ('planet', 'rasters', 'enrichment', 'boundaries',
+                       'city_boundaries', 'overture', 'regional_heights', 'official_barriers', 'measured_heights',
+                       'fra_crossings', 'tc_crossings',
+                       'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
+            for path in sources.values():
+                Path(path).touch()
+            config = {'build': {'as_of_date': '20261231', 'aircraft_anchor': '2027-01',
+                                'memory_gib': 80, 'threads': 4}, 'sources': sources}
+            _, plan = world.build_plan(config, root / 'out', root / 'scratch')
+            aircraft = [dict(step.environment) for step in plan if 'AIRCRAFT_ANCHOR' in dict(step.environment)]
+            self.assertEqual([environment['AIRCRAFT_ANCHOR'] for environment in aircraft], ['2027-01'])
 
     def test_scheduler_does_not_start_dependents_after_failure_and_finishes_running_siblings(self):
         started, completed = set(), set()
@@ -252,7 +264,9 @@ class WorldBuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sources = {name: str(root / name) for name in ('planet', 'rasters', 'enrichment', 'boundaries',
-                       'city_boundaries', 'overture', 'ghsl', 'regional_heights', 'airline', 'general_aviation', 'ships', 'ships_gfw')}
+                       'city_boundaries', 'overture', 'regional_heights', 'official_barriers', 'measured_heights',
+                       'fra_crossings', 'tc_crossings',
+                       'aircraft_primary', 'aircraft_secondary', 'ships', 'ships_gfw')}
             for path in sources.values():
                 Path(path).touch()
             config = {'build': {'as_of_date': '20260909', 'aircraft_anchor': '2026-09',
@@ -284,8 +298,13 @@ class WorldBuildTest(unittest.TestCase):
                                  root / 'out', root / 'scratch')
             with self.assertRaisesRegex(ValueError, 'overlaps frozen source'):
                 world.validate_osm_storage([root / 'external-vrt'], [root / 'external-vrt/tile.tif'])
-            self.assertEqual(indexed['structures'].dependencies, ('buildings',))
+            self.assertEqual(indexed['structures'].dependencies, ('buildings', 'square-country-city'))
             self.assertEqual(indexed['structures'].argv[-2:], ('--jobs', '4'))
+            structures_argv = indexed['structures'].argv
+            self.assertEqual(structures_argv[structures_argv.index('--official-barriers') + 1],
+                             str(root / 'official_barriers'))
+            self.assertEqual(structures_argv[structures_argv.index('--measured-heights') + 1],
+                             str(root / 'measured_heights'))
             self.assertEqual(indexed['structures-finalize'].dependencies, ('structures',))
             self.assertTrue(indexed['structures-finalize'].argv[0].endswith('engine/target/release/structures-finalize'))
             self.assertEqual(set(indexed['roads'].dependencies), {'square-country-city', 'structures'})
@@ -295,6 +314,12 @@ class WorldBuildTest(unittest.TestCase):
             self.assertEqual(indexed['railways'].dependencies, ('square-country-city',))
             self.assertEqual(indexed['railways-finalize'].dependencies, ('railways',))
             self.assertTrue(indexed['railways-finalize'].argv[0].endswith('engine/target/release/railways-finalize'))
+            self.assertEqual(indexed['railways-horns'].dependencies, ('railways-finalize',))
+            horns_argv = indexed['railways-horns'].argv
+            self.assertTrue(horns_argv[0].endswith('engine/target/release/railways-finalize'))
+            self.assertEqual(horns_argv[1], 'append-horns')
+            self.assertEqual(horns_argv[horns_argv.index('--fra') + 1], str(root / 'fra_crossings'))
+            self.assertEqual(horns_argv[horns_argv.index('--tc') + 1], str(root / 'tc_crossings'))
             self.assertNotIn('repaint', indexed)
             geography_running, aircraft_running = threading.Event(), threading.Event()
             def execute(step):
@@ -319,7 +344,8 @@ class WorldBuildTest(unittest.TestCase):
             self.assertGreaterEqual(peak, 2)
             aircraft = dict(indexed['aircraft'].environment)
             self.assertEqual(aircraft['AIRCRAFT_ANCHOR'], '2026-09')
-            self.assertEqual(aircraft['AIRLINE_FEED'], 'adsbexchange')
+            self.assertTrue(aircraft['ADSB_CACHE'].endswith('aircraft_primary'))
+            self.assertTrue(aircraft['SECONDARY_ADSB_CACHE'].endswith('aircraft_secondary'))
             self.assertEqual(aircraft['PREPARED_DIR'], aircraft['PREPARED_YEAR_DIR'])
 
 

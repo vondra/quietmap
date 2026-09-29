@@ -11,6 +11,10 @@ node = ["dep:napi", "dep:napi-derive"]
 name = "source_reader"
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "point-sum-oracle"
+path = "src/bin/point_sum_oracle/main.rs"
+
 [dependencies]
 napi = { version = "2", features = ["serde-json"], optional = true }
 napi-derive = { version = "2", optional = true }

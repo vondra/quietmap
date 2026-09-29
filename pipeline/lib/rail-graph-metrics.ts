@@ -1,4 +1,4 @@
-/** Railway routing and traffic allocation on source-connected graphs. */
+/** Railway routing of station pairs on source-connected graphs; railways-finalize allocates over parallel tracks. */
 
 import { haversineM, flatDist, pointToSegmentDist, pointToPolylineDist, wrapLonDeltaDeg, M_PER_DEG_LAT, M_PER_DEG_LON_EQ } from './spatial.js'
 import { RailPairSearches } from './rail-pair-searches.js'
@@ -9,7 +9,7 @@ import {
   isWalkableRailType, walkFamilyBit, WALK_FAMILY_MASKS,
   WALK_DETOUR_RATIO, WALK_DETOUR_SLACK_M, WALK_AMBIGUITY_LENGTH_RATIO, WALK_AMBIGUITY_SHARED_EDGE_FRACTION,
   WALK_TWIN_MEDIAN_LATERAL_M, WALK_TWIN_P75_LATERAL_M, WALK_TWIN_FAR_LATERAL_M, WALK_TWIN_FAR_LENGTH_FRACTION, UNLOCALIZED_PAIR_QUARANTINE_RADIUS_M,
-  SHAPE_CORRIDOR_TOLERANCE_M, PARALLEL_SPREAD_RADIUS_M,
+  SHAPE_CORRIDOR_TOLERANCE_M,
 } from './rail-graph.js'
 
 // ── Bounded shortest path ────────────────────────────────────────────────────
@@ -149,26 +149,7 @@ export function dijkstraShortestPath(
   return { lengthM, edgeIndices: new Set(orderedEdges), orderedEdges }
 }
 
-// ── Parallel-track spread ────────────────────────────────────────────────────
-
-/** Track pairs in a shared corridor sit 4-10 m apart; two DISTINCT parallel
- *  lines are typically wider. When no corridor token can confirm identity
- *  (CZ evidence 2026-07-15: 0 of ~5,000 corridor segments carry ref or name),
- *  this much tighter radius + the 10-degree heading gate below stand in for
- *  the token — /gg review W8: tighten bearing/overlap instead of removing
- *  the token-less arm, else no CZ double-track ever spreads and the divided
- *  twin renders at the full engine class default (the DE +8..+17 dB
- *  double-count shape, plan /gg item 6). */
-export const PARALLEL_SPREAD_TOKENLESS_RADIUS_M = 15
-
-/** Overlap-fraction gate (2026-07-16 /gg review, item 7): segment `i` counts
- *  `j` as a sibling only when their longitudinal overlap covers at least this
- *  many metres — see `PARALLEL_SPREAD_MIN_OVERLAP_FRACTION` for the other
- *  (percentage) arm and `longitudinalOverlapM`'s doc for the accepted
- *  asymmetric-residual bound this trades off against exact conservation. */
-export const PARALLEL_SPREAD_MIN_OVERLAP_ABS_M = 30
-/** ...OR at least this fraction of `i`'s OWN length, whichever is larger. */
-export const PARALLEL_SPREAD_MIN_OVERLAP_FRACTION = 0.3
+// ── Segment geometry ─────────────────────────────────────────────────────────
 
 /** Indexes each source piece's edge by `key`. Construction emits
  *  exactly one edge per input, so callers use the edge geometry as-is. */
@@ -195,239 +176,14 @@ function headingDeltaMod180(h1: number, h2: number): number {
   return Math.min(diff, 180 - diff)
 }
 
-/** Projects both segments onto the shared heading axis (local flat-earth
- *  metres around their common midpoint) and returns the longitudinal OVERLAP
- *  length in metres (0 = spans don't touch at all), plus `a`'s own span —
- *  the caller gates on a FRACTION of `a`'s length (see
- *  `parallelSiblingLateralM`'s doc for why this is deliberately asymmetric,
- *  and `applyParallelSpread`'s doc for the accepted error this trades off
- *  against exact conservation). Two parallel-heading tracks that don't
- *  actually run alongside each other (one ends where the other starts) have
- *  zero overlap and are never siblings. */
-function longitudinalOverlapM(a: RailGraphEdge, b: RailGraphEdge): { overlapM: number; aSpanM: number } {
-  const midLat = (a.startLat + a.endLat + b.startLat + b.endLat) / 4
-  const cosLat = Math.cos(midLat * Math.PI / 180)
-  const headingRad = headingDeg(a.startLat, a.startLon, a.endLat, a.endLon) * Math.PI / 180
-  const ux = Math.sin(headingRad), uy = Math.cos(headingRad) // unit vector, matches atan2(dx,dy) convention
-  const scalar = (lat: number, lon: number) => {
-    const x = lon * M_PER_DEG_LON_EQ * cosLat
-    const y = lat * M_PER_DEG_LAT
-    return x * ux + y * uy
-  }
-  const aMin = Math.min(scalar(a.startLat, a.startLon), scalar(a.endLat, a.endLon))
-  const aMax = Math.max(scalar(a.startLat, a.startLon), scalar(a.endLat, a.endLon))
-  const bMin = Math.min(scalar(b.startLat, b.startLon), scalar(b.endLat, b.endLon))
-  const bMax = Math.max(scalar(b.startLat, b.startLon), scalar(b.endLat, b.endLon))
-  const overlapM = Math.max(0, Math.min(aMax, bMax) - Math.max(aMin, bMin))
-  return { overlapM, aSpanM: aMax - aMin }
-}
-
-/** Sibling probe: does
- *  `b` run alongside `a` at a's midpoint? Returns the LATERAL distance
- *  (metres, a-midpoint -> BODY of b) when every gate passes, else null.
- *
- *  Point-to-BODY is the load-bearing metric choice: microsegments are cut
- *  independently per OSM way (up to 250 m, cut phase anchored at each way's
- *  own start — engine/osm-extract/src/microsegment.rs), so two physically
- *  parallel tracks carry arbitrary 0-250 m longitudinal midpoint stagger. A
- *  midpoint-to-midpoint gate (the round-1 design here, and the old CZ
- *  czpttKey divisor pass before it) never pairs a staggered double-track at
- *  all — the sibling then renders at the full engine class default (the DE
- *  +8..+17 dB divisor-coverage hole). Distance to b's body is stagger-immune.
- *
- *  Gates: different osmId, same railType+usage, no shared node (a spur
- *  meeting the main is not a sibling), then one of two geometry arms:
- *  - CONFIRMED tokens (both non-empty and equal): lateral within
- *    PARALLEL_SPREAD_RADIUS_M (50 m), heading within 20 deg (mod 180),
- *    longitudinal overlap — the original matcher design.
- *  - TOKEN-LESS (either token empty): the STRICT arm — lateral within
- *    PARALLEL_SPREAD_TOKENLESS_RADIUS_M (15 m), heading within 10 deg,
- *    longitudinal overlap. See the constant's comment for the provenance
- *    (/gg W8 + the CZ empty-token evidence).
- *  - Tokens non-empty but DIFFERENT: never siblings — two named corridors
- *    that happen to run alongside stay independent.
- *  - Longitudinal overlap must cover >= max(30 m, 30% of `a`'s OWN length)
- *    (2026-07-16 /gg review, item 7) — a segment barely grazing a much
- *    longer neighbour's end is not a real double-track pairing from ITS
- *    perspective. This is DELIBERATELY asymmetric (see
- *    `applyParallelSpread`'s doc for the accepted-error bound it trades off
- *    against exact conservation): a short segment can accept a long one that
- *    only just touches it, while the long one rejects the short one back. */
-/** Geometry-only core of the SPREAD's sibling probe (its token/heading/
- *  radius arms — 15 m token-less / 50 m equal-token). Called only by
- *  `parallelSiblingLateralM` since the 2026-07-16 review round: the
- *  ambiguity probe's twin check briefly reused these arms, but the spread's
- *  strict 15 m token-less radius mis-classified island-platform station
- *  throats (20-40 m spacing) as "not a twin" — `altPathIsParallelTwin` now
- *  carries its own quantile gate over `twinGateMetrics` instead (see
- *  WALK_TWIN_MEDIAN_LATERAL_M's two-radius reasoning). `aHeadingDeg` is passed in rather
- *  than recomputed here because the caller already has it in scope from its
- *  own heading-gate call below. */
-function lateralTwinGate(
-  aHeadingDeg: number, aCorridorToken: string, aMidLat: number, aMidLon: number,
-  b: { corridorToken: string; startLat: number; startLon: number; endLat: number; endLon: number },
-): number | null {
-  if (aCorridorToken !== '' && b.corridorToken !== '' && aCorridorToken !== b.corridorToken) return null
-  const tokenConfirmed = aCorridorToken !== '' && aCorridorToken === b.corridorToken
-  const maxLateralM = tokenConfirmed ? PARALLEL_SPREAD_RADIUS_M : PARALLEL_SPREAD_TOKENLESS_RADIUS_M
-  const maxHeadingDeltaDeg = tokenConfirmed ? 20 : 10
-  const hB = headingDeg(b.startLat, b.startLon, b.endLat, b.endLon)
-  if (headingDeltaMod180(aHeadingDeg, hB) >= maxHeadingDeltaDeg) return null
-  const lateralM = pointToSegmentDist(aMidLat, aMidLon, b.startLat, b.startLon, b.endLat, b.endLon)
-  if (lateralM >= maxLateralM) return null
-  return lateralM
-}
-
-function parallelSiblingLateralM(a: RailGraphEdge, aMidLat: number, aMidLon: number, b: RailGraphEdge): number | null {
-  if (a.osmId === b.osmId) return null
-  // A main-tagged track and its untagged twin (usage 0 and 3) are one corridor.
-  const usageFamily = (usage: number): number => usage === 3 ? 0 : usage
-  if (a.railType !== b.railType || usageFamily(a.usage) !== usageFamily(b.usage)) return null
-  if (a.nodeA === b.nodeA || a.nodeA === b.nodeB || a.nodeB === b.nodeA || a.nodeB === b.nodeB) return null
-  const { overlapM, aSpanM } = longitudinalOverlapM(a, b)
-  if (overlapM < Math.max(PARALLEL_SPREAD_MIN_OVERLAP_ABS_M, PARALLEL_SPREAD_MIN_OVERLAP_FRACTION * aSpanM)) return null
-  const hA = headingDeg(a.startLat, a.startLon, a.endLat, a.endLon)
-  return lateralTwinGate(hA, a.corridorToken, aMidLat, aMidLon, b)
-}
-
-/** Grid cell for the sibling candidate search. ~110 m of latitude — segment
+/** Grid cell for the twin-gate lateral search. ~110 m of latitude — segment
  *  BODIES are indexed by their bbox cells (a 250 m microsegment spans a
  *  handful), the query ring around a midpoint is computed latitude-aware per
- *  query, so a body within the 50 m search radius always shares a ring cell.
+ *  query, so a body within the search radius always shares a ring cell.
  *  UNWRAPPED at the antimeridian, like rail-graph.ts's SPATIAL_INDEX_CELL_DEG
  *  grids (same reasoning: no railway segment in the dataset crosses ±180°;
  *  revisit if one ever does). */
-const PARALLEL_GRID_CELL_DEG = 0.001
-
-/** PER-SEGMENT parallel-track spread (2026-07-15 review round 2 — REPLACES
- *  the round-1 transitive-cluster + clique grouping: once the sibling metric
- *  is stagger-immune, cluster growth chains A1-B1-A2-B2... down the whole
- *  corridor and the clique test then ALWAYS fails, because far members never
- *  longitudinally overlap — corridor-global grouping cannot express a
- *  divisor that varies along the line; the grouping must be local).
- *
- *  For every stampable segment i (heavy rail, not traversal-only — stamped
- *  or NOT: a canonical pair is walked once along ONE shortest path, so on a
- *  double-track only one track ever carries the walk's stamp, and the
- *  sibling must still be reached or it falls to the engine class default):
- *  1. siblings(i) = ONE representative per OTHER osmId — the laterally
- *     nearest segment passing `parallelSiblingLateralM` at i's midpoint.
- *  2. No siblings -> row untouched (stamps AND divisorBySegmentKey stay
- *     absent for i).
- *  3. divisor_i = 1 + number of distinct sibling osmIds — recorded into
- *     `divisorBySegmentKey` for EVERY i with >=1 sibling, INDEPENDENT of
- *     whether i or its siblings carry any traffic (a silent-residual stamp
- *     landing later on an unwalked-but-sibling-bearing row still needs the
- *     right divisor, not an implicit 1 — 2026-07-16 /gg review item 2).
- *  4. value_i = preSpread(i) + sum of preSpread(representative_j), ALL read
- *     from a FROZEN pre-spread snapshot — never post-spread values, so a
- *     spread result can never feed a second spread (no double counting).
- *  5. value 0 (fully unstamped neighbourhood) stays absent from `stamps`
- *     even though `divisorBySegmentKey` still records the divisor (step 3).
- *
- *  CONSERVATION (typical case): at any corridor cross-section with N tracks
- *  and pre-spread stamps T_1..T_N (some 0), every track sees the other N-1 as
- *  siblings, so each carries value = sum(T) with divisor = N and renders
- *  sum(T)/N — the cross-section total is sum(T), exactly the single-track
- *  total. The divisor is position-local: a third track joining mid-corridor
- *  raises the divisor to 3 only on the segments it actually overlaps, 2
- *  elsewhere.
- *
- *  ACCEPTED ERROR (2026-07-16 /gg review item 7 — NOT exact conservation
- *  everywhere): the overlap-fraction gate in `parallelSiblingLateralM`
- *  (segment i counts j as a sibling only when their longitudinal overlap
- *  covers >= max(30 m, 30% of i's OWN length)) is deliberately asymmetric —
- *  a SHORT segment barely touching a much LONGER neighbour's end can accept
- *  it as a sibling (the overlap is a big fraction of the short one) while the
- *  long segment rejects the short one back (the same overlap is a small
- *  fraction of ITS length). Repro: A spans 0-250 m (stamped T), B spans
- *  200-300 m (parallel, unstamped) — B (100 m) sees a 50 m/50% overlap with A
- *  and accepts it (divisor 2, value T, renders T/2); A (250 m) sees the same
- *  50 m as only 20% of its own length and rejects B (divisor 1, renders T/1
- *  unchanged) — so the 50 m sliver shows T/1 on one track and T/2 on the
- *  other, up to +1.76 dB over-rendered versus the "should be T/2 on both"
- *  ideal. Exact conservation would require SPLITTING Arrow rows at every
- *  overlap boundary — rejected per SPEC's Occam's-razor rule: the bug class
- *  this pass fixes was a ~12 dB double-count over KILOMETRES of banded
- *  corridor, and a <=250 m sliver at <=1.76 dB is not worth the row-splitting
- *  complexity to close.
- *
- *  `geomByKey`: built once by the caller (`walkRailStationPairs`, via
- *  `collectSegmentGeometry`) and shared with the unlocalized-pair
- *  chord-vicinity quarantine. */
-function applyParallelSpread(
-  graph: RailGraph,
-  stamps: Map<string, { pax: number; frt: number; divisor: number }>,
-  divisorBySegmentKey: Map<string, number>,
-  geomByKey: Map<string, RailGraphEdge>,
-): void {
-  const stampableGeomByKey = new Map<string, RailGraphEdge>()
-  const bodyGrid = new Map<string, string[]>() // cell -> keys of segments whose body bbox covers the cell
-  for (const [k, g] of geomByKey) {
-    if (!isStampableRailEdge(g)) continue // stampable universe only
-    stampableGeomByKey.set(k, g)
-    const laMin = Math.floor(Math.min(g.startLat, g.endLat) / PARALLEL_GRID_CELL_DEG)
-    const laMax = Math.floor(Math.max(g.startLat, g.endLat) / PARALLEL_GRID_CELL_DEG)
-    const loMin = Math.floor(Math.min(g.startLon, g.endLon) / PARALLEL_GRID_CELL_DEG)
-    const loMax = Math.floor(Math.max(g.startLon, g.endLon) / PARALLEL_GRID_CELL_DEG)
-    for (let la = laMin; la <= laMax; la++) {
-      for (let lo = loMin; lo <= loMax; lo++) {
-        const cell = `${la}_${lo}`
-        const arr = bodyGrid.get(cell)
-        if (arr) arr.push(k); else bodyGrid.set(cell, [k])
-      }
-    }
-  }
-
-  // FROZEN pre-spread snapshot (spec step 4). Shallow copy suffices: the
-  // loop below only ever REPLACES map entries via stamps.set, never mutates
-  // the existing value objects.
-  const preSpread = new Map(stamps)
-
-  for (const [key, gi] of stampableGeomByKey) {
-    const midLat = (gi.startLat + gi.endLat) / 2
-    const midLon = (gi.startLon + gi.endLon) / 2
-    const latSpanM = PARALLEL_GRID_CELL_DEG * M_PER_DEG_LAT
-    const lonSpanM = PARALLEL_GRID_CELL_DEG * M_PER_DEG_LON_EQ * Math.max(0.05, Math.cos(midLat * Math.PI / 180))
-    const dyMax = Math.max(1, Math.ceil(PARALLEL_SPREAD_RADIUS_M / latSpanM))
-    const dxMax = Math.max(1, Math.ceil(PARALLEL_SPREAD_RADIUS_M / lonSpanM))
-    const gy = Math.floor(midLat / PARALLEL_GRID_CELL_DEG)
-    const gx = Math.floor(midLon / PARALLEL_GRID_CELL_DEG)
-
-    const probed = new Set<string>()
-    const nearestSiblingByOsmId = new Map<string, { lateralM: number; key: string }>()
-    for (let dy = -dyMax; dy <= dyMax; dy++) {
-      for (let dx = -dxMax; dx <= dxMax; dx++) {
-        const arr = bodyGrid.get(`${gy + dy}_${gx + dx}`)
-        if (!arr) continue
-        for (const jKey of arr) {
-          if (jKey === key || probed.has(jKey)) continue
-          probed.add(jKey)
-          const gj = stampableGeomByKey.get(jKey)!
-          const lateralM = parallelSiblingLateralM(gi, midLat, midLon, gj)
-          if (lateralM === null) continue
-          const prev = nearestSiblingByOsmId.get(gj.osmId)
-          if (!prev || lateralM < prev.lateralM) nearestSiblingByOsmId.set(gj.osmId, { lateralM, key: jKey })
-        }
-      }
-    }
-    if (nearestSiblingByOsmId.size === 0) continue // no siblings — row untouched
-    const divisor = 1 + nearestSiblingByOsmId.size
-    // Recorded for EVERY sibling-bearing segment regardless of traffic (step 3
-    // above) — independent of whether `stamps` itself ends up touched below.
-    divisorBySegmentKey.set(key, divisor)
-
-    const own = preSpread.get(key)
-    let pax = own?.pax ?? 0
-    let frt = own?.frt ?? 0
-    for (const rep of nearestSiblingByOsmId.values()) {
-      const s = preSpread.get(rep.key)
-      if (s) { pax += s.pax; frt += s.frt } // unstamped representatives contribute 0
-    }
-    if (pax === 0 && frt === 0) continue // fully unstamped neighbourhood stays absent
-    stamps.set(key, { pax, frt, divisor })
-  }
-}
+const TWIN_GATE_GRID_CELL_DEG = 0.001
 
 // ── Twin-track ambiguity exemption ──────────────────────────────────────────
 
@@ -448,10 +204,10 @@ function twinGateMetrics(
   const bestGrid = new Map<string, number[]>()
   for (const idx of bestStampableIndices) {
     const e = graph.edges[idx]
-    const laMin = Math.floor(Math.min(e.startLat, e.endLat) / PARALLEL_GRID_CELL_DEG)
-    const laMax = Math.floor(Math.max(e.startLat, e.endLat) / PARALLEL_GRID_CELL_DEG)
-    const loMin = Math.floor(Math.min(e.startLon, e.endLon) / PARALLEL_GRID_CELL_DEG)
-    const loMax = Math.floor(Math.max(e.startLon, e.endLon) / PARALLEL_GRID_CELL_DEG)
+    const laMin = Math.floor(Math.min(e.startLat, e.endLat) / TWIN_GATE_GRID_CELL_DEG)
+    const laMax = Math.floor(Math.max(e.startLat, e.endLat) / TWIN_GATE_GRID_CELL_DEG)
+    const loMin = Math.floor(Math.min(e.startLon, e.endLon) / TWIN_GATE_GRID_CELL_DEG)
+    const loMax = Math.floor(Math.max(e.startLon, e.endLon) / TWIN_GATE_GRID_CELL_DEG)
     for (let la = laMin; la <= laMax; la++) {
       for (let lo = loMin; lo <= loMax; lo++) {
         const cell = `${la}_${lo}`
@@ -475,12 +231,12 @@ function twinGateMetrics(
 
     const midLat = (e.startLat + e.endLat) / 2
     const midLon = (e.startLon + e.endLon) / 2
-    const latSpanM = PARALLEL_GRID_CELL_DEG * M_PER_DEG_LAT
-    const lonSpanM = PARALLEL_GRID_CELL_DEG * M_PER_DEG_LON_EQ * Math.max(0.05, Math.cos(midLat * Math.PI / 180))
+    const latSpanM = TWIN_GATE_GRID_CELL_DEG * M_PER_DEG_LAT
+    const lonSpanM = TWIN_GATE_GRID_CELL_DEG * M_PER_DEG_LON_EQ * Math.max(0.05, Math.cos(midLat * Math.PI / 180))
     const dyMax = Math.max(1, Math.ceil(WALK_TWIN_FAR_LATERAL_M / latSpanM))
     const dxMax = Math.max(1, Math.ceil(WALK_TWIN_FAR_LATERAL_M / lonSpanM))
-    const gy = Math.floor(midLat / PARALLEL_GRID_CELL_DEG)
-    const gx = Math.floor(midLon / PARALLEL_GRID_CELL_DEG)
+    const gy = Math.floor(midLat / TWIN_GATE_GRID_CELL_DEG)
+    const gx = Math.floor(midLon / TWIN_GATE_GRID_CELL_DEG)
 
     let nearestLateralM = WALK_TWIN_FAR_LATERAL_M // FAR clamp — "no best edge anywhere near"
     const probed = new Set<number>()
@@ -787,7 +543,7 @@ function quarantineAmbiguousPathUnion(
  *  Standalone shape for an UNLOCALIZED pair (no snapped node to flood from
  *  at all — proximity to the raw chord is the next-tightest evidence
  *  available), and the corridor-band half of `quarantineGraphlessPair`. `geomByKey` is the SAME map
- *  `applyParallelSpread` reads (passed in by `walkRailStationPairs`). */
+ *  the collection built once by `walkRailStationPairs`. */
 function quarantineChordVicinity(
   geomByKey: Map<string, RailGraphEdge>,
   cp: { fromLat: number; fromLon: number; toLat: number; toLon: number },
@@ -831,8 +587,7 @@ function shapeEdgeFilter(shapePolyline: Array<[number, number]>): (edge: RailGra
 }
 
 export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCount[]): RailWalkResult {
-  const stampsBySegmentKey = new Map<string, { pax: number; frt: number; divisor: number }>()
-  const divisorBySegmentKey = new Map<string, number>()
+  const stampsBySegmentKey = new Map<string, { pax: number; frt: number }>()
   const failures = { snapFailed: 0, disconnected: 0, detourRejected: 0, ambiguous: 0 }
   const failedPairChords: RailWalkResult['failedPairChords'] = []
   const quarantinedSegmentKeys = new Set<string>()
@@ -1008,17 +763,15 @@ export function walkRailStationPairs(graph: RailGraph, pairs: RailStationPairCou
     for (const edgeIdx of best.edgeIndices) {
       const e = graph.edges[edgeIdx]
       if (!isStampableRailEdge(e)) continue // crossovers/other families connect, never stamped
-      const existing = stampsBySegmentKey.get(e.key) ?? { pax: 0, frt: 0, divisor: 1 }
+      const existing = stampsBySegmentKey.get(e.key) ?? { pax: 0, frt: 0 }
       existing.pax += cp.pax
       existing.frt += cp.frt
       stampsBySegmentKey.set(e.key, existing)
     }
   }
 
-  applyParallelSpread(graph, stampsBySegmentKey, divisorBySegmentKey, geomByKey)
-
   return {
-    stampsBySegmentKey, divisorBySegmentKey, failures, failedPairChords,
+    stampsBySegmentKey, failures, failedPairChords,
     quarantinedSegmentKeys, unlocalizedPairs, pairsWalked, pairsTotal,
   }
 }

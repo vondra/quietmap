@@ -1,5 +1,6 @@
 /** Parse admitted NZTA carriageway and Auckland Transport AADT sources. */
 
+import { withholdsCountPoint, withholdsCountGeometry } from './count-holdout.js'
 import { roadFeatureObservation } from './pinned-road-lines.js'
 import type { RoadObservation } from './road-observation.js'
 import type { RoadLoaderArguments } from './road-loader-cli.js'
@@ -109,6 +110,7 @@ export function parseNewZealandRoadSources(
 ): NewZealandRoadSource {
   const result: NewZealandRoadSource = { observations: [], nztaRows: 0, atRows: 0,
     unavailableTrafficSkipped: 0, unsupportedClassSkipped: 0, invalidGeometrySkipped: 0 }
+  let withheldSections = 0
   for (const [page, raw] of nztaSources.entries()) {
     const features = featureCollection(raw, `NZTA page ${page}`)
     result.nztaRows += features.length
@@ -133,6 +135,7 @@ export function parseNewZealandRoadSources(
       const rawHeavy = properties!.loadingPcHeavy
       const heavyPercent = typeof rawHeavy === 'number' && Number.isFinite(rawHeavy) &&
         rawHeavy >= 0 && rawHeavy <= 100 ? rawHeavy : 8
+      if (withholdsCountGeometry((feature as { geometry: { coordinates: unknown } }).geometry.coordinates)) { withheldSections++; continue }
       result.observations.push({ source: 'nzta', countBasis: 'both-directions', observationId: `nzta:${roadFeatureObservation(feature as object, 'both-directions').observationId}`, sourceRow: page * 2000 + sourceRow,
         // NZTA carriageway element names end `-R<n>` (or spell `ON RMP`/`OFF RMP`) on ramps.
         latitude: point[0], longitude: point[1], rank,
@@ -158,10 +161,12 @@ export function parseNewZealandRoadSources(
     const rawHeavy = properties!.pcheavy
     const heavyPercent = typeof rawHeavy === 'number' && Number.isFinite(rawHeavy) &&
       rawHeavy >= 0 && rawHeavy <= 100 ? rawHeavy : 0
+    if (withholdsCountGeometry((feature as { geometry: { coordinates: unknown } }).geometry.coordinates)) { withheldSections++; continue }
     result.observations.push({ source: 'at', countBasis: 'street-cross-section', observationId: `at:${roadFeatureObservation(feature as object, 'street-cross-section').observationId}`, sourceRow, latitude: point[0], longitude: point[1],
       rank: null, isRamp: false, total, heavyPercent, ...split(total, heavyPercent) })
   }
-  if (result.observations.length === 0) throw new Error('New Zealand road sources have no usable measurements')
+  if (result.observations.length === 0 && withheldSections === 0) throw new Error('New Zealand road sources have no usable measurements')
+  result.observations = result.observations.filter(point => !withholdsCountPoint(point.latitude, point.longitude))
   return result
 }
 

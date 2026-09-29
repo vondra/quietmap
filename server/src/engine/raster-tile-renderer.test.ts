@@ -39,10 +39,10 @@ test('all building pixels preserve the independently anchored dev1 palette and f
   const rectangle = (left: number, top: number, right: number, bottom: number) =>
     [[left, top], [right, top], [right, bottom], [left, bottom], [left, top]].map(([px, py]) => point(px, py))
   const rows = [3, 10, 20, 45, 80].map((height, i) => ({
-    o: rectangle(12 + 45 * i, 22, 42 + 45 * i, 68), h: height, t: i, c: false,
+    o: rectangle(12 + 45 * i, 22, 42 + 45 * i, 68), h: height,
   }))
-  rows.push({ o: [[30, 110], [120, 110], [76, 175], [30, 110]].map(([px, py]) => point(px, py)), h: 45, t: 2, c: false })
-  rows.push({ o: rectangle(50, 122, 90, 150), h: 3, t: 4, c: true })
+  rows.push({ o: [[30, 110], [120, 110], [76, 175], [30, 110]].map(([px, py]) => point(px, py)), h: 45 })
+  rows.push({ o: rectangle(50, 122, 90, 150), h: 3 })
   const pixels = rgbaFromPng(await renderBuildingVectorTile(z, x, y, async (...bounds) => {
     assert.deepEqual(bounds, [point(0, 256)[0], point(0, 0)[1], point(0, 0)[0], point(256, 0)[1]])
     return JSON.stringify(rows.map(({ o, ...row }) => ({ ...row, p: [[o]] })))
@@ -68,7 +68,7 @@ test('a crossing footprint paints both dateline columns exactly like translated 
     (middle + px / 256) / axis * 360 - 180,
   ])
   const crossing = ring.map(([lat, lon]) => [lat, lon < 0 ? lon + 180 : lon - 180])
-  const footprints = (o: number[][]) => JSON.stringify([{ p: [[o]], h: 45, t: 0, c: false }])
+  const footprints = (o: number[][]) => JSON.stringify([{ p: [[o]], h: 45 }])
   for (const [interior, dateline, edgeColumn] of [[middle - 1, axis - 1, 255], [middle, 0, 0]]) {
     const expected = await renderBuildingVectorTile(z, interior, y, async () => footprints(ring))
     const actual = await renderBuildingVectorTile(z, dateline, y, async () => footprints(crossing))
@@ -93,8 +93,8 @@ test('multipart courtyards subtract only their own polygon in either winding and
     const block = { p: [
       [ring(rectangle(10, 10, 110, 110)), ring(rectangle(30, 30, 90, 90))],
       [ring(rectangle(150, 10, 200, 110))],
-    ], h: 20, t: 0, c: false }
-    const courtyardHouse = { p: [[rectangle(50, 50, 70, 70)]], h: 3, t: 0, c: false }
+    ], h: 20 }
+    const courtyardHouse = { p: [[rectangle(50, 50, 70, 70)]], h: 3 }
     for (const rows of [[block, courtyardHouse], [courtyardHouse, block]]) {
       const pixels = rgbaFromPng(await renderBuildingVectorTile(z, x, y, async () => JSON.stringify(rows)))
       const pixel = (px: number, py: number) => [...pixels.subarray((py * 256 + px) * 4, (py * 256 + px) * 4 + 4)]

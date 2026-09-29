@@ -27,7 +27,7 @@ fn contains_and_enclosure_thresholds() {
     };
     // 60 m half-size square vs 75 m probes: only the centre probe is
     // inside → density 1/9 → 0 dB.
-    assert_eq!(enclosure_db(&set, OLAT, OLON, 75.0), 0.0);
+    assert_eq!(enclosure_db(&set, OLAT, OLON, 75.0, None), 0.0);
 
     // A 200 m half-size block swallows all 9 probes → 3 dB.
     let mut b2 = ObstacleIndex::builder(OLAT, OLON);
@@ -35,7 +35,7 @@ fn contains_and_enclosure_thresholds() {
     let set2 = ObstacleSet {
         indexes: vec![std::sync::Arc::new(b2.build())],
     };
-    assert_eq!(enclosure_db(&set2, OLAT, OLON, 75.0), 3.0);
+    assert_eq!(enclosure_db(&set2, OLAT, OLON, 75.0, None), 3.0);
 }
 
 #[test]

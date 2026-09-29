@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -57,6 +58,13 @@ def create_selected_catalog(output, days=('2026-06-06',), kind='staging', mlat_d
                 database.execute('INSERT INTO verified VALUES (?,?,?,?,?,?,?)',
                                  (str(source), chosen[4], *MODULE.identity(source)))
     return source
+
+
+def advance_mtime(path):
+    """A same-size rewrite or touch within one filesystem timestamp tick leaves the stat identity
+    unchanged; move mtime a whole second forward so the test's change is always observable."""
+    status = path.stat()
+    os.utime(path, ns=(status.st_atime_ns, status.st_mtime_ns + 1_000_000_000))
 
 
 class PublisherIntegrity(unittest.TestCase):
@@ -161,6 +169,7 @@ class PublisherIntegrity(unittest.TestCase):
                 asset = ('2026-06-06', 'original.tar', 'unused', 8, digest, 'prod')
                 self.assertEqual(MODULE.verified_asset(database, asset), str(source))
                 source.write_bytes(b'changed!')
+                advance_mtime(source)
                 with self.assertRaisesRegex(ValueError, 'changed verified'):
                     MODULE.verified_asset(database, asset)
                 with self.assertRaisesRegex(ValueError, 'changed independently'):
@@ -263,8 +272,8 @@ class SelectedSourceReuse(unittest.TestCase):
             flights = work / 'flights/2026-06-06.arrow'
             segments = work / 'segments/2026-06-06.arrow'
             flights.write_bytes(b'empty typed output tested by native IPC regression')
-            def receipt(stage, action, chosen=selected, filter='ga'):
-                return MODULE.source_receipt(work, chosen, stage, filter, action)
+            def receipt(stage, action, chosen=selected):
+                return MODULE.source_receipt(work, chosen, stage, action)
             with self.assertRaises(sqlite3.OperationalError):
                 receipt('flights', 'check')
             receipt('flights', 'begin')
@@ -272,15 +281,13 @@ class SelectedSourceReuse(unittest.TestCase):
                 receipt('flights', 'check')
             receipt('flights', 'complete')
             receipt('flights', 'check')
-            with self.assertRaisesRegex(ValueError, 'feed/class differs'):
-                receipt('flights', 'check', filter='non-ga')
             receipt('segments', 'begin')
             segments.write_bytes(b'new empty typed segment output')
             receipt('segments', 'complete')
             receipt('segments', 'check')
             other = create_selected_catalog(root / 'other', kind='prod')
             changed = MODULE.validate_selected_sources(root / 'other', {'2026-06-06'})
-            with self.assertRaisesRegex(ValueError, 'source/feed/class differs'):
+            with self.assertRaisesRegex(ValueError, 'selected source differs'):
                 receipt('segments', 'check', chosen=changed)
             self.assertTrue(other.exists())
             receipt('segments', 'begin')
@@ -485,7 +492,7 @@ class StructuralRecovery(unittest.TestCase):
                     real = MODULE.check_archive_continuity
                     def changed(selected):
                         result = real(selected)
-                        Path(selected[0][1]).touch()
+                        advance_mtime(Path(selected[0][1]))
                         return result
                     with patch.object(MODULE, 'check_archive_continuity', side_effect=changed):
                         with self.assertRaisesRegex(ValueError, 'changed verified'):

@@ -1,5 +1,6 @@
 /** Enrich z9 Japanese roads with MLIT census route medians and class fallbacks. */
 
+import { excludesHoldoutCounts } from './lib/count-holdout.js'
 import type { RoadObservation } from './lib/road-observation.js'
 import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import { leadingJapaneseRoadDigits, loadJapaneseRoadCensus, normalizeJapaneseRoadIdentity,
@@ -23,6 +24,8 @@ function traffic(counts: JapaneseVehicleCounts & RoadObservation, sourceId: numb
 }
 
 export function buildJapaneseRoadMatcher(census: JapaneseRoadCensus): (row: RoadRow) => RoadAadt | null {
+  // The retained route and class aggregates have no count-point positions.
+  if (excludesHoldoutCounts()) return () => null
   const expresswayCache = new Map<string, (JapaneseVehicleCounts & RoadObservation) | null>()
   const expressway = (rawName: string): (JapaneseVehicleCounts & RoadObservation) | null => {
     const name = normalizeJapaneseRoadIdentity(rawName)

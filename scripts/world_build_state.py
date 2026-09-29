@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from functools import cache
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,20 @@ from world_build_inputs import pin_digest, repin_inputs
 STATE_NAME = 'build.json'
 STEPS_NAME = 'steps.jsonl'
 PIN_NAME = 'input-identities.jsonl'
+REPOSITORY = Path(__file__).resolve().parents[1]
+
+
+@cache
+def product_code_identity(repository=REPOSITORY):
+    """The checked-out product commit and whether the working tree differs from it.
+
+    Read once per process: the input pin covers every producer code file, so a later producer
+    edit fails the build instead of mislabelling it.
+    """
+    def git(*arguments):
+        return subprocess.check_output(['git', *arguments], cwd=repository, text=True)
+    return {'product_commit': git('rev-parse', 'HEAD').strip(),
+            'product_dirty': bool(git('status', '--porcelain', '--untracked-files=normal').strip())}
 
 
 def write_atomic(path, text):
@@ -36,7 +51,7 @@ def write_atomic(path, text):
 def write_state(output, config, status, **fields):
     path = output / STATE_NAME
     state = json.loads(path.read_text()) if path.exists() else {}
-    state.update(config=json.dumps(config, sort_keys=True), status=status, **fields)
+    state.update(config=json.dumps(config, sort_keys=True), status=status, **product_code_identity(), **fields)
     state.pop('remaining', None)
     write_atomic(path, json.dumps(state, sort_keys=True) + '\n')
 

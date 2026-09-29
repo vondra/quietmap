@@ -67,9 +67,12 @@ impl PropagationVariants {
         }
     }
 
-    /// Convert energy to dB, clamped to avoid -inf.
+    /// Convert linear energy to dB, floored at 1e-12 (-120 dB) for silence. A non-finite
+    /// or negative energy is a propagation bug and fails closed instead of flooring to a
+    /// quiet layer (a NaN once hid as rail -113.6 dB Lden).
     #[inline]
     pub fn to_db(energy: f64) -> f64 {
+        assert!(energy.is_finite() && energy >= 0.0, "non-finite or negative energy: {energy}");
         10.0 * energy.max(1e-12).log10()
     }
 
@@ -180,4 +183,21 @@ pub struct VegetationBreakdown {
     /// Transparency: path length actually sampled for forest (metres).
     /// 0 when the segment was beyond the model's applicable range.
     pub sampled_path_m: f64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PropagationVariants;
+
+    #[test]
+    fn silence_floors_but_non_finite_energies_fail_closed() {
+        assert_eq!(PropagationVariants::to_db(0.0), -120.0);
+        assert_eq!(PropagationVariants::to_db(1.0), 0.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-finite or negative energy")]
+    fn nan_energy_is_an_error_not_a_quiet_floor() {
+        let _ = PropagationVariants::to_db(f64::NAN);
+    }
 }

@@ -229,6 +229,7 @@ impl ObstacleIndex {
                                 height_m: e.height_m,
                                 kind: e.kind(),
                                 id: e.id,
+                                index: 0,
                             });
                         }
                     }

@@ -1,12 +1,13 @@
 /** Ordered dev1 name priors, with owned retirement and unchanged native industrial payload. */
 
+import { footprintAcceptsRegistryClass, isGenericIndustrialSource } from './facility-match.js'
 import { resolve } from 'node:path'
 import { DataType, makeVector, Table, type Vector } from 'apache-arrow'
 import { bakedIndustrialCountryReader, gridToLonLat, iso2Code, listPreparedSquares } from './prepared-grid.js'
 import { shouldOverwrite, withArrowWrite } from './provenance.js'
 import { SOURCE_ID_INDUSTRIAL_NAME_HEURISTIC, SOURCE_ID_KR_INDUSTRIAL_NAMES } from './sources.js'
 
-// Literal dev1 keywords and first-match order; wind is a terminal skip before power.
+// Activity-specific names precede broader waste handling; wind skips before power.
 const NAME_RULES = [
   { keywords: ['solar', 'photovoltaic', 'pv park', 'solární', 'fotovoltaico'], nace4: 3599 },
   { keywords: ['wind farm', 'wind park', 'windpark', 'éolien', 'vindpark', 'vindkraft', 'parque eólico', 'větrná', 'wiatrowy', 'turbin'], nace4: 0 },
@@ -19,9 +20,9 @@ const NAME_RULES = [
   { keywords: ['cement', 'concrete', 'brick', 'ceramic', 'glass', 'tile', 'ciment', 'béton', 'zement', 'beton', 'cemento', 'cimenterie', 'betonárna', 'cihelna', 'keramik', 'vidrio', 'verrerie', 'tegel'], nace4: 2300 },
   { keywords: ['steel', 'smelter', 'foundry', 'metallurg', 'aluminum', 'aluminium', 'copper', 'iron works', 'forge', 'acier', 'stahl', 'acero', 'siderúrg', 'hutní', 'odlévárna', 'hütte', 'fonderie', 'fundición', 'fundição'], nace4: 2400 },
   { keywords: ['automotive', 'car factory', 'vehicle', 'engine', 'turbine', 'automobile', 'automovil'], nace4: 2900 },
-  { keywords: ['waste', 'recycl', 'landfill', 'sewage', 'wastewater', 'treatment plant', 'incinerator', 'déchets', 'abfall', 'residuo', 'reciclaje', 'skládka', 'čistírna', 'spalovna', 'klärwerk', 'deponie', 'aterro'], nace4: 3800 },
+  { keywords: ['sewage', 'wastewater', 'čistírna', 'klärwerk'], nace4: 3700 },
+  { keywords: ['waste', 'recycl', 'landfill', 'incinerator', 'déchets', 'abfall', 'residuo', 'reciclaje', 'skládka', 'spalovna', 'deponie', 'aterro'], nace4: 3800 },
   { keywords: ['warehouse', 'logistics', 'distribution center', 'storage', 'depot', 'lager', 'entrepôt', 'almacén', 'armazém', 'sklad', 'magazyn'], nace4: 5200 },
-  { keywords: ['farm', 'ranch', 'livestock', 'poultry', 'greenhouse', 'hatchery', 'statek', 'farma', 'ferme', 'granja', 'fazenda', 'bauernhof', 'gewächshaus', 'invernadero'], nace4: 100 },
 ] as const
 
 export function industrialNameRule(name: string) {
@@ -73,6 +74,7 @@ export async function enrichIndustrialNames(preparedDirectory: string, squares?:
       if (!names || !DataType.isUtf8(names.type)) throw new Error('industrial Arrow requires Utf8 name')
       const source = integerColumn(table, 'source_id', 16, false)!
       const sourceType = integerColumn(table, 'source_type', 8, false)!
+      const subtype = integerColumn(table, 'site_subtype', 8, false, true)
       const nace = integerColumn(table, 'nace_4digit', 16, false, true)
       const gx = integerColumn(table, 'centroid_gx', 32, true)!
       const gy = integerColumn(table, 'centroid_gy', 32, true)!
@@ -83,8 +85,8 @@ export async function enrichIndustrialNames(preparedDirectory: string, squares?:
       let changed = false
       result.rows += rows
       for (let row = 0; row < rows; row++) {
-        // Native turbines keep their independent point-source classification and measurements.
-        if (sourceType.get(row) === 10) continue
+        // Source-specific evidence keeps its classification and measurements.
+        if (!isGenericIndustrialSource(sourceType.get(row) as number)) continue
         const name = names.get(row) as string | null
         if (name?.trim()) result.named++
         const globalRule = name ? industrialNameRule(name) : null
@@ -92,8 +94,11 @@ export async function enrichIndustrialNames(preparedDirectory: string, squares?:
         const koreanScope = position.lat >= 33 && position.lat <= 39 && position.lon >= 124.5 && position.lon <= 132 &&
           ![iso2Code('KP'), iso2Code('JP')].includes(country.codeAt(row))
         const koreanRule = name && koreanScope ? koreanIndustrialNameRule(name) : null
-        const desired = koreanRule ? { source: SOURCE_ID_KR_INDUSTRIAL_NAMES, nace4: koreanRule.nace4 }
+        const rule = koreanRule ? { source: SOURCE_ID_KR_INDUSTRIAL_NAMES, nace4: koreanRule.nace4 }
           : globalRule?.nace4 ? { source: SOURCE_ID_INDUSTRIAL_NAME_HEURISTIC, nace4: globalRule.nace4 } : null
+        const desired = rule && footprintAcceptsRegistryClass(rule, {
+          sourceType: sourceType.get(row) as number, subtype: subtype?.get(row) as number ?? 0,
+        }) ? rule : null
         const currentSource = newSource[row], currentNace = newNace[row]
         const owned = currentSource === SOURCE_ID_INDUSTRIAL_NAME_HEURISTIC || currentSource === SOURCE_ID_KR_INDUSTRIAL_NAMES
         if (desired && (owned || shouldOverwrite(currentSource, desired.source))) {

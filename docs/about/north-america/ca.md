@@ -1,6 +1,6 @@
 ---
 title: Canada
-intro: Quebec DJMA 2024 traffic counts, timetables for VIA Rail and seven city systems, Natural Resources Canada wind turbine database. Roads outside Quebec and freight use class defaults.
+intro: Quebec DJMA 2024 traffic counts, timetables for VIA Rail and seven city systems, Transport Canada crossing horns, Natural Resources Canada wind turbine database. Roads outside Quebec and freight use class defaults.
 map: { center: [-95.0, 60.0], zoom: 3 }
 ---
 
@@ -28,6 +28,8 @@ Passenger trains come from eight timetables.
 Surface metro sections are included; see the [railway method](/about/methodology).
 
 Freight is not covered: CN and CPKC publish no schedules. Their lines default to 20 freight trains per day on a main line and 5 on a branch. Lines without a usage tag use the [unclassified railway default](/about/methodology).
+
+Level-crossing horns: [Transport Canada Grade Crossings Inventory](https://open.canada.ca/data/en/dataset/d0f54727-6c0b-4e5a-aa04-ea1463cf9f4c), 2023 update (contains information licensed under the Open Government Licence – Canada). Public crossings with trains sound on approach; whistling cessation is not in the inventory, so every sounding crossing is labelled cessation-unknown. Rail yards mapped in OpenStreetMap emit as round-the-clock industrial sites.
 
 ## Industry
 

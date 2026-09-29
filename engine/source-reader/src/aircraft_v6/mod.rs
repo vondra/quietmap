@@ -57,40 +57,6 @@ fn build_osm_ref_lookup(batches: &[RecordBatch]) -> HashMap<u64, String> {
     out
 }
 
-/// Every loaded aircraft batch must agree on both class windows; otherwise
-/// a mixed release can amplify full-year GA energy by the airline divisor.
-/// An empty receiver has no rows to weight.
-fn build_class_weights(
-    airborne_batches: &[RecordBatch],
-    airport_traffic_batches: &[RecordBatch],
-    n_days: u16,
-) -> Result<noise_compute::emission::aircraft::ClassWeights, String> {
-    use noise_compute::emission::aircraft::{ClassWeights, SAMPLE_DAYS_BY_CLASS_KEY};
-    if airborne_batches.is_empty() && airport_traffic_batches.is_empty() {
-        return Ok(ClassWeights::uniform());
-    }
-    let mut stamp: Option<String> = None;
-    for batch in airborne_batches
-        .iter()
-        .chain(airport_traffic_batches.iter())
-    {
-        let v = batch.schema_ref().metadata().get(SAMPLE_DAYS_BY_CLASS_KEY);
-        match (v, &stamp) {
-            (Some(v), None) => stamp = Some(v.clone()),
-            (Some(v), Some(seen)) if v != seen => {
-                return Err(format!(
-                    "{SAMPLE_DAYS_BY_CLASS_KEY} disagrees across loaded aircraft arrows \
-                     ({seen:?} vs {v:?}) — mixed/stale shards; re-extract / re-merge"
-                ));
-            }
-            (Some(_), Some(_)) => {}
-            // Current writers always carry the required normalization stamp.
-            (None, _) => return ClassWeights::parse(None, n_days),
-        }
-    }
-    ClassWeights::parse(stamp.as_deref(), n_days)
-}
-
 /// Add observed aircraft noise after the non-aircraft point computation.
 /// Traffic requires complete cell-local summaries of the global movement unions.
 #[allow(clippy::too_many_arguments)]
@@ -107,7 +73,8 @@ pub fn add_v6_aircraft_to_result(
     // Vector obstacles feed airborne building diffraction and ground-ops
     // screening. Cruise remains structurally exempt.
     obstacles: &noise_compute::propagation::obstacle_index::ObstacleSet,
-    n_days: u16,
+    // The window every opened aircraft file carries (checked at load).
+    sampling_window: Option<&noise_compute::emission::aircraft::SamplingWindow>,
     // Per-kind top-K cap for airborne sub-segment traces — passed to
     // compute_aircraft_v6 so the bounded min-heap in airborne::scatter
     // is sized correctly. query_noise_impl sets this to
@@ -118,8 +85,8 @@ pub fn add_v6_aircraft_to_result(
     assert_airborne_contract("airborne.arrow", airborne_batches)?;
     assert_cruise_contract("cruise.arrow", cruise_batches)?;
     assert_airport_traffic_contract("airport_traffic.arrow", airport_traffic_batches)?;
-    // Contracts guard geometry; the shared window stamp guards normalization.
-    let class_weights = build_class_weights(airborne_batches, airport_traffic_batches, n_days)?;
+    let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
+    let t_accum = timing_on.then(std::time::Instant::now);
     let airborne_rows = AirborneRowAccum::new(airborne_batches)?;
     let cruise_rows = CruiseRowAccum::new(cruise_batches)?;
     let traffic_rows = AirportTrafficRowAccum::new(airport_traffic_batches)?;
@@ -129,14 +96,17 @@ pub fn add_v6_aircraft_to_result(
     let cruise_view_slices = cruise_rows.views();
     let cruise_views = cruise_view_slices.as_row_views();
     let traffic_views = traffic_rows.views();
+    let t_accum_ms = t_accum.map(|t| t.elapsed().as_secs_f64() * 1000.0);
 
     let n_airborne_rows = noise_compute::compute::aircraft_v6::airborne_row_count(airborne_views);
     let total_rows = n_airborne_rows + cruise_views.len() + traffic_views.len();
     if total_rows == 0 {
         return Ok(());
     }
+    let window = sampling_window.ok_or("aircraft rows without a sampling window stamp")?;
 
     // Airborne screens against one receiver horizon; cruise is exempt.
+    let t_horizon = timing_on.then(std::time::Instant::now);
     let horizon = if n_airborne_rows == 0 {
         None
     } else {
@@ -149,14 +119,14 @@ pub fn add_v6_aircraft_to_result(
     };
     let mut crossing_scratch =
         noise_compute::propagation::obstacle_index::CrossingScratch::default();
-    let receiver_is_enclosed =
-        crate::structure_store::point_inside_enclosed(obstacles, receiver.lat, receiver.lon)
-            .is_some();
+    let receiver_is_enclosed = obstacles
+        .enclosed_footprint_at(receiver.lat, receiver.lon)
+        .is_some();
     let building_horizon = (n_airborne_rows > 0 && !receiver_is_enclosed)
         .then(|| {
             noise_compute::emission::aircraft::BuildingHorizon::build(
                 obstacles,
-                rasters,
+                |lat, lon| rasters.elevation(lat, lon),
                 receiver.lat,
                 receiver.lon,
                 receiver.altitude_m(),
@@ -164,6 +134,13 @@ pub fn add_v6_aircraft_to_result(
             )
         })
         .filter(|horizon| !horizon.is_empty());
+    if timing_on {
+        eprintln!(
+            "popup-stage aircraft accum={:.0}ms horizon={:.0}ms",
+            t_accum_ms.unwrap_or(0.0),
+            t_horizon.map(|t| t.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0),
+        );
+    }
 
     let (mut air_periods, mut air_contribs, band_data) = compute_aircraft_v6(
         receiver,
@@ -172,8 +149,7 @@ pub fn add_v6_aircraft_to_result(
         rasters,
         horizon.as_ref(),
         building_horizon.as_ref(),
-        n_days,
-        &class_weights,
+        window,
         trace_cap,
         Some(traces),
         result.timings.as_mut(),
@@ -182,7 +158,6 @@ pub fn add_v6_aircraft_to_result(
     // airport_traffic → Doc 29 line-source contributors; fold their
     // per-period Lden into `air_periods` so the top-of-popup Aircraft
     // total includes ground-ops energy (not just its contributor row).
-    let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
     let t_traffic_start = std::time::Instant::now();
     let mut n_traffic_rows: usize = 0;
     if !traffic_views.is_empty() {
@@ -194,8 +169,7 @@ pub fn add_v6_aircraft_to_result(
         let traffic_contribs = compute_airport_traffic::run(
             receiver,
             &traffic_views,
-            n_days,
-            &class_weights,
+            window,
             rasters,
             obstacles,
             &osm_ref_lookup,

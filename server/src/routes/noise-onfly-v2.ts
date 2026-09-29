@@ -30,6 +30,11 @@ const NOISE_ONFLY_MAX_QUEUE = Number(process.env.NOISE_ONFLY_MAX_QUEUE || '8')
 // heap too: one build at a time in the process, at most four kept. Set
 // concurrency to the measured memory budget of the deployment.
 const NOISE_ONFLY_POOL_SIZE = Number(process.env.NOISE_ONFLY_POOL_SIZE || '8')
+// `receiver_height_m` scores the model at a microphone's height (validation). The floor is
+// the engine's RECEIVER_HEIGHT_FLOOR_M, which the native call enforces too; the ceiling only
+// bounds a public parameter: no monitor mast or roof in the validation catalogue is higher.
+const RECEIVER_HEIGHT_MIN_M = 0.5
+const RECEIVER_HEIGHT_MAX_M = 100
 
 export type NoiseOnflyEngine = {
   checkReady: () => Promise<void>
@@ -118,7 +123,7 @@ export async function noiseOnflyV2Routes(
     },
   )
 
-  app.get<{ Querystring: { lat?: string; lng?: string; detail?: string } }>(
+  app.get<{ Querystring: { lat?: string; lng?: string; detail?: string; receiver_height_m?: string } }>(
     '/api/noise-onfly-v2',
     // The popup compute is the most expensive public surface (one worker
     // thread per query) — rate-limited per client (owner directive 2026-07-15).
@@ -136,6 +141,16 @@ export async function noiseOnflyV2Routes(
       if (detail !== 'summary' && detail !== 'segments' && detail !== 'all') {
         return reply.status(400).send({ error: 'detail must be one of summary, segments, all' })
       }
+      const receiverHeightM = request.query.receiver_height_m === undefined
+        ? undefined
+        : Number(request.query.receiver_height_m)
+      if (receiverHeightM !== undefined && (!Number.isFinite(receiverHeightM)
+        || receiverHeightM < RECEIVER_HEIGHT_MIN_M || receiverHeightM > RECEIVER_HEIGHT_MAX_M
+        || detail === 'all')) {
+        return reply.status(400).send({
+          error: `receiver_height_m must be ${RECEIVER_HEIGHT_MIN_M}..${RECEIVER_HEIGHT_MAX_M} m, without detail=all`,
+        })
+      }
 
       const t0 = Date.now()
       const abortController = new AbortController()
@@ -152,14 +167,15 @@ export async function noiseOnflyV2Routes(
         if (detail === 'all') {
           resultJson = await supervisor.queryNoiseAtPointUnfiltered(lat, lng, abortController.signal)
         } else if (detail === 'segments') {
-          const hit = supervisor.cachedFull(lat, lng)
-          resultJson = hit ?? await supervisor.queryNoiseAtPoint(lat, lng, abortController.signal)
+          const hit = supervisor.cachedFull(lat, lng, receiverHeightM)
+          resultJson = hit
+            ?? await supervisor.queryNoiseAtPoint(lat, lng, abortController.signal, receiverHeightM)
         } else {
-          const hit = supervisor.cachedSummary(lat, lng)
+          const hit = supervisor.cachedSummary(lat, lng, receiverHeightM)
           if (hit !== null) {
             resultJson = hit
           } else {
-            const full = await supervisor.queryNoiseAtPoint(lat, lng, abortController.signal)
+            const full = await supervisor.queryNoiseAtPoint(lat, lng, abortController.signal, receiverHeightM)
             resultJson = NoiseOnflySupervisor.deriveSummary(full) ?? full
           }
         }

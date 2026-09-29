@@ -70,6 +70,7 @@ pub fn extract_features(
             )?;
         }
     }
+    std::mem::take(&mut transport.controls).finish(spiller)?;
     Ok(stats)
 }
 
@@ -95,6 +96,19 @@ fn apply_prepared(
     }
     for item in blob.items {
         match item {
+            Prepared::Evidence(mut node) => {
+                if let Some(tags) = node.power.take() {
+                    stats.features_total += emit_node(
+                        spiller,
+                        &tags,
+                        FeatureType::Industrial,
+                        node.id,
+                        node.lat,
+                        node.lon,
+                    )?;
+                }
+                transport.controls.insert(node);
+            }
             Prepared::Train(route) => transport.write_train_route(&route)?,
             Prepared::Point(point) => apply_point(point, spiller, stats)?,
             Prepared::Way(way) => {
@@ -153,21 +167,47 @@ fn apply_way(
     if way.is_relation_member && !coords.is_empty() {
         let completed = assembler.add_way(way.id, coords.clone(), manifest);
         for rel_id in completed {
-            if let Some((ring, tags, ftype)) = assembler.assemble(rel_id, manifest) {
-                let extracted_tags = relations::spill_tags_for_assembled(&ftype, &tags);
-                let (clat, clon) = centroid(&ring);
-                let square = grid::square_of(clat, clon);
-                let safe_ring = ring_for_spill(&ring, &mut stats.antimeridian_rings_omitted);
-                spiller.emit_polygon(
-                    &ftype,
-                    square,
-                    rel_id,
-                    clat,
-                    clon,
-                    &extracted_tags,
-                    safe_ring,
-                )?;
-                stats.features_total += 1;
+            if let Some(assembled) = assembler.assemble(rel_id, manifest) {
+                let relations::AssembledRelation {
+                    rings,
+                    tags,
+                    feature_types: types,
+                } = assembled;
+                for ftype in types {
+                    let extracted_tags = relations::spill_tags_for_assembled(&ftype, &tags);
+                    // New source contracts retain every outer part. Other
+                    // families keep their existing first-part behavior.
+                    let count = if matches!(ftype, FeatureType::Industrial | FeatureType::Leisure) {
+                        rings.len()
+                    } else {
+                        1
+                    };
+                    // A facility nameplate describes the whole relation: every
+                    // part keeps it byte-identical and carries its area share,
+                    // so readers evaluate the one facility power and share it
+                    // by area instead of radiating the nameplate per part.
+                    let part_tags = if matches!(ftype, FeatureType::Industrial) {
+                        facility_part_tags(&rings, &extracted_tags)
+                    } else {
+                        vec![extracted_tags.clone(); rings.len()]
+                    };
+                    for (ring, tags) in rings.iter().zip(part_tags.iter()).take(count) {
+                        let (clat, clon) = centroid(ring);
+                        let square = grid::square_of(clat, clon);
+                        let safe_ring = ring_for_spill(ring, &mut stats.antimeridian_rings_omitted);
+                        spiller.emit_polygon(
+                            &ftype,
+                            square,
+                            rel_id,
+                            "relation",
+                            clat,
+                            clon,
+                            tags,
+                            safe_ring,
+                        )?;
+                        stats.features_total += 1;
+                    }
+                }
                 stats.rels_assembled += 1;
             }
             assembler.cleanup(rel_id, manifest);
@@ -177,26 +217,12 @@ fn apply_way(
     let Some(ftype) = way.class else {
         return Ok(());
     };
-    // Skip if this way is an outer member of a polygon relation; the relation's
-    // assembled multipolygon already covers it. An INNER building is not covered:
-    // the assembler keeps outer rings only, so a tagged inner way (a shop inside
-    // a campus, a house in a courtyard) is its own object and must be emitted —
-    // the parent's own row defers to the buildings mapped inside it.
-    if way.is_outer_relation_member
-        && matches!(
-            ftype,
-            FeatureType::Building
-                | FeatureType::Industrial
-                | FeatureType::AirportArea
-                | FeatureType::AirportLine
-        )
-    {
-        return Ok(());
-    }
-
     let is_transport = matches!(ftype, FeatureType::Road | FeatureType::Railway);
     if is_transport {
         transport.observe_way(ftype.name(), &way.resolved_nodes);
+        transport
+            .controls
+            .link_way(way.id, ftype.name(), &way.resolved_nodes, spiller)?;
     }
     let mut piece_squares = BTreeSet::new();
     if ftype.is_linear() {
@@ -215,8 +241,19 @@ fn apply_way(
     } else if !coords.is_empty() {
         let (clat, clon) = centroid(&coords);
         let square = grid::square_of(clat, clon);
-        let ring = ring_for_spill(&coords, &mut stats.antimeridian_rings_omitted);
-        spiller.emit_polygon(&ftype, square, way.id, clat, clon, &way.tags, ring)?;
+        let ring = if ftype == FeatureType::Leisure && coords.len() == 2 {
+            Some(coords.as_slice())
+        } else {
+            ring_for_spill(&coords, &mut stats.antimeridian_rings_omitted)
+        };
+        if !relation_covers_kind(way.id, &ftype, manifest) {
+            spiller.emit_polygon(&ftype, square, way.id, "way", clat, clon, &way.tags, ring)?;
+        }
+        for (kind, tags) in &way.additional {
+            if !relation_covers_kind(way.id, kind, manifest) {
+                spiller.emit_polygon(kind, square, way.id, "way", clat, clon, tags, ring)?;
+            }
+        }
         stats.features_total += 1;
     }
     if matches!(ftype, FeatureType::Railway) {
@@ -225,6 +262,20 @@ fn apply_way(
         transport.write_railway_way(way.id, &way.resolved_nodes, &piece_squares)?;
     }
     Ok(())
+}
+
+/// Suppress only the family represented by an assembled outer relation. A
+/// building member can carry a separate power/sport feature absent on its parent.
+fn relation_covers_kind(id: i64, kind: &FeatureType, manifest: &RelationManifest) -> bool {
+    manifest.way_to_relations.get(&id).is_some_and(|parents| {
+        parents.iter().any(|(id, role)| {
+            (role.is_empty() || role == "outer")
+                && manifest
+                    .relations
+                    .get(id)
+                    .is_some_and(|relation| relation.feature_types.contains(kind))
+        })
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -262,11 +313,12 @@ fn emit_linear_way(
         let mid_lon = grid::geo::wrapped_longitude_midpoint(seg.0[1], seg.1[1]);
         let square = grid::square_of(mid_lat, mid_lon);
         let piece_tail = matches!(ftype, FeatureType::Road | FeatureType::Railway).then(|| {
-            transport::piece_tail(
+            let tail = transport::piece_tail(
                 resolved_nodes,
                 interval,
                 railway_metres.as_ref().map(|metres| metres.as_deref()),
-            )
+            );
+            format!("{}\t{tail}", transport::way_extent(resolved_nodes))
         });
         spiller.emit_segment(
             ftype,
@@ -296,7 +348,7 @@ fn emit_node(
     lon: f64,
 ) -> Result<u64> {
     let square = grid::square_of(lat, lon);
-    spiller.emit_polygon(&ftype, square, osm_id, lat, lon, tags, None)?;
+    spiller.emit_polygon(&ftype, square, osm_id, "node", lat, lon, tags, None)?;
     Ok(1)
 }
 
@@ -314,7 +366,7 @@ fn emit_settlement_node(
     let square = grid::square_of(lat, lon);
     match kind {
         classify::FeatureType::Leisure => {
-            spiller.emit_polygon(&kind, square, osm_id, lat, lon, tags, None)?;
+            spiller.emit_polygon(&kind, square, osm_id, "node", lat, lon, tags, None)?;
             Ok(1)
         }
         classify::FeatureType::Poi => match spill::poi_class_from_tags(tags) {
@@ -371,9 +423,163 @@ pub(crate) fn ring_for_spill<'a>(
     }
 }
 
+/// One tag set per outer part: every closed part keeps the facility's full
+/// nameplate byte-identical and carries its area fraction in
+/// `qm:facility_share`, so readers evaluate the facility's sound power once
+/// and share it by area. Sharing the MVA/MW itself cannot conserve power:
+/// the substation law is logarithmic (ten equal parts of 100 MVA read
+/// −4 dB), and a part holding the rated transformers would double-count the
+/// tag share of the others. Unclosed fragments keep the original tags (the
+/// spill drops them) and single parts stay byte-identical (share 1.0 is the
+/// reader default). Areas use the same snapped-grid shoelace as the stored
+/// `area_m2`; a zero total leaves the parts unshared rather than split.
+fn facility_part_tags(rings: &[Vec<[f64; 2]>], tags: &Tags) -> Vec<Tags> {
+    let closed: Vec<bool> = rings
+        .iter()
+        .map(|ring| crate::classify::is_a_closed_ring(ring))
+        .collect();
+    if closed.iter().filter(|&&c| c).count() < 2 {
+        return vec![tags.clone(); rings.len()];
+    }
+    let areas: Vec<f64> = rings
+        .iter()
+        .zip(closed.iter())
+        .map(|(ring, &is_closed)| {
+            if !is_closed {
+                return 0.0;
+            }
+            let snapped: Vec<(i32, i32)> = ring
+                .iter()
+                .map(|c| grid::lonlat_to_grid(c[1], c[0]))
+                .collect();
+            grid::poly::ring_area_m2(&snapped).unwrap_or(0.0)
+        })
+        .collect();
+    let total_area: f64 = areas.iter().sum();
+    if total_area <= 0.0 {
+        return vec![tags.clone(); rings.len()];
+    }
+    rings
+        .iter()
+        .zip(closed.iter())
+        .zip(areas.iter())
+        .map(|((_, &is_closed), &area)| {
+            if !is_closed {
+                return tags.clone();
+            }
+            let mut part = tags.clone();
+            part.insert(
+                square_store::osm_evidence::QM_FACILITY_SHARE.to_string(),
+                format!("{}", area / total_area),
+            );
+            part
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{centroid, ring_for_spill};
+    #[test]
+    fn outer_building_keeps_its_independent_source_family() {
+        use crate::classify::{FeatureType, Tags};
+        use crate::relations::{RelationInfo, RelationManifest};
+        let manifest = RelationManifest {
+            way_to_relations: [
+                (1, vec![(2, "outer".to_owned())]),
+                (3, vec![(2, "inner".to_owned())]),
+            ]
+            .into(),
+            relations: [(
+                2,
+                RelationInfo {
+                    feature_types: vec![FeatureType::Building],
+                    tags: Tags::new(),
+                    member_ways: vec![],
+                },
+            )]
+            .into(),
+        };
+        assert!(super::relation_covers_kind(
+            1,
+            &FeatureType::Building,
+            &manifest
+        ));
+        assert!(!super::relation_covers_kind(
+            1,
+            &FeatureType::Industrial,
+            &manifest
+        ));
+        assert!(!super::relation_covers_kind(
+            1,
+            &FeatureType::Leisure,
+            &manifest
+        ));
+        assert!(!super::relation_covers_kind(
+            3,
+            &FeatureType::Building,
+            &manifest
+        ));
+    }
+
+    use super::{centroid, facility_part_tags, ring_for_spill};
+
+    #[test]
+    fn multipolygon_parts_keep_the_full_nameplate_and_carry_their_area_share() {
+        use crate::classify::Tags;
+        use std::collections::BTreeMap;
+        // Two equal closed halves plus one unclosed fragment: the halves keep
+        // the full 24 MW nameplate and carry 0.5 each, the fragment keeps the
+        // original tags without a share (the spill drops it) and a single
+        // part stays byte-identical.
+        let half = |lon0: f64| {
+            vec![
+                [50.0, lon0],
+                [50.0, lon0 + 0.0001],
+                [50.0001, lon0 + 0.0001],
+                [50.0001, lon0],
+                [50.0, lon0],
+            ]
+        };
+        let tags: Tags = [("plant:output:electricity".to_string(), "24 MW".to_string())].into();
+        let share = |part: &Tags| {
+            let btree: BTreeMap<String, String> =
+                part.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            square_store::osm_evidence::facility_share(&btree)
+        };
+        let parts = facility_part_tags(&[half(14.0), half(14.0002)], &tags);
+        assert_eq!(parts.len(), 2);
+        for part in &parts {
+            assert_eq!(part.get("plant:output:electricity").unwrap(), "24 MW");
+            assert!((share(part) - 0.5).abs() < 1e-9, "{}", share(part));
+        }
+        let double = vec![
+            [50.0, 14.0],
+            [50.0, 14.0002],
+            [50.0001, 14.0002],
+            [50.0001, 14.0],
+            [50.0, 14.0],
+        ];
+        let open = vec![[50.0, 14.0], [50.0, 14.0001]];
+        let parts = facility_part_tags(&[half(14.0), double, open], &tags);
+        // The double-area part carries twice the single-area part (1/3 +
+        // 2/3, within snapped-grid rounding: the two rings snap to
+        // different cell boundaries, so the ratio is approximate).
+        assert!(
+            (share(&parts[0]) - 1.0 / 3.0).abs() < 1e-3,
+            "{}",
+            share(&parts[0])
+        );
+        assert!(
+            (share(&parts[1]) - 2.0 / 3.0).abs() < 1e-3,
+            "{}",
+            share(&parts[1])
+        );
+        assert_eq!(parts[2].get("plant:output:electricity").unwrap(), "24 MW");
+        assert!(!parts[2].contains_key(square_store::osm_evidence::QM_FACILITY_SHARE));
+        let single = facility_part_tags(&[half(14.0)], &tags);
+        assert_eq!(single[0].get("plant:output:electricity").unwrap(), "24 MW");
+        assert!(!single[0].contains_key(square_store::osm_evidence::QM_FACILITY_SHARE));
+    }
 
     #[test]
     fn antimeridian_ring_keeps_its_centroid_but_not_unsafe_geometry() {

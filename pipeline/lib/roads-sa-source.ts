@@ -1,5 +1,6 @@
 /** Load and match Saudi Arabia's pinned MoT counts, Riyadh PMS and national atlas. */
 
+import { withholdsCountPoint } from './count-holdout.js'
 import { roadObservation } from './road-observation.js'
 import { pinnedRoadObservation, buildRoadLineVertexGrid, loadPinnedRoadLines, nearestRoadLine, type PinnedRoadLine } from './pinned-road-lines.js'
 import { parse } from 'csv-parse/sync'
@@ -37,6 +38,7 @@ export function parseSaudiMotSource(csv: string): SaudiMotSource {
     const aadt = Number(String(row['24 Hour Total'] ?? '').replace(/[,\"]/g, ''))
     if (!roadRef || !Number.isFinite(latitude) || !Number.isFinite(longitude) ||
         !Number.isFinite(aadt) || aadt <= 0) { unavailableTrafficRows++; continue }
+    if (withholdsCountPoint(latitude, longitude)) continue
     const aggregate = aggregates.get(roadRef) ?? { sum: 0, count: 0 }
     aggregate.sum += aadt; aggregate.count++
     aggregates.set(roadRef, aggregate); stations++

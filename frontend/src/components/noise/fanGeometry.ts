@@ -7,9 +7,8 @@
  */
 import type { SegmentTrace } from '../../types/noise'
 
-/** What blocks one fan slice. Vegetation is NOT here: the engine resolves
- * forest once on the characteristic ray, so per-slice forest state does not
- * exist — coloring it would invent data. */
+/** What blocks one fan slice. Vegetation is NOT here: the fan trace carries
+ * no per-node forest effect — coloring it would invent data. */
 export type FanSliceKind = 'clear' | 'building' | 'terrain' | 'mixed'
 
 /** A slice counts as terrain-shadowed at this 1 kHz A_terrain. Below it the
@@ -60,8 +59,8 @@ const M_PER_DEG_LON_EQ = 111_320.0
 
 const DEG = Math.PI / 180
 
-/** Receiver-centred ray∩segment solve, mirroring SegFan::at (seg_sampling.rs):
- * the point on the segment seen at absolute azimuth `az`. Null when the ray
+/** Receiver-centred ray∩segment solve: the point on the segment seen at
+ * absolute azimuth `az`. Null when the ray
  * is parallel to the segment (meets it at infinity — never invent a point),
  * misses the segment line, or lands within a metre of the receiver. */
 function pointOnSegmentAt(
@@ -121,10 +120,9 @@ export function segmentFanHighlight(trace: SegmentTrace): GeoJSON.FeatureCollect
   if (Math.hypot(cx, cy) < 1.0) return null
   const cpAz = Math.atan2(cy, cx)
 
-  // Interval degrees are offsets from the characteristic-ray azimuth —
-  // the engine stores them that way (arc_screening.rs FanTrace::push:
-  // `from_deg: (start - cp_azimuth).to_degrees()`), so each boundary maps
-  // to an absolute azimuth by adding cpAz.
+  // Interval degrees are horizontal azimuth offsets from the closest point's
+  // ray (engine line_piece.rs `fan_trace`), so each boundary maps to an
+  // absolute azimuth by adding cpAz.
   const features: GeoJSON.Feature[] = []
   const ordered = [...fan.intervals].sort((a, b) => a.from_deg - b.from_deg)
   for (const interval of ordered) {

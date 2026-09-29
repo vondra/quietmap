@@ -1,6 +1,7 @@
 /** Enrich z9 Italian roads with Anas TGM point measurements. */
 
 import { shouldOverwrite } from './lib/provenance.js'
+import { declaredRoadCoverage } from './lib/sources.js'
 import { runRoadLoaderCli, type RoadLoaderArguments } from './lib/road-loader-cli.js'
 import {
   loadItalianTgmSource, normalizeItalianOsmRef, type ItalianTgmStation,
@@ -13,6 +14,7 @@ import { writeNationalRoadSquares } from './lib/square-pool.js'
 const SOURCE_ID = SOURCE_ID_IT_NATIONAL_ROADS
 const ITALY_BBOX = [35.5, 6.6, 47.1, 18.6] as const
 const MAXIMUM_MATCH_DISTANCE_M = 30_000
+const COVERED_ROAD_CLASSES = declaredRoadCoverage(SOURCE_ID)
 
 export function indexItalianTgm(
   stations: readonly ItalianTgmStation[],
@@ -72,8 +74,8 @@ export async function enrichItalianRoads(
         return station ? { countBasis: station.countBasis, observationId: station.observationId, ...splitItalianTgm(station.total, row.roadClass), sourceId: SOURCE_ID } : null
       },
       undefined,
-      undefined,
-      { sourceIds: [SOURCE_ID], when: row => match(row) === null },
+      COVERED_ROAD_CLASSES,
+      { sourceIds: [SOURCE_ID], when: row => !COVERED_ROAD_CLASSES.has(row.roadClass) || match(row) === null },
     ))
 }
 

@@ -8,6 +8,9 @@
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, HashMap};
+use std::hash::BuildHasher;
+
+use crate::fxhash::FxHashMap;
 
 use rayon::prelude::*;
 
@@ -20,7 +23,7 @@ use crate::types::{
 };
 
 mod chords;
-pub use chords::SPLIT_PIECE;
+pub use chords::{CHORD_START, SPLIT_PIECE};
 mod row;
 
 use chords::{ChordCandidate, PieceEval};
@@ -63,21 +66,26 @@ const AIRBORNE_RANK_W: [f64; 3] = [
     80.0 / 28800.0,
 ];
 
-/// One entry of the bounded top-K airborne trace heap. Ranks by
-/// `rank_key` (linear, monotone with `received_lden.full`) using
-/// `f64::total_cmp` so heap pop/peek give a total order even with
-/// NaN edge cases.
-struct ScoredTrace {
+/// One entry of the bounded top-K airborne trace heap: rank + input position +
+/// row address. The trace is built only for global survivors at merge — each
+/// chunk heap used to build a trace per insertion (150 fills + replacements)
+/// and the merge dropped all but 150 of them. Re-evaluating the survivors is
+/// `trace_cap` deterministic kernel calls; the kept set is unchanged (same
+/// total order) and each trace is bit-identical (same pure functions).
+#[derive(Clone, Copy)]
+struct ScoredStub {
     rank_key: f64,
     /// Input row position: the earlier candidate outranks an equal
     /// `rank_key`, so the kept set is a total order over the input and
     /// identical for the serial walk and any chunking.
     order: u64,
-    trace: SegmentTrace,
+    /// Global batch index and row within it: the merge re-evaluates the row.
+    batch: usize,
+    row: usize,
 }
 
-impl ScoredTrace {
-    fn outranks(rank_key: f64, order: u64, weakest: &ScoredTrace) -> bool {
+impl ScoredStub {
+    fn outranks(rank_key: f64, order: u64, weakest: &ScoredStub) -> bool {
         match rank_key.total_cmp(&weakest.rank_key) {
             Ordering::Greater => true,
             Ordering::Less => false,
@@ -86,18 +94,18 @@ impl ScoredTrace {
     }
 }
 
-impl PartialEq for ScoredTrace {
+impl PartialEq for ScoredStub {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other).is_eq()
     }
 }
-impl Eq for ScoredTrace {}
-impl PartialOrd for ScoredTrace {
+impl Eq for ScoredStub {}
+impl PartialOrd for ScoredStub {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-impl Ord for ScoredTrace {
+impl Ord for ScoredStub {
     fn cmp(&self, other: &Self) -> Ordering {
         self.rank_key
             .total_cmp(&other.rank_key)
@@ -129,18 +137,16 @@ pub fn scatter(
     receiver: &Receiver,
     batches: &[AirborneSegmentBatch<'_>],
     n_days_f: f64,
-    // GA hybrid per-class weight LUT.
-    // Each row's energy AND its count (`flight_weight`) are multiplied by
-    // `class_weights.get(class)` so a GA one-off divides by `ga_n_days`, not
-    // `n_days`. Uniform (all-1.0) for non-hybrid extracts.
-    class_weights: &aircraft::ClassWeights,
+    // Each row's energy and its flight's count are multiplied by the row's
+    // provenance weight, so a secondary-only row divides by the increment days.
+    weights: &aircraft::ProvenanceWeights,
     horizon: &aircraft::ReceiverHorizon,
     buildings: Option<&aircraft::BuildingHorizon>,
     trace_cap: usize,
     traces: Option<&mut TraceCollector>,
-) -> HashMap<u64, FlightAccum> {
+) -> (FxHashMap<u64, FlightAccum>, AirborneScatterStats) {
     let want_traces = traces.is_some();
-    let ctx = ScatterContext::new(receiver, n_days_f, class_weights, horizon, buildings);
+    let ctx = ScatterContext::new(receiver, n_days_f, weights, horizon, buildings);
     let chunks: Vec<ChunkScatter> = chunk_batches(batches)
         .into_par_iter()
         .map(|(range, first_row)| {
@@ -162,8 +168,15 @@ pub fn scatter(
 /// summation order are a pure function of the input: the same click gives
 /// the same bytes on any machine or pool. Below a few thousand rows the
 /// per-chunk `HashMap` + heap allocation and the merge cost more than the
-/// split saves, so sparse z14 batches are grouped up to this size.
-const SCATTER_CHUNK_ROWS: usize = 4_096;
+/// split saves, so sparse z14 batches are grouped up to this size. 16 384
+/// (4× the old 4 096): a flight's ~150 sub-segments span dozens of batches,
+/// so narrow chunks only multiply duplicate accumulators (one `String`
+/// allocation and free per duplicate at merge) plus candidate stubs for the
+/// global top-K select; wider chunks halve both while keeping hundreds of
+/// tasks per popup. Trace/peaks/counts are chunking-independent (proven at
+/// the select);
+/// energies re-associate within the parity test's 1e-9.
+const SCATTER_CHUNK_ROWS: usize = 16_384;
 
 /// Consecutive batch runs holding at least [`SCATTER_CHUNK_ROWS`] rows (the
 /// last run may be shorter), each with the global index of its first row.
@@ -189,15 +202,27 @@ fn chunk_batches(batches: &[AirborneSegmentBatch<'_>]) -> Vec<(std::ops::Range<u
 /// One chunk's private accumulators. Every field recombines associatively
 /// (sum / max / min / count), which is what makes the split legal.
 struct ChunkScatter {
-    flights: HashMap<u64, FlightAccum>,
+    flights: FxHashMap<u64, FlightAccum>,
     /// Bounded top-K heap over this chunk's unsplit rows only. Ranks form a
     /// total order (rank, then input position), so a trace in the global
     /// top-K is inside its own chunk's top-K and merging the heaps drops
-    /// nothing.
-    heap: BinaryHeap<Reverse<ScoredTrace>>,
+    /// nothing. Stubs, not traces: the merge builds the survivors.
+    heap: BinaryHeap<Reverse<ScoredStub>>,
     above_cutoff: u32,
     /// Split pieces in row order; their chords are only known after the merge.
     pieces: Vec<PieceEval>,
+    /// Rows the Doc 29 kernel admitted (split pieces included), and unsplit
+    /// rows that also cleared the 20 dB event floor into their flight's
+    /// received energy (the `POPUP_TIMING` evaluated-vs-considered counts).
+    n_eval: u64,
+    n_received: u64,
+}
+
+/// Evaluated-vs-considered counts of one [`scatter`] call.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AirborneScatterStats {
+    pub n_eval: u64,
+    pub n_received: u64,
 }
 
 /// Merge the chunk tables in chunk order, fold the split chords, and, when
@@ -209,19 +234,25 @@ fn merge_chunks(
     chunks: Vec<ChunkScatter>,
     trace_cap: usize,
     traces: Option<&mut TraceCollector>,
-) -> HashMap<u64, FlightAccum> {
+) -> (FxHashMap<u64, FlightAccum>, AirborneScatterStats) {
     use std::collections::hash_map::Entry;
 
     let mut chunks = chunks.into_iter();
     let Some(first) = chunks.next() else {
-        return HashMap::new();
+        return (FxHashMap::default(), AirborneScatterStats::default());
     };
     let mut flights = first.flights;
     let mut above_cutoff = first.above_cutoff;
     let mut pieces = first.pieces;
+    let mut stats = AirborneScatterStats {
+        n_eval: first.n_eval,
+        n_received: first.n_received,
+    };
+    let timing_on = std::env::var("POPUP_TIMING").as_deref() == Ok("1");
+    let t_flights = timing_on.then(std::time::Instant::now);
     // `into_vec` is the heap's backing array: arbitrary order, but a pure
     // function of this chunk's insertion sequence, hence run-to-run stable.
-    let mut scored: Vec<ScoredTrace> = first.heap.into_vec().into_iter().map(|r| r.0).collect();
+    let mut scored: Vec<ScoredStub> = first.heap.into_vec().into_iter().map(|r| r.0).collect();
     for chunk in chunks {
         // The per-key f64 order is decided by chunk order, not by this
         // walk: each chunk holds at most one accumulator per flight id.
@@ -234,27 +265,37 @@ fn merge_chunks(
             }
         }
         above_cutoff = above_cutoff.saturating_add(chunk.above_cutoff);
+        stats.n_eval += chunk.n_eval;
+        stats.n_received += chunk.n_received;
         scored.extend(chunk.heap.into_vec().into_iter().map(|r| r.0));
         pieces.extend(chunk.pieces);
     }
+    let t_fold = timing_on.then(std::time::Instant::now);
     let want_traces = traces.is_some() && trace_cap > 0;
     let (chords, chord_above_cutoff) =
         chords::fold_chords(&pieces, batches, &mut flights, want_traces);
     above_cutoff = above_cutoff.saturating_add(chord_above_cutoff);
+    let n_pieces = pieces.len();
+    let n_chords = chords.len();
+    let n_scored = scored.len();
 
+    let t_select = timing_on.then(std::time::Instant::now);
     if let Some(t) = traces {
         // One total order (rank, then input position) over unsplit rows and
         // whole chords: the exact global top-K the serial heap keeps.
+        // Chunking-independent: a global top-K row is top-K in its own chunk
+        // (else 150 chunk-mates would outrank it globally), so the union of
+        // chunk heaps always covers the global set however chunks split.
         // `apply_segment_top_k_with_cap` (source-reader) re-sorts by
         // `received_lden.full` afterwards because road / rail / cruise
         // traces are mixed in.
         enum Candidate {
-            Row(Box<SegmentTrace>),
+            Row(ScoredStub),
             Chord(ChordCandidate),
         }
         let mut candidates: Vec<(f64, u64, Candidate)> = scored
             .into_iter()
-            .map(|s| (s.rank_key, s.order, Candidate::Row(Box::new(s.trace))))
+            .map(|s| (s.rank_key, s.order, Candidate::Row(s)))
             .chain(
                 chords
                     .into_iter()
@@ -265,17 +306,49 @@ fn merge_chunks(
             candidates.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
             candidates.truncate(trace_cap);
         }
+        let t_mat = timing_on.then(std::time::Instant::now);
         t.airborne_above_cutoff = t.airborne_above_cutoff.saturating_add(above_cutoff);
         for (_, _, candidate) in candidates {
             match candidate {
-                Candidate::Row(trace) => t.segments.push(*trace),
+                Candidate::Row(stub) => t.segments.push(materialize_stub(ctx, batches, &stub)),
                 Candidate::Chord(chord) => t
                     .segments
                     .extend(chords::chord_traces(ctx, batches, &pieces, &chord)),
             }
         }
+        if timing_on {
+            let ms = |t: Option<std::time::Instant>| {
+                t.map(|t| t.elapsed().as_secs_f64() * 1000.0).unwrap_or(0.0)
+            };
+            eprintln!(
+                "ac-v6-merge flights={:.0}ms fold={:.0}ms select={:.0}ms mat={:.0}ms (n_scored={} n_pieces={} n_chords={} n_seg={})",
+                ms(t_flights) - ms(t_fold),
+                ms(t_fold) - ms(t_select),
+                ms(t_select) - ms(t_mat),
+                ms(t_mat),
+                n_scored,
+                n_pieces,
+                n_chords,
+                t.segments.len(),
+            );
+        }
     }
-    flights
+    (flights, stats)
+}
+
+/// Re-evaluate a surviving stub's row and build its trace. `evaluate_row` is
+/// pure over (context, batch, row), so the re-evaluation is bit-identical to
+/// the scatter-time one; the `expect` documents that a heap-admitted row
+/// always re-admits (same gates, same inputs).
+fn materialize_stub(
+    ctx: &ScatterContext<'_>,
+    batches: &[AirborneSegmentBatch<'_>],
+    stub: &ScoredStub,
+) -> SegmentTrace {
+    let batch = &batches[stub.batch];
+    let row = evaluate_row::<true>(ctx, batch, stub.row)
+        .expect("a heap-admitted row re-admits on re-evaluation");
+    build_row_trace(ctx, batch, stub.row, &row, stub.order)
 }
 
 /// The Doc 29 kernel loop over one contiguous batch run starting at global
@@ -290,16 +363,20 @@ fn scatter_chunk(
     trace_cap: usize,
     want_traces: bool,
 ) -> ChunkScatter {
-    let mut flights: HashMap<u64, FlightAccum> = HashMap::new();
+    // Grown, never pre-sized: one chunk's map is small, but thousands of
+    // chunks are alive at once and 6 concurrent popups share 8 GB — per-chunk
+    // capacity multiplies into gigabytes of transient (OOM-killed 2026-09-28).
+    // The merge sorts by key, so growth never leaks into output order.
+    let mut flights: FxHashMap<u64, FlightAccum> = FxHashMap::default();
     let mut above_cutoff: u32 = 0;
     let mut pieces = Vec::new();
+    let mut n_eval: u64 = 0;
+    let mut n_received: u64 = 0;
     // Bounded top-K min-heap (size `trace_cap`). We rank by `rank_key`
     // (monotone with received_lden.full) and use `Reverse` so the heap
-    // root is the *weakest* kept trace — pop+push replaces it when a
-    // stronger candidate arrives. Avoids ~4.4 M `SegmentTrace`
-    // allocations at LKPR (only ~150 + a few hundred replacements
-    // actually allocate; the rest skip the trace builder entirely).
-    let mut heap: BinaryHeap<Reverse<ScoredTrace>> = if want_traces && trace_cap > 0 {
+    // root is the *weakest* kept stub — pop+push replaces it when a
+    // stronger candidate arrives. Stubs only: no trace is built here.
+    let mut heap: BinaryHeap<Reverse<ScoredStub>> = if want_traces && trace_cap > 0 {
         BinaryHeap::with_capacity(trace_cap)
     } else {
         BinaryHeap::new()
@@ -312,6 +389,7 @@ fn scatter_chunk(
             row_order += 1;
             if batch.flags[i] & chords::SPLIT_PIECE != 0 {
                 if let Some(row) = evaluate_row::<false>(ctx, batch, i) {
+                    n_eval += 1;
                     pieces.push(PieceEval::new(
                         first_batch + batch_offset,
                         i,
@@ -325,7 +403,8 @@ fn scatter_chunk(
             let Some(row) = evaluate_row::<true>(ctx, batch, i) else {
                 continue;
             };
-            let acc = flight_accumulator(&mut flights, batch, i, row.class_weight);
+            n_eval += 1;
+            let acc = flight_accumulator(&mut flights, batch, i, row.provenance_weight);
             // The retained variants deliberately run before the received
             // floor so a strong aircraft hidden by a terrain/building edge
             // still contributes to `periods_free` and its effect deltas.
@@ -333,6 +412,7 @@ fn scatter_chunk(
             if row.below_event_floor() {
                 continue;
             }
+            n_received += 1;
             row.apply_received(acc);
 
             if want_traces && row.lmax >= AIRBORNE_TRACE_CUTOFF_DB {
@@ -342,24 +422,25 @@ fn scatter_chunk(
 
                 if trace_cap > 0 {
                     let rank_key = row.energy * AIRBORNE_RANK_W[row.period];
-                    // Skip the trace builder unless this sub-seg can
-                    // displace the weakest kept trace.
-                    let should_build = heap.len() < trace_cap
+                    // Skip the heap unless this sub-seg can displace the
+                    // weakest kept stub; the trace is built at merge.
+                    let should_push = heap.len() < trace_cap
                         || heap
                             .peek()
-                            .map(|w| ScoredTrace::outranks(rank_key, order, &w.0))
+                            .map(|w| ScoredStub::outranks(rank_key, order, &w.0))
                             .unwrap_or(true);
-                    if should_build {
-                        let scored = ScoredTrace {
+                    if should_push {
+                        let stub = ScoredStub {
                             rank_key,
                             order,
-                            trace: build_row_trace(ctx, batch, i, &row),
+                            batch: first_batch + batch_offset,
+                            row: i,
                         };
                         if heap.len() < trace_cap {
-                            heap.push(Reverse(scored));
+                            heap.push(Reverse(stub));
                         } else {
                             heap.pop();
-                            heap.push(Reverse(scored));
+                            heap.push(Reverse(stub));
                         }
                     }
                 }
@@ -371,6 +452,8 @@ fn scatter_chunk(
         heap,
         above_cutoff,
         pieces,
+        n_eval,
+        n_received,
     }
 }
 
@@ -380,15 +463,15 @@ fn scatter_chunk(
 /// separate `cruise_flights` table, whose synth-fid namespace is disjoint.
 #[allow(clippy::too_many_arguments)]
 pub fn build_detail(
-    flights: &HashMap<u64, FlightAccum>,
-    cruise_flights: &HashMap<u64, FlightAccum>,
-    cruise_transit_count: usize,
-    top_flight_candidates: &HashMap<u64, TopFlightCandidate>,
+    flights: &HashMap<u64, FlightAccum, impl BuildHasher>,
+    cruise_flights: &HashMap<u64, FlightAccum, impl BuildHasher>,
+    // Real cruise transits at this receiver, each at its provenance weight.
+    cruise_transits_weighted: f64,
+    top_flight_candidates: &HashMap<u64, TopFlightCandidate, impl BuildHasher>,
     cruise_band_stats: &[BandStats; 3],
     n_days_f: f64,
-    // GA-class window for the popup's per-class "Data" row;
-    // equals `n_days_f` for non-hybrid extracts.
-    ga_n_days_f: f64,
+    // Increment day count for the popup's "Data" row.
+    increment_days: u32,
 ) -> (
     NoisePeriods,
     NoisePeriods,
@@ -546,7 +629,7 @@ pub fn build_detail(
     // makes that delta legible. (Below-threshold cruise transits are
     // included here but don't enter the bands — the row is therefore
     // an upper bound on the cruise contribution, not an exact remainder.)
-    let cruise_transits_per_day = cruise_transit_count as f64 / n_days_f;
+    let cruise_transits_per_day = cruise_transits_weighted / n_days_f;
 
     let total_airborne_energy: f64 = airborne_energy.iter().sum();
     let top_flights =
@@ -590,7 +673,7 @@ pub fn build_detail(
         top_day_date,
         top_flight_energy_share: round3(top_flight_energy_share),
         sample_days: n_days_f as u32,
-        ga_sample_days: ga_n_days_f as u32,
+        increment_sample_days: increment_days,
         top_flights,
     };
 
@@ -604,7 +687,7 @@ pub fn build_detail(
 /// real fids and per-fid energy split would be artificial.
 fn build_top_flights(
     flights_by_id: &[(&u64, &FlightAccum)],
-    cruise_candidates: &HashMap<u64, TopFlightCandidate>,
+    cruise_candidates: &HashMap<u64, TopFlightCandidate, impl BuildHasher>,
     total_airborne_energy: f64,
 ) -> Vec<AircraftTopFlight> {
     use std::cmp::Ordering;

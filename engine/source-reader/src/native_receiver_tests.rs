@@ -1,4 +1,4 @@
-//! Actual native popup keeps clicked metadata and accumulates airborne rows from every owner square.
+//! Actual native popup answers a building click at its stored façade receiver and accumulates airborne rows from every owner square.
 
 use aircraft_extract::{arrow_io, flight::FlightSegment};
 use raster_reader::channel::Channel;
@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::structure_test_fixture as fx;
 
-pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root: &Path) {
+pub(super) fn building_popup_uses_its_stored_facade_receiver_and_keeps_aircraft_multiplicity(root: &Path) {
     let lat = -2.0 / grid::geo::M_PER_DEG_LAT;
     let lon = 0.35;
     let north_wall = 0.5 / grid::geo::M_PER_DEG_LAT;
@@ -23,18 +23,38 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         ]),
         centroid_lonlat: Some((lon, -0.0005)),
         height_m: 12,
-        height_tier: 0,
+        height_source: 0,
         envelope_class: 1,
         osm_id: Some(901),
         building_type: Some(1),
         area_m2: Some(1000.0),
         ..Default::default()
     };
-    fx::write_square_structures(root, click_square, &[house]);
+    let structures = fx::write_square_structures(root, click_square, &[house]);
     let set = crate::structure_store::load_obstacle_set(root, lat, lon).unwrap();
-    let (facade_lat, facade_lon, winner) =
-        crate::structure_store::locate_facade_receiver(&set, lat, lon);
-    assert!(winner.is_some());
+    let building = set.enclosed_footprint_at(lat, lon).expect("the click is inside the house");
+    let (_, rings) = crate::structure_store::enclosed_building_footprints(
+        &std::fs::read(&structures).unwrap(),
+        &structures,
+    )
+    .unwrap()
+    .remove(0);
+    let receivers = noise_compute::facade_receivers::exposed_facade_receivers(&rings, &set);
+    // The stage's choice, here the north-wall receiver nearest the click: it
+    // stands in the next square, so the popup must load sources around it.
+    let chosen = (0..receivers.len())
+        .filter(|&i| receivers[i].latitude_longitude().0 > 0.0)
+        .min_by(|&a, &b| {
+            let off = |i: usize| (receivers[i].latitude_longitude().1 - lon).abs();
+            off(a).total_cmp(&off(b))
+        })
+        .unwrap();
+    let click_dir = fx::square_dir(root, click_square);
+    fx::write_facade_exposure(
+        &click_dir,
+        &[fx::facade_exposure_row(building.key.id, &receivers, Some(chosen))],
+    );
+    let (facade_lat, facade_lon) = receivers[chosen].latitude_longitude();
     let facade_square = grid::square_of(facade_lat, facade_lon);
     assert_ne!(facade_square, click_square);
     for channel in Channel::ALL {
@@ -71,25 +91,53 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         agl_avg_m: 1000.0,
         start_elev_m: 0.0,
         end_elev_m: 0.0,
+        departure_field_elev_m: f32::NAN,
     };
     let facade_dir = fx::square_dir(root, facade_square);
     std::fs::create_dir_all(&facade_dir).unwrap();
     fx::write_square_structures(root, facade_square, &[]);
     let path = facade_dir.join("airborne.arrow");
-    arrow_io::write_airborne(&path, std::slice::from_ref(&row), 12, 0).unwrap();
+    arrow_io::write_airborne(&path, std::slice::from_ref(&row), &fx::sampling_window(12, 0)).unwrap();
     let popup = |lat, lon| -> Value {
         super::reset_store(root);
         let mut value: Value =
-            serde_json::from_str(&crate::query_noise_at_point(lat, lon).unwrap()).unwrap();
+            serde_json::from_str(&crate::query_noise_at_point(lat, lon, None).unwrap()).unwrap();
         value.as_object_mut().unwrap().remove("timings");
         value
     };
     let inside = popup(lat, lon);
     let outside = popup(facade_lat, facade_lon);
     assert_eq!(inside["center"], serde_json::json!([lat, lon]));
-    assert_eq!(inside["envelope_class"], "residential");
-    let outdoor_total = outside["total_lden"].as_f64().unwrap();
-    assert_eq!(inside["facade_lden"], (outdoor_total * 10.0).round() / 10.0);
+    assert_eq!(
+        inside["building_exposure"],
+        serde_json::json!({
+            "receiver": [facade_lat, facade_lon],
+            "facade_bearing_deg": 0.0,
+            "facade_points": receivers.len(),
+        })
+    );
+    assert!(outside.get("building_exposure").is_none());
+    for removed in ["envelope_class", "envelope_delta_db", "facade_lden", "indoor_lden_tilted"] {
+        assert!(inside.get(removed).is_none(), "{removed} left the popup");
+    }
+    let building_lden = |value: &Value| {
+        value["top_contributors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|source| source["source_type"] == "building" && source["osm_id"] == 901)
+            .unwrap()["received_lden"]
+            .as_f64()
+            .unwrap()
+    };
+    // Three of the nine density probes at the north wall fall inside the house:
+    // an outdoor point there gets 1.5 dB, its own façade's receiver none (§2.8).
+    assert!(
+        (building_lden(&outside) - building_lden(&inside) - 1.5).abs() < 0.051,
+        "own-façade bonus: outside {} inside {}",
+        building_lden(&outside),
+        building_lden(&inside)
+    );
     let building_distance = |value: &Value| {
         value["top_contributors"]
             .as_array()
@@ -104,8 +152,32 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     assert_eq!(
         building_distance(&inside),
         building_distance(&outside),
-        "moving an indoor receiver must update source distances before screening"
+        "a building click must measure source distances from its façade receiver"
     );
+    // The answer names the point it computed: the facade point for an indoor click, 4 m up.
+    let receiver = |value: &Value| {
+        let receiver = &value["receiver"];
+        [&receiver["lat"], &receiver["lng"], &receiver["height_m"]].map(|v| v.as_f64().unwrap())
+    };
+    let default_height = noise_compute::constants::DEFAULT_RECEIVER_HEIGHT;
+    assert_eq!(receiver(&inside), [facade_lat, facade_lon, default_height]);
+    assert_eq!(receiver(&outside), [facade_lat, facade_lon, default_height]);
+    // A microphone height is a runtime receiver choice: an explicit 4 m is the default answer,
+    // another height moves every layer's geometry, and a height under the floor is refused.
+    let popup_at_height = |height: f64| -> Value {
+        super::reset_store(root);
+        let mut value: Value = serde_json::from_str(
+            &crate::query_noise_at_point(facade_lat, facade_lon, Some(height)).unwrap(),
+        )
+        .unwrap();
+        value.as_object_mut().unwrap().remove("timings");
+        value
+    };
+    assert_eq!(popup_at_height(default_height), outside);
+    let low = popup_at_height(1.2);
+    assert_eq!(receiver(&low), [facade_lat, facade_lon, 1.2]);
+    assert_ne!(low["total_lden"], outside["total_lden"]);
+    assert!(crate::query_noise_at_point(facade_lat, facade_lon, Some(0.4)).is_err());
     let airborne = |value: &Value| {
         value["sources"]
             .as_array()
@@ -123,10 +195,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     // is a second observation for this receiver, not a copy to ignore.
     arrow_io::write_airborne(
         &fx::square_dir(root, click_square).join("airborne.arrow"),
-        std::slice::from_ref(&row),
-        12,
-        0,
-    )
+        std::slice::from_ref(&row), &fx::sampling_window(12, 0))
     .unwrap();
     let neighbours = airborne(&popup(facade_lat, facade_lon));
     assert_eq!(neighbours["segment_count"].as_u64().unwrap(), 2);
@@ -136,7 +205,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         "second owner square increase: {increase}"
     );
     // Two original observations remain two energy contributions, even when identical.
-    arrow_io::write_airborne(&path, &[row.clone(), row.clone()], 12, 0).unwrap();
+    arrow_io::write_airborne(&path, &[row.clone(), row.clone()], &fx::sampling_window(12, 0)).unwrap();
     let tripled = airborne(&popup(facade_lat, facade_lon));
     assert_eq!(tripled["segment_count"].as_u64().unwrap(), 3);
     let increase = tripled["lden"].as_f64().unwrap() - first["lden"].as_f64().unwrap();
@@ -164,7 +233,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         airborne(&expected_north)["lden"]
     );
     let mut warm_north: Value =
-        serde_json::from_str(&crate::query_noise_at_point(north.0, north.1).unwrap()).unwrap();
+        serde_json::from_str(&crate::query_noise_at_point(north.0, north.1, None).unwrap()).unwrap();
     warm_north.as_object_mut().unwrap().remove("timings");
     assert_eq!(
         warm_north, expected_north,
@@ -172,7 +241,7 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
     );
     // Owner squares disagreeing on the sampling windows cost the visitor the aircraft layer,
     // named in the answer; the building keeps its level and the popup is never refused.
-    arrow_io::write_airborne(&path, std::slice::from_ref(&row), 12, 5).unwrap();
+    arrow_io::write_airborne(&path, std::slice::from_ref(&row), &fx::sampling_window(12, 5)).unwrap();
     let without_aircraft = popup(facade_lat, facade_lon);
     assert_eq!(
         without_aircraft["unavailable_layers"],
@@ -186,10 +255,17 @@ pub(super) fn facade_popup_preserves_aircraft_and_observation_multiplicity(root:
         crate::STORE.read().unwrap().squares.is_empty(),
         "a square served with a fault is reloaded on the next click"
     );
+    // A release without the stage's file refuses a building click, never answers
+    // it from another point; outdoor clicks are unaffected.
+    std::fs::remove_file(click_dir.join("facade_exposure.arrow")).unwrap();
+    super::reset_store(root);
+    let missing = crate::query_noise_at_point(lat, lon, None).unwrap_err();
+    assert!(missing.to_string().contains("building exposure missing"), "{missing}");
+    assert!(crate::query_noise_at_point(facade_lat, facade_lon, None).is_ok());
     // The screening table is never dropped: a stale stamp refuses the popup end to end,
     // even though its paired index still maps.
-    arrow_io::write_airborne(&path, std::slice::from_ref(&row), 12, 0).unwrap();
+    arrow_io::write_airborne(&path, std::slice::from_ref(&row), &fx::sampling_window(12, 0)).unwrap();
     fx::write_structure_file(&facade_dir.join("structures.arrow"), &[], false);
-    let refused = crate::query_noise_at_point(facade_lat, facade_lon).unwrap_err();
+    let refused = crate::query_noise_at_point(facade_lat, facade_lon, None).unwrap_err();
     assert!(refused.to_string().contains("structures_contract mismatch"), "{refused}");
 }

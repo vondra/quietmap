@@ -5,7 +5,7 @@
 use crate::emission::aircraft;
 
 /// Per-flight scatter state. `period_energy` carries screened Doc 29 SEL ×
-/// count_weight per period; the popup divides by `n_days × period_seconds`
+/// provenance weight per period; the popup divides by `n_days × period_seconds`
 /// at write time. The three companion sums retain the pre-screen and
 /// one-effect-removed energies for aircraft's popup variants. Peak fields
 /// track the loudest single segment so the popup can render `top_flights` with
@@ -73,8 +73,8 @@ impl FlightAccum {
     /// * `peak_lmax` is a max and drags its whole companion record along —
     ///   sel / altitude / period / date / geometry describe the SAME
     ///   sub-segment and must never be mixed across chunks,
-    /// * `min_dist_m` is a min; `flight_weight` comes from the flight's first
-    ///   row, so the earlier chunk keeps it,
+    /// * `min_dist_m` and `flight_weight` (the smallest row provenance
+    ///   weight) are mins,
     /// * identity (`profile_idx`, `aircraft_type`, `callsign`, `is_cruise`)
     ///   comes from the row and is identical in every chunk — keep ours.
     ///
@@ -99,8 +99,7 @@ impl FlightAccum {
         if other.min_dist_m < self.min_dist_m {
             self.min_dist_m = other.min_dist_m;
         }
-        // `flight_weight` is set by the flight's first row and never updated,
-        // so the earlier chunk's value stands.
+        self.flight_weight = self.flight_weight.min(other.flight_weight);
     }
 }
 
@@ -152,6 +151,8 @@ pub struct CruiseFlightStats {
     pub peak_lmax: f64,
     pub alt_at_peak: f64,
     pub class_at_peak: usize,
+    /// Smallest provenance weight among the buckets naming this transit.
+    pub weight: f64,
 }
 
 /// Cruise-side per-real-fid candidate for the unified popup

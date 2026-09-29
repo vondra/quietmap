@@ -7,15 +7,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-import numpy as np
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pyarrow.parquet as pq
-import rasterio
-from affine import Affine
 
 from test_structures_fixtures import (
-    BUILDER, GRID, SQUARE, FakeGlobalPrior, OVT_LONELY, ovt_row,
+    BUILDER, GRID, SQUARE, FakeRegional, OVT_LONELY, ovt_row,
 )
 
 
@@ -27,7 +24,7 @@ class StructureInventoryTests(unittest.TestCase):
             prepared.mkdir()
             rows = [ovt_row(OVT_LONELY)]
             census = BUILDER.build_square(
-                SQUARE, prepared, rows, [], FakeGlobalPrior(), None)
+                SQUARE, prepared, rows, [], None)
             self.assertEqual(census["overture_only"], 1)
             self.assertFalse((prepared / SQUARE / "buildings.arrow").exists())
             table = ipc.open_file(prepared / SQUARE / "structures.arrow").read_all()
@@ -48,11 +45,6 @@ class StructureInventoryTests(unittest.TestCase):
             occupied.unlink()
             pq.write_table(pa.table({"geometry": pa.array([rows[0]["wkb"]],
                                                           type=pa.binary())}), occupied)
-            prior = root / "prior.tif"
-            with rasterio.open(prior, "w", driver="GTiff", width=1, height=1,
-                               count=1, dtype="float32", crs="EPSG:4326",
-                               transform=Affine(360, 0, -180, 0, -180, 90)) as writer:
-                writer.write(np.array([[12.5]], dtype=np.float32), 1)
             # A prepared square without any building remains part of the output
             # inventory because another layer can require its obstacle table.
             other = GRID.square_name(*GRID.square_of(-41.3, 174.8))
@@ -66,7 +58,7 @@ class StructureInventoryTests(unittest.TestCase):
             empty_ocean = GRID.square_name(*GRID.square_of(0.0, -140.0))
             args = ["build-structures.py", "--squares", ",".join([SQUARE, other, empty_ocean]),
                     "--prepared-dir", str(prepared),
-                    "--overture-parquet", str(parquet), "--ghsl", str(prior),
+                    "--overture-parquet", str(parquet),
                     "--jobs", "1"]
             with patch("sys.argv", args), patch("sys.stdout", new_callable=io.StringIO):
                 BUILDER.main()

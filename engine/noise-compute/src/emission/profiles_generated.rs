@@ -54,32 +54,6 @@ pub static IS_JET: [bool; NUM_CLASSES] = [
     true,  // FUSE_C56X
 ];
 
-/// Runway-roll, taxi, apron per-metre `LW'` (dB re 1 pW/m), per noise
-/// class. Hand-tuned per anchor typecode (see `RUNWAY_DB_BY_ANCHOR` in
-/// the generator) — `dep@200ft` overestimates runway-roll by 6-10 dB
-/// because flyover NPDs don't include ground absorption / engine
-/// baffling. Standard offsets: taxi = runway − 12 dB, apron = runway
-/// − 18 dB. Stored values ≡ legacy 1 km event-SEL anchors + `+9.01 dB
-/// = 10·log10(25/π)`; identity at the 1 km test point holds under the
-/// CNOSSOS-EU §2.5.5 line-source receiver formula.
-pub static GROUND_OPS_REFERENCE_LW_PER_METER_DB: [[f64; 3]; NUM_CLASSES] = [
-    [113.01, 101.01, 95.01], // WING_FALLBACK
-    [113.01, 101.01, 95.01], // WING_A320
-    [113.01, 101.01, 95.01], // WING_B738
-    [101.01, 89.01, 83.01],  // PROP_C172
-    [113.01, 101.01, 95.01], // WING_B38M
-    [117.01, 105.01, 99.01], // WING_B789
-    [113.01, 101.01, 95.01], // WING_A21N
-    [106.51, 94.51, 88.51],  // WING_A321
-    [103.11, 91.11, 85.11],  // WING_A20N
-    [113.01, 101.01, 95.01], // WING_A319
-    [109.01, 97.01, 91.01],  // FUSE_CRJ9
-    [117.01, 105.01, 99.01], // WING_B748
-    [103.01, 91.01, 85.01],  // HELICOPTER
-    [106.01, 94.01, 88.01],  // PROP_DH8D
-    [108.01, 96.01, 90.01],  // FUSE_C56X
-];
-
 /// Per-profile → noise class lookup (dense u8 index). Computed by
 /// Voronoi assignment to nearest anchor (L∞ on 20-D NPD vector,
 /// constrained to same Installation; helicopters pinned).
@@ -212,7 +186,7 @@ pub static CLASS_OF_PROFILE: [u8; NUM_PROFILES] = [
 
 /// Anchor profile_idx for each noise class. Anchor = exact NPD vector
 /// of the dominant traffic profile within the class (frozen). Used by
-/// the kernel hot path for SEL/v_ref/d_bar/installation lookup, by the
+/// the kernel hot path for SEL/v_ref/installation lookup, by the
 /// synth surface emitter, and by popup display name.
 pub static CLASS_REP_PROFILE_IDX: [u8; NUM_CLASSES] = [
     123, // WING_FALLBACK → FALLBACK
@@ -242,7 +216,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [91.8, 84.8, 80.1, 75.1, 67.1, 58.4, 51.7, 44.7, 36.5, 28.3],
         [107.2, 100.9, 96.5, 91.9, 84.7, 76.8, 71.4, 64.6, 57.7, 50.4],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -254,7 +227,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [91.8, 84.8, 80.1, 75.1, 67.1, 58.4, 51.7, 44.7, 36.5, 28.3],
         [107.2, 100.9, 96.5, 91.9, 84.7, 76.8, 71.4, 64.6, 57.7, 50.4],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -264,7 +236,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.4, 85.7, 80.8, 75.6, 67.4, 58.2, 51.5, 44.0, 36.5, 29.1],
         [104.4, 97.9, 93.5, 88.9, 81.5, 73.5, 67.6, 61.1, 54.5, 48.3],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -274,7 +245,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.4, 85.7, 80.8, 75.6, 67.4, 58.2, 51.5, 44.0, 36.5, 29.1],
         [104.4, 97.9, 93.5, 88.9, 81.5, 73.5, 67.6, 61.1, 54.5, 48.3],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -284,7 +254,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.4, 85.7, 80.8, 75.6, 67.4, 58.2, 51.5, 44.0, 36.5, 29.1],
         [104.4, 97.9, 93.5, 88.9, 81.5, 73.5, 67.6, 61.1, 54.5, 48.3],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -294,7 +263,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.4, 85.7, 80.8, 75.6, 67.4, 58.2, 51.5, 44.0, 36.5, 29.1],
         [104.4, 97.9, 93.5, 88.9, 81.5, 73.5, 67.6, 61.1, 54.5, 48.3],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -304,7 +272,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.4, 85.7, 80.8, 75.6, 67.4, 58.2, 51.5, 44.0, 36.5, 29.1],
         [104.4, 97.9, 93.5, 88.9, 81.5, 73.5, 67.6, 61.1, 54.5, 48.3],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -314,7 +281,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [90.4, 83.4, 78.7, 73.8, 65.9, 57.1, 50.7, 43.6, 36.5, 29.7],
         [100.6, 94.0, 89.5, 84.8, 77.0, 68.5, 62.4, 55.7, 48.9, 42.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -324,7 +290,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [90.4, 83.4, 78.7, 73.8, 65.9, 57.1, 50.7, 43.6, 36.5, 29.7],
         [100.6, 94.0, 89.5, 84.8, 77.0, 68.5, 62.4, 55.7, 48.9, 42.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -334,7 +299,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [90.4, 83.4, 78.7, 73.8, 65.9, 57.1, 50.7, 43.6, 36.5, 29.7],
         [100.6, 94.0, 89.5, 84.8, 77.0, 68.5, 62.4, 55.7, 48.9, 42.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -344,7 +308,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [89.3, 82.8, 78.2, 73.4, 65.8, 57.4, 51.2, 44.4, 36.7, 28.6],
         [104.0, 96.9, 92.2, 87.3, 79.4, 70.8, 64.7, 57.9, 50.3, 42.0],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -354,7 +317,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [88.8, 82.2, 77.6, 72.8, 65.1, 56.5, 50.2, 43.2, 35.3, 27.2],
         [104.9, 97.5, 92.7, 87.5, 79.0, 70.4, 63.9, 56.7, 48.5, 39.8],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -364,7 +326,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [89.7, 83.1, 78.5, 73.4, 65.3, 56.3, 49.8, 42.6, 34.5, 26.3],
         [103.1, 95.8, 91.0, 86.1, 78.2, 69.4, 63.2, 56.3, 48.6, 40.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -374,7 +335,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [89.7, 83.1, 78.5, 73.4, 65.3, 56.3, 49.8, 42.6, 34.5, 26.3],
         [103.1, 95.8, 91.0, 86.1, 78.2, 69.4, 63.2, 56.3, 48.6, 40.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -384,7 +344,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [89.7, 83.1, 78.5, 73.4, 65.3, 56.3, 49.8, 42.6, 34.5, 26.3],
         [103.1, 95.8, 91.0, 86.1, 78.2, 69.4, 63.2, 56.3, 48.6, 40.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -394,7 +353,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [89.7, 83.1, 78.5, 73.4, 65.3, 56.3, 49.8, 42.6, 34.5, 26.3],
         [103.1, 95.8, 91.0, 86.1, 78.2, 69.4, 63.2, 56.3, 48.6, 40.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -406,7 +364,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [91.8, 84.4, 79.6, 74.5, 66.3, 57.2, 50.5, 43.2, 35.2, 26.9],
         [107.0, 100.0, 95.3, 90.4, 82.6, 74.2, 68.1, 61.5, 54.0, 45.8],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -416,7 +373,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [88.2, 82.4, 78.1, 73.5, 65.9, 57.5, 51.4, 44.5, 37.0, 29.4],
         [99.5, 93.4, 89.0, 84.2, 76.3, 67.7, 61.3, 54.0, 45.8, 37.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -428,7 +384,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.3, 86.7, 82.1, 77.1, 69.2, 60.2, 53.4, 46.2, 38.2, 30.2],
         [103.7, 98.4, 94.6, 90.5, 83.8, 75.5, 68.9, 61.6, 53.2, 44.6],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -440,7 +395,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.3, 86.7, 82.1, 77.1, 69.2, 60.2, 53.4, 46.2, 38.2, 30.2],
         [103.7, 98.4, 94.6, 90.5, 83.8, 75.5, 68.9, 61.6, 53.2, 44.6],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -452,7 +406,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [94.2, 86.8, 81.8, 76.8, 68.9, 60.3, 54.1, 47.5, 40.8, 34.5],
         [109.0, 102.4, 97.8, 92.9, 85.2, 76.7, 70.8, 64.4, 58.0, 52.0],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -464,7 +417,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.6, 85.9, 80.9, 75.9, 68.1, 59.5, 53.3, 46.7, 39.2, 30.3],
         [110.5, 104.0, 99.6, 95.1, 88.0, 80.3, 74.4, 67.9, 60.5, 52.0],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -478,7 +430,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
             112.5, 105.8, 101.2, 96.3, 88.4, 79.6, 73.4, 66.3, 59.3, 52.1,
         ],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -490,7 +441,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [94.2, 86.8, 81.8, 76.8, 68.9, 60.3, 54.1, 47.5, 40.8, 34.5],
         [109.0, 102.4, 97.8, 92.9, 85.2, 76.7, 70.8, 64.4, 58.0, 52.0],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -502,7 +452,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.6, 85.9, 80.9, 75.9, 68.1, 59.5, 53.3, 46.7, 39.2, 30.3],
         [110.5, 104.0, 99.6, 95.1, 88.0, 80.3, 74.4, 67.9, 60.5, 52.0],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -512,7 +461,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.3, 85.1, 80.3, 75.4, 67.4, 58.8, 52.6, 45.9, 39.1, 32.7],
         [105.2, 97.8, 94.2, 88.3, 80.3, 71.9, 66.0, 59.6, 53.2, 47.2],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -522,7 +470,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.3, 85.1, 80.3, 75.4, 67.4, 58.8, 52.6, 45.9, 39.1, 32.7],
         [105.2, 97.8, 94.2, 88.3, 80.3, 71.9, 66.0, 59.6, 53.2, 47.2],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -532,7 +479,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.3, 85.1, 80.3, 75.4, 67.4, 58.8, 52.6, 45.9, 39.1, 32.7],
         [105.2, 97.8, 94.2, 88.3, 80.3, 71.9, 66.0, 59.6, 53.2, 47.2],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -544,7 +490,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.8, 86.6, 82.0, 77.2, 69.6, 61.4, 55.4, 48.7, 41.1, 33.0],
         [111.7, 104.4, 99.6, 94.5, 86.6, 78.4, 72.4, 65.6, 57.6, 48.8],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -556,7 +501,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.6, 86.6, 81.9, 77.1, 69.4, 61.2, 55.3, 48.7, 41.2, 33.4],
         [108.7, 101.6, 96.9, 91.9, 83.9, 75.1, 68.9, 62.0, 54.1, 45.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -568,7 +512,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.6, 86.6, 81.9, 77.1, 69.4, 61.2, 55.3, 48.7, 41.2, 33.4],
         [108.7, 101.6, 96.9, 91.9, 83.9, 75.1, 68.9, 62.0, 54.1, 45.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -578,7 +521,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.2, 85.5, 80.8, 75.9, 68.1, 59.7, 53.7, 47.1, 39.7, 32.3],
         [102.6, 96.5, 92.0, 87.0, 79.0, 70.4, 64.2, 57.2, 49.4, 41.3],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -588,7 +530,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [91.2, 84.4, 79.8, 75.0, 67.2, 58.7, 52.7, 46.1, 38.9, 31.7],
         [103.7, 96.8, 92.0, 86.9, 78.8, 70.0, 63.7, 56.7, 48.8, 40.6],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -600,7 +541,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [91.1, 85.4, 81.1, 76.5, 68.9, 60.3, 54.2, 47.6, 40.5, 33.4],
         [105.3, 99.8, 95.4, 90.7, 83.0, 74.5, 68.4, 61.5, 53.9, 45.9],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -612,7 +552,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.8, 86.6, 82.0, 77.2, 69.6, 61.4, 55.4, 48.7, 41.1, 33.0],
         [111.7, 104.4, 99.6, 94.5, 86.6, 78.4, 72.4, 65.6, 57.6, 48.8],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -624,7 +563,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.8, 86.6, 82.0, 77.2, 69.6, 61.4, 55.4, 48.7, 41.1, 33.0],
         [111.7, 104.4, 99.6, 94.5, 86.6, 78.4, 72.4, 65.6, 57.6, 48.8],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -636,7 +574,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [96.3, 89.8, 85.2, 80.2, 71.9, 63.2, 56.9, 50.8, 44.1, 37.7],
         [104.4, 99.0, 95.2, 91.0, 84.1, 75.8, 69.7, 63.2, 56.0, 48.8],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -648,7 +585,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [94.4, 87.4, 82.8, 78.0, 70.4, 61.9, 55.7, 48.8, 40.9, 31.7],
         [109.7, 103.2, 98.8, 94.0, 86.4, 78.2, 72.5, 66.2, 59.0, 50.4],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -662,7 +598,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
             111.4, 105.1, 100.8, 96.5, 88.7, 82.4, 76.3, 70.3, 62.7, 54.0,
         ],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -674,7 +609,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [99.2, 92.0, 86.6, 81.0, 72.1, 63.0, 56.5, 49.1, 40.8, 32.5],
         [107.8, 101.1, 96.5, 91.5, 83.7, 74.9, 68.7, 61.7, 53.8, 46.2],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -686,7 +620,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [99.2, 92.0, 86.6, 81.0, 72.1, 63.0, 56.5, 49.1, 40.8, 32.5],
         [108.3, 101.6, 97.0, 92.0, 84.2, 75.4, 69.2, 62.2, 54.3, 46.7],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -700,7 +633,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
             113.3, 106.5, 101.7, 96.9, 89.1, 81.0, 75.3, 68.9, 62.5, 56.4,
         ],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -712,7 +644,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [99.0, 91.8, 87.0, 82.2, 74.4, 65.9, 59.6, 52.8, 45.9, 39.4],
         [110.1, 103.4, 98.7, 93.8, 85.8, 76.9, 70.5, 63.2, 55.9, 49.0],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -726,7 +657,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
             117.9, 110.8, 105.7, 100.0, 90.5, 80.6, 73.8, 66.5, 58.5, 49.7,
         ],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -740,7 +670,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
             115.7, 108.1, 102.8, 97.3, 88.7, 80.1, 74.1, 67.5, 59.9, 51.9,
         ],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -752,7 +681,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.3, 86.6, 82.1, 77.3, 69.7, 61.5, 55.6, 48.9, 41.5, 33.6],
         [106.9, 99.4, 94.4, 89.3, 81.0, 71.9, 65.4, 58.3, 50.2, 41.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -764,7 +692,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.3, 86.6, 82.1, 77.3, 69.7, 61.5, 55.6, 48.9, 41.5, 33.6],
         [106.9, 99.4, 94.4, 89.3, 81.0, 71.9, 65.4, 58.3, 50.2, 41.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -776,7 +703,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [94.6, 88.1, 83.3, 78.3, 70.5, 61.8, 55.6, 48.7, 41.1, 33.2],
         [107.8, 100.4, 95.4, 90.3, 82.2, 73.2, 66.6, 59.3, 51.3, 43.0],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -788,7 +714,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [93.1, 86.6, 82.2, 77.5, 69.9, 61.4, 55.3, 48.6, 41.2, 33.5],
         [107.0, 101.2, 97.0, 92.3, 84.6, 76.0, 69.8, 62.8, 55.0, 46.8],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -802,7 +727,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
             115.7, 108.1, 102.8, 97.3, 88.7, 80.1, 74.1, 67.5, 59.9, 51.9,
         ],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -812,7 +736,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [91.1, 84.4, 79.8, 74.8, 66.8, 57.8, 51.3, 44.0, 35.9, 27.5],
         [103.3, 96.6, 92.0, 87.1, 79.2, 70.3, 64.0, 57.2, 49.6, 41.8],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -822,7 +745,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [91.1, 84.4, 79.8, 74.8, 66.8, 57.8, 51.3, 44.0, 35.9, 27.5],
         [103.3, 96.6, 92.0, 87.1, 79.2, 70.3, 64.0, 57.2, 49.6, 41.8],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -832,7 +754,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [91.1, 84.4, 79.8, 74.8, 66.8, 57.8, 51.3, 44.0, 35.9, 27.5],
         [103.3, 96.6, 92.0, 87.1, 79.2, 70.3, 64.0, 57.2, 49.6, 41.8],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -842,7 +763,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [90.1, 83.6, 79.1, 74.4, 66.9, 58.6, 52.6, 45.7, 37.9, 29.5],
         [103.3, 96.8, 92.3, 87.5, 79.8, 71.3, 65.1, 58.3, 50.4, 42.0],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -852,7 +772,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [90.1, 83.6, 79.1, 74.4, 66.9, 58.6, 52.6, 45.7, 37.9, 29.5],
         [103.3, 96.8, 92.3, 87.5, 79.8, 71.3, 65.1, 58.3, 50.4, 42.0],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -862,7 +781,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.4, 80.6, 76.1, 71.2, 63.6, 55.3, 49.3, 42.7, 35.1, 27.2],
         [101.4, 94.8, 89.9, 84.6, 76.0, 65.3, 58.8, 51.6, 43.5, 35.1],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -872,7 +790,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.4, 80.6, 76.1, 71.2, 63.6, 55.3, 49.3, 42.7, 35.1, 27.2],
         [101.4, 94.8, 89.9, 84.6, 76.0, 65.3, 58.8, 51.6, 43.5, 35.1],
         160.0,
-        370.0,
         Installation::Wing,
     ),
     NpdProfile::new(
@@ -882,7 +799,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [88.4, 81.5, 76.6, 71.3, 62.7, 53.2, 46.4, 39.1, 31.4, 23.2],
         [98.0, 91.5, 86.9, 82.2, 74.4, 65.8, 59.4, 52.6, 45.1, 36.8],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -892,7 +808,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 80.7, 76.0, 71.1, 63.0, 54.1, 47.6, 40.6, 33.0, 24.6],
         [97.2, 90.9, 86.1, 81.2, 73.2, 64.5, 58.2, 51.5, 43.5, 34.9],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -902,7 +817,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 80.7, 76.0, 71.1, 63.0, 54.1, 47.6, 40.6, 33.0, 24.6],
         [97.2, 90.9, 86.1, 81.2, 73.2, 64.5, 58.2, 51.5, 43.5, 34.9],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -912,7 +826,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [85.5, 78.7, 74.2, 69.3, 61.5, 52.7, 46.4, 39.3, 31.2, 22.7],
         [96.0, 89.5, 85.0, 80.3, 72.6, 64.0, 57.7, 50.6, 42.5, 34.0],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -922,7 +835,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 80.7, 76.0, 71.1, 63.0, 54.1, 47.6, 40.6, 33.0, 24.6],
         [97.2, 90.9, 86.1, 81.2, 73.2, 64.5, 58.2, 51.5, 43.5, 34.9],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -932,7 +844,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [85.8, 78.6, 73.4, 67.9, 59.1, 50.0, 43.6, 36.6, 28.8, 20.7],
         [101.0, 94.4, 89.8, 85.0, 77.4, 69.1, 63.0, 55.9, 47.6, 38.6],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -942,7 +853,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [85.8, 78.6, 73.4, 67.9, 59.1, 50.0, 43.6, 36.6, 28.8, 20.7],
         [101.0, 94.4, 89.8, 85.0, 77.4, 69.1, 63.0, 55.9, 47.6, 38.6],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -952,7 +862,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 80.7, 76.0, 71.1, 63.0, 54.1, 47.6, 40.6, 33.0, 24.6],
         [97.2, 90.9, 86.1, 81.2, 73.2, 64.5, 58.2, 51.5, 43.5, 34.9],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -962,7 +871,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 80.7, 76.0, 71.1, 63.0, 54.1, 47.6, 40.6, 33.0, 24.6],
         [97.2, 90.9, 86.1, 81.2, 73.2, 64.5, 58.2, 51.5, 43.5, 34.9],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -972,7 +880,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 80.7, 76.0, 71.1, 63.0, 54.1, 47.6, 40.6, 33.0, 24.6],
         [97.2, 90.9, 86.1, 81.2, 73.2, 64.5, 58.2, 51.5, 43.5, 34.9],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -982,7 +889,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 80.7, 76.0, 71.1, 63.0, 54.1, 47.6, 40.6, 33.0, 24.6],
         [97.2, 90.9, 86.1, 81.2, 73.2, 64.5, 58.2, 51.5, 43.5, 34.9],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -992,7 +898,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [86.0, 81.0, 77.0, 73.0, 66.0, 59.0, 54.0, 48.0, 42.0, 36.0],
         [89.0, 84.0, 80.0, 76.0, 69.0, 62.0, 57.0, 51.0, 45.0, 39.0],
         140.0,
-        320.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -1004,7 +909,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [91.1, 84.2, 79.2, 73.9, 65.5, 56.6, 50.2, 43.5, 36.3, 28.6],
         [107.5, 99.8, 94.4, 88.9, 80.1, 70.3, 62.9, 54.6, 45.3, 35.0],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -1014,7 +918,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1024,7 +927,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1034,7 +936,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1044,7 +945,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1054,7 +954,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1064,7 +963,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1074,7 +972,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1084,7 +981,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1094,7 +990,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [90.9, 84.6, 80.4, 76.0, 69.1, 61.6, 56.0, 49.8, 42.6, 34.0],
         [95.6, 89.5, 85.3, 81.0, 74.3, 67.0, 61.6, 55.6, 49.0, 41.4],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1104,7 +999,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [90.9, 84.6, 80.4, 76.0, 69.1, 61.6, 56.0, 49.8, 42.6, 34.0],
         [95.6, 89.5, 85.3, 81.0, 74.3, 67.0, 61.6, 55.6, 49.0, 41.4],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1114,7 +1008,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1124,7 +1017,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1134,7 +1026,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [85.5, 78.7, 74.2, 69.3, 61.5, 52.7, 46.4, 39.3, 31.2, 22.7],
         [96.0, 89.5, 85.0, 80.3, 72.6, 64.0, 57.7, 50.6, 42.5, 34.0],
         160.0,
-        370.0,
         Installation::Fuselage,
     ),
     NpdProfile::new(
@@ -1144,7 +1035,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
         130.0,
-        261.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1154,7 +1044,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1164,7 +1053,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1174,7 +1062,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1184,7 +1071,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1194,7 +1080,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         [79.0, 74.0, 70.0, 66.0, 59.0, 52.0, 47.0, 41.0, 35.0, 29.0],
         110.0,
-        220.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1204,7 +1089,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1214,7 +1098,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1224,7 +1107,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1234,7 +1116,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         [79.0, 74.0, 70.0, 66.0, 59.0, 52.0, 47.0, 41.0, 35.0, 29.0],
         110.0,
-        220.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1244,7 +1125,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1254,7 +1134,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1264,7 +1143,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1274,7 +1152,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1284,7 +1161,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1294,7 +1170,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1304,7 +1179,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         [79.0, 74.0, 70.0, 66.0, 59.0, 52.0, 47.0, 41.0, 35.0, 29.0],
         110.0,
-        220.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1314,7 +1188,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1324,7 +1197,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
         [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
         90.0,
-        208.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1334,7 +1206,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1344,7 +1215,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1354,7 +1224,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1364,7 +1233,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1374,7 +1242,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1384,7 +1251,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1394,7 +1260,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1404,7 +1269,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1414,7 +1278,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1424,7 +1287,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1434,7 +1296,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1444,7 +1305,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1454,7 +1314,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1464,7 +1323,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1474,7 +1332,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1484,7 +1341,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1494,7 +1350,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1504,7 +1359,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1514,7 +1368,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1524,7 +1377,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1534,7 +1386,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [87.3, 83.9, 81.5, 79.0, 74.6, 69.2, 65.4, 60.7, 54.7, 47.9],
         [85.3, 81.9, 79.5, 77.0, 72.6, 67.2, 63.4, 58.7, 52.7, 45.9],
         100.0,
-        230.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1544,7 +1395,6 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [91.2, 84.3, 79.7, 74.8, 67.1, 58.9, 53.1, 46.9, 40.1, 33.1],
         [105.3, 98.6, 94.1, 89.3, 81.7, 73.4, 67.6, 60.8, 53.8, 46.5],
         160.0,
-        370.0,
         Installation::Wing,
     ),
 ];

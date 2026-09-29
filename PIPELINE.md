@@ -35,13 +35,14 @@ has no prepared squares, so a regional extract (Prague, 2026-09-16) stops at
 The TOML file has `[build]` keys `as_of_date` (YYYYMMDD string), `aircraft_anchor`
 (YYYY-MM string), `memory_gib` and `threads` (positive integers). `[sources]` supplies
 absolute paths named `planet`, `rasters`, `enrichment`, `boundaries`, `city_boundaries`,
-`overture`, `ghsl`, `regional_heights`, `airline`, `general_aviation`, `ships` (EMODnet
-vessel density) and `ships_gfw` (Global Fishing Watch presence hours).
+`overture`, `regional_heights`, `official_barriers` (normalized per-1-degree official barrier cache), `measured_heights` (normalized per-1-degree measured building-height cache), `fra_crossings` (the FRA crossing-inventory CSV), `tc_crossings` (the Transport Canada grade-crossings CSV), `aircraft_primary` (the adsb.lol archive),
+`aircraft_secondary` (the ADSBexchange monthly samples), `ships` (EMODnet vessel density)
+and `ships_gfw` (Global Fishing Watch presence hours).
 `rasters` is an already published native raster year, `city_boundaries` is the ADM2
 cache, and `regional_heights` retains the measured regional raster or VRT dependencies.
 Download and validate new source versions before freezing these inputs. A fresh
-build checks the exact airline days and GA publisher receipts before pinning or
-starting OSM. This reads archive tails, not all compressed traces; extraction still
+build checks the primary publisher receipts and the secondary monthly samples before
+pinning or starting OSM. This reads archive tails, not all compressed traces; extraction still
 validates payloads. Missing or incomplete samples stop the run early.
 
 Optional `[build]` paths `osm_node_cache` and `osm_spill_dir` place the sparse node
@@ -53,10 +54,16 @@ copies while rotating generations. `--plan` shows paths without admission or wri
 
 The controller records each frozen input's device identity in `input-identities.jsonl`
 (path, inode, size, mtimes — no SHA-256 of the world) and step receipts in `steps.jsonl`.
-`build.json` records configuration, status and resume history; filesystem locks exclude another controller. It prepares the complete z9 directory
+`build.json` records configuration, status, resume history and the product commit with a
+dirty flag; each step receipt carries the commit that ran it. Filesystem locks exclude another controller.
+Device identity does not survive a disk migration; content does. Before a build,
+`scripts/freeze-world-inputs.py --config <toml> --output <dir>` hashes every input the pin
+would list (two threads by default), writes `<family>.SHA256SUMS` outside the sources,
+checks every stored checksum (`SHA256SUMS`, `sha256.txt`, GFW receipts, the adsb.lol
+catalog) and prints the digests for the release record; a rerun verifies instead of rewriting. It prepares the complete z9 directory
 set before parallel writers, then runs OSM, square-country-city, national buildings, structures
 (`--jobs` workers, one square each; omit `--jobs` for all CPUs that fit memory),
-ordered road/rail/industry chains and the pinned hybrid aircraft window. Buildings
+ordered road/rail/industry chains and the pinned aircraft exposure year. Buildings
 precede structures; both precede service-tree and built-up road inference. Disjoint
 writers can overlap within the configured cgroup memory budget. Source cache changes
 invalidate completion, including replaced symlink targets or newly added files.
@@ -70,13 +77,19 @@ This controller does not repaint heatmaps or change a served generation.
 
 ## Base rasters and OSM
 
-The geophysical channels are DEM, forest and IMD. Their runtime files are
-`z9/x/y/dem.i16be`, `forest.u8`, `imd.u8`, one per square and channel for all
+The geophysical channels are DEM, canopy height, forest cover and IMD. Their runtime files are
+`z9/x/y/dem.u16le`, `canopy.u8`, `forest.u8`, `imd.u8`, one per square and channel for all
 262144 z9 coordinates. A file has three states: the whole native window bytes;
 a 0-byte file, which declares coverage-verified absence and samples as the
-channel's ocean value (DEM 0, forest 0, IMD 100); and missing, which is an error,
+channel's ocean value (DEM 0, canopy 0, forest 0, IMD 100); and missing, which is an error,
 so an undeclared square never computes. There is no raster catalog or generation
 id: identity is the release name and the code version.
+
+The terrain contract is in `engine/noise-compute/SPEC.md`.
+`terrain_produce.py` consumes a reviewed source manifest and requires an explicit
+free-space reserve. It refuses missing source provenance, unresolved nodes and
+changed resumed outputs. Its bounded square outputs still need source-seam
+validation before assembling a complete release.
 
 The source converters live in `scripts/rasters/`; `scripts/rasters/repack-native-z9.py`
 derives coverage from the official source catalogs and runs `raster-repack`, which
@@ -93,7 +106,7 @@ These are not seven independent raster inputs.
 ## Structures and geography
 
 `scripts/structures/build-structures.py` joins OSM buildings/barriers with
-Overture footprints, GHSL heights, and regional height rasters where available.
+Overture footprints and regional height rasters where available.
 The builder writes even completed empty squares and validates the OSM emission
 view. Preserve the regional IPR input for the two Prague reference squares.
 
@@ -136,6 +149,17 @@ Remove `--dry-run` only for an authorized run. A regional canary uses an isolate
 prepared tree with real copies of writable Arrows and a complete read-only halo.
 The old `--scope country:CZ` was unsafe: global writers still changed the whole
 input tree. It is rejected.
+A canary scored against held-out traffic counts runs the roads chain with
+`QM_EXCLUDE_HOLDOUT_COUNTS=1`: the road writer then stamps no measured count inside a
+holdout square of rule v1 (`pipeline/lib/count-holdout.ts`). Sources also withhold physical
+count points before matching, section counts whose geometry reaches a held-out square, and
+count-derived profiles and aggregates before they can transfer to a training square. Section
+edges reserve their tile rectangles conservatively; all parts of one observation stay together.
+The retained Japanese route/class aggregates, Thai DRR counts and Polish provincial medians
+lack usable count locations, so this mode omits them. A municipal street aggregate without
+coordinates is admitted only if its whole municipality lies in training squares. Derived flows
+from the remaining training observations still apply. Start from raw inputs when changing this
+switch; it is an experiment exclusion, not a cleanup of previously enriched traffic.
 
 `--layer buildings|roads|railways|industrial` selects an independent output family.
 National buildings can run during the square-country-city bake: they use their source coordinates and only
@@ -148,7 +172,7 @@ hold the square-country-city lock shared, excluding its writer for their lifetim
 are emitted as JSON. `--from STEP` resumes within the selected family.
 `--jobs` (default: every CPU) caps square workers; omitting it, or `QM_ROAD_WORKERS`,
 uses every CPU that still fits the process memory limit. Per-square world heuristics
-(service-tree, continuity, taper, railways-parallel, industrial wind/name, built-up)
+(service-tree, continuity, taper, industrial wind/name, built-up)
 shard that way. Built-up completion is stored with the owner/halo structure identities
 and classification code; an unchanged retry reads only the Arrow header. Changed
 structure inputs invalidate that square. Country adapters, national policies and national networks load their
@@ -161,7 +185,7 @@ building demand retracts its own stale estimates and preserves measured traffic.
 National buildings writes only existing `buildings.arrow` rows.
 
 After national building refinement, refresh affected `structures.arrow` files with
-the original GHSL/regional inputs. Both emission attributes and screening heights
+the original regional input. Both emission attributes and screening heights
 are embedded in structures; enrichment alone cannot update them. Rerun
 `structures-finalize` after this step.
 
@@ -178,21 +202,35 @@ the source archive and digest, then use `--enrich-only` for national roads.
 
 `engine/aircraft-extract` and `scripts/run-aircraft-extract.sh` are already ported
 to z9. Reuse validated Stage 0/1 segment files; do not re-extract them just because
-the world prepared tree has no aircraft output yet.
+the world prepared tree has no aircraft output yet. Reuse needs v4-era files:
+segments without `departure_field_elev_m` and `airborne.arrow` without
+`airborne_contract` v4 are refused (Stage 1 judges provider gaps with DEM phases
+and stamps each flight's departure field elevation for the Doc 29 cutback gate).
 
-`aircraft_anchor` selects 12 monthly airline samples and the preceding GA year
-through `scripts/aircraft_window.py`. Publisher receipts determine admitted GA days;
-use that recorded list and class normalization, never a hardcoded 365 divisor.
-For example, the September 2026 delivery admitted 12 airline and 364 GA days:
-May 6 contained only excluded MLAT traffic. Refresh the sources and anchor together.
+`aircraft_anchor` (YYYY-MM) is the month after the exposure year: `scripts/aircraft_window.py`
+selects every day of `[anchor − 1 year, anchor)` as a baseline candidate and its 12
+month-firsts as increment candidates, and `scripts/ships/download_gfw.py` requests the
+same days. Anchor 2027-01 is calendar 2026; anchor 2026-10 is 2025-10-01 … 2026-09-30.
+Stage 0 merges the two providers per aircraft address and UTC day: every adsb.lol
+sample stays, an ADSBexchange sample only where adsb.lol has no sample within 1 s,
+and anonymous (`~`) echoes of an address track go. Stage 1 then drops the
+ADSBexchange samples a joinable primary pair spans — judged with DEM phases,
+which Stage 0 cannot see — so only real coverage gaps ride the increment days.
+Segments touching an ADSBexchange sample carry `SECONDARY_ONLY`. Each day leaves a
+provider receipt (`provider-receipts/<day>.json`: traces, corrupt members, aircraft
+per UTC hour); a day below half the same-hour median, with an unrecovered corrupt
+member or without an archive is missing, never zero. The admitted baseline and
+increment days (`segments_by_square/{baseline_days,increment_days,admission.json}`)
+are stamped into every prepared aircraft file; consumers divide primary rows by the
+baseline count and secondary-only rows by the increment count (difference estimator).
 The CLI accepts repeated `--segments-dir` arguments for split retained segments.
 Keep input paths and receipts in the execution record.
 
 After Stage 0/1: world shuffle, airport discovery, Stage 2A airborne, Stage 2B
 cruise, Stage 2C ground operations and local airport summaries. Stage 2B spills raw
 transits, then folds each owner z9 once into `cruise.arrow`; the popup reads owner
-squares within `CRUISE_QUERY_RADIUS_M` (16 km reach + half the 50 km representative
-length clamp), so no support copies exist for cruise. This work can overlap
+squares within `CRUISE_QUERY_RADIUS_M` (16 km reach + half the largest z15 cell
+diagonal), so no support copies exist for cruise. This work can overlap
 square-country-city/enrichment because it writes separate artifact names. It requires complete
 rasters, airport inputs, verified windows, and a measured shuffle disk budget.
 Prague-only throughput is not a world completion forecast. New aircraft support
@@ -209,6 +247,19 @@ After the final Arrow/structures generation, rerun `structures-finalize`.
 writes anything — a re-batch or an index (a `structures.arrow` changed after the
 step); the audit refuses a square whose `structures.qoix` is missing or whose
 non-empty `structures.arrow` carries no `qm_blocks`.
+
+Then run the façade-exposure stage, the last prepared stage and the only one that
+needs a CUDA card: per z9 square, `relevant-source-gpu`'s `facade-exposure
+--prepared-year YEAR --raster-root YEAR --input-manifest M --input-manifest-sha256 H
+--square z9/X/Y --output YEAR/z9/X/Y/facade_exposure.arrow`, where `M` pins the
+final Arrow inputs (`scripts/prepared_manifest.py`). It places the CNOSSOS §2.8
+façade receivers of every enclosed building the square owns (`screening_ordinal`
+of its `structures.arrow`), evaluates them exactly with the painter's kernels and
+the aircraft fields, and writes one row per building: its noisiest receiver with
+per-layer, per-period powers (`square-store/src/facade_exposure_contract.rs`). The
+popup refuses a click inside a building of a square without the file; the
+painter refuses to paint a building whose owner square lacks it. Any later change
+of structures, sources, rasters or physics reruns the stage, then the manifest.
 
 Compare actual popup levels, source provenance, counts and screening against the reference generation
 on city, airport, quiet, coast, border and polar cases. Include adjacent clicks in

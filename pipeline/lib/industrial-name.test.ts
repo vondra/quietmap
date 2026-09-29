@@ -1,4 +1,5 @@
 /** Native IPC name priors retain measured authority, duplicate suppression and repeatable lifecycle. */
+import { osmContract } from './osm-contract.js'
 
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -10,7 +11,7 @@ import { enrichIndustrialNames, industrialNameRule, koreanIndustrialNameRule } f
 import { iso2Code } from './prepared-grid.js'
 import { encodeQmBlocks } from './road-test-fixture.js'
 
-interface Row { name: string | null; source?: number; nace?: number; wind?: boolean; suppressed?: number; lat?: number; lon?: number; country?: string }
+interface Row { name: string | null; source?: number; nace?: number; wind?: boolean; sourceType?: number; suppressed?: number; lat?: number; lon?: number; country?: string }
 const gx = (longitude: number) => Math.round((longitude / 360 + .5) * 2 ** 30)
 const gy = (latitude: number) => Math.round((Math.log(Math.tan(Math.PI / 4 + latitude * Math.PI / 360)) / (2 * Math.PI) + .5) * 2 ** 30)
 function store(path: string, rows: Row[], fresh = false) {
@@ -18,7 +19,7 @@ function store(path: string, rows: Row[], fresh = false) {
     centroid_gx: Int32Array.from(rows, row => gx(row.lon ?? 14)),
     centroid_gy: Int32Array.from(rows, row => gy(row.lat ?? 50)),
     country_iso: Uint16Array.from(rows, row => iso2Code(row.country ?? 'CZ')),
-    source_id: Uint16Array.from(rows, r => r.source ?? 0), source_type: Uint8Array.from(rows, r => r.wind ? 10 : 0),
+    source_id: Uint16Array.from(rows, r => r.source ?? 0), source_type: Uint8Array.from(rows, r => r.sourceType ?? (r.wind ? 10 : 0)),
     suppressed: Uint8Array.from(rows, r => r.suppressed ?? 0),
     name: vectorFromArray(rows.map(r => r.name), new Utf8()),
     hub_height: Float32Array.from(rows, () => 80), rated_power_kw: Float32Array.from(rows, () => 2000),
@@ -26,7 +27,7 @@ function store(path: string, rows: Row[], fresh = false) {
   if (!fresh) table = table.assign(makeTable({ nace_4digit: Uint16Array.from(rows, r => r.nace ?? 0) }))
   const parts = rows.length > 1 ? [table.slice(0, 1), table.slice(1)] : [table]
   const schema = new Schema(table.schema.fields.map(f => new Field(f.name, f.type, f.nullable, new Map([['original', f.name]]))),
-    new Map([['grid', 'z30'], ['industrial_contract', 'country_land_baked_v1'], ['native', 'preserve'], ['qm_blocks', encodeQmBlocks(parts.map(() => [49, 13, 51, 16]))]]))
+    new Map([osmContract('industrial'), ['grid', 'z30'], ['industrial_contract', 'country_land_baked_v1'], ['native', 'preserve'], ['qm_blocks', encodeQmBlocks(parts.map(() => [49, 13, 51, 16]))]]))
   const result = new Table(schema, parts.flatMap(p => p.batches.map(b => new RecordBatch(schema, b.data))))
   mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, tableToIPC(result, 'file'))
   return tableFromIPC(readFileSync(path))
@@ -46,12 +47,41 @@ test('ordered multilingual rules retain wind skip, solar precedence and all orig
   const examples: Array<[string, number | undefined]> = [
     ['SOLÁRNÍ elektrárna', 3599], ['wind farm power plant', 0], ['Elektrárna', 3511], ['Kamenolom ', 700],
     ['Pivovar', 1000], ['Textile', 1300], ['Sägewerk', 1600], ['Rafinérie', 2000], ['Betonárna', 2300],
-    ['Foundry', 2400], ['Car factory', 2900], ['Čistírna', 3800], ['Logistics', 5200], ['Farma', 100],
+    ['Foundry', 2400], ['Car factory', 2900], ['Čistírna', 3700], ['Logistics', 5200], ['Farma', undefined],
     ['Wind turbine factory', 0], ['Unnamed industrial site', undefined],
   ]
   for (const [name, nace] of examples) assert.equal(industrialNameRule(name)?.nace4, nace, name)
   assert.equal(koreanIndustrialNameRule('포항제철소')?.nace4, 2410)
   assert.equal(koreanIndustrialNameRule('여수국가산업단지')?.nace4, 2011)
+})
+
+test('wastewater names select continuous sewage activity and retract obsolete waste handling', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'industrial-name-wastewater-'))
+  try {
+    const path = resolve(root, 'z9/275/173/industrial.arrow')
+    store(path, ['Blackbirds Sewage Treatment Works', 'Wastewater treatment plant', 'Klärwerk',
+      'Waste recycling plant', 'Water treatment plant'].map(name => ({ name, source: 9000, nace: 3800 })))
+    await enrichIndustrialNames(root)
+    assert.deepEqual(values(path, 'nace_4digit'), [3700, 3700, 3700, 3800, 0])
+    assert.equal((await enrichIndustrialNames(root)).squaresUpdated, 0)
+    store(path, [{ name: 'Power plant', sourceType: 4, source: 9000, nace: 3800 },
+      { name: 'Sewage treatment works', sourceType: 4 }])
+    await enrichIndustrialNames(root)
+    assert.deepEqual(values(path, 'nace_4digit'), [0, 3700], 'a name cannot replace explicit wastewater activity')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('farm place names cannot classify industrial activity', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'industrial-name-farm-'))
+  try {
+    const path = resolve(root, 'z9/275/173/industrial.arrow')
+    store(path, [{ name: 'Trumps Farm Anaerobic Digestion Plant', source: 9000, nace: 100 },
+      { name: 'Manor Farm', sourceType: 2, source: 9000, nace: 100 }])
+    await enrichIndustrialNames(root)
+    assert.deepEqual(values(path, 'nace_4digit'), [0, 0])
+    assert.deepEqual(values(path, 'source_type'), [0, 2], 'mapped farmyard activity remains authoritative')
+    assert.equal((await enrichIndustrialNames(root)).squaresUpdated, 0)
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
 test('native names preserve authority and suppression while owned retirement, wind and re-extraction converge', async () => {
@@ -118,5 +148,17 @@ test('Korean names use their national sector detail, exclude North Korea and con
     const bytes = readFileSync(path)
     assert.equal((await enrichIndustrialNames(root)).squaresUpdated, 0)
     assert.deepEqual(readFileSync(path), bytes)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+
+test('dedicated power and inactive sources cannot acquire generic name priors', async () => {
+  const root = mkdtempSync(resolve(tmpdir(), 'industrial-name-power-'))
+  try {
+    const path = resolve(root, 'z9/275/173/industrial.arrow')
+    store(path, [10, 11, 12, 13, 14, 15].map(sourceType => ({ name: 'Power plant quarry', sourceType })))
+    const before = readFileSync(path)
+    assert.equal((await enrichIndustrialNames(root)).classified, 0)
+    assert.deepEqual(readFileSync(path), before)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

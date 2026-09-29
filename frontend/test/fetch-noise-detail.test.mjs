@@ -77,14 +77,10 @@ test('a new click invalidates old data, preview and error before the effect has 
   }
 })
 
-test('accommodation outdoor levels never substitute indoor or incomplete estimates', () => {
+test('accommodation levels refuse incomplete or missing totals', () => {
   for (const [data, expected] of [
-    [{ total_lden: 25, facade_lden: 60, envelope_class: 'commercial', envelope_delta_db: 35 }, 60],
     [{ total_lden: 45 }, 45],
     [{ total_lden: 0 }, 0],
-    [{ total_lden: 0, facade_lden: 18, envelope_delta_db: 35 }, 18],
-    [{ total_lden: 25, envelope_class: 'commercial' }, null],
-    [{ total_lden: 25, facade_lden: null, envelope_delta_db: 35 }, null],
     [{ total_lden: 45, unavailable_layers: ['aircraft'] }, null],
     [{ total_lden: null }, null],
     [{ total_lden: Infinity }, null],

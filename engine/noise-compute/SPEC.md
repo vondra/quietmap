@@ -1,19 +1,53 @@
 # Popup propagation contract
 
 The Rust engine is the acoustic source of truth. This document specifies the
-current screening contract; it is not a claim of full CNOSSOS-EU compliance.
-The implementation and regressions live in `src/propagation/path_effects.rs`,
-`diffraction.rs` and `arc_screening.rs`.
+propagation contract of road, rail and point sources (CNOSSOS-EU 2015/996 as amended by
+2021/1226, checked against ISO/TR 17534-4) and the prepared-source rules around it. The
+implementation and regressions live in `src/propagation/cnossos/`, `ray_path.rs`,
+`ray_transfer.rs`, `line_quadrature.rs`, `relevance_bound.rs`, `meteorology.rs`,
+`air_absorption.rs` and `vegetation.rs`; the CUDA painter mirrors them in
+`relevant_source_cnossos_*.cuh`.
+Airport ground operations keep their single-edge path (`path_effects.rs`, `diffraction.rs`)
+until their own campaign moves them.
 
 ## Receiver and prepared-source selection
 
-Inside an enclosed building, retain the clicked footprint's envelope class and
-clicked coordinates for presentation. The existing cardinal search, one-metre
-steps up to 100 metres, selects the facade receiver before any source gate.
-Reload obstacle indexes at that receiver, and use its position and elevation
-for source selection and propagation. Project the facade result to the indoor
-estimate only after computation. If that search finds no exterior point, retain
-the clicked position as before.
+Every receiver stands `DEFAULT_RECEIVER_HEIGHT` (4 m) above the bare-earth ground
+unless the caller names another height of at least `RECEIVER_HEIGHT_FLOOR_M`, as
+validation does for a microphone's height; every layer reads `Receiver::altitude_m`
+and the answer's `receiver` names the point and height computed. Outside enclosed
+buildings (streets, open ground, water, courtyard holes, outdoor-class carports
+and roofs) the receiver is the clicked point or the pixel centre.
+
+Inside an enclosed building (the tallest enclosed footprint containing the point;
+equal heights go to the smallest (square, id) key) the receiver is the building
+exposure: CNOSSOS §2.8 case 1 façade receivers (Directive (EU) 2021/1226,
+Annex II; `facade_receivers.rs`) — every ring edge cut into the fewest equal
+intervals ≤ 5 m, one receiver mid-interval; an edge of 2.5–5 m gets one; runs of
+shorter adjacent edges together over 5 m are cut the same way as a polyline;
+lengths within one z30 quantum of a limit read as the limit. Receivers stand
+0.1 m out along the outward normal (into the courtyard for holes). A receiver
+inside any enclosed footprint (a party wall) is dropped; a footprint with no
+qualifying edge keeps one receiver mid its longest edge; a building whose every
+receiver is dropped has no exposed façade and is not assessed. Canonical order:
+parts as stored, exterior counter-clockwise and holes clockwise, each ring from
+its lexicographically smallest z30 vertex, rotated to its first edge over 2.5 m.
+At a façade receiver the density bonus (0/1.5/3 dB, nine probes at ±75 m)
+ignores probes inside its own footprint (§2.8: the façade's own reflection is
+excluded); the own building still screens sources behind it. The façade-exposure
+stage evaluates every receiver of every building on the GPU and stores the one
+with the highest all-source Lden (ties: lowest canonical index) with its layer
+and period powers in `facade_exposure.arrow`. The popup recomputes the receiver
+set, requires the stored choice to be one of its points, reloads obstacle
+indexes and sources around it and evaluates it exactly; a missing file refuses
+the click. There is no indoor attenuation anywhere.
+
+A painted z13 pixel is the outdoor receiver at its centre, or, when the centre is
+inside an enclosed building, that building's stored layer powers (every tile
+covering the building copies the same row). Tiles (HM3 v4, `tile-painter/src/hm3.rs`)
+keep coverage apart from energy: 2·Lden bytes 0–253, 254 computed silence, 255 not
+assessed; a zoomed-out cell is the energy mean of its assessed children, silence
+counting as zero energy.
 
 Prepared airborne sub-segments are stored once, as rows of the z9 square that
 owns the midpoint of their stored geometry (`airborne_segments_z9_v2`); the
@@ -35,7 +69,7 @@ dropped like any sub-segment there: each such piece is on its own below the
 40 dB reach threshold, and the energy lost is the dropped pieces' own energy,
 those under the kernel's 20 dB floor bounded by that floor (pinned by
 `pieces_beyond_reach_are_dropped_and_the_loss_is_their_own_level`: an 18 km
-chord 14–32 km east of the receiver, 33.6 dB whole, keeps its 30.9 dB first
+chord 14–32 km east of the receiver, 44.95 dB whole, keeps its 42.28 dB first
 piece). Splitting
 otherwise changes only the Doc 29 finite-segment terms: per layer and period
 the energy of an unsplit chord is unchanged, a split chord within reach moves
@@ -67,7 +101,164 @@ latitudes.
 Present aircraft schemas must carry a positive sampling-window stamp, including
 empty files; selected rows cannot redefine the observation window.
 
+## Aircraft sampling window
+
+Aircraft rows come from two ADS-B providers merged per address and UTC day: the
+primary (adsb.lol) on every admitted baseline day, the secondary (ADSBexchange)
+on the admitted increment days, adding only samples the primary did not cover.
+A row touching a secondary sample carries flag bit 6 (`SECONDARY_ONLY`; cruise
+and ground rows a `secondary_only` column). Every aircraft file stamps
+`baseline_days`, `increment_days` and the SHA-256 of each sorted day list; one
+popup or painter tile refuses files whose windows differ. The mean day is the
+difference estimator `Σ_primary E / baseline_days + Σ_secondary E /
+increment_days`: every consumer divides by `baseline_days` and weights a
+secondary-only row by `baseline_days / increment_days` (`ProvenanceWeights`),
+in energy and in movement counts. A flight counts as a baseline movement when
+any of its rows at the receiver, microsegment or airport category is primary.
+
+## Industrial, wind and leisure emission
+
+An `industrial.arrow` row is admitted by the popup exactly when its polygon
+EDGE can reach: centroid distance minus ring radius (max vertex distance from
+the centroid; 0 for ringless point rows) ≤ `INDUSTRIAL_MAX_RADIUS` = 4 km —
+the same reach the painter's per-point cap enforces. The retired 5 km centroid
+gate dropped giant polygons (Garzweiler's east/west ends stood 5.4–5.6 km from
+the mine centroid, 250 m from its boundary). Batch prefiltering (5 km over
+geometry envelopes) and square loading (7.5 km) already cover these rows.
+
+Profile selection is NACE, then OSM subtype, then coarse source type
+(`emission/industrial.rs`). A tagged warehouse IS a NACE 52 site and uses that
+profile (86 dB(A) at 1 ha, evening −3, night −8); the old quieter subtype twin
+(−13.2 dB Lden) is deleted. Coal and lignite mining (NACE 05) runs 24/7
+(evening/night offsets 0 — bucket-wheel pits do not stop); NACE 08 quarries
+keep day-oriented hours (−8/−20).
+
+Wind turbines emit their annual operating level: the max-mode LUT
+(`turbine_lw`, 98–106.5 dB(A) by rating) plus the Dutch statutory operating
+duty ΔL = 10·lg Σ_j U_j·10^((Lw_j − Lmax)/10) (Reken- en meetvoorschrift
+windturbines, 2011) over the generic normalised LwA(v) curve — the arithmetic
+mean of (Lw−Lmax) over nine published type curves (Oliver Forest Appendix 13.2
+Table 2; Ballinagree Appendix 7.4 SG 6.0-155 AM0, N149, V150 mode 0), cut-in
+3 m/s, Lmax held above rated. Until the meteorology raster arrives the wind
+distribution is a documented placeholder: Rayleigh with 7.5 m/s hub-height
+mean, identical in every period (generic duty −2.1 dB; the published V150
+check gives −3.4). The turbine spectrum is the energy mean of five published
+max-mode octave spectra (the four modern Oliver Forest types plus SG 6.0-155
+AM0), unweighted relative to 1 kHz:
+`[13.2, 11.1, 7.8, 4.4, 0, −3.9, −9.7, −19.4]` dB. Spectrum and duty ship
+together: at 1 km they nearly cancel.
+
+A sports pitch annualizes the Sport England AGP measurement (58 dB LAeq,1h at
+10 m) as the area source it is: 10 m outside the touchline of a 100×64 m pitch
+the area integral sits 1.8 dB under the per-m² level, giving active 59.8
+dB/m² — 97.85 dB(A) over the pitch — and 50.8 dB/m² after the standard −9 dB
+annualization (−3 season, −6 duty).
+
+Power classes (`source_type` 11–15, `osm_industrial_contract`). A facility
+gets its sound power once, from one rating truth, and its parts share that
+acoustic power by area (`lw_part = lw_total + 10·lg(share)`); sharing the
+MVA/MW itself cannot conserve power (the substation law is logarithmic).
+Solar farms (13) emit per-MW, not per area: 88 dB(A)/MW + 10·lg(MW) − 5 dB
+day duty, day-only (Sungrow SG4950HV-MV 4.95 MW = 95 dB(A) anchor; MW from
+the row's `plant:output:electricity` tag, a solar generator unit's
+`rated_power_kw`, or area × 0.55 MW/ha, the tagged-farm median). Only the
+plant nameplate is a facility total shared by area; unit output and area
+density are already per part. A solar row with no nameplate and no footprint
+(a bare `generator:source=solar` node) stays silent — the generic 10,000 m²
+default must not invent 0.55 MW / 80.4 dB for a rooftop panel — and
+a generator inside its plant polygon stays silent too (the plant owns the
+emission). Both the plant containment and the transformer feed span every
+loaded square, so a facility across a square edge still sees its units in the
+neighbour. Registry-confirmed solar
+(synthetic NACE 3599) takes the same branch. Substations (14) emit per-MVA,
+24/7: IEC 551 LWA = 74 + 14·lg(MVA), 64 dB below 0.2 MVA (MVA from the joined
+`rating` sum of the class-15 transformers inside ANY part of the facility
+when at least one part contains a rated unit, else the full facility
+nameplate tag, else the class median — main 25, auto 160, distribution 2,
+minor 0.4 MVA; class from the `substation` tag, then `voltage` /
+autotransformer evidence). Wind-plant outlines (11), inactive facilities
+(12) and transformers (15) are silent; lifecycle-retired rows carry
+`suppressed`, honoured by both readers.
+
+A registry point belongs to the smallest mapped footprint containing it, of any
+class; equal-area outlines prefer dedicated identity. Neither an area-equivalent
+circle nor proximity identifies a facility.
+Only a generic footprint whose subtype admits the activity takes the registry
+class: a dedicated source or incompatible subtype keeps its identity and never
+passes the point to an enclosing zone, and uncontained points leave the OSM
+classification in place. A polygon takes the loudest contained facility
+of the winning registry (Tata: steel 2410 over chemicals 2011). Whole-site duplicate
+suppression requires footprints of at least 10 ha, an area ratio at most 2.5,
+and each centre inside the other footprint; only mutual-nearest pairs collapse.
+Rebuild registry classifications from extracted inputs when changing this rule,
+so stale higher-authority stamps cannot block an earlier source in the chain.
+New NACE arms:
+06 oil/gas extraction (92, near-24/7), 07 metal-ore mining (as quarries),
+19 coke/refining (96, near-24/7), 62 office (defensive, 60). E-PRTR maps by
+Annex I sub-activity letter, not sector: 1(e) coal rolling mills → 1920 (coal
+products, like 1(f) — metal hot-rolling is 2(c)(i)), 3(a) underground mining →
+division-08 other mining (all underground commodities, not 24/7 coal), 3(b)
+opencast → 812. A contained GEM coal-tracker mine beats broad E-PRTR mining
+for the same polygon (commodity-specific over broad activity), so coal pits
+keep their 24/7 profile. The India colour feed is deleted (CPCB
+colours score air/water/waste pollution, not noise); registry points never
+stamp substations or turbines.
+
+Explicit wastewater/works activity takes precedence over generic industrial land
+use. Sewage and wastewater name priors select NACE 37 (continuous treatment),
+separate from NACE 38 solid-waste handling; an unspecified treatment plant does
+not establish either activity. Registry and name priors share the mapped-activity
+gate, so neither can replace an explicit wastewater class with another sector.
+Farm place names do not establish agricultural activity; the mapped farmyard
+class owns that emission, including when the name also labels a non-farm plant.
+
+`leisure_v4` adds the motorsport (10) and shooting (11) formula classes.
+These carry a class-TOTAL annual day Lw, not the area law, with the sub-type
+read from the row's retained tags: motorsport LW(1) + 10·lg(n) +
+10·lg(active hours / 4,380) with UBA REP-0310 per-vehicle levels (circuit 116
+touring proxy / n=15, motocross 114/7, kart 118/8, speedway 139/4, trial 95/2,
+other 116/10), default 100 days × 6 h, pink propagation spectrum; shooting LE
++ 10·lg(shots / 15.77 Ms) with RIVM sphere sums (rifle 139.0, pistol 133.6,
+shotgun 134.8), default 20,000 shots/yr, per-weapon octave spectra. Both are
+day-only (−50 evening/night) and reach past the 2 km leisure cap (industrial
+4 km reach, edge-gated). Raceway lines carry the emission, spread over their
+chain segments by segment length (OSM noding sets the vertices, so a count
+split would mistune per-metre power); an enclosing motorsport polygon goes silent, as does a roofed formula
+row (its building footprint emits) or a near-silent shooting discipline
+(archery, paintball, air guns). One venue carries one formula total: fragments
+of a circuit stored as N ways — touching chains, or lines in one class-10
+polygon — share the total by chain length instead of each radiating it
+(+10·lg N). A line in no venue keeps one total; mixed-subtype venues scale
+each line's own total by its length share.
+
 ## Prepared road direction and traffic
+
+Local roads (residential, living street and unclassified) without a higher-priority
+observation use S2p before finalization:
+`T[cell] × (through and urban ? c : 1) × (singleTrack ? d : 1) + k × G_street`.
+The three cells are urban residential (also living street), urban unclassified and
+pooled rural (also unknown built-up). Parameters and count/source provenance live in
+`pipeline/lib/local-street-demand.json`; `scripts/roads/fit_local_street_demand.py`
+regenerates them from DfT manual minor-road AADF, excluding holdout squares before
+feature extraction and using five CV folds grouped by square.
+
+Buildings generate the existing trip-rate demand at the OSM emission centroid,
+using `structures_v5.storeys` from the structures height ladder. The existing
+multi-source Dijkstra routes that demand to motor exits. `G_street` is the maximum
+total routed demand of any piece with the same name within one tree component,
+or of the same OSM way when unnamed. `through` means that this street contains
+an edge whose ends drain to different exits; the boundary marker is not routed
+into other streets. The through premium applies only in built-up areas: rural
+connectors are farm tracks without through traffic (a fitted split premium is
+1.80 urban against 1.03 rural, 95% interval [0.80, 1.27]). `singleTrack` means
+some street piece is mapped single-lane and none is mapped wider; untagged
+streets keep the full background. Background cells remain row-local across
+class/urban boundaries.
+Public local streets have no 20/day floor or class cap. Class 7 keeps its historical
+per-row routed demand clamped to 20–400/day, with no traffic when buildings are absent.
+The producer rounds and splits the total once; source 11 and allocated basis 3 remain.
+After structures and built-up change, rerun roads-service-tree → continuity → taper →
+roads-finalize from parent roads. A server restart alone cannot apply this model.
 
 Final road Arrow carries `road_traffic_contract=1`, four non-null Float64
 `aadt_{light,medium,heavy,moto}` values (finite, nonnegative, EFFECTIVE
@@ -92,7 +283,9 @@ day/evening/night shares of the 24 h volume (local periods 07–19/19–23/23–
 an absent class in an entry is unmeasured and keeps the class default, and an
 optional `total` share of the unclassified volume backs every class without a
 class-specific observation as an explicitly transferred estimate (US TMAS
-hourly totals) — never a measured class profile.
+hourly totals) — never a measured class profile. RWS INWEVA 2024 sections
+stamp class-specific shares from their published dag/avond/nacht volumes
+(motorcycles follow light); sections without published periods keep the default.
 One canonical validation lives in `normalize::RoadTimeProfile::validate`.
 The reader rejects a wrong-typed/null column, an id past the dictionary,
 unknown class keys and malformed entries — malformed never degrades to
@@ -116,38 +309,61 @@ LONE one-way row of class 0-2 with a ref or name takes 0.5: its sibling was
 missed. Classes 3+ and links keep a lone count whole (30 % of their measured
 one-way km are genuine one-way streets). A street-cross-section count (city
 profile counters) is that one street's own total and stays whole on a lone
-one-way street, which also keeps the publisher's class status. Every shared
-count, unknown scope, and any other count on a one-way row is published with
-all four `traffic_estimated` bits set; otherwise the bits are the adapter's:
-clear only for a class the publisher counted, never inferred from the basis.
+one-way street, which also keeps the publisher's class status. A roundabout
+ring (`junction` 1 or 2) is allocated as a two-way road: every point of the
+ring carries about the two-way flow of one approach, so neither a count nor a
+prior is halved on it, and two arcs of one ring are never two carriageways.
+Every shared count, unknown scope, and any other count on a one-way row is
+published with all four `traffic_estimated` bits set; otherwise the bits are
+the adapter's: clear only for a class the publisher counted, never inferred
+from the basis.
 
 Priors for rows without a count (`noise_compute::defaults::resolve_traffic_default`):
-hand-set city (São Paulo, Rio, Bangkok) and country (TH, BR) section totals
-first. Otherwise motorway, trunk and primary take a measured world rate per
-lane and per stored carriageway, vehicles/lane/day one-way / two-way:
-motorway 6,379 / 3,010, trunk 4,533 / 2,594, primary 4,250 / 2,800
-(length-weighted medians of measured rows of release r260910 over 174k / 218k /
-200k km; leave-one-country-out MAE 3.2-3.7 dB, |bias| < 0.6 dB). The lanes tag
-counts when 1-6; a row without one takes the median whole count of untagged
-measured rows (motorway 5,200 / 6,019, trunk 1,810 / 3,045, primary
-5,882 / 3,719). The vehicle-class split keeps the `WORLD_DEFAULT` proportions
-of the class. Such a prior is per carriageway by construction: no carriageway
-share, one-way half or `lane_ratio` applies, only `access_factor`. Classes
-3-12 and every hand-set arm are both-directions section totals x
-`normalize::road::lane_ratio` x share (1/n matched carriageways, 0.5 for a
-standalone one-way row) x `access_factor`. No country or continent factor
-exists: vehicles per paved km measured worse than none in every class, and
-nine alternative predictors failed to beat a constant. These tables
-remain authoritative for that build step. Serving consumes the prepared
-counts verbatim: no traffic default, oneway share, lane or access factor is
-re-applied at runtime, and a row stamped `source_id` 0 with positive counts
-is a valid prior. A heavy-only count emits without inventing other classes;
-a true total zero is silent and is never resurrected by a class default;
-tunnels still do not emit. OSM direction never scales a count. Effective
-speed retains the shared posted, taper, country-legal and class-default
-rules. Contributor and segment traces report the dominant segment's four
-class values, the estimated bitmask and the row dataset attribution;
-source and vehicles-per-day units are preserved end to end.
+hand-set city (Bangkok) and country (TH) section totals first. Otherwise
+classes 0-4 take a measured prior per stored carriageway,
+`MEASURED_CARRIAGEWAY_PRIORS` in `road_traffic_priors_generated.rs`, indexed by
+class, direction (one-way carriageway or two-way road) and `built_up`
+(unknown takes the cell fitted on every row). Motorway, trunk and primary
+have a vehicles-per-lane rate used for a lanes tag of 1-6 and the whole count
+of an untagged carriageway otherwise; secondary and tertiary have the whole
+count only. The table is regenerated by `pipeline/fit-road-traffic-priors.ts`:
+length-weighted medians of counted public carriageways (tunnels, roundabouts
+and derived flows excluded) in training squares of holdout rule v1, scored on
+the holdout squares; its header records the release and kilometres. The
+vehicle-class split keeps the `WORLD_DEFAULT` proportions of the class. Such a
+prior is per carriageway by construction: no carriageway share, one-way half
+or `lane_ratio` applies, only `access_factor`. The one exception is the
+one-way secondary street, which shares the fitted two-way section (0.5 for a
+lone row, 1/n for n matched carriageways): the retired one-way arm read
++3.0 dB on holdout genuine one-way secondary streets and doubled the
+split-mapped two-way streets that form 90% of paired one-way secondary rows
+(w3-priors, 2026-09-25). Classes 5-12 and every hand-set arm are both-directions
+section totals x `normalize::road::lane_ratio` x share (1/n matched
+carriageways, 0.5 for a standalone one-way row) x `access_factor`. No country
+or continent factor exists: vehicles per paved km measured worse than none in
+every class, and nine alternative predictors failed to beat a constant; a
+metro-size term failed leave-one-country-out and is not used.
+
+Every finalized piece also carries `cross_section_aadt`, the whole road's
+vehicles per day at that piece (owner decision 2: the popup headline shows the
+whole road, both directions, and the details the carriageway's four classes).
+It is the row itself when the row establishes the whole road (a two-way row or
+ring, a known share of a two-way total, a street's or tree's own flow), else
+the sum over the carriageways found together, and 0 where only this one
+direction is known (a lone directional count or a lone carriageway prior).
+Emission never reads it.
+
+These tables remain authoritative for that build step. Serving consumes the
+prepared counts verbatim: no traffic default, oneway share, lane or access
+factor is re-applied at runtime, and a row stamped `source_id` 0 with positive
+counts is a valid prior. A heavy-only count emits without inventing other
+classes; a true total zero is silent and is never resurrected by a class
+default; tunnels still do not emit. At serving time OSM direction never scales
+a count. Effective speed retains the shared posted, taper, country-legal and
+class-default rules. Contributor and segment traces report the dominant
+segment's four class values, its `cross_section_aadt`, the estimated bitmask
+and the row dataset attribution; source and vehicles-per-day units are
+preserved end to end.
 
 ## Prepared railway traffic
 
@@ -161,18 +377,174 @@ period. The producer clips geometry and resolves counts, missing-traffic priors,
 service/parallel allocation and any estimated period split before publication.
 Daily-only timetable evidence receives an explicitly estimated period allocation.
 Unknown freight is not a known zero; a known numeric zero remains zero.
-On non-service tracks (`service=0`), each unknown category receives its own
-labelled class prior, independently of evidence in the other category. Existing
-category values, including zero, are preserved; new priors are shared once.
+The yard stamp marks untagged non-through tracks inside rail-yard polygons
+`service=yard` before allocation (no ref or name, not usage-main, no timetable
+intervals, way fully inside the polygon), so they keep only their own evidence
+while the yard facility carries the area. On non-service tracks (`service=0`)
+other than preserved heritage rail (type 5),
+each category is allocated once per line
+cross-section: a track and each other way running beside its midpoint (same type
+and usage family, no shared node; longitudinal overlap at least the greater of
+30 m and 30% of that track's own length; 15 m and 10° without a common ref or name,
+50 m and 20° with one), closed transitively over ways (a way beside a sibling's
+midpoint joins even past the lateral gate, so the division conserves the line
+value for any sibling graph), form the cross-section, projected in local metres scaled by
+the square centre's latitude so the sections ignore input row order. The line value comes from the
+track's own country files first: the highest-ranked domestic evidence sets it (the
+sum of what a measured source counted on each track, such as routed trips and
+platform stops, or the value a proxy repeats on every track). A measured domestic
+sum is trusted where the walk covered every track, and is otherwise a lower bound
+the class prior floors; a timetable's no-service residual yields to any ranked
+evidence on the line, from either timetable: a no-service stamp beside ranked trains is
+a walk gap on that piece, not silence. Neighbour-file evidence only ever sees
+cross-border services: it bounds a line the domestic timetable missed and loses to
+domestic evidence. Without
+evidence one labelled class prior applies: 80 passenger trains/day on main lines
+everywhere, and freight per day per country (DE 24.5, FR 5.5, PL 12.0, CZ 13.5,
+AT 27.1, CH 31.4, 20.0 elsewhere), each solved to conserve its official 2023
+national goods train-km. The `traffic_mode` column carries OSM
+`railway:traffic_mode` (0 unknown, 1 passenger, 2 freight, 3 mixed): a
+passenger-only track takes no freight prior and a freight-only track no passenger
+prior, so a prior divides among the capable tracks only; measured evidence still
+wins over the tag with the whole cross-section as its divisor. Each
+track carries the line value divided by its divisor, so a proven zero
+stays zero and the cross-section sum equals the line value in every category.
+Heritage rows retain type 5, observed traffic and posted speed. Missing traffic
+stays zero with status 0 (unknown), with no class speed or high-speed fallback.
+They are labelled heritage and emit nothing until a heritage model is available.
 
 Popup and surface loaders require this contract and use the same validator and
 normalization. Emission and audibility reach consume these period counts directly
 with 12/4/8-hour periods. Serving performs no traffic fallback, daily redistribution,
 parallel division or service discount. Effective speed retains the shared posted,
-high-speed and type-default rules. Contributor metadata follows the segment with
+high-speed and type-default rules. Each category's representative speed, the
+effective speed within its vehicle range (freight at most 88.9 km/h, the EBA 2023
+train-weighted mean), sets both its per-train level and its line density. Contributor metadata follows the segment with
 the greatest received Lden energy, including night-only traffic, and reports both
 categories' status, source and matching evidence separately. Rail contributor
 emission headlines use the same Lden period weighting as received levels.
+
+## Level-crossing horns
+
+US and Canadian public at-grade crossings with trains sound horns as rail rows
+of type 6: one approach segment per travel direction ends at the crossing,
+oriented along the nearest finalized track within 60 m and min(1/4 mi, v·20 s)
+long (49 CFR 222.21; CROR 14(l)). Each approach carries half the crossing's
+soundings in the passenger slots; freight is estimated zero. FRA day (6a–6p) /
+night (6p–6a) thru counts map to END periods uniform within blocks; full-day
+quiet zones and Chicago-excused crossings are silent and partial zones silent
+22–07. Transport Canada daily totals split flat 12/4/8; TC carries no cessation
+data (labelled in its dataset name). Overlapping same-direction approaches
+merge onto shared pieces with the max soundings. Horn rows are appended
+post-finalize and never take priors or daily splits; refinalizing a square
+refuses horn rows (strip them and re-run the horns step).
+
+A sounding spreads the horn's power over the approach it travels, so the line
+emission follows the rolling-stock density law (N / (T·1000·v)) with the horn's
+own loudness independent of speed; slower trains sound longer per metre. The
+octave spectrum is the energy mean of the three normalized Volpe 1993 horn
+spectra (Figs. 10/13/16, 0°, 61 m), and the sound power level is calibrated so
+one sounding at the median US sounding speed (40 mph) yields the FRA reference
+SEL of 107 dBA at 100 ft abeam a 402 m approach through the engine's own
+propagation on flat soft ground. Horns radiate omnidirectionally from 4.0 m
+above the railhead over ballast ground.
+
+## Rail yards
+
+`railway=yard` polygons extract as industrial source_type 5
+and emit as CNOSSOS 2.3.3 facility sources at base Lw 96 dB(A) with the quarry octave
+spectrum (the closest modelled open-air mechanical analogue: switchers,
+coupling, retarders), running 24/7. `landuse=railway` alone is the railway
+corridor, not a yard, and emits nothing. The level is provisional until the Schall
+03 yard chapter is verified. Untagged non-through tracks inside the polygon
+lose the line prior (the yard stamp) so the area is not counted twice.
+
+## Aircraft finite-segment corrections
+
+Popup, airborne CUDA and cruise CUDA apply Doc 29 Vol 2 Eq. 4-8b at every
+slant: NPD SEL + ΔV + ΔI − Γ(ℓ)Λ(β) + ΔF. Lateral attenuation is independent
+of engine installation, including helicopters via AEDT 2c Eq. 4-70; only
+airport-ground evaluation bypasses it. For β < 0, Λ = 10.857 dB is still
+multiplied by Γ(ℓ). Terrain and building diffraction compete with lateral
+attenuation through their maximum at all distances. Installation ΔI keeps
+its own wing/fuselage coefficients; propeller/helicopter ΔI is zero.
+
+The finite-segment integral uses the class anchor's scaled distance
+`d_lambda = (2/pi) V_ref t0 10^((SEL − LAmax)/10)` (Doc 29 Eq. 4-11), with
+V_ref in m/s and t0 = 1 s. SEL − LAmax interpolates in log distance and
+extrapolates with the nearest two NPD rows, independently of the existing
+SEL energy-tail extrapolation. Profiles whose generated LAmax is the
+placeholder SEL − 12 use the dipole limit d_lambda = slant (Appendix E).
+Both metrics use the same 128-bin log-distance grid on CPU and CUDA.
+The old constant scaled distance and 7,620 m correction cutoff are removed.
+This is a runtime model change: prepared airborne/cruise rows remain valid;
+recompute receiver exposure and tiles under the coordinated physics generation.
+
+Airborne fields prepare split-piece geometry and possible predecessor links once
+per scene. CUDA selects the first surviving predecessor at each receiver, then
+sums each accepted chain in source row order before applying the free and received
+20 dB event floors. Double precision keeps small finite-segment fractions and
+floor decisions aligned with the canonical CPU scatter. Receiver batches bound
+working storage; terrain marches reuse the existing bilinear DEM tile handle and
+produce the same packed horizons as the uncached sampler.
+
+## Aircraft thrust-dependent NPD interpolation
+
+Fixed-wing jet departures no longer read the max-thrust NPD row. Each segment
+computes its corrected net thrust per engine Fn/δ (Doc 29 Vol 2 Eq. B-1/B-12)
+and interpolates the bracketing power rows linearly in power (Eq. 4-3), for
+SEL, LAmax and scaled distance alike (SEL − LAmax is nearly flat across rows,
+so d_λ lerps in metres). Ground rolls use their rating (takeoff/idle); initial
+climb below the ANP cutback height above the departure field flies MaxTakeoff;
+everything else follows force balance `(W/δ)(sin γ/K + R)/N` within
+[Idle, MaxClimb], with K = 1.01 at Vc ≤ 200 kt else 0.95. A segment outside
+the rating model's domain — an ADS-B outlier whose Idle/MaxClimb bounds
+invert or leave the finite range — is rejected: the bracket returns no row
+and the kernel, packs and painters drop the segment instead of clamping
+into crossed bounds. The field is the
+terrain under the flight's own takeoff roll, stamped per flight by Stage 1;
+when the roll was not observed (overflights, coverage gaps at the airport)
+the gate falls back to local AGL. Speed is ground speed times √σ (no wind);
+weight is the anchor's median DEFAULT stage weight; R is the clean-configuration
+drag ratio. The (row, weight) bracket is receiver-independent (stored length,
+barometric altitude, Filter-D cuts, departure field), computed once per segment
+and shared by popup, CPU painter and CUDA pack; the kernels do two LUT reads
+plus a lerp. Example: B738 at 3,000 ft AFE after cutback reads 93.77 dB SEL
+at 1,000 ft instead of 99.3.
+
+Reach envelopes the loudest power row per operation (approach reach grows;
+departure reach is unchanged). Fallback proxy, piston, turboprop (% power) and
+helicopter classes stay pinned to today's curves. Stage-2B source-side ranking
+stays pinned to the max departure row (display-only). Acceleration and flap
+schedule stay unmodelled; takeoff derate stays unmodelled (full MaxTakeoff
+below cutback). This is a producer and runtime model change: `airborne.arrow`
+carries the departure field elevation per flight (v4 contract), so aircraft
+prepared outputs rebuild; the gate itself evaluates in the shared bracket.
+
+## Helicopter certification levels
+
+Helicopters keep the MV-22 distance shape with an additive per-typecode,
+per-state correction from EASA Certification Noise Levels – Helicopters,
+Issue 52 (26 Jun 2026; reproduction authorised provided the source is
+acknowledged): Chapter 11 SEL energy mean over representative records, else
+Chapter 8 overflight EPNL energy mean minus 2.65 dB (median over same-model
+and -engine pairs, grouped by engine). Climbing rows take the typecode's
+takeoff-uplift correction, descending rows (level-flight flag and the stored
+whole-chord descent state: the chord lost more than 10 m end to end, past
+one 25-ft barometric step) the BVI approach correction, level rows the bare
+level correction. Stage 1 stamps the state before storage splitting and
+every piece inherits it, so a steep descent keeps its correction at any
+sample cadence. Traffic-weighted level SEL
+at 150 m is 83.1/84.4/89.7 dB for light/medium/heavy helicopters, against
+today's uniform 94.8. LAmax shifts with SEL (no certified LAmax exists), so
+scaled distance keeps the dipole limit. Reference speed stays at today's
+100 kt: the certificates carry no speed, and the ACRP 129 kt alternative
+moves ΔV by only ±1.1 dB. Gyroplanes take the light-class
+traffic-weighted prior. The typecode-to-EASA-model mapping is not verified
+against ICAO Doc 8643. This is a producer and runtime model change:
+`airborne.arrow` carries the descent state in flag bit 7 (v5 contract), so
+aircraft prepared outputs rebuild; the gate itself evaluates in the shared
+correction from the stored state.
 
 ## Aircraft local geometry
 
@@ -231,7 +603,7 @@ Waters absent from both products have no rows.
 
 ## Open parking and emission-only grounds
 
-Open parking ways use `leisure_v3` classes 8 (lot) and 9 (street strip), with no
+Open parking ways use `leisure_v5` classes 8 (lot) and 9 (street strip), with no
 screening geometry. Their mapped area estimates spaces at 23.8 and 13.3 m² per
 space. Day sound power follows the Parkplatzlärmstudie (LfU, 6th ed. 2007):
 63 dB(A) per movement/hour, 0.40 movements/space/hour and the searching term
@@ -240,13 +612,13 @@ are averaged over this engine's periods: evening −1.1 dB, night −6.3 dB.
 These are model defaults, not measured traffic for an individual car park.
 
 Functional grounds and underground sources retained in structures have null
-screening geometry and zero screening height at default height tier 2
-(`structures-builder-2` and later). Explicitly underground Overture footprints
+screening geometry and zero screening height with the ground-activity height
+source (`structures_v5`). Explicitly underground Overture footprints
 are excluded from above-ground screening and matching (`structures-builder-3`);
 an independently mapped above-ground OSM building keeps its own wall. Mapped
-sub-metre building heights retain tier 0 even when the screening height rounds
-to zero. Both popup and painter preserve that distinction when normalizing
-emission: one
+sub-metre building heights keep their mapped-height source even when the
+screening height rounds to zero. Both popup and painter preserve that
+distinction when normalizing emission: one
 mapped ground area, no floor multiplier, source height 1.5 m (the existing
 open-air activity convention). Raw building height/floor tags cannot turn such
 an area into a facade source. A real building with unavailable geometry keeps
@@ -258,49 +630,385 @@ Explicit OSM open structures (`building=carport`, `building=roof`, or
 `amenity=parking` with `parking=carports`) carry outdoor `building_use=3`
 in `buildings_v5`.
 The structures builder preserves that outdoor envelope for OSM-only and
-Overture-matched rows (`structures-builder-4`), so a canopy cannot acquire an
-indoor attenuation from an absent or generic Overture class. Enclosed garages
-retain their existing classification. This changes enclosure only: screening
-geometry, height, emission and traffic remain unchanged.
+Overture-matched rows (`structures-builder-4`), so a point under a canopy stays
+an outdoor receiver instead of taking a building exposure from an absent or
+generic Overture class. These rows and
+Overture `roof`/`carport` classes screen at 0 m (`structures-builder-5`): a
+roof on posts has no wall to diffract over. Footprint, emission, envelope and
+traffic stay. Greenhouses, grandstands and enclosed garages keep their walls.
 
-## 4.7 Vector screening
+## Sports pitches
 
-One source-to-receiver ray shares its bare-earth raster profile between terrain
-and exact building/barrier crossings. The existing source-platform clamp and
-source/receiver height floors apply to both. Buildings inside the source's
-exclusion radius are omitted; explicit barriers are not. Paths shorter than
-30 m or with fewer than three profile samples have no screening term.
+Both pitch classes share one active anchor: 97.9 dB(A) over 6400 m², the Sport
+England AGP Acoustics DGN (2015) typical free-field 58 dB LAeq,1h at 10 m from
+the sideline halfway (player voices while the pitch is in use), back-calculated
+through the hemispherical incoherent area integral (−1.8 dB for 100×64 m).
+Grass and unknown surfaces (class 0) take the seasonal club duty: 5 h/week over
+40 weeks (4 h day + 1 h summer evenings; night silent), Lden ~83.5 @ 7000 m².
+Artificial turf (class 12) takes the booked duty: 40 h/week year-round on the
+documented peak pattern (weekday evenings + weekends; night silent),
+Lden ~93.8 @ 7000 m². Day/evening/night follow the engine clock (07–19/19–23/
+23–07).
 
-Bare terrain retains its existing single max-path-difference edge. Every admitted
-vector crossing is evaluated at its exact path fraction, with interpolated bare
-ground plus its height. Each uses the same existing single-edge diffraction
-function, bare-earth mean-ground fit, Rayleigh admission, favourable-condition
-geometry, meteorological mixture and band caps.
+## Screening heights
 
-For each frequency band, with terrain attenuation `T` and crossing attenuations
-`C_j`, return `S = max(0, max_j(C_j) - T)`. Thus `T + S` is the band envelope,
-not the sum of obstacle losses. The empty candidate set gives exactly `S = 0`.
-Different crossings can supply different bands: selecting one maximum path
-difference before evaluating attenuation is not equivalent. Adding a candidate
-must not reduce any band's envelope. Raising a wall or building must not make
-the receiver louder in the competing-roof regression.
+The structures builder gives every footprint one screening height, the mean
+roof height, from the first available rung, and stores its `height_source`:
 
-Line-source angular integration is unchanged: interval rays use their own
-terrain and crossings, and energy-average their ground-or-barrier composite.
-The existing ground, vegetation, atmospheric and emission models are unchanged.
+1. national measured height (NRW LoD1 `measuredHeight`, 3DBAG 50th-percentile
+   roof minus ground) where a measured footprint covers the candidate, else the
+   regional survey zonal mean (Prague LiDAR); clamped to 2.5–250 m;
+2. mapped OSM `height`;
+3. OSM, national-register or Overture floor count: 1 floor 6 m (its attic
+   counts: floor counts exclude it), 2–3 floors 6–9 m, 4+ floors 3 m each
+   plus 2 m of roof (five mean-roof references, 2026-09-25; never stations);
+4. Overture height of at least 2.5 m (lower values are artefacts);
+5. median reference mean-roof height by footprint area: < 30 m² 2.9 m,
+   < 60 m² 3.5 m, < 150 m² 7.4 m, < 500 m² 8.0 m, else 9.0 m
+   (no-information rows only, 2026-09-25).
+
+Rung 5 is not per-building knowledge, and neither is the retired
+satellite rung (`height_source` 4, read from older prepared squares only):
+both take the low-profile cap; every other source measured or mapped the
+building. The demand storey count `storeys` is the floor count where one is
+mapped, else round((height − 1 m) / 3 m), at least 1 (registry floor counts
+vs mean height, 6,061 buildings: MAE 0.41 storeys, unbiased); a structure
+without a screening height counts one level. The service-tree demand reads it.
+Noise walls keep a mapped OSM height; unmapped walls stand at their country's
+mean wall height (DE 3.88 m, US 4.45 m, AT 3.6 m, else 3 m), stored rounded
+to whole metres (4 m in Germany, the United States and Austria). Official barrier
+inventories (`structures-builder-9`) stand beside OSM: an official line
+replaces the OSM micro-segments within 5 m of it and screens at its
+inventoried height (GWV top-minus-road-edge median, else the inventory's
+in-range median); replacement reads a 375 m support halo past the square
+border while owned hops still emit alone, so a cross-square survey
+replaces its OSM twin instead of screening twice. Official berms stay out
+of the thin-wall index until the terrain step consumes them.
+
+## Raster terrain and canopy inputs
+
+The next raster generation uses bare-earth `dem.u16le`: WGS84 one-arc-second
+nodes in `grid::raster::RasterWindow`, EGM2008 metres, decoded as −500 + v/5;
+65535 is missing. The terrain producer area-averages the source footprint at each
+node and gives national DTMs precedence over the global DTM. Runtime elevation
+remains bilinear. The old signed big-endian DEM is not accepted by this reader.
+
+`canopy.u8` records canopy top above bare earth, 0–250 metres (255 missing),
+nearest sampled into `PathProfile.canopy_m` beside `forest.u8` canopy cover.
+The CUDA upload carries this height at byte 6 of the existing eight-byte
+`FusedPixel`; `SampledRasterPoint.canopy_m` exposes it to the foliage kernel.
+A zero-byte channel file denotes independently verified ocean; a missing file,
+wrong length or sampled missing node fails the operation. A producer may not
+turn missing canopy into zero. Height is for foliage only, never subtracted
+from a surface DEM to manufacture terrain.
+
+Source fetches retain URL, fetch and terms-check timestamps, SHA-256, byte count,
+licence and licence URL. A published square carries source epochs, coverage
+fractions and its output digest. National vertical transforms must use PROJ
+with ballpark operations disabled and required grids present. The geoid shift
+is evaluated at every target node after resampling; missing grids fail.
+
+Changing this generation invalidates terrain-dependent altitudes, structure
+bases, aircraft preprocessing and horizon calculations, façade exposure and
+painted tiles. Bridge-deck/railhead geometry must be integrated before this
+generation is used for a production calculation; the canopy-height foliage
+model already reads this generation.
+
+## Line sources: the CNOSSOS point sum
+
+A road or rail piece is a straight 3D line between its endpoints' ground plus the
+source height. Directive 2015/996 §2.5.3 splits a line into incoherent points of
+`A_div = 20·lg r + 11`; for a straight piece `dx/r² = dφ/d⊥` (φ the angle in the
+plane that holds the line and the receiver, d⊥ the 3D distance from the receiver to
+the line, floored at 0.5 m), so the point sum is exactly
+`E = W′/(10^1.1·d⊥)·∫ 10^(−A_path(φ)/10) dφ`. In free field this is
+`L_W′ + 10·lg θ − 10·lg d⊥ − 11`; an infinite line reads `L_W′ − 10·lg d⊥ − 6.03`
+(the retired `−10·lg(2π·d) + 10·lg(θ_horizontal/π)` chain sat 1.9533 dB lower and took
+the finite-line angle in plan, #5 and #28).
+
+The integral uses one rule in popup and painter (`propagation::line_quadrature`,
+CUDA `relevant_source_arc.cuh`/`relevant_source_pair.cuh`): five buckets of equal Δφ,
+each node on its own ray from the piece to the receiver with its own profile, ground,
+terrain, screening, vegetation and air absorption at its own slant distance, weight
+Δφ. A bucket spanning at least 3° of horizontal azimuth replaces its node by
+geometry-placed nodes: every obstacle edge within reach that stands at least a metre
+in front of the piece marks a 128-bin blocked mask over the bucket's azimuths (walls
+lower than the source height, and grid cells whose tallest edge is, are skipped);
+every blocked run and clear gap is split into parts of at most 0.26 rad (at most nine
+per run), each part one node weighted by its own Δφ, obstacles read on blocked parts
+only. There is no lower bound on the edge's distance from the receiver itself: a wall
+0.4 m away still marks its bins (dropping sub-metre edges reads 16 dB loud where the
+receiver stands just outside a wall). A line source radiating with the CNOSSOS-EU rail track dipole `0.01 + 0.99·sin²ψ` uses ψ
+between the **horizontal projections** of track and ray (2.3.15). Each node is weighted by the
+integral of that horizontal directivity over its 3D in-plane Δφ. With `u = tan φ`, its dipole
+part is `b² / ((u+a)²+b²)`: `a` is the projected along-track offset of the 3D perpendicular foot,
+and `b` the horizontal perpendicular distance, each divided by the horizontal track speed and
+the 3D perpendicular distance. Partial fractions integrate this against `du/(1+u²)`; near
+coincident quadratics (dimensionless denominator < 1e-2), eight-point Gauss–Legendre avoids
+cancellation. For a coplanar source and receiver this reduces to the original integral of
+`cos²φ`; an elevated receiver needs the horizontal projection. Rail rows stay omnidirectional until W4's emission, fitted
+with the dipole and the two source heights, lands (each height is then its own line source).
+Against a fine point sum (1°/10 m nodes through the same per-ray physics,
+`point-sum-oracle`) the rule is within ±0.15 dB on straight roads over G = 0, 0.5, 1
+at 5 m–2 km and behind a roadside wall, and within 0.28 dB per layer at ten real receivers
+(2026-09-24, the largest behind the M25 J17 barrier).
+
+A point source–receiver pair is skipped only when the relevance bound of
+`propagation::relevance_bound` stays below 0 dB in every band of every period:
+`B = L_W − A_div,min(d) − α_min·d/1000 + G_max`, a line bounded by its infinite line at its
+closest horizontal distance, a point by `20·lg d + 11`, α_min the smallest absorption of the
+weather window, G_max the two state maxima mixed at the window's p_max per period (18 dB
+favourable, 6 dB homogeneous: the (9)(h) below-plane corner takes the image path's Δdif
+near 0 dB with both sides at the (2.5.20) floor, 0 + 9 + 9 in the limit; 17.60/6.00 dB
+found, `boundary_gain_tests.rs`, voiding the older 13.3 dB derivation): a night-only source
+is never dropped by a day-only gate (#31). A road or rail row reaches as far as that
+bound's Lden stays above 30 dB (the display floor), capped so no ray outruns the painter's
+64-sample profile (11,872 m, minus the 250 m longest piece for a line's closest point);
+popup and painter share the reach, and a pair inside it is never below 0 dB in every band.
+Past 20 piece lengths the row must also pass the finite-piece cap: the point spread at
+the piece's total power `L_W′ + 10·lg(1.01·L)`, which drops the short far rows the
+infinite-line bound keeps to the ceiling (a 40 m residential piece at 5 km: line bound
+≈ 47 dB Lden, cap ≈ 21 dB). The cap is sound because the kernel's incoherent point sum
+`W′/(10^1.1·d⊥)·Σw·T` there runs on uniform buckets (under 3° subtended, so no wide-bucket
+path), the weights partition the subtended angle, and `dx/r² = dφ/d⊥` with every node at
+3D distance ≥ the horizontal closest point gives `E ≤ W′·L·G·A/(10^1.1·d²)`; the 1% length
+margin covers the planimetric length, the f32 rounding, and the weight dust, and
+directivity never exceeds 1 (omnidirectional today, `0.01 + 0.99·sin²` in the planned
+track dipole).
+
+## One ray: CNOSSOS-EU per meteorological state
+
+Every line quadrature node and every point source runs one ray (`ray_transfer.rs`); the
+painter runs the same ray in f32 (`relevant_source_cnossos_stream.cuh`).
+
+- Profile: the bare-earth samples of the bilateral cadence, G = 1 − IMD/100 per sample, both
+  linear between samples. Within the source's platform half-width the terrain may not rise
+  above the source ground (road: lanes × 3.5 m / 2 + 1.5 m, two lanes when untagged; rail
+  2.5 m; points 0) — this replaces the 30.9 m source clamp that erased berms.
+- Obstacles: every crossing of the ray with a building wall or barrier; its top is the
+  terrain there plus its height. Building crossings nearer a point source than its footprint
+  radius are its own building. A footprint's crossings pair into roofs in chainage order
+  (entry, exit); an unpaired last crossing has none; roofs are taken in the order the ray
+  leaves them and each starts no earlier than where the roofs before it end (overlapping
+  footprints are 0.4 % of roof length on the oracle's real rays). Roofs are hard raised ground
+  (G = 0) in the mean planes and ground factors, the ISO/TR 17534-4 geometry; walls are not
+  ground. Footprints are named by index and id, so two squares' footprints never pair.
+- Candidates: the bare terrain samples and the obstacle tops.
+- Diffraction points per state: homogeneous rays are straight; favourable rays are arcs of
+  radius Γ = max(1000 m, 8·d). A candidate above the state's ray (favourable: lowered by the
+  arc's height above the chord) blocks it; the points are then the upper hull of S, the
+  blocking candidates and R (the rubber band, any number of edges). An unblocked state takes
+  the one candidate with the largest path difference (homogeneous −(SO + OR − SR) below the
+  chord; favourable (2.5.26) above the straight chord, else (2.5.27)), admitted per band by the
+  Rayleigh criterion δ > −λ/20 and δ > λ/4 − δ*, S* and R* mirrored in the side planes.
+- Mean planes: the continuous least-squares line of the roofed ground over the whole path, and
+  over the ground before the first and after the last diffraction point; heights orthogonal to
+  the plane, a negative one taken as 0 with its sign kept; dp the projected distance.
+- A_ground (2.5.14)–(2.5.20): the homogeneous state uses G′path, blending in the source ground
+  Gs on short paths; the favourable state uses the modified heights of (2.5.19) and the lower
+  bound (2.5.20) on the unmodified heights; a hard path is −3 dB homogeneous and the bound
+  favourable. Height sums below one millimetre use one millimetre in the ratios of (2.5.14),
+  (2.5.19) and (2.5.20). Gs: road carriageway and bridge decks 0, ballast 1, embedded tram
+  track 0; a point source the ground under it.
+- A_dif (2.5.21)–(2.5.32): Δdif = 10·lg(3 + 40·C″·δ/λ) with C_h = 1 and C″ for two or more
+  points spanning more than 0.3 m; the ground correction split on both sides; only Δdif(S,R)
+  is capped at 25 dB; a source or receiver below its side's plane takes that side's A_ground
+  whole and the mirrored Δdif. There is no minimum path length.
+  **Numerical domain:** if either ground-split logarithm has a non-positive argument and
+  hence a non-finite result, that side takes its whole A_ground and its image Δdif,
+  source then receiver. This follows NoiseModelling's `AttenuationCnossos.aDif`; the
+  published equations do not specify this fallback. It also covers the zero-argument
+  (infinite) limit. A recorded Prague two-roof path tests this domain separately from the
+  ISO accuracy fixture. Any other non-finite or negative linear energy fails its receiver
+  instead of flooring to a quiet layer.
+- The states are mixed only at the end, per period and propagation direction:
+  `10^(−A/10) = p·10^(−A_F/10) + (1 − p)·10^(−A_H/10)` with p of the period and of the
+  direction's 16-sector climatology: the receiver square's `meteorology.bin` window sampled
+  bilinearly at the receiver, then linearly between the two nearest sector centres (0.5
+  everywhere only where the square has no file).
+- A_atm: ISO 9613-1 at exact mid-band frequencies, per period and band from the mean μ and
+  variance σ² of the hourly coefficient of the receiver square's window: the second cumulant
+  `μ·d − (ln 10/20)·σ²·d²` with its running maximum (monotone, never amplifying), in closed
+  form the cumulant up to d_peak = μ/(2cσ²) and the peak value beyond, d the slant distance
+  in km; 15 °C / 70 % (the CNOSSOS default) with no variance only where the square has no
+  file.
+- Foliage: ISO 9613-2:2024 Table A.1 literally, from the ray's cover-weighted metres in
+  canopy height per state (straight ray homogeneous, Γ arc favourable): nothing below 10 m,
+  the short row below 20 m, the per-metre rate times the depth capped at 200 m above (the
+  table's own step at 20 m stands). Every profile interval contributes its slant length times
+  the fraction of its ends inside the canopy volume times the mean forest cover; the two
+  state attenuations mix in energy at p. A missing canopy height poisons the depth, and the
+  production samplers poison the elevation with it, so the popup fails instead of publishing.
+- Popup hypotheses: free field is the whole-path A_ground alone; no terrain leaves the terrain
+  out of the candidates; no screening removes every crossing (tops and roofs); no ground drops
+  every ground term; no forest; no air absorption.
+- Acceptance: all 28 ISO/TR 17534-4 Direct cases, LH and LF, within ±0.1 dB in every band
+  (`iso_tr_17534_4_tests.rs`); the painter against the popup's CPU ray on synthetic scenes
+  (`surface-cuda-check`, gates 0.05 dB flat / 0.5 dB relief): flat ground of four ground
+  factors within 0.033 dB, a ridge with touching, overlapping and courtyard buildings and two
+  walls within 0.18 dB (the largest a wide-bucket mask bin at a wall edge moving in f32),
+  under both default and distinct per-period, per-sector weather with nonzero absorption
+  variance and varied window bounds.
+- The literal standard is not monotone in obstacle height;
+  what holds is that adding a candidate never shortens the rubber band.
+
+Where a square has no `meteorology.bin` file, every period uses the same default absorption
+coefficients (dB/km), rounded here to two decimals; the implementation computes them from
+ISO 9613-1 at exact mid-band frequencies, 15 °C, 70 % RH and 101.325 kPa. Variance is zero,
+and each period's directional favourable probability is 0.5.
+
+| Nominal band (Hz) | 63 | 125 | 250 | 500 | 1000 | 2000 | 4000 | 8000 |
+|---|---|---|---|---|---|---|---|---|
+| Mean α (dB/km) | 0.10 | 0.38 | 1.13 | 2.36 | 4.08 | 8.75 | 26.39 | 93.71 |
+
+The W4 emission integration must supply one independently powered line per source height
+A/B. The current CPU `LinePiece.source_height_m` and CUDA `DeviceLineSource.source_height_m` are relative
+to the sampled terrain (the formation datum once bare earth lands): set them to
+`railhead_offset_m + 0.5` and `railhead_offset_m + 4.0` respectively, and attach each
+height's emission, directivity and distinct source-part identity.
+Do not duplicate today's complete row emission into both heights. The deterministic CUDA
+check exercises both heights above a raised railhead and distinct per-period, per-sector
+weather probabilities with nonzero absorption variance and varied window bounds, uploaded
+per receiver as in production.
+
+One relevance bound stands behind every road and rail reach and every point-source pair
+skip: `B = L_W − A_div,min(d) − α_min·d/1000 + G_max`, never below what the method can
+deliver at horizontal distance d. The state gains are 18 dB favourable (the below-plane
+corner: the capped Δdif replaced by the image path's ≥ 0 dB while both sides sit at the
+−9 dB floor) and 6 dB homogeneous (the same corner at the −3 dB floor); each period mixes
+them in energy at the largest p over the row's propagation-direction azimuth span
+(source→receiver, the same `propagation_azimuth_rad` the ray transfer evaluates; exact: p
+is piecewise linear with breakpoints at the sector centres, so the maximum sits at an
+endpoint or an enclosed centre), never above the window p_max the extract-time envelope
+was built at, and α_min
+is the window's linear absorption bound per band (the peak-region line only where every
+node and period peaks inside the ceiling; elsewhere it overshoots the unreached peak).
+A row reaches as far as its bound's Lden stays above the 30 dB display edge; no ray
+outruns the 11,872 m profile cadence ceiling. Point-layer reach radii stay hand-set per
+layer; only the pair skip uses the bound. The painter's pair gate evaluates the
+window-maximum bound per receiver from the uploaded extremes.
+
+The painter streams the ray: samples and crossings in chainage order (the scene's obstacles are
+one merged grid, each cell taking the crossings inside its own chainage window) feed both
+states' monotone-chain hulls, and every hull entry carries the ground moments of its two sides,
+so the side planes of whichever points end up first and last come out without storing roofs. A
+ray that outruns a fixed capacity (64 samples, 64 hull points, 32 crossings in one cell, 16
+open footprints) fails its cell instead of painting.
 
 ### Popup trace
 
-The schema retains one real representative crossing: greatest incremental loss
-in any band, then greatest path difference; exact ties retain input order.
-Its position, height and path difference describe that crossing only. Other
-crossings may supply other bands, and other rays may supply the line-source fan.
-No positive increment means no representative edge. Scalar impact remains the
-A-weighted difference between full and no-screening Lden, not this edge's loss.
+A ray's trace shows the homogeneous state's diffraction points: terrain points as the terrain
+edges with the terrain-only path difference, and the obstacle top standing highest above the
+straight line of sight as the representative crossing with the full path difference. A line
+piece's trace shows its loudest quadrature node's ray, and its fan lists every node with its
+horizontal azimuth stretch and 1 kHz terrain and screening effect. The terrain, screening and
+forest impacts are the A-weighted differences between the full and the hypothesis Lden.
 
-### Model boundary
+## Retained OSM model evidence
 
-This envelope is Quiet Map's existing single-edge approximation applied to all
-crossings, not a multiple-diffraction path construction. Full multiple-obstacle
-geometry and split ground-reflection corrections are outside this change. The
-normative context is [Directive 2021/1226, Annex II propagation amendments](https://eur-lex.europa.eu/eli/dir_del/2021/1226/oj/eng).
+The extraction contract constants live in `square-store::osm_contract`: spill
+format 2, roads/railways/industrial evidence 2, `leisure_v5`, and
+`transport_nodes_contract=1`. Readers reject older stamps; rebuilding requires
+fresh extraction outputs. Existing country-bake and grid contracts still apply.
+
+Road rows retain raw speed/surface/vertical-structure tags in `osm_tags` plus
+numeric `maxspeed_hgv` (u16 km/h, 0 unknown, 65535 unrestricted).
+`osm-extract::implicit_speed` owns the sourced passenger
+implicit-rule table. Explicit `maxspeed` wins; unresolvable conditional rules
+remain unknown and their original text survives. HGV implicit rules are retained
+without applying passenger limits. Direction codes are 0 two-way, 1 explicit
+forward, 2 reverse, 3 implied roundabout, 4 implied motorway; all forward codes
+participate in continuity and directional traffic matching. Whole-way endpoint
+node IDs and grid coordinates survive microsegmentation, so adjacent bridge
+ways can form runs and identify abutment candidates without mistaking piece
+boundaries for abutments. These endpoints are evidence, not a deck-height model.
+
+Transport control rows retain node identity, raw crossing/signal/whistle tags,
+and one incidence per road or rail way (vertex index and whole-way chainage).
+Unlinked controls remain explicit null incidences; there is no proximity guess.
+Orphan controls flush in node-id order, so identical extracts spill identically.
+National whistle values and `railway:traffic_mode`, usage, service and heritage
+survive. Original railway node chains and piece intervals already supply curve
+geometry to rail finalization; no new curve-radius approximation is introduced.
+
+Industrial source classes 11/12 identify wind-plant outlines and inactive
+facilities: neither falls through to generic factory emission. A wind-plant
+outline requires wind as the sole `plant:source`; mixed fuels and copied
+generator tags do not silence a plant polygon. Plant and generator nodes
+without a staged power class are omitted instead: a node has no footprint
+for the generic area law, so emitting one would invent a 10,000 m² factory
+stacked on the plant polygon; the polygon owns power emission. Classes 13/14/15
+retain solar, substation and transformer evidence for their specific models
+(see above); transformers stay silent themselves. Raw power/output/rating and
+lifecycle tags survive, with OSM object kind to disambiguate IDs. Registry
+matching does not overwrite these classes. Industrial and leisure multipolygons
+retain every closed outer component as a separate row; unclosed fragments are
+omitted rather than assigned an area. Every emitting part of an industrial
+relation keeps the full facility nameplate byte-identical and carries its
+area fraction in `qm:facility_share`, so readers evaluate the one facility
+power and share it by area. Inner holes remain outside the
+existing single-ring geometry contract.
+
+`leisure_v5` adds the artificial-turf pitch class 12 (`surface=artificial_turf`;
+grass and unknown surfaces stay class 0 with the seasonal club duty) to the
+v4 evidence: motorsport class 10 and shooting class 11, `osm_tags`, OSM kind,
+geometry kind (0 point, 1 area, 2 line) and line length. Two-node raceways and
+motor-sport tracks survive with open-chain geometry; enclosing polygons are
+separate area rows. Open non-motorised tracks also retain their line path;
+coordinate snapping does not change line/area identity. Shooting subtype and indoor/building flags survive on nodes,
+ways and relations. The activity models consume both classes (see above); an
+enclosing area must not duplicate a line's emission.
+A physical building also retains its separate source row and has no generic
+residential emission. Buildings keep `buildings_v5` and the existing roof/carport
+use code; screening heights follow §Screening heights.
+
+## Meteorology climatology input
+
+The meteorology producer streams the fixed 1991–2020 ERA5 normal at three-hour UTC
+steps. Every 0.25° node uses `aircraft_extract::period::resolve_tz` for historical
+local civil END periods, including daylight-saving transitions. Solar elevation,
+not the END period, selects the day/night stability class. Nord2000 weather
+classes use Eurasto (2006) Tables 1–7 with the dimensionally consistent logarithmic
+profile coefficient A: its temperature term does not divide by Monin–Obukhov L.
+A class is favourable when its representative c(10 m) − c(0) is positive.
+
+`meteorology-contract.json` defines the producer/reader contract in one place.
+Each z9 square, oceans included, holds its ERA5 nodes in `meteorology.bin`: a
+16-byte header (8-byte magic naming the contract version, then the window's
+west and north nodes and its column and row counts, little-endian) followed by
+row-major 240-byte node records (48 UInt8 `p` percentages, then 24 Float32
+`alpha_mean` and 24 Float32 `alpha_variance` values, little-endian). The window
+is `grid::raster::RasterWindow::for_square_with_density` at 4 nodes per degree,
+the same floor/ceil edge bracketing as the 1″ rasters, so every square
+interpolates from its own file alone. Each period stores `p` (16 percentages)
+and `alpha_mean`/`alpha_variance` (eight population moments of hourly ISO 9613-1
+coefficients in dB/km); readers derive `p_max` as the sector maximum. Midbands
+follow ISO 266; absorption uses hourly temperature, dewpoint-derived liquid-water
+relative humidity and surface pressure. No missing observations are silently
+discarded. Sector zero is sound travelling north, with centres every 22.5°
+clockwise; meteorological wind-from bearings must be reversed. Exact hourly
+favourable counts determine stored p; retained 20° wind histograms do not
+quantize that calculation.
+
+`raster_reader::meteorology::Meteorology::at` interpolates moments and probabilities
+bilinearly at the receiver inside the receiver square's window, wrapping longitude.
+Invalid coordinates, wrong magic, mismatched windows, short files, nonfinite
+values and invalid percentages are errors. Window maxima conservatively bound
+any interpolation inside the window. The popup samples its receiver's window through
+`RealRasters::weather`; the painter uploads the same per-receiver weather to the card
+(one `DeviceWeather` per receiver: p, absorption moments, and the window's per-period
+mixed gains with α_min for the pair gate), so the two agree. Airport ground-ops pairs
+evaluate A_atm in the row's period over (d − 25 m) on both lanes, and the popup
+atmospheric chart draws each period's own curve. A present but unreadable
+file is refused loudly and falls back to the built-in defaults above, as does a square
+with no file.
+
+The streamed producer retains period × wind-class × stability-class × direction
+histograms, exact favourable counts, Welford absorption moments and SHA-256 chunk
+receipts. Two alternating, fsynced checkpoint slots bind these statistics to a
+SHA-256-verified manifest prefix and the source, timezone and producer identities.
+The producer snapshots the actual historical TZif rules and reuses them on restart;
+Python dependency versions are also bound to the checkpoint identity. Restart replays
+only the uncommitted interval (at most seven days); it cannot count that interval
+twice. Arrow publication is atomic and only follows the full normal. The source
+licence, acquisition receipts, code and table digests enter the release identity.

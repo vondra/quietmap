@@ -21,28 +21,14 @@ export interface NoiseDetailContentProps {
   maxSources?: number
 }
 
-// Present only when the query point is inside an enclosed building. Every LEVEL
-// the popup then shows — the badge, the per-layer breakdown and each contributor
-// row's dB — is already the indoor estimate; these fields say where it came
-// from. The per-source detail panels keep their outdoor path figures.
-interface IndoorEstimate {
-  buildingType: string
-  facadeLden: number
-  reductionDb: number
-  tiltedLden: number | null
-}
-
 // The rich popup body (sources + segments tabs, diagrams, per-effect tooltips).
 // It pulls in the whole components/noise/ tree (~3.8 kLoC), so it is a lazy
 // chunk — DetailCard / MobileDetailSheet import it via React.lazy and show
 // DetailSkeleton until both the ~1.5 s noise compute AND this chunk land.
 export default function NoiseDetailContent({ data, onHighlight, maxSources }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.center
-  const indoorEstimate = getIndoorEstimate(data)
   // The popup's 0 dB display floor, applied to this list the way the per-layer
-  // rows already apply it. The engine keeps a contributor at exactly 0 dB, which
-  // indoors is every source quieter than the envelope step — at LKPR that was
-  // 16 of 30 rows, all of them inaudible.
+  // rows already apply it.
   const audibleContributors = data.top_contributors.filter(c => c.received_lden > 0)
   // Hide silence-sentinel values (sources with no audible contribution at this point).
   // The Rust engine returns periods even for empty source classes; their Lden falls
@@ -54,7 +40,6 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
           .map(s => [SOURCE_LABELS[s.source_type] ?? s.source_type, `${s.lden!.toFixed(1)} dB`] as [string, string]),
         { sep: true },
         ['Total Lden', `${data.total_lden.toFixed(1)} dB`],
-        ...(indoorEstimate ? ['', indoorEstimateDetail(indoorEstimate)] : []),
       ], 14, 9)
     : ''
 
@@ -176,7 +161,7 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
               )}
             </div>
           </div>
-          <IndoorEstimateNotice estimate={indoorEstimate} />
+          <BuildingExposureNotice exposure={data.building_exposure} />
           <UnavailableLayersNotice layers={data.unavailable_layers} />
           {hasSegmentsTab ? (
             <TabStrip
@@ -200,8 +185,7 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
               {(maxSources ? audibleContributors.slice(0, maxSources) : audibleContributors).map((c, i) => (
                 <ContributorRow key={`${c.source_type}-${c.osm_id}-${i}`} c={c} onToggle={onHighlight} />
               ))}
-              {/* Same display floor as the per-layer rows: indoors the leftover
-                  bucket often clamps to 0 dB, which is not worth a row. */}
+              {/* Same display floor as the per-layer rows. */}
               {data.other_sources_lden !== null && data.other_sources_lden > 0 && (
                 <div className="flex items-baseline gap-1.5 px-0 py-1.5 border-t border-border/40 text-xs italic text-muted-foreground/70">
                   <span className="truncate flex-1">Other sources</span>
@@ -247,7 +231,11 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
         </>
       ) : (
         <>
-          <div className="text-sm text-muted-foreground mt-1">No noise data computed for this location.</div>
+          <div className="text-sm text-muted-foreground mt-1">
+            {data.building_exposure
+              ? 'Not assessed — this building has no exposed façade'
+              : 'No noise data computed for this location.'}
+          </div>
           <UnavailableLayersNotice layers={data.unavailable_layers} />
         </>
       )}
@@ -255,39 +243,26 @@ export default function NoiseDetailContent({ data, onHighlight, maxSources }: No
   )
 }
 
-function getIndoorEstimate(data: NoiseComputeData): IndoorEstimate | null {
-  if (data.facade_lden == null || data.envelope_delta_db == null) return null
-  return {
-    buildingType: buildingTypeLabel(data.envelope_class),
-    facadeLden: data.facade_lden,
-    reductionDb: data.envelope_delta_db,
-    tiltedLden: data.indoor_lden_tilted ?? null,
-  }
+const COMPASS_POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const
+
+function compassPoint(bearingDeg: number): string {
+  return COMPASS_POINTS[Math.round((((bearingDeg % 360) + 360) % 360) / 45) % 8]
 }
 
-function buildingTypeLabel(envelopeClass: NoiseComputeData['envelope_class']): string {
-  switch (envelopeClass) {
-    case 'residential': return 'house'
-    case 'commercial': return 'office'
-    case 'industrial': return 'industrial hall'
-    case 'historic': return 'historic building'
-    default: return 'building'
-  }
-}
-
-// One line, above the source rows: says that this point is inside a building
-// and that every dB below it is therefore an indoor estimate, with the envelope
-// step and the façade level it was taken from. Hover carries the full wording.
-function IndoorEstimateNotice({ estimate }: { estimate: IndoorEstimate | null }) {
-  if (!estimate) return null
+// One line above the source rows: every level in this popup is the building's
+// noisiest façade receiver, not the clicked point. Hover carries the receiver rule.
+function BuildingExposureNotice({ exposure }: { exposure: NoiseComputeData['building_exposure'] }) {
+  if (!exposure?.receiver) return null
+  const [receiverLat, receiverLng] = exposure.receiver
+  const faces = exposure.facade_bearing_deg == null ? '' : ` — faces ${compassPoint(exposure.facade_bearing_deg)}`
+  const points = `1 of ${exposure.facade_points} façade point${exposure.facade_points === 1 ? '' : 's'}`
+  const detail = `The level is computed at ${receiverLat.toFixed(5)}, ${receiverLng.toFixed(5)}: 0.1 m in front of this façade, 4 m above ground, as EU noise mapping does for building exposure; the façade's own reflection is excluded. Of the building's ${exposure.facade_points} façade points, this one is the loudest by Lden of all sources together.`
   return (
-    <div data-testid="indoor-calculation" className="mb-1 border-b border-border/50">
-      <HoverText title={indoorEstimateDetail(estimate)} className="block" focusable>
+    <div data-testid="building-exposure" className="mb-1 border-b border-border/50">
+      <HoverText title={detail} className="block" focusable>
         <span className="flex items-baseline gap-1.5 px-0 py-1 text-xs font-medium">
-          <span className="truncate flex-1">Inside a building — indoor estimates</span>
-          <span className="shrink-0 text-right tabular-nums font-normal text-muted-foreground/70">
-            {estimate.facadeLden.toFixed(1)} dB façade − {estimate.reductionDb.toFixed(0)} dB
-          </span>
+          <span className="truncate flex-1">Noisiest façade of this building{faces}</span>
+          <span className="shrink-0 text-right tabular-nums font-normal text-muted-foreground/70">{points}</span>
         </span>
       </HoverText>
     </div>
@@ -304,13 +279,6 @@ function UnavailableLayersNotice({ layers }: { layers: NoiseComputeData['unavail
       {sentence}
     </div>
   )
-}
-
-function indoorEstimateDetail(estimate: IndoorEstimate): string {
-  const openWindow = estimate.tiltedLden == null
-    ? ''
-    : ` With an open window: ~${estimate.tiltedLden.toFixed(1)} dB.`
-  return `This point is inside a building, so the total and every source row are indoor estimates — the same value the map paints here. Outside at the wall: ${estimate.facadeLden.toFixed(1)} dB. A ${estimate.buildingType} typically reduces noise by ~${estimate.reductionDb.toFixed(1)} dB with windows closed.${openWindow} Uncertainty ±8–12 dB; occupant behaviour dominates. The detail behind each source stays at the wall — what it emits, its octave bands, its per-segment figures and, for aircraft, the peak level of a single flyover: those explain the path from the source to the outside of this building.`
 }
 
 function TimingsOverlay({ timings }: { timings: NoiseComputeData['timings'] }) {

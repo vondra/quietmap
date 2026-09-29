@@ -1,0 +1,12 @@
+{
+  "meteorology_contract": "1",
+  "grid": "ERA5-0.25;row-major;north=90;west=0;rows=721;columns=1440;longitude=periodic",
+  "method": "Nord2000-Eurasto-2006;A-dimensionally-consistent;representative-dc10-positive",
+  "sector_count": "16",
+  "direction": "source-to-receiver;clockwise-from-north;centres=22.5*s",
+  "periods": "local-civil;day=07-19;evening=19-23;night=23-07;tz=aircraft-extract-resolve_tz",
+  "absorption": "ISO9613-1:1993;ISO266-exact-midbands;actual-surface-pressure;population-variance;dB/km",
+  "climatology_years": "1991-2020",
+  "sampling_hours": "3",
+  "histogram": "cell,period,wind-class,stability-class,downwind-direction;18-centres-at-20*s;uint32"
+}

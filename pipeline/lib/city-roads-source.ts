@@ -1,5 +1,6 @@
 /** Admit original Praha, Wien and Brno traffic observations without writing normalized source caches. */
 
+import { withholdsCountLine } from './count-holdout.js'
 import { roadObservation, type RoadObservation } from './road-observation.js'
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
@@ -188,9 +189,15 @@ export async function loadMunicipalRoadSources(enrichmentDirectory: string, boun
     if (!records.length) throw new Error(`${city.slug}: no positive traffic observations`)
     let boundary = boundaries.get(city.iso3)
     if (!boundary) { boundary = read(resolve(boundaryDirectory, `geoBoundaries-${city.iso3}-ADM2.geojson`)).toString('utf8'); boundaries.set(city.iso3, boundary) }
+    const municipality = municipalityFromGeoJson(boundary, city.municipality)
+    const [south, west, north, east] = municipality.bbox
+    const withheld = new Set(records.filter(record => withholdsCountLine(record.line ?? [[west, south], [east, north]]))
+      .map(record => record.observationId))
+    const admitted = records.filter(record => !withheld.has(record.observationId))
+    if (!admitted.length) continue
     const { records: _records, ...admission } = parsed
-    cities.push({ ...city, year: parsed.year, admission, coverage: new Set(dataset.roadCoverage), records,
-      zeroSplitSkipped: parsed.records.length - records.length, municipality: municipalityFromGeoJson(boundary, city.municipality) })
+    cities.push({ ...city, year: parsed.year, admission, coverage: new Set(dataset.roadCoverage), records: admitted,
+      zeroSplitSkipped: parsed.records.length - records.length, municipality })
   }
   return { cities, receipts }
 }

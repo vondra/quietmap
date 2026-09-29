@@ -1,5 +1,5 @@
 /** Cached heatmap cell readouts using the same grid and energy arithmetic as rendering. */
-import { fetchAndDecodeHM3, NO_DATA, TILE_PX } from './hm3-decoder.ts'
+import { fetchAndDecodeHM3, HM3_COMPUTED_SILENCE, HM3_NOT_ASSESSED, TILE_PX } from './hm3-decoder.ts'
 import { HM3_BYTE_ENERGY } from './hm3-compose.ts'
 import { lngLatToTileFloat } from './tile-math.ts'
 import { MIN_ZOOM, WORLD_EXTENT, type TileBuilds } from './tile-urls.ts'
@@ -50,24 +50,26 @@ export function hm3CellAt(lng: number, lat: number, z: number): HM3CellAddress |
   }
 }
 
+/** One layer's tile at a readout: its cells, absent from the archive (every
+ *  cell not assessed), or failed to load (level unknown, retried later). */
+export type SampledTile = Uint8Array | 'not-assessed' | 'failed'
+
 // LRU keyed by the full tile URL — the URL carries the tile build, so a
 // mid-session generation flip re-keys the cache by itself. Each entry is
 // ~256 KiB of cells; 64 ≈ 16 MiB, a few screenfuls of sample tiles.
-type TileCellsEntry = { promise: Promise<Uint8Array | null>; done: boolean }
+type TileCellsEntry = { promise: Promise<SampledTile>; done: boolean }
 const tileCellsCache = new Map<string, TileCellsEntry>()
 const TILE_CELLS_CACHE_MAX = 64
-// A tile whose fetch failed reads as silence (the renderer paints a failed
-// tile blank too) and is forgotten after this, so a transient error is
-// retried instead of pinning "no data" for the session.
+// A failed tile is forgotten after this, so a transient error is retried
+// instead of pinning "unavailable" for the session.
 const FAILED_TILE_RETRY_MS = 30_000
 
 /**
- * Decoded cells of one tile (`null` = no tile: the world is silent there).
- * Callers hold the returned array, so an eviction never takes a sample away
- * from a readout already using it. 'low' fetch priority keeps the heatmap's
- * own sharp tiles ahead in the queue.
+ * Decoded cells of one tile. Callers hold the returned array, so an eviction
+ * never takes a sample away from a readout already using it. 'low' fetch
+ * priority keeps the heatmap's own sharp tiles ahead in the queue.
  */
-export function tileCells(url: string): Promise<Uint8Array | null> {
+export function tileCells(url: string): Promise<SampledTile> {
   const hit = tileCellsCache.get(url)
   if (hit) {
     tileCellsCache.delete(url) // refresh recency
@@ -76,12 +78,12 @@ export function tileCells(url: string): Promise<Uint8Array | null> {
   }
   const entry: TileCellsEntry = {
     promise: fetchAndDecodeHM3(url, undefined, 'low')
-      .then((decoded) => decoded?.cells ?? null)
-      .catch(() => {
+      .then((decoded): SampledTile => decoded?.cells ?? 'not-assessed')
+      .catch((): SampledTile => {
         setTimeout(() => { if (tileCellsCache.get(url) === entry) tileCellsCache.delete(url) }, FAILED_TILE_RETRY_MS)
-        return null
+        return 'failed'
       })
-      .then((cells) => { entry.done = true; evictSettledTilesBeyondLimit(); return cells }),
+      .then((tile) => { entry.done = true; evictSettledTilesBeyondLimit(); return tile }),
     done: false,
   }
   tileCellsCache.set(url, entry)
@@ -99,19 +101,35 @@ function evictSettledTilesBeyondLimit(): void {
   }
 }
 
+/** What a cell reads across the selected layers. */
+export type HeatmapCellReadout =
+  | { kind: 'level'; ldenDb: number }
+  | { kind: 'no-modelled-source' }
+  | { kind: 'not-assessed' }
+  | { kind: 'unavailable'; failedSources: string[] }
+
 /**
- * Lden (dB) at one cell, energy-summed across the given tiles — the same
+ * Lden at one cell, energy-summed across the selected layers' tiles — the same
  * byte → 10^(dB/10) → Σ → 10·log10 chain the renderer paints with, so the
- * number equals the pixel colour. `null` where no tile carries data.
+ * number equals the pixel colour. A number only when every layer is known: a
+ * failed layer makes the cell unavailable (a partial sum would read quieter
+ * than the place is), and a layer not assessed there makes it not assessed.
+ * Computed silence adds zero energy; silence in every layer has no level.
  */
-export function energySumLdenDb(tiles: readonly (Uint8Array | null)[], cell: HM3CellAddress): number | null {
+export function readHeatmapCell(
+  layers: readonly { source: string; tile: SampledTile }[],
+  cell: HM3CellAddress,
+): HeatmapCellReadout {
+  const failedSources = layers.filter((layer) => layer.tile === 'failed').map((layer) => layer.source)
+  if (failedSources.length > 0) return { kind: 'unavailable', failedSources }
   let sumLinear = 0
-  let anyData = false
-  for (const cells of tiles) {
-    const byte = cells?.[cell.py * TILE_PX + cell.px]
-    if (byte === undefined || byte === NO_DATA) continue
+  let everyLayerSilent = true
+  for (const { tile } of layers) {
+    const byte = typeof tile === 'string' ? HM3_NOT_ASSESSED : tile[cell.py * TILE_PX + cell.px]
+    if (byte === HM3_NOT_ASSESSED) return { kind: 'not-assessed' }
+    if (byte !== HM3_COMPUTED_SILENCE) everyLayerSilent = false
     sumLinear += HM3_BYTE_ENERGY[byte]
-    anyData = true
   }
-  return anyData ? 10 * Math.log10(sumLinear) : null
+  if (everyLayerSilent) return { kind: 'no-modelled-source' }
+  return { kind: 'level', ldenDb: 10 * Math.log10(sumLinear) }
 }

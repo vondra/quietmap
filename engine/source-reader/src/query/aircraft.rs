@@ -8,7 +8,9 @@ pub(super) struct AircraftPointQueryData {
     pub(super) airport_traffic_batches: Vec<arrow::record_batch::RecordBatch>,
     pub(super) airport_summary: crate::aircraft_v6::airport_summary_view::AirportSummaryAccum,
     pub(super) airport_lines_batches: Vec<arrow::record_batch::RecordBatch>,
-    pub(super) n_days: u16,
+    /// The one sampling window every opened aircraft file carries; `None`
+    /// when no aircraft file lies within reach.
+    pub(super) sampling_window: Option<noise_compute::emission::aircraft::SamplingWindow>,
 }
 
 impl AircraftPointQueryData {
@@ -19,7 +21,7 @@ impl AircraftPointQueryData {
             airport_traffic_batches: Vec::new(),
             airport_summary: Default::default(),
             airport_lines_batches: Vec::new(),
-            n_days: 365,
+            sampling_window: None,
         }
     }
 }
@@ -83,7 +85,6 @@ pub(super) fn read_aircraft_stamps_of_square_data(
     lng: f64,
     aircraft: &mut AircraftPointQueryData,
 ) -> Result<(), String> {
-    let mut n_days_from_metadata: Option<u16> = None;
     for (_, data) in square_data {
         // Footer-only: every opened traffic file must carry current summaries,
         // whether or not its rows are near the click.
@@ -93,29 +94,33 @@ pub(super) fn read_aircraft_stamps_of_square_data(
                 .merge_square(schema, &airport_traffic_batches_near(data, lat, lng)?)?;
         }
         // Every aircraft file is read from its owner cell. The file stamp is the
-        // sampling window even when no row is near.
+        // sampling window even when no row is near; a release mixing windows
+        // would divide rows by the wrong day counts.
         for arrow in [
             &data.aircraft_airborne,
             &data.aircraft_cruise,
             &data.aircraft_airport_traffic,
         ] {
             if let Some(schema) = arrow.schema() {
-                let found = schema.metadata().get("n_days");
-                let days = found
-                    .and_then(|value| value.parse::<u16>().ok())
-                    .filter(|days| *days > 0)
-                    .ok_or_else(|| {
-                        format!(
-                            "{}: n_days sampling window expected a positive day count, found {found:?}",
+                let window =
+                    noise_compute::emission::aircraft::SamplingWindow::from_metadata(
+                        schema.metadata(),
+                    )
+                    .map_err(|error| format!("{}: {error}", arrow.path().display()))?;
+                match &aircraft.sampling_window {
+                    None => aircraft.sampling_window = Some(window),
+                    Some(seen) if *seen != window => {
+                        return Err(format!(
+                            "{}: sampling window {window:?} differs from {seen:?} of another \
+                             aircraft file; mixed aircraft releases",
                             arrow.path().display()
-                        )
-                    })?;
-                n_days_from_metadata =
-                    Some(n_days_from_metadata.map_or(days, |value| value.max(days)));
+                        ))
+                    }
+                    Some(_) => {}
+                }
             }
         }
     }
-    aircraft.n_days = n_days_from_metadata.unwrap_or(365);
     Ok(())
 }
 

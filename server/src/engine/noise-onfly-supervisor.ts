@@ -14,7 +14,9 @@ export type NoiseOnflyOp = 'point' | 'unfiltered' | 'ready' | 'footprints' | 'bu
 export interface NoiseOnflyWorker {
   /** Optional one-time initialization, outside all visitor request deadlines. */
   ready?: Promise<void>
-  postMessage(message: { id: number; lat: number; lng: number; lat2?: number; lng2?: number; op?: NoiseOnflyOp }): void
+  postMessage(message: {
+    id: number; lat: number; lng: number; lat2?: number; lng2?: number; receiverHeightM?: number; op?: NoiseOnflyOp
+  }): void
   terminate(): Promise<number>
   on(event: 'message', listener: (message: NoiseOnflyWorkerReply) => void): this
   on(event: 'error', listener: (err: Error) => void): this
@@ -64,6 +66,8 @@ type RequestEntry = {
   /** bbox ops ('footprints'): north-east corner; lat/lng carry south-west. */
   lat2?: number
   lng2?: number
+  /** Point ops: receiver height above the DEM; undefined = the engine's default. */
+  receiverHeightM?: number
   op: NoiseOnflyOp
   enqueuedAt: number
   dispatchedAt: number
@@ -118,18 +122,9 @@ type CacheEntry = {
  * (the same place — harmless). Exact keys only: a quantized key would
  * serve one point's numbers to another. Bbox ops (`footprints`) are never
  * keyed here — they need lat2/lng2 and stay uncached. */
-function pointCacheKey(op: 'point' | 'unfiltered', lat: number, lng: number): string {
-  return `${op}|${lat}|${lng}`
+function pointCacheKey(op: 'point' | 'unfiltered', lat: number, lng: number, receiverHeightM?: number): string {
+  return `${op}|${lat}|${lng}|${receiverHeightM ?? 'default'}`
 }
-
-/**
- * A native call still running this many work timeouts after its client gave
- * up is hung (30 s timeout → 5 min). The slot cannot be freed without
- * dlclosing the addon under live Rust threads, so the whole process exits and
- * the unit restarts (Restart=always) — bounded recovery instead of a pool
- * that parks itself slot by slot.
- */
-const STUCK_NATIVE_CALL_TIMEOUTS = 10
 
 const RESULT_CACHE_MAX_ENTRIES = 32
 const RESULT_CACHE_MAX_BYTES = 150 * 1024 * 1024
@@ -148,8 +143,6 @@ export type NoiseOnflySupervisorConfig = {
   logger?: SupervisorLogger
   /** Per-request timing tap (phase A0 measurement; cheap, one call per reply). */
   onTiming?: (timing: NoiseOnflyTiming) => void
-  /** Test seam for the hung-native-call exit; production exits the process. */
-  exitProcess?: () => void
 }
 
 function toError(value: unknown): Error {
@@ -193,7 +186,6 @@ export class NoiseOnflySupervisor {
   private readonly workTimeoutMs: number
   private readonly logger?: SupervisorLogger
   private readonly onTiming?: (timing: NoiseOnflyTiming) => void
-  private readonly exitProcess: () => void
   private readonly slots: Slot[]
 
   private readonly queue: RequestEntry[] = []
@@ -211,7 +203,6 @@ export class NoiseOnflySupervisor {
     this.workTimeoutMs = Math.max(1, config.workTimeoutMs)
     this.logger = config.logger
     this.onTiming = config.onTiming
-    this.exitProcess = config.exitProcess ?? (() => process.exit(1))
     const poolSize = Math.max(1, config.poolSize ?? 1)
     this.slots = Array.from({ length: poolSize }, (_, index) => ({
       index,
@@ -223,8 +214,10 @@ export class NoiseOnflySupervisor {
     }))
   }
 
-  async queryNoiseAtPoint(lat: number, lng: number, signal?: AbortSignal): Promise<string> {
-    return this.queryPointCached('point', lat, lng, signal)
+  async queryNoiseAtPoint(
+    lat: number, lng: number, signal?: AbortSignal, receiverHeightM?: number,
+  ): Promise<string> {
+    return this.queryPointCached('point', lat, lng, signal, receiverHeightM)
   }
 
   async queryNoiseAtPointUnfiltered(lat: number, lng: number, signal?: AbortSignal): Promise<string> {
@@ -240,12 +233,12 @@ export class NoiseOnflySupervisor {
    * like an uncached one.
    */
   private async queryPointCached(
-    op: 'point' | 'unfiltered', lat: number, lng: number, signal?: AbortSignal,
+    op: 'point' | 'unfiltered', lat: number, lng: number, signal?: AbortSignal, receiverHeightM?: number,
   ): Promise<string> {
     if (signal?.aborted) {
       throw abortError()
     }
-    const key = pointCacheKey(op, lat, lng)
+    const key = pointCacheKey(op, lat, lng, receiverHeightM)
     const hit = this.resultCache.get(key)
     if (hit) {
       this.resultCache.delete(key)
@@ -272,7 +265,7 @@ export class NoiseOnflySupervisor {
     const entryRef: { id?: number } = {}
     // The client signal travels into enqueue as the FIRST waiter (registered
     // there); later joiners register via addWaiter above. Never both.
-    const run = this.enqueue(lat, lng, op, signal, undefined, undefined, entryRef)
+    const run = this.enqueue(lat, lng, op, signal, undefined, undefined, entryRef, receiverHeightM)
     const entry = entryRef.id === undefined ? undefined : this.findEntry(entryRef.id)
     if (!entry) {
       // Rejected before queuing (closed/queue-full): nothing to share.
@@ -363,9 +356,11 @@ export class NoiseOnflySupervisor {
    * client already left (their compute is still a valid future hit).
    * `unfiltered` ("show all") is deliberately never stored: 18 MB entries
    * would crowd out the point cache, and nothing reads that key. */
-  private writePointCache(op: NoiseOnflyOp, lat: number, lng: number, full: string): void {
+  private writePointCache(
+    op: NoiseOnflyOp, lat: number, lng: number, receiverHeightM: number | undefined, full: string,
+  ): void {
     if (op !== 'point') return
-    const key = pointCacheKey(op, lat, lng)
+    const key = pointCacheKey(op, lat, lng, receiverHeightM)
     const summary = NoiseOnflySupervisor.deriveSummary(full)
     if (summary === null) return
     const bytes = Buffer.byteLength(full) + Buffer.byteLength(summary)
@@ -386,18 +381,20 @@ export class NoiseOnflySupervisor {
   }
 
   /** Summary view of a cached point answer, or null on miss. */
-  cachedSummary(lat: number, lng: number): string | null {
-    return this.cachedView(lat, lng, 'summary')
+  cachedSummary(lat: number, lng: number, receiverHeightM?: number): string | null {
+    return this.cachedView(lat, lng, receiverHeightM, 'summary')
   }
 
   /** Full view of a cached point answer, or null on miss. */
-  cachedFull(lat: number, lng: number): string | null {
-    return this.cachedView(lat, lng, 'full')
+  cachedFull(lat: number, lng: number, receiverHeightM?: number): string | null {
+    return this.cachedView(lat, lng, receiverHeightM, 'full')
   }
 
-  private cachedView(lat: number, lng: number, view: 'summary' | 'full'): string | null {
+  private cachedView(
+    lat: number, lng: number, receiverHeightM: number | undefined, view: 'summary' | 'full',
+  ): string | null {
     // Point-only: `unfiltered` answers are never stored, so no op key needed.
-    const key = pointCacheKey('point', lat, lng)
+    const key = pointCacheKey('point', lat, lng, receiverHeightM)
     const hit = this.resultCache.get(key)
     if (!hit) return null
     this.resultCache.delete(key)
@@ -443,6 +440,7 @@ export class NoiseOnflySupervisor {
     lat2?: number,
     lng2?: number,
     entryRef?: { id?: number },
+    receiverHeightM?: number,
   ): Promise<string> {
     if (this.closed) {
       throw unavailableError('noise-onfly supervisor is shutting down')
@@ -462,6 +460,7 @@ export class NoiseOnflySupervisor {
         lng,
         lat2,
         lng2,
+        receiverHeightM,
         op,
         enqueuedAt: Date.now(),
         dispatchedAt: 0,
@@ -595,7 +594,15 @@ export class NoiseOnflySupervisor {
     })
 
     try {
-      worker.postMessage({ id: entry.id, lat: entry.lat, lng: entry.lng, lat2: entry.lat2, lng2: entry.lng2, op: entry.op })
+      worker.postMessage({
+        id: entry.id,
+        lat: entry.lat,
+        lng: entry.lng,
+        lat2: entry.lat2,
+        lng2: entry.lng2,
+        receiverHeightM: entry.receiverHeightM,
+        op: entry.op,
+      })
     } catch (error) {
       this.finishActiveSlot(slot, entry)
       this.rejectClient(entry, unavailableError(`noise-onfly dispatch failed: ${toError(error).message}`))
@@ -682,7 +689,7 @@ export class NoiseOnflySupervisor {
       // Cache on every successful reply — even when the client already
       // left (resolveClient below is then a no-op, but the compute stays
       // a valid future hit).
-      this.writePointCache(active.op, active.lat, active.lng, message.resultJson)
+      this.writePointCache(active.op, active.lat, active.lng, active.receiverHeightM, message.resultJson)
       this.resolveClient(active, message.resultJson)
     } else {
       this.rejectClient(
@@ -778,25 +785,20 @@ export class NoiseOnflySupervisor {
     this.parkActiveEntry(slot, active)
   }
 
-  /** The client is gone; the slot waits for the native call, bounded by the stuck-exit deadline. */
+  /**
+   * The client is gone; the slot waits for the native call with no deadline.
+   * A starved-but-healthy call (host load, huge airport) still returns and
+   * frees its slot; a truly hung call parks its slot while the other slots
+   * keep serving and cache hits bypass the pool entirely. The server never
+   * exits itself: a wall-clock timeout cannot tell hunger from death, and an
+   * exit takes every visitor down with one slow click.
+   */
   private parkActiveEntry(slot: Slot, entry: RequestEntry): void {
     this.clearWorkTimer(entry)
-    entry.workTimer = setTimeout(() => {
-      this.handleStuckNativeCall(slot, entry.id)
-    }, this.workTimeoutMs * STUCK_NATIVE_CALL_TIMEOUTS)
-  }
-
-  private handleStuckNativeCall(slot: Slot, requestId: number): void {
-    const active = slot.active
-    if (!active || active.id !== requestId) {
-      return
-    }
-    this.log('error', 'noise-onfly native call never returned; exiting so the unit restarts without unloading the addon', {
-      request_id: active.id,
+    this.log('warn', 'noise-onfly slot parked after its 504; waiting for the native call', {
+      request_id: entry.id,
       slot: slot.index,
-      parked_ms: Date.now() - active.dispatchedAt,
     })
-    this.exitProcess()
   }
 
   private handleQueueTimeout(requestId: number): void {
@@ -820,7 +822,7 @@ export class NoiseOnflySupervisor {
       const slot = this.slotForActiveWorker(entry.worker)
       if (slot && slot.active?.id === entry.id) {
         // Same rule as a timeout: the slot stays busy until the native call
-        // returns, bounded by the same stuck-exit deadline.
+        // returns, with no deadline.
         this.detachAbortListener(entry)
         this.rejectClient(entry, abortError())
         this.parkActiveEntry(slot, entry)

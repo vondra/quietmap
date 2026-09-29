@@ -2,7 +2,9 @@
 
 use super::*;
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+use crate::flight::CruiseBucket;
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq, Ord, PartialOrd)]
 #[cfg_attr(test, derive(Debug))]
 pub(super) struct CruiseKey {
     pub(super) cruise_cell_id: u64,
@@ -10,6 +12,8 @@ pub(super) struct CruiseKey {
     pub(super) fl_bin: u8,
     pub(super) period: u8,
     pub(super) heading_bin: u8,
+    /// Secondary-only transits accumulate apart: they carry the increment weight.
+    pub(super) secondary_only: bool,
 }
 
 /// Per-bucket worker accumulator (v14). `fid_set` tracks the full
@@ -74,10 +78,13 @@ impl CruiseAccum {
         self.origin = seg.origin;
         // Source-side peak Lmax at 25 m. Doc 29 §A.3.2 — cruise rows
         // use the Departure NPD curve. NPD `lookup_lmax` indexes by
-        // log10(d_ft); 25 m → 82 ft → log10 ≈ 1.914.
+        // log10(d_ft); 25 m → 82 ft → log10 ≈ 1.914. Display-only ranking:
+        // pinned to the max departure row (bit-identical to the pre-thrust
+        // value); the runtime popup re-ranks with the true power bracket.
         let class_idx = noise_class_of(seg.profile_idx) as usize;
         let log_d = log_d_25m_ft();
-        let lmax_db = npd_luts.lookup_lmax(class_idx, true, log_d) as f32;
+        let max_row = thrust_model_for_class(class_idx).dep_rows - 1;
+        let lmax_db = npd_luts.lookup_lmax(class_idx, true, max_row, 0.0, log_d) as f32;
         self.update_top(seg, lmax_db, mid_alt);
     }
 
@@ -93,31 +100,6 @@ impl CruiseAccum {
             peak_lmax_25m_db: lmax_db,
             altitude_m,
         });
-    }
-
-    /// Symmetric merge for the Stage 2B fold/reduce. Both `add` and
-    /// `merge` must produce the same final accumulator state regardless
-    /// of split point — tested by `merge_matches_sequential`.
-    pub(super) fn merge(&mut self, other: CruiseAccum) {
-        self.sum_length_m += other.sum_length_m;
-        self.rep_alt_m += other.rep_alt_m;
-        self.rep_speed_kt += other.rep_speed_kt;
-        self.weight += other.weight;
-        for fid in other.fid_set {
-            self.fid_set.insert(fid);
-        }
-        // Replay other's top entries through the cap-K logic so the
-        // final accumulator has the true top-K of the union (rev 2
-        // accepts that two capped top-50 lists union to top-50 of
-        // top-100 — bounded rank pollution at the Kth slot).
-        for cand in other.top.into_values() {
-            self.merge_top_entry(cand);
-        }
-        // `rep_profile_idx` / `source_id` / `origin` are NOT
-        // invariant per bucket key — different `profile_idx` can map
-        // to the same `class`. Both `add` and `merge` pick
-        // arbitrarily; downstream remaps `profile_idx` → class so
-        // the pick has no measurable effect.
     }
 
     /// Cap-K + re-entrant top-K maintenance. If the fid is already in
@@ -207,6 +189,7 @@ impl CruiseAccum {
             top_candidates,
             source_id: self.source_id,
             origin: self.origin,
+            secondary_only: key.secondary_only,
         }
     }
 }

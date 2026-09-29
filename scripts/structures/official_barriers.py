@@ -1,0 +1,114 @@
+"""Official noise-barrier inventory: cache contract, OSM replacement, hop rows."""
+
+import math
+
+import pyarrow as pa
+import shapely
+from shapely import STRtree
+
+import qmgrid
+from structure_inputs import METRES_PER_DEGREE, footprint_in_longitude_frame
+
+CONTRACT_KEY = "official_barriers_contract"
+CONTRACT_VERSION = "official_barriers_v2"
+
+KIND_WALL = 0
+KIND_BERM = 1
+KIND_COMBINED = 2
+# A berm is terrain, not a thin wall: its screening waits for the terrain step.
+SCREENED_KINDS = frozenset({KIND_WALL, KIND_COMBINED})
+
+# Cache rows are HOPS (≤250 m two-point lines), one per 1-degree tile by hop
+# centroid — like OSM micro-segments, one row per square by midpoint. Caching
+# whole lines by line centroid but emitting them whole screened square
+# borders twice (the far side kept its OSM twin beside the spilled hops).
+SCHEMA = pa.schema([
+    pa.field("geometry", pa.binary(), nullable=False),  # WKB hop LineString lon/lat
+    pa.field("hop_idx", pa.uint32(), nullable=False),   # within-line hop identity
+    pa.field("height_m", pa.float32(), nullable=False),
+    pa.field("measured", pa.bool_(), nullable=False),  # else the inventory median
+    pa.field("kind", pa.uint8(), nullable=False),      # wall 0, berm 1, combined 2
+    pa.field("source", pa.utf8(), nullable=False),     # e.g. NL-RWS-GWV-2024
+    pa.field("as_of", pa.utf8(), nullable=False),      # inventory vintage YYYY-MM-DD
+])
+
+# An OSM micro-segment on the same wall as an official line is the same wall
+# twice: survey-vs-trace offsets run 1-3 m, while distinct parallel noise walls
+# stand on opposite carriageway sides, 15 m or more apart.
+REPLACE_DISTANCE_M = 5.0
+# OSM linear ways chord at 250 m (engine/osm-extract/src/pass2.rs); official
+# hops never run longer, and keep their surveyed intermediate vertices.
+HOP_CAP_M = 250.0
+# Replacement support reaches past the square border: an OSM micro-segment
+# (<=250 m, midpoint-owned) extends <=125 m outside the square, the probe
+# reaches REPLACE_DISTANCE_M past its endpoints, and a supporting hop
+# (<=250 m) extends <=125 m past its centroid — support centroids live
+# within 255 m. The loader keeps hops whose centroid is within
+# SUPPORT_HALO_M of the square span for replacement support (owned=False);
+# emission still uses owned hops only, so no hop screens twice.
+SUPPORT_HALO_M = 375.0
+
+
+def segment_length_m(lon0, lat0, lon1, lat1):
+    dx = (lon1 - lon0) * METRES_PER_DEGREE * math.cos(math.radians((lat0 + lat1) / 2))
+    dy = (lat1 - lat0) * METRES_PER_DEGREE
+    return math.hypot(dx, dy)
+
+
+def split_hops(coords):
+    """Vertex hops of a lon/lat line, chopped at the OSM micro-segment cap.
+    Hops interpolate in one short-arc frame, so a dateline crossing chops the
+    short way, not across the map."""
+    hops = []
+    for (lon0, lat0), (lon1, lat1) in zip(coords, coords[1:]):
+        span = qmgrid.wrapped_longitude_delta(lon0, lon1)
+        length = segment_length_m(lon0, lat0, lon0 + span, lat1)
+        if length <= HOP_CAP_M:
+            hops.append(((lon0, lat0), (lon1, lat1), length))
+            continue
+        count = math.ceil(length / HOP_CAP_M)
+        for i in range(count):
+            a, b = i / count, (i + 1) / count
+            hops.append(((qmgrid.normalize_longitude(lon0 + span * a), lat0 + (lat1 - lat0) * a),
+                         (qmgrid.normalize_longitude(lon0 + span * b), lat0 + (lat1 - lat0) * b),
+                         length / count))
+    return hops
+
+
+def replacement_tree(official_rows):
+    """STRtree over screened official lines in one shared longitude frame."""
+    lines = [row["geom"] for row in official_rows if row["kind"] in SCREENED_KINDS]
+    if not lines:
+        return None, [], 0.0
+    reference = float(shapely.get_coordinates(lines[0])[0][0])
+    framed = [footprint_in_longitude_frame(line, reference) for line in lines]
+    return STRtree(framed), framed, reference
+
+
+def point_near_official(lon, lat, tree, framed):
+    """A point within the replace distance of a screened official line."""
+    reach = REPLACE_DISTANCE_M / METRES_PER_DEGREE
+    reach_lon = reach / math.cos(math.radians(max(min(lat, 89.9), -89.9)))
+    box = shapely.box(lon - reach_lon - 1e-9, lat - reach - 1e-9,
+                      lon + reach_lon + 1e-9, lat + reach + 1e-9)
+    for k in tree.query(box):
+        nearest = shapely.shortest_line(shapely.Point(lon, lat), framed[k])
+        (x0, y0), (x1, y1) = shapely.get_coordinates(nearest)
+        if segment_length_m(x0, y0, x1, y1) <= REPLACE_DISTANCE_M:
+            return True
+    return False
+
+
+def osm_segment_is_replaced(start_lon, start_lat, end_lon, end_lat, tree, framed, reference):
+    """An OSM micro-segment the official line covers end to end is the same
+    wall and the OSM copy goes. The midpoint alone is not enough: a crossing
+    wall passes within metres of the official line near mid-span while the
+    line covers none of it, and deleting it would drop real screening."""
+    mid_lon = reference + (qmgrid.wrapped_longitude_delta(reference, start_lon)
+                           + qmgrid.wrapped_longitude_delta(reference, end_lon)) / 2
+    mid_lat = (start_lat + end_lat) / 2
+    start = (reference + qmgrid.wrapped_longitude_delta(reference, start_lon), start_lat)
+    end = (reference + qmgrid.wrapped_longitude_delta(reference, end_lon), end_lat)
+    return (point_near_official(mid_lon, mid_lat, tree, framed)
+            and point_near_official(*start, tree, framed)
+            and point_near_official(*end, tree, framed))

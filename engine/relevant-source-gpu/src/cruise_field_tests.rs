@@ -18,6 +18,17 @@ impl RasterSampler for Terrain {
         0.0
     }
 }
+/// Baseline 12 days and increment 4: a secondary-only bucket weighs 3.
+fn weights() -> aircraft::ProvenanceWeights {
+    aircraft::SamplingWindow {
+        baseline_days: 12,
+        increment_days: 4,
+        baseline_days_sha256: "baseline".into(),
+        increment_days_sha256: "increment".into(),
+    }
+    .provenance_weights()
+}
+
 fn rows(lat: f64, lon: f64, altitude: f32) -> Vec<CruiseRowView<'static>> {
     (0..3)
         .map(|p| CruiseRowView {
@@ -33,6 +44,7 @@ fn rows(lat: f64, lon: f64, altitude: f32) -> Vec<CruiseRowView<'static>> {
             rep_speed_kt: 450.0,
             source_id: 0,
             origin: 0,
+            secondary_only: p == 2,
             unique_count: 1,
             top_candidates: &[],
         })
@@ -42,7 +54,7 @@ fn groups(rows: &[CruiseRowView<'_>], rasters: &dyn RasterSampler) -> Vec<Group>
     rows.iter()
         .enumerate()
         .map(|(i, row)| {
-            let (segment, density) = cruise_segment(row, i).unwrap();
+            let (segment, density) = cruise_segment(row, i, &weights()).unwrap();
             let terrain = SegmentTerrain::sample(&segment, rasters);
             Group {
                 bounds: [row.lat, row.lon, row.lat, row.lon],
@@ -52,7 +64,8 @@ fn groups(rows: &[CruiseRowView<'_>], rasters: &dyn RasterSampler) -> Vec<Group>
                         &segment,
                         terrain.start_elev - 30.0,
                         terrain.end_elev - 30.0,
-                    ),
+                    )
+                    .unwrap(),
                     lat: row.lat,
                     lon: row.lon,
                     half_length: f64::from(segment.segment_length_m) * 0.5,
@@ -82,6 +95,7 @@ fn exact(
         rows,
         rasters,
         12.0,
+        &weights(),
         &mut flights,
         &mut HashMap::new(),
         &mut HashMap::new(),
@@ -194,9 +208,11 @@ fn absent_sources_are_silent_but_unmanifested_or_wrong_contract_inputs_fail() {
     let schema = Arc::new(Schema::new_with_metadata(
         Vec::<arrow::datatypes::Field>::new(),
         HashMap::from([
-            ("schema_version".into(), "v15".into()),
+            (
+                "schema_version".into(),
+                square_store::aircraft_contract::SCHEMA_VERSION.into(),
+            ),
             ("cruise_contract".into(), "cruise_v17".into()),
-            ("n_days".into(), "12".into()),
         ]),
     ));
     let mut writer =
@@ -283,35 +299,6 @@ fn field_and_receiver_parallelism_keep_identical_power_bytes() {
 #[cfg(feature = "gpu")]
 mod gpu_parity {
     use super::*;
-    use noise_compute::propagation::iso9613::fast_exp_f64;
-
-    fn reference_energy(bucket: &Bucket, lat: f64, lon: f64, altitude: f64) -> f64 {
-        let north = (bucket.lat - lat) * aircraft::M_PER_DEG_LAT;
-        let east =
-            grid::geo::wrapped_longitude_delta(lon, bucket.lon)
-                * grid::geo::m_per_deg_lon(lat.to_radians());
-        if north * north + east * east
-            > (aircraft::AIRCRAFT_MAX_HORIZONTAL_REACH_M + bucket.half_length).powi(2)
-        {
-            return 0.0;
-        }
-        let row = aircraft::prepare_row(
-            &bucket.prepared,
-            lat,
-            aircraft::M_PER_DEG_LAT * lat.to_radians().cos().max(0.2),
-        );
-        aircraft::segment_sel_at_pixel_energy(
-            &bucket.prepared,
-            &row,
-            lon,
-            altitude,
-            aircraft::NpdLuts::shared(),
-            None,
-        )
-        .map_or(0.0, |sel| {
-            fast_exp_f64(sel * std::f64::consts::LN_10 * 0.1) * bucket.density
-        })
-    }
 
     fn db_error(observed: f64, wanted: f64) -> f64 {
         if observed == wanted {
@@ -342,6 +329,7 @@ mod gpu_parity {
             rep_speed_kt: 450.0,
             source_id: heading_bin + 8 * period,
             origin: 0,
+            secondary_only: false,
             unique_count: 1,
             top_candidates: &[],
         }
@@ -356,7 +344,7 @@ mod gpu_parity {
 
     #[test]
     fn layouts_match_the_cuda_static_asserts() {
-        assert_eq!(std::mem::size_of::<gpu::DeviceCruiseSource>(), 160);
+        assert_eq!(std::mem::size_of::<gpu::DeviceCruiseSource>(), 176);
         assert_eq!(std::mem::size_of::<gpu::DeviceCruiseReceiver>(), 40);
     }
 
@@ -416,7 +404,7 @@ mod gpu_parity {
             ];
             let gpu = gpu::evaluate(std::slice::from_ref(&bucket), &points, &altitudes).unwrap();
             for (i, &[lat, lon]) in points.iter().enumerate() {
-                let wanted = reference_energy(bucket, lat, lon, altitudes[i]);
+                let wanted = bucket.energy(lat, lon, altitudes[i], aircraft::NpdLuts::shared());
                 let observed = gpu[i][bucket.period];
                 assert!(
                     observed == 0.0 || wanted > 0.0,
@@ -471,13 +459,14 @@ mod gpu_parity {
             .map(|&[lat, lon]| terrain.elevation(lat, lon) + DEFAULT_RECEIVER_HEIGHT)
             .collect();
         let gpu = gpu::evaluate(&selected, &points, &altitudes).unwrap();
+        let npd = aircraft::NpdLuts::shared();
         let reference: Vec<_> = points
             .par_iter()
             .zip(&altitudes)
             .map(|(&[lat, lon], &altitude)| {
                 let mut sums = [0.0f64; 3];
                 for bucket in &buckets {
-                    sums[bucket.period] += reference_energy(bucket, lat, lon, altitude);
+                    sums[bucket.period] += bucket.energy(lat, lon, altitude, npd);
                 }
                 sums
             })

@@ -30,6 +30,7 @@ fn leg(lat: f32, lon: f32) -> FlightSegment {
         agl_avg_m: 0.0,
         start_elev_m: 0.0,
         end_elev_m: 0.0,
+        departure_field_elev_m: f32::NAN,
     }
 }
 
@@ -83,7 +84,7 @@ fn partitioned_run(lat: f64, lon: f64, split: bool) -> Vec<AirportTrafficRow> {
         1e6,
     );
     let index = crate::airport_index::AerodromeIndex::build(std::slice::from_ref(&area));
-    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap();
+    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap().works;
     assert_eq!(plan.len(), if split { 2 } else { 1 });
     let input = inputs.join(square_path(right)).join("ground.arrow");
     for work in &plan {
@@ -92,12 +93,9 @@ fn partitioned_run(lat: f64, lon: f64, split: bool) -> Vec<AirportTrafficRow> {
         assert_eq!(work.input_bytes, input.metadata().unwrap().len());
         assert_eq!(work.candidates.len(), if split { 2 } else { 1 });
         assert_eq!(work.cached_lines, 2);
-        assert_eq!(work.owned_lines, if split { 1 } else { 2 });
-        assert_eq!(work.maximum_counter_rows, 54 * work.owned_lines);
-        assert!(work.maximum_airport_key_bytes >= "TEST".len());
     }
     assert!(!prepared.join(".airport_traffic_pending").exists());
-    let n = run_stage_2c(&inputs, &[area], &prepared, 12, 365, None).unwrap();
+    let n = run_stage_2c(&inputs, &[area], &prepared, &crate::provider_receipt::window_of(12, 365), None).unwrap();
     assert_eq!(n, if split { 2 } else { 1 });
     let mut rows = Vec::new();
     for (owner, dir) in crate::spatial::square_directories(&prepared).unwrap() {
@@ -173,16 +171,15 @@ fn all_corrupt_ground_or_line_inputs_fail_before_prior_output_is_removed() {
         };
         std::fs::create_dir_all(corrupt.parent().unwrap()).unwrap();
         std::fs::write(corrupt, b"corrupt").unwrap();
-        assert!(run_stage_2c(&inputs, &[], &prepared, 12, 365, None).is_err());
+        assert!(run_stage_2c(&inputs, &[], &prepared, &crate::provider_receipt::window_of(12, 365), None).is_err());
         assert_eq!(std::fs::read(&prior).unwrap(), b"prior-good-output");
     }
 }
 
+/// One flight seen by both providers on a microsegment keeps every counter
+/// row (provenance is a row key) yet counts once, as a primary movement.
 #[test]
-fn inconsistent_classes_for_one_flight_keep_all_counter_and_union_dimensions() {
-    use noise_compute::emission::{
-        aircraft::is_ga_sampled_class, profiles_generated::CLASS_REP_PROFILE_IDX,
-    };
+fn one_flight_of_both_provenances_keeps_every_counter_row_and_counts_as_primary() {
     let temp = tempfile::tempdir().unwrap();
     let inputs = temp.path().join("input");
     let prepared = temp.path().join("prepared");
@@ -202,23 +199,17 @@ fn inconsistent_classes_for_one_flight_keep_all_counter_and_union_dimensions() {
             aeroway_type: 0,
         }],
     );
-    let ga_class = (0..CLASS_REP_PROFILE_IDX.len())
-        .find(|&i| is_ga_sampled_class(i as u8))
-        .unwrap();
     let mut segments = Vec::new();
-    for (profile, period) in [
-        (segment.profile_idx, 0),
-        (CLASS_REP_PROFILE_IDX[ga_class], 1),
-    ] {
+    for (provenance, period) in [(0, 0), (crate::flight::segment_flags::SECONDARY_ONLY, 1)] {
         for departure in [false, true] {
             let mut row = segment.clone();
-            row.profile_idx = profile;
             row.period = period;
-            row.flags = if departure {
-                crate::flight::segment_flags::IS_DEPARTURE
-            } else {
-                0
-            };
+            row.flags = provenance
+                | if departure {
+                    crate::flight::segment_flags::IS_DEPARTURE
+                } else {
+                    0
+                };
             segments.push(row);
         }
     }
@@ -246,17 +237,16 @@ fn inconsistent_classes_for_one_flight_keep_all_counter_and_union_dimensions() {
         0.0,
     );
     let index = crate::airport_index::AerodromeIndex::build(std::slice::from_ref(&area));
-    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap();
+    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap().works;
     assert_eq!(plan.len(), 1);
-    assert_eq!(plan[0].maximum_counter_rows, 99);
-    run_stage_2c(&inputs, &[area], &prepared, 12, 365, None).unwrap();
+    run_stage_2c(&inputs, &[area], &prepared, &crate::provider_receipt::window_of(12, 365), None).unwrap();
     let rows = read_airport_traffic(&dir.join("airport_traffic.arrow")).unwrap();
     assert_eq!(rows.len(), 7);
     for row in rows {
         assert_eq!(row.unique_movement_count, 1);
         assert_eq!(
-            (row.microseg_unique_count, row.microseg_unique_ga_count),
-            (1, 1)
+            (row.microseg_unique_count, row.microseg_unique_secondary_count),
+            (1, 0)
         );
         assert_eq!(
             (row.microseg_unique_arr_count, row.microseg_unique_dep_count),
@@ -264,10 +254,10 @@ fn inconsistent_classes_for_one_flight_keep_all_counter_and_union_dimensions() {
         );
         assert_eq!(
             (
-                row.microseg_unique_ga_arr_count,
-                row.microseg_unique_ga_dep_count
+                row.microseg_unique_secondary_arr_count,
+                row.microseg_unique_secondary_dep_count
             ),
-            (1, 1)
+            (0, 0)
         );
         assert_eq!(row.microseg_unique_gse_count_per_class, [1, 1, 1]);
         if row.veh_kind == 0 {
@@ -279,7 +269,10 @@ fn inconsistent_classes_for_one_flight_keep_all_counter_and_union_dimensions() {
     }
     let summary = read_airport_summaries(&dir.join("airport_traffic.arrow")).unwrap()["A"];
     assert_eq!((summary.arr_count, summary.dep_count), (1, 1));
-    assert_eq!((summary.ga_arr_count, summary.ga_dep_count), (1, 1));
+    assert_eq!(
+        (summary.secondary_arr_count, summary.secondary_dep_count),
+        (0, 0)
+    );
     assert_eq!(summary.gse_count_per_class, [1, 1, 1]);
 }
 
@@ -332,12 +325,12 @@ fn oversized_ground_owner_retries_alone_without_rewriting_successes_or_retrying_
         ));
     }
     let index = crate::airport_index::AerodromeIndex::build(&areas);
-    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap();
+    let plan = plan_ground_traffic(&inputs, &prepared, None, &index).unwrap().works;
     assert_eq!(plan.len(), 2);
     let charges: Vec<_> = plan
         .iter()
         .map(|work| {
-            run_ground_traffic_work(work, &prepared, &expected, &index, (12, 365), u64::MAX)
+            run_ground_traffic_work(work, &prepared, &expected, &index, &crate::provider_receipt::window_of(12, 365), u64::MAX)
                 .unwrap()
                 .charged_bytes
         })
@@ -353,24 +346,45 @@ fn oversized_ground_owner_retries_alone_without_rewriting_successes_or_retrying_
     assert!(charges.iter().all(|&bytes| bytes < process_limit));
     let calls = Mutex::new(Vec::new());
     let active = AtomicUsize::new(0);
+    let caller_thread = Mutex::new(None);
+    let retry_threads = Mutex::new(Vec::new());
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(2)
         .build()
         .unwrap();
     let count = pool
         .install(|| {
+            *caller_thread.lock().unwrap() = Some(std::thread::current().id());
             run_with_serial_retry(&plan, worker_limit, process_limit, |work, limit| {
                 let concurrent = active.fetch_add(1, Ordering::SeqCst) + 1;
+                // Live workers × their allowance never exceed the process
+                // allowance, in phase 1 or on retry: a retry admitted to the
+                // whole remaining process allowance must run alone.
                 assert!(concurrent as u64 * limit <= process_limit);
+                if limit != worker_limit {
+                    retry_threads.lock().unwrap().push(std::thread::current().id());
+                    assert_eq!(limit, process_limit);
+                }
                 calls.lock().unwrap().push((work.owner, limit));
                 let result =
-                    run_ground_traffic_work(work, &prepared, &output, &index, (12, 365), limit);
+                    run_ground_traffic_work(work, &prepared, &output, &index, &crate::provider_receipt::window_of(12, 365), limit);
                 active.fetch_sub(1, Ordering::SeqCst);
                 result.map(|outcome| outcome.counter_rows > 0)
             })
         })
         .unwrap();
     assert_eq!(count, 2);
+    // The heavy owner retried, and every retry ran on the calling thread:
+    // a second pool would admit the whole process allowance again per
+    // thread (8 threads × the cap), which the charge arithmetic (≥3×
+    // actual) cannot cover.
+    let retries = retry_threads.lock().unwrap();
+    assert_eq!(retries.len(), 1);
+    assert!(
+        retries.iter().all(|id| Some(*id) == *caller_thread.lock().unwrap()),
+        "retries left the calling thread: {retries:?}"
+    );
+    drop(retries);
     for (work, charged) in plan.iter().zip(charges) {
         assert_eq!(
             calls
@@ -406,7 +420,7 @@ fn oversized_ground_owner_retries_alone_without_rewriting_successes_or_retrying_
     let attempts = AtomicUsize::new(0);
     let refused = run_with_serial_retry(work, base, base + 1, |work, limit| {
         attempts.fetch_add(1, Ordering::SeqCst);
-        run_ground_traffic_work(work, &prepared, &output, &index, (12, 365), limit)
+        run_ground_traffic_work(work, &prepared, &output, &index, &crate::provider_receipt::window_of(12, 365), limit)
             .map(|outcome| outcome.counter_rows > 0)
     })
     .unwrap_err();
@@ -417,7 +431,7 @@ fn oversized_ground_owner_retries_alone_without_rewriting_successes_or_retrying_
     attempts.store(0, Ordering::SeqCst);
     let corrupt = run_with_serial_retry(work, worker_limit, process_limit, |work, limit| {
         attempts.fetch_add(1, Ordering::SeqCst);
-        run_ground_traffic_work(work, &prepared, &output, &index, (12, 365), limit)
+        run_ground_traffic_work(work, &prepared, &output, &index, &crate::provider_receipt::window_of(12, 365), limit)
             .map(|outcome| outcome.counter_rows > 0)
     })
     .unwrap_err();

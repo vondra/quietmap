@@ -33,8 +33,7 @@ const ROOT_KEYS = [
   'other_sources_lden', 'compute_time_ms', 'segments_meta', 'timings',
 ]
 const ROOT_OPTIONAL_KEYS = [
-  'center', 'h3_center', 'envelope_class', 'envelope_delta_db', 'facade_lden',
-  'indoor_lden_tilted', 'segments', 'unavailable_layers',
+  'center', 'h3_center', 'building_exposure', 'segments', 'unavailable_layers', 'receiver',
 ]
 // Emission layers the server answered without; the comparison keeps the key, so an answer
 // that lacks a layer on one side only is a structural difference, never a quiet delta.
@@ -147,8 +146,8 @@ function validatePropagation(value, layer, path) {
   if (value.model !== expected) fail(`${path}.model`, `expected ${expected}`)
   if (expected === 'doc29') {
     const keys = ['model', 'sel_npd_db', 'delta_v_db', 'delta_i_db', 'lambda_db', 'delta_f_db',
-      'd_p_m', 'lateral_m', 'beta_deg', 'seg_len_m', 'd_bar_m', 'installation',
-      'cffk_fast_path', 'screening_kind', 'screening_db']
+      'd_p_m', 'lateral_m', 'beta_deg', 'seg_len_m', 'd_lambda_m', 'installation',
+      'screening_kind', 'screening_db']
     exactKeys(value, path, keys)
     return
   }
@@ -232,6 +231,22 @@ function assertEnergySum(total, sources, field, path) {
   if (Math.abs(actual - sum) > roundoff) fail(path, `not the linear-energy sum of sources.${field}`)
 }
 
+// A building without an exposed façade has no receiver, no bearing and no level.
+function validateBuildingExposure(payload, path) {
+  const exposure = payload.building_exposure
+  exactKeys(exposure, path, ['receiver', 'facade_bearing_deg', 'facade_points'])
+  integer(exposure.facade_points, `${path}.facade_points`, 0)
+  nullableFinite(exposure.facade_bearing_deg, `${path}.facade_bearing_deg`)
+  if (exposure.receiver === null) {
+    if (exposure.facade_points !== 0 || exposure.facade_bearing_deg !== null || payload.total_lden !== null) {
+      fail(path, 'no receiver but façade points, a bearing or a level')
+    }
+    return
+  }
+  coordinatePair(exposure.receiver, `${path}.receiver`)
+  if (exposure.facade_points < 1) fail(`${path}.facade_points`, 'a receiver needs at least one façade point')
+}
+
 export function validatePopupPayload(value, point, label = 'payload') {
   exactKeys(value, label, ROOT_KEYS, ROOT_OPTIONAL_KEYS)
   const centers = ['center', 'h3_center'].filter((key) => Object.hasOwn(value, key))
@@ -254,6 +269,7 @@ export function validatePopupPayload(value, point, label = 'payload') {
   const layers = array(segments, `${label}.segments`).map((segment, i) => validateSegment(segment, `${label}.segments[${i}]`))
   validateMeta(value.segments_meta, layers, `${label}.segments_meta`)
   numericObject(value.timings, `${label}.timings`, TIMING_KEYS)
+  if (Object.hasOwn(value, 'receiver')) numericObject(value.receiver, `${label}.receiver`, ['lat', 'lng', 'height_m'])
   if (Object.hasOwn(value, 'unavailable_layers')) {
     const dropped = array(value.unavailable_layers, `${label}.unavailable_layers`)
     if (dropped.length === 0 || dropped.some((layer) => !UNAVAILABLE_LAYERS.has(layer))) {
@@ -263,12 +279,9 @@ export function validatePopupPayload(value, point, label = 'payload') {
       fail(`${label}.unavailable_layers`, 'names aircraft beside an aircraft source')
     }
   }
-  // Indoor projection floors each source independently at 0 dB, so only the
-  // outdoor wire retains exact linear-energy additivity.
-  if (!Object.hasOwn(value, 'envelope_delta_db')) {
-    assertEnergySum(value.total_lden, value.sources, 'lden', `${label}.total_lden`)
-    assertEnergySum(value.total_lden_free, value.sources, 'lden_free', `${label}.total_lden_free`)
-  }
+  if (Object.hasOwn(value, 'building_exposure')) validateBuildingExposure(value, `${label}.building_exposure`)
+  assertEnergySum(value.total_lden, value.sources, 'lden', `${label}.total_lden`)
+  assertEnergySum(value.total_lden_free, value.sources, 'lden_free', `${label}.total_lden_free`)
   return value
 }
 

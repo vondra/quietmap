@@ -291,140 +291,6 @@ fn test_pinned_heavy_class_membership() {
 /// residual), jets, bizjet classes, and the blank-typecode
 /// FALLBACK.
 #[test]
-fn test_ga_sampled_window_membership() {
-    for tc in [
-        "C172", "DR40", "WT9", "R44", "R22", "GYRO", "UHEL", "EC35", "H125",
-    ] {
-        assert!(
-            is_ga_sampled_profile(profile_idx(tc)),
-            "{tc} must be 365-day GA-window sampled"
-        );
-    }
-    for tc in [
-        "AT72", "AT76", "DH8D", "SF34", "L410", // airline turboprops
-        "B738", "A320", "B748", // jets
-        "CRJ9", "C56X", "GLF4", "CL30", // regional-jet/bizjet classes
-        "PC12", "C208", // GA turbine singles → DH8D residual
-    ] {
-        assert!(
-            !is_ga_sampled_profile(profile_idx(tc)),
-            "{tc} must stay on the 12-day airline window"
-        );
-    }
-    assert!(
-        !is_ga_sampled_profile(FALLBACK_PROFILE_IDX),
-        "blank/unknown typecodes stay 12-day (blank ≠ GA)"
-    );
-    // Class-level predicate agrees with the name-keyed definition and
-    // rejects out-of-range indices instead of panicking.
-    for (idx, name) in CLASS_NAMES.iter().enumerate() {
-        assert_eq!(
-            is_ga_sampled_class(idx as u8),
-            matches!(*name, "PROP_C172" | "HELICOPTER"),
-            "class {idx} ({name})"
-        );
-    }
-    assert!(!is_ga_sampled_class(NUM_CLASSES as u8));
-    assert!(!is_ga_sampled_class(u8::MAX));
-}
-
-/// Weight-LUT round-trip from the `sample_days_by_class` metadata
-/// vector. This synthetic case uses 365 GA days and 12 airline days;
-/// live extracts carry their available day count in metadata.
-#[test]
-fn class_weights_round_trip_from_metadata() {
-    // Build a non-uniform hybrid vector: GA classes → 365, else → 12.
-    let vec: String = (0..NUM_CLASSES)
-        .map(|c| {
-            if is_ga_sampled_class(c as u8) {
-                "365"
-            } else {
-                "12"
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    let w = ClassWeights::parse(Some(&vec), 12).unwrap();
-    for c in 0..NUM_CLASSES as u8 {
-        let expected = if is_ga_sampled_class(c) {
-            12.0 / 365.0
-        } else {
-            1.0
-        };
-        assert!(
-            (w.get(c) - expected).abs() < 1e-12,
-            "class {c} ({}) weight {} != {expected}",
-            CLASS_NAMES[c as usize],
-            w.get(c)
-        );
-    }
-    // GA classes (C172 piston + helicopter) must carry the 12/365 factor.
-    assert!((w.get(noise_class_of(profile_idx("C172"))) - 12.0 / 365.0).abs() < 1e-12);
-    assert!((w.get(noise_class_of(profile_idx("R44"))) - 12.0 / 365.0).abs() < 1e-12);
-    // Jets / airline turboprops stay at 1.0.
-    assert_eq!(w.get(noise_class_of(profile_idx("B738"))), 1.0);
-    assert_eq!(w.get(noise_class_of(profile_idx("AT72"))), 1.0);
-    // Out-of-range class clamps (no panic).
-    assert_eq!(w.get(u8::MAX), w.get(NUM_CLASSES as u8 - 1));
-}
-
-/// Single-window (non-hybrid) extract stamps the uniform vector → all
-/// weights 1.0 (byte-identical to pre-hybrid energy accounting).
-#[test]
-fn class_weights_uniform_vector_is_identity() {
-    let vec = std::iter::repeat_n("14", NUM_CLASSES)
-        .collect::<Vec<_>>()
-        .join(",");
-    let w = ClassWeights::parse(Some(&vec), 14).unwrap();
-    for c in 0..NUM_CLASSES as u8 {
-        assert_eq!(w.get(c), 1.0, "uniform vector must weight every class 1.0");
-    }
-    assert_eq!(ClassWeights::uniform().as_array(), &[1.0; NUM_CLASSES]);
-}
-
-/// FAIL-LOUD contract (owner directive 2026-06-12): missing metadata,
-/// wrong length, non-integer, and zero-days all error with an
-/// operator-actionable message — never a silent uniform fallback.
-#[test]
-fn class_weights_missing_or_malformed_metadata_errors() {
-    // Missing → loud, names the key + the re-run remedy.
-    let err = ClassWeights::parse(None, 12).unwrap_err();
-    assert!(err.contains(SAMPLE_DAYS_BY_CLASS_KEY), "{err}");
-    assert!(err.contains("re-run"), "{err}");
-    // Wrong length.
-    assert!(ClassWeights::parse(Some("12,12,12"), 12).is_err());
-    // Non-integer entry.
-    let too = std::iter::repeat_n("x", NUM_CLASSES)
-        .collect::<Vec<_>>()
-        .join(",");
-    assert!(ClassWeights::parse(Some(&too), 12).is_err());
-    // Zero day-count = invalid divisor.
-    let zero = {
-        let mut v = vec!["12"; NUM_CLASSES];
-        v[0] = "0";
-        v.join(",")
-    };
-    assert!(ClassWeights::parse(Some(&zero), 12).is_err());
-    // GA classes carrying DIFFERENT sample-day counts is malformed —
-    // the count split exposes one ga_n_days divisor.
-    let mut diverge = vec!["12"; NUM_CLASSES];
-    let mut first_ga = true;
-    for (i, slot) in diverge.iter_mut().enumerate() {
-        if is_ga_sampled_class(i as u8) {
-            *slot = if first_ga { "365" } else { "200" };
-            first_ga = false;
-        }
-    }
-    let err = ClassWeights::parse(Some(&diverge.join(",")), 12).unwrap_err();
-    assert!(err.contains("different sample-day"), "{err}");
-}
-
-/// AS* prefix audit (ICAO 8643, 2026-06-11): the only AS-prefixed
-/// helicopters are AS32/AS3B (similarity → EC35) and AS50/AS55/AS65
-/// (strict-mapped); all must stay in the HELICOPTER class, as must the
-/// UHEL ultralight-helicopter special designator. The IAI Astra bizjet
-/// (ASTR) lands on CRJ9, not on a phantom helicopter.
-#[test]
 fn test_as_prefix_helicopters_still_ec35() {
     let heli_class = noise_class_of(profile_idx("EC35"));
     assert_eq!(CLASS_NAMES[heli_class as usize], "HELICOPTER");
@@ -442,4 +308,109 @@ fn test_as_prefix_helicopters_still_ec35() {
         profile_idx("CRJ9"),
         "IAI Astra is a bizjet"
     );
+}
+
+/// Doc 29 Eq. 4-3 headline check: B738 at 3,000 ft AFE after cutback
+/// (MaxClimb Fn/δ 18,093 lb, rows 16,000/19,000 lb, w 0.6977) reads
+/// 93.77 dB SEL at 1,000 ft — not the 99.3 dB max-thrust row.
+#[test]
+fn test_b738_cutback_interpolation_reads_93_77_db() {
+    use crate::emission::aircraft::thrust::{bracket_power, thrust_model_for_class};
+    let class = noise_class_of(profile_idx("B738")) as usize;
+    let model = thrust_model_for_class(class);
+    let (row, w) = bracket_power(&model.dep_power, model.dep_rows, 18_093.0);
+    assert_eq!((row, (w * 10_000.0).round() as u32), (2, 6977));
+    let sel = NpdLuts::shared().lookup(class, true, row, w, 1000.0_f64.log10());
+    assert!(
+        (sel - 93.77).abs() < 0.06,
+        "B738 cutback SEL@1000ft = {sel}"
+    );
+    let max_row =
+        NpdLuts::shared().lookup(class, true, model.dep_rows - 1, 0.0, 1000.0_f64.log10());
+    assert!(
+        (max_row - 99.3).abs() < 0.06,
+        "B738 max-row SEL@1000ft = {max_row}"
+    );
+}
+
+/// Cross-check between the two generators: every thrust class's edge power
+/// rows must reproduce the ANP merge already checked into PROFILES (max
+/// departure row = `departure_sel`, min approach row = `approach_sel`).
+/// A wrong ACFT_ID/NPD_ID in the thrust generator fails here at dB scale;
+/// the 0.1 dB tolerance is LUT bin sag only (worst at the 25,000 ft edge).
+#[test]
+fn test_power_row_edges_reproduce_anchor_curves() {
+    use crate::emission::aircraft::thrust::thrust_model_for_class;
+    let luts = NpdLuts::shared();
+    for class in 0..NUM_CLASSES {
+        let model = thrust_model_for_class(class);
+        if !model.has_thrust {
+            continue;
+        }
+        let anchor = &PROFILES[CLASS_REP_PROFILE_IDX[class] as usize];
+        for (node, curve) in NPD_DIST_FT.iter().zip(anchor.departure_sel.iter()) {
+            let actual = luts.lookup(class, true, model.dep_rows - 1, 0.0, node.log10());
+            assert!(
+                (actual - curve).abs() < 0.1,
+                "{} dep edge @ {node} ft: {actual} vs {curve}",
+                model.class_name
+            );
+        }
+        for (node, curve) in NPD_DIST_FT.iter().zip(anchor.approach_sel.iter()) {
+            let actual = luts.lookup(class, false, 0, 0.0, node.log10());
+            assert!(
+                (actual - curve).abs() < 0.1,
+                "{} app edge @ {node} ft: {actual} vs {curve}",
+                model.class_name
+            );
+        }
+    }
+}
+
+/// Pinned classes (fallback, piston, turboprop, helicopter) read their
+/// anchor curve at row 0: bit-identical to the pre-thrust LUT at bin
+/// centers (frac = 0 takes the exact bin value).
+#[test]
+fn test_pinned_rows_match_anchor_lut_bit_for_bit() {
+    use crate::emission::aircraft::thrust::thrust_model_for_class;
+    let luts = NpdLuts::shared();
+    for class in 0..NUM_CLASSES {
+        if thrust_model_for_class(class).has_thrust {
+            continue;
+        }
+        let anchor = &PROFILES[CLASS_REP_PROFILE_IDX[class] as usize];
+        for departure in [false, true] {
+            for bin in [0, 1, 64, 127, 128] {
+                let log_d = NPD_LUT_LOG_MIN + bin as f64 * NPD_LUT_STEP;
+                assert_eq!(
+                    luts.lookup(class, departure, 0, 0.0, log_d),
+                    interpolate_sel_logd(anchor, log_d, departure),
+                    "class {class} dep={departure} bin {bin}"
+                );
+            }
+        }
+    }
+}
+
+/// Reach envelopes the loudest power row per operation: departure reach is
+/// unchanged (max row = today's curve), approach reach grows (min row →
+/// loudest approach row) so interpolated approach segments never gate out.
+#[test]
+fn test_reach_envelopes_loudest_power_row() {
+    use crate::emission::aircraft::thrust::thrust_model_for_class;
+    for class in 0..NUM_CLASSES {
+        let anchor = &PROFILES[CLASS_REP_PROFILE_IDX[class] as usize];
+        let model = thrust_model_for_class(class);
+        let old_dep = anchor.estimate_reach_m(AIRCRAFT_NPD_REACH_THRESHOLD_DB, true);
+        let old_app = anchor.estimate_reach_m(AIRCRAFT_NPD_REACH_THRESHOLD_DB, false);
+        let new_dep = REACH_SQ_TABLE[class][1].sqrt();
+        let new_app = REACH_SQ_TABLE[class][0].sqrt();
+        if model.has_thrust {
+            assert_eq!(new_dep, old_dep, "{} dep reach moved", model.class_name);
+            assert!(new_app >= old_app, "{} app reach shrank", model.class_name);
+        } else {
+            assert_eq!(new_dep, old_dep, "{} dep reach moved", model.class_name);
+            assert_eq!(new_app, old_app, "{} app reach moved", model.class_name);
+        }
+    }
 }

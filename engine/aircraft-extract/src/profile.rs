@@ -5,7 +5,7 @@
 //! this file when ANP-v9 anchors shift.
 
 pub use noise_compute::emission::aircraft::{
-    clamp_profile_idx, is_ga_sampled_class, is_ga_sampled_profile, is_jet_profile,
+    clamp_profile_idx, is_jet_profile,
     is_negligible_noise_typecode, is_non_aircraft_typecode, noise_class_of, profile_idx,
     profile_typecode, CLASS_NAMES, CLASS_OF_PROFILE, CLASS_REP_PROFILE_IDX, FALLBACK_NOISE_CLASS,
     FALLBACK_PROFILE_IDX, IS_JET, NUM_CLASSES, NUM_PROFILES, PROFILES,

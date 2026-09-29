@@ -11,4 +11,5 @@ pub mod road;
 pub mod settlement;
 pub mod ships;
 pub mod spectrum;
+pub mod thrust_generated;
 pub mod wind;

@@ -6,20 +6,8 @@ use crate::propagation::obstacle_index::{CrossingScratch, ObstacleIndex, Obstacl
 
 use super::*;
 
-struct FlatGround;
-
-impl RasterSampler for FlatGround {
-    fn elevation(&self, _lat: f64, _lon: f64) -> f64 {
-        0.0
-    }
-
-    fn ground_g(&self, _lat: f64, _lon: f64) -> f64 {
-        0.0
-    }
-
-    fn building_enclosure(&self, _lat: f64, _lon: f64) -> f64 {
-        0.0
-    }
+fn flat_ground(_lat: f64, _lon: f64) -> f64 {
+    0.0
 }
 
 fn rectangle_set(kind: ObstacleKind, height_m: f32) -> ObstacleSet {
@@ -131,7 +119,7 @@ fn horizon_from_individual_sector_rays(set: &ObstacleSet) -> BuildingHorizon {
 fn building_below_and_above_line_of_sight() {
     let set = rectangle_set(ObstacleKind::Building, 12.0);
     let mut crossings = CrossingScratch::default();
-    let horizon = BuildingHorizon::build(&set, &FlatGround, 50.0, 14.0, 4.0, &mut crossings);
+    let horizon = BuildingHorizon::build(&set, flat_ground, 50.0, 14.0, 4.0, &mut crossings);
     let blocked_db = horizon.screening_dz(200.0, 0.0, 5.0);
     assert!((5.0..=18.0).contains(&blocked_db), "{blocked_db}");
     assert_eq!(horizon.screening_dz(200.0, 0.0, 30.0), 0.0);
@@ -141,7 +129,7 @@ fn building_below_and_above_line_of_sight() {
 fn noise_barrier_is_not_an_airborne_building() {
     let set = rectangle_set(ObstacleKind::Barrier, 100.0);
     let mut crossings = CrossingScratch::default();
-    let horizon = BuildingHorizon::build(&set, &FlatGround, 50.0, 14.0, 4.0, &mut crossings);
+    let horizon = BuildingHorizon::build(&set, flat_ground, 50.0, 14.0, 4.0, &mut crossings);
     assert_eq!(horizon.screening_dz(200.0, 0.0, 5.0), 0.0);
 }
 
@@ -149,7 +137,7 @@ fn noise_barrier_is_not_an_airborne_building() {
 fn one_neighbourhood_scan_matches_individual_sector_rays() {
     let set = surrounding_building_set();
     let mut scratch = CrossingScratch::default();
-    let scanned = BuildingHorizon::build(&set, &FlatGround, 50.0, 14.0, 4.0, &mut scratch);
+    let scanned = BuildingHorizon::build(&set, flat_ground, 50.0, 14.0, 4.0, &mut scratch);
     let individually_cast = horizon_from_individual_sector_rays(&set);
     assert_eq!(scanned.local, individually_cast.local);
     assert_eq!(
@@ -168,7 +156,7 @@ fn anchored_iso_form_is_zero_at_grazing_and_caps_at_eighteen() {
 fn negative_zero_bearing_stays_inside_the_sector_array() {
     let set = ObstacleSet::empty();
     let mut crossings = CrossingScratch::default();
-    let horizon = BuildingHorizon::build(&set, &FlatGround, 50.0, 14.0, 4.0, &mut crossings);
+    let horizon = BuildingHorizon::build(&set, flat_ground, 50.0, 14.0, 4.0, &mut crossings);
     assert_eq!(horizon.screening_dz(2.0, -0.0, 1.0), 0.0);
 }
 
@@ -185,7 +173,7 @@ fn building_tangent_encoding_keeps_vertical_range_without_raising_roofs() {
 fn close_facade_range_keeps_centimetres() {
     let set = rectangle_set(ObstacleKind::Building, 12.0);
     let mut crossings = CrossingScratch::default();
-    let horizon = BuildingHorizon::build(&set, &FlatGround, 50.0, 14.0, 4.0, &mut crossings);
+    let horizon = BuildingHorizon::build(&set, flat_ground, 50.0, 14.0, 4.0, &mut crossings);
     let range_q = horizon.local[0][3].1;
     assert!((9_000..=9_010).contains(&range_q), "range_q={range_q}");
     assert_ne!(range_q % 100, 0, "range collapsed to whole metres");

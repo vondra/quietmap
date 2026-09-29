@@ -130,7 +130,7 @@ mod tests {
                 elevation: 0.0,
                 forest: 0,
                 imd,
-                _pad: 0,
+                canopy_m: 0,
             });
         }
         (data, rng)

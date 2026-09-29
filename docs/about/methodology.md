@@ -11,8 +11,16 @@ is propagated to a receiver 4 m above ground over terrain and around buildings, 
 contributions of all sources are summed. The result is Lden, the annual
 day-evening-night level. Layers are computed independently and can be toggled separately.
 
-Accommodation cards show outdoor noise. Listings inside a building use the façade
-estimate before wall and window insulation.
+Inside a building, the map and the click panel show the level at its noisiest façade
+point, placed as the EU method (CNOSSOS-EU) places receivers for building exposure.
+Receivers sit at most 5 m apart along each façade, 0.1 m in front of the wall and 4 m above ground, with the façade's own
+reflection left out; the loudest by Lden of all sources is shown. Courtyards and open
+ground show the level at the point itself. No indoor attenuation is applied anywhere, and
+accommodation cards show the same level as a click at the listing.
+
+Zoomed-out views show each cell as the energy mean of the cells beneath it. Cells where no
+modelled source reaches 0 dB count as silence; cells that were not computed are left out
+of the mean and stay blank.
 
 ## Roads
 
@@ -26,25 +34,44 @@ map.
 
 ### Road defaults
 
-A three-lane one-way motorway without a count is estimated at 3 × 6,379 = 19,137
-vehicles per day. The rates below are medians of counted roads, separated by road class
-and direction. They estimate uncounted roads; they are not local measurements.
+A three-lane urban one-way motorway without a count is estimated at 3 × 12,543 = 37,629
+vehicles per day. The defaults below are length-weighted medians of counted public roads,
+fitted in September 2026 by road class, direction and surroundings. Local counts and
+national estimate tables take precedence.
 
-| Vehicles per day | Motorway | Trunk | Primary |
-|---|---:|---:|---:|
-| One-way carriageway, per lane | 6,379 | 4,533 | 4,250 |
-| Two-way road, per lane | 3,010 | 2,594 | 2,800 |
-| One-way carriageway, lane count unknown | 5,200 | 1,810 | 5,882 |
-| Two-way road, lane count unknown | 6,019 | 3,045 | 3,719 |
+Motorways, trunks and primary roads with a lane count from 1 to 6 use these rates in
+vehicles per day per lane:
 
-Lane counts from 1 to 6 use the per-lane rate; missing or implausible counts use the
-carriageway median. National estimate tables, where available, take precedence.
+| Road | Direction | Rural | Urban | Surroundings unknown |
+|---|---|---:|---:|---:|
+| Motorway | One-way | 6,174 | 12,543 | 7,331 |
+| Motorway | Two-way | 2,305 | 4,396 | 2,305 |
+| Trunk | One-way | 2,950 | 6,188 | 3,652 |
+| Trunk | Two-way | 1,959 | 4,000 | 2,205 |
+| Primary | One-way | 3,314 | 4,980 | 4,579 |
+| Primary | Two-way | 1,977 | 4,136 | 2,636 |
 
-Smaller-road defaults are section totals: secondary 3,000, tertiary 800, residential 500,
-living street 100, unclassified 1,340, service 250 and track 5 vehicles per day, before
-lane, carriageway and access adjustments. A two-way track without an access tag takes 0.5
-vehicles per day. Local streets can instead be estimated from the buildings they serve.
-Country pages list local data and estimates; no generic country multiplier is applied.
+Missing or implausible lane counts use the whole carriageway estimates below, in vehicles
+per day. Secondary and tertiary roads use these totals regardless of the lane count.
+
+| Road | Direction | Rural | Urban | Surroundings unknown |
+|---|---|---:|---:|---:|
+| Motorway | One-way | 5,208 | 30,980 | 6,008 |
+| Motorway | Two-way | 6,297 | 7,640 | 6,297 |
+| Trunk | One-way | 5,061 | 9,744 | 6,652 |
+| Trunk | Two-way | 4,260 | 8,289 | 4,840 |
+| Primary | One-way | 4,966 | 7,963 | 7,103 |
+| Primary | Two-way | 3,644 | 9,322 | 4,500 |
+| Secondary | One-way | half of two-way (1,030) | half of two-way (3,222) | half of two-way (1,500) |
+| Secondary | Two-way | 2,061 | 6,445 | 3,000 |
+| Tertiary | One-way | 2,266 | 4,298 | 4,132 |
+| Tertiary | Two-way | 1,002 | 2,562 | 1,506 |
+
+Smaller-road defaults are section totals: residential 500, living street 100,
+unclassified 1,340, service 250 and track 5 vehicles per day, before lane, carriageway
+and access adjustments. A two-way track without an access tag takes 0.5 vehicles per day.
+Local streets can instead be estimated from the buildings they serve. Country pages
+list local data and estimates; no generic country multiplier is applied.
 
 Directional counts are kept as published; counts covering both directions are shared
 between carriageways. A divided main road can receive half a two-way count when its
@@ -70,7 +97,7 @@ allocation can reduce the count assigned to an individual track.
 
 | Railway | Passenger trains/day | Freight trains/day |
 |---|---:|---:|
-| Main line | 80 | 20 |
+| Main line | 80 | 20 (national rate where solved) |
 | Branch | 30 | 5 |
 | Industrial | 0 | 15 |
 | Unclassified | 40 | 10 |
@@ -78,6 +105,17 @@ allocation can reduce the count assigned to an individual track.
 | Light rail or metro | 80 | 0 |
 | Narrow gauge | 10 | 0 |
 | Funicular | 40 | 0 |
+
+The main-line freight rate conserves each solved country's official 2023 goods
+train-km: Germany 24.5, France 5.5, Poland 12.0, Czechia 13.5, Austria 27.1 and
+Switzerland 31.4 trains per day. Lines mapped as passenger-only carry no freight.
+
+At US and Canadian public level crossings with trains, locomotives sound their
+horns on approach: each travel direction is a line segment up to a quarter mile
+long ending at the crossing, with half the crossing's trains sounding. Full-day
+quiet zones stay silent, as do partial zones at night. Rail yards mapped in
+OpenStreetMap emit as industrial sites that run around the clock, and their
+untagged tracks carry no line estimate.
 
 ## Aircraft
 
@@ -118,15 +156,35 @@ at night.
 ## Industry
 
 Factories, power plants, mines, quarries and wind turbines. Sites come from OpenStreetMap;
-plant type comes from E-PRTR (Europe), the Global Power Plant Database and the Global
-Energy Monitor trackers for steel, cement and coal. Sound power is estimated from plant
-type and size. Operating hours and operating status are unknown.
+plant type comes from E-PRTR (Europe, by Annex I sub-activity), the Global Power Plant
+Database and the Global Energy Monitor trackers for steel, cement and coal. A registry
+site claims the smallest mapped polygon containing it; where several registry points fall
+inside one plant, the loudest plant type wins. Sound power is estimated from plant
+type and size. Coal and lignite mines run day and night; other mines and quarries,
+offices and warehouses keep day-oriented hours. Operating status is unknown.
+
+Wind turbines emit their annual operating level: the published maximum for their size,
+minus an operating allowance for calm and part-load hours (about 2 dB on average; the
+wind distribution used is a placeholder until measured wind data arrives). Solar farms
+emit from their inverters during daylight (about 88 dB(A) per MW, from manufacturer
+data; untagged farms assume 0.55 MW per hectare) and are silent at night. Substations
+hum around the clock from their transformers (IEC 551, from the transformer rating or
+a class median). Wind-farm outlines themselves are silent — only the turbines emit.
 
 ## Buildings
 
 **As sources.** Buildings and leisure facilities use estimated sound power by type,
 area and assumed operating hours. These extensions beyond the transport standards are
-not measurements of individual heat pumps, shops or sports grounds.
+not measurements of individual heat pumps, shops or sports grounds. Sports pitches
+are the exception with documented hours: both kinds radiate the Sport England
+typical in-use level (58 dB LAeq,1h at 10 m from the sideline); grass pitches
+take 5 hours a week over a September–May season, floodlit artificial turf
+40 hours a week year-round, and both are silent at night.
+
+Race circuits, motocross, kart, speedway and trial tracks use published per-vehicle
+levels with typical grids (15, 7, 8, 4 and 2 vehicles), 100 days × 6 hours a year,
+daytime only. Outdoor shooting ranges use published per-shot levels (rifle, pistol,
+shotgun) with 20,000 shots a year, daytime only.
 
 Open car parks use the [Bavarian parking study (LfU, 2007, sixth edition)](https://www.lfu.bayern.de/publikationen/get_pdf.htm?art_nr=lfu_lae_00045&pdf_nr=0),
 with 63 dB(A) sound power for one movement per hour and its searching-traffic term.
@@ -135,24 +193,34 @@ then average these into the map's day, evening and night periods. Capacity is es
 from mapped area. These residential-parking defaults can understate busy shopping sites;
 the study's impulse rating surcharge is not included in the sound-energy calculation.
 Garages and carports share a generic emission profile; actual ventilation and vehicle
-movements are unknown. Explicitly mapped carports and open roof structures receive no
-indoor attenuation, but their footprints still screen as solid obstacles.
+movements are unknown. Explicitly mapped carports and open roof structures count as open
+ground for receivers.
 
 **As obstacles.** Mapped above-ground buildings and noise barriers screen sound. Open
-parking areas, yards and explicitly underground footprints do not. Building heights
-come from mapped heights or floor counts, measured surveys where available (Prague),
-and otherwise area averages or defaults. Footprints come from OpenStreetMap and Overture
-Maps.
+parking areas, yards, explicitly underground footprints, carports and open roofs do not:
+a roof on posts has no wall. Building heights come, in this order, from measured
+surveys (North Rhine-Westphalia, the Netherlands, Prague), mapped heights,
+floor counts (one floor 6 m, two to three floors 6–9 m, four or more 3 m each
+plus 2 m of roof), Overture heights, and finally the typical height of a
+building of that footprint size. Noise walls come from official barrier
+inventories where one is open (the Netherlands, Washington, Florida, Virginia)
+and from OpenStreetMap elsewhere; a wall without a measured height takes its country's
+average wall height: 3.9 m in Germany, 4.5 m in the United States, 3.6 m in Austria
+and 3 m elsewhere. Heights are stored as whole metres, so the three national
+averages stand as 4 m walls on the map. Footprints come from OpenStreetMap and
+Overture Maps.
 
 ## Propagation
 
 ISO 9613-2 in eight octave bands: geometric spreading, atmospheric absorption, ground
 effect (per CNOSSOS-EU, verified against the standard's test cases), diffraction over
-terrain and buildings, and attenuation by forest according to canopy density.
+terrain and buildings, and attenuation by forest according to canopy height and density.
 
-Terrain is the Copernicus GLO-30 elevation model; canopy density and ground sealing come
-from satellite land-cover data. All inputs can be inspected in the map's Advanced panel.
-Meteorology is a fixed long-term average.
+Terrain is a bare-earth model: national LiDAR surveys (see the credits page) over the
+GEDTM30 world model; tree screening uses satellite canopy height and density, ground
+sealing comes from imperviousness data. All inputs can be inspected in the map's
+Advanced panel. Meteorology (favourable-weather probability, temperature, humidity)
+is a 1991–2020 ERA5 climatology.
 
 ## Standards
 

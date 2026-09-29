@@ -55,7 +55,7 @@ if (surfaceCornersRoot) {
   parentPort?.postMessage({ initialized: true, available })
 }
 
-parentPort?.on('message', ({ id, lat, lng, lat2, lng2, op }) => {
+parentPort?.on('message', ({ id, lat, lng, lat2, lng2, receiverHeightM, op }) => {
   try {
     if (op === 'ready') {
       // Re-run the idempotent init so a worker created during a transient data
@@ -92,11 +92,10 @@ parentPort?.on('message', ({ id, lat, lng, lat2, lng2, op }) => {
       parentPort?.postMessage({ id, ok: true, resultJson, nativeMs: Date.now() - t0 })
       return
     }
-    const fn = op === 'unfiltered'
-      ? sourceModule.queryNoiseAtPointUnfiltered
-      : sourceModule.queryNoiseAtPoint
     const t0 = Date.now()
-    const resultJson = fn(lat, lng)
+    const resultJson = op === 'unfiltered'
+      ? sourceModule.queryNoiseAtPointUnfiltered(lat, lng)
+      : sourceModule.queryNoiseAtPoint(lat, lng, receiverHeightM)
     parentPort?.postMessage({ id, ok: true, resultJson, nativeMs: Date.now() - t0 })
   } catch (err) {
     parentPort?.postMessage({

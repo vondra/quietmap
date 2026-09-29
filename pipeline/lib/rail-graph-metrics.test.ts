@@ -12,7 +12,7 @@ import {
 function seg(over: Partial<RailGraphSegmentInput> & Pick<RailGraphSegmentInput, 'key' | 'startLat' | 'startLon' | 'endLat' | 'endLon'>): RailGraphSegmentInput {
   const lengthM = flatDist(over.startLat, over.startLon, over.endLat, over.endLon)
   return {
-    osmId: over.key, railType: 0, usage: 0, isTraversalOnly: false, corridorToken: '',
+    osmId: over.key, railType: 0, isTraversalOnly: false,
     startKey: `${over.startLat},${over.startLon}`, endKey: `${over.endLat},${over.endLon}`,
     lengthM, ...over,
   }
@@ -38,8 +38,8 @@ test('walk: a path across pieces that share a source node stamps each piece once
   ])
   assert.equal(result.failures.snapFailed + result.failures.disconnected + result.failures.detourRejected + result.failures.ambiguous, 0)
   assert.equal(result.pairsWalked, 1)
-  assert.deepEqual(result.stampsBySegmentKey.get('west'), { pax: 20, frt: 0, divisor: 1 })
-  assert.deepEqual(result.stampsBySegmentKey.get('east'), { pax: 20, frt: 0, divisor: 1 })
+  assert.deepEqual(result.stampsBySegmentKey.get('west'), { pax: 20, frt: 0 })
+  assert.deepEqual(result.stampsBySegmentKey.get('east'), { pax: 20, frt: 0 })
   assert.equal(result.stampsBySegmentKey.has('branch'), false, 'branch was never on this path')
 })
 
@@ -81,8 +81,8 @@ test('walk: a meander well within the detour gate is fully stamped on every edge
     { fromLat: 50.000, fromLon: 14.000, toLat: 50.000, toLon: 14.100, pax: 12, frt: 3 },
   ])
   assert.equal(result.pairsWalked, 1)
-  assert.deepEqual(result.stampsBySegmentKey.get('a-m'), { pax: 12, frt: 3, divisor: 1 })
-  assert.deepEqual(result.stampsBySegmentKey.get('m-b'), { pax: 12, frt: 3, divisor: 1 })
+  assert.deepEqual(result.stampsBySegmentKey.get('a-m'), { pax: 12, frt: 3 })
+  assert.deepEqual(result.stampsBySegmentKey.get('m-b'), { pax: 12, frt: 3 })
 })
 
 // ── Direction sum + express/local summation ─────────────────────────────────
@@ -95,7 +95,7 @@ test('walk: opposite directions route separately and add their counts on a share
     { fromLat: 50, fromLon: 14.020, toLat: 50, toLon: 14.000, pax: 16, frt: 0 }, // reverse direction
   ])
   assert.equal(result.pairsTotal, 2)
-  assert.deepEqual(result.stampsBySegmentKey.get('ab'), { pax: 32, frt: 0, divisor: 1 })
+  assert.deepEqual(result.stampsBySegmentKey.get('ab'), { pax: 32, frt: 0 })
 })
 
 test('walk: original coordinates distinguish stops inside the same rounded coordinate cell', () => {
@@ -110,8 +110,8 @@ test('walk: original coordinates distinguish stops inside the same rounded coord
   const result = walkRailStationPairs(buildRailGraph(segments), pairs)
   assert.equal(result.pairsTotal, 2)
   assert.equal(result.pairsWalked, 2)
-  assert.deepEqual(result.stampsBySegmentKey.get('piece-0'), { pax: 10, frt: 0, divisor: 1 })
-  assert.deepEqual(result.stampsBySegmentKey.get('piece-1'), { pax: 20, frt: 0, divisor: 1 })
+  assert.deepEqual(result.stampsBySegmentKey.get('piece-0'), { pax: 10, frt: 0 })
+  assert.deepEqual(result.stampsBySegmentKey.get('piece-1'), { pax: 20, frt: 0 })
   assert.deepEqual(pairs, original)
 })
 
@@ -124,8 +124,8 @@ test('walk: express + local pairs on a shared trunk edge SUM (different OD pairs
     { fromLat: 50, fromLon: 14.000, toLat: 50, toLon: 14.020, pax: 8, frt: 0 },  // express: A-C via AM+MC
   ])
   assert.equal(result.pairsTotal, 2, 'two distinct OD pairs, not merged')
-  assert.deepEqual(result.stampsBySegmentKey.get('AM'), { pax: 13, frt: 0, divisor: 1 }, 'local + express both cross AM')
-  assert.deepEqual(result.stampsBySegmentKey.get('MC'), { pax: 8, frt: 0, divisor: 1 }, 'only express reaches MC')
+  assert.deepEqual(result.stampsBySegmentKey.get('AM'), { pax: 13, frt: 0 }, 'local + express both cross AM')
+  assert.deepEqual(result.stampsBySegmentKey.get('MC'), { pax: 8, frt: 0 }, 'only express reaches MC')
 })
 
 // ── Ambiguity ────────────────────────────────────────────────────────────────
@@ -187,8 +187,8 @@ test('walk: a shapePolyline hugging one corridor disambiguates it (ambiguity pro
   ])
   assert.equal(result.failures.ambiguous, 0)
   assert.equal(result.pairsWalked, 1)
-  assert.deepEqual(result.stampsBySegmentKey.get('A-N'), { pax: 7, frt: 0, divisor: 1 })
-  assert.deepEqual(result.stampsBySegmentKey.get('N-B'), { pax: 7, frt: 0, divisor: 1 })
+  assert.deepEqual(result.stampsBySegmentKey.get('A-N'), { pax: 7, frt: 0 })
+  assert.deepEqual(result.stampsBySegmentKey.get('N-B'), { pax: 7, frt: 0 })
   assert.equal(result.stampsBySegmentKey.has('A-S'), false, 'south corridor excluded by the shape constraint')
 })
 
@@ -200,7 +200,7 @@ test('walk: a shapePolyline hugging one corridor disambiguates it (ambiguity pro
 // `best`; the ONLY alternate route once `best`'s edges are penalized is
 // crossover -> sibling track -> crossover, fully disjoint from `best` and
 // near-equal length — genuinely ambiguous-LOOKING, but the sibling passes the
-// parallel-spread's own lateral-twin gate, so it is not a different corridor
+// twin gate, so it is not a different corridor
 // at all. ─────────────────────────────────────────────────────────────────
 
 function buildCrossoverJoinedDoubleTrack(offsetM: number) {
@@ -216,15 +216,15 @@ function buildCrossoverJoinedDoubleTrack(offsetM: number) {
   return buildRailGraph([track1, track2, crossIn, crossOut])
 }
 
-test('walk: a token-less double-track joined at both ends via crossovers is NOT ambiguous — walks the direct track and spreads to the sibling', () => {
+test('walk: a token-less double-track joined at both ends via crossovers is NOT ambiguous — walks the direct track', () => {
   const g = buildCrossoverJoinedDoubleTrack(8) // ~8 m lateral — genuine double-track spacing
   const result = walkRailStationPairs(g, [
     { fromLat: 50.000, fromLon: 14.000, toLat: 50.000, toLon: 14.030, pax: 20, frt: 4 },
   ])
   assert.equal(result.failures.ambiguous, 0, 'the sibling-track alt path is exempted as a parallel twin, not a genuine second corridor')
   assert.equal(result.pairsWalked, 1)
-  assert.deepEqual(result.stampsBySegmentKey.get('track1'), { pax: 20, frt: 4, divisor: 2 }, 'walked directly')
-  assert.deepEqual(result.stampsBySegmentKey.get('track2'), { pax: 20, frt: 4, divisor: 2 }, 'unwalked sibling still spreads — the parallel-track pass runs exactly as normal once the pair is no longer failed')
+  assert.deepEqual(result.stampsBySegmentKey.get('track1'), { pax: 20, frt: 4 }, 'walked directly')
+  assert.equal(result.stampsBySegmentKey.has('track2'), false, 'the walk stamps passages only; railways-finalize shares the line over its tracks')
 })
 
 test('walk: two corridors ~100 m+ apart (beyond even the confirmed-token 50 m radius) are genuinely disjoint and STAY ambiguous', () => {
@@ -277,10 +277,10 @@ test('twin exemption is LENGTH-weighted (item 5): 8 short twin stubs + 2 long ~1
   assert.equal(result.stampsBySegmentKey.size, 0)
 })
 
-test('twin classification has its OWN radii (review round): a station throat widening to 30 m for 400 m stays a twin — NOT ambiguous — while the 15 m spread radius stays strict', () => {
+test('twin classification has its OWN radii (review round): a station throat widening to 30 m for 400 m stays a twin — NOT ambiguous', () => {
   // CZ Step-A v3 regression (ambiguous 29 -> 71): around island platforms
-  // parallel tracks legitimately spread to 20-40 m for 300-600 m. Under the
-  // spread's 15 m token-less radius those throat stretches read as non-twin;
+  // parallel tracks legitimately spread to 20-40 m for 300-600 m. Under a
+  // 15 m token-less radius those throat stretches would read as non-twin;
   // under the quantile gate the sibling's length-weighted median lateral is
   // ~8 m (<= WALK_TWIN_MEDIAN_LATERAL_M) and nothing sits FAR, so the
   // throat stays a twin and the pair walks cleanly. The sibling track: 800 m at 8 m offset,
@@ -302,10 +302,10 @@ test('twin classification has its OWN radii (review round): a station throat wid
   const result = walkRailStationPairs(g, [
     { fromLat: 50, fromLon: lonAtM(0), toLat: 50, toLon: lonAtM(2147), pax: 20, frt: 4 },
   ])
-  assert.equal(result.failures.ambiguous, 0, 'the sibling with a 30 m station-throat passage is a twin under the quantile gate — the spread\'s 15 m arm would have read the throat as non-twin')
+  assert.equal(result.failures.ambiguous, 0, 'the sibling with a 30 m station-throat passage is a twin under the quantile gate — a 15 m radius would have read the throat as non-twin')
   assert.equal(result.pairsWalked, 1)
-  assert.deepEqual(result.stampsBySegmentKey.get('track1'), { pax: 20, frt: 4, divisor: 1 }, 'walked directly; no divisor — the SPREAD still refuses the 30 m throat (and the 8 m stretches fail its overlap fraction at track1\'s own midpoint)')
-  assert.equal(result.stampsBySegmentKey.has('s2'), false, 'the throat itself gets NO spread stamp: energy division keeps the strict 15 m radius — classification tolerance never leaks into acoustics')
+  assert.deepEqual(result.stampsBySegmentKey.get('track1'), { pax: 20, frt: 4 }, 'walked directly')
+  assert.equal(result.stampsBySegmentKey.has('s2'), false, 'classification tolerance never stamps the twin')
 })
 
 // ── DE v3 quantile gate: bounded station/yard excursions vs far corridors ──
@@ -341,7 +341,7 @@ test('twin gate (DE v3): a sibling with one steep ~360 m-lateral yard excursion 
   ])
   assert.equal(result.failures.ambiguous, 0, 'median ~8 m, p75 ~8 m, far fraction 0 — a steep bounded excursion no longer votes the pair ambiguous')
   assert.equal(result.pairsWalked, 1)
-  assert.deepEqual(result.stampsBySegmentKey.get('best'), { pax: 40, frt: 20, divisor: 1 })
+  assert.deepEqual(result.stampsBySegmentKey.get('best'), { pax: 40, frt: 20 })
 })
 
 test('twin gate (Codex C2): a gently-ramped ~1.4 km parallel stretch at ~180 m STAYS ambiguous — the p75 gate closes the 50-500 m middle band', () => {
@@ -417,8 +417,8 @@ test('walk: a station pair on a narrow-gauge line (railType 3) snaps, walks and 
   ])
   assert.equal(result.failures.snapFailed, 0, 'narrow-gauge nodes are in the graph — the stop snaps')
   assert.equal(result.pairsWalked, 1)
-  assert.deepEqual(result.stampsBySegmentKey.get('ng1'), { pax: 104, frt: 2, divisor: 1 })
-  assert.deepEqual(result.stampsBySegmentKey.get('ng2'), { pax: 104, frt: 2, divisor: 1 })
+  assert.deepEqual(result.stampsBySegmentKey.get('ng1'), { pax: 104, frt: 2 })
+  assert.deepEqual(result.stampsBySegmentKey.get('ng2'), { pax: 104, frt: 2 })
 })
 
 // ── Disconnected pair ────────────────────────────────────────────────────────
@@ -660,211 +660,5 @@ test('dijkstraShortestPath: a reused scratch run on the same pair twice, then a 
   assert.deepEqual([...run3!.edgeIndices].sort(), [...fresh3!.edgeIndices].sort())
 })
 
-// ── Parallel spread ──────────────────────────────────────────────────────────
-
-/** Isolated parallel tracks whose stop pairs sit exactly on their source endpoints. */
-function buildParallelTracks(offsetsDeg: number[], corridorToken: string, paxByIndex: number[], frtByIndex: number[]) {
-  const segs: RailGraphSegmentInput[] = []
-  const pairs: Array<{ fromLat: number; fromLon: number; toLat: number; toLon: number; pax: number; frt: number }> = []
-  offsetsDeg.forEach((offset, i) => {
-    const lat = 50 + offset
-    const s = seg({ key: `track${i}`, osmId: `osm${i}`, startLat: lat, startLon: 14.000, endLat: lat, endLon: 14.010, corridorToken })
-    segs.push(s)
-    pairs.push({ fromLat: lat, fromLon: 14.000, toLat: lat, toLon: 14.010, pax: paxByIndex[i], frt: frtByIndex[i] })
-  })
-  return { g: buildRailGraph(segs), pairs }
-}
-
-test('parallel spread N=2: confirmed group conserves total effective traffic before/after', () => {
-  const paxByIndex = [10, 8], frtByIndex = [4, 6]
-  const { g, pairs } = buildParallelTracks([0, 0.00035], 'PARL', paxByIndex, frtByIndex)
-  const before = paxByIndex.reduce((s, p, i) => s + (p + frtByIndex[i]), 0)
-
-  const result = walkRailStationPairs(g, pairs)
-  assert.deepEqual(result.stampsBySegmentKey.get('track0'), { pax: 18, frt: 10, divisor: 2 })
-  assert.deepEqual(result.stampsBySegmentKey.get('track1'), { pax: 18, frt: 10, divisor: 2 })
-
-  const after = [0, 1].reduce((s, i) => {
-    const stamp = result.stampsBySegmentKey.get(`track${i}`)!
-    return s + (stamp.pax + stamp.frt) / stamp.divisor
-  }, 0)
-  assert.equal(before, 28)
-  assert.equal(after, before, 'N * (total/N) = total — corridor total conserved')
-})
-
-test('parallel spread N=4: confirmed group of 4 conserves total effective traffic before/after', () => {
-  const paxByIndex = [10, 12, 14, 16], frtByIndex = [3, 3, 3, 3]
-  const { g, pairs } = buildParallelTracks([0, 0.00012, 0.00024, 0.00036], 'PARL', paxByIndex, frtByIndex)
-  const before = paxByIndex.reduce((s, p, i) => s + (p + frtByIndex[i]), 0)
-
-  const result = walkRailStationPairs(g, pairs)
-  for (let i = 0; i < 4; i++) {
-    assert.deepEqual(result.stampsBySegmentKey.get(`track${i}`), { pax: 52, frt: 12, divisor: 4 })
-  }
-  const after = [0, 1, 2, 3].reduce((s, i) => {
-    const stamp = result.stampsBySegmentKey.get(`track${i}`)!
-    return s + (stamp.pax + stamp.frt) / stamp.divisor
-  }, 0)
-  assert.equal(before, 64)
-  assert.equal(after, before)
-})
-
-test('parallel spread: token-less lines 30 m apart do NOT spread (beyond the strict 15 m token-less radius)', () => {
-  // Without a corridor token, only the STRICT arm applies — 30 m is real
-  // track-pair spacing for two DISTINCT lines sharing a corridor, not a
-  // double-track (4-10 m), so no group forms.
-  const paxByIndex = [10, 8], frtByIndex = [4, 6]
-  const { g, pairs } = buildParallelTracks([0, 0.000271], '', paxByIndex, frtByIndex) // ~30 m apart, empty corridorToken
-  const result = walkRailStationPairs(g, pairs)
-  assert.deepEqual(result.stampsBySegmentKey.get('track0'), { pax: 10, frt: 4, divisor: 1 }, 'untouched — no group formed')
-  assert.deepEqual(result.stampsBySegmentKey.get('track1'), { pax: 8, frt: 6, divisor: 1 })
-})
-
-test('parallel spread: token-less double-track 8 m apart — walk stamps ONE track, spread reaches the unstamped sibling', () => {
-  // A distinct search is walked exactly once along ONE shortest path, so only
-  // track0 ever gets a walk stamp; without unstamped-sibling spread, track1
-  // would render at the full engine class default next to its divided twin
-  // (the DE +8..+17 dB double-count shape).
-  const siblingLat = 50 + 8 / 110_540 // ~8 m north — genuine double-track spacing
-  const t0 = seg({ key: 'track0', osmId: 'osm0', startLat: 50, startLon: 14.000, endLat: 50, endLon: 14.010 })
-  const t1 = seg({ key: 'track1', osmId: 'osm1', startLat: siblingLat, startLon: 14.000, endLat: siblingLat, endLon: 14.010 })
-  const g = buildRailGraph([t0, t1])
-  const result = walkRailStationPairs(g, [
-    { fromLat: 50, fromLon: 14.000, toLat: 50, toLon: 14.010, pax: 20, frt: 6 }, // ONE pair — snaps onto track0 only
-  ])
-  assert.equal(result.pairsWalked, 1)
-  assert.deepEqual(result.stampsBySegmentKey.get('track0'), { pax: 20, frt: 6, divisor: 2 })
-  assert.deepEqual(result.stampsBySegmentKey.get('track1'), { pax: 20, frt: 6, divisor: 2 }, 'unstamped sibling receives the group stamp')
-
-  const singleTrackTotal = 26
-  const after = ['track0', 'track1'].reduce((s, k) => {
-    const stamp = result.stampsBySegmentKey.get(k)!
-    return s + (stamp.pax + stamp.frt) / stamp.divisor
-  }, 0)
-  assert.equal(after, singleTrackTotal, 'corridor total conserved: 2 x (26/2) = 26')
-})
-
-test('parallel spread: different non-empty corridor tokens never pair, even 8 m apart', () => {
-  const siblingLat = 50 + 8 / 110_540
-  const t0 = seg({ key: 'track0', osmId: 'osm0', startLat: 50, startLon: 14.000, endLat: 50, endLon: 14.010, corridorToken: 'LINE-A' })
-  const t1 = seg({ key: 'track1', osmId: 'osm1', startLat: siblingLat, startLon: 14.000, endLat: siblingLat, endLon: 14.010, corridorToken: 'LINE-B' })
-  const g = buildRailGraph([t0, t1])
-  const result = walkRailStationPairs(g, [
-    { fromLat: 50, fromLon: 14.000, toLat: 50, toLon: 14.010, pax: 20, frt: 6 },
-  ])
-  assert.deepEqual(result.stampsBySegmentKey.get('track0'), { pax: 20, frt: 6, divisor: 1 }, 'named corridors stay independent')
-  assert.equal(result.stampsBySegmentKey.has('track1'), false)
-})
-
-// ── Staggered fixtures (review round 2): microsegments are cut per OSM way,
-// so real parallel tracks carry 0-250 m longitudinal midpoint stagger — the
-// round-1 midpoint-distance metric never paired these at all. ──────────────
-
-/** Metres -> longitude degrees at lat 50, matching the flat-earth constants. */
 const DEG_PER_M_LON_AT_50 = 1 / (111_320 * Math.cos(50 * Math.PI / 180))
 const lonAtM = (m: number) => 14 + m * DEG_PER_M_LON_AT_50
-
-test('parallel spread: STAGGERED token-less double-track (250 m segments, 125 m offset), one track stamped — every segment gets value=T divisor=2', () => {
-  const latA = 50, latB = 50 + 5 / 110_540 // 5 m lateral — genuine double-track spacing
-  const g = buildRailGraph([
-    seg({ key: 'A1', osmId: 'osmA', startLat: latA, startLon: lonAtM(0), endLat: latA, endLon: lonAtM(250) }),
-    seg({ key: 'A2', osmId: 'osmA', startLat: latA, startLon: lonAtM(250), endLat: latA, endLon: lonAtM(500) }),
-    seg({ key: 'B1', osmId: 'osmB', startLat: latB, startLon: lonAtM(125), endLat: latB, endLon: lonAtM(375) }),
-    seg({ key: 'B2', osmId: 'osmB', startLat: latB, startLon: lonAtM(375), endLat: latB, endLon: lonAtM(625) }),
-  ])
-  const result = walkRailStationPairs(g, [
-    { fromLat: latA, fromLon: lonAtM(0), toLat: latA, toLon: lonAtM(500), pax: 20, frt: 6 }, // walk stamps A1+A2 only
-  ])
-  assert.equal(result.pairsWalked, 1)
-  for (const k of ['A1', 'A2', 'B1', 'B2']) {
-    assert.deepEqual(result.stampsBySegmentKey.get(k), { pax: 20, frt: 6, divisor: 2 }, `${k} carries the corridor value at divisor 2`)
-  }
-  // Cross-section conservation at ~300 m (tracks A2 + B1 present there):
-  const crossSection = ['A2', 'B1'].reduce((s, k) => {
-    const stamp = result.stampsBySegmentKey.get(k)!
-    return s + (stamp.pax + stamp.frt) / stamp.divisor
-  }, 0)
-  assert.equal(crossSection, 26, 'cross-section total = single-track total')
-})
-
-test('parallel spread: STAGGERED double-track, BOTH tracks stamped — each side carries T_A+T_B at divisor 2, cross-section conserved', () => {
-  const latA = 50, latB = 50 + 5 / 110_540
-  const g = buildRailGraph([
-    seg({ key: 'A1', osmId: 'osmA', startLat: latA, startLon: lonAtM(0), endLat: latA, endLon: lonAtM(250) }),
-    seg({ key: 'A2', osmId: 'osmA', startLat: latA, startLon: lonAtM(250), endLat: latA, endLon: lonAtM(500) }),
-    seg({ key: 'B1', osmId: 'osmB', startLat: latB, startLon: lonAtM(125), endLat: latB, endLon: lonAtM(375) }),
-    seg({ key: 'B2', osmId: 'osmB', startLat: latB, startLon: lonAtM(375), endLat: latB, endLon: lonAtM(625) }),
-  ])
-  const result = walkRailStationPairs(g, [
-    { fromLat: latA, fromLon: lonAtM(0), toLat: latA, toLon: lonAtM(500), pax: 20, frt: 6 },   // T_A on A1+A2
-    { fromLat: latB, fromLon: lonAtM(125), toLat: latB, toLon: lonAtM(625), pax: 8, frt: 2 }, // T_B on B1+B2
-  ])
-  assert.equal(result.pairsWalked, 2)
-  for (const k of ['A1', 'A2', 'B1', 'B2']) {
-    assert.deepEqual(result.stampsBySegmentKey.get(k), { pax: 28, frt: 8, divisor: 2 }, `${k} carries T_A+T_B`)
-  }
-  const crossSection = ['A2', 'B1'].reduce((s, k) => {
-    const stamp = result.stampsBySegmentKey.get(k)!
-    return s + (stamp.pax + stamp.frt) / stamp.divisor
-  }, 0)
-  assert.equal(crossSection, 36, 'cross-section total = T_A(26) + T_B(10)')
-})
-
-test('parallel spread: third track only mid-corridor — divisor 3 on the overlapping stretch, 2 elsewhere, every cross-section conserved', () => {
-  const latA = 50, latB = 50 + 5 / 110_540, latC = 50 + 10 / 110_540
-  const g = buildRailGraph([
-    seg({ key: 'A1', osmId: 'osmA', startLat: latA, startLon: lonAtM(0), endLat: latA, endLon: lonAtM(250) }),
-    seg({ key: 'A2', osmId: 'osmA', startLat: latA, startLon: lonAtM(250), endLat: latA, endLon: lonAtM(500) }),
-    seg({ key: 'A3', osmId: 'osmA', startLat: latA, startLon: lonAtM(500), endLat: latA, endLon: lonAtM(750) }),
-    seg({ key: 'B1', osmId: 'osmB', startLat: latB, startLon: lonAtM(0), endLat: latB, endLon: lonAtM(250) }),
-    seg({ key: 'B2', osmId: 'osmB', startLat: latB, startLon: lonAtM(250), endLat: latB, endLon: lonAtM(500) }),
-    seg({ key: 'B3', osmId: 'osmB', startLat: latB, startLon: lonAtM(500), endLat: latB, endLon: lonAtM(750) }),
-    seg({ key: 'C1', osmId: 'osmC', startLat: latC, startLon: lonAtM(250), endLat: latC, endLon: lonAtM(500) }), // mid-corridor only
-  ])
-  const result = walkRailStationPairs(g, [
-    { fromLat: latA, fromLon: lonAtM(0), toLat: latA, toLon: lonAtM(750), pax: 30, frt: 9 }, // stamps A1+A2+A3
-  ])
-  assert.equal(result.pairsWalked, 1)
-  for (const k of ['A2', 'B2', 'C1']) {
-    assert.deepEqual(result.stampsBySegmentKey.get(k), { pax: 30, frt: 9, divisor: 3 }, `${k}: three tracks overlap here`)
-  }
-  for (const k of ['A1', 'A3', 'B1', 'B3']) {
-    assert.deepEqual(result.stampsBySegmentKey.get(k), { pax: 30, frt: 9, divisor: 2 }, `${k}: only two tracks here`)
-  }
-  const singleTrackTotal = 39
-  const threeTrackSection = ['A2', 'B2', 'C1'].reduce((s, k) => {
-    const stamp = result.stampsBySegmentKey.get(k)!
-    return s + (stamp.pax + stamp.frt) / stamp.divisor
-  }, 0)
-  const twoTrackSection = ['A1', 'B1'].reduce((s, k) => {
-    const stamp = result.stampsBySegmentKey.get(k)!
-    return s + (stamp.pax + stamp.frt) / stamp.divisor
-  }, 0)
-  assert.equal(threeTrackSection, singleTrackTotal, '3-track cross-section conserved')
-  assert.equal(twoTrackSection, singleTrackTotal, '2-track cross-section conserved')
-})
-
-// ── Overlap-fraction gate: accepted asymmetric-residual bound (2026-07-16 /gg
-// review item 7 — documented in applyParallelSpread's doc as ACCEPTED ERROR,
-// not a bug) ─────────────────────────────────────────────────────────────────
-
-test('parallel spread: asymmetric overlap sliver — short segment accepts a long neighbour, long segment rejects the short one back (deterministic, accepted bound)', () => {
-  // A spans 0-250 m (walked, carries T=20); B spans 200-300 m, laterally ~8 m
-  // away (genuine double-track spacing), never itself walked. Their overlap
-  // is 50 m: 50/250=20% of A's length (< the 30 m/30% gate — A rejects B),
-  // but 50/100=50% of B's length (>= the gate — B accepts A). Exact
-  // conservation would require splitting either row at the overlap boundary;
-  // this pass doesn't, and the resulting sliver mismatch is the accepted
-  // error applyParallelSpread's doc quantifies at <=1.76 dB over <=250 m.
-  const latA = 50, latB = 50 + 8 / 110_540
-  const g = buildRailGraph([
-    seg({ key: 'A', osmId: 'osmA', startLat: latA, startLon: lonAtM(0), endLat: latA, endLon: lonAtM(250) }),
-    seg({ key: 'B', osmId: 'osmB', startLat: latB, startLon: lonAtM(200), endLat: latB, endLon: lonAtM(300) }),
-  ])
-  const result = walkRailStationPairs(g, [
-    { fromLat: latA, fromLon: lonAtM(0), toLat: latA, toLon: lonAtM(250), pax: 20, frt: 0 },
-  ])
-  assert.equal(result.pairsWalked, 1)
-  assert.deepEqual(result.stampsBySegmentKey.get('A'), { pax: 20, frt: 0, divisor: 1 }, 'A (250 m) sees only a 20% overlap with B — below its own 30% gate, no sibling found, renders T/1 unchanged')
-  assert.deepEqual(result.stampsBySegmentKey.get('B'), { pax: 20, frt: 0, divisor: 2 }, 'B (100 m) sees a 50% overlap with A — clears its own gate, accepts A as sibling, renders T/2')
-})

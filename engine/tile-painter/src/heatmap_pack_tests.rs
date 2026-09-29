@@ -3,7 +3,7 @@ use super::*;
 use crate::{
     corner_store::CornerStore,
     generation_receipt::{hex_digest, GenerationReceipt, SURFACE_FORMAT_AND_PHYSICS_GENERATION},
-    hm3::decode_cells,
+    hm3::{decode_cells, COMPUTED_SILENCE},
 };
 use grid::Z13_PER_Z9_SIDE;
 use std::future::Future;
@@ -83,11 +83,11 @@ fn fixture(root: &Path) -> (std::path::PathBuf, String, std::path::PathBuf) {
     .unwrap();
     let tx = db.transaction().unwrap();
     for (i, layer) in ALL_LAYERS.into_iter().enumerate() {
-        let mut cells = vec![255; TILE_PIXEL_SIDE * TILE_PIXEL_SIDE];
-        // One loud pixel per source 2x2 block: area mean is 60 - 10log10(4).
+        let mut cells = vec![COMPUTED_SILENCE; TILE_PIXEL_SIDE * TILE_PIXEL_SIDE];
+        // One loud pixel among quiet ones per 2x2 block: area mean is 60 - 10log10(4).
         cells[0] = if layer == Hm3Layer::Total { 140 } else { 120 };
         let painted = encode_cells(&cells, layer).unwrap();
-        let silent = encode_cells(&vec![255; cells.len()], layer).unwrap();
+        let silent = encode_cells(&vec![COMPUTED_SILENCE; cells.len()], layer).unwrap();
         for y in 0..Z13_PER_Z9_SIDE {
             for x in 0..Z13_PER_Z9_SIDE {
                 let bytes = if x == 0 && y == 0 {
@@ -144,7 +144,7 @@ fn complete_owner_roundtrip_preserves_z13_and_never_sums_quantized_layers() {
         );
         let parent = decode_cells(&tile(&archive, 12, 0, 0), layer).unwrap();
         assert_eq!(parent[0], if layer == Hm3Layer::Total { 128 } else { 108 });
-        assert_eq!(parent[1], 255);
+        assert_eq!(parent[1], COMPUTED_SILENCE);
         assert_eq!(
             decode_cells(&tile(&archive, 2, 0, 0), layer).unwrap().len(),
             TILE_PIXEL_SIDE * TILE_PIXEL_SIDE

@@ -6,7 +6,10 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { tableFromIPC } from 'apache-arrow'
-import { enrichUsRoads, enrichTmasTimeProfiles, loadUsSegments, parseUsPage, runUsEnrichment, tmasCandidateSquares, matchTmasStation } from './enrich-roads-us.js'
+import {
+  enrichUsRoads, enrichTmasTimeProfiles, indexUsSections, loadUsSegments, matchTmasStation, nearestUsSection, parseUsPage,
+  runUsEnrichment, tmasCandidateSquares, withTwoWayTwinsOfOneWaySections,
+} from './enrich-roads-us.js'
 import { iso2Code, listPreparedSquares } from './lib/prepared-grid.js'
 import { decodeQmBlocks, writeRoadsFixture } from './lib/road-test-fixture.js'
 import { readRoadTimeProfilesSource, type RoadRow } from './lib/roads-arrow.js'
@@ -62,6 +65,26 @@ test('FHWA facility type decides the count scope; a page cached without it fails
   delete (stale.properties as Partial<typeof stale.properties>).FACILITY_TYPE
   assert.throws(() => parseUsPage({ features: [stale] }), /no FACILITY_TYPE/)
   assert.throws(() => parseUsPage({ features: [feature(10000, 1, -84, 34, 'ramp' as unknown as number)] }), /invalid FHWA FACILITY_TYPE/)
+})
+
+test('an HPMS section applies along its whole line, and a crossing section does not take the row', () => {
+  const line = (coordinates: number[][], aadt: number, observation: string) => ({
+    ...feature(aadt), id: observation, geometry: { type: 'LineString', coordinates } })
+  // A 5 km east-west Interstate section and a north-south arterial crossing 150 m from the row.
+  const [interstate, crossing] = parseUsPage({ features: [
+    line([[-84.05, 34], [-83.9958, 34]], 180000, 'i'), line([[-84.0055, 33.99], [-84.0055, 34.01]], 20000, 'c')] }).segments
+  const grid = indexUsSections([interstate, crossing])
+  const row = (longitude: number): RoadRow => ({ startLat: 34.0002, startLon: longitude - 0.0005, endLat: 34.0002,
+    endLon: longitude + 0.0005, midLat: 34.0002, midLon: longitude, ref: null, name: null, osmId: 1, roadClass: 0, existingSourceId: 0 })
+  assert.equal(nearestUsSection(row(-84.004), grid), interstate) // 4.5 km from the centroid, on the line
+  assert.equal(nearestUsSection({ ...row(-84.0055), startLon: -84.0055, endLon: -84.0055, startLat: 33.999, endLat: 34.001 }, grid), crossing)
+})
+
+test('a one-way HPMS section that repeats its two-way twin is a two-way total; a lone one stays directional', () => {
+  const segments = parseUsPage({ features: [feature(40000, 1, -84, 34, 6), feature(41000, 1, -84.001, 34.001, 1),
+    feature(20000, 1, -85, 34, 1)] }).segments
+  assert.deepEqual(withTwoWayTwinsOfOneWaySections(segments).map(segment => segment.countBasis),
+    ['both-directions', 'both-directions', 'directional'])
 })
 
 test('FHWA malformed pages/counts/coordinates fail instead of manufacturing empty source data', () => {
@@ -327,7 +350,9 @@ test('TMAS opposing carriageways retain their own hourly profiles; two-way roads
   const row: RoadRow = { startLat: 33.9999, startLon: -84, endLat: 34.0001, endLon: -84,
     midLat: 34, midLon: -84, oneway: 1, ref: 'I 5', name: null, osmId: 1,
     roadClass: 0, existingSourceId: 21, countryCode: iso2Code('US') }
-  assert.equal(matchTmasStation(row, grid)?.station, north.station)
+  for (const oneway of [1, 3, 4]) {
+    assert.equal(matchTmasStation({ ...row, oneway }, grid)?.station, north.station)
+  }
   assert.equal(matchTmasStation({ ...row, oneway: 2 }, grid)?.station, south.station)
   assert.equal(matchTmasStation({ ...row, oneway: 0 }, grid), null)
   assert.equal(matchTmasStation({ ...row, startLat: row.endLat, endLat: row.startLat }, grid)?.station, south.station)

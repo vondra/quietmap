@@ -28,11 +28,10 @@ use crate::shuffle::list_square_shards;
 pub fn run_stage_2a(
     segments_by_square_dir: &Path,
     prepared_year_dir: &Path,
-    n_days: u16,
-    // GA-class window (0 = single-window extract). Stamped into the
-    // airborne.arrow metadata so popup/heatmap weight GA rows at
-    // `1/ga_n_days`.
-    ga_n_days: u16,
+    // Stamped into every airborne.arrow so popup and heatmap normalise
+    // primary rows by the baseline days and secondary-only rows by the
+    // increment days.
+    window: &noise_compute::emission::aircraft::SamplingWindow,
     scope: Option<&ScopeBbox>,
 ) -> Result<usize> {
     let square_inputs = list_square_shards(segments_by_square_dir, "airborne.arrow", scope)?;
@@ -85,12 +84,7 @@ pub fn run_stage_2a(
             row_counter.add(rows.len() as u64);
             let dir = prepared_year_dir.join(square_path(*square));
             std::fs::create_dir_all(&dir)?;
-            crate::arrow_io::write_airborne(
-                &dir.join("airborne.arrow"),
-                &rows,
-                n_days,
-                ga_n_days,
-            )?;
+            crate::arrow_io::write_airborne(&dir.join("airborne.arrow"), &rows, window)?;
             written.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(())
         },

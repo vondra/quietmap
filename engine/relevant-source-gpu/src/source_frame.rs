@@ -6,8 +6,6 @@ use grid::{
 };
 use noise_compute::constants::{m_per_deg_lon, M_PER_DEG_LAT};
 
-/// `DeviceLineSource::flags`: the segment propagates over hard ground (a bridge).
-pub const SOURCE_FLAG_BRIDGE: u32 = 1;
 /// `DeviceLineSource::flags`: a point source (industrial, building): start == end,
 /// spherical divergence, `extent_m` is its footprint exclusion radius.
 pub const SOURCE_FLAG_POINT: u32 = 2;
@@ -17,6 +15,9 @@ pub const SOURCE_FLAG_GROUND_OPS_AIRCRAFT: u32 = 4;
 /// `DeviceLineSource::flags`: the same microsegment's ground-support rows,
 /// `GROUND_OPS_REF_OFFSET_M / d` divergence.
 pub const SOURCE_FLAG_GROUND_OPS_GSE: u32 = 8;
+/// `DeviceLineSource::flags`: a line radiating with the CNOSSOS-EU track dipole
+/// (noise-compute `LineDirectivity::TrackDipole`).
+pub const SOURCE_FLAG_TRACK_DIPOLE: u32 = 16;
 
 pub use grid::surface_corner::{
     BLOCKS_PER_TILE_SIDE, BLOCK_PIXEL_SIDE, CORNERS_PER_TILE_SIDE, CORNER_COUNT, TILE_PIXEL_SIDE,
@@ -25,9 +26,10 @@ pub const BLOCK_COUNT: usize = BLOCKS_PER_TILE_SIDE * BLOCKS_PER_TILE_SIDE;
 pub const PERIOD_COUNT: usize = 3;
 pub const BAND_COUNT: usize = 8;
 
-/// The 64-point CUDA cadence first needs a 65th sample at 11,872.35 m;
-/// reject longer rays and check the device overflow flag after each launch.
-pub const MAXIMUM_PROFILE_RAY_M: f32 = 11_872.0;
+/// The 64-point CUDA cadence's longest ray (noise-compute `PROFILE_RAY_CEILING_M`); reject
+/// longer rays and check the device overflow flag after each launch.
+pub const MAXIMUM_PROFILE_RAY_M: f32 =
+    noise_compute::propagation::relevance_bound::PROFILE_RAY_CEILING_M as f32;
 
 /// One source encoded once in the metric frame shared by a region's tiles and CUDA
 /// scene: a line segment, or a point (`SOURCE_FLAG_POINT`) with start == end.
@@ -38,11 +40,16 @@ pub struct DeviceLineSource {
     pub start_y_m: f32,
     pub end_x_m: f32,
     pub end_y_m: f32,
-    /// Segment length for a line; footprint exclusion radius for a point.
+    /// 0 for a surface line (its length comes from the endpoints); footprint exclusion
+    /// radius for a point, segment length for a ground-ops microsegment.
     pub extent_m: f32,
     pub max_distance_m: f32,
     pub source_height_m: f32,
     pub flags: u32,
+    /// Gs of (2.5.14) under a line source (road 0, ballast 1, deck 0); a point samples its own.
+    pub source_ground_factor: f32,
+    /// A line source's platform half-width; 0 for points.
+    pub platform_half_width_m: f32,
     pub emission_linear: [f32; PERIOD_COUNT * BAND_COUNT],
 }
 
@@ -128,8 +135,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn device_source_layout_is_the_expected_four_cache_lines() {
-        assert_eq!(std::mem::size_of::<DeviceLineSource>(), 128);
+    fn device_source_layout_matches_the_cuda_record() {
+        assert_eq!(std::mem::size_of::<DeviceLineSource>(), 136);
     }
 
     /// The rule the profile cap rests on: a receiver at the reach of the segment's

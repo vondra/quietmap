@@ -22,7 +22,10 @@ pub fn airport_traffic_schema() -> Arc<Schema> {
         Field::new("veh_kind", DataType::UInt8, false),
         Field::new("class_idx", DataType::UInt8, false),
         Field::new("period", DataType::UInt8, false),
-        // Raw Σ over n_days per band. Consumer divides via
+        // 1 when every movement of the row touches a secondary-provider
+        // sample: the consumer applies the increment-day weight.
+        Field::new("secondary_only", DataType::UInt8, false),
+        // Raw Σ over the sampling days per band. Consumer divides via
         // `period_leq(e, n_days_f, period_seconds)` to recover Leq.
         // FixedSizeList enforces the 8-band invariant at the schema
         // level so the reader doesn't need a runtime `ensure!` guard.
@@ -45,21 +48,33 @@ pub fn airport_traffic_schema() -> Arc<Schema> {
         Field::new("unique_gse_count_per_class", gse_per_class.clone(), false),
         // Per-microsegment UNION (replicated across rows). Lets the
         // popup populate per-microseg movement counts without a UNION
-        // join over per-row scalars. v9: these three count NON-GA-class
-        // fids only — the GA-class union lives in the `microseg_unique_ga_*`
-        // columns below so the popup can divide each by its own window:
-        // `non_ga / n_days + ga / ga_n_days`.
+        // join over per-row scalars: movements with a primary-provider row
+        // in the category, then those seen only through secondary rows, so
+        // the popup reads `primary / baseline + secondary / increment`.
         Field::new("microseg_unique_count", DataType::UInt32, false),
         Field::new("microseg_unique_arr_count", DataType::UInt32, false),
         Field::new("microseg_unique_dep_count", DataType::UInt32, false),
-        Field::new("microseg_unique_gse_count_per_class", gse_per_class, false),
-        // v9 GA-class microseg UNION (PROP_C172 + HELICOPTER): the full-year
-        // window split of the three columns above. Zero on non-hybrid
-        // extracts (no flights routed to the GA window) — then the popup's
-        // `ga / ga_n_days` term vanishes and the math degenerates to legacy.
-        Field::new("microseg_unique_ga_count", DataType::UInt32, false),
-        Field::new("microseg_unique_ga_arr_count", DataType::UInt32, false),
-        Field::new("microseg_unique_ga_dep_count", DataType::UInt32, false),
+        Field::new(
+            "microseg_unique_gse_count_per_class",
+            gse_per_class.clone(),
+            false,
+        ),
+        Field::new("microseg_unique_secondary_count", DataType::UInt32, false),
+        Field::new(
+            "microseg_unique_secondary_arr_count",
+            DataType::UInt32,
+            false,
+        ),
+        Field::new(
+            "microseg_unique_secondary_dep_count",
+            DataType::UInt32,
+            false,
+        ),
+        Field::new(
+            "microseg_unique_secondary_gse_count_per_class",
+            gse_per_class,
+            false,
+        ),
     ];
     Arc::new(Schema::new(fields).with_metadata(base_metadata(&[
         ("kind", "airport_traffic"),

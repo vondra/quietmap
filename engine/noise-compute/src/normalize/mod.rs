@@ -9,7 +9,7 @@
 use crate::types::NUM_BANDS;
 
 mod points;
-mod rail;
+pub mod rail;
 pub mod road;
 
 pub use points::{
@@ -19,7 +19,7 @@ pub use points::{
 };
 pub use rail::{normalize_rail, NormalizedRail, RailCategoryTraffic, RailTraffic, RawRailInput};
 pub use road::{
-    normalize_road, normalize_road_segment, road_max_distance_m, NormalizedRoad, RawRoadInput,
+    normalize_road, normalize_road_segment, NormalizedRoad, RawRoadInput,
     RoadTimeProfile, RoadTimeProfileAttribution, RoadTraffic, ROAD_ESTIMATED_HEAVY,
     ROAD_ESTIMATED_LIGHT, ROAD_ESTIMATED_MEDIUM,
     ROAD_ESTIMATED_MOTO,
@@ -85,6 +85,10 @@ mod tests {
                 nace_4digit: None,
                 area_m2,
                 polygon_grid,
+                plant_output_mw: None,
+                substation_mva: None,
+                substation_class: 0,
+                facility_share: 1.0,
             }),
             prepare_leisure_points(RawLeisureInput {
                 centroid_lat: 0.0,
@@ -92,6 +96,8 @@ mod tests {
                 sport: crate::emission::leisure::PADEL,
                 area_m2,
                 polygon_grid,
+                formula: None,
+                is_line: false,
             }),
         ]
     }

@@ -26,6 +26,7 @@ fn zero_byte_file_samples_the_channel_ocean_value() {
     let root = tempfile::tempdir().unwrap();
     for (channel, ocean) in [
         (Channel::Dem, 0.0),
+        (Channel::Canopy, 0.0),
         (Channel::Forest, 0.0),
         (Channel::Imd, 100.0),
     ] {

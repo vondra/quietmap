@@ -74,49 +74,44 @@ async function openStayMap(page: Page, second = false) {
   }).toEqual([148, 163, 184])
 }
 
-test('accommodation pins stay neutral instead of implying quietness from indoor heatmap cells', async ({ page }) => {
+test('accommodation pins stay neutral and read no heatmap cells', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await installHermeticMap(page, STAY_POINT)
   await page.route('**/api/tiles-manifest', route => route.fulfill({ json: {
     build: 'b1', zoom: 12, layers: { total: { build: 'b1', file: 'total.b1.pmtiles' } },
   } }))
-  let indoorTileRequests = 0
+  let heatmapTileRequests = 0
   await page.route('**/api/tiles/b1/total/**', route => {
-    indoorTileRequests++
-    const bytes = Buffer.alloc(6 + 512 * 512, 50) // 25 dB indoor cells
-    bytes.set([72, 77, 51, 32, 3, 1])
+    heatmapTileRequests++
+    const bytes = Buffer.alloc(6 + 512 * 512, 50) // 25 dB cells
+    bytes.set([72, 77, 51, 32, 4, 1])
     return route.fulfill({ contentType: 'application/octet-stream', body: bytes })
   })
   await openStayMap(page) // Asserts the rendered pin is neutral grey.
-  expect(indoorTileRequests).toBe(0)
+  expect(heatmapTileRequests).toBe(0)
 })
 
 for (const width of [1280, 390]) {
-  for (const indoor of [true, false]) {
-    test(`stay card uses ${indoor ? 'facade' : 'outdoor total'} noise and one shared request at width ${width}`, async ({ page }, testInfo) => {
-      await page.setViewportSize({ width, height: 900 })
-      let requests = 0
-      await installHermeticMap(page, STAY_POINT)
-      await page.route('**/api/noise-onfly-v2?**', route => {
-        requests++
-        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(
-          popupFixture(STAY_POINT.lat, STAY_POINT.lng, indoor ? 25 : 45, { road: 60 }, indoor ? {
-            envelope_class: 'residential', envelope_delta_db: 35,
-            facade_lden: 60, indoor_lden_tilted: 25,
-          } : undefined),
-        ) })
-      })
-      await openStayMap(page)
-      await page.mouse.click(width / 2, 450)
-      const card = page.getByRole('heading', { name: 'First hotel', exact: true }).filter({ visible: true }).locator('..').locator('..')
-      await expect(card.getByRole('status')).toHaveText(`Outdoor noise: ${indoor ? '60.0' : '45.0'} dB Lden`)
-      await afterPaint(page)
-      expect(requests).toBe(1)
-      expect(await page.getByRole('heading', { name: 'First hotel', exact: true, includeHidden: true }).count()).toBe(2)
-      const artifact = process.env.STAYS_SCREENSHOTS
-      if (artifact) await page.screenshot({ path: `${artifact}/card-${testInfo.project.name}-${indoor ? 'facade' : 'outdoor'}-${width}.png` })
+  test(`stay card shows the exact point level from one shared request at width ${width}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 })
+    let requests = 0
+    await installHermeticMap(page, STAY_POINT)
+    await page.route('**/api/noise-onfly-v2?**', route => {
+      requests++
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(
+        popupFixture(STAY_POINT.lat, STAY_POINT.lng, 45, { road: 45 }),
+      ) })
     })
-  }
+    await openStayMap(page)
+    await page.mouse.click(width / 2, 450)
+    const card = page.getByRole('heading', { name: 'First hotel', exact: true }).filter({ visible: true }).locator('..').locator('..')
+    await expect(card.getByRole('status')).toHaveText('Outdoor noise: 45.0 dB Lden')
+    await afterPaint(page)
+    expect(requests).toBe(1)
+    expect(await page.getByRole('heading', { name: 'First hotel', exact: true, includeHidden: true }).count()).toBe(2)
+    const artifact = process.env.STAYS_SCREENSHOTS
+    if (artifact) await page.screenshot({ path: `${artifact}/card-${testInfo.project.name}-${width}.png` })
+  })
 }
 
 test('switching hotels discards the previous pending noise result', async ({ page }) => {

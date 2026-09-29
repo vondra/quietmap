@@ -8,7 +8,6 @@ import {
   roadCategoryLine,
   roadTimingLine,
   roadTrafficDescription,
-  roadTrafficLabel,
   roadTrafficSourceLine,
   sourceHost,
 } from '../src/components/noise/provenance.ts'
@@ -49,7 +48,7 @@ test('prepared counts render per category with counted or estimated status', () 
     description,
     'Source: Example dataset (2024) · CC-BY-4.0\n' +
       '\n' +
-      'Prepared daily traffic, this road:\n' +
+      'Prepared daily traffic, this carriageway:\n' +
       '  Light: 8,824/day — counted\n' +
       '  Medium: 516/day — counted\n' +
       '  Heavy: 1,497/day — counted\n' +
@@ -81,14 +80,6 @@ test('dataset attribution keeps source, units and url', () => {
   assert.equal(
     line,
     'Source: Example dataset (2024) · CC-BY-4.0\n  https://example.org/aadt',
-  )
-})
-
-test('the headline label totals the four prepared classes', () => {
-  assert.equal(roadTrafficLabel(traffic()), '10,837/day')
-  assert.equal(
-    roadTrafficLabel(traffic({ aadt_light: 0, aadt_medium: 0, aadt_moto: 0, aadt_heavy: 500 })),
-    '500/day',
   )
 })
 

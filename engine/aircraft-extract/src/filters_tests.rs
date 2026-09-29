@@ -69,7 +69,7 @@ fn point_is_sane_keeps_subsea_aerodrome_when_on_ground() {
         35.5,
         0.0,
         0.0,
-        crate::trace::FLAG_ALT_IS_GROUND | crate::trace::FLAG_ON_GROUND_RAW,
+        crate::trace::FLAG_ALT_IS_GROUND,
     );
     assert!(point_is_sane(&p));
 }

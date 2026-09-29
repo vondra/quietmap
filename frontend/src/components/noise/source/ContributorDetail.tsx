@@ -159,7 +159,8 @@ export function ContributorDetail({ c }: { c: Contributor }) {
         ['A-weighted ΔL_A', `${fmt(c.terrain_impact_db)} dB`],
         '',
         'ISO 9613-2 §7.3 + C₃ frequency term',
-        'Copernicus GLO-30 DEM (30 m raster).',
+        'Bare-earth DTM: GEDTM30 (30 m),',
+        'national LiDAR where surveyed.',
         'Shared bilateral terrain profile — SPEC §4.2.',
       ], 18, 14)
     : txtTable([
@@ -275,7 +276,7 @@ export function ContributorDetail({ c }: { c: Contributor }) {
                   <HoverText title={"Lmax threshold\n\nPer-event peak A-weighted SPL band looked up from per-class LAmax NPD tables (EASA ANP v2.3 where available, generated SEL−12 fallback for manual GA / helicopter profiles).\nA flight is counted in this band if its Lmax at this point exceeds the threshold."}>Lmax</HoverText>
                 </th>
                 <th className="text-right">
-                  <HoverText title={"Observed flights per day\n\nSegments contributing to this Lmax band, divided by n_days from the ADS-B archive (currently 365)."}>Flights/day</HoverText>
+                  <HoverText title={"Observed flights per day\n\nSegments contributing to this Lmax band per mean day of the ADS-B sample (adsb.lol days, plus adsbexchange days for flights adsb.lol missed)."}>Flights/day</HoverText>
                 </th>
                 <th className="text-right">
                   <HoverText title={"Mean aircraft altitude AMSL in this band.\nLow values indicate approach/departure traffic; high values indicate en-route cruise."}>Avg alt(km)</HoverText>

@@ -3,7 +3,7 @@ use crate::{
     generation_receipt::{file_digest, hex_digest},
     heatmap_authority::{completed_owners, OwnerArtifact},
     heatmap_pyramid as pyramid,
-    hm3::{encode_cells, Hm3Layer, ALL_LAYERS},
+    hm3::{encode_cells, Hm3Layer, ALL_LAYERS, NOT_ASSESSED},
 };
 use anyhow::{ensure, Result};
 use grid::surface_corner::TILE_PIXEL_SIDE;
@@ -62,7 +62,7 @@ fn build_owner_parents(
         for x in u32::from(artifact.owner.x) * Z12_PER_Z9_SIDE
             ..u32::from(artifact.owner.x) * Z12_PER_Z9_SIDE + Z12_PER_Z9_SIDE
         {
-            let mut cells = vec![255; TILE_PIXEL_SIDE * TILE_PIXEL_SIDE];
+            let mut cells = vec![NOT_ASSESSED; TILE_PIXEL_SIDE * TILE_PIXEL_SIDE];
             for qy in 0..2 {
                 for qx in 0..2 {
                     let bytes = read_tile(&owner, layer_index, x * 2 + qx, y * 2 + qy)?;

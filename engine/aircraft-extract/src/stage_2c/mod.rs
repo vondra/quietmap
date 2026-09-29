@@ -7,7 +7,7 @@ use std::path::Path;
 pub(crate) mod admission;
 pub mod airport_summary_reduce;
 pub mod airport_traffic;
-pub mod airport_line_index;
+pub mod airport_line_grid;
 pub mod airport_traffic_writer;
 pub(crate) mod movements;
 pub const AIRPORT_TRAFFIC_FILENAME: &str = "airport_traffic.arrow";
@@ -16,12 +16,11 @@ pub fn run_stage_2c(
     segments_by_square_dir: &Path,
     airport_areas: &[AirportArea],
     prepared_year_dir: &Path,
-    n_days: u16,
-    ga_n_days: u16,
+    window: &noise_compute::emission::aircraft::SamplingWindow,
     scope: Option<&ScopeBbox>,
 ) -> Result<usize> {
     anyhow::ensure!(
-        n_days > 0,
+        window.baseline_days > 0,
         "primary sampling window must contain at least one day"
     );
     let pending = prepared_year_dir.join(".airport_traffic_pending");
@@ -38,8 +37,7 @@ pub fn run_stage_2c(
         airport_areas,
         prepared_year_dir,
         &pending,
-        n_days,
-        ga_n_days,
+        window,
         scope,
     )?;
     let parts = pending.join("airport_summary_parts");

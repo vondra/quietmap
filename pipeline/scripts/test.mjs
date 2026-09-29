@@ -6,7 +6,7 @@ import { dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const tests = [root, resolve(root, 'lib'), resolve(root, 'chain')]
+const tests = [root, resolve(root, 'lib'), resolve(root, 'chain'), resolve(root, 'validation')]
   .flatMap(directory => readdirSync(directory)
     .filter(name => name.endsWith('.test.ts'))
     .map(name => relative(root, resolve(directory, name))))

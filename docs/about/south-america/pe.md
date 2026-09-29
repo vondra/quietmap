@@ -21,7 +21,7 @@ An OSM motorway, trunk or primary road takes the nearest network road within 500
 | Other paved | 2,000 |
 | Unpaved | 1,200 |
 
-Both measured and estimated volumes are doubled inside Lima and Callao and multiplied by 1.4 in 24 other cities: Arequipa, Trujillo, Chiclayo, Piura, Iquitos, Cusco, Chimbote, Huancayo, Tacna, Juliaca, Ica, Cajamarca, Pucallpa, Sullana, Ayacucho, Chincha Alta, Huánuco, Tarapoto, Puno, Tumbes, Huaraz, Jaén, Huacho and Pisco. The city boxes are drawn manually.
+Measured volumes are used as published. Estimates are doubled inside Lima and Callao and multiplied by 1.4 in 24 other cities: Arequipa, Trujillo, Chiclayo, Piura, Iquitos, Cusco, Chimbote, Huancayo, Tacna, Juliaca, Ica, Cajamarca, Pucallpa, Sullana, Ayacucho, Chincha Alta, Huánuco, Tarapoto, Puno, Tumbes, Huaraz, Jaén, Huacho and Pisco. The city boxes are drawn manually.
 
 The vehicle mix is an estimate everywhere, including where the total is measured:
 

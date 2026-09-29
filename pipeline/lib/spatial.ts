@@ -273,6 +273,38 @@ export function buildOneHundredthDegreeSegmentGrid<T extends SegmentCoordinates>
   return grid
 }
 
+type HeadingRow = { startLat: number; startLon: number; endLat: number; endLon: number; midLat: number }
+
+/** Signed heading cosine of a road row and a publisher segment; null where either has no heading. */
+function headingCosine(row: HeadingRow, segment: SegmentCoordinates): number | null {
+  const scale = METRES_PER_DEGREE_LONGITUDE_AT_EQUATOR * Math.cos(row.midLat * Math.PI / 180)
+  const rowEast = wrapLonDeltaDeg(row.endLon - row.startLon) * scale
+  const rowNorth = (row.endLat - row.startLat) * METRES_PER_DEGREE_LATITUDE
+  const lineEast = wrapLonDeltaDeg(segment.endLongitude - segment.startLongitude) * scale
+  const lineNorth = (segment.endLatitude - segment.startLatitude) * METRES_PER_DEGREE_LATITUDE
+  const lengths = Math.hypot(rowEast, rowNorth) * Math.hypot(lineEast, lineNorth)
+  return lengths === 0 ? null : (rowEast * lineEast + rowNorth * lineNorth) / lengths
+}
+
+/** A line and a road row describe one road only when they run within 30 degrees of each other (either travel
+ *  direction); a cross street within the match radius does not. A point or a zero-length line has no heading. */
+export function runsAlongSegment(row: HeadingRow, segment: SegmentCoordinates): boolean {
+  const cosine = headingCosine(row, segment)
+  return cosine === null || Math.abs(cosine) >= ALONG_LINE_MINIMUM_COSINE
+}
+
+/** A directional count stamps only the carriageway travelling with the publisher line: the row must be
+ *  one-way (stored `oneway` 1-4, travelling against its geometry for 2, as engine travel_vector reads it)
+ *  and its travel direction must run within 30 degrees of the line. A two-way row proves no travel
+ *  direction and takes no directional count, like a TMAS compass station's carriageway gate. */
+export function runsWithSegment(row: HeadingRow & { oneway?: number }, segment: SegmentCoordinates): boolean {
+  if (row.oneway === undefined || row.oneway < 1 || row.oneway > 4) return false
+  const cosine = headingCosine(row, segment)
+  if (cosine === null) return false
+  return (row.oneway === 2 ? -cosine : cosine) >= ALONG_LINE_MINIMUM_COSINE
+}
+const ALONG_LINE_MINIMUM_COSINE = Math.cos(30 * Math.PI / 180)
+
 /** Degree reaches enclosing both shared distance models, including polar queries. */
 export function pointSearchReach(latitude: number, radiusMetres: number): [number, number] {
   const latitudeReach = radiusMetres / METRES_PER_DEGREE_LATITUDE

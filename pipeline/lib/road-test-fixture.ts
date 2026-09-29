@@ -1,4 +1,5 @@
 /** z9/z30 Arrow fixture shared by road-writer contract tests, and the test-side `qm_blocks` codec. */
+import { osmContract } from './osm-contract.js'
 
 import { after } from 'node:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -79,6 +80,7 @@ export interface RoadFixtureOptions {
   countryCodes?: number[]
   refs?: Array<string | null>
   sourceIds?: number[]
+  oneways?: number[]
   omitCountryColumn?: boolean
   omitCountryContract?: boolean
 }
@@ -102,6 +104,7 @@ export function writeRoadsFixture(name: string, classes: number[], options: Road
     end_gy: vectorFromArray(ends.map(point => point[1]), new Int32()),
     road_class: vectorFromArray(classes, new Uint8()),
     ...(options.speeds ? { speed_limit: vectorFromArray(options.speeds, new Uint8()) } : {}),
+    ...(options.oneways ? { oneway: vectorFromArray(options.oneways, new Uint8()) } : {}),
     aadt_light: vectorFromArray(indices.map(index => 1000 + index), new Int32()),
     aadt_medium: vectorFromArray(indices.map(index => 2000 + index), new Int32()),
     aadt_heavy: vectorFromArray(indices.map(index => 3000 + index), new Int32()),
@@ -119,6 +122,7 @@ export function writeRoadsFixture(name: string, classes: number[], options: Road
   const metadata = new Map<string, string>([
     ['grid', 'z30'],
     ...(indices.length ? [['qm_blocks', encodeQmBlocks([bounds])] as const] : []),
+    osmContract('roads'),
     ...(!options.omitCountryContract ? [['roads_contract', 'country_baked_v1'] as const] : []),
   ])
   const schema = new Schema(table.schema.fields, metadata)

@@ -5,7 +5,7 @@
 // importing the component's HeatmapSource union back would create a type cycle
 // (buildKey/tileUrl accept strings anyway).
 
-import { fetchAndDecodeHM3, TILE_PX, NO_DATA } from './hm3-decoder'
+import { fetchAndDecodeHM3, HM3_NOT_ASSESSED, TILE_PX } from './hm3-decoder'
 import { composeOffThread } from './compose-off-thread'
 import { lngLatToTileFloat, tileXToLng, tileYToLat } from './tile-math'
 import { buildKey, tileUrl, type TileBuilds } from './tile-urls'
@@ -76,14 +76,15 @@ export async function buildComposite(
         .catch(() => null)
     }),
   )
-  // Bucket the landed tiles into one grid per source (allocated only on first hit).
+  // Bucket the landed tiles into one grid per source (allocated only on first
+  // hit); an absent or failed tile stays not assessed, painted transparent.
   const gridBySource = new Map<string, Uint8Array>()
   decoded.forEach((d, i) => {
     if (!d?.cells) return
     const { source, tx, ty } = jobs[i]
     let grid = gridBySource.get(source)
     if (!grid) {
-      grid = new Uint8Array(width * height).fill(NO_DATA)
+      grid = new Uint8Array(width * height).fill(HM3_NOT_ASSESSED)
       gridBySource.set(source, grid)
     }
     blit(d.cells, grid, (tx - x0) * TILE_PX, (ty - y0) * TILE_PX, width)

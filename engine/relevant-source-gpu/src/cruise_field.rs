@@ -2,7 +2,7 @@
 use crate::{
     input_manifest::InputManifest,
     surface_scene::{scene_bounds, SurfaceScene},
-    tile_receivers::TileReceivers,
+    receiver_points::ReceiverPoints,
 };
 use anyhow::{ensure, Context, Result};
 use arrow::{ipc::reader::FileReader, record_batch::RecordBatch};
@@ -35,7 +35,7 @@ struct Bucket {
     period: usize,
 }
 impl Bucket {
-    #[cfg(not(feature = "gpu"))]
+    #[cfg(any(not(feature = "gpu"), test))]
     fn energy(&self, lat: f64, lon: f64, altitude: f64, npd: &aircraft::NpdLuts) -> f64 {
         let row = aircraft::prepare_row(
             &self.prepared,
@@ -44,7 +44,7 @@ impl Bucket {
         );
         self.energy_at_row(lat, lon, altitude, npd, &row)
     }
-    #[cfg(not(feature = "gpu"))]
+    #[cfg(any(not(feature = "gpu"), test))]
     fn energy_at_row(
         &self,
         lat: f64,
@@ -127,7 +127,7 @@ impl CruiseField {
         )
         .context("invalid cruise support")?;
         let mut groups = Vec::new();
-        let mut days = 0;
+        let mut window: Option<aircraft::SamplingWindow> = None;
         let mut owners: Vec<_> = squares.iter().collect();
         owners.sort_by_key(|square| (square.y, square.x));
         for square in owners {
@@ -138,16 +138,18 @@ impl CruiseField {
             let reader = FileReader::try_new(Cursor::new(bytes), None)?;
             assert_cruise_contract(&relative, &[RecordBatch::new_empty(reader.schema())])
                 .map_err(anyhow::Error::msg)?;
-            let file_days = reader
-                .schema()
-                .metadata()
-                .get("n_days")
-                .and_then(|v| v.parse::<u16>().ok())
-                .filter(|v| *v > 0)
-                .context("cruise has no valid n_days")?;
-            days = days.max(file_days);
+            let file_window = aircraft::SamplingWindow::from_metadata(reader.schema().metadata())
+                .map_err(anyhow::Error::msg)?;
+            ensure!(
+                window.as_ref().is_none_or(|seen| *seen == file_window),
+                "mixed cruise sampling windows"
+            );
+            let weights = file_window.provenance_weights();
+            window = Some(file_window);
             for batch in reader {
-                let rows = CruiseRowAccum::new(&[batch?]).map_err(anyhow::Error::msg)?;
+                let batch = batch?;
+                let rows =
+                    CruiseRowAccum::new(std::slice::from_ref(&batch)).map_err(anyhow::Error::msg)?;
                 let slices = rows.views();
                 let views = slices.as_row_views();
                 let mut group = Group {
@@ -161,7 +163,7 @@ impl CruiseField {
                     buckets: Vec::new(),
                 };
                 for (index, row) in views.iter().enumerate() {
-                    let Some((segment, density)) = cruise_segment(row, index) else {
+                    let Some((segment, density)) = cruise_segment(row, index, &weights) else {
                         continue;
                     };
                     let terrain = SegmentTerrain::sample(&segment, rasters);
@@ -188,12 +190,15 @@ impl CruiseField {
                     group.half_length = group
                         .half_length
                         .max(f64::from(segment.segment_length_m) * 0.5);
+                    let Some(prepared) = aircraft::prepare_segment(
+                        &segment,
+                        terrain.start_elev - 30.0,
+                        terrain.end_elev - 30.0,
+                    ) else {
+                        continue;
+                    };
                     group.buckets.push(Bucket {
-                        prepared: aircraft::prepare_segment(
-                            &segment,
-                            terrain.start_elev - 30.0,
-                            terrain.end_elev - 30.0,
-                        ),
+                        prepared,
                         lat: row.lat,
                         lon: row.lon,
                         half_length: f64::from(segment.segment_length_m) * 0.5,
@@ -206,6 +211,7 @@ impl CruiseField {
                 }
             }
         }
+        let days = window.map_or(0, |window| window.baseline_days);
         Self::build(owner, lattice, groups, days, rasters)
     }
     fn build(
@@ -293,7 +299,7 @@ impl CruiseField {
     pub fn period_powers(
         &self,
         scene: &SurfaceScene,
-        receivers: &TileReceivers,
+        receivers: &ReceiverPoints,
     ) -> Result<Vec<f32>> {
         ensure!(
             scene.owner == self.owner,
@@ -329,6 +335,9 @@ impl CruiseField {
             .map(|&[lat, lon]| self.lattice.bracket(lat, lon))
             .collect::<Result<Vec<_>>>()?;
         let max_alt = altitudes.iter().copied().fold(f32::NEG_INFINITY, f32::max) as f64;
+        // Near field: a bucket whose low end is within one NPD table length above the highest
+        // receiver can still slant inside the table, so it is replaced exactly; higher buckets
+        // extrapolate smoothly and the lattice interpolation suffices.
         let near: Vec<_> = self
             .groups
             .iter()
@@ -337,7 +346,7 @@ impl CruiseField {
                 b.prepared
                     .start_alt_m
                     .min(b.prepared.start_alt_m + b.prepared.sdz)
-                    <= max_alt + aircraft::AIRCRAFT_FAR_FIELD_THRESHOLD_M
+                    <= max_alt + aircraft::AIRCRAFT_NPD_REF_SLANT_M
             })
             .collect();
         let mut nodes = self.energies.clone();
