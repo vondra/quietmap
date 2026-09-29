@@ -171,6 +171,66 @@ fn a_click_inside_a_building_answers_at_the_facade_facing_the_road() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// Point sources on the north edge of the northernmost read tile: their rays start on the edge
+/// and must stay in their own tile, the tile beyond not being read yet (a click in the Brdy
+/// failed so before lattice points returned to the lattice exactly).
+#[test]
+fn a_source_on_the_edge_of_the_read_block_is_answered() {
+    let root = release_root("edge");
+    let (lat, lon) = (49.758, 13.865);
+    let centre = TileId::containing(tiles::geo::Mercator::from_degrees(lat, lon));
+    let north = TileId {
+        x: centre.x + 1,
+        y: centre.y - 1,
+    };
+    let attributes = [Attribute {
+        layer: Layer::Building,
+        height_m: 5.0,
+        ground_percent: 0,
+        platform_half_width_m: 0.0,
+        exclusion_radius_m: 3.5,
+        footprint_id: 0,
+        group_key: 2,
+        emission: [[80.0; BANDS]; PERIODS],
+        display: r#"["edge"]"#.into(),
+    }];
+    // Many points along the edge: whether one rounds across it depends on its position.
+    let pieces: Vec<Piece> = (-16_384..16_384)
+        .step_by(16)
+        .map(|x| Piece {
+            ends: [[x, -16_384], [x, -16_384]],
+            attribute: 0,
+        })
+        .collect();
+    let path = tile_path(&root.join("2026"), north, Kind::Sources);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, encode(&pieces, &attributes)).unwrap();
+    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    let release = Release::open(&root, "2026").unwrap();
+    let mut building_energy = 0.0;
+    answer(
+        &release,
+        lat,
+        lon,
+        &Options {
+            exact: true,
+            pieces: 0,
+        },
+        &mut |update| {
+            let layer = update
+                .layers
+                .iter()
+                .find(|layer| layer.layer == Layer::Building)
+                .unwrap();
+            building_energy = layer.energy[0];
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert!(building_energy > 0.0);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn an_incomplete_release_is_never_served() {
     let root = release_root("incomplete");

@@ -240,53 +240,56 @@ fn read_rows(table: &Table, rows: &mut Vec<IndustrialRow>) -> Result<(), String>
         require_stamp(table, key, value)?;
     }
     for batch in &table.batches {
-        let bytes = |name: &str| column::<UInt8Array>(batch, name);
+        // Only the centroid is required; older squares lack some columns, which then read as
+        // absent values (as dev4 reads them, `point_sources.rs`).
+        let (gx, gy) = (
+            column::<Int32Array>(batch, "centroid_gx")?,
+            column::<Int32Array>(batch, "centroid_gy")?,
+        );
+        let bytes = |name: &str| column::<UInt8Array>(batch, name).ok();
         let (types, subtypes, suppressed) = (
-            bytes("source_type")?,
-            bytes("site_subtype")?,
-            bytes("suppressed")?,
+            bytes("source_type"),
+            bytes("site_subtype"),
+            bytes("suppressed"),
         );
-        let words = |name: &str| column::<UInt16Array>(batch, name);
-        let (naces, sources) = (words("nace_4digit")?, words("source_id")?);
-        let integers = |name: &str| column::<Int32Array>(batch, name);
-        let (gx, gy) = (integers("centroid_gx")?, integers("centroid_gy")?);
-        let floats = |name: &str| column::<Float32Array>(batch, name);
+        let words = |name: &str| column::<UInt16Array>(batch, name).ok();
+        let (naces, sources) = (words("nace_4digit"), words("source_id"));
+        let floats = |name: &str| column::<Float32Array>(batch, name).ok();
         let (hubs, powers, areas) = (
-            floats("hub_height")?,
-            floats("rated_power_kw")?,
-            floats("area_m2")?,
+            floats("hub_height"),
+            floats("rated_power_kw"),
+            floats("area_m2"),
         );
-        let texts = |name: &str| column::<StringArray>(batch, name);
-        let (kinds, names, tags) = (texts("osm_kind")?, texts("name")?, texts("osm_tags")?);
-        let (ids, geometry) = (
-            column::<Int64Array>(batch, "osm_id")?,
-            column::<BinaryArray>(batch, "geom")?,
-        );
+        let texts = |name: &str| column::<StringArray>(batch, name).ok();
+        let (kinds, names, tags) = (texts("osm_kind"), texts("name"), texts("osm_tags"));
+        let ids = column::<Int64Array>(batch, "osm_id").ok();
+        let geometry = column::<BinaryArray>(batch, "geom").ok();
         for row in 0..batch.num_rows() {
-            let source_type = types.value(row);
+            let source_type = types.map_or(0, |values| values.value(row));
             let power = matches!(
                 source_type,
                 SOURCE_SOLAR_FARM | SOURCE_SUBSTATION | SOURCE_TRANSFORMER
             );
             rows.push(IndustrialRow {
-                osm_kind: kinds.value(row).to_string(),
-                osm_id: ids.value(row),
+                osm_kind: kinds.map_or("", |values| text(values, row)).to_string(),
+                osm_id: ids.map_or(0, |values| values.value(row)),
                 centroid: (gx.value(row), gy.value(row)),
                 source_type,
-                site_subtype: subtypes.value(row),
-                name: text(names, row).to_string(),
-                hub_height_m: positive(hubs, row),
-                rated_power_kw: positive(powers, row),
-                ring: ring_cell(geometry, row),
-                area_m2: positive(areas, row),
-                nace: Some(naces.value(row)).filter(|code| *code > 0),
-                tags: if power {
-                    parse_tags(tags.value(row))
-                } else {
-                    Tags::new()
+                site_subtype: subtypes.map_or(0, |values| values.value(row)),
+                name: names.map_or("", |values| text(values, row)).to_string(),
+                hub_height_m: hubs.and_then(|values| positive(values, row)),
+                rated_power_kw: powers.and_then(|values| positive(values, row)),
+                ring: geometry.map_or_else(Vec::new, |values| ring_cell(values, row)),
+                area_m2: areas.and_then(|values| positive(values, row)),
+                nace: naces
+                    .map(|values| values.value(row))
+                    .filter(|code| *code > 0),
+                tags: match tags {
+                    Some(values) if power => parse_tags(text(values, row)),
+                    _ => Tags::new(),
                 },
-                suppressed: suppressed.value(row) != 0,
-                source_id: sources.value(row),
+                suppressed: suppressed.is_some_and(|values| values.value(row) != 0),
+                source_id: sources.map_or(0, |values| values.value(row)),
             });
         }
     }

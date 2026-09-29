@@ -45,7 +45,29 @@ impl Mercator {
         let lat = (PI * (1.0 - 2.0 * self.y / n)).sinh().atan().to_degrees();
         (lat, self.x / n * 360.0 - 180.0)
     }
+
+    /// The position with each coordinate within a millionth of a step of the step lattice put
+    /// on it: a point that came from the lattice (a stored vertex or source end) and went through
+    /// metres returns to it exactly, so a point on a tile's north or west edge stays in its tile.
+    pub fn snapped_to_lattice(self) -> Self {
+        let snap = |units: f64| {
+            let steps = units * STEPS_PER_TILE;
+            let nearest = steps.round();
+            if (steps - nearest).abs() < LATTICE_SNAP_STEPS {
+                nearest / STEPS_PER_TILE
+            } else {
+                units
+            }
+        };
+        Mercator {
+            x: snap(self.x),
+            y: snap(self.y),
+        }
+    }
 }
+
+/// How close to a lattice point a position counts as on it (steps; 1e-6 is about 0.3 um).
+pub const LATTICE_SNAP_STEPS: f64 = 1e-6;
 
 /// One z12 tile in the standard XYZ numbering.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

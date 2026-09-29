@@ -20,7 +20,7 @@ pub use facades::FacadeReceiver;
 
 use tile::SceneTile;
 
-use tiles::geo::{LocalFrame, STEPS_PER_TILE, TILES_PER_AXIS, TileId};
+use tiles::geo::{LATTICE_SNAP_STEPS, LocalFrame, STEPS_PER_TILE, TILES_PER_AXIS, TileId};
 use tiles::obstacles::{CELL_STEPS, CELLS_PER_SIDE, Obstacles};
 
 const WORLD_STEPS: i64 = STEPS_PER_TILE as i64 * TILES_PER_AXIS as i64;
@@ -50,10 +50,20 @@ impl Lattice {
         }
     }
 
+    /// Scene steps of a point; a lattice point (a stored vertex or source end) comes back as its
+    /// exact integer, so a source on a tile's north or west edge stays in its tile's cells.
     fn steps(&self, metres: [f64; 2]) -> [f64; 2] {
+        let snap = |steps: f64| {
+            let nearest = steps.round();
+            if (steps - nearest).abs() < LATTICE_SNAP_STEPS {
+                nearest
+            } else {
+                steps
+            }
+        };
         [
-            self.origin[0] + metres[0] / self.metres_per_step[0],
-            self.origin[1] - metres[1] / self.metres_per_step[1],
+            snap(self.origin[0] + metres[0] / self.metres_per_step[0]),
+            snap(self.origin[1] - metres[1] / self.metres_per_step[1]),
         ]
     }
 

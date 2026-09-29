@@ -46,7 +46,7 @@ impl<'a> Ground<'a> {
     /// The ground at [east, north] metres; an error outside the read tiles or at a node without
     /// data (the click fails instead of answering quieter).
     pub fn at(&self, metres: [f64; 2]) -> Result<GroundSample, String> {
-        let position = self.frame.to_mercator(metres);
+        let position = self.frame.to_mercator(metres).snapped_to_lattice();
         let tile = TileId::containing(position);
         let terrain = self
             .slot(tile)
