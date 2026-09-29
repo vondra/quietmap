@@ -14,7 +14,6 @@ pub mod ship;
 
 use crate::dev4::{Dev4, Square};
 use crate::output::write_tile;
-use arrow_array::RecordBatch;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use tiles::Kind;
@@ -93,14 +92,6 @@ pub fn group_key(parts: &[&str]) -> u64 {
         }
     }
     hash
-}
-
-/// A typed column of a batch.
-pub fn column<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> Result<&'a T, String> {
-    batch
-        .column_by_name(name)
-        .and_then(|column| column.as_any().downcast_ref::<T>())
-        .ok_or_else(|| format!("column {name} missing or of another type"))
 }
 
 /// Writes the sources tiles of `squares`. A dev4 row is owned by the dev4 square of its midpoint,

@@ -134,3 +134,27 @@ fn points_belong_to_the_tile_holding_them() {
     let (east, ends) = point_piece(edge.0, edge.1);
     assert_eq!((east, ends[0][0]), (TileId { x: 2213, y: 1387 }, -16_384));
 }
+
+/// A 1 km cell on the antimeridian stays 1 km wide: its cells hug 180 degrees on both sides.
+#[test]
+fn sites_across_the_antimeridian_stay_where_they_are() {
+    let centroid = (-16.8, 179.999);
+    let ring = square_ring(centroid, 1_000.0);
+    assert!((ring_area_m2(&ring).unwrap() - 1e6).abs() < 2e4);
+    let site = Site {
+        centroid,
+        ring: &ring,
+        area_m2: 1e6,
+        single_point_up_to_m2: 0.0,
+        cell_m: 250.0,
+    };
+    let points = site_points(&site);
+    assert!((16..=25).contains(&points.len()), "{}", points.len());
+    for point in &points {
+        let (lat, lon) = Mercator::from_degrees(point.lat, point.lon).to_degrees();
+        assert!(
+            (lat + 16.8).abs() < 0.01 && 180.0 - lon.abs() < 0.01,
+            "{lat} {lon}"
+        );
+    }
+}

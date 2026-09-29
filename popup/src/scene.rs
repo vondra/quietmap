@@ -61,12 +61,21 @@ impl<'a> Ground<'a> {
         })
     }
 
-    /// Samples the ground under the ray from `source` to the receiver at the origin.
-    pub fn fill_profile(&self, source: [f64; 2], profile: &mut Profile) -> Result<(), String> {
-        profile.reset(source[0].hypot(source[1]).max(1.0));
+    /// Samples the ground under the ray from `source` to `receiver` (both in click metres).
+    pub fn fill_profile(
+        &self,
+        source: [f64; 2],
+        receiver: [f64; 2],
+        profile: &mut Profile,
+    ) -> Result<(), String> {
+        let offset = [source[0] - receiver[0], source[1] - receiver[1]];
+        profile.reset(offset[0].hypot(offset[1]).max(1.0));
         for index in 0..profile.t.len() {
             let keep = 1.0 - profile.t[index];
-            let sample = self.at([source[0] * keep, source[1] * keep])?;
+            let sample = self.at([
+                receiver[0] + offset[0] * keep,
+                receiver[1] + offset[1] * keep,
+            ])?;
             profile.ground_m.push(sample.height_m);
             profile.ground_factor.push(sample.ground_factor);
             profile.forest_cover.push(sample.forest_cover);

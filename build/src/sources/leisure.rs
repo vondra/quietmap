@@ -4,15 +4,12 @@
 //! ranges by shots a year unless roofed. Motorsport (PLAN-z13 DROP) and unknown classes are silent.
 
 use super::cells::{
-    AUDIBILITY_FLOOR_DBA, Site, Z30Ring, decode_z30_ring, push_site_points, resolve_area_m2,
-    site_points,
+    AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
 };
 use super::facilities::{Tags, parse_tags};
-use super::{Converted, column, group_key};
-use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees};
-use arrow_array::{
-    Array, BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array,
-};
+use super::{Converted, group_key};
+use crate::dev4::{Dev4, Square, column, positive, require_stamp, text, z30_corner_degrees};
+use arrow_array::{BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array};
 use physics::emission::leisure::*;
 use physics::emission::spectrum::SoundPower;
 use serde_json::json;
@@ -145,49 +142,30 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
 }
 
 fn read_batch(batch: &arrow_array::RecordBatch) -> Result<Vec<LeisureRow>, String> {
-    let (gx, gy) = (
-        column::<Int32Array>(batch, "centroid_gx")?,
-        column::<Int32Array>(batch, "centroid_gy")?,
-    );
-    let (kinds, ids) = (
-        column::<StringArray>(batch, "osm_kind")?,
+    let integers = |name: &str| column::<Int32Array>(batch, name);
+    let (gx, gy) = (integers("centroid_gx")?, integers("centroid_gy")?);
+    let texts = |name: &str| column::<StringArray>(batch, name);
+    let (kinds, names, tags) = (texts("osm_kind")?, texts("name")?, texts("osm_tags")?);
+    let bytes = |name: &str| column::<UInt8Array>(batch, name);
+    let (classes, geometry_kinds) = (bytes("sport")?, bytes("geometry_kind")?);
+    let (ids, geometry) = (
         column::<Int64Array>(batch, "osm_id")?,
-    );
-    let (classes, geometry_kinds) = (
-        column::<UInt8Array>(batch, "sport")?,
-        column::<UInt8Array>(batch, "geometry_kind")?,
-    );
-    let (names, tags) = (
-        column::<StringArray>(batch, "name")?,
-        column::<StringArray>(batch, "osm_tags")?,
-    );
-    let (geometry, areas) = (
         column::<BinaryArray>(batch, "geom")?,
-        column::<Float32Array>(batch, "area_m2")?,
     );
+    let areas = column::<Float32Array>(batch, "area_m2")?;
     Ok((0..batch.num_rows())
         .map(|row| LeisureRow {
             osm_kind: kinds.value(row).to_string(),
             osm_id: ids.value(row),
             centroid: (gx.value(row), gy.value(row)),
             class: classes.value(row),
-            name: if names.is_valid(row) {
-                names.value(row).to_string()
-            } else {
-                String::new()
-            },
-            ring: geometry
-                .is_valid(row)
-                .then(|| decode_z30_ring(geometry.value(row)))
-                .flatten()
-                .unwrap_or_default(),
-            area_m2: (areas.is_valid(row) && areas.value(row) > 0.0)
-                .then(|| f64::from(areas.value(row))),
+            name: text(names, row).to_string(),
+            ring: ring_cell(geometry, row),
+            area_m2: positive(areas, row),
             is_line: geometry_kinds.value(row) == LINE_GEOMETRY,
-            tags: if classes.value(row) == SHOOTING {
-                parse_tags(tags.value(row))
-            } else {
-                Tags::new()
+            tags: match classes.value(row) {
+                SHOOTING => parse_tags(tags.value(row)),
+                _ => Tags::new(),
             },
         })
         .collect())

@@ -3,8 +3,8 @@
 //! whole 1 km cell at its centre), at the height of the class carrying most of the energy.
 
 use super::cells::{AUDIBILITY_FLOOR_DBA, Site, push_site_points, site_points, square_ring};
-use super::{Converted, column, group_key};
-use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees};
+use super::{Converted, group_key};
+use crate::dev4::{Dev4, Square, column, require_stamp, z30_corner_degrees};
 use arrow_array::{Float32Array, Int32Array, UInt16Array};
 use physics::emission::ships::ship_cell_sound_power;
 use serde_json::json;

@@ -4,11 +4,11 @@
 //! 2,000 m2. Each carries the id of its screening footprint, so it never screens itself.
 
 use super::cells::{
-    AUDIBILITY_FLOOR_DBA, Site, Z30Ring, decode_z30_ring, push_site_points, resolve_area_m2,
-    site_points,
+    AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
 };
-use super::{Converted, column, group_key};
-use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees};
+use super::{Converted, group_key};
+use crate::dev4::{Dev4, Square, cell, column, positive, require_stamp, text, z30_corner_degrees};
+use crate::screening::BUILDING_HEIGHT_MAX_M;
 use crate::structures::footprint_id;
 use arrow_array::{
     Array, BinaryArray, Float32Array, Int32Array, Int64Array, RecordBatch, StringArray, UInt8Array,
@@ -26,8 +26,6 @@ const GROUND_ACTIVITY_SOURCE_HEIGHT_M: f64 = 1.5;
 /// Storey height and the height of a building with neither a height nor a floor count (dev4).
 const FLOOR_HEIGHT_M: f64 = 3.0;
 const DEFAULT_HEIGHT_M: f64 = 8.0;
-/// The tallest building on Earth (Burj Khalifa); a taller mapped value is a tag error.
-const TALLEST_BUILDING_M: f64 = 828.0;
 /// The footprint of a building with neither a stored area nor a ring.
 const DEFAULT_FOOTPRINT_M2: f64 = 100.0;
 const SINGLE_POINT_UP_TO_M2: f64 = 2_000.0;
@@ -73,7 +71,7 @@ pub fn building_emission(row: &BuildingRow) -> Option<BuildingEmission> {
         } else {
             DEFAULT_HEIGHT_M
         }
-        .min(TALLEST_BUILDING_M);
+        .min(BUILDING_HEIGHT_MAX_M);
         let floors = if row.floors > 0 {
             row.floors
         } else {
@@ -168,99 +166,64 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
 }
 
 fn read_batch(batch: &RecordBatch, square: Square) -> Result<Vec<BuildingRow>, String> {
-    let (kinds, ids) = (
-        column::<UInt8Array>(batch, "kind")?,
-        column::<Int64Array>(batch, "osm_id")?,
-    );
-    let centroid = [
-        column::<Int32Array>(batch, "centroid_gx")?,
-        column::<Int32Array>(batch, "centroid_gy")?,
-    ];
+    let bytes = |name: &str| column::<UInt8Array>(batch, name);
+    let (kinds, floors) = (bytes("kind")?, bytes("floors")?);
+    let (classes, height_sources) = (bytes("building_type")?, bytes("height_source")?);
+    let integers = |name: &str| column::<Int32Array>(batch, name);
+    let centroid = [integers("centroid_gx")?, integers("centroid_gy")?];
     let emission_centroid = [
-        column::<Int32Array>(batch, "emission_centroid_gx")?,
-        column::<Int32Array>(batch, "emission_centroid_gy")?,
+        integers("emission_centroid_gx")?,
+        integers("emission_centroid_gy")?,
     ];
-    let (heights, floors) = (
-        column::<Float32Array>(batch, "height")?,
-        column::<UInt8Array>(batch, "floors")?,
+    let floats = |name: &str| column::<Float32Array>(batch, name);
+    let (heights, areas) = (floats("height")?, floats("area_m2")?);
+    let binaries = |name: &str| column::<BinaryArray>(batch, name);
+    let (rings, geometry) = (binaries("emission_geom")?, binaries("geom")?);
+    let texts = |name: &str| column::<StringArray>(batch, name);
+    let (names, streets, numbers) = (
+        texts("name")?,
+        texts("addr_street")?,
+        texts("addr_housenumber")?,
     );
-    let (areas, classes) = (
-        column::<Float32Array>(batch, "area_m2")?,
-        column::<UInt8Array>(batch, "building_type")?,
-    );
-    let (height_sources, rings) = (
-        column::<UInt8Array>(batch, "height_source")?,
-        column::<BinaryArray>(batch, "emission_geom")?,
-    );
-    let (geometry, ordinals) = (
-        column::<BinaryArray>(batch, "geom")?,
+    let (ids, ordinals) = (
+        column::<Int64Array>(batch, "osm_id")?,
         column::<UInt32Array>(batch, "screening_ordinal")?,
     );
-    let text = |name: &str| column::<StringArray>(batch, name);
-    let (names, streets, numbers) = (
-        text("name")?,
-        text("addr_street")?,
-        text("addr_housenumber")?,
-    );
-    fn string(values: &StringArray, row: usize) -> &str {
-        if values.is_valid(row) {
-            values.value(row)
-        } else {
-            ""
-        }
-    }
     let mut rows = Vec::new();
-    for row in
-        (0..batch.num_rows()).filter(|&row| kinds.value(row) == KIND_BUILDING && ids.is_valid(row))
-    {
-        let [x, y] = if emission_centroid.iter().all(|values| values.is_valid(row)) {
+    for row in 0..batch.num_rows() {
+        let Some(osm_id) = cell(ids, row) else {
+            continue;
+        };
+        if kinds.value(row) != KIND_BUILDING {
+            continue;
+        }
+        let emission_centroid_known = emission_centroid.iter().all(|values| values.is_valid(row));
+        let [x, y] = if emission_centroid_known {
             emission_centroid
         } else {
             centroid
         };
-        let footprint_id = if geometry.is_valid(row) {
-            if !ordinals.is_valid(row) {
-                return Err(format!("row {row} has geometry but no screening_ordinal"));
-            }
-            footprint_id(square, ordinals.value(row))
-        } else {
-            0
-        };
-        let street = string(streets, row);
-        let address = if street.is_empty() {
-            String::new()
-        } else {
-            format!("{street} {}", string(numbers, row))
+        let footprint_id = match (geometry.is_valid(row), cell(ordinals, row)) {
+            (false, _) => 0,
+            (true, Some(ordinal)) => footprint_id(square, ordinal),
+            (true, None) => return Err(format!("row {row} has geometry but no screening_ordinal")),
         };
         rows.push(BuildingRow {
-            osm_id: ids.value(row),
+            osm_id,
             centroid: (x.value(row), y.value(row)),
-            ring: rings
-                .is_valid(row)
-                .then(|| decode_z30_ring(rings.value(row)))
-                .flatten()
-                .unwrap_or_default(),
-            height_tag_m: if heights.is_valid(row) {
-                f64::from(heights.value(row))
-            } else {
-                0.0
+            ring: ring_cell(rings, row),
+            height_tag_m: positive(heights, row).unwrap_or(0.0),
+            floors: cell(floors, row).unwrap_or(0),
+            area_m2: positive(areas, row),
+            class: cell(classes, row).unwrap_or(0),
+            ground_activity: cell(height_sources, row) == Some(HEIGHT_SOURCE_GROUND_ACTIVITY),
+            name: text(names, row).to_string(),
+            address: match text(streets, row) {
+                "" => String::new(),
+                street => format!("{street} {}", text(numbers, row))
+                    .trim_end()
+                    .to_string(),
             },
-            floors: if floors.is_valid(row) {
-                floors.value(row)
-            } else {
-                0
-            },
-            area_m2: (areas.is_valid(row) && areas.value(row) > 0.0)
-                .then(|| f64::from(areas.value(row))),
-            class: if classes.is_valid(row) {
-                classes.value(row)
-            } else {
-                0
-            },
-            ground_activity: height_sources.is_valid(row)
-                && height_sources.value(row) == HEIGHT_SOURCE_GROUND_ACTIVITY,
-            name: string(names, row).to_string(),
-            address: address.trim_end().to_string(),
             footprint_id,
         });
     }

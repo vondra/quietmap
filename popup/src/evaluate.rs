@@ -17,6 +17,8 @@ use physics::weather::FavourableProbability;
 pub struct Receiver<'s, 'a> {
     pub ground: &'s Ground<'a>,
     pub obstacles: &'s Scene<'a>,
+    /// Where the receiver stands (click metres): the click, or a building's façade receiver.
+    pub position: [f64; 2],
     pub altitude_m: f64,
     pub weather: FavourableProbability,
     pub reflection_db: f64,
@@ -29,6 +31,13 @@ pub struct Scratch {
     profile: Profile,
     crossings: Vec<Crossing>,
     ray: RayScratch,
+}
+
+impl Receiver<'_, '_> {
+    /// Direction of travel from `point` to the receiver, radians anticlockwise from east.
+    fn azimuth(&self, point: [f64; 2]) -> f64 {
+        (self.position[1] - point[1]).atan2(self.position[0] - point[0])
+    }
 }
 
 /// The ray ends of a source at this receiver.
@@ -51,12 +60,13 @@ pub fn trace(
     scratch: &mut Scratch,
 ) -> Result<RayTerms, String> {
     let ends = ray_ends(receiver, &source.attribute);
-    receiver.ground.fill_profile(point, &mut scratch.profile)?;
+    receiver
+        .ground
+        .fill_profile(point, receiver.position, &mut scratch.profile)?;
     receiver
         .obstacles
-        .crossings(point, [0.0, 0.0], &mut scratch.crossings)?;
-    let azimuth = (-point[1]).atan2(-point[0]);
-    let p = std::array::from_fn(|period| receiver.weather.at(period, azimuth));
+        .crossings(point, receiver.position, &mut scratch.crossings)?;
+    let p = std::array::from_fn(|period| receiver.weather.at(period, receiver.azimuth(point)));
     Ok(ray_terms(
         &scratch.profile,
         &scratch.crossings,
@@ -96,15 +106,17 @@ pub fn received_energy(
         return Ok(received.map(|e| e * reflection));
     }
     let altitude = |end: usize| candidate.ground_m[end] + source.height_m - receiver.altitude_m;
-    let Some(geometry) =
-        LinePieceGeometry::new([a[0], a[1], altitude(0)], [b[0], b[1], altitude(1)])
-    else {
+    let [x, y] = receiver.position;
+    let Some(geometry) = LinePieceGeometry::new(
+        [a[0] - x, a[1] - y, altitude(0)],
+        [b[0] - x, b[1] - y, altitude(1)],
+    ) else {
         return Ok(received);
     };
     let obstacles = receiver.obstacles;
     let mut skyline = |lo: f64, hi: f64, radius: f64, visit: &mut dyn FnMut(SkylineArc)| {
         obstacles.skyline_arcs(
-            [0.0, 0.0],
+            receiver.position,
             lo,
             hi,
             radius,
@@ -140,7 +152,7 @@ pub fn received_energy(
     Ok(received.map(|e| e * reflection))
 }
 
-/// The transfer of one ray from `point` to the receiver at the origin.
+/// The transfer of one ray from `point` to the receiver.
 fn ray(
     receiver: &Receiver,
     point: [f64; 2],
@@ -148,15 +160,16 @@ fn ray(
     ends: &RayEnds,
     scratch: &mut Scratch,
 ) -> Result<[[f64; BANDS]; PERIODS], String> {
-    receiver.ground.fill_profile(point, &mut scratch.profile)?;
+    receiver
+        .ground
+        .fill_profile(point, receiver.position, &mut scratch.profile)?;
     scratch.crossings.clear();
     if obstacles_on_ray {
         receiver
             .obstacles
-            .crossings(point, [0.0, 0.0], &mut scratch.crossings)?;
+            .crossings(point, receiver.position, &mut scratch.crossings)?;
     }
-    let azimuth = (-point[1]).atan2(-point[0]);
-    let p = std::array::from_fn(|period| receiver.weather.at(period, azimuth));
+    let p = std::array::from_fn(|period| receiver.weather.at(period, receiver.azimuth(point)));
     Ok(ray_transfer(
         &scratch.profile,
         &scratch.crossings,

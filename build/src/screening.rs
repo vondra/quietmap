@@ -5,7 +5,7 @@ use tiles::geo::GlobalSteps;
 use tiles::obstacles::{EnvelopeClass, OutlineKind};
 
 /// The tallest building on Earth (Burj Khalifa, 828 m); a taller mapped value is a tag error.
-const BUILDING_HEIGHT_MAX_M: f64 = 828.0;
+pub const BUILDING_HEIGHT_MAX_M: f64 = 828.0;
 
 /// One ring or wall of a row; a ring is closed (its first vertex repeated last).
 pub struct ScreeningOutline {

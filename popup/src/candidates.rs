@@ -29,6 +29,7 @@ pub struct SourceAttribute {
 /// A sources file's attributes and its candidates (indexing those attributes).
 pub type TileCandidates = (Vec<SourceAttribute>, Vec<Candidate>);
 
+#[derive(Clone)]
 pub struct Candidate {
     pub layer: Layer,
     pub piece: Piece,
@@ -42,6 +43,14 @@ pub struct Candidate {
     pub order: f64,
     pub group_key: u64,
     pub display: DisplayRef,
+}
+
+/// Horizontal distance from `receiver` to the segment `a`-`b`.
+fn distance_from(receiver: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    distance_to_segment(
+        [a[0] - receiver[0], a[1] - receiver[1]],
+        [b[0] - receiver[0], b[1] - receiver[1]],
+    )
 }
 
 /// Horizontal distance from the origin to the segment `a`-`b`.
@@ -64,13 +73,65 @@ pub fn lden_weighted(periods: &[f64; PERIODS]) -> f64 {
         / 24.0
 }
 
-/// The attributes of one sources file and its pieces within reach as candidates; a candidate's
-/// `attribute` indexes the returned attributes.
+impl Candidate {
+    /// How the piece spreads (a line's length is its 3D length).
+    fn spread(&self) -> Spread {
+        if self.piece.is_line() {
+            let [a, b] = self.ends_m;
+            let horizontal = (b[0] - a[0]).hypot(b[1] - a[1]);
+            Spread::Line {
+                length_m: horizontal.hypot(self.ground_m[1] - self.ground_m[0]),
+            }
+        } else {
+            Spread::Point
+        }
+    }
+
+    /// Horizontal distance from `receiver` (click metres) to the piece.
+    pub fn distance_from(&self, receiver: [f64; 2]) -> f64 {
+        let [a, b] = self.ends_m;
+        if self.piece.is_line() {
+            distance_from(receiver, a, b)
+        } else {
+            (a[0] - receiver[0]).hypot(a[1] - receiver[1])
+        }
+    }
+
+    /// The bound per period at horizontal distance `distance_m`.
+    pub fn bound_at_distance(
+        &self,
+        distance_m: f64,
+        source: &SourceAttribute,
+        receiver_gain: &[f64; PERIODS],
+    ) -> [f64; PERIODS] {
+        received_energy_bound(&source.energy, self.spread(), distance_m, receiver_gain)
+    }
+
+    /// Distance, bound and order for a receiver at `receiver` (click metres); `false` when the
+    /// piece lies beyond the reach.
+    pub fn bound_at(
+        &mut self,
+        receiver: [f64; 2],
+        source: &SourceAttribute,
+        receiver_gain: &[f64; PERIODS],
+    ) -> bool {
+        self.distance_m = self.distance_from(receiver);
+        self.bound = self.bound_at_distance(self.distance_m, source, receiver_gain);
+        self.order = lden_weighted(&self.bound);
+        self.distance_m <= GROUND_REACH_M
+    }
+}
+
+/// The attributes of one sources file and its pieces within `reach_m` of the receiver at
+/// `receiver` (click metres) as candidates; a candidate's `attribute` indexes the returned
+/// attributes.
 pub fn collect(
     sources: &Sources<'_>,
     tile: TileId,
     display: (usize, usize),
     ground: &Ground<'_>,
+    receiver: [f64; 2],
+    reach_m: f64,
     receiver_gain: &[f64; PERIODS],
 ) -> Result<TileCandidates, String> {
     let attributes = (0..sources.attribute_count())
@@ -94,30 +155,21 @@ pub fn collect(
                 .frame
                 .metres_of_steps([global.x as f64, global.y as f64])
         });
-        let distance_m = if piece.is_line() {
-            distance_to_segment(ends_m[0], ends_m[1])
+        let near = if piece.is_line() {
+            distance_from(receiver, ends_m[0], ends_m[1])
         } else {
-            ends_m[0][0].hypot(ends_m[0][1])
+            (ends_m[0][0] - receiver[0]).hypot(ends_m[0][1] - receiver[1])
         };
-        if distance_m > GROUND_REACH_M {
+        if near > reach_m {
             continue;
         }
         let ground_m = [
             ground.at(ends_m[0])?.height_m,
             ground.at(ends_m[1])?.height_m,
         ];
-        let spread = if piece.is_line() {
-            let horizontal = (ends_m[1][0] - ends_m[0][0]).hypot(ends_m[1][1] - ends_m[0][1]);
-            Spread::Line {
-                length_m: horizontal.hypot(ground_m[1] - ground_m[0]),
-            }
-        } else {
-            Spread::Point
-        };
-        let bound = received_energy_bound(&source.energy, spread, distance_m, receiver_gain);
-        candidates.push(Candidate {
+        let mut candidate = Candidate {
             layer: source.attribute.layer,
-            order: lden_weighted(&bound),
+            order: 0.0,
             display: DisplayRef {
                 ring: display.0,
                 tile: display.1,
@@ -128,9 +180,11 @@ pub fn collect(
             piece,
             ends_m,
             ground_m,
-            distance_m,
-            bound,
-        });
+            distance_m: near,
+            bound: [0.0; PERIODS],
+        };
+        candidate.bound_at(receiver, source, receiver_gain);
+        candidates.push(candidate);
     }
     Ok((attributes, candidates))
 }

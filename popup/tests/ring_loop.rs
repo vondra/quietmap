@@ -1,6 +1,6 @@
 //! The ring loop on a synthetic release (flat ocean, one tile of road pieces): the fast answer
-//! stays within 0.1 dB of the exact one while evaluating fewer pieces, and a complete release is
-//! required.
+//! stays within 0.1 dB of the exact one while evaluating fewer pieces, a click inside a building
+//! answers at the façade facing the road, and a complete release is required.
 
 use physics::bands::{BANDS, PERIODS};
 use physics::weather::{COLUMNS, ROWS, SECTORS, encode as encode_weather};
@@ -8,6 +8,7 @@ use popup::answer::{Options, answer};
 use popup::release::Release;
 use std::path::{Path, PathBuf};
 use tiles::geo::{LocalFrame, TileId};
+use tiles::obstacles::{EnvelopeClass, Outline, OutlineKind, encode as encode_obstacles};
 use tiles::sources::{Attribute, Layer, Piece, encode};
 use tiles::{COMPLETION_MARKER, Kind, tile_path};
 
@@ -24,8 +25,7 @@ fn release_root(name: &str) -> PathBuf {
 
 /// Road pieces of 100 m running north-south at `distances` east of the tile centre.
 fn write_roads(root: &Path, distances: &[f64]) {
-    let frame = LocalFrame::at(TILE.centre());
-    let steps_per_metre = 32_768.0 / frame.east_m_per_unit;
+    let steps_per_metre = steps_per_metre();
     let half = (50.0 * steps_per_metre).round() as i16;
     let pieces: Vec<Piece> = distances
         .iter()
@@ -51,6 +51,58 @@ fn write_roads(root: &Path, distances: &[f64]) {
     let path = tile_path(&root.join("2026"), TILE, Kind::Sources);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, encode(&pieces, &attributes)).unwrap();
+}
+
+/// Int16 steps per metre east in the tile's frame.
+fn steps_per_metre() -> f64 {
+    32_768.0 / LocalFrame::at(TILE.centre()).east_m_per_unit
+}
+
+/// A 20 m square building, 15 m tall, centred on the tile centre.
+fn write_building(root: &Path) {
+    let s = (10.0 * steps_per_metre()).round() as i16;
+    let outline = Outline {
+        footprint_id: 7,
+        kind: OutlineKind::Exterior,
+        envelope: EnvelopeClass::Residential,
+        height_m: 15.0,
+        vertices: vec![[-s, s], [s, s], [s, -s], [-s, -s], [-s, s]],
+    };
+    let path = tile_path(&root.join("2026"), TILE, Kind::Obstacles);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, encode_obstacles(&[outline])).unwrap();
+}
+
+/// The last update of a click `east_m` east of the tile centre: road Lden energy and the
+/// chosen façade's bearing, if the click is inside a building.
+fn click(release: &Release, east_m: f64) -> (f64, Option<f64>) {
+    let frame = LocalFrame::at(TILE.centre());
+    let (lat, lon) = frame.to_mercator([east_m, 0.0]).to_degrees();
+    let mut last = None;
+    answer(
+        release,
+        lat,
+        lon,
+        &Options {
+            exact: true,
+            pieces: 0,
+        },
+        &mut |update| {
+            let road = update
+                .layers
+                .iter()
+                .find(|layer| layer.layer == Layer::Road)
+                .unwrap();
+            let bearing = update
+                .building
+                .and_then(|building| building.facade)
+                .map(|facade| facade.outward_bearing_deg);
+            last = Some((popup::candidates::lden_weighted(&road.energy), bearing));
+            Ok(())
+        },
+    )
+    .unwrap();
+    last.unwrap()
 }
 
 /// The road layer's per-period energies and evaluated count of the last update.
@@ -98,6 +150,24 @@ fn the_fast_answer_is_within_a_tenth_of_a_decibel_of_the_exact_one() {
         );
     }
     assert!(fast_count < exact_count, "{fast_count} of {exact_count}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_click_inside_a_building_answers_at_the_facade_facing_the_road() {
+    let root = release_root("building");
+    write_roads(&root, &[40.0]);
+    write_building(&root);
+    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    let release = Release::open(&root, "2026").unwrap();
+    let (inside, bearing) = click(&release, 0.0);
+    let bearing = bearing.expect("the click stands in the building");
+    assert!((bearing - 90.0).abs() < 1.0, "façade bearing {bearing}");
+    // Outdoors 5 m behind the building the road is screened; at the east façade it is not.
+    let (behind, none) = click(&release, -15.0);
+    assert!(none.is_none());
+    let difference = 10.0 * (inside / behind).log10();
+    assert!(difference > 10.0, "façade {difference} dB above the back");
     std::fs::remove_dir_all(&root).unwrap();
 }
 

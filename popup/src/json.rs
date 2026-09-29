@@ -1,7 +1,7 @@
 //! One streamed update as a line of JSON: totals per layer and period, the loudest contributor
 //! groups with their display records, and what the click read so far.
 
-use crate::answer::Update;
+use crate::update::Update;
 use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy};
 use serde_json::{Map, Value, json};
 
@@ -30,14 +30,22 @@ fn periods(object: &mut Map<String, Value>, energies: &[f64; PERIODS]) {
     object.insert("lden".into(), lden(energies));
 }
 
-/// The contributor's label: its name, else its reference, else its class.
+/// The contributor's label: its name, else its reference or address, else its class or type.
 fn label(display: &Value) -> String {
-    ["name", "ref", "road_class", "rail_type"]
-        .iter()
-        .filter_map(|key| display.get(*key).and_then(Value::as_str))
-        .find(|text| !text.is_empty())
-        .unwrap_or("")
-        .to_string()
+    [
+        "name",
+        "ref",
+        "address",
+        "road_class",
+        "rail_type",
+        "building_type",
+        "source_type",
+    ]
+    .iter()
+    .filter_map(|key| display.get(*key).and_then(Value::as_str))
+    .find(|text| !text.is_empty())
+    .unwrap_or("")
+    .to_string()
 }
 
 pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
@@ -132,10 +140,22 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         "partial": update.partial,
         "center": [update.lat, update.lon],
         "elevation_m": ((update.receiver_altitude_m - crate::answer::RECEIVER_HEIGHT_M) * 10.0).round() / 10.0,
-        "building": update.building.map(|(id, height_m)| json!({
-            "id": format!("{id:016x}"),
-            "height_m": (height_m * 10.0).round() / 10.0,
-        })),
+        "building": update.building.map(|click| {
+            let facade = click.facade.map(|facade| {
+                let (lat, lon) = update.frame.to_mercator(facade.position).to_degrees();
+                json!({
+                    "receiver": [(lat * 1e7).round() / 1e7, (lon * 1e7).round() / 1e7],
+                    "bearing_deg": facade.outward_bearing_deg.round(),
+                    "index": facade.index,
+                })
+            });
+            json!({
+                "id": format!("{:016x}", click.footprint_id),
+                "height_m": (click.height_m * 10.0).round() / 10.0,
+                "facade_receivers": click.receivers,
+                "facade": facade,
+            })
+        }),
         "total_lden": totals.get("lden"),
         "total": totals,
         "sources": layers,

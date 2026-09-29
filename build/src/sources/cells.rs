@@ -1,11 +1,10 @@
-//! Point and area sources as dev4 placed them (`normalize/points.rs`): a site larger than its
-//! threshold becomes the cells of a latitude-longitude lattice that catch any of 5 x 5 samples of
-//! its z30 ring, each at its samples' mean with its share of the site's area and energy and an
-//! exclusion radius sqrt(cell area / pi); a smaller site, or one without a ring, is one point at
-//! its centroid with the radius of its whole area.
+//! Point and area sources placed as dev4 placed them (`normalize/points.rs`): a site above its
+//! threshold becomes lattice cells, each with its share of the site's area and energy and the
+//! exclusion radius sqrt(cell area / pi); a smaller or ringless site is one point at its centroid.
 
 use super::Converted;
 use crate::dev4::{degrees_to_z30, z30_corner_degrees, z30_corner_mercator_m};
+use arrow_array::{Array, BinaryArray};
 use tiles::geo::{GlobalSteps, Mercator, TileId};
 use tiles::sources::Attribute;
 
@@ -13,6 +12,8 @@ use tiles::sources::Attribute;
 const M_PER_DEG_LAT: f64 = 110_540.0;
 const M_PER_DEG_LON_EQ: f64 = 111_320.0;
 const SAMPLES_PER_CELL_SIDE: usize = 5;
+/// The Web Mercator world's width in metres.
+const WORLD_WIDTH_M: f64 = 2.0 * std::f64::consts::PI * tiles::geo::WGS84_A_M;
 /// No footprint counts less than a square metre (dev4 `MIN_FOOTPRINT_AREA_M2`).
 const MINIMUM_AREA_M2: f64 = 1.0;
 /// Sources below this A-weighted sound power are dropped (dev4's audibility gate).
@@ -35,6 +36,15 @@ pub fn decode_z30_ring(bytes: &[u8]) -> Option<Z30Ring> {
     )
 }
 
+/// The ring of a nullable geometry cell; empty when null or not a ring.
+pub fn ring_cell(values: &BinaryArray, row: usize) -> Z30Ring {
+    if values.is_valid(row) {
+        decode_z30_ring(values.value(row)).unwrap_or_default()
+    } else {
+        Vec::new()
+    }
+}
+
 /// A square ring of `side_m` around `centre` (latitude, longitude), its corners snapped to z30
 /// (dev4's ship cell footprint).
 pub fn square_ring(centre: (f64, f64), side_m: f64) -> Z30Ring {
@@ -55,6 +65,25 @@ pub fn square_ring(centre: (f64, f64), side_m: f64) -> Z30Ring {
         .collect()
 }
 
+/// `value` moved by whole periods to lie within half a period of `reference`.
+fn nearest_copy(value: f64, reference: f64, period: f64) -> f64 {
+    reference + (value - reference + period / 2.0).rem_euclid(period) - period / 2.0
+}
+
+/// A ring's vertices in Web Mercator metres, continuous across the antimeridian (each x the copy
+/// nearest the first vertex's).
+fn continuous_metres(ring: &[(i32, i32)]) -> Vec<[f64; 2]> {
+    let first_x = ring
+        .first()
+        .map_or(0.0, |&(x, y)| z30_corner_mercator_m(x, y)[0]);
+    ring.iter()
+        .map(|&(x, y)| {
+            let [x, y] = z30_corner_mercator_m(x, y);
+            [nearest_copy(x, first_x, WORLD_WIDTH_M), y]
+        })
+        .collect()
+}
+
 /// A ring of three or more vertices in Web Mercator metres with its box, for containment tests.
 pub struct PreparedRing {
     points: Vec<[f64; 2]>,
@@ -66,10 +95,7 @@ impl PreparedRing {
         if ring.len() < 3 {
             return None;
         }
-        let points: Vec<[f64; 2]> = ring
-            .iter()
-            .map(|&(x, y)| z30_corner_mercator_m(x, y))
-            .collect();
+        let points = continuous_metres(ring);
         let bbox = points.iter().fold(
             [f64::MAX, f64::MAX, f64::MIN, f64::MIN],
             |[x0, y0, x1, y1], &[x, y]| [x0.min(x), y0.min(y), x1.max(x), y1.max(y)],
@@ -80,6 +106,7 @@ impl PreparedRing {
     /// Whether the corner of z30 `cell` lies inside (even-odd rule, dev4 `PreparedRing::contains`).
     pub fn contains(&self, cell: (i32, i32)) -> bool {
         let [px, py] = z30_corner_mercator_m(cell.0, cell.1);
+        let px = nearest_copy(px, self.points[0][0], WORLD_WIDTH_M);
         let [x0, y0, x1, y1] = self.bbox;
         if px < x0 || px > x1 || py < y0 || py > y1 {
             return false;
@@ -102,10 +129,7 @@ pub fn ring_area_m2(ring: &[(i32, i32)]) -> Option<f64> {
     if ring.len() < 3 {
         return None;
     }
-    let points: Vec<[f64; 2]> = ring
-        .iter()
-        .map(|&(x, y)| z30_corner_mercator_m(x, y))
-        .collect();
+    let points = continuous_metres(ring);
     let mean_y = points.iter().map(|p| p[1]).sum::<f64>() / points.len() as f64;
     let mean_lat =
         2.0 * (mean_y / tiles::geo::WGS84_A_M).exp().atan() - std::f64::consts::FRAC_PI_2;
@@ -175,9 +199,15 @@ pub fn site_points(site: &Site) -> Vec<SitePoint> {
 /// dev4 `ring_area_grid_points`: lattice cells of `cell_m` anchored on whole multiples of the
 /// step, each at the mean of its samples inside the ring; the vertex mean if none is.
 fn lattice_cells(ring: &[(i32, i32)], cell_m: f64) -> Vec<SitePoint> {
+    let first_lon = ring
+        .first()
+        .map_or(0.0, |&(x, y)| z30_corner_degrees(x, y).1);
     let vertices: Vec<(f64, f64)> = ring
         .iter()
-        .map(|&(x, y)| z30_corner_degrees(x, y))
+        .map(|&(x, y)| {
+            let (lat, lon) = z30_corner_degrees(x, y);
+            (lat, nearest_copy(lon, first_lon, 360.0))
+        })
         .collect();
     let (min_lat, max_lat, min_lon, max_lon) = vertices.iter().fold(
         (f64::MAX, f64::MIN, f64::MAX, f64::MIN),
@@ -189,12 +219,12 @@ fn lattice_cells(ring: &[(i32, i32)], cell_m: f64) -> Vec<SitePoint> {
     let samples = SAMPLES_PER_CELL_SIDE as f64;
     let sample_area_m2 = cell_m * cell_m / (samples * samples);
     let offset = |index: usize, step: f64| ((index as f64 + 0.5) / samples - 0.5) * step;
-    let first_lon = (min_lon / lon_step).floor() * lon_step + lon_step / 2.0;
+    let lattice_first_lon = (min_lon / lon_step).floor() * lon_step + lon_step / 2.0;
     let mut cells = Vec::new();
     if let Some(prepared) = PreparedRing::new(ring) {
         let mut lat = (min_lat / lat_step).floor() * lat_step + lat_step / 2.0;
         while lat <= max_lat {
-            let mut lon = first_lon;
+            let mut lon = lattice_first_lon;
             while lon <= max_lon {
                 let (mut count, mut sum_lat, mut sum_lon) = (0usize, 0.0, 0.0);
                 for sample_row in 0..SAMPLES_PER_CELL_SIDE {

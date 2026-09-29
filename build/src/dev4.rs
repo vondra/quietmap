@@ -1,7 +1,8 @@
 //! The dev4 r260924 z9 tree as a builder input until the builders read the sources themselves:
 //! square paths, Arrow tables, the z30 grid and the one-arc-second raster windows.
 
-use arrow_array::RecordBatch;
+use arrow_array::types::ArrowPrimitiveType;
+use arrow_array::{Array, Float32Array, PrimitiveArray, RecordBatch, StringArray};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tiles::geo::{GlobalSteps, MAX_LATITUDE_DEG, WGS84_A_M};
@@ -94,6 +95,35 @@ pub fn require_stamp(table: &Table, key: &str, value: &str) -> Result<(), String
         Some(found) if found == value => Ok(()),
         found => Err(format!("stamp {key}: expected {value:?}, found {found:?}")),
     }
+}
+
+/// A typed column of a batch.
+pub fn column<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> Result<&'a T, String> {
+    batch
+        .column_by_name(name)
+        .and_then(|column| column.as_any().downcast_ref::<T>())
+        .ok_or_else(|| format!("column {name} missing or of another type"))
+}
+
+/// A nullable text cell; null reads as empty.
+pub fn text(values: &StringArray, row: usize) -> &str {
+    if values.is_valid(row) {
+        values.value(row)
+    } else {
+        ""
+    }
+}
+
+/// A nullable cell of a primitive column.
+pub fn cell<T: ArrowPrimitiveType>(values: &PrimitiveArray<T>, row: usize) -> Option<T::Native> {
+    values.is_valid(row).then(|| values.value(row))
+}
+
+/// A nullable float cell when it is positive.
+pub fn positive(values: &Float32Array, row: usize) -> Option<f64> {
+    cell(values, row)
+        .filter(|value| *value > 0.0)
+        .map(f64::from)
 }
 
 /// The nearest global int16 step to the centre of a dev4 z30 cell. dev4's z30 grid counts

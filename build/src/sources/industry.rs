@@ -1,22 +1,19 @@
 //! Industrial sites, solar farms, substations and wind turbines of dev4's `industrial.arrow` as
-//! point and area sources. The facility joins run here, not at the click, over the target square
-//! and its neighbours: they hold every facility part and transformer of any row reaching the
-//! target's tiles. Silent: dead sites (`suppressed`), gas stations, rail yards (PLAN-z13 DROP),
-//! wind-farm outlines, inactive sites, transformers (their rating joins their substation), unknown
-//! types and solar generators inside their plant (the plant emits).
+//! point and area sources, the facility joins run here over the target square and its neighbours
+//! (they hold every part and transformer of a facility reaching the target's tiles).
 
 use super::cells::{
-    AUDIBILITY_FLOOR_DBA, Site, Z30Ring, decode_z30_ring, point_piece, push_site_points,
-    resolve_area_m2, ring_area_m2, site_points,
+    AUDIBILITY_FLOOR_DBA, Site, Z30Ring, point_piece, push_site_points, resolve_area_m2,
+    ring_area_m2, ring_cell, site_points,
 };
 use super::facilities::{
     FacilityJoins, Tags, facility_share, is_gas_substation, is_solar_plant, parse_tags,
     plant_output_mw, substation_power,
 };
-use super::{Converted, column, group_key};
-use crate::dev4::{Dev4, Square, Table, require_stamp, z30_corner_degrees};
+use super::{Converted, group_key};
+use crate::dev4::{Dev4, Square, Table, column, positive, require_stamp, text, z30_corner_degrees};
 use arrow_array::{
-    Array, BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array, UInt16Array,
+    BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array, UInt16Array,
 };
 use physics::emission::industrial::*;
 use physics::emission::spectrum::SoundPower;
@@ -51,23 +48,21 @@ pub struct IndustrialRow {
     pub source_id: u16,
 }
 
-/// What a row emits: a turbine at its hub, or a site over its area.
+/// What a row emits: its sound power, source height, display label, and its site's area (`None`
+/// for a turbine, one point at its hub without an exclusion radius) or turbine rating.
 #[derive(Debug, PartialEq)]
-pub enum RowEmission {
-    Turbine {
-        sound: SoundPower,
-        hub_height_m: f64,
-        rated_power_kw: Option<f64>,
-    },
-    Site {
-        sound: SoundPower,
-        height_m: f64,
-        area_m2: f64,
-        label: &'static str,
-    },
+pub struct RowEmission {
+    pub sound: SoundPower,
+    pub height_m: f64,
+    pub label: &'static str,
+    pub area_m2: Option<f64>,
+    pub rated_power_kw: Option<f64>,
 }
 
-/// A row's emission with the facility evidence of `joins`; `None` when it is silent.
+/// A row's emission with the facility evidence of `joins`; `None` when silent: a dead site
+/// (`suppressed`), a gas station, a rail yard (PLAN-z13 DROP), a wind-farm outline, an inactive
+/// site, a transformer (its rating joins its substation), an unknown type, a solar generator
+/// inside its plant (the plant emits) or an untagged solar node without a footprint.
 pub fn row_emission(row: &IndustrialRow, joins: &FacilityJoins) -> Option<RowEmission> {
     let silent_type = matches!(
         row.source_type,
@@ -80,11 +75,13 @@ pub fn row_emission(row: &IndustrialRow, joins: &FacilityJoins) -> Option<RowEmi
         let rated_power_kw = row
             .rated_power_kw
             .filter(|kw| *kw <= TURBINE_MAXIMUM_PLAUSIBLE_POWER_KW);
-        return Some(RowEmission::Turbine {
+        return Some(RowEmission {
             sound: turbine_sound_power(rated_power_kw),
-            hub_height_m: row
+            height_m: row
                 .hub_height_m
                 .map_or(DEFAULT_HUB_HEIGHT_M, |hub| hub.min(MAXIMUM_HUB_HEIGHT_M)),
+            label: "wind_turbine",
+            area_m2: None,
             rated_power_kw,
         });
     }
@@ -97,7 +94,7 @@ pub fn row_emission(row: &IndustrialRow, joins: &FacilityJoins) -> Option<RowEmi
     let solar = row.source_type == SOURCE_SOLAR_FARM || row.nace == Some(SOLAR_NACE);
     let substation = row.source_type == SOURCE_SUBSTATION;
     let nameplate_mw = plant_output_mw(&row.tags);
-    // An untagged solar node has neither output nor footprint: no default area invents one.
+    // No default area may invent a footprint for an untagged solar node.
     let footprint = row.area_m2.is_some() || ring_area_m2(&row.ring).is_some();
     if solar && nameplate_mw.is_none() && row.rated_power_kw.is_none() && !footprint {
         return None;
@@ -131,11 +128,12 @@ pub fn row_emission(row: &IndustrialRow, joins: &FacilityJoins) -> Option<RowEmi
             type_label(row.source_type),
         )
     };
-    (sound.day_dba >= AUDIBILITY_FLOOR_DBA).then_some(RowEmission::Site {
+    (sound.day_dba >= AUDIBILITY_FLOOR_DBA).then_some(RowEmission {
         sound,
         height_m,
-        area_m2,
         label,
+        area_m2: Some(area_m2),
+        rated_power_kw: None,
     })
 }
 
@@ -189,75 +187,46 @@ pub fn convert(dev4: &Dev4, target: Square, out: &mut Vec<Converted>) -> Result<
 
 fn place(row: &IndustrialRow, emission: RowEmission, out: &mut Vec<Converted>) {
     let centroid = z30_corner_degrees(row.centroid.0, row.centroid.1);
-    let nace = row.nace.map(|code| format!("{code:04}"));
-    let decibels = |level: f64| (level * 10.0).round() / 10.0;
-    let mut attribute = Attribute {
+    let points = emission.area_m2.map(|area_m2| {
+        site_points(&Site {
+            centroid,
+            ring: &row.ring,
+            area_m2,
+            single_point_up_to_m2: SINGLE_POINT_UP_TO_M2,
+            cell_m: CELL_M,
+        })
+    });
+    let display = json!([
+        row.name,
+        emission.label,
+        emission.area_m2.unwrap_or(0.0).round(),
+        row.nace.map(|code| format!("{code:04}")),
+        points.as_ref().map_or(1, Vec::len),
+        emission.area_m2.is_none().then_some(emission.height_m),
+        emission.rated_power_kw,
+        (emission.sound.day_dba * 10.0).round() / 10.0,
+        row.source_id
+    ]);
+    let attribute = Attribute {
         layer: Layer::Industry,
-        height_m: 0.0,
+        height_m: emission.height_m,
         ground_percent: GROUND_FROM_TERRAIN,
         platform_half_width_m: 0.0,
         exclusion_radius_m: 0.0,
         footprint_id: 0,
         group_key: group_key(&["industry", &row.osm_kind, &row.osm_id.to_string()]),
-        emission: [[f64::NEG_INFINITY; tiles::sources::BANDS]; tiles::sources::PERIODS],
-        display: String::new(),
+        emission: emission.sound.band_levels_db(),
+        display: display.to_string(),
     };
-    match emission {
-        RowEmission::Turbine {
-            sound,
-            hub_height_m,
-            rated_power_kw,
-        } => {
-            attribute.height_m = hub_height_m;
-            attribute.emission = sound.band_levels_db();
-            attribute.display = json!([
-                row.name,
-                "wind_turbine",
-                0,
-                nace,
-                1,
-                hub_height_m,
-                rated_power_kw,
-                decibels(sound.day_dba),
-                row.source_id
-            ])
-            .to_string();
+    match (points, emission.area_m2) {
+        (Some(points), Some(area_m2)) => push_site_points(&points, area_m2, &attribute, out),
+        _ => {
             let (tile, ends) = point_piece(centroid.0, centroid.1);
             out.push(Converted {
                 tile,
                 ends,
                 attribute,
             });
-        }
-        RowEmission::Site {
-            sound,
-            height_m,
-            area_m2,
-            label,
-        } => {
-            let site = Site {
-                centroid,
-                ring: &row.ring,
-                area_m2,
-                single_point_up_to_m2: SINGLE_POINT_UP_TO_M2,
-                cell_m: CELL_M,
-            };
-            let points = site_points(&site);
-            attribute.height_m = height_m;
-            attribute.emission = sound.band_levels_db();
-            attribute.display = json!([
-                row.name,
-                label,
-                area_m2.round(),
-                nace,
-                points.len(),
-                null,
-                null,
-                decibels(sound.day_dba),
-                row.source_id
-            ])
-            .to_string();
-            push_site_points(&points, area_m2, &attribute, out);
         }
     }
 }
@@ -271,38 +240,28 @@ fn read_rows(table: &Table, rows: &mut Vec<IndustrialRow>) -> Result<(), String>
         require_stamp(table, key, value)?;
     }
     for batch in &table.batches {
-        let (gx, gy) = (
-            column::<Int32Array>(batch, "centroid_gx")?,
-            column::<Int32Array>(batch, "centroid_gy")?,
+        let bytes = |name: &str| column::<UInt8Array>(batch, name);
+        let (types, subtypes, suppressed) = (
+            bytes("source_type")?,
+            bytes("site_subtype")?,
+            bytes("suppressed")?,
         );
-        let (kinds, ids) = (
-            column::<StringArray>(batch, "osm_kind")?,
+        let words = |name: &str| column::<UInt16Array>(batch, name);
+        let (naces, sources) = (words("nace_4digit")?, words("source_id")?);
+        let integers = |name: &str| column::<Int32Array>(batch, name);
+        let (gx, gy) = (integers("centroid_gx")?, integers("centroid_gy")?);
+        let floats = |name: &str| column::<Float32Array>(batch, name);
+        let (hubs, powers, areas) = (
+            floats("hub_height")?,
+            floats("rated_power_kw")?,
+            floats("area_m2")?,
+        );
+        let texts = |name: &str| column::<StringArray>(batch, name);
+        let (kinds, names, tags) = (texts("osm_kind")?, texts("name")?, texts("osm_tags")?);
+        let (ids, geometry) = (
             column::<Int64Array>(batch, "osm_id")?,
-        );
-        let (types, subtypes) = (
-            column::<UInt8Array>(batch, "source_type")?,
-            column::<UInt8Array>(batch, "site_subtype")?,
-        );
-        let (names, tags) = (
-            column::<StringArray>(batch, "name")?,
-            column::<StringArray>(batch, "osm_tags")?,
-        );
-        let (hubs, powers) = (
-            column::<Float32Array>(batch, "hub_height")?,
-            column::<Float32Array>(batch, "rated_power_kw")?,
-        );
-        let (geometry, areas) = (
             column::<BinaryArray>(batch, "geom")?,
-            column::<Float32Array>(batch, "area_m2")?,
         );
-        let (naces, sources) = (
-            column::<UInt16Array>(batch, "nace_4digit")?,
-            column::<UInt16Array>(batch, "source_id")?,
-        );
-        let suppressed = column::<UInt8Array>(batch, "suppressed")?;
-        let positive = |values: &Float32Array, row: usize| {
-            (values.is_valid(row) && values.value(row) > 0.0).then(|| f64::from(values.value(row)))
-        };
         for row in 0..batch.num_rows() {
             let source_type = types.value(row);
             let power = matches!(
@@ -315,18 +274,10 @@ fn read_rows(table: &Table, rows: &mut Vec<IndustrialRow>) -> Result<(), String>
                 centroid: (gx.value(row), gy.value(row)),
                 source_type,
                 site_subtype: subtypes.value(row),
-                name: if names.is_valid(row) {
-                    names.value(row).to_string()
-                } else {
-                    String::new()
-                },
+                name: text(names, row).to_string(),
                 hub_height_m: positive(hubs, row),
                 rated_power_kw: positive(powers, row),
-                ring: geometry
-                    .is_valid(row)
-                    .then(|| decode_z30_ring(geometry.value(row)))
-                    .flatten()
-                    .unwrap_or_default(),
+                ring: ring_cell(geometry, row),
                 area_m2: positive(areas, row),
                 nace: Some(naces.value(row)).filter(|code| *code > 0),
                 tags: if power {

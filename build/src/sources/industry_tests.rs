@@ -28,10 +28,12 @@ fn tagged(source_type: u8, tags: &str) -> IndustrialRow {
     }
 }
 
+fn emission(row: &IndustrialRow) -> Option<RowEmission> {
+    row_emission(row, &FacilityJoins::default())
+}
+
 fn day_dba(row: &IndustrialRow) -> Option<f64> {
-    match row_emission(row, &FacilityJoins::default())? {
-        RowEmission::Site { sound, .. } | RowEmission::Turbine { sound, .. } => Some(sound.day_dba),
-    }
+    Some(emission(row)?.sound.day_dba)
 }
 
 /// Registry solar (NACE 3599) at 24 MW is the Vienna pilot 96.8, untagged solar the area density;
@@ -53,14 +55,11 @@ fn power_classes_use_their_own_physics_and_outlines_stay_silent() {
     assert!((day_dba(&rated).unwrap() - substation_sound_power(50.0).day_dba).abs() < 1e-9);
     let auto = tagged(SOURCE_SUBSTATION, r#"{"transformer":"auto"}"#);
     assert!((day_dba(&auto).unwrap() - substation_sound_power(160.0).day_dba).abs() < 1e-9);
-    match row_emission(&rated, &FacilityJoins::default()).unwrap() {
-        RowEmission::Site {
-            sound, height_m, ..
-        } => {
-            assert_eq!((sound.night_offset_db, height_m), (0.0, 5.0));
-        }
-        other => panic!("{other:?}"),
-    }
+    let substation = emission(&rated).unwrap();
+    assert_eq!(
+        (substation.sound.night_offset_db, substation.height_m),
+        (0.0, 5.0)
+    );
     for silent in [
         SOURCE_RAIL_YARD,
         SOURCE_WIND_OUTLINE,
@@ -156,32 +155,17 @@ fn turbines_take_default_and_clamped_inputs() {
             rated_power_kw: kw,
             ..row(SOURCE_WIND_TURBINE)
         };
-        row_emission(&row, &FacilityJoins::default()).unwrap()
+        emission(&row).unwrap()
     };
-    let RowEmission::Turbine {
-        hub_height_m,
-        sound,
-        rated_power_kw,
-    } = turbine(None, Some(20_000.0))
-    else {
-        panic!("a turbine");
-    };
-    assert_eq!((hub_height_m, rated_power_kw), (105.0, None));
-    assert!((sound.day_dba - (105.0 - 2.14)).abs() < 1e-9);
-    assert!(matches!(
-        turbine(Some(250.0), None),
-        RowEmission::Turbine {
-            hub_height_m: 175.0,
-            ..
-        }
-    ));
-    assert!(matches!(
-        turbine(Some(120.0), None),
-        RowEmission::Turbine {
-            hub_height_m: 120.0,
-            ..
-        }
-    ));
+    let unknown = turbine(None, Some(20_000.0));
+    assert_eq!(
+        (unknown.height_m, unknown.rated_power_kw, unknown.area_m2),
+        (105.0, None, None)
+    );
+    assert!((unknown.sound.day_dba - (105.0 - 2.14)).abs() < 1e-9);
+    assert_eq!(turbine(Some(250.0), None).height_m, 175.0);
+    assert_eq!(turbine(Some(120.0), Some(3_000.0)).height_m, 120.0);
+    assert_eq!(turbine(None, Some(3_000.0)).rated_power_kw, Some(3_000.0));
 }
 
 #[test]
@@ -198,11 +182,12 @@ fn profiles_resolve_nace_then_subtype_then_type_with_their_heights() {
     );
     assert_eq!(
         row_emission(&steel, &FacilityJoins::default()),
-        Some(RowEmission::Site {
+        Some(RowEmission {
             sound: expected,
             height_m: 10.0,
-            area_m2: 3e6,
             label: "industrial_area",
+            area_m2: Some(3e6),
+            rated_power_kw: None,
         })
     );
     let warehouse = IndustrialRow {
@@ -214,15 +199,8 @@ fn profiles_resolve_nace_then_subtype_then_type_with_their_heights() {
         (day_dba(&warehouse).unwrap() - 86.0 - a_weighted_sum(&nace_profile(5210).unwrap())).abs()
             < 1e-9
     );
-    let quarry = row_emission(&row(SOURCE_QUARRY), &FacilityJoins::default()).unwrap();
-    assert!(matches!(
-        quarry,
-        RowEmission::Site {
-            height_m: 8.0,
-            label: "quarry",
-            ..
-        }
-    ));
+    let quarry = emission(&row(SOURCE_QUARRY)).unwrap();
+    assert_eq!((quarry.height_m, quarry.label), (8.0, "quarry"));
 }
 
 fn a_weighted_sum(profile: &IndustrialProfile) -> f64 {

@@ -1,20 +1,22 @@
 //! The ring loop: read the clicked tile and ring 1 whole, answer, then ring after ring until the
-//! reach is covered. Every ring's candidates join their layer's selection, which evaluates from the
-//! loudest bound until the bounds of everything left out stay below (10^(0.1/10) - 1) times the
-//! energy evaluated, per period and across all rings.
+//! reach is covered. Every ring's candidates join their layer's selection ([`crate::selection`]).
+//! A click inside a building is answered at its loudest façade ([`crate::building`]).
 
+use crate::building::{BuildingClick, loudest_facade};
 use crate::candidates::{
-    Candidate, DisplayRef, GROUND_REACH_M, SourceAttribute, TileCandidates, collect, lden_weighted,
+    Candidate, DisplayRef, GROUND_REACH_M, SourceAttribute, TileCandidates, collect,
 };
-use crate::evaluate::{Receiver, Scratch, received_energy, trace};
+use crate::evaluate::Receiver;
+use crate::listing::list_pieces;
 use crate::obstacles::Scene;
 use crate::release::{Release, RingFiles};
 use crate::scene::Ground;
-use physics::bands::{BANDS, PERIODS, energy};
+use crate::selection::{LayerSelection, select};
+use crate::update::{Statistics, Update, empty_answer, layer_answers, loudest_contributors};
 use physics::bound::receiver_gain;
+use physics::weather::FavourableProbability;
 use rayon::prelude::*;
 use std::cell::OnceCell;
-use std::collections::HashMap;
 use tiles::geo::{LocalFrame, Mercator, TileId};
 use tiles::sources::{Layer, Sources, display_fields};
 use tiles::terrain::Terrain;
@@ -22,12 +24,6 @@ use tiles::{Kind, obstacles::Obstacles};
 
 /// Receiver height above the ground (END assessment height).
 pub const RECEIVER_HEIGHT_M: f64 = 4.0;
-/// The omitted energy may reach this fraction of the evaluated energy: 0.1 dB.
-pub const OMITTED_ENERGY_FRACTION: f64 = 0.023_292_992_280_754_13;
-/// Contributors listed per answer.
-pub const CONTRIBUTORS_SHOWN: usize = 30;
-/// The fewest candidates one round evaluates per layer, so the pool stays busy.
-const MINIMUM_BATCH: usize = 16;
 
 pub struct Options {
     /// Evaluate every candidate (the benchmark reference); the stop rule is off.
@@ -37,149 +33,19 @@ pub struct Options {
     pub pieces: usize,
 }
 
-/// One evaluated piece, kept only when `Options::pieces` asks for them.
-#[derive(Clone)]
-pub struct EvaluatedPiece {
-    pub layer: Layer,
-    pub ends_m: [[f64; 2]; 2],
-    pub distance_m: f64,
-    pub energy: [f64; PERIODS],
-    /// A-weighted emission per period (per metre for lines), linear.
-    pub emission: [f64; PERIODS],
-    pub group_key: u64,
-    /// Buildings and walls crossed by the ray from the piece's closest point: distance from the
-    /// receiver (m) and height (m), filled when listed.
-    pub crossings: Vec<(f64, f64)>,
-    /// Index into the click's attribute list.
-    pub attribute: usize,
-    /// The ray from the closest point, filled when listed: slant (m), favourable probability
-    /// per period, and per state (homogeneous, favourable) the boundary, foliage and air
-    /// attenuation as A-weighted over the day emission spectrum (dB), and the path difference.
-    pub trace: Option<PieceTrace>,
+/// Where the click is answered: the click itself or a building's façade.
+#[derive(Clone, Copy)]
+struct Station {
+    position: [f64; 2],
+    altitude_m: f64,
+    weather: FavourableProbability,
+    reflection_db: f64,
 }
 
-#[derive(Clone)]
-pub struct PieceTrace {
-    pub slant_m: f64,
-    pub favourable_probability: [f64; PERIODS],
-    pub boundary_db: [f64; 2],
-    pub without_ground_db: [f64; 2],
-    pub foliage_db: [f64; 2],
-    pub air_db: f64,
-    pub path_difference_m: [f64; 2],
-}
-
-/// The point of the segment `a`-`b` closest to the origin.
-fn closest_point(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let length_sq = dx * dx + dy * dy;
-    let t = if length_sq > 0.0 {
-        (-(a[0] * dx + a[1] * dy) / length_sq).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    [a[0] + t * dx, a[1] + t * dy]
-}
-
-/// A layer's state after a ring.
-pub struct LayerAnswer {
-    pub layer: Layer,
-    pub energy: [f64; PERIODS],
-    /// Sum of the bounds of the candidates left out.
-    pub omitted_bound: [f64; PERIODS],
-    pub evaluated: usize,
-    pub candidates: usize,
-}
-
-/// One contributor group (sources sharing a display group key).
-#[derive(Clone)]
-pub struct Contributor {
-    pub group_key: u64,
-    pub layer: Layer,
-    pub energy: [f64; PERIODS],
-    pub distance_m: f64,
-    pub display: DisplayRef,
-}
-
-pub struct Statistics {
-    pub rings_read: u32,
-    pub files: usize,
-    pub bytes: u64,
-    pub read_seconds: f64,
-    /// Parsing tiles and bounding candidates.
-    pub candidate_seconds: f64,
-    /// The full physics of the selected candidates.
-    pub evaluate_seconds: f64,
-    pub elapsed_seconds: f64,
-}
-
-/// One streamed update.
-pub struct Update<'u> {
-    pub partial: bool,
-    pub lat: f64,
-    pub lon: f64,
-    pub frame: LocalFrame,
-    pub receiver_altitude_m: f64,
-    /// The enclosed building the click stands in (footprint id, height), if any.
-    pub building: Option<(u64, f64)>,
-    pub layers: Vec<LayerAnswer>,
-    pub contributors: Vec<Contributor>,
-    /// The loudest evaluated pieces per layer (final update, when asked for).
-    pub pieces: Vec<EvaluatedPiece>,
-    pub statistics: Statistics,
-    /// The display JSON of a contributor.
-    pub display_json: &'u dyn Fn(DisplayRef, Layer) -> Result<String, String>,
-}
-
-struct LayerSelection {
-    layer: Layer,
-    pending: Vec<Candidate>,
-    energy: [f64; PERIODS],
-    evaluated: usize,
-    contributors: HashMap<u64, Contributor>,
-    pieces: Vec<EvaluatedPiece>,
-}
-
-impl LayerSelection {
-    fn pending_bound(&self) -> [f64; PERIODS] {
-        let mut sum = [0.0; PERIODS];
-        for candidate in &self.pending {
-            for (total, bound) in sum.iter_mut().zip(candidate.bound) {
-                *total += bound;
-            }
-        }
-        sum
-    }
-
-    /// The fewest loudest candidates whose evaluation could satisfy the rule: as if each
-    /// delivered its whole bound, the most any can.
-    fn fewest_to_satisfy(&self) -> usize {
-        let mut remaining = self.pending_bound();
-        let mut evaluated = self.energy;
-        for (taken, candidate) in self.pending.iter().rev().enumerate() {
-            if (0..PERIODS).all(|p| remaining[p] <= OMITTED_ENERGY_FRACTION * evaluated[p]) {
-                return taken;
-            }
-            for period in 0..PERIODS {
-                remaining[period] -= candidate.bound[period];
-                evaluated[period] += candidate.bound[period];
-            }
-        }
-        self.pending.len()
-    }
-
-    fn satisfied(&self, exact: bool) -> bool {
-        if exact {
-            return self.pending.is_empty();
-        }
-        let omitted = self.pending_bound();
-        (0..PERIODS).all(|period| omitted[period] <= OMITTED_ENERGY_FRACTION * self.energy[period])
-    }
-}
-
-/// Distance from the receiver to the edge of the block of rings up to `ring` (metres).
-fn covered_radius_m(frame: &LocalFrame, centre: TileId, ring: u32) -> f64 {
-    let (k, origin) = (f64::from(ring), frame.origin);
+/// Distance from `receiver` (click metres) to the edge of the block of rings up to `ring`.
+fn covered_radius_m(frame: &LocalFrame, centre: TileId, ring: u32, receiver: [f64; 2]) -> f64 {
+    let k = f64::from(ring);
+    let origin = frame.to_mercator(receiver);
     let west = (origin.x - (f64::from(centre.x) - k)) * frame.east_m_per_unit;
     let east = (f64::from(centre.x) + k + 1.0 - origin.x) * frame.east_m_per_unit;
     let north = (origin.y - (f64::from(centre.y) - k)).max(0.0) * frame.north_m_per_unit;
@@ -197,6 +63,13 @@ fn covered_radius_m(frame: &LocalFrame, centre: TileId, ring: u32) -> f64 {
     west.min(east).min(north).min(south)
 }
 
+/// The rings to read for a receiver at `receiver`: until the reach is covered.
+fn rings_needed(frame: &LocalFrame, centre: TileId, receiver: [f64; 2]) -> u32 {
+    (1..)
+        .find(|&ring| covered_radius_m(frame, centre, ring, receiver) >= GROUND_REACH_M)
+        .unwrap_or(1)
+}
+
 /// Answers a click, calling `emit` after the first read (tile + ring 1) and after every further ring.
 pub fn answer(
     release: &Release,
@@ -209,30 +82,26 @@ pub fn answer(
     let origin = Mercator::from_degrees(lat, lon);
     let frame = LocalFrame::at(origin);
     let centre = TileId::containing(origin);
-    let max_ring = (1..)
-        .find(|&ring| covered_radius_m(&frame, centre, ring) >= GROUND_REACH_M)
-        .unwrap_or(1);
-    let rings: Vec<OnceCell<RingFiles>> = (0..=max_ring).map(|_| OnceCell::new()).collect();
+    // A façade receiver stands at most a ring further out than the click needs.
+    let most_rings = rings_needed(&frame, centre, [0.0, 0.0]) + 1;
+    let mut max_ring = most_rings - 1;
+    let rings: Vec<OnceCell<RingFiles>> = (0..=most_rings).map(|_| OnceCell::new()).collect();
     let kinds = vec![Kind::Terrain, Kind::Obstacles, Kind::Sources];
-    let mut ground = Ground::new(frame, centre, max_ring);
+    let mut ground = Ground::new(frame, centre, most_rings);
     let mut obstacles = Scene::new(frame);
     let mut selections: Vec<LayerSelection> = Layer::ALL
         .iter()
-        .map(|&layer| LayerSelection {
-            layer,
-            pending: Vec::new(),
-            energy: [0.0; PERIODS],
-            evaluated: 0,
-            contributors: HashMap::new(),
-            pieces: Vec::new(),
-        })
+        .map(|&layer| LayerSelection::new(layer))
         .collect();
     let (mut files, mut bytes, mut read_seconds) = (0usize, 0u64, 0.0f64);
     let (mut candidate_seconds, mut evaluate_seconds) = (0.0f64, 0.0f64);
-    let mut receiver = None;
-    let mut building = None;
+    let mut station: Option<Station> = None;
+    let mut building: Option<BuildingClick> = None;
     let mut attributes: Vec<SourceAttribute> = Vec::new();
-    for ring in 1..=max_ring {
+    let weather = release.weather.at(lat, lon);
+    let mut ring = 0;
+    while ring < max_ring {
+        ring += 1;
         let tiles = if ring == 1 {
             [centre.ring(0), centre.ring(1)].concat()
         } else {
@@ -268,42 +137,140 @@ pub fn answer(
                 ));
             }
         }
-        if receiver.is_none() {
-            let altitude_m = ground.at([0.0, 0.0])?.height_m + RECEIVER_HEIGHT_M;
-            let reflection_db = obstacles.reflection_db([0.0, 0.0], None)?;
-            receiver = Some((altitude_m, release.weather.at(lat, lon), reflection_db));
-            building = obstacles
-                .enclosing_building([0.0, 0.0])?
-                .map(|footprint| (footprint.id, footprint.height_m));
+        let enclosing = if ring == 1 {
+            obstacles.enclosing_building([0.0, 0.0])?
+        } else {
+            None
+        };
+        if ring == 1 && enclosing.is_none() {
+            station = Some(Station {
+                position: [0.0, 0.0],
+                altitude_m: ground.at([0.0, 0.0])?.height_m + RECEIVER_HEIGHT_M,
+                weather,
+                reflection_db: obstacles.reflection_db([0.0, 0.0], None)?,
+            });
         }
-        let (altitude_m, weather, reflection_db) = receiver.expect("set after the first read");
-        let gain = receiver_gain(weather.maximum(), reflection_db);
+        let facade_receivers = match &enclosing {
+            Some(footprint) => obstacles.facade_receivers(footprint)?,
+            None => Vec::new(),
+        };
+        if let Some(footprint) = &enclosing
+            && facade_receivers.is_empty()
+        {
+            // No exposed façade: the building is not assessed.
+            let click = BuildingClick {
+                footprint_id: footprint.id,
+                height_m: footprint.height_m,
+                receivers: 0,
+                facade: None,
+            };
+            return empty_answer(
+                lat,
+                lon,
+                frame,
+                &ground,
+                click,
+                &selections,
+                (files, bytes, read_seconds, started),
+                emit,
+            );
+        }
+        // Before a building's façade is chosen the candidates are collected around the click,
+        // wide enough for any of its façades, and bounded again at the chosen one.
+        let (collect_at, reach, reflection_db) = match station {
+            Some(station) => (station.position, GROUND_REACH_M, station.reflection_db),
+            None => (
+                [0.0, 0.0],
+                GROUND_REACH_M
+                    + facade_receivers
+                        .iter()
+                        .map(|facade| facade.position[0].hypot(facade.position[1]))
+                        .fold(0.0, f64::max),
+                0.0,
+            ),
+        };
+        let collect_gain = receiver_gain(weather.maximum(), reflection_db);
         let collected: Vec<Result<TileCandidates, String>> = ring_sources
             .par_iter()
             .map(|(tile_index, tile, sources)| {
-                collect(sources, *tile, (ring as usize, *tile_index), &ground, &gain)
+                collect(
+                    sources,
+                    *tile,
+                    (ring as usize, *tile_index),
+                    &ground,
+                    collect_at,
+                    reach,
+                    &collect_gain,
+                )
             })
             .collect();
+        let mut ring_candidates: Vec<Candidate> = Vec::new();
         for result in collected {
             let (tile_attributes, candidates) = result?;
             let first = attributes.len();
             attributes.extend(tile_attributes);
-            for mut candidate in candidates {
+            ring_candidates.extend(candidates.into_iter().map(|mut candidate| {
                 candidate.attribute += first;
-                selections[candidate.layer as usize].pending.push(candidate);
-            }
+                candidate
+            }));
         }
         candidate_seconds += candidates_started.elapsed().as_secs_f64();
         let evaluate_started = std::time::Instant::now();
+        if let Some(footprint) = &enclosing {
+            let everything: Vec<&Candidate> = ring_candidates.iter().collect();
+            let facade = loudest_facade(
+                footprint,
+                &facade_receivers,
+                &everything,
+                &attributes,
+                &ground,
+                &obstacles,
+                weather,
+            )?;
+            building = Some(BuildingClick {
+                footprint_id: footprint.id,
+                height_m: footprint.height_m,
+                receivers: facade_receivers.len(),
+                facade: Some(facade),
+            });
+            let chosen = Station {
+                position: facade.position,
+                altitude_m: facade.altitude_m,
+                weather,
+                reflection_db: facade.reflection_db,
+            };
+            let gain = receiver_gain(weather.maximum(), chosen.reflection_db);
+            ring_candidates.retain_mut(|candidate| {
+                candidate.bound_at(chosen.position, &attributes[candidate.attribute], &gain)
+            });
+            max_ring = rings_needed(&frame, centre, chosen.position).min(most_rings);
+            station = Some(chosen);
+        }
+        let station = station.expect("chosen after the first read");
+        for candidate in ring_candidates {
+            selections[candidate.layer as usize].pending.push(candidate);
+        }
         let evaluation = Receiver {
             ground: &ground,
             obstacles: &obstacles,
-            altitude_m,
-            weather,
-            reflection_db,
+            position: station.position,
+            altitude_m: station.altitude_m,
+            weather: station.weather,
+            reflection_db: station.reflection_db,
         };
-        select(&mut selections, &evaluation, &attributes, options)?;
+        select(
+            &mut selections,
+            &evaluation,
+            &attributes,
+            options.exact,
+            options.pieces > 0,
+        )?;
         evaluate_seconds += evaluate_started.elapsed().as_secs_f64();
+        let pieces = if ring == max_ring && options.pieces > 0 {
+            list_pieces(&mut selections, options.pieces, &evaluation, &attributes)?
+        } else {
+            Vec::new()
+        };
         let display_json = |display: DisplayRef, layer: Layer| -> Result<String, String> {
             let read = rings[display.ring]
                 .get()
@@ -325,79 +292,15 @@ pub fn answer(
                 .collect();
             Ok(serde_json::Value::Object(object).to_string())
         };
-        let mut contributors: Vec<Contributor> = selections
-            .iter()
-            .flat_map(|selection| selection.contributors.values().cloned())
-            .collect();
-        contributors.sort_by(|a, b| {
-            lden_weighted(&b.energy)
-                .total_cmp(&lden_weighted(&a.energy))
-                .then(a.group_key.cmp(&b.group_key))
-        });
-        contributors.truncate(CONTRIBUTORS_SHOWN);
-        let mut pieces = Vec::new();
-        if ring == max_ring {
-            for selection in &mut selections {
-                selection
-                    .pieces
-                    .sort_by(|a, b| lden_weighted(&b.energy).total_cmp(&lden_weighted(&a.energy)));
-                for piece in selection.pieces.iter().take(options.pieces) {
-                    let mut piece = piece.clone();
-                    let from = closest_point(piece.ends_m[0], piece.ends_m[1]);
-                    let mut crossings = Vec::new();
-                    obstacles.crossings(from, [0.0, 0.0], &mut crossings)?;
-                    let length = from[0].hypot(from[1]);
-                    piece.crossings = crossings
-                        .iter()
-                        .map(|crossing| ((1.0 - crossing.t) * length, crossing.height_m))
-                        .collect();
-                    let source = &attributes[piece.attribute];
-                    let terms = trace(&evaluation, from, source, &mut Scratch::default())?;
-                    let spectrum = source.energy[0];
-                    let weighted = |attenuation: &[f64; BANDS]| {
-                        let total: f64 = spectrum.iter().sum();
-                        let passed: f64 = (0..BANDS)
-                            .map(|band| spectrum[band] * energy(-attenuation[band]))
-                            .sum();
-                        -10.0 * (passed / total).log10()
-                    };
-                    let azimuth = (-from[1]).atan2(-from[0]);
-                    piece.trace = Some(PieceTrace {
-                        slant_m: terms.transfer.slant_m,
-                        favourable_probability: std::array::from_fn(|period| {
-                            evaluation.weather.at(period, azimuth)
-                        }),
-                        boundary_db: [0, 1]
-                            .map(|state| weighted(&terms.boundaries[state].attenuation_db)),
-                        without_ground_db: [0, 1]
-                            .map(|state| weighted(&terms.boundaries[state].without_ground_db)),
-                        foliage_db: [0, 1].map(|state| weighted(&terms.foliage_db[state])),
-                        air_db: weighted(&terms.air_db),
-                        path_difference_m: [0, 1]
-                            .map(|state| terms.boundaries[state].path_difference_m),
-                    });
-                    pieces.push(piece);
-                }
-            }
-        }
         let update = Update {
             partial: ring < max_ring,
             lat,
             lon,
             frame,
-            receiver_altitude_m: altitude_m,
+            receiver_altitude_m: station.altitude_m,
             building,
-            layers: selections
-                .iter()
-                .map(|selection| LayerAnswer {
-                    layer: selection.layer,
-                    energy: selection.energy,
-                    omitted_bound: selection.pending_bound(),
-                    evaluated: selection.evaluated,
-                    candidates: selection.evaluated + selection.pending.len(),
-                })
-                .collect(),
-            contributors,
+            layers: layer_answers(&selections),
+            contributors: loudest_contributors(&selections),
             pieces,
             statistics: Statistics {
                 rings_read: ring,
@@ -413,91 +316,4 @@ pub fn answer(
         emit(&update)?;
     }
     Ok(())
-}
-
-/// Evaluates candidates from the loudest bound, in parallel batches over all unsatisfied layers,
-/// until every layer's omitted-energy account allows it to stop.
-fn select(
-    selections: &mut [LayerSelection],
-    receiver: &Receiver,
-    attributes: &[SourceAttribute],
-    options: &Options,
-) -> Result<(), String> {
-    let exact = options.exact;
-    for selection in selections.iter_mut() {
-        selection
-            .pending
-            .sort_by(|a, b| a.order.total_cmp(&b.order));
-    }
-    loop {
-        let mut work: Vec<(usize, Candidate)> = Vec::new();
-        for (layer, selection) in selections.iter_mut().enumerate() {
-            if !selection.satisfied(exact) {
-                let take = if exact {
-                    selection.pending.len()
-                } else {
-                    selection.fewest_to_satisfy().max(MINIMUM_BATCH)
-                };
-                let start = selection.pending.len() - take.min(selection.pending.len());
-                work.extend(
-                    selection
-                        .pending
-                        .drain(start..)
-                        .map(|candidate| (layer, candidate)),
-                );
-            }
-        }
-        if work.is_empty() {
-            return Ok(());
-        }
-        let energies: Vec<Result<[f64; PERIODS], String>> = work
-            .par_iter()
-            .map_init(Scratch::default, |scratch, (_, candidate)| {
-                received_energy(
-                    receiver,
-                    candidate,
-                    &attributes[candidate.attribute],
-                    scratch,
-                )
-            })
-            .collect();
-        for ((layer, candidate), energy) in work.into_iter().zip(energies) {
-            let energy = energy?;
-            let selection = &mut selections[layer];
-            selection.evaluated += 1;
-            for (total, value) in selection.energy.iter_mut().zip(energy) {
-                *total += value;
-            }
-            let contributor = selection
-                .contributors
-                .entry(candidate.group_key)
-                .or_insert_with(|| Contributor {
-                    group_key: candidate.group_key,
-                    layer: candidate.layer,
-                    energy: [0.0; PERIODS],
-                    distance_m: candidate.distance_m,
-                    display: candidate.display,
-                });
-            for (total, value) in contributor.energy.iter_mut().zip(energy) {
-                *total += value;
-            }
-            contributor.distance_m = contributor.distance_m.min(candidate.distance_m);
-            if options.pieces > 0 {
-                let emission = attributes[candidate.attribute]
-                    .energy
-                    .map(|bands| bands.iter().sum());
-                selection.pieces.push(EvaluatedPiece {
-                    layer: candidate.layer,
-                    ends_m: candidate.ends_m,
-                    distance_m: candidate.distance_m,
-                    energy,
-                    emission,
-                    group_key: candidate.group_key,
-                    crossings: Vec::new(),
-                    attribute: candidate.attribute,
-                    trace: None,
-                });
-            }
-        }
-    }
 }

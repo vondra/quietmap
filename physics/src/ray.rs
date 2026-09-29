@@ -92,6 +92,7 @@ pub fn ray_transfer(
 /// the foliage and the air absorption behind it, for traces and comparisons.
 pub struct RayTerms {
     pub transfer: Transfer,
+    pub favourable_probability: [f64; PERIODS],
     pub boundaries: [StateBoundary; 2],
     pub foliage_db: [[f64; BANDS]; 2],
     pub air_db: [f64; BANDS],
@@ -146,6 +147,7 @@ pub fn ray_terms(
                 })
             }),
         },
+        favourable_probability,
         boundaries,
         foliage_db: foliage,
         air_db,
