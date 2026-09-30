@@ -2,6 +2,8 @@
 //! reach is covered. Every ring's candidates join their layer's selection ([`crate::selection`]).
 //! A click inside a building is answered at its loudest façade ([`crate::building`]).
 
+use crate::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver, tile_energy};
+use crate::aircraft::horizons::Horizons;
 use crate::building::{BuildingClick, loudest_facade};
 use crate::candidates::{
     Attributes, Candidate, DisplayRef, GROUND_REACH_M, TileCandidates, collect,
@@ -17,6 +19,7 @@ use physics::bound::receiver_gain;
 use physics::weather::FavourableProbability;
 use rayon::prelude::*;
 use std::cell::OnceCell;
+use tiles::aircraft::Aircraft;
 use tiles::geo::{LocalFrame, Mercator, TileId};
 use tiles::sources::{Layer, Sources, display_fields};
 use tiles::terrain::Terrain;
@@ -63,10 +66,10 @@ fn covered_radius_m(frame: &LocalFrame, centre: TileId, ring: u32, receiver: [f6
     west.min(east).min(north).min(south)
 }
 
-/// The rings to read for a receiver at `receiver`: until the reach is covered.
-fn rings_needed(frame: &LocalFrame, centre: TileId, receiver: [f64; 2]) -> u32 {
+/// The rings to read for a receiver at `receiver`: until `reach_m` is covered.
+fn rings_needed(frame: &LocalFrame, centre: TileId, receiver: [f64; 2], reach_m: f64) -> u32 {
     (1..)
-        .find(|&ring| covered_radius_m(frame, centre, ring, receiver) >= GROUND_REACH_M)
+        .find(|&ring| covered_radius_m(frame, centre, ring, receiver) >= reach_m)
         .unwrap_or(1)
 }
 
@@ -82,12 +85,17 @@ pub fn answer(
     let origin = Mercator::from_degrees(lat, lon);
     let frame = LocalFrame::at(origin);
     let centre = TileId::containing(origin);
-    // A façade receiver stands at most a ring further out than the click needs.
-    let most_rings = rings_needed(&frame, centre, [0.0, 0.0]) + 1;
-    let mut max_ring = most_rings - 1;
-    let rings: Vec<OnceCell<RingFiles>> = (0..=most_rings).map(|_| OnceCell::new()).collect();
-    let kinds = vec![Kind::Terrain, Kind::Obstacles, Kind::Sources];
-    let mut ground = Ground::new(frame, centre, most_rings);
+    // A façade receiver stands at most a ring further out than the click needs. Ground kinds are
+    // read to the ground reach, aircraft to theirs.
+    let most_ground_rings = rings_needed(&frame, centre, [0.0, 0.0], GROUND_REACH_M) + 1;
+    let most_aircraft_rings = rings_needed(&frame, centre, [0.0, 0.0], AIRCRAFT_REACH_M) + 1;
+    let mut ground_rings = most_ground_rings - 1;
+    let mut aircraft_rings = most_aircraft_rings - 1;
+    let rings: Vec<OnceCell<RingFiles>> = (0..=most_ground_rings.max(most_aircraft_rings))
+        .map(|_| OnceCell::new())
+        .collect();
+    let mut ground = Ground::new(frame, centre, most_ground_rings);
+    let mut horizons: Option<Horizons> = None;
     let mut obstacles = Scene::new(frame);
     let mut selections: Vec<LayerSelection> = Layer::ALL
         .iter()
@@ -100,15 +108,23 @@ pub fn answer(
     let mut attributes = Attributes::default();
     let weather = release.weather.at(lat, lon);
     let mut ring = 0;
-    while ring < max_ring {
+    while ring < ground_rings.max(aircraft_rings) {
         ring += 1;
         let tiles = if ring == 1 {
             [centre.ring(0), centre.ring(1)].concat()
         } else {
             centre.ring(ring)
         };
+        let reads_ground = ring <= ground_rings;
+        let mut kinds = Vec::new();
+        if reads_ground {
+            kinds.extend([Kind::Terrain, Kind::Obstacles, Kind::Sources]);
+        }
+        if ring <= aircraft_rings {
+            kinds.push(Kind::Aircraft);
+        }
         let cell = &rings[ring as usize];
-        let _ = cell.set(RingFiles::read(release, tiles, kinds.clone())?);
+        let _ = cell.set(RingFiles::read(release, tiles, kinds)?);
         let read = cell.get().expect("the ring was just read");
         (files, bytes, read_seconds) = (
             files + read.file_count,
@@ -120,6 +136,7 @@ pub fn answer(
             Option<Terrain<'a>>,
             Option<Obstacles<'a>>,
             Option<Sources<'a>>,
+            Option<Aircraft<'a>>,
         );
         let parsed: Vec<Result<Parsed, String>> = (0..read.tiles.len())
             .into_par_iter()
@@ -136,21 +153,32 @@ pub fn answer(
                     .file(index, Kind::Sources)
                     .map(Sources::parse)
                     .transpose();
+                let aircraft = read
+                    .file(index, Kind::Aircraft)
+                    .map(Aircraft::parse)
+                    .transpose();
                 Ok((
                     terrain.map_err(|e| e.to_string())?,
                     obstacles.map_err(|e| e.to_string())?,
                     sources.map_err(|e| e.to_string())?,
+                    aircraft.map_err(|e| e.to_string())?,
                 ))
             })
             .collect();
         let mut ring_sources = Vec::new();
         let mut ring_obstacles = Vec::new();
+        let mut ring_aircraft = Vec::new();
         for (index, (&tile, parsed)) in read.tiles.iter().zip(parsed).enumerate() {
-            let (terrain, tile_obstacles, sources) = parsed?;
-            ground.insert(tile, terrain);
-            ring_obstacles.push((tile, tile_obstacles));
+            let (terrain, tile_obstacles, sources, aircraft) = parsed?;
+            if reads_ground {
+                ground.insert(tile, terrain);
+                ring_obstacles.push((tile, tile_obstacles));
+            }
             if let Some(sources) = sources {
                 ring_sources.push((index, tile, sources));
+            }
+            if let Some(aircraft) = aircraft {
+                ring_aircraft.push((tile, aircraft));
             }
         }
         obstacles.insert_all(ring_obstacles);
@@ -263,7 +291,10 @@ pub fn answer(
                     candidate.bound_at(chosen.position, &attributes[candidate.attribute], &gain)
                 });
             }
-            max_ring = rings_needed(&frame, centre, chosen.position).min(most_rings);
+            ground_rings = rings_needed(&frame, centre, chosen.position, GROUND_REACH_M)
+                .min(most_ground_rings);
+            aircraft_rings = rings_needed(&frame, centre, chosen.position, AIRCRAFT_REACH_M)
+                .min(most_aircraft_rings);
             station = Some(chosen);
         }
         let station = station.expect("chosen after the first read");
@@ -282,8 +313,30 @@ pub fn answer(
             options.exact,
             options.pieces > 0,
         )?;
+        if reads_ground {
+            horizons = Some(Horizons::build(
+                &ground,
+                &obstacles,
+                station.position,
+                station.altitude_m,
+            )?);
+        }
+        let receiver = AircraftReceiver {
+            position: station.position,
+            altitude_m: station.altitude_m,
+        };
+        let horizons = horizons.as_ref().expect("built at the first read");
+        let aircraft = &mut selections[Layer::Aircraft as usize];
+        for (tile, boxes) in &ring_aircraft {
+            let (energy, count) = tile_energy(boxes, *tile, &frame, receiver, horizons);
+            for (total, value) in aircraft.energy.iter_mut().zip(energy) {
+                *total += value;
+            }
+            aircraft.evaluated += count;
+        }
         evaluate_seconds += evaluate_started.elapsed().as_secs_f64();
-        let pieces = if ring == max_ring && options.pieces > 0 {
+        let last_ring = ring == ground_rings.max(aircraft_rings);
+        let pieces = if last_ring && options.pieces > 0 {
             list_pieces(&mut selections, options.pieces, &evaluation, &attributes)?
         } else {
             Vec::new()
@@ -310,7 +363,7 @@ pub fn answer(
             Ok(serde_json::Value::Object(object).to_string())
         };
         let update = Update {
-            partial: ring < max_ring,
+            partial: !last_ring,
             lat,
             lon,
             frame,
