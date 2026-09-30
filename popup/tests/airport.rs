@@ -67,7 +67,7 @@ fn departure_box() -> AircraftBox {
         flights: 1,
         energy_db: values.levels_db,
         tail_energy_db: values.tail_levels_db,
-        scaled_distance_m: values.scaled_distance_m,
+        lg_scaled_distance: values.scaled_distance_m.map(f64::log10),
         installation_shares: values.installation_shares,
         first_piece: 0,
         piece_count: 0,
