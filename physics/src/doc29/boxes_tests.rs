@@ -58,6 +58,7 @@ fn box_day_sel(values: &BoxValues) -> Option<f64> {
         gradient: values.gradient,
         piece_length_m: values.piece_length_m,
         levels_db: &values.levels_db,
+        tail_levels_db: &values.tail_levels_db,
         scaled_distance_m: &values.scaled_distance_m,
         installation_shares: values.installation_shares,
         ground_m: -4.0,
@@ -166,21 +167,26 @@ fn a_box_of_one_flow_reads_as_the_sum_of_its_pieces() {
     assert!(behind.abs() < 0.6, "behind: {behind:+.3} dB");
     let values = box_of(&pieces);
     assert!(
-        values.installation_shares[0] > 0.99,
+        values
+            .installation_shares
+            .iter()
+            .all(|shares| shares[0] > 0.99),
         "{:?}",
         values.installation_shares
     );
 }
 
-/// Mixed flows share one average aircraft: abeam within 0.2 dB, but on the extension one mean
-/// gradient cannot stand for climbs and descents extended kilometres (3 dB measured here); the
-/// benchmark decides whether boxes need direction or gradient bins.
+/// Mixed flows share one average aircraft: abeam within 0.3 dB (12 km off, between 25,000 ft
+/// and the tail anchor, the mix's absorption is interpolated linearly and overstates it by a
+/// quarter decibel), but on the extension one mean gradient cannot stand for climbs and descents
+/// extended kilometres (3 dB measured here); the benchmark decides whether boxes need direction
+/// or gradient bins.
 #[test]
 fn a_box_of_mixed_flows_errs_on_its_extension_only() {
     let pieces = bundle(true);
     for receiver in ABEAM {
         let error = box_error_db(&pieces, receiver);
-        assert!(error.abs() < 0.2, "abeam {receiver:?}: {error:+.3} dB");
+        assert!(error.abs() < 0.3, "abeam {receiver:?}: {error:+.3} dB");
     }
     for receiver in ON_THE_EXTENSION {
         let error = box_error_db(&pieces, receiver);
@@ -227,4 +233,25 @@ fn merged_sums_equal_the_whole() {
     assert!((merged.axis_rad - direct.axis_rad).abs() < 1e-9);
     assert!((merged.gradient - direct.gradient).abs() < 1e-9);
     assert!((merged.centroid_m[2] - direct.centroid_m[2]).abs() < 1e-6);
+}
+
+/// Jets and turboprops in one box: propellers fall off slower than jets, so far away the mix
+/// is theirs. The shares at the tail anchor and the anchor itself keep the box within 0.3 dB of
+/// its pieces out to 16 km (one share and a tail fitted to the sum read 2 dB low there).
+#[test]
+fn a_box_of_jets_and_propellers_reads_their_mix_far_away() {
+    let altitude = 1_000.0;
+    let pieces: Vec<_> = [("A320", 0.0), ("DH8D", 20.0)]
+        .iter()
+        .map(|&(designator, offset)| {
+            let emission = emission(designator, &flight(true, 150.0, 0.06, altitude));
+            let start = [-50.0 + offset, offset, altitude - 3.0];
+            let end = [50.0 + offset, offset, altitude + 3.0];
+            (emission, start, end)
+        })
+        .collect();
+    for north in [2_000.0, 4_000.0, 8_000.0, 12_000.0, 16_000.0] {
+        let error = box_error_db(&pieces, [0.0, north]);
+        assert!(error.abs() < 0.3, "{north} m: {error:+.3} dB");
+    }
 }

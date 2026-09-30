@@ -328,6 +328,11 @@ pub fn steepest_sel_slope_db_per_m(slant_m: f64) -> f64 {
     STEEPEST_INTERVAL_DB_PER_DECADE[interval] / (slant_m * std::f64::consts::LN_10)
 }
 
+/// The far anchor of an aircraft box's curves (m): past 25,000 ft every row falls with its own
+/// absorption, so a mix of rows falls slower than any one fitted curve; a box also sums its
+/// pieces here, at the aircraft reach, and its tail runs through both ends.
+pub const TAIL_ANCHOR_M: f64 = 16_000.0;
+
 /// The slant (m) at which an aircraft box states its loudest piece's LAmax: 1,000 ft.
 pub const LAMAX_REFERENCE_SLANT_M: f64 = 1_000.0 * METRES_PER_FOOT;
 /// The rise table starts at the nearest slant a curve is read at and has this many entries per

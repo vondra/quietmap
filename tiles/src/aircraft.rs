@@ -11,7 +11,7 @@ pub use parse::Aircraft;
 
 const MAGIC: &[u8; 8] = b"qmair1\n\0";
 const HEADER_BYTES: usize = 24;
-const BOX_BYTES: usize = 116;
+const BOX_BYTES: usize = 124;
 const FLIGHT_BYTES: usize = 20;
 const PIECE_BYTES: usize = 24;
 /// The NPD distances of Doc 29 (200 ft .. 25,000 ft).
@@ -74,13 +74,16 @@ pub struct AircraftBox {
     pub piece_length_m: f64,
     /// Flights that crossed the box in the year.
     pub flights: u32,
-    /// Per period, the average day's summed SEL energy at each NPD distance (dB; -inf silent).
+    /// Per period, the average day's summed SEL energy at each NPD distance (dB; -inf silent),
+    /// and at the tail anchor past them (16 km).
     pub energy_db: [[f64; NPD_DISTANCES]; PERIODS],
+    pub tail_energy_db: [f64; PERIODS],
     /// The pieces' scaled distance d_lambda (m) at each NPD distance, their energy-weighted
     /// harmonic mean (what Delta_F of short pieces sums to), stored as lg d_lambda in 1e-4 steps.
     pub scaled_distance_m: [f64; NPD_DISTANCES],
-    /// Energy shares of the installations (1/255 steps; the last is what the first two leave).
-    pub installation_shares: [f64; INSTALLATIONS],
+    /// Energy shares of the installations at 1,000 ft and at the tail anchor (1/255 steps; the
+    /// last is what the first two leave).
+    pub installation_shares: [[f64; INSTALLATIONS]; 2],
     /// The box's loudest pieces: `first_piece .. first_piece + piece_count` in the piece table,
     /// and the loudest LAmax among them at 1,000 ft (dB, rounded up to 0.5 dB; -inf without
     /// pieces): with the most an LAmax curve can rise from there, a bound on what they reach.
@@ -203,11 +206,14 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox) {
         assert!(code <= f64::from(u16::MAX), "scaled distance {distance} m");
         bytes.extend_from_slice(&(code as u16).to_le_bytes());
     }
-    let [wing, fuselage, _] = record
-        .installation_shares
-        .map(|share| (share * 255.0).round());
-    assert!(wing + fuselage <= 255.0, "installation shares above one");
-    bytes.extend_from_slice(&[wing as u8, fuselage as u8]);
+    for shares in record.installation_shares {
+        let [wing, fuselage, _] = shares.map(|share| (share * 255.0).round());
+        assert!(wing + fuselage <= 255.0, "installation shares above one");
+        bytes.extend_from_slice(&[wing as u8, fuselage as u8]);
+    }
+    for level in record.tail_energy_db {
+        bytes.extend_from_slice(&level_code(level).to_le_bytes());
+    }
     bytes.extend_from_slice(&record.first_piece.to_le_bytes());
     bytes.push(record.piece_count);
     bytes.push(lamax_code(record.loudest_lamax_db));
@@ -233,7 +239,7 @@ fn write_piece(bytes: &mut Vec<u8>, piece: &FlightPiece) {
     assert_eq!(bytes.len() - start, PIECE_BYTES);
 }
 
-/// The bytes of an aircraft file: header, 116-byte boxes, 20-byte flights, 24-byte pieces.
+/// The bytes of an aircraft file: header, 124-byte boxes, 20-byte flights, 24-byte pieces.
 /// Every piece's flight and every box's pieces must exist.
 pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(

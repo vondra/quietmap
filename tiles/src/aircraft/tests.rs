@@ -27,7 +27,8 @@ fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
         scaled_distance_m: [
             61.0, 150.0, 288.0, 500.0, 1_100.0, 2_566.5, 4_259.3, 6_780.3, 9_000.0, 1e6,
         ],
-        installation_shares: [0.2, 0.4, 0.4],
+        tail_energy_db: [61.23, f64::NEG_INFINITY, 55.0],
+        installation_shares: [[0.2, 0.4, 0.4], [0.1, 0.3, 0.6]],
         first_piece,
         piece_count,
         loudest_lamax_db: if piece_count > 0 {
@@ -66,7 +67,7 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
     let flights = [a_flight(0x4b_a9_c1), a_flight(0x00_00_01)];
     let pieces = [a_piece(1), a_piece(0)];
     let bytes = encode(&boxes, &flights, &pieces);
-    assert_eq!(bytes.len(), 24 + 2 * 116 + 2 * 20 + 2 * 24);
+    assert_eq!(bytes.len(), 24 + 2 * 124 + 2 * 20 + 2 * 24);
     let parsed = Aircraft::parse(&bytes).unwrap();
     assert_eq!(
         (
@@ -98,15 +99,20 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
             assert!(r == w || (r - w).abs() <= 0.005, "{r} vs {w}");
         }
     }
+    for (r, w) in read.tail_energy_db.iter().zip(written.tail_energy_db) {
+        assert!(r == &w || (r - w).abs() <= 0.005, "{r} vs {w}");
+    }
     for (r, w) in read.scaled_distance_m.iter().zip(written.scaled_distance_m) {
         assert!((r / w - 1.0).abs() < 1.2e-4, "{r} vs {w}");
     }
-    for (r, w) in read
+    for (read, written) in read
         .installation_shares
         .iter()
         .zip(written.installation_shares)
     {
-        assert!((r - w).abs() <= 1.0 / 255.0, "{r} vs {w}");
+        for (r, w) in read.iter().zip(written) {
+            assert!((r - w).abs() <= 1.0 / 255.0, "{r} vs {w}");
+        }
     }
     assert_eq!((read.first_piece, read.piece_count), (0, 2));
     // Rounded up, so a bound stays a bound.
@@ -132,10 +138,10 @@ fn a_file_that_does_not_add_up_is_refused() {
     assert!(Aircraft::parse(&wrong_magic).is_err());
     // A box naming a piece beyond the table, a piece naming a flight beyond it.
     let mut missing_piece = bytes.clone();
-    missing_piece[24 + 110] = 7;
+    missing_piece[24 + 118] = 7;
     assert!(Aircraft::parse(&missing_piece).is_err());
     let mut missing_flight = bytes;
-    missing_flight[24 + 116 + 20] = 9;
+    missing_flight[24 + 124 + 20] = 9;
     assert!(Aircraft::parse(&missing_flight).is_err());
 }
 

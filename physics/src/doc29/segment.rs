@@ -8,8 +8,8 @@ use super::corrections::{
 };
 use super::helicopters::{HelicopterLevels, helicopter_levels};
 use super::npd::{
-    Installation, METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT, NpdReading, class_anchor,
-    is_helicopter_class, read_npd,
+    Installation, METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT, NpdReading, TAIL_ANCHOR_M,
+    class_anchor, is_helicopter_class, read_npd,
 };
 use super::profiles_generated::{noise_class_of, profile_idx};
 use super::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M, screened_sel_db};
@@ -63,6 +63,8 @@ pub struct NpdDistanceLevels {
     /// (exactly so for one power row: SEL - LAmax is linear in lg d, Eq. 4-11; the dipole limit
     /// d_lambda = d likewise).
     pub scaled_distance_m: [f64; NPD_DISTANCES],
+    /// The same SEL at the box tail anchor ([`super::npd::TAIL_ANCHOR_M`]).
+    pub tail_sel_db: f64,
 }
 
 impl SegmentEmission {
@@ -102,6 +104,7 @@ impl SegmentEmission {
         NpdDistanceLevels {
             sel_db: readings.map(|reading| reading.sel_db + self.speed_correction_db),
             scaled_distance_m: readings.map(|reading| reading.scaled_distance_m),
+            tail_sel_db: self.read_npd(TAIL_ANCHOR_M).sel_db + self.speed_correction_db,
         }
     }
 }

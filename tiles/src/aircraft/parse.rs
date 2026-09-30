@@ -45,7 +45,7 @@ impl<'a> Aircraft<'a> {
         };
         for index in 0..boxes {
             let record = parsed.box_record(index);
-            let (zoom, first, count) = (record[0], u32_at(record, 110), usize::from(record[114]));
+            let (zoom, first, count) = (record[0], u32_at(record, 118), usize::from(record[122]));
             if !(12..=super::MAXIMUM_ZOOM).contains(&zoom) || record[1] > 1 {
                 return Err(FormatError("aircraft: bad box zoom or group"));
             }
@@ -88,12 +88,15 @@ impl<'a> Aircraft<'a> {
     pub fn aircraft_box(&self, index: usize) -> AircraftBox {
         let record = self.box_record(index);
         let energy = |at: usize| level_db(u16_at(record, at));
-        let (wing, fuselage) = (
-            f64::from(record[108]) / 255.0,
-            f64::from(record[109]) / 255.0,
-        );
-        let mut installation_shares = [wing, fuselage, 0.0];
-        installation_shares[INSTALLATIONS - 1] = (1.0 - wing - fuselage).max(0.0);
+        let installation_shares = [108, 110].map(|at| {
+            let (wing, fuselage) = (
+                f64::from(record[at]) / 255.0,
+                f64::from(record[at + 1]) / 255.0,
+            );
+            let mut shares = [wing, fuselage, 0.0];
+            shares[INSTALLATIONS - 1] = (1.0 - wing - fuselage).max(0.0);
+            shares
+        });
         AircraftBox {
             zoom: record[0],
             cell: [u16_at(record, 2), u16_at(record, 4)],
@@ -117,10 +120,11 @@ impl<'a> Aircraft<'a> {
             scaled_distance_m: std::array::from_fn(|distance| {
                 10f64.powf(f64::from(u16_at(record, 88 + 2 * distance)) / 10_000.0)
             }),
+            tail_energy_db: std::array::from_fn(|period| energy(112 + 2 * period)),
             installation_shares,
-            first_piece: u32_at(record, 110),
-            piece_count: record[114],
-            loudest_lamax_db: lamax_db(record[115]),
+            first_piece: u32_at(record, 118),
+            piece_count: record[122],
+            loudest_lamax_db: lamax_db(record[123]),
         }
     }
 

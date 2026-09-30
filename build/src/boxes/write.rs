@@ -124,6 +124,7 @@ pub fn write_tiles(
                 piece_length_m: values.piece_length_m,
                 flights: (entry.flights_per_day * DAYS_PER_YEAR).round() as u32,
                 energy_db: values.levels_db,
+                tail_energy_db: values.tail_levels_db,
                 scaled_distance_m: values.scaled_distance_m,
                 installation_shares: values.installation_shares,
                 first_piece,

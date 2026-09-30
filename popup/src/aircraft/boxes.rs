@@ -92,6 +92,7 @@ pub fn tile_energy(
                 gradient: record.gradient,
                 piece_length_m: record.piece_length_m,
                 levels_db: &record.energy_db,
+                tail_levels_db: &record.tail_energy_db,
                 scaled_distance_m: &record.scaled_distance_m,
                 installation_shares: record.installation_shares,
                 ground_m: record.ground_m - receiver.altitude_m,

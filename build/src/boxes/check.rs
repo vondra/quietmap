@@ -64,8 +64,10 @@ pub struct PointReport {
     /// aircraft files read: fine boxes in every ring, and as the popup reads them.
     pub boxed_as_read: Levels,
     pub megabytes: [f64; 2],
-    /// The first band (exact pieces, boxes) and the bands above it.
+    /// The first band (exact pieces, boxes) and the bands above it; by horizontal distance
+    /// (exact pieces by their middle, fine boxes by their centroid).
     pub near_ground: [Levels; 2],
+    pub by_distance: [[Levels; 2]; DISTANCE_BANDS_M.len()],
     pub aloft: [Levels; 2],
     /// The exact ten loudest flights (id, LAmax dB) and the popup's lists.
     pub exact_top: Vec<(u64, f64)>,
@@ -108,7 +110,7 @@ fn leq_db(energy: &[f64]) -> Levels {
 /// loudest LAmax (dB).
 #[derive(Clone)]
 struct Sums {
-    energy: [f64; 4 * PERIODS],
+    energy: [f64; SLOTS * PERIODS],
     flights: HashMap<u64, (f64, f64)>,
 }
 
@@ -116,11 +118,24 @@ const EXACT: usize = 0;
 const BEYOND: usize = PERIODS;
 const NEAR_GROUND: usize = 2 * PERIODS;
 const ALOFT: usize = 3 * PERIODS;
+/// The exact energy by horizontal distance (of each box piece's middle), from this slot on.
+const BY_DISTANCE: usize = 4 * PERIODS;
+const SLOTS: usize = 4 + DISTANCE_BANDS_M.len();
+/// Upper edges of the distance bands the error is split into (m).
+const DISTANCE_BANDS_M: [f64; 3] = [2_000.0, 6_000.0, REACH_M];
+
+/// The distance band of a horizontal distance within the reach.
+fn distance_band(distance_m: f64) -> usize {
+    DISTANCE_BANDS_M
+        .iter()
+        .position(|&edge| distance_m < edge)
+        .unwrap_or(DISTANCE_BANDS_M.len() - 1)
+}
 
 impl Sums {
     fn new() -> Self {
         Sums {
-            energy: [0.0; 4 * PERIODS],
+            energy: [0.0; SLOTS * PERIODS],
             flights: HashMap::new(),
         }
     }
@@ -235,7 +250,14 @@ fn add_segment(
                 } else {
                     ALOFT
                 };
-                sums.energy[slot + period] += weight * 10f64.powf(sel.sel_db / 10.0);
+                let value = weight * 10f64.powf(sel.sel_db / 10.0);
+                sums.energy[slot + period] += value;
+                let middle = [
+                    0.5 * (geometry.start_m[0] + geometry.end_m[0]),
+                    0.5 * (geometry.start_m[1] + geometry.end_m[1]),
+                ];
+                let band = distance_band(middle[0].hypot(middle[1]));
+                sums.energy[BY_DISTANCE + PERIODS * band + period] += value;
             }
         }
     }
@@ -394,12 +416,20 @@ fn parse_rings(
 }
 
 /// The day SEL energy per period of the boxes within the reach: those of the first band and
-/// those above it.
+/// those above it, and by the horizontal distance of their centroids.
+struct BoxEnergy {
+    bands: [[f64; PERIODS]; 2],
+    distances: [[f64; PERIODS]; DISTANCE_BANDS_M.len()],
+}
+
 fn box_energy<'a>(
     tiles: impl Iterator<Item = &'a (TileId, Aircraft<'a>)>,
     receiver: &Receiver,
-) -> [[f64; PERIODS]; 2] {
-    let mut energy = [[0.0; PERIODS]; 2];
+) -> BoxEnergy {
+    let mut energy = BoxEnergy {
+        bands: [[0.0; PERIODS]; 2],
+        distances: [[0.0; PERIODS]; DISTANCE_BANDS_M.len()],
+    };
     for (tile, aircraft) in tiles {
         for index in 0..aircraft.box_count() {
             let record = aircraft.aircraft_box(index);
@@ -420,14 +450,18 @@ fn box_energy<'a>(
                 gradient: record.gradient,
                 piece_length_m: record.piece_length_m,
                 levels_db: &record.energy_db,
+                tail_levels_db: &record.tail_energy_db,
                 scaled_distance_m: &record.scaled_distance_m,
                 installation_shares: record.installation_shares,
                 ground_m: record.ground_m - receiver.altitude_m,
             };
             if let Some(sel) = box_sel_at_receiver(&at_receiver, &Unscreened) {
-                let slots = &mut energy[usize::from(record.clearance_m > 0.0)];
-                for (total, level) in slots.iter_mut().zip(sel.sel_db) {
-                    *total += 10f64.powf(level / 10.0);
+                let band = usize::from(record.clearance_m > 0.0);
+                let distance = distance_band(east.hypot(north));
+                for (period, level) in sel.sel_db.iter().enumerate() {
+                    let value = 10f64.powf(level / 10.0);
+                    energy.bands[band][period] += value;
+                    energy.distances[distance][period] += value;
                 }
             }
         }
@@ -471,10 +505,11 @@ fn report(aircraft_root: &Path, receiver: &Receiver, total: Sums) -> Result<Poin
             .collect::<Vec<_>>(),
     );
     let fine_bytes = megabytes(&fine_files.iter().collect::<Vec<_>>());
-    let [near_ground, aloft] = box_energy(fine.iter().flatten(), receiver);
-    let [popup_near, popup_aloft] =
-        box_energy(popup_rings.iter().flat_map(|ring| ring.iter()), receiver);
-    let popup: [f64; PERIODS] = std::array::from_fn(|p| popup_near[p] + popup_aloft[p]);
+    let fine_energy = box_energy(fine.iter().flatten(), receiver);
+    let [near_ground, aloft] = fine_energy.bands;
+    let popup_energy = box_energy(popup_rings.iter().flat_map(|ring| ring.iter()), receiver);
+    let popup: [f64; PERIODS] =
+        std::array::from_fn(|p| popup_energy.bands[0][p] + popup_energy.bands[1][p]);
     let boxed: [f64; PERIODS] = std::array::from_fn(|p| near_ground[p] + aloft[p]);
     // The ten loudest flights by LAmax of the exact sum, and the popup's list reading K pieces
     // per box.
@@ -572,6 +607,12 @@ fn report(aircraft_root: &Path, receiver: &Receiver, total: Sums) -> Result<Poin
         boxed_as_read: leq_db(&popup),
         megabytes: [fine_bytes, popup_bytes],
         beyond: leq_db(&total.energy[BEYOND..]),
+        by_distance: std::array::from_fn(|band| {
+            [
+                leq_db(&total.energy[BY_DISTANCE + PERIODS * band..]),
+                leq_db(&fine_energy.distances[band]),
+            ]
+        }),
         near_ground: [leq_db(&total.energy[NEAR_GROUND..]), leq_db(&near_ground)],
         aloft: [leq_db(&total.energy[ALOFT..]), leq_db(&aloft)],
         exact_top,

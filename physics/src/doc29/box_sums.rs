@@ -2,19 +2,24 @@
 //! it and the box values they give ([`super::boxes`] reads them at a click). Every sum is a plain
 //! sum, so a box is independent of the order and the day its pieces arrive in.
 
-use super::npd::{Installation, NPD_DISTANCES};
+use super::npd::{Installation, METRES_PER_FOOT, NPD_DISTANCES, TAIL_ANCHOR_M};
 use super::segment::NpdDistanceLevels;
 use crate::bands::PERIODS;
 
 /// The NPD distance whose energy weighs a piece's geometry (1,000 ft): near enough for the
 /// geometry that is heard, far enough for every class to be on its curve.
 const GEOMETRY_WEIGHT_DISTANCE: usize = 3;
+/// The slants the installation shares are stated at (m): 1,000 ft and the tail anchor. The mix
+/// changes with distance, propellers falling off slower than jets.
+pub const INSTALLATION_SHARE_SLANTS_M: [f64; 2] = [1_000.0 * METRES_PER_FOOT, TAIL_ANCHOR_M];
 
 /// The running sums of one box.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BoxSums {
-    /// Per period and NPD distance, the pieces' weighted energy.
+    /// Per period and NPD distance, the pieces' weighted energy, and per period at the tail
+    /// anchor.
     energy: [[f64; NPD_DISTANCES]; PERIODS],
+    tail_energy: [f64; PERIODS],
     /// Per NPD distance, the pieces' energy (all periods) over their d_lambda.
     energy_over_scaled_distance: [f64; NPD_DISTANCES],
     /// Geometry weights: the pieces' energy at the weight distance, all periods.
@@ -25,7 +30,8 @@ pub struct BoxSums {
     /// horizontal direction (its sign follows the direction the axis ends up pointing).
     weighted_doubled_direction: [f64; 2],
     weighted_gradient_direction: [f64; 2],
-    weighted_installation: [f64; 3],
+    /// Per share slant, the pieces' energy (all periods) by installation.
+    installation_energy: [[f64; 3]; 2],
     pieces: u64,
 }
 
@@ -33,12 +39,15 @@ pub struct BoxSums {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoxValues {
     pub levels_db: [[f64; NPD_DISTANCES]; PERIODS],
+    /// Per period, the summed level at the tail anchor.
+    pub tail_levels_db: [f64; PERIODS],
     pub scaled_distance_m: [f64; NPD_DISTANCES],
     pub centroid_m: [f64; 3],
     pub axis_rad: f64,
     pub gradient: f64,
     pub piece_length_m: f64,
-    pub installation_shares: [f64; 3],
+    /// Energy shares of the installations at each of [`INSTALLATION_SHARE_SLANTS_M`].
+    pub installation_shares: [[f64; 3]; 2],
 }
 
 impl BoxSums {
@@ -58,10 +67,12 @@ impl BoxSums {
         if total_weight <= 0.0 {
             return;
         }
+        let tail = 10f64.powf(levels.tail_sel_db / 10.0);
         for (period, weight) in period_weights.iter().enumerate() {
             for (sum, energy) in self.energy[period].iter_mut().zip(unweighted) {
                 *sum += weight * energy;
             }
+            self.tail_energy[period] += weight * tail;
         }
         for (k, sum) in self.energy_over_scaled_distance.iter_mut().enumerate() {
             *sum += total_weight * unweighted[k] / levels.scaled_distance_m[k].max(1.0);
@@ -87,7 +98,8 @@ impl BoxSums {
             Installation::Fuselage => 1,
             Installation::Propeller => 2,
         };
-        self.weighted_installation[slot] += weight;
+        self.installation_energy[0][slot] += total_weight * unweighted[GEOMETRY_WEIGHT_DISTANCE];
+        self.installation_energy[1][slot] += total_weight * tail;
         self.pieces += 1;
     }
 
@@ -97,6 +109,9 @@ impl BoxSums {
             for (sum, value) in sums.iter_mut().zip(others) {
                 *sum += value;
             }
+        }
+        for (sum, value) in self.tail_energy.iter_mut().zip(other.tail_energy) {
+            *sum += value;
         }
         for (sum, value) in self
             .energy_over_scaled_distance
@@ -114,12 +129,14 @@ impl BoxSums {
             self.weighted_doubled_direction[axis] += other.weighted_doubled_direction[axis];
             self.weighted_gradient_direction[axis] += other.weighted_gradient_direction[axis];
         }
-        for (sum, value) in self
-            .weighted_installation
+        for (sums, values) in self
+            .installation_energy
             .iter_mut()
-            .zip(other.weighted_installation)
+            .zip(other.installation_energy)
         {
-            *sum += value;
+            for (sum, value) in sums.iter_mut().zip(values) {
+                *sum += value;
+            }
         }
         self.pieces += other.pieces;
     }
@@ -134,15 +151,14 @@ impl BoxSums {
         if self.weight <= 0.0 {
             return None;
         }
-        let levels_db = self.energy.map(|energies| {
-            energies.map(|energy| {
-                if energy > 0.0 {
-                    10.0 * energy.log10()
-                } else {
-                    f64::NEG_INFINITY
-                }
-            })
-        });
+        let level = |energy: f64| {
+            if energy > 0.0 {
+                10.0 * energy.log10()
+            } else {
+                f64::NEG_INFINITY
+            }
+        };
+        let levels_db = self.energy.map(|energies| energies.map(level));
         let scaled_distance_m = std::array::from_fn(|k| {
             let energy: f64 = (0..PERIODS).map(|period| self.energy[period][k]).sum();
             energy / self.energy_over_scaled_distance[k]
@@ -156,12 +172,16 @@ impl BoxSums {
             / self.weight;
         Some(BoxValues {
             levels_db,
+            tail_levels_db: self.tail_energy.map(level),
             scaled_distance_m,
             centroid_m: self.weighted_midpoint_m.map(|sum| sum / self.weight),
             axis_rad,
             gradient,
             piece_length_m: self.weighted_length_m / self.weight,
-            installation_shares: self.weighted_installation.map(|sum| sum / self.weight),
+            installation_shares: self.installation_energy.map(|energies| {
+                let total: f64 = energies.iter().sum();
+                energies.map(|energy| if total > 0.0 { energy / total } else { 0.0 })
+            }),
         })
     }
 }

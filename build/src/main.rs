@@ -254,6 +254,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             "exact_leq": report.near_ground[0],
                             "boxed_leq": report.near_ground[1],
                         },
+                        "by_distance": report.by_distance,
                         "aloft": {
                             "exact_leq": report.aloft[0],
                             "boxed_leq": report.aloft[1],
