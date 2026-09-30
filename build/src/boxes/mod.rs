@@ -308,10 +308,11 @@ impl Default for BoxRule {
 }
 
 /// Builds the aircraft tiles of one z9 square from its day files under `shuffled` (see
-/// [`shuffle`]) and the terrain of `terrain_root` (a prepared year root) by `rule`; writes them
-/// under `out`, returns the number of tiles and boxes written.
+/// [`shuffle`]; `days` are the days done there with their roles) and the terrain of
+/// `terrain_root` (a prepared year root) by `rule`; writes them under `out`, returns the number
+/// of tiles and boxes written.
 pub fn build_square(
-    shuffled: &Path,
+    (shuffled, days): (&Path, &[(String, shuffle::DayRoles)]),
     square: Square,
     terrain_root: &Path,
     rule: BoxRule,
@@ -342,7 +343,18 @@ pub fn build_square(
         .map_err(|error| error.to_string())?;
     let placement = Placement::new(&near, &terrain, rule.level_step_db);
     let mut boxes = Boxes::default();
-    for mut segments in shuffle::square_days(shuffled, square)? {
+    let counts = (
+        days.iter().filter(|(_, roles)| roles.baseline).count(),
+        days.iter().filter(|(_, roles)| roles.increment).count(),
+    );
+    for (day, roles) in days {
+        let mut segments: Vec<(FlightSegment, f64)> = shuffle::square_day(shuffled, square, day)?
+            .into_iter()
+            .map(|segment| {
+                let weight = roles.weight(&segment, counts);
+                (segment, weight)
+            })
+            .collect();
         // Each flight's segments together, in their order.
         segments.par_sort_by_key(|(segment, _)| segment.flight_id);
         add_day(&mut boxes, &segments, &placement, &scope, rule.pieces);

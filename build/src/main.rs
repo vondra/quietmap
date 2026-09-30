@@ -164,14 +164,24 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let scope = parse_squares(options.get("squares")?)?
                 .into_iter()
                 .collect();
-            boxes::shuffle::shuffle(Path::new(options.get("segments")?), &window, &scope, &out)
+            let left = boxes::shuffle::shuffle(
+                Path::new(options.get("segments")?),
+                &window,
+                &scope,
+                &out,
+            )?;
+            eprintln!("aircraft shuffle: {left} days not written yet");
+            Ok(())
         }
         "aircraft-boxes" => {
             let rule = box_rule(&options)?;
+            let shuffled = Path::new(options.get("shuffled")?);
+            let days = boxes::shuffle::shuffled_days(shuffled)?;
+            eprintln!("aircraft boxes: {} days", days.len());
             for square in parse_squares(options.get("squares")?)? {
                 let started = std::time::Instant::now();
                 let (tiles, written) = boxes::build_square(
-                    Path::new(options.get("shuffled")?),
+                    (shuffled, &days),
                     square,
                     Path::new(options.get("terrain")?),
                     rule,
