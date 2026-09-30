@@ -32,7 +32,11 @@ fn prague_bands_start_at_the_first_layer_and_coarsen_upward() {
         assert!((pair[1].clearance_m - pair[0].clearance_m - pair[0].edge_m).abs() < 1e-9);
     }
     for band in &bands {
-        let spanned = band_edge_limit_m(band.clearance_m, band.clearance_m + band.edge_m);
+        let spanned = band_edge_limit_m(
+            band.clearance_m,
+            band.clearance_m + band.edge_m,
+            BOX_EDGE_LEVEL_STEP_DB,
+        );
         assert!(band.edge_m <= spanned || band.zoom == 19, "{band:?}");
     }
     assert!(bands.last().unwrap().zoom <= 16, "{:?}", bands.last());
