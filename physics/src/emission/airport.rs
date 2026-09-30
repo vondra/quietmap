@@ -5,7 +5,8 @@
 
 use crate::bands::BANDS;
 use crate::bound::POINT_DIVERGENCE_OFFSET_DB;
-use crate::doc29::profiles_generated::NUM_CLASSES;
+use crate::doc29::npd::Family;
+use crate::doc29::profiles_generated::CLASS_FAMILY;
 
 /// What a movement does on an aeroway line: dev4 takes runway, stopway and airstrip lines as
 /// runway roll and taxiway lines as taxiing (aprons are areas, which its ground traffic never met).
@@ -15,27 +16,20 @@ pub enum GroundOperation {
     Taxi,
 }
 
-/// Runway roll per noise class as dev4's 1 km event SEL anchor (dB): flyover NPDs overstate the
-/// roll by 6-10 dB, so the bands are set per anchor type: narrowbody jet 104, widebody 108,
-/// regional jet 100, business jet 99, turboprop 97, helicopter 94, piston single 92.
-const RUNWAY_ROLL_EVENT_SEL_DB: [(&str, f64); NUM_CLASSES] = [
-    ("WING_FALLBACK", 104.0),
-    ("WING_A320", 104.0),
-    ("WING_B738", 104.0),
-    ("PROP_C172", 92.0),
-    ("WING_B38M", 104.0),
-    ("WING_B789", 108.0),
-    ("WING_A21N", 104.0),
-    ("WING_A321", 104.0),
-    ("WING_A20N", 104.0),
-    ("WING_A319", 104.0),
-    ("FUSE_CRJ9", 100.0),
-    ("WING_B748", 108.0),
-    ("HELICOPTER", 94.0),
-    ("PROP_DH8D", 97.0),
-    ("FUSE_C56X", 99.0),
-    ("PROP_AT72", 97.0),
-];
+/// Runway roll per family as dev4's 1 km event SEL anchor (dB): flyover NPDs overstate the roll
+/// by 6-10 dB, so the bands are set per type: narrowbody jet 104, widebody 108, regional jet 100,
+/// business jet 99, turboprop 97, helicopter 94, piston single 92.
+pub fn runway_roll_event_sel_db(family: Family) -> f64 {
+    match family {
+        Family::Narrowbody => 104.0,
+        Family::Widebody => 108.0,
+        Family::Regional => 100.0,
+        Family::Business => 99.0,
+        Family::Turboprop => 97.0,
+        Family::Helicopter => 94.0,
+        Family::Piston => 92.0,
+    }
+}
 /// dev4's per-metre level of an anchor, 10 lg(25/pi): its receiver formula LW' + 10 lg(theta/d)
 /// then reads the anchor - 0.14 dB at 25 m from the middle of a 1 km roll.
 const EVENT_SEL_TO_PER_METRE_DB: f64 = 9.01;
@@ -98,7 +92,7 @@ pub fn aircraft_pass_energy_db(
     if speed_kt.is_nan() || speed_kt <= 0.0 {
         return None;
     }
-    let (_, runway_sel_db) = RUNWAY_ROLL_EVENT_SEL_DB[usize::from(class)];
+    let runway_sel_db = runway_roll_event_sel_db(CLASS_FAMILY[usize::from(class)]);
     let mut total = runway_sel_db + EVENT_SEL_TO_PER_METRE_DB + POINT_DIVERGENCE_OFFSET_DB;
     match operation {
         GroundOperation::RunwayRoll if departure => total += RUNWAY_DEPARTURE_BONUS_DB,

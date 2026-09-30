@@ -27,13 +27,16 @@ use super::npd::{
 /// below it cannot reach it.
 pub const EVENT_FLOOR_SEL_DB: f64 = 20.0;
 
-/// Spare above the measured geometry step: over every class, operation and power row and 5.3 M
-/// segments whose closest point lies off the segment (low, short, receiver on the extension,
-/// d_lambda up to three times the slant), NPD + Delta_F stayed at least 2.8 dB under the curve at
-/// the segment's nearest distance; with the closest point on the segment Delta_F <= 0 alone keeps
-/// it under, reached only overhead a long segment. It also covers boxes storing their levels in
-/// 0.01 dB steps.
-pub const FINITE_GEOMETRY_MARGIN_DB: f64 = 0.5;
+/// Spare above the measured geometry step: where a segment's closest point lies off it (low, short,
+/// receiver on the extension, d_lambda up to three times the slant), NPD + Delta_F can read above
+/// the curve at the segment's nearest distance, since the infinite line passes nearer. dev4's 15
+/// classes stayed 2.8 dB under it; with every ANP aircraft its own class the steepest near-field
+/// approach curves (the A340-211's falls 5.9 dB from 200 to 400 ft, the A330-301's 5.6, with SEL -
+/// LAmax 5.3-5.4 dB there) read up to 1.5 dB over curve plus installation plus 0.5 dB (the grid of
+/// `the_bound_stays_above_every_segment`), so the spare is 2.1 dB. With the closest point on the
+/// segment Delta_F <= 0 alone keeps it under, reached only overhead a long segment. It also covers
+/// boxes storing their levels in 0.01 dB steps.
+pub const FINITE_GEOMETRY_MARGIN_DB: f64 = 2.1;
 
 /// Upper bound (dB) of the SEL a box or segment delivers at a receiver `nearest_slant_m` from its
 /// nearest point, from its levels at the ten NPD distances: a segment's

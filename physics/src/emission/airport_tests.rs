@@ -6,6 +6,14 @@ use crate::bands::{A_WEIGHTING_DB, energy};
 use crate::doc29::profiles_generated::CLASS_NAMES;
 use crate::line::POINT_DIVERGENCE_LINEAR;
 
+/// The class of an ANP aircraft.
+fn class_named(name: &str) -> u8 {
+    CLASS_NAMES
+        .iter()
+        .position(|&n| n == name)
+        .expect("a class") as u8
+}
+
 fn total_db(bands: &[f64; BANDS]) -> f64 {
     10.0 * bands
         .iter()
@@ -21,15 +29,29 @@ fn a_weighted_db(bands: &[f64; BANDS]) -> f64 {
         .log10()
 }
 
-/// Z-weighted pass energy of a B738-class aircraft (dev4's class 2 in its tests).
+/// Z-weighted pass energy of a 737-800 (dev4's class 2 in its tests).
 fn b738(operation: GroundOperation, departure: bool, speed_kt: f64) -> f64 {
-    total_db(&aircraft_pass_energy_db(2, operation, departure, speed_kt).unwrap())
+    let class = class_named("737800");
+    total_db(&aircraft_pass_energy_db(class, operation, departure, speed_kt).unwrap())
 }
 
+/// The families keep dev4's per-class anchors: its narrowbody, widebody, regional, business,
+/// turboprop, piston and helicopter classes.
 #[test]
-fn every_noise_class_has_its_runway_anchor_in_class_order() {
-    for (class, (name, _)) in RUNWAY_ROLL_EVENT_SEL_DB.iter().enumerate() {
-        assert_eq!(*name, CLASS_NAMES[class]);
+fn every_family_has_dev4s_runway_anchor() {
+    for (name, anchor) in [
+        ("737800", 104.0),
+        ("A320-232", 104.0),
+        ("7879", 108.0),
+        ("7478", 108.0),
+        ("CRJ9-ER", 100.0),
+        ("CIT3", 99.0),
+        ("DHC830", 97.0),
+        ("CNA172", 92.0),
+        ("HELICOPTER", 94.0),
+    ] {
+        let family = CLASS_FAMILY[usize::from(class_named(name))];
+        assert_eq!(runway_roll_event_sel_db(family), anchor, "{name}");
     }
 }
 
@@ -39,9 +61,12 @@ fn every_noise_class_has_its_runway_anchor_in_class_order() {
 fn reference_speeds_give_dev4_levels_plus_the_point_divergence() {
     assert!((b738(GroundOperation::RunwayRoll, false, 70.0) - 124.01).abs() < 1e-9);
     assert!((b738(GroundOperation::Taxi, false, 18.0) - 112.01).abs() < 1e-9);
-    let widebody = aircraft_pass_energy_db(5, GroundOperation::RunwayRoll, false, 70.0).unwrap();
+    let widebody = class_named("7879");
+    let widebody =
+        aircraft_pass_energy_db(widebody, GroundOperation::RunwayRoll, false, 70.0).unwrap();
     assert!((total_db(&widebody) - 128.01).abs() < 1e-9);
-    let spectrum = aircraft_pass_energy_db(2, GroundOperation::Taxi, false, 18.0).unwrap();
+    let spectrum =
+        aircraft_pass_energy_db(class_named("737800"), GroundOperation::Taxi, false, 18.0).unwrap();
     assert!(
         (spectrum[0] - spectrum[7] - 21.0).abs() < 1e-9,
         "taxi shape 14 .. -7 dB"
@@ -82,7 +107,7 @@ fn the_dwell_correction_is_clamped_at_three_decibels() {
     assert!((taxi(0.5) - taxi(18.0)).abs() < 1e-9);
     for stopped in [0.0, -1.0, f64::NAN] {
         assert_eq!(
-            aircraft_pass_energy_db(2, GroundOperation::Taxi, false, stopped),
+            aircraft_pass_energy_db(class_named("737800"), GroundOperation::Taxi, false, stopped),
             None
         );
         assert_eq!(vehicle_pass_energy_db(GroundVehicle::Heavy, stopped), None);

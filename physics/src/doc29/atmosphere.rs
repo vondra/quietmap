@@ -119,7 +119,14 @@ pub fn class_increments_db(class: usize, departure: bool) -> [f64; NPD_DISTANCES
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::doc29::profiles_generated::CLASS_NAMES;
+    use crate::doc29::profiles_generated::{CLASS_NAMES, IS_JET};
+
+    fn class_named(name: &str) -> usize {
+        CLASS_NAMES
+            .iter()
+            .position(|&n| n == name)
+            .expect("a class")
+    }
 
     /// Appendix D's example (Tables D-2 to D-4): the V2527A's departure class 103 and approach
     /// class 205 taken to 10 C / 80 % with the SAE ARP-5534 rates of Table D-3 read the published
@@ -131,7 +138,9 @@ mod tests {
             0.292, 0.364, 0.471, 0.636, 0.893, 1.297, 1.931, 2.922, 4.461, 6.826, 10.398, 15.661,
         ]
         .map(|per_100m| per_100m / 100.0);
-        let a320 = SPECTRA[1].as_ref().expect("the A320 class has spectra");
+        let a320 = SPECTRA[class_named("A320-232")]
+            .as_ref()
+            .expect("the A320 class has spectra");
         assert_eq!((a320.departure_class, a320.approach_class), (103, 205));
         let departure = npd_increments_db(&a320.departure_db, &arp_5534_10c_80);
         let approach = npd_increments_db(&a320.approach_db, &arp_5534_10c_80);
@@ -155,7 +164,9 @@ mod tests {
     /// same to 0.1 dB. The impedance adjustment there is 0.11 dB, at 15 C 0.074 dB (Doc 29 4.2.1).
     #[test]
     fn the_buf_test_tasks_recalculation_reproduces() {
-        let a320 = SPECTRA[1].as_ref().expect("the A320 class has spectra");
+        let a320 = SPECTRA[class_named("A320-232")]
+            .as_ref()
+            .expect("the A320 class has spectra");
         let increments = npd_increments_db(&a320.departure_db, &rates_db_per_m(10.0, 70.0));
         let reference = [97.0, 90.3, 85.6, 80.6, 72.5, 63.6, 57.4, 50.7, 43.3, 35.3];
         let published = [97.1, 90.5, 86.0, 81.2, 73.6, 65.3, 59.5, 53.2, 46.2, 38.9];
@@ -181,7 +192,7 @@ mod tests {
                 continue;
             };
             assert_eq!(spectra.class_name, CLASS_NAMES[class]);
-            if !spectra.class_name.starts_with("PROP") {
+            if IS_JET[class] {
                 for departure in [false, true] {
                     let increments = class_increments_db(class, departure);
                     assert!(

@@ -94,41 +94,40 @@ fn sailplanes_and_balloons_are_negligible_and_blank_is_not() {
     assert!(is_non_aircraft_typecode("TWR") && is_non_aircraft_typecode(" GND "));
 }
 
-/// The pinned heavy class catches the loud heavy family and nothing quieter.
+/// Every designator reads its own ANP aircraft, or the proxy its mapping names: dev4's 15
+/// classes had flown the 737-700 on the fallback curve, the A300-600 and the A330-200 as 737-800s,
+/// the E175 as an A320, the 767-300 as a 787-8 and the ATR 72 as a Dash 8-300.
 #[test]
-fn the_heavy_class_holds_the_loud_heavies_only() {
-    let heavy = noise_class_of(profile_idx("B748"));
-    assert_eq!(CLASS_NAMES[usize::from(heavy)], "WING_B748");
-    for designator in ["B744", "B77W", "MD11", "B741", "B742", "IL76"] {
-        assert_eq!(
-            noise_class_of(profile_idx(designator)),
-            heavy,
-            "{designator}"
-        );
+fn designators_read_their_own_anp_aircraft() {
+    let class_name = |designator| CLASS_NAMES[usize::from(noise_class_of(profile_idx(designator)))];
+    for (designator, aircraft) in [
+        ("B738", "737800"),
+        ("B737", "737700"),
+        ("A306", "A300-622R"),
+        ("A332", "A330-301"),
+        ("A359", "A350-941"),
+        ("E75L", "EMB175"),
+        ("E190", "EMB190"),
+        ("B763", "7673ER"),
+        ("B789", "7879"),
+        ("B77W", "7773ER"),
+        ("A388", "A380-841"),
+        ("AT76", "ATR72"),
+        ("AT43", "ATR72"),
+        ("DH8D", "DHC830"),
+        ("DH8C", "DHC830"),
+        ("SF34", "SF340"),
+        ("PC12", "DHC830"),
+        ("C172", "CNA172"),
+        ("PA44", "PA30"),
+        ("DA42", "CNA172"),
+        ("BCS3", "A320-270N"),
+        ("GLF6", "CRJ9-ER"),
+    ] {
+        assert_eq!(class_name(designator), aircraft, "{designator}");
     }
-    for designator in ["B77L", "B772", "B789", "A388", "A346", "B763"] {
-        assert_ne!(
-            noise_class_of(profile_idx(designator)),
-            heavy,
-            "{designator}"
-        );
-    }
-    assert_eq!(NUM_CLASSES, 16);
-}
-
-/// The ATR 42 and 72 fly the ANP's ATR72, a class of their own; the Dash 8 family and the other
-/// turboprops stay on the DHC830.
-#[test]
-fn the_atr_family_has_its_own_class() {
-    let atr = noise_class_of(profile_idx("AT76"));
-    assert_eq!(CLASS_NAMES[usize::from(atr)], "PROP_AT72");
-    for designator in ["AT72", "AT43", "AT45"] {
-        assert_eq!(noise_class_of(profile_idx(designator)), atr, "{designator}");
-    }
-    for designator in ["DH8D", "DH8C", "SF34", "F50", "L410", "PC12", "C208"] {
-        let class = usize::from(noise_class_of(profile_idx(designator)));
-        assert_eq!(CLASS_NAMES[class], "PROP_DH8D", "{designator}");
-    }
+    assert_eq!(class_name("ZZZZ"), "WING_FALLBACK");
+    assert_eq!(NUM_CLASSES, 55);
 }
 
 /// Only the AS-prefixed rotorcraft designators are helicopters; the IAI Astra is a jet.

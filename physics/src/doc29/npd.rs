@@ -33,6 +33,23 @@ const PLACEHOLDER_SEL_MINUS_LAMAX_DB: f64 = 12.0;
 static LOG10_NPD_DISTANCES_FT: LazyLock<[f64; NPD_DISTANCES]> =
     LazyLock::new(|| NPD_DISTANCES_FT.map(f64::log10));
 
+/// What an aircraft class is on the ground and low over it: its runway rolls and the speed Stage 1
+/// holds plausible (the family follows the ANP aircraft's engines and maximum take-off weight).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Family {
+    /// Jets of 120,000-300,000 lb.
+    Narrowbody,
+    /// Jets of 300,000 lb and more.
+    Widebody,
+    /// Jets of 55,000-120,000 lb.
+    Regional,
+    /// Jets under 55,000 lb.
+    Business,
+    Turboprop,
+    Piston,
+    Helicopter,
+}
+
 /// Engine installation: the coefficients of the installation correction Delta_I (Eq. 4-15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Installation {

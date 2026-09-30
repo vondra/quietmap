@@ -6,7 +6,8 @@ use super::altitude::Sample;
 use super::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, flat_distance_m, signed_longitude_delta};
 use super::flights::Airframe;
 use super::trace::TracePoint;
-use physics::doc29::profiles_generated::{CLASS_NAMES, noise_class_of};
+use physics::doc29::npd::Family;
+use physics::doc29::profiles_generated::{CLASS_FAMILY, noise_class_of};
 
 /// About 4 x the combined error of barometric altitude, the DEM and pressure offsets: below this
 /// height the whole tail is fabricated (a receiver tracking returns into the ground).
@@ -80,7 +81,7 @@ pub fn low_level_speed_cap_kt(airframe: Airframe, profile: u8) -> f32 {
     match airframe {
         Airframe::Helicopter => 220.0,
         Airframe::Propeller
-            if CLASS_NAMES.get(usize::from(noise_class_of(profile))) == Some(&"PROP_C172") =>
+            if CLASS_FAMILY.get(usize::from(noise_class_of(profile))) == Some(&Family::Piston) =>
         {
             250.0
         }

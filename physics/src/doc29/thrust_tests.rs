@@ -101,17 +101,17 @@ fn cutback_compares_the_height_above_the_field() {
     assert_eq!(bracket(900.0, 500.0), (3, 5239));
 }
 
-/// An ADS-B outlier the filters admit (a B789 at FL510 and 525 kt) inverts the Idle/MaxClimb
+/// An ADS-B outlier the filters admit (a 787 at FL510 and 525 kt) inverts the 787-8's Idle/MaxClimb
 /// ratings: the segment is rejected, never clamped into crossed bounds; over a 1,000 ft / 25 kt
 /// sweep to 60,000 ft exactly the inverted or non-finite combinations reject, in every class.
 #[test]
 fn inverted_idle_and_climb_ratings_reject_the_segment() {
-    let class = class_of("B789");
-    assert_eq!(THRUST[class].class_name, "WING_B789");
+    let class = class_of("B788");
+    assert_eq!(THRUST[class].class_name, "7878R");
     let h_ft = 51_000.0;
     let flight = climbing(h_ft * METRES_PER_FOOT, h_ft * METRES_PER_FOOT, 525.0, 0.0);
     assert_eq!(power_bracket(class, &flight), None);
-    let aircraft = AircraftType::from_designator("B789");
+    let aircraft = AircraftType::from_designator("B788");
     assert_eq!(SegmentEmission::new(&aircraft, &flight, false), None);
     let mut rejected = 0;
     for class in (0..THRUST.len()).filter(|&class| THRUST[class].has_thrust) {
@@ -242,14 +242,15 @@ fn a_final_approach_flies_its_landing_configuration() {
     assert_eq!(APPROACH[class].class_name, CLASS_NAMES[class]);
 }
 
-/// The approach table follows the class names.
+/// The approach table follows the class names; every thrust class has its landing configuration
+/// but the MD-11, whose ANP entry gives no approach aerodynamics.
 #[test]
 fn approach_configurations_follow_class_names() {
     for (class, approach) in APPROACH.iter().enumerate() {
         assert_eq!(approach.class_name, CLASS_NAMES[class]);
         assert_eq!(
             approach.drag_ratio > 0.0,
-            THRUST[class].has_thrust,
+            THRUST[class].has_thrust && approach.class_name != "MD11GE",
             "{}",
             approach.class_name
         );

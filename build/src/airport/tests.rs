@@ -389,12 +389,18 @@ fn low_end(flight: u64, first: bool, departure: bool, class: u8, east_m: f64) ->
 fn flights_seen_low_over_a_runway_get_the_rolls_they_miss() {
     let aeroways = airport(10);
     let runways = rolls::Runways::new(&aeroways);
-    let a320 = 1;
+    let class = |name| {
+        physics::doc29::profiles_generated::CLASS_NAMES
+            .iter()
+            .position(|&n| n == name)
+            .expect("a class") as u8
+    };
+    let (a320, helicopter) = (class("A320-232"), class("HELICOPTER"));
     let ends = [
         low_end(1, true, true, a320, 3_000.0),
         low_end(2, false, false, a320, -1_000.0),
         low_end(3, true, true, a320, 3_000.0),
-        low_end(4, true, true, 12, 3_000.0),
+        low_end(4, true, true, helicopter, 3_000.0),
         legs::LowEnd {
             end: at(100.0, 2_900.0),
             ..low_end(5, true, true, a320, 2_900.0)

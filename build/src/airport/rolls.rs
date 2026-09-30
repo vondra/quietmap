@@ -11,7 +11,8 @@
 use super::legs::{GroundLeg, LowEnd, Mover};
 use super::lines::Aeroways;
 use crate::aircraft::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, signed_longitude_delta};
-use physics::doc29::profiles_generated::CLASS_NAMES;
+use physics::doc29::npd::Family;
+use physics::doc29::profiles_generated::CLASS_FAMILY;
 use physics::emission::airport::GroundOperation;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -33,14 +34,14 @@ const CELL_DEG: f64 = 0.1;
 /// A class's typical rolls: take-off length (m) and lift-off speed (kt), landing length (m) and
 /// touchdown speed (kt); helicopters have none.
 fn rolls_of(class: u8) -> Option<[f64; 4]> {
-    Some(match *CLASS_NAMES.get(usize::from(class))? {
-        "HELICOPTER" => return None,
-        "PROP_C172" => [300.0, 55.0, 250.0, 55.0],
-        "PROP_DH8D" | "PROP_AT72" => [1_100.0, 115.0, 900.0, 100.0],
-        "FUSE_C56X" => [1_100.0, 115.0, 900.0, 105.0],
-        "FUSE_CRJ9" => [1_700.0, 145.0, 1_300.0, 125.0],
-        "WING_B789" | "WING_B748" => [2_600.0, 165.0, 1_800.0, 140.0],
-        _ => [1_800.0, 150.0, 1_400.0, 130.0],
+    Some(match *CLASS_FAMILY.get(usize::from(class))? {
+        Family::Helicopter => return None,
+        Family::Piston => [300.0, 55.0, 250.0, 55.0],
+        Family::Turboprop => [1_100.0, 115.0, 900.0, 100.0],
+        Family::Business => [1_100.0, 115.0, 900.0, 105.0],
+        Family::Regional => [1_700.0, 145.0, 1_300.0, 125.0],
+        Family::Widebody => [2_600.0, 165.0, 1_800.0, 140.0],
+        Family::Narrowbody => [1_800.0, 150.0, 1_400.0, 130.0],
     })
 }
 
