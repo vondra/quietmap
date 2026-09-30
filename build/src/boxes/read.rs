@@ -15,7 +15,7 @@ pub use crate::aircraft::{
 const PHASE_GROUND: u8 = 0;
 
 /// One segment as the boxes read it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct FlightSegment {
     /// ICAO address in bits 63-40 and the flight's start (Unix seconds) in bits 31-0 (dev4).
     pub flight_id: u64,

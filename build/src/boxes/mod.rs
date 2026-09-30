@@ -1,24 +1,23 @@
-//! Builds `aircraft` tiles (PLAN section 5) from Stage 1's day files: every airborne or cruise
+//! Builds `aircraft` tiles (PLAN section 5) from Stage 1's day files: the window's segments are
+//! first sorted into z9 squares ([`shuffle`]), then square by square every airborne or cruise
 //! segment gets its Doc 29 emission (`physics::doc29`), is cut into the pieces of the boxes it
-//! crosses, and each piece is added to its box, weighted as an average day of the window (the
-//! P/B + S/I estimator: primary flights over the baseline days, flights only the secondary
-//! provider saw over the increment days). A box keeps its loudest pieces for the top-flights list.
+//! crosses, and each piece is added to its box, weighted as an average day of the window. A box
+//! keeps its loudest pieces for the top-flights list.
 
 pub mod check;
 mod place;
 mod read;
+pub mod shuffle;
 mod write;
 
+use crate::dev4::Square;
 use physics::bands::PERIODS;
 use physics::doc29::box_sums::BoxSums;
 use physics::doc29::segment::{AircraftType, NpdDistanceLevels, SegmentEmission};
 use physics::doc29::thrust::SegmentFlight;
 use place::{BoxKey, BoxPiece, Placement, cut_into_pieces};
 use rayon::prelude::*;
-use read::{
-    FLAG_DEPARTURE, FLAG_HELICOPTER_DESCENT, FLAG_ON_GROUND, FLAG_SECONDARY_ONLY, FlightSegment,
-    read_segments,
-};
+use read::{FLAG_DEPARTURE, FLAG_HELICOPTER_DESCENT, FLAG_ON_GROUND, FlightSegment};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tiles::geo::{Mercator, TileId};
@@ -199,32 +198,23 @@ fn touches(scope: &HashSet<TileId>, start: Mercator, end: Mercator) -> bool {
     })
 }
 
-/// Adds one day's segments to `boxes`, weighted `weight` for primary flights and
-/// `secondary_weight` for flights only the secondary provider saw (0 on baseline days), each box
-/// keeping its `pieces` loudest pieces. Each flight's segments must be together: a box counts a
-/// flight once while its pieces arrive one after another.
+/// Adds one day's segments with their window weights to `boxes`, each box keeping its `pieces`
+/// loudest pieces. Each flight's segments must be together: a box counts a flight once while its
+/// pieces arrive one after another.
 fn add_day(
     boxes: &mut Boxes,
-    segments: &[FlightSegment],
+    segments: &[(FlightSegment, f64)],
     placement: &Placement,
     scope: &HashSet<TileId>,
-    (weight, secondary_weight): (f64, f64),
     pieces: usize,
 ) {
-    let weight_of = |segment: &FlightSegment| {
-        if segment.flags & FLAG_SECONDARY_ONLY != 0 {
-            secondary_weight
-        } else {
-            weight
-        }
-    };
     let point = |end: [f64; 3]| (Mercator::from_degrees(end[0], end[1]), end[2]);
     // Each segment's emission, its levels and whether it is a helicopter (none without weight,
     // outside the scope or outside the thrust model's domain).
     let emitted: Vec<Option<(SegmentEmission, NpdDistanceLevels, bool)>> = segments
         .par_iter()
-        .map(|segment| {
-            if weight_of(segment) <= 0.0 || usize::from(segment.period) >= PERIODS {
+        .map(|(segment, weight)| {
+            if *weight <= 0.0 || usize::from(segment.period) >= PERIODS {
                 return None;
             }
             if !touches(scope, point(segment.start).0, point(segment.end).0) {
@@ -241,7 +231,7 @@ fn add_day(
         .par_iter()
         .zip(&emitted)
         .enumerate()
-        .flat_map_iter(|(index, (segment, emitted))| {
+        .flat_map_iter(|(index, ((segment, _), emitted))| {
             let pieces = match emitted {
                 Some((_, _, helicopter)) => cut_into_pieces(
                     placement,
@@ -271,11 +261,11 @@ fn add_day(
         .enumerate()
         .for_each(|(shard, map)| {
             for (_, index, _, piece) in &cut[bounds[shard]..bounds[shard + 1]] {
-                let segment = &segments[*index as usize];
+                let (segment, segment_weight) = &segments[*index as usize];
                 let Some((emission, levels, _)) = &emitted[*index as usize] else {
                     continue;
                 };
-                let segment_weight = weight_of(segment);
+                let segment_weight = *segment_weight;
                 let mut period_weights = [0.0; PERIODS];
                 period_weights[usize::from(segment.period)] = segment_weight;
                 let entry = map.entry(piece.key).or_default();
@@ -317,22 +307,26 @@ impl Default for BoxRule {
     }
 }
 
-/// Builds the aircraft tiles of `scope` from the day files under `segments_dir` and the terrain
-/// of `terrain_root` (a prepared year root) by `rule`; writes them under `out`, returns the
-/// number written.
-pub fn build(
-    segments_dir: &Path,
-    window: &Window,
+/// Builds the aircraft tiles of one z9 square from its day files under `shuffled` (see
+/// [`shuffle`]) and the terrain of `terrain_root` (a prepared year root) by `rule`; writes them
+/// under `out`, returns the number of tiles and boxes written.
+pub fn build_square(
+    shuffled: &Path,
+    square: Square,
     terrain_root: &Path,
-    scope: &HashSet<TileId>,
     rule: BoxRule,
     out: &Path,
-) -> Result<usize, String> {
+) -> Result<(usize, usize), String> {
+    let scope: HashSet<TileId> = (0..64)
+        .map(|index| TileId {
+            x: square.x * 8 + index % 8,
+            y: square.y * 8 + index / 8,
+        })
+        .collect();
     let mut near: HashSet<TileId> = HashSet::new();
-    for tile in scope {
-        for ring in 0..=1 {
-            near.extend(tile.ring(ring));
-        }
+    for tile in &scope {
+        near.extend(tile.ring(0));
+        near.extend(tile.ring(1));
     }
     let bytes: Vec<(TileId, Vec<u8>)> = near
         .iter()
@@ -347,57 +341,14 @@ pub fn build(
         .collect::<Result<_, _>>()
         .map_err(|error| error.to_string())?;
     let placement = Placement::new(&near, &terrain, rule.level_step_db);
-    eprintln!("aircraft boxes: terrain pyramid of {} tiles", near.len());
     let mut boxes = Boxes::default();
-    let (baseline, increment) = (
-        window.baseline_days.len().max(1) as f64,
-        window.increment_days.len().max(1) as f64,
-    );
-    let mut days: Vec<&String> = window
-        .baseline_days
-        .iter()
-        .chain(&window.increment_days)
-        .collect();
-    days.sort();
-    days.dedup();
-    for day in days {
-        let path = segments_dir.join("segments").join(format!("{day}.arrow"));
-        let mut segments = read_segments(&path, &|start, end| {
-            touches(
-                scope,
-                Mercator::from_degrees(start[0], start[1]),
-                Mercator::from_degrees(end[0], end[1]),
-            )
-        })?;
+    for mut segments in shuffle::square_days(shuffled, square)? {
         // Each flight's segments together, in their order.
-        segments.par_sort_by_key(|segment| segment.flight_id);
-        // An increment day is usually a baseline day too: its primary flights count toward the
-        // baseline, the flights only the secondary provider saw toward the increment.
-        let weight = if window.baseline_days.contains(day) {
-            1.0 / baseline
-        } else {
-            0.0
-        };
-        let secondary_weight = if window.increment_days.contains(day) {
-            1.0 / increment
-        } else {
-            0.0
-        };
-        add_day(
-            &mut boxes,
-            &segments,
-            &placement,
-            scope,
-            (weight, secondary_weight),
-            rule.pieces,
-        );
-        eprintln!(
-            "aircraft boxes: {day}: {} segments, {} boxes",
-            segments.len(),
-            boxes.len()
-        );
+        segments.par_sort_by_key(|(segment, _)| segment.flight_id);
+        add_day(&mut boxes, &segments, &placement, &scope, rule.pieces);
     }
-    write::write_tiles(&boxes, &placement, out)
+    let written = write::write_tiles(&boxes, &placement, out)?;
+    Ok((written, boxes.len()))
 }
 
 #[cfg(test)]

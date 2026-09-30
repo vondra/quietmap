@@ -265,8 +265,10 @@ pub struct BoxPiece {
 }
 
 /// A segment from `start` to `end` (Mercator, altitude above sea level) cut into the pieces of
-/// the boxes it crosses: sampled every quarter of the current box's edge, each stretch between
-/// two samples going to the box of its middle, consecutive stretches of one box joined.
+/// the boxes it crosses: first at z12 tile edges (so a tile's pieces depend on nothing outside
+/// it and its neighbours), then within each tile sampled every quarter of the current box's
+/// edge, each stretch between two samples going to the box of its middle, consecutive stretches
+/// of one box joined.
 pub fn cut_into_pieces(
     placement: &Placement,
     start: (Mercator, f64),
@@ -285,32 +287,50 @@ pub fn cut_into_pieces(
     let metres_per_unit = cell_edge_m(TileId::containing(start.0), 12);
     let length_m = (end.0.x - start.0.x).hypot(end.0.y - start.0.y) * metres_per_unit;
     let mut pieces: Vec<BoxPiece> = Vec::new();
-    let mut t = 0.0;
-    let mut step_m = {
-        let (probe, probe_altitude) = at(0.0);
-        placement.edge_m(&placement.box_of(probe, probe_altitude, helicopter).0) / SAMPLES_PER_EDGE
-    };
-    while t < 1.0 {
-        let next = if length_m > 0.0 {
-            (t + step_m / length_m).min(1.0)
-        } else {
-            1.0
+    for pair in tile_crossings(start.0, end.0).windows(2) {
+        let (mut t, until) = (pair[0], pair[1]);
+        let mut step_m = {
+            let (probe, probe_altitude) = at(0.5 * (t + until));
+            placement.edge_m(&placement.box_of(probe, probe_altitude, helicopter).0)
+                / SAMPLES_PER_EDGE
         };
-        let (middle, middle_altitude) = at(0.5 * (t + next));
-        let (key, ground_m) = placement.box_of(middle, middle_altitude, helicopter);
-        step_m = placement.edge_m(&key) / SAMPLES_PER_EDGE;
-        match pieces.last_mut() {
-            Some(piece) if piece.key == key => piece.end = at(next),
-            _ => pieces.push(BoxPiece {
-                key,
-                ground_m,
-                start: at(t),
-                end: at(next),
-            }),
+        while t < until {
+            let next = if length_m > 0.0 {
+                (t + step_m / length_m).min(until)
+            } else {
+                until
+            };
+            let (middle, middle_altitude) = at(0.5 * (t + next));
+            let (key, ground_m) = placement.box_of(middle, middle_altitude, helicopter);
+            step_m = placement.edge_m(&key) / SAMPLES_PER_EDGE;
+            match pieces.last_mut() {
+                Some(piece) if piece.key == key => piece.end = at(next),
+                _ => pieces.push(BoxPiece {
+                    key,
+                    ground_m,
+                    start: at(t),
+                    end: at(next),
+                }),
+            }
+            t = next;
         }
-        t = next;
     }
     pieces
+}
+
+/// The fractions 0, the crossings of z12 tile edges in order, and 1 along a segment.
+fn tile_crossings(start: Mercator, end: Mercator) -> Vec<f64> {
+    let mut crossings = vec![0.0, 1.0];
+    for (from, to) in [(start.x, end.x), (start.y, end.y)] {
+        let (low, high) = (from.min(to), from.max(to));
+        let mut edge = low.floor() + 1.0;
+        while edge < high {
+            crossings.push((edge - from) / (to - from));
+            edge += 1.0;
+        }
+    }
+    crossings.sort_by(f64::total_cmp);
+    crossings
 }
 
 #[cfg(test)]

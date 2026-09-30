@@ -150,7 +150,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 out: &out,
             })
         }
-        "aircraft-boxes" => {
+        "aircraft-shuffle" => {
             let listed = |key: &str| {
                 options
                     .optional(key)
@@ -161,26 +161,29 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 baseline_days: listed("days"),
                 increment_days: listed("increment-days"),
             };
-            // Every z12 tile of the listed z9 squares (8 x 8 each).
-            let scope: std::collections::HashSet<tiles::geo::TileId> =
-                parse_squares(options.get("squares")?)?
-                    .iter()
-                    .flat_map(|square| {
-                        (0..64).map(move |index| tiles::geo::TileId {
-                            x: square.x * 8 + index % 8,
-                            y: square.y * 8 + index / 8,
-                        })
-                    })
-                    .collect();
-            let written = boxes::build(
-                Path::new(options.get("segments")?),
-                &window,
-                Path::new(options.get("terrain")?),
-                &scope,
-                box_rule(&options)?,
-                &out,
-            )?;
-            eprintln!("aircraft: {written} tiles");
+            let scope = parse_squares(options.get("squares")?)?
+                .into_iter()
+                .collect();
+            boxes::shuffle::shuffle(Path::new(options.get("segments")?), &window, &scope, &out)
+        }
+        "aircraft-boxes" => {
+            let rule = box_rule(&options)?;
+            for square in parse_squares(options.get("squares")?)? {
+                let started = std::time::Instant::now();
+                let (tiles, written) = boxes::build_square(
+                    Path::new(options.get("shuffled")?),
+                    square,
+                    Path::new(options.get("terrain")?),
+                    rule,
+                    &out,
+                )?;
+                eprintln!(
+                    "aircraft boxes: square {}/{}: {written} boxes in {tiles} tiles, {:.0} s",
+                    square.x,
+                    square.y,
+                    started.elapsed().as_secs_f64()
+                );
+            }
             Ok(())
         }
         "aircraft-check" => {

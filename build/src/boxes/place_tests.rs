@@ -65,3 +65,38 @@ fn a_segment_is_cut_into_chained_pieces_covering_it() {
     // Climbing from 150 m to 250 m, the pieces rise through the bands.
     assert!(pieces.last().unwrap().key.band > pieces[0].key.band);
 }
+
+#[test]
+fn pieces_end_at_tile_edges() {
+    let neighbour = TileId {
+        x: PRAGUE.x + 1,
+        ..PRAGUE
+    };
+    let terrain = HashMap::new();
+    let placement = Placement::new(
+        &HashSet::from([PRAGUE, neighbour]),
+        &terrain,
+        BOX_EDGE_LEVEL_STEP_DB,
+    );
+    let at = |x: f64| {
+        (
+            Mercator {
+                x,
+                y: f64::from(PRAGUE.y) + 0.3,
+            },
+            2_000.0,
+        )
+    };
+    let edge = f64::from(neighbour.x);
+    let pieces = cut_into_pieces(&placement, at(edge - 0.05), at(edge + 0.05), false);
+    let crossing = pieces
+        .windows(2)
+        .find(|pair| pair[0].key.tile != pair[1].key.tile)
+        .expect("the segment crosses into the neighbour");
+    assert_eq!(crossing[0].end.0.x, edge);
+    assert_eq!(crossing[1].start.0.x, edge);
+    for piece in &pieces {
+        let tile = f64::from(piece.key.tile.x);
+        assert!(piece.start.0.x >= tile && piece.end.0.x <= tile + 1.0);
+    }
+}
