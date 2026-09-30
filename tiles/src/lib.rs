@@ -1,6 +1,8 @@
 //! Prepared z12 tiles: numbering and coordinates ([`geo`]) and one module per kind with its
-//! file format, writer and reader ([`terrain`], [`sources`]); [`read`] reads whole files.
+//! file format, writer and reader ([`terrain`], [`obstacles`], [`sources`], [`aircraft`]); [`read`]
+//! reads whole files.
 
+pub mod aircraft;
 pub mod geo;
 pub mod obstacles;
 pub mod read;
