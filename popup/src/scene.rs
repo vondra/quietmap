@@ -61,6 +61,19 @@ impl<'a> Ground<'a> {
         })
     }
 
+    /// The terrain height at `metres`, `None` where no tile is read yet or a node has no data
+    /// (the aircraft horizons skip such samples; a ray never meets them).
+    pub fn read_height_m(&self, metres: [f64; 2]) -> Option<f64> {
+        let position = self.frame.to_mercator(metres).snapped_to_lattice();
+        let terrain = self
+            .slot(TileId::containing(position))
+            .and_then(|slot| self.tiles[slot].as_ref())?;
+        match terrain {
+            Some(terrain) => terrain.sample(position).map(|sample| sample.height_m),
+            None => Some(OCEAN.height_m),
+        }
+    }
+
     /// Samples the ground under the ray from `source` to `receiver` (both in click metres).
     pub fn fill_profile(
         &self,

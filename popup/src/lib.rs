@@ -6,6 +6,7 @@
 //! [`evaluate`] (the full physics of one source), [`answer`] (the ring loop), [`json`] (an
 //! update as a line of JSON).
 
+pub mod aircraft;
 pub mod answer;
 pub mod building;
 pub mod candidates;
