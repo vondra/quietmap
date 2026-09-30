@@ -15,14 +15,20 @@ import {
   mapUrl,
   popupRequests,
   sendPopupLine,
+  TILE_Z,
 } from './support'
 
 /** The middle of a track piece, [lat, lon]. */
 const middle = ([start, end]: TrackPiece) => [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2]
 
-/** Whether the map shows the highlighted track's blue at each place (the empty world is black). */
+// The highlight is dev1's white line on a black casing; the hermetic map is black, so a place is
+// drawn when a pixel within 3 px of it is near white.
 async function trackDrawnAt(page: Page, places: number[][]): Promise<boolean[]> {
-  return (await mapPixels(page, POINT, places)).map(([red, , blue]) => blue - red > 100)
+  const degrees = 3 * 360 / (512 * 2 ** TILE_Z)
+  const offsets = [[0, 0], [degrees, 0], [-degrees, 0], [0, degrees], [0, -degrees]]
+  const around = places.flatMap(([lat, lng]) => offsets.map(([dLat, dLng]) => [lat + dLat, lng + dLng]))
+  const white = (await mapPixels(page, POINT, around)).map(pixel => Math.min(...pixel.slice(0, 3)) > 200)
+  return places.map((_, index) => white.slice(index * offsets.length, (index + 1) * offsets.length).some(Boolean))
 }
 
 const [AIRBUS, HELICOPTER] = FIXTURE_FLIGHTS
