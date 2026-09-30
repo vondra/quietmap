@@ -32,6 +32,9 @@ pub struct LoudFlight {
     pub lmax_db: f64,
     pub closest_m: f64,
     pub altitude_m: f64,
+    /// Its computed pieces, the line on the map: each piece's ends as latitude, longitude (deg)
+    /// and altitude above sea level (m).
+    pub track: Vec<[[f64; 3]; 2]>,
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -133,6 +136,10 @@ impl FlightTotals {
                 let closest = sel.closest.on_segment_m;
                 let lateral = closest[0].hypot(closest[1]);
                 let lmax_db = emission.read_npd(lateral.hypot(closest[2])).lamax_db;
+                let end_on_map = |end: usize| {
+                    let (lat, lon) = tile.to_mercator(piece.ends[end]).to_degrees();
+                    [lat, lon, piece.altitudes_m[end]]
+                };
                 let entry = self
                     .flights
                     .entry((flight.icao, flight.start_unix))
@@ -146,7 +153,9 @@ impl FlightTotals {
                         lmax_db: f64::NEG_INFINITY,
                         closest_m: lateral,
                         altitude_m: closest[2],
+                        track: Vec::new(),
                     });
+                entry.track.push([end_on_map(0), end_on_map(1)]);
                 let energy = 10f64.powf(entry.sel_db / 10.0) + 10f64.powf(sel.sel_db / 10.0);
                 entry.sel_db = 10.0 * energy.log10();
                 if lmax_db > entry.lmax_db {
