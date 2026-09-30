@@ -1,12 +1,14 @@
 // The aircraft layer's loudest flights at the point, loudest first: peak level, where the flight
-// passed, when, and what flew, linked to the flight's trace on the adsb.lol globe.
+// passed, when, and what flew, linked to the flight's trace on the adsb.lol globe. A row hovered
+// (or tapped on a phone) highlights the flight's track on the map.
 import type { TopFlight } from '../../../types/noise'
 import { HoverText } from '../../ui/info-tip'
 import { PERIOD_LABELS_DETAIL } from '../shared'
-import { topFlightCells } from '../top-flights'
+import { topFlightCells, topFlightKey } from '../top-flights'
 
 const TITLE_TOOLTIP =
-  'The ADS-B flights with the highest peak level (Lmax) at this point, loudest first.'
+  'The ADS-B flights with the highest peak level (Lmax) at this point, loudest first.\n' +
+  'Hover a row (tap it on a phone) to see on the map the part of its track computed here.'
 const AIRCRAFT_TOOLTIP =
   'The aircraft type, with its callsign and ICAO address in its tooltip.\n' +
   'It opens the flight\'s trace of that day on adsb.lol, in a new tab.'
@@ -32,7 +34,11 @@ const NUMBER_COLUMNS = [
 /** The date's colour by period: day as the rest of the row, evening amber, night indigo. */
 const PERIOD_COLOURS = ['', 'text-amber-700', 'text-indigo-600']
 
-export function TopFlightsTable({ flights }: { flights: TopFlight[] }) {
+export function TopFlightsTable({ flights, onHighlightFlight }: {
+  flights: TopFlight[]
+  /** Shows a flight's track on the map, by `topFlightKey`; null shows none. */
+  onHighlightFlight: (key: string | null) => void
+}) {
   if (!flights.length) return null
   // Only the type name wraps; should a row still not fit, the table scrolls sideways, never the popup.
   return (
@@ -57,8 +63,16 @@ export function TopFlightsTable({ flights }: { flights: TopFlight[] }) {
         <tbody>
           {flights.map(flight => {
             const cells = topFlightCells(flight)
+            const key = topFlightKey(flight)
+            // A phone has no hover, but browsers send a tapped row mouseenter and, on the next tap
+            // elsewhere, mouseleave: the tapped flight's track stays until then.
             return (
-              <tr key={`${flight.icao}-${flight.start_unix}`}>
+              <tr
+                key={key}
+                className="hover:bg-muted/30"
+                onMouseEnter={() => onHighlightFlight(key)}
+                onMouseLeave={() => onHighlightFlight(null)}
+              >
                 <td className="text-right font-medium text-foreground">{cells.lmax}</td>
                 <td className="text-right">{cells.closestKm}</td>
                 <td className="text-right">{cells.altitudeKm}</td>

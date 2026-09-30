@@ -1,13 +1,10 @@
-// Hermetic browser fixtures: a one-cell HM3 world, a black basemap, and a streamed popup the test
-// writes line by line.
-import { expect, type Page } from '@playwright/test'
+// Hermetic browser fixtures: a one-cell HM3 world, a black basemap, a streamed popup the test writes
+// line by line (the answers are in answers.ts), and the painted canvas read back.
+import { devices, expect, type Page } from '@playwright/test'
 import { TILE_PX } from '../src/lib/hm3-decoder'
-import type { Contributor, PopupUpdate, TopFlight } from '../src/types/noise'
 
 export const FIXTURE_DB = 63
 export const SOURCE_DB = 60
-/** Quieter than the street: the aircraft row ranks below it. */
-const AIRCRAFT_DB = 55
 /** The hermetic world's published zoom (a z12 world, while the served heatmap is z13: the
  *  frontend must take its tile ceiling from the manifest). */
 export const TILE_Z = 12
@@ -26,14 +23,17 @@ export type PixelCenter = {
   py: number
 }
 
+/** Web Mercator y of a latitude: 0 at the world's north edge, 1 at its south edge. */
+function mercatorY(lat: number): number {
+  const latRad = lat * Math.PI / 180
+  return (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2
+}
+
 /** Snap a geographic point to the exact HM3 receiver lattice at tile zoom `z`. */
 export function hm3PixelCenter(lat: number, lng: number, z = TILE_Z): PixelCenter {
   const worldPixels = 2 ** z * TILE_PX
-  const latRad = lat * Math.PI / 180
   const gx = Math.floor((lng + 180) / 360 * worldPixels)
-  const gy = Math.floor(
-    (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * worldPixels,
-  )
+  const gy = Math.floor(mercatorY(lat) * worldPixels)
   const x = (gx + 0.5) / worldPixels
   const y = (gy + 0.5) / worldPixels
   return {
@@ -44,6 +44,18 @@ export function hm3PixelCenter(lat: number, lng: number, z = TILE_Z): PixelCente
     px: gx % TILE_PX,
     py: gy % TILE_PX,
   }
+}
+
+/** The clicked point of the hermetic world, the map's centre. */
+export const POINT = hm3PixelCenter(49.8486, 14.1639)
+
+/** A phone: the popup is the bottom sheet over the lower half of the map. */
+export const PHONE = {
+  viewport: { width: 390, height: 844 },
+  deviceScaleFactor: 1,
+  userAgent: devices['Pixel 5'].userAgent,
+  isMobile: true,
+  hasTouch: true,
 }
 
 export function mapUrl(point: PixelCenter, layers = 'road', zoom = TILE_Z): string {
@@ -58,76 +70,6 @@ function hm3Tile(point?: PixelCenter, db?: number): Buffer {
   tile[5] = 1
   if (point && db != null) tile[6 + point.py * TILE_PX + point.px] = Math.round(db * 2)
   return tile
-}
-
-/** One road contributor at `db`. */
-export function roadContributor(db: number): Contributor {
-  return {
-    id: '00000000000000aa',
-    source_type: 'road',
-    name: 'Fixture street',
-    subtype: 'tertiary',
-    distance_m: 12,
-    received_lden: db,
-    received: { ld: db - 2, le: db - 3, ln: db - 8, lden: db },
-    metadata: {
-      name: 'Fixture street', ref: '', road_class: 'tertiary',
-      aadt_light: 9000, aadt_medium: 300, aadt_heavy: 200, aadt_moto: 50, traffic_estimated: 8,
-      cross_section_aadt: 9550, speed_posted_kmh: 50, speed_kmh: 50, speed_source: 'osm_posted',
-      surface: 'asphalt', surface_corr_db: 0, lanes: 2, oneway: false, bridge: false, source_id: 1,
-    },
-  }
-}
-
-/** One streamed update of the popup contract. */
-export function popupUpdate(
-  seq: number,
-  partial: boolean,
-  lat: number,
-  lng: number,
-  db: number | null,
-  building: PopupUpdate['building'] = null,
-): PopupUpdate {
-  const levels = { ld: db, le: db, ln: db, lden: db }
-  return {
-    seq,
-    partial,
-    center: [lat, lng],
-    elevation_m: 350,
-    building,
-    total_lden: db,
-    total: levels,
-    sources: [{ source_type: 'road', ...levels, lden_upper: db, evaluated: 1, candidates: 1 }],
-    top_contributors: db == null ? [] : [roadContributor(db)],
-    top_flights: [],
-    stats: { rings: seq, files: 27, bytes: 1e6, read_ms: 3, candidate_ms: 4, evaluate_ms: 20, elapsed_ms: 30 },
-  }
-}
-
-/** The loudest flights, loudest first: an A320 by day, and a helicopter with a long type name at
- *  night. */
-export const FIXTURE_FLIGHTS: TopFlight[] = [
-  {
-    icao: '4b0a1c', callsign: 'CSA123', type: 'A320', start_unix: Date.UTC(2025, 8, 2, 14, 26, 40) / 1000,
-    period: 'day', sel_db: 79.1, lmax_db: 70.2, closest_m: 444, altitude_m: 255,
-  },
-  {
-    icao: '49d3e1', callsign: 'HELI42', type: 'AS55', start_unix: Date.UTC(2025, 8, 1, 23, 58, 20) / 1000,
-    period: 'night', sel_db: 77.4, lmax_db: 68.9, closest_m: 1310, altitude_m: 610,
-  },
-]
-
-/** `update` with the aircraft layer audible at AIRCRAFT_DB and its loudest `flights`. */
-export function withAircraft(update: PopupUpdate, flights: TopFlight[]): PopupUpdate {
-  const db = AIRCRAFT_DB
-  return {
-    ...update,
-    sources: [
-      ...update.sources,
-      { source_type: 'aircraft', ld: db - 1, le: db - 4, ln: db - 9, lden: db, lden_upper: db, evaluated: 40, candidates: 40 },
-    ],
-    top_flights: flights,
-  }
 }
 
 /** Replace the third-party basemap with a stable opaque-black tile. */
@@ -269,9 +211,10 @@ export async function afterPaint(page: Page): Promise<void> {
   }))
 }
 
-/** Decode a locator screenshot in-browser and return its exact centre RGBA. */
-export async function pngCenterPixel(page: Page, png: Buffer): Promise<number[]> {
-  return page.evaluate(async (source) => {
+/** Decode a locator screenshot in-browser and return the RGBA at each of `at` (its pixels from the
+ *  top left), by default at its exact centre. */
+async function pngPixels(page: Page, png: Buffer, at?: { x: number; y: number }[]): Promise<number[][]> {
+  return page.evaluate(async ({ source, at }) => {
     const image = new Image()
     image.src = source
     await image.decode()
@@ -280,6 +223,31 @@ export async function pngCenterPixel(page: Page, png: Buffer): Promise<number[]>
     canvas.height = image.height
     const context = canvas.getContext('2d')!
     context.drawImage(image, 0, 0)
-    return [...context.getImageData(Math.floor(image.width / 2), Math.floor(image.height / 2), 1, 1).data]
-  }, `data:image/png;base64,${png.toString('base64')}`)
+    return (at ?? [{ x: Math.floor(image.width / 2), y: Math.floor(image.height / 2) }])
+      .map(({ x, y }) => [...context.getImageData(x, y, 1, 1).data])
+  }, { source: `data:image/png;base64,${png.toString('base64')}`, at })
+}
+
+/** Decode a locator screenshot in-browser and return its exact centre RGBA. */
+export async function pngCenterPixel(page: Page, png: Buffer): Promise<number[]> {
+  return (await pngPixels(page, png))[0]
+}
+
+/** The painted map's RGBA at each [lat, lon] of `places`, the map centred on `center` at `zoom`
+ *  (MapLibre draws the world 512 px wide at zoom 0). */
+export async function mapPixels(
+  page: Page,
+  center: PixelCenter,
+  places: readonly (readonly number[])[],
+  zoom = TILE_Z,
+): Promise<number[][]> {
+  const canvas = page.locator('canvas.maplibregl-canvas')
+  const box = (await canvas.boundingBox())!
+  const worldPixels = 512 * 2 ** zoom
+  const at = places.map(([lat, lng]) => ({
+    x: Math.floor(box.width / 2 + (lng - center.lng) / 360 * worldPixels),
+    y: Math.floor(box.height / 2 + (mercatorY(lat) - mercatorY(center.lat)) * worldPixels),
+  }))
+  await afterPaint(page)
+  return pngPixels(page, await canvas.screenshot(), at)
 }

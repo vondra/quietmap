@@ -1,8 +1,19 @@
-// A loudest flight's cells in words: its peak level, where it passed, when (UTC) and in which
-// period, what flew, and the link to its trace on the adsb.lol globe. Pure TypeScript, so the
-// wording has dependency-free unit tests.
-import type { TopFlight } from '../../types/noise.ts'
+// A loudest flight in words and on the map: its cells (peak level, where it passed, when (UTC) and
+// in which period, what flew, the link to its trace on the adsb.lol globe) and its track as
+// GeoJSON. Pure TypeScript, so both have dependency-free unit tests.
+import type { TopFlight, TrackPiece } from '../../types/noise.ts'
 import { aircraftTypeName } from '../../utils/aircraft-types.ts'
+
+/** The flight across the streamed updates of one click: one aircraft, one start. */
+export function topFlightKey(flight: TopFlight): string {
+  return `${flight.icao}-${flight.start_unix}`
+}
+
+/** The track's pieces as lines of [lon, lat]. The altitude stays out: a GeoJSON height is above the
+ *  ellipsoid, the track's above sea level, and the map is flat. */
+export function flightTrackGeoJson(track: TrackPiece[]): GeoJSON.MultiLineString {
+  return { type: 'MultiLineString', coordinates: track.map(piece => piece.map(([lat, lon]) => [lon, lat])) }
+}
 
 /** In the order of the popup's period labels. */
 const PERIODS = ['day', 'evening', 'night'] as const

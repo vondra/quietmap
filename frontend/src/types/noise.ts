@@ -63,6 +63,9 @@ export interface BuildingAnswer {
   [field: string]: unknown
 }
 
+/** A piece of a flight's track: its two ends as [lat, lon, altitude above sea level in m]. */
+export type TrackPiece = [[number, number, number], [number, number, number]]
+
 /** One of the loudest flights at the point: an ADS-B flight of the aircraft layer. */
 export interface TopFlight {
   /** ICAO 24-bit address, six lowercase hex digits. */
@@ -84,6 +87,9 @@ export interface TopFlight {
   closest_m: number
   /** Height of that point above the receiver. */
   altitude_m: number
+  /** The parts of the flight the popup computed near the point, in the order computed: not along
+   *  the flight, and not necessarily contiguous. */
+  track: TrackPiece[]
 }
 
 /** What the click read and computed so far. */

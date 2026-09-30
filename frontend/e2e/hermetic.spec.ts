@@ -1,27 +1,25 @@
 // The visitor's path in a real browser, without a backend: heatmap hover, the streamed popup (its
 // refinement, errors and aborts, the loudest flights), building clicks, layer switches, search, and
 // the phone sheet.
-import { devices, expect, test } from '@playwright/test'
+import { expect, test } from '@playwright/test'
+import { FIXTURE_FLIGHTS, popupUpdate, withAircraft } from './answers'
 import {
   FIXTURE_DB,
-  FIXTURE_FLIGHTS,
+  PHONE,
+  POINT,
   SOURCE_DB,
   TILE_Z,
   abortedPopupRequests,
   afterPaint,
   canvasCenter,
   endPopup,
-  hm3PixelCenter,
   installHermeticMap,
   mapUrl,
   pngCenterPixel,
   popupRequests,
-  popupUpdate,
   sendPopupLine,
-  withAircraft,
 } from './support'
 
-const POINT = hm3PixelCenter(49.8486, 14.1639)
 const badge = (page: import('@playwright/test').Page) => page.locator('[data-testid="noise-badge"]:visible')
 
 test('desktop: hover reads the painted cell, the popup redraws on every streamed update', async ({ page }) => {
@@ -174,13 +172,7 @@ test('search: picking a result flies the map there and opens its popup', async (
 })
 
 test.describe('mobile', () => {
-  test.use({
-    viewport: { width: 390, height: 844 },
-    deviceScaleFactor: 1,
-    userAgent: devices['Pixel 5'].userAgent,
-    isMobile: true,
-    hasTouch: true,
-  })
+  test.use(PHONE)
 
   test('map tap opens the real mobile sheet and layer controls', async ({ page }) => {
     await installHermeticMap(page, POINT)

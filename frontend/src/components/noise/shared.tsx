@@ -96,11 +96,13 @@ const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
     shooting_shotgun: 'Shotgun range',
     default: 'Building',
   },
-  aircraft: { mixed: 'Aircraft', aircraft: 'Aircraft' },
+  aircraft: { mixed: 'Aircraft', aircraft: 'Aircraft', airport_traffic: 'Airport ground operations' },
 }
 
+/** A class in words. What follows a colon names the one source, not its class (the airport of
+ *  `airport_traffic:LKPR`). */
 export function subtypeLabel(sourceType: string, subtype: string): string {
-  return SUBTYPE_LABELS[sourceType]?.[subtype] || subtype.replace(/_/g, ' ')
+  return SUBTYPE_LABELS[sourceType]?.[subtype.split(':')[0]] || subtype.replace(/_/g, ' ')
 }
 
 /** The class a contributor's label falls back to: road class, rail type, building or site type. */

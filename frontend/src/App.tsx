@@ -11,6 +11,7 @@ import BasemapBar from './components/BasemapBar'
 import { useUrlState, QUIET_THRESHOLD_DEFAULT, type UrlState } from './hooks/useUrlState'
 import type { SelectedLocation } from './components/FlyToLocation'
 import type { PopupUpdate } from './types/noise'
+import { topFlightKey } from './components/noise/top-flights'
 import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
 
@@ -27,6 +28,11 @@ export default function App() {
   // with a skeleton at the click and keeps the position on an error, so the visitor sees where.
   const [noiseDetailData, setNoiseDetailData] = useState<PopupUpdate | null>(null)
   const [noiseDetailError, setNoiseDetailError] = useState<string | null>(null)
+  // The loudest flight whose track the map shows (its row hovered, or tapped on a phone), by key:
+  // the track is read from the latest update, so it follows the stream and goes when the flight
+  // leaves the list.
+  const [highlightedFlight, setHighlightedFlight] = useState<string | null>(null)
+  const highlightedTrack = noiseDetailData?.top_flights.find(f => topFlightKey(f) === highlightedFlight)?.track ?? null
   const [quietClustersEnabled, setQuietClustersEnabled] = useState(initial.quietClusters)
   const [quietThreshold, setQuietThreshold] = useState(initial.quietThreshold ?? QUIET_THRESHOLD_DEFAULT)
   const [basemap, setBasemap] = useState<BasemapId>(initial.basemap ?? DEFAULT_BASEMAP)
@@ -121,13 +127,14 @@ export default function App() {
   const closeNoiseDetail = useCallback(() => {
     setNoiseDetailData(null)
     setNoiseDetailError(null)
+    setHighlightedFlight(null)
   }, [])
 
   const handleDetailPositionChange = useCallback((pos: { lat: number; lng: number } | null) => {
     activeDetailPosition.current = pos
     detailPositionRef.current = pos
     setDetailPosition(pos)
-    // Fresh click: clear the previous point's answer and error so the new skeleton renders.
+    // Fresh click: clear the previous point's answer, error and flight so the new skeleton renders.
     closeNoiseDetail()
     syncUrl({ detailPosition: pos })
   }, [syncUrl, closeNoiseDetail])
@@ -192,6 +199,7 @@ export default function App() {
             position={detailPosition}
             error={noiseDetailError}
             onNoiseClose={handleNoiseClose}
+            onHighlightFlight={setHighlightedFlight}
           />
         </div>
 
@@ -218,6 +226,7 @@ export default function App() {
         onHashState={handleHashState}
         onDetailError={handleDetailError}
         detailPosition={detailPosition}
+        flightTrack={highlightedTrack}
         quietClustersEnabled={quietClustersEnabled}
         quietThreshold={quietThreshold}
         heatmapLayers={heatmapLayers}
@@ -262,6 +271,7 @@ export default function App() {
         position={detailPosition}
         error={noiseDetailError}
         onClose={handleNoiseClose}
+        onHighlightFlight={setHighlightedFlight}
       />
     </div>
   )

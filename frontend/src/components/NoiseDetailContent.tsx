@@ -15,9 +15,11 @@ const SHOW_STATS = typeof location !== 'undefined' && new URLSearchParams(locati
 export interface NoiseDetailContentProps {
   data: PopupUpdate
   maxSources?: number
+  /** Shows a loudest flight's track on the map, by `topFlightKey`; null shows none. */
+  onHighlightFlight: (key: string | null) => void
 }
 
-export default function NoiseDetailContent({ data, maxSources }: NoiseDetailContentProps) {
+export default function NoiseDetailContent({ data, maxSources, onHighlightFlight }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.center
   // The popup's 0 dB display floor, applied to this list the way the per-layer rows apply it.
   const audibleContributors = data.top_contributors.filter(c => c.received_lden != null && c.received_lden > 0)
@@ -28,7 +30,7 @@ export default function NoiseDetailContent({ data, maxSources }: NoiseDetailCont
   if (aircraft && aircraftLden > 0) {
     const rank = audibleContributors.findIndex(c => (c.received_lden ?? 0) < aircraftLden)
     rows.splice(rank < 0 ? rows.length : rank, 0,
-      <AircraftLayerRow key="aircraft" layer={aircraft} flights={data.top_flights} />)
+      <AircraftLayerRow key="aircraft" layer={aircraft} flights={data.top_flights} onHighlightFlight={onHighlightFlight} />)
   }
   const totalLdenText = txtTable([
     ...data.sources

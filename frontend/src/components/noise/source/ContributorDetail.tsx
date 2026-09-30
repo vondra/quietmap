@@ -36,11 +36,15 @@ export function ContributorDetail({ c }: { c: Contributor }) {
   )
 }
 
-export function AircraftLayerDetail({ received, flights }: { received: PeriodLevels; flights: TopFlight[] }) {
+export function AircraftLayerDetail({ received, flights, onHighlightFlight }: {
+  received: PeriodLevels
+  flights: TopFlight[]
+  onHighlightFlight: (key: string | null) => void
+}) {
   return (
     <div className={DETAIL_CLASS}>
       <PeriodLevelsLine received={received} />
-      <TopFlightsTable flights={flights} />
+      <TopFlightsTable flights={flights} onHighlightFlight={onHighlightFlight} />
     </div>
   )
 }

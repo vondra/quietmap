@@ -14,9 +14,10 @@ interface MobileDetailSheetProps {
   position?: { lat: number; lng: number } | null
   error?: string | null
   onClose: () => void
+  onHighlightFlight: (key: string | null) => void
 }
 
-export default function MobileDetailSheet({ data, position, error, onClose }: MobileDetailSheetProps) {
+export default function MobileDetailSheet({ data, position, error, onClose, onHighlightFlight }: MobileDetailSheetProps) {
   const [expanded, setExpanded] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
@@ -109,7 +110,7 @@ export default function MobileDetailSheet({ data, position, error, onClose }: Mo
           {showSkeleton
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
-                <NoiseDetailContent data={data} maxSources={9} />
+                <NoiseDetailContent data={data} maxSources={9} onHighlightFlight={onHighlightFlight} />
               </Suspense>}
         </div>
       </div>

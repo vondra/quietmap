@@ -1,9 +1,11 @@
-// The map: basemap, noise heatmap, quiet zones, hover readout, search flight, and the click popup.
+// The map: basemap, noise heatmap, quiet zones, hover readout, search flight, the click popup and the
+// track of the loudest flight highlighted in it.
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import Map, { NavigationControl, GeolocateControl } from 'react-map-gl/maplibre'
 import type { StyleSpecification, GeolocateControl as GeolocateControlInstance } from 'maplibre-gl'
 import FlyToLocation from './FlyToLocation'
 import DetailPopup from './DetailPopup'
+import FlightTrackLayer from './FlightTrackLayer'
 import QuietZonesLayer from './QuietZonesLayer'
 import HeatmapOverlay from './HeatmapOverlay'
 import { HEATMAP_LAYERS, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
@@ -12,7 +14,7 @@ import MapStateSync from './MapStateSync'
 import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
 import { QUIET_THRESHOLD_DEFAULT, type UrlState } from '../hooks/useUrlState'
 import type { SelectedLocation } from './FlyToLocation'
-import type { PopupUpdate } from '../types/noise'
+import type { PopupUpdate, TrackPiece } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 interface MapViewProps {
@@ -27,6 +29,8 @@ interface MapViewProps {
   onDetailPositionChange?: (pos: { lat: number; lng: number } | null) => void
   onDetailError?: (message: string) => void
   detailPosition?: { lat: number; lng: number } | null
+  /** The track of the loudest flight highlighted in the popup. */
+  flightTrack?: TrackPiece[] | null
   quietClustersEnabled?: boolean
   quietThreshold?: number
   heatmapLayers?: Record<string, boolean>
@@ -42,7 +46,7 @@ interface MapViewProps {
 
 export default function MapView({
   isCurrentDetailPosition, selectedLocation, initialCenter, initialZoom,
-  basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition,
+  basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition, flightTrack,
   quietClustersEnabled, quietThreshold, heatmapLayers,
   registerGeolocateTrigger, onGeolocateActiveChange, onGeolocateReadyChange,
 }: MapViewProps) {
@@ -156,6 +160,7 @@ export default function MapView({
         onDetailPositionChange={onDetailPositionChange}
         onDetailError={onDetailError}
       />
+      <FlightTrackLayer track={flightTrack ?? null} />
       {onViewChange && onHashState && <MapStateSync onViewChange={onViewChange} onHashState={onHashState} />}
     </Map>
   )

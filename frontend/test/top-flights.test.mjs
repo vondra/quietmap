@@ -1,9 +1,10 @@
 // A loudest flight's cells: level, kilometres, the UTC start day with the period letter, the type in
-// words, and the link to the trace of the day the flight started.
+// words, and the link to the trace of the day the flight started; its identity across updates and its
+// track as map lines.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { topFlightCells } from '../src/components/noise/top-flights.ts'
+import { flightTrackGeoJson, topFlightCells, topFlightKey } from '../src/components/noise/top-flights.ts'
 
 // A visitor east of Greenwich, where 23:58 UTC is already the next day.
 process.env.TZ = 'Europe/Prague'
@@ -58,4 +59,25 @@ test('a period the popup has no label for is marked, not guessed', () => {
   const cells = topFlightCells({ ...dayFlight, period: '' })
   assert.equal(cells.date, '09-02 ?')
   assert.equal(cells.period, -1)
+})
+
+test('a flight is known across updates by its aircraft and start, whatever else changes', () => {
+  assert.equal(topFlightKey(dayFlight), '4b0a1c-1756823200')
+  assert.equal(topFlightKey({ ...dayFlight, lmax_db: 72.5, closest_m: 279 }), topFlightKey(dayFlight))
+  assert.notEqual(topFlightKey({ ...dayFlight, start_unix: dayFlight.start_unix + 86_400 }), topFlightKey(dayFlight))
+})
+
+test('a track is one map line per piece, as computed and apart, [lon, lat] without the altitude', () => {
+  const track = [
+    [[50.08123, 14.25001, 787], [50.08456, 14.26789, 812]],
+    [[50.07001, 14.20002, 640], [50.07234, 14.21003, 655]],
+  ]
+  assert.deepEqual(flightTrackGeoJson(track), {
+    type: 'MultiLineString',
+    coordinates: [
+      [[14.25001, 50.08123], [14.26789, 50.08456]],
+      [[14.20002, 50.07001], [14.21003, 50.07234]],
+    ],
+  })
+  assert.deepEqual(flightTrackGeoJson([]), { type: 'MultiLineString', coordinates: [] })
 })

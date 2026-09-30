@@ -16,9 +16,10 @@ interface DetailCardProps {
   position?: { lat: number; lng: number } | null
   error?: string | null
   onNoiseClose: () => void
+  onHighlightFlight: (key: string | null) => void
 }
 
-export default function DetailCard({ noiseData, position, error, onNoiseClose }: DetailCardProps) {
+export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlightFlight }: DetailCardProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // A new point starts at the top; the streamed updates of one point keep the reader's scroll.
@@ -47,7 +48,7 @@ export default function DetailCard({ noiseData, position, error, onNoiseClose }:
       {showSkeleton
         ? <DetailSkeleton position={position} error={error} />
         : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
-            <NoiseDetailContent data={noiseData} />
+            <NoiseDetailContent data={noiseData} onHighlightFlight={onHighlightFlight} />
           </Suspense>}
     </FloatingCard>
   )

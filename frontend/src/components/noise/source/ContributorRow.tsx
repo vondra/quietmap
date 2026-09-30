@@ -70,10 +70,14 @@ export function ContributorRow({ c }: { c: Contributor }) {
 }
 
 /** Flights pass at every distance: the layer's row has none. */
-export function AircraftLayerRow({ layer, flights }: { layer: LayerLevels; flights: TopFlight[] }) {
+export function AircraftLayerRow({ layer, flights, onHighlightFlight }: {
+  layer: LayerLevels
+  flights: TopFlight[]
+  onHighlightFlight: (key: string | null) => void
+}) {
   return (
     <SourceRow label={SOURCE_LABELS.aircraft} distance="" received={layer}>
-      <AircraftLayerDetail received={layer} flights={flights} />
+      <AircraftLayerDetail received={layer} flights={flights} onHighlightFlight={onHighlightFlight} />
     </SourceRow>
   )
 }

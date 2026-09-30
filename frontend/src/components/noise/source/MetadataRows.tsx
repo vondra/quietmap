@@ -201,10 +201,11 @@ function ShipRows({ m }: { m: ContributorMetadata }) {
   )
 }
 
-// A layer without rows of its own: its fields by name.
+// A layer without rows of its own: its fields by name, but for the name and the subtype that the
+// row and its class line show.
 function FieldRows({ m }: { m: ContributorMetadata }) {
   const fields = Object.entries(m).filter(([name, value]) =>
-    name !== 'name' && value !== null && value !== '' && value !== false)
+    name !== 'name' && name !== 'subtype' && value !== null && value !== '' && value !== false)
   return <>{fields.map(([name, value]) => <div key={name}>{lineRow(words(name), fieldText(value))}</div>)}</>
 }
 
@@ -214,8 +215,6 @@ const LAYER_ROWS: Record<string, (props: { m: ContributorMetadata }) => ReactNod
   building: BuildingRows,
   industrial: IndustrialRows,
   ship: ShipRows,
-  // Aircraft carry only a name so far; the row already shows it.
-  aircraft: () => null,
 }
 
 /** The layer's rows for a contributor, and its sound power where the layer stores one. */
