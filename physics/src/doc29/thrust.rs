@@ -255,7 +255,11 @@ pub fn power_bracket(class: usize, flight: &SegmentFlight) -> Option<PowerBracke
 
 /// Eq. 4-3 bracket of corrected thrust `thrust_lb` over the first `rows` tabulated `powers`;
 /// thrust outside the table takes the edge row with weight 0.
-fn bracket_power(powers: &[f64; MAX_POWER_ROWS], rows: u8, thrust_lb: f64) -> PowerBracket {
+pub(crate) fn bracket_power(
+    powers: &[f64; MAX_POWER_ROWS],
+    rows: u8,
+    thrust_lb: f64,
+) -> PowerBracket {
     let last = usize::from(rows) - 1;
     let edge = |row| PowerBracket { row, weight: 0.0 };
     if thrust_lb <= powers[0] {

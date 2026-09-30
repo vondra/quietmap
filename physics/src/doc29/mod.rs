@@ -29,3 +29,7 @@ pub mod thrust_generated;
 
 #[cfg(test)]
 mod designator_tests;
+
+#[cfg(test)]
+#[path = "buf_tests.rs"]
+mod buf_tests;
