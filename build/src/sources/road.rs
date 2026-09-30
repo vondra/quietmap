@@ -68,26 +68,76 @@ const COUNTRY_CLASS_PRIORS: [([u8; 2], [[f64; 3]; 2]); 3] = [
     ),
     (*b"SE", [[1_294.0, 844.0, 1_983.0], [273.0, 151.0, 494.0]]),
 ];
+/// Their medium and heavy vehicle shares (% of the flow; rural, urban; median counted rows of the
+/// same classes): the prior's world split read 4.0 % and 6.0 % on Czech secondary roads and 3.2 %
+/// and 4.8 % on tertiary ones, where the census counts 3.4 % and 2.9-3.2 %, 3.4 % and 1.9-2.1 %
+/// (+0.7 dB).
+/// Per class (secondary, tertiary), per built-up (rural, urban): medium and heavy shares (%).
+type ClassShares = [[[f64; 2]; 2]; 2];
+const COUNTRY_CLASS_SHARES: [([u8; 2], ClassShares); 3] = [
+    (
+        *b"CZ",
+        [[[3.48, 3.20], [3.41, 2.91]], [[3.42, 2.08], [3.38, 1.92]]],
+    ),
+    (
+        *b"GB",
+        [[[0.42, 2.19], [0.59, 1.39]], [[0.18, 1.98], [0.65, 0.73]]],
+    ),
+    (
+        *b"SE",
+        [[[1.32, 4.95], [1.17, 3.43]], [[3.85, 2.51], [3.85, 2.22]]],
+    ),
+];
 /// dev4's source id of a class prior (no dataset).
 const PRIOR_SOURCE_ID: u16 = 0;
 /// dev4's `traffic_estimated` bits of a row whose four categories all come from a prior.
 const ALL_CATEGORIES_ESTIMATED: u8 = 15;
 
-/// The factor taking a dev4 class prior of a secondary or tertiary row in a country with
-/// representative counts to that country's cell, else 1.
-fn prior_scale(class: usize, built_up: u8, country_iso: u16, source_id: u16, estimated: u8) -> f64 {
+/// The daily flows (light, medium, heavy, motorcycles) of a row: a dev4 class prior of a secondary
+/// or tertiary row in a country with representative counts takes that country's cell and its
+/// medium and heavy shares (motorcycles scaled with the flow); every other row keeps `prior`.
+fn country_flows(
+    prior: [f64; 4],
+    class: usize,
+    built_up: u8,
+    country_iso: u16,
+    source_id: u16,
+    estimated: u8,
+) -> [f64; 4] {
     if source_id != PRIOR_SOURCE_ID || estimated != ALL_CATEGORIES_ESTIMATED {
-        return 1.0;
+        return prior;
     }
     let Some(row) = class.checked_sub(3).filter(|row| *row < 2) else {
-        return 1.0;
+        return prior;
     };
     let iso = country_iso.to_le_bytes();
-    let Some((_, cells)) = COUNTRY_CLASS_PRIORS.iter().find(|(code, _)| *code == iso) else {
-        return 1.0;
+    let (Some((_, cells)), Some((_, shares))) = (
+        COUNTRY_CLASS_PRIORS.iter().find(|(code, _)| *code == iso),
+        COUNTRY_CLASS_SHARES.iter().find(|(code, _)| *code == iso),
+    ) else {
+        return prior;
     };
     let cell = usize::from(built_up.min(2));
-    cells[row][cell] / DEV4_CLASS_PRIORS[row][cell]
+    let scale = cells[row][cell] / DEV4_CLASS_PRIORS[row][cell];
+    let total = prior.iter().sum::<f64>() * scale;
+    // Unknown built-up takes the mean of the rural and urban shares.
+    let share = |k: usize| {
+        let [rural, urban] = [shares[row][0][k], shares[row][1][k]];
+        let percent = match built_up {
+            1 => rural,
+            2 => urban,
+            _ => 0.5 * (rural + urban),
+        };
+        percent / 100.0
+    };
+    let motorcycles = prior[3] * scale;
+    let (medium, heavy) = (total * share(0), total * share(1));
+    [
+        total - medium - heavy - motorcycles,
+        medium,
+        heavy,
+        motorcycles,
+    ]
 }
 
 /// Day/evening/night shares of the daily flow: motorways, trunks and their links; other roads.
@@ -229,14 +279,17 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
         let source_id = c.get("source_id")?.as_primitive::<UInt16Type>();
         for (row, &slope) in slopes.iter().enumerate() {
             let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
-            let scale = prior_scale(
+            let prior: [f64; 4] = std::array::from_fn(|category| aadt[category].value(row));
+            let daily = country_flows(
+                prior,
                 class_index,
                 built_up.value(row),
                 country.value(row),
                 source_id.value(row),
                 estimated.value(row),
             );
-            let daily: [f64; 4] = std::array::from_fn(|category| scale * aadt[category].value(row));
+            let scale =
+                daily.iter().sum::<f64>() / prior.iter().sum::<f64>().max(f64::MIN_POSITIVE);
             if tunnel.value(row) || daily.iter().sum::<f64>() <= 0.0 {
                 continue;
             }
@@ -371,22 +424,44 @@ mod tests {
     use super::*;
 
     /// A prior secondary or tertiary row in a country with representative counts takes its
-    /// country's cell; counted rows, other classes, rows a dataset filled and other countries keep
-    /// their flows.
+    /// country's cell and split; counted rows, other classes, rows a dataset filled and other
+    /// countries keep their flows.
     #[test]
     fn class_priors_of_secondary_and_tertiary_roads_take_their_countrys_cell() {
         let cz = u16::from_le_bytes(*b"CZ");
         let estimated = ALL_CATEGORIES_ESTIMATED;
-        let village = prior_scale(4, 2, cz, PRIOR_SOURCE_ID, estimated);
-        assert!((2_562.0 * village - 962.0).abs() < 1e-9);
-        let rural = prior_scale(3, 1, u16::from_le_bytes(*b"SE"), PRIOR_SOURCE_ID, estimated);
-        assert!((2_061.0 * rural - 844.0).abs() < 1e-9);
-        assert_eq!(prior_scale(4, 2, cz, 20, 0), 1.0, "counted");
-        assert_eq!(prior_scale(4, 2, cz, 11, estimated), 1.0, "service tree");
-        assert_eq!(prior_scale(5, 2, cz, PRIOR_SOURCE_ID, estimated), 1.0);
-        assert_eq!(prior_scale(2, 2, cz, PRIOR_SOURCE_ID, estimated), 1.0);
+        // dev4's urban tertiary prior: 2,562 a day, 3.2 % medium, 4.8 % heavy, 1 % motorcycles.
+        let prior = [2_331.4, 82.0, 123.0, 25.6];
+        let village = country_flows(prior, 4, 2, cz, PRIOR_SOURCE_ID, estimated);
+        assert!(
+            (village.iter().sum::<f64>() - 962.0).abs() < 1e-6,
+            "{village:?}"
+        );
+        assert!((village[1] - 962.0 * 0.0338).abs() < 1e-6);
+        assert!((village[2] - 962.0 * 0.0192).abs() < 1e-6);
+        assert!((village[3] - 25.6 * 962.0 / 2_562.0).abs() < 1e-6);
+        let se = u16::from_le_bytes(*b"SE");
+        let rural = country_flows(prior, 3, 1, se, PRIOR_SOURCE_ID, estimated);
+        assert!((rural.iter().sum::<f64>() - 2_562.0 * 844.0 / 2_061.0).abs() < 1e-6);
+        assert_eq!(country_flows(prior, 4, 2, cz, 20, 0), prior, "counted");
+        assert_eq!(
+            country_flows(prior, 4, 2, cz, 11, estimated),
+            prior,
+            "service tree"
+        );
+        assert_eq!(
+            country_flows(prior, 5, 2, cz, PRIOR_SOURCE_ID, estimated),
+            prior
+        );
+        assert_eq!(
+            country_flows(prior, 2, 2, cz, PRIOR_SOURCE_ID, estimated),
+            prior
+        );
         let de = u16::from_le_bytes(*b"DE");
-        assert_eq!(prior_scale(4, 2, de, PRIOR_SOURCE_ID, estimated), 1.0);
+        assert_eq!(
+            country_flows(prior, 4, 2, de, PRIOR_SOURCE_ID, estimated),
+            prior
+        );
     }
 
     #[test]
