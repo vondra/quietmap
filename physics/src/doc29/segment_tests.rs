@@ -1,5 +1,5 @@
-//! One segment at a receiver: dev4's closest-point, helicopter, Filter D, partition and
-//! screening cases, in the receiver's frame.
+//! One segment at a receiver: dev4's closest-point, helicopter, partition and screening cases,
+//! and the extension dev4's Filter D dropped, in the receiver's frame.
 
 use std::cell::RefCell;
 

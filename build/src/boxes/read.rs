@@ -34,7 +34,7 @@ pub struct FlightSegment {
     /// (m; NaN when its takeoff roll was not seen).
     pub above_ground_m: f64,
     pub departure_field_m: f64,
-    /// Terrain under both ends (m above sea level): the kernel's Filter D.
+    /// Terrain under both ends (m above sea level): whether the kernel screens the segment.
     pub ground_m: [f64; 2],
 }
 
