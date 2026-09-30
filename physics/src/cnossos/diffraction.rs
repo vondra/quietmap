@@ -8,7 +8,7 @@ use super::ground::{
 use super::mean_plane::{EquivalentGeometry, fit_mean_plane};
 use super::rubber_band::{DiffractionPath, PlanePoint, StateRay, diffraction_path};
 use super::{StateBoundary, VerticalPath};
-use crate::bands::{BAND_FREQUENCY_HZ, BANDS, SPEED_OF_SOUND_M_PER_S};
+use crate::bands::{BAND_FREQUENCY_HZ, BANDS, SPEED_OF_SOUND_M_PER_S, amplitude};
 
 /// Δdif(S,R) above this is capped (§2.5.6 "Δdif > 25 dB"); the Δground terms are not.
 pub const DIFFRACTION_CAP_DB: f64 = 25.0;
@@ -30,10 +30,7 @@ fn diffraction_db(path_difference_m: f64, c_second: &[f64; BANDS]) -> [f64; BAND
 
 /// (2.5.31)/(2.5.32): `−20·lg(1 + (10^(−A_ground/20) − 1)·10^(−(Δdif′ − Δdif)/20))`.
 fn ground_split_db(ground_db: f64, mirrored_db: f64, direct_db: f64) -> f64 {
-    -20.0
-        * (1.0
-            + (10f64.powf(-ground_db / 20.0) - 1.0) * 10f64.powf(-(mirrored_db - direct_db) / 20.0))
-        .log10()
+    -20.0 * (1.0 + (amplitude(-ground_db) - 1.0) * amplitude(-(mirrored_db - direct_db))).log10()
 }
 
 /// The boundary term of `path` in `state` over `candidates` (sorted by distance).

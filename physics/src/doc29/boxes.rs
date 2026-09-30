@@ -18,7 +18,7 @@ use super::corrections::{
 use super::npd::{Installation, NPD_DISTANCES, NPD_LAST_DISTANCE_M, NpdPosition, TAIL_ANCHOR_M};
 use super::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M, screened_sel_db};
 use super::segment::{ClosestPoints, closest_points};
-use crate::bands::PERIODS;
+use crate::bands::{PERIODS, energy};
 
 /// dev4 Filter D, as the kernel applies it to one segment.
 const EXTENSION_BELOW_GROUND_M: f64 = 30.0;
@@ -75,7 +75,7 @@ pub fn average_piece_ends(aircraft_box: &AircraftBoxAtReceiver) -> [[f64; 3]; 2]
 /// The box's d_lambda at a slant: lg d_lambda linear in lg distance through the ten distances
 /// and extrapolated with the end intervals, as the kernel reads each power row.
 fn scaled_distance_at(lg_scaled_distance: &[f64; NPD_DISTANCES], position: &NpdPosition) -> f64 {
-    10f64.powf(position.linear(lg_scaled_distance))
+    (position.linear(lg_scaled_distance) * std::f64::consts::LN_10).exp()
 }
 
 /// A box's summed level at `slant_m`: its NPD curve up to 25,000 ft, beyond it spherical
@@ -134,7 +134,7 @@ pub fn box_sel_at_receiver(
         .iter()
         .zip(shares_at(aircraft_box.installation_shares, slant_m))
         .map(|(&installation, share)| {
-            share * 10f64.powf(installation_correction_db(installation, height_m, slant_m) / 10.0)
+            share * energy(installation_correction_db(installation, height_m, slant_m))
         })
         .sum();
     let installation = if installation_energy > 0.0 {

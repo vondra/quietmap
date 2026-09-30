@@ -2,7 +2,7 @@
 //! (`physics::doc29::boxes`), all of them, since a box costs well under a microsecond; their SEL
 //! sums per period become period energies (Leq), as the ground layers report.
 
-use physics::bands::{PERIOD_HOURS, PERIODS};
+use physics::bands::{PERIOD_HOURS, PERIODS, energy};
 use physics::doc29::boxes::{AircraftBoxAtReceiver, box_sel_at_receiver};
 use physics::doc29::npd::lamax_rise_bound_db;
 use physics::doc29::screening::ReceiverHorizons;
@@ -100,7 +100,7 @@ pub fn tile_energy(
             let energy =
                 box_sel_at_receiver(&at_receiver, horizons).map_or([0.0; PERIODS], |sel| {
                     std::array::from_fn(|period| {
-                        10f64.powf(sel.sel_db[period] / 10.0) / (PERIOD_HOURS[period] * 3_600.0)
+                        energy(sel.sel_db[period]) / (PERIOD_HOURS[period] * 3_600.0)
                     })
                 });
             let bound = (record.piece_count > 0).then(|| {
