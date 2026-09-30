@@ -11,8 +11,14 @@ use crate::line::{LINE_PERPENDICULAR_FLOOR_M, POINT_DIVERGENCE_LINEAR};
 /// the capped direct diffraction replaced by the image path's (>= 0 dB) while both sides sit at
 /// the (2.5.20) floor of -9 dB, so 0 + 9 + 9 = 18 dB at most (17.60 dB found by search).
 pub const FAVOURABLE_GAIN_BOUND_DB: f64 = 18.0;
-/// Largest homogeneous-state gain (dB): the same corner at the -3 dB floor (6.00 dB found).
-pub const HOMOGENEOUS_GAIN_BOUND_DB: f64 = 6.0;
+/// Largest homogeneous-state gain (dB), held at the favourable bound. The below-plane corner at
+/// the -3 dB floor gives 6.00 dB, but an elevated source gains more: a roof inside a short
+/// source-side sub-path tilts its mean plane and throws S' past O, and (2.5.31) then gains
+/// beyond the floor (the propagation audit found 11.4 dB in 300 k urban rays from sources 8-150 m
+/// high, 17.8 dB on a synthetic path), so a 6 dB bound let the stop rule skip audible sources. At
+/// the 32 benchmark and owner points the 18 dB bound moves the answers by at most 0.04 dB per
+/// layer and the clicks no slower.
+pub const HOMOGENEOUS_GAIN_BOUND_DB: f64 = FAVOURABLE_GAIN_BOUND_DB;
 /// Point divergence 20 lg d + 11 (CNOSSOS-EU 2.5.12, 10 lg 4 pi printed as 11).
 pub const POINT_DIVERGENCE_OFFSET_DB: f64 = 11.0;
 /// The ray kernel floors point distances at 1 m.
@@ -94,11 +100,12 @@ pub fn received_energy_bound(
 mod tests {
     use super::*;
 
+    /// Both states now hold the same 18 dB, whatever the favourable probability.
     #[test]
     fn mixed_gain_spans_the_two_state_bounds() {
-        assert!((mixed_gain_bound_db(0.0) - 6.0).abs() < 1e-12);
-        assert!((mixed_gain_bound_db(1.0) - 18.0).abs() < 1e-12);
-        assert!((mixed_gain_bound_db(0.5) - 15.26).abs() < 0.01);
+        for p in [0.0, 0.5, 1.0] {
+            assert!((mixed_gain_bound_db(p) - 18.0).abs() < 1e-12, "{p}");
+        }
     }
 
     #[test]
