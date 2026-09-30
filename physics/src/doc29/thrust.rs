@@ -1,0 +1,192 @@
+//! Per-segment engine power (Doc 29 4th ed. Vol 2 Eq. 4-3, B-1, B-12): the corrected net thrust a
+//! segment flies selects two bracketing NPD power rows and a weight, once per segment.
+
+use super::npd::METRES_PER_FOOT;
+use super::thrust_generated::THRUST;
+
+/// Power-row stride of the per-class thrust tables; generated padding repeats the loudest row.
+pub const MAX_POWER_ROWS: usize = 6;
+
+/// The thrust model of one noise class (rows generated in `thrust_generated`).
+pub struct ThrustModel {
+    pub class_name: &'static str,
+    pub anchor_name: &'static str,
+    /// False for the pinned classes (fallback proxy, piston, turboprop, helicopter): they read
+    /// their anchor profile's curve on row 0.
+    pub has_thrust: bool,
+    pub engines: u8,
+    /// Median DEFAULT stage weight (lb): observed stage lengths are unknown.
+    pub weight_lb: f64,
+    /// Clean-configuration drag/lift ratio R (the minimum-R departure flap).
+    pub drag_ratio: f64,
+    /// Cutback height (ft above the field): the initial climb flies MaxTakeoff below it.
+    pub cutback_ft_afe: f64,
+    /// Eq. B-1 coefficients (E, F, Ga, Gb, H) per rating.
+    pub takeoff_coef: [f64; 5],
+    pub climb_coef: [f64; 5],
+    pub idle_coef: [f64; 5],
+    /// Departure rows: count, corrected net thrust per engine (lb), SEL and LAmax curves.
+    pub dep_rows: u8,
+    pub dep_power: [f64; MAX_POWER_ROWS],
+    pub dep_sel: [[f64; 10]; MAX_POWER_ROWS],
+    pub dep_lmax: [[f64; 10]; MAX_POWER_ROWS],
+    /// Approach rows, as the departure rows.
+    pub app_rows: u8,
+    pub app_power: [f64; MAX_POWER_ROWS],
+    pub app_sel: [[f64; 10]; MAX_POWER_ROWS],
+    pub app_lmax: [[f64; 10]; MAX_POWER_ROWS],
+}
+
+impl ThrustModel {
+    /// A pinned class: no thrust tables.
+    pub const fn pinned(class_name: &'static str, anchor_name: &'static str) -> Self {
+        ThrustModel {
+            class_name,
+            anchor_name,
+            has_thrust: false,
+            engines: 0,
+            weight_lb: 0.0,
+            drag_ratio: 0.0,
+            cutback_ft_afe: 0.0,
+            takeoff_coef: [0.0; 5],
+            climb_coef: [0.0; 5],
+            idle_coef: [0.0; 5],
+            dep_rows: 1,
+            dep_power: [0.0; MAX_POWER_ROWS],
+            dep_sel: [[0.0; 10]; MAX_POWER_ROWS],
+            dep_lmax: [[0.0; 10]; MAX_POWER_ROWS],
+            app_rows: 1,
+            app_power: [0.0; MAX_POWER_ROWS],
+            app_sel: [[0.0; 10]; MAX_POWER_ROWS],
+            app_lmax: [[0.0; 10]; MAX_POWER_ROWS],
+        }
+    }
+}
+
+/// Doc 29 Eq. 4-3 bracket: the lower power row and the weight toward the next one (0 at and past
+/// the table's edges, so a bracket never reads beyond the tabulated rows).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PowerBracket {
+    pub row: usize,
+    pub weight: f64,
+}
+
+impl PowerBracket {
+    /// Row 0 alone: every pinned class.
+    pub const FIRST_ROW: PowerBracket = PowerBracket {
+        row: 0,
+        weight: 0.0,
+    };
+}
+
+/// What a segment flies, independent of any receiver: the inputs of its power bracket and of its
+/// speed correction.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SegmentFlight {
+    /// Doc 29 A.3.2 climb classification by Stage 1: departure NPDs, else approach NPDs.
+    pub departure: bool,
+    /// On the runway or taxiway: takeoff roll at MaxTakeoff, landing roll and taxi at idle
+    /// (reversers have no ANP model).
+    pub on_ground: bool,
+    /// Ground speed (kt); the calibrated airspeed is taken as ground speed x sqrt(sigma) (no wind).
+    pub speed_kt: f64,
+    /// Pressure altitude of the segment's middle (m): the ISA state of Eq. B-1.
+    pub pressure_altitude_m: f64,
+    /// Sine of the climb angle over the segment's 3-D length.
+    pub climb_sine: f64,
+    /// Height above the departure field (m): the altitude minus the terrain under the flight's own
+    /// takeoff roll, or the height above the local ground when the roll was not observed.
+    pub height_above_field_m: f64,
+}
+
+/// ISA pressure ratio delta at pressure altitude `h_ft`.
+fn isa_pressure_ratio(h_ft: f64) -> f64 {
+    (1.0 - 6.8756e-6 * h_ft).powf(5.2559)
+}
+
+/// ISA density ratio sigma at pressure altitude `h_ft`.
+fn isa_density_ratio(h_ft: f64) -> f64 {
+    (1.0 - 6.8756e-6 * h_ft).powf(4.2559)
+}
+
+/// ISA temperature (deg C) at pressure altitude `h_ft`.
+fn isa_temperature_c(h_ft: f64) -> f64 {
+    15.0 - 1.98 * h_ft / 1000.0
+}
+
+/// Eq. B-1: corrected net thrust per engine (lb) at a rating, calibrated airspeed `vc_kt`,
+/// pressure altitude `h_ft` and ambient `temperature_c`.
+fn rated_thrust_lb(coef: &[f64; 5], vc_kt: f64, h_ft: f64, temperature_c: f64) -> f64 {
+    coef[0] + coef[1] * vc_kt + coef[2] * h_ft + coef[3] * h_ft * h_ft + coef[4] * temperature_c
+}
+
+/// Eq. B-12 inverted (no bank, no acceleration term): corrected thrust per engine holding the
+/// climb angle, `k` 1.01 at Vc <= 200 kt, else 0.95 (headwind and constant-CAS acceleration).
+fn force_balance_thrust_lb(model: &ThrustModel, climb_sine: f64, k: f64, delta: f64) -> f64 {
+    (model.weight_lb / delta) * (climb_sine / k + model.drag_ratio) / f64::from(model.engines)
+}
+
+/// The power bracket of a segment of noise class `class`. Pinned classes read row 0; ground
+/// rolls fly their rating (takeoff or idle); a departure below the cutback height above its field
+/// flies MaxTakeoff; everything else holds its climb angle by force balance within [Idle,
+/// MaxClimb]. `None` outside the rating model's domain (dev4's thrust-domain guard): the Appendix
+/// B polynomials fit the normal envelope, and an ADS-B outlier (a B789 record at FL510 and 525 kt)
+/// inverts the Idle/MaxClimb bounds, so the segment is rejected instead of clamped into crossed
+/// bounds.
+pub fn power_bracket(class: usize, flight: &SegmentFlight) -> Option<PowerBracket> {
+    let model = &THRUST[class];
+    if !model.has_thrust {
+        return Some(PowerBracket::FIRST_ROW);
+    }
+    let (powers, rows) = if flight.departure {
+        (&model.dep_power, model.dep_rows)
+    } else {
+        (&model.app_power, model.app_rows)
+    };
+    let h_ft = flight.pressure_altitude_m / METRES_PER_FOOT;
+    let delta = isa_pressure_ratio(h_ft);
+    let vc_kt = flight.speed_kt * isa_density_ratio(h_ft).sqrt();
+    let temperature_c = isa_temperature_c(h_ft);
+    let thrust_lb = if flight.on_ground {
+        let rating = if flight.departure {
+            &model.takeoff_coef
+        } else {
+            &model.idle_coef
+        };
+        rated_thrust_lb(rating, vc_kt, h_ft, temperature_c)
+    } else if flight.departure
+        && flight.height_above_field_m < model.cutback_ft_afe * METRES_PER_FOOT
+    {
+        rated_thrust_lb(&model.takeoff_coef, vc_kt, h_ft, temperature_c)
+    } else {
+        let k = if vc_kt <= 200.0 { 1.01 } else { 0.95 };
+        let idle = rated_thrust_lb(&model.idle_coef, vc_kt, h_ft, temperature_c);
+        let climb = rated_thrust_lb(&model.climb_coef, vc_kt, h_ft, temperature_c);
+        if !(idle.is_finite() && climb.is_finite() && idle <= climb) {
+            return None;
+        }
+        force_balance_thrust_lb(model, flight.climb_sine, k, delta).clamp(idle, climb)
+    };
+    Some(bracket_power(powers, rows, thrust_lb))
+}
+
+/// Eq. 4-3 bracket of corrected thrust `thrust_lb` over the first `rows` tabulated `powers`;
+/// thrust outside the table takes the edge row with weight 0.
+fn bracket_power(powers: &[f64; MAX_POWER_ROWS], rows: u8, thrust_lb: f64) -> PowerBracket {
+    let last = usize::from(rows) - 1;
+    let edge = |row| PowerBracket { row, weight: 0.0 };
+    if thrust_lb <= powers[0] {
+        return edge(0);
+    }
+    match (0..last).find(|&row| thrust_lb < powers[row + 1]) {
+        Some(row) => PowerBracket {
+            row,
+            weight: (thrust_lb - powers[row]) / (powers[row + 1] - powers[row]),
+        },
+        None => edge(last),
+    }
+}
+
+#[cfg(test)]
+#[path = "thrust_tests.rs"]
+mod tests;
