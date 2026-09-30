@@ -1,0 +1,110 @@
+[
+ {
+  "name": "lkpr_end2_3km",
+  "lat": 50.12739,
+  "lon": 14.31151,
+  "what": "Prague LKPR runway 06/24: extended centreline 3 km beyond the end at (50.11596, 14.2734)"
+ },
+ {
+  "name": "lkpr_end2_5km",
+  "lat": 50.13501,
+  "lon": 14.33692,
+  "what": "Prague LKPR runway 06/24: extended centreline 5 km beyond the end at (50.11596, 14.2734)"
+ },
+ {
+  "name": "lkpr_end2_8km",
+  "lat": 50.14644,
+  "lon": 14.37503,
+  "what": "Prague LKPR runway 06/24: extended centreline 8 km beyond the end at (50.11596, 14.2734)"
+ },
+ {
+  "name": "lkpr_end1_3km",
+  "lat": 50.0904,
+  "lon": 14.18818,
+  "what": "Prague LKPR runway 06/24: extended centreline 3 km beyond the end at (50.10183, 14.22629)"
+ },
+ {
+  "name": "lkpr_end1_5km",
+  "lat": 50.08278,
+  "lon": 14.16277,
+  "what": "Prague LKPR runway 06/24: extended centreline 5 km beyond the end at (50.10183, 14.22629)"
+ },
+ {
+  "name": "lkpr_abeam",
+  "lat": 50.14991,
+  "lon": 14.22034,
+  "what": "Prague LKPR runway 06/24: abeam the runway middle"
+ },
+ {
+  "name": "kphx_end2_3km",
+  "lat": 33.44089,
+  "lon": -112.05915,
+  "what": "Phoenix KPHX runway 08/26: extended centreline 3 km beyond the end at (33.44086, -112.02685)"
+ },
+ {
+  "name": "kphx_end2_5km",
+  "lat": 33.44091,
+  "lon": -112.08068,
+  "what": "Phoenix KPHX runway 08/26: extended centreline 5 km beyond the end at (33.44086, -112.02685)"
+ },
+ {
+  "name": "kphx_end2_8km",
+  "lat": 33.44093,
+  "lon": -112.11297,
+  "what": "Phoenix KPHX runway 08/26: extended centreline 8 km beyond the end at (33.44086, -112.02685)"
+ },
+ {
+  "name": "kphx_end1_3km",
+  "lat": 33.4408,
+  "lon": -111.95987,
+  "what": "Phoenix KPHX runway 08/26: extended centreline 3 km beyond the end at (33.44083, -111.99217)"
+ },
+ {
+  "name": "kphx_end1_5km",
+  "lat": 33.44078,
+  "lon": -111.93834,
+  "what": "Phoenix KPHX runway 08/26: extended centreline 5 km beyond the end at (33.44083, -111.99217)"
+ },
+ {
+  "name": "kphx_abeam",
+  "lat": 33.39562,
+  "lon": -112.00957,
+  "what": "Phoenix KPHX runway 08/26: abeam the runway middle"
+ },
+ {
+  "name": "sbsp_end2_3km",
+  "lat": -23.59806,
+  "lon": -46.67624,
+  "what": "Sao Paulo SBSP runway 17R/35L: extended centreline 3 km beyond the end at (-23.62094, -46.66042)"
+ },
+ {
+  "name": "sbsp_end2_5km",
+  "lat": -23.58281,
+  "lon": -46.68678,
+  "what": "Sao Paulo SBSP runway 17R/35L: extended centreline 5 km beyond the end at (-23.62094, -46.66042)"
+ },
+ {
+  "name": "sbsp_end2_8km",
+  "lat": -23.55994,
+  "lon": -46.7026,
+  "what": "Sao Paulo SBSP runway 17R/35L: extended centreline 8 km beyond the end at (-23.62094, -46.66042)"
+ },
+ {
+  "name": "sbsp_end1_3km",
+  "lat": -23.65717,
+  "lon": -46.63537,
+  "what": "Sao Paulo SBSP runway 17R/35L: extended centreline 3 km beyond the end at (-23.63429, -46.65119)"
+ },
+ {
+  "name": "sbsp_end1_5km",
+  "lat": -23.67242,
+  "lon": -46.62483,
+  "what": "Sao Paulo SBSP runway 17R/35L: extended centreline 5 km beyond the end at (-23.63429, -46.65119)"
+ },
+ {
+  "name": "sbsp_abeam",
+  "lat": -23.6422,
+  "lon": -46.68061,
+  "what": "Sao Paulo SBSP runway 17R/35L: abeam the runway middle"
+ }
+]
