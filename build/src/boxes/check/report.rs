@@ -289,7 +289,7 @@ pub(super) fn report(
 fn diagnose(
     fine: &[Vec<(TileId, Aircraft<'_>)>],
     receiver: &Receiver,
-    per_box: &HashMap<BoxKey, [f64; PERIODS]>,
+    per_box: &HashMap<BoxKey, [[f64; PERIODS]; 6]>,
     level_step_db: f64,
 ) -> Vec<BoxDiagnosis> {
     let lden = |energy: &[f64; PERIODS]| {
@@ -360,6 +360,16 @@ fn diagnose(
                         piece_length_m: record.piece_length_m,
                         exact_db: [f64::NEG_INFINITY; PERIODS],
                         boxed_db: [f64::NEG_INFINITY; PERIODS],
+                        exact_altitude_m: [f64::NAN; PERIODS],
+                        exact_scaled_distance_m: [f64::NAN; PERIODS],
+                        exact_offset_m: [f64::NAN; PERIODS],
+                        exact_length_m: [f64::NAN; PERIODS],
+                        centroid_m: [east, north],
+                        boxed_scaled_distance_m: box_scaled_distance_m(
+                            &record,
+                            [east, north],
+                            receiver,
+                        ),
                     },
                 )
             });
@@ -372,8 +382,22 @@ fn diagnose(
     let mut found: Vec<(f64, BoxDiagnosis)> = boxed
         .into_iter()
         .map(|(key, (energy, mut diagnosis))| {
-            let exact = per_box.get(&key).copied().unwrap_or([0.0; PERIODS]);
+            let [
+                exact,
+                weighted,
+                over_scaled,
+                east_sum,
+                north_sum,
+                length_sum,
+            ] = per_box.get(&key).copied().unwrap_or([[0.0; PERIODS]; 6]);
+            diagnosis.exact_length_m = std::array::from_fn(|p| length_sum[p] / exact[p]);
+            diagnosis.exact_offset_m = std::array::from_fn(|p| {
+                let (east, north) = (east_sum[p] / exact[p], north_sum[p] / exact[p]);
+                (east - diagnosis.centroid_m[0]).hypot(north - diagnosis.centroid_m[1])
+            });
             diagnosis.exact_db = exact.map(|value| 10.0 * value.log10());
+            diagnosis.exact_altitude_m = std::array::from_fn(|p| weighted[p] / exact[p]);
+            diagnosis.exact_scaled_distance_m = std::array::from_fn(|p| exact[p] / over_scaled[p]);
             diagnosis.boxed_db = energy.map(|value| 10.0 * value.log10());
             (lden(&exact) - lden(&energy), diagnosis)
         })
@@ -381,4 +405,16 @@ fn diagnose(
     found.sort_by(|a, b| b.0.abs().total_cmp(&a.0.abs()));
     found.truncate(DIAGNOSED_BOXES);
     found.into_iter().map(|(_, diagnosis)| diagnosis).collect()
+}
+
+/// A box's d_lambda at the slant to its centroid (m), as the click reads it.
+fn box_scaled_distance_m(
+    record: &tiles::aircraft::AircraftBox,
+    centroid: [f64; 2],
+    receiver: &Receiver,
+) -> f64 {
+    let slant = centroid[0]
+        .hypot(centroid[1])
+        .hypot(record.centroid_altitude_m - receiver.altitude_m);
+    physics::doc29::boxes::scaled_distance_at_slant(&record.lg_scaled_distance, slant)
 }

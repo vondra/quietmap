@@ -21,7 +21,7 @@ fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
         centroid_altitude_m: 371.0,
         axis_rad: 2.5,
         gradient: -0.052,
-        piece_length_m: 44.0,
+        piece_length_m: [44.0, 51.0, 38.0],
         flights: 123_456,
         energy_db,
         lg_scaled_distance: [
@@ -68,7 +68,7 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
     let flights = [a_flight(0x4b_a9_c1), a_flight(0x00_00_01)];
     let pieces = [a_piece(1), a_piece(0)];
     let bytes = encode(&boxes, &flights, &pieces);
-    assert_eq!(bytes.len(), 24 + 2 * 124 + 2 * 20 + 2 * 24);
+    assert_eq!(bytes.len(), 24 + 2 * 128 + 2 * 20 + 2 * 24);
     let parsed = Aircraft::parse(&bytes).unwrap();
     assert_eq!(
         (
@@ -94,7 +94,10 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
     );
     assert!((read.axis_rad - 2.5).abs() < 1e-4);
     assert!((read.gradient - -0.052).abs() < 1e-4);
-    assert_eq!((read.piece_length_m, read.flights), (44.0, 123_456));
+    assert_eq!(
+        (read.piece_length_m, read.flights),
+        ([44.0, 51.0, 38.0], 123_456)
+    );
     for (read_levels, written_levels) in read.energy_db.iter().zip(&written.energy_db) {
         for (r, w) in read_levels.iter().zip(written_levels) {
             assert!(r == w || (r - w).abs() <= 0.005, "{r} vs {w}");
@@ -143,10 +146,10 @@ fn a_file_that_does_not_add_up_is_refused() {
     assert!(Aircraft::parse(&wrong_magic).is_err());
     // A box naming a piece beyond the table, a piece naming a flight beyond it.
     let mut missing_piece = bytes.clone();
-    missing_piece[24 + 118] = 7;
+    missing_piece[24 + 122] = 7;
     assert!(Aircraft::parse(&missing_piece).is_err());
     let mut missing_flight = bytes;
-    missing_flight[24 + 124 + 20] = 9;
+    missing_flight[24 + 128 + 20] = 9;
     assert!(Aircraft::parse(&missing_flight).is_err());
 }
 

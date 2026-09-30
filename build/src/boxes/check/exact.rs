@@ -18,8 +18,9 @@ use tiles::geo::Mercator;
 pub(super) struct Sums {
     pub(super) energy: [f64; SLOTS * PERIODS],
     pub(super) flights: HashMap<u64, (f64, f64)>,
-    /// For a diagnosed point, the exact energy of the pieces of each box.
-    pub(super) per_box: Option<HashMap<BoxKey, [f64; PERIODS]>>,
+    /// For a diagnosed point, per box and period the exact energy of its pieces, that energy times
+    /// their mean altitude and over their d_lambda at the point.
+    pub(super) per_box: Option<HashMap<BoxKey, [[f64; PERIODS]; 6]>>,
 }
 
 pub(super) const EXACT: usize = 0;
@@ -62,10 +63,12 @@ impl Sums {
             entry.1 = entry.1.max(lmax_db);
         }
         if let (Some(mine), Some(theirs)) = (self.per_box.as_mut(), other.per_box) {
-            for (key, energy) in theirs {
-                let sum = mine.entry(key).or_insert([0.0; PERIODS]);
-                for (a, b) in sum.iter_mut().zip(energy) {
-                    *a += b;
+            for (key, sums) in theirs {
+                let sum = mine.entry(key).or_insert([[0.0; PERIODS]; 6]);
+                for (mine, theirs) in sum.iter_mut().zip(sums) {
+                    for (a, b) in mine.iter_mut().zip(theirs) {
+                        *a += b;
+                    }
                 }
             }
         }
@@ -158,7 +161,14 @@ pub(super) fn add_segment(
                 let band = distance_band(middle[0].hypot(middle[1]));
                 sums.energy[BY_DISTANCE + PERIODS * band + period] += value;
                 if let Some(per_box) = sums.per_box.as_mut() {
-                    per_box.entry(piece.key).or_insert([0.0; PERIODS])[period] += value;
+                    let sum = per_box.entry(piece.key).or_insert([[0.0; PERIODS]; 6]);
+                    sum[0][period] += value;
+                    sum[1][period] += value * 0.5 * (piece.start.1 + piece.end.1);
+                    sum[2][period] += value / sel.npd.scaled_distance_m;
+                    sum[3][period] += value * middle[0];
+                    sum[4][period] += value * middle[1];
+                    let [a, b] = [geometry.start_m, geometry.end_m];
+                    sum[5][period] += value * (b[0] - a[0]).hypot(b[1] - a[1]);
                 }
             }
         }

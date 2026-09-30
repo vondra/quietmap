@@ -11,7 +11,7 @@ pub use parse::Aircraft;
 
 const MAGIC: &[u8; 8] = b"qmair1\n\0";
 const HEADER_BYTES: usize = 24;
-const BOX_BYTES: usize = 124;
+const BOX_BYTES: usize = 128;
 const FLIGHT_BYTES: usize = 20;
 const PIECE_BYTES: usize = 24;
 /// The NPD distances of Doc 29 (200 ft .. 25,000 ft).
@@ -70,8 +70,8 @@ pub struct AircraftBox {
     /// east, and the climb gradient (rise over run) along it.
     pub axis_rad: f64,
     pub gradient: f64,
-    /// Energy-weighted mean length of the pieces (1 m steps).
-    pub piece_length_m: f64,
+    /// Per period, the energy-weighted mean length of the pieces (1 m steps).
+    pub piece_length_m: [f64; PERIODS],
     /// Flights that crossed the box in the year.
     pub flights: u32,
     /// Per period, the average day's summed SEL energy at each NPD distance (dB; -inf silent),
@@ -196,7 +196,7 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox) {
         record.gradient
     );
     bytes.extend_from_slice(&(gradient as i16).to_le_bytes());
-    bytes.extend_from_slice(&metres_u16(record.piece_length_m).to_le_bytes());
+    bytes.extend_from_slice(&metres_u16(record.piece_length_m[0]).to_le_bytes());
     bytes.extend_from_slice(&record.flights.to_le_bytes());
     for level in record.energy_db.iter().flatten() {
         bytes.extend_from_slice(&level_code(*level).to_le_bytes());
@@ -216,6 +216,9 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox) {
     }
     for level in record.tail_energy_db {
         bytes.extend_from_slice(&level_code(level).to_le_bytes());
+    }
+    for length in &record.piece_length_m[1..] {
+        bytes.extend_from_slice(&metres_u16(*length).to_le_bytes());
     }
     bytes.extend_from_slice(&record.first_piece.to_le_bytes());
     bytes.push(record.piece_count);
@@ -242,7 +245,7 @@ fn write_piece(bytes: &mut Vec<u8>, piece: &FlightPiece) {
     assert_eq!(bytes.len() - start, PIECE_BYTES);
 }
 
-/// The bytes of an aircraft file: header, 124-byte boxes, 20-byte flights, 24-byte pieces.
+/// The bytes of an aircraft file: header, 128-byte boxes, 20-byte flights, 24-byte pieces.
 /// Every piece's flight and every box's pieces must exist.
 pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(

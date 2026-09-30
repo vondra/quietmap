@@ -25,7 +25,10 @@ pub struct BoxSums {
     /// Geometry weights: the pieces' energy at the weight distance, all periods.
     weight: f64,
     weighted_midpoint_m: [f64; 3],
-    weighted_length_m: f64,
+    /// Per period, the same weights and the pieces' horizontal length under them: a period's
+    /// pieces may be longer than another's in the same box (a piece's energy grows with it).
+    period_weight: [f64; PERIODS],
+    period_weighted_length_m: [f64; PERIODS],
     /// Doubled-angle direction sums of the axis, and the gradient carried on each piece's own
     /// horizontal direction (its sign follows the direction the axis ends up pointing).
     weighted_doubled_direction: [f64; 2],
@@ -45,7 +48,8 @@ pub struct BoxValues {
     pub centroid_m: [f64; 3],
     pub axis_rad: f64,
     pub gradient: f64,
-    pub piece_length_m: f64,
+    /// Per period, the energy-weighted mean horizontal length of the pieces.
+    pub piece_length_m: [f64; PERIODS],
     /// Energy shares of the installations at each of [`INSTALLATION_SHARE_SLANTS_M`].
     pub installation_shares: [[f64; 3]; 2],
 }
@@ -84,7 +88,11 @@ impl BoxSums {
         for axis in 0..3 {
             self.weighted_midpoint_m[axis] += weight * 0.5 * (start_m[axis] + end_m[axis]);
         }
-        self.weighted_length_m += weight * length_m;
+        for (period, period_weight) in period_weights.iter().enumerate() {
+            let piece_weight = period_weight * unweighted[GEOMETRY_WEIGHT_DISTANCE];
+            self.period_weight[period] += piece_weight;
+            self.period_weighted_length_m[period] += piece_weight * length_m;
+        }
         if length_m > 0.0 {
             let (cos, sin) = (delta[0] / length_m, delta[1] / length_m);
             self.weighted_doubled_direction[0] += weight * (cos * cos - sin * sin);
@@ -124,7 +132,10 @@ impl BoxSums {
         for axis in 0..3 {
             self.weighted_midpoint_m[axis] += other.weighted_midpoint_m[axis];
         }
-        self.weighted_length_m += other.weighted_length_m;
+        for period in 0..PERIODS {
+            self.period_weight[period] += other.period_weight[period];
+            self.period_weighted_length_m[period] += other.period_weighted_length_m[period];
+        }
         for axis in 0..2 {
             self.weighted_doubled_direction[axis] += other.weighted_doubled_direction[axis];
             self.weighted_gradient_direction[axis] += other.weighted_gradient_direction[axis];
@@ -177,7 +188,19 @@ impl BoxSums {
             centroid_m: self.weighted_midpoint_m.map(|sum| sum / self.weight),
             axis_rad,
             gradient,
-            piece_length_m: self.weighted_length_m / self.weight,
+            piece_length_m: {
+                let (weights, lengths) = (
+                    self.period_weight.iter().sum::<f64>(),
+                    self.period_weighted_length_m.iter().sum::<f64>(),
+                );
+                std::array::from_fn(|period| {
+                    if self.period_weight[period] > 0.0 {
+                        self.period_weighted_length_m[period] / self.period_weight[period]
+                    } else {
+                        lengths / weights
+                    }
+                })
+            },
             installation_shares: self.installation_energy.map(|energies| {
                 let total: f64 = energies.iter().sum();
                 energies.map(|energy| if total > 0.0 { energy / total } else { 0.0 })

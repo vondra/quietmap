@@ -296,6 +296,11 @@ fn run(arguments: &[String]) -> Result<(), String> {
                                 "piece_length_m": found.piece_length_m,
                                 "exact_db": found.exact_db,
                                 "boxed_db": found.boxed_db,
+                                "exact_altitude_m": found.exact_altitude_m,
+                                "exact_scaled_distance_m": found.exact_scaled_distance_m,
+                                "boxed_scaled_distance_m": found.boxed_scaled_distance_m,
+                                "exact_offset_m": found.exact_offset_m,
+                                "exact_length_m": found.exact_length_m,
                             }))
                             .collect::<Vec<_>>(),
                         "lists": report

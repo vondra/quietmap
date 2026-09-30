@@ -86,9 +86,20 @@ pub struct BoxDiagnosis {
     pub flights: u32,
     pub axis_deg: f64,
     pub gradient: f64,
-    pub piece_length_m: f64,
+    pub piece_length_m: Levels,
     pub exact_db: Levels,
     pub boxed_db: Levels,
+    /// Per period, the altitude of the box's pieces weighted by their energy at the point, their
+    /// energy-weighted harmonic mean d_lambda at the point, and the box's d_lambda there.
+    pub exact_altitude_m: Levels,
+    pub exact_scaled_distance_m: Levels,
+    pub boxed_scaled_distance_m: f64,
+    /// Per period, how far the pieces' energy-weighted middle lies from the box centroid (m), and
+    /// the centroid in metres east and north of the point.
+    pub exact_offset_m: Levels,
+    pub centroid_m: [f64; 2],
+    /// Per period, the pieces' horizontal length weighted by their energy at the point (m).
+    pub exact_length_m: Levels,
 }
 
 /// The popup's top-flights list reading `pieces` per box: the share of the exact ten it holds,

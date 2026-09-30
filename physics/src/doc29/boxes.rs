@@ -20,6 +20,9 @@ use super::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M, scree
 use super::segment::{ClosestPoints, closest_points};
 use crate::bands::{PERIODS, energy};
 
+/// The NPD distance (1,000 ft) whose energy weighs the periods' piece lengths into one.
+const GEOMETRY_DISTANCE: usize = 3;
+
 /// dev4 Filter D, as the kernel applies it to one segment.
 const EXTENSION_BELOW_GROUND_M: f64 = 30.0;
 
@@ -31,8 +34,8 @@ pub struct AircraftBoxAtReceiver<'a> {
     pub axis_rad: f64,
     /// Climb (rise over horizontal run) along `axis_rad`.
     pub gradient: f64,
-    /// Energy-weighted mean horizontal length of the pieces (m).
-    pub piece_length_m: f64,
+    /// Per period, the energy-weighted mean horizontal length of the pieces (m).
+    pub piece_length_m: [f64; PERIODS],
     /// Per period, the summed SEL energy's level at each NPD distance (dB, -inf silent).
     pub levels_db: &'a [[f64; NPD_DISTANCES]; PERIODS],
     /// lg of the pieces' energy-weighted harmonic mean d_lambda (m) at each NPD distance.
@@ -53,16 +56,33 @@ pub struct BoxSel {
     /// After screening (dB per period, -inf silent).
     pub sel_db: [f64; PERIODS],
     pub closest: ClosestPoints,
-    pub finite_segment_correction_db: f64,
+    /// Per period (each with its mean piece length).
+    pub finite_segment_correction_db: [f64; PERIODS],
     pub lateral_attenuation_db: f64,
     pub installation_correction_db: f64,
     pub terrain_loss_db: f64,
     pub building_loss_db: f64,
 }
 
+/// The average piece's length (m): the periods' lengths weighted by their energy at 1,000 ft.
+fn average_length_m(aircraft_box: &AircraftBoxAtReceiver) -> f64 {
+    let weights = aircraft_box
+        .levels_db
+        .map(|levels| energy(levels[GEOMETRY_DISTANCE]));
+    let total: f64 = weights.iter().sum();
+    if total > 0.0 {
+        (0..PERIODS)
+            .map(|period| weights[period] * aircraft_box.piece_length_m[period])
+            .sum::<f64>()
+            / total
+    } else {
+        aircraft_box.piece_length_m[0]
+    }
+}
+
 /// The ends of the average piece: the mean length centred on the centroid along the axis.
 pub fn average_piece_ends(aircraft_box: &AircraftBoxAtReceiver) -> [[f64; 3]; 2] {
-    let half = 0.5 * aircraft_box.piece_length_m.max(1.0);
+    let half = 0.5 * average_length_m(aircraft_box).max(1.0);
     let (sin, cos) = aircraft_box.axis_rad.sin_cos();
     let step = [cos * half, sin * half, aircraft_box.gradient * half];
     let c = aircraft_box.centroid_m;
@@ -76,6 +96,11 @@ pub fn average_piece_ends(aircraft_box: &AircraftBoxAtReceiver) -> [[f64; 3]; 2]
 /// and extrapolated with the end intervals, as the kernel reads each power row.
 fn scaled_distance_at(lg_scaled_distance: &[f64; NPD_DISTANCES], position: &NpdPosition) -> f64 {
     (position.linear(lg_scaled_distance) * std::f64::consts::LN_10).exp()
+}
+
+/// A box's d_lambda at `slant_m` (m).
+pub fn scaled_distance_at_slant(lg_scaled_distance: &[f64; NPD_DISTANCES], slant_m: f64) -> f64 {
+    scaled_distance_at(lg_scaled_distance, &NpdPosition::at(slant_m))
 }
 
 /// A box's summed level at `slant_m`: its NPD curve up to 25,000 ft, beyond it spherical
@@ -119,11 +144,17 @@ pub fn box_sel_at_receiver(
     let lateral_m = east_m.hypot(north_m);
     let slant_m = lateral_m.hypot(height_m);
     let position = NpdPosition::at(slant_m);
-    let finite = finite_segment_correction_db(
-        closest.along * closest.horizontal_length_m,
-        closest.horizontal_length_m,
-        scaled_distance_at(aircraft_box.lg_scaled_distance, &position),
-    );
+    // Each period's pieces keep their own mean length, centred where the average piece is.
+    let scaled_distance_m = scaled_distance_at(aircraft_box.lg_scaled_distance, &position);
+    let along_m = closest.along * closest.horizontal_length_m;
+    let finite: [f64; PERIODS] = std::array::from_fn(|period| {
+        let length_m = aircraft_box.piece_length_m[period].max(1.0);
+        finite_segment_correction_db(
+            along_m + 0.5 * (length_m - closest.horizontal_length_m),
+            length_m,
+            scaled_distance_m,
+        )
+    });
     let lateral_attenuation = lateral_attenuation_db(height_m, lateral_m);
     let installations = [
         Installation::Wing,
@@ -158,7 +189,7 @@ pub fn box_sel_at_receiver(
             return f64::NEG_INFINITY;
         }
         let free = box_level_db(levels, aircraft_box.tail_levels_db[period], &position)
-            + finite
+            + finite[period]
             + installation
             - lateral_attenuation;
         screened_sel_db(free, lateral_attenuation, terrain_loss_db, building_loss_db)
