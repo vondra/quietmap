@@ -15,11 +15,6 @@ use super::profiles_generated::{noise_class_of, profile_idx};
 use super::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M, screened_sel_db};
 use super::thrust::{PowerBracket, SegmentFlight, power_bracket};
 
-/// dev4 Filter D: a segment whose straight extension, beyond the end nearer the receiver's closest
-/// point, sinks more than this below the terrain under that end (touchdown, the last sample) is
-/// not heard through that fictitious extension. The margin covers terrain and altitude errors.
-const EXTENSION_BELOW_GROUND_M: f64 = 30.0;
-
 /// A type designator resolved once per flight: its noise class, and a helicopter's levels.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AircraftType {
@@ -171,25 +166,21 @@ pub struct SegmentSel {
     pub building_loss_db: f64,
 }
 
-/// The exact SEL of one segment at the receiver, as dev4 computes it: the NPD level at the slant
-/// to the closest point of the segment's line (not clamped), plus Delta_V, the helicopter
+/// The exact SEL of one segment at the receiver (Doc 29 4.4-4.5): the NPD level at the slant to
+/// the closest point of the segment's line (not clamped), plus Delta_V, the helicopter
 /// correction, Delta_I and Delta_F, minus Lambda, then terrain and building screening composed
-/// with Lambda. `None` when dev4's Filter D rejects the segment at this receiver. No reach cut
-/// and no event floor: the box it is the reference of can apply neither.
+/// with Lambda. Every segment is heard: dev4's Filter D, which dropped a segment whose extended
+/// line passed more than 30 m under the ground at its closest point, is not Doc 29 (Delta_F
+/// already keeps only the segment's own extent) and dropped real sound (0.4-0.5 dB 3-5 km beside
+/// runways; owner decision 2026-09-30). No reach cut and no event floor: the box it is the
+/// reference of can apply neither.
 pub fn segment_sel_at_receiver(
     emission: &SegmentEmission,
     geometry: &SegmentGeometry,
     horizons: &impl ReceiverHorizons,
-) -> Option<SegmentSel> {
+) -> SegmentSel {
     let closest = closest_points(geometry.start_m, geometry.end_m);
     let [east_m, north_m, height_m] = closest.on_line_m;
-    let beyond_start =
-        closest.along < 0.0 && height_m < geometry.ground_under_start_m - EXTENSION_BELOW_GROUND_M;
-    let beyond_end =
-        closest.along > 1.0 && height_m < geometry.ground_under_end_m - EXTENSION_BELOW_GROUND_M;
-    if beyond_start || beyond_end {
-        return None;
-    }
     let lateral_m = east_m.hypot(north_m);
     let slant_m = lateral_m.hypot(height_m);
     let npd = emission.read_npd(slant_m);
@@ -214,7 +205,7 @@ pub fn segment_sel_at_receiver(
         } else {
             (0.0, 0.0)
         };
-    Some(SegmentSel {
+    SegmentSel {
         sel_db: screened_sel_db(
             free_sel_db,
             lateral_attenuation,
@@ -229,7 +220,7 @@ pub fn segment_sel_at_receiver(
         installation_correction_db: installation,
         terrain_loss_db,
         building_loss_db,
-    })
+    }
 }
 
 #[cfg(test)]

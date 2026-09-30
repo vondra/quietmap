@@ -130,9 +130,7 @@ impl FlightTotals {
                     ground_under_start_m: record.ground_m - receiver.altitude_m,
                     ground_under_end_m: record.ground_m - receiver.altitude_m,
                 };
-                let Some(sel) = segment_sel_at_receiver(&emission, &geometry, horizons) else {
-                    continue;
-                };
+                let sel = segment_sel_at_receiver(&emission, &geometry, horizons);
                 let closest = sel.closest.on_segment_m;
                 let lateral = closest[0].hypot(closest[1]);
                 let lmax_db = emission.read_npd(lateral.hypot(closest[2])).lamax_db;

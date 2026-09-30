@@ -66,7 +66,7 @@ fn exact_db(segments: &[FlightSegment], receiver: [f64; 2]) -> f64 {
                 ground_under_start_m: -4.0,
                 ground_under_end_m: -4.0,
             };
-            segment_sel_at_receiver(&emission, &geometry, &Unscreened)
+            Some(segment_sel_at_receiver(&emission, &geometry, &Unscreened))
         })
         .map(|sel| 10f64.powf(sel.sel_db / 10.0))
         .sum();
@@ -98,9 +98,7 @@ fn boxed_db(files: &[(TileId, Vec<u8>)], receiver: [f64; 2]) -> f64 {
                 installation_shares: record.installation_shares,
                 ground_m: record.ground_m - 4.0,
             };
-            if let Some(sel) = box_sel_at_receiver(&at_receiver, &Unscreened) {
-                energy += 10f64.powf(sel.sel_db[0] / 10.0);
-            }
+            energy += 10f64.powf(box_sel_at_receiver(&at_receiver, &Unscreened).sel_db[0] / 10.0);
         }
     }
     10.0 * energy.log10()
@@ -158,9 +156,14 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
             "at {receiver:?}: box {boxed:.3} vs segments {exact:.3}"
         );
     }
-    // Behind the corridor's start every extended climb is under the ground: both are silent.
+    // Behind the corridor's start, where every extended climb runs under the ground, the climbs
+    // are still heard (Doc 29 keeps them; dev4's Filter D dropped them) and the boxes follow.
     let behind = [500.0, -5_000.0];
-    assert_eq!(exact_db(&segments, behind), f64::NEG_INFINITY);
-    assert_eq!(boxed_db(&files, behind), f64::NEG_INFINITY);
+    let (exact, boxed) = (exact_db(&segments, behind), boxed_db(&files, behind));
+    eprintln!("corridor behind its start: box {boxed:.2} vs segments {exact:.2}");
+    assert!(
+        exact.is_finite() && (boxed - exact).abs() < 0.5,
+        "{boxed:.3} vs {exact:.3}"
+    );
     std::fs::remove_dir_all(&out).unwrap();
 }

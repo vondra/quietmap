@@ -136,9 +136,7 @@ fn a_box_of_one_segment_answers_as_the_kernel_reads_it() {
         ground_under_start_m: -RECEIVER_ALTITUDE_M,
         ground_under_end_m: -RECEIVER_ALTITUDE_M,
     };
-    let sel = segment_sel_at_receiver(&emission, &geometry, &Unscreened)
-        .unwrap()
-        .sel_db;
+    let sel = segment_sel_at_receiver(&emission, &geometry, &Unscreened).sel_db;
     let expected_leq = sel - 10.0 * (PERIOD_HOURS[0] * 3_600.0).log10();
     let got_leq = 10.0 * energy.log10();
     // Metre altitudes and step-rounded centroids shift the level by far less than 0.05 dB.

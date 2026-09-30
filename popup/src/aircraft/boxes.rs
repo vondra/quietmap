@@ -97,12 +97,10 @@ pub fn tile_energy(
                 installation_shares: record.installation_shares,
                 ground_m: record.ground_m - receiver.altitude_m,
             };
-            let energy =
-                box_sel_at_receiver(&at_receiver, horizons).map_or([0.0; PERIODS], |sel| {
-                    std::array::from_fn(|period| {
-                        energy(sel.sel_db[period]) / (PERIOD_HOURS[period] * 3_600.0)
-                    })
-                });
+            let sel = box_sel_at_receiver(&at_receiver, horizons);
+            let energy: [f64; PERIODS] = std::array::from_fn(|period| {
+                energy(sel.sel_db[period]) / (PERIOD_HOURS[period] * 3_600.0)
+            });
             let bound = (record.piece_count > 0).then(|| {
                 record.loudest_lamax_db
                     + lamax_rise_bound_db(nearest_slant_m(&record, tile, frame, receiver))

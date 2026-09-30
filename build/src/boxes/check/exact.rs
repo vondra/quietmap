@@ -105,9 +105,7 @@ pub(super) fn add_segment(
             ground_under_start_m: ground(segment.ground_m[0]),
             ground_under_end_m: ground(segment.ground_m[1]),
         };
-        let Some(sel) = segment_sel_at_receiver(emission, &geometry, &Unscreened) else {
-            continue;
-        };
+        let sel = segment_sel_at_receiver(emission, &geometry, &Unscreened);
         let energy = 10f64.powf(sel.sel_db / 10.0);
         if nearest > REACH_M {
             sums.energy[BEYOND + period] += weight * energy;
@@ -146,30 +144,29 @@ pub(super) fn add_segment(
                 ground_under_start_m: under(piece.start.0),
                 ground_under_end_m: under(piece.end.0),
             };
-            if let Some(sel) = segment_sel_at_receiver(emission, &geometry, &Unscreened) {
-                let slot = if piece.key.band == 0 {
-                    NEAR_GROUND
-                } else {
-                    ALOFT
-                };
-                let value = weight * 10f64.powf(sel.sel_db / 10.0);
-                sums.energy[slot + period] += value;
-                let middle = [
-                    0.5 * (geometry.start_m[0] + geometry.end_m[0]),
-                    0.5 * (geometry.start_m[1] + geometry.end_m[1]),
-                ];
-                let band = distance_band(middle[0].hypot(middle[1]));
-                sums.energy[BY_DISTANCE + PERIODS * band + period] += value;
-                if let Some(per_box) = sums.per_box.as_mut() {
-                    let sum = per_box.entry(piece.key).or_insert([[0.0; PERIODS]; 6]);
-                    sum[0][period] += value;
-                    sum[1][period] += value * 0.5 * (piece.start.1 + piece.end.1);
-                    sum[2][period] += value / sel.npd.scaled_distance_m;
-                    sum[3][period] += value * middle[0];
-                    sum[4][period] += value * middle[1];
-                    let [a, b] = [geometry.start_m, geometry.end_m];
-                    sum[5][period] += value * (b[0] - a[0]).hypot(b[1] - a[1]);
-                }
+            let sel = segment_sel_at_receiver(emission, &geometry, &Unscreened);
+            let slot = if piece.key.band == 0 {
+                NEAR_GROUND
+            } else {
+                ALOFT
+            };
+            let value = weight * 10f64.powf(sel.sel_db / 10.0);
+            sums.energy[slot + period] += value;
+            let middle = [
+                0.5 * (geometry.start_m[0] + geometry.end_m[0]),
+                0.5 * (geometry.start_m[1] + geometry.end_m[1]),
+            ];
+            let band = distance_band(middle[0].hypot(middle[1]));
+            sums.energy[BY_DISTANCE + PERIODS * band + period] += value;
+            if let Some(per_box) = sums.per_box.as_mut() {
+                let sum = per_box.entry(piece.key).or_insert([[0.0; PERIODS]; 6]);
+                sum[0][period] += value;
+                sum[1][period] += value * 0.5 * (piece.start.1 + piece.end.1);
+                sum[2][period] += value / sel.npd.scaled_distance_m;
+                sum[3][period] += value * middle[0];
+                sum[4][period] += value * middle[1];
+                let [a, b] = [geometry.start_m, geometry.end_m];
+                sum[5][period] += value * (b[0] - a[0]).hypot(b[1] - a[1]);
             }
         }
     }

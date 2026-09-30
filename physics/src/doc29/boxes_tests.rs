@@ -33,7 +33,7 @@ fn kernel_sel(emission: &SegmentEmission, start_m: [f64; 3], end_m: [f64; 3]) ->
         ground_under_start_m: -4.0,
         ground_under_end_m: -4.0,
     };
-    segment_sel_at_receiver(emission, &geometry, &Unscreened).map(|sel| sel.sel_db)
+    Some(segment_sel_at_receiver(emission, &geometry, &Unscreened).sel_db)
 }
 
 /// The box of `pieces` (emission, start, end) in the receiver's frame, day period only.
@@ -63,7 +63,7 @@ fn box_day_sel(values: &BoxValues) -> Option<f64> {
         installation_shares: values.installation_shares,
         ground_m: -4.0,
     };
-    box_sel_at_receiver(&aircraft_box, &Unscreened).map(|sel| sel.sel_db[0])
+    Some(box_sel_at_receiver(&aircraft_box, &Unscreened).sel_db[0])
 }
 
 /// A box of one segment is that segment: the same curve, d_lambda, Delta_F, Lambda and Delta_I,

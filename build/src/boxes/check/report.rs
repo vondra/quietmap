@@ -111,14 +111,13 @@ fn box_energy<'a>(
                 installation_shares: record.installation_shares,
                 ground_m: record.ground_m - receiver.altitude_m,
             };
-            if let Some(sel) = box_sel_at_receiver(&at_receiver, &Unscreened) {
-                let band = usize::from(record.clearance_m > 0.0);
-                let distance = distance_band(east.hypot(north));
-                for (period, level) in sel.sel_db.iter().enumerate() {
-                    let value = 10f64.powf(level / 10.0);
-                    energy.bands[band][period] += value;
-                    energy.distances[distance][period] += value;
-                }
+            let sel = box_sel_at_receiver(&at_receiver, &Unscreened);
+            let band = usize::from(record.clearance_m > 0.0);
+            let distance = distance_band(east.hypot(north));
+            for (period, level) in sel.sel_db.iter().enumerate() {
+                let value = 10f64.powf(level / 10.0);
+                energy.bands[band][period] += value;
+                energy.distances[distance][period] += value;
             }
         }
     }
@@ -338,9 +337,8 @@ fn diagnose(
                 ground_m: record.ground_m - receiver.altitude_m,
             };
             let energy: [f64; PERIODS] = box_sel_at_receiver(&at_receiver, &Unscreened)
-                .map_or([0.0; PERIODS], |sel| {
-                    sel.sel_db.map(|level| 10f64.powf(level / 10.0))
-                });
+                .sel_db
+                .map(|level| 10f64.powf(level / 10.0));
             let (lat, lon) = tiles::geo::Mercator {
                 x: global.x as f64 / 32_768.0,
                 y: global.y as f64 / 32_768.0,

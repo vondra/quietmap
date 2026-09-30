@@ -110,9 +110,8 @@ fn the_bound_stays_above_every_segment() {
                         for gradient in [0.0, 0.05, 0.25, -0.05] {
                             let geometry =
                                 segment(-along_m, length_m, lateral_m, height_m, gradient);
-                            let exact = segment_sel_at_receiver(&emission, &geometry, &Unscreened)
-                                .expect("no extension reaches the ground")
-                                .sel_db;
+                            let exact =
+                                segment_sel_at_receiver(&emission, &geometry, &Unscreened).sel_db;
                             let bound_db = aircraft_sel_bound_db(&levels, nearest_m(&geometry));
                             assert!(exact <= bound_db, "{emission:?} {geometry:?}");
                             worst_over_curve_db =
@@ -188,11 +187,7 @@ fn the_bound_of_a_box_stays_above_the_sum_of_its_segments() {
                         end_m: shifted(geometry.end_m),
                         ..*geometry
                     };
-                    energy(
-                        segment_sel_at_receiver(emission, &relative, &Unscreened)
-                            .unwrap()
-                            .sel_db,
-                    )
+                    energy(segment_sel_at_receiver(emission, &relative, &Unscreened).sel_db)
                 })
                 .sum();
             let gap = [0, 1, 2].map(|axis| {

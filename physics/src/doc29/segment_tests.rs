@@ -100,8 +100,7 @@ fn a_curving_departure_phantom_keeps_its_foot_for_the_sel_only() {
         ..in_the_open(start, end)
     };
     let departure = flight(true, 100.0, 23.0 / 131.0);
-    let sel = segment_sel_at_receiver(&emission("B738", &departure, false), &geometry, &Unscreened)
-        .expect("the foot lies above the terrain");
+    let sel = segment_sel_at_receiver(&emission("B738", &departure, false), &geometry, &Unscreened);
     assert!(
         sel.closest.along < 0.0 && norm(sel.closest.on_line_m) < 100.0,
         "{sel:?}"
@@ -125,9 +124,7 @@ fn helicopter_states_differ_by_the_certification_uplifts() {
         let geometry = in_the_open([0.0, -250.0, 150.0], [0.0, 250.0, end_height_m]);
         let climb_sine = (end_height_m - 150.0) / 500f64.hypot(end_height_m - 150.0);
         let emission = emission("EC35", &flight(departure, 100.0, climb_sine), descent);
-        segment_sel_at_receiver(&emission, &geometry, &Unscreened)
-            .unwrap()
-            .sel_db
+        segment_sel_at_receiver(&emission, &geometry, &Unscreened).sel_db
     };
     let level = sel(false, 150.0, false);
     let descent = sel(false, 139.0, true);
@@ -150,17 +147,17 @@ fn a_nearby_b738_approach_reads_a_plausible_sel() {
         local(receiver, [50.01, 14.0, 900.0]),
     );
     let approach = flight(false, 150.0, -100.0 / 1_100.0);
-    let sel = segment_sel_at_receiver(&emission("B738", &approach, false), &geometry, &Unscreened)
-        .unwrap();
+    let sel = segment_sel_at_receiver(&emission("B738", &approach, false), &geometry, &Unscreened);
     assert!(sel.sel_db > 50.0 && sel.sel_db < 110.0, "{}", sel.sel_db);
     let slant_m = norm(sel.closest.on_line_m);
     assert!(slant_m > 100.0 && slant_m < 2_000.0, "{slant_m}");
 }
 
-/// dev4 Filter D: a final approach whose extension beyond touchdown sinks 46 m below the ground
-/// under its end is not heard through that extension; over a valley 30 m deeper it is.
+/// A final approach whose line, extended beyond touchdown, passes 46 m under the ground at the
+/// receiver's closest point is heard through its own extent (Doc 29; dev4's Filter D dropped it):
+/// finite, and quieter than with the receiver abeam its nearer end.
 #[test]
-fn an_extension_below_the_ground_is_not_heard_through() {
+fn an_approach_is_heard_beyond_its_touchdown() {
     let approach = emission("B738", &flight(false, 140.0, -0.05), false);
     let geometry = SegmentGeometry {
         start_m: [-4_000.0, 0.0, 150.0],
@@ -168,15 +165,15 @@ fn an_extension_below_the_ground_is_not_heard_through() {
         ground_under_start_m: -4.0,
         ground_under_end_m: -4.0,
     };
-    assert_eq!(
-        segment_sel_at_receiver(&approach, &geometry, &Unscreened),
-        None
-    );
-    let valley = SegmentGeometry {
-        ground_under_end_m: -34.0,
+    let beyond = segment_sel_at_receiver(&approach, &geometry, &Unscreened).sel_db;
+    let abeam = SegmentGeometry {
+        start_m: [-2_000.0, 2_000.0, 150.0],
+        end_m: [0.0, 2_000.0, 50.0],
         ..geometry
     };
-    assert!(segment_sel_at_receiver(&approach, &valley, &Unscreened).is_some());
+    let beside = segment_sel_at_receiver(&approach, &abeam, &Unscreened).sel_db;
+    assert!(beyond.is_finite() && beyond > 30.0, "{beyond}");
+    assert!(beyond < beside, "{beyond} vs {beside}");
 }
 
 /// Collinear pieces share the line's closest point and d_lambda, and Eq. 4-20 telescopes: they
@@ -186,7 +183,7 @@ fn collinear_pieces_carry_the_energy_of_their_segment() {
     let fallback = emission("XXXX", &flight(true, 160.0, 0.0), false);
     let energy = |from_m: f64, to_m: f64| {
         let geometry = in_the_open([from_m, 8_000.0, 8_000.0], [to_m, 8_000.0, 8_000.0]);
-        let sel = segment_sel_at_receiver(&fallback, &geometry, &Unscreened).unwrap();
+        let sel = segment_sel_at_receiver(&fallback, &geometry, &Unscreened);
         10f64.powf(sel.sel_db / 10.0)
     };
     let whole = energy(-10_000.0, 10_000.0);
@@ -209,7 +206,7 @@ fn the_npd_distance_levels_are_the_kernel_under_a_long_segment() {
         for (k, distance_ft) in NPD_DISTANCES_FT.iter().enumerate() {
             let height_m = distance_ft * METRES_PER_FOOT;
             let geometry = in_the_open([-5e5, 0.0, height_m], [5e5, 0.0, height_m]);
-            let sel = segment_sel_at_receiver(&emission, &geometry, &Unscreened).unwrap();
+            let sel = segment_sel_at_receiver(&emission, &geometry, &Unscreened);
             assert!(
                 (sel.free_sel_db - levels.sel_db[k]).abs() < 1e-3,
                 "{designator} {k}"
@@ -260,14 +257,14 @@ fn screening_takes_the_larger_loss_net_of_lateral_attenuation() {
             [lateral_m, 1_000.0, height_m],
         );
         let both = FixedHorizons::new(18.0, 18.0);
-        let sel = segment_sel_at_receiver(&jet, &geometry, &both).unwrap();
+        let sel = segment_sel_at_receiver(&jet, &geometry, &both);
         assert!(sel.lateral_attenuation_db > 1.0);
         let expected = sel.free_sel_db - (18.0 - sel.lateral_attenuation_db);
         assert!((sel.sel_db - expected).abs() < 1e-9, "{sel:?}");
     }
     let geometry = in_the_open([-4_000.0, 300.0, 500.0], [-3_000.0, 300.0, 520.0]);
     let recording = FixedHorizons::new(2.0, 1.0);
-    let sel = segment_sel_at_receiver(&jet, &geometry, &recording).unwrap();
+    let sel = segment_sel_at_receiver(&jet, &geometry, &recording);
     let asked = recording.asked.borrow();
     assert_eq!(
         *asked,
@@ -285,7 +282,7 @@ fn sources_above_the_screening_ceiling_are_not_screened() {
         ..in_the_open([8_000.0, -1_000.0, 7_400.0], [8_000.0, 1_000.0, 7_400.0])
     };
     let wall = FixedHorizons::new(18.0, 18.0);
-    let sel = segment_sel_at_receiver(&jet, &high, &wall).unwrap();
+    let sel = segment_sel_at_receiver(&jet, &high, &wall);
     assert_eq!(sel.sel_db, sel.free_sel_db);
     assert!(wall.asked.borrow().is_empty());
     let lower = SegmentGeometry {
@@ -293,5 +290,5 @@ fn sources_above_the_screening_ceiling_are_not_screened() {
         ground_under_end_m: -100.0,
         ..high
     };
-    assert!(segment_sel_at_receiver(&jet, &lower, &wall).unwrap().sel_db < sel.sel_db);
+    assert!(segment_sel_at_receiver(&jet, &lower, &wall).sel_db < sel.sel_db);
 }

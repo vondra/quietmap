@@ -3,7 +3,7 @@
 //! its average aircraft (the emission-weighted centroid, one axis and gradient, the mean piece
 //! length) and applies to that average piece what the kernel applies to one segment: Delta_F with
 //! the box's scaled distance, the lateral attenuation, the installation correction of the box's
-//! installation shares, dev4's Filter D and the screening.
+//! installation shares and the screening.
 //!
 //! Why it matches the pieces: the energies add at every NPD distance; the geometry terms are the
 //! kernel's for one segment; Delta_F of short pieces (length << d_lambda) is proportional to
@@ -22,9 +22,6 @@ use crate::bands::{PERIODS, energy};
 
 /// The NPD distance (1,000 ft) whose energy weighs the periods' piece lengths into one.
 const GEOMETRY_DISTANCE: usize = 3;
-
-/// dev4 Filter D, as the kernel applies it to one segment.
-const EXTENSION_BELOW_GROUND_M: f64 = 30.0;
 
 /// A box in the receiver's frame: metres east and north of the receiver, heights above it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -129,18 +126,14 @@ fn shares_at(shares: [[f64; 3]; 2], slant_m: f64) -> [f64; 3] {
     std::array::from_fn(|k| shares[0][k] + t * (shares[1][k] - shares[0][k]))
 }
 
-/// The box's SEL sums at the receiver, or `None` when dev4's Filter D rejects its average piece.
+/// The box's SEL sums at the receiver.
 pub fn box_sel_at_receiver(
     aircraft_box: &AircraftBoxAtReceiver,
     horizons: &impl ReceiverHorizons,
-) -> Option<BoxSel> {
+) -> BoxSel {
     let [start, end] = average_piece_ends(aircraft_box);
     let closest = closest_points(start, end);
     let [east_m, north_m, height_m] = closest.on_line_m;
-    let below_extension = height_m < aircraft_box.ground_m - EXTENSION_BELOW_GROUND_M;
-    if below_extension && !(0.0..=1.0).contains(&closest.along) {
-        return None;
-    }
     let lateral_m = east_m.hypot(north_m);
     let slant_m = lateral_m.hypot(height_m);
     let position = NpdPosition::at(slant_m);
@@ -194,7 +187,7 @@ pub fn box_sel_at_receiver(
             - lateral_attenuation;
         screened_sel_db(free, lateral_attenuation, terrain_loss_db, building_loss_db)
     });
-    Some(BoxSel {
+    BoxSel {
         sel_db,
         closest,
         finite_segment_correction_db: finite,
@@ -202,7 +195,7 @@ pub fn box_sel_at_receiver(
         installation_correction_db: installation,
         terrain_loss_db,
         building_loss_db,
-    })
+    }
 }
 
 #[cfg(test)]
