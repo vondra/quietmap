@@ -11,6 +11,7 @@
 //! tables [`profiles_generated`] (profiles, classes, designator mapping) and [`thrust_generated`]
 //! (thrust rows per class).
 
+pub mod approach_generated;
 pub mod bound;
 pub mod box_geometry;
 pub mod box_sums;

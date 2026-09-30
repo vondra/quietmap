@@ -1,6 +1,7 @@
 //! Per-segment engine power (Doc 29 4th ed. Vol 2 Eq. 4-3, B-1, B-12): the corrected net thrust a
 //! segment flies selects two bracketing NPD power rows and a weight, once per segment.
 
+use super::approach_generated::APPROACH;
 use super::npd::METRES_PER_FOOT;
 use super::thrust_generated::THRUST;
 
@@ -63,6 +64,35 @@ impl ThrustModel {
     }
 }
 
+/// The final approach configuration of a noise class (Doc 29 Vol 2 B11, `approach_generated`):
+/// below `from_ft_afe` an arrival flies its landing flap with the gear down at 90 % of its maximum
+/// landing weight, and its thrust is the glideslope's force balance with that drag (Eq. B-25).
+pub struct ApproachConfiguration {
+    pub class_name: &'static str,
+    pub anchor: &'static str,
+    pub flap: &'static str,
+    pub drag_ratio: f64,
+    pub from_ft_afe: f64,
+    pub landing_weight_lb: f64,
+}
+
+impl ApproachConfiguration {
+    /// A class without a thrust model.
+    pub const fn none(class_name: &'static str) -> Self {
+        ApproachConfiguration {
+            class_name,
+            anchor: "",
+            flap: "",
+            drag_ratio: 0.0,
+            from_ft_afe: 0.0,
+            landing_weight_lb: 0.0,
+        }
+    }
+}
+
+/// Eq. B-25's constant: the deceleration of a constant-CAS descent into an 8 kt headwind.
+const APPROACH_K: f64 = 1.03;
+
 /// Doc 29 Eq. 4-3 bracket: the lower power row and the weight toward the next one (0 at and past
 /// the table's edges, so a bracket never reads beyond the tabulated rows).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -115,8 +145,8 @@ pub struct SegmentFlight {
     /// Along-track acceleration (m/s^2) from the flight's neighbouring segments (0 unknown):
     /// the energy an accelerating climb puts into speed, which the climb angle alone does not show.
     pub acceleration_ms2: f64,
-    /// Height above the departure field (m): the altitude minus the terrain under the flight's own
-    /// takeoff roll, or the height above the local ground when the roll was not observed.
+    /// Height above the field (m): for a departure the altitude minus the terrain under its own
+    /// takeoff roll, else (and when the roll was not observed) the height above the local ground.
     pub height_above_field_m: f64,
 }
 
@@ -192,6 +222,24 @@ pub fn power_bracket(class: usize, flight: &SegmentFlight) -> Option<PowerBracke
         && flight.height_above_field_m < model.cutback_ft_afe * METRES_PER_FOOT
     {
         rated_thrust_lb(&model.takeoff_coef, vc_kt, h_ft, temperature_c)
+    } else if !flight.departure
+        && flight.height_above_field_m <= APPROACH[class].from_ft_afe * METRES_PER_FOOT
+    {
+        // B11: the landing flap and the gear hold the glideslope's thrust well above idle; with
+        // the clean ratio of the climb an approach read idle all the way down (1-4 dB of the
+        // approach NPD of the A320neo family, 10 dB of a business jet's).
+        let approach = &APPROACH[class];
+        let idle = rated_thrust_lb(&model.idle_coef, vc_kt, h_ft, temperature_c);
+        let climb = rated_thrust_lb(&model.climb_coef, vc_kt, h_ft, temperature_c);
+        if !(idle.is_finite() && climb.is_finite() && idle <= climb) {
+            return None;
+        }
+        ((approach.landing_weight_lb / delta)
+            * (approach.drag_ratio
+                + flight.climb_sine / APPROACH_K
+                + flight.acceleration_ms2 / GRAVITY_MS2)
+            / f64::from(model.engines))
+        .clamp(idle, climb)
     } else {
         let k = if vc_kt <= 200.0 { 1.01 } else { 0.95 };
         let idle = rated_thrust_lb(&model.idle_coef, vc_kt, h_ft, temperature_c);

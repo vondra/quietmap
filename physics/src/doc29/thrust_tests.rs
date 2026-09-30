@@ -203,3 +203,52 @@ fn acceleration_adds_thrust_to_the_climb() {
     };
     assert!(power_bracket(class, &braking).is_some());
 }
+
+/// An A320 on a 3 degree glideslope at 140 kt, 300 m above the field, flies its landing flap and
+/// gear (Eq. B-25): some 4,500 lb a side, between the 2,700 and 6,000 lb approach rows, where the
+/// clean ratio read idle below the first row; above the configuration height it stays at idle.
+#[test]
+fn a_final_approach_flies_its_landing_configuration() {
+    let class = class_of("A320");
+    let model = &THRUST[class];
+    let approach = &APPROACH[class];
+    let final_approach = SegmentFlight {
+        departure: false,
+        on_ground: false,
+        speed_kt: 140.0,
+        pressure_altitude_m: 600.0,
+        climb_sine: -0.0523,
+        acceleration_ms2: 0.0,
+        height_above_field_m: 300.0,
+    };
+    let bracket = power_bracket(class, &final_approach).expect("in the domain");
+    let delta = (1.0_f64 - 6.8756e-6 * 600.0 / METRES_PER_FOOT).powf(5.2559);
+    let expected =
+        approach.landing_weight_lb / delta * (approach.drag_ratio - 0.0523 / APPROACH_K) / 2.0;
+    let read = model.app_power[bracket.row]
+        + bracket.weight * (model.app_power[bracket.row + 1] - model.app_power[bracket.row]);
+    assert!(
+        (read - expected).abs() < 1.0 && (2_700.0..6_000.0).contains(&read),
+        "{read} {expected}"
+    );
+    let higher = SegmentFlight {
+        height_above_field_m: 1_000.0,
+        ..final_approach
+    };
+    assert_eq!(power_bracket(class, &higher), Some(PowerBracket::FIRST_ROW));
+    assert_eq!(APPROACH[class].class_name, CLASS_NAMES[class]);
+}
+
+/// The approach table follows the class names.
+#[test]
+fn approach_configurations_follow_class_names() {
+    for (class, approach) in APPROACH.iter().enumerate() {
+        assert_eq!(approach.class_name, CLASS_NAMES[class]);
+        assert_eq!(
+            approach.drag_ratio > 0.0,
+            THRUST[class].has_thrust,
+            "{}",
+            approach.class_name
+        );
+    }
+}
