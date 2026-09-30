@@ -45,7 +45,12 @@ pub struct Aeroways {
     pub lines: Vec<AerowayLine>,
     pub airports: Vec<Airport>,
     keys: HashMap<String, u32>,
+    /// The aerodromes of the squares and their neighbours (for lines found later).
+    aerodromes: Vec<Aerodrome>,
 }
+
+/// Discovered lines are cut into pieces of at most this length (m), as dev4 cut OSM lines.
+const PIECE_M: f64 = 250.0;
 
 /// An aerodrome polygon as a candidate airport of lines.
 #[derive(Debug, Clone)]
@@ -160,6 +165,7 @@ impl Aeroways {
             }
             nearby.sort_by_key(|aerodrome| aerodrome.osm_id);
             nearby.dedup_by_key(|aerodrome| aerodrome.osm_id);
+            aeroways.aerodromes.extend(nearby.iter().cloned());
             let Some(table) = dev4.table(square, "airport_lines.arrow")? else {
                 continue;
             };
@@ -204,7 +210,48 @@ impl Aeroways {
                 }
             }
         }
+        aeroways
+            .aerodromes
+            .sort_by_key(|aerodrome| aerodrome.osm_id);
+        aeroways
+            .aerodromes
+            .dedup_by_key(|aerodrome| aerodrome.osm_id);
         Ok(aeroways)
+    }
+
+    /// Adds discovered airstrips (latitude and longitude of both ends) as runway lines cut into
+    /// equal pieces of at most [`PIECE_M`], each strip of the airport its middle belongs to and
+    /// each piece in the square of its middle; `square_of` gives a point's square.
+    pub fn add_strips(&mut self, strips: &[[[f64; 2]; 2]], square_of: impl Fn([f64; 2]) -> Square) {
+        for strip in strips {
+            let at = |t: f64| {
+                let (lat, lon) = crate::aircraft::flat::interpolate(
+                    strip[0][0] as f32,
+                    strip[0][1] as f32,
+                    strip[1][0] as f32,
+                    strip[1][1] as f32,
+                    t as f32,
+                );
+                [f64::from(lat), f64::from(lon)]
+            };
+            let airport = self.intern(airport_at(at(0.5), &self.aerodromes));
+            let pieces = (distance_m(strip[0], strip[1]) / PIECE_M).ceil().max(1.0) as usize;
+            let osm_id = super::strips::strip_id(strip);
+            for piece in 0..pieces {
+                let (from, to) = (
+                    piece as f64 / pieces as f64,
+                    (piece + 1) as f64 / pieces as f64,
+                );
+                self.lines.push(AerowayLine {
+                    osm_id,
+                    segment: piece as u16,
+                    ends: [at(from), at(to)],
+                    operation: GroundOperation::RunwayRoll,
+                    airport,
+                    square: square_of(at(0.5 * (from + to))),
+                });
+            }
+        }
     }
 
     /// The index of an airport, added on first sight (by key; the first name stays).

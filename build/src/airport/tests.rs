@@ -1,5 +1,6 @@
 //! Ground legs onto synthetic aeroway lines: a leg's length is conserved when buffers overlap, a
-//! day of passes becomes sound power per metre, and a flight is one movement per airport and day.
+//! day of passes becomes sound power per metre, a flight is one movement per airport and day, and
+//! strips missing from the lines are found in the legs off them.
 
 use super::lines::{AerowayLine, Airport};
 use super::*;
@@ -273,4 +274,94 @@ fn a_square_file_reads_back_as_written() {
     assert_eq!(file::read(&dir, square).unwrap(), lines);
     assert!(file::read(&dir, Square { x: 1, y: 1 }).unwrap().is_empty());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Legs of `flights` flights on each of `days` days along an 800 m strip 2 km north of the test
+/// airport (off all its lines), in eight 100 m legs at 60 kt, landing westwards.
+fn strip_days(flights: u64, days: usize) -> Vec<Vec<GroundLeg>> {
+    let c172 = Mover::Aircraft { class: 3 };
+    (0..days)
+        .map(|day| {
+            (0..flights)
+                .flat_map(|flight| {
+                    (0..8).map(move |step| {
+                        let east = 800.0 - 100.0 * step as f64;
+                        let mut leg = leg(
+                            100 * day as u64 + flight,
+                            c172,
+                            at(2_000.0, east),
+                            at(2_000.0, east - 100.0),
+                        );
+                        (leg.departure, leg.speed_kt) = (false, 60.0);
+                        leg
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+fn discovered(days: &[Vec<GroundLeg>]) -> Vec<[[f64; 2]; 2]> {
+    let aeroways = airport(2);
+    let index = index_of(&aeroways);
+    let mut discovery = strips::Discovery::default();
+    for legs in days {
+        discovery.add_day(legs, &index);
+    }
+    discovery.strips()
+}
+
+/// Ten flights on three days find the strip: a line along it spanning its 800 m (the end cells
+/// taken whole: within one z19 cell, 49 m here), cut into four runway pieces of an airstrip
+/// airport, on which the landings then count as arrivals.
+#[test]
+fn a_strip_off_every_line_is_found_and_carries_its_landings() {
+    let days = strip_days(10, 3);
+    let found = discovered(&days);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let [west, east] = if found[0][0][1] < found[0][1][1] {
+        found[0]
+    } else {
+        [found[0][1], found[0][0]]
+    };
+    assert!(length_m(west, at(2_000.0, 0.0)) < 50.0, "{west:?}");
+    assert!(length_m(east, at(2_000.0, 800.0)) < 50.0, "{east:?}");
+    let mut aeroways = airport(2);
+    aeroways.add_strips(&found, square_of);
+    let pieces: Vec<&AerowayLine> = aeroways.lines.iter().filter(|l| l.osm_id < 0).collect();
+    assert_eq!(pieces.len(), 4);
+    assert!(
+        pieces
+            .iter()
+            .all(|piece| length_m(piece.ends[0], piece.ends[1]) <= 250.0)
+    );
+    let strip_airport = &aeroways.airports[pieces[0].airport as usize];
+    assert!(
+        strip_airport.key.starts_with("airstrip "),
+        "{strip_airport:?}"
+    );
+    let index = index_of(&aeroways);
+    let mut traffic = Traffic::new(&aeroways);
+    traffic.add_day(&aeroways, &index, &days[0], (1.0, 0.0));
+    assert_eq!(
+        traffic.movements[pieces[0].airport as usize],
+        [10.0, 0.0, 0.0]
+    );
+}
+
+/// One flight's legs on three days, or ten flights on two days, find nothing; nor do legs on a
+/// mapped line.
+#[test]
+fn a_strip_needs_ten_flights_on_three_days_off_every_line() {
+    assert!(discovered(&strip_days(1, 3)).is_empty());
+    assert!(discovered(&strip_days(10, 2)).is_empty());
+    let b738 = Mover::Aircraft { class: 2 };
+    let on_the_runway: Vec<Vec<GroundLeg>> = (0..3)
+        .map(|day| {
+            (0..10)
+                .map(|flight| leg(100 * day + flight, b738, at(0.0, 0.0), at(0.0, 250.0)))
+                .collect()
+        })
+        .collect();
+    assert!(discovered(&on_the_runway).is_empty());
 }
