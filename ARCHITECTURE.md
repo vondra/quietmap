@@ -29,7 +29,8 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
 | `terrain` | raster: terrain height and ground type; neighbours share their seam samples |
 | `obstacles` | buildings and walls: outlines and heights, listed per 50 m cell with a cell -> offset table |
 | `sources` | every ground source as points or polylines, emission per octave band (63 Hz-8 kHz) and period as u16 in 0.01 dB; a few display fields |
-| `aircraft` | aircraft boxes (energy per period at the NPD distances) and the tile's flight table |
+| `aircraft` | aircraft boxes (energy per period at the NPD distances), each with its two loudest flight pieces, and the tile's flight table |
+| `aircraft-far` | the same with boxes four times larger, read from the second ring on |
 
 - Coordinates are int16 relative to the tile centre, step = tile width / 32,768: the tile spans
   +-16,384 steps and half a tile of margin fits on every side. Longer geometry is split.
@@ -48,6 +49,23 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
 - Reading is always whole files with plain reads, all files of a ring at once, one reader per
   file (cold on NVMe 5-8x faster than mmap with MADV_WILLNEED, whose faults read 32 KB at a
   time).
+
+## Aircraft
+
+Stage 0/1 turns a year of ADS-B traces into flight segments per day (`build/src/aircraft`):
+altitudes above EGM2008 (geometric altitude is ellipsoidal: the flight's own offset, else a
+regional one, else pressure), Doc 29 phases and powers. `aircraft-shuffle` sorts the window's
+segments into z9 squares once; `aircraft-boxes` then builds a square at a time. A box is a
+web-map cell x a clearance slab above the highest terrain within one edge; the edge grows with
+clearance so that it spans D = 3 dB of the steepest NPD slope there (first layer about 50 m).
+A segment is cut at tile edges, then into the pieces of the boxes it crosses; a box sums its
+pieces per period at the ten NPD distances (an average day of the window: primary flights over
+the baseline days, flights only the secondary provider saw over the increment days) with the
+geometry of one average piece, and keeps its two loudest pieces for the flight list. The click
+reads every box through the click-time equation (`physics/src/doc29/boxes.rs`); from the second
+ring on it reads the far boxes (D = 12 dB). The flight list is ranked by Lmax: each box states
+its kept pieces' loudest LAmax at 1,000 ft, and boxes are searched loudest bound first until
+the bound falls below the list's entry level, so the list is what every kept piece would give.
 
 ## Popup
 
