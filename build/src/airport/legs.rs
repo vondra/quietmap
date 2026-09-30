@@ -15,7 +15,7 @@ use std::path::Path;
 const PHASE_GROUND: u8 = 0;
 const KIND_AIRCRAFT: u8 = 0;
 const KIND_GROUND_VEHICLE: u8 = 1;
-const COLUMNS: [&str; 12] = [
+const COLUMNS: [&str; 13] = [
     "flight_id",
     "profile_idx",
     "veh_kind",
@@ -28,7 +28,10 @@ const COLUMNS: [&str; 12] = [
     "end_lat",
     "end_lon",
     "speed_kt",
+    "agl_avg_m",
 ];
+/// A flight's first or last airborne segment is a low end below this height above the ground (m).
+pub const LOW_END_M: f32 = 150.0;
 
 /// What moves along a leg.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,6 +60,30 @@ pub struct GroundLeg {
     pub speed_kt: f64,
 }
 
+/// A flight's first or last airborne segment when it is low: where it left or reached the
+/// ground, seen from the air (a roll the ground receivers may have missed).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LowEnd {
+    pub flight_id: u64,
+    pub class: u8,
+    pub period: u8,
+    /// The flight's first airborne segment (else its last).
+    pub first: bool,
+    /// Stage 1 took the segment for a departure (climbing).
+    pub departure: bool,
+    pub secondary_only: bool,
+    /// Latitude and longitude of both ends (deg).
+    pub start: [f64; 2],
+    pub end: [f64; 2],
+}
+
+/// A day's ground legs and the low ends of its flights.
+#[derive(Debug, Default)]
+pub struct DayLegs {
+    pub legs: Vec<GroundLeg>,
+    pub low_ends: Vec<LowEnd>,
+}
+
 fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array, String> {
     batch
         .column_by_name(name)
@@ -64,12 +91,13 @@ fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array, Strin
         .ok_or_else(|| format!("segments: no column {name}"))
 }
 
-/// The ground legs of the day file at `path` whose ends (latitude, longitude) `keep` accepts. A
-/// missing day is an error, never a quiet day.
+/// The ground legs of the day file at `path` whose ends (latitude, longitude) `keep` accepts, and
+/// the low ends of its aircraft flights there (a flight's segments follow one another in the
+/// file). A missing day is an error, never a quiet day.
 pub fn read_ground_legs(
     path: &Path,
     keep: &(dyn Fn([f64; 2], [f64; 2]) -> bool + Sync),
-) -> Result<Vec<GroundLeg>, String> {
+) -> Result<DayLegs, String> {
     let failed = |error: &dyn std::fmt::Display| format!("{}: {error}", path.display());
     let open = || {
         std::fs::File::open(path)
@@ -85,7 +113,21 @@ pub fn read_ground_legs(
         .collect::<Result<Vec<_>, _>>()?;
     let reader = arrow_ipc::reader::FileReader::try_new(open()?, Some(projection))
         .map_err(|e| failed(&e))?;
-    let mut legs = Vec::new();
+    let mut day = DayLegs::default();
+    // The current flight: its id, airborne segments so far, its first one and its last one
+    // (each kept only when low).
+    let mut flight: Option<(u64, usize, Option<LowEnd>, Option<LowEnd>)> = None;
+    let close = |flight: Option<(u64, usize, Option<LowEnd>, Option<LowEnd>)>,
+                 low: &mut Vec<LowEnd>| {
+        if let Some((_, count, first, last)) = flight {
+            let last = last.filter(|_| count > 1);
+            for end in [first, last].into_iter().flatten() {
+                if keep(end.start, end.end) {
+                    low.push(end);
+                }
+            }
+        }
+    };
     for batch in reader {
         let batch = batch.map_err(|e| failed(&e))?;
         let bytes = |name| column(&batch, name).map(|c| c.as_primitive::<UInt8Type>());
@@ -103,6 +145,35 @@ pub fn read_ground_legs(
         let [start_lat, start_lon, end_lat, end_lon, speed] = floats;
         let (start_lat, start_lon, end_lat, end_lon, speed) =
             (start_lat?, start_lon?, end_lat?, end_lon?, speed?);
+        let height = column(&batch, "agl_avg_m")?.as_primitive::<Float32Type>();
+        for row in 0..batch.num_rows() {
+            if phase.value(row) == PHASE_GROUND || kind.value(row) != KIND_AIRCRAFT {
+                continue;
+            }
+            let id = flight_id.value(row);
+            let end = |first: bool| {
+                (height.value(row) < LOW_END_M).then(|| LowEnd {
+                    flight_id: id,
+                    class: noise_class_of(profile.value(row)),
+                    period: period.value(row),
+                    first,
+                    departure: flags.value(row) & IS_DEPARTURE != 0,
+                    secondary_only: flags.value(row) & SECONDARY_ONLY != 0,
+                    start: [start_lat.value(row), start_lon.value(row)].map(f64::from),
+                    end: [end_lat.value(row), end_lon.value(row)].map(f64::from),
+                })
+            };
+            match flight.as_mut() {
+                Some((current, count, _, last)) if *current == id => {
+                    *count += 1;
+                    *last = end(false);
+                }
+                _ => {
+                    close(flight.take(), &mut day.low_ends);
+                    flight = Some((id, 1, end(true), end(false)));
+                }
+            }
+        }
         let kept: Vec<GroundLeg> = (0..batch.num_rows())
             .into_par_iter()
             .filter_map(|row| {
@@ -135,7 +206,8 @@ pub fn read_ground_legs(
                 })
             })
             .collect();
-        legs.extend(kept);
+        day.legs.extend(kept);
     }
-    Ok(legs)
+    close(flight.take(), &mut day.low_ends);
+    Ok(day)
 }

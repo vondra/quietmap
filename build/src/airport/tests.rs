@@ -365,3 +365,74 @@ fn a_strip_needs_ten_flights_on_three_days_off_every_line() {
         .collect();
     assert!(discovered(&on_the_runway).is_empty());
 }
+
+/// The first or last low segment of flight `flight`: 100 m along the runway line direction
+/// (eastwards) ending at `east_m`.
+fn low_end(flight: u64, first: bool, departure: bool, class: u8, east_m: f64) -> legs::LowEnd {
+    legs::LowEnd {
+        flight_id: flight,
+        class,
+        period: 0,
+        first,
+        departure,
+        secondary_only: false,
+        start: at(0.0, east_m - 100.0),
+        end: at(0.0, east_m),
+    }
+}
+
+/// On a 2,500 m runway (ten 250 m pieces, west to east): a departure first seen 500 m past its
+/// east end rolls 1,800 m from the west end, accelerating; a landing last seen 1 km before the
+/// west threshold rolls 1,400 m from 300 m past it, slowing; each as four legs. A flight with its
+/// own roll, a helicopter, a climb across the runway and a flight low mid-way get none.
+#[test]
+fn flights_seen_low_over_a_runway_get_the_rolls_they_miss() {
+    let aeroways = airport(10);
+    let runways = rolls::Runways::new(&aeroways);
+    let a320 = 1;
+    let ends = [
+        low_end(1, true, true, a320, 3_000.0),
+        low_end(2, false, false, a320, -1_000.0),
+        low_end(3, true, true, a320, 3_000.0),
+        low_end(4, true, true, 12, 3_000.0),
+        legs::LowEnd {
+            end: at(100.0, 2_900.0),
+            ..low_end(5, true, true, a320, 2_900.0)
+        },
+        low_end(6, true, true, a320, 500.0),
+    ];
+    let own_roll = leg(
+        3,
+        Mover::Aircraft { class: a320 },
+        at(0.0, 0.0),
+        at(0.0, 250.0),
+    );
+    let rolls = rolls::missing_rolls(&[own_roll], &ends, &runways);
+    assert_eq!(rolls.len(), 2 * rolls::LEGS, "{rolls:?}");
+    let (take_off, landing) = rolls.split_at(rolls::LEGS);
+    let east_of = |point: [f64; 2]| length_m(at(0.0, 0.0), point);
+    assert!(
+        take_off
+            .iter()
+            .all(|leg| leg.flight_id == 1 && leg.departure)
+    );
+    assert!(east_of(take_off[0].start) < 1.0);
+    assert!((east_of(take_off[3].end) - 1_800.0).abs() < 1.0);
+    assert!(
+        take_off
+            .windows(2)
+            .all(|pair| pair[0].speed_kt < pair[1].speed_kt)
+    );
+    assert!(
+        landing
+            .iter()
+            .all(|leg| leg.flight_id == 2 && !leg.departure)
+    );
+    assert!((east_of(landing[0].start) - 300.0).abs() < 1.0);
+    assert!((east_of(landing[3].end) - 1_700.0).abs() < 1.0);
+    assert!(
+        landing
+            .windows(2)
+            .all(|pair| pair[0].speed_kt > pair[1].speed_kt)
+    );
+}

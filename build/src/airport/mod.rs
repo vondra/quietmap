@@ -8,12 +8,13 @@ pub mod file;
 pub mod legs;
 pub mod lines;
 pub mod project;
+pub mod rolls;
 pub mod strips;
 
 use crate::boxes::Window;
 use crate::dev4::{Dev4, Square};
 use file::LineTraffic;
-use legs::{GroundLeg, Mover, read_ground_legs};
+use legs::{DayLegs, GroundLeg, Mover, read_ground_legs};
 use lines::Aeroways;
 use physics::bands::{BANDS, PERIOD_HOURS, PERIODS, energy};
 use physics::emission::airport::{
@@ -38,7 +39,7 @@ const SECONDARY_SHIFT: u8 = 3;
 /// crossing the runway or turning off at the end of a landing roll, at idle thrust (taxi levels).
 /// dev4 took every leg on a runway as a roll, 15 dB above taxiing at 15 kt, and counted a flight
 /// that crossed a runway as an arrival; a movement now needs a leg this fast on the runway.
-const ROLL_MIN_KT: f64 = 40.0;
+pub const ROLL_MIN_KT: f64 = 40.0;
 
 /// What a leg does on a line: a runway's slow legs taxi unless they are a take-off roll.
 fn operation_of_leg(line: GroundOperation, leg: &GroundLeg) -> GroundOperation {
@@ -244,11 +245,12 @@ pub fn build(
     };
     let mut discovery = strips::Discovery::default();
     for day in &days {
-        discovery.add_day(&read_day(day)?, &osm_index);
+        discovery.add_day(&read_day(day)?.legs, &osm_index);
     }
     let found = discovery.strips();
     aeroways.add_strips(&found, square_of);
     let index = index_of(&aeroways);
+    let runways = rolls::Runways::new(&aeroways);
     eprintln!(
         "airport traffic: {} airstrips missing from OSM",
         found.len()
@@ -256,11 +258,13 @@ pub fn build(
     let mut traffic = Traffic::new(&aeroways);
     for day in &days {
         let started = std::time::Instant::now();
-        let legs = read_day(day)?;
+        let DayLegs { mut legs, low_ends } = read_day(day)?;
+        let rolls = rolls::missing_rolls(&legs, &low_ends, &runways);
+        let (seen, added) = (legs.len(), rolls.len() / rolls::LEGS);
+        legs.extend(rolls);
         traffic.add_day(&aeroways, &index, &legs, day_weights(window, day));
         eprintln!(
-            "airport traffic: {day}: {} ground legs in {:.1} s",
-            legs.len(),
+            "airport traffic: {day}: {seen} ground legs, {added} rolls added, in {:.1} s",
             started.elapsed().as_secs_f64()
         );
     }
