@@ -45,6 +45,49 @@ const CLASS_DEFAULT_SPEED_KMH: [f64; 13] = [
 /// paving stones, concrete, unpaved.
 const SURFACE_NAMES: [&str; 5] = ["asphalt", "sett", "paving_stones", "concrete", "unpaved"];
 const SURFACE_CORRECTION_DB: [f64; 5] = [0.0, 4.0, 4.0, 1.0, 2.0];
+/// dev4's fitted carriageway priors of secondary and tertiary roads (built-up unknown, rural,
+/// urban; two-way sections, one-way cells scaled alike). They are medians of counted roads, and
+/// where counting is selective the counted roads are the busy ones of their class: Swedish NVDB,
+/// which counts every state road, reads them 5.7 dB high, and an uncounted Czech III-class road
+/// through a village took 2,562 vehicles a day where its counted neighbour carries 1,252.
+const DEV4_CLASS_PRIORS: [[f64; 3]; 2] = [[3_000.0, 2_061.0, 6_445.0], [1_506.0, 1_002.0, 2_562.0]];
+/// The same cells from roads counted without selection, for the countries whose counts give them
+/// (evidence 2026-09-30, traffic priors; unknown built-up is the geometric mean of rural and
+/// urban): Sweden (NVDB counts every state road), Great Britain (the DfT counts A and B roads whole
+/// and minor roads by a random sample), Czechia (the census counts II-class roads whole; its
+/// III-class roads are the II-class medians times the Swedish and British tertiary-to-secondary
+/// ratios, 0.24 rural and 0.37 urban). Countries differ fivefold on the same class, so no country
+/// lends its cells to another: elsewhere dev4's priors stay until counts represent the country.
+const COUNTRY_CLASS_PRIORS: [([u8; 2], [[f64; 3]; 2]); 3] = [
+    (*b"CZ", [[2_126.0, 1_739.0, 2_600.0], [632.0, 415.0, 962.0]]),
+    (
+        *b"GB",
+        [[3_794.0, 2_369.0, 6_076.0], [1_585.0, 753.0, 3_337.0]],
+    ),
+    (*b"SE", [[1_294.0, 844.0, 1_983.0], [273.0, 151.0, 494.0]]),
+];
+/// dev4's source id of a class prior (no dataset).
+const PRIOR_SOURCE_ID: u16 = 0;
+/// dev4's `traffic_estimated` bits of a row whose four categories all come from a prior.
+const ALL_CATEGORIES_ESTIMATED: u8 = 15;
+
+/// The factor taking a dev4 class prior of a secondary or tertiary row in a country with
+/// representative counts to that country's cell, else 1.
+fn prior_scale(class: usize, built_up: u8, country_iso: u16, source_id: u16, estimated: u8) -> f64 {
+    if source_id != PRIOR_SOURCE_ID || estimated != ALL_CATEGORIES_ESTIMATED {
+        return 1.0;
+    }
+    let Some(row) = class.checked_sub(3).filter(|row| *row < 2) else {
+        return 1.0;
+    };
+    let iso = country_iso.to_le_bytes();
+    let Some((_, cells)) = COUNTRY_CLASS_PRIORS.iter().find(|(code, _)| *code == iso) else {
+        return 1.0;
+    };
+    let cell = usize::from(built_up.min(2));
+    cells[row][cell] / DEV4_CLASS_PRIORS[row][cell]
+}
+
 /// Day/evening/night shares of the daily flow: motorways, trunks and their links; other roads.
 const MOTORWAY_PERIOD_SHARES: [f64; PERIODS] = [0.65, 0.20, 0.15];
 const URBAN_PERIOD_SHARES: [f64; PERIODS] = [0.70, 0.18, 0.12];
@@ -145,7 +188,15 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
         let country = c.get("country_iso")?.as_primitive::<UInt16Type>();
         let source_id = c.get("source_id")?.as_primitive::<UInt16Type>();
         for row in 0..batch.num_rows() {
-            let daily: [f64; 4] = std::array::from_fn(|category| aadt[category].value(row));
+            let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
+            let scale = prior_scale(
+                class_index,
+                built_up.value(row),
+                country.value(row),
+                source_id.value(row),
+                estimated.value(row),
+            );
+            let daily: [f64; 4] = std::array::from_fn(|category| scale * aadt[category].value(row));
             if tunnel.value(row) || daily.iter().sum::<f64>() <= 0.0 {
                 continue;
             }
@@ -154,7 +205,6 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
             if start == end {
                 continue;
             }
-            let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
             let taper = speed_taper.map_or(0, |taper| taper.value(row));
             let (base_speed, base_source, posted) = match speed_limit.value(row) {
                 DERESTRICTED_CODE => (DERESTRICTED_SPEED_KMH, "derestricted", None),
@@ -211,7 +261,7 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
                 (daily[2] * 10.0).round() / 10.0,
                 (daily[3] * 10.0).round() / 10.0,
                 estimated.value(row),
-                cross_section.value(row).round(),
+                (scale * cross_section.value(row)).round(),
                 posted,
                 speed,
                 speed_source,
@@ -258,6 +308,25 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A prior secondary or tertiary row in a country with representative counts takes its
+    /// country's cell; counted rows, other classes, rows a dataset filled and other countries keep
+    /// their flows.
+    #[test]
+    fn class_priors_of_secondary_and_tertiary_roads_take_their_countrys_cell() {
+        let cz = u16::from_le_bytes(*b"CZ");
+        let estimated = ALL_CATEGORIES_ESTIMATED;
+        let village = prior_scale(4, 2, cz, PRIOR_SOURCE_ID, estimated);
+        assert!((2_562.0 * village - 962.0).abs() < 1e-9);
+        let rural = prior_scale(3, 1, u16::from_le_bytes(*b"SE"), PRIOR_SOURCE_ID, estimated);
+        assert!((2_061.0 * rural - 844.0).abs() < 1e-9);
+        assert_eq!(prior_scale(4, 2, cz, 20, 0), 1.0, "counted");
+        assert_eq!(prior_scale(4, 2, cz, 11, estimated), 1.0, "service tree");
+        assert_eq!(prior_scale(5, 2, cz, PRIOR_SOURCE_ID, estimated), 1.0);
+        assert_eq!(prior_scale(2, 2, cz, PRIOR_SOURCE_ID, estimated), 1.0);
+        let de = u16::from_le_bytes(*b"DE");
+        assert_eq!(prior_scale(4, 2, de, PRIOR_SOURCE_ID, estimated), 1.0);
+    }
 
     #[test]
     fn untagged_speeds_follow_the_country_and_built_up_density() {
