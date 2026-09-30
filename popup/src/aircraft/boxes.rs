@@ -2,10 +2,10 @@
 //! (`physics::doc29::boxes`), all of them, since a box costs well under a microsecond; their SEL
 //! sums per period become period energies (Leq), as the ground layers report.
 
-use super::horizons::Horizons;
 use crate::candidates::lden_weighted;
 use physics::bands::{PERIOD_HOURS, PERIODS};
 use physics::doc29::boxes::{AircraftBoxAtReceiver, box_sel_at_receiver};
+use physics::doc29::screening::ReceiverHorizons;
 use rayon::prelude::*;
 use tiles::aircraft::Aircraft;
 use tiles::geo::{LocalFrame, TileId};
@@ -36,7 +36,7 @@ pub fn tile_energy(
     tile: TileId,
     frame: &LocalFrame,
     receiver: AircraftReceiver,
-    horizons: &Horizons,
+    horizons: &(impl ReceiverHorizons + Sync),
     loudest: usize,
 ) -> TileAnswer {
     let per_box: Vec<([f64; PERIODS], usize)> = (0..aircraft.box_count())

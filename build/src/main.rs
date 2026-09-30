@@ -156,11 +156,18 @@ fn run(arguments: &[String]) -> Result<(), String> {
                         })
                     })
                     .collect();
+            let pieces = match options.optional("pieces") {
+                Some(pieces) => pieces
+                    .parse()
+                    .map_err(|_| format!("bad --pieces {pieces}"))?,
+                None => boxes::PIECES_PER_BOX,
+            };
             let written = boxes::build(
                 Path::new(options.get("segments")?),
                 &window,
                 Path::new(options.get("terrain")?),
                 &scope,
+                pieces,
                 &out,
             )?;
             eprintln!("aircraft: {written} tiles");
@@ -202,16 +209,46 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 Path::new(options.get("segments")?),
                 &window,
                 &out,
+                terrain,
                 &chosen.iter().map(|(_, point)| *point).collect::<Vec<_>>(),
             )?;
-            for ((name, _), [exact, boxed, beyond]) in chosen.iter().zip(compared) {
+            for ((name, _), report) in chosen.iter().zip(compared) {
                 println!(
                     "{}",
                     serde_json::json!({
                         "point": name,
-                        "exact_leq": exact,
-                        "boxed_leq": boxed,
-                        "beyond_reach_leq": beyond,
+                        "exact_leq": report.exact,
+                        "boxed_leq": report.boxed,
+                        "beyond_reach_leq": report.beyond,
+                        "near_ground": {
+                            "exact_leq": report.near_ground[0],
+                            "boxed_leq": report.near_ground[1],
+                        },
+                        "aloft": {
+                            "exact_leq": report.aloft[0],
+                            "boxed_leq": report.aloft[1],
+                        },
+                        "exact_top": report
+                            .exact_top
+                            .iter()
+                            .map(|(flight, sel)| serde_json::json!([format!("{flight:016x}"), sel]))
+                            .collect::<Vec<_>>(),
+                        "lists": report
+                            .lists
+                            .iter()
+                            .map(|list| serde_json::json!({
+                                "pieces": list.pieces,
+                                "boxes_searched": list.boxes_searched.min(u32::MAX as usize),
+                                "recall": list.recall,
+                                "listed": list
+                                    .listed
+                                    .iter()
+                                    .map(|(flight, sel, gap)| {
+                                        serde_json::json!([format!("{flight:016x}"), sel, gap])
+                                    })
+                                    .collect::<Vec<_>>(),
+                            }))
+                            .collect::<Vec<_>>(),
                     })
                 );
             }

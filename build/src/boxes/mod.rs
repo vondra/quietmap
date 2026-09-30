@@ -58,8 +58,9 @@ pub struct BoxEntry {
 }
 
 impl BoxEntry {
-    fn keep(&mut self, candidate: KeptPiece) {
-        if self.kept.len() < PIECES_PER_BOX {
+    /// Keeps `candidate` if it is among the `limit` loudest pieces so far.
+    fn keep(&mut self, candidate: KeptPiece, limit: usize) {
+        if self.kept.len() < limit {
             self.kept.push(candidate);
         } else if let Some(weakest) = self
             .kept
@@ -71,12 +72,12 @@ impl BoxEntry {
         }
     }
 
-    fn merge(&mut self, other: BoxEntry) {
+    fn merge(&mut self, other: BoxEntry, limit: usize) {
         self.sums.merge(&other.sums);
         self.ground_m = other.ground_m;
         self.flights_per_day += other.flights_per_day;
         for kept in other.kept {
-            self.keep(kept);
+            self.keep(kept, limit);
         }
     }
 }
@@ -158,15 +159,15 @@ fn flight_chunks(segments: &[FlightSegment], size: usize) -> Vec<&[FlightSegment
 }
 
 /// Adds one day's segments to `boxes`, weighted `weight` for primary flights and
-/// `secondary_weight` for flights only the secondary provider saw (0 on baseline days). Each
-/// flight's segments must be together.
+/// `secondary_weight` for flights only the secondary provider saw (0 on baseline days), each box
+/// keeping its `pieces` loudest pieces. Each flight's segments must be together.
 fn add_day(
     boxes: &mut HashMap<BoxKey, BoxEntry>,
     segments: &[FlightSegment],
     placement: &Placement,
     scope: &HashSet<TileId>,
-    weight: f64,
-    secondary_weight: f64,
+    (weight, secondary_weight): (f64, f64),
+    pieces: usize,
 ) {
     let partials: Vec<HashMap<BoxKey, BoxEntry>> = flight_chunks(segments, 4_096)
         .into_par_iter()
@@ -216,14 +217,17 @@ fn add_day(
                         entry.flights_per_day += segment_weight;
                     }
                     let length = (end_m[0] - start_m[0]).hypot(end_m[1] - start_m[1]);
-                    entry.keep(KeptPiece {
-                        rank: segment_weight
-                            * 10f64.powf(levels.sel_db[RANKING_DISTANCE] / 10.0)
-                            * length,
-                        segment: segment.clone(),
-                        emission,
-                        piece,
-                    });
+                    entry.keep(
+                        KeptPiece {
+                            rank: segment_weight
+                                * 10f64.powf(levels.sel_db[RANKING_DISTANCE] / 10.0)
+                                * length,
+                            segment: segment.clone(),
+                            emission,
+                            piece,
+                        },
+                        pieces,
+                    );
                 }
             }
             local
@@ -231,18 +235,20 @@ fn add_day(
         .collect();
     for partial in partials {
         for (key, entry) in partial {
-            boxes.entry(key).or_default().merge(entry);
+            boxes.entry(key).or_default().merge(entry, pieces);
         }
     }
 }
 
 /// Builds the aircraft tiles of `scope` from the day files under `segments_dir` and the terrain
-/// of `terrain_root` (a prepared year root); writes them under `out`, returns the number written.
+/// of `terrain_root` (a prepared year root), each box keeping its `pieces` loudest pieces; writes
+/// them under `out`, returns the number written.
 pub fn build(
     segments_dir: &Path,
     window: &Window,
     terrain_root: &Path,
     scope: &HashSet<TileId>,
+    pieces: usize,
     out: &Path,
 ) -> Result<usize, String> {
     let mut near: HashSet<TileId> = HashSet::new();
@@ -305,8 +311,8 @@ pub fn build(
             &segments,
             &placement,
             scope,
-            weight,
-            secondary_weight,
+            (weight, secondary_weight),
+            pieces,
         );
         eprintln!(
             "aircraft boxes: {day}: {} segments, {} boxes",

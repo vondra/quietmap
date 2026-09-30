@@ -111,7 +111,14 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
     let scope: HashSet<TileId> = [0, 1].iter().flat_map(|&ring| PRAGUE.ring(ring)).collect();
     let placement = Placement::new(&scope, &terrain);
     let mut boxes = HashMap::new();
-    add_day(&mut boxes, &segments, &placement, &scope, 1.0, 0.0);
+    add_day(
+        &mut boxes,
+        &segments,
+        &placement,
+        &scope,
+        (1.0, 0.0),
+        PIECES_PER_BOX,
+    );
     let out = std::env::temp_dir().join(format!("qm-boxes-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out);
     assert!(

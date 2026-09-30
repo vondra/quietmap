@@ -3,10 +3,10 @@
 //! flight's Lmax is the loudest LAmax of its pieces at their closest points.
 
 use super::boxes::AircraftReceiver;
-use super::horizons::Horizons;
 use physics::doc29::corrections::speed_correction_db;
 use physics::doc29::helicopters::helicopter_levels;
 use physics::doc29::npd::{class_anchor, is_helicopter_class};
+use physics::doc29::screening::ReceiverHorizons;
 use physics::doc29::segment::{SegmentEmission, SegmentGeometry, segment_sel_at_receiver};
 use physics::doc29::thrust::PowerBracket;
 use std::collections::HashMap;
@@ -59,12 +59,31 @@ fn emission_of(piece: &FlightPiece, designator: &str) -> SegmentEmission {
 }
 
 /// Per flight (keyed by address and start) its summed SEL energy and its loudest piece.
-#[derive(Default)]
 pub struct FlightTotals {
     flights: HashMap<(u32, u32), LoudFlight>,
+    /// Pieces read per box (all it keeps, or fewer) and boxes searched per ring: the popup's
+    /// defaults, or the benchmark's trials.
+    pub pieces_per_box: usize,
+    pub boxes_searched: usize,
+}
+
+impl Default for FlightTotals {
+    fn default() -> Self {
+        FlightTotals::reading(usize::MAX, BOXES_SEARCHED)
+    }
 }
 
 impl FlightTotals {
+    /// Totals reading at most `pieces_per_box` kept pieces (the loudest) of each of the
+    /// `boxes_searched` loudest boxes of a ring.
+    pub fn reading(pieces_per_box: usize, boxes_searched: usize) -> Self {
+        FlightTotals {
+            flights: HashMap::new(),
+            pieces_per_box,
+            boxes_searched,
+        }
+    }
+
     /// Computes the pieces of boxes `boxes` (indices into `aircraft`) of `tile`.
     #[allow(clippy::too_many_arguments)]
     pub fn add_boxes(
@@ -74,12 +93,13 @@ impl FlightTotals {
         boxes: &[usize],
         frame: &LocalFrame,
         receiver: AircraftReceiver,
-        horizons: &Horizons,
+        horizons: &impl ReceiverHorizons,
     ) {
         for &index in boxes {
             let record = aircraft.aircraft_box(index);
             let first = record.first_piece as usize;
-            for piece_index in first..first + usize::from(record.piece_count) {
+            let count = usize::from(record.piece_count).min(self.pieces_per_box);
+            for piece_index in first..first + count {
                 let piece = aircraft.piece(piece_index);
                 let flight = aircraft.flight(piece.flight as usize);
                 let designator = text(&flight.type_designator);
