@@ -79,7 +79,7 @@ pub fn write_tiles(
             let band = bands[usize::from(key.band)];
             let first_piece = pieces.len() as u32;
             let mut kept = entry.kept.clone();
-            kept.sort_by(|a, b| b.rank.total_cmp(&a.rank));
+            kept.sort_by(|a, b| b.cmp_loudness(a));
             for kept in &kept {
                 let flight = *flight_index.entry(kept.flight_id).or_insert_with(|| {
                     flights.push(flight_of(kept.flight_id, kept.callsign, kept.designator));

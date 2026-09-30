@@ -167,3 +167,39 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
     );
     std::fs::remove_dir_all(&out).unwrap();
 }
+
+#[test]
+fn a_box_keeps_its_loudest_pieces_one_per_flight() {
+    let piece = |flight: u64, level: f64| KeptPiece {
+        flight_id: flight,
+        callsign: *b"CSA100  ",
+        designator: *b"A320",
+        flags: 0,
+        period: 0,
+        speed_kt: 160.0,
+        class: 0,
+        power_code: 0,
+        lamax_reference_db: 80.0,
+        keep_level_db: level,
+        start: (PRAGUE.centre(), 300.0),
+        end: (PRAGUE.centre(), 300.0),
+    };
+    let mut entry = BoxEntry::default();
+    for (flight, level) in [
+        (1, 80.0),
+        (2, 85.0),
+        (1, 83.0),
+        (3, 82.0),
+        (2, 84.0),
+        (4, 79.0),
+    ] {
+        entry.keep(piece(flight, level), 2);
+    }
+    // Flight 2's louder piece and flight 1's; flight 3 falls out at 82 dB.
+    let kept: Vec<(u64, f64)> = entry
+        .kept
+        .iter()
+        .map(|kept| (kept.flight_id, kept.keep_level_db))
+        .collect();
+    assert_eq!(kept, [(1, 83.0), (2, 85.0)]);
+}

@@ -19,15 +19,16 @@ use physics::doc29::thrust::SegmentFlight;
 use place::{BoxKey, BoxPiece, Placement, cut_into_pieces};
 use rayon::prelude::*;
 use read::{FLAG_DEPARTURE, FLAG_HELICOPTER_DESCENT, FLAG_ON_GROUND, FlightSegment};
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tiles::geo::{Mercator, TileId};
 use tiles::terrain::Terrain;
 
-/// Loudest pieces a box keeps for the top-flights list (PLAN section 5: K starts at 2).
+/// Loudest pieces a box keeps for the top-flights list (PLAN section 5: K starts at 2), one per
+/// flight, by their LAmax at their height above the box's ground: the list ranks flights by
+/// LAmax, and a receiver under a box hears its lowest pieces of the loudest types loudest.
 pub const PIECES_PER_BOX: usize = 2;
-/// The NPD distance (index) whose energy ranks a box's pieces (1,000 ft).
-const RANKING_DISTANCE: usize = 3;
 
 /// The days of the window: baseline days carry the primary provider; increment days add the
 /// flights only the secondary provider saw.
@@ -40,7 +41,6 @@ pub struct Window {
 /// (about 100 B; a box keeps a few for the whole year).
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeptPiece {
-    pub rank: f64,
     pub flight_id: u64,
     pub callsign: [u8; 8],
     pub designator: [u8; 4],
@@ -52,20 +52,16 @@ pub struct KeptPiece {
     pub class: u16,
     pub power_code: u16,
     pub lamax_reference_db: f64,
+    /// Its LAmax at its height above the box's ground (dB): what orders a box's pieces.
+    pub keep_level_db: f64,
     /// The piece's ends: position and altitude above sea level.
     pub start: (Mercator, f64),
     pub end: (Mercator, f64),
 }
 
 impl KeptPiece {
-    fn new(
-        rank: f64,
-        segment: &FlightSegment,
-        emission: &SegmentEmission,
-        piece: &BoxPiece,
-    ) -> Self {
+    fn new(segment: &FlightSegment, emission: &SegmentEmission, piece: &BoxPiece) -> Self {
         KeptPiece {
-            rank,
             flight_id: segment.flight_id,
             callsign: segment.callsign,
             designator: segment.designator,
@@ -75,9 +71,21 @@ impl KeptPiece {
             class: emission.class as u16,
             power_code: emission.power.code(),
             lamax_reference_db: emission.read_npd(LAMAX_REFERENCE_SLANT_M).lamax_db,
+            keep_level_db: emission
+                .read_npd(piece.start.1.min(piece.end.1) - piece.ground_m)
+                .lamax_db,
             start: piece.start,
             end: piece.end,
         }
+    }
+
+    /// The order a box keeps its pieces in: by `keep_level_db`, equal levels by a hash of the
+    /// flight, so that the flights kept of one type spread over the window.
+    pub fn cmp_loudness(&self, other: &KeptPiece) -> Ordering {
+        let mixed = |flight: u64| flight.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        self.keep_level_db
+            .total_cmp(&other.keep_level_db)
+            .then(mixed(self.flight_id).cmp(&mixed(other.flight_id)))
     }
 }
 
@@ -126,17 +134,27 @@ pub struct BoxEntry {
 }
 
 impl BoxEntry {
-    /// Keeps `candidate` if it is among the `limit` loudest pieces so far.
+    /// Keeps `candidate` if it is among the `limit` loudest pieces so far, one per flight.
     fn keep(&mut self, candidate: KeptPiece, limit: usize) {
-        if self.kept.len() < limit {
-            self.kept.push(candidate);
-        } else if let Some(weakest) = self
+        let same_flight = self
             .kept
-            .iter_mut()
-            .min_by(|a, b| a.rank.total_cmp(&b.rank))
-            .filter(|weakest| weakest.rank < candidate.rank)
-        {
-            *weakest = candidate;
+            .iter()
+            .position(|kept| kept.flight_id == candidate.flight_id);
+        let slot = match same_flight {
+            Some(slot) => slot,
+            None if self.kept.len() < limit => {
+                self.kept.push(candidate);
+                return;
+            }
+            None => match (0..self.kept.len())
+                .min_by(|&a, &b| self.kept[a].cmp_loudness(&self.kept[b]))
+            {
+                Some(weakest) => weakest,
+                None => return,
+            },
+        };
+        if self.kept[slot].cmp_loudness(&candidate).is_lt() {
+            self.kept[slot] = candidate;
         }
     }
 }
@@ -285,10 +303,7 @@ fn add_day(
                     entry.last_flight = segment.flight_id;
                     entry.flights_per_day += segment_weight;
                 }
-                let length = (end_m[0] - start_m[0]).hypot(end_m[1] - start_m[1]);
-                let rank =
-                    segment_weight * 10f64.powf(levels.sel_db[RANKING_DISTANCE] / 10.0) * length;
-                entry.keep(KeptPiece::new(rank, segment, emission, piece), pieces);
+                entry.keep(KeptPiece::new(segment, emission, piece), pieces);
             }
         });
 }
