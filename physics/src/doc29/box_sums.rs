@@ -91,6 +91,39 @@ impl BoxSums {
         self.pieces += 1;
     }
 
+    /// Adds another box's sums (a partial sum from another thread or day).
+    pub fn merge(&mut self, other: &BoxSums) {
+        for (sums, others) in self.energy.iter_mut().zip(&other.energy) {
+            for (sum, value) in sums.iter_mut().zip(others) {
+                *sum += value;
+            }
+        }
+        for (sum, value) in self
+            .energy_over_scaled_distance
+            .iter_mut()
+            .zip(other.energy_over_scaled_distance)
+        {
+            *sum += value;
+        }
+        self.weight += other.weight;
+        for axis in 0..3 {
+            self.weighted_midpoint_m[axis] += other.weighted_midpoint_m[axis];
+        }
+        self.weighted_length_m += other.weighted_length_m;
+        for axis in 0..2 {
+            self.weighted_doubled_direction[axis] += other.weighted_doubled_direction[axis];
+            self.weighted_gradient_direction[axis] += other.weighted_gradient_direction[axis];
+        }
+        for (sum, value) in self
+            .weighted_installation
+            .iter_mut()
+            .zip(other.weighted_installation)
+        {
+            *sum += value;
+        }
+        self.pieces += other.pieces;
+    }
+
     /// Pieces added so far.
     pub fn pieces(&self) -> u64 {
         self.pieces
