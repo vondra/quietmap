@@ -2,15 +2,20 @@
 //!
 //! Until the builders read the sources themselves, `qm-build dev4` converts squares of the dev4
 //! z9 tree: `qm-build dev4 --prepared DIR --rasters DIR --out DIR --squares X:Y[,X:Y..]
-//! [--kinds terrain,obstacles,sources]`; `qm-build weather --rasters DIR --out FILE` cuts the global
-//! weather table; `qm-build complete --out DIR --note TEXT` writes the completion marker last.
+//! [--kinds terrain,obstacles,sources] [--airport-traffic DIR]` (sources need the airport traffic);
+//! `qm-build weather --rasters DIR --out FILE` cuts the global weather table; `qm-build complete
+//! --out DIR --note TEXT` writes the completion marker last.
 //!
 //! Aircraft: `qm-build geoid --tiff FILE --out FILE` converts the EGM2008 GeoTIFF once;
 //! `qm-build aircraft-segments (--days D,D.. [--increment-days D,..] | --anchor YYYY-MM)
 //! --primary DIR [--secondary DIR] --rasters DIR --geoid FILE --out DIR [--boxes S,W,N,E;..]
-//! [--threads N]` writes per-day segments, flight tables and receipts into a scratch directory.
+//! [--threads N]` writes per-day segments, flight tables and receipts into a scratch directory;
+//! `qm-build airport-traffic --prepared DIR --segments DIR --days D,.. [--increment-days D,..]
+//! --squares X:Y[,X:Y..] --out DIR` projects the window's ground legs onto the aeroway lines of
+//! the squares (and their neighbours) once, one traffic file per square.
 
 mod aircraft;
+mod airport;
 mod boxes;
 mod dev4;
 mod low_profile;
@@ -69,6 +74,20 @@ fn parse_squares(text: &str) -> Result<Vec<Square>, String> {
         .collect()
 }
 
+/// The sampling window: `--days` (baseline) and `--increment-days`, comma separated.
+fn sampling_window(options: &Arguments) -> boxes::Window {
+    let listed = |key: &str| {
+        options
+            .optional(key)
+            .map(|days| days.split(',').map(str::to_string).collect())
+            .unwrap_or_default()
+    };
+    boxes::Window {
+        baseline_days: listed("days"),
+        increment_days: listed("increment-days"),
+    }
+}
+
 /// The aircraft box rule: `--kind aircraft|aircraft-far`, `--level-step-db` (D) and `--pieces`
 /// (kept per box), else the kind's defaults.
 fn box_rule(options: &Arguments) -> Result<boxes::BoxRule, String> {
@@ -93,7 +112,7 @@ fn box_rule(options: &Arguments) -> Result<boxes::BoxRule, String> {
 fn run(arguments: &[String]) -> Result<(), String> {
     let (command, rest) = arguments
         .split_first()
-        .ok_or("usage: qm-build dev4|weather|complete|geoid|aircraft-segments --key value ..")?;
+        .ok_or("usage: qm-build dev4|weather|complete|geoid|aircraft-segments|airport-traffic --key value ..")?;
     let options = Arguments::parse(rest)?;
     let out = PathBuf::from(options.get("out")?);
     match command.as_str() {
@@ -109,7 +128,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 let written = match kind {
                     "terrain" => terrain::build(&dev4, &squares, &out)?,
                     "obstacles" => obstacles::build(&dev4, &squares, &out)?,
-                    "sources" => sources::build(&dev4, &squares, &out)?,
+                    "sources" => sources::build(
+                        &dev4,
+                        Path::new(options.get("airport-traffic")?),
+                        &squares,
+                        &out,
+                    )?,
                     other => return Err(format!("unknown kind {other}")),
                 };
                 eprintln!(
@@ -156,16 +180,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             })
         }
         "aircraft-shuffle" => {
-            let listed = |key: &str| {
-                options
-                    .optional(key)
-                    .map(|days| days.split(',').map(str::to_string).collect())
-                    .unwrap_or_default()
-            };
-            let window = boxes::Window {
-                baseline_days: listed("days"),
-                increment_days: listed("increment-days"),
-            };
+            let window = sampling_window(&options);
             let scope = parse_squares(options.get("squares")?)?
                 .into_iter()
                 .collect();
@@ -202,16 +217,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             Ok(())
         }
         "aircraft-check" => {
-            let listed = |key: &str| {
-                options
-                    .optional(key)
-                    .map(|days| days.split(',').map(str::to_string).collect())
-                    .unwrap_or_default()
-            };
-            let window = boxes::Window {
-                baseline_days: listed("days"),
-                increment_days: listed("increment-days"),
-            };
+            let window = sampling_window(&options);
             let points: Vec<serde_json::Value> = serde_json::from_str(
                 &std::fs::read_to_string(options.get("points")?).map_err(|e| e.to_string())?,
             )
@@ -284,6 +290,21 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     })
                 );
             }
+            Ok(())
+        }
+        "airport-traffic" => {
+            let dev4 = Dev4 {
+                prepared: options.get("prepared")?.into(),
+                rasters: PathBuf::new(),
+            };
+            let written = airport::build(
+                &dev4,
+                Path::new(options.get("segments")?),
+                &sampling_window(&options),
+                &parse_squares(options.get("squares")?)?,
+                &out,
+            )?;
+            eprintln!("airport traffic: {written} squares with traffic");
             Ok(())
         }
         other => Err(format!("unknown command {other}")),

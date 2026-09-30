@@ -2,6 +2,7 @@
 //! its point) with its emission per band and period, from one converter per layer, and one display
 //! table per tile with identical records stored once.
 
+pub mod airport;
 pub mod building;
 pub mod cells;
 pub mod country_speeds;
@@ -16,9 +17,9 @@ use crate::dev4::{Dev4, Square};
 use crate::output::write_tile;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use tiles::Kind;
 use tiles::geo::{GlobalSteps, TileId};
 use tiles::sources::{Attribute, Piece, attribute_key, encode};
+use tiles::{COMPLETION_MARKER, Kind};
 
 /// int16 steps per tile and the world's width in steps.
 const TILE_STEPS: i64 = 32_768;
@@ -94,11 +95,23 @@ pub fn group_key(parts: &[&str]) -> u64 {
     hash
 }
 
-/// Writes the sources tiles of `squares`. A dev4 row is owned by the dev4 square of its midpoint,
+/// Writes the sources tiles of `squares`, with the airport ground operations of the complete
+/// traffic pass under `airport_traffic`. A dev4 row is owned by the dev4 square of its midpoint,
 /// which may round into a neighbour's tile here, and an area source spreads over its site, so each
 /// square also converts its neighbours and keeps the sources its own tiles own (industry reads the
 /// neighbours itself, for its facility joins). Returns the number of tiles written.
-pub fn build(dev4: &Dev4, squares: &[Square], out: &Path) -> Result<usize, String> {
+pub fn build(
+    dev4: &Dev4,
+    airport_traffic: &Path,
+    squares: &[Square],
+    out: &Path,
+) -> Result<usize, String> {
+    if !airport_traffic.join(COMPLETION_MARKER).exists() {
+        return Err(format!(
+            "{}: no complete airport traffic",
+            airport_traffic.display()
+        ));
+    }
     let mut written = 0;
     for &square in squares {
         let owned = |item: &Converted| (item.tile.x >> 3, item.tile.y >> 3) == (square.x, square.y);
@@ -109,6 +122,7 @@ pub fn build(dev4: &Dev4, squares: &[Square], out: &Path) -> Result<usize, Strin
             leisure::convert(dev4, neighbour, &mut converted)?;
             building::convert(dev4, neighbour, &mut converted)?;
             ship::convert(dev4, neighbour, &mut converted)?;
+            airport::convert(airport_traffic, neighbour, &mut converted)?;
             converted.retain(owned);
         }
         industry::convert(dev4, square, &mut converted)?;

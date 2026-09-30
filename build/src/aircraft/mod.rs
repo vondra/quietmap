@@ -10,7 +10,7 @@ mod day;
 mod dem;
 mod echoes;
 mod filters;
-mod flat;
+pub mod flat;
 mod flight_table;
 mod flights;
 pub mod geoid;

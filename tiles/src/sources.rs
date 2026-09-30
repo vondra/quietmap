@@ -127,7 +127,14 @@ pub fn display_fields(layer: Layer) -> &'static [&'static str] {
             "sound_power_dba",
             "source_id",
         ],
-        _ => &["name"],
+        Layer::Aircraft => &[
+            "name",
+            "subtype",
+            "airport",
+            "arrivals_per_day",
+            "departures_per_day",
+            "ground_vehicles_per_day",
+        ],
     }
 }
 
