@@ -6,7 +6,7 @@ use super::altitude::{GeometricDatum, RegionalOffsets, geometric_datum, samples,
 use super::archive::read_archive;
 use super::catalog::{primary_day_parts, secondary_day_parts};
 use super::dem::TerrainHeights;
-use super::filters::{point_is_sane, validate_trajectory};
+use super::filters::{low_level_speed_cap_kt, point_is_sane, validate_trajectory};
 use super::flight_table::FlightRow;
 use super::flights::{ADSB_EXCHANGE, ADSB_LOL, trace_to_flights};
 use super::geoid::Geoid;
@@ -212,7 +212,10 @@ fn flight_rows(
         .map(|point| terrain_m(&inputs.terrain, point, &mut last))
         .collect::<Result<Vec<f32>, String>>()?;
     let (mut samples, source) = samples(&flight.points, &terrain, datum, &inputs.geoid, regional);
-    validate_trajectory(&mut samples);
+    validate_trajectory(
+        &mut samples,
+        low_level_speed_cap_kt(flight.airframe, flight.profile),
+    );
     if samples.len() < 2 {
         return Ok((
             FlightRow::of(&flight, source as u8, f32::NAN, 0),

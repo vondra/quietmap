@@ -1,4 +1,5 @@
-//! Filter cases: telemetry sanity, the bogus tail, teleports, spikes, keepable segments.
+//! Filter cases: telemetry sanity, the bogus tail, surface reports in flight, low-level speeds,
+//! teleports, spikes, keepable segments.
 
 use super::*;
 use crate::aircraft::altitude::tests::sample;
@@ -63,14 +64,14 @@ fn heights(values: &[f32], vertical_rate_fpm: f32) -> Vec<Sample> {
 #[test]
 fn an_underground_tail_is_cut() {
     let mut samples = heights(&[1500.0, 1000.0, 800.0, -100.0, -500.0], 0.0);
-    validate_trajectory(&mut samples);
+    validate_trajectory(&mut samples, 450.0);
     assert_eq!(samples.len(), 3);
 }
 
 #[test]
 fn a_sustained_anomalous_descent_is_cut() {
     let mut samples = heights(&[1500.0, 1000.0, 600.0, 200.0, 100.0], -8500.0);
-    validate_trajectory(&mut samples);
+    validate_trajectory(&mut samples, 450.0);
     assert!(samples.len() <= 1, "{}", samples.len());
 }
 
@@ -84,7 +85,7 @@ fn teleports_are_dropped_against_the_last_kept_point() {
             sample(7.0, 70.0, 30.0, 5500.0, 250.0),
             sample(9.0, end.0, end.1, 5500.0, 250.0),
         ];
-        validate_trajectory(&mut samples);
+        validate_trajectory(&mut samples, 450.0);
         assert_eq!(samples.len(), expected);
         assert_eq!(samples[1].point.timestamp, 5.0);
     }
@@ -92,7 +93,7 @@ fn teleports_are_dropped_against_the_last_kept_point() {
         sample(1.0, 1.0, 179.999, 10_000.0, 450.0),
         sample(6.0, 1.0, -179.999, 10_000.0, 450.0),
     ];
-    validate_trajectory(&mut dateline);
+    validate_trajectory(&mut dateline, 450.0);
     assert_eq!(dateline.len(), 2);
 }
 
@@ -109,6 +110,64 @@ fn track(count: usize, step_s: f64, position: impl Fn(f64) -> [f64; 2]) -> Vec<S
         .collect()
 }
 
+/// A track every 5 s eastwards at `speed_kt`, `heights[i]` above flat terrain; a height of 0 is a
+/// surface report.
+fn low_track(heights: &[f32], speed_kt: f32) -> Vec<Sample> {
+    let step_m = f64::from(speed_kt / MPS_TO_KT) * 5.0;
+    let mut samples = track(heights.len(), 5.0, |t| [step_m * t / 5.0, 0.0]);
+    for (sample, &height) in samples.iter_mut().zip(heights) {
+        sample.point.ground_speed_kt = speed_kt;
+        sample.height_m = height;
+        if height == 0.0 {
+            sample.point.flags |= SURFACE_REPORT;
+            sample.point.altitude_ft = f32::NAN;
+        }
+    }
+    samples
+}
+
+/// Three surface reports at 400 m in cruise go; a touch-and-go's (neighbours below 150 m) and a
+/// landing's stay.
+#[test]
+fn surface_reports_in_flight_are_dropped_and_touch_and_goes_kept() {
+    let mut glitch = low_track(&[400.0, 400.0, 400.0, 0.0, 0.0, 0.0, 400.0, 400.0], 140.0);
+    validate_trajectory(&mut glitch, 450.0);
+    assert_eq!(glitch.len(), 5);
+    assert!(glitch.iter().all(|s| !s.point.is_surface_report()));
+    let heights = [
+        150.0, 90.0, 40.0, 10.0, 0.0, 0.0, 0.0, 15.0, 60.0, 120.0, 180.0,
+    ];
+    let mut touch_and_go = low_track(&heights, 80.0);
+    validate_trajectory(&mut touch_and_go, 250.0);
+    assert_eq!(touch_and_go.len(), heights.len());
+    let mut landing = low_track(&[300.0, 200.0, 100.0, 0.0, 0.0], 100.0);
+    validate_trajectory(&mut landing, 450.0);
+    assert_eq!(landing.len(), 5);
+}
+
+/// A light piston reporting 600 kt at 300 m takes its neighbours' 100 kt; one whose position also
+/// jumps 1 km goes; a jet at 430 kt low and a light piston at 600 kt high stay as they are.
+#[test]
+fn low_level_speeds_are_mended_or_dropped() {
+    let mut mended = low_track(&[300.0; 8], 100.0);
+    mended[4].point.ground_speed_kt = 600.0;
+    validate_trajectory(&mut mended, 250.0);
+    assert_eq!(mended.len(), 8);
+    assert!((mended[4].point.ground_speed_kt - 100.0).abs() < 1.0);
+    let mut jumped = low_track(&[300.0; 8], 100.0);
+    jumped[4].point.ground_speed_kt = 600.0;
+    jumped[4].point.lon += (1_000.0 / (111_195.0 * 50f64.to_radians().cos())) as f32;
+    validate_trajectory(&mut jumped, 250.0);
+    assert_eq!(jumped.len(), 7);
+    let mut fast_jet = low_track(&[300.0; 8], 430.0);
+    validate_trajectory(&mut fast_jet, 450.0);
+    assert!(fast_jet.iter().all(|s| s.point.ground_speed_kt == 430.0));
+    let mut high = low_track(&[3_000.0; 8], 100.0);
+    high[4].point.ground_speed_kt = 600.0;
+    validate_trajectory(&mut high, 250.0);
+    assert_eq!(high[4].point.ground_speed_kt, 600.0);
+}
+
 /// A point thrown 1 km off a straight track and back goes; a U-turn, a hover's jitter and a sparse
 /// track's turn stay.
 #[test]
@@ -116,7 +175,7 @@ fn spikes_are_dropped_and_turns_kept() {
     let speed = 128.6;
     let mut straight = track(10, 5.0, |t| [speed * t, 0.0]);
     straight[4].point.lat += (1_000.0 / 111_195.0) as f32;
-    validate_trajectory(&mut straight);
+    validate_trajectory(&mut straight, 450.0);
     assert_eq!(straight.len(), 9);
     assert!(straight.iter().all(|s| s.point.timestamp != 20.0));
     let radius = 1_500.0;
@@ -124,16 +183,16 @@ fn spikes_are_dropped_and_turns_kept() {
         let angle = speed * t / radius;
         [radius * angle.sin(), radius * (1.0 - angle.cos())]
     });
-    validate_trajectory(&mut u_turn);
+    validate_trajectory(&mut u_turn, 450.0);
     assert_eq!(u_turn.len(), 40);
     let mut hover = track(20, 2.0, |t| [5.0 * (t * 1.7).sin(), 5.0 * (t * 2.3).cos()]);
-    validate_trajectory(&mut hover);
+    validate_trajectory(&mut hover, 450.0);
     assert_eq!(hover.len(), 20);
     let mut sparse = track(6, 40.0, |t| {
         let angle = speed * t / 3_000.0;
         [3_000.0 * angle.sin(), 3_000.0 * (1.0 - angle.cos())]
     });
-    validate_trajectory(&mut sparse);
+    validate_trajectory(&mut sparse, 450.0);
     assert_eq!(sparse.len(), 6);
 }
 

@@ -1,10 +1,12 @@
 //! Receiver-independent data filters of Stage 0/1 (dev4 `filters.rs`): sane points, the bogus tail
-//! of a trajectory, teleports, spikes (r051) and unkeepable segments.
+//! of a trajectory, surface reports in flight and speeds the airframe cannot fly low (r051),
+//! teleports, spikes (r051) and unkeepable segments.
 
 use super::altitude::Sample;
-use super::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, signed_longitude_delta};
+use super::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, flat_distance_m, signed_longitude_delta};
 use super::flights::Airframe;
 use super::trace::TracePoint;
+use physics::doc29::profiles_generated::{CLASS_NAMES, noise_class_of};
 
 /// About 4 x the combined error of barometric altitude, the DEM and pressure offsets: below this
 /// height the whole tail is fabricated (a receiver tracking returns into the ground).
@@ -35,6 +37,20 @@ const HELICOPTER_HEIGHT_CEILING_M: f32 = 5_000.0;
 const SPIKE_OFFSET_M: f32 = 300.0;
 const MAX_TURN_RATE_DEG_S: f32 = 15.0;
 const SPIKE_WINDOW_S: f32 = 30.0;
+/// A surface report whose airborne neighbours, both within this time, are both higher above the
+/// terrain than this is a transponder's ground bit in flight: no aircraft lands and is 150 m up
+/// again within a minute (one world day: 22,063 such segments in 773 flights; one approached Sao
+/// Paulo, sat on a meadow 8 km short and climbed back 512 m in one step).
+const IN_FLIGHT_GROUND_WINDOW_S: f64 = 60.0;
+const IN_FLIGHT_GROUND_HEIGHT_M: f32 = 150.0;
+/// Below this height above the terrain an airframe flies no faster than its cap (kt, ground speed
+/// with a strong tail wind): helicopters 220, light pistons 250, other propellers 400, jets 450
+/// (military fast jets fly low at 420-450 kt, civil jets under 350). One world day had 4,735
+/// segments below 1,000 m faster than 400 kt; most were C172s, Robinsons and Diamonds at 450-1,200
+/// kt. A sample over its cap takes the speed its neighbours' positions imply, or goes when those
+/// too are over it (a wrong position).
+const LOW_LEVEL_M: f32 = 1_000.0;
+const NEIGHBOUR_WINDOW_S: f64 = 60.0;
 
 /// Finite time and position (not the 0,0 no-fix sentinel), a plausible airborne altitude and a
 /// finite, possible speed. A surface report carries no altitude to check.
@@ -59,10 +75,25 @@ pub fn point_is_sane(point: &TracePoint) -> bool {
         && point.vertical_rate_fpm.is_finite()
 }
 
+/// The ground speed an airframe of `profile` does not exceed low over the terrain (kt).
+pub fn low_level_speed_cap_kt(airframe: Airframe, profile: u8) -> f32 {
+    match airframe {
+        Airframe::Helicopter => 220.0,
+        Airframe::Propeller
+            if CLASS_NAMES.get(usize::from(noise_class_of(profile))) == Some(&"PROP_C172") =>
+        {
+            250.0
+        }
+        Airframe::Propeller => 400.0,
+        Airframe::Jet => 450.0,
+    }
+}
+
 /// Cut the trajectory at its first implausible point (below the hard height floor, or the start of
 /// a sustained anomalous descent), walking back over the negative heights that led there, then drop
-/// teleports. Cutting the whole tail keeps the fabricated approach before it out as well.
-pub fn validate_trajectory(samples: &mut Vec<Sample>) {
+/// surface reports in flight, mend or drop speeds over `speed_cap_kt` low over the terrain, drop
+/// teleports and spikes. Cutting the whole tail keeps the fabricated approach before it out as well.
+pub fn validate_trajectory(samples: &mut Vec<Sample>, speed_cap_kt: f32) {
     let underground = samples
         .iter()
         .position(|s| s.height_m < HARD_HEIGHT_FLOOR_M);
@@ -77,8 +108,93 @@ pub fn validate_trajectory(samples: &mut Vec<Sample>) {
         }
         samples.truncate(keep);
     }
+    drop_ground_reports_in_flight(samples);
+    mend_low_level_speeds(samples, speed_cap_kt);
     drop_teleports(samples);
     drop_spikes(samples);
+}
+
+/// Drop every run of surface reports between airborne samples both more than
+/// [`IN_FLIGHT_GROUND_HEIGHT_M`] above the terrain and within [`IN_FLIGHT_GROUND_WINDOW_S`].
+fn drop_ground_reports_in_flight(samples: &mut Vec<Sample>) {
+    let mut keep = vec![true; samples.len()];
+    let mut index = 0;
+    while index < samples.len() {
+        if !samples[index].point.is_surface_report() {
+            index += 1;
+            continue;
+        }
+        let first = index;
+        while index + 1 < samples.len() && samples[index + 1].point.is_surface_report() {
+            index += 1;
+        }
+        let last = index;
+        index += 1;
+        let (Some(before), Some(after)) = (first.checked_sub(1), samples.get(last + 1)) else {
+            continue;
+        };
+        let high = |sample: &Sample| sample.height_m > IN_FLIGHT_GROUND_HEIGHT_M;
+        let close = |a: &Sample, b: &Sample| {
+            (b.point.timestamp - a.point.timestamp).abs() <= IN_FLIGHT_GROUND_WINDOW_S
+        };
+        let before = &samples[before];
+        if high(before)
+            && high(after)
+            && close(before, &samples[first])
+            && close(&samples[last], after)
+        {
+            keep[first..=last].fill(false);
+        }
+    }
+    let mut flags = keep.into_iter();
+    samples.retain(|_| flags.next().unwrap_or(false));
+}
+
+/// Samples below [`LOW_LEVEL_M`] reporting more than `cap_kt` take the ground speed their own
+/// position implies from and to their neighbours (within [`NEIGHBOUR_WINDOW_S`]); a sample for
+/// which either leg implies more too (a wrong position), or which has no neighbour, goes.
+fn mend_low_level_speeds(samples: &mut Vec<Sample>, cap_kt: f32) {
+    let over =
+        |sample: &Sample| sample.height_m < LOW_LEVEL_M && sample.point.ground_speed_kt > cap_kt;
+    if !samples.iter().any(over) {
+        return;
+    }
+    let mut keep = vec![true; samples.len()];
+    let mut mended = Vec::new();
+    for index in 0..samples.len() {
+        if !over(&samples[index]) {
+            continue;
+        }
+        let at = |i: usize| &samples[i].point;
+        let leg_kt = |other: usize| {
+            let (a, b) = (at(index), at(other));
+            let seconds = (b.timestamp - a.timestamp).abs();
+            (seconds <= NEIGHBOUR_WINDOW_S).then(|| {
+                let metres = flat_distance_m(a.lat, a.lon, b.lat, b.lon);
+                if seconds > 0.0 {
+                    metres / seconds as f32 * MPS_TO_KT
+                } else {
+                    f32::INFINITY
+                }
+            })
+        };
+        let legs: Vec<f32> = [index.checked_sub(1), Some(index + 1)]
+            .into_iter()
+            .flatten()
+            .filter(|&other| other < samples.len())
+            .filter_map(leg_kt)
+            .collect();
+        if legs.is_empty() || legs.iter().any(|&speed| speed > cap_kt) {
+            keep[index] = false;
+        } else {
+            mended.push((index, legs.iter().sum::<f32>() / legs.len() as f32));
+        }
+    }
+    for (index, speed_kt) in mended {
+        samples[index].point.ground_speed_kt = speed_kt;
+    }
+    let mut flags = keep.into_iter();
+    samples.retain(|_| flags.next().unwrap_or(false));
 }
 
 fn sustained_descent_start(samples: &[Sample]) -> Option<usize> {
