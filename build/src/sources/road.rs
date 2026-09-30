@@ -4,7 +4,7 @@
 use super::country_speeds::COUNTRY_SPEEDS;
 use super::road_junctions::{Junctions, traffic_signals};
 use super::road_slope::{SquareHeights, WayRow, row_slopes};
-use super::{Converted, group_key, split_at_tile_edges};
+use super::{Converted, Reach, group_key, split_at_tile_edges};
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type};
@@ -186,8 +186,14 @@ impl<'a> Columns<'a> {
     }
 }
 
-/// Converts the road rows of one dev4 square; returns how many rows emit.
-pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<usize, String> {
+/// Converts the road rows of one dev4 square, or with `reach` only those reaching into another
+/// square; returns how many rows emit.
+pub fn convert(
+    dev4: &Dev4,
+    square: Square,
+    reach: Option<Reach>,
+    out: &mut Vec<Converted>,
+) -> Result<usize, String> {
     let Some(table) = dev4.table(square, "roads.arrow")? else {
         return Ok(0);
     };
@@ -263,9 +269,24 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
         );
         let osm_id = c.get("osm_id")?.as_primitive::<Int64Type>();
         let segment_index = c.get("segment_idx")?.as_primitive::<Int16Type>();
+        let within: Vec<bool> = (0..batch.num_rows())
+            .map(|row| {
+                reach.is_none_or(|reach| {
+                    reach.touches(
+                        z30_to_global(start_x.value(row), start_y.value(row)),
+                        z30_to_global(end_x.value(row), end_y.value(row)),
+                    )
+                })
+            })
+            .collect();
+        // A row's slope reads its whole way: the ways of the rows within.
+        let wanted: std::collections::HashSet<i64> = (0..batch.num_rows())
+            .filter(|&row| within[row])
+            .map(|row| osm_id.value(row))
+            .collect();
         let mut ways: std::collections::HashMap<i64, Vec<WayRow>> =
             std::collections::HashMap::new();
-        for row in 0..batch.num_rows() {
+        for row in (0..batch.num_rows()).filter(|&row| wanted.contains(&osm_id.value(row))) {
             ways.entry(osm_id.value(row)).or_default().push(WayRow {
                 row,
                 segment_index: segment_index.value(row),
@@ -278,6 +299,9 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
         let country = c.get("country_iso")?.as_primitive::<UInt16Type>();
         let source_id = c.get("source_id")?.as_primitive::<UInt16Type>();
         for (row, &slope) in slopes.iter().enumerate() {
+            if !within[row] {
+                continue;
+            }
             let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
             let prior: [f64; 4] = std::array::from_fn(|category| aadt[category].value(row));
             let daily = country_flows(

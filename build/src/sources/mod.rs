@@ -17,6 +17,7 @@ pub mod ship;
 
 use crate::dev4::{Dev4, Square};
 use crate::output::write_tile;
+use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use tiles::geo::{GlobalSteps, TileId};
@@ -26,6 +27,38 @@ use tiles::{COMPLETION_MARKER, Kind};
 /// int16 steps per tile and the world's width in steps.
 const TILE_STEPS: i64 = 32_768;
 const WORLD_STEPS: i64 = TILE_STEPS << tiles::geo::ZOOM;
+
+/// The global steps of a z9 square (inclusive): a neighbour's rows matter to the square being
+/// built only where they reach into it, and a converter may skip the others before converting
+/// them (a road row is some metres long, a square tens of kilometres).
+#[derive(Debug, Clone, Copy)]
+pub struct Reach {
+    min: GlobalSteps,
+    max: GlobalSteps,
+}
+
+impl Reach {
+    pub fn of_square(square: Square) -> Self {
+        let side = TILE_STEPS * 8;
+        let (x, y) = (i64::from(square.x) * side, i64::from(square.y) * side);
+        Reach {
+            min: GlobalSteps { x, y },
+            max: GlobalSteps {
+                x: x + side - 1,
+                y: y + side - 1,
+            },
+        }
+    }
+
+    /// Whether the box of a piece from `a` to `b` meets the square (a piece across the
+    /// antimeridian spans the world here, so it is always kept).
+    pub fn touches(&self, a: GlobalSteps, b: GlobalSteps) -> bool {
+        a.x.min(b.x) <= self.max.x
+            && a.x.max(b.x) >= self.min.x
+            && a.y.min(b.y) <= self.max.y
+            && a.y.max(b.y) >= self.min.y
+    }
+}
 
 /// One converted piece with its owner tile and attribute.
 pub struct Converted {
@@ -114,42 +147,55 @@ pub fn build(
             airport_traffic.display()
         ));
     }
-    let mut written = 0;
-    for &square in squares {
-        let owned = |item: &Converted| (item.tile.x >> 3, item.tile.y >> 3) == (square.x, square.y);
-        let mut converted = Vec::new();
-        for neighbour in square.with_neighbours() {
-            road::convert(dev4, neighbour, &mut converted)?;
-            rail::convert(dev4, neighbour, &mut converted)?;
-            leisure::convert(dev4, neighbour, &mut converted)?;
-            building::convert(dev4, neighbour, &mut converted)?;
-            ship::convert(dev4, neighbour, &mut converted)?;
-            airport::convert(airport_traffic, neighbour, &mut converted)?;
-            converted.retain(owned);
-        }
-        industry::convert(dev4, square, &mut converted)?;
+    squares
+        .par_iter()
+        .map(|&square| build_square(dev4, airport_traffic, square, out))
+        .sum()
+}
+
+/// The sources tiles of one square (the squares build in parallel, each within its own memory).
+fn build_square(
+    dev4: &Dev4,
+    airport_traffic: &Path,
+    square: Square,
+    out: &Path,
+) -> Result<usize, String> {
+    let owned = |item: &Converted| (item.tile.x >> 3, item.tile.y >> 3) == (square.x, square.y);
+    let mut converted = Vec::new();
+    let reach = Reach::of_square(square);
+    for neighbour in square.with_neighbours() {
+        let road_reach = (neighbour != square).then_some(reach);
+        road::convert(dev4, neighbour, road_reach, &mut converted)?;
+        rail::convert(dev4, neighbour, &mut converted)?;
+        leisure::convert(dev4, neighbour, &mut converted)?;
+        building::convert(dev4, neighbour, &mut converted)?;
+        ship::convert(dev4, neighbour, &mut converted)?;
+        airport::convert(airport_traffic, neighbour, &mut converted)?;
         converted.retain(owned);
-        let mut by_tile: BTreeMap<TileId, Vec<Converted>> = BTreeMap::new();
-        for item in converted {
-            by_tile.entry(item.tile).or_default().push(item);
+    }
+    industry::convert(dev4, square, &mut converted)?;
+    converted.retain(owned);
+    let mut by_tile: BTreeMap<TileId, Vec<Converted>> = BTreeMap::new();
+    for item in converted {
+        by_tile.entry(item.tile).or_default().push(item);
+    }
+    let mut written = 0;
+    for (tile, items) in by_tile {
+        let mut attributes: Vec<Attribute> = Vec::new();
+        let mut index: HashMap<Vec<u8>, u32> = HashMap::new();
+        let mut pieces = Vec::with_capacity(items.len());
+        for Converted {
+            ends, attribute, ..
+        } in items
+        {
+            let attribute = *index.entry(attribute_key(&attribute)).or_insert_with(|| {
+                attributes.push(attribute);
+                (attributes.len() - 1) as u32
+            });
+            pieces.push(Piece { ends, attribute });
         }
-        for (tile, items) in by_tile {
-            let mut attributes: Vec<Attribute> = Vec::new();
-            let mut index: HashMap<Vec<u8>, u32> = HashMap::new();
-            let mut pieces = Vec::with_capacity(items.len());
-            for Converted {
-                ends, attribute, ..
-            } in items
-            {
-                let attribute = *index.entry(attribute_key(&attribute)).or_insert_with(|| {
-                    attributes.push(attribute);
-                    (attributes.len() - 1) as u32
-                });
-                pieces.push(Piece { ends, attribute });
-            }
-            write_tile(out, tile, Kind::Sources, &encode(&pieces, &attributes))?;
-            written += 1;
-        }
+        write_tile(out, tile, Kind::Sources, &encode(&pieces, &attributes))?;
+        written += 1;
     }
     Ok(written)
 }
@@ -157,6 +203,23 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A neighbour's row counts when its box meets the square: inside, across the edge, or
+    /// touching it; a row one step outside does not.
+    #[test]
+    fn a_reach_keeps_the_rows_that_meet_its_square() {
+        let reach = Reach::of_square(Square { x: 276, y: 173 });
+        let west = 276 * 8 * TILE_STEPS;
+        let north = 173 * 8 * TILE_STEPS;
+        let at = |x: i64, y: i64| GlobalSteps { x, y };
+        assert!(reach.touches(at(west + 5, north + 5), at(west + 50, north + 9)));
+        assert!(reach.touches(at(west - 40, north + 5), at(west + 10, north + 5)));
+        assert!(reach.touches(at(west - 40, north + 5), at(west, north + 5)));
+        assert!(!reach.touches(at(west - 40, north + 5), at(west - 1, north + 5)));
+        let south = north + 8 * TILE_STEPS;
+        assert!(!reach.touches(at(west + 5, south), at(west + 9, south + 30)));
+        assert!(reach.touches(at(west + 5, south - 1), at(west + 9, south + 30)));
+    }
 
     #[test]
     fn pieces_split_at_tile_edges_stay_inside_their_tiles() {
