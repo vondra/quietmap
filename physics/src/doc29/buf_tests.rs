@@ -1,8 +1,9 @@
 //! The German test tasks for Doc 29 noise mapping (UBA Texte 11/2022, "Testaufgaben zur BUF"):
-//! the A320's straight and curved departures and approaches of the fictitious test airport, their
+//! the A320's and the CRJ900's straight and curved departures and approaches of the fictitious test
+//! airport, their
 //! segments (Appendix B: position, true airspeed, the thrust each segment reads its NPD at) put
 //! through this kernel at the test tasks' receivers (Table 30) against their single-event levels
-//! (Table 32). The tasks' atmosphere is 10 C / 70 % (their NPD curves recalculated by Appendix D,
+//! (Tables 32 and 33). The tasks' atmosphere is 10 C / 70 % (their NPD curves recalculated by Appendix D,
 //! impedance 0.11 dB); the kernel's curves are in 15 C / 70 %, so each segment's level moves by the
 //! difference of the two increments at its slant.
 
@@ -17,14 +18,18 @@ use crate::atmosphere::REFERENCE_PRESSURE_KPA;
 use crate::doc29::corrections::speed_correction_db;
 use crate::doc29::npd::class_anchor;
 
-const A320_CLASS: usize = 1;
+/// The noise class of a case's aircraft: the A320's, and the CRJ900's (anchored on the CRJ9-ER
+/// the tasks use).
+fn class_of_case(case: &str) -> usize {
+    if case.starts_with("CRJ9") { 10 } else { 1 }
+}
 const NEWTONS_PER_POUND: f64 = 4.448_222;
 const METRES_PER_SECOND_PER_KNOT: f64 = 0.514_444;
 
 /// The increment difference (dB) between the tasks' atmosphere and the kernel's at `slant_m`,
 /// linear in log distance as the curves are.
-fn atmosphere_difference_db(departure: bool, slant_m: f64) -> f64 {
-    let spectra = SPECTRA[A320_CLASS].as_ref().expect("A320 spectra");
+fn atmosphere_difference_db(class: usize, departure: bool, slant_m: f64) -> f64 {
+    let spectra = SPECTRA[class].as_ref().expect("the class has spectra");
     let spectrum = if departure {
         &spectra.departure_db
     } else {
@@ -51,9 +56,9 @@ fn atmosphere_difference_db(departure: bool, slant_m: f64) -> f64 {
 }
 
 /// The single-event level of one case at one receiver: every segment of its point list.
-fn case_sel_db(points: &[[f64; 5]], departure: bool, receiver: [f64; 3]) -> f64 {
-    let model = &THRUST[A320_CLASS];
-    let anchor = class_anchor(A320_CLASS);
+fn case_sel_db(class: usize, points: &[[f64; 5]], departure: bool, receiver: [f64; 3]) -> f64 {
+    let model = &THRUST[class];
+    let anchor = class_anchor(class);
     let (powers, rows) = if departure {
         (&model.dep_power, model.dep_rows)
     } else {
@@ -65,7 +70,7 @@ fn case_sel_db(points: &[[f64; 5]], departure: bool, receiver: [f64; 3]) -> f64 
         let speed_m_per_s = 0.5 * (a[3] + b[3]);
         let thrust_lb = 0.5 * (a[4] + b[4]) / NEWTONS_PER_POUND;
         let emission = SegmentEmission {
-            class: A320_CLASS,
+            class,
             departure,
             power: bracket_power(powers, rows, thrust_lb),
             installation: anchor.installation,
@@ -86,24 +91,26 @@ fn case_sel_db(points: &[[f64; 5]], departure: bool, receiver: [f64; 3]) -> f64 
         let slant = sel.closest.on_line_m[0]
             .hypot(sel.closest.on_line_m[1])
             .hypot(sel.closest.on_line_m[2]);
-        energy += 10f64.powf((sel.free_sel_db + atmosphere_difference_db(departure, slant)) / 10.0);
+        energy += 10f64
+            .powf((sel.free_sel_db + atmosphere_difference_db(class, departure, slant)) / 10.0);
     }
     10.0 * energy.log10()
 }
 
 /// Receivers where a case hears its ground roll more than its flight, which this kernel does not
 /// model as Doc 29 does (r051 takes runway rolls as airport ground operations): beside and behind
-/// the start of roll the tasks add the start-of-roll directivity (the kernel reads 2.2-3.4 dB low
-/// there), and past the runway end an arrival's reverse-thrust increment (1.9 dB low).
+/// the start of roll the tasks add the start-of-roll directivity (the kernel reads 3.6 dB high to
+/// 3.4 dB low there), and past the runway end an arrival's reverse-thrust increment (1.4-1.9 dB low).
 const GROUND_ROLL_RECEIVERS: [(&str, &str); 4] =
     [("D", "IP02"), ("D", "IP03"), ("D", "IP04"), ("A", "IP05")];
 
-/// Every other case and receiver of the fixture (25) reads within the tasks' own precision target,
-/// 0.5 dB, of the published level (in the night of 2026-09-30: -0.39 to +0.42 dB).
+/// Every other case and receiver of the fixture (50) reads within the tasks' own precision target,
+/// 0.5 dB, of the published level (in the night of 2026-09-30: A320 -0.39 to +0.42 dB, CRJ900 on the
+/// CRJ9-ER anchor -0.19 to +0.24 dB).
 #[test]
-fn the_a320_cases_of_the_buf_test_tasks() {
+fn the_a320_and_crj900_cases_of_the_buf_test_tasks() {
     let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("buf2022_a320.json")).expect("the fixture");
+        serde_json::from_str(include_str!("buf2022.json")).expect("the fixture");
     let receivers = &fixture["receivers"];
     let mut rows = Vec::new();
     for (case, reference) in fixture["reference"].as_object().unwrap() {
@@ -116,7 +123,7 @@ fn the_a320_cases_of_the_buf_test_tasks() {
             .collect();
         for (receiver, level) in reference.as_object().unwrap() {
             let at: [f64; 3] = std::array::from_fn(|k| receivers[receiver][k].as_f64().unwrap());
-            let model = case_sel_db(&points, departure, at);
+            let model = case_sel_db(class_of_case(case), &points, departure, at);
             rows.push((
                 case.clone(),
                 receiver.clone(),
@@ -143,5 +150,5 @@ fn the_a320_cases_of_the_buf_test_tasks() {
             checked += 1;
         }
     }
-    assert_eq!(checked, 25);
+    assert_eq!(checked, 50);
 }

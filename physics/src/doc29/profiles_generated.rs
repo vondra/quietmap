@@ -4,6 +4,8 @@
 //! last changed in aa84ae6f); inputs: EASA ANP database v2.3 (NPD and aircraft tables, sha256
 //! prefix fb122e3dce42733f) with its v9 supplement, and the pinned global traffic counts
 //! (`aircraft-profiles-counts.json`, sha256 prefix b43635ca4751a5a3, 4,885,163,837 segments).
+//! Profile 59, the FUSE_CRJ9 anchor, is the CRJ9-ER's (r051, `scripts/thrust-class.py`; dev4 had
+//! the CL601's).
 //! Copied unchanged from dev4 `qm260904` at c815f215, which is that output with two hand edits:
 //! 2598c1c2 removed the constant scaled distance per profile, fe4d9933 the ground-operations
 //! table. The generator is ported in a later step; until then this file is not edited by hand.
@@ -810,11 +812,11 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         Installation::Fuselage,
     ),
     NpdProfile::new(
-        "CRJ9/CL601",
-        [90.9, 86.7, 83.3, 79.9, 74.1, 67.4, 62.4, 56.9, 50.7, 43.9],
-        [99.7, 95.2, 92.0, 88.5, 82.8, 76.3, 71.5, 66.1, 59.9, 52.7],
-        [87.3, 80.7, 76.0, 71.1, 63.0, 54.1, 47.6, 40.6, 33.0, 24.6],
-        [97.2, 90.9, 86.1, 81.2, 73.2, 64.5, 58.2, 51.5, 43.5, 34.9],
+        "CRJ9/CRJ9-ER",
+        [93.1, 89.2, 86.4, 83.3, 78.2, 72.0, 67.1, 61.5, 54.9, 47.7],
+        [104.7, 100.9, 98.2, 95.3, 90.4, 84.4, 79.6, 74.0, 67.6, 60.7],
+        [89.7, 83.1, 78.6, 73.8, 66.2, 57.6, 51.3, 44.1, 36.0, 27.3],
+        [103.6, 97.1, 92.6, 87.9, 80.2, 71.6, 65.3, 58.3, 50.3, 42.0],
         160.0,
         Installation::Fuselage,
     ),

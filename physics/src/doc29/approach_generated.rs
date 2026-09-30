@@ -76,11 +76,11 @@ pub static APPROACH: [ApproachConfiguration; NUM_CLASSES] = [
     },
     ApproachConfiguration {
         class_name: "FUSE_CRJ9",
-        anchor: "CL601/DEFAULT",
+        anchor: "CRJ9-ER/DEFAULT",
         flap: "D-45",
-        drag_ratio: 0.163669,
+        drag_ratio: 0.1551,
         from_ft_afe: 1000.0,
-        landing_weight_lb: 32400.0,
+        landing_weight_lb: 66150.0,
     },
     ApproachConfiguration {
         class_name: "WING_B748",

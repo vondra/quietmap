@@ -172,7 +172,7 @@ pub static SPECTRA: [Option<ClassSpectra>; NUM_CLASSES] = [
     }),
     Some(ClassSpectra {
         class_name: "FUSE_CRJ9",
-        anchor: "CL601",
+        anchor: "CRJ9-ER",
         approach_class: 216,
         departure_class: 113,
         approach_db: [
