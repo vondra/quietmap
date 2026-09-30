@@ -70,6 +70,25 @@ pub struct PointReport {
     /// The exact ten loudest flights (id, LAmax dB) and the popup's lists.
     pub exact_top: Vec<(u64, f64)>,
     pub lists: Vec<FlightList>,
+    /// For a diagnosed point, the fine boxes whose SEL sums miss their pieces' the most.
+    pub diagnosis: Vec<BoxDiagnosis>,
+}
+
+/// One fine box at a diagnosed point: where it is (centroid latitude, longitude, altitude, the
+/// horizontal distance), its cell and slab, its average piece, and per period the day SEL sum
+/// (dB) of its pieces through the kernel and of the box through the click-time equation.
+#[derive(Debug, Clone)]
+pub struct BoxDiagnosis {
+    pub centroid: [f64; 3],
+    pub distance_m: f64,
+    pub zoom: u8,
+    pub clearance_m: f64,
+    pub flights: u32,
+    pub axis_deg: f64,
+    pub gradient: f64,
+    pub piece_length_m: f64,
+    pub exact_db: Levels,
+    pub boxed_db: Levels,
 }
 
 /// The popup's top-flights list reading `pieces` per box: the share of the exact ten it holds,
@@ -116,7 +135,7 @@ pub fn compare(
     window: &Window,
     (aircraft_root, level_step_db): (&Path, f64),
     terrain_root: &Path,
-    points: &[CheckPoint],
+    (points, diagnosed): (&[CheckPoint], Option<usize>),
 ) -> Result<Vec<PointReport>, String> {
     let receivers: Vec<Receiver> = points
         .iter()
@@ -177,7 +196,11 @@ pub fn compare(
         .collect();
     days.sort();
     days.dedup();
-    let zero = || vec![Sums::new(); points.len()];
+    let zero = || {
+        (0..points.len())
+            .map(|index| Sums::new(diagnosed == Some(index)))
+            .collect::<Vec<_>>()
+    };
     let mut totals = zero();
     for day in days {
         let path = segments_dir.join("segments").join(format!("{day}.arrow"));
@@ -221,7 +244,7 @@ pub fn compare(
     receivers
         .iter()
         .zip(totals)
-        .map(|(receiver, total)| report(aircraft_root, receiver, total))
+        .map(|(receiver, total)| report((aircraft_root, level_step_db), receiver, total))
         .collect()
 }
 

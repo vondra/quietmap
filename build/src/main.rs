@@ -239,12 +239,24 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 })
                 .filter(|(name, _)| only.is_empty() || only.contains(name))
                 .collect();
+            let diagnosed = match options.optional("diagnose") {
+                Some(name) => Some(
+                    chosen
+                        .iter()
+                        .position(|(chosen, _)| *chosen == name)
+                        .ok_or_else(|| format!("--diagnose {name}: no such point"))?,
+                ),
+                None => None,
+            };
             let compared = boxes::check::compare(
                 Path::new(options.get("segments")?),
                 &window,
                 (&out, box_rule(&options)?.level_step_db),
                 terrain,
-                &chosen.iter().map(|(_, point)| *point).collect::<Vec<_>>(),
+                (
+                    &chosen.iter().map(|(_, point)| *point).collect::<Vec<_>>(),
+                    diagnosed,
+                ),
             )?;
             for ((name, _), report) in chosen.iter().zip(compared) {
                 println!(
@@ -269,6 +281,22 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             .exact_top
                             .iter()
                             .map(|(flight, sel)| serde_json::json!([format!("{flight:016x}"), sel]))
+                            .collect::<Vec<_>>(),
+                        "diagnosis": report
+                            .diagnosis
+                            .iter()
+                            .map(|found| serde_json::json!({
+                                "centroid": found.centroid,
+                                "distance_m": found.distance_m,
+                                "zoom": found.zoom,
+                                "clearance_m": found.clearance_m,
+                                "flights": found.flights,
+                                "axis_deg": found.axis_deg,
+                                "gradient": found.gradient,
+                                "piece_length_m": found.piece_length_m,
+                                "exact_db": found.exact_db,
+                                "boxed_db": found.boxed_db,
+                            }))
                             .collect::<Vec<_>>(),
                         "lists": report
                             .lists

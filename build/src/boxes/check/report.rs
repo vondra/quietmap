@@ -1,11 +1,13 @@
 //! The check's report of one point: the boxes around it, fine and as the popup reads them,
 //! against the exact sums, and the popup's flight lists against the exact loudest flights.
 
+use super::super::place::{BoxKey, tile_bands};
 use super::exact::{
     ALOFT, BEYOND, BY_DISTANCE, DISTANCE_BANDS_M, EXACT, NEAR_GROUND, Sums, distance_band,
 };
 use super::{
-    FlightList, LIST_TOLERANCE_DB, PIECES, PointReport, REACH_M, REACH_RINGS, Receiver, leq_db,
+    BoxDiagnosis, FlightList, LIST_TOLERANCE_DB, PIECES, PointReport, REACH_M, REACH_RINGS,
+    Receiver, leq_db,
 };
 use physics::bands::PERIODS;
 use physics::doc29::boxes::{AircraftBoxAtReceiver, box_sel_at_receiver};
@@ -17,6 +19,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use tiles::aircraft::Aircraft;
 use tiles::geo::TileId;
+
+/// Boxes listed for a diagnosed point.
+const DIAGNOSED_BOXES: usize = 40;
 
 /// Whether two lists name the same flights with the same Lmax (their SELs sum what each
 /// computed and may differ).
@@ -123,7 +128,7 @@ fn box_energy<'a>(
 /// One point's report from its sums and the written boxes around it: the fine boxes of every
 /// ring, and as the popup reads them (fine boxes in the tile and ring 1, far boxes beyond).
 pub(super) fn report(
-    aircraft_root: &Path,
+    (aircraft_root, level_step_db): (&Path, f64),
     receiver: &Receiver,
     total: Sums,
 ) -> Result<PointReport, String> {
@@ -256,6 +261,10 @@ pub(super) fn report(
             search_is_exhaustive: same_list(&searched, &exhaustive),
         });
     }
+    let diagnosis = match &total.per_box {
+        Some(per_box) => diagnose(&fine, receiver, per_box, level_step_db),
+        None => Vec::new(),
+    };
     Ok(PointReport {
         exact: leq_db(&total.energy[EXACT..]),
         boxed: leq_db(&boxed),
@@ -272,5 +281,104 @@ pub(super) fn report(
         aloft: [leq_db(&total.energy[ALOFT..]), leq_db(&aloft)],
         exact_top,
         lists,
+        diagnosis,
     })
+}
+
+/// The fine boxes within the reach whose Lden-weighted SEL sums miss their pieces' the most.
+fn diagnose(
+    fine: &[Vec<(TileId, Aircraft<'_>)>],
+    receiver: &Receiver,
+    per_box: &HashMap<BoxKey, [f64; PERIODS]>,
+    level_step_db: f64,
+) -> Vec<BoxDiagnosis> {
+    let lden = |energy: &[f64; PERIODS]| {
+        energy[0] * 12.0 + energy[1] * 4.0 * 10f64.powf(0.5) + energy[2] * 8.0 * 10.0
+    };
+    let mut boxed: HashMap<BoxKey, ([f64; PERIODS], BoxDiagnosis)> = HashMap::new();
+    for (tile, aircraft) in fine.iter().flatten() {
+        let bands = tile_bands(*tile, level_step_db);
+        for index in 0..aircraft.box_count() {
+            let record = aircraft.aircraft_box(index);
+            let global = tile.global(record.centroid);
+            let [east, north] = receiver
+                .frame
+                .metres_of_steps([global.x as f64, global.y as f64]);
+            if east.hypot(north) > REACH_M {
+                continue;
+            }
+            let Some(band) = bands.iter().position(|band| {
+                band.zoom == record.zoom && (band.clearance_m - record.clearance_m).abs() < 1.0
+            }) else {
+                continue;
+            };
+            let per_tile = 1u32 << (record.zoom - 12);
+            let key = BoxKey {
+                tile: *tile,
+                band: band as u8,
+                cell: [
+                    tile.x * per_tile + u32::from(record.cell[0]),
+                    tile.y * per_tile + u32::from(record.cell[1]),
+                ],
+                helicopter: record.group == tiles::aircraft::Group::Helicopter,
+            };
+            let at_receiver = AircraftBoxAtReceiver {
+                centroid_m: [
+                    east,
+                    north,
+                    record.centroid_altitude_m - receiver.altitude_m,
+                ],
+                axis_rad: record.axis_rad,
+                gradient: record.gradient,
+                piece_length_m: record.piece_length_m,
+                levels_db: &record.energy_db,
+                tail_levels_db: &record.tail_energy_db,
+                lg_scaled_distance: &record.lg_scaled_distance,
+                installation_shares: record.installation_shares,
+                ground_m: record.ground_m - receiver.altitude_m,
+            };
+            let energy: [f64; PERIODS] = box_sel_at_receiver(&at_receiver, &Unscreened)
+                .map_or([0.0; PERIODS], |sel| {
+                    sel.sel_db.map(|level| 10f64.powf(level / 10.0))
+                });
+            let (lat, lon) = tiles::geo::Mercator {
+                x: global.x as f64 / 32_768.0,
+                y: global.y as f64 / 32_768.0,
+            }
+            .to_degrees();
+            let entry = boxed.entry(key).or_insert_with(|| {
+                (
+                    [0.0; PERIODS],
+                    BoxDiagnosis {
+                        centroid: [lat, lon, record.centroid_altitude_m],
+                        distance_m: east.hypot(north),
+                        zoom: record.zoom,
+                        clearance_m: record.clearance_m,
+                        flights: 0,
+                        axis_deg: record.axis_rad.to_degrees(),
+                        gradient: record.gradient,
+                        piece_length_m: record.piece_length_m,
+                        exact_db: [f64::NEG_INFINITY; PERIODS],
+                        boxed_db: [f64::NEG_INFINITY; PERIODS],
+                    },
+                )
+            });
+            for (total, value) in entry.0.iter_mut().zip(energy) {
+                *total += value;
+            }
+            entry.1.flights += record.flights;
+        }
+    }
+    let mut found: Vec<(f64, BoxDiagnosis)> = boxed
+        .into_iter()
+        .map(|(key, (energy, mut diagnosis))| {
+            let exact = per_box.get(&key).copied().unwrap_or([0.0; PERIODS]);
+            diagnosis.exact_db = exact.map(|value| 10.0 * value.log10());
+            diagnosis.boxed_db = energy.map(|value| 10.0 * value.log10());
+            (lden(&exact) - lden(&energy), diagnosis)
+        })
+        .collect();
+    found.sort_by(|a, b| b.0.abs().total_cmp(&a.0.abs()));
+    found.truncate(DIAGNOSED_BOXES);
+    found.into_iter().map(|(_, diagnosis)| diagnosis).collect()
 }

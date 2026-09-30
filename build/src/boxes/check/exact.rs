@@ -2,7 +2,7 @@
 //! period, beyond the reach, per band and distance of its box pieces, and per flight.
 
 use super::super::emission_of;
-use super::super::place::{Placement, cut_into_pieces};
+use super::super::place::{BoxKey, Placement, cut_into_pieces};
 use super::super::read::FlightSegment;
 use super::{BEYOND_REACH_M, REACH_M, Receiver};
 use physics::bands::PERIODS;
@@ -18,6 +18,8 @@ use tiles::geo::Mercator;
 pub(super) struct Sums {
     pub(super) energy: [f64; SLOTS * PERIODS],
     pub(super) flights: HashMap<u64, (f64, f64)>,
+    /// For a diagnosed point, the exact energy of the pieces of each box.
+    pub(super) per_box: Option<HashMap<BoxKey, [f64; PERIODS]>>,
 }
 
 pub(super) const EXACT: usize = 0;
@@ -39,10 +41,11 @@ pub(super) fn distance_band(distance_m: f64) -> usize {
 }
 
 impl Sums {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(diagnosed: bool) -> Self {
         Sums {
             energy: [0.0; SLOTS * PERIODS],
             flights: HashMap::new(),
+            per_box: diagnosed.then(HashMap::new),
         }
     }
 
@@ -57,6 +60,14 @@ impl Sums {
                 .or_insert((0.0, f64::NEG_INFINITY));
             entry.0 += energy;
             entry.1 = entry.1.max(lmax_db);
+        }
+        if let (Some(mine), Some(theirs)) = (self.per_box.as_mut(), other.per_box) {
+            for (key, energy) in theirs {
+                let sum = mine.entry(key).or_insert([0.0; PERIODS]);
+                for (a, b) in sum.iter_mut().zip(energy) {
+                    *a += b;
+                }
+            }
         }
     }
 }
@@ -146,6 +157,9 @@ pub(super) fn add_segment(
                 ];
                 let band = distance_band(middle[0].hypot(middle[1]));
                 sums.energy[BY_DISTANCE + PERIODS * band + period] += value;
+                if let Some(per_box) = sums.per_box.as_mut() {
+                    per_box.entry(piece.key).or_insert([0.0; PERIODS])[period] += value;
+                }
             }
         }
     }
