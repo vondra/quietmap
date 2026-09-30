@@ -56,6 +56,8 @@ pub struct Statistics {
 /// One streamed update.
 pub struct Update<'u> {
     pub partial: bool,
+    /// The levels exceeded 10, 50 and 90 % of the time (none for a building without a façade).
+    pub percentiles: Option<crate::percentiles::Percentiles>,
     pub lat: f64,
     pub lon: f64,
     pub frame: LocalFrame,
@@ -119,6 +121,7 @@ pub fn empty_answer(
     };
     emit(&Update {
         partial: false,
+        percentiles: None,
         lat,
         lon,
         frame,

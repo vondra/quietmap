@@ -34,7 +34,8 @@ pub fn reads_fine_boxes(frame: &LocalFrame, tile: TileId) -> bool {
 }
 
 /// One ring's aircraft at the receiver: every box of its tiles through the click-time equation
-/// (period energies, linear, and the number of boxes heard), and into `flights` the kept pieces
+/// (period energies, linear, those energies times their flights' lambda, and the number of boxes
+/// heard), and into `flights` the kept pieces
 /// of every box whose bound on their LAmax is above the list's entry level, loudest bound first
 /// (so the list holds the loudest flights of all kept pieces, rings read so far).
 pub fn ring_aircraft(
@@ -43,13 +44,14 @@ pub fn ring_aircraft(
     receiver: AircraftReceiver,
     horizons: &(impl ReceiverHorizons + Sync),
     flights: &mut FlightTotals,
-) -> ([f64; PERIODS], usize) {
-    let (mut energy, mut heard) = ([0.0; PERIODS], 0);
+) -> ([f64; PERIODS], [f64; PERIODS], usize) {
+    let (mut energy, mut energy_lambda, mut heard) = ([0.0; PERIODS], [0.0; PERIODS], 0);
     let mut bounds: Vec<(f64, usize, usize)> = Vec::new();
     for (tile_index, (tile, boxes)) in tiles.iter().enumerate() {
         let answer = tile_energy(boxes, *tile, frame, receiver, horizons);
-        for (total, value) in energy.iter_mut().zip(answer.energy) {
-            *total += value;
+        for period in 0..PERIODS {
+            energy[period] += answer.energy[period];
+            energy_lambda[period] += answer.energy_lambda[period];
         }
         heard += answer.boxes;
         bounds.extend(
@@ -69,5 +71,5 @@ pub fn ring_aircraft(
             flights.add_boxes(boxes, *tile, &[index], frame, receiver, horizons);
         }
     }
-    (energy, heard)
+    (energy, energy_lambda, heard)
 }

@@ -17,6 +17,7 @@ use crate::release::{Release, RingFiles};
 use crate::scene::Ground;
 use crate::selection::{LayerSelection, select};
 use crate::update::{Statistics, Update, empty_answer, layer_answers, loudest_contributors};
+use physics::bands::PERIODS;
 use physics::bound::receiver_gain;
 use physics::weather::FavourableProbability;
 use rayon::prelude::*;
@@ -99,6 +100,8 @@ pub fn answer(
     let mut ground = Ground::new(frame, centre, most_ground_rings);
     let mut horizons: Option<Horizons> = None;
     let mut flights = FlightTotals::default();
+    // The flights' energy and energy times lambda per period, for the percentile levels.
+    let (mut flight_energy, mut flight_energy_lambda) = ([0.0; PERIODS], [0.0; PERIODS]);
     let mut obstacles = Scene::new(frame);
     let mut selections: Vec<LayerSelection> = Layer::ALL
         .iter()
@@ -329,15 +332,17 @@ pub fn answer(
         // The ring's boxes join the aircraft layer before its sources (airport ground operations)
         // are selected: their energy counts in the layer's omitted-energy account.
         let aircraft = &mut selections[Layer::Aircraft as usize];
-        let (energy, heard) = ring_aircraft(
+        let (energy, energy_lambda, heard) = ring_aircraft(
             &ring_aircraft_tiles,
             &frame,
             receiver,
             horizons,
             &mut flights,
         );
-        for (total, value) in aircraft.energy.iter_mut().zip(energy) {
-            *total += value;
+        for period in 0..PERIODS {
+            aircraft.energy[period] += energy[period];
+            flight_energy[period] += energy[period];
+            flight_energy_lambda[period] += energy_lambda[period];
         }
         aircraft.evaluated += heard;
         aircraft.covered += heard;
@@ -385,8 +390,20 @@ pub fn answer(
                 .collect();
             Ok(serde_json::Value::Object(object).to_string())
         };
+        let fields = |contributor: &crate::update::Contributor| {
+            display_json(contributor.display, contributor.layer)
+                .ok()
+                .and_then(|text| serde_json::from_str(&text).ok())
+        };
+        let percentiles = crate::percentiles::percentiles(
+            &selections,
+            (flight_energy, flight_energy_lambda),
+            &fields,
+            lat.to_bits() ^ lon.to_bits().rotate_left(32),
+        );
         let update = Update {
             partial: !last_ring,
+            percentiles: Some(percentiles),
             lat,
             lon,
             frame,

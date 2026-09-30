@@ -14,6 +14,7 @@ pub mod evaluate;
 pub mod json;
 pub mod listing;
 pub mod obstacles;
+pub mod percentiles;
 pub mod release;
 pub mod scene;
 pub mod selection;

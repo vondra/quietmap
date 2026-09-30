@@ -21,10 +21,16 @@ pub struct AircraftReceiver {
     pub altitude_m: f64,
 }
 
+/// Speed of a flight near the ground for its passing's duration (m/s): 135 kt.
+pub const FLIGHT_SPEED_M_S: f64 = 70.0;
+
 /// One tile's boxes at the receiver.
 pub struct TileAnswer {
     /// Period energies (Leq, linear) summed over the boxes within reach.
     pub energy: [f64; PERIODS],
+    /// Per period the boxes' energies times their flights' Kurze lambda (flights per second of
+    /// the period times the slant over the speed): the energy-weighted lambda of the flights heard.
+    pub energy_lambda: [f64; PERIODS],
     pub boxes: usize,
     /// Per box within reach that keeps pieces: its index and the most LAmax (dB) its pieces can
     /// reach at the receiver.
@@ -70,7 +76,9 @@ pub fn tile_energy(
     receiver: AircraftReceiver,
     horizons: &(impl ReceiverHorizons + Sync),
 ) -> TileAnswer {
-    let per_box: Vec<([f64; PERIODS], Option<f64>, usize)> = (0..aircraft.box_count())
+    #[allow(clippy::type_complexity)]
+    let per_box: Vec<([f64; PERIODS], [f64; PERIODS], Option<f64>, usize)> = (0..aircraft
+        .box_count())
         .into_par_iter()
         .with_min_len(1_024)
         .map(|index| {
@@ -80,7 +88,7 @@ pub fn tile_energy(
             let east_m = centroid[0] - receiver.position[0];
             let north_m = centroid[1] - receiver.position[1];
             if east_m.hypot(north_m) > AIRCRAFT_REACH_M {
-                return ([0.0; PERIODS], None, 0);
+                return ([0.0; PERIODS], [0.0; PERIODS], None, 0);
             }
             let at_receiver = AircraftBoxAtReceiver {
                 centroid_m: [
@@ -102,21 +110,38 @@ pub fn tile_energy(
             let energy: [f64; PERIODS] = std::array::from_fn(|period| {
                 energy(sel.sel_db[period]) / (PERIOD_HOURS[period] * 3_600.0)
             });
+            // The box's flights of a year split over the periods as its SEL energy is, each
+            // period's rate over its hours; lambda is that rate times the slant over the speed.
+            let period_sel: [f64; PERIODS] =
+                std::array::from_fn(|period| physics::bands::energy(sel.sel_db[period]));
+            let total_sel: f64 = period_sel.iter().sum();
+            let slant = sel.closest.on_line_m[0]
+                .hypot(sel.closest.on_line_m[1])
+                .hypot(sel.closest.on_line_m[2]);
+            let lambda: [f64; PERIODS] = std::array::from_fn(|period| {
+                if total_sel <= 0.0 {
+                    return 0.0;
+                }
+                let flights = f64::from(record.flights) / 365.25 * period_sel[period] / total_sel;
+                flights / (PERIOD_HOURS[period] * 3_600.0) * slant / FLIGHT_SPEED_M_S
+            });
             let bound = (record.piece_count > 0).then(|| {
                 record.loudest_lamax_db
                     + lamax_rise_bound_db(nearest_slant_m(&record, tile, frame, receiver))
             });
-            (energy, bound, 1)
+            (energy, lambda, bound, 1)
         })
         .collect();
     let mut answer = TileAnswer {
         energy: [0.0; PERIODS],
+        energy_lambda: [0.0; PERIODS],
         boxes: 0,
         lamax_bounds: Vec::new(),
     };
-    for (index, (energy, bound, count)) in per_box.iter().enumerate() {
-        for (total, value) in answer.energy.iter_mut().zip(energy) {
-            *total += value;
+    for (index, (energy, lambda, bound, count)) in per_box.iter().enumerate() {
+        for period in 0..PERIODS {
+            answer.energy[period] += energy[period];
+            answer.energy_lambda[period] += energy[period] * lambda[period];
         }
         answer.boxes += count;
         if let Some(bound) = bound {

@@ -221,6 +221,13 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         "total_lden": totals.get("lden"),
         "total": totals,
         "sources": layers,
+        "percentiles": update.percentiles.map(|p| {
+            let periods = |levels: [f64; PERIODS]| {
+                let round = |value: f64| value.is_finite().then(|| (value * 10.0).round() / 10.0);
+                json!({"day": round(levels[0]), "evening": round(levels[1]), "night": round(levels[2])})
+            };
+            json!({"l10": periods(p.l10), "l50": periods(p.l50), "l90": periods(p.l90)})
+        }),
         "top_contributors": contributors,
         "top_flights": flights,
         "stats": {
