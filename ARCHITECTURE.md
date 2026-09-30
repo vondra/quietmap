@@ -45,7 +45,9 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
   missing file mean "empty"; an unfinished build is never served.
 - Global tables ship with the program: physics tables (NPD, CNOSSOS coefficients) and one
   weather table (favourable probability per period and 16 sectors, 0.5 deg). Air absorption is
-  ISO 9613-1 at 15 C and 70 %; road emission is frozen at the CNOSSOS reference temperature.
+  ISO 9613-1 at 15 C and 70 %, and the NPD curves are moved to that air from the AIR-1845
+  atmosphere they come in (Doc 29 Appendix D, with the impedance adjustment); road emission is
+  frozen at the CNOSSOS reference temperature, with its gradient and junction terms.
 - Reading is always whole files with plain reads, all files of a ring at once, one reader per
   file (cold on NVMe 5-8x faster than mmap with MADV_WILLNEED, whose faults read 32 KB at a
   time).
@@ -54,7 +56,9 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
 
 Stage 0/1 turns a year of ADS-B traces into flight segments per day (`build/src/aircraft`):
 altitudes above EGM2008 (geometric altitude is ellipsoidal: the flight's own offset, else a
-regional one, else pressure), Doc 29 phases and powers. `aircraft-shuffle` sorts the window's
+regional one, else pressure), Doc 29 phases and powers (the force balance with the observed
+climb and acceleration; below the landing configuration height an arrival's flap and gear, Doc 29
+B11). `aircraft-shuffle` sorts the window's
 segments into z9 squares once; `aircraft-boxes` then builds a square at a time. A box is a
 web-map cell x a clearance slab above the highest terrain within one edge; the edge grows with
 clearance so that it spans D = 3 dB of the steepest NPD slope there (first layer about 50 m).
@@ -84,10 +88,9 @@ ring 2, 3, ... until every kind's reach is covered (ground sources ~12 km, aircr
 A ring beyond a kind's reach skips that kind's files. One HTTP response streams the updates as
 lines of JSON (each <= 100 KB).
 
-1. Upper bound per source: free field plus the mixed ground and diffraction gain (6 dB
-   homogeneous, 18 dB favourable, mixed at the largest favourable probability of the
-   receiver's weather row) plus the receiver reflection; aircraft boxes use their own bound.
-   Sort per layer.
+1. Upper bound per source: free field plus the ground and diffraction gain (18 dB in either
+   state: an elevated source gains more than the 6 dB homogeneous corner of a ground source)
+   plus the receiver reflection; aircraft boxes use their own bound. Sort per layer.
 2. Full physics from the loudest. One omitted-energy account per layer and period runs across
    all rings: a source is skipped only while the bounds of everything skipped so far stay below
    (10^(0.1/10) - 1) x the energy evaluated. Never a per-source threshold.
@@ -101,6 +104,11 @@ lines of JSON (each <= 100 KB).
    outline of the same building).
 6. Until every ring is read the answer says it is partial. A failed read is an error, never a
    quieter answer. Exact mode (benchmark only) is the same loop with the stop rule off.
+7. The final update also carries the levels exceeded 10, 50 and 90 % of the time (each
+   contributor a line of Kurze's Poisson statistics at its own lambda, the sum drawn with
+   stratified draws seeded by the click) and the share of residents expected to be highly
+   annoyed (WHO 2018 curves per source, road traffic's intermittency credit, annoyance
+   equivalents).
 
 ## Web
 
