@@ -33,6 +33,21 @@ const ARRIVAL: u8 = 1;
 const DEPARTURE: u8 = 2;
 const VEHICLE: u8 = 4;
 const SECONDARY_SHIFT: u8 = 3;
+/// A leg on a runway that is not a take-off roll and slower than this taxis: backtracking,
+/// crossing the runway or turning off at the end of a landing roll, at idle thrust (taxi levels).
+/// dev4 took every leg on a runway as a roll, 15 dB above taxiing at 15 kt, and counted a flight
+/// that crossed a runway as an arrival; a movement now needs a leg this fast on the runway.
+const ROLL_MIN_KT: f64 = 40.0;
+
+/// What a leg does on a line: a runway's slow legs taxi unless they are a take-off roll.
+fn operation_of_leg(line: GroundOperation, leg: &GroundLeg) -> GroundOperation {
+    match line {
+        GroundOperation::RunwayRoll if !leg.departure && leg.speed_kt < ROLL_MIN_KT => {
+            GroundOperation::Taxi
+        }
+        operation => operation,
+    }
+}
 
 /// What a window gathers: per line, period and band the sound energy per metre of an average day
 /// (linear, pW s per metre), and per airport its arrivals, departures and ground vehicles of an
@@ -63,11 +78,12 @@ fn leg_hits(
     index.project(leg.start, leg.end, scratch);
     let mut hits = Vec::with_capacity(scratch.len());
     for &(line, overlap_m) in scratch.iter() {
-        let operation = aeroways.lines[line as usize].operation;
+        let operation = operation_of_leg(aeroways.lines[line as usize].operation, leg);
         let (pass, movement) = match leg.mover {
             Mover::Aircraft { class } => (
                 aircraft_pass_energy_db(class, operation, leg.departure, leg.speed_kt),
                 match (operation, leg.departure) {
+                    (GroundOperation::RunwayRoll, _) if leg.speed_kt < ROLL_MIN_KT => 0,
                     (GroundOperation::RunwayRoll, true) => DEPARTURE,
                     (GroundOperation::RunwayRoll, false) => ARRIVAL,
                     (GroundOperation::Taxi, _) => 0,

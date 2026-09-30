@@ -205,6 +205,35 @@ fn movements_count_once_per_flight_and_day_at_their_weight() {
     assert!(close(day_energy(2), 0.25 * taxi + 0.25 * vehicle));
 }
 
+/// On a runway, a flight crossing at 15 kt taxis and is no movement; the start of a take-off roll
+/// at 15 kt rolls but counts only with a leg of the roll above 40 kt; a landing at 70 kt arrives.
+#[test]
+fn slow_legs_on_a_runway_taxi_unless_they_roll_off() {
+    let aeroways = airport(1);
+    let index = index_of(&aeroways);
+    let b738 = Mover::Aircraft { class: 2 };
+    let slow = |flight: u64, departure: bool| GroundLeg {
+        departure,
+        speed_kt: 15.0,
+        ..leg(flight, b738, at(0.0, 0.0), at(0.0, 250.0))
+    };
+    let mut landing = leg(3, b738, at(0.0, 0.0), at(0.0, 250.0));
+    landing.departure = false;
+    let legs = [slow(1, false), slow(2, true), landing];
+    let mut traffic = Traffic::new(&aeroways);
+    traffic.add_day(&aeroways, &index, &legs, (1.0, 0.0));
+    assert_eq!(traffic.movements[0], [1.0, 0.0, 0.0]);
+    let total = |bands: [f64; BANDS]| bands.iter().map(|level| energy(*level)).sum::<f64>();
+    let pass = |operation, departure, speed| {
+        total(aircraft_pass_energy_db(2, operation, departure, speed).unwrap())
+    };
+    let expected = pass(GroundOperation::Taxi, false, 15.0)
+        + pass(GroundOperation::RunwayRoll, true, 15.0)
+        + pass(GroundOperation::RunwayRoll, false, 70.0);
+    let got: f64 = traffic.energy[0][0].iter().sum();
+    assert!((got / expected - 1.0).abs() < 1e-3, "{got} vs {expected}");
+}
+
 #[test]
 fn a_day_counts_on_its_lists() {
     let window = Window {
