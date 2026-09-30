@@ -121,6 +121,7 @@ pub fn write_tiles(
                 centroid_altitude_m: values.centroid_m[2],
                 axis_rad: values.axis_rad,
                 gradient: values.gradient.clamp(-3.0, 3.0),
+                gradient_spread: values.gradient_spread.min(6.0),
                 piece_length_m: values.piece_length_m,
                 flights: (entry.flights_per_day * DAYS_PER_YEAR).round() as u32,
                 energy_db: values.levels_db,

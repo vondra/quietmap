@@ -56,6 +56,7 @@ fn box_day_sel(values: &BoxValues) -> Option<f64> {
         centroid_m: values.centroid_m,
         axis_rad: values.axis_rad,
         gradient: values.gradient,
+        gradient_spread: values.gradient_spread,
         piece_length_m: values.piece_length_m,
         levels_db: &values.levels_db,
         tail_levels_db: &values.tail_levels_db,
@@ -152,10 +153,9 @@ const ABEAM: [[f64; 2]; 4] = [
 ];
 const ON_THE_EXTENSION: [[f64; 2]; 2] = [[-4_000.0, 300.0], [-8_000.0, 1_000.0]];
 
-/// One flow reads within 0.1 dB of the sum of its pieces abeam and within 0.6 dB on its
-/// extension, where the average piece may also be filtered out whole (8 km behind the box,
-/// Filter D drops the average climb extended below the ground while shallower pieces still
-/// count, a few dB at most: far behind, a box is not what is heard).
+/// One flow reads within 0.1 dB of the sum of its pieces abeam and within 0.6 dB 4 km behind it
+/// on its extension (8 km behind, 2.3 dB: the pieces' extended lines scatter by hundreds of
+/// metres there; far behind, a box is not what is heard).
 #[test]
 fn a_box_of_one_flow_reads_as_the_sum_of_its_pieces() {
     let pieces = bundle(false);
@@ -178,9 +178,10 @@ fn a_box_of_one_flow_reads_as_the_sum_of_its_pieces() {
 
 /// Mixed flows share one average aircraft: abeam within 0.3 dB (12 km off, between 25,000 ft
 /// and the tail anchor, the mix's absorption is interpolated linearly and overstates it by a
-/// quarter decibel), but on the extension one mean gradient cannot stand for climbs and descents
-/// extended kilometres (3 dB measured here); the benchmark decides whether boxes need direction
-/// or gradient bins.
+/// quarter decibel). On the extension 4-8 km behind the box, the two average pieces at the
+/// gradient plus and minus its spread still miss climbs and descents extended that far by up to
+/// 3 dB; a kilometre along, beside a runway, they took the error from 0.7 to 0.2 dB (eight days
+/// at three airports).
 #[test]
 fn a_box_of_mixed_flows_errs_on_its_extension_only() {
     let pieces = bundle(true);

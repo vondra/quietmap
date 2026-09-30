@@ -21,6 +21,7 @@ fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
         centroid_altitude_m: 371.0,
         axis_rad: 2.5,
         gradient: -0.052,
+        gradient_spread: 0.0412,
         piece_length_m: [44.0, 51.0, 38.0],
         flights: 123_456,
         energy_db,

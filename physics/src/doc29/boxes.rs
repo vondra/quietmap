@@ -3,7 +3,10 @@
 //! its average aircraft (the emission-weighted centroid, one axis and gradient, the mean piece
 //! length) and applies to that average piece what the kernel applies to one segment: Delta_F with
 //! the box's scaled distance, the lateral attenuation, the installation correction of the box's
-//! installation shares and the screening.
+//! installation shares and the screening. A box whose pieces climb and descend is read as two
+//! average pieces, half its energy each, at its gradient plus and minus their spread: the kernel
+//! takes the elevation angle where each piece's extended line passes the receiver, kilometres
+//! from the box beside a runway, and one mean gradient cannot stand for climbs and descents there.
 //!
 //! Why it matches the pieces: the energies add at every NPD distance; the geometry terms are the
 //! kernel's for one segment; Delta_F of short pieces (length << d_lambda) is proportional to
@@ -31,6 +34,8 @@ pub struct AircraftBoxAtReceiver<'a> {
     pub axis_rad: f64,
     /// Climb (rise over horizontal run) along `axis_rad`.
     pub gradient: f64,
+    /// The spread of the pieces' gradients about it.
+    pub gradient_spread: f64,
     /// Per period, the energy-weighted mean horizontal length of the pieces (m).
     pub piece_length_m: [f64; PERIODS],
     /// Per period, the summed SEL energy's level at each NPD distance (dB, -inf silent).
@@ -126,8 +131,40 @@ fn shares_at(shares: [[f64; 3]; 2], slant_m: f64) -> [f64; 3] {
     std::array::from_fn(|k| shares[0][k] + t * (shares[1][k] - shares[0][k]))
 }
 
-/// The box's SEL sums at the receiver.
+/// The box's SEL sums at the receiver: its two average pieces, or one without a spread (the terms
+/// besides the sums are the lower piece's).
 pub fn box_sel_at_receiver(
+    aircraft_box: &AircraftBoxAtReceiver,
+    horizons: &impl ReceiverHorizons,
+) -> BoxSel {
+    let spread = aircraft_box.gradient_spread;
+    if spread <= 0.0 {
+        return average_piece_sel(aircraft_box, horizons);
+    }
+    let at = |gradient: f64| {
+        let piece = AircraftBoxAtReceiver {
+            gradient,
+            ..*aircraft_box
+        };
+        average_piece_sel(&piece, horizons)
+    };
+    let (lower, upper) = (
+        at(aircraft_box.gradient - spread),
+        at(aircraft_box.gradient + spread),
+    );
+    let sel_db = std::array::from_fn(|period| {
+        let sum = 0.5 * (energy(lower.sel_db[period]) + energy(upper.sel_db[period]));
+        if sum > 0.0 {
+            10.0 * sum.log10()
+        } else {
+            f64::NEG_INFINITY
+        }
+    });
+    BoxSel { sel_db, ..lower }
+}
+
+/// The SEL sums of one average piece at the receiver.
+fn average_piece_sel(
     aircraft_box: &AircraftBoxAtReceiver,
     horizons: &impl ReceiverHorizons,
 ) -> BoxSel {

@@ -33,6 +33,9 @@ pub struct BoxSums {
     /// horizontal direction (its sign follows the direction the axis ends up pointing).
     weighted_doubled_direction: [f64; 2],
     weighted_gradient_direction: [f64; 2],
+    /// The squared gradients on the doubled-angle terms (cos^2, sin^2, sin cos of each piece's
+    /// direction): the spread of the gradients along the axis, once it is known.
+    weighted_squared_gradient: [f64; 3],
     /// Per share slant, the pieces' energy (all periods) by installation.
     installation_energy: [[f64; 3]; 2],
     pieces: u64,
@@ -48,6 +51,8 @@ pub struct BoxValues {
     pub centroid_m: [f64; 3],
     pub axis_rad: f64,
     pub gradient: f64,
+    /// The spread (standard deviation) of the pieces' gradients along the axis about it.
+    pub gradient_spread: f64,
     /// Per period, the energy-weighted mean horizontal length of the pieces.
     pub piece_length_m: [f64; PERIODS],
     /// Energy shares of the installations at each of [`INSTALLATION_SHARE_SLANTS_M`].
@@ -100,6 +105,10 @@ impl BoxSums {
             let gradient = delta[2] / length_m;
             self.weighted_gradient_direction[0] += weight * gradient * cos;
             self.weighted_gradient_direction[1] += weight * gradient * sin;
+            let squared = weight * gradient * gradient;
+            self.weighted_squared_gradient[0] += squared * cos * cos;
+            self.weighted_squared_gradient[1] += squared * sin * sin;
+            self.weighted_squared_gradient[2] += squared * sin * cos;
         }
         let slot = match installation {
             Installation::Wing => 0,
@@ -139,6 +148,13 @@ impl BoxSums {
         for axis in 0..2 {
             self.weighted_doubled_direction[axis] += other.weighted_doubled_direction[axis];
             self.weighted_gradient_direction[axis] += other.weighted_gradient_direction[axis];
+        }
+        for (sum, value) in self
+            .weighted_squared_gradient
+            .iter_mut()
+            .zip(other.weighted_squared_gradient)
+        {
+            *sum += value;
         }
         for (sums, values) in self
             .installation_energy
@@ -181,6 +197,9 @@ impl BoxSums {
         let gradient = (self.weighted_gradient_direction[0] * cos
             + self.weighted_gradient_direction[1] * sin)
             / self.weight;
+        let [cos_cos, sin_sin, sin_cos] = self.weighted_squared_gradient;
+        let mean_square =
+            (cos_cos * cos * cos + sin_sin * sin * sin + 2.0 * sin_cos * sin * cos) / self.weight;
         Some(BoxValues {
             levels_db,
             tail_levels_db: self.tail_energy.map(level),
@@ -188,6 +207,7 @@ impl BoxSums {
             centroid_m: self.weighted_midpoint_m.map(|sum| sum / self.weight),
             axis_rad,
             gradient,
+            gradient_spread: (mean_square - gradient * gradient).max(0.0).sqrt(),
             piece_length_m: {
                 let (weights, lengths) = (
                     self.period_weight.iter().sum::<f64>(),

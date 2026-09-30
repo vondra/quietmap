@@ -86,6 +86,7 @@ pub struct BoxDiagnosis {
     pub flights: u32,
     pub axis_deg: f64,
     pub gradient: f64,
+    pub gradient_spread: f64,
     pub piece_length_m: Levels,
     pub exact_db: Levels,
     pub boxed_db: Levels,

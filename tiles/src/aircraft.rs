@@ -9,7 +9,7 @@ mod parse;
 
 pub use parse::Aircraft;
 
-const MAGIC: &[u8; 8] = b"qmair1\n\0";
+const MAGIC: &[u8; 8] = b"qmair2\n\0";
 const HEADER_BYTES: usize = 24;
 const BOX_BYTES: usize = 128;
 const FLIGHT_BYTES: usize = 20;
@@ -67,12 +67,14 @@ pub struct AircraftBox {
     pub centroid: [i16; 2],
     pub centroid_altitude_m: f64,
     /// Mean horizontal axis in [0, pi) (there and back are one axis), radians anticlockwise from
-    /// east, and the climb gradient (rise over run) along it.
+    /// east, and the climb gradient (rise over run) along it, and the spread of the pieces'
+    /// gradients about it (1e-4 steps).
     pub axis_rad: f64,
     pub gradient: f64,
+    pub gradient_spread: f64,
     /// Per period, the energy-weighted mean length of the pieces (1 m steps).
     pub piece_length_m: [f64; PERIODS],
-    /// Flights that crossed the box in the year.
+    /// Flights that crossed the box in the year (below 2^24).
     pub flights: u32,
     /// Per period, the average day's summed SEL energy at each NPD distance (dB; -inf silent),
     /// and at the tail anchor past them (16 km).
@@ -84,9 +86,10 @@ pub struct AircraftBox {
     /// Energy shares of the installations at 1,000 ft and at the tail anchor (1/255 steps; the
     /// last is what the first two leave).
     pub installation_shares: [[f64; INSTALLATIONS]; 2],
-    /// The box's loudest pieces: `first_piece .. first_piece + piece_count` in the piece table,
-    /// and the loudest LAmax among them at 1,000 ft (dB, rounded up to 0.5 dB; -inf without
-    /// pieces): with the most an LAmax curve can rise from there, a bound on what they reach.
+    /// The box's loudest pieces: `first_piece .. first_piece + piece_count` in the piece table
+    /// (`first_piece` below 2^24), and the loudest LAmax among them at 1,000 ft (dB, rounded up
+    /// to 0.5 dB; -inf without pieces): with the most an LAmax curve can rise from there, a
+    /// bound on what they reach.
     pub first_piece: u32,
     pub piece_count: u8,
     pub loudest_lamax_db: f64,
@@ -197,7 +200,9 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox) {
     );
     bytes.extend_from_slice(&(gradient as i16).to_le_bytes());
     bytes.extend_from_slice(&metres_u16(record.piece_length_m[0]).to_le_bytes());
-    bytes.extend_from_slice(&record.flights.to_le_bytes());
+    assert!(record.flights < 1 << 24, "{} flights", record.flights);
+    bytes.extend_from_slice(&record.flights.to_le_bytes()[..3]);
+    bytes.push(record.piece_count);
     for level in record.energy_db.iter().flatten() {
         bytes.extend_from_slice(&level_code(*level).to_le_bytes());
     }
@@ -220,8 +225,15 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox) {
     for length in &record.piece_length_m[1..] {
         bytes.extend_from_slice(&metres_u16(*length).to_le_bytes());
     }
-    bytes.extend_from_slice(&record.first_piece.to_le_bytes());
-    bytes.push(record.piece_count);
+    assert!(record.first_piece < 1 << 24, "piece {}", record.first_piece);
+    bytes.extend_from_slice(&record.first_piece.to_le_bytes()[..3]);
+    let spread = (record.gradient_spread * 10_000.0).round();
+    assert!(
+        (0.0..=f64::from(u16::MAX)).contains(&spread),
+        "gradient spread {}",
+        record.gradient_spread
+    );
+    bytes.extend_from_slice(&(spread as u16).to_le_bytes());
     bytes.push(lamax_code(record.loudest_lamax_db));
     assert_eq!(bytes.len() - start, BOX_BYTES);
 }

@@ -91,6 +91,7 @@ fn boxed_db(files: &[(TileId, Vec<u8>)], receiver: [f64; 2]) -> f64 {
                 ],
                 axis_rad: record.axis_rad,
                 gradient: record.gradient,
+                gradient_spread: record.gradient_spread,
                 piece_length_m: record.piece_length_m,
                 levels_db: &record.energy_db,
                 tail_levels_db: &record.tail_energy_db,

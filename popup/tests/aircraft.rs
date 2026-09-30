@@ -79,6 +79,7 @@ fn box_of(emission: &SegmentEmission, start: [f64; 3], end: [f64; 3]) -> Aircraf
         centroid_altitude_m: values.centroid_m[2],
         axis_rad: values.axis_rad,
         gradient: values.gradient,
+        gradient_spread: values.gradient_spread,
         piece_length_m: values.piece_length_m,
         flights: 1,
         energy_db: values.levels_db,

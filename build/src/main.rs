@@ -293,6 +293,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                                 "flights": found.flights,
                                 "axis_deg": found.axis_deg,
                                 "gradient": found.gradient,
+                                "gradient_spread": found.gradient_spread,
                                 "piece_length_m": found.piece_length_m,
                                 "exact_db": found.exact_db,
                                 "boxed_db": found.boxed_db,

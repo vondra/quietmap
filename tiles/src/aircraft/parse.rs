@@ -26,6 +26,10 @@ fn u32_at(record: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(record[at..at + 4].try_into().unwrap())
 }
 
+fn u24_at(record: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([record[at], record[at + 1], record[at + 2], 0])
+}
+
 impl<'a> Aircraft<'a> {
     pub fn parse(bytes: &'a [u8]) -> Result<Self, FormatError> {
         if bytes.len() < HEADER_BYTES || &bytes[..8] != MAGIC {
@@ -45,7 +49,7 @@ impl<'a> Aircraft<'a> {
         };
         for index in 0..boxes {
             let record = parsed.box_record(index);
-            let (zoom, first, count) = (record[0], u32_at(record, 122), usize::from(record[126]));
+            let (zoom, first, count) = (record[0], u24_at(record, 122), usize::from(record[27]));
             if !(12..=super::MAXIMUM_ZOOM).contains(&zoom) || record[1] > 1 {
                 return Err(FormatError("aircraft: bad box zoom or group"));
             }
@@ -112,8 +116,9 @@ impl<'a> Aircraft<'a> {
             centroid_altitude_m: f64::from(i16_at(record, 16)),
             axis_rad: f64::from(u16_at(record, 18)) / 65_536.0 * std::f64::consts::PI,
             gradient: f64::from(i16_at(record, 20)) / 10_000.0,
+            gradient_spread: f64::from(u16_at(record, 125)) / 10_000.0,
             piece_length_m: [22, 118, 120].map(|at| f64::from(u16_at(record, at))),
-            flights: u32_at(record, 24),
+            flights: u24_at(record, 24),
             energy_db: std::array::from_fn(|period| {
                 std::array::from_fn(|distance| energy(28 + 2 * (period * NPD_DISTANCES + distance)))
             }),
@@ -122,8 +127,8 @@ impl<'a> Aircraft<'a> {
             }),
             tail_energy_db: std::array::from_fn(|period| energy(112 + 2 * period)),
             installation_shares,
-            first_piece: u32_at(record, 122),
-            piece_count: record[126],
+            first_piece: u24_at(record, 122),
+            piece_count: record[27],
             loudest_lamax_db: lamax_db(record[127]),
         }
     }
