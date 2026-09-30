@@ -6,12 +6,13 @@
 //! Map: [`npd`] (curves, interpolation, tail, scaled distance, power rows per class), [`thrust`]
 //! (a segment's power bracket), [`helicopters`] (certified levels per designator), [`corrections`]
 //! (Delta_V, Delta_F, Lambda, Delta_I), [`screening`] (edge loss and its composition with Lambda),
-//! [`segment`] (a segment at a receiver), [`box_sums`] and [`boxes`] (an aircraft box: the sums a
-//! builder keeps, and the click-time equation), [`bound`] (upper bound for the stop rule); generated
+//! [`segment`] (a segment at a receiver), [`box_geometry`], [`box_sums`] and [`boxes`] (an aircraft
+//! box: its size, the sums a builder keeps, and the click-time equation), [`bound`] (upper bound for the stop rule); generated
 //! tables [`profiles_generated`] (profiles, classes, designator mapping) and [`thrust_generated`]
 //! (thrust rows per class).
 
 pub mod bound;
+pub mod box_geometry;
 pub mod box_sums;
 pub mod boxes;
 pub mod corrections;
