@@ -2,14 +2,17 @@
 //! z9 square that owns the node's position, so neighbouring tiles share identical seam nodes even
 //! where two dev4 squares disagree (up to 0.2 m).
 
+pub mod national;
+
 use crate::dev4::{Dev4, Square, z9_raster_window};
 use crate::output::write_tile;
+use national::NationalHeights;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
 use tiles::Kind;
 use tiles::geo::{Mercator, TileId};
-use tiles::terrain::{NODES_PER_DEGREE, Node, Window, encode};
+use tiles::terrain::{HEIGHT_MISSING, NODES_PER_DEGREE, Node, Window, encode, height_m_of_code};
 
 /// One dev4 square's three channels; an empty square is verified ocean.
 struct SquareRaster {
@@ -84,8 +87,29 @@ fn owner_square(north_index: i32, east_index: i32) -> Square {
     }
 }
 
-/// Writes the terrain tiles of `squares`; returns the number written (all-ocean tiles are absent).
-pub fn build(dev4: &Dev4, squares: &[Square], out: &Path) -> Result<usize, String> {
+/// A node with the national models laid over its height (the first that has a say).
+fn with_national(mut node: Node, north: i32, east: i32, national: &[NationalHeights]) -> Node {
+    if node.height_code == HEIGHT_MISSING || node == OCEAN_NODE {
+        return node;
+    }
+    if let Some((height_m, weight)) = national.iter().find_map(|model| model.at(north, east)) {
+        let base_m = height_m_of_code(node.height_code);
+        let blended_m = base_m + weight * (height_m - base_m);
+        node.height_code = ((blended_m + 500.0) * 5.0)
+            .round()
+            .clamp(0.0, f64::from(HEIGHT_MISSING - 1)) as u16;
+    }
+    node
+}
+
+/// Writes the terrain tiles of `squares`, the `national` models laid over dev4's heights; returns
+/// the number written (all-ocean tiles are absent).
+pub fn build(
+    dev4: &Dev4,
+    squares: &[Square],
+    national: &[NationalHeights],
+    out: &Path,
+) -> Result<usize, String> {
     let mut written = 0;
     for &square in squares {
         let mut rasters = HashMap::new();
@@ -114,7 +138,7 @@ pub fn build(dev4: &Dev4, squares: &[Square], out: &Path) -> Result<usize, Strin
                             .ok_or_else(|| {
                                 format!("{tile:?}: node {north}/{east} outside square {square:?}")
                             })?;
-                        nodes.push(node);
+                        nodes.push(with_national(node, north, east, national));
                     }
                 }
                 if nodes.iter().all(|node| *node == OCEAN_NODE) {

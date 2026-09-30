@@ -2,14 +2,16 @@
 //!
 //! Until the builders read the sources themselves, `qm-build dev4` converts squares of the dev4
 //! z9 tree: `qm-build dev4 --prepared DIR --rasters DIR --out DIR --squares X:Y[,X:Y..]
-//! [--kinds terrain,obstacles,sources] [--airport-traffic DIR]` (sources need the airport traffic);
+//! [--kinds terrain,obstacles,sources] [--airport-traffic DIR] [--national-dem FILE,..]` (sources
+//! need the airport traffic; terrain lays the national models over dev4's heights);
 //! `qm-build weather --rasters DIR --out FILE` cuts the global weather table; `qm-build complete
 //! --out DIR --note TEXT` writes the completion marker last.
 //!
 //! Aircraft: `qm-build geoid --tiff FILE --out FILE` converts the EGM2008 GeoTIFF once;
 //! `qm-build aircraft-segments (--days D,D.. [--increment-days D,..] | --anchor YYYY-MM)
 //! --primary DIR [--secondary DIR] --rasters DIR --geoid FILE --out DIR [--boxes S,W,N,E;..]
-//! [--threads N]` writes per-day segments, flight tables and receipts into a scratch directory;
+//! [--threads N] [--national-dem FILE,..]` writes per-day segments, flight tables and receipts
+//! into a scratch directory;
 //! `qm-build airport-traffic --prepared DIR --segments DIR --days D,.. [--increment-days D,..]
 //! --squares X:Y[,X:Y..] --out DIR` projects the window's ground legs onto the aeroway lines of
 //! the squares (and their neighbours) once, one traffic file per square.
@@ -75,6 +77,18 @@ fn parse_squares(text: &str) -> Result<Vec<Square>, String> {
 }
 
 /// The sampling window: `--days` (baseline) and `--increment-days`, comma separated.
+/// The national terrain models of `--national-dem FILE,..` (none without it).
+fn national_models(options: &Arguments) -> Result<Vec<terrain::national::NationalHeights>, String> {
+    options
+        .optional("national-dem")
+        .map_or(Ok(Vec::new()), |paths| {
+            paths
+                .split(',')
+                .map(|path| terrain::national::NationalHeights::read(Path::new(path)))
+                .collect()
+        })
+}
+
 fn sampling_window(options: &Arguments) -> boxes::Window {
     let listed = |key: &str| {
         options
@@ -126,7 +140,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
             for kind in kinds.split(',') {
                 let started = std::time::Instant::now();
                 let written = match kind {
-                    "terrain" => terrain::build(&dev4, &squares, &out)?,
+                    "terrain" => {
+                        terrain::build(&dev4, &squares, &national_models(&options)?, &out)?
+                    }
                     "obstacles" => obstacles::build(&dev4, &squares, &out)?,
                     "sources" => sources::build(
                         &dev4,
@@ -177,6 +193,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 geoid: Path::new(options.get("geoid")?),
                 boxes: options.optional("boxes"),
                 out: &out,
+                national: national_models(&options)?,
             })
         }
         "aircraft-shuffle" => {

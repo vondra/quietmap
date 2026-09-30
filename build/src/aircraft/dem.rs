@@ -2,9 +2,11 @@
 //! EGM2008 heights): the nearest node, with dev4 Stage 1's arithmetic. A node is read with one
 //! positioned read, without read-ahead (a flight uses a few nodes per page): the page cache keeps
 //! what days share and nothing terrain-sized is mapped into the process. An empty file is verified
-//! ocean; a missing file or a node without data fails the day, never a guessed height.
+//! ocean; a missing file or a node without data fails the day, never a guessed height. National
+//! models are laid over the heights as the terrain tiles lay them (`terrain::national`).
 
 use crate::dev4::{Dev4, Square, z9_raster_window};
+use crate::terrain::national::NationalHeights;
 use std::collections::HashMap;
 use std::fs::File;
 use std::os::fd::AsRawFd;
@@ -22,6 +24,7 @@ pub enum SquareHeights {
 pub struct TerrainHeights {
     rasters: Dev4,
     squares: RwLock<HashMap<Square, Arc<SquareHeights>>>,
+    national: Vec<NationalHeights>,
 }
 
 /// The square a flight sampled last: consecutive samples mostly share it.
@@ -32,7 +35,13 @@ impl TerrainHeights {
         TerrainHeights {
             rasters,
             squares: RwLock::new(HashMap::new()),
+            national: Vec::new(),
         }
+    }
+
+    /// The same heights with national models laid over them.
+    pub fn with_national(self, national: Vec<NationalHeights>) -> Self {
+        TerrainHeights { national, ..self }
     }
 
     /// Terrain height in metres at the node nearest to (lat, lon).
@@ -61,10 +70,20 @@ impl TerrainHeights {
             2 * (row * window.columns as usize + column) as u64,
         )
         .map_err(|error| format!("terrain of square {square:?}: {error}"))?;
-        match u16::from_le_bytes(code) {
-            HEIGHT_MISSING => Err(format!("no terrain height at {lat} {lon}")),
-            code => Ok(height_m_of_code(code) as f32),
-        }
+        let base_m = match u16::from_le_bytes(code) {
+            HEIGHT_MISSING => return Err(format!("no terrain height at {lat} {lon}")),
+            code => height_m_of_code(code),
+        };
+        let (north, east) = (
+            window.north_node - row as i32,
+            window.west_node + column as i32,
+        );
+        Ok(
+            match self.national.iter().find_map(|model| model.at(north, east)) {
+                Some((height_m, weight)) => base_m + weight * (height_m - base_m),
+                None => base_m,
+            } as f32,
+        )
     }
 
     fn square(&self, square: Square) -> Result<Arc<SquareHeights>, String> {

@@ -138,6 +138,8 @@ pub struct Run<'a> {
     pub geoid: &'a Path,
     pub boxes: Option<&'a str>,
     pub out: &'a Path,
+    /// National terrain models laid over the dev4 heights.
+    pub national: Vec<crate::terrain::national::NationalHeights>,
 }
 
 /// `qm-build aircraft-segments`: extract every requested day not yet complete, then admit.
@@ -149,7 +151,8 @@ pub fn run(run: Run) -> Result<(), String> {
         terrain: dem::TerrainHeights::new(Dev4 {
             prepared: Default::default(),
             rasters: run.rasters.to_path_buf(),
-        }),
+        })
+        .with_national(run.national),
         geoid: geoid::Geoid::read(run.geoid)?,
         scope,
     };
