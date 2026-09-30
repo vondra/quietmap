@@ -1,7 +1,11 @@
 //! Foliage attenuation (ISO 9613-2:2024 Annex A.2.2, Table A.1) from the metres a state's direct
-//! ray spends in canopy: every profile interval contributes its slant length times the fraction of
-//! its ends inside the canopy volume times the mean canopy cover. The canopy stands a constant
-//! [`CANOPY_HEIGHT_M`] above the ground wherever there is cover. The homogeneous ray is straight;
+//! ray spends in dense foliage: every profile interval contributes its slant length times the
+//! fraction of its ends inside the canopy volume. Annex A.1 counts foliage only where it is dense
+//! enough to block the view completely, so a node is foliage from [`DENSE_COVER`] of tree cover
+//! up and not at all below: dev4 weighted every interval by its cover, so that the scattered trees
+//! of gardens and parkland (12-32 % of Prague's nodes, mean cover 0.05-0.15) took 4.5 dB(A) from a
+//! 500 m ray, where the annex gives nothing. The canopy stands a constant [`CANOPY_HEIGHT_M`] above
+//! the ground of dense cover. The homogeneous ray is straight;
 //! the favourable ray is the annex's own curved path of radius 5 km (Figure A.1), not CNOSSOS's
 //! Γ = max(1000, 8d) of the ground and diffraction terms, which dev4 used: 16.7 km over 2 km, so flat
 //! that a motorway 2 km from Kytin (Brdy foothills) grazed a forest belt's canopy for 200 m and lost
@@ -12,9 +16,12 @@ use crate::cnossos::MeteorologicalState;
 use crate::cnossos::rubber_band::StateRay;
 use crate::profile::Profile;
 
-/// Canopy top above the bare earth wherever cover is above zero (dev4's canopy raster moved the
-/// level by a median 0.17 dB against a constant; PLAN-z13 SIMPLIFY).
+/// Canopy top above the bare earth of dense cover (dev4's canopy raster moved the level by a
+/// median 0.17 dB against a constant; PLAN-z13 SIMPLIFY).
 pub const CANOPY_HEIGHT_M: f64 = 20.0;
+/// Tree cover from which a node's foliage blocks the view: a closed canopy (the forests of the
+/// Brdy read 85-97 %, gardens and parkland 10-60 %).
+pub const DENSE_COVER: f64 = 0.6;
 /// Table A.1 row 1: fixed attenuation for 10-20 m of foliage (dB).
 pub const FOLIAGE_SHORT_DB: [f64; BANDS] = [0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 2.0, 3.0];
 /// Table A.1 rows 20-200 m: attenuation rate (dB/m).
@@ -41,7 +48,7 @@ pub fn foliage_attenuation(depth_m: f64) -> [f64; BANDS] {
     std::array::from_fn(|band| FOLIAGE_DB_PER_M[band] * capped)
 }
 
-/// Cover-weighted metres of one state's direct ray inside the canopy volume.
+/// Metres of one state's direct ray inside the canopy volume of dense cover.
 pub fn canopy_depth_on_ray(
     profile: &Profile,
     source_altitude_m: f64,
@@ -56,7 +63,7 @@ pub fn canopy_depth_on_ray(
     };
     let inside = |k: usize, ray_altitude: f64| {
         let ground = profile.ground_m[k];
-        let top = if profile.forest_cover[k] > 0.0 {
+        let top = if profile.forest_cover[k] >= DENSE_COVER {
             ground + CANOPY_HEIGHT_M
         } else {
             ground
@@ -71,8 +78,7 @@ pub fn canopy_depth_on_ray(
         let fraction =
             f64::from(u8::from(inside(i - 1, previous.1)) + u8::from(inside(i, altitude))) / 2.0;
         if fraction > 0.0 {
-            let cover = (profile.forest_cover[i - 1] + profile.forest_cover[i]) / 2.0;
-            depth += fraction * cover * (x - previous.0).hypot(altitude - previous.1);
+            depth += fraction * (x - previous.0).hypot(altitude - previous.1);
         }
         previous = (x, altitude);
     }
@@ -101,10 +107,11 @@ mod tests {
         profile
     }
 
-    /// A 4 m ray through a full forest counts its whole length; half cover counts half; above the
-    /// canopy nothing.
+    /// A 4 m ray through a forest counts its whole length, through a closed canopy of 70 % too;
+    /// half cover and the scattered trees of parkland count nothing (ISO: no view blocked); above
+    /// the canopy nothing.
     #[test]
-    fn depth_is_the_cover_weighted_ray_length_inside_the_canopy() {
+    fn depth_is_the_ray_length_inside_dense_canopy() {
         let full = canopy_depth_on_ray(
             &forest(300.0, 1.0),
             104.0,
@@ -112,13 +119,22 @@ mod tests {
             MeteorologicalState::Homogeneous,
         );
         assert!((full - 300.0).abs() < 1e-9, "{full}");
-        let half = canopy_depth_on_ray(
-            &forest(300.0, 0.5),
+        let closed = canopy_depth_on_ray(
+            &forest(300.0, 0.7),
             104.0,
             104.0,
             MeteorologicalState::Homogeneous,
         );
-        assert!((half - 150.0).abs() < 1e-9, "{half}");
+        assert!((closed - 300.0).abs() < 1e-9, "{closed}");
+        for sparse in [0.5, 0.15] {
+            let depth = canopy_depth_on_ray(
+                &forest(500.0, sparse),
+                104.0,
+                104.0,
+                MeteorologicalState::Homogeneous,
+            );
+            assert_eq!(depth, 0.0, "{sparse}");
+        }
         let above = canopy_depth_on_ray(
             &forest(300.0, 1.0),
             125.0,
