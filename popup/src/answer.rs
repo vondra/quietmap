@@ -5,7 +5,7 @@
 use crate::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver};
 use crate::aircraft::flights::FlightTotals;
 use crate::aircraft::horizons::Horizons;
-use crate::aircraft::ring_aircraft;
+use crate::aircraft::{reads_fine_boxes, ring_aircraft};
 use crate::building::{BuildingClick, loudest_facade};
 use crate::candidates::{
     Attributes, Candidate, DisplayRef, GROUND_REACH_M, TileCandidates, collect,
@@ -123,17 +123,22 @@ pub fn answer(
         if reads_ground {
             kinds.extend([Kind::Terrain, Kind::Obstacles, Kind::Sources]);
         }
-        // From the second ring on, at least a tile edge away, the far boxes hold.
-        let aircraft_kind = if ring == 1 {
-            Kind::Aircraft
-        } else {
-            Kind::AircraftFar
-        };
+        // Fine boxes near the click, far boxes elsewhere.
         if ring <= aircraft_rings {
-            kinds.push(aircraft_kind);
+            kinds.extend([Kind::Aircraft, Kind::AircraftFar]);
         }
+        let fine = |tile: TileId| reads_fine_boxes(&frame, tile);
         let cell = &rings[ring as usize];
-        let _ = cell.set(RingFiles::read(release, tiles, kinds)?);
+        let _ = cell.set(RingFiles::read(
+            release,
+            tiles,
+            kinds,
+            |tile, kind| match kind {
+                Kind::Aircraft => fine(tile),
+                Kind::AircraftFar => !fine(tile),
+                _ => true,
+            },
+        )?);
         let read = cell.get().expect("the ring was just read");
         (files, bytes, read_seconds) = (
             files + read.file_count,
@@ -163,7 +168,8 @@ pub fn answer(
                     .map(Sources::parse)
                     .transpose();
                 let aircraft = read
-                    .file(index, aircraft_kind)
+                    .file(index, Kind::Aircraft)
+                    .or_else(|| read.file(index, Kind::AircraftFar))
                     .map(Aircraft::parse)
                     .transpose();
                 Ok((

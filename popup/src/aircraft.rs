@@ -15,6 +15,23 @@ use tiles::geo::{LocalFrame, TileId};
 
 /// Boxes computed between two looks at the list's entry level.
 const SEARCH_CHUNK: usize = 16;
+/// Fine boxes are read for the tiles whose nearest point lies within this of the click, far boxes
+/// (four times the edges) for the others: a few kilometres off, the steepest slope is a fraction
+/// of the one at a low box's clearance, and far boxes are a seventh of the fine ones.
+pub const FINE_BOXES_WITHIN_M: f64 = 3_000.0;
+
+/// Whether `tile` is read with its fine boxes for a click at the origin of `frame`.
+pub fn reads_fine_boxes(frame: &LocalFrame, tile: TileId) -> bool {
+    let corner = |dx: f64, dy: f64| {
+        frame.to_metres(tiles::geo::Mercator {
+            x: f64::from(tile.x) + dx,
+            y: f64::from(tile.y) + dy,
+        })
+    };
+    let (a, b) = (corner(0.0, 0.0), corner(1.0, 1.0));
+    let gap = |low: f64, high: f64| (low.min(high)).max(-high.max(low)).max(0.0);
+    gap(a[0], b[0]).hypot(gap(a[1], b[1])) <= FINE_BOXES_WITHIN_M
+}
 
 /// One ring's aircraft at the receiver: every box of its tiles through the click-time equation
 /// (period energies, linear, and the number of boxes heard), and into `flights` the kept pieces

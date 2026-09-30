@@ -12,7 +12,7 @@ use physics::doc29::boxes::{AircraftBoxAtReceiver, box_sel_at_receiver};
 use physics::doc29::screening::Unscreened;
 use popup::aircraft::boxes::{AircraftReceiver, tile_energy};
 use popup::aircraft::flights::{FLIGHTS_SHOWN, FlightTotals};
-use popup::aircraft::ring_aircraft;
+use popup::aircraft::{reads_fine_boxes, ring_aircraft};
 use std::collections::HashMap;
 use std::path::Path;
 use tiles::aircraft::Aircraft;
@@ -139,26 +139,26 @@ pub(super) fn report(
             .sum::<usize>() as f64
             / 1e6
     };
-    let popup_rings: Vec<&Vec<(TileId, Aircraft<'_>)>> = (0..fine.len())
+    // As the popup reads them: fine boxes of the tiles near the click, far boxes elsewhere.
+    let fine_here = |tile: &TileId| reads_fine_boxes(&receiver.frame, *tile);
+    let popup_rings: Vec<Vec<(TileId, Aircraft<'_>)>> = (0..fine.len())
         .map(|ring| {
-            if ring >= 2 && !far[ring].is_empty() {
-                &far[ring]
-            } else {
-                &fine[ring]
-            }
+            let near = fine[ring].iter().filter(|(tile, _)| fine_here(tile));
+            let away = far[ring].iter().filter(|(tile, _)| !fine_here(tile));
+            near.chain(away).copied().collect()
         })
         .collect();
-    let popup_bytes = megabytes(
-        &(0..fine_files.len())
-            .map(|ring| {
-                if ring >= 2 && !far_files[ring].is_empty() {
-                    &far_files[ring]
-                } else {
-                    &fine_files[ring]
-                }
-            })
-            .collect::<Vec<_>>(),
-    );
+    let popup_bytes = (0..fine_files.len())
+        .map(|ring| {
+            fine_files[ring]
+                .iter()
+                .filter(|(tile, _)| fine_here(tile))
+                .chain(far_files[ring].iter().filter(|(tile, _)| !fine_here(tile)))
+                .map(|(_, bytes)| bytes.len())
+                .sum::<usize>()
+        })
+        .sum::<usize>() as f64
+        / 1e6;
     let fine_bytes = megabytes(&fine_files.iter().collect::<Vec<_>>());
     let fine_energy = box_energy(fine.iter().flatten(), receiver);
     let [near_ground, aloft] = fine_energy.bands;

@@ -44,18 +44,35 @@ pub struct RingFiles {
 }
 
 impl RingFiles {
-    /// Reads every file of `tiles` and `kinds` whole and at once (the time is the ring's cold read).
-    pub fn read(release: &Release, tiles: Vec<TileId>, kinds: Vec<Kind>) -> Result<Self, String> {
+    /// Reads every file of `tiles` and `kinds` that is `wanted` whole and at once (the time is the
+    /// ring's cold read); a file not wanted reads as absent.
+    pub fn read(
+        release: &Release,
+        tiles: Vec<TileId>,
+        kinds: Vec<Kind>,
+        wanted: impl Fn(TileId, Kind) -> bool,
+    ) -> Result<Self, String> {
         let started = std::time::Instant::now();
-        let paths: Vec<PathBuf> = tiles
+        let slots: Vec<(TileId, Kind)> = tiles
             .iter()
-            .flat_map(|&tile| {
-                kinds
-                    .iter()
-                    .map(move |&kind| tile_path(&release.year_root, tile, kind))
+            .flat_map(|&tile| kinds.iter().map(move |&kind| (tile, kind)))
+            .collect();
+        let paths: Vec<PathBuf> = slots
+            .iter()
+            .filter(|&&(tile, kind)| wanted(tile, kind))
+            .map(|&(tile, kind)| tile_path(&release.year_root, tile, kind))
+            .collect();
+        let mut read = read_all(&paths)?.into_iter();
+        let files: Vec<Option<Vec<u8>>> = slots
+            .iter()
+            .map(|&(tile, kind)| {
+                if wanted(tile, kind) {
+                    read.next().expect("one read per wanted file")
+                } else {
+                    None
+                }
             })
             .collect();
-        let files = read_all(&paths)?;
         let bytes = files.iter().flatten().map(|file| file.len() as u64).sum();
         let file_count = files.iter().filter(|file| file.is_some()).count();
         Ok(RingFiles {
