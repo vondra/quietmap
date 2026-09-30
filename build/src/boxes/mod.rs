@@ -141,8 +141,25 @@ fn touches(scope: &HashSet<TileId>, start: Mercator, end: Mercator) -> bool {
     })
 }
 
+/// Chunks of about `size` segments that never split a flight, so that a box counts each flight
+/// once (`segments` hold each flight's segments together).
+fn flight_chunks(segments: &[FlightSegment], size: usize) -> Vec<&[FlightSegment]> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < segments.len() {
+        let mut end = (start + size).min(segments.len());
+        while end < segments.len() && segments[end].flight_id == segments[end - 1].flight_id {
+            end += 1;
+        }
+        chunks.push(&segments[start..end]);
+        start = end;
+    }
+    chunks
+}
+
 /// Adds one day's segments to `boxes`, weighted `weight` for primary flights and
-/// `secondary_weight` for flights only the secondary provider saw (0 on baseline days).
+/// `secondary_weight` for flights only the secondary provider saw (0 on baseline days). Each
+/// flight's segments must be together.
 fn add_day(
     boxes: &mut HashMap<BoxKey, BoxEntry>,
     segments: &[FlightSegment],
@@ -151,8 +168,8 @@ fn add_day(
     weight: f64,
     secondary_weight: f64,
 ) {
-    let partials: Vec<HashMap<BoxKey, BoxEntry>> = segments
-        .par_chunks(4_096)
+    let partials: Vec<HashMap<BoxKey, BoxEntry>> = flight_chunks(segments, 4_096)
+        .into_par_iter()
         .map(|chunk| {
             let mut local: HashMap<BoxKey, BoxEntry> = HashMap::new();
             for segment in chunk {
@@ -262,7 +279,15 @@ pub fn build(
     days.dedup();
     for day in days {
         let path = segments_dir.join("segments").join(format!("{day}.arrow"));
-        let segments = read_segments(&path)?;
+        let mut segments = read_segments(&path, &|start, end| {
+            touches(
+                scope,
+                Mercator::from_degrees(start[0], start[1]),
+                Mercator::from_degrees(end[0], end[1]),
+            )
+        })?;
+        // Each flight's segments together, in their order.
+        segments.par_sort_by_key(|segment| segment.flight_id);
         // An increment day is usually a baseline day too: its primary flights count toward the
         // baseline, the flights only the secondary provider saw toward the increment.
         let weight = if window.baseline_days.contains(day) {

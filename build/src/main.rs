@@ -185,22 +185,26 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 .optional("only")
                 .map_or(Vec::new(), |names| names.split(',').collect());
             let terrain = Path::new(options.get("terrain")?);
-            for point in &points {
-                let name = point["name"].as_str().unwrap_or("");
-                if !only.is_empty() && !only.contains(&name) {
-                    continue;
-                }
-                let at = (
-                    point["lat"].as_f64().unwrap_or(0.0),
-                    point["lon"].as_f64().unwrap_or(0.0),
-                );
-                let [exact, boxed, beyond] = boxes::check::compare_at(
-                    Path::new(options.get("segments")?),
-                    &window,
-                    &out,
-                    at,
-                    boxes::check::ground_at(terrain, at),
-                )?;
+            let chosen: Vec<(&str, boxes::check::CheckPoint)> = points
+                .iter()
+                .map(|point| {
+                    let (lat, lon) = (
+                        point["lat"].as_f64().unwrap_or(0.0),
+                        point["lon"].as_f64().unwrap_or(0.0),
+                    );
+                    let ground_m = boxes::check::ground_at(terrain, (lat, lon));
+                    let name = point["name"].as_str().unwrap_or("");
+                    (name, boxes::check::CheckPoint { lat, lon, ground_m })
+                })
+                .filter(|(name, _)| only.is_empty() || only.contains(name))
+                .collect();
+            let compared = boxes::check::compare(
+                Path::new(options.get("segments")?),
+                &window,
+                &out,
+                &chosen.iter().map(|(_, point)| *point).collect::<Vec<_>>(),
+            )?;
+            for ((name, _), [exact, boxed, beyond]) in chosen.iter().zip(compared) {
                 println!(
                     "{}",
                     serde_json::json!({

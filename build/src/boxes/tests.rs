@@ -158,3 +158,23 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
     assert_eq!(boxed_db(&files, behind), f64::NEG_INFINITY);
     std::fs::remove_dir_all(&out).unwrap();
 }
+
+#[test]
+fn chunks_never_split_a_flight() {
+    let mut segments = departures();
+    segments.truncate(6);
+    for (segment, flight) in segments.iter_mut().zip([1, 1, 1, 2, 2, 3]) {
+        segment.flight_id = flight;
+    }
+    let flights = |chunk: &[FlightSegment]| {
+        chunk
+            .iter()
+            .map(|segment| segment.flight_id)
+            .collect::<Vec<_>>()
+    };
+    let chunks: Vec<Vec<u64>> = flight_chunks(&segments, 2)
+        .into_iter()
+        .map(flights)
+        .collect();
+    assert_eq!(chunks, vec![vec![1, 1, 1], vec![2, 2], vec![3]]);
+}

@@ -1,10 +1,10 @@
 //! One day's flight segments from Stage 1's scratch (`segments/<day>.arrow`): the columns the
 //! boxes need, one struct per airborne or cruise segment (ground segments go to ground operations).
 
-use crate::dev4::read_table;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, UInt8Type, UInt64Type};
 use arrow_array::{Array, RecordBatch};
+use rayon::prelude::*;
 use std::path::Path;
 
 pub use crate::aircraft::{
@@ -53,13 +53,24 @@ fn padded<const N: usize>(bytes: &[u8]) -> [u8; N] {
     out
 }
 
-/// The airborne and cruise segments of the day file at `path` (none when it is absent).
-pub fn read_segments(path: &Path) -> Result<Vec<FlightSegment>, String> {
-    let Some(table) = read_table(path)? else {
-        return Ok(Vec::new());
+/// The airborne and cruise segments of the day file at `path` whose ends (latitude, longitude)
+/// `keep` accepts (none when the file is absent). Batches are read one at a time: a world day is
+/// 86 M segments, of which a region keeps a small part.
+pub fn read_segments(
+    path: &Path,
+    keep: &(dyn Fn([f64; 2], [f64; 2]) -> bool + Sync),
+) -> Result<Vec<FlightSegment>, String> {
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("{}: {error}", path.display())),
     };
+    let reader = arrow_ipc::reader::FileReader::try_new(std::io::BufReader::new(file), None)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
     let mut segments = Vec::new();
-    for batch in &table.batches {
+    for batch in reader {
+        let batch = batch.map_err(|error| format!("{}: {error}", path.display()))?;
+        let batch = &batch;
         let bytes = |name| column(batch, name).map(|c| c.as_primitive::<UInt8Type>());
         let floats = |name| column(batch, name).map(|c| c.as_primitive::<Float32Type>());
         let (source_id, period, phase, flags) = (
@@ -90,27 +101,34 @@ pub fn read_segments(path: &Path) -> Result<Vec<FlightSegment>, String> {
             .iter()
             .map(|name| floats(name))
             .collect::<Result<Vec<_>, String>>()?;
-        for row in 0..batch.num_rows() {
-            if phase.value(row) == PHASE_GROUND {
-                continue;
-            }
-            let value = |index: usize| f64::from(values[index].value(row));
-            segments.push(FlightSegment {
-                flight_id: flight_id.value(row),
-                callsign: padded(callsign.value(row).as_bytes()),
-                designator: padded(designator.value(row)),
-                source_id: source_id.value(row),
-                period: period.value(row),
-                flags: flags.value(row),
-                start: [value(0), value(1), value(2)],
-                end: [value(3), value(4), value(5)],
-                pressure_altitude_m: [value(6), value(7)],
-                speed_kt: value(8),
-                above_ground_m: value(9),
-                departure_field_m: value(10),
-                ground_m: [value(11), value(12)],
-            });
-        }
+        let kept: Vec<FlightSegment> = (0..batch.num_rows())
+            .into_par_iter()
+            .filter_map(|row| {
+                if phase.value(row) == PHASE_GROUND {
+                    return None;
+                }
+                let value = |index: usize| f64::from(values[index].value(row));
+                if !keep([value(0), value(1)], [value(3), value(4)]) {
+                    return None;
+                }
+                Some(FlightSegment {
+                    flight_id: flight_id.value(row),
+                    callsign: padded(callsign.value(row).as_bytes()),
+                    designator: padded(designator.value(row)),
+                    source_id: source_id.value(row),
+                    period: period.value(row),
+                    flags: flags.value(row),
+                    start: [value(0), value(1), value(2)],
+                    end: [value(3), value(4), value(5)],
+                    pressure_altitude_m: [value(6), value(7)],
+                    speed_kt: value(8),
+                    above_ground_m: value(9),
+                    departure_field_m: value(10),
+                    ground_m: [value(11), value(12)],
+                })
+            })
+            .collect();
+        segments.extend(kept);
     }
     Ok(segments)
 }
