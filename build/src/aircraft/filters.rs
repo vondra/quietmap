@@ -1,5 +1,5 @@
 //! Receiver-independent data filters of Stage 0/1 (dev4 `filters.rs`): sane points, the bogus tail
-//! of a trajectory, teleports and unkeepable segments.
+//! of a trajectory, teleports, spikes (r051) and unkeepable segments.
 
 use super::altitude::Sample;
 use super::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, signed_longitude_delta};
@@ -26,6 +26,15 @@ pub const MAX_PLAUSIBLE_SPEED_KT: f32 = 1_500.0;
 pub const MPS_TO_KT: f32 = 3600.0 / 1852.0;
 /// A helicopter 5 km above the terrain is a decode error (civil ceilings reach 4-6 km altitude).
 const HELICOPTER_HEIGHT_CEILING_M: f32 = 5_000.0;
+/// A spike: a position further off the chord of its neighbours (all three within `SPIKE_WINDOW_S`)
+/// than this and than any turn could carry it: turning at most `MAX_TURN_RATE_DEG_S` between the
+/// neighbours (airliners turn at 3 deg/s, aerobatics near 15), an arc of turn theta stands at most
+/// chord / 2 * tan(theta / 4) off its chord. A multilateration or decoding glitch jumping off the
+/// track and back does not keep to that (one world day: 0.045 % of points off by over 500 m, a
+/// third of them by over 1 km).
+const SPIKE_OFFSET_M: f32 = 300.0;
+const MAX_TURN_RATE_DEG_S: f32 = 15.0;
+const SPIKE_WINDOW_S: f32 = 30.0;
 
 /// Finite time and position (not the 0,0 no-fix sentinel), a plausible airborne altitude and a
 /// finite, possible speed. A surface report carries no altitude to check.
@@ -69,6 +78,7 @@ pub fn validate_trajectory(samples: &mut Vec<Sample>) {
         samples.truncate(keep);
     }
     drop_teleports(samples);
+    drop_spikes(samples);
 }
 
 fn sustained_descent_start(samples: &[Sample]) -> Option<usize> {
@@ -117,6 +127,59 @@ fn drop_teleports(samples: &mut Vec<Sample>) {
     }
     let mut flags = keep.into_iter();
     samples.retain(|_| flags.next().unwrap_or(false));
+}
+
+/// Drop a point that jumps off the chord of its neighbours and back (judged against the last kept
+/// point and the next one).
+fn drop_spikes(samples: &mut Vec<Sample>) {
+    if samples.len() < 3 {
+        return;
+    }
+    let mut keep = vec![true; samples.len()];
+    let mut previous = 0;
+    for index in 1..samples.len() - 1 {
+        let (a, b, c) = (
+            &samples[previous].point,
+            &samples[index].point,
+            &samples[index + 1].point,
+        );
+        keep[index] = !is_spike(a, b, c);
+        if keep[index] {
+            previous = index;
+        }
+    }
+    let mut flags = keep.into_iter();
+    samples.retain(|_| flags.next().unwrap_or(false));
+}
+
+/// Whether `b` leaves the chord from `a` to `c` by more than [`SPIKE_OFFSET_M`] and more than the
+/// fastest turn allows, the three within [`SPIKE_WINDOW_S`].
+fn is_spike(a: &TracePoint, b: &TracePoint, c: &TracePoint) -> bool {
+    let (before, after) = (
+        (b.timestamp - a.timestamp) as f32,
+        (c.timestamp - b.timestamp) as f32,
+    );
+    if !(before > 0.0 && after > 0.0 && before + after <= SPIKE_WINDOW_S) {
+        return false;
+    }
+    let cos_lat = f64::from(b.lat).to_radians().cos() as f32;
+    let metres = |p: &TracePoint| {
+        [
+            signed_longitude_delta(b.lon, p.lon) * M_PER_DEG_LON_EQUATOR * cos_lat,
+            (p.lat - b.lat) * M_PER_DEG_LAT,
+        ]
+    };
+    let (from, to) = (metres(a), metres(c));
+    let chord_m = (to[0] - from[0]).hypot(to[1] - from[1]);
+    let offset_m = if chord_m > 0.0 {
+        (from[0] * to[1] - from[1] * to[0]).abs() / chord_m
+    } else {
+        from[0].hypot(from[1])
+    };
+    let turn = (MAX_TURN_RATE_DEG_S * (before + after))
+        .min(180.0)
+        .to_radians();
+    offset_m > (0.5 * chord_m * (0.25 * turn).tan()).max(SPIKE_OFFSET_M)
 }
 
 /// A segment worth keeping: finite, above the floor, at least 10 m, a positive duration at a

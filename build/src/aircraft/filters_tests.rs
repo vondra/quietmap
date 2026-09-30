@@ -1,4 +1,4 @@
-//! Filter cases: telemetry sanity, the bogus tail, teleports, keepable segments.
+//! Filter cases: telemetry sanity, the bogus tail, teleports, spikes, keepable segments.
 
 use super::*;
 use crate::aircraft::altitude::tests::sample;
@@ -94,6 +94,47 @@ fn teleports_are_dropped_against_the_last_kept_point() {
     ];
     validate_trajectory(&mut dateline);
     assert_eq!(dateline.len(), 2);
+}
+
+/// Samples every `step_s` along `position(t)` (metres east and north of 50 N 14 E) at 250 kt.
+fn track(count: usize, step_s: f64, position: impl Fn(f64) -> [f64; 2]) -> Vec<Sample> {
+    (0..count)
+        .map(|i| {
+            let t = i as f64 * step_s;
+            let [east, north] = position(t);
+            let lat = 50.0 + north / 111_195.0;
+            let lon = 14.0 + east / (111_195.0 * 50f64.to_radians().cos());
+            sample(t, lat as f32, lon as f32, 10_000.0, 250.0)
+        })
+        .collect()
+}
+
+/// A point thrown 1 km off a straight track and back goes; a U-turn, a hover's jitter and a sparse
+/// track's turn stay.
+#[test]
+fn spikes_are_dropped_and_turns_kept() {
+    let speed = 128.6;
+    let mut straight = track(10, 5.0, |t| [speed * t, 0.0]);
+    straight[4].point.lat += (1_000.0 / 111_195.0) as f32;
+    validate_trajectory(&mut straight);
+    assert_eq!(straight.len(), 9);
+    assert!(straight.iter().all(|s| s.point.timestamp != 20.0));
+    let radius = 1_500.0;
+    let mut u_turn = track(40, 5.0, |t| {
+        let angle = speed * t / radius;
+        [radius * angle.sin(), radius * (1.0 - angle.cos())]
+    });
+    validate_trajectory(&mut u_turn);
+    assert_eq!(u_turn.len(), 40);
+    let mut hover = track(20, 2.0, |t| [5.0 * (t * 1.7).sin(), 5.0 * (t * 2.3).cos()]);
+    validate_trajectory(&mut hover);
+    assert_eq!(hover.len(), 20);
+    let mut sparse = track(6, 40.0, |t| {
+        let angle = speed * t / 3_000.0;
+        [3_000.0 * angle.sin(), 3_000.0 * (1.0 - angle.cos())]
+    });
+    validate_trajectory(&mut sparse);
+    assert_eq!(sparse.len(), 6);
 }
 
 #[test]
