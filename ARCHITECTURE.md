@@ -30,7 +30,7 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
 | `obstacles` | buildings and walls: outlines and heights, listed per 50 m cell with a cell -> offset table |
 | `sources` | every ground source as points or polylines, emission per octave band (63 Hz-8 kHz) and period as u16 in 0.01 dB; a few display fields |
 | `aircraft` | aircraft boxes (energy per period at the NPD distances), each with its two loudest flight pieces, and the tile's flight table |
-| `aircraft-far` | the same with boxes four times larger, read from the second ring on |
+| `aircraft-far` | the same with boxes four times larger, read for tiles beyond 3 km of the click |
 
 - Coordinates are int16 relative to the tile centre, step = tile width / 32,768: the tile spans
   +-16,384 steps and half a tile of margin fits on every side. Longer geometry is split.
@@ -61,11 +61,19 @@ clearance so that it spans D = 3 dB of the steepest NPD slope there (first layer
 A segment is cut at tile edges, then into the pieces of the boxes it crosses; a box sums its
 pieces per period at the ten NPD distances (an average day of the window: primary flights over
 the baseline days, flights only the secondary provider saw over the increment days) with the
-geometry of one average piece, and keeps its two loudest pieces for the flight list. The click
-reads every box through the click-time equation (`physics/src/doc29/boxes.rs`); from the second
-ring on it reads the far boxes (D = 12 dB). The flight list is ranked by Lmax: each box states
-its kept pieces' loudest LAmax at 1,000 ft, and boxes are searched loudest bound first until
-the bound falls below the list's entry level, so the list is what every kept piece would give.
+geometry of one average piece, read as two at the gradient plus and minus the spread of its
+pieces' gradients (climbs and descents extended to where they pass a receiver), and keeps its two
+loudest pieces for the flight list (by LAmax at their height above the box's ground, one per
+flight). The click reads every box through the click-time equation
+(`physics/src/doc29/boxes.rs`); for tiles beyond 3 km of the click it reads the far boxes (D = 12
+dB). The flight list is ranked by Lmax: each box states its kept pieces' loudest LAmax at 1,000
+ft, and boxes are searched loudest bound first until the bound falls below the list's entry
+level, so the list is what every kept piece would give.
+
+Airport ground operations (`build/src/airport`) put the window's ground legs on the aeroway lines
+(OSM runways and taxiways, and lines found where legs of ten flights on three days run off every
+mapped line): a leg on a runway rolls at 40 kt or faster or as a take-off roll, and taxis
+otherwise; the lines become sources with their sound power per metre.
 
 ## Popup
 
