@@ -45,16 +45,29 @@ pub fn third_octave_centre_hz(n: usize) -> f64 {
     10f64.powf((n as f64 + 17.0) / 10.0)
 }
 
-/// The model's attenuation rates (dB/m) per 1/3-octave band: CNOSSOS-EU's 15 C and 70 %.
-pub fn model_rates_db_per_m() -> [f64; THIRD_OCTAVES] {
+/// ISO 9613-1 attenuation rates (dB/m) per 1/3-octave band at a temperature and humidity.
+pub fn rates_db_per_m(temperature_c: f64, relative_humidity_pct: f64) -> [f64; THIRD_OCTAVES] {
     std::array::from_fn(|n| {
         alpha_db_per_km(
             third_octave_centre_hz(n),
-            DEFAULT_TEMPERATURE_C,
-            DEFAULT_RELATIVE_HUMIDITY_PCT,
+            temperature_c,
+            relative_humidity_pct,
             REFERENCE_PRESSURE_KPA,
         ) / 1_000.0
     })
+}
+
+/// The model's attenuation rates (dB/m) per 1/3-octave band: CNOSSOS-EU's 15 C and 70 %.
+pub fn model_rates_db_per_m() -> [f64; THIRD_OCTAVES] {
+    rates_db_per_m(DEFAULT_TEMPERATURE_C, DEFAULT_RELATIVE_HUMIDITY_PCT)
+}
+
+/// Doc 29 Eqs. 4-6 and 4-7: the acoustic impedance adjustment (dB) of the NPD levels at a
+/// temperature and pressure, 10 lg(rho c / 409.81) with rho c = 416.86 delta / sqrt(theta).
+pub fn impedance_adjustment_db(temperature_c: f64, pressure_kpa: f64) -> f64 {
+    let delta = pressure_kpa / REFERENCE_PRESSURE_KPA;
+    let theta = (temperature_c + 273.15) / (15.0 + 273.15);
+    10.0 * (416.86 * delta / theta.sqrt() / 409.81).log10()
 }
 
 /// Eqs. D-1 to D-4: the increments (dB) at the ten NPD distances of a curve whose spectral class
@@ -87,19 +100,20 @@ pub fn npd_increments_db(
 }
 
 /// The increments of a class's approach (`departure` false) or departure curves to the model's
-/// atmosphere; zero for a class without spectral classes.
+/// atmosphere: the absorption's and the impedance adjustment Doc 29 4.2.1 applies to the ANP's
+/// standard NPD levels (0.074 dB at 15 C and sea level). The helicopter class, calibrated to the
+/// EASA certification levels rather than ANP curves, has neither.
 pub fn class_increments_db(class: usize, departure: bool) -> [f64; NPD_DISTANCES] {
-    match &SPECTRA[class] {
-        Some(spectra) => npd_increments_db(
-            if departure {
-                &spectra.departure_db
-            } else {
-                &spectra.approach_db
-            },
-            &model_rates_db_per_m(),
-        ),
-        None => [0.0; NPD_DISTANCES],
-    }
+    let Some(spectra) = &SPECTRA[class] else {
+        return [0.0; NPD_DISTANCES];
+    };
+    let impedance = impedance_adjustment_db(DEFAULT_TEMPERATURE_C, REFERENCE_PRESSURE_KPA);
+    let spectrum = if departure {
+        &spectra.departure_db
+    } else {
+        &spectra.approach_db
+    };
+    npd_increments_db(spectrum, &model_rates_db_per_m()).map(|increment| increment + impedance)
 }
 
 #[cfg(test)]
@@ -133,6 +147,28 @@ mod tests {
                 "{k}: {approach:?}"
             );
         }
+    }
+
+    /// UBA Texte 11/2022 (the German BUF test tasks), Tables 28 and 2.5: the A320 departure class
+    /// 103 recalculated to 10 C / 70 % reads 97.1, 90.5, 86.0, 81.2, 73.6, 65.3, 59.5, 53.2, 46.2
+    /// and 38.9 dB(A) at the NPD distances (ARP-5534); ISO 9613-1 at the exact centres gives the
+    /// same to 0.1 dB. The impedance adjustment there is 0.11 dB, at 15 C 0.074 dB (Doc 29 4.2.1).
+    #[test]
+    fn the_buf_test_tasks_recalculation_reproduces() {
+        let a320 = SPECTRA[1].as_ref().expect("the A320 class has spectra");
+        let increments = npd_increments_db(&a320.departure_db, &rates_db_per_m(10.0, 70.0));
+        let reference = [97.0, 90.3, 85.6, 80.6, 72.5, 63.6, 57.4, 50.7, 43.3, 35.3];
+        let published = [97.1, 90.5, 86.0, 81.2, 73.6, 65.3, 59.5, 53.2, 46.2, 38.9];
+        for k in 0..NPD_DISTANCES {
+            let recalculated = reference[k] + increments[k];
+            assert!(
+                (recalculated - published[k]).abs() < 0.11,
+                "{k}: {recalculated} vs {}",
+                published[k]
+            );
+        }
+        assert!((impedance_adjustment_db(10.0, REFERENCE_PRESSURE_KPA) - 0.11).abs() < 0.005);
+        assert!((impedance_adjustment_db(15.0, REFERENCE_PRESSURE_KPA) - 0.074).abs() < 0.001);
     }
 
     /// The model's 15 C / 70 % absorbs less than AIR-1845 where an aircraft's level lies: the
