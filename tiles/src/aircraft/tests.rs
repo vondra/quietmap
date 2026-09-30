@@ -14,7 +14,8 @@ fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
         zoom: 19,
         cell: [127, 3],
         group: Group::Helicopter,
-        floor_m: 350.0,
+        ground_m: 301.0,
+        clearance_m: 49.0,
         height_m: 49.0,
         centroid: [-16_000, 12_345],
         centroid_altitude_m: 371.0,
@@ -60,7 +61,7 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
     let flights = [a_flight(0x4b_a9_c1), a_flight(0x00_00_01)];
     let pieces = [a_piece(1), a_piece(0)];
     let bytes = encode(&boxes, &flights, &pieces);
-    assert_eq!(bytes.len(), 24 + 2 * 114 + 2 * 20 + 2 * 24);
+    assert_eq!(bytes.len(), 24 + 2 * 116 + 2 * 20 + 2 * 24);
     let parsed = Aircraft::parse(&bytes).unwrap();
     assert_eq!(
         (
@@ -76,7 +77,10 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
         (read.zoom, read.cell, read.group),
         (19, [127, 3], Group::Helicopter)
     );
-    assert_eq!((read.floor_m, read.height_m), (350.0, 49.0));
+    assert_eq!(
+        (read.ground_m, read.clearance_m, read.height_m),
+        (301.0, 49.0, 49.0)
+    );
     assert_eq!(
         (read.centroid, read.centroid_altitude_m),
         ([-16_000, 12_345], 371.0)
@@ -121,10 +125,10 @@ fn a_file_that_does_not_add_up_is_refused() {
     assert!(Aircraft::parse(&wrong_magic).is_err());
     // A box naming a piece beyond the table, a piece naming a flight beyond it.
     let mut missing_piece = bytes.clone();
-    missing_piece[24 + 108] = 7;
+    missing_piece[24 + 110] = 7;
     assert!(Aircraft::parse(&missing_piece).is_err());
     let mut missing_flight = bytes;
-    missing_flight[24 + 114 + 20] = 9;
+    missing_flight[24 + 116 + 20] = 9;
     assert!(Aircraft::parse(&missing_flight).is_err());
 }
 

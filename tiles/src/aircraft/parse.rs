@@ -45,7 +45,7 @@ impl<'a> Aircraft<'a> {
         };
         for index in 0..boxes {
             let record = parsed.box_record(index);
-            let (zoom, first, count) = (record[0], u32_at(record, 108), usize::from(record[112]));
+            let (zoom, first, count) = (record[0], u32_at(record, 110), usize::from(record[114]));
             if !(12..=super::MAXIMUM_ZOOM).contains(&zoom) || record[1] > 1 {
                 return Err(FormatError("aircraft: bad box zoom or group"));
             }
@@ -89,8 +89,8 @@ impl<'a> Aircraft<'a> {
         let record = self.box_record(index);
         let energy = |at: usize| level_db(u16_at(record, at));
         let (wing, fuselage) = (
-            f64::from(record[106]) / 255.0,
-            f64::from(record[107]) / 255.0,
+            f64::from(record[108]) / 255.0,
+            f64::from(record[109]) / 255.0,
         );
         let mut installation_shares = [wing, fuselage, 0.0];
         installation_shares[INSTALLATIONS - 1] = (1.0 - wing - fuselage).max(0.0);
@@ -102,23 +102,24 @@ impl<'a> Aircraft<'a> {
             } else {
                 Group::Helicopter
             },
-            floor_m: f64::from(i16_at(record, 6)),
-            height_m: f64::from(u16_at(record, 8)),
-            centroid: [i16_at(record, 10), i16_at(record, 12)],
-            centroid_altitude_m: f64::from(i16_at(record, 14)),
-            axis_rad: f64::from(u16_at(record, 16)) / 65_536.0 * std::f64::consts::PI,
-            gradient: f64::from(i16_at(record, 18)) / 10_000.0,
-            piece_length_m: f64::from(u16_at(record, 20)),
-            flights: u32_at(record, 22),
+            ground_m: f64::from(i16_at(record, 6)),
+            clearance_m: f64::from(u16_at(record, 8)),
+            height_m: f64::from(u16_at(record, 10)),
+            centroid: [i16_at(record, 12), i16_at(record, 14)],
+            centroid_altitude_m: f64::from(i16_at(record, 16)),
+            axis_rad: f64::from(u16_at(record, 18)) / 65_536.0 * std::f64::consts::PI,
+            gradient: f64::from(i16_at(record, 20)) / 10_000.0,
+            piece_length_m: f64::from(u16_at(record, 22)),
+            flights: u32_at(record, 24),
             energy_db: std::array::from_fn(|period| {
-                std::array::from_fn(|distance| energy(26 + 2 * (period * NPD_DISTANCES + distance)))
+                std::array::from_fn(|distance| energy(28 + 2 * (period * NPD_DISTANCES + distance)))
             }),
             scaled_distance_m: std::array::from_fn(|distance| {
-                10f64.powf(f64::from(u16_at(record, 86 + 2 * distance)) / 10_000.0)
+                10f64.powf(f64::from(u16_at(record, 88 + 2 * distance)) / 10_000.0)
             }),
             installation_shares,
-            first_piece: u32_at(record, 108),
-            piece_count: record[112],
+            first_piece: u32_at(record, 110),
+            piece_count: record[114],
         }
     }
 
@@ -150,4 +151,4 @@ impl<'a> Aircraft<'a> {
     }
 }
 
-const _: () = assert!(26 + 2 * PERIODS * NPD_DISTANCES == 86);
+const _: () = assert!(28 + 2 * PERIODS * NPD_DISTANCES == 88);

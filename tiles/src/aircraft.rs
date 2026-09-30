@@ -11,7 +11,7 @@ pub use parse::Aircraft;
 
 const MAGIC: &[u8; 8] = b"qmair1\n\0";
 const HEADER_BYTES: usize = 24;
-const BOX_BYTES: usize = 114;
+const BOX_BYTES: usize = 116;
 const FLIGHT_BYTES: usize = 20;
 const PIECE_BYTES: usize = 24;
 /// The NPD distances of Doc 29 (200 ft .. 25,000 ft).
@@ -39,8 +39,10 @@ pub struct AircraftBox {
     pub zoom: u8,
     pub cell: [u16; 2],
     pub group: Group,
-    /// The slab: altitudes above sea level from `floor_m` to `floor_m + height_m` (1 m steps).
-    pub floor_m: f64,
+    /// The terrain the clearance counts from: the highest within one edge of the cell (m above
+    /// sea level), and the slab from `ground_m + clearance_m` up by `height_m` (1 m steps).
+    pub ground_m: f64,
+    pub clearance_m: f64,
     pub height_m: f64,
     /// Emission-weighted centroid: tile-local steps (as every kind) and altitude (1 m steps).
     pub centroid: [i16; 2],
@@ -153,7 +155,8 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox) {
     for value in record.cell {
         bytes.extend_from_slice(&value.to_le_bytes());
     }
-    bytes.extend_from_slice(&metres_i16(record.floor_m).to_le_bytes());
+    bytes.extend_from_slice(&metres_i16(record.ground_m).to_le_bytes());
+    bytes.extend_from_slice(&metres_u16(record.clearance_m).to_le_bytes());
     bytes.extend_from_slice(&metres_u16(record.height_m).to_le_bytes());
     for value in record.centroid {
         bytes.extend_from_slice(&value.to_le_bytes());
@@ -207,7 +210,7 @@ fn write_piece(bytes: &mut Vec<u8>, piece: &FlightPiece) {
     assert_eq!(bytes.len() - start, PIECE_BYTES);
 }
 
-/// The bytes of an aircraft file: header, 114-byte boxes, 20-byte flights, 24-byte pieces.
+/// The bytes of an aircraft file: header, 116-byte boxes, 20-byte flights, 24-byte pieces.
 /// Every piece's flight and every box's pieces must exist.
 pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(
