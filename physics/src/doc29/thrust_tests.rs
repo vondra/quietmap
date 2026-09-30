@@ -39,13 +39,15 @@ fn b738_cutback_matches_the_doc29_pilot() {
     let bracket = bracket_power(&model.dep_power, model.dep_rows, thrust_lb);
     assert_eq!(bracket.row, 2);
     assert!((bracket.weight - 0.6977).abs() < 1e-4, "{bracket:?}");
+    // The pilot's levels are in the AIR-1845 atmosphere; the curves read in the model's.
+    let atmosphere = crate::doc29::atmosphere::class_increments_db(class, true)[3];
     let at_1000_ft = |bracket| read_npd(class, true, bracket, 1_000.0 * METRES_PER_FOOT).sel_db;
-    assert!((at_1000_ft(bracket) - 93.77).abs() < 0.01);
+    assert!((at_1000_ft(bracket) - atmosphere - 93.77).abs() < 0.01);
     let top = PowerBracket {
         row: usize::from(model.dep_rows) - 1,
         weight: 0.0,
     };
-    assert!((at_1000_ft(top) - 99.3).abs() < 1e-9);
+    assert!((at_1000_ft(top) - atmosphere - 99.3).abs() < 1e-9);
     // Past the table's edges the weight is exactly 0.
     let edge = bracket_power(&model.dep_power, model.dep_rows, 10_000.0);
     assert_eq!(edge, PowerBracket::FIRST_ROW);

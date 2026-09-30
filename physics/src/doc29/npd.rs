@@ -5,6 +5,7 @@
 use std::f64::consts::PI;
 use std::sync::LazyLock;
 
+use super::atmosphere::class_increments_db;
 use super::profiles_generated::{CLASS_NAMES, CLASS_REP_PROFILE_IDX, NUM_CLASSES, PROFILES};
 use super::thrust::PowerBracket;
 use super::thrust_generated::THRUST;
@@ -253,27 +254,40 @@ impl PowerRow {
 }
 
 /// `[class][departure]`: every tabulated power row of a thrust class, the anchor curve alone for
-/// a pinned class.
+/// a pinned class; SEL and LAmax alike moved from the AIR-1845 atmosphere of the ANP curves to the
+/// model's (`atmosphere`, Doc 29 Appendix D).
 static POWER_ROWS: LazyLock<Vec<[Vec<PowerRow>; 2]>> = LazyLock::new(|| {
     (0..NUM_CLASSES)
         .map(|class| {
             let anchor = class_anchor(class);
             let model = &THRUST[class];
-            let rows = |sel: &[[f64; NPD_DISTANCES]], lamax: &[[f64; NPD_DISTANCES]], count: u8| {
-                let count = usize::from(count);
-                (0..count)
-                    .map(|row| PowerRow::new(&sel[row], &lamax[row], anchor.v_ref_kt))
+            let rows = |sel: &[[f64; NPD_DISTANCES]],
+                        lamax: &[[f64; NPD_DISTANCES]],
+                        count: u8,
+                        departure: bool| {
+                let increments = class_increments_db(class, departure);
+                let adjusted = |curve: &[f64; NPD_DISTANCES]| -> [f64; NPD_DISTANCES] {
+                    std::array::from_fn(|k| curve[k] + increments[k])
+                };
+                (0..usize::from(count))
+                    .map(|row| {
+                        PowerRow::new(
+                            &adjusted(&sel[row]),
+                            &adjusted(&lamax[row]),
+                            anchor.v_ref_kt,
+                        )
+                    })
                     .collect::<Vec<_>>()
             };
             if model.has_thrust {
                 [
-                    rows(&model.app_sel, &model.app_lmax, model.app_rows),
-                    rows(&model.dep_sel, &model.dep_lmax, model.dep_rows),
+                    rows(&model.app_sel, &model.app_lmax, model.app_rows, false),
+                    rows(&model.dep_sel, &model.dep_lmax, model.dep_rows, true),
                 ]
             } else {
                 [
-                    rows(&[anchor.approach_sel], &[anchor.approach_lmax], 1),
-                    rows(&[anchor.departure_sel], &[anchor.departure_lmax], 1),
+                    rows(&[anchor.approach_sel], &[anchor.approach_lmax], 1, false),
+                    rows(&[anchor.departure_sel], &[anchor.departure_lmax], 1, true),
                 ]
             }
         })

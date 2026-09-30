@@ -154,9 +154,10 @@ const ABEAM: [[f64; 2]; 4] = [
 ];
 const ON_THE_EXTENSION: [[f64; 2]; 2] = [[-4_000.0, 300.0], [-8_000.0, 1_000.0]];
 
-/// One flow reads within 0.1 dB of the sum of its pieces abeam and within 0.6 dB 4 km behind it
-/// on its extension (8 km behind, 2.3 dB: the pieces' extended lines scatter by hundreds of
-/// metres there; far behind, a box is not what is heard).
+/// One flow reads within 0.1 dB of the sum of its pieces abeam and within 0.75 dB 4 km behind it
+/// on its extension (0.70 dB on the NPD curves of the model's atmosphere; 8 km behind, 2.3 dB:
+/// the pieces' extended lines scatter by hundreds of metres there; far behind, a box is not what
+/// is heard).
 #[test]
 fn a_box_of_one_flow_reads_as_the_sum_of_its_pieces() {
     let pieces = bundle(false);
@@ -165,7 +166,7 @@ fn a_box_of_one_flow_reads_as_the_sum_of_its_pieces() {
         assert!(error.abs() < 0.1, "abeam {receiver:?}: {error:+.3} dB");
     }
     let behind = box_error_db(&pieces, ON_THE_EXTENSION[0]);
-    assert!(behind.abs() < 0.6, "behind: {behind:+.3} dB");
+    assert!(behind.abs() < 0.75, "behind: {behind:+.3} dB");
     let values = box_of(&pieces);
     assert!(
         values

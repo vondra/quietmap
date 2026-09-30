@@ -109,7 +109,9 @@ fn b738_departure_scaled_distance_follows_sel_minus_lamax() {
         );
         // The class's loudest departure row carries the anchor's maximum-thrust curves.
         let class_reading = read_npd(class, true, top, feet(distance_ft));
-        assert_eq!(class_reading.scaled_distance_m, exact);
+        // The atmosphere's increment moves SEL and LAmax alike: SEL - LAmax, and with it
+        // d_lambda, keep their values to rounding.
+        assert!((class_reading.scaled_distance_m - exact).abs() < 1e-9 * exact);
     }
 }
 
@@ -148,14 +150,17 @@ fn power_row_edges_reproduce_the_anchor_curves() {
     }
 }
 
+/// A pinned class reads its anchor's curve on row zero, moved to the model's atmosphere.
 #[test]
 fn pinned_classes_read_their_anchor_curve_on_row_zero() {
     for class in (0..NUM_CLASSES).filter(|&class| !THRUST[class].has_thrust) {
         let anchor = class_anchor(class);
-        for (departure, curve) in [(false, &anchor.approach_sel), (true, &anchor.departure_sel)] {
+        for (departure, raw) in [(false, &anchor.approach_sel), (true, &anchor.departure_sel)] {
+            let increments = crate::doc29::atmosphere::class_increments_db(class, departure);
+            let curve: [f64; NPD_DISTANCES] = std::array::from_fn(|k| raw[k] + increments[k]);
             for slant_m in [20.0, 150.0, 1_000.0, 7_620.0, 14_000.0] {
                 let reading = read_npd(class, departure, PowerBracket::FIRST_ROW, slant_m);
-                let expected = curve_level_db(curve, tail_absorption_db_per_m(curve), slant_m);
+                let expected = curve_level_db(&curve, tail_absorption_db_per_m(&curve), slant_m);
                 assert_eq!(reading.sel_db, expected, "class {class}");
             }
         }

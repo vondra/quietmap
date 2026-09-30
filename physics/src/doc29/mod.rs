@@ -12,6 +12,7 @@
 //! (thrust rows per class).
 
 pub mod approach_generated;
+pub mod atmosphere;
 pub mod bound;
 pub mod box_geometry;
 pub mod box_sums;
@@ -22,6 +23,7 @@ pub mod npd;
 pub mod profiles_generated;
 pub mod screening;
 pub mod segment;
+pub mod spectra_generated;
 pub mod thrust;
 pub mod thrust_generated;
 
