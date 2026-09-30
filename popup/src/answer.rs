@@ -404,9 +404,27 @@ pub fn answer(
                 lat.to_bits() ^ lon.to_bits().rotate_left(32),
             )
         });
+        let annoyance = percentiles.map(|levels| {
+            let layer_lden: Vec<(Layer, f64)> = selections
+                .iter()
+                .map(|selection| {
+                    let lden = crate::candidates::lden_weighted(&selection.answer_energy());
+                    (selection.layer, physics::bands::level_db(lden))
+                })
+                .collect();
+            let road = selections
+                .iter()
+                .find(|selection| selection.layer == Layer::Road)
+                .map_or([0.0; PERIODS], LayerSelection::answer_energy);
+            crate::annoyance::annoyance(
+                &layer_lden,
+                crate::annoyance::day_evening_intermittency(levels.road_intermittency, road),
+            )
+        });
         let update = Update {
             partial: !last_ring,
             percentiles,
+            annoyance,
             lat,
             lon,
             frame,

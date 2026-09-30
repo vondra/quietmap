@@ -94,6 +94,24 @@ export interface TopFlight {
   track: TrackPiece[]
 }
 
+/** The levels exceeded 10, 50 and 90 % of the time, per period (null where silent). */
+export interface PopupPercentiles {
+  l10: { day: number | null; evening: number | null; night: number | null }
+  l50: { day: number | null; evening: number | null; night: number | null }
+  l90: { day: number | null; evening: number | null; night: number | null }
+}
+
+/** How unpleasant the place's noise is to live with: the share of residents expected to be highly
+ * annoyed (WHO 2018 curves per source, road traffic heard in occasional pass-bys counting up to
+ * 6 dB less, the sources combined as annoyance equivalents). */
+export interface PopupAnnoyance {
+  highly_annoyed_percent: number | null
+  dominant: string | null
+  road_intermittency_percent: number | null
+  road_credit_db: number | null
+  sources: { source_type: string; highly_annoyed_percent: number | null }[]
+}
+
 /** What the click read and computed so far. */
 export interface PopupStats {
   rings: number
@@ -118,6 +136,9 @@ export interface PopupUpdate {
   top_contributors: Contributor[]
   /** The loudest flights by Lmax, loudest first; empty when no aircraft are heard. */
   top_flights: TopFlight[]
+  /** With the final update only. */
+  percentiles?: PopupPercentiles | null
+  annoyance?: PopupAnnoyance | null
   stats: PopupStats
 }
 

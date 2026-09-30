@@ -28,17 +28,24 @@ const MOVEMENT_SPEED_M_S: f64 = 10.0;
 /// Emitters closer than this are at this distance (m): a receiver on the line itself.
 const DISTANCE_MIN_M: f64 = 1.0;
 
-/// The levels (dB, `-inf` silent) exceeded 10, 50 and 90 % of the time per period.
+/// The levels (dB, `-inf` silent) exceeded 10, 50 and 90 % of the time per period, and road
+/// traffic's intermittency ratio (Wunderli et al. 2016): the share of its sound energy that comes
+/// while its level stands more than 3 dB above its own mean (NaN without road traffic).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Percentiles {
     pub l10: [f64; PERIODS],
     pub l50: [f64; PERIODS],
     pub l90: [f64; PERIODS],
+    pub road_intermittency: [f64; PERIODS],
 }
+
+/// Wunderli's event threshold: 3 dB above the mean, twice its intensity.
+const EVENT_THRESHOLD_RATIO: f64 = 2.0;
 
 /// One fluctuating source: its mean energy and lambda per period.
 struct Line {
     key: u64,
+    road: bool,
     energy: [f64; PERIODS],
     lambda: [f64; PERIODS],
 }
@@ -135,6 +142,7 @@ pub fn percentiles(
             let distance = contributor.distance_m.max(DISTANCE_MIN_M);
             lines.push(Line {
                 key: contributor.group_key,
+                road: contributor.layer == Layer::Road,
                 energy: contributor.energy,
                 lambda: density.map(|rho| rho * distance),
             });
@@ -144,6 +152,7 @@ pub fn percentiles(
     lines.sort_by_key(|line| line.key);
     lines.push(Line {
         key: u64::MAX,
+        road: false,
         energy: flight_energy,
         lambda: std::array::from_fn(|p| {
             if flight_energy[p] > 0.0 {
@@ -158,11 +167,23 @@ pub fn percentiles(
         l10: [f64::NEG_INFINITY; PERIODS],
         l50: [f64::NEG_INFINITY; PERIODS],
         l90: [f64::NEG_INFINITY; PERIODS],
+        road_intermittency: [f64::NAN; PERIODS],
     };
+    let road_total = selections
+        .iter()
+        .find(|selection| selection.layer == Layer::Road)
+        .map_or([0.0; PERIODS], LayerSelection::answer_energy);
     for (p, period_total) in total.iter().enumerate() {
         let fluctuating: f64 = lines.iter().map(|line| line.energy[p]).sum();
         let steady = (period_total - fluctuating).max(0.0);
+        let road_fluctuating: f64 = lines
+            .iter()
+            .filter(|line| line.road)
+            .map(|line| line.energy[p])
+            .sum();
         let mut draws = vec![steady; DRAWS];
+        // Road traffic alone, its unlisted remainder steady.
+        let mut road_draws = vec![(road_total[p] - road_fluctuating).max(0.0); DRAWS];
         let mut strata: Vec<usize> = (0..DRAWS).collect();
         for line in lines.iter().filter(|line| line.energy[p] > 0.0) {
             // Fisher-Yates: which stratum of this line's probability each draw takes.
@@ -170,10 +191,22 @@ pub fn percentiles(
                 let j = (random.uniform() * (k + 1) as f64) as usize;
                 strata.swap(k, j.min(k));
             }
-            for (draw, stratum) in draws.iter_mut().zip(&strata) {
+            for (k, stratum) in strata.iter().enumerate() {
                 let probability = (*stratum as f64 + random.uniform()) / DRAWS as f64;
-                *draw += line.energy[p] * relative_intensity(line.lambda[p], probability);
+                let value = line.energy[p] * relative_intensity(line.lambda[p], probability);
+                draws[k] += value;
+                if line.road {
+                    road_draws[k] += value;
+                }
             }
+        }
+        if road_total[p] > 0.0 {
+            // Against the draws' own mean: the table ends at the 99.5 % quantile, so the draws
+            // hold a sparse road's pass-bys at that quantile's level and its mean lower alike.
+            let all: f64 = road_draws.iter().sum();
+            let threshold = EVENT_THRESHOLD_RATIO * all / DRAWS as f64;
+            let events: f64 = road_draws.iter().filter(|&&value| value > threshold).sum();
+            result.road_intermittency[p] = if all > 0.0 { events / all } else { 0.0 };
         }
         draws.sort_by(f64::total_cmp);
         let level = |exceeded: f64| {
@@ -257,6 +290,38 @@ mod tests {
         assert!(levels.l50[0] < 25.0 && levels.l10[0] > levels.l50[0]);
     }
 
+    /// A car every half hour 4 m away is all events (intermittency near 1); a busy road's hum
+    /// 300 m away has almost none above its mean plus 3 dB.
+    #[test]
+    fn sparse_roads_are_intermittent_and_busy_distant_ones_are_not() {
+        let sparse = selection(Layer::Road, vec![contributor(7, Layer::Road, 40.0, 4.0)]);
+        let levels = percentiles(&[sparse], ([0.0; PERIODS], [0.0; PERIODS]), &quiet_road, 1);
+        assert!(
+            levels.road_intermittency[0] > 0.9,
+            "{:?}",
+            levels.road_intermittency
+        );
+        let busy = |_: &Contributor| {
+            Some(
+                serde_json::json!({"aadt_light": 30_000.0, "speed_kmh": 100.0,
+                "road_class": "motorway"}),
+            )
+        };
+        let hum = selection(Layer::Road, vec![contributor(8, Layer::Road, 45.0, 300.0)]);
+        let levels = percentiles(&[hum], ([0.0; PERIODS], [0.0; PERIODS]), &busy, 1);
+        assert!(
+            levels.road_intermittency[0] < 0.1,
+            "{:?}",
+            levels.road_intermittency
+        );
+        let industry = selection(
+            Layer::Industry,
+            vec![contributor(9, Layer::Industry, 45.0, 30.0)],
+        );
+        let levels = percentiles(&[industry], ([0.0; PERIODS], [0.0; PERIODS]), &busy, 1);
+        assert!(levels.road_intermittency[0].is_nan());
+    }
+
     /// Industry is steady; the same click gives the same levels whatever order the hash maps
     /// hold the contributors in.
     #[test]
@@ -286,6 +351,15 @@ mod tests {
                 3,
             )
         };
-        assert_eq!(roads(&[1, 2, 3, 4, 5]), roads(&[5, 3, 1, 4, 2]));
+        let (first, second) = (roads(&[1, 2, 3, 4, 5]), roads(&[5, 3, 1, 4, 2]));
+        assert_eq!(
+            (first.l10, first.l50, first.l90, first.road_intermittency),
+            (
+                second.l10,
+                second.l50,
+                second.l90,
+                second.road_intermittency
+            )
+        );
     }
 }

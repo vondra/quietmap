@@ -6,7 +6,7 @@ import { HoverText } from './ui/info-tip'
 import { fmtDb, txtTable, type TableRow } from '../utils/formatters'
 import { fieldText, PERIOD_LABELS_DETAIL, SOURCE_LABELS } from './noise/shared'
 import { AircraftLayerRow, ContributorRow } from './noise/source/ContributorRow'
-import type { BuildingAnswer, PopupUpdate } from '../types/noise'
+import type { BuildingAnswer, PopupAnnoyance, PopupUpdate } from '../types/noise'
 
 // The read and compute statistics of the click are for profiling, not for visitors: shown only
 // when the URL carries ?timings.
@@ -80,6 +80,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight }: No
           )}
         </div>
       </div>
+      {data.annoyance && <AnnoyanceLine annoyance={data.annoyance} />}
       <BuildingNotice building={data.building} />
       {data.total_lden != null ? (
         <>
@@ -100,6 +101,41 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight }: No
         </div>
       )}
       {SHOW_STATS && <StatsPanel data={data} />}
+    </div>
+  )
+}
+
+// One line under the level: how many of 100 people living here would be highly annoyed, with the
+// sources' own shares and road traffic's intermittency credit in the hover.
+function AnnoyanceLine({ annoyance }: { annoyance: PopupAnnoyance }) {
+  const percent = annoyance.highly_annoyed_percent
+  if (percent == null) return null
+  const people = percent < 1 ? '<1' : Math.round(percent).toString()
+  const ratio = annoyance.road_intermittency_percent
+  const text = txtTable([
+    ...annoyance.sources
+      .filter(s => s.highly_annoyed_percent != null && s.highly_annoyed_percent >= 0.1)
+      .map(s => [SOURCE_LABELS[s.source_type] ?? s.source_type, `${s.highly_annoyed_percent!.toFixed(1)} %`] as [string, string]),
+    { sep: true },
+    ['All sources together', `${percent.toFixed(1)} %`],
+    '',
+    ...(ratio != null
+      ? [[`Road traffic in pass-bys`, `${ratio.toFixed(0)} %`] as [string, string],
+         [`Road credit`, `${(annoyance.road_credit_db ?? 0).toFixed(1)} dB`] as [string, string]]
+      : []),
+    '',
+    'Expected share of residents highly annoyed',
+    '(WHO 2018 curves per source). Aircraft count',
+    'more than road traffic of the same Lden; road',
+    'traffic heard as occasional pass-bys counts up',
+    'to 6 dB less than a steady flow (SiRENE study).',
+  ], 22, 9)
+  return (
+    <div data-testid="annoyance" className="text-sm mb-1">
+      <DataPoint title="Annoyance" text={text}>
+        <span className="font-semibold">{people} of 100</span>
+        <span className="text-muted-foreground"> people would be highly annoyed here</span>
+      </DataPoint>
     </div>
   )
 }

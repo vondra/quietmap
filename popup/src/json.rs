@@ -228,6 +228,18 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             };
             json!({"l10": periods(p.l10), "l50": periods(p.l50), "l90": periods(p.l90)})
         }),
+        "annoyance": update.annoyance.as_ref().map(|a| {
+            let round = |value: f64| value.is_finite().then(|| (value * 10.0).round() / 10.0);
+            json!({
+                "highly_annoyed_percent": round(a.percent),
+                "dominant": a.dominant.map(|layer| layer.name()),
+                "road_intermittency_percent": round(100.0 * a.road_intermittency),
+                "road_credit_db": round(a.road_credit_db),
+                "sources": a.by_layer.iter().map(|(layer, percent)| {
+                    json!({"source_type": layer.name(), "highly_annoyed_percent": round(*percent)})
+                }).collect::<Vec<_>>(),
+            })
+        }),
         "top_contributors": contributors,
         "top_flights": flights,
         "stats": {

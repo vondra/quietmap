@@ -7,6 +7,7 @@
 //! update as a line of JSON).
 
 pub mod aircraft;
+pub mod annoyance;
 pub mod answer;
 pub mod building;
 pub mod candidates;

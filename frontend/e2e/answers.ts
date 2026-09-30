@@ -63,6 +63,14 @@ export function popupUpdate(
     sources: [{ source_type: 'road', ...levels, lden_upper: db, evaluated: 1, candidates: 1 }],
     top_contributors: db == null ? [] : [roadContributor(db)],
     top_flights: [],
+    // The final answer carries the annoyance line: a road heard in occasional pass-bys.
+    annoyance: partial || db == null ? null : {
+      highly_annoyed_percent: 6.8,
+      dominant: 'road',
+      road_intermittency_percent: 91,
+      road_credit_db: 6,
+      sources: [{ source_type: 'road', highly_annoyed_percent: 6.8 }],
+    },
     stats: { rings: seq, files: 27, bytes: 1e6, read_ms: 3, candidate_ms: 4, evaluate_ms: 20, elapsed_ms: 30 },
   }
 }

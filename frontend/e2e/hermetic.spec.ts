@@ -55,6 +55,7 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   await sendPopupLine(page, withAircraft(popupUpdate(1, true, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS.slice(0, 1)))
   await expect(badge(page)).toHaveText(`${SOURCE_DB.toFixed(1)} dB`)
   await expect(page.locator('[data-testid="popup-refining"]:visible')).toBeVisible()
+  await expect(page.locator('[data-testid="annoyance"]:visible')).toHaveCount(0)
   await expect(page.getByRole('button', { name: /Fixture street/ }).filter({ visible: true })).toBeVisible()
   // An opened contributor stays open while later updates redraw the popup.
   await page.getByRole('button', { name: /Fixture street/ }).filter({ visible: true }).click()
@@ -70,6 +71,8 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   await endPopup(page)
   await expect(badge(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB`)
   await expect(page.locator('[data-testid="popup-refining"]:visible')).toHaveCount(0)
+  // The final answer says how many of 100 residents would be highly annoyed.
+  await expect(page.locator('[data-testid="annoyance"]:visible')).toHaveText('7 of 100 people would be highly annoyed here')
   await expect(page.getByText('9.6k/day').filter({ visible: true })).toBeVisible()
   await expect(flights.locator('tbody tr')).toHaveCount(2)
   await expect(flights.locator('tbody tr').nth(0).locator('td')).toHaveText(['70', '0.44', '0.26', '09-02 D', /^Airbus A320\b/])
