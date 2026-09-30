@@ -1,7 +1,11 @@
 //! Foliage attenuation (ISO 9613-2:2024 Annex A.2.2, Table A.1) from the metres a state's direct
 //! ray spends in canopy: every profile interval contributes its slant length times the fraction of
 //! its ends inside the canopy volume times the mean canopy cover. The canopy stands a constant
-//! [`CANOPY_HEIGHT_M`] above the ground wherever there is cover.
+//! [`CANOPY_HEIGHT_M`] above the ground wherever there is cover. The homogeneous ray is straight;
+//! the favourable ray is the annex's own curved path of radius 5 km (Figure A.1), not CNOSSOS's
+//! Γ = max(1000, 8d) of the ground and diffraction terms, which dev4 used: 16.7 km over 2 km, so flat
+//! that a motorway 2 km from Kytin (Brdy foothills) grazed a forest belt's canopy for 200 m and lost
+//! 13 dB downwind, while the owner hears it there half the time.
 
 use crate::bands::BANDS;
 use crate::cnossos::MeteorologicalState;
@@ -21,6 +25,8 @@ pub const FOLIAGE_MIN_DEPTH_M: f64 = 10.0;
 pub const FOLIAGE_RATE_DEPTH_M: f64 = 20.0;
 /// The rate stops accumulating past this depth (m).
 pub const FOLIAGE_MAX_DEPTH_M: f64 = 200.0;
+/// Radius of the curved path of Figure A.1 (downwind propagation) (m).
+pub const FOLIAGE_DOWNWIND_RADIUS_M: f64 = 5_000.0;
 
 /// Table A.1 literally: nothing below 10 m, the short row below 20 m, the rate times the depth
 /// (capped at 200 m) above; the table's own step at 20 m stands.
@@ -44,7 +50,10 @@ pub fn canopy_depth_on_ray(
 ) -> f64 {
     let length = profile.horizontal_m;
     let (source, receiver) = ((0.0, source_altitude_m), (length, receiver_altitude_m));
-    let ray = StateRay::between(state, source, receiver);
+    let ray = StateRay {
+        state,
+        radius_m: FOLIAGE_DOWNWIND_RADIUS_M,
+    };
     let inside = |k: usize, ray_altitude: f64| {
         let ground = profile.ground_m[k];
         let top = if profile.forest_cover[k] > 0.0 {
