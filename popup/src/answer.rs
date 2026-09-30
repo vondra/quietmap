@@ -395,15 +395,18 @@ pub fn answer(
                 .ok()
                 .and_then(|text| serde_json::from_str(&text).ok())
         };
-        let percentiles = crate::percentiles::percentiles(
-            &selections,
-            (flight_energy, flight_energy_lambda),
-            &fields,
-            lat.to_bits() ^ lon.to_bits().rotate_left(32),
-        );
+        // The time levels come with the final answer only (the partial ones do not show them).
+        let percentiles = last_ring.then(|| {
+            crate::percentiles::percentiles(
+                &selections,
+                (flight_energy, flight_energy_lambda),
+                &fields,
+                lat.to_bits() ^ lon.to_bits().rotate_left(32),
+            )
+        });
         let update = Update {
             partial: !last_ring,
-            percentiles: Some(percentiles),
+            percentiles,
             lat,
             lon,
             frame,
