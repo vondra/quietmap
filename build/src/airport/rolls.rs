@@ -36,7 +36,7 @@ fn rolls_of(class: u8) -> Option<[f64; 4]> {
     Some(match *CLASS_NAMES.get(usize::from(class))? {
         "HELICOPTER" => return None,
         "PROP_C172" => [300.0, 55.0, 250.0, 55.0],
-        "PROP_DH8D" => [1_100.0, 115.0, 900.0, 100.0],
+        "PROP_DH8D" | "PROP_AT72" => [1_100.0, 115.0, 900.0, 100.0],
         "FUSE_C56X" => [1_100.0, 115.0, 900.0, 105.0],
         "FUSE_CRJ9" => [1_700.0, 145.0, 1_300.0, 125.0],
         "WING_B789" | "WING_B748" => [2_600.0, 165.0, 1_800.0, 140.0],

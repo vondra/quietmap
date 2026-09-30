@@ -114,4 +114,12 @@ pub static APPROACH: [ApproachConfiguration; NUM_CLASSES] = [
         from_ft_afe: 1000.0,
         landing_weight_lb: 15300.0,
     },
+    ApproachConfiguration {
+        class_name: "PROP_AT72",
+        anchor: "ATR72/DEFAULT",
+        flap: "33-A-G",
+        drag_ratio: 0.105,
+        from_ft_afe: 2802.0,
+        landing_weight_lb: 44343.0,
+    },
 ];

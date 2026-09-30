@@ -16,12 +16,14 @@
 //! all NPD data; CNOSSOS-EU's 82.31 m/s), where dev4 had given the turboprops 130 kt and its
 //! piston placeholders 90-110 kt (the turboprops read 0.9 dB, the pistons 2.5 dB low). Profile
 //! 84, the PROP_C172 anchor, is the ANP's CNA172 (IO360L rows, `scripts/thrust-class.py`) instead
-//! of dev4's hand-made PISTON_SE placeholder; the other placeholders are not read.
+//! of dev4's hand-made PISTON_SE placeholder; the other placeholders are not read. The ATR 42 and
+//! 72 (AT43, AT45, AT72, AT76), which dev4 read as Dash 8s (DHC8, DHC830), are the ANP's ATR72
+//! and a class of their own, PROP_AT72 (anchor AT76, the family's most flown type).
 
 use super::npd::{Installation, NpdProfile};
 
 pub const NUM_PROFILES: usize = 124;
-pub const NUM_CLASSES: usize = 15;
+pub const NUM_CLASSES: usize = 16;
 pub const FALLBACK_PROFILE_IDX: u8 = 123;
 pub const FALLBACK_NOISE_CLASS: u8 = 0;
 
@@ -41,6 +43,7 @@ pub static CLASS_NAMES: [&str; NUM_CLASSES] = [
     "HELICOPTER",
     "PROP_DH8D",
     "FUSE_C56X",
+    "PROP_AT72",
 ];
 
 pub static IS_JET: [bool; NUM_CLASSES] = [
@@ -59,6 +62,7 @@ pub static IS_JET: [bool; NUM_CLASSES] = [
     false, // HELICOPTER
     false, // PROP_DH8D
     true,  // FUSE_C56X
+    false, // PROP_AT72
 ];
 
 /// Per-profile → noise class lookup (dense u8 index). Computed by
@@ -135,10 +139,10 @@ pub static CLASS_OF_PROFILE: [u8; NUM_PROFILES] = [
     10, // FA7X → FUSE_CRJ9
     10, // PC24 → FUSE_CRJ9
     14, // LJ60 → FUSE_C56X
-    13, // AT72 → PROP_DH8D
-    13, // AT76 → PROP_DH8D
-    13, // AT43 → PROP_DH8D
-    13, // AT45 → PROP_DH8D
+    15, // AT72 → PROP_AT72
+    15, // AT76 → PROP_AT72
+    15, // AT43 → PROP_AT72
+    15, // AT45 → PROP_AT72
     13, // DH8D → PROP_DH8D
     13, // DH8C → PROP_DH8D
     13, // DH8A → PROP_DH8D
@@ -211,6 +215,7 @@ pub static CLASS_REP_PROFILE_IDX: [u8; NUM_CLASSES] = [
     107, // HELICOPTER → AS50
     74,  // PROP_DH8D → DH8D
     62,  // FUSE_C56X → C56X
+    71,  // PROP_AT72 → AT76
 ];
 
 pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
@@ -919,38 +924,38 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         Installation::Fuselage,
     ),
     NpdProfile::new(
-        "AT72/DHC830",
-        [88.9, 84.4, 81.1, 77.7, 71.9, 65.8, 62.3, 58.7, 55.6, 52.8],
-        [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
-        [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
-        [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
+        "AT72/ATR72",
+        [89.7, 85.0, 81.7, 78.2, 72.8, 66.9, 62.6, 57.7, 52.1, 45.9],
+        [93.7, 90.2, 87.7, 85.2, 81.4, 77.1, 74.1, 70.6, 66.8, 62.6],
+        [86.6, 79.4, 74.4, 69.2, 61.1, 52.5, 46.6, 40.0, 32.7, 25.0],
+        [95.7, 89.5, 85.2, 81.0, 74.3, 67.3, 62.4, 57.0, 51.7, 45.6],
         160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
-        "AT76/DHC830",
-        [88.9, 84.4, 81.1, 77.7, 71.9, 65.8, 62.3, 58.7, 55.6, 52.8],
-        [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
-        [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
-        [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
+        "AT76/ATR72",
+        [89.7, 85.0, 81.7, 78.2, 72.8, 66.9, 62.6, 57.7, 52.1, 45.9],
+        [93.7, 90.2, 87.7, 85.2, 81.4, 77.1, 74.1, 70.6, 66.8, 62.6],
+        [86.6, 79.4, 74.4, 69.2, 61.1, 52.5, 46.6, 40.0, 32.7, 25.0],
+        [95.7, 89.5, 85.2, 81.0, 74.3, 67.3, 62.4, 57.0, 51.7, 45.6],
         160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
-        "AT43/DHC8",
-        [88.9, 84.4, 81.1, 77.7, 71.9, 65.8, 62.3, 58.7, 55.6, 52.8],
-        [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
-        [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
-        [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
+        "AT43/ATR72",
+        [89.7, 85.0, 81.7, 78.2, 72.8, 66.9, 62.6, 57.7, 52.1, 45.9],
+        [93.7, 90.2, 87.7, 85.2, 81.4, 77.1, 74.1, 70.6, 66.8, 62.6],
+        [86.6, 79.4, 74.4, 69.2, 61.1, 52.5, 46.6, 40.0, 32.7, 25.0],
+        [95.7, 89.5, 85.2, 81.0, 74.3, 67.3, 62.4, 57.0, 51.7, 45.6],
         160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
-        "AT45/DHC8",
-        [88.9, 84.4, 81.1, 77.7, 71.9, 65.8, 62.3, 58.7, 55.6, 52.8],
-        [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
-        [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
-        [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
+        "AT45/ATR72",
+        [89.7, 85.0, 81.7, 78.2, 72.8, 66.9, 62.6, 57.7, 52.1, 45.9],
+        [93.7, 90.2, 87.7, 85.2, 81.4, 77.1, 74.1, 70.6, 66.8, 62.6],
+        [86.6, 79.4, 74.4, 69.2, 61.1, 52.5, 46.6, 40.0, 32.7, 25.0],
+        [95.7, 89.5, 85.2, 81.0, 74.3, 67.3, 62.4, 57.0, 51.7, 45.6],
         160.0,
         Installation::Propeller,
     ),

@@ -8,7 +8,8 @@ and LAmax NPD row per operation by power (padded to six with the loudest); the a
 holds the lowest approach row and the highest departure row, 160 kt, and the installation given.
 
 A class whose NPD power is a percentage of its maximum sea-level static thrust gets its rows in
-pounds; one without an IdleApproach rating (the ANP rates the DHC830 at MaxTakeoff and MaxClimb
+pounds; a row repeating the previous row's curves is dropped (the ATR72's 5,310 lb row repeats
+its 5,300, its 900 lb row its 890); one without an IdleApproach rating (the ANP rates the DHC830 at MaxTakeoff and MaxClimb
 only) gets no idle floor; one the ANP rates by its propeller (CNA172) gets that rating's efficiency
 and net propulsive power for Eq. B-5 and zero B-1 coefficients.
 
@@ -58,9 +59,15 @@ def main(anp, class_name, acft, label, installation):
         found = sorted(((float(n["Power Setting"]), [float(n[d]) for d in distances]) for n in npd
                         if n["Op Mode"] == op and n["Noise Metric"] == metric), key=lambda t: t[0])
         return found
+    def repeated(op):  # powers whose SEL and LAmax curves repeat the previous row's
+        sel, lmax = table(op, "SEL"), table(op, "LAmax")
+        return {sel[k][0] for k in range(1, len(sel))
+                if sel[k][1] == sel[k - 1][1] and lmax[k][1] == lmax[k - 1][1]}
     out = []
     def rows_block(op):
-        sel, lmax = table(op, "SEL"), table(op, "LAmax")
+        drop = repeated(op)
+        sel = [row for row in table(op, "SEL") if row[0] not in drop]
+        lmax = [row for row in table(op, "LAmax") if row[0] not in drop]
         assert [p for p, _ in sel] == [p for p, _ in lmax]
         count = len(sel)
         pad = lambda seq: seq + [seq[-1]] * (MAX_ROWS - len(seq))

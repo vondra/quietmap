@@ -14,7 +14,7 @@ ANCHORS = [  # CLASS_NAMES order: the ANP aircraft whose spectral classes the cl
     ("PROP_C172", "CNA172"), ("WING_B38M", "7378MAX"), ("WING_B789", "7878R"),
     ("WING_A21N", "A321-270N"), ("WING_A321", "A321-232"), ("WING_A20N", "A320-270N"),
     ("WING_A319", "A319-131"), ("FUSE_CRJ9", "CRJ9-ER"), ("WING_B748", "7478"),
-    ("HELICOPTER", None), ("PROP_DH8D", "DHC830"), ("FUSE_C56X", "CIT3"),
+    ("HELICOPTER", None), ("PROP_DH8D", "DHC830"), ("FUSE_C56X", "CIT3"), ("PROP_AT72", "ATR72"),
 ]
 
 

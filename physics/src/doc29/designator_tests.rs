@@ -113,7 +113,22 @@ fn the_heavy_class_holds_the_loud_heavies_only() {
             "{designator}"
         );
     }
-    assert_eq!(NUM_CLASSES, 15);
+    assert_eq!(NUM_CLASSES, 16);
+}
+
+/// The ATR 42 and 72 fly the ANP's ATR72, a class of their own; the Dash 8 family and the other
+/// turboprops stay on the DHC830.
+#[test]
+fn the_atr_family_has_its_own_class() {
+    let atr = noise_class_of(profile_idx("AT76"));
+    assert_eq!(CLASS_NAMES[usize::from(atr)], "PROP_AT72");
+    for designator in ["AT72", "AT43", "AT45"] {
+        assert_eq!(noise_class_of(profile_idx(designator)), atr, "{designator}");
+    }
+    for designator in ["DH8D", "DH8C", "SF34", "F50", "L410", "PC12", "C208"] {
+        let class = usize::from(noise_class_of(profile_idx(designator)));
+        assert_eq!(CLASS_NAMES[class], "PROP_DH8D", "{designator}");
+    }
 }
 
 /// Only the AS-prefixed rotorcraft designators are helicopters; the IAI Astra is a jet.

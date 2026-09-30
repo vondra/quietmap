@@ -34,6 +34,7 @@ const RUNWAY_ROLL_EVENT_SEL_DB: [(&str, f64); NUM_CLASSES] = [
     ("HELICOPTER", 94.0),
     ("PROP_DH8D", 97.0),
     ("FUSE_C56X", 99.0),
+    ("PROP_AT72", 97.0),
 ];
 /// dev4's per-metre level of an anchor, 10 lg(25/pi): its receiver formula LW' + 10 lg(theta/d)
 /// then reads the anchor - 0.14 dB at 25 m from the middle of a 1 km roll.

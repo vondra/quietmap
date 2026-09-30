@@ -15,7 +15,7 @@ ANCHORS = [  # CLASS_NAMES order; None for the pinned classes (no thrust model)
     ("WING_B38M", "7378MAX"), ("WING_B789", "7878R"), ("WING_A21N", "A321-270N"),
     ("WING_A321", "A321-232"), ("WING_A20N", "A320-270N"), ("WING_A319", "A319-131"),
     ("FUSE_CRJ9", "CRJ9-ER"), ("WING_B748", "7478"), ("HELICOPTER", None), ("PROP_DH8D", "DHC830"),
-    ("FUSE_C56X", "CIT3"),
+    ("FUSE_C56X", "CIT3"), ("PROP_AT72", "ATR72"),
 ]
 
 
