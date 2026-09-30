@@ -1,7 +1,7 @@
 //! CNOSSOS-EU road traffic emission (Directive 2015/996 Annex II 2.2 with the coefficients of
 //! Delegated Directive 2021/1226): rolling and propulsion noise per vehicle category and octave
-//! band, summed into the sound power per metre of a traffic flow. There are no temperature,
-//! gradient, acceleration or studded-tyre terms: emission is frozen at the reference conditions.
+//! band, summed into the sound power per metre of a traffic flow, with the road gradient's
+//! propulsion term (2.2.4). There are no temperature, acceleration or studded-tyre terms.
 
 use crate::bands::BANDS;
 
@@ -82,6 +82,30 @@ pub struct CategoryFlow {
     pub vehicles_per_hour: f64,
     pub speed_kmh: f64,
     pub category: VehicleCategory,
+    /// The road's slope in the flow's direction (%, positive uphill).
+    pub slope_percent: f64,
+}
+
+/// Slopes steeper than this count as this (2.2.13-2.2.15: Min(12 %; s)).
+const SLOPE_LIMIT_PERCENT: f64 = 12.0;
+
+/// CNOSSOS-EU 2.2.4 (Eqs. 2.2.13-2.2.15): the propulsion correction (dB, every band) of a
+/// category climbing (`slope` > 0) or descending a road at `speed_kmh`; it holds the effect of the
+/// slope on the speed too. Motorcycles have none.
+pub fn gradient_correction_db(category: VehicleCategory, slope: f64, speed_kmh: f64) -> f64 {
+    let (up, down) = (
+        slope.min(SLOPE_LIMIT_PERCENT),
+        (-slope).min(SLOPE_LIMIT_PERCENT),
+    );
+    match category {
+        VehicleCategory::Light if slope < -6.0 => (down - 6.0) / 1.0,
+        VehicleCategory::Light if slope > 2.0 => (up - 2.0) / 1.5 * speed_kmh / 100.0,
+        VehicleCategory::Medium if slope < -4.0 => (down - 4.0) / 0.7 * (speed_kmh - 20.0) / 100.0,
+        VehicleCategory::Medium if slope > 0.0 => up / 1.0 * speed_kmh / 100.0,
+        VehicleCategory::Heavy if slope < -4.0 => (down - 4.0) / 0.5 * (speed_kmh - 10.0) / 100.0,
+        VehicleCategory::Heavy if slope > 0.0 => up / 0.8 * speed_kmh / 100.0,
+        _ => 0.0,
+    }
 }
 
 /// Sound power per metre (dB, Z-weighted) of a mix of flows; `-inf` in every band when silent.
@@ -101,9 +125,10 @@ pub fn line_emission_db(flows: &[CategoryFlow], surface_correction_db: f64) -> [
         );
         // Vehicles per metre: Q / (1000 v) with Q per hour and v in km/h.
         let density = flow.vehicles_per_hour / (1000.0 * speed);
+        let gradient = gradient_correction_db(flow.category, flow.slope_percent, law_speed);
         for band in 0..BANDS {
             let (a_p, b_p) = coefficients.propulsion;
-            let mut vehicle = 10f64.powf((a_p[band] + b_p[band] * relative) / 10.0);
+            let mut vehicle = 10f64.powf((a_p[band] + b_p[band] * relative + gradient) / 10.0);
             if let Some((a_r, b_r)) = coefficients.rolling {
                 vehicle +=
                     10f64.powf((a_r[band] + b_r[band] * log_ratio + surface_correction_db) / 10.0);
@@ -138,6 +163,7 @@ mod tests {
             vehicles_per_hour,
             speed_kmh,
             category,
+            slope_percent: 0.0,
         }]
     }
 
@@ -156,6 +182,72 @@ mod tests {
         assert!((k2 - 80.07).abs() < 0.15, "{k2}");
         let slow = a_weighted(&flow(100.0, 20.0, VehicleCategory::Light), 0.0);
         assert!((slow - 66.17).abs() < 0.15, "{slow}");
+    }
+
+    /// 2.2.4 on the audit's cases: 100 heavy vehicles an hour at 80 km/h up 6 % read 3.20 dB(A)/m
+    /// above level; a two-way road at 80 km/h with 12 % heavy vehicles, half up and half down,
+    /// 1.1 dB at 6 % and 3.4 dB at 10 %; motorcycles and gentle slopes nothing.
+    #[test]
+    fn slopes_load_the_engines() {
+        let heavy = |slope| {
+            a_weighted(
+                &[CategoryFlow {
+                    vehicles_per_hour: 100.0,
+                    speed_kmh: 80.0,
+                    category: VehicleCategory::Heavy,
+                    slope_percent: slope,
+                }],
+                0.0,
+            )
+        };
+        assert!(
+            (heavy(6.0) - heavy(0.0) - 3.20).abs() < 0.05,
+            "{}",
+            heavy(6.0) - heavy(0.0)
+        );
+        let two_way = |slope: f64| {
+            let flows: Vec<CategoryFlow> = [slope, -slope]
+                .iter()
+                .flat_map(|&s| {
+                    [
+                        (VehicleCategory::Light, 440.0),
+                        (VehicleCategory::Heavy, 60.0),
+                    ]
+                    .map(|(category, vehicles_per_hour)| CategoryFlow {
+                        vehicles_per_hour,
+                        speed_kmh: 80.0,
+                        category,
+                        slope_percent: s,
+                    })
+                })
+                .collect();
+            a_weighted(&flows, 0.0)
+        };
+        let (six, ten) = (two_way(6.0) - two_way(0.0), two_way(10.0) - two_way(0.0));
+        assert!(
+            (six - 1.1).abs() < 0.3 && (ten - 3.4).abs() < 0.4,
+            "{six} {ten}"
+        );
+        assert_eq!(
+            gradient_correction_db(VehicleCategory::Motorcycle, 10.0, 50.0),
+            0.0
+        );
+        assert_eq!(
+            gradient_correction_db(VehicleCategory::Light, 2.0, 50.0),
+            0.0
+        );
+        assert_eq!(
+            gradient_correction_db(VehicleCategory::Light, -6.0, 50.0),
+            0.0
+        );
+        assert_eq!(
+            gradient_correction_db(VehicleCategory::Heavy, -4.0, 80.0),
+            0.0
+        );
+        assert_eq!(
+            gradient_correction_db(VehicleCategory::Heavy, 20.0, 80.0),
+            gradient_correction_db(VehicleCategory::Heavy, 12.0, 80.0)
+        );
     }
 
     /// The laws hold above 130 km/h too: cars at 140 km/h emit 0.79 dB(A)/m more than at 130

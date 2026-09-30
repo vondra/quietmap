@@ -2,10 +2,11 @@
 //! period computed here once, and the display record of the road group.
 
 use super::country_speeds::COUNTRY_SPEEDS;
+use super::road_slope::{SquareHeights, WayRow, row_slopes};
 use super::{Converted, group_key, split_at_tile_edges};
-use crate::dev4::{Dev4, Square, require_stamp, z30_to_global};
+use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Float64Type, Int32Type, Int64Type, UInt8Type, UInt16Type};
+use arrow_array::types::{Float64Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type};
 use arrow_array::{Array, RecordBatch};
 use physics::bands::{BANDS, PERIOD_HOURS, PERIODS};
 use physics::emission::road::{CategoryFlow, VehicleCategory, line_emission_db};
@@ -146,6 +147,7 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
     ] {
         require_stamp(&table, key, value)?;
     }
+    let heights = SquareHeights::load(dev4, square)?;
     let mut emitting = 0;
     for batch in &table.batches {
         let c = Columns { batch };
@@ -185,9 +187,22 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
             c.get("ref")?.as_string::<i32>(),
         );
         let osm_id = c.get("osm_id")?.as_primitive::<Int64Type>();
+        let segment_index = c.get("segment_idx")?.as_primitive::<Int16Type>();
+        let mut ways: std::collections::HashMap<i64, Vec<WayRow>> =
+            std::collections::HashMap::new();
+        for row in 0..batch.num_rows() {
+            ways.entry(osm_id.value(row)).or_default().push(WayRow {
+                row,
+                segment_index: segment_index.value(row),
+                start: z30_corner_degrees(start_x.value(row), start_y.value(row)),
+                end: z30_corner_degrees(end_x.value(row), end_y.value(row)),
+                bridge: bridge.value(row),
+            });
+        }
+        let slopes = row_slopes(ways, &heights, batch.num_rows());
         let country = c.get("country_iso")?.as_primitive::<UInt16Type>();
         let source_id = c.get("source_id")?.as_primitive::<UInt16Type>();
-        for row in 0..batch.num_rows() {
+        for (row, &slope) in slopes.iter().enumerate() {
             let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
             let scale = prior_scale(
                 class_index,
@@ -238,12 +253,26 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
                 VehicleCategory::Heavy,
                 VehicleCategory::Motorcycle,
             ];
+            // 2.2.4: a two-way flow is half uphill, half downhill; a one-way flow runs along the
+            // way (1 tagged, 3 roundabout, 4 motorway) or against it (2, oneway=-1).
+            let directions: &[(f64, f64)] = match oneway.value(row) {
+                0 => &[(0.5, 1.0), (0.5, -1.0)],
+                2 => &[(1.0, -1.0)],
+                _ => &[(1.0, 1.0)],
+            };
             let emission: [[f64; BANDS]; PERIODS] = std::array::from_fn(|period| {
-                let flows = std::array::from_fn::<_, 4, _>(|c| CategoryFlow {
-                    vehicles_per_hour: daily[c] * shares[period] / PERIOD_HOURS[period],
-                    speed_kmh: speed,
-                    category: categories[c],
-                });
+                let flows: Vec<CategoryFlow> = directions
+                    .iter()
+                    .flat_map(|&(share, sign)| {
+                        (0..4).map(move |c| CategoryFlow {
+                            vehicles_per_hour: share * daily[c] * shares[period]
+                                / PERIOD_HOURS[period],
+                            speed_kmh: speed,
+                            category: categories[c],
+                            slope_percent: sign * slope,
+                        })
+                    })
+                    .collect();
                 line_emission_db(&flows, surface_correction)
             });
             let lanes_used = if lanes.value(row) == 0 {

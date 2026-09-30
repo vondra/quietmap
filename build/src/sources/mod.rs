@@ -11,6 +11,7 @@ pub mod industry;
 pub mod leisure;
 pub mod rail;
 pub mod road;
+pub mod road_slope;
 pub mod ship;
 
 use crate::dev4::{Dev4, Square};
