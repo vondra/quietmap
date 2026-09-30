@@ -53,9 +53,14 @@ fn flight_of(flight_id: u64, callsign: [u8; 8], designator: [u8; 4]) -> Flight {
     }
 }
 
-/// Writes one aircraft file per tile holding boxes (their bands from `placement`); returns how
-/// many were written.
-pub fn write_tiles(boxes: &Boxes, placement: &Placement, out: &Path) -> Result<usize, String> {
+/// Writes one aircraft file of `kind` per tile holding boxes (their bands from `placement`);
+/// returns how many were written.
+pub fn write_tiles(
+    boxes: &Boxes,
+    placement: &Placement,
+    kind: Kind,
+    out: &Path,
+) -> Result<usize, String> {
     let mut by_tile: BTreeMap<TileId, Vec<(&BoxKey, &BoxEntry)>> = BTreeMap::new();
     for (key, entry) in boxes.iter() {
         by_tile.entry(key.tile).or_default().push((key, entry));
@@ -132,12 +137,7 @@ pub fn write_tiles(boxes: &Boxes, placement: &Placement, out: &Path) -> Result<u
         if records.is_empty() {
             continue;
         }
-        write_tile(
-            out,
-            tile,
-            Kind::Aircraft,
-            &encode(&records, &flights, &pieces),
-        )?;
+        write_tile(out, tile, kind, &encode(&records, &flights, &pieces))?;
         written += 1;
     }
     Ok(written)

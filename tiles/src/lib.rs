@@ -18,6 +18,8 @@ pub enum Kind {
     Obstacles,
     Sources,
     Aircraft,
+    /// The same format with boxes of a coarser rule, read from the second ring on.
+    AircraftFar,
 }
 
 impl Kind {
@@ -27,6 +29,7 @@ impl Kind {
             Kind::Obstacles => "obstacles",
             Kind::Sources => "sources",
             Kind::Aircraft => "aircraft",
+            Kind::AircraftFar => "aircraft-far",
         }
     }
 }

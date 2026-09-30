@@ -60,6 +60,10 @@ pub struct PointReport {
     pub exact: Levels,
     pub boxed: Levels,
     pub beyond: Levels,
+    /// The boxes as the popup reads them (far boxes from the second ring) and the megabytes of
+    /// aircraft files read: fine boxes in every ring, and as the popup reads them.
+    pub boxed_as_read: Levels,
+    pub megabytes: [f64; 2],
     /// The first band (exact pieces, boxes) and the bands above it.
     pub near_ground: [Levels; 2],
     pub aloft: [Levels; 2],
@@ -354,23 +358,31 @@ pub fn compare(
         .collect()
 }
 
-/// One point's report from its sums and the written boxes around it.
-fn report(aircraft_root: &Path, receiver: &Receiver, total: Sums) -> Result<PointReport, String> {
-    let centre = TileId::containing(receiver.frame.origin);
-    let rings: Vec<Vec<(TileId, Vec<u8>)>> = (0..=REACH_RINGS)
+/// The aircraft files of `kind` of each ring (0 ..= [`REACH_RINGS`]) around `centre`.
+fn read_rings(
+    aircraft_root: &Path,
+    centre: TileId,
+    kind: tiles::Kind,
+) -> Vec<Vec<(TileId, Vec<u8>)>> {
+    (0..=REACH_RINGS)
         .map(|ring| {
             centre
                 .ring(ring)
                 .into_iter()
                 .filter_map(|tile| {
-                    std::fs::read(tiles::tile_path(aircraft_root, tile, tiles::Kind::Aircraft))
+                    std::fs::read(tiles::tile_path(aircraft_root, tile, kind))
                         .ok()
                         .map(|bytes| (tile, bytes))
                 })
                 .collect()
         })
-        .collect();
-    let parsed: Vec<Vec<(TileId, Aircraft<'_>)>> = rings
+        .collect()
+}
+
+fn parse_rings(
+    rings: &[Vec<(TileId, Vec<u8>)>],
+) -> Result<Vec<Vec<(TileId, Aircraft<'_>)>>, String> {
+    rings
         .iter()
         .map(|ring| {
             ring.iter()
@@ -378,11 +390,17 @@ fn report(aircraft_root: &Path, receiver: &Receiver, total: Sums) -> Result<Poin
                 .collect::<Result<_, _>>()
         })
         .collect::<Result<_, _>>()
-        .map_err(|error| error.to_string())?;
-    // The boxes' energy in the first band and above.
-    let mut near_ground = [0.0; PERIODS];
-    let mut aloft = [0.0; PERIODS];
-    for (tile, aircraft) in parsed.iter().flatten() {
+        .map_err(|error| error.to_string())
+}
+
+/// The day SEL energy per period of the boxes within the reach: those of the first band and
+/// those above it.
+fn box_energy<'a>(
+    tiles: impl Iterator<Item = &'a (TileId, Aircraft<'a>)>,
+    receiver: &Receiver,
+) -> [[f64; PERIODS]; 2] {
+    let mut energy = [[0.0; PERIODS]; 2];
+    for (tile, aircraft) in tiles {
         for index in 0..aircraft.box_count() {
             let record = aircraft.aircraft_box(index);
             let global = tile.global(record.centroid);
@@ -407,17 +425,56 @@ fn report(aircraft_root: &Path, receiver: &Receiver, total: Sums) -> Result<Poin
                 ground_m: record.ground_m - receiver.altitude_m,
             };
             if let Some(sel) = box_sel_at_receiver(&at_receiver, &Unscreened) {
-                let slots = if record.clearance_m == 0.0 {
-                    &mut near_ground
-                } else {
-                    &mut aloft
-                };
+                let slots = &mut energy[usize::from(record.clearance_m > 0.0)];
                 for (total, level) in slots.iter_mut().zip(sel.sel_db) {
                     *total += 10f64.powf(level / 10.0);
                 }
             }
         }
     }
+    energy
+}
+
+/// One point's report from its sums and the written boxes around it: the fine boxes of every
+/// ring, and as the popup reads them (fine boxes in the tile and ring 1, far boxes beyond).
+fn report(aircraft_root: &Path, receiver: &Receiver, total: Sums) -> Result<PointReport, String> {
+    let centre = TileId::containing(receiver.frame.origin);
+    let fine_files = read_rings(aircraft_root, centre, tiles::Kind::Aircraft);
+    let far_files = read_rings(aircraft_root, centre, tiles::Kind::AircraftFar);
+    let (fine, far) = (parse_rings(&fine_files)?, parse_rings(&far_files)?);
+    let megabytes = |rings: &[&Vec<(TileId, Vec<u8>)>]| {
+        rings
+            .iter()
+            .flat_map(|ring| ring.iter())
+            .map(|(_, bytes)| bytes.len())
+            .sum::<usize>() as f64
+            / 1e6
+    };
+    let popup_rings: Vec<&Vec<(TileId, Aircraft<'_>)>> = (0..fine.len())
+        .map(|ring| {
+            if ring >= 2 && !far[ring].is_empty() {
+                &far[ring]
+            } else {
+                &fine[ring]
+            }
+        })
+        .collect();
+    let popup_bytes = megabytes(
+        &(0..fine_files.len())
+            .map(|ring| {
+                if ring >= 2 && !far_files[ring].is_empty() {
+                    &far_files[ring]
+                } else {
+                    &fine_files[ring]
+                }
+            })
+            .collect::<Vec<_>>(),
+    );
+    let fine_bytes = megabytes(&fine_files.iter().collect::<Vec<_>>());
+    let [near_ground, aloft] = box_energy(fine.iter().flatten(), receiver);
+    let [popup_near, popup_aloft] =
+        box_energy(popup_rings.iter().flat_map(|ring| ring.iter()), receiver);
+    let popup: [f64; PERIODS] = std::array::from_fn(|p| popup_near[p] + popup_aloft[p]);
     let boxed: [f64; PERIODS] = std::array::from_fn(|p| near_ground[p] + aloft[p]);
     // The ten loudest flights by LAmax of the exact sum, and the popup's list reading K pieces
     // per box.
@@ -443,7 +500,7 @@ fn report(aircraft_root: &Path, receiver: &Receiver, total: Sums) -> Result<Poin
     for pieces in PIECES {
         let (mut searched, mut exhaustive) =
             (FlightTotals::reading(pieces), FlightTotals::reading(pieces));
-        for ring in &parsed {
+        for ring in &popup_rings {
             ring_aircraft(
                 ring,
                 &receiver.frame,
@@ -451,7 +508,7 @@ fn report(aircraft_root: &Path, receiver: &Receiver, total: Sums) -> Result<Poin
                 &Unscreened,
                 &mut searched,
             );
-            for (tile, aircraft) in ring {
+            for (tile, aircraft) in ring.iter() {
                 let answer = tile_energy(
                     aircraft,
                     *tile,
@@ -512,6 +569,8 @@ fn report(aircraft_root: &Path, receiver: &Receiver, total: Sums) -> Result<Poin
     Ok(PointReport {
         exact: leq_db(&total.energy[EXACT..]),
         boxed: leq_db(&boxed),
+        boxed_as_read: leq_db(&popup),
+        megabytes: [fine_bytes, popup_bytes],
         beyond: leq_db(&total.energy[BEYOND..]),
         near_ground: [leq_db(&total.energy[NEAR_GROUND..]), leq_db(&near_ground)],
         aloft: [leq_db(&total.energy[ALOFT..]), leq_db(&aloft)],

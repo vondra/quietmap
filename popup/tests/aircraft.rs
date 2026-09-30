@@ -1,6 +1,6 @@
 //! The aircraft layer of the ring loop on a synthetic release (flat ocean): a box of one segment
-//! answers as the kernel's SEL of that segment, as the day's Leq, and a box beyond the reach is
-//! not heard.
+//! answers as the kernel's SEL of that segment, as the day's Leq; from the second ring on the far
+//! boxes are read; a box beyond the reach is not heard.
 
 use physics::bands::{PERIOD_HOURS, PERIODS};
 use physics::doc29::box_sums::BoxSums;
@@ -22,13 +22,13 @@ const TILE: TileId = TileId { x: 2212, y: 1387 };
 /// The receiver stands 4 m above the ocean.
 const RECEIVER_ALTITUDE_M: f64 = 4.0;
 
-fn release_with_boxes(name: &str, tile: TileId, boxes: &[AircraftBox]) -> PathBuf {
+fn release_with_boxes(name: &str, tile: TileId, kind: Kind, boxes: &[AircraftBox]) -> PathBuf {
     let root = std::env::temp_dir().join(format!("qm-aircraft-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("2026")).unwrap();
     let weather = vec![[[50u8; SECTORS]; PERIODS]; ROWS * COLUMNS];
     std::fs::write(root.join("weather"), encode_weather(&weather)).unwrap();
-    let path = tile_path(&root.join("2026"), tile, Kind::Aircraft);
+    let path = tile_path(&root.join("2026"), tile, kind);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, encode(boxes, &[], &[])).unwrap();
     std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
@@ -119,7 +119,12 @@ fn aircraft_day_energy(release: &Release) -> (f64, usize) {
 #[test]
 fn a_box_of_one_segment_answers_as_the_kernel_reads_it() {
     let (emission, start, end) = departure(1_000.0);
-    let root = release_with_boxes("one", TILE, &[box_of(&emission, start, end)]);
+    let root = release_with_boxes(
+        "one",
+        TILE,
+        Kind::Aircraft,
+        &[box_of(&emission, start, end)],
+    );
     let release = Release::open(&root, "2026").unwrap();
     let (energy, boxes) = aircraft_day_energy(&release);
     assert_eq!(boxes, 1);
@@ -143,6 +148,28 @@ fn a_box_of_one_segment_answers_as_the_kernel_reads_it() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// Two tiles east (about 12.6 km in Prague) the far file is heard and the fine one is not read.
+#[test]
+fn the_second_ring_reads_the_far_boxes() {
+    let (emission, start, end) = departure(0.0);
+    let second_ring = TileId {
+        x: TILE.x + 2,
+        y: TILE.y,
+    };
+    for (kind, heard) in [(Kind::AircraftFar, 1), (Kind::Aircraft, 0)] {
+        let root = release_with_boxes(
+            "second",
+            second_ring,
+            kind,
+            &[box_of(&emission, start, end)],
+        );
+        let release = Release::open(&root, "2026").unwrap();
+        let (energy, boxes) = aircraft_day_energy(&release);
+        assert_eq!((boxes, energy > 0.0), (heard, heard == 1), "{kind:?}");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
 /// A box three tiles east (about 19 km in Prague) is read, the ring loop reading aircraft to
 /// 16 km, and not heard.
 #[test]
@@ -152,7 +179,12 @@ fn a_box_beyond_the_reach_is_not_heard() {
         x: TILE.x + 3,
         y: TILE.y,
     };
-    let root = release_with_boxes("far", far_tile, &[box_of(&emission, start, end)]);
+    let root = release_with_boxes(
+        "far",
+        far_tile,
+        Kind::AircraftFar,
+        &[box_of(&emission, start, end)],
+    );
     let release = Release::open(&root, "2026").unwrap();
     let (energy, boxes) = aircraft_day_energy(&release);
     assert_eq!((energy, boxes), (0.0, 0));

@@ -293,12 +293,13 @@ fn add_day(
         });
 }
 
-/// How boxes are cut and what they keep: the level step D of their edges (dB) and the loudest
-/// pieces kept per box.
+/// How boxes are cut and what they keep: the level step D of their edges (dB), the loudest
+/// pieces kept per box, and the kind of file they go to.
 #[derive(Debug, Clone, Copy)]
 pub struct BoxRule {
     pub level_step_db: f64,
     pub pieces: usize,
+    pub kind: tiles::Kind,
 }
 
 impl Default for BoxRule {
@@ -306,6 +307,18 @@ impl Default for BoxRule {
         BoxRule {
             level_step_db: physics::doc29::box_geometry::BOX_EDGE_LEVEL_STEP_DB,
             pieces: PIECES_PER_BOX,
+            kind: tiles::Kind::Aircraft,
+        }
+    }
+}
+
+impl BoxRule {
+    /// The far boxes, read from the second ring on.
+    pub fn far() -> Self {
+        BoxRule {
+            level_step_db: physics::doc29::box_geometry::FAR_BOX_EDGE_LEVEL_STEP_DB,
+            kind: tiles::Kind::AircraftFar,
+            ..BoxRule::default()
         }
     }
 }
@@ -362,7 +375,7 @@ pub fn build_square(
         segments.par_sort_by_key(|(segment, _)| segment.flight_id);
         add_day(&mut boxes, &segments, &placement, &scope, rule.pieces);
     }
-    let written = write::write_tiles(&boxes, &placement, out)?;
+    let written = write::write_tiles(&boxes, &placement, rule.kind, out)?;
     Ok((written, boxes.len()))
 }
 

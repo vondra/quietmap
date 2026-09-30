@@ -120,7 +120,7 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
     let out = std::env::temp_dir().join(format!("qm-boxes-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out);
     assert!(
-        write::write_tiles(&boxes, &placement, &out).unwrap() >= 2,
+        write::write_tiles(&boxes, &placement, tiles::Kind::Aircraft, &out).unwrap() >= 2,
         "the corridor crosses tiles"
     );
     let files: Vec<(TileId, Vec<u8>)> = scope

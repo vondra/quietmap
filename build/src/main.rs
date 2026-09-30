@@ -69,9 +69,14 @@ fn parse_squares(text: &str) -> Result<Vec<Square>, String> {
         .collect()
 }
 
-/// The aircraft box rule: `--level-step-db` (D) and `--pieces` (kept per box), else the defaults.
+/// The aircraft box rule: `--kind aircraft|aircraft-far`, `--level-step-db` (D) and `--pieces`
+/// (kept per box), else the kind's defaults.
 fn box_rule(options: &Arguments) -> Result<boxes::BoxRule, String> {
-    let mut rule = boxes::BoxRule::default();
+    let mut rule = match options.optional("kind") {
+        None | Some("aircraft") => boxes::BoxRule::default(),
+        Some("aircraft-far") => boxes::BoxRule::far(),
+        Some(other) => return Err(format!("bad --kind {other}")),
+    };
     if let Some(step) = options.optional("level-step-db") {
         rule.level_step_db = step
             .parse()
@@ -243,6 +248,8 @@ fn run(arguments: &[String]) -> Result<(), String> {
                         "exact_leq": report.exact,
                         "boxed_leq": report.boxed,
                         "beyond_reach_leq": report.beyond,
+                        "boxed_as_read_leq": report.boxed_as_read,
+                        "megabytes_fine_as_read": report.megabytes,
                         "near_ground": {
                             "exact_leq": report.near_ground[0],
                             "boxed_leq": report.near_ground[1],

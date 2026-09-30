@@ -123,8 +123,14 @@ pub fn answer(
         if reads_ground {
             kinds.extend([Kind::Terrain, Kind::Obstacles, Kind::Sources]);
         }
+        // From the second ring on, at least a tile edge away, the far boxes hold.
+        let aircraft_kind = if ring == 1 {
+            Kind::Aircraft
+        } else {
+            Kind::AircraftFar
+        };
         if ring <= aircraft_rings {
-            kinds.push(Kind::Aircraft);
+            kinds.push(aircraft_kind);
         }
         let cell = &rings[ring as usize];
         let _ = cell.set(RingFiles::read(release, tiles, kinds)?);
@@ -157,7 +163,7 @@ pub fn answer(
                     .map(Sources::parse)
                     .transpose();
                 let aircraft = read
-                    .file(index, Kind::Aircraft)
+                    .file(index, aircraft_kind)
                     .map(Aircraft::parse)
                     .transpose();
                 Ok((
