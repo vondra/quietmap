@@ -34,9 +34,14 @@ pub fn cell_edge_m(tile: TileId, zoom: u8) -> f64 {
     EQUATOR_M * lat.to_radians().cos() / f64::from(1u32 << zoom)
 }
 
-/// The clearance bands of a tile.
-pub fn tile_bands(tile: TileId) -> Vec<ClearanceBand> {
-    clearance_bands(|zoom| cell_edge_m(tile, zoom), 12, TOP_CLEARANCE_M)
+/// The clearance bands of a tile for a level step D of `level_step_db`.
+pub fn tile_bands(tile: TileId, level_step_db: f64) -> Vec<ClearanceBand> {
+    clearance_bands(
+        |zoom| cell_edge_m(tile, zoom),
+        12,
+        TOP_CLEARANCE_M,
+        level_step_db,
+    )
 }
 
 /// A tile's highest terrain per cell, from its finest band's zoom up to the tile itself:
@@ -112,14 +117,21 @@ fn ground_within_one_edge(ground: &TileGround, zoom: u8, cell: [u32; 2]) -> f64 
 /// The bands of every tile row (they depend on the latitude alone) and the terrain pyramid of the
 /// tiles near the flights, built once and shared.
 pub struct Placement {
+    level_step_db: f64,
     bands: Vec<std::sync::OnceLock<Vec<ClearanceBand>>>,
     ground: HashMap<TileId, TileGround>,
 }
 
 impl Placement {
-    /// For `tiles` (the boxes' tiles and a ring around them), from the terrain read for them.
-    pub fn new(tiles: &HashSet<TileId>, terrain: &HashMap<TileId, Terrain<'_>>) -> Self {
+    /// For `tiles` (the boxes' tiles and a ring around them), from the terrain read for them, with
+    /// the bands of a level step D of `level_step_db`.
+    pub fn new(
+        tiles: &HashSet<TileId>,
+        terrain: &HashMap<TileId, Terrain<'_>>,
+        level_step_db: f64,
+    ) -> Self {
         let mut placement = Placement {
+            level_step_db,
             bands: (0..TILES_PER_AXIS)
                 .map(|_| std::sync::OnceLock::new())
                 .collect(),
@@ -180,7 +192,7 @@ impl Placement {
 
     /// The clearance bands of a tile (of its row: they depend on the latitude alone).
     pub fn bands(&self, tile: TileId) -> &[ClearanceBand] {
-        self.bands[tile.y as usize].get_or_init(|| tile_bands(tile))
+        self.bands[tile.y as usize].get_or_init(|| tile_bands(tile, self.level_step_db))
     }
 
     /// The highest terrain of one cell at `zoom` (0 beyond the prepared tiles).

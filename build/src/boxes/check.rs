@@ -210,11 +210,12 @@ fn add_segment(
 }
 
 /// The report of every point: one pass over the days of `window` under `segments_dir`, the
-/// written boxes under `aircraft_root`, the box placement from the terrain under `terrain_root`.
+/// written boxes under `aircraft_root` (cut with a level step D of `level_step_db`), the box
+/// placement from the terrain under `terrain_root`.
 pub fn compare(
     segments_dir: &Path,
     window: &Window,
-    aircraft_root: &Path,
+    (aircraft_root, level_step_db): (&Path, f64),
     terrain_root: &Path,
     points: &[CheckPoint],
 ) -> Result<Vec<PointReport>, String> {
@@ -243,7 +244,7 @@ pub fn compare(
         .map(|(tile, bytes)| Terrain::parse(bytes).map(|terrain| (*tile, terrain)))
         .collect::<Result<_, _>>()
         .map_err(|error| error.to_string())?;
-    let placement = Placement::new(&near, &terrain);
+    let placement = Placement::new(&near, &terrain, level_step_db);
     // Segments are read when an end lies in some point's latitude-longitude box of the
     // beyond-reach distance (with a quarter to spare).
     let reach_deg = 1.25 * BEYOND_REACH_M / METRES_PER_DEGREE;

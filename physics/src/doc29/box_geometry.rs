@@ -11,20 +11,21 @@ pub const BOX_EDGE_LEVEL_STEP_DB: f64 = 3.0;
 /// The first layer's edge (m): the web-map zoom whose cell edge is nearest to it is the finest.
 pub const FIRST_LAYER_EDGE_M: f64 = 50.0;
 
-/// The largest box edge (m) allowed at `clearance_m` above the terrain.
-pub fn box_edge_limit_m(clearance_m: f64) -> f64 {
-    BOX_EDGE_LEVEL_STEP_DB / steepest_sel_slope_db_per_m(clearance_m.max(0.0))
+/// The largest box edge (m) allowed at `clearance_m` above the terrain for a level step D of
+/// `level_step_db`.
+pub fn box_edge_limit_m(clearance_m: f64, level_step_db: f64) -> f64 {
+    level_step_db / steepest_sel_slope_db_per_m(clearance_m.max(0.0))
 }
 
 /// The smallest limit over the clearances from `low_m` to `high_m`: the steepest slope jumps up
 /// at some NPD distances, so the floor alone may overstate what a band may span.
-fn band_edge_limit_m(low_m: f64, high_m: f64) -> f64 {
+fn band_edge_limit_m(low_m: f64, high_m: f64, level_step_db: f64) -> f64 {
     let npd_distances_m = NPD_DISTANCES_FT.map(|feet| feet * METRES_PER_FOOT);
     npd_distances_m
         .iter()
         .filter(|&&distance| low_m < distance && distance < high_m)
         .chain([low_m, high_m].iter())
-        .map(|&clearance| box_edge_limit_m(clearance))
+        .map(|&clearance| box_edge_limit_m(clearance, level_step_db))
         .fold(f64::INFINITY, f64::min)
 }
 
@@ -41,11 +42,13 @@ pub struct ClearanceBand {
 /// `cell_edge_m(z)` (the equatorial edge times the cosine of the tile's latitude): from the
 /// ground up, each band takes the coarsest zoom whose edge fits the limit over its height, never
 /// finer than the first layer's zoom nor coarser than `coarsest_zoom`. A band spans at most D
-/// over its whole height; a band above may take a finer zoom where the steepest slope jumps up.
+/// (`level_step_db`) over its whole height; a band above may take a finer zoom where the steepest
+/// slope jumps up.
 pub fn clearance_bands(
     cell_edge_m: impl Fn(u8) -> f64,
     coarsest_zoom: u8,
     top_m: f64,
+    level_step_db: f64,
 ) -> Vec<ClearanceBand> {
     let finest_zoom = (coarsest_zoom..=FINEST_ZOOM)
         .min_by(|&a, &b| {
@@ -61,7 +64,7 @@ pub fn clearance_bands(
         let zoom = (coarsest_zoom..finest_zoom)
             .find(|&zoom| {
                 let edge_m = cell_edge_m(zoom);
-                edge_m <= band_edge_limit_m(clearance_m, clearance_m + edge_m)
+                edge_m <= band_edge_limit_m(clearance_m, clearance_m + edge_m, level_step_db)
             })
             .unwrap_or(finest_zoom);
         let edge_m = cell_edge_m(zoom);

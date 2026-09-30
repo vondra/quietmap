@@ -3,6 +3,7 @@
 //! kernel's exact sum of the segments.
 
 use super::*;
+use physics::doc29::box_geometry::BOX_EDGE_LEVEL_STEP_DB;
 use physics::doc29::boxes::{AircraftBoxAtReceiver, box_sel_at_receiver};
 use physics::doc29::screening::Unscreened;
 use physics::doc29::segment::{SegmentGeometry, segment_sel_at_receiver};
@@ -109,8 +110,8 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
     let segments = departures();
     let terrain = HashMap::new();
     let scope: HashSet<TileId> = [0, 1].iter().flat_map(|&ring| PRAGUE.ring(ring)).collect();
-    let placement = Placement::new(&scope, &terrain);
-    let mut boxes = HashMap::new();
+    let placement = Placement::new(&scope, &terrain, BOX_EDGE_LEVEL_STEP_DB);
+    let mut boxes = Boxes::default();
     add_day(
         &mut boxes,
         &segments,
@@ -122,7 +123,7 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
     let out = std::env::temp_dir().join(format!("qm-boxes-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out);
     assert!(
-        write::write_tiles(&boxes, &out).unwrap() >= 2,
+        write::write_tiles(&boxes, &placement, &out).unwrap() >= 2,
         "the corridor crosses tiles"
     );
     let files: Vec<(TileId, Vec<u8>)> = scope
@@ -164,24 +165,4 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
     assert_eq!(exact_db(&segments, behind), f64::NEG_INFINITY);
     assert_eq!(boxed_db(&files, behind), f64::NEG_INFINITY);
     std::fs::remove_dir_all(&out).unwrap();
-}
-
-#[test]
-fn chunks_never_split_a_flight() {
-    let mut segments = departures();
-    segments.truncate(6);
-    for (segment, flight) in segments.iter_mut().zip([1, 1, 1, 2, 2, 3]) {
-        segment.flight_id = flight;
-    }
-    let flights = |chunk: &[FlightSegment]| {
-        chunk
-            .iter()
-            .map(|segment| segment.flight_id)
-            .collect::<Vec<_>>()
-    };
-    let chunks: Vec<Vec<u64>> = flight_chunks(&segments, 2)
-        .into_iter()
-        .map(flights)
-        .collect();
-    assert_eq!(chunks, vec![vec![1, 1, 1], vec![2, 2], vec![3]]);
 }

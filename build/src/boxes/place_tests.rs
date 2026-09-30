@@ -2,13 +2,14 @@
 //! cover it exactly.
 
 use super::*;
+use physics::doc29::box_geometry::BOX_EDGE_LEVEL_STEP_DB;
 
 const PRAGUE: TileId = TileId { x: 2212, y: 1387 };
 
 #[test]
 fn a_point_takes_the_highest_band_its_clearance_reaches() {
     let terrain = HashMap::new();
-    let placement = Placement::new(&HashSet::from([PRAGUE]), &terrain);
+    let placement = Placement::new(&HashSet::from([PRAGUE]), &terrain, BOX_EDGE_LEVEL_STEP_DB);
     let bands = placement.bands(PRAGUE).to_vec();
     let centre = PRAGUE.centre();
     let (low, ground) = placement.box_of(centre, 20.0, false);
@@ -32,7 +33,7 @@ fn a_point_takes_the_highest_band_its_clearance_reaches() {
 #[test]
 fn a_segment_is_cut_into_chained_pieces_covering_it() {
     let terrain = HashMap::new();
-    let placement = Placement::new(&HashSet::from([PRAGUE]), &terrain);
+    let placement = Placement::new(&HashSet::from([PRAGUE]), &terrain, BOX_EDGE_LEVEL_STEP_DB);
     let centre = PRAGUE.centre();
     let units = 300.0 / cell_edge_m(PRAGUE, 12);
     let start = (

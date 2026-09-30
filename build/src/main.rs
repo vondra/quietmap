@@ -69,6 +69,22 @@ fn parse_squares(text: &str) -> Result<Vec<Square>, String> {
         .collect()
 }
 
+/// The aircraft box rule: `--level-step-db` (D) and `--pieces` (kept per box), else the defaults.
+fn box_rule(options: &Arguments) -> Result<boxes::BoxRule, String> {
+    let mut rule = boxes::BoxRule::default();
+    if let Some(step) = options.optional("level-step-db") {
+        rule.level_step_db = step
+            .parse()
+            .map_err(|_| format!("bad --level-step-db {step}"))?;
+    }
+    if let Some(pieces) = options.optional("pieces") {
+        rule.pieces = pieces
+            .parse()
+            .map_err(|_| format!("bad --pieces {pieces}"))?;
+    }
+    Ok(rule)
+}
+
 fn run(arguments: &[String]) -> Result<(), String> {
     let (command, rest) = arguments
         .split_first()
@@ -156,18 +172,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
                         })
                     })
                     .collect();
-            let pieces = match options.optional("pieces") {
-                Some(pieces) => pieces
-                    .parse()
-                    .map_err(|_| format!("bad --pieces {pieces}"))?,
-                None => boxes::PIECES_PER_BOX,
-            };
             let written = boxes::build(
                 Path::new(options.get("segments")?),
                 &window,
                 Path::new(options.get("terrain")?),
                 &scope,
-                pieces,
+                box_rule(&options)?,
                 &out,
             )?;
             eprintln!("aircraft: {written} tiles");
@@ -208,7 +218,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let compared = boxes::check::compare(
                 Path::new(options.get("segments")?),
                 &window,
-                &out,
+                (&out, box_rule(&options)?.level_step_db),
                 terrain,
                 &chosen.iter().map(|(_, point)| *point).collect::<Vec<_>>(),
             )?;
