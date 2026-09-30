@@ -1,9 +1,12 @@
 //! `sources` tiles: every ground source owned by the tile (each piece lies inside it) as a point or
 //! a straight line piece. Pieces sharing emission and display share one attribute record: its
 //! layer, the geometry of emission (height, ground, platform), emission per octave band and period
-//! computed at build time, and the display fields the popup shows for its contributors.
+//! computed at build time, and the display fields the popup shows for its contributors. Records
+//! sharing their display text point at one copy of it: the rows of a road differ in emission by
+//! their gradient and junction corrections, not in what the popup shows of them.
 
 use crate::FormatError;
+use std::collections::HashMap;
 
 const MAGIC: &[u8; 8] = b"qmsrc2\n\0";
 const HEADER_BYTES: usize = 24;
@@ -221,14 +224,26 @@ pub fn attribute_key(attribute: &Attribute) -> Vec<u8> {
     key
 }
 
-/// The bytes of a sources file: header, 12-byte pieces, 80-byte attributes, display texts.
+/// The bytes of a sources file: header, 12-byte pieces, 80-byte attributes, display texts (each
+/// distinct text once).
 pub fn encode(pieces: &[Piece], attributes: &[Attribute]) -> Vec<u8> {
-    let text_bytes: usize = attributes.iter().map(|a| a.display.len()).sum();
+    let mut text: Vec<u8> = Vec::new();
+    let mut starts: HashMap<&str, u32> = HashMap::new();
+    let text_starts: Vec<u32> = attributes
+        .iter()
+        .map(|attribute| {
+            *starts.entry(attribute.display.as_str()).or_insert_with(|| {
+                let start = u32::try_from(text.len()).expect("tile too large");
+                text.extend_from_slice(attribute.display.as_bytes());
+                start
+            })
+        })
+        .collect();
     let mut bytes = Vec::with_capacity(
-        HEADER_BYTES + PIECE_BYTES * pieces.len() + ATTRIBUTE_BYTES * attributes.len() + text_bytes,
+        HEADER_BYTES + PIECE_BYTES * pieces.len() + ATTRIBUTE_BYTES * attributes.len() + text.len(),
     );
     bytes.extend_from_slice(MAGIC);
-    for count in [pieces.len(), attributes.len(), text_bytes] {
+    for count in [pieces.len(), attributes.len(), text.len()] {
         bytes.extend_from_slice(&u32::try_from(count).expect("tile too large").to_le_bytes());
     }
     bytes.extend_from_slice(&[0; 4]);
@@ -239,14 +254,10 @@ pub fn encode(pieces: &[Piece], attributes: &[Attribute]) -> Vec<u8> {
         }
         bytes.extend_from_slice(&piece.attribute.to_le_bytes());
     }
-    let mut text_start = 0u32;
-    for attribute in attributes {
-        write_attribute_record(&mut bytes, attribute, text_start);
-        text_start += attribute.display.len() as u32;
+    for (attribute, &start) in attributes.iter().zip(&text_starts) {
+        write_attribute_record(&mut bytes, attribute, start);
     }
-    for attribute in attributes {
-        bytes.extend_from_slice(attribute.display.as_bytes());
-    }
+    bytes.extend_from_slice(&text);
     bytes
 }
 
@@ -406,5 +417,25 @@ mod tests {
         assert_eq!(parsed.display(0).unwrap(), road().display);
         assert_eq!(parsed.display(1).unwrap(), "[]");
         assert!(Sources::parse(&bytes[..bytes.len() - 1]).is_err());
+    }
+
+    /// Two rows of a road that differ in emission keep two records and one copy of their text.
+    #[test]
+    fn a_shared_display_text_is_stored_once() {
+        let mut uphill = road();
+        uphill.emission[0][0] += 1.5;
+        let pieces = [0, 1].map(|attribute| Piece {
+            ends: [[0, 0], [10, 10]],
+            attribute,
+        });
+        let bytes = encode(&pieces, &[road(), uphill.clone()]);
+        let parsed = Sources::parse(&bytes).unwrap();
+        assert_eq!(parsed.attribute_count(), 2);
+        assert_eq!(parsed.attribute(1).unwrap().emission, uphill.emission);
+        for index in [0, 1] {
+            assert_eq!(parsed.display(index).unwrap(), road().display);
+        }
+        let single = encode(&pieces[..1], &[road()]);
+        assert_eq!(bytes.len(), single.len() + PIECE_BYTES + ATTRIBUTE_BYTES);
     }
 }
