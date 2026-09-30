@@ -73,7 +73,9 @@ level, so the list is what every kept piece would give.
 Airport ground operations (`build/src/airport`) put the window's ground legs on the aeroway lines
 (OSM runways and taxiways, and lines found where legs of ten flights on three days run off every
 mapped line): a leg on a runway rolls at 40 kt or faster or as a take-off roll, and taxis
-otherwise; the lines become sources with their sound power per metre.
+otherwise. A flight seen low over a runway but without a roll of its own (no receiver saw it on
+the ground) gets its class's typical take-off or landing roll there. The lines become sources
+with their sound power per metre.
 
 ## Popup
 
