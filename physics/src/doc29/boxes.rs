@@ -15,10 +15,7 @@ use super::box_sums::INSTALLATION_SHARE_SLANTS_M;
 use super::corrections::{
     finite_segment_correction_db, installation_correction_db, lateral_attenuation_db,
 };
-use super::npd::{
-    Installation, METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT, NPD_LAST_DISTANCE_M,
-    NPD_NEAREST_SLANT_M, TAIL_ANCHOR_M, curve_level_db,
-};
+use super::npd::{Installation, NPD_DISTANCES, NPD_LAST_DISTANCE_M, NpdPosition, TAIL_ANCHOR_M};
 use super::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M, screened_sel_db};
 use super::segment::{ClosestPoints, closest_points};
 use crate::bands::PERIODS;
@@ -38,8 +35,8 @@ pub struct AircraftBoxAtReceiver<'a> {
     pub piece_length_m: f64,
     /// Per period, the summed SEL energy's level at each NPD distance (dB, -inf silent).
     pub levels_db: &'a [[f64; NPD_DISTANCES]; PERIODS],
-    /// The pieces' energy-weighted harmonic mean d_lambda (m) at each NPD distance.
-    pub scaled_distance_m: &'a [f64; NPD_DISTANCES],
+    /// lg of the pieces' energy-weighted harmonic mean d_lambda (m) at each NPD distance.
+    pub lg_scaled_distance: &'a [f64; NPD_DISTANCES],
     /// Per period, the summed level at the tail anchor (dB, -inf silent).
     pub tail_levels_db: &'a [f64; PERIODS],
     /// Energy shares of wing-mounted jets, fuselage-mounted jets and propellers at 1,000 ft and
@@ -75,30 +72,22 @@ pub fn average_piece_ends(aircraft_box: &AircraftBoxAtReceiver) -> [[f64; 3]; 2]
     ]
 }
 
-/// The box's d_lambda at `slant_m`: lg d_lambda linear in lg distance through the ten distances
+/// The box's d_lambda at a slant: lg d_lambda linear in lg distance through the ten distances
 /// and extrapolated with the end intervals, as the kernel reads each power row.
-fn scaled_distance_at(scaled_distance_m: &[f64; NPD_DISTANCES], slant_m: f64) -> f64 {
-    let log_d = (slant_m.max(NPD_NEAREST_SLANT_M) / METRES_PER_FOOT).log10();
-    let logs = NPD_DISTANCES_FT.map(f64::log10);
-    let interval = (1..NPD_DISTANCES - 1)
-        .rev()
-        .find(|&k| log_d > logs[k])
-        .unwrap_or(0);
-    let fraction = (log_d - logs[interval]) / (logs[interval + 1] - logs[interval]);
-    let (low, high) = (
-        scaled_distance_m[interval].log10(),
-        scaled_distance_m[interval + 1].log10(),
-    );
-    10f64.powf(low + fraction * (high - low))
+fn scaled_distance_at(lg_scaled_distance: &[f64; NPD_DISTANCES], position: &NpdPosition) -> f64 {
+    10f64.powf(position.linear(lg_scaled_distance))
 }
 
 /// A box's summed level at `slant_m`: its NPD curve up to 25,000 ft, beyond it spherical
 /// divergence and the absorption that takes the curve through its tail anchor (a mix of rows
 /// falls slower than one curve fitted to their sum).
-fn box_level_db(levels: &[f64; NPD_DISTANCES], tail_db: f64, slant_m: f64) -> f64 {
-    let last = levels[NPD_DISTANCES - 1];
-    if slant_m < NPD_LAST_DISTANCE_M || last == f64::NEG_INFINITY {
-        return curve_level_db(levels, 0.0, slant_m);
+fn box_level_db(levels: &[f64; NPD_DISTANCES], tail_db: f64, position: &NpdPosition) -> f64 {
+    let (last, slant_m) = (levels[NPD_DISTANCES - 1], position.slant_m);
+    if slant_m < NPD_LAST_DISTANCE_M {
+        return position.linear(levels);
+    }
+    if last == f64::NEG_INFINITY {
+        return f64::NEG_INFINITY;
     }
     let spherical_db = |d: f64| 20.0 * (d / NPD_LAST_DISTANCE_M).log10();
     let absorption_db_per_m = ((last - spherical_db(TAIL_ANCHOR_M) - tail_db)
@@ -129,10 +118,11 @@ pub fn box_sel_at_receiver(
     }
     let lateral_m = east_m.hypot(north_m);
     let slant_m = lateral_m.hypot(height_m);
+    let position = NpdPosition::at(slant_m);
     let finite = finite_segment_correction_db(
         closest.along * closest.horizontal_length_m,
         closest.horizontal_length_m,
-        scaled_distance_at(aircraft_box.scaled_distance_m, slant_m),
+        scaled_distance_at(aircraft_box.lg_scaled_distance, &position),
     );
     let lateral_attenuation = lateral_attenuation_db(height_m, lateral_m);
     let installations = [
@@ -167,7 +157,7 @@ pub fn box_sel_at_receiver(
         if levels.iter().all(|level| *level == f64::NEG_INFINITY) {
             return f64::NEG_INFINITY;
         }
-        let free = box_level_db(levels, aircraft_box.tail_levels_db[period], slant_m)
+        let free = box_level_db(levels, aircraft_box.tail_levels_db[period], &position)
             + finite
             + installation
             - lateral_attenuation;

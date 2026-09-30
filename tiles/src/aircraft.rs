@@ -78,9 +78,9 @@ pub struct AircraftBox {
     /// and at the tail anchor past them (16 km).
     pub energy_db: [[f64; NPD_DISTANCES]; PERIODS],
     pub tail_energy_db: [f64; PERIODS],
-    /// The pieces' scaled distance d_lambda (m) at each NPD distance, their energy-weighted
-    /// harmonic mean (what Delta_F of short pieces sums to), stored as lg d_lambda in 1e-4 steps.
-    pub scaled_distance_m: [f64; NPD_DISTANCES],
+    /// lg of the pieces' scaled distance d_lambda (m) at each NPD distance, their
+    /// energy-weighted harmonic mean (what Delta_F of short pieces sums to), in 1e-4 steps.
+    pub lg_scaled_distance: [f64; NPD_DISTANCES],
     /// Energy shares of the installations at 1,000 ft and at the tail anchor (1/255 steps; the
     /// last is what the first two leave).
     pub installation_shares: [[f64; INSTALLATIONS]; 2],
@@ -201,9 +201,12 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox) {
     for level in record.energy_db.iter().flatten() {
         bytes.extend_from_slice(&level_code(*level).to_le_bytes());
     }
-    for distance in record.scaled_distance_m {
-        let code = (distance.max(1.0).log10() * 10_000.0).round();
-        assert!(code <= f64::from(u16::MAX), "scaled distance {distance} m");
+    for lg_distance in record.lg_scaled_distance {
+        let code = (lg_distance.max(0.0) * 10_000.0).round();
+        assert!(
+            code <= f64::from(u16::MAX),
+            "scaled distance 10^{lg_distance} m"
+        );
         bytes.extend_from_slice(&(code as u16).to_le_bytes());
     }
     for shares in record.installation_shares {

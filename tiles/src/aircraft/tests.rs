@@ -24,9 +24,10 @@ fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
         piece_length_m: 44.0,
         flights: 123_456,
         energy_db,
-        scaled_distance_m: [
-            61.0, 150.0, 288.0, 500.0, 1_100.0, 2_566.5, 4_259.3, 6_780.3, 9_000.0, 1e6,
-        ],
+        lg_scaled_distance: [
+            61.0f64, 150.0, 288.0, 500.0, 1_100.0, 2_566.5, 4_259.3, 6_780.3, 9_000.0, 1e6,
+        ]
+        .map(f64::log10),
         tail_energy_db: [61.23, f64::NEG_INFINITY, 55.0],
         installation_shares: [[0.2, 0.4, 0.4], [0.1, 0.3, 0.6]],
         first_piece,
@@ -102,8 +103,12 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
     for (r, w) in read.tail_energy_db.iter().zip(written.tail_energy_db) {
         assert!(r == &w || (r - w).abs() <= 0.005, "{r} vs {w}");
     }
-    for (r, w) in read.scaled_distance_m.iter().zip(written.scaled_distance_m) {
-        assert!((r / w - 1.0).abs() < 1.2e-4, "{r} vs {w}");
+    for (r, w) in read
+        .lg_scaled_distance
+        .iter()
+        .zip(written.lg_scaled_distance)
+    {
+        assert!((r - w).abs() <= 0.5e-4, "{r} vs {w}");
     }
     for (read, written) in read
         .installation_shares

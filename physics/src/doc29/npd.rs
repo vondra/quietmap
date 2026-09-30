@@ -91,14 +91,14 @@ pub fn is_helicopter_class(class: usize) -> bool {
 /// Where a slant falls among the NPD distances: the interval (0..=8) and the fraction along it in
 /// log distance, below 0 before 200 ft and above 1 past 25,000 ft.
 #[derive(Debug, Clone, Copy)]
-struct NpdPosition {
-    interval: usize,
-    fraction: f64,
-    slant_m: f64,
+pub(crate) struct NpdPosition {
+    pub(crate) interval: usize,
+    pub(crate) fraction: f64,
+    pub(crate) slant_m: f64,
 }
 
 impl NpdPosition {
-    fn at(slant_m: f64) -> Self {
+    pub(crate) fn at(slant_m: f64) -> Self {
         let slant_m = slant_m.max(NPD_NEAREST_SLANT_M);
         let log_d = (slant_m / METRES_PER_FOOT).log10();
         let logs = &*LOG10_NPD_DISTANCES_FT;
@@ -115,7 +115,7 @@ impl NpdPosition {
     }
 
     /// Linear in log distance, extrapolated with the end intervals (Eq. 4-4, 4-5).
-    fn linear(&self, curve: &[f64; NPD_DISTANCES]) -> f64 {
+    pub(crate) fn linear(&self, curve: &[f64; NPD_DISTANCES]) -> f64 {
         let lower = curve[self.interval];
         lower + self.fraction * (curve[self.interval + 1] - lower)
     }

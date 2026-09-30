@@ -28,16 +28,21 @@ struct Edge {
     tangent: f64,
 }
 
-/// Per sector, the steepest edge of each band (`None`: the band holds nothing sampled).
+/// Per sector, the steepest edge of each band (`None`: the band holds nothing sampled), and the
+/// steepest tangent of each sector and of all: a point seen above it is screened by nothing.
 #[derive(Debug, Clone, PartialEq)]
 struct SectorEdges<const BANDS: usize> {
     sectors: Vec<[Option<Edge>; BANDS]>,
+    steepest: Vec<f64>,
+    steepest_of_all: f64,
 }
 
 impl<const BANDS: usize> SectorEdges<BANDS> {
     fn new(sectors: usize) -> Self {
         SectorEdges {
             sectors: vec![[None; BANDS]; sectors],
+            steepest: vec![f64::NEG_INFINITY; sectors],
+            steepest_of_all: f64::NEG_INFINITY,
         }
     }
 
@@ -46,16 +51,21 @@ impl<const BANDS: usize> SectorEdges<BANDS> {
         if slot.is_none_or(|kept| edge.tangent > kept.tangent) {
             *slot = Some(edge);
         }
+        self.steepest[sector] = self.steepest[sector].max(edge.tangent);
+        self.steepest_of_all = self.steepest_of_all.max(edge.tangent);
     }
 
     /// The largest edge loss toward `point_m` (east, north, height above the receiver) over the
     /// edges of its sector nearer than it.
     fn loss_db(&self, point_m: [f64; 3]) -> f64 {
         let range_m = point_m[0].hypot(point_m[1]);
-        if range_m <= 1.0 {
+        if range_m <= 1.0 || point_m[2] >= self.steepest_of_all * range_m {
             return 0.0;
         }
         let sector = sector_of(point_m, self.sectors.len());
+        if point_m[2] >= self.steepest[sector] * range_m {
+            return 0.0;
+        }
         self.sectors[sector]
             .iter()
             .flatten()

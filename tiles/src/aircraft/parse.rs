@@ -117,8 +117,8 @@ impl<'a> Aircraft<'a> {
             energy_db: std::array::from_fn(|period| {
                 std::array::from_fn(|distance| energy(28 + 2 * (period * NPD_DISTANCES + distance)))
             }),
-            scaled_distance_m: std::array::from_fn(|distance| {
-                10f64.powf(f64::from(u16_at(record, 88 + 2 * distance)) / 10_000.0)
+            lg_scaled_distance: std::array::from_fn(|distance| {
+                f64::from(u16_at(record, 88 + 2 * distance)) / 10_000.0
             }),
             tail_energy_db: std::array::from_fn(|period| energy(112 + 2 * period)),
             installation_shares,

@@ -59,7 +59,7 @@ fn box_day_sel(values: &BoxValues) -> Option<f64> {
         piece_length_m: values.piece_length_m,
         levels_db: &values.levels_db,
         tail_levels_db: &values.tail_levels_db,
-        scaled_distance_m: &values.scaled_distance_m,
+        lg_scaled_distance: &values.scaled_distance_m.map(f64::log10),
         installation_shares: values.installation_shares,
         ground_m: -4.0,
     };

@@ -94,7 +94,7 @@ fn boxed_db(files: &[(TileId, Vec<u8>)], receiver: [f64; 2]) -> f64 {
                 piece_length_m: record.piece_length_m,
                 levels_db: &record.energy_db,
                 tail_levels_db: &record.tail_energy_db,
-                scaled_distance_m: &record.scaled_distance_m,
+                lg_scaled_distance: &record.lg_scaled_distance,
                 installation_shares: record.installation_shares,
                 ground_m: record.ground_m - 4.0,
             };
