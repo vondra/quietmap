@@ -58,8 +58,10 @@ Stage 0/1 turns a year of ADS-B traces into flight segments per day (`build/src/
 altitudes above EGM2008 (geometric altitude is ellipsoidal: the flight's own offset, else a
 regional one, else pressure), Doc 29 phases and powers (the force balance with the observed
 climb and acceleration; below the landing configuration height an arrival's flap and gear, Doc 29
-B11). `aircraft-shuffle` sorts the window's
-segments into z9 squares once; `aircraft-boxes` then builds a square at a time. A box is a
+B11; jets and the two turboprop classes on their ANP ratings, the piston class on its
+propeller's, Eq. B-5; a power past the class's NPD rows reads the edge row, as Doc 29 gives Eq.
+4-3 between tabulated powers only; every NPD curve holds for 160 kt). `aircraft-shuffle` sorts
+the window's segments into z9 squares once; `aircraft-boxes` then builds a square at a time. A box is a
 web-map cell x a clearance slab above the highest terrain within one edge; the edge grows with
 clearance so that it spans D = 3 dB of the steepest NPD slope there (first layer about 50 m).
 A segment is cut at tile edges, then into the pieces of the boxes it crosses; a box sums its
