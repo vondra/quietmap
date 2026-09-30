@@ -1,7 +1,8 @@
 //! CNOSSOS-EU road traffic emission (Directive 2015/996 Annex II 2.2 with the coefficients of
 //! Delegated Directive 2021/1226): rolling and propulsion noise per vehicle category and octave
 //! band, summed into the sound power per metre of a traffic flow, with the road gradient's
-//! propulsion term (2.2.4). There are no temperature, acceleration or studded-tyre terms.
+//! propulsion term (2.2.4) and the stop-and-go terms near traffic lights and roundabouts (2.2.5).
+//! There are no temperature or studded-tyre terms.
 
 use crate::bands::BANDS;
 
@@ -84,6 +85,39 @@ pub struct CategoryFlow {
     pub category: VehicleCategory,
     /// The road's slope in the flow's direction (%, positive uphill).
     pub slope_percent: f64,
+    /// The nearest junction that stops and starts the flow, and the distance to it (m).
+    pub junction: Option<(Junction, f64)>,
+}
+
+/// The junctions of CNOSSOS-EU 2.2.5 (Table F-3: k = 1 and 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Junction {
+    TrafficLights,
+    Roundabout,
+}
+
+/// The junction corrections fade linearly to nothing over this distance from the junction (m).
+pub const JUNCTION_REACH_M: f64 = 100.0;
+
+/// CNOSSOS-EU 2.2.5 (Eqs. 2.2.17-2.2.18, Table F-3): the rolling and propulsion corrections (dB,
+/// every band) of a category `distance_m` from a junction: vehicles braking and pulling away roll
+/// quieter and drive their engines harder. Motorcycles have none.
+pub fn junction_correction_db(
+    category: VehicleCategory,
+    junction: Option<(Junction, f64)>,
+) -> (f64, f64) {
+    let Some((kind, distance_m)) = junction else {
+        return (0.0, 0.0);
+    };
+    let fade = (1.0 - distance_m.abs() / JUNCTION_REACH_M).max(0.0);
+    let (rolling, propulsion) = match (category, kind) {
+        (VehicleCategory::Light, Junction::TrafficLights) => (-4.5, 5.5),
+        (VehicleCategory::Light, Junction::Roundabout) => (-4.4, 3.1),
+        (VehicleCategory::Medium | VehicleCategory::Heavy, Junction::TrafficLights) => (-4.0, 9.0),
+        (VehicleCategory::Medium | VehicleCategory::Heavy, Junction::Roundabout) => (-2.3, 6.7),
+        (VehicleCategory::Motorcycle, _) => (0.0, 0.0),
+    };
+    (fade * rolling, fade * propulsion)
 }
 
 /// Slopes steeper than this count as this (2.2.13-2.2.15: Min(12 %; s)).
@@ -126,12 +160,17 @@ pub fn line_emission_db(flows: &[CategoryFlow], surface_correction_db: f64) -> [
         // Vehicles per metre: Q / (1000 v) with Q per hour and v in km/h.
         let density = flow.vehicles_per_hour / (1000.0 * speed);
         let gradient = gradient_correction_db(flow.category, flow.slope_percent, law_speed);
+        let (junction_rolling, junction_propulsion) =
+            junction_correction_db(flow.category, flow.junction);
         for band in 0..BANDS {
             let (a_p, b_p) = coefficients.propulsion;
-            let mut vehicle = 10f64.powf((a_p[band] + b_p[band] * relative + gradient) / 10.0);
+            let mut vehicle = 10f64
+                .powf((a_p[band] + b_p[band] * relative + gradient + junction_propulsion) / 10.0);
             if let Some((a_r, b_r)) = coefficients.rolling {
-                vehicle +=
-                    10f64.powf((a_r[band] + b_r[band] * log_ratio + surface_correction_db) / 10.0);
+                vehicle += 10f64.powf(
+                    (a_r[band] + b_r[band] * log_ratio + surface_correction_db + junction_rolling)
+                        / 10.0,
+                );
             }
             energy[band] += density * vehicle;
         }
@@ -164,6 +203,7 @@ mod tests {
             speed_kmh,
             category,
             slope_percent: 0.0,
+            junction: None,
         }]
     }
 
@@ -196,6 +236,7 @@ mod tests {
                     speed_kmh: 80.0,
                     category: VehicleCategory::Heavy,
                     slope_percent: slope,
+                    junction: None,
                 }],
                 0.0,
             )
@@ -218,6 +259,7 @@ mod tests {
                         speed_kmh: 80.0,
                         category,
                         slope_percent: s,
+                        junction: None,
                     })
                 })
                 .collect();
@@ -247,6 +289,58 @@ mod tests {
         assert_eq!(
             gradient_correction_db(VehicleCategory::Heavy, 20.0, 80.0),
             gradient_correction_db(VehicleCategory::Heavy, 12.0, 80.0)
+        );
+    }
+
+    /// 2.2.5 on the audit's cases: at 50 km/h with 4 % medium and 4 % heavy vehicles a stop line
+    /// reads 3.6 dB(A)/m above free flow and the first 100 m 1.35 dB on average; cars alone lose
+    /// 0.5 dB there; heavy vehicles 50 m from a roundabout take (-1.15, +3.35).
+    #[test]
+    fn junctions_stop_and_start_the_flow() {
+        let mix = |junction| {
+            let flows = [
+                (VehicleCategory::Light, 920.0),
+                (VehicleCategory::Medium, 40.0),
+                (VehicleCategory::Heavy, 40.0),
+            ]
+            .map(|(category, vehicles_per_hour)| CategoryFlow {
+                vehicles_per_hour,
+                speed_kmh: 50.0,
+                category,
+                slope_percent: 0.0,
+                junction,
+            });
+            a_weighted(&flows, 0.0)
+        };
+        let free = mix(None);
+        let stop_line = mix(Some((Junction::TrafficLights, 0.0))) - free;
+        assert!((stop_line - 3.6).abs() < 0.2, "{stop_line}");
+        let mean_energy = (0..100)
+            .map(|x| 10f64.powf(mix(Some((Junction::TrafficLights, f64::from(x) + 0.5))) / 10.0))
+            .sum::<f64>()
+            / 100.0;
+        let approach = 10.0 * mean_energy.log10() - free;
+        assert!((approach - 1.35).abs() < 0.15, "{approach}");
+        let cars = |junction| {
+            a_weighted(
+                &[CategoryFlow {
+                    vehicles_per_hour: 1_000.0,
+                    speed_kmh: 50.0,
+                    category: VehicleCategory::Light,
+                    slope_percent: 0.0,
+                    junction,
+                }],
+                0.0,
+            )
+        };
+        let car_change = cars(Some((Junction::TrafficLights, 0.0))) - cars(None);
+        assert!((car_change + 0.5).abs() < 0.2, "{car_change}");
+        let (rolling, propulsion) =
+            junction_correction_db(VehicleCategory::Heavy, Some((Junction::Roundabout, 50.0)));
+        assert!((rolling + 1.15).abs() < 1e-12 && (propulsion - 3.35).abs() < 1e-12);
+        assert_eq!(
+            junction_correction_db(VehicleCategory::Light, Some((Junction::Roundabout, 150.0))),
+            (0.0, 0.0)
         );
     }
 

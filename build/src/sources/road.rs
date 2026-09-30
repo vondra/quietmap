@@ -2,6 +2,7 @@
 //! period computed here once, and the display record of the road group.
 
 use super::country_speeds::COUNTRY_SPEEDS;
+use super::road_junctions::{Junctions, traffic_signals};
 use super::road_slope::{SquareHeights, WayRow, row_slopes};
 use super::{Converted, group_key, split_at_tile_edges};
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
@@ -9,7 +10,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type};
 use arrow_array::{Array, RecordBatch};
 use physics::bands::{BANDS, PERIOD_HOURS, PERIODS};
-use physics::emission::road::{CategoryFlow, VehicleCategory, line_emission_db};
+use physics::emission::road::{CategoryFlow, Junction, VehicleCategory, line_emission_db};
 use tiles::sources::{Attribute, Layer};
 
 /// Source height above the carriageway (CNOSSOS-EU 2.4.1).
@@ -21,8 +22,8 @@ const DEFAULT_LANES: u8 = 2;
 /// dev4 `speed_limit` code of `maxspeed=none`, driven at 130 km/h.
 const DERESTRICTED_CODE: u8 = 255;
 const DERESTRICTED_SPEED_KMH: f64 = 130.0;
-/// Roundabouts (`junction` 1) are driven at no more than this.
-const ROUNDABOUT_SPEED_KMH: f64 = 30.0;
+/// dev4's `junction` code of a roundabout row.
+const ROUNDABOUT_CODE: u8 = 1;
 /// dev4 class codes 0-12.
 const CLASS_NAMES: [&str; 13] = [
     "motorway",
@@ -148,6 +149,30 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
         require_stamp(&table, key, value)?;
     }
     let heights = SquareHeights::load(dev4, square)?;
+    // The square's traffic signals and the vertices of its roundabouts (CNOSSOS-EU 2.2.5).
+    let mut stops: Vec<((f64, f64), Junction)> = traffic_signals(dev4, square)?
+        .into_iter()
+        .map(|place| (place, Junction::TrafficLights))
+        .collect();
+    for batch in &table.batches {
+        let c = Columns { batch };
+        let i32s = |name| c.get(name).map(|a| a.as_primitive::<Int32Type>());
+        let junction = c.get("junction")?.as_primitive::<UInt8Type>();
+        let ends = [
+            (i32s("start_gx")?, i32s("start_gy")?),
+            (i32s("end_gx")?, i32s("end_gy")?),
+        ];
+        for row in (0..batch.num_rows()).filter(|&row| junction.value(row) == ROUNDABOUT_CODE) {
+            for (x, y) in ends {
+                stops.push((
+                    z30_corner_degrees(x.value(row), y.value(row)),
+                    Junction::Roundabout,
+                ));
+            }
+        }
+    }
+    let latitude = stops.first().map_or(0.0, |(place, _)| place.0);
+    let junctions = Junctions::new(latitude, stops);
     let mut emitting = 0;
     for batch in &table.batches {
         let c = Columns { batch };
@@ -231,12 +256,18 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
                 }
                 posted => (f64::from(posted), "osm_posted", Some(posted)),
             };
-            let (speed, speed_source) =
-                if junction.value(row) == 1 && base_speed > ROUNDABOUT_SPEED_KMH {
-                    (ROUNDABOUT_SPEED_KMH, "roundabout_cap")
-                } else {
-                    (base_speed, base_source)
-                };
+            // CNOSSOS-EU drives roundabouts at their legal speed and corrects the braking and
+            // pulling away (2.2.5), where dev4 capped them at 30 km/h (-4.1 dB at 50).
+            let (speed, speed_source) = (base_speed, base_source);
+            let stop = if junction.value(row) == ROUNDABOUT_CODE {
+                Some((Junction::Roundabout, 0.0))
+            } else {
+                let (a, b) = (
+                    z30_corner_degrees(start_x.value(row), start_y.value(row)),
+                    z30_corner_degrees(end_x.value(row), end_y.value(row)),
+                );
+                junctions.nearest((0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1)))
+            };
             let surface_index = usize::from(surface.value(row));
             let surface_correction = SURFACE_CORRECTION_DB
                 .get(surface_index)
@@ -270,6 +301,7 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
                             speed_kmh: speed,
                             category: categories[c],
                             slope_percent: sign * slope,
+                            junction: stop,
                         })
                     })
                     .collect();

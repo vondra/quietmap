@@ -11,6 +11,7 @@ pub mod industry;
 pub mod leisure;
 pub mod rail;
 pub mod road;
+pub mod road_junctions;
 pub mod road_slope;
 pub mod ship;
 
