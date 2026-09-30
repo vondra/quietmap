@@ -22,6 +22,25 @@ pub const PERIODS: usize = 3;
 pub const INSTALLATIONS: usize = 3;
 /// Stored level = code / 100 - 100 dB; code 0 is silence.
 const LEVEL_OFFSET_DB: f64 = 100.0;
+/// A box's loudest LAmax = code / 2 + 30 dB, rounded up; code 0 is none.
+const LAMAX_OFFSET_DB: f64 = 30.0;
+
+fn lamax_code(lamax_db: f64) -> u8 {
+    if lamax_db == f64::NEG_INFINITY {
+        return 0;
+    }
+    (2.0 * (lamax_db - LAMAX_OFFSET_DB))
+        .ceil()
+        .clamp(1.0, 255.0) as u8
+}
+
+fn lamax_db(code: u8) -> f64 {
+    if code == 0 {
+        f64::NEG_INFINITY
+    } else {
+        f64::from(code) / 2.0 + LAMAX_OFFSET_DB
+    }
+}
 /// The finest box: a web-map cell of this zoom is under 0.3 m wide anywhere.
 pub const MAXIMUM_ZOOM: u8 = 28;
 
@@ -62,9 +81,12 @@ pub struct AircraftBox {
     pub scaled_distance_m: [f64; NPD_DISTANCES],
     /// Energy shares of the installations (1/255 steps; the last is what the first two leave).
     pub installation_shares: [f64; INSTALLATIONS],
-    /// The box's loudest pieces: `first_piece .. first_piece + piece_count` in the piece table.
+    /// The box's loudest pieces: `first_piece .. first_piece + piece_count` in the piece table,
+    /// and the loudest LAmax among them at 1,000 ft (dB, rounded up to 0.5 dB; -inf without
+    /// pieces): with the most an LAmax curve can rise from there, a bound on what they reach.
     pub first_piece: u32,
     pub piece_count: u8,
+    pub loudest_lamax_db: f64,
 }
 
 /// One flight of the tile's table.
@@ -188,7 +210,8 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox) {
     bytes.extend_from_slice(&[wing as u8, fuselage as u8]);
     bytes.extend_from_slice(&record.first_piece.to_le_bytes());
     bytes.push(record.piece_count);
-    bytes.resize(start + BOX_BYTES, 0);
+    bytes.push(lamax_code(record.loudest_lamax_db));
+    assert_eq!(bytes.len() - start, BOX_BYTES);
 }
 
 fn write_piece(bytes: &mut Vec<u8>, piece: &FlightPiece) {

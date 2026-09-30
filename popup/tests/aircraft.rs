@@ -86,6 +86,7 @@ fn box_of(emission: &SegmentEmission, start: [f64; 3], end: [f64; 3]) -> Aircraf
         installation_shares: values.installation_shares,
         first_piece: 0,
         piece_count: 0,
+        loudest_lamax_db: f64::NEG_INFINITY,
     }
 }
 

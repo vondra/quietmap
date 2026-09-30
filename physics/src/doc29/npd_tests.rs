@@ -187,3 +187,32 @@ fn every_sel_row_falls_with_distance() {
         }
     }
 }
+
+#[test]
+fn the_lamax_rise_bound_holds_every_row_between_its_entries() {
+    let mut slant_m = 20.0;
+    while slant_m < 2.0e6 {
+        let bound = lamax_rise_bound_db(slant_m);
+        for class in 0..NUM_CLASSES {
+            for departure in [false, true] {
+                for row in 0..POWER_ROWS[class][usize::from(departure)].len() {
+                    for weight in [0.0, 0.5] {
+                        if weight > 0.0
+                            && row + 1 == POWER_ROWS[class][usize::from(departure)].len()
+                        {
+                            continue;
+                        }
+                        let power = PowerBracket { row, weight };
+                        let rise = read_npd(class, departure, power, slant_m).lamax_db
+                            - read_npd(class, departure, power, LAMAX_REFERENCE_SLANT_M).lamax_db;
+                        assert!(rise <= bound + 1e-9, "{slant_m} m: {rise} > {bound}");
+                    }
+                }
+            }
+        }
+        slant_m *= 1.037;
+    }
+    assert!(lamax_rise_bound_db(100.0) > 5.0);
+    assert!(lamax_rise_bound_db(LAMAX_REFERENCE_SLANT_M).abs() < 1e-9);
+    assert!(lamax_rise_bound_db(10_000.0) < -15.0);
+}

@@ -261,8 +261,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             .iter()
                             .map(|list| serde_json::json!({
                                 "pieces": list.pieces,
-                                "boxes_searched": list.boxes_searched.min(u32::MAX as usize),
+                                "search_is_exhaustive": list.search_is_exhaustive,
                                 "recall": list.recall,
+                                "tolerant_recall": list.tolerant_recall,
                                 "listed": list
                                     .listed
                                     .iter()

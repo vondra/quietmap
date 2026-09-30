@@ -30,6 +30,11 @@ fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
         installation_shares: [0.2, 0.4, 0.4],
         first_piece,
         piece_count,
+        loudest_lamax_db: if piece_count > 0 {
+            91.26
+        } else {
+            f64::NEG_INFINITY
+        },
     }
 }
 
@@ -104,6 +109,8 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
         assert!((r - w).abs() <= 1.0 / 255.0, "{r} vs {w}");
     }
     assert_eq!((read.first_piece, read.piece_count), (0, 2));
+    // Rounded up, so a bound stays a bound.
+    assert_eq!(read.loudest_lamax_db, 91.5);
     assert_eq!(parsed.flight(0), flights[0]);
     assert_eq!(parsed.flight(1), flights[1]);
     let piece = parsed.piece(0);

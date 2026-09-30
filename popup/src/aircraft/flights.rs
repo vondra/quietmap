@@ -1,6 +1,8 @@
 //! The loudest flights of a click (PLAN section 5, as dev4 lists them): the pieces the loudest
-//! boxes kept, each computed exactly with the kernel at the receiver, summed per flight; a
-//! flight's Lmax is the loudest LAmax of its pieces at their closest points.
+//! boxes kept, each computed exactly with the kernel at the receiver; a flight's Lmax is the
+//! loudest LAmax of its pieces at their closest points, and the list is ranked by it as dev4
+//! ranks it (a flight's SEL sums only the pieces kept, so it would rank flights by what happened
+//! to be kept).
 
 use super::boxes::AircraftReceiver;
 use physics::doc29::corrections::speed_correction_db;
@@ -15,8 +17,6 @@ use tiles::geo::{LocalFrame, TileId};
 
 /// Flights listed per click (dev4 lists ten).
 pub const FLIGHTS_SHOWN: usize = 10;
-/// Boxes whose pieces are computed: the loudest this many of a ring.
-pub const BOXES_SEARCHED: usize = 256;
 
 /// One listed flight.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,7 +26,7 @@ pub struct LoudFlight {
     pub type_designator: String,
     pub start_unix: u32,
     pub period: u8,
-    /// The flight's SEL at the receiver (dB), summed over its computed pieces.
+    /// The flight's SEL at the receiver (dB), summed over its computed pieces only.
     pub sel_db: f64,
     /// Its loudest LAmax (dB) and where: horizontal distance and altitude above the receiver.
     pub lmax_db: f64,
@@ -61,27 +61,35 @@ fn emission_of(piece: &FlightPiece, designator: &str) -> SegmentEmission {
 /// Per flight (keyed by address and start) its summed SEL energy and its loudest piece.
 pub struct FlightTotals {
     flights: HashMap<(u32, u32), LoudFlight>,
-    /// Pieces read per box (all it keeps, or fewer) and boxes searched per ring: the popup's
-    /// defaults, or the benchmark's trials.
-    pub pieces_per_box: usize,
-    pub boxes_searched: usize,
+    /// Pieces read per box: all it keeps, or fewer (the benchmark's trials).
+    pieces_per_box: usize,
 }
 
 impl Default for FlightTotals {
     fn default() -> Self {
-        FlightTotals::reading(usize::MAX, BOXES_SEARCHED)
+        FlightTotals::reading(usize::MAX)
     }
 }
 
 impl FlightTotals {
-    /// Totals reading at most `pieces_per_box` kept pieces (the loudest) of each of the
-    /// `boxes_searched` loudest boxes of a ring.
-    pub fn reading(pieces_per_box: usize, boxes_searched: usize) -> Self {
+    /// Totals reading at most `pieces_per_box` kept pieces (the loudest) of a box.
+    pub fn reading(pieces_per_box: usize) -> Self {
         FlightTotals {
             flights: HashMap::new(),
             pieces_per_box,
-            boxes_searched,
         }
+    }
+
+    /// The Lmax a flight must exceed to enter the list: its last one's, or -inf while it is
+    /// short.
+    pub fn entry_lmax_db(&self) -> f64 {
+        if self.flights.len() < FLIGHTS_SHOWN {
+            return f64::NEG_INFINITY;
+        }
+        let mut levels: Vec<f64> = self.flights.values().map(|flight| flight.lmax_db).collect();
+        *levels
+            .select_nth_unstable_by(FLIGHTS_SHOWN - 1, |a, b| b.total_cmp(a))
+            .1
     }
 
     /// Computes the pieces of boxes `boxes` (indices into `aircraft`) of `tile`.
@@ -149,13 +157,14 @@ impl FlightTotals {
         }
     }
 
-    /// The loudest flights by SEL.
+    /// The loudest flights by Lmax.
     pub fn loudest(&self) -> Vec<LoudFlight> {
         let mut flights: Vec<LoudFlight> = self.flights.values().cloned().collect();
         flights.sort_by(|a, b| {
-            b.sel_db
-                .total_cmp(&a.sel_db)
+            b.lmax_db
+                .total_cmp(&a.lmax_db)
                 .then(a.start_unix.cmp(&b.start_unix))
+                .then(a.icao.cmp(&b.icao))
         });
         flights.truncate(FLIGHTS_SHOWN);
         flights

@@ -6,7 +6,7 @@ import { PERIOD_LABELS_DETAIL } from '../shared'
 import { topFlightCells } from '../top-flights'
 
 const TITLE_TOOLTIP =
-  'The ADS-B flights with the greatest sound exposure (SEL) at this point, loudest first.'
+  'The ADS-B flights with the highest peak level (Lmax) at this point, loudest first.'
 const AIRCRAFT_TOOLTIP =
   'The aircraft type, with its callsign and ICAO address in its tooltip.\n' +
   'It opens the flight\'s trace of that day on adsb.lol, in a new tab.'
@@ -17,8 +17,7 @@ const NUMBER_COLUMNS = [
     name: 'Lmax',
     unit: 'dB',
     tooltip: 'The flight\'s peak A-weighted level here (LAmax): the loudest part of its track at its ' +
-      'closest point, from the Doc 29 noise-power-distance tables.\n\n' +
-      'The list is ordered by sound exposure (SEL), not by Lmax.',
+      'closest point, from the Doc 29 noise-power-distance tables. The list is ordered by it.',
   },
   { name: 'Dist', unit: 'km', tooltip: 'Horizontal distance to where the flight\'s peak level is reached.' },
   { name: 'Alt', unit: 'km', tooltip: 'Height above this point where the flight\'s peak level is reached.' },

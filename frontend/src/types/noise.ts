@@ -75,9 +75,10 @@ export interface TopFlight {
   start_unix: number
   /** The period the flight passed the point in. */
   period: 'day' | 'evening' | 'night'
-  /** Sound exposure level at the point: the list's order. */
+  /** Sound exposure level at the point of the parts of the flight the popup computed. */
   sel_db: number
-  /** The flight's peak level (LAmax) at the point: the loudest of its parts, each at its closest point. */
+  /** The flight's peak level (LAmax) at the point: the loudest of its parts, each at its closest point;
+   *  the list's order. */
   lmax_db: number
   /** Horizontal distance to where that peak is reached (the closest point of the loudest part). */
   closest_m: number
@@ -107,7 +108,7 @@ export interface PopupUpdate {
   total: PeriodLevels
   sources: LayerLevels[]
   top_contributors: Contributor[]
-  /** The loudest flights by SEL, loudest first; empty when no aircraft are heard. */
+  /** The loudest flights by Lmax, loudest first; empty when no aircraft are heard. */
   top_flights: TopFlight[]
   stats: PopupStats
 }

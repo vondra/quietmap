@@ -328,6 +328,44 @@ pub fn steepest_sel_slope_db_per_m(slant_m: f64) -> f64 {
     STEEPEST_INTERVAL_DB_PER_DECADE[interval] / (slant_m * std::f64::consts::LN_10)
 }
 
+/// The slant (m) at which an aircraft box states its loudest piece's LAmax: 1,000 ft.
+pub const LAMAX_REFERENCE_SLANT_M: f64 = 1_000.0 * METRES_PER_FOOT;
+/// The rise table starts at the nearest slant a curve is read at and has this many entries per
+/// decade of slant, out to 1,000 km.
+const RISE_TABLE_STEPS_PER_DECADE: f64 = 50.0;
+const RISE_TABLE_LAST_M: f64 = 1.0e6;
+
+/// Per slant of the rise table, the most any row's LAmax curve rises from the reference slant.
+static LAMAX_RISE_TABLE: LazyLock<Vec<f64>> = LazyLock::new(|| {
+    let decades = (RISE_TABLE_LAST_M / NPD_NEAREST_SLANT_M).log10();
+    let entries = (decades * RISE_TABLE_STEPS_PER_DECADE).ceil() as usize + 1;
+    let reference = NpdPosition::at(LAMAX_REFERENCE_SLANT_M);
+    (0..entries)
+        .map(|index| {
+            let slant_m =
+                NPD_NEAREST_SLANT_M * 10f64.powf(index as f64 / RISE_TABLE_STEPS_PER_DECADE);
+            let position = NpdPosition::at(slant_m);
+            POWER_ROWS
+                .iter()
+                .flatten()
+                .flatten()
+                .map(|row| row.read(&position).lamax_db - row.read(&reference).lamax_db)
+                .fold(f64::NEG_INFINITY, f64::max)
+        })
+        .collect()
+});
+
+/// The most any LAmax curve rises from [`LAMAX_REFERENCE_SLANT_M`] to `slant_m` (dB; negative
+/// where every curve falls): a piece whose LAmax at the reference is L is at most L plus this at
+/// `slant_m`. Every curve falls with slant, so the table entry at or below `slant_m` bounds it;
+/// power rows interpolate linearly in dB and stay within their rows.
+pub fn lamax_rise_bound_db(slant_m: f64) -> f64 {
+    let table = &*LAMAX_RISE_TABLE;
+    let steps = (slant_m.max(NPD_NEAREST_SLANT_M) / NPD_NEAREST_SLANT_M).log10()
+        * RISE_TABLE_STEPS_PER_DECADE;
+    table[(steps.floor() as usize).min(table.len() - 1)]
+}
+
 #[cfg(test)]
 #[path = "npd_tests.rs"]
 mod tests;

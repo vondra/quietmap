@@ -2,7 +2,7 @@
 
 use super::{
     AircraftBox, BOX_BYTES, FLIGHT_BYTES, Flight, FlightPiece, Group, HEADER_BYTES, INSTALLATIONS,
-    MAGIC, NPD_DISTANCES, PERIODS, PIECE_BYTES, level_db,
+    MAGIC, NPD_DISTANCES, PERIODS, PIECE_BYTES, lamax_db, level_db,
 };
 use crate::FormatError;
 
@@ -120,6 +120,7 @@ impl<'a> Aircraft<'a> {
             installation_shares,
             first_piece: u32_at(record, 110),
             piece_count: record[114],
+            loudest_lamax_db: lamax_db(record[115]),
         }
     }
 

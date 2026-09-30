@@ -13,6 +13,7 @@ mod write;
 use crate::dev4::Square;
 use physics::bands::PERIODS;
 use physics::doc29::box_sums::BoxSums;
+use physics::doc29::npd::LAMAX_REFERENCE_SLANT_M;
 use physics::doc29::segment::{AircraftType, NpdDistanceLevels, SegmentEmission};
 use physics::doc29::thrust::SegmentFlight;
 use place::{BoxKey, BoxPiece, Placement, cut_into_pieces};
@@ -47,9 +48,10 @@ pub struct KeptPiece {
     pub flags: u8,
     pub period: u8,
     pub speed_kt: f32,
-    /// The kernel's emission class and power bracket code.
+    /// The kernel's emission class and power bracket code, and its LAmax at 1,000 ft (dB).
     pub class: u16,
     pub power_code: u16,
+    pub lamax_reference_db: f64,
     /// The piece's ends: position and altitude above sea level.
     pub start: (Mercator, f64),
     pub end: (Mercator, f64),
@@ -72,6 +74,7 @@ impl KeptPiece {
             speed_kt: segment.speed_kt as f32,
             class: emission.class as u16,
             power_code: emission.power.code(),
+            lamax_reference_db: emission.read_npd(LAMAX_REFERENCE_SLANT_M).lamax_db,
             start: piece.start,
             end: piece.end,
         }

@@ -123,6 +123,10 @@ pub fn write_tiles(boxes: &Boxes, placement: &Placement, out: &Path) -> Result<u
                 installation_shares: values.installation_shares,
                 first_piece,
                 piece_count: kept.len() as u8,
+                loudest_lamax_db: kept
+                    .iter()
+                    .map(|kept| kept.lamax_reference_db)
+                    .fold(f64::NEG_INFINITY, f64::max),
             });
         }
         if records.is_empty() {

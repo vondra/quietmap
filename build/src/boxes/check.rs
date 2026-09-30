@@ -14,10 +14,8 @@ use physics::bands::{PERIOD_HOURS, PERIODS};
 use physics::doc29::boxes::{AircraftBoxAtReceiver, box_sel_at_receiver};
 use physics::doc29::screening::Unscreened;
 use physics::doc29::segment::{SegmentEmission, SegmentGeometry, segment_sel_at_receiver};
-use popup::aircraft::boxes::AircraftReceiver;
-use popup::aircraft::flights::{
-    BOXES_SEARCHED as BOXES_SEARCHED_BY_POPUP, FLIGHTS_SHOWN, FlightTotals,
-};
+use popup::aircraft::boxes::{AircraftReceiver, tile_energy};
+use popup::aircraft::flights::{FLIGHTS_SHOWN, FlightTotals};
 use popup::aircraft::ring_aircraft;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -38,13 +36,11 @@ const METRES_PER_DEGREE: f64 = 111_000.0;
 /// slice lies), and one more for the terrain within one edge of their boxes.
 const REACH_RINGS: u32 = 3;
 /// The top-flights list is compared reading this many kept pieces per box (at most what the
-/// boxes keep), of the popup's number of loudest boxes per ring or more.
+/// boxes keep).
 const PIECES: [usize; 5] = [1, 2, 4, 8, 16];
-const BOXES_SEARCHED: [usize; 3] = [
-    BOXES_SEARCHED_BY_POPUP,
-    4 * BOXES_SEARCHED_BY_POPUP,
-    usize::MAX,
-];
+/// A listed flight whose exact Lmax is within this of the exact tenth's is as loud as the list
+/// (under a busy approach dozens of flights are within a few tenths of a decibel).
+const LIST_TOLERANCE_DB: f64 = 0.5;
 
 /// One point of the check: latitude, longitude (deg) and the ground under it (m).
 #[derive(Debug, Clone, Copy)]
@@ -67,19 +63,35 @@ pub struct PointReport {
     /// The first band (exact pieces, boxes) and the bands above it.
     pub near_ground: [Levels; 2],
     pub aloft: [Levels; 2],
-    /// The exact ten loudest flights (id, SEL dB) and the popup's lists.
+    /// The exact ten loudest flights (id, LAmax dB) and the popup's lists.
     pub exact_top: Vec<(u64, f64)>,
     pub lists: Vec<FlightList>,
 }
 
-/// The popup's top-flights list reading `pieces` per box of `boxes_searched` per ring: the share
-/// of the exact ten it holds, and per listed flight (id, SEL dB) its SEL minus the exact.
+/// The popup's top-flights list reading `pieces` per box: the share of the exact ten it holds,
+/// the share of it that is as loud as the exact ten within [`LIST_TOLERANCE_DB`], per listed
+/// flight (id, LAmax dB) its LAmax minus the exact, and whether the popup's search (boxes by
+/// their LAmax bound) lists what computing every kept piece within reach lists.
 #[derive(Debug, Clone)]
 pub struct FlightList {
     pub pieces: usize,
-    pub boxes_searched: usize,
     pub recall: f64,
+    pub tolerant_recall: f64,
     pub listed: Vec<(u64, f64, f64)>,
+    pub search_is_exhaustive: bool,
+}
+
+/// Whether two lists name the same flights with the same Lmax (their SELs sum what each
+/// computed and may differ).
+fn same_list(a: &FlightTotals, b: &FlightTotals) -> bool {
+    let named = |totals: &FlightTotals| -> Vec<(u32, u32, f64)> {
+        totals
+            .loudest()
+            .iter()
+            .map(|flight| (flight.icao, flight.start_unix, flight.lmax_db))
+            .collect()
+    };
+    named(a) == named(b)
 }
 
 /// Leq (dB) per period of the day SEL energies.
@@ -88,11 +100,12 @@ fn leq_db(energy: &[f64]) -> Levels {
 }
 
 /// Energy slots of one point: exact within the reach, beyond it, and the pieces of the first
-/// band and above (each per period); per flight its exact SEL energy within the reach.
+/// band and above (each per period); per flight within the reach its exact SEL energy and its
+/// loudest LAmax (dB).
 #[derive(Clone)]
 struct Sums {
     energy: [f64; 4 * PERIODS],
-    flights: HashMap<u64, f64>,
+    flights: HashMap<u64, (f64, f64)>,
 }
 
 const EXACT: usize = 0;
@@ -112,8 +125,13 @@ impl Sums {
         for (a, b) in self.energy.iter_mut().zip(other.energy) {
             *a += b;
         }
-        for (flight, energy) in other.flights {
-            *self.flights.entry(flight).or_default() += energy;
+        for (flight, (energy, lmax_db)) in other.flights {
+            let entry = self
+                .flights
+                .entry(flight)
+                .or_insert((0.0, f64::NEG_INFINITY));
+            entry.0 += energy;
+            entry.1 = entry.1.max(lmax_db);
         }
     }
 }
@@ -175,7 +193,17 @@ fn add_segment(
             continue;
         }
         sums.energy[EXACT + period] += weight * energy;
-        *sums.flights.entry(segment.flight_id).or_default() += energy;
+        // The loudest LAmax as the popup takes it: the NPD value at the closest point's slant.
+        let closest = sel.closest.on_segment_m;
+        let lmax_db = emission
+            .read_npd(closest[0].hypot(closest[1]).hypot(closest[2]))
+            .lamax_db;
+        let flight = sums
+            .flights
+            .entry(segment.flight_id)
+            .or_insert((0.0, f64::NEG_INFINITY));
+        flight.0 += energy;
+        flight.1 = flight.1.max(lmax_db);
         let point = |end: [f64; 3]| (Mercator::from_degrees(end[0], end[1]), end[2]);
         let (from, to) = (point(segment.start), point(segment.end));
         let pieces =
@@ -391,61 +419,95 @@ fn report(aircraft_root: &Path, receiver: &Receiver, total: Sums) -> Result<Poin
         }
     }
     let boxed: [f64; PERIODS] = std::array::from_fn(|p| near_ground[p] + aloft[p]);
-    // The ten loudest flights of the exact sum, and the popup's list reading K pieces per box.
+    // The ten loudest flights by LAmax of the exact sum, and the popup's list reading K pieces
+    // per box.
     let mut exact_top: Vec<(u64, f64)> = total
         .flights
         .iter()
-        .map(|(&flight, &energy)| (flight, 10.0 * energy.log10()))
+        .map(|(&flight, &(_, lmax_db))| (flight, lmax_db))
         .collect();
     exact_top.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     exact_top.truncate(FLIGHTS_SHOWN);
     // The popup names a flight by its address and start (the id's bits 39-32 are dropped).
     let named = |flight: u64| (flight >> 40 & 0x00ff_ffff, flight & 0xffff_ffff);
-    let exact_sel: HashMap<(u64, u64), f64> = total
+    let exact_lmax: HashMap<(u64, u64), f64> = total
         .flights
         .iter()
-        .map(|(&flight, &energy)| (named(flight), 10.0 * energy.log10()))
+        .map(|(&flight, &(_, lmax_db))| (named(flight), lmax_db))
         .collect();
     let aircraft_receiver = AircraftReceiver {
         position: [0.0, 0.0],
         altitude_m: receiver.altitude_m,
     };
     let mut lists = Vec::new();
-    for boxes_searched in BOXES_SEARCHED {
-        for pieces in PIECES {
-            let mut flights = FlightTotals::reading(pieces, boxes_searched);
-            for ring in &parsed {
-                ring_aircraft(
-                    ring,
+    for pieces in PIECES {
+        let (mut searched, mut exhaustive) =
+            (FlightTotals::reading(pieces), FlightTotals::reading(pieces));
+        for ring in &parsed {
+            ring_aircraft(
+                ring,
+                &receiver.frame,
+                aircraft_receiver,
+                &Unscreened,
+                &mut searched,
+            );
+            for (tile, aircraft) in ring {
+                let answer = tile_energy(
+                    aircraft,
+                    *tile,
                     &receiver.frame,
                     aircraft_receiver,
                     &Unscreened,
-                    &mut flights,
+                );
+                let within: Vec<usize> = answer
+                    .lamax_bounds
+                    .iter()
+                    .map(|&(index, _)| index)
+                    .collect();
+                exhaustive.add_boxes(
+                    aircraft,
+                    *tile,
+                    &within,
+                    &receiver.frame,
+                    aircraft_receiver,
+                    &Unscreened,
                 );
             }
-            let listed: Vec<(u64, f64, f64)> = flights
-                .loudest()
-                .iter()
-                .map(|flight| {
-                    let id = (u64::from(flight.icao), u64::from(flight.start_unix));
-                    let exact = exact_sel.get(&id).copied().unwrap_or(f64::NAN);
-                    (id.0 << 40 | id.1, flight.sel_db, flight.sel_db - exact)
-                })
-                .collect();
-            let found = exact_top
-                .iter()
-                .filter(|(flight, _)| {
-                    let (icao, start) = named(*flight);
-                    listed.iter().any(|(id, _, _)| *id == icao << 40 | start)
-                })
-                .count();
-            lists.push(FlightList {
-                pieces,
-                boxes_searched,
-                recall: found as f64 / exact_top.len().max(1) as f64,
-                listed,
-            });
         }
+        let listed: Vec<(u64, f64, f64)> = searched
+            .loudest()
+            .iter()
+            .map(|flight| {
+                let id = (u64::from(flight.icao), u64::from(flight.start_unix));
+                let exact = exact_lmax.get(&id).copied().unwrap_or(f64::NAN);
+                (id.0 << 40 | id.1, flight.lmax_db, flight.lmax_db - exact)
+            })
+            .collect();
+        let found = exact_top
+            .iter()
+            .filter(|(flight, _)| {
+                let (icao, start) = named(*flight);
+                listed.iter().any(|(id, _, _)| *id == icao << 40 | start)
+            })
+            .count();
+        let last = exact_top
+            .last()
+            .map_or(f64::NEG_INFINITY, |(_, lmax_db)| *lmax_db);
+        let as_loud = listed
+            .iter()
+            .filter(|(id, _, _)| {
+                exact_lmax
+                    .get(&(id >> 40, id & 0xffff_ffff))
+                    .is_some_and(|lmax_db| *lmax_db >= last - LIST_TOLERANCE_DB)
+            })
+            .count();
+        lists.push(FlightList {
+            pieces,
+            recall: found as f64 / exact_top.len().max(1) as f64,
+            tolerant_recall: as_loud as f64 / listed.len().max(1) as f64,
+            listed,
+            search_is_exhaustive: same_list(&searched, &exhaustive),
+        });
     }
     Ok(PointReport {
         exact: leq_db(&total.energy[EXACT..]),
