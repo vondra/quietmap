@@ -74,10 +74,10 @@ pub fn layer_answers(selections: &[LayerSelection]) -> Vec<LayerAnswer> {
         .iter()
         .map(|selection| LayerAnswer {
             layer: selection.layer,
-            energy: selection.energy,
-            omitted_bound: selection.pending_bound(),
+            energy: selection.answer_energy(),
+            omitted_bound: selection.uncertainty(),
             evaluated: selection.evaluated,
-            candidates: selection.evaluated + selection.pending.len(),
+            candidates: selection.covered + selection.pending.len(),
         })
         .collect()
 }

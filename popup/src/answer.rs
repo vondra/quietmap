@@ -334,6 +334,7 @@ pub fn answer(
             *total += value;
         }
         aircraft.evaluated += heard;
+        aircraft.covered += heard;
         let evaluation = Receiver {
             ground: &ground,
             obstacles: &obstacles,
@@ -348,6 +349,7 @@ pub fn answer(
             &attributes,
             options.exact,
             options.pieces > 0,
+            (lat.to_bits() ^ lon.to_bits().rotate_left(32)) ^ u64::from(ring),
         )?;
         evaluate_seconds += evaluate_started.elapsed().as_secs_f64();
         let last_ring = ring == ground_rings.max(aircraft_rings);
