@@ -50,7 +50,9 @@ const MOTORWAY_PERIOD_SHARES: [f64; PERIODS] = [0.65, 0.20, 0.15];
 const URBAN_PERIOD_SHARES: [f64; PERIODS] = [0.70, 0.18, 0.12];
 
 /// The speed of an untagged road: the country's legal limit for main classes (urban or rural by
-/// the row's built-up flag, unknown density keeps the class default), else the class default.
+/// the row's built-up flag, unknown density keeps the class default), else the class default. A
+/// trunk in a built-up area takes the urban limit like any street there; elsewhere the country's
+/// motorroad limit where it has one.
 fn default_speed(class: usize, country_iso: u16, built_up: u8) -> (f64, &'static str) {
     let iso = country_iso.to_le_bytes();
     let legal = COUNTRY_SPEEDS
@@ -59,6 +61,7 @@ fn default_speed(class: usize, country_iso: u16, built_up: u8) -> (f64, &'static
         .map(|i| COUNTRY_SPEEDS[i].1);
     let value = legal.map_or(0, |[urban, rural, motorway, motorroad]| match class {
         0 => motorway,
+        1 if built_up == 2 => urban,
         1 if motorroad > 0 => motorroad,
         1 => rural,
         2 | 3 | 4 | 9 => match built_up {
@@ -261,6 +264,12 @@ mod tests {
         let cz = u16::from_le_bytes(*b"CZ");
         assert_eq!(default_speed(0, cz, 0).0, 130.0);
         assert_eq!(default_speed(1, cz, 0).0, 110.0, "Czech motorroads");
+        assert_eq!(
+            default_speed(1, cz, 2),
+            (50.0, "country_legal_default"),
+            "a trunk through a town"
+        );
+        assert_eq!(default_speed(1, cz, 1).0, 110.0);
         assert_eq!(default_speed(3, cz, 2), (50.0, "country_legal_default"));
         assert_eq!(default_speed(3, cz, 1).0, 90.0);
         assert_eq!(

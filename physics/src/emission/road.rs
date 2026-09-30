@@ -9,8 +9,9 @@ use crate::bands::BANDS;
 pub const REFERENCE_SPEED_KMH: f64 = 70.0;
 /// Heavy vehicles never emit above this speed (km/h).
 pub const HEAVY_SPEED_CAP_KMH: f64 = 80.0;
-/// The laws are evaluated between these speeds (km/h); the vehicle density uses the real speed.
-const SPEED_RANGE_KMH: (f64, f64) = (20.0, 130.0);
+/// The laws are evaluated at no less than this speed (km/h), and are valid on all speed ranges
+/// above it (2.2.2); the vehicle density uses the real speed.
+const MINIMUM_LAW_SPEED_KMH: f64 = 20.0;
 
 /// CNOSSOS-EU vehicle categories 1, 2, 3 and 4b.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,7 +94,7 @@ pub fn line_emission_db(flows: &[CategoryFlow], surface_correction_db: f64) -> [
             _ => flow.speed_kmh,
         };
         let coefficients = flow.category.coefficients();
-        let law_speed = speed.clamp(SPEED_RANGE_KMH.0, SPEED_RANGE_KMH.1);
+        let law_speed = speed.max(MINIMUM_LAW_SPEED_KMH);
         let (log_ratio, relative) = (
             (law_speed / REFERENCE_SPEED_KMH).log10(),
             (law_speed - REFERENCE_SPEED_KMH) / REFERENCE_SPEED_KMH,
@@ -155,6 +156,15 @@ mod tests {
         assert!((k2 - 80.07).abs() < 0.15, "{k2}");
         let slow = a_weighted(&flow(100.0, 20.0, VehicleCategory::Light), 0.0);
         assert!((slow - 66.17).abs() < 0.15, "{slow}");
+    }
+
+    /// The laws hold above 130 km/h too: cars at 140 km/h emit 0.79 dB(A)/m more than at 130
+    /// (the rolling law outgrows the thinner flow), where a clamp at 130 left 0.32 dB less.
+    #[test]
+    fn fast_cars_follow_the_laws_past_one_hundred_and_thirty() {
+        let at = |speed| a_weighted(&flow(1_000.0, speed, VehicleCategory::Light), 0.0);
+        let rise = at(140.0) - at(130.0);
+        assert!((rise - 0.79).abs() < 0.05, "{rise}");
     }
 
     #[test]

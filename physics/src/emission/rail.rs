@@ -15,8 +15,14 @@ use crate::bands::BANDS;
 
 /// Rolling noise grows as B lg(v / v_ref) (dev4's constant).
 const ROLLING_SPEED_COEFFICIENT: f64 = 30.0;
-/// Speeds below this are evaluated at it (as dev4).
+/// Speeds below this are evaluated at it (as dev4): a line never stands still.
 const MINIMUM_SPEED_KMH: f64 = 20.0;
+/// CNOSSOS-EU 2.3.2: a train's sound power is taken at no less than 50 km/h (30 km/h for light
+/// metro), standing for the braking and impact noise the rolling law leaves out; the flow keeps
+/// the line's own speed. Trams keep their per-speed calibration, fitted to CNOSSOS consists that
+/// already hold this floor; funiculars are outside CNOSSOS.
+const MINIMUM_POWER_SPEED_KMH: f64 = 50.0;
+const LIGHT_METRO_MINIMUM_POWER_SPEED_KMH: f64 = 30.0;
 
 /// The rail type code of the prepared rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,6 +191,11 @@ pub fn line_emission_db(
             }
         }
         _ => {
+            let power_floor_kmh = match rail_type {
+                RailType::Rail | RailType::NarrowGauge => MINIMUM_POWER_SPEED_KMH,
+                RailType::LightRail => LIGHT_METRO_MINIMUM_POWER_SPEED_KMH,
+                _ => MINIMUM_SPEED_KMH,
+            };
             let passenger_category = match rail_type {
                 RailType::Tram => Category::Tram,
                 RailType::LightRail | RailType::NarrowGauge => Category::LightRail,
@@ -199,7 +210,12 @@ pub fn line_emission_db(
                 }
                 let train = category.train();
                 let speed = line_speed_kmh.clamp(MINIMUM_SPEED_KMH, train.maximum_speed_kmh);
-                let bands = train_bands(train, speed, category.calibration_db(region, speed));
+                let power_speed = speed.max(power_floor_kmh).min(train.maximum_speed_kmh);
+                let bands = train_bands(
+                    train,
+                    power_speed,
+                    category.calibration_db(region, power_speed),
+                );
                 let density = count / (period_hours * 1000.0 * speed);
                 for band in 0..BANDS {
                     energy[band] += density * 10f64.powf(bands[band] / 10.0);
@@ -265,6 +281,36 @@ mod tests {
         let eu = line_emission_db(RailType::Rail, 80.0, 0.0, 10.0, 12.0, FreightRegion::Europe);
         let world = line_emission_db(RailType::Rail, 80.0, 0.0, 10.0, 12.0, FreightRegion::World);
         assert!((a_weighted(&world) - a_weighted(&eu) - 8.0).abs() < 1e-9);
+    }
+
+    /// Below 50 km/h a train keeps the sound power of 50 km/h and only its flow grows: at 30
+    /// km/h it reads 10 lg(50/30) = 2.22 dB above 50 km/h (it read 4.4 dB below). Light metro
+    /// holds 30 km/h; trams keep their calibration below it.
+    #[test]
+    fn slow_trains_keep_the_sound_power_of_fifty_kilometres_an_hour() {
+        let level = |rail_type, speed| {
+            a_weighted(&line_emission_db(
+                rail_type,
+                speed,
+                10.0,
+                5.0,
+                12.0,
+                FreightRegion::Europe,
+            ))
+        };
+        let flow = |from: f64, to: f64| 10.0 * (from / to).log10();
+        assert!(
+            (level(RailType::Rail, 30.0) - level(RailType::Rail, 50.0) - flow(50.0, 30.0)).abs()
+                < 1e-9
+        );
+        assert!(
+            (level(RailType::LightRail, 20.0)
+                - level(RailType::LightRail, 30.0)
+                - flow(30.0, 20.0))
+            .abs()
+                < 1e-9
+        );
+        assert!(level(RailType::Tram, 20.0) < level(RailType::Tram, 25.0));
     }
 
     #[test]
