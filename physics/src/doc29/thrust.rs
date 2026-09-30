@@ -77,7 +77,25 @@ impl PowerBracket {
         row: 0,
         weight: 0.0,
     };
+
+    /// The bracket as stored in a tile (the boxes' loudest pieces): the row in the top 3 bits,
+    /// the weight in the low 13 (steps of 1/8191, under 1e-3 dB of level).
+    pub fn code(self) -> u16 {
+        assert!(self.row < MAX_POWER_ROWS && (0.0..=1.0).contains(&self.weight));
+        ((self.row as u16) << 13) | (self.weight * f64::from(WEIGHT_STEPS)).round() as u16
+    }
+
+    /// The bracket of a stored [`code`](Self::code).
+    pub fn from_code(code: u16) -> Self {
+        PowerBracket {
+            row: usize::from(code >> 13).min(MAX_POWER_ROWS - 1),
+            weight: f64::from(code & WEIGHT_STEPS) / f64::from(WEIGHT_STEPS),
+        }
+    }
 }
+
+/// Weight steps of a stored power bracket.
+const WEIGHT_STEPS: u16 = (1 << 13) - 1;
 
 /// What a segment flies, independent of any receiver: the inputs of its power bracket and of its
 /// speed correction.

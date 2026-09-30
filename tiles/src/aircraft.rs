@@ -1,6 +1,6 @@
 //! `aircraft` tiles: the tile's aircraft boxes and its flight table. A box sums every flight piece
 //! that crossed one web-map cell of the tile within one clearance slab, for one aircraft group: per
-//! period the NPD energy at the ten NPD distances, the energy-weighted SEL minus LAmax there, the
+//! period the NPD energy at the ten NPD distances, the pieces' scaled distance there, the
 //! installation shares, and the geometry of its "average aircraft" (the emission-weighted centroid,
 //! one mean axis and gradient, the mean piece length). Each box also names its loudest pieces for
 //! the top-flights list; a piece names a flight of the table.
@@ -11,7 +11,7 @@ pub use parse::Aircraft;
 
 const MAGIC: &[u8; 8] = b"qmair1\n\0";
 const HEADER_BYTES: usize = 24;
-const BOX_BYTES: usize = 104;
+const BOX_BYTES: usize = 114;
 const FLIGHT_BYTES: usize = 20;
 const PIECE_BYTES: usize = 24;
 /// The NPD distances of Doc 29 (200 ft .. 25,000 ft).
@@ -55,8 +55,9 @@ pub struct AircraftBox {
     pub flights: u32,
     /// Per period, the average day's summed SEL energy at each NPD distance (dB; -inf silent).
     pub energy_db: [[f64; NPD_DISTANCES]; PERIODS],
-    /// The energy-weighted SEL minus LAmax at each NPD distance (0.1 dB steps, 0..25.5 dB).
-    pub sel_minus_lamax_db: [f64; NPD_DISTANCES],
+    /// The pieces' scaled distance d_lambda (m) at each NPD distance, their energy-weighted
+    /// harmonic mean (what Delta_F of short pieces sums to), stored as lg d_lambda in 1e-4 steps.
+    pub scaled_distance_m: [f64; NPD_DISTANCES],
     /// Energy shares of the installations (1/255 steps; the last is what the first two leave).
     pub installation_shares: [f64; INSTALLATIONS],
     /// The box's loudest pieces: `first_piece .. first_piece + piece_count` in the piece table.
@@ -87,10 +88,11 @@ pub struct FlightPiece {
     pub altitudes_m: [f64; 2],
     /// Ground speed (0.1 kt steps).
     pub speed_kt: f64,
-    pub profile: u16,
-    /// The kernel's power setting, as its code.
+    /// The Doc 29 noise class (the flight's designator gives a helicopter its levels).
+    pub class: u16,
+    /// The power bracket as `physics::doc29::thrust::PowerBracket::code`.
     pub power_code: u16,
-    /// Kernel flags (departure, helicopter descent, ...).
+    /// Bit 0: departure NPDs; bit 1: helicopter descent.
     pub flags: u8,
     /// The flight's period (its date is the flight's start).
     pub period: u8,
@@ -171,8 +173,10 @@ fn write_box(bytes: &mut Vec<u8>, record: &AircraftBox) {
     for level in record.energy_db.iter().flatten() {
         bytes.extend_from_slice(&level_code(*level).to_le_bytes());
     }
-    for difference in record.sel_minus_lamax_db {
-        bytes.push((difference * 10.0).round().clamp(0.0, 255.0) as u8);
+    for distance in record.scaled_distance_m {
+        let code = (distance.max(1.0).log10() * 10_000.0).round();
+        assert!(code <= f64::from(u16::MAX), "scaled distance {distance} m");
+        bytes.extend_from_slice(&(code as u16).to_le_bytes());
     }
     let [wing, fuselage, _] = record
         .installation_shares
@@ -197,13 +201,13 @@ fn write_piece(bytes: &mut Vec<u8>, piece: &FlightPiece) {
         .round()
         .clamp(0.0, f64::from(u16::MAX));
     bytes.extend_from_slice(&(speed as u16).to_le_bytes());
-    bytes.extend_from_slice(&piece.profile.to_le_bytes());
+    bytes.extend_from_slice(&piece.class.to_le_bytes());
     bytes.extend_from_slice(&piece.power_code.to_le_bytes());
     bytes.extend_from_slice(&[piece.flags, piece.period]);
     assert_eq!(bytes.len() - start, PIECE_BYTES);
 }
 
-/// The bytes of an aircraft file: header, 104-byte boxes, 20-byte flights, 24-byte pieces.
+/// The bytes of an aircraft file: header, 114-byte boxes, 20-byte flights, 24-byte pieces.
 /// Every piece's flight and every box's pieces must exist.
 pub fn encode(boxes: &[AircraftBox], flights: &[Flight], pieces: &[FlightPiece]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(

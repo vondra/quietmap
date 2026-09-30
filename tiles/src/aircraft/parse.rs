@@ -45,7 +45,7 @@ impl<'a> Aircraft<'a> {
         };
         for index in 0..boxes {
             let record = parsed.box_record(index);
-            let (zoom, first, count) = (record[0], u32_at(record, 98), usize::from(record[102]));
+            let (zoom, first, count) = (record[0], u32_at(record, 108), usize::from(record[112]));
             if !(12..=super::MAXIMUM_ZOOM).contains(&zoom) || record[1] > 1 {
                 return Err(FormatError("aircraft: bad box zoom or group"));
             }
@@ -88,7 +88,10 @@ impl<'a> Aircraft<'a> {
     pub fn aircraft_box(&self, index: usize) -> AircraftBox {
         let record = self.box_record(index);
         let energy = |at: usize| level_db(u16_at(record, at));
-        let (wing, fuselage) = (f64::from(record[96]) / 255.0, f64::from(record[97]) / 255.0);
+        let (wing, fuselage) = (
+            f64::from(record[106]) / 255.0,
+            f64::from(record[107]) / 255.0,
+        );
         let mut installation_shares = [wing, fuselage, 0.0];
         installation_shares[INSTALLATIONS - 1] = (1.0 - wing - fuselage).max(0.0);
         AircraftBox {
@@ -110,12 +113,12 @@ impl<'a> Aircraft<'a> {
             energy_db: std::array::from_fn(|period| {
                 std::array::from_fn(|distance| energy(26 + 2 * (period * NPD_DISTANCES + distance)))
             }),
-            sel_minus_lamax_db: std::array::from_fn(|distance| {
-                f64::from(record[86 + distance]) / 10.0
+            scaled_distance_m: std::array::from_fn(|distance| {
+                10f64.powf(f64::from(u16_at(record, 86 + 2 * distance)) / 10_000.0)
             }),
             installation_shares,
-            first_piece: u32_at(record, 98),
-            piece_count: record[102],
+            first_piece: u32_at(record, 108),
+            piece_count: record[112],
         }
     }
 
@@ -139,7 +142,7 @@ impl<'a> Aircraft<'a> {
             ],
             altitudes_m: [f64::from(i16_at(record, 12)), f64::from(i16_at(record, 14))],
             speed_kt: f64::from(u16_at(record, 16)) / 10.0,
-            profile: u16_at(record, 18),
+            class: u16_at(record, 18),
             power_code: u16_at(record, 20),
             flags: record[22],
             period: record[23],

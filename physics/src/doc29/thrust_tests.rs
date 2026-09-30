@@ -150,3 +150,19 @@ fn generated_tables_follow_class_names_and_anchors() {
         }
     }
 }
+
+#[test]
+fn a_power_bracket_survives_its_tile_code() {
+    for row in 0..MAX_POWER_ROWS {
+        for weight in [0.0, 0.25, 0.6977, 1.0] {
+            let bracket = PowerBracket { row, weight };
+            let back = PowerBracket::from_code(bracket.code());
+            assert_eq!(back.row, row);
+            assert!(
+                (back.weight - weight).abs() <= 0.5 / 8191.0,
+                "{weight} -> {}",
+                back.weight
+            );
+        }
+    }
+}
