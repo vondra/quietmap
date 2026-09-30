@@ -12,7 +12,7 @@ pub const MAX_POWER_ROWS: usize = 6;
 pub struct ThrustModel {
     pub class_name: &'static str,
     pub anchor_name: &'static str,
-    /// False for the pinned classes (fallback proxy, piston, turboprop, helicopter): they read
+    /// False for the pinned classes (the fallback proxy and the helicopters): they read
     /// their anchor profile's curve on row 0.
     pub has_thrust: bool,
     pub engines: u8,
@@ -26,6 +26,10 @@ pub struct ThrustModel {
     pub takeoff_coef: [f64; 5],
     pub climb_coef: [f64; 5],
     pub idle_coef: [f64; 5],
+    /// Eq. B-5 (propeller efficiency, net propulsive power in hp) at MaxTakeoff and MaxClimb of a
+    /// class the ANP rates by its propeller, zeros for the others: those two ratings are then
+    /// 326 eta P / (V_T delta), and the class has no idle rating (0 lb: its lowest row bounds it).
+    pub propeller: [[f64; 2]; 2],
     /// Departure rows: count, corrected net thrust per engine (lb), SEL and LAmax curves.
     pub dep_rows: u8,
     pub dep_power: [f64; MAX_POWER_ROWS],
@@ -52,6 +56,7 @@ impl ThrustModel {
             takeoff_coef: [0.0; 5],
             climb_coef: [0.0; 5],
             idle_coef: [0.0; 5],
+            propeller: [[0.0; 2]; 2],
             dep_rows: 1,
             dep_power: [0.0; MAX_POWER_ROWS],
             dep_sel: [[0.0; 10]; MAX_POWER_ROWS],
@@ -171,6 +176,37 @@ fn rated_thrust_lb(coef: &[f64; 5], vc_kt: f64, h_ft: f64, temperature_c: f64) -
     coef[0] + coef[1] * vc_kt + coef[2] * h_ft + coef[3] * h_ft * h_ft + coef[4] * temperature_c
 }
 
+/// The engine ratings of the thrust model.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Rating {
+    Takeoff,
+    Climb,
+    Idle,
+}
+
+impl ThrustModel {
+    /// Corrected net thrust per engine (lb) at a rating: Eq. B-1, or for a propeller class Eq. B-5
+    /// with the true airspeed V_C / sqrt(sigma) (Eq. B-6; below 1 kt, where B-5 has no meaning,
+    /// read at 1 kt: the table's top row).
+    fn rated_thrust_lb(&self, rating: Rating, vc_kt: f64, h_ft: f64, temperature_c: f64) -> f64 {
+        if self.propeller[0][1] > 0.0 {
+            let [efficiency, power_hp] = match rating {
+                Rating::Takeoff => self.propeller[0],
+                Rating::Climb => self.propeller[1],
+                Rating::Idle => return 0.0,
+            };
+            let vt_kt = (vc_kt / isa_density_ratio(h_ft).sqrt()).max(1.0);
+            return 326.0 * efficiency * power_hp / vt_kt / isa_pressure_ratio(h_ft);
+        }
+        let coef = match rating {
+            Rating::Takeoff => &self.takeoff_coef,
+            Rating::Climb => &self.climb_coef,
+            Rating::Idle => &self.idle_coef,
+        };
+        rated_thrust_lb(coef, vc_kt, h_ft, temperature_c)
+    }
+}
+
 /// Standard gravity (m/s^2).
 const GRAVITY_MS2: f64 = 9.806_65;
 
@@ -211,17 +247,17 @@ pub fn power_bracket(class: usize, flight: &SegmentFlight) -> Option<PowerBracke
     let delta = isa_pressure_ratio(h_ft);
     let vc_kt = flight.speed_kt * isa_density_ratio(h_ft).sqrt();
     let temperature_c = isa_temperature_c(h_ft);
+    let rated = |rating| model.rated_thrust_lb(rating, vc_kt, h_ft, temperature_c);
     let thrust_lb = if flight.on_ground {
-        let rating = if flight.departure {
-            &model.takeoff_coef
+        rated(if flight.departure {
+            Rating::Takeoff
         } else {
-            &model.idle_coef
-        };
-        rated_thrust_lb(rating, vc_kt, h_ft, temperature_c)
+            Rating::Idle
+        })
     } else if flight.departure
         && flight.height_above_field_m < model.cutback_ft_afe * METRES_PER_FOOT
     {
-        rated_thrust_lb(&model.takeoff_coef, vc_kt, h_ft, temperature_c)
+        rated(Rating::Takeoff)
     } else if !flight.departure
         && flight.height_above_field_m <= APPROACH[class].from_ft_afe * METRES_PER_FOOT
     {
@@ -229,8 +265,7 @@ pub fn power_bracket(class: usize, flight: &SegmentFlight) -> Option<PowerBracke
         // the clean ratio of the climb an approach read idle all the way down (1-4 dB of the
         // approach NPD of the A320neo family, 10 dB of a business jet's).
         let approach = &APPROACH[class];
-        let idle = rated_thrust_lb(&model.idle_coef, vc_kt, h_ft, temperature_c);
-        let climb = rated_thrust_lb(&model.climb_coef, vc_kt, h_ft, temperature_c);
+        let (idle, climb) = (rated(Rating::Idle), rated(Rating::Climb));
         if !(idle.is_finite() && climb.is_finite() && idle <= climb) {
             return None;
         }
@@ -242,8 +277,7 @@ pub fn power_bracket(class: usize, flight: &SegmentFlight) -> Option<PowerBracke
         .clamp(idle, climb)
     } else {
         let k = if vc_kt <= 200.0 { 1.01 } else { 0.95 };
-        let idle = rated_thrust_lb(&model.idle_coef, vc_kt, h_ft, temperature_c);
-        let climb = rated_thrust_lb(&model.climb_coef, vc_kt, h_ft, temperature_c);
+        let (idle, climb) = (rated(Rating::Idle), rated(Rating::Climb));
         if !(idle.is_finite() && climb.is_finite() && idle <= climb) {
             return None;
         }

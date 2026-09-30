@@ -7,6 +7,11 @@ cutback height (the highest end altitude of a DEFAULT climb step at MaxTakeoff),
 and LAmax NPD row per operation by power (padded to six with the loudest); the anchor profile
 holds the lowest approach row and the highest departure row, 160 kt, and the installation given.
 
+A class whose NPD power is a percentage of its maximum sea-level static thrust gets its rows in
+pounds; one without an IdleApproach rating (the ANP rates the DHC830 at MaxTakeoff and MaxClimb
+only) gets no idle floor; one the ANP rates by its propeller (CNA172) gets that rating's efficiency
+and net propulsive power for Eq. B-5 and zero B-1 coefficients.
+
 usage: thrust-class.py ANP_2_3_DIR CLASS_NAME ACFT_ID LABEL INSTALLATION
 """
 import csv, os, statistics, sys
@@ -36,6 +41,8 @@ def main(anp, class_name, acft, label, installation):
     npd_id = aircraft["NPD_ID"]
     ratings = {r["Thrust Rating"]: r for r in rows(anp, "ANP2.3_Jet_engine_coefficients.csv") if r["ACFT_ID"] == acft}
     coef = lambda rating: [num(ratings[rating][k]) for k in ("E", "F", "Ga", "Gb", "H")]
+    percent = "%" in aircraft["Power Parameter"]
+    static_lb = float(aircraft["Max Sea Level Static Thrust (lb)"])
     weights = [float(w["Weight (lb)"]) for w in rows(anp, "ANP2.3_Default_weights.csv") if w["ACFT_ID"] == acft]
     weight = statistics.median(weights)
     drags = [(float(a["R"]), a["Flap_ID"]) for a in rows(anp, "ANP2.3_Aerodynamic_coefficients.csv")
@@ -57,14 +64,16 @@ def main(anp, class_name, acft, label, installation):
         assert [p for p, _ in sel] == [p for p, _ in lmax]
         count = len(sel)
         pad = lambda seq: seq + [seq[-1]] * (MAX_ROWS - len(seq))
-        power = pad([p for p, _ in sel])
+        to_pounds = (lambda p: round(p * static_lb / 100.0, 2)) if percent else (lambda p: p)
+        power = pad([to_pounds(p) for p, _ in sel])
         sels = pad([c for _, c in sel])
         lmaxs = pad([c for _, c in lmax])
         return count, power, sels, lmaxs
     dep = rows_block("D")
     app = rows_block("A")
     curve = lambda c: "[" + ", ".join(fmt(v) for v in c) + "]"
-    print(f"    // {class_name} <- {acft} (median stage weight, R from clean flap {flap})")
+    unit = f", rows at % of {static_lb:.0f} lb" if percent else ""
+    print(f"    // {class_name} <- {acft} (median stage weight, R from clean flap {flap}{unit})")
     print("    ThrustModel {")
     print(f'        class_name: "{class_name}",')
     print(f'        anchor_name: "{label}",')
@@ -74,9 +83,14 @@ def main(anp, class_name, acft, label, installation):
     print(f"        drag_ratio: {fmt(drag)},")
     print(f"        cutback_ft_afe: {fmt(cutback)},")
     print("        // B-1 coefficients (E, F, Ga, Gb, H) per rating.")
-    print(f"        takeoff_coef: {curve(coef('MaxTakeoff'))},")
-    print(f"        climb_coef: {curve(coef('MaxClimb'))},")
-    print(f"        idle_coef: {curve(coef('IdleApproach'))},")
+    propellers = {r["Thrust Rating"]: [float(r["Propeller Efficiency"]), float(r["Installed Net Propulsive Power (hp)"])]
+                  for r in rows(anp, "ANP2.3_Propeller_engine_coefficients.csv") if r["ACFT_ID"] == acft}
+    rating = lambda name: coef(name) if name in ratings else [0.0] * 5
+    print(f"        takeoff_coef: {curve(rating('MaxTakeoff'))},")
+    print(f"        climb_coef: {curve(rating('MaxClimb'))},")
+    print(f"        idle_coef: {curve(rating('IdleApproach'))},")
+    propeller = [propellers.get(name, [0.0, 0.0]) for name in ("MaxTakeoff", "MaxClimb")]
+    print(f"        propeller: [{curve(propeller[0])}, {curve(propeller[1])}],")
     for name, (count, power, sels, lmaxs) in (("dep", dep), ("app", app)):
         print(f"        {name}_rows: {count},")
         print(f"        {name}_power: {curve(power)},")

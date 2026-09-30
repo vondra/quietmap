@@ -117,12 +117,10 @@ fn b738_departure_scaled_distance_follows_sel_minus_lamax() {
 
 #[test]
 fn a_placeholder_lamax_takes_the_dipole_limit() {
-    for designator in ["C172", "AS50"] {
-        let class = class_of(designator);
-        for slant_m in [10.0, 300.0, 3_000.0, 12_000.0] {
-            let reading = read_npd(class, false, PowerBracket::FIRST_ROW, slant_m);
-            assert_eq!(reading.scaled_distance_m, slant_m.max(NPD_NEAREST_SLANT_M));
-        }
+    let class = class_of("AS50");
+    for slant_m in [10.0, 300.0, 3_000.0, 12_000.0] {
+        let reading = read_npd(class, false, PowerBracket::FIRST_ROW, slant_m);
+        assert_eq!(reading.scaled_distance_m, slant_m.max(NPD_NEAREST_SLANT_M));
     }
 }
 

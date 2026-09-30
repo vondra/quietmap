@@ -25,7 +25,14 @@ pub static APPROACH: [ApproachConfiguration; NUM_CLASSES] = [
         from_ft_afe: 2817.0,
         landing_weight_lb: 131670.0,
     },
-    ApproachConfiguration::none("PROP_C172"),
+    ApproachConfiguration {
+        class_name: "PROP_C172",
+        anchor: "CNA172/DEFAULT",
+        flap: "10-D",
+        drag_ratio: 0.0994,
+        from_ft_afe: 1000.0,
+        landing_weight_lb: 2205.0,
+    },
     ApproachConfiguration {
         class_name: "WING_B38M",
         anchor: "7378MAX/DEFAULT",
@@ -91,7 +98,14 @@ pub static APPROACH: [ApproachConfiguration; NUM_CLASSES] = [
         landing_weight_lb: 681300.0,
     },
     ApproachConfiguration::none("HELICOPTER"),
-    ApproachConfiguration::none("PROP_DH8D"),
+    ApproachConfiguration {
+        class_name: "PROP_DH8D",
+        anchor: "DHC830/DEFAULT",
+        flap: "D-35",
+        drag_ratio: 0.103483,
+        from_ft_afe: 1000.0,
+        landing_weight_lb: 37800.0,
+    },
     ApproachConfiguration {
         class_name: "FUSE_C56X",
         anchor: "CIT3/DEFAULT",

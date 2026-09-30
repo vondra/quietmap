@@ -11,6 +11,12 @@
 //! table. The generator is ported in a later step; until then this file is not edited by hand.
 //! The kernel reads only each class's anchor profile (`CLASS_REP_PROFILE_IDX`); the others are
 //! kept for the class assignment they came from.
+//!
+//! r051: every ANP curve holds for 160 kt (Doc 29 4th ed. Vol 2 2.5, the reference groundspeed of
+//! all NPD data; CNOSSOS-EU's 82.31 m/s), where dev4 had given the turboprops 130 kt and its
+//! piston placeholders 90-110 kt (the turboprops read 0.9 dB, the pistons 2.5 dB low). Profile
+//! 84, the PROP_C172 anchor, is the ANP's CNA172 (IO360L rows, `scripts/thrust-class.py`) instead
+//! of dev4's hand-made PISTON_SE placeholder; the other placeholders are not read.
 
 use super::npd::{Installation, NpdProfile};
 
@@ -918,7 +924,7 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -927,7 +933,7 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -936,7 +942,7 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -945,7 +951,7 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -954,7 +960,7 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -963,7 +969,7 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -972,7 +978,7 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -981,7 +987,7 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -990,7 +996,7 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [95.9, 92.0, 89.3, 86.5, 82.0, 77.0, 73.1, 68.6, 63.5, 57.4],
         [90.9, 84.6, 80.4, 76.0, 69.1, 61.6, 56.0, 49.8, 42.6, 34.0],
         [95.6, 89.5, 85.3, 81.0, 74.3, 67.0, 61.6, 55.6, 49.0, 41.4],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -999,7 +1005,7 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [95.9, 92.0, 89.3, 86.5, 82.0, 77.0, 73.1, 68.6, 63.5, 57.4],
         [90.9, 84.6, 80.4, 76.0, 69.1, 61.6, 56.0, 49.8, 42.6, 34.0],
         [95.6, 89.5, 85.3, 81.0, 74.3, 67.0, 61.6, 55.6, 49.0, 41.4],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1008,7 +1014,7 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1017,7 +1023,7 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
@@ -1035,16 +1041,16 @@ pub static PROFILES: [NpdProfile; NUM_PROFILES] = [
         [92.0, 88.5, 86.4, 84.1, 80.4, 76.5, 73.7, 70.9, 67.7, 64.6],
         [87.1, 80.3, 75.5, 70.5, 62.4, 54.0, 48.9, 43.8, 39.1, 34.8],
         [90.2, 84.4, 80.8, 76.9, 70.9, 64.7, 60.3, 56.0, 51.2, 46.6],
-        130.0,
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(
-        "C172/PISTON_SE",
-        [85.0, 80.0, 76.0, 72.0, 65.0, 58.0, 53.0, 47.0, 41.0, 35.0],
-        [88.0, 83.0, 79.0, 75.0, 68.0, 61.0, 56.0, 50.0, 44.0, 38.0],
-        [73.0, 68.0, 64.0, 60.0, 53.0, 46.0, 41.0, 35.0, 29.0, 23.0],
-        [76.0, 71.0, 67.0, 63.0, 56.0, 49.0, 44.0, 38.0, 32.0, 26.0],
-        90.0,
+        "C172/CNA172",
+        [73.0, 68.7, 65.8, 63.0, 58.6, 53.6, 50.0, 46.2, 42.4, 38.8],
+        [84.9, 81.4, 78.9, 76.0, 71.2, 65.5, 61.3, 56.5, 51.8, 46.3],
+        [71.6, 64.2, 59.7, 55.0, 47.7, 39.8, 34.4, 28.5, 22.4, 16.9],
+        [84.6, 77.8, 73.2, 68.2, 60.4, 52.0, 46.2, 39.9, 33.5, 25.6],
+        160.0,
         Installation::Propeller,
     ),
     NpdProfile::new(

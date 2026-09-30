@@ -79,8 +79,9 @@ fn the_bracket_routes_ground_rolls_cutback_and_force_balance() {
     let bracket = power_bracket(class, &cruise).unwrap();
     assert!(bracket.row >= 2 && (0.0..=1.0).contains(&bracket.weight));
     // Pinned classes never interpolate.
+    assert!(!THRUST[class_of("AS50")].has_thrust);
     assert_eq!(
-        power_bracket(class_of("DH8D"), &cruise),
+        power_bracket(class_of("AS50"), &cruise),
         Some(PowerBracket::FIRST_ROW)
     );
 }
@@ -119,8 +120,8 @@ fn inverted_idle_and_climb_ratings_reject_the_segment() {
             for speed_kt in (100..=600).step_by(25).map(f64::from) {
                 let vc_kt = speed_kt * isa_density_ratio(h_ft).sqrt();
                 let temperature_c = isa_temperature_c(h_ft);
-                let idle = rated_thrust_lb(&model.idle_coef, vc_kt, h_ft, temperature_c);
-                let climb = rated_thrust_lb(&model.climb_coef, vc_kt, h_ft, temperature_c);
+                let idle = model.rated_thrust_lb(Rating::Idle, vc_kt, h_ft, temperature_c);
+                let climb = model.rated_thrust_lb(Rating::Climb, vc_kt, h_ft, temperature_c);
                 let outside = !(idle.is_finite() && climb.is_finite() && idle <= climb);
                 let approach = SegmentFlight {
                     departure: false,
@@ -253,4 +254,35 @@ fn approach_configurations_follow_class_names() {
             approach.class_name
         );
     }
+}
+
+/// The propeller ratings (Eq. B-5): a C172 climbing out at 80 kt at sea level has 326 x 0.69 x
+/// 140 / 80 = 393.6 lb at MaxClimb, 90 % of its 436 lb static thrust, between its 59.6 % and 100 %
+/// rows; in level flight at 2,000 ft its force balance, W R / delta = 219 lb, sits between the
+/// approach rows (26.6 % and 58.2 %), where the approach row alone read 6.9 dB less at 1,000 ft.
+/// The DHC830's jet-form MaxTakeoff at 120 kt 500 ft up is 4,539 lb, 92 % (the BUF tasks' DH8C
+/// flies 95-97 % there).
+#[test]
+fn propeller_and_turboprop_ratings() {
+    let c172 = &THRUST[class_of("C172")];
+    let climb = c172.rated_thrust_lb(Rating::Climb, 80.0, 0.0, 15.0);
+    assert!((climb - 393.645).abs() < 0.01, "{climb}");
+    assert_eq!(c172.rated_thrust_lb(Rating::Idle, 80.0, 0.0, 15.0), 0.0);
+    let bracket = bracket_power(&c172.dep_power, c172.dep_rows, climb);
+    assert_eq!(bracket.row, 0);
+    assert!((bracket.weight - 0.7595).abs() < 1e-3, "{bracket:?}");
+    let h_m = 2_000.0 * METRES_PER_FOOT;
+    let level = SegmentFlight {
+        departure: false,
+        ..climbing(h_m, h_m, 100.0, 0.0)
+    };
+    let bracket = power_bracket(class_of("C172"), &level).unwrap();
+    assert_eq!(bracket.row, 0);
+    assert!((bracket.weight - 0.7475).abs() < 1e-3, "{bracket:?}");
+    let dh8d = &THRUST[class_of("DH8D")];
+    let takeoff = dh8d.rated_thrust_lb(Rating::Takeoff, 120.0, 500.0, 14.0);
+    assert!((takeoff - 4_539.02).abs() < 0.01, "{takeoff}");
+    let bracket = bracket_power(&dh8d.dep_power, dh8d.dep_rows, takeoff);
+    assert_eq!(bracket.row, 0);
+    assert!((bracket.weight - 0.2294).abs() < 1e-3, "{bracket:?}");
 }
