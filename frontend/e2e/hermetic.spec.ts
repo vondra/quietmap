@@ -1,8 +1,10 @@
 // The visitor's path in a real browser, without a backend: heatmap hover, the streamed popup (its
-// refinement, errors and aborts), building clicks, layer switches, search, and the phone sheet.
+// refinement, errors and aborts, the loudest flights), building clicks, layer switches, search, and
+// the phone sheet.
 import { devices, expect, test } from '@playwright/test'
 import {
   FIXTURE_DB,
+  FIXTURE_FLIGHTS,
   SOURCE_DB,
   TILE_Z,
   abortedPopupRequests,
@@ -16,6 +18,7 @@ import {
   popupRequests,
   popupUpdate,
   sendPopupLine,
+  withAircraft,
 } from './support'
 
 const POINT = hm3PixelCenter(49.8486, 14.1639)
@@ -51,19 +54,36 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   expect(Math.abs(query.lng - POINT.lng)).toBeLessThan(1e-6)
 
   // The first ring's answer is shown at once, marked as still being refined.
-  await sendPopupLine(page, popupUpdate(1, true, POINT.lat, POINT.lng, SOURCE_DB))
+  await sendPopupLine(page, withAircraft(popupUpdate(1, true, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS.slice(0, 1)))
   await expect(badge(page)).toHaveText(`${SOURCE_DB.toFixed(1)} dB`)
   await expect(page.locator('[data-testid="popup-refining"]:visible')).toBeVisible()
   await expect(page.getByRole('button', { name: /Fixture street/ }).filter({ visible: true })).toBeVisible()
   // An opened contributor stays open while later updates redraw the popup.
   await page.getByRole('button', { name: /Fixture street/ }).filter({ visible: true }).click()
   await expect(page.getByText('9.6k/day').filter({ visible: true })).toBeVisible()
+  // The aircraft layer is one row, ranked below the louder street; it opens on its loudest flights.
+  const popup = page.locator('[data-testid="detail-popup"]:visible')
+  await expect(popup.getByRole('button')).toHaveText([/^Fixture street/, /^Aircraft/])
+  await popup.getByRole('button', { name: /^Aircraft/ }).click()
+  const flights = popup.getByRole('table', { name: 'Loudest flights' })
+  await expect(flights.locator('tbody tr')).toHaveCount(1)
 
-  await sendPopupLine(page, popupUpdate(2, false, POINT.lat, POINT.lng, FIXTURE_DB))
+  await sendPopupLine(page, withAircraft(popupUpdate(2, false, POINT.lat, POINT.lng, FIXTURE_DB), FIXTURE_FLIGHTS))
   await endPopup(page)
   await expect(badge(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB`)
   await expect(page.locator('[data-testid="popup-refining"]:visible')).toHaveCount(0)
   await expect(page.getByText('9.6k/day').filter({ visible: true })).toBeVisible()
+  await expect(flights.locator('tbody tr')).toHaveCount(2)
+  await expect(flights.locator('tbody tr').nth(0).locator('td')).toHaveText(['70', '0.44', '0.26', '09-02 D', /^Airbus A320\b/])
+  await expect(flights.locator('tbody tr').nth(1).locator('td'))
+    .toHaveText(['69', '1.31', '0.61', '09-01 N', /^Aérospatiale AS355 Écureuil 2\b/])
+  // A long type name wraps: the table fits the card, nothing clipped or scrolled.
+  await flights.scrollIntoViewIfNeeded()
+  await expect(flights).toBeInViewport({ ratio: 1 })
+  const trace = flights.getByRole('link', { name: /^Airbus A320\b/ })
+  await expect(trace).toHaveAttribute('href', 'https://adsb.lol/?icao=4b0a1c&showTrace=2025-09-02')
+  await expect(trace).toHaveAttribute('target', '_blank')
+  await expect(trace).toHaveAttribute('rel', 'noopener noreferrer')
 
   await page.locator('button[aria-label="Close"]:visible').click()
   await expect(page.locator('[data-testid="detail-popup"]:visible')).toHaveCount(0)
@@ -177,8 +197,13 @@ test.describe('mobile', () => {
     await expect(sheet).toBeVisible()
     await expect(sheet.getByTestId('detail-popup-skeleton')).toBeVisible()
 
-    await sendPopupLine(page, popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB))
+    await sendPopupLine(page, withAircraft(popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS))
     await expect(sheet.getByTestId('noise-badge')).toHaveText(`${SOURCE_DB.toFixed(1)} dB`)
+    // The loudest flights fit the phone: the whole table is on screen, nothing clipped or scrolled.
+    await sheet.getByRole('button', { name: /^Aircraft/ }).tap()
+    const flights = sheet.getByRole('table', { name: 'Loudest flights' })
+    await expect(flights.locator('tbody tr')).toHaveCount(2)
+    await expect(flights).toBeInViewport({ ratio: 1 })
 
     // A detail sheet deliberately covers the layers button. Start a clean map
     // view instead of force-clicking through it (which no user can do). A

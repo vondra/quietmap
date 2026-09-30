@@ -1,11 +1,11 @@
-// The popup body: the total level, the building notice, the loudest contributors, and whether the
-// answer is still being refined. Redrawn on every streamed update of the click.
+// The popup body: the total level, the building notice, the loudest contributors and the aircraft
+// layer, and whether the answer is still being refined. Redrawn on every streamed update of the click.
 import { ldenToColor } from '../utils/noise-colors'
 import { DataPoint } from './noise/noise-tooltips'
 import { HoverText } from './ui/info-tip'
 import { fmtDb, txtTable, type TableRow } from '../utils/formatters'
 import { fieldText, PERIOD_LABELS_DETAIL, SOURCE_LABELS } from './noise/shared'
-import { ContributorRow } from './noise/source/ContributorRow'
+import { AircraftLayerRow, ContributorRow } from './noise/source/ContributorRow'
 import type { BuildingAnswer, PopupUpdate } from '../types/noise'
 
 // The read and compute statistics of the click are for profiling, not for visitors: shown only
@@ -21,6 +21,15 @@ export default function NoiseDetailContent({ data, maxSources }: NoiseDetailCont
   const [centerLat, centerLng] = data.center
   // The popup's 0 dB display floor, applied to this list the way the per-layer rows apply it.
   const audibleContributors = data.top_contributors.filter(c => c.received_lden != null && c.received_lden > 0)
+  const rows = audibleContributors.map(c => <ContributorRow key={`${c.source_type}-${c.id}`} c={c} />)
+  // The aircraft layer lists no contributors: the layer is one row, at its rank by Lden.
+  const aircraft = data.sources.find(s => s.source_type === 'aircraft')
+  const aircraftLden = aircraft?.lden ?? 0
+  if (aircraft && aircraftLden > 0) {
+    const rank = audibleContributors.findIndex(c => (c.received_lden ?? 0) < aircraftLden)
+    rows.splice(rank < 0 ? rows.length : rank, 0,
+      <AircraftLayerRow key="aircraft" layer={aircraft} flights={data.top_flights} />)
+  }
   const totalLdenText = txtTable([
     ...data.sources
       .filter(s => s.lden != null && s.lden > 0)
@@ -32,7 +41,7 @@ export default function NoiseDetailContent({ data, maxSources }: NoiseDetailCont
     { sep: true },
     ['Total Lden', fmtDb(data.total_lden)],
   ], 16, 9)
-  const shown = maxSources ? audibleContributors.slice(0, maxSources) : audibleContributors
+  const shown = maxSources ? rows.slice(0, maxSources) : rows
 
   return (
     <div data-testid="detail-popup" role="dialog" className="px-2.5 pt-1 pb-2" onClick={(e) => e.stopPropagation()}>
@@ -71,13 +80,11 @@ export default function NoiseDetailContent({ data, maxSources }: NoiseDetailCont
         <>
           <div className="border-b border-border pb-0.5 mb-0.5">
             <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-              Noise sources ({audibleContributors.length})
+              Noise sources ({rows.length})
             </span>
           </div>
           <div className="overflow-y-auto overflow-x-clip" style={{ maxHeight: 'max(100dvh - 400px, 160px)' }}>
-            {shown.map(c => (
-              <ContributorRow key={`${c.source_type}-${c.id}`} c={c} />
-            ))}
+            {shown}
           </div>
         </>
       ) : (

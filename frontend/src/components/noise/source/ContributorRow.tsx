@@ -1,22 +1,29 @@
-// One contributor of the popup: label, distance and level; expands to its details.
-import { useState } from 'react'
-import type { Contributor } from '../../../types/noise'
+// One row of the popup's source list: label, distance and level; expands to its details. A
+// contributor has one, and so has the aircraft layer as a whole, which lists no contributors.
+import { useState, type ReactNode } from 'react'
+import type { Contributor, LayerLevels, PeriodLevels, TopFlight } from '../../../types/noise'
 import { ldenToColor } from '../../../utils/noise-colors'
 import { fmtDb, txtTable } from '../../../utils/formatters'
 import { DataPoint } from '../noise-tooltips'
-import { contributorLabel, formatDist, PERIOD_LABELS_DETAIL } from '../shared'
-import { ContributorDetail } from './ContributorDetail'
+import { contributorLabel, formatDist, PERIOD_LABELS_DETAIL, SOURCE_LABELS } from '../shared'
+import { AircraftLayerDetail, ContributorDetail } from './ContributorDetail'
 
-export function ContributorRow({ c }: { c: Contributor }) {
-  // Keyed by the contributor's stable id, so the row stays open across streamed updates.
+function SourceRow({ label, distance, received, children }: {
+  label: string
+  distance: string
+  received: PeriodLevels
+  /** The expanded body. */
+  children: ReactNode
+}) {
+  // Keyed by a stable id, so the row stays open across streamed updates.
   const [expanded, setExpanded] = useState(false)
-  const lden = c.received_lden ?? 0
+  const lden = received.lden ?? 0
   const periodsText = txtTable([
-    [PERIOD_LABELS_DETAIL[0], fmtDb(c.received.ld)],
-    [PERIOD_LABELS_DETAIL[1], fmtDb(c.received.le)],
-    [PERIOD_LABELS_DETAIL[2], fmtDb(c.received.ln)],
+    [PERIOD_LABELS_DETAIL[0], fmtDb(received.ld)],
+    [PERIOD_LABELS_DETAIL[1], fmtDb(received.le)],
+    [PERIOD_LABELS_DETAIL[2], fmtDb(received.ln)],
     { sep: true },
-    ['→ Lden', fmtDb(c.received_lden)],
+    ['→ Lden', fmtDb(received.lden)],
   ], 16, 9)
 
   return (
@@ -31,9 +38,9 @@ export function ContributorRow({ c }: { c: Contributor }) {
         className="w-full py-1.5 text-left cursor-pointer hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         <div className="flex items-baseline gap-1.5 text-xs px-0">
-          <span className="font-medium truncate flex-1">{contributorLabel(c)}</span>
+          <span className="font-medium truncate flex-1">{label}</span>
           <span className="text-muted-foreground/60 shrink-0 w-14 text-right tabular-nums">
-            {formatDist(c.distance_m)}
+            {distance}
           </span>
           <span
             className="font-bold shrink-0 w-14 text-right tabular-nums"
@@ -49,7 +56,24 @@ export function ContributorRow({ c }: { c: Contributor }) {
         </div>
       </button>
 
-      {expanded && <ContributorDetail c={c} />}
+      {expanded && children}
     </div>
+  )
+}
+
+export function ContributorRow({ c }: { c: Contributor }) {
+  return (
+    <SourceRow label={contributorLabel(c)} distance={formatDist(c.distance_m)} received={c.received}>
+      <ContributorDetail c={c} />
+    </SourceRow>
+  )
+}
+
+/** Flights pass at every distance: the layer's row has none. */
+export function AircraftLayerRow({ layer, flights }: { layer: LayerLevels; flights: TopFlight[] }) {
+  return (
+    <SourceRow label={SOURCE_LABELS.aircraft} distance="" received={layer}>
+      <AircraftLayerDetail received={layer} flights={flights} />
+    </SourceRow>
   )
 }

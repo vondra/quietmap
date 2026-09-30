@@ -2,10 +2,12 @@
 // writes line by line.
 import { expect, type Page } from '@playwright/test'
 import { TILE_PX } from '../src/lib/hm3-decoder'
-import type { Contributor, PopupUpdate } from '../src/types/noise'
+import type { Contributor, PopupUpdate, TopFlight } from '../src/types/noise'
 
 export const FIXTURE_DB = 63
 export const SOURCE_DB = 60
+/** Quieter than the street: the aircraft row ranks below it. */
+const AIRCRAFT_DB = 55
 /** The hermetic world's published zoom (a z12 world, while the served heatmap is z13: the
  *  frontend must take its tile ceiling from the manifest). */
 export const TILE_Z = 12
@@ -97,7 +99,34 @@ export function popupUpdate(
     total: levels,
     sources: [{ source_type: 'road', ...levels, lden_upper: db, evaluated: 1, candidates: 1 }],
     top_contributors: db == null ? [] : [roadContributor(db)],
+    top_flights: [],
     stats: { rings: seq, files: 27, bytes: 1e6, read_ms: 3, candidate_ms: 4, evaluate_ms: 20, elapsed_ms: 30 },
+  }
+}
+
+/** The loudest flights, loudest first: an A320 by day, and a helicopter with a long type name at
+ *  night. */
+export const FIXTURE_FLIGHTS: TopFlight[] = [
+  {
+    icao: '4b0a1c', callsign: 'CSA123', type: 'A320', start_unix: Date.UTC(2025, 8, 2, 14, 26, 40) / 1000,
+    period: 'day', sel_db: 79.1, lmax_db: 70.2, closest_m: 444, altitude_m: 255,
+  },
+  {
+    icao: '49d3e1', callsign: 'HELI42', type: 'AS55', start_unix: Date.UTC(2025, 8, 1, 23, 58, 20) / 1000,
+    period: 'night', sel_db: 77.4, lmax_db: 68.9, closest_m: 1310, altitude_m: 610,
+  },
+]
+
+/** `update` with the aircraft layer audible at AIRCRAFT_DB and its loudest `flights`. */
+export function withAircraft(update: PopupUpdate, flights: TopFlight[]): PopupUpdate {
+  const db = AIRCRAFT_DB
+  return {
+    ...update,
+    sources: [
+      ...update.sources,
+      { source_type: 'aircraft', ld: db - 1, le: db - 4, ln: db - 9, lden: db, lden_upper: db, evaluated: 40, candidates: 40 },
+    ],
+    top_flights: flights,
   }
 }
 

@@ -63,6 +63,28 @@ export interface BuildingAnswer {
   [field: string]: unknown
 }
 
+/** One of the loudest flights at the point: an ADS-B flight of the aircraft layer. */
+export interface TopFlight {
+  /** ICAO 24-bit address, six lowercase hex digits. */
+  icao: string
+  /** ATC callsign; empty when the flight sent none. */
+  callsign: string
+  /** ICAO type designator ("A320"); empty when unknown. */
+  type: string
+  /** The flight's start, Unix seconds UTC. */
+  start_unix: number
+  /** The period the flight passed the point in. */
+  period: 'day' | 'evening' | 'night'
+  /** Sound exposure level at the point: the list's order. */
+  sel_db: number
+  /** The flight's peak level (LAmax) at the point: the loudest of its parts, each at its closest point. */
+  lmax_db: number
+  /** Horizontal distance to where that peak is reached (the closest point of the loudest part). */
+  closest_m: number
+  /** Height of that point above the receiver. */
+  altitude_m: number
+}
+
 /** What the click read and computed so far. */
 export interface PopupStats {
   rings: number
@@ -85,6 +107,8 @@ export interface PopupUpdate {
   total: PeriodLevels
   sources: LayerLevels[]
   top_contributors: Contributor[]
+  /** The loudest flights by SEL, loudest first; empty when no aircraft are heard. */
+  top_flights: TopFlight[]
   stats: PopupStats
 }
 
