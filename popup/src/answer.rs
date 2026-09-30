@@ -307,6 +307,33 @@ pub fn answer(
             station = Some(chosen);
         }
         let station = station.expect("chosen after the first read");
+        if reads_ground {
+            horizons = Some(Horizons::build(
+                &ground,
+                &obstacles,
+                station.position,
+                station.altitude_m,
+            )?);
+        }
+        let receiver = AircraftReceiver {
+            position: station.position,
+            altitude_m: station.altitude_m,
+        };
+        let horizons = horizons.as_ref().expect("built at the first read");
+        // The ring's boxes join the aircraft layer before its sources (airport ground operations)
+        // are selected: their energy counts in the layer's omitted-energy account.
+        let aircraft = &mut selections[Layer::Aircraft as usize];
+        let (energy, heard) = ring_aircraft(
+            &ring_aircraft_tiles,
+            &frame,
+            receiver,
+            horizons,
+            &mut flights,
+        );
+        for (total, value) in aircraft.energy.iter_mut().zip(energy) {
+            *total += value;
+        }
+        aircraft.evaluated += heard;
         let evaluation = Receiver {
             ground: &ground,
             obstacles: &obstacles,
@@ -322,31 +349,6 @@ pub fn answer(
             options.exact,
             options.pieces > 0,
         )?;
-        if reads_ground {
-            horizons = Some(Horizons::build(
-                &ground,
-                &obstacles,
-                station.position,
-                station.altitude_m,
-            )?);
-        }
-        let receiver = AircraftReceiver {
-            position: station.position,
-            altitude_m: station.altitude_m,
-        };
-        let horizons = horizons.as_ref().expect("built at the first read");
-        let aircraft = &mut selections[Layer::Aircraft as usize];
-        let (energy, heard) = ring_aircraft(
-            &ring_aircraft_tiles,
-            &frame,
-            receiver,
-            horizons,
-            &mut flights,
-        );
-        for (total, value) in aircraft.energy.iter_mut().zip(energy) {
-            *total += value;
-        }
-        aircraft.evaluated += heard;
         evaluate_seconds += evaluate_started.elapsed().as_secs_f64();
         let last_ring = ring == ground_rings.max(aircraft_rings);
         let pieces = if last_ring && options.pieces > 0 {

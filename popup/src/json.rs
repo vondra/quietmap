@@ -91,7 +91,11 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         object.insert("name".into(), json!(label(&display)));
         object.insert(
             "subtype".into(),
-            display.get("road_class").cloned().unwrap_or(Value::Null),
+            display
+                .get("road_class")
+                .or_else(|| display.get("subtype"))
+                .cloned()
+                .unwrap_or(Value::Null),
         );
         object.insert("distance_m".into(), json!(contributor.distance_m.round()));
         let mut received = Map::new();
