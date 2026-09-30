@@ -1,6 +1,7 @@
 //! One streamed update of a click: every layer's totals and account, the loudest contributor
 //! groups, what was read, and the building a click stands in.
 
+use crate::aircraft::flights::LoudFlight;
 use crate::answer::RECEIVER_HEIGHT_M;
 use crate::building::BuildingClick;
 use crate::candidates::{DisplayRef, lden_weighted};
@@ -59,6 +60,8 @@ pub struct Update<'u> {
     pub building: Option<BuildingClick>,
     pub layers: Vec<LayerAnswer>,
     pub contributors: Vec<Contributor>,
+    /// The loudest flights so far.
+    pub flights: Vec<LoudFlight>,
     /// The loudest evaluated pieces per layer (final update, when asked for).
     pub pieces: Vec<EvaluatedPiece>,
     pub statistics: Statistics,
@@ -118,6 +121,7 @@ pub fn empty_answer(
         building: Some(click),
         layers: layer_answers(selections),
         contributors: Vec::new(),
+        flights: Vec::new(),
         pieces: Vec::new(),
         statistics: Statistics {
             rings_read: 1,

@@ -3,6 +3,7 @@
 //! sums per period become period energies (Leq), as the ground layers report.
 
 use super::horizons::Horizons;
+use crate::candidates::lden_weighted;
 use physics::bands::{PERIOD_HOURS, PERIODS};
 use physics::doc29::boxes::{AircraftBoxAtReceiver, box_sel_at_receiver};
 use rayon::prelude::*;
@@ -20,15 +21,25 @@ pub struct AircraftReceiver {
     pub altitude_m: f64,
 }
 
-/// The period energies (Leq, linear) of one tile's boxes and how many were within reach.
+/// One tile's boxes at the receiver.
+pub struct TileAnswer {
+    /// Period energies (Leq, linear) summed over the boxes within reach.
+    pub energy: [f64; PERIODS],
+    pub boxes: usize,
+    /// The loudest boxes (index, Lden-weighted energy), at most `loudest` of them.
+    pub loudest: Vec<(usize, f64)>,
+}
+
+/// The boxes of one tile at the receiver.
 pub fn tile_energy(
     aircraft: &Aircraft<'_>,
     tile: TileId,
     frame: &LocalFrame,
     receiver: AircraftReceiver,
     horizons: &Horizons,
-) -> ([f64; PERIODS], usize) {
-    (0..aircraft.box_count())
+    loudest: usize,
+) -> TileAnswer {
+    let per_box: Vec<([f64; PERIODS], usize)> = (0..aircraft.box_count())
         .into_par_iter()
         .with_min_len(1_024)
         .map(|index| {
@@ -62,13 +73,24 @@ pub fn tile_energy(
                 });
             (energy, 1)
         })
-        .reduce(
-            || ([0.0; PERIODS], 0),
-            |a, b| {
-                (
-                    std::array::from_fn(|period| a.0[period] + b.0[period]),
-                    a.1 + b.1,
-                )
-            },
-        )
+        .collect();
+    let mut answer = TileAnswer {
+        energy: [0.0; PERIODS],
+        boxes: 0,
+        loudest: Vec::new(),
+    };
+    for (index, (energy, count)) in per_box.iter().enumerate() {
+        for (total, value) in answer.energy.iter_mut().zip(energy) {
+            *total += value;
+        }
+        answer.boxes += count;
+        if *count > 0 {
+            answer.loudest.push((index, lden_weighted(energy)));
+        }
+    }
+    answer
+        .loudest
+        .sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    answer.loudest.truncate(loudest);
+    answer
 }

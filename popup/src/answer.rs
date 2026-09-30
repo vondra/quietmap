@@ -3,6 +3,7 @@
 //! A click inside a building is answered at its loudest façade ([`crate::building`]).
 
 use crate::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver, tile_energy};
+use crate::aircraft::flights::{BOXES_SEARCHED, FlightTotals};
 use crate::aircraft::horizons::Horizons;
 use crate::building::{BuildingClick, loudest_facade};
 use crate::candidates::{
@@ -96,6 +97,7 @@ pub fn answer(
         .collect();
     let mut ground = Ground::new(frame, centre, most_ground_rings);
     let mut horizons: Option<Horizons> = None;
+    let mut flights = FlightTotals::default();
     let mut obstacles = Scene::new(frame);
     let mut selections: Vec<LayerSelection> = Layer::ALL
         .iter()
@@ -327,12 +329,29 @@ pub fn answer(
         };
         let horizons = horizons.as_ref().expect("built at the first read");
         let aircraft = &mut selections[Layer::Aircraft as usize];
-        for (tile, boxes) in &ring_aircraft {
-            let (energy, count) = tile_energy(boxes, *tile, &frame, receiver, horizons);
-            for (total, value) in aircraft.energy.iter_mut().zip(energy) {
+        let mut loudest_boxes: Vec<(f64, usize, usize)> = Vec::new();
+        for (tile_index, (tile, boxes)) in ring_aircraft.iter().enumerate() {
+            let answer = tile_energy(boxes, *tile, &frame, receiver, horizons, BOXES_SEARCHED);
+            for (total, value) in aircraft.energy.iter_mut().zip(answer.energy) {
                 *total += value;
             }
-            aircraft.evaluated += count;
+            aircraft.evaluated += answer.boxes;
+            loudest_boxes.extend(
+                answer
+                    .loudest
+                    .iter()
+                    .map(|&(index, energy)| (energy, tile_index, index)),
+            );
+        }
+        loudest_boxes.sort_by(|a, b| b.0.total_cmp(&a.0));
+        loudest_boxes.truncate(BOXES_SEARCHED);
+        for (tile_index, (tile, boxes)) in ring_aircraft.iter().enumerate() {
+            let chosen: Vec<usize> = loudest_boxes
+                .iter()
+                .filter(|&&(_, owner, _)| owner == tile_index)
+                .map(|&(_, _, index)| index)
+                .collect();
+            flights.add_boxes(boxes, *tile, &chosen, &frame, receiver, horizons);
         }
         evaluate_seconds += evaluate_started.elapsed().as_secs_f64();
         let last_ring = ring == ground_rings.max(aircraft_rings);
@@ -372,6 +391,7 @@ pub fn answer(
             building,
             layers: layer_answers(&selections),
             contributors: loudest_contributors(&selections),
+            flights: flights.loudest(),
             pieces,
             statistics: Statistics {
                 rings_read: ring,

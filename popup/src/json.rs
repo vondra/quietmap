@@ -148,6 +148,24 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             "footprint": format!("{:016x}", piece.footprint_id),
         }));
     }
+    let period_names = ["day", "evening", "night"];
+    let flights: Vec<Value> = update
+        .flights
+        .iter()
+        .map(|flight| {
+            json!({
+                "icao": format!("{:06x}", flight.icao),
+                "callsign": flight.callsign,
+                "type": flight.type_designator,
+                "start_unix": flight.start_unix,
+                "period": period_names.get(usize::from(flight.period)).copied().unwrap_or(""),
+                "sel_db": (flight.sel_db * 10.0).round() / 10.0,
+                "lmax_db": (flight.lmax_db * 10.0).round() / 10.0,
+                "closest_m": flight.closest_m.round(),
+                "altitude_m": flight.altitude_m.round(),
+            })
+        })
+        .collect();
     let mut totals = Map::new();
     periods(&mut totals, &total);
     let statistics = &update.statistics;
@@ -177,6 +195,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         "total": totals,
         "sources": layers,
         "top_contributors": contributors,
+        "top_flights": flights,
         "stats": {
             "rings": statistics.rings_read,
             "files": statistics.files,
