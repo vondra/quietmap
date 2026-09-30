@@ -1,10 +1,48 @@
 //! The size of an aircraft box (PLAN section 5): a web-map cell horizontally and a slab of the
 //! same edge vertically, counted as clearance above the highest terrain within one edge. The edge
-//! grows with clearance so that one edge spans at most `BOX_EDGE_LEVEL_STEP_DB` of the steepest
-//! NPD curve at that clearance (the slant to a receiver right below), never finer than the first
+//! grows with clearance so that one edge spans at most `BOX_EDGE_LEVEL_STEP_DB` of the sizing
+//! slope at that clearance (the slant to a receiver right below), never finer than the first
 //! layer of about 50 m: nearer the ground the altitude error of the data dominates anyway.
 
-use super::npd::{METRES_PER_FOOT, NPD_DISTANCES_FT, steepest_sel_slope_db_per_m};
+use super::npd::{
+    METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT, NPD_LAST_DISTANCE_M, NPD_NEAREST_SLANT_M,
+};
+
+/// The NPD slopes the boxes are sized by (dB per decade of slant, per interval between the NPD
+/// distances; below 200 ft the first, past 25,000 ft spherical divergence plus
+/// [`BOX_SIZING_TAIL_ABSORPTION_DB_PER_M`]): the steepest rows of dev4's 15 classes, on which the
+/// benchmark chose D (the box minus the exact sum within 0.16 dB at 27 points). The classes of
+/// every ANP aircraft add rarer curves up to 28 % steeper (the A340-211's near field, the
+/// 767-400's at 1,000-2,000 ft); sized by them the fine boxes grew 22-26 % in number and 19 % in
+/// bytes, the clicks 8-25 % in time, and the owner's places and the airport monitors moved 0.1
+/// dB. A box of such a curve spans up to 3.8 dB of it instead of 3.
+const BOX_SIZING_SLOPES_DB_PER_DECADE: [f64; NPD_DISTANCES - 1] = [
+    15.652355484795148,
+    16.949996290281888,
+    19.787951421238496,
+    18.399349815615903,
+    20.91109753944399,
+    24.27833802036249,
+    28.37525126270424,
+    35.508729977931225,
+    45.13689547333061,
+];
+/// The tail absorption the boxes are sized by past 25,000 ft (dB/m), as the slopes.
+const BOX_SIZING_TAIL_ABSORPTION_DB_PER_M: f64 = 0.0013672947916138617;
+
+/// The sizing slope at `slant_m` (dB per metre).
+fn sizing_slope_db_per_m(slant_m: f64) -> f64 {
+    let slant_m = slant_m.max(NPD_NEAREST_SLANT_M);
+    if slant_m >= NPD_LAST_DISTANCE_M {
+        return 20.0 / (slant_m * std::f64::consts::LN_10) + BOX_SIZING_TAIL_ABSORPTION_DB_PER_M;
+    }
+    let log_d = (slant_m / METRES_PER_FOOT).log10();
+    let interval = (1..NPD_DISTANCES - 1)
+        .rev()
+        .find(|&k| log_d > NPD_DISTANCES_FT[k].log10())
+        .unwrap_or(0);
+    BOX_SIZING_SLOPES_DB_PER_DECADE[interval] / (slant_m * std::f64::consts::LN_10)
+}
 
 /// D: the level change one box edge may span along the steepest NPD curve (dB).
 pub const BOX_EDGE_LEVEL_STEP_DB: f64 = 3.0;
@@ -17,7 +55,7 @@ pub const FIRST_LAYER_EDGE_M: f64 = 50.0;
 /// The largest box edge (m) allowed at `clearance_m` above the terrain for a level step D of
 /// `level_step_db`.
 pub fn box_edge_limit_m(clearance_m: f64, level_step_db: f64) -> f64 {
-    level_step_db / steepest_sel_slope_db_per_m(clearance_m.max(0.0))
+    level_step_db / sizing_slope_db_per_m(clearance_m.max(0.0))
 }
 
 /// The smallest limit over the clearances from `low_m` to `high_m`: the steepest slope jumps up

@@ -313,7 +313,7 @@ static POWER_ROWS: LazyLock<Vec<[Vec<PowerRow>; 2]>> = LazyLock::new(|| {
 
 /// The steepest fall (dB per decade of distance) of any row's SEL curve in each interval between
 /// NPD distances: the first one is the most any level can gain below 200 ft, where each row
-/// extrapolates its own first interval; all of them size the aircraft boxes.
+/// extrapolates its own first interval (the relevance bound).
 pub(crate) static STEEPEST_INTERVAL_DB_PER_DECADE: LazyLock<[f64; NPD_DISTANCES - 1]> =
     LazyLock::new(|| {
         let logs = &*LOG10_NPD_DISTANCES_FT;
@@ -330,34 +330,6 @@ pub(crate) static STEEPEST_INTERVAL_DB_PER_DECADE: LazyLock<[f64; NPD_DISTANCES 
 /// The first interval's value of [`STEEPEST_INTERVAL_DB_PER_DECADE`].
 pub(crate) static STEEPEST_FIRST_INTERVAL_DB_PER_DECADE: LazyLock<f64> =
     LazyLock::new(|| STEEPEST_INTERVAL_DB_PER_DECADE[0]);
-
-/// The largest tail absorption (dB/m) of any row: past 25,000 ft no SEL falls faster than
-/// spherical divergence plus this.
-pub(crate) static STEEPEST_TAIL_ABSORPTION_DB_PER_M: LazyLock<f64> = LazyLock::new(|| {
-    POWER_ROWS
-        .iter()
-        .flatten()
-        .flatten()
-        .map(|row| row.tail_absorption_db_per_m)
-        .fold(0.0, f64::max)
-});
-
-/// The steepest fall of any NPD SEL curve at `slant_m` (dB per metre): its interval's steepest
-/// decade slope, below 200 ft the first interval's, past 25,000 ft spherical divergence plus the
-/// largest tail absorption.
-pub fn steepest_sel_slope_db_per_m(slant_m: f64) -> f64 {
-    let slant_m = slant_m.max(NPD_NEAREST_SLANT_M);
-    if slant_m >= NPD_LAST_DISTANCE_M {
-        return 20.0 / (slant_m * std::f64::consts::LN_10) + *STEEPEST_TAIL_ABSORPTION_DB_PER_M;
-    }
-    let log_d = (slant_m / METRES_PER_FOOT).log10();
-    let logs = &*LOG10_NPD_DISTANCES_FT;
-    let interval = (1..NPD_DISTANCES - 1)
-        .rev()
-        .find(|&k| log_d > logs[k])
-        .unwrap_or(0);
-    STEEPEST_INTERVAL_DB_PER_DECADE[interval] / (slant_m * std::f64::consts::LN_10)
-}
 
 /// The far anchor of an aircraft box's curves (m): past 25,000 ft every row falls with its own
 /// absorption, so a mix of rows falls slower than any one fitted curve; a box also sums its
