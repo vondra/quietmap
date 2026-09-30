@@ -28,11 +28,13 @@ export default function App() {
   // with a skeleton at the click and keeps the position on an error, so the visitor sees where.
   const [noiseDetailData, setNoiseDetailData] = useState<PopupUpdate | null>(null)
   const [noiseDetailError, setNoiseDetailError] = useState<string | null>(null)
-  // The loudest flight whose track the map shows (its row hovered, or tapped on a phone), by key:
-  // the track is read from the latest update, so it follows the stream and goes when the flight
-  // leaves the list.
-  const [highlightedFlight, setHighlightedFlight] = useState<string | null>(null)
-  const highlightedTrack = noiseDetailData?.top_flights.find(f => topFlightKey(f) === highlightedFlight)?.track ?? null
+  // What the map highlights: a loudest flight's track (its row hovered, or tapped on a phone), by
+  // key, or a contributor's loudest pieces (its row opened), by `source:<id>`; read from the latest
+  // update, so it follows the stream and goes when it leaves the list.
+  const [highlighted, setHighlighted] = useState<string | null>(null)
+  const highlightedTrack = highlighted?.startsWith('source:')
+    ? noiseDetailData?.top_contributors.find(c => `source:${c.id}` === highlighted)?.geometry ?? null
+    : noiseDetailData?.top_flights.find(f => topFlightKey(f) === highlighted)?.track ?? null
   const [quietClustersEnabled, setQuietClustersEnabled] = useState(initial.quietClusters)
   const [quietThreshold, setQuietThreshold] = useState(initial.quietThreshold ?? QUIET_THRESHOLD_DEFAULT)
   const [basemap, setBasemap] = useState<BasemapId>(initial.basemap ?? DEFAULT_BASEMAP)
@@ -127,7 +129,7 @@ export default function App() {
   const closeNoiseDetail = useCallback(() => {
     setNoiseDetailData(null)
     setNoiseDetailError(null)
-    setHighlightedFlight(null)
+    setHighlighted(null)
   }, [])
 
   const handleDetailPositionChange = useCallback((pos: { lat: number; lng: number } | null) => {
@@ -199,7 +201,7 @@ export default function App() {
             position={detailPosition}
             error={noiseDetailError}
             onNoiseClose={handleNoiseClose}
-            onHighlightFlight={setHighlightedFlight}
+            onHighlight={setHighlighted}
           />
         </div>
 
@@ -271,7 +273,7 @@ export default function App() {
         position={detailPosition}
         error={noiseDetailError}
         onClose={handleNoiseClose}
-        onHighlightFlight={setHighlightedFlight}
+        onHighlight={setHighlighted}
       />
     </div>
   )

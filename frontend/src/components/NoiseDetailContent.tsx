@@ -15,22 +15,25 @@ const SHOW_STATS = typeof location !== 'undefined' && new URLSearchParams(locati
 export interface NoiseDetailContentProps {
   data: PopupUpdate
   maxSources?: number
-  /** Shows a loudest flight's track on the map, by `topFlightKey`; null shows none. */
-  onHighlightFlight: (key: string | null) => void
+  /** Shows a loudest flight's track (by `topFlightKey`) or a contributor's pieces (by
+   * `source:<id>`) on the map; null shows none. */
+  onHighlight: (key: string | null) => void
 }
 
-export default function NoiseDetailContent({ data, maxSources, onHighlightFlight }: NoiseDetailContentProps) {
+export default function NoiseDetailContent({ data, maxSources, onHighlight }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.center
   // The popup's 0 dB display floor, applied to this list the way the per-layer rows apply it.
   const audibleContributors = data.top_contributors.filter(c => c.received_lden != null && c.received_lden > 0)
-  const rows = audibleContributors.map(c => <ContributorRow key={`${c.source_type}-${c.id}`} c={c} />)
+  const rows = audibleContributors.map(c => (
+    <ContributorRow key={`${c.source_type}-${c.id}`} c={c} onHighlight={id => onHighlight(id === null ? null : `source:${id}`)} />
+  ))
   // The aircraft layer lists no contributors: the layer is one row, at its rank by Lden.
   const aircraft = data.sources.find(s => s.source_type === 'aircraft')
   const aircraftLden = aircraft?.lden ?? 0
   if (aircraft && aircraftLden > 0) {
     const rank = audibleContributors.findIndex(c => (c.received_lden ?? 0) < aircraftLden)
     rows.splice(rank < 0 ? rows.length : rank, 0,
-      <AircraftLayerRow key="aircraft" layer={aircraft} flights={data.top_flights} onHighlightFlight={onHighlightFlight} />)
+      <AircraftLayerRow key="aircraft" layer={aircraft} flights={data.top_flights} onHighlightFlight={onHighlight} />)
   }
   const totalLdenText = txtTable([
     ...data.sources

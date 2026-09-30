@@ -14,7 +14,7 @@ import MapStateSync from './MapStateSync'
 import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
 import { QUIET_THRESHOLD_DEFAULT, type UrlState } from '../hooks/useUrlState'
 import type { SelectedLocation } from './FlyToLocation'
-import type { PopupUpdate, TrackPiece } from '../types/noise'
+import type { PopupUpdate } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 interface MapViewProps {
@@ -30,7 +30,8 @@ interface MapViewProps {
   onDetailError?: (message: string) => void
   detailPosition?: { lat: number; lng: number } | null
   /** The track of the loudest flight highlighted in the popup. */
-  flightTrack?: TrackPiece[] | null
+  /** The highlighted flight track or contributor pieces ([lat, lon, ..] ends). */
+  flightTrack?: number[][][] | null
   quietClustersEnabled?: boolean
   quietThreshold?: number
   heatmapLayers?: Record<string, boolean>

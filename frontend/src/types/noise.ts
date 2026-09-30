@@ -39,6 +39,8 @@ export interface Contributor {
   received_lden: Level
   received: PeriodLevels
   metadata: ContributorMetadata | null
+  /** Its loudest pieces as [lat, lon] ends (one for a point), for the map. */
+  geometry?: [number, number][][]
 }
 
 /** The façade receiver a building click is answered at. */

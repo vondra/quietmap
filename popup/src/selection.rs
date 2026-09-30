@@ -13,7 +13,7 @@
 use crate::candidates::{Attributes, Candidate};
 use crate::evaluate::{Receiver, Scratch, received_energy};
 use crate::listing::EvaluatedPiece;
-use crate::update::Contributor;
+use crate::update::{CONTRIBUTOR_PIECES, Contributor};
 use physics::bands::PERIODS;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -142,12 +142,25 @@ impl LayerSelection {
                 energy: [0.0; PERIODS],
                 distance_m: candidate.distance_m,
                 display: candidate.display,
+                pieces: Vec::new(),
             });
         for (total, value) in contributor.energy.iter_mut().zip(energy) {
             *total += value;
         }
         contributor.distance_m = contributor.distance_m.min(candidate.distance_m);
+        contributor
+            .pieces
+            .push((candidate.ends_m, crate::candidates::lden_weighted(&energy)));
+        if contributor.pieces.len() >= 2 * CONTRIBUTOR_PIECES {
+            loudest_pieces(&mut contributor.pieces);
+        }
     }
+}
+
+/// Keeps the [`CONTRIBUTOR_PIECES`] loudest pieces, loudest first.
+pub fn loudest_pieces(pieces: &mut Vec<([[f64; 2]; 2], f64)>) {
+    pieces.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0[0][0].total_cmp(&b.0[0][0])));
+    pieces.truncate(CONTRIBUTOR_PIECES);
 }
 
 /// Ascending bound, ties broken by the source itself so every run evaluates in the same order.

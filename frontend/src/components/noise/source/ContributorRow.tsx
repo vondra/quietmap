@@ -8,10 +8,12 @@ import { DataPoint } from '../noise-tooltips'
 import { contributorLabel, formatDist, PERIOD_LABELS_DETAIL, SOURCE_LABELS } from '../shared'
 import { AircraftLayerDetail, ContributorDetail } from './ContributorDetail'
 
-function SourceRow({ label, distance, received, children }: {
+function SourceRow({ label, distance, received, onToggle, children }: {
   label: string
   distance: string
   received: PeriodLevels
+  /** Told when the row opens or closes (a tap on a phone as well as a click). */
+  onToggle?: (expanded: boolean) => void
   /** The expanded body. */
   children: ReactNode
 }) {
@@ -34,6 +36,7 @@ function SourceRow({ label, distance, received, children }: {
         onClick={(e) => {
           e.stopPropagation()
           setExpanded(!expanded)
+          onToggle?.(!expanded)
         }}
         className="w-full py-1.5 text-left cursor-pointer hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
@@ -61,9 +64,15 @@ function SourceRow({ label, distance, received, children }: {
   )
 }
 
-export function ContributorRow({ c }: { c: Contributor }) {
+/** A source's row; opening it shows the source's loudest pieces on the map. */
+export function ContributorRow({ c, onHighlight }: { c: Contributor, onHighlight?: (id: string | null) => void }) {
   return (
-    <SourceRow label={contributorLabel(c)} distance={formatDist(c.distance_m)} received={c.received}>
+    <SourceRow
+      label={contributorLabel(c)}
+      distance={formatDist(c.distance_m)}
+      received={c.received}
+      onToggle={open => onHighlight?.(open ? c.id : null)}
+    >
       <ContributorDetail c={c} />
     </SourceRow>
   )

@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { flightTrackGeoJson, topFlightCells, topFlightKey } from '../src/components/noise/top-flights.ts'
+import { highlightGeoJson, topFlightCells, topFlightKey } from '../src/components/noise/top-flights.ts'
 
 // A visitor east of Greenwich, where 23:58 UTC is already the next day.
 process.env.TZ = 'Europe/Prague'
@@ -67,17 +67,20 @@ test('a flight is known across updates by its aircraft and start, whatever else 
   assert.notEqual(topFlightKey({ ...dayFlight, start_unix: dayFlight.start_unix + 86_400 }), topFlightKey(dayFlight))
 })
 
-test('a track is one map line per piece, as computed and apart, [lon, lat] without the altitude', () => {
+test('a highlight is one map line per piece, as computed and apart, [lon, lat] without the altitude, and a dot per point', () => {
   const track = [
     [[50.08123, 14.25001, 787], [50.08456, 14.26789, 812]],
     [[50.07001, 14.20002, 640], [50.07234, 14.21003, 655]],
+    [[50.06, 14.19]],
   ]
-  assert.deepEqual(flightTrackGeoJson(track), {
+  const [lines, points] = highlightGeoJson(track).features.map(feature => feature.geometry)
+  assert.deepEqual(lines, {
     type: 'MultiLineString',
     coordinates: [
       [[14.25001, 50.08123], [14.26789, 50.08456]],
       [[14.20002, 50.07001], [14.21003, 50.07234]],
     ],
   })
-  assert.deepEqual(flightTrackGeoJson([]), { type: 'MultiLineString', coordinates: [] })
+  assert.deepEqual(points, { type: 'MultiPoint', coordinates: [[14.19, 50.06]] })
+  assert.deepEqual(highlightGeoJson([]).features.map(feature => feature.geometry.coordinates), [[], []])
 })

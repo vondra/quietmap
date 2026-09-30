@@ -33,7 +33,13 @@ pub struct Contributor {
     pub energy: [f64; PERIODS],
     pub distance_m: f64,
     pub display: DisplayRef,
+    /// Its loudest evaluated pieces (ends in the click's frame, equal for a point) with their
+    /// Lden-weighted energies: what the map shows of it.
+    pub pieces: Vec<([[f64; 2]; 2], f64)>,
 }
+
+/// Pieces a contributor keeps for the map.
+pub const CONTRIBUTOR_PIECES: usize = 24;
 
 pub struct Statistics {
     pub rings_read: u32,
