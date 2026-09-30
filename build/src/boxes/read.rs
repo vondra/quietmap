@@ -36,6 +36,47 @@ pub struct FlightSegment {
     pub departure_field_m: f64,
     /// Terrain under both ends (m above sea level): whether the kernel screens the segment.
     pub ground_m: [f64; 2],
+    /// Along-track acceleration (m/s^2) from the flight's neighbouring segments (0 unknown).
+    pub acceleration_ms2: f64,
+}
+
+/// Knots to metres per second.
+const KNOT_MS: f64 = 0.514_444;
+/// Accelerations beyond this are ADS-B speed glitches, not flight (m/s^2; a takeoff roll reaches
+/// about 2.5).
+const ACCELERATION_MAX_MS2: f64 = 3.0;
+
+/// Each row's along-track acceleration from its flight's neighbours in the day file, which holds
+/// a flight's segments in order: (v_next^2 - v_prev^2) / 2s over the path between their middles,
+/// one-sided at a flight's ends or gaps (a neighbour must share the flight and touch the row),
+/// 0 alone. Speeds are ground speeds (the wind cancels between neighbours).
+pub fn accelerations(
+    flight_id: &[u64],
+    ends: &[([f32; 2], [f32; 2])],
+    speed_kt: &[f32],
+    length_m: &[f32],
+) -> Vec<f64> {
+    let n = flight_id.len();
+    let joined = |a: usize, b: usize| flight_id[a] == flight_id[b] && ends[a].1 == ends[b].0;
+    (0..n)
+        .map(|i| {
+            let previous = (i > 0 && joined(i - 1, i)).then(|| i - 1);
+            let next = (i + 1 < n && joined(i, i + 1)).then_some(i + 1);
+            let speed = |k: usize| f64::from(speed_kt[k]) * KNOT_MS;
+            let half = |k: usize| 0.5 * f64::from(length_m[k]);
+            let (from, to, path) = match (previous, next) {
+                (Some(p), Some(q)) => (p, q, half(p) + 2.0 * half(i) + half(q)),
+                (Some(p), None) => (p, i, half(p) + half(i)),
+                (None, Some(q)) => (i, q, half(i) + half(q)),
+                (None, None) => return 0.0,
+            };
+            if path <= 0.0 {
+                return 0.0;
+            }
+            ((speed(to).powi(2) - speed(from).powi(2)) / (2.0 * path))
+                .clamp(-ACCELERATION_MAX_MS2, ACCELERATION_MAX_MS2)
+        })
+        .collect()
 }
 
 fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array, String> {
@@ -96,11 +137,26 @@ pub fn read_segments(
             "departure_field_elev_m",
             "start_elev_m",
             "end_elev_m",
+            "length_m",
         ];
         let values = names
             .iter()
             .map(|name| floats(name))
             .collect::<Result<Vec<_>, String>>()?;
+        let ends: Vec<([f32; 2], [f32; 2])> = (0..batch.num_rows())
+            .map(|row| {
+                (
+                    [values[0].value(row), values[1].value(row)],
+                    [values[3].value(row), values[4].value(row)],
+                )
+            })
+            .collect();
+        let acceleration = accelerations(
+            flight_id.values(),
+            &ends,
+            values[8].values(),
+            values[13].values(),
+        );
         let kept: Vec<FlightSegment> = (0..batch.num_rows())
             .into_par_iter()
             .filter_map(|row| {
@@ -125,10 +181,42 @@ pub fn read_segments(
                     above_ground_m: value(9),
                     departure_field_m: value(10),
                     ground_m: [value(11), value(12)],
+                    acceleration_ms2: acceleration[row],
                 })
             })
             .collect();
         segments.extend(kept);
     }
     Ok(segments)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Three touching segments of one flight speeding from 150 to 170 kt, then another flight: the
+    /// middle one reads the central difference, the ends one-sided, the lone flight 0.
+    #[test]
+    fn accelerations_come_from_the_flights_touching_neighbours() {
+        let ends = [
+            ([0.0, 0.0], [0.0, 1.0]),
+            ([0.0, 1.0], [0.0, 2.0]),
+            ([0.0, 2.0], [0.0, 3.0]),
+            ([5.0, 5.0], [5.0, 6.0]),
+        ];
+        let flight = [1, 1, 1, 2];
+        let speed = [150.0, 160.0, 170.0, 200.0];
+        let length = [1_000.0, 1_000.0, 1_000.0, 1_000.0];
+        let a = accelerations(&flight, &ends, &speed, &length);
+        let v = |kt: f64| kt * KNOT_MS;
+        assert!((a[1] - (v(170.0).powi(2) - v(150.0).powi(2)) / 4_000.0).abs() < 1e-12);
+        assert!((a[0] - (v(160.0).powi(2) - v(150.0).powi(2)) / 2_000.0).abs() < 1e-12);
+        assert!((a[2] - (v(170.0).powi(2) - v(160.0).powi(2)) / 2_000.0).abs() < 1e-12);
+        assert_eq!(a[3], 0.0);
+        let gap = [ends[0], ([0.0, 1.5], [0.0, 2.0])];
+        assert_eq!(
+            accelerations(&[1, 1], &gap, &speed[..2], &length[..2]),
+            vec![0.0, 0.0]
+        );
+    }
 }

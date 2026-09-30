@@ -17,6 +17,7 @@ fn flight(departure: bool, speed_kt: f64, climb_sine: f64, altitude_m: f64) -> S
         speed_kt,
         pressure_altitude_m: altitude_m,
         climb_sine,
+        acceleration_ms2: 0.0,
         height_above_field_m: altitude_m,
     }
 }

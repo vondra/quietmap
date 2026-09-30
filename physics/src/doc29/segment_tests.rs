@@ -42,6 +42,7 @@ fn flight(departure: bool, speed_kt: f64, climb_sine: f64) -> SegmentFlight {
         speed_kt,
         pressure_altitude_m: 1_000.0,
         climb_sine,
+        acceleration_ms2: 0.0,
         height_above_field_m: 1_000.0,
     }
 }

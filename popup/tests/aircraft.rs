@@ -43,6 +43,7 @@ fn departure(east_m: f64) -> (SegmentEmission, [f64; 3], [f64; 3]) {
         speed_kt: 160.0,
         pressure_altitude_m: 600.0,
         climb_sine: 0.08,
+        acceleration_ms2: 0.0,
         height_above_field_m: 600.0,
     };
     let emission =

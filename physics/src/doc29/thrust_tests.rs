@@ -21,6 +21,7 @@ fn climbing(
         speed_kt,
         pressure_altitude_m,
         climb_sine,
+        acceleration_ms2: 0.0,
         height_above_field_m,
     }
 }
@@ -165,4 +166,40 @@ fn a_power_bracket_survives_its_tile_code() {
             );
         }
     }
+}
+
+/// An A320 climbing 7 % at 200 kt after cutback while accelerating at 0.5 m/s^2 flies more thrust
+/// than the same climb at constant speed (Eq. B-17: a/g joins the climb gradient and R), within
+/// MaxClimb; decelerating on approach reads less, never below idle.
+#[test]
+fn acceleration_adds_thrust_to_the_climb() {
+    let class = class_of("A320");
+    let model = &THRUST[class];
+    let steady = climbing(900.0, 600.0, 200.0, 0.07);
+    let accelerating = SegmentFlight {
+        acceleration_ms2: 0.5,
+        ..steady
+    };
+    let thrust = |flight: &SegmentFlight| {
+        let bracket = power_bracket(class, flight).expect("in the domain");
+        model.dep_power[bracket.row]
+            + bracket.weight * (model.dep_power[bracket.row + 1] - model.dep_power[bracket.row])
+    };
+    // The steady climb's 9,856 lb sits below the table's first row (read at 10,000 lb); the
+    // accelerating one's 13,954 lb is bracketed.
+    let delta = (1.0_f64 - 6.8756e-6 * 900.0 / METRES_PER_FOOT).powf(5.2559);
+    let expected =
+        model.weight_lb / delta * (0.07 / 1.01 + model.drag_ratio + 0.5 / GRAVITY_MS2) / 2.0;
+    let (slow, fast) = (thrust(&steady), thrust(&accelerating));
+    assert!(
+        slow == model.dep_power[0] && (fast - expected).abs() < 1.0,
+        "{slow} {fast} {expected}"
+    );
+    let braking = SegmentFlight {
+        departure: false,
+        climb_sine: -0.052,
+        acceleration_ms2: -0.5,
+        ..steady
+    };
+    assert!(power_bracket(class, &braking).is_some());
 }

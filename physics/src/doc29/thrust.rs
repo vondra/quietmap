@@ -112,6 +112,9 @@ pub struct SegmentFlight {
     pub pressure_altitude_m: f64,
     /// Sine of the climb angle over the segment's 3-D length.
     pub climb_sine: f64,
+    /// Along-track acceleration (m/s^2) from the flight's neighbouring segments (0 unknown):
+    /// the energy an accelerating climb puts into speed, which the climb angle alone does not show.
+    pub acceleration_ms2: f64,
     /// Height above the departure field (m): the altitude minus the terrain under the flight's own
     /// takeoff roll, or the height above the local ground when the roll was not observed.
     pub height_above_field_m: f64,
@@ -138,10 +141,23 @@ fn rated_thrust_lb(coef: &[f64; 5], vc_kt: f64, h_ft: f64, temperature_c: f64) -
     coef[0] + coef[1] * vc_kt + coef[2] * h_ft + coef[3] * h_ft * h_ft + coef[4] * temperature_c
 }
 
-/// Eq. B-12 inverted (no bank, no acceleration term): corrected thrust per engine holding the
-/// climb angle, `k` 1.01 at Vc <= 200 kt, else 0.95 (headwind and constant-CAS acceleration).
-fn force_balance_thrust_lb(model: &ThrustModel, climb_sine: f64, k: f64, delta: f64) -> f64 {
-    (model.weight_lb / delta) * (climb_sine / k + model.drag_ratio) / f64::from(model.engines)
+/// Standard gravity (m/s^2).
+const GRAVITY_MS2: f64 = 9.806_65;
+
+/// Eqs. B-12 and B-17 inverted (no bank): corrected thrust per engine holding the climb angle and
+/// the acceleration, N Fn/delta = (W/delta)(R + G + a/g); `k` 1.01 at Vc <= 200 kt, else 0.95
+/// (headwind and the acceleration of a constant-CAS climb) on the climb term. Without a/g an
+/// accelerating climb after cutback, which flies MaxClimb, read as a shallow climb at some 30 %
+/// less thrust, 3-4 dB of the departure NPD.
+fn force_balance_thrust_lb(
+    model: &ThrustModel,
+    climb_sine: f64,
+    acceleration_ms2: f64,
+    k: f64,
+    delta: f64,
+) -> f64 {
+    (model.weight_lb / delta) * (climb_sine / k + model.drag_ratio + acceleration_ms2 / GRAVITY_MS2)
+        / f64::from(model.engines)
 }
 
 /// The power bracket of a segment of noise class `class`. Pinned classes read row 0; ground
@@ -183,7 +199,8 @@ pub fn power_bracket(class: usize, flight: &SegmentFlight) -> Option<PowerBracke
         if !(idle.is_finite() && climb.is_finite() && idle <= climb) {
             return None;
         }
-        force_balance_thrust_lb(model, flight.climb_sine, k, delta).clamp(idle, climb)
+        force_balance_thrust_lb(model, flight.climb_sine, flight.acceleration_ms2, k, delta)
+            .clamp(idle, climb)
     };
     Some(bracket_power(powers, rows, thrust_lb))
 }

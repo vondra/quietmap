@@ -13,8 +13,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tiles::geo::Mercator;
 
-/// Bytes of one record: the segment as the day file holds it (its reals are f32 there).
-const RECORD_BYTES: usize = 76;
+/// Bytes of one record: the segment as the day file holds it (its reals are f32 there), with its
+/// acceleration.
+const RECORD_BYTES: usize = 80;
 /// z12 tiles per z9 square side.
 const TILES_PER_SQUARE: f64 = 8.0;
 
@@ -37,6 +38,7 @@ fn encode(segment: &FlightSegment, out: &mut Vec<u8>) {
         segment.departure_field_m,
         segment.ground_m[0],
         segment.ground_m[1],
+        segment.acceleration_ms2,
     ];
     for real in reals {
         out.extend_from_slice(&(real as f32).to_le_bytes());
@@ -64,6 +66,7 @@ fn decode(bytes: &[u8]) -> FlightSegment {
         above_ground_m: real(9),
         departure_field_m: real(10),
         ground_m: [real(11), real(12)],
+        acceleration_ms2: real(13),
     }
 }
 
@@ -302,6 +305,7 @@ mod tests {
             above_ground_m: 500.0,
             departure_field_m: f64::NAN,
             ground_m: [312.0, 330.5],
+            acceleration_ms2: 0.625,
         };
         let mut bytes = Vec::new();
         encode(&segment, &mut bytes);

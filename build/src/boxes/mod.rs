@@ -178,6 +178,7 @@ fn emission_of(segment: &FlightSegment) -> Option<(AircraftType, SegmentEmission
         pressure_altitude_m: 0.5
             * (segment.pressure_altitude_m[0] + segment.pressure_altitude_m[1]),
         climb_sine: (segment.end[2] - segment.start[2]) / length,
+        acceleration_ms2: segment.acceleration_ms2,
         height_above_field_m: if segment.departure_field_m.is_finite() {
             altitude - segment.departure_field_m
         } else {

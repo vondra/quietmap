@@ -43,6 +43,7 @@ fn departures() -> Vec<FlightSegment> {
                 above_ground_m: 0.5 * (altitude(north0) + altitude(north1)),
                 departure_field_m: 0.0,
                 ground_m: [0.0, 0.0],
+                acceleration_ms2: 0.0,
             });
         }
     }
