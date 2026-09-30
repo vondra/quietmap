@@ -4,7 +4,14 @@
 //! z9 tree: `qm-build dev4 --prepared DIR --rasters DIR --out DIR --squares X:Y[,X:Y..]
 //! [--kinds terrain,obstacles,sources]`; `qm-build weather --rasters DIR --out FILE` cuts the global
 //! weather table; `qm-build complete --out DIR --note TEXT` writes the completion marker last.
+//!
+//! Aircraft: `qm-build geoid --tiff FILE --out FILE` converts the EGM2008 GeoTIFF once;
+//! `qm-build aircraft-segments (--days D,D.. [--increment-days D,..] | --anchor YYYY-MM)
+//! --primary DIR [--secondary DIR] --rasters DIR --geoid FILE --out DIR [--boxes S,W,N,E;..]
+//! [--threads N]` writes per-day segments, flight tables and receipts into a scratch directory.
 
+mod aircraft;
+mod boxes;
 mod dev4;
 mod low_profile;
 mod obstacles;
@@ -16,7 +23,7 @@ mod terrain;
 mod weather;
 
 use dev4::{Dev4, Square};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 struct Arguments {
     values: Vec<(String, String)>,
@@ -65,7 +72,7 @@ fn parse_squares(text: &str) -> Result<Vec<Square>, String> {
 fn run(arguments: &[String]) -> Result<(), String> {
     let (command, rest) = arguments
         .split_first()
-        .ok_or("usage: qm-build dev4|weather|complete --key value ..")?;
+        .ok_or("usage: qm-build dev4|weather|complete|geoid|aircraft-segments --key value ..")?;
     let options = Arguments::parse(rest)?;
     let out = PathBuf::from(options.get("out")?);
     match command.as_str() {
@@ -99,6 +106,113 @@ fn run(arguments: &[String]) -> Result<(), String> {
             weather::build(&dev4, &out)
         }
         "complete" => output::mark_complete(&out, options.get("note")?),
+        "geoid" => aircraft::geoid::build(Path::new(options.get("tiff")?), &out),
+        "aircraft-segments" => {
+            if let Some(threads) = options.optional("threads") {
+                let threads = threads
+                    .parse()
+                    .map_err(|_| format!("bad --threads {threads}"))?;
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build_global()
+                    .map_err(|error| error.to_string())?;
+            }
+            let days = match (options.optional("days"), options.optional("anchor")) {
+                (Some(days), None) => {
+                    aircraft::Days::listed(days, options.optional("increment-days"))?
+                }
+                (None, Some(anchor)) => aircraft::Days::anchor(anchor)?,
+                _ => return Err("give --days or --anchor".into()),
+            };
+            aircraft::run(aircraft::Run {
+                days,
+                primary: Path::new(options.get("primary")?),
+                secondary: options.optional("secondary").map(Path::new),
+                rasters: Path::new(options.get("rasters")?),
+                geoid: Path::new(options.get("geoid")?),
+                boxes: options.optional("boxes"),
+                out: &out,
+            })
+        }
+        "aircraft-boxes" => {
+            let listed = |key: &str| {
+                options
+                    .optional(key)
+                    .map(|days| days.split(',').map(str::to_string).collect())
+                    .unwrap_or_default()
+            };
+            let window = boxes::Window {
+                baseline_days: listed("days"),
+                increment_days: listed("increment-days"),
+            };
+            // Every z12 tile of the listed z9 squares (8 x 8 each).
+            let scope: std::collections::HashSet<tiles::geo::TileId> =
+                parse_squares(options.get("squares")?)?
+                    .iter()
+                    .flat_map(|square| {
+                        (0..64).map(move |index| tiles::geo::TileId {
+                            x: square.x * 8 + index % 8,
+                            y: square.y * 8 + index / 8,
+                        })
+                    })
+                    .collect();
+            let written = boxes::build(
+                Path::new(options.get("segments")?),
+                &window,
+                Path::new(options.get("terrain")?),
+                &scope,
+                &out,
+            )?;
+            eprintln!("aircraft: {written} tiles");
+            Ok(())
+        }
+        "aircraft-check" => {
+            let listed = |key: &str| {
+                options
+                    .optional(key)
+                    .map(|days| days.split(',').map(str::to_string).collect())
+                    .unwrap_or_default()
+            };
+            let window = boxes::Window {
+                baseline_days: listed("days"),
+                increment_days: listed("increment-days"),
+            };
+            let points: Vec<serde_json::Value> = serde_json::from_str(
+                &std::fs::read_to_string(options.get("points")?).map_err(|e| e.to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+            let only: Vec<&str> = options
+                .optional("only")
+                .map_or(Vec::new(), |names| names.split(',').collect());
+            let terrain = Path::new(options.get("terrain")?);
+            for point in &points {
+                let name = point["name"].as_str().unwrap_or("");
+                if !only.is_empty() && !only.contains(&name) {
+                    continue;
+                }
+                let at = (
+                    point["lat"].as_f64().unwrap_or(0.0),
+                    point["lon"].as_f64().unwrap_or(0.0),
+                );
+                let [exact, boxed, beyond] = boxes::check::compare_at(
+                    Path::new(options.get("segments")?),
+                    &window,
+                    &out,
+                    at,
+                    boxes::check::ground_at(terrain, at),
+                )?;
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "point": name,
+                        "exact_leq": exact,
+                        "boxed_leq": boxed,
+                        "beyond_reach_leq": beyond,
+                    })
+                );
+            }
+            Ok(())
+        }
         other => Err(format!("unknown command {other}")),
     }
 }
