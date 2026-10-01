@@ -61,22 +61,25 @@ const MAIN_MODELS: [MainModel; 3] = [
 ];
 
 /// The countries whose counts cover a whole class network (Sweden's NVDB every state road,
-/// Czechia's census every I-III class road, Great Britain's DfT every A and B road and a random
+/// Czechia's census its I-III class roads, Great Britain's DfT every A and B road and a random
 /// sample of the minor ones, Finland's every public road) shift the pooled model by their own
-/// median residual (dB; secondary, tertiary): Swedish tertiary roads carry 6.7 dB less than the
-/// 13 countries' at the same trip ends.
-const COUNTRY_SHIFTS_DB: [([u8; 2], [f64; 2]); 4] = [
-    (*b"CZ", [-1.0, -0.8]),
-    (*b"FI", [-1.6, -4.4]),
-    (*b"GB", [0.9, -1.4]),
-    (*b"SE", [-0.8, -6.7]),
+/// median residual (dB; secondary, tertiary; outside and inside built-up areas): Swedish tertiary
+/// roads carry 6.7 dB less than the 13 countries' at the same trip ends. Czechia's are its
+/// census rows across the country (254,359 secondary and 150,413 tertiary): a III-class road
+/// through a village carries 1,807 a day in the median, where the pooled model put 2,750.
+const COUNTRY_SHIFTS_DB: [([u8; 2], [[f64; 2]; 2]); 4] = [
+    (*b"CZ", [[-1.8, -1.4], [0.0, -2.6]]),
+    (*b"FI", [[-1.6, -1.6], [-4.4, -4.4]]),
+    (*b"GB", [[0.9, 0.9], [-1.4, -1.4]]),
+    (*b"SE", [[-0.8, -0.8], [-6.7, -6.7]]),
 ];
 
 /// dev4 classes the trees run down (residential, living street, service) and unclassified,
-/// which also takes its class's relation to the trip ends around it (a village's connecting
-/// road carries more than the houses along it).
+/// which in a town also takes its class's relation to the trip ends around it.
 const TREE_CLASSES: [u8; 3] = [5, 6, 7];
 const UNCLASSIFIED: u8 = 9;
+/// dev4's built-up code of a row inside a settlement's built-up area.
+const URBAN: u8 = 2;
 
 /// A square's building traffic as the conversion reads it.
 pub struct BuildingTraffic {
@@ -119,12 +122,18 @@ impl BuildingTraffic {
             .filter(|f| f.is_finite());
         let iso = country_iso.to_le_bytes();
         let shift_db = |class: u8| {
-            COUNTRY_SHIFTS_DB
+            let Some(shifts) = COUNTRY_SHIFTS_DB
                 .iter()
                 .find(|(code, _)| *code == iso)
                 .and_then(|(_, shifts)| shifts.get(usize::from(class.checked_sub(3)?)))
-                .copied()
-                .unwrap_or(0.0)
+            else {
+                return 0.0;
+            };
+            match built_up {
+                1 => shifts[0],
+                URBAN => shifts[1],
+                _ => 0.5 * (shifts[0] + shifts[1]),
+            }
         };
         let main = |model: &MainModel| {
             let around = self
@@ -142,9 +151,16 @@ impl BuildingTraffic {
         let model = MAIN_MODELS.iter().find(|model| model.class == class);
         match (class, flow, model) {
             (c, Some(flow), _) if TREE_CLASSES.contains(&c) => Some(f64::from(flow)),
+            // In a town an unclassified street also collects what passes through; outside one it
+            // is a village's lane (the owner: the lane by the hotel in Bosen carries its 33 cars a
+            // day, where the fit on British and French minor roads put 301).
             (UNCLASSIFIED, flow, Some(model)) => {
                 let routed = flow.map_or(0.0, f64::from);
-                Some(main(model).map_or(routed, |related| related.max(routed)))
+                if built_up == URBAN {
+                    Some(main(model).map_or(routed, |related| related.max(routed)))
+                } else {
+                    Some(routed)
+                }
             }
             (_, _, Some(model)) if prior => main(model),
             _ => None,
