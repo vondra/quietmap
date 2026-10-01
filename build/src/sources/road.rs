@@ -93,10 +93,79 @@ const COUNTRY_CLASS_SHARES: [([u8; 2], ClassShares); 3] = [
 const PRIOR_SOURCE_ID: u16 = 0;
 /// dev4's `traffic_estimated` bits of a row whose four categories all come from a prior.
 const ALL_CATEGORIES_ESTIMATED: u8 = 15;
+/// dev4's sources whose category split is a guess, not a count: the class priors (0), the
+/// country-tuned CNOSSOS class defaults (Algeria, DR Congo, Ethiopia, Iran, Iraq, Kazakhstan,
+/// Kenya, Morocco, Nigeria, Russia, Sudan, Turkey, Ukraine, Egypt, Tanzania, Uzbekistan: "no open
+/// per-segment AADT") and the road-classification fallbacks (Japan, Argentina, Chile, Colombia,
+/// Indonesia, Peru, Riyadh, Thailand). They put 9-15 % medium and heavy vehicles on urban main
+/// roads and up to 40 % on every class, residential streets included.
+const GUESSED_SPLIT_SOURCES: [u16; 25] = [
+    PRIOR_SOURCE_ID,
+    9012,
+    9180,
+    9231,
+    9364,
+    9368,
+    9398,
+    9404,
+    9504,
+    9566,
+    9643,
+    9729,
+    9792,
+    9804,
+    9818,
+    9834,
+    9860,
+    9865,
+    9870,
+    9871,
+    9872,
+    9873,
+    9874,
+    9875,
+    9876,
+];
+/// Medium and heavy shares (%) of counted roads (motorway, trunk, primary, secondary, tertiary;
+/// rural, urban): the medians over the counts of 16 countries (CZ, DE, GB, FR, IE, PL, ES, IT, NO,
+/// SE, FI, DK, NL, US, CA, NZ; evidence 2026-10-01, road shares), links as their roads. Urban
+/// primaries carry 7.5 % where the world prior put 15 %.
+const COUNTED_CLASS_SHARES: [[[f64; 2]; 2]; 5] = [
+    [[1.4, 10.2], [1.1, 8.7]],
+    [[1.4, 9.5], [1.5, 6.8]],
+    [[1.6, 7.9], [1.2, 6.3]],
+    [[1.5, 6.4], [1.3, 5.5]],
+    [[1.0, 5.0], [1.0, 4.4]],
+];
+/// The medium and heavy shares (%) of local streets, as dev4's service tree splits them.
+const LOCAL_SHARES: [f64; 2] = [1.0, 2.0];
 
-/// The daily flows (light, medium, heavy, motorcycles) of a row: a dev4 class prior of a secondary
-/// or tertiary row in a country with representative counts takes that country's cell and its
-/// medium and heavy shares (motorcycles scaled with the flow); every other row keeps `prior`.
+/// The medium and heavy shares (fractions) of a class at a built-up code (1 rural, 2 urban,
+/// unknown the mean of both).
+fn counted_shares(class: usize, built_up: u8) -> [f64; 2] {
+    let road = match class {
+        10 => 0,
+        11 => 1,
+        12 => 2,
+        main if main < 5 => main,
+        _ => return LOCAL_SHARES.map(|percent| percent / 100.0),
+    };
+    let [rural, urban] = COUNTED_CLASS_SHARES[road];
+    std::array::from_fn(|k| {
+        let percent = match built_up {
+            1 => rural[k],
+            2 => urban[k],
+            _ => 0.5 * (rural[k] + urban[k]),
+        };
+        percent / 100.0
+    })
+}
+
+/// The daily flows (light, medium, heavy, motorcycles) of a row whose four categories are all a
+/// guess ([`GUESSED_SPLIT_SOURCES`]): a class prior of a secondary or tertiary row in a country
+/// with representative counts takes that country's cell and its medium and heavy shares
+/// (motorcycles scaled with the flow); any other keeps its flow and motorcycles and takes the
+/// counted medium and heavy shares of its class. Every other row keeps `prior`.
 fn country_flows(
     prior: [f64; 4],
     class: usize,
@@ -105,22 +174,32 @@ fn country_flows(
     source_id: u16,
     estimated: u8,
 ) -> [f64; 4] {
-    if source_id != PRIOR_SOURCE_ID || estimated != ALL_CATEGORIES_ESTIMATED {
+    if estimated != ALL_CATEGORIES_ESTIMATED || !GUESSED_SPLIT_SOURCES.contains(&source_id) {
         return prior;
     }
-    let Some(row) = class.checked_sub(3).filter(|row| *row < 2) else {
-        return prior;
+    let split = |total: f64, motorcycles: f64, [medium, heavy]: [f64; 2]| {
+        let (medium, heavy) = (total * medium, total * heavy);
+        [
+            (total - medium - heavy - motorcycles).max(0.0),
+            medium,
+            heavy,
+            motorcycles,
+        ]
     };
+    let total = prior.iter().sum::<f64>();
+    let row = class.checked_sub(3).filter(|row| *row < 2);
     let iso = country_iso.to_le_bytes();
-    let (Some((_, cells)), Some((_, shares))) = (
+    let country = (
         COUNTRY_CLASS_PRIORS.iter().find(|(code, _)| *code == iso),
         COUNTRY_CLASS_SHARES.iter().find(|(code, _)| *code == iso),
-    ) else {
-        return prior;
+    );
+    let (Some(row), PRIOR_SOURCE_ID, (Some((_, cells)), Some((_, shares)))) =
+        (row, source_id, country)
+    else {
+        return split(total, prior[3], counted_shares(class, built_up));
     };
     let cell = usize::from(built_up.min(2));
     let scale = cells[row][cell] / DEV4_CLASS_PRIORS[row][cell];
-    let total = prior.iter().sum::<f64>() * scale;
     // Unknown built-up takes the mean of the rural and urban shares.
     let share = |k: usize| {
         let [rural, urban] = [shares[row][0][k], shares[row][1][k]];
@@ -131,14 +210,7 @@ fn country_flows(
         };
         percent / 100.0
     };
-    let motorcycles = prior[3] * scale;
-    let (medium, heavy) = (total * share(0), total * share(1));
-    [
-        total - medium - heavy - motorcycles,
-        medium,
-        heavy,
-        motorcycles,
-    ]
+    split(total * scale, prior[3] * scale, [share(0), share(1)])
 }
 
 /// Day/evening/night shares of the daily flow: motorways, trunks and their links; other roads.
@@ -478,17 +550,38 @@ mod tests {
             "service tree"
         );
         assert_eq!(
-            country_flows(prior, 5, 2, cz, PRIOR_SOURCE_ID, estimated),
-            prior
+            country_flows(prior, 4, 2, cz, 1041, estimated),
+            prior,
+            "a dataset's split"
         );
-        assert_eq!(
-            country_flows(prior, 2, 2, cz, PRIOR_SOURCE_ID, estimated),
-            prior
-        );
+    }
+
+    /// A guessed split keeps the flow and the motorcycles and takes the counted medium and heavy
+    /// shares: a world-prior urban primary falls from 15.2 % to 7.5 %, a Kazakh residential street
+    /// from 37 % to the service tree's 3 %, a rural motorway link reads its motorway.
+    #[test]
+    fn guessed_splits_take_the_counted_shares_of_their_class() {
         let de = u16::from_le_bytes(*b"DE");
-        assert_eq!(
-            country_flows(prior, 4, 2, de, PRIOR_SOURCE_ID, estimated),
-            prior
+        let estimated = ALL_CATEGORIES_ESTIMATED;
+        let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
+        let primary = [8_486.0, 610.0, 910.0, 200.0];
+        let urban = country_flows(primary, 2, 2, de, PRIOR_SOURCE_ID, estimated);
+        let total: f64 = primary.iter().sum();
+        assert!(close(urban.iter().sum::<f64>(), total), "{urban:?}");
+        assert!(close(urban[1], total * 0.012) && close(urban[2], total * 0.063));
+        assert!(close(urban[3], 200.0));
+        let kz = u16::from_le_bytes(*b"KZ");
+        let street = [600.0, 40.0, 330.0, 30.0];
+        let local = country_flows(street, 5, 2, kz, 9398, estimated);
+        assert!(close(local[1], 10.0) && close(local[2], 20.0), "{local:?}");
+        let link = country_flows(primary, 10, 1, de, PRIOR_SOURCE_ID, estimated);
+        assert!(close(link[2], total * 0.102));
+        let unknown = country_flows(primary, 2, 0, de, PRIOR_SOURCE_ID, estimated);
+        assert!(close(unknown[2], total * 0.071));
+        let mopeds = country_flows([10.0, 0.0, 0.0, 990.0], 2, 2, de, 9873, estimated);
+        assert!(
+            close(mopeds[0], 0.0) && close(mopeds[3], 990.0),
+            "{mopeds:?}"
         );
     }
 
