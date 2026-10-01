@@ -63,7 +63,23 @@ impl Arguments {
     }
 }
 
+/// The squares of `--squares`: `X:Y,X:Y,..`, `all` (every z9 square of the world) or `@FILE`
+/// (the same pairs, by commas or lines: a world's list is too long for one argument).
 fn parse_squares(text: &str) -> Result<Vec<Square>, String> {
+    if text == "all" {
+        return Ok((0..dev4::Z9_PER_AXIS)
+            .flat_map(|x| (0..dev4::Z9_PER_AXIS).map(move |y| Square { x, y }))
+            .collect());
+    }
+    if let Some(path) = text.strip_prefix('@') {
+        let listed = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+        let pairs: Vec<&str> = listed
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|pair| !pair.is_empty())
+            .collect();
+        return parse_squares(&pairs.join(","));
+    }
     text.split(',')
         .map(|pair| {
             let (x, y) = pair
