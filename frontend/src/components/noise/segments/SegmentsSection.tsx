@@ -54,7 +54,7 @@ function SegmentDetail({ piece }: { piece: PopupPiece }) {
             pair(trace.boundary_db),
           )}
           {(trace.without_ground_db[0] > 0.05 || trace.without_ground_db[1] > 0.05) && lineRow(
-            <HoverText title={'Screening alone, without the ground:\nhomogeneous / favourable'}>Screening</HoverText>,
+            <HoverText title={'The screening term alone, the ground left out:\nhomogeneous / favourable'}>Screening, no ground</HoverText>,
             pair(trace.without_ground_db),
           )}
           {lineRow(

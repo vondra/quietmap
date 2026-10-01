@@ -1,6 +1,6 @@
 // The ground under one ray, from the source (left) to the receiver (right): the terrain line, its
-// ground factor along the bottom (soft ground green, hard grey), the buildings and walls the ray
-// crosses, and the straight sight line between the source and the receiver.
+// ground factor along the bottom (soft ground green, hard grey), the buildings (blocks) and walls
+// (bars) the ray crosses, and the straight sight line between the source and the receiver.
 import type { PieceTrace } from '../../../types/noise'
 
 const WIDTH = 300
@@ -25,10 +25,23 @@ export function ProfileDiagram({ trace, crossings }: {
   const profile = trace.profile
   if (profile.length < 2) return null
   const length = profile.at(-1)![0]
-  const tops = crossings.map(([fromReceiver, height]) => {
+  // The two walls of a building share its id: one block between them; a lone crossing is a wall.
+  const byFootprint = new Map<string, { from: number, to: number, height: number }>()
+  for (const [fromReceiver, height, id] of crossings) {
     const distance = length - fromReceiver
-    return { distance, ground: groundAt(profile, distance), height }
-  })
+    const block = byFootprint.get(id)
+    if (block) {
+      block.from = Math.min(block.from, distance)
+      block.to = Math.max(block.to, distance)
+      block.height = Math.max(block.height, height)
+    } else {
+      byFootprint.set(id, { from: distance, to: distance, height })
+    }
+  }
+  const tops = [...byFootprint.values()].map(block => ({
+    ...block,
+    ground: groundAt(profile, (block.from + block.to) / 2),
+  }))
   const altitudes = [
     ...profile.map(([, z]) => z),
     trace.source_altitude_m,
@@ -63,11 +76,11 @@ export function ProfileDiagram({ trace, crossings }: {
       {tops.map((top, k) => (
         <rect
           key={k}
-          x={x(top.distance) - 1}
+          x={x(top.from) - 1}
           y={y(top.ground + top.height)}
-          width={2}
+          width={Math.max(x(top.to) - x(top.from), 0) + 2}
           height={Math.max(y(top.ground) - y(top.ground + top.height), 0.5)}
-          className="fill-foreground/60"
+          className="fill-foreground/50"
         />
       ))}
       <line
