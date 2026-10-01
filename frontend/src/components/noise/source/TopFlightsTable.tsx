@@ -13,7 +13,7 @@ const AIRCRAFT_TOOLTIP =
   'The aircraft type, with its callsign and ICAO address in its tooltip.\n' +
   'It opens the flight\'s trace of that day on adsb.lol, in a new tab.'
 
-/** The numeric columns, each with its unit under its name. */
+/** The numeric columns, each with its unit after its name on the same line. */
 const NUMBER_COLUMNS = [
   {
     name: 'Lmax',
@@ -52,7 +52,7 @@ export function TopFlightsTable({ flights, onHighlightFlight }: {
             {NUMBER_COLUMNS.map(column => (
               <th key={column.name} scope="col" className="text-right">
                 <HoverText title={column.tooltip}>{column.name}</HoverText>
-                <span className="block"> {column.unit}</span>
+                <span className="text-muted-foreground/45"> {column.unit}</span>
               </th>
             ))}
             <th scope="col" className="w-full text-left">

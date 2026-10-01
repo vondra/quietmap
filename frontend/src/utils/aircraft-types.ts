@@ -1,5 +1,5 @@
 // ICAO aircraft type designators (Doc 8643) in words, for the popup's loudest flights: the types
-// heard most in Europe. Any other designator is shown as it is.
+// heard most in Europe, light aircraft included. Any other designator is shown as it is.
 
 const AIRCRAFT_TYPE_NAMES: Record<string, string> = {
   // Boeing 737
@@ -61,6 +61,19 @@ const AIRCRAFT_TYPE_NAMES: Record<string, string> = {
   PC12: 'Pilatus PC-12', TBM7: 'Daher TBM-700', SF34: 'Saab 340', SF50: 'Cirrus SF50 Vision Jet',
   SR20: 'Cirrus SR20', SR22: 'Cirrus SR22', S22T: 'Cirrus SR22T',
   RV4: "Van's RV-4", RV6: "Van's RV-6", RV9: "Van's RV-9", RV10: "Van's RV-10", RV12: "Van's RV-12",
+  // Light aircraft of European skies
+  C140: 'Cessna 140', C206: 'Cessna 206 Stationair', C210: 'Cessna 210 Centurion',
+  C72R: 'Cessna 172RG Cutlass', C82R: 'Cessna 182RG Skylane RG', C77R: 'Cessna 177RG Cardinal RG',
+  PA18: 'Piper PA-18 Super Cub', PA32: 'Piper PA-32 Cherokee Six', PA34: 'Piper PA-34 Seneca',
+  PA38: 'Piper PA-38 Tomahawk', PA44: 'Piper PA-44 Seminole',
+  DA20: 'Diamond DA20 Katana', DA40: 'Diamond DA40 Diamond Star', DA42: 'Diamond DA42 Twin Star',
+  DA62: 'Diamond DA62', G115: 'Grob G115', G120: 'Grob G120',
+  TB10: 'Socata TB-10 Tobago', TB20: 'Socata TB-20 Trinidad', DR40: 'Robin DR400',
+  M20P: 'Mooney M20', M20T: 'Mooney M20 (turbo)', E300: 'Extra 300', XA42: 'XtremeAir XA42',
+  Z42: 'Zlin Z-42', Z43: 'Zlin Z-43', Z142: 'Zlin Z-142', Z242: 'Zlin Z-242',
+  L200: 'Let L-200 Morava', L410: 'Let L-410 Turbolet', AN2: 'Antonov An-2',
+  VUT1: 'Evektor VUT100 Cobra', WT9: 'Aerospool WT9 Dynamic', P208: 'Tecnam P2008',
+  FK14: 'FK Lightplanes FK14 Polaris', GLID: 'glider', BALL: 'balloon',
   // Helicopters
   AS50: 'Aérospatiale AS350 Écureuil', AS55: 'Aérospatiale AS355 Écureuil 2',
   AS65: 'Aérospatiale AS365 Dauphin',
@@ -68,7 +81,8 @@ const AIRCRAFT_TYPE_NAMES: Record<string, string> = {
   EC55: 'Eurocopter EC155', EC75: 'Eurocopter EC175', H160: 'Airbus H160',
   A109: 'Leonardo A109', A119: 'Leonardo A119', A139: 'Leonardo AW139', A169: 'Leonardo AW169',
   A189: 'Leonardo AW189',
-  B407: 'Bell 407', B412: 'Bell 412', B429: 'Bell 429', B505: 'Bell 505',
+  B06: 'Bell 206 JetRanger', B407: 'Bell 407', B412: 'Bell 412', B427: 'Bell 427', B429: 'Bell 429',
+  B505: 'Bell 505', EC20: 'Eurocopter EC120', EN48: 'Enstrom 480', H500: 'MD 500',
   R22: 'Robinson R22', R44: 'Robinson R44', R66: 'Robinson R66', S76: 'Sikorsky S-76', S92: 'Sikorsky S-92',
 }
 
