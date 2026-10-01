@@ -33,6 +33,13 @@ pub struct Scratch {
     ray: RayScratch,
 }
 
+impl Scratch {
+    /// The ground under the last ray [`trace`] followed.
+    pub fn profile(&self) -> &Profile {
+        &self.profile
+    }
+}
+
 impl Receiver<'_, '_> {
     /// Direction of travel from `point` to the receiver, radians anticlockwise from east.
     fn azimuth(&self, point: [f64; 2]) -> f64 {

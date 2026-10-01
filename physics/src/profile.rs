@@ -1,7 +1,7 @@
 //! The sampled ground under one ray: one bilateral cadence (a 10 m probe at each end, three
 //! steps each of 30.7, 61.4 and 122.8 m from both ends, then 245.6 m through the middle), dense
-//! where obstacles near the source and receiver diffract most. Terrain, ground factor and forest
-//! cover are all read at these positions.
+//! where obstacles near the source and receiver diffract most. Terrain and ground factor are read
+//! at these positions.
 
 /// Base step of the cadence (m): one arc-second of latitude as dev4 measured it (110,540 m per
 /// degree / 3600), the terrain lattice spacing; a sampling cadence, not a distance of geometry.

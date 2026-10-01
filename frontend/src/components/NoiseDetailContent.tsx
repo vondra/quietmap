@@ -6,6 +6,7 @@ import { HoverText } from './ui/info-tip'
 import { fmtDb, txtTable, type TableRow } from '../utils/formatters'
 import { fieldText, PERIOD_LABELS_DETAIL, SOURCE_LABELS } from './noise/shared'
 import { AircraftLayerRow, ContributorRow } from './noise/source/ContributorRow'
+import { SegmentsSection } from './noise/segments/SegmentsSection'
 import type { BuildingAnswer, PopupLoudness, PopupUpdate } from '../types/noise'
 
 // The read and compute statistics of the click are for profiling, not for visitors: shown only
@@ -100,6 +101,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight }: No
             : 'No modelled noise source reaches this point.'}
         </div>
       )}
+      {data.total_lden != null && !data.partial && <SegmentsSection lat={centerLat} lng={centerLng} />}
       {SHOW_STATS && <StatsPanel data={data} />}
     </div>
   )

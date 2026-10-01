@@ -6,7 +6,12 @@ export interface PopupRequest {
   year: string
   lat: number
   lon: number
+  /** The professional view: the loudest pieces of each layer with their data and rays. */
+  segments?: boolean
 }
+
+/** Pieces per layer the segments view lists. */
+export const SEGMENTS_PER_LAYER = 8
 
 export interface PopupRunHandlers {
   /** One streamed update: a complete line of the child's output, without its newline. */
@@ -33,13 +38,15 @@ export interface PopupRunnerOptions {
   timeoutMs: number
 }
 
-/** The benchmark's `--exact` and `--pieces` never reach a visitor: the arguments are built here. */
-function popupArguments(preparedDir: string, request: PopupRequest): string[] {
+/** The benchmark's `--exact` never reaches a visitor, `--pieces` only as the segments view's fixed
+ *  count: the arguments are built here. */
+export function popupArguments(preparedDir: string, request: PopupRequest): string[] {
   return [
     '--prepared', preparedDir,
     '--year', request.year,
     '--lat', String(request.lat),
     '--lon', String(request.lon),
+    ...(request.segments ? ['--pieces', String(SEGMENTS_PER_LAYER)] : []),
   ]
 }
 

@@ -37,8 +37,10 @@ export async function streamPopup(
   position: { lat: number; lng: number },
   signal: AbortSignal,
   callbacks: PopupStreamCallbacks,
+  { segments = false }: { segments?: boolean } = {},
 ): Promise<void> {
   const params = new URLSearchParams({ lat: String(position.lat), lon: String(position.lng) })
+  if (segments) params.set('segments', '1')
   let last: PopupUpdate | null = null
   try {
     const response = await fetch(`/api/popup?${params}`, { signal })

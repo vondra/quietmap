@@ -119,6 +119,41 @@ export interface PopupStats {
   elapsed_ms: number
 }
 
+/** A listed piece's ray: the ground under it from the source (distance m, altitude m, G), the
+ *  source and receiver altitudes, and its terms (dB, A-weighted over the source's day spectrum;
+ *  pairs are homogeneous, favourable). */
+export interface PieceTrace {
+  profile: [number, number, number][]
+  source_altitude_m: number
+  receiver_altitude_m: number
+  slant_m: number
+  /** Share of favourable (downward refracting) propagation by day, evening and night. */
+  p: [number, number, number]
+  /** Ground and screening together. */
+  boundary_db: [number, number]
+  /** Screening alone, without the ground. */
+  without_ground_db: [number, number]
+  air_db: number
+  path_difference_m: [number, number]
+}
+
+/** One computed piece of the segments view (asked with `segments=1`). */
+export interface PopupPiece {
+  source_type: string
+  /** Its contributor group's id. */
+  id: string
+  /** [lat, lon] ends; one for a point source. */
+  ends: [number, number][]
+  distance_m: number
+  /** A-weighted emission (per metre of a line). */
+  emission: PeriodLevels
+  received: PeriodLevels
+  metadata: ContributorMetadata | null
+  /** Buildings and walls the ray crosses: distance from the receiver (m), height (m), id. */
+  crossings: [number, number, string][]
+  trace: PieceTrace | null
+}
+
 export interface PopupUpdate {
   seq: number
   /** True until every ring within the reach is read: the numbers shown are valid, but still refined. */
@@ -135,6 +170,8 @@ export interface PopupUpdate {
   /** With the final update only. */
   percentiles?: PopupPercentiles | null
   loudness?: PopupLoudness | null
+  /** The segments view's pieces, when asked for. */
+  pieces?: PopupPiece[]
   stats: PopupStats
 }
 

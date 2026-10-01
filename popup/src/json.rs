@@ -142,7 +142,13 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         periods(&mut emission, &piece.emission);
         let round = |value: f64| (value * 100.0).round() / 100.0;
         let trace = piece.trace.as_ref().map(|trace| {
+            let metres = |value: f64| (value * 10.0).round() / 10.0;
             json!({
+                "profile": trace.profile.iter().map(|[distance, altitude, ground]| {
+                    json!([metres(*distance), metres(*altitude), round(*ground)])
+                }).collect::<Vec<_>>(),
+                "source_altitude_m": metres(trace.source_altitude_m),
+                "receiver_altitude_m": metres(trace.receiver_altitude_m),
                 "slant_m": round(trace.slant_m),
                 "p": trace.favourable_probability.map(round),
                 "boundary_db": trace.boundary_db.map(round),
@@ -151,7 +157,12 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 "path_difference_m": trace.path_difference_m.map(round),
             })
         });
+        let metadata: Value = (update.display_json)(piece.display, piece.layer)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or(Value::Null);
         pieces.push(json!({
+            "metadata": metadata,
             "trace": trace,
             "source_type": piece.layer.name(),
             "id": format!("{:016x}", piece.group_key),

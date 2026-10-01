@@ -124,6 +124,12 @@ test('a click may name a configured year; longitude wraps into -180..180', async
   }
 })
 
+test('the segments view asks the popup for its fixed count of pieces per layer', async (t) => {
+  const popup = await listen(t)
+  const [first] = await lines(await popup('lat=1&lon=14&segments=1'))
+  assert.deepEqual((first.value.argv as string[]).slice(2), ['--year', '2026', '--lat', '1', '--lon', '14', '--pieces', '8'])
+})
+
 test('an invalid point or year, or a HEAD request, is refused before anything runs', async (t) => {
   const app = await buildApp(config())
   t.after(() => app.close())
@@ -139,6 +145,7 @@ test('an invalid point or year, or a HEAD request, is refused before anything ru
     ['lat=50&lon=Infinity', /^lon must be/],
     ['lat=50&lon=14&year=1999', /^year must be one of 2026, 2025$/],
     ['lat=50&lon=14&year=', /^year must be one of/],
+    ['lat=50&lon=14&segments=all', /^segments must be 1$/],
   ] as const) {
     const response = await app.inject(`/api/popup?${query}`)
     assert.equal(response.statusCode, 400, query)

@@ -2,11 +2,14 @@
 //! layer with their emission, the buildings and walls on the ray from their closest point and the
 //! terms of that ray, for piece-by-piece comparisons with dev4. Never part of a visitor's answer.
 
-use crate::candidates::{AttributeRef, Attributes, Candidate, lden_weighted};
+use crate::candidates::{AttributeRef, Attributes, Candidate, DisplayRef, lden_weighted};
 use crate::evaluate::{Receiver, Scratch, trace};
 use crate::selection::LayerSelection;
 use physics::bands::{BANDS, PERIODS, energy};
 use tiles::sources::Layer;
+
+/// Ground samples a listed piece's trace keeps.
+pub const PROFILE_POINTS: usize = 48;
 
 /// One evaluated piece.
 #[derive(Clone)]
@@ -19,6 +22,8 @@ pub struct EvaluatedPiece {
     pub emission: [f64; PERIODS],
     pub group_key: u64,
     pub attribute: AttributeRef,
+    /// The source's display fields.
+    pub display: DisplayRef,
     /// Buildings and walls crossed by the ray from the piece's closest point: distance from the
     /// receiver (m), height (m) and footprint id, filled when listed.
     pub crossings: Vec<(f64, f64, u64)>,
@@ -32,6 +37,11 @@ pub struct EvaluatedPiece {
 /// (dB), per state (homogeneous, favourable) where the state matters.
 #[derive(Clone)]
 pub struct PieceTrace {
+    /// The ground under the ray from the source: distance (m), altitude (m) and G, at most
+    /// [`PROFILE_POINTS`] samples; the source and the receiver altitudes (m).
+    pub profile: Vec<[f64; 3]>,
+    pub source_altitude_m: f64,
+    pub receiver_altitude_m: f64,
     pub slant_m: f64,
     pub favourable_probability: [f64; PERIODS],
     pub boundary_db: [f64; 2],
@@ -52,6 +62,7 @@ impl EvaluatedPiece {
                 .map(|bands| bands.iter().sum()),
             group_key: candidate.group_key,
             attribute: candidate.attribute,
+            display: candidate.display,
             crossings: Vec::new(),
             footprint_id: attributes[candidate.attribute].footprint_id,
             trace: None,
@@ -112,7 +123,24 @@ pub fn list_pieces(
                     .sum();
                 -10.0 * (passed / total).log10()
             };
+            let ground = scratch.profile();
+            let step = ground.t.len().div_ceil(PROFILE_POINTS).max(1);
+            let mut profile: Vec<[f64; 3]> = (0..ground.t.len())
+                .filter(|&k| k % step == 0 || k + 1 == ground.t.len())
+                .map(|k| {
+                    [
+                        ground.t[k] * ground.horizontal_m,
+                        ground.ground_m[k],
+                        ground.ground_factor[k],
+                    ]
+                })
+                .collect();
+            profile.dedup_by(|a, b| a[0] == b[0]);
             piece.trace = Some(PieceTrace {
+                source_altitude_m: ground.ground_m.first().copied().unwrap_or(0.0)
+                    + source.height_m,
+                receiver_altitude_m: receiver.altitude_m,
+                profile,
                 slant_m: terms.transfer.slant_m,
                 favourable_probability: terms.favourable_probability,
                 boundary_db: [0, 1].map(|state| weighted(&terms.boundaries[state].attenuation_db)),

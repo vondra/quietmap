@@ -1,4 +1,5 @@
-// GET /api/popup?lat=&lon=[&year=]: one click's answer streamed as it is refined, one line of JSON
+// GET /api/popup?lat=&lon=[&year=][&segments=1]: one click's answer streamed as it is refined
+// (with the segments view's pieces when asked), one line of JSON
 // per update (application/x-ndjson), each line flushed as `qm-popup` writes it. A failed
 // computation ends the stream with one line `{"error": "..."}`; the updates before it are
 // incomplete and must not be shown as the level.
@@ -20,7 +21,7 @@ function coordinate(text: unknown): number | null {
 
 /** The click's point and year, or what is wrong with the query. Longitude wraps to -180..180. */
 export function parsePopupQuery(
-  query: { lat?: unknown; lon?: unknown; year?: unknown },
+  query: { lat?: unknown; lon?: unknown; year?: unknown; segments?: unknown },
   years: readonly string[],
 ): PopupRequest | string {
   const lat = coordinate(query.lat)
@@ -29,14 +30,20 @@ export function parsePopupQuery(
   if (lon === null) return 'lon must be a number'
   const year = query.year ?? years[0]
   if (typeof year !== 'string' || !years.includes(year)) return `year must be one of ${years.join(', ')}`
-  return { year, lat, lon: ((((lon + 180) % 360) + 360) % 360) - 180 }
+  if (query.segments !== undefined && query.segments !== '1') return 'segments must be 1'
+  return {
+    year,
+    lat,
+    lon: ((((lon + 180) % 360) + 360) % 360) - 180,
+    ...(query.segments === '1' ? { segments: true } : {}),
+  }
 }
 
 export async function popupRoutes(
   app: FastifyInstance,
   { runner, years }: { runner: PopupRunner; years: readonly string[] },
 ): Promise<void> {
-  app.get<{ Querystring: { lat?: string; lon?: string; year?: string } }>('/api/popup', {
+  app.get<{ Querystring: { lat?: string; lon?: string; year?: string; segments?: string } }>('/api/popup', {
     // Never compressed: a compressor holds lines back until its buffer fills.
     compress: false,
     // A HEAD request would compute a click nobody reads.
