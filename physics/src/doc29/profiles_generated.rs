@@ -7,7 +7,9 @@
 //! `qm260904` at c815f215 with two hand edits (2598c1c2 removed the constant scaled distance per
 //! profile, fe4d9933 the ground-operations table).
 //!
-//! r051: the classes and every ANP profile's curves are written by `scripts/aircraft-classes.py`:
+//! r051: `similarity_fallback` routes the most flown designators dev4 left on FALLBACK (edited by
+//! hand, as in dev4). The classes and every ANP profile's curves are written by
+//! `scripts/aircraft-classes.py`:
 //! a class per ANP aircraft a designator reads (Doc 29 flies each aircraft on its own data), where
 //! dev4 had collapsed the profiles onto 15 classes by the likeness of their loudest curves and
 //! mapped several designators to the wrong aircraft; every ANP curve holds for 160 kt (Doc 29 4th
@@ -1888,6 +1890,44 @@ fn similarity_fallback(typecode: &str) -> u8 {
             | b"PNR3"
     ) {
         return profile_idx("C172");
+    }
+    // r051: the most flown designators that fell to FALLBACK (the jet energy mean at full power) on
+    // four world days of the year run, routed to their nearest ANP aircraft: light singles (T206 to
+    // Grob 120; PIAT, GX and MC01 fly 87 kt), piston twins, turboprops and military trainers,
+    // business jets by weight, airliners and freighters. Military jets, tankers and the A400M stay
+    // on FALLBACK.
+    match b {
+        b"T206" | b"T210" | b"P210" | b"C82S" | b"C82T" | b"SLG4" | b"BL8" | b"CH7A" | b"CH7B"
+        | b"COL3" | b"COL4" | b"G120" | b"AA1" | b"HUSK" | b"EFOX" | b"GA8" | b"DHC2" | b"BT36"
+        | b"CT4" | b"TL30" | b"R200" | b"VELO" | b"M7" | b"NAVI" | b"T34P" | b"PIAT" | b"GX"
+        | b"MC01" => return profile_idx("C172"),
+        b"AEST" | b"B58T" | b"BE18" | b"BN2P" | b"AC50" => return profile_idx("PA34"),
+        b"TEX2" | b"T34T" | b"SW3" | b"SW4" | b"G12T" | b"EPIC" | b"P180" | b"K100" | b"DH3T"
+        | b"AC90" | b"MU2" | b"U21" | b"SB20" | b"SH36" | b"CN35" | b"C27J" | b"E2" | b"TUCA"
+        | b"S2T" | b"F406" | b"DC3T" | b"M600" | b"M700" => return profile_idx("DH8D"),
+        b"DHC6" | b"D228" => return profile_idx("L410"),
+        b"JS32" => return profile_idx("JS41"),
+        b"F100" => return profile_idx("F70"),
+        b"B762" => return profile_idx("B763"),
+        b"CRJX" => return profile_idx("CRJ9"),
+        b"A318" => return profile_idx("A319"),
+        b"SU95" | b"AJ27" => return profile_idx("E190"),
+        b"C919" => return profile_idx("A20N"),
+        b"J328" | b"E135" | b"E145" => return profile_idx("EMJ"),
+        b"P8" => return profile_idx("B738"),
+        b"E737" => return profile_idx("B737"),
+        b"C17" | b"C5M" | b"A124" => return profile_idx("B744"),
+        b"E3TF" => return profile_idx("B742"),
+        b"H64" | b"H47" | b"UH1" | b"H53S" => return profile_idx("EC35"),
+        b"HDJT" | b"PRM1" | b"EA50" | b"G150" | b"FA10" | b"FA20" | b"FA50" | b"H25B" | b"H25C"
+        | b"ASTR" | b"E50P" | b"E55P" | b"E545" | b"E550" => return profile_idx("C56X"),
+        b"CL30" | b"CL35" | b"F2TH" | b"F900" | b"G280" | b"E35L" | b"GALX" | b"HA4T" => {
+            return profile_idx("CL60");
+        }
+        b"GA5C" | b"GA6C" | b"GA7C" | b"GA8C" => return profile_idx("GLF6"),
+        b"FA8X" => return profile_idx("FA7X"),
+        [b'L', b'J', _, _] => return profile_idx("LJ60"),
+        _ => {}
     }
     // C-130 Hercules and C-130J Super Hercules — military 4-engine turboprop
     // (would otherwise hit the C1xx Cessna piston bucket and produce a 20+ dB

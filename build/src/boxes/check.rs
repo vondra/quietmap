@@ -10,9 +10,9 @@
 mod exact;
 mod report;
 
-use super::Window;
 use super::place::Placement;
 use super::read::{FLAG_SECONDARY_ONLY, read_segments};
+use super::{Window, light_unknown_flights};
 use exact::{DISTANCE_BANDS_M, Sums, add_segment};
 use physics::bands::{PERIOD_HOURS, PERIODS};
 use rayon::prelude::*;
@@ -217,6 +217,7 @@ pub fn compare(
     for day in days {
         let path = segments_dir.join("segments").join(format!("{day}.arrow"));
         let segments = read_segments(&path, &keep)?;
+        let light = light_unknown_flights(segments.iter());
         let (weight, secondary) = (
             if window.baseline_days.contains(day) {
                 1.0 / baseline
@@ -238,7 +239,14 @@ pub fn compare(
                     weight
                 };
                 if segment_weight > 0.0 {
-                    add_segment(&mut sums, &receivers, &placement, segment, segment_weight);
+                    let light = light.contains(&segment.flight_id);
+                    add_segment(
+                        &mut sums,
+                        &receivers,
+                        &placement,
+                        (segment, light),
+                        segment_weight,
+                    );
                 }
                 sums
             })

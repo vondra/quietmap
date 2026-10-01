@@ -3,7 +3,9 @@
 
 use super::profiles_generated::*;
 
-/// Real unmapped ADS-B designators (the top of dev4's 24-day scan) reach their nearest anchor.
+/// Real unmapped ADS-B designators (the top of dev4's 24-day scan, and of four world days of the
+/// year run) reach their nearest ANP aircraft; business jets by weight (Learjets the Learjet 35,
+/// Phenoms the Citation III, Challenger 300s and Falcon 900/2000s the Challenger 601).
 #[test]
 fn unmapped_designators_reach_their_nearest_anchor() {
     for (designator, anchor) in [
@@ -20,24 +22,35 @@ fn unmapped_designators_reach_their_nearest_anchor() {
         ("C180", "C172"),
         ("C185", "C172"),
         ("S22T", "C172"),
-        ("CL30", "CRJ9"),
-        ("CL35", "CRJ9"),
-        ("E55P", "CRJ9"),
-        ("E545", "CRJ9"),
+        ("CL30", "CL60"),
+        ("CL35", "CL60"),
+        ("E55P", "C56X"),
+        ("E545", "C56X"),
         ("E110", "DH8D"),
         ("E120", "DH8D"),
         ("GLF4", "CRJ9"),
-        ("F900", "CRJ9"),
-        ("F2TH", "CRJ9"),
+        ("F900", "CL60"),
+        ("F2TH", "CL60"),
         ("H125", "EC35"),
         ("H145", "EC35"),
         ("RV6", "C172"),
         ("PA46", "C172"),
-        ("LJ45", "CRJ9"),
+        ("LJ45", "LJ60"),
         ("B712", "CRJ9"),
         ("B461", "CRJ9"),
         ("B463", "CRJ9"),
         ("RJ85", "CRJ9"),
+        // r051: the most flown designators dev4 left on the fallback.
+        ("T206", "C172"),
+        ("PIAT", "C172"),
+        ("TEX2", "DH8D"),
+        ("SW4", "DH8D"),
+        ("DHC6", "L410"),
+        ("F100", "F70"),
+        ("B762", "B763"),
+        ("CRJX", "CRJ9"),
+        ("GA6C", "GLF6"),
+        ("HDJT", "C56X"),
     ] {
         assert_eq!(profile_idx(designator), profile_idx(anchor), "{designator}");
         assert_ne!(
@@ -142,5 +155,5 @@ fn as_prefixed_rotorcraft_stay_helicopters() {
             "{designator}"
         );
     }
-    assert_eq!(profile_idx("ASTR"), profile_idx("CRJ9"));
+    assert_eq!(profile_idx("ASTR"), profile_idx("C56X"));
 }

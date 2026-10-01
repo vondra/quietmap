@@ -75,12 +75,13 @@ impl Sums {
     }
 }
 
-/// Adds one segment of weight `weight` to the sums of every point it reaches.
+/// Adds one segment of weight `weight` to the sums of every point it reaches; a `light` flight of
+/// unknown type flies the C172's class.
 pub(super) fn add_segment(
     sums: &mut [Sums],
     receivers: &[Receiver],
     placement: &Placement,
-    segment: &FlightSegment,
+    (segment, light): (&FlightSegment, bool),
     weight: f64,
 ) {
     let mut emission: Option<Option<(bool, SegmentEmission)>> = None;
@@ -92,7 +93,7 @@ pub(super) fn add_segment(
             continue;
         }
         let Some((helicopter, emission)) = emission.get_or_insert_with(|| {
-            emission_of(segment)
+            emission_of(segment, light)
                 .map(|(aircraft, emission)| (aircraft.helicopter.is_some(), emission))
         }) else {
             return;

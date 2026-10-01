@@ -14,6 +14,7 @@ use crate::dev4::Square;
 use physics::bands::PERIODS;
 use physics::doc29::box_sums::BoxSums;
 use physics::doc29::npd::LAMAX_REFERENCE_SLANT_M;
+use physics::doc29::profiles_generated::{FALLBACK_PROFILE_IDX, profile_idx};
 use physics::doc29::segment::{AircraftType, NpdDistanceLevels, SegmentEmission};
 use physics::doc29::thrust::SegmentFlight;
 use place::{BoxKey, BoxPiece, Placement, cut_into_pieces};
@@ -159,11 +160,52 @@ impl BoxEntry {
     }
 }
 
-/// The Doc 29 emission of a segment, or `None` outside the thrust model's domain.
-fn emission_of(segment: &FlightSegment) -> Option<(AircraftType, SegmentEmission)> {
-    let designator = String::from_utf8_lossy(&segment.designator)
-        .trim()
-        .to_string();
+/// The top ground speed under which a flight of unknown type is a light aircraft (kt): training
+/// singles cruise at 90-140 kt, while a jet passing a z9 square flies faster somewhere in it (it
+/// climbs or descends through 180-250 kt within some 35 km of its runway).
+const LIGHT_TOP_SPEED_KT: f64 = 150.0;
+
+/// Whether a callsign is an airline or military flight number: three letters, then a digit.
+fn flight_number(callsign: &[u8; 8]) -> bool {
+    callsign[..3].iter().all(u8::is_ascii_alphabetic) && callsign[3].is_ascii_digit()
+}
+
+/// The flights of unknown type that are light aircraft. A designator no table knows reads the
+/// fallback, the jet energy mean at full power, but most such flights (empty designators, codes
+/// like a homebuilt's) are light aircraft over the countryside, 10-20 dB under it: a flight with
+/// no flight number that never flies faster than [`LIGHT_TOP_SPEED_KT`] among `segments` (one
+/// square and day of them, or the day around the checked points) flies the C172's class.
+pub(crate) fn light_unknown_flights<'a>(
+    segments: impl Iterator<Item = &'a FlightSegment>,
+) -> HashSet<u64> {
+    let mut top_speed: HashMap<u64, f64> = HashMap::new();
+    for segment in segments {
+        let designator = String::from_utf8_lossy(&segment.designator);
+        if profile_idx(designator.trim()) != FALLBACK_PROFILE_IDX
+            || flight_number(&segment.callsign)
+        {
+            continue;
+        }
+        let top = top_speed.entry(segment.flight_id).or_insert(0.0);
+        *top = top.max(segment.speed_kt);
+    }
+    top_speed
+        .into_iter()
+        .filter(|&(_, speed_kt)| speed_kt < LIGHT_TOP_SPEED_KT)
+        .map(|(flight_id, _)| flight_id)
+        .collect()
+}
+
+/// The Doc 29 emission of a segment, or `None` outside the thrust model's domain; a `light`
+/// flight of unknown type flies the C172's class.
+fn emission_of(segment: &FlightSegment, light: bool) -> Option<(AircraftType, SegmentEmission)> {
+    let designator = if light {
+        "C172".to_string()
+    } else {
+        String::from_utf8_lossy(&segment.designator)
+            .trim()
+            .to_string()
+    };
     let aircraft = AircraftType::from_designator(&designator);
     let altitude = 0.5 * (segment.start[2] + segment.end[2]);
     let (dx, dy) = geo_metres(segment.start, segment.end);
@@ -233,6 +275,7 @@ fn add_day(
     pieces: usize,
 ) {
     let point = |end: [f64; 3]| (Mercator::from_degrees(end[0], end[1]), end[2]);
+    let light = light_unknown_flights(segments.iter().map(|(segment, _)| segment));
     // Each segment's emission, its levels and whether it is a helicopter (none without weight,
     // outside the scope or outside the thrust model's domain).
     let emitted: Vec<Option<(SegmentEmission, NpdDistanceLevels, bool)>> = segments
@@ -244,7 +287,7 @@ fn add_day(
             if !touches(scope, point(segment.start).0, point(segment.end).0) {
                 return None;
             }
-            let (aircraft, emission) = emission_of(segment)?;
+            let (aircraft, emission) = emission_of(segment, light.contains(&segment.flight_id))?;
             let helicopter = aircraft.helicopter.is_some();
             Some((emission, emission.npd_distance_levels(), helicopter))
         })
