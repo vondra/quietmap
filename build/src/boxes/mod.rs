@@ -160,10 +160,11 @@ impl BoxEntry {
     }
 }
 
-/// The top ground speed under which a flight of unknown type is a light aircraft (kt): training
-/// singles cruise at 90-140 kt, while a jet passing a z9 square flies faster somewhere in it (it
-/// climbs or descends through 180-250 kt within some 35 km of its runway).
-const LIGHT_TOP_SPEED_KT: f64 = 150.0;
+/// The median airborne ground speed under which a flight of unknown type is a light aircraft
+/// (kt): training singles fly 80-130 kt, while a jet in the air flies 140 kt only on short final
+/// and faster everywhere else. A median, as ADS-B speeds jump (a light single's day read 95 kt with
+/// one segment at 400).
+const LIGHT_MEDIAN_SPEED_KT: f64 = 140.0;
 
 /// Whether a callsign is an airline or military flight number: three letters, then a digit.
 fn flight_number(callsign: &[u8; 8]) -> bool {
@@ -173,26 +174,32 @@ fn flight_number(callsign: &[u8; 8]) -> bool {
 /// The flights of unknown type that are light aircraft. A designator no table knows reads the
 /// fallback, the jet energy mean at full power, but most such flights (empty designators, codes
 /// like a homebuilt's) are light aircraft over the countryside, 10-20 dB under it: a flight with
-/// no flight number that never flies faster than [`LIGHT_TOP_SPEED_KT`] among `segments` (one
-/// square and day of them, or the day around the checked points) flies the C172's class.
+/// no flight number whose airborne segments among `segments` (one square and day of them, or the
+/// day around the checked points) fly a median under [`LIGHT_MEDIAN_SPEED_KT`] flies the C172's
+/// class.
 pub(crate) fn light_unknown_flights<'a>(
     segments: impl Iterator<Item = &'a FlightSegment>,
 ) -> HashSet<u64> {
-    let mut top_speed: HashMap<u64, f64> = HashMap::new();
+    let mut speeds: HashMap<u64, Vec<f64>> = HashMap::new();
     for segment in segments {
         let designator = String::from_utf8_lossy(&segment.designator);
-        if profile_idx(designator.trim()) != FALLBACK_PROFILE_IDX
+        if segment.flags & FLAG_ON_GROUND != 0
+            || profile_idx(designator.trim()) != FALLBACK_PROFILE_IDX
             || flight_number(&segment.callsign)
         {
             continue;
         }
-        let top = top_speed.entry(segment.flight_id).or_insert(0.0);
-        *top = top.max(segment.speed_kt);
+        speeds
+            .entry(segment.flight_id)
+            .or_default()
+            .push(segment.speed_kt);
     }
-    top_speed
+    speeds
         .into_iter()
-        .filter(|&(_, speed_kt)| speed_kt < LIGHT_TOP_SPEED_KT)
-        .map(|(flight_id, _)| flight_id)
+        .filter_map(|(flight_id, mut speeds)| {
+            speeds.sort_by(f64::total_cmp);
+            (speeds[speeds.len() / 2] < LIGHT_MEDIAN_SPEED_KT).then_some(flight_id)
+        })
         .collect()
 }
 
