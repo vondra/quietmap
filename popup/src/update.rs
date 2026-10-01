@@ -59,8 +59,8 @@ pub struct Update<'u> {
     /// The levels exceeded 10, 50 and 90 % of the time (the final update's; none for a building
     /// without a façade).
     pub percentiles: Option<crate::percentiles::Percentiles>,
-    /// The share of residents expected to be highly annoyed (the final update's).
-    pub annoyance: Option<crate::annoyance::Annoyance>,
+    /// How loud the click sounds, N5 (the final update's).
+    pub loudness: Option<crate::loudness::Loudness>,
     pub lat: f64,
     pub lon: f64,
     pub frame: LocalFrame,
@@ -125,7 +125,7 @@ pub fn empty_answer(
     emit(&Update {
         partial: false,
         percentiles: None,
-        annoyance: None,
+        loudness: None,
         lat,
         lon,
         frame,

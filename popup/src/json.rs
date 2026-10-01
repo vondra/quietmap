@@ -226,19 +226,17 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 let round = |value: f64| value.is_finite().then(|| (value * 10.0).round() / 10.0);
                 json!({"day": round(levels[0]), "evening": round(levels[1]), "night": round(levels[2])})
             };
-            json!({"l10": periods(p.l10), "l50": periods(p.l50), "l90": periods(p.l90)})
+            json!({"l5": periods(p.l5), "l10": periods(p.l10), "l50": periods(p.l50), "l90": periods(p.l90)})
         }),
-        "annoyance": update.annoyance.as_ref().map(|a| {
-            let round = |value: f64| value.is_finite().then(|| (value * 10.0).round() / 10.0);
-            json!({
-                "highly_annoyed_percent": round(a.percent),
-                "dominant": a.dominant.map(|layer| layer.name()),
-                "road_intermittency_percent": round(100.0 * a.road_intermittency),
-                "road_credit_db": round(a.road_credit_db),
-                "sources": a.by_layer.iter().map(|(layer, percent)| {
-                    json!({"source_type": layer.name(), "highly_annoyed_percent": round(*percent)})
-                }).collect::<Vec<_>>(),
-            })
+        "loudness": update.loudness.as_ref().map(|loudness| {
+            // Two significant digits: 0.43, 4.3, 43.
+            let round = |sone: f64| {
+                let digits = (1 - sone.max(0.01).log10().floor() as i32).max(0);
+                let scale = 10f64.powi(digits);
+                (sone * scale).round() / scale
+            };
+            let n5 = loudness.n5_sone;
+            json!({"n5_sone": {"day": round(n5[0]), "evening": round(n5[1]), "night": round(n5[2])}})
         }),
         "top_contributors": contributors,
         "top_flights": flights,

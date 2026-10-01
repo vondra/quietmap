@@ -199,6 +199,24 @@ pub fn class_increments_db(class: usize, departure: bool) -> [f64; NPD_DISTANCES
     npd_increments_db(spectrum, &model_rates_db_per_m()).map(|increment| increment + impedance)
 }
 
+/// The unweighted 1/3-octave levels (dB up to a constant, 50 Hz to 10 kHz) a class's flights make
+/// at `slant_m` through the absorption `rates_db_per_m`: its approach and departure spectral
+/// classes averaged in energy, taken back from 305 m through AIR-1845 (Eq. D-1) and out again;
+/// `None` for a class without spectra.
+pub fn class_spectrum_at(
+    class: usize,
+    slant_m: f64,
+    rates_db_per_m: &[f64; THIRD_OCTAVES],
+) -> Option<[f64; THIRD_OCTAVES]> {
+    let spectra = SPECTRA.get(class)?.as_ref()?;
+    Some(std::array::from_fn(|n| {
+        let both =
+            10f64.powf(spectra.approach_db[n] / 10.0) + 10f64.powf(spectra.departure_db[n] / 10.0);
+        10.0 * (both / 2.0).log10() + AIR_1845_DB_PER_100M[n] / 100.0 * SPECTRUM_DISTANCE_M
+            - rates_db_per_m[n] * slant_m
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,5 +358,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Far away an aircraft's sound loses its treble: the A320's 4 kHz third falls 68 dB more
+    /// than its 250 Hz one between 305 m and 3 km in the model atmosphere (25 dB/km against
+    /// 1 dB/km).
+    #[test]
+    fn far_flights_lose_their_treble() {
+        let rates = model_rates_db_per_m();
+        let class = class_named("A320-232");
+        let near = class_spectrum_at(class, SPECTRUM_DISTANCE_M, &rates).unwrap();
+        let far = class_spectrum_at(class, 3_000.0, &rates).unwrap();
+        // Bands 7 (250 Hz) and 19 (4 kHz).
+        let tilt = (near[19] - far[19]) - (near[7] - far[7]);
+        assert!((tilt - 68.1).abs() < 0.5, "{tilt}");
+        let expected = (rates[19] - rates[7]) * (3_000.0 - SPECTRUM_DISTANCE_M);
+        assert!((tilt - expected).abs() < 1e-9);
     }
 }

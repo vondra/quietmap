@@ -11,10 +11,10 @@
 //! same every time.
 
 use crate::candidates::{Attributes, Candidate};
-use crate::evaluate::{Receiver, Scratch, received_energy};
+use crate::evaluate::{Bands, Receiver, Scratch, period_sums, received_bands};
 use crate::listing::EvaluatedPiece;
 use crate::update::{CONTRIBUTOR_PIECES, Contributor};
-use physics::bands::PERIODS;
+use physics::bands::{BANDS, PERIODS};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use tiles::sources::Layer;
@@ -48,6 +48,9 @@ pub struct LayerSelection {
     pub contributors: HashMap<u64, Contributor>,
     /// Every evaluated piece, kept only when the benchmark lists pieces.
     pub pieces: Vec<EvaluatedPiece>,
+    /// The received band energies of every evaluated piece, certain and sampled alike: the
+    /// spectrum's shape, not its level.
+    pub spectrum: Bands,
 }
 
 impl LayerSelection {
@@ -62,6 +65,7 @@ impl LayerSelection {
             covered: 0,
             contributors: HashMap::new(),
             pieces: Vec::new(),
+            spectrum: [[0.0; BANDS]; PERIODS],
         }
     }
 
@@ -116,19 +120,29 @@ impl LayerSelection {
     fn add(
         &mut self,
         candidate: &Candidate,
-        energy: [f64; PERIODS],
+        bands: &Bands,
         attributes: &Attributes,
         keep_pieces: bool,
     ) {
+        let energy = period_sums(bands);
         self.evaluated += 1;
         self.covered += 1;
         for (total, value) in self.energy.iter_mut().zip(energy) {
             *total += value;
         }
+        self.add_spectrum(bands);
         self.add_contributor(candidate, energy);
         if keep_pieces {
             self.pieces
                 .push(EvaluatedPiece::of(candidate, attributes, energy));
+        }
+    }
+
+    fn add_spectrum(&mut self, bands: &Bands) {
+        for (total, period) in self.spectrum.iter_mut().zip(bands) {
+            for (sum, value) in total.iter_mut().zip(period) {
+                *sum += value;
+            }
         }
     }
 
@@ -218,9 +232,9 @@ pub fn select(
         if work.is_empty() {
             break;
         }
-        let energies = evaluate_all(&work, receiver, attributes);
-        for ((layer, candidate), energy) in work.into_iter().zip(energies) {
-            selections[layer].add(&candidate, energy?, attributes, keep_pieces);
+        let received = evaluate_all(&work, receiver, attributes);
+        for ((layer, candidate), bands) in work.into_iter().zip(received) {
+            selections[layer].add(&candidate, &bands?, attributes, keep_pieces);
         }
     }
     for (layer, selection) in selections.iter_mut().enumerate() {
@@ -241,10 +255,10 @@ fn evaluate_all(
     work: &[(usize, Candidate)],
     receiver: &Receiver,
     attributes: &Attributes,
-) -> Vec<Result<[f64; PERIODS], String>> {
+) -> Vec<Result<Bands, String>> {
     work.par_iter()
         .map_init(Scratch::default, |scratch, (_, candidate)| {
-            received_energy(
+            received_bands(
                 receiver,
                 candidate,
                 &attributes[candidate.attribute],
@@ -281,7 +295,7 @@ fn sample_rest(
     let mut rest = std::mem::take(&mut selection.pending);
     // Pending stays sorted ascending (only its loudest end is ever drained).
     rest.reverse();
-    let mut evaluated: HashMap<usize, [f64; PERIODS]> = HashMap::new();
+    let mut evaluated: HashMap<usize, ([f64; PERIODS], Bands)> = HashMap::new();
     let mut size = SAMPLE_START;
     let mut first = 0;
     loop {
@@ -323,18 +337,19 @@ fn sample_rest(
             .into_iter()
             .map(|index| (index, rest[index].clone()))
             .collect();
-        let energies = evaluate_all(&needed, receiver, attributes);
-        for ((index, _), energy) in needed.iter().zip(energies) {
-            evaluated.insert(*index, energy?);
+        let received = evaluate_all(&needed, receiver, attributes);
+        for ((index, _), bands) in needed.iter().zip(received) {
+            let bands = bands?;
+            evaluated.insert(*index, (period_sums(&bands), bands));
         }
         for index in first..certain {
-            selection.add(&rest[index], evaluated[&index], attributes, keep_pieces);
+            selection.add(&rest[index], &evaluated[&index].1, attributes, keep_pieces);
         }
         first = certain;
         let (estimate, variance) = if exhaustive {
             let mut sum = [0.0; PERIODS];
             for index in certain..rest.len() {
-                for (total, value) in sum.iter_mut().zip(evaluated[&index]) {
+                for (total, value) in sum.iter_mut().zip(evaluated[&index].0) {
                     *total += value;
                 }
             }
@@ -346,7 +361,7 @@ fn sample_rest(
             for &index in &draws {
                 let probability = rest[index].order / rest_order;
                 for period in 0..PERIODS {
-                    let y = evaluated[&index][period] / probability;
+                    let y = evaluated[&index].0[period] / probability;
                     mean[period] += y / n;
                     square[period] += y * y / n;
                 }
@@ -371,15 +386,16 @@ fn sample_rest(
             let mut shown = std::collections::BTreeSet::new();
             for &index in &draws {
                 if shown.insert(index) {
-                    let energy = evaluated[&index];
+                    let (energy, bands) = &evaluated[&index];
                     if exhaustive {
-                        selection.add(&rest[index], energy, attributes, keep_pieces);
+                        selection.add(&rest[index], bands, attributes, keep_pieces);
                         for (estimate, value) in selection.estimate.iter_mut().zip(energy) {
                             *estimate -= value;
                         }
                     } else {
                         selection.evaluated += 1;
-                        selection.add_contributor(&rest[index], energy);
+                        selection.add_spectrum(bands);
+                        selection.add_contributor(&rest[index], *energy);
                     }
                 }
             }

@@ -7,13 +7,13 @@
 //! update as a line of JSON).
 
 pub mod aircraft;
-pub mod annoyance;
 pub mod answer;
 pub mod building;
 pub mod candidates;
 pub mod evaluate;
 pub mod json;
 pub mod listing;
+pub mod loudness;
 pub mod obstacles;
 pub mod percentiles;
 pub mod release;

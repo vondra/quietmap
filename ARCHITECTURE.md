@@ -108,11 +108,12 @@ lines of JSON (each <= 100 KB).
    outline of the same building).
 6. Until every ring is read the answer says it is partial. A failed read is an error, never a
    quieter answer. Exact mode (benchmark only) is the same loop with the stop rule off.
-7. The final update also carries the levels exceeded 10, 50 and 90 % of the time (each
+7. The final update also carries the levels exceeded 5, 10, 50 and 90 % of the time (each
    contributor a line of Kurze's Poisson statistics at its own lambda, the sum drawn with
-   stratified draws seeded by the click) and the share of residents expected to be highly
-   annoyed (WHO 2018 curves per source, road traffic's intermittency credit, annoyance
-   equivalents).
+   stratified draws seeded by the click) and the loudness N5 per period: Zwicker's loudness
+   (ISO 532-1, sone) of the received third-octave spectrum (each ground layer's octave bands as
+   its evaluated pieces arrive, the flights' as the loudest flight's Doc 29 spectral classes
+   through the place's air) set to the level exceeded 5 % of the time.
 
 ## Web
 

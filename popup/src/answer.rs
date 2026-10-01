@@ -19,6 +19,8 @@ use crate::selection::{LayerSelection, select};
 use crate::update::{Statistics, Update, empty_answer, layer_answers, loudest_contributors};
 use physics::bands::PERIODS;
 use physics::bound::receiver_bound;
+use physics::doc29::atmosphere::{class_spectrum_at, place_rates_db_per_m};
+use physics::doc29::profiles_generated::{noise_class_of, profile_idx};
 use physics::weather::PlaceWeather;
 use rayon::prelude::*;
 use std::cell::OnceCell;
@@ -412,27 +414,29 @@ pub fn answer(
                 lat.to_bits() ^ lon.to_bits().rotate_left(32),
             )
         });
-        let annoyance = percentiles.map(|levels| {
-            let layer_lden: Vec<(Layer, f64)> = selections
-                .iter()
-                .map(|selection| {
-                    let lden = crate::candidates::lden_weighted(&selection.answer_energy());
-                    (selection.layer, physics::bands::level_db(lden))
-                })
-                .collect();
-            let road = selections
-                .iter()
-                .find(|selection| selection.layer == Layer::Road)
-                .map_or([0.0; PERIODS], LayerSelection::answer_energy);
-            crate::annoyance::annoyance(
-                &layer_lden,
-                crate::annoyance::day_evening_intermittency(levels.road_intermittency, road),
+        let loudness = percentiles.map(|levels| {
+            let flight = flights.loudest().into_iter().next();
+            let spectrum_db = flight.and_then(|flight| {
+                let class = noise_class_of(profile_idx(&flight.type_designator));
+                class_spectrum_at(
+                    usize::from(class),
+                    flight.closest_m.hypot(flight.altitude_m),
+                    &place_rates_db_per_m(&weather.alpha_db_per_km),
+                )
+            });
+            crate::loudness::loudness(
+                &selections,
+                &crate::loudness::FlightSound {
+                    energy: flight_energy,
+                    spectrum_db,
+                },
+                levels.l5,
             )
         });
         let update = Update {
             partial: !last_ring,
             percentiles,
-            annoyance,
+            loudness,
             lat,
             lon,
             frame,

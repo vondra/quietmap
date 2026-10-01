@@ -1,4 +1,4 @@
-//! The levels exceeded a share of the time per period (L10, L50, L90): every contributor a line of
+//! The levels exceeded a share of the time per period (L5, L10, L50, L90): every contributor a line of
 //! emitters of Kurze's statistics (`physics::percentile`) at its own lambda = (emitters per metre)
 //! x (its distance): vehicles on a road (the daily flow over the period's share and hours, over
 //! the speed), trains on a track (the period's trains over its hours, over the speed), airport
@@ -28,11 +28,12 @@ const MOVEMENT_SPEED_M_S: f64 = 10.0;
 /// Emitters closer than this are at this distance (m): a receiver on the line itself.
 const DISTANCE_MIN_M: f64 = 1.0;
 
-/// The levels (dB, `-inf` silent) exceeded 10, 50 and 90 % of the time per period, and road
+/// The levels (dB, `-inf` silent) exceeded 5, 10, 50 and 90 % of the time per period, and road
 /// traffic's intermittency ratio (Wunderli et al. 2016): the share of its sound energy that comes
 /// while its level stands more than 3 dB above its own mean (NaN without road traffic).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Percentiles {
+    pub l5: [f64; PERIODS],
     pub l10: [f64; PERIODS],
     pub l50: [f64; PERIODS],
     pub l90: [f64; PERIODS],
@@ -164,6 +165,7 @@ pub fn percentiles(
     });
     let mut random = Random::new(seed);
     let mut result = Percentiles {
+        l5: [f64::NEG_INFINITY; PERIODS],
         l10: [f64::NEG_INFINITY; PERIODS],
         l50: [f64::NEG_INFINITY; PERIODS],
         l90: [f64::NEG_INFINITY; PERIODS],
@@ -217,6 +219,7 @@ pub fn percentiles(
                 f64::NEG_INFINITY
             }
         };
+        result.l5[p] = level(0.05);
         result.l10[p] = level(0.1);
         result.l50[p] = level(0.5);
         result.l90[p] = level(0.9);

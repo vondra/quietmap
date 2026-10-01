@@ -15,6 +15,7 @@ pub mod doc29;
 pub mod emission;
 pub mod foliage;
 pub mod line;
+pub mod loudness;
 pub mod percentile;
 pub mod profile;
 pub mod ray;

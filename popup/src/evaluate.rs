@@ -1,5 +1,5 @@
 //! The full physics of one source at the receiver: a line piece through the point-sum quadrature,
-//! each node on its own ray, or a point on one ray; received A-weighted energy per period,
+//! each node on its own ray, or a point on one ray; received A-weighted energy per period and band,
 //! including the receiver reflection.
 
 use crate::candidates::Candidate;
@@ -81,6 +81,14 @@ pub fn trace(
     ))
 }
 
+/// Received A-weighted energy per period and octave band.
+pub type Bands = [[f64; BANDS]; PERIODS];
+
+/// The per-period sums of band energies.
+pub fn period_sums(bands: &Bands) -> [f64; PERIODS] {
+    bands.map(|period| period.iter().sum())
+}
+
 /// Received A-weighted energy per period of one candidate with its attribute.
 pub fn received_energy(
     receiver: &Receiver,
@@ -88,9 +96,19 @@ pub fn received_energy(
     source: &SourceAttribute,
     scratch: &mut Scratch,
 ) -> Result<[f64; PERIODS], String> {
+    received_bands(receiver, candidate, source, scratch).map(|bands| period_sums(&bands))
+}
+
+/// Received A-weighted energy per period and band of one candidate with its attribute.
+pub fn received_bands(
+    receiver: &Receiver,
+    candidate: &Candidate,
+    source: &SourceAttribute,
+    scratch: &mut Scratch,
+) -> Result<Bands, String> {
     let emission = &source.energy;
     let reflection = energy(receiver.reflection_db);
-    let mut received = [0.0; PERIODS];
+    let mut received = [[0.0; BANDS]; PERIODS];
     let ends = ray_ends(receiver, source);
     let [a, b] = candidate.ends_m;
     if !candidate.line {
@@ -102,12 +120,11 @@ pub fn received_energy(
             .max(1.0);
         let divergence = 1.0 / (distance * distance * energy(POINT_DIVERGENCE_OFFSET_DB));
         for (period, total) in received.iter_mut().enumerate() {
-            *total = divergence
-                * (0..BANDS)
-                    .map(|band| emission[period][band] * transfer[period][band])
-                    .sum::<f64>();
+            for (band, value) in total.iter_mut().enumerate() {
+                *value = divergence * emission[period][band] * transfer[period][band] * reflection;
+            }
         }
-        return Ok(received.map(|e| e * reflection));
+        return Ok(received);
     }
     let altitude = |end: usize| candidate.ground_m[end] + source.height_m - receiver.altitude_m;
     let [x, y] = receiver.position;
@@ -144,16 +161,15 @@ pub fn received_energy(
             a[1] + fraction * (b[1] - a[1]),
         ];
         let transfer = ray(receiver, point, node.obstacles_on_ray, &ends, scratch)?;
-        let weight = node.weight_rad * divergence;
+        let weight = node.weight_rad * divergence * reflection;
         for (period, total) in received.iter_mut().enumerate() {
-            *total += weight
-                * (0..BANDS)
-                    .map(|band| emission[period][band] * transfer[period][band])
-                    .sum::<f64>();
+            for (band, value) in total.iter_mut().enumerate() {
+                *value += weight * emission[period][band] * transfer[period][band];
+            }
         }
     }
     scratch.nodes = nodes;
-    Ok(received.map(|e| e * reflection))
+    Ok(received)
 }
 
 /// The transfer of one ray from `point` to the receiver.
