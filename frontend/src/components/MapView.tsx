@@ -17,6 +17,10 @@ import type { SelectedLocation } from './FlyToLocation'
 import type { PopupUpdate } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
+// The noise model's inputs whose licences ask for credit (OpenStreetMap's ODbL above all).
+const NOISE_DATA_CREDITS =
+  'Noise model: &copy; OpenStreetMap contributors (ODbL), Copernicus ERA5, WorldClim, IEA, Eurostat, EU TEN-T'
+
 interface MapViewProps {
   isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean
   selectedLocation?: SelectedLocation | null
@@ -116,8 +120,8 @@ export default function MapView({
       fadeDuration={0}
       maxZoom={16}
       // Compact ⓘ: expands to the basemap sources' own credits (OSM/Carto —
-      // their licenses require on-map attribution).
-      attributionControl={{ compact: true }}
+      // their licenses require on-map attribution) and the noise model's data.
+      attributionControl={{ compact: true, customAttribution: NOISE_DATA_CREDITS }}
       // Defaults (deceleration 2500, maxSpeed 1400) give ~1.25 s inertia on a medium
       // flick — too sluggish. 4000 / 1100 lands around ~780 ms, between the default
       // and a Google-Maps-snappy feel.
