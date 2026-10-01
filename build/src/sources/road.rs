@@ -213,6 +213,65 @@ fn country_flows(
     split(total * scale, prior[3] * scale, [share(0), share(1)])
 }
 
+/// Battery-electric cars in each country's car fleet (% of the stock, IEA Global EV Data Explorer
+/// 2025, 2024 stock: EV stock share times the battery-electric part of the EV stock; CC BY 4.0).
+/// Countries the explorer does not list take none. Their tyres roll as any car's, their drive
+/// adds no propulsion noise: Norway's 27.6 % takes 0.23 dB off a 50 km/h car flow.
+const BATTERY_ELECTRIC_PERCENT: [([u8; 2], f64); 44] = [
+    (*b"AE", 2.33),
+    (*b"AT", 3.85),
+    (*b"AU", 1.56),
+    (*b"BE", 4.09),
+    (*b"BR", 0.31),
+    (*b"CA", 2.35),
+    (*b"CH", 4.60),
+    (*b"CL", 0.19),
+    (*b"CN", 6.87),
+    (*b"CO", 0.45),
+    (*b"CR", 1.96),
+    (*b"DE", 3.37),
+    (*b"DK", 12.56),
+    (*b"ES", 0.84),
+    (*b"FI", 3.81),
+    (*b"FR", 3.08),
+    (*b"GB", 3.79),
+    (*b"GR", 0.44),
+    (*b"ID", 0.59),
+    (*b"IL", 4.21),
+    (*b"IN", 0.48),
+    (*b"IS", 9.69),
+    (*b"IT", 0.69),
+    (*b"JO", 0.84),
+    (*b"JP", 0.54),
+    (*b"KH", 0.47),
+    (*b"KR", 2.32),
+    (*b"LA", 1.58),
+    (*b"MX", 0.20),
+    (*b"MY", 0.27),
+    (*b"NL", 6.02),
+    (*b"NO", 27.64),
+    (*b"NZ", 2.28),
+    (*b"PH", 0.14),
+    (*b"PL", 0.67),
+    (*b"PT", 2.27),
+    (*b"SE", 7.52),
+    (*b"SG", 4.48),
+    (*b"TH", 0.85),
+    (*b"TR", 1.29),
+    (*b"US", 1.86),
+    (*b"UY", 0.97),
+    (*b"UZ", 0.17),
+    (*b"VN", 4.39),
+];
+
+/// The battery-electric share (fraction) of a country's cars.
+fn electric_share(country_iso: u16) -> f64 {
+    let iso = country_iso.to_le_bytes();
+    BATTERY_ELECTRIC_PERCENT
+        .binary_search_by(|(code, _)| code[..].cmp(&iso[..]))
+        .map_or(0.0, |index| BATTERY_ELECTRIC_PERCENT[index].1 / 100.0)
+}
+
 /// Day/evening/night shares of the daily flow: motorways, trunks and their links; other roads.
 const MOTORWAY_PERIOD_SHARES: [f64; PERIODS] = [0.65, 0.20, 0.15];
 const URBAN_PERIOD_SHARES: [f64; PERIODS] = [0.70, 0.18, 0.12];
@@ -444,6 +503,7 @@ pub fn convert(
                 2 => &[(1.0, -1.0)],
                 _ => &[(1.0, 1.0)],
             };
+            let electric = electric_share(country.value(row));
             let emission: [[f64; BANDS]; PERIODS] = std::array::from_fn(|period| {
                 let flows: Vec<CategoryFlow> = directions
                     .iter()
@@ -455,6 +515,7 @@ pub fn convert(
                             category: categories[c],
                             slope_percent: sign * slope,
                             junction: stop,
+                            electric_share: electric,
                         })
                     })
                     .collect();
@@ -583,6 +644,14 @@ mod tests {
             close(mopeds[0], 0.0) && close(mopeds[3], 990.0),
             "{mopeds:?}"
         );
+    }
+
+    #[test]
+    fn countries_drive_their_battery_electric_shares() {
+        let code = |iso: &[u8; 2]| u16::from_le_bytes(*iso);
+        assert!((electric_share(code(b"NO")) - 0.2764).abs() < 1e-12);
+        assert!((electric_share(code(b"DE")) - 0.0337).abs() < 1e-12);
+        assert_eq!(electric_share(code(b"CZ")), 0.0, "not listed");
     }
 
     #[test]

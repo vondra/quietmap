@@ -1,8 +1,9 @@
 //! CNOSSOS-EU road traffic emission (Directive 2015/996 Annex II 2.2 with the coefficients of
 //! Delegated Directive 2021/1226): rolling and propulsion noise per vehicle category and octave
 //! band, summed into the sound power per metre of a traffic flow, with the road gradient's
-//! propulsion term (2.2.4) and the stop-and-go terms near traffic lights and roundabouts (2.2.5).
-//! There are no temperature or studded-tyre terms.
+//! propulsion term (2.2.4), the stop-and-go terms near traffic lights and roundabouts (2.2.5) and
+//! the air temperature's rolling term (2.2.2). Battery-electric cars, an open category of the
+//! method, roll like any car and drive without propulsion noise. There is no studded-tyre term.
 
 use crate::bands::BANDS;
 
@@ -87,6 +88,9 @@ pub struct CategoryFlow {
     pub slope_percent: f64,
     /// The nearest junction that stops and starts the flow, and the distance to it (m).
     pub junction: Option<(Junction, f64)>,
+    /// Of a light vehicle flow, the share driving on batteries: their tyres roll as any car's,
+    /// their drive adds no propulsion noise. Other categories ignore it.
+    pub electric_share: f64,
 }
 
 /// The junctions of CNOSSOS-EU 2.2.5 (Table F-3: k = 1 and 2).
@@ -185,10 +189,16 @@ pub fn line_emission_db(
         let rolling_correction = surface_correction_db
             + junction_rolling
             + temperature_correction_db(flow.category, air_temperature_c);
+        let combustion = match flow.category {
+            VehicleCategory::Light => 1.0 - flow.electric_share.clamp(0.0, 1.0),
+            _ => 1.0,
+        };
         for band in 0..BANDS {
             let (a_p, b_p) = coefficients.propulsion;
-            let mut vehicle = 10f64
-                .powf((a_p[band] + b_p[band] * relative + gradient + junction_propulsion) / 10.0);
+            let mut vehicle = combustion
+                * 10f64.powf(
+                    (a_p[band] + b_p[band] * relative + gradient + junction_propulsion) / 10.0,
+                );
             if let Some((a_r, b_r)) = coefficients.rolling {
                 vehicle +=
                     10f64.powf((a_r[band] + b_r[band] * log_ratio + rolling_correction) / 10.0);
@@ -233,6 +243,31 @@ mod tests {
         assert!((0.7..0.85).contains(&prague), "{prague}");
     }
 
+    /// Battery-electric cars keep their rolling noise only: a 50 km/h car flow all electric reads
+    /// 0.9 dB below a combustion one, at 30 km/h 2.2 dB; Norway's 27.6 % of its fleet takes
+    /// 0.23 dB off at 50 km/h. Heavy vehicles ignore the share.
+    #[test]
+    fn electric_cars_roll_without_propulsion_noise() {
+        let level = |speed: f64, electric_share: f64, category| {
+            a_weighted(
+                &[CategoryFlow {
+                    electric_share,
+                    ..flow(500.0, speed, category)[0]
+                }],
+                0.0,
+            )
+        };
+        let light = VehicleCategory::Light;
+        let at_50 = level(50.0, 0.0, light) - level(50.0, 1.0, light);
+        let at_30 = level(30.0, 0.0, light) - level(30.0, 1.0, light);
+        let norway = level(50.0, 0.0, light) - level(50.0, 0.276, light);
+        assert!((at_50 - 0.9).abs() < 0.1, "{at_50}");
+        assert!((at_30 - 2.24).abs() < 0.05, "{at_30}");
+        assert!((norway - 0.23).abs() < 0.03, "{norway}");
+        let heavy = VehicleCategory::Heavy;
+        assert_eq!(level(50.0, 1.0, heavy), level(50.0, 0.0, heavy));
+    }
+
     fn a_weighted(flows: &[CategoryFlow], surface: f64) -> f64 {
         level_db(a_weighted_energy(&line_emission_db(
             flows,
@@ -251,6 +286,7 @@ mod tests {
             category,
             slope_percent: 0.0,
             junction: None,
+            electric_share: 0.0,
         }]
     }
 
@@ -284,6 +320,7 @@ mod tests {
                     category: VehicleCategory::Heavy,
                     slope_percent: slope,
                     junction: None,
+                    electric_share: 0.0,
                 }],
                 0.0,
             )
@@ -307,6 +344,7 @@ mod tests {
                         category,
                         slope_percent: s,
                         junction: None,
+                        electric_share: 0.0,
                     })
                 })
                 .collect();
@@ -356,6 +394,7 @@ mod tests {
                 category,
                 slope_percent: 0.0,
                 junction,
+                electric_share: 0.0,
             });
             a_weighted(&flows, 0.0)
         };
@@ -376,6 +415,7 @@ mod tests {
                     category: VehicleCategory::Light,
                     slope_percent: 0.0,
                     junction,
+                    electric_share: 0.0,
                 }],
                 0.0,
             )
