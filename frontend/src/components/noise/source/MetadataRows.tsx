@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
 import type { Contributor, ContributorMetadata } from '../../../types/noise'
 import { fmt, fmtCompact, fmtInt, txtTable, type TableRow } from '../../../utils/formatters'
 import { MetricLabel, DataPoint } from '../noise-tooltips'
-import { fieldText, lineRow, subtypeLabel } from '../shared'
+import { fieldText, lineRow } from '../shared'
 import { railTrafficDescription, railTrafficLabel, roadCategoryEstimated, type RailTraffic } from '../provenance'
 
 function num(m: ContributorMetadata, key: string): number | null {
@@ -135,24 +135,34 @@ function RailwayRows({ m }: { m: ContributorMetadata }) {
   )
 }
 
+/** Building-layer types that are open-air activity areas, not buildings (no floors, no height). */
+const ACTIVITY_AREAS = new Set([
+  'padel_court', 'tennis_court', 'ball_court', 'playground', 'swimming_pool', 'outdoor_seating',
+  'stadium', 'sports_pitch', 'car_park', 'street_parking', 'motorsport', 'motorsport_circuit',
+  'motorsport_motocross', 'motorsport_kart', 'motorsport_speedway', 'motorsport_trial', 'shooting',
+  'shooting_rifle', 'shooting_pistol', 'shooting_shotgun',
+])
+
+// Only what the title does not already say: the type is the title (or the class line above), so the
+// line lists the floors, mapped height and footprint the data holds, and no line without them.
 function BuildingRows({ m }: { m: ContributorMetadata }) {
-  const typeLabel = subtypeLabel('building', text(m, 'building_type'))
+  const type = text(m, 'building_type')
   const height = num(m, 'height_m') ?? 0
   const floors = num(m, 'floors') ?? 0
   const area = num(m, 'area_m2') ?? 0
   const address = text(m, 'address')
-  const buildingText = txtTable([
-    ['Type', typeLabel],
-    ...(height > 0 ? [['Height', `${height.toFixed(1)} m`] as [string, string]] : []),
-    ...(floors > 1 ? [['Floors', String(floors)] as [string, string]] : []),
-    ...(area > 0 ? [['Footprint', `${fmtInt(area)} m²`] as [string, string]] : []),
-    ...(address ? ['', `Address: ${address}`] : []),
-  ], 14, 20)
-  // The collapsed line stays short (no wrap): type, plus floors only when multi-storey.
+  const activity = ACTIVITY_AREAS.has(type)
+  const facts = [
+    ...(!activity && floors > 1 ? [`${floors} floors`] : []),
+    ...(!activity && height > 0 ? [`${height.toFixed(0)} m high`] : []),
+    ...(area > 0 ? [`${fmtInt(area)} m²`] : []),
+  ]
+  if (!facts.length && !address) return null
+  const detail = txtTable([...facts, ...(address ? ['', `Address: ${address}`] : [])], 14, 20)
   return lineRow(
-    'Building',
-    <DataPoint title="Building metadata" text={buildingText}>
-      {typeLabel}{floors > 1 ? ` · ${floors} fl.` : ''}
+    activity ? 'Area' : 'Building',
+    <DataPoint title={activity ? 'Activity area' : 'Building'} text={detail}>
+      {facts.join(' · ') || address}
     </DataPoint>,
   )
 }
@@ -174,10 +184,12 @@ function IndustrialRows({ m }: { m: ContributorMetadata }) {
       ? ['', 'Large sites are split into grid points;', 'each carries its area share', 'of the total sound power.']
       : []),
   ], 16, 16)
+  // The site type is the title (or the class line above): the line shows its area, if known.
+  if (area <= 0) return null
   return lineRow(
-    'Industrial',
+    'Site',
     <DataPoint title="Industrial site metadata" text={siteText}>
-      {area > 0 ? `${fmtInt(area)} m²` : words(text(m, 'source_type'))}
+      {`${fmtInt(area)} m²`}
     </DataPoint>,
   )
 }
