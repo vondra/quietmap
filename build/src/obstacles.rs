@@ -10,61 +10,85 @@ use crate::structures::read_square;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tiles::Kind;
 use tiles::geo::{GlobalSteps, STEPS_PER_TILE, TileId};
 use tiles::obstacles::{MAXIMUM_HEIGHT_M, MAXIMUM_VERTICES, Outline, encode, tiles_crossed};
 
 /// z12 tiles per z9 square side.
 const TILES_PER_SQUARE_SIDE: u32 = 8;
+/// Squares built at once: each holds the outlines of nine squares (up to about 2 GB in a dense
+/// city), and its reading is serial.
+const SQUARES_AT_ONCE: usize = 8;
 
-/// Writes the obstacles tiles of `squares`; returns the number written (empty tiles get no file).
+/// Writes the obstacles tiles of `squares`, [`SQUARES_AT_ONCE`] at a time; returns the number
+/// written (empty tiles get no file).
 pub fn build(dev4: &Dev4, squares: &[Square], out: &Path) -> Result<usize, String> {
-    let mut written = 0;
-    for &square in squares {
-        let side = i64::from(TILES_PER_SQUARE_SIDE) * STEPS_PER_TILE as i64;
-        let (west, north) = (i64::from(square.x) * side, i64::from(square.y) * side);
-        // An outline can cross the square's cells only if its box meets the square's.
-        let near = |vertices: &[GlobalSteps]| {
-            let (min, max) =
-                vertices
-                    .iter()
-                    .fold(([i64::MAX; 2], [i64::MIN; 2]), |(min, max), v| {
-                        (
-                            [min[0].min(v.x), min[1].min(v.y)],
-                            [max[0].max(v.x), max[1].max(v.y)],
-                        )
-                    });
-            min[0] <= west + side && max[0] >= west && min[1] <= north + side && max[1] >= north
-        };
-        let mut outlines = Vec::new();
-        for owner in square.with_neighbours() {
-            outlines.extend(read_square(dev4, owner, west + side / 2, &near)?);
-        }
-        let crossed: Vec<Vec<TileId>> = outlines
-            .par_iter()
-            .map(|outline| tiles_crossed(&outline.vertices))
-            .collect();
-        let mut members: HashMap<TileId, Vec<usize>> = HashMap::new();
-        for (index, tiles) in crossed.iter().enumerate() {
-            for &tile in tiles
-                .iter()
-                .filter(|tile| (tile.x >> 3, tile.y >> 3) == (square.x, square.y))
-            {
-                members.entry(tile).or_default().push(index);
-            }
-        }
-        drop(crossed);
-        written += members
-            .par_iter()
-            .map(|(&tile, members)| {
-                let bytes = encode(&tile_outlines(tile, &outlines, members)?);
-                write_tile(out, tile, Kind::Obstacles, &bytes).map(|()| 1)
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..SQUARES_AT_ONCE)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut written = 0;
+                    while let Some(&square) = squares.get(next.fetch_add(1, Ordering::Relaxed)) {
+                        written += build_square(dev4, square, out)?;
+                    }
+                    Ok::<usize, String>(written)
+                })
             })
-            .collect::<Result<Vec<usize>, String>>()?
+            .collect();
+        workers
             .into_iter()
-            .sum::<usize>();
+            .map(|worker| {
+                worker
+                    .join()
+                    .map_err(|_| "an obstacles worker panicked".to_string())?
+            })
+            .sum()
+    })
+}
+
+/// Writes the obstacles tiles of one square; returns the number written.
+fn build_square(dev4: &Dev4, square: Square, out: &Path) -> Result<usize, String> {
+    let side = i64::from(TILES_PER_SQUARE_SIDE) * STEPS_PER_TILE as i64;
+    let (west, north) = (i64::from(square.x) * side, i64::from(square.y) * side);
+    // An outline can cross the square's cells only if its box meets the square's.
+    let near = |vertices: &[GlobalSteps]| {
+        let (min, max) = vertices
+            .iter()
+            .fold(([i64::MAX; 2], [i64::MIN; 2]), |(min, max), v| {
+                (
+                    [min[0].min(v.x), min[1].min(v.y)],
+                    [max[0].max(v.x), max[1].max(v.y)],
+                )
+            });
+        min[0] <= west + side && max[0] >= west && min[1] <= north + side && max[1] >= north
+    };
+    let mut outlines = Vec::new();
+    for owner in square.with_neighbours() {
+        outlines.extend(read_square(dev4, owner, west + side / 2, &near)?);
     }
-    Ok(written)
+    let crossed: Vec<Vec<TileId>> = outlines
+        .par_iter()
+        .map(|outline| tiles_crossed(&outline.vertices))
+        .collect();
+    let mut members: HashMap<TileId, Vec<usize>> = HashMap::new();
+    for (index, tiles) in crossed.iter().enumerate() {
+        for &tile in tiles
+            .iter()
+            .filter(|tile| (tile.x >> 3, tile.y >> 3) == (square.x, square.y))
+        {
+            members.entry(tile).or_default().push(index);
+        }
+    }
+    drop(crossed);
+    members
+        .par_iter()
+        .map(|(&tile, members)| {
+            let bytes = encode(&tile_outlines(tile, &outlines, members)?);
+            write_tile(out, tile, Kind::Obstacles, &bytes).map(|()| 1)
+        })
+        .sum()
 }
 
 /// A tile's outlines in its int16 frame, sorted by footprint id with each footprint's rings in
