@@ -40,7 +40,8 @@ export function TopFlightsTable({ flights, onHighlightFlight }: {
   onHighlightFlight: (key: string | null) => void
 }) {
   if (!flights.length) return null
-  // Only the type name wraps; should a row still not fit, the table scrolls sideways, never the popup.
+  // A row is one line: a long type name ends in an ellipsis (whole in its tooltip); should the
+  // numbers still not fit, the table scrolls sideways, never the popup.
   return (
     <div className="mt-2 overflow-x-auto">
       <table className="w-full text-[10px] whitespace-nowrap [&_tr>*+*]:pl-2 [&_td]:align-baseline">
@@ -81,7 +82,7 @@ export function TopFlightsTable({ flights, onHighlightFlight }: {
                     {cells.date}
                   </HoverText>
                 </td>
-                <td className="whitespace-normal">
+                <td className="max-w-0 truncate">
                   <HoverText title={cells.aircraftTitle}>
                     <a href={cells.href} target="_blank" rel="noopener noreferrer" className="text-sky-700 hover:underline">
                       {cells.aircraft}
