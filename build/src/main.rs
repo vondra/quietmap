@@ -242,7 +242,18 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let days = boxes::shuffle::shuffled_days(shuffled)?;
             let weather = read_weather(options.get("weather")?)?;
             eprintln!("aircraft boxes: {} days", days.len());
+            // `--progress DIR`: a marker per square built, so that a rerun resumes.
+            let progress = options.optional("progress").map(PathBuf::from);
+            if let Some(progress) = &progress {
+                std::fs::create_dir_all(progress).map_err(|error| error.to_string())?;
+            }
             for square in parse_squares(options.get("squares")?)? {
+                let marker = progress.as_ref().map(|progress| {
+                    progress.join(format!("{}-{}-{}", rule.kind.name(), square.x, square.y))
+                });
+                if marker.as_ref().is_some_and(|marker| marker.exists()) {
+                    continue;
+                }
                 let started = std::time::Instant::now();
                 let (tiles, written) = boxes::build_square(
                     (shuffled, &days),
@@ -257,6 +268,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     square.y,
                     started.elapsed().as_secs_f64()
                 );
+                if let Some(marker) = &marker {
+                    std::fs::write(marker, b"").map_err(|error| error.to_string())?;
+                }
             }
             Ok(())
         }
