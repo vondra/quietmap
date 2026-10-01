@@ -3,9 +3,10 @@
 //! Until the builders read the sources themselves, `qm-build dev4` converts squares of the dev4
 //! z9 tree: `qm-build dev4 --prepared DIR --rasters DIR --out DIR --squares X:Y[,X:Y..]
 //! [--kinds terrain,obstacles,sources] [--airport-traffic DIR] [--temperature FILE] [--tent FILE]
-//! [--national-dem FILE,..]` (sources need the airport traffic, the yearly temperature of
-//! `fetch/worldclim.sh` and the TEN-T freight lines of `fetch/tent.sh`; terrain lays the national
-//! models over dev4's heights);
+//! [--road-traffic DIR] [--national-dem FILE,..]` (sources need the airport traffic, the yearly
+//! temperature of `fetch/worldclim.sh` and the TEN-T freight lines of `fetch/tent.sh`, and take
+//! the roads' building traffic of `qm-build traffic` when given; terrain lays the national models
+//! over dev4's heights);
 //! `qm-build weather --rasters DIR --out FILE` cuts the global weather table; `qm-build complete
 //! --out DIR --note TEXT` writes the completion marker last.
 //!
@@ -17,6 +18,9 @@
 //! `qm-build airport-traffic --prepared DIR --segments DIR --days D,.. [--increment-days D,..]
 //! --squares X:Y[,X:Y..] --out DIR` projects the window's ground legs onto the aeroway lines of
 //! the squares (and their neighbours) once, one traffic file per square.
+//!
+//! Roads: `qm-build traffic --prepared DIR --squares X:Y[,X:Y..] --out DIR` routes the buildings'
+//! trip ends down the local streets and grids them, one file per square, for the sources.
 
 mod aircraft;
 mod airport;
@@ -30,6 +34,7 @@ mod screening;
 mod sources;
 mod structures;
 mod terrain;
+mod traffic;
 mod weather;
 
 use dev4::{Dev4, Square};
@@ -175,7 +180,10 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             &climate::Temperature::load(Path::new(options.get("temperature")?))?,
                             &sources::tent::FreightNetwork::load(Path::new(options.get("tent")?))?,
                         ),
-                        Path::new(options.get("airport-traffic")?),
+                        (
+                            Path::new(options.get("airport-traffic")?),
+                            options.optional("road-traffic").map(Path::new),
+                        ),
                         &squares,
                         &out,
                     )?,
@@ -386,6 +394,19 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     })
                 );
             }
+            Ok(())
+        }
+        "traffic" => {
+            let dev4 = Dev4 {
+                prepared: options.get("prepared")?.into(),
+                rasters: PathBuf::new(),
+            };
+            let started = std::time::Instant::now();
+            let written = traffic::build(&dev4, &parse_squares(options.get("squares")?)?, &out)?;
+            eprintln!(
+                "traffic: {written} squares in {:.1} s",
+                started.elapsed().as_secs_f64()
+            );
             Ok(())
         }
         "airport-traffic" => {

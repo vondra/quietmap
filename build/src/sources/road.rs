@@ -4,6 +4,7 @@
 use super::country_speeds::COUNTRY_SPEEDS;
 use super::road_junctions::{Junctions, traffic_signals};
 use super::road_slope::{SquareHeights, WayRow, row_slopes};
+use super::road_traffic::{BuildingTraffic, local_km};
 use super::{Converted, Reach, group_key, split_at_tile_edges};
 use crate::climate::Temperature;
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
@@ -91,6 +92,10 @@ const COUNTRY_CLASS_SHARES: [([u8; 2], ClassShares); 3] = [
 ];
 /// dev4's source id of a class prior (no dataset).
 const PRIOR_SOURCE_ID: u16 = 0;
+/// dev4's service-tree heuristic of local streets (a background plus routed trips).
+const SERVICE_TREE_SOURCE_ID: u16 = 11;
+/// The source id this converter gives a row whose traffic the buildings model.
+const BUILDING_TRAFFIC_SOURCE_ID: u16 = 30;
 /// dev4's `traffic_estimated` bits of a row whose four categories all come from a prior.
 const ALL_CATEGORIES_ESTIMATED: u8 = 15;
 /// dev4's sources whose category split is a guess, not a count: the class priors (0), the
@@ -211,6 +216,31 @@ fn country_flows(
         percent / 100.0
     };
     split(total * scale, prior[3] * scale, [share(0), share(1)])
+}
+
+/// The daily flows (light, medium, heavy, motorcycles) of a modelled `total`: the counted
+/// medium and heavy shares of the class, and the prior's share of motorcycles.
+fn modelled_flows(total: f64, prior: [f64; 4], class: usize, built_up: u8) -> [f64; 4] {
+    let prior_total = prior.iter().sum::<f64>();
+    let motorcycles = if prior_total > 0.0 {
+        total * prior[3] / prior_total
+    } else {
+        0.0
+    };
+    let [medium, heavy] = counted_shares(class, built_up).map(|share| share * total);
+    [
+        (total - medium - heavy - motorcycles).max(0.0),
+        medium,
+        heavy,
+        motorcycles,
+    ]
+}
+
+/// Whether dev4 guessed a row's traffic: all four categories estimated by a class prior, a
+/// country default, a classification fallback or the service tree.
+fn guessed(source_id: u16, estimated: u8) -> bool {
+    estimated == ALL_CATEGORIES_ESTIMATED
+        && (GUESSED_SPLIT_SOURCES.contains(&source_id) || source_id == SERVICE_TREE_SOURCE_ID)
 }
 
 /// Battery-electric cars in each country's car fleet (% of the stock, IEA Global EV Data Explorer
@@ -355,9 +385,10 @@ impl<'a> Columns<'a> {
 }
 
 /// Converts the road rows of one dev4 square, or with `reach` only those reaching into another
-/// square; returns how many rows emit.
+/// square, the guessed traffic replaced by the building traffic under `traffic` when given;
+/// returns how many rows emit.
 pub fn convert(
-    (dev4, temperature): (&Dev4, &Temperature),
+    (dev4, temperature, traffic): (&Dev4, &Temperature, Option<&std::path::Path>),
     square: Square,
     reach: Option<Reach>,
     out: &mut Vec<Converted>,
@@ -397,8 +428,29 @@ pub fn convert(
     }
     let latitude = stops.first().map_or(0.0, |(place, _)| place.0);
     let junctions = Junctions::new(latitude, stops);
+    let building_traffic = match traffic {
+        Some(dir) => {
+            let mut lengths = Vec::new();
+            for batch in &table.batches {
+                let c = Columns { batch };
+                let class = c.get("road_class")?.as_primitive::<UInt8Type>();
+                let length = c
+                    .get("length_m")?
+                    .as_primitive::<arrow_array::types::Float32Type>();
+                lengths.extend(
+                    (0..batch.num_rows())
+                        .map(|row| (class.value(row), f64::from(length.value(row)))),
+                );
+            }
+            BuildingTraffic::load(dir, square, local_km(lengths.into_iter()))?
+        }
+        None => None,
+    };
     let mut emitting = 0;
+    let mut first_row = 0;
     for batch in &table.batches {
+        let batch_first_row = first_row;
+        first_row += batch.num_rows();
         let c = Columns { batch };
         let i32s = |name| c.get(name).map(|a| a.as_primitive::<Int32Type>());
         let u8s = |name| c.get(name).map(|a| a.as_primitive::<UInt8Type>());
@@ -472,14 +524,39 @@ pub fn convert(
             }
             let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
             let prior: [f64; 4] = std::array::from_fn(|category| aadt[category].value(row));
-            let daily = country_flows(
-                prior,
-                class_index,
-                built_up.value(row),
-                country.value(row),
-                source_id.value(row),
-                estimated.value(row),
+            let middle_z30 = (
+                ((i64::from(start_x.value(row)) + i64::from(end_x.value(row))) / 2) as i32,
+                ((i64::from(start_y.value(row)) + i64::from(end_y.value(row))) / 2) as i32,
             );
+            let modelled = building_traffic
+                .as_ref()
+                .filter(|_| guessed(source_id.value(row), estimated.value(row)))
+                .and_then(|traffic| {
+                    traffic.total(
+                        batch_first_row + row,
+                        (
+                            class.value(row),
+                            built_up.value(row),
+                            oneway.value(row) != 0,
+                        ),
+                        (
+                            middle_z30,
+                            country.value(row),
+                            source_id.value(row) == PRIOR_SOURCE_ID,
+                        ),
+                    )
+                });
+            let daily = match modelled {
+                Some(total) => modelled_flows(total, prior, class_index, built_up.value(row)),
+                None => country_flows(
+                    prior,
+                    class_index,
+                    built_up.value(row),
+                    country.value(row),
+                    source_id.value(row),
+                    estimated.value(row),
+                ),
+            };
             let scale =
                 daily.iter().sum::<f64>() / prior.iter().sum::<f64>().max(f64::MIN_POSITIVE);
             if tunnel.value(row) || daily.iter().sum::<f64>() <= 0.0 {
@@ -585,7 +662,11 @@ pub fn convert(
                 lanes.value(row),
                 oneway.value(row) != 0,
                 bridge.value(row),
-                source_id.value(row),
+                if modelled.is_some() {
+                    BUILDING_TRAFFIC_SOURCE_ID
+                } else {
+                    source_id.value(row)
+                },
             ]);
             let key = if name.is_empty() && reference.is_empty() {
                 group_key(&["road-way", &osm_id.value(row).to_string()])
