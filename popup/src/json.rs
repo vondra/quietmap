@@ -147,7 +147,6 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 "p": trace.favourable_probability.map(round),
                 "boundary_db": trace.boundary_db.map(round),
                 "without_ground_db": trace.without_ground_db.map(round),
-                "foliage_db": trace.foliage_db.map(round),
                 "air_db": round(trace.air_db),
                 "path_difference_m": trace.path_difference_m.map(round),
             })

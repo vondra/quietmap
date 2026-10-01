@@ -19,8 +19,6 @@ pub struct Profile {
     pub ground_m: Vec<f64>,
     /// CNOSSOS G in [0, 1].
     pub ground_factor: Vec<f64>,
-    /// Canopy cover fraction in [0, 1].
-    pub forest_cover: Vec<f64>,
 }
 
 impl Profile {
@@ -30,7 +28,6 @@ impl Profile {
         fill_t_values(horizontal_m, &mut self.t);
         self.ground_m.clear();
         self.ground_factor.clear();
-        self.forest_cover.clear();
     }
 }
 

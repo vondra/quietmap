@@ -91,7 +91,6 @@ impl<'a> Ground<'a> {
             ])?;
             profile.ground_m.push(sample.height_m);
             profile.ground_factor.push(sample.ground_factor);
-            profile.forest_cover.push(sample.forest_cover);
         }
         Ok(())
     }

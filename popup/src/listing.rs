@@ -36,7 +36,6 @@ pub struct PieceTrace {
     pub favourable_probability: [f64; PERIODS],
     pub boundary_db: [f64; 2],
     pub without_ground_db: [f64; 2],
-    pub foliage_db: [f64; 2],
     pub air_db: f64,
     pub path_difference_m: [f64; 2],
 }
@@ -119,7 +118,6 @@ pub fn list_pieces(
                 boundary_db: [0, 1].map(|state| weighted(&terms.boundaries[state].attenuation_db)),
                 without_ground_db: [0, 1]
                     .map(|state| weighted(&terms.boundaries[state].without_ground_db)),
-                foliage_db: [0, 1].map(|state| weighted(&terms.foliage_db[state])),
                 air_db: weighted(&terms.air_db),
                 path_difference_m: [0, 1].map(|state| terms.boundaries[state].path_difference_m),
             });

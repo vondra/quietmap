@@ -1,7 +1,7 @@
 //! The upper bound of what one ground source can deliver at a receiver: free-field divergence at
 //! the closest horizontal distance, the least air absorption, the largest mixed ground and
 //! diffraction gain of CNOSSOS-EU and the receiver reflection. The popup skips sources only by
-//! this bound, so it must stay an upper bound of `ray` and `line` (foliage only attenuates).
+//! this bound, so it must stay an upper bound of `ray` and `line`.
 
 use crate::bands::{A_WEIGHTING_DB, BANDS, PERIODS, energy};
 use crate::line::{LINE_PERPENDICULAR_FLOOR_M, POINT_DIVERGENCE_LINEAR};

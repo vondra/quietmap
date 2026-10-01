@@ -19,7 +19,6 @@ fn profile() -> Profile {
         t: vec![0.0, 0.25, 0.3, 0.5, 0.75, 1.0],
         ground_m: vec![100.0, 102.0, 105.0, 101.0, 103.0, 100.0],
         ground_factor: vec![1.0, 0.5, 0.4, 0.0, 0.5, 1.0],
-        forest_cover: vec![0.0; 6],
     }
 }
 
@@ -142,7 +141,6 @@ fn overlapping_roofs_clip_in_closing_order_and_equal_exits_drop() {
         t: vec![0.0, 0.5, 1.0],
         ground_m: vec![100.0, 100.0, 100.0],
         ground_factor: vec![1.0, 0.5, 0.0],
-        forest_cover: vec![0.0; 3],
     };
     let crossings = [
         building(0.2, 6.0, 11),
@@ -181,7 +179,6 @@ fn flat(horizontal_m: f64) -> Profile {
     let n = profile.t.len();
     profile.ground_m = vec![200.0; n];
     profile.ground_factor = vec![0.5; n];
-    profile.forest_cover = vec![0.0; n];
     profile
 }
 
