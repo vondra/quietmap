@@ -2,8 +2,10 @@
 //!
 //! Until the builders read the sources themselves, `qm-build dev4` converts squares of the dev4
 //! z9 tree: `qm-build dev4 --prepared DIR --rasters DIR --out DIR --squares X:Y[,X:Y..]
-//! [--kinds terrain,obstacles,sources] [--airport-traffic DIR] [--national-dem FILE,..]` (sources
-//! need the airport traffic; terrain lays the national models over dev4's heights);
+//! [--kinds terrain,obstacles,sources] [--airport-traffic DIR] [--temperature FILE] [--tent FILE]
+//! [--national-dem FILE,..]` (sources need the airport traffic, the yearly temperature of
+//! `fetch/worldclim.sh` and the TEN-T freight lines of `fetch/tent.sh`; terrain lays the national
+//! models over dev4's heights);
 //! `qm-build weather --rasters DIR --out FILE` cuts the global weather table; `qm-build complete
 //! --out DIR --note TEXT` writes the completion marker last.
 //!
@@ -171,6 +173,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                         (
                             &dev4,
                             &climate::Temperature::load(Path::new(options.get("temperature")?))?,
+                            &sources::tent::FreightNetwork::load(Path::new(options.get("tent")?))?,
                         ),
                         Path::new(options.get("airport-traffic")?),
                         &squares,

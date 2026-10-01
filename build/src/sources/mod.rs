@@ -14,6 +14,7 @@ pub mod road;
 pub mod road_junctions;
 pub mod road_slope;
 pub mod ship;
+pub mod tent;
 
 use crate::climate::Temperature;
 use crate::dev4::{Dev4, Square};
@@ -21,6 +22,7 @@ use crate::output::write_tile;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use tent::FreightNetwork;
 use tiles::geo::{GlobalSteps, TileId};
 use tiles::sources::{Attribute, Piece, attribute_key, encode};
 use tiles::{COMPLETION_MARKER, Kind};
@@ -137,7 +139,7 @@ pub fn group_key(parts: &[&str]) -> u64 {
 /// square also converts its neighbours and keeps the sources its own tiles own (industry reads the
 /// neighbours itself, for its facility joins). Returns the number of tiles written.
 pub fn build(
-    (dev4, temperature): (&Dev4, &Temperature),
+    (dev4, temperature, network): (&Dev4, &Temperature, &FreightNetwork),
     airport_traffic: &Path,
     squares: &[Square],
     out: &Path,
@@ -150,13 +152,13 @@ pub fn build(
     }
     squares
         .par_iter()
-        .map(|&square| build_square((dev4, temperature), airport_traffic, square, out))
+        .map(|&square| build_square((dev4, temperature, network), airport_traffic, square, out))
         .sum()
 }
 
 /// The sources tiles of one square (the squares build in parallel, each within its own memory).
 fn build_square(
-    (dev4, temperature): (&Dev4, &Temperature),
+    (dev4, temperature, network): (&Dev4, &Temperature, &FreightNetwork),
     airport_traffic: &Path,
     square: Square,
     out: &Path,
@@ -167,7 +169,7 @@ fn build_square(
     for neighbour in square.with_neighbours() {
         let road_reach = (neighbour != square).then_some(reach);
         road::convert((dev4, temperature), neighbour, road_reach, &mut converted)?;
-        rail::convert(dev4, neighbour, &mut converted)?;
+        rail::convert((dev4, network), neighbour, &mut converted)?;
         leisure::convert(dev4, neighbour, &mut converted)?;
         building::convert(dev4, neighbour, &mut converted)?;
         ship::convert(dev4, neighbour, &mut converted)?;

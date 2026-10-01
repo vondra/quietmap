@@ -1,8 +1,9 @@
 //! Railway, tram and horn pieces of the dev4 prepared tree as sources: the line speed, the calibrated
 //! per-category emission of each period's trains, and the display record of the line.
 
+use super::tent::{FreightNetwork, Tier};
 use super::{Converted, group_key, split_at_tile_edges};
-use crate::dev4::{Dev4, Square, require_stamp, z30_to_global};
+use crate::dev4::{Dev4, Square, require_stamp, z30_corner_mercator_m, z30_to_global};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, Int32Type, Int64Type, UInt8Type, UInt16Type};
 use arrow_array::{Array, RecordBatch};
@@ -32,45 +33,70 @@ const GUESSED_TRAIN_SOURCES: [u16; 19] = [
 ];
 /// Per country, the factors on the guessed freight and passenger counts of its rail lines that
 /// bring the rows' train-km to Eurostat's (rail_tf_trainmv 2024, the United Kingdom 2019;
-/// evidence 2026-10-01, rail train-km): freight to the goods train-km; passenger priors, where they
-/// carry at least a quarter of the rows' passenger train-km, to 1.2 times the passenger train-km
-/// less the timetable-matched rows' (the rows count each track of a double-track line in full:
-/// timetable-matched countries read 0.9-1.6 times Eurostat), never raised. dev4's freight priors
-/// read Eurostat's goods train-km in Germany, France, Austria, Switzerland and Poland but 2.5 times
-/// it in Spain and Romania and 36 times in Ireland, its passenger priors up to 21 times in North
-/// Macedonia.
-const COUNTRY_TRAIN_SCALES: [([u8; 2], f64, f64); 27] = [
+/// evidence 2026-10-01, rail train-km): freight to the goods train-km (the EU27's weighed by their
+/// TEN-T tiers first; Belgium and Greece publish none and keep dev4's total); passenger priors,
+/// where they carry at least a quarter of the rows' passenger train-km, to 1.2 times the passenger
+/// train-km less the timetable-matched rows' (the rows count each track of a double-track line in
+/// full: timetable-matched countries read 0.9-1.6 times Eurostat), never raised. dev4's freight
+/// priors read Eurostat's goods train-km in Germany, France, Austria, Switzerland and Poland but
+/// 2.5 times it in Spain and Romania and 36 times in Ireland, its passenger priors up to 21 times
+/// in North Macedonia.
+const COUNTRY_TRAIN_SCALES: [([u8; 2], f64, f64); 31] = [
+    (*b"AT", 0.499, 1.000),
     (*b"BA", 0.364, 0.075),
-    (*b"BG", 0.391, 0.241),
-    (*b"CZ", 0.897, 1.000),
-    (*b"DK", 0.458, 1.000),
-    (*b"EE", 0.160, 0.492),
-    (*b"ES", 0.316, 0.413),
-    (*b"FI", 0.489, 1.000),
-    (*b"FR", 1.009, 0.286),
+    (*b"BE", 0.530, 1.000),
+    (*b"BG", 0.164, 0.241),
+    (*b"CZ", 0.597, 1.000),
+    (*b"DE", 0.547, 1.000),
+    (*b"DK", 0.141, 1.000),
+    (*b"EE", 0.070, 0.492),
+    (*b"ES", 0.119, 0.413),
+    (*b"FI", 0.203, 1.000),
+    (*b"FR", 0.587, 0.286),
     (*b"GB", 0.381, 1.000),
-    (*b"GR", 1.000, 0.170),
-    (*b"HR", 0.426, 1.000),
-    (*b"HU", 0.489, 1.000),
-    (*b"IE", 0.028, 1.000),
-    (*b"IT", 0.649, 1.000),
-    (*b"LT", 0.397, 0.166),
-    (*b"LU", 0.214, 1.000),
-    (*b"LV", 0.191, 0.197),
+    (*b"GR", 0.940, 0.170),
+    (*b"HR", 0.208, 1.000),
+    (*b"HU", 0.229, 1.000),
+    (*b"IE", 0.015, 1.000),
+    (*b"IT", 0.291, 1.000),
+    (*b"LT", 0.151, 0.166),
+    (*b"LU", 0.099, 1.000),
+    (*b"LV", 0.085, 0.197),
     (*b"ME", 0.122, 0.174),
     (*b"MK", 0.082, 0.048),
-    (*b"NL", 0.588, 1.000),
+    (*b"NL", 0.264, 1.000),
     (*b"NO", 0.265, 1.000),
-    (*b"PT", 0.313, 1.000),
-    (*b"RO", 0.297, 0.333),
-    (*b"SE", 0.665, 1.000),
-    (*b"SI", 1.281, 0.560),
-    (*b"SK", 0.619, 1.000),
+    (*b"PL", 0.566, 1.000),
+    (*b"PT", 0.134, 1.000),
+    (*b"RO", 0.160, 0.333),
+    (*b"SE", 0.331, 1.000),
+    (*b"SI", 0.477, 0.560),
+    (*b"SK", 0.316, 1.000),
     (*b"TR", 0.681, 0.372),
 ];
 
-/// The (freight, passenger) factors of a heavy rail row's guessed counts in its country.
-fn train_scales(kind: RailType, iso: [u8; 2], sources: [u16; 2]) -> [f64; 2] {
+/// EU freight trains by period (day 07-19, evening 19-23, night 23-07): the freight trains the 19
+/// EBA Laerm-Monitoring 2023 stations counted, 37.6 % of them in 22-06, spread evenly within the
+/// German day and night windows. dev4 split every EU line as one line's 2012 count, the
+/// Rheintalbahn's 54.6 % at night (EBA counted 31 % there in 2023).
+const EU_FREIGHT_SHARES: [f64; PERIODS] = [0.468, 0.164, 0.368];
+
+/// The countries the TEN-T maps cover (EU27): their guessed freight is weighed by tier.
+const TENT_COUNTRIES: [&[u8; 2]; 27] = [
+    b"AT", b"BE", b"BG", b"CY", b"CZ", b"DE", b"DK", b"EE", b"ES", b"FI", b"FR", b"GR", b"HR",
+    b"HU", b"IE", b"IT", b"LT", b"LU", b"LV", b"MT", b"NL", b"PL", b"PT", b"RO", b"SE", b"SI",
+    b"SK",
+];
+/// Freight trains per km of line by TEN-T tier (off the network, on a TEN-T freight line, on a
+/// core network corridor), relative: dev4 spread a country's freight evenly over every row, half
+/// of Germany's on lines off the network and 24 a day on its corridors where the 19 EBA monitors
+/// on them counted 30-164 (mean 107); weighed so, Germany's corridors carry 62 % of its freight
+/// train-km, 54 trains a day on a double-track line.
+const TIER_WEIGHTS: [f64; 3] = [0.5, 2.0, 4.0];
+
+/// The (freight, passenger) factors of a heavy rail row's guessed counts in its country, the
+/// freight's at the row's TEN-T tier.
+fn train_scales(kind: RailType, iso: [u8; 2], sources: [u16; 2], tier: Tier) -> [f64; 2] {
     let Some((_, freight, passenger)) = COUNTRY_TRAIN_SCALES
         .iter()
         .find(|(code, ..)| *code == iso)
@@ -79,8 +105,17 @@ fn train_scales(kind: RailType, iso: [u8; 2], sources: [u16; 2]) -> [f64; 2] {
         return [1.0, 1.0];
     };
     let guessed = |source: u16| GUESSED_TRAIN_SOURCES.contains(&source);
+    let weight = if TENT_COUNTRIES.contains(&&iso) {
+        TIER_WEIGHTS[tier as usize]
+    } else {
+        1.0
+    };
     [
-        if guessed(sources[0]) { *freight } else { 1.0 },
+        if guessed(sources[0]) {
+            freight * weight
+        } else {
+            1.0
+        },
         if guessed(sources[1]) { *passenger } else { 1.0 },
     ]
 }
@@ -103,7 +138,11 @@ fn column<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a dyn Array, Strin
 }
 
 /// Converts the rail rows of one dev4 square; returns how many rows emit.
-pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<usize, String> {
+pub fn convert(
+    (dev4, network): (&Dev4, &FreightNetwork),
+    square: Square,
+    out: &mut Vec<Converted>,
+) -> Result<usize, String> {
     let Some(table) = dev4.table(square, "railways.arrow")? else {
         return Ok(0);
     };
@@ -161,15 +200,35 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
         for row in 0..batch.num_rows() {
             let kind = RailType::from_code(rail_type.value(row));
             let iso = country.value(row).to_le_bytes();
+            let tier = if kind == RailType::Rail && TENT_COUNTRIES.contains(&&iso) {
+                network.tier(
+                    z30_corner_mercator_m(start_x.value(row), start_y.value(row)),
+                    z30_corner_mercator_m(end_x.value(row), end_y.value(row)),
+                )
+            } else {
+                Tier::Off
+            };
             let [freight_scale, passenger_scale] = train_scales(
                 kind,
                 iso,
                 [freight_source.value(row), passenger_source.value(row)],
+                tier,
             );
             let passenger_trains: [f64; PERIODS] =
                 std::array::from_fn(|period| passenger[period].value(row) * passenger_scale);
-            let freight_trains: [f64; PERIODS] =
+            let mut freight_trains: [f64; PERIODS] =
                 std::array::from_fn(|period| freight[period].value(row) * freight_scale);
+            let region = if EU_FREIGHT_NETWORK.contains(&&iso) {
+                FreightRegion::Europe
+            } else {
+                FreightRegion::World
+            };
+            if region == FreightRegion::Europe
+                && GUESSED_TRAIN_SOURCES.contains(&freight_source.value(row))
+            {
+                let total: f64 = freight_trains.iter().sum();
+                freight_trains = EU_FREIGHT_SHARES.map(|share| share * total);
+            }
             if tunnel.value(row)
                 || kind == RailType::Preserved
                 || passenger_trains
@@ -190,11 +249,6 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
                 (HIGH_SPEED_DEFAULT_KMH, "high_speed_default")
             } else {
                 (kind.default_speed_kmh(), "default_by_type")
-            };
-            let region = if EU_FREIGHT_NETWORK.contains(&&iso) {
-                FreightRegion::Europe
-            } else {
-                FreightRegion::World
             };
             let emission: [[f64; BANDS]; PERIODS] = std::array::from_fn(|period| {
                 line_emission_db(
@@ -273,13 +327,39 @@ mod tests {
     /// countries without a factor keep theirs.
     #[test]
     fn guessed_trains_follow_the_countrys_train_km() {
-        assert_eq!(train_scales(RailType::Rail, *b"IE", [0, 0]), [0.028, 1.0]);
+        let off = Tier::Off;
         assert_eq!(
-            train_scales(RailType::Rail, *b"MK", [9013, 0]),
+            train_scales(RailType::Rail, *b"MK", [9013, 0], off),
             [0.082, 0.048]
         );
-        assert_eq!(train_scales(RailType::Rail, *b"RO", [0, 100]), [0.297, 1.0]);
-        assert_eq!(train_scales(RailType::Tram, *b"RO", [0, 0]), [1.0, 1.0]);
-        assert_eq!(train_scales(RailType::Rail, *b"DE", [0, 0]), [1.0, 1.0]);
+        assert_eq!(
+            train_scales(RailType::Rail, *b"NO", [0, 100], off),
+            [0.265, 1.0]
+        );
+        assert_eq!(
+            train_scales(RailType::Tram, *b"RO", [0, 0], off),
+            [1.0, 1.0]
+        );
+        assert_eq!(
+            train_scales(RailType::Rail, *b"CH", [0, 0], off),
+            [1.0, 1.0]
+        );
+        // The EU27 weigh their freight by tier: a German corridor carries 8 times a line off the
+        // network, a timetable row keeps its passengers.
+        let [corridor, _] = train_scales(RailType::Rail, *b"DE", [0, 9864], Tier::Corridor);
+        let [off_network, passenger] = train_scales(RailType::Rail, *b"DE", [0, 9864], off);
+        assert!((corridor / off_network - 8.0).abs() < 1e-9 && passenger == 1.0);
+        assert!((corridor - 0.547 * 4.0).abs() < 1e-9);
+    }
+
+    /// The EBA split sums to one and puts 36.8 % of EU freight in the END night.
+    #[test]
+    fn eu_freight_runs_by_the_counted_split() {
+        assert!((EU_FREIGHT_SHARES.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        let (day, night) = (0.624 / 16.0, 0.376 / 8.0);
+        let expected = [12.0 * day, 3.0 * day + night, 7.0 * night + day];
+        for (share, expected) in EU_FREIGHT_SHARES.iter().zip(expected) {
+            assert!((share - expected).abs() < 0.001, "{share} {expected}");
+        }
     }
 }
