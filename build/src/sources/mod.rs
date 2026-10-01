@@ -4,6 +4,7 @@
 
 pub mod airport;
 pub mod building;
+pub mod bus;
 pub mod cells;
 pub mod country_speeds;
 pub mod facilities;
@@ -141,7 +142,7 @@ pub fn group_key(parts: &[&str]) -> u64 {
 /// neighbours itself, for its facility joins). Returns the number of tiles written.
 pub fn build(
     (dev4, temperature, network): (&Dev4, &Temperature, &FreightNetwork),
-    (airport_traffic, road_traffic): (&Path, Option<&Path>),
+    (airport_traffic, road_traffic, bus): (&Path, Option<&Path>, Option<&bus::BusRoutes>),
     squares: &[Square],
     out: &Path,
 ) -> Result<usize, String> {
@@ -156,7 +157,7 @@ pub fn build(
         .map(|&square| {
             build_square(
                 (dev4, temperature, network),
-                (airport_traffic, road_traffic),
+                (airport_traffic, road_traffic, bus),
                 square,
                 out,
             )
@@ -167,7 +168,7 @@ pub fn build(
 /// The sources tiles of one square (the squares build in parallel, each within its own memory).
 fn build_square(
     (dev4, temperature, network): (&Dev4, &Temperature, &FreightNetwork),
-    (airport_traffic, road_traffic): (&Path, Option<&Path>),
+    (airport_traffic, road_traffic, bus): (&Path, Option<&Path>, Option<&bus::BusRoutes>),
     square: Square,
     out: &Path,
 ) -> Result<usize, String> {
@@ -177,7 +178,7 @@ fn build_square(
     for neighbour in square.with_neighbours() {
         let road_reach = (neighbour != square).then_some(reach);
         road::convert(
-            (dev4, temperature, road_traffic),
+            (dev4, temperature, road_traffic, bus),
             neighbour,
             road_reach,
             &mut converted,

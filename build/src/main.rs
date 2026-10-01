@@ -3,10 +3,10 @@
 //! Until the builders read the sources themselves, `qm-build dev4` converts squares of the dev4
 //! z9 tree: `qm-build dev4 --prepared DIR --rasters DIR --out DIR --squares X:Y[,X:Y..]
 //! [--kinds terrain,obstacles,sources] [--airport-traffic DIR] [--temperature FILE] [--tent FILE]
-//! [--road-traffic DIR] [--national-dem FILE,..]` (sources need the airport traffic, the yearly
-//! temperature of `fetch/worldclim.sh` and the TEN-T freight lines of `fetch/tent.sh`, and take
-//! the roads' building traffic of `qm-build traffic` when given; terrain lays the national models
-//! over dev4's heights);
+//! [--road-traffic DIR] [--bus FILE] [--national-dem FILE,..]` (sources need the airport traffic,
+//! the yearly temperature of `fetch/worldclim.sh` and the TEN-T freight lines of `fetch/tent.sh`,
+//! and take the roads' building traffic of `qm-build traffic` and the bus routes of
+//! `fetch/bus.sh` when given; terrain lays the national models over dev4's heights);
 //! `qm-build weather --rasters DIR --out FILE` cuts the global weather table; `qm-build complete
 //! --out DIR --note TEXT` writes the completion marker last.
 //!
@@ -183,6 +183,11 @@ fn run(arguments: &[String]) -> Result<(), String> {
                         (
                             Path::new(options.get("airport-traffic")?),
                             options.optional("road-traffic").map(Path::new),
+                            options
+                                .optional("bus")
+                                .map(|path| sources::bus::BusRoutes::load(Path::new(path)))
+                                .transpose()?
+                                .as_ref(),
                         ),
                         &squares,
                         &out,

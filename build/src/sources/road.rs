@@ -1,10 +1,11 @@
 //! Road pieces of the dev4 prepared tree as sources: the speed cascade, CNOSSOS-EU emission per
 //! period computed here once, and the display record of the road group.
 
+use super::bus::BusRoutes;
 use super::country_speeds::COUNTRY_SPEEDS;
 use super::road_junctions::{Junctions, traffic_signals};
 use super::road_slope::{SquareHeights, WayRow, row_slopes};
-use super::road_traffic::{BuildingTraffic, local_km};
+use super::road_traffic::{BUS_SERVICE_BY_BUILT_UP, BuildingTraffic, local_km};
 use super::{Converted, Reach, group_key, split_at_tile_edges};
 use crate::climate::Temperature;
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
@@ -385,10 +386,15 @@ impl<'a> Columns<'a> {
 }
 
 /// Converts the road rows of one dev4 square, or with `reach` only those reaching into another
-/// square, the guessed traffic replaced by the building traffic under `traffic` when given;
-/// returns how many rows emit.
+/// square, the guessed traffic replaced by the building traffic under `traffic` when given and
+/// the buses of `bus` added to it; returns how many rows emit.
 pub fn convert(
-    (dev4, temperature, traffic): (&Dev4, &Temperature, Option<&std::path::Path>),
+    (dev4, temperature, traffic, bus): (
+        &Dev4,
+        &Temperature,
+        Option<&std::path::Path>,
+        Option<&BusRoutes>,
+    ),
     square: Square,
     reach: Option<Reach>,
     out: &mut Vec<Converted>,
@@ -546,7 +552,7 @@ pub fn convert(
                         ),
                     )
                 });
-            let daily = match modelled {
+            let mut daily = match modelled {
                 Some(total) => modelled_flows(total, prior, class_index, built_up.value(row)),
                 None => country_flows(
                     prior,
@@ -557,6 +563,16 @@ pub fn convert(
                     estimated.value(row),
                 ),
             };
+            // Buses on an uncounted row: two-axle city buses medium, a third articulated heavy.
+            if let Some(bus) = bus.filter(|_| guessed(source_id.value(row), estimated.value(row))) {
+                let service = building_traffic.as_ref().map_or(
+                    BUS_SERVICE_BY_BUILT_UP[usize::from(built_up.value(row).min(2))],
+                    |traffic| traffic.bus_service(middle_z30),
+                );
+                let (buses, coaches) = bus.daily(osm_id.value(row), service);
+                daily[1] += buses * 2.0 / 3.0;
+                daily[2] += buses / 3.0 + coaches;
+            }
             let scale =
                 daily.iter().sum::<f64>() / prior.iter().sum::<f64>().max(f64::MIN_POSITIVE);
             if tunnel.value(row) || daily.iter().sum::<f64>() <= 0.0 {

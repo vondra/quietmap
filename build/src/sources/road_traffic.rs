@@ -152,6 +152,26 @@ impl BuildingTraffic {
     }
 }
 
+/// The trip ends within 2 km at which a bus line runs a city's service, the exponent and the
+/// least share: a village among 4,000 trip ends runs 28 % of it (17 departures a direction).
+const CITY_TRIP_ENDS: f64 = 100_000.0;
+const SERVICE_EXPONENT: f64 = 0.4;
+const LEAST_SERVICE: f64 = 0.15;
+
+impl BuildingTraffic {
+    /// The share of a city bus line's service a line runs at `middle` (z30).
+    pub fn bus_service(&self, middle: (i32, i32)) -> f64 {
+        let around = self.surroundings.around(middle, 2_000.0);
+        (around / CITY_TRIP_ENDS)
+            .powf(SERVICE_EXPONENT)
+            .clamp(LEAST_SERVICE, 1.0)
+    }
+}
+
+/// The share of a city bus line's service where the buildings are not known: by the row's
+/// built-up flag (unknown, rural, urban).
+pub const BUS_SERVICE_BY_BUILT_UP: [f64; 3] = [0.5, 0.2, 1.0];
+
 /// The length of a square's open local streets (km), for [`BuildingTraffic::load`].
 pub fn local_km(lengths: impl Iterator<Item = (u8, f64)>) -> f64 {
     lengths
