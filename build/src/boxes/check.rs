@@ -12,9 +12,12 @@ mod report;
 
 use super::place::Placement;
 use super::read::{FLAG_SECONDARY_ONLY, read_segments};
-use super::{Window, light_unknown_flights};
+use super::{Window, light_unknown_flights, place_atmosphere};
+use crate::dev4::Square;
 use exact::{DISTANCE_BANDS_M, Sums, add_segment};
 use physics::bands::{PERIOD_HOURS, PERIODS};
+use physics::doc29::atmosphere::PlaceAtmosphere;
+use physics::weather::WeatherTable;
 use rayon::prelude::*;
 use report::report;
 use std::collections::{HashMap, HashSet};
@@ -143,7 +146,7 @@ impl Receiver {
 /// written boxes under `aircraft_root` (cut with a level step D of `level_step_db`), the box
 /// placement from the terrain under `terrain_root`.
 pub fn compare(
-    segments_dir: &Path,
+    (segments_dir, weather): (&Path, &WeatherTable),
     window: &Window,
     (aircraft_root, level_step_db): (&Path, f64),
     terrain_root: &Path,
@@ -218,6 +221,21 @@ pub fn compare(
         let path = segments_dir.join("segments").join(format!("{day}.arrow"));
         let segments = read_segments(&path, &keep)?;
         let light = light_unknown_flights(segments.iter());
+        // Each segment in the atmosphere of its start's square, as the boxes sum it.
+        let square_of = |end: [f64; 3]| {
+            let tile = TileId::containing(Mercator::from_degrees(end[0], end[1]));
+            Square {
+                x: tile.x >> 3,
+                y: tile.y >> 3,
+            }
+        };
+        let places: HashMap<Square, PlaceAtmosphere> = segments
+            .iter()
+            .map(|segment| square_of(segment.start))
+            .collect::<HashSet<Square>>()
+            .into_par_iter()
+            .map(|square| (square, place_atmosphere(weather, square)))
+            .collect();
         let (weight, secondary) = (
             if window.baseline_days.contains(day) {
                 1.0 / baseline
@@ -240,11 +258,12 @@ pub fn compare(
                 };
                 if segment_weight > 0.0 {
                     let light = light.contains(&segment.flight_id);
+                    let place = &places[&square_of(segment.start)];
                     add_segment(
                         &mut sums,
                         &receivers,
                         &placement,
-                        (segment, light),
+                        (segment, light, place),
                         segment_weight,
                     );
                 }

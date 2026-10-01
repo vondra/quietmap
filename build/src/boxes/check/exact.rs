@@ -6,6 +6,7 @@ use super::super::place::{BoxKey, Placement, cut_into_pieces};
 use super::super::read::FlightSegment;
 use super::{BEYOND_REACH_M, REACH_M, Receiver};
 use physics::bands::PERIODS;
+use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::doc29::screening::Unscreened;
 use physics::doc29::segment::{SegmentEmission, SegmentGeometry, segment_sel_at_receiver};
 use std::collections::HashMap;
@@ -81,7 +82,7 @@ pub(super) fn add_segment(
     sums: &mut [Sums],
     receivers: &[Receiver],
     placement: &Placement,
-    (segment, light): (&FlightSegment, bool),
+    (segment, light, place): (&FlightSegment, bool, &PlaceAtmosphere),
     weight: f64,
 ) {
     let mut emission: Option<Option<(bool, SegmentEmission)>> = None;
@@ -93,8 +94,9 @@ pub(super) fn add_segment(
             continue;
         }
         let Some((helicopter, emission)) = emission.get_or_insert_with(|| {
-            emission_of(segment, light)
-                .map(|(aircraft, emission)| (aircraft.helicopter.is_some(), emission))
+            emission_of(segment, light).map(|(aircraft, emission)| {
+                (aircraft.helicopter.is_some(), emission.in_atmosphere(place))
+            })
         }) else {
             return;
         };

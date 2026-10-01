@@ -123,6 +123,12 @@ fn box_rule(options: &Arguments) -> Result<boxes::BoxRule, String> {
     Ok(rule)
 }
 
+/// The global weather table (`qm-build weather`): the yearly atmosphere the boxes are summed in.
+fn read_weather(path: &str) -> Result<physics::weather::WeatherTable, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("{path}: {error}"))?;
+    physics::weather::WeatherTable::parse(&bytes)
+}
+
 fn run(arguments: &[String]) -> Result<(), String> {
     let (command, rest) = arguments
         .split_first()
@@ -214,12 +220,13 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let rule = box_rule(&options)?;
             let shuffled = Path::new(options.get("shuffled")?);
             let days = boxes::shuffle::shuffled_days(shuffled)?;
+            let weather = read_weather(options.get("weather")?)?;
             eprintln!("aircraft boxes: {} days", days.len());
             for square in parse_squares(options.get("squares")?)? {
                 let started = std::time::Instant::now();
                 let (tiles, written) = boxes::build_square(
                     (shuffled, &days),
-                    square,
+                    (square, &weather),
                     Path::new(options.get("terrain")?),
                     rule,
                     &out,
@@ -265,8 +272,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 ),
                 None => None,
             };
+            let weather = read_weather(options.get("weather")?)?;
             let compared = boxes::check::compare(
-                Path::new(options.get("segments")?),
+                (Path::new(options.get("segments")?), &weather),
                 &window,
                 (&out, box_rule(&options)?.level_step_db),
                 terrain,

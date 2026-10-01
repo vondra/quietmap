@@ -14,6 +14,7 @@ use super::spectra_generated::SPECTRA;
 use super::thrust::{MAX_POWER_ROWS, PowerBracket, bracket_power};
 use super::thrust_generated::THRUST;
 use crate::atmosphere::REFERENCE_PRESSURE_KPA;
+use crate::doc29::atmosphere::SHIFT_DISTANCES;
 use crate::doc29::corrections::speed_correction_db;
 use crate::doc29::npd::class_anchor;
 use crate::doc29::profiles_generated::{noise_class_of, profile_idx};
@@ -117,6 +118,7 @@ fn case_sel_db(case: &str, points: &[[f64; 5]], receiver: [f64; 3], rule: PowerR
                 speed_m_per_s / METRES_PER_SECOND_PER_KNOT,
             ),
             helicopter_correction_db: 0.0,
+            atmosphere_shift_db: [0.0; SHIFT_DISTANCES],
         };
         let relative = |p: [f64; 5]| [p[0] - receiver[0], p[1] - receiver[1], p[2] - receiver[2]];
         let geometry = SegmentGeometry {

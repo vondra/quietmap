@@ -5,6 +5,7 @@
 //! to be kept).
 
 use super::boxes::AircraftReceiver;
+use physics::doc29::atmosphere::{PlaceAtmosphere, SHIFT_DISTANCES};
 use physics::doc29::corrections::speed_correction_db;
 use physics::doc29::helicopters::helicopter_levels;
 use physics::doc29::npd::{class_anchor, is_helicopter_class};
@@ -41,8 +42,9 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).trim().to_string()
 }
 
-/// The kernel's emission of a stored piece of a flight with `designator`.
-fn emission_of(piece: &FlightPiece, designator: &str) -> SegmentEmission {
+/// The kernel's emission of a stored piece of a flight with `designator`, in the atmosphere of
+/// `place`.
+fn emission_of(piece: &FlightPiece, designator: &str, place: &PlaceAtmosphere) -> SegmentEmission {
     let class = usize::from(piece.class);
     let anchor = class_anchor(class);
     let departure = piece.flags & 1 != 0;
@@ -58,7 +60,9 @@ fn emission_of(piece: &FlightPiece, designator: &str) -> SegmentEmission {
         } else {
             0.0
         },
+        atmosphere_shift_db: [0.0; SHIFT_DISTANCES],
     }
+    .in_atmosphere(place)
 }
 
 /// Per flight (keyed by address and start) its summed SEL energy and its loudest piece.
@@ -66,6 +70,8 @@ pub struct FlightTotals {
     flights: HashMap<(u32, u32), LoudFlight>,
     /// Pieces read per box: all it keeps, or fewer (the benchmark's trials).
     pieces_per_box: usize,
+    /// The receiver's yearly atmosphere, as the boxes' pieces were summed in theirs.
+    place: PlaceAtmosphere,
 }
 
 impl Default for FlightTotals {
@@ -80,6 +86,15 @@ impl FlightTotals {
         FlightTotals {
             flights: HashMap::new(),
             pieces_per_box,
+            place: PlaceAtmosphere::model(),
+        }
+    }
+
+    /// The totals in the atmosphere of a place with octave-band absorption `alpha_db_per_km`.
+    pub fn in_atmosphere(self, alpha_db_per_km: &[f64; physics::bands::BANDS]) -> Self {
+        FlightTotals {
+            place: PlaceAtmosphere::new(alpha_db_per_km),
+            ..self
         }
     }
 
@@ -114,7 +129,7 @@ impl FlightTotals {
                 let piece = aircraft.piece(piece_index);
                 let flight = aircraft.flight(piece.flight as usize);
                 let designator = text(&flight.type_designator);
-                let emission = emission_of(&piece, &designator);
+                let emission = emission_of(&piece, &designator, &self.place);
                 let point = |end: usize| {
                     let global = tile.global(piece.ends[end]);
                     let [east, north] = frame.metres_of_steps([global.x as f64, global.y as f64]);

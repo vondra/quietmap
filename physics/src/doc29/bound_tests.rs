@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::bands::{energy, level_db};
+use crate::doc29::atmosphere::SHIFT_DISTANCES;
 use crate::doc29::npd::class_anchor;
 use crate::doc29::screening::Unscreened;
 use crate::doc29::segment::{SegmentEmission, SegmentGeometry, segment_sel_at_receiver};
@@ -32,6 +33,7 @@ fn every_emission() -> Vec<SegmentEmission> {
                         installation: class_anchor(class).installation,
                         speed_correction_db: 0.0,
                         helicopter_correction_db: 0.0,
+                        atmosphere_shift_db: [0.0; SHIFT_DISTANCES],
                     });
                 }
             }

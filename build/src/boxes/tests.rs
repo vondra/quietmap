@@ -117,7 +117,13 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
         .iter()
         .map(|segment| (segment.clone(), 1.0))
         .collect();
-    add_day(&mut boxes, &weighted, &placement, &scope, PIECES_PER_BOX);
+    add_day(
+        &mut boxes,
+        &weighted,
+        (&placement, &PlaceAtmosphere::model()),
+        &scope,
+        PIECES_PER_BOX,
+    );
     let out = std::env::temp_dir().join(format!("qm-boxes-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out);
     assert!(

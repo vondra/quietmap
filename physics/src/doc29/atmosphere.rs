@@ -8,11 +8,13 @@
 //! LAmax curves. The model's absorption is ISO 9613-1 at the exact 1/3-octave centres (Doc 29
 //! names SAE ARP-5534, which it matches within 2 % in the bands that carry an aircraft's level).
 
-use super::npd::{METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT};
+use super::npd::{METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT, TAIL_ANCHOR_M};
 use super::spectra_generated::SPECTRA;
 use crate::atmosphere::{
-    DEFAULT_RELATIVE_HUMIDITY_PCT, DEFAULT_TEMPERATURE_C, REFERENCE_PRESSURE_KPA, alpha_db_per_km,
+    ALPHA_DB_PER_KM, DEFAULT_RELATIVE_HUMIDITY_PCT, DEFAULT_TEMPERATURE_C, REFERENCE_PRESSURE_KPA,
+    alpha_db_per_km,
 };
+use crate::bands::BANDS;
 
 /// The 24 one-third-octave bands of the spectral classes, 50 Hz to 10 kHz.
 pub const THIRD_OCTAVES: usize = 24;
@@ -70,33 +72,114 @@ pub fn impedance_adjustment_db(temperature_c: f64, pressure_kpa: f64) -> f64 {
     10.0 * (416.86 * delta / theta.sqrt() / 409.81).log10()
 }
 
+/// The A-weighted level (dB) at `distance_m` of a spectral class `spectrum_db` (at 305 m in the
+/// AIR-1845 atmosphere, Eq. D-1 taking it back to the source) through the atmosphere of
+/// `rates_db_per_m` (Eqs. D-2 to D-4).
+fn a_weighted_db(
+    spectrum_db: &[f64; THIRD_OCTAVES],
+    rates_db_per_m: &[f64; THIRD_OCTAVES],
+    distance_m: f64,
+) -> f64 {
+    let spreading = 20.0 * (distance_m / SPECTRUM_DISTANCE_M).log10();
+    10.0 * (0..THIRD_OCTAVES)
+        .map(|n| {
+            let source = spectrum_db[n] + AIR_1845_DB_PER_100M[n] / 100.0 * SPECTRUM_DISTANCE_M;
+            10f64.powf(
+                (source - spreading - rates_db_per_m[n] * distance_m
+                    + A_WEIGHTING_THIRD_OCTAVES_DB[n])
+                    / 10.0,
+            )
+        })
+        .sum::<f64>()
+        .log10()
+}
+
 /// Eqs. D-1 to D-4: the increments (dB) at the ten NPD distances of a curve whose spectral class
 /// is `spectrum_db`, going from AIR-1845 to the atmosphere of `rates_db_per_m`.
 pub fn npd_increments_db(
     spectrum_db: &[f64; THIRD_OCTAVES],
     rates_db_per_m: &[f64; THIRD_OCTAVES],
 ) -> [f64; NPD_DISTANCES] {
-    let source: [f64; THIRD_OCTAVES] = std::array::from_fn(|n| {
-        spectrum_db[n] + AIR_1845_DB_PER_100M[n] / 100.0 * SPECTRUM_DISTANCE_M
-    });
-    let a_weighted = |distance_m: f64, rate: &dyn Fn(usize) -> f64| {
-        let spreading = 20.0 * (distance_m / SPECTRUM_DISTANCE_M).log10();
-        10.0 * (0..THIRD_OCTAVES)
-            .map(|n| {
-                10f64.powf(
-                    (source[n] - spreading - rate(n) * distance_m
-                        + A_WEIGHTING_THIRD_OCTAVES_DB[n])
-                        / 10.0,
-                )
-            })
-            .sum::<f64>()
-            .log10()
-    };
+    let air_1845: [f64; THIRD_OCTAVES] = AIR_1845_DB_PER_100M.map(|rate| rate / 100.0);
     std::array::from_fn(|k| {
         let distance_m = NPD_DISTANCES_FT[k] * METRES_PER_FOOT;
-        a_weighted(distance_m, &|n| rates_db_per_m[n])
-            - a_weighted(distance_m, &|n| AIR_1845_DB_PER_100M[n] / 100.0)
+        a_weighted_db(spectrum_db, rates_db_per_m, distance_m)
+            - a_weighted_db(spectrum_db, &air_1845, distance_m)
     })
+}
+
+/// The 1/3-octave absorption rates (dB/m) of a place whose octave-band absorption is
+/// `octave_alpha_db_per_km` (the weather table's): the model's ISO 9613-1 rates times the place's
+/// ratio to the model, the ratio's logarithm interpolated between the octave centres and continued
+/// past the end ones (from -10 C / 60 % to 35 C / 10 % within 8 % of ISO 9613-1 at the exact
+/// thirds; held per octave the thirds missed it by up to 40 %).
+pub fn place_rates_db_per_m(octave_alpha_db_per_km: &[f64; BANDS]) -> [f64; THIRD_OCTAVES] {
+    let model = model_rates_db_per_m();
+    let ln_ratio: [f64; BANDS] = std::array::from_fn(|octave| {
+        (octave_alpha_db_per_km[octave] / ALPHA_DB_PER_KM[octave]).ln()
+    });
+    std::array::from_fn(|n| {
+        // The third's position among the octave centres: 63 Hz (third 1) is 0, 8 kHz (22) is 7.
+        let position = (n as f64 - 1.0) / 3.0;
+        let lower = (position.floor().max(0.0) as usize).min(BANDS - 2);
+        let t = position - lower as f64;
+        model[n] * (ln_ratio[lower] + t * (ln_ratio[lower + 1] - ln_ratio[lower])).exp()
+    })
+}
+
+/// The distances at which the place's shift is stated: the ten NPD distances and the boxes' tail
+/// anchor.
+pub const SHIFT_DISTANCES: usize = NPD_DISTANCES + 1;
+
+/// How far a place's yearly atmosphere moves every class's curves from the model's (Doc 29
+/// Appendix D between the two atmospheres), per class and operation at the ten NPD distances and
+/// the tail anchor (dB): the place's A-weighted level of the class's spectrum less the model's.
+/// The helicopter class has no spectra and stays.
+pub struct PlaceAtmosphere {
+    shifts: Vec<[[f64; SHIFT_DISTANCES]; 2]>,
+}
+
+impl PlaceAtmosphere {
+    pub fn new(octave_alpha_db_per_km: &[f64; BANDS]) -> Self {
+        let (place, model) = (
+            place_rates_db_per_m(octave_alpha_db_per_km),
+            model_rates_db_per_m(),
+        );
+        let distance = |k: usize| {
+            if k < NPD_DISTANCES {
+                NPD_DISTANCES_FT[k] * METRES_PER_FOOT
+            } else {
+                TAIL_ANCHOR_M
+            }
+        };
+        let shifts = SPECTRA
+            .iter()
+            .map(|spectra| {
+                let Some(spectra) = spectra else {
+                    return [[0.0; SHIFT_DISTANCES]; 2];
+                };
+                [&spectra.approach_db, &spectra.departure_db].map(|spectrum| {
+                    std::array::from_fn(|k| {
+                        a_weighted_db(spectrum, &place, distance(k))
+                            - a_weighted_db(spectrum, &model, distance(k))
+                    })
+                })
+            })
+            .collect();
+        PlaceAtmosphere { shifts }
+    }
+
+    /// The model atmosphere itself: no shift.
+    pub fn model() -> Self {
+        PlaceAtmosphere {
+            shifts: vec![[[0.0; SHIFT_DISTANCES]; 2]; SPECTRA.len()],
+        }
+    }
+
+    /// The shift of a class's departure or approach curves.
+    pub fn shift_db(&self, class: usize, departure: bool) -> &[f64; SHIFT_DISTANCES] {
+        &self.shifts[class][usize::from(departure)]
+    }
 }
 
 /// The increments of a class's approach (`departure` false) or departure curves to the model's
@@ -180,6 +263,55 @@ mod tests {
         }
         assert!((impedance_adjustment_db(10.0, REFERENCE_PRESSURE_KPA) - 0.11).abs() < 0.005);
         assert!((impedance_adjustment_db(15.0, REFERENCE_PRESSURE_KPA) - 0.074).abs() < 0.001);
+    }
+
+    /// The place's rates from its octave absorption: the model's own atmosphere moves nothing, and
+    /// at 30 C / 20 % (a desert) and -10 C / 60 % the interpolated thirds stay within 8 % of ISO
+    /// 9613-1 at the exact centres in the bands that carry an aircraft's A-weighted level (200 Hz
+    /// to 5 kHz).
+    #[test]
+    fn a_place_scales_the_model_rates_by_its_octaves() {
+        let model = PlaceAtmosphere::new(&ALPHA_DB_PER_KM);
+        for class in 0..SPECTRA.len() {
+            for departure in [false, true] {
+                assert!(
+                    model
+                        .shift_db(class, departure)
+                        .iter()
+                        .all(|s| s.abs() < 1e-12)
+                );
+            }
+        }
+        for (temperature_c, humidity_pct) in [(30.0, 20.0), (-10.0, 60.0)] {
+            let octaves = crate::atmosphere::alpha_bands(temperature_c, humidity_pct);
+            let scaled = place_rates_db_per_m(&octaves);
+            let exact = rates_db_per_m(temperature_c, humidity_pct);
+            for n in 6..21 {
+                let ratio = scaled[n] / exact[n];
+                assert!(
+                    (0.92..1.08).contains(&ratio),
+                    "{temperature_c} C band {n}: {ratio}"
+                );
+            }
+        }
+    }
+
+    /// A desert's dry air takes 2-5 dB off an A320's departure curve 3-8 km away against the
+    /// model's 15 C / 70 %; Prague's yearly air (the weather table's node) moves it under 1 dB.
+    #[test]
+    fn the_place_atmosphere_moves_far_aircraft() {
+        let a320 = CLASS_NAMES.iter().position(|&n| n == "A320-232").unwrap();
+        let desert = PlaceAtmosphere::new(&crate::atmosphere::alpha_bands(30.0, 20.0));
+        let shift = desert.shift_db(a320, true);
+        assert!(shift[5] < -1.0 && shift[5] > -4.0, "{shift:?}");
+        assert!(shift[7] < -2.0 && shift[7] > -8.0, "{shift:?}");
+        assert!(
+            shift.windows(2).all(|pair| pair[1] <= pair[0] + 1e-9),
+            "{shift:?}"
+        );
+        let prague = PlaceAtmosphere::new(&[0.12, 0.38, 0.99, 2.07, 4.21, 10.93, 34.83, 112.69]);
+        let shift = prague.shift_db(a320, true);
+        assert!(shift.iter().all(|s| s.abs() < 1.0), "{shift:?}");
     }
 
     /// The model's 15 C / 70 % absorbs less than AIR-1845 where an aircraft's level lies: the

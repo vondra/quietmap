@@ -99,7 +99,8 @@ pub fn answer(
         .collect();
     let mut ground = Ground::new(frame, centre, most_ground_rings);
     let mut horizons: Option<Horizons> = None;
-    let mut flights = FlightTotals::default();
+    let weather = release.weather.place(lat, lon);
+    let mut flights = FlightTotals::default().in_atmosphere(&weather.alpha_db_per_km);
     // The flights' energy and energy times lambda per period, for the percentile levels.
     let (mut flight_energy, mut flight_energy_lambda) = ([0.0; PERIODS], [0.0; PERIODS]);
     let mut obstacles = Scene::new(frame);
@@ -112,7 +113,6 @@ pub fn answer(
     let mut station: Option<Station> = None;
     let mut building: Option<BuildingClick> = None;
     let mut attributes = Attributes::default();
-    let weather = release.weather.place(lat, lon);
     let mut ring = 0;
     while ring < ground_rings.max(aircraft_rings) {
         ring += 1;

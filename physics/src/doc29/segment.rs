@@ -2,6 +2,7 @@
 //! exact SEL the benchmark takes as the reference of the aircraft boxes, and the levels a box
 //! sums at the ten NPD distances.
 
+use super::atmosphere::{PlaceAtmosphere, SHIFT_DISTANCES};
 use super::corrections::{
     finite_segment_correction_db, installation_correction_db, lateral_attenuation_db,
     speed_correction_db,
@@ -44,6 +45,35 @@ pub struct SegmentEmission {
     pub speed_correction_db: f64,
     /// The helicopter correction (dB); 0 for fixed wing.
     pub helicopter_correction_db: f64,
+    /// How far the place's yearly atmosphere moves the curves from the model's, at the ten NPD
+    /// distances and the tail anchor (zeros: the model atmosphere; [`Self::in_atmosphere`]).
+    pub atmosphere_shift_db: [f64; SHIFT_DISTANCES],
+}
+
+/// The place's shift at `slant_m`: linear in lg d between the NPD distances and on to the tail
+/// anchor, the first value nearer than 200 ft, past the tail anchor linear in distance (the
+/// absorption difference grows with the path).
+fn shift_at(shift: &[f64; SHIFT_DISTANCES], slant_m: f64) -> f64 {
+    let distance = |k: usize| {
+        if k < NPD_DISTANCES {
+            NPD_DISTANCES_FT[k] * METRES_PER_FOOT
+        } else {
+            TAIL_ANCHOR_M
+        }
+    };
+    if slant_m <= distance(0) {
+        return shift[0];
+    }
+    let last = SHIFT_DISTANCES - 1;
+    if slant_m >= distance(last) {
+        let slope = (shift[last] - shift[last - 1]) / (distance(last) - distance(last - 1));
+        return shift[last] + slope * (slant_m - distance(last));
+    }
+    let k = (0..last)
+        .find(|&k| slant_m < distance(k + 1))
+        .expect("inside the distances");
+    let t = (slant_m / distance(k)).log10() / (distance(k + 1) / distance(k)).log10();
+    shift[k] + t * (shift[k + 1] - shift[k])
 }
 
 /// The NPD levels of one segment at the ten NPD distances D_k: what a box sums at build time.
@@ -80,16 +110,26 @@ impl SegmentEmission {
             helicopter_correction_db: aircraft.helicopter.map_or(0.0, |levels| {
                 levels.correction_db(flight.departure, helicopter_descent)
             }),
+            atmosphere_shift_db: [0.0; SHIFT_DISTANCES],
         })
     }
 
     /// The segment's NPD values at `slant_m`, helicopter correction included in SEL and LAmax.
     pub fn read_npd(&self, slant_m: f64) -> NpdReading {
         let reading = read_npd(self.class, self.departure, self.power, slant_m);
+        let offset = self.helicopter_correction_db + shift_at(&self.atmosphere_shift_db, slant_m);
         NpdReading {
-            sel_db: reading.sel_db + self.helicopter_correction_db,
-            lamax_db: reading.lamax_db + self.helicopter_correction_db,
+            sel_db: reading.sel_db + offset,
+            lamax_db: reading.lamax_db + offset,
             ..reading
+        }
+    }
+
+    /// The emission in a place's yearly atmosphere.
+    pub fn in_atmosphere(self, place: &PlaceAtmosphere) -> Self {
+        SegmentEmission {
+            atmosphere_shift_db: *place.shift_db(self.class, self.departure),
+            ..self
         }
     }
 

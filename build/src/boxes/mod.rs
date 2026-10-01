@@ -12,11 +12,13 @@ mod write;
 
 use crate::dev4::Square;
 use physics::bands::PERIODS;
+use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::doc29::box_sums::BoxSums;
 use physics::doc29::npd::LAMAX_REFERENCE_SLANT_M;
 use physics::doc29::profiles_generated::{FALLBACK_PROFILE_IDX, profile_idx};
 use physics::doc29::segment::{AircraftType, NpdDistanceLevels, SegmentEmission};
 use physics::doc29::thrust::SegmentFlight;
+use physics::weather::WeatherTable;
 use place::{BoxKey, BoxPiece, Placement, cut_into_pieces};
 use rayon::prelude::*;
 use read::{FLAG_DEPARTURE, FLAG_HELICOPTER_DESCENT, FLAG_ON_GROUND, FlightSegment};
@@ -203,6 +205,18 @@ pub(crate) fn light_unknown_flights<'a>(
         .collect()
 }
 
+/// The yearly atmosphere of a z9 square: the weather table's absorption at its centre (the table
+/// has 0.5 degree nodes, a square spans 0.7 degrees of longitude).
+pub(crate) fn place_atmosphere(weather: &WeatherTable, square: Square) -> PlaceAtmosphere {
+    let centre = TileId {
+        x: square.x * 8 + 4,
+        y: square.y * 8 + 4,
+    }
+    .centre();
+    let (lat, lon) = centre.to_degrees();
+    PlaceAtmosphere::new(&weather.alpha_at(lat, lon))
+}
+
 /// The Doc 29 emission of a segment, or `None` outside the thrust model's domain; a `light`
 /// flight of unknown type flies the C172's class.
 fn emission_of(segment: &FlightSegment, light: bool) -> Option<(AircraftType, SegmentEmission)> {
@@ -277,7 +291,7 @@ fn touches(scope: &HashSet<TileId>, start: Mercator, end: Mercator) -> bool {
 fn add_day(
     boxes: &mut Boxes,
     segments: &[(FlightSegment, f64)],
-    placement: &Placement,
+    (placement, place): (&Placement, &PlaceAtmosphere),
     scope: &HashSet<TileId>,
     pieces: usize,
 ) {
@@ -295,6 +309,7 @@ fn add_day(
                 return None;
             }
             let (aircraft, emission) = emission_of(segment, light.contains(&segment.flight_id))?;
+            let emission = emission.in_atmosphere(place);
             let helicopter = aircraft.helicopter.is_some();
             Some((emission, emission.npd_distance_levels(), helicopter))
         })
@@ -397,11 +412,12 @@ impl BoxRule {
 /// of tiles and boxes written.
 pub fn build_square(
     (shuffled, days): (&Path, &[(String, shuffle::DayRoles)]),
-    square: Square,
+    (square, weather): (Square, &WeatherTable),
     terrain_root: &Path,
     rule: BoxRule,
     out: &Path,
 ) -> Result<(usize, usize), String> {
+    let place = place_atmosphere(weather, square);
     let scope: HashSet<TileId> = (0..64)
         .map(|index| TileId {
             x: square.x * 8 + index % 8,
@@ -441,7 +457,13 @@ pub fn build_square(
             .collect();
         // Each flight's segments together, in their order.
         segments.par_sort_by_key(|(segment, _)| segment.flight_id);
-        add_day(&mut boxes, &segments, &placement, &scope, rule.pieces);
+        add_day(
+            &mut boxes,
+            &segments,
+            (&placement, &place),
+            &scope,
+            rule.pieces,
+        );
     }
     let written = write::write_tiles(&boxes, &placement, rule.kind, out)?;
     Ok((written, boxes.len()))
