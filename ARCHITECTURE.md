@@ -44,10 +44,15 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
 - A release is complete when its builder wrote the completion marker last. Only then does a
   missing file mean "empty"; an unfinished build is never served.
 - Global tables ship with the program: physics tables (NPD, CNOSSOS coefficients) and one
-  weather table (favourable probability per period and 16 sectors, 0.5 deg). Air absorption is
-  ISO 9613-1 at 15 C and 70 %, and the NPD curves are moved to that air from the AIR-1845
-  atmosphere they come in (Doc 29 Appendix D, with the impedance adjustment); road emission is
-  frozen at the CNOSSOS reference temperature, with its gradient and junction terms.
+  weather table (0.5 deg, ERA5 1991-2020: favourable probability per period and 16 sectors, and
+  the yearly mean air absorption per octave, ISO 9613-1). Ground rays take the place's absorption,
+  and the NPD curves are moved to the place's air from the AIR-1845 atmosphere they come in (Doc
+  29 Appendix D, with the impedance adjustment); roads roll at the place's yearly air temperature
+  (WorldClim 2.1, CNOSSOS 2.2.10), with the gradient and junction terms.
+- Traffic is local where data says so: the road converter keeps counted flows and splits, gives
+  every guessed split the counted medians of its class (16 countries), the cars the country's
+  battery-electric share (IEA, rolling noise only) and the heavy vehicles their country's limit;
+  guessed rail counts follow the country's Eurostat train-km.
 - Reading is always whole files with plain reads, all files of a ring at once, one reader per
   file (cold on NVMe 5-8x faster than mmap with MADV_WILLNEED, whose faults read 32 KB at a
   time).
