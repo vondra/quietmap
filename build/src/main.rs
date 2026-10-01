@@ -19,6 +19,7 @@
 mod aircraft;
 mod airport;
 mod boxes;
+mod climate;
 mod dev4;
 mod low_profile;
 mod obstacles;
@@ -151,7 +152,10 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     }
                     "obstacles" => obstacles::build(&dev4, &squares, &out)?,
                     "sources" => sources::build(
-                        &dev4,
+                        (
+                            &dev4,
+                            &climate::Temperature::load(Path::new(options.get("temperature")?))?,
+                        ),
                         Path::new(options.get("airport-traffic")?),
                         &squares,
                         &out,

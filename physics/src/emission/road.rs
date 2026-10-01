@@ -142,9 +142,29 @@ pub fn gradient_correction_db(category: VehicleCategory, slope: f64, speed_kmh: 
     }
 }
 
+/// The yearly average air temperature at which the road surface corrections hold (C), Eq. 2.2.10.
+pub const REFERENCE_AIR_TEMPERATURE_C: f64 = 20.0;
+
+/// CNOSSOS-EU 2.2.2 (Eq. 2.2.10): the rolling noise correction (dB, every band) of a category on
+/// a road whose yearly average air temperature is `air_temperature_c`: K = 0.08 dB/C for light
+/// vehicles and 0.04 for medium and heavy ones times (20 C - t), louder in colder climates.
+/// Motorcycles roll no noise of their own.
+pub fn temperature_correction_db(category: VehicleCategory, air_temperature_c: f64) -> f64 {
+    let k = match category {
+        VehicleCategory::Light => 0.08,
+        VehicleCategory::Medium | VehicleCategory::Heavy => 0.04,
+        VehicleCategory::Motorcycle => 0.0,
+    };
+    k * (REFERENCE_AIR_TEMPERATURE_C - air_temperature_c)
+}
+
 /// Sound power per metre (dB, Z-weighted) of a mix of flows; `-inf` in every band when silent.
-/// The surface correction applies to rolling noise only (motorcycles have none).
-pub fn line_emission_db(flows: &[CategoryFlow], surface_correction_db: f64) -> [f64; BANDS] {
+/// The surface correction and the air temperature (2.2.10) apply to rolling noise only
+/// (motorcycles have none).
+pub fn line_emission_db(
+    flows: &[CategoryFlow],
+    (surface_correction_db, air_temperature_c): (f64, f64),
+) -> [f64; BANDS] {
     let mut energy = [0.0f64; BANDS];
     for flow in flows.iter().filter(|flow| flow.vehicles_per_hour > 0.0) {
         let speed = match flow.category {
@@ -162,15 +182,16 @@ pub fn line_emission_db(flows: &[CategoryFlow], surface_correction_db: f64) -> [
         let gradient = gradient_correction_db(flow.category, flow.slope_percent, law_speed);
         let (junction_rolling, junction_propulsion) =
             junction_correction_db(flow.category, flow.junction);
+        let rolling_correction = surface_correction_db
+            + junction_rolling
+            + temperature_correction_db(flow.category, air_temperature_c);
         for band in 0..BANDS {
             let (a_p, b_p) = coefficients.propulsion;
             let mut vehicle = 10f64
                 .powf((a_p[band] + b_p[band] * relative + gradient + junction_propulsion) / 10.0);
             if let Some((a_r, b_r)) = coefficients.rolling {
-                vehicle += 10f64.powf(
-                    (a_r[band] + b_r[band] * log_ratio + surface_correction_db + junction_rolling)
-                        / 10.0,
-                );
+                vehicle +=
+                    10f64.powf((a_r[band] + b_r[band] * log_ratio + rolling_correction) / 10.0);
             }
             energy[band] += density * vehicle;
         }
@@ -189,8 +210,34 @@ mod tests {
     use super::*;
     use crate::bands::{a_weighted_energy, level_db};
 
+    /// Eq. 2.2.10: Prague's 9.4 C adds 0.85 dB to a light vehicle's rolling noise and 0.42 dB to a
+    /// heavy one's, Singapore's 26.7 C takes 0.54 and 0.27 dB off; a 50 km/h car flow's A-weighted
+    /// level moves 0.8 dB in Prague (rolling dominates), motorcycles not at all.
+    #[test]
+    fn colder_places_roll_louder() {
+        assert!((temperature_correction_db(VehicleCategory::Light, 9.4) - 0.848).abs() < 1e-9);
+        assert!((temperature_correction_db(VehicleCategory::Heavy, 9.4) - 0.424).abs() < 1e-9);
+        assert!((temperature_correction_db(VehicleCategory::Light, 26.7) + 0.536).abs() < 1e-9);
+        assert_eq!(
+            temperature_correction_db(VehicleCategory::Motorcycle, 0.0),
+            0.0
+        );
+        let cars = flow(500.0, 50.0, VehicleCategory::Light);
+        let level = |temperature: f64| {
+            level_db(a_weighted_energy(&line_emission_db(
+                &cars,
+                (0.0, temperature),
+            )))
+        };
+        let prague = level(9.4) - level(REFERENCE_AIR_TEMPERATURE_C);
+        assert!((0.7..0.85).contains(&prague), "{prague}");
+    }
+
     fn a_weighted(flows: &[CategoryFlow], surface: f64) -> f64 {
-        level_db(a_weighted_energy(&line_emission_db(flows, surface)))
+        level_db(a_weighted_energy(&line_emission_db(
+            flows,
+            (surface, REFERENCE_AIR_TEMPERATURE_C),
+        )))
     }
 
     fn flow(
@@ -356,12 +403,15 @@ mod tests {
     #[test]
     fn surface_touches_rolling_only_and_heavy_speed_is_capped() {
         let moto = flow(100.0, 50.0, VehicleCategory::Motorcycle);
-        assert_eq!(line_emission_db(&moto, 0.0), line_emission_db(&moto, 4.0));
-        let fast = line_emission_db(&flow(100.0, 120.0, VehicleCategory::Heavy), 0.0);
-        let capped = line_emission_db(&flow(100.0, 80.0, VehicleCategory::Heavy), 0.0);
+        assert_eq!(
+            line_emission_db(&moto, (0.0, 20.0)),
+            line_emission_db(&moto, (4.0, 20.0))
+        );
+        let fast = line_emission_db(&flow(100.0, 120.0, VehicleCategory::Heavy), (0.0, 20.0));
+        let capped = line_emission_db(&flow(100.0, 80.0, VehicleCategory::Heavy), (0.0, 20.0));
         assert_eq!(fast, capped);
         assert_eq!(
-            line_emission_db(&flow(0.0, 50.0, VehicleCategory::Light), 0.0),
+            line_emission_db(&flow(0.0, 50.0, VehicleCategory::Light), (0.0, 20.0)),
             [f64::NEG_INFINITY; BANDS]
         );
     }

@@ -5,6 +5,7 @@ use super::country_speeds::COUNTRY_SPEEDS;
 use super::road_junctions::{Junctions, traffic_signals};
 use super::road_slope::{SquareHeights, WayRow, row_slopes};
 use super::{Converted, Reach, group_key, split_at_tile_edges};
+use crate::climate::Temperature;
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type};
@@ -189,7 +190,7 @@ impl<'a> Columns<'a> {
 /// Converts the road rows of one dev4 square, or with `reach` only those reaching into another
 /// square; returns how many rows emit.
 pub fn convert(
-    dev4: &Dev4,
+    (dev4, temperature): (&Dev4, &Temperature),
     square: Square,
     reach: Option<Reach>,
     out: &mut Vec<Converted>,
@@ -336,15 +337,18 @@ pub fn convert(
             // CNOSSOS-EU drives roundabouts at their legal speed and corrects the braking and
             // pulling away (2.2.5), where dev4 capped them at 30 km/h (-4.1 dB at 50).
             let (speed, speed_source) = (base_speed, base_source);
+            let (a, b) = (
+                z30_corner_degrees(start_x.value(row), start_y.value(row)),
+                z30_corner_degrees(end_x.value(row), end_y.value(row)),
+            );
+            let middle = (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1));
             let stop = if junction.value(row) == ROUNDABOUT_CODE {
                 Some((Junction::Roundabout, 0.0))
             } else {
-                let (a, b) = (
-                    z30_corner_degrees(start_x.value(row), start_y.value(row)),
-                    z30_corner_degrees(end_x.value(row), end_y.value(row)),
-                );
-                junctions.nearest((0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1)))
+                junctions.nearest(middle)
             };
+            // CNOSSOS-EU 2.2.2: rolling noise at the place's yearly mean air temperature.
+            let air_temperature_c = temperature.at(middle.0, middle.1);
             let surface_index = usize::from(surface.value(row));
             let surface_correction = SURFACE_CORRECTION_DB
                 .get(surface_index)
@@ -382,7 +386,7 @@ pub fn convert(
                         })
                     })
                     .collect();
-                line_emission_db(&flows, surface_correction)
+                line_emission_db(&flows, (surface_correction, air_temperature_c))
             });
             let lanes_used = if lanes.value(row) == 0 {
                 DEFAULT_LANES
