@@ -334,6 +334,12 @@ impl<'a> Sources<'a> {
         })
     }
 
+    /// An attribute's group key alone, without decoding its emission.
+    pub fn group_key(&self, index: u32) -> Result<u64, FormatError> {
+        let record = self.attribute_record(index)?;
+        Ok(u64::from_le_bytes(record[16..24].try_into().unwrap()))
+    }
+
     /// The display fields of an attribute as a JSON array text.
     pub fn display(&self, index: u32) -> Result<&'a str, FormatError> {
         let record = self.attribute_record(index)?;
@@ -414,6 +420,7 @@ mod tests {
                 ..building
             }
         );
+        assert_eq!(parsed.group_key(0).unwrap(), 7);
         assert_eq!(parsed.display(0).unwrap(), road().display);
         assert_eq!(parsed.display(1).unwrap(), "[]");
         assert!(Sources::parse(&bytes[..bytes.len() - 1]).is_err());

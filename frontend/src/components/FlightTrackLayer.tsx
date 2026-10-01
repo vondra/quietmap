@@ -1,5 +1,5 @@
 // The highlighted source on the map, as dev1 draws it: a white line on a black casing for a loudest
-// flight's track (the pieces the popup computed near the point) or a contributor's loudest pieces,
+// flight's track (the pieces the popup computed near the point) or a contributor's lines,
 // legible over every basemap and heatmap colour; a point source is a white dot ringed in black. The
 // dot layer reads points only (a circle layer would put a dot on every vertex of the lines too).
 import type { FilterSpecification } from 'maplibre-gl'

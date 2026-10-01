@@ -157,6 +157,7 @@ impl LayerSelection {
                 distance_m: candidate.distance_m,
                 display: candidate.display,
                 pieces: Vec::new(),
+                lines: Vec::new(),
             });
         for (total, value) in contributor.energy.iter_mut().zip(energy) {
             *total += value;

@@ -34,8 +34,10 @@ pub struct Contributor {
     pub distance_m: f64,
     pub display: DisplayRef,
     /// Its loudest evaluated pieces (ends in the click's frame, equal for a point) with their
-    /// Lden-weighted energies: what the map shows of it.
+    /// Lden-weighted energies: what the map shows of it while the click is computed.
     pub pieces: Vec<([[f64; 2]; 2], f64)>,
+    /// All of it within the reach as lines (the final update's): what the map shows then.
+    pub lines: crate::lines::Lines,
 }
 
 /// Pieces a contributor keeps for the map.

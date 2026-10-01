@@ -11,6 +11,7 @@ use crate::candidates::{
     Attributes, Candidate, DisplayRef, GROUND_REACH_M, TileCandidates, collect,
 };
 use crate::evaluate::Receiver;
+use crate::lines::whole_lines;
 use crate::listing::list_pieces;
 use crate::obstacles::Scene;
 use crate::release::{Release, RingFiles};
@@ -433,6 +434,15 @@ pub fn answer(
                 levels.l5,
             )
         });
+        let mut contributors = loudest_contributors(&selections);
+        if last_ring {
+            let read: Vec<&RingFiles> = rings.iter().filter_map(OnceCell::get).collect();
+            let keys: Vec<u64> = contributors.iter().map(|c| c.group_key).collect();
+            let lines = whole_lines(&read, &frame, &keys, station.position, GROUND_REACH_M)?;
+            for (contributor, lines) in contributors.iter_mut().zip(lines) {
+                contributor.lines = lines;
+            }
+        }
         let update = Update {
             partial: !last_ring,
             percentiles,
@@ -444,7 +454,7 @@ pub fn answer(
             reflection_db: station.reflection_db,
             building,
             layers: layer_answers(&selections),
-            contributors: loudest_contributors(&selections),
+            contributors,
             flights: flights.loudest(),
             pieces,
             statistics: Statistics {

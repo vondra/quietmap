@@ -106,23 +106,32 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         );
         object.insert("received".into(), Value::Object(received));
         object.insert("metadata".into(), display);
-        // Its loudest pieces as the map draws them: [lat, lon] ends, one for a point.
-        let mut pieces = contributor.pieces.clone();
-        crate::selection::loudest_pieces(&mut pieces);
-        let geometry: Vec<Value> = pieces
-            .iter()
-            .map(|(ends, _)| {
-                let degrees = |metres: [f64; 2]| {
-                    let (lat, lon) = update.frame.to_mercator(metres).to_degrees();
-                    json!([(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6])
-                };
-                if ends[0] == ends[1] {
-                    json!([degrees(ends[0])])
-                } else {
-                    json!([degrees(ends[0]), degrees(ends[1])])
-                }
-            })
-            .collect();
+        // What the map draws of it as lines of [lat, lon], one point for a point source: all of it
+        // within the reach in the final update, its loudest pieces before.
+        let degrees = |metres: &[f64; 2]| {
+            let (lat, lon) = update.frame.to_mercator(*metres).to_degrees();
+            json!([(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6])
+        };
+        let geometry: Vec<Value> = if contributor.lines.is_empty() {
+            let mut pieces = contributor.pieces.clone();
+            crate::selection::loudest_pieces(&mut pieces);
+            pieces
+                .iter()
+                .map(|(ends, _)| {
+                    if ends[0] == ends[1] {
+                        json!([degrees(&ends[0])])
+                    } else {
+                        json!([degrees(&ends[0]), degrees(&ends[1])])
+                    }
+                })
+                .collect()
+        } else {
+            contributor
+                .lines
+                .iter()
+                .map(|line| Value::Array(line.iter().map(degrees).collect()))
+                .collect()
+        };
         object.insert("geometry".into(), Value::Array(geometry));
         contributors.push(Value::Object(object));
     }

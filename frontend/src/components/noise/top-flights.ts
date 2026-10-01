@@ -9,10 +9,9 @@ export function topFlightKey(flight: TopFlight): string {
   return `${flight.icao}-${flight.start_unix}`
 }
 
-/** The track's pieces as lines of [lon, lat]. The altitude stays out: a GeoJSON height is above the
- *  ellipsoid, the track's above sea level, and the map is flat. */
-/** Highlighted pieces as the map draws them ([lon, lat], an altitude dropped): a flight's track or a
- * contributor's line pieces, one map line each as computed and apart, and a point source's dot. */
+/** Highlighted pieces as the map draws them, lines of [lon, lat]: a flight's track or a contributor's
+ *  lines, and a point source's dot. The altitude stays out: a GeoJSON height is above the ellipsoid,
+ *  the track's above sea level, and the map is flat. */
 export function highlightGeoJson(pieces: number[][][]): GeoJSON.FeatureCollection {
   const lines = pieces.filter(piece => piece.length >= 2)
   const points = pieces.filter(piece => piece.length === 1)

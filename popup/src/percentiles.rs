@@ -247,6 +247,7 @@ mod tests {
                 attribute: key as u32,
             },
             pieces: Vec::new(),
+            lines: Vec::new(),
         }
     }
 

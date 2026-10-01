@@ -39,7 +39,8 @@ export interface Contributor {
   received_lden: Level
   received: PeriodLevels
   metadata: ContributorMetadata | null
-  /** Its loudest pieces as [lat, lon] ends (one for a point), for the map. */
+  /** What the map draws of it, lines of [lat, lon] (one point for a point source): all of it within
+   *  the reach in the final update, its loudest pieces before. */
   geometry?: [number, number][][]
 }
 

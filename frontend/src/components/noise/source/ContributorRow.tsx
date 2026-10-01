@@ -64,7 +64,7 @@ function SourceRow({ label, distance, received, onToggle, children }: {
   )
 }
 
-/** A source's row; opening it shows the source's loudest pieces on the map. */
+/** A source's row; opening it shows the source on the map. */
 export function ContributorRow({ c, onHighlight }: { c: Contributor, onHighlight?: (id: string | null) => void }) {
   return (
     <SourceRow

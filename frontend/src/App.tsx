@@ -29,7 +29,7 @@ export default function App() {
   const [noiseDetailData, setNoiseDetailData] = useState<PopupUpdate | null>(null)
   const [noiseDetailError, setNoiseDetailError] = useState<string | null>(null)
   // What the map highlights: a loudest flight's track (its row hovered, or tapped on a phone), by
-  // key, or a contributor's loudest pieces (its row opened), by `source:<id>`; read from the latest
+  // key, or a contributor's lines (its row opened), by `source:<id>`; read from the latest
   // update, so it follows the stream and goes when it leaves the list.
   const [highlighted, setHighlighted] = useState<string | null>(null)
   const highlightedTrack = highlighted?.startsWith('source:')
