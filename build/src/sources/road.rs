@@ -272,6 +272,42 @@ fn electric_share(country_iso: u16) -> f64 {
         .map_or(0.0, |index| BATTERY_ELECTRIC_PERCENT[index].1 / 100.0)
 }
 
+/// Heavy vehicles drive no faster than this (km/h): the 80 km/h most of Europe sets them, where
+/// a country lets them faster its limit or their speed limiters' setting (Australia 100,
+/// Belgium, Brazil, France, Ireland, Japan, New Zealand, Russia and Spain 90 on motorways, Canada
+/// 105 by Ontario's and Quebec's limiters, China 100 on expressways, Great Britain 90 by the
+/// limiters, the United States 105 for the 65 mph most trucks are governed to).
+const HEAVY_SPEED_CAP_KMH: f64 = 80.0;
+const COUNTRY_HEAVY_SPEED_CAP_KMH: [([u8; 2], f64); 13] = [
+    (*b"AU", 100.0),
+    (*b"BE", 90.0),
+    (*b"BR", 90.0),
+    (*b"CA", 105.0),
+    (*b"CN", 100.0),
+    (*b"ES", 90.0),
+    (*b"FR", 90.0),
+    (*b"GB", 90.0),
+    (*b"IE", 90.0),
+    (*b"JP", 90.0),
+    (*b"NZ", 90.0),
+    (*b"RU", 90.0),
+    (*b"US", 105.0),
+];
+
+/// The speed of a category on a road of `speed_kmh` in a country.
+fn category_speed(category: VehicleCategory, speed_kmh: f64, country_iso: u16) -> f64 {
+    if category != VehicleCategory::Heavy {
+        return speed_kmh;
+    }
+    let iso = country_iso.to_le_bytes();
+    let cap = COUNTRY_HEAVY_SPEED_CAP_KMH
+        .binary_search_by(|(code, _)| code[..].cmp(&iso[..]))
+        .map_or(HEAVY_SPEED_CAP_KMH, |index| {
+            COUNTRY_HEAVY_SPEED_CAP_KMH[index].1
+        });
+    speed_kmh.min(cap)
+}
+
 /// Day/evening/night shares of the daily flow: motorways, trunks and their links; other roads.
 const MOTORWAY_PERIOD_SHARES: [f64; PERIODS] = [0.65, 0.20, 0.15];
 const URBAN_PERIOD_SHARES: [f64; PERIODS] = [0.70, 0.18, 0.12];
@@ -504,6 +540,7 @@ pub fn convert(
                 _ => &[(1.0, 1.0)],
             };
             let electric = electric_share(country.value(row));
+            let country_iso = country.value(row);
             let emission: [[f64; BANDS]; PERIODS] = std::array::from_fn(|period| {
                 let flows: Vec<CategoryFlow> = directions
                     .iter()
@@ -511,7 +548,7 @@ pub fn convert(
                         (0..4).map(move |c| CategoryFlow {
                             vehicles_per_hour: share * daily[c] * shares[period]
                                 / PERIOD_HOURS[period],
-                            speed_kmh: speed,
+                            speed_kmh: category_speed(categories[c], speed, country_iso),
                             category: categories[c],
                             slope_percent: sign * slope,
                             junction: stop,
@@ -643,6 +680,22 @@ mod tests {
         assert!(
             close(mopeds[0], 0.0) && close(mopeds[3], 990.0),
             "{mopeds:?}"
+        );
+    }
+
+    /// Heavy vehicles keep to 80 km/h unless their country lets them faster; the others drive
+    /// the road's speed.
+    #[test]
+    fn heavy_vehicles_keep_their_countrys_limit() {
+        let code = |iso: &[u8; 2]| u16::from_le_bytes(*iso);
+        let heavy = VehicleCategory::Heavy;
+        assert_eq!(category_speed(heavy, 130.0, code(b"DE")), 80.0);
+        assert_eq!(category_speed(heavy, 113.0, code(b"US")), 105.0);
+        assert_eq!(category_speed(heavy, 60.0, code(b"US")), 60.0);
+        assert_eq!(category_speed(heavy, 130.0, code(b"FR")), 90.0);
+        assert_eq!(
+            category_speed(VehicleCategory::Medium, 130.0, code(b"DE")),
+            130.0
         );
     }
 

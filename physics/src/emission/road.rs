@@ -9,8 +9,6 @@ use crate::bands::BANDS;
 
 /// Reference speed of the rolling and propulsion laws (km/h).
 pub const REFERENCE_SPEED_KMH: f64 = 70.0;
-/// Heavy vehicles never emit above this speed (km/h).
-pub const HEAVY_SPEED_CAP_KMH: f64 = 80.0;
 /// The laws are evaluated at no less than this speed (km/h), and are valid on all speed ranges
 /// above it (2.2.2); the vehicle density uses the real speed.
 const MINIMUM_LAW_SPEED_KMH: f64 = 20.0;
@@ -82,6 +80,7 @@ impl VehicleCategory {
 #[derive(Debug, Clone, Copy)]
 pub struct CategoryFlow {
     pub vehicles_per_hour: f64,
+    /// The category's own mean speed (the caller holds heavy vehicles to their limit).
     pub speed_kmh: f64,
     pub category: VehicleCategory,
     /// The road's slope in the flow's direction (%, positive uphill).
@@ -171,10 +170,7 @@ pub fn line_emission_db(
 ) -> [f64; BANDS] {
     let mut energy = [0.0f64; BANDS];
     for flow in flows.iter().filter(|flow| flow.vehicles_per_hour > 0.0) {
-        let speed = match flow.category {
-            VehicleCategory::Heavy => flow.speed_kmh.min(HEAVY_SPEED_CAP_KMH),
-            _ => flow.speed_kmh,
-        };
+        let speed = flow.speed_kmh;
         let coefficients = flow.category.coefficients();
         let law_speed = speed.max(MINIMUM_LAW_SPEED_KMH);
         let (log_ratio, relative) = (
@@ -441,15 +437,12 @@ mod tests {
     }
 
     #[test]
-    fn surface_touches_rolling_only_and_heavy_speed_is_capped() {
+    fn surface_touches_rolling_only() {
         let moto = flow(100.0, 50.0, VehicleCategory::Motorcycle);
         assert_eq!(
             line_emission_db(&moto, (0.0, 20.0)),
             line_emission_db(&moto, (4.0, 20.0))
         );
-        let fast = line_emission_db(&flow(100.0, 120.0, VehicleCategory::Heavy), (0.0, 20.0));
-        let capped = line_emission_db(&flow(100.0, 80.0, VehicleCategory::Heavy), (0.0, 20.0));
-        assert_eq!(fast, capped);
         assert_eq!(
             line_emission_db(&flow(0.0, 50.0, VehicleCategory::Light), (0.0, 20.0)),
             [f64::NEG_INFINITY; BANDS]
