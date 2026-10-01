@@ -2,7 +2,9 @@
 //! (`fetch/bus.sh`), per way the directions they serve. A route that tags its interval runs
 //! that often for 18 hours; any other runs a typical service per direction: a city bus line 60
 //! departures a day (every 15 minutes, less by evening and night), fewer where fewer people
-//! live (the caller's `service` share: a village's line 12-20), a trolleybus 80, a coach 4. A
+//! live (the caller's `service` share: a village's line 12-20), a trolleybus 80, a coach 4.
+//! A street's buses saturate towards a trunk corridor's 3,000 a day (both directions): São
+//! Paulo's avenues list 300-400 route directions, variants of the same lines among them. A
 //! counted road keeps its count, buses included.
 
 use std::path::Path;
@@ -11,6 +13,8 @@ use std::path::Path;
 const BUS_DEPARTURES: f64 = 60.0;
 const TROLLEYBUS_DEPARTURES: f64 = 80.0;
 const COACH_DEPARTURES: f64 = 4.0;
+/// The most buses a street carries a day (both directions), approached smoothly.
+const MOST_BUSES: f64 = 3_000.0;
 
 /// The routes per way, sorted by way id.
 pub struct BusRoutes {
@@ -61,9 +65,10 @@ impl BusRoutes {
             return (0.0, 0.0);
         };
         let ([bus, trolleybus, coach], departures) = self.service[index];
-        let buses = f64::from(bus) * BUS_DEPARTURES * service
+        let listed = f64::from(bus) * BUS_DEPARTURES * service
             + f64::from(trolleybus) * TROLLEYBUS_DEPARTURES
             + f64::from(departures);
+        let buses = MOST_BUSES * (1.0 - (-listed / MOST_BUSES).exp());
         (buses, f64::from(coach) * COACH_DEPARTURES)
     }
 }
@@ -75,11 +80,15 @@ mod tests {
     #[test]
     fn a_street_carries_its_routes_departures() {
         let routes = BusRoutes::parse("7 6 2 0 0.0\n9 0 0 1 108.0\n").unwrap();
-        // Three city lines both ways and a trolleybus line: 6 x 60 + 2 x 80.
-        assert_eq!(routes.daily(7, 1.0), (520.0, 0.0));
-        assert_eq!(routes.daily(7, 0.2), (232.0, 0.0));
-        assert_eq!(routes.daily(9, 1.0), (108.0, 4.0));
+        // Three city lines both ways and a trolleybus line: 6 x 60 + 2 x 80, saturating.
+        let saturated = |listed: f64| MOST_BUSES * (1.0 - (-listed / MOST_BUSES).exp());
+        assert_eq!(routes.daily(7, 1.0), (saturated(520.0), 0.0));
+        assert!((saturated(520.0) - 477.0).abs() < 1.0);
+        assert_eq!(routes.daily(7, 0.2), (saturated(232.0), 0.0));
+        assert_eq!(routes.daily(9, 1.0), (saturated(108.0), 4.0));
         assert_eq!(routes.daily(8, 1.0), (0.0, 0.0));
+        // 400 route directions: a corridor's 3,000, not 24,000.
+        assert!(saturated(24_000.0) > 2_990.0 && saturated(24_000.0) <= 3_000.0);
         assert!(BusRoutes::parse("9 1 0 0 0\n7 1 0 0 0\n").is_err());
     }
 }
