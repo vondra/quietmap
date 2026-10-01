@@ -3,6 +3,7 @@
 //! with state mixing and air absorption.
 
 use super::*;
+use crate::atmosphere::ALPHA_DB_PER_KM;
 
 fn assert_close(got: &[f64], want: &[f64]) {
     assert_eq!(got.len(), want.len(), "length {got:?} vs {want:?}");
@@ -198,9 +199,27 @@ fn flat_ground_transfer_mixes_states_and_absorbs_air() {
     };
     let profile = flat(110.54);
     let mut scratch = RayScratch::default();
-    let homogeneous = ray_transfer(&profile, &[], &ends, [0.0; PERIODS], &mut scratch);
-    let favourable = ray_transfer(&profile, &[], &ends, [1.0; PERIODS], &mut scratch);
-    let mixed = ray_transfer(&profile, &[], &ends, [0.5, 0.0, 1.0], &mut scratch);
+    let homogeneous = ray_transfer(
+        &profile,
+        &[],
+        &ends,
+        ([0.0; PERIODS], &*ALPHA_DB_PER_KM),
+        &mut scratch,
+    );
+    let favourable = ray_transfer(
+        &profile,
+        &[],
+        &ends,
+        ([1.0; PERIODS], &*ALPHA_DB_PER_KM),
+        &mut scratch,
+    );
+    let mixed = ray_transfer(
+        &profile,
+        &[],
+        &ends,
+        ([0.5, 0.0, 1.0], &*ALPHA_DB_PER_KM),
+        &mut scratch,
+    );
     let slant = 110.54f64.hypot(3.0);
     assert!((homogeneous.slant_m - slant).abs() < 1e-12);
     let air = |band: usize| 10f64.powf(-ALPHA_DB_PER_KM[band] * slant / 1000.0 / 10.0);
@@ -231,12 +250,18 @@ fn a_wall_between_source_and_receiver_screens() {
         own_footprint: 0,
     };
     let mut scratch = RayScratch::default();
-    let open = ray_transfer(&profile, &[], &ends, [0.5; PERIODS], &mut scratch);
+    let open = ray_transfer(
+        &profile,
+        &[],
+        &ends,
+        ([0.5; PERIODS], &*ALPHA_DB_PER_KM),
+        &mut scratch,
+    );
     let walled = ray_transfer(
         &profile,
         &[barrier(0.5, 6.0, 9)],
         &ends,
-        [0.5; PERIODS],
+        ([0.5; PERIODS], &*ALPHA_DB_PER_KM),
         &mut scratch,
     );
     let loss_db = 10.0 * (open.periods[0][4] / walled.periods[0][4]).log10();

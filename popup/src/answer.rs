@@ -18,8 +18,8 @@ use crate::scene::Ground;
 use crate::selection::{LayerSelection, select};
 use crate::update::{Statistics, Update, empty_answer, layer_answers, loudest_contributors};
 use physics::bands::PERIODS;
-use physics::bound::receiver_gain;
-use physics::weather::FavourableProbability;
+use physics::bound::receiver_bound;
+use physics::weather::PlaceWeather;
 use rayon::prelude::*;
 use std::cell::OnceCell;
 use tiles::aircraft::Aircraft;
@@ -44,7 +44,7 @@ pub struct Options {
 struct Station {
     position: [f64; 2],
     altitude_m: f64,
-    weather: FavourableProbability,
+    weather: PlaceWeather,
     reflection_db: f64,
 }
 
@@ -112,7 +112,7 @@ pub fn answer(
     let mut station: Option<Station> = None;
     let mut building: Option<BuildingClick> = None;
     let mut attributes = Attributes::default();
-    let weather = release.weather.at(lat, lon);
+    let weather = release.weather.place(lat, lon);
     let mut ring = 0;
     while ring < ground_rings.max(aircraft_rings) {
         ring += 1;
@@ -252,7 +252,11 @@ pub fn answer(
                 0.0,
             ),
         };
-        let collect_gain = receiver_gain(weather.maximum(), reflection_db);
+        let collect_gain = receiver_bound(
+            weather.favourable.maximum(),
+            reflection_db,
+            weather.alpha_db_per_km,
+        );
         let collected: Vec<Result<TileCandidates, String>> = ring_sources
             .par_iter()
             .map(|(tile_index, tile, sources)| {
@@ -303,7 +307,11 @@ pub fn answer(
                 weather,
                 reflection_db: facade.reflection_db,
             };
-            let gain = receiver_gain(weather.maximum(), chosen.reflection_db);
+            let gain = receiver_bound(
+                weather.favourable.maximum(),
+                chosen.reflection_db,
+                weather.alpha_db_per_km,
+            );
             for selection in &mut selections {
                 selection.pending.retain_mut(|candidate| {
                     candidate.bound_at(chosen.position, &attributes[candidate.attribute], &gain)

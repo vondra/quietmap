@@ -5,7 +5,6 @@
 //! state and air absorption at the slant distance. Divergence and the receiver reflection are the
 //! caller's.
 
-use crate::atmosphere::ALPHA_DB_PER_KM;
 use crate::bands::{BANDS, PERIODS};
 use crate::cnossos::{
     MeteorologicalState, PlanePoint, StateBoundary, VerticalPath, VerticalPathScratch,
@@ -79,15 +78,23 @@ struct Roof {
     top1: f64,
 }
 
-/// The transfer of one ray; `favourable_probability` is p of each period for this ray's direction.
+/// The transfer of one ray; `favourable_probability` is p of each period for this ray's direction,
+/// `alpha_db_per_km` the air absorption of the place per band.
 pub fn ray_transfer(
     profile: &Profile,
     crossings: &[Crossing],
     ends: &RayEnds,
-    favourable_probability: [f64; PERIODS],
+    (favourable_probability, alpha_db_per_km): ([f64; PERIODS], &[f64; BANDS]),
     scratch: &mut RayScratch,
 ) -> Transfer {
-    ray_terms(profile, crossings, ends, favourable_probability, scratch).transfer
+    ray_terms(
+        profile,
+        crossings,
+        ends,
+        (favourable_probability, alpha_db_per_km),
+        scratch,
+    )
+    .transfer
 }
 
 /// The terms of one ray: the transfer with the boundary of each state (homogeneous, favourable),
@@ -105,7 +112,7 @@ pub fn ray_terms(
     profile: &Profile,
     crossings: &[Crossing],
     ends: &RayEnds,
-    favourable_probability: [f64; PERIODS],
+    (favourable_probability, alpha_db_per_km): ([f64; PERIODS], &[f64; BANDS]),
     scratch: &mut RayScratch,
 ) -> RayTerms {
     let horizontal = profile.horizontal_m.max(1.0);
@@ -130,8 +137,7 @@ pub fn ray_terms(
         let path = scratch.path.path(profile, ends, source_altitude);
         state_boundary(&path, state, &mut scratch.vertical)
     });
-    let alpha = *ALPHA_DB_PER_KM;
-    let air_db: [f64; BANDS] = std::array::from_fn(|band| alpha[band] * slant / 1000.0);
+    let air_db: [f64; BANDS] = std::array::from_fn(|band| alpha_db_per_km[band] * slant / 1000.0);
     let air: [f64; BANDS] = air_db.map(attenuation_energy);
     let homogeneous: [f64; BANDS] = std::array::from_fn(|band| {
         attenuation_energy(boundaries[0].attenuation_db[band] + foliage[0][band])

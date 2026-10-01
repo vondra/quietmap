@@ -10,8 +10,8 @@ use crate::evaluate::{Receiver, Scratch, received_energy};
 use crate::obstacles::{FacadeReceiver, Footprint, Scene};
 use crate::scene::Ground;
 use physics::bands::PERIODS;
-use physics::bound::receiver_gain;
-use physics::weather::FavourableProbability;
+use physics::bound::receiver_bound;
+use physics::weather::PlaceWeather;
 use rayon::prelude::*;
 
 /// Sources evaluated at every façade to choose the loudest (dev4 `FACADE_SOURCE_LIMIT`).
@@ -66,7 +66,7 @@ pub fn loudest_facade(
     attributes: &Attributes,
     ground: &Ground<'_>,
     obstacles: &Scene<'_>,
-    weather: FavourableProbability,
+    weather: PlaceWeather,
 ) -> Result<Facade, String> {
     let facades = receivers
         .iter()
@@ -80,7 +80,11 @@ pub fn loudest_facade(
         .iter()
         .map(|facade| facade.reflection_db)
         .fold(0.0, f64::max);
-    let ranking_gain = receiver_gain(weather.maximum(), largest_reflection);
+    let ranking_gain = receiver_bound(
+        weather.favourable.maximum(),
+        largest_reflection,
+        weather.alpha_db_per_km,
+    );
     let mut ranked: Vec<(f64, usize)> = candidates
         .par_iter()
         .enumerate()

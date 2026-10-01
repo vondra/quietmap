@@ -3,7 +3,6 @@
 //! diffraction gain of CNOSSOS-EU and the receiver reflection. The popup skips sources only by
 //! this bound, so it must stay an upper bound of `ray` and `line` (foliage only attenuates).
 
-use crate::atmosphere::ALPHA_DB_PER_KM;
 use crate::bands::{A_WEIGHTING_DB, BANDS, PERIODS, energy};
 use crate::line::{LINE_PERPENDICULAR_FLOOR_M, POINT_DIVERGENCE_LINEAR};
 
@@ -68,13 +67,25 @@ pub fn emission_energy(emission_db: &[[f64; BANDS]; PERIODS]) -> [[f64; BANDS]; 
     })
 }
 
-/// The per-period factor of the bound shared by every source of one receiver: the largest mixed
-/// gain at the largest favourable probability the rays can meet, and the receiver reflection.
-pub fn receiver_gain(
+/// The receiver's share of the bound, the same for every source of one receiver: per period the
+/// largest mixed gain at the largest favourable probability the rays can meet with the receiver
+/// reflection, and the air absorption of the place per band (the rays' own).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReceiverBound {
+    pub gain: [f64; PERIODS],
+    pub alpha_db_per_km: [f64; BANDS],
+}
+
+/// The [`ReceiverBound`] of a receiver.
+pub fn receiver_bound(
     favourable_probability_max: [f64; PERIODS],
     reflection_db: f64,
-) -> [f64; PERIODS] {
-    favourable_probability_max.map(|p| energy(mixed_gain_bound_db(p) + reflection_db))
+    alpha_db_per_km: [f64; BANDS],
+) -> ReceiverBound {
+    ReceiverBound {
+        gain: favourable_probability_max.map(|p| energy(mixed_gain_bound_db(p) + reflection_db)),
+        alpha_db_per_km,
+    }
 }
 
 /// Upper bound of the received A-weighted energy per period of a source with A-weighted band
@@ -83,16 +94,16 @@ pub fn received_energy_bound(
     emission_energy: &[[f64; BANDS]; PERIODS],
     spread: Spread,
     distance_m: f64,
-    receiver_gain: &[f64; PERIODS],
+    receiver: &ReceiverBound,
 ) -> [f64; PERIODS] {
-    let alpha = &*ALPHA_DB_PER_KM;
     let divergence = energy(-spread.divergence_db(distance_m));
-    let air: [f64; BANDS] = std::array::from_fn(|band| energy(-alpha[band] * distance_m / 1000.0));
+    let air: [f64; BANDS] =
+        std::array::from_fn(|band| energy(-receiver.alpha_db_per_km[band] * distance_m / 1000.0));
     std::array::from_fn(|period| {
         let received: f64 = (0..BANDS)
             .map(|band| emission_energy[period][band] * air[band])
             .sum();
-        received * divergence * receiver_gain[period]
+        received * divergence * receiver.gain[period]
     })
 }
 
@@ -130,7 +141,7 @@ mod tests {
             &emission_energy(&emission),
             Spread::Point,
             100.0,
-            &receiver_gain([0.5; PERIODS], 0.0),
+            &receiver_bound([0.5; PERIODS], 0.0, *crate::atmosphere::ALPHA_DB_PER_KM),
         );
         assert_eq!((bound[0], bound[1]), (0.0, 0.0));
         assert!(bound[2] > 0.0);

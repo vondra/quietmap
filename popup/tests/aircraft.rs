@@ -9,7 +9,7 @@ use physics::doc29::segment::{
     AircraftType, SegmentEmission, SegmentGeometry, segment_sel_at_receiver,
 };
 use physics::doc29::thrust::SegmentFlight;
-use physics::weather::{COLUMNS, ROWS, SECTORS, encode as encode_weather};
+use physics::weather::{COLUMNS, ROWS, SECTORS, WeatherNode, encode as encode_weather};
 use popup::answer::{Options, answer};
 use popup::release::Release;
 use std::path::PathBuf;
@@ -26,7 +26,13 @@ fn release_with_boxes(name: &str, tile: TileId, kind: Kind, boxes: &[AircraftBox
     let root = std::env::temp_dir().join(format!("qm-aircraft-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("2026")).unwrap();
-    let weather = vec![[[50u8; SECTORS]; PERIODS]; ROWS * COLUMNS];
+    let weather = vec![
+        WeatherNode {
+            percent: [[50u8; SECTORS]; PERIODS],
+            ..WeatherNode::default()
+        };
+        ROWS * COLUMNS
+    ];
     std::fs::write(root.join("weather"), encode_weather(&weather)).unwrap();
     let path = tile_path(&root.join("2026"), tile, kind);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();

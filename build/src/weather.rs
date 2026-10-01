@@ -1,9 +1,11 @@
-//! Builds the global weather table: p per period and direction sector on the 0.5 degree grid, cut
-//! from dev4's per-square ERA5 files (every 0.5 degree node is a 0.25 degree ERA5 node).
+//! Builds the global weather table: p per period and direction sector and the air absorption per
+//! band on the 0.5 degree grid, cut from dev4's per-square ERA5 files (every 0.5 degree node is a
+//! 0.25 degree ERA5 node; each record holds p, then the mean and variance of ISO 9613-1 absorption
+//! per period and band over the 3-hourly states of 1991-2020).
 
 use crate::dev4::{Dev4, Square};
-use physics::bands::PERIODS;
-use physics::weather::{COLUMNS, NODES_PER_DEGREE, ROWS, SECTORS, encode};
+use physics::bands::{BANDS, PERIOD_HOURS, PERIODS};
+use physics::weather::{COLUMNS, NODES_PER_DEGREE, ROWS, SECTORS, WeatherNode, encode};
 use std::collections::BTreeMap;
 use std::path::Path;
 use tiles::geo::{Mercator, TileId};
@@ -46,8 +48,9 @@ impl SquareWeather {
         })
     }
 
-    /// The 48 percentages of the ERA5 node at global indices (column east of 0 E, row south of 90 N).
-    fn percent(&self, column: i64, row: i64) -> Option<[[u8; SECTORS]; PERIODS]> {
+    /// The ERA5 node at global indices (column east of 0 E, row south of 90 N): its 48 percentages
+    /// and its absorption per band, the periods' means weighted by their hours.
+    fn node(&self, column: i64, row: i64) -> Option<WeatherNode> {
         let wrap = 360 * ERA5_NODES_PER_DEGREE;
         let local_column = (column - self.west).rem_euclid(wrap);
         let local_row = row - (90 * ERA5_NODES_PER_DEGREE - self.north);
@@ -55,9 +58,24 @@ impl SquareWeather {
             return None;
         }
         let at = HEADER_BYTES + RECORD_BYTES * (local_row * self.columns + local_column) as usize;
-        Some(std::array::from_fn(|period| {
-            std::array::from_fn(|sector| self.bytes[at + period * SECTORS + sector])
-        }))
+        let mean = |period: usize, band: usize| {
+            let from = at + PERIODS * SECTORS + (period * BANDS + band) * 4;
+            f64::from(f32::from_le_bytes(
+                self.bytes[from..from + 4].try_into().expect("four bytes"),
+            ))
+        };
+        let hours: f64 = PERIOD_HOURS.iter().sum();
+        Some(WeatherNode {
+            percent: std::array::from_fn(|period| {
+                std::array::from_fn(|sector| self.bytes[at + period * SECTORS + sector])
+            }),
+            alpha_db_per_km: std::array::from_fn(|band| {
+                (0..PERIODS)
+                    .map(|period| PERIOD_HOURS[period] * mean(period, band))
+                    .sum::<f64>()
+                    / hours
+            }),
+        })
     }
 }
 
@@ -81,11 +99,11 @@ pub fn build(dev4: &Dev4, out: &Path) -> Result<(), String> {
             ));
         }
     }
-    let mut table = vec![[[0u8; SECTORS]; PERIODS]; ROWS * COLUMNS];
+    let mut table = vec![WeatherNode::default(); ROWS * COLUMNS];
     for (square, nodes) in by_square {
         let weather = SquareWeather::load(dev4, square)?;
         for (index, era5_column, era5_row) in nodes {
-            table[index] = weather.percent(era5_column, era5_row).ok_or_else(|| {
+            table[index] = weather.node(era5_column, era5_row).ok_or_else(|| {
                 format!("square {square:?} lacks ERA5 node {era5_column}/{era5_row}")
             })?;
         }

@@ -4,7 +4,7 @@
 use crate::scene::Ground;
 use physics::bands::BANDS;
 use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy};
-use physics::bound::{Spread, emission_energy, received_energy_bound};
+use physics::bound::{ReceiverBound, Spread, emission_energy, received_energy_bound};
 use rayon::prelude::*;
 use tiles::geo::TileId;
 use tiles::sources::{Layer, Sources};
@@ -142,9 +142,9 @@ impl Candidate {
         &self,
         distance_m: f64,
         source: &SourceAttribute,
-        receiver_gain: &[f64; PERIODS],
+        receiver_bound: &ReceiverBound,
     ) -> [f64; PERIODS] {
-        received_energy_bound(&source.energy, self.spread(), distance_m, receiver_gain)
+        received_energy_bound(&source.energy, self.spread(), distance_m, receiver_bound)
     }
 
     /// Distance, bound and order for a receiver at `receiver` (click metres); `false` when the
@@ -153,10 +153,10 @@ impl Candidate {
         &mut self,
         receiver: [f64; 2],
         source: &SourceAttribute,
-        receiver_gain: &[f64; PERIODS],
+        receiver_bound: &ReceiverBound,
     ) -> bool {
         self.distance_m = self.distance_from(receiver);
-        self.bound = self.bound_at_distance(self.distance_m, source, receiver_gain);
+        self.bound = self.bound_at_distance(self.distance_m, source, receiver_bound);
         self.order = lden_weighted(&self.bound);
         self.distance_m <= GROUND_REACH_M
     }
@@ -172,7 +172,7 @@ pub fn collect(
     ground: &Ground<'_>,
     receiver: [f64; 2],
     reach_m: f64,
-    receiver_gain: &[f64; PERIODS],
+    receiver_bound: &ReceiverBound,
 ) -> Result<TileCandidates, String> {
     // Both loops run in parallel chunks: a dense tile holds a million sources.
     let attributes = (0..sources.attribute_count())
@@ -239,7 +239,7 @@ pub fn collect(
                 distance_m: near,
                 bound: [0.0; PERIODS],
             };
-            candidate.bound_at(receiver, source, receiver_gain);
+            candidate.bound_at(receiver, source, receiver_bound);
             Ok(Some(candidate))
         })
         .filter_map(Result::transpose)

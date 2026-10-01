@@ -6,7 +6,7 @@ use physics::bands::{BANDS, PERIODS};
 use physics::doc29::box_sums::BoxSums;
 use physics::doc29::segment::{AircraftType, SegmentEmission};
 use physics::doc29::thrust::SegmentFlight;
-use physics::weather::{COLUMNS, ROWS, SECTORS, encode as encode_weather};
+use physics::weather::{COLUMNS, ROWS, SECTORS, WeatherNode, encode as encode_weather};
 use popup::answer::{Options, answer};
 use popup::json::update_line;
 use popup::release::Release;
@@ -83,7 +83,13 @@ fn release(name: &str, east_m: &[f64], level_db: f64, with_box: bool) -> PathBuf
     let root = std::env::temp_dir().join(format!("qm-airport-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("2026")).unwrap();
-    let weather = vec![[[50u8; SECTORS]; PERIODS]; ROWS * COLUMNS];
+    let weather = vec![
+        WeatherNode {
+            percent: [[50u8; SECTORS]; PERIODS],
+            ..WeatherNode::default()
+        };
+        ROWS * COLUMNS
+    ];
     std::fs::write(root.join("weather"), encode_weather(&weather)).unwrap();
     let write = |kind, bytes: Vec<u8>| {
         let path = tile_path(&root.join("2026"), TILE, kind);

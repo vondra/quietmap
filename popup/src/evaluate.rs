@@ -11,7 +11,7 @@ use physics::bound::POINT_DIVERGENCE_OFFSET_DB;
 use physics::line::{LinePieceGeometry, LineQuadratureNode, SkylineArc, line_quadrature_nodes};
 use physics::profile::Profile;
 use physics::ray::{Crossing, RayEnds, RayScratch, RayTerms, ray_terms, ray_transfer};
-use physics::weather::FavourableProbability;
+use physics::weather::PlaceWeather;
 
 /// What every source of one click shares.
 pub struct Receiver<'s, 'a> {
@@ -20,7 +20,7 @@ pub struct Receiver<'s, 'a> {
     /// Where the receiver stands (click metres): the click, or a building's façade receiver.
     pub position: [f64; 2],
     pub altitude_m: f64,
-    pub weather: FavourableProbability,
+    pub weather: PlaceWeather,
     pub reflection_db: f64,
 }
 
@@ -66,12 +66,17 @@ pub fn trace(
     receiver
         .obstacles
         .crossings(point, receiver.position, &mut scratch.crossings)?;
-    let p = std::array::from_fn(|period| receiver.weather.at(period, receiver.azimuth(point)));
+    let p = std::array::from_fn(|period| {
+        receiver
+            .weather
+            .favourable
+            .at(period, receiver.azimuth(point))
+    });
     Ok(ray_terms(
         &scratch.profile,
         &scratch.crossings,
         &ends,
-        p,
+        (p, &receiver.weather.alpha_db_per_km),
         &mut scratch.ray,
     ))
 }
@@ -168,12 +173,17 @@ fn ray(
             .obstacles
             .crossings(point, receiver.position, &mut scratch.crossings)?;
     }
-    let p = std::array::from_fn(|period| receiver.weather.at(period, receiver.azimuth(point)));
+    let p = std::array::from_fn(|period| {
+        receiver
+            .weather
+            .favourable
+            .at(period, receiver.azimuth(point))
+    });
     Ok(ray_transfer(
         &scratch.profile,
         &scratch.crossings,
         ends,
-        p,
+        (p, &receiver.weather.alpha_db_per_km),
         &mut scratch.ray,
     )
     .periods)
