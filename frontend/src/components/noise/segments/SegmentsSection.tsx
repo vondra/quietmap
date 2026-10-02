@@ -305,7 +305,7 @@ export const SEGMENTS_EXPLAINED = 'Every source within reach is cut into pieces.
   + 'ground. The level is the energy sum of all pieces; the loudest\n'
   + 'are listed and drawn on the map.'
 
-export function SegmentsSection({ lat, lng, building, reflectionDb, layers, contributors, onFan, insetLeftPx = 0 }: {
+export function SegmentsSection({ lat, lng, building, reflectionDb, layers, contributors, onFan }: {
   lat: number
   lng: number
   building: BuildingAnswer | null
@@ -315,8 +315,6 @@ export function SegmentsSection({ lat, lng, building, reflectionDb, layers, cont
   contributors: Contributor[]
   /** Draws the listed pieces and their rays on the map; null clears them. */
   onFan?: (fan: SegmentFan | null) => void
-  /** The map's width a panel covers on the left: the rays are framed beside it. */
-  insetLeftPx?: number
 }) {
   const [pieces, setPieces] = useState<PopupPiece[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -364,12 +362,11 @@ export function SegmentsSection({ lat, lng, building, reflectionDb, layers, cont
           opened: open && opened !== null
             ? { index: opened, points: [...open.ends, ...summedRays(open).map(ray => ray.from)] }
             : null,
-          insetLeftPx,
         }
       : null)
     // The receiver is read from `lat`, `lng` and the building, all fixed for one click.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grouped, selected, opened, onFan, insetLeftPx])
+  }, [grouped, selected, opened, onFan])
   useEffect(() => () => onFan?.(null), [onFan])
   const toggle = (key: string) => {
     const next = new Set(openKeys)
@@ -403,11 +400,8 @@ export function SegmentsSection({ lat, lng, building, reflectionDb, layers, cont
           <span className={`text-right ${HEADER}`}>Lden</span>
           {grouped.map(({ layer, sources }) => (
             <div key={layer.source_type} className="contents">
-              <div className="col-span-4 flex justify-between items-baseline mt-2 pt-1 border-t border-border text-foreground">
-                <span className="font-sans font-medium uppercase tracking-[0.08em]">
-                  {SOURCE_LABELS[layer.source_type] ?? layer.source_type}
-                </span>
-                <span className="tabular-nums font-semibold">{layer.lden?.toFixed(1)}</span>
+              <div className="col-span-4 mt-2 pt-1 border-t border-border text-foreground font-sans font-medium uppercase tracking-[0.08em]">
+                {SOURCE_LABELS[layer.source_type] ?? layer.source_type}
               </div>
               <span className="col-span-4 mb-0.5 font-sans text-[10px] text-muted-foreground/80">{layerNote(layer)}</span>
               {sources.map(source => {

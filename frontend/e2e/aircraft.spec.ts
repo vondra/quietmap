@@ -94,7 +94,7 @@ test('desktop: airport ground operations read as their airport and its traffic',
   await sendPopupLine(page, { ...update, top_contributors: [...update.top_contributors, airportContributor(52)] })
   // A row of its own beside the Aircraft layer's row, whose level includes it.
   const popup = page.locator('[data-testid="detail-popup"]:visible')
-  await expect(popup.getByRole('button')).toHaveText([/Detailed calculation/, /^Fixture street/, /^Aircraft/, /^LKPR ground operations/])
+  await expect(popup.getByRole('button')).toHaveText([/^Fixture street/, /^Aircraft/, /^LKPR ground operations/, /^Detailed calc/])
   const airport = popup.getByRole('button', { name: /^LKPR ground operations/ })
   await airport.click()
   // Its class in words, then its fields by name: the subtype is the class, not a line of its own.

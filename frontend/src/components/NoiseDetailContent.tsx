@@ -1,13 +1,17 @@
-// The popup body: how loud the place is over the whole day (loudness in sone, Lden beside it), and
+// The popup body: how loud the place is over the whole day (loudness in sone, Lden under it), and
 // what is heard there and from what: the loudest contributors and the aircraft layer, each with how
-// it is heard and its share of the noise. The whole calculation opens in its own panel. Redrawn on
-// every streamed update of the click.
+// it is heard and its share of the noise. Under the list the whole calculation opens in place.
+// Redrawn on every streamed update of the click.
+import { lazy, Suspense } from 'react'
 import { ldenToColor } from '../utils/noise-colors'
 import { DataPoint } from './noise/noise-tooltips'
 import { fmtDb, fmtSone, txtTable } from '../utils/formatters'
 import { PERIOD_LABELS_DETAIL, SOURCE_LABELS } from './noise/shared'
 import { AircraftLayerRow, ContributorRow } from './noise/source/ContributorRow'
-import type { PopupUpdate } from '../types/noise'
+import type { PopupUpdate, SegmentFan } from '../types/noise'
+
+// Lazy: the calculation is a separate chunk, loaded when a visitor opens it.
+const CalculationDetails = lazy(() => import('./calculation/CalculationDetails'))
 
 // The read and compute statistics of the click are for profiling, not for visitors: shown only
 // when the URL carries ?timings.
@@ -19,8 +23,11 @@ export interface NoiseDetailContentProps {
   /** Shows a loudest flight's track (by `topFlightKey`) or a contributor's pieces (by
    * `source:<id>`) on the map; null shows none. */
   onHighlight: (key: string | null) => void
-  /** Opens the detailed calculation of the answered click. */
-  onOpenCalculation?: () => void
+  /** Whether the detailed calculation is open under the list, and how to open or close it. */
+  calculationOpen?: boolean
+  onCalculationToggle?: () => void
+  /** Draws the calculation's pieces and rays on the map; null clears them. */
+  onFan?: (fan: SegmentFan | null) => void
 }
 
 const LOUDNESS_TEXT = [
@@ -31,7 +38,7 @@ const LOUDNESS_TEXT = [
   'Twice the number sounds twice as loud.',
 ].join('\n')
 
-export default function NoiseDetailContent({ data, maxSources, onHighlight, onOpenCalculation }: NoiseDetailContentProps) {
+export default function NoiseDetailContent({ data, maxSources, onHighlight, calculationOpen = false, onCalculationToggle, onFan }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.center
   const answered = data.total_lden != null && !data.partial
   const total = data.total_lden ?? 0
@@ -71,26 +78,26 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, onOp
     <div data-testid="detail-popup" role="dialog" className="px-2.5 pt-1 pb-2" onClick={(e) => e.stopPropagation()}>
       <div className="flex items-start justify-between mb-1.5">
         {data.total_lden != null ? (
-          <span data-testid="noise-badge" className="flex items-baseline gap-1.5 leading-none shrink-0 whitespace-nowrap text-foreground">
-            <span className="inline-block size-2.5 rounded-full self-center" style={{ background: ldenToColor(data.total_lden) }} aria-hidden="true" />
-            {sone != null && sone > 0
-              ? (
-                <DataPoint title="Loudness" text={LOUDNESS_TEXT}>
-                  <span className="text-2xl font-bold">{fmtSone(sone)}</span>
-                  <span className="text-sm font-medium"> sone</span>
-                </DataPoint>
-              )
-              : <span className="text-2xl font-bold text-muted-foreground/40 animate-pulse">… sone</span>}
-          </span>
-        ) : <span />}
-        <div className="text-right pr-6 text-xs text-muted-foreground/60 font-mono leading-tight">
-          {data.total_lden != null && (
-            <div data-testid="lden">
+          <div className="shrink-0">
+            <span data-testid="noise-badge" className="flex items-baseline gap-1.5 leading-none whitespace-nowrap text-foreground">
+              <span className="inline-block size-2.5 rounded-full self-center" style={{ background: ldenToColor(data.total_lden) }} aria-hidden="true" />
+              {sone != null && sone > 0
+                ? (
+                  <DataPoint title="Loudness" text={LOUDNESS_TEXT}>
+                    <span className="text-2xl font-bold">{fmtSone(sone)}</span>
+                    <span className="text-sm font-medium"> sone</span>
+                  </DataPoint>
+                )
+                : <span className="text-2xl font-bold text-muted-foreground/40 animate-pulse">… sone</span>}
+            </span>
+            <div data-testid="lden" className="mt-1 pl-4 text-xs text-muted-foreground/60 font-mono leading-tight">
               <DataPoint title="Total Lden — energy sum across all sources (EU noise mapping)" text={totalLdenText}>
                 Lden {data.total_lden.toFixed(1)} dB
               </DataPoint>
             </div>
-          )}
+          </div>
+        ) : <span />}
+        <div className="text-right pr-6 text-xs text-muted-foreground/60 font-mono leading-tight">
           <div>{centerLat.toFixed(4)}, {centerLng.toFixed(4)}</div>
           {data.elevation_m > 0 && <div>{Math.round(data.elevation_m)} m a.s.l.</div>}
           {data.partial && (
@@ -106,22 +113,28 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, onOp
       </div>
       {data.total_lden != null ? (
         <>
-          <div className="flex items-baseline justify-between border-b border-border pb-0.5 mb-0.5">
-            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">What you hear</span>
-            {answered && onOpenCalculation && (
+          <div className="border-b border-border pb-0.5 mb-0.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+            What you hear
+          </div>
+          {shown}
+          {answered && onCalculationToggle && (
+            <>
               <button
                 type="button"
-                data-testid="calculation-open"
-                className="text-[11px] text-muted-foreground hover:text-foreground"
-                onClick={onOpenCalculation}
+                data-testid="calculation-toggle"
+                aria-expanded={calculationOpen}
+                className="mt-1 w-full border-t border-border pt-1 text-left text-[11px] text-muted-foreground hover:text-foreground"
+                onClick={onCalculationToggle}
               >
-                Detailed calculation ▸
+                Detailed calc {calculationOpen ? '▾' : '▸'}
               </button>
-            )}
-          </div>
-          <div className="overflow-y-auto overflow-x-clip" style={{ maxHeight: 'max(100dvh - 400px, 160px)' }}>
-            {shown}
-          </div>
+              {calculationOpen && (
+                <Suspense fallback={<div className="mt-2 text-[11px] text-muted-foreground animate-pulse">…</div>}>
+                  <CalculationDetails data={data} onFan={onFan} />
+                </Suspense>
+              )}
+            </>
+          )}
         </>
       ) : (
         <div className="text-sm text-muted-foreground mt-1">

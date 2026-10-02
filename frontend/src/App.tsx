@@ -1,6 +1,6 @@
 // The map application: search, layer controls, the map, and the popup card or sheet, with every
 // piece of state mirrored into the shareable URL hash.
-import { lazy, Suspense, useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import MapView from './components/MapView'
 import SearchBar from './components/SearchBar'
 import ControlCard from './components/ControlCard'
@@ -16,9 +16,8 @@ import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
 import RecentPlaces from './components/RecentPlaces'
 import { loadRecentPlaces, saveRecentPlaces, withPlace, withoutPlace, type RecentPlace } from './lib/recent-places'
+import { useIsDesktop } from './hooks/useIsDesktop'
 
-// Lazy: the detailed calculation is a separate chunk, loaded when a visitor opens it.
-const CalculationPanel = lazy(() => import('./components/calculation/CalculationPanel'))
 
 export default function App() {
   const { initial, updateUrl } = useUrlState()
@@ -39,7 +38,10 @@ export default function App() {
   const [highlighted, setHighlighted] = useState<string | null>(null)
   // The detailed calculation's pieces and rays on the map, while it is open.
   const [fan, setFan] = useState<SegmentFan | null>(null)
+  // The detailed calculation, open under the popup's list.
   const [calculationOpen, setCalculationOpen] = useState(false)
+  const toggleCalculation = useCallback(() => setCalculationOpen(open => !open), [])
+  const desktop = useIsDesktop()
   // The last places opened, newest first, kept in this browser.
   const [recentPlaces, setRecentPlaces] = useState<RecentPlace[]>(loadRecentPlaces)
   const highlightedTrack = highlighted?.startsWith('source:')
@@ -245,7 +247,9 @@ export default function App() {
             error={noiseDetailError}
             onNoiseClose={handleNoiseClose}
             onHighlight={setHighlighted}
-            onOpenCalculation={() => setCalculationOpen(true)}
+            calculationOpen={calculationOpen && desktop}
+            onCalculationToggle={toggleCalculation}
+            onFan={setFan}
           />
         </div>
 
@@ -319,15 +323,12 @@ export default function App() {
         error={noiseDetailError}
         onClose={handleNoiseClose}
         onHighlight={setHighlighted}
-        onOpenCalculation={() => setCalculationOpen(true)}
+        calculationOpen={calculationOpen && !desktop}
+        onCalculationToggle={toggleCalculation}
+        onFan={setFan}
         recentPlaces={<RecentPlaces places={recentPlaces} current={detailPosition} onOpen={openPlace} onRemove={forgetPlace} />}
       />
 
-      {calculationOpen && noiseDetailData && !noiseDetailData.partial && (
-        <Suspense fallback={null}>
-          <CalculationPanel data={noiseDetailData} onClose={() => setCalculationOpen(false)} onFan={setFan} />
-        </Suspense>
-      )}
     </div>
   )
 }

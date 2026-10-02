@@ -3,7 +3,7 @@ import { lazy, Suspense, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import FloatingCard from './FloatingCard'
 import DetailSkeleton from './DetailSkeleton'
-import type { PopupUpdate } from '../types/noise'
+import type { PopupUpdate, SegmentFan } from '../types/noise'
 
 // Lazy: the popup body is a separate chunk, off first paint. App pre-warms it on click (its
 // detailPosition effect) so it downloads while the first answer is computed.
@@ -17,10 +17,12 @@ interface DetailCardProps {
   error?: string | null
   onNoiseClose: () => void
   onHighlight: (key: string | null) => void
-  onOpenCalculation?: () => void
+  calculationOpen: boolean
+  onCalculationToggle: () => void
+  onFan: (fan: SegmentFan | null) => void
 }
 
-export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlight, onOpenCalculation }: DetailCardProps) {
+export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlight, calculationOpen, onCalculationToggle, onFan }: DetailCardProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // A new point starts at the top; the streamed updates of one point keep the reader's scroll.
@@ -33,12 +35,12 @@ export default function DetailCard({ noiseData, position, error, onNoiseClose, o
   if (!position) return null
   const showSkeleton = !noiseData
 
-  // max-h-[50vh] keeps half the viewport for the map; the column's flex
-  // shrink (min-h-0) squeezes the card further on short viewports.
-  // overflow-x-clip: nothing inside may pan sideways — a child wider than
+  // max-h-[50vh] keeps half the viewport for the map; with the calculation open the card takes
+  // the rest of its column. The column's flex shrink (min-h-0) squeezes the card further on
+  // short viewports. overflow-x-clip: nothing inside may pan sideways — a child wider than
   // the card used to drag the whole popup left on vertical scroll.
   return (
-    <FloatingCard className="relative p-0 pointer-events-auto min-h-0 max-h-[50vh] overflow-y-auto overflow-x-clip" ref={scrollRef}>
+    <FloatingCard className={`relative p-0 pointer-events-auto min-h-0 overflow-y-auto overflow-x-clip ${calculationOpen ? '' : 'max-h-[50vh]'}`} ref={scrollRef}>
       <button
         onClick={onNoiseClose}
         className="absolute top-1 right-1.5 z-10 p-1 rounded-md hover:bg-black/5 text-muted-foreground hover:text-foreground"
@@ -49,7 +51,13 @@ export default function DetailCard({ noiseData, position, error, onNoiseClose, o
       {showSkeleton
         ? <DetailSkeleton position={position} error={error} />
         : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
-            <NoiseDetailContent data={noiseData} onHighlight={onHighlight} onOpenCalculation={onOpenCalculation} />
+            <NoiseDetailContent
+              data={noiseData}
+              onHighlight={onHighlight}
+              calculationOpen={calculationOpen}
+              onCalculationToggle={onCalculationToggle}
+              onFan={onFan}
+            />
           </Suspense>}
     </FloatingCard>
   )

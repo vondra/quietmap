@@ -156,8 +156,6 @@ export interface SegmentFan {
   overview: [number, number][]
   /** The opened piece's ends and rays, which the map frames as it opens. */
   opened: { index: number, points: [number, number][] } | null
-  /** The map's width a panel covers on the left (px): the framing keeps clear of it. */
-  insetLeftPx?: number
 }
 
 /** One computed piece of the segments view (asked with `segments=1`). */

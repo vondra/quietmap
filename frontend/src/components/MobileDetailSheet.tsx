@@ -1,7 +1,7 @@
 // The phone popup: a bottom sheet with a drag handle, a collapsed peek and the streamed answer.
 import { lazy, Suspense, useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import DetailSkeleton from './DetailSkeleton'
-import type { PopupUpdate } from '../types/noise'
+import type { PopupUpdate, SegmentFan } from '../types/noise'
 import { resolveSheetTouchEnd } from '../lib/sheet-drag'
 
 // Lazy popup body: see DetailCard.
@@ -15,12 +15,14 @@ interface MobileDetailSheetProps {
   error?: string | null
   onClose: () => void
   onHighlight: (key: string | null) => void
-  onOpenCalculation?: () => void
+  calculationOpen: boolean
+  onCalculationToggle: () => void
+  onFan: (fan: SegmentFan | null) => void
   /** The recent places' tabs, shown above the answer. */
   recentPlaces?: ReactNode
 }
 
-export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, onOpenCalculation, recentPlaces }: MobileDetailSheetProps) {
+export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, recentPlaces }: MobileDetailSheetProps) {
   const [expanded, setExpanded] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
@@ -114,7 +116,14 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
           {showSkeleton
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
-                <NoiseDetailContent data={data} maxSources={9} onHighlight={onHighlight} onOpenCalculation={onOpenCalculation} />
+                <NoiseDetailContent
+                  data={data}
+                  maxSources={9}
+                  onHighlight={onHighlight}
+                  calculationOpen={calculationOpen}
+                  onCalculationToggle={onCalculationToggle}
+                  onFan={onFan}
+                />
               </Suspense>}
         </div>
       </div>

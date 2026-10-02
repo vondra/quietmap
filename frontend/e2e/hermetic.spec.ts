@@ -152,7 +152,7 @@ test('desktop: a point inside a building tells its façade receiver in the segme
   await sendPopupLine(page, popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB, building))
   await expect(lden(page)).toHaveText(`Lden ${FIXTURE_DB.toFixed(1)} dB`)
   await expect(page.locator('[data-testid="building-exposure"]')).toHaveCount(0)
-  await page.locator('[data-testid="calculation-open"]:visible').click()
+  await page.locator('[data-testid="calculation-toggle"]:visible').click()
   await expect.poll(() => popupRequests(page)).toHaveLength(2)
   await sendPopupLine(page, { ...popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB, building), pieces: [] })
   const segments = page.locator('[data-testid="segments"]:visible')
@@ -171,7 +171,7 @@ test('desktop: the segments view groups the computed pieces under their source',
   await expect.poll(() => popupRequests(page)).toHaveLength(1)
   const answer = popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB)
   await sendPopupLine(page, answer)
-  await page.locator('[data-testid="calculation-open"]:visible').click()
+  await page.locator('[data-testid="calculation-toggle"]:visible').click()
   await expect.poll(() => popupRequests(page)).toHaveLength(2)
   const street = roadContributor(FIXTURE_DB)
   const lane = { ...street, id: '00000000000000cc', name: 'Fixture lane', metadata: { ...street.metadata, name: 'Fixture lane' } }
