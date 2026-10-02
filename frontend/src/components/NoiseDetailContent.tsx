@@ -92,7 +92,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
             </span>
             <div data-testid="lden" className="mt-1 pl-4 text-xs text-muted-foreground/60 font-mono leading-tight">
               <DataPoint title="Total Lden — energy sum across all sources (EU noise mapping)" text={totalLdenText}>
-                Lden {data.total_lden.toFixed(1)} dB
+                {data.total_lden.toFixed(1)} dB Lden
               </DataPoint>
             </div>
           </div>
@@ -113,10 +113,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
       </div>
       {data.total_lden != null ? (
         <>
-          <div className="border-b border-border pb-0.5 mb-0.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-            What you hear
-          </div>
-          {shown}
+          <div className="border-t border-border">{shown}</div>
           {answered && onCalculationToggle && (
             <>
               <button

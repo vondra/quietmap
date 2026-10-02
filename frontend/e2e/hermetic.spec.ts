@@ -54,7 +54,7 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
 
   // The first ring's answer is shown at once, marked as still being refined.
   await sendPopupLine(page, withAircraft(popupUpdate(1, true, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS.slice(0, 1)))
-  await expect(lden(page)).toHaveText(`Lden ${SOURCE_DB.toFixed(1)} dB`)
+  await expect(lden(page)).toHaveText(`${SOURCE_DB.toFixed(1)} dB Lden`)
   await expect(page.locator('[data-testid="popup-refining"]:visible')).toBeVisible()
   // The loudness comes with the final answer only.
   await expect(badge(page)).toHaveText('… sone')
@@ -71,7 +71,7 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
 
   await sendPopupLine(page, withAircraft(popupUpdate(2, false, POINT.lat, POINT.lng, FIXTURE_DB), FIXTURE_FLIGHTS))
   await endPopup(page)
-  await expect(lden(page)).toHaveText(`Lden ${FIXTURE_DB.toFixed(1)} dB`)
+  await expect(lden(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB Lden`)
   await expect(page.locator('[data-testid="popup-refining"]:visible')).toHaveCount(0)
   // The final answer says how loud the place sounds over the whole day.
   await expect(badge(page)).toHaveText('15 sone')
@@ -116,7 +116,7 @@ test('desktop: an error line replaces the partial answer, a new click aborts the
   await page.mouse.click(x, y)
   await expect.poll(() => popupRequests(page)).toHaveLength(1)
   await sendPopupLine(page, popupUpdate(1, true, POINT.lat, POINT.lng, SOURCE_DB))
-  await expect(lden(page)).toHaveText(`Lden ${SOURCE_DB.toFixed(1)} dB`)
+  await expect(lden(page)).toHaveText(`${SOURCE_DB.toFixed(1)} dB Lden`)
   await sendPopupLine(page, { error: 'The noise computation failed at this point.' })
   await endPopup(page)
   await expect(page.locator('[data-testid="detail-popup-error"]:visible'))
@@ -127,7 +127,7 @@ test('desktop: an error line replaces the partial answer, a new click aborts the
   await page.mouse.click(x - 40, y)
   await expect.poll(() => popupRequests(page)).toHaveLength(2)
   await sendPopupLine(page, popupUpdate(1, true, POINT.lat, POINT.lng, SOURCE_DB))
-  await expect(lden(page)).toHaveText(`Lden ${SOURCE_DB.toFixed(1)} dB`)
+  await expect(lden(page)).toHaveText(`${SOURCE_DB.toFixed(1)} dB Lden`)
   await page.mouse.click(x + 40, y)
   await expect.poll(() => popupRequests(page)).toHaveLength(3)
   await expect.poll(() => abortedPopupRequests(page)).toBe(1)
@@ -150,7 +150,7 @@ test('desktop: a point inside a building tells its façade receiver in the segme
     storeys: 8,
   }
   await sendPopupLine(page, popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB, building))
-  await expect(lden(page)).toHaveText(`Lden ${FIXTURE_DB.toFixed(1)} dB`)
+  await expect(lden(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB Lden`)
   await expect(page.locator('[data-testid="building-exposure"]')).toHaveCount(0)
   await page.locator('[data-testid="calculation-toggle"]:visible').click()
   await expect.poll(() => popupRequests(page)).toHaveLength(2)
@@ -232,7 +232,7 @@ test.describe('mobile', () => {
     await expect(sheet.getByTestId('detail-popup-skeleton')).toBeVisible()
 
     await sendPopupLine(page, withAircraft(popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS))
-    await expect(sheet.getByTestId('lden')).toHaveText(`Lden ${SOURCE_DB.toFixed(1)} dB`)
+    await expect(sheet.getByTestId('lden')).toHaveText(`${SOURCE_DB.toFixed(1)} dB Lden`)
     // The loudest flights fit the phone: the whole table is on screen, nothing clipped or scrolled.
     await sheet.getByRole('button', { name: /^Aircraft/ }).tap()
     const flights = sheet.getByRole('table', { name: 'Loudest flights' })
