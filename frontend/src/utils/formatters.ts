@@ -5,15 +5,15 @@ export function fmt(v: number): string {
   return v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1)
 }
 
-/** A level that may be null (silence): "—" for null, otherwise `12.3 dB`. */
+/** A level: `12.3 dB`, or "—" for silence and for any level at or under the popup's 0 dB display
+ *  floor (a night level of -20.1 dB tells nothing a dash does not). */
 export function fmtDb(v: number | null | undefined): string {
-  return v == null ? '—' : `${v.toFixed(1)} dB`
+  return v == null || v <= 0 ? '—' : `${v.toFixed(1)} dB`
 }
 
-/** Same null handling as fmtDb but returns just the number — for composing
- *  multi-value strings like "12.3/—/8.7 dB" without unit round-tripping. */
+/** Same as fmtDb but just the number, for strings like "12.3/—/8.7 dB". */
 export function fmtDbValue(v: number | null | undefined): string {
-  return v == null ? '—' : v.toFixed(1)
+  return v == null || v <= 0 ? '—' : v.toFixed(1)
 }
 
 /** Rounds to integer and formats with thousands separators. */
