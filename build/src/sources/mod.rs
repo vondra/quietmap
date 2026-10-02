@@ -10,12 +10,14 @@ pub mod country_speeds;
 pub mod facilities;
 pub mod industry;
 pub mod leisure;
+pub mod motorcycles;
 pub mod rail;
 pub mod road;
 pub mod road_junctions;
 pub mod road_slope;
 pub mod road_traffic;
 pub mod ship;
+pub mod tagged_speeds;
 pub mod tent;
 
 use crate::climate::Temperature;

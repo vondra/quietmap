@@ -3,9 +3,11 @@
 
 use super::bus::BusRoutes;
 use super::country_speeds::COUNTRY_SPEEDS;
+use super::motorcycles::{LocalMotorcycles, country_share};
 use super::road_junctions::{Junctions, traffic_signals};
 use super::road_slope::{SquareHeights, WayRow, row_slopes};
 use super::road_traffic::{BUS_SERVICE_BY_BUILT_UP, BuildingTraffic, local_km};
+use super::tagged_speeds::tagged_speed_kmh;
 use super::{Converted, Reach, group_key, split_at_tile_edges};
 use crate::climate::Temperature;
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
@@ -23,8 +25,8 @@ const PLATFORM_HALF_LANE_M: f64 = 1.75;
 const PLATFORM_SHOULDER_M: f64 = 1.5;
 const DEFAULT_LANES: u8 = 2;
 /// dev4 `speed_limit` code of `maxspeed=none`, driven at 130 km/h.
-const DERESTRICTED_CODE: u8 = 255;
-const DERESTRICTED_SPEED_KMH: f64 = 130.0;
+pub(crate) const DERESTRICTED_CODE: u8 = 255;
+pub(crate) const DERESTRICTED_SPEED_KMH: f64 = 130.0;
 /// dev4's `junction` code of a roundabout row.
 const ROUNDABOUT_CODE: u8 = 1;
 /// dev4 class codes 0-12.
@@ -220,21 +222,50 @@ fn country_flows(
 }
 
 /// The daily flows (light, medium, heavy, motorcycles) of a modelled `total`: the counted
-/// medium and heavy shares of the class, and the prior's share of motorcycles.
-fn modelled_flows(total: f64, prior: [f64; 4], class: usize, built_up: u8) -> [f64; 4] {
-    let prior_total = prior.iter().sum::<f64>();
-    let motorcycles = if prior_total > 0.0 {
-        total * prior[3] / prior_total
-    } else {
-        0.0
-    };
+/// medium and heavy shares of the class; the motorcycles are set by [`with_motorcycles`].
+fn modelled_flows(total: f64, class: usize, built_up: u8) -> [f64; 4] {
     let [medium, heavy] = counted_shares(class, built_up).map(|share| share * total);
+    [(total - medium - heavy).max(0.0), medium, heavy, 0.0]
+}
+
+/// Guessed flows with `share` of their vehicles motorcycles, taken from the light vehicles (the
+/// trips the buildings make, and dev4's priors, count every motor vehicle).
+fn with_motorcycles(flows: [f64; 4], share: f64) -> [f64; 4] {
+    let total: f64 = flows.iter().sum();
+    let others = flows[1] + flows[2];
+    let motorcycles = (total * share).min((total - others).max(0.0));
     [
-        (total - medium - heavy - motorcycles).max(0.0),
-        medium,
-        heavy,
+        (total - others - motorcycles).max(0.0),
+        flows[1],
+        flows[2],
         motorcycles,
     ]
+}
+
+/// The square's counted rows that count motorcycles, by class group.
+fn local_motorcycles(table: &crate::dev4::Table) -> Result<LocalMotorcycles, String> {
+    let mut local = LocalMotorcycles::default();
+    for batch in &table.batches {
+        let c = Columns { batch };
+        let class = c.get("road_class")?.as_primitive::<UInt8Type>();
+        let estimated = c.get("traffic_estimated")?.as_primitive::<UInt8Type>();
+        let source_id = c.get("source_id")?.as_primitive::<UInt16Type>();
+        let aadt = ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"]
+            .map(|name| c.get(name).map(|a| a.as_primitive::<Float64Type>()));
+        let aadt = [
+            aadt[0].clone()?,
+            aadt[1].clone()?,
+            aadt[2].clone()?,
+            aadt[3].clone()?,
+        ];
+        for row in 0..batch.num_rows() {
+            if super::motorcycles::counted(source_id.value(row), estimated.value(row)) {
+                let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
+                local.add(class_index, std::array::from_fn(|k| aadt[k].value(row)));
+            }
+        }
+    }
+    Ok(local)
 }
 
 /// Whether dev4 guessed a row's traffic: all four categories estimated by a class prior, a
@@ -347,7 +378,7 @@ const URBAN_PERIOD_SHARES: [f64; PERIODS] = [0.70, 0.18, 0.12];
 /// the row's built-up flag, unknown density keeps the class default), else the class default. A
 /// trunk in a built-up area takes the urban limit like any street there; elsewhere the country's
 /// motorroad limit where it has one.
-fn default_speed(class: usize, country_iso: u16, built_up: u8) -> (f64, &'static str) {
+pub(crate) fn default_speed(class: usize, country_iso: u16, built_up: u8) -> (f64, &'static str) {
     let iso = country_iso.to_le_bytes();
     let legal = COUNTRY_SPEEDS
         .binary_search_by(|(code, _)| code[..].cmp(&iso[..]))
@@ -365,10 +396,14 @@ fn default_speed(class: usize, country_iso: u16, built_up: u8) -> (f64, &'static
         },
         _ => 0,
     });
-    if value > 0 {
+    let (speed, source) = if value > 0 {
         (f64::from(value), "country_legal_default")
     } else {
         (CLASS_DEFAULT_SPEED_KMH[class], "default_by_class")
+    };
+    match tagged_speed_kmh(class, country_iso, built_up) {
+        Some(tagged) if tagged < speed => (tagged, "tagged_median"),
+        _ => (speed, source),
     }
 }
 
@@ -452,6 +487,7 @@ pub fn convert(
         }
         None => None,
     };
+    let motorcycles = local_motorcycles(&table)?;
     let mut emitting = 0;
     let mut first_row = 0;
     for batch in &table.batches {
@@ -553,7 +589,7 @@ pub fn convert(
                     )
                 });
             let mut daily = match modelled {
-                Some(total) => modelled_flows(total, prior, class_index, built_up.value(row)),
+                Some(total) => modelled_flows(total, class_index, built_up.value(row)),
                 None => country_flows(
                     prior,
                     class_index,
@@ -563,6 +599,14 @@ pub fn convert(
                     estimated.value(row),
                 ),
             };
+            // Guessed traffic takes the motorcycles of the square's counted roads, else of the
+            // country's fleet (dev4 put 2 % on Vietnam's and 15 % on Thailand's class priors).
+            if guessed(source_id.value(row), estimated.value(row)) {
+                let share = motorcycles
+                    .share(class_index, country.value(row))
+                    .unwrap_or_else(|| country_share(country.value(row), class_index));
+                daily = with_motorcycles(daily, share);
+            }
             // Buses on an uncounted row: two-axle city buses medium, a third articulated heavy.
             if let Some(bus) = bus.filter(|_| guessed(source_id.value(row), estimated.value(row))) {
                 let service = building_traffic.as_ref().map_or(
