@@ -242,6 +242,57 @@ fn with_motorcycles(flows: [f64; 4], share: f64) -> [f64; 4] {
     ]
 }
 
+/// Local-class rows (residential, living street, service) whose count repeats the daily total of
+/// a main-class counted row of the same name in the square: copies a conflation put on a
+/// boulevard's side lanes and squares (Madrid's Castellana side lane carried the main
+/// carriageway's 35,989 vehicles a day, the station by it read 5 dB too loud). They take the
+/// traffic their buildings make, as uncounted rows do.
+fn copied_counts(table: &crate::dev4::Table) -> Result<std::collections::HashSet<usize>, String> {
+    let mut main: std::collections::HashMap<String, Vec<i64>> = std::collections::HashMap::new();
+    let mut locals = Vec::new();
+    let mut first = 0;
+    for batch in &table.batches {
+        let c = Columns { batch };
+        let class = c.get("road_class")?.as_primitive::<UInt8Type>();
+        let estimated = c.get("traffic_estimated")?.as_primitive::<UInt8Type>();
+        let source_id = c.get("source_id")?.as_primitive::<UInt16Type>();
+        let names = c.get("name")?.as_string::<i32>();
+        let aadt = ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"]
+            .map(|name| c.get(name).map(|a| a.as_primitive::<Float64Type>()));
+        let aadt = [
+            aadt[0].clone()?,
+            aadt[1].clone()?,
+            aadt[2].clone()?,
+            aadt[3].clone()?,
+        ];
+        for row in 0..batch.num_rows() {
+            let (source, name) = (source_id.value(row), names.value(row));
+            if source == PRIOR_SOURCE_ID || guessed(source, estimated.value(row)) || name.is_empty()
+            {
+                continue;
+            }
+            let total = aadt
+                .iter()
+                .map(|column| column.value(row))
+                .sum::<f64>()
+                .round() as i64;
+            match class.value(row) {
+                5..=7 if total > 0 => locals.push((first + row, name.to_string(), total)),
+                0..=4 | 10..=12 if total > 0 => {
+                    main.entry(name.to_string()).or_default().push(total)
+                }
+                _ => {}
+            }
+        }
+        first += batch.num_rows();
+    }
+    Ok(locals
+        .into_iter()
+        .filter(|(_, name, total)| main.get(name).is_some_and(|totals| totals.contains(total)))
+        .map(|(row, _, _)| row)
+        .collect())
+}
+
 /// The square's counted rows that count motorcycles, by class group.
 fn local_motorcycles(table: &crate::dev4::Table) -> Result<LocalMotorcycles, String> {
     let mut local = LocalMotorcycles::default();
@@ -488,6 +539,7 @@ pub fn convert(
         None => None,
     };
     let motorcycles = local_motorcycles(&table)?;
+    let copies = copied_counts(&table)?;
     let mut emitting = 0;
     let mut first_row = 0;
     for batch in &table.batches {
@@ -566,13 +618,15 @@ pub fn convert(
             }
             let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
             let prior: [f64; 4] = std::array::from_fn(|category| aadt[category].value(row));
+            let row_guessed = guessed(source_id.value(row), estimated.value(row))
+                || copies.contains(&(batch_first_row + row));
             let middle_z30 = (
                 ((i64::from(start_x.value(row)) + i64::from(end_x.value(row))) / 2) as i32,
                 ((i64::from(start_y.value(row)) + i64::from(end_y.value(row))) / 2) as i32,
             );
             let modelled = building_traffic
                 .as_ref()
-                .filter(|_| guessed(source_id.value(row), estimated.value(row)))
+                .filter(|_| row_guessed)
                 .and_then(|traffic| {
                     traffic.total(
                         batch_first_row + row,
@@ -601,14 +655,14 @@ pub fn convert(
             };
             // Guessed traffic takes the motorcycles of the square's counted roads, else of the
             // country's fleet (dev4 put 2 % on Vietnam's and 15 % on Thailand's class priors).
-            if guessed(source_id.value(row), estimated.value(row)) {
+            if row_guessed {
                 let share = motorcycles
                     .share(class_index, country.value(row))
                     .unwrap_or_else(|| country_share(country.value(row), class_index));
                 daily = with_motorcycles(daily, share);
             }
             // Buses on an uncounted row: two-axle city buses medium, a third articulated heavy.
-            if let Some(bus) = bus.filter(|_| guessed(source_id.value(row), estimated.value(row))) {
+            if let Some(bus) = bus.filter(|_| row_guessed) {
                 let service = building_traffic.as_ref().map_or(
                     BUS_SERVICE_BY_BUILT_UP[usize::from(built_up.value(row).min(2))],
                     |traffic| traffic.bus_service(middle_z30),
