@@ -1,23 +1,41 @@
-// The professional view of a click: where the level is computed, then each layer's loudest
-// computed pieces, each with its data, what it emits, what its ray loses on the way and the ground,
-// buildings and walls it crosses; their rays drawn on the map from the receiver. Opening it computes
-// the click again with the pieces listed.
-import { useEffect, useState } from 'react'
+// The professional view of a click: where its level is computed, then per layer, loudest first,
+// its sources with the pieces of them the click computed (the loudest of the layer). Each piece
+// row reads what the ground and the screening take from its ray in calm air and when the sound is
+// bent down, and the Lden it delivers; opened, its data, sound power, ray and ground profile.
+// The pieces and their rays are drawn on the map in the colour of their row's dot. Opening the
+// view computes the click again with the pieces listed.
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { streamPopup } from '../../../lib/popup-stream'
-import type { BuildingAnswer, Contributor, PeriodLevels, PopupPiece, SegmentFan } from '../../../types/noise'
-import { fmtDbValue, fmtInt } from '../../../utils/formatters'
+import type { BuildingAnswer, Contributor, LayerLevels, PopupPiece, SegmentFan } from '../../../types/noise'
+import { fmtInt } from '../../../utils/formatters'
+import { pieceColor } from '../../SegmentFanLayer'
 import { HoverText } from '../../ui/info-tip'
-import { contributorLabel, lineRow, SOURCE_LABELS } from '../shared'
+import { contributorLabel, formatDist, lineRow, SOURCE_LABELS } from '../shared'
 import { MetadataRows } from '../source/MetadataRows'
 import { ProfileDiagram } from './ProfileDiagram'
 
-const PERIODS_TEXT = (levels: PeriodLevels) =>
-  `${fmtDbValue(levels.ld)}/${fmtDbValue(levels.le)}/${fmtDbValue(levels.ln)}`
-
+/** One grid for the whole list: label, ground and screening in calm air and bent down, Lden. */
+const GRID = 'grid grid-cols-[minmax(0,1fr)_2.9rem_2.9rem_2.6rem] gap-x-2'
+const HEADER = 'text-[10px] font-sans text-muted-foreground/70'
 const COMPASS_POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const
+const EARTH_M_PER_DEGREE = 111_320
 
 function compassPoint(bearingDeg: number): string {
   return COMPASS_POINTS[Math.round((((bearingDeg % 360) + 360) % 360) / 45) % 8]
+}
+
+/** East and north metres from `a` to `b`, both [lat, lon]. */
+function offsetM(a: [number, number], b: [number, number]): [number, number] {
+  return [
+    (b[1] - a[1]) * EARTH_M_PER_DEGREE * Math.cos((a[0] * Math.PI) / 180),
+    (b[0] - a[0]) * EARTH_M_PER_DEGREE,
+  ]
+}
+
+/** What a term does to the level: a loss with a minus, a gain with a plus, one decimal. */
+function term(attenuationDb: number): string {
+  if (Math.abs(attenuationDb) < 0.05) return '0.0'
+  return `${attenuationDb > 0 ? '−' : '+'}${Math.abs(attenuationDb).toFixed(1)}`
 }
 
 /** A piece as a contributor, so that its data reads as the source rows read it. */
@@ -36,7 +54,7 @@ function asContributor(piece: PopupPiece): Contributor {
   }
 }
 
-/** Where the level is computed: the click, or the loudest façade of the building clicked. */
+/** Where every level of the click is computed. */
 function ReceiverRows({ lat, lng, building, elevationM, reflectionDb }: {
   lat: number
   lng: number
@@ -47,12 +65,10 @@ function ReceiverRows({ lat, lng, building, elevationM, reflectionDb }: {
   const facade = building?.facade ?? null
   const [rLat, rLng] = facade ? facade.receiver : [lat, lng]
   return (
-    <div className="mb-1.5">
+    <div className="mb-2">
       {lineRow(
-        <HoverText title={'Every level of this click is computed here,\n4 m above the ground (EU noise mapping)'}>Receiver</HoverText>,
-        facade
-          ? `façade facing ${compassPoint(facade.bearing_deg)}`
-          : 'the clicked point',
+        <HoverText title={'Every level of this click is computed here, 4 m above\nthe ground (EU noise mapping)'}>Receiver</HoverText>,
+        facade ? `façade facing ${compassPoint(facade.bearing_deg)}, 4 m up` : 'the clicked point, 4 m up',
       )}
       {facade && building && lineRow(
         <HoverText title={'Inside a building the level is computed 0.1 m in front of\nits façades; the loudest by Lden is shown'}>Façade</HoverText>,
@@ -68,45 +84,64 @@ function ReceiverRows({ lat, lng, building, elevationM, reflectionDb }: {
   )
 }
 
-function SegmentDetail({ piece }: { piece: PopupPiece }) {
+/** One piece opened: its data, sound power, ray, the terms of the ray and the ground under it. */
+function PieceDetail({ piece }: { piece: PopupPiece }) {
   const trace = piece.trace
   const line = piece.ends.length > 1
-  const pair = (values: [number, number]) => `${values[0].toFixed(1)} / ${values[1].toFixed(1)} dB`
+  const length = line ? Math.hypot(...offsetM(piece.ends[0], piece.ends[1])) : 0
   const buildings = new Set(piece.crossings.map(([, , id]) => id)).size
+  const share = (p: number) => `${Math.round(100 * p)} %`
+  const row = (label: ReactNode, calm: string, bent: string) => (
+    <>
+      <span className="min-w-0 truncate">{label}</span>
+      <span className="text-right tabular-nums text-foreground">{calm}</span>
+      <span className="text-right tabular-nums text-foreground">{bent}</span>
+    </>
+  )
   return (
-    <div className="ml-2 mb-1.5">
+    <div data-testid="segment-piece" className="col-span-4 ml-3 mt-0.5 mb-1.5 pl-2 border-l-2 border-border/60">
       <MetadataRows c={asContributor(piece)} />
       {lineRow(
-        <HoverText title={line ? 'Sound power per metre of this piece (A-weighted)' : 'Sound power (A-weighted)'}>
-          Emission D/E/N
+        <HoverText title={line ? 'A-weighted sound power per metre of the road or track' : 'A-weighted sound power'}>
+          Sound power, day
         </HoverText>,
-        `${PERIODS_TEXT(piece.emission)} dB(A)${line ? '/m' : ''}`,
+        `${piece.emission.ld?.toFixed(1) ?? '–'} dB(A)${line ? ' per m' : ''}`,
       )}
-      {lineRow('Received D/E/N', `${PERIODS_TEXT(piece.received)} dB`)}
+      {length >= 1 && lineRow(
+        <HoverText title={'A piece is summed over its length, each point on its own\nray; the ray shown is the one from its nearest point'}>Piece</HoverText>,
+        `${fmtInt(length)} m long, ${formatDist(Math.round(piece.distance_m))} away`,
+      )}
       {trace && (
         <>
-          {lineRow('Ray', `${fmtInt(trace.slant_m)} m`)}
           {lineRow(
-            <HoverText title={'Ground and screening together (CNOSSOS-EU 2.5): calm air\n(straight ray) / sound bent down by wind or inversion'}>
-              Ground + screening
-            </HoverText>,
-            pair(trace.boundary_db),
-          )}
-          {(trace.without_ground_db[0] > 0.05 || trace.without_ground_db[1] > 0.05) && lineRow(
-            <HoverText title={'The screening term alone, the ground left out:\ncalm air / bent down'}>Screening, no ground</HoverText>,
-            pair(trace.without_ground_db),
-          )}
-          {lineRow(
-            <HoverText title="Air absorption over the ray (ISO 9613-1, the place's yearly air)">Air</HoverText>,
-            `${trace.air_db.toFixed(1)} dB`,
-          )}
-          {lineRow(
-            <HoverText title={'Share of time the sound bends down towards the ground\n(downwind or at night), by day, evening and night;\nthe rest is calm air'}>
-              Bent down D/E/N
-            </HoverText>,
-            trace.p.map(p => `${Math.round(100 * p)}`).join('/') + ' %',
+            'Ray',
+            `${fmtInt(trace.slant_m)} m, ${Math.round(trace.source_altitude_m)} → ${Math.round(trace.receiver_altitude_m)} m a.s.l.`,
           )}
           {buildings > 0 && lineRow('Buildings crossed', String(buildings))}
+          <div className="grid grid-cols-[minmax(0,1fr)_3.6rem_3.6rem] gap-x-2 mt-1">
+            {row('', 'calm air', 'bent down')}
+            {row(
+              <HoverText title={'Ground reflection and screening by terrain, buildings and\nwalls together (CNOSSOS-EU)'}>Ground + screening</HoverText>,
+              term(trace.boundary_db[0]),
+              term(trace.boundary_db[1]),
+            )}
+            {(trace.without_ground_db[0] > 0.05 || trace.without_ground_db[1] > 0.05) && row(
+              <HoverText title="The same with the ground left out: what the obstacles alone take">Screening alone</HoverText>,
+              term(trace.without_ground_db[0]),
+              term(trace.without_ground_db[1]),
+            )}
+            {row(
+              <HoverText title="Absorption in the air over the ray (ISO 9613-1, the place's yearly air)">Air</HoverText>,
+              term(trace.air_db),
+              term(trace.air_db),
+            )}
+            {row(
+              <HoverText title={'How often the sound travels each way: bent down when the\nwind blows from the source or the air is inverted, mostly\nat night (the place\'s weather, ERA5)'}>Share of the day</HoverText>,
+              share(1 - trace.p[0]),
+              share(trace.p[0]),
+            )}
+            {row('Share of the night', share(1 - trace.p[2]), share(trace.p[2]))}
+          </div>
           <ProfileDiagram trace={trace} crossings={piece.crossings} />
           <div className="text-[10px] text-muted-foreground/70">
             <span className="text-red-600">●</span> source <span className="text-sky-700">●</span> receiver
@@ -118,41 +153,133 @@ function SegmentDetail({ piece }: { piece: PopupPiece }) {
   )
 }
 
-function SegmentRow({ piece, open, onToggle }: { piece: PopupPiece, open: boolean, onToggle: () => void }) {
+interface ListedPiece {
+  piece: PopupPiece
+  /** Its index in the click's listing. */
+  index: number
+  lden: number
+}
+
+interface SourceGroup {
+  key: string
+  label: string
+  /** The whole source's Lden; with `atLeast`, only its listed pieces'. */
+  lden: number
+  atLeast: boolean
+  pieces: ListedPiece[]
+}
+
+interface LayerGroup {
+  layer: LayerLevels
+  sources: SourceGroup[]
+}
+
+const energySum = (levels: number[]) => 10 * Math.log10(levels.reduce((sum, level) => sum + 10 ** (level / 10), 0))
+
+/** The layers above 0 dB, loudest first, each with its sources and their pieces above 0 dB. */
+function groupPieces(pieces: PopupPiece[], layers: LayerLevels[], contributors: Contributor[]): LayerGroup[] {
+  const whole = new Map(contributors.map(c => [`${c.source_type}:${c.id}`, c.received_lden]))
+  return layers
+    .filter(layer => (layer.lden ?? 0) > 0)
+    .sort((a, b) => (b.lden ?? 0) - (a.lden ?? 0))
+    .map(layer => {
+      const groups = new Map<string, ListedPiece[]>()
+      pieces.forEach((piece, index) => {
+        const lden = piece.received.lden
+        if (piece.source_type !== layer.source_type || lden == null || lden <= 0) return
+        const list = groups.get(piece.id) ?? []
+        list.push({ piece, index, lden })
+        groups.set(piece.id, list)
+      })
+      const sources = [...groups.entries()].map(([id, list]) => {
+        const key = `${layer.source_type}:${id}`
+        const known = whole.get(key)
+        return {
+          key,
+          label: contributorLabel(asContributor(list[0].piece)),
+          lden: known ?? energySum(list.map(p => p.lden)),
+          atLeast: known == null,
+          pieces: list.sort((a, b) => b.lden - a.lden),
+        }
+      }).sort((a, b) => b.lden - a.lden)
+      return { layer, sources }
+    })
+}
+
+/** How a layer was computed, under its heading. */
+function layerNote(layer: LayerLevels): ReactNode {
+  if (layer.source_type === 'aircraft') {
+    return (
+      <HoverText title={'Each box sums the flights of a year through one map cell\nat one height for one aircraft group; the loudest flights\nare listed under Sources'}>
+        a year of ADS-B flights in {fmtInt(layer.evaluated)} boxes (ECAC Doc 29)
+      </HoverText>
+    )
+  }
+  if (layer.evaluated >= layer.candidates) return `all ${fmtInt(layer.candidates)} pieces within reach computed`
   return (
-    <div>
-      <button
-        type="button"
-        className="w-full flex justify-between gap-2 text-left hover:bg-muted/30"
-        aria-expanded={open}
-        onClick={onToggle}
-      >
-        <span className="truncate">{contributorLabel(asContributor(piece))}</span>
-        <span className="shrink-0 text-foreground">
-          {fmtDbValue(piece.received.lden)} dB · {fmtInt(piece.distance_m)} m
-        </span>
-      </button>
-      {open && <SegmentDetail piece={piece} />}
-    </div>
+    <HoverText title={'The rest are far or screened: what they could add at most\nstays under 0.1 dB of the level, or a weighted sample of\nthem estimates it within 0.05 dB'}>
+      {fmtInt(layer.evaluated)} of {fmtInt(layer.candidates)} pieces within reach computed
+    </HoverText>
   )
 }
 
-export function SegmentsSection({ lat, lng, building, elevationM, reflectionDb, onFan }: {
+/** A listed piece's row: its colour on the map, direction and distance, its ray's ground and
+ *  screening in calm air and bent down, and the Lden it delivers. */
+function PieceRow({ listed, open, onToggle, onHover }: {
+  listed: ListedPiece
+  open: boolean
+  onToggle: () => void
+  onHover: (hovered: boolean) => void
+}) {
+  const { piece, lden } = listed
+  const trace = piece.trace
+  const [east, north] = trace?.ray ? offsetM(trace.ray[1], trace.ray[0]) : [0, 0]
+  const direction = trace?.ray ? compassPoint((Math.atan2(east, north) * 180) / Math.PI) : ''
+  return (
+    <>
+      <button
+        type="button"
+        className={`col-span-4 grid grid-cols-subgrid items-baseline py-px pl-3 text-left hover:bg-muted/40 ${open ? 'bg-muted/50' : ''}`}
+        aria-expanded={open}
+        onClick={onToggle}
+        onMouseEnter={() => onHover(true)}
+        onMouseLeave={() => onHover(false)}
+      >
+        <span className="truncate whitespace-pre">
+          <span style={{ color: pieceColor(lden) }}>●</span> {direction.padEnd(2, ' ')} {formatDist(Math.round(piece.distance_m))}
+        </span>
+        <span className="text-right tabular-nums text-foreground">{trace ? term(trace.boundary_db[0]) : '–'}</span>
+        <span className="text-right tabular-nums text-foreground">{trace ? term(trace.boundary_db[1]) : '–'}</span>
+        <span className="text-right tabular-nums text-foreground">{lden.toFixed(1)}</span>
+      </button>
+      {open && <PieceDetail piece={piece} />}
+    </>
+  )
+}
+
+export function SegmentsSection({ lat, lng, building, elevationM, reflectionDb, layers, contributors, onFan }: {
   lat: number
   lng: number
   building: BuildingAnswer | null
   elevationM: number
   reflectionDb: number
-  /** Draws the listed pieces' rays on the map; null clears them. */
+  /** The click's layers and sources, for their whole levels. */
+  layers: LayerLevels[]
+  contributors: Contributor[]
+  /** Draws the listed pieces and their rays on the map; null clears them. */
   onFan?: (fan: SegmentFan | null) => void
 }) {
   const [pieces, setPieces] = useState<PopupPiece[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // The open sources by key; until one is toggled, the loudest source of each layer.
+  const [open, setOpen] = useState<Set<string> | null>(null)
   const [opened, setOpened] = useState<number | null>(null)
+  const [hovered, setHovered] = useState<number | null>(null)
   useEffect(() => {
     const controller = new AbortController()
     setPieces(null)
     setError(null)
+    setOpen(null)
     setOpened(null)
     void streamPopup({ lat, lng }, controller.signal, {
       onUpdate: update => { if (!update.partial) setPieces(update.pieces ?? []) },
@@ -160,36 +287,93 @@ export function SegmentsSection({ lat, lng, building, elevationM, reflectionDb, 
     }, { segments: true })
     return () => controller.abort()
   }, [lat, lng])
+  const grouped = useMemo(
+    () => (pieces ? groupPieces(pieces, layers, contributors) : []),
+    [pieces, layers, contributors],
+  )
+  const openKeys = open ?? new Set(grouped.flatMap(({ sources }) => sources.slice(0, 1).map(s => s.key)))
   const receiver: [number, number] = building?.facade?.receiver ?? [lat, lng]
+  const selected = hovered ?? opened
   useEffect(() => {
     if (!onFan) return
-    const rays = (pieces ?? []).flatMap((piece, k) => piece.trace?.ray
-      ? [{ ray: piece.trace.ray, lden: piece.received.lden ?? 0, selected: k === opened }]
-      : [])
-    onFan(rays.length ? { receiver, rays } : null)
+    const drawn = grouped.flatMap(({ sources }) => sources.flatMap(s => s.pieces)).flatMap(({ piece, index, lden }) =>
+      piece.trace?.ray ? [{ ends: piece.ends, ray: piece.trace.ray, lden, selected: index === selected }] : [])
+    onFan(drawn.length ? { receiver, pieces: drawn } : null)
     // The receiver is read from `lat`, `lng` and the building, all fixed for one click.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pieces, opened, onFan])
+  }, [grouped, selected, onFan])
   useEffect(() => () => onFan?.(null), [onFan])
-  const layers = pieces ? Object.keys(SOURCE_LABELS).filter(layer => pieces.some(p => p.source_type === layer)) : []
+  const toggle = (key: string) => {
+    const next = new Set(openKeys)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    setOpen(next)
+  }
   return (
     <div data-testid="segments" className="text-[11px] font-mono text-muted-foreground">
       <ReceiverRows lat={lat} lng={lng} building={building} elevationM={elevationM} reflectionDb={reflectionDb} />
-      {!pieces && !error && <div className="animate-pulse">computing…</div>}
+      <p className="mb-2 font-sans leading-snug">
+        Every source within reach is cut into pieces. The sound of each piece is followed along its
+        rays over the terrain and past buildings, in calm air and bent down by the wind or a night
+        inversion, each as often as it happens here. The level is the energy sum of all pieces;
+        the loudest are listed and drawn on the map.
+      </p>
+      {!pieces && !error && <div className="animate-pulse">computing the pieces…</div>}
       {error && <div className="text-destructive">{error}</div>}
-      {pieces && layers.map(layer => (
-        <div key={layer} className="mt-1">
-          <div className="text-muted-foreground/70">{SOURCE_LABELS[layer] ?? layer}</div>
-          {pieces.map((piece, k) => piece.source_type === layer && (
-            <SegmentRow
-              key={`${piece.id}-${k}`}
-              piece={piece}
-              open={opened === k}
-              onToggle={() => setOpened(opened === k ? null : k)}
-            />
+      {pieces && (
+        <div className={`${GRID} items-baseline`}>
+          <span />
+          <HoverText
+            className={`col-span-2 text-center ${HEADER}`}
+            title={'What the ground and the screening by terrain, buildings and\nwalls do to the ray from the piece\'s nearest point, in dB:\nin calm air and with the sound bent down by the wind or an\ninversion (CNOSSOS-EU)'}
+          >
+            ground + screening
+          </HoverText>
+          <span />
+          <span className={HEADER}>source, piece</span>
+          <span className={`text-right ${HEADER}`}>calm</span>
+          <span className={`text-right ${HEADER}`}>bent</span>
+          <span className={`text-right ${HEADER}`}>Lden</span>
+          {grouped.map(({ layer, sources }) => (
+            <div key={layer.source_type} className="contents">
+              <span className="col-span-3 mt-2 pt-1 border-t border-border font-sans font-medium uppercase tracking-[0.08em] text-foreground">
+                {SOURCE_LABELS[layer.source_type] ?? layer.source_type}
+              </span>
+              <span className="mt-2 pt-1 border-t border-border text-right tabular-nums font-semibold text-foreground">
+                {layer.lden?.toFixed(1)}
+              </span>
+              <span className="col-span-4 mb-0.5 font-sans text-[10px] text-muted-foreground/80">{layerNote(layer)}</span>
+              {sources.map(source => {
+                const isOpen = openKeys.has(source.key)
+                return (
+                  <div key={source.key} className="contents">
+                    <button
+                      type="button"
+                      className="col-span-4 grid grid-cols-subgrid items-baseline py-px text-left hover:bg-muted/40"
+                      aria-expanded={isOpen}
+                      onClick={() => toggle(source.key)}
+                    >
+                      <span className="col-span-3 truncate text-foreground">{isOpen ? '▾' : '▸'} {source.label}</span>
+                      <span className="text-right tabular-nums text-foreground">
+                        {source.atLeast ? '≥' : ''}{source.lden.toFixed(1)}
+                      </span>
+                    </button>
+                    {isOpen && source.pieces.map(listed => (
+                      <PieceRow
+                        key={listed.index}
+                        listed={listed}
+                        open={opened === listed.index}
+                        onToggle={() => setOpened(opened === listed.index ? null : listed.index)}
+                        onHover={on => setHovered(on ? listed.index : null)}
+                      />
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
           ))}
         </div>
-      ))}
+      )}
     </div>
   )
 }

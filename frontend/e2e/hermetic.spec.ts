@@ -2,7 +2,7 @@
 // refinement, errors and aborts, the loudest flights), building clicks, layer switches, search, and
 // the phone sheet.
 import { expect, test } from '@playwright/test'
-import { FIXTURE_FLIGHTS, popupUpdate, withAircraft } from './answers'
+import { computedPiece, FIXTURE_FLIGHTS, popupUpdate, roadContributor, withAircraft } from './answers'
 import {
   FIXTURE_DB,
   PHONE,
@@ -73,6 +73,8 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   await expect(page.locator('[data-testid="popup-refining"]:visible')).toHaveCount(0)
   // The final answer says how loud the place sounds by day and at night.
   await expect(page.locator('[data-testid="loudness"]:visible')).toHaveText('12 sone by day, 7.4 sone at night')
+  // And how much of the day and of the night human noise is heard over a quiet natural background.
+  await expect(page.locator('[data-testid="heard"]:visible')).toHaveText('Human noise heard over 99 % of the day, 54 % of the night')
   await expect(page.getByText('9.6k/day').filter({ visible: true })).toBeVisible()
   await expect(flights.locator('tbody tr')).toHaveCount(2)
   await expect(flights.locator('tbody tr').nth(0).locator('td')).toHaveText(['70', '0.44', '0.26', '09-02 D', /^Airbus A320\b/])
@@ -156,6 +158,38 @@ test('desktop: a point inside a building tells its façade receiver in the segme
   const segments = page.locator('[data-testid="segments"]:visible')
   await expect(segments).toContainText('façade facing SE')
   await expect(segments).toContainText('loudest of 12 façade points')
+})
+
+// The segments view lists each layer's sources once, the loudest open on its computed pieces, in
+// columns: what the ground and the screening do to each piece's ray in calm air and bent down,
+// and the Lden it delivers; pieces under 0 dB are left out. An opened piece tells its ray.
+test('desktop: the segments view groups the computed pieces under their source', async ({ page }) => {
+  await installHermeticMap(page, POINT, FIXTURE_DB)
+  await page.goto(mapUrl(POINT))
+  const { x, y } = await canvasCenter(page)
+  await page.mouse.click(x, y)
+  await expect.poll(() => popupRequests(page)).toHaveLength(1)
+  const answer = popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB)
+  await sendPopupLine(page, answer)
+  await page.locator('[data-testid="segments-toggle"]:visible').click()
+  await expect.poll(() => popupRequests(page)).toHaveLength(2)
+  const street = roadContributor(FIXTURE_DB)
+  const lane = { ...street, id: '00000000000000cc', name: 'Fixture lane', metadata: { ...street.metadata, name: 'Fixture lane' } }
+  await sendPopupLine(page, {
+    ...answer,
+    pieces: [
+      computedPiece(street, 61.2, 12, [-2.5, -2.4]),
+      computedPiece(street, 55.4, 40, [3.1, 1.2]),
+      computedPiece(lane, -1.5, 900, [20, 10]),
+    ],
+  })
+  const segments = page.locator('[data-testid="segments"]:visible')
+  await expect(segments.getByRole('button', { name: /Fixture/ })).toHaveText([/^▾ Fixture street\s*63\.0$/])
+  const pieces = segments.getByRole('button', { name: /●/ })
+  await expect(pieces).toHaveText([/●\s+E\s+12 m\s*\+2\.5\s*\+2\.4\s*61\.2/, /●\s+E\s+40 m\s*−3\.1\s*−1\.2\s*55\.4/])
+  await pieces.nth(1).click()
+  await expect(segments.getByTestId('segment-piece')).toContainText('Ground + screening')
+  await expect(segments.getByTestId('segment-piece')).toContainText('Share of the night')
 })
 
 test('search: picking a result flies the map there and opens its popup', async ({ page }) => {

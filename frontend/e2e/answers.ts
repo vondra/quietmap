@@ -1,6 +1,6 @@
 // The popup answers the browser tests stream: one update of the contract, a street, Prague airport's
 // ground operations, and the loudest flights with their tracks near the hermetic world's point.
-import type { Contributor, PopupUpdate, TopFlight, TrackPiece } from '../src/types/noise'
+import type { Contributor, PopupPiece, PopupUpdate, TopFlight, TrackPiece } from '../src/types/noise'
 import { POINT } from './support'
 
 /** Quieter than the street: the aircraft row ranks below it. */
@@ -63,9 +63,44 @@ export function popupUpdate(
     sources: [{ source_type: 'road', ...levels, lden_upper: db, evaluated: 1, candidates: 1 }],
     top_contributors: db == null ? [] : [roadContributor(db)],
     top_flights: [],
-    // The final answer carries the loudness line.
+    // The final answer carries the loudness and heard lines.
     loudness: partial || db == null ? null : { n5_sone: { day: 12, evening: 11, night: 7.4 } },
+    percentiles: partial || db == null ? null : {
+      l10: { day: db + 3, evening: db + 2, night: db - 4 },
+      l50: { day: db - 2, evening: db - 3, night: db - 9 },
+      l90: { day: db - 6, evening: db - 7, night: db - 15 },
+      audible_percent: { day: 99.7, evening: 97.2, night: 54.4 },
+    },
     stats: { rings: seq, files: 27, bytes: 1e6, read_ms: 3, candidate_ms: 4, evaluate_ms: 20, elapsed_ms: 30 },
+  }
+}
+
+/** A computed piece of `contributor` delivering `lden`, `distance_m` east of the point, with its
+ *  ray's ground and screening in calm air and bent down. */
+export function computedPiece(contributor: Contributor, lden: number, distance_m: number, boundary_db: [number, number]): PopupPiece {
+  const east = distance_m / (111_320 * Math.cos((POINT.lat * Math.PI) / 180))
+  const nearest: [number, number] = [POINT.lat, POINT.lng + east]
+  return {
+    source_type: contributor.source_type,
+    id: contributor.id,
+    ends: [[POINT.lat - 0.0002, POINT.lng + east], [POINT.lat + 0.0002, POINT.lng + east]],
+    distance_m,
+    emission: { ld: 80, le: 78, ln: 72, lden: 82 },
+    received: { ld: lden - 2, le: lden - 3, ln: lden - 8, lden },
+    metadata: contributor.metadata,
+    crossings: [],
+    trace: {
+      profile: [[0, 350, 0], [distance_m, 350, 0]],
+      source_altitude_m: 350,
+      receiver_altitude_m: 354,
+      slant_m: distance_m + 0.4,
+      p: [0.55, 0.8, 0.9],
+      boundary_db,
+      without_ground_db: [0, 0],
+      air_db: 0.1,
+      path_difference_m: [0, 0],
+      ray: [nearest, [POINT.lat, POINT.lng]],
+    },
   }
 }
 

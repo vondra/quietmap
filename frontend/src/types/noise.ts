@@ -101,6 +101,9 @@ export interface PopupPercentiles {
   l10: { day: number | null; evening: number | null; night: number | null }
   l50: { day: number | null; evening: number | null; night: number | null }
   l90: { day: number | null; evening: number | null; night: number | null }
+  /** The share of each period (%, 0.1 precision) the sources together stand above a quiet natural
+   *  background: how much of the time human noise is heard. */
+  audible_percent?: { day: number; evening: number; night: number }
 }
 
 /** How loud the place sounds: Zwicker's loudness (ISO 532-1) of the sound exceeded 5 % of each
@@ -140,11 +143,11 @@ export interface PieceTrace {
   ray?: [[number, number], [number, number]]
 }
 
-/** The segments view's rays on the map: each listed piece's ray with its received Lden (the
- *  opened piece's selected) and the point the level is computed at. */
+/** The segments view's pieces on the map: each listed piece's ends and its ray, with the Lden it
+ *  delivers (the selected piece's marked), and the point the level is computed at. */
 export interface SegmentFan {
   receiver: [number, number]
-  rays: { ray: [[number, number], [number, number]], lden: number, selected: boolean }[]
+  pieces: { ends: [number, number][], ray: [[number, number], [number, number]], lden: number, selected: boolean }[]
 }
 
 /** One computed piece of the segments view (asked with `segments=1`). */
