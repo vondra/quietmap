@@ -8,7 +8,6 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { streamPopup } from '../../../lib/popup-stream'
 import type { BuildingAnswer, Contributor, LayerLevels, PopupPiece, SegmentFan } from '../../../types/noise'
 import { fmtInt } from '../../../utils/formatters'
-import { pieceColor } from '../../SegmentFanLayer'
 import { HoverText } from '../../ui/info-tip'
 import { contributorLabel, formatDist, lineRow, SOURCE_LABELS } from '../shared'
 import { MetadataRows } from '../source/MetadataRows'
@@ -19,6 +18,23 @@ const GRID = 'grid grid-cols-[minmax(0,1fr)_2.9rem_2.9rem_2.6rem] gap-x-2'
 const HEADER = 'text-[10px] font-sans text-muted-foreground/70'
 const COMPASS_POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const
 const EARTH_M_PER_DEGREE = 111_320
+
+/** A piece's colour in the list and on the map by how far below the loudest listed piece it is:
+ *  red the loudest, violet 10 dB below, blue 20, grey 30 and more. */
+const COLOR_STOPS: [number, [number, number, number]][] = [
+  [-30, [0x94, 0xa3, 0xb8]],
+  [-20, [0x25, 0x63, 0xeb]],
+  [-10, [0x7c, 0x3a, 0xed]],
+  [0, [0xdc, 0x26, 0x26]],
+]
+
+function pieceColor(belowLoudestDb: number): string {
+  const db = Math.min(0, Math.max(-30, belowLoudestDb))
+  const k = Math.max(1, COLOR_STOPS.findIndex(([at]) => db <= at))
+  const [[from, a], [to, b]] = [COLOR_STOPS[k - 1], COLOR_STOPS[k]]
+  const t = (db - from) / (to - from)
+  return `#${[0, 1, 2].map(c => Math.round(a[c] + t * (b[c] - a[c])).toString(16).padStart(2, '0')).join('')}`
+}
 
 function compassPoint(bearingDeg: number): string {
   return COMPASS_POINTS[Math.round((((bearingDeg % 360) + 360) % 360) / 45) % 8]
@@ -158,6 +174,7 @@ interface ListedPiece {
   /** Its index in the click's listing. */
   index: number
   lden: number
+  color: string
 }
 
 interface SourceGroup {
@@ -179,6 +196,7 @@ const energySum = (levels: number[]) => 10 * Math.log10(levels.reduce((sum, leve
 /** The layers above 0 dB, loudest first, each with its sources and their pieces above 0 dB. */
 function groupPieces(pieces: PopupPiece[], layers: LayerLevels[], contributors: Contributor[]): LayerGroup[] {
   const whole = new Map(contributors.map(c => [`${c.source_type}:${c.id}`, c.received_lden]))
+  const loudest = Math.max(...pieces.map(piece => piece.received.lden ?? -Infinity))
   return layers
     .filter(layer => (layer.lden ?? 0) > 0)
     .sort((a, b) => (b.lden ?? 0) - (a.lden ?? 0))
@@ -188,7 +206,7 @@ function groupPieces(pieces: PopupPiece[], layers: LayerLevels[], contributors: 
         const lden = piece.received.lden
         if (piece.source_type !== layer.source_type || lden == null || lden <= 0) return
         const list = groups.get(piece.id) ?? []
-        list.push({ piece, index, lden })
+        list.push({ piece, index, lden, color: pieceColor(lden - loudest) })
         groups.set(piece.id, list)
       })
       const sources = [...groups.entries()].map(([id, list]) => {
@@ -210,8 +228,8 @@ function groupPieces(pieces: PopupPiece[], layers: LayerLevels[], contributors: 
 function layerNote(layer: LayerLevels): ReactNode {
   if (layer.source_type === 'aircraft') {
     return (
-      <HoverText title={'Each box sums the flights of a year through one map cell\nat one height for one aircraft group; the loudest flights\nare listed under Sources'}>
-        a year of ADS-B flights in {fmtInt(layer.evaluated)} boxes (ECAC Doc 29)
+      <HoverText title={'A box sums the flights of a year through one map cell at\none height for one aircraft group; an airport\'s ground\noperations are pieces like a road\'s. The loudest flights\nare listed under Sources'}>
+        a year of ADS-B flights (ECAC Doc 29): {fmtInt(layer.evaluated)} boxes and pieces computed
       </HoverText>
     )
   }
@@ -231,7 +249,7 @@ function PieceRow({ listed, open, onToggle, onHover }: {
   onToggle: () => void
   onHover: (hovered: boolean) => void
 }) {
-  const { piece, lden } = listed
+  const { piece, lden, color } = listed
   const trace = piece.trace
   const [east, north] = trace?.ray ? offsetM(trace.ray[1], trace.ray[0]) : [0, 0]
   const direction = trace?.ray ? compassPoint((Math.atan2(east, north) * 180) / Math.PI) : ''
@@ -246,7 +264,7 @@ function PieceRow({ listed, open, onToggle, onHover }: {
         onMouseLeave={() => onHover(false)}
       >
         <span className="truncate whitespace-pre">
-          <span style={{ color: pieceColor(lden) }}>●</span> {direction.padEnd(2, ' ')} {formatDist(Math.round(piece.distance_m))}
+          <span style={{ color }}>●</span> {direction.padEnd(2, ' ')} {formatDist(Math.round(piece.distance_m))}
         </span>
         <span className="text-right tabular-nums text-foreground">{trace ? term(trace.boundary_db[0]) : '–'}</span>
         <span className="text-right tabular-nums text-foreground">{trace ? term(trace.boundary_db[1]) : '–'}</span>
@@ -296,8 +314,8 @@ export function SegmentsSection({ lat, lng, building, elevationM, reflectionDb, 
   const selected = hovered ?? opened
   useEffect(() => {
     if (!onFan) return
-    const drawn = grouped.flatMap(({ sources }) => sources.flatMap(s => s.pieces)).flatMap(({ piece, index, lden }) =>
-      piece.trace?.ray ? [{ ends: piece.ends, ray: piece.trace.ray, lden, selected: index === selected }] : [])
+    const drawn = grouped.flatMap(({ sources }) => sources.flatMap(s => s.pieces)).flatMap(({ piece, index, color }) =>
+      piece.trace?.ray ? [{ ends: piece.ends, ray: piece.trace.ray, color, selected: index === selected }] : [])
     onFan(drawn.length ? { receiver, pieces: drawn } : null)
     // The receiver is read from `lat`, `lng` and the building, all fixed for one click.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -330,18 +348,23 @@ export function SegmentsSection({ lat, lng, building, elevationM, reflectionDb, 
             ground + screening
           </HoverText>
           <span />
-          <span className={HEADER}>source, piece</span>
+          <HoverText
+            className={HEADER}
+            title={'A piece: its direction and distance from the receiver. Its dot\nis its colour on the map: red the loudest listed piece, violet\n10 dB below it, blue 20, grey 30 and more'}
+          >
+            source, piece
+          </HoverText>
           <span className={`text-right ${HEADER}`}>calm</span>
           <span className={`text-right ${HEADER}`}>bent</span>
           <span className={`text-right ${HEADER}`}>Lden</span>
           {grouped.map(({ layer, sources }) => (
             <div key={layer.source_type} className="contents">
-              <span className="col-span-3 mt-2 pt-1 border-t border-border font-sans font-medium uppercase tracking-[0.08em] text-foreground">
-                {SOURCE_LABELS[layer.source_type] ?? layer.source_type}
-              </span>
-              <span className="mt-2 pt-1 border-t border-border text-right tabular-nums font-semibold text-foreground">
-                {layer.lden?.toFixed(1)}
-              </span>
+              <div className="col-span-4 flex justify-between items-baseline mt-2 pt-1 border-t border-border text-foreground">
+                <span className="font-sans font-medium uppercase tracking-[0.08em]">
+                  {SOURCE_LABELS[layer.source_type] ?? layer.source_type}
+                </span>
+                <span className="tabular-nums font-semibold">{layer.lden?.toFixed(1)}</span>
+              </div>
               <span className="col-span-4 mb-0.5 font-sans text-[10px] text-muted-foreground/80">{layerNote(layer)}</span>
               {sources.map(source => {
                 const isOpen = openKeys.has(source.key)

@@ -143,11 +143,11 @@ export interface PieceTrace {
   ray?: [[number, number], [number, number]]
 }
 
-/** The segments view's pieces on the map: each listed piece's ends and its ray, with the Lden it
- *  delivers (the selected piece's marked), and the point the level is computed at. */
+/** The segments view's pieces on the map: each listed piece's ends and its ray in the colour of
+ *  its row (the selected piece's marked), and the point the level is computed at. */
 export interface SegmentFan {
   receiver: [number, number]
-  pieces: { ends: [number, number][], ray: [[number, number], [number, number]], lden: number, selected: boolean }[]
+  pieces: { ends: [number, number][], ray: [[number, number], [number, number]], color: string, selected: boolean }[]
 }
 
 /** One computed piece of the segments view (asked with `segments=1`). */

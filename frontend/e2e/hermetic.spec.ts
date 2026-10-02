@@ -74,7 +74,7 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   // The final answer says how loud the place sounds by day and at night.
   await expect(page.locator('[data-testid="loudness"]:visible')).toHaveText('12 sone by day, 7.4 sone at night')
   // And how much of the day and of the night human noise is heard over a quiet natural background.
-  await expect(page.locator('[data-testid="heard"]:visible')).toHaveText('Human noise heard over 99 % of the day, 54 % of the night')
+  await expect(page.locator('[data-testid="heard"]:visible')).toHaveText('Human noise heard: day over 99 %, night 54 %')
   await expect(page.getByText('9.6k/day').filter({ visible: true })).toBeVisible()
   await expect(flights.locator('tbody tr')).toHaveCount(2)
   await expect(flights.locator('tbody tr').nth(0).locator('td')).toHaveText(['70', '0.44', '0.26', '09-02 D', /^Airbus A320\b/])

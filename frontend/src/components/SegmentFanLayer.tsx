@@ -1,37 +1,26 @@
 // The segments view's pieces on the map: each listed piece drawn thick and a thin ray from its
-// nearest point to the point the level is computed at, both coloured by the Lden the piece
-// delivers (the colour of its dot in the list), the selected piece white on a black casing, and
-// that point a dot.
+// nearest point to the point the level is computed at, both in the colour of the piece's row, the
+// selected piece white on a black casing, and that point a dot. When the pieces of a click first
+// appear, the map moves out just enough to show them all beside the popup.
 import type { FilterSpecification } from 'maplibre-gl'
-import { Layer, Source } from 'react-map-gl/maplibre'
+import { useEffect, useRef } from 'react'
+import { Layer, Source, useMap } from 'react-map-gl/maplibre'
 import type { SegmentFan } from '../types/noise'
 
 const LINE_LAYOUT = { 'line-cap': 'round', 'line-join': 'round' } as const
 const kind = (name: string): FilterSpecification => ['==', ['get', 'kind'], name]
-
-/** The colour of a piece by the Lden it delivers: grey, blue, violet, red from 0 to 60 dB. */
-const STOPS: [number, [number, number, number]][] = [
-  [0, [0x94, 0xa3, 0xb8]],
-  [30, [0x25, 0x63, 0xeb]],
-  [45, [0x7c, 0x3a, 0xed]],
-  [60, [0xdc, 0x26, 0x26]],
-]
-
-export function pieceColor(lden: number): string {
-  const k = STOPS.findIndex(([at]) => lden < at)
-  const [from, to] = k <= 0 ? (k === 0 ? [STOPS[0], STOPS[0]] : [STOPS.at(-1)!, STOPS.at(-1)!]) : [STOPS[k - 1], STOPS[k]]
-  const t = to[0] > from[0] ? (lden - from[0]) / (to[0] - from[0]) : 0
-  const channel = (c: number) => Math.round(from[1][c] + t * (to[1][c] - from[1][c])).toString(16).padStart(2, '0')
-  return `#${channel(0)}${channel(1)}${channel(2)}`
-}
+/** Below this width the popup is the bottom sheet over the lower half of the map. */
+const PHONE_WIDTH_PX = 768
+/** The desktop popup's column on the right: its width and two gutters. */
+const CARD_COLUMN_PX = 320 + 2 * 12
 
 export function fanGeoJson(fan: SegmentFan): GeoJSON.FeatureCollection {
   const lonLat = ([lat, lon]: [number, number]) => [lon, lat]
   return {
     type: 'FeatureCollection',
     features: [
-      ...fan.pieces.flatMap(({ ray, ends, lden, selected }) => {
-        const properties = (name: string) => ({ kind: selected ? `${name}-selected` : name, color: pieceColor(lden) })
+      ...fan.pieces.flatMap(({ ray, ends, color, selected }) => {
+        const properties = (name: string) => ({ kind: selected ? `${name}-selected` : name, color })
         const point = ends.length < 2 || (ends[0][0] === ends[1][0] && ends[0][1] === ends[1][1])
         return [
           {
@@ -57,7 +46,42 @@ export function fanGeoJson(fan: SegmentFan): GeoJSON.FeatureCollection {
   }
 }
 
+/** Moves the map out to show every piece of a click's fan beside the popup, once per click and
+ *  only when some piece lies outside; never zooms in. */
+function useFitFan(fan: SegmentFan | null) {
+  const { current: map } = useMap()
+  const fitted = useRef<string | null>(null)
+  useEffect(() => {
+    if (!fan || !map) {
+      if (!fan) fitted.current = null
+      return
+    }
+    const click = fan.receiver.join(',')
+    if (fitted.current === click) return
+    fitted.current = click
+    const points = [fan.receiver, ...fan.pieces.flatMap(({ ends, ray }) => [...ends, ray[0]])]
+    const phone = window.innerWidth < PHONE_WIDTH_PX
+    const padding = phone
+      ? { top: 72, bottom: Math.round(window.innerHeight / 2) + 24, left: 24, right: 24 }
+      : { top: 72, bottom: 48, left: 48, right: CARD_COLUMN_PX + 24 }
+    const canvas = map.getCanvas()
+    const [width, height] = [canvas.clientWidth, canvas.clientHeight]
+    const shown = points.every(([lat, lon]) => {
+      const { x, y } = map.project([lon, lat])
+      return x >= padding.left && x <= width - padding.right && y >= padding.top && y <= height - padding.bottom
+    })
+    if (shown) return
+    const lats = points.map(([lat]) => lat)
+    const lons = points.map(([, lon]) => lon)
+    map.fitBounds(
+      [[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+      { padding, maxZoom: map.getZoom(), duration: 600 },
+    )
+  }, [fan, map])
+}
+
 export default function SegmentFanLayer({ fan }: { fan: SegmentFan | null }) {
+  useFitFan(fan)
   if (!fan) return null
   return (
     <Source id="segment-fan" type="geojson" data={fanGeoJson(fan)}>
@@ -66,7 +90,7 @@ export default function SegmentFanLayer({ fan }: { fan: SegmentFan | null }) {
         type="line"
         filter={kind('ray')}
         layout={LINE_LAYOUT}
-        paint={{ 'line-color': ['get', 'color'], 'line-width': 1.25, 'line-opacity': 0.8 }}
+        paint={{ 'line-color': ['get', 'color'], 'line-width': 1.25, 'line-opacity': 0.85 }}
       />
       <Layer
         id="segment-fan-piece"

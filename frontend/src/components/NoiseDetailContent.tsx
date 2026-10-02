@@ -189,11 +189,10 @@ function HeardLine({ heard }: { heard: NonNullable<PopupPercentiles['audible_per
   return (
     <div data-testid="heard" className="text-sm mb-1">
       <DataPoint title="Human noise heard" text={text}>
-        <span className="text-muted-foreground">Human noise heard </span>
+        <span className="text-muted-foreground">Human noise heard: day </span>
         <span className="font-semibold">{percent(heard.day)}</span>
-        <span className="text-muted-foreground"> of the day, </span>
+        <span className="text-muted-foreground">, night </span>
         <span className="font-semibold">{percent(heard.night)}</span>
-        <span className="text-muted-foreground"> of the night</span>
       </DataPoint>
     </div>
   )
