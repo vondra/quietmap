@@ -20,6 +20,11 @@ const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
     tertiary: 'Tertiary road',
     residential: 'Local road',
     living_street: 'Living street',
+    unclassified: 'Minor road',
+    service: 'Service road',
+    motorway_link: 'Motorway ramp',
+    trunk_link: 'Trunk road ramp',
+    primary_link: 'Primary road ramp',
   },
   railway: {
     freight_corridor: 'Freight railway',
