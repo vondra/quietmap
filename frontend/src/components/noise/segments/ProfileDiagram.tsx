@@ -1,6 +1,8 @@
 // The ground under one ray, from the source (left) to the receiver (right): the terrain line, its
 // ground factor along the bottom (soft ground green, hard grey), the buildings (blocks) and walls
-// (bars) the ray crosses, and the straight sight line between the source and the receiver.
+// (bars) the ray crosses, the straight ray of calm air and the ray bent down by wind or an
+// inversion (CNOSSOS-EU favourable propagation: an arc of radius max(1000 m, 8 d)), which clears
+// a crest the straight ray hits.
 import type { PieceTrace } from '../../../types/noise'
 
 const WIDTH = 300
@@ -42,11 +44,18 @@ export function ProfileDiagram({ trace, crossings }: {
     ...block,
     ground: groundAt(profile, (block.from + block.to) / 2),
   }))
+  // The bent ray rises above the straight one by x (d - x) / (2 R), R = max(1000, 8 d).
+  const radius = Math.max(1000, 8 * trace.slant_m)
+  const straight = (distance: number) =>
+    trace.source_altitude_m + (trace.receiver_altitude_m - trace.source_altitude_m) * distance / Math.max(length, 1)
+  const bent = (distance: number) => straight(distance) + distance * (length - distance) / (2 * radius)
+  const arc = Array.from({ length: 33 }, (_, k) => (k / 32) * length)
   const altitudes = [
     ...profile.map(([, z]) => z),
     trace.source_altitude_m,
     trace.receiver_altitude_m,
     ...tops.map(top => top.ground + top.height),
+    bent(length / 2),
   ]
   const low = Math.min(...altitudes) - 2
   const high = Math.max(...altitudes) + 2
@@ -59,7 +68,7 @@ export function ProfileDiagram({ trace, crossings }: {
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
       className="w-full h-auto my-1"
       role="img"
-      aria-label={`Ground under the ray: ${Math.round(length)} m, altitudes ${Math.round(low + 2)}–${Math.round(high - 2)} m`}
+      aria-label={`Ground under the ray: ${Math.round(length)} m, altitudes ${Math.round(low + 2)}–${Math.round(high - 2)} m; straight ray (calm air) and bent ray (wind or inversion)`}
     >
       <polygon points={area} className="fill-muted" />
       <polyline points={ground} className="fill-none stroke-muted-foreground" strokeWidth={1} />
@@ -86,6 +95,10 @@ export function ProfileDiagram({ trace, crossings }: {
       <line
         x1={x(0)} y1={y(trace.source_altitude_m)} x2={x(length)} y2={y(trace.receiver_altitude_m)}
         className="stroke-sky-600" strokeWidth={0.8} strokeDasharray="3 2"
+      />
+      <polyline
+        points={arc.map(d => `${x(d).toFixed(1)},${y(bent(d)).toFixed(1)}`).join(' ')}
+        className="fill-none stroke-amber-600" strokeWidth={0.8} strokeDasharray="1 2"
       />
       <circle cx={x(0)} cy={y(trace.source_altitude_m)} r={2.2} className="fill-red-600" />
       <circle cx={x(length)} cy={y(trace.receiver_altitude_m)} r={2.2} className="fill-sky-700" />

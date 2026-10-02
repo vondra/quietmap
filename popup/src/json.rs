@@ -164,6 +164,10 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 "without_ground_db": trace.without_ground_db.map(round),
                 "air_db": round(trace.air_db),
                 "path_difference_m": trace.path_difference_m.map(round),
+                "ray": trace.ray_m.map(|end| {
+                    let (lat, lon) = update.frame.to_mercator(end).to_degrees();
+                    [(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6]
+                }),
             })
         });
         let metadata: Value = (update.display_json)(piece.display, piece.layer)

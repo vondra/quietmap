@@ -6,6 +6,7 @@ import type { StyleSpecification, GeolocateControl as GeolocateControlInstance }
 import FlyToLocation from './FlyToLocation'
 import DetailPopup from './DetailPopup'
 import FlightTrackLayer from './FlightTrackLayer'
+import SegmentFanLayer from './SegmentFanLayer'
 import QuietZonesLayer from './QuietZonesLayer'
 import HeatmapOverlay from './HeatmapOverlay'
 import { HEATMAP_LAYERS, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
@@ -14,7 +15,7 @@ import MapStateSync from './MapStateSync'
 import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
 import { QUIET_THRESHOLD_DEFAULT, type UrlState } from '../hooks/useUrlState'
 import type { SelectedLocation } from './FlyToLocation'
-import type { PopupUpdate } from '../types/noise'
+import type { PopupUpdate, SegmentFan } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
 // The noise model's inputs whose licences ask for credit (OpenStreetMap's ODbL above all).
@@ -36,6 +37,8 @@ interface MapViewProps {
   /** The track of the loudest flight highlighted in the popup. */
   /** The highlighted flight track or contributor pieces ([lat, lon, ..] ends). */
   flightTrack?: number[][][] | null
+  /** The segments view's rays from the computed pieces to the receiver. */
+  segmentFan?: SegmentFan | null
   quietClustersEnabled?: boolean
   quietThreshold?: number
   heatmapLayers?: Record<string, boolean>
@@ -51,7 +54,7 @@ interface MapViewProps {
 
 export default function MapView({
   isCurrentDetailPosition, selectedLocation, initialCenter, initialZoom,
-  basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition, flightTrack,
+  basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition, flightTrack, segmentFan,
   quietClustersEnabled, quietThreshold, heatmapLayers,
   registerGeolocateTrigger, onGeolocateActiveChange, onGeolocateReadyChange,
 }: MapViewProps) {
@@ -165,6 +168,7 @@ export default function MapView({
         onDetailPositionChange={onDetailPositionChange}
         onDetailError={onDetailError}
       />
+      <SegmentFanLayer fan={segmentFan ?? null} />
       <FlightTrackLayer track={flightTrack ?? null} />
       {onViewChange && onHashState && <MapStateSync onViewChange={onViewChange} onHashState={onHashState} />}
     </Map>

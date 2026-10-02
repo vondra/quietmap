@@ -3,7 +3,7 @@ import { lazy, Suspense, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import FloatingCard from './FloatingCard'
 import DetailSkeleton from './DetailSkeleton'
-import type { PopupUpdate } from '../types/noise'
+import type { PopupUpdate, SegmentFan } from '../types/noise'
 
 // Lazy: the popup body is a separate chunk, off first paint. App pre-warms it on click (its
 // detailPosition effect) so it downloads while the first answer is computed.
@@ -17,9 +17,10 @@ interface DetailCardProps {
   error?: string | null
   onNoiseClose: () => void
   onHighlight: (key: string | null) => void
+  onFan?: (fan: SegmentFan | null) => void
 }
 
-export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlight }: DetailCardProps) {
+export default function DetailCard({ noiseData, position, error, onNoiseClose, onHighlight, onFan }: DetailCardProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // A new point starts at the top; the streamed updates of one point keep the reader's scroll.
@@ -48,7 +49,7 @@ export default function DetailCard({ noiseData, position, error, onNoiseClose, o
       {showSkeleton
         ? <DetailSkeleton position={position} error={error} />
         : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
-            <NoiseDetailContent data={noiseData} onHighlight={onHighlight} />
+            <NoiseDetailContent data={noiseData} onHighlight={onHighlight} onFan={onFan} />
           </Suspense>}
     </FloatingCard>
   )

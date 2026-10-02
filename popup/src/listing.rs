@@ -48,6 +48,8 @@ pub struct PieceTrace {
     pub without_ground_db: [f64; 2],
     pub air_db: f64,
     pub path_difference_m: [f64; 2],
+    /// The ray on the map: from the piece's closest point to the receiver (click metres).
+    pub ray_m: [[f64; 2]; 2],
 }
 
 impl EvaluatedPiece {
@@ -148,6 +150,7 @@ pub fn list_pieces(
                     .map(|state| weighted(&terms.boundaries[state].without_ground_db)),
                 air_db: weighted(&terms.air_db),
                 path_difference_m: [0, 1].map(|state| terms.boundaries[state].path_difference_m),
+                ray_m: [from, receiver.position],
             });
             listed.push(piece);
         }

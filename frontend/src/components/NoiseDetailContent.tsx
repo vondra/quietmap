@@ -1,13 +1,14 @@
-// The popup body: the total level, the building notice, the loudest contributors and the aircraft
-// layer, and whether the answer is still being refined. Redrawn on every streamed update of the click.
+// The popup body: the total level, the loudest contributors and the aircraft layer, and whether the
+// answer is still being refined; or, once the click is answered, how it was computed (segments).
+// Redrawn on every streamed update of the click.
+import { useState } from 'react'
 import { ldenToColor } from '../utils/noise-colors'
 import { DataPoint } from './noise/noise-tooltips'
-import { HoverText } from './ui/info-tip'
-import { fmtDb, txtTable, type TableRow } from '../utils/formatters'
-import { fieldText, PERIOD_LABELS_DETAIL, SOURCE_LABELS } from './noise/shared'
+import { fmtDb, txtTable } from '../utils/formatters'
+import { PERIOD_LABELS_DETAIL, SOURCE_LABELS } from './noise/shared'
 import { AircraftLayerRow, ContributorRow } from './noise/source/ContributorRow'
 import { SegmentsSection } from './noise/segments/SegmentsSection'
-import type { BuildingAnswer, PopupLoudness, PopupUpdate } from '../types/noise'
+import type { PopupLoudness, PopupUpdate, SegmentFan } from '../types/noise'
 
 // The read and compute statistics of the click are for profiling, not for visitors: shown only
 // when the URL carries ?timings.
@@ -19,10 +20,14 @@ export interface NoiseDetailContentProps {
   /** Shows a loudest flight's track (by `topFlightKey`) or a contributor's pieces (by
    * `source:<id>`) on the map; null shows none. */
   onHighlight: (key: string | null) => void
+  /** Draws the segments view's rays on the map; null clears them. */
+  onFan?: (fan: SegmentFan | null) => void
 }
 
-export default function NoiseDetailContent({ data, maxSources, onHighlight }: NoiseDetailContentProps) {
+export default function NoiseDetailContent({ data, maxSources, onHighlight, onFan }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.center
+  const [segments, setSegments] = useState(false)
+  const answered = data.total_lden != null && !data.partial
   // The popup's 0 dB display floor, applied to this list the way the per-layer rows apply it.
   const audibleContributors = data.top_contributors.filter(c => c.received_lden != null && c.received_lden > 0)
   const rows = audibleContributors.map(c => (
@@ -82,16 +87,37 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight }: No
         </div>
       </div>
       {data.loudness && <LoudnessLine loudness={data.loudness} />}
-      <BuildingNotice building={data.building} />
       {data.total_lden != null ? (
         <>
-          <div className="border-b border-border pb-0.5 mb-0.5">
+          <div className="flex items-baseline justify-between border-b border-border pb-0.5 mb-0.5">
             <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-              Noise sources ({rows.length})
+              {segments && answered ? 'How it is computed' : `Noise sources (${rows.length})`}
             </span>
+            {answered && (
+              <button
+                type="button"
+                data-testid="segments-toggle"
+                className="text-[11px] text-muted-foreground hover:text-foreground"
+                aria-expanded={segments}
+                onClick={() => setSegments(!segments)}
+              >
+                {segments ? '◂ Sources' : 'Segments ▸'}
+              </button>
+            )}
           </div>
           <div className="overflow-y-auto overflow-x-clip" style={{ maxHeight: 'max(100dvh - 400px, 160px)' }}>
-            {shown}
+            {segments && answered
+              ? (
+                <SegmentsSection
+                  lat={centerLat}
+                  lng={centerLng}
+                  building={data.building}
+                  elevationM={data.elevation_m}
+                  reflectionDb={data.reflection_db ?? 0}
+                  onFan={onFan}
+                />
+              )
+              : shown}
           </div>
         </>
       ) : (
@@ -101,7 +127,6 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight }: No
             : 'No modelled noise source reaches this point.'}
         </div>
       )}
-      {data.total_lden != null && !data.partial && <SegmentsSection lat={centerLat} lng={centerLng} />}
       {SHOW_STATS && <StatsPanel data={data} />}
     </div>
   )
@@ -131,50 +156,6 @@ function LoudnessLine({ loudness }: { loudness: PopupLoudness }) {
         <span className="font-semibold">{sone(day)}</span>
         <span className="text-muted-foreground"> by day{night != null ? `, ${sone(night)} at night` : ''}</span>
       </DataPoint>
-    </div>
-  )
-}
-
-const COMPASS_POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const
-
-function compassPoint(bearingDeg: number): string {
-  return COMPASS_POINTS[Math.round((((bearingDeg % 360) + 360) % 360) / 45) % 8]
-}
-
-// One line above the source rows: every level in this popup is the building's loudest façade
-// receiver, not the clicked point. Fields the popup has no words for are listed in the hover.
-const BUILDING_FIELDS_IN_WORDS = new Set(['id', 'height_m', 'facade', 'facade_receivers'])
-
-function BuildingNotice({ building }: { building: BuildingAnswer | null }) {
-  if (!building) return null
-  const { height_m, facade, facade_receivers } = building
-  const others = Object.entries(building).filter(([name]) => !BUILDING_FIELDS_IN_WORDS.has(name))
-  const faces = facade ? ` — faces ${compassPoint(facade.bearing_deg)}` : ''
-  const points = typeof facade_receivers === 'number' && facade_receivers > 0
-    ? `1 of ${facade_receivers} façade point${facade_receivers === 1 ? '' : 's'}`
-    : ''
-  const rows: TableRow[] = [
-    ...(facade
-      ? [
-          `The level is computed at ${facade.receiver[0].toFixed(5)}, ${facade.receiver[1].toFixed(5)}:`,
-          '0.1 m in front of this façade, 4 m above ground, as EU',
-          'noise mapping does for building exposure. Of the',
-          'building\'s façade points it is the loudest by Lden of',
-          'all sources together.',
-        ]
-      : ['This building has no exposed façade.']),
-    '',
-    ['Building height', `${height_m.toFixed(1)} m`],
-    ...others.map(([name, value]) => [name.replace(/_/g, ' '), fieldText(value)] as [string, string]),
-  ]
-  return (
-    <div data-testid="building-exposure" className="mb-1 border-b border-border/50">
-      <HoverText title={txtTable(rows, 16, 12)} className="block" focusable>
-        <span className="flex items-baseline gap-1.5 px-0 py-1 text-xs font-medium">
-          <span className="truncate flex-1">Noisiest façade of this building{faces}</span>
-          <span className="shrink-0 text-right tabular-nums font-normal text-muted-foreground/70">{points}</span>
-        </span>
-      </HoverText>
     </div>
   )
 }

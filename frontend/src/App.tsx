@@ -10,7 +10,7 @@ import MobileDetailSheet from './components/MobileDetailSheet'
 import BasemapBar from './components/BasemapBar'
 import { useUrlState, QUIET_THRESHOLD_DEFAULT, type UrlState } from './hooks/useUrlState'
 import type { SelectedLocation } from './components/FlyToLocation'
-import type { PopupUpdate } from './types/noise'
+import type { PopupUpdate, SegmentFan } from './types/noise'
 import { topFlightKey } from './components/noise/top-flights'
 import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
@@ -32,6 +32,8 @@ export default function App() {
   // key, or a contributor's lines (its row opened), by `source:<id>`; read from the latest
   // update, so it follows the stream and goes when it leaves the list.
   const [highlighted, setHighlighted] = useState<string | null>(null)
+  // The segments view's rays on the map, while it is open.
+  const [fan, setFan] = useState<SegmentFan | null>(null)
   const highlightedTrack = highlighted?.startsWith('source:')
     ? noiseDetailData?.top_contributors.find(c => `source:${c.id}` === highlighted)?.geometry ?? null
     : noiseDetailData?.top_flights.find(f => topFlightKey(f) === highlighted)?.track ?? null
@@ -130,6 +132,7 @@ export default function App() {
     setNoiseDetailData(null)
     setNoiseDetailError(null)
     setHighlighted(null)
+    setFan(null)
   }, [])
 
   const handleDetailPositionChange = useCallback((pos: { lat: number; lng: number } | null) => {
@@ -202,6 +205,7 @@ export default function App() {
             error={noiseDetailError}
             onNoiseClose={handleNoiseClose}
             onHighlight={setHighlighted}
+            onFan={setFan}
           />
         </div>
 
@@ -229,6 +233,7 @@ export default function App() {
         onDetailError={handleDetailError}
         detailPosition={detailPosition}
         flightTrack={highlightedTrack}
+        segmentFan={fan}
         quietClustersEnabled={quietClustersEnabled}
         quietThreshold={quietThreshold}
         heatmapLayers={heatmapLayers}
@@ -274,6 +279,7 @@ export default function App() {
         error={noiseDetailError}
         onClose={handleNoiseClose}
         onHighlight={setHighlighted}
+        onFan={setFan}
       />
     </div>
   )

@@ -132,9 +132,9 @@ test('desktop: an error line replaces the partial answer, a new click aborts the
   await expect(page.locator('[data-testid="detail-popup-skeleton"]:visible')).toBeVisible()
 })
 
-// Inside a building the popup shows the level at the building's loudest façade receiver, and
-// lists answer fields it has no words for.
-test('desktop: a point inside a building reads as its noisiest façade', async ({ page }) => {
+// Inside a building the popup shows the level at the building's loudest façade receiver; where
+// that receiver is reads in the segments view, not above the sources.
+test('desktop: a point inside a building tells its façade receiver in the segments view', async ({ page }) => {
   await installHermeticMap(page, POINT, FIXTURE_DB)
   await page.goto(mapUrl(POINT))
   const { x, y } = await canvasCenter(page)
@@ -149,11 +149,13 @@ test('desktop: a point inside a building reads as its noisiest façade', async (
   }
   await sendPopupLine(page, popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB, building))
   await expect(badge(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB`)
-  const exposure = page.locator('[data-testid="building-exposure"]:visible')
-  await expect(exposure).toContainText('Noisiest façade of this building — faces SE')
-  await expect(exposure).toContainText('1 of 12 façade points')
-  await exposure.hover()
-  await expect(page.getByRole('tooltip')).toContainText('storeys')
+  await expect(page.locator('[data-testid="building-exposure"]')).toHaveCount(0)
+  await page.locator('[data-testid="segments-toggle"]:visible').click()
+  await expect.poll(() => popupRequests(page)).toHaveLength(2)
+  await sendPopupLine(page, { ...popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB, building), pieces: [] })
+  const segments = page.locator('[data-testid="segments"]:visible')
+  await expect(segments).toContainText('façade facing SE')
+  await expect(segments).toContainText('loudest of 12 façade points')
 })
 
 test('search: picking a result flies the map there and opens its popup', async ({ page }) => {

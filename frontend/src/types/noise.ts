@@ -136,6 +136,15 @@ export interface PieceTrace {
   without_ground_db: [number, number]
   air_db: number
   path_difference_m: [number, number]
+  /** The ray on the map: [lat, lon] of the piece's closest point, then of the receiver. */
+  ray?: [[number, number], [number, number]]
+}
+
+/** The segments view's rays on the map: each listed piece's ray with its received Lden (the
+ *  opened piece's selected) and the point the level is computed at. */
+export interface SegmentFan {
+  receiver: [number, number]
+  rays: { ray: [[number, number], [number, number]], lden: number, selected: boolean }[]
 }
 
 /** One computed piece of the segments view (asked with `segments=1`). */
@@ -161,6 +170,8 @@ export interface PopupUpdate {
   partial: boolean
   center: [number, number]
   elevation_m: number
+  /** The receiver reflection bonus of the surroundings (dB: 0, 1.5 or 3). */
+  reflection_db?: number
   building: BuildingAnswer | null
   total_lden: Level
   total: PeriodLevels
