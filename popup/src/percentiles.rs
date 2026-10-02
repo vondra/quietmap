@@ -28,9 +28,11 @@ const MOVEMENT_SPEED_M_S: f64 = 10.0;
 /// Emitters closer than this are at this distance (m): a receiver on the line itself.
 const DISTANCE_MIN_M: f64 = 1.0;
 
-/// The levels (dB, `-inf` silent) exceeded 5, 10, 50 and 90 % of the time per period, and road
+/// The levels (dB, `-inf` silent) exceeded 5, 10, 50 and 90 % of the time per period, road
 /// traffic's intermittency ratio (Wunderli et al. 2016): the share of its sound energy that comes
-/// while its level stands more than 3 dB above its own mean (NaN without road traffic).
+/// while its level stands more than 3 dB above its own mean (NaN without road traffic), and the
+/// share of the time the modelled sound stands above a quiet natural place's own
+/// ([`NATURAL_BACKGROUND_DB`]): when human noise is heard over a stream, leaves and birds.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Percentiles {
     pub l5: [f64; PERIODS],
@@ -38,17 +40,39 @@ pub struct Percentiles {
     pub l50: [f64; PERIODS],
     pub l90: [f64; PERIODS],
     pub road_intermittency: [f64; PERIODS],
+    pub audible: [f64; PERIODS],
 }
+
+/// The A-weighted level of a quiet natural place by day, evening and night (a stream, leaves and
+/// birds at some distance; the natural ambient the US National Park Service measures at 20-35
+/// dB in its parks): human noise above it is heard, the share of the time it is above, the
+/// soundscape's "percent time audible".
+pub const NATURAL_BACKGROUND_DB: [f64; PERIODS] = [30.0, 30.0, 25.0];
 
 /// Wunderli's event threshold: 3 dB above the mean, twice its intensity.
 const EVENT_THRESHOLD_RATIO: f64 = 2.0;
 
-/// One fluctuating source: its mean energy and lambda per period.
+/// One source whose level varies in time: its mean energy, its energy in each meteorological
+/// state (homogeneous, favourable) and lambda per period (infinite for a steady source, whose
+/// level follows the weather alone).
 struct Line {
     key: u64,
     road: bool,
     energy: [f64; PERIODS],
+    states: [[f64; PERIODS]; 2],
     lambda: [f64; PERIODS],
+}
+
+impl Line {
+    /// The share of the time the source is heard in its favourable state, from its mean being
+    /// the mix of the two.
+    fn favourable_share(&self, period: usize) -> f64 {
+        let [homogeneous, favourable] = [self.states[0][period], self.states[1][period]];
+        if (favourable - homogeneous).abs() <= f64::EPSILON * favourable.abs() {
+            return 0.0;
+        }
+        ((self.energy[period] - homogeneous) / (favourable - homogeneous)).clamp(0.0, 1.0)
+    }
 }
 
 fn number(fields: &serde_json::Value, name: &str) -> Option<f64> {
@@ -127,25 +151,30 @@ pub fn percentiles(
         for contributor in selection.contributors.values() {
             let significant =
                 (0..PERIODS).any(|p| contributor.energy[p] > FLUCTUATING_SHARE_MIN * total[p]);
-            if !significant
-                || matches!(
-                    selection.layer,
-                    Layer::Industry | Layer::Building | Layer::Ship
-                )
-            {
+            if !significant {
                 continue;
             }
-            let Some(density) =
-                fields(contributor).and_then(|f| emitters_per_metre(contributor.layer, &f))
-            else {
-                continue;
+            // Industry, buildings and ships are steady; their level still follows the weather.
+            let lambda = if matches!(
+                selection.layer,
+                Layer::Industry | Layer::Building | Layer::Ship
+            ) {
+                [f64::INFINITY; PERIODS]
+            } else {
+                let Some(density) =
+                    fields(contributor).and_then(|f| emitters_per_metre(contributor.layer, &f))
+                else {
+                    continue;
+                };
+                let distance = contributor.distance_m.max(DISTANCE_MIN_M);
+                density.map(|rho| rho * distance)
             };
-            let distance = contributor.distance_m.max(DISTANCE_MIN_M);
             lines.push(Line {
                 key: contributor.group_key,
                 road: contributor.layer == Layer::Road,
                 energy: contributor.energy,
-                lambda: density.map(|rho| rho * distance),
+                states: contributor.states,
+                lambda,
             });
         }
     }
@@ -155,6 +184,7 @@ pub fn percentiles(
         key: u64::MAX,
         road: false,
         energy: flight_energy,
+        states: [flight_energy; 2],
         lambda: std::array::from_fn(|p| {
             if flight_energy[p] > 0.0 {
                 flight_energy_lambda[p] / flight_energy[p]
@@ -170,6 +200,7 @@ pub fn percentiles(
         l50: [f64::NEG_INFINITY; PERIODS],
         l90: [f64::NEG_INFINITY; PERIODS],
         road_intermittency: [f64::NAN; PERIODS],
+        audible: [0.0; PERIODS],
     };
     let road_total = selections
         .iter()
@@ -187,15 +218,32 @@ pub fn percentiles(
         // Road traffic alone, its unlisted remainder steady.
         let mut road_draws = vec![(road_total[p] - road_fluctuating).max(0.0); DRAWS];
         let mut strata: Vec<usize> = (0..DRAWS).collect();
-        for line in lines.iter().filter(|line| line.energy[p] > 0.0) {
-            // Fisher-Yates: which stratum of this line's probability each draw takes.
+        // The weather of each draw, one for all sources (a night's inversion or a wind bends
+        // every ray of the place alike): stratified too.
+        let shuffle = |strata: &mut Vec<usize>, random: &mut Random| {
             for k in (1..DRAWS).rev() {
                 let j = (random.uniform() * (k + 1) as f64) as usize;
                 strata.swap(k, j.min(k));
             }
+        };
+        shuffle(&mut strata, &mut random);
+        let weather: Vec<f64> = strata
+            .iter()
+            .map(|&stratum| (stratum as f64 + random.uniform()) / DRAWS as f64)
+            .collect();
+        for line in lines.iter().filter(|line| line.energy[p] > 0.0) {
+            // Fisher-Yates: which stratum of this line's probability each draw takes.
+            shuffle(&mut strata, &mut random);
+            let favourable = line.favourable_share(p);
             for (k, stratum) in strata.iter().enumerate() {
                 let probability = (*stratum as f64 + random.uniform()) / DRAWS as f64;
-                let value = line.energy[p] * relative_intensity(line.lambda[p], probability);
+                let state = usize::from(weather[k] < favourable);
+                let mean = if line.states[state][p] > 0.0 || line.states[1 - state][p] > 0.0 {
+                    line.states[state][p]
+                } else {
+                    line.energy[p]
+                };
+                let value = mean * relative_intensity(line.lambda[p], probability);
                 draws[k] += value;
                 if line.road {
                     road_draws[k] += value;
@@ -210,6 +258,9 @@ pub fn percentiles(
             let events: f64 = road_draws.iter().filter(|&&value| value > threshold).sum();
             result.road_intermittency[p] = if all > 0.0 { events / all } else { 0.0 };
         }
+        let background = physics::bands::energy(NATURAL_BACKGROUND_DB[p]);
+        result.audible[p] =
+            draws.iter().filter(|&&value| value > background).count() as f64 / DRAWS as f64;
         draws.sort_by(f64::total_cmp);
         let level = |exceeded: f64| {
             let value = draws[((1.0 - exceeded) * (DRAWS - 1) as f64).round() as usize];
@@ -240,6 +291,7 @@ mod tests {
             group_key: key,
             layer,
             energy: [energy(leq_db); PERIODS],
+            states: [[energy(leq_db); PERIODS]; 2],
             distance_m,
             display: DisplayRef {
                 ring: 0,
@@ -324,6 +376,30 @@ mod tests {
         );
         let levels = percentiles(&[industry], ([0.0; PERIODS], [0.0; PERIODS]), &busy, 1);
         assert!(levels.road_intermittency[0].is_nan());
+    }
+
+    /// A car every half hour 4 m away is heard a small share of the day; a motorway's hum
+    /// 300 m away above the natural background all of it; nothing, none of it.
+    #[test]
+    fn human_noise_is_heard_the_share_of_the_time_it_stands_above_nature() {
+        let sparse = selection(Layer::Road, vec![contributor(7, Layer::Road, 40.0, 4.0)]);
+        let levels = percentiles(&[sparse], ([0.0; PERIODS], [0.0; PERIODS]), &quiet_road, 1);
+        assert!(
+            levels.audible[0] > 0.0 && levels.audible[0] < 0.3,
+            "{:?}",
+            levels.audible
+        );
+        let busy = |_: &Contributor| {
+            Some(
+                serde_json::json!({"aadt_light": 30_000.0, "speed_kmh": 100.0,
+                "road_class": "motorway"}),
+            )
+        };
+        let hum = selection(Layer::Road, vec![contributor(8, Layer::Road, 45.0, 300.0)]);
+        let levels = percentiles(&[hum], ([0.0; PERIODS], [0.0; PERIODS]), &busy, 1);
+        assert_eq!(levels.audible, [1.0; PERIODS]);
+        let none = percentiles(&[], ([0.0; PERIODS], [0.0; PERIODS]), &busy, 1);
+        assert_eq!(none.audible, [0.0; PERIODS]);
     }
 
     /// Industry is steady; the same click gives the same levels whatever order the hash maps

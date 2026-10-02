@@ -11,7 +11,7 @@
 //! same every time.
 
 use crate::candidates::{Attributes, Candidate};
-use crate::evaluate::{Bands, Receiver, Scratch, period_sums, received_bands};
+use crate::evaluate::{Bands, Received, Receiver, Scratch, period_sums, received_bands};
 use crate::listing::EvaluatedPiece;
 use crate::update::{CONTRIBUTOR_PIECES, Contributor};
 use physics::bands::{BANDS, PERIODS};
@@ -120,18 +120,18 @@ impl LayerSelection {
     fn add(
         &mut self,
         candidate: &Candidate,
-        bands: &Bands,
+        received: &Received,
         attributes: &Attributes,
         keep_pieces: bool,
     ) {
-        let energy = period_sums(bands);
+        let energy = period_sums(&received.bands);
         self.evaluated += 1;
         self.covered += 1;
         for (total, value) in self.energy.iter_mut().zip(energy) {
             *total += value;
         }
-        self.add_spectrum(bands);
-        self.add_contributor(candidate, energy);
+        self.add_spectrum(&received.bands);
+        self.add_contributor(candidate, energy, &received.states);
         if keep_pieces {
             self.pieces
                 .push(EvaluatedPiece::of(candidate, attributes, energy));
@@ -146,7 +146,12 @@ impl LayerSelection {
         }
     }
 
-    fn add_contributor(&mut self, candidate: &Candidate, energy: [f64; PERIODS]) {
+    fn add_contributor(
+        &mut self,
+        candidate: &Candidate,
+        energy: [f64; PERIODS],
+        states: &[[f64; PERIODS]; 2],
+    ) {
         let contributor = self
             .contributors
             .entry(candidate.group_key)
@@ -154,6 +159,7 @@ impl LayerSelection {
                 group_key: candidate.group_key,
                 layer: candidate.layer,
                 energy: [0.0; PERIODS],
+                states: [[0.0; PERIODS]; 2],
                 distance_m: candidate.distance_m,
                 display: candidate.display,
                 pieces: Vec::new(),
@@ -161,6 +167,11 @@ impl LayerSelection {
             });
         for (total, value) in contributor.energy.iter_mut().zip(energy) {
             *total += value;
+        }
+        for (totals, values) in contributor.states.iter_mut().zip(states) {
+            for (total, value) in totals.iter_mut().zip(values) {
+                *total += value;
+            }
         }
         contributor.distance_m = contributor.distance_m.min(candidate.distance_m);
         contributor
@@ -234,8 +245,8 @@ pub fn select(
             break;
         }
         let received = evaluate_all(&work, receiver, attributes);
-        for ((layer, candidate), bands) in work.into_iter().zip(received) {
-            selections[layer].add(&candidate, &bands?, attributes, keep_pieces);
+        for ((layer, candidate), received) in work.into_iter().zip(received) {
+            selections[layer].add(&candidate, &received?, attributes, keep_pieces);
         }
     }
     for (layer, selection) in selections.iter_mut().enumerate() {
@@ -256,7 +267,7 @@ fn evaluate_all(
     work: &[(usize, Candidate)],
     receiver: &Receiver,
     attributes: &Attributes,
-) -> Vec<Result<Bands, String>> {
+) -> Vec<Result<Received, String>> {
     work.par_iter()
         .map_init(Scratch::default, |scratch, (_, candidate)| {
             received_bands(
@@ -296,7 +307,7 @@ fn sample_rest(
     let mut rest = std::mem::take(&mut selection.pending);
     // Pending stays sorted ascending (only its loudest end is ever drained).
     rest.reverse();
-    let mut evaluated: HashMap<usize, ([f64; PERIODS], Bands)> = HashMap::new();
+    let mut evaluated: HashMap<usize, ([f64; PERIODS], Received)> = HashMap::new();
     let mut size = SAMPLE_START;
     let mut first = 0;
     loop {
@@ -339,9 +350,9 @@ fn sample_rest(
             .map(|index| (index, rest[index].clone()))
             .collect();
         let received = evaluate_all(&needed, receiver, attributes);
-        for ((index, _), bands) in needed.iter().zip(received) {
-            let bands = bands?;
-            evaluated.insert(*index, (period_sums(&bands), bands));
+        for ((index, _), received) in needed.iter().zip(received) {
+            let received = received?;
+            evaluated.insert(*index, (period_sums(&received.bands), received));
         }
         for index in first..certain {
             selection.add(&rest[index], &evaluated[&index].1, attributes, keep_pieces);
@@ -387,16 +398,16 @@ fn sample_rest(
             let mut shown = std::collections::BTreeSet::new();
             for &index in &draws {
                 if shown.insert(index) {
-                    let (energy, bands) = &evaluated[&index];
+                    let (energy, received) = &evaluated[&index];
                     if exhaustive {
-                        selection.add(&rest[index], bands, attributes, keep_pieces);
+                        selection.add(&rest[index], received, attributes, keep_pieces);
                         for (estimate, value) in selection.estimate.iter_mut().zip(energy) {
                             *estimate -= value;
                         }
                     } else {
                         selection.evaluated += 1;
-                        selection.add_spectrum(bands);
-                        selection.add_contributor(&rest[index], *energy);
+                        selection.add_spectrum(&received.bands);
+                        selection.add_contributor(&rest[index], *energy, &received.states);
                     }
                 }
             }

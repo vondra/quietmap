@@ -10,7 +10,7 @@ use physics::bands::{BANDS, PERIODS, energy};
 use physics::bound::POINT_DIVERGENCE_OFFSET_DB;
 use physics::line::{LinePieceGeometry, LineQuadratureNode, SkylineArc, line_quadrature_nodes};
 use physics::profile::Profile;
-use physics::ray::{Crossing, RayEnds, RayScratch, RayTerms, ray_terms, ray_transfer};
+use physics::ray::{Crossing, RayEnds, RayScratch, RayTerms, Transfer, ray_terms, ray_transfer};
 use physics::weather::PlaceWeather;
 
 /// What every source of one click shares.
@@ -91,6 +91,13 @@ pub fn trace(
 /// Received A-weighted energy per period and octave band.
 pub type Bands = [[f64; BANDS]; PERIODS];
 
+/// What one source delivers: per period and band, and per meteorological state (homogeneous,
+/// favourable) and period summed over the bands, for the time the source is heard.
+pub struct Received {
+    pub bands: Bands,
+    pub states: [[f64; PERIODS]; 2],
+}
+
 /// The per-period sums of band energies.
 pub fn period_sums(bands: &Bands) -> [f64; PERIODS] {
     bands.map(|period| period.iter().sum())
@@ -103,7 +110,26 @@ pub fn received_energy(
     source: &SourceAttribute,
     scratch: &mut Scratch,
 ) -> Result<[f64; PERIODS], String> {
-    received_bands(receiver, candidate, source, scratch).map(|bands| period_sums(&bands))
+    received_bands(receiver, candidate, source, scratch)
+        .map(|received| period_sums(&received.bands))
+}
+
+/// Adds `weight` times one ray's transfer of `emission` to `received`.
+fn add_ray(
+    received: &mut Received,
+    emission: &[[f64; BANDS]; PERIODS],
+    transfer: &Transfer,
+    weight: f64,
+) {
+    for period in 0..PERIODS {
+        for (band, power) in emission[period].iter().enumerate() {
+            let power = weight * power;
+            received.bands[period][band] += power * transfer.periods[period][band];
+            for (state, total) in received.states.iter_mut().enumerate() {
+                total[period] += power * transfer.states[state][band];
+            }
+        }
+    }
 }
 
 /// Received A-weighted energy per period and band of one candidate with its attribute.
@@ -112,10 +138,13 @@ pub fn received_bands(
     candidate: &Candidate,
     source: &SourceAttribute,
     scratch: &mut Scratch,
-) -> Result<Bands, String> {
+) -> Result<Received, String> {
     let emission = &source.energy;
     let reflection = energy(receiver.reflection_db);
-    let mut received = [[0.0; BANDS]; PERIODS];
+    let mut received = Received {
+        bands: [[0.0; BANDS]; PERIODS],
+        states: [[0.0; PERIODS]; 2],
+    };
     let ends = ray_ends(receiver, source);
     let [a, b] = candidate.ends_m;
     if !candidate.line {
@@ -126,11 +155,7 @@ pub fn received_bands(
             .hypot(receiver.altitude_m - (candidate.ground_m[0] + source.height_m))
             .max(1.0);
         let divergence = 1.0 / (distance * distance * energy(POINT_DIVERGENCE_OFFSET_DB));
-        for (period, total) in received.iter_mut().enumerate() {
-            for (band, value) in total.iter_mut().enumerate() {
-                *value = divergence * emission[period][band] * transfer[period][band] * reflection;
-            }
-        }
+        add_ray(&mut received, emission, &transfer, divergence * reflection);
         return Ok(received);
     }
     let altitude = |end: usize| candidate.ground_m[end] + source.height_m - receiver.altitude_m;
@@ -168,12 +193,12 @@ pub fn received_bands(
             a[1] + fraction * (b[1] - a[1]),
         ];
         let transfer = ray(receiver, point, node.obstacles_on_ray, &ends, scratch)?;
-        let weight = node.weight_rad * divergence * reflection;
-        for (period, total) in received.iter_mut().enumerate() {
-            for (band, value) in total.iter_mut().enumerate() {
-                *value += weight * emission[period][band] * transfer[period][band];
-            }
-        }
+        add_ray(
+            &mut received,
+            emission,
+            &transfer,
+            node.weight_rad * divergence * reflection,
+        );
     }
     scratch.nodes = nodes;
     Ok(received)
@@ -186,7 +211,7 @@ fn ray(
     obstacles_on_ray: bool,
     ends: &RayEnds,
     scratch: &mut Scratch,
-) -> Result<[[f64; BANDS]; PERIODS], String> {
+) -> Result<Transfer, String> {
     receiver
         .ground
         .fill_profile(point, receiver.position, &mut scratch.profile)?;
@@ -208,6 +233,5 @@ fn ray(
         ends,
         (p, &receiver.weather.alpha_db_per_km),
         &mut scratch.ray,
-    )
-    .periods)
+    ))
 }

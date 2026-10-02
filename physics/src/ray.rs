@@ -41,11 +41,14 @@ pub struct RayEnds {
     pub own_footprint: u64,
 }
 
-/// A ray's transfer: linear 10^(-A/10) per period and band (A without divergence).
+/// A ray's transfer: linear 10^(-A/10) per period and band (A without divergence), the
+/// periods' mix of the two meteorological states and each state alone (homogeneous,
+/// favourable), so that the time a source is heard can follow the weather.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Transfer {
     pub slant_m: f64,
     pub periods: [[f64; BANDS]; PERIODS],
+    pub states: [[f64; BANDS]; 2],
 }
 
 /// Reusable per-thread buffers.
@@ -143,6 +146,8 @@ pub fn ray_terms(
                     air[band] * (p * favourable[band] + (1.0 - p) * homogeneous[band])
                 })
             }),
+            states: [homogeneous, favourable]
+                .map(|state| std::array::from_fn(|band| air[band] * state[band])),
         },
         favourable_probability,
         boundaries,

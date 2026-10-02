@@ -249,7 +249,12 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 let round = |value: f64| value.is_finite().then(|| (value * 10.0).round() / 10.0);
                 json!({"day": round(levels[0]), "evening": round(levels[1]), "night": round(levels[2])})
             };
-            json!({"l5": periods(p.l5), "l10": periods(p.l10), "l50": periods(p.l50), "l90": periods(p.l90)})
+            let percent = |shares: [f64; PERIODS]| {
+                let round = |share: f64| (share * 1000.0).round() / 10.0;
+                json!({"day": round(shares[0]), "evening": round(shares[1]), "night": round(shares[2])})
+            };
+            json!({"l5": periods(p.l5), "l10": periods(p.l10), "l50": periods(p.l50), "l90": periods(p.l90),
+                "audible_percent": percent(p.audible)})
         }),
         "loudness": update.loudness.as_ref().map(|loudness| {
             // Two significant digits: 0.43, 4.3, 43.
