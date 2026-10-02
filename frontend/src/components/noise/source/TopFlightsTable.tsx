@@ -8,7 +8,10 @@ import { topFlightCells, topFlightKey } from '../top-flights'
 
 const TITLE_TOOLTIP =
   'The ADS-B flights with the highest peak level (Lmax) at this point, loudest first.\n' +
-  'Hover a row (tap it on a phone) to see on the map the part of its track computed here.'
+  'Hover a row (tap it on a phone) to see on the map the parts of its track stored for this\n' +
+  'place: each map cell keeps, per height band and aircraft class, the two loudest flights\n' +
+  'through it, so a flight\'s line has gaps where others were louder. Every flight\'s noise\n' +
+  'counts in full.'
 const AIRCRAFT_TOOLTIP =
   'The aircraft type, with its callsign and ICAO address in its tooltip.\n' +
   'It opens the flight\'s trace of that day on adsb.lol, in a new tab.'
@@ -95,6 +98,10 @@ export function TopFlightsTable({ flights, onHighlightFlight }: {
           })}
         </tbody>
       </table>
+      <p className="mt-0.5 text-[10px] text-muted-foreground/70 whitespace-normal">
+        The map draws the parts of a flight stored for this place, so its line can have gaps; the
+        aircraft link opens the whole flight.
+      </p>
     </div>
   )
 }
