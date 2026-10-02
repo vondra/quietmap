@@ -106,6 +106,17 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         );
         object.insert("received".into(), Value::Object(received));
         object.insert("metadata".into(), display);
+        if let Some(heard) = contributor.heard {
+            let rate = |value: f64| (value * 100.0).round() / 100.0;
+            object.insert(
+                "heard".into(),
+                json!({
+                    "per_hour": {"day": rate(heard.per_hour[0]), "evening": rate(heard.per_hour[1]),
+                        "night": rate(heard.per_hour[2])},
+                    "steady": heard.steady,
+                }),
+            );
+        }
         // What the map draws of it as lines of [lat, lon], one point for a point source: all of it
         // within the reach in the final update, its loudest pieces before.
         let degrees = |metres: &[f64; 2]| {
@@ -258,12 +269,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 let round = |value: f64| value.is_finite().then(|| (value * 10.0).round() / 10.0);
                 json!({"day": round(levels[0]), "evening": round(levels[1]), "night": round(levels[2])})
             };
-            let percent = |shares: [f64; PERIODS]| {
-                let round = |share: f64| (share * 1000.0).round() / 10.0;
-                json!({"day": round(shares[0]), "evening": round(shares[1]), "night": round(shares[2])})
-            };
-            json!({"l5": periods(p.l5), "l10": periods(p.l10), "l50": periods(p.l50), "l90": periods(p.l90),
-                "audible_percent": percent(p.audible)})
+            json!({"l5": periods(p.l5), "l10": periods(p.l10), "l50": periods(p.l50), "l90": periods(p.l90)})
         }),
         "loudness": update.loudness.as_ref().map(|loudness| {
             // Two significant digits: 0.43, 4.3, 43.
@@ -273,10 +279,8 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 (sone * scale).round() / scale
             };
             let n5 = loudness.n5_sone;
-            let n50 = loudness.n50_sone;
             json!({"n5_sone": {"day": round(n5[0]), "evening": round(n5[1]), "night": round(n5[2])},
-                "n50_sone": {"day": round(n50[0]), "evening": round(n50[1]), "night": round(n50[2])},
-                "rated_sone": round(loudness.rated_sone)})
+                "n5_den_sone": round(loudness.n5_den_sone)})
         }),
         "top_contributors": contributors,
         "top_flights": flights,

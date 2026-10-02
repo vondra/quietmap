@@ -431,12 +431,15 @@ pub fn answer(
                     energy: flight_energy,
                     spectrum_db,
                 },
-                (levels.l5, levels.l50),
-                levels.road_intermittency,
+                levels.l5,
             )
         });
         let mut contributors = loudest_contributors(&selections);
         if last_ring {
+            for contributor in &mut contributors {
+                contributor.heard = fields(contributor)
+                    .and_then(|fields| crate::percentiles::heard(contributor, &fields));
+            }
             let read: Vec<&RingFiles> = rings.iter().filter_map(OnceCell::get).collect();
             let keys: Vec<u64> = contributors.iter().map(|c| c.group_key).collect();
             let lines = whole_lines(&read, &frame, &keys, station.position, GROUND_REACH_M)?;

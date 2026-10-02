@@ -7,7 +7,8 @@
 //! mean. The sum's distribution is drawn by a simulation seeded by the click, each line's draws
 //! stratified (one in each 1/DRAWS of its probability, in a shuffled order) and the lines taken in
 //! a fixed order, so that a click gives the same levels every time and the loudest line's own
-//! quantiles come out nearly exact.
+//! quantiles come out nearly exact. The same traffic tells how a contributor is heard: its passes
+//! per hour, and whether at its distance they run together into a steady sound.
 
 use crate::selection::LayerSelection;
 use physics::bands::{PERIOD_HOURS, PERIODS};
@@ -28,36 +29,32 @@ const MOVEMENT_SPEED_M_S: f64 = 10.0;
 /// Emitters closer than this are at this distance (m): a receiver on the line itself.
 const DISTANCE_MIN_M: f64 = 1.0;
 
-/// The levels (dB, `-inf` silent) exceeded 5, 10, 50 and 90 % of the time per period, road
-/// traffic's intermittency ratio (Wunderli et al. 2016): the share of its sound energy that comes
-/// while its level stands more than 3 dB above its own mean (NaN without road traffic), and the
-/// share of the time the modelled sound stands above a quiet natural place's own
-/// ([`NATURAL_BACKGROUND_DB`]): when human noise is heard over a stream, leaves and birds.
+/// The levels (dB, `-inf` silent) exceeded 5, 10, 50 and 90 % of the time per period.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Percentiles {
     pub l5: [f64; PERIODS],
     pub l10: [f64; PERIODS],
     pub l50: [f64; PERIODS],
     pub l90: [f64; PERIODS],
-    pub road_intermittency: [f64; PERIODS],
-    pub audible: [f64; PERIODS],
 }
 
-/// The A-weighted level of a quiet natural place by day, evening and night (a stream, leaves and
-/// birds at some distance; the natural ambient the US National Park Service measures at 20-35
-/// dB in its parks): human noise above it is heard, the share of the time it is above, the
-/// soundscape's "percent time audible".
-pub const NATURAL_BACKGROUND_DB: [f64; PERIODS] = [30.0, 30.0, 25.0];
+/// How a contributor is heard: its passes per hour by day, evening and night (vehicles, trains,
+/// airport movements), and whether at its distance they run together into a steady sound (on
+/// average at least one within its distance by day: Kurze's lambda of at least 1).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Heard {
+    pub per_hour: [f64; PERIODS],
+    pub steady: bool,
+}
 
-/// Wunderli's event threshold: 3 dB above the mean, twice its intensity.
-const EVENT_THRESHOLD_RATIO: f64 = 2.0;
+/// Kurze's lambda from which passes run together into a steady sound.
+const STEADY_LAMBDA: f64 = 1.0;
 
 /// One source whose level varies in time: its mean energy, its energy in each meteorological
 /// state (homogeneous, favourable) and lambda per period (infinite for a steady source, whose
 /// level follows the weather alone).
 struct Line {
     key: u64,
-    road: bool,
     energy: [f64; PERIODS],
     states: [[f64; PERIODS]; 2],
     lambda: [f64; PERIODS],
@@ -79,9 +76,11 @@ fn number(fields: &serde_json::Value, name: &str) -> Option<f64> {
     fields.get(name)?.as_f64()
 }
 
-/// Emitters per metre of a contributor per period from its display fields, or `None` for a steady
-/// source (or one whose fields say nothing).
-fn emitters_per_metre(layer: Layer, fields: &serde_json::Value) -> Option<[f64; PERIODS]> {
+/// A contributor's passes per hour by day, evening and night and their speed (m/s) from its
+/// display fields: vehicles on a road (the daily flow over the period's share and hours), trains on
+/// a track (the period's trains over its hours), airport movements on an aeroway (at taxi speed);
+/// `None` for a steady source (or one whose fields say nothing).
+fn traffic(layer: Layer, fields: &serde_json::Value) -> Option<([f64; PERIODS], f64)> {
     match layer {
         Layer::Road => {
             let daily: f64 = ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"]
@@ -99,7 +98,10 @@ fn emitters_per_metre(layer: Layer, fields: &serde_json::Value) -> Option<[f64; 
                 OTHER_PERIOD_SHARES
             };
             (speed > 0.0 && daily > 0.0).then(|| {
-                std::array::from_fn(|p| daily * shares[p] / (PERIOD_HOURS[p] * 3_600.0) / speed)
+                (
+                    std::array::from_fn(|p| daily * shares[p] / PERIOD_HOURS[p]),
+                    speed,
+                )
             })
         }
         Layer::Railway => {
@@ -110,13 +112,14 @@ fn emitters_per_metre(layer: Layer, fields: &serde_json::Value) -> Option<[f64; 
                 ["trains_passenger_night", "trains_freight_night"],
             ];
             (speed > 0.0).then(|| {
-                std::array::from_fn(|p| {
+                let per_hour = std::array::from_fn(|p| {
                     let trains: f64 = names[p]
                         .iter()
                         .filter_map(|name| number(fields, name))
                         .sum();
-                    trains / (PERIOD_HOURS[p] * 3_600.0) / speed
-                })
+                    trains / PERIOD_HOURS[p]
+                });
+                (per_hour, speed)
             })
         }
         Layer::Aircraft => {
@@ -125,15 +128,31 @@ fn emitters_per_metre(layer: Layer, fields: &serde_json::Value) -> Option<[f64; 
                 .filter_map(|name| number(fields, name))
                 .sum();
             (daily > 0.0).then(|| {
-                std::array::from_fn(|p| {
-                    daily * OTHER_PERIOD_SHARES[p]
-                        / (PERIOD_HOURS[p] * 3_600.0)
-                        / MOVEMENT_SPEED_M_S
-                })
+                (
+                    std::array::from_fn(|p| daily * OTHER_PERIOD_SHARES[p] / PERIOD_HOURS[p]),
+                    MOVEMENT_SPEED_M_S,
+                )
             })
         }
         Layer::Industry | Layer::Building | Layer::Ship => None,
     }
+}
+
+/// Kurze's lambda per period: the emitters within the contributor's distance of a line of them.
+fn lambda(per_hour: [f64; PERIODS], speed_m_s: f64, distance_m: f64) -> [f64; PERIODS] {
+    per_hour.map(|passes| passes / 3_600.0 / speed_m_s * distance_m.max(DISTANCE_MIN_M))
+}
+
+/// How `contributor` is heard, from its display fields; `None` for a steady source.
+pub fn heard(
+    contributor: &crate::update::Contributor,
+    fields: &serde_json::Value,
+) -> Option<Heard> {
+    let (per_hour, speed) = traffic(contributor.layer, fields)?;
+    Some(Heard {
+        per_hour,
+        steady: lambda(per_hour, speed, contributor.distance_m)[0] >= STEADY_LAMBDA,
+    })
 }
 
 /// The percentile levels of an answer: `selections` with their contributors, the flights' energy
@@ -161,17 +180,15 @@ pub fn percentiles(
             ) {
                 [f64::INFINITY; PERIODS]
             } else {
-                let Some(density) =
-                    fields(contributor).and_then(|f| emitters_per_metre(contributor.layer, &f))
+                let Some((per_hour, speed)) =
+                    fields(contributor).and_then(|f| traffic(contributor.layer, &f))
                 else {
                     continue;
                 };
-                let distance = contributor.distance_m.max(DISTANCE_MIN_M);
-                density.map(|rho| rho * distance)
+                lambda(per_hour, speed, contributor.distance_m)
             };
             lines.push(Line {
                 key: contributor.group_key,
-                road: contributor.layer == Layer::Road,
                 energy: contributor.energy,
                 states: contributor.states,
                 lambda,
@@ -182,7 +199,6 @@ pub fn percentiles(
     lines.sort_by_key(|line| line.key);
     lines.push(Line {
         key: u64::MAX,
-        road: false,
         energy: flight_energy,
         states: [flight_energy; 2],
         lambda: std::array::from_fn(|p| {
@@ -199,24 +215,11 @@ pub fn percentiles(
         l10: [f64::NEG_INFINITY; PERIODS],
         l50: [f64::NEG_INFINITY; PERIODS],
         l90: [f64::NEG_INFINITY; PERIODS],
-        road_intermittency: [f64::NAN; PERIODS],
-        audible: [0.0; PERIODS],
     };
-    let road_total = selections
-        .iter()
-        .find(|selection| selection.layer == Layer::Road)
-        .map_or([0.0; PERIODS], LayerSelection::answer_energy);
     for (p, period_total) in total.iter().enumerate() {
         let fluctuating: f64 = lines.iter().map(|line| line.energy[p]).sum();
         let steady = (period_total - fluctuating).max(0.0);
-        let road_fluctuating: f64 = lines
-            .iter()
-            .filter(|line| line.road)
-            .map(|line| line.energy[p])
-            .sum();
         let mut draws = vec![steady; DRAWS];
-        // Road traffic alone, its unlisted remainder steady.
-        let mut road_draws = vec![(road_total[p] - road_fluctuating).max(0.0); DRAWS];
         let mut strata: Vec<usize> = (0..DRAWS).collect();
         // The weather of each draw, one for all sources (a night's inversion or a wind bends
         // every ray of the place alike): stratified too.
@@ -243,24 +246,9 @@ pub fn percentiles(
                 } else {
                     line.energy[p]
                 };
-                let value = mean * relative_intensity(line.lambda[p], probability);
-                draws[k] += value;
-                if line.road {
-                    road_draws[k] += value;
-                }
+                draws[k] += mean * relative_intensity(line.lambda[p], probability);
             }
         }
-        if road_total[p] > 0.0 {
-            // Against the draws' own mean: the table ends at the 99.5 % quantile, so the draws
-            // hold a sparse road's pass-bys at that quantile's level and its mean lower alike.
-            let all: f64 = road_draws.iter().sum();
-            let threshold = EVENT_THRESHOLD_RATIO * all / DRAWS as f64;
-            let events: f64 = road_draws.iter().filter(|&&value| value > threshold).sum();
-            result.road_intermittency[p] = if all > 0.0 { events / all } else { 0.0 };
-        }
-        let background = physics::bands::energy(NATURAL_BACKGROUND_DB[p]);
-        result.audible[p] =
-            draws.iter().filter(|&&value| value > background).count() as f64 / DRAWS as f64;
         draws.sort_by(f64::total_cmp);
         let level = |exceeded: f64| {
             let value = draws[((1.0 - exceeded) * (DRAWS - 1) as f64).round() as usize];
@@ -300,6 +288,7 @@ mod tests {
             },
             pieces: Vec::new(),
             lines: Vec::new(),
+            heard: None,
         }
     }
 
@@ -346,60 +335,23 @@ mod tests {
         assert!(levels.l50[0] < 25.0 && levels.l10[0] > levels.l50[0]);
     }
 
-    /// A car every half hour 4 m away is all events (intermittency near 1); a busy road's hum
-    /// 300 m away has almost none above its mean plus 3 dB.
+    /// A car every half hour 4 m away is heard as passes about twice an hour by day; a
+    /// motorway's 30,000 vehicles 300 m away run together into a steady sound; industry has no
+    /// passes.
     #[test]
-    fn sparse_roads_are_intermittent_and_busy_distant_ones_are_not() {
-        let sparse = selection(Layer::Road, vec![contributor(7, Layer::Road, 40.0, 4.0)]);
-        let levels = percentiles(&[sparse], ([0.0; PERIODS], [0.0; PERIODS]), &quiet_road, 1);
-        assert!(
-            levels.road_intermittency[0] > 0.9,
-            "{:?}",
-            levels.road_intermittency
-        );
-        let busy = |_: &Contributor| {
-            Some(
-                serde_json::json!({"aadt_light": 30_000.0, "speed_kmh": 100.0,
-                "road_class": "motorway"}),
-            )
-        };
-        let hum = selection(Layer::Road, vec![contributor(8, Layer::Road, 45.0, 300.0)]);
-        let levels = percentiles(&[hum], ([0.0; PERIODS], [0.0; PERIODS]), &busy, 1);
-        assert!(
-            levels.road_intermittency[0] < 0.1,
-            "{:?}",
-            levels.road_intermittency
-        );
-        let industry = selection(
-            Layer::Industry,
-            vec![contributor(9, Layer::Industry, 45.0, 30.0)],
-        );
-        let levels = percentiles(&[industry], ([0.0; PERIODS], [0.0; PERIODS]), &busy, 1);
-        assert!(levels.road_intermittency[0].is_nan());
-    }
-
-    /// A car every half hour 4 m away is heard a small share of the day; a motorway's hum
-    /// 300 m away above the natural background all of it; nothing, none of it.
-    #[test]
-    fn human_noise_is_heard_the_share_of_the_time_it_stands_above_nature() {
-        let sparse = selection(Layer::Road, vec![contributor(7, Layer::Road, 40.0, 4.0)]);
-        let levels = percentiles(&[sparse], ([0.0; PERIODS], [0.0; PERIODS]), &quiet_road, 1);
-        assert!(
-            levels.audible[0] > 0.0 && levels.audible[0] < 0.3,
-            "{:?}",
-            levels.audible
-        );
-        let busy = |_: &Contributor| {
-            Some(
-                serde_json::json!({"aadt_light": 30_000.0, "speed_kmh": 100.0,
-                "road_class": "motorway"}),
-            )
-        };
-        let hum = selection(Layer::Road, vec![contributor(8, Layer::Road, 45.0, 300.0)]);
-        let levels = percentiles(&[hum], ([0.0; PERIODS], [0.0; PERIODS]), &busy, 1);
-        assert_eq!(levels.audible, [1.0; PERIODS]);
-        let none = percentiles(&[], ([0.0; PERIODS], [0.0; PERIODS]), &busy, 1);
-        assert_eq!(none.audible, [0.0; PERIODS]);
+    fn a_contributor_is_heard_as_its_passes_or_as_a_steady_sound() {
+        let lane = contributor(7, Layer::Road, 40.0, 4.0);
+        let heard_lane = heard(&lane, &quiet_road(&lane).unwrap()).unwrap();
+        assert!((heard_lane.per_hour[0] - 33.0 * 0.70 / 12.0).abs() < 1e-9);
+        assert!(!heard_lane.steady);
+        let motorway = contributor(8, Layer::Road, 45.0, 300.0);
+        let busy = serde_json::json!({"aadt_light": 30_000.0, "speed_kmh": 100.0,
+            "road_class": "motorway"});
+        let heard_motorway = heard(&motorway, &busy).unwrap();
+        assert!((heard_motorway.per_hour[0] - 30_000.0 * 0.65 / 12.0).abs() < 1e-9);
+        assert!(heard_motorway.steady);
+        let industry = contributor(9, Layer::Industry, 45.0, 30.0);
+        assert_eq!(heard(&industry, &busy), None);
     }
 
     /// Industry is steady; the same click gives the same levels whatever order the hash maps
@@ -433,13 +385,8 @@ mod tests {
         };
         let (first, second) = (roads(&[1, 2, 3, 4, 5]), roads(&[5, 3, 1, 4, 2]));
         assert_eq!(
-            (first.l10, first.l50, first.l90, first.road_intermittency),
-            (
-                second.l10,
-                second.l50,
-                second.l90,
-                second.road_intermittency
-            )
+            (first.l10, first.l50, first.l90),
+            (second.l10, second.l50, second.l90)
         );
     }
 }

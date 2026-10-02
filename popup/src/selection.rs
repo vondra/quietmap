@@ -164,6 +164,7 @@ impl LayerSelection {
                 display: candidate.display,
                 pieces: Vec::new(),
                 lines: Vec::new(),
+                heard: None,
             });
         for (total, value) in contributor.energy.iter_mut().zip(energy) {
             *total += value;

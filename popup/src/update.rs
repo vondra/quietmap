@@ -41,6 +41,9 @@ pub struct Contributor {
     pub pieces: Vec<([[f64; 2]; 2], f64)>,
     /// All of it within the reach as lines (the final update's): what the map shows then.
     pub lines: crate::lines::Lines,
+    /// How it is heard: its passes per hour and whether they run together (the final update's;
+    /// `None` for a steady source).
+    pub heard: Option<crate::percentiles::Heard>,
 }
 
 /// Pieces a contributor keeps for the map.
