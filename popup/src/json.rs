@@ -273,7 +273,10 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 (sone * scale).round() / scale
             };
             let n5 = loudness.n5_sone;
-            json!({"n5_sone": {"day": round(n5[0]), "evening": round(n5[1]), "night": round(n5[2])}})
+            let n50 = loudness.n50_sone;
+            json!({"n5_sone": {"day": round(n5[0]), "evening": round(n5[1]), "night": round(n5[2])},
+                "n50_sone": {"day": round(n50[0]), "evening": round(n50[1]), "night": round(n50[2])},
+                "rated_sone": round(loudness.rated_sone)})
         }),
         "top_contributors": contributors,
         "top_flights": flights,

@@ -431,7 +431,8 @@ pub fn answer(
                     energy: flight_energy,
                     spectrum_db,
                 },
-                levels.l5,
+                (levels.l5, levels.l50),
+                levels.road_intermittency,
             )
         });
         let mut contributors = loudest_contributors(&selections);
