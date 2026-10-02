@@ -71,7 +71,8 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, onOp
     <div data-testid="detail-popup" role="dialog" className="px-2.5 pt-1 pb-2" onClick={(e) => e.stopPropagation()}>
       <div className="flex items-start justify-between mb-1.5">
         {data.total_lden != null ? (
-          <span data-testid="noise-badge" className="leading-none shrink-0 whitespace-nowrap" style={{ color: ldenToColor(data.total_lden) }}>
+          <span data-testid="noise-badge" className="flex items-baseline gap-1.5 leading-none shrink-0 whitespace-nowrap text-foreground">
+            <span className="inline-block size-2.5 rounded-full self-center" style={{ background: ldenToColor(data.total_lden) }} aria-hidden="true" />
             {sone != null && sone > 0
               ? (
                 <DataPoint title="Loudness" text={LOUDNESS_TEXT}>
