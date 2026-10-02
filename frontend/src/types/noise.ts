@@ -15,6 +15,8 @@ export interface PeriodLevels {
 /** One layer's levels at the point. */
 export interface LayerLevels extends PeriodLevels {
   source_type: string
+  /** The aircraft layer's Lden-weighted level exceeded 5 % of the time (the final update's). */
+  loud_lden?: Level
   /** Lden if everything the stop rule left out (so far) were as loud as its bound. */
   lden_upper: Level
   /** Sources computed in full, of the candidates the rings read so far. */
@@ -38,6 +40,8 @@ export interface Contributor {
   distance_m: number
   received_lden: Level
   received: PeriodLevels
+  /** Its Lden-weighted level exceeded 5 % of the time by itself (the final update's). */
+  loud_lden?: Level
   metadata: ContributorMetadata | null
   /** What the map draws of it, lines of [lat, lon] (one point for a point source): all of it within
    *  the reach in the final update, its loudest pieces before. */

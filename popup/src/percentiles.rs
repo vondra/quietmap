@@ -209,6 +209,47 @@ pub fn heard(
     })
 }
 
+/// Exceeded 5 % of the time: what the loud moments of a source are made of.
+const LOUD_EXCEEDED: f64 = 0.05;
+
+/// A source's energy exceeded 5 % of the time by itself, per period: its mean energy where it is
+/// steady (industry, buildings, ships, or no traffic in its fields), else its line's L5 at its
+/// lambda. A car every few hours by the window weighs little; the flights of an approach a lot.
+pub fn loud_energy(
+    contributor: &crate::update::Contributor,
+    fields: Option<&serde_json::Value>,
+) -> [f64; PERIODS] {
+    let steady = matches!(
+        contributor.layer,
+        Layer::Industry | Layer::Building | Layer::Ship
+    );
+    match fields
+        .filter(|_| !steady)
+        .and_then(|fields| traffic(contributor.layer, fields))
+    {
+        Some((per_hour, speed)) => {
+            let lambda = lambda(per_hour, speed, contributor.distance_m);
+            std::array::from_fn(|p| {
+                contributor.energy[p] * relative_intensity(lambda[p], 1.0 - LOUD_EXCEEDED)
+            })
+        }
+        None => contributor.energy,
+    }
+}
+
+/// The flights' energy exceeded 5 % of the time, from their energy and energy times lambda.
+pub fn loud_flight_energy(
+    (energy, energy_lambda): ([f64; PERIODS], [f64; PERIODS]),
+) -> [f64; PERIODS] {
+    std::array::from_fn(|p| {
+        if energy[p] > 0.0 {
+            energy[p] * relative_intensity(energy_lambda[p] / energy[p], 1.0 - LOUD_EXCEEDED)
+        } else {
+            0.0
+        }
+    })
+}
+
 /// The percentile levels of an answer: `selections` with their contributors, the flights' energy
 /// and energy times lambda per period, `fields` a contributor's display fields, `seed` the click's.
 pub fn percentiles(
@@ -356,6 +397,7 @@ mod tests {
             pieces: Vec::new(),
             lines: Vec::new(),
             heard: None,
+            loud: None,
         }
     }
 
@@ -455,6 +497,25 @@ mod tests {
         assert!(heard_motorway.steady);
         let industry = contributor(9, Layer::Industry, 45.0, 30.0);
         assert_eq!(heard(&industry, &busy), None);
+    }
+
+    /// The loud moments of a source by itself: 33 cars a day 4 m away are there for under 5 % of
+    /// the time and weigh a fifth of their mean; industry keeps its mean; passes that run together
+    /// keep about theirs; flights a few times an hour weigh several times theirs.
+    #[test]
+    fn loud_moments_weigh_rare_passes_little_and_frequent_flights_much() {
+        let lane = contributor(7, Layer::Road, 40.0, 4.0);
+        let rare = loud_energy(&lane, quiet_road(&lane).as_ref())[0] / energy(40.0);
+        assert!(rare < 0.4, "{rare}");
+        let industry = contributor(9, Layer::Industry, 45.0, 30.0);
+        assert_eq!(loud_energy(&industry, None), industry.energy);
+        let motorway = contributor(8, Layer::Road, 45.0, 300.0);
+        let busy = serde_json::json!({"aadt_light": 30_000.0, "speed_kmh": 100.0,
+            "road_class": "motorway"});
+        let steady = loud_energy(&motorway, Some(&busy))[0] / energy(45.0);
+        assert!((1.0..1.5).contains(&steady), "{steady}");
+        let flights = loud_flight_energy(([1.0; PERIODS], [0.05; PERIODS]))[0];
+        assert!(flights > 3.0, "{flights}");
     }
 
     /// Industry is steady; the same click gives the same levels whatever order the hash maps

@@ -7,7 +7,7 @@ import { ldenToColor } from '../utils/noise-colors'
 import { DataPoint } from './noise/noise-tooltips'
 import { fmtDb, fmtSone, txtTable } from '../utils/formatters'
 import { PERIOD_LABELS_DETAIL, SOURCE_LABELS } from './noise/shared'
-import { AircraftLayerRow, ContributorRow } from './noise/source/ContributorRow'
+import { AircraftLayerRow, ContributorRow, loudLevel } from './noise/source/ContributorRow'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 
 // Lazy: the calculation is a separate chunk, loaded when a visitor opens it.
@@ -41,24 +41,30 @@ const LOUDNESS_TEXT = [
 export default function NoiseDetailContent({ data, maxSources, onHighlight, calculationOpen = false, onCalculationToggle, onFan }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.center
   const answered = data.total_lden != null && !data.partial
-  const total = data.total_lden ?? 0
-  // The popup's 0 dB display floor, applied to this list the way the per-layer rows apply it.
-  const audibleContributors = data.top_contributors.filter(c => c.received_lden != null && c.received_lden > 0)
+  // The popup's 0 dB display floor, applied to this list the way the per-layer rows apply it; the
+  // list ranks what is heard by the loud moments each source makes by itself.
+  const audibleContributors = data.top_contributors
+    .filter(c => c.received_lden != null && c.received_lden > 0)
+    .sort((a, b) => loudLevel(b.loud_lden, b.received_lden) - loudLevel(a.loud_lden, a.received_lden))
+  // The aircraft layer lists no contributors: the layer is one row, at its rank.
+  const aircraft = data.sources.find(s => s.source_type === 'aircraft')
+  const aircraftLoud = aircraft && (aircraft.lden ?? 0) > 0 ? loudLevel(aircraft.loud_lden, aircraft.lden) : null
+  const loudTotal = 10 * Math.log10([
+    ...audibleContributors.map(c => loudLevel(c.loud_lden, c.received_lden)),
+    ...(aircraftLoud == null ? [] : [aircraftLoud]),
+  ].reduce((sum, level) => sum + 10 ** (level / 10), 0) || 1)
   const rows = audibleContributors.map(c => (
     <ContributorRow
       key={`${c.source_type}-${c.id}`}
       c={c}
-      totalLden={total}
+      loudTotal={loudTotal}
       onHighlight={id => onHighlight(id === null ? null : `source:${id}`)}
     />
   ))
-  // The aircraft layer lists no contributors: the layer is one row, at its rank by Lden.
-  const aircraft = data.sources.find(s => s.source_type === 'aircraft')
-  const aircraftLden = aircraft?.lden ?? 0
-  if (aircraft && aircraftLden > 0) {
-    const rank = audibleContributors.findIndex(c => (c.received_lden ?? 0) < aircraftLden)
+  if (aircraft && aircraftLoud != null) {
+    const rank = audibleContributors.findIndex(c => loudLevel(c.loud_lden, c.received_lden) < aircraftLoud)
     rows.splice(rank < 0 ? rows.length : rank, 0,
-      <AircraftLayerRow key="aircraft" layer={aircraft} totalLden={total} flights={data.top_flights} onHighlightFlight={onHighlight} />)
+      <AircraftLayerRow key="aircraft" layer={aircraft} loudTotal={loudTotal} flights={data.top_flights} onHighlightFlight={onHighlight} />)
   }
   const totalLdenText = txtTable([
     ...data.sources

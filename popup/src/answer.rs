@@ -437,8 +437,14 @@ pub fn answer(
         let mut contributors = loudest_contributors(&selections);
         if last_ring {
             for contributor in &mut contributors {
-                contributor.heard = fields(contributor)
-                    .and_then(|fields| crate::percentiles::heard(contributor, &fields));
+                let display = fields(contributor);
+                contributor.heard = display
+                    .as_ref()
+                    .and_then(|fields| crate::percentiles::heard(contributor, fields));
+                contributor.loud = Some(crate::percentiles::loud_energy(
+                    contributor,
+                    display.as_ref(),
+                ));
             }
             let read: Vec<&RingFiles> = rings.iter().filter_map(OnceCell::get).collect();
             let keys: Vec<u64> = contributors.iter().map(|c| c.group_key).collect();
@@ -447,10 +453,21 @@ pub fn answer(
                 contributor.lines = lines;
             }
         }
+        // The aircraft layer's loud moments: its flights' L5, its airport movements steady.
+        let aircraft_loud = last_ring.then(|| {
+            let layer = selections
+                .iter()
+                .find(|selection| selection.layer == Layer::Aircraft)
+                .map_or([0.0; PERIODS], |selection| selection.answer_energy());
+            let flights =
+                crate::percentiles::loud_flight_energy((flight_energy, flight_energy_lambda));
+            std::array::from_fn(|p| flights[p] + (layer[p] - flight_energy[p]).max(0.0))
+        });
         let update = Update {
             partial: !last_ring,
             percentiles,
             loudness,
+            aircraft_loud,
             lat,
             lon,
             frame,

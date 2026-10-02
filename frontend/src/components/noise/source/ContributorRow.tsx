@@ -1,6 +1,6 @@
 // One row of the popup's "what you hear" list: the source, how far, how it is heard and its share
-// of the noise; it expands to its details. A contributor has one, and so has the aircraft layer as a
-// whole, which lists no contributors.
+// of the loud moments; it expands to its details. A contributor has one, and so has the aircraft
+// layer as a whole, which lists no contributors.
 import { useState, type ReactNode } from 'react'
 import type { Contributor, LayerLevels, PeriodLevels, TopFlight } from '../../../types/noise'
 import { ldenToColor } from '../../../utils/noise-colors'
@@ -10,20 +10,27 @@ import { heardText } from '../heard'
 import { contributorLabel, formatDist, PERIOD_LABELS_DETAIL, SOURCE_LABELS } from '../shared'
 import { AircraftLayerDetail, ContributorDetail } from './ContributorDetail'
 
-/** A share of the noise in whole percent, or "<1 %". */
+/** A row's level of the loud moments: the popup's, or its Lden before the final update. */
+export function loudLevel(loud: number | null | undefined, lden: number | null | undefined): number {
+  return loud ?? lden ?? 0
+}
+
+/** A share in whole percent, or "<1 %". */
 function percentText(share: number): string {
   const percent = 100 * share
   return percent < 0.5 ? '<1 %' : `${Math.round(percent)} %`
 }
 
-function SourceRow({ label, distance, heard, received, totalLden, onToggle, children }: {
+function SourceRow({ label, distance, heard, received, loud, loudTotal, onToggle, children }: {
   label: string
   distance: string
   /** How it is heard, in words; none for a steady source. */
   heard: string | null
   received: PeriodLevels
-  /** The click's Lden: the row's share of the noise is its Lden energy's. */
-  totalLden: number
+  /** The row's level exceeded 5 % of the time by itself (Lden-weighted), and the energy sum of
+   *  the list's: its share of the loud moments. */
+  loud: number
+  loudTotal: number
   /** Told when the row opens or closes (a tap on a phone as well as a click). */
   onToggle?: (expanded: boolean) => void
   /** The expanded body. */
@@ -32,9 +39,9 @@ function SourceRow({ label, distance, heard, received, totalLden, onToggle, chil
   // Keyed by a stable id, so the row stays open across streamed updates.
   const [expanded, setExpanded] = useState(false)
   const lden = received.lden ?? 0
-  const share = Math.min(1, 10 ** ((lden - totalLden) / 10))
+  const share = Math.min(1, 10 ** ((loud - loudTotal) / 10))
   const shareText = txtTable([
-    ['Share of the noise', percentText(share)],
+    ['Share of the loud moments', percentText(share)],
     '',
     [PERIOD_LABELS_DETAIL[0], fmtDb(received.ld)],
     [PERIOD_LABELS_DETAIL[1], fmtDb(received.le)],
@@ -42,8 +49,10 @@ function SourceRow({ label, distance, heard, received, totalLden, onToggle, chil
     { sep: true },
     ['→ Lden', fmtDb(received.lden)],
     '',
-    'Its share of the sound energy of the',
-    'day, evening and night here (Lden).',
+    'How much of the loudest 5 % of the',
+    'time comes from it: a car every few',
+    'hours counts little, steady traffic',
+    'and frequent flights a lot.',
   ], 18, 9)
 
   return (
@@ -80,9 +89,9 @@ function SourceRow({ label, distance, heard, received, totalLden, onToggle, chil
 }
 
 /** A source's row; opening it shows the source on the map. */
-export function ContributorRow({ c, totalLden, onHighlight }: {
+export function ContributorRow({ c, loudTotal, onHighlight }: {
   c: Contributor
-  totalLden: number
+  loudTotal: number
   onHighlight?: (id: string | null) => void
 }) {
   return (
@@ -91,7 +100,8 @@ export function ContributorRow({ c, totalLden, onHighlight }: {
       distance={formatDist(c.distance_m)}
       heard={heardText(c.source_type, c.heard)}
       received={c.received}
-      totalLden={totalLden}
+      loud={loudLevel(c.loud_lden, c.received_lden)}
+      loudTotal={loudTotal}
       onToggle={open => onHighlight?.(open ? c.id : null)}
     >
       <ContributorDetail c={c} />
@@ -100,14 +110,14 @@ export function ContributorRow({ c, totalLden, onHighlight }: {
 }
 
 /** Flights pass at every distance: the layer's row has none. */
-export function AircraftLayerRow({ layer, totalLden, flights, onHighlightFlight }: {
+export function AircraftLayerRow({ layer, loudTotal, flights, onHighlightFlight }: {
   layer: LayerLevels
-  totalLden: number
+  loudTotal: number
   flights: TopFlight[]
   onHighlightFlight: (key: string | null) => void
 }) {
   return (
-    <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={null} received={layer} totalLden={totalLden}>
+    <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={null} received={layer} loud={loudLevel(layer.loud_lden, layer.lden)} loudTotal={loudTotal}>
       <AircraftLayerDetail received={layer} flights={flights} onHighlightFlight={onHighlightFlight} />
     </SourceRow>
   )

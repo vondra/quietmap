@@ -44,6 +44,8 @@ pub struct Contributor {
     /// How it is heard: its passes per hour and whether they run together (the final update's;
     /// `None` for a steady source).
     pub heard: Option<crate::percentiles::Heard>,
+    /// Its energy exceeded 5 % of the time by itself, per period (the final update's).
+    pub loud: Option<[f64; PERIODS]>,
 }
 
 /// Pieces a contributor keeps for the map.
@@ -69,6 +71,9 @@ pub struct Update<'u> {
     pub percentiles: Option<crate::percentiles::Percentiles>,
     /// How loud the click sounds, N5 (the final update's).
     pub loudness: Option<crate::loudness::Loudness>,
+    /// The aircraft layer's energy exceeded 5 % of the time: its flights' L5 and its airport
+    /// movements steady (the final update's).
+    pub aircraft_loud: Option<[f64; PERIODS]>,
     pub lat: f64,
     pub lon: f64,
     pub frame: LocalFrame,
@@ -134,6 +139,7 @@ pub fn empty_answer(
         partial: false,
         percentiles: None,
         loudness: None,
+        aircraft_loud: None,
         lat,
         lon,
         frame,

@@ -4,6 +4,7 @@
 use crate::update::Update;
 use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy};
 use serde_json::{Map, Value, json};
+use tiles::sources::Layer;
 
 /// A level rounded to 0.1 dB, `null` for silence.
 fn level(energy_value: f64) -> Value {
@@ -58,6 +59,10 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         let mut object = Map::new();
         object.insert("source_type".into(), json!(layer.layer.name()));
         periods(&mut object, &layer.energy);
+        // The aircraft layer is one row of the list: its loud moments rank it there.
+        if let (Layer::Aircraft, Some(loud)) = (layer.layer, update.aircraft_loud) {
+            object.insert("loud_lden".into(), lden(&loud));
+        }
         // Unrounded Lden for the benchmark's error measurement (fast against exact).
         let weighted: f64 = (0..PERIODS)
             .map(|p| PERIOD_HOURS[p] * layer.energy[p] * energy(PERIOD_PENALTY_DB[p]))
@@ -105,6 +110,9 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             received.get("lden").cloned().unwrap_or(Value::Null),
         );
         object.insert("received".into(), Value::Object(received));
+        if let Some(loud) = contributor.loud {
+            object.insert("loud_lden".into(), lden(&loud));
+        }
         object.insert("metadata".into(), display);
         if let Some(heard) = contributor.heard {
             let rate = |value: f64| (value * 100.0).round() / 100.0;
