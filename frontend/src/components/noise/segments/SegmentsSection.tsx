@@ -100,12 +100,34 @@ function ReceiverRows({ lat, lng, building, elevationM, reflectionDb }: {
   )
 }
 
-/** One piece opened: its data, sound power, ray, the terms of the ray and the ground under it. */
+interface SummedRay {
+  from: [number, number]
+  /** What reaches the receiver along it per radian of the piece's angle, against the clearest
+   *  ray of the piece (dB, 0 for the clearest): what the way takes, the divergence apart. */
+  belowClearestDb: number
+}
+
+/** The rays a piece was summed over, each with how much less reaches the receiver along it than
+ *  along the piece's clearest ray. */
+function summedRays(piece: PopupPiece): SummedRay[] {
+  const all = piece.rays ?? []
+  // A line's rays stand for their angle; a point source has one ray, of no angle.
+  const rays = all.flatMap(([lat, lon, angle, lden]) => lden == null || (angle <= 0 && all.length > 1)
+    ? []
+    : [{ from: [lat, lon] as [number, number], density: angle > 0 ? lden - 10 * Math.log10(angle) : lden }])
+  const clearest = Math.max(...rays.map(ray => ray.density))
+  return rays.map(({ from, density }) => ({ from, belowClearestDb: density - clearest }))
+}
+
+/** One piece opened: its data, sound power, rays, the terms of its nearest ray and the ground
+ *  under that ray. */
 function PieceDetail({ piece }: { piece: PopupPiece }) {
   const trace = piece.trace
   const line = piece.ends.length > 1
   const length = line ? Math.hypot(...offsetM(piece.ends[0], piece.ends[1])) : 0
   const buildings = new Set(piece.crossings.map(([, , id]) => id)).size
+  const rays = summedRays(piece)
+  const weakest = Math.min(...rays.map(ray => ray.belowClearestDb))
   const share = (p: number) => `${Math.round(100 * p)} %`
   const row = (label: ReactNode, calm: string, bent: string) => (
     <>
@@ -123,14 +145,17 @@ function PieceDetail({ piece }: { piece: PopupPiece }) {
         </HoverText>,
         `${piece.emission.ld?.toFixed(1) ?? '–'} dB(A)${line ? ' per m' : ''}`,
       )}
-      {length >= 1 && lineRow(
-        <HoverText title={'A piece is summed over its length, each point on its own\nray; the ray shown is the one from its nearest point'}>Piece</HoverText>,
-        `${fmtInt(length)} m long, ${formatDist(Math.round(piece.distance_m))} away`,
+      {length >= 1 && lineRow('Piece', `${fmtInt(length)} m long, ${formatDist(Math.round(piece.distance_m))} away`)}
+      {rays.length > 1 && lineRow(
+        <HoverText title={'The piece is summed over the angle it fills as seen from\nthe receiver: five equal parts, one ray each, and where\nbuildings stand in front of a part, a ray for every stretch\nhidden behind them and every free gap (CNOSSOS-EU point\nsum). On the map each ray is coloured by what reaches the\nreceiver along it: red the clearest, violet 10 dB less,\nblue 20, grey 30 and more'}>
+          Rays summed
+        </HoverText>,
+        weakest < -0.05 ? `${rays.length}, weakest ${term(-weakest)} dB` : `${rays.length}, all clear alike`,
       )}
       {trace && (
         <>
           {lineRow(
-            'Ray',
+            <HoverText title={'The ray from the piece\'s nearest point: the terms below and\nthe profile are its'}>Nearest ray</HoverText>,
             `${fmtInt(trace.slant_m)} m, ${Math.round(trace.source_altitude_m)} → ${Math.round(trace.receiver_altitude_m)} m a.s.l.`,
           )}
           {buildings > 0 && lineRow('Buildings crossed', String(buildings))}
@@ -314,9 +339,12 @@ export function SegmentsSection({ lat, lng, building, elevationM, reflectionDb, 
   const selected = hovered ?? opened
   useEffect(() => {
     if (!onFan) return
-    const drawn = grouped.flatMap(({ sources }) => sources.flatMap(s => s.pieces)).flatMap(({ piece, index, color }) =>
+    const listed = grouped.flatMap(({ sources }) => sources.flatMap(s => s.pieces))
+    const drawn = listed.flatMap(({ piece, index, color }) =>
       piece.trace?.ray ? [{ ends: piece.ends, ray: piece.trace.ray, color, selected: index === selected }] : [])
-    onFan(drawn.length ? { receiver, pieces: drawn } : null)
+    const chosen = listed.find(({ index }) => index === selected)?.piece
+    const rays = chosen ? summedRays(chosen).map(({ from, belowClearestDb }) => ({ from, color: pieceColor(belowClearestDb) })) : []
+    onFan(drawn.length ? { receiver, pieces: drawn, rays } : null)
     // The receiver is read from `lat`, `lng` and the building, all fixed for one click.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [grouped, selected, onFan])

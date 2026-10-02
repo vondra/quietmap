@@ -143,11 +143,13 @@ export interface PieceTrace {
   ray?: [[number, number], [number, number]]
 }
 
-/** The segments view's pieces on the map: each listed piece's ends and its ray in the colour of
- *  its row (the selected piece's marked), and the point the level is computed at. */
+/** The segments view's pieces on the map: each listed piece's ends and its nearest ray in the
+ *  colour of its row (the selected piece's marked), every ray the selected piece was summed over
+ *  in the colour of what reaches the receiver along it, and the point the level is computed at. */
 export interface SegmentFan {
   receiver: [number, number]
   pieces: { ends: [number, number][], ray: [[number, number], [number, number]], color: string, selected: boolean }[]
+  rays: { from: [number, number], color: string }[]
 }
 
 /** One computed piece of the segments view (asked with `segments=1`). */
@@ -165,6 +167,9 @@ export interface PopupPiece {
   /** Buildings and walls the ray crosses: distance from the receiver (m), height (m), id. */
   crossings: [number, number, string][]
   trace: PieceTrace | null
+  /** Every ray the piece was summed over: [lat, lon] it leaves from, the in-plane angle it stands
+   *  for (rad; 0 for a point source, its one ray) and the Lden it delivers (null: silent). */
+  rays?: [number, number, number, number | null][]
 }
 
 export interface PopupUpdate {

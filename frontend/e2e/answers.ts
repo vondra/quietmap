@@ -89,6 +89,13 @@ export function computedPiece(contributor: Contributor, lden: number, distance_m
     received: { ld: lden - 2, le: lden - 3, ln: lden - 8, lden },
     metadata: contributor.metadata,
     crossings: [],
+    // Four rays along the piece summing to its Lden, the southernmost behind a building.
+    rays: [
+      [POINT.lat - 0.00015, POINT.lng + east, 0.3, lden - 30.5],
+      [POINT.lat - 0.00005, POINT.lng + east, 0.6, lden - 4],
+      [POINT.lat + 0.00005, POINT.lng + east, 0.6, lden - 4],
+      [POINT.lat + 0.00015, POINT.lng + east, 0.3, lden - 7],
+    ],
     trace: {
       profile: [[0, 350, 0], [distance_m, 350, 0]],
       source_altitude_m: 350,

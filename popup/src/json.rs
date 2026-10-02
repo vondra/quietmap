@@ -138,6 +138,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
     let mut pieces = Vec::new();
     for piece in &update.pieces {
         let ends: Vec<[f64; 2]> = piece
+            .candidate
             .ends_m
             .iter()
             .map(|&end| {
@@ -170,17 +171,25 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 }),
             })
         });
-        let metadata: Value = (update.display_json)(piece.display, piece.layer)
+        let candidate = &piece.candidate;
+        let metadata: Value = (update.display_json)(candidate.display, candidate.layer)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
             .unwrap_or(Value::Null);
         pieces.push(json!({
             "metadata": metadata,
             "trace": trace,
-            "source_type": piece.layer.name(),
-            "id": format!("{:016x}", piece.group_key),
+            "source_type": candidate.layer.name(),
+            "id": format!("{:016x}", candidate.group_key),
             "ends": ends,
-            "distance_m": (piece.distance_m * 10.0).round() / 10.0,
+            "distance_m": (candidate.distance_m * 10.0).round() / 10.0,
+            // Every ray the piece was summed over: [lat, lon] it leaves from, the in-plane angle
+            // it stands for (rad, 0 for a point) and the Lden it delivers.
+            "rays": piece.rays.iter().map(|ray| {
+                let (lat, lon) = update.frame.to_mercator(ray.from_m).to_degrees();
+                json!([(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6,
+                    (ray.angle_rad * 1e6).round() / 1e6, lden(&ray.energy)])
+            }).collect::<Vec<_>>(),
             "received": received,
             "emission": emission,
             "crossings": piece.crossings.iter().map(|(distance_m, height_m, footprint)| {

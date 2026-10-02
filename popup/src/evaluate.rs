@@ -132,19 +132,25 @@ fn add_ray(
     }
 }
 
-/// Received A-weighted energy per period and band of one candidate with its attribute.
-pub fn received_bands(
+/// One ray of a source at the receiver: the point it leaves from (click metres), the in-plane
+/// angle it stands for on a line piece (0 for a point), its weight (the divergence, for a line the
+/// angle times the line's, and the receiver reflection) and its transfer.
+pub struct SourceRay {
+    pub from_m: [f64; 2],
+    pub angle_rad: f64,
+    pub weight: f64,
+    pub transfer: Transfer,
+}
+
+/// Every ray of one candidate at the receiver: a point's one, a line piece's quadrature nodes.
+pub fn source_rays(
     receiver: &Receiver,
     candidate: &Candidate,
     source: &SourceAttribute,
     scratch: &mut Scratch,
-) -> Result<Received, String> {
-    let emission = &source.energy;
+    visit: &mut dyn FnMut(&SourceRay),
+) -> Result<(), String> {
     let reflection = energy(receiver.reflection_db);
-    let mut received = Received {
-        bands: [[0.0; BANDS]; PERIODS],
-        states: [[0.0; PERIODS]; 2],
-    };
     let ends = ray_ends(receiver, source);
     let [a, b] = candidate.ends_m;
     if !candidate.line {
@@ -155,8 +161,13 @@ pub fn received_bands(
             .hypot(receiver.altitude_m - (candidate.ground_m[0] + source.height_m))
             .max(1.0);
         let divergence = 1.0 / (distance * distance * energy(POINT_DIVERGENCE_OFFSET_DB));
-        add_ray(&mut received, emission, &transfer, divergence * reflection);
-        return Ok(received);
+        visit(&SourceRay {
+            from_m: a,
+            angle_rad: 0.0,
+            weight: divergence * reflection,
+            transfer,
+        });
+        return Ok(());
     }
     let altitude = |end: usize| candidate.ground_m[end] + source.height_m - receiver.altitude_m;
     let [x, y] = receiver.position;
@@ -164,7 +175,7 @@ pub fn received_bands(
         [a[0] - x, a[1] - y, altitude(0)],
         [b[0] - x, b[1] - y, altitude(1)],
     ) else {
-        return Ok(received);
+        return Ok(());
     };
     let obstacles = receiver.obstacles;
     let mut skyline = |lo: f64, hi: f64, radius: f64, visit: &mut dyn FnMut(SkylineArc)| {
@@ -193,14 +204,31 @@ pub fn received_bands(
             a[1] + fraction * (b[1] - a[1]),
         ];
         let transfer = ray(receiver, point, node.obstacles_on_ray, &ends, scratch)?;
-        add_ray(
-            &mut received,
-            emission,
-            &transfer,
-            node.weight_rad * divergence * reflection,
-        );
+        visit(&SourceRay {
+            from_m: point,
+            angle_rad: node.weight_rad,
+            weight: node.weight_rad * divergence * reflection,
+            transfer,
+        });
     }
     scratch.nodes = nodes;
+    Ok(())
+}
+
+/// Received A-weighted energy per period and band of one candidate with its attribute.
+pub fn received_bands(
+    receiver: &Receiver,
+    candidate: &Candidate,
+    source: &SourceAttribute,
+    scratch: &mut Scratch,
+) -> Result<Received, String> {
+    let mut received = Received {
+        bands: [[0.0; BANDS]; PERIODS],
+        states: [[0.0; PERIODS]; 2],
+    };
+    source_rays(receiver, candidate, source, scratch, &mut |ray| {
+        add_ray(&mut received, &source.energy, &ray.transfer, ray.weight)
+    })?;
     Ok(received)
 }
 

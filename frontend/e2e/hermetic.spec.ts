@@ -188,8 +188,11 @@ test('desktop: the segments view groups the computed pieces under their source',
   const pieces = segments.getByRole('button', { name: /●/ })
   await expect(pieces).toHaveText([/●\s+E\s+12 m\s*\+2\.5\s*\+2\.4\s*61\.2/, /●\s+E\s+40 m\s*−3\.1\s*−1\.2\s*55\.4/])
   await pieces.nth(1).click()
-  await expect(segments.getByTestId('segment-piece')).toContainText('Ground + screening')
-  await expect(segments.getByTestId('segment-piece')).toContainText('Share of the night')
+  const piece = segments.getByTestId('segment-piece')
+  await expect(piece).toContainText('Ground + screening')
+  await expect(piece).toContainText('Share of the night')
+  // Its four rays, the one behind the building 23.5 dB under the clearest per unit of angle.
+  await expect(piece).toContainText(/Rays summed\s*4, weakest −23\.5 dB/)
 })
 
 test('search: picking a result flies the map there and opens its popup', async ({ page }) => {

@@ -1,12 +1,12 @@
-//! The benchmark's piece listing (`qm-popup --pieces N`): the loudest evaluated pieces of each
-//! layer with their emission, the buildings and walls on the ray from their closest point and the
-//! terms of that ray, for piece-by-piece comparisons with dev4. Never part of a visitor's answer.
+//! The piece listing (`qm-popup --pieces N`, the segments view and the benchmark): the loudest
+//! evaluated pieces of each layer with their emission, every ray they were summed over with what
+//! it delivers, the buildings and walls on the ray from their closest point and the terms of that
+//! ray.
 
-use crate::candidates::{AttributeRef, Attributes, Candidate, DisplayRef, lden_weighted};
-use crate::evaluate::{Receiver, Scratch, trace};
+use crate::candidates::{Attributes, Candidate, lden_weighted};
+use crate::evaluate::{Receiver, Scratch, source_rays, trace};
 use crate::selection::LayerSelection;
 use physics::bands::{BANDS, PERIODS, energy};
-use tiles::sources::Layer;
 
 /// Ground samples a listed piece's trace keeps.
 pub const PROFILE_POINTS: usize = 48;
@@ -14,16 +14,10 @@ pub const PROFILE_POINTS: usize = 48;
 /// One evaluated piece.
 #[derive(Clone)]
 pub struct EvaluatedPiece {
-    pub layer: Layer,
-    pub ends_m: [[f64; 2]; 2],
-    pub distance_m: f64,
+    pub candidate: Candidate,
     pub energy: [f64; PERIODS],
     /// A-weighted emission per period (per metre for lines), linear.
     pub emission: [f64; PERIODS],
-    pub group_key: u64,
-    pub attribute: AttributeRef,
-    /// The source's display fields.
-    pub display: DisplayRef,
     /// Buildings and walls crossed by the ray from the piece's closest point: distance from the
     /// receiver (m), height (m) and footprint id, filled when listed.
     pub crossings: Vec<(f64, f64, u64)>,
@@ -31,6 +25,18 @@ pub struct EvaluatedPiece {
     pub footprint_id: u64,
     /// The ray from the closest point, filled when listed.
     pub trace: Option<PieceTrace>,
+    /// Every ray the piece was summed over, filled when listed.
+    pub rays: Vec<ListedRay>,
+}
+
+/// One ray of a listed piece: the point it leaves from (click metres), the in-plane angle it
+/// stands for (0 for a point) and the energy it delivers per period; the piece's energy is their
+/// sum.
+#[derive(Clone)]
+pub struct ListedRay {
+    pub from_m: [f64; 2],
+    pub angle_rad: f64,
+    pub energy: [f64; PERIODS],
 }
 
 /// The terms of one ray, each as an A-weighted attenuation over the piece's day emission spectrum
@@ -55,19 +61,15 @@ pub struct PieceTrace {
 impl EvaluatedPiece {
     pub fn of(candidate: &Candidate, attributes: &Attributes, energy: [f64; PERIODS]) -> Self {
         EvaluatedPiece {
-            layer: candidate.layer,
-            ends_m: candidate.ends_m,
-            distance_m: candidate.distance_m,
+            candidate: candidate.clone(),
             energy,
             emission: attributes[candidate.attribute]
                 .energy
                 .map(|bands| bands.iter().sum()),
-            group_key: candidate.group_key,
-            attribute: candidate.attribute,
-            display: candidate.display,
             crossings: Vec::new(),
             footprint_id: attributes[candidate.attribute].footprint_id,
             trace: None,
+            rays: Vec::new(),
         }
     }
 }
@@ -99,7 +101,30 @@ pub fn list_pieces(
             .sort_by(|a, b| lden_weighted(&b.energy).total_cmp(&lden_weighted(&a.energy)));
         for piece in selection.pieces.iter().take(count) {
             let mut piece = piece.clone();
-            let from = closest_point(receiver.position, piece.ends_m[0], piece.ends_m[1]);
+            let source = &attributes[piece.candidate.attribute];
+            source_rays(
+                receiver,
+                &piece.candidate,
+                source,
+                &mut scratch,
+                &mut |ray| {
+                    piece.rays.push(ListedRay {
+                        from_m: ray.from_m,
+                        angle_rad: ray.angle_rad,
+                        energy: std::array::from_fn(|period| {
+                            (0..BANDS)
+                                .map(|band| {
+                                    ray.weight
+                                        * source.energy[period][band]
+                                        * ray.transfer.periods[period][band]
+                                })
+                                .sum()
+                        }),
+                    })
+                },
+            )?;
+            let [a, b] = piece.candidate.ends_m;
+            let from = closest_point(receiver.position, a, b);
             let mut crossings = Vec::new();
             receiver
                 .obstacles
@@ -115,7 +140,6 @@ pub fn list_pieces(
                     )
                 })
                 .collect();
-            let source = &attributes[piece.attribute];
             let terms = trace(receiver, from, source, &mut scratch)?;
             let spectrum = source.energy[0];
             let weighted = |attenuation: &[f64; BANDS]| {

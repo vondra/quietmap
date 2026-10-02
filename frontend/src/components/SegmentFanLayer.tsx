@@ -1,6 +1,7 @@
 // The segments view's pieces on the map: each listed piece drawn thick and a thin ray from its
-// nearest point to the point the level is computed at, both in the colour of the piece's row, the
-// selected piece white on a black casing, and that point a dot. When the pieces of a click first
+// nearest point to the point the level is computed at, both in the colour of the piece's row; the
+// selected piece white on a black casing with every ray it was summed over, each in the colour of
+// what reaches the receiver along it; and that point a dot. When the pieces of a click first
 // appear, the map moves out just enough to show them all beside the popup.
 import type { FilterSpecification } from 'maplibre-gl'
 import { useEffect, useRef } from 'react'
@@ -20,23 +21,29 @@ export function fanGeoJson(fan: SegmentFan): GeoJSON.FeatureCollection {
     type: 'FeatureCollection',
     features: [
       ...fan.pieces.flatMap(({ ray, ends, color, selected }) => {
-        const properties = (name: string) => ({ kind: selected ? `${name}-selected` : name, color })
         const point = ends.length < 2 || (ends[0][0] === ends[1][0] && ends[0][1] === ends[1][1])
+        const shape = point ? 'point' : 'piece'
         return [
-          {
+          // The selected piece shows its summed rays instead of its nearest one.
+          ...(selected ? [] : [{
             type: 'Feature' as const,
-            properties: properties('ray'),
+            properties: { kind: 'ray', color },
             geometry: { type: 'LineString' as const, coordinates: ray.map(lonLat) },
-          },
+          }]),
           {
             type: 'Feature' as const,
-            properties: properties(point ? 'point' : 'piece'),
+            properties: { kind: selected ? `${shape}-selected` : shape, color },
             geometry: point
               ? { type: 'Point' as const, coordinates: lonLat(ends[0]) }
               : { type: 'LineString' as const, coordinates: ends.map(lonLat) },
           },
         ]
       }),
+      ...fan.rays.map(({ from, color }) => ({
+        type: 'Feature' as const,
+        properties: { kind: 'summed', color },
+        geometry: { type: 'LineString' as const, coordinates: [lonLat(from), lonLat(fan.receiver)] },
+      })),
       {
         type: 'Feature' as const,
         properties: { kind: 'receiver' },
@@ -105,10 +112,15 @@ export default function SegmentFanLayer({ fan }: { fan: SegmentFan | null }) {
         filter={kind('point')}
         paint={{ 'circle-color': ['get', 'color'], 'circle-radius': 4.5, 'circle-opacity': 0.9 }}
       />
-      <Layer id="segment-fan-ray-selected-casing" type="line" filter={kind('ray-selected')} layout={LINE_LAYOUT} paint={{ 'line-color': '#000000', 'line-width': 4.5 }} />
-      <Layer id="segment-fan-ray-selected" type="line" filter={kind('ray-selected')} layout={LINE_LAYOUT} paint={{ 'line-color': '#ffffff', 'line-width': 2 }} />
       <Layer id="segment-fan-piece-selected-casing" type="line" filter={kind('piece-selected')} layout={LINE_LAYOUT} paint={{ 'line-color': '#000000', 'line-width': 9 }} />
       <Layer id="segment-fan-piece-selected" type="line" filter={kind('piece-selected')} layout={LINE_LAYOUT} paint={{ 'line-color': '#ffffff', 'line-width': 5 }} />
+      <Layer
+        id="segment-fan-summed"
+        type="line"
+        filter={kind('summed')}
+        layout={LINE_LAYOUT}
+        paint={{ 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': 0.95 }}
+      />
       <Layer
         id="segment-fan-point-selected"
         type="circle"
