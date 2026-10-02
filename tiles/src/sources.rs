@@ -83,6 +83,7 @@ pub fn display_fields(layer: Layer) -> &'static [&'static str] {
             "oneway",
             "bridge",
             "source_id",
+            "period_shares",
         ],
         Layer::Railway => &[
             "name",

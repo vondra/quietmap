@@ -4,6 +4,7 @@
 use super::bus::BusRoutes;
 use super::country_speeds::COUNTRY_SPEEDS;
 use super::motorcycles::{LocalMotorcycles, country_share};
+use super::period_shares::period_shares;
 use super::road_junctions::{Junctions, traffic_signals};
 use super::road_slope::{SquareHeights, WayRow, row_slopes};
 use super::road_traffic::{BUS_SERVICE_BY_BUILT_UP, BuildingTraffic, local_km};
@@ -421,9 +422,19 @@ fn category_speed(category: VehicleCategory, speed_kmh: f64, country_iso: u16) -
     speed_kmh.min(cap)
 }
 
-/// Day/evening/night shares of the daily flow: motorways, trunks and their links; other roads.
-const MOTORWAY_PERIOD_SHARES: [f64; PERIODS] = [0.65, 0.20, 0.15];
-const URBAN_PERIOD_SHARES: [f64; PERIODS] = [0.70, 0.18, 0.12];
+/// A road's day, evening and night shares of its daily vehicles, all categories together (the
+/// popup's passes per hour), to three decimals.
+fn road_period_shares(daily: [f64; 4], shares: &[[f64; PERIODS]; 4]) -> [f64; PERIODS] {
+    let total: f64 = daily.iter().sum();
+    std::array::from_fn(|p| {
+        let share = if total > 0.0 {
+            (0..4).map(|c| daily[c] * shares[c][p]).sum::<f64>() / total
+        } else {
+            shares[0][p]
+        };
+        (share * 1_000.0).round() / 1_000.0
+    })
+}
 
 /// The speed of an untagged road: the country's legal limit for main classes (urban or rural by
 /// the row's built-up flag, unknown density keeps the class default), else the class default. A
@@ -712,11 +723,12 @@ pub fn convert(
                 .get(surface_index)
                 .copied()
                 .unwrap_or(0.0);
-            let shares = if matches!(class_index, 0 | 1 | 10 | 11) {
-                MOTORWAY_PERIOD_SHARES
-            } else {
-                URBAN_PERIOD_SHARES
-            };
+            // Each category's day, evening and night shares of its daily flow, by country and road
+            // group: light vehicles and motorcycles, medium and heavy vehicles (lorries run more of
+            // their day at night).
+            let [light_shares, heavy_shares] =
+                [false, true].map(|heavy| period_shares(country.value(row), class_index, heavy));
+            let shares = [light_shares, heavy_shares, heavy_shares, light_shares];
             let categories = [
                 VehicleCategory::Light,
                 VehicleCategory::Medium,
@@ -737,7 +749,7 @@ pub fn convert(
                     .iter()
                     .flat_map(|&(share, sign)| {
                         (0..4).map(move |c| CategoryFlow {
-                            vehicles_per_hour: share * daily[c] * shares[period]
+                            vehicles_per_hour: share * daily[c] * shares[c][period]
                                 / PERIOD_HOURS[period],
                             speed_kmh: category_speed(categories[c], speed, country_iso),
                             category: categories[c],
@@ -781,6 +793,7 @@ pub fn convert(
                 } else {
                     source_id.value(row)
                 },
+                road_period_shares(daily, &shares),
             ]);
             let key = if name.is_empty() && reference.is_empty() {
                 group_key(&["road-way", &osm_id.value(row).to_string()])
@@ -926,5 +939,21 @@ mod tests {
             "local streets keep the class default"
         );
         assert_eq!(default_speed(0, 0, 0), (100.0, "default_by_class"));
+    }
+
+    /// A road's shares for the popup weigh each category's by its vehicles: a German Landesstrasse
+    /// with one lorry in ten runs between its cars' night and its lorries'.
+    #[test]
+    fn a_roads_period_shares_weigh_its_categories_by_their_vehicles() {
+        let de = u16::from_le_bytes(*b"DE");
+        let [cars, lorries] = [false, true].map(|heavy| period_shares(de, 3, heavy));
+        let shares = [cars, lorries, lorries, cars];
+        let mixed = road_period_shares([900.0, 0.0, 100.0, 0.0], &shares);
+        assert!(mixed[2] > cars[2] && mixed[2] < lorries[2], "{mixed:?}");
+        assert!((mixed.iter().sum::<f64>() - 1.0).abs() < 0.003);
+        assert_eq!(
+            road_period_shares([0.0; 4], &shares),
+            cars.map(|s| (s * 1e3).round() / 1e3)
+        );
     }
 }

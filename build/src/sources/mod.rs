@@ -11,6 +11,7 @@ pub mod facilities;
 pub mod industry;
 pub mod leisure;
 pub mod motorcycles;
+pub mod period_shares;
 pub mod rail;
 pub mod road;
 pub mod road_junctions;

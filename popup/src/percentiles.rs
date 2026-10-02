@@ -22,8 +22,8 @@ const DRAWS: usize = 2_000;
 /// Contributors under this share of their period's energy count as steady (their fluctuation does
 /// not move a percentile of the sum).
 const FLUCTUATING_SHARE_MIN: f64 = 1e-4;
-/// Day, evening and night shares of a road's daily flow: motorways, trunks and their links; other
-/// roads (the sources builder's).
+/// Day, evening and night shares of a road's daily flow where its fields carry none (sources built
+/// before the shares by country): motorways, trunks and their links; other roads.
 const MOTORWAY_PERIOD_SHARES: [f64; PERIODS] = [0.65, 0.20, 0.15];
 const OTHER_PERIOD_SHARES: [f64; PERIODS] = [0.70, 0.18, 0.12];
 /// Each hour's share of a road's daily vehicles (hour 0 is 00-01): medians of Baden-Wuerttemberg's
@@ -112,6 +112,17 @@ fn number(fields: &serde_json::Value, name: &str) -> Option<f64> {
     fields.get(name)?.as_f64()
 }
 
+/// A road's day, evening and night shares of its daily flow, as the sources builder wrote them.
+fn period_shares(fields: &serde_json::Value) -> Option<[f64; PERIODS]> {
+    let values = fields.get("period_shares")?.as_array()?;
+    let shares: Vec<f64> = values
+        .iter()
+        .filter_map(serde_json::Value::as_f64)
+        .collect();
+    (shares.len() == PERIODS && shares.iter().all(|share| *share >= 0.0))
+        .then(|| std::array::from_fn(|p| shares[p]))
+}
+
 /// A contributor's passes per hour by day, evening and night and their speed (m/s) from its
 /// display fields: vehicles on a road (the daily flow over the period's share and hours), trains on
 /// a track (the period's trains over its hours), airport movements on an aeroway (at taxi speed);
@@ -137,11 +148,11 @@ fn traffic_and_profile(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let motorway = matches!(class, "motorway" | "trunk" | "motorway_link" | "trunk_link");
-            let shares = if motorway {
+            let shares = period_shares(fields).unwrap_or(if motorway {
                 MOTORWAY_PERIOD_SHARES
             } else {
                 OTHER_PERIOD_SHARES
-            };
+            });
             let profile = if motorway {
                 0
             } else if matches!(class, "primary" | "primary_link") {
@@ -420,6 +431,20 @@ mod tests {
             serde_json::json!({"aadt_light": 31.0, "aadt_heavy": 1.0, "aadt_moto": 1.0,
             "speed_kmh": 20.0, "road_class": "service"}),
         )
+    }
+
+    /// A road runs at the day, evening and night shares its fields carry (its country's), and at
+    /// the fallback where sources built before them carry none.
+    #[test]
+    fn a_road_runs_at_the_period_shares_its_fields_carry() {
+        let thai = serde_json::json!({"aadt_light": 800.0, "speed_kmh": 50.0,
+            "road_class": "primary", "period_shares": [0.632, 0.182, 0.186]});
+        let (per_hour, _, _) = traffic_and_profile(Layer::Road, &thai).unwrap();
+        assert!((per_hour[2] - 800.0 * 0.186 / PERIOD_HOURS[2]).abs() < 1e-9);
+        let older = serde_json::json!({"aadt_light": 800.0, "speed_kmh": 50.0,
+            "road_class": "primary"});
+        let (per_hour, _, _) = traffic_and_profile(Layer::Road, &older).unwrap();
+        assert!((per_hour[2] - 800.0 * OTHER_PERIOD_SHARES[2] / PERIOD_HOURS[2]).abs() < 1e-9);
     }
 
     /// One sparse road alone: its levels are the quantiles of its line over the period's hours,
