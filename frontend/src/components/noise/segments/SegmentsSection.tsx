@@ -18,6 +18,9 @@ const GRID = 'grid grid-cols-[minmax(0,1fr)_2.9rem_2.9rem_2.6rem] gap-x-2'
 const HEADER = 'text-[10px] font-sans text-muted-foreground/70'
 const COMPASS_POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const
 const EARTH_M_PER_DEGREE = 111_320
+/** The map first frames the listed pieces within this of the loudest: those that make the level
+ *  (a piece 20 dB under the loudest adds a hundredth of its energy). */
+const OVERVIEW_BELOW_LOUDEST_DB = 20
 
 /** A piece's colour in the list and on the map by how far below the loudest listed piece it is:
  *  red the loudest, violet 10 dB below, blue 20, grey 30 and more. */
@@ -344,10 +347,25 @@ export function SegmentsSection({ lat, lng, building, elevationM, reflectionDb, 
       piece.trace?.ray ? [{ ends: piece.ends, ray: piece.trace.ray, color, selected: index === selected }] : [])
     const chosen = listed.find(({ index }) => index === selected)?.piece
     const rays = chosen ? summedRays(chosen).map(({ from, belowClearestDb }) => ({ from, color: pieceColor(belowClearestDb) })) : []
-    onFan(drawn.length ? { receiver, pieces: drawn, rays } : null)
+    const loudest = Math.max(...listed.map(({ lden }) => lden))
+    const overview = listed
+      .filter(({ lden }) => lden >= loudest - OVERVIEW_BELOW_LOUDEST_DB)
+      .flatMap(({ piece }) => [...piece.ends, ...(piece.trace?.ray ? [piece.trace.ray[0]] : [])])
+    const open = listed.find(({ index }) => index === opened)?.piece
+    onFan(drawn.length
+      ? {
+          receiver,
+          pieces: drawn,
+          rays,
+          overview,
+          opened: open && opened !== null
+            ? { index: opened, points: [...open.ends, ...summedRays(open).map(ray => ray.from)] }
+            : null,
+        }
+      : null)
     // The receiver is read from `lat`, `lng` and the building, all fixed for one click.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grouped, selected, onFan])
+  }, [grouped, selected, opened, onFan])
   useEffect(() => () => onFan?.(null), [onFan])
   const toggle = (key: string) => {
     const next = new Set(openKeys)

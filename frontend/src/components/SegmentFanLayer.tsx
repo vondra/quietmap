@@ -1,8 +1,8 @@
 // The segments view's pieces on the map: each listed piece drawn thick and a thin ray from its
 // nearest point to the point the level is computed at, both in the colour of the piece's row; the
 // selected piece white on a black casing with every ray it was summed over, each in the colour of
-// what reaches the receiver along it; and that point a dot. When the pieces of a click first
-// appear, the map moves out just enough to show them all beside the popup.
+// what reaches the receiver along it; and that point a dot. The map frames the pieces that make
+// the level when they first appear, and a piece when it is opened.
 import type { FilterSpecification } from 'maplibre-gl'
 import { useEffect, useRef } from 'react'
 import { Layer, Source, useMap } from 'react-map-gl/maplibre'
@@ -14,6 +14,8 @@ const kind = (name: string): FilterSpecification => ['==', ['get', 'kind'], name
 const PHONE_WIDTH_PX = 768
 /** The desktop popup's column on the right: its width and two gutters. */
 const CARD_COLUMN_PX = 320 + 2 * 12
+/** The closest the map comes to frame an opened piece: a street's width stays readable. */
+const OPENED_PIECE_MAX_ZOOM = 18
 
 export function fanGeoJson(fan: SegmentFan): GeoJSON.FeatureCollection {
   const lonLat = ([lat, lon]: [number, number]) => [lon, lat]
@@ -53,42 +55,55 @@ export function fanGeoJson(fan: SegmentFan): GeoJSON.FeatureCollection {
   }
 }
 
-/** Moves the map out to show every piece of a click's fan beside the popup, once per click and
- *  only when some piece lies outside; never zooms in. */
-function useFitFan(fan: SegmentFan | null) {
+/** The map's padding around what it frames: clear of the search bar, and of the popup's card
+ *  column on a desktop or of the bottom sheet on a phone. */
+function framePadding() {
+  return window.innerWidth < PHONE_WIDTH_PX
+    ? { top: 72, bottom: Math.round(window.innerHeight / 2) + 24, left: 24, right: 24 }
+    : { top: 72, bottom: 48, left: 48, right: CARD_COLUMN_PX + 24 }
+}
+
+/** Frames the fan: when a click's pieces first appear, the map moves out (never in) only as far as
+ *  needed to show the pieces that make the level with the receiver; when a piece is opened, the
+ *  map frames that piece, its rays and the receiver. */
+function useFrameFan(fan: SegmentFan | null) {
   const { current: map } = useMap()
-  const fitted = useRef<string | null>(null)
+  const framed = useRef<{ click: string, opened: number | null } | null>(null)
   useEffect(() => {
     if (!fan || !map) {
-      if (!fan) fitted.current = null
+      if (!fan) framed.current = null
       return
     }
     const click = fan.receiver.join(',')
-    if (fitted.current === click) return
-    fitted.current = click
-    const points = [fan.receiver, ...fan.pieces.flatMap(({ ends, ray }) => [...ends, ray[0]])]
-    const phone = window.innerWidth < PHONE_WIDTH_PX
-    const padding = phone
-      ? { top: 72, bottom: Math.round(window.innerHeight / 2) + 24, left: 24, right: 24 }
-      : { top: 72, bottom: 48, left: 48, right: CARD_COLUMN_PX + 24 }
-    const canvas = map.getCanvas()
-    const [width, height] = [canvas.clientWidth, canvas.clientHeight]
-    const shown = points.every(([lat, lon]) => {
-      const { x, y } = map.project([lon, lat])
-      return x >= padding.left && x <= width - padding.right && y >= padding.top && y <= height - padding.bottom
-    })
-    if (shown) return
-    const lats = points.map(([lat]) => lat)
-    const lons = points.map(([, lon]) => lon)
-    map.fitBounds(
-      [[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
-      { padding, maxZoom: map.getZoom(), duration: 600 },
-    )
+    const opened = fan.opened?.index ?? null
+    const before = framed.current?.click === click ? framed.current : null
+    framed.current = { click, opened }
+    const padding = framePadding()
+    const frame = (points: [number, number][], maxZoom: number) => {
+      const lats = points.map(([lat]) => lat)
+      const lons = points.map(([, lon]) => lon)
+      map.fitBounds(
+        [[Math.min(...lons), Math.min(...lats)], [Math.max(...lons), Math.max(...lats)]],
+        { padding, maxZoom, duration: 600 },
+      )
+    }
+    if (!before) {
+      const points = [fan.receiver, ...fan.overview]
+      const canvas = map.getCanvas()
+      const [width, height] = [canvas.clientWidth, canvas.clientHeight]
+      const shown = points.every(([lat, lon]) => {
+        const { x, y } = map.project([lon, lat])
+        return x >= padding.left && x <= width - padding.right && y >= padding.top && y <= height - padding.bottom
+      })
+      if (!shown) frame(points, map.getZoom())
+    } else if (fan.opened && opened !== before.opened) {
+      frame([fan.receiver, ...fan.opened.points], OPENED_PIECE_MAX_ZOOM)
+    }
   }, [fan, map])
 }
 
 export default function SegmentFanLayer({ fan }: { fan: SegmentFan | null }) {
-  useFitFan(fan)
+  useFrameFan(fan)
   if (!fan) return null
   return (
     <Source id="segment-fan" type="geojson" data={fanGeoJson(fan)}>

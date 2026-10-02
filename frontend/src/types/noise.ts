@@ -150,6 +150,10 @@ export interface SegmentFan {
   receiver: [number, number]
   pieces: { ends: [number, number][], ray: [[number, number], [number, number]], color: string, selected: boolean }[]
   rays: { from: [number, number], color: string }[]
+  /** What the map shows when the pieces first appear: the pieces that make the level. */
+  overview: [number, number][]
+  /** The opened piece's ends and rays, which the map frames as it opens. */
+  opened: { index: number, points: [number, number][] } | null
 }
 
 /** One computed piece of the segments view (asked with `segments=1`). */
