@@ -73,28 +73,22 @@ function asContributor(piece: PopupPiece): Contributor {
   }
 }
 
-/** Where every level of the click is computed. */
-function ReceiverRows({ lat, lng, building, elevationM, reflectionDb }: {
-  lat: number
-  lng: number
-  building: BuildingAnswer | null
-  elevationM: number
-  reflectionDb: number
-}) {
+/** Where every level of the click is computed, when it is not the clicked point itself: a
+ *  building's façade, and the reflection of walls close behind the receiver. */
+function ReceiverRows({ building, reflectionDb }: { building: BuildingAnswer | null, reflectionDb: number }) {
   const facade = building?.facade ?? null
-  const [rLat, rLng] = facade ? facade.receiver : [lat, lng]
+  if (!facade && reflectionDb <= 0) return null
   return (
     <div className="mb-2">
-      {lineRow(
-        <HoverText title={'Every level of this click is computed here, 4 m above\nthe ground (EU noise mapping)'}>Receiver</HoverText>,
-        facade ? `façade facing ${compassPoint(facade.bearing_deg)}, 4 m up` : 'the clicked point, 4 m up',
+      {facade && building && (
+        <>
+          {lineRow(
+            <HoverText title={'Inside a building the level is computed 0.1 m in front of\nits façades, 4 m up; the loudest by Lden is shown'}>Receiver</HoverText>,
+            `façade facing ${compassPoint(facade.bearing_deg)}`,
+          )}
+          {lineRow('Façade', `loudest of ${building.facade_receivers} façade points`)}
+        </>
       )}
-      {facade && building && lineRow(
-        <HoverText title={'Inside a building the level is computed 0.1 m in front of\nits façades; the loudest by Lden is shown'}>Façade</HoverText>,
-        `loudest of ${building.facade_receivers} façade points`,
-      )}
-      {lineRow('Position', `${rLat.toFixed(5)}, ${rLng.toFixed(5)}`)}
-      {elevationM > 0 && lineRow('Ground', `${Math.round(elevationM)} m a.s.l.`)}
       {reflectionDb > 0 && lineRow(
         <HoverText title={'Walls close behind the receiver reflect sound back to it\n(CNOSSOS-EU): added to every source'}>Reflection</HoverText>,
         `+${reflectionDb.toFixed(1)} dB`,
@@ -303,11 +297,18 @@ function PieceRow({ listed, open, onToggle, onHover }: {
   )
 }
 
-export function SegmentsSection({ lat, lng, building, elevationM, reflectionDb, layers, contributors, onFan }: {
+/** How the level comes about, for the view's heading. */
+export const SEGMENTS_EXPLAINED = 'Every source within reach is cut into pieces. The sound of each\n'
+  + 'piece is followed along its rays over the terrain and past\n'
+  + 'buildings, in calm air and bent down by the wind or a night\n'
+  + 'inversion, each as often as it happens here, 4 m above the\n'
+  + 'ground. The level is the energy sum of all pieces; the loudest\n'
+  + 'are listed and drawn on the map.'
+
+export function SegmentsSection({ lat, lng, building, reflectionDb, layers, contributors, onFan }: {
   lat: number
   lng: number
   building: BuildingAnswer | null
-  elevationM: number
   reflectionDb: number
   /** The click's layers and sources, for their whole levels. */
   layers: LayerLevels[]
@@ -375,13 +376,7 @@ export function SegmentsSection({ lat, lng, building, elevationM, reflectionDb, 
   }
   return (
     <div data-testid="segments" className="text-[11px] font-mono text-muted-foreground">
-      <ReceiverRows lat={lat} lng={lng} building={building} elevationM={elevationM} reflectionDb={reflectionDb} />
-      <p className="mb-2 font-sans leading-snug">
-        Every source within reach is cut into pieces. The sound of each piece is followed along its
-        rays over the terrain and past buildings, in calm air and bent down by the wind or a night
-        inversion, each as often as it happens here. The level is the energy sum of all pieces;
-        the loudest are listed and drawn on the map.
-      </p>
+      <ReceiverRows building={building} reflectionDb={reflectionDb} />
       {!pieces && !error && <div className="animate-pulse">computing the pieces…</div>}
       {error && <div className="text-destructive">{error}</div>}
       {pieces && (

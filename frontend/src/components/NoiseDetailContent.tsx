@@ -7,8 +7,9 @@ import { DataPoint } from './noise/noise-tooltips'
 import { fmtDb, txtTable } from '../utils/formatters'
 import { PERIOD_LABELS_DETAIL, SOURCE_LABELS } from './noise/shared'
 import { AircraftLayerRow, ContributorRow } from './noise/source/ContributorRow'
-import { SegmentsSection } from './noise/segments/SegmentsSection'
-import type { PopupLoudness, PopupPercentiles, PopupUpdate, SegmentFan } from '../types/noise'
+import { SEGMENTS_EXPLAINED, SegmentsSection } from './noise/segments/SegmentsSection'
+import { HoverText } from './ui/info-tip'
+import type { PopupLoudness, PopupUpdate, SegmentFan } from '../types/noise'
 
 // The read and compute statistics of the click are for profiling, not for visitors: shown only
 // when the URL carries ?timings.
@@ -87,12 +88,13 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, onFa
         </div>
       </div>
       {data.loudness && <LoudnessLine loudness={data.loudness} />}
-      {data.percentiles?.audible_percent && <HeardLine heard={data.percentiles.audible_percent} />}
       {data.total_lden != null ? (
         <>
           <div className="flex items-baseline justify-between border-b border-border pb-0.5 mb-0.5">
             <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-              {segments && answered ? 'How it is computed' : `Noise sources (${rows.length})`}
+              {segments && answered
+                ? <HoverText title={SEGMENTS_EXPLAINED}>How it is computed</HoverText>
+                : `Noise sources (${rows.length})`}
             </span>
             {answered && (
               <button
@@ -113,7 +115,6 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, onFa
                   lat={centerLat}
                   lng={centerLng}
                   building={data.building}
-                  elevationM={data.elevation_m}
                   reflectionDb={data.reflection_db ?? 0}
                   layers={data.sources}
                   contributors={data.top_contributors}
@@ -158,41 +159,6 @@ function LoudnessLine({ loudness }: { loudness: PopupLoudness }) {
       <DataPoint title="Loudness" text={text}>
         <span className="font-semibold">{sone(day)}</span>
         <span className="text-muted-foreground"> by day{night != null ? `, ${sone(night)} at night` : ''}</span>
-      </DataPoint>
-    </div>
-  )
-}
-
-// One line under the loudness: how much of the day and of the night human noise stands above a
-// quiet natural background, with the evening and the method in the hover.
-function HeardLine({ heard }: { heard: NonNullable<PopupPercentiles['audible_percent']> }) {
-  const percent = (value: number) => {
-    if (value > 0 && value < 0.5) return 'under 1 %'
-    if (value >= 99.5 && value < 100) return 'over 99 %'
-    return `${Math.round(value)} %`
-  }
-  const text = txtTable([
-    ['Day 07–19', percent(heard.day)],
-    ['Evening 19–23', percent(heard.evening)],
-    ['Night 23–07', percent(heard.night)],
-    '',
-    'The share of the time the noise of roads,',
-    'railways, aircraft, industry, buildings and',
-    'ships together stands above a quiet natural',
-    'background (leaves, birds, a distant stream):',
-    '30 dB(A) by day and evening, 25 at night. It',
-    'follows how often vehicles and flights pass',
-    'and how often the weather bends the sound',
-    'down here (percent time audible, as the US',
-    'national parks measure their soundscapes).',
-  ], 22, 9)
-  return (
-    <div data-testid="heard" className="text-sm mb-1">
-      <DataPoint title="Human noise heard" text={text}>
-        <span className="text-muted-foreground">Human noise heard: day </span>
-        <span className="font-semibold">{percent(heard.day)}</span>
-        <span className="text-muted-foreground">, night </span>
-        <span className="font-semibold">{percent(heard.night)}</span>
       </DataPoint>
     </div>
   )
