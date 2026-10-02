@@ -16,6 +16,13 @@ export function fmtDbValue(v: number | null | undefined): string {
   return v == null || v <= 0 ? '—' : v.toFixed(1)
 }
 
+/** A loudness in sone to two significant digits: 0.43, 4.3, 43. */
+export function fmtSone(sone: number): string {
+  if (sone >= 10) return Math.round(sone).toString()
+  if (sone >= 1) return sone.toFixed(1)
+  return sone.toFixed(2)
+}
+
 /** Rounds to integer and formats with thousands separators. */
 export function fmtInt(v: number): string {
   return Math.round(v).toLocaleString('en-US')

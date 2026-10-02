@@ -1,15 +1,13 @@
-// The popup body: the total level, the loudest contributors and the aircraft layer, and whether the
-// answer is still being refined; or, once the click is answered, how it was computed (segments).
-// Redrawn on every streamed update of the click.
-import { useState } from 'react'
+// The popup body: how loud the place is over the whole day (loudness in sone, Lden beside it), and
+// what is heard there and from what: the loudest contributors and the aircraft layer, each with how
+// it is heard and its share of the noise. The whole calculation opens in its own panel. Redrawn on
+// every streamed update of the click.
 import { ldenToColor } from '../utils/noise-colors'
 import { DataPoint } from './noise/noise-tooltips'
-import { fmtDb, txtTable } from '../utils/formatters'
+import { fmtDb, fmtSone, txtTable } from '../utils/formatters'
 import { PERIOD_LABELS_DETAIL, SOURCE_LABELS } from './noise/shared'
 import { AircraftLayerRow, ContributorRow } from './noise/source/ContributorRow'
-import { SEGMENTS_EXPLAINED, SegmentsSection } from './noise/segments/SegmentsSection'
-import { HoverText } from './ui/info-tip'
-import type { PopupLoudness, PopupUpdate, SegmentFan } from '../types/noise'
+import type { PopupUpdate } from '../types/noise'
 
 // The read and compute statistics of the click are for profiling, not for visitors: shown only
 // when the URL carries ?timings.
@@ -21,18 +19,31 @@ export interface NoiseDetailContentProps {
   /** Shows a loudest flight's track (by `topFlightKey`) or a contributor's pieces (by
    * `source:<id>`) on the map; null shows none. */
   onHighlight: (key: string | null) => void
-  /** Draws the segments view's rays on the map; null clears them. */
-  onFan?: (fan: SegmentFan | null) => void
+  /** Opens the detailed calculation of the answered click. */
+  onOpenCalculation?: () => void
 }
 
-export default function NoiseDetailContent({ data, maxSources, onHighlight, onFan }: NoiseDetailContentProps) {
+const LOUDNESS_TEXT = [
+  'Loudness over the whole day: how loud the sound',
+  'heard 5 % of the time is to the ear (Zwicker,',
+  'ISO 532-1, N5), the evening counted 5 dB and',
+  'the night 10 dB louder, as Lden counts them.',
+  'Twice the number sounds twice as loud.',
+].join('\n')
+
+export default function NoiseDetailContent({ data, maxSources, onHighlight, onOpenCalculation }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.center
-  const [segments, setSegments] = useState(false)
   const answered = data.total_lden != null && !data.partial
+  const total = data.total_lden ?? 0
   // The popup's 0 dB display floor, applied to this list the way the per-layer rows apply it.
   const audibleContributors = data.top_contributors.filter(c => c.received_lden != null && c.received_lden > 0)
   const rows = audibleContributors.map(c => (
-    <ContributorRow key={`${c.source_type}-${c.id}`} c={c} onHighlight={id => onHighlight(id === null ? null : `source:${id}`)} />
+    <ContributorRow
+      key={`${c.source_type}-${c.id}`}
+      c={c}
+      totalLden={total}
+      onHighlight={id => onHighlight(id === null ? null : `source:${id}`)}
+    />
   ))
   // The aircraft layer lists no contributors: the layer is one row, at its rank by Lden.
   const aircraft = data.sources.find(s => s.source_type === 'aircraft')
@@ -40,7 +51,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, onFa
   if (aircraft && aircraftLden > 0) {
     const rank = audibleContributors.findIndex(c => (c.received_lden ?? 0) < aircraftLden)
     rows.splice(rank < 0 ? rows.length : rank, 0,
-      <AircraftLayerRow key="aircraft" layer={aircraft} flights={data.top_flights} onHighlightFlight={onHighlight} />)
+      <AircraftLayerRow key="aircraft" layer={aircraft} totalLden={total} flights={data.top_flights} onHighlightFlight={onHighlight} />)
   }
   const totalLdenText = txtTable([
     ...data.sources
@@ -54,32 +65,37 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, onFa
     ['Total Lden', fmtDb(data.total_lden)],
   ], 16, 9)
   const shown = maxSources ? rows.slice(0, maxSources) : rows
+  const sone = data.loudness?.n5_den_sone ?? null
 
   return (
     <div data-testid="detail-popup" role="dialog" className="px-2.5 pt-1 pb-2" onClick={(e) => e.stopPropagation()}>
-      <div className="flex items-center justify-between mb-1">
+      <div className="flex items-start justify-between mb-1.5">
         {data.total_lden != null ? (
-          <span
-            data-testid="noise-badge"
-            className="text-2xl font-bold leading-none shrink-0 whitespace-nowrap"
-            style={{ color: ldenToColor(data.total_lden) }}
-          >
-            <DataPoint title="Total Lden — energy sum across all sources" text={totalLdenText}>
-              {data.total_lden.toFixed(1)} dB
-            </DataPoint>
+          <span data-testid="noise-badge" className="leading-none shrink-0 whitespace-nowrap" style={{ color: ldenToColor(data.total_lden) }}>
+            {sone != null && sone > 0
+              ? (
+                <DataPoint title="Loudness" text={LOUDNESS_TEXT}>
+                  <span className="text-2xl font-bold">{fmtSone(sone)}</span>
+                  <span className="text-sm font-medium"> sone</span>
+                </DataPoint>
+              )
+              : <span className="text-2xl font-bold text-muted-foreground/40 animate-pulse">… sone</span>}
           </span>
         ) : <span />}
-        <div className="text-right pr-6">
-          <div className="text-xs text-muted-foreground/60 font-mono leading-tight">
-            {centerLat.toFixed(4)}, {centerLng.toFixed(4)}
-          </div>
-          {data.elevation_m > 0 && (
-            <div className="text-xs text-muted-foreground/60 font-mono leading-tight">{Math.round(data.elevation_m)} m a.s.l.</div>
+        <div className="text-right pr-6 text-xs text-muted-foreground/60 font-mono leading-tight">
+          {data.total_lden != null && (
+            <div data-testid="lden">
+              <DataPoint title="Total Lden — energy sum across all sources (EU noise mapping)" text={totalLdenText}>
+                Lden {data.total_lden.toFixed(1)} dB
+              </DataPoint>
+            </div>
           )}
+          <div>{centerLat.toFixed(4)}, {centerLng.toFixed(4)}</div>
+          {data.elevation_m > 0 && <div>{Math.round(data.elevation_m)} m a.s.l.</div>}
           {data.partial && (
             <div
               data-testid="popup-refining"
-              className="text-xs text-muted-foreground/60 font-mono leading-tight animate-pulse"
+              className="animate-pulse"
               title="The levels shown are valid; farther sources are still being added."
             >
               refining…
@@ -87,41 +103,23 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, onFa
           )}
         </div>
       </div>
-      {data.loudness && <LoudnessLine loudness={data.loudness} />}
       {data.total_lden != null ? (
         <>
           <div className="flex items-baseline justify-between border-b border-border pb-0.5 mb-0.5">
-            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-              {segments && answered
-                ? <HoverText title={SEGMENTS_EXPLAINED}>How it is computed</HoverText>
-                : `Noise sources (${rows.length})`}
-            </span>
-            {answered && (
+            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">What you hear</span>
+            {answered && onOpenCalculation && (
               <button
                 type="button"
-                data-testid="segments-toggle"
+                data-testid="calculation-open"
                 className="text-[11px] text-muted-foreground hover:text-foreground"
-                aria-expanded={segments}
-                onClick={() => setSegments(!segments)}
+                onClick={onOpenCalculation}
               >
-                {segments ? '◂ Sources' : 'Segments ▸'}
+                Detailed calculation ▸
               </button>
             )}
           </div>
           <div className="overflow-y-auto overflow-x-clip" style={{ maxHeight: 'max(100dvh - 400px, 160px)' }}>
-            {segments && answered
-              ? (
-                <SegmentsSection
-                  lat={centerLat}
-                  lng={centerLng}
-                  building={data.building}
-                  reflectionDb={data.reflection_db ?? 0}
-                  layers={data.sources}
-                  contributors={data.top_contributors}
-                  onFan={onFan}
-                />
-              )
-              : shown}
+            {shown}
           </div>
         </>
       ) : (
@@ -132,34 +130,6 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, onFa
         </div>
       )}
       {SHOW_STATS && <StatsPanel data={data} />}
-    </div>
-  )
-}
-
-// One line under the level: how loud the place sounds (N5 in sone), by day and at night, with the
-// evening and the scale in the hover.
-function LoudnessLine({ loudness }: { loudness: PopupLoudness }) {
-  const { day, evening, night } = loudness.n5_sone
-  if (day == null) return null
-  const sone = (value: number | null) => (value == null ? '–' : `${value} sone`)
-  const text = txtTable([
-    ['Day 07–19', sone(day)],
-    ['Evening 19–23', sone(evening)],
-    ['Night 23–07', sone(night)],
-    '',
-    'Loudness N5: how loud the sound heard 5 % of',
-    'the time is to the ear (Zwicker, ISO 532-1), the',
-    'measure of psychoacoustic and soundscape research.',
-    'Twice the sone sounds twice as loud: about 5 in',
-    'a quiet park or suburb, 35 in a busy city street,',
-    '55 beside a city motorway.',
-  ], 22, 9)
-  return (
-    <div data-testid="loudness" className="text-sm mb-1">
-      <DataPoint title="Loudness" text={text}>
-        <span className="font-semibold">{sone(day)}</span>
-        <span className="text-muted-foreground"> by day{night != null ? `, ${sone(night)} at night` : ''}</span>
-      </DataPoint>
     </div>
   )
 }

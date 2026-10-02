@@ -63,13 +63,13 @@ export function popupUpdate(
     sources: [{ source_type: 'road', ...levels, lden_upper: db, evaluated: 1, candidates: 1 }],
     top_contributors: db == null ? [] : [roadContributor(db)],
     top_flights: [],
-    // The final answer carries the loudness and heard lines.
-    loudness: partial || db == null ? null : { n5_sone: { day: 12, evening: 11, night: 7.4 } },
+    // The final answer carries the loudness and the time levels.
+    loudness: partial || db == null ? null : { n5_sone: { day: 12, evening: 11, night: 7.4 }, n5_den_sone: 15 },
     percentiles: partial || db == null ? null : {
+      l5: { day: db + 4, evening: db + 3, night: db - 3 },
       l10: { day: db + 3, evening: db + 2, night: db - 4 },
       l50: { day: db - 2, evening: db - 3, night: db - 9 },
       l90: { day: db - 6, evening: db - 7, night: db - 15 },
-      audible_percent: { day: 99.7, evening: 97.2, night: 54.4 },
     },
     stats: { rings: seq, files: 27, bytes: 1e6, read_ms: 3, candidate_ms: 4, evaluate_ms: 20, elapsed_ms: 30 },
   }

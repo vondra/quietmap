@@ -1,6 +1,6 @@
 // The map application: search, layer controls, the map, and the popup card or sheet, with every
 // piece of state mirrored into the shareable URL hash.
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { lazy, Suspense, useState, useCallback, useRef, useEffect } from 'react'
 import MapView from './components/MapView'
 import SearchBar from './components/SearchBar'
 import ControlCard from './components/ControlCard'
@@ -14,6 +14,11 @@ import type { PopupUpdate, SegmentFan } from './types/noise'
 import { topFlightKey } from './components/noise/top-flights'
 import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
+import RecentPlaces from './components/RecentPlaces'
+import { loadRecentPlaces, saveRecentPlaces, withPlace, withoutPlace, type RecentPlace } from './lib/recent-places'
+
+// Lazy: the detailed calculation is a separate chunk, loaded when a visitor opens it.
+const CalculationPanel = lazy(() => import('./components/calculation/CalculationPanel'))
 
 export default function App() {
   const { initial, updateUrl } = useUrlState()
@@ -32,8 +37,11 @@ export default function App() {
   // key, or a contributor's lines (its row opened), by `source:<id>`; read from the latest
   // update, so it follows the stream and goes when it leaves the list.
   const [highlighted, setHighlighted] = useState<string | null>(null)
-  // The segments view's rays on the map, while it is open.
+  // The detailed calculation's pieces and rays on the map, while it is open.
   const [fan, setFan] = useState<SegmentFan | null>(null)
+  const [calculationOpen, setCalculationOpen] = useState(false)
+  // The last places opened, newest first, kept in this browser.
+  const [recentPlaces, setRecentPlaces] = useState<RecentPlace[]>(loadRecentPlaces)
   const highlightedTrack = highlighted?.startsWith('source:')
     ? noiseDetailData?.top_contributors.find(c => `source:${c.id}` === highlighted)?.geometry ?? null
     : noiseDetailData?.top_flights.find(f => topFlightKey(f) === highlighted)?.track ?? null
@@ -83,6 +91,34 @@ export default function App() {
       .catch(() => { if (!controller.signal.aborted) setDetailPlaceName(null) })
     return () => controller.abort()
   }, [detailPosition])
+
+  // An answered point joins the recent places (again first), with its name once it is known.
+  useEffect(() => {
+    if (!detailPosition || !noiseDetailData || noiseDetailData.partial) return
+    const entry: RecentPlace = {
+      lat: detailPosition.lat,
+      lng: detailPosition.lng,
+      place: detailPlaceName,
+      sone: noiseDetailData.loudness?.n5_den_sone ?? null,
+      lden: noiseDetailData.total_lden,
+    }
+    setRecentPlaces(places => {
+      const next = withPlace(places, entry)
+      saveRecentPlaces(next)
+      return next
+    })
+  }, [detailPosition, noiseDetailData, detailPlaceName])
+  const forgetPlace = useCallback((place: RecentPlace) => {
+    setRecentPlaces(places => {
+      const next = withoutPlace(places, place)
+      saveRecentPlaces(next)
+      return next
+    })
+  }, [])
+  // A tab flies to its place and opens its popup, as a search result does.
+  const openPlace = useCallback((place: RecentPlace) => {
+    setSelectedLocation({ display_name: place.place ?? '', lat: place.lat, lon: place.lng })
+  }, [])
 
   const detailTotalLden = noiseDetailData?.total_lden ?? null
   useEffect(() => {
@@ -134,6 +170,10 @@ export default function App() {
     setHighlighted(null)
     setFan(null)
   }, [])
+  // The calculation goes with the popup; a new point keeps it open for that point.
+  useEffect(() => {
+    if (!detailPosition) setCalculationOpen(false)
+  }, [detailPosition])
 
   const handleDetailPositionChange = useCallback((pos: { lat: number; lng: number } | null) => {
     activeDetailPosition.current = pos
@@ -196,13 +236,16 @@ export default function App() {
             heatmapLayers={heatmapLayers}
             onHeatmapLayersChange={handleHeatmapLayersChange}
           />
+          {detailPosition && (
+            <RecentPlaces places={recentPlaces} current={detailPosition} onOpen={openPlace} onRemove={forgetPlace} />
+          )}
           <DetailCard
             noiseData={noiseDetailData}
             position={detailPosition}
             error={noiseDetailError}
             onNoiseClose={handleNoiseClose}
             onHighlight={setHighlighted}
-            onFan={setFan}
+            onOpenCalculation={() => setCalculationOpen(true)}
           />
         </div>
 
@@ -276,8 +319,15 @@ export default function App() {
         error={noiseDetailError}
         onClose={handleNoiseClose}
         onHighlight={setHighlighted}
-        onFan={setFan}
+        onOpenCalculation={() => setCalculationOpen(true)}
+        recentPlaces={<RecentPlaces places={recentPlaces} current={detailPosition} onOpen={openPlace} onRemove={forgetPlace} />}
       />
+
+      {calculationOpen && noiseDetailData && !noiseDetailData.partial && (
+        <Suspense fallback={null}>
+          <CalculationPanel data={noiseDetailData} onClose={() => setCalculationOpen(false)} onFan={setFan} />
+        </Suspense>
+      )}
     </div>
   )
 }

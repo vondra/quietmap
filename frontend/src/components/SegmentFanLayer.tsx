@@ -79,6 +79,7 @@ function useFrameFan(fan: SegmentFan | null) {
     const before = framed.current?.click === click ? framed.current : null
     framed.current = { click, opened }
     const padding = framePadding()
+    padding.left += fan.insetLeftPx ?? 0
     const frame = (points: [number, number][], maxZoom: number) => {
       const lats = points.map(([lat]) => lat)
       const lons = points.map(([, lon]) => lon)

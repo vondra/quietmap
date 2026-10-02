@@ -1,7 +1,7 @@
 // The phone popup: a bottom sheet with a drag handle, a collapsed peek and the streamed answer.
-import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react'
+import { lazy, Suspense, useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import DetailSkeleton from './DetailSkeleton'
-import type { PopupUpdate, SegmentFan } from '../types/noise'
+import type { PopupUpdate } from '../types/noise'
 import { resolveSheetTouchEnd } from '../lib/sheet-drag'
 
 // Lazy popup body: see DetailCard.
@@ -15,10 +15,12 @@ interface MobileDetailSheetProps {
   error?: string | null
   onClose: () => void
   onHighlight: (key: string | null) => void
-  onFan?: (fan: SegmentFan | null) => void
+  onOpenCalculation?: () => void
+  /** The recent places' tabs, shown above the answer. */
+  recentPlaces?: ReactNode
 }
 
-export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, onFan }: MobileDetailSheetProps) {
+export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, onOpenCalculation, recentPlaces }: MobileDetailSheetProps) {
   const [expanded, setExpanded] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
@@ -107,11 +109,12 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
         {/* Collapsed = a peek at the top of the detail (place + level) under
             a fixed cap; the tap now reaches onClick, so this state is real
             (review 2026-09-10: `auto` let a tall detail grow on Collapse). */}
+        {recentPlaces && <div className="px-2.5 pb-1">{recentPlaces}</div>}
         <div className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50vh-16px)]' : 'overflow-hidden max-h-24'}`}>
           {showSkeleton
             ? <DetailSkeleton position={position} error={error} />
             : <Suspense fallback={<DetailSkeleton position={position} error={error} />}>
-                <NoiseDetailContent data={data} maxSources={9} onHighlight={onHighlight} onFan={onFan} />
+                <NoiseDetailContent data={data} maxSources={9} onHighlight={onHighlight} onOpenCalculation={onOpenCalculation} />
               </Suspense>}
         </div>
       </div>

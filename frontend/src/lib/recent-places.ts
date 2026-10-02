@@ -1,0 +1,66 @@
+// The visitor's recent places: the last points opened, newest first, each with its place name and
+// its numbers, kept in this browser only, so that a few known places stay at hand to compare and
+// to reopen.
+
+export interface RecentPlace {
+  lat: number
+  lng: number
+  /** The reverse-geocoded place, when known. */
+  place: string | null
+  /** The whole day's loudness (sone) and Lden (dB), when answered. */
+  sone: number | null
+  lden: number | null
+}
+
+/** The most places kept. */
+export const RECENT_PLACES_MAX = 7
+const STORAGE_KEY = 'quietmap.recent-places'
+/** Two points closer than this (m) are one place. */
+const SAME_PLACE_M = 30
+const METRES_PER_DEGREE = 111_320
+
+export function samePlace(a: { lat: number, lng: number }, b: { lat: number, lng: number }): boolean {
+  const north = (b.lat - a.lat) * METRES_PER_DEGREE
+  const east = (b.lng - a.lng) * METRES_PER_DEGREE * Math.cos((a.lat * Math.PI) / 180)
+  return Math.hypot(north, east) < SAME_PLACE_M
+}
+
+/** `list` with `place` first, in place of the same place's older entry, at most the most kept. */
+export function withPlace(list: RecentPlace[], place: RecentPlace): RecentPlace[] {
+  return [place, ...list.filter(other => !samePlace(other, place))].slice(0, RECENT_PLACES_MAX)
+}
+
+export function withoutPlace(list: RecentPlace[], place: { lat: number, lng: number }): RecentPlace[] {
+  return list.filter(other => !samePlace(other, place))
+}
+
+const numberOrNull = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : null)
+
+/** The stored places; none when the browser keeps no storage or holds something else. */
+export function loadRecentPlaces(): RecentPlace[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]')
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((entry: Record<string, unknown>) => {
+      const [lat, lng] = [numberOrNull(entry?.lat), numberOrNull(entry?.lng)]
+      if (lat == null || lng == null) return []
+      return [{
+        lat,
+        lng,
+        place: typeof entry.place === 'string' ? entry.place : null,
+        sone: numberOrNull(entry.sone),
+        lden: numberOrNull(entry.lden),
+      }]
+    }).slice(0, RECENT_PLACES_MAX)
+  } catch {
+    return []
+  }
+}
+
+export function saveRecentPlaces(list: RecentPlace[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
+  } catch {
+    // A private window or blocked storage keeps the places for this visit only.
+  }
+}

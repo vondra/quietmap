@@ -21,6 +21,7 @@ import {
 } from './support'
 
 const badge = (page: import('@playwright/test').Page) => page.locator('[data-testid="noise-badge"]:visible')
+const lden = (page: import('@playwright/test').Page) => page.locator('[data-testid="lden"]:visible')
 
 test('desktop: hover reads the painted cell, the popup redraws on every streamed update', async ({ page }) => {
   await installHermeticMap(page, POINT)
@@ -53,9 +54,10 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
 
   // The first ring's answer is shown at once, marked as still being refined.
   await sendPopupLine(page, withAircraft(popupUpdate(1, true, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS.slice(0, 1)))
-  await expect(badge(page)).toHaveText(`${SOURCE_DB.toFixed(1)} dB`)
+  await expect(lden(page)).toHaveText(`Lden ${SOURCE_DB.toFixed(1)} dB`)
   await expect(page.locator('[data-testid="popup-refining"]:visible')).toBeVisible()
-  await expect(page.locator('[data-testid="loudness"]:visible')).toHaveCount(0)
+  // The loudness comes with the final answer only.
+  await expect(badge(page)).toHaveText('… sone')
   await expect(page.getByRole('button', { name: /Fixture street/ }).filter({ visible: true })).toBeVisible()
   // An opened contributor stays open while later updates redraw the popup.
   await page.getByRole('button', { name: /Fixture street/ }).filter({ visible: true }).click()
@@ -69,10 +71,10 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
 
   await sendPopupLine(page, withAircraft(popupUpdate(2, false, POINT.lat, POINT.lng, FIXTURE_DB), FIXTURE_FLIGHTS))
   await endPopup(page)
-  await expect(badge(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB`)
+  await expect(lden(page)).toHaveText(`Lden ${FIXTURE_DB.toFixed(1)} dB`)
   await expect(page.locator('[data-testid="popup-refining"]:visible')).toHaveCount(0)
-  // The final answer says how loud the place sounds by day and at night.
-  await expect(page.locator('[data-testid="loudness"]:visible')).toHaveText('12 sone by day, 7.4 sone at night')
+  // The final answer says how loud the place sounds over the whole day.
+  await expect(badge(page)).toHaveText('15 sone')
   await expect(page.getByText('9.6k/day').filter({ visible: true })).toBeVisible()
   await expect(flights.locator('tbody tr')).toHaveCount(2)
   await expect(flights.locator('tbody tr').nth(0).locator('td')).toHaveText(['70', '0.44', '0.26', '09-02 D', /^Airbus A320\b/])
@@ -114,7 +116,7 @@ test('desktop: an error line replaces the partial answer, a new click aborts the
   await page.mouse.click(x, y)
   await expect.poll(() => popupRequests(page)).toHaveLength(1)
   await sendPopupLine(page, popupUpdate(1, true, POINT.lat, POINT.lng, SOURCE_DB))
-  await expect(badge(page)).toHaveText(`${SOURCE_DB.toFixed(1)} dB`)
+  await expect(lden(page)).toHaveText(`Lden ${SOURCE_DB.toFixed(1)} dB`)
   await sendPopupLine(page, { error: 'The noise computation failed at this point.' })
   await endPopup(page)
   await expect(page.locator('[data-testid="detail-popup-error"]:visible'))
@@ -125,7 +127,7 @@ test('desktop: an error line replaces the partial answer, a new click aborts the
   await page.mouse.click(x - 40, y)
   await expect.poll(() => popupRequests(page)).toHaveLength(2)
   await sendPopupLine(page, popupUpdate(1, true, POINT.lat, POINT.lng, SOURCE_DB))
-  await expect(badge(page)).toHaveText(`${SOURCE_DB.toFixed(1)} dB`)
+  await expect(lden(page)).toHaveText(`Lden ${SOURCE_DB.toFixed(1)} dB`)
   await page.mouse.click(x + 40, y)
   await expect.poll(() => popupRequests(page)).toHaveLength(3)
   await expect.poll(() => abortedPopupRequests(page)).toBe(1)
@@ -148,9 +150,9 @@ test('desktop: a point inside a building tells its façade receiver in the segme
     storeys: 8,
   }
   await sendPopupLine(page, popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB, building))
-  await expect(badge(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB`)
+  await expect(lden(page)).toHaveText(`Lden ${FIXTURE_DB.toFixed(1)} dB`)
   await expect(page.locator('[data-testid="building-exposure"]')).toHaveCount(0)
-  await page.locator('[data-testid="segments-toggle"]:visible').click()
+  await page.locator('[data-testid="calculation-open"]:visible').click()
   await expect.poll(() => popupRequests(page)).toHaveLength(2)
   await sendPopupLine(page, { ...popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB, building), pieces: [] })
   const segments = page.locator('[data-testid="segments"]:visible')
@@ -169,7 +171,7 @@ test('desktop: the segments view groups the computed pieces under their source',
   await expect.poll(() => popupRequests(page)).toHaveLength(1)
   const answer = popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB)
   await sendPopupLine(page, answer)
-  await page.locator('[data-testid="segments-toggle"]:visible').click()
+  await page.locator('[data-testid="calculation-open"]:visible').click()
   await expect.poll(() => popupRequests(page)).toHaveLength(2)
   const street = roadContributor(FIXTURE_DB)
   const lane = { ...street, id: '00000000000000cc', name: 'Fixture lane', metadata: { ...street.metadata, name: 'Fixture lane' } }
@@ -230,7 +232,7 @@ test.describe('mobile', () => {
     await expect(sheet.getByTestId('detail-popup-skeleton')).toBeVisible()
 
     await sendPopupLine(page, withAircraft(popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS))
-    await expect(sheet.getByTestId('noise-badge')).toHaveText(`${SOURCE_DB.toFixed(1)} dB`)
+    await expect(sheet.getByTestId('lden')).toHaveText(`Lden ${SOURCE_DB.toFixed(1)} dB`)
     // The loudest flights fit the phone: the whole table is on screen, nothing clipped or scrolled.
     await sheet.getByRole('button', { name: /^Aircraft/ }).tap()
     const flights = sheet.getByRole('table', { name: 'Loudest flights' })

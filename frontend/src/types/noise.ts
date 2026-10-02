@@ -42,6 +42,9 @@ export interface Contributor {
   /** What the map draws of it, lines of [lat, lon] (one point for a point source): all of it within
    *  the reach in the final update, its loudest pieces before. */
   geometry?: [number, number][][]
+  /** How it is heard (final update; none for a steady source): its passes per hour by day,
+   *  evening and night, and whether at its distance they run together into a steady sound. */
+  heard?: { per_hour: { day: number; evening: number; night: number }; steady: boolean }
 }
 
 /** The façade receiver a building click is answered at. */
@@ -101,15 +104,14 @@ export interface PopupPercentiles {
   l10: { day: number | null; evening: number | null; night: number | null }
   l50: { day: number | null; evening: number | null; night: number | null }
   l90: { day: number | null; evening: number | null; night: number | null }
-  /** The share of each period (%, 0.1 precision) the sources together stand above a quiet natural
-   *  background: how much of the time human noise is heard. */
-  audible_percent?: { day: number; evening: number; night: number }
 }
 
-/** How loud the place sounds: Zwicker's loudness (ISO 532-1) of the sound exceeded 5 % of each
- * period, N5 in sone (twice the sone, twice as loud). */
+/** How loud the place sounds: Zwicker's loudness (ISO 532-1) of the sound exceeded 5 % of the
+ *  time, N5 in sone (twice the sone, twice as loud), per period and for the whole day, its periods
+ *  weighed as Lden weighs them. */
 export interface PopupLoudness {
   n5_sone: { day: number | null; evening: number | null; night: number | null }
+  n5_den_sone: number | null
 }
 
 /** What the click read and computed so far. */
@@ -154,6 +156,8 @@ export interface SegmentFan {
   overview: [number, number][]
   /** The opened piece's ends and rays, which the map frames as it opens. */
   opened: { index: number, points: [number, number][] } | null
+  /** The map's width a panel covers on the left (px): the framing keeps clear of it. */
+  insetLeftPx?: number
 }
 
 /** One computed piece of the segments view (asked with `segments=1`). */

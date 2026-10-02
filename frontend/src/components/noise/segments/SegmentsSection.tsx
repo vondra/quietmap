@@ -305,7 +305,7 @@ export const SEGMENTS_EXPLAINED = 'Every source within reach is cut into pieces.
   + 'ground. The level is the energy sum of all pieces; the loudest\n'
   + 'are listed and drawn on the map.'
 
-export function SegmentsSection({ lat, lng, building, reflectionDb, layers, contributors, onFan }: {
+export function SegmentsSection({ lat, lng, building, reflectionDb, layers, contributors, onFan, insetLeftPx = 0 }: {
   lat: number
   lng: number
   building: BuildingAnswer | null
@@ -315,6 +315,8 @@ export function SegmentsSection({ lat, lng, building, reflectionDb, layers, cont
   contributors: Contributor[]
   /** Draws the listed pieces and their rays on the map; null clears them. */
   onFan?: (fan: SegmentFan | null) => void
+  /** The map's width a panel covers on the left: the rays are framed beside it. */
+  insetLeftPx?: number
 }) {
   const [pieces, setPieces] = useState<PopupPiece[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -362,11 +364,12 @@ export function SegmentsSection({ lat, lng, building, reflectionDb, layers, cont
           opened: open && opened !== null
             ? { index: opened, points: [...open.ends, ...summedRays(open).map(ray => ray.from)] }
             : null,
+          insetLeftPx,
         }
       : null)
     // The receiver is read from `lat`, `lng` and the building, all fixed for one click.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grouped, selected, opened, onFan])
+  }, [grouped, selected, opened, onFan, insetLeftPx])
   useEffect(() => () => onFan?.(null), [onFan])
   const toggle = (key: string) => {
     const next = new Set(openKeys)
