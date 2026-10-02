@@ -63,6 +63,10 @@ const fn profile(
 }
 
 const PLAYERS: [f64; BANDS] = [-2.0, -1.0, 0.0, 1.0, 1.0, 0.0, -2.0, -4.0];
+/// Movements a parking space sees in a day at the car-park rates below (0.40 an hour 06-22, 0.05
+/// 22-06).
+pub const PARKING_MOVEMENTS_PER_SPACE_DAY: f64 = 16.0 * 0.40 + 8.0 * 0.05;
+
 /// Parkplatzlaermstudie Tab. 25: A-weighted bands of parking movements, turned Z-weighted.
 const CAR_PARK_SPECTRUM: [f64; BANDS] = [8.5, -1.0, -4.2, -5.5, -5.3, -5.8, -10.4, -18.5];
 

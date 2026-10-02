@@ -586,6 +586,18 @@ fn read_buildings(dev4: &Dev4, square: Square) -> Result<Vec<BuildingLoad>, Stri
     Ok(buildings)
 }
 
+/// The cell of a square's grid (row from the north, column) a z30 point falls in, clamped to the
+/// square.
+pub fn grid_cell(square: Square, at: (i32, i32)) -> (usize, usize) {
+    let (west, north) = (
+        i64::from(square.x) * SQUARE_Z30,
+        (i64::from(Z9_PER_AXIS) - i64::from(square.y)) * SQUARE_Z30,
+    );
+    let column = ((i64::from(at.0) - west) / CELL_Z30).clamp(0, GRID_SIDE as i64 - 1);
+    let row = ((north - 1 - i64::from(at.1)) / CELL_Z30).clamp(0, GRID_SIDE as i64 - 1);
+    (row as usize, column as usize)
+}
+
 /// Ground metres per z30 cell at a z30 northing (Web Mercator's scale).
 fn metres_per_z30(gy: i32) -> f64 {
     let y_m = (i64::from(gy) - (1 << 29)) as f64 * Z30_QUANTUM_M;
@@ -606,17 +618,11 @@ fn square_traffic(dev4: &Dev4, square: Square) -> Result<Option<SquareTraffic>, 
     let (flows, dead_end) = trees(&roads, &loads).map_err(context)?;
     // The grid: every building's trip ends in its cell (rows from the north).
     let mut grid = vec![0f32; GRID_SIDE * GRID_SIDE];
-    let (west, north) = (
-        i64::from(square.x) * SQUARE_Z30,
-        (i64::from(Z9_PER_AXIS) - i64::from(square.y)) * SQUARE_Z30,
-    );
     for building in &buildings {
         let country = loads.country_of(building);
         let trip_ends = building.dwellings * trips_per_dwelling(country) + building.trips;
-        let column = ((i64::from(building.at.0) - west) / CELL_Z30).clamp(0, GRID_SIDE as i64 - 1);
-        let row =
-            ((north - 1 - i64::from(building.at.1)) / CELL_Z30).clamp(0, GRID_SIDE as i64 - 1);
-        grid[row as usize * GRID_SIDE + column as usize] += trip_ends as f32;
+        let (row, column) = grid_cell(square, building.at);
+        grid[row * GRID_SIDE + column] += trip_ends as f32;
     }
     Ok(Some(SquareTraffic {
         flows,

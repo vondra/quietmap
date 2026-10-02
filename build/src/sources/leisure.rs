@@ -2,6 +2,9 @@
 //! above the ground, in the Building layer as dev4 shows them: the area law over the polygon (a
 //! node takes its class's reference footprint; a line is no area and emits from its centroid),
 //! ranges by shots a year unless roofed. Motorsport (PLAN-z13 DROP) and unknown classes are silent.
+//! Street parking serves the buildings around it: no more cars park and leave there in a day than
+//! those buildings' trip ends, shared by all the street parking spaces around (villas park on
+//! their plots; the car-park rate of every space taken is the most it carries).
 
 use super::cells::{
     AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
@@ -9,6 +12,7 @@ use super::cells::{
 use super::facilities::{Tags, parse_tags};
 use super::{Converted, group_key};
 use crate::dev4::{Dev4, Square, column, positive, require_stamp, text, z30_corner_degrees};
+use crate::traffic::{GRID_SIDE, grid_cell};
 use arrow_array::{BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array};
 use physics::emission::leisure::*;
 use physics::emission::spectrum::SoundPower;
@@ -24,6 +28,9 @@ const CELL_M: f64 = 75.0;
 const DEFAULT_RANGE_AREA_M2: f64 = 10_000.0;
 /// dev4 `geometry_kind` of a line row (raceways and tracks).
 const LINE_GEOMETRY: u8 = 2;
+/// Street parking shares the trip ends of the cells within this many cells of its own (cells of
+/// about 200 m: 3 x 3 of them) with the street parking spaces there.
+const STREET_PARKING_REACH_CELLS: usize = 1;
 
 /// One `leisure.arrow` row as the conversion reads it; tags are kept for shooting ranges only.
 pub struct LeisureRow {
@@ -90,8 +97,50 @@ fn class_label(class: u8) -> &'static str {
     }
 }
 
-/// Converts the leisure rows of one dev4 square; returns how many rows emit.
-pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<usize, String> {
+/// A car park's spaces from its area.
+fn parking_spaces(row: &LeisureRow, area_m2: f64) -> f64 {
+    leisure_profile(row.class)
+        .and_then(|profile| profile.m2_per_parking_space)
+        .map_or(0.0, |per_space| area_m2 / per_space)
+}
+
+/// The street parking of a square against the trip ends of its buildings (`grid`).
+struct StreetParking {
+    grid: Vec<f32>,
+    /// Street parking spaces per cell.
+    spaces: Vec<f64>,
+}
+
+impl StreetParking {
+    fn around(values: impl Fn(usize) -> f64, (row, column): (usize, usize)) -> f64 {
+        let reach = STREET_PARKING_REACH_CELLS;
+        let mut sum = 0.0;
+        for r in row.saturating_sub(reach)..=(row + reach).min(GRID_SIDE - 1) {
+            for c in column.saturating_sub(reach)..=(column + reach).min(GRID_SIDE - 1) {
+                sum += values(r * GRID_SIDE + c);
+            }
+        }
+        sum
+    }
+
+    /// The share of the car-park rate a street parking of `spaces` at `cell` carries: the
+    /// trip ends around over the movements all the spaces around would make, at most 1.
+    fn share(&self, cell: (usize, usize), spaces: f64) -> f64 {
+        let trips = Self::around(|k| f64::from(self.grid[k]), cell);
+        let around = Self::around(|k| self.spaces[k], cell).max(spaces);
+        let ceiling = trips * spaces / around;
+        (ceiling / (spaces * PARKING_MOVEMENTS_PER_SPACE_DAY)).min(1.0)
+    }
+}
+
+/// Converts the leisure rows of one dev4 square, street parking bound by the trip ends of the
+/// square's buildings under `traffic` when given; returns how many rows emit.
+pub fn convert(
+    dev4: &Dev4,
+    square: Square,
+    traffic: Option<&std::path::Path>,
+    out: &mut Vec<Converted>,
+) -> Result<usize, String> {
     let Some(table) = dev4.table(square, "leisure.arrow")? else {
         return Ok(0);
     };
@@ -99,13 +148,45 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
     for (key, value) in [("grid", "z30"), ("leisure_contract", "leisure_v5")] {
         require_stamp(&table, key, value).map_err(context)?;
     }
-    let mut emitting = 0;
+    let mut rows = Vec::new();
     for batch in &table.batches {
-        let rows = read_batch(batch).map_err(context)?;
+        rows.extend(read_batch(batch).map_err(context)?);
+    }
+    let street_parking = match traffic {
+        Some(dir) => crate::traffic::read(dir, square)?.map(|traffic| {
+            let mut spaces = vec![0.0; GRID_SIDE * GRID_SIDE];
+            for row in rows.iter().filter(|row| row.class == CAR_PARK_STREET) {
+                if let Some((_, area_m2)) = row_emission(row) {
+                    let (r, c) = grid_cell(square, row.centroid);
+                    spaces[r * GRID_SIDE + c] += parking_spaces(row, area_m2);
+                }
+            }
+            StreetParking {
+                grid: traffic.grid,
+                spaces,
+            }
+        }),
+        None => None,
+    };
+    let mut emitting = 0;
+    {
         for row in rows {
-            let Some((sound, area_m2)) = row_emission(&row) else {
+            let Some((mut sound, area_m2)) = row_emission(&row) else {
                 continue;
             };
+            let spaces = parking_spaces(&row, area_m2);
+            let mut movements = spaces * PARKING_MOVEMENTS_PER_SPACE_DAY;
+            if let (CAR_PARK_STREET, Some(parking)) = (row.class, street_parking.as_ref()) {
+                let share = parking.share(grid_cell(square, row.centroid), spaces);
+                if share <= 0.0 {
+                    continue;
+                }
+                sound.day_dba += 10.0 * share.log10();
+                movements *= share;
+                if sound.day_dba < AUDIBILITY_FLOOR_DBA {
+                    continue;
+                }
+            }
             let site = Site {
                 centroid: z30_corner_degrees(row.centroid.0, row.centroid.1),
                 ring: row.area_ring(),
@@ -123,15 +204,28 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
                 footprint_id: 0,
                 group_key: group_key(&["leisure", &row.osm_kind, &row.osm_id.to_string()]),
                 emission: sound.band_levels_db(),
-                display: json!([
-                    row.name,
-                    class_label(row.class),
-                    0.0,
-                    0,
-                    area_m2.round(),
-                    "",
-                    decibels
-                ])
+                display: if spaces > 0.0 {
+                    json!([
+                        row.name,
+                        class_label(row.class),
+                        0.0,
+                        0,
+                        area_m2.round(),
+                        "",
+                        decibels,
+                        movements.round()
+                    ])
+                } else {
+                    json!([
+                        row.name,
+                        class_label(row.class),
+                        0.0,
+                        0,
+                        area_m2.round(),
+                        "",
+                        decibels
+                    ])
+                }
                 .to_string(),
             };
             push_site_points(&site_points(&site), area_m2, &attribute, out);

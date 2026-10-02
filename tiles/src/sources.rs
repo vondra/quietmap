@@ -122,6 +122,7 @@ pub fn display_fields(layer: Layer) -> &'static [&'static str] {
             "area_m2",
             "address",
             "sound_power_dba",
+            "movements_per_day",
         ],
         Layer::Ship => &[
             "source_type",
