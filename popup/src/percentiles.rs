@@ -4,11 +4,13 @@
 //! the speed), trains on a track (the period's trains over its hours, over the speed), airport
 //! movements on an aeroway (at taxi speed); the flights heard one more line at the boxes'
 //! energy-weighted lambda; industry, buildings, ships and the unlisted remainder steady at their
-//! mean. The sum's distribution is drawn by a simulation seeded by the click, each line's draws
-//! stratified (one in each 1/DRAWS of its probability, in a shuffled order) and the lines taken in
-//! a fixed order, so that a click gives the same levels every time and the loudest line's own
-//! quantiles come out nearly exact. The same traffic tells how a contributor is heard: its passes
-//! per hour, and whether at its distance they run together into a steady sound.
+//! mean. A road's flow follows the hours of the day within each period (measured hourly profiles:
+//! a night's 3 am carries a fifth of its mean), all roads the same hour of a draw. The sum's
+//! distribution is drawn by a simulation seeded by the click, each line's draws stratified (one in
+//! each 1/DRAWS of its probability, in a shuffled order) and the lines taken in a fixed order, so
+//! that a click gives the same levels every time and the loudest line's own quantiles come out
+//! nearly exact. The same traffic tells how a contributor is heard: its passes per hour, and
+//! whether at its distance they run together into a steady sound.
 
 use crate::selection::LayerSelection;
 use physics::bands::{PERIOD_HOURS, PERIODS};
@@ -24,6 +26,38 @@ const FLUCTUATING_SHARE_MIN: f64 = 1e-4;
 /// roads (the sources builder's).
 const MOTORWAY_PERIOD_SHARES: [f64; PERIODS] = [0.65, 0.20, 0.15];
 const OTHER_PERIOD_SHARES: [f64; PERIODS] = [0.70, 0.18, 0.12];
+/// Each hour's share of a road's daily vehicles (hour 0 is 00-01): medians of Baden-Wuerttemberg's
+/// permanent counters over 2025, all days (121 Autobahn, 74 Bundesstrasse and 47 Landesstrasse
+/// stations, mobidata-bw.de `stundenwerte_dauerzaehlstellen`): motorways and trunks, primary roads,
+/// every other road.
+const HOURLY_SHARES: [[f64; 24]; 3] = [
+    [
+        0.01309, 0.00918, 0.00785, 0.00838, 0.01246, 0.02353, 0.03973, 0.05108, 0.05364, 0.05517,
+        0.05799, 0.05978, 0.06152, 0.06281, 0.06338, 0.06522, 0.06718, 0.06558, 0.05905, 0.04848,
+        0.03909, 0.03131, 0.02568, 0.01881,
+    ],
+    [
+        0.00684, 0.00423, 0.00330, 0.00331, 0.00691, 0.02047, 0.04139, 0.05610, 0.05161, 0.05350,
+        0.05888, 0.06151, 0.06501, 0.06797, 0.07131, 0.07483, 0.08065, 0.07760, 0.06261, 0.04433,
+        0.03251, 0.02441, 0.01922, 0.01150,
+    ],
+    [
+        0.00545, 0.00336, 0.00242, 0.00236, 0.00555, 0.02012, 0.03996, 0.05863, 0.05247, 0.05348,
+        0.05843, 0.06219, 0.06493, 0.06839, 0.07266, 0.07679, 0.08515, 0.08071, 0.06255, 0.04356,
+        0.03107, 0.02300, 0.01719, 0.00958,
+    ],
+];
+/// The first hour of each period (END: day 07-19, evening 19-23, night 23-07).
+const PERIOD_FIRST_HOUR: [usize; PERIODS] = [7, 19, 23];
+
+/// A road's flow in the `slot`th hour of `period` against its mean over the period, by its profile.
+fn hour_factor(profile: usize, period: usize, slot: usize) -> f64 {
+    let hours = PERIOD_HOURS[period] as usize;
+    let share = |slot: usize| HOURLY_SHARES[profile][(PERIOD_FIRST_HOUR[period] + slot) % 24];
+    let mean = (0..hours).map(share).sum::<f64>() / hours as f64;
+    share(slot) / mean
+}
+
 /// Airport movements taxi and roll at about 20 kt on average (m/s).
 const MOVEMENT_SPEED_M_S: f64 = 10.0;
 /// Emitters closer than this are at this distance (m): a receiver on the line itself.
@@ -58,6 +92,8 @@ struct Line {
     energy: [f64; PERIODS],
     states: [[f64; PERIODS]; 2],
     lambda: [f64; PERIODS],
+    /// A road's hourly profile ([`HOURLY_SHARES`]); `None` keeps the period's mean every hour.
+    profile: Option<usize>,
 }
 
 impl Line {
@@ -81,6 +117,14 @@ fn number(fields: &serde_json::Value, name: &str) -> Option<f64> {
 /// a track (the period's trains over its hours), airport movements on an aeroway (at taxi speed);
 /// `None` for a steady source (or one whose fields say nothing).
 fn traffic(layer: Layer, fields: &serde_json::Value) -> Option<([f64; PERIODS], f64)> {
+    traffic_and_profile(layer, fields).map(|(per_hour, speed, _)| (per_hour, speed))
+}
+
+/// [`traffic`] and, for a road, its hourly profile by class.
+fn traffic_and_profile(
+    layer: Layer,
+    fields: &serde_json::Value,
+) -> Option<([f64; PERIODS], f64, Option<usize>)> {
     match layer {
         Layer::Road => {
             let daily: f64 = ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"]
@@ -92,15 +136,24 @@ fn traffic(layer: Layer, fields: &serde_json::Value) -> Option<([f64; PERIODS], 
                 .get("road_class")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let shares = if matches!(class, "motorway" | "trunk" | "motorway_link" | "trunk_link") {
+            let motorway = matches!(class, "motorway" | "trunk" | "motorway_link" | "trunk_link");
+            let shares = if motorway {
                 MOTORWAY_PERIOD_SHARES
             } else {
                 OTHER_PERIOD_SHARES
+            };
+            let profile = if motorway {
+                0
+            } else if matches!(class, "primary" | "primary_link") {
+                1
+            } else {
+                2
             };
             (speed > 0.0 && daily > 0.0).then(|| {
                 (
                     std::array::from_fn(|p| daily * shares[p] / PERIOD_HOURS[p]),
                     speed,
+                    Some(profile),
                 )
             })
         }
@@ -119,7 +172,7 @@ fn traffic(layer: Layer, fields: &serde_json::Value) -> Option<([f64; PERIODS], 
                         .sum();
                     trains / PERIOD_HOURS[p]
                 });
-                (per_hour, speed)
+                (per_hour, speed, None)
             })
         }
         Layer::Aircraft => {
@@ -131,6 +184,7 @@ fn traffic(layer: Layer, fields: &serde_json::Value) -> Option<([f64; PERIODS], 
                 (
                     std::array::from_fn(|p| daily * OTHER_PERIOD_SHARES[p] / PERIOD_HOURS[p]),
                     MOVEMENT_SPEED_M_S,
+                    None,
                 )
             })
         }
@@ -174,24 +228,25 @@ pub fn percentiles(
                 continue;
             }
             // Industry, buildings and ships are steady; their level still follows the weather.
-            let lambda = if matches!(
+            let (lambda, profile) = if matches!(
                 selection.layer,
                 Layer::Industry | Layer::Building | Layer::Ship
             ) {
-                [f64::INFINITY; PERIODS]
+                ([f64::INFINITY; PERIODS], None)
             } else {
-                let Some((per_hour, speed)) =
-                    fields(contributor).and_then(|f| traffic(contributor.layer, &f))
+                let Some((per_hour, speed, profile)) =
+                    fields(contributor).and_then(|f| traffic_and_profile(contributor.layer, &f))
                 else {
                     continue;
                 };
-                lambda(per_hour, speed, contributor.distance_m)
+                (lambda(per_hour, speed, contributor.distance_m), profile)
             };
             lines.push(Line {
                 key: contributor.group_key,
                 energy: contributor.energy,
                 states: contributor.states,
                 lambda,
+                profile,
             });
         }
     }
@@ -208,6 +263,7 @@ pub fn percentiles(
                 f64::INFINITY
             }
         }),
+        profile: None,
     });
     let mut random = Random::new(seed);
     let mut result = Percentiles {
@@ -234,6 +290,13 @@ pub fn percentiles(
             .iter()
             .map(|&stratum| (stratum as f64 + random.uniform()) / DRAWS as f64)
             .collect();
+        // The hour of each draw, one for all roads (the day's rhythm moves them together).
+        let hours = PERIOD_HOURS[p] as usize;
+        shuffle(&mut strata, &mut random);
+        let slots: Vec<usize> = strata
+            .iter()
+            .map(|&stratum| (stratum * hours / DRAWS).min(hours - 1))
+            .collect();
         for line in lines.iter().filter(|line| line.energy[p] > 0.0) {
             // Fisher-Yates: which stratum of this line's probability each draw takes.
             shuffle(&mut strata, &mut random);
@@ -246,7 +309,11 @@ pub fn percentiles(
                 } else {
                     line.energy[p]
                 };
-                draws[k] += mean * relative_intensity(line.lambda[p], probability);
+                let factor = line
+                    .profile
+                    .map_or(1.0, |profile| hour_factor(profile, p, slots[k]));
+                draws[k] +=
+                    mean * factor * relative_intensity(line.lambda[p] * factor, probability);
             }
         }
         draws.sort_by(f64::total_cmp);
@@ -272,7 +339,7 @@ mod tests {
     use crate::candidates::DisplayRef;
     use crate::update::Contributor;
     use physics::bands::energy;
-    use physics::percentile::exceeded_level_db;
+    use physics::percentile::{exceeded_level_db, relative_intensity};
 
     fn contributor(key: u64, layer: Layer, leq_db: f64, distance_m: f64) -> Contributor {
         Contributor {
@@ -313,26 +380,62 @@ mod tests {
         )
     }
 
-    /// One sparse road alone: its levels are the line's own quantiles (the stratified draws make
-    /// them nearly exact), far below its Leq most of the time.
+    /// One sparse road alone: its levels are the quantiles of its line over the period's hours,
+    /// each hour at its share of the day's vehicles (the stratified draws make them nearly
+    /// exact), far below its Leq most of the time.
     #[test]
-    fn a_lone_sparse_road_has_its_lines_own_levels() {
+    fn a_lone_sparse_road_has_its_lines_own_levels_over_the_hours() {
         let road = selection(Layer::Road, vec![contributor(7, Layer::Road, 40.0, 4.0)]);
         let levels = percentiles(&[road], ([0.0; PERIODS], [0.0; PERIODS]), &quiet_road, 1);
         let lambda =
             33.0 * OTHER_PERIOD_SHARES[0] / (PERIOD_HOURS[0] * 3_600.0) / (20.0 / 3.6) * 4.0;
+        let mut pooled: Vec<f64> = (0..12)
+            .flat_map(|slot| {
+                let factor = hour_factor(2, 0, slot);
+                (0..2_000).map(move |k| {
+                    energy(40.0)
+                        * factor
+                        * relative_intensity(lambda * factor, (k as f64 + 0.5) / 2_000.0)
+                })
+            })
+            .collect();
+        pooled.sort_by(f64::total_cmp);
         for (exceeded, level) in [
             (0.1, levels.l10[0]),
             (0.5, levels.l50[0]),
             (0.9, levels.l90[0]),
         ] {
-            let expected = exceeded_level_db(40.0, lambda, exceeded);
+            let at = ((1.0 - exceeded) * (pooled.len() - 1) as f64).round() as usize;
+            let expected = 10.0 * pooled[at].log10();
             assert!(
-                (level - expected).abs() < 0.3,
+                (level - expected).abs() < 0.5,
                 "{exceeded}: {level} vs {expected}"
             );
         }
         assert!(levels.l50[0] < 25.0 && levels.l10[0] > levels.l50[0]);
+    }
+
+    /// A busy road's passes run together (lambda about 12), yet its 3 am carries a fifth of the
+    /// night's mean flow: its night L90 sits several dB under its Leq, where one rate for the
+    /// whole night kept it within 1 dB (Madrid's stations read L90 4.5 dB under the model's
+    /// beyond its level offset, evidence 2026-10-02).
+    #[test]
+    fn a_busy_roads_quiet_hours_lower_its_night_l90() {
+        let road = selection(
+            Layer::Road,
+            vec![contributor(7, Layer::Road, 60.0, 2_000.0)],
+        );
+        let busy = |_: &Contributor| {
+            Some(
+                serde_json::json!({"aadt_light": 20_000.0, "speed_kmh": 50.0,
+                "road_class": "secondary"}),
+            )
+        };
+        let levels = percentiles(&[road], ([0.0; PERIODS], [0.0; PERIODS]), &busy, 4);
+        let constant_l90 = exceeded_level_db(60.0, 12.0, 0.9);
+        assert!(constant_l90 > 59.0, "{constant_l90}");
+        assert!(levels.l90[2] < 56.0, "{}", levels.l90[2]);
+        assert!(levels.l10[2] > 60.5, "{}", levels.l10[2]);
     }
 
     /// A car every half hour 4 m away is heard as passes about twice an hour by day; a
