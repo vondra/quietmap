@@ -12,6 +12,19 @@ export const QUIET_THRESHOLD_MAX = 45
 export const QUIET_THRESHOLD_DEFAULT = 35
 export const QUIET_THRESHOLD_STEP = 0.5
 
+/** The popup point's decimals in the URL: 0.1 m, so a shared link answers at the very point
+ *  clicked (at four decimals, 11 m, a click inside a building could open outside it). */
+const DETAIL_DECIMALS = 6
+
+/** The point a popup link names, as written into the URL. */
+const detailText = (position: { lat: number; lng: number }) =>
+  `${position.lat.toFixed(DETAIL_DECIMALS)},${position.lng.toFixed(DETAIL_DECIMALS)}`
+
+/** Whether two popup points are the same point of a link. */
+export function sameDetailPosition(a: { lat: number; lng: number } | null, b: { lat: number; lng: number } | null): boolean {
+  return a === b || (a != null && b != null && detailText(a) === detailText(b))
+}
+
 export interface UrlState {
   lat: number
   lng: number
@@ -112,7 +125,7 @@ function buildHash(state: UrlWrite): string {
   }
 
   if (state.detailPosition) {
-    parts.push(`d=${state.detailPosition.lat.toFixed(4)},${state.detailPosition.lng.toFixed(4)}`)
+    parts.push(`d=${detailText(state.detailPosition)}`)
   }
 
   if (state.basemap !== DEFAULT_BASEMAP) {

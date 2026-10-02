@@ -8,7 +8,7 @@ import DetailCard from './components/DetailCard'
 import LayersPanel from './components/LayersPanel'
 import MobileDetailSheet from './components/MobileDetailSheet'
 import BasemapBar from './components/BasemapBar'
-import { useUrlState, QUIET_THRESHOLD_DEFAULT, type UrlState } from './hooks/useUrlState'
+import { sameDetailPosition, useUrlState, QUIET_THRESHOLD_DEFAULT, type UrlState } from './hooks/useUrlState'
 import type { SelectedLocation } from './components/FlyToLocation'
 import type { PopupUpdate, SegmentFan } from './types/noise'
 import { topFlightKey } from './components/noise/top-flights'
@@ -175,10 +175,7 @@ export default function App() {
     handleQuietThresholdChange(next.quietThreshold)
     handleHeatmapLayersChange(next.heatmapLayers)
     handleBasemapChange(next.basemap)
-    const cur = detailPositionRef.current
-    const same = cur === next.detailPosition
-      || (cur != null && next.detailPosition != null && cur.lat.toFixed(4) === next.detailPosition.lat.toFixed(4) && cur.lng.toFixed(4) === next.detailPosition.lng.toFixed(4))
-    if (same) return
+    if (sameDetailPosition(detailPositionRef.current, next.detailPosition)) return
     handleDetailPositionChange(next.detailPosition)
   }, [handleQuietClustersChange, handleQuietThresholdChange, handleHeatmapLayersChange, handleBasemapChange, handleDetailPositionChange])
 
