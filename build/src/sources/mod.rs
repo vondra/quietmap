@@ -22,6 +22,7 @@ pub mod ship;
 pub mod tagged_speeds;
 pub mod tent;
 pub mod thai_highways;
+pub mod us_trucks;
 
 use crate::climate::Climate;
 use crate::dev4::{Dev4, Square};

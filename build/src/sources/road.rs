@@ -12,6 +12,7 @@ use super::road_traffic::{
 };
 use super::tagged_speeds::tagged_speed_kmh;
 use super::thai_highways::thai_highway;
+use super::us_trucks::us_vehicle_shares;
 use super::{Converted, Reach, group_key, split_at_tile_edges};
 use crate::climate::Temperature;
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
@@ -107,6 +108,7 @@ const BUILDING_TRAFFIC_SOURCE_ID: u16 = 30;
 const THAI_HIGHWAYS_SOURCE_ID: u16 = 31;
 /// Thailand's ISO code as the prepared rows store it.
 const THAI_ISO: u16 = u16::from_le_bytes(*b"TH");
+const US_ISO: u16 = u16::from_le_bytes(*b"US");
 /// dev4's `traffic_estimated` bits of a row whose four categories all come from a prior.
 const ALL_CATEGORIES_ESTIMATED: u8 = 15;
 /// dev4's sources whose category split is a guess, not a count: the class priors (0), the
@@ -702,9 +704,22 @@ pub fn convert(
                 let total = mean * if oneway.value(row) != 0 { 0.5 } else { 1.0 };
                 daily = shares.map(|share| share * total);
             }
+            // A US road whose vehicle types nobody counted (HPMS's national layer counts the total
+            // only) carries its state's mix on its road group in its area (VM-4).
+            let us_mix = (country.value(row) == US_ISO
+                && estimated.value(row) == ALL_CATEGORIES_ESTIMATED)
+                .then(|| {
+                    let (lat, lon) = z30_corner_degrees(middle_z30.0, middle_z30.1);
+                    us_vehicle_shares(lat, lon, class_index, built_up.value(row))
+                })
+                .flatten();
+            if let Some(shares) = us_mix {
+                let total: f64 = daily.iter().sum();
+                daily = shares.map(|share| share * total);
+            }
             // Guessed traffic takes the motorcycles of the square's counted roads, else of the
             // country's fleet (dev4 put 2 % on Vietnam's and 15 % on Thailand's class priors).
-            if row_guessed && highway.is_none() {
+            if row_guessed && highway.is_none() && us_mix.is_none() {
                 let share = motorcycles
                     .share(class_index, country.value(row))
                     .unwrap_or_else(|| country_share(country.value(row), class_index));
