@@ -52,12 +52,19 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
 - Traffic is local where data says so: the road converter keeps counted flows and splits, gives
   every guessed split the counted medians of its class (16 countries), the cars the country's
   battery-electric share (IEA, rolling noise only) and the heavy vehicles their country's limit;
-  guessed rail counts follow the country's Eurostat train-km. Where no one counted, the buildings
-  make the traffic (`qm-build traffic`): every building's daily trip ends join its nearest road
-  and travel down the local streets to the nearest main road along a shortest-path tree, so a
-  street carries what the buildings behind it make and never more than the street it drains
+  guessed rail counts follow the country's Eurostat train-km. Thailand's national highways take
+  the highway department's vehicle-km per province over their rows. Where no one counted, the
+  buildings make the traffic (`qm-build traffic`): every building (OSM's, and the Overture
+  footprints OSM lacks as buildings of unknown use) makes daily trip ends that join its nearest
+  road and travel down the local streets to the nearest main road along a shortest-path tree, so
+  a street carries what the buildings behind it make and never more than the street it drains
   into; secondary, tertiary and unclassified roads take the counted roads' relation to the trip
-  ends generated within 2-5 km (13 European countries, capped where denser cities drive less).
+  ends generated within 2-5 km (13 European countries, capped where denser cities drive less;
+  Thailand's rural road network its own counts), major roads in 20 countries a world fit on the
+  trip ends within 1, 5 and 15 km.
+- Homes emit the outdoor units their country's households own (heat pumps and air conditioners
+  per household) running the hours their climate asks for (WorldClim degree days); other
+  buildings follow the area law of their class.
 - Reading is always whole files with plain reads, all files of a ring at once, one reader per
   file (cold on NVMe 5-8x faster than mmap with MADV_WILLNEED, whose faults read 32 KB at a
   time).
