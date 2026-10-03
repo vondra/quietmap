@@ -438,6 +438,20 @@ fn road_period_shares(daily: [f64; 4], shares: &[[f64; PERIODS]; 4]) -> [f64; PE
     })
 }
 
+/// Free-flowing cars on rural single carriageways at the national limit drive at 0.845 of it:
+/// DfT's automatic counters across Great Britain, 2024 (SPE0102): 50.7 mph on 60 mph single
+/// carriageways, where motorways run at 68.4 of 70 and 30 mph roads at 29.6. The counting sites
+/// are straight, free-flowing sections, so bends and junctions only lower a road's mean further.
+const RURAL_FREE_FLOW_OF_LIMIT: f64 = 0.845;
+/// A national rural limit: this fast or faster (km/h).
+const RURAL_LIMIT_FROM_KMH: f64 = 80.0;
+
+/// Whether a row's cars drive below its limit by the rural free-flow share: a two-way rural row
+/// other than a motorway at a national rural limit.
+fn free_flows_below_limit(class_index: usize, built_up: u8, oneway: bool, limit_kmh: f64) -> bool {
+    built_up == 1 && !oneway && !matches!(class_index, 0 | 10) && limit_kmh >= RURAL_LIMIT_FROM_KMH
+}
+
 /// The speed of an untagged road: the country's legal limit for main classes (urban or rural by
 /// the row's built-up flag, unknown density keeps the class default), else the class default. A
 /// trunk in a built-up area takes the urban limit like any street there; elsewhere the country's
@@ -707,8 +721,19 @@ pub fn convert(
                 posted => (f64::from(posted), "osm_posted", Some(posted)),
             };
             // CNOSSOS-EU drives roundabouts at their legal speed and corrects the braking and
-            // pulling away (2.2.5), where dev4 capped them at 30 km/h (-4.1 dB at 50).
-            let (speed, speed_source) = (base_speed, base_source);
+            // pulling away (2.2.5), where dev4 capped them at 30 km/h (-4.1 dB at 50). The law
+            // wants the mean speed: on a rural single carriageway at a national limit free-flowing
+            // cars drive below it.
+            let (speed, speed_source) = if free_flows_below_limit(
+                class_index,
+                built_up.value(row),
+                oneway.value(row) != 0,
+                base_speed,
+            ) {
+                (base_speed * RURAL_FREE_FLOW_OF_LIMIT, "rural_free_flow")
+            } else {
+                (base_speed, base_source)
+            };
             let (a, b) = (
                 z30_corner_degrees(start_x.value(row), start_y.value(row)),
                 z30_corner_degrees(end_x.value(row), end_y.value(row)),
@@ -958,5 +983,20 @@ mod tests {
             road_period_shares([0.0; 4], &shares),
             cars.map(|s| (s * 1e3).round() / 1e3)
         );
+    }
+
+    /// A two-way rural road at a national limit runs at 0.845 of it (DfT's free-flow speeds);
+    /// motorways, one-way carriageways, towns and slower limits keep their limit.
+    #[test]
+    fn rural_roads_run_below_their_national_limit() {
+        assert!(free_flows_below_limit(4, 1, false, 90.0));
+        assert!(!free_flows_below_limit(4, 2, false, 90.0), "a town");
+        assert!(!free_flows_below_limit(0, 1, false, 130.0), "a motorway");
+        assert!(
+            !free_flows_below_limit(1, 1, true, 110.0),
+            "a dual carriageway"
+        );
+        assert!(!free_flows_below_limit(5, 1, false, 50.0), "a village lane");
+        assert!((90.0 * RURAL_FREE_FLOW_OF_LIMIT - 76.05).abs() < 1e-9);
     }
 }
