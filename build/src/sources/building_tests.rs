@@ -12,6 +12,7 @@ fn row(class: u8, height_tag_m: f64, floors: u8, ground_activity: bool) -> Build
         ring: Vec::new(),
         height_tag_m,
         floors,
+        storeys: floors,
         area_m2: Some(1_000.0),
         class,
         ground_activity,
@@ -26,10 +27,10 @@ fn row(class: u8, height_tag_m: f64, floors: u8, ground_activity: bool) -> Build
 #[test]
 fn ground_activities_emit_their_footprint_at_one_and_a_half_metres() {
     for class in [1, 3, 7] {
-        let ground = building_emission(&row(class, 0.0, 0, true)).unwrap();
+        let ground = building_emission(&row(class, 0.0, 0, true), None).unwrap();
         assert_eq!(
             ground,
-            building_emission(&row(class, 24.0, 8, true)).unwrap()
+            building_emission(&row(class, 24.0, 8, true), None).unwrap()
         );
         assert_eq!(
             (ground.source_height_m, ground.height_m, ground.floors),
@@ -38,11 +39,11 @@ fn ground_activities_emit_their_footprint_at_one_and_a_half_metres() {
         let profile = building_profile(class).unwrap();
         let expected = area_law_lw_dba(profile.lw_fixed_dba, profile.lw_per_m2_dba, 1_000.0);
         assert!((ground.sound.day_dba - expected).abs() < 1e-9);
-        let building = building_emission(&row(class, 0.0, 0, false)).unwrap();
+        let building = building_emission(&row(class, 0.0, 0, false), None).unwrap();
         assert_eq!((building.floors, building.source_height_m), (3, 4.0));
     }
     assert_eq!(
-        building_emission(&row(10, 30.0, 10, false)),
+        building_emission(&row(10, 30.0, 10, false), None),
         None,
         "sheds are silent"
     );
@@ -52,7 +53,7 @@ fn ground_activities_emit_their_footprint_at_one_and_a_half_metres() {
 #[test]
 fn source_height_is_half_the_laddered_height_under_the_tallest_building() {
     let source = |height_tag_m: f64, floors: u8| {
-        building_emission(&row(1, height_tag_m, floors, false))
+        building_emission(&row(1, height_tag_m, floors, false), None)
             .unwrap()
             .source_height_m
     };
@@ -109,6 +110,10 @@ fn batch() -> RecordBatch {
         (
             "floors",
             Arc::new(UInt8Array::from(vec![Some(4), Some(0), None, None])),
+        ),
+        (
+            "storeys",
+            Arc::new(UInt8Array::from(vec![Some(0), Some(2), None, None])),
         ),
         (
             "area_m2",
@@ -191,5 +196,60 @@ fn rows_carry_the_footprint_id_of_their_screening_outline() {
     assert_eq!(
         (rows[0].height_tag_m, rows[0].floors, rows[0].ring.len()),
         (12.0, 4, 4)
+    );
+    assert_eq!(
+        (rows[0].storeys, rows[1].storeys),
+        (4, 2),
+        "dev4's storeys, else the floors"
+    );
+}
+
+/// A home emits its dwellings' outdoor units: a 120 m2 one-storey house in Prague's climate is one
+/// dwelling (45.0 dB(A)), a 1,000 m2 four-storey block of flats fifty; a shed of 20 m2 nothing.
+#[test]
+fn homes_emit_their_dwellings_units_by_country_and_climate() {
+    let (lat, lon) = (50.0, 14.5);
+    let (cell_row, cell_column) = (
+        ((90.0 - lat) * 6.0) as usize,
+        ((lon + 180.0) * 6.0) as usize,
+    );
+    // The cells around the place hold the value, the rest of the world is sea.
+    let grid = |value: f32| {
+        let mut cells = vec![-3.4e38f32; 2_160 * 1_080];
+        for r in cell_row - 1..=cell_row + 1 {
+            cells[r * 2_160 + cell_column - 1..=r * 2_160 + cell_column + 1].fill(value);
+        }
+        cells
+            .iter()
+            .flat_map(|cell| cell.to_le_bytes())
+            .collect::<Vec<u8>>()
+    };
+    let directory = std::env::temp_dir().join(format!("qm-climate-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    for (name, value) in [("bio1.f32", 9.3), ("bio10.f32", 18.2), ("bio11.f32", 0.6)] {
+        std::fs::write(directory.join(name), grid(value)).unwrap();
+    }
+    let climate = Climate::load(&directory).unwrap();
+    std::fs::remove_dir_all(&directory).unwrap();
+    let cz = u16::from_le_bytes(*b"CZ");
+    let at = crate::dev4::degrees_to_z30(lat, lon);
+    let home = |class: u8, storeys: u8, area: f64| {
+        let mut home = row(class, 0.0, storeys, false);
+        (home.storeys, home.area_m2, home.centroid) = (storeys, Some(area), at);
+        building_emission(&home, Some((cz, &climate))).map(|emission| emission.sound.day_dba)
+    };
+    let house = home(0, 1, 120.0).unwrap();
+    assert!((house - 45.0).abs() < 0.2, "{house}");
+    let flats = home(0, 4, 1_000.0).unwrap();
+    assert!(
+        (flats - house - 10.0 * 50f64.log10()).abs() < 1e-9,
+        "{flats}"
+    );
+    assert_eq!(home(0, 1, 20.0), None, "a shed");
+    let shop = row(1, 0.0, 2, false);
+    assert_eq!(
+        building_emission(&shop, Some((cz, &climate))),
+        building_emission(&shop, None),
+        "other classes keep the area law"
     );
 }

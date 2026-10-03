@@ -72,6 +72,19 @@ impl Dev4 {
     pub fn table(&self, square: Square, name: &str) -> Result<Option<Table>, String> {
         read_table(&self.prepared_file(square, name))
     }
+
+    /// The square's country (ISO 3166 alpha-2, little-endian) from dev4's 13-byte
+    /// `square-country-city.bin` (Morton id u64, continent u8, country u16, city u16): the country
+    /// at its centre, else the most of its interior; 0 when unknown or the square has no record.
+    pub fn square_country(&self, square: Square) -> Result<u16, String> {
+        let path = self.prepared_file(square, "square-country-city.bin");
+        match std::fs::read(&path) {
+            Ok(bytes) if bytes.len() == 13 => Ok(u16::from_le_bytes([bytes[9], bytes[10]])),
+            Ok(bytes) => Err(format!("{}: {} bytes, not 13", path.display(), bytes.len())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(error) => Err(format!("{}: {error}", path.display())),
+        }
+    }
 }
 
 pub fn read_table(path: &Path) -> Result<Option<Table>, String> {

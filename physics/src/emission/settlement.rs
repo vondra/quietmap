@@ -1,6 +1,8 @@
 //! Buildings as sources (dev4 settlement v3, not a standard): a fixed plant term plus a term per
 //! square metre of gross floor area, `L_W = 10 lg(10^(fixed/10) + GFA 10^(per_m2/10))`, per
-//! building class. The same area law serves the open-air leisure areas.
+//! building class. The same area law serves the open-air leisure areas. Homes instead carry the
+//! outdoor units their country's households own, each running its climate's share of the hours:
+//! [`plant_sound_power`].
 
 use super::spectrum::SoundPower;
 use crate::bands::BANDS;
@@ -124,6 +126,44 @@ pub fn building_profile(class: u8) -> Option<BuildingProfile> {
     })
 }
 
+/// Homes: the residential classes, whose plant is their dwellings' outdoor units.
+pub fn is_home(class: u8) -> bool {
+    matches!(class, 0 | HOUSE) || class > HOSPITALITY
+}
+
+/// One use of a home's outdoor units: units per dwelling (households owning one times units per
+/// household), the share of the hours they run by day, evening and night, and their sound power
+/// while running (dB(A)).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlantUse {
+    pub units_per_dwelling: f64,
+    pub running: [f64; 3],
+    pub lw_dba: f64,
+}
+
+/// The expected sound power of `dwellings` homes' outdoor units, the energy over the year of each
+/// use's running hours (an air-source heat pump heating, an air conditioner cooling); `None` when
+/// nothing runs.
+pub fn plant_sound_power(uses: &[PlantUse], dwellings: f64) -> Option<SoundPower> {
+    let energy = |period: usize| {
+        dwellings
+            * uses
+                .iter()
+                .map(|u| u.units_per_dwelling * u.running[period] * 10f64.powf(u.lw_dba / 10.0))
+                .sum::<f64>()
+    };
+    let [day, evening, night] = [energy(0), energy(1), energy(2)];
+    if day <= 0.0 || evening <= 0.0 || night <= 0.0 {
+        return None;
+    }
+    Some(SoundPower {
+        day_dba: 10.0 * day.log10(),
+        spectrum_db: RESIDENTIAL_PLANT,
+        evening_offset_db: 10.0 * (evening / day).log10(),
+        night_offset_db: 10.0 * (night / day).log10(),
+    })
+}
+
 /// The shared area law (dB(A)): a fixed floor plus `lw_per_m2_dba` over `area_m2`.
 pub fn area_law_lw_dba(lw_fixed_dba: f64, lw_per_m2_dba: f64, area_m2: f64) -> f64 {
     10.0 * (10f64.powf(lw_fixed_dba / 10.0) + area_m2 * 10f64.powf(lw_per_m2_dba / 10.0)).log10()
@@ -181,6 +221,30 @@ mod tests {
             day(0, 1_000.0, 1),
             "unknown floors count one"
         );
+    }
+
+    /// Units times running share times the running level, summed per period over the uses and
+    /// the dwellings: a heat pump running 0.5 of the hours at 60 dB(A) in 6 % of 10 homes is
+    /// 10 lg(10 x 0.06 x 0.5 x 10^6) = 54.8 dB(A).
+    #[test]
+    fn homes_emit_their_units_running_hours() {
+        let heating = PlantUse {
+            units_per_dwelling: 0.06,
+            running: [0.5; 3],
+            lw_dba: 60.0,
+        };
+        let plant = plant_sound_power(&[heating], 10.0).unwrap();
+        assert!((plant.day_dba - 54.77).abs() < 0.01, "{}", plant.day_dba);
+        assert_eq!((plant.evening_offset_db, plant.night_offset_db), (0.0, 0.0));
+        let cooling = PlantUse {
+            units_per_dwelling: 1.0,
+            running: [0.22, 0.3, 0.12],
+            lw_dba: 62.0,
+        };
+        let plant = plant_sound_power(&[cooling], 1.0).unwrap();
+        assert!((plant.night_offset_db - 10.0 * (0.12f64 / 0.22).log10()).abs() < 1e-9);
+        assert_eq!(plant_sound_power(&[], 1.0), None);
+        assert!(is_home(0) && is_home(HOUSE) && is_home(20) && !is_home(1) && !is_home(SILENT));
     }
 
     /// Food retail refrigerates all night and spans at least 12 dB from a kiosk to a hypermarket;

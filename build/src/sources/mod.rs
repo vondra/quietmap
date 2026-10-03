@@ -4,6 +4,7 @@
 
 pub mod airport;
 pub mod building;
+pub mod building_plant;
 pub mod bus;
 pub mod cells;
 pub mod country_speeds;
@@ -22,7 +23,7 @@ pub mod tagged_speeds;
 pub mod tent;
 pub mod thai_highways;
 
-use crate::climate::Temperature;
+use crate::climate::Climate;
 use crate::dev4::{Dev4, Square};
 use crate::output::write_tile;
 use rayon::prelude::*;
@@ -145,7 +146,7 @@ pub fn group_key(parts: &[&str]) -> u64 {
 /// square also converts its neighbours and keeps the sources its own tiles own (industry reads the
 /// neighbours itself, for its facility joins). Returns the number of tiles written.
 pub fn build(
-    (dev4, temperature, network): (&Dev4, &Temperature, &FreightNetwork),
+    (dev4, climate, network): (&Dev4, &Climate, &FreightNetwork),
     (airport_traffic, road_traffic, bus): (&Path, Option<&Path>, Option<&bus::BusRoutes>),
     squares: &[Square],
     out: &Path,
@@ -160,7 +161,7 @@ pub fn build(
         .par_iter()
         .map(|&square| {
             build_square(
-                (dev4, temperature, network),
+                (dev4, climate, network),
                 (airport_traffic, road_traffic, bus),
                 square,
                 out,
@@ -171,7 +172,7 @@ pub fn build(
 
 /// The sources tiles of one square (the squares build in parallel, each within its own memory).
 fn build_square(
-    (dev4, temperature, network): (&Dev4, &Temperature, &FreightNetwork),
+    (dev4, climate, network): (&Dev4, &Climate, &FreightNetwork),
     (airport_traffic, road_traffic, bus): (&Path, Option<&Path>, Option<&bus::BusRoutes>),
     square: Square,
     out: &Path,
@@ -182,14 +183,14 @@ fn build_square(
     for neighbour in square.with_neighbours() {
         let road_reach = (neighbour != square).then_some(reach);
         road::convert(
-            (dev4, temperature, road_traffic, bus),
+            (dev4, &climate.mean, road_traffic, bus),
             neighbour,
             road_reach,
             &mut converted,
         )?;
         rail::convert((dev4, network), neighbour, &mut converted)?;
         leisure::convert(dev4, neighbour, road_traffic, &mut converted)?;
-        building::convert(dev4, neighbour, &mut converted)?;
+        building::convert(dev4, climate, neighbour, &mut converted)?;
         ship::convert(dev4, neighbour, &mut converted)?;
         airport::convert(airport_traffic, neighbour, &mut converted)?;
         converted.retain(owned);

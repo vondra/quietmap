@@ -1,20 +1,24 @@
 //! Buildings of dev4's `structures.arrow` (kind 0 rows with an OSM id) as sources: the settlement
-//! area law over the gross floor area, at half the building's height (its height tag, else floors
-//! x 3 m, else 8 m) or 1.5 m for a ground activity (an emission-only area); cells of 30 m above
-//! 2,000 m2. Each carries the id of its screening footprint, so it never screens itself.
+//! area law over the gross floor area, homes their dwellings' outdoor units by country and climate
+//! (`building_plant`), at half the building's height (its height tag, else floors x 3 m, else 8 m)
+//! or 1.5 m for a ground activity (an emission-only area); cells of 30 m above 2,000 m2. Each
+//! carries the id of its screening footprint, so it never screens itself.
 
+use super::building_plant::dwelling_plant;
 use super::cells::{
     AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
 };
 use super::{Converted, group_key};
+use crate::climate::Climate;
 use crate::dev4::{Dev4, Square, cell, column, positive, require_stamp, text, z30_corner_degrees};
 use crate::screening::BUILDING_HEIGHT_MAX_M;
 use crate::structures::footprint_id;
+use crate::traffic::building_load;
 use arrow_array::{
     Array, BinaryArray, Float32Array, Int32Array, Int64Array, RecordBatch, StringArray, UInt8Array,
     UInt32Array,
 };
-use physics::emission::settlement::building_sound_power;
+use physics::emission::settlement::{building_sound_power, is_home, plant_sound_power};
 use physics::emission::spectrum::SoundPower;
 use serde_json::json;
 use tiles::sources::{Attribute, GROUND_FROM_TERRAIN, Layer};
@@ -41,6 +45,8 @@ pub struct BuildingRow {
     pub height_tag_m: f64,
     /// The mapped floor count, 0 when none.
     pub floors: u8,
+    /// dev4's storeys for the dwellings (its demand storeys, else the floors), 0 when none.
+    pub storeys: u8,
     pub area_m2: Option<f64>,
     pub class: u8,
     pub ground_activity: bool,
@@ -59,8 +65,12 @@ pub struct BuildingEmission {
     pub area_m2: f64,
 }
 
-/// A building's emission; `None` for silent classes and inaudible levels.
-pub fn building_emission(row: &BuildingRow) -> Option<BuildingEmission> {
+/// A building's emission, a home's from the outdoor units of its dwellings in `country_iso` under
+/// its climate (`None`: the old area law); `None` for silent classes and inaudible levels.
+pub fn building_emission(
+    row: &BuildingRow,
+    home_plant: Option<(u16, &Climate)>,
+) -> Option<BuildingEmission> {
     let (height_m, floors) = if row.ground_activity {
         (0.0, 0)
     } else {
@@ -80,7 +90,15 @@ pub fn building_emission(row: &BuildingRow) -> Option<BuildingEmission> {
         (height_m, floors)
     };
     let area_m2 = resolve_area_m2(row.area_m2, &row.ring, DEFAULT_FOOTPRINT_M2);
-    let sound = building_sound_power(row.class, area_m2, floors)?;
+    let sound = match home_plant.filter(|_| is_home(row.class)) {
+        Some((country_iso, climate)) => {
+            let (dwellings, _) = building_load(row.class, row.storeys.max(1), row.area_m2);
+            let (lat, lon) = z30_corner_degrees(row.centroid.0, row.centroid.1);
+            let uses = dwelling_plant(country_iso, climate.degree_days(lat, lon));
+            plant_sound_power(&uses, dwellings)?
+        }
+        None => building_sound_power(row.class, area_m2, floors)?,
+    };
     let source_height_m = if row.ground_activity {
         GROUND_ACTIVITY_SOURCE_HEIGHT_M
     } else {
@@ -116,10 +134,16 @@ fn class_label(class: u8) -> &'static str {
 }
 
 /// Converts the building rows of one dev4 square; returns how many rows emit.
-pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<usize, String> {
+pub fn convert(
+    dev4: &Dev4,
+    climate: &Climate,
+    square: Square,
+    out: &mut Vec<Converted>,
+) -> Result<usize, String> {
     let Some(table) = dev4.table(square, "structures.arrow")? else {
         return Ok(0);
     };
+    let country_iso = dev4.square_country(square)?;
     let context = |error: String| format!("structures.arrow of {square:?}: {error}");
     for (key, value) in [("grid", "z30"), ("structures_contract", "structures_v5")] {
         require_stamp(&table, key, value).map_err(context)?;
@@ -127,7 +151,7 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
     let mut emitting = 0;
     for batch in &table.batches {
         for row in read_batch(batch, square).map_err(context)? {
-            let Some(emission) = building_emission(&row) else {
+            let Some(emission) = building_emission(&row, Some((country_iso, climate))) else {
                 continue;
             };
             let site = Site {
@@ -167,7 +191,7 @@ pub fn convert(dev4: &Dev4, square: Square, out: &mut Vec<Converted>) -> Result<
 
 fn read_batch(batch: &RecordBatch, square: Square) -> Result<Vec<BuildingRow>, String> {
     let bytes = |name: &str| column::<UInt8Array>(batch, name);
-    let (kinds, floors) = (bytes("kind")?, bytes("floors")?);
+    let (kinds, floors, storeys) = (bytes("kind")?, bytes("floors")?, bytes("storeys")?);
     let (classes, height_sources) = (bytes("building_type")?, bytes("height_source")?);
     let integers = |name: &str| column::<Int32Array>(batch, name);
     let centroid = [integers("centroid_gx")?, integers("centroid_gy")?];
@@ -214,6 +238,10 @@ fn read_batch(batch: &RecordBatch, square: Square) -> Result<Vec<BuildingRow>, S
             ring: ring_cell(rings, row),
             height_tag_m: positive(heights, row).unwrap_or(0.0),
             floors: cell(floors, row).unwrap_or(0),
+            storeys: cell(storeys, row)
+                .filter(|&count| count > 0)
+                .or_else(|| cell(floors, row))
+                .unwrap_or(0),
             area_m2: positive(areas, row),
             class: cell(classes, row).unwrap_or(0),
             ground_activity: cell(height_sources, row) == Some(HEIGHT_SOURCE_GROUND_ACTIVITY),

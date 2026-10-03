@@ -329,7 +329,7 @@ const HOUSE_UP_TO_STOREYS: u8 = 3;
 /// for homes, else trips per 100 m2 (gross floor area or footprint) between a floor and a cap
 /// (ITE rates damped x0.3 outside US suburbs), fixed trips for small fixtures, none for sheds;
 /// a building of unknown use is a shed, a house or flats by its size.
-fn building_load(building_type: u8, storeys: u8, area_m2: Option<f64>) -> (f64, f64) {
+pub(crate) fn building_load(building_type: u8, storeys: u8, area_m2: Option<f64>) -> (f64, f64) {
     let footprint = area_m2.unwrap_or(100.0);
     let gfa = footprint * f64::from(storeys.max(1));
     let dwellings =
