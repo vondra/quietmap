@@ -11,6 +11,7 @@ use super::road_traffic::{
     BUS_SERVICE_BY_BUILT_UP, BuildingTraffic, local_km, thai_rural_road_ref,
 };
 use super::tagged_speeds::tagged_speed_kmh;
+use super::thai_highways::thai_highway;
 use super::{Converted, Reach, group_key, split_at_tile_edges};
 use crate::climate::Temperature;
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
@@ -102,6 +103,10 @@ const PRIOR_SOURCE_ID: u16 = 0;
 const SERVICE_TREE_SOURCE_ID: u16 = 11;
 /// The source id this converter gives a row whose traffic the buildings model.
 const BUILDING_TRAFFIC_SOURCE_ID: u16 = 30;
+/// The source id of a Thai national highway's row carrying the department's counts.
+const THAI_HIGHWAYS_SOURCE_ID: u16 = 31;
+/// Thailand's ISO code as the prepared rows store it.
+const THAI_ISO: u16 = u16::from_le_bytes(*b"TH");
 /// dev4's `traffic_estimated` bits of a row whose four categories all come from a prior.
 const ALL_CATEGORIES_ESTIMATED: u8 = 15;
 /// dev4's sources whose category split is a guess, not a count: the class priors (0), the
@@ -651,6 +656,14 @@ pub fn convert(
                 ((i64::from(start_x.value(row)) + i64::from(end_x.value(row))) / 2) as i32,
                 ((i64::from(start_y.value(row)) + i64::from(end_y.value(row))) / 2) as i32,
             );
+            // A Thai national highway carries the department's vehicle-km, spread along it by the
+            // world model (its own shares of every category, motorcycles and buses counted).
+            let highway = (row_guessed
+                && country.value(row) == THAI_ISO
+                && built_up.value(row) == 1
+                && matches!(class_index, 0 | 1 | 2 | 10 | 11 | 12))
+            .then(|| thai_highway(refs.value(row)))
+            .flatten();
             let modelled = building_traffic
                 .as_ref()
                 .filter(|_| row_guessed)
@@ -681,16 +694,24 @@ pub fn convert(
                     estimated.value(row),
                 ),
             };
+            // A Thai national highway's major rows outside built-up areas carry the department's
+            // mean traffic of the highway and its shares of every category (motorcycles and buses
+            // counted). Its towns' sections keep their estimates: a city street's ref may name
+            // only an interchange, and a town's mix of vehicles is not the highway's.
+            if let Some(&(_, _, mean, shares)) = highway {
+                let total = mean * if oneway.value(row) != 0 { 0.5 } else { 1.0 };
+                daily = shares.map(|share| share * total);
+            }
             // Guessed traffic takes the motorcycles of the square's counted roads, else of the
             // country's fleet (dev4 put 2 % on Vietnam's and 15 % on Thailand's class priors).
-            if row_guessed {
+            if row_guessed && highway.is_none() {
                 let share = motorcycles
                     .share(class_index, country.value(row))
                     .unwrap_or_else(|| country_share(country.value(row), class_index));
                 daily = with_motorcycles(daily, share);
             }
             // Buses on an uncounted row: two-axle city buses medium, a third articulated heavy.
-            if let Some(bus) = bus.filter(|_| row_guessed) {
+            if let Some(bus) = bus.filter(|_| row_guessed && highway.is_none()) {
                 let service = building_traffic.as_ref().map_or(
                     BUS_SERVICE_BY_BUILT_UP[usize::from(built_up.value(row).min(2))],
                     |traffic| traffic.bus_service(middle_z30),
@@ -816,7 +837,9 @@ pub fn convert(
                 lanes.value(row),
                 oneway.value(row) != 0,
                 bridge.value(row),
-                if modelled.is_some() {
+                if highway.is_some() {
+                    THAI_HIGHWAYS_SOURCE_ID
+                } else if modelled.is_some() {
                     BUILDING_TRAFFIC_SOURCE_ID
                 } else {
                     source_id.value(row)

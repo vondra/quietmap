@@ -250,6 +250,33 @@ impl BuildingTraffic {
         }))
     }
 
+    /// The world major-road model's daily traffic of a row: a motorway, trunk, primary road or
+    /// link by its group, any other class as a primary road.
+    pub fn major_prediction(
+        &self,
+        middle: (i32, i32),
+        (class, built_up, oneway, lanes): (u8, u8, bool, u8),
+    ) -> f64 {
+        let model = &MAJOR_MODELS[major_group(class).unwrap_or(2)];
+        let intercept = match built_up {
+            1 => model.intercept[0],
+            URBAN => model.intercept[1],
+            _ => 0.5 * (model.intercept[0] + model.intercept[1]),
+        };
+        let density: f64 = MAJOR_RADII_M
+            .iter()
+            .zip(model.slopes)
+            .map(|(&radius, slope)| slope * (self.surroundings.around(middle, radius) + 100.0).ln())
+            .sum();
+        let lanes_term = if lanes > 0 {
+            MAJOR_LN_LANES * f64::from(lanes).ln()
+        } else {
+            MAJOR_LANES_UNKNOWN
+        };
+        let oneway_term = if oneway { MAJOR_ONEWAY } else { 0.0 };
+        (intercept + density + lanes_term + oneway_term).exp()
+    }
+
     /// The modelled daily total of a row whose traffic dev4 guessed, `None` to keep the guess:
     /// `class` (dev4 code), `built_up` (0 unknown, 1 rural, 2 urban), `middle` (z30).
     /// `prior` tells a class prior (no dataset) from a country default or classification
@@ -300,30 +327,11 @@ impl BuildingTraffic {
                     .exp()
             })
         };
-        if let Some(group) = major_group(class) {
+        if major_group(class).is_some() {
             if !(prior && MAJOR_MODEL_COUNTRIES.contains(&iso)) {
                 return None;
             }
-            let model = &MAJOR_MODELS[group];
-            let intercept = match built_up {
-                1 => model.intercept[0],
-                URBAN => model.intercept[1],
-                _ => 0.5 * (model.intercept[0] + model.intercept[1]),
-            };
-            let density: f64 = MAJOR_RADII_M
-                .iter()
-                .zip(model.slopes)
-                .map(|(&radius, slope)| {
-                    slope * (self.surroundings.around(middle, radius) + 100.0).ln()
-                })
-                .sum();
-            let lanes_term = if lanes > 0 {
-                MAJOR_LN_LANES * f64::from(lanes).ln()
-            } else {
-                MAJOR_LANES_UNKNOWN
-            };
-            let oneway_term = if oneway { MAJOR_ONEWAY } else { 0.0 };
-            return Some((intercept + density + lanes_term + oneway_term).exp());
+            return Some(self.major_prediction(middle, (class, built_up, oneway, lanes)));
         }
         let models: &[MainModel] = if thai_rural_road && iso == *b"TH" {
             &THAI_RURAL_ROAD_MODELS

@@ -20,6 +20,7 @@ pub mod road_traffic;
 pub mod ship;
 pub mod tagged_speeds;
 pub mod tent;
+pub mod thai_highways;
 
 use crate::climate::Temperature;
 use crate::dev4::{Dev4, Square};
