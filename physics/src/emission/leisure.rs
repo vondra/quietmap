@@ -146,9 +146,14 @@ pub fn leisure_profile(class: u8) -> Option<LeisureProfile> {
 pub fn leisure_sound_power(class: u8, area_m2: f64) -> Option<SoundPower> {
     let profile = leisure_profile(class)?;
     let counted_m2 = area_m2.min(profile.area_cap_m2);
-    // Parkplatzlaermstudie Formula 3: K_D = 2.5 lg(B - 9) above ten spaces.
+    // Parkplatzlaermstudie Formula 3: K_D = 2.5 lg(B - 9) above ten spaces, the driving on a
+    // lot's aisles while looking for a space. On a street that driving is the street's own traffic
+    // (the road layer carries every trip end of the buildings around), so a street strip has only
+    // the parking itself: manoeuvres, doors and starts.
     let searching_traffic_db = match profile.m2_per_parking_space {
-        Some(per_space) if area_m2 / per_space > 10.0 => 2.5 * (area_m2 / per_space - 9.0).log10(),
+        Some(per_space) if class != CAR_PARK_STREET && area_m2 / per_space > 10.0 => {
+            2.5 * (area_m2 / per_space - 9.0).log10()
+        }
         _ => 0.0,
     };
     Some(SoundPower {

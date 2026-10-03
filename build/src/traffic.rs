@@ -586,6 +586,58 @@ fn read_buildings(dev4: &Dev4, square: Square) -> Result<Vec<BuildingLoad>, Stri
     Ok(buildings)
 }
 
+/// The share of households whose cars park on the street at home, in houses (up to four
+/// dwellings to a building) and in blocks of flats. Dwellings relying on street parking in the
+/// English Housing Survey 2009 (Figure 3.7): rural 6 %, rural residential 15 %, village centre
+/// 17 %, suburban residential 28 %, other urban centre 59 %, city centre 52 %; cars parked on the
+/// street at home in MiD 2017 (Figure 47): villages and small towns 8-11 %, metropolises 49 %.
+/// Houses take the rural residential areas' share, flats the urban centres'; visits to shops and
+/// offices the flats'.
+const STREET_PARKING_HOUSES: f64 = 0.15;
+const STREET_PARKING_FLATS: f64 = 0.55;
+const HOUSE_UP_TO_DWELLINGS: f64 = 4.0;
+
+/// A building's weight among its cell's trip ends (dwellings, or visits in dwellings' worth) and
+/// the share of them made by cars that park on the street.
+fn street_parking_weight(building: &BuildingLoad) -> (f64, f64) {
+    if building.dwellings > 0.0 {
+        let share = if building.dwellings <= HOUSE_UP_TO_DWELLINGS {
+            STREET_PARKING_HOUSES
+        } else {
+            STREET_PARKING_FLATS
+        };
+        (building.dwellings, share)
+    } else {
+        (
+            building.trips / WORLD_TRIPS_PER_DWELLING,
+            STREET_PARKING_FLATS,
+        )
+    }
+}
+
+/// Per grid cell of a square: the share of its buildings' trip ends made by cars that park on
+/// the street, dwellings and visits weighed alike; the flats' share in a cell without buildings.
+pub fn street_parking_shares(dev4: &Dev4, square: Square) -> Result<Vec<f32>, String> {
+    let mut cells = vec![(0.0f64, 0.0f64); GRID_SIDE * GRID_SIDE];
+    for building in read_buildings(dev4, square)? {
+        let (row, column) = grid_cell(square, building.at);
+        let (weight, share) = street_parking_weight(&building);
+        let cell = &mut cells[row * GRID_SIDE + column];
+        cell.0 += weight;
+        cell.1 += weight * share;
+    }
+    Ok(cells
+        .into_iter()
+        .map(|(weight, street)| {
+            if weight > 0.0 {
+                (street / weight) as f32
+            } else {
+                STREET_PARKING_FLATS as f32
+            }
+        })
+        .collect())
+}
+
 /// The cell of a square's grid (row from the north, column) a z30 point falls in, clamped to the
 /// square.
 pub fn grid_cell(square: Square, at: (i32, i32)) -> (usize, usize) {
@@ -1066,6 +1118,26 @@ mod tests {
         assert_eq!(building_load(1, 2, Some(500.0)), (0.0, 120.0));
         assert_eq!(building_load(10, 1, Some(20.0)), (0.0, 0.0));
         assert_eq!(trips_per_dwelling(u16::from_le_bytes(*b"AT")), 3.4);
+    }
+
+    /// A villa's and a terraced row's cars park mostly on their plots (15 % on the street), a
+    /// block of flats' cars and a shop's visitors mostly on the street (55 %).
+    #[test]
+    fn houses_park_on_their_plots_and_flats_on_the_street() {
+        let load = |(dwellings, trips)| BuildingLoad {
+            at: (0, 0),
+            dwellings,
+            trips,
+        };
+        let villa = street_parking_weight(&load(building_load(0, 3, Some(200.0))));
+        assert_eq!(villa, (2.0, STREET_PARKING_HOUSES));
+        let terrace = street_parking_weight(&load(building_load(11, 2, Some(240.0))));
+        assert_eq!(terrace.1, STREET_PARKING_HOUSES);
+        let flats = street_parking_weight(&load(building_load(0, 5, Some(600.0))));
+        assert_eq!(flats, (37.0, STREET_PARKING_FLATS));
+        let shop = street_parking_weight(&load(building_load(1, 2, Some(500.0))));
+        assert!((shop.0 - 120.0 / WORLD_TRIPS_PER_DWELLING).abs() < 1e-9);
+        assert_eq!(shop.1, STREET_PARKING_FLATS);
     }
 
     #[test]

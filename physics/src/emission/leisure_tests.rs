@@ -20,11 +20,12 @@ fn lden(sound: &SoundPower) -> f64 {
 }
 
 /// The Parkplatzlaermstudie arithmetic: 63 dB(A) per space and movement, 0.40 movements per
-/// space and hour, K_D above ten spaces, and the study's 06-22 / 22-06 blocks re-averaged.
+/// space and hour, K_D above ten spaces on a lot (a street's searching traffic is its road
+/// traffic), and the study's 06-22 / 22-06 blocks re-averaged.
 #[test]
 fn car_parks_follow_the_parking_study() {
-    let study = |spaces: f64| {
-        let searching = if spaces > 10.0 {
+    let study = |spaces: f64, aisles: bool| {
+        let searching = if aisles && spaces > 10.0 {
             2.5 * (spaces - 9.0).log10()
         } else {
             0.0
@@ -37,7 +38,7 @@ fn car_parks_follow_the_parking_study() {
         (CAR_PARK_STREET, 13.3, 200.0),
         (CAR_PARK_STREET, 13.3, 120.0),
     ] {
-        let expected = study(area_m2 / m2_per_space);
+        let expected = study(area_m2 / m2_per_space, class == CAR_PARK);
         assert!(
             (day(class, area_m2) - expected).abs() < 0.1,
             "class {class} at {area_m2} m2"

@@ -3,8 +3,10 @@
 //! node takes its class's reference footprint; a line is no area and emits from its centroid),
 //! ranges by shots a year unless roofed. Motorsport (PLAN-z13 DROP) and unknown classes are silent.
 //! Street parking serves the buildings around it: no more cars park and leave there in a day than
-//! those buildings' trip ends, shared by all the street parking spaces around (villas park on
-//! their plots; the car-park rate of every space taken is the most it carries).
+//! the trip ends of those buildings made by cars that park on the street (houses' cars mostly
+//! park on their plots, flats' cars on the street), shared by all the street parking spaces
+//! around; the car-park rate of every space taken is the most it carries. Driving to and from a
+//! space is the street's road traffic, not the parking's.
 
 use super::cells::{
     AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
@@ -12,7 +14,7 @@ use super::cells::{
 use super::facilities::{Tags, parse_tags};
 use super::{Converted, group_key};
 use crate::dev4::{Dev4, Square, column, positive, require_stamp, text, z30_corner_degrees};
-use crate::traffic::{GRID_SIDE, grid_cell};
+use crate::traffic::{GRID_SIDE, grid_cell, street_parking_shares};
 use arrow_array::{BinaryArray, Float32Array, Int32Array, Int64Array, StringArray, UInt8Array};
 use physics::emission::leisure::*;
 use physics::emission::spectrum::SoundPower;
@@ -104,9 +106,11 @@ fn parking_spaces(row: &LeisureRow, area_m2: f64) -> f64 {
         .map_or(0.0, |per_space| area_m2 / per_space)
 }
 
-/// The street parking of a square against the trip ends of its buildings (`grid`).
+/// The street parking of a square against the trip ends of its buildings (`grid`) made by cars
+/// that park on the street (`street_shares`).
 struct StreetParking {
     grid: Vec<f32>,
+    street_shares: Vec<f32>,
     /// Street parking spaces per cell.
     spaces: Vec<f64>,
 }
@@ -124,9 +128,13 @@ impl StreetParking {
     }
 
     /// The share of the car-park rate a street parking of `spaces` at `cell` carries: the
-    /// trip ends around over the movements all the spaces around would make, at most 1.
+    /// trip ends around by cars parking on the street over the movements all the spaces around
+    /// would make, at most 1.
     fn share(&self, cell: (usize, usize), spaces: f64) -> f64 {
-        let trips = Self::around(|k| f64::from(self.grid[k]), cell);
+        let trips = Self::around(
+            |k| f64::from(self.grid[k]) * f64::from(self.street_shares[k]),
+            cell,
+        );
         let around = Self::around(|k| self.spaces[k], cell).max(spaces);
         let ceiling = trips * spaces / around;
         (ceiling / (spaces * PARKING_MOVEMENTS_PER_SPACE_DAY)).min(1.0)
@@ -153,7 +161,7 @@ pub fn convert(
         rows.extend(read_batch(batch).map_err(context)?);
     }
     let street_parking = match traffic {
-        Some(dir) => crate::traffic::read(dir, square)?.map(|traffic| {
+        Some(dir) => crate::traffic::read(dir, square)?.map(|traffic| -> Result<_, String> {
             let mut spaces = vec![0.0; GRID_SIDE * GRID_SIDE];
             for row in rows.iter().filter(|row| row.class == CAR_PARK_STREET) {
                 if let Some((_, area_m2)) = row_emission(row) {
@@ -161,13 +169,15 @@ pub fn convert(
                     spaces[r * GRID_SIDE + c] += parking_spaces(row, area_m2);
                 }
             }
-            StreetParking {
+            Ok(StreetParking {
                 grid: traffic.grid,
+                street_shares: street_parking_shares(dev4, square)?,
                 spaces,
-            }
+            })
         }),
         None => None,
-    };
+    }
+    .transpose()?;
     let mut emitting = 0;
     {
         for row in rows {
