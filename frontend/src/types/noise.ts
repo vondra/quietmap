@@ -178,9 +178,14 @@ export interface PopupPiece {
   crossings: [number, number, string][]
   trace: PieceTrace | null
   /** Every ray the piece was summed over: [lat, lon] it leaves from, the in-plane angle it stands
-   *  for (rad; 0 for a point source, its one ray) and the Lden it delivers (null: silent). */
-  rays?: [number, number, number, number | null][]
+   *  for (rad; 0 for a point source, its one ray), the Lden it delivers (null: silent) and its
+   *  terms. */
+  rays?: [number, number, number, number | null, RayTerms?][]
 }
+
+/** One ray's terms (dB, losses positive): ground and screening in calm air and bent down,
+ *  screening alone in calm air and bent down, the air's absorption; then its slant length (m). */
+export type RayTerms = [number, number, number, number, number, number] | null
 
 export interface PopupUpdate {
   seq: number

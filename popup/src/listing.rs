@@ -30,13 +30,25 @@ pub struct EvaluatedPiece {
 }
 
 /// One ray of a listed piece: the point it leaves from (click metres), the in-plane angle it
-/// stands for (0 for a point) and the energy it delivers per period; the piece's energy is their
-/// sum.
+/// stands for (0 for a point), the energy it delivers per period (the piece's energy is their
+/// sum) and its terms.
 #[derive(Clone)]
 pub struct ListedRay {
     pub from_m: [f64; 2],
     pub angle_rad: f64,
     pub energy: [f64; PERIODS],
+    pub terms: Option<ListedTerms>,
+}
+
+/// A ray's terms as A-weighted attenuations over the piece's day emission spectrum (dB): ground
+/// and screening together and screening alone per state (calm air, bent down), the air's
+/// absorption, and its slant length (m).
+#[derive(Clone, Copy)]
+pub struct ListedTerms {
+    pub boundary_db: [f64; 2],
+    pub without_ground_db: [f64; 2],
+    pub air_db: f64,
+    pub slant_m: f64,
 }
 
 /// The terms of one ray, each as an A-weighted attenuation over the piece's day emission spectrum
@@ -120,9 +132,30 @@ pub fn list_pieces(
                                 })
                                 .sum()
                         }),
+                        terms: None,
                     })
                 },
             )?;
+            let spectrum = source.energy[0];
+            let weighted = |attenuation: &[f64; BANDS]| {
+                let total: f64 = spectrum.iter().sum();
+                let passed: f64 = (0..BANDS)
+                    .map(|band| spectrum[band] * energy(-attenuation[band]))
+                    .sum();
+                -10.0 * (passed / total).log10()
+            };
+            // Every ray's own terms (the piece's nearest ray below also keeps its ground profile).
+            for ray in &mut piece.rays {
+                let terms = trace(receiver, ray.from_m, source, &mut scratch)?;
+                ray.terms = Some(ListedTerms {
+                    boundary_db: [0, 1]
+                        .map(|state| weighted(&terms.boundaries[state].attenuation_db)),
+                    without_ground_db: [0, 1]
+                        .map(|state| weighted(&terms.boundaries[state].without_ground_db)),
+                    air_db: weighted(&terms.air_db),
+                    slant_m: terms.transfer.slant_m,
+                });
+            }
             let [a, b] = piece.candidate.ends_m;
             let from = closest_point(receiver.position, a, b);
             let mut crossings = Vec::new();
@@ -141,14 +174,6 @@ pub fn list_pieces(
                 })
                 .collect();
             let terms = trace(receiver, from, source, &mut scratch)?;
-            let spectrum = source.energy[0];
-            let weighted = |attenuation: &[f64; BANDS]| {
-                let total: f64 = spectrum.iter().sum();
-                let passed: f64 = (0..BANDS)
-                    .map(|band| spectrum[band] * energy(-attenuation[band]))
-                    .sum();
-                -10.0 * (passed / total).log10()
-            };
             let ground = scratch.profile();
             let step = ground.t.len().div_ceil(PROFILE_POINTS).max(1);
             let mut profile: Vec<[f64; 3]> = (0..ground.t.len())

@@ -193,6 +193,9 @@ test('desktop: the segments view groups the computed pieces under their source',
   await expect(piece).toContainText('Share of the night')
   // Its four rays, the one behind the building 23.5 dB under the clearest per unit of angle.
   await expect(piece).toContainText(/Rays summed\s*4, weakest −23\.5 dB/)
+  // The count opens every ray's row: what reaches along it, its length and its terms.
+  await piece.getByRole('button', { name: /4, weakest/ }).click()
+  await expect(piece.getByTestId('ray-table')).toContainText('reaches')
 })
 
 test('search: picking a result flies the map there and opens its popup', async ({ page }) => {

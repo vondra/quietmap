@@ -203,11 +203,18 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             "ends": ends,
             "distance_m": (candidate.distance_m * 10.0).round() / 10.0,
             // Every ray the piece was summed over: [lat, lon] it leaves from, the in-plane angle
-            // it stands for (rad, 0 for a point) and the Lden it delivers.
+            // it stands for (rad, 0 for a point), the Lden it delivers and its terms (dB: ground
+            // and screening calm and bent, screening alone calm and bent, air; slant m).
             "rays": piece.rays.iter().map(|ray| {
                 let (lat, lon) = update.frame.to_mercator(ray.from_m).to_degrees();
+                let tenth = |value: f64| (value * 10.0).round() / 10.0;
+                let terms = ray.terms.map(|t| json!([
+                    tenth(t.boundary_db[0]), tenth(t.boundary_db[1]),
+                    tenth(t.without_ground_db[0]), tenth(t.without_ground_db[1]),
+                    tenth(t.air_db), t.slant_m.round(),
+                ]));
                 json!([(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6,
-                    (ray.angle_rad * 1e6).round() / 1e6, lden(&ray.energy)])
+                    (ray.angle_rad * 1e6).round() / 1e6, lden(&ray.energy), terms])
             }).collect::<Vec<_>>(),
             "received": received,
             "emission": emission,

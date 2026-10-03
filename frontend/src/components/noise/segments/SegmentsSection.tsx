@@ -6,7 +6,7 @@
 // view computes the click again with the pieces listed.
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { streamPopup } from '../../../lib/popup-stream'
-import type { BuildingAnswer, Contributor, LayerLevels, PopupPiece, SegmentFan } from '../../../types/noise'
+import type { BuildingAnswer, Contributor, LayerLevels, PopupPiece, RayTerms, SegmentFan } from '../../../types/noise'
 import { fmtInt } from '../../../utils/formatters'
 import { HoverText } from '../../ui/info-tip'
 import { contributorLabel, formatDist, lineRow, SOURCE_LABELS } from '../shared'
@@ -102,18 +102,58 @@ interface SummedRay {
   /** What reaches the receiver along it per radian of the piece's angle, against the clearest
    *  ray of the piece (dB, 0 for the clearest): what the way takes, the divergence apart. */
   belowClearestDb: number
+  terms: RayTerms
 }
 
 /** The rays a piece was summed over, each with how much less reaches the receiver along it than
- *  along the piece's clearest ray. */
+ *  along the piece's clearest ray, and its terms. */
 function summedRays(piece: PopupPiece): SummedRay[] {
   const all = piece.rays ?? []
   // A line's rays stand for their angle; a point source has one ray, of no angle.
-  const rays = all.flatMap(([lat, lon, angle, lden]) => lden == null || (angle <= 0 && all.length > 1)
+  const rays = all.flatMap(([lat, lon, angle, lden, terms]) => lden == null || (angle <= 0 && all.length > 1)
     ? []
-    : [{ from: [lat, lon] as [number, number], density: angle > 0 ? lden - 10 * Math.log10(angle) : lden }])
+    : [{ from: [lat, lon] as [number, number], density: angle > 0 ? lden - 10 * Math.log10(angle) : lden, terms: terms ?? null }])
   const clearest = Math.max(...rays.map(ray => ray.density))
-  return rays.map(({ from, density }) => ({ from, belowClearestDb: density - clearest }))
+  return rays.map(({ from, density, terms }) => ({ from, belowClearestDb: density - clearest, terms }))
+}
+
+/** Every ray of a piece with its terms, one row each: what reaches along it against the clearest
+ *  ray, its length, ground and screening in calm air and bent down, the air. */
+function RayTable({ rays }: { rays: SummedRay[] }) {
+  const cell = 'text-right tabular-nums text-foreground'
+  return (
+    <div data-testid="ray-table" className="grid grid-cols-[1.4rem_3.2rem_3.4rem_3.2rem_3.2rem_2.6rem] gap-x-1.5 mt-1 text-[10px]">
+      <span className="text-muted-foreground/70">#</span>
+      <span className="text-right text-muted-foreground/70">
+        <HoverText title={'What reaches the receiver along the ray, per its share of the\npiece, against the clearest ray (divergence apart)'}>reaches</HoverText>
+      </span>
+      <span className="text-right text-muted-foreground/70">m</span>
+      <span className="text-right text-muted-foreground/70">
+        <HoverText title="Ground and screening together, in calm air">calm</HoverText>
+      </span>
+      <span className="text-right text-muted-foreground/70">
+        <HoverText title="Ground and screening together, the sound bent down (wind from the source, inversion)">bent</HoverText>
+      </span>
+      <span className="text-right text-muted-foreground/70">air</span>
+      {rays.map((ray, k) => (
+        <RayRow key={k} index={k + 1} ray={ray} cell={cell} />
+      ))}
+    </div>
+  )
+}
+
+function RayRow({ index, ray, cell }: { index: number, ray: SummedRay, cell: string }) {
+  const t = ray.terms
+  return (
+    <>
+      <span className="text-muted-foreground">{index}</span>
+      <span className={cell}>{ray.belowClearestDb > -0.05 ? '0.0' : ray.belowClearestDb.toFixed(1)}</span>
+      <span className={cell}>{t ? fmtInt(t[5]) : '–'}</span>
+      <span className={cell}>{t ? term(t[0]) : '–'}</span>
+      <span className={cell}>{t ? term(t[1]) : '–'}</span>
+      <span className={cell}>{t ? term(t[4]) : '–'}</span>
+    </>
+  )
 }
 
 /** One piece opened: its data, sound power, rays, the terms of its nearest ray and the ground
@@ -125,6 +165,7 @@ function PieceDetail({ piece }: { piece: PopupPiece }) {
   const buildings = new Set(piece.crossings.map(([, , id]) => id)).size
   const rays = summedRays(piece)
   const weakest = Math.min(...rays.map(ray => ray.belowClearestDb))
+  const [showRays, setShowRays] = useState(false)
   const share = (p: number) => `${Math.round(100 * p)} %`
   const row = (label: ReactNode, calm: string, bent: string) => (
     <>
@@ -147,8 +188,16 @@ function PieceDetail({ piece }: { piece: PopupPiece }) {
         <HoverText title={'The piece is summed over the angle it fills as seen from\nthe receiver: five equal parts, one ray each, and where\nbuildings stand in front of a part, a ray for every stretch\nhidden behind them and every free gap (CNOSSOS-EU point\nsum). On the map each ray is coloured by what reaches the\nreceiver along it: red the clearest, violet 10 dB less,\nblue 20, grey 30 and more'}>
           Rays summed
         </HoverText>,
-        weakest < -0.05 ? `${rays.length}, weakest ${term(-weakest)} dB` : `${rays.length}, all clear alike`,
+        <button
+          type="button"
+          className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+          onClick={() => setShowRays(shown => !shown)}
+          aria-expanded={showRays}
+        >
+          {weakest < -0.05 ? `${rays.length}, weakest ${term(-weakest)} dB` : `${rays.length}, all clear alike`}
+        </button>,
       )}
+      {rays.length > 1 && showRays && <RayTable rays={rays} />}
       {trace && (
         <>
           {lineRow(
