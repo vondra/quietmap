@@ -118,10 +118,15 @@ const MAJOR_MODELS: [MajorModel; 4] = [
 const MAJOR_ONEWAY: f64 = -0.1874;
 const MAJOR_LN_LANES: f64 = 0.5401;
 const MAJOR_LANES_UNKNOWN: f64 = -0.0209;
-/// The countries where the model beat the class priors with the country held out.
-const MAJOR_MODEL_COUNTRIES: [[u8; 2]; 20] = [
-    *b"CH", *b"CL", *b"CO", *b"CZ", *b"DE", *b"ES", *b"FI", *b"FR", *b"GB", *b"IE", *b"IT", *b"JP",
-    *b"LU", *b"MX", *b"NL", *b"NO", *b"NZ", *b"PL", *b"SE", *b"US",
+/// The countries where the model replaces the class priors: those where it beat them with the
+/// country held out, and the rest of Europe (UN M49), where every one of the 13 European
+/// countries held out did (Austria, outside the fit: 1.53 dB against the priors' 12.2).
+const MAJOR_MODEL_COUNTRIES: [[u8; 2]; 58] = [
+    *b"AD", *b"AL", *b"AT", *b"AX", *b"BA", *b"BE", *b"BG", *b"BY", *b"CH", *b"CL", *b"CO", *b"CZ",
+    *b"DE", *b"DK", *b"EE", *b"ES", *b"FI", *b"FO", *b"FR", *b"GB", *b"GG", *b"GI", *b"GR", *b"HR",
+    *b"HU", *b"IE", *b"IM", *b"IS", *b"IT", *b"JE", *b"JP", *b"LI", *b"LT", *b"LU", *b"LV", *b"MC",
+    *b"MD", *b"ME", *b"MK", *b"MT", *b"MX", *b"NL", *b"NO", *b"NZ", *b"PL", *b"PT", *b"RO", *b"RS",
+    *b"RU", *b"SE", *b"SI", *b"SJ", *b"SK", *b"SM", *b"UA", *b"US", *b"VA", *b"XK",
 ];
 
 /// The model group of a dev4 class: motorway, trunk, primary, a link of any of them.
