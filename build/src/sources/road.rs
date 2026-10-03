@@ -656,14 +656,16 @@ pub fn convert(
                 ((i64::from(start_x.value(row)) + i64::from(end_x.value(row))) / 2) as i32,
                 ((i64::from(start_y.value(row)) + i64::from(end_y.value(row))) / 2) as i32,
             );
-            // A Thai national highway carries the department's vehicle-km, spread along it by the
-            // world model (its own shares of every category, motorcycles and buses counted).
-            let highway = (row_guessed
-                && country.value(row) == THAI_ISO
-                && built_up.value(row) == 1
-                && matches!(class_index, 0 | 1 | 2 | 10 | 11 | 12))
-            .then(|| thai_highway(refs.value(row)))
-            .flatten();
+            // A Thai national highway's rows (motorway to tertiary and unclassified; links and
+            // streets carrying its number are not the highway) take the department's traffic of
+            // the highway in the row's province: its vehicle-km there over these rows' length.
+            let highway =
+                (row_guessed && country.value(row) == THAI_ISO && matches!(class_index, 0..=4 | 9))
+                    .then(|| {
+                        let (lat, lon) = z30_corner_degrees(middle_z30.0, middle_z30.1);
+                        thai_highway(refs.value(row), lat, lon)
+                    })
+                    .flatten();
             let modelled = building_traffic
                 .as_ref()
                 .filter(|_| row_guessed)
@@ -694,10 +696,8 @@ pub fn convert(
                     estimated.value(row),
                 ),
             };
-            // A Thai national highway's major rows outside built-up areas carry the department's
-            // mean traffic of the highway and its shares of every category (motorcycles and buses
-            // counted). Its towns' sections keep their estimates: a city street's ref may name
-            // only an interchange, and a town's mix of vehicles is not the highway's.
+            // The department's mean is the traffic across both directions and its shares count
+            // every category, motorcycles and buses among them; a one-way carriageway carries half.
             if let Some(&(_, _, mean, shares)) = highway {
                 let total = mean * if oneway.value(row) != 0 { 0.5 } else { 1.0 };
                 daily = shares.map(|share| share * total);
