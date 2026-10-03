@@ -161,6 +161,37 @@ pub fn temperature_correction_db(category: VehicleCategory, air_temperature_c: f
     k * (REFERENCE_AIR_TEMPERATURE_C - air_temperature_c)
 }
 
+/// Motorcycles emit this much more than light vehicles at the same speed: the Japanese standard
+/// model ASJ RTN-Model 2018 (Sakamoto, Acoust. Sci. & Tech. 41(3), 2020, Table 2.3, dense asphalt,
+/// steady flow: motorcycles and mopeds 49.6 + 30 lg V against light vehicles' 45.8), from
+/// Japanese pass-by measurements; CNOSSOS-EU's category 4b puts them 0.9-2.2 dB below cars.
+pub const MOTORCYCLE_OVER_LIGHT_DB: f64 = 3.8;
+
+/// A-weighted sum (dB) of per-vehicle band energies.
+fn a_weighted_db(bands: &[f64; BANDS]) -> f64 {
+    10.0 * (0..BANDS)
+        .map(|band| bands[band] * 10f64.powf(crate::bands::A_WEIGHTING_DB[band] / 10.0))
+        .sum::<f64>()
+        .log10()
+}
+
+/// One vehicle's band energies of a category at a law speed, without any correction.
+fn bare_vehicle(category: VehicleCategory, law_speed: f64) -> [f64; BANDS] {
+    let coefficients = category.coefficients();
+    let (log_ratio, relative) = (
+        (law_speed / REFERENCE_SPEED_KMH).log10(),
+        (law_speed - REFERENCE_SPEED_KMH) / REFERENCE_SPEED_KMH,
+    );
+    std::array::from_fn(|band| {
+        let (a_p, b_p) = coefficients.propulsion;
+        let mut energy = 10f64.powf((a_p[band] + b_p[band] * relative) / 10.0);
+        if let Some((a_r, b_r)) = coefficients.rolling {
+            energy += 10f64.powf((a_r[band] + b_r[band] * log_ratio) / 10.0);
+        }
+        energy
+    })
+}
+
 /// Sound power per metre (dB, Z-weighted) of a mix of flows; `-inf` in every band when silent.
 /// The surface correction and the air temperature (2.2.10) apply to rolling noise only
 /// (motorcycles have none).
@@ -189,6 +220,14 @@ pub fn line_emission_db(
             VehicleCategory::Light => 1.0 - flow.electric_share.clamp(0.0, 1.0),
             _ => 1.0,
         };
+        // A motorcycle keeps category 4b's spectrum at the level ASJ measures over a car.
+        let motorcycle_scale = if flow.category == VehicleCategory::Motorcycle {
+            let light = a_weighted_db(&bare_vehicle(VehicleCategory::Light, law_speed));
+            let own = a_weighted_db(&bare_vehicle(VehicleCategory::Motorcycle, law_speed));
+            10f64.powf((light + MOTORCYCLE_OVER_LIGHT_DB - own) / 10.0)
+        } else {
+            1.0
+        };
         for band in 0..BANDS {
             let (a_p, b_p) = coefficients.propulsion;
             let mut vehicle = combustion
@@ -199,7 +238,7 @@ pub fn line_emission_db(
                 vehicle +=
                     10f64.powf((a_r[band] + b_r[band] * log_ratio + rolling_correction) / 10.0);
             }
-            energy[band] += density * vehicle;
+            energy[band] += density * vehicle * motorcycle_scale;
         }
     }
     energy.map(|e| {
@@ -434,6 +473,20 @@ mod tests {
         let at = |speed| a_weighted(&flow(1_000.0, speed, VehicleCategory::Light), 0.0);
         let rise = at(140.0) - at(130.0);
         assert!((rise - 0.79).abs() < 0.05, "{rise}");
+    }
+
+    /// A motorcycle sounds 3.8 dB over a car at the same speed (ASJ RTN-Model 2018), at 30, 50
+    /// and 90 km/h alike.
+    #[test]
+    fn a_motorcycle_sounds_over_a_car_by_the_japanese_measurements() {
+        for speed in [30.0, 50.0, 90.0] {
+            let car = a_weighted(&flow(100.0, speed, VehicleCategory::Light), 0.0);
+            let moto = a_weighted(&flow(100.0, speed, VehicleCategory::Motorcycle), 0.0);
+            assert!(
+                (moto - car - MOTORCYCLE_OVER_LIGHT_DB).abs() < 0.05,
+                "{speed}: {moto} vs {car}"
+            );
+        }
     }
 
     #[test]
