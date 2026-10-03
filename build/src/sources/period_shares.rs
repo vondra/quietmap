@@ -19,11 +19,8 @@ pub(crate) const GROUPS: usize = 3;
 /// Shares where nothing is measured, light and heavy alike: between the counted temperate pattern
 /// (US, Japan, Germany, the Netherlands, Britain: 0.75-0.81 by day, 0.09-0.15 in the evening,
 /// 0.07-0.13 at night) and the late ones (Spain 0.68/0.19/0.13, Thailand 0.63/0.18/0.19).
-pub(crate) const DEFAULT_PERIOD_SHARES: [[f64; PERIODS]; GROUPS] = [
-    [0.65, 0.20, 0.15],
-    [0.70, 0.18, 0.12],
-    [0.70, 0.18, 0.12],
-];
+pub(crate) const DEFAULT_PERIOD_SHARES: [[f64; PERIODS]; GROUPS] =
+    [[0.65, 0.20, 0.15], [0.70, 0.18, 0.12], [0.70, 0.18, 0.12]];
 
 /// Each group's shares of its light vehicles and of its medium and heavy ones.
 type GroupShares = [[[f64; PERIODS]; 2]; GROUPS];

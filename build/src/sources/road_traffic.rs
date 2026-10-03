@@ -60,19 +60,61 @@ const MAIN_MODELS: [MainModel; 3] = [
     },
 ];
 
-/// The countries whose counts cover a whole class network (Sweden's NVDB every state road,
-/// Czechia's census its I-III class roads, Great Britain's DfT every A and B road and a random
-/// sample of the minor ones, Finland's every public road) shift the pooled model by their own
-/// median residual (dB; secondary, tertiary; outside and inside built-up areas): Swedish tertiary
-/// roads carry 6.7 dB less than the 13 countries' at the same trip ends. Czechia's are its
-/// census rows across the country (254,359 secondary and 150,413 tertiary): a III-class road
-/// through a village carries 1,807 a day in the median, where the pooled model put 2,750.
+/// The countries whose counts cover a class network widely (Sweden's NVDB every state road,
+/// Great Britain's DfT every A and B road and a random sample of the minor ones, Finland's every
+/// public road; Czechia's census its I and II class roads, but only the busier fifth of its III
+/// class roads by length) shift the pooled model by their own median residual (dB; secondary,
+/// tertiary; outside and inside built-up areas): Swedish tertiary roads carry 6.7 dB less than
+/// the 13 countries' at the same trip ends. Czechia's are its census rows across the country
+/// (254,359 secondary and 150,413 tertiary): a counted III-class road through a village carries
+/// 1,807 a day in the median, where the pooled model put 2,750.
 const COUNTRY_SHIFTS_DB: [([u8; 2], [[f64; 2]; 2]); 4] = [
     (*b"CZ", [[-1.8, -1.4], [0.0, -2.6]]),
     (*b"FI", [[-1.6, -1.6], [-4.4, -4.4]]),
     (*b"GB", [[0.9, 0.9], [-1.4, -1.4]]),
     (*b"SE", [[-0.8, -0.8], [-6.7, -6.7]]),
 ];
+
+/// Counted tertiary roads are the busier ones wherever counting selects them (Czechia's census
+/// counts 21 % of its III-class roads by length around Bosen, Germany's and Poland's 14 and 20 %
+/// of their tertiary roads in the sampled squares, reading 5 dB over the pooled model), and the
+/// pooled model is fitted on them. Where whole networks or random samples are counted, tertiary
+/// roads carry less at the same trip ends, most where buildings are few (dB from the pooled
+/// model, median of Sweden, Finland and Great Britain by the trip ends within 5 km: -5.8 under
+/// 20,000, -4.9, -3.9, -2.8 and -1.9 over 300,000; evidence 2026-10-02, routes). An uncounted
+/// tertiary road in a European country with selective counts takes that shift, interpolated in
+/// the log of its trip ends; elsewhere the pooled model is not fitted on the country's own
+/// counted roads (Bangkok's sois carry more than it says, Thailand's stations).
+const UNSELECTED_TERTIARY_SHIFT_DB: [(f64, f64); 5] = [
+    (10_000.0, -5.8),
+    (32_000.0, -4.9),
+    (77_000.0, -3.9),
+    (190_000.0, -2.8),
+    (550_000.0, -1.9),
+];
+/// European countries (UN M49) whose tertiary roads the pooled model's counts come from or
+/// resemble; Finland, Great Britain and Sweden count theirs whole or at random (their own shift).
+const SELECTIVE_TERTIARY_COUNTS: [[u8; 2]; 41] = [
+    *b"AD", *b"AL", *b"AT", *b"BA", *b"BE", *b"BG", *b"BY", *b"CH", *b"CZ", *b"DE", *b"DK", *b"EE",
+    *b"ES", *b"FR", *b"GR", *b"HR", *b"HU", *b"IE", *b"IS", *b"IT", *b"LI", *b"LT", *b"LU", *b"LV",
+    *b"MC", *b"MD", *b"ME", *b"MK", *b"MT", *b"NL", *b"NO", *b"PL", *b"PT", *b"RO", *b"RS", *b"RU",
+    *b"SI", *b"SK", *b"SM", *b"UA", *b"VA",
+];
+
+/// The shift of an uncounted tertiary road among `around` trip ends within 5 km (dB).
+fn unselected_tertiary_shift_db(around: f64) -> f64 {
+    let points = UNSELECTED_TERTIARY_SHIFT_DB;
+    if around <= points[0].0 {
+        return points[0].1;
+    }
+    for pair in points.windows(2) {
+        let [(x0, y0), (x1, y1)] = [pair[0], pair[1]];
+        if around <= x1 {
+            return y0 + (y1 - y0) * (around / x0).ln() / (x1 / x0).ln();
+        }
+    }
+    points[points.len() - 1].1
+}
 
 /// dev4 classes the trees run down (residential, living street, service) and unclassified,
 /// which in a town also takes its class's relation to the trip ends around it.
@@ -141,10 +183,15 @@ impl BuildingTraffic {
                 .around(middle, model.radius_m)
                 .min(model.most_around);
             (around > 0.0).then(|| {
+                let selection_db = if model.class == 4 && SELECTIVE_TERTIARY_COUNTS.contains(&iso) {
+                    unselected_tertiary_shift_db(around)
+                } else {
+                    0.0
+                };
                 (model.intercept[usize::from(built_up.min(2))]
                     + model.slope * around.ln()
                     + if oneway { model.oneway } else { 0.0 }
-                    + shift_db(model.class) / 10.0 * std::f64::consts::LN_10)
+                    + (shift_db(model.class) + selection_db) / 10.0 * std::f64::consts::LN_10)
                     .exp()
             })
         };
@@ -200,6 +247,18 @@ pub fn local_km(lengths: impl Iterator<Item = (u8, f64)>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uncounted_tertiary_roads_shift_most_where_buildings_are_few() {
+        assert_eq!(unselected_tertiary_shift_db(5_000.0), -5.8);
+        assert!((unselected_tertiary_shift_db(77_000.0) + 3.9).abs() < 1e-9);
+        let between = unselected_tertiary_shift_db(120_000.0);
+        assert!(between < -2.8 && between > -3.9, "{between}");
+        assert_eq!(unselected_tertiary_shift_db(2e6), -1.9);
+        assert!(SELECTIVE_TERTIARY_COUNTS.windows(2).all(|w| w[0] < w[1]));
+        assert!(!SELECTIVE_TERTIARY_COUNTS.contains(b"SE"));
+        assert!(SELECTIVE_TERTIARY_COUNTS.contains(b"CZ"));
+    }
 
     #[test]
     fn main_classes_scale_with_the_trip_ends_around_them() {
