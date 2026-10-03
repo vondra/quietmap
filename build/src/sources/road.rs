@@ -667,7 +667,7 @@ pub fn convert(
                             country.value(row),
                             source_id.value(row) == PRIOR_SOURCE_ID,
                         ),
-                        thai_rural_road_ref(refs.value(row)),
+                        (thai_rural_road_ref(refs.value(row)), lanes.value(row)),
                     )
                 });
             let mut daily = match modelled {

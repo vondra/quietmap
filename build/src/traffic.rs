@@ -1012,8 +1012,15 @@ fn dead_ends(roads: &[RoadRow], ends: &[[u32; 2]], drain: &[bool], nodes: usize)
 
 /// The trip ends of the grids of a square and its neighbours, summed around a point.
 pub struct Surroundings {
-    grids: HashMap<Square, Vec<f32>>,
+    /// The trip ends of the 3 x 3 squares around `square` summed from their north-west corner:
+    /// entry (r + 1, c + 1) holds every cell north and west of cell (r, c) inclusive, rows from
+    /// the north (squares without a traffic file count none).
+    sums: Vec<f64>,
+    square: Square,
 }
+
+/// Cells per side of a square's neighbourhood.
+const WINDOW: usize = 3 * GRID_SIDE;
 
 impl Surroundings {
     /// The grids of `square`'s neighbourhood (squares without a traffic file count none).
@@ -1024,33 +1031,66 @@ impl Surroundings {
                 grids.insert(neighbour, grid);
             }
         }
-        Ok(Surroundings { grids })
+        Ok(Self::from_grids(square, &grids))
     }
 
-    /// The trip ends within `radius_m` (a square box) of the z30 point `at`.
-    pub fn around(&self, at: (i32, i32), radius_m: f64) -> f64 {
-        let reach = (radius_m / metres_per_z30(at.1) / CELL_Z30 as f64).round() as i64;
-        let column = i64::from(at.0) / CELL_Z30;
-        let row_from_north = (i64::from(Z9_PER_AXIS) * SQUARE_Z30 - 1 - i64::from(at.1)) / CELL_Z30;
+    fn from_grids(square: Square, grids: &HashMap<Square, Vec<f32>>) -> Self {
         let side = GRID_SIDE as i64;
-        let world_columns = i64::from(Z9_PER_AXIS) * side;
-        let mut sum = 0.0;
-        for r in row_from_north - reach..=row_from_north + reach {
-            if r < 0 || r >= world_columns {
+        let world = i64::from(Z9_PER_AXIS);
+        let mut cells = vec![0.0f64; WINDOW * WINDOW];
+        for dy in -1i64..=1 {
+            let y = i64::from(square.y) + dy;
+            if !(0..world).contains(&y) {
                 continue;
             }
-            for c in column - reach..=column + reach {
-                let c = c.rem_euclid(world_columns);
-                let square = Square {
-                    x: (c / side) as u32,
-                    y: (r / side) as u32,
+            for dx in -1i64..=1 {
+                let x = (i64::from(square.x) + dx).rem_euclid(world);
+                let Some(grid) = grids.get(&Square {
+                    x: x as u32,
+                    y: y as u32,
+                }) else {
+                    continue;
                 };
-                if let Some(grid) = self.grids.get(&square) {
-                    sum += f64::from(grid[(r % side * side + c % side) as usize]);
+                let (row0, column0) = (((dy + 1) * side) as usize, ((dx + 1) * side) as usize);
+                for r in 0..GRID_SIDE {
+                    for c in 0..GRID_SIDE {
+                        cells[(row0 + r) * WINDOW + column0 + c] =
+                            f64::from(grid[r * GRID_SIDE + c]);
+                    }
                 }
             }
         }
-        sum
+        let stride = WINDOW + 1;
+        let mut sums = vec![0.0f64; stride * stride];
+        for r in 0..WINDOW {
+            let mut row_sum = 0.0;
+            for c in 0..WINDOW {
+                row_sum += cells[r * WINDOW + c];
+                sums[(r + 1) * stride + c + 1] = sums[r * stride + c + 1] + row_sum;
+            }
+        }
+        Surroundings { sums, square }
+    }
+
+    /// The trip ends within `radius_m` (a square box) of the z30 point `at`, as far as the
+    /// neighbourhood reaches.
+    pub fn around(&self, at: (i32, i32), radius_m: f64) -> f64 {
+        let reach = (radius_m / metres_per_z30(at.1) / CELL_Z30 as f64).round() as i64;
+        let side = GRID_SIDE as i64;
+        let world_columns = i64::from(Z9_PER_AXIS) * side;
+        let column = i64::from(at.0) / CELL_Z30;
+        let row_from_north = (i64::from(Z9_PER_AXIS) * SQUARE_Z30 - 1 - i64::from(at.1)) / CELL_Z30;
+        // The neighbourhood's own coordinates: its north-west square's north-west cell is (0, 0).
+        let column = (column - (i64::from(self.square.x) - 1) * side).rem_euclid(world_columns);
+        let row = row_from_north - (i64::from(self.square.y) - 1) * side;
+        let window = WINDOW as i64;
+        let (r0, r1) = ((row - reach).max(0), (row + reach + 1).min(window));
+        let (c0, c1) = ((column - reach).max(0), (column + reach + 1).min(window));
+        if r0 >= r1 || c0 >= c1 {
+            return 0.0;
+        }
+        let sum = |r: i64, c: i64| self.sums[r as usize * (WINDOW + 1) + c as usize];
+        sum(r1, c1) - sum(r0, c1) - sum(r1, c0) + sum(r0, c0)
     }
 }
 
@@ -1118,6 +1158,59 @@ mod tests {
         assert_eq!(building_load(1, 2, Some(500.0)), (0.0, 120.0));
         assert_eq!(building_load(10, 1, Some(20.0)), (0.0, 0.0));
         assert_eq!(trips_per_dwelling(u16::from_le_bytes(*b"AT")), 3.4);
+    }
+
+    /// The neighbourhood's box sums match adding the cells one by one, across the square edges
+    /// and the antimeridian, and stop at the neighbourhood's edge.
+    #[test]
+    fn surroundings_sum_boxes_like_cell_by_cell() {
+        let square = Square { x: 0, y: 200 };
+        let mut grids = HashMap::new();
+        for neighbour in square.with_neighbours() {
+            let grid: Vec<f32> = (0..GRID_SIDE * GRID_SIDE)
+                .map(|k| ((k * 7 + neighbour.x as usize * 13 + neighbour.y as usize) % 11) as f32)
+                .collect();
+            grids.insert(neighbour, grid);
+        }
+        let around = Surroundings::from_grids(square, &grids);
+        let brute = |at: (i32, i32), radius_m: f64| {
+            let reach = (radius_m / metres_per_z30(at.1) / CELL_Z30 as f64).round() as i64;
+            let column = i64::from(at.0) / CELL_Z30;
+            let row = (i64::from(Z9_PER_AXIS) * SQUARE_Z30 - 1 - i64::from(at.1)) / CELL_Z30;
+            let side = GRID_SIDE as i64;
+            let world_columns = i64::from(Z9_PER_AXIS) * side;
+            let mut sum = 0.0;
+            for r in row - reach..=row + reach {
+                for c in column - reach..=column + reach {
+                    let c = c.rem_euclid(world_columns);
+                    let cell_square = Square {
+                        x: (c / side) as u32,
+                        y: (r / side) as u32,
+                    };
+                    if let Some(grid) = grids.get(&cell_square) {
+                        sum += f64::from(grid[(r % side * side + c % side) as usize]);
+                    }
+                }
+            }
+            sum
+        };
+        let north = (i64::from(Z9_PER_AXIS) - 200) * SQUARE_Z30;
+        for (dx, dy, radius) in [
+            (3, 5, 1_000.0),
+            (250, 3, 5_000.0),
+            (2, 250, 15_000.0),
+            (128, 128, 50_000.0),
+        ] {
+            let at = (
+                (dx * CELL_Z30) as i32 + 1,
+                (north - dy * CELL_Z30 - 1) as i32,
+            );
+            let (fast, slow) = (around.around(at, radius), brute(at, radius));
+            assert!(
+                (fast - slow).abs() < 1e-6,
+                "{dx} {dy} {radius}: {fast} vs {slow}"
+            );
+        }
     }
 
     /// A villa's and a terraced row's cars park mostly on their plots (15 % on the street), a

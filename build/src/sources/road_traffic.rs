@@ -75,6 +75,65 @@ const COUNTRY_SHIFTS_DB: [([u8; 2], [[f64; 2]; 2]); 4] = [
     (*b"SE", [[-0.8, -0.8], [-6.7, -6.7]]),
 ];
 
+/// The world's counted major roads (motorway, trunk, primary and their links): 3.36 M rows in
+/// 933 squares of 20 countries (US, Europe, Japan, New Zealand, Colombia, Chile, Mexico), every
+/// country weighed alike. The daily traffic of a row follows the trip ends of the buildings
+/// within 1, 5 and 15 km (square boxes) by road group, the class and built-up area, its lanes
+/// and a one-way carriageway: held out a whole country at a time, 2.30 dB mean absolute error
+/// against 3.00 for the class priors, every one of the 19 countries better (Germany 2.61 ->
+/// 1.63, the US 3.36 -> 2.40, the Netherlands 3.88 -> 2.05, Colombia 2.85 -> 2.45). Mexico's
+/// federal roads carry 4 dB more than the buildings say (as Thailand's rural roads do: a sparse
+/// network carries a region's traffic), so the fit leaves Mexico out and the model applies
+/// only to the class priors of the countries where it held out well.
+struct MajorModel {
+    /// Natural-log intercepts, rural and urban (unknown built-up the mean).
+    intercept: [f64; 2],
+    /// Slopes on ln(trip ends + 100) within `MAJOR_RADII_M`.
+    slopes: [f64; 3],
+}
+
+const MAJOR_RADII_M: [f64; 3] = [1_000.0, 5_000.0, 15_000.0];
+
+/// Motorways, trunks, primary roads, their links.
+const MAJOR_MODELS: [MajorModel; 4] = [
+    MajorModel {
+        intercept: [3.7548, 3.6849],
+        slopes: [0.0275, 0.0062, 0.3789],
+    },
+    MajorModel {
+        intercept: [5.0775, 5.1465],
+        slopes: [0.0123, 0.0549, 0.2155],
+    },
+    MajorModel {
+        intercept: [5.3850, 5.5418],
+        slopes: [0.0019, 0.0830, 0.1443],
+    },
+    MajorModel {
+        intercept: [-0.4141, -0.4399],
+        slopes: [-0.0274, 0.2730, 0.3825],
+    },
+];
+/// The model's one-way term, its elasticity to the lanes and its term for unknown lanes.
+const MAJOR_ONEWAY: f64 = -0.1218;
+const MAJOR_LN_LANES: f64 = 0.6053;
+const MAJOR_LANES_UNKNOWN: f64 = -0.0046;
+/// The countries where the model beat the class priors with the country held out.
+const MAJOR_MODEL_COUNTRIES: [[u8; 2]; 19] = [
+    *b"CH", *b"CL", *b"CO", *b"CZ", *b"DE", *b"ES", *b"FI", *b"FR", *b"GB", *b"IE", *b"IT", *b"JP",
+    *b"LU", *b"NL", *b"NO", *b"NZ", *b"PL", *b"SE", *b"US",
+];
+
+/// The model group of a dev4 class: motorway, trunk, primary, a link of any of them.
+fn major_group(class: u8) -> Option<usize> {
+    match class {
+        0 => Some(0),
+        1 => Some(1),
+        2 => Some(2),
+        10..=12 => Some(3),
+        _ => None,
+    }
+}
+
 /// Thailand's Department of Rural Roads network (refs such as "สฎ.6038": a province's
 /// abbreviation and four digits) carries traffic its own way: the network's counted roads (DRR
 /// AADT 2024 on 416,746 tertiary and 30,716 secondary rows in 122 and 75 squares) hardly follow
@@ -200,7 +259,7 @@ impl BuildingTraffic {
         row: usize,
         (class, built_up, oneway): (u8, u8, bool),
         (middle, country_iso, prior): ((i32, i32), u16, bool),
-        thai_rural_road: bool,
+        (thai_rural_road, lanes): (bool, u8),
     ) -> Option<f64> {
         let flow = self
             .traffic
@@ -241,6 +300,31 @@ impl BuildingTraffic {
                     .exp()
             })
         };
+        if let Some(group) = major_group(class) {
+            if !(prior && MAJOR_MODEL_COUNTRIES.contains(&iso)) {
+                return None;
+            }
+            let model = &MAJOR_MODELS[group];
+            let intercept = match built_up {
+                1 => model.intercept[0],
+                URBAN => model.intercept[1],
+                _ => 0.5 * (model.intercept[0] + model.intercept[1]),
+            };
+            let density: f64 = MAJOR_RADII_M
+                .iter()
+                .zip(model.slopes)
+                .map(|(&radius, slope)| {
+                    slope * (self.surroundings.around(middle, radius) + 100.0).ln()
+                })
+                .sum();
+            let lanes_term = if lanes > 0 {
+                MAJOR_LN_LANES * f64::from(lanes).ln()
+            } else {
+                MAJOR_LANES_UNKNOWN
+            };
+            let oneway_term = if oneway { MAJOR_ONEWAY } else { 0.0 };
+            return Some((intercept + density + lanes_term + oneway_term).exp());
+        }
         let models: &[MainModel] = if thai_rural_road && iso == *b"TH" {
             &THAI_RURAL_ROAD_MODELS
         } else {
@@ -301,6 +385,42 @@ pub fn local_km(lengths: impl Iterator<Item = (u8, f64)>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn major_roads_grow_with_the_buildings_and_lanes_around() {
+        let model = &MAJOR_MODELS[2];
+        let at = |boxes: [f64; 3], lanes: f64| {
+            (model.intercept[1]
+                + model
+                    .slopes
+                    .iter()
+                    .zip(boxes)
+                    .map(|(s, trip_ends)| s * (trip_ends + 100.0).ln())
+                    .sum::<f64>()
+                + MAJOR_LN_LANES * lanes.ln())
+            .exp()
+        };
+        // A two-lane urban primary road in a city (50,000 trip ends within 1 km, 500,000 within
+        // 5 km, 2 M within 15 km): about 9,600 a day, like the counted ones of dense European
+        // areas (12,000-14,000 across both directions); four lanes 1.5 times that.
+        let city = [5e4, 5e5, 2e6];
+        assert!(
+            (8_000.0..12_000.0).contains(&at(city, 2.0)),
+            "{}",
+            at(city, 2.0)
+        );
+        assert!((at(city, 4.0) / at(city, 2.0) - 2f64.powf(MAJOR_LN_LANES)).abs() < 1e-9);
+        let village = [500.0, 5e3, 5e4];
+        assert!(
+            at(village, 2.0) < at(city, 2.0) / 2.0,
+            "{}",
+            at(village, 2.0)
+        );
+        assert!(MAJOR_MODEL_COUNTRIES.windows(2).all(|w| w[0] < w[1]));
+        assert!(!MAJOR_MODEL_COUNTRIES.contains(b"MX") && MAJOR_MODEL_COUNTRIES.contains(b"CZ"));
+        assert_eq!(major_group(11), Some(3));
+        assert_eq!(major_group(3), None);
+    }
 
     #[test]
     fn thai_rural_road_refs_are_told_from_other_refs() {
