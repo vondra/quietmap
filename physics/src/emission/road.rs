@@ -104,7 +104,8 @@ pub const JUNCTION_REACH_M: f64 = 100.0;
 
 /// CNOSSOS-EU 2.2.5 (Eqs. 2.2.17-2.2.18, Table F-3): the rolling and propulsion corrections (dB,
 /// every band) of a category `distance_m` from a junction: vehicles braking and pulling away roll
-/// quieter and drive their engines harder. Motorcycles have none.
+/// quieter and drive their engines harder. The table has none for motorcycles; they follow the
+/// cars' level at a junction (see `motorcycle_gain_db`).
 pub fn junction_correction_db(
     category: VehicleCategory,
     junction: Option<(Junction, f64)>,
@@ -112,7 +113,7 @@ pub fn junction_correction_db(
     let Some((kind, distance_m)) = junction else {
         return (0.0, 0.0);
     };
-    let fade = (1.0 - distance_m.abs() / JUNCTION_REACH_M).max(0.0);
+    let fade = junction_fade(Some((kind, distance_m)));
     let (rolling, propulsion) = match (category, kind) {
         (VehicleCategory::Light, Junction::TrafficLights) => (-4.5, 5.5),
         (VehicleCategory::Light, Junction::Roundabout) => (-4.4, 3.1),
@@ -163,9 +164,13 @@ pub fn temperature_correction_db(category: VehicleCategory, air_temperature_c: f
 
 /// Motorcycles emit this much more than light vehicles at the same speed: the Japanese standard
 /// model ASJ RTN-Model 2018 (Sakamoto, Acoust. Sci. & Tech. 41(3), 2020, Table 2.3, dense asphalt,
-/// steady flow: motorcycles and mopeds 49.6 + 30 lg V against light vehicles' 45.8), from
-/// Japanese pass-by measurements; CNOSSOS-EU's category 4b puts them 0.9-2.2 dB below cars.
+/// steady flow at 40-140 km/h: motorcycles and mopeds 49.6 + 30 lg V against light vehicles'
+/// 45.8, the same speed law), from Japanese pass-by measurements; CNOSSOS-EU's category 4b puts
+/// them 3.5 dB over cars at 20 km/h and 0.9-2.4 dB under them at 50-110 km/h.
 pub const MOTORCYCLE_OVER_LIGHT_DB: f64 = 3.8;
+/// The same where traffic stops and starts (ASJ RTN-Model 2018 Table 2.3, non-steady flow at
+/// 10-60 km/h: 85.2 + 10 lg V against 82.3): motorcycles pull away like cars, 2.9 dB louder.
+pub const MOTORCYCLE_OVER_LIGHT_NON_STEADY_DB: f64 = 2.9;
 
 /// A-weighted sum (dB) of per-vehicle band energies.
 fn a_weighted_db(bands: &[f64; BANDS]) -> f64 {
@@ -175,8 +180,13 @@ fn a_weighted_db(bands: &[f64; BANDS]) -> f64 {
         .log10()
 }
 
-/// One vehicle's band energies of a category at a law speed, without any correction.
-fn bare_vehicle(category: VehicleCategory, law_speed: f64) -> [f64; BANDS] {
+/// One vehicle's band energies of a category at a law speed with a junction's rolling and
+/// propulsion corrections (dB) and no other.
+fn vehicle_at_junction(
+    category: VehicleCategory,
+    law_speed: f64,
+    (rolling_db, propulsion_db): (f64, f64),
+) -> [f64; BANDS] {
     let coefficients = category.coefficients();
     let (log_ratio, relative) = (
         (law_speed / REFERENCE_SPEED_KMH).log10(),
@@ -184,12 +194,35 @@ fn bare_vehicle(category: VehicleCategory, law_speed: f64) -> [f64; BANDS] {
     );
     std::array::from_fn(|band| {
         let (a_p, b_p) = coefficients.propulsion;
-        let mut energy = 10f64.powf((a_p[band] + b_p[band] * relative) / 10.0);
+        let mut energy = 10f64.powf((a_p[band] + b_p[band] * relative + propulsion_db) / 10.0);
         if let Some((a_r, b_r)) = coefficients.rolling {
-            energy += 10f64.powf((a_r[band] + b_r[band] * log_ratio) / 10.0);
+            energy += 10f64.powf((a_r[band] + b_r[band] * log_ratio + rolling_db) / 10.0);
         }
         energy
     })
+}
+
+/// How far into a junction's reach a flow is: 1 at the junction, 0 from `JUNCTION_REACH_M` on.
+fn junction_fade(junction: Option<(Junction, f64)>) -> f64 {
+    junction.map_or(0.0, |(_, distance_m)| {
+        (1.0 - distance_m.abs() / JUNCTION_REACH_M).max(0.0)
+    })
+}
+
+/// The A-weighted gain (dB) that takes a motorcycle of category 4b to its level over a light
+/// vehicle at the same speed (ASJ RTN-Model 2018): a car's level with the junction's stop and
+/// start terms (CNOSSOS-EU 2.2.5), plus 3.8 dB in steady flow, 2.9 dB at the junction.
+fn motorcycle_gain_db(law_speed: f64, junction: Option<(Junction, f64)>) -> f64 {
+    let car = vehicle_at_junction(
+        VehicleCategory::Light,
+        law_speed,
+        junction_correction_db(VehicleCategory::Light, junction),
+    );
+    let own = vehicle_at_junction(VehicleCategory::Motorcycle, law_speed, (0.0, 0.0));
+    let over = MOTORCYCLE_OVER_LIGHT_DB
+        + (MOTORCYCLE_OVER_LIGHT_NON_STEADY_DB - MOTORCYCLE_OVER_LIGHT_DB)
+            * junction_fade(junction);
+    a_weighted_db(&car) + over - a_weighted_db(&own)
 }
 
 /// Sound power per metre (dB, Z-weighted) of a mix of flows; `-inf` in every band when silent.
@@ -220,11 +253,10 @@ pub fn line_emission_db(
             VehicleCategory::Light => 1.0 - flow.electric_share.clamp(0.0, 1.0),
             _ => 1.0,
         };
-        // A motorcycle keeps category 4b's spectrum at the level ASJ measures over a car.
+        // A motorcycle keeps category 4b's spectrum at the level ASJ measures over a car, pulling
+        // away from a junction like one.
         let motorcycle_scale = if flow.category == VehicleCategory::Motorcycle {
-            let light = a_weighted_db(&bare_vehicle(VehicleCategory::Light, law_speed));
-            let own = a_weighted_db(&bare_vehicle(VehicleCategory::Motorcycle, law_speed));
-            10f64.powf((light + MOTORCYCLE_OVER_LIGHT_DB - own) / 10.0)
+            10f64.powf(motorcycle_gain_db(law_speed, flow.junction) / 10.0)
         } else {
             1.0
         };
@@ -473,6 +505,34 @@ mod tests {
         let at = |speed| a_weighted(&flow(1_000.0, speed, VehicleCategory::Light), 0.0);
         let rise = at(140.0) - at(130.0);
         assert!((rise - 0.79).abs() < 0.05, "{rise}");
+    }
+
+    /// At a traffic light a motorcycle pulls away 2.9 dB over a car doing the same (ASJ's
+    /// non-steady flow), the car with CNOSSOS-EU's stop-and-start terms; 50 m on, halfway back to
+    /// the steady 3.8 dB.
+    #[test]
+    fn a_motorcycle_pulls_away_over_a_car_by_the_japanese_measurements() {
+        for (distance, over) in [(0.0, 2.9), (50.0, 3.35)] {
+            let at = Some((Junction::TrafficLights, distance));
+            let mix = |category| {
+                let [one] = flow(100.0, 30.0, category);
+                a_weighted(
+                    &[CategoryFlow {
+                        junction: at,
+                        ..one
+                    }],
+                    0.0,
+                )
+            };
+            let (car, moto) = (
+                mix(VehicleCategory::Light),
+                mix(VehicleCategory::Motorcycle),
+            );
+            assert!(
+                (moto - car - over).abs() < 0.05,
+                "{distance}: {moto} vs {car}"
+            );
+        }
     }
 
     /// A motorcycle sounds 3.8 dB over a car at the same speed (ASJ RTN-Model 2018), at 30, 50
