@@ -13,9 +13,10 @@
 //! flag, then the square's grid of trip ends.
 
 use crate::dev4::{Dev4, Square, Z9_PER_AXIS, cell, column, require_stamp};
+use crate::structures::footprint_area_m2;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Int32Type, UInt8Type, UInt16Type};
-use arrow_array::{Array, Float32Array, Int32Array, Int64Array, UInt8Array};
+use arrow_array::{Array, BinaryArray, Float32Array, Int32Array, Int64Array, UInt8Array};
 use rayon::prelude::*;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -532,8 +533,12 @@ fn read_roads(dev4: &Dev4, square: Square) -> Result<Option<Vec<RoadRow>>, Strin
     Ok(Some(rows))
 }
 
-/// The OSM buildings of `structures.arrow` (kind 0 with an OSM id) at their emission centroid
-/// (else their centroid), with dev4's demand storeys.
+/// The buildings of `structures.arrow` (kind 0) at their emission centroid (else their centroid),
+/// with dev4's demand storeys: OSM's with their type and area, and the footprints OSM lacks
+/// (dev4's Overture-only screening stock, matched to OSM one to one at an IoU of 0.5, without an
+/// OSM id, type or area) as buildings of unknown use of their outline's area. dev4's trip
+/// generation skipped those: 2.1 of Bangkok's 2.3 million footprints, 2.5 of Mexico City's 2.7
+/// million, against 3 % of Prague's floor (`evidence/2026-10-03/buildings`).
 fn read_buildings(dev4: &Dev4, square: Square) -> Result<Vec<BuildingLoad>, String> {
     let Some(table) = dev4.table(square, "structures.arrow")? else {
         return Ok(Vec::new());
@@ -556,8 +561,13 @@ fn read_buildings(dev4: &Dev4, square: Square) -> Result<Vec<BuildingLoad>, Stri
         ];
         let ids = column::<Int64Array>(batch, "osm_id")?;
         let areas = column::<Float32Array>(batch, "area_m2")?;
+        let outlines = column::<BinaryArray>(batch, "geom")?;
         for row in 0..batch.num_rows() {
-            if kinds.value(row) != 0 || !ids.is_valid(row) {
+            if kinds.value(row) != 0 {
+                continue;
+            }
+            let osm = ids.is_valid(row);
+            if !osm && !outlines.is_valid(row) {
                 continue;
             }
             let [x, y] = if emission.iter().all(|values| values.is_valid(row)) {
@@ -569,11 +579,15 @@ fn read_buildings(dev4: &Dev4, square: Square) -> Result<Vec<BuildingLoad>, Stri
                 .filter(|&count| count > 0)
                 .or_else(|| cell(floors, row))
                 .unwrap_or(1);
-            let area = cell(areas, row)
-                .filter(|area| area.is_finite() && *area > 0.0)
-                .map(f64::from);
-            let (dwellings, trips) =
-                building_load(cell(types, row).unwrap_or(0), storey_count, area);
+            let (building_type, area) = if osm {
+                let area = cell(areas, row)
+                    .filter(|area| area.is_finite() && *area > 0.0)
+                    .map(f64::from);
+                (cell(types, row).unwrap_or(0), area)
+            } else {
+                (0, footprint_area_m2(outlines.value(row)))
+            };
+            let (dwellings, trips) = building_load(building_type, storey_count, area);
             if dwellings > 0.0 || trips > 0.0 {
                 buildings.push(BuildingLoad {
                     at: (x.value(row), y.value(row)),

@@ -78,13 +78,14 @@ const COUNTRY_SHIFTS_DB: [([u8; 2], [[f64; 2]; 2]); 4] = [
 /// The world's counted major roads (motorway, trunk, primary and their links): 3.36 M rows in
 /// 933 squares of 20 countries (US, Europe, Japan, New Zealand, Colombia, Chile, Mexico), every
 /// country weighed alike. The daily traffic of a row follows the trip ends of the buildings
-/// within 1, 5 and 15 km (square boxes) by road group, the class and built-up area, its lanes
-/// and a one-way carriageway: held out a whole country at a time, 2.30 dB mean absolute error
-/// against 3.00 for the class priors, every one of the 19 countries better (Germany 2.61 ->
-/// 1.63, the US 3.36 -> 2.40, the Netherlands 3.88 -> 2.05, Colombia 2.85 -> 2.45). Mexico's
-/// federal roads carry 4 dB more than the buildings say (as Thailand's rural roads do: a sparse
-/// network carries a region's traffic), so the fit leaves Mexico out and the model applies
-/// only to the class priors of the countries where it held out well.
+/// within 1, 5 and 15 km (square boxes; every building, the footprints OSM lacks among them) by
+/// road group, the class and built-up area, its lanes and a one-way carriageway: held out a whole
+/// country at a time, 2.27 dB mean absolute error against 3.00 for the class priors, every one of
+/// the 19 fitted countries better (Germany 2.61 -> 1.64, the US 3.36 -> 2.33, the Netherlands
+/// 3.88 -> 2.17, Colombia 2.85 -> 2.08). Mexico, left out of the fit, reads 2.86 dB against its
+/// priors' 3.09 (+1.3 dB low; 4.77 when only OSM's buildings made trip ends, a fifth of Mexico
+/// City's), so the model replaces the class priors there too; Thailand's department roads read
+/// 3.12 against the priors' 2.75 (5.07 with OSM's buildings alone) and keep theirs.
 struct MajorModel {
     /// Natural-log intercepts, rural and urban (unknown built-up the mean).
     intercept: [f64; 2],
@@ -97,30 +98,30 @@ const MAJOR_RADII_M: [f64; 3] = [1_000.0, 5_000.0, 15_000.0];
 /// Motorways, trunks, primary roads, their links.
 const MAJOR_MODELS: [MajorModel; 4] = [
     MajorModel {
-        intercept: [3.7548, 3.6849],
-        slopes: [0.0275, 0.0062, 0.3789],
+        intercept: [2.9621, 2.8953],
+        slopes: [0.0072, 0.0176, 0.4403],
     },
     MajorModel {
-        intercept: [5.0775, 5.1465],
-        slopes: [0.0123, 0.0549, 0.2155],
+        intercept: [3.7332, 3.6682],
+        slopes: [0.0410, 0.0836, 0.2731],
     },
     MajorModel {
-        intercept: [5.3850, 5.5418],
-        slopes: [0.0019, 0.0830, 0.1443],
+        intercept: [4.3867, 4.4465],
+        slopes: [0.0284, 0.0984, 0.1884],
     },
     MajorModel {
-        intercept: [-0.4141, -0.4399],
-        slopes: [-0.0274, 0.2730, 0.3825],
+        intercept: [-0.7808, -0.8148],
+        slopes: [-0.0303, 0.2955, 0.3932],
     },
 ];
 /// The model's one-way term, its elasticity to the lanes and its term for unknown lanes.
-const MAJOR_ONEWAY: f64 = -0.1218;
-const MAJOR_LN_LANES: f64 = 0.6053;
-const MAJOR_LANES_UNKNOWN: f64 = -0.0046;
+const MAJOR_ONEWAY: f64 = -0.1874;
+const MAJOR_LN_LANES: f64 = 0.5401;
+const MAJOR_LANES_UNKNOWN: f64 = -0.0209;
 /// The countries where the model beat the class priors with the country held out.
-const MAJOR_MODEL_COUNTRIES: [[u8; 2]; 19] = [
+const MAJOR_MODEL_COUNTRIES: [[u8; 2]; 20] = [
     *b"CH", *b"CL", *b"CO", *b"CZ", *b"DE", *b"ES", *b"FI", *b"FR", *b"GB", *b"IE", *b"IT", *b"JP",
-    *b"LU", *b"NL", *b"NO", *b"NZ", *b"PL", *b"SE", *b"US",
+    *b"LU", *b"MX", *b"NL", *b"NO", *b"NZ", *b"PL", *b"SE", *b"US",
 ];
 
 /// The model group of a dev4 class: motorway, trunk, primary, a link of any of them.
@@ -135,29 +136,32 @@ fn major_group(class: u8) -> Option<usize> {
 }
 
 /// Thailand's Department of Rural Roads network (refs such as "สฎ.6038": a province's
-/// abbreviation and four digits) carries traffic its own way: the network's counted roads (DRR
-/// AADT 2024 on 416,746 tertiary and 30,716 secondary rows in 122 and 75 squares) hardly follow
-/// the buildings around, tertiary ones carrying 1,800-3,000 vehicles a day wherever they run,
-/// where the pooled European model put 400 in the country and 5,900 in towns. Fitted with every
-/// square weighed alike; held out by square, 3.0 dB mean absolute error against the pooled
-/// model's 8.0 (secondary 2.9 against 5.2). An uncounted road of the network takes this fit;
-/// Thailand's other uncounted roads (municipal streets without a ref) keep the pooled model.
+/// abbreviation and four digits): the network's counted roads (DRR AADT 2024 on 480,221 tertiary
+/// and 32,824 secondary rows in 122 and 75 squares) against the trip ends of every building, the
+/// footprints OSM lacks among them. Fitted with every square weighed alike, the trip ends capped at
+/// the counted rows' 90th percentile; held out by square, 3.0 dB mean absolute error (secondary
+/// 2.7). Secondary roads follow the buildings as Europe's do (slope 0.39, Europe's 0.34; 3,700 a
+/// day at the median 53,000 trip ends within 5 km, Europe's model 3,100), tertiary ones carry 2.4
+/// dB more than Europe's at the same trip ends (1,900 at 33,000). With OSM's buildings alone (a
+/// tenth to a half of Thailand's) the roads seemed to carry their traffic whatever the buildings
+/// (slopes 0.13 and 0.05). An uncounted road of the network takes this fit; Thailand's other
+/// uncounted roads (municipal streets without a ref) keep the pooled model.
 const THAI_RURAL_ROAD_MODELS: [MainModel; 2] = [
     MainModel {
         class: 3,
         radius_m: 5_000.0,
-        most_around: 617_000.0,
-        intercept: [7.311, 7.197, 7.425],
-        slope: 0.121,
-        oneway: -0.136,
+        most_around: 628_000.0,
+        intercept: [3.982, 3.921, 4.043],
+        slope: 0.394,
+        oneway: -0.357,
     },
     MainModel {
         class: 4,
         radius_m: 5_000.0,
-        most_around: 446_000.0,
-        intercept: [7.366, 7.200, 7.531],
-        slope: 0.039,
-        oneway: 0.338,
+        most_around: 145_000.0,
+        intercept: [4.734, 4.627, 4.841],
+        slope: 0.279,
+        oneway: 0.212,
     },
 ];
 
@@ -425,7 +429,7 @@ mod tests {
             at(village, 2.0)
         );
         assert!(MAJOR_MODEL_COUNTRIES.windows(2).all(|w| w[0] < w[1]));
-        assert!(!MAJOR_MODEL_COUNTRIES.contains(b"MX") && MAJOR_MODEL_COUNTRIES.contains(b"CZ"));
+        assert!(!MAJOR_MODEL_COUNTRIES.contains(b"TH") && MAJOR_MODEL_COUNTRIES.contains(b"MX"));
         assert_eq!(major_group(11), Some(3));
         assert_eq!(major_group(3), None);
     }
@@ -438,20 +442,20 @@ mod tests {
         for reference in ["4169", "สฎ.603", "Sukhumvit", "", "สฎ6038", "AH2"] {
             assert!(!thai_rural_road_ref(reference), "{reference}");
         }
-        // The network's tertiary roads carry about 2,000 a day in the country, 3,000 in towns.
-        let tertiary = &THAI_RURAL_ROAD_MODELS[1];
-        let at =
-            |b: usize, around: f64| (tertiary.intercept[b] + tertiary.slope * around.ln()).exp();
-        assert!(
-            (1_800.0..2_200.0).contains(&at(1, 10_000.0)),
-            "{}",
-            at(1, 10_000.0)
-        );
-        assert!(
-            (2_500.0..3_100.0).contains(&at(2, 50_000.0)),
-            "{}",
-            at(2, 50_000.0)
-        );
+        // The network's tertiary roads carry about 1,900 a day at the counted rows' median
+        // 33,000 trip ends within 5 km in the country, 2,600 in towns at 50,000; its secondary
+        // roads 3,700 at their median 53,000.
+        let at = |model: &MainModel, b: usize, around: f64| {
+            (model.intercept[b] + model.slope * around.ln()).exp()
+        };
+        let [secondary, tertiary] = &THAI_RURAL_ROAD_MODELS;
+        for (value, range) in [
+            (at(tertiary, 1, 32_700.0), 1_700.0..2_000.0),
+            (at(tertiary, 2, 50_000.0), 2_400.0..2_800.0),
+            (at(secondary, 1, 53_400.0), 3_400.0..4_000.0),
+        ] {
+            assert!(range.contains(&value), "{value}");
+        }
     }
 
     #[test]

@@ -45,6 +45,21 @@ fn nearest_copy(global: GlobalSteps, reference_x: i64) -> GlobalSteps {
     }
 }
 
+/// A footprint's area (m2): its parts' exterior rings less their holes; `None` on incomplete
+/// topology.
+pub(crate) fn footprint_area_m2(bytes: &[u8]) -> Option<f64> {
+    let area = decode_parts(bytes)?
+        .iter()
+        .flat_map(|rings| {
+            rings.iter().enumerate().map(|(index, ring)| {
+                let area = crate::sources::cells::ring_area_m2(ring).unwrap_or(0.0);
+                if index == 0 { area } else { -area }
+            })
+        })
+        .sum::<f64>();
+    (area > 0.0).then_some(area)
+}
+
 /// dev4 `decode_grid_polygons`: u32 parts; per part u32 rings; per ring u32 points and that many
 /// (i32 x east, i32 y north) z30 pairs, exterior first. `None` on incomplete topology.
 fn decode_parts(mut bytes: &[u8]) -> Option<Vec<Vec<Z30Ring>>> {
