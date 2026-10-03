@@ -7,7 +7,9 @@ use super::motorcycles::{LocalMotorcycles, country_share};
 use super::period_shares::period_shares;
 use super::road_junctions::{Junctions, traffic_signals};
 use super::road_slope::{SquareHeights, WayRow, row_slopes};
-use super::road_traffic::{BUS_SERVICE_BY_BUILT_UP, BuildingTraffic, local_km};
+use super::road_traffic::{
+    BUS_SERVICE_BY_BUILT_UP, BuildingTraffic, local_km, thai_rural_road_ref,
+};
 use super::tagged_speeds::tagged_speed_kmh;
 use super::{Converted, Reach, group_key, split_at_tile_edges};
 use crate::climate::Temperature;
@@ -651,6 +653,7 @@ pub fn convert(
                             country.value(row),
                             source_id.value(row) == PRIOR_SOURCE_ID,
                         ),
+                        thai_rural_road_ref(refs.value(row)),
                     )
                 });
             let mut daily = match modelled {

@@ -75,6 +75,51 @@ const COUNTRY_SHIFTS_DB: [([u8; 2], [[f64; 2]; 2]); 4] = [
     (*b"SE", [[-0.8, -0.8], [-6.7, -6.7]]),
 ];
 
+/// Thailand's Department of Rural Roads network (refs such as "สฎ.6038": a province's
+/// abbreviation and four digits) carries traffic its own way: the network's counted roads (DRR
+/// AADT 2024 on 416,746 tertiary and 30,716 secondary rows in 122 and 75 squares) hardly follow
+/// the buildings around, tertiary ones carrying 1,800-3,000 vehicles a day wherever they run,
+/// where the pooled European model put 400 in the country and 5,900 in towns. Fitted with every
+/// square weighed alike; held out by square, 3.0 dB mean absolute error against the pooled
+/// model's 8.0 (secondary 2.9 against 5.2). An uncounted road of the network takes this fit;
+/// Thailand's other uncounted roads (municipal streets without a ref) keep the pooled model.
+const THAI_RURAL_ROAD_MODELS: [MainModel; 2] = [
+    MainModel {
+        class: 3,
+        radius_m: 5_000.0,
+        most_around: 617_000.0,
+        intercept: [7.311, 7.197, 7.425],
+        slope: 0.121,
+        oneway: -0.136,
+    },
+    MainModel {
+        class: 4,
+        radius_m: 5_000.0,
+        most_around: 446_000.0,
+        intercept: [7.366, 7.200, 7.531],
+        slope: 0.039,
+        oneway: 0.338,
+    },
+];
+
+/// Whether an OSM ref names a road of Thailand's rural road network: one or two Thai letters, a
+/// full stop and four digits ("สฎ.6038", "กบ. 4038"), alone or among several refs.
+pub fn thai_rural_road_ref(reference: &str) -> bool {
+    reference.split(';').any(|part| {
+        let Some((province, number)) = part.trim().split_once('.') else {
+            return false;
+        };
+        let letters = province.chars().count();
+        let number = number.trim();
+        (1..=2).contains(&letters)
+            && province
+                .chars()
+                .all(|c| ('\u{0E01}'..='\u{0E2E}').contains(&c))
+            && number.len() == 4
+            && number.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
 /// Counted tertiary roads are the busier ones wherever counting selects them (Czechia's census
 /// counts 21 % of its III-class roads by length around Bosen, Germany's and Poland's 14 and 20 %
 /// of their tertiary roads in the sampled squares, reading 5 dB over the pooled model), and the
@@ -155,6 +200,7 @@ impl BuildingTraffic {
         row: usize,
         (class, built_up, oneway): (u8, u8, bool),
         (middle, country_iso, prior): ((i32, i32), u16, bool),
+        thai_rural_road: bool,
     ) -> Option<f64> {
         let flow = self
             .traffic
@@ -195,7 +241,15 @@ impl BuildingTraffic {
                     .exp()
             })
         };
-        let model = MAIN_MODELS.iter().find(|model| model.class == class);
+        let models: &[MainModel] = if thai_rural_road && iso == *b"TH" {
+            &THAI_RURAL_ROAD_MODELS
+        } else {
+            &MAIN_MODELS
+        };
+        let model = models
+            .iter()
+            .find(|model| model.class == class)
+            .or_else(|| MAIN_MODELS.iter().find(|model| model.class == class));
         match (class, flow, model) {
             (c, Some(flow), _) if TREE_CLASSES.contains(&c) => Some(f64::from(flow)),
             // In a town an unclassified street also collects what passes through; outside one it
@@ -247,6 +301,30 @@ pub fn local_km(lengths: impl Iterator<Item = (u8, f64)>) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thai_rural_road_refs_are_told_from_other_refs() {
+        for reference in ["สฎ.6038", "กบ. 4038", "นธ.6037;3060", "อ.1234"] {
+            assert!(thai_rural_road_ref(reference), "{reference}");
+        }
+        for reference in ["4169", "สฎ.603", "Sukhumvit", "", "สฎ6038", "AH2"] {
+            assert!(!thai_rural_road_ref(reference), "{reference}");
+        }
+        // The network's tertiary roads carry about 2,000 a day in the country, 3,000 in towns.
+        let tertiary = &THAI_RURAL_ROAD_MODELS[1];
+        let at =
+            |b: usize, around: f64| (tertiary.intercept[b] + tertiary.slope * around.ln()).exp();
+        assert!(
+            (1_800.0..2_200.0).contains(&at(1, 10_000.0)),
+            "{}",
+            at(1, 10_000.0)
+        );
+        assert!(
+            (2_500.0..3_100.0).contains(&at(2, 50_000.0)),
+            "{}",
+            at(2, 50_000.0)
+        );
+    }
 
     #[test]
     fn uncounted_tertiary_roads_shift_most_where_buildings_are_few() {
