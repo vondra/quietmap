@@ -55,7 +55,7 @@ const HALL_BREAKOUT: [f64; BANDS] = [0.0, 1.0, 1.0, 0.0, -1.0, -2.0, -4.0, -7.0]
 /// The profile of a building class; `None` for [`SILENT`]. Classes 0-9: residential (one air
 /// source heat pump L_W 54-62, Daikin EN14825), commercial (AHU and chillers, Guyer), warehouse
 /// or factory (roof and facade breakout), school (yard voices, 71.7 dB just outside in breaks),
-/// hospital (24/7 chillers and gensets), church (bells, fleet average), hotel, garage (vent fans),
+/// hospital (24/7 chillers and gensets), place of worship (a public building's services), hotel, garage (vent fans),
 /// farm (livestock fans), public; food retail re-anchored to one refrigeration unit (RWDI),
 /// hospitality to a kitchen extract (Guyer) with VDI 3770 voices. Unknown classes are residential.
 pub fn building_profile(class: u8) -> Option<BuildingProfile> {
@@ -77,13 +77,9 @@ pub fn building_profile(class: u8) -> Option<BuildingProfile> {
             -25.0,
         ),
         4 => profile(72.0, 26.0, BUILDING_SERVICES, -3.0, -5.0),
-        5 => profile(
-            72.0,
-            26.0,
-            [-3.0, -2.0, -1.0, 0.0, 1.0, 1.0, 0.0, -2.0],
-            -5.0,
-            -20.0,
-        ),
+        // A place of worship's own plant (its bells are events of their own, `bells`): a public
+        // building's services, dev4's steady 72 dB(A) of "bells, fleet average" dropped.
+        5 => profile(62.0, 25.0, BUILDING_SERVICES, -8.0, -20.0),
         6 => profile(
             58.0,
             22.0,

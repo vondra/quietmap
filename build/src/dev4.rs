@@ -19,6 +19,16 @@ pub struct Square {
 }
 
 impl Square {
+    /// The square of a z30 cell (x east from 180 W, y north from the equator at 2^29).
+    pub fn of_z30(gx: i32, gy: i32) -> Square {
+        let per_square = (1i64 << 30) / i64::from(Z9_PER_AXIS);
+        let last = i64::from(Z9_PER_AXIS) - 1;
+        Square {
+            x: (i64::from(gx) / per_square).clamp(0, last) as u32,
+            y: ((((1i64 << 30) - 1) - i64::from(gy)) / per_square).clamp(0, last) as u32,
+        }
+    }
+
     /// The square and its existing neighbours (x wraps, y stops at the poles).
     pub fn with_neighbours(self) -> Vec<Square> {
         let mut squares = Vec::new();

@@ -20,3 +20,10 @@ test('trains and airport movements read by the day; a steady source says nothing
   assert.equal(heardText('aircraft', heard(20, 15, 2)), '316 movements a day')
   assert.equal(heardText('building', undefined), null)
 })
+
+test('church bells read as how often they ring', () => {
+  // A German church: prayer ringing twice by day and the Sunday peal, the quarters struck by day
+  // and evening, the morning ringing before 07 h.
+  assert.equal(heardText('building', heard(50.14 / 12, 16 / 4, 1 / 8)), 'rings 67 times a day')
+  assert.equal(heardText('building', heard(2.14 / 12, 0, 1 / 8)), 'rings 3 times a day')
+})

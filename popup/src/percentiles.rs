@@ -3,8 +3,9 @@
 //! x (its distance): vehicles on a road (the daily flow over the period's share and hours, over
 //! the speed), trains on a track (the period's trains over its hours, over the speed), airport
 //! movements on an aeroway (at taxi speed); the flights heard one more line at the boxes'
-//! energy-weighted lambda; industry, buildings, ships and the unlisted remainder steady at their
-//! mean. A road's flow follows the hours of the day within each period (measured hourly profiles:
+//! energy-weighted lambda; events (church bells) on for their duty, the share of the period they
+//! sound, at their mean over it; industry, buildings, ships and the unlisted remainder steady at
+//! their mean. A road's flow follows the hours of the day within each period (measured hourly profiles:
 //! a night's 3 am carries a fifth of its mean), all roads the same hour of a draw. The sum's
 //! distribution is drawn by a simulation seeded by the click, each line's draws stratified (one in
 //! each 1/DRAWS of its probability, in a shuffled order) and the lines taken in a fixed order, so
@@ -94,6 +95,9 @@ struct Line {
     lambda: [f64; PERIODS],
     /// A road's hourly profile ([`HOURLY_SHARES`]); `None` keeps the period's mean every hour.
     profile: Option<usize>,
+    /// An event source's share of each period it sounds: on, it is its mean over the duty; off,
+    /// silent.
+    duty: Option<[f64; PERIODS]>,
 }
 
 impl Line {
@@ -121,6 +125,29 @@ fn period_shares(fields: &serde_json::Value) -> Option<[f64; PERIODS]> {
         .collect();
     (shares.len() == PERIODS && shares.iter().all(|share| *share >= 0.0))
         .then(|| std::array::from_fn(|p| shares[p]))
+}
+
+/// An event source's duty per period (the share of the period it sounds), from its display
+/// fields; `None` for any other source.
+fn duty(fields: &serde_json::Value) -> Option<[f64; PERIODS]> {
+    let values = fields.get("duty")?.as_array()?;
+    let duty: Vec<f64> = values
+        .iter()
+        .filter_map(serde_json::Value::as_f64)
+        .collect();
+    (duty.len() == PERIODS && duty.iter().all(|share| (0.0..=1.0).contains(share)))
+        .then(|| std::array::from_fn(|p| duty[p]))
+}
+
+/// An event source's events per hour by day, evening and night, from its events a day per
+/// period.
+fn events_per_hour(fields: &serde_json::Value) -> Option<[f64; PERIODS]> {
+    let values = fields.get("events_per_day")?.as_array()?;
+    let events: Vec<f64> = values
+        .iter()
+        .filter_map(serde_json::Value::as_f64)
+        .collect();
+    (events.len() == PERIODS).then(|| std::array::from_fn(|p| events[p] / PERIOD_HOURS[p]))
 }
 
 /// A contributor's passes per hour by day, evening and night and their speed (m/s) from its
@@ -208,11 +235,18 @@ fn lambda(per_hour: [f64; PERIODS], speed_m_s: f64, distance_m: f64) -> [f64; PE
     per_hour.map(|passes| passes / 3_600.0 / speed_m_s * distance_m.max(DISTANCE_MIN_M))
 }
 
-/// How `contributor` is heard, from its display fields; `None` for a steady source.
+/// How `contributor` is heard, from its display fields: its passes, or its events (church bells
+/// ringing), per hour; `None` for a steady source.
 pub fn heard(
     contributor: &crate::update::Contributor,
     fields: &serde_json::Value,
 ) -> Option<Heard> {
+    if let Some(per_hour) = events_per_hour(fields) {
+        return Some(Heard {
+            per_hour,
+            steady: false,
+        });
+    }
     let (per_hour, speed) = traffic(contributor.layer, fields)?;
     Some(Heard {
         per_hour,
@@ -224,12 +258,22 @@ pub fn heard(
 const LOUD_EXCEEDED: f64 = 0.05;
 
 /// A source's energy exceeded 5 % of the time by itself, per period: its mean energy where it is
-/// steady (industry, buildings, ships, or no traffic in its fields), else its line's L5 at its
+/// steady (industry, buildings, ships, or no traffic in its fields), an event source's level while
+/// it sounds if it sounds at least 5 % of the time (else nothing), else its line's L5 at its
 /// lambda. A car every few hours by the window weighs little; the flights of an approach a lot.
 pub fn loud_energy(
     contributor: &crate::update::Contributor,
     fields: Option<&serde_json::Value>,
 ) -> [f64; PERIODS] {
+    if let Some(duty) = fields.and_then(duty) {
+        return std::array::from_fn(|p| {
+            if duty[p] >= LOUD_EXCEEDED {
+                contributor.energy[p] / duty[p]
+            } else {
+                0.0
+            }
+        });
+    }
     let steady = matches!(
         contributor.layer,
         Layer::Industry | Layer::Building | Layer::Ship
@@ -279,11 +323,14 @@ pub fn percentiles(
             if !significant {
                 continue;
             }
-            // Industry, buildings and ships are steady; their level still follows the weather.
+            // Industry, buildings and ships are steady (events apart); their level still follows
+            // the weather.
+            let mut events = None;
             let (lambda, profile) = if matches!(
                 selection.layer,
                 Layer::Industry | Layer::Building | Layer::Ship
             ) {
+                events = fields(contributor).as_ref().and_then(duty);
                 ([f64::INFINITY; PERIODS], None)
             } else {
                 let Some((per_hour, speed, profile)) =
@@ -299,6 +346,7 @@ pub fn percentiles(
                 states: contributor.states,
                 lambda,
                 profile,
+                duty: events,
             });
         }
     }
@@ -316,6 +364,7 @@ pub fn percentiles(
             }
         }),
         profile: None,
+        duty: None,
     });
     let mut random = Random::new(seed);
     let mut result = Percentiles {
@@ -361,11 +410,23 @@ pub fn percentiles(
                 } else {
                     line.energy[p]
                 };
-                let factor = line
-                    .profile
-                    .map_or(1.0, |profile| hour_factor(profile, p, slots[k]));
-                draws[k] +=
-                    mean * factor * relative_intensity(line.lambda[p] * factor, probability);
+                draws[k] += match line.duty {
+                    // An event sounds in its duty's share of the draws, at its mean over it.
+                    Some(duty) if duty[p] > 0.0 => {
+                        if probability >= 1.0 - duty[p] {
+                            mean / duty[p]
+                        } else {
+                            0.0
+                        }
+                    }
+                    Some(_) => 0.0,
+                    None => {
+                        let factor = line
+                            .profile
+                            .map_or(1.0, |profile| hour_factor(profile, p, slots[k]));
+                        mean * factor * relative_intensity(line.lambda[p] * factor, probability)
+                    }
+                };
             }
         }
         draws.sort_by(f64::total_cmp);
@@ -577,5 +638,35 @@ mod tests {
             (first.l10, first.l50, first.l90),
             (second.l10, second.l50, second.l90)
         );
+    }
+
+    /// Church bells sounding 2 % of the day at a mean of 40 dB beside a steady 40 dB: the
+    /// percentiles keep the steady 40 (a steady source of the bells' energy would put L50 at 43),
+    /// the bells are heard as their rings a day and add nothing to the loud moments.
+    #[test]
+    fn events_sound_for_their_duty_and_are_silent_otherwise() {
+        let bells_fields = |c: &Contributor| {
+            (c.group_key == 2).then(|| {
+                serde_json::json!({"events_per_day": [36.0, 0.0, 3.0], "duty": [0.02, 0.0, 0.01]})
+            })
+        };
+        let plant = contributor(1, Layer::Industry, 40.0, 50.0);
+        let bells = contributor(2, Layer::Building, 40.0, 80.0);
+        let levels = percentiles(
+            &[
+                selection(Layer::Industry, vec![plant]),
+                selection(Layer::Building, vec![bells.clone()]),
+            ],
+            ([0.0; PERIODS], [0.0; PERIODS]),
+            &bells_fields,
+            5,
+        );
+        for level in [levels.l5[0], levels.l50[0], levels.l90[0]] {
+            assert!((level - 40.0).abs() < 1e-9, "{level}");
+        }
+        let fields = bells_fields(&bells).unwrap();
+        let heard_bells = heard(&bells, &fields).unwrap();
+        assert!(!heard_bells.steady && (heard_bells.per_hour[0] - 3.0).abs() < 1e-9);
+        assert_eq!(loud_energy(&bells, Some(&fields)), [0.0; PERIODS]);
     }
 }

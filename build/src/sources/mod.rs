@@ -3,6 +3,7 @@
 //! table per tile with identical records stored once.
 
 pub mod airport;
+pub mod bells;
 pub mod building;
 pub mod building_plant;
 pub mod bus;
@@ -148,7 +149,12 @@ pub fn group_key(parts: &[&str]) -> u64 {
 /// neighbours itself, for its facility joins). Returns the number of tiles written.
 pub fn build(
     (dev4, climate, network): (&Dev4, &Climate, &FreightNetwork),
-    (airport_traffic, road_traffic, bus): (&Path, Option<&Path>, Option<&bus::BusRoutes>),
+    (airport_traffic, road_traffic, bus, worship): (
+        &Path,
+        Option<&Path>,
+        Option<&bus::BusRoutes>,
+        Option<&bells::WorshipSites>,
+    ),
     squares: &[Square],
     out: &Path,
 ) -> Result<usize, String> {
@@ -163,7 +169,7 @@ pub fn build(
         .map(|&square| {
             build_square(
                 (dev4, climate, network),
-                (airport_traffic, road_traffic, bus),
+                (airport_traffic, road_traffic, bus, worship),
                 square,
                 out,
             )
@@ -174,7 +180,12 @@ pub fn build(
 /// The sources tiles of one square (the squares build in parallel, each within its own memory).
 fn build_square(
     (dev4, climate, network): (&Dev4, &Climate, &FreightNetwork),
-    (airport_traffic, road_traffic, bus): (&Path, Option<&Path>, Option<&bus::BusRoutes>),
+    (airport_traffic, road_traffic, bus, worship): (
+        &Path,
+        Option<&Path>,
+        Option<&bus::BusRoutes>,
+        Option<&bells::WorshipSites>,
+    ),
     square: Square,
     out: &Path,
 ) -> Result<usize, String> {
@@ -191,7 +202,7 @@ fn build_square(
         )?;
         rail::convert((dev4, network), neighbour, &mut converted)?;
         leisure::convert(dev4, neighbour, road_traffic, &mut converted)?;
-        building::convert(dev4, climate, neighbour, &mut converted)?;
+        building::convert(dev4, (climate, worship), neighbour, &mut converted)?;
         ship::convert(dev4, neighbour, &mut converted)?;
         airport::convert(airport_traffic, neighbour, &mut converted)?;
         converted.retain(owned);
