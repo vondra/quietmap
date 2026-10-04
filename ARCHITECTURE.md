@@ -70,7 +70,11 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
   clocks strike the quarters; mosques call five times a day at their place's prayer times, by
   their country's rules (Friday's call only, and only from a minaret, in western Europe, the
   Americas and East Asia); the popup's time levels count an event only in the share of the
-  period it sounds.
+  period it sounds. The people outside bars, pubs, nightclubs, beer gardens, restaurants, cafés
+  and fast-food places (OpenStreetMap) sit on their terraces and stand at their doors by their
+  hours (the mapped ones, else their country's), each a talker's power with a third talking,
+  in front of the building they are mapped in; clusters of drinking places add their street
+  crowd at night.
 - Reading is always whole files with plain reads, all files of a ring at once, one reader per
   file (cold on NVMe 5-8x faster than mmap with MADV_WILLNEED, whose faults read 32 KB at a
   time).

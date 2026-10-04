@@ -112,6 +112,22 @@ impl Climate {
             cooling: above(COOLING_BASE_C),
         }
     }
+
+    /// The share of the year whose daily mean reaches `base_c`, on the same sinusoidal year.
+    pub fn share_of_year_above(&self, lat: f64, lon: f64, base_c: f64) -> f64 {
+        let mean = self.mean.at(lat, lon);
+        let amplitude = (self.warmest_quarter.at(lat, lon) - self.coldest_quarter.at(lat, lon))
+            / (2.0 * QUARTER_MEAN_OF_AMPLITUDE);
+        share_above(mean, amplitude.max(0.0), base_c)
+    }
+}
+
+/// The share of a year T = mean + amplitude cos(t) at or above `base`.
+fn share_above(mean: f64, amplitude: f64, base: f64) -> f64 {
+    if amplitude <= 0.0 {
+        return if mean >= base { 1.0 } else { 0.0 };
+    }
+    ((base - mean) / amplitude).clamp(-1.0, 1.0).acos() / std::f64::consts::PI
 }
 
 /// The mean of max(0, T - base) over a year T = mean + amplitude cos(t).
@@ -160,6 +176,23 @@ mod tests {
             (heating - 3_727.0).abs() < 15.0 && cooling == 0.0,
             "{heating} {cooling}"
         );
+    }
+
+    /// Paris (12.4, 19.5, 5.5 C) reaches 12.5 C half the year, Barcelona (16.5, 23.5, 10.5) seven
+    /// tenths of it, Bangkok always, Tromsø never.
+    #[test]
+    fn shares_of_the_year_follow_the_quarters() {
+        let share = |mean: f64, warm: f64, cold: f64| {
+            share_above(
+                mean,
+                (warm - cold) / (2.0 * QUARTER_MEAN_OF_AMPLITUDE),
+                12.5,
+            )
+        };
+        assert!((share(12.4, 19.5, 5.5) - 0.50).abs() < 0.01);
+        assert!((share(16.5, 23.5, 10.5) - 0.69).abs() < 0.01);
+        assert_eq!(share(28.5, 30.0, 27.0), 1.0);
+        assert_eq!(share(3.0, 10.0, -3.0), 0.0);
     }
 
     /// Bilinear between cell centres, the mean of the land corners on a coast, 20 C at sea.

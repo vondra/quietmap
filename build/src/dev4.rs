@@ -166,7 +166,7 @@ pub fn z30_corner_degrees(gx: i32, gy: i32) -> (f64, f64) {
 }
 
 /// The side of a dev4 z30 cell in Web Mercator metres: the circumference over 2^30.
-const Z30_QUANTUM_M: f64 = 0.037_322_767_717_044_72;
+pub(crate) const Z30_QUANTUM_M: f64 = 0.037_322_767_717_044_72;
 
 /// Web Mercator metres (EPSG:3857) of a dev4 z30 cell's south-west corner (`grid_to_meters`).
 pub fn z30_corner_mercator_m(gx: i32, gy: i32) -> [f64; 2] {

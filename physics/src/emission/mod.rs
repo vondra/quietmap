@@ -8,6 +8,7 @@
 pub mod airport;
 pub mod industrial;
 pub mod leisure;
+pub mod people;
 pub mod rail;
 pub mod road;
 pub mod settlement;

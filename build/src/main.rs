@@ -3,11 +3,12 @@
 //! Until the builders read the sources themselves, `qm-build dev4` converts squares of the dev4
 //! z9 tree: `qm-build dev4 --prepared DIR --rasters DIR --out DIR --squares X:Y[,X:Y..]
 //! [--kinds terrain,obstacles,sources] [--airport-traffic DIR] [--climate DIR] [--tent FILE]
-//! [--road-traffic DIR] [--bus FILE] [--worship FILE] [--national-dem FILE,..]` (sources need the
-//! airport traffic, the climate grids of `fetch/worldclim.sh` and the TEN-T freight lines of
-//! `fetch/tent.sh`, and take the roads' building traffic of `qm-build traffic`, the bus routes of
-//! `fetch/bus.sh` and the places of worship of `fetch/worship.sh` when given; terrain lays the
-//! national models over dev4's heights);
+//! [--road-traffic DIR] [--bus FILE] [--worship FILE] [--venues FILE] [--national-dem FILE,..]`
+//! (sources need the airport traffic, the climate grids of `fetch/worldclim.sh` and the TEN-T
+//! freight lines of `fetch/tent.sh`, and take the roads' building traffic of `qm-build traffic`,
+//! the bus routes of `fetch/bus.sh`, the places of worship of `fetch/worship.sh` and the bars,
+//! restaurants and cafés of `fetch/venues.sh` when given; terrain lays the national models over
+//! dev4's heights);
 //! `qm-build weather --rasters DIR --out FILE` cuts the global weather table; `qm-build complete
 //! --out DIR --note TEXT` writes the completion marker last.
 //!
@@ -190,11 +191,20 @@ fn run(arguments: &[String]) -> Result<(), String> {
                                 .map(|path| sources::bus::BusRoutes::load(Path::new(path)))
                                 .transpose()?
                                 .as_ref(),
-                            options
-                                .optional("worship")
-                                .map(|path| sources::worship::WorshipSites::load(Path::new(path)))
-                                .transpose()?
-                                .as_ref(),
+                            sources::Places {
+                                worship: options
+                                    .optional("worship")
+                                    .map(|path| {
+                                        sources::worship::WorshipSites::load(Path::new(path))
+                                    })
+                                    .transpose()?
+                                    .as_ref(),
+                                venues: options
+                                    .optional("venues")
+                                    .map(|path| sources::venues::Venues::load(Path::new(path)))
+                                    .transpose()?
+                                    .as_ref(),
+                            },
                         ),
                         &squares,
                         &out,

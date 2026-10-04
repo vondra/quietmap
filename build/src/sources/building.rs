@@ -11,12 +11,16 @@ use super::calls::convert_calls;
 use super::cells::{
     AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
 };
-use super::worship::{Host, WorshipSites};
-use super::{Converted, group_key};
+use super::outside::OutsidePlacer;
+use super::people::convert_people;
+use super::worship::Host;
+use super::{Converted, Places, group_key};
 use crate::climate::Climate;
-use crate::dev4::{Dev4, Square, cell, column, positive, require_stamp, text, z30_corner_degrees};
+use crate::dev4::{
+    Dev4, Square, cell, column, degrees_to_z30, positive, require_stamp, text, z30_corner_degrees,
+};
 use crate::screening::BUILDING_HEIGHT_MAX_M;
-use crate::structures::footprint_id;
+use crate::structures::{decode_parts, footprint_id};
 use crate::traffic::building_load;
 use arrow_array::{
     Array, BinaryArray, Float32Array, Int32Array, Int64Array, RecordBatch, StringArray, UInt8Array,
@@ -140,7 +144,7 @@ fn class_label(class: u8) -> &'static str {
 /// Converts the building rows of one dev4 square; returns how many rows emit.
 pub fn convert(
     dev4: &Dev4,
-    (climate, worship): (&Climate, Option<&WorshipSites>),
+    (climate, places): (&Climate, Places),
     square: Square,
     out: &mut Vec<Converted>,
 ) -> Result<usize, String> {
@@ -160,7 +164,7 @@ pub fn convert(
             let Some(emission) = building_emission(&row, Some((country_iso, climate))) else {
                 continue;
             };
-            if worship.is_some() {
+            if places.worship.is_some() {
                 hosts.push(Host {
                     centre: z30_corner_degrees(row.centroid.0, row.centroid.1),
                     height_m: emission.height_m,
@@ -201,12 +205,50 @@ pub fn convert(
             emitting += 1;
         }
     }
-    if let Some(worship) = worship {
+    if let Some(worship) = places.worship {
         let sites = worship.in_square(square.x, square.y);
         emitting += convert_bells(sites, &hosts, country_iso, out);
         emitting += convert_calls(sites, &hosts, country_iso, out);
     }
+    let venues = places
+        .venues
+        .map_or(&[][..], |venues| venues.in_square(square.x, square.y));
+    if !venues.is_empty() {
+        let points = venues
+            .iter()
+            .map(|site| degrees_to_z30(site.lat, site.lon))
+            .collect();
+        let mut placer = OutsidePlacer::new(points, venues[0].lat);
+        for batch in &table.batches {
+            place_outside(batch, &mut placer).map_err(context)?;
+        }
+        emitting += convert_people(venues, &placer.positions(), (country_iso, climate), out);
+    }
     Ok(emitting)
+}
+
+/// Offers every building footprint of a batch near a place (OpenStreetMap's and Overture's alike:
+/// both screen) to the placer.
+fn place_outside(batch: &RecordBatch, placer: &mut OutsidePlacer) -> Result<(), String> {
+    let kinds = column::<UInt8Array>(batch, "kind")?;
+    let outlines = column::<BinaryArray>(batch, "geom")?;
+    let centroid = [
+        column::<Int32Array>(batch, "centroid_gx")?,
+        column::<Int32Array>(batch, "centroid_gy")?,
+    ];
+    for row in 0..batch.num_rows() {
+        if kinds.value(row) != KIND_BUILDING
+            || !outlines.is_valid(row)
+            || !centroid.iter().all(|values| values.is_valid(row))
+            || !placer.near((centroid[0].value(row), centroid[1].value(row)))
+        {
+            continue;
+        }
+        for part in decode_parts(outlines.value(row)).unwrap_or_default() {
+            placer.offer(&part);
+        }
+    }
+    Ok(())
 }
 
 const WORSHIP: u8 = 5;

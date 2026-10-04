@@ -62,7 +62,7 @@ pub(crate) fn footprint_area_m2(bytes: &[u8]) -> Option<f64> {
 
 /// dev4 `decode_grid_polygons`: u32 parts; per part u32 rings; per ring u32 points and that many
 /// (i32 x east, i32 y north) z30 pairs, exterior first. `None` on incomplete topology.
-fn decode_parts(mut bytes: &[u8]) -> Option<Vec<Vec<Z30Ring>>> {
+pub(crate) fn decode_parts(mut bytes: &[u8]) -> Option<Vec<Vec<Z30Ring>>> {
     fn count(bytes: &mut &[u8]) -> Option<usize> {
         let value = u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?) as usize;
         *bytes = &bytes[4..];

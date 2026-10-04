@@ -15,6 +15,9 @@ pub mod facilities;
 pub mod industry;
 pub mod leisure;
 pub mod motorcycles;
+pub mod opening_hours;
+pub mod outside;
+pub mod people;
 pub mod period_shares;
 pub mod prayer_times;
 pub mod rail;
@@ -27,6 +30,7 @@ pub mod tagged_speeds;
 pub mod tent;
 pub mod thai_highways;
 pub mod us_trucks;
+pub mod venues;
 pub mod worship;
 
 use crate::climate::Climate;
@@ -146,6 +150,14 @@ pub fn group_key(parts: &[&str]) -> u64 {
     hash
 }
 
+/// The mapped places whose sound the buildings carry: places of worship (bells, calls to prayer)
+/// and bars, restaurants and cafés (the people outside them).
+#[derive(Clone, Copy, Default)]
+pub struct Places<'a> {
+    pub worship: Option<&'a worship::WorshipSites>,
+    pub venues: Option<&'a venues::Venues>,
+}
+
 /// Writes the sources tiles of `squares`, with the airport ground operations of the complete
 /// traffic pass under `airport_traffic`. A dev4 row is owned by the dev4 square of its midpoint,
 /// which may round into a neighbour's tile here, and an area source spreads over its site, so each
@@ -153,11 +165,11 @@ pub fn group_key(parts: &[&str]) -> u64 {
 /// neighbours itself, for its facility joins). Returns the number of tiles written.
 pub fn build(
     (dev4, climate, network): (&Dev4, &Climate, &FreightNetwork),
-    (airport_traffic, road_traffic, bus, worship): (
+    (airport_traffic, road_traffic, bus, places): (
         &Path,
         Option<&Path>,
         Option<&bus::BusRoutes>,
-        Option<&worship::WorshipSites>,
+        Places,
     ),
     squares: &[Square],
     out: &Path,
@@ -173,7 +185,7 @@ pub fn build(
         .map(|&square| {
             build_square(
                 (dev4, climate, network),
-                (airport_traffic, road_traffic, bus, worship),
+                (airport_traffic, road_traffic, bus, places),
                 square,
                 out,
             )
@@ -184,11 +196,11 @@ pub fn build(
 /// The sources tiles of one square (the squares build in parallel, each within its own memory).
 fn build_square(
     (dev4, climate, network): (&Dev4, &Climate, &FreightNetwork),
-    (airport_traffic, road_traffic, bus, worship): (
+    (airport_traffic, road_traffic, bus, places): (
         &Path,
         Option<&Path>,
         Option<&bus::BusRoutes>,
-        Option<&worship::WorshipSites>,
+        Places,
     ),
     square: Square,
     out: &Path,
@@ -206,7 +218,7 @@ fn build_square(
         )?;
         rail::convert((dev4, network), neighbour, &mut converted)?;
         leisure::convert(dev4, neighbour, road_traffic, &mut converted)?;
-        building::convert(dev4, (climate, worship), neighbour, &mut converted)?;
+        building::convert(dev4, (climate, places), neighbour, &mut converted)?;
         ship::convert(dev4, neighbour, &mut converted)?;
         airport::convert(airport_traffic, neighbour, &mut converted)?;
         converted.retain(owned);
