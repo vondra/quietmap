@@ -75,6 +75,7 @@ const SUBTYPE_LABELS: Record<string, Record<string, string>> = {
     healthcare: 'Hospital / clinic',
     worship: 'Place of worship',
     church_bells: 'Church bells',
+    call_to_prayer: 'Call to prayer',
     hotel: 'Hotel',
     garage: 'Garage / parking',
     farm: 'Farm',

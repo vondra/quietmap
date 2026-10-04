@@ -5,8 +5,8 @@ use super::altitude::{M_PER_FT, Sample};
 use super::filters::segment_is_keepable;
 use super::flat::{flat_distance_m, interpolate};
 use super::flights::{Airframe, takeoff_roll_start};
-use super::period::period;
 use super::phases::Phase;
+use crate::period::period;
 
 /// Gap budgets by the more permissive endpoint phase: oceanic cruise dropouts of up to an hour
 /// are real, terminal areas have dense coverage, ground data is continuous.

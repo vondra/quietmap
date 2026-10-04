@@ -2,13 +2,16 @@
 //! area law over the gross floor area, homes their dwellings' outdoor units by country and climate
 //! (`building_plant`), at half the building's height (its height tag, else floors x 3 m, else 8 m)
 //! or 1.5 m for a ground activity (an emission-only area); cells of 30 m above 2,000 m2. Each
-//! carries the id of its screening footprint, so it never screens itself.
+//! carries the id of its screening footprint, so it never screens itself. The bells of churches
+//! and the calls of mosques (`bells`, `calls`) hang from them.
 
-use super::bells::{SITE_REACH_M, SiteKind, WorshipSite, WorshipSites, bell_height_m, push_bells};
+use super::bells::convert_bells;
 use super::building_plant::dwelling_plant;
+use super::calls::convert_calls;
 use super::cells::{
     AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
 };
+use super::worship::{Host, WorshipSites};
 use super::{Converted, group_key};
 use crate::climate::Climate;
 use crate::dev4::{Dev4, Square, cell, column, positive, require_stamp, text, z30_corner_degrees};
@@ -150,20 +153,21 @@ pub fn convert(
         require_stamp(&table, key, value).map_err(context)?;
     }
     let mut emitting = 0;
-    // Where the bells hang: every building's centre, height and footprint.
-    let mut towers: Vec<((f64, f64), f64, u64, bool)> = Vec::new();
+    // Where bells and loudspeakers hang: every building's centre, height, footprint and name.
+    let mut hosts: Vec<Host> = Vec::new();
     for batch in &table.batches {
         for row in read_batch(batch, square).map_err(context)? {
             let Some(emission) = building_emission(&row, Some((country_iso, climate))) else {
                 continue;
             };
             if worship.is_some() {
-                towers.push((
-                    z30_corner_degrees(row.centroid.0, row.centroid.1),
-                    emission.height_m,
-                    row.footprint_id,
-                    row.class == WORSHIP,
-                ));
+                hosts.push(Host {
+                    centre: z30_corner_degrees(row.centroid.0, row.centroid.1),
+                    height_m: emission.height_m,
+                    footprint_id: row.footprint_id,
+                    name: row.name.clone(),
+                    worship: row.class == WORSHIP,
+                });
             }
             let site = Site {
                 centroid: z30_corner_degrees(row.centroid.0, row.centroid.1),
@@ -198,97 +202,14 @@ pub fn convert(
         }
     }
     if let Some(worship) = worship {
-        emitting += convert_bells(
-            worship.in_square(square.x, square.y),
-            &towers,
-            country_iso,
-            out,
-        );
+        let sites = worship.in_square(square.x, square.y);
+        emitting += convert_bells(sites, &hosts, country_iso, out);
+        emitting += convert_calls(sites, &hosts, country_iso, out);
     }
     Ok(emitting)
 }
 
 const WORSHIP: u8 = 5;
-
-/// The bells of the square's Christian churches, cathedrals and bell towers: the sites within
-/// [`SITE_REACH_M`] of each other ring as one (from the bell tower where one is mapped), from the
-/// building nearest them within that reach (a place of worship first), screened by everything but
-/// that building. Returns how many ring.
-fn convert_bells(
-    sites: &[WorshipSite],
-    towers: &[((f64, f64), f64, u64, bool)],
-    country_iso: u16,
-    out: &mut Vec<Converted>,
-) -> usize {
-    let metres = |a: (f64, f64), b: (f64, f64)| {
-        let dy = (a.0 - b.0) * 111_320.0;
-        let dx = (a.1 - b.1) * 111_320.0 * a.0.to_radians().cos();
-        dx.hypot(dy)
-    };
-    let ringing: Vec<&WorshipSite> = sites.iter().filter(|site| site.rings()).collect();
-    let mut taken = vec![false; ringing.len()];
-    let mut rung = 0;
-    for first in 0..ringing.len() {
-        if taken[first] {
-            continue;
-        }
-        let group: Vec<usize> = (first..ringing.len())
-            .filter(|&other| {
-                !taken[other]
-                    && metres(
-                        (ringing[first].lat, ringing[first].lon),
-                        (ringing[other].lat, ringing[other].lon),
-                    ) <= SITE_REACH_M
-            })
-            .collect();
-        for &member in &group {
-            taken[member] = true;
-        }
-        let kind = if group
-            .iter()
-            .any(|&m| ringing[m].kind == SiteKind::Cathedral)
-        {
-            SiteKind::Cathedral
-        } else if group
-            .iter()
-            .all(|&m| ringing[m].kind == SiteKind::BellTower)
-        {
-            SiteKind::BellTower
-        } else {
-            SiteKind::Church
-        };
-        let at = group
-            .iter()
-            .find(|&&m| ringing[m].kind == SiteKind::BellTower)
-            .map_or(ringing[first], |&m| ringing[m]);
-        let point = (at.lat, at.lon);
-        // The nearest building within the reach, a place of worship before any other.
-        let building = towers
-            .iter()
-            .map(|tower| (tower, metres(point, tower.0)))
-            .filter(|(_, distance)| *distance <= SITE_REACH_M)
-            .min_by(|(a, da), (b, db)| (!a.3, *da).partial_cmp(&(!b.3, *db)).expect("finite"));
-        let (centroid, building_height_m, footprint_id) = match building {
-            Some((tower, _)) if kind != SiteKind::BellTower => (tower.0, tower.1, tower.2),
-            Some((tower, _)) => (point, at.height_m.max(0.0), tower.2),
-            None => (point, at.height_m, 0),
-        };
-        let key = format!("{:.6},{:.6}", point.0, point.1);
-        if push_bells(
-            (
-                centroid,
-                bell_height_m(kind, building_height_m),
-                footprint_id,
-            ),
-            (country_iso, kind),
-            &key,
-            out,
-        ) {
-            rung += 1;
-        }
-    }
-    rung
-}
 
 fn read_batch(batch: &RecordBatch, square: Square) -> Result<Vec<BuildingRow>, String> {
     let bytes = |name: &str| column::<UInt8Array>(batch, name);

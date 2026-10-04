@@ -98,7 +98,7 @@ export function ContributorRow({ c, loudTotal, onHighlight }: {
     <SourceRow
       label={contributorLabel(c)}
       distance={formatDist(c.distance_m)}
-      heard={heardText(c.source_type, c.heard)}
+      heard={heardText(c.source_type, c.heard, c.name)}
       received={c.received}
       loud={loudLevel(c.loud_lden, c.received_lden)}
       loudTotal={loudTotal}

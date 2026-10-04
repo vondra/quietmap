@@ -7,13 +7,16 @@ pub mod bells;
 pub mod building;
 pub mod building_plant;
 pub mod bus;
+pub mod calls;
 pub mod cells;
 pub mod country_speeds;
+pub mod events;
 pub mod facilities;
 pub mod industry;
 pub mod leisure;
 pub mod motorcycles;
 pub mod period_shares;
+pub mod prayer_times;
 pub mod rail;
 pub mod road;
 pub mod road_junctions;
@@ -24,6 +27,7 @@ pub mod tagged_speeds;
 pub mod tent;
 pub mod thai_highways;
 pub mod us_trucks;
+pub mod worship;
 
 use crate::climate::Climate;
 use crate::dev4::{Dev4, Square};
@@ -153,7 +157,7 @@ pub fn build(
         &Path,
         Option<&Path>,
         Option<&bus::BusRoutes>,
-        Option<&bells::WorshipSites>,
+        Option<&worship::WorshipSites>,
     ),
     squares: &[Square],
     out: &Path,
@@ -184,7 +188,7 @@ fn build_square(
         &Path,
         Option<&Path>,
         Option<&bus::BusRoutes>,
-        Option<&bells::WorshipSites>,
+        Option<&worship::WorshipSites>,
     ),
     square: Square,
     out: &Path,

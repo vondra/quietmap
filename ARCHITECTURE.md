@@ -64,10 +64,13 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
   trip ends within 1, 5 and 15 km.
 - Homes emit the outdoor units their country's households own (heat pumps and air conditioners
   per household) running the hours their climate asks for (WorldClim degree days); other
-  buildings follow the area law of their class. Church bells are events: Europe's Christian
-  churches and bell towers (OpenStreetMap) ring the prayer bells three times a day and a Sunday
-  peal, German and Swiss clocks strike the quarters; the popup's time levels count an event only
-  in the share of the period it sounds.
+  buildings follow the area law of their class. Church bells and calls to prayer are events:
+  Europe's Christian churches and bell towers (OpenStreetMap) ring the prayer bells three times a
+  day and a Sunday peal (Orthodox ones before Saturday's and Sunday's services), German and Swiss
+  clocks strike the quarters; mosques call five times a day at their place's prayer times, by
+  their country's rules (Friday's call only, and only from a minaret, in western Europe, the
+  Americas and East Asia); the popup's time levels count an event only in the share of the
+  period it sounds.
 - Reading is always whole files with plain reads, all files of a ring at once, one reader per
   file (cold on NVMe 5-8x faster than mmap with MADV_WILLNEED, whose faults read 32 KB at a
   time).

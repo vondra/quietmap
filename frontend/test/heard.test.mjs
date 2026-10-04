@@ -12,7 +12,8 @@ test('a road reads as a steady hum, vehicles an hour, one every so many minutes 
   assert.equal(heardText('road', heard(76, 59, 20)), '76 vehicles an hour')
   assert.equal(heardText('road', heard(3.78, 2.92, 0.97)), 'a vehicle every 16 min')
   assert.equal(heardText('road', heard(0.59, 0.46, 0.15)), '10 vehicles a day')
-  assert.equal(heardText('road', heard(0.01, 0.0, 0.0)), 'a vehicle every 8 days')
+  assert.equal(heardText('road', heard(0.01, 0.0, 0.0)), '1 vehicle a week')
+  assert.equal(heardText('road', heard(0.003, 0.0, 0.0)), 'a vehicle every 28 days')
 })
 
 test('trains and airport movements read by the day; a steady source says nothing', () => {
@@ -26,4 +27,13 @@ test('church bells read as how often they ring', () => {
   // and evening, the morning ringing before 07 h.
   assert.equal(heardText('building', heard(50.14 / 12, 16 / 4, 1 / 8)), 'rings 67 times a day')
   assert.equal(heardText('building', heard(2.14 / 12, 0, 1 / 8)), 'rings 3 times a day')
+})
+
+test('a mosque reads as how often it calls; rarer events by the week', () => {
+  // Istanbul's calls: Fajr at night, two to three by day, the rest in the evening, the sala twice a week.
+  assert.equal(heardText('building', heard((2.42 + 1 / 7) / 12, (1.58 + 1 / 7) / 4, 1 / 8), 'call_to_prayer'), 'calls 5 times a day')
+  // An Orthodox church rings before Saturday's and Sunday's services; a European mosque's Friday call.
+  assert.equal(heardText('building', heard(2 / 7 / 12, 0, 0), 'church_bells'), 'rings 2 times a week')
+  assert.equal(heardText('building', heard(1 / 7 / 12, 0, 0), 'call_to_prayer'), 'calls 1 time a week')
+  assert.equal(heardText('railway', heard(0.1 / 12, 0, 0)), 'a train every 10 days')
 })

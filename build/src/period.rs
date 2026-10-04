@@ -41,11 +41,16 @@ pub fn time_zone(lat: f64, lon: f64) -> Tz {
 
 /// The period of a UTC instant at a coordinate; a non-finite instant counts as night.
 pub fn period(timestamp: f64, lat: f64, lon: f64) -> u8 {
+    period_in(&time_zone(lat, lon), timestamp)
+}
+
+/// The period of a UTC instant on the clocks of `zone`; a non-finite instant counts as night.
+pub fn period_in(zone: &Tz, timestamp: f64) -> u8 {
     if !timestamp.is_finite() {
         return NIGHT;
     }
     let utc = DateTime::from_timestamp(timestamp as i64, 0).unwrap_or(DateTime::UNIX_EPOCH);
-    match utc.with_timezone(&time_zone(lat, lon)).hour() {
+    match utc.with_timezone(zone).hour() {
         7..=18 => DAY,
         19..=22 => EVENING,
         _ => NIGHT,

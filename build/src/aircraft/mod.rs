@@ -17,7 +17,6 @@ pub mod geoid;
 mod ground;
 mod merge;
 mod output;
-mod period;
 mod phases;
 mod readsb;
 mod receipt;
@@ -70,7 +69,7 @@ impl Days {
     pub fn listed(days: &str, increments: Option<&str>) -> Result<Self, String> {
         let parse = |list: &str| -> Result<BTreeSet<String>, String> {
             list.split(',')
-                .map(|day| period::date_id(day.trim()).map(|_| day.trim().to_string()))
+                .map(|day| crate::period::date_id(day.trim()).map(|_| day.trim().to_string()))
                 .collect()
         };
         let days = Days {

@@ -31,6 +31,7 @@ mod dev4;
 mod low_profile;
 mod obstacles;
 mod output;
+mod period;
 mod screening;
 mod sources;
 mod structures;
@@ -191,7 +192,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                                 .as_ref(),
                             options
                                 .optional("worship")
-                                .map(|path| sources::bells::WorshipSites::load(Path::new(path)))
+                                .map(|path| sources::worship::WorshipSites::load(Path::new(path)))
                                 .transpose()?
                                 .as_ref(),
                         ),
