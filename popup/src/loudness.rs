@@ -90,7 +90,8 @@ fn unweighted_thirds(
     let mut thirds = [0.0; THIRD_OCTAVES];
     for selection in selections {
         let mut layer = selection.answer_energy()[period];
-        if selection.layer == Layer::Aircraft {
+        // The flights leave the layer's shape only for their own spectrum (a helicopter has none).
+        if selection.layer == Layer::Aircraft && flights.spectrum_db.is_some() {
             layer -= flights.energy[period];
         }
         let shape = &selection.spectrum[period];
@@ -137,7 +138,8 @@ mod tests {
 
     /// A road's N5 grows by about 2x per 10 dB of L5 and follows L5, not the mean; silence and a
     /// shape-less layer give 0; an aircraft's distant rumble sounds less loud than a road at the
-    /// same L5 (its energy sits low, where the ear is deaf).
+    /// same L5 (its energy sits low, where the ear is deaf); flights without a spectral class keep
+    /// their layer's shape.
     #[test]
     fn loudness_follows_the_level_exceeded_five_percent_of_the_time() {
         let road = [layer(Layer::Road, 60.0, ROAD_SHAPE)];
@@ -169,6 +171,18 @@ mod tests {
         };
         let heard = loudness(&aircraft, &flights, [65.0; PERIODS]).n5_sone[0];
         assert!(heard > 0.0 && heard < at(65.0), "{heard} {}", at(65.0));
+        // A helipad: its loudest flight has no spectral class, so the layer keeps its own shape.
+        let helipad = [layer(Layer::Aircraft, 60.0, ROAD_SHAPE)];
+        let unclassed = FlightSound {
+            energy: [energy(60.0); PERIODS],
+            spectrum_db: None,
+        };
+        let with_flights = loudness(&helipad, &unclassed, [65.0; PERIODS]).n5_sone[0];
+        assert!(with_flights > 0.0);
+        assert_eq!(
+            with_flights,
+            loudness(&helipad, &NONE, [65.0; PERIODS]).n5_sone[0]
+        );
     }
 
     /// The whole day's N5 weighs its periods as Lden does: equal L5 all day reads as the day's

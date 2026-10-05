@@ -150,18 +150,15 @@ fn events_per_hour(fields: &serde_json::Value) -> Option<[f64; PERIODS]> {
     (events.len() == PERIODS).then(|| std::array::from_fn(|p| events[p] / PERIOD_HOURS[p]))
 }
 
-/// A contributor's passes per hour by day, evening and night and their speed (m/s) from its
-/// display fields: vehicles on a road (the daily flow over the period's share and hours), trains on
-/// a track (the period's trains over its hours), airport movements on an aeroway (at taxi speed);
-/// `None` for a steady source (or one whose fields say nothing).
-fn traffic(layer: Layer, fields: &serde_json::Value) -> Option<([f64; PERIODS], f64)> {
-    traffic_and_profile(layer, fields).map(|(per_hour, speed, _)| (per_hour, speed))
-}
-
-/// [`traffic`] and, for a road, its hourly profile by class.
-fn traffic_and_profile(
+/// A contributor's passes per hour by day, evening and night, their speed (m/s) and, for a road,
+/// its hourly profile by class, from its display fields: vehicles on a road (the daily flow over
+/// the period's share and hours), trains on a track (the period's trains over its hours), airport
+/// movements and ground vehicles on an aeroway (at taxi speed, by the periods its `energy` fell
+/// in); `None` for a steady source (or one whose fields say nothing).
+fn traffic(
     layer: Layer,
     fields: &serde_json::Value,
+    energy: [f64; PERIODS],
 ) -> Option<([f64; PERIODS], f64, Option<usize>)> {
     match layer {
         Layer::Road => {
@@ -214,13 +211,18 @@ fn traffic_and_profile(
             })
         }
         Layer::Aircraft => {
-            let daily: f64 = ["arrivals_per_day", "departures_per_day"]
-                .iter()
-                .filter_map(|name| number(fields, name))
-                .sum();
-            (daily > 0.0).then(|| {
+            let daily: f64 = [
+                "arrivals_per_day",
+                "departures_per_day",
+                "ground_vehicles_per_day",
+            ]
+            .iter()
+            .filter_map(|name| number(fields, name))
+            .sum();
+            let total: f64 = energy.iter().sum();
+            (daily > 0.0 && total > 0.0).then(|| {
                 (
-                    std::array::from_fn(|p| daily * OTHER_PERIOD_SHARES[p] / PERIOD_HOURS[p]),
+                    std::array::from_fn(|p| daily * energy[p] / total / PERIOD_HOURS[p]),
                     MOVEMENT_SPEED_M_S,
                     None,
                 )
@@ -247,7 +249,7 @@ pub fn heard(
             steady: false,
         });
     }
-    let (per_hour, speed) = traffic(contributor.layer, fields)?;
+    let (per_hour, speed, _) = traffic(contributor.layer, fields, contributor.energy)?;
     Some(Heard {
         per_hour,
         steady: lambda(per_hour, speed, contributor.distance_m)[0] >= STEADY_LAMBDA,
@@ -260,7 +262,8 @@ const LOUD_EXCEEDED: f64 = 0.05;
 /// A source's energy exceeded 5 % of the time by itself, per period: its mean energy where it is
 /// steady (industry, buildings, ships, or no traffic in its fields), an event source's level while
 /// it sounds if it sounds at least 5 % of the time (else nothing), else its line's L5 at its
-/// lambda. A car every few hours by the window weighs little; the flights of an approach a lot.
+/// lambda through its hours ([`loud_line`]). A car every few hours by the window weighs little;
+/// the flights of an approach a lot.
 pub fn loud_energy(
     contributor: &crate::update::Contributor,
     fields: Option<&serde_json::Value>,
@@ -280,16 +283,35 @@ pub fn loud_energy(
     );
     match fields
         .filter(|_| !steady)
-        .and_then(|fields| traffic(contributor.layer, fields))
+        .and_then(|fields| traffic(contributor.layer, fields, contributor.energy))
     {
-        Some((per_hour, speed)) => {
+        Some((per_hour, speed, profile)) => {
             let lambda = lambda(per_hour, speed, contributor.distance_m);
-            std::array::from_fn(|p| {
-                contributor.energy[p] * relative_intensity(lambda[p], 1.0 - LOUD_EXCEEDED)
-            })
+            std::array::from_fn(|p| loud_line(contributor.energy[p], lambda[p], profile, p))
         }
         None => contributor.energy,
     }
+}
+
+/// A line's energy exceeded 5 % of period `p` by itself: its passes (Kurze at the hour's lambda)
+/// within each hour of its `profile`, the hours weighed alike as the time levels' draws weigh
+/// them (a local road's night is loud in its 06-07 h).
+fn loud_line(mean: f64, lambda: f64, profile: Option<usize>, p: usize) -> f64 {
+    const GRID: usize = 200;
+    let Some(profile) = profile else {
+        return mean * relative_intensity(lambda, 1.0 - LOUD_EXCEEDED);
+    };
+    let mut values: Vec<f64> = (0..PERIOD_HOURS[p] as usize)
+        .flat_map(|slot| {
+            let factor = hour_factor(profile, p, slot);
+            (0..GRID).map(move |k| {
+                let probability = (k as f64 + 0.5) / GRID as f64;
+                mean * factor * relative_intensity(lambda * factor, probability)
+            })
+        })
+        .collect();
+    values.sort_by(f64::total_cmp);
+    values[((1.0 - LOUD_EXCEEDED) * (values.len() - 1) as f64).round() as usize]
 }
 
 /// The flights' energy exceeded 5 % of the time, from their energy and energy times lambda.
@@ -333,8 +355,8 @@ pub fn percentiles(
                 events = fields(contributor).as_ref().and_then(duty);
                 ([f64::INFINITY; PERIODS], None)
             } else {
-                let Some((per_hour, speed, profile)) =
-                    fields(contributor).and_then(|f| traffic_and_profile(contributor.layer, &f))
+                let Some((per_hour, speed, profile)) = fields(contributor)
+                    .and_then(|f| traffic(contributor.layer, &f, contributor.energy))
                 else {
                     continue;
                 };
@@ -500,12 +522,33 @@ mod tests {
     fn a_road_runs_at_the_period_shares_its_fields_carry() {
         let thai = serde_json::json!({"aadt_light": 800.0, "speed_kmh": 50.0,
             "road_class": "primary", "period_shares": [0.632, 0.182, 0.186]});
-        let (per_hour, _, _) = traffic_and_profile(Layer::Road, &thai).unwrap();
+        let (per_hour, _, _) = traffic(Layer::Road, &thai, [1.0; PERIODS]).unwrap();
         assert!((per_hour[2] - 800.0 * 0.186 / PERIOD_HOURS[2]).abs() < 1e-9);
         let older = serde_json::json!({"aadt_light": 800.0, "speed_kmh": 50.0,
             "road_class": "primary"});
-        let (per_hour, _, _) = traffic_and_profile(Layer::Road, &older).unwrap();
+        let (per_hour, _, _) = traffic(Layer::Road, &older, [1.0; PERIODS]).unwrap();
         assert!((per_hour[2] - 800.0 * OTHER_PERIOD_SHARES[2] / PERIOD_HOURS[2]).abs() < 1e-9);
+    }
+
+    /// A steady local road's loud night moments are its morning hour's flow, well over its night
+    /// mean; airport movements run in the periods their energy fell in, ground vehicles counted.
+    #[test]
+    fn loud_moments_follow_the_hours_and_movements_their_periods() {
+        let mean = 1.0;
+        let flat = mean * relative_intensity(1e6, 1.0 - LOUD_EXCEEDED);
+        let peak = (0..8)
+            .map(|slot| hour_factor(2, 2, slot))
+            .fold(0.0, f64::max);
+        let night = loud_line(mean, 1e6, Some(2), 2);
+        assert!(
+            peak > 2.0 && (night / peak - flat).abs() < 0.05,
+            "{night} {peak}"
+        );
+        let cargo = serde_json::json!({"arrivals_per_day": 4.0, "departures_per_day": 4.0,
+            "ground_vehicles_per_day": 2.0});
+        let (per_hour, _, _) = traffic(Layer::Aircraft, &cargo, [0.0, 0.0, 1.0]).unwrap();
+        assert_eq!(per_hour[0], 0.0);
+        assert!((per_hour[2] - 10.0 / 8.0).abs() < 1e-12);
     }
 
     /// One sparse road alone: its levels are the quantiles of its line over the period's hours,

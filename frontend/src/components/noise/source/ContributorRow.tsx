@@ -7,12 +7,13 @@ import { ldenToColor } from '../../../utils/noise-colors'
 import { fmtDb, txtTable } from '../../../utils/formatters'
 import { DataPoint } from '../noise-tooltips'
 import { heardText } from '../heard'
-import { contributorLabel, formatDist, PERIOD_LABELS_DETAIL, SOURCE_LABELS } from '../shared'
+import { contributorClass, contributorLabel, formatDist, PERIOD_LABELS_DETAIL, SOURCE_LABELS } from '../shared'
 import { AircraftLayerDetail, ContributorDetail } from './ContributorDetail'
 
-/** A row's level of the loud moments: the popup's, or its Lden before the final update. */
+/** A row's level of the loud moments: the popup's (`null`: none, a rare event), or its Lden before
+ *  the final update brings it. */
 export function loudLevel(loud: number | null | undefined, lden: number | null | undefined): number {
-  return loud ?? lden ?? 0
+  return loud === undefined ? (lden ?? -Infinity) : (loud ?? -Infinity)
 }
 
 /** A share in whole percent, or "<1 %". */
@@ -98,7 +99,7 @@ export function ContributorRow({ c, loudTotal, onHighlight }: {
     <SourceRow
       label={contributorLabel(c)}
       distance={formatDist(c.distance_m)}
-      heard={heardText(c.source_type, c.heard, c.name)}
+      heard={heardText(c.source_type, c.heard, contributorClass(c))}
       received={c.received}
       loud={loudLevel(c.loud_lden, c.received_lden)}
       loudTotal={loudTotal}

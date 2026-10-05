@@ -160,6 +160,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             .candidate
             .ends_m
             .iter()
+            .take(if piece.candidate.line { 2 } else { 1 })
             .map(|&end| {
                 let (lat, lon) = update.frame.to_mercator(end).to_degrees();
                 [(lat * 1e7).round() / 1e7, (lon * 1e7).round() / 1e7]

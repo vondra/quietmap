@@ -410,6 +410,13 @@ fn sample_rest(
                         selection.evaluated += 1;
                         selection.add_spectrum(&received.bands);
                         selection.add_contributor(&rest[index], *energy, &received.states);
+                        if keep_pieces {
+                            selection.pieces.push(EvaluatedPiece::of(
+                                &rest[index],
+                                attributes,
+                                *energy,
+                            ));
+                        }
                     }
                 }
             }

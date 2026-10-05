@@ -44,7 +44,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
   // The popup's 0 dB display floor, applied to this list the way the per-layer rows apply it; the
   // list ranks what is heard by the loud moments each source makes by itself.
   const audibleContributors = data.top_contributors
-    .filter(c => c.received_lden != null && c.received_lden > 0)
+    .filter(c => c.source_type !== 'aircraft' && c.received_lden != null && c.received_lden > 0)
     .sort((a, b) => loudLevel(b.loud_lden, b.received_lden) - loudLevel(a.loud_lden, a.received_lden))
   // The aircraft layer lists no contributors: the layer is one row, at its rank.
   const aircraft = data.sources.find(s => s.source_type === 'aircraft')
@@ -87,14 +87,14 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
           <div className="shrink-0">
             <span data-testid="noise-badge" className="flex items-baseline gap-1.5 leading-none whitespace-nowrap text-foreground">
               <span className="inline-block size-2.5 rounded-full self-center" style={{ background: ldenToColor(data.total_lden) }} aria-hidden="true" />
-              {sone != null && sone > 0
+              {sone != null
                 ? (
                   <DataPoint title="Loudness" text={LOUDNESS_TEXT}>
                     <span className="text-2xl font-bold">{fmtSone(sone)}</span>
                     <span className="text-sm font-medium"> sone</span>
                   </DataPoint>
                 )
-                : <span className="text-2xl font-bold text-muted-foreground/40 animate-pulse">… sone</span>}
+                : <span className={`text-2xl font-bold text-muted-foreground/40${data.partial ? ' animate-pulse' : ''}`}>{data.partial ? '… sone' : '—'}</span>}
             </span>
             <div data-testid="lden" className="mt-1 pl-4 text-xs text-muted-foreground/60 font-mono leading-tight">
               <DataPoint title="Total Lden — energy sum across all sources (EU noise mapping)" text={totalLdenText}>

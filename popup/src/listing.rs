@@ -6,7 +6,7 @@
 use crate::candidates::{Attributes, Candidate, lden_weighted};
 use crate::evaluate::{Receiver, Scratch, source_rays, trace};
 use crate::selection::LayerSelection;
-use physics::bands::{BANDS, PERIODS, energy};
+use physics::bands::{BANDS, PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy};
 
 /// Ground samples a listed piece's trace keeps.
 pub const PROFILE_POINTS: usize = 48;
@@ -136,7 +136,14 @@ pub fn list_pieces(
                     })
                 },
             )?;
-            let spectrum = source.energy[0];
+            // The terms weigh the bands as the piece's Lden does (a source silent by day has terms).
+            let spectrum: [f64; BANDS] = std::array::from_fn(|band| {
+                (0..PERIODS)
+                    .map(|p| {
+                        PERIOD_HOURS[p] * energy(PERIOD_PENALTY_DB[p]) * source.energy[p][band]
+                    })
+                    .sum()
+            });
             let weighted = |attenuation: &[f64; BANDS]| {
                 let total: f64 = spectrum.iter().sum();
                 let passed: f64 = (0..BANDS)
