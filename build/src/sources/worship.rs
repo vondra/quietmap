@@ -3,6 +3,7 @@
 //! (a node and its building, a church and its bell tower, a mosque and its minaret), sounding from
 //! the building nearest them.
 
+use super::metres;
 use crate::dev4::degrees_to_z30;
 use std::collections::HashMap;
 use std::path::Path;
@@ -111,13 +112,6 @@ impl WorshipSites {
     pub fn in_square(&self, x: u32, y: u32) -> &[WorshipSite] {
         self.by_square.get(&(x, y)).map_or(&[], Vec::as_slice)
     }
-}
-
-/// Horizontal distance (m) between two points (lat, lon) a few hundred metres apart.
-pub fn metres(a: (f64, f64), b: (f64, f64)) -> f64 {
-    let dy = (a.0 - b.0) * 111_320.0;
-    let dx = (a.1 - b.1) * 111_320.0 * a.0.to_radians().cos();
-    dx.hypot(dy)
 }
 
 /// The sites in groups: each group the sites not yet taken within [`SITE_REACH_M`] of its first,

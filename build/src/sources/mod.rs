@@ -138,6 +138,14 @@ pub fn split_at_tile_edges(start: GlobalSteps, end: GlobalSteps) -> Vec<(TileId,
     parts
 }
 
+/// Metres between two places (latitude, longitude) a few kilometres apart, on the local sphere.
+pub fn metres(a: (f64, f64), b: (f64, f64)) -> f64 {
+    const METRES_PER_DEGREE: f64 = 111_195.0;
+    let north = (b.0 - a.0) * METRES_PER_DEGREE;
+    let east = (b.1 - a.1) * METRES_PER_DEGREE * (0.5 * (a.0 + b.0)).to_radians().cos();
+    north.hypot(east)
+}
+
 /// A display group's key, stable across tiles and builds: FNV-1a over the parts.
 pub fn group_key(parts: &[&str]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;

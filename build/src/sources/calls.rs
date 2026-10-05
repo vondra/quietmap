@@ -26,10 +26,9 @@
 
 use super::Converted;
 use super::events::{DAY, EVENING, EventSchedule, push_event_source};
+use super::metres;
 use super::prayer_times::{Isha, Method, WORLD_LEAGUE, call_periods};
-use super::worship::{
-    Host, Religion, SITE_REACH_M, SiteKind, WorshipSite, groups, metres, nearest_host,
-};
+use super::worship::{Host, Religion, SITE_REACH_M, SiteKind, WorshipSite, groups, nearest_host};
 use crate::period::time_zone;
 use physics::bands::BANDS;
 

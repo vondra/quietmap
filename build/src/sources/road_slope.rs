@@ -3,6 +3,7 @@
 //! square's one-arc-second terrain at the window's ends (a shorter window reads the lattice's 31 m
 //! steps as slopes). Bridges read level: the terrain under a deck is the valley.
 
+use super::metres;
 use crate::dev4::{Dev4, Square, z9_raster_window};
 use std::collections::HashMap;
 use tiles::terrain::{HEIGHT_MISSING, NODES_PER_DEGREE, Window, height_m_of_code};
@@ -11,8 +12,6 @@ use tiles::terrain::{HEIGHT_MISSING, NODES_PER_DEGREE, Window, height_m_of_code}
 pub const WINDOW_HALF_M: f64 = 50.0;
 /// Ways whose window is shorter than this read level (m).
 pub const WINDOW_MIN_M: f64 = 20.0;
-/// Metres per degree of latitude, and of longitude at the equator.
-const METRES_PER_DEGREE: f64 = 111_195.0;
 /// Consecutive rows of a way join when their ends are this close (degrees, about 1 m).
 const JOIN_DEGREES: f64 = 1e-5;
 
@@ -79,13 +78,6 @@ pub struct WayRow {
     pub start: (f64, f64),
     pub end: (f64, f64),
     pub bridge: bool,
-}
-
-/// Metres between two places (latitude, longitude), on the local sphere.
-fn metres(a: (f64, f64), b: (f64, f64)) -> f64 {
-    let north = (b.0 - a.0) * METRES_PER_DEGREE;
-    let east = (b.1 - a.1) * METRES_PER_DEGREE * (0.5 * (a.0 + b.0)).to_radians().cos();
-    north.hypot(east)
 }
 
 /// The place `along_m` metres along a chain of `places` with cumulative `distances`.

@@ -6,8 +6,8 @@
 
 use super::Converted;
 use super::cells::{Site, Z30Ring, push_site_points, site_points};
-use super::group_key;
 use super::venues::{VenueKind, VenueSite, cluster_weight, customs, hours, seats};
+use super::{group_key, metres};
 use crate::climate::Climate;
 use crate::dev4::{degrees_to_z30, z30_corner_degrees};
 use physics::emission::people::{
@@ -22,12 +22,6 @@ use tiles::sources::{Attribute, GROUND_FROM_TERRAIN, Layer};
 const PEOPLE_HEIGHT_M: f64 = 1.5;
 /// A cluster's places are those within this distance (m) of a place: 40 m of street around it.
 const CLUSTER_REACH_M: f64 = 20.0;
-
-fn metres(a: (f64, f64), b: (f64, f64)) -> f64 {
-    let dy = (a.0 - b.0) * 111_320.0;
-    let dx = (a.1 - b.1) * 111_320.0 * a.0.to_radians().cos();
-    dx.hypot(dy)
-}
 
 fn label(kind: VenueKind) -> &'static str {
     match kind {
