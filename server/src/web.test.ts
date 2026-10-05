@@ -7,7 +7,7 @@ import test from 'node:test'
 import Fastify from 'fastify'
 import { registerWeb } from './web.ts'
 
-test('the map and its files are served; nothing else pretends to exist', async (t) => {
+test('the map, its files and its About pages are served; nothing else pretends to exist', async (t) => {
   const frontend = await mkdtemp(join(tmpdir(), '0db-web-'))
   await writeFile(join(frontend, 'index.html'), '<!doctype html><title>quiet-map-test</title>')
   await writeFile(join(frontend, 'known.js'), 'console.log("known")')
@@ -17,7 +17,7 @@ test('the map and its files are served; nothing else pretends to exist', async (
   await registerWeb(app, frontend)
   t.after(async () => app.close())
 
-  for (const url of ['/', '/?e2e=1']) {
+  for (const url of ['/', '/?e2e=1', '/about', '/about/methodology', '/about/news/']) {
     const response = await app.inject(url)
     assert.equal(response.statusCode, 200, url)
     assert.match(response.body, /quiet-map-test/)
@@ -25,7 +25,7 @@ test('the map and its files are served; nothing else pretends to exist', async (
   assert.equal((await app.inject('/known.js')).statusCode, 200)
 
   for (const url of [
-    '/.env', '/.git/config', '/.ssh/id_rsa', '/about', '/about/europe/cz',
+    '/.env', '/.git/config', '/.ssh/id_rsa', '/aboutness', '/about/europe/cz', '/about/.env',
     '/%2eenv', '/assets/missing.js', '/api/missing',
   ]) {
     const response = await app.inject(url)

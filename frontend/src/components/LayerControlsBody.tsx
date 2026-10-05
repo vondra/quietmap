@@ -1,5 +1,5 @@
 // The layer controls, shared by the desktop ControlCard and the phone LayersPanel: the noise
-// layers, then the quiet-zone overlay.
+// layers, the quiet-zone overlay and the link to the About pages.
 import OverlayControls from './OverlayControls'
 import SourceToggles from './SourceToggles'
 
@@ -38,6 +38,10 @@ export default function LayerControlsBody({
         quietThreshold={quietThreshold}
         onQuietThresholdChange={onQuietThresholdChange}
       />
+
+      <div className={divClass} />
+
+      <a href="/about" className="block text-xs text-muted-foreground hover:text-foreground">About quietmap.org</a>
     </>
   )
 }

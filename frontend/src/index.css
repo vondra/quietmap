@@ -150,3 +150,18 @@ html, body {
     @apply font-sans;
   }
 }
+
+/* The About pages' markdown (components/AboutPage.tsx). */
+@layer components {
+  .about { @apply text-sm leading-relaxed text-muted-foreground; }
+  .about h1 { @apply mt-6 mb-4 text-3xl font-bold text-foreground; }
+  .about h2 { @apply mt-8 mb-2 text-xl font-semibold text-foreground; }
+  .about p, .about ul, .about table { @apply my-3; }
+  .about ul { @apply list-disc pl-5; }
+  .about li { @apply my-1; }
+  .about a { @apply text-foreground underline underline-offset-2; }
+  .about strong { @apply text-foreground; }
+  .about table { @apply w-full; }
+  .about th { @apply py-1 pr-3 text-left font-semibold text-foreground; }
+  .about td { @apply py-1 pr-3; }
+}
