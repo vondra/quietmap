@@ -132,29 +132,20 @@ const SAMPLE_DAYS: std::ops::Range<i64> = 0..73;
 const YEAR_2026_UNIX: i64 = 1_767_225_600;
 
 /// Each call's share of the year in the day, evening and night period on the clocks of `zone`
-/// (Fajr, Dhuhr, Asr, Maghrib, Isha).
+/// (Fajr, Dhuhr, Asr, Maghrib, Isha); a day the sun neither rises nor sets has no calls.
 pub fn call_periods(lat: f64, lon: f64, zone: &Tz, method: &Method) -> [[f64; 3]; 5] {
     let mut counts = [[0.0; 3]; 5];
-    let mut days = 0.0;
     for sample in SAMPLE_DAYS {
         let day_unix = YEAR_2026_UNIX + sample * 5 * 86_400;
         let Some(hours) = prayer_hours(day_unix, lat, lon, method) else {
             continue;
         };
-        days += 1.0;
         for (call, hour) in hours.iter().enumerate() {
             let instant = day_unix as f64 + hour * 3_600.0;
             counts[call][usize::from(period_in(zone, instant))] += 1.0;
         }
     }
-    if days > 0.0 {
-        for call in &mut counts {
-            for share in call.iter_mut() {
-                *share /= days;
-            }
-        }
-    }
-    counts
+    counts.map(|call| call.map(|days| days / SAMPLE_DAYS.end as f64))
 }
 
 #[cfg(test)]

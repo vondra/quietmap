@@ -84,11 +84,11 @@ impl OutsidePlacer {
         }
     }
 
-    /// Whether any point lies within a cell of `centre` (a footprint's centroid): only then is the
-    /// footprint worth decoding.
+    /// Whether any point lies within three cells of `centre` (a footprint's centroid; 300-450 m,
+    /// a mall's or a station's half-length): only then is the footprint worth decoding.
     pub fn near(&self, centre: (i32, i32)) -> bool {
         let (cx, cy) = cell(centre);
-        (-1..=1).any(|dx| (-1..=1).any(|dy| self.grid.contains_key(&(cx + dx, cy + dy))))
+        (-3..=3).any(|dx| (-3..=3).any(|dy| self.grid.contains_key(&(cx + dx, cy + dy))))
     }
 
     /// A footprint's part (its exterior, then its holes): the points inside it go outside its
@@ -108,13 +108,9 @@ impl OutsidePlacer {
                     continue;
                 };
                 for &index in indices {
-                    let point = self.points[index];
-                    if self.moved[index].is_some()
-                        || point.0 < min.0
-                        || point.0 > max.0
-                        || point.1 < min.1
-                        || point.1 > max.1
-                    {
+                    // Overlapping outlines move a point on from where the last one left it.
+                    let point = self.moved[index].unwrap_or(self.points[index]);
+                    if point.0 < min.0 || point.0 > max.0 || point.1 < min.1 || point.1 > max.1 {
                         continue;
                     }
                     let at = (f64::from(point.0) + 0.5, f64::from(point.1) + 0.5);

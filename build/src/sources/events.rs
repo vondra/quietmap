@@ -6,7 +6,7 @@
 use super::Converted;
 use super::cells::{Site, Z30Ring, push_site_points, site_points};
 use super::group_key;
-use physics::bands::BANDS;
+use physics::bands::{BANDS, PERIOD_HOURS};
 use physics::emission::spectrum::SoundPower;
 use serde_json::json;
 use tiles::sources::{Attribute, GROUND_FROM_TERRAIN, Layer};
@@ -14,7 +14,6 @@ use tiles::sources::{Attribute, GROUND_FROM_TERRAIN, Layer};
 pub const DAY: usize = 0;
 pub const EVENING: usize = 1;
 pub const NIGHT: usize = 2;
-const PERIOD_SECONDS: [f64; 3] = [12.0 * 3600.0, 4.0 * 3600.0, 8.0 * 3600.0];
 
 /// Events a day, seconds sounding a day and the energy of a day (seconds times 10^(LW/10)) per
 /// period.
@@ -48,8 +47,9 @@ pub fn event_emission(
     schedule: &EventSchedule,
     spectrum_db: [f64; BANDS],
 ) -> (SoundPower, [f64; 3], f64) {
-    let mean = std::array::from_fn::<f64, 3, _>(|p| schedule.energy[p] / PERIOD_SECONDS[p]);
-    let duty = std::array::from_fn(|p| schedule.seconds[p] / PERIOD_SECONDS[p]);
+    let mean =
+        std::array::from_fn::<f64, 3, _>(|p| schedule.energy[p] / (PERIOD_HOURS[p] * 3600.0));
+    let duty = std::array::from_fn(|p| schedule.seconds[p] / (PERIOD_HOURS[p] * 3600.0));
     let day = level(mean[0]);
     let sounding: f64 = schedule.seconds.iter().sum();
     let while_sounding = level(schedule.energy.iter().sum::<f64>() / sounding);

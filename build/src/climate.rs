@@ -53,16 +53,18 @@ impl Temperature {
             (self.cell(row + 1, column), fy * (1.0 - fx)),
             (self.cell(row + 1, column + 1), fy * fx),
         ];
-        let land: Vec<(f64, f64)> = corners
-            .iter()
-            .filter_map(|&(value, weight)| value.map(|value| (value, weight)))
-            .collect();
-        if land.len() == 4 {
-            land.iter().map(|(value, weight)| value * weight).sum()
-        } else if land.is_empty() {
+        let land = || {
+            corners
+                .iter()
+                .filter_map(|&(value, weight)| value.map(|value| (value, weight)))
+        };
+        let count = land().count();
+        if count == 4 {
+            land().map(|(value, weight)| value * weight).sum()
+        } else if count == 0 {
             REFERENCE_AIR_TEMPERATURE_C
         } else {
-            land.iter().map(|(value, _)| value).sum::<f64>() / land.len() as f64
+            land().map(|(value, _)| value).sum::<f64>() / count as f64
         }
     }
 }

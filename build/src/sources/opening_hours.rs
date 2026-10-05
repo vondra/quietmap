@@ -57,7 +57,28 @@ fn spans(text: &str) -> Option<Vec<(u32, u32)>> {
         .collect()
 }
 
-/// The week's open hours of an `opening_hours` value; `None` when unreadable.
+/// A rule's weekdays and its spans (minutes from the day's midnight).
+type Rule = ([bool; 7], Vec<(u32, u32)>);
+
+/// One rule's weekdays and spans: a bare time is every day, a bare `off` or `closed` every day
+/// shut.
+fn read_rule(rule: &str) -> Option<Rule> {
+    let mut words = rule.split_whitespace();
+    let first = words.next()?;
+    let (named, times) =
+        if first.as_bytes()[0].is_ascii_digit() || first == "off" || first == "closed" {
+            ([true; 7], first.to_string())
+        } else {
+            (days(first)?, words.collect::<Vec<&str>>().join(""))
+        };
+    let spans = match times.as_str() {
+        "off" | "closed" => Vec::new(),
+        times => spans(times)?,
+    };
+    Some((named, spans))
+}
+
+/// The week's open hours of an `opening_hours` value; `None` when no rule is readable.
 pub fn parse(value: &str) -> Option<WeekHours> {
     let value = value.trim().to_ascii_lowercase();
     if value == "24/7" {
@@ -71,19 +92,9 @@ pub fn parse(value: &str) -> Option<WeekHours> {
         .map(str::trim)
         .filter(|rule| !rule.is_empty())
     {
-        let rule = rule.replace(", ", ",");
-        let mut words = rule.split_whitespace();
-        let first = words.next()?;
-        let (named, times) = if first.as_bytes()[0].is_ascii_digit() {
-            ([true; 7], first.to_string())
-        } else {
-            let named = days(first)?;
-            let times: Vec<&str> = words.collect();
-            (named, times.join(""))
-        };
-        let spans = match times.as_str() {
-            "off" | "closed" => Vec::new(),
-            times => spans(times)?,
+        // A rule this reader cannot read (a month, a holiday) is left out; the others stand.
+        let Some((named, spans)) = read_rule(&rule.replace(", ", ",")) else {
+            continue;
         };
         for (day, chosen) in named.iter().enumerate() {
             if *chosen {
@@ -154,5 +165,9 @@ mod tests {
         ] {
             assert!(parse(value).is_none(), "{value}");
         }
+        // A holiday rule beside readable ones is left out; a bare closure shuts the week.
+        let bar = parse("Mo-Sa 18:00-02:00; PH off").unwrap();
+        assert!(bar[0][20] && !bar[6][20]);
+        assert_eq!(parse("closed").unwrap(), [[false; 24]; 7]);
     }
 }

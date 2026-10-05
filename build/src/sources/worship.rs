@@ -72,9 +72,16 @@ impl WorshipSites {
                 return Err(format!("line {}: expected six fields", number + 1));
             };
             let bad = |error: &dyn std::fmt::Display| format!("line {}: {error}", number + 1);
+            let (lat, lon): (f64, f64) = (
+                lat.parse().map_err(|e| bad(&e))?,
+                lon.parse().map_err(|e| bad(&e))?,
+            );
+            if !(lat.abs() <= 90.0 && lon.abs() <= 180.0) {
+                return Err(bad(&"no place on Earth"));
+            }
             let site = WorshipSite {
-                lat: lat.parse().map_err(|e| bad(&e))?,
-                lon: lon.parse().map_err(|e| bad(&e))?,
+                lat,
+                lon,
                 religion: match religion {
                     "christian" => Religion::Christian,
                     "muslim" => Religion::Muslim,
@@ -114,8 +121,8 @@ impl WorshipSites {
     }
 }
 
-/// The sites in groups: each group the sites not yet taken within [`SITE_REACH_M`] of its first,
-/// in their order.
+/// The sites in groups: a group grows by every site within [`SITE_REACH_M`] of any of its members
+/// (a node, its building's centroid and a tower beside it), in their order.
 pub fn groups(sites: &[&WorshipSite]) -> Vec<Vec<usize>> {
     let mut taken = vec![false; sites.len()];
     let mut groups = Vec::new();
@@ -123,15 +130,21 @@ pub fn groups(sites: &[&WorshipSite]) -> Vec<Vec<usize>> {
         if taken[first] {
             continue;
         }
-        let at = (sites[first].lat, sites[first].lon);
-        let group: Vec<usize> = (first..sites.len())
-            .filter(|&other| {
-                !taken[other] && metres(at, (sites[other].lat, sites[other].lon)) <= SITE_REACH_M
-            })
-            .collect();
-        for &member in &group {
-            taken[member] = true;
+        taken[first] = true;
+        let mut group = vec![first];
+        let mut next = 0;
+        while let Some(&member) = group.get(next) {
+            let at = (sites[member].lat, sites[member].lon);
+            for other in 0..sites.len() {
+                if !taken[other] && metres(at, (sites[other].lat, sites[other].lon)) <= SITE_REACH_M
+                {
+                    taken[other] = true;
+                    group.push(other);
+                }
+            }
+            next += 1;
         }
+        group.sort_unstable();
         groups.push(group);
     }
     groups

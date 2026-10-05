@@ -36,8 +36,8 @@ const EUROPE: [[u8; 2]; 51] = [
 const STRIKING: [[u8; 2]; 2] = [*b"CH", *b"DE"];
 const STRIKING_AT_NIGHT: [[u8; 2]; 1] = [*b"CH"];
 /// European countries whose churches are Orthodox where no denomination is mapped.
-const ORTHODOX_COUNTRIES: [[u8; 2]; 11] = [
-    *b"BG", *b"BY", *b"CY", *b"GR", *b"MD", *b"ME", *b"MK", *b"RO", *b"RS", *b"RU", *b"UA",
+const ORTHODOX_COUNTRIES: [[u8; 2]; 10] = [
+    *b"BG", *b"BY", *b"GR", *b"MD", *b"ME", *b"MK", *b"RO", *b"RS", *b"RU", *b"UA",
 ];
 
 const PRAYER_RINGING_S: f64 = 180.0;
@@ -56,13 +56,16 @@ const STRIKE_LW_DBA: f64 = 110.0;
 const BELL_SPECTRUM: [f64; BANDS] = [-25.0, -15.0, -6.0, -1.0, 0.0, -3.0, -9.0, -16.0];
 
 impl WorshipSite {
-    /// Whether it rings: a Christian church, cathedral or place of worship (chapels apart: the
-    /// research has nothing on their bells), or a bell tower of no other religion.
+    /// Whether it rings: a church, cathedral or bell tower of no other religion (a church building
+    /// names its religion), a Christian place of worship; chapels never (the research has nothing
+    /// on their bells).
     pub fn rings(&self) -> bool {
         match self.kind {
-            SiteKind::BellTower => matches!(self.religion, Religion::Christian | Religion::Unknown),
+            SiteKind::BellTower | SiteKind::Church | SiteKind::Cathedral => {
+                matches!(self.religion, Religion::Christian | Religion::Unknown)
+            }
             SiteKind::Chapel | SiteKind::Minaret => false,
-            _ => self.religion == Religion::Christian,
+            SiteKind::Other => self.religion == Religion::Christian,
         }
     }
 }
@@ -138,29 +141,21 @@ pub fn convert_bells(
         let Some(plan) = schedule(country_iso, peal, orthodox) else {
             continue;
         };
-        let at = members()
-            .find(|site| site.kind == SiteKind::BellTower)
-            .unwrap_or(ringing[group[0]]);
+        // The bells hang in a mapped tower where there is one, else in the church.
+        let tower = members().find(|site| site.kind == SiteKind::BellTower);
+        let at = tower.unwrap_or(ringing[group[0]]);
         let point = (at.lat, at.lon);
         let host = nearest_host(point, hosts);
-        let (centre, building_height_m, footprint_id, name) = match host {
-            Some(host) if kind != SiteKind::BellTower => (
-                host.centre,
-                host.height_m,
-                host.footprint_id,
-                host.worship_name(),
-            ),
-            Some(host) => (
-                point,
-                at.height_m.max(0.0),
-                host.footprint_id,
-                host.worship_name(),
-            ),
-            None => (point, at.height_m, 0, ""),
+        let (centre, height_m) = match (tower, host) {
+            (Some(tower), _) if tower.height_m > 0.0 => (point, 0.75 * tower.height_m),
+            (Some(_), host) => (point, bell_height_m(kind, host.map_or(0.0, |h| h.height_m))),
+            (None, Some(host)) => (host.centre, bell_height_m(kind, host.height_m)),
+            (None, None) => (point, bell_height_m(kind, at.height_m)),
         };
+        let (footprint_id, name) = host.map_or((0, ""), |h| (h.footprint_id, h.worship_name()));
         let key = format!("{:.6},{:.6}", point.0, point.1);
         push_event_source(
-            (centre, bell_height_m(kind, building_height_m), footprint_id),
+            (centre, height_m, footprint_id),
             ("church_bells", name),
             (&plan, BELL_SPECTRUM),
             &key,

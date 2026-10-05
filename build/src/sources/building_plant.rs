@@ -116,7 +116,7 @@ const COUNTRIES: [([u8; 2], Option<f64>, Option<f64>); 35] = [
 
 /// UN M49 regions: members, heat pumps and cooling units per household (the medians of the
 /// measured members; South-East Asia's regional figure; Sub-Saharan Africa South Africa's).
-const REGIONS: [(&str, f64, f64); 12] = [
+const REGIONS: [(&str, f64, f64); 11] = [
     // GB 0.02, IE 0.07, DK 0.19, EE 0.32, SE 0.38, FI 0.47, NO 0.60; cooling GB alone.
     (
         "AX DK EE FO FI GG IS IE IM JE LV LT NO SJ SE GB",
@@ -156,8 +156,6 @@ const REGIONS: [(&str, f64, f64); 12] = [
     ("AU NZ NF", 0.49, 0.59),
     // Canada's for its neighbours.
     ("BM GL PM", 0.13, 0.45),
-    // The Gulf's households all cooled (Saudi Arabia measured at 63 %).
-    ("AE BH KW OM QA SA", 0.0, 1.0),
 ];
 
 fn country_plant(country_iso: u16) -> Plant {

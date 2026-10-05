@@ -100,7 +100,7 @@ pub fn building_emission(
     let area_m2 = resolve_area_m2(row.area_m2, &row.ring, DEFAULT_FOOTPRINT_M2);
     let sound = match home_plant.filter(|_| is_home(row.class)) {
         Some((country_iso, climate)) => {
-            let (dwellings, _) = building_load(row.class, row.storeys.max(1), row.area_m2);
+            let (dwellings, _) = building_load(row.class, row.storeys.max(1), Some(area_m2));
             let (lat, lon) = z30_corner_degrees(row.centroid.0, row.centroid.1);
             let uses = dwelling_plant(country_iso, climate.degree_days(lat, lon));
             plant_sound_power(&uses, dwellings)?
@@ -148,18 +148,22 @@ pub fn convert(
     square: Square,
     out: &mut Vec<Converted>,
 ) -> Result<usize, String> {
-    let Some(table) = dev4.table(square, "structures.arrow")? else {
-        return Ok(0);
-    };
+    // A square without buildings still has its mapped places.
+    let table = dev4.table(square, "structures.arrow")?;
     let country_iso = dev4.square_country(square)?;
     let context = |error: String| format!("structures.arrow of {square:?}: {error}");
-    for (key, value) in [("grid", "z30"), ("structures_contract", "structures_v5")] {
-        require_stamp(&table, key, value).map_err(context)?;
+    if let Some(table) = &table {
+        for (key, value) in [("grid", "z30"), ("structures_contract", "structures_v5")] {
+            require_stamp(table, key, value).map_err(context)?;
+        }
     }
+    let batches = table
+        .as_ref()
+        .map_or(&[][..], |table| table.batches.as_slice());
     let mut emitting = 0;
     // Where bells and loudspeakers hang: every building's centre, height, footprint and name.
     let mut hosts: Vec<Host> = Vec::new();
-    for batch in &table.batches {
+    for batch in batches {
         for row in read_batch(batch, square).map_err(context)? {
             let Some(emission) = building_emission(&row, Some((country_iso, climate))) else {
                 continue;
@@ -219,7 +223,7 @@ pub fn convert(
             .map(|site| degrees_to_z30(site.lat, site.lon))
             .collect();
         let mut placer = OutsidePlacer::new(points, venues[0].lat);
-        for batch in &table.batches {
+        for batch in batches {
             place_outside(batch, &mut placer).map_err(context)?;
         }
         emitting += convert_people(venues, &placer.positions(), (country_iso, climate), out);

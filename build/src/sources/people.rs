@@ -55,8 +55,9 @@ fn crowd_shares(sites: &[VenueSite]) -> Vec<Option<f64>> {
                 return None;
             }
             let (cx, cy) = cell(site);
-            let near: Vec<&VenueSite> = (-1..=1)
-                .flat_map(|dx| (-1..=1).map(move |dy| (cx + dx, cy + dy)))
+            // Cells of 2^10 z30 steps: 38 m at the equator, 13 m at 70 N; two of them reach 20 m.
+            let near: Vec<&VenueSite> = (-2..=2)
+                .flat_map(|dx| (-2..=2).map(move |dy| (cx + dx, cy + dy)))
                 .filter_map(|key| grid.get(&key))
                 .flatten()
                 .map(|&other| &sites[other])

@@ -1,7 +1,7 @@
 """Venues of an OpenStreetMap extract (`venues.sh`), one line each: `lat lon kind outdoor_seating
 area_m2 opening_hours name` (tab-separated, sorted by latitude then longitude), the point of a node
 or the mean of an outline's vertices. Kinds: bar, pub, nightclub, biergarten, restaurant, cafe,
-fast_food, food_court; outdoor_seating the tag's value or unknown; area_m2 an outline's area, 0
+fast_food; outdoor_seating the tag's value or unknown; area_m2 an outline's area, 0
 for a node; opening_hours and name as mapped, empty when none. Mapped terraces
 (leisure=outdoor_seating) are the leisure layer's. Reads osmium's GeoJSON sequence on stdin.
 
@@ -12,7 +12,7 @@ import math
 import re
 import sys
 
-KINDS = ('bar', 'pub', 'nightclub', 'biergarten', 'restaurant', 'cafe', 'fast_food', 'food_court')
+KINDS = ('bar', 'pub', 'nightclub', 'biergarten', 'restaurant', 'cafe', 'fast_food')
 CONTROL = re.compile(r'[\x00-\x1f\x7f]+')
 
 
@@ -24,7 +24,8 @@ def centroid(geometry):
     rings = {'Polygon': lambda c: c[:1], 'MultiPolygon': lambda c: [p[0] for p in c]}.get(kind)
     if rings is None:
         return None
-    points = [point for ring in rings(coordinates) for point in ring]
+    # A ring repeats its first vertex at its end: once is enough.
+    points = [point for ring in rings(coordinates) for point in ring[:-1] or ring]
     if not points:
         return None
     return sum(p[1] for p in points) / len(points), sum(p[0] for p in points) / len(points)

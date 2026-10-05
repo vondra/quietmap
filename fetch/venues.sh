@@ -9,7 +9,7 @@ set -euo pipefail
 planet=$1 out=$2
 mkdir -p "$out"
 osmium tags-filter "$planet" \
-    nwr/amenity=bar,pub,nightclub,biergarten,restaurant,cafe,fast_food,food_court \
+    nwr/amenity=bar,pub,nightclub,biergarten,restaurant,cafe,fast_food \
     -o "$out/venues.osm.pbf" --overwrite
 osmium export "$out/venues.osm.pbf" -f geojsonseq --geometry-types=point,polygon --overwrite -o - \
     | python3 "$(dirname "$0")/venues.py" "$out/venues.txt"

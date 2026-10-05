@@ -56,7 +56,7 @@ const RULES: [(&str, Rule); 7] = [
         "AD AT AX BE CH CZ DE DK EE ES FI FO FR GB GG GI HR HU IE IM IS IT JE LI LT LU LV MC MT NL \
          NO PL PT SE SI SK SM VA AI AG AW BS BB BQ VG KY CU CW DM DO GD GP HT JM MQ MS PR BL KN LC \
          MF VC SX TT TC VI BZ CR SV GT HN MX NI PA AR BO BV BR CL CO EC FK GF GY PY PE GS SR UY VE \
-         US CA BM GL PM AU NZ NF JP KR TW HK MO",
+         US CA BM GL PM AU NZ NF JP KR TW HK MO UA BY MD",
         Rule::FridayOnly,
     ),
 ];
@@ -127,6 +127,9 @@ const HORN_SPECTRUM: [f64; BANDS] = [-60.0, -53.0, -14.0, -4.0, 0.0, -4.0, -25.0
 
 /// The calls of a mosque at (`lat`, `lon`) in a country; `None` where none sound outside.
 pub fn schedule(country_iso: u16, lat: f64, lon: f64) -> Option<EventSchedule> {
+    if country_iso == 0 {
+        return None;
+    }
     let code = country_iso.to_le_bytes();
     let rule = rule(code);
     let mut plan = EventSchedule::default();
@@ -168,7 +171,8 @@ pub fn schedule(country_iso: u16, lat: f64, lon: f64) -> Option<EventSchedule> {
         plan.add(DAY, 1.0 / 7.0, SALA_S, lw);
         plan.add(EVENING, 1.0 / 7.0, SALA_S, lw);
     }
-    Some(plan)
+    // No call at all where the sun never sets or rises on any sampled day.
+    (plan.seconds.iter().sum::<f64>() > 0.0).then_some(plan)
 }
 
 /// The horns' height: three quarters of a mapped minaret, else the country's usual mounting, or
@@ -213,7 +217,12 @@ pub fn convert_calls(
         let point = (first.lat, first.lon);
         let minaret = minarets
             .iter()
-            .filter(|minaret| metres(point, (minaret.lat, minaret.lon)) <= SITE_REACH_M)
+            .filter(|minaret| {
+                group.iter().any(|&m| {
+                    metres((mosques[m].lat, mosques[m].lon), (minaret.lat, minaret.lon))
+                        <= SITE_REACH_M
+                })
+            })
             .max_by(|a, b| a.height_m.total_cmp(&b.height_m));
         if minaret.is_none() && rule(code) == Rule::FridayOnly {
             continue;

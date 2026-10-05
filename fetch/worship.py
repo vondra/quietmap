@@ -19,7 +19,8 @@ def centroid(geometry):
     rings = {'Polygon': lambda c: c[:1], 'MultiPolygon': lambda c: [p[0] for p in c]}.get(kind)
     if rings is None:
         return None
-    points = [point for ring in rings(coordinates) for point in ring]
+    # A ring repeats its first vertex at its end: once is enough.
+    points = [point for ring in rings(coordinates) for point in ring[:-1] or ring]
     if not points:
         return None
     return sum(p[1] for p in points) / len(points), sum(p[0] for p in points) / len(points)

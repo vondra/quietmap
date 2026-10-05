@@ -13,7 +13,7 @@ pub const SILENT: u8 = 10;
 pub const HOUSE: u8 = 11;
 /// Supermarkets and food shops: rooftop refrigeration runs through the night (dev4 audit B2).
 pub const FOOD_RETAIL: u8 = 12;
-/// Restaurants, cafes and bars: kitchen extract and evening voices.
+/// Restaurants, cafes and bars: the kitchen extract (their guests are the people outside them).
 pub const HOSPITALITY: u8 = 13;
 
 /// Classes whose noise scales with the footprint, not the floor area: single-volume halls
@@ -57,7 +57,8 @@ const HALL_BREAKOUT: [f64; BANDS] = [0.0, 1.0, 1.0, 0.0, -1.0, -2.0, -4.0, -7.0]
 /// or factory (roof and facade breakout), school (yard voices, 71.7 dB just outside in breaks),
 /// hospital (24/7 chillers and gensets), place of worship (a public building's services), hotel, garage (vent fans),
 /// farm (livestock fans), public; food retail re-anchored to one refrigeration unit (RWDI),
-/// hospitality to a kitchen extract (Guyer) with VDI 3770 voices. Unknown classes are residential.
+/// hospitality to a kitchen extract (Guyer; its VDI 3770 voices per m2 left to the people outside
+/// the venues, `people`). Unknown classes are residential.
 pub fn building_profile(class: u8) -> Option<BuildingProfile> {
     Some(match class {
         0 => profile(57.0, 25.0, RESIDENTIAL_PLANT, -5.0, -10.0),
@@ -113,7 +114,7 @@ pub fn building_profile(class: u8) -> Option<BuildingProfile> {
         ),
         HOSPITALITY => profile(
             68.0,
-            50.0,
+            f64::NEG_INFINITY,
             [-1.0, 0.0, 1.0, 1.0, 1.0, 0.0, -3.0, -6.0],
             0.0,
             -5.0,

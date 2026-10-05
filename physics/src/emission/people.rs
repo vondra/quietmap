@@ -17,7 +17,7 @@
 
 use super::DAY_ONLY_OFFSET_DB;
 use super::spectrum::SoundPower;
-use crate::bands::BANDS;
+use crate::bands::{BANDS, PERIOD_HOURS};
 
 pub const EATING_DBA: f64 = 63.6;
 pub const LIVELY_DBA: f64 = 70.7;
@@ -130,9 +130,8 @@ pub fn venue_sound_power(venue: &Venue) -> Option<SoundPower> {
             sums[period(hour)] += hour_sum;
         }
     }
-    let hours = [12.0, 4.0, 8.0];
     let levels: [f64; 3] = std::array::from_fn(|p| {
-        let mean = sums[p] / (7.0 * hours[p]);
+        let mean = sums[p] / (7.0 * PERIOD_HOURS[p]);
         if mean > 0.0 {
             10.0 * mean.log10()
         } else {
