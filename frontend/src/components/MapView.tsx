@@ -20,7 +20,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 
 // The noise model's inputs whose licences ask for credit (OpenStreetMap's ODbL above all).
 const NOISE_DATA_CREDITS =
-  'Noise model: &copy; OpenStreetMap contributors (ODbL), Overture Maps Foundation (ODbL), Copernicus ERA5, WorldClim, IEA, Eurostat, EU TEN-T, FHWA HPMS, Thailand DOH'
+  'Noise model: &copy; OpenStreetMap contributors (ODbL), Overture Maps Foundation (ODbL), Copernicus ERA5, WorldClim, IEA, Eurostat, EU TEN-T, FHWA, Thailand DOH'
 
 interface MapViewProps {
   isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean

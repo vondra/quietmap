@@ -5,7 +5,7 @@ tiles, the geocoder proxies and the streamed popup:
 
 | route | answer |
 |---|---|
-| `GET /api/popup?lat=&lon=[&year=]` | one click, streamed as `application/x-ndjson` (below) |
+| `GET /api/popup?lat=&lon=[&year=][&segments=1]` | one click, streamed as `application/x-ndjson` (below) |
 | `GET /api/tiles-manifest` | the published heatmap generation: `{build, zoom, layers}` |
 | `GET /api/tiles/:build/:layer/:z/:x/:y.bin` | one HM3 tile, Brotli, immutable; a missing tile is an empty 200 |
 | `GET /api/search?q=&lat=&lon=`, `GET /api/reverse?lat=&lon=` | address suggestions and place names (public Photon geocoder) |
@@ -17,10 +17,12 @@ tiles, the geocoder proxies and the streamed popup:
 forwards every line it prints as one line of the response, flushed at once: the first after the
 clicked tile and its neighbours are read, later ones as rings are added. Each line is the whole
 answer so far (`partial` is true until the last one), never a delta; the fields are those of
-`qm-popup` (`frontend/src/types/noise.ts`). The benchmark flags of `qm-popup` are never passed.
+`qm-popup` (`frontend/src/types/noise.ts`). `segments=1` (the detailed calculation's segments view)
+adds each layer's 8 loudest pieces with their data and rays (`--pieces 8`); the benchmark's
+`--exact` is never passed.
 
 - `400` with `{"error"}`: `lat` must be a number within ±85.05, `lon` a number (wrapped to
-  -180..180), `year` one of `QM_YEARS` (the first when absent).
+  -180..180), `year` one of `QM_YEARS` (the first when absent), `segments` 1 when given.
 - `503` with `{"error"}` and `Retry-After`: every slot computes and the queue is full. A few clicks
   compute at once (each uses every core); two per slot may wait.
 - `429`: more than 5 requests per second from one client (an IPv4 address or an IPv6 /64). Tiles
