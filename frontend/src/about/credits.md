@@ -76,11 +76,25 @@
 Constants come from published measurements, where none exist from assumptions the
 [methodology](/about/methodology) names: voices (ANSI S3.5 via Rindel and Christensen 2012;
 ÖNORM S 5012; Hayne et al. 2011; Flanagan et al. 2023; Ramón-Turner et al. 2025; Ballesteros 2014),
-terrace registers (Madrid's 2026 census, Melbourne's CLUE), people at bar doors (Kaplan et al.
+talker heights (Chauvineau 2025; Jacquesson 2017, Université Gustave Eiffel), terrace registers (Madrid's 2026 census, Melbourne's CLUE), people at bar doors (Kaplan et al.
 2019), dinner times (Eurostat HETUS); church bells (LUBW; the Zurich sleep study); prayer times
 (the PrayTimes.org method, Diyanet, JAKIM and Kemenag tables); home heat pumps and air
 conditioners (EHPA, US RECS, Natural Resources Canada, national surveys); car parks (Bavarian
 Environment Agency, parking study 2007).
+
+## Reference code
+
+- Propagation is tested on the ISO/TR 17534-4 cases as encoded in
+  [NoiseModelling](https://github.com/Universite-Gustave-Eiffel/NoiseModelling) (Université
+  Gustave Eiffel, UMRAE; GPL-3.0) and follows its numerical fallback for the ground term of
+  diffraction.
+- Loudness is tested against [MoSQITo](https://github.com/Eomys/MoSQITo) (Apache 2.0).
+
+## Measurements we compare against
+
+Bruitparif (Paris); the Ajuntament de Barcelona (CC BY 4.0); the Ayuntamiento de Madrid (CC BY
+4.0); Dublin City Council (CC BY); Thailand's Pollution Control Department; Letiště Praha;
+Flughafen Zürich; the Eisenbahn-Bundesamt's railway noise monitoring (2023).
 
 ## The map you look at
 
@@ -104,6 +118,7 @@ not rely on them alone for legal, health, safety or property decisions.
 ## Privacy
 
 No cookies, no trackers, no analytics scripts. The server keeps a standard access log (address,
-browser, the URLs requested, so also the points clicked) for security and operations. The first
-view of the map is guessed from your browser's language;
-your precise location is used only when you tap the locate button and allow it.
+browser, the URLs requested, so also the points clicked) for security and operations. The base map
+loads from CARTO, OpenTopoMap or Esri, which see your address and the area you view. The first
+view of the map is guessed from your browser's language; your precise location is used only when
+you tap the locate button and allow it.

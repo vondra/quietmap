@@ -3,7 +3,7 @@
 Each source gets a sound power per octave band (63 Hz to 8 kHz) for the day (07–19), the evening
 (19–23) and the night (23–07). A click sums every source within 12 km of the point (aircraft
 within 16 km) at a receiver 4 m above the ground and reports Lden, the three period levels, the
-levels exceeded 5, 10, 50 and 90 % of the time, and the loudness. Inside a building the click
+level exceeded 5 % of the time and the loudness. Inside a building the click
 answers at the building's loudest façade point, placed as CNOSSOS-EU places receivers for
 building exposure; no indoor attenuation is applied.
 
@@ -37,7 +37,8 @@ Statistics 2023, table VM-4). Motorcycles come from counts and national fleets (
 
 Day, evening and night shares are measured by country, road group and vehicle weight: hourly
 counts in the United States, Japan, Germany, the Netherlands and Great Britain, roadside monitors
-in Spain and Thailand; elsewhere the median of the region. Within each period the traffic follows
+in Spain and Thailand; elsewhere the median of the region's measured countries, or where none is
+measured a default between the measured patterns. Within each period the traffic follows
 the hourly profile of 242 counters in Baden-Württemberg. Speeds are the posted limit; an untagged
 road takes the legal default or, where lower, its class's median signed speed, and a two-way rural
 road at a national limit below motorways runs at 0.845 of it (free-flow speeds in Great Britain).
@@ -48,16 +49,21 @@ Roads nobody counted carry the buses of OpenStreetMap's routes.
 
 ## Railways
 
-Emission follows CNOSSOS-EU for passenger, freight, tram and light-rail traffic. Train counts come
-from GTFS feeds and national timetables routed along the track network; lines without a timetable
-take their country's train-kilometres (Eurostat). Freight without a count is spread over the network by the EU's TEN-T
+Each category — passenger, high-speed, freight, tram — has one whole-train spectrum with a rolling
+term growing as 30 lg v and a constant traction term, shifted to its typical train by CNOSSOS-EU
+per-vehicle computations and the pass-bys at Germany's 19 railway noise monitors (2023); a period's
+trains spread over the line as in CNOSSOS-EU. Train counts come from GTFS feeds and national
+timetables routed along the track network; lines without a timetable take their country's
+train-kilometres (Eurostat). Freight without a count is spread over the network by the EU's TEN-T
 freight corridors; on European lines 37.6 % of freight trains run between 22:00 and 06:00, as
-counted at Germany's 19 railway noise monitors in 2023.
+counted at the same German monitors. Locomotives sound their horn at level crossings in the United
+States and Canada.
 
 ## Aircraft
 
-A year of recorded ADS-B flights (September 2025 – August 2026): airline traffic from
-ADSBExchange, small planes and helicopters from adsb.lol. Each aircraft type flies its EASA ANP
+A year of recorded ADS-B flights (September 2025 – August 2026) from adsb.lol, with the flights
+only ADSBExchange received added from sample days on which both are complete. Each aircraft type
+flies its EASA ANP
 aircraft (a similar one where the ANP has none) by ECAC Doc 29, 4th edition: altitude above the geoid, thrust from the observed
 climb and acceleration, flaps and gear on approach. The flights are summed into boxes of airspace;
 at the benchmark's nine points a box reads back within 0.2 dB of every flight summed on its own.
@@ -79,7 +85,7 @@ craft.
 
 Homes emit the outdoor units their country's households own — heat pumps and air conditioners
 per household from national surveys — running the hours their climate asks for (WorldClim degree
-days). A Prague house emits 45 dB(A), a Bangkok home 51 dB(A) by day. Shops, schools, hotels and
+days). A Prague home emits 45 dB(A), a Bangkok home 51 dB(A) by day. Shops, schools, hotels and
 other buildings emit by their class and floor area.
 
 Church bells ring as events. Europe's Christian churches and bell towers ring the prayer bells
@@ -89,10 +95,12 @@ is 114 dB(A), a cathedral's 122.
 
 Mosques call to prayer at their place's prayer times, computed for every mosque with its
 country's method and time zone, five calls a day of three minutes at 118 dB(A) from the minaret.
-Country rules change this: Saudi Arabia and Egypt add the iqama (Saudi Arabia at a third of the
-volume), Indonesia the recitation before the call, Turkey the Friday sala, Rwanda has no dawn
-call; Chinese, Tajik and Singapore mosques do not call outside; in western Europe, the Americas
-and East Asia only mosques with a minaret call, once on Fridays at 100 dB(A).
+Country rules change this: Saudi Arabia calls at a third of the power and, like Egypt, adds the
+iqama; Indonesia adds the recitation before the call, Turkey the Friday sala; Rwanda has no dawn
+call; Chinese, Tajik and Singapore mosques do not call outside. In Europe (except Albania, Bosnia
+and Herzegovina, Bulgaria, Greece, Kosovo, Montenegro, North Macedonia, Romania, Serbia and
+Russia), the Americas, Australia, New Zealand and East Asia only mosques with a mapped minaret
+call, once on Fridays at 100 dB(A).
 
 The people outside bars, pubs, nightclubs, beer gardens, restaurants, cafés and fast-food places
 sit on their terraces and stand at their doors. A person present emits a talker's sound power with
@@ -108,22 +116,30 @@ mapped heights, floor counts, Overture heights and finally the typical height of
 
 ## Propagation
 
-CNOSSOS-EU in eight octave bands: geometric spreading, air absorption at the place's mean
-temperature and humidity, the ground's effect, diffraction over terrain and buildings, and the
-share of favourable (downward-refracting) weather by direction from the ERA5 1991–2020
-climatology. Forest does not attenuate: CNOSSOS-EU has no foliage term. Terrain is national
-LiDAR where open and GEDTM30 elsewhere.
+CNOSSOS-EU in eight octave bands: geometric spreading, air absorption (ISO 9613-1) averaged over
+the place's 3-hourly weather of 1991–2020, the ground's effect, diffraction over terrain and
+buildings, and the share of favourable (downward-refracting) weather by direction from the same
+ERA5 climatology. Forest does not attenuate: CNOSSOS-EU has no foliage term. Terrain is a national
+elevation model where one is open (mostly LiDAR; Great Britain's OS Terrain 50) and GEDTM30
+elsewhere, at one arc-second (about 30 m).
+
+Reflections are not traced. Instead of CNOSSOS-EU's image sources a receiver among buildings gains
+3 dB when more than half of nine points 75 m apart around it fall inside buildings taller than
+5 m, 1.5 dB when more than a fifth do, else nothing.
 
 ## Time and loudness
 
-The levels exceeded 5, 10, 50 and 90 % of the time come from each source's passes through the
-hours of the day. Loudness in sone follows ISO 532-1 (Zwicker) from the received third-octave spectrum at the
-level exceeded 5 % of the time.
+The level exceeded 5 % of the time comes from each source's passes through the hours of the day.
+Loudness in sone follows ISO 532-1, Zwicker's method for steady sound. Each period's received
+spectrum — the octave bands shared equally by their thirds, flights by the loudest flight's Doc 29
+spectral class — is set to the period's level exceeded 5 % of the time and taken as steady: an
+approximation of the N5 that ISO 532-1 defines for time-varying sound. The whole day's loudness is
+that of the three periods' spectra averaged over their hours with the evening 5 dB and the night
+10 dB up, as in Lden, so it can exceed the loudness of every single period.
 
 ## Standards
 
-- [CNOSSOS-EU](https://eur-lex.europa.eu/eli/dir_del/2021/1226): road, rail and industrial
-  emission, propagation
+- [CNOSSOS-EU](https://eur-lex.europa.eu/eli/dir_del/2021/1226): road emission, propagation
 - [ECAC Doc 29](https://www.ecac-ceac.org/activities/environment/european-aviation-and-environment-working-group-eaeg/airmod)
   with [EASA ANP](https://www.easa.europa.eu/en/domains/environment/policy-support-and-research/aircraft-noise-and-performance-anp-data)
   data: aircraft
@@ -136,8 +152,9 @@ certificate.
 
 ## Known limits
 
-- Traffic on roads nobody counted dominates the error. Barcelona's and Madrid's wide avenues read
-  3 to 6 dB too loud.
+- Natural sound — wind, water, birds, insects — is not modelled. Where human-made sound is faint,
+  a place is louder than the map says.
+- Barcelona's and Madrid's wide avenues read 3 to 6 dB too loud.
 - Crowds on squares and pedestrians by day are missing: Barcelona's nightlife stations read 6 dB
   under the measurement.
 - Night freight on German main lines reads 2.9 dB too quiet.
