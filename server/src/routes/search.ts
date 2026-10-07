@@ -86,11 +86,12 @@ function capCache<V extends { expires: number }>(map: Map<string, V>, cap: numbe
   }
 }
 
-/** Shared Photon call — one UA + timeout for /api/search and /api/reverse. */
+/** Shared Photon call — one UA + timeout for /api/search and /api/reverse. The public Photon
+ *  answered in 5.2-6.6 s on 2026-10-07, so a 3 s limit returned no place at all. */
 function fetchPhoton(url: URL): Promise<Response> {
   return fetch(url.toString(), {
     headers: { 'User-Agent': 'quietmap.org/1.0 (noise atlas; contact: info@quietmap.org)' },
-    signal: AbortSignal.timeout(3000),
+    signal: AbortSignal.timeout(10_000),
   })
 }
 
