@@ -124,8 +124,10 @@ export function AircraftLayerRow({ layer, loudTotal, flights, onHighlightFlight 
 
 /** Everything the list does not name: the many farther pieces of road, track, building and plant.
  *  Together they make a steady sound, so their loud moments are their Lden. */
-export function RestRow({ levels, loudTotal, count }: {
+export function RestRow({ levels, loud, loudTotal, count }: {
   levels: PeriodLevels
+  /** Its loud moments: its share of the list's is its row's. */
+  loud: number
   loudTotal: number
   /** How many pieces it sums. */
   count: number
@@ -136,7 +138,7 @@ export function RestRow({ levels, loudTotal, count }: {
       distance=""
       heard={`${count.toLocaleString('en')} more`}
       received={levels}
-      loud={levels.lden ?? -Infinity}
+      loud={loud}
       loudTotal={loudTotal}
     />
   )

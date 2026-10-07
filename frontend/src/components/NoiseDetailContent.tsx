@@ -68,7 +68,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
       />
     )
     : <AircraftLayerRow key="aircraft" layer={e.layer!} loudTotal={loudTotal} flights={data.top_flights} onHighlightFlight={onHighlight} />)
-  if (rest) shown.push(<RestRow key="rest" levels={rest.levels} loudTotal={loudTotal} count={rest.count} />)
+  if (rest) shown.push(<RestRow key="rest" levels={rest.levels} loud={rest.loud} loudTotal={loudTotal} count={rest.count} />)
   const totalLdenText = txtTable([
     ...data.sources
       .filter(s => s.lden != null && s.lden > 0)
