@@ -48,6 +48,7 @@ visitor's address in `X-Forwarded-For` (forwarding headers are trusted from loop
 | `QM_TILES_DIR` | the heatmap tiles: `current.json` and the `{layer}.{build}.pmtiles` archives it names |
 | `QM_POPUP_CONCURRENCY` | clicks computed at the same time; default `2` |
 | `QM_NOINDEX` | `1` marks every response `X-Robots-Tag: noindex` (a host search engines must skip) |
+| `QM_PHOTON_URL` | the Photon geocoder's base URL for search and place names; default the public `https://photon.komoot.io` |
 
 The server refuses to start without the binary, a year directory or the tiles directory.
 

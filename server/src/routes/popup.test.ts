@@ -21,6 +21,7 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     popupConcurrency: 2,
     tilesDir: scratch,
     noIndex: false,
+    photonUrl: 'http://127.0.0.1:9',
     ...overrides,
   }
 }

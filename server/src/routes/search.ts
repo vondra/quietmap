@@ -148,9 +148,9 @@ function formatReversePlace(p: PhotonFeature['properties']): string | null {
   return secondary ? `${primary}, ${secondary}` : primary
 }
 
-export async function searchRoutes(app: FastifyInstance) {
-  // Both geocode routes proxy the external Photon service — rate-limited per
-  // client (owner directive 2026-07-15) to protect Photon etiquette and us.
+export async function searchRoutes(app: FastifyInstance, { photonUrl }: { photonUrl: string }) {
+  // Both geocode routes proxy the Photon geocoder (QM_PHOTON_URL, the public one unless set) —
+  // rate-limited per client (owner directive 2026-07-15) to protect Photon etiquette and us.
   // The map's view biases the order, as strongly as the view is close: zoomed out over Prague,
   // "london" is London; without the zoom Photon took a street's radius and listed Prague's bars.
   app.get<{ Querystring: { q?: string; lat?: string; lon?: string; zoom?: string } }>('/api/search', {
@@ -172,7 +172,7 @@ export async function searchRoutes(app: FastifyInstance) {
     if (entry && entry.expires > Date.now()) return reply.send(entry.data)
 
     try {
-      const url = new URL('https://photon.komoot.io/api/')
+      const url = new URL('/api/', photonUrl)
       url.searchParams.set('q', q)
       if (view) {
         url.searchParams.set('lat', view.lat)
@@ -222,7 +222,7 @@ export async function searchRoutes(app: FastifyInstance) {
     if (entry && entry.expires > Date.now()) return reply.send({ place: entry.place })
 
     try {
-      const url = new URL('https://photon.komoot.io/reverse')
+      const url = new URL('/reverse', photonUrl)
       url.searchParams.set('lat', String(lat))
       url.searchParams.set('lon', String(lon))
       url.searchParams.set('lang', 'default')

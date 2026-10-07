@@ -18,6 +18,8 @@ export interface Config {
   tilesDir: string
   /** Every response carries `X-Robots-Tag: noindex` (a host search engines must skip). */
   noIndex: boolean
+  /** The Photon geocoder that finds and names places: its base URL, the public one unless set. */
+  photonUrl: string
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -60,5 +62,6 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
     popupConcurrency: positiveInteger(env.QM_POPUP_CONCURRENCY || '2', 'QM_POPUP_CONCURRENCY', 64),
     tilesDir: directory(required(env, 'QM_TILES_DIR'), 'QM_TILES_DIR'),
     noIndex: env.QM_NOINDEX === '1',
+    photonUrl: env.QM_PHOTON_URL || 'https://photon.komoot.io',
   }
 }

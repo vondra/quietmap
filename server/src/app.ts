@@ -17,7 +17,7 @@ const POPUP_QUEUE_PER_SLOT = 2
 /** A click still computing after this is killed and answered with an error. */
 const POPUP_TIMEOUT_MS = 30_000
 
-export type AppConfig = Pick<Config, 'popupBin' | 'preparedDir' | 'years' | 'popupConcurrency' | 'tilesDir' | 'noIndex'>
+export type AppConfig = Pick<Config, 'popupBin' | 'preparedDir' | 'years' | 'popupConcurrency' | 'tilesDir' | 'noIndex' | 'photonUrl'>
 
 export async function buildApp(
   config: AppConfig,
@@ -76,7 +76,7 @@ export async function buildApp(
     timeoutMs: popupTimeoutMs,
   })
   await app.register(popupRoutes, { runner, years: config.years })
-  await app.register(searchRoutes)
+  await app.register(searchRoutes, { photonUrl: config.photonUrl })
   await app.register(heatmapPmtilesRoutes, { tilesDir: config.tilesDir })
   await app.register(heatmapManifestRoutes, { tilesDir: config.tilesDir })
   return app

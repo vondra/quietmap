@@ -16,6 +16,7 @@ const CONFIG: AppConfig = {
   popupConcurrency: 1,
   tilesDir: tmpdir(),
   noIndex: false,
+  photonUrl: 'http://127.0.0.1:9',
 }
 
 async function app(t: test.TestContext) {
