@@ -442,12 +442,17 @@ pub fn answer(
                 levels.l5,
             )
         });
-        let mut contributors = all_contributors(&selections);
         let mut layers = layer_answers(&selections);
+        let mut contributors: Vec<crate::update::Contributor>;
         if !last_ring {
-            contributors = ranked_contributors(contributors, |c| c.energy);
-            contributors.truncate(CONTRIBUTORS_SHOWN);
+            // A partial list: the loudest by Lden, only they copied.
+            contributors = ranked_contributors(all_contributors(&selections), |c| c.energy)
+                .into_iter()
+                .take(CONTRIBUTORS_SHOWN)
+                .cloned()
+                .collect();
         } else {
+            contributors = all_contributors(&selections).into_iter().cloned().collect();
             for contributor in &mut contributors {
                 let display = fields(contributor);
                 contributor.heard = display

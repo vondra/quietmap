@@ -114,19 +114,13 @@ impl Weather {
         }
     }
 
-    /// The energy of `period` under a draw's `weather` in [0, 1).
-    fn at(&self, period: usize, weather: f64) -> f64 {
-        self.0
-            .iter()
-            .map(|[homogeneous, favourable, mix]| {
-                let share = favourable_share(mix[period], homogeneous[period], favourable[period]);
-                if weather < share {
-                    favourable[period]
-                } else {
-                    homogeneous[period]
-                }
-            })
-            .sum()
+    /// Each bin's favourable share and its energy of `period` in either state: a draw's weather u
+    /// in [0, 1) takes the favourable energy of the bins whose share is above it.
+    fn states(&self, period: usize) -> [(f64, f64, f64); SHARE_BINS] {
+        self.0.map(|[homogeneous, favourable, mix]| {
+            let share = favourable_share(mix[period], homogeneous[period], favourable[period]);
+            (share, homogeneous[period], favourable[period])
+        })
     }
 }
 
@@ -141,10 +135,10 @@ fn favourable_share(mean: f64, homogeneous: f64, favourable: f64) -> f64 {
 
 /// One source whose level varies in time: its mean energy, its weather and lambda per period
 /// (infinite for a steady source, whose level follows the weather alone).
-struct Line {
+struct Line<'w> {
     key: u64,
     energy: [f64; PERIODS],
-    weather: Weather,
+    weather: &'w Weather,
     lambda: [f64; PERIODS],
     /// A road's hourly profile ([`HOURLY_SHARES`]); `None` keeps the period's mean every hour.
     profile: Option<usize>,
@@ -378,6 +372,8 @@ pub fn percentiles(
 ) -> Percentiles {
     let total: [f64; PERIODS] =
         std::array::from_fn(|p| selections.iter().map(|s| s.answer_energy()[p]).sum::<f64>());
+    let mut flight_weather = Weather::default();
+    flight_weather.add(&flight_energy, &[flight_energy; 2]);
     let mut lines = Vec::new();
     for selection in selections {
         for contributor in selection.contributors.values() {
@@ -406,7 +402,7 @@ pub fn percentiles(
             lines.push(Line {
                 key: contributor.group_key,
                 energy: contributor.energy,
-                weather: contributor.weather.clone(),
+                weather: &contributor.weather,
                 lambda,
                 profile,
                 duty: events,
@@ -415,12 +411,10 @@ pub fn percentiles(
     }
     // The contributors come from hash maps: a fixed order keeps the draws of a click the same.
     lines.sort_by_key(|line| line.key);
-    let mut flight_weather = Weather::default();
-    flight_weather.add(&flight_energy, &[flight_energy; 2]);
     lines.push(Line {
         key: u64::MAX,
         energy: flight_energy,
-        weather: flight_weather,
+        weather: &flight_weather,
         lambda: std::array::from_fn(|p| {
             if flight_energy[p] > 0.0 {
                 flight_energy_lambda[p] / flight_energy[p]
@@ -466,9 +460,19 @@ pub fn percentiles(
         for line in lines.iter().filter(|line| line.energy[p] > 0.0) {
             // Fisher-Yates: which stratum of this line's probability each draw takes.
             shuffle(&mut strata, &mut random);
+            let states = line.weather.states(p);
             for (k, stratum) in strata.iter().enumerate() {
                 let probability = (*stratum as f64 + random.uniform()) / DRAWS as f64;
-                let mean = line.weather.at(p, weather[k]);
+                let mean: f64 = states
+                    .iter()
+                    .map(|&(share, homogeneous, favourable)| {
+                        if weather[k] < share {
+                            favourable
+                        } else {
+                            homogeneous
+                        }
+                    })
+                    .sum();
                 draws[k] += match line.duty {
                     // An event sounds in its duty's share of the draws, at its mean over it.
                     Some(duty) if duty[p] > 0.0 => {
