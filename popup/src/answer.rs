@@ -389,31 +389,30 @@ pub fn answer(
         } else {
             Vec::new()
         };
-        let display_json = |display: DisplayRef, layer: Layer| -> Result<String, String> {
-            let read = rings[usize::from(display.ring)]
-                .get()
-                .ok_or("display of an unread ring")?;
-            let bytes = read
-                .file(usize::from(display.tile), Kind::Sources)
-                .ok_or("display of an absent sources file")?;
-            let sources = Sources::parse(bytes).map_err(|e| e.to_string())?;
-            let values: Vec<serde_json::Value> = serde_json::from_str(
-                sources
-                    .display(display.attribute)
-                    .map_err(|e| e.to_string())?,
-            )
-            .map_err(|e| e.to_string())?;
-            let object: serde_json::Map<String, serde_json::Value> = display_fields(layer)
-                .iter()
-                .map(|field| field.to_string())
-                .zip(values)
-                .collect();
-            Ok(serde_json::Value::Object(object).to_string())
-        };
+        let display_record =
+            |display: DisplayRef, layer: Layer| -> Result<serde_json::Value, String> {
+                let read = rings[usize::from(display.ring)]
+                    .get()
+                    .ok_or("display of an unread ring")?;
+                let bytes = read
+                    .file(usize::from(display.tile), Kind::Sources)
+                    .ok_or("display of an absent sources file")?;
+                let sources = Sources::parse(bytes).map_err(|e| e.to_string())?;
+                let values: Vec<serde_json::Value> = serde_json::from_str(
+                    sources
+                        .display(display.attribute)
+                        .map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+                let object: serde_json::Map<String, serde_json::Value> = display_fields(layer)
+                    .iter()
+                    .map(|field| field.to_string())
+                    .zip(values)
+                    .collect();
+                Ok(serde_json::Value::Object(object))
+            };
         let fields = |contributor: &crate::update::Contributor| {
-            display_json(contributor.display, contributor.layer)
-                .ok()
-                .and_then(|text| serde_json::from_str(&text).ok())
+            display_record(contributor.display, contributor.layer).ok()
         };
         // The time levels come with the final answer only (the partial ones do not show them).
         let percentiles = last_ring.then(|| {
@@ -514,7 +513,7 @@ pub fn answer(
                 evaluate_seconds,
                 elapsed_seconds: started.elapsed().as_secs_f64(),
             },
-            display_json: &display_json,
+            display_record: &display_record,
         };
         emit(&update)?;
     }

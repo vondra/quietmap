@@ -93,8 +93,8 @@ pub struct Update<'u> {
     /// The loudest evaluated pieces per layer (final update, when asked for).
     pub pieces: Vec<EvaluatedPiece>,
     pub statistics: Statistics,
-    /// The display JSON of a contributor.
-    pub display_json: &'u dyn Fn(DisplayRef, Layer) -> Result<String, String>,
+    /// The display record of a contributor: its display fields by name.
+    pub display_record: &'u dyn Fn(DisplayRef, Layer) -> Result<serde_json::Value, String>,
 }
 
 pub fn layer_answers(selections: &[LayerSelection]) -> Vec<LayerAnswer> {
@@ -143,7 +143,7 @@ pub fn empty_answer(
     (files, bytes, read_seconds, started): (usize, u64, f64, std::time::Instant),
     emit: &mut dyn FnMut(&Update) -> Result<(), String>,
 ) -> Result<(), String> {
-    let no_display = |_: DisplayRef, _: Layer| -> Result<String, String> {
+    let no_display = |_: DisplayRef, _: Layer| -> Result<serde_json::Value, String> {
         Err("a building without an exposed façade shows no contributors".into())
     };
     emit(&Update {
@@ -171,6 +171,6 @@ pub fn empty_answer(
             evaluate_seconds: 0.0,
             elapsed_seconds: started.elapsed().as_secs_f64(),
         },
-        display_json: &no_display,
+        display_record: &no_display,
     })
 }

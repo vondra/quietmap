@@ -100,11 +100,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
     }
     let mut contributors = Vec::new();
     for contributor in &update.contributors {
-        let display: Value = serde_json::from_str(&(update.display_json)(
-            contributor.display,
-            contributor.layer,
-        )?)
-        .map_err(|error| error.to_string())?;
+        let display = (update.display_record)(contributor.display, contributor.layer)?;
         let mut object = Map::new();
         object.insert(
             "id".into(),
@@ -210,10 +206,8 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             })
         });
         let candidate = &piece.candidate;
-        let metadata: Value = (update.display_json)(candidate.display, candidate.layer)
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or(Value::Null);
+        let metadata =
+            (update.display_record)(candidate.display, candidate.layer).unwrap_or(Value::Null);
         pieces.push(json!({
             "metadata": metadata,
             "trace": trace,
