@@ -19,7 +19,7 @@ use crate::scene::Ground;
 use crate::selection::{LayerSelection, select};
 use crate::update::{
     CONTRIBUTORS_SHOWN, Statistics, Update, all_contributors, empty_answer, layer_answers,
-    ranked_contributors,
+    ranked_contributors, set_unlisted,
 };
 use physics::bands::PERIODS;
 use physics::bound::receiver_bound;
@@ -446,13 +446,15 @@ pub fn answer(
         let mut contributors: Vec<crate::update::Contributor>;
         if !last_ring {
             // A partial list: the loudest by Lden, only they copied.
-            contributors = ranked_contributors(all_contributors(&selections), |c| c.energy)
+            let ranked = ranked_contributors(all_contributors(&selections).collect(), |c| c.energy);
+            set_unlisted(&mut layers, &ranked, CONTRIBUTORS_SHOWN);
+            contributors = ranked
                 .into_iter()
                 .take(CONTRIBUTORS_SHOWN)
                 .cloned()
                 .collect();
         } else {
-            contributors = all_contributors(&selections).into_iter().cloned().collect();
+            contributors = all_contributors(&selections).cloned().collect();
             for contributor in &mut contributors {
                 let display = fields(contributor);
                 contributor.heard = display
@@ -463,27 +465,11 @@ pub fn answer(
                     display.as_ref(),
                 ));
             }
-            // A ground layer's loud moments: every contributor's before the list is cut (a brief
-            // event cut from it is not steady) and, steady, the pieces beyond them.
-            for layer in layers
-                .iter_mut()
-                .filter(|layer| layer.layer != Layer::Aircraft)
-            {
-                let (mut listed, mut loud) = ([0.0; PERIODS], [0.0; PERIODS]);
-                for contributor in contributors.iter().filter(|c| c.layer == layer.layer) {
-                    let own = contributor.loud.unwrap_or(contributor.energy);
-                    for p in 0..PERIODS {
-                        listed[p] += contributor.energy[p];
-                        loud[p] += own[p];
-                    }
-                }
-                layer.loud = Some(std::array::from_fn(|p| {
-                    loud[p] + (layer.energy[p] - listed[p]).max(0.0)
-                }));
-            }
             // The visitor's list ranks by the loud moments: every contributor ranked so, then cut,
-            // so thirty brief events never push out the steady road that leads it.
+            // so thirty brief events never push out the steady road that leads it; a brief event
+            // cut from it stays brief in the last row.
             contributors = ranked_contributors(contributors, |c| c.loud.unwrap_or(c.energy));
+            set_unlisted(&mut layers, &contributors, CONTRIBUTORS_SHOWN);
             contributors.truncate(CONTRIBUTORS_SHOWN);
             let read: Vec<&RingFiles> = rings.iter().filter_map(OnceCell::get).collect();
             let keys: Vec<u64> = contributors.iter().map(|c| c.group_key).collect();

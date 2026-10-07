@@ -55,7 +55,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
     ...(aircraft && (aircraft.lden ?? 0) > 0 ? [{ loud: loudLevel(aircraft.loud_lden, aircraft.lden), layer: aircraft }] : []),
   ].sort((a, b) => b.loud - a.loud)
   const shownEntries = maxSources ? entries.slice(0, maxSources) : entries
-  const rest = restOf(data.sources, audible, entries.slice(shownEntries.length), shownEntries)
+  const rest = restOf(data.sources, entries.slice(shownEntries.length), shownEntries)
   const loudTotal = 10 * Math.log10([...shownEntries.map(e => e.loud), ...(rest ? [rest.loud] : [])]
     .reduce((sum, level) => sum + 10 ** (level / 10), 0) || 1)
   const shown = shownEntries.map(e => e.contributor
@@ -198,30 +198,24 @@ interface ListEntry {
 
 const PERIOD_KEYS = ['ld', 'le', 'ln', 'lden'] as const
 
-/** Everything the list does not show: the rows past its length, and the pieces beyond the popup's
- *  contributors — the ground layers' energy less their contributors'. Its loud moments are the
- *  ground layers' less the listed contributors' (a brief event left out stays brief; the many
- *  farther pieces sound together, steadily). Null when nothing is left. */
-function restOf(layers: LayerLevels[], contributors: Contributor[], hidden: ListEntry[], shown: ListEntry[]): {
+/** Everything the list does not show: the rows past its length, and what the popup leaves out of
+ *  each ground layer (its contributors cut from the list, a brief event staying brief, and the many
+ *  farther pieces, steady). Null when nothing is left. */
+function restOf(layers: LayerLevels[], hidden: ListEntry[], shown: ListEntry[]): {
   levels: PeriodLevels
   loud: number
   count: number
 } | null {
   const energy = (level: number | null | undefined) => (level == null ? 0 : 10 ** (level / 10))
   const ground = layers.filter(l => l.source_type !== 'aircraft')
-  const beyond = (key: typeof PERIOD_KEYS[number]) => Math.max(0,
-    ground.reduce((sum, l) => sum + energy(l[key]), 0) - contributors.reduce((sum, c) => sum + energy(c.received[key]), 0))
-  const hiddenEnergy = (key: typeof PERIOD_KEYS[number]) =>
-    hidden.reduce((sum, e) => sum + energy(e.contributor ? e.contributor.received[key] : e.layer?.[key]), 0)
   const levels = Object.fromEntries(PERIOD_KEYS.map(key => {
-    const total = beyond(key) + hiddenEnergy(key)
+    const total = ground.reduce((sum, l) => sum + energy(l.unlisted?.[key]), 0)
+      + hidden.reduce((sum, e) => sum + energy(e.contributor ? e.contributor.received[key] : e.layer?.[key]), 0)
     return [key, total > 0 ? 10 * Math.log10(total) : null]
   })) as unknown as PeriodLevels
-  const loudEnergy = Math.max(0, ground.reduce((sum, l) => sum + 10 ** (loudLevel(l.loud_lden, l.lden) / 10), 0)
-    - shown.reduce((sum, e) => sum + (e.contributor ? 10 ** (e.loud / 10) : 0), 0))
-    + hidden.reduce((sum, e) => sum + (e.layer ? 10 ** (e.loud / 10) : 0), 0)
-  // Rare events left out may make no loud moments (no share) but still their Lden.
   if (levels.lden == null || levels.lden <= 0) return null
+  const loudEnergy = ground.reduce((sum, l) => sum + energy(l.unlisted?.loud_lden), 0)
+    + hidden.reduce((sum, e) => sum + 10 ** (e.loud / 10), 0)
   const shownContributors = shown.filter(e => e.contributor).length
   return {
     levels,

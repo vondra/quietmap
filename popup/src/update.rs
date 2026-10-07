@@ -24,9 +24,11 @@ pub struct LayerAnswer {
     pub omitted_bound: [f64; PERIODS],
     pub evaluated: usize,
     pub candidates: usize,
-    /// Its loud moments, the energy its sources exceed 5 % of the time each by itself (the final
-    /// update's): what ranks the visitor's list and tells what the list leaves out.
+    /// The aircraft layer's loud moments, its flights' L5 and its ground operations (the final
+    /// update's): what ranks it, one row, in the visitor's list.
     pub loud: Option<[f64; PERIODS]>,
+    /// A ground layer's energy and loud moments beyond the contributors sent: the list's last row.
+    pub unlisted: Option<[[f64; PERIODS]; 2]>,
 }
 
 /// One contributor group (sources sharing a display group key).
@@ -106,8 +108,43 @@ pub fn layer_answers(selections: &[LayerSelection]) -> Vec<LayerAnswer> {
             evaluated: selection.evaluated,
             candidates: selection.covered + selection.pending.len(),
             loud: None,
+            unlisted: None,
         })
         .collect()
+}
+
+/// Each ground layer's part not sent (all but the first `sent` of `ranked`, every contributor of
+/// the click): the pieces beyond its contributors, steady, and the contributors cut, at their loud
+/// moments where known (the final update's), else at their energy.
+pub fn set_unlisted<C: std::borrow::Borrow<Contributor>>(
+    layers: &mut [LayerAnswer],
+    ranked: &[C],
+    sent: usize,
+) {
+    for layer in layers
+        .iter_mut()
+        .filter(|layer| layer.layer != Layer::Aircraft)
+    {
+        let (mut all, mut cut, mut cut_loud) = ([0.0; PERIODS], [0.0; PERIODS], [0.0; PERIODS]);
+        for (rank, contributor) in ranked.iter().map(|c| c.borrow()).enumerate() {
+            if contributor.layer != layer.layer {
+                continue;
+            }
+            let loud = contributor.loud.unwrap_or(contributor.energy);
+            for p in 0..PERIODS {
+                all[p] += contributor.energy[p];
+                if rank >= sent {
+                    cut[p] += contributor.energy[p];
+                    cut_loud[p] += loud[p];
+                }
+            }
+        }
+        let beyond: [f64; PERIODS] = std::array::from_fn(|p| (layer.energy[p] - all[p]).max(0.0));
+        layer.unlisted = Some([
+            std::array::from_fn(|p| beyond[p] + cut[p]),
+            std::array::from_fn(|p| beyond[p] + cut_loud[p]),
+        ]);
+    }
 }
 
 /// Every contributor, the loudest first by `key` (its Lden, or in the final update its loud
@@ -125,11 +162,10 @@ pub fn ranked_contributors<C: std::borrow::Borrow<Contributor>>(
     contributors
 }
 
-pub fn all_contributors(selections: &[LayerSelection]) -> Vec<&Contributor> {
+pub fn all_contributors(selections: &[LayerSelection]) -> impl Iterator<Item = &Contributor> {
     selections
         .iter()
         .flat_map(|selection| selection.contributors.values())
-        .collect()
 }
 
 /// The one and final update of a building without an exposed façade: no levels.
