@@ -443,6 +443,7 @@ pub fn answer(
             )
         });
         let mut contributors = all_contributors(&selections);
+        let mut layers = layer_answers(&selections);
         if !last_ring {
             contributors = ranked_contributors(contributors, |c| c.energy);
             contributors.truncate(CONTRIBUTORS_SHOWN);
@@ -456,6 +457,24 @@ pub fn answer(
                     contributor,
                     display.as_ref(),
                 ));
+            }
+            // A ground layer's loud moments: every contributor's before the list is cut (a brief
+            // event cut from it is not steady) and, steady, the pieces beyond them.
+            for layer in layers
+                .iter_mut()
+                .filter(|layer| layer.layer != Layer::Aircraft)
+            {
+                let (mut listed, mut loud) = ([0.0; PERIODS], [0.0; PERIODS]);
+                for contributor in contributors.iter().filter(|c| c.layer == layer.layer) {
+                    let own = contributor.loud.unwrap_or(contributor.energy);
+                    for p in 0..PERIODS {
+                        listed[p] += contributor.energy[p];
+                        loud[p] += own[p];
+                    }
+                }
+                layer.loud = Some(std::array::from_fn(|p| {
+                    loud[p] + (layer.energy[p] - listed[p]).max(0.0)
+                }));
             }
             // The visitor's list ranks by the loud moments: every contributor ranked so, then cut,
             // so thirty brief events never push out the steady road that leads it.
@@ -477,11 +496,16 @@ pub fn answer(
             std::array::from_fn(|p| (layer[p] - flight_energy[p]).max(0.0))
         });
         // The aircraft layer's loud moments: its flights' L5 and the ground operations.
-        let aircraft_loud = airport_ground.map(|ground| {
+        if let (Some(ground), Some(layer)) = (
+            airport_ground,
+            layers
+                .iter_mut()
+                .find(|layer| layer.layer == Layer::Aircraft),
+        ) {
             let flights =
                 crate::percentiles::loud_flight_energy((flight_energy, flight_energy_lambda));
-            std::array::from_fn(|p| flights[p] + ground[p])
-        });
+            layer.loud = Some(std::array::from_fn(|p| flights[p] + ground[p]));
+        }
         // What the aircraft layer is made of: the flight kinds and the ground operations.
         let aircraft_kinds = airport_ground.map(|ground| {
             let [airliners, jets, propeller, helicopters] = flight_kinds;
@@ -492,7 +516,6 @@ pub fn answer(
             partial: !last_ring,
             percentiles,
             loudness,
-            aircraft_loud,
             aircraft_kinds,
             lat,
             lon,
@@ -500,7 +523,7 @@ pub fn answer(
             receiver_altitude_m: station.altitude_m,
             reflection_db: station.reflection_db,
             building,
-            layers: layer_answers(&selections),
+            layers,
             contributors,
             flights: flights.loudest(),
             pieces,

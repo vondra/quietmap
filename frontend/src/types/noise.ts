@@ -19,7 +19,8 @@ export type AircraftKind = 'airliners' | 'regional_business_jets' | 'propeller' 
 /** One layer's levels at the point. */
 export interface LayerLevels extends PeriodLevels {
   source_type: string
-  /** The aircraft layer's Lden-weighted level exceeded 5 % of the time (the final update's). */
+  /** Its Lden-weighted loud moments, the level its sources exceed 5 % of the time each by itself
+   *  (the final update's). */
   loud_lden?: Level
   /** What the aircraft layer is made of: each kind's share of its Lden energy, those of 0.5 % or
    *  more (the final update's). */

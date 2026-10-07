@@ -24,6 +24,9 @@ pub struct LayerAnswer {
     pub omitted_bound: [f64; PERIODS],
     pub evaluated: usize,
     pub candidates: usize,
+    /// Its loud moments, the energy its sources exceed 5 % of the time each by itself (the final
+    /// update's): what ranks the visitor's list and tells what the list leaves out.
+    pub loud: Option<[f64; PERIODS]>,
 }
 
 /// One contributor group (sources sharing a display group key).
@@ -71,9 +74,6 @@ pub struct Update<'u> {
     pub percentiles: Option<crate::percentiles::Percentiles>,
     /// How loud the click sounds, N5 (the final update's).
     pub loudness: Option<crate::loudness::Loudness>,
-    /// The aircraft layer's energy exceeded 5 % of the time: its flights' L5 and its airport
-    /// movements steady (the final update's).
-    pub aircraft_loud: Option<[f64; PERIODS]>,
     /// What the aircraft layer is made of, Lden energies (final update): airliners, regional and
     /// business jets, propeller aircraft, helicopters, airport ground operations.
     pub aircraft_kinds: Option<[f64; 5]>,
@@ -105,6 +105,7 @@ pub fn layer_answers(selections: &[LayerSelection]) -> Vec<LayerAnswer> {
             omitted_bound: selection.uncertainty(),
             evaluated: selection.evaluated,
             candidates: selection.covered + selection.pending.len(),
+            loud: None,
         })
         .collect()
 }
@@ -149,7 +150,6 @@ pub fn empty_answer(
         partial: false,
         percentiles: None,
         loudness: None,
-        aircraft_loud: None,
         aircraft_kinds: None,
         lat,
         lon,

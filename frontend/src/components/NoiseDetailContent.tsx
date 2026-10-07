@@ -199,8 +199,9 @@ interface ListEntry {
 const PERIOD_KEYS = ['ld', 'le', 'ln', 'lden'] as const
 
 /** Everything the list does not show: the rows past its length, and the pieces beyond the popup's
- *  contributors — the ground layers' energy less their contributors'. Those many farther pieces
- *  sound together, steadily, so their loud moments are their Lden. Null when nothing is left. */
+ *  contributors — the ground layers' energy less their contributors'. Its loud moments are the
+ *  ground layers' less the listed contributors' (a brief event left out stays brief; the many
+ *  farther pieces sound together, steadily). Null when nothing is left. */
 function restOf(layers: LayerLevels[], contributors: Contributor[], hidden: ListEntry[], shown: ListEntry[]): {
   levels: PeriodLevels
   loud: number
@@ -216,7 +217,9 @@ function restOf(layers: LayerLevels[], contributors: Contributor[], hidden: List
     const total = beyond(key) + hiddenEnergy(key)
     return [key, total > 0 ? 10 * Math.log10(total) : null]
   })) as unknown as PeriodLevels
-  const loudEnergy = beyond('lden') + hidden.reduce((sum, e) => sum + 10 ** (e.loud / 10), 0)
+  const loudEnergy = Math.max(0, ground.reduce((sum, l) => sum + 10 ** (loudLevel(l.loud_lden, l.lden) / 10), 0)
+    - shown.reduce((sum, e) => sum + (e.contributor ? 10 ** (e.loud / 10) : 0), 0))
+    + hidden.reduce((sum, e) => sum + (e.layer ? 10 ** (e.loud / 10) : 0), 0)
   if (levels.lden == null || levels.lden <= 0 || loudEnergy <= 0) return null
   const shownContributors = shown.filter(e => e.contributor).length
   return {

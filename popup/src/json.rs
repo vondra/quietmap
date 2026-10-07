@@ -77,8 +77,9 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         let mut object = Map::new();
         object.insert("source_type".into(), json!(layer.layer.name()));
         periods(&mut object, &layer.energy);
-        // The aircraft layer is one row of the list: its loud moments rank it there.
-        if let (Layer::Aircraft, Some(loud)) = (layer.layer, update.aircraft_loud) {
+        // Its loud moments rank the aircraft layer, one row of the list, and tell what the list
+        // leaves out of the others.
+        if let Some(loud) = layer.loud {
             object.insert("loud_lden".into(), lden(&loud));
         }
         if let (Layer::Aircraft, Some(kinds)) = (layer.layer, update.aircraft_kinds) {
