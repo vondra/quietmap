@@ -669,6 +669,9 @@ pub fn convert(
             let prior: [f64; 4] = std::array::from_fn(|category| aadt[category].value(row));
             let row_guessed = guessed(source_id.value(row), estimated.value(row))
                 || copies.contains(&(batch_first_row + row));
+            // A row closed to motor vehicles carries no guessed traffic (way 977414128 had 317 a
+            // day): only what was counted on it and its buses.
+            let closed = row_guessed && crate::traffic::CLOSED_ACCESS.contains(&access.value(row));
             let middle_z30 = (
                 ((i64::from(start_x.value(row)) + i64::from(end_x.value(row))) / 2) as i32,
                 ((i64::from(start_y.value(row)) + i64::from(end_y.value(row))) / 2) as i32,
@@ -676,16 +679,18 @@ pub fn convert(
             // A Thai national highway's rows (motorway to tertiary and unclassified; links and
             // streets carrying its number are not the highway) take the department's traffic of
             // the highway in the row's province: its vehicle-km there over these rows' length.
-            let highway =
-                (row_guessed && country.value(row) == THAI_ISO && matches!(class_index, 0..=4 | 9))
-                    .then(|| {
-                        let (lat, lon) = z30_corner_degrees(middle_z30.0, middle_z30.1);
-                        thai_highway(refs.value(row), lat, lon)
-                    })
-                    .flatten();
+            let highway = (row_guessed
+                && !closed
+                && country.value(row) == THAI_ISO
+                && matches!(class_index, 0..=4 | 9))
+            .then(|| {
+                let (lat, lon) = z30_corner_degrees(middle_z30.0, middle_z30.1);
+                thai_highway(refs.value(row), lat, lon)
+            })
+            .flatten();
             let modelled = building_traffic
                 .as_ref()
-                .filter(|_| row_guessed)
+                .filter(|_| row_guessed && !closed)
                 .and_then(|traffic| {
                     traffic.total(
                         batch_first_row + row,
@@ -732,9 +737,7 @@ pub fn convert(
                 let total: f64 = daily.iter().sum();
                 daily = shares.map(|share| share * total);
             }
-            // A row closed to motor vehicles carries no guessed traffic (way 977414128 had 317 a
-            // day): only what was counted on it and its buses.
-            if row_guessed && crate::traffic::CLOSED_ACCESS.contains(&access.value(row)) {
+            if closed {
                 daily = [0.0; 4];
             }
             // Guessed traffic takes the motorcycles of the square's counted roads, else of the

@@ -133,9 +133,11 @@ impl StreetParking {
         let movements_per_space = Self::around(
             |k| {
                 // Each origin cell divides its budget among all spaces it can serve.
-                let around =
-                    Self::around(|j| self.spaces[j], (k / GRID_SIDE, k % GRID_SIDE)).max(spaces);
-                f64::from(self.grid[k]) * f64::from(self.street_shares[k]) / around
+                let trips = f64::from(self.grid[k]) * f64::from(self.street_shares[k]);
+                if trips == 0.0 {
+                    return 0.0;
+                }
+                trips / Self::around(|j| self.spaces[j], (k / GRID_SIDE, k % GRID_SIDE)).max(spaces)
             },
             cell,
         );

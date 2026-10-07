@@ -4,15 +4,14 @@
 //! service, unclassified) each trip end travels to the nearest main road along a shortest-path
 //! tree, so a street carries what the buildings behind it make, and no street more than the one
 //! it drains into (dev4 added a background of 327-590 vehicles a day to every street and gave a
-//! whole street its busiest row). A street beyond a bridge of the local network, seen from the
-//! main roads, is a dead end: nothing passes through it. The trip ends are also summed per cell
-//! of the square: their sum around a road measures how much its surroundings generate.
+//! whole street its busiest row). The trip ends are also summed per cell of the square: their sum
+//! around a road measures how much its surroundings generate.
 //!
 //! One file per square, `<out>/z9/<x>/<y>.traffic`: per row of the square's `roads.arrow` the
-//! trip ends routed through it (NaN where the row is no local street of a tree) and its dead-end
-//! flag, then the square's grid of trip ends.
+//! trip ends routed through it (NaN where the row is no local street of a tree), then the square's
+//! grid of trip ends.
 
-use crate::dev4::{Dev4, Square, Z9_PER_AXIS, cell, column, require_stamp};
+use crate::dev4::{Dev4, Square, Z9_PER_AXIS, Z30_QUANTUM_M, cell, column, require_stamp};
 use crate::structures::footprint_area_m2;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Int32Type, UInt8Type, UInt16Type};
@@ -27,8 +26,6 @@ pub const GRID_SIDE: usize = 256;
 /// z30 cells per z9 square side and per grid cell.
 const SQUARE_Z30: i64 = 1 << 21;
 const CELL_Z30: i64 = SQUARE_Z30 / GRID_SIDE as i64;
-/// The side of a dev4 z30 cell in Web Mercator metres.
-const Z30_QUANTUM_M: f64 = 0.037_322_767_717_044_72;
 /// A building joins the nearest road within this distance (dev4's frontage).
 const FRONTAGE_M: f64 = 50.0;
 const MAGIC: &[u8; 8] = b"QMTRAF02";
@@ -291,6 +288,8 @@ struct RoadRow {
     length_m: f64,
     /// Open to motor vehicles; tunnels still connect the routing graph.
     open: bool,
+    /// Under the ground: it routes, but no building beside its line joins it.
+    tunnel: bool,
     country: u16,
 }
 
@@ -401,7 +400,7 @@ impl SquareTraffic {
         }
         let count = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
         let (rows, side) = (count(8), count(12));
-        if side != GRID_SIDE || bytes.len() != 16 + 4 * rows + 4 * side * side {
+        if side != GRID_SIDE || bytes.len() != grid_offset(rows) + 4 * side * side {
             return Err("traffic: length does not match the counts".into());
         }
         let floats = |from: usize, n: usize| -> Vec<f32> {
@@ -412,7 +411,7 @@ impl SquareTraffic {
         };
         Ok(SquareTraffic {
             flows: floats(16, rows),
-            grid: floats(16 + 4 * rows, side * side),
+            grid: floats(grid_offset(rows), side * side),
         })
     }
 }
@@ -435,6 +434,11 @@ pub fn read(out: &Path, square: Square) -> Result<Option<SquareTraffic>, String>
     }
 }
 
+/// Where a traffic file's grid starts: after the header and one flow per row.
+fn grid_offset(rows: usize) -> usize {
+    16 + 4 * rows
+}
+
 /// The grid of a square's traffic file alone (the rows' flows are not read).
 fn read_grid(out: &Path, square: Square) -> Result<Option<Vec<f32>>, String> {
     use std::io::{Read, Seek, SeekFrom};
@@ -451,7 +455,8 @@ fn read_grid(out: &Path, square: Square) -> Result<Option<Vec<f32>>, String> {
         return Err(format!("{}: bad magic", path.display()));
     }
     let rows = u32::from_le_bytes(header[8..12].try_into().unwrap()) as u64;
-    file.seek(SeekFrom::Start(16 + 5 * rows)).map_err(context)?;
+    file.seek(SeekFrom::Start(grid_offset(rows as usize) as u64))
+        .map_err(context)?;
     let mut bytes = vec![0u8; 4 * GRID_SIDE * GRID_SIDE];
     file.read_exact(&mut bytes).map_err(context)?;
     Ok(Some(
@@ -508,6 +513,7 @@ fn read_roads(dev4: &Dev4, square: Square) -> Result<Option<Vec<RoadRow>>, Strin
         );
         let (class, access) = (u8s("road_class")?, u8s("access")?);
         let length = get("length_m")?.as_primitive::<Float32Type>();
+        let tunnel = get("tunnel")?.as_boolean();
         let country = get("country_iso")?.as_primitive::<UInt16Type>();
         for row in 0..batch.num_rows() {
             rows.push(RoadRow {
@@ -518,6 +524,7 @@ fn read_roads(dev4: &Dev4, square: Square) -> Result<Option<Vec<RoadRow>>, Strin
                 class: class.value(row),
                 length_m: f64::from(length.value(row)),
                 open: !CLOSED_ACCESS.contains(&access.value(row)),
+                tunnel: tunnel.value(row),
                 country: country.value(row),
             });
         }
@@ -668,12 +675,11 @@ fn square_traffic(dev4: &Dev4, square: Square) -> Result<Option<SquareTraffic>, 
         return Ok(None);
     };
     let buildings = read_buildings(dev4, square)?;
-    let context = |error: String| format!("traffic of {square:?}: {error}");
     // Local metres: the square's mean scale is exact to 1 % across it.
     let scale = metres_per_z30(roads.first().map_or(1 << 29, |row| row.ends[0].1));
     let metres = |(gx, gy): (i32, i32)| [f64::from(gx) * scale, f64::from(gy) * scale];
     let loads = assign(&roads, &buildings, scale, &metres);
-    let flows = trees(&roads, &loads).map_err(context)?;
+    let flows = trees(&roads, &loads);
     // The grid: every building's trip ends in its cell (rows from the north).
     let mut grid = vec![0f32; GRID_SIDE * GRID_SIDE];
     for building in &buildings {
@@ -686,7 +692,7 @@ fn square_traffic(dev4: &Dev4, square: Square) -> Result<Option<SquareTraffic>, 
 }
 
 /// The buildings' trip ends per road row (each building on its nearest open road within the
-/// frontage, any class but a track), and each building's country (its road's).
+/// frontage, any class but a track or a tunnel), and each building's country (its road's).
 struct Loads {
     per_row: Vec<f64>,
     country: HashMap<(i32, i32), u16>,
@@ -712,7 +718,7 @@ fn assign(
     let key = |(gx, gy): (i32, i32)| (i64::from(gx) / cell_z30, i64::from(gy) / cell_z30);
     let mut grid: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
     for (index, row) in roads.iter().enumerate() {
-        if !row.open || row.class == TRACK_CLASS {
+        if !row.open || row.tunnel || row.class == TRACK_CLASS {
             continue;
         }
         let (a, b) = (key(row.ends[0]), key(row.ends[1]));
@@ -768,7 +774,7 @@ fn distance_to_segment(p: [f64; 2], d: [f64; 2]) -> f64 {
 }
 
 /// The service trees: per row the trip ends routed through it (NaN off the trees).
-fn trees(roads: &[RoadRow], loads: &Loads) -> Result<Vec<f32>, String> {
+fn trees(roads: &[RoadRow], loads: &Loads) -> Vec<f32> {
     let mut ids: HashMap<(i32, i32), u32> = HashMap::new();
     let mut node = |at: (i32, i32)| {
         let next = ids.len() as u32;
@@ -910,7 +916,7 @@ fn trees(roads: &[RoadRow], loads: &Loads) -> Result<Vec<f32>, String> {
             }
         })
         .collect();
-    Ok(flows)
+    flows
 }
 
 /// A total order on finite distances for the heap.
@@ -1022,6 +1028,7 @@ mod tests {
             class,
             length_m: 100.0,
             open: true,
+            tunnel: false,
             country: u16::from_le_bytes(*b"CZ"),
         }
     }
@@ -1043,7 +1050,7 @@ mod tests {
             row((2, 0), (3, 0), 5),
             row((2, 0), (2, 1), 5),
         ];
-        let flows = trees(&roads, &loads(vec![500.0, 10.0, 20.0, 30.0])).unwrap();
+        let flows = trees(&roads, &loads(vec![500.0, 10.0, 20.0, 30.0]));
         assert!(flows[0].is_nan());
         assert_eq!(&flows[1..], &[60.0, 20.0, 30.0]);
     }
@@ -1058,7 +1065,7 @@ mod tests {
             row((1, 0), (1, 1), 5),
             row((2, 0), (1, 1), 5),
         ];
-        let flows = trees(&roads, &loads(vec![500.0, 10.0, 20.0, 30.0])).unwrap();
+        let flows = trees(&roads, &loads(vec![500.0, 10.0, 20.0, 30.0]));
         assert_eq!(flows[1] + flows[2], 60.0);
     }
 
@@ -1072,7 +1079,7 @@ mod tests {
             row((2, 0), (3, 0), 5),
             row((2, 0), (2, 5), 5),
         ];
-        let flows = trees(&roads, &loads(vec![0.0, 0.0, 4.0, 4.0, 10.0])).unwrap();
+        let flows = trees(&roads, &loads(vec![0.0, 0.0, 4.0, 4.0, 10.0]));
         // Node 2 lies 100 m from both ends: its trips drain to one of them, never both.
         assert_eq!(flows[4], 10.0);
         assert!((flows[2] + flows[3] - 18.0).abs() < 1e-9);
@@ -1173,5 +1180,32 @@ mod tests {
         assert_eq!(back.flows[0], 1.5);
         assert!(back.flows[1].is_nan());
         assert_eq!(back.grid, traffic.grid);
+        // The grid alone, as the sources read it from the file.
+        let out = std::env::temp_dir().join(format!("qm-traffic-grid-{}", std::process::id()));
+        let square = Square { x: 1, y: 2 };
+        let file = path(&out, square);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, traffic.encode()).unwrap();
+        assert_eq!(read_grid(&out, square).unwrap().unwrap(), traffic.grid);
+        std::fs::remove_dir_all(&out).unwrap();
+    }
+
+    /// A building over a tunnel joins the street beside it, not the road under the ground.
+    #[test]
+    fn a_building_over_a_tunnel_joins_its_street() {
+        let tunnel = RoadRow {
+            tunnel: true,
+            ..row((0, 0), (1_000, 0), 2)
+        };
+        let roads = vec![tunnel, row((0, 300), (1_000, 300), 5)];
+        let buildings = [BuildingLoad {
+            at: (500, 50),
+            dwellings: 2.0,
+            trips: 0.0,
+        }];
+        let metres = |(x, y): (i32, i32)| [f64::from(x) * 0.1, f64::from(y) * 0.1];
+        let loads = assign(&roads, &buildings, 0.1, &metres);
+        assert_eq!(loads.per_row[0], 0.0);
+        assert!(loads.per_row[1] > 0.0);
     }
 }
