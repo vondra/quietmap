@@ -129,17 +129,30 @@ export function contributorClass(c: Contributor): string {
 }
 
 /** What a reference alone is the number of: a bare "2404" tells a visitor nothing, "Road 2404" does
- *  and fits the row's column (the class stands in the row's detail). */
-const REFERENCE_NOUNS: Record<string, string> = { road: 'Road', railway: 'Railway' }
+ *  and fits the row's column, where "Secondary road 240" does not (the class stands in the row's
+ *  detail). A line keeps its class: "Tram 22", "Railway 011". */
+const REFERENCE_NOUNS: Record<string, string> = { road: 'Road' }
+
+function kindOf(c: Contributor): string {
+  const cls = contributorClass(c)
+  return cls ? subtypeLabel(c.source_type, cls) : SOURCE_LABELS[c.source_type] ?? c.source_type
+}
 
 /** The contributor's name, else its number with what it numbers ("Road 2404"), else its class in
  *  words. */
 export function contributorLabel(c: Contributor): string {
-  const cls = contributorClass(c)
-  const kind = cls ? subtypeLabel(c.source_type, cls) : SOURCE_LABELS[c.source_type] ?? c.source_type
-  if (!c.name || c.name === cls) return kind
+  const kind = kindOf(c)
+  if (!c.name || c.name === contributorClass(c)) return kind
   const referenceOnly = c.name === c.metadata?.ref && !c.metadata?.name
   return referenceOnly ? `${REFERENCE_NOUNS[c.source_type] ?? kind} ${c.name}` : c.name
+}
+
+/** Whether the label already says the contributor's class ("Tertiary road", "Tram 22"), so its
+ *  detail need not repeat it. */
+export function labelNamesClass(c: Contributor): boolean {
+  const kind = kindOf(c)
+  const label = contributorLabel(c)
+  return contributorClass(c) === '' || label === kind || label === `${kind} ${c.name}`
 }
 
 const AIRCRAFT_KIND_LABELS: Record<AircraftKind, string> = {

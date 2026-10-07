@@ -2,7 +2,7 @@
 // level by day, evening and night; the aircraft layer's levels and its loudest flights.
 import type { AircraftKind, Contributor, PeriodLevels, TopFlight } from '../../../types/noise'
 import { fmtDbValue } from '../../../utils/formatters'
-import { aircraftKindShares, contributorClass, contributorLabel, subtypeLabel } from '../labels'
+import { aircraftKindShares, contributorClass, labelNamesClass, subtypeLabel } from '../labels'
 import { lineRow, PERIOD_LABELS_DETAIL } from '../shared'
 import { HoverText } from '../../ui/info-tip'
 import { MetadataRows } from './MetadataRows'
@@ -24,8 +24,8 @@ function PeriodLevelsLine({ received }: { received: PeriodLevels }) {
 
 export function ContributorDetail({ c }: { c: Contributor }) {
   const cls = contributorClass(c)
-  // The row shows the name; the class goes here unless the row's label already starts with it.
-  const showClass = cls !== '' && !contributorLabel(c).startsWith(subtypeLabel(c.source_type, cls))
+  // The row shows the name; the class goes here unless the row's label already says it.
+  const showClass = !labelNamesClass(c)
   return (
     <div className={DETAIL_CLASS}>
       {showClass && (
@@ -39,7 +39,7 @@ export function ContributorDetail({ c }: { c: Contributor }) {
 
 const KINDS_TOOLTIP =
   'Share of the aircraft noise here (Lden) by kind.\n' +
-  'Airliners: jets with their engines under the wings (A320, B737, wide-bodies).\n' +
+  'Airliners: jets with their engines under the wings (A320, B737, E-Jets, wide-bodies).\n' +
   'Regional and business jets: engines at the tail (CRJ, ERJ, business jets).\n' +
   'Propeller aircraft: turboprops and light aircraft.\n' +
   'Airport ground operations: taxiing and take-off rolls.'

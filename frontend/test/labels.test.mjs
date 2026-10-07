@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { aircraftKindShares, aircraftMakeup, contributorLabel } from '../src/components/noise/labels.ts'
+import { aircraftKindShares, aircraftMakeup, contributorLabel, labelNamesClass } from '../src/components/noise/labels.ts'
 
 const road = (name, metadata) => ({
   id: 'r', source_type: 'road', name, subtype: 'tertiary', distance_m: 38,
@@ -21,6 +21,15 @@ test('a named road reads as its name, even with a number', () => {
 
 test('a road with neither name nor number reads as its class', () => {
   assert.equal(contributorLabel(road('tertiary', { road_class: 'tertiary' })), 'Tertiary road')
+})
+
+test('a line known only by its number keeps its class, and its detail does not repeat it', () => {
+  const tram = { ...road('22', { rail_type: 'tram', ref: '22' }), source_type: 'railway', subtype: null }
+  assert.equal(contributorLabel(tram), 'Tram 22')
+  assert.equal(labelNamesClass(tram), true)
+  assert.equal(labelNamesClass(road('2404', { road_class: 'tertiary', ref: '2404' })), false)
+  const school = { ...road('School of Economics', { building_type: 'education', name: 'School of Economics' }), source_type: 'building', subtype: null }
+  assert.equal(labelNamesClass(school), false)
 })
 
 test('the aircraft layer reads as its largest kind, its makeup largest first', () => {

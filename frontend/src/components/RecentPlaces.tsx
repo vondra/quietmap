@@ -33,7 +33,7 @@ export default function RecentPlaces({ places, current, onOpen, onRemove }: {
           >
             <button
               type="button"
-              className={`flex min-w-0 flex-1 flex-col items-start py-0.5 pl-1.5 text-left ${isCurrent ? 'pr-4' : 'pr-1.5'}`}
+              className={`flex min-w-0 flex-1 flex-col items-start py-0.5 pl-1.5 text-left ${isCurrent ? 'pr-5' : 'pr-1.5'}`}
               aria-current={isCurrent ? 'page' : undefined}
               title={place.place ?? name}
               onClick={() => onOpen(place)}
@@ -45,7 +45,7 @@ export default function RecentPlaces({ places, current, onOpen, onRemove }: {
               <button
                 type="button"
                 aria-label={`Forget ${name}`}
-                className="absolute right-0.5 top-0.5 opacity-60 hover:opacity-100"
+                className="absolute right-0 top-0 p-1 opacity-60 hover:opacity-100"
                 onClick={() => onRemove(place)}
               >
                 <X className="size-3" />
