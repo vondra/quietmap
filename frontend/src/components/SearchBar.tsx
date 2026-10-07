@@ -1,4 +1,5 @@
-// Address search: geocoder suggestions near the map centre; picking one flies the map there.
+// Address search: geocoder suggestions leaning towards the map's view; picking one flies the map
+// there.
 import { useState, useRef, useEffect, useCallback } from 'react'
 
 interface SearchResult {
@@ -10,10 +11,11 @@ interface SearchResult {
 
 interface SearchBarProps {
   onSelect: (result: SearchResult) => void
-  mapCenter?: { lat: number; lng: number }
+  /** The map's view when the visitor types (read then, not at the last render). */
+  getMapView?: () => { lat: number; lng: number; zoom: number }
 }
 
-export default function SearchBar({ onSelect, mapCenter }: SearchBarProps) {
+export default function SearchBar({ onSelect, getMapView }: SearchBarProps) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [open, setOpen] = useState(false)
@@ -37,9 +39,11 @@ export default function SearchBar({ onSelect, mapCenter }: SearchBarProps) {
     setLoading(true)
     try {
       const params = new URLSearchParams({ q })
-      if (mapCenter) {
-        params.set('lat', mapCenter.lat.toFixed(4))
-        params.set('lon', mapCenter.lng.toFixed(4))
+      const view = getMapView?.()
+      if (view) {
+        params.set('lat', view.lat.toFixed(4))
+        params.set('lon', view.lng.toFixed(4))
+        params.set('zoom', view.zoom.toFixed(1))
       }
       const res = await fetch(`/api/search?${params}`, { signal: controller.signal })
       if (!res.ok) return
@@ -52,7 +56,7 @@ export default function SearchBar({ onSelect, mapCenter }: SearchBarProps) {
     } finally {
       setLoading(false)
     }
-  }, [mapCenter])
+  }, [getMapView])
 
   const handleInput = (value: string) => {
     setQuery(value)

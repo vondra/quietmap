@@ -1,5 +1,6 @@
 // GET /api/search (address suggestions) and /api/reverse (the place name of the tab title): a
-// proxy to the public Photon geocoder, cached in memory and rate-limited per client.
+// proxy to the Photon geocoder, filtered to what a visitor looks for, cached in memory and
+// rate-limited per client.
 import type { FastifyInstance } from 'fastify'
 import { EXPENSIVE_ROUTE_RATE_LIMIT } from '../rate-limit.ts'
 
@@ -20,27 +21,70 @@ interface PhotonFeature {
     locality?: string
     state?: string
     country?: string
+    osm_key?: string
+    osm_value?: string
   }
   geometry: {
     coordinates: [number, number]
   }
 }
 
+/** What a visitor of a noise map looks for: places, streets and addresses, nature, somewhere to
+ *  stay, landmarks and stations. Everything else (bus stops, guideposts, motorway exits, bars,
+ *  shops, artworks) crowded out the place itself: "sněžka" gave a bus stop and three guideposts. */
+const SEARCHABLE: Record<string, true | readonly string[]> = {
+  place: true,
+  boundary: ['administrative', 'national_park', 'protected_area'],
+  building: true,
+  natural: true,
+  waterway: ['river', 'canal'],
+  landuse: true,
+  leisure: true,
+  highway: ['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'unclassified', 'residential',
+    'living_street', 'pedestrian', 'service', 'road'],
+  tourism: ['hotel', 'motel', 'guest_house', 'hostel', 'chalet', 'apartment', 'alpine_hut',
+    'wilderness_hut', 'camp_site', 'caravan_site', 'viewpoint', 'attraction', 'museum', 'zoo',
+    'theme_park'],
+  historic: ['castle', 'ruins', 'fort', 'manor', 'monastery', 'archaeological_site'],
+  railway: ['station', 'halt'],
+  aeroway: ['aerodrome'],
+  amenity: ['school', 'kindergarten', 'university', 'college', 'hospital'],
+}
+
+function searchable(p: PhotonFeature['properties']): boolean {
+  if (p.housenumber) return true
+  const allowed = p.osm_key ? SEARCHABLE[p.osm_key] : undefined
+  return allowed === true || (allowed !== undefined && allowed.includes(p.osm_value ?? ''))
+}
+
+/** Results the visitor cannot tell apart: the same label anywhere (Nantes the city and Nantes
+ *  the metropolis), or the same name within 5 km (Paris the city and Paris the boundary; a
+ *  village and its cadastral area). */
+const SAME_PLACE_M = 5_000
+
+function samePlace(a: SearchResult, b: SearchResult): boolean {
+  if (a.display_name !== b.display_name) return false
+  if (a.secondary === b.secondary) return true
+  const dy = (a.lat - b.lat) * 111_320
+  const dx = (a.lon - b.lon) * 111_320 * Math.cos((a.lat * Math.PI) / 180)
+  return Math.hypot(dx, dy) < SAME_PLACE_M
+}
+
+/** Results shown, out of the more Photon is asked for so that filtering leaves enough. */
+const SHOWN = 5
+const ASKED = 20
+
 function formatPhotonResult(p: PhotonFeature['properties']): { display_name: string; secondary: string } {
   let primary = ''
   const secondaryParts: string[] = []
 
-  if (p.street) {
-    let num = p.housenumber
-    if (num) {
-      const slash = num.indexOf('/')
-      if (slash !== -1) num = num.substring(slash + 1)
-      primary = `${p.street} ${num}`
-    } else {
-      primary = p.street
-    }
-  } else if (p.name) {
-    primary = p.name
+  // An address reads as its street and number; anything named reads as its name (Nantes station
+  // read as its street, "Voies 10-11").
+  if (p.street && p.housenumber) {
+    const slash = p.housenumber.indexOf('/')
+    primary = `${p.street} ${slash === -1 ? p.housenumber : p.housenumber.substring(slash + 1)}`
+  } else {
+    primary = p.name || p.street || ''
   }
 
   const city = p.city
@@ -107,15 +151,22 @@ function formatReversePlace(p: PhotonFeature['properties']): string | null {
 export async function searchRoutes(app: FastifyInstance) {
   // Both geocode routes proxy the external Photon service — rate-limited per
   // client (owner directive 2026-07-15) to protect Photon etiquette and us.
-  app.get<{ Querystring: { q?: string; lat?: string; lon?: string } }>('/api/search', {
+  // The map's view biases the order, as strongly as the view is close: zoomed out over Prague,
+  // "london" is London; without the zoom Photon took a street's radius and listed Prague's bars.
+  app.get<{ Querystring: { q?: string; lat?: string; lon?: string; zoom?: string } }>('/api/search', {
     config: { rateLimit: EXPENSIVE_ROUTE_RATE_LIMIT },
   }, async (request, reply) => {
     const q = request.query.q?.trim()
     if (!q || q.length < 2) return reply.send([])
 
-    const lat = request.query.lat || '50.08'
-    const lon = request.query.lon || '14.42'
-    const cacheKey = `${q.toLowerCase()}|${parseFloat(lat).toFixed(1)}|${parseFloat(lon).toFixed(1)}`
+    const lat = parseFloat(request.query.lat ?? '')
+    const lon = parseFloat(request.query.lon ?? '')
+    const zoom = Math.round(parseFloat(request.query.zoom ?? ''))
+    const view = Number.isFinite(lat) && Math.abs(lat) <= 90 && Number.isFinite(lon) &&
+      Math.abs(lon) <= 180 && Number.isFinite(zoom)
+      ? { lat: lat.toFixed(1), lon: lon.toFixed(1), zoom: String(Math.min(18, Math.max(0, zoom))) }
+      : null
+    const cacheKey = `${q.toLowerCase()}|${view ? `${view.lat}|${view.lon}|${view.zoom}` : ''}`
 
     const entry = cache.get(cacheKey)
     if (entry && entry.expires > Date.now()) return reply.send(entry.data)
@@ -123,25 +174,28 @@ export async function searchRoutes(app: FastifyInstance) {
     try {
       const url = new URL('https://photon.komoot.io/api/')
       url.searchParams.set('q', q)
-      url.searchParams.set('lat', lat)
-      url.searchParams.set('lon', lon)
+      if (view) {
+        url.searchParams.set('lat', view.lat)
+        url.searchParams.set('lon', view.lon)
+        url.searchParams.set('zoom', view.zoom)
+      }
       url.searchParams.set('lang', 'default')
-      url.searchParams.set('limit', '5')
+      url.searchParams.set('limit', String(ASKED))
 
       const res = await fetchPhoton(url)
 
       if (!res.ok) return reply.send([])
 
       const data = await res.json() as { features: PhotonFeature[] }
-      const results: SearchResult[] = data.features.map(f => {
+      const results: SearchResult[] = []
+      for (const f of data.features) {
+        if (!searchable(f.properties)) continue
         const { display_name, secondary } = formatPhotonResult(f.properties)
-        return {
-          display_name,
-          secondary,
-          lat: f.geometry.coordinates[1],
-          lon: f.geometry.coordinates[0],
-        }
-      })
+        const result = { display_name, secondary, lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0] }
+        if (results.some(shown => samePlace(shown, result))) continue
+        results.push(result)
+        if (results.length === SHOWN) break
+      }
 
       cache.set(cacheKey, { data: results, expires: Date.now() + CACHE_TTL })
       capCache(cache, 1000)

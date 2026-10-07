@@ -63,6 +63,7 @@ export default function App() {
 
   // Refs are the post-event truth for the URL: each handler updates its ref before syncUrl.
   const mapViewRef = useRef({ lat: initial.lat, lng: initial.lng, zoom: initial.zoom })
+  const getMapView = useCallback(() => mapViewRef.current, [])
   // A pan must keep `d=` in the shared URL while the card is open.
   const detailPositionRef = useRef(detailPosition)
   detailPositionRef.current = detailPosition
@@ -223,7 +224,7 @@ export default function App() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden">
-      <SearchBar onSelect={setSelectedLocation} mapCenter={mapViewRef.current} />
+      <SearchBar onSelect={setSelectedLocation} getMapView={getMapView} />
 
       {/* UI overlays */}
       <div className="absolute inset-0 z-[1002] pointer-events-none">
