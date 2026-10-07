@@ -127,17 +127,19 @@ impl StreetParking {
         sum
     }
 
-    /// The share of the car-park rate a street parking of `spaces` at `cell` carries: the
-    /// trip ends around by cars parking on the street over the movements all the spaces around
-    /// would make, at most 1.
+    /// The share of the car-park rate at `cell`: each nearby origin divides its trips among
+    /// all street spaces within its reach, and a space carries at most the car-park rate.
     fn share(&self, cell: (usize, usize), spaces: f64) -> f64 {
-        let trips = Self::around(
-            |k| f64::from(self.grid[k]) * f64::from(self.street_shares[k]),
+        let movements_per_space = Self::around(
+            |k| {
+                // Each origin cell divides its budget among all spaces it can serve.
+                let around =
+                    Self::around(|j| self.spaces[j], (k / GRID_SIDE, k % GRID_SIDE)).max(spaces);
+                f64::from(self.grid[k]) * f64::from(self.street_shares[k]) / around
+            },
             cell,
         );
-        let around = Self::around(|k| self.spaces[k], cell).max(spaces);
-        let ceiling = trips * spaces / around;
-        (ceiling / (spaces * PARKING_MOVEMENTS_PER_SPACE_DAY)).min(1.0)
+        (movements_per_space / PARKING_MOVEMENTS_PER_SPACE_DAY).min(1.0)
     }
 }
 

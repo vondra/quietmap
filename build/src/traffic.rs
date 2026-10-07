@@ -31,13 +31,13 @@ const CELL_Z30: i64 = SQUARE_Z30 / GRID_SIDE as i64;
 const Z30_QUANTUM_M: f64 = 0.037_322_767_717_044_72;
 /// A building joins the nearest road within this distance (dev4's frontage).
 const FRONTAGE_M: f64 = 50.0;
-const MAGIC: &[u8; 8] = b"QMTRAF01";
+const MAGIC: &[u8; 8] = b"QMTRAF02";
 
 /// dev4 road classes: the local streets a tree runs down; tracks carry nothing.
 const LOCAL_CLASSES: [u8; 4] = [5, 6, 7, 9];
 const TRACK_CLASS: u8 = 8;
 /// dev4 access codes closed to motor vehicles (no, and dev4's other excluded code).
-const CLOSED_ACCESS: [u8; 2] = [2, 4];
+pub(crate) const CLOSED_ACCESS: [u8; 2] = [2, 4];
 
 /// Vehicle trip ends per occupied dwelling and day (dev4's country fleet table: MiD 2017, UK NTS,
 /// NHTS 2022 and household surveys by continent, times 0.92 occupancy, clamped to 0.8-6).
@@ -289,7 +289,7 @@ struct RoadRow {
     ends: [(i32, i32); 2],
     class: u8,
     length_m: f64,
-    /// Neither a tunnel nor closed to motor vehicles.
+    /// Open to motor vehicles; tunnels still connect the routing graph.
     open: bool,
     country: u16,
 }
@@ -376,22 +376,19 @@ pub struct SquareTraffic {
     /// Per row of `roads.arrow`: the trip ends routed through it, NaN where the row is no local
     /// street of a tree.
     pub flows: Vec<f32>,
-    /// Per row: a local street in a dead end of the network.
-    pub dead_end: Vec<bool>,
     /// Trip ends per grid cell, rows from the north.
     pub grid: Vec<f32>,
 }
 
 impl SquareTraffic {
     fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(16 + 5 * self.flows.len() + 4 * self.grid.len());
+        let mut bytes = Vec::with_capacity(16 + 4 * self.flows.len() + 4 * self.grid.len());
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&(self.flows.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&(GRID_SIDE as u32).to_le_bytes());
         for flow in &self.flows {
             bytes.extend_from_slice(&flow.to_le_bytes());
         }
-        bytes.extend(self.dead_end.iter().map(|&dead| u8::from(dead)));
         for value in &self.grid {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
@@ -404,7 +401,7 @@ impl SquareTraffic {
         }
         let count = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
         let (rows, side) = (count(8), count(12));
-        if side != GRID_SIDE || bytes.len() != 16 + 5 * rows + 4 * side * side {
+        if side != GRID_SIDE || bytes.len() != 16 + 4 * rows + 4 * side * side {
             return Err("traffic: length does not match the counts".into());
         }
         let floats = |from: usize, n: usize| -> Vec<f32> {
@@ -415,11 +412,7 @@ impl SquareTraffic {
         };
         Ok(SquareTraffic {
             flows: floats(16, rows),
-            dead_end: bytes[16 + 4 * rows..16 + 5 * rows]
-                .iter()
-                .map(|&b| b != 0)
-                .collect(),
-            grid: floats(16 + 5 * rows, side * side),
+            grid: floats(16 + 4 * rows, side * side),
         })
     }
 }
@@ -515,7 +508,6 @@ fn read_roads(dev4: &Dev4, square: Square) -> Result<Option<Vec<RoadRow>>, Strin
         );
         let (class, access) = (u8s("road_class")?, u8s("access")?);
         let length = get("length_m")?.as_primitive::<Float32Type>();
-        let tunnel = get("tunnel")?.as_boolean();
         let country = get("country_iso")?.as_primitive::<UInt16Type>();
         for row in 0..batch.num_rows() {
             rows.push(RoadRow {
@@ -525,7 +517,7 @@ fn read_roads(dev4: &Dev4, square: Square) -> Result<Option<Vec<RoadRow>>, Strin
                 ],
                 class: class.value(row),
                 length_m: f64::from(length.value(row)),
-                open: !tunnel.value(row) && !CLOSED_ACCESS.contains(&access.value(row)),
+                open: !CLOSED_ACCESS.contains(&access.value(row)),
                 country: country.value(row),
             });
         }
@@ -681,7 +673,7 @@ fn square_traffic(dev4: &Dev4, square: Square) -> Result<Option<SquareTraffic>, 
     let scale = metres_per_z30(roads.first().map_or(1 << 29, |row| row.ends[0].1));
     let metres = |(gx, gy): (i32, i32)| [f64::from(gx) * scale, f64::from(gy) * scale];
     let loads = assign(&roads, &buildings, scale, &metres);
-    let (flows, dead_end) = trees(&roads, &loads).map_err(context)?;
+    let flows = trees(&roads, &loads).map_err(context)?;
     // The grid: every building's trip ends in its cell (rows from the north).
     let mut grid = vec![0f32; GRID_SIDE * GRID_SIDE];
     for building in &buildings {
@@ -690,11 +682,7 @@ fn square_traffic(dev4: &Dev4, square: Square) -> Result<Option<SquareTraffic>, 
         let (row, column) = grid_cell(square, building.at);
         grid[row * GRID_SIDE + column] += trip_ends as f32;
     }
-    Ok(Some(SquareTraffic {
-        flows,
-        dead_end,
-        grid,
-    }))
+    Ok(Some(SquareTraffic { flows, grid }))
 }
 
 /// The buildings' trip ends per road row (each building on its nearest open road within the
@@ -779,9 +767,8 @@ fn distance_to_segment(p: [f64; 2], d: [f64; 2]) -> f64 {
     (p[0] - t * d[0]).hypot(p[1] - t * d[1])
 }
 
-/// The service trees: per row the trip ends routed through it (NaN off the trees) and its
-/// dead-end flag.
-fn trees(roads: &[RoadRow], loads: &Loads) -> Result<(Vec<f32>, Vec<bool>), String> {
+/// The service trees: per row the trip ends routed through it (NaN off the trees).
+fn trees(roads: &[RoadRow], loads: &Loads) -> Result<Vec<f32>, String> {
     let mut ids: HashMap<(i32, i32), u32> = HashMap::new();
     let mut node = |at: (i32, i32)| {
         let next = ids.len() as u32;
@@ -902,7 +889,8 @@ fn trees(roads: &[RoadRow], loads: &Loads) -> Result<(Vec<f32>, Vec<bool>), Stri
         let mut inflow = 0.0;
         for &index in incident_of(u) {
             let v = other(index, u);
-            if distance[v as usize] > distance[u as usize] {
+            // Equal-distance cross edges route their own load to one endpoint.
+            if (distance[v as usize], v) > (distance[u as usize], u) {
                 inflow += flow[index as usize];
             }
         }
@@ -911,7 +899,6 @@ fn trees(roads: &[RoadRow], loads: &Loads) -> Result<(Vec<f32>, Vec<bool>), Stri
             flow[parent as usize] += inflow;
         }
     }
-    let dead_end = dead_ends(roads, &ends, &drain, nodes);
     let flows = roads
         .iter()
         .zip(&flow)
@@ -923,7 +910,7 @@ fn trees(roads: &[RoadRow], loads: &Loads) -> Result<(Vec<f32>, Vec<bool>), Stri
             }
         })
         .collect();
-    Ok((flows, dead_end))
+    Ok(flows)
 }
 
 /// A total order on finite distances for the heap.
@@ -939,89 +926,6 @@ impl Ord for Ordered {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.0.total_cmp(&other.0)
     }
-}
-
-/// The tree rows in dead ends: every tree row but those in the 2-edge-connected part of the
-/// local network that holds the main roads (all drained nodes joined into one).
-fn dead_ends(roads: &[RoadRow], ends: &[[u32; 2]], drain: &[bool], nodes: usize) -> Vec<bool> {
-    // Tarjan's bridges, iteratively, over the tree rows with every drained node merged into one
-    // super node (index `nodes`).
-    let merged = |n: u32| if drain[n as usize] { nodes as u32 } else { n };
-    let total = nodes + 1;
-    let mut neighbours: Vec<Vec<(u32, u32)>> = vec![Vec::new(); total];
-    for (index, row) in roads.iter().enumerate() {
-        if !row.in_tree() {
-            continue;
-        }
-        let [a, b] = ends[index];
-        let (a, b) = (merged(a), merged(b));
-        if a == b {
-            continue;
-        }
-        neighbours[a as usize].push((b, index as u32));
-        neighbours[b as usize].push((a, index as u32));
-    }
-    let mut order = vec![u32::MAX; total];
-    let mut low = vec![0u32; total];
-    let mut bridge = vec![false; roads.len()];
-    let mut counter = 0u32;
-    for root in 0..total as u32 {
-        if order[root as usize] != u32::MAX || neighbours[root as usize].is_empty() {
-            continue;
-        }
-        // Stack of (node, the row it was entered by, next neighbour to look at).
-        let mut stack: Vec<(u32, u32, usize)> = vec![(root, u32::MAX, 0)];
-        order[root as usize] = counter;
-        low[root as usize] = counter;
-        counter += 1;
-        while let Some(&mut (u, via, ref mut next)) = stack.last_mut() {
-            if let Some(&(v, index)) = neighbours[u as usize].get(*next) {
-                *next += 1;
-                if index == via {
-                    continue;
-                }
-                if order[v as usize] == u32::MAX {
-                    order[v as usize] = counter;
-                    low[v as usize] = counter;
-                    counter += 1;
-                    stack.push((v, index, 0));
-                } else {
-                    low[u as usize] = low[u as usize].min(order[v as usize]);
-                }
-            } else {
-                stack.pop();
-                if let Some(&(parent, _, _)) = stack.last() {
-                    low[parent as usize] = low[parent as usize].min(low[u as usize]);
-                    if low[u as usize] > order[parent as usize] {
-                        bridge[via as usize] = true;
-                    }
-                }
-            }
-        }
-    }
-    // The core: what the super node reaches without crossing a bridge.
-    let mut core = vec![false; total];
-    let mut queue = vec![nodes as u32];
-    core[nodes] = true;
-    while let Some(u) = queue.pop() {
-        for &(v, index) in &neighbours[u as usize] {
-            if !bridge[index as usize] && !core[v as usize] {
-                core[v as usize] = true;
-                queue.push(v);
-            }
-        }
-    }
-    roads
-        .iter()
-        .enumerate()
-        .map(|(index, row)| {
-            if !row.in_tree() {
-                return false;
-            }
-            let [a, b] = ends[index];
-            bridge[index] || !(core[merged(a) as usize] && core[merged(b) as usize])
-        })
-        .collect()
 }
 
 /// The trip ends of the grids of a square and its neighbours, summed around a point.
@@ -1139,14 +1043,27 @@ mod tests {
             row((2, 0), (3, 0), 5),
             row((2, 0), (2, 1), 5),
         ];
-        let (flows, dead) = trees(&roads, &loads(vec![500.0, 10.0, 20.0, 30.0])).unwrap();
+        let flows = trees(&roads, &loads(vec![500.0, 10.0, 20.0, 30.0])).unwrap();
         assert!(flows[0].is_nan());
         assert_eq!(&flows[1..], &[60.0, 20.0, 30.0]);
-        assert_eq!(dead, vec![false, true, true, true]);
     }
 
     #[test]
-    fn a_loop_between_two_main_roads_is_no_dead_end() {
+    fn a_street_between_two_points_equally_far_from_the_main_road_drains_once() {
+        // Main road 0-1; streets 1-2 and 1-3, and 2-3 joining their ends, both 100 m from 1: the
+        // joining street's trips reach the main road, through one of the two, not lost.
+        let roads = vec![
+            row((0, 0), (1, 0), 3),
+            row((1, 0), (2, 0), 5),
+            row((1, 0), (1, 1), 5),
+            row((2, 0), (1, 1), 5),
+        ];
+        let flows = trees(&roads, &loads(vec![500.0, 10.0, 20.0, 30.0])).unwrap();
+        assert_eq!(flows[1] + flows[2], 60.0);
+    }
+
+    #[test]
+    fn a_street_between_two_main_roads_drains_each_trip_once() {
         // Two main roads, a street 1-2-3 joining them, a cul-de-sac 2-5.
         let roads = vec![
             row((0, 0), (1, 0), 2),
@@ -1155,8 +1072,7 @@ mod tests {
             row((2, 0), (3, 0), 5),
             row((2, 0), (2, 5), 5),
         ];
-        let (flows, dead) = trees(&roads, &loads(vec![0.0, 0.0, 4.0, 4.0, 10.0])).unwrap();
-        assert_eq!(dead, vec![false, false, false, false, true]);
+        let flows = trees(&roads, &loads(vec![0.0, 0.0, 4.0, 4.0, 10.0])).unwrap();
         // Node 2 lies 100 m from both ends: its trips drain to one of them, never both.
         assert_eq!(flows[4], 10.0);
         assert!((flows[2] + flows[3] - 18.0).abs() < 1e-9);
@@ -1251,13 +1167,11 @@ mod tests {
     fn traffic_files_round_trip() {
         let traffic = SquareTraffic {
             flows: vec![1.5, f32::NAN, 7.0],
-            dead_end: vec![true, false, false],
             grid: (0..GRID_SIDE * GRID_SIDE).map(|i| i as f32).collect(),
         };
         let back = SquareTraffic::decode(&traffic.encode()).unwrap();
         assert_eq!(back.flows[0], 1.5);
         assert!(back.flows[1].is_nan());
-        assert_eq!(back.dead_end, traffic.dead_end);
         assert_eq!(back.grid, traffic.grid);
     }
 }

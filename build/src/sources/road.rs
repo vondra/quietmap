@@ -610,6 +610,7 @@ pub fn convert(
             f64s("aadt_moto")?,
         ];
         let cross_section = f64s("cross_section_aadt")?;
+        let access = u8s("access")?;
         let (tunnel, bridge) = (c.get("tunnel")?.as_boolean(), c.get("bridge")?.as_boolean());
         let (names, refs) = (
             c.get("name")?.as_string::<i32>(),
@@ -716,6 +717,11 @@ pub fn convert(
             if let Some(shares) = us_mix {
                 let total: f64 = daily.iter().sum();
                 daily = shares.map(|share| share * total);
+            }
+            // A row closed to motor vehicles carries no guessed traffic (way 977414128 had 317 a
+            // day): only what was counted on it and its buses.
+            if row_guessed && crate::traffic::CLOSED_ACCESS.contains(&access.value(row)) {
+                daily = [0.0; 4];
             }
             // Guessed traffic takes the motorcycles of the square's counted roads, else of the
             // country's fleet (dev4 put 2 % on Vietnam's and 15 % on Thailand's class priors).
