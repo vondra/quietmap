@@ -129,7 +129,7 @@ impl StreetParking {
 
     /// The share of the car-park rate at `cell`: each nearby origin divides its trips among
     /// all street spaces within its reach, and a space carries at most the car-park rate.
-    fn share(&self, cell: (usize, usize), spaces: f64) -> f64 {
+    fn share(&self, cell: (usize, usize)) -> f64 {
         let movements_per_space = Self::around(
             |k| {
                 // Each origin cell divides its budget among all spaces it can serve.
@@ -137,7 +137,8 @@ impl StreetParking {
                 if trips == 0.0 {
                     return 0.0;
                 }
-                trips / Self::around(|j| self.spaces[j], (k / GRID_SIDE, k % GRID_SIDE)).max(spaces)
+                // The origin's window holds this cell, so its spaces count among these.
+                trips / Self::around(|j| self.spaces[j], (k / GRID_SIDE, k % GRID_SIDE))
             },
             cell,
         );
@@ -191,7 +192,7 @@ pub fn convert(
             let spaces = parking_spaces(&row, area_m2);
             let mut movements = spaces * PARKING_MOVEMENTS_PER_SPACE_DAY;
             if let (CAR_PARK_STREET, Some(parking)) = (row.class, street_parking.as_ref()) {
-                let share = parking.share(grid_cell(square, row.centroid), spaces);
+                let share = parking.share(grid_cell(square, row.centroid));
                 if share <= 0.0 {
                     continue;
                 }
