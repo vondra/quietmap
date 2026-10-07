@@ -113,10 +113,11 @@ pub fn layer_answers(selections: &[LayerSelection]) -> Vec<LayerAnswer> {
         .collect()
 }
 
-/// Whether the visitor's list may name a contributor: above 0 dB Lden (the popup's display floor;
-/// those below go to their layer's unlisted part).
-pub fn above_floor(contributor: &Contributor) -> bool {
-    lden_energy(&contributor.energy) > 1.0
+/// Whether the visitor's list may name a contributor: a ground source above 0 dB Lden (the popup's
+/// display floor; those below go to their layer's unlisted part). The aircraft layer is one row,
+/// its airports' ground operations within it.
+pub fn listed(contributor: &Contributor) -> bool {
+    contributor.layer != Layer::Aircraft && lden_energy(&contributor.energy) > 1.0
 }
 
 /// Each ground layer's part the list leaves out: the `unlisted` contributors' energy and loud

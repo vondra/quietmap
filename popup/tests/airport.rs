@@ -170,16 +170,9 @@ fn airport_pieces_join_the_boxes_in_the_aircraft_layer() {
         let sum = boxed[period] + ground[period];
         assert!((both[period] / sum - 1.0).abs() < 1e-9, "period {period}");
     }
-    let contributors = json["top_contributors"].as_array().unwrap();
-    assert_eq!(
-        contributors.len(),
-        1,
-        "the boxes list flights, not contributors"
-    );
-    assert_eq!(contributors[0]["source_type"], "aircraft");
-    assert_eq!(contributors[0]["name"], "TEST ground operations");
-    assert_eq!(contributors[0]["subtype"], "airport_traffic:TEST");
-    assert_eq!(contributors[0]["metadata"]["departures_per_day"], 2.0);
+    // The boxes list flights, not contributors, and the airport's ground operations are within the
+    // aircraft layer's one row.
+    assert_eq!(json["top_contributors"].as_array().unwrap().len(), 0);
 }
 
 /// Faint airport pieces from 200 m to 10 km beside departures overhead (about 40 dB louder): the
