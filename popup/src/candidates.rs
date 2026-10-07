@@ -3,7 +3,7 @@
 
 use crate::scene::Ground;
 use physics::bands::BANDS;
-use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy};
+use physics::bands::{PERIODS, lden_energy};
 use physics::bound::{ReceiverBound, Spread, emission_energy, received_energy_bound};
 use rayon::prelude::*;
 use tiles::geo::TileId;
@@ -105,14 +105,6 @@ fn distance_to_segment(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] + t * dx).hypot(a[1] + t * dy)
 }
 
-/// The Lden weighting of per-period energies (the ordering key).
-pub fn lden_weighted(periods: &[f64; PERIODS]) -> f64 {
-    (0..PERIODS)
-        .map(|p| PERIOD_HOURS[p] * periods[p] * energy(PERIOD_PENALTY_DB[p]))
-        .sum::<f64>()
-        / 24.0
-}
-
 impl Candidate {
     /// How the piece spreads (a line's length is its 3D length).
     fn spread(&self) -> Spread {
@@ -157,7 +149,7 @@ impl Candidate {
     ) -> bool {
         self.distance_m = self.distance_from(receiver);
         self.bound = self.bound_at_distance(self.distance_m, source, receiver_bound);
-        self.order = lden_weighted(&self.bound);
+        self.order = lden_energy(&self.bound);
         self.distance_m <= GROUND_REACH_M
     }
 }

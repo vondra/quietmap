@@ -103,7 +103,7 @@ fn click(release: &Release, east_m: f64) -> (f64, Option<f64>) {
                 .building
                 .and_then(|building| building.facade)
                 .map(|facade| facade.outward_bearing_deg);
-            last = Some((popup::candidates::lden_weighted(&road.energy), bearing));
+            last = Some((physics::bands::lden_energy(&road.energy), bearing));
             Ok(())
         },
     )

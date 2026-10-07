@@ -5,11 +5,12 @@
 //! what stands behind it, and its footprint does not count for the reflection bonus (2.8).
 
 use crate::answer::RECEIVER_HEIGHT_M;
-use crate::candidates::{Attributes, Candidate, lden_weighted};
+use crate::candidates::{Attributes, Candidate};
 use crate::evaluate::{Receiver, Scratch, received_energy};
 use crate::obstacles::{FacadeReceiver, Footprint, Scene};
 use crate::scene::Ground;
 use physics::bands::PERIODS;
+use physics::bands::lden_energy;
 use physics::bound::receiver_bound;
 use physics::weather::PlaceWeather;
 use rayon::prelude::*;
@@ -95,7 +96,7 @@ pub fn loudest_facade(
                 .fold(f64::INFINITY, f64::min);
             let source = &attributes[candidate.attribute];
             let bound = candidate.bound_at_distance(nearest, source, &ranking_gain);
-            (lden_weighted(&bound), index)
+            (lden_energy(&bound), index)
         })
         .collect();
     if ranked.len() > FACADE_SOURCE_LIMIT {
@@ -124,7 +125,7 @@ pub fn loudest_facade(
                     *sum += value;
                 }
             }
-            Ok(lden_weighted(&total))
+            Ok(lden_energy(&total))
         })
         .collect::<Result<Vec<f64>, String>>()?;
     let mut winner = 0;

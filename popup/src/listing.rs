@@ -3,10 +3,10 @@
 //! it delivers, the buildings and walls on the ray from their closest point and the terms of that
 //! ray.
 
-use crate::candidates::{Attributes, Candidate, lden_weighted};
+use crate::candidates::{Attributes, Candidate};
 use crate::evaluate::{Receiver, Scratch, source_rays, trace};
 use crate::selection::LayerSelection;
-use physics::bands::{BANDS, PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy};
+use physics::bands::{BANDS, PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy, lden_energy};
 
 /// Ground samples a listed piece's trace keeps.
 pub const PROFILE_POINTS: usize = 48;
@@ -110,7 +110,7 @@ pub fn list_pieces(
     for selection in selections.iter_mut() {
         selection
             .pieces
-            .sort_by(|a, b| lden_weighted(&b.energy).total_cmp(&lden_weighted(&a.energy)));
+            .sort_by(|a, b| lden_energy(&b.energy).total_cmp(&lden_energy(&a.energy)));
         for piece in selection.pieces.iter().take(count) {
             let mut piece = piece.clone();
             let source = &attributes[piece.candidate.attribute];

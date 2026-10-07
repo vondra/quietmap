@@ -42,14 +42,20 @@ pub fn level_db(energy: f64) -> f64 {
     }
 }
 
-/// Lden of per-period energies (A-weighted, linear).
-pub fn lden_db(period_energy: [f64; PERIODS]) -> f64 {
-    let weighted: f64 = (0..PERIODS)
+/// The day's energy of per-period energies with the evening's and the night's penalties (Lden,
+/// linear).
+pub fn lden_energy(period_energy: &[f64; PERIODS]) -> f64 {
+    (0..PERIODS)
         .map(|period| {
             PERIOD_HOURS[period] * period_energy[period] * energy(PERIOD_PENALTY_DB[period])
         })
-        .sum();
-    level_db(weighted / 24.0)
+        .sum::<f64>()
+        / 24.0
+}
+
+/// Lden of per-period energies (A-weighted, linear).
+pub fn lden_db(period_energy: [f64; PERIODS]) -> f64 {
+    level_db(lden_energy(&period_energy))
 }
 
 /// A-weighted energy of band levels.

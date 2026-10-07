@@ -178,7 +178,7 @@ impl LayerSelection {
         contributor.distance_m = contributor.distance_m.min(candidate.distance_m);
         contributor
             .pieces
-            .push((candidate.ends_m, crate::candidates::lden_weighted(&energy)));
+            .push((candidate.ends_m, physics::bands::lden_energy(&energy)));
         if contributor.pieces.len() >= 2 * CONTRIBUTOR_PIECES {
             loudest_pieces(&mut contributor.pieces);
         }

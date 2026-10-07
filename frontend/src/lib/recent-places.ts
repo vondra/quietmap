@@ -12,8 +12,8 @@ export interface RecentPlace {
   lden: number | null
 }
 
-/** The most places kept. */
-export const RECENT_PLACES_MAX = 7
+/** The most places kept: one row of tabs on a phone. */
+export const RECENT_PLACES_MAX = 5
 const STORAGE_KEY = 'quietmap.recent-places'
 /** Two points closer than this (m) are one place. */
 const SAME_PLACE_M = 30
@@ -25,9 +25,19 @@ export function samePlace(a: { lat: number, lng: number }, b: { lat: number, lng
   return Math.hypot(north, east) < SAME_PLACE_M
 }
 
-/** `list` with `place` first, in place of the same place's older entry, at most the most kept. */
+/** `list` with `place` first, in place of the same place's older entry (whose name it keeps until
+ *  its own arrives), at most the most kept. */
 export function withPlace(list: RecentPlace[], place: RecentPlace): RecentPlace[] {
-  return [place, ...list.filter(other => !samePlace(other, place))].slice(0, RECENT_PLACES_MAX)
+  const older = list.find(other => samePlace(other, place))
+  const entry = place.place == null && older?.place != null ? { ...place, place: older.place } : place
+  return [entry, ...list.filter(other => !samePlace(other, place))].slice(0, RECENT_PLACES_MAX)
+}
+
+/** `list` with `name` given to the same place's entry if it has none yet (a name looked up after
+ *  the visitor clicked on comes back late); `list` itself when nothing changes. */
+export function withName(list: RecentPlace[], at: { lat: number, lng: number }, name: string): RecentPlace[] {
+  if (!list.some(other => other.place == null && samePlace(other, at))) return list
+  return list.map(other => (other.place == null && samePlace(other, at) ? { ...other, place: name } : other))
 }
 
 export function withoutPlace(list: RecentPlace[], place: { lat: number, lng: number }): RecentPlace[] {

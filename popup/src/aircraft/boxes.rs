@@ -2,12 +2,12 @@
 //! (`physics::doc29::boxes`), all of them, since a box costs well under a microsecond; their SEL
 //! sums per period become period energies (Leq), as the ground layers report.
 
-use physics::bands::{PERIOD_HOURS, PERIODS, energy};
+use physics::bands::{PERIOD_HOURS, PERIODS, energy, lden_energy};
 use physics::doc29::boxes::{AircraftBoxAtReceiver, box_sel_at_receiver};
 use physics::doc29::npd::lamax_rise_bound_db;
 use physics::doc29::screening::ReceiverHorizons;
 use rayon::prelude::*;
-use tiles::aircraft::{Aircraft, AircraftBox};
+use tiles::aircraft::{Aircraft, AircraftBox, Group};
 use tiles::geo::{LocalFrame, Mercator, TileId};
 
 /// Aircraft within this horizontal distance of the receiver are heard (dev4's airborne reach;
@@ -24,10 +24,34 @@ pub struct AircraftReceiver {
 /// Speed of a flight near the ground for its passing's duration (m/s): 135 kt.
 pub const FLIGHT_SPEED_M_S: f64 = 70.0;
 
+/// What the flights heard are: wing-mounted jets (airliners), fuselage-mounted jets (regional and
+/// business jets), propeller aircraft (Doc 29's engine installations) and helicopters.
+pub const FLIGHT_KINDS: usize = 4;
+
+/// One box at the receiver.
+struct BoxAnswer {
+    energy: [f64; PERIODS],
+    lambda: [f64; PERIODS],
+    /// The box's received Lden energy shared over the flight kinds.
+    kinds: [f64; FLIGHT_KINDS],
+    bound: Option<f64>,
+    within_reach: bool,
+}
+
+const BEYOND_REACH: BoxAnswer = BoxAnswer {
+    energy: [0.0; PERIODS],
+    lambda: [0.0; PERIODS],
+    kinds: [0.0; FLIGHT_KINDS],
+    bound: None,
+    within_reach: false,
+};
+
 /// One tile's boxes at the receiver.
 pub struct TileAnswer {
     /// Period energies (Leq, linear) summed over the boxes within reach.
     pub energy: [f64; PERIODS],
+    /// The boxes' Lden energy per flight kind.
+    pub kinds: [f64; FLIGHT_KINDS],
     /// Per period the boxes' energies times their flights' Kurze lambda (flights per second of
     /// the period times the slant over the speed): the energy-weighted lambda of the flights heard.
     pub energy_lambda: [f64; PERIODS],
@@ -76,9 +100,7 @@ pub fn tile_energy(
     receiver: AircraftReceiver,
     horizons: &(impl ReceiverHorizons + Sync),
 ) -> TileAnswer {
-    #[allow(clippy::type_complexity)]
-    let per_box: Vec<([f64; PERIODS], [f64; PERIODS], Option<f64>, usize)> = (0..aircraft
-        .box_count())
+    let per_box: Vec<BoxAnswer> = (0..aircraft.box_count())
         .into_par_iter()
         .with_min_len(1_024)
         .map(|index| {
@@ -88,7 +110,7 @@ pub fn tile_energy(
             let east_m = centroid[0] - receiver.position[0];
             let north_m = centroid[1] - receiver.position[1];
             if east_m.hypot(north_m) > AIRCRAFT_REACH_M {
-                return ([0.0; PERIODS], [0.0; PERIODS], None, 0);
+                return BEYOND_REACH;
             }
             let at_receiver = AircraftBoxAtReceiver {
                 centroid_m: [
@@ -129,23 +151,42 @@ pub fn tile_energy(
                 record.loudest_lamax_db
                     + lamax_rise_bound_db(nearest_slant_m(&record, tile, frame, receiver))
             });
-            (energy, lambda, bound, 1)
+            // The installation shares are the box's over the whole day (the tiles keep no share per
+            // period), so a box whose jets fly by day and propellers by night splits its Lden as the
+            // day's mix.
+            let [wing, fuselage, propeller] = sel.installation_fractions;
+            let shares = match record.group {
+                Group::FixedWing => [wing, fuselage, propeller, 0.0],
+                Group::Helicopter => [0.0, 0.0, 0.0, 1.0],
+            };
+            let kinds = shares.map(|share| share * lden_energy(&energy));
+            BoxAnswer {
+                energy,
+                lambda,
+                kinds,
+                bound,
+                within_reach: true,
+            }
         })
         .collect();
     let mut answer = TileAnswer {
         energy: [0.0; PERIODS],
+        kinds: [0.0; FLIGHT_KINDS],
         energy_lambda: [0.0; PERIODS],
         boxes: 0,
         lamax_bounds: Vec::new(),
     };
-    for (index, (energy, lambda, bound, count)) in per_box.iter().enumerate() {
+    for (index, heard) in per_box.iter().enumerate() {
         for period in 0..PERIODS {
-            answer.energy[period] += energy[period];
-            answer.energy_lambda[period] += energy[period] * lambda[period];
+            answer.energy[period] += heard.energy[period];
+            answer.energy_lambda[period] += heard.energy[period] * heard.lambda[period];
         }
-        answer.boxes += count;
-        if let Some(bound) = bound {
-            answer.lamax_bounds.push((index, *bound));
+        for (kind, part) in answer.kinds.iter_mut().zip(heard.kinds) {
+            *kind += part;
+        }
+        answer.boxes += usize::from(heard.within_reach);
+        if let Some(bound) = heard.bound {
+            answer.lamax_bounds.push((index, bound));
         }
     }
     answer

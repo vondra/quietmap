@@ -15,7 +15,7 @@ import { topFlightKey } from './components/noise/top-flights'
 import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
 import RecentPlaces from './components/RecentPlaces'
-import { loadRecentPlaces, saveRecentPlaces, withPlace, withoutPlace, type RecentPlace } from './lib/recent-places'
+import { loadRecentPlaces, saveRecentPlaces, withName, withPlace, withoutPlace, type RecentPlace } from './lib/recent-places'
 import { useIsDesktop } from './hooks/useIsDesktop'
 
 
@@ -80,19 +80,31 @@ export default function App() {
 
   // Tab/share title tracks the open popup: reverse-geocode the position
   // (place-level, server-cached) and compose "Dejvice, Praha - 62 dB -
-  // quietmap.org" — place first, never the number.
+  // quietmap.org" — place first, never the number. The lookup is not cancelled
+  // by the next click: a name that comes back late still names its recent tab.
   const [detailPlaceName, setDetailPlaceName] = useState<string | null>(null)
   useEffect(() => {
     // Clear synchronously so a moved popup never shows the previous place
     // next to the new position's dB while the new lookup is in flight.
     setDetailPlaceName(null)
     if (!detailPosition) return
-    const controller = new AbortController()
-    fetch(`/api/reverse?lat=${detailPosition.lat}&lon=${detailPosition.lng}`, { signal: controller.signal })
+    const position = detailPosition
+    let open = true
+    fetch(`/api/reverse?lat=${position.lat}&lon=${position.lng}`)
       .then(res => (res.ok ? res.json() : null))
-      .then(json => setDetailPlaceName(json?.place ?? null))
-      .catch(() => { if (!controller.signal.aborted) setDetailPlaceName(null) })
-    return () => controller.abort()
+      .then(json => {
+        const place = typeof json?.place === 'string' && json.place ? json.place : null
+        if (open) setDetailPlaceName(place)
+        if (place) {
+          setRecentPlaces(places => {
+            const next = withName(places, position, place)
+            if (next !== places) saveRecentPlaces(next)
+            return next
+          })
+        }
+      })
+      .catch(() => { if (open) setDetailPlaceName(null) })
+    return () => { open = false }
   }, [detailPosition])
 
   // An answered point joins the recent places (again first), with its name once it is known.

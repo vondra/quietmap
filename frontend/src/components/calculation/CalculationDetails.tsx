@@ -5,7 +5,7 @@
 import type { ReactNode } from 'react'
 import type { PopupUpdate, SegmentFan } from '../../types/noise'
 import { fmtSone } from '../../utils/formatters'
-import { SOURCE_LABELS } from '../noise/shared'
+import { SOURCE_LABELS } from '../noise/labels'
 import { SEGMENTS_EXPLAINED, SegmentsSection } from '../noise/segments/SegmentsSection'
 import { HoverText } from '../ui/info-tip'
 

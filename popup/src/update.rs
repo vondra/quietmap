@@ -4,11 +4,12 @@
 use crate::aircraft::flights::LoudFlight;
 use crate::answer::RECEIVER_HEIGHT_M;
 use crate::building::BuildingClick;
-use crate::candidates::{DisplayRef, lden_weighted};
+use crate::candidates::DisplayRef;
 use crate::listing::EvaluatedPiece;
 use crate::scene::Ground;
 use crate::selection::LayerSelection;
 use physics::bands::PERIODS;
+use physics::bands::lden_energy;
 use tiles::geo::LocalFrame;
 use tiles::sources::Layer;
 
@@ -74,6 +75,9 @@ pub struct Update<'u> {
     /// The aircraft layer's energy exceeded 5 % of the time: its flights' L5 and its airport
     /// movements steady (the final update's).
     pub aircraft_loud: Option<[f64; PERIODS]>,
+    /// What the aircraft layer is made of, Lden energies (final update): airliners, regional and
+    /// business jets, propeller aircraft, helicopters, airport ground operations.
+    pub aircraft_kinds: Option<[f64; 5]>,
     pub lat: f64,
     pub lon: f64,
     pub frame: LocalFrame,
@@ -112,8 +116,8 @@ pub fn loudest_contributors(selections: &[LayerSelection]) -> Vec<Contributor> {
         .flat_map(|selection| selection.contributors.values().cloned())
         .collect();
     contributors.sort_by(|a, b| {
-        lden_weighted(&b.energy)
-            .total_cmp(&lden_weighted(&a.energy))
+        lden_energy(&b.energy)
+            .total_cmp(&lden_energy(&a.energy))
             .then(a.group_key.cmp(&b.group_key))
     });
     contributors.truncate(CONTRIBUTORS_SHOWN);
@@ -140,6 +144,7 @@ pub fn empty_answer(
         percentiles: None,
         loudness: None,
         aircraft_loud: None,
+        aircraft_kinds: None,
         lat,
         lon,
         frame,

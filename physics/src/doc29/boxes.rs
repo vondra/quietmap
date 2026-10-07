@@ -62,6 +62,8 @@ pub struct BoxSel {
     pub finite_segment_correction_db: [f64; PERIODS],
     pub lateral_attenuation_db: f64,
     pub installation_correction_db: f64,
+    /// The received energy's shares of wing-mounted jets, fuselage-mounted jets and propellers.
+    pub installation_fractions: [f64; 3],
     pub terrain_loss_db: f64,
     pub building_loss_db: f64,
 }
@@ -160,7 +162,23 @@ pub fn box_sel_at_receiver(
             f64::NEG_INFINITY
         }
     });
-    BoxSel { sel_db, ..lower }
+    // The two pieces' installation mixes, weighed by what each brings to the receiver.
+    let [lower_energy, upper_energy] =
+        [&lower, &upper].map(|piece| piece.sel_db.iter().map(|&sel| energy(sel)).sum::<f64>());
+    let installation_fractions = if lower_energy + upper_energy > 0.0 {
+        std::array::from_fn(|k| {
+            (lower_energy * lower.installation_fractions[k]
+                + upper_energy * upper.installation_fractions[k])
+                / (lower_energy + upper_energy)
+        })
+    } else {
+        lower.installation_fractions
+    };
+    BoxSel {
+        sel_db,
+        installation_fractions,
+        ..lower
+    }
 }
 
 /// The SEL sums of one average piece at the receiver.
@@ -191,17 +209,23 @@ fn average_piece_sel(
         Installation::Fuselage,
         Installation::Propeller,
     ];
-    let installation_energy: f64 = installations
-        .iter()
-        .zip(shares_at(aircraft_box.installation_shares, slant_m))
-        .map(|(&installation, share)| {
-            share * energy(installation_correction_db(installation, height_m, slant_m))
-        })
-        .sum();
-    let installation = if installation_energy > 0.0 {
-        10.0 * installation_energy.log10()
+    let shares = shares_at(aircraft_box.installation_shares, slant_m);
+    let parts: [f64; 3] = std::array::from_fn(|k| {
+        shares[k]
+            * energy(installation_correction_db(
+                installations[k],
+                height_m,
+                slant_m,
+            ))
+    });
+    let installation_energy: f64 = parts.iter().sum();
+    let (installation, installation_fractions) = if installation_energy > 0.0 {
+        (
+            10.0 * installation_energy.log10(),
+            parts.map(|part| part / installation_energy),
+        )
     } else {
-        0.0
+        (0.0, shares)
     };
     let height_above_ground_m = aircraft_box.centroid_m[2] - aircraft_box.ground_m;
     let (terrain_loss_db, building_loss_db) =
@@ -230,6 +254,7 @@ fn average_piece_sel(
         finite_segment_correction_db: finite,
         lateral_attenuation_db: lateral_attenuation,
         installation_correction_db: installation,
+        installation_fractions,
         terrain_loss_db,
         building_loss_db,
     }

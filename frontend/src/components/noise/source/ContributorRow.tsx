@@ -7,7 +7,8 @@ import type { Contributor, LayerLevels, PeriodLevels, TopFlight } from '../../..
 import { fmtDb, txtTable } from '../../../utils/formatters'
 import { DataPoint } from '../noise-tooltips'
 import { heardText } from '../heard'
-import { contributorLabel, formatDist, PERIOD_LABELS_DETAIL, SOURCE_LABELS } from '../shared'
+import { aircraftMakeup, contributorLabel, SOURCE_LABELS } from '../labels'
+import { formatDist, PERIOD_LABELS_DETAIL } from '../shared'
 import { AircraftLayerDetail, ContributorDetail } from './ContributorDetail'
 
 /** A row's level of the loud moments: the popup's (`null`: none, a rare event), or its Lden before
@@ -115,8 +116,8 @@ export function AircraftLayerRow({ layer, loudTotal, flights, onHighlightFlight 
   onHighlightFlight: (key: string | null) => void
 }) {
   return (
-    <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={null} received={layer} loud={loudLevel(layer.loud_lden, layer.lden)} loudTotal={loudTotal}>
-      <AircraftLayerDetail received={layer} flights={flights} onHighlightFlight={onHighlightFlight} />
+    <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={aircraftMakeup(layer.kinds)} received={layer} loud={loudLevel(layer.loud_lden, layer.lden)} loudTotal={loudTotal}>
+      <AircraftLayerDetail received={layer} kinds={layer.kinds} flights={flights} onHighlightFlight={onHighlightFlight} />
     </SourceRow>
   )
 }

@@ -12,11 +12,18 @@ export interface PeriodLevels {
   lden: Level
 }
 
+/** The kinds of the aircraft layer: Doc 29's engine installations, helicopters, and the airport's
+ *  taxiing and take-off rolls. */
+export type AircraftKind = 'airliners' | 'regional_business_jets' | 'propeller' | 'helicopters' | 'ground'
+
 /** One layer's levels at the point. */
 export interface LayerLevels extends PeriodLevels {
   source_type: string
   /** The aircraft layer's Lden-weighted level exceeded 5 % of the time (the final update's). */
   loud_lden?: Level
+  /** What the aircraft layer is made of: each kind's share of its Lden energy, those of 0.5 % or
+   *  more (the final update's). */
+  kinds?: Partial<Record<AircraftKind, number>>
   /** Lden if everything the stop rule left out (so far) were as loud as its bound. */
   lden_upper: Level
   /** Sources computed in full, of the candidates the rings read so far. */

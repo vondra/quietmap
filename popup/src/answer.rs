@@ -106,6 +106,9 @@ pub fn answer(
     let mut flights = FlightTotals::default().in_atmosphere(&weather.alpha_db_per_km);
     // The flights' energy and energy times lambda per period, for the percentile levels.
     let (mut flight_energy, mut flight_energy_lambda) = ([0.0; PERIODS], [0.0; PERIODS]);
+    // The flights' Lden energies per kind (airliners, regional and business jets, propeller
+    // aircraft, helicopters), for what the aircraft layer is made of.
+    let mut flight_kinds = [0.0; crate::aircraft::boxes::FLIGHT_KINDS];
     let mut obstacles = Scene::new(frame);
     let mut selections: Vec<LayerSelection> = Layer::ALL
         .iter()
@@ -343,7 +346,7 @@ pub fn answer(
         // The ring's boxes join the aircraft layer before its sources (airport ground operations)
         // are selected: their energy counts in the layer's omitted-energy account.
         let aircraft = &mut selections[Layer::Aircraft as usize];
-        let (energy, energy_lambda, heard) = ring_aircraft(
+        let ring_flights = ring_aircraft(
             &ring_aircraft_tiles,
             &frame,
             receiver,
@@ -351,12 +354,15 @@ pub fn answer(
             &mut flights,
         );
         for period in 0..PERIODS {
-            aircraft.energy[period] += energy[period];
-            flight_energy[period] += energy[period];
-            flight_energy_lambda[period] += energy_lambda[period];
+            aircraft.energy[period] += ring_flights.energy[period];
+            flight_energy[period] += ring_flights.energy[period];
+            flight_energy_lambda[period] += ring_flights.energy_lambda[period];
         }
-        aircraft.evaluated += heard;
-        aircraft.covered += heard;
+        for (kind, ring_kind) in flight_kinds.iter_mut().zip(ring_flights.kinds) {
+            *kind += ring_kind;
+        }
+        aircraft.evaluated += ring_flights.heard;
+        aircraft.covered += ring_flights.heard;
         let evaluation = Receiver {
             ground: &ground,
             obstacles: &obstacles,
@@ -453,21 +459,32 @@ pub fn answer(
                 contributor.lines = lines;
             }
         }
-        // The aircraft layer's loud moments: its flights' L5, its airport movements steady.
-        let aircraft_loud = last_ring.then(|| {
+        // The aircraft layer beyond its flights: the airport ground operations, steady.
+        let airport_ground: Option<[f64; PERIODS]> = last_ring.then(|| {
             let layer = selections
                 .iter()
                 .find(|selection| selection.layer == Layer::Aircraft)
                 .map_or([0.0; PERIODS], |selection| selection.answer_energy());
+            std::array::from_fn(|p| (layer[p] - flight_energy[p]).max(0.0))
+        });
+        // The aircraft layer's loud moments: its flights' L5 and the ground operations.
+        let aircraft_loud = airport_ground.map(|ground| {
             let flights =
                 crate::percentiles::loud_flight_energy((flight_energy, flight_energy_lambda));
-            std::array::from_fn(|p| flights[p] + (layer[p] - flight_energy[p]).max(0.0))
+            std::array::from_fn(|p| flights[p] + ground[p])
+        });
+        // What the aircraft layer is made of: the flight kinds and the ground operations.
+        let aircraft_kinds = airport_ground.map(|ground| {
+            let [airliners, jets, propeller, helicopters] = flight_kinds;
+            let ground = physics::bands::lden_energy(&ground);
+            [airliners, jets, propeller, helicopters, ground]
         });
         let update = Update {
             partial: !last_ring,
             percentiles,
             loudness,
             aircraft_loud,
+            aircraft_kinds,
             lat,
             lon,
             frame,

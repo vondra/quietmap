@@ -259,3 +259,57 @@ fn a_box_of_jets_and_propellers_reads_their_mix_far_away() {
         assert!(error.abs() < 0.4, "{north} m: {error:+.3} dB");
     }
 }
+
+/// What a box is made of follows its pieces: the received energy's share of wing-mounted jets is
+/// the jet's share of the pieces' own SELs within 15 points, near and far. A box of one climb is
+/// within 7 (between 1,000 ft and the tail anchor it interpolates the shares: 0.30 for 0.23 at
+/// 4 km); a box of a climbing jet and a descending turboprop keeps one mix for both its average
+/// pieces, so 500 m from it the jets read 0.58 for 0.72.
+#[test]
+fn a_box_tells_its_jets_from_its_propellers_as_its_pieces_do() {
+    let altitude = 1_000.0;
+    for propeller_climb in [0.06, -0.05] {
+        let pieces: Vec<_> = [
+            ("A320", 0.0, 0.06, true),
+            ("DH8D", 20.0, propeller_climb, propeller_climb > 0.0),
+        ]
+        .iter()
+        .map(|&(designator, offset, climb, departure)| {
+            let emission = emission(designator, &flight(departure, 150.0, climb, altitude));
+            let rise = 50.0 * climb;
+            let start = [-50.0 + offset, offset, altitude - rise];
+            let end = [50.0 + offset, offset, altitude + rise];
+            (emission, start, end)
+        })
+        .collect();
+        let values = box_of(&pieces);
+        assert_eq!(values.gradient_spread > 1e-6, propeller_climb < 0.0);
+        for north in [500.0, 4_000.0, 12_000.0] {
+            let shift = |p: [f64; 3]| [p[0], p[1] - north, p[2]];
+            let [jet, propeller] = [0, 1].map(|k| {
+                let (emission, start, end) = &pieces[k];
+                10f64.powf(kernel_sel(emission, shift(*start), shift(*end)).unwrap() / 10.0)
+            });
+            let at = AircraftBoxAtReceiver {
+                centroid_m: shift(values.centroid_m),
+                axis_rad: values.axis_rad,
+                gradient: values.gradient,
+                gradient_spread: values.gradient_spread,
+                piece_length_m: values.piece_length_m,
+                levels_db: &values.levels_db,
+                tail_levels_db: &values.tail_levels_db,
+                lg_scaled_distance: &values.scaled_distance_m.map(f64::log10),
+                installation_shares: values.installation_shares,
+                ground_m: -4.0,
+            };
+            let fractions = box_sel_at_receiver(&at, &Unscreened).installation_fractions;
+            let expected = jet / (jet + propeller);
+            assert!(
+                (fractions[0] - expected).abs() < 0.15 && fractions[1] == 0.0,
+                "climb {propeller_climb}, {north} m: wing jets {:.3} of the box, {expected:.3} of the pieces",
+                fractions[0]
+            );
+            assert!((fractions.iter().sum::<f64>() - 1.0).abs() < 1e-9);
+        }
+    }
+}

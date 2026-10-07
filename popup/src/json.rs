@@ -2,7 +2,7 @@
 //! groups with their display records, and what the click read so far.
 
 use crate::update::Update;
-use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy};
+use physics::bands::{PERIODS, lden_energy};
 use serde_json::{Map, Value, json};
 use tiles::sources::Layer;
 
@@ -16,12 +16,7 @@ fn level(energy_value: f64) -> Value {
 }
 
 fn lden(periods: &[f64; PERIODS]) -> Value {
-    level(
-        (0..PERIODS)
-            .map(|p| PERIOD_HOURS[p] * periods[p] * energy(PERIOD_PENALTY_DB[p]))
-            .sum::<f64>()
-            / 24.0,
-    )
+    level(lden_energy(periods))
 }
 
 fn periods(object: &mut Map<String, Value>, energies: &[f64; PERIODS]) {
@@ -49,6 +44,29 @@ fn label(display: &Value) -> String {
     .to_string()
 }
 
+/// The aircraft layer's kinds as their shares of its Lden energy (to 0.1 %, so the largest stays
+/// the largest), those of at least 0.5 %.
+fn aircraft_kinds(kinds: &[f64; 5]) -> Value {
+    const NAMES: [&str; 5] = [
+        "airliners",
+        "regional_business_jets",
+        "propeller",
+        "helicopters",
+        "ground",
+    ];
+    let total: f64 = kinds.iter().sum();
+    let mut object = Map::new();
+    if total > 0.0 {
+        for (name, part) in NAMES.iter().zip(kinds) {
+            let share = part / total;
+            if share >= 0.005 {
+                object.insert((*name).into(), json!((share * 1000.0).round() / 1000.0));
+            }
+        }
+    }
+    Value::Object(object)
+}
+
 pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
     let mut total = [0.0; PERIODS];
     let mut layers = Vec::new();
@@ -63,11 +81,11 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         if let (Layer::Aircraft, Some(loud)) = (layer.layer, update.aircraft_loud) {
             object.insert("loud_lden".into(), lden(&loud));
         }
+        if let (Layer::Aircraft, Some(kinds)) = (layer.layer, update.aircraft_kinds) {
+            object.insert("kinds".into(), aircraft_kinds(&kinds));
+        }
         // Unrounded Lden for the benchmark's error measurement (fast against exact).
-        let weighted: f64 = (0..PERIODS)
-            .map(|p| PERIOD_HOURS[p] * layer.energy[p] * energy(PERIOD_PENALTY_DB[p]))
-            .sum::<f64>()
-            / 24.0;
+        let weighted = lden_energy(&layer.energy);
         if weighted > 0.0 {
             object.insert(
                 "lden_precise".into(),
