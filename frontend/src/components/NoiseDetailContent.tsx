@@ -1,14 +1,15 @@
 // The popup body: how loud the place is over the whole day (loudness in sone, Lden under it), and
-// what is heard there and from what: the loudest contributors and the aircraft layer, each with how
-// it is heard and its share of the noise. Under the list the whole calculation opens in place.
+// what is heard there and from what: the loudest contributors, the aircraft layer and everything
+// else, each with why it is loud and its share of the noise. Under the list the whole calculation
+// opens in place.
 // Redrawn on every streamed update of the click.
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
 import { ldenToColor } from '../utils/noise-colors'
 import { DataPoint } from './noise/noise-tooltips'
 import { fmtDb, fmtSone, txtTable } from '../utils/formatters'
 import { PERIOD_LABELS_DETAIL, SOURCE_LABELS } from './noise/shared'
-import { AircraftLayerRow, ContributorRow, loudLevel } from './noise/source/ContributorRow'
-import type { PopupUpdate, SegmentFan } from '../types/noise'
+import { AircraftLayerRow, ContributorRow, loudLevel, RestRow } from './noise/source/ContributorRow'
+import type { Contributor, LayerLevels, PeriodLevels, PopupUpdate, SegmentFan } from '../types/noise'
 
 // Lazy: the calculation is a separate chunk, loaded when a visitor opens it.
 const CalculationDetails = lazy(() => import('./calculation/CalculationDetails'))
@@ -42,30 +43,31 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
   const [centerLat, centerLng] = data.center
   const answered = data.total_lden != null && !data.partial
   // The popup's 0 dB display floor, applied to this list the way the per-layer rows apply it; the
-  // list ranks what is heard by the loud moments each source makes by itself.
-  const audibleContributors = data.top_contributors
+  // list ranks what is heard by the loud moments each source makes by itself. The aircraft layer
+  // lists no contributors: the layer is one row, at its rank. What the list does not show is one
+  // last row, so the shares add up to the whole place.
+  const audible = data.top_contributors
     .filter(c => c.source_type !== 'aircraft' && c.received_lden != null && c.received_lden > 0)
-    .sort((a, b) => loudLevel(b.loud_lden, b.received_lden) - loudLevel(a.loud_lden, a.received_lden))
-  // The aircraft layer lists no contributors: the layer is one row, at its rank.
   const aircraft = data.sources.find(s => s.source_type === 'aircraft')
-  const aircraftLoud = aircraft && (aircraft.lden ?? 0) > 0 ? loudLevel(aircraft.loud_lden, aircraft.lden) : null
-  const loudTotal = 10 * Math.log10([
-    ...audibleContributors.map(c => loudLevel(c.loud_lden, c.received_lden)),
-    ...(aircraftLoud == null ? [] : [aircraftLoud]),
-  ].reduce((sum, level) => sum + 10 ** (level / 10), 0) || 1)
-  const rows = audibleContributors.map(c => (
-    <ContributorRow
-      key={`${c.source_type}-${c.id}`}
-      c={c}
-      loudTotal={loudTotal}
-      onHighlight={id => onHighlight(id === null ? null : `source:${id}`)}
-    />
-  ))
-  if (aircraft && aircraftLoud != null) {
-    const rank = audibleContributors.findIndex(c => loudLevel(c.loud_lden, c.received_lden) < aircraftLoud)
-    rows.splice(rank < 0 ? rows.length : rank, 0,
-      <AircraftLayerRow key="aircraft" layer={aircraft} loudTotal={loudTotal} flights={data.top_flights} onHighlightFlight={onHighlight} />)
-  }
+  const entries: ListEntry[] = [
+    ...audible.map(c => ({ loud: loudLevel(c.loud_lden, c.received_lden), contributor: c })),
+    ...(aircraft && (aircraft.lden ?? 0) > 0 ? [{ loud: loudLevel(aircraft.loud_lden, aircraft.lden), layer: aircraft }] : []),
+  ].sort((a, b) => b.loud - a.loud)
+  const shownEntries = maxSources ? entries.slice(0, maxSources) : entries
+  const rest = restOf(data.sources, audible, entries.slice(shownEntries.length), shownEntries)
+  const loudTotal = 10 * Math.log10([...shownEntries.map(e => e.loud), ...(rest ? [rest.loud] : [])]
+    .reduce((sum, level) => sum + 10 ** (level / 10), 0) || 1)
+  const shown = shownEntries.map(e => e.contributor
+    ? (
+      <ContributorRow
+        key={`${e.contributor.source_type}-${e.contributor.id}`}
+        c={e.contributor}
+        loudTotal={loudTotal}
+        onHighlight={id => onHighlight(id === null ? null : `source:${id}`)}
+      />
+    )
+    : <AircraftLayerRow key="aircraft" layer={e.layer!} loudTotal={loudTotal} flights={data.top_flights} onHighlightFlight={onHighlight} />)
+  if (rest) shown.push(<RestRow key="rest" levels={rest.levels} loudTotal={loudTotal} count={rest.count} />)
   const totalLdenText = txtTable([
     ...data.sources
       .filter(s => s.lden != null && s.lden > 0)
@@ -77,7 +79,6 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
     { sep: true },
     ['Total Lden', fmtDb(data.total_lden)],
   ], 16, 9)
-  const shown = maxSources ? rows.slice(0, maxSources) : rows
   const sone = data.loudness?.n5_den_sone ?? null
 
   return (
@@ -126,14 +127,17 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
                 type="button"
                 data-testid="calculation-toggle"
                 aria-expanded={calculationOpen}
-                className="mt-1 w-full border-t border-border pt-1 text-left text-[11px] text-muted-foreground hover:text-foreground"
+                className="mt-2 flex w-full items-center justify-between rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-muted/40"
                 onClick={onCalculationToggle}
               >
-                Detailed calc {calculationOpen ? '▾' : '▸'}
+                <span>Detailed calculation</span>
+                <span className="text-muted-foreground">{calculationOpen ? '▾' : '▸'}</span>
               </button>
               {calculationOpen && (
                 <Suspense fallback={<div className="mt-2 text-[11px] text-muted-foreground animate-pulse">…</div>}>
-                  <CalculationDetails data={data} onFan={onFan} />
+                  <IntoView>
+                    <CalculationDetails data={data} onFan={onFan} />
+                  </IntoView>
                 </Suspense>
               )}
             </>
@@ -174,4 +178,49 @@ function StatsPanel({ data }: { data: PopupUpdate }) {
       </div>
     </div>
   )
+}
+
+/** Brings its content into view once it is shown: the calculation opens below the list, on a phone
+ *  far below the fold. Inside the Suspense, so it scrolls when the lazy chunk has arrived. */
+function IntoView({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => ref.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }), [])
+  return <div ref={ref} className="scroll-mt-2">{children}</div>
+}
+
+/** A row of the list: a contributor, or the aircraft layer as a whole; ranked by its loud moments. */
+interface ListEntry {
+  loud: number
+  contributor?: Contributor
+  layer?: LayerLevels
+}
+
+const PERIOD_KEYS = ['ld', 'le', 'ln', 'lden'] as const
+
+/** Everything the list does not show: the rows past its length, and the pieces beyond the popup's
+ *  contributors — the ground layers' energy less their contributors'. Those many farther pieces
+ *  sound together, steadily, so their loud moments are their Lden. Null when nothing is left. */
+function restOf(layers: LayerLevels[], contributors: Contributor[], hidden: ListEntry[], shown: ListEntry[]): {
+  levels: PeriodLevels
+  loud: number
+  count: number
+} | null {
+  const energy = (level: number | null | undefined) => (level == null ? 0 : 10 ** (level / 10))
+  const ground = layers.filter(l => l.source_type !== 'aircraft')
+  const beyond = (key: typeof PERIOD_KEYS[number]) => Math.max(0,
+    ground.reduce((sum, l) => sum + energy(l[key]), 0) - contributors.reduce((sum, c) => sum + energy(c.received[key]), 0))
+  const hiddenEnergy = (key: typeof PERIOD_KEYS[number]) =>
+    hidden.reduce((sum, e) => sum + energy(e.contributor ? e.contributor.received[key] : e.layer?.[key]), 0)
+  const levels = Object.fromEntries(PERIOD_KEYS.map(key => {
+    const total = beyond(key) + hiddenEnergy(key)
+    return [key, total > 0 ? 10 * Math.log10(total) : null]
+  })) as unknown as PeriodLevels
+  const loudEnergy = beyond('lden') + hidden.reduce((sum, e) => sum + 10 ** (e.loud / 10), 0)
+  if (levels.lden == null || levels.lden <= 0 || loudEnergy <= 0) return null
+  const shownContributors = shown.filter(e => e.contributor).length
+  return {
+    levels,
+    loud: 10 * Math.log10(loudEnergy),
+    count: ground.reduce((sum, l) => sum + l.candidates, 0) - shownContributors,
+  }
 }

@@ -1,13 +1,13 @@
-// One row of the popup's "what you hear" list: the source, how far, how it is heard and its share
-// of the loud moments; it expands to its details. A contributor has one, and so has the aircraft
-// layer as a whole, which lists no contributors.
+// One row of the popup's "what you hear" list, in columns: the source, how far, why it is loud
+// (how often it passes, or steady) and its share of the loud moments; it expands to its details. A
+// contributor has one, the aircraft layer as a whole has one (it lists no contributors), and so has
+// everything the list does not name.
 import { useState, type ReactNode } from 'react'
 import type { Contributor, LayerLevels, PeriodLevels, TopFlight } from '../../../types/noise'
-import { ldenToColor } from '../../../utils/noise-colors'
 import { fmtDb, txtTable } from '../../../utils/formatters'
 import { DataPoint } from '../noise-tooltips'
 import { heardText } from '../heard'
-import { contributorClass, contributorLabel, formatDist, PERIOD_LABELS_DETAIL, SOURCE_LABELS } from '../shared'
+import { contributorLabel, formatDist, PERIOD_LABELS_DETAIL, SOURCE_LABELS } from '../shared'
 import { AircraftLayerDetail, ContributorDetail } from './ContributorDetail'
 
 /** A row's level of the loud moments: the popup's (`null`: none, a rare event), or its Lden before
@@ -25,7 +25,7 @@ function percentText(share: number): string {
 function SourceRow({ label, distance, heard, received, loud, loudTotal, onToggle, children }: {
   label: string
   distance: string
-  /** How it is heard, in words; none for a steady source. */
+  /** Why it is loud, short: how often it passes, or steady; none for a source without passes. */
   heard: string | null
   received: PeriodLevels
   /** The row's level exceeded 5 % of the time by itself (Lden-weighted), and the energy sum of
@@ -34,12 +34,11 @@ function SourceRow({ label, distance, heard, received, loud, loudTotal, onToggle
   loudTotal: number
   /** Told when the row opens or closes (a tap on a phone as well as a click). */
   onToggle?: (expanded: boolean) => void
-  /** The expanded body. */
-  children: ReactNode
+  /** The expanded body; none for a row that does not open. */
+  children?: ReactNode
 }) {
   // Keyed by a stable id, so the row stays open across streamed updates.
   const [expanded, setExpanded] = useState(false)
-  const lden = received.lden ?? 0
   const share = Math.min(1, 10 ** ((loud - loudTotal) / 10))
   const shareText = txtTable([
     ['Share of the loud moments', percentText(share)],
@@ -60,27 +59,23 @@ function SourceRow({ label, distance, heard, received, loud, loudTotal, onToggle
     <div className="border-b border-border/50 last:border-b-0">
       <button
         type="button"
-        aria-expanded={expanded}
+        aria-expanded={children ? expanded : undefined}
+        disabled={!children}
         onClick={(e) => {
           e.stopPropagation()
           setExpanded(!expanded)
           onToggle?.(!expanded)
         }}
-        className="w-full py-1.5 text-left cursor-pointer hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="w-full py-1.5 text-left enabled:cursor-pointer enabled:hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
-        <div className="grid grid-cols-[minmax(0,1fr)_3.5rem_2.3rem_0.6rem] gap-x-1.5 items-center text-xs">
-          <span className="truncate">
-            <span className="font-medium">{label}</span>
-            {distance && <span className="text-muted-foreground/60"> · {distance}</span>}
-          </span>
+        <div className="grid grid-cols-[minmax(0,1fr)_2.8rem_5.6rem_2.5rem_0.6rem] gap-x-1.5 items-baseline text-xs">
+          <span className="truncate font-medium">{label}</span>
+          <span className="text-right tabular-nums text-muted-foreground/70">{distance}</span>
+          <span className="truncate text-muted-foreground">{heard}</span>
           <DataPoint title={label} text={shareText}>
-            <span className="block h-1.5 rounded-full bg-muted overflow-hidden" aria-hidden="true">
-              <span className="block h-full rounded-full" style={{ width: `${Math.max(3, 100 * share)}%`, background: ldenToColor(lden) }} />
-            </span>
+            <span className="block text-right tabular-nums">{percentText(share)}</span>
           </DataPoint>
-          <span className="text-right tabular-nums text-muted-foreground">{percentText(share)}</span>
-          <span className="text-[10px] text-muted-foreground/40">{expanded ? '▲' : '▼'}</span>
-          {heard && <span className="col-span-4 truncate text-[11px] text-muted-foreground">{heard}</span>}
+          <span className="text-[10px] text-muted-foreground/40">{children ? (expanded ? '▲' : '▼') : ''}</span>
         </div>
       </button>
 
@@ -99,7 +94,7 @@ export function ContributorRow({ c, loudTotal, onHighlight }: {
     <SourceRow
       label={contributorLabel(c)}
       distance={formatDist(c.distance_m)}
-      heard={heardText(c.source_type, c.heard, contributorClass(c))}
+      heard={heardText(c.source_type, c.heard)}
       received={c.received}
       loud={loudLevel(c.loud_lden, c.received_lden)}
       loudTotal={loudTotal}
@@ -121,5 +116,25 @@ export function AircraftLayerRow({ layer, loudTotal, flights, onHighlightFlight 
     <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={null} received={layer} loud={loudLevel(layer.loud_lden, layer.lden)} loudTotal={loudTotal}>
       <AircraftLayerDetail received={layer} flights={flights} onHighlightFlight={onHighlightFlight} />
     </SourceRow>
+  )
+}
+
+/** Everything the list does not name: the many farther pieces of road, track, building and plant.
+ *  Together they make a steady sound, so their loud moments are their Lden. */
+export function RestRow({ levels, loudTotal, count }: {
+  levels: PeriodLevels
+  loudTotal: number
+  /** How many pieces it sums. */
+  count: number
+}) {
+  return (
+    <SourceRow
+      label="Everything else"
+      distance=""
+      heard={`${count.toLocaleString('en')} more`}
+      received={levels}
+      loud={levels.lden ?? -Infinity}
+      loudTotal={loudTotal}
+    />
   )
 }

@@ -1,5 +1,6 @@
-// The recent places as tabs above the popup: each the place's name and its whole-day loudness, the
-// open one marked; a tab reopens its place, its cross forgets it. Kept in this browser only.
+// The recent places as tabs above the popup, wrapping onto more lines rather than scrolling out of
+// the column: each the place's name and its whole-day loudness, the open one marked; a tab reopens
+// its place, its cross forgets it. Kept in this browser only.
 import { X } from 'lucide-react'
 import { samePlace, type RecentPlace } from '../lib/recent-places'
 import { fmtSone } from '../utils/formatters'
@@ -19,7 +20,7 @@ export default function RecentPlaces({ places, current, onOpen, onRemove }: {
   // One place alone has nothing to be compared with.
   if (places.length < 2) return null
   return (
-    <nav aria-label="Recent places" data-testid="recent-places" className="pointer-events-auto flex gap-1 overflow-x-auto pb-0.5">
+    <nav aria-label="Recent places" data-testid="recent-places" className="pointer-events-auto flex shrink-0 flex-wrap gap-1">
       {places.map(place => {
         const isCurrent = current != null && samePlace(place, current)
         const name = placeName(place)

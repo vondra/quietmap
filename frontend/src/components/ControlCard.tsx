@@ -1,13 +1,17 @@
-// The desktop layer card, collapsible to a single button.
-import { useState } from 'react'
+// The desktop layer card, collapsible to a single button; it folds away while a popup is open, so
+// the popup and the recent places have the column, and comes back when the popup closes.
+import { useEffect, useState } from 'react'
 import { ChevronUp, Layers3 } from 'lucide-react'
 import FloatingCard from './FloatingCard'
 import LayerControlsBody, { type LayerControlsBodyProps } from './LayerControlsBody'
 
-type ControlCardProps = LayerControlsBodyProps
+type ControlCardProps = LayerControlsBodyProps & {
+  popupOpen: boolean
+}
 
-export default function ControlCard(props: ControlCardProps) {
-  const [collapsed, setCollapsed] = useState(false)
+export default function ControlCard({ popupOpen, ...props }: ControlCardProps) {
+  const [collapsed, setCollapsed] = useState(popupOpen)
+  useEffect(() => setCollapsed(popupOpen), [popupOpen])
 
   if (collapsed) {
     return (

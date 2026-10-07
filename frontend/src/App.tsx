@@ -232,6 +232,7 @@ export default function App() {
             that scroll their own content, so on a short viewport both stay reachable. */}
         <div className="hidden md:flex absolute top-3 right-(--map-gutter) bottom-3 flex-col gap-2 w-(--map-card-column) overflow-hidden">
           <ControlCard
+            popupOpen={detailPosition != null}
             quietClustersEnabled={quietClustersEnabled}
             onQuietClustersChange={handleQuietClustersChange}
             quietThreshold={quietThreshold}
