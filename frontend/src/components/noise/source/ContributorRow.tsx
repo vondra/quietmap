@@ -1,5 +1,5 @@
-// One row of the popup's "what you hear" list, in columns: the source, how far, why it is loud
-// (how often it passes, or steady) and its share of the loud moments; it expands to its details. A
+// One row of the popup's "what you hear" list, in columns: the source, why it is loud (how often it
+// passes, or steady), how far and its share of the loud moments; it expands to its details. A
 // contributor has one, the aircraft layer as a whole has one (it lists no contributors), and so has
 // everything the list does not name.
 import { useState, type ReactNode } from 'react'
@@ -68,12 +68,14 @@ function SourceRow({ label, distance, heard, received, loud, loudTotal, onToggle
         }}
         className="w-full py-1.5 text-left enabled:cursor-pointer enabled:hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
-        <div className="grid grid-cols-[minmax(0,1fr)_2.8rem_5.6rem_2.5rem_0.6rem] gap-x-1.5 items-baseline text-xs">
+        {/* What it is, how much of it (why it is loud), how far (context, grey) and its share (the
+            result, bold); every number right-aligned in its own column, so they read down. */}
+        <div className="grid grid-cols-[minmax(0,1fr)_5.8rem_3rem_2.5rem_0.6rem] gap-x-2 items-baseline text-xs">
           <span className="truncate font-medium">{label}</span>
-          <span className="text-right tabular-nums text-muted-foreground/70">{distance}</span>
-          <span className="truncate text-muted-foreground">{heard}</span>
+          <span className="truncate text-right tabular-nums">{heard}</span>
+          <span className="text-right tabular-nums text-muted-foreground/60">{distance}</span>
           <DataPoint title={label} text={shareText}>
-            <span className="block text-right tabular-nums">{percentText(share)}</span>
+            <span className="block text-right tabular-nums font-semibold">{percentText(share)}</span>
           </DataPoint>
           <span className="text-[10px] text-muted-foreground/40">{children ? (expanded ? '▲' : '▼') : ''}</span>
         </div>
