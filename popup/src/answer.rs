@@ -17,7 +17,10 @@ use crate::obstacles::Scene;
 use crate::release::{Release, RingFiles};
 use crate::scene::Ground;
 use crate::selection::{LayerSelection, select};
-use crate::update::{Statistics, Update, empty_answer, layer_answers, loudest_contributors};
+use crate::update::{
+    CONTRIBUTORS_SHOWN, Statistics, Update, all_contributors, empty_answer, layer_answers,
+    ranked_contributors,
+};
 use physics::bands::PERIODS;
 use physics::bound::receiver_bound;
 use physics::doc29::atmosphere::{class_spectrum_at, place_rates_db_per_m};
@@ -440,8 +443,11 @@ pub fn answer(
                 levels.l5,
             )
         });
-        let mut contributors = loudest_contributors(&selections);
-        if last_ring {
+        let mut contributors = all_contributors(&selections);
+        if !last_ring {
+            contributors = ranked_contributors(contributors, |c| c.energy);
+            contributors.truncate(CONTRIBUTORS_SHOWN);
+        } else {
             for contributor in &mut contributors {
                 let display = fields(contributor);
                 contributor.heard = display
@@ -452,6 +458,10 @@ pub fn answer(
                     display.as_ref(),
                 ));
             }
+            // The visitor's list ranks by the loud moments: every contributor ranked so, then cut,
+            // so thirty brief events never push out the steady road that leads it.
+            contributors = ranked_contributors(contributors, |c| c.loud.unwrap_or(c.energy));
+            contributors.truncate(CONTRIBUTORS_SHOWN);
             let read: Vec<&RingFiles> = rings.iter().filter_map(OnceCell::get).collect();
             let keys: Vec<u64> = contributors.iter().map(|c| c.group_key).collect();
             let lines = whole_lines(&read, &frame, &keys, station.position, GROUND_REACH_M)?;

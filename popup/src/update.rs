@@ -110,18 +110,25 @@ pub fn layer_answers(selections: &[LayerSelection]) -> Vec<LayerAnswer> {
         .collect()
 }
 
-pub fn loudest_contributors(selections: &[LayerSelection]) -> Vec<Contributor> {
-    let mut contributors: Vec<Contributor> = selections
-        .iter()
-        .flat_map(|selection| selection.contributors.values().cloned())
-        .collect();
+/// Every contributor, the loudest first by `key` (its Lden, or in the final update its loud
+/// moments, as the visitor's list ranks them).
+pub fn ranked_contributors(
+    mut contributors: Vec<Contributor>,
+    key: impl Fn(&Contributor) -> [f64; PERIODS],
+) -> Vec<Contributor> {
     contributors.sort_by(|a, b| {
-        lden_energy(&b.energy)
-            .total_cmp(&lden_energy(&a.energy))
+        lden_energy(&key(b))
+            .total_cmp(&lden_energy(&key(a)))
             .then(a.group_key.cmp(&b.group_key))
     });
-    contributors.truncate(CONTRIBUTORS_SHOWN);
     contributors
+}
+
+pub fn all_contributors(selections: &[LayerSelection]) -> Vec<Contributor> {
+    selections
+        .iter()
+        .flat_map(|selection| selection.contributors.values().cloned())
+        .collect()
 }
 
 /// The one and final update of a building without an exposed façade: no levels.
