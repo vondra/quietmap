@@ -113,11 +113,10 @@ pub fn layer_answers(selections: &[LayerSelection]) -> Vec<LayerAnswer> {
         .collect()
 }
 
-/// Whether the visitor's list may name a contributor: a ground source above 0 dB Lden (the popup's
-/// display floor; those below go to their layer's unlisted part). The aircraft layer is one row,
-/// its airports' ground operations within it.
+/// Whether the visitor's list may name a ground contributor: above 0 dB Lden (the popup's display
+/// floor; those below go to their layer's unlisted part).
 pub fn listed(contributor: &Contributor) -> bool {
-    contributor.layer != Layer::Aircraft && lden_energy(&contributor.energy) > 1.0
+    lden_energy(&contributor.energy) > 1.0
 }
 
 /// Each ground layer's part the list leaves out: the `unlisted` contributors' energy and loud
@@ -164,9 +163,12 @@ pub fn ranked_contributors<C: std::borrow::Borrow<Contributor>>(
     contributors
 }
 
+/// Every ground contributor: the aircraft layer is one row of the list, its airports' ground
+/// operations within it.
 pub fn all_contributors(selections: &[LayerSelection]) -> impl Iterator<Item = &Contributor> {
     selections
         .iter()
+        .filter(|selection| selection.layer != Layer::Aircraft)
         .flat_map(|selection| selection.contributors.values())
 }
 

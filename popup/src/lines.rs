@@ -28,6 +28,9 @@ pub fn whole_lines(
     receiver: [f64; 2],
     reach_m: f64,
 ) -> Result<Vec<Lines>, String> {
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
     assert!(keys.len() < usize::from(u8::MAX));
     let mut sorted: Vec<(u64, u8)> = keys
         .iter()

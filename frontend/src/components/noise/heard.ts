@@ -24,7 +24,6 @@ export function heardText(sourceType: string, heard: Contributor['heard']): stri
   if (heard.steady) return 'steady'
   const day = heard.per_hour.day
   if (sourceType === 'railway') return daily(perDay(heard.per_hour), 'trains')
-  if (sourceType === 'aircraft') return daily(perDay(heard.per_hour), 'flights')
   if (sourceType === 'building') return daily(perDay(heard.per_hour), null)
   if (day >= 1) return `${Math.round(day)} veh/h`
   return daily(perDay(heard.per_hour), 'veh')

@@ -16,9 +16,8 @@ test('a road reads as steady, vehicles an hour, or vehicles a day, week or month
   assert.equal(heardText('road', heard(0.003, 0.0, 0.0)), '1 veh/month')
 })
 
-test('trains and airport movements read by the day; a steady source says nothing', () => {
+test('trains read by the day; a steady source says nothing', () => {
   assert.equal(heardText('railway', heard(4, 2, 0.5)), '60 trains/day')
-  assert.equal(heardText('aircraft', heard(20, 15, 2)), '316 flights/day')
   assert.equal(heardText('building', undefined), null)
 })
 
