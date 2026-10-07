@@ -85,31 +85,72 @@ pub struct Heard {
 /// Kurze's lambda from which passes run together into a steady sound.
 const STEADY_LAMBDA: f64 = 1.0;
 
-/// One source whose level varies in time: its mean energy, its energy in each meteorological
-/// state (homogeneous, favourable) and lambda per period (infinite for a steady source, whose
-/// level follows the weather alone).
+/// Bins of the favourable share in which a contributor keeps its pieces' weather apart.
+const SHARE_BINS: usize = 10;
+
+/// A contributor's energy per period in each meteorological state (homogeneous, favourable) and
+/// their mix, binned by its pieces' favourable share p (CNOSSOS-EU 2.5.9, by direction): the
+/// pieces on either side of a click are favourable at different times (ERA5's sectors differ by
+/// up to 50 points across), so one share for the whole would make them all favourable or all calm
+/// together. A draw's weather is favourable in the bins whose share lies above it.
+#[derive(Clone, Default)]
+pub struct Weather([[[f64; PERIODS]; 3]; SHARE_BINS]);
+
+impl Weather {
+    /// Adds a piece of `energy` per period, the mix of its `states`; a piece without states
+    /// (none computed) holds its mean in either.
+    pub fn add(&mut self, energy: &[f64; PERIODS], states: &[[f64; PERIODS]; 2]) {
+        for period in 0..PERIODS {
+            let [homogeneous, favourable] = if states[0][period] > 0.0 || states[1][period] > 0.0 {
+                [states[0][period], states[1][period]]
+            } else {
+                [energy[period]; 2]
+            };
+            let share = favourable_share(energy[period], homogeneous, favourable);
+            let bin = &mut self.0[((share * SHARE_BINS as f64) as usize).min(SHARE_BINS - 1)];
+            bin[0][period] += homogeneous;
+            bin[1][period] += favourable;
+            bin[2][period] += energy[period];
+        }
+    }
+
+    /// The energy of `period` under a draw's `weather` in [0, 1).
+    fn at(&self, period: usize, weather: f64) -> f64 {
+        self.0
+            .iter()
+            .map(|[homogeneous, favourable, mix]| {
+                let share = favourable_share(mix[period], homogeneous[period], favourable[period]);
+                if weather < share {
+                    favourable[period]
+                } else {
+                    homogeneous[period]
+                }
+            })
+            .sum()
+    }
+}
+
+/// The share of the time a source is heard in its favourable state, from its mean being the mix
+/// of the two.
+fn favourable_share(mean: f64, homogeneous: f64, favourable: f64) -> f64 {
+    if (favourable - homogeneous).abs() <= f64::EPSILON * favourable.abs() {
+        return 0.0;
+    }
+    ((mean - homogeneous) / (favourable - homogeneous)).clamp(0.0, 1.0)
+}
+
+/// One source whose level varies in time: its mean energy, its weather and lambda per period
+/// (infinite for a steady source, whose level follows the weather alone).
 struct Line {
     key: u64,
     energy: [f64; PERIODS],
-    states: [[f64; PERIODS]; 2],
+    weather: Weather,
     lambda: [f64; PERIODS],
     /// A road's hourly profile ([`HOURLY_SHARES`]); `None` keeps the period's mean every hour.
     profile: Option<usize>,
     /// An event source's share of each period it sounds: on, it is its mean over the duty; off,
     /// silent.
     duty: Option<[f64; PERIODS]>,
-}
-
-impl Line {
-    /// The share of the time the source is heard in its favourable state, from its mean being
-    /// the mix of the two.
-    fn favourable_share(&self, period: usize) -> f64 {
-        let [homogeneous, favourable] = [self.states[0][period], self.states[1][period]];
-        if (favourable - homogeneous).abs() <= f64::EPSILON * favourable.abs() {
-            return 0.0;
-        }
-        ((self.energy[period] - homogeneous) / (favourable - homogeneous)).clamp(0.0, 1.0)
-    }
 }
 
 fn number(fields: &serde_json::Value, name: &str) -> Option<f64> {
@@ -365,7 +406,7 @@ pub fn percentiles(
             lines.push(Line {
                 key: contributor.group_key,
                 energy: contributor.energy,
-                states: contributor.states,
+                weather: contributor.weather.clone(),
                 lambda,
                 profile,
                 duty: events,
@@ -374,10 +415,12 @@ pub fn percentiles(
     }
     // The contributors come from hash maps: a fixed order keeps the draws of a click the same.
     lines.sort_by_key(|line| line.key);
+    let mut flight_weather = Weather::default();
+    flight_weather.add(&flight_energy, &[flight_energy; 2]);
     lines.push(Line {
         key: u64::MAX,
         energy: flight_energy,
-        states: [flight_energy; 2],
+        weather: flight_weather,
         lambda: std::array::from_fn(|p| {
             if flight_energy[p] > 0.0 {
                 flight_energy_lambda[p] / flight_energy[p]
@@ -423,15 +466,9 @@ pub fn percentiles(
         for line in lines.iter().filter(|line| line.energy[p] > 0.0) {
             // Fisher-Yates: which stratum of this line's probability each draw takes.
             shuffle(&mut strata, &mut random);
-            let favourable = line.favourable_share(p);
             for (k, stratum) in strata.iter().enumerate() {
                 let probability = (*stratum as f64 + random.uniform()) / DRAWS as f64;
-                let state = usize::from(weather[k] < favourable);
-                let mean = if line.states[state][p] > 0.0 || line.states[1 - state][p] > 0.0 {
-                    line.states[state][p]
-                } else {
-                    line.energy[p]
-                };
+                let mean = line.weather.at(p, weather[k]);
                 draws[k] += match line.duty {
                     // An event sounds in its duty's share of the draws, at its mean over it.
                     Some(duty) if duty[p] > 0.0 => {
@@ -481,7 +518,11 @@ mod tests {
             group_key: key,
             layer,
             energy: [energy(leq_db); PERIODS],
-            states: [[energy(leq_db); PERIODS]; 2],
+            weather: {
+                let mut weather = Weather::default();
+                weather.add(&[energy(leq_db); PERIODS], &[[energy(leq_db); PERIODS]; 2]);
+                weather
+            },
             distance_m,
             display: DisplayRef {
                 ring: 0,
@@ -681,6 +722,34 @@ mod tests {
             (first.l10, first.l50, first.l90),
             (second.l10, second.l50, second.l90)
         );
+    }
+
+    /// A site's two pieces on either side of the click, one always downwind (favourable, 10 dB
+    /// over calm) and the other never: its level holds at their sum, never all favourable or all
+    /// calm together (one share for the whole put L90 7 dB low and L10 3 dB high).
+    #[test]
+    fn pieces_on_either_side_keep_their_own_weather() {
+        let mut site = contributor(1, Layer::Industry, 0.0, 300.0);
+        let (calm, favourable) = (1.0, 10.0);
+        site.weather = Weather::default();
+        site.weather.add(
+            &[favourable; PERIODS],
+            &[[calm; PERIODS], [favourable; PERIODS]],
+        );
+        site.weather
+            .add(&[calm; PERIODS], &[[calm; PERIODS], [favourable; PERIODS]]);
+        site.energy = [favourable + calm; PERIODS];
+        let levels = percentiles(
+            &[selection(Layer::Industry, vec![site])],
+            ([0.0; PERIODS], [0.0; PERIODS]),
+            &|_| None,
+            5,
+        );
+        for p in 0..PERIODS {
+            for level in [levels.l5[p], levels.l50[p], levels.l90[p]] {
+                assert!((level - 11f64.log10() * 10.0).abs() < 1e-9, "{level}");
+            }
+        }
     }
 
     /// Church bells sounding 2 % of the day at a mean of 40 dB beside a steady 40 dB: the

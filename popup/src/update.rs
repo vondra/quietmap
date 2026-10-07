@@ -32,9 +32,8 @@ pub struct Contributor {
     pub group_key: u64,
     pub layer: Layer,
     pub energy: [f64; PERIODS],
-    /// The energy per meteorological state (homogeneous, favourable) and period: the mix of
-    /// the two is `energy`.
-    pub states: [[f64; PERIODS]; 2],
+    /// Its energy per meteorological state, kept apart by its pieces' favourable shares.
+    pub weather: crate::percentiles::Weather,
     pub distance_m: f64,
     pub display: DisplayRef,
     /// Its loudest evaluated pieces (ends in the click's frame, equal for a point) with their

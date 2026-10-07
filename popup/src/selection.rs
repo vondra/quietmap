@@ -159,7 +159,7 @@ impl LayerSelection {
                 group_key: candidate.group_key,
                 layer: candidate.layer,
                 energy: [0.0; PERIODS],
-                states: [[0.0; PERIODS]; 2],
+                weather: Default::default(),
                 distance_m: candidate.distance_m,
                 display: candidate.display,
                 pieces: Vec::new(),
@@ -170,11 +170,7 @@ impl LayerSelection {
         for (total, value) in contributor.energy.iter_mut().zip(energy) {
             *total += value;
         }
-        for (totals, values) in contributor.states.iter_mut().zip(states) {
-            for (total, value) in totals.iter_mut().zip(values) {
-                *total += value;
-            }
-        }
+        contributor.weather.add(&energy, states);
         contributor.distance_m = contributor.distance_m.min(candidate.distance_m);
         contributor
             .pieces
