@@ -118,10 +118,14 @@ pub fn relative_intensity(lambda: f64, p: f64) -> f64 {
         let deviation = 1.0 / (2.0 * std::f64::consts::PI * lambda).sqrt();
         return (1.0 + deviation * normal_quantile(p.clamp(bottom, top))).max(0.0);
     }
-    let lambda = lambda.max(LAMBDA_MIN);
     if p > top {
         return relative_intensity(lambda, top) * passing_intensity(lambda, p)
             / passing_intensity(lambda, top);
+    }
+    // Sparser than the table, a line's nearest emitters lie about 1 / lambda distances away and
+    // its intensity, relative to its mean, is in proportion to lambda below the last quantile.
+    if lambda < LAMBDA_MIN {
+        return lambda / LAMBDA_MIN * relative_intensity(LAMBDA_MIN, p);
     }
     let p = p.max(bottom);
     let position = ((lambda / LAMBDA_MIN).log10() * STEPS_PER_DECADE).clamp(0.0, (ROWS - 1) as f64);

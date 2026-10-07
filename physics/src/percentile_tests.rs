@@ -113,7 +113,8 @@ fn sparse_lines_are_quiet_most_of_the_time_and_dense_ones_hum() {
 #[test]
 fn every_line_keeps_its_mean() {
     for lambda in [1e-5, 1e-4, 1e-3, 1e-2, 0.1, 1.0, 9.0] {
-        // Midpoints of 100,000 equal steps of probability, and of a million in the last one.
+        // Midpoints of 100,000 equal steps of probability, and of a million in the last one (in
+        // place of its midpoint).
         let body: f64 = (0..100_000)
             .map(|k| relative_intensity(lambda, (k as f64 + 0.5) / 100_000.0))
             .sum::<f64>()
@@ -122,7 +123,7 @@ fn every_line_keeps_its_mean() {
         let tail: f64 = (0..1_000_000)
             .map(|k| {
                 let p = last + (k as f64 + 0.5) / 1_000_000.0 / 100_000.0;
-                relative_intensity(lambda, p) - relative_intensity(lambda, last - 0.5 / 100_000.0)
+                relative_intensity(lambda, p) - relative_intensity(lambda, last + 0.5 / 100_000.0)
             })
             .sum::<f64>()
             / 1_000_000.0
@@ -132,13 +133,15 @@ fn every_line_keeps_its_mean() {
     }
 }
 
-/// Ten independent lines of lambda 1e-4 at equal energy are one line of 1e-3, and a hundred one of
-/// 1e-2: their sum, sampled line by line as the popup does, has the same normalised L10 and L5
-/// (without the rare passes, +5.5 dB at L10 and -12.3 dB at L5).
+/// Ten independent lines of lambda 1e-4 at equal energy are one line of 1e-3, a hundred one of
+/// 1e-2, and ten of 1e-5, sparser than the table, one of 1e-4: their sum, sampled line by line as
+/// the popup does, has the same normalised L10 and L5 within 0.11 dB (without the rare passes,
+/// +5.5 dB at L10 and -12.3 dB at L5; with lines below the table read as its first row, ten of
+/// 1e-5 were ten of 1e-4).
 #[test]
 fn independent_sparse_lines_add_up_to_a_denser_one() {
     let mut random = Random::new(0x5eed_2026);
-    for (lines, lambda) in [(10usize, 1e-4), (100, 1e-4)] {
+    for (lines, lambda) in [(10usize, 1e-4), (100, 1e-4), (10, 1e-5)] {
         let mut sums: Vec<f64> = (0..200_000)
             .map(|_| {
                 (0..lines)
@@ -154,7 +157,7 @@ fn independent_sparse_lines_add_up_to_a_denser_one() {
             let one = relative_intensity(combined, 1.0 - exceeded);
             let difference = 10.0 * (sampled / one).log10();
             assert!(
-                difference.abs() < 1.5,
+                difference.abs() < 0.3,
                 "{lines} lines of {lambda}, exceeded {exceeded}: {difference:+.2} dB"
             );
         }
