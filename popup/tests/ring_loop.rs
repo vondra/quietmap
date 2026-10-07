@@ -317,6 +317,82 @@ fn the_sampled_answer_is_within_a_twentieth_of_a_decibel_and_reproducible() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// Weak low points and a few strong high ones: the sample draws mostly the weak ones, and its
+/// spectrum weighs each drawn piece as the estimate does, so the loudness of the fast answer is the
+/// exact one's (unweighted, the high band took 99 % of the spectrum: 7.2 sone for 11.9).
+#[test]
+fn a_sampled_layer_sounds_as_the_exact_one() {
+    let root = release_root("sampled-spectrum");
+    let steps_per_metre = steps_per_metre();
+    let pieces: Vec<Piece> = (0..6_060)
+        .map(|i| {
+            let f = f64::from(i);
+            let radius = 20.0 * (2_900.0f64 / 20.0).powf(f / 6_060.0);
+            let angle = f * 2.399_963;
+            let point = [
+                (radius * angle.cos() * steps_per_metre).round() as i16,
+                (radius * angle.sin() * steps_per_metre).round() as i16,
+            ];
+            Piece {
+                ends: [point, point],
+                attribute: u32::from(i % 101 == 0),
+            }
+        })
+        .collect();
+    // Band 0 is 63 Hz, band 4 is 1 kHz; the weak points' A-weighted energy (63 Hz, -26.2 dB)
+    // equals the strong ones' over the hundredfold count.
+    let band = |index: usize, level: f64| {
+        let mut bands = [0.0; BANDS];
+        bands[index] = level;
+        [bands; PERIODS]
+    };
+    let attributes: Vec<Attribute> = [band(0, 106.2), band(4, 100.0)]
+        .into_iter()
+        .enumerate()
+        .map(|(k, emission)| Attribute {
+            layer: Layer::Industry,
+            height_m: 2.0,
+            ground_percent: 50,
+            platform_half_width_m: 0.0,
+            exclusion_radius_m: 0.0,
+            footprint_id: 0,
+            group_key: 20 + k as u64,
+            emission,
+            display: r#"["point"]"#.into(),
+        })
+        .collect();
+    let path = tile_path(&root.join("2026"), TILE, Kind::Sources);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, encode(&pieces, &attributes)).unwrap();
+    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    let release = Release::open(&root, "2026").unwrap();
+    let sone = |exact: bool| {
+        let (lat, lon) = TILE.centre().to_degrees();
+        let mut last = None;
+        answer(
+            &release,
+            lat,
+            lon,
+            &Options { exact, pieces: 0 },
+            &mut |update| {
+                last = update
+                    .loudness
+                    .as_ref()
+                    .map(|loudness| loudness.n5_den_sone);
+                Ok(())
+            },
+        )
+        .unwrap();
+        last.expect("a final loudness")
+    };
+    let (exact, sampled) = (sone(true), sone(false));
+    assert!(
+        (sampled / exact - 1.0).abs() < 0.05,
+        "sampled {sampled:.2} sone, exact {exact:.2}"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn an_incomplete_release_is_never_served() {
     let root = release_root("incomplete");

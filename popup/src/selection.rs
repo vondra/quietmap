@@ -397,26 +397,42 @@ fn sample_rest(
             if !exhaustive {
                 selection.covered += population;
             }
-            let mut shown = std::collections::BTreeSet::new();
+            // Each drawn piece stands for its share of the estimate: drawn m times out of n with
+            // probability p, its weight is m / (n p), so the spectrum and the contributors sum to
+            // the layer's estimate (a piece's own energy stays in its listing).
+            let mut times: std::collections::BTreeMap<usize, f64> =
+                std::collections::BTreeMap::new();
             for &index in &draws {
-                if shown.insert(index) {
-                    let (energy, received) = &evaluated[&index];
-                    if exhaustive {
-                        selection.add(&rest[index], received, attributes, keep_pieces);
-                        for (estimate, value) in selection.estimate.iter_mut().zip(energy) {
-                            *estimate -= value;
-                        }
-                    } else {
-                        selection.evaluated += 1;
-                        selection.add_spectrum(&received.bands);
-                        selection.add_contributor(&rest[index], *energy, &received.states);
-                        if keep_pieces {
-                            selection.pieces.push(EvaluatedPiece::of(
-                                &rest[index],
-                                attributes,
-                                *energy,
-                            ));
-                        }
+                *times.entry(index).or_default() += 1.0;
+            }
+            for (&index, &drawn) in &times {
+                let (energy, received) = &evaluated[&index];
+                if exhaustive {
+                    selection.add(&rest[index], received, attributes, keep_pieces);
+                    for (estimate, value) in selection.estimate.iter_mut().zip(energy) {
+                        *estimate -= value;
+                    }
+                } else {
+                    let weight = drawn / (draws.len() as f64 * rest[index].order / rest_order);
+                    selection.evaluated += 1;
+                    selection.add_spectrum(
+                        &received
+                            .bands
+                            .map(|period| period.map(|band| band * weight)),
+                    );
+                    selection.add_contributor(
+                        &rest[index],
+                        energy.map(|value| value * weight),
+                        &received
+                            .states
+                            .map(|state| state.map(|value| value * weight)),
+                    );
+                    if keep_pieces {
+                        selection.pieces.push(EvaluatedPiece::of(
+                            &rest[index],
+                            attributes,
+                            *energy,
+                        ));
                     }
                 }
             }
