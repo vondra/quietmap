@@ -220,7 +220,8 @@ function restOf(layers: LayerLevels[], contributors: Contributor[], hidden: List
   const loudEnergy = Math.max(0, ground.reduce((sum, l) => sum + 10 ** (loudLevel(l.loud_lden, l.lden) / 10), 0)
     - shown.reduce((sum, e) => sum + (e.contributor ? 10 ** (e.loud / 10) : 0), 0))
     + hidden.reduce((sum, e) => sum + (e.layer ? 10 ** (e.loud / 10) : 0), 0)
-  if (levels.lden == null || levels.lden <= 0 || loudEnergy <= 0) return null
+  // Rare events left out may make no loud moments (no share) but still their Lden.
+  if (levels.lden == null || levels.lden <= 0) return null
   const shownContributors = shown.filter(e => e.contributor).length
   return {
     levels,

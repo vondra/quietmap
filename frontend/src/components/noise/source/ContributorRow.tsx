@@ -122,8 +122,9 @@ export function AircraftLayerRow({ layer, loudTotal, flights, onHighlightFlight 
   )
 }
 
-/** Everything the list does not name: the many farther pieces of road, track, building and plant.
- *  Together they make a steady sound, so their loud moments are their Lden. */
+/** Everything the list does not name: the sources cut from it and the many farther pieces of road,
+ *  track, building and plant. Its share is its loud moments: the cut sources' own, the farther
+ *  pieces' steady. */
 export function RestRow({ levels, loud, loudTotal, count }: {
   levels: PeriodLevels
   /** Its loud moments: its share of the list's is its row's. */
