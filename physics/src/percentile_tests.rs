@@ -146,7 +146,7 @@ fn a_line_without_emitters_is_silent() {
 
 /// Ten independent lines of lambda 1e-4 at equal energy are one line of 1e-3, a hundred one of
 /// 1e-2, and ten of 1e-5, sparser than the table, one of 1e-4: their sum, sampled line by line as
-/// the popup does, has the same normalised L10 and L5 within 0.11 dB (without the rare passes,
+/// the popup does, has the same normalised L10 and L5 within 0.17 dB (without the rare passes,
 /// +5.5 dB at L10 and -12.3 dB at L5; with lines below the table read as its first row, ten of
 /// 1e-5 were ten of 1e-4).
 #[test]
