@@ -18,8 +18,8 @@ use crate::release::{Release, RingFiles};
 use crate::scene::Ground;
 use crate::selection::{LayerSelection, select};
 use crate::update::{
-    CONTRIBUTORS_SHOWN, Statistics, Update, all_contributors, empty_answer, layer_answers,
-    ranked_contributors, set_unlisted,
+    CONTRIBUTORS_SHOWN, Statistics, Update, above_floor, all_contributors, empty_answer,
+    layer_answers, ranked_contributors, set_unlisted,
 };
 use physics::bands::PERIODS;
 use physics::bound::receiver_bound;
@@ -445,14 +445,13 @@ pub fn answer(
         let mut layers = layer_answers(&selections);
         let mut contributors: Vec<crate::update::Contributor>;
         if !last_ring {
-            // A partial list: the loudest by Lden, only they copied.
-            let ranked = ranked_contributors(all_contributors(&selections).collect(), |c| c.energy);
-            set_unlisted(&mut layers, &ranked, CONTRIBUTORS_SHOWN);
-            contributors = ranked
-                .into_iter()
-                .take(CONTRIBUTORS_SHOWN)
-                .cloned()
-                .collect();
+            // A partial list: the loudest by Lden above the floor, only they copied.
+            let (heard, quiet): (Vec<_>, Vec<_>) =
+                all_contributors(&selections).partition(|c| above_floor(c));
+            let ranked = ranked_contributors(heard, |c| c.energy);
+            let shown = ranked.len().min(CONTRIBUTORS_SHOWN);
+            set_unlisted(&mut layers, ranked[shown..].iter().copied().chain(quiet));
+            contributors = ranked[..shown].iter().map(|&c| c.clone()).collect();
         } else {
             contributors = all_contributors(&selections).cloned().collect();
             for contributor in &mut contributors {
@@ -468,9 +467,11 @@ pub fn answer(
             // The visitor's list ranks by the loud moments: every contributor ranked so, then cut,
             // so thirty brief events never push out the steady road that leads it; a brief event
             // cut from it stays brief in the last row.
-            contributors = ranked_contributors(contributors, |c| c.loud.unwrap_or(c.energy));
-            set_unlisted(&mut layers, &contributors, CONTRIBUTORS_SHOWN);
-            contributors.truncate(CONTRIBUTORS_SHOWN);
+            let (heard, quiet): (Vec<_>, Vec<_>) = contributors.into_iter().partition(above_floor);
+            contributors = ranked_contributors(heard, |c| c.loud.unwrap_or(c.energy));
+            let shown = contributors.len().min(CONTRIBUTORS_SHOWN);
+            set_unlisted(&mut layers, contributors[shown..].iter().chain(&quiet));
+            contributors.truncate(shown);
             let read: Vec<&RingFiles> = rings.iter().filter_map(OnceCell::get).collect();
             let keys: Vec<u64> = contributors.iter().map(|c| c.group_key).collect();
             let lines = whole_lines(&read, &frame, &keys, station.position, GROUND_REACH_M)?;

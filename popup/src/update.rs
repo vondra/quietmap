@@ -113,37 +113,38 @@ pub fn layer_answers(selections: &[LayerSelection]) -> Vec<LayerAnswer> {
         .collect()
 }
 
-/// Each ground layer's part not sent (all but the first `sent` of `ranked`, every contributor of
-/// the click): the pieces beyond its contributors, steady, and the contributors cut, at their loud
-/// moments where known (the final update's), else at their energy.
-pub fn set_unlisted<C: std::borrow::Borrow<Contributor>>(
+/// Whether the visitor's list may name a contributor: above 0 dB Lden (the popup's display floor;
+/// those below go to their layer's unlisted part).
+pub fn above_floor(contributor: &Contributor) -> bool {
+    lden_energy(&contributor.energy) > 1.0
+}
+
+/// Each ground layer's part the list leaves out: the `unlisted` contributors' energy and loud
+/// moments where known (the final update's), else their energy. Every evaluated piece is in a
+/// contributor, so nothing else is left.
+pub fn set_unlisted<'c>(
     layers: &mut [LayerAnswer],
-    ranked: &[C],
-    sent: usize,
+    unlisted: impl Iterator<Item = &'c Contributor>,
 ) {
     for layer in layers
         .iter_mut()
         .filter(|layer| layer.layer != Layer::Aircraft)
     {
-        let (mut all, mut cut, mut cut_loud) = ([0.0; PERIODS], [0.0; PERIODS], [0.0; PERIODS]);
-        for (rank, contributor) in ranked.iter().map(|c| c.borrow()).enumerate() {
-            if contributor.layer != layer.layer {
-                continue;
-            }
-            let loud = contributor.loud.unwrap_or(contributor.energy);
-            for p in 0..PERIODS {
-                all[p] += contributor.energy[p];
-                if rank >= sent {
-                    cut[p] += contributor.energy[p];
-                    cut_loud[p] += loud[p];
-                }
-            }
+        layer.unlisted = Some([[0.0; PERIODS]; 2]);
+    }
+    for contributor in unlisted {
+        let Some([energy, loud]) = layers
+            .iter_mut()
+            .find(|layer| layer.layer == contributor.layer)
+            .and_then(|layer| layer.unlisted.as_mut())
+        else {
+            continue;
+        };
+        let own = contributor.loud.unwrap_or(contributor.energy);
+        for p in 0..PERIODS {
+            energy[p] += contributor.energy[p];
+            loud[p] += own[p];
         }
-        let beyond: [f64; PERIODS] = std::array::from_fn(|p| (layer.energy[p] - all[p]).max(0.0));
-        layer.unlisted = Some([
-            std::array::from_fn(|p| beyond[p] + cut[p]),
-            std::array::from_fn(|p| beyond[p] + cut_loud[p]),
-        ]);
     }
 }
 

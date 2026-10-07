@@ -43,12 +43,11 @@ const LOUDNESS_TEXT = [
 export default function NoiseDetailContent({ data, maxSources, onHighlight, calculationOpen = false, onCalculationToggle, onFan }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.center
   const answered = data.total_lden != null && !data.partial
-  // The popup's 0 dB display floor, applied to this list the way the per-layer rows apply it; the
-  // list ranks what is heard by the loud moments each source makes by itself. The aircraft layer
-  // lists no contributors: the layer is one row, at its rank. What the list does not show is one
-  // last row, so the shares add up to the whole place.
-  const audible = data.top_contributors
-    .filter(c => c.source_type !== 'aircraft' && c.received_lden != null && c.received_lden > 0)
+  // The popup sends the contributors above its 0 dB display floor; the list ranks what is heard by
+  // the loud moments each source makes by itself. The aircraft layer lists no contributors: the
+  // layer is one row, at its rank. What the list does not show is one last row, so the shares add
+  // up to the whole place.
+  const audible = data.top_contributors.filter(c => c.source_type !== 'aircraft')
   const aircraft = data.sources.find(s => s.source_type === 'aircraft')
   const entries: ListEntry[] = [
     ...audible.map(c => ({ loud: loudLevel(c.loud_lden, c.received_lden), contributor: c })),
