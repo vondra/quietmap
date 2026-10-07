@@ -905,7 +905,7 @@ fn trees(roads: &[RoadRow], loads: &Loads) -> Vec<f32> {
             flow[parent as usize] += inflow;
         }
     }
-    let flows = roads
+    roads
         .iter()
         .zip(&flow)
         .map(|(row, &value)| {
@@ -915,8 +915,7 @@ fn trees(roads: &[RoadRow], loads: &Loads) -> Vec<f32> {
                 f32::NAN
             }
         })
-        .collect();
-    flows
+        .collect()
 }
 
 /// A total order on finite distances for the heap.
