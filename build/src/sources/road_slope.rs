@@ -156,8 +156,10 @@ pub fn row_slopes(
                             (to < total).then(|| ground(to)).flatten(),
                         ];
                         match ends {
-                            [Some(a), Some(b)] => Some(a + (b - a) * (along - from) / (to - from)),
-                            [Some(a), None] => Some(a),
+                            [Some(a), Some(b)] if to > from => {
+                                Some(a + (b - a) * (along - from) / (to - from))
+                            }
+                            [Some(a), _] => Some(a),
                             [None, Some(b)] => Some(b),
                             [None, None] => None,
                         }
