@@ -5,7 +5,9 @@
 //! `lambda = rho d` alone: the mean number of emitters within one distance of the closest point.
 //! A dense road (`lambda` of tens) hums; a car every half hour 4 m away (`lambda` of 1e-4) is
 //! silence but for its pass-by. The quantiles are tabulated once (a seeded simulation below
-//! `lambda` = 10, the normal limit above) and sampled by inverse transform.
+//! `lambda` = 10, the normal limit above) and sampled by inverse transform; above the table's last
+//! quantile a sparse line's loudest moments are its nearest emitter passing, in closed form, so the
+//! rare passes keep their energy (a line of `lambda` 1e-4 held a tenth of its mean without them).
 
 /// Tabulated `lambda` from 1e-4 upwards, [`STEPS_PER_DECADE`] a decade up to [`SIMULATED_LAMBDA_MAX`].
 pub const LAMBDA_MIN: f64 = 1e-4;
@@ -18,8 +20,8 @@ pub const QUANTILES: usize = 100;
 pub const ROWS: usize = 41;
 
 /// The tabulated quantiles (`percentile_table.rs`, written by the ignored test
-/// `writes_the_table`: 20,000 seeded samples a row over at least 200 distances of line each side,
-/// each value the shortest decimal that reads back as its `f32`).
+/// `writes_the_table`: 20,000 seeded samples a row, up to a million for sparse lines, over at least
+/// 200 distances of line each side, each value the shortest decimal that reads back as its `f32`).
 static TABLE: [[f32; QUANTILES]; ROWS] = include!("percentile_table.rs");
 
 /// A small deterministic generator (SplitMix64): the same click draws the same numbers.
@@ -88,31 +90,54 @@ fn normal_quantile(p: f64) -> f64 {
     }
 }
 
+/// The intensity, relative to its mean, of a sparse line's nearest emitter passing that is exceeded
+/// with probability `1 - p`: an emitter within `s` distances of the closest point, which happens
+/// with probability `1 - exp(-2 lambda s)`, gives `1 / (lambda pi (1 + s^2))` (the simulation's
+/// own law; its L10 emitter is 0.105 / (2 lambda) away).
+fn passing_intensity(lambda: f64, p: f64) -> f64 {
+    let s = -p.ln() / (2.0 * lambda);
+    1.0 / (lambda * std::f64::consts::PI * (1.0 + s * s))
+}
+
+/// The probability of quantile `k` of a table row.
+fn probability(k: usize) -> f64 {
+    (k as f64 + 0.5) / QUANTILES as f64
+}
+
 /// The intensity, relative to its mean, that a line source of `lambda` stays below with
-/// probability `p` (0 < p < 1); `lambda` infinite is a steady source (always 1).
+/// probability `p` (0 < p < 1); `lambda` infinite is a steady source (always 1). Between quantiles
+/// the log intensity is linear in the log of `1 - p` (a sparse line's upper quantiles fall as a
+/// power of it: interpolated linearly, lambda 1e-4's 0.99 quantile read 3.6 times too high); above
+/// the last one the table goes on as its nearest emitter's passing.
 pub fn relative_intensity(lambda: f64, p: f64) -> f64 {
-    let p = p.clamp(0.5 / QUANTILES as f64, 1.0 - 0.5 / QUANTILES as f64);
     if !lambda.is_finite() {
         return 1.0;
     }
+    let (bottom, top) = (probability(0), probability(QUANTILES - 1));
     if lambda >= SIMULATED_LAMBDA_MAX {
         let deviation = 1.0 / (2.0 * std::f64::consts::PI * lambda).sqrt();
-        return (1.0 + deviation * normal_quantile(p)).max(0.0);
+        return (1.0 + deviation * normal_quantile(p.clamp(bottom, top))).max(0.0);
     }
-    let position = ((lambda.max(LAMBDA_MIN) / LAMBDA_MIN).log10() * STEPS_PER_DECADE)
-        .clamp(0.0, (ROWS - 1) as f64);
+    let lambda = lambda.max(LAMBDA_MIN);
+    if p > top {
+        return relative_intensity(lambda, top) * passing_intensity(lambda, p)
+            / passing_intensity(lambda, top);
+    }
+    let p = p.max(bottom);
+    let position = ((lambda / LAMBDA_MIN).log10() * STEPS_PER_DECADE).clamp(0.0, (ROWS - 1) as f64);
     let (row, fraction) = (position.floor() as usize, position.fract());
-    let quantile = |values: &[f32; QUANTILES]| {
-        let at = (p * QUANTILES as f64 - 0.5).clamp(0.0, (QUANTILES - 1) as f64);
-        let (k, t) = (at.floor() as usize, at.fract());
+    let k = ((p * QUANTILES as f64 - 0.5).floor() as usize).min(QUANTILES - 2);
+    let t = ((1.0 - p).ln() - (1.0 - probability(k)).ln())
+        / ((1.0 - probability(k + 1)).ln() - (1.0 - probability(k)).ln());
+    let log_quantile = |values: &[f32; QUANTILES]| {
         let (here, next) = (
-            f64::from(values[k]),
-            f64::from(values[(k + 1).min(QUANTILES - 1)]),
+            f64::from(values[k]).max(1e-30).ln(),
+            f64::from(values[k + 1]).max(1e-30).ln(),
         );
         here + t * (next - here)
     };
-    let low = quantile(&TABLE[row]).max(1e-30).ln();
-    let high = quantile(&TABLE[(row + 1).min(ROWS - 1)]).max(1e-30).ln();
+    let low = log_quantile(&TABLE[row]);
+    let high = log_quantile(&TABLE[(row + 1).min(ROWS - 1)]);
     // Interpolated in log intensity between the rows.
     (low + fraction * (high - low)).exp()
 }
