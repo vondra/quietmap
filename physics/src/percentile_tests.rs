@@ -108,28 +108,31 @@ fn sparse_lines_are_quiet_most_of_the_time_and_dense_ones_hum() {
     }
 }
 
-/// The sampled intensity keeps its mean, 1, for every line however sparse: the rare passes above
-/// the table's last quantile carry most of a sparse line's energy.
+/// The sampled intensity keeps its mean, 1, within 5 % for every line however sparse, at every
+/// row of the table and halfway between (0.953-1.025): the rare passes above the table's last
+/// quantile carry most of a sparse line's energy.
 #[test]
 fn every_line_keeps_its_mean() {
-    for lambda in [1e-5, 1e-4, 1e-3, 1e-2, 0.1, 1.0, 9.0] {
-        // Midpoints of 100,000 equal steps of probability, and of a million in the last one (in
+    let between_rows = (0..=2 * ROWS - 2)
+        .map(|half_row| LAMBDA_MIN * 10f64.powf(half_row as f64 / 2.0 / STEPS_PER_DECADE));
+    for lambda in [1e-6, 1e-5].into_iter().chain(between_rows) {
+        // Midpoints of 20,000 equal steps of probability, and of 200,000 in the last one (in
         // place of its midpoint).
-        let body: f64 = (0..100_000)
-            .map(|k| relative_intensity(lambda, (k as f64 + 0.5) / 100_000.0))
+        let body: f64 = (0..20_000)
+            .map(|k| relative_intensity(lambda, (k as f64 + 0.5) / 20_000.0))
             .sum::<f64>()
-            / 100_000.0;
-        let last = 1.0 - 1.0 / 100_000.0;
-        let tail: f64 = (0..1_000_000)
+            / 20_000.0;
+        let last = 1.0 - 1.0 / 20_000.0;
+        let tail: f64 = (0..200_000)
             .map(|k| {
-                let p = last + (k as f64 + 0.5) / 1_000_000.0 / 100_000.0;
-                relative_intensity(lambda, p) - relative_intensity(lambda, last + 0.5 / 100_000.0)
+                let p = last + (k as f64 + 0.5) / 200_000.0 / 20_000.0;
+                relative_intensity(lambda, p) - relative_intensity(lambda, last + 0.5 / 20_000.0)
             })
             .sum::<f64>()
-            / 1_000_000.0
-            / 100_000.0;
+            / 200_000.0
+            / 20_000.0;
         let mean = body + tail;
-        assert!((mean - 1.0).abs() < 0.1, "lambda {lambda}: mean {mean}");
+        assert!((mean - 1.0).abs() < 0.05, "lambda {lambda}: mean {mean}");
     }
 }
 

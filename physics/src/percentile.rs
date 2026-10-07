@@ -108,7 +108,9 @@ fn probability(k: usize) -> f64 {
 /// probability `p` (0 < p < 1); `lambda` infinite is a steady source (always 1). Between quantiles
 /// the log intensity is linear in the log of `1 - p` (a sparse line's upper quantiles fall as a
 /// power of it: interpolated linearly, lambda 1e-4's 0.99 quantile read 3.6 times too high); above
-/// the last one the table goes on as its nearest emitter's passing.
+/// the last one the table goes on as its nearest emitter's passing over the others held at the
+/// last quantile (added, so that the noise of the simulated last quantile stays in its own 0.5 %
+/// of the time: scaled with it, it moved lambda 7.5e-4's mean 10 %).
 pub fn relative_intensity(lambda: f64, p: f64) -> f64 {
     if !lambda.is_finite() {
         return 1.0;
@@ -119,8 +121,8 @@ pub fn relative_intensity(lambda: f64, p: f64) -> f64 {
         return (1.0 + deviation * normal_quantile(p.clamp(bottom, top))).max(0.0);
     }
     if p > top {
-        return relative_intensity(lambda, top) * passing_intensity(lambda, p)
-            / passing_intensity(lambda, top);
+        return relative_intensity(lambda, top) + passing_intensity(lambda, p)
+            - passing_intensity(lambda, top);
     }
     // Sparser than the table, a line's nearest emitters lie about 1 / lambda distances away and
     // its intensity, relative to its mean, is in proportion to lambda below the last quantile.
