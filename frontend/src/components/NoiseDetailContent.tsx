@@ -43,18 +43,23 @@ const LOUDNESS_TEXT = [
 export default function NoiseDetailContent({ data, maxSources, onHighlight, calculationOpen = false, onCalculationToggle, onFan }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.center
   const answered = data.total_lden != null && !data.partial
-  // The popup sends the contributors above its 0 dB display floor; the list ranks what is heard by
-  // the loud moments each source makes by itself. The aircraft layer lists no contributors: the
-  // layer is one row, at its rank. What the list does not show is one last row, so the shares add
-  // up to the whole place.
-  const audible = data.top_contributors.filter(c => c.source_type !== 'aircraft')
+  // The popup sends the ground contributors above its 0 dB display floor; the list ranks what is
+  // heard by the loud moments each source makes by itself. The aircraft layer is one row, at its
+  // rank, from 0 dB up. What the list does not show is one last row, so the shares add up to the
+  // whole place.
   const aircraft = data.sources.find(s => s.source_type === 'aircraft')
+  const aircraftEntry = aircraft && aircraft.lden != null
+    ? [{ loud: loudLevel(aircraft.loud_lden, aircraft.lden), layer: aircraft }]
+    : []
   const entries: ListEntry[] = [
-    ...audible.map(c => ({ loud: loudLevel(c.loud_lden, c.received_lden), contributor: c })),
-    ...(aircraft && (aircraft.lden ?? 0) > 0 ? [{ loud: loudLevel(aircraft.loud_lden, aircraft.lden), layer: aircraft }] : []),
+    ...data.top_contributors.map(c => ({ loud: loudLevel(c.loud_lden, c.received_lden), contributor: c })),
+    ...aircraftEntry.filter(e => (e.layer.lden ?? 0) > 0),
   ].sort((a, b) => b.loud - a.loud)
   const shownEntries = maxSources ? entries.slice(0, maxSources) : entries
-  const rest = restOf(data.sources, entries.slice(shownEntries.length), shownEntries)
+  const rest = restOf(data.sources, [
+    ...entries.slice(shownEntries.length),
+    ...aircraftEntry.filter(e => (e.layer.lden ?? 0) <= 0),
+  ])
   const loudTotal = 10 * Math.log10([...shownEntries.map(e => e.loud), ...(rest ? [rest.loud] : [])]
     .reduce((sum, level) => sum + 10 ** (level / 10), 0) || 1)
   const shown = shownEntries.map(e => e.contributor
@@ -67,7 +72,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
       />
     )
     : <AircraftLayerRow key="aircraft" layer={e.layer!} loudTotal={loudTotal} flights={data.top_flights} onHighlightFlight={onHighlight} />)
-  if (rest) shown.push(<RestRow key="rest" levels={rest.levels} loud={rest.loud} loudTotal={loudTotal} count={rest.count} />)
+  if (rest) shown.push(<RestRow key="rest" levels={rest.levels} loud={rest.loud} loudTotal={loudTotal} />)
   const totalLdenText = txtTable([
     ...data.sources
       .filter(s => s.lden != null && s.lden > 0)
@@ -197,14 +202,10 @@ interface ListEntry {
 
 const PERIOD_KEYS = ['ld', 'le', 'ln', 'lden'] as const
 
-/** Everything the list does not show: the rows past its length, and what the popup leaves out of
- *  each ground layer (its contributors cut from the list, a brief event staying brief, and the many
- *  farther pieces, steady). Null when nothing is left. */
-function restOf(layers: LayerLevels[], hidden: ListEntry[], shown: ListEntry[]): {
-  levels: PeriodLevels
-  loud: number
-  count: number
-} | null {
+/** Everything the list does not show: the rows past its length (the aircraft layer among them when
+ *  under 0 dB) and what the popup leaves out of each ground layer (its contributors cut from the
+ *  thirty or under 0 dB, a brief event staying brief). Null when it has no energy. */
+function restOf(layers: LayerLevels[], hidden: ListEntry[]): { levels: PeriodLevels, loud: number } | null {
   const energy = (level: number | null | undefined) => (level == null ? 0 : 10 ** (level / 10))
   const ground = layers.filter(l => l.source_type !== 'aircraft')
   const levels = Object.fromEntries(PERIOD_KEYS.map(key => {
@@ -212,13 +213,8 @@ function restOf(layers: LayerLevels[], hidden: ListEntry[], shown: ListEntry[]):
       + hidden.reduce((sum, e) => sum + energy(e.contributor ? e.contributor.received[key] : e.layer?.[key]), 0)
     return [key, total > 0 ? 10 * Math.log10(total) : null]
   })) as unknown as PeriodLevels
-  if (levels.lden == null || levels.lden <= 0) return null
+  if (levels.lden == null) return null
   const loudEnergy = ground.reduce((sum, l) => sum + energy(l.unlisted?.loud_lden), 0)
     + hidden.reduce((sum, e) => sum + 10 ** (e.loud / 10), 0)
-  const shownContributors = shown.filter(e => e.contributor).length
-  return {
-    levels,
-    loud: 10 * Math.log10(loudEnergy),
-    count: ground.reduce((sum, l) => sum + l.candidates, 0) - shownContributors,
-  }
+  return { levels, loud: 10 * Math.log10(loudEnergy) }
 }

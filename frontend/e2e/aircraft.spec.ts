@@ -1,9 +1,8 @@
 // The aircraft layer of the popup in a real browser, without a backend: a loudest flight's track on
-// the map while its row is hovered (tapped on a phone), redrawn by every streamed update, and airport
-// ground operations as rows of their own.
+// the map while its row is hovered (tapped on a phone), redrawn by every streamed update.
 import { expect, test, type Page } from '@playwright/test'
 import type { TrackPiece } from '../src/types/noise'
-import { FIXTURE_FLIGHTS, airportContributor, popupUpdate, withAircraft } from './answers'
+import { FIXTURE_FLIGHTS, popupUpdate, withAircraft } from './answers'
 import {
   PHONE,
   POINT,
@@ -82,30 +81,6 @@ test('desktop: a hovered flight draws its track on the map, redrawn by every str
   await sendPopupLine(page, withAircraft(popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS))
   await expect(popup.getByTestId('noise-badge')).toBeVisible()
   await expect.poll(() => trackDrawnAt(page, [AIRBUS_EAST, HELICOPTER_MIDDLE])).toEqual([false, false])
-})
-
-test('desktop: airport ground operations read as their airport and its traffic', async ({ page }) => {
-  await installHermeticMap(page, POINT)
-  await page.goto(mapUrl(POINT))
-  const { x, y } = await canvasCenter(page)
-  await page.mouse.click(x, y)
-  await expect.poll(() => popupRequests(page)).toHaveLength(1)
-  const update = withAircraft(popupUpdate(1, false, POINT.lat, POINT.lng, SOURCE_DB), FIXTURE_FLIGHTS)
-  await sendPopupLine(page, { ...update, top_contributors: [...update.top_contributors, airportContributor(52)] })
-  // A row of its own beside the Aircraft layer's row, whose level includes it.
-  const popup = page.locator('[data-testid="detail-popup"]:visible')
-  await expect(popup.getByRole('button')).toHaveText([/^Fixture street/, /^Aircraft/, /^LKPR ground operations/, /^Detailed calc/])
-  const airport = popup.getByRole('button', { name: /^LKPR ground operations/ })
-  await airport.click()
-  // Its class in words, then its fields by name: the subtype is the class, not a line of its own.
-  await expect(airport.locator('xpath=following-sibling::div[1]').locator(':scope > div')).toHaveText([
-    'Airport ground operations',
-    /^airport\s*Letiště Václava Havla Praha$/,
-    /^arrivals per day\s*180\.4$/,
-    /^departures per day\s*181\.2$/,
-    /^ground vehicles per day\s*36\.5$/,
-    /^Day\/Evening\/Night/,
-  ])
 })
 
 test.describe('mobile', () => {

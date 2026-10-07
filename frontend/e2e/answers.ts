@@ -25,23 +25,6 @@ export function roadContributor(db: number): Contributor {
   }
 }
 
-/** Prague airport's ground operations at `db`: a contributor of the aircraft layer. */
-export function airportContributor(db: number): Contributor {
-  return {
-    id: '00000000000000bb',
-    source_type: 'aircraft',
-    name: 'LKPR ground operations',
-    subtype: 'airport_traffic:LKPR',
-    distance_m: 2400,
-    received_lden: db,
-    received: { ld: db - 1, le: db - 2, ln: db - 7, lden: db },
-    metadata: {
-      name: 'LKPR ground operations', subtype: 'airport_traffic:LKPR', airport: 'Letiště Václava Havla Praha',
-      arrivals_per_day: 180.4, departures_per_day: 181.2, ground_vehicles_per_day: 36.5,
-    },
-  }
-}
-
 /** One streamed update of the popup contract. */
 export function popupUpdate(
   seq: number,

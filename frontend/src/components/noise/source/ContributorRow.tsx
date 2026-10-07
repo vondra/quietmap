@@ -122,22 +122,19 @@ export function AircraftLayerRow({ layer, loudTotal, flights, onHighlightFlight 
   )
 }
 
-/** Everything the list does not name: the sources cut from it and the many farther pieces of road,
- *  track, building and plant. Its share is its loud moments: the cut sources' own, the farther
- *  pieces' steady. */
-export function RestRow({ levels, loud, loudTotal, count }: {
+/** Everything the list does not name: the sources cut from it or under 0 dB. Its share is their
+ *  loud moments. */
+export function RestRow({ levels, loud, loudTotal }: {
   levels: PeriodLevels
   /** Its loud moments: its share of the list's is its row's. */
   loud: number
   loudTotal: number
-  /** How many pieces it sums. */
-  count: number
 }) {
   return (
     <SourceRow
       label="Everything else"
       distance=""
-      heard={`${count.toLocaleString('en')} more`}
+      heard={null}
       received={levels}
       loud={loud}
       loudTotal={loudTotal}
