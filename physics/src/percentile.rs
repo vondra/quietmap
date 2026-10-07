@@ -115,6 +115,10 @@ pub fn relative_intensity(lambda: f64, p: f64) -> f64 {
     if !lambda.is_finite() {
         return 1.0;
     }
+    // No emitters (a count rounded to none): its rare passes lie beyond any draw.
+    if lambda <= 0.0 {
+        return 0.0;
+    }
     let (bottom, top) = (probability(0), probability(QUANTILES - 1));
     if lambda >= SIMULATED_LAMBDA_MAX {
         let deviation = 1.0 / (2.0 * std::f64::consts::PI * lambda).sqrt();

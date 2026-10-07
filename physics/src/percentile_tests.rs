@@ -136,6 +136,14 @@ fn every_line_keeps_its_mean() {
     }
 }
 
+/// A line without emitters (its count rounded to none) is silent, never NaN.
+#[test]
+fn a_line_without_emitters_is_silent() {
+    for p in [0.001, 0.5, 0.995, 0.9999] {
+        assert_eq!(relative_intensity(0.0, p), 0.0);
+    }
+}
+
 /// Ten independent lines of lambda 1e-4 at equal energy are one line of 1e-3, a hundred one of
 /// 1e-2, and ten of 1e-5, sparser than the table, one of 1e-4: their sum, sampled line by line as
 /// the popup does, has the same normalised L10 and L5 within 0.11 dB (without the rare passes,
