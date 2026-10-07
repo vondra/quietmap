@@ -508,6 +508,36 @@ impl<'a> Columns<'a> {
 /// Converts the road rows of one dev4 square, or with `reach` only those reaching into another
 /// square, the guessed traffic replaced by the building traffic under `traffic` when given and
 /// the buses of `bus` added to it; returns how many rows emit.
+/// Every row's slope from its whole way, whichever batches the way's rows are in.
+fn way_slopes(table: &crate::dev4::Table, heights: &SquareHeights) -> Result<Vec<f64>, String> {
+    let mut ways: std::collections::HashMap<i64, Vec<WayRow>> = std::collections::HashMap::new();
+    let mut first_row = 0;
+    for batch in &table.batches {
+        let c = Columns { batch };
+        let i32s = |name| c.get(name).map(|a| a.as_primitive::<Int32Type>());
+        let (start_x, start_y, end_x, end_y) = (
+            i32s("start_gx")?,
+            i32s("start_gy")?,
+            i32s("end_gx")?,
+            i32s("end_gy")?,
+        );
+        let osm_id = c.get("osm_id")?.as_primitive::<Int64Type>();
+        let segment_index = c.get("segment_idx")?.as_primitive::<Int16Type>();
+        let (tunnel, bridge) = (c.get("tunnel")?.as_boolean(), c.get("bridge")?.as_boolean());
+        for row in 0..batch.num_rows() {
+            ways.entry(osm_id.value(row)).or_default().push(WayRow {
+                row: first_row + row,
+                segment_index: segment_index.value(row),
+                start: z30_corner_degrees(start_x.value(row), start_y.value(row)),
+                end: z30_corner_degrees(end_x.value(row), end_y.value(row)),
+                off_ground: bridge.value(row) || tunnel.value(row),
+            });
+        }
+        first_row += batch.num_rows();
+    }
+    Ok(row_slopes(ways, heights, first_row))
+}
+
 pub fn convert(
     (dev4, temperature, traffic, bus): (
         &Dev4,
@@ -574,6 +604,7 @@ pub fn convert(
     };
     let motorcycles = local_motorcycles(&table)?;
     let copies = copied_counts(&table)?;
+    let slopes = way_slopes(&table, &heights)?;
     let mut emitting = 0;
     let mut first_row = 0;
     for batch in &table.batches {
@@ -617,7 +648,6 @@ pub fn convert(
             c.get("ref")?.as_string::<i32>(),
         );
         let osm_id = c.get("osm_id")?.as_primitive::<Int64Type>();
-        let segment_index = c.get("segment_idx")?.as_primitive::<Int16Type>();
         let within: Vec<bool> = (0..batch.num_rows())
             .map(|row| {
                 reach.is_none_or(|reach| {
@@ -628,29 +658,13 @@ pub fn convert(
                 })
             })
             .collect();
-        // A row's slope reads its whole way: the ways of the rows within.
-        let wanted: std::collections::HashSet<i64> = (0..batch.num_rows())
-            .filter(|&row| within[row])
-            .map(|row| osm_id.value(row))
-            .collect();
-        let mut ways: std::collections::HashMap<i64, Vec<WayRow>> =
-            std::collections::HashMap::new();
-        for row in (0..batch.num_rows()).filter(|&row| wanted.contains(&osm_id.value(row))) {
-            ways.entry(osm_id.value(row)).or_default().push(WayRow {
-                row,
-                segment_index: segment_index.value(row),
-                start: z30_corner_degrees(start_x.value(row), start_y.value(row)),
-                end: z30_corner_degrees(end_x.value(row), end_y.value(row)),
-                bridge: bridge.value(row),
-            });
-        }
-        let slopes = row_slopes(ways, &heights, batch.num_rows());
         let country = c.get("country_iso")?.as_primitive::<UInt16Type>();
         let source_id = c.get("source_id")?.as_primitive::<UInt16Type>();
-        for (row, &slope) in slopes.iter().enumerate() {
+        for row in 0..batch.num_rows() {
             if !within[row] {
                 continue;
             }
+            let slope = slopes[batch_first_row + row];
             let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
             let prior: [f64; 4] = std::array::from_fn(|category| aadt[category].value(row));
             let row_guessed = guessed(source_id.value(row), estimated.value(row))

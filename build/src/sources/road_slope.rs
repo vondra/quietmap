@@ -1,7 +1,9 @@
 //! Road slopes from the bare earth, for the CNOSSOS-EU gradient correction (2.2.4): each row's
 //! slope along its way over [`WINDOW_HALF_M`] either side of its middle, the heights read from the
 //! square's one-arc-second terrain at the window's ends (a shorter window reads the lattice's 31 m
-//! steps as slopes). Bridges read level: the terrain under a deck is the valley.
+//! steps as slopes). A bridge or a tunnel is not on the terrain (under a deck is the valley, over a
+//! tunnel the hill): the road runs straight between the ground at its two ends, and its own rows
+//! read level.
 
 use super::metres;
 use crate::dev4::{Dev4, Square, z9_raster_window};
@@ -70,14 +72,15 @@ impl SquareHeights {
     }
 }
 
-/// One row of a way: its order on the way, its ends (latitude, longitude) and whether it bridges.
+/// One row of a way: its order on the way, its ends (latitude, longitude) and whether it is a
+/// bridge or a tunnel.
 #[derive(Debug, Clone, Copy)]
 pub struct WayRow {
     pub row: usize,
     pub segment_index: i16,
     pub start: (f64, f64),
     pub end: (f64, f64),
-    pub bridge: bool,
+    pub off_ground: bool,
 }
 
 /// The place `along_m` metres along a chain of `places` with cumulative `distances`.
@@ -95,8 +98,8 @@ fn place_along(places: &[(f64, f64)], distances: &[f64], along_m: f64) -> (f64, 
     (a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1))
 }
 
-/// Every row's slope (%, positive when climbing from its start to its end; 0 on bridges, short
-/// ways and where the terrain is missing), from the rows of each way.
+/// Every row's slope (%, positive when climbing from its start to its end; 0 on bridges, tunnels,
+/// short ways and where the terrain is missing), from the rows of each way.
 pub fn row_slopes(
     ways: HashMap<i64, Vec<WayRow>>,
     heights: &SquareHeights,
@@ -125,8 +128,41 @@ pub fn row_slopes(
                 distances.push(distances[distances.len() - 1] + metres(pair[0], pair[1]));
             }
             let total = distances[distances.len() - 1];
+            // The spans of the chain off the ground (bridges and tunnels), from and to (m).
+            let mut spans: Vec<(f64, f64)> = Vec::new();
             for (k, row) in chain.iter().enumerate() {
-                if row.bridge {
+                if !row.off_ground {
+                    continue;
+                }
+                match spans.last_mut() {
+                    Some(span) if span.1 == distances[k] => span.1 = distances[k + 1],
+                    _ => spans.push((distances[k], distances[k + 1])),
+                }
+            }
+            let ground = |along: f64| {
+                let (lat, lon) = place_along(&places, &distances, along);
+                heights.at(lat, lon)
+            };
+            // The road's height: the terrain, or across a span the line between the ground at its
+            // ends (one end alone where the chain starts or ends off the ground).
+            let height =
+                |along: f64| match spans.iter().find(|span| span.0 < along && along < span.1) {
+                    None => ground(along),
+                    Some(&(from, to)) => {
+                        let ends = [
+                            (from > 0.0).then(|| ground(from)).flatten(),
+                            (to < total).then(|| ground(to)).flatten(),
+                        ];
+                        match ends {
+                            [Some(a), Some(b)] => Some(a + (b - a) * (along - from) / (to - from)),
+                            [Some(a), None] => Some(a),
+                            [None, Some(b)] => Some(b),
+                            [None, None] => None,
+                        }
+                    }
+                };
+            for (k, row) in chain.iter().enumerate() {
+                if row.off_ground {
                     continue;
                 }
                 let middle = 0.5 * (distances[k] + distances[k + 1]);
@@ -137,10 +173,6 @@ pub fn row_slopes(
                 if to - from < WINDOW_MIN_M {
                     continue;
                 }
-                let height = |along: f64| {
-                    let (lat, lon) = place_along(&places, &distances, along);
-                    heights.at(lat, lon)
-                };
                 if let (Some(low), Some(high)) = (height(from), height(to)) {
                     slopes[row.row] = 100.0 * (high - low) / (to - from);
                 }
@@ -178,12 +210,12 @@ mod tests {
         let lat = 55.0 + 50.0 / 3600.0;
         let lon = |node: f64| 10.0 + node / 3600.0;
         let node_m = metres((lat, lon(0.0)), (lat, lon(1.0)));
-        let row = |row: usize, index: i16, from: f64, to: f64, bridge: bool| WayRow {
+        let row = |row: usize, index: i16, from: f64, to: f64, off_ground: bool| WayRow {
             row,
             segment_index: index,
             start: (lat, lon(from)),
             end: (lat, lon(to)),
-            bridge,
+            off_ground,
         };
         let mut ways = HashMap::new();
         ways.insert(
@@ -203,5 +235,50 @@ mod tests {
         assert!((slopes[2] + expected).abs() < 1e-6 * expected);
         assert_eq!(slopes[3], 0.0);
         assert_eq!(slopes[4], 0.0);
+    }
+
+    /// A flat road crossing a 50 m deep valley on a bridge: the rows that run up to the bridge
+    /// read the road's line across it, level, not the valley beneath the deck (-40 %).
+    #[test]
+    fn a_bridge_approach_reads_the_road_not_the_valley() {
+        let window = Window {
+            north_node: 55 * 3600 + 100,
+            west_node: 10 * 3600,
+            rows: 200,
+            columns: 200,
+        };
+        let mut dem = Vec::new();
+        for _row in 0..200 {
+            for column in 0..200u32 {
+                let height: f64 = if (45..=55).contains(&column) {
+                    250.0
+                } else {
+                    300.0
+                };
+                let code = ((height + 500.0) * 5.0).round() as u16;
+                dem.extend_from_slice(&code.to_le_bytes());
+            }
+        }
+        let heights = SquareHeights { window, dem };
+        let lat = 55.0 + 50.0 / 3600.0;
+        let lon = |node: f64| 10.0 + node / 3600.0;
+        let row = |row: usize, index: i16, from: f64, to: f64, off_ground: bool| WayRow {
+            row,
+            segment_index: index,
+            start: (lat, lon(from)),
+            end: (lat, lon(to)),
+            off_ground,
+        };
+        let mut ways = HashMap::new();
+        ways.insert(
+            1,
+            vec![
+                row(0, 0, 40.0, 44.0, false),
+                row(1, 1, 44.0, 56.0, true),
+                row(2, 2, 56.0, 60.0, false),
+            ],
+        );
+        let slopes = row_slopes(ways, &heights, 3);
+        assert!(slopes.iter().all(|slope| slope.abs() < 1e-9), "{slopes:?}");
     }
 }
