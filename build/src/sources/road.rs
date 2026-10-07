@@ -505,12 +505,15 @@ impl<'a> Columns<'a> {
     }
 }
 
-/// Converts the road rows of one dev4 square, or with `reach` only those reaching into another
-/// square, the guessed traffic replaced by the building traffic under `traffic` when given and
-/// the buses of `bus` added to it; returns how many rows emit.
-/// Every row's slope from its whole way, whichever batches the way's rows are in.
-fn way_slopes(table: &crate::dev4::Table, heights: &SquareHeights) -> Result<Vec<f64>, String> {
+/// Every row's slope from its whole way, whichever batches the way's rows are in; with `reach`
+/// only the ways with a row reaching into it (no other row is converted).
+fn way_slopes(
+    table: &crate::dev4::Table,
+    heights: &SquareHeights,
+    reach: Option<Reach>,
+) -> Result<Vec<f64>, String> {
     let mut ways: std::collections::HashMap<i64, Vec<WayRow>> = std::collections::HashMap::new();
+    let mut wanted = std::collections::HashSet::new();
     let mut first_row = 0;
     for batch in &table.batches {
         let c = Columns { batch };
@@ -525,19 +528,32 @@ fn way_slopes(table: &crate::dev4::Table, heights: &SquareHeights) -> Result<Vec
         let segment_index = c.get("segment_idx")?.as_primitive::<Int16Type>();
         let (tunnel, bridge) = (c.get("tunnel")?.as_boolean(), c.get("bridge")?.as_boolean());
         for row in 0..batch.num_rows() {
+            let (start, end) = (
+                (start_x.value(row), start_y.value(row)),
+                (end_x.value(row), end_y.value(row)),
+            );
+            if reach.is_none_or(|reach| {
+                reach.touches(z30_to_global(start.0, start.1), z30_to_global(end.0, end.1))
+            }) {
+                wanted.insert(osm_id.value(row));
+            }
             ways.entry(osm_id.value(row)).or_default().push(WayRow {
                 row: first_row + row,
                 segment_index: segment_index.value(row),
-                start: z30_corner_degrees(start_x.value(row), start_y.value(row)),
-                end: z30_corner_degrees(end_x.value(row), end_y.value(row)),
+                start: z30_corner_degrees(start.0, start.1),
+                end: z30_corner_degrees(end.0, end.1),
                 off_ground: bridge.value(row) || tunnel.value(row),
             });
         }
         first_row += batch.num_rows();
     }
+    ways.retain(|way, _| wanted.contains(way));
     Ok(row_slopes(ways, heights, first_row))
 }
 
+/// Converts the road rows of one dev4 square, or with `reach` only those reaching into another
+/// square, the guessed traffic replaced by the building traffic under `traffic` when given and
+/// the buses of `bus` added to it; returns how many rows emit.
 pub fn convert(
     (dev4, temperature, traffic, bus): (
         &Dev4,
@@ -604,7 +620,7 @@ pub fn convert(
     };
     let motorcycles = local_motorcycles(&table)?;
     let copies = copied_counts(&table)?;
-    let slopes = way_slopes(&table, &heights)?;
+    let slopes = way_slopes(&table, &heights, reach)?;
     let mut emitting = 0;
     let mut first_row = 0;
     for batch in &table.batches {

@@ -143,10 +143,12 @@ pub fn row_slopes(
                 let (lat, lon) = place_along(&places, &distances, along);
                 heights.at(lat, lon)
             };
-            // The road's height: the terrain, or across a span the line between the ground at its
-            // ends (one end alone where the chain starts or ends off the ground).
+            // The road's height: the terrain, or across a span (its ends included: where the chain
+            // ends off the ground, the ground there is under the deck or over the tunnel) the line
+            // between the ground at its ends (one end alone where the chain starts or ends off the
+            // ground).
             let height =
-                |along: f64| match spans.iter().find(|span| span.0 < along && along < span.1) {
+                |along: f64| match spans.iter().find(|span| span.0 <= along && along <= span.1) {
                     None => ground(along),
                     Some(&(from, to)) => {
                         let ends = [
@@ -238,7 +240,8 @@ mod tests {
     }
 
     /// A flat road crossing a 50 m deep valley on a bridge: the rows that run up to the bridge
-    /// read the road's line across it, level, not the valley beneath the deck (-40 %).
+    /// read the road's line across it, level, not the valley beneath the deck (-40 %); so does a
+    /// way that ends on the bridge, its window reaching the deck's end (-141 %).
     #[test]
     fn a_bridge_approach_reads_the_road_not_the_valley() {
         let window = Window {
@@ -278,7 +281,11 @@ mod tests {
                 row(2, 2, 56.0, 60.0, false),
             ],
         );
-        let slopes = row_slopes(ways, &heights, 3);
+        ways.insert(
+            2,
+            vec![row(3, 0, 43.0, 44.0, false), row(4, 1, 44.0, 45.0, true)],
+        );
+        let slopes = row_slopes(ways, &heights, 5);
         assert!(slopes.iter().all(|slope| slope.abs() < 1e-9), "{slopes:?}");
     }
 }
