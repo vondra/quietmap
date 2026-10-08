@@ -169,18 +169,3 @@ export function aircraftKindShares(kinds: Partial<Record<AircraftKind, number>>)
     .sort((a, b) => b[1] - a[1])
     .map(([kind, share]) => [AIRCRAFT_KIND_LABELS[kind] ?? kind, share])
 }
-
-/** The kinds in a word or two, for the row's narrow column. */
-const AIRCRAFT_KIND_WORDS: Record<AircraftKind, string> = {
-  airliners: 'airliners',
-  regional_business_jets: 'smaller jets',
-  propeller: 'propeller',
-  helicopters: 'helicopters',
-  ground: 'airport ground',
-}
-
-/** What the aircraft layer mostly is, for its row: its largest kind; none before the final update. */
-export function aircraftMakeup(kinds: Partial<Record<AircraftKind, number>> | undefined): string | null {
-  const largest = (Object.entries(kinds ?? {}) as [AircraftKind, number][]).sort((a, b) => b[1] - a[1])[0]
-  return largest ? AIRCRAFT_KIND_WORDS[largest[0]] ?? largest[0] : null
-}

@@ -1,9 +1,10 @@
 // The expanded body of a source row: a contributor's class, its layer's display fields and its
 // level by day, evening and night; the aircraft layer's levels and its loudest flights.
+import { Fragment } from 'react'
 import type { AircraftKind, Contributor, PeriodLevels, TopFlight } from '../../../types/noise'
 import { fmtDbValue } from '../../../utils/formatters'
 import { aircraftKindShares, contributorClass, labelNamesClass, subtypeLabel } from '../labels'
-import { lineRow, PERIOD_LABELS_DETAIL } from '../shared'
+import { PERIOD_LABELS_DETAIL } from '../shared'
 import { HoverText } from '../../ui/info-tip'
 import { MetadataRows } from './MetadataRows'
 import { TopFlightsTable } from './TopFlightsTable'
@@ -15,10 +16,17 @@ const PERIODS_TOOLTIP =
 
 const DETAIL_CLASS = 'mt-1 ml-2 mr-4 mb-1 text-[11px] leading-relaxed font-mono text-muted-foreground'
 
+/** The level by day, evening and night, each period's value under its name, the columns right-aligned. */
 function PeriodLevelsLine({ received }: { received: PeriodLevels }) {
-  return lineRow(
-    <HoverText title={PERIODS_TOOLTIP}>Day/Evening/Night</HoverText>,
-    `${fmtDbValue(received.ld)}/${fmtDbValue(received.le)}/${fmtDbValue(received.ln)} dB`,
+  return (
+    <div className="grid grid-cols-[1fr_repeat(3,auto)] gap-x-3 text-right">
+      <span />
+      {['Day', 'Evening', 'Night'].map(name => <span key={name} className="text-muted-foreground/60">{name}</span>)}
+      <HoverText title={PERIODS_TOOLTIP} className="text-left">Level dB</HoverText>
+      {[received.ld, received.le, received.ln].map((level, period) => (
+        <span key={period} className="text-foreground">{fmtDbValue(level)}</span>
+      ))}
+    </div>
   )
 }
 
@@ -53,11 +61,16 @@ export function AircraftLayerDetail({ received, kinds, flights, onHighlightFligh
   const shares = aircraftKindShares(kinds ?? {})
   return (
     <div className={DETAIL_CLASS}>
-      {shares.length > 0 && lineRow(
-        <HoverText title={KINDS_TOOLTIP}>Made of</HoverText>,
-        <span className="flex flex-col items-end">
-          {shares.map(([label, share]) => <span key={label}>{`${label} ${Math.round(100 * share)}\u00a0%`}</span>)}
-        </span>,
+      {shares.length > 0 && (
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3">
+          <HoverText title={KINDS_TOOLTIP} className="col-span-2">Made of</HoverText>
+          {shares.map(([label, share]) => (
+            <Fragment key={label}>
+              <span className="truncate pl-2" title={label}>{label}</span>
+              <span className="text-right text-foreground">{`${Math.round(100 * share)}\u00a0%`}</span>
+            </Fragment>
+          ))}
+        </div>
       )}
       <PeriodLevelsLine received={received} />
       <TopFlightsTable flights={flights} onHighlightFlight={onHighlightFlight} />

@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { aircraftKindShares, aircraftMakeup, contributorLabel, labelNamesClass } from '../src/components/noise/labels.ts'
+import { aircraftKindShares, contributorLabel, labelNamesClass } from '../src/components/noise/labels.ts'
 
 const road = (name, metadata) => ({
   id: 'r', source_type: 'road', name, subtype: 'tertiary', distance_m: 38,
@@ -32,10 +32,7 @@ test('a line known only by its number keeps its class, and its detail does not r
   assert.equal(labelNamesClass(school), false)
 })
 
-test('the aircraft layer reads as its largest kind, its makeup largest first', () => {
-  assert.equal(aircraftMakeup({ airliners: 0.95, propeller: 0.03, regional_business_jets: 0.02 }), 'airliners')
-  assert.equal(aircraftMakeup({ airliners: 0.35, helicopters: 0.40, propeller: 0.25 }), 'helicopters')
-  assert.equal(aircraftMakeup(undefined), null)
+test('the aircraft makeup reads largest first', () => {
   assert.deepEqual(aircraftKindShares({ propeller: 0.09, airliners: 0.78, helicopters: 0.13 }),
     [['Airliners', 0.78], ['Helicopters', 0.13], ['Propeller aircraft', 0.09]])
 })

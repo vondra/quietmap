@@ -7,7 +7,7 @@ import type { Contributor, LayerLevels, PeriodLevels, TopFlight } from '../../..
 import { fmtDb, txtTable } from '../../../utils/formatters'
 import { DataPoint } from '../noise-tooltips'
 import { heardText } from '../heard'
-import { aircraftMakeup, contributorLabel, SOURCE_LABELS } from '../labels'
+import { contributorLabel, SOURCE_LABELS } from '../labels'
 import { formatDist, PERIOD_LABELS_DETAIL } from '../shared'
 import { AircraftLayerDetail, ContributorDetail } from './ContributorDetail'
 
@@ -116,7 +116,7 @@ export function AircraftLayerRow({ layer, loudTotal, flights, onHighlightFlight 
   onHighlightFlight: (key: string | null) => void
 }) {
   return (
-    <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={aircraftMakeup(layer.kinds)} received={layer} loud={loudLevel(layer.loud_lden, layer.lden)} loudTotal={loudTotal}>
+    <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={null} received={layer} loud={loudLevel(layer.loud_lden, layer.lden)} loudTotal={loudTotal}>
       <AircraftLayerDetail received={layer} kinds={layer.kinds} flights={flights} onHighlightFlight={onHighlightFlight} />
     </SourceRow>
   )

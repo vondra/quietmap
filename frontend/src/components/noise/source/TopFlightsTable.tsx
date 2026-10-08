@@ -98,10 +98,6 @@ export function TopFlightsTable({ flights, onHighlightFlight }: {
           })}
         </tbody>
       </table>
-      <p className="mt-0.5 text-[10px] text-muted-foreground/70 whitespace-normal">
-        The map draws the parts of a flight stored for this place, so its line can have gaps; the
-        aircraft link opens the whole flight.
-      </p>
     </div>
   )
 }
