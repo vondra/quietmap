@@ -4,8 +4,10 @@
 
 **The data under every click.** The layer panel's new Advanced group draws what a click computes
 over, at the resolution it has it: the ground's height, hard ground (paved, built over or water),
-buildings by their height and noise barriers. And the forest, which takes nothing off: the EU
-method has no term for foliage.
+buildings by their height and noise barriers; the vehicles a day on every road and the trains a
+day on every track, solid where counted or timetabled, faint where a fixed estimate stands; and
+every other source, from wind turbines and church bells to the people outside bars. And the
+forest, which takes nothing off: the EU method has no term for foliage.
 
 **Noise screens in Poland.** The 10,876 noise screens of Poland's national topographic database
 (BDOT10k) now screen the roads; in the 128 counties with nearly all the motorway monitoring points,
