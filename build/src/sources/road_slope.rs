@@ -98,17 +98,26 @@ fn place_along(places: &[(f64, f64)], distances: &[f64], along_m: f64) -> (f64, 
     (a.0 + t * (b.0 - a.0), a.1 + t * (b.1 - a.1))
 }
 
-/// Every row's slope (%, positive when climbing from its start to its end; 0 on bridges, tunnels,
-/// short ways and where the terrain is missing), from the rows of each way.
-pub fn row_slopes(
-    ways: HashMap<i64, Vec<WayRow>>,
-    heights: &SquareHeights,
-    rows: usize,
-) -> Vec<f64> {
-    let mut slopes = vec![0.0; rows];
-    for mut way in ways.into_values() {
+/// A chain of a way's rows that join end to start: its rows, the places along it (its start, then
+/// every row's end) and the distance to each from its start (m).
+pub struct Chain<'w> {
+    pub rows: &'w [WayRow],
+    pub places: Vec<(f64, f64)>,
+    pub distances: Vec<f64>,
+}
+
+impl Chain<'_> {
+    pub fn total(&self) -> f64 {
+        self.distances[self.distances.len() - 1]
+    }
+}
+
+/// The chains of every way, its rows put in their order on it first.
+pub fn chains(ways: &mut HashMap<i64, Vec<WayRow>>) -> Vec<Chain<'_>> {
+    let mut chains = Vec::new();
+    for way in ways.values_mut() {
         way.sort_by_key(|row| row.segment_index);
-        // Chains of rows that join end to start.
+        let way: &[WayRow] = way;
         let mut first = 0;
         while first < way.len() {
             let mut last = first;
@@ -119,69 +128,83 @@ pub fn row_slopes(
                 }
                 last += 1;
             }
-            let chain = &way[first..=last];
-            let places: Vec<(f64, f64)> = std::iter::once(chain[0].start)
-                .chain(chain.iter().map(|row| row.end))
+            let rows = &way[first..=last];
+            let places: Vec<(f64, f64)> = std::iter::once(rows[0].start)
+                .chain(rows.iter().map(|row| row.end))
                 .collect();
             let mut distances = vec![0.0];
             for pair in places.windows(2) {
                 distances.push(distances[distances.len() - 1] + metres(pair[0], pair[1]));
             }
-            let total = distances[distances.len() - 1];
-            // The spans of the chain off the ground (bridges and tunnels), from and to (m).
-            let mut spans: Vec<(f64, f64)> = Vec::new();
-            for (k, row) in chain.iter().enumerate() {
-                if !row.off_ground {
-                    continue;
-                }
-                match spans.last_mut() {
-                    Some(span) if span.1 == distances[k] => span.1 = distances[k + 1],
-                    _ => spans.push((distances[k], distances[k + 1])),
-                }
-            }
-            let ground = |along: f64| {
-                let (lat, lon) = place_along(&places, &distances, along);
-                heights.at(lat, lon)
-            };
-            // The road's height: the terrain, or across a span (its ends included: where the chain
-            // ends off the ground, the ground there is under the deck or over the tunnel) the line
-            // between the ground at its ends (one end alone where the chain starts or ends off the
-            // ground).
-            let height =
-                |along: f64| match spans.iter().find(|span| span.0 <= along && along <= span.1) {
-                    None => ground(along),
-                    Some(&(from, to)) => {
-                        let ends = [
-                            (from > 0.0).then(|| ground(from)).flatten(),
-                            (to < total).then(|| ground(to)).flatten(),
-                        ];
-                        match ends {
-                            [Some(a), Some(b)] if to > from => {
-                                Some(a + (b - a) * (along - from) / (to - from))
-                            }
-                            [Some(a), _] => Some(a),
-                            [None, Some(b)] => Some(b),
-                            [None, None] => None,
-                        }
-                    }
-                };
-            for (k, row) in chain.iter().enumerate() {
-                if row.off_ground {
-                    continue;
-                }
-                let middle = 0.5 * (distances[k] + distances[k + 1]);
-                let (from, to) = (
-                    (middle - WINDOW_HALF_M).max(0.0),
-                    (middle + WINDOW_HALF_M).min(total),
-                );
-                if to - from < WINDOW_MIN_M {
-                    continue;
-                }
-                if let (Some(low), Some(high)) = (height(from), height(to)) {
-                    slopes[row.row] = 100.0 * (high - low) / (to - from);
-                }
-            }
+            chains.push(Chain {
+                rows,
+                places,
+                distances,
+            });
             first = last + 1;
+        }
+    }
+    chains
+}
+
+/// Every row's slope (%, positive when climbing from its start to its end; 0 on bridges, tunnels,
+/// short ways and where the terrain is missing), from the chains of each way.
+pub fn row_slopes(chains: &[Chain], heights: &SquareHeights, rows: usize) -> Vec<f64> {
+    let mut slopes = vec![0.0; rows];
+    for chain in chains {
+        let (places, distances, total) = (&chain.places, &chain.distances, chain.total());
+        // The spans of the chain off the ground (bridges and tunnels), from and to (m).
+        let mut spans: Vec<(f64, f64)> = Vec::new();
+        for (k, row) in chain.rows.iter().enumerate() {
+            if !row.off_ground {
+                continue;
+            }
+            match spans.last_mut() {
+                Some(span) if span.1 == distances[k] => span.1 = distances[k + 1],
+                _ => spans.push((distances[k], distances[k + 1])),
+            }
+        }
+        let ground = |along: f64| {
+            let (lat, lon) = place_along(places, distances, along);
+            heights.at(lat, lon)
+        };
+        // The road's height: the terrain, or across a span (its ends included: where the chain
+        // ends off the ground, the ground there is under the deck or over the tunnel) the line
+        // between the ground at its ends (one end alone where the chain starts or ends off the
+        // ground).
+        let height = |along: f64| match spans.iter().find(|span| span.0 <= along && along <= span.1)
+        {
+            None => ground(along),
+            Some(&(from, to)) => {
+                let ends = [
+                    (from > 0.0).then(|| ground(from)).flatten(),
+                    (to < total).then(|| ground(to)).flatten(),
+                ];
+                match ends {
+                    [Some(a), Some(b)] if to > from => {
+                        Some(a + (b - a) * (along - from) / (to - from))
+                    }
+                    [Some(a), _] => Some(a),
+                    [None, Some(b)] => Some(b),
+                    [None, None] => None,
+                }
+            }
+        };
+        for (k, row) in chain.rows.iter().enumerate() {
+            if row.off_ground {
+                continue;
+            }
+            let middle = 0.5 * (distances[k] + distances[k + 1]);
+            let (from, to) = (
+                (middle - WINDOW_HALF_M).max(0.0),
+                (middle + WINDOW_HALF_M).min(total),
+            );
+            if to - from < WINDOW_MIN_M {
+                continue;
+            }
+            if let (Some(low), Some(high)) = (height(from), height(to)) {
+                slopes[row.row] = 100.0 * (high - low) / (to - from);
+            }
         }
     }
     slopes
@@ -229,7 +252,7 @@ mod tests {
         ways.insert(2, vec![row(2, 0, 60.0, 50.0, false)]);
         ways.insert(3, vec![row(3, 0, 20.0, 30.0, true)]);
         ways.insert(4, vec![row(4, 0, 20.0, 20.7, false)]);
-        let slopes = row_slopes(ways, &heights, 5);
+        let slopes = row_slopes(&chains(&mut ways), &heights, 5);
         let expected = 100.0 * 5.0 / node_m;
         assert!(
             (slopes[0] - expected).abs() < 1e-6 * expected,
@@ -287,7 +310,7 @@ mod tests {
             2,
             vec![row(3, 0, 43.0, 44.0, false), row(4, 1, 44.0, 45.0, true)],
         );
-        let slopes = row_slopes(ways, &heights, 5);
+        let slopes = row_slopes(&chains(&mut ways), &heights, 5);
         assert!(slopes.iter().all(|slope| slope.abs() < 1e-9), "{slopes:?}");
     }
 }

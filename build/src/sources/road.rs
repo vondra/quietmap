@@ -5,8 +5,8 @@ use super::bus::BusRoutes;
 use super::country_speeds::COUNTRY_SPEEDS;
 use super::motorcycles::{LocalMotorcycles, country_share};
 use super::period_shares::period_shares;
-use super::road_junctions::{Junctions, traffic_signals};
-use super::road_slope::{SquareHeights, WayRow, row_slopes};
+use super::road_junctions::{Junctions, row_junctions, traffic_signals};
+use super::road_slope::{SquareHeights, WayRow, chains, row_slopes};
 use super::road_traffic::{
     BUS_SERVICE_BY_BUILT_UP, BuildingTraffic, local_km, thai_rural_road_ref,
 };
@@ -515,13 +515,12 @@ impl<'a> Columns<'a> {
     }
 }
 
-/// Every row's slope from its whole way, whichever batches the way's rows are in; with `reach`
+/// The rows of every way, whichever batches they are in, and the table's row count; with `reach`
 /// only the ways with a row reaching into it (no other row is converted).
-fn way_slopes(
+fn way_rows(
     table: &crate::dev4::Table,
-    heights: &SquareHeights,
     reach: Option<Reach>,
-) -> Result<Vec<f64>, String> {
+) -> Result<(std::collections::HashMap<i64, Vec<WayRow>>, usize), String> {
     let mut ways: std::collections::HashMap<i64, Vec<WayRow>> = std::collections::HashMap::new();
     let mut wanted = std::collections::HashSet::new();
     let mut first_row = 0;
@@ -558,7 +557,7 @@ fn way_slopes(
         first_row += batch.num_rows();
     }
     ways.retain(|way, _| wanted.contains(way));
-    Ok(row_slopes(ways, heights, first_row))
+    Ok((ways, first_row))
 }
 
 /// Converts the road rows of one dev4 square, or with `reach` only those reaching into another
@@ -630,7 +629,10 @@ pub fn convert(
     };
     let motorcycles = local_motorcycles(&table)?;
     let copies = copied_counts(&table)?;
-    let slopes = way_slopes(&table, &heights, reach)?;
+    let (mut ways, rows) = way_rows(&table, reach)?;
+    let chains = chains(&mut ways);
+    let slopes = row_slopes(&chains, &heights, rows);
+    let row_stops = row_junctions(&chains, &junctions, rows);
     let mut emitting = 0;
     let mut first_row = 0;
     for batch in &table.batches {
@@ -828,7 +830,7 @@ pub fn convert(
             let stop = if junction.value(row) == ROUNDABOUT_CODE {
                 Some((Junction::Roundabout, 0.0))
             } else {
-                junctions.nearest(middle)
+                row_stops[batch_first_row + row]
             };
             // CNOSSOS-EU 2.2.2: rolling noise at the place's yearly mean air temperature.
             let air_temperature_c = temperature.at(middle.0, middle.1);
