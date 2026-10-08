@@ -1,6 +1,6 @@
 //! The loudest flights of a click (PLAN section 5, as dev4 lists them): the pieces the loudest
 //! boxes kept, each computed exactly with the kernel at the receiver; a flight's Lmax is the
-//! loudest LAmax of its pieces at their closest points, and the list is ranked by it as dev4
+//! loudest maximum level of its pieces (Doc 29 Eq. 4-8a), and the list is ranked by it as dev4
 //! ranks it (a flight's SEL sums only the pieces kept, so it would rank flights by what happened
 //! to be kept).
 
@@ -10,7 +10,9 @@ use physics::doc29::corrections::speed_correction_db;
 use physics::doc29::helicopters::helicopter_levels;
 use physics::doc29::npd::{class_anchor, is_helicopter_class};
 use physics::doc29::screening::ReceiverHorizons;
-use physics::doc29::segment::{SegmentEmission, SegmentGeometry, segment_sel_at_receiver};
+use physics::doc29::segment::{
+    SegmentEmission, SegmentGeometry, segment_lmax_db, segment_sel_at_receiver,
+};
 use physics::doc29::thrust::PowerBracket;
 use std::collections::HashMap;
 use tiles::aircraft::{Aircraft, FlightPiece};
@@ -32,7 +34,8 @@ pub struct LoudFlight {
     pub period: u8,
     /// The flight's SEL at the receiver (dB), summed over its computed pieces only.
     pub sel_db: f64,
-    /// Its loudest LAmax (dB) and where: horizontal distance and altitude above the receiver.
+    /// Its loudest maximum level (dB) and where: horizontal distance and altitude above the
+    /// receiver.
     pub lmax_db: f64,
     pub closest_m: f64,
     pub altitude_m: f64,
@@ -151,7 +154,7 @@ impl FlightTotals {
                 let sel = segment_sel_at_receiver(&emission, &geometry, horizons);
                 let closest = sel.closest.on_segment_m;
                 let lateral = closest[0].hypot(closest[1]);
-                let lmax_db = emission.read_npd(lateral.hypot(closest[2])).lamax_db;
+                let lmax_db = segment_lmax_db(&emission, &sel.closest);
                 let end_on_map = |end: usize| {
                     let (lat, lon) = tile.to_mercator(piece.ends[end]).to_degrees();
                     [lat, lon, piece.altitudes_m[end]]

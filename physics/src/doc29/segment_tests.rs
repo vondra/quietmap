@@ -154,6 +154,26 @@ fn a_nearby_b738_approach_reads_a_plausible_sel() {
     assert!(slant_m > 100.0 && slant_m < 2_000.0, "{slant_m}");
 }
 
+/// A segment's maximum level takes the lateral attenuation of its closest point (Eq. 4-8a): a
+/// climb seen low from 3 km aside reads about 10 dB under its NPD level at that distance, one
+/// overhead keeps it (the flight list read the NPD level alone).
+#[test]
+fn a_low_pass_aside_reads_its_maximum_level_attenuated() {
+    let climb = emission("B738", &flight(true, 160.0, 0.05), false);
+    let lmax = |start_m: [f64; 3], end_m: [f64; 3]| {
+        let closest = closest_points(start_m, end_m);
+        let npd = climb.read_npd(norm(closest.on_segment_m)).lamax_db;
+        (segment_lmax_db(&climb, &closest), npd)
+    };
+    let (aside, npd) = lmax([-500.0, 3_000.0, 100.0], [500.0, 3_000.0, 150.0]);
+    assert!(
+        (npd - aside - 10.0).abs() < 1.0,
+        "{aside} against NPD {npd}"
+    );
+    let (overhead, npd) = lmax([-500.0, 0.0, 600.0], [500.0, 0.0, 650.0]);
+    assert!((overhead - npd).abs() < 1.0, "{overhead} against NPD {npd}");
+}
+
 /// A final approach whose line, extended beyond touchdown, passes 46 m under the ground at the
 /// receiver's closest point is heard through its own extent (Doc 29; dev4's Filter D dropped it):
 /// finite, and quieter than with the receiver abeam its nearer end.

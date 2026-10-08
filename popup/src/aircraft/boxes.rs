@@ -4,6 +4,7 @@
 
 use physics::bands::{PERIOD_HOURS, PERIODS, energy, lden_energy};
 use physics::doc29::boxes::{AircraftBoxAtReceiver, box_sel_at_receiver};
+use physics::doc29::corrections::INSTALLATION_CORRECTION_MAX_DB;
 use physics::doc29::npd::lamax_rise_bound_db;
 use physics::doc29::screening::ReceiverHorizons;
 use rayon::prelude::*;
@@ -56,8 +57,9 @@ pub struct TileAnswer {
     /// the period times the slant over the speed): the energy-weighted lambda of the flights heard.
     pub energy_lambda: [f64; PERIODS],
     pub boxes: usize,
-    /// Per box within reach that keeps pieces: its index and the most LAmax (dB) its pieces can
-    /// reach at the receiver.
+    /// Per box within reach that keeps pieces: its index and the most maximum level (dB) its
+    /// pieces can reach at the receiver (Eq. 4-8a: Delta_I adds at most
+    /// [`INSTALLATION_CORRECTION_MAX_DB`], Lambda only attenuates).
     pub lamax_bounds: Vec<(usize, f64)>,
 }
 
@@ -150,6 +152,7 @@ pub fn tile_energy(
             let bound = (record.piece_count > 0).then(|| {
                 record.loudest_lamax_db
                     + lamax_rise_bound_db(nearest_slant_m(&record, tile, frame, receiver))
+                    + INSTALLATION_CORRECTION_MAX_DB
             });
             // The installation shares are the box's over the whole day (the tiles keep no share per
             // period), so a box whose jets fly by day and propellers by night splits its Lden as the
