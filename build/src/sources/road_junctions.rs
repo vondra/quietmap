@@ -83,23 +83,61 @@ impl Junctions {
     }
 }
 
-/// Each row's junction: the nearest one on its chain within [`JUNCTION_REACH_M`] along it from the
-/// row's middle, and that distance (m). Junctions are met on the ground only.
+/// A signal stands at most this far before its crossing (m), at the stop line of its approach.
+const STOP_LINE_M: f64 = 25.0;
+
+/// Each row's junction, as CNOSSOS-EU 2.2.5 has it: the nearest crossing of its road with another
+/// that has a signal or is a roundabout's entry, within [`JUNCTION_REACH_M`] along its chain from
+/// the row's middle, and that distance (m). A signal marks the nearest crossing (a vertex of two
+/// chains or more) on its own way within [`STOP_LINE_M`], and every road through that crossing
+/// takes it; a signal with no crossing near (a pedestrian crossing) counts on its own road only.
+/// Junctions are met on the ground only.
 pub fn row_junctions(
     chains: &[Chain],
     junctions: &Junctions,
     rows: usize,
 ) -> Vec<Option<(Junction, f64)>> {
-    let mut found = vec![None; rows];
-    for chain in chains {
-        let mut along: Vec<(Junction, f64)> = Vec::new();
+    // Every vertex's chains and its distance along each.
+    let key = |place: (f64, f64)| (place.0.to_bits(), place.1.to_bits());
+    let mut vertices: HashMap<(u64, u64), Vec<(usize, f64)>> = HashMap::new();
+    for (index, chain) in chains.iter().enumerate() {
+        for (place, &at) in chain.places.iter().zip(&chain.distances) {
+            vertices.entry(key(*place)).or_default().push((index, at));
+        }
+    }
+    let crossing = |place: (f64, f64)| {
+        vertices
+            .get(&key(place))
+            .filter(|on| on.iter().any(|&(chain, _)| chain != on[0].0))
+    };
+    let mut along: Vec<Vec<(Junction, f64)>> = vec![Vec::new(); chains.len()];
+    for (index, chain) in chains.iter().enumerate() {
         for (k, row) in chain.rows.iter().enumerate() {
-            if !row.off_ground {
-                for (kind, offset) in junctions.on_segment(chain.places[k], chain.places[k + 1]) {
-                    along.push((kind, chain.distances[k] + offset));
+            if row.off_ground {
+                continue;
+            }
+            for (kind, offset) in junctions.on_segment(chain.places[k], chain.places[k + 1]) {
+                let at = chain.distances[k] + offset;
+                let nearest = chain
+                    .places
+                    .iter()
+                    .zip(&chain.distances)
+                    .filter(|&(_, &d)| (d - at).abs() <= STOP_LINE_M)
+                    .filter_map(|(&place, &d)| crossing(place).map(|on| (on, (d - at).abs())))
+                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                match nearest {
+                    Some((on, _)) => {
+                        for &(other, d) in on {
+                            along[other].push((kind, d));
+                        }
+                    }
+                    None => along[index].push((kind, at)),
                 }
             }
         }
+    }
+    let mut found = vec![None; rows];
+    for (chain, along) in chains.iter().zip(&along) {
         for (k, row) in chain.rows.iter().enumerate() {
             let middle = 0.5 * (chain.distances[k] + chain.distances[k + 1]);
             found[row.row] = along
@@ -184,5 +222,47 @@ mod tests {
         assert!((found[1].unwrap().1 - 75.0).abs() < 1e-6);
         assert_eq!(found[2], None, "a parallel street");
         assert_eq!(found[3], None, "a bridge over it");
+    }
+
+    /// A signal 10 m before a crossing marks the crossing: the signalled road and the road across
+    /// it, which maps no signal, both take it by their distance to the crossing; a parallel street
+    /// does not.
+    #[test]
+    fn a_signal_marks_its_crossing_for_every_road_through_it() {
+        use super::super::road_slope::{WayRow, chains};
+        let degrees = |metres: f64| metres / METRES_PER_DEGREE;
+        let junctions = Junctions::new(0.0, [((0.0, degrees(-10.0)), Junction::TrafficLights)]);
+        let row = |row: usize, index: i16, from: (f64, f64), to: (f64, f64)| WayRow {
+            row,
+            segment_index: index,
+            start: (degrees(from.1), degrees(from.0)),
+            end: (degrees(to.1), degrees(to.0)),
+            off_ground: false,
+        };
+        let mut ways = HashMap::new();
+        ways.insert(
+            1,
+            vec![
+                row(0, 0, (-50.0, 0.0), (-10.0, 0.0)),
+                row(1, 1, (-10.0, 0.0), (0.0, 0.0)),
+                row(2, 2, (0.0, 0.0), (50.0, 0.0)),
+            ],
+        );
+        ways.insert(
+            2,
+            vec![
+                row(3, 0, (0.0, -50.0), (0.0, 0.0)),
+                row(4, 1, (0.0, 0.0), (0.0, 50.0)),
+            ],
+        );
+        ways.insert(3, vec![row(5, 0, (-50.0, 20.0), (50.0, 20.0))]);
+        let found = row_junctions(&chains(&mut ways), &junctions, 6);
+        let distance = |row: usize| found[row].map(|(_, d)| (d * 1e6).round() / 1e6);
+        assert_eq!(
+            [distance(0), distance(1), distance(2)],
+            [Some(30.0), Some(5.0), Some(25.0)]
+        );
+        assert_eq!([distance(3), distance(4)], [Some(25.0), Some(25.0)]);
+        assert_eq!(found[5], None, "a parallel street");
     }
 }
