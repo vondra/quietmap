@@ -6,7 +6,7 @@ import { useState, type ReactNode } from 'react'
 import type { Contributor, LayerLevels, PeriodLevels, TopFlight } from '../../../types/noise'
 import { fmtDb, fmtSone, txtTable } from '../../../utils/formatters'
 import { DataPoint } from '../noise-tooltips'
-import { heardText } from '../heard'
+import { flightsText, heardText } from '../heard'
 import { contributorLabel, SOURCE_LABELS } from '../labels'
 import { formatDist, PERIOD_LABELS_DETAIL } from '../shared'
 import { AircraftLayerDetail, ContributorDetail } from './ContributorDetail'
@@ -104,7 +104,7 @@ export function AircraftLayerRow({ layer, flights, onHighlightFlight }: {
   onHighlightFlight: (key: string | null) => void
 }) {
   return (
-    <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={null} received={layer} nden={layer.nden_sone}>
+    <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={flightsText(layer.events)} received={layer} nden={layer.nden_sone}>
       <AircraftLayerDetail received={layer} kinds={layer.kinds} events={layer.events} flights={flights} onHighlightFlight={onHighlightFlight} />
     </SourceRow>
   )

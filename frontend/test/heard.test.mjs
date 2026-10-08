@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { heardText } from '../src/components/noise/heard.ts'
+import { flightsText, heardText } from '../src/components/noise/heard.ts'
 
 const heard = (day, evening, night, steady = false) => ({ per_hour: { day, evening, night }, steady })
 
@@ -35,4 +35,12 @@ test('rarer events read by the week or the month', () => {
   assert.equal(heardText('building', heard(2 / 7 / 12, 0, 0)), '2× a week')
   assert.equal(heardText('building', heard(1 / 7 / 12, 0, 0)), '1× a week')
   assert.equal(heardText('railway', heard(0.1 / 12, 0, 0)), '3 trains/month')
+})
+
+test('the aircraft layer reads as its flights a day above 50 dB; none without them', () => {
+  const events = (perDay) => ({ above_db: [50, 60, 70], per_day: perDay, night: [0, 0, 0], height_m: [null, null, null], type: [null, null, null], helicopters_per_day: 0 })
+  assert.equal(flightsText(events([412.4, 30, 2])), '412 flights/day')
+  assert.equal(flightsText(events([0.3, 0, 0])), '2 flights/week')
+  assert.equal(flightsText(events([0, 0, 0])), null)
+  assert.equal(flightsText(undefined), null)
 })
