@@ -1,9 +1,10 @@
 //! Prepared z12 tiles: numbering and coordinates ([`geo`]) and one module per kind with its
 //! file format, writer and reader ([`terrain`], [`obstacles`], [`sources`], [`aircraft`]); [`read`]
-//! reads whole files.
+//! reads whole files; [`aircraft_tracks`] holds the year's flights as the map draws them.
 
 pub mod aircraft;
 pub mod aircraft_events;
+pub mod aircraft_tracks;
 pub mod geo;
 pub mod obstacles;
 pub mod read;

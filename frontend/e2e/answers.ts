@@ -1,6 +1,6 @@
 // The popup answers the browser tests stream: one update of the contract, a street, Prague airport's
 // ground operations, and the loudest flights with their tracks near the hermetic world's point.
-import type { Contributor, PopupPiece, PopupUpdate, TopFlight, TrackPiece } from '../src/types/noise'
+import type { Contributor, PopupPiece, PopupUpdate, TopFlight, TrackLine } from '../src/types/noise'
 import { POINT } from './support'
 
 /** Quieter than the street: the aircraft row ranks below it. */
@@ -95,8 +95,8 @@ export function computedPiece(contributor: Contributor, lden: number, distance_m
   }
 }
 
-/** A track piece between two places given in degrees north and east of the point. */
-function trackPiece([north0, east0]: [number, number], [north1, east1]: [number, number], altitude_m: number): TrackPiece {
+/** A track line between two places given in degrees north and east of the point. */
+function trackLine([north0, east0]: [number, number], [north1, east1]: [number, number], altitude_m: number): TrackLine {
   return [[POINT.lat + north0, POINT.lng + east0, altitude_m], [POINT.lat + north1, POINT.lng + east1, altitude_m]]
 }
 
@@ -109,15 +109,15 @@ export const FIXTURE_FLIGHTS: TopFlight[] = [
     icao: '4b0a1c', callsign: 'CSA123', type: 'A320', start_unix: Date.UTC(2025, 8, 2, 14, 26, 40) / 1000,
     period: 'day', sel_db: 79.1, lmax_db: 70.2, closest_m: 444, altitude_m: 255,
     track: [
-      trackPiece([0.0166, 0.005], [0.0166, 0.02], 610),
-      trackPiece([0.0166, -0.02], [0.0166, -0.005], 600),
-      trackPiece([0.0166, -0.005], [0.0166, 0.005], 605),
+      trackLine([0.0166, 0.005], [0.0166, 0.02], 610),
+      trackLine([0.0166, -0.02], [0.0166, -0.005], 600),
+      trackLine([0.0166, -0.005], [0.0166, 0.005], 605),
     ],
   },
   {
     icao: '49d3e1', callsign: 'HELI42', type: 'AS55', start_unix: Date.UTC(2025, 8, 1, 23, 58, 20) / 1000,
     period: 'night', sel_db: 77.4, lmax_db: 68.9, closest_m: 1310, altitude_m: 610,
-    track: [trackPiece([0.01, -0.025], [0.025, -0.025], 960)],
+    track: [trackLine([0.01, -0.025], [0.025, -0.025], 960)],
   },
 ]
 

@@ -1,7 +1,7 @@
 // The aircraft layer of the popup in a real browser, without a backend: a loudest flight's track on
 // the map while its row is hovered (tapped on a phone), redrawn by every streamed update.
 import { expect, test, type Page } from '@playwright/test'
-import type { TrackPiece } from '../src/types/noise'
+import type { TrackLine } from '../src/types/noise'
 import { FIXTURE_FLIGHTS, popupUpdate, withAircraft } from './answers'
 import {
   PHONE,
@@ -17,8 +17,8 @@ import {
   TILE_Z,
 } from './support'
 
-/** The middle of a track piece, [lat, lon]. */
-const middle = ([start, end]: TrackPiece) => [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2]
+/** The middle of a two-point track line, [lat, lon]. */
+const middle = ([start, end]: TrackLine) => [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2]
 
 // The highlight is dev1's white line on a black casing; the hermetic map is black, so a place is
 // drawn when a pixel within 3 px of it is near white.

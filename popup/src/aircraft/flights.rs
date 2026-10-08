@@ -21,9 +21,6 @@ use tiles::geo::{LocalFrame, TileId};
 
 /// Flights listed per click (dev4 lists ten).
 pub const FLIGHTS_SHOWN: usize = 10;
-/// The most pieces a listed flight draws (about 2.7 KB): the first computed, from the rings
-/// nearest the click; a helicopter circling a city keeps hundreds (Bogota, 35 KB).
-const TRACK_PIECES: usize = 48;
 
 /// One listed flight.
 #[derive(Debug, Clone, PartialEq)]
@@ -40,9 +37,9 @@ pub struct LoudFlight {
     pub lmax_db: f64,
     pub closest_m: f64,
     pub altitude_m: f64,
-    /// Its computed pieces, the line on the map: each piece's ends as latitude, longitude (deg)
-    /// and altitude above sea level (m), at most [`TRACK_PIECES`].
-    pub track: Vec<[[f64; 3]; 2]>,
+    /// Its line on the map near the click ([`super::tracks`]): points as latitude, longitude
+    /// (deg) and altitude above sea level (m); the final answer's only.
+    pub track: Vec<Vec<[f64; 3]>>,
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -157,10 +154,6 @@ impl FlightTotals {
                 let closest = sel.closest.on_segment_m;
                 let lateral = closest[0].hypot(closest[1]);
                 let lmax_db = receiver_lmax_db(&emission, &sel.closest, receiver.altitude_m);
-                let end_on_map = |end: usize| {
-                    let (lat, lon) = tile.to_mercator(piece.ends[end]).to_degrees();
-                    [lat, lon, piece.altitudes_m[end]]
-                };
                 let entry = self
                     .flights
                     .entry((flight.icao, flight.start_unix))
@@ -176,9 +169,6 @@ impl FlightTotals {
                         altitude_m: closest[2],
                         track: Vec::new(),
                     });
-                if entry.track.len() < TRACK_PIECES {
-                    entry.track.push([end_on_map(0), end_on_map(1)]);
-                }
                 let energy = 10f64.powf(entry.sel_db / 10.0)
                     + 10f64.powf((sel.sel_db + impedance_db) / 10.0);
                 entry.sel_db = 10.0 * energy.log10();

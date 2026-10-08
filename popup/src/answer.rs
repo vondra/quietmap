@@ -586,7 +586,13 @@ pub fn answer(
             building,
             layers,
             contributors,
-            flights: flights.loudest(),
+            flights: {
+                let mut listed = flights.loudest();
+                if last_ring {
+                    crate::aircraft::tracks::attach(&release.year_root, &mut listed, [lat, lon])?;
+                }
+                listed
+            },
             pieces,
             statistics: Statistics {
                 rings_read: ring,

@@ -98,8 +98,8 @@ export interface BuildingAnswer {
   [field: string]: unknown
 }
 
-/** A piece of a flight's track: its two ends as [lat, lon, altitude above sea level in m]. */
-export type TrackPiece = [[number, number, number], [number, number, number]]
+/** A line of a flight's track: its points as [lat, lon, altitude above sea level in m]. */
+export type TrackLine = [number, number, number][]
 
 /** One of the loudest flights at the point: an ADS-B flight of the aircraft layer. */
 export interface TopFlight {
@@ -122,9 +122,9 @@ export interface TopFlight {
   closest_m: number
   /** Height of that point above the receiver. */
   altitude_m: number
-  /** The parts of the flight the popup computed near the point, in the order computed: not along
-   *  the flight, and not necessarily contiguous. */
-  track: TrackPiece[]
+  /** The flight's line within 20 km of the point, along the flight (more than one where it leaves
+   *  the area and comes back); the final answer's only. */
+  track: TrackLine[]
 }
 
 /** The levels exceeded 5, 10, 50 and 90 % of the time, per period (null where silent). */
