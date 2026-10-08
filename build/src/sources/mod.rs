@@ -225,7 +225,12 @@ fn build_square(
             &mut converted,
         )?;
         rail::convert((dev4, network), neighbour, &mut converted)?;
-        leisure::convert(dev4, neighbour, road_traffic, &mut converted)?;
+        leisure::convert(
+            dev4,
+            neighbour,
+            (road_traffic, places.venues),
+            &mut converted,
+        )?;
         building::convert(dev4, (climate, places), neighbour, &mut converted)?;
         ship::convert(dev4, neighbour, &mut converted)?;
         airport::convert(airport_traffic, neighbour, &mut converted)?;
