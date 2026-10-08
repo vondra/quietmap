@@ -259,6 +259,7 @@ pub fn build(
     for day in &days {
         let started = std::time::Instant::now();
         let DayLegs { mut legs, low_ends } = read_day(day)?;
+        let low_ends = rolls::primary_first(&mut legs, &low_ends);
         let rolls = rolls::missing_rolls(&legs, &low_ends, &runways);
         let (seen, added) = (legs.len(), rolls.len() / rolls::LEGS);
         legs.extend(rolls);
