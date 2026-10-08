@@ -18,6 +18,7 @@ const CONFIG: AppConfig = {
   tilesDir: tmpdir(),
   noIndex: false,
   photonUrl: 'http://127.0.0.1:9',
+  stay22: { aid: 'test-aid', apiKey: 'test-key' },
 }
 
 async function app(t: test.TestContext) {

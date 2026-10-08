@@ -22,6 +22,9 @@ export interface Config {
   noIndex: boolean
   /** The Photon geocoder that finds and names places: its base URL, the public one unless set. */
   photonUrl: string
+  /** The Stay22 account the places to stay are searched with: its affiliate id and API key; without
+   *  one `/api/stay` answers 503, and the noise map stays up. */
+  stay22: { aid: string; apiKey: string } | null
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -68,5 +71,12 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
     tilesDir: directory(required(env, 'QM_TILES_DIR'), 'QM_TILES_DIR'),
     noIndex: env.QM_NOINDEX === '1',
     photonUrl: env.QM_PHOTON_URL || 'https://photon.komoot.io',
+    stay22: stay22Account(env),
   }
+}
+
+/** The Stay22 account, both its values or neither: one alone is a typo, and stops the start. */
+function stay22Account(env: NodeJS.ProcessEnv): Config['stay22'] {
+  if (!env.STAY22_AID && !env.STAY22_API_KEY) return null
+  return { aid: required(env, 'STAY22_AID'), apiKey: required(env, 'STAY22_API_KEY') }
 }

@@ -22,6 +22,7 @@ async function app(t: test.TestContext) {
     tilesDir: '/nonexistent/tiles',
     noIndex: false,
     photonUrl: 'http://127.0.0.1:9',
+    stay22: { aid: 'test-aid', apiKey: 'test-key' },
   })
   t.after(() => built.close())
   return built

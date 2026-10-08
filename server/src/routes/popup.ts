@@ -13,7 +13,8 @@ export const MAX_LATITUDE = 85.05
 
 const DECIMAL = /^[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?$/
 
-function coordinate(text: unknown): number | null {
+/** A query's decimal number, or null for anything else (`Number` alone reads '' as 0). */
+export function coordinate(text: unknown): number | null {
   if (typeof text !== 'string' || !DECIMAL.test(text)) return null
   const value = Number(text)
   return Number.isFinite(value) ? value : null

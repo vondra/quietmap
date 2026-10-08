@@ -1,7 +1,7 @@
 # Server
 
 Fastify on Node 24 (TypeScript run as is, no build step). It serves the built map, the heatmap
-tiles, the data layers, the geocoder proxies and the streamed popup:
+tiles, the data layers, the geocoder proxies, the places to stay and the streamed popup:
 
 | route | answer |
 |---|---|
@@ -10,6 +10,7 @@ tiles, the data layers, the geocoder proxies and the streamed popup:
 | `GET /api/tiles/:build/:layer/:z/:x/:y.bin` | one HM3 tile, Brotli, immutable; a missing tile is an empty 200 |
 | `GET /api/raster/:layer/:z/:x/:y.png` | one 256-pixel map tile of a data layer, drawn by `qm-raster` from the default year: `elevation`, `forest`, `hard` (zoom 10-16), `buildings`, `barriers`, `traffic` (13-16), `trains` (11-16) and `others` (12-16); 400 for no such tile, 503 when eight draw and 256 wait, 500 when the drawing failed; kept an hour |
 | `GET /api/search?q=&lat=&lon=`, `GET /api/reverse?lat=&lon=` | address suggestions and place names (public Photon geocoder) |
+| `GET /api/stay?swlat=&swlng=&nelat=&nelng=&checkin=&checkout=[&adults=][&type=][&minstars=][&minscore=]` | the places to stay with a room in a view for a stay (dates `YYYY-MM-DD`, check-in from today in UTC), hotels or the rest (`type=hotel`, `rental`, both when absent), from Stay22: `{listings, nights, currency}`, each listing at its cheapest supplier's price for the whole stay; the view (its middle 16° when wider) is answered for its box moved out to a grid of 1, 2 or 5 times a power of ten, at most a quarter of the view, kept in memory 55 minutes; 400 for a wrong query or one Stay22 refuses (in its words), 502 when Stay22 fails, 503 without a Stay22 account and, with `Retry-After`, when Stay22 takes no more searches this minute (150 a minute per key); limited per client like the popup |
 | everything else | the built frontend (`../frontend/dist`), or a 404 |
 
 ## The popup stream
@@ -26,8 +27,8 @@ adds each layer's 8 loudest pieces with their data and rays (`--pieces 8`); the 
   -180..180), `year` one of `QM_YEARS` (the first when absent), `segments` 1 when given.
 - `503` with `{"error"}` and `Retry-After`: every slot computes and the queue is full. A few clicks
   compute at once (each uses every core); two per slot may wait.
-- `429`: more than 5 requests per second from one client (an IPv4 address or an IPv6 /64). Tiles
-  are never limited, local unproxied callers never are.
+- `429`: more than 5 requests per second from one client (an IPv4 address or an IPv6 /64), as for
+  the geocoder and the places to stay. Tiles are never limited, local unproxied callers never are.
 - A child that fails, exits without a final update, writes something that is no update, or runs
   longer than 30 s ends the stream with one line `{"error": "..."}` in words for the visitor; the
   exit status and stderr go to the server log. The updates before it are incomplete.
@@ -51,8 +52,10 @@ visitor's address in `X-Forwarded-For` (forwarding headers are trusted from loop
 | `QM_POPUP_CONCURRENCY` | clicks computed at the same time; default `2` |
 | `QM_NOINDEX` | `1` marks every response `X-Robots-Tag: noindex` (a host search engines must skip) |
 | `QM_PHOTON_URL` | the Photon geocoder's base URL for search and place names; default the public `https://photon.komoot.io` |
+| `STAY22_AID`, `STAY22_API_KEY` | the Stay22 affiliate id and API key the places to stay are searched with; without them `/api/stay` answers 503 (Stay22 answers no search without a key) |
 
-The server refuses to start without either binary, a year directory or the tiles directory.
+The server refuses to start without either binary, a year directory or the tiles directory, or with
+only one of the two Stay22 values.
 
 ## Run and test
 
@@ -60,7 +63,7 @@ The server refuses to start without either binary, a year directory or the tiles
     npm ci --prefix server
     PORT=... QM_POPUP_BIN=... QM_RASTER_BIN=... QM_PREPARED_DIR=... QM_YEARS=... QM_TILES_DIR=... npm --prefix server start
 
-    npm --prefix server run check     # typecheck, lint, tests (the popup route against a fake qm-popup)
+    npm --prefix server run check     # typecheck, lint, tests (the popup route against a fake qm-popup, Stay22 mocked)
     npm --prefix frontend run check   # typecheck, lint, unit tests
     npm --prefix frontend run e2e     # the built map in Chromium, every API answer mocked in the page
 
