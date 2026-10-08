@@ -10,7 +10,8 @@
 //! to its layer's energy, set to the moment's level and taken as steady. A source alone is
 //! measured the same way: its own Nden ranks it in the list.
 
-use crate::percentiles::{Distribution, Line};
+use crate::distribution::Distribution;
+use crate::percentiles::Line;
 use crate::selection::LayerSelection;
 use physics::bands::{
     A_WEIGHTING_DB as OCTAVE_A_DB, BANDS, PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy,
