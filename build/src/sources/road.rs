@@ -5,7 +5,7 @@ use super::bus::BusRoutes;
 use super::country_speeds::COUNTRY_SPEEDS;
 use super::motorcycles::{LocalMotorcycles, country_share};
 use super::period_shares::period_shares;
-use super::road_junctions::{Junctions, row_junctions, traffic_signals};
+use super::road_junctions::{Junctions, row_junctions, signalised_rings, traffic_signals};
 use super::road_slope::{SquareHeights, WayRow, chains, row_slopes};
 use super::road_traffic::{
     BUS_SERVICE_BY_BUILT_UP, BuildingTraffic, local_km, thai_rural_road_ref,
@@ -602,11 +602,11 @@ pub fn convert(
         require_stamp(&table, key, value)?;
     }
     let heights = SquareHeights::load(dev4, square)?;
-    // The square's traffic signals and the vertices of its roundabouts (CNOSSOS-EU 2.2.5).
-    let mut stops: Vec<((f64, f64), Junction)> = traffic_signals(dev4, square)?
-        .into_iter()
-        .map(|place| (place, Junction::TrafficLights))
-        .collect();
+    // The square's traffic signals and the vertices of its roundabouts (CNOSSOS-EU 2.2.5), a
+    // roundabout with signals a crossing with traffic lights.
+    let signals = traffic_signals(dev4, square)?;
+    let mut rings = Vec::new();
+    let mut first_row = 0;
     for batch in &table.batches {
         let c = Columns { batch };
         let i32s = |name| c.get(name).map(|a| a.as_primitive::<Int32Type>());
@@ -616,13 +616,27 @@ pub fn convert(
             (i32s("end_gx")?, i32s("end_gy")?),
         ];
         for row in (0..batch.num_rows()).filter(|&row| junction.value(row) == ROUNDABOUT_CODE) {
-            for (x, y) in ends {
-                stops.push((
-                    z30_corner_degrees(x.value(row), y.value(row)),
-                    Junction::Roundabout,
-                ));
-            }
+            rings.push((
+                first_row + row,
+                ends.map(|(x, y)| z30_corner_degrees(x.value(row), y.value(row))),
+            ));
         }
+        first_row += batch.num_rows();
+    }
+    let signalised = signalised_rings(&rings, &signals);
+    let ring_kind = |row: usize| {
+        if signalised.contains(&row) {
+            Junction::TrafficLights
+        } else {
+            Junction::Roundabout
+        }
+    };
+    let mut stops: Vec<((f64, f64), Junction)> = signals
+        .into_iter()
+        .map(|place| (place, Junction::TrafficLights))
+        .collect();
+    for (row, ends) in &rings {
+        stops.extend(ends.map(|end| (end, ring_kind(*row))));
     }
     let latitude = stops.first().map_or(0.0, |(place, _)| place.0);
     let junctions = Junctions::new(latitude, stops);
@@ -845,7 +859,7 @@ pub fn convert(
             );
             let middle = (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1));
             let stop = if junction.value(row) == ROUNDABOUT_CODE {
-                Some((Junction::Roundabout, 0.0))
+                Some((ring_kind(batch_first_row + row), 0.0))
             } else {
                 row_stops[batch_first_row + row]
             };

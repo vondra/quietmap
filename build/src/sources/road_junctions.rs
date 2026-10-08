@@ -3,15 +3,16 @@
 //! rows). A road row takes the nearest junction on its own way within [`JUNCTION_REACH_M`] along
 //! the way from its middle (OpenStreetMap puts a signal on a node of the road it stops, and an
 //! approach ends on a node of the roundabout), a roundabout's own rows the roundabout at distance
-//! 0; a road that only passes near a junction, or over it on a bridge, takes none. Junctions of the
-//! neighbouring squares are not read: a row within 100 m of a square's edge may miss one there.
+//! 0, a roundabout with signals being a crossing with traffic lights; a road that only passes near
+//! a junction, or over it on a bridge, takes none. Junctions of the neighbouring squares are not
+//! read: a row within 100 m of a square's edge may miss one there.
 
 use super::road_slope::Chain;
 use crate::dev4::{Dev4, Square, z30_corner_degrees};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int32Type;
 use physics::emission::road::{JUNCTION_REACH_M, Junction};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Metres per degree of latitude, and of longitude at the equator.
 const METRES_PER_DEGREE: f64 = 111_195.0;
@@ -53,6 +54,21 @@ impl Junctions {
         ]
     }
 
+    /// Whether a junction lies within `radius_m` (at most [`JUNCTION_REACH_M`]) of `place`.
+    fn within(&self, place: (f64, f64), radius_m: f64) -> bool {
+        let xy = self.plane(place);
+        let (cx, cy) = cell(xy);
+        (cx - 1..=cx + 1).any(|x| {
+            (cy - 1..=cy + 1).any(|y| {
+                self.cells
+                    .get(&(x, y))
+                    .into_iter()
+                    .flatten()
+                    .any(|(point, _)| (point[0] - xy[0]).hypot(point[1] - xy[1]) <= radius_m)
+            })
+        })
+    }
+
     /// The junctions on the segment from `a` to `b`: each kind and its distance from `a` along it.
     fn on_segment(&self, a: (f64, f64), b: (f64, f64)) -> Vec<(Junction, f64)> {
         let (pa, pb) = (self.plane(a), self.plane(b));
@@ -85,6 +101,51 @@ impl Junctions {
 
 /// A signal stands at most this far before its crossing (m), at the stop line of its approach.
 const STOP_LINE_M: f64 = 25.0;
+
+/// The ring rows (row, ends) of the roundabouts signals control: rows joined at shared ends make a
+/// roundabout, and one with a signal within [`STOP_LINE_M`] of a vertex is a crossing with traffic
+/// lights (CNOSSOS-EU 2.2.5, k = 1), its traffic stopping and starting at them. Place de la
+/// Bastille, measured 74.0 dB Lden: 72.4 with a signal's correction on its ring, 70.3 with a
+/// roundabout's.
+pub fn signalised_rings(
+    rings: &[(usize, [(f64, f64); 2])],
+    signals: &[(f64, f64)],
+) -> HashSet<usize> {
+    fn root(parent: &mut [usize], mut index: usize) -> usize {
+        while parent[index] != index {
+            parent[index] = parent[parent[index]];
+            index = parent[index];
+        }
+        index
+    }
+    let key = |place: (f64, f64)| (place.0.to_bits(), place.1.to_bits());
+    let mut parent: Vec<usize> = (0..rings.len()).collect();
+    let mut first_at: HashMap<(u64, u64), usize> = HashMap::new();
+    for (index, (_, ends)) in rings.iter().enumerate() {
+        for end in ends {
+            let other = *first_at.entry(key(*end)).or_insert(index);
+            let (a, b) = (root(&mut parent, index), root(&mut parent, other));
+            parent[a] = b;
+        }
+    }
+    let latitude = signals.first().map_or(0.0, |place| place.0);
+    let signals = Junctions::new(
+        latitude,
+        signals
+            .iter()
+            .map(|&place| (place, Junction::TrafficLights)),
+    );
+    let mut marked = HashSet::new();
+    for (index, (_, ends)) in rings.iter().enumerate() {
+        if ends.iter().any(|&end| signals.within(end, STOP_LINE_M)) {
+            marked.insert(root(&mut parent, index));
+        }
+    }
+    (0..rings.len())
+        .filter(|&index| marked.contains(&root(&mut parent, index)))
+        .map(|index| rings[index].0)
+        .collect()
+}
 
 /// Each row's junction, as CNOSSOS-EU 2.2.5 has it: the nearest crossing of its road with another
 /// that has a signal or is a roundabout's entry, within [`JUNCTION_REACH_M`] along its chain from
@@ -222,6 +283,27 @@ mod tests {
         assert!((found[1].unwrap().1 - 75.0).abs() < 1e-6);
         assert_eq!(found[2], None, "a parallel street");
         assert_eq!(found[3], None, "a bridge over it");
+    }
+
+    /// A roundabout with a signal 10 m before one of its entries is signalised, every row of its
+    /// ring; a roundabout 200 m away is not.
+    #[test]
+    fn a_signal_at_a_roundabout_signalises_its_whole_ring() {
+        let degrees = |metres: f64| metres / METRES_PER_DEGREE;
+        let ring = |first: usize, east: f64| {
+            let corners = [(0.0, 0.0), (0.0, 30.0), (30.0, 30.0), (30.0, 0.0)];
+            (0..4)
+                .map(|k| {
+                    let at = |(north, x): (f64, f64)| (degrees(north), degrees(east + x));
+                    (first + k, [at(corners[k]), at(corners[(k + 1) % 4])])
+                })
+                .collect::<Vec<_>>()
+        };
+        let rings = [ring(0, 0.0), ring(10, 200.0)].concat();
+        let signals = [(degrees(-10.0), degrees(0.0))];
+        let mut found: Vec<usize> = signalised_rings(&rings, &signals).into_iter().collect();
+        found.sort_unstable();
+        assert_eq!(found, vec![0, 1, 2, 3]);
     }
 
     /// A signal 10 m before a crossing marks the crossing: the signalled road and the road across
