@@ -6,7 +6,7 @@
 //! passes it only through what the secondary provider saw counts on increment days (the energy's
 //! P/B + S/I estimator, a count in place of the energy).
 //!
-//! The builder ([`build_square`]) counts at every z17 cell of a square (`aircraft-events` tiles),
+//! The builder ([`build_square`]) counts at every z16 cell of a square (`aircraft-events` tiles),
 //! the checker at its points; both take every segment of a flight whose reach (its own LAmax
 //! curve, the largest Delta_I) meets the receiver, so a louder power row along the track beats the
 //! foot of the nearest segment as it does in the air.
@@ -188,7 +188,7 @@ impl EventCounts {
 pub const EVENTS_REACH_M: f64 = 20_000.0;
 /// The receiver above the ground (m), as the popup's.
 const RECEIVER_HEIGHT_M: f64 = 4.0;
-/// z17 cells per square side.
+/// z16 cells per square side.
 const CELLS: usize = 8 * CELLS_PER_SIDE;
 
 /// Mercator x differences across the antimeridian.
@@ -197,7 +197,7 @@ fn wrap_x(dx: f64) -> f64 {
     (dx + n / 2.0).rem_euclid(n) - n / 2.0
 }
 
-/// The receivers of a square: each z17 cell's centre 4 m above the terrain, per row the local
+/// The receivers of a square: each z16 cell's centre 4 m above the terrain, per row the local
 /// frame's metres per Mercator unit, and the highest receiver.
 struct Receivers {
     west: f64,
@@ -694,10 +694,10 @@ mod tests {
         let root = std::env::temp_dir().join(format!("qm-events-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let square = Square { x: 276, y: 173 };
-        let (column, row) = (144, 112);
+        let (column, row) = (4 * CELLS_PER_SIDE + 8, 3 * CELLS_PER_SIDE + 8);
         let cell = Mercator {
-            x: f64::from(square.x * 8) + (column as f64 + 0.5) / 32.0,
-            y: f64::from(square.y * 8) + (row as f64 + 0.5) / 32.0,
+            x: f64::from(square.x * 8) + (column as f64 + 0.5) / CELLS_PER_SIDE as f64,
+            y: f64::from(square.y * 8) + (row as f64 + 0.5) / CELLS_PER_SIDE as f64,
         };
         let frame = LocalFrame::at(cell);
         let pass = |altitude: f64, period: u8| {

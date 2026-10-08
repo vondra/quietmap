@@ -1,11 +1,11 @@
-//! `aircraft-events` tiles: what flies over each z17 cell of the tile, every flight of the year
+//! `aircraft-events` tiles: what flies over each z16 cell of the tile, every flight of the year
 //! counted once at its loudest moment there (Doc 29 Eq. 4-8a, outdoors in the open): per band of
 //! that maximum level (50, 60, 70 dB) the flights of an average day and those at night, their
 //! mean height above the ground at that moment and the type flying most of them; and the
 //! helicopters of the lowest band. A tile without any flight above 50 dB has no file.
 //!
 //! ```text
-//! magic "qmevt1\n\0", u16 cells per side (32), u16 designators
+//! magic "qmevt1\n\0", u16 cells per side (16), u16 designators
 //! per cell, row-major from the north-west, 40 B:
 //!   per band: f32 flights a day, f32 of them at night (23-07), i16 mean height (m, negative
 //!   below the ground there), u16 designator index (0xFFFF none)
@@ -22,8 +22,10 @@ const NO_DESIGNATOR: u16 = u16::MAX;
 /// The bands of the table (dB, maximum level at or above).
 pub const EVENT_BANDS_DB: [f64; 3] = [50.0, 60.0, 70.0];
 pub const BANDS: usize = EVENT_BANDS_DB.len();
-/// z17 cells per side of a z12 tile.
-pub const CELLS_PER_SIDE: usize = 32;
+/// z16 cells per side of a z12 tile (about 400 m in Europe): read with bilinear counts, as good
+/// as z17's nearest cell at the pilot's ten points and a fifth of its work (evidence 2026-10-08,
+/// r055 pilot).
+pub const CELLS_PER_SIDE: usize = 16;
 
 /// One band of one cell.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -156,7 +158,7 @@ mod tests {
     #[test]
     fn cells_round_trip_and_bad_files_are_refused() {
         let mut cells = vec![EventCell::default(); CELLS_PER_SIDE * CELLS_PER_SIDE];
-        cells[33] = EventCell {
+        cells[17] = EventCell {
             bands: [
                 BandCell {
                     per_day: 412.5,
@@ -174,16 +176,16 @@ mod tests {
             ],
             helicopters_per_day: 0.004,
         };
-        cells[1023].bands[0].designator = Some(*b"A320");
+        cells[255].bands[0].designator = Some(*b"A320");
         let bytes = encode(&cells);
-        assert_eq!(bytes.len(), HEADER_BYTES + 40 * 1024 + 2 * 4);
+        assert_eq!(bytes.len(), HEADER_BYTES + 40 * 256 + 2 * 4);
         let parsed = AircraftEvents::parse(&bytes).unwrap();
-        assert_eq!(parsed.cell(1, 1), cells[33]);
-        assert_eq!(parsed.cell(31, 31), cells[1023]);
+        assert_eq!(parsed.cell(1, 1), cells[17]);
+        assert_eq!(parsed.cell(15, 15), cells[255]);
         assert_eq!(parsed.cell(0, 0), EventCell::default());
         assert!(AircraftEvents::parse(&bytes[..bytes.len() - 1]).is_err());
         let mut missing = bytes.clone();
-        missing[HEADER_BYTES + 40 * 33 + 10] = 7;
+        missing[HEADER_BYTES + 40 * 17 + 10] = 7;
         assert!(AircraftEvents::parse(&missing).is_err());
     }
 }
