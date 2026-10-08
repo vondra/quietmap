@@ -8,7 +8,8 @@ use super::filters::point_is_sane;
 use super::trace::{AircraftTrace, TracePoint, parse_address_hex};
 use physics::doc29::npd::is_helicopter_class;
 use physics::doc29::profiles_generated::{
-    IS_JET, is_negligible_noise_typecode, noise_class_of, profile_idx,
+    CLASS_REP_PROFILE_IDX, FALLBACK_PROFILE_IDX, IS_JET, NUM_CLASSES, is_negligible_noise_typecode,
+    noise_class_of, profile_idx,
 };
 use std::ops::Range;
 
@@ -23,6 +24,60 @@ pub const ADSB_EXCHANGE: u8 = 2;
 /// Profile of a ground vehicle, which has none.
 pub const NO_PROFILE: u8 = u8::MAX;
 const SYNTHETIC_BIT: u64 = 1 << 32;
+
+/// The median airborne ground speed under which a flight of unknown type is a light aircraft
+/// (kt): most such flights (empty designators, homebuilts' codes) are light aircraft over the
+/// countryside, 10-20 dB under the fallback jet; training singles fly 80-130 kt, while a jet in
+/// the air flies 140 kt only on short final and faster everywhere else. A median, as ADS-B speeds
+/// jump (a light single's day read 95 kt with one sample at 400).
+pub const LIGHT_MEDIAN_SPEED_KT: f32 = 140.0;
+
+/// Whether a callsign is an airline or military flight number: three letters, then a digit.
+pub fn flight_number(callsign: &str) -> bool {
+    let bytes = callsign.as_bytes();
+    bytes.len() >= 4 && bytes[..3].iter().all(u8::is_ascii_alphabetic) && bytes[3].is_ascii_digit()
+}
+
+/// The profile a rotation flies, decided once for all its segments: its designator's; for a
+/// designator on the fallback, the transponder's emitter category (A7 rotorcraft the helicopter
+/// class, A1 light and B4 ultralight the C172's) or, without a flight number at a median airborne
+/// ground speed under [`LIGHT_MEDIAN_SPEED_KT`], the C172's. `None` for a glider or a balloon (B1,
+/// B2), dropped as their designators are. The boxes, the events and the checker fly it.
+pub fn rotation_profile(
+    designator: &str,
+    emitter_category: u8,
+    callsign: &str,
+    points: &[TracePoint],
+) -> Option<u8> {
+    let profile = profile_idx(designator);
+    if profile != FALLBACK_PROFILE_IDX {
+        return Some(profile);
+    }
+    let light = profile_idx("C172");
+    match emitter_category {
+        0xA7 => {
+            let class = (0..NUM_CLASSES).find(|&class| is_helicopter_class(class));
+            return class.map(|class| CLASS_REP_PROFILE_IDX[class]);
+        }
+        0xA1 | 0xB4 => return Some(light),
+        0xB1 | 0xB2 => return None,
+        _ => {}
+    }
+    let mut speeds: Vec<f32> = points
+        .iter()
+        .filter(|point| !point.is_surface_report() && point.ground_speed_kt.is_finite())
+        .map(|point| point.ground_speed_kt)
+        .collect();
+    speeds.sort_by(f32::total_cmp);
+    let slow = speeds
+        .get(speeds.len() / 2)
+        .is_some_and(|median| *median < LIGHT_MEDIAN_SPEED_KT);
+    Some(if slow && !flight_number(callsign) {
+        light
+    } else {
+        profile
+    })
+}
 
 /// What Stage 1's filters tell apart, from the kernel's noise class of the designator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,8 +125,8 @@ pub fn trace_to_flights(
     primary_source: u8,
     secondary_source: u8,
 ) -> Vec<Flight> {
-    let designator = trace.aircraft_type.trim();
-    if designator.eq_ignore_ascii_case("TWR") || is_negligible_noise_typecode(designator) {
+    let designator = trace.aircraft_type.trim().to_string();
+    if designator.eq_ignore_ascii_case("TWR") || is_negligible_noise_typecode(&designator) {
         return Vec::new();
     }
     let ground_vehicle = designator.eq_ignore_ascii_case("GND");
@@ -81,7 +136,6 @@ pub fn trace_to_flights(
     }
     let address = parse_address_hex(&trace.address).unwrap_or(0);
     let real_address = address != 0 && address != 0xff_ffff;
-    let profile = profile_idx(&trace.aircraft_type);
     let mut flights = Vec::new();
     for range in split_rotations(&trace.points) {
         let points = trace.points[range.clone()].to_vec();
@@ -97,6 +151,15 @@ pub fn trace_to_flights(
             .find(|change| range.contains(&change.point_index))
             .map(|change| change.callsign.clone())
             .unwrap_or_default();
+        let profile = if ground_vehicle {
+            NO_PROFILE
+        } else {
+            let profile = rotation_profile(&designator, trace.emitter_category, &callsign, &points);
+            let Some(profile) = profile else {
+                continue;
+            };
+            profile
+        };
         let source_id = if points.iter().all(TracePoint::is_secondary) {
             secondary_source
         } else {
@@ -112,7 +175,7 @@ pub fn trace_to_flights(
             },
             callsign,
             aircraft_type: trace.aircraft_type.clone(),
-            profile: if ground_vehicle { NO_PROFILE } else { profile },
+            profile,
             airframe: airframe(profile),
             source_id,
             vehicle_kind: u8::from(ground_vehicle),

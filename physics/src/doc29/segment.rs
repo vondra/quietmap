@@ -26,7 +26,13 @@ pub struct AircraftType {
 impl AircraftType {
     /// By the generated designator mapping (`profile_idx`, unknown types on the fallback class).
     pub fn from_designator(designator: &str) -> Self {
-        let class = usize::from(noise_class_of(profile_idx(designator)));
+        AircraftType::of(profile_idx(designator), designator)
+    }
+
+    /// The class of `profile` (the one Stage 1 decided for the flight); a helicopter's certified
+    /// levels by its designator.
+    pub fn of(profile: u8, designator: &str) -> Self {
+        let class = usize::from(noise_class_of(profile));
         let helicopter = is_helicopter_class(class).then(|| helicopter_levels(designator));
         AircraftType { class, helicopter }
     }

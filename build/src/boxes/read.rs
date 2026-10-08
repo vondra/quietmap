@@ -21,6 +21,8 @@ pub struct FlightSegment {
     pub flight_id: u64,
     pub callsign: [u8; 8],
     pub designator: [u8; 4],
+    /// The profile Stage 1 decided for the flight: its class (`AircraftType::of`).
+    pub profile: u8,
     pub source_id: u8,
     pub period: u8,
     pub flags: u8,
@@ -114,7 +116,8 @@ pub fn read_segments(
         let batch = &batch;
         let bytes = |name| column(batch, name).map(|c| c.as_primitive::<UInt8Type>());
         let floats = |name| column(batch, name).map(|c| c.as_primitive::<Float32Type>());
-        let (source_id, period, phase, flags) = (
+        let (profile, source_id, period, phase, flags) = (
+            bytes("profile_idx")?,
             bytes("source_id")?,
             bytes("period")?,
             bytes("phase")?,
@@ -171,6 +174,7 @@ pub fn read_segments(
                     flight_id: flight_id.value(row),
                     callsign: padded(callsign.value(row).as_bytes()),
                     designator: padded(designator.value(row)),
+                    profile: profile.value(row),
                     source_id: source_id.value(row),
                     period: period.value(row),
                     flags: flags.value(row),

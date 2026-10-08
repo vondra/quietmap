@@ -33,6 +33,7 @@ fn departures() -> Vec<FlightSegment> {
                 flight_id: (0x4b_0000 + flight) << 40 | 1_756_700_000,
                 callsign: *b"CSA100  ",
                 designator: *b"A320",
+                profile: physics::doc29::profiles_generated::profile_idx("A320"),
                 source_id: 0,
                 period: 0,
                 flags: read::FLAG_DEPARTURE,
@@ -60,7 +61,7 @@ fn exact_db(segments: &[FlightSegment], receiver: [f64; 2]) -> f64 {
     let energy: f64 = segments
         .iter()
         .filter_map(|segment| {
-            let (_, emission) = emission_of(segment, false)?;
+            let (_, emission) = emission_of(segment)?;
             let geometry = SegmentGeometry {
                 start_m: local(segment.start),
                 end_m: local(segment.end),
@@ -210,36 +211,4 @@ fn a_box_keeps_its_loudest_pieces_one_per_flight() {
         .map(|kept| (kept.flight_id, kept.keep_level_db))
         .collect();
     assert_eq!(kept, [(1, 83.0), (2, 85.0)]);
-}
-
-/// A flight of unknown type with no flight number flying a median under 140 kt is a light
-/// aircraft, a glitch to 400 kt notwithstanding; an airline or military flight number, a faster
-/// flight or a known type keeps its class.
-#[test]
-fn slow_flights_of_unknown_type_are_light_aircraft() {
-    let base = departures()[0].clone();
-    let flight = |id: u64, callsign: &[u8; 8], designator: &[u8; 4], speeds: &[f64]| {
-        speeds
-            .iter()
-            .map(|&speed_kt| FlightSegment {
-                flight_id: id,
-                callsign: *callsign,
-                designator: *designator,
-                speed_kt,
-                ..base.clone()
-            })
-            .collect::<Vec<_>>()
-    };
-    let segments: Vec<FlightSegment> = [
-        flight(1, b"OKBYS   ", b"    ", &[95.0, 400.0, 110.0]),
-        flight(2, b"N4721K  ", b"PIAX", &[88.0, 120.0, 140.0]),
-        flight(3, b"RCH123  ", b"    ", &[130.0, 120.0]),
-        flight(4, b"OKJFA   ", b"    ", &[130.0, 230.0, 250.0]),
-        flight(5, b"OKABC   ", b"C172", &[100.0]),
-    ]
-    .concat();
-    let light = light_unknown_flights(segments.iter());
-    assert_eq!(light, HashSet::from([1, 2]));
-    let (aircraft, _) = emission_of(&segments[0], true).unwrap();
-    assert_eq!(aircraft.class, AircraftType::from_designator("C172").class);
 }

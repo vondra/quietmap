@@ -82,7 +82,7 @@ pub(super) fn add_segment(
     sums: &mut [Sums],
     receivers: &[Receiver],
     placement: &Placement,
-    (segment, light, place): (&FlightSegment, bool, &PlaceAtmosphere),
+    (segment, place): (&FlightSegment, &PlaceAtmosphere),
     weight: f64,
 ) {
     let mut emission: Option<Option<(bool, SegmentEmission)>> = None;
@@ -94,7 +94,7 @@ pub(super) fn add_segment(
             continue;
         }
         let Some((helicopter, emission)) = emission.get_or_insert_with(|| {
-            emission_of(segment, light).map(|(aircraft, emission)| {
+            emission_of(segment).map(|(aircraft, emission)| {
                 (aircraft.helicopter.is_some(), emission.in_atmosphere(place))
             })
         }) else {
