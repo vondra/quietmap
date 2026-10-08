@@ -1,10 +1,12 @@
 //! Builds `obstacles` tiles from dev4 structures (the rows and footprint ids in
-//! [`crate::structures`], the rules in [`crate::screening`]): for each target square, the outlines of the square and of its eight
+//! [`crate::structures`], the rules in [`crate::screening`]) and the noise screens OpenStreetMap
+//! lacks ([`crate::barriers`]): for each target square, the outlines of the square and of its eight
 //! neighbours (whose outlines cross into its border tiles), each stored whole in every child tile
 //! whose cells it crosses. A wall longer than a tile's int16 frame (half a tile beyond each edge)
 //! is stored there as its parts inside the frame; a building ring that large is a mapping error
 //! (no building spans kilometres) and is left out, counted on standard error.
 
+use crate::barriers::Barriers;
 use crate::dev4::{Dev4, Square};
 use crate::output::write_tile;
 use crate::screening::ScreeningOutline;
@@ -27,7 +29,12 @@ const SQUARES_AT_ONCE: usize = 8;
 
 /// Writes the obstacles tiles of `squares`, [`SQUARES_AT_ONCE`] at a time; returns the number
 /// written (empty tiles get no file).
-pub fn build(dev4: &Dev4, squares: &[Square], out: &Path) -> Result<usize, String> {
+pub fn build(
+    dev4: &Dev4,
+    barriers: &Barriers,
+    squares: &[Square],
+    out: &Path,
+) -> Result<usize, String> {
     let next = AtomicUsize::new(0);
     std::thread::scope(|scope| {
         let workers: Vec<_> = (0..SQUARES_AT_ONCE)
@@ -35,7 +42,7 @@ pub fn build(dev4: &Dev4, squares: &[Square], out: &Path) -> Result<usize, Strin
                 scope.spawn(|| {
                     let mut written = 0;
                     while let Some(&square) = squares.get(next.fetch_add(1, Ordering::Relaxed)) {
-                        written += build_square(dev4, square, out)?;
+                        written += build_square(dev4, barriers, square, out)?;
                     }
                     Ok::<usize, String>(written)
                 })
@@ -53,7 +60,12 @@ pub fn build(dev4: &Dev4, squares: &[Square], out: &Path) -> Result<usize, Strin
 }
 
 /// Writes the obstacles tiles of one square; returns the number written.
-fn build_square(dev4: &Dev4, square: Square, out: &Path) -> Result<usize, String> {
+fn build_square(
+    dev4: &Dev4,
+    barriers: &Barriers,
+    square: Square,
+    out: &Path,
+) -> Result<usize, String> {
     let side = i64::from(TILES_PER_SQUARE_SIDE) * STEPS_PER_TILE as i64;
     let (west, north) = (i64::from(square.x) * side, i64::from(square.y) * side);
     // An outline can cross the square's cells only if its box meets the square's.
@@ -72,6 +84,16 @@ fn build_square(dev4: &Dev4, square: Square, out: &Path) -> Result<usize, String
     for owner in square.with_neighbours() {
         outlines.extend(read_square(dev4, owner, west + side / 2, &near)?);
     }
+    let mut screens = Vec::new();
+    for owner in square.with_neighbours() {
+        screens.extend(
+            barriers
+                .walls(owner, west + side / 2, &outlines)
+                .into_iter()
+                .filter(|screen| near(&screen.vertices)),
+        );
+    }
+    outlines.extend(screens);
     let crossed: Vec<Vec<TileId>> = outlines
         .par_iter()
         .map(|outline| tiles_crossed(&outline.vertices))

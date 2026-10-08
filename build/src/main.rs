@@ -3,8 +3,9 @@
 //! Until the builders read the sources themselves, `qm-build dev4` converts squares of the dev4
 //! z9 tree: `qm-build dev4 --prepared DIR --rasters DIR --out DIR --squares X:Y[,X:Y..]
 //! [--kinds terrain,obstacles,sources] [--airport-traffic DIR] [--climate DIR] [--tent FILE]
-//! [--turbines FILE] [--road-traffic DIR] [--bus FILE] [--worship FILE] [--venues FILE]
-//! [--national-dem FILE,..]` (sources need the airport traffic, the climate grids of
+//! [--turbines FILE] [--barriers FILE] [--road-traffic DIR] [--bus FILE] [--worship FILE]
+//! [--venues FILE] [--national-dem FILE,..]` (obstacles need the noise screens of
+//! `fetch/barriers.sh`; sources need the airport traffic, the climate grids of
 //! `fetch/worldclim.sh`, the TEN-T freight lines of `fetch/tent.sh` and the standing wind turbines
 //! of `fetch/turbines.sh`, and take the roads' building traffic of `qm-build traffic`,
 //! the bus routes of `fetch/bus.sh`, the places of worship of `fetch/worship.sh` and the bars,
@@ -27,6 +28,7 @@
 
 mod aircraft;
 mod airport;
+mod barriers;
 mod boxes;
 mod climate;
 mod dev4;
@@ -177,7 +179,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
                     "terrain" => {
                         terrain::build(&dev4, &squares, &national_models(&options)?, &out)?
                     }
-                    "obstacles" => obstacles::build(&dev4, &squares, &out)?,
+                    "obstacles" => obstacles::build(
+                        &dev4,
+                        &barriers::Barriers::load(Path::new(options.get("barriers")?))?,
+                        &squares,
+                        &out,
+                    )?,
                     "sources" => sources::build(
                         (
                             &dev4,

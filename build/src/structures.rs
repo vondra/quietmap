@@ -37,7 +37,7 @@ pub fn footprint_id(square: Square, screening_ordinal: u32) -> u64 {
 
 /// The copy of a global position whose x lies nearest `reference_x` (outlines run continuously
 /// across the antimeridian).
-fn nearest_copy(global: GlobalSteps, reference_x: i64) -> GlobalSteps {
+pub(crate) fn nearest_copy(global: GlobalSteps, reference_x: i64) -> GlobalSteps {
     let copies = (reference_x - global.x + WORLD_STEPS / 2).div_euclid(WORLD_STEPS);
     GlobalSteps {
         x: global.x + copies * WORLD_STEPS,
