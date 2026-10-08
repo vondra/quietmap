@@ -311,26 +311,6 @@ static POWER_ROWS: LazyLock<Vec<[Vec<PowerRow>; 2]>> = LazyLock::new(|| {
         .collect()
 });
 
-/// The steepest fall (dB per decade of distance) of any row's SEL curve in each interval between
-/// NPD distances: the first one is the most any level can gain below 200 ft, where each row
-/// extrapolates its own first interval (the relevance bound).
-pub(crate) static STEEPEST_INTERVAL_DB_PER_DECADE: LazyLock<[f64; NPD_DISTANCES - 1]> =
-    LazyLock::new(|| {
-        let logs = &*LOG10_NPD_DISTANCES_FT;
-        std::array::from_fn(|k| {
-            POWER_ROWS
-                .iter()
-                .flatten()
-                .flatten()
-                .map(|row| (row.sel_db[k] - row.sel_db[k + 1]) / (logs[k + 1] - logs[k]))
-                .fold(f64::NEG_INFINITY, f64::max)
-        })
-    });
-
-/// The first interval's value of [`STEEPEST_INTERVAL_DB_PER_DECADE`].
-pub(crate) static STEEPEST_FIRST_INTERVAL_DB_PER_DECADE: LazyLock<f64> =
-    LazyLock::new(|| STEEPEST_INTERVAL_DB_PER_DECADE[0]);
-
 /// The far anchor of an aircraft box's curves (m): past 25,000 ft every row falls with its own
 /// absorption, so a mix of rows falls slower than any one fitted curve; a box also sums its
 /// pieces here, at the aircraft reach, and its tail runs through both ends.
