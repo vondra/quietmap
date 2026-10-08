@@ -20,6 +20,16 @@ html, body {
   bottom: 10px !important;
 }
 
+/* The bottom-right corner is one row: "About quietmap.org", then the attribution ⓘ, which grows
+   leftwards when opened and pushes the link along instead of covering it. */
+.maplibregl-ctrl-bottom-right {
+  display: flex;
+  align-items: center;
+}
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl.about-control {
+  margin: 10px 0;
+}
+
 /* Google-like spacing in the bottom-left stack: +/- at the bottom, a gap,
    then the locate button (BasemapBar floats above with its own gap). */
 .maplibregl-ctrl-bottom-left .maplibregl-ctrl-group:has(button.maplibregl-ctrl-geolocate) {

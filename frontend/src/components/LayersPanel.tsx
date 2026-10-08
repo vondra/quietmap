@@ -80,6 +80,9 @@ export default function LayersPanel({ open, onClose, ...body }: LayersPanelProps
 
       <div className="max-h-[60vh] overflow-y-auto px-4 pb-3 [scrollbar-gutter:stable] scroll-py-1.5">
         <LayerControlsBody {...body} dividerSpacing="comfortable" />
+        {/* The phone's way to the About pages; from md up it sits in the map's corner (AboutControl). */}
+        <div className="my-2 border-t border-border" />
+        <a href="/about" className="block text-xs text-muted-foreground hover:text-foreground">About quietmap.org</a>
       </div>
     </div>
   )

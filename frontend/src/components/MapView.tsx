@@ -11,6 +11,7 @@ import QuietZonesLayer from './QuietZonesLayer'
 import HeatmapOverlay from './HeatmapOverlay'
 import { HEATMAP_LAYERS, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
 import HoverTooltip from './HoverTooltip'
+import AboutControl from './AboutControl'
 import MapStateSync from './MapStateSync'
 import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
 import { QUIET_THRESHOLD_DEFAULT, type UrlState } from '../hooks/useUrlState'
@@ -18,9 +19,9 @@ import type { SelectedLocation } from './FlyToLocation'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-// The noise model's inputs whose licences ask for credit (OpenStreetMap's ODbL above all).
-const NOISE_DATA_CREDITS =
-  'Noise model: &copy; OpenStreetMap contributors (ODbL), Overture Maps Foundation (ODbL), Copernicus ERA5, WorldClim, IEA, Eurostat, EU TEN-T, FHWA, Thailand DOH'
+// The noise model's data: OpenStreetMap's ODbL asks for its credit on the map (the satellite base
+// map does not name it); every other source is credited on the About pages.
+const NOISE_DATA_CREDITS = 'Noise model: &copy; OpenStreetMap contributors and <a href="/about/credits">others</a>'
 
 interface MapViewProps {
   isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean
@@ -124,6 +125,7 @@ export default function MapView({
       maxZoom={16}
       // Compact ⓘ: expands to the basemap sources' own credits (OSM/Carto —
       // their licenses require on-map attribution) and the noise model's data.
+      // AboutControl sits left of it.
       attributionControl={{ compact: true, customAttribution: NOISE_DATA_CREDITS }}
       // Defaults (deceleration 2500, maxSpeed 1400) give ~1.25 s inertia on a medium
       // flick — too sluggish. 4000 / 1100 lands around ~780 ms, between the default
@@ -131,6 +133,7 @@ export default function MapView({
       dragPan={{ deceleration: 4000, maxSpeed: 1100 }}
     >
       <NavigationControl position="bottom-left" showCompass={false} />
+      <AboutControl />
       {/* Precise location is user-triggered (Google pattern): the initial view
           only approximates from browser language (utils/initial-view.ts); GPS
           fires on this button's click, when the permission prompt is expected. */}
