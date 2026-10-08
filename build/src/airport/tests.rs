@@ -442,3 +442,47 @@ fn flights_seen_low_over_a_runway_get_the_rolls_they_miss() {
             .all(|pair| pair[0].speed_kt > pair[1].speed_kt)
     );
 }
+
+/// One count per movement: an increment day on which the primary saw a departure low at the
+/// runway and the secondary saw its roll keeps the primary's (a roll added from its low end) and
+/// drops the secondary's legs there; a landing only the secondary saw, 50 km away, stays.
+#[test]
+fn where_the_primary_saw_a_flight_low_its_roll_counts_once() {
+    let aeroways = airport(10);
+    let runways = rolls::Runways::new(&aeroways);
+    let a320 = physics::doc29::profiles_generated::CLASS_NAMES
+        .iter()
+        .position(|&name| name == "A320-232")
+        .expect("a class") as u8;
+    let roll = |departure: bool, east_m: f64| GroundLeg {
+        secondary_only: true,
+        departure,
+        speed_kt: 120.0,
+        ..leg(
+            7,
+            Mover::Aircraft { class: a320 },
+            at(0.0, east_m),
+            at(0.0, east_m + 250.0),
+        )
+    };
+    // The take-off roll at the runway, the landing roll 50 km east, both seen by the secondary.
+    let mut legs = vec![roll(true, 0.0), roll(false, 50_000.0)];
+    let ends = [
+        low_end(7, true, true, a320, 3_000.0),
+        legs::LowEnd {
+            secondary_only: true,
+            ..low_end(7, false, false, a320, 49_000.0)
+        },
+    ];
+    let kept = rolls::primary_first(&mut legs, &ends);
+    assert_eq!(legs.len(), 1);
+    assert!(length_m(at(0.0, 50_000.0), legs[0].start) < 1.0);
+    assert_eq!(kept.len(), 2);
+    let rolls = rolls::missing_rolls(&legs, &kept, &runways);
+    assert_eq!(rolls.len(), rolls::LEGS, "{rolls:?}");
+    assert!(
+        rolls
+            .iter()
+            .all(|roll| !roll.secondary_only && roll.departure)
+    );
+}

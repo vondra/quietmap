@@ -10,7 +10,9 @@
 
 use super::legs::{GroundLeg, LowEnd, Mover};
 use super::lines::Aeroways;
-use crate::aircraft::flat::{M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, signed_longitude_delta};
+use crate::aircraft::flat::{
+    M_PER_DEG_LAT, M_PER_DEG_LON_EQUATOR, flat_distance_m, signed_longitude_delta,
+};
 use physics::doc29::npd::Family;
 use physics::doc29::profiles_generated::CLASS_FAMILY;
 use physics::emission::airport::GroundOperation;
@@ -228,6 +230,37 @@ fn roll_legs(
                 ..template.clone()
             }
         })
+        .collect()
+}
+
+/// Within this of a flight's low end the primary provider saw, the flight's ground legs that only
+/// the secondary saw are the same movement there (the largest airports are 4-5 km across).
+const SAME_PLACE_M: f32 = 8_000.0;
+
+/// One count per physical movement (review item 8): where the primary provider saw a flight low,
+/// the flight's roll comes from the primary (its own legs, else the roll [`missing_rolls`] adds
+/// from its low end) on every day it is seen, and the ground legs and low ends only the secondary
+/// saw there are dropped, or an increment day counts its taxi and roll twice (LHR runway power
+/// 90.7 -> 90.3 dB(A)/m, ORD -0.2 dB). What only the secondary saw elsewhere stays: a landing the
+/// primary missed. Returns the low ends that stay.
+pub fn primary_first(legs: &mut Vec<GroundLeg>, low_ends: &[LowEnd]) -> Vec<LowEnd> {
+    let mut seen: HashMap<u64, Vec<[f64; 2]>> = HashMap::new();
+    for end in low_ends.iter().filter(|end| !end.secondary_only) {
+        seen.entry(end.flight_id).or_default().push(end.end);
+    }
+    let there = |flight_id: u64, at: [f64; 2]| {
+        seen.get(&flight_id).is_some_and(|places| {
+            places.iter().any(|place| {
+                flat_distance_m(place[0] as f32, place[1] as f32, at[0] as f32, at[1] as f32)
+                    <= SAME_PLACE_M
+            })
+        })
+    };
+    legs.retain(|leg| !(leg.secondary_only && there(leg.flight_id, leg.start)));
+    low_ends
+        .iter()
+        .filter(|end| !(end.secondary_only && there(end.flight_id, end.end)))
+        .cloned()
         .collect()
 }
 
