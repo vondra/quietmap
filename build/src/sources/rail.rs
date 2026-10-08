@@ -10,7 +10,7 @@ use arrow_array::{Array, RecordBatch};
 use physics::bands::{BANDS, PERIOD_HOURS, PERIODS};
 use physics::emission::rail::{FreightRegion, RailType, line_emission_db};
 use std::collections::HashMap;
-use tiles::sources::{Attribute, Layer};
+use tiles::sources::{Attribute, GUESSED_TRAIN_SOURCES, Layer};
 
 /// Source height above the terrain: the wheel-rail contact (CNOSSOS-EU), a locomotive horn.
 const RAIL_SOURCE_HEIGHT_M: f64 = 0.5;
@@ -26,12 +26,6 @@ const EU_FREIGHT_NETWORK: [&[u8; 2]; 30] = [
     b"SE", b"CH", b"NO", b"GB",
 ];
 
-/// dev4's rail sources whose train counts are a guess: the per-line priors (0) and the
-/// operator-class CNOSSOS defaults of countries without open timetables.
-const GUESSED_TRAIN_SOURCES: [u16; 19] = [
-    0, 2044, 9013, 9181, 9232, 9263, 9365, 9369, 9399, 9405, 9505, 9567, 9644, 9730, 9793, 9805,
-    9819, 9835, 9861,
-];
 /// Per country, the factors on the guessed freight and passenger counts of its rail lines that
 /// bring the rows' train-km to Eurostat's (rail_tf_trainmv 2024, the United Kingdom 2019;
 /// evidence 2026-10-01, rail train-km): freight to the goods train-km (the EU27's weighed by their

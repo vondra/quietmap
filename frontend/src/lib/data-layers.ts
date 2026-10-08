@@ -1,5 +1,5 @@
-// The data layers: the ground and obstacles every click computes over, and the forest it leaves
-// out, drawn from the served release by `qm-raster`
+// The data layers: the ground, obstacles and traffic every click computes over, and the forest it
+// leaves out, drawn from the served release by `qm-raster`
 // (`/api/raster/{id}/{z}/{x}/{y}.png`). Its zooms: the server's (server/src/routes/raster.ts).
 export const DATA_LAYERS = [
   {
@@ -17,6 +17,14 @@ export const DATA_LAYERS = [
   {
     id: 'buildings', label: 'Buildings', minzoom: 13, opacity: 0.85,
     tooltip: 'Buildings as the computation screens and reflects with them, coloured by height: yellow 3 m, orange 8 m, red 15 m, dark red 25 m, purple 50 m and more.',
+  },
+  {
+    id: 'traffic', label: 'Road traffic', minzoom: 13, opacity: 1,
+    tooltip: 'Vehicles a day on every road: yellow 100, orange 5,000, red 15,000, dark red 40,000 and more. Solid where counted, half where a model makes them (mostly from the buildings around), faint where a fixed estimate per road class stands.',
+  },
+  {
+    id: 'trains', label: 'Trains', minzoom: 11, opacity: 1,
+    tooltip: 'Trains a day on every track, trams included: light blue 1, blue 10, dark blue 50, navy 150, purple 300 and more. Solid where timetables give all of them, half where they give some, faint where none do.',
   },
   {
     id: 'barriers', label: 'Noise barriers', minzoom: 13, opacity: 1,

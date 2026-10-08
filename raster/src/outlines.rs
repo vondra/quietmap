@@ -66,7 +66,12 @@ fn fill_even_odd(rings: &[Vec<[f64; 2]>], colour: [u8; 4], pixels: &mut [[u8; 4]
 }
 
 /// Draws the pixels whose centres lie closer to the polyline than half its width.
-fn draw_line(points: &[[f64; 2]], width_px: f64, colour: [u8; 4], pixels: &mut [[u8; 4]]) {
+pub(crate) fn draw_line(
+    points: &[[f64; 2]],
+    width_px: f64,
+    colour: [u8; 4],
+    pixels: &mut [[u8; 4]],
+) {
     let radius = width_px / 2.0;
     for edge in points.windows(2) {
         let ([x0, y0], [x1, y1]) = (edge[0], edge[1]);
@@ -91,7 +96,7 @@ fn draw_line(points: &[[f64; 2]], width_px: f64, colour: [u8; 4], pixels: &mut [
 }
 
 /// Whether points span a box that meets the tile widened by `margin` pixels.
-fn near(points: &[[f64; 2]], margin: f64) -> bool {
+pub(crate) fn near(points: &[[f64; 2]], margin: f64) -> bool {
     let (low, high) = points
         .iter()
         .fold(([f64::MAX; 2], [f64::MIN; 2]), |(low, high), &[x, y]| {
@@ -120,7 +125,7 @@ pub fn render(
     for (&tile, file) in tiles.iter().zip(files) {
         let Some(bytes) = file else { continue };
         let obstacles = Obstacles::parse(bytes).map_err(|error| error.to_string())?;
-        let centre = tile.centre();
+        let centre = map_tile.centre_of(tile);
         let points = |index: usize| -> Vec<[f64; 2]> {
             let record = obstacles.outline(index);
             (record.first_vertex..record.first_vertex + record.vertex_count)

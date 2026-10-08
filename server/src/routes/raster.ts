@@ -1,18 +1,20 @@
 // GET /api/raster/:layer/:z/:x/:y.png: one map tile of a data layer (the terrain's elevation, forest
-// and hard ground; the obstacles' buildings and noise barriers),
+// and hard ground; the obstacles' buildings and noise barriers; the sources' road traffic and trains),
 // drawn by `qm-raster` from the release's default year. A few tiles draw at once behind a short
 // queue; a full queue answers 503, a failed drawing 500, and neither is cached.
 import { spawn } from 'node:child_process'
 import type { FastifyInstance } from 'fastify'
 
 /** Each layer's zooms, as `qm-raster` draws them: the terrain from 10 (16 files a tile), the
- *  obstacles from 13; the map enlarges zoom 16 beyond. */
+ *  obstacles and the roads from 13, the railways from 11; the map enlarges zoom 16 beyond. */
 export const RASTER_ZOOMS: Readonly<Record<string, readonly [number, number]>> = {
   elevation: [10, 16],
   forest: [10, 16],
   hard: [10, 16],
   buildings: [13, 16],
   barriers: [13, 16],
+  traffic: [13, 16],
+  trains: [11, 16],
 }
 
 /** A view asks for about 35 tiles a layer, all five layers 175; one draws in 3-13 ms, so 256

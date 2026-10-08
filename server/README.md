@@ -8,7 +8,7 @@ tiles, the data layers, the geocoder proxies and the streamed popup:
 | `GET /api/popup?lat=&lon=[&year=][&segments=1]` | one click, streamed as `application/x-ndjson` (below) |
 | `GET /api/tiles-manifest` | the published heatmap generation: `{build, zoom, layers}` |
 | `GET /api/tiles/:build/:layer/:z/:x/:y.bin` | one HM3 tile, Brotli, immutable; a missing tile is an empty 200 |
-| `GET /api/raster/:layer/:z/:x/:y.png` | one 256-pixel map tile of a data layer, drawn by `qm-raster` from the default year: `elevation`, `forest`, `hard` (zoom 10-16) and `buildings`, `barriers` (13-16); 400 for no such tile, 503 when eight draw and 256 wait, 500 when the drawing failed; kept an hour |
+| `GET /api/raster/:layer/:z/:x/:y.png` | one 256-pixel map tile of a data layer, drawn by `qm-raster` from the default year: `elevation`, `forest`, `hard` (zoom 10-16), `buildings`, `barriers`, `traffic` (13-16) and `trains` (11-16); 400 for no such tile, 503 when eight draw and 256 wait, 500 when the drawing failed; kept an hour |
 | `GET /api/search?q=&lat=&lon=`, `GET /api/reverse?lat=&lon=` | address suggestions and place names (public Photon geocoder) |
 | everything else | the built frontend (`../frontend/dist`), or a 404 |
 

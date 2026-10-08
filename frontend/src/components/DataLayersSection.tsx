@@ -1,7 +1,7 @@
 // The layer panel's "Advanced" group: the data layers, folded away until opened (open while any is
 // on).
 import { useState } from 'react'
-import { ChevronDown, Fence, Mountain, SquareDashed, Trees, Building } from 'lucide-react'
+import { Building, Car, ChevronDown, Fence, Mountain, SquareDashed, TrainFront, Trees } from 'lucide-react'
 import { DATA_LAYERS, type DataLayerId } from '../lib/data-layers'
 import { Switch } from './ui/switch'
 
@@ -10,6 +10,8 @@ const ICONS: Record<DataLayerId, React.ReactNode> = {
   forest: <Trees className="size-3.5" />,
   hard: <SquareDashed className="size-3.5" />,
   buildings: <Building className="size-3.5" />,
+  traffic: <Car className="size-3.5" />,
+  trains: <TrainFront className="size-3.5" />,
   barriers: <Fence className="size-3.5" />,
 }
 
@@ -29,7 +31,7 @@ export default function DataLayersSection({ dataLayers, onDataLayersChange }: Da
     <div>
       <button
         onClick={() => setOpen(value => !value)}
-        title="The data every click computes over: the ground's height, hard ground, buildings and noise barriers; and the forest, which takes nothing off"
+        title="The data every click computes over: the ground's height, hard ground, buildings, road traffic, trains and noise barriers; and the forest, which takes nothing off"
         aria-expanded={open}
         className="flex w-full items-center gap-2.5 py-1.5 px-1 rounded-lg hover:bg-black/5 transition-colors cursor-pointer text-muted-foreground hover:text-foreground"
       >

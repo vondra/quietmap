@@ -1,11 +1,13 @@
 //! `qm-raster --prepared DIR --year YYYY --layer LAYER --z Z --x X --y Y`: one 256-pixel map tile
 //! (standard XYZ) of the data under the computation, as a PNG on stdout: the terrain's height,
-//! forest cover or hard ground per lattice node, or the buildings by height or the noise
-//! barriers of the obstacles. Where the release has nothing to show the tile is transparent.
+//! forest cover or hard ground per lattice node, the buildings by height or the noise barriers of
+//! the obstacles, or the roads' vehicles and the railways' trains a day of the sources. Where the
+//! release has nothing to show the tile is transparent.
 
 mod ground;
 mod outlines;
 mod png;
+mod sources;
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -25,6 +27,8 @@ enum Layer {
     Hard,
     Buildings,
     Barriers,
+    Traffic,
+    Trains,
 }
 
 impl Layer {
@@ -35,23 +39,28 @@ impl Layer {
             "hard" => Layer::Hard,
             "buildings" => Layer::Buildings,
             "barriers" => Layer::Barriers,
+            "traffic" => Layer::Traffic,
+            "trains" => Layer::Trains,
             _ => return None,
         })
     }
 
     /// The terrain layers read 16 files a tile at zoom 10; the obstacles lie in one file from
-    /// zoom 13 on, where a building covers pixels.
+    /// zoom 13 on, where a building covers pixels; the roads from 13, the railways from 11.
     fn min_zoom(self) -> u32 {
         match self {
             Layer::Elevation | Layer::Forest | Layer::Hard => 10,
-            Layer::Buildings | Layer::Barriers => 13,
+            Layer::Buildings | Layer::Barriers | Layer::Traffic => 13,
+            Layer::Trains => 11,
         }
     }
 
-    /// Pixels beyond the map tile whose data reach into it: half a barrier's line.
+    /// Pixels beyond the map tile whose data reach into it: half a barrier's, a road's or a
+    /// railway's widest line.
     fn margin_px(self) -> f64 {
         match self {
             Layer::Barriers => outlines::BARRIER_WIDTH_PX / 2.0,
+            Layer::Traffic | Layer::Trains => sources::WIDEST_LINE_PX / 2.0,
             _ => 0.0,
         }
     }
@@ -60,6 +69,7 @@ impl Layer {
         match self {
             Layer::Elevation | Layer::Forest | Layer::Hard => Kind::Terrain,
             Layer::Buildings | Layer::Barriers => Kind::Obstacles,
+            Layer::Traffic | Layer::Trains => Kind::Sources,
         }
     }
 }
@@ -99,6 +109,18 @@ impl MapTile {
             x: self.west + (column as f64 + 0.5) * self.pixel,
             y: self.north + (row as f64 + 0.5) * self.pixel,
         }
+    }
+
+    /// A z12 tile's centre beside the map tile: a neighbour read across the antimeridian lies a
+    /// world's width over.
+    fn centre_of(self, tile: TileId) -> Mercator {
+        let (mut centre, world) = (tile.centre(), f64::from(TILES_PER_AXIS));
+        if centre.x - self.west > world / 2.0 {
+            centre.x -= world;
+        } else if self.west - centre.x > world / 2.0 {
+            centre.x += world;
+        }
+        centre
     }
 
     /// The z12 tiles under the map tile widened by `margin_px` pixels on every side (across the
@@ -154,6 +176,7 @@ fn run(arguments: &[String]) -> Result<Vec<u8>, String> {
             ground::render(layer, map_tile, &tiles, &files)?
         }
         Layer::Buildings | Layer::Barriers => outlines::render(layer, map_tile, &tiles, &files)?,
+        Layer::Traffic | Layer::Trains => sources::render(layer, map_tile, &tiles, &files)?,
     };
     Ok(png::encode(PIXELS, PIXELS, &pixels))
 }
@@ -198,6 +221,12 @@ mod tests {
                 touching(0, 1387)
             ]
         );
+        // The western neighbour of a tile on the antimeridian lies just west of it.
+        let east = MapTile::new(13, 0, 2 * 1387);
+        assert_eq!(east.centre_of(touching(4095, 1387)).x, -0.5);
+        assert_eq!(east.centre_of(touching(0, 1387)).x, 0.5);
+        let west = MapTile::new(13, 8191, 2 * 1387);
+        assert_eq!(west.centre_of(touching(0, 1387)).x, 4096.5);
         let corner = fine.pixel_centre(0, 0);
         assert_eq!(corner.x, 8849.0 / 4.0 + 0.5 / 1024.0);
         assert_eq!(corner.y, 5549.0 / 4.0 + 0.5 / 1024.0);

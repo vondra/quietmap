@@ -145,6 +145,68 @@ pub fn display_fields(layer: Layer) -> &'static [&'static str] {
     }
 }
 
+// Where a road's traffic and a railway's trains come from, as the display fields' source ids say:
+// the builder sets them, the data layers read them.
+
+/// dev4's source id of a class prior (no dataset).
+pub const PRIOR_SOURCE_ID: u16 = 0;
+/// dev4's service-tree heuristic of local streets (a background plus routed trips).
+pub const SERVICE_TREE_SOURCE_ID: u16 = 11;
+/// The source id this converter gives a row whose traffic the buildings model.
+pub const BUILDING_TRAFFIC_SOURCE_ID: u16 = 30;
+/// The source id of a Thai national highway's row carrying the department's counts.
+pub const THAI_HIGHWAYS_SOURCE_ID: u16 = 31;
+/// dev4's sources whose category split is a guess, not a count: the class priors (0), the
+/// country-tuned CNOSSOS class defaults (Algeria, DR Congo, Ethiopia, Iran, Iraq, Kazakhstan,
+/// Kenya, Morocco, Nigeria, Russia, Sudan, Turkey, Ukraine, Egypt, Tanzania, Uzbekistan: "no open
+/// per-segment AADT") and the road-classification fallbacks (Japan, Argentina, Chile, Colombia,
+/// Indonesia, Peru, Riyadh, Thailand). They put 9-15 % medium and heavy vehicles on urban main
+/// roads and up to 40 % on every class, residential streets included.
+pub const GUESSED_SPLIT_SOURCES: [u16; 25] = [
+    PRIOR_SOURCE_ID,
+    9012,
+    9180,
+    9231,
+    9364,
+    9368,
+    9398,
+    9404,
+    9504,
+    9566,
+    9643,
+    9729,
+    9792,
+    9804,
+    9818,
+    9834,
+    9860,
+    9865,
+    9870,
+    9871,
+    9872,
+    9873,
+    9874,
+    9875,
+    9876,
+];
+/// dev4's rail sources whose train counts are a guess: the per-line priors (0) and the
+/// operator-class CNOSSOS defaults of countries without open timetables.
+pub const GUESSED_TRAIN_SOURCES: [u16; 19] = [
+    0, 2044, 9013, 9181, 9232, 9263, 9365, 9369, 9399, 9405, 9505, 9567, 9644, 9730, 9793, 9805,
+    9819, 9835, 9861,
+];
+
+/// dev4's road datasets that are its own values per road class on a national network (its registry
+/// calls them proxies; the builder keeps them as data): Bolivia, China, Ecuador, India, the
+/// Philippines, Paraguay, Venezuela.
+pub const NETWORK_ESTIMATE_SOURCE_IDS: [u16; 7] = [1013, 1025, 1034, 1050, 1095, 1098, 1124];
+/// Amsterdam's file of the EU city traffic volumes: the city's traffic model, not counts (dev4).
+pub const AMSTERDAM_MODEL_SOURCE_ID: u16 = 1103;
+/// dev4's rail sources whose counts come from a fixed table though the builder keeps them: China's
+/// and India's networks by service type, Czechia's residual of 2 passenger and 1 freight train a day
+/// where no timetable runs.
+pub const TABLE_TRAIN_SOURCES: [u16; 3] = [2021, 2037, 9863];
+
 /// Band levels in dB (Z-weighted) per period; `f64::NEG_INFINITY` is silence. Lines carry sound
 /// power per metre, points sound power.
 pub type Emission = [[f64; BANDS]; PERIODS];
@@ -336,6 +398,11 @@ impl<'a> Sources<'a> {
             }),
             display: String::new(),
         })
+    }
+
+    /// An attribute's layer alone, without decoding its emission.
+    pub fn layer(&self, index: u32) -> Result<Layer, FormatError> {
+        Layer::from_code(self.attribute_record(index)?[0])
     }
 
     /// An attribute's group key alone, without decoding its emission.

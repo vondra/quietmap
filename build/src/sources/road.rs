@@ -25,7 +25,10 @@ use physics::emission::road_surface::{
     BRUSHED_CONCRETE, HARD_ELEMENTS, HARD_ELEMENTS_HERRINGBONE, REFERENCE_SURFACE, RoadSurface,
     car_effect_db,
 };
-use tiles::sources::{Attribute, Layer};
+use tiles::sources::{
+    Attribute, BUILDING_TRAFFIC_SOURCE_ID, GUESSED_SPLIT_SOURCES, Layer, PRIOR_SOURCE_ID,
+    SERVICE_TREE_SOURCE_ID, THAI_HIGHWAYS_SOURCE_ID,
+};
 
 /// Source height above the carriageway (CNOSSOS-EU 2.4.1).
 const ROAD_SOURCE_HEIGHT_M: f64 = 0.05;
@@ -115,52 +118,11 @@ const COUNTRY_CLASS_SHARES: [([u8; 2], ClassShares); 3] = [
         [[[1.32, 4.95], [1.17, 3.43]], [[3.85, 2.51], [3.85, 2.22]]],
     ),
 ];
-/// dev4's source id of a class prior (no dataset).
-const PRIOR_SOURCE_ID: u16 = 0;
-/// dev4's service-tree heuristic of local streets (a background plus routed trips).
-const SERVICE_TREE_SOURCE_ID: u16 = 11;
-/// The source id this converter gives a row whose traffic the buildings model.
-const BUILDING_TRAFFIC_SOURCE_ID: u16 = 30;
-/// The source id of a Thai national highway's row carrying the department's counts.
-const THAI_HIGHWAYS_SOURCE_ID: u16 = 31;
 /// Thailand's ISO code as the prepared rows store it.
 const THAI_ISO: u16 = u16::from_le_bytes(*b"TH");
 const US_ISO: u16 = u16::from_le_bytes(*b"US");
 /// dev4's `traffic_estimated` bits of a row whose four categories all come from a prior.
 const ALL_CATEGORIES_ESTIMATED: u8 = 15;
-/// dev4's sources whose category split is a guess, not a count: the class priors (0), the
-/// country-tuned CNOSSOS class defaults (Algeria, DR Congo, Ethiopia, Iran, Iraq, Kazakhstan,
-/// Kenya, Morocco, Nigeria, Russia, Sudan, Turkey, Ukraine, Egypt, Tanzania, Uzbekistan: "no open
-/// per-segment AADT") and the road-classification fallbacks (Japan, Argentina, Chile, Colombia,
-/// Indonesia, Peru, Riyadh, Thailand). They put 9-15 % medium and heavy vehicles on urban main
-/// roads and up to 40 % on every class, residential streets included.
-const GUESSED_SPLIT_SOURCES: [u16; 25] = [
-    PRIOR_SOURCE_ID,
-    9012,
-    9180,
-    9231,
-    9364,
-    9368,
-    9398,
-    9404,
-    9504,
-    9566,
-    9643,
-    9729,
-    9792,
-    9804,
-    9818,
-    9834,
-    9860,
-    9865,
-    9870,
-    9871,
-    9872,
-    9873,
-    9874,
-    9875,
-    9876,
-];
 /// Medium and heavy shares (%) of counted roads (motorway, trunk, primary, secondary, tertiary;
 /// rural, urban): the medians over the counts of 16 countries (CZ, DE, GB, FR, IE, PL, ES, IT, NO,
 /// SE, FI, DK, NL, US, CA, NZ; evidence 2026-10-01, road shares), links as their roads. Urban
