@@ -2,14 +2,19 @@
 // Unknown paths must remain 404s: returning index.html for scanner paths hides mistakes and makes
 // sensitive-looking URLs appear to exist. Browsers get the friendly HTML page, API and scanner
 // clients get JSON.
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import fastifyStatic from '@fastify/static'
 import type { FastifyInstance } from 'fastify'
 import { NOT_FOUND_PAGE_HTML } from './not-found-page.ts'
 
-/** The About pages the frontend renders (frontend/src/about). */
-const ABOUT_PAGES = /^\/about(?:\/(?:methodology|credits|news))?\/?$/
+/** A path under /about (one trailing slash allowed) and the page it names, as the frontend reads it
+ *  (frontend/src/lib/about-paths.ts). */
+const ABOUT_PATH = /^\/about(?:\/(.*?))?\/?$/
 
 export async function registerWeb(app: FastifyInstance, frontendDist: string): Promise<void> {
+  // The About pages the build found (frontend/src/about): only these paths open a page.
+  const aboutPages = new Set(JSON.parse(readFileSync(join(frontendDist, 'about-pages.json'), 'utf8')) as string[])
   // preCompressed: the frontend build writes sibling .br files, served with
   // zero per-request compression CPU.
   await app.register(fastifyStatic, { root: frontendDist, preCompressed: true })
@@ -23,7 +28,8 @@ export async function registerWeb(app: FastifyInstance, frontendDist: string): P
     } catch {
       return reply.status(404).send({ error: 'Not found' })
     }
-    if ((request.method === 'GET' || request.method === 'HEAD') && ABOUT_PAGES.test(pathname)) {
+    const about = pathname.match(ABOUT_PATH)
+    if ((request.method === 'GET' || request.method === 'HEAD') && about && aboutPages.has(about[1] ?? '')) {
       return reply.sendFile('index.html')
     }
     const wantsHtml =

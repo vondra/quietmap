@@ -69,14 +69,6 @@ html, body {
   .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib {
     margin: 0 0 2px 0;
   }
-  /* Opened, the credits rise above the control row (16-60px up) instead of running under it, and
-     take the width between the gutters. */
-  .maplibregl-ctrl-bottom-right:has(.maplibregl-compact-show) {
-    bottom: 64px !important;
-    left: 8px;
-    right: 8px !important;
-    justify-content: flex-end;
-  }
 }
 
 /* Search bar: one horizontal placement. Below md a
@@ -176,10 +168,14 @@ html, body {
   .about h2 { @apply mt-8 mb-2 text-xl font-semibold text-foreground; }
   .about p, .about ul, .about table { @apply my-3; }
   .about ul { @apply list-disc pl-5; }
+  .about ol { @apply list-decimal pl-5; }
   .about li { @apply my-1; }
   .about a { @apply text-foreground underline underline-offset-2; }
   .about strong { @apply text-foreground; }
   .about table { @apply w-full; }
   .about th { @apply py-1 pr-3 text-left font-semibold text-foreground; }
   .about td { @apply py-1 pr-3; }
+  /* Screenshots side by side, one under the other on a phone. */
+  .about p:has(> img) { @apply flex flex-wrap items-start gap-3; }
+  .about img { @apply h-auto min-w-0 flex-[1_1_260px] rounded-md border border-border; }
 }

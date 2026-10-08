@@ -5,17 +5,18 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { initTileBuild } from './lib/tile-urls'
+import { aboutPageOf } from './lib/about-paths'
 
 const AboutPage = lazy(() => import('./components/AboutPage'))
-// The pages the server answers (server/src/web.ts).
-const about = window.location.pathname.match(/^\/about(?:\/(methodology|credits|news))?\/?$/)
+// The server answers only the pages the build lists (server/src/web.ts).
+const about = aboutPageOf(window.location.pathname)
 
 // Resolve the published tile build in parallel with the React mount — the
 // heatmap layers stay unmounted until the manifest lands.
-if (!about) void initTileBuild()
+if (about === null) void initTileBuild()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {about ? <Suspense fallback={null}><AboutPage page={about[1] ?? ''} /></Suspense> : <App />}
+    {about !== null ? <Suspense fallback={null}><AboutPage page={about} /></Suspense> : <App />}
   </StrictMode>,
 )

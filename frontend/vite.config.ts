@@ -1,10 +1,25 @@
-// Vite build of the map: React, Tailwind, and the two big vendor stacks in their own chunks.
-import { defineConfig } from 'vite'
+// Vite build of the map: React, Tailwind, the two big vendor stacks in their own chunks, and the
+// list of About pages the server answers (`about-pages.json`).
+import { globSync } from 'node:fs'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { aboutPagePath } from './src/lib/about-paths.ts'
+
+/** Writes the paths of the About pages (src/about) for the server: any other /about path is a 404. */
+function aboutPagesList(): Plugin {
+  return {
+    name: 'about-pages',
+    generateBundle() {
+      const files = globSync('**/*.md', { cwd: new URL('./src/about', import.meta.url).pathname })
+      const pages = files.map(aboutPagePath).sort()
+      this.emitFile({ type: 'asset', fileName: 'about-pages.json', source: JSON.stringify(pages) })
+    },
+  }
+}
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), aboutPagesList()],
   build: {
     // The two vendor chunks below are split out on purpose; each is one library.
     chunkSizeWarningLimit: 1100,
