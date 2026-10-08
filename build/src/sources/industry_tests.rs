@@ -10,7 +10,6 @@ fn row(source_type: u8) -> IndustrialRow {
         source_type,
         site_subtype: 0,
         name: String::new(),
-        hub_height_m: None,
         rated_power_kw: None,
         ring: Vec::new(),
         area_m2: Some(46_710.0),
@@ -144,28 +143,6 @@ fn solar_points_need_an_output_or_a_footprint_and_generators_defer_to_their_plan
         ..tagged(SOURCE_SOLAR_FARM, r#"{"power":"plant"}"#)
     };
     assert!(row_emission(&plant, &joins).is_some());
-}
-
-/// Untagged hubs stand at 105 m, tag errors clamp to 175 m, and ratings over 8 MW are unknown.
-#[test]
-fn turbines_take_default_and_clamped_inputs() {
-    let turbine = |hub: Option<f64>, kw: Option<f64>| {
-        let row = IndustrialRow {
-            hub_height_m: hub,
-            rated_power_kw: kw,
-            ..row(SOURCE_WIND_TURBINE)
-        };
-        emission(&row).unwrap()
-    };
-    let unknown = turbine(None, Some(20_000.0));
-    assert_eq!(
-        (unknown.height_m, unknown.rated_power_kw, unknown.area_m2),
-        (105.0, None, None)
-    );
-    assert!((unknown.sound.day_dba - (105.0 - 2.14)).abs() < 1e-9);
-    assert_eq!(turbine(Some(250.0), None).height_m, 175.0);
-    assert_eq!(turbine(Some(120.0), Some(3_000.0)).height_m, 120.0);
-    assert_eq!(turbine(None, Some(3_000.0)).rated_power_kw, Some(3_000.0));
 }
 
 #[test]

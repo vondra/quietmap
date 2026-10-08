@@ -29,6 +29,7 @@ pub mod ship;
 pub mod tagged_speeds;
 pub mod tent;
 pub mod thai_highways;
+pub mod turbines;
 pub mod us_trucks;
 pub mod venues;
 pub mod worship;
@@ -172,7 +173,7 @@ pub struct Places<'a> {
 /// square also converts its neighbours and keeps the sources its own tiles own (industry reads the
 /// neighbours itself, for its facility joins). Returns the number of tiles written.
 pub fn build(
-    (dev4, climate, network): (&Dev4, &Climate, &FreightNetwork),
+    (dev4, climate, network, turbines): (&Dev4, &Climate, &FreightNetwork, &turbines::Turbines),
     (airport_traffic, road_traffic, bus, places): (
         &Path,
         Option<&Path>,
@@ -192,7 +193,7 @@ pub fn build(
         .par_iter()
         .map(|&square| {
             build_square(
-                (dev4, climate, network),
+                (dev4, climate, network, turbines),
                 (airport_traffic, road_traffic, bus, places),
                 square,
                 out,
@@ -203,7 +204,7 @@ pub fn build(
 
 /// The sources tiles of one square (the squares build in parallel, each within its own memory).
 fn build_square(
-    (dev4, climate, network): (&Dev4, &Climate, &FreightNetwork),
+    (dev4, climate, network, turbines): (&Dev4, &Climate, &FreightNetwork, &turbines::Turbines),
     (airport_traffic, road_traffic, bus, places): (
         &Path,
         Option<&Path>,
@@ -237,6 +238,7 @@ fn build_square(
         converted.retain(owned);
     }
     industry::convert(dev4, square, &mut converted)?;
+    turbines::convert(turbines, square, &mut converted);
     converted.retain(owned);
     let mut by_tile: BTreeMap<TileId, Vec<Converted>> = BTreeMap::new();
     for item in converted {

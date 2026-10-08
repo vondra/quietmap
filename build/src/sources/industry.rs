@@ -1,6 +1,7 @@
-//! Industrial sites, solar farms, substations and wind turbines of dev4's `industrial.arrow` as
-//! point and area sources, the facility joins run here over the target square and its neighbours
-//! (they hold every part and transformer of a facility reaching the target's tiles).
+//! Industrial sites, solar farms and substations of dev4's `industrial.arrow` as point and area
+//! sources, the facility joins run here over the target square and its neighbours (they hold every
+//! part and transformer of a facility reaching the target's tiles). Its wind turbines are silent:
+//! `turbines` places the standing ones.
 
 use super::cells::{
     AUDIBILITY_FLOOR_DBA, Site, Z30Ring, point_piece, push_site_points, resolve_area_m2,
@@ -17,7 +18,6 @@ use arrow_array::{
 };
 use physics::emission::industrial::*;
 use physics::emission::spectrum::SoundPower;
-use physics::emission::wind::{TURBINE_MAXIMUM_PLAUSIBLE_POWER_KW, turbine_sound_power};
 use serde_json::json;
 use tiles::sources::{Attribute, GROUND_FROM_TERRAIN, Layer};
 
@@ -26,9 +26,6 @@ const SINGLE_POINT_UP_TO_M2: f64 = 5_000.0;
 const CELL_M: f64 = 75.0;
 /// The area of a site with neither a stored area nor a ring.
 const DEFAULT_SITE_AREA_M2: f64 = 10_000.0;
-/// Hub heights: the known-data median when untagged; taller tags are errors (dev4 audit I-10b).
-const DEFAULT_HUB_HEIGHT_M: f64 = 105.0;
-const MAXIMUM_HUB_HEIGHT_M: f64 = 175.0;
 
 /// One `industrial.arrow` row as the conversion reads it; tags are kept for power rows only.
 pub struct IndustrialRow {
@@ -38,7 +35,6 @@ pub struct IndustrialRow {
     pub source_type: u8,
     pub site_subtype: u8,
     pub name: String,
-    pub hub_height_m: Option<f64>,
     pub rated_power_kw: Option<f64>,
     pub ring: Z30Ring,
     pub area_m2: Option<f64>,
@@ -60,30 +56,16 @@ pub struct RowEmission {
 }
 
 /// A row's emission with the facility evidence of `joins`; `None` when silent: a dead site
-/// (`suppressed`), a gas station, a rail yard (PLAN-z13 DROP), a wind-farm outline, an inactive
-/// site, a transformer (its rating joins its substation), an unknown type, a solar generator
+/// (`suppressed`), a gas station, a rail yard (PLAN-z13 DROP), a wind turbine or farm outline
+/// (`turbines`), an inactive site, a transformer (its rating joins its substation), an unknown type, a solar generator
 /// inside its plant (the plant emits) or an untagged solar node without a footprint.
 pub fn row_emission(row: &IndustrialRow, joins: &FacilityJoins) -> Option<RowEmission> {
     let silent_type = matches!(
         row.source_type,
-        SOURCE_RAIL_YARD | SOURCE_WIND_OUTLINE | SOURCE_INACTIVE
+        SOURCE_RAIL_YARD | SOURCE_WIND_TURBINE | SOURCE_WIND_OUTLINE | SOURCE_INACTIVE
     ) || row.source_type >= SOURCE_TRANSFORMER;
     if row.suppressed || silent_type || is_gas_substation(&row.tags) {
         return None;
-    }
-    if row.source_type == SOURCE_WIND_TURBINE {
-        let rated_power_kw = row
-            .rated_power_kw
-            .filter(|kw| *kw <= TURBINE_MAXIMUM_PLAUSIBLE_POWER_KW);
-        return Some(RowEmission {
-            sound: turbine_sound_power(rated_power_kw),
-            height_m: row
-                .hub_height_m
-                .map_or(DEFAULT_HUB_HEIGHT_M, |hub| hub.min(MAXIMUM_HUB_HEIGHT_M)),
-            label: "wind_turbine",
-            area_m2: None,
-            rated_power_kw,
-        });
     }
     if row.source_type == SOURCE_SOLAR_FARM
         && !is_solar_plant(&row.tags)
@@ -255,11 +237,7 @@ fn read_rows(table: &Table, rows: &mut Vec<IndustrialRow>) -> Result<(), String>
         let words = |name: &str| column::<UInt16Array>(batch, name).ok();
         let (naces, sources) = (words("nace_4digit"), words("source_id"));
         let floats = |name: &str| column::<Float32Array>(batch, name).ok();
-        let (hubs, powers, areas) = (
-            floats("hub_height"),
-            floats("rated_power_kw"),
-            floats("area_m2"),
-        );
+        let (powers, areas) = (floats("rated_power_kw"), floats("area_m2"));
         let texts = |name: &str| column::<StringArray>(batch, name).ok();
         let (kinds, names, tags) = (texts("osm_kind"), texts("name"), texts("osm_tags"));
         let ids = column::<Int64Array>(batch, "osm_id").ok();
@@ -277,7 +255,6 @@ fn read_rows(table: &Table, rows: &mut Vec<IndustrialRow>) -> Result<(), String>
                 source_type,
                 site_subtype: subtypes.map_or(0, |values| values.value(row)),
                 name: names.map_or("", |values| text(values, row)).to_string(),
-                hub_height_m: hubs.and_then(|values| positive(values, row)),
                 rated_power_kw: powers.and_then(|values| positive(values, row)),
                 ring: geometry.map_or_else(Vec::new, |values| ring_cell(values, row)),
                 area_m2: areas.and_then(|values| positive(values, row)),
