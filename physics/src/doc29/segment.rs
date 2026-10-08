@@ -9,8 +9,8 @@ use super::corrections::{
 };
 use super::helicopters::{HelicopterLevels, helicopter_levels};
 use super::npd::{
-    Installation, METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT, NpdReading, TAIL_ANCHOR_M,
-    class_anchor, is_helicopter_class, read_npd,
+    Installation, METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT, NPD_LAST_DISTANCE_M,
+    NpdPosition, NpdReading, TAIL_ANCHOR_M, class_anchor, is_helicopter_class, read_npd,
 };
 use super::profiles_generated::{noise_class_of, profile_idx};
 use super::screening::{ReceiverHorizons, SCREENING_CEILING_ABOVE_GROUND_M, screened_sel_db};
@@ -56,32 +56,6 @@ pub struct SegmentEmission {
     pub atmosphere_shift_db: [f64; SHIFT_DISTANCES],
 }
 
-/// The place's shift at `slant_m`: linear in lg d between the NPD distances and on to the tail
-/// anchor, the first value nearer than 200 ft, past the tail anchor linear in distance (the
-/// absorption difference grows with the path).
-fn shift_at(shift: &[f64; SHIFT_DISTANCES], slant_m: f64) -> f64 {
-    let distance = |k: usize| {
-        if k < NPD_DISTANCES {
-            NPD_DISTANCES_FT[k] * METRES_PER_FOOT
-        } else {
-            TAIL_ANCHOR_M
-        }
-    };
-    if slant_m <= distance(0) {
-        return shift[0];
-    }
-    let last = SHIFT_DISTANCES - 1;
-    if slant_m >= distance(last) {
-        let slope = (shift[last] - shift[last - 1]) / (distance(last) - distance(last - 1));
-        return shift[last] + slope * (slant_m - distance(last));
-    }
-    let k = (0..last)
-        .find(|&k| slant_m < distance(k + 1))
-        .expect("inside the distances");
-    let t = (slant_m / distance(k)).log10() / (distance(k + 1) / distance(k)).log10();
-    shift[k] + t * (shift[k + 1] - shift[k])
-}
-
 /// The NPD levels of one segment at the ten NPD distances D_k: what a box sums at build time.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NpdDistanceLevels {
@@ -120,13 +94,43 @@ impl SegmentEmission {
         })
     }
 
-    /// The segment's NPD values at `slant_m`, helicopter correction included in SEL and LAmax.
+    /// The segment's NPD values at `slant_m`, helicopter correction included in SEL and LAmax, in
+    /// the place's atmosphere read as a box reads its sums (Doc 29 Appendix D's shift at the ten NPD
+    /// distances; review item 11): linear in lg d up to 25,000 ft, the first interval extrapolated
+    /// below 200 ft; past 25,000 ft spherical spreading and one absorption, the one that takes the
+    /// curve through its value at the tail anchor, never negative. A box of one segment reads as
+    /// the segment, wherever the place's air bends the curves (the shift linear in lg d read a
+    /// 777-300ER approach 14 km off 1.75 dB over its box in 30 C, 90 % air).
     pub fn read_npd(&self, slant_m: f64) -> NpdReading {
-        let reading = read_npd(self.class, self.departure, self.power, slant_m);
-        let offset = self.helicopter_correction_db + shift_at(&self.atmosphere_shift_db, slant_m);
+        let position = NpdPosition::at(slant_m);
+        let shift = &self.atmosphere_shift_db;
+        let table = |slant_m: f64| read_npd(self.class, self.departure, self.power, slant_m);
+        let reading = table(position.slant_m);
+        if position.slant_m < NPD_LAST_DISTANCE_M {
+            let nodes: &[f64; NPD_DISTANCES] = shift[..NPD_DISTANCES].try_into().expect("ten");
+            let offset = self.helicopter_correction_db + position.linear(nodes);
+            return NpdReading {
+                sel_db: reading.sel_db + offset,
+                lamax_db: reading.lamax_db + offset,
+                ..reading
+            };
+        }
+        let (last, tail) = (table(NPD_LAST_DISTANCE_M), table(TAIL_ANCHOR_M));
+        let (last_shift, tail_shift) = (shift[NPD_DISTANCES - 1], shift[SHIFT_DISTANCES - 1]);
+        let spherical_db = |slant_m: f64| 20.0 * (slant_m / NPD_LAST_DISTANCE_M).log10();
+        let along = |last_db: f64, tail_db: f64| {
+            let (last_db, tail_db) = (last_db + last_shift, tail_db + tail_shift);
+            let absorption_db_per_m = ((last_db - spherical_db(TAIL_ANCHOR_M) - tail_db)
+                / (TAIL_ANCHOR_M - NPD_LAST_DISTANCE_M))
+                .max(0.0);
+            last_db
+                - spherical_db(position.slant_m)
+                - absorption_db_per_m * (position.slant_m - NPD_LAST_DISTANCE_M)
+                + self.helicopter_correction_db
+        };
         NpdReading {
-            sel_db: reading.sel_db + offset,
-            lamax_db: reading.lamax_db + offset,
+            sel_db: along(last.sel_db, tail.sel_db),
+            lamax_db: along(last.lamax_db, tail.lamax_db),
             ..reading
         }
     }
