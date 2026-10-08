@@ -20,7 +20,10 @@
 
 use super::Converted;
 use super::events::{DAY, EVENING, EventSchedule, NIGHT, push_event_source};
-use super::worship::{Denomination, Host, Religion, SiteKind, WorshipSite, groups, nearest_host};
+use super::worship::{
+    Denomination, Host, Religion, SiteKind, WorshipSite, first, groups, nearest_host,
+};
+use crate::dev4::Square;
 use physics::bands::BANDS;
 
 /// European countries (UN M49) and Cyprus, where the research describes what the bells ring.
@@ -114,12 +117,12 @@ pub fn bell_height_m(kind: SiteKind, building_height_m: f64) -> f64 {
 /// nearest them (a place of worship first), screened by everything but that building. Returns how
 /// many ring.
 pub fn convert_bells(
-    sites: &[WorshipSite],
+    (sites, square): (&[&WorshipSite], Square),
     hosts: &[Host],
     country_iso: u16,
     out: &mut Vec<Converted>,
 ) -> usize {
-    let ringing: Vec<&WorshipSite> = sites.iter().filter(|site| site.rings()).collect();
+    let ringing: Vec<&WorshipSite> = sites.iter().copied().filter(|site| site.rings()).collect();
     let mut rung = 0;
     for group in groups(&ringing) {
         let members = || group.iter().map(|&m| ringing[m]);
@@ -141,9 +144,15 @@ pub fn convert_bells(
         let Some(plan) = schedule(country_iso, peal, orthodox) else {
             continue;
         };
-        // The bells hang in a mapped tower where there is one, else in the church.
-        let tower = members().find(|site| site.kind == SiteKind::BellTower);
-        let at = tower.unwrap_or(ringing[group[0]]);
+        // The bells hang in a mapped tower where there is one, else in the church; the square of
+        // that site rings them (a group across a square's edge rings once).
+        let tower = first(members().filter(|site| site.kind == SiteKind::BellTower));
+        let Some(at) = tower.or_else(|| first(members())) else {
+            continue;
+        };
+        if at.square() != square {
+            continue;
+        }
         let point = (at.lat, at.lon);
         let host = nearest_host(point, hosts);
         let (centre, height_m) = match (tower, host) {
@@ -229,8 +238,10 @@ mod tests {
             worship: true,
         }];
         let iso = |code: &[u8; 2]| u16::from_le_bytes(*code);
+        let refs: Vec<&WorshipSite> = sites.iter().collect();
+        let here = (&refs[..], sites[0].square());
         let mut out = Vec::new();
-        assert_eq!(convert_bells(&sites, &hosts, iso(b"CZ"), &mut out), 1);
+        assert_eq!(convert_bells(here, &hosts, iso(b"CZ"), &mut out), 1);
         let display = &out[0].attribute.display;
         assert!(
             display.starts_with(r#"["St Nicholas","church_bells",15.0"#),
@@ -238,7 +249,19 @@ mod tests {
         );
         assert!(display.contains("[2.14,0.0,1.0]"), "{display}");
         out.clear();
-        assert_eq!(convert_bells(&sites, &hosts, iso(b"GR"), &mut out), 1);
+        assert_eq!(convert_bells(here, &hosts, iso(b"GR"), &mut out), 1);
         assert!(out[0].attribute.display.contains("[0.29,0.0,0.0]"));
+        // A church and its tower 1.4 m apart across a square's edge (14.0625 E) ring once, from
+        // the tower's square.
+        let edge = [
+            site(14.06249, SiteKind::Church, Religion::Christian),
+            site(14.06251, SiteKind::BellTower, Religion::Unknown),
+        ];
+        let refs: Vec<&WorshipSite> = edge.iter().collect();
+        let (west, east) = (edge[0].square(), edge[1].square());
+        assert_ne!(west, east);
+        out.clear();
+        assert_eq!(convert_bells((&refs, west), &[], iso(b"CZ"), &mut out), 0);
+        assert_eq!(convert_bells((&refs, east), &[], iso(b"CZ"), &mut out), 1);
     }
 }

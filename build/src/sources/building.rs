@@ -210,9 +210,9 @@ pub fn convert(
         }
     }
     if let Some(worship) = places.worship {
-        let sites = worship.in_square(square.x, square.y);
-        emitting += convert_bells(sites, &hosts, country_iso, out);
-        emitting += convert_calls(sites, &hosts, country_iso, out);
+        let sites = worship.around(square);
+        emitting += convert_bells((&sites, square), &hosts, country_iso, out);
+        emitting += convert_calls((&sites, square), &hosts, country_iso, out);
     }
     let venues = places
         .venues

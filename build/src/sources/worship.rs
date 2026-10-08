@@ -4,7 +4,7 @@
 //! the building nearest them.
 
 use super::metres;
-use crate::dev4::degrees_to_z30;
+use crate::dev4::{Square, degrees_to_z30};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -119,6 +119,29 @@ impl WorshipSites {
     pub fn in_square(&self, x: u32, y: u32) -> &[WorshipSite] {
         self.by_square.get(&(x, y)).map_or(&[], Vec::as_slice)
     }
+
+    /// The sites of a square and its neighbours: a group across the square's edge is whole.
+    pub fn around(&self, square: Square) -> Vec<&WorshipSite> {
+        square
+            .with_neighbours()
+            .into_iter()
+            .flat_map(|near| self.in_square(near.x, near.y))
+            .collect()
+    }
+}
+
+impl WorshipSite {
+    /// The square the site lies in: a group sounds from the square of the site it is placed at.
+    pub fn square(&self) -> Square {
+        let (gx, gy) = degrees_to_z30(self.lat, self.lon);
+        Square::of_z30(gx, gy)
+    }
+}
+
+/// Of `sites`, the southernmost, then westernmost: the one a group is placed at whichever square
+/// converts it.
+pub fn first<'s>(sites: impl Iterator<Item = &'s WorshipSite>) -> Option<&'s WorshipSite> {
+    sites.min_by(|a, b| a.lat.total_cmp(&b.lat).then(a.lon.total_cmp(&b.lon)))
 }
 
 /// The sites in groups: a group grows by every site within [`SITE_REACH_M`] of any of its members

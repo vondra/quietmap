@@ -28,7 +28,10 @@ use super::Converted;
 use super::events::{DAY, EVENING, EventSchedule, push_event_source};
 use super::metres;
 use super::prayer_times::{Isha, Method, WORLD_LEAGUE, call_periods};
-use super::worship::{Host, Religion, SITE_REACH_M, SiteKind, WorshipSite, groups, nearest_host};
+use super::worship::{
+    Host, Religion, SITE_REACH_M, SiteKind, WorshipSite, first, groups, nearest_host,
+};
+use crate::dev4::Square;
 use crate::period::time_zone;
 use physics::bands::BANDS;
 
@@ -198,7 +201,7 @@ fn horn_height_m(code: [u8; 2], minaret_m: f64, mosque_m: f64) -> f64 {
 /// everything but the building nearest the horns. Where only Friday's call sounds, a mosque without
 /// a minaret is silent. Returns how many call.
 pub fn convert_calls(
-    sites: &[WorshipSite],
+    (sites, square): (&[&WorshipSite], Square),
     hosts: &[Host],
     country_iso: u16,
     out: &mut Vec<Converted>,
@@ -207,17 +210,25 @@ pub fn convert_calls(
     let muslim = |site: &&WorshipSite| site.religion == Religion::Muslim;
     let mosques: Vec<&WorshipSite> = sites
         .iter()
+        .copied()
         .filter(muslim)
         .filter(|site| site.kind != SiteKind::Minaret)
         .collect();
     let minarets: Vec<&WorshipSite> = sites
         .iter()
+        .copied()
         .filter(muslim)
         .filter(|site| site.kind == SiteKind::Minaret)
         .collect();
     let mut calling = 0;
     for group in groups(&mosques) {
-        let first = mosques[group[0]];
+        // The square of the group's first mosque calls (a group across a square's edge once).
+        let Some(first) = first(group.iter().map(|&m| mosques[m])) else {
+            continue;
+        };
+        if first.square() != square {
+            continue;
+        }
         let point = (first.lat, first.lon);
         let minaret = minarets
             .iter()
@@ -319,15 +330,23 @@ mod tests {
             name: "Yeni Cami".into(),
             worship: true,
         }];
+        let refs: Vec<&WorshipSite> = sites.iter().collect();
+        let square = sites[0].square();
         let mut out = Vec::new();
-        assert_eq!(convert_calls(&sites, &hosts, iso(b"TR"), &mut out), 1);
+        assert_eq!(
+            convert_calls((&refs, square), &hosts, iso(b"TR"), &mut out),
+            1
+        );
         let display = &out[0].attribute.display;
         assert!(
             display.starts_with(r#"["Yeni Cami","call_to_prayer",30.0"#),
             "{display}"
         );
         out.clear();
-        assert_eq!(convert_calls(&sites[..2], &hosts, iso(b"DE"), &mut out), 0);
+        assert_eq!(
+            convert_calls((&refs[..2], square), &hosts, iso(b"DE"), &mut out),
+            0
+        );
         assert_eq!(horn_height_m(*b"ID", 0.0, 4.0), 10.0);
         assert_eq!(horn_height_m(*b"EG", 0.0, 20.0), 22.0);
     }
