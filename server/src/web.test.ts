@@ -26,7 +26,7 @@ test('the map, its files and its About pages are served; nothing else pretends t
 
   for (const url of [
     '/.env', '/.git/config', '/.ssh/id_rsa', '/aboutness', '/about/europe/cz', '/about/.env',
-    '/%2eenv', '/assets/missing.js', '/api/missing',
+    '/%2eenv', '/assets/missing.js', '/api/missing', '/about/%6eews', '/%61bout/news', '/about%2fnews',
   ]) {
     const response = await app.inject(url)
     assert.equal(response.statusCode, 404, url)

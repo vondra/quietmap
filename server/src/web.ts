@@ -15,9 +15,11 @@ export async function registerWeb(app: FastifyInstance, frontendDist: string): P
   await app.register(fastifyStatic, { root: frontendDist, preCompressed: true })
 
   app.setNotFoundHandler(async (request, reply) => {
+    // As the browser reads it (frontend/src/main.tsx), percent-encoding kept: an encoded About path
+    // is no page.
     let pathname: string
     try {
-      pathname = decodeURIComponent(new URL(request.raw.url ?? '/', 'http://localhost').pathname)
+      pathname = new URL(request.raw.url ?? '/', 'http://localhost').pathname
     } catch {
       return reply.status(404).send({ error: 'Not found' })
     }
