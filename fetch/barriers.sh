@@ -15,9 +15,14 @@ base=https://opendata.geoportal.gov.pl/bdot10k/schemat2021/SHP
 for province in 02 04 06 08 10 12 14 16 18 20 22 24 26 28 30 32; do
     for county in $(seq -w 1 80); do
         code=$province$county zip=$out/bdot10k/${code}_SHP.zip
-        if [ ! -s "$zip" ] && ! curl -sS -f -L --retry 3 -o "$zip" "$base/$province/${code}_SHP.zip" 2> /dev/null; then
-            rm -f "$zip"
-            continue
+        if [ ! -s "$zip" ]; then
+            # A code without a county answers 404; any other failure stops the fetch.
+            status=$(curl -sS -L --retry 3 -o "$zip.part" -w '%{http_code}' "$base/$province/${code}_SHP.zip")
+            case $status in
+                200) mv "$zip.part" "$zip" ;;
+                404) rm "$zip.part"; continue ;;
+                *) echo "$code: HTTP $status" >&2; exit 1 ;;
+            esac
         fi
         rm -rf "$out/bdot10k/$code" && mkdir "$out/bdot10k/$code"
         # A county without the class has no screens.
@@ -34,5 +39,6 @@ done | awk -F'\t' '$1 ~ /LINESTRING/ {
         for (i = 1; i <= m; i++) { split(points[i], xy, " "); line = line "\t" xy[2] "\t" xy[1] }
         if (m >= 2) print line
     }
-}' > "$out/barriers.txt"
-test "$(wc -l < "$out/barriers.txt")" -gt 5000
+}' > "$out/barriers.txt.part"
+test "$(wc -l < "$out/barriers.txt.part")" -gt 5000
+mv "$out/barriers.txt.part" "$out/barriers.txt"
