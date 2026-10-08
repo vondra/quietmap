@@ -21,6 +21,10 @@ use arrow_array::types::{Float64Type, Int16Type, Int32Type, Int64Type, UInt8Type
 use arrow_array::{Array, RecordBatch};
 use physics::bands::{BANDS, PERIOD_HOURS, PERIODS};
 use physics::emission::road::{CategoryFlow, Junction, VehicleCategory, line_emission_db};
+use physics::emission::road_surface::{
+    BRUSHED_CONCRETE, HARD_ELEMENTS, HARD_ELEMENTS_HERRINGBONE, REFERENCE_SURFACE, RoadSurface,
+    car_effect_db,
+};
 use tiles::sources::{Attribute, Layer};
 
 /// Source height above the carriageway (CNOSSOS-EU 2.4.1).
@@ -53,10 +57,23 @@ const CLASS_NAMES: [&str; 13] = [
 const CLASS_DEFAULT_SPEED_KMH: [f64; 13] = [
     100.0, 70.0, 50.0, 50.0, 50.0, 30.0, 20.0, 20.0, 20.0, 50.0, 60.0, 50.0, 50.0,
 ];
-/// Rolling-noise corrections by the extractor's surface code: asphalt, sett, cobblestone or
-/// paving stones, concrete, unpaved.
+/// The extractor's surface codes: asphalt (or none), sett, cobblestone or paving stones, concrete,
+/// gravel or compacted or unpaved.
 const SURFACE_NAMES: [&str; 5] = ["asphalt", "sett", "paving_stones", "concrete", "unpaved"];
-const SURFACE_CORRECTION_DB: [f64; 5] = [0.0, 4.0, 4.0, 1.0, 2.0];
+/// Their CNOSSOS-EU surfaces (Table F-4): setts are hard elements not in herring-bone (NL11), the
+/// code that holds paving stones (most of its length) and cobblestones hard elements in
+/// herring-bone (NL10), concrete brushed down concrete (NL06); unpaved roads, which the table has
+/// not, keep dev4's flat 2 dB on rolling noise.
+const SURFACES: [RoadSurface; 5] = [
+    REFERENCE_SURFACE,
+    HARD_ELEMENTS,
+    HARD_ELEMENTS_HERRINGBONE,
+    BRUSHED_CONCRETE,
+    RoadSurface {
+        alpha: [[2.0; BANDS]; 3],
+        ..REFERENCE_SURFACE
+    },
+];
 /// dev4's fitted carriageway priors of secondary and tertiary roads (built-up unknown, rural,
 /// urban; two-way sections, one-way cells scaled alike). They are medians of counted roads, and
 /// where counting is selective the counted roads are the busy ones of their class: Swedish NVDB,
@@ -835,10 +852,7 @@ pub fn convert(
             // CNOSSOS-EU 2.2.2: rolling noise at the place's yearly mean air temperature.
             let air_temperature_c = temperature.at(middle.0, middle.1);
             let surface_index = usize::from(surface.value(row));
-            let surface_correction = SURFACE_CORRECTION_DB
-                .get(surface_index)
-                .copied()
-                .unwrap_or(0.0);
+            let road_surface = SURFACES.get(surface_index).unwrap_or(&REFERENCE_SURFACE);
             // Each category's day, evening and night shares of its daily flow, by country and road
             // group: light vehicles and motorcycles, medium and heavy vehicles (lorries run more of
             // their day at night).
@@ -880,7 +894,7 @@ pub fn convert(
                         })
                     })
                     .collect();
-                line_emission_db(&flows, (surface_correction, air_temperature_c))
+                line_emission_db(&flows, (road_surface, air_temperature_c))
             });
             let lanes_used = if lanes.value(row) == 0 {
                 DEFAULT_LANES
@@ -905,7 +919,7 @@ pub fn convert(
                     .get(surface_index)
                     .copied()
                     .unwrap_or("asphalt"),
-                surface_correction,
+                (car_effect_db(road_surface, speed) * 10.0).round() / 10.0,
                 lanes.value(row),
                 oneway.value(row) != 0,
                 bridge.value(row),

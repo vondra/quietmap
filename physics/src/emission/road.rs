@@ -5,6 +5,7 @@
 //! the air temperature's rolling term (2.2.2). Battery-electric cars, an open category of the
 //! method, roll like any car and drive without propulsion noise. There is no studded-tyre term.
 
+use super::road_surface::RoadSurface;
 use crate::bands::BANDS;
 
 /// Reference speed of the rolling and propulsion laws (km/h).
@@ -225,12 +226,12 @@ fn motorcycle_gain_db(law_speed: f64, junction: Option<(Junction, f64)>) -> f64 
     a_weighted_db(&car) + over - a_weighted_db(&own)
 }
 
-/// Sound power per metre (dB, Z-weighted) of a mix of flows; `-inf` in every band when silent.
-/// The surface correction and the air temperature (2.2.10) apply to rolling noise only
-/// (motorcycles have none).
+/// Sound power per metre (dB, Z-weighted) of a mix of flows on `surface` (2.2.6); `-inf` in every
+/// band when silent. The air temperature (2.2.10) applies to rolling noise only (motorcycles have
+/// none).
 pub fn line_emission_db(
     flows: &[CategoryFlow],
-    (surface_correction_db, air_temperature_c): (f64, f64),
+    (surface, air_temperature_c): (&RoadSurface, f64),
 ) -> [f64; BANDS] {
     let mut energy = [0.0f64; BANDS];
     for flow in flows.iter().filter(|flow| flow.vehicles_per_hour > 0.0) {
@@ -246,9 +247,8 @@ pub fn line_emission_db(
         let gradient = gradient_correction_db(flow.category, flow.slope_percent, law_speed);
         let (junction_rolling, junction_propulsion) =
             junction_correction_db(flow.category, flow.junction);
-        let rolling_correction = surface_correction_db
-            + junction_rolling
-            + temperature_correction_db(flow.category, air_temperature_c);
+        let rolling_correction =
+            junction_rolling + temperature_correction_db(flow.category, air_temperature_c);
         let combustion = match flow.category {
             VehicleCategory::Light => 1.0 - flow.electric_share.clamp(0.0, 1.0),
             _ => 1.0,
@@ -261,14 +261,23 @@ pub fn line_emission_db(
             1.0
         };
         for band in 0..BANDS {
+            let (surface_rolling, surface_propulsion) =
+                surface.corrections(flow.category, speed, band);
             let (a_p, b_p) = coefficients.propulsion;
             let mut vehicle = combustion
                 * 10f64.powf(
-                    (a_p[band] + b_p[band] * relative + gradient + junction_propulsion) / 10.0,
+                    (a_p[band]
+                        + b_p[band] * relative
+                        + gradient
+                        + junction_propulsion
+                        + surface_propulsion)
+                        / 10.0,
                 );
             if let Some((a_r, b_r)) = coefficients.rolling {
-                vehicle +=
-                    10f64.powf((a_r[band] + b_r[band] * log_ratio + rolling_correction) / 10.0);
+                vehicle += 10f64.powf(
+                    (a_r[band] + b_r[band] * log_ratio + rolling_correction + surface_rolling)
+                        / 10.0,
+                );
             }
             energy[band] += density * vehicle * motorcycle_scale;
         }
@@ -284,6 +293,7 @@ pub fn line_emission_db(
 
 #[cfg(test)]
 mod tests {
+    use super::super::road_surface::REFERENCE_SURFACE;
     use super::*;
     use crate::bands::{a_weighted_energy, level_db};
 
@@ -303,7 +313,7 @@ mod tests {
         let level = |temperature: f64| {
             level_db(a_weighted_energy(&line_emission_db(
                 &cars,
-                (0.0, temperature),
+                (&REFERENCE_SURFACE, temperature),
             )))
         };
         let prague = level(9.4) - level(REFERENCE_AIR_TEMPERATURE_C);
@@ -321,7 +331,7 @@ mod tests {
                     electric_share,
                     ..flow(500.0, speed, category)[0]
                 }],
-                0.0,
+                &REFERENCE_SURFACE,
             )
         };
         let light = VehicleCategory::Light;
@@ -335,7 +345,15 @@ mod tests {
         assert_eq!(level(50.0, 1.0, heavy), level(50.0, 0.0, heavy));
     }
 
-    fn a_weighted(flows: &[CategoryFlow], surface: f64) -> f64 {
+    /// dev4's flat correction of rolling noise, on every category alike.
+    fn flat(db: f64) -> RoadSurface {
+        RoadSurface {
+            alpha: [[db; BANDS]; 3],
+            ..REFERENCE_SURFACE
+        }
+    }
+
+    fn a_weighted(flows: &[CategoryFlow], surface: &RoadSurface) -> f64 {
         level_db(a_weighted_energy(&line_emission_db(
             flows,
             (surface, REFERENCE_AIR_TEMPERATURE_C),
@@ -362,15 +380,18 @@ mod tests {
     fn reference_cases_keep_their_levels() {
         let k1 = a_weighted(
             &flow(10_000.0 * 0.70 / 12.0, 50.0, VehicleCategory::Light),
-            0.0,
+            &REFERENCE_SURFACE,
         );
         assert!((k1 - 79.11).abs() < 0.15, "{k1}");
         let k2 = a_weighted(
             &flow(500.0 * 0.70 / 12.0, 80.0, VehicleCategory::Heavy),
-            4.0,
+            &flat(4.0),
         );
         assert!((k2 - 80.07).abs() < 0.15, "{k2}");
-        let slow = a_weighted(&flow(100.0, 20.0, VehicleCategory::Light), 0.0);
+        let slow = a_weighted(
+            &flow(100.0, 20.0, VehicleCategory::Light),
+            &REFERENCE_SURFACE,
+        );
         assert!((slow - 66.17).abs() < 0.15, "{slow}");
     }
 
@@ -389,7 +410,7 @@ mod tests {
                     junction: None,
                     electric_share: 0.0,
                 }],
-                0.0,
+                &REFERENCE_SURFACE,
             )
         };
         assert!(
@@ -415,7 +436,7 @@ mod tests {
                     })
                 })
                 .collect();
-            a_weighted(&flows, 0.0)
+            a_weighted(&flows, &REFERENCE_SURFACE)
         };
         let (six, ten) = (two_way(6.0) - two_way(0.0), two_way(10.0) - two_way(0.0));
         assert!(
@@ -463,7 +484,7 @@ mod tests {
                 junction,
                 electric_share: 0.0,
             });
-            a_weighted(&flows, 0.0)
+            a_weighted(&flows, &REFERENCE_SURFACE)
         };
         let free = mix(None);
         let stop_line = mix(Some((Junction::TrafficLights, 0.0))) - free;
@@ -484,7 +505,7 @@ mod tests {
                     junction,
                     electric_share: 0.0,
                 }],
-                0.0,
+                &REFERENCE_SURFACE,
             )
         };
         let car_change = cars(Some((Junction::TrafficLights, 0.0))) - cars(None);
@@ -502,7 +523,12 @@ mod tests {
     /// (the rolling law outgrows the thinner flow), where a clamp at 130 left 0.32 dB less.
     #[test]
     fn fast_cars_follow_the_laws_past_one_hundred_and_thirty() {
-        let at = |speed| a_weighted(&flow(1_000.0, speed, VehicleCategory::Light), 0.0);
+        let at = |speed| {
+            a_weighted(
+                &flow(1_000.0, speed, VehicleCategory::Light),
+                &REFERENCE_SURFACE,
+            )
+        };
         let rise = at(140.0) - at(130.0);
         assert!((rise - 0.79).abs() < 0.05, "{rise}");
     }
@@ -521,7 +547,7 @@ mod tests {
                         junction: at,
                         ..one
                     }],
-                    0.0,
+                    &REFERENCE_SURFACE,
                 )
             };
             let (car, moto) = (
@@ -540,8 +566,14 @@ mod tests {
     #[test]
     fn a_motorcycle_sounds_over_a_car_by_the_japanese_measurements() {
         for speed in [30.0, 50.0, 90.0] {
-            let car = a_weighted(&flow(100.0, speed, VehicleCategory::Light), 0.0);
-            let moto = a_weighted(&flow(100.0, speed, VehicleCategory::Motorcycle), 0.0);
+            let car = a_weighted(
+                &flow(100.0, speed, VehicleCategory::Light),
+                &REFERENCE_SURFACE,
+            );
+            let moto = a_weighted(
+                &flow(100.0, speed, VehicleCategory::Motorcycle),
+                &REFERENCE_SURFACE,
+            );
             assert!(
                 (moto - car - MOTORCYCLE_OVER_LIGHT_DB).abs() < 0.05,
                 "{speed}: {moto} vs {car}"
@@ -549,15 +581,23 @@ mod tests {
         }
     }
 
+    /// Table F-4 of 2021/1226 at 50 km/h: a car on block pavers in herring-bone (NL10) +2.1 dB, on
+    /// pavers not in herring-bone (NL11, setts) +5.7, a lorry on them +7.4; motorcycles keep their
+    /// level, and a silent flow is silent on any surface.
     #[test]
-    fn surface_touches_rolling_only() {
-        let moto = flow(100.0, 50.0, VehicleCategory::Motorcycle);
+    fn surfaces_follow_table_f4() {
+        use super::super::road_surface::{HARD_ELEMENTS, HARD_ELEMENTS_HERRINGBONE};
+        let over = |category, surface| {
+            a_weighted(&flow(100.0, 50.0, category), surface)
+                - a_weighted(&flow(100.0, 50.0, category), &REFERENCE_SURFACE)
+        };
+        let light = VehicleCategory::Light;
+        assert!((over(light, &HARD_ELEMENTS_HERRINGBONE) - 2.1).abs() < 0.05);
+        assert!((over(light, &HARD_ELEMENTS) - 5.7).abs() < 0.05);
+        assert!((over(VehicleCategory::Heavy, &HARD_ELEMENTS) - 7.4).abs() < 0.05);
+        assert_eq!(over(VehicleCategory::Motorcycle, &HARD_ELEMENTS), 0.0);
         assert_eq!(
-            line_emission_db(&moto, (0.0, 20.0)),
-            line_emission_db(&moto, (4.0, 20.0))
-        );
-        assert_eq!(
-            line_emission_db(&flow(0.0, 50.0, VehicleCategory::Light), (0.0, 20.0)),
+            line_emission_db(&flow(0.0, 50.0, light), (&HARD_ELEMENTS, 20.0)),
             [f64::NEG_INFINITY; BANDS]
         );
     }

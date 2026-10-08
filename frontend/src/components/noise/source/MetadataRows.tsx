@@ -65,7 +65,7 @@ function RoadRows({ m }: { m: ContributorMetadata }) {
   const lanes = num(m, 'lanes')
   const surfaceText = txtTable([
     ['Type', text(m, 'surface')],
-    ['Rolling correction', `${fmt(num(m, 'surface_corr_db') ?? 0)} dB`],
+    ['Effect on cars', `${fmt(num(m, 'surface_corr_db') ?? 0)} dB`],
     ['Lanes', lanes != null && lanes > 0 ? String(lanes) : 'unknown'],
     ['Oneway', m.oneway === true ? 'yes' : 'no'],
     ...(m.bridge === true ? [['Bridge', 'yes'] as [string, string]] : []),

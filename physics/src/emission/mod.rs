@@ -11,6 +11,7 @@ pub mod leisure;
 pub mod people;
 pub mod rail;
 pub mod road;
+pub mod road_surface;
 pub mod settlement;
 pub mod ships;
 pub mod spectrum;
