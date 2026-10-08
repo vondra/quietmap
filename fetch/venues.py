@@ -1,9 +1,10 @@
 """Venues of an OpenStreetMap extract (`venues.sh`), one line each: `lat lon kind outdoor_seating
 area_m2 opening_hours name` (tab-separated, sorted by latitude then longitude), the point of a node
 or the mean of an outline's vertices. Kinds: bar, pub, nightclub, biergarten, restaurant, cafe,
-fast_food; outdoor_seating the tag's value or unknown; area_m2 an outline's area, 0
-for a node; opening_hours and name as mapped, empty when none. Mapped terraces
-(leisure=outdoor_seating) are the leisure layer's. Reads osmium's GeoJSON sequence on stdin.
+fast_food; outdoor_seating the tag's value, yes for an untagged venue with a mapped terrace
+(leisure=outdoor_seating) within 30 m, which the leisure layer then leaves to it, else unknown;
+area_m2 an outline's area, 0 for a node; opening_hours and name as mapped, empty when none. Reads
+osmium's GeoJSON sequence on stdin.
 
     osmium export venues.osm.pbf -f geojsonseq | python3 venues.py venues.txt
 """
@@ -13,6 +14,8 @@ import re
 import sys
 
 KINDS = ('bar', 'pub', 'nightclub', 'biergarten', 'restaurant', 'cafe', 'fast_food')
+# A mapped terrace this near a venue is its terrace (m; the builder's TERRACE_OF_VENUE_M).
+TERRACE_OF_VENUE_M = 30.0
 CONTROL = re.compile(r'[\x00-\x1f\x7f]+')
 
 
@@ -49,13 +52,35 @@ def area_m2(geometry):
     return max(total, 0.0)
 
 
+def seated_by_terraces(rows, terraces):
+    """The rows with yes for an untagged venue that has a terrace within TERRACE_OF_VENUE_M."""
+    cell = TERRACE_OF_VENUE_M / 111195.0
+    grid = {}
+    for lat, lon in terraces:
+        grid.setdefault((int(lat // cell), int(lon // cell)), []).append((lat, lon))
+
+    def near(lat, lon):
+        scale = math.cos(math.radians(lat))
+        span = int(1 / max(scale, 0.01)) + 1
+        for i in (-1, 0, 1):
+            for j in range(-span, span + 1):
+                for t_lat, t_lon in grid.get((int(lat // cell) + i, int(lon // cell) + j), ()):
+                    dy, dx = (t_lat - lat) * 111195.0, (t_lon - lon) * 111195.0 * scale
+                    if math.hypot(dx, dy) <= TERRACE_OF_VENUE_M:
+                        return True
+        return False
+
+    return [row[:3] + ('yes',) + row[4:] if row[3] == 'unknown' and near(row[0], row[1]) else row
+            for row in rows]
+
+
 def clean(text):
     """A tag's value on one line without tabs."""
     return CONTROL.sub(' ', text or '').strip()
 
 
 def main(out_path):
-    rows = []
+    rows, terraces = [], []
     for line in sys.stdin:
         line = line.strip().lstrip('\x1e')
         if not line:
@@ -63,21 +88,23 @@ def main(out_path):
         feature = json.loads(line)
         tags = feature.get('properties') or {}
         kind = tags.get('amenity', '')
-        if kind not in KINDS:
-            continue
         geometry = feature.get('geometry') or {}
         point = centroid(geometry)
         if point is None:
+            continue
+        if kind not in KINDS:
+            if tags.get('leisure') == 'outdoor_seating':
+                terraces.append(point)
             continue
         seating = clean(tags.get('outdoor_seating')).lower() or 'unknown'
         rows.append((round(point[0], 6), round(point[1], 6), kind, seating,
                      round(area_m2(geometry)), clean(tags.get('opening_hours')),
                      clean(tags.get('name'))))
-    rows.sort()
+    rows = sorted(seated_by_terraces(rows, terraces))
     with open(out_path, 'w') as out:
         for lat, lon, kind, seating, area, hours, name in rows:
             out.write(f'{lat}\t{lon}\t{kind}\t{seating}\t{area}\t{hours}\t{name}\n')
-    print(len(rows), 'venues', file=sys.stderr)
+    print(len(rows), 'venues,', len(terraces), 'terraces', file=sys.stderr)
 
 
 if __name__ == '__main__':

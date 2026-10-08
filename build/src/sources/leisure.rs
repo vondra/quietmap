@@ -100,7 +100,8 @@ fn class_label(class: u8) -> &'static str {
     }
 }
 
-/// A mapped terrace this near a bar, pub, restaurant or café is its terrace (m).
+/// A mapped terrace this near a bar, pub, restaurant or café is its terrace (m; `fetch/venues.py`
+/// seats such a venue outside when untagged).
 const TERRACE_OF_VENUE_M: f64 = 30.0;
 
 /// Whether a mapped terrace at `place` belongs to a venue, whose guests the people converter seats
