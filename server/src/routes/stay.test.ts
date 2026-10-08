@@ -1,8 +1,10 @@
 // The places-to-stay route against a mocked Stay22: the box it asks for (an over-wide view's middle),
 // each kind asked apart in two lists and every page read, one listing per place at its cheapest
-// price and with https links only, queries refused before Stay22 is asked, Stay22's refusal passed
-// on, a failure never kept and no page sent after it, its busy minute waited out, and a server
-// without a Stay22 account that answers 503.
+// price and with https links only, queries refused before Stay22 is asked (impossible dates too),
+// Stay22's refusal passed on, a failure or a malformed success never kept, one kind's failure beside
+// the other's places, an answer's lifetime kept and ended, the key's and a visitor's minute, at most
+// four searches at once, Stay22's busy minute waited out (a minute at most), and a server without a
+// Stay22 account that answers 503.
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -10,7 +12,8 @@ import { join } from 'node:path'
 import test, { mock } from 'node:test'
 import Fastify from 'fastify'
 import { readConfig } from '../config.ts'
-import { clusterPrecision, slimListing, snapBox, stayRoutes } from './stay.ts'
+import { clusterPrecision, retryAfterSeconds, slimListing } from '../stay22.ts'
+import { snapBox, stayRoutes } from './stay.ts'
 
 async function app(t: test.TestContext, stay22: { aid: string; apiKey: string } | null = { aid: 'test-aid', apiKey: 'test-key' }) {
   const built = Fastify()
@@ -114,6 +117,8 @@ test('a query that names no box, no stay or an unknown filter is refused before 
     // Stay22 refuses a check-in before its today, and a check-out not after the check-in.
     `${VIEW}&checkin=${day(-1)}&checkout=${day(1)}`,
     `${VIEW}&checkin=${day(3)}&checkout=${day(3)}`,
+    // An impossible date: Date.parse reads 31 November as 1 December, a stay of no night.
+    `${VIEW}&checkin=${new Date().getUTCFullYear() + 1}-11-31&checkout=${new Date().getUTCFullYear() + 1}-12-01`,
     `${VIEW}&${STAY}&type=villa`,
     `${VIEW}&${STAY}&adults=0`,
     `${VIEW}&${STAY}&minstars=6`,
@@ -141,7 +146,10 @@ test('each kind is asked apart in its ranked and its per-cell list; a place is a
 
   const response = await server.inject(`/api/stay?${VIEW}&${STAY}&adults=3&minstars=4&minscore=8`)
   assert.equal(response.statusCode, 200)
+  assert.equal(response.headers['cache-control'], 'no-store')
   const answer = response.json()
+  assert.equal(answer.failure, null)
+  assert.ok(answer.expiresIn > 55 * 60 - 5 && answer.expiresIn <= 55 * 60)
   assert.deepEqual(answer.listings.map((listing: { id: string }) => listing.id), ['h1', 'h2', 'h3', 'r1'])
   assert.equal(answer.nights, 3)
   assert.equal(answer.currency, 'EUR')
@@ -165,8 +173,8 @@ test('each kind is asked apart in its ranked and its per-cell list; a place is a
   // The same box is answered from memory, for the same view or one moved inside it.
   const again = await server.inject(`/api/stay?${VIEW}&${STAY}&adults=3&minstars=4&minscore=8`)
   const moved = await server.inject(`/api/stay?swlat=50.0715&swlng=14.4111&nelat=50.0841&nelng=14.4322&${STAY}&adults=3&minstars=4&minscore=8`)
-  assert.deepEqual(again.json(), answer)
-  assert.deepEqual(moved.json(), answer)
+  assert.deepEqual(again.json().listings, answer.listings)
+  assert.deepEqual(moved.json().listings, answer.listings)
   assert.equal(fetchMock.mock.callCount(), 4)
 })
 
@@ -215,7 +223,7 @@ test('after a 429 no search goes to Stay22 until its Retry-After has passed', as
   const busy = await server.inject(`/api/stay?${VIEW}&${STAY}&type=hotel`)
   assert.equal(busy.statusCode, 503)
   assert.equal(busy.headers['retry-after'], '7')
-  assert.match(busy.json().error, /no more searches this minute; places to stay again in 7 s/)
+  assert.match(busy.json().error, /asked too often just now; places to stay again in 7 s/)
   const calls = fetchMock.mock.callCount()
   // Another place within the minute is answered at once, without asking.
   const elsewhere = await server.inject(`/api/stay?swlat=48.85&swlng=2.33&nelat=48.86&nelng=2.35&${STAY}`)
@@ -233,16 +241,16 @@ test('a view wider than 16° is searched for its middle 16°', async (t) => {
   assert.deepEqual([params.get('swlat'), params.get('nelat'), params.get('swlng'), params.get('nelng')], ['40', '58', '14', '16'])
 })
 
-test('a failed search sends no more pages', async (t) => {
+test("Stay22's 429 stops every list of the search: no page is sent after it", async (t) => {
   const sent: string[] = []
   const fetchMock = mock.method(globalThis, 'fetch', async (url: string, init: RequestInit) => {
     const params = new URL(url).searchParams
     const list = `${params.get('type')} ${params.get('cluster') ?? 'ranked'} ${params.get('page')}`
     if (params.get('type') === 'rental') {
       sent.push(list)
-      return new Response('busy', { status: 503 })
+      return new Response('{}', { status: 429, headers: { 'retry-after': '9' } })
     }
-    // The hotels' first page, of 250, comes back after the rentals failed.
+    // The hotels' first page, of 250, comes back after the rentals were refused.
     await new Promise(resolve => setTimeout(resolve, 20))
     if (init.signal?.aborted) throw new DOMException('aborted', 'AbortError')
     sent.push(list)
@@ -250,9 +258,102 @@ test('a failed search sends no more pages', async (t) => {
   })
   t.after(() => fetchMock.mock.restore())
   const response = await (await app(t)).inject(`/api/stay?${VIEW}&${STAY}`)
-  assert.equal(response.statusCode, 502)
+  assert.equal(response.statusCode, 503)
+  assert.equal(response.headers['retry-after'], '9')
   await new Promise(resolve => setTimeout(resolve, 50))
   assert.deepEqual(sent.sort(), ['rental ranked 1', 'rental top 1'])
+})
+
+test('a Retry-After is believed up to a minute: none, a negative or an absurd one waits the minute', () => {
+  assert.equal(retryAfterSeconds('7'), 7)
+  assert.equal(retryAfterSeconds('999999999'), 60)
+  assert.equal(retryAfterSeconds('-1'), 60)
+  assert.equal(retryAfterSeconds(null), 60)
+  assert.equal(retryAfterSeconds('Wed, 21 Oct 2026 07:28:00 GMT'), 60)
+})
+
+test('a success without results is a failure, never a kept "no rooms"', async (t) => {
+  let answer = () => new Response(JSON.stringify({ message: 'upstream temporarily unavailable' }), { status: 200 })
+  const fetchMock = mock.method(globalThis, 'fetch', async () => answer())
+  t.after(() => fetchMock.mock.restore())
+  const server = await app(t)
+  assert.equal((await server.inject(`/api/stay?${VIEW}&${STAY}&type=hotel`)).statusCode, 502)
+  answer = () => page([SAMPLE])
+  const retried = await server.inject(`/api/stay?${VIEW}&${STAY}&type=hotel`)
+  assert.equal(retried.statusCode, 200)
+  assert.equal(retried.json().listings.length, 1)
+})
+
+test("one kind's failure keeps the other kind's places, with the failure beside them, and is not kept", async (t) => {
+  const fetchMock = mock.method(globalThis, 'fetch', async (url: string) =>
+    (new URL(url).searchParams.get('type') === 'rental' ? new Response('busy', { status: 503 }) : page([place('h1')])))
+  t.after(() => fetchMock.mock.restore())
+  const server = await app(t)
+  const response = await server.inject(`/api/stay?${VIEW}&${STAY}`)
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json().listings.map((listing: { id: string }) => listing.id), ['h1'])
+  assert.equal(response.json().failure, 'Stay22 did not answer; no places to stay for now.')
+  await server.inject(`/api/stay?${VIEW}&${STAY}`)
+  assert.equal(fetchMock.mock.callCount(), 8)
+})
+
+test("a visitor spends a third of the key's minute; three visitors spend the key's 150", async (t) => {
+  const fetchMock = mock.method(globalThis, 'fetch', async () => page([place('h1')]))
+  t.after(() => fetchMock.mock.restore())
+  const server = await app(t)
+  // 14 distinct views from one address: a search of both kinds is 4 calls, so 12 searches spend 48
+  // of the visitor's 50, the 13th gets two lists (answered with the failure), the 14th none.
+  const spendAll = async (visitor: number) => {
+    const statuses: number[] = []
+    for (let at = 0; at < 14; at += 1) {
+      const view = `swlat=${10 + at}&swlng=${visitor}&nelat=${10.01 + at}&nelng=${visitor + 0.01}`
+      const response = await server.inject({ url: `/api/stay?${view}&${STAY}`, remoteAddress: `203.0.113.${visitor}` })
+      statuses.push(response.statusCode === 200 && response.json().failure ? 206 : response.statusCode)
+    }
+    return statuses
+  }
+  assert.deepEqual(await spendAll(1), [...Array(12).fill(200), 206, 503])
+  assert.equal(fetchMock.mock.callCount(), 50)
+  await spendAll(2)
+  await spendAll(3)
+  assert.equal(fetchMock.mock.callCount(), 150)
+  const fourth = await server.inject({ url: `/api/stay?swlat=30&swlng=10&nelat=30.01&nelng=10.01&${STAY}`, remoteAddress: '203.0.113.4' })
+  assert.equal(fourth.statusCode, 503)
+  assert.equal(fetchMock.mock.callCount(), 150)
+})
+
+test('at most four searches run at once; the fifth waits a second', async (t) => {
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const fetchMock = mock.method(globalThis, 'fetch', async () => {
+    await held
+    return page([place('h1')])
+  })
+  t.after(() => fetchMock.mock.restore())
+  const server = await app(t)
+  const view = (at: number) => `/api/stay?swlat=${10 + at}&swlng=10&nelat=${10.01 + at}&nelng=10.01&${STAY}&type=hotel`
+  const running = [0, 1, 2, 3].map(at => server.inject(view(at)))
+  await new Promise(resolve => setTimeout(resolve, 20))
+  const fifth = await server.inject(view(4))
+  assert.equal(fifth.statusCode, 503)
+  assert.equal(fifth.headers['retry-after'], '1')
+  release()
+  assert.deepEqual((await Promise.all(running)).map(response => response.statusCode), [200, 200, 200, 200])
+})
+
+test("an answer lives 55 minutes from when it was asked, kept answers too, and then leaves memory", async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() })
+  const fetchMock = mock.method(globalThis, 'fetch', async () => page([SAMPLE]))
+  t.after(() => fetchMock.mock.restore())
+  const server = await app(t)
+  const ask = async () => (await server.inject(`/api/stay?${VIEW}&${STAY}&type=hotel`)).json()
+  assert.equal((await ask()).expiresIn, 55 * 60)
+  t.mock.timers.tick(10 * 60_000)
+  assert.equal((await ask()).expiresIn, 45 * 60)
+  assert.equal(fetchMock.mock.callCount(), 2)
+  t.mock.timers.tick(45 * 60_000)
+  assert.equal((await ask()).expiresIn, 55 * 60)
+  assert.equal(fetchMock.mock.callCount(), 4)
 })
 
 test('without a Stay22 account the route answers 503, and nothing is asked', async (t) => {
