@@ -1,0 +1,13 @@
+[package]
+name = "raster"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "qm-raster"
+path = "src/main.rs"
+
+[dependencies]
+tiles = { path = "../tiles" }
+flate2 = "1"

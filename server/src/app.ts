@@ -1,5 +1,6 @@
-// The HTTP API: the streamed popup, the geocoder proxies and the heatmap tiles, behind per-client
-// rate limits on the expensive routes. The static frontend is added by server.ts (web.ts).
+// The HTTP API: the streamed popup, the geocoder proxies, the heatmap tiles and the data layers,
+// behind per-client rate limits on the expensive routes. The static frontend is added by server.ts
+// (web.ts).
 import Fastify from 'fastify'
 import type { FastifyError, FastifyInstance } from 'fastify'
 import compress from '@fastify/compress'
@@ -11,13 +12,14 @@ import { popupRoutes } from './routes/popup.ts'
 import { searchRoutes } from './routes/search.ts'
 import { heatmapPmtilesRoutes } from './routes/heatmap-pmtiles.ts'
 import { heatmapManifestRoutes } from './routes/heatmap-manifest.ts'
+import { rasterRoutes } from './routes/raster.ts'
 
 /** Clicks waiting per computing slot: beyond that a visitor waits longer than a retry takes. */
 const POPUP_QUEUE_PER_SLOT = 2
 /** A click still computing after this is killed and answered with an error. */
 const POPUP_TIMEOUT_MS = 30_000
 
-export type AppConfig = Pick<Config, 'popupBin' | 'preparedDir' | 'years' | 'popupConcurrency' | 'tilesDir' | 'noIndex' | 'photonUrl'>
+export type AppConfig = Pick<Config, 'popupBin' | 'rasterBin' | 'preparedDir' | 'years' | 'popupConcurrency' | 'tilesDir' | 'noIndex' | 'photonUrl'>
 
 export async function buildApp(
   config: AppConfig,
@@ -79,5 +81,6 @@ export async function buildApp(
   await app.register(searchRoutes, { photonUrl: config.photonUrl })
   await app.register(heatmapPmtilesRoutes, { tilesDir: config.tilesDir })
   await app.register(heatmapManifestRoutes, { tilesDir: config.tilesDir })
+  await app.register(rasterRoutes, { rasterBin: config.rasterBin, preparedDir: config.preparedDir, year: config.years[0] })
   return app
 }

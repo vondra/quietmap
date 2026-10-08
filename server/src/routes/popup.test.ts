@@ -16,6 +16,7 @@ after(() => rm(scratch, { recursive: true, force: true }))
 function config(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
     popupBin: FAKE_POPUP,
+    rasterBin: '/nonexistent/qm-raster',
     preparedDir: PREPARED,
     years: ['2026', '2025'],
     popupConcurrency: 2,

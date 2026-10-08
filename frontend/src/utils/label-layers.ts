@@ -54,3 +54,10 @@ export function getLabelLayers(basemapId: BasemapId): SymbolLayerSpecification[]
     paint: adaptPaint(layer.paint ?? {}, basemapId) as SymbolLayerSpecification['paint'],
   }))
 }
+
+/** The layer the map's overlays draw beneath, so place labels stay on top: the first of the
+ *  `_label` layers (standard and satellite), else the first symbol layer (the Positron fallback). */
+export function labelAnchorId(layers: readonly { id: string; type: string }[] | undefined): string | undefined {
+  return layers?.find(layer => layer.id.startsWith('_label'))?.id
+    ?? layers?.find(layer => layer.type === 'symbol')?.id
+}

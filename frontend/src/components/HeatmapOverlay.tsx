@@ -13,6 +13,8 @@ import { lngLatToTileFloat } from '../lib/tile-math'
 import { MIN_ZOOM, WORLD_EXTENT, buildKey, tileUrl, useTileBuild, type HeatmapSource, type TileBuilds } from '../lib/tile-urls'
 import { loadTileProgressively, fetchAncestor, type HeatTile } from '../lib/progressive-tile-loader'
 import { compositeSig, baseRange, buildComposite, type Composite } from '../lib/tile-composite'
+import { labelAnchorId } from '../utils/label-layers'
+import { lowestDataLayerId } from '../lib/data-layers'
 
 interface Props {
   sources: readonly HeatmapSource[]
@@ -47,7 +49,7 @@ const MAX_CACHE_TILES = 192
  * Each tile (and the composite) is fetched as static `.bin`, decoded +
  * energy-summed (multi-layer subsets) + palette-mapped to `ImageData` in the
  * browser — server stays a dumb static/CDN reader. Interleaved overlay + a
- * `beforeId` of the first label layer keeps city labels on top.
+ * `beforeId` beneath the data layers and the first label layer keeps both on top.
  */
 export default function HeatmapOverlay({ sources }: Props): null {
   const { current: mapRef } = useMap()
@@ -56,7 +58,7 @@ export default function HeatmapOverlay({ sources }: Props): null {
   // reads newer module state than the layer it feeds (no mixed generations).
   const build = useTileBuild()
   const [overlay, setOverlay] = useState<MapboxOverlay | null>(null)
-  const labelAnchor = useRef<string | undefined>(undefined)
+  const anchor = useRef<string | undefined>(undefined)
   // The stitched over-zoom composite. `sig` is the source + base-zoom-range key
   // it was built for, so a pan within the same tiles skips the rebuild.
   const composite = useRef<(Composite & { sig: string }) | null>(null)
@@ -139,11 +141,11 @@ export default function HeatmapOverlay({ sources }: Props): null {
   }, [mapRef])
 
   // Pick the mode by zoom and push the deck layers. Cheap — no fetch (the
-  // composite is built in `update`); also handles label-anchor changes.
+  // composite is built in `update`); also handles anchor changes.
   const apply = useCallback(() => {
     if (!overlay || !mapRef) return
     const map = mapRef.getMap()
-    const beforeId = labelAnchor.current
+    const beforeId = anchor.current
     const layers = []
     // No published build yet (manifest still resolving) → no tile layers; the
     // store notification re-renders us the moment it lands.
@@ -278,19 +280,16 @@ export default function HeatmapOverlay({ sources }: Props): null {
     }
   }, [mapRef, build, sources])
 
-  // Track the basemap's first label layer as the heatmap's z-anchor (beforeId).
+  // The heatmap's z-anchor (beforeId): beneath the data layers when any is on, else beneath the
+  // basemap's first label layer.
   useEffect(() => {
     if (!mapRef) return
     const map = mapRef.getMap()
     const sync = () => {
       const layers = map.getStyle()?.layers
-      // Anchor below the first label layer so labels draw on top. Standard +
-      // satellite rename labels `_label-*`; the Positron fallback doesn't, so
-      // fall back to the first symbol layer.
-      const id = layers?.find((l) => l.id.startsWith('_label'))?.id
-        ?? layers?.find((l) => l.type === 'symbol')?.id
-      if (id !== labelAnchor.current) {
-        labelAnchor.current = id
+      const id = lowestDataLayerId(layers) ?? labelAnchorId(layers)
+      if (id !== anchor.current) {
+        anchor.current = id
         applyRef.current()
       }
     }

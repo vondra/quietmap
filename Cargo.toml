@@ -1,8 +1,8 @@
-# One workspace: physics kernels, tile formats, builders, the popup and the server.
+# One workspace: physics kernels, tile formats, builders, the popup and the map's data layers.
 # Build with `cargo build --release`; binaries land in target/release/.
 [workspace]
 resolver = "3"
-members = ["tiles", "physics", "build", "popup"]
+members = ["tiles", "physics", "build", "popup", "raster"]
 
 [workspace.package]
 edition = "2024"

@@ -12,7 +12,8 @@ be exact within a stated error budget and fast from a cold disk. Read this page 
     build/   one builder per kind: emission is computed here, never at the click
       -> prepared/<year>/<x9>/<y9>/<x12>_<y12>.<kind>      (z12 tiles in z9 directories)
     popup/   the ring loop: read whole files, propagate, stream the answer
-    server/  HTTP: the map, the tiles, the streamed popup
+    raster/  the data layers: a map tile of the terrain or obstacles files as a PNG
+    server/  HTTP: the map, the tiles, the data layers, the streamed popup
     frontend/ the map and the popup (redraws on every streamed update)
 
 `physics/` holds the kernels (ray, line quadrature, bounds, Doc 29) with the standards' test
@@ -149,7 +150,10 @@ lines of JSON (each <= 100 KB).
 `server/` runs `qm-popup` once per click (a few clicks at once, a short queue, 503 when it is
 full) and forwards its lines as `application/x-ndjson`, flushed at once and never compressed; a
 visitor who leaves has the child killed, and a failed click ends with one `{"error"}` line. It
-also serves the heatmap tiles and the built map. `frontend/` redraws the popup on every line,
+also serves the heatmap tiles and the built map, and runs `qm-raster` once per tile of a data
+layer the visitor switched on (the "Advanced" group: elevation, hard ground, buildings and noise
+barriers as the computation reads them, and the forest cover it leaves out). `frontend/`
+redraws the popup on every line,
 marks a partial answer as still refining, shows an error line as an error, and aborts the
 previous request on a new click. `server/README.md` has the routes and the environment.
 

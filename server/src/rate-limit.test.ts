@@ -11,6 +11,7 @@ import { rateLimitClientKey } from './rate-limit.ts'
 // limiter in front of the handlers.
 const CONFIG: AppConfig = {
   popupBin: '/nonexistent/qm-popup',
+  rasterBin: '/nonexistent/qm-raster',
   preparedDir: '/nonexistent',
   years: ['2026'],
   popupConcurrency: 1,

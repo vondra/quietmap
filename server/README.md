@@ -1,13 +1,14 @@
 # Server
 
 Fastify on Node 24 (TypeScript run as is, no build step). It serves the built map, the heatmap
-tiles, the geocoder proxies and the streamed popup:
+tiles, the data layers, the geocoder proxies and the streamed popup:
 
 | route | answer |
 |---|---|
 | `GET /api/popup?lat=&lon=[&year=][&segments=1]` | one click, streamed as `application/x-ndjson` (below) |
 | `GET /api/tiles-manifest` | the published heatmap generation: `{build, zoom, layers}` |
 | `GET /api/tiles/:build/:layer/:z/:x/:y.bin` | one HM3 tile, Brotli, immutable; a missing tile is an empty 200 |
+| `GET /api/raster/:layer/:z/:x/:y.png` | one 256-pixel map tile of a data layer, drawn by `qm-raster` from the default year: `elevation`, `forest`, `hard` (zoom 10-16) and `buildings`, `barriers` (13-16); 400 for no such tile, 503 when eight draw and 256 wait, 500 when the drawing failed; kept an hour |
 | `GET /api/search?q=&lat=&lon=`, `GET /api/reverse?lat=&lon=` | address suggestions and place names (public Photon geocoder) |
 | everything else | the built frontend (`../frontend/dist`), or a 404 |
 
@@ -43,6 +44,7 @@ visitor's address in `X-Forwarded-For` (forwarding headers are trusted from loop
 | `PORT` | the port to listen on (required) |
 | `HOST` | the address to listen on; default `127.0.0.1` |
 | `QM_POPUP_BIN` | the `qm-popup` executable (`cargo build --release` writes `target/release/qm-popup`) |
+| `QM_RASTER_BIN` | the `qm-raster` executable (`target/release/qm-raster`), which draws the data layers |
 | `QM_PREPARED_DIR` | the prepared release: one directory per year beside the global tables |
 | `QM_YEARS` | comma-separated years the release serves, e.g. `2026,2025`; the first is the default |
 | `QM_TILES_DIR` | the heatmap tiles: `current.json` and the `{layer}.{build}.pmtiles` archives it names |
@@ -50,13 +52,13 @@ visitor's address in `X-Forwarded-For` (forwarding headers are trusted from loop
 | `QM_NOINDEX` | `1` marks every response `X-Robots-Tag: noindex` (a host search engines must skip) |
 | `QM_PHOTON_URL` | the Photon geocoder's base URL for search and place names; default the public `https://photon.komoot.io` |
 
-The server refuses to start without the binary, a year directory or the tiles directory.
+The server refuses to start without either binary, a year directory or the tiles directory.
 
 ## Run and test
 
     npm ci --prefix frontend && npm --prefix frontend run build
     npm ci --prefix server
-    PORT=... QM_POPUP_BIN=... QM_PREPARED_DIR=... QM_YEARS=... QM_TILES_DIR=... npm --prefix server start
+    PORT=... QM_POPUP_BIN=... QM_RASTER_BIN=... QM_PREPARED_DIR=... QM_YEARS=... QM_TILES_DIR=... npm --prefix server start
 
     npm --prefix server run check     # typecheck, lint, tests (the popup route against a fake qm-popup)
     npm --prefix frontend run check   # typecheck, lint, unit tests

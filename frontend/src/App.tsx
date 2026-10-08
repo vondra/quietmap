@@ -17,6 +17,7 @@ import { setDocumentTitle } from './utils/page-title'
 import RecentPlaces from './components/RecentPlaces'
 import { loadRecentPlaces, saveRecentPlaces, withName, withPlace, withoutPlace, type RecentPlace } from './lib/recent-places'
 import { useIsDesktop } from './hooks/useIsDesktop'
+import type { DataLayerId } from './lib/data-layers'
 
 
 export default function App() {
@@ -60,6 +61,7 @@ export default function App() {
   }, [])
   const handleLocate = useCallback(() => geolocateTrigger.current(), [])
   const [heatmapLayers, setHeatmapLayers] = useState<Record<string, boolean>>(initial.heatmapLayers)
+  const [dataLayers, setDataLayers] = useState<DataLayerId[]>(initial.dataLayers)
 
   // Refs are the post-event truth for the URL: each handler updates its ref before syncUrl.
   const mapViewRef = useRef({ lat: initial.lat, lng: initial.lng, zoom: initial.zoom })
@@ -71,6 +73,7 @@ export default function App() {
   const quietThresholdRef = useRef(quietThreshold)
   const basemapRef = useRef(basemap)
   const heatmapLayersRef = useRef(heatmapLayers)
+  const dataLayersRef = useRef(dataLayers)
 
   // Pre-warm the lazy popup-body chunk the instant a point is clicked, so it
   // downloads while the first answer is computed instead of after it.
@@ -152,6 +155,7 @@ export default function App() {
       detailPosition: detailPositionRef.current,
       basemap: basemapRef.current,
       heatmapLayers: heatmapLayersRef.current,
+      dataLayers: dataLayersRef.current,
       ...overrides,
     })
   }, [updateUrl])
@@ -160,6 +164,12 @@ export default function App() {
     setHeatmapLayers(next)
     heatmapLayersRef.current = next
     syncUrl({ heatmapLayers: next })
+  }, [syncUrl])
+
+  const handleDataLayersChange = useCallback((next: DataLayerId[]) => {
+    setDataLayers(next)
+    dataLayersRef.current = next
+    syncUrl({ dataLayers: next })
   }, [syncUrl])
 
   const handleViewChange = useCallback((lat: number, lng: number, zoom: number) => {
@@ -229,10 +239,11 @@ export default function App() {
     handleQuietClustersChange(next.quietClusters)
     handleQuietThresholdChange(next.quietThreshold)
     handleHeatmapLayersChange(next.heatmapLayers)
+    handleDataLayersChange(next.dataLayers)
     handleBasemapChange(next.basemap)
     if (sameDetailPosition(detailPositionRef.current, next.detailPosition)) return
     handleDetailPositionChange(next.detailPosition)
-  }, [handleQuietClustersChange, handleQuietThresholdChange, handleHeatmapLayersChange, handleBasemapChange, handleDetailPositionChange])
+  }, [handleQuietClustersChange, handleQuietThresholdChange, handleHeatmapLayersChange, handleDataLayersChange, handleBasemapChange, handleDetailPositionChange])
 
   return (
     <div className="relative h-screen w-screen overflow-hidden">
@@ -251,6 +262,8 @@ export default function App() {
             onQuietThresholdChange={handleQuietThresholdChange}
             heatmapLayers={heatmapLayers}
             onHeatmapLayersChange={handleHeatmapLayersChange}
+            dataLayers={dataLayers}
+            onDataLayersChange={handleDataLayersChange}
           />
           {detailPosition && (
             <RecentPlaces places={recentPlaces} current={detailPosition} onOpen={openPlace} onRemove={forgetPlace} />
@@ -295,6 +308,7 @@ export default function App() {
         quietClustersEnabled={quietClustersEnabled}
         quietThreshold={quietThreshold}
         heatmapLayers={heatmapLayers}
+        dataLayers={dataLayers}
         registerGeolocateTrigger={registerGeolocateTrigger}
         onGeolocateActiveChange={setGeolocateActive}
         onGeolocateReadyChange={setGeolocateReady}
@@ -327,6 +341,8 @@ export default function App() {
           onQuietThresholdChange={handleQuietThresholdChange}
           heatmapLayers={heatmapLayers}
           onHeatmapLayersChange={handleHeatmapLayersChange}
+          dataLayers={dataLayers}
+          onDataLayersChange={handleDataLayersChange}
         />
       </div>
 

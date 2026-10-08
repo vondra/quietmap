@@ -8,6 +8,8 @@ export interface Config {
   port: number
   /** The `qm-popup` executable. */
   popupBin: string
+  /** The `qm-raster` executable, which draws the data layers. */
+  rasterBin: string
   /** The prepared release: one directory per year beside the global tables. */
   preparedDir: string
   /** The years the release serves; the first answers a click that names none. */
@@ -47,6 +49,8 @@ function directory(path: string, name: string): string {
 export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const popupBin = required(env, 'QM_POPUP_BIN')
   accessSync(popupBin, constants.X_OK)
+  const rasterBin = required(env, 'QM_RASTER_BIN')
+  accessSync(rasterBin, constants.X_OK)
   const preparedDir = directory(required(env, 'QM_PREPARED_DIR'), 'QM_PREPARED_DIR')
   const years = required(env, 'QM_YEARS').split(',').map(year => year.trim())
   for (const year of years) {
@@ -57,6 +61,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: env.HOST || '127.0.0.1',
     port: positiveInteger(required(env, 'PORT'), 'PORT', 65535),
     popupBin,
+    rasterBin,
     preparedDir,
     years,
     popupConcurrency: positiveInteger(env.QM_POPUP_CONCURRENCY || '2', 'QM_POPUP_CONCURRENCY', 64),

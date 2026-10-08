@@ -1,8 +1,10 @@
-// The shareable map state in the URL hash: view, open popup point, basemap, layers, quiet zones.
+// The shareable map state in the URL hash: view, open popup point, basemap, layers, quiet zones,
+// data layers.
 import { useCallback, useRef, useMemo } from 'react'
 import { DEFAULT_BASEMAP, type BasemapId } from '../utils/basemaps'
 import { resolveInitialView } from '../utils/initial-view'
 import { HEATMAP_LAYERS } from '../lib/tile-urls'
+import { parseDataLayers, type DataLayerId } from '../lib/data-layers'
 // Quiet-zone slider spec — highlight areas whose total Lden is ≤ this.
 // Range targets genuinely quiet places: 20 dB (rural quiet) to 45 dB (calm
 // suburb). Step 0.5 dB matches the model's native resolution; finer would
@@ -37,6 +39,8 @@ export interface UrlState {
   detailPosition: { lat: number; lng: number } | null
   basemap: BasemapId
   heatmapLayers: Record<string, boolean>
+  /** The data layers switched on (`data=`, none when absent). */
+  dataLayers: DataLayerId[]
 }
 
 // Default view: every noise layer on (the overlay then fetches the precomputed `total` tile).
@@ -68,6 +72,7 @@ export function parseHash(): UrlState {
       detailPosition: null,
       basemap: DEFAULT_BASEMAP,
       heatmapLayers: { ...DEFAULT_HEATMAP_LAYERS },
+      dataLayers: [],
     }
   }
 
@@ -107,6 +112,7 @@ export function parseHash(): UrlState {
     detailPosition,
     basemap: (params.get('bm') as BasemapId) || DEFAULT_BASEMAP,
     heatmapLayers,
+    dataLayers: parseDataLayers(params.get('data')),
   }
 }
 
@@ -136,6 +142,10 @@ function buildHash(state: UrlWrite): string {
   // default; serialize the exact set otherwise (including the empty "all off" set as `ro=`).
   if (!HEATMAP_LAYERS.every(id => state.heatmapLayers[id])) {
     parts.push(`ro=${HEATMAP_LAYERS.filter(id => state.heatmapLayers[id]).join(',')}`)
+  }
+
+  if (state.dataLayers.length) {
+    parts.push(`data=${state.dataLayers.join(',')}`)
   }
 
   return '#' + parts.join('&')

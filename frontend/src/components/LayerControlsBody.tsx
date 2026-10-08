@@ -1,9 +1,10 @@
 // The layer controls, shared by the desktop ControlCard and the phone LayersPanel: the noise
-// layers and the quiet-zone overlay.
+// layers, the quiet-zone overlay and the data layers.
+import DataLayersSection, { type DataLayersSectionProps } from './DataLayersSection'
 import OverlayControls from './OverlayControls'
 import SourceToggles from './SourceToggles'
 
-export interface LayerControlsBodyProps {
+export interface LayerControlsBodyProps extends DataLayersSectionProps {
   quietClustersEnabled: boolean
   onQuietClustersChange: (enabled: boolean) => void
   quietThreshold: number
@@ -17,6 +18,7 @@ export default function LayerControlsBody({
   quietClustersEnabled, onQuietClustersChange,
   quietThreshold, onQuietThresholdChange,
   heatmapLayers, onHeatmapLayersChange,
+  dataLayers, onDataLayersChange,
   dividerSpacing = 'compact',
 }: LayerControlsBodyProps) {
   const divClass = dividerSpacing === 'compact'
@@ -38,6 +40,10 @@ export default function LayerControlsBody({
         quietThreshold={quietThreshold}
         onQuietThresholdChange={onQuietThresholdChange}
       />
+
+      <div className={divClass} />
+
+      <DataLayersSection dataLayers={dataLayers} onDataLayersChange={onDataLayersChange} />
     </>
   )
 }

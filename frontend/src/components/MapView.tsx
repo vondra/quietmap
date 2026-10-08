@@ -12,6 +12,8 @@ import HeatmapOverlay from './HeatmapOverlay'
 import { HEATMAP_LAYERS, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
 import HoverTooltip from './HoverTooltip'
 import AboutControl from './AboutControl'
+import DataLayersOverlay from './DataLayersOverlay'
+import type { DataLayerId } from '../lib/data-layers'
 import MapStateSync from './MapStateSync'
 import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
 import { QUIET_THRESHOLD_DEFAULT, type UrlState } from '../hooks/useUrlState'
@@ -43,6 +45,7 @@ interface MapViewProps {
   quietClustersEnabled?: boolean
   quietThreshold?: number
   heatmapLayers?: Record<string, boolean>
+  dataLayers?: DataLayerId[]
   /** Hands the parent a function that fires the map's GeolocateControl — the
    *  mobile locate box in the BasemapBar row triggers GPS through it. */
   registerGeolocateTrigger?: (trigger: () => void) => void
@@ -56,7 +59,7 @@ interface MapViewProps {
 export default function MapView({
   isCurrentDetailPosition, selectedLocation, initialCenter, initialZoom,
   basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition, flightTrack, segmentFan,
-  quietClustersEnabled, quietThreshold, heatmapLayers,
+  quietClustersEnabled, quietThreshold, heatmapLayers, dataLayers,
   registerGeolocateTrigger, onGeolocateActiveChange, onGeolocateReadyChange,
 }: MapViewProps) {
   const center = initialCenter ?? [49.8, 15.5]
@@ -160,6 +163,7 @@ export default function MapView({
           energy-summed + palette-mapped in the browser) below the labels,
           above the basemap, on its own interleaved deck.gl canvas. */}
       <HeatmapOverlay sources={activeHeatmapSources} />
+      <DataLayersOverlay layers={dataLayers ?? []} />
       <QuietZonesLayer enabled={quietClustersEnabled ?? false} threshold={quietThreshold ?? QUIET_THRESHOLD_DEFAULT} />
       <FlyToLocation location={selectedLocation ?? null} onArrived={handleArrived} />
       <HoverTooltip sources={activeHeatmapSources} />
