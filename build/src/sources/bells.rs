@@ -23,21 +23,21 @@ use super::events::{DAY, EVENING, EventSchedule, NIGHT, push_event_source};
 use super::worship::{Denomination, Host, Religion, SiteKind, WorshipSite, groups, nearest_host};
 use physics::bands::BANDS;
 
-/// European countries (UN M49), where the research describes what the bells ring.
-const EUROPE: [[u8; 2]; 51] = [
-    *b"AD", *b"AL", *b"AT", *b"AX", *b"BA", *b"BE", *b"BG", *b"BY", *b"CH", *b"CZ", *b"DE", *b"DK",
-    *b"EE", *b"ES", *b"FI", *b"FO", *b"FR", *b"GB", *b"GG", *b"GI", *b"GR", *b"HR", *b"HU", *b"IE",
-    *b"IM", *b"IS", *b"IT", *b"JE", *b"LI", *b"LT", *b"LU", *b"LV", *b"MC", *b"MD", *b"ME", *b"MK",
-    *b"MT", *b"NL", *b"NO", *b"PL", *b"PT", *b"RO", *b"RS", *b"RU", *b"SE", *b"SI", *b"SK", *b"SM",
-    *b"UA", *b"VA", *b"XK",
+/// European countries (UN M49) and Cyprus, where the research describes what the bells ring.
+const EUROPE: [[u8; 2]; 52] = [
+    *b"AD", *b"AL", *b"AT", *b"AX", *b"BA", *b"BE", *b"BG", *b"BY", *b"CH", *b"CY", *b"CZ", *b"DE",
+    *b"DK", *b"EE", *b"ES", *b"FI", *b"FO", *b"FR", *b"GB", *b"GG", *b"GI", *b"GR", *b"HR", *b"HU",
+    *b"IE", *b"IM", *b"IS", *b"IT", *b"JE", *b"LI", *b"LT", *b"LU", *b"LV", *b"MC", *b"MD", *b"ME",
+    *b"MK", *b"MT", *b"NL", *b"NO", *b"PL", *b"PT", *b"RO", *b"RS", *b"RU", *b"SE", *b"SI", *b"SK",
+    *b"SM", *b"UA", *b"VA", *b"XK",
 ];
 /// Countries whose church clocks strike the hours and quarters by day (the research's Germany and
 /// Switzerland), and those that strike at night too.
 const STRIKING: [[u8; 2]; 2] = [*b"CH", *b"DE"];
 const STRIKING_AT_NIGHT: [[u8; 2]; 1] = [*b"CH"];
 /// European countries whose churches are Orthodox where no denomination is mapped.
-const ORTHODOX_COUNTRIES: [[u8; 2]; 10] = [
-    *b"BG", *b"BY", *b"GR", *b"MD", *b"ME", *b"MK", *b"RO", *b"RS", *b"RU", *b"UA",
+const ORTHODOX_COUNTRIES: [[u8; 2]; 11] = [
+    *b"BG", *b"BY", *b"CY", *b"GR", *b"MD", *b"ME", *b"MK", *b"RO", *b"RS", *b"RU", *b"UA",
 ];
 
 const PRAYER_RINGING_S: f64 = 180.0;
@@ -193,6 +193,11 @@ mod tests {
         assert!((swiss.events_per_day[2] - 24.0).abs() < 1e-12);
         let serbian = schedule(iso(b"RS"), PEAL_LW_DBA, true).unwrap();
         assert_eq!(serbian.events_per_day, [2.0 / 7.0, 0.0, 0.0]);
+        let cypriot = schedule(iso(b"CY"), PEAL_LW_DBA, true).unwrap();
+        assert_eq!(
+            cypriot.events_per_day, serbian.events_per_day,
+            "Cyprus rings, Orthodox"
+        );
         assert!(schedule(iso(b"US"), PEAL_LW_DBA, false).is_none());
         assert_eq!(bell_height_m(SiteKind::Church, 8.0), 15.0);
         assert_eq!(bell_height_m(SiteKind::BellTower, 0.0), 6.0);
