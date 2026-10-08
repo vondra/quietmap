@@ -30,11 +30,13 @@ export function heardText(sourceType: string, heard: Contributor['heard']): stri
 }
 
 /** The aircraft layer's flights whose peak level here reaches the events table's first band
- *  (50 dB): a day from one and a half a day, else a year ("5 flights/year", "<1 flight/year");
- *  none without such flights. */
+ *  (50 dB): an hour from two an hour (the column holds "48 flights/h", not "1143 flights/day"), a
+ *  day from one and a half a day, else a year ("5 flights/year", "<1 flight/year"); none without
+ *  such flights. */
 export function flightsText(events: AircraftEvents | undefined): string | null {
   const perDay = events?.per_day[0] ?? 0
   if (perDay <= 0) return null
+  if (perDay >= 48) return `${Math.round(perDay / 24)} flights/h`
   if (perDay >= 1.5) return `${Math.round(perDay)} flights/day`
   const perYear = perDay * 365.25
   return perYear >= 0.5 ? `${Math.round(perYear)} flights/year` : '<1 flight/year'

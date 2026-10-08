@@ -5,7 +5,7 @@
 
 use super::flights::LoudFlight;
 use std::path::Path;
-use tiles::aircraft_tracks::{TrackPoint, flight_parts, tracks_path};
+use tiles::aircraft_tracks::{TrackPoint, TracksFile, tracks_path};
 
 /// How far from the click a track is drawn (m, each way): beyond the aircraft reach, so a listed
 /// flight's line runs off the area it was heard from.
@@ -99,24 +99,31 @@ fn near(parts: Vec<Vec<TrackPoint>>, centre: [f64; 2]) -> Vec<Vec<TrackPoint>> {
         .collect()
 }
 
-/// Gives each listed flight its line near the click at `centre` (lat, lon in deg); the files
-/// opened and bytes read.
+/// Gives each listed flight its line near the click at `centre` (lat, lon in deg), each tracks
+/// file opened once; the files opened and bytes read.
 pub fn attach(
     year_root: &Path,
     flights: &mut [LoudFlight],
     centre: [f64; 2],
 ) -> Result<(usize, u64), String> {
-    let (mut files, mut bytes) = (0, 0);
+    let mut opened: Vec<(std::path::PathBuf, TracksFile)> = Vec::new();
+    let mut bytes = 0;
     for flight in flights {
-        let (parts, read) = flight_parts(
-            &tracks_path(year_root, flight.icao),
-            flight.icao,
-            flight.start_unix,
-        )?;
-        (files, bytes) = (files + 1, bytes + read);
+        let path = tracks_path(year_root, flight.icao);
+        let index = match opened.iter().position(|(open, _)| *open == path) {
+            Some(index) => index,
+            None => {
+                let file = TracksFile::open(&path)?;
+                bytes += file.opened_bytes();
+                opened.push((path, file));
+                opened.len() - 1
+            }
+        };
+        let (parts, read) = opened[index].1.flight(flight.icao, flight.start_unix)?;
+        bytes += read;
         flight.track = near(parts, centre);
     }
-    Ok((files, bytes))
+    Ok((opened.len(), bytes))
 }
 
 #[cfg(test)]

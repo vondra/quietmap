@@ -1,8 +1,9 @@
 //! `qm-build aircraft-tracks`: every flight of the year's Stage 1 days as the map draws it
 //! (`tiles::aircraft_tracks`). A day's aircraft segments, a flight's following one another in its
 //! file, chain into one line, straight across the receivers' gaps as the aircraft flew there, and
-//! broken only where it crosses the antimeridian (a segment from one side to the other is left
-//! out); the line keeps the ends Douglas-Peucker needs within the tolerance of the segments drawn. The days run in parallel, each writing its flights split by address into
+//! broken where it crosses the antimeridian or a step is too long for a flight (such a segment is
+//! left out); the line keeps the ends Douglas-Peucker needs within the tolerance of the segments
+//! drawn. The days run in parallel, each writing its flights split by address into
 //! a scratch file per split; then each split's days are merged into its file.
 
 use arrow_array::cast::AsArray;
@@ -51,10 +52,18 @@ fn offset_m(point: &TrackPoint, a: &TrackPoint, b: &TrackPoint) -> f64 {
     (px - along * dx).hypot(py - along * dy)
 }
 
-/// Whether a step from `a` to `b` crosses the antimeridian (its longitudes more than half the
-/// world apart).
-fn crosses(a: &TrackPoint, b: &TrackPoint) -> bool {
-    (a[1] - b[1]).abs() > 180.0
+/// A step longer than this (m) is no flight's: a bad fix (one hop from St Petersburg to
+/// Antarctica, 24,912 km) or a coverage gap over an ocean, drawn as no line.
+const STEP_MAX_M: f64 = 300_000.0;
+
+/// Whether a step from `a` to `b` breaks the line: across the antimeridian (its longitudes more
+/// than half the world apart) or longer than [`STEP_MAX_M`].
+fn breaks(a: &TrackPoint, b: &TrackPoint) -> bool {
+    if (a[1] - b[1]).abs() > 180.0 {
+        return true;
+    }
+    let [east, north] = metres(a, b);
+    east.hypot(north) > STEP_MAX_M
 }
 
 /// The points Douglas-Peucker keeps within [`TOLERANCE_M`], the first and last always.
@@ -146,11 +155,11 @@ fn day_parts(path: &Path) -> Result<Vec<Vec<Part>>, String> {
                 close(current.take());
             }
             let points = &mut current.get_or_insert_with(|| (id, Vec::new())).1;
-            // A segment from one side of the antimeridian to the other breaks the line; a gap
-            // between segments is drawn straight unless it crosses it too.
-            if crosses(&start, &end) || points.last().is_some_and(|last| crosses(last, &start)) {
+            // A segment across the antimeridian or too long breaks the line; a gap between
+            // segments is drawn straight unless it would break it too.
+            if breaks(&start, &end) || points.last().is_some_and(|last| breaks(last, &start)) {
                 close(current.take());
-                if crosses(&start, &end) {
+                if breaks(&start, &end) {
                     current = Some((id, vec![end]));
                     continue;
                 }
@@ -261,10 +270,12 @@ mod tests {
         assert_eq!(simplify(&back).len(), 3);
     }
 
-    /// Steps more than half the world apart cross the antimeridian.
+    /// Steps across the antimeridian or too long for a flight break the line.
     #[test]
-    fn a_step_across_the_antimeridian_is_told() {
-        assert!(crosses(&[10.0, 179.98], &[10.0, -179.99]));
-        assert!(!crosses(&[10.0, 179.98], &[10.0, 179.99]));
+    fn a_step_across_the_antimeridian_or_the_world_breaks_the_line() {
+        assert!(breaks(&[10.0, 179.98], &[10.0, -179.99]));
+        assert!(!breaks(&[10.0, 179.98], &[10.0, 179.99]));
+        assert!(breaks(&[59.581, 29.721], &[-84.094, -146.19]));
+        assert!(!breaks(&[50.0, 14.0], &[50.5, 14.5]));
     }
 }

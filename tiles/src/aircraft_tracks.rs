@@ -3,8 +3,8 @@
 //! with those within [`TOLERANCE_M`] of the line through the ends kept left out (Douglas-Peucker),
 //! one part unless it crosses the antimeridian. The flights are split by the low byte of their
 //! address into 256 files (`<year root>/aircraft-tracks/<xx>.aircraft-tracks`), each sorted by
-//! address and start, so a click finds a flight by a binary search of positioned reads instead of
-//! reading a file. The map is flat: no heights.
+//! address and start, so a click reads a file's directory, finds its flights in it and reads only
+//! their points. The map is flat: no heights.
 //!
 //! ```text
 //! magic "qmtrk2\n\0", u32 parts
@@ -125,70 +125,92 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Part>, String> {
     Ok(decoded)
 }
 
-fn read_at(file: &File, path: &Path, at: u64, buffer: &mut [u8]) -> Result<(), String> {
-    file.read_exact_at(buffer, at)
-        .map_err(|error| format!("{}: {error}", path.display()))
+/// A tracks file opened for lookups: its directory read whole (one read, a few MB), a flight's
+/// points one read each.
+pub struct TracksFile {
+    file: File,
+    path: PathBuf,
+    directory: Vec<u8>,
+    points_at: u64,
+    points: u64,
 }
 
-/// The parts of the flight `(address, start)` in the file at `path`, in their order along it, and
-/// the bytes read; none when the file holds no such flight.
-pub fn flight_parts(
-    path: &Path,
-    address: u32,
-    start: u32,
-) -> Result<(Vec<Vec<TrackPoint>>, u64), String> {
-    let failed = |what: &str| format!("{}: {what}", path.display());
-    let file = File::open(path).map_err(|error| failed(&error.to_string()))?;
-    let length = file
-        .metadata()
-        .map_err(|error| failed(&error.to_string()))?
-        .len();
-    let mut header = [0u8; HEADER_BYTES as usize];
-    read_at(&file, path, 0, &mut header)?;
-    if &header[..8] != MAGIC {
-        return Err(failed("bad magic"));
-    }
-    let parts = u64::from(u32_at(&header, 8));
-    let (points_at, points) =
-        layout(length, parts).ok_or_else(|| failed("length does not match"))?;
-    let mut read = HEADER_BYTES;
-    let mut entry = |index: u64| -> Result<[u32; 4], String> {
-        let mut record = [0u8; PART_BYTES as usize];
-        read_at(&file, path, HEADER_BYTES + PART_BYTES * index, &mut record)?;
-        read += PART_BYTES;
-        Ok(std::array::from_fn(|field| u32_at(&record, 4 * field)))
-    };
-    // The first part not before the flight's key.
-    let (mut low, mut high) = (0, parts);
-    while low < high {
-        let middle = (low + high) / 2;
-        let [entry_address, entry_start, ..] = entry(middle)?;
-        if (entry_address, entry_start) < (address, start) {
-            low = middle + 1;
-        } else {
-            high = middle;
+impl TracksFile {
+    /// Opens the file at `path` and reads its directory, checking its extents.
+    pub fn open(path: &Path) -> Result<Self, String> {
+        let failed = |what: &dyn std::fmt::Display| format!("{}: {what}", path.display());
+        let file = File::open(path).map_err(|error| failed(&error))?;
+        let length = file.metadata().map_err(|error| failed(&error))?.len();
+        let mut header = [0u8; HEADER_BYTES as usize];
+        file.read_exact_at(&mut header, 0)
+            .map_err(|error| failed(&error))?;
+        if &header[..8] != MAGIC {
+            return Err(failed(&"bad magic"));
         }
+        let parts = u64::from(u32_at(&header, 8));
+        let (points_at, points) =
+            layout(length, parts).ok_or_else(|| failed(&"length does not match"))?;
+        let mut directory = vec![0u8; (points_at - HEADER_BYTES) as usize];
+        file.read_exact_at(&mut directory, HEADER_BYTES)
+            .map_err(|error| failed(&error))?;
+        Ok(TracksFile {
+            file,
+            path: path.to_path_buf(),
+            directory,
+            points_at,
+            points,
+        })
     }
-    let mut runs = Vec::new();
-    for index in low..parts {
-        let [entry_address, entry_start, first, count] = entry(index)?;
-        if (entry_address, entry_start) != (address, start) {
-            break;
+
+    /// The bytes read to open it.
+    pub fn opened_bytes(&self) -> u64 {
+        HEADER_BYTES + self.directory.len() as u64
+    }
+
+    fn entry(&self, index: usize) -> [u32; 4] {
+        std::array::from_fn(|field| {
+            u32_at(&self.directory, PART_BYTES as usize * index + 4 * field)
+        })
+    }
+
+    /// The parts of the flight `(address, start)` in their order along it, and the bytes read;
+    /// none when the file holds no such flight.
+    pub fn flight(&self, address: u32, start: u32) -> Result<(Vec<Vec<TrackPoint>>, u64), String> {
+        let parts = self.directory.len() / PART_BYTES as usize;
+        // The first part not before the flight's key.
+        let (mut first, mut high) = (0, parts);
+        while first < high {
+            let middle = (first + high) / 2;
+            let [entry_address, entry_start, ..] = self.entry(middle);
+            if (entry_address, entry_start) < (address, start) {
+                first = middle + 1;
+            } else {
+                high = middle;
+            }
         }
-        let (first, count) = (u64::from(first), u64::from(count));
-        if first + count > points {
-            return Err(failed("a part outside the points"));
+        let mut found = Vec::new();
+        let mut read = 0;
+        for index in first..parts {
+            let [entry_address, entry_start, from, count] = self.entry(index);
+            if (entry_address, entry_start) != (address, start) {
+                break;
+            }
+            let (from, count) = (u64::from(from), u64::from(count));
+            if from + count > self.points {
+                return Err(format!(
+                    "{}: a part outside the points",
+                    self.path.display()
+                ));
+            }
+            let mut bytes = vec![0u8; (POINT_BYTES * count) as usize];
+            self.file
+                .read_exact_at(&mut bytes, self.points_at + POINT_BYTES * from)
+                .map_err(|error| format!("{}: {error}", self.path.display()))?;
+            read += bytes.len() as u64;
+            found.push(points_of(&bytes));
         }
-        runs.push((first, count));
+        Ok((found, read))
     }
-    let mut found = Vec::with_capacity(runs.len());
-    for (first, count) in runs {
-        let mut bytes = vec![0u8; (POINT_BYTES * count) as usize];
-        read_at(&file, path, points_at + POINT_BYTES * first, &mut bytes)?;
-        read += bytes.len() as u64;
-        found.push(points_of(&bytes));
-    }
-    Ok((found, read))
 }
 
 #[cfg(test)]
@@ -213,26 +235,32 @@ mod tests {
         ]);
         let path = std::env::temp_dir().join(format!("qm-tracks-{}.test", std::process::id()));
         std::fs::write(&path, &bytes).unwrap();
-        let (parts, read) = flight_parts(&path, 0x4ca1aa, 1_780_000_000).unwrap();
+        let tracks = TracksFile::open(&path).unwrap();
+        let (parts, read) = tracks.flight(0x4ca1aa, 1_780_000_000).unwrap();
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0], vec![[50.1, 14.5], [50.11, 14.51]]);
         assert_eq!(parts[1][0], [50.2, 14.5]);
-        assert!(read > 0);
-        assert_eq!(flight_parts(&path, 0x4b1805, 7).unwrap().0.len(), 1);
-        assert!(flight_parts(&path, 0x4ca1aa, 8).unwrap().0.is_empty());
-        assert!(flight_parts(&path, 0xffffff, 0).unwrap().0.is_empty());
+        assert!(read > 0 && tracks.opened_bytes() > 0);
+        assert_eq!(tracks.flight(0x4b1805, 7).unwrap().0.len(), 1);
+        assert!(tracks.flight(0x4ca1aa, 8).unwrap().0.is_empty());
+        assert!(tracks.flight(0xffffff, 0).unwrap().0.is_empty());
         assert_eq!(decode(&bytes).unwrap().len(), 4);
         // One part declared and none stored; then a part claiming every point there could be.
         let mut short = bytes[..12].to_vec();
         short[8] = 1;
         assert!(decode(&short).is_err());
         std::fs::write(&path, &short).unwrap();
-        assert!(flight_parts(&path, 0, 0).is_err());
+        assert!(TracksFile::open(&path).is_err());
         let mut greedy = bytes.clone();
         greedy[12 + 12..12 + 16].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(decode(&greedy).is_err());
         std::fs::write(&path, &greedy).unwrap();
-        assert!(flight_parts(&path, 0x4b1805, 7).is_err());
+        assert!(
+            TracksFile::open(&path)
+                .unwrap()
+                .flight(0x4b1805, 7)
+                .is_err()
+        );
         std::fs::remove_file(&path).unwrap();
         assert_eq!(
             tracks_path(Path::new("/y"), 0x4ca1aa),
