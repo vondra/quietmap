@@ -42,6 +42,39 @@ impl Temperature {
     /// them are sea, the mean of the land ones; with none, the surfaces' reference 20 C (no
     /// correction).
     pub fn at(&self, lat: f64, lon: f64) -> f64 {
+        self.land_at(lat, lon)
+            .unwrap_or(REFERENCE_AIR_TEMPERATURE_C)
+    }
+
+    /// The temperature of the land at a place: [`Self::at`]'s where a corner is land, else the
+    /// nearest land cell within [`NEAREST_LAND_RINGS`] rings of cells (an island smaller than a
+    /// cell), else none.
+    pub fn on_land(&self, lat: f64, lon: f64) -> Option<f64> {
+        if let Some(value) = self.land_at(lat, lon) {
+            return Some(value);
+        }
+        let row = (((90.0 - lat) * CELLS_PER_DEGREE) as usize).min(ROWS - 1);
+        let column = ((lon + 180.0).rem_euclid(360.0) * CELLS_PER_DEGREE) as usize % COLUMNS;
+        let mut nearest: Option<(usize, f64)> = None;
+        for dr in -NEAREST_LAND_RINGS..=NEAREST_LAND_RINGS {
+            for dc in -NEAREST_LAND_RINGS..=NEAREST_LAND_RINGS {
+                let r = row as i64 + dr;
+                if !(0..ROWS as i64).contains(&r) {
+                    continue;
+                }
+                let c = (column as i64 + dc).rem_euclid(COLUMNS as i64) as usize;
+                let ring = (dr * dr + dc * dc) as usize;
+                if let Some(value) = self.cell(r as usize, c)
+                    && nearest.is_none_or(|(best, _)| ring < best)
+                {
+                    nearest = Some((ring, value));
+                }
+            }
+        }
+        nearest.map(|(_, value)| value)
+    }
+
+    fn land_at(&self, lat: f64, lon: f64) -> Option<f64> {
         let y = ((90.0 - lat) * CELLS_PER_DEGREE - 0.5).clamp(0.0, (ROWS - 1) as f64);
         let x = (lon + 180.0).rem_euclid(360.0) * CELLS_PER_DEGREE - 0.5;
         let (row, column) = ((y.floor() as usize).min(ROWS - 2), x.floor());
@@ -60,14 +93,17 @@ impl Temperature {
         };
         let count = land().count();
         if count == 4 {
-            land().map(|(value, weight)| value * weight).sum()
+            Some(land().map(|(value, weight)| value * weight).sum())
         } else if count == 0 {
-            REFERENCE_AIR_TEMPERATURE_C
+            None
         } else {
-            land().map(|(value, _)| value).sum::<f64>() / count as f64
+            Some(land().map(|(value, _)| value).sum::<f64>() / count as f64)
         }
     }
 }
+
+/// How far an island's homes look for the land's climate (rings of 10' cells, about 55 km).
+const NEAREST_LAND_RINGS: i64 = 3;
 
 /// The yearly mean, warmest-quarter and coldest-quarter temperature grids of a WorldClim
 /// directory (`bio1.f32`, `bio10.f32`, `bio11.f32`).
@@ -101,13 +137,28 @@ impl Climate {
         })
     }
 
+    /// The land's yearly mean and the amplitude of its sinusoidal year (warmest and coldest
+    /// quarters); none far out at sea (the sea's 20 C would run air conditioners all year).
+    fn year(&self, lat: f64, lon: f64) -> Option<(f64, f64)> {
+        let mean = self.mean.on_land(lat, lon)?;
+        let quarters =
+            self.warmest_quarter.on_land(lat, lon)? - self.coldest_quarter.on_land(lat, lon)?;
+        Some((
+            mean,
+            (quarters / (2.0 * QUARTER_MEAN_OF_AMPLITUDE)).max(0.0),
+        ))
+    }
+
     /// The year as a sinusoid through the yearly mean whose warmest and coldest quarters average
-    /// the place's (monthly means: the days' own swings add degree days at the margins).
+    /// the place's (monthly means: the days' own swings add degree days at the margins); none to
+    /// run on at sea.
     pub fn degree_days(&self, lat: f64, lon: f64) -> DegreeDays {
-        let mean = self.mean.at(lat, lon);
-        let amplitude = ((self.warmest_quarter.at(lat, lon) - self.coldest_quarter.at(lat, lon))
-            / (2.0 * QUARTER_MEAN_OF_AMPLITUDE))
-            .max(0.0);
+        let Some((mean, amplitude)) = self.year(lat, lon) else {
+            return DegreeDays {
+                heating: 0.0,
+                cooling: 0.0,
+            };
+        };
         let above = |base: f64| 365.0 * mean_excess(mean, amplitude, base);
         DegreeDays {
             heating: above(HEATING_BASE_C) - 365.0 * (mean - HEATING_BASE_C),
@@ -115,12 +166,12 @@ impl Climate {
         }
     }
 
-    /// The share of the year whose daily mean reaches `base_c`, on the same sinusoidal year.
+    /// The share of the year whose daily mean reaches `base_c`, on the same sinusoidal year; none
+    /// at sea.
     pub fn share_of_year_above(&self, lat: f64, lon: f64, base_c: f64) -> f64 {
-        let mean = self.mean.at(lat, lon);
-        let amplitude = (self.warmest_quarter.at(lat, lon) - self.coldest_quarter.at(lat, lon))
-            / (2.0 * QUARTER_MEAN_OF_AMPLITUDE);
-        share_above(mean, amplitude.max(0.0), base_c)
+        self.year(lat, lon).map_or(0.0, |(mean, amplitude)| {
+            share_above(mean, amplitude, base_c)
+        })
     }
 }
 
@@ -221,5 +272,10 @@ mod tests {
             "coast"
         );
         assert_eq!(grid.at(0.0, -30.0), REFERENCE_AIR_TEMPERATURE_C);
+        // An island two cells off the coast takes the coast's land; the open sea none.
+        let (island_lat, _) = centre(row, column);
+        let (_, island_lon) = centre(row, column + 3);
+        assert_eq!(grid.on_land(island_lat, island_lon), Some(11.0));
+        assert_eq!(grid.on_land(0.0, -30.0), None);
     }
 }
