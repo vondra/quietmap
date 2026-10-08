@@ -1,8 +1,8 @@
 //! `qm-raster --prepared DIR --year YYYY --layer LAYER --z Z --x X --y Y`: one 256-pixel map tile
 //! (standard XYZ) of the data under the computation, as a PNG on stdout: the terrain's height,
 //! forest cover or hard ground per lattice node, the buildings by height or the noise barriers of
-//! the obstacles, or the roads' vehicles and the railways' trains a day of the sources. Where the
-//! release has nothing to show the tile is transparent.
+//! the obstacles, or the roads' vehicles and the railways' trains a day and every other source of
+//! the sources. Where the release has nothing to show the tile is transparent.
 
 mod ground;
 mod outlines;
@@ -29,6 +29,7 @@ enum Layer {
     Barriers,
     Traffic,
     Trains,
+    Others,
 }
 
 impl Layer {
@@ -41,26 +42,30 @@ impl Layer {
             "barriers" => Layer::Barriers,
             "traffic" => Layer::Traffic,
             "trains" => Layer::Trains,
+            "others" => Layer::Others,
             _ => return None,
         })
     }
 
     /// The terrain layers read 16 files a tile at zoom 10; the obstacles lie in one file from
-    /// zoom 13 on, where a building covers pixels; the roads from 13, the railways from 11.
+    /// zoom 13 on, where a building covers pixels; the roads from 13, the railways from 11, the
+    /// other sources from 12.
     fn min_zoom(self) -> u32 {
         match self {
             Layer::Elevation | Layer::Forest | Layer::Hard => 10,
             Layer::Buildings | Layer::Barriers | Layer::Traffic => 13,
             Layer::Trains => 11,
+            Layer::Others => 12,
         }
     }
 
     /// Pixels beyond the map tile whose data reach into it: half a barrier's, a road's or a
-    /// railway's widest line.
+    /// railway's widest line, half the largest dot.
     fn margin_px(self) -> f64 {
         match self {
             Layer::Barriers => outlines::BARRIER_WIDTH_PX / 2.0,
             Layer::Traffic | Layer::Trains => sources::WIDEST_LINE_PX / 2.0,
+            Layer::Others => sources::LARGEST_DOT_PX / 2.0,
             _ => 0.0,
         }
     }
@@ -69,7 +74,7 @@ impl Layer {
         match self {
             Layer::Elevation | Layer::Forest | Layer::Hard => Kind::Terrain,
             Layer::Buildings | Layer::Barriers => Kind::Obstacles,
-            Layer::Traffic | Layer::Trains => Kind::Sources,
+            Layer::Traffic | Layer::Trains | Layer::Others => Kind::Sources,
         }
     }
 }
@@ -176,7 +181,9 @@ fn run(arguments: &[String]) -> Result<Vec<u8>, String> {
             ground::render(layer, map_tile, &tiles, &files)?
         }
         Layer::Buildings | Layer::Barriers => outlines::render(layer, map_tile, &tiles, &files)?,
-        Layer::Traffic | Layer::Trains => sources::render(layer, map_tile, &tiles, &files)?,
+        Layer::Traffic | Layer::Trains | Layer::Others => {
+            sources::render(layer, map_tile, &tiles, &files)?
+        }
     };
     Ok(png::encode(PIXELS, PIXELS, &pixels))
 }

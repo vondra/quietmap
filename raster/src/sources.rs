@@ -3,6 +3,9 @@
 //! Amsterdam's traffic model), faint where a fixed estimate per class stands; every railway piece
 //! (horns aside) in the colour of its trains a day, solid where timetables give all of them, half
 //! where they give some, faint where none. Fainter lines are drawn first, the known ones on top.
+//! Every other source (`Layer::Others`) as a dot in its family's colour where the click computes
+//! it (a site, an area's cells), the airports' ground lines and the horns' approaches to level
+//! crossings; the buildings' own sound is left to the Buildings layer.
 
 use crate::outlines::{draw_line, near};
 use crate::{Layer, MapTile, ramp};
@@ -34,6 +37,34 @@ const TRAIN_STOPS: [(f64, [f64; 3]); 5] = [
 ];
 /// The busiest roads' and railways' line (pixels).
 pub const WIDEST_LINE_PX: f64 = 3.5;
+/// The other sources' dots (pixels across): wind turbines, bells and calls larger.
+const DOT_PX: f64 = 4.0;
+pub const LARGEST_DOT_PX: f64 = 7.0;
+/// The other sources' families: industry, wind turbines, church bells and calls to prayer, people
+/// outside bars and restaurants, sport and play, parking, ships, the airports' ground lines, the
+/// horns at level crossings.
+const INDUSTRY: [u8; 3] = [123, 50, 148];
+const TURBINE: [u8; 3] = [0, 128, 128];
+const BELLS_AND_CALLS: [u8; 3] = [184, 134, 11];
+const PEOPLE: [u8; 3] = [208, 28, 139];
+const SPORT_AND_PLAY: [u8; 3] = [26, 152, 80];
+const PARKING: [u8; 3] = [77, 106, 138];
+const SHIPS: [u8; 3] = [33, 102, 172];
+const AIRPORT: [u8; 3] = [64, 64, 64];
+const HORNS: [u8; 3] = [230, 85, 13];
+/// The sport and play areas of `build/src/sources/leisure.rs` (`class_label`): a new class there
+/// is drawn once listed here.
+const SPORT_AND_PLAY_TYPES: [&str; 9] = [
+    "sports_pitch",
+    "artificial_turf_pitch",
+    "padel_court",
+    "tennis_court",
+    "ball_court",
+    "playground",
+    "swimming_pool",
+    "stadium",
+    "shooting",
+];
 /// How a number is known, as opacity: counted or timetabled, modelled, a fixed estimate or guess.
 const COUNTED_ALPHA: u8 = 255;
 const MODELLED_ALPHA: u8 = 150;
@@ -143,18 +174,70 @@ fn style(layer: SourceLayer, display: &str) -> Option<([u8; 4], f64, f64)> {
     Some(([r, g, b, alpha], width, value))
 }
 
-/// The map tile's pixels from the sources files of `tiles`: the roads (`Layer::Traffic`) or the
-/// railways (`Layer::Trains`); points are not drawn.
+/// Another source's colour, dot or line width and drawing rank from its layer and display fields,
+/// or `None` for a building's own sound (its plant, a school's yard, a warehouse's walls: the
+/// Buildings layer has the buildings) and what is not listed. The dots go by family, not power:
+/// every cell of an area carries the whole area's power in its display.
+fn other_style(layer: SourceLayer, display: &str) -> Option<([u8; 4], f64, f64)> {
+    let (family, width, rank) = match layer {
+        SourceLayer::Road => return None,
+        // A crossing's horn sounds along the track's approach; trains are the Trains layer's.
+        SourceLayer::Railway => {
+            let fields = serde_json::from_str::<Value>(display).ok()?;
+            match fields.get(field_index(layer, "rail_type")) {
+                Some(kind) if kind == "horn" => (HORNS, 2.5, 0.5),
+                _ => return None,
+            }
+        }
+        SourceLayer::Aircraft => (AIRPORT, 2.5, 0.0),
+        SourceLayer::Ship => (SHIPS, DOT_PX, 1.0),
+        SourceLayer::Industry | SourceLayer::Building => {
+            let fields = serde_json::from_str::<Value>(display).ok()?;
+            let text = |name: &str| {
+                fields
+                    .get(field_index(layer, name))
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned()
+            };
+            if layer == SourceLayer::Industry {
+                match text("source_type").as_str() {
+                    "wind_turbine" => (TURBINE, LARGEST_DOT_PX, 7.0),
+                    _ => (INDUSTRY, DOT_PX, 5.0),
+                }
+            } else {
+                match text("building_type").as_str() {
+                    "church_bells" | "call_to_prayer" => (BELLS_AND_CALLS, LARGEST_DOT_PX, 6.0),
+                    kind if kind.starts_with("people_") || kind == "outdoor_seating" => {
+                        (PEOPLE, DOT_PX, 4.0)
+                    }
+                    kind if SPORT_AND_PLAY_TYPES.contains(&kind) => (SPORT_AND_PLAY, DOT_PX, 3.0),
+                    "car_park" | "street_parking" => (PARKING, DOT_PX, 2.0),
+                    _ => return None,
+                }
+            }
+        }
+    };
+    Some(([family[0], family[1], family[2], 255], width, rank))
+}
+
+/// The map tile's pixels from the sources files of `tiles`: the roads (`Layer::Traffic`), the
+/// railways (`Layer::Trains`) or every other source (`Layer::Others`, its points as dots).
 pub fn render(
     layer: Layer,
     map_tile: MapTile,
     tiles: &[TileId],
     files: &[Option<Vec<u8>>],
 ) -> Result<Vec<[u8; 4]>, String> {
-    let wanted = if layer == Layer::Traffic {
-        SourceLayer::Road
-    } else {
-        SourceLayer::Railway
+    // The pieces a layer reads: roads, railways, or everything but roads (a railway's horns).
+    let reads = |kind: SourceLayer| match layer {
+        Layer::Traffic => kind == SourceLayer::Road,
+        Layer::Trains => kind == SourceLayer::Railway,
+        _ => kind != SourceLayer::Road,
+    };
+    let style = |kind: SourceLayer, display: &str| match layer {
+        Layer::Others => other_style(kind, display),
+        _ => style(kind, display),
     };
     let mut lines = Vec::new();
     for (&tile, file) in tiles.iter().zip(files) {
@@ -171,33 +254,33 @@ pub fn render(
         for index in 0..sources.piece_count() {
             let piece = sources.piece(index).map_err(|error| error.to_string())?;
             let ends = piece.ends.map(to_pixel);
-            if !piece.is_line() || !near(&ends, 4.0) {
+            // Roads and railways are lines; the other sources mostly points.
+            if (layer != Layer::Others && !piece.is_line()) || !near(&ends, LARGEST_DOT_PX / 2.0) {
                 continue;
             }
-            if sources
+            let kind = sources
                 .layer(piece.attribute)
-                .map_err(|error| error.to_string())?
-                != wanted
-            {
+                .map_err(|error| error.to_string())?;
+            if !reads(kind) {
                 continue;
             }
-            let style = match styles.get(&piece.attribute) {
-                Some(style) => *style,
+            let found = match styles.get(&piece.attribute) {
+                Some(found) => *found,
                 None => {
                     let display = sources
                         .display(piece.attribute)
                         .map_err(|error| error.to_string())?;
                     *styles
                         .entry(piece.attribute)
-                        .or_insert(style(wanted, display))
+                        .or_insert(style(kind, display))
                 }
             };
-            if let Some((colour, width, value)) = style {
+            if let Some((colour, width, value)) = found {
                 lines.push((colour, width, value, ends));
             }
         }
     }
-    // The better known on top, and of two as well known the busier.
+    // The better known on top, and of two as well known the busier; the other sources by rank.
     lines.sort_by(|a, b| a.0[3].cmp(&b.0[3]).then(a.2.total_cmp(&b.2)));
     let mut pixels = vec![[0; 4]; crate::PIXELS * crate::PIXELS];
     for (colour, width, _, ends) in &lines {
@@ -280,6 +363,105 @@ mod tests {
         }
         assert!(road(0.0, 9003).is_none());
         assert!(style(SourceLayer::Road, "not json").is_none());
+    }
+
+    /// Another source is a dot of its family's colour, turbines, bells and calls larger; a
+    /// building's own sound and an unlisted kind are not drawn, the airports' ground lines are.
+    #[test]
+    fn other_sources_are_dots_of_their_family() {
+        let other = |layer: SourceLayer, set: &[(&str, Value)]| {
+            other_style(layer, &display(layer, set)).map(|(colour, width, _)| (colour, width))
+        };
+        let building = |kind: &str| {
+            other(
+                SourceLayer::Building,
+                &[("building_type", Value::from(kind))],
+            )
+        };
+        let industry =
+            |kind: &str| other(SourceLayer::Industry, &[("source_type", Value::from(kind))]);
+        let solid = |[r, g, b]: [u8; 3]| [r, g, b, 255];
+        assert_eq!(
+            industry("wind_turbine"),
+            Some((solid(TURBINE), LARGEST_DOT_PX))
+        );
+        assert_eq!(industry("quarry"), Some((solid(INDUSTRY), DOT_PX)));
+        assert_eq!(
+            building("church_bells"),
+            Some((solid(BELLS_AND_CALLS), LARGEST_DOT_PX))
+        );
+        assert_eq!(
+            building("call_to_prayer").unwrap().0,
+            solid(BELLS_AND_CALLS)
+        );
+        assert_eq!(building("people_pub"), Some((solid(PEOPLE), DOT_PX)));
+        assert_eq!(building("outdoor_seating").unwrap().0, solid(PEOPLE));
+        assert_eq!(building("car_park").unwrap().0, solid(PARKING));
+        assert_eq!(building("tennis_court").unwrap().0, solid(SPORT_AND_PLAY));
+        for own in [
+            "residential_multi",
+            "education",
+            "warehouse",
+            "worship",
+            "unknown",
+        ] {
+            assert!(building(own).is_none(), "{own}");
+        }
+        assert_eq!(other(SourceLayer::Ship, &[]), Some((solid(SHIPS), DOT_PX)));
+        assert_eq!(
+            other(SourceLayer::Aircraft, &[]),
+            Some((solid(AIRPORT), 2.5))
+        );
+        let rail = |kind: &str| other(SourceLayer::Railway, &[("rail_type", Value::from(kind))]);
+        assert_eq!(rail("horn"), Some((solid(HORNS), 2.5)));
+        assert!(rail("rail").is_none());
+        assert!(other(SourceLayer::Road, &[]).is_none());
+    }
+
+    /// A wind turbine and a pub's guests at one spot: the turbine shows. A dot stored in the z12
+    /// tile west of the map tile, on their shared edge, reaches into the map tile's first columns.
+    #[test]
+    fn other_sources_draw_turbines_on_top_and_across_tile_edges() {
+        use tiles::sources::{Attribute, BANDS, GROUND_FROM_TERRAIN, PERIODS, Piece, encode};
+        let attribute = |layer: SourceLayer, fields: &[(&str, Value)]| Attribute {
+            layer,
+            height_m: 1.5,
+            ground_percent: GROUND_FROM_TERRAIN,
+            platform_half_width_m: 0.0,
+            exclusion_radius_m: 0.0,
+            footprint_id: 0,
+            group_key: 1,
+            emission: [[60.0; BANDS]; PERIODS],
+            display: display(layer, fields),
+        };
+        let point = |x: i16, y: i16, attribute: u32| Piece {
+            ends: [[x, y], [x, y]],
+            attribute,
+        };
+        // At the east edge of z12 tile (2047, 2048), a quarter of a tile above its centre.
+        let edge = 16_383;
+        let bytes = encode(
+            &[point(edge, -8_192, 0), point(edge, -8_192, 1)],
+            &[
+                attribute(
+                    SourceLayer::Industry,
+                    &[("source_type", Value::from("wind_turbine"))],
+                ),
+                attribute(
+                    SourceLayer::Building,
+                    &[("building_type", Value::from("people_pub"))],
+                ),
+            ],
+        );
+        // The zoom-13 map tile in the north-west quarter of z12 tile (2048, 2048).
+        let map_tile = MapTile::new(13, 4096, 4096);
+        let west = TileId { x: 2047, y: 2048 };
+        let pixels = render(Layer::Others, map_tile, &[west], &[Some(bytes)]).unwrap();
+        let [r, g, b] = TURBINE;
+        // The dot's centre lies 0.016 px west of column 0, at row 128.
+        assert_eq!(pixels[128 * crate::PIXELS], [r, g, b, 255]);
+        assert_eq!(pixels[128 * crate::PIXELS + 2], [r, g, b, 255]);
+        assert_eq!(pixels[128 * crate::PIXELS + 4], [0; 4]);
     }
 
     /// A railway is as solid as the share of its trains a timetable gives: all, some or none (a

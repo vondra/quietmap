@@ -15,6 +15,7 @@ export const RASTER_ZOOMS: Readonly<Record<string, readonly [number, number]>> =
   barriers: [13, 16],
   traffic: [13, 16],
   trains: [11, 16],
+  others: [12, 16],
 }
 
 /** A view asks for about 35 tiles a layer, all five layers 175; one draws in 3-13 ms, so 256

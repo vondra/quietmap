@@ -27,6 +27,10 @@ export const DATA_LAYERS = [
     tooltip: 'Trains a day on every track, trams included: light blue 1, blue 10, dark blue 50, navy 150, purple 300 and more. Solid where timetables give all of them, half where they give some, faint where none do.',
   },
   {
+    id: 'others', label: 'Other sources', minzoom: 12, opacity: 1,
+    tooltip: 'The other sources every click computes, where it computes them (a dot per site, or per cell of an area): purple industry, teal wind turbines, gold church bells and calls to prayer, pink people outside bars and restaurants, green sport and play, slate car parks and street parking, blue ships (their density cells), grey the airports\' taxiways and runways, orange the horns sounded on the approach to level crossings (the United States and Canada). Buildings\' own sound (heat pumps, air conditioners, school yards, warehouses) is not drawn here: the Buildings layer shows the buildings.',
+  },
+  {
     id: 'barriers', label: 'Noise barriers', minzoom: 13, opacity: 1,
     tooltip: 'Noise barriers the computation screens with: OpenStreetMap and national inventories.',
   },
