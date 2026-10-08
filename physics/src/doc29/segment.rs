@@ -264,14 +264,16 @@ pub fn segment_sel_at_receiver(
 }
 
 /// A segment's maximum level at the receiver (Doc 29 Eq. 4-8a, unscreened): the NPD LAmax at the
-/// shortest distance to the segment, plus Delta_I, minus Lambda with the elevation angle of and
-/// the ground distance to that same point (4.5.4); no Delta_V, no Delta_F.
+/// shortest distance to the segment, minus Lambda with the elevation angle of and the ground
+/// distance to that same point (4.5.4, Fig. 4-7), plus Delta_I at the depression angle in the
+/// plane normal to the flight path, as for the SEL; no Delta_V, no Delta_F.
 pub fn segment_lmax_db(emission: &SegmentEmission, closest: &ClosestPoints) -> f64 {
     let [east_m, north_m, height_m] = closest.on_segment_m;
     let lateral_m = east_m.hypot(north_m);
-    let slant_m = lateral_m.hypot(height_m);
-    emission.read_npd(slant_m).lamax_db
-        + installation_correction_db(emission.installation, height_m, slant_m)
+    let [line_east_m, line_north_m, line_height_m] = closest.on_line_m;
+    let line_slant_m = line_east_m.hypot(line_north_m).hypot(line_height_m);
+    emission.read_npd(lateral_m.hypot(height_m)).lamax_db
+        + installation_correction_db(emission.installation, line_height_m, line_slant_m)
         - lateral_attenuation_db(height_m, lateral_m)
 }
 

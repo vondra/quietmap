@@ -172,6 +172,12 @@ fn a_low_pass_aside_reads_its_maximum_level_attenuated() {
     );
     let (overhead, npd) = lmax([-500.0, 0.0, 600.0], [500.0, 0.0, 650.0]);
     assert!((overhead - npd).abs() < 1.0, "{overhead} against NPD {npd}");
+    // Past its end a level segment whose path runs overhead takes Delta_I at 90 deg, which is 0
+    // for wing engines (Codex, review of r053: the end's 5.7 deg gave -1.13 dB).
+    let past = closest_points([1_000.0, 0.0, 100.0], [1_100.0, 0.0, 100.0]);
+    let end = norm(past.on_segment_m);
+    let expected = climb.read_npd(end).lamax_db - lateral_attenuation_db(100.0, 1_000.0);
+    assert!((segment_lmax_db(&climb, &past) - expected).abs() < 1e-9);
 }
 
 /// A final approach whose line, extended beyond touchdown, passes 46 m under the ground at the
