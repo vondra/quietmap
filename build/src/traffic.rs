@@ -331,7 +331,9 @@ const HOUSE_UP_TO_STOREYS: u8 = 3;
 /// a building of unknown use is a shed, a house or flats by its size. A lodging (6) makes dev4's
 /// 2.45 trips a room (ITE 310 x occupancy 0.5 x car 0.6) over the 85.4 m2 of gross floor a room
 /// of the 49,151 hotel-typed buildings whose lodging states its rooms in OpenStreetMap
-/// (`evidence/2026-10-08/hotels`); dev4 took a room for 25 m2 and so made 4.66 trips a room.
+/// (`evidence/2026-10-08/hotels`), with no cap: the largest of them keep the rate (dev4's cap of
+/// 1,472 trips read lodgings of over 300 rooms 1.8 dB low); dev4 took a room for 25 m2 and so
+/// made 4.66 trips a room.
 pub(crate) fn building_load(building_type: u8, storeys: u8, area_m2: Option<f64>) -> (f64, f64) {
     let footprint = area_m2.unwrap_or(100.0);
     let gfa = footprint * f64::from(storeys.max(1));
@@ -352,7 +354,7 @@ pub(crate) fn building_load(building_type: u8, storeys: u8, area_m2: Option<f64>
         3 => trips(gfa, 0.46, 4.0, 368.0),
         4 => trips(gfa, 33.5, 20.0, 1_104.0),
         5 => (0.0, 7.36),
-        6 => trips(gfa, 2.87, 8.0, 1_472.0),
+        6 => trips(gfa, 2.87, 8.0, f64::INFINITY),
         7 => (0.0, 3.68),
         8 => trips(gfa, 1.84, 2.0, 184.0),
         9 => trips(gfa, 1.23, 2.0, 368.0),
@@ -1095,9 +1097,11 @@ mod tests {
         assert_eq!(building_load(0, 1, Some(120.0)), (1.0, 0.0), "a house");
         assert_eq!(building_load(0, 1, Some(18.0)), (0.0, 0.0), "a garage");
         assert_eq!(building_load(1, 2, Some(500.0)), (0.0, 120.0));
-        // A hotel of 3,000 m2 has 35 rooms of 85.4 m2: 2.45 trips each.
+        // A hotel of 3,000 m2 has 35 rooms of 85.4 m2: 2.45 trips each; one of 90,000 m2 its 1,054.
         let (_, hotel) = building_load(6, 3, Some(1_000.0));
         assert!((hotel - 3_000.0 / 85.4 * 2.45).abs() < 0.1, "{hotel}");
+        let (_, resort) = building_load(6, 9, Some(10_000.0));
+        assert!((resort - 90_000.0 / 85.4 * 2.45).abs() < 3.0, "{resort}");
         assert_eq!(building_load(10, 1, Some(20.0)), (0.0, 0.0));
         assert_eq!(trips_per_dwelling(u16::from_le_bytes(*b"AT")), 3.4);
     }
