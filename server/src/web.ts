@@ -10,7 +10,7 @@ import { NOT_FOUND_PAGE_HTML } from './not-found-page.ts'
 
 /** A path under /about (one trailing slash allowed) and the page it names, as the frontend reads it
  *  (frontend/src/lib/about-paths.ts). */
-const ABOUT_PATH = /^\/about(?:\/(.*?))?\/?$/
+const ABOUT_PATH = /^\/about(?:\/([^/].*?))?\/?$/
 
 export async function registerWeb(app: FastifyInstance, frontendDist: string): Promise<void> {
   // The About pages the build found (frontend/src/about): only these paths open a page.

@@ -7,10 +7,12 @@
   (ODbL)
 - Building outlines OpenStreetMap lacks: [Overture Maps Foundation](https://overturemaps.org/)
   (ODbL)
-- Noise-wall inventories: [Rijkswaterstaat](https://data.overheid.nl/dataset/15743-geluidswerende-voorzieningen--gwv-)
+- Noise-barrier inventories: [Rijkswaterstaat](https://data.overheid.nl/dataset/15743-geluidswerende-voorzieningen--gwv-)
   (CC0 1.0), [WSDOT](https://geo.wa.gov/datasets/WSDOT::wsdot-noise-walls/about),
-  [FDOT](https://www.geoplan.ufl.edu/noise-barrier-inventory/) and
-  [VDOT](https://www.arcgis.com/home/item.html?id=695b47c2cede44aebcade31fd8bc3901)
+  [FDOT](https://www.geoplan.ufl.edu/noise-barrier-inventory/),
+  [VDOT](https://www.arcgis.com/home/item.html?id=695b47c2cede44aebcade31fd8bc3901) and Poland's
+  topographic database [BDOT10k](https://www.geoportal.gov.pl/pl/dane/baza-danych-obiektow-topograficznych-bdot10k/)
+  (GUGiK; free of charge, any use)
 
 ## Terrain, ground and weather
 
@@ -31,15 +33,21 @@
   (© Ordnance Survey, Open Government Licence 3.0); Italy [TINITALY 1.1](https://tinitaly.pi.ingv.it)
   (INGV, CC BY 4.0); USA [3DEP](https://www.sciencebase.gov/catalog/item/4f70aa9fe4b058caae3f8de5)
   (USGS, public domain); Canada MRDEM-30 (Natural Resources Canada, Open Government Licence –
-  Canada). [Copernicus GLO-30](https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model)
+  Canada); Poland NMT (GUGiK); Ireland's LiDAR (Geological Survey Ireland); Spain MDT05 from
+  PNOA-LiDAR (© Instituto Geográfico Nacional). [Copernicus GLO-30](https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model)
   covers Antarctic ice and the remaining gaps (Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and
   © Airbus Defence and Space GmbH 2014-2018, provided under COPERNICUS by the European Union and
   ESA; all rights reserved)
-- Sealed ground: [ESA WorldCover 2021](https://worldcover2021.esa.int/) (CC BY 4.0) and
-  [Copernicus Imperviousness Density](https://land.copernicus.eu/en/products/high-resolution-layer-imperviousness)
+- Hard ground (paved, built over or water): [ESA WorldCover 2021](https://esa-worldcover.org/en)
+  (CC BY 4.0), refined by [Copernicus Imperviousness Density](https://land.copernicus.eu/en/products/high-resolution-layer-imperviousness)
+  in Europe
+- Tree cover, shown in the forest layer: [Copernicus Tree Cover Density](https://land.copernicus.eu/en/products/high-resolution-layer-tree-cover-density)
+  in Europe, [Hansen/UMD Global Forest Change](https://glad.earthengine.app/view/global-forest-change)
+  elsewhere
 - Building heights: [IPR Praha](https://opendata.geoportalpraha.cz/maps/ad9aca20e9c042d2b52eb31ff18961b6)
   (CC BY), [NRW LoD1](https://www.opengeodata.nrw.de/produkte/geobasis/3dg/lod1_gml/) (Datenlizenz
-  Deutschland – Zero 2.0), [3DBAG](https://3dbag.nl/) (CC BY 4.0)
+  Deutschland – Zero 2.0), [3DBAG](https://3dbag.nl/) (CC BY 4.0); floor counts from Czechia's
+  RÚIAN (© ČÚZK) and Spain's Catastro (Dirección General del Catastro)
 - Weather: [ERA5](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5) 1991–2020
   (Copernicus Climate Change Service, CC BY 4.0; contains modified Copernicus Climate Change
   Service information); temperatures [WorldClim 2.1](https://www.worldclim.org/) (Fick and Hijmans
@@ -69,7 +77,18 @@
   Crossings Inventory (Open Government Licence – Canada)
 - Industry: [E-PRTR](https://industry.eea.europa.eu/) (EEA),
   [Global Power Plant Database](https://datasets.wri.org/dataset/globalpowerplantdatabase) (WRI),
-  [Global Energy Monitor](https://globalenergymonitor.org/), national wind-turbine registries
+  [Global Energy Monitor](https://globalenergymonitor.org/)
+- Wind turbines standing today: OpenStreetMap and eight registers:
+  [USWTDB](https://energy.usgs.gov/uswtdb/) (USGS, LBNL; public domain),
+  [Canadian Wind Turbine Database](https://ftp.cartes.canada.ca/pub/nrcan_rncan/Wind-energy_Energie-eolienne/wind_turbines_database/)
+  (NRCan, Open Government Licence – Canada),
+  [Marktstammdatenregister](https://www.marktstammdatenregister.de/MaStR/Datendownload)
+  (Bundesnetzagentur, Datenlizenz Deutschland – Namensnennung 2.0),
+  [Energistyrelsen](https://ens.dk/) (Danish Energy Agency),
+  [Vindbrukskollen](https://vbk.lansstyrelsen.se/) (Länsstyrelserna, CC0),
+  [NVE](https://www.nve.no/) (NLOD 2.0),
+  [Castilla-La Mancha](https://datosabiertos.castillalamancha.es/) (CC BY-SA) and
+  [RIVM](https://data.rivm.nl/) (public domain)
 
 ## Measured numbers in the model
 
@@ -93,8 +112,12 @@ Environment Agency, parking study 2007).
 ## Measurements we compare against
 
 Bruitparif (Paris); the Ajuntament de Barcelona (CC BY 4.0); the Ayuntamiento de Madrid (CC BY
-4.0); Dublin City Council (CC BY); Thailand's Pollution Control Department; Letiště Praha;
-Flughafen Zürich; the Eisenbahn-Bundesamt's railway noise monitoring (2023).
+4.0); Dublin City Council (CC BY); Poland's Chief Inspectorate of Environmental Protection, road
+noise monitoring ([dane.gov.pl](https://dane.gov.pl/pl/dataset/1404), CC BY 4.0); the
+Eisenbahn-Bundesamt's railway noise monitoring (2023); Letiště Praha; the Metropolitan Airports
+Commission, Minneapolis–St Paul (MACNOMS); Flughafen Zürich; Clark et al. 2021, Accra
+([Zenodo](https://zenodo.org/records/11223686), CC BY 4.0); Silenzi in Quota
+([Zenodo](https://zenodo.org/records/20719737), CC BY 4.0).
 
 ## The map you look at
 

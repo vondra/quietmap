@@ -1,5 +1,28 @@
 # What's new
 
+## 8 October 2026
+
+**The data under every click.** The layer panel's new Advanced group draws what a click computes
+over, at the resolution it has it: the ground's height, hard ground (paved, built over or water),
+buildings by their height and noise barriers. And the forest, which takes nothing off: the EU
+method has no term for foliage.
+
+**Noise screens in Poland.** The 10,876 noise screens of Poland's national topographic database
+(BDOT10k) now screen the roads; in the 128 counties with nearly all the motorway monitoring points,
+3,320 of its 7,314 screens were missing from OpenStreetMap. At the 192 road monitoring points
+behind such a screen, the model went from 8.2 to 2.5 dB above the measurement; along all motorways
+and expressways from 4.1 to 3.2 dB.
+
+**Wind turbines.** 472,924 standing turbines from OpenStreetMap and eight national registers; 4,364
+of them were missing, mostly farms built in 2024–2026, and 680 the registers call dismantled are
+gone.
+
+**Trains on bridges.** A stretch of track between two switches now carries one train count, the
+one most of its length has. Short pieces, bridges above all, kept counts of their own: one bridge
+in five in Czechia and Germany, more than half in Britain, was 1.5 times off the track on both
+sides. At Germany's railway monitors the worst tenth of the stations moved from 6.8 to 6.0 dB off
+the measurement.
+
 ## 4 October 2026
 
 **People outside bars and restaurants.** 3.4 million bars, pubs, nightclubs, beer gardens,
@@ -23,8 +46,8 @@ general-area monitors moved from 8.6 to 5.7 dB under the measurement; the major-
 in Mexico fell from 4.8 to 2.9 dB.
 
 **Major roads across Europe and the United States.** Uncounted motorways, trunk and primary roads
-in Europe, the United States, Mexico, Chile, Colombia, Japan and New Zealand follow one fit on
-their counted roads (2.3 dB off on countries left out of it). US roads carry their state's mix of
+in Europe (not Cyprus or Ukraine), the United States, Mexico, Chile, Colombia and New Zealand follow
+one fit on their counted roads (2.3 dB off on countries left out of it). US roads carry their state's mix of
 lorries: 43 % on Wyoming's rural Interstates.
 
 **Homes' heat pumps and air conditioners.** A home emits the outdoor units its country's

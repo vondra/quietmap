@@ -69,6 +69,14 @@ html, body {
   .maplibregl-ctrl-bottom-right .maplibregl-ctrl-attrib {
     margin: 0 0 2px 0;
   }
+  /* Opened, the credits rise above the control row (16-60px up) instead of running under it, and
+     take the width between the gutters. */
+  .maplibregl-ctrl-bottom-right:has(.maplibregl-compact-show) {
+    bottom: 64px !important;
+    left: 8px;
+    right: 8px !important;
+    justify-content: flex-end;
+  }
 }
 
 /* Search bar: one horizontal placement. Below md a

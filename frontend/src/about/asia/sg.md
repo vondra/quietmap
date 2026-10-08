@@ -1,0 +1,8 @@
+# Singapore
+
+[Asia](/about/asia)
+
+- **Roads:** No open traffic counts. Every main road keeps a fixed estimate per road class and lane.
+- **Traffic:** Motorcycles 2.7 % of a town street's traffic (WHO 2023); electric cars 4.5 % of cars (IEA 2024), rolling noise only; without a speed sign a primary road 50 km/h in towns and outside; the day, evening and night shares as measured in Thailand.
+- **Railways:** No timetables: a fixed estimate per kind of line.
+- **Homes and places:** Per 100 of the homes OpenStreetMap maps: 29 air conditioners (the region's median); mosques do not call outside; open-fronted bars and restaurants, their terraces open as long as they are.

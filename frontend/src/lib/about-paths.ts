@@ -7,6 +7,6 @@ export function aboutPagePath(file: string): string {
 /** The page a browser path names under /about (percent-encoding kept, one trailing slash allowed),
  *  or null when the path is not under /about. */
 export function aboutPageOf(pathname: string): string | null {
-  const match = pathname.match(/^\/about(?:\/(.*?))?\/?$/)
+  const match = pathname.match(/^\/about(?:\/([^/].*?))?\/?$/)
   return match ? (match[1] ?? '') : null
 }
