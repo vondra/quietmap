@@ -76,6 +76,33 @@ fn closest_point_alongside_inside_behind_and_below() {
     assert!(elevation_deg(overhead.on_line_m) > 80.0);
 }
 
+/// Codex's case (review of the r054 plan): a 27 degree climb 62.2 m aside, 90.7 m up over the
+/// receiver's foot on its ground track. Doc 29 takes the perpendicular to the inclined line, 102 m
+/// (the foot over the ground track read 110 m), the lateral displacement to the ground track and
+/// the equivalent level path's height h cos(27 deg); behind the segment, the nearer end's height
+/// over the cosine.
+#[test]
+fn the_closest_point_is_the_perpendicular_to_the_inclined_path() {
+    let climb = 27f64.to_radians();
+    let (lateral, up) = (62.2, 90.7);
+    let at = |x: f64| [x, lateral, up + x * climb.tan()];
+    let closest = closest_points(at(-500.0), at(500.0));
+    let expected = lateral.hypot(up * climb.cos());
+    assert!(
+        (norm(closest.on_line_m) - expected).abs() < 1e-6,
+        "{closest:?}"
+    );
+    assert!((expected - 102.0).abs() < 0.1 && (lateral.hypot(up) - 110.0).abs() < 0.1);
+    assert!((closest.lateral_m - lateral).abs() < 1e-9);
+    assert!((closest.height_m - up * climb.cos()).abs() < 1e-6);
+    assert_eq!(closest.lambda_height_m, closest.height_m);
+    assert!((closest.length_m - 1_000.0 / climb.cos()).abs() < 1e-6);
+    let behind = closest_points(at(500.0), at(1_500.0));
+    assert!(behind.along < 0.0);
+    let start_height = at(500.0)[2];
+    assert!((behind.lambda_height_m - start_height / climb.cos()).abs() < 1e-6);
+}
+
 /// A segment in a valley below a ridge-top receiver keeps its signed height.
 #[test]
 fn a_segment_below_the_receiver_keeps_a_signed_height() {
