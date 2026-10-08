@@ -169,21 +169,27 @@ html, body {
   }
 }
 
-/* The About pages' markdown (components/AboutPage.tsx). */
+/* The About pages' prose (components/AboutPage.tsx), as dev4 set it: a classic descending heading
+   hierarchy, a compact rhythm where the headings carry the section breaks, grey body text with dark
+   emphasis and links, and a borderless table with its header rule (owner 2026-07-10, -16, -17). */
 @layer components {
-  .about { @apply text-sm leading-relaxed text-muted-foreground; }
-  .about h1 { @apply mt-6 mb-4 text-3xl font-bold text-foreground; }
-  .about h2 { @apply mt-8 mb-2 text-xl font-semibold text-foreground; }
-  .about p, .about ul, .about table { @apply my-3; }
-  .about ul { @apply list-disc pl-5; }
-  .about ol { @apply list-decimal pl-5; }
-  .about li { @apply my-1; }
-  .about a { @apply text-foreground underline underline-offset-2; }
-  .about strong { @apply text-foreground; }
-  .about table { @apply w-full; }
-  .about th { @apply py-1 pr-3 text-left font-semibold text-foreground; }
-  .about td { @apply py-1 pr-3; }
-  /* Screenshots side by side, one under the other on a phone. */
-  .about p:has(> img) { @apply flex flex-wrap items-start gap-3; }
-  .about img { @apply h-auto min-w-0 flex-[1_1_260px] rounded-md border border-border; }
+  .about-prose { @apply text-sm leading-relaxed text-muted-foreground; }
+  .about-prose h2 { @apply mt-10 mb-2 text-2xl font-bold text-foreground; }
+  .about-prose h3 { @apply mt-6 mb-2 text-lg font-semibold text-foreground; }
+  .about-prose p { @apply my-3; }
+  .about-prose a { @apply font-medium text-primary no-underline hover:underline; }
+  .about-prose ul { @apply my-3 list-disc pl-6; }
+  .about-prose ol { @apply my-3 list-decimal pl-6; }
+  .about-prose li { @apply my-1 pl-1; }
+  .about-prose li::marker { @apply text-muted-foreground; }
+  .about-prose strong { @apply font-semibold text-foreground; }
+  .about-prose table { @apply my-3 w-full text-sm; }
+  .about-prose thead { @apply border-b border-border; }
+  .about-prose th { @apply py-1 pr-3 text-left font-semibold text-foreground; }
+  .about-prose td { @apply py-1 pr-3 align-top; }
+  .about-prose code { @apply rounded-md bg-muted px-1.5 py-0.5 text-xs text-foreground; }
+  .about-prose pre { @apply my-3 overflow-x-auto rounded-lg border border-border bg-muted p-3 text-xs; }
+  .about-prose pre code { @apply bg-transparent p-0; }
+  .about-prose hr { @apply my-8 border-border; }
+  .about-prose img { @apply h-auto max-w-full rounded-md; }
 }

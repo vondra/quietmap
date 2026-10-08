@@ -1,8 +1,29 @@
-# Angola
+---
+title: Angola
+intro: No traffic counts or timetable; roads use the world defaults, railways the world default.
+map: { center: [17, -12], zoom: 5 }
+---
 
-[Africa](/about/africa)
+## Roads
 
-- **Roads:** No open traffic counts. Every main road keeps a fixed estimate per road class and lane.
-- **Traffic:** Motorcycles 1.5 % of a town street's traffic (the region's median); without a speed sign a primary road 60 km/h in towns, 90 outside (traffic drives 76 on a two-way one), a motorway 120.
-- **Railways:** No timetables: a fixed estimate per kind of line.
-- **Homes and places:** Per 100 of the homes OpenStreetMap maps: 6 air conditioners (the region's median); mosques call five times a day.
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/methodology)). Vehicle mix: world default.
+
+Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 1.5 % of a town street's traffic (the region's median).
+
+Unsigned roads: a primary road 60 km/h in towns, 90 outside (traffic drives 76 on a two-way one), a motorway 120.
+
+## Railways
+
+Train counts: no timetable. Mapped active railways use the [world railway defaults](/about/methodology). The Luanda, Benguela and Moçâmedes railways run far fewer trains; rail noise is overstated.
+
+## Industry
+
+Operating power plants: Global Energy Monitor, matched to OpenStreetMap industrial areas; plants without a mapped area are absent. Other sites are classified from their OpenStreetMap name, otherwise as generic industry.
+
+## Ships
+
+Coastal traffic: Global Fishing Watch AIS vessel hours.
+
+## Homes and places
+
+Homes mapped in OpenStreetMap: 6 air conditioners per 100 homes (the region's median). Mosques call five times a day.

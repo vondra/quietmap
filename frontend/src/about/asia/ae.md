@@ -1,8 +1,39 @@
-# United Arab Emirates
+---
+title: United Arab Emirates
+intro: Dubai Tram counts from the 2025 RTA timetable archive. Roads are estimated from the buildings around them; Etihad Rail use class defaults.
+map: { center: [54.5, 24.5], zoom: 7 }
+---
 
-[Asia](/about/asia)
+## Roads
 
-- **Roads:** No open traffic counts. Every main road keeps a fixed estimate per road class and lane.
-- **Traffic:** Motorcycles 0.5 % of a town street's traffic (WHO 2023); electric cars 2.3 % of cars (IEA 2024), rolling noise only; without a speed sign a primary road 50 km/h in towns, 100 outside (traffic drives 84 on a two-way one), a motorway 120.
-- **Railways:** No timetables: a fixed estimate per kind of line.
-- **Homes and places:** An air conditioner in every home, running 12.8 hours a day; mosques call five times a day.
+No per-road traffic counts are published. [Dubai Pulse](https://www.dubaipulse.gov.ae/) has none, and the Abu Dhabi portals are not accessible. Traffic is set by OpenStreetMap road class.
+
+Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/methodology)).
+
+Local streets: traffic is derived from the buildings served; motorcycles 1%, from 0.4 × the two-wheeler share of registered vehicles (WHO 2023 country profile, 2021 fleet).
+
+Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 0.5 % of a town street's traffic (WHO 2023); electric cars 2.3 % of cars, rolling noise only (IEA 2024).
+
+Unsigned roads: a primary road 50 km/h in towns, 100 outside (traffic drives 84 on a two-way one), a motorway 120.
+
+## Railways
+
+Train counts come from the [Dubai RTA timetable on Dubai Pulse](https://www.dubaipulse.gov.ae/dataset/73765e8f-e8c4-443c-9687-288072ed9d12/resource/11515bd3-bdba-466f-ab65-f057bd123ab5/download/gtfs.7z). No current feed was available; the 2025 archive is used, with service up to 31 December 2025. Only the Dubai Tram is taken from it.
+
+Surface metro sections are included; see the [railway method](/about/methodology).
+
+Etihad Rail publishes no timetable. Its lines use the [world railway defaults](/about/methodology).
+
+## Industry
+
+- Power plants: [Global Power Plant Database](https://datasets.wri.org/dataset/globalpowerplantdatabase), last updated in 2021; newer plants are missing.
+- Steel works, cement plants, coal mines: Global Energy Monitor trackers.
+- Refineries, smelters and the Jebel Ali port area: OSM polygons with a generic sound level.
+
+## Ships
+
+[Global Fishing Watch](https://globalfishingwatch.org/our-apis/) AIS data, which has no class for yachts and pleasure boats.
+
+## Homes and places
+
+Homes: an air conditioner in every home, running 12.8 hours a day. Mosques call five times a day.

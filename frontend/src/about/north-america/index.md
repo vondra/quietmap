@@ -1,11 +1,15 @@
-# North America
+---
+title: North America
+intro: Measured highway traffic in the United States, Quebec and Mexico; class defaults elsewhere.
+map: { center: [-100, 45], zoom: 3 }
+---
 
-What the map knows in North America, country by country below. Main roads are the motorways, trunk and primary roads of OpenStreetMap.
+Measured road traffic covers three countries: federal counts on US highways and arterials, counts with a measured truck share on Mexican federal and state highways, and provincial counts for Quebec. Uncounted streets carry the trips their buildings make; uncounted main roads follow one model of the trips made around them in the United States and Mexico, and keep class defaults in the rest of Canada, Central America and the Caribbean. US roads carry their state's mix of lorries (FHWA, table VM-4).
 
-- **Roads:** Traffic counted in Canada, Mexico and United States. Uncounted streets carry their buildings' trips; uncounted main roads follow the buildings around them in Mexico and United States and keep a fixed estimate per road class elsewhere (see each country).
-- **Railways:** Timetables in Canada, Mexico and United States.
-- **Terrain:** National surveys in Canada and United States; elsewhere the GEDTM30 world model (30 m).
+Rail timetables: Amtrak, VIA Rail, seven Canadian city systems and Mexico City. Freight railways publish no schedules. A main line without a timetable defaults to 80 passenger and 20 freight trains per day. Locomotives sound their horns at the level crossings of the US and Canadian inventories.
 
-## Countries
+Wind turbines in the US and Canada come from the national turbine registers. Power plants in Mexico, Central America and the Caribbean come from Global Energy Monitor.
 
-[Barbados](/about/north-america/bb) · [Canada](/about/north-america/ca) · [Costa Rica](/about/north-america/cr) · [Cuba](/about/north-america/cu) · [Dominican Republic](/about/north-america/do) · [El Salvador](/about/north-america/sv) · [Guatemala](/about/north-america/gt) · [Haiti](/about/north-america/ht) · [Honduras](/about/north-america/hn) · [Jamaica](/about/north-america/jm) · [Mexico](/about/north-america/mx) · [Nicaragua](/about/north-america/ni) · [Panama](/about/north-america/pa) · [The Bahamas](/about/north-america/bs) · [Trinidad and Tobago](/about/north-america/tt) · [United States](/about/north-america/us)
+Ships: Global Fishing Watch AIS vessel density.
+
+Layer construction is described on the [methodology page](/about/methodology).

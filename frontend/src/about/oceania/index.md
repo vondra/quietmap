@@ -1,11 +1,13 @@
-# Oceania
+---
+title: Oceania
+intro: Rail timetables in Australia, road traffic counts in New Zealand, class defaults on the Pacific islands.
+map: { center: [140, -25], zoom: 3 }
+---
 
-What the map knows in Oceania, country by country below. Main roads are the motorways, trunk and primary roads of OpenStreetMap.
+Australia has train timetables for five states and no traffic counts loaded. New Zealand has measured traffic on state highways and Auckland streets and no train timetable loaded.
 
-- **Roads:** Traffic counted in New Zealand. Uncounted streets carry their buildings' trips; uncounted main roads follow the buildings around them in New Zealand and keep a fixed estimate per road class elsewhere (see each country).
-- **Railways:** Timetables in Australia.
-- **Terrain:** The GEDTM30 world model (30 m).
+No traffic counts were found for Fiji, New Caledonia, Papua New Guinea or Samoa. Main roads there use the [world defaults](/about/methodology); streets carry the trips their buildings make. In New Zealand uncounted main roads follow one model of the trips made around them, fitted on counted roads. Most of these islands have no railway. Power plants come from Global Energy Monitor.
 
-## Countries
+Ships: Global Fishing Watch AIS vessel density.
 
-[Australia](/about/oceania/au) · [Fiji](/about/oceania/fj) · [New Caledonia](/about/oceania/nc) · [New Zealand](/about/oceania/nz) · [Papua New Guinea](/about/oceania/pg) · [Samoa](/about/oceania/ws)
+Layer construction is described on the [methodology page](/about/methodology).

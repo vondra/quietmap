@@ -1,11 +1,41 @@
-# Asia
+---
+title: Asia
+intro: Counted road traffic in Japan, Thailand, Saudi Arabia and Indonesia; timetables in India, Israel, Thailand and the UAE. Most other roads and railways use class defaults.
+map: { center: [100, 35], zoom: 3 }
+---
 
-What the map knows in Asia, country by country below. Main roads are the motorways, trunk and primary roads of OpenStreetMap.
+## Where Asia has real numbers
 
-- **Roads:** Traffic counted in Indonesia, Japan, Saudi Arabia and Thailand. Uncounted streets carry their buildings' trips; uncounted main roads keep a fixed estimate per road class.
-- **Railways:** Timetables in China, India, Israel and Thailand.
-- **Terrain:** The GEDTM30 world model (30 m).
+Most of Asia publishes no open traffic counts. Road traffic by source:
 
-## Countries
+- Counts: Japan (national road census 2021), Thailand (rural road counts 2024), Saudi Arabia (ministry count stations 2024). Indonesia publishes daily traffic for many regional roads.
+- Main road network with classes, traffic set by class: China (community dataset), India and the Philippines (official).
+- Assigned values by road class and city size: Iran, Iraq, Turkey, Kazakhstan, Uzbekistan.
+- Everywhere else: the world default.
 
-[Armenia](/about/asia/am) · [Azerbaijan](/about/asia/az) · [Bahrain](/about/asia/bh) · [Bangladesh](/about/asia/bd) · [Bhutan](/about/asia/bt) · [Brunei](/about/asia/bn) · [Cambodia](/about/asia/kh) · [China](/about/asia/cn) · [Georgia](/about/asia/ge) · [India](/about/asia/in) · [Indonesia](/about/asia/id) · [Iran](/about/asia/ir) · [Iraq](/about/asia/iq) · [Israel](/about/asia/il) · [Japan](/about/asia/jp) · [Jordan](/about/asia/jo) · [Kazakhstan](/about/asia/kz) · [Kuwait](/about/asia/kw) · [Laos](/about/asia/la) · [Lebanon](/about/asia/lb) · [Maldives](/about/asia/mv) · [Mongolia](/about/asia/mn) · [Myanmar](/about/asia/mm) · [Nepal](/about/asia/np) · [North Korea](/about/asia/kp) · [Oman](/about/asia/om) · [Pakistan](/about/asia/pk) · [Philippines](/about/asia/ph) · [Qatar](/about/asia/qa) · [Saudi Arabia](/about/asia/sa) · [Singapore](/about/asia/sg) · [South Korea](/about/asia/kr) · [Sri Lanka](/about/asia/lk) · [Taiwan](/about/asia/tw) · [Thailand](/about/asia/th) · [Timor-Leste](/about/asia/tl) · [Turkey](/about/asia/tr) · [United Arab Emirates](/about/asia/ae) · [Uzbekistan](/about/asia/uz) · [Vietnam](/about/asia/vn)
+Train counts by source:
+
+- Timetable: India, Israel, Thailand, the UAE. No timetable here includes freight.
+- Line map with speeds, converted to trains per day: China and India.
+- Counts assigned per corridor: Iran, Iraq, Turkey, Kazakhstan, Uzbekistan.
+- Everywhere else: class defaults.
+
+## The defaults
+
+Roads without counts or national estimates use the [world defaults](/about/methodology).
+
+See the [world railway defaults](/about/methodology).
+
+The railway defaults are sized for European lines.
+
+## What is missing across the region
+
+Surface metro sections are included; see the [railway method](/about/methodology).
+
+Motorcycles: where counted roads nearby count them, their share; otherwise the country's fleet (WHO 2023): 72 % of traffic in Vietnam, 64 % in Indonesia, 63 % in India, 48 % in the Philippines, 39 % in Thailand, 4.3 % in China. Uncounted streets carry the trips their buildings make.
+
+Homes emit their air conditioners: 2.37 per household in Japan, 1.46 in China, 0.29 in South-East Asia, 0.16 in South Asia. Mosques call five times a day at their own prayer times, with country rules: Indonesia adds the recitation before the call, Saudi Arabia calls at a third of the power, Chinese and Singapore mosques do not call outside.
+
+No Asian country has a wind turbine register or a national building register loaded. Building heights come from the global sources described in the [methodology](/about/methodology).
+
+Ships along Asian coasts come from Global Fishing Watch, which has no class for yachts and pleasure boats; leisure traffic is missing.

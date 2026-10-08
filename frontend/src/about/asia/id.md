@@ -1,8 +1,39 @@
-# Indonesia
+---
+title: Indonesia
+intro: Bina Marga daily traffic (LHRT) on many regional roads, assigned values elsewhere. No railway timetable.
+map: { center: [118.0, -2.0], zoom: 4 }
+---
 
-[Asia](/about/asia)
+## Roads
 
-- **Roads:** Counted by Bina Marga's regional counts of 2024 on 4.7 % of the main roads by length. Of the main roads, 95 % keep a fixed estimate per road class and lane.
-- **Traffic:** Motorcycles 64 % of a town street's traffic (WHO 2023); electric cars 0.6 % of cars (IEA 2024), rolling noise only; without a speed sign a primary road 50 km/h in towns, 60 outside, a motorway 100; the day, evening and night shares as measured in Thailand.
-- **Railways:** No timetables: a fixed estimate per kind of line.
-- **Homes and places:** Per 100 of the homes OpenStreetMap maps: 9 air conditioners; five calls a day with the recitation before them; open-fronted bars and restaurants, their terraces open as long as they are.
+The highways directorate, Bina Marga, runs a public [GIS portal](https://gisportal.binamarga.pu.go.id/) with three layers. They are applied to motorways, trunk and primary roads in this order:
+
+- Toll roads: a road within 300 m of an operating toll road gets 80,000 vehicles per day, an assigned value.
+- Regional roads: the layer carries LHRT, the average daily traffic, for many provincial, regency and city roads. A primary road within 200 m of a provincial line gets the published value, or 8,000 where the value is empty, unless a national road lies within 50 m: most regency and city lines run beside national roads, so their counts are not used on main roads.
+- National roads: no traffic value. A road within 400 m gets 30,000.
+
+Assigned values are doubled in 8 metropolitan areas (Jakarta, Surabaya, Bandung, Medan, Semarang, Makassar, Palembang, Denpasar) and multiplied by 1.4 in 33 other cities. Published LHRT values are used unchanged.
+
+Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 64 % of a town street's traffic (WHO 2023); electric cars 0.6 % of cars, rolling noise only (IEA 2024).
+
+The vehicle split is assigned; LHRT is a single total without vehicle classes. Smaller roads use the world default. Local-street traffic is derived from the buildings served, with 33% motorcycles.
+
+Unsigned roads: a primary road 50 km/h in towns, 60 outside, a motorway 100.
+
+## Railways
+
+No Indonesian operator publishes an open timetable. All lines use the [world railway defaults](/about/methodology). Surface metro sections are included; see the [railway method](/about/methodology).
+
+## Industry
+
+- Power plants: Global Energy Monitor list for Indonesia, operating units only, wind farms excluded, matched to OpenStreetMap industrial areas within 1.5 km.
+- Steel works, cement plants, coal mines: GEM trackers.
+- Palm oil mills, nickel smelters and refineries: OSM polygons with a generic sound level.
+
+## Ships
+
+[Global Fishing Watch](https://globalfishingwatch.org/our-apis/) AIS data, which has no class for yachts and pleasure boats.
+
+## Homes and places
+
+Homes mapped in OpenStreetMap: 9 air conditioners per 100 homes. Mosques: five calls a day with the recitation before them. Open-fronted bars and restaurants, their terraces open as long as they are.

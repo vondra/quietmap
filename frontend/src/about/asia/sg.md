@@ -1,8 +1,35 @@
-# Singapore
+---
+title: Singapore
+intro: Roads use the world defaults. MRT and LRT surface sections use class defaults.
+map: { center: [103.85, 1.35], zoom: 11 }
+---
 
-[Asia](/about/asia)
+## Roads
 
-- **Roads:** No open traffic counts. Every main road keeps a fixed estimate per road class and lane.
-- **Traffic:** Motorcycles 2.7 % of a town street's traffic (WHO 2023); electric cars 4.5 % of cars (IEA 2024), rolling noise only; without a speed sign a primary road 50 km/h in towns and outside; the day, evening and night shares as measured in Thailand.
-- **Railways:** No timetables: a fixed estimate per kind of line.
-- **Homes and places:** Per 100 of the homes OpenStreetMap maps: 29 air conditioners (the region's median); mosques do not call outside; open-fronted bars and restaurants, their terraces open as long as they are.
+No per-road traffic counts are published. [data.gov.sg](https://data.gov.sg/) has one annual figure, vehicles entering the city; the LTA DataMall speed data needs an API key. Traffic is set by OpenStreetMap road class.
+
+Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/methodology)).
+
+Local streets: traffic is derived from the buildings served; motorcycles 2.7 % (WHO 2023).
+
+Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 2.7 % of a town street's traffic (WHO 2023); electric cars 4.5 % of cars, rolling noise only (IEA 2024).
+
+Unsigned roads: a primary road 50 km/h in towns and outside.
+
+## Railways
+
+Mapped surface MRT and LRT sections use the [light-rail default](/about/methodology). The LTA timetable needs a registered key and is not loaded.
+
+## Industry
+
+- Power plants: [Global Power Plant Database](https://datasets.wri.org/dataset/globalpowerplantdatabase), last updated in 2021; newer plants are missing.
+- Steel works, cement plants, coal mines: Global Energy Monitor trackers.
+- Jurong Island and the port terminals: OSM polygons with a generic sound level.
+
+## Ships
+
+[Global Fishing Watch](https://globalfishingwatch.org/our-apis/) AIS data, which has no class for yachts and pleasure boats.
+
+## Homes and places
+
+Homes mapped in OpenStreetMap: 29 air conditioners per 100 homes (the region's median). Mosques do not call outside. Open-fronted bars and restaurants, their terraces open as long as they are.

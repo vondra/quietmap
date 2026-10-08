@@ -1,8 +1,57 @@
-# China
+---
+title: China
+intro: Mainland China. Road traffic and train counts are assigned by road class and line speed from community network maps.
+map: { center: [105.0, 35.0], zoom: 4 }
+---
 
-[Asia](/about/asia)
+## Roads
 
-- **Roads:** Estimated per road class from China's highway network of 2024 on 26 % of the main roads by length. Of the main roads, 74 % keep a fixed estimate per road class and lane.
-- **Traffic:** Motorcycles 4.3 % of a town street's traffic (WHO 2023); electric cars 6.9 % of cars (IEA 2024), rolling noise only; lorries and buses at most 100 km/h; without a speed sign a primary road 50 km/h in towns, 70 outside, a motorway 120, a residential street 20; the day, evening and night shares as measured in Japan.
-- **Railways:** Timetables on 158,753 of 351,321 km of railway; the lines without one a fixed estimate per kind of line.
-- **Homes and places:** Per 100 of the homes OpenStreetMap maps: 146 air conditioners; mosques do not call outside.
+No open traffic counts. A community map of the national road network on [ArcGIS Online](https://services1.arcgis.com/ERdCHt0sNM6dENSD/) has three classes. OpenStreetMap motorways, trunk and primary roads within 400 m of a network line get traffic by that class:
+
+| Network class | Open country | 33 large cities (×1.4) | 12 largest cities (×2.0) |
+|---|---:|---:|---:|
+| Highway | 60,000 | 84,000 | 120,000 |
+| Major road | 25,000 | 35,000 | 50,000 |
+| Local road | 8,000 | 11,200 | 16,000 |
+
+The 12 largest cities are Beijing, Shanghai, Guangzhou, Shenzhen, Chengdu, Chongqing, Wuhan, Xi'an, Hangzhou, Nanjing, Suzhou and Tianjin. Each city is a bounding box, not its administrative boundary.
+
+Vehicle split in cities: 75% cars, 10% medium, 10% heavy, 5% motorcycles. Outside cities: 65, 12, 18 and 5%. The motorcycle share is low because most large cities ban petrol motorcycles and electric scooters make almost no engine noise.
+
+None of these values is a count. Main roads with no network line nearby get the world estimate per lane ([world defaults](/about/methodology)).
+
+Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 4.3 % of a town street's traffic (WHO 2023); electric cars 6.9 % of cars, rolling noise only (IEA 2024); lorries and buses at most 100 km/h.
+
+Unsigned roads: a primary road 50 km/h in towns, 70 outside, a motorway 120, a residential street 20.
+
+## Railways
+
+No operator publishes a timetable. A community map of the mainland network on [ArcGIS Online](https://services7.arcgis.com/m6uLpqj7MgjPU371/) gives each national line a top speed and each metro line a service type; lines marked as not operating are skipped. Track within 500 m of a mapped line gets trains by speed:
+
+| Top speed | Passenger | Freight |
+|---|---:|---:|
+| 350 km/h | 180 | 0 |
+| 300 km/h | 150 | 0 |
+| 250 km/h | 120 | 0 |
+| 200 km/h | 80 | 10 |
+| 150 km/h | 50 | 20 |
+| 100 km/h | 30 | 20 |
+| Slower | 15 | 10 |
+
+Metro lines get 500 trains per day, express metro 400, light rail 300, streetcars 200, assigned by line type.
+
+Surface metro sections are included; see the [railway method](/about/methodology).
+
+## Industry
+
+- Coal, gas and nuclear plants, LNG terminals and solar farms: Global Energy Monitor lists, operating units only, matched to OpenStreetMap industrial areas within 1.5 km. Wind farms are not used.
+- Steel works, cement plants, coal mines: GEM trackers.
+- Other factories: OSM polygons with a generic sound level.
+
+## Ships
+
+[Global Fishing Watch](https://globalfishingwatch.org/our-apis/) AIS data, which has no class for yachts and pleasure boats.
+
+## Homes and places
+
+Homes mapped in OpenStreetMap: 146 air conditioners per 100 homes. Mosques do not call outside.

@@ -1,11 +1,19 @@
-# South America
+---
+title: South America
+intro: Traffic counts in four countries, estimates from the national road register in five, class defaults in three. No train timetable is loaded.
+map: { center: [-60, -15], zoom: 3 }
+---
 
-What the map knows in South America, country by country below. Main roads are the motorways, trunk and primary roads of OpenStreetMap.
+Argentina, Chile, Colombia and Peru publish traffic counts, and main roads there carry measured volumes. Colombia also counts trucks and buses per section. Chile's counts date from 2024 and 2025, Argentina's from 2017-18.
 
-- **Roads:** Traffic counted in Argentina, Chile, Colombia and Peru. Uncounted streets carry their buildings' trips; uncounted main roads follow the buildings around them in Chile and Colombia and keep a fixed estimate per road class elsewhere (see each country).
-- **Railways:** No timetables yet.
-- **Terrain:** The GEDTM30 world model (30 m).
+Brazil, Bolivia, Ecuador, Paraguay and Venezuela publish their road network without traffic. Volumes there are estimated from register attributes: surface, toll concession, state or provincial status. The tables are on the country pages. Several government servers are unreachable from abroad, so some layers come from community mirrors. Uruguay, Guyana and Suriname use class defaults.
 
-## Countries
+In counted and estimated countries alike, traffic is doubled inside manually drawn boxes around the largest cities and multiplied by 1.4 in a second list of cities. Where not counted, medium and heavy vehicles follow the counted roads of the same class; motorcycles come from national fleets (WHO 2023): 47 % of traffic in Colombia, 16 % in Argentina, 7.7 % in Brazil. Uncounted streets carry the trips their buildings make; in Chile and Colombia uncounted main roads follow one model of the trips made around them.
 
-[Argentina](/about/south-america/ar) · [Bolivia](/about/south-america/bo) · [Brazil](/about/south-america/br) · [Chile](/about/south-america/cl) · [Colombia](/about/south-america/co) · [Ecuador](/about/south-america/ec) · [Guyana](/about/south-america/gy) · [Paraguay](/about/south-america/py) · [Peru](/about/south-america/pe) · [Suriname](/about/south-america/sr) · [Uruguay](/about/south-america/uy) · [Venezuela](/about/south-america/ve)
+Railways: no timetable is loaded for any South American country. A main line defaults to 80 passenger and 20 freight trains per day. Surface metro sections are included; see the [railway method](/about/methodology).
+
+Industry: Chile, Bolivia, Brazil and Venezuela have national power plant registers; Chile adds tailings dams and Peru mine outlines. Elsewhere power plants come from Global Energy Monitor.
+
+Ships: Global Fishing Watch AIS vessel density.
+
+Layer construction is described on the [methodology page](/about/methodology).

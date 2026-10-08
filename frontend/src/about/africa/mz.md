@@ -1,8 +1,29 @@
-# Mozambique
+---
+title: Mozambique
+intro: Roads use the world defaults; the three freight rail networks carry the world rail default.
+map: { center: [36, -18], zoom: 5 }
+---
 
-[Africa](/about/africa)
+## Roads
 
-- **Roads:** No open traffic counts. Every main road keeps a fixed estimate per road class and lane.
-- **Traffic:** Motorcycles 3 % of a town street's traffic (the region's median); without a speed sign a primary road 60 km/h in towns and outside.
-- **Railways:** No timetables: a fixed estimate per kind of line.
-- **Homes and places:** Per 100 of the homes OpenStreetMap maps: 6 air conditioners (the region's median); mosques call five times a day.
+Traffic volumes: no national counts. Motorways, trunk and primary roads use the world estimate per lane; smaller roads carry the trips their buildings make, else class defaults ([world defaults](/about/methodology)). Vehicle mix: world default.
+
+Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 3 % of a town street's traffic (the region's median).
+
+Unsigned roads: a primary road 60 km/h in towns and outside.
+
+## Railways
+
+Train counts: no timetable. Mapped active railways use the [world railway defaults](/about/methodology). The separate networks out of Maputo, Beira and Nacala are freight lines with few passenger trains; the defaults overstate them, the passenger count most of all.
+
+## Industry
+
+Operating power plants: Global Energy Monitor, matched to OpenStreetMap industrial areas; plants without a mapped area are absent. Other sites are classified from their OpenStreetMap name, otherwise as generic industry.
+
+## Ships
+
+Coastal traffic: Global Fishing Watch AIS vessel hours.
+
+## Homes and places
+
+Homes mapped in OpenStreetMap: 6 air conditioners per 100 homes (the region's median). Mosques call five times a day.
