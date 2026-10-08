@@ -193,22 +193,24 @@ fn average_piece_sel(
 ) -> BoxSel {
     let [start, end] = average_piece_ends(aircraft_box);
     let closest = closest_points(start, end);
-    let [east_m, north_m, height_m] = closest.on_line_m;
-    let lateral_m = east_m.hypot(north_m);
-    let slant_m = lateral_m.hypot(height_m);
+    let [east_m, north_m, up_m] = closest.on_line_m;
+    let slant_m = east_m.hypot(north_m).hypot(up_m);
+    let (height_m, lateral_m) = (closest.height_m, closest.lateral_m);
     let position = NpdPosition::at(slant_m);
-    // Each period's pieces keep their own mean length, centred where the average piece is.
+    // Each period's pieces keep their own mean length (stored horizontal, taken along the average
+    // piece's gradient), centred where the average piece is.
     let scaled_distance_m = scaled_distance_at(aircraft_box.lg_scaled_distance, &position);
-    let along_m = closest.along * closest.horizontal_length_m;
+    let along_m = closest.along * closest.length_m;
+    let stretch = aircraft_box.gradient.hypot(1.0);
     let finite: [f64; PERIODS] = std::array::from_fn(|period| {
-        let length_m = aircraft_box.piece_length_m[period].max(1.0);
+        let length_m = (aircraft_box.piece_length_m[period] * stretch).max(1.0);
         finite_segment_correction_db(
-            along_m + 0.5 * (length_m - closest.horizontal_length_m),
+            along_m + 0.5 * (length_m - closest.length_m),
             length_m,
             scaled_distance_m,
         )
     });
-    let lateral_attenuation = lateral_attenuation_db(height_m, lateral_m);
+    let lateral_attenuation = lateral_attenuation_db(closest.lambda_height_m, lateral_m);
     let installations = [
         Installation::Wing,
         Installation::Fuselage,

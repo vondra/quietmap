@@ -161,37 +161,76 @@ pub struct SegmentGeometry {
     pub ground_under_end_m: f64,
 }
 
-/// Where a segment passes the receiver (Doc 29 4.4.1, dev4): the closest point of its horizontal
-/// track line, not clamped to the segment, and the height of the segment's line there.
+/// Where a segment passes the receiver (Doc 29 Vol 2 4.4-4.5, Fig. 4-6 and 4-7): S, the foot of the
+/// perpendicular from the receiver to the segment's line in three dimensions, its slant d_p; the
+/// receiver's lateral displacement from the ground track; and the height of the equivalent level
+/// path the lateral attenuation and the installation effect take (Codex, review of the r054 plan:
+/// the foot over the ground track, which dev4 took, read a 27 degree climb at 110 m for 102).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ClosestPoints {
-    /// Position of that point: 0 at the start, 1 at the end, outside on the extensions.
+    /// Position of S: 0 at the start, 1 at the end, outside on the extensions.
     pub along: f64,
-    /// The point on the segment's infinite line: the slant and angles of Eq. 4-8b.
+    /// S on the segment's infinite line: its slant d_p is the exposure level's NPD distance.
     pub on_line_m: [f64; 3],
-    /// The same foot clamped to the segment: where the aircraft really passes closest (dev4's
-    /// display distance and altitude, and the point the building horizon screens).
+    /// The segment's point nearest the receiver (S clamped to it): the maximum level's distance,
+    /// the aircraft's real closest position and the point the building horizon screens.
     pub on_segment_m: [f64; 3],
-    /// Horizontal length of the segment, at least 1 m.
-    pub horizontal_length_m: f64,
+    /// The perpendicular distance l from the receiver to the (extended) ground track (OR, OC).
+    pub lateral_m: f64,
+    /// The height of the equivalent level path at slant d_p, (d_p^2 - l^2)^0.5, negative below
+    /// the receiver: the elevation and depression angle in the plane normal to the flight path.
+    pub height_m: f64,
+    /// The equivalent level path's height for the exposure level's lateral attenuation: the
+    /// above alongside the segment; behind or ahead of it the perpendicular from the ground track
+    /// to the nearer end (RS1 in Fig. 4-7).
+    pub lambda_height_m: f64,
+    /// Length of the segment, at least 1 m.
+    pub length_m: f64,
 }
 
-/// The closest points of a segment given in the receiver's frame.
+/// The closest points of a segment given in the receiver's frame. A (near-)vertical segment has
+/// no ground track: its start stands for it (dev4).
 pub fn closest_points(start_m: [f64; 3], end_m: [f64; 3]) -> ClosestPoints {
     let delta = [0, 1, 2].map(|axis| end_m[axis] - start_m[axis]);
-    let length_squared = delta[0] * delta[0] + delta[1] * delta[1];
-    // A (near-)vertical segment has no track direction: its start stands for it (dev4).
-    let along = if length_squared > 1e-6 {
-        -(start_m[0] * delta[0] + start_m[1] * delta[1]) / length_squared
-    } else {
-        0.0
-    };
+    let horizontal_squared = delta[0] * delta[0] + delta[1] * delta[1];
+    let length_squared = horizontal_squared + delta[2] * delta[2];
     let point = |t: f64| [0, 1, 2].map(|axis| start_m[axis] + t * delta[axis]);
+    if horizontal_squared <= 1e-6 {
+        return ClosestPoints {
+            along: 0.0,
+            on_line_m: start_m,
+            on_segment_m: start_m,
+            lateral_m: start_m[0].hypot(start_m[1]),
+            height_m: start_m[2],
+            lambda_height_m: start_m[2],
+            length_m: length_squared.sqrt().max(1.0),
+        };
+    }
+    let along = -(0..3).map(|axis| start_m[axis] * delta[axis]).sum::<f64>() / length_squared;
+    let on_line_m = point(along);
+    let on_segment_m = point(along.clamp(0.0, 1.0));
+    let lateral_m =
+        (start_m[0] * delta[1] - start_m[1] * delta[0]).abs() / horizontal_squared.sqrt();
+    let slant_squared: f64 = on_line_m.iter().map(|value| value * value).sum();
+    let height_m = (slant_squared - lateral_m * lateral_m)
+        .max(0.0)
+        .sqrt()
+        .copysign(on_line_m[2]);
+    // Behind or ahead: the nearer end's height measured perpendicular to the inclined path.
+    let cos_climb = (horizontal_squared / length_squared).sqrt();
+    let lambda_height_m = if (0.0..=1.0).contains(&along) {
+        height_m
+    } else {
+        on_segment_m[2] / cos_climb
+    };
     ClosestPoints {
         along,
-        on_line_m: point(along),
-        on_segment_m: point(along.clamp(0.0, 1.0)),
-        horizontal_length_m: length_squared.sqrt().max(1.0),
+        on_line_m,
+        on_segment_m,
+        lateral_m,
+        height_m,
+        lambda_height_m,
+        length_m: length_squared.sqrt().max(1.0),
     }
 }
 
@@ -226,17 +265,16 @@ pub fn segment_sel_at_receiver(
     horizons: &impl ReceiverHorizons,
 ) -> SegmentSel {
     let closest = closest_points(geometry.start_m, geometry.end_m);
-    let [east_m, north_m, height_m] = closest.on_line_m;
-    let lateral_m = east_m.hypot(north_m);
-    let slant_m = lateral_m.hypot(height_m);
+    let [east_m, north_m, up_m] = closest.on_line_m;
+    let slant_m = east_m.hypot(north_m).hypot(up_m);
     let npd = emission.read_npd(slant_m);
     let finite = finite_segment_correction_db(
-        closest.along * closest.horizontal_length_m,
-        closest.horizontal_length_m,
+        closest.along * closest.length_m,
+        closest.length_m,
         npd.scaled_distance_m,
     );
-    let lateral_attenuation = lateral_attenuation_db(height_m, lateral_m);
-    let installation = installation_correction_db(emission.installation, height_m, slant_m);
+    let lateral_attenuation = lateral_attenuation_db(closest.lambda_height_m, closest.lateral_m);
+    let installation = installation_correction_db(emission.installation, closest.height_m, slant_m);
     let free_sel_db =
         npd.sel_db + emission.speed_correction_db + installation - lateral_attenuation + finite;
     let height_above_ground_m = 0.5
@@ -270,17 +308,23 @@ pub fn segment_sel_at_receiver(
 }
 
 /// A segment's maximum level at the receiver (Doc 29 Eq. 4-8a, unscreened): the NPD LAmax at the
-/// shortest distance to the segment, minus Lambda with the elevation angle of and the ground
-/// distance to that same point (4.5.4, Fig. 4-7), plus Delta_I at the depression angle in the
-/// plane normal to the flight path, as for the SEL; no Delta_V, no Delta_F.
+/// shortest distance to the segment, minus Lambda, plus Delta_I at the depression angle in the
+/// plane normal to the flight path, as for the SEL; no Delta_V, no Delta_F. Alongside the segment
+/// Lambda is the exposure level's; behind or ahead of it, that of the nearer end's elevation angle
+/// and ground distance (4.5.4, Fig. 4-7).
 pub fn segment_lmax_db(emission: &SegmentEmission, closest: &ClosestPoints) -> f64 {
-    let [east_m, north_m, height_m] = closest.on_segment_m;
-    let lateral_m = east_m.hypot(north_m);
-    let [line_east_m, line_north_m, line_height_m] = closest.on_line_m;
-    let line_slant_m = line_east_m.hypot(line_north_m).hypot(line_height_m);
-    emission.read_npd(lateral_m.hypot(height_m)).lamax_db
-        + installation_correction_db(emission.installation, line_height_m, line_slant_m)
-        - lateral_attenuation_db(height_m, lateral_m)
+    let [east_m, north_m, up_m] = closest.on_segment_m;
+    let distance_m = east_m.hypot(north_m).hypot(up_m);
+    let [line_east_m, line_north_m, line_up_m] = closest.on_line_m;
+    let line_slant_m = line_east_m.hypot(line_north_m).hypot(line_up_m);
+    let lateral_attenuation = if (0.0..=1.0).contains(&closest.along) {
+        lateral_attenuation_db(closest.height_m, closest.lateral_m)
+    } else {
+        lateral_attenuation_db(up_m, east_m.hypot(north_m))
+    };
+    emission.read_npd(distance_m).lamax_db
+        + installation_correction_db(emission.installation, closest.height_m, line_slant_m)
+        - lateral_attenuation
 }
 
 /// The slant (m) within which a segment's maximum level (Eq. 4-8a) can reach `threshold_db`: its
