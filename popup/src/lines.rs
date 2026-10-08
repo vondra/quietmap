@@ -1,7 +1,7 @@
 //! The whole of each shown contributor as the map draws it: every piece of its group within the
 //! reach in the sources files read, not only the pieces evaluated (a road sampled or cut by the
-//! stop rule would show with gaps), joined at shared ends into lines and simplified, so the
-//! final update stays small.
+//! stop rule would show with gaps), joined at shared ends into lines and simplified together, so
+//! the final update stays within its budget (100 KB, ARCHITECTURE.md).
 
 use crate::release::RingFiles;
 use rayon::prelude::*;
@@ -12,8 +12,9 @@ use tiles::sources::Sources;
 
 /// Lines are simplified to this distance (Douglas-Peucker): under a pixel at street zoom.
 const TOLERANCE_M: f64 = 1.0;
-/// The most points a contributor sends: a larger one is simplified coarser until it fits, and
-/// point sources beyond it are left out, the farthest first.
+/// The most points the shown contributors send together (about 44 KB): their lines are simplified
+/// with one tolerance, coarser until they fit, and point sources beyond it are left out, the
+/// farthest first.
 const MOST_POINTS: usize = 2_000;
 
 /// A contributor's lines in click metres; a point source is a line of one point.
@@ -55,7 +56,9 @@ pub fn whole_lines(
         pieces[usize::from(position)].push(ends);
     }
     let metres = |steps: GlobalSteps| frame.metres_of_steps([steps.x as f64, steps.y as f64]);
-    Ok(pieces
+    let away = |at: [f64; 2]| (at[0] - receiver[0]).hypot(at[1] - receiver[1]);
+    // Per group its chains (the lines before simplifying) and its point sources.
+    let groups: Vec<(Lines, Vec<[f64; 2]>)> = pieces
         .into_par_iter()
         .map(|mut group| {
             group.retain(|ends| {
@@ -65,23 +68,29 @@ pub fn whole_lines(
                     [b[0] - receiver[0], b[1] - receiver[1]],
                 ) <= reach_m
             });
-            let (lines, mut points): (Vec<_>, Vec<_>) =
+            let (lines, points): (Vec<_>, Vec<_>) =
                 group.into_iter().partition(|ends| ends[0] != ends[1]);
-            let chains: Vec<Vec<[f64; 2]>> = join(&lines)
+            let chains = join(&lines)
                 .into_iter()
                 .map(|chain| chain.into_iter().map(metres).collect())
                 .collect();
-            let mut out = simplified(&chains, MOST_POINTS);
-            let room = MOST_POINTS.saturating_sub(out.iter().map(Vec::len).sum());
-            let away = |ends: &[GlobalSteps; 2]| {
-                let at = metres(ends[0]);
-                (at[0] - receiver[0]).hypot(at[1] - receiver[1])
-            };
-            points.sort_by(|a, b| away(a).total_cmp(&away(b)));
-            out.extend(points.iter().take(room).map(|ends| vec![metres(ends[0])]));
-            out
+            (chains, points.iter().map(|ends| metres(ends[0])).collect())
         })
-        .collect())
+        .collect();
+    let chains: Vec<&[Vec<[f64; 2]>]> = groups.iter().map(|(chains, _)| &chains[..]).collect();
+    let mut out = simplified(&chains, MOST_POINTS);
+    // Point sources fill the room left, the nearest first over every group.
+    let mut points: Vec<(usize, [f64; 2])> = groups
+        .iter()
+        .enumerate()
+        .flat_map(|(group, (_, points))| points.iter().map(move |&at| (group, at)))
+        .collect();
+    points.sort_by(|a, b| away(a.1).total_cmp(&away(b.1)).then(a.0.cmp(&b.0)));
+    let room = MOST_POINTS.saturating_sub(out.iter().flatten().map(Vec::len).sum());
+    for &(group, at) in points.iter().take(room) {
+        out[group].push(vec![at]);
+    }
+    Ok(out)
 }
 
 /// The pieces of one sources file whose group is among `sorted` (key, position), as positions and
@@ -184,16 +193,21 @@ fn join(pieces: &[[GlobalSteps; 2]]) -> Vec<Vec<GlobalSteps>> {
     chains
 }
 
-/// The chains simplified to [`TOLERANCE_M`], coarser by halves until they hold at most `most`
-/// points (a chain keeps its two ends at least).
-fn simplified(chains: &[Vec<[f64; 2]>], most: usize) -> Lines {
+/// Every group's chains simplified to [`TOLERANCE_M`], all coarser by halves until together they
+/// hold at most `most` points (a chain keeps its two ends at least).
+fn simplified(groups: &[&[Vec<[f64; 2]>]], most: usize) -> Vec<Lines> {
     let mut tolerance = TOLERANCE_M;
     loop {
-        let lines: Lines = chains
-            .iter()
-            .map(|chain| douglas_peucker(chain, tolerance))
+        let lines: Vec<Lines> = groups
+            .par_iter()
+            .map(|chains| {
+                chains
+                    .iter()
+                    .map(|chain| douglas_peucker(chain, tolerance))
+                    .collect()
+            })
             .collect();
-        if lines.iter().map(Vec::len).sum::<usize>() <= most || tolerance > 1e5 {
+        if lines.iter().flatten().map(Vec::len).sum::<usize>() <= most || tolerance > 1e5 {
             return lines;
         }
         tolerance *= 2.0;
@@ -285,8 +299,12 @@ mod tests {
         let wiggly: Vec<[f64; 2]> = (0..=1_000)
             .map(|k| [f64::from(k), 30.0 * (f64::from(k) / 7.0).sin()])
             .collect();
-        let lines = simplified(&[wiggly.clone(), wiggly], 100);
-        assert!(lines.iter().map(Vec::len).sum::<usize>() <= 100);
-        assert!(lines.iter().all(|line| line.len() >= 2));
+        // Two contributors share the points: one tolerance for both, so neither keeps its own 100.
+        let one = [wiggly.clone()];
+        let two = [wiggly.clone(), wiggly];
+        let lines = simplified(&[&one[..], &two[..]], 100);
+        assert!(lines.iter().flatten().map(Vec::len).sum::<usize>() <= 100);
+        assert!(lines.iter().flatten().all(|line| line.len() >= 2));
+        assert_eq!(lines[1][0], lines[0][0]);
     }
 }
