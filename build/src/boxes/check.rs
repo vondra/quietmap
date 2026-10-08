@@ -10,6 +10,7 @@
 mod exact;
 mod report;
 
+use super::events::EventCounts;
 use super::place::Placement;
 use super::read::{FLAG_SECONDARY_ONLY, read_segments};
 use super::{Window, place_atmosphere};
@@ -75,6 +76,8 @@ pub struct PointReport {
     pub lists: Vec<FlightList>,
     /// For a diagnosed point, the fine boxes whose SEL sums miss their pieces' the most.
     pub diagnosis: Vec<BoxDiagnosis>,
+    /// The events table of every flight's exact maximum level.
+    pub events: EventCounts,
 }
 
 /// One fine box at a diagnosed point: where it is (centroid latitude, longitude, altitude, the
@@ -117,6 +120,44 @@ pub struct FlightList {
     pub tolerant_recall: f64,
     pub listed: Vec<(u64, f64, f64)>,
     pub search_is_exhaustive: bool,
+}
+
+/// The z9 square of a segment's end (latitude, longitude, altitude).
+fn square_of(end: [f64; 3]) -> Square {
+    square_of_tile(TileId::containing(Mercator::from_degrees(end[0], end[1])))
+}
+
+fn square_of_tile(tile: TileId) -> Square {
+    Square {
+        x: tile.x >> 3,
+        y: tile.y >> 3,
+    }
+}
+
+/// Whether the horizontal distance from `point` to the segment from `start` to `end` (latitude,
+/// longitude) is at most `reach_m`, on the point's local sphere.
+fn within(point: &CheckPoint, start: [f64; 2], end: [f64; 2], reach_m: f64) -> bool {
+    let reach_deg = reach_m / METRES_PER_DEGREE;
+    if start[0].min(end[0]) > point.lat + reach_deg || start[0].max(end[0]) < point.lat - reach_deg
+    {
+        return false;
+    }
+    let metres = |at: [f64; 2]| {
+        let east = (at[1] - point.lon + 540.0).rem_euclid(360.0) - 180.0;
+        [
+            east * METRES_PER_DEGREE * point.lat.to_radians().cos(),
+            (at[0] - point.lat) * METRES_PER_DEGREE,
+        ]
+    };
+    let ([x0, y0], [x1, y1]) = (metres(start), metres(end));
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    let length_squared = dx * dx + dy * dy;
+    let t = if length_squared > 0.0 {
+        (-(x0 * dx + y0 * dy) / length_squared).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (x0 + t * dx).hypot(y0 + t * dy) <= reach_m
 }
 
 /// Leq (dB) per period of the day SEL energies.
@@ -178,28 +219,15 @@ pub fn compare(
         .collect::<Result<_, _>>()
         .map_err(|error| error.to_string())?;
     let placement = Placement::new(&near, &terrain, level_step_db);
-    // Segments are read when an end lies in some point's latitude-longitude box of the
-    // beyond-reach distance (with a quarter to spare).
-    let reach_deg = 1.25 * BEYOND_REACH_M / METRES_PER_DEGREE;
-    let areas: Vec<[f64; 4]> = points
-        .iter()
-        .map(|point| {
-            let across = reach_deg / point.lat.to_radians().cos().max(0.05);
-            [
-                point.lat - reach_deg,
-                point.lat + reach_deg,
-                point.lon - across,
-                point.lon + across,
-            ]
-        })
-        .collect();
+    // Segments are read when they pass within the beyond-reach distance of some point (a quarter
+    // to spare for the sphere): by the segment, not its ends, so that a cruise segment passing
+    // over a point with both ends far away is read.
     let keep = |start: [f64; 2], end: [f64; 2]| {
-        areas.iter().any(|area| {
-            [start, end].iter().any(|at| {
-                (area[0]..=area[1]).contains(&at[0]) && (area[2]..=area[3]).contains(&at[1])
-            })
-        })
+        points
+            .iter()
+            .any(|point| within(point, start, end, 1.25 * BEYOND_REACH_M))
     };
+    let near_squares: HashSet<Square> = near.iter().map(|&tile| square_of_tile(tile)).collect();
     let (baseline, increment) = (
         window.baseline_days.len().max(1) as f64,
         window.increment_days.len().max(1) as f64,
@@ -220,17 +248,11 @@ pub fn compare(
     for day in days {
         let path = segments_dir.join("segments").join(format!("{day}.arrow"));
         let segments = read_segments(&path, &keep)?;
-        // Each segment in the atmosphere of its start's square, as the boxes sum it.
-        let square_of = |end: [f64; 3]| {
-            let tile = TileId::containing(Mercator::from_degrees(end[0], end[1]));
-            Square {
-                x: tile.x >> 3,
-                y: tile.y >> 3,
-            }
-        };
+        // Each box piece in the atmosphere of its square, as the boxes sum it.
         let places: HashMap<Square, PlaceAtmosphere> = segments
             .iter()
-            .map(|segment| square_of(segment.start))
+            .flat_map(|segment| [square_of(segment.start), square_of(segment.end)])
+            .chain(near_squares.iter().copied())
             .collect::<HashSet<Square>>()
             .into_par_iter()
             .map(|square| (square, place_atmosphere(weather, square)))
@@ -255,16 +277,13 @@ pub fn compare(
                 } else {
                     weight
                 };
-                if segment_weight > 0.0 {
-                    let place = &places[&square_of(segment.start)];
-                    add_segment(
-                        &mut sums,
-                        &receivers,
-                        &placement,
-                        (segment, place),
-                        segment_weight,
-                    );
-                }
+                add_segment(
+                    &mut sums,
+                    &receivers,
+                    &placement,
+                    (segment, &places),
+                    segment_weight,
+                );
                 sums
             })
             .reduce(zero, |mut a, b| {
@@ -273,7 +292,8 @@ pub fn compare(
                 }
                 a
             });
-        for (total, day) in totals.iter_mut().zip(day_sums) {
+        for (total, mut day) in totals.iter_mut().zip(day_sums) {
+            day.close_day((weight, secondary));
             total.merge(day);
         }
         eprintln!("aircraft check: {day}: {} segments", segments.len());
@@ -302,4 +322,30 @@ pub fn ground_at(terrain_root: &Path, point: (f64, f64)) -> f64 {
                 .map(|sample| sample.height_m)
         })
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cruise segment 100 km long passing 1 km north of a point is read and within reach of it
+    /// although both its ends lie 50 km away: the check measures the segment, not its ends.
+    #[test]
+    fn a_segment_counts_by_its_distance_not_its_ends() {
+        let point = CheckPoint {
+            lat: 50.0,
+            lon: 14.0,
+            ground_m: 0.0,
+        };
+        let north = 1_000.0 / METRES_PER_DEGREE;
+        let across = 50_000.0 / (METRES_PER_DEGREE * 50f64.to_radians().cos());
+        let (start, end) = ([50.0 + north, 14.0 - across], [50.0 + north, 14.0 + across]);
+        assert!(within(&point, start, end, 1_001.0));
+        assert!(!within(&point, start, end, 999.0));
+        let distance = exact::horizontal_distance_m(
+            [-50_000.0, 1_000.0, 9_000.0],
+            [50_000.0, 1_000.0, 9_000.0],
+        );
+        assert!((distance - 1_000.0).abs() < 1e-9);
+    }
 }

@@ -123,7 +123,9 @@ pub fn write_tiles(
                 gradient: values.gradient.clamp(-3.0, 3.0),
                 gradient_spread: values.gradient_spread.min(6.0),
                 piece_length_m: values.piece_length_m,
-                flights: (entry.flights_per_day * DAYS_PER_YEAR).round() as u32,
+                flights: entry
+                    .flights_per_day
+                    .map(|per_day| (per_day * DAYS_PER_YEAR).round() as u32),
                 energy_db: values.levels_db,
                 tail_energy_db: values.tail_levels_db,
                 lg_scaled_distance: values.scaled_distance_m.map(f64::log10),

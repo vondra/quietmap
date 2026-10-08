@@ -92,7 +92,7 @@ impl<'a> Aircraft<'a> {
     pub fn aircraft_box(&self, index: usize) -> AircraftBox {
         let record = self.box_record(index);
         let energy = |at: usize| level_db(u16_at(record, at));
-        let installation_shares = [108, 110].map(|at| {
+        let shares = |at: usize| {
             let (wing, fuselage) = (
                 f64::from(record[at]) / 255.0,
                 f64::from(record[at + 1]) / 255.0,
@@ -100,7 +100,9 @@ impl<'a> Aircraft<'a> {
             let mut shares = [wing, fuselage, 0.0];
             shares[INSTALLATIONS - 1] = (1.0 - wing - fuselage).max(0.0);
             shares
-        });
+        };
+        let installation_shares =
+            [[108, 110], [134, 136], [138, 140]].map(|slants| slants.map(shares));
         AircraftBox {
             zoom: record[0],
             cell: [u16_at(record, 2), u16_at(record, 4)],
@@ -118,7 +120,7 @@ impl<'a> Aircraft<'a> {
             gradient: f64::from(i16_at(record, 20)) / 10_000.0,
             gradient_spread: f64::from(u16_at(record, 125)) / 10_000.0,
             piece_length_m: [22, 118, 120].map(|at| f64::from(u16_at(record, at))),
-            flights: u24_at(record, 24),
+            flights: [24, 128, 131].map(|at| u24_at(record, at)),
             energy_db: std::array::from_fn(|period| {
                 std::array::from_fn(|distance| energy(28 + 2 * (period * NPD_DISTANCES + distance)))
             }),
@@ -162,3 +164,4 @@ impl<'a> Aircraft<'a> {
 }
 
 const _: () = assert!(28 + 2 * PERIODS * NPD_DISTANCES == 88);
+const _: () = assert!(BOX_BYTES == 142 && PERIODS == 3);

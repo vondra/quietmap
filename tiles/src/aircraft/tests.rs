@@ -23,14 +23,18 @@ fn a_box(first_piece: u32, piece_count: u8) -> AircraftBox {
         gradient: -0.052,
         gradient_spread: 0.0412,
         piece_length_m: [44.0, 51.0, 38.0],
-        flights: 123_456,
+        flights: [123_456, 7, 16_777_215],
         energy_db,
         lg_scaled_distance: [
             61.0f64, 150.0, 288.0, 500.0, 1_100.0, 2_566.5, 4_259.3, 6_780.3, 9_000.0, 1e6,
         ]
         .map(f64::log10),
         tail_energy_db: [61.23, f64::NEG_INFINITY, 55.0],
-        installation_shares: [[0.2, 0.4, 0.4], [0.1, 0.3, 0.6]],
+        installation_shares: [
+            [[0.2, 0.4, 0.4], [0.1, 0.3, 0.6]],
+            [[1.0, 0.0, 0.0], [0.9, 0.1, 0.0]],
+            [[0.0, 0.0, 1.0], [0.05, 0.05, 0.9]],
+        ],
         first_piece,
         piece_count,
         loudest_lamax_db: if piece_count > 0 {
@@ -69,7 +73,7 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
     let flights = [a_flight(0x4b_a9_c1), a_flight(0x00_00_01)];
     let pieces = [a_piece(1), a_piece(0)];
     let bytes = encode(&boxes, &flights, &pieces);
-    assert_eq!(bytes.len(), 24 + 2 * 128 + 2 * 20 + 2 * 24);
+    assert_eq!(bytes.len(), 24 + 2 * 142 + 2 * 20 + 2 * 24);
     let parsed = Aircraft::parse(&bytes).unwrap();
     assert_eq!(
         (
@@ -97,7 +101,7 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
     assert!((read.gradient - -0.052).abs() < 1e-4);
     assert_eq!(
         (read.piece_length_m, read.flights),
-        ([44.0, 51.0, 38.0], 123_456)
+        ([44.0, 51.0, 38.0], [123_456, 7, 16_777_215])
     );
     for (read_levels, written_levels) in read.energy_db.iter().zip(&written.energy_db) {
         for (r, w) in read_levels.iter().zip(written_levels) {
@@ -117,7 +121,8 @@ fn boxes_flights_and_pieces_round_trip_at_their_steps() {
     for (read, written) in read
         .installation_shares
         .iter()
-        .zip(written.installation_shares)
+        .flatten()
+        .zip(written.installation_shares.iter().flatten())
     {
         for (r, w) in read.iter().zip(written) {
             assert!((r - w).abs() <= 1.0 / 255.0, "{r} vs {w}");
@@ -150,7 +155,7 @@ fn a_file_that_does_not_add_up_is_refused() {
     missing_piece[24 + 122] = 7;
     assert!(Aircraft::parse(&missing_piece).is_err());
     let mut missing_flight = bytes;
-    missing_flight[24 + 128 + 20] = 9;
+    missing_flight[24 + 142 + 20] = 9;
     assert!(Aircraft::parse(&missing_flight).is_err());
 }
 

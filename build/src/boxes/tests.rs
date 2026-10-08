@@ -44,7 +44,7 @@ fn departures() -> Vec<FlightSegment> {
                 above_ground_m: 0.5 * (altitude(north0) + altitude(north1)),
                 departure_field_m: 0.0,
                 ground_m: [0.0, 0.0],
-                acceleration_ms2: 0.0,
+                acceleration_ms2: None,
             });
         }
     }
@@ -142,9 +142,14 @@ fn boxes_of_a_departure_corridor_read_as_its_segments() {
     let bytes = std::fs::read(tiles::tile_path(&out, PRAGUE, tiles::Kind::Aircraft)).unwrap();
     let aircraft = Aircraft::parse(&bytes).unwrap();
     assert!(aircraft.box_count() > 50, "{} boxes", aircraft.box_count());
-    // A box counts each flight crossing it once: at most all 30 flights a day.
+    // A box counts each flight crossing it once, in the period it flies (all by day): at most all
+    // 30 flights a day.
     let most = (0..aircraft.box_count())
-        .map(|index| aircraft.aircraft_box(index).flights)
+        .map(|index| {
+            let [day, evening, night] = aircraft.aircraft_box(index).flights;
+            assert_eq!((evening, night), (0, 0));
+            day
+        })
         .max()
         .unwrap();
     assert!(

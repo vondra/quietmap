@@ -17,7 +17,7 @@ fn flight(departure: bool, speed_kt: f64, climb_sine: f64, altitude_m: f64) -> S
         speed_kt,
         pressure_altitude_m: altitude_m,
         climb_sine,
-        acceleration_ms2: 0.0,
+        acceleration_ms2: None,
         height_above_field_m: altitude_m,
     }
 }
@@ -172,6 +172,7 @@ fn a_box_of_one_flow_reads_as_the_sum_of_its_pieces() {
         values
             .installation_shares
             .iter()
+            .flatten()
             .all(|shares| shares[0] > 0.99),
         "{:?}",
         values.installation_shares
@@ -302,7 +303,7 @@ fn a_box_tells_its_jets_from_its_propellers_as_its_pieces_do() {
                 installation_shares: values.installation_shares,
                 ground_m: -4.0,
             };
-            let fractions = box_sel_at_receiver(&at, &Unscreened).installation_fractions;
+            let fractions = box_sel_at_receiver(&at, &Unscreened).installation_fractions[0];
             let expected = jet / (jet + propeller);
             assert!(
                 (fractions[0] - expected).abs() < 0.15 && fractions[1] == 0.0,
@@ -312,4 +313,47 @@ fn a_box_tells_its_jets_from_its_propellers_as_its_pieces_do() {
             assert!((fractions.iter().sum::<f64>() - 1.0).abs() < 1e-9);
         }
     }
+}
+
+/// Jets by day and propellers by night are two mixes (Codex, review of the r054 plan): each period
+/// reads its own installation shares, the night the propellers' Delta_I and the day the wing jets',
+/// where one mix for the whole day gave the night the day's jets.
+#[test]
+fn each_period_reads_its_own_installation_mix() {
+    let altitude = 1_000.0;
+    let mut sums = BoxSums::default();
+    for (designator, weights) in [("A320", [1.0, 0.0, 0.0]), ("DH8D", [0.0, 0.0, 1.0])] {
+        let emission = emission(designator, &flight(true, 150.0, 0.06, altitude));
+        sums.add(
+            &emission.npd_distance_levels(),
+            emission.installation,
+            weights,
+            [-50.0, 2_000.0, altitude - 3.0],
+            [50.0, 2_000.0, altitude + 3.0],
+        );
+    }
+    let values = sums.values().expect("a box with energy");
+    let at = AircraftBoxAtReceiver {
+        centroid_m: values.centroid_m,
+        axis_rad: values.axis_rad,
+        gradient: values.gradient,
+        gradient_spread: values.gradient_spread,
+        piece_length_m: values.piece_length_m,
+        levels_db: &values.levels_db,
+        tail_levels_db: &values.tail_levels_db,
+        lg_scaled_distance: &values.scaled_distance_m.map(f64::log10),
+        installation_shares: values.installation_shares,
+        ground_m: -4.0,
+    };
+    let sel = box_sel_at_receiver(&at, &Unscreened);
+    let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-9);
+    assert!(close(sel.installation_fractions[0], [1.0, 0.0, 0.0]));
+    assert!(close(sel.installation_fractions[2], [0.0, 0.0, 1.0]));
+    let [east, north, height] = sel.closest.on_line_m;
+    let slant = east.hypot(north).hypot(height);
+    let correction = |installation| installation_correction_db(installation, height, slant);
+    assert!((sel.installation_correction_db[0] - correction(Installation::Wing)).abs() < 1e-9);
+    assert!((sel.installation_correction_db[2] - correction(Installation::Propeller)).abs() < 1e-9);
+    // 2 km aside at 1,000 m the wing jets' Delta_I is -0.07 dB, the propellers' 0.
+    assert!((sel.installation_correction_db[0] - sel.installation_correction_db[2]).abs() > 0.05);
 }

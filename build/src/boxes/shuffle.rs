@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use tiles::geo::Mercator;
 
 /// Bytes of one record: the segment as the day file holds it (its reals are f32 there), with its
-/// acceleration.
+/// acceleration (NaN unknown).
 const RECORD_BYTES: usize = 80;
 /// z12 tiles per z9 square side.
 const TILES_PER_SQUARE: f64 = 8.0;
@@ -43,7 +43,7 @@ fn encode(segment: &FlightSegment, out: &mut Vec<u8>) {
         segment.departure_field_m,
         segment.ground_m[0],
         segment.ground_m[1],
-        segment.acceleration_ms2,
+        segment.acceleration_ms2.unwrap_or(f64::NAN),
     ];
     for real in reals {
         out.extend_from_slice(&(real as f32).to_le_bytes());
@@ -72,7 +72,7 @@ fn decode(bytes: &[u8]) -> FlightSegment {
         above_ground_m: real(9),
         departure_field_m: real(10),
         ground_m: [real(11), real(12)],
-        acceleration_ms2: real(13),
+        acceleration_ms2: Some(real(13)).filter(|acceleration| acceleration.is_finite()),
     }
 }
 
@@ -277,6 +277,44 @@ pub fn shuffled_days(out: &Path) -> Result<Vec<(String, DayRoles)>, String> {
     Ok(days)
 }
 
+/// The days done under `out` with their roles, which must be exactly `window`'s: boxes and events
+/// averaged over the days present would count a day the shuffle never wrote as one without
+/// flights.
+pub fn window_days(out: &Path, window: &Window) -> Result<Vec<(String, DayRoles)>, String> {
+    let done = shuffled_days(out)?;
+    let mut planned: Vec<(String, DayRoles)> = window
+        .baseline_days
+        .iter()
+        .chain(&window.increment_days)
+        .map(|day| {
+            let roles = DayRoles {
+                baseline: window.baseline_days.contains(day),
+                increment: window.increment_days.contains(day),
+            };
+            (day.clone(), roles)
+        })
+        .collect();
+    planned.sort_by(|a, b| a.0.cmp(&b.0));
+    planned.dedup();
+    if done != planned {
+        let missing: Vec<&str> = planned
+            .iter()
+            .filter(|day| !done.contains(day))
+            .map(|(day, _)| day.as_str())
+            .collect();
+        let extra: Vec<&str> = done
+            .iter()
+            .filter(|day| !planned.contains(day))
+            .map(|(day, _)| day.as_str())
+            .collect();
+        return Err(format!(
+            "{}: the shuffle is not the window's: missing or other roles {missing:?}, not in it {extra:?}",
+            out.display()
+        ));
+    }
+    Ok(done)
+}
+
 /// The segments of one square on one day under `out` (none when it had none).
 pub fn square_day(out: &Path, square: Square, day: &str) -> Result<Vec<FlightSegment>, String> {
     let path = square_day_path(out, square, day);
@@ -312,7 +350,7 @@ mod tests {
             above_ground_m: 500.0,
             departure_field_m: f64::NAN,
             ground_m: [312.0, 330.5],
-            acceleration_ms2: 0.625,
+            acceleration_ms2: Some(0.625),
         };
         let mut bytes = Vec::new();
         encode(&segment, &mut bytes);
@@ -351,5 +389,26 @@ mod tests {
             vec![Square { x: 276, y: 173 }, Square { x: 277, y: 173 }]
         );
         assert!(squares_of(&segment(10.0, 10.1), &scope).is_empty());
+    }
+
+    /// Boxes start only from the window's exact days and roles: a day the shuffle has not written,
+    /// or one written in another role, stops them.
+    #[test]
+    fn boxes_need_every_day_of_the_window() {
+        let out = std::env::temp_dir().join(format!("qm-shuffle-days-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        std::fs::create_dir_all(out.join("days")).unwrap();
+        let window = Window {
+            baseline_days: vec!["2026-01-08".into(), "2026-01-22".into()],
+            increment_days: vec!["2026-01-22".into()],
+        };
+        std::fs::write(out.join("days/2026-01-08"), "baseline \n").unwrap();
+        assert!(window_days(&out, &window).is_err());
+        std::fs::write(out.join("days/2026-01-22"), "baseline \n").unwrap();
+        assert!(window_days(&out, &window).is_err());
+        std::fs::write(out.join("days/2026-01-22"), "baseline increment\n").unwrap();
+        let days = window_days(&out, &window).unwrap();
+        assert_eq!(days.len(), 2);
+        std::fs::remove_dir_all(&out).unwrap();
     }
 }

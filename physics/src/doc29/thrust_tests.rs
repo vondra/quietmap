@@ -3,7 +3,6 @@
 use super::*;
 use crate::doc29::npd::{class_anchor, read_npd};
 use crate::doc29::profiles_generated::{CLASS_NAMES, noise_class_of, profile_idx};
-use crate::doc29::segment::{AircraftType, SegmentEmission};
 
 fn class_of(designator: &str) -> usize {
     usize::from(noise_class_of(profile_idx(designator)))
@@ -21,7 +20,7 @@ fn climbing(
         speed_kt,
         pressure_altitude_m,
         climb_sine,
-        acceleration_ms2: 0.0,
+        acceleration_ms2: None,
         height_above_field_m,
     }
 }
@@ -101,19 +100,37 @@ fn cutback_compares_the_height_above_the_field() {
     assert_eq!(bracket(900.0, 500.0), (3, 5239));
 }
 
-/// An ADS-B outlier the filters admit (a 787 at FL510 and 525 kt) inverts the 787-8's Idle/MaxClimb
-/// ratings: the segment is rejected, never clamped into crossed bounds; over a 1,000 ft / 25 kt
-/// sweep to 60,000 ft exactly the inverted or non-finite combinations reject, in every class.
+/// Where the Idle and MaxClimb fits cross (both outside the envelope they were fitted on) the
+/// force balance stands alone: an A380 level at FL350 at 450 kt, an E190 at FL350, a B772 at FL410
+/// and a DH8D at 360 kt read the bracket of their balance, where dev4 dropped them. Over a 1,000 ft
+/// / 25 kt sweep to 60,000 ft every class reads the balance clamped to its ratings where they do
+/// not cross, the balance alone where they do, and never nothing.
 #[test]
-fn inverted_idle_and_climb_ratings_reject_the_segment() {
-    let class = class_of("B788");
-    assert_eq!(THRUST[class].class_name, "7878R");
-    let h_ft = 51_000.0;
-    let flight = climbing(h_ft * METRES_PER_FOOT, h_ft * METRES_PER_FOOT, 525.0, 0.0);
-    assert_eq!(power_bracket(class, &flight), None);
-    let aircraft = AircraftType::from_designator("B788");
-    assert_eq!(SegmentEmission::new(&aircraft, &flight, false), None);
-    let mut rejected = 0;
+fn crossed_ratings_leave_the_force_balance() {
+    let level = |designator: &str, h_ft: f64, speed_kt: f64| {
+        let class = class_of(designator);
+        let flight = climbing(
+            h_ft * METRES_PER_FOOT,
+            h_ft * METRES_PER_FOOT,
+            speed_kt,
+            0.0,
+        );
+        let model = &THRUST[class];
+        let delta = isa_pressure_ratio(h_ft);
+        let balance = force_balance_thrust_lb(model, 0.0, None, 0.95, delta);
+        let expected = bracket_power(&model.dep_power, model.dep_rows, balance);
+        (power_bracket(class, &flight), expected)
+    };
+    for (designator, h_ft, speed_kt) in [
+        ("A388", 35_000.0, 450.0),
+        ("E190", 35_000.0, 450.0),
+        ("B772", 41_000.0, 480.0),
+        ("DH8D", 20_000.0, 360.0),
+    ] {
+        let (bracket, expected) = level(designator, h_ft, speed_kt);
+        assert_eq!(bracket, Some(expected), "{designator}");
+    }
+    let mut crossed = 0;
     for class in (0..THRUST.len()).filter(|&class| THRUST[class].has_thrust) {
         let model = &THRUST[class];
         for h_ft in (-1_000..=60_000).step_by(1_000).map(f64::from) {
@@ -122,23 +139,29 @@ fn inverted_idle_and_climb_ratings_reject_the_segment() {
                 let temperature_c = isa_temperature_c(h_ft);
                 let idle = model.rated_thrust_lb(Rating::Idle, vc_kt, h_ft, temperature_c);
                 let climb = model.rated_thrust_lb(Rating::Climb, vc_kt, h_ft, temperature_c);
-                let outside = !(idle.is_finite() && climb.is_finite() && idle <= climb);
-                let approach = SegmentFlight {
-                    departure: false,
-                    ..climbing(
-                        h_ft * METRES_PER_FOOT,
-                        h_ft * METRES_PER_FOOT,
-                        speed_kt,
-                        0.0,
-                    )
+                let flight = climbing(h_ft * METRES_PER_FOOT, 3_000.0, speed_kt, 0.0);
+                let k = if vc_kt <= 200.0 { 1.01 } else { 0.95 };
+                let balance =
+                    force_balance_thrust_lb(model, 0.0, None, k, isa_pressure_ratio(h_ft));
+                let thrust = if idle <= climb {
+                    balance.clamp(idle, climb)
+                } else {
+                    crossed += 1;
+                    balance
                 };
-                let bracket = power_bracket(class, &approach);
-                assert_eq!(bracket.is_none(), outside, "{} {h_ft} ft", model.class_name);
-                rejected += usize::from(outside);
+                let (got, want) = (
+                    power_bracket(class, &flight).expect("a finite thrust"),
+                    bracket_power(&model.dep_power, model.dep_rows, thrust),
+                );
+                assert!(
+                    got.row == want.row && (got.weight - want.weight).abs() < 1e-9,
+                    "{} {h_ft} ft {speed_kt} kt: {got:?} {want:?}",
+                    model.class_name
+                );
             }
         }
     }
-    assert!(rejected > 0, "the sweep must exercise rejections");
+    assert!(crossed > 0, "the sweep must cross ratings");
 }
 
 #[test]
@@ -172,15 +195,15 @@ fn a_power_bracket_survives_its_tile_code() {
 }
 
 /// An A320 climbing 7 % at 200 kt after cutback while accelerating at 0.5 m/s^2 flies more thrust
-/// than the same climb at constant speed (Eq. B-17: a/g joins the climb gradient and R), within
-/// MaxClimb; decelerating on approach reads less, never below idle.
+/// than the same climb of unknown acceleration (Eq. B-20: a/g joins the climb gradient and R, and
+/// no K), within MaxClimb; decelerating on approach reads less, never below idle.
 #[test]
 fn acceleration_adds_thrust_to_the_climb() {
     let class = class_of("A320");
     let model = &THRUST[class];
     let steady = climbing(900.0, 600.0, 200.0, 0.07);
     let accelerating = SegmentFlight {
-        acceleration_ms2: 0.5,
+        acceleration_ms2: Some(0.5),
         ..steady
     };
     let thrust = |flight: &SegmentFlight| {
@@ -191,8 +214,7 @@ fn acceleration_adds_thrust_to_the_climb() {
     // The steady climb's 9,856 lb sits below the table's first row (read at 10,000 lb); the
     // accelerating one's 13,954 lb is bracketed.
     let delta = (1.0_f64 - 6.8756e-6 * 900.0 / METRES_PER_FOOT).powf(5.2559);
-    let expected =
-        model.weight_lb / delta * (0.07 / 1.01 + model.drag_ratio + 0.5 / GRAVITY_MS2) / 2.0;
+    let expected = model.weight_lb / delta * (0.07 + model.drag_ratio + 0.5 / GRAVITY_MS2) / 2.0;
     let (slow, fast) = (thrust(&steady), thrust(&accelerating));
     assert!(
         slow == model.dep_power[0] && (fast - expected).abs() < 1.0,
@@ -201,10 +223,35 @@ fn acceleration_adds_thrust_to_the_climb() {
     let braking = SegmentFlight {
         departure: false,
         climb_sine: -0.052,
-        acceleration_ms2: -0.5,
+        acceleration_ms2: Some(-0.5),
         ..steady
     };
     assert!(power_bracket(class, &braking).is_some());
+}
+
+/// Codex's case (review of the r054 plan): a B738 at 1,500 m and 240 kt climbing at sine 0.07
+/// while accelerating at 0.15 m/s^2 flies Eq. B-20, 12,814.57 lb a side, where the factor K on top
+/// of the observed acceleration read 13,148.11 lb.
+#[test]
+fn an_observed_acceleration_replaces_the_constant_cas_factor() {
+    let class = class_of("B738");
+    let model = &THRUST[class];
+    let flight = SegmentFlight {
+        acceleration_ms2: Some(0.15),
+        ..climbing(1_500.0, 1_500.0, 240.0, 0.07)
+    };
+    let h_ft = 1_500.0 / METRES_PER_FOOT;
+    let delta = isa_pressure_ratio(h_ft);
+    let thrust = force_balance_thrust_lb(model, 0.07, Some(0.15), 0.95, delta);
+    assert!((thrust - 12_814.57).abs() < 0.01, "{thrust}");
+    let with_k =
+        model.weight_lb / delta * (0.07 / 0.95 + model.drag_ratio + 0.15 / GRAVITY_MS2) / 2.0;
+    assert!((with_k - 13_148.11).abs() < 0.01, "{with_k}");
+    let bracket = power_bracket(class, &flight).expect("in the domain");
+    assert_eq!(
+        bracket,
+        bracket_power(&model.dep_power, model.dep_rows, thrust)
+    );
 }
 
 /// An A320 on a 3 degree glideslope at 140 kt, 300 m above the field, flies its landing flap and
@@ -221,7 +268,7 @@ fn a_final_approach_flies_its_landing_configuration() {
         speed_kt: 140.0,
         pressure_altitude_m: 600.0,
         climb_sine: -0.0523,
-        acceleration_ms2: 0.0,
+        acceleration_ms2: None,
         height_above_field_m: 300.0,
     };
     let bracket = power_bracket(class, &final_approach).expect("in the domain");

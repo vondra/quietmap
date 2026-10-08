@@ -2,23 +2,27 @@
 //! period, beyond the reach, per band and distance of its box pieces, and per flight.
 
 use super::super::emission_of;
+use super::super::events::{EventCounts, FlightPeaks, Peak};
 use super::super::place::{BoxKey, Placement, cut_into_pieces};
-use super::super::read::FlightSegment;
-use super::{BEYOND_REACH_M, REACH_M, Receiver};
+use super::super::read::{FLAG_SECONDARY_ONLY, FlightSegment};
+use super::{BEYOND_REACH_M, REACH_M, RECEIVER_HEIGHT_M, Receiver, square_of, square_of_tile};
+use crate::dev4::Square;
 use physics::bands::PERIODS;
 use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::doc29::screening::Unscreened;
-use physics::doc29::segment::{SegmentEmission, SegmentGeometry, segment_sel_at_receiver};
+use physics::doc29::segment::{SegmentGeometry, segment_lmax_db, segment_sel_at_receiver};
 use std::collections::HashMap;
 use tiles::geo::Mercator;
 
 /// Energy slots of one point: exact within the reach, beyond it, and the pieces of the first
 /// band and above (each per period); per flight within the reach its exact SEL energy and its
-/// loudest LAmax (dB).
+/// loudest maximum level (dB, Eq. 4-8a); the day's flights' loudest moments and the events table.
 #[derive(Clone)]
 pub(super) struct Sums {
     pub(super) energy: [f64; SLOTS * PERIODS],
     pub(super) flights: HashMap<u64, (f64, f64)>,
+    peaks: HashMap<u64, FlightPeaks>,
+    pub(super) events: EventCounts,
     /// For a diagnosed point, per box and period the exact energy of its pieces, that energy times
     /// their mean altitude and over their d_lambda at the point.
     pub(super) per_box: Option<HashMap<BoxKey, [[f64; PERIODS]; 6]>>,
@@ -47,7 +51,17 @@ impl Sums {
         Sums {
             energy: [0.0; SLOTS * PERIODS],
             flights: HashMap::new(),
+            peaks: HashMap::new(),
+            events: EventCounts::default(),
             per_box: diagnosed.then(HashMap::new),
+        }
+    }
+
+    /// Ends a day: each flight's loudest moments into the events table, its primary segments at
+    /// `weights.0`, the secondary's at `weights.1`.
+    pub(super) fn close_day(&mut self, weights: (f64, f64)) {
+        for (_, peaks) in self.peaks.drain() {
+            self.events.add(&peaks, weights);
         }
     }
 
@@ -55,6 +69,17 @@ impl Sums {
         for (a, b) in self.energy.iter_mut().zip(other.energy) {
             *a += b;
         }
+        for (flight, peaks) in other.peaks {
+            match self.peaks.entry(flight) {
+                std::collections::hash_map::Entry::Occupied(mut mine) => {
+                    mine.get_mut().merge(&peaks)
+                }
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    slot.insert(peaks);
+                }
+            }
+        }
+        self.events.merge(other.events);
         for (flight, (energy, lmax_db)) in other.flights {
             let entry = self
                 .flights
@@ -76,62 +101,68 @@ impl Sums {
     }
 }
 
-/// Adds one segment of weight `weight` to the sums of every point it reaches; a `light` flight of
-/// unknown type flies the C172's class.
+/// The horizontal distance (m) from the receiver to a segment given in its frame.
+pub(super) fn horizontal_distance_m(start: [f64; 3], end: [f64; 3]) -> f64 {
+    let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
+    let length_squared = dx * dx + dy * dy;
+    let t = if length_squared > 0.0 {
+        (-(start[0] * dx + start[1] * dy) / length_squared).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (start[0] + t * dx).hypot(start[1] + t * dy)
+}
+
+/// Adds one segment of weight `weight` to the sums of every point it reaches (by its distance,
+/// not its ends'), each box piece in the atmosphere of its own square as the boxes sum it, a
+/// segment beyond the reach in its start's. A segment of weight 0 (a day without its provider's
+/// role) still sets its flight's loudest moment, which decides how the flight counts.
 pub(super) fn add_segment(
     sums: &mut [Sums],
     receivers: &[Receiver],
     placement: &Placement,
-    (segment, place): (&FlightSegment, &PlaceAtmosphere),
+    (segment, places): (&FlightSegment, &HashMap<Square, PlaceAtmosphere>),
     weight: f64,
 ) {
-    let mut emission: Option<Option<(bool, SegmentEmission)>> = None;
+    // Every square a kept segment's ends lie in has its atmosphere; others take the start's.
+    let place = |square: Square| {
+        places
+            .get(&square)
+            .unwrap_or_else(|| &places[&square_of(segment.start)])
+    };
+    let mut emitted = None;
     let mut pieces = None;
     for (sums, receiver) in sums.iter_mut().zip(receivers) {
         let (start, end) = (receiver.local(segment.start), receiver.local(segment.end));
-        let nearest = start[0].hypot(start[1]).min(end[0].hypot(end[1]));
-        if nearest > BEYOND_REACH_M {
+        let distance = horizontal_distance_m(start, end);
+        if distance > BEYOND_REACH_M {
             continue;
         }
-        let Some((helicopter, emission)) = emission.get_or_insert_with(|| {
-            emission_of(segment).map(|(aircraft, emission)| {
-                (aircraft.helicopter.is_some(), emission.in_atmosphere(place))
-            })
-        }) else {
+        let Some((aircraft, emission)) = emitted.get_or_insert_with(|| emission_of(segment)) else {
             return;
         };
         let period = usize::from(segment.period).min(PERIODS - 1);
         let ground = |metres: f64| metres - receiver.altitude_m;
-        let geometry = SegmentGeometry {
-            start_m: start,
-            end_m: end,
-            ground_under_start_m: ground(segment.ground_m[0]),
-            ground_under_end_m: ground(segment.ground_m[1]),
-        };
-        let sel = segment_sel_at_receiver(emission, &geometry, &Unscreened);
-        let energy = 10f64.powf(sel.sel_db / 10.0);
-        if nearest > REACH_M {
-            sums.energy[BEYOND + period] += weight * energy;
+        if distance > REACH_M {
+            let geometry = SegmentGeometry {
+                start_m: start,
+                end_m: end,
+                ground_under_start_m: ground(segment.ground_m[0]),
+                ground_under_end_m: ground(segment.ground_m[1]),
+            };
+            let emission = emission.in_atmosphere(place(square_of(segment.start)));
+            let sel = segment_sel_at_receiver(&emission, &geometry, &Unscreened);
+            sums.energy[BEYOND + period] += weight * 10f64.powf(sel.sel_db / 10.0);
             continue;
         }
-        sums.energy[EXACT + period] += weight * energy;
-        // The loudest LAmax as the popup takes it: the NPD value at the closest point's slant.
-        let closest = sel.closest.on_segment_m;
-        let lmax_db = emission
-            .read_npd(closest[0].hypot(closest[1]).hypot(closest[2]))
-            .lamax_db;
-        let flight = sums
-            .flights
-            .entry(segment.flight_id)
-            .or_insert((0.0, f64::NEG_INFINITY));
-        flight.0 += energy;
-        flight.1 = flight.1.max(lmax_db);
         let point = |end: [f64; 3]| (Mercator::from_degrees(end[0], end[1]), end[2]);
         let (from, to) = (point(segment.start), point(segment.end));
-        let pieces =
-            pieces.get_or_insert_with(|| cut_into_pieces(placement, from, to, *helicopter));
+        let helicopter = aircraft.helicopter.is_some();
+        let pieces = pieces.get_or_insert_with(|| cut_into_pieces(placement, from, to, helicopter));
         let length = (to.0.x - from.0.x).hypot(to.0.y - from.0.y);
+        let (mut flight_energy, mut loudest) = (0.0, None::<Peak>);
         for piece in pieces.iter() {
+            let emission = emission.in_atmosphere(place(square_of_tile(piece.key.tile)));
             // The terrain under the piece's ends, along the segment's.
             let under = |at: Mercator| {
                 let t = if length > 0.0 {
@@ -147,13 +178,24 @@ pub(super) fn add_segment(
                 ground_under_start_m: under(piece.start.0),
                 ground_under_end_m: under(piece.end.0),
             };
-            let sel = segment_sel_at_receiver(emission, &geometry, &Unscreened);
+            let sel = segment_sel_at_receiver(&emission, &geometry, &Unscreened);
+            let energy = 10f64.powf(sel.sel_db / 10.0);
+            flight_energy += energy;
+            let moment = Peak {
+                lmax_db: segment_lmax_db(&emission, &sel.closest),
+                period: segment.period,
+                height_m: sel.closest.on_segment_m[2] + RECEIVER_HEIGHT_M,
+            };
+            if loudest.is_none_or(|loudest| moment.lmax_db > loudest.lmax_db) {
+                loudest = Some(moment);
+            }
+            let value = weight * energy;
+            sums.energy[EXACT + period] += value;
             let slot = if piece.key.band == 0 {
                 NEAR_GROUND
             } else {
                 ALOFT
             };
-            let value = weight * 10f64.powf(sel.sel_db / 10.0);
             sums.energy[slot + period] += value;
             let middle = [
                 0.5 * (geometry.start_m[0] + geometry.end_m[0]),
@@ -172,5 +214,20 @@ pub(super) fn add_segment(
                 sum[5][period] += value * (b[0] - a[0]).hypot(b[1] - a[1]);
             }
         }
+        let Some(loudest) = loudest else {
+            continue;
+        };
+        if weight > 0.0 {
+            let flight = sums
+                .flights
+                .entry(segment.flight_id)
+                .or_insert((0.0, f64::NEG_INFINITY));
+            flight.0 += flight_energy;
+            flight.1 = flight.1.max(loudest.lmax_db);
+        }
+        sums.peaks
+            .entry(segment.flight_id)
+            .or_insert_with(|| FlightPeaks::new(segment.designator, helicopter))
+            .add(loudest, segment.flags & FLAG_SECONDARY_ONLY != 0);
     }
 }

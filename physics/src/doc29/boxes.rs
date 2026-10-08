@@ -2,11 +2,12 @@
 //! pieces of every flight that crossed it; the click reads the summed energies at the slant to
 //! its average aircraft (the emission-weighted centroid, one axis and gradient, the mean piece
 //! length) and applies to that average piece what the kernel applies to one segment: Delta_F with
-//! the box's scaled distance, the lateral attenuation, the installation correction of the box's
-//! installation shares and the screening. A box whose pieces climb and descend is read as two
-//! average pieces, half its energy each, at its gradient plus and minus their spread: the kernel
-//! takes the elevation angle where each piece's extended line passes the receiver, kilometres
-//! from the box beside a runway, and one mean gradient cannot stand for climbs and descents there.
+//! the box's scaled distance, the lateral attenuation, the installation correction of each
+//! period's installation shares and the screening. A box whose pieces climb and descend is read
+//! as two average pieces, half its energy each, at its gradient plus and minus their spread: the
+//! kernel takes the elevation angle where each piece's extended line passes the receiver,
+//! kilometres from the box beside a runway, and one mean gradient cannot stand for climbs and
+//! descents there.
 //!
 //! Why it matches the pieces: the energies add at every NPD distance; the geometry terms are the
 //! kernel's for one segment; Delta_F of short pieces (length << d_lambda) is proportional to
@@ -44,10 +45,10 @@ pub struct AircraftBoxAtReceiver<'a> {
     pub lg_scaled_distance: &'a [f64; NPD_DISTANCES],
     /// Per period, the summed level at the tail anchor (dB, -inf silent).
     pub tail_levels_db: &'a [f64; PERIODS],
-    /// Energy shares of wing-mounted jets, fuselage-mounted jets and propellers at 1,000 ft and
-    /// at the tail anchor (propellers fall off slower than jets, so the mix changes with
-    /// distance).
-    pub installation_shares: [[f64; 3]; 2],
+    /// Per period, the energy shares of wing-mounted jets, fuselage-mounted jets and propellers
+    /// at 1,000 ft and at the tail anchor (propellers fall off slower than jets, so the mix
+    /// changes with distance; jets by day and propellers by night are two mixes).
+    pub installation_shares: [[[f64; 3]; 2]; PERIODS],
     /// The terrain the box's clearance counts from, above the receiver (m).
     pub ground_m: f64,
 }
@@ -61,9 +62,11 @@ pub struct BoxSel {
     /// Per period (each with its mean piece length).
     pub finite_segment_correction_db: [f64; PERIODS],
     pub lateral_attenuation_db: f64,
-    pub installation_correction_db: f64,
-    /// The received energy's shares of wing-mounted jets, fuselage-mounted jets and propellers.
-    pub installation_fractions: [f64; 3],
+    /// Per period, Delta_I of its installation mix.
+    pub installation_correction_db: [f64; PERIODS],
+    /// Per period, the received energy's shares of wing-mounted jets, fuselage-mounted jets and
+    /// propellers.
+    pub installation_fractions: [[f64; 3]; PERIODS],
     pub terrain_loss_db: f64,
     pub building_loss_db: f64,
 }
@@ -162,18 +165,20 @@ pub fn box_sel_at_receiver(
             f64::NEG_INFINITY
         }
     });
-    // The two pieces' installation mixes, weighed by what each brings to the receiver.
-    let [lower_energy, upper_energy] =
-        [&lower, &upper].map(|piece| piece.sel_db.iter().map(|&sel| energy(sel)).sum::<f64>());
-    let installation_fractions = if lower_energy + upper_energy > 0.0 {
-        std::array::from_fn(|k| {
-            (lower_energy * lower.installation_fractions[k]
-                + upper_energy * upper.installation_fractions[k])
-                / (lower_energy + upper_energy)
-        })
-    } else {
-        lower.installation_fractions
-    };
+    // Each period's two installation mixes, weighed by what each piece brings to the receiver.
+    let installation_fractions = std::array::from_fn(|period| {
+        let [lower_energy, upper_energy] =
+            [&lower, &upper].map(|piece| energy(piece.sel_db[period]));
+        if lower_energy + upper_energy > 0.0 {
+            std::array::from_fn(|k| {
+                (lower_energy * lower.installation_fractions[period][k]
+                    + upper_energy * upper.installation_fractions[period][k])
+                    / (lower_energy + upper_energy)
+            })
+        } else {
+            lower.installation_fractions[period]
+        }
+    });
     BoxSel {
         sel_db,
         installation_fractions,
@@ -209,24 +214,23 @@ fn average_piece_sel(
         Installation::Fuselage,
         Installation::Propeller,
     ];
-    let shares = shares_at(aircraft_box.installation_shares, slant_m);
-    let parts: [f64; 3] = std::array::from_fn(|k| {
-        shares[k]
-            * energy(installation_correction_db(
-                installations[k],
-                height_m,
-                slant_m,
-            ))
+    let corrections = installations
+        .map(|installation| installation_correction_db(installation, height_m, slant_m));
+    let mixes = aircraft_box.installation_shares.map(|shares| {
+        let shares = shares_at(shares, slant_m);
+        let parts: [f64; 3] = std::array::from_fn(|k| shares[k] * energy(corrections[k]));
+        let installation_energy: f64 = parts.iter().sum();
+        if installation_energy > 0.0 {
+            (
+                10.0 * installation_energy.log10(),
+                parts.map(|part| part / installation_energy),
+            )
+        } else {
+            (0.0, shares)
+        }
     });
-    let installation_energy: f64 = parts.iter().sum();
-    let (installation, installation_fractions) = if installation_energy > 0.0 {
-        (
-            10.0 * installation_energy.log10(),
-            parts.map(|part| part / installation_energy),
-        )
-    } else {
-        (0.0, shares)
-    };
+    let installation = mixes.map(|(correction, _)| correction);
+    let installation_fractions = mixes.map(|(_, fractions)| fractions);
     let height_above_ground_m = aircraft_box.centroid_m[2] - aircraft_box.ground_m;
     let (terrain_loss_db, building_loss_db) =
         if height_above_ground_m < SCREENING_CEILING_ABOVE_GROUND_M {
@@ -244,7 +248,7 @@ fn average_piece_sel(
         }
         let free = box_level_db(levels, aircraft_box.tail_levels_db[period], &position)
             + finite[period]
-            + installation
+            + installation[period]
             - lateral_attenuation;
         screened_sel_db(free, lateral_attenuation, terrain_loss_db, building_loss_db)
     });

@@ -49,7 +49,7 @@ fn departure(east_m: f64) -> (SegmentEmission, [f64; 3], [f64; 3]) {
         speed_kt: 160.0,
         pressure_altitude_m: 600.0,
         climb_sine: 0.08,
-        acceleration_ms2: 0.0,
+        acceleration_ms2: None,
         height_above_field_m: 600.0,
     };
     let emission =
@@ -88,7 +88,7 @@ fn box_of(emission: &SegmentEmission, start: [f64; 3], end: [f64; 3]) -> Aircraf
         gradient: values.gradient,
         gradient_spread: values.gradient_spread,
         piece_length_m: values.piece_length_m,
-        flights: 1,
+        flights: [1, 0, 0],
         energy_db: values.levels_db,
         tail_energy_db: values.tail_levels_db,
         lg_scaled_distance: values.scaled_distance_m.map(f64::log10),
@@ -196,4 +196,36 @@ fn a_box_beyond_the_reach_is_not_heard() {
     let (energy, boxes) = aircraft_day_energy(&release);
     assert_eq!((energy, boxes), (0.0, 0));
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// A box's flights are counted per period (Codex, review of the r054 plan): two flights a day by
+/// day and two at night, the night 10 dB quieter, give the night its own rate, 1.5 times the day's
+/// per hour (12 h against 8 h), where splitting the four by the SEL energy gave the night a tenth.
+#[test]
+fn each_period_counts_its_own_flights() {
+    use popup::aircraft::boxes::{AircraftReceiver, tile_energy};
+    let (emission, start, end) = departure(1_000.0);
+    let mut record = box_of(&emission, start, end);
+    record.energy_db[2] = record.energy_db[0].map(|level| level - 10.0);
+    record.tail_energy_db[2] = record.tail_energy_db[0] - 10.0;
+    record.flights = [731, 0, 731];
+    let bytes = encode(&[record], &[], &[]);
+    let aircraft = tiles::aircraft::Aircraft::parse(&bytes).unwrap();
+    let receiver = AircraftReceiver {
+        position: [0.0, 0.0],
+        altitude_m: RECEIVER_ALTITUDE_M,
+    };
+    let heard = tile_energy(
+        &aircraft,
+        TILE,
+        &LocalFrame::at(TILE.centre()),
+        receiver,
+        &Unscreened,
+    );
+    let lambda = |period: usize| heard.energy_lambda[period] / heard.energy[period];
+    let ratio = lambda(2) / lambda(0);
+    assert!(
+        (ratio - PERIOD_HOURS[0] / PERIOD_HOURS[2]).abs() < 1e-9,
+        "{ratio}"
+    );
 }

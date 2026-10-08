@@ -165,6 +165,27 @@ fn designators_decide_drops_ground_vehicles_and_profiles() {
     );
     let helicopter = &trace_to_flights(trace("EC35", two(), &[]), ADSB_LOL, ADSB_EXCHANGE)[0];
     assert_eq!(helicopter.airframe, Airframe::Helicopter);
+    // A surface vehicle's transponder makes it a ground vehicle whatever its designator; an
+    // obstacle's is dropped.
+    let with_category = |category: u8| {
+        let mut traced = trace("", two(), &[(0, "UDRZBA2")]);
+        traced.emitter_category = category;
+        trace_to_flights(traced, ADSB_LOL, ADSB_EXCHANGE)
+    };
+    for category in [0xC1, 0xC2] {
+        let vehicle = &with_category(category)[0];
+        assert_eq!(
+            (
+                vehicle.vehicle_kind,
+                vehicle.ground_vehicle_class,
+                vehicle.profile
+            ),
+            (1, 1, NO_PROFILE)
+        );
+    }
+    for category in [0xC3, 0xC4, 0xC5] {
+        assert!(with_category(category).is_empty());
+    }
 }
 
 /// A rotation of secondary samples only carries the secondary provider; anonymous and reserved
