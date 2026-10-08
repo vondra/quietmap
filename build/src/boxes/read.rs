@@ -1,5 +1,6 @@
 //! One day's flight segments from Stage 1's scratch (`segments/<day>.arrow`): the columns the
-//! boxes need, one struct per airborne or cruise segment (ground segments go to ground operations).
+//! boxes need, one struct per airborne or cruise segment of an aircraft (ground segments go to
+//! ground operations; a surface vehicle's track is never a flight, however high its heights read).
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, UInt8Type, UInt64Type};
@@ -13,6 +14,10 @@ pub use crate::aircraft::{
 };
 /// Stage 1 phases: ground segments are not boxed.
 const PHASE_GROUND: u8 = 0;
+/// Stage 1's vehicle kind of an aircraft: a surface vehicle (by its emitter category or the "GND"
+/// type) has no aircraft profile, so boxing it would sound it as the profile table's last row
+/// (address 000001 over Bedrichov, 1,636 airborne segments on 2026-05-24, listed loudest).
+const KIND_AIRCRAFT: u8 = 0;
 
 /// One segment as the boxes read it.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -122,12 +127,13 @@ pub fn read_segments(
         let batch = &batch;
         let bytes = |name| column(batch, name).map(|c| c.as_primitive::<UInt8Type>());
         let floats = |name| column(batch, name).map(|c| c.as_primitive::<Float32Type>());
-        let (profile, source_id, period, phase, flags) = (
+        let (profile, source_id, period, phase, flags, kind) = (
             bytes("profile_idx")?,
             bytes("source_id")?,
             bytes("period")?,
             bytes("phase")?,
             bytes("flags")?,
+            bytes("veh_kind")?,
         );
         let flight_id = column(batch, "flight_id")?.as_primitive::<UInt64Type>();
         let callsign = column(batch, "callsign")?.as_string::<i32>();
@@ -169,7 +175,7 @@ pub fn read_segments(
         );
         let kept: Vec<FlightSegment> = (0..batch.num_rows())
             .into_par_iter()
-            .filter(|&row| phase.value(row) != PHASE_GROUND)
+            .filter(|&row| phase.value(row) != PHASE_GROUND && kind.value(row) == KIND_AIRCRAFT)
             .flat_map_iter(|row| {
                 let value = |index: usize| f64::from(values[index].value(row));
                 split_at_antimeridian(FlightSegment {
