@@ -44,6 +44,35 @@ pub fn period(timestamp: f64, lat: f64, lon: f64) -> u8 {
     period_in(&time_zone(lat, lon), timestamp)
 }
 
+/// The seconds of `length_s` from the UTC instant `start` that fall in the day, evening and night
+/// on the clocks of `zone` (the offset of `start` holds throughout).
+pub fn period_seconds(zone: &Tz, start: f64, length_s: f64) -> [f64; 3] {
+    let mut seconds = [0.0; 3];
+    if !start.is_finite() || length_s <= 0.0 {
+        return seconds;
+    }
+    let utc = DateTime::from_timestamp(start.floor() as i64, 0).unwrap_or(DateTime::UNIX_EPOCH);
+    let hour = 3_600.0;
+    let mut at = f64::from(utc.with_timezone(zone).num_seconds_from_midnight()) + start.fract();
+    let mut left = length_s;
+    while left > 0.0 {
+        let (period, until) = if at < 7.0 * hour {
+            (NIGHT, 7.0 * hour)
+        } else if at < 19.0 * hour {
+            (DAY, 19.0 * hour)
+        } else if at < 23.0 * hour {
+            (EVENING, 23.0 * hour)
+        } else {
+            (NIGHT, 24.0 * hour)
+        };
+        let taken = (until - at).min(left);
+        seconds[usize::from(period)] += taken;
+        left -= taken;
+        at = until % (24.0 * hour);
+    }
+    seconds
+}
+
 /// The period of a UTC instant on the clocks of `zone`; a non-finite instant counts as night.
 pub fn period_in(zone: &Tz, timestamp: f64) -> u8 {
     if !timestamp.is_finite() {

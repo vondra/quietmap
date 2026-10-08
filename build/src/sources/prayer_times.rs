@@ -7,7 +7,7 @@
 //! Where twilight never gets that deep (summer above about 48 N), Fajr and Isha take the angle's
 //! sixtieth part of the night from sunrise and sunset (the angle-based rule).
 
-use crate::period::period_in;
+use crate::period::{period_in, period_seconds};
 use chrono_tz::Tz;
 
 /// How a country's authority sets Fajr and Isha, its Asr shadow factor and the margins (minutes)
@@ -131,10 +131,18 @@ pub fn prayer_hours(day_unix: i64, lat: f64, lon: f64, method: &Method) -> Optio
 const SAMPLE_DAYS: std::ops::Range<i64> = 0..73;
 const YEAR_2026_UNIX: i64 = 1_767_225_600;
 
-/// Each call's share of the year in the day, evening and night period on the clocks of `zone`
-/// (Fajr, Dhuhr, Asr, Maghrib, Isha); a day the sun neither rises nor sets has no calls.
-pub fn call_periods(lat: f64, lon: f64, zone: &Tz, method: &Method) -> [[f64; 3]; 5] {
-    let mut counts = [[0.0; 3]; 5];
+/// Each call's events a day and seconds sounding a day in the day, evening and night period on
+/// the clocks of `zone` over the year (Fajr, Dhuhr, Asr, Maghrib, Isha): the event in the period
+/// its prayer time falls in, its sound from `sounding.0` seconds before the prayer time for
+/// `sounding.1` seconds (a recitation before the call); a day the sun neither rises nor sets has no
+/// calls.
+pub fn call_periods(
+    (lat, lon): (f64, f64),
+    zone: &Tz,
+    method: &Method,
+    sounding: [(f64, f64); 5],
+) -> [([f64; 3], [f64; 3]); 5] {
+    let mut periods = [([0.0; 3], [0.0; 3]); 5];
     for sample in SAMPLE_DAYS {
         let day_unix = YEAR_2026_UNIX + sample * 5 * 86_400;
         let Some(hours) = prayer_hours(day_unix, lat, lon, method) else {
@@ -142,10 +150,20 @@ pub fn call_periods(lat: f64, lon: f64, zone: &Tz, method: &Method) -> [[f64; 3]
         };
         for (call, hour) in hours.iter().enumerate() {
             let instant = day_unix as f64 + hour * 3_600.0;
-            counts[call][usize::from(period_in(zone, instant))] += 1.0;
+            let (lead_s, length_s) = sounding[call];
+            let (events, seconds) = &mut periods[call];
+            events[usize::from(period_in(zone, instant))] += 1.0;
+            for (sum, part) in
+                seconds
+                    .iter_mut()
+                    .zip(period_seconds(zone, instant - lead_s, length_s))
+            {
+                *sum += part;
+            }
         }
     }
-    counts.map(|call| call.map(|days| days / SAMPLE_DAYS.end as f64))
+    let days = SAMPLE_DAYS.end as f64;
+    periods.map(|(events, seconds)| (events.map(|e| e / days), seconds.map(|s| s / days)))
 }
 
 #[cfg(test)]
@@ -193,7 +211,8 @@ mod tests {
             asr_factor: 1.0,
             margins_min: [2.5, 3.5, 2.4, 3.1, 2.4],
         };
-        let shares = call_periods(-6.2, 106.85, &jakarta, &kemenag);
+        let calls = [(0.0, 180.0); 5];
+        let shares = call_periods((-6.2, 106.85), &jakarta, &kemenag, calls).map(|(e, _)| e);
         assert_eq!(shares[0], [0.0, 0.0, 1.0]);
         assert_eq!(shares[3], [1.0, 0.0, 0.0]);
         assert!(
@@ -202,7 +221,7 @@ mod tests {
             shares[4]
         );
         let berlin: Tz = "Europe/Berlin".parse().unwrap();
-        let cologne = call_periods(50.94, 6.96, &berlin, &WORLD_LEAGUE);
+        let cologne = call_periods((50.94, 6.96), &berlin, &WORLD_LEAGUE, calls).map(|(e, _)| e);
         assert_eq!(cologne[0], [0.0, 0.0, 1.0]);
         assert!(
             cologne[4][2] > 0.2 && cologne[4][2] < 0.4,
@@ -210,5 +229,26 @@ mod tests {
             cologne[4]
         );
         assert_eq!(cologne[1], [1.0, 0.0, 0.0]);
+    }
+
+    /// A call sounds in the periods its minutes fall in, a recitation before it included: Jakarta's
+    /// Maghrib near 18:00 with ten minutes of recitation before it stays in the day; a sound from
+    /// 18:55 for ten minutes is five in the day and five in the evening.
+    #[test]
+    fn a_call_sounds_in_the_periods_its_minutes_fall_in() {
+        let jakarta: Tz = "Asia/Jakarta".parse().unwrap();
+        // 2026-10-04 11:55 UTC is 18:55 in Jakarta (UTC+7).
+        let start = 1_791_072_000.0 + 11.0 * 3_600.0 + 55.0 * 60.0;
+        assert_eq!(period_seconds(&jakarta, start, 600.0), [300.0, 300.0, 0.0]);
+        assert_eq!(
+            period_seconds(&jakarta, start + 4.0 * 3_600.0, 600.0),
+            [0.0, 300.0, 300.0],
+            "22:55, across 23:00"
+        );
+        assert_eq!(
+            period_seconds(&jakarta, start - 12.0 * 3_600.0, 600.0),
+            [300.0, 0.0, 300.0],
+            "06:55, across 07:00"
+        );
     }
 }

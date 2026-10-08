@@ -118,9 +118,12 @@ const CALL_S: f64 = 180.0;
 const IQAMA_S: f64 = 60.0;
 const SALA_S: f64 = 120.0;
 const FRIDAY_CALL_S: f64 = 240.0;
-/// Indonesia's calls and the recitation before them (SE 05/2022's caps).
-const SUBUH_S: f64 = 240.0 + 600.0;
-const INDONESIAN_CALL_S: f64 = 210.0 + 300.0;
+/// Indonesia's calls and the recitation before them (SE 05/2022's caps): ten minutes before Subuh
+/// and Friday's Zuhur, five before the others.
+const SUBUH_CALL_S: f64 = 240.0;
+const SUBUH_RECITATION_S: f64 = 600.0;
+const INDONESIAN_CALL_S: f64 = 210.0;
+const RECITATION_S: f64 = 300.0;
 const FRIDAY_RECITATION_EXTRA_S: f64 = 300.0;
 /// A shouted voice's spectrum through a horn loudspeaker (63 Hz to 8 kHz, Z-weighted).
 const HORN_SPECTRUM: [f64; BANDS] = [-60.0, -53.0, -14.0, -4.0, 0.0, -4.0, -25.0, -56.0];
@@ -141,30 +144,31 @@ pub fn schedule(country_iso: u16, lat: f64, lon: f64) -> Option<EventSchedule> {
         }
         _ => {}
     }
-    let shares = call_periods(lat, lon, &time_zone(lat, lon), &method(code));
+    // Each call's sound: the recitation before the prayer time and the call after it.
+    let sounding: [(f64, f64); 5] = std::array::from_fn(|call| match (rule, call) {
+        (Rule::Indonesia, 0) => (SUBUH_RECITATION_S, SUBUH_RECITATION_S + SUBUH_CALL_S),
+        (Rule::Indonesia, 1) => {
+            let recitation = RECITATION_S + FRIDAY_RECITATION_EXTRA_S / 7.0;
+            (recitation, recitation + INDONESIAN_CALL_S)
+        }
+        (Rule::Indonesia, _) => (RECITATION_S, RECITATION_S + INDONESIAN_CALL_S),
+        (_, 0) => (0.0, FAJR_S),
+        _ => (0.0, CALL_S),
+    });
+    let periods = call_periods((lat, lon), &time_zone(lat, lon), &method(code), sounding);
     let lw = if rule == Rule::SaudiArabia {
         SAUDI_LW_DBA
     } else {
         CALL_LW_DBA
     };
-    for (call, periods) in shares.iter().enumerate() {
+    for (call, (events, seconds)) in periods.iter().enumerate() {
         if call == 0 && rule == Rule::NoDawn {
             continue;
         }
-        let seconds = match (rule, call) {
-            (Rule::Indonesia, 0) => SUBUH_S,
-            (Rule::Indonesia, 1) => INDONESIAN_CALL_S + FRIDAY_RECITATION_EXTRA_S / 7.0,
-            (Rule::Indonesia, _) => INDONESIAN_CALL_S,
-            (_, 0) => FAJR_S,
-            _ => CALL_S,
-        };
-        for (period, &share) in periods.iter().enumerate() {
-            if share > 0.0 {
-                plan.add(period, share, seconds, lw);
-                if matches!(rule, Rule::SaudiArabia | Rule::Egypt) {
-                    plan.add(period, share, IQAMA_S, lw);
-                }
-            }
+        plan.add_split(*events, *seconds, lw);
+        if matches!(rule, Rule::SaudiArabia | Rule::Egypt) {
+            // The iqama follows by the prayer's own delay: in the call's period.
+            plan.add_split(*events, events.map(|e| e * IQAMA_S), lw);
         }
     }
     if rule == Rule::Turkey {
@@ -283,7 +287,7 @@ mod tests {
         assert!((riyadh.events_per_day.iter().sum::<f64>() - 10.0).abs() < 1e-9);
         assert!((event_emission(&riyadh, HORN_SPECTRUM).2 - SAUDI_LW_DBA).abs() < 1e-9);
         let jakarta = schedule(iso(b"ID"), -6.2, 106.85).unwrap();
-        assert!((jakarta.seconds[NIGHT] - SUBUH_S).abs() < 1e-9);
+        assert!((jakarta.seconds[NIGHT] - (SUBUH_RECITATION_S + SUBUH_CALL_S)).abs() < 1e-9);
         let kigali = schedule(iso(b"RW"), -1.95, 30.06).unwrap();
         assert_eq!(kigali.events_per_day[NIGHT], 0.0);
         assert!(schedule(iso(b"CN"), 39.9, 116.4).is_none());

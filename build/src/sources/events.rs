@@ -31,6 +31,16 @@ impl EventSchedule {
         self.seconds[period] += events * seconds;
         self.energy[period] += events * seconds * 10f64.powf(lw_dba / 10.0);
     }
+
+    /// Events a day by the period they start in, sounding `seconds` a day by the period each
+    /// second falls in, at `lw_dba`.
+    pub fn add_split(&mut self, events: [f64; 3], seconds: [f64; 3], lw_dba: f64) {
+        for period in 0..3 {
+            self.events_per_day[period] += events[period];
+            self.seconds[period] += seconds[period];
+            self.energy[period] += seconds[period] * 10f64.powf(lw_dba / 10.0);
+        }
+    }
 }
 
 fn level(energy: f64) -> f64 {
