@@ -14,7 +14,7 @@ Main roads use the world vehicle split, with 1 to 2% motorcycles. This understat
 
 Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 72 % of a town street's traffic (WHO 2023); electric cars 4.4 % of cars, rolling noise only (IEA 2024).
 
-Unsigned roads: a primary road 50 km/h in towns, 60 outside, a motorway 120.
+Unsigned roads: a primary road 60 km/h in towns and outside, a motorway 120.
 
 ## Railways
 

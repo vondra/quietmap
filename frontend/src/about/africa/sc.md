@@ -10,7 +10,7 @@ Traffic volumes: no national counts. Motorways, trunk and primary roads use the 
 
 Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 0.9 % of a town street's traffic (WHO 2023).
 
-Unsigned roads: a primary road 40 km/h in towns, 50 outside.
+Unsigned roads: a primary road 40 km/h in towns, 65 outside.
 
 ## Railways
 

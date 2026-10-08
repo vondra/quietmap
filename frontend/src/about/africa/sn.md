@@ -10,7 +10,7 @@ Traffic volumes: no national counts. Motorways, trunk and primary roads use the 
 
 Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 3 % of a town street's traffic (the region's median).
 
-Unsigned roads: a primary road 50 km/h in towns, 90 outside (traffic drives 76 on a two-way one), a motorway 110.
+Unsigned roads: a primary road 80 km/h in towns, 90 outside (traffic drives 76 on a two-way one), a motorway 110.
 
 ## Railways
 

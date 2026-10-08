@@ -10,7 +10,7 @@ No traffic counts are loaded: the DNIT national count programme is served from h
 
 Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 7.7 % of a town street's traffic (WHO 2023); electric cars 0.3 % of cars, rolling noise only (IEA 2024); lorries and buses at most 90 km/h.
 
-Unsigned roads: a primary road 50 km/h in towns, 80 outside.
+Unsigned roads: a primary road 60 km/h in towns, 80 outside.
 
 ## Railways
 

@@ -12,7 +12,7 @@ Where buildings are mapped, residential, living, service and unclassified street
 
 Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 9.2 % of a town street's traffic (the region's median).
 
-Unsigned roads: a primary road 50 km/h in towns, 60 outside.
+Unsigned roads: a primary road 60 km/h in towns and outside.
 
 ## Railways
 

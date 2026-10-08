@@ -16,7 +16,7 @@ Minor collectors and local streets are not in HPMS and carry the trips their bui
 
 Vehicle mix: where not counted, FHWA's state mix by road group and area (table VM-4), motorcycles included; lorries and buses at most 105 km/h.
 
-Unsigned roads: a primary road 50 km/h in towns and outside.
+Unsigned roads: a primary road 64 km/h in towns, 89 outside (traffic drives 75 on a two-way one).
 
 ## Railways
 

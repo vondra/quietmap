@@ -23,7 +23,7 @@ Vehicle mix: where not counted, the medium and heavy vehicles that counted roads
 
 The South Pars routes run from Asaluyeh inland to Shiraz and along the coast towards Bushehr.
 
-Unsigned roads: a primary road 50 km/h in towns and outside.
+Unsigned roads: a primary road 60 km/h in towns, 90 outside (traffic drives 76 on a two-way one).
 
 ## Railways
 

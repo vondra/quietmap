@@ -12,7 +12,7 @@ Canada has no national traffic database, and the Ontario, British Columbia and A
 
 Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 0.6 % of a town street's traffic (WHO 2023); electric cars 2.4 % of cars, rolling noise only (IEA 2024); lorries and buses at most 105 km/h.
 
-Unsigned roads: a primary road 50 km/h in towns and outside.
+Unsigned roads: a primary road 50 km/h in towns, 90 outside (traffic drives 76 on a two-way one).
 
 ## Railways
 

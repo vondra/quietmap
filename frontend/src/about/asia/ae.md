@@ -14,7 +14,7 @@ Local streets: traffic is derived from the buildings served; motorcycles 1%, fro
 
 Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 0.5 % of a town street's traffic (WHO 2023); electric cars 2.3 % of cars, rolling noise only (IEA 2024).
 
-Unsigned roads: a primary road 50 km/h in towns, 100 outside (traffic drives 84 on a two-way one), a motorway 120.
+Unsigned roads: a primary road 80 km/h in towns, 100 outside (traffic drives 84 on a two-way one), a motorway 120.
 
 ## Railways
 

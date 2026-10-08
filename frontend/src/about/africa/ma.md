@@ -21,7 +21,7 @@ Vehicles per day, both directions. Slip roads take half the value of their road.
 
 Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 13 % of a town street's traffic (WHO 2023).
 
-Unsigned roads: a primary road 50 km/h in towns and outside.
+Unsigned roads: a primary road 60 km/h in towns and outside.
 
 ## Railways
 

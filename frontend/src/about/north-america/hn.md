@@ -12,7 +12,7 @@ Where buildings are mapped, residential, living, service and unclassified street
 
 Vehicle mix: where not counted, the medium and heavy vehicles that counted roads of the same class carry; motorcycles 34 % of a town street's traffic (WHO 2023).
 
-Unsigned roads: a primary road 50 km/h in towns and outside, a residential street 20.
+Unsigned roads: a primary road 80 km/h in towns and outside (traffic drives 68 on a two-way one), a residential street 20.
 
 ## Railways
 

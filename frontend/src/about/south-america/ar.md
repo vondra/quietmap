@@ -25,7 +25,7 @@ Vehicle mix: where not counted, the medium and heavy vehicles that counted roads
 
 Secondary and smaller roads use world defaults.
 
-Unsigned roads: a primary road 50 km/h in towns, 110 outside (traffic drives 93 on a two-way one), an expressway 120 (101 on a two-way one), a motorway 130.
+Unsigned roads: a primary road 60 km/h in towns, 110 outside (traffic drives 93 on a two-way one), an expressway 120 (101 on a two-way one), a motorway 130.
 
 ## Railways
 

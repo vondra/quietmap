@@ -471,7 +471,10 @@ fn legal_speed(class: usize, country_iso: u16, built_up: u8) -> u8 {
 }
 
 /// The speed of an untagged road: the country's legal limit ([`legal_speed`]), else the class
-/// default, or the country's median signed speed of the class where it is lower.
+/// default, or the country's median signed speed of the class where it is lower. A main class whose
+/// limit the country's table lacks (the United States, Canada, Brazil's towns) takes the median
+/// sign either way: half of the United States' rural primary rows are unsigned, driven at the
+/// class's 50 km/h where the signed ones' median is 89 (55 mph).
 pub(crate) fn default_speed(class: usize, country_iso: u16, built_up: u8) -> (f64, &'static str) {
     let value = legal_speed(class, country_iso, built_up);
     let (speed, source) = if value > 0 {
@@ -480,7 +483,9 @@ pub(crate) fn default_speed(class: usize, country_iso: u16, built_up: u8) -> (f6
         (CLASS_DEFAULT_SPEED_KMH[class], "default_by_class")
     };
     match tagged_speed_kmh(class, country_iso, built_up) {
-        Some(tagged) if tagged < speed => (tagged, "tagged_median"),
+        Some(tagged) if tagged < speed || (value == 0 && matches!(class, 2 | 3 | 4 | 9)) => {
+            (tagged, "tagged_median")
+        }
         _ => (speed, source),
     }
 }
@@ -1060,6 +1065,15 @@ mod tests {
             "local streets keep the class default"
         );
         assert_eq!(default_speed(0, 0, 0), (100.0, "default_by_class"));
+        // Without a legal limit a main class takes its signs: the United States' rural primary
+        // roads 89 km/h (55 mph), Brazil's urban ones 60; its local streets keep the class default.
+        let us = u16::from_le_bytes(*b"US");
+        assert_eq!(default_speed(2, us, 1), (89.0, "tagged_median"));
+        assert_eq!(default_speed(9, us, 1), (80.0, "tagged_median"));
+        assert_eq!(default_speed(5, us, 2), (30.0, "default_by_class"));
+        let br = u16::from_le_bytes(*b"BR");
+        assert_eq!(default_speed(2, br, 2), (60.0, "tagged_median"));
+        assert_eq!(default_speed(2, br, 1), (80.0, "tagged_median"));
     }
 
     /// A road's shares for the popup weigh each category's by its vehicles: a German Landesstrasse
