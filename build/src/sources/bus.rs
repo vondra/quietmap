@@ -20,12 +20,13 @@ const MOST_BUSES: f64 = 3_000.0;
 pub struct BusRoutes {
     ways: Vec<i64>,
     /// Directions served by bus, trolleybus and coach routes without an interval, and the
-    /// departures a day of the routes with one.
-    service: Vec<([u16; 3], f32)>,
+    /// departures a day of the bus and trolleybus routes and of the coach routes with one.
+    service: Vec<([u16; 3], [f32; 2])>,
 }
 
 impl BusRoutes {
-    /// Reads `bus-ways.txt`: `way bus trolleybus coach departures` per line, sorted by way.
+    /// Reads `bus-ways.txt`: `way bus trolleybus coach bus_departures coach_departures` per line,
+    /// sorted by way.
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path)
             .map_err(|error| format!("{}: {error}", path.display()))?;
@@ -37,8 +38,8 @@ impl BusRoutes {
         let mut service = Vec::new();
         for (number, line) in text.lines().enumerate() {
             let fields: Vec<&str> = line.split_ascii_whitespace().collect();
-            let [way, bus, trolleybus, coach, departures] = fields[..] else {
-                return Err(format!("line {}: expected five fields", number + 1));
+            let [way, bus, trolleybus, coach, departures, coach_departures] = fields[..] else {
+                return Err(format!("line {}: expected six fields", number + 1));
             };
             let bad = |error: &dyn std::fmt::Display| format!("line {}: {error}", number + 1);
             let way: i64 = way.parse().map_err(|e| bad(&e))?;
@@ -52,7 +53,10 @@ impl BusRoutes {
                     trolleybus.parse().map_err(|e| bad(&e))?,
                     coach.parse().map_err(|e| bad(&e))?,
                 ],
-                departures.parse().map_err(|e| bad(&e))?,
+                [
+                    departures.parse().map_err(|e| bad(&e))?,
+                    coach_departures.parse().map_err(|e| bad(&e))?,
+                ],
             ));
         }
         Ok(BusRoutes { ways, service })
@@ -64,12 +68,15 @@ impl BusRoutes {
         let Ok(index) = self.ways.binary_search(&way) else {
             return (0.0, 0.0);
         };
-        let ([bus, trolleybus, coach], departures) = self.service[index];
+        let ([bus, trolleybus, coach], [departures, coach_departures]) = self.service[index];
         let listed = f64::from(bus) * BUS_DEPARTURES * service
             + f64::from(trolleybus) * TROLLEYBUS_DEPARTURES
             + f64::from(departures);
         let buses = MOST_BUSES * (1.0 - (-listed / MOST_BUSES).exp());
-        (buses, f64::from(coach) * COACH_DEPARTURES)
+        (
+            buses,
+            f64::from(coach) * COACH_DEPARTURES + f64::from(coach_departures),
+        )
     }
 }
 
@@ -79,7 +86,8 @@ mod tests {
 
     #[test]
     fn a_street_carries_its_routes_departures() {
-        let routes = BusRoutes::parse("7 6 2 0 0.0\n9 0 0 1 108.0\n").unwrap();
+        let routes =
+            BusRoutes::parse("7 6 2 0 0.0 0.0\n9 0 0 1 108.0 0.0\n10 0 0 0 0.0 18.0\n").unwrap();
         // Three city lines both ways and a trolleybus line: 6 x 60 + 2 x 80, saturating.
         let saturated = |listed: f64| MOST_BUSES * (1.0 - (-listed / MOST_BUSES).exp());
         assert_eq!(routes.daily(7, 1.0), (saturated(520.0), 0.0));
@@ -87,8 +95,10 @@ mod tests {
         assert_eq!(routes.daily(7, 0.2), (saturated(232.0), 0.0));
         assert_eq!(routes.daily(9, 1.0), (saturated(108.0), 4.0));
         assert_eq!(routes.daily(8, 1.0), (0.0, 0.0));
+        // A coach route every hour stays coaches, not buses.
+        assert_eq!(routes.daily(10, 1.0), (0.0, 18.0));
         // 400 route directions: a corridor's 3,000, not 24,000.
         assert!(saturated(24_000.0) > 2_990.0 && saturated(24_000.0) <= 3_000.0);
-        assert!(BusRoutes::parse("9 1 0 0 0\n7 1 0 0 0\n").is_err());
+        assert!(BusRoutes::parse("9 1 0 0 0 0\n7 1 0 0 0 0\n").is_err());
     }
 }
