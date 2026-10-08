@@ -12,7 +12,7 @@ use super::cells::{
     AUDIBILITY_FLOOR_DBA, Site, Z30Ring, push_site_points, resolve_area_m2, ring_cell, site_points,
 };
 use super::facilities::{Tags, parse_tags};
-use super::venues::Venues;
+use super::venues::{Seating, Venues};
 use super::{Converted, group_key};
 use crate::dev4::{Dev4, Square, column, positive, require_stamp, text, z30_corner_degrees};
 use crate::traffic::{GRID_SIDE, grid_cell, street_parking_shares};
@@ -100,16 +100,20 @@ fn class_label(class: u8) -> &'static str {
     }
 }
 
-/// A mapped terrace this near a bar, pub, restaurant or café is its terrace (m; `fetch/venues.py`
+/// A mapped terrace this near a venue that seats guests outside is its terrace (m; `fetch/venues.py`
 /// seats such a venue outside when untagged).
 const TERRACE_OF_VENUE_M: f64 = 30.0;
 
 /// Whether a mapped terrace at `place` belongs to a venue, whose guests the people converter seats
-/// with its hours (the review of 2026-10-05, Codex B 11: both emitted, +1.1 dB).
+/// with its hours (the review of 2026-10-05, Codex B 11: both emitted, +1.1 dB); beside a venue
+/// tagged with no outdoor seating it stays its own crowd.
 fn terrace_of_a_venue(venues: &Venues, square: Square, (lat, lon): (f64, f64)) -> bool {
     let metres_per_degree = 111_195.0;
     square.with_neighbours().into_iter().any(|near| {
         venues.in_square(near.x, near.y).iter().any(|venue| {
+            if venue.seating == Seating::No {
+                return false;
+            }
             let dy = (venue.lat - lat) * metres_per_degree;
             let dx = (venue.lon - lon) * metres_per_degree * lat.to_radians().cos();
             dx.hypot(dy) <= TERRACE_OF_VENUE_M
@@ -359,14 +363,21 @@ mod tests {
     }
 
     /// A mapped terrace 10 m from a cafe is the cafe's (its guests are the people converter's); one
-    /// 100 m away stands alone.
+    /// 100 m away, or beside a cafe tagged with no outdoor seating, stands alone.
     #[test]
     fn a_terrace_beside_a_venue_is_the_venues() {
-        let venues = Venues::parse("50\t14\tcafe\tyes\t0\t\t\n").unwrap();
+        let venues =
+            Venues::parse("50\t14\tcafe\tyes\t0\t\t\n50\t14.01\tcafe\tno\t0\t\t\n").unwrap();
         let (gx, gy) = crate::dev4::degrees_to_z30(50.0, 14.0);
         let square = Square::of_z30(gx, gy);
         let north = |metres: f64| (50.0 + metres / 111_195.0, 14.0);
         assert!(terrace_of_a_venue(&venues, square, north(10.0)));
         assert!(!terrace_of_a_venue(&venues, square, north(100.0)));
+        // Beside a cafe that seats nobody outside the terrace is its own crowd.
+        assert!(!terrace_of_a_venue(
+            &venues,
+            square,
+            (50.0 + 10.0 / 111_195.0, 14.01)
+        ));
     }
 }

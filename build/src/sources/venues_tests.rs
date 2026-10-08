@@ -71,7 +71,8 @@ fn places_without_hours_keep_their_countrys_customs() {
 }
 
 /// A bar mapped as a node and as its 200 m2 outline 3 m away is one place, the outline's with the
-/// node's terrace, hours and name; a bar 40 m away and a restaurant on the same outline stay apart.
+/// node's terrace, hours and name; a bar 40 m away, a restaurant on the same outline and a bar of
+/// another name on a named outline stay apart.
 #[test]
 fn a_node_on_its_outline_is_one_place() {
     let north = |metres: f64| 50.0 + metres / 111_195.0;
@@ -79,20 +80,28 @@ fn a_node_on_its_outline_is_one_place() {
         "50\t14\tbar\tunknown\t200\t\t\n\
          {}\t14\tbar\tyes\t0\tMo-Su 18:00-02:00\tU Tygra\n\
          {}\t14\tbar\tno\t0\t\tNext Door\n\
-         {}\t14\trestaurant\tunknown\t0\t\t\n",
+         {}\t14\trestaurant\tunknown\t0\t\t\n\
+         {}\t14\tbar\tunknown\t100\t\tU Zlateho Tygra\n\
+         {}\t14\tbar\tunknown\t0\t\tVedle\n",
         north(3.0),
         north(40.0),
         north(3.0),
+        north(1_000.0),
+        north(1_004.0),
     ))
     .unwrap();
     let (gx, gy) = degrees_to_z30(50.0, 14.0);
     let square = crate::dev4::Square::of_z30(gx, gy);
     let places = venues.in_square(square.x, square.y);
-    assert_eq!(places.len(), 3, "{places:?}");
+    assert_eq!(places.len(), 5, "{places:?}");
     let bar = places.iter().find(|p| p.area_m2 == 200.0).unwrap();
     assert_eq!((bar.lat, bar.seating), (50.0, Seating::Yes));
     assert_eq!(bar.name, "U Tygra");
     assert!(bar.hours.is_some());
     assert!(places.iter().any(|p| p.name == "Next Door"));
     assert!(places.iter().any(|p| p.kind == VenueKind::Restaurant));
+    assert!(
+        places.iter().any(|p| p.name == "Vedle"),
+        "another name is another place"
+    );
 }

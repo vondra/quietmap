@@ -109,9 +109,9 @@ impl Venues {
 const ON_OUTLINE_M: f64 = 5.0;
 
 /// One place mapped twice, as a node and as its outline (Grok, review of 2026-10-05: two crowds,
-/// +3 dB): a node of the same kind within the outline's radius (that of a circle of its area) and
-/// [`ON_OUTLINE_M`] of its centre joins the nearest such outline, which takes from the node the
-/// terrace, hours and name it lacks.
+/// +3 dB): a node of the same kind and no other name within the outline's radius (that of a circle
+/// of its area) and [`ON_OUTLINE_M`] of its centre joins the nearest such outline, which takes from
+/// the node the terrace, hours and name it lacks. Two names are two places (a café next door).
 fn merge_nodes_into_outlines(sites: &mut Vec<VenueSite>) {
     let mut merged = vec![false; sites.len()];
     for node in 0..sites.len() {
@@ -119,10 +119,14 @@ fn merge_nodes_into_outlines(sites: &mut Vec<VenueSite>) {
             continue;
         }
         let (lat, lon, kind) = (sites[node].lat, sites[node].lon, sites[node].kind);
+        let name = sites[node].name.to_lowercase();
         let metres_per_degree = 111_195.0;
         let nearest = (0..sites.len())
-            .filter(|&outline| outline != node && !merged[outline] && sites[outline].area_m2 > 0.0)
-            .filter(|&outline| sites[outline].kind == kind)
+            .filter(|&outline| sites[outline].area_m2 > 0.0 && sites[outline].kind == kind)
+            .filter(|&outline| {
+                let other = sites[outline].name.to_lowercase();
+                name.is_empty() || other.is_empty() || name == other
+            })
             .map(|outline| {
                 let site = &sites[outline];
                 let (dy, dx) = (
