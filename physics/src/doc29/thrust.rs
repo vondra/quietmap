@@ -147,9 +147,10 @@ pub struct SegmentFlight {
     pub pressure_altitude_m: f64,
     /// Sine of the climb angle over the segment's 3-D length.
     pub climb_sine: f64,
-    /// Along-track acceleration (m/s^2) from the flight's neighbouring segments (0 unknown):
-    /// the energy an accelerating climb puts into speed, which the climb angle alone does not show.
-    pub acceleration_ms2: f64,
+    /// Along-track acceleration (m/s^2) from the flight's neighbouring airborne segments, `None`
+    /// unknown: the energy an accelerating climb puts into speed, which the climb angle alone does
+    /// not show.
+    pub acceleration_ms2: Option<f64>,
     /// Height above the field (m): for a departure the altitude minus the terrain under its own
     /// takeoff roll, else (and when the roll was not observed) the height above the local ground.
     pub height_above_field_m: f64,
@@ -210,29 +211,38 @@ impl ThrustModel {
 /// Standard gravity (m/s^2).
 const GRAVITY_MS2: f64 = 9.806_65;
 
-/// Eqs. B-12 and B-17 inverted (no bank): corrected thrust per engine holding the climb angle and
-/// the acceleration, N Fn/delta = (W/delta)(R + G + a/g); `k` 1.01 at Vc <= 200 kt, else 0.95
-/// (headwind and the acceleration of a constant-CAS climb) on the climb term. Without a/g an
-/// accelerating climb after cutback, which flies MaxClimb, read as a shallow climb at some 30 %
-/// less thrust, 3-4 dB of the departure NPD.
+/// The climb and acceleration term of the force balance: with an observed acceleration G + a/g
+/// (Eq. B-20), else G / K (Eqs. B-12, B-25: K stands for the acceleration a climb at constant
+/// calibrated airspeed implies). Without a/g an accelerating climb after cutback, which flies
+/// MaxClimb, read as a shallow climb at some 30 % less thrust, 3-4 dB of the departure NPD.
+fn climb_term(climb_sine: f64, acceleration_ms2: Option<f64>, k: f64) -> f64 {
+    match acceleration_ms2 {
+        Some(acceleration) => climb_sine + acceleration / GRAVITY_MS2,
+        None => climb_sine / k,
+    }
+}
+
+/// Eqs. B-12, B-17 and B-20 inverted (no bank): corrected thrust per engine holding the climb
+/// angle and the acceleration, N Fn/delta = (W/delta)(R + the climb term); `k` 1.01 at Vc <= 200
+/// kt, else 0.95.
 fn force_balance_thrust_lb(
     model: &ThrustModel,
     climb_sine: f64,
-    acceleration_ms2: f64,
+    acceleration_ms2: Option<f64>,
     k: f64,
     delta: f64,
 ) -> f64 {
-    (model.weight_lb / delta) * (climb_sine / k + model.drag_ratio + acceleration_ms2 / GRAVITY_MS2)
+    (model.weight_lb / delta) * (model.drag_ratio + climb_term(climb_sine, acceleration_ms2, k))
         / f64::from(model.engines)
 }
 
 /// The power bracket of a segment of noise class `class`. Pinned classes read row 0; ground
 /// rolls fly their rating (takeoff or idle); a departure below the cutback height above its field
 /// flies MaxTakeoff; everything else holds its climb angle by force balance within [Idle,
-/// MaxClimb]. `None` outside the rating model's domain (dev4's thrust-domain guard): the Appendix
-/// B polynomials fit the normal envelope, and an ADS-B outlier (a B789 record at FL510 and 525 kt)
-/// inverts the Idle/MaxClimb bounds, so the segment is rejected instead of clamped into crossed
-/// bounds.
+/// MaxClimb]. Where those two fits cross, both are outside the envelope they were fitted on (the
+/// A380's idle fit passes its climb fit at 19,600 ft at 250 kt, the E170's climb fit is negative
+/// at FL290), and the force balance stands alone: dev4 dropped such segments, a quiet place's
+/// cruise traffic. `None` for a non-finite thrust; impossible observations are Stage 1's to drop.
 pub fn power_bracket(class: usize, flight: &SegmentFlight) -> Option<PowerBracket> {
     let model = &THRUST[class];
     if !model.has_thrust {
@@ -248,6 +258,14 @@ pub fn power_bracket(class: usize, flight: &SegmentFlight) -> Option<PowerBracke
     let vc_kt = flight.speed_kt * isa_density_ratio(h_ft).sqrt();
     let temperature_c = isa_temperature_c(h_ft);
     let rated = |rating| model.rated_thrust_lb(rating, vc_kt, h_ft, temperature_c);
+    let within_ratings = |balance: f64| {
+        let (idle, climb) = (rated(Rating::Idle), rated(Rating::Climb));
+        if idle.is_finite() && climb.is_finite() && idle <= climb {
+            balance.clamp(idle, climb)
+        } else {
+            balance
+        }
+    };
     let thrust_lb = if flight.on_ground {
         rated(if flight.departure {
             Rating::Takeoff
@@ -265,26 +283,26 @@ pub fn power_bracket(class: usize, flight: &SegmentFlight) -> Option<PowerBracke
         // the clean ratio of the climb an approach read idle all the way down (1-4 dB of the
         // approach NPD of the A320neo family, 10 dB of a business jet's).
         let approach = &APPROACH[class];
-        let (idle, climb) = (rated(Rating::Idle), rated(Rating::Climb));
-        if !(idle.is_finite() && climb.is_finite() && idle <= climb) {
-            return None;
-        }
-        ((approach.landing_weight_lb / delta)
-            * (approach.drag_ratio
-                + flight.climb_sine / APPROACH_K
-                + flight.acceleration_ms2 / GRAVITY_MS2)
-            / f64::from(model.engines))
-        .clamp(idle, climb)
+        within_ratings(
+            (approach.landing_weight_lb / delta)
+                * (approach.drag_ratio
+                    + climb_term(flight.climb_sine, flight.acceleration_ms2, APPROACH_K))
+                / f64::from(model.engines),
+        )
     } else {
         let k = if vc_kt <= 200.0 { 1.01 } else { 0.95 };
-        let (idle, climb) = (rated(Rating::Idle), rated(Rating::Climb));
-        if !(idle.is_finite() && climb.is_finite() && idle <= climb) {
-            return None;
-        }
-        force_balance_thrust_lb(model, flight.climb_sine, flight.acceleration_ms2, k, delta)
-            .clamp(idle, climb)
+        within_ratings(force_balance_thrust_lb(
+            model,
+            flight.climb_sine,
+            flight.acceleration_ms2,
+            k,
+            delta,
+        ))
     };
-    Some(bracket_power(powers, rows, thrust_lb))
+    // A NaN fails every comparison of the bracket and would read the loudest row.
+    thrust_lb
+        .is_finite()
+        .then(|| bracket_power(powers, rows, thrust_lb))
 }
 
 /// Eq. 4-3 bracket of corrected thrust `thrust_lb` over the first `rows` tabulated `powers`;

@@ -1,5 +1,5 @@
-//! One aircraft-day trace to its flights (dev4 `trace_to_flight`): towers, gliders and balloons
-//! dropped, ground vehicles kept apart, sane points only, one flight per rotation with its own
+//! One aircraft-day trace to its flights (dev4 `trace_to_flight`): towers, obstacles, gliders and
+//! balloons dropped, ground vehicles (by designator or emitter category) kept apart, sane points only, one flight per rotation with its own
 //! identity and callsign. A rotation ends at a surface rest of 5 minutes or more; the next starts at
 //! its takeoff roll (PLAN-z13 fix: dev4 started it at the first airborne sample, so the roll and
 //! the lift-off pair stayed behind and only 14 % of jet departures knew their field).
@@ -126,10 +126,16 @@ pub fn trace_to_flights(
     secondary_source: u8,
 ) -> Vec<Flight> {
     let designator = trace.aircraft_type.trim().to_string();
-    if designator.eq_ignore_ascii_case("TWR") || is_negligible_noise_typecode(&designator) {
+    // Obstacles (emitter categories C3-C5) make no noise; surface vehicles (C1 emergency, C2
+    // service) are ground vehicles whatever their designator.
+    if designator.eq_ignore_ascii_case("TWR")
+        || is_negligible_noise_typecode(&designator)
+        || matches!(trace.emitter_category, 0xC3..=0xC5)
+    {
         return Vec::new();
     }
-    let ground_vehicle = designator.eq_ignore_ascii_case("GND");
+    let ground_vehicle =
+        designator.eq_ignore_ascii_case("GND") || matches!(trace.emitter_category, 0xC1 | 0xC2);
     trace.retain_points(|_, point| point_is_sane(point));
     if trace.points.len() < 2 {
         return Vec::new();

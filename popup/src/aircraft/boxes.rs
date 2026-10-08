@@ -141,19 +141,13 @@ pub fn tile_energy(
             let energy: [f64; PERIODS] = std::array::from_fn(|period| {
                 energy(sel.sel_db[period] + impedance_db) / (PERIOD_HOURS[period] * 3_600.0)
             });
-            // The box's flights of a year split over the periods as its SEL energy is, each
-            // period's rate over its hours; lambda is that rate times the slant over the speed.
-            let period_sel: [f64; PERIODS] =
-                std::array::from_fn(|period| physics::bands::energy(sel.sel_db[period]));
-            let total_sel: f64 = period_sel.iter().sum();
+            // Each period's flights a day over its hours; lambda is that rate times the slant over
+            // the speed.
             let slant = sel.closest.on_line_m[0]
                 .hypot(sel.closest.on_line_m[1])
                 .hypot(sel.closest.on_line_m[2]);
             let lambda: [f64; PERIODS] = std::array::from_fn(|period| {
-                if total_sel <= 0.0 {
-                    return 0.0;
-                }
-                let flights = f64::from(record.flights) / 365.25 * period_sel[period] / total_sel;
+                let flights = f64::from(record.flights[period]) / 365.25;
                 flights / (PERIOD_HOURS[period] * 3_600.0) * slant / FLIGHT_SPEED_M_S
             });
             let bound = (record.piece_count > 0).then(|| {
@@ -162,15 +156,21 @@ pub fn tile_energy(
                     + INSTALLATION_CORRECTION_MAX_DB
                     + impedance_db
             });
-            // The installation shares are the box's over the whole day (the tiles keep no share per
-            // period), so a box whose jets fly by day and propellers by night splits its Lden as the
-            // day's mix.
-            let [wing, fuselage, propeller] = sel.installation_fractions;
-            let shares = match record.group {
-                Group::FixedWing => [wing, fuselage, propeller, 0.0],
-                Group::Helicopter => [0.0, 0.0, 0.0, 1.0],
-            };
-            let kinds = shares.map(|share| share * lden_energy(&energy));
+            // Each period's Lden energy by that period's installation mix.
+            let kinds = std::array::from_fn(|kind| {
+                (0..PERIODS)
+                    .map(|period| {
+                        let mut alone = [0.0; PERIODS];
+                        alone[period] = energy[period];
+                        let share = match (record.group, kind) {
+                            (Group::FixedWing, 0..=2) => sel.installation_fractions[period][kind],
+                            (Group::Helicopter, 3) => 1.0,
+                            _ => 0.0,
+                        };
+                        share * lden_energy(&alone)
+                    })
+                    .sum()
+            });
             BoxAnswer {
                 energy,
                 lambda,

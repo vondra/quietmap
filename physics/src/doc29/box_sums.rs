@@ -36,8 +36,8 @@ pub struct BoxSums {
     /// The squared gradients on the doubled-angle terms (cos^2, sin^2, sin cos of each piece's
     /// direction): the spread of the gradients along the axis, once it is known.
     weighted_squared_gradient: [f64; 3],
-    /// Per share slant, the pieces' energy (all periods) by installation.
-    installation_energy: [[f64; 3]; 2],
+    /// Per period and share slant, the pieces' energy by installation.
+    installation_energy: [[[f64; 3]; 2]; PERIODS],
     pieces: u64,
 }
 
@@ -55,8 +55,9 @@ pub struct BoxValues {
     pub gradient_spread: f64,
     /// Per period, the energy-weighted mean horizontal length of the pieces.
     pub piece_length_m: [f64; PERIODS],
-    /// Energy shares of the installations at each of [`INSTALLATION_SHARE_SLANTS_M`].
-    pub installation_shares: [[f64; 3]; 2],
+    /// Per period, the energy shares of the installations at each of
+    /// [`INSTALLATION_SHARE_SLANTS_M`] (a period without pieces the whole day's).
+    pub installation_shares: [[[f64; 3]; 2]; PERIODS],
 }
 
 impl BoxSums {
@@ -115,8 +116,11 @@ impl BoxSums {
             Installation::Fuselage => 1,
             Installation::Propeller => 2,
         };
-        self.installation_energy[0][slot] += total_weight * unweighted[GEOMETRY_WEIGHT_DISTANCE];
-        self.installation_energy[1][slot] += total_weight * tail;
+        for (period, weight) in period_weights.iter().enumerate() {
+            self.installation_energy[period][0][slot] +=
+                weight * unweighted[GEOMETRY_WEIGHT_DISTANCE];
+            self.installation_energy[period][1][slot] += weight * tail;
+        }
         self.pieces += 1;
     }
 
@@ -159,11 +163,11 @@ impl BoxSums {
         for (sums, values) in self
             .installation_energy
             .iter_mut()
-            .zip(other.installation_energy)
+            .flatten()
+            .flatten()
+            .zip(other.installation_energy.iter().flatten().flatten())
         {
-            for (sum, value) in sums.iter_mut().zip(values) {
-                *sum += value;
-            }
+            *sums += values;
         }
         self.pieces += other.pieces;
     }
@@ -221,10 +225,23 @@ impl BoxSums {
                     }
                 })
             },
-            installation_shares: self.installation_energy.map(|energies| {
-                let total: f64 = energies.iter().sum();
-                energies.map(|energy| if total > 0.0 { energy / total } else { 0.0 })
-            }),
+            installation_shares: {
+                let shares = |energies: [f64; 3]| {
+                    let total: f64 = energies.iter().sum();
+                    (total > 0.0).then(|| energies.map(|energy| energy / total))
+                };
+                let day: [[f64; 3]; 2] = std::array::from_fn(|slant| {
+                    let all = std::array::from_fn(|k| {
+                        (0..PERIODS)
+                            .map(|period| self.installation_energy[period][slant][k])
+                            .sum()
+                    });
+                    shares(all).unwrap_or([0.0; 3])
+                });
+                self.installation_energy.map(|period| {
+                    std::array::from_fn(|slant| shares(period[slant]).unwrap_or(day[slant]))
+                })
+            },
         })
     }
 }

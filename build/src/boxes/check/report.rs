@@ -282,6 +282,7 @@ pub(super) fn report(
         exact_top,
         lists,
         diagnosis,
+        events: total.events,
     })
 }
 
@@ -377,7 +378,7 @@ fn diagnose(
             for (total, value) in entry.0.iter_mut().zip(energy) {
                 *total += value;
             }
-            entry.1.flights += record.flights;
+            entry.1.flights += record.flights.iter().sum::<u32>();
         }
     }
     let mut found: Vec<(f64, BoxDiagnosis)> = boxed

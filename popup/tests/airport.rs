@@ -35,7 +35,7 @@ fn departure_box() -> AircraftBox {
         speed_kt: 160.0,
         pressure_altitude_m: 600.0,
         climb_sine: 0.08,
-        acceleration_ms2: 0.0,
+        acceleration_ms2: None,
         height_above_field_m: 600.0,
     };
     let emission =
@@ -66,7 +66,7 @@ fn departure_box() -> AircraftBox {
         gradient: values.gradient,
         gradient_spread: values.gradient_spread,
         piece_length_m: values.piece_length_m,
-        flights: 1,
+        flights: [1, 0, 0],
         energy_db: values.levels_db,
         tail_energy_db: values.tail_levels_db,
         lg_scaled_distance: values.scaled_distance_m.map(f64::log10),

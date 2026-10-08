@@ -21,7 +21,11 @@
 //! into a scratch directory;
 //! `qm-build airport-traffic --prepared DIR --segments DIR --days D,.. [--increment-days D,..]
 //! --squares X:Y[,X:Y..] --out DIR` projects the window's ground legs onto the aeroway lines of
-//! the squares (and their neighbours) once, one traffic file per square.
+//! the squares (and their neighbours) once, one traffic file per square;
+//! `qm-build aircraft-shuffle --segments DIR --days D,.. [--increment-days D,..] --squares
+//! X:Y[,X:Y..] --out DIR` sorts the window's segments into squares, and `qm-build aircraft-boxes
+//! --shuffled DIR --days D,.. [--increment-days D,..] --squares .. --terrain DIR --weather FILE
+//! [--kind aircraft-far] --out DIR` boxes them, refusing a shuffle that is not exactly that window.
 //!
 //! Roads: `qm-build traffic --prepared DIR --squares X:Y[,X:Y..] --out DIR` routes the buildings'
 //! trip ends down the local streets and grids them, one file per square, for the sources.
@@ -151,6 +155,26 @@ fn box_rule(options: &Arguments) -> Result<boxes::BoxRule, String> {
             .map_err(|_| format!("bad --pieces {pieces}"))?;
     }
     Ok(rule)
+}
+
+/// An events table as JSON: per band its threshold, flights a day by period, mean height (m) and
+/// most frequent type; helicopters a day in the lowest band.
+fn events_json(events: &boxes::events::EventCounts) -> serde_json::Value {
+    let bands: Vec<serde_json::Value> = boxes::events::EVENT_BANDS_DB
+        .iter()
+        .enumerate()
+        .map(|(band, above_db)| {
+            serde_json::json!({
+                "above_db": above_db,
+                "per_day": events.per_day[band],
+                "height_m": events.mean_height_m(band),
+                "type": events
+                    .top_designator(band)
+                    .map(|designator| String::from_utf8_lossy(&designator).trim().to_string()),
+            })
+        })
+        .collect();
+    serde_json::json!({"bands": bands, "helicopters_per_day": events.helicopters})
 }
 
 /// The global weather table (`qm-build weather`): the yearly atmosphere the boxes are summed in.
@@ -283,7 +307,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         "aircraft-boxes" => {
             let rule = box_rule(&options)?;
             let shuffled = Path::new(options.get("shuffled")?);
-            let days = boxes::shuffle::shuffled_days(shuffled)?;
+            let days = boxes::shuffle::window_days(shuffled, &sampling_window(&options))?;
             let weather = read_weather(options.get("weather")?)?;
             eprintln!("aircraft boxes: {} days", days.len());
             // `--progress DIR`: a marker per square built, so that a rerun resumes.
@@ -380,6 +404,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             "exact_leq": report.aloft[0],
                             "boxed_leq": report.aloft[1],
                         },
+                        "exact_events": events_json(&report.events),
                         "exact_top": report
                             .exact_top
                             .iter()

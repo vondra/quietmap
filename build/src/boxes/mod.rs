@@ -5,6 +5,7 @@
 //! keeps its loudest pieces for the top-flights list.
 
 pub mod check;
+pub mod events;
 mod place;
 mod read;
 pub mod shuffle;
@@ -128,9 +129,9 @@ impl Boxes {
 pub struct BoxEntry {
     pub sums: BoxSums,
     pub ground_m: f64,
-    /// Flights per average day that crossed it, and the last flight seen (a flight's segments
-    /// arrive together within a day).
-    pub flights_per_day: f64,
+    /// Flights per average day that crossed it by the period of their first piece in it, and the
+    /// last flight seen (a flight's segments arrive together within a day).
+    pub flights_per_day: [f64; PERIODS],
     last_flight: u64,
     pub kept: Vec<KeptPiece>,
 }
@@ -318,7 +319,7 @@ fn add_day(
                 entry.ground_m = piece.ground_m;
                 if entry.last_flight != segment.flight_id {
                     entry.last_flight = segment.flight_id;
-                    entry.flights_per_day += segment_weight;
+                    entry.flights_per_day[usize::from(segment.period)] += segment_weight;
                 }
                 entry.keep(KeptPiece::new(segment, emission, piece), pieces);
             }
