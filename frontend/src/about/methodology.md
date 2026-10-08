@@ -8,9 +8,9 @@ nav: hidden
 
 Each source is assigned a sound power from observations or explicit assumptions. Sound
 is propagated to a receiver 4 m above ground over terrain and around buildings, and the
-contributions of all sources are summed. The result is Lden, the annual
-day-evening-night level, with the day, evening and night levels, the levels exceeded 5, 10,
-50 and 90 % of the time, and the loudness in sone. A click computes its point on the spot
+contributions of all sources are summed. The result is Nden, how loud the place sounds on
+average over the day in sone, and Lden, the annual day-evening-night level, with the day,
+evening and night levels and the levels exceeded 5, 10, 50 and 90 % of the time. A click computes its point on the spot
 from every source within 12 km, aircraft within 16 km. Layers are computed independently
 and can be toggled separately.
 
@@ -274,14 +274,18 @@ than a fifth do; flights gain nothing.
 
 ## Time and loudness
 
-The levels exceeded part of the time come from 2,000 moments of each period: one weather
-state for all sources, one hour of road traffic, each road, railway and flight path a
-random stream of passes at its own rate, bells and calls in their share of the period;
-industry, buildings and ships are steady.
+How the level spreads over each period is computed, not drawn: for every hour of road
+traffic and each of ten weather states (one for all sources at a time), each road, railway
+and flight path is a random stream of passes at its own rate, bells and calls sound in
+their share of the period, and industry, buildings and ships are steady; their sum's spread
+gives the levels exceeded 5, 10, 50 and 90 % of the time.
 
-Loudness in sone follows ISO 532-1 (Zwicker), each period's received spectrum set to its
-level exceeded 5 % of the time; the whole day's loudness weighs the evening 5 dB and the
-night 10 dB up, as Lden does.
+Nden, the headline, is the mean over the whole day of how loud every moment is: loudness in
+sone after ISO 532-1 (Zwicker), the period's received spectrum set to the moment's level, the
+evening counted 5 dB and the night 10 dB louder, as Lden counts them, and the periods
+weighed by their hours. A sound counts by how loud it is and how long it lasts: a car every
+few hours by a window adds little, a constant hum all of its loudness. Each source in the
+list shows its own Nden, as if it sounded alone.
 
 ## Standards
 

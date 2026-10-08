@@ -6,6 +6,7 @@ nav: hidden
 
 ## October 2026
 
+- **Nden.** The click panel leads with Nden, how loud the place sounds on average over the day, in sone (twice the number sounds twice as loud), with Lden under it. A sound counts by how loud it is and how long it lasts: a car every few hours by a hut adds little, a city's constant hum all of its loudness. Each source in the list shows how loud it is alone.
 - **Every click computed on the spot.** The click panel no longer reads a painted map: it computes its point from every source within 12 km (aircraft 16 km) with the EU method CNOSSOS-EU and ECAC Doc 29, and shows Lden, the day, evening and night levels, how often the level is exceeded and how loud it sounds.
 - **The data under every click.** A new Advanced group in the layer panel shows elevation, forest, hard ground, buildings by height and noise barriers, the vehicles a day on every road, the trains a day on every track, and every other source — wind turbines, church bells, terraces, car parks, airports.
 - **Forest.** Trees no longer reduce noise: CNOSSOS-EU has no term for foliage, and the ground under them counts as soft ground.
