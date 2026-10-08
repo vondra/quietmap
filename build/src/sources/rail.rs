@@ -261,18 +261,17 @@ pub fn convert(
                 )
             });
             let (name, reference) = (names.value(row), refs.value(row));
-            let round = |trains: f64| (trains * 10.0).round() / 10.0;
             let display = serde_json::json!([
                 name,
                 reference,
                 kind.name(),
                 usage_name(usage.value(row)),
-                round(passenger_trains[0]),
-                round(passenger_trains[1]),
-                round(passenger_trains[2]),
-                round(freight_trains[0]),
-                round(freight_trains[1]),
-                round(freight_trains[2]),
+                display_trains(passenger_trains[0]),
+                display_trains(passenger_trains[1]),
+                display_trains(passenger_trains[2]),
+                display_trains(freight_trains[0]),
+                display_trains(freight_trains[1]),
+                display_trains(freight_trains[2]),
                 passenger_status.value(row),
                 freight_status.value(row),
                 speed,
@@ -319,9 +318,28 @@ pub fn convert(
     Ok(emitting)
 }
 
+/// Trains a period as the display keeps them, to three significant digits: the popup's line
+/// statistics read them, so a line of 0.04 trains a period still runs (tenths read it as none).
+fn display_trains(trains: f64) -> f64 {
+    if trains <= 0.0 {
+        return 0.0;
+    }
+    let scale = 10f64.powi(2 - trains.log10().floor() as i32);
+    (trains * scale).round() / scale
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A line too rare for tenths keeps its trains in the display the time statistics read.
+    #[test]
+    fn rare_trains_keep_three_digits() {
+        assert_eq!(display_trains(0.0412), 0.0412);
+        assert_eq!(display_trains(12.345), 12.3);
+        assert_eq!(display_trains(123.4), 123.0);
+        assert_eq!(display_trains(0.0), 0.0);
+    }
 
     /// Guessed heavy rail counts take their country's factors; timetable rows, trams and
     /// countries without a factor keep theirs.
