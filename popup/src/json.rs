@@ -237,6 +237,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                     (ray.angle_rad * 1e6).round() / 1e6, lden(&ray.energy), terms])
             }).collect::<Vec<_>>(),
             "received": received,
+            "source_lden": lden(&piece.source_energy),
             "emission": emission,
             "crossings": piece.crossings.iter().map(|(distance_m, height_m, footprint)| {
                 json!([

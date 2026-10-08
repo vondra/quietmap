@@ -252,9 +252,8 @@ interface ListedPiece {
 interface SourceGroup {
   key: string
   label: string
-  /** The whole source's Lden; with `atLeast`, only its listed pieces'. */
+  /** The whole source's Lden. */
   lden: number
-  atLeast: boolean
   pieces: ListedPiece[]
 }
 
@@ -263,11 +262,8 @@ interface LayerGroup {
   sources: SourceGroup[]
 }
 
-const energySum = (levels: number[]) => 10 * Math.log10(levels.reduce((sum, level) => sum + 10 ** (level / 10), 0))
-
 /** The layers above 0 dB, loudest first, each with its sources and their pieces above 0 dB. */
-function groupPieces(pieces: PopupPiece[], layers: LayerLevels[], contributors: Contributor[]): LayerGroup[] {
-  const whole = new Map(contributors.map(c => [`${c.source_type}:${c.id}`, c.received_lden]))
+function groupPieces(pieces: PopupPiece[], layers: LayerLevels[]): LayerGroup[] {
   const loudest = Math.max(...pieces.map(piece => piece.received.lden ?? -Infinity))
   return layers
     .filter(layer => (layer.lden ?? 0) > 0)
@@ -281,17 +277,12 @@ function groupPieces(pieces: PopupPiece[], layers: LayerLevels[], contributors: 
         list.push({ piece, index, lden, color: pieceColor(lden - loudest) })
         groups.set(piece.id, list)
       })
-      const sources = [...groups.entries()].map(([id, list]) => {
-        const key = `${layer.source_type}:${id}`
-        const known = whole.get(key)
-        return {
-          key,
-          label: contributorLabel(asContributor(list[0].piece)),
-          lden: known ?? energySum(list.map(p => p.lden)),
-          atLeast: known == null,
-          pieces: list.sort((a, b) => b.lden - a.lden),
-        }
-      }).sort((a, b) => b.lden - a.lden)
+      const sources = [...groups.entries()].map(([id, list]) => ({
+        key: `${layer.source_type}:${id}`,
+        label: contributorLabel(asContributor(list[0].piece)),
+        lden: list[0].piece.source_lden ?? 0,
+        pieces: list.sort((a, b) => b.lden - a.lden),
+      })).sort((a, b) => b.lden - a.lden)
       return { layer, sources }
     })
 }
@@ -355,14 +346,13 @@ export const SEGMENTS_EXPLAINED = 'Every source within reach is cut into pieces.
   + 'ground. The level is the energy sum of all pieces; the loudest\n'
   + 'are listed and drawn on the map.'
 
-export function SegmentsSection({ lat, lng, building, reflectionDb, layers, contributors, onFan }: {
+export function SegmentsSection({ lat, lng, building, reflectionDb, layers, onFan }: {
   lat: number
   lng: number
   building: BuildingAnswer | null
   reflectionDb: number
-  /** The click's layers and sources, for their whole levels. */
+  /** The click's layers. */
   layers: LayerLevels[]
-  contributors: Contributor[]
   /** Draws the listed pieces and their rays on the map; null clears them. */
   onFan?: (fan: SegmentFan | null) => void
 }) {
@@ -385,8 +375,8 @@ export function SegmentsSection({ lat, lng, building, reflectionDb, layers, cont
     return () => controller.abort()
   }, [lat, lng])
   const grouped = useMemo(
-    () => (pieces ? groupPieces(pieces, layers, contributors) : []),
-    [pieces, layers, contributors],
+    () => (pieces ? groupPieces(pieces, layers) : []),
+    [pieces, layers],
   )
   const openKeys = open ?? new Set(grouped.flatMap(({ sources }) => sources.slice(0, 1).map(s => s.key)))
   const receiver: [number, number] = building?.facade?.receiver ?? [lat, lng]
@@ -466,7 +456,7 @@ export function SegmentsSection({ lat, lng, building, reflectionDb, layers, cont
                     >
                       <span className="col-span-3 truncate text-foreground">{isOpen ? '▾' : '▸'} {source.label}</span>
                       <span className="text-right tabular-nums text-foreground">
-                        {source.atLeast ? '≥' : ''}{source.lden.toFixed(1)}
+                        {source.lden.toFixed(1)}
                       </span>
                     </button>
                     {isOpen && source.pieces.map(listed => (

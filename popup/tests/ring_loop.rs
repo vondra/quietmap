@@ -159,6 +159,46 @@ fn the_fast_answer_is_within_a_tenth_of_a_decibel_of_the_exact_one() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// A listed piece carries its whole source's energy, not only the listed pieces' (the detailed
+/// calculation showed a source cut from the list at "at least" the sum of its listed pieces).
+#[test]
+fn a_listed_piece_carries_its_whole_source() {
+    let root = release_root("listed");
+    write_roads(&root, &[30.0, 60.0, 90.0, 120.0]);
+    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    let release = Release::open(&root, "2026").unwrap();
+    let (lat, lon) = TILE.centre().to_degrees();
+    let mut last = None;
+    answer(
+        &release,
+        lat,
+        lon,
+        &Options {
+            exact: true,
+            pieces: 2,
+        },
+        &mut |update| {
+            let road = update
+                .layers
+                .iter()
+                .find(|layer| layer.layer == Layer::Road);
+            last = Some((road.unwrap().energy, update.pieces.clone()));
+            Ok(())
+        },
+    )
+    .unwrap();
+    let (road, pieces) = last.unwrap();
+    assert_eq!(pieces.len(), 2);
+    for piece in &pieces {
+        assert_eq!(
+            piece.source_energy, road,
+            "one group: the source is the layer"
+        );
+        assert!(piece.energy[0] < road[0]);
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn a_click_inside_a_building_answers_at_the_facade_facing_the_road() {
     let root = release_root("building");

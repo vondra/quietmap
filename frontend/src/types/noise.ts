@@ -183,6 +183,8 @@ export interface PopupPiece {
   /** A-weighted emission (per metre of a line). */
   emission: PeriodLevels
   received: PeriodLevels
+  /** Its whole source's Lden: every piece of it, listed or not. */
+  source_lden: number | null
   metadata: ContributorMetadata | null
   /** Buildings and walls the ray crosses: distance from the receiver (m), height (m), id. */
   crossings: [number, number, string][]

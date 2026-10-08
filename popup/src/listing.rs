@@ -16,6 +16,9 @@ pub const PROFILE_POINTS: usize = 48;
 pub struct EvaluatedPiece {
     pub candidate: Candidate,
     pub energy: [f64; PERIODS],
+    /// Its whole source's received energy per period (its contributor group's, every piece of
+    /// it), filled when listed.
+    pub source_energy: [f64; PERIODS],
     /// A-weighted emission per period (per metre for lines), linear.
     pub emission: [f64; PERIODS],
     /// Buildings and walls crossed by the ray from the piece's closest point: distance from the
@@ -75,6 +78,7 @@ impl EvaluatedPiece {
         EvaluatedPiece {
             candidate: candidate.clone(),
             energy,
+            source_energy: [0.0; PERIODS],
             emission: attributes[candidate.attribute]
                 .energy
                 .map(|bands| bands.iter().sum()),
@@ -113,6 +117,7 @@ pub fn list_pieces(
             .sort_by(|a, b| lden_energy(&b.energy).total_cmp(&lden_energy(&a.energy)));
         for piece in selection.pieces.iter().take(count) {
             let mut piece = piece.clone();
+            piece.source_energy = selection.contributors[&piece.candidate.group_key].energy;
             let source = &attributes[piece.candidate.attribute];
             source_rays(
                 receiver,

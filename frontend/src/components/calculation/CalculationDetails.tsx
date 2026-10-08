@@ -104,7 +104,6 @@ export default function CalculationDetails({ data, onFan }: {
           building={data.building}
           reflectionDb={data.reflection_db ?? 0}
           layers={data.sources}
-          contributors={data.top_contributors}
           onFan={onFan}
         />
       </Section>

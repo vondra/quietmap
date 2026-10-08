@@ -70,6 +70,7 @@ export function computedPiece(contributor: Contributor, lden: number, distance_m
     distance_m,
     emission: { ld: 80, le: 78, ln: 72, lden: 82 },
     received: { ld: lden - 2, le: lden - 3, ln: lden - 8, lden },
+    source_lden: contributor.received_lden,
     metadata: contributor.metadata,
     crossings: [],
     // Four rays along the piece summing to its Lden, the southernmost behind a building.
