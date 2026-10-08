@@ -19,7 +19,7 @@ use crate::output::write_tile;
 use physics::bands::PERIODS;
 use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::doc29::corrections::INSTALLATION_CORRECTION_MAX_DB;
-use physics::doc29::segment::{closest_points, lmax_reach_m, segment_lmax_db};
+use physics::doc29::segment::{SegmentEmission, closest_points, lmax_reach_m, segment_lmax_db};
 use physics::weather::WeatherTable;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -206,7 +206,13 @@ struct Receivers {
     altitudes_m: Vec<f64>,
     scales: Vec<[f64; 2]>,
     highest_m: f64,
+    /// Per block of [`BLOCK`] x [`BLOCK`] cells (row-major), its highest receiver.
+    block_tops_m: Vec<f64>,
 }
+
+/// Cells per side of a block, the unit a flight's segment is first bounded on.
+const BLOCK: usize = 8;
+const BLOCKS: usize = CELLS / BLOCK;
 
 impl Receivers {
     fn new(square: Square, terrain_root: &Path) -> Result<Self, String> {
@@ -252,6 +258,14 @@ impl Receivers {
             .iter()
             .copied()
             .fold(f64::NEG_INFINITY, f64::max);
+        let block_tops_m = (0..BLOCKS * BLOCKS)
+            .map(|block| {
+                let (row, column) = (block / BLOCKS * BLOCK, block % BLOCKS * BLOCK);
+                (0..BLOCK * BLOCK)
+                    .map(|cell| altitudes_m[(row + cell / BLOCK) * CELLS + column + cell % BLOCK])
+                    .fold(f64::NEG_INFINITY, f64::max)
+            })
+            .collect();
         Ok(Receivers {
             west,
             north,
@@ -259,6 +273,7 @@ impl Receivers {
             altitudes_m,
             scales,
             highest_m,
+            block_tops_m,
         })
     }
 
@@ -317,6 +332,43 @@ pub fn halo(squares: &[Square]) -> Vec<Square> {
 /// and over all of them (only moments of the lowest band and above).
 type CellMoments = HashMap<u32, [Option<Peak>; 2]>;
 
+/// One block's loudest moments of the flight so far, and per provider the quietest of them over
+/// its cells (-inf while a cell has none): no segment whose bound stays under it can change the
+/// block.
+struct BlockMoments {
+    cells: [[Option<Peak>; 2]; BLOCK * BLOCK],
+    floor_db: [f64; 2],
+}
+
+impl BlockMoments {
+    fn new() -> Self {
+        BlockMoments {
+            cells: [[None; 2]; BLOCK * BLOCK],
+            floor_db: [f64::NEG_INFINITY; 2],
+        }
+    }
+
+    fn update_floor(&mut self) {
+        self.floor_db = [0, 1].map(|provider| {
+            self.cells
+                .iter()
+                .map(|cell| cell[provider].map_or(f64::NEG_INFINITY, |peak| peak.lmax_db))
+                .fold(f64::INFINITY, f64::min)
+        });
+    }
+}
+
+/// A segment of the flight that can reach the lowest band somewhere: its emission, its ends,
+/// its lowest altitude, its reach (m) and the most its maximum level can be anywhere (dB).
+struct Candidate<'a> {
+    segment: &'a FlightSegment,
+    emission: SegmentEmission,
+    ends: [Mercator; 2],
+    lowest_m: f64,
+    reach_m: f64,
+    bound_db: f64,
+}
+
 fn flight_moments(
     segments: &[FlightSegment],
     receivers: &Receivers,
@@ -325,36 +377,56 @@ fn flight_moments(
 ) -> CellMoments {
     let lowest_band = EVENT_BANDS_DB[0];
     let [least_east, least_north] = receivers.least_scales();
-    let mut moments = CellMoments::new();
-    for segment in segments {
-        let Some((_, emission)) = emission_of(segment) else {
-            continue;
-        };
-        let start_position = Mercator::from_degrees(segment.start[0], segment.start[1]);
-        let end_position = Mercator::from_degrees(segment.end[0], segment.end[1]);
-        let square = TileId::containing(start_position);
-        let place = places
-            .get(&Square {
-                x: square.x >> 3,
-                y: square.y >> 3,
+    let mut candidates: Vec<Candidate> = segments
+        .iter()
+        .filter_map(|segment| {
+            let (_, emission) = emission_of(segment)?;
+            let ends =
+                [segment.start, segment.end].map(|end| Mercator::from_degrees(end[0], end[1]));
+            let square = TileId::containing(ends[0]);
+            let place = places
+                .get(&Square {
+                    x: square.x >> 3,
+                    y: square.y >> 3,
+                })
+                .unwrap_or(home);
+            let emission = emission.in_atmosphere(place);
+            let reach_slant_m = lmax_reach_m(&emission, lowest_band);
+            let lowest_m = segment.start[2].min(segment.end[2]);
+            let above_m = (lowest_m - receivers.highest_m).max(0.0);
+            if reach_slant_m <= above_m {
+                return None;
+            }
+            let reach_m = (reach_slant_m * reach_slant_m - above_m * above_m)
+                .sqrt()
+                .min(EVENTS_REACH_M);
+            let bound_db =
+                emission.read_npd(above_m.max(1.0)).lamax_db + INSTALLATION_CORRECTION_MAX_DB;
+            Some(Candidate {
+                segment,
+                emission,
+                ends,
+                lowest_m,
+                reach_m,
+                bound_db,
             })
-            .unwrap_or(home);
-        let emission = emission.in_atmosphere(place);
-        let reach_slant_m = lmax_reach_m(&emission, lowest_band);
-        let lowest_m = segment.start[2].min(segment.end[2]);
-        let above_m = (lowest_m - receivers.highest_m).max(0.0);
-        if reach_slant_m <= above_m {
-            continue;
-        }
-        let reach_m = (reach_slant_m * reach_slant_m - above_m * above_m)
-            .sqrt()
-            .min(EVENTS_REACH_M);
-        // The cells within the reach of the segment's box.
-        let cells_of = |from: f64, to: f64, margin: f64| {
-            let low = ((from.min(to) - margin) * CELLS_PER_SIDE as f64).floor();
-            let high = ((from.max(to) + margin) * CELLS_PER_SIDE as f64).floor();
-            (low.max(0.0) as usize, high.min(CELLS as f64 - 1.0))
+        })
+        .collect();
+    // The loudest first: their moments let the blocks skip the quieter segments.
+    candidates.sort_by(|a, b| b.bound_db.total_cmp(&a.bound_db));
+    let mut blocks: HashMap<u32, BlockMoments> = HashMap::new();
+    for candidate in &candidates {
+        let (segment, emission) = (candidate.segment, &candidate.emission);
+        let secondary = segment.flags & FLAG_SECONDARY_ONLY != 0;
+        let provider = usize::from(secondary);
+        // The blocks within the reach of the segment's box.
+        let blocks_of = |from: f64, to: f64, margin: f64| {
+            let cells = CELLS_PER_SIDE as f64;
+            let low = ((from.min(to) - margin) * cells / BLOCK as f64).floor();
+            let high = ((from.max(to) + margin) * cells / BLOCK as f64).floor();
+            (low.max(0.0) as usize, high.min(BLOCKS as f64 - 1.0))
         };
+        let [start_position, end_position] = candidate.ends;
         let (x0, x1) = (
             wrap_x(start_position.x - receivers.west),
             wrap_x(end_position.x - receivers.west),
@@ -363,58 +435,112 @@ fn flight_moments(
             start_position.y - receivers.north,
             end_position.y - receivers.north,
         );
-        let (first_column, last_column) = cells_of(x0, x1, reach_m / least_east);
-        let (first_row, last_row) = cells_of(y0, y1, reach_m / least_north);
+        let (first_column, last_column) = blocks_of(x0, x1, candidate.reach_m / least_east);
+        let (first_row, last_row) = blocks_of(y0, y1, candidate.reach_m / least_north);
         if last_column < first_column as f64 || last_row < first_row as f64 {
             continue;
         }
-        let secondary = segment.flags & FLAG_SECONDARY_ONLY != 0;
-        for row in first_row..=last_row as usize {
-            let [east_scale, north_scale] = receivers.scales[row];
-            for column in first_column..=last_column as usize {
-                let index = row * CELLS + column;
-                let (cell, altitude_m) = (receivers.positions[index], receivers.altitudes_m[index]);
-                let local = |position: Mercator, metres: f64| {
-                    [
-                        wrap_x(position.x - cell.x) * east_scale,
-                        (cell.y - position.y) * north_scale,
-                        metres - altitude_m,
-                    ]
+        let local =
+            |at: Mercator, scales: [f64; 2], position: Mercator, metres: f64, below: f64| {
+                [
+                    wrap_x(position.x - at.x) * scales[0],
+                    (at.y - position.y) * scales[1],
+                    metres - below,
+                ]
+            };
+        for block_row in first_row..=last_row as usize {
+            for block_column in first_column..=last_column as usize {
+                let block = block_row * BLOCKS + block_column;
+                // The block's centre and half diagonal, in its middle row's metres.
+                let middle_row = block_row * BLOCK + BLOCK / 2;
+                let scales = receivers.scales[middle_row];
+                let centre = Mercator {
+                    x: receivers.west
+                        + (block_column * BLOCK) as f64 / CELLS_PER_SIDE as f64
+                        + 0.5 * BLOCK as f64 / CELLS_PER_SIDE as f64,
+                    y: receivers.north
+                        + (block_row * BLOCK) as f64 / CELLS_PER_SIDE as f64
+                        + 0.5 * BLOCK as f64 / CELLS_PER_SIDE as f64,
                 };
-                let (start_m, end_m) = (
-                    local(start_position, segment.start[2]),
-                    local(end_position, segment.end[2]),
-                );
-                let horizontal_m = horizontal_distance_m(start_m, end_m);
-                if horizontal_m > reach_m {
+                let side = BLOCK as f64 / CELLS_PER_SIDE as f64;
+                let half_diagonal_m = 0.5 * (side * scales[0]).hypot(side * scales[1]);
+                let horizontal_m = horizontal_distance_m(
+                    local(centre, scales, start_position, segment.start[2], 0.0),
+                    local(centre, scales, end_position, segment.end[2], 0.0),
+                ) - half_diagonal_m;
+                if horizontal_m > candidate.reach_m {
                     continue;
                 }
-                // The nearest the segment comes bounds what it can reach here.
-                let nearest_m = horizontal_m.hypot((lowest_m - altitude_m).max(0.0));
+                let top_m = receivers.block_tops_m[block];
+                let nearest_m = horizontal_m
+                    .max(0.0)
+                    .hypot((candidate.lowest_m - top_m).max(0.0));
                 let bound = emission.read_npd(nearest_m).lamax_db + INSTALLATION_CORRECTION_MAX_DB;
-                let entry = moments.entry(index as u32).or_default();
-                let known = entry[usize::from(secondary)];
-                if bound < lowest_band || known.is_some_and(|peak| peak.lmax_db >= bound) {
+                if bound < lowest_band {
                     continue;
                 }
-                let closest = closest_points(start_m, end_m);
-                let lmax_db = segment_lmax_db(&emission, &closest);
-                if lmax_db < lowest_band {
+                let state = blocks.entry(block as u32).or_insert_with(BlockMoments::new);
+                if state.floor_db[provider] >= bound {
                     continue;
                 }
-                let peak = Some(Peak {
-                    lmax_db,
-                    period: segment.period,
-                    height_m: closest.on_segment_m[2] + RECEIVER_HEIGHT_M,
-                });
-                if !secondary {
-                    entry[0] = louder(entry[0], peak);
+                let mut changed = false;
+                for (slot, cell) in state.cells.iter_mut().enumerate() {
+                    let row = block_row * BLOCK + slot / BLOCK;
+                    let column = block_column * BLOCK + slot % BLOCK;
+                    let index = row * CELLS + column;
+                    let (at, altitude_m) =
+                        (receivers.positions[index], receivers.altitudes_m[index]);
+                    let row_scales = receivers.scales[row];
+                    let (start_m, end_m) = (
+                        local(at, row_scales, start_position, segment.start[2], altitude_m),
+                        local(at, row_scales, end_position, segment.end[2], altitude_m),
+                    );
+                    let horizontal_m = horizontal_distance_m(start_m, end_m);
+                    if horizontal_m > candidate.reach_m {
+                        continue;
+                    }
+                    // The nearest the segment comes bounds what it can reach here.
+                    let nearest_m = horizontal_m.hypot((candidate.lowest_m - altitude_m).max(0.0));
+                    let bound =
+                        emission.read_npd(nearest_m).lamax_db + INSTALLATION_CORRECTION_MAX_DB;
+                    if bound < lowest_band
+                        || cell[provider].is_some_and(|peak| peak.lmax_db >= bound)
+                    {
+                        continue;
+                    }
+                    let closest = closest_points(start_m, end_m);
+                    let lmax_db = segment_lmax_db(emission, &closest);
+                    if lmax_db < lowest_band {
+                        continue;
+                    }
+                    let peak = Some(Peak {
+                        lmax_db,
+                        period: segment.period,
+                        height_m: closest.on_segment_m[2] + RECEIVER_HEIGHT_M,
+                    });
+                    if !secondary {
+                        cell[0] = louder(cell[0], peak);
+                    }
+                    cell[1] = louder(cell[1], peak);
+                    changed = true;
                 }
-                entry[1] = louder(entry[1], peak);
+                if changed {
+                    state.update_floor();
+                }
             }
         }
     }
-    moments.retain(|_, peaks| peaks[1].is_some());
+    let mut moments = CellMoments::new();
+    for (block, state) in blocks {
+        let (block_row, block_column) = (block as usize / BLOCKS, block as usize % BLOCKS);
+        for (slot, cell) in state.cells.iter().enumerate() {
+            if cell[1].is_some() {
+                let row = block_row * BLOCK + slot / BLOCK;
+                let column = block_column * BLOCK + slot % BLOCK;
+                moments.insert((row * CELLS + column) as u32, *cell);
+            }
+        }
+    }
     moments
 }
 
