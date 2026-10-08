@@ -5,7 +5,7 @@
 //! to be kept).
 
 use super::boxes::AircraftReceiver;
-use physics::doc29::atmosphere::{PlaceAtmosphere, SHIFT_DISTANCES};
+use physics::doc29::atmosphere::{PlaceAtmosphere, SHIFT_DISTANCES, receiver_impedance_db};
 use physics::doc29::corrections::speed_correction_db;
 use physics::doc29::helicopters::helicopter_levels;
 use physics::doc29::npd::{class_anchor, is_helicopter_class};
@@ -152,9 +152,15 @@ impl FlightTotals {
                     ground_under_end_m: record.ground_m - receiver.altitude_m,
                 };
                 let sel = segment_sel_at_receiver(&emission, &geometry, horizons);
+                // The NPD curves at the receiver's elevation; helicopters carry no impedance.
+                let impedance_db = if is_helicopter_class(emission.class) {
+                    0.0
+                } else {
+                    receiver_impedance_db(receiver.altitude_m)
+                };
                 let closest = sel.closest.on_segment_m;
                 let lateral = closest[0].hypot(closest[1]);
-                let lmax_db = segment_lmax_db(&emission, &sel.closest);
+                let lmax_db = segment_lmax_db(&emission, &sel.closest) + impedance_db;
                 let end_on_map = |end: usize| {
                     let (lat, lon) = tile.to_mercator(piece.ends[end]).to_degrees();
                     [lat, lon, piece.altitudes_m[end]]
@@ -177,7 +183,8 @@ impl FlightTotals {
                 if entry.track.len() < TRACK_PIECES {
                     entry.track.push([end_on_map(0), end_on_map(1)]);
                 }
-                let energy = 10f64.powf(entry.sel_db / 10.0) + 10f64.powf(sel.sel_db / 10.0);
+                let energy = 10f64.powf(entry.sel_db / 10.0)
+                    + 10f64.powf((sel.sel_db + impedance_db) / 10.0);
                 entry.sel_db = 10.0 * energy.log10();
                 if lmax_db > entry.lmax_db {
                     (entry.lmax_db, entry.closest_m, entry.altitude_m) =

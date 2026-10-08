@@ -72,6 +72,18 @@ pub fn impedance_adjustment_db(temperature_c: f64, pressure_kpa: f64) -> f64 {
     10.0 * (416.86 * delta / theta.sqrt() / 409.81).log10()
 }
 
+/// What the NPD levels gain at a receiver `elevation_m` above sea level (dB): Doc 29's impedance
+/// adjustment (Eqs. 4-6, 4-7) at the temperature and pressure of the International Standard
+/// Atmosphere there, less the 0.074 dB of 15 C at sea level the curves carry
+/// ([`class_increments_db`]): -1.07 dB at Mexico City's 2,240 m. Not for the helicopter class,
+/// which carries none.
+pub fn receiver_impedance_db(elevation_m: f64) -> f64 {
+    let temperature_k = 288.15 - 0.0065 * elevation_m;
+    let pressure_kpa = REFERENCE_PRESSURE_KPA * (temperature_k / 288.15).powf(5.255_88);
+    impedance_adjustment_db(temperature_k - 273.15, pressure_kpa)
+        - impedance_adjustment_db(DEFAULT_TEMPERATURE_C, REFERENCE_PRESSURE_KPA)
+}
+
 /// The A-weighted level (dB) at `distance_m` of a spectral class `spectrum_db` (at 305 m in the
 /// AIR-1845 atmosphere, Eq. D-1 taking it back to the source) through the atmosphere of
 /// `rates_db_per_m` (Eqs. D-2 to D-4).
@@ -227,6 +239,15 @@ mod tests {
             .iter()
             .position(|&n| n == name)
             .expect("a class")
+    }
+
+    /// The NPD levels lose 1.07 dB at Mexico City's 2,240 m and 1.99 at El Alto's 4,061 m in the
+    /// standard atmosphere, nothing at sea level (the evidence of 2026-10-08, aircraft, item 1).
+    #[test]
+    fn a_receiver_up_high_hears_the_curves_quieter() {
+        assert!(receiver_impedance_db(0.0).abs() < 1e-12);
+        assert!((receiver_impedance_db(2_240.0) + 1.07).abs() < 0.01);
+        assert!((receiver_impedance_db(4_061.0) + 1.99).abs() < 0.01);
     }
 
     /// Appendix D's example (Tables D-2 to D-4): the V2527A's departure class 103 and approach

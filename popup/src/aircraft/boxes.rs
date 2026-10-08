@@ -3,6 +3,7 @@
 //! sums per period become period energies (Leq), as the ground layers report.
 
 use physics::bands::{PERIOD_HOURS, PERIODS, energy, lden_energy};
+use physics::doc29::atmosphere::receiver_impedance_db;
 use physics::doc29::boxes::{AircraftBoxAtReceiver, box_sel_at_receiver};
 use physics::doc29::corrections::INSTALLATION_CORRECTION_MAX_DB;
 use physics::doc29::npd::lamax_rise_bound_db;
@@ -102,6 +103,8 @@ pub fn tile_energy(
     receiver: AircraftReceiver,
     horizons: &(impl ReceiverHorizons + Sync),
 ) -> TileAnswer {
+    // The NPD curves at the receiver's elevation (Doc 29 4.2.1); helicopters carry no impedance.
+    let impedance_db = receiver_impedance_db(receiver.altitude_m);
     let per_box: Vec<BoxAnswer> = (0..aircraft.box_count())
         .into_par_iter()
         .with_min_len(1_024)
@@ -131,8 +134,12 @@ pub fn tile_energy(
                 ground_m: record.ground_m - receiver.altitude_m,
             };
             let sel = box_sel_at_receiver(&at_receiver, horizons);
+            let impedance_db = match record.group {
+                Group::FixedWing => impedance_db,
+                Group::Helicopter => 0.0,
+            };
             let energy: [f64; PERIODS] = std::array::from_fn(|period| {
-                energy(sel.sel_db[period]) / (PERIOD_HOURS[period] * 3_600.0)
+                energy(sel.sel_db[period] + impedance_db) / (PERIOD_HOURS[period] * 3_600.0)
             });
             // The box's flights of a year split over the periods as its SEL energy is, each
             // period's rate over its hours; lambda is that rate times the slant over the speed.
@@ -153,6 +160,7 @@ pub fn tile_energy(
                 record.loudest_lamax_db
                     + lamax_rise_bound_db(nearest_slant_m(&record, tile, frame, receiver))
                     + INSTALLATION_CORRECTION_MAX_DB
+                    + impedance_db
             });
             // The installation shares are the box's over the whole day (the tiles keep no share per
             // period), so a box whose jets fly by day and propellers by night splits its Lden as the
