@@ -169,15 +169,10 @@ pub fn read_segments(
         );
         let kept: Vec<FlightSegment> = (0..batch.num_rows())
             .into_par_iter()
-            .filter_map(|row| {
-                if phase.value(row) == PHASE_GROUND {
-                    return None;
-                }
+            .filter(|&row| phase.value(row) != PHASE_GROUND)
+            .flat_map_iter(|row| {
                 let value = |index: usize| f64::from(values[index].value(row));
-                if !keep([value(0), value(1)], [value(3), value(4)]) {
-                    return None;
-                }
-                Some(FlightSegment {
+                split_at_antimeridian(FlightSegment {
                     flight_id: flight_id.value(row),
                     callsign: padded(callsign.value(row).as_bytes()),
                     designator: padded(designator.value(row)),
@@ -194,6 +189,13 @@ pub fn read_segments(
                     ground_m: [value(11), value(12)],
                     acceleration_ms2: acceleration[row],
                 })
+                .into_iter()
+                .filter(|segment| {
+                    keep(
+                        [segment.start[0], segment.start[1]],
+                        [segment.end[0], segment.end[1]],
+                    )
+                })
             })
             .collect();
         segments.extend(kept);
@@ -201,9 +203,85 @@ pub fn read_segments(
     Ok(segments)
 }
 
+/// Longitude (deg) a half of a segment across the antimeridian ends at, short of +-180 by more than
+/// an f32 step there (1.5e-5 deg), so that its stored end stays on its own side.
+const ANTIMERIDIAN_EDGE_DEG: f64 = 180.0 - 2e-5;
+
+/// A segment whose ends lie more than 180 degrees of longitude apart crossed the antimeridian:
+/// its two halves, each on its own side (a gap of 4 m), so that no square, box or receiver sees a
+/// line across the whole world (Codex, review of r055: the shuffle sent such a segment to every
+/// square of its rows).
+fn split_at_antimeridian(segment: FlightSegment) -> Vec<FlightSegment> {
+    let (west, east) = (segment.start[1], segment.end[1]);
+    if (east - west).abs() <= 180.0 {
+        return vec![segment];
+    }
+    // Eastwards from near +180 to near -180, or westwards the other way.
+    let eastwards = west > 0.0;
+    let unwrapped = if eastwards {
+        east + 360.0
+    } else {
+        east - 360.0
+    };
+    let edge = if eastwards { 180.0 } else { -180.0 };
+    let t = (edge - west) / (unwrapped - west);
+    let lerp = |a: f64, b: f64| a + t * (b - a);
+    let (lat, altitude) = (
+        lerp(segment.start[0], segment.end[0]),
+        lerp(segment.start[2], segment.end[2]),
+    );
+    let (pressure, ground) = (
+        lerp(
+            segment.pressure_altitude_m[0],
+            segment.pressure_altitude_m[1],
+        ),
+        lerp(segment.ground_m[0], segment.ground_m[1]),
+    );
+    let side = ANTIMERIDIAN_EDGE_DEG.copysign(edge);
+    let first = FlightSegment {
+        end: [lat, side, altitude],
+        pressure_altitude_m: [segment.pressure_altitude_m[0], pressure],
+        ground_m: [segment.ground_m[0], ground],
+        ..segment.clone()
+    };
+    let second = FlightSegment {
+        start: [lat, -side, altitude],
+        pressure_altitude_m: [pressure, segment.pressure_altitude_m[1]],
+        ground_m: [ground, segment.ground_m[1]],
+        ..segment
+    };
+    vec![first, second]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A segment from 179.99 E to 179.99 W is two halves meeting at the antimeridian, each on its
+    /// own side, its middle's latitude and altitude where they meet; a segment beside it is one.
+    #[test]
+    fn a_segment_across_the_antimeridian_is_cut_there() {
+        let segment = FlightSegment {
+            start: [10.0, 179.99, 10_000.0],
+            end: [10.02, -179.99, 10_100.0],
+            ..FlightSegment::default()
+        };
+        let halves = split_at_antimeridian(segment.clone());
+        assert_eq!(halves.len(), 2);
+        assert_eq!(halves[0].start, segment.start);
+        assert_eq!(halves[1].end, segment.end);
+        assert!(
+            (halves[0].end[0] - 10.01).abs() < 1e-9 && (halves[0].end[2] - 10_050.0).abs() < 1e-6
+        );
+        assert!(halves[0].end[1] > 179.9999 && halves[1].start[1] < -179.9999);
+        assert!((halves[0].end[1] as f32) < 180.0 && (halves[1].start[1] as f32) > -180.0);
+        let beside = FlightSegment {
+            start: [10.0, 179.0, 10_000.0],
+            end: [10.0, 179.5, 10_000.0],
+            ..FlightSegment::default()
+        };
+        assert_eq!(split_at_antimeridian(beside.clone()), vec![beside]);
+    }
 
     /// Three touching segments of one flight speeding from 150 to 170 kt, then another flight: the
     /// middle one reads the central difference, the ends one-sided, the lone flight none; a gap

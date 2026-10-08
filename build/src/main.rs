@@ -314,6 +314,8 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let rule = box_rule(&options)?;
             let shuffled = Path::new(options.get("shuffled")?);
             let days = boxes::shuffle::window_days(shuffled, &sampling_window(&options))?;
+            let squares = parse_squares(options.get("squares")?)?;
+            boxes::shuffle::holds(shuffled, &squares)?;
             let weather = read_weather(options.get("weather")?)?;
             eprintln!("aircraft boxes: {} days", days.len());
             // `--progress DIR`: a marker per square built, so that a rerun resumes.
@@ -321,7 +323,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             if let Some(progress) = &progress {
                 std::fs::create_dir_all(progress).map_err(|error| error.to_string())?;
             }
-            for square in parse_squares(options.get("squares")?)? {
+            for square in squares {
                 let marker = progress.as_ref().map(|progress| {
                     progress.join(format!("{}-{}-{}", rule.kind.name(), square.x, square.y))
                 });
@@ -351,12 +353,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
         "aircraft-events" => {
             let shuffled = Path::new(options.get("shuffled")?);
             let days = boxes::shuffle::window_days(shuffled, &sampling_window(&options))?;
+            let squares = parse_squares(options.get("squares")?)?;
+            boxes::shuffle::holds(shuffled, &boxes::events::halo(&squares))?;
             let weather = read_weather(options.get("weather")?)?;
             let progress = options.optional("progress").map(PathBuf::from);
             if let Some(progress) = &progress {
                 std::fs::create_dir_all(progress).map_err(|error| error.to_string())?;
             }
-            for square in parse_squares(options.get("squares")?)? {
+            for square in squares {
                 let marker = progress
                     .as_ref()
                     .map(|progress| progress.join(format!("events-{}-{}", square.x, square.y)));

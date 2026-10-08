@@ -485,4 +485,28 @@ fn where_the_primary_saw_a_flight_low_its_roll_counts_once() {
             .iter()
             .all(|roll| !roll.secondary_only && roll.departure)
     );
+    // A landing the primary followed low on final and the secondary completed: the reader keeps
+    // the primary's last low end beside the secondary's; the secondary's end and roll go, and the
+    // landing rolls once, from the primary's end.
+    let mut legs = vec![roll(false, 0.0)];
+    let ends = [
+        low_end(8, false, false, a320, -1_200.0),
+        legs::LowEnd {
+            secondary_only: true,
+            ..low_end(8, false, false, a320, -300.0)
+        },
+    ];
+    for leg in &mut legs {
+        leg.flight_id = 8;
+    }
+    let kept = rolls::primary_first(&mut legs, &ends);
+    assert!(legs.is_empty());
+    assert_eq!(kept, vec![ends[0].clone()]);
+    let rolls = rolls::missing_rolls(&legs, &kept, &runways);
+    assert_eq!(rolls.len(), rolls::LEGS, "{rolls:?}");
+    assert!(
+        rolls
+            .iter()
+            .all(|roll| !roll.secondary_only && !roll.departure)
+    );
 }

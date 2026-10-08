@@ -174,6 +174,27 @@ pub fn shuffle(
     days.dedup();
     let mut squares: Vec<Square> = scope.iter().copied().collect();
     squares.sort();
+    // A shuffle holds one scope: its day markers say nothing of squares added later.
+    let listed: String = squares
+        .iter()
+        .map(|square| format!("{}:{}\n", square.x, square.y))
+        .collect();
+    let scope_path = out.join("scope");
+    match std::fs::read_to_string(&scope_path) {
+        Ok(existing) if existing != listed => {
+            return Err(format!(
+                "{}: the shuffle holds another scope; a new scope needs a new directory",
+                out.display()
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(out).map_err(|error| format!("{}: {error}", out.display()))?;
+            std::fs::write(&scope_path, &listed)
+                .map_err(|error| format!("{}: {error}", scope_path.display()))?;
+        }
+        Err(error) => return Err(format!("{}: {error}", scope_path.display())),
+    }
     let index_of: std::collections::HashMap<Square, usize> = squares
         .iter()
         .enumerate()
@@ -275,6 +296,32 @@ pub fn shuffled_days(out: &Path) -> Result<Vec<(String, DayRoles)>, String> {
     }
     days.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(days)
+}
+
+/// Whether the shuffle under `out` holds every square of `squares` (its scope file).
+pub fn holds(out: &Path, squares: &[Square]) -> Result<(), String> {
+    let path = out.join("scope");
+    let text =
+        std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let scope: HashSet<Square> = text
+        .lines()
+        .filter_map(|line| {
+            let (x, y) = line.split_once(':')?;
+            Some(Square {
+                x: x.parse().ok()?,
+                y: y.parse().ok()?,
+            })
+        })
+        .collect();
+    match squares.iter().find(|square| !scope.contains(square)) {
+        Some(square) => Err(format!(
+            "{}: the shuffle lacks square {}:{} (shuffle with --halo for the events)",
+            out.display(),
+            square.x,
+            square.y
+        )),
+        None => Ok(()),
+    }
 }
 
 /// The days done under `out` with their roles, which must be exactly `window`'s: boxes and events
@@ -389,6 +436,28 @@ mod tests {
             vec![Square { x: 276, y: 173 }, Square { x: 277, y: 173 }]
         );
         assert!(squares_of(&segment(10.0, 10.1), &scope).is_empty());
+    }
+
+    /// A shuffle holds one scope: rerun with another it refuses, and the boxes and events refuse
+    /// squares it does not hold (Codex, review of r055: a shuffle made without the halo would read
+    /// as one with it).
+    #[test]
+    fn a_shuffle_holds_one_scope() {
+        let out = std::env::temp_dir().join(format!("qm-shuffle-scope-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let window = Window {
+            baseline_days: vec!["2026-01-08".into()],
+            increment_days: Vec::new(),
+        };
+        let prague = Square { x: 276, y: 173 };
+        let segments = out.join("no-segments");
+        shuffle(&segments, &window, &[prague].into(), &out).unwrap();
+        shuffle(&segments, &window, &[prague].into(), &out).unwrap();
+        let wider: HashSet<Square> = [prague, Square { x: 277, y: 173 }].into();
+        assert!(shuffle(&segments, &window, &wider, &out).is_err());
+        assert!(holds(&out, &[prague]).is_ok());
+        assert!(holds(&out, &[Square { x: 277, y: 173 }]).is_err());
+        std::fs::remove_dir_all(&out).unwrap();
     }
 
     /// Boxes start only from the window's exact days and roles: a day the shuffle has not written,

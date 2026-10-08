@@ -114,14 +114,17 @@ pub fn read_ground_legs(
     let reader = arrow_ipc::reader::FileReader::try_new(open()?, Some(projection))
         .map_err(|e| failed(&e))?;
     let mut day = DayLegs::default();
-    // The current flight: its id, airborne segments so far, its first one and its last one
-    // (each kept only when low).
-    let mut flight: Option<(u64, usize, Option<LowEnd>, Option<LowEnd>)> = None;
-    let close = |flight: Option<(u64, usize, Option<LowEnd>, Option<LowEnd>)>,
-                 low: &mut Vec<LowEnd>| {
-        if let Some((_, count, first, last)) = flight {
+    // The current flight: its id, airborne segments so far, its first one, its last one and the
+    // last one the primary provider saw (each kept only when low): where only the secondary
+    // completed a landing, the primary's last low segment still witnesses it (Codex, review of
+    // r055: one landing counted 697/354 times a day).
+    type Flight = (u64, usize, Option<LowEnd>, Option<LowEnd>, Option<LowEnd>);
+    let mut flight: Option<Flight> = None;
+    let close = |flight: Option<Flight>, low: &mut Vec<LowEnd>| {
+        if let Some((_, count, first, last, last_primary)) = flight {
             let last = last.filter(|_| count > 1);
-            for end in [first, last].into_iter().flatten() {
+            let last_primary = last_primary.filter(|end| count > 1 && Some(end) != last.as_ref());
+            for end in [first, last, last_primary].into_iter().flatten() {
                 if keep(end.start, end.end) {
                     low.push(end);
                 }
@@ -163,14 +166,19 @@ pub fn read_ground_legs(
                     end: [end_lat.value(row), end_lon.value(row)].map(f64::from),
                 })
             };
+            let primary = flags.value(row) & SECONDARY_ONLY == 0;
             match flight.as_mut() {
-                Some((current, count, _, last)) if *current == id => {
+                Some((current, count, _, last, last_primary)) if *current == id => {
                     *count += 1;
                     *last = end(false);
+                    if primary {
+                        *last_primary = end(false);
+                    }
                 }
                 _ => {
                     close(flight.take(), &mut day.low_ends);
-                    flight = Some((id, 1, end(true), end(false)));
+                    let last_primary = if primary { end(false) } else { None };
+                    flight = Some((id, 1, end(true), end(false), last_primary));
                 }
             }
         }

@@ -5,13 +5,14 @@
 //! to be kept).
 
 use super::boxes::AircraftReceiver;
-use physics::doc29::atmosphere::{PlaceAtmosphere, SHIFT_DISTANCES, receiver_impedance_db};
+use physics::doc29::atmosphere::{PlaceAtmosphere, SHIFT_DISTANCES};
 use physics::doc29::corrections::speed_correction_db;
 use physics::doc29::helicopters::helicopter_levels;
 use physics::doc29::npd::{class_anchor, is_helicopter_class};
 use physics::doc29::screening::ReceiverHorizons;
 use physics::doc29::segment::{
-    SegmentEmission, SegmentGeometry, segment_lmax_db, segment_sel_at_receiver,
+    SegmentEmission, SegmentGeometry, receiver_impedance_for_db, receiver_lmax_db,
+    segment_sel_at_receiver,
 };
 use physics::doc29::thrust::PowerBracket;
 use std::collections::HashMap;
@@ -152,15 +153,10 @@ impl FlightTotals {
                     ground_under_end_m: record.ground_m - receiver.altitude_m,
                 };
                 let sel = segment_sel_at_receiver(&emission, &geometry, horizons);
-                // The NPD curves at the receiver's elevation; helicopters carry no impedance.
-                let impedance_db = if is_helicopter_class(emission.class) {
-                    0.0
-                } else {
-                    receiver_impedance_db(receiver.altitude_m)
-                };
+                let impedance_db = receiver_impedance_for_db(&emission, receiver.altitude_m);
                 let closest = sel.closest.on_segment_m;
                 let lateral = closest[0].hypot(closest[1]);
-                let lmax_db = segment_lmax_db(&emission, &sel.closest) + impedance_db;
+                let lmax_db = receiver_lmax_db(&emission, &sel.closest, receiver.altitude_m);
                 let end_on_map = |end: usize| {
                     let (lat, lon) = tile.to_mercator(piece.ends[end]).to_degrees();
                     [lat, lon, piece.altitudes_m[end]]
