@@ -19,11 +19,11 @@ export type AircraftKind = 'airliners' | 'regional_business_jets' | 'propeller' 
 /** One layer's levels at the point. */
 export interface LayerLevels extends PeriodLevels {
   source_type: string
-  /** The aircraft layer's Lden-weighted loud moments: its flights' level exceeded 5 % of the time
-   *  and its ground operations (the final update's). */
-  loud_lden?: Level
-  /** What the popup leaves out of a ground layer: its levels and loud moments. */
-  unlisted?: PeriodLevels & { loud_lden: Level }
+  /** The aircraft layer alone, its flights and its airports' ground operations: its Nden in sone
+   *  (the final update's). */
+  nden_sone?: number
+  /** What the popup leaves out of a ground layer: its levels. */
+  unlisted?: PeriodLevels
   /** What the aircraft layer is made of: each kind's share of its Lden energy, those of 0.5 % or
    *  more (the final update's). */
   kinds?: Partial<Record<AircraftKind, number>>
@@ -50,8 +50,8 @@ export interface Contributor {
   distance_m: number
   received_lden: Level
   received: PeriodLevels
-  /** Its Lden-weighted level exceeded 5 % of the time by itself (the final update's). */
-  loud_lden?: Level
+  /** It alone: its Nden in sone (the final update's), as the list ranks it. */
+  nden_sone?: number
   metadata: ContributorMetadata | null
   /** What the map draws of it, lines of [lat, lon] (one point for a point source): all of it within
    *  the reach in the final update, its loudest pieces before. */
@@ -120,12 +120,13 @@ export interface PopupPercentiles {
   l90: { day: number | null; evening: number | null; night: number | null }
 }
 
-/** How loud the place sounds: Zwicker's loudness (ISO 532-1) of the sound exceeded 5 % of the
- *  time, N5 in sone (twice the sone, twice as loud), per period and for the whole day, its periods
- *  weighed as Lden weighs them. */
+/** How loud the place sounds: Zwicker's loudness (ISO 532-1, sone: twice the sone, twice as loud)
+ *  of every moment, averaged over each period as it sounds and over the whole day as Nden (the
+ *  evening counted 5 dB and the night 10 dB louder, as Lden counts them, the periods by their
+ *  hours). */
 export interface PopupLoudness {
-  n5_sone: { day: number | null; evening: number | null; night: number | null }
-  n5_den_sone: number | null
+  mean_sone: { day: number | null; evening: number | null; night: number | null }
+  nden_sone: number | null
 }
 
 /** What the click read and computed so far. */
@@ -221,6 +222,8 @@ export interface PopupUpdate {
   /** With the final update only. */
   percentiles?: PopupPercentiles | null
   loudness?: PopupLoudness | null
+  /** Everything the list leaves out, together and steady: its Nden in sone (the final update's). */
+  rest_nden_sone?: number | null
   /** The segments view's pieces, when asked for. */
   pieces?: PopupPiece[]
   stats: PopupStats

@@ -74,7 +74,7 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   await expect(lden(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB Lden`)
   await expect(page.locator('[data-testid="popup-refining"]:visible')).toHaveCount(0)
   // The final answer says how loud the place sounds over the whole day.
-  await expect(badge(page)).toHaveText('15 sone')
+  await expect(badge(page)).toHaveText('Nden 15 sone')
   await expect(page.getByText('9.6k/day').filter({ visible: true })).toBeVisible()
   await expect(flights.locator('tbody tr')).toHaveCount(2)
   await expect(flights.locator('tbody tr').nth(0).locator('td')).toHaveText(['70', '0.44', '0.26', '09-02 D', /^Airbus A320\b/])

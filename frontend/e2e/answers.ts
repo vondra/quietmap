@@ -47,7 +47,7 @@ export function popupUpdate(
     top_contributors: db == null ? [] : [roadContributor(db)],
     top_flights: [],
     // The final answer carries the loudness and the time levels.
-    loudness: partial || db == null ? null : { n5_sone: { day: 12, evening: 11, night: 7.4 }, n5_den_sone: 15 },
+    loudness: partial || db == null ? null : { mean_sone: { day: 12, evening: 11, night: 7.4 }, nden_sone: 15 },
     percentiles: partial || db == null ? null : {
       l5: { day: db + 4, evening: db + 3, night: db - 3 },
       l10: { day: db + 3, evening: db + 2, night: db - 4 },

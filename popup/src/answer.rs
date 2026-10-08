@@ -14,6 +14,7 @@ use crate::evaluate::Receiver;
 use crate::lines::whole_lines;
 use crate::listing::list_pieces;
 use crate::obstacles::Scene;
+use crate::percentiles::Percentiles;
 use crate::release::{Release, RingFiles};
 use crate::scene::Ground;
 use crate::selection::{LayerSelection, select};
@@ -21,7 +22,7 @@ use crate::update::{
     CONTRIBUTORS_SHOWN, Statistics, Update, all_contributors, empty_answer, layer_answers, listed,
     ranked_contributors, set_unlisted,
 };
-use physics::bands::PERIODS;
+use physics::bands::{PERIODS, lden_energy};
 use physics::bound::receiver_bound;
 use physics::doc29::atmosphere::{class_spectrum_at, place_rates_db_per_m};
 use physics::doc29::profiles_generated::{noise_class_of, profile_idx};
@@ -414,16 +415,22 @@ pub fn answer(
         let fields = |contributor: &crate::update::Contributor| {
             display_record(contributor.display, contributor.layer).ok()
         };
-        // The time levels come with the final answer only (the partial ones do not show them).
-        let percentiles = last_ring.then(|| {
-            crate::percentiles::percentiles(
+        // The aircraft layer beyond its flights: the airport ground operations, steady.
+        let airport_ground: Option<[f64; PERIODS]> = last_ring.then(|| {
+            let layer = selections
+                .iter()
+                .find(|selection| selection.layer == Layer::Aircraft)
+                .map_or([0.0; PERIODS], |selection| selection.answer_energy());
+            std::array::from_fn(|p| (layer[p] - flight_energy[p]).max(0.0))
+        });
+        // The time levels and the loudness come with the final answer only (the partial ones do
+        // not show them).
+        let timing = last_ring.then(|| {
+            let distributions = crate::percentiles::distributions(
                 &selections,
                 (flight_energy, flight_energy_lambda),
                 &fields,
-                lat.to_bits() ^ lon.to_bits().rotate_left(32),
-            )
-        });
-        let loudness = percentiles.map(|levels| {
+            );
             let flight = flights.loudest().into_iter().next();
             let spectrum_db = flight.and_then(|flight| {
                 let class = noise_class_of(profile_idx(&flight.type_designator));
@@ -433,81 +440,132 @@ pub fn answer(
                     &place_rates_db_per_m(&weather.alpha_db_per_km),
                 )
             });
-            crate::loudness::loudness(
-                &selections,
-                &crate::loudness::FlightSound {
-                    energy: flight_energy,
-                    spectrum_db,
-                },
-                levels.l5,
+            let flight_sound = crate::loudness::FlightSound {
+                energy: flight_energy,
+                spectrum_db,
+            };
+            let curves = crate::loudness::curves(&selections, &flight_sound);
+            let layer_curves = crate::loudness::layer_curves(&selections, &flight_sound);
+            let loudness = crate::loudness::loudness(&distributions, &curves);
+            (
+                Percentiles::of(&distributions),
+                loudness,
+                curves,
+                layer_curves,
             )
         });
         let mut layers = layer_answers(&selections);
         let mut contributors: Vec<crate::update::Contributor>;
-        if !last_ring {
-            // A partial list: the loudest listed by Lden, only they copied.
-            let (heard, quiet): (Vec<_>, Vec<_>) =
-                all_contributors(&selections).partition(|c| listed(c));
-            let ranked = ranked_contributors(heard, |c| c.energy);
-            let shown = ranked.len().min(CONTRIBUTORS_SHOWN);
-            set_unlisted(&mut layers, ranked[shown..].iter().copied().chain(quiet));
-            contributors = ranked[..shown].iter().map(|&c| c.clone()).collect();
-        } else {
-            contributors = all_contributors(&selections).cloned().collect();
-            for contributor in &mut contributors {
-                let display = fields(contributor);
-                contributor.heard = display
-                    .as_ref()
-                    .and_then(|fields| crate::percentiles::heard(contributor, fields));
-                contributor.loud = Some(crate::percentiles::loud_energy(
-                    contributor,
-                    display.as_ref(),
-                ));
+        let mut rest_nden_sone = None;
+        let (percentiles, loudness) = match &timing {
+            None => {
+                // A partial list: the loudest listed by Lden, only they copied.
+                let (heard, quiet): (Vec<_>, Vec<_>) =
+                    all_contributors(&selections).partition(|c| listed(c));
+                let ranked = ranked_contributors(heard, |c| lden_energy(&c.energy));
+                let shown = ranked.len().min(CONTRIBUTORS_SHOWN);
+                set_unlisted(&mut layers, ranked[shown..].iter().copied().chain(quiet));
+                contributors = ranked[..shown].iter().map(|&c| c.clone()).collect();
+                (None, None)
             }
-            // The visitor's list ranks by the loud moments: every contributor ranked so, then cut,
-            // so thirty brief events never push out the steady road that leads it; a brief event
-            // cut from it stays brief in the last row.
-            let (heard, quiet): (Vec<_>, Vec<_>) = contributors.into_iter().partition(listed);
-            contributors = ranked_contributors(heard, |c| c.loud.unwrap_or(c.energy));
-            let shown = contributors.len().min(CONTRIBUTORS_SHOWN);
-            set_unlisted(&mut layers, contributors[shown..].iter().chain(&quiet));
-            contributors.truncate(shown);
-            let read: Vec<&RingFiles> = rings.iter().filter_map(OnceCell::get).collect();
-            let keys: Vec<u64> = contributors.iter().map(|c| c.group_key).collect();
-            let lines = whole_lines(&read, &frame, &keys, station.position, GROUND_REACH_M)?;
-            for (contributor, lines) in contributors.iter_mut().zip(lines) {
-                contributor.lines = lines;
+            Some((percentiles, loudness, curves, layer_curves)) => {
+                let own_curves = |layer: Layer| {
+                    layer_curves
+                        .iter()
+                        .find(|(own, _)| *own == layer)
+                        .map_or(curves, |(_, curves)| curves)
+                };
+                // The visitor's list ranks by each source's own Nden, alone, so a steady road
+                // leads brief passes louder in energy.
+                let (heard, quiet): (Vec<_>, Vec<_>) =
+                    all_contributors(&selections).partition(|c| listed(c));
+                // The display records are read one by one; the sources scored in parallel.
+                let displays: Vec<(&crate::update::Contributor, Option<serde_json::Value>)> =
+                    heard.into_iter().map(|c| (c, fields(c))).collect();
+                let ranked: Vec<crate::update::Contributor> = displays
+                    .into_par_iter()
+                    .map(|(contributor, display)| {
+                        let line = crate::percentiles::Line::of(contributor, display.as_ref());
+                        let curves = own_curves(contributor.layer);
+                        let own = match &line {
+                            Some(line) => {
+                                crate::loudness::own_nden(Some(line), [0.0; PERIODS], curves)
+                            }
+                            None => crate::loudness::own_nden(None, contributor.energy, curves),
+                        };
+                        let mut contributor = contributor.clone();
+                        contributor.nden_sone = Some(own);
+                        contributor.heard = display
+                            .as_ref()
+                            .and_then(|fields| crate::percentiles::heard(&contributor, fields));
+                        contributor
+                    })
+                    .collect();
+                contributors = ranked_contributors(ranked, |c| c.nden_sone.unwrap_or(0.0));
+                let shown = contributors.len().min(CONTRIBUTORS_SHOWN);
+                set_unlisted(
+                    &mut layers,
+                    contributors[shown..].iter().chain(quiet.iter().copied()),
+                );
+                // What the list leaves out, together: its own distribution's Nden.
+                let rest: [f64; PERIODS] = std::array::from_fn(|p| {
+                    layers
+                        .iter()
+                        .filter_map(|layer| layer.unlisted.map(|energy| energy[p]))
+                        .sum()
+                });
+                let (rest_lines, rest_steady) = crate::percentiles::lines(
+                    contributors[shown..].iter().chain(quiet.iter().copied()),
+                    rest,
+                    crate::percentiles::REST_SHARE_MIN,
+                    &fields,
+                );
+                rest_nden_sone = Some(
+                    crate::loudness::loudness(
+                        &crate::percentiles::distributions_of(&rest_lines, rest_steady),
+                        curves,
+                    )
+                    .nden_sone,
+                );
+                contributors.truncate(shown);
+                // The aircraft layer alone: its flights' line over its airports' ground operations.
+                let ground = airport_ground.unwrap_or([0.0; PERIODS]);
+                let mut flight_weather = crate::percentiles::Weather::default();
+                flight_weather.add(&flight_energy, &[flight_energy; 2]);
+                let flights_line = crate::percentiles::Line::flights(
+                    &flight_weather,
+                    (flight_energy, flight_energy_lambda),
+                );
+                if let Some(layer) = layers
+                    .iter_mut()
+                    .find(|layer| layer.layer == Layer::Aircraft)
+                {
+                    layer.nden_sone = Some(crate::loudness::own_nden(
+                        Some(&flights_line),
+                        ground,
+                        own_curves(Layer::Aircraft),
+                    ));
+                }
+                let read: Vec<&RingFiles> = rings.iter().filter_map(OnceCell::get).collect();
+                let keys: Vec<u64> = contributors.iter().map(|c| c.group_key).collect();
+                let lines = whole_lines(&read, &frame, &keys, station.position, GROUND_REACH_M)?;
+                for (contributor, lines) in contributors.iter_mut().zip(lines) {
+                    contributor.lines = lines;
+                }
+                (Some(*percentiles), Some(*loudness))
             }
-        }
-        // The aircraft layer beyond its flights: the airport ground operations, steady.
-        let airport_ground: Option<[f64; PERIODS]> = last_ring.then(|| {
-            let layer = selections
-                .iter()
-                .find(|selection| selection.layer == Layer::Aircraft)
-                .map_or([0.0; PERIODS], |selection| selection.answer_energy());
-            std::array::from_fn(|p| (layer[p] - flight_energy[p]).max(0.0))
-        });
-        // The aircraft layer's loud moments: its flights' L5 and the ground operations.
-        if let (Some(ground), Some(layer)) = (
-            airport_ground,
-            layers
-                .iter_mut()
-                .find(|layer| layer.layer == Layer::Aircraft),
-        ) {
-            let flights =
-                crate::percentiles::loud_flight_energy((flight_energy, flight_energy_lambda));
-            layer.loud = Some(std::array::from_fn(|p| flights[p] + ground[p]));
-        }
+        };
         // What the aircraft layer is made of: the flight kinds and the ground operations.
         let aircraft_kinds = airport_ground.map(|ground| {
             let [airliners, jets, propeller, helicopters] = flight_kinds;
-            let ground = physics::bands::lden_energy(&ground);
+            let ground = lden_energy(&ground);
             [airliners, jets, propeller, helicopters, ground]
         });
         let update = Update {
             partial: !last_ring,
             percentiles,
             loudness,
+            rest_nden_sone,
             aircraft_kinds,
             lat,
             lon,

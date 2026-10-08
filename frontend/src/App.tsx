@@ -117,7 +117,7 @@ export default function App() {
       lat: detailPosition.lat,
       lng: detailPosition.lng,
       place: detailPlaceName,
-      sone: noiseDetailData.loudness?.n5_den_sone ?? null,
+      sone: noiseDetailData.loudness?.nden_sone ?? null,
       lden: noiseDetailData.total_lden,
     }
     setRecentPlaces(places => {

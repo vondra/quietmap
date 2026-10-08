@@ -2,6 +2,25 @@
 
 use super::*;
 
+/// A small deterministic generator (SplitMix64): the table's simulation repeats exactly.
+#[derive(Clone)]
+struct Random(u64);
+
+impl Random {
+    fn new(seed: u64) -> Self {
+        Random(seed)
+    }
+
+    /// Uniform in [0, 1).
+    fn uniform(&mut self) -> f64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
 /// Samples per simulated row: 20,000, and up to a million for sparse lines, whose upper quantiles
 /// rest on rare passes (20,000 read lambda 1e-4's 0.995 quantile 8.8 for 5.3). The line is simulated
 /// for at least 200 distances each side and for 5 / lambda (ten emitters on average), so that even

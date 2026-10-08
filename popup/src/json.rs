@@ -67,6 +67,14 @@ fn aircraft_kinds(kinds: &[f64; 5]) -> Value {
     Value::Object(object)
 }
 
+/// A loudness to three significant digits (0.432, 4.32, 43.2): the list ranks by it, the visitor
+/// reads two.
+fn sone(value: f64) -> f64 {
+    let digits = (2 - value.max(0.001).log10().floor() as i32).max(0);
+    let scale = 10f64.powi(digits);
+    (value * scale).round() / scale
+}
+
 pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
     let mut total = [0.0; PERIODS];
     let mut layers = Vec::new();
@@ -77,15 +85,14 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         let mut object = Map::new();
         object.insert("source_type".into(), json!(layer.layer.name()));
         periods(&mut object, &layer.energy);
-        // The aircraft layer is one row of the list: its loud moments rank it there.
-        if let Some(loud) = layer.loud {
-            object.insert("loud_lden".into(), lden(&loud));
+        // The aircraft layer is one row of the list: its own Nden ranks it there.
+        if let Some(own) = layer.nden_sone {
+            object.insert("nden_sone".into(), json!(sone(own)));
         }
         // What the list leaves out of a ground layer: its last row.
-        if let Some([energy, loud]) = layer.unlisted {
+        if let Some(energy) = layer.unlisted {
             let mut unlisted = Map::new();
             periods(&mut unlisted, &energy);
-            unlisted.insert("loud_lden".into(), lden(&loud));
             object.insert("unlisted".into(), Value::Object(unlisted));
         }
         if let (Layer::Aircraft, Some(kinds)) = (layer.layer, update.aircraft_kinds) {
@@ -131,8 +138,8 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             received.get("lden").cloned().unwrap_or(Value::Null),
         );
         object.insert("received".into(), Value::Object(received));
-        if let Some(loud) = contributor.loud {
-            object.insert("loud_lden".into(), lden(&loud));
+        if let Some(own) = contributor.nden_sone {
+            object.insert("nden_sone".into(), json!(sone(own)));
         }
         object.insert("metadata".into(), display);
         if let Some(heard) = contributor.heard {
@@ -316,16 +323,11 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             json!({"l5": periods(p.l5), "l10": periods(p.l10), "l50": periods(p.l50), "l90": periods(p.l90)})
         }),
         "loudness": update.loudness.as_ref().map(|loudness| {
-            // Two significant digits: 0.43, 4.3, 43.
-            let round = |sone: f64| {
-                let digits = (1 - sone.max(0.01).log10().floor() as i32).max(0);
-                let scale = 10f64.powi(digits);
-                (sone * scale).round() / scale
-            };
-            let n5 = loudness.n5_sone;
-            json!({"n5_sone": {"day": round(n5[0]), "evening": round(n5[1]), "night": round(n5[2])},
-                "n5_den_sone": round(loudness.n5_den_sone)})
+            let mean = loudness.mean_sone;
+            json!({"mean_sone": {"day": sone(mean[0]), "evening": sone(mean[1]), "night": sone(mean[2])},
+                "nden_sone": sone(loudness.nden_sone)})
         }),
+        "rest_nden_sone": update.rest_nden_sone.map(sone),
         "top_contributors": contributors,
         "top_flights": flights,
         "stats": {

@@ -24,11 +24,11 @@ pub struct LayerAnswer {
     pub omitted_bound: [f64; PERIODS],
     pub evaluated: usize,
     pub candidates: usize,
-    /// The aircraft layer's loud moments, its flights' L5 and its ground operations (the final
+    /// The aircraft layer's own Nden, its flights and its ground operations alone (the final
     /// update's): what ranks it, one row, in the visitor's list.
-    pub loud: Option<[f64; PERIODS]>,
-    /// A ground layer's energy and loud moments beyond the contributors sent: the list's last row.
-    pub unlisted: Option<[[f64; PERIODS]; 2]>,
+    pub nden_sone: Option<f64>,
+    /// A ground layer's energy beyond the contributors sent: the list's last row.
+    pub unlisted: Option<[f64; PERIODS]>,
 }
 
 /// One contributor group (sources sharing a display group key).
@@ -49,8 +49,8 @@ pub struct Contributor {
     /// How it is heard: its passes per hour and whether they run together (the final update's;
     /// `None` for a steady source).
     pub heard: Option<crate::percentiles::Heard>,
-    /// Its energy exceeded 5 % of the time by itself, per period (the final update's).
-    pub loud: Option<[f64; PERIODS]>,
+    /// Its own Nden, alone (the final update's): what ranks it in the visitor's list.
+    pub nden_sone: Option<f64>,
 }
 
 /// Pieces a contributor keeps for the map.
@@ -74,8 +74,10 @@ pub struct Update<'u> {
     /// The levels exceeded 10, 50 and 90 % of the time (the final update's; none for a building
     /// without a façade).
     pub percentiles: Option<crate::percentiles::Percentiles>,
-    /// How loud the click sounds, N5 (the final update's).
+    /// How loud the click sounds, Nden (the final update's).
     pub loudness: Option<crate::loudness::Loudness>,
+    /// The Nden of everything the list leaves out, together and steady (the final update's).
+    pub rest_nden_sone: Option<f64>,
     /// What the aircraft layer is made of, Lden energies (final update): airliners, regional and
     /// business jets, propeller aircraft, helicopters, airport ground operations.
     pub aircraft_kinds: Option<[f64; 5]>,
@@ -110,7 +112,7 @@ pub fn layer_answers(selections: &[LayerSelection]) -> Vec<LayerAnswer> {
             omitted_bound: selection.uncertainty(),
             evaluated: selection.evaluated,
             candidates: selection.covered + selection.pending.len(),
-            loud: None,
+            nden_sone: None,
             unlisted: None,
         })
         .collect()
@@ -122,9 +124,8 @@ pub fn listed(contributor: &Contributor) -> bool {
     lden_energy(&contributor.energy) > 1.0
 }
 
-/// Each ground layer's part the list leaves out: the `unlisted` contributors' energy and loud
-/// moments where known (the final update's), else their energy. Every evaluated piece is in a
-/// contributor, so nothing else is left.
+/// Each ground layer's part the list leaves out: the `unlisted` contributors' energy. Every
+/// evaluated piece is in a contributor, so nothing else is left.
 pub fn set_unlisted<'c>(
     layers: &mut [LayerAnswer],
     unlisted: impl Iterator<Item = &'c Contributor>,
@@ -133,34 +134,32 @@ pub fn set_unlisted<'c>(
         .iter_mut()
         .filter(|layer| layer.layer != Layer::Aircraft)
     {
-        layer.unlisted = Some([[0.0; PERIODS]; 2]);
+        layer.unlisted = Some([0.0; PERIODS]);
     }
     for contributor in unlisted {
-        let Some([energy, loud]) = layers
+        let Some(energy) = layers
             .iter_mut()
             .find(|layer| layer.layer == contributor.layer)
             .and_then(|layer| layer.unlisted.as_mut())
         else {
             continue;
         };
-        let own = contributor.loud.unwrap_or(contributor.energy);
-        for p in 0..PERIODS {
-            energy[p] += contributor.energy[p];
-            loud[p] += own[p];
+        for (sum, value) in energy.iter_mut().zip(contributor.energy) {
+            *sum += value;
         }
     }
 }
 
-/// Every contributor, the loudest first by `key` (its Lden, or in the final update its loud
-/// moments, as the visitor's list ranks them).
+/// Every contributor, the loudest first by `key` (its Lden energy, or in the final update its own
+/// Nden, as the visitor's list ranks them).
 pub fn ranked_contributors<C: std::borrow::Borrow<Contributor>>(
     mut contributors: Vec<C>,
-    key: impl Fn(&Contributor) -> [f64; PERIODS],
+    key: impl Fn(&Contributor) -> f64,
 ) -> Vec<C> {
     contributors.sort_by(|a, b| {
         let (a, b) = (a.borrow(), b.borrow());
-        lden_energy(&key(b))
-            .total_cmp(&lden_energy(&key(a)))
+        key(b)
+            .total_cmp(&key(a))
             .then(a.group_key.cmp(&b.group_key))
     });
     contributors
@@ -194,6 +193,7 @@ pub fn empty_answer(
         partial: false,
         percentiles: None,
         loudness: None,
+        rest_nden_sone: None,
         aircraft_kinds: None,
         lat,
         lon,

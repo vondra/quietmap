@@ -138,12 +138,15 @@ lines of JSON (each <= 100 KB).
    outline of the same building).
 6. Until every ring is read the answer says it is partial. A failed read is an error, never a
    quieter answer. Exact mode (benchmark only) is the same loop with the stop rule off.
-7. The final update also carries the levels exceeded 5, 10, 50 and 90 % of the time (each
-   contributor a line of Kurze's Poisson statistics at its own lambda, the sum drawn with
-   stratified draws seeded by the click) and the loudness N5 per period: Zwicker's loudness
-   (ISO 532-1, sone) of the received third-octave spectrum (each ground layer's octave bands as
-   its evaluated pieces arrive, the flights' as the loudest flight's Doc 29 spectral classes
-   through the place's air) set to the level exceeded 5 % of the time.
+7. The final update also carries how the level spreads over each period (each contributor a
+   line of Kurze's Poisson statistics at its own lambda; for every hour and weather state the
+   lines that move the level added on a 0.1 dB grid, then the steady energy; computed, not
+   drawn), its levels exceeded 5, 10, 50 and 90 % of the time, and Nden, the headline: the mean
+   over the day of Zwicker's loudness (ISO 532-1, sone) of every moment, the received
+   third-octave spectrum (each ground layer's octave bands as its evaluated pieces arrive, the
+   flights' as the loudest flight's Doc 29 spectral classes through the place's air) set to the
+   moment's level, the evening 5 dB and the night 10 dB up, the periods by their hours. The list
+   ranks each source by its own Nden, alone.
 
 ## Web
 

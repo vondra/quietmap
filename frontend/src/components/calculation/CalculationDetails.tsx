@@ -69,8 +69,7 @@ export default function CalculationDetails({ data, onFan }: {
   })
   const allEnergy = periodEnergy.reduce((a, b) => a + b, 0)
   const total = data.total_lden ?? 0
-  const l5 = data.percentiles?.l5
-  const sone = data.loudness?.n5_sone
+  const sone = data.loudness?.mean_sone
   const layers = data.sources
     .filter(layer => (layer.lden ?? 0) > 0)
     .sort((a, b) => (b.lden ?? 0) - (a.lden ?? 0))
@@ -78,15 +77,14 @@ export default function CalculationDetails({ data, onFan }: {
 
   return (
     <div data-testid="calculation">
-      <Section title="Day, evening, night" hint={'Each period\'s level, its share of the Lden energy (the evening\ncounts 5 dB and the night 10 dB up, EU Directive 2002/49), the\nlevel it exceeds 5 % of the time (L5) and the loudness of its\nspectrum at L5 (ISO 532-1, N5); the whole day\'s loudness\nweighs the periods as Lden does'}>
+      <Section title="Day, evening, night" hint={'Each period\'s level, its share of the Lden energy (the evening\ncounts 5 dB and the night 10 dB up, EU Directive 2002/49) and\nits mean loudness as it sounds (ISO 532-1, every moment by\nits level); Nden counts the evening 5 dB and the night 10 dB\nlouder, as Lden does, and weighs the periods by their hours'}>
         <Table
-          head={['', 'dB', 'Share', 'L5 dB', 'Sone']}
+          head={['', 'dB', 'Share', 'Sone']}
           rows={PERIODS.map((p, k) => [
             p.name,
             level(data.total[p.key]),
             allEnergy > 0 ? `${Math.round(100 * periodEnergy[k] / allEnergy)} %` : '—',
-            level(l5?.[p.sone]),
-            sone?.[p.sone] ? fmtSone(sone[p.sone] as number) : '—',
+            sone?.[p.sone] != null ? fmtSone(sone[p.sone] as number) : '—',
           ])}
         />
       </Section>

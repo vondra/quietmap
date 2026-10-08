@@ -1,28 +1,31 @@
-//! The levels exceeded a share of the time per period (L5, L10, L50, L90): every contributor a line of
-//! emitters of Kurze's statistics (`physics::percentile`) at its own lambda = (emitters per metre)
-//! x (its distance): vehicles on a road (the daily flow over the period's share and hours, over
-//! the speed), trains on a track (the period's trains over its hours, over the speed), airport
-//! movements on an aeroway (at taxi speed); the flights heard one more line at the boxes'
-//! energy-weighted lambda; events (church bells) on for their duty, the share of the period they
-//! sound, at their mean over it; industry, buildings, ships and the unlisted remainder steady at
-//! their mean. A road's flow follows the hours of the day within each period (measured hourly profiles:
-//! a night's 3 am carries a fifth of its mean), all roads the same hour of a draw. The sum's
-//! distribution is drawn by a simulation seeded by the click, each line's draws stratified (one in
-//! each 1/DRAWS of its probability, in a shuffled order) and the lines taken in a fixed order, so
-//! that a click gives the same levels every time and the loudest line's own quantiles come out
-//! nearly exact. The same traffic tells how a contributor is heard: its passes per hour, and
-//! whether at its distance they run together into a steady sound.
+//! How the level of a click spreads over each period: the share of the time at each level, from
+//! which come the levels exceeded 5, 10, 50 and 90 % of the time (L5, L10, L50, L90) and the mean
+//! loudness ([`crate::loudness`]). Every contributor is a line of emitters of Kurze's statistics
+//! (`physics::percentile`) at its own lambda = (emitters per metre) x (its distance): vehicles on
+//! a road (the daily flow over the period's share and hours, over the speed), trains on a track
+//! (the period's trains over its hours, over the speed), airport movements on an aeroway (at taxi
+//! speed); the flights heard one more line at the boxes' energy-weighted lambda; events (church
+//! bells) on for their duty, the share of the period they sound, at their mean over it; industry,
+//! buildings, ships and the unlisted remainder steady at their mean. A road's flow follows the
+//! hours of the day within each period (measured hourly profiles: a night's 3 am carries a fifth
+//! of its mean), all roads the same hour. The spread is computed, not drawn: for every hour and
+//! weather state the steady energy with each line's quantiles added (the lines independent, on a
+//! grid of 0.1 dB), averaged over the hours and states. The same traffic tells how a contributor
+//! is heard: its passes per hour, and whether at its distance they run together into a steady
+//! sound.
 
 use crate::selection::LayerSelection;
 use physics::bands::{PERIOD_HOURS, PERIODS};
-use physics::percentile::{Random, relative_intensity};
+use physics::percentile::relative_intensity;
+use rayon::prelude::*;
 use tiles::sources::Layer;
 
-/// Draws of the sum's distribution.
-const DRAWS: usize = 2_000;
 /// Contributors under this share of their period's energy count as steady (their fluctuation does
 /// not move a percentile of the sum).
 const FLUCTUATING_SHARE_MIN: f64 = 1e-4;
+/// The same for the list's last row, everything it leaves out: a coarser account of a row that
+/// names nothing.
+pub const REST_SHARE_MIN: f64 = 1e-2;
 /// Day, evening and night shares of a road's daily flow where its fields carry none (sources built
 /// before the shares by country): motorways, trunks and their links; other roads.
 const MOTORWAY_PERIOD_SHARES: [f64; PERIODS] = [0.65, 0.20, 0.15];
@@ -135,9 +138,10 @@ fn favourable_share(mean: f64, homogeneous: f64, favourable: f64) -> f64 {
 
 /// One source whose level varies in time: its mean energy, its weather and lambda per period
 /// (infinite for a steady source, whose level follows the weather alone).
-struct Line<'w> {
+pub struct Line<'w> {
+    /// The contributor's group: the lines are added in its order, so a click repeats exactly.
     key: u64,
-    energy: [f64; PERIODS],
+    pub energy: [f64; PERIODS],
     weather: &'w Weather,
     lambda: [f64; PERIODS],
     /// A road's hourly profile ([`HOURLY_SHARES`]); `None` keeps the period's mean every hour.
@@ -145,6 +149,129 @@ struct Line<'w> {
     /// An event source's share of each period it sounds: on, it is its mean over the duty; off,
     /// silent.
     duty: Option<[f64; PERIODS]>,
+}
+
+impl<'w> Line<'w> {
+    /// A contributor's line: industry, buildings and ships steady but for their events, a road,
+    /// railway or aeroway by its traffic; none for one of those whose fields carry no traffic.
+    pub fn of(
+        contributor: &'w crate::update::Contributor,
+        fields: Option<&serde_json::Value>,
+    ) -> Option<Self> {
+        let steady = matches!(
+            contributor.layer,
+            Layer::Industry | Layer::Building | Layer::Ship
+        );
+        let (lambda, profile, duty) = if steady {
+            ([f64::INFINITY; PERIODS], None, fields.and_then(duty))
+        } else {
+            let (per_hour, speed, profile) =
+                traffic(contributor.layer, fields?, contributor.energy)?;
+            (
+                lambda(per_hour, speed, contributor.distance_m),
+                profile,
+                None,
+            )
+        };
+        Some(Line {
+            key: contributor.group_key,
+            energy: contributor.energy,
+            weather: &contributor.weather,
+            lambda,
+            profile,
+            duty,
+        })
+    }
+}
+
+impl<'w> Line<'w> {
+    /// The flights heard, one line at their energy-weighted lambda (`weather` theirs: the mean in
+    /// either state).
+    pub fn flights(
+        weather: &'w Weather,
+        (energy, energy_lambda): ([f64; PERIODS], [f64; PERIODS]),
+    ) -> Self {
+        Line {
+            key: u64::MAX,
+            energy,
+            weather,
+            lambda: std::array::from_fn(|p| {
+                if energy[p] > 0.0 {
+                    energy_lambda[p] / energy[p]
+                } else {
+                    f64::INFINITY
+                }
+            }),
+            profile: None,
+            duty: None,
+        }
+    }
+
+    /// The line's mean in each weather state of `period`: a piece is favourable while the place's
+    /// weather u lies under its favourable share, so over the state's span of u it is favourable
+    /// for the part of the span under the share (no step where a share crosses a state's middle).
+    fn state_means(&self, period: usize) -> [f64; WEATHER_STATES] {
+        let states = self.weather.states(period);
+        if states
+            .iter()
+            .all(|&(_, homogeneous, favourable)| homogeneous + favourable <= 0.0)
+        {
+            return [self.energy[period]; WEATHER_STATES];
+        }
+        std::array::from_fn(|state| {
+            let span = 1.0 / WEATHER_STATES as f64;
+            let low = state as f64 * span;
+            states
+                .iter()
+                .map(|&(share, homogeneous, favourable)| {
+                    let favoured = (share.clamp(low, low + span) - low) / span;
+                    favoured * favourable + (1.0 - favoured) * homogeneous
+                })
+                .sum()
+        })
+    }
+
+    /// The line's intensities in an hour of `period` with `factor` its flow then and the line at
+    /// `mean` (its weather state's), each with its share of the time; a line that holds its mean
+    /// one value, an event its duty.
+    fn values(&self, period: usize, mean: f64, factor: f64) -> Vec<(f64, f64)> {
+        let lambda = self.lambda[period] * factor;
+        match self.duty.map(|duty| duty[period]) {
+            Some(duty) if duty > 0.0 => line_values(mean * factor, 0.0, Some(duty)),
+            Some(_) => Vec::new(),
+            None if lambda >= HOLDS_MEAN_LAMBDA => vec![(mean * factor, 1.0)],
+            None => line_values(mean * factor, lambda, None),
+        }
+    }
+
+    /// The line alone over a steady `floor` in `period`: each of its levels (dB) with its share of
+    /// the period, over every hour and weather state; silence apart.
+    pub fn own_levels(&self, period: usize, floor: f64, visit: &mut dyn FnMut(f64, f64)) {
+        if self.energy[period] <= 0.0 {
+            if floor > 0.0 {
+                visit(10.0 * floor.log10(), 1.0);
+            }
+            return;
+        }
+        let factors: Vec<f64> = match self.profile {
+            Some(profile) => (0..PERIOD_HOURS[period] as usize)
+                .map(|slot| hour_factor(profile, period, slot))
+                .collect(),
+            None => vec![1.0],
+        };
+        let weight = 1.0 / (factors.len() * WEATHER_STATES) as f64;
+        for mean in self.state_means(period) {
+            for &factor in &factors {
+                let values = self.values(period, mean, factor);
+                let silent = 1.0 - values.iter().map(|(_, share)| share).sum::<f64>();
+                for (value, share) in values.into_iter().chain([(0.0, silent)]) {
+                    if floor + value > 0.0 && share > 0.0 {
+                        visit(10.0 * (floor + value).log10(), share * weight);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn number(fields: &serde_json::Value, name: &str) -> Option<f64> {
@@ -291,222 +418,315 @@ pub fn heard(
     })
 }
 
-/// Exceeded 5 % of the time: what the loud moments of a source are made of.
-const LOUD_EXCEEDED: f64 = 0.05;
+/// The grid of the level distributions: levels at multiples of [`BIN_DB`] from [`LEVEL_MIN_DB`]
+/// (each bin holds the levels rounding to it); a level below the grid counts as silence.
+pub const BIN_DB: f64 = 0.1;
+const LEVEL_MIN_DB: f64 = -30.0;
+const BINS: usize = 1_800;
+/// Equally likely weather states of the place, one for every ray of it (a night's inversion bends
+/// them alike): in state k a piece is favourable when its share exceeds (k + 0.5) / WEATHER_STATES.
+const WEATHER_STATES: usize = 10;
+/// A line at least this dense (Kurze's lambda) holds its mean: its level stays within about 0.5 dB.
+const HOLDS_MEAN_LAMBDA: f64 = 10.0;
+/// A line held at its mean: one whose level exceeded a thousandth of the time stays a hundredth of
+/// the steady energy's (20 dB under it), so it moves no level by more than a bin but for moments
+/// too rare to count.
+const HELD_EXCEEDED: f64 = 1e-3;
+const HELD_SHARE: f64 = 1e-2;
 
-/// A source's energy exceeded 5 % of the time by itself, per period: its mean energy where it is
-/// steady (industry, buildings, ships, or no traffic in its fields), an event source's level while
-/// it sounds if it sounds at least 5 % of the time (else nothing), else its line's L5 at its
-/// lambda through its hours ([`loud_line`]). A car every few hours by the window weighs little;
-/// the flights of an approach a lot.
-pub fn loud_energy(
-    contributor: &crate::update::Contributor,
-    fields: Option<&serde_json::Value>,
-) -> [f64; PERIODS] {
-    if let Some(duty) = fields.and_then(duty) {
-        return std::array::from_fn(|p| {
-            if duty[p] >= LOUD_EXCEEDED {
-                contributor.energy[p] / duty[p]
-            } else {
-                0.0
-            }
-        });
-    }
-    let steady = matches!(
-        contributor.layer,
-        Layer::Industry | Layer::Building | Layer::Ship
-    );
-    match fields
-        .filter(|_| !steady)
-        .and_then(|fields| traffic(contributor.layer, fields, contributor.energy))
-    {
-        Some((per_hour, speed, profile)) => {
-            let lambda = lambda(per_hour, speed, contributor.distance_m);
-            std::array::from_fn(|p| loud_line(contributor.energy[p], lambda[p], profile, p))
+/// The probabilities at which a line's distribution is read, each with the share of the time it
+/// stands for: every percent to 0.99 (the levels exceeded 5 to 90 % of the time within one), then
+/// evenly in log(1 - p) to 1 - 1e-8, where a sparse line's rare passes lie (a car a day 10 m away
+/// is loud for a few seconds of it).
+fn nodes() -> &'static [(f64, f64)] {
+    static NODES: std::sync::OnceLock<Vec<(f64, f64)>> = std::sync::OnceLock::new();
+    NODES.get_or_init(|| {
+        const EVEN: usize = 99;
+        const TAIL_STEPS: usize = 24;
+        let mut nodes: Vec<(f64, f64)> = (0..EVEN)
+            .map(|k| ((k as f64 + 0.5) / 100.0, 0.01))
+            .collect();
+        // -log10(1 - p) from 2 to 8 in steps of a quarter, and the last 1e-8 in one.
+        let at = |t: f64| 1.0 - 10f64.powf(-t);
+        for k in 0..TAIL_STEPS {
+            let (a, b) = (2.0 + k as f64 * 0.25, 2.25 + k as f64 * 0.25);
+            nodes.push((at((a + b) / 2.0), at(b) - at(a)));
         }
-        None => contributor.energy,
-    }
-}
-
-/// A line's energy exceeded 5 % of period `p` by itself: its passes (Kurze at the hour's lambda)
-/// within each hour of its `profile`, the hours weighed alike as the time levels' draws weigh
-/// them (a local road's night is loud in its 06-07 h).
-fn loud_line(mean: f64, lambda: f64, profile: Option<usize>, p: usize) -> f64 {
-    const GRID: usize = 200;
-    let Some(profile) = profile else {
-        return mean * relative_intensity(lambda, 1.0 - LOUD_EXCEEDED);
-    };
-    let mut values: Vec<f64> = (0..PERIOD_HOURS[p] as usize)
-        .flat_map(|slot| {
-            let factor = hour_factor(profile, p, slot);
-            (0..GRID).map(move |k| {
-                let probability = (k as f64 + 0.5) / GRID as f64;
-                mean * factor * relative_intensity(lambda * factor, probability)
-            })
-        })
-        .collect();
-    values.sort_by(f64::total_cmp);
-    values[((1.0 - LOUD_EXCEEDED) * (values.len() - 1) as f64).round() as usize]
-}
-
-/// The flights' energy exceeded 5 % of the time, from their energy and energy times lambda.
-pub fn loud_flight_energy(
-    (energy, energy_lambda): ([f64; PERIODS], [f64; PERIODS]),
-) -> [f64; PERIODS] {
-    std::array::from_fn(|p| {
-        if energy[p] > 0.0 {
-            energy[p] * relative_intensity(energy_lambda[p] / energy[p], 1.0 - LOUD_EXCEEDED)
-        } else {
-            0.0
-        }
+        nodes.push((1.0 - 0.5e-8, 1e-8));
+        nodes
     })
 }
 
-/// The percentile levels of an answer: `selections` with their contributors, the flights' energy
-/// and energy times lambda per period, `fields` a contributor's display fields, `seed` the click's.
-pub fn percentiles(
-    selections: &[LayerSelection],
-    (flight_energy, flight_energy_lambda): ([f64; PERIODS], [f64; PERIODS]),
+/// How the summed level is spread over a period: the share of the time in each bin of the level
+/// grid with the mean intensity of its moments (so adding sounds loses no energy to the grid), and
+/// the share in silence.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Distribution {
+    pub silent: f64,
+    /// Per bin its share of the time and that share times its moments' mean intensity.
+    bins: Vec<[f64; 2]>,
+}
+
+impl Distribution {
+    fn empty() -> Self {
+        Distribution {
+            silent: 0.0,
+            bins: vec![[0.0; 2]; BINS],
+        }
+    }
+
+    /// The bin of a level; a level under the grid is held in its lowest bin, at its own intensity.
+    fn bin(level_db: f64) -> usize {
+        (((level_db - LEVEL_MIN_DB) / BIN_DB).round().max(0.0) as usize).min(BINS - 1)
+    }
+
+    /// Each bin holding a share of the time: its moments' mean intensity and its share.
+    fn intensities(&self) -> impl Iterator<Item = (f64, f64)> + '_ {
+        self.bins
+            .iter()
+            .filter(|[share, _]| *share > 0.0)
+            .map(|&[share, weighted]| (weighted / share, share))
+    }
+
+    /// Each level (dB) holding a share of the time, with its share; silence apart.
+    pub fn levels(&self) -> impl Iterator<Item = (f64, f64)> + '_ {
+        self.intensities()
+            .map(|(intensity, share)| (10.0 * intensity.log10(), share))
+    }
+
+    /// The level exceeded `exceeded` of the time (dB, `-inf` where silence is).
+    pub fn exceeded_db(&self, exceeded: f64) -> f64 {
+        let mut above = 0.0;
+        for &[share, weighted] in self.bins.iter().rev() {
+            above += share;
+            if share > 0.0 && above > exceeded * (1.0 - 1e-12) {
+                return 10.0 * (weighted / share).log10();
+            }
+        }
+        f64::NEG_INFINITY
+    }
+
+    /// A distribution of given levels (dB, `-inf` silent) with their shares of the time.
+    #[cfg(test)]
+    pub fn of_levels(levels: &[(f64, f64)]) -> Self {
+        let mut distribution = Distribution::empty();
+        for &(level, share) in levels {
+            distribution.add(10f64.powf(level / 10.0), share);
+        }
+        distribution
+    }
+
+    /// The distribution with independent `values` (intensities with their shares of the time)
+    /// added at every moment. A sum's bin is found from the two levels (a table); its intensity
+    /// is kept exact.
+    fn with_line(&self, values: &[(f64, f64)]) -> Self {
+        let mut sum = Distribution::empty();
+        let levels: Vec<f64> = values
+            .iter()
+            .map(|&(value, _)| {
+                if value > 0.0 {
+                    10.0 * value.log10()
+                } else {
+                    f64::NEG_INFINITY
+                }
+            })
+            .collect();
+        for &(value, weight) in values {
+            sum.add(value, self.silent * weight);
+        }
+        for (intensity, share) in self.intensities() {
+            let level = 10.0 * intensity.log10();
+            for (&(value, weight), &value_level) in values.iter().zip(&levels) {
+                let bin = Self::bin(power_sum_db(level, value_level));
+                sum.bins[bin][0] += share * weight;
+                sum.bins[bin][1] += share * weight * (intensity + value);
+            }
+        }
+        sum
+    }
+
+    /// The distribution with a steady `intensity` added at every moment.
+    fn over(&self, intensity: f64) -> Self {
+        self.with_line(&[(intensity, 1.0)])
+    }
+
+    /// Adds `other`'s shares times `weight`.
+    fn add_scaled(&mut self, other: &Distribution, weight: f64) {
+        self.silent += other.silent * weight;
+        for (into, from) in self.bins.iter_mut().zip(&other.bins) {
+            into[0] += from[0] * weight;
+            into[1] += from[1] * weight;
+        }
+    }
+
+    fn add(&mut self, intensity: f64, share: f64) {
+        if intensity > 0.0 {
+            let bin = Self::bin(10.0 * intensity.log10());
+            self.bins[bin][0] += share;
+            self.bins[bin][1] += share * intensity;
+        } else {
+            self.silent += share;
+        }
+    }
+}
+
+/// The level of two levels' summed energy (dB): the louder one and the step the quieter adds,
+/// tabled every 0.01 dB of their difference (a silent one adds nothing).
+fn power_sum_db(a: f64, b: f64) -> f64 {
+    static STEPS: std::sync::OnceLock<Vec<f64>> = std::sync::OnceLock::new();
+    const PER_DB: f64 = 100.0;
+    const SPAN_DB: f64 = 60.0;
+    let steps = STEPS.get_or_init(|| {
+        (0..=(SPAN_DB * PER_DB) as usize)
+            .map(|k| 10.0 * (1.0 + 10f64.powf(-(k as f64 / PER_DB) / 10.0)).log10())
+            .collect()
+    });
+    let (high, difference) = if a >= b { (a, a - b) } else { (b, b - a) };
+    if !difference.is_finite() {
+        return high;
+    }
+    high + steps
+        .get((difference * PER_DB).round() as usize)
+        .copied()
+        .unwrap_or(0.0)
+}
+
+/// A line's intensities at the nodes, each with its share of the time: Kurze's quantiles of
+/// `mean` at `lambda`, or an event's mean over its duty while it sounds and silence otherwise.
+fn line_values(mean: f64, lambda: f64, duty: Option<f64>) -> Vec<(f64, f64)> {
+    match duty {
+        Some(duty) => vec![(0.0, 1.0 - duty), (mean / duty, duty)],
+        None => nodes()
+            .iter()
+            .map(|&(p, weight)| (mean * relative_intensity(lambda, p), weight))
+            .collect(),
+    }
+}
+
+/// The lines of `contributors` summing to `total` per period: every one with traffic in its fields
+/// (or steady but for its events) over `share_min` of its period, in a fixed order; and what is
+/// left of each period's energy, steady.
+pub fn lines<'a>(
+    contributors: impl Iterator<Item = &'a crate::update::Contributor>,
+    total: [f64; PERIODS],
+    share_min: f64,
     fields: &dyn Fn(&crate::update::Contributor) -> Option<serde_json::Value>,
-    seed: u64,
-) -> Percentiles {
+) -> (Vec<Line<'a>>, [f64; PERIODS]) {
+    let mut lines: Vec<Line<'a>> = contributors
+        .filter(|contributor| (0..PERIODS).any(|p| contributor.energy[p] > share_min * total[p]))
+        .filter_map(|contributor| Line::of(contributor, fields(contributor).as_ref()))
+        .collect();
+    // The contributors come from hash maps: a fixed order keeps a click's rounding the same.
+    lines.sort_by_key(|line| line.key);
+    let steady = std::array::from_fn(|p| {
+        (total[p] - lines.iter().map(|line| line.energy[p]).sum::<f64>()).max(0.0)
+    });
+    (lines, steady)
+}
+
+/// The distribution of the summed level over each period of a click: every contributor of
+/// `selections` and the flights heard ([`distributions_of`]).
+pub fn distributions(
+    selections: &[LayerSelection],
+    flights: ([f64; PERIODS], [f64; PERIODS]),
+    fields: &dyn Fn(&crate::update::Contributor) -> Option<serde_json::Value>,
+) -> [Distribution; PERIODS] {
+    let mut flight_weather = Weather::default();
+    flight_weather.add(&flights.0, &[flights.0; 2]);
     let total: [f64; PERIODS] =
         std::array::from_fn(|p| selections.iter().map(|s| s.answer_energy()[p]).sum::<f64>());
-    let mut flight_weather = Weather::default();
-    flight_weather.add(&flight_energy, &[flight_energy; 2]);
-    let mut lines = Vec::new();
-    for selection in selections {
-        for contributor in selection.contributors.values() {
-            let significant =
-                (0..PERIODS).any(|p| contributor.energy[p] > FLUCTUATING_SHARE_MIN * total[p]);
-            if !significant {
-                continue;
-            }
-            // Industry, buildings and ships are steady (events apart); their level still follows
-            // the weather.
-            let mut events = None;
-            let (lambda, profile) = if matches!(
-                selection.layer,
-                Layer::Industry | Layer::Building | Layer::Ship
-            ) {
-                events = fields(contributor).as_ref().and_then(duty);
-                ([f64::INFINITY; PERIODS], None)
-            } else {
-                let Some((per_hour, speed, profile)) = fields(contributor)
-                    .and_then(|f| traffic(contributor.layer, &f, contributor.energy))
-                else {
-                    continue;
-                };
-                (lambda(per_hour, speed, contributor.distance_m), profile)
-            };
-            lines.push(Line {
-                key: contributor.group_key,
-                energy: contributor.energy,
-                weather: &contributor.weather,
-                lambda,
-                profile,
-                duty: events,
-            });
-        }
-    }
-    // The contributors come from hash maps: a fixed order keeps the draws of a click the same.
-    lines.sort_by_key(|line| line.key);
-    lines.push(Line {
-        key: u64::MAX,
-        energy: flight_energy,
-        weather: &flight_weather,
-        lambda: std::array::from_fn(|p| {
-            if flight_energy[p] > 0.0 {
-                flight_energy_lambda[p] / flight_energy[p]
-            } else {
-                f64::INFINITY
-            }
-        }),
-        profile: None,
-        duty: None,
-    });
-    let mut random = Random::new(seed);
-    let mut result = Percentiles {
-        l5: [f64::NEG_INFINITY; PERIODS],
-        l10: [f64::NEG_INFINITY; PERIODS],
-        l50: [f64::NEG_INFINITY; PERIODS],
-        l90: [f64::NEG_INFINITY; PERIODS],
-    };
-    for (p, period_total) in total.iter().enumerate() {
-        let fluctuating: f64 = lines.iter().map(|line| line.energy[p]).sum();
-        let steady = (period_total - fluctuating).max(0.0);
-        let mut draws = vec![steady; DRAWS];
-        let mut strata: Vec<usize> = (0..DRAWS).collect();
-        // The weather of each draw, one for all sources (a night's inversion or a wind bends
-        // every ray of the place alike): stratified too.
-        let shuffle = |strata: &mut Vec<usize>, random: &mut Random| {
-            for k in (1..DRAWS).rev() {
-                let j = (random.uniform() * (k + 1) as f64) as usize;
-                strata.swap(k, j.min(k));
-            }
-        };
-        shuffle(&mut strata, &mut random);
-        let weather: Vec<f64> = strata
+    let (mut lines, mut steady) = lines(
+        selections
             .iter()
-            .map(|&stratum| (stratum as f64 + random.uniform()) / DRAWS as f64)
-            .collect();
-        // The hour of each draw, one for all roads (the day's rhythm moves them together).
+            .flat_map(|selection| selection.contributors.values()),
+        total,
+        FLUCTUATING_SHARE_MIN,
+        fields,
+    );
+    let flights_line = Line::flights(&flight_weather, flights);
+    for (steady, energy) in steady.iter_mut().zip(flights_line.energy) {
+        *steady = (*steady - energy).max(0.0);
+    }
+    lines.push(flights_line);
+    distributions_of(&lines, steady)
+}
+
+/// The distribution of the summed level over each period: for every hour of it (the roads' flows
+/// follow the hour together) and every weather state (one for every ray of the place), the lines
+/// that move the level added, independent, then the steady energy; the hours and states averaged.
+pub fn distributions_of(lines: &[Line], steady: [f64; PERIODS]) -> [Distribution; PERIODS] {
+    std::array::from_fn(|p| {
         let hours = PERIOD_HOURS[p] as usize;
-        shuffle(&mut strata, &mut random);
-        let slots: Vec<usize> = strata
-            .iter()
-            .map(|&stratum| (stratum * hours / DRAWS).min(hours - 1))
-            .collect();
-        for line in lines.iter().filter(|line| line.energy[p] > 0.0) {
-            // Fisher-Yates: which stratum of this line's probability each draw takes.
-            shuffle(&mut strata, &mut random);
-            let states = line.weather.states(p);
-            for (k, stratum) in strata.iter().enumerate() {
-                let probability = (*stratum as f64 + random.uniform()) / DRAWS as f64;
-                let mean: f64 = states
-                    .iter()
-                    .map(|&(share, homogeneous, favourable)| {
-                        if weather[k] < share {
-                            favourable
-                        } else {
-                            homogeneous
-                        }
-                    })
-                    .sum();
-                draws[k] += match line.duty {
-                    // An event sounds in its duty's share of the draws, at its mean over it.
-                    Some(duty) if duty[p] > 0.0 => {
-                        if probability >= 1.0 - duty[p] {
-                            mean / duty[p]
-                        } else {
-                            0.0
-                        }
-                    }
-                    Some(_) => 0.0,
-                    None => {
-                        let factor = line
-                            .profile
-                            .map_or(1.0, |profile| hour_factor(profile, p, slots[k]));
-                        mean * factor * relative_intensity(line.lambda[p] * factor, probability)
-                    }
-                };
-            }
-        }
-        draws.sort_by(f64::total_cmp);
-        let level = |exceeded: f64| {
-            let value = draws[((1.0 - exceeded) * (DRAWS - 1) as f64).round() as usize];
-            if value > 0.0 {
-                10.0 * value.log10()
-            } else {
-                f64::NEG_INFINITY
-            }
+        let means: Vec<[f64; WEATHER_STATES]> =
+            lines.iter().map(|line| line.state_means(p)).collect();
+        // The hours differ only where a road follows its hourly profile.
+        let hours = if lines.iter().any(|line| line.profile.is_some()) {
+            hours
+        } else {
+            1
         };
-        result.l5[p] = level(0.05);
-        result.l10[p] = level(0.1);
-        result.l50[p] = level(0.5);
-        result.l90[p] = level(0.9);
+        // Every hour and weather state apart, in parallel.
+        let weight = 1.0 / (hours * WEATHER_STATES) as f64;
+        let parts: Vec<Distribution> = (0..hours * WEATHER_STATES)
+            .into_par_iter()
+            .map(|task| {
+                let (slot, state) = (task / WEATHER_STATES, task % WEATHER_STATES);
+                let mut floor = steady[p];
+                let mut moving = Distribution::empty();
+                moving.silent = 1.0;
+                let mut held = Vec::new();
+                for (line, means) in lines.iter().zip(&means) {
+                    if line.energy[p] <= 0.0 {
+                        continue;
+                    }
+                    let factor = line
+                        .profile
+                        .map_or(1.0, |profile| hour_factor(profile, p, slot));
+                    let mean = means[state] * factor;
+                    let lambda = line.lambda[p] * factor;
+                    match line.duty.map(|duty| duty[p]) {
+                        Some(duty) if duty > 0.0 => {
+                            moving = moving.with_line(&line_values(mean, 0.0, Some(duty)))
+                        }
+                        Some(_) => {}
+                        None if lambda >= HOLDS_MEAN_LAMBDA => floor += mean,
+                        None => held.push((mean, lambda)),
+                    }
+                }
+                // A line moves the level unless its level exceeded a thousandth of the time stays
+                // a hundredth of the steady energy: then it holds its mean in it.
+                let steady_energy = floor + held.iter().map(|(mean, _)| mean).sum::<f64>();
+                for (mean, lambda) in held {
+                    if mean * relative_intensity(lambda, 1.0 - HELD_EXCEEDED)
+                        < HELD_SHARE * steady_energy
+                    {
+                        floor += mean;
+                    } else {
+                        moving = moving.with_line(&line_values(mean, lambda, None));
+                    }
+                }
+                moving.over(floor)
+            })
+            .collect();
+        let mut mixture = Distribution::empty();
+        for part in &parts {
+            mixture.add_scaled(part, weight);
+        }
+        mixture
+    })
+}
+
+impl Percentiles {
+    /// The levels exceeded 5, 10, 50 and 90 % of each period's time.
+    pub fn of(distributions: &[Distribution; PERIODS]) -> Self {
+        let at = |exceeded: f64| std::array::from_fn(|p| distributions[p].exceeded_db(exceeded));
+        Percentiles {
+            l5: at(0.05),
+            l10: at(0.1),
+            l50: at(0.5),
+            l90: at(0.9),
+        }
     }
-    result
 }
 
 #[cfg(test)]
@@ -516,6 +736,18 @@ mod tests {
     use crate::update::Contributor;
     use physics::bands::energy;
     use physics::percentile::{exceeded_level_db, relative_intensity};
+
+    /// The time levels of `selections` with no flights and `fields` the contributors' displays.
+    fn levels(
+        selections: &[LayerSelection],
+        fields: &dyn Fn(&Contributor) -> Option<serde_json::Value>,
+    ) -> Percentiles {
+        Percentiles::of(&distributions(
+            selections,
+            ([0.0; PERIODS], [0.0; PERIODS]),
+            fields,
+        ))
+    }
 
     fn contributor(key: u64, layer: Layer, leq_db: f64, distance_m: f64) -> Contributor {
         Contributor {
@@ -536,7 +768,7 @@ mod tests {
             pieces: Vec::new(),
             lines: Vec::new(),
             heard: None,
-            loud: None,
+            nden_sone: None,
         }
     }
 
@@ -575,20 +807,33 @@ mod tests {
         assert!((per_hour[2] - 800.0 * OTHER_PERIOD_SHARES[2] / PERIOD_HOURS[2]).abs() < 1e-9);
     }
 
-    /// A steady local road's loud night moments are its morning hour's flow, well over its night
-    /// mean; airport movements run in the periods their energy fell in, ground vehicles counted.
+    /// A local road alone at night is loudest in its morning hour, its flow then well over its
+    /// night mean; airport movements run in the periods their energy fell in, ground vehicles
+    /// counted.
     #[test]
-    fn loud_moments_follow_the_hours_and_movements_their_periods() {
-        let mean = 1.0;
-        let flat = mean * relative_intensity(1e6, 1.0 - LOUD_EXCEEDED);
+    fn a_road_follows_its_hours_and_movements_their_periods() {
+        let steady = Line {
+            key: 1,
+            energy: [1.0; PERIODS],
+            weather: &Weather::default(),
+            lambda: [1e6; PERIODS],
+            profile: Some(2),
+            duty: None,
+        };
+        let mut loudest = f64::NEG_INFINITY;
+        let mut shares = 0.0;
+        steady.own_levels(2, 0.0, &mut |level, share| {
+            loudest = loudest.max(level);
+            shares += share;
+        });
         let peak = (0..8)
             .map(|slot| hour_factor(2, 2, slot))
             .fold(0.0, f64::max);
-        let night = loud_line(mean, 1e6, Some(2), 2);
         assert!(
-            peak > 2.0 && (night / peak - flat).abs() < 0.05,
-            "{night} {peak}"
+            peak > 2.0 && (loudest - 10.0 * peak.log10()).abs() < 1e-9,
+            "{loudest}"
         );
+        assert!((shares - 1.0).abs() < 1e-9);
         let cargo = serde_json::json!({"arrivals_per_day": 4.0, "departures_per_day": 4.0,
             "ground_vehicles_per_day": 2.0});
         let (per_hour, _, _) = traffic(Layer::Aircraft, &cargo, [0.0, 0.0, 1.0]).unwrap();
@@ -597,12 +842,11 @@ mod tests {
     }
 
     /// One sparse road alone: its levels are the quantiles of its line over the period's hours,
-    /// each hour at its share of the day's vehicles (the stratified draws make them nearly
-    /// exact), far below its Leq most of the time.
+    /// each hour at its share of the day's vehicles, far below its Leq most of the time.
     #[test]
     fn a_lone_sparse_road_has_its_lines_own_levels_over_the_hours() {
         let road = selection(Layer::Road, vec![contributor(7, Layer::Road, 40.0, 4.0)]);
-        let levels = percentiles(&[road], ([0.0; PERIODS], [0.0; PERIODS]), &quiet_road, 1);
+        let levels = levels(&[road], &quiet_road);
         let lambda =
             33.0 * OTHER_PERIOD_SHARES[0] / (PERIOD_HOURS[0] * 3_600.0) / (20.0 / 3.6) * 4.0;
         let mut pooled: Vec<f64> = (0..12)
@@ -647,7 +891,7 @@ mod tests {
                 "road_class": "secondary"}),
             )
         };
-        let levels = percentiles(&[road], ([0.0; PERIODS], [0.0; PERIODS]), &busy, 4);
+        let levels = levels(&[road], &busy);
         let constant_l90 = exceeded_level_db(60.0, 12.0, 0.9);
         assert!(constant_l90 > 59.0, "{constant_l90}");
         assert!(levels.l90[2] < 56.0, "{}", levels.l90[2]);
@@ -673,25 +917,6 @@ mod tests {
         assert_eq!(heard(&industry, &busy), None);
     }
 
-    /// The loud moments of a source by itself: 33 cars a day 4 m away are there for under 5 % of
-    /// the time and weigh a fifth of their mean; industry keeps its mean; passes that run together
-    /// keep about theirs; flights a few times an hour weigh several times theirs.
-    #[test]
-    fn loud_moments_weigh_rare_passes_little_and_frequent_flights_much() {
-        let lane = contributor(7, Layer::Road, 40.0, 4.0);
-        let rare = loud_energy(&lane, quiet_road(&lane).as_ref())[0] / energy(40.0);
-        assert!(rare < 0.4, "{rare}");
-        let industry = contributor(9, Layer::Industry, 45.0, 30.0);
-        assert_eq!(loud_energy(&industry, None), industry.energy);
-        let motorway = contributor(8, Layer::Road, 45.0, 300.0);
-        let busy = serde_json::json!({"aadt_light": 30_000.0, "speed_kmh": 100.0,
-            "road_class": "motorway"});
-        let steady = loud_energy(&motorway, Some(&busy))[0] / energy(45.0);
-        assert!((1.0..1.5).contains(&steady), "{steady}");
-        let flights = loud_flight_energy(([1.0; PERIODS], [0.05; PERIODS]))[0];
-        assert!(flights > 3.0, "{flights}");
-    }
-
     /// Industry is steady; the same click gives the same levels whatever order the hash maps
     /// hold the contributors in.
     #[test]
@@ -700,32 +925,44 @@ mod tests {
             Layer::Industry,
             vec![contributor(1, Layer::Industry, 45.0, 300.0)],
         );
-        let levels = percentiles(
-            &[industry],
-            ([0.0; PERIODS], [0.0; PERIODS]),
-            &quiet_road,
-            2,
-        );
-        for level in [levels.l10[0], levels.l50[0], levels.l90[0]] {
-            assert!((level - 45.0).abs() < 1e-9);
+        let industry_levels = levels(&[industry], &quiet_road);
+        for level in [
+            industry_levels.l10[0],
+            industry_levels.l50[0],
+            industry_levels.l90[0],
+        ] {
+            assert!((level - 45.0).abs() < 1e-9, "{level}");
         }
         let roads = |order: &[u64]| {
             let contributors = order
                 .iter()
                 .map(|&key| contributor(key, Layer::Road, 30.0 + key as f64, 5.0 * key as f64))
                 .collect();
-            percentiles(
-                &[selection(Layer::Road, contributors)],
-                ([0.0; PERIODS], [0.0; PERIODS]),
-                &quiet_road,
-                3,
-            )
+            levels(&[selection(Layer::Road, contributors)], &quiet_road)
         };
         let (first, second) = (roads(&[1, 2, 3, 4, 5]), roads(&[5, 3, 1, 4, 2]));
         assert_eq!(
             (first.l10, first.l50, first.l90),
             (second.l10, second.l50, second.l90)
         );
+    }
+
+    /// Adding many lines loses no energy to the grid: 500 identical lines, each soon a small part
+    /// of a 0.1 dB step of their sum, keep their summed mean (rounding to the grid lost 1.2 dB).
+    #[test]
+    fn many_quiet_lines_keep_their_energy() {
+        let mut sum = Distribution::empty();
+        sum.silent = 1.0;
+        let values = line_values(1.0, 0.5, None);
+        let mean: f64 = values.iter().map(|(value, weight)| value * weight).sum();
+        for _ in 0..500 {
+            sum = sum.with_line(&values);
+        }
+        let total: f64 = sum
+            .intensities()
+            .map(|(intensity, share)| intensity * share)
+            .sum();
+        assert!((total / (500.0 * mean) - 1.0).abs() < 1e-9, "{total}");
     }
 
     /// A site's two pieces on either side of the click, one always downwind (favourable, 10 dB
@@ -743,22 +980,81 @@ mod tests {
         site.weather
             .add(&[calm; PERIODS], &[[calm; PERIODS], [favourable; PERIODS]]);
         site.energy = [favourable + calm; PERIODS];
-        let levels = percentiles(
-            &[selection(Layer::Industry, vec![site])],
-            ([0.0; PERIODS], [0.0; PERIODS]),
-            &|_| None,
-            5,
-        );
+        let levels = levels(&[selection(Layer::Industry, vec![site])], &|_| None);
         for p in 0..PERIODS {
             for level in [levels.l5[p], levels.l50[p], levels.l90[p]] {
-                assert!((level - 11f64.log10() * 10.0).abs() < 1e-9, "{level}");
+                assert!(
+                    (level - 11f64.log10() * 10.0).abs() <= BIN_DB / 2.0,
+                    "{level}"
+                );
             }
         }
     }
 
+    /// A steady source alone keeps its weather: favourable (50 dB) half the time and calm (40 dB)
+    /// the other half, it is at each for half the period, not at their mean.
+    #[test]
+    fn a_source_alone_keeps_its_weather() {
+        let mut plant = contributor(1, Layer::Industry, 0.0, 300.0);
+        let (calm, favourable) = (energy(40.0), energy(50.0));
+        let mean = 0.5 * (calm + favourable);
+        plant.weather = Weather::default();
+        plant
+            .weather
+            .add(&[mean; PERIODS], &[[calm; PERIODS], [favourable; PERIODS]]);
+        plant.energy = [mean; PERIODS];
+        let line = Line::of(&plant, None).unwrap();
+        let mut levels: Vec<(f64, f64)> = Vec::new();
+        line.own_levels(0, 0.0, &mut |level, share| levels.push((level, share)));
+        let at = |db: f64| -> f64 {
+            levels
+                .iter()
+                .filter(|(level, _)| (level - db).abs() < 1e-9)
+                .map(|(_, share)| share)
+                .sum()
+        };
+        assert!(
+            (at(40.0) - 0.5).abs() < 1e-9 && (at(50.0) - 0.5).abs() < 1e-9,
+            "{levels:?}"
+        );
+    }
+
+    /// A source's favourable share moves its levels smoothly: 24.9 % and 25.1 % of the time
+    /// favourable (10 dB over calm) give nearly the same spread (ten states read at their middles
+    /// jumped there by a whole state).
+    #[test]
+    fn the_weather_moves_the_levels_smoothly() {
+        let spread = |share: f64| {
+            let mut site = contributor(1, Layer::Industry, 0.0, 300.0);
+            let (calm, favourable) = (1.0, 10.0);
+            let mean = share * favourable + (1.0 - share) * calm;
+            site.weather = Weather::default();
+            site.weather
+                .add(&[mean; PERIODS], &[[calm; PERIODS], [favourable; PERIODS]]);
+            site.energy = [mean; PERIODS];
+            distributions(
+                &[selection(Layer::Industry, vec![site])],
+                ([0.0; PERIODS], [0.0; PERIODS]),
+                &|_| None,
+            )
+        };
+        let (below, above) = (spread(0.249), spread(0.251));
+        let mean = |distribution: &Distribution| -> f64 {
+            distribution
+                .levels()
+                .map(|(level, share)| share * 10f64.powf(level / 10.0))
+                .sum()
+        };
+        assert!((mean(&above[0]) / mean(&below[0]) - 1.0).abs() < 0.01);
+        for exceeded in [0.1, 0.5, 0.9] {
+            let step = above[0].exceeded_db(exceeded) - below[0].exceeded_db(exceeded);
+            assert!(step.abs() < 0.2, "{exceeded}: {step}");
+        }
+    }
+
     /// Church bells sounding 2 % of the day at a mean of 40 dB beside a steady 40 dB: the
-    /// percentiles keep the steady 40 (a steady source of the bells' energy would put L50 at 43),
-    /// the bells are heard as their rings a day and add nothing to the loud moments.
+    /// percentiles keep the steady 40 (a steady source of the bells' energy would put L50 at 43)
+    /// but for the bells' own 2 %, and the bells are heard as their rings a day.
     #[test]
     fn events_sound_for_their_duty_and_are_silent_otherwise() {
         let bells_fields = |c: &Contributor| {
@@ -768,21 +1064,32 @@ mod tests {
         };
         let plant = contributor(1, Layer::Industry, 40.0, 50.0);
         let bells = contributor(2, Layer::Building, 40.0, 80.0);
-        let levels = percentiles(
+        let levels = levels(
             &[
                 selection(Layer::Industry, vec![plant]),
                 selection(Layer::Building, vec![bells.clone()]),
             ],
-            ([0.0; PERIODS], [0.0; PERIODS]),
             &bells_fields,
-            5,
         );
         for level in [levels.l5[0], levels.l50[0], levels.l90[0]] {
             assert!((level - 40.0).abs() < 1e-9, "{level}");
         }
+        let distribution = &distributions(
+            &[
+                selection(
+                    Layer::Industry,
+                    vec![contributor(1, Layer::Industry, 40.0, 50.0)],
+                ),
+                selection(Layer::Building, vec![bells.clone()]),
+            ],
+            ([0.0; PERIODS], [0.0; PERIODS]),
+            &bells_fields,
+        )[0];
+        // Ringing, 40 dB over the duty's 2 %: 40 + 10 log10(1 + 50) for 2 % of the day.
+        let ringing = 10.0 * 51f64.log10() + 40.0;
+        assert!((distribution.exceeded_db(0.019) - ringing).abs() <= BIN_DB / 2.0);
         let fields = bells_fields(&bells).unwrap();
         let heard_bells = heard(&bells, &fields).unwrap();
         assert!(!heard_bells.steady && (heard_bells.per_hour[0] - 3.0).abs() < 1e-9);
-        assert_eq!(loud_energy(&bells, Some(&fields)), [0.0; PERIODS]);
     }
 }

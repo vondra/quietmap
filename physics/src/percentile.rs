@@ -24,25 +24,6 @@ pub const ROWS: usize = 41;
 /// 200 distances of line each side, each value the shortest decimal that reads back as its `f32`).
 static TABLE: [[f32; QUANTILES]; ROWS] = include!("percentile_table.rs");
 
-/// A small deterministic generator (SplitMix64): the same click draws the same numbers.
-#[derive(Clone)]
-pub struct Random(u64);
-
-impl Random {
-    pub fn new(seed: u64) -> Self {
-        Random(seed)
-    }
-
-    /// Uniform in [0, 1).
-    pub fn uniform(&mut self) -> f64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64
-    }
-}
-
 /// The standard normal quantile at probability `p` (Acklam's approximation, 1e-9 relative).
 fn normal_quantile(p: f64) -> f64 {
     const A: [f64; 6] = [

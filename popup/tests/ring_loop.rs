@@ -415,10 +415,7 @@ fn a_sampled_layer_sounds_as_the_exact_one() {
             lon,
             &Options { exact, pieces: 0 },
             &mut |update| {
-                last = update
-                    .loudness
-                    .as_ref()
-                    .map(|loudness| loudness.n5_den_sone);
+                last = update.loudness.as_ref().map(|loudness| loudness.nden_sone);
                 Ok(())
             },
         )
