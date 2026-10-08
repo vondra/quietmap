@@ -419,7 +419,7 @@ const COUNTRY_HEAVY_SPEED_CAP_KMH: [([u8; 2], f64); 13] = [
 
 /// The speed of a category on a road of `speed_kmh` in a country.
 fn category_speed(category: VehicleCategory, speed_kmh: f64, country_iso: u16) -> f64 {
-    if category != VehicleCategory::Heavy {
+    if !matches!(category, VehicleCategory::Medium | VehicleCategory::Heavy) {
         return speed_kmh;
     }
     let iso = country_iso.to_le_bytes();
@@ -454,9 +454,19 @@ const RURAL_FREE_FLOW_OF_LIMIT: f64 = 0.845;
 const RURAL_LIMIT_FROM_KMH: f64 = 80.0;
 
 /// Whether a row's cars drive below its limit by the rural free-flow share: a two-way rural row
-/// other than a motorway at a national rural limit.
-fn free_flows_below_limit(class_index: usize, built_up: u8, oneway: bool, limit_kmh: f64) -> bool {
-    built_up == 1 && !oneway && !matches!(class_index, 0 | 10) && limit_kmh >= RURAL_LIMIT_FROM_KMH
+/// other than a motorway at its country's national rural limit for the class, posted or not (a
+/// lower posted limit is driven as posted).
+fn free_flows_below_limit(
+    class_index: usize,
+    built_up: u8,
+    oneway: bool,
+    limit_kmh: f64,
+    national_kmh: f64,
+) -> bool {
+    built_up == 1
+        && !oneway
+        && !matches!(class_index, 0 | 10)
+        && limit_kmh >= RURAL_LIMIT_FROM_KMH.max(national_kmh)
 }
 
 /// The speed of an untagged road: the country's legal limit for main classes (urban or rural by
@@ -804,6 +814,7 @@ pub fn convert(
                 built_up.value(row),
                 oneway.value(row) != 0,
                 base_speed,
+                default_speed(class_index, country.value(row), 1).0,
             ) {
                 (base_speed * RURAL_FREE_FLOW_OF_LIMIT, "rural_free_flow")
             } else {
@@ -854,7 +865,12 @@ pub fn convert(
                         (0..4).map(move |c| CategoryFlow {
                             vehicles_per_hour: share * daily[c] * shares[c][period]
                                 / PERIOD_HOURS[period],
-                            speed_kmh: category_speed(categories[c], speed, country_iso),
+                            // The free-flow share is the cars' (DfT's counters); lorries and
+                            // buses keep their own limit on the road's.
+                            speed_kmh: match categories[c] {
+                                VehicleCategory::Light | VehicleCategory::Motorcycle => speed,
+                                category => category_speed(category, base_speed, country_iso),
+                            },
                             category: categories[c],
                             slope_percent: sign * slope,
                             junction: stop,
@@ -996,8 +1012,8 @@ mod tests {
         );
     }
 
-    /// Heavy vehicles keep to 80 km/h unless their country lets them faster; the others drive
-    /// the road's speed.
+    /// Heavy and medium vehicles (lorries and buses over 3.5 t) keep to 80 km/h unless their
+    /// country lets them faster; cars and motorcycles drive the road's speed.
     #[test]
     fn heavy_vehicles_keep_their_countrys_limit() {
         let code = |iso: &[u8; 2]| u16::from_le_bytes(*iso);
@@ -1008,6 +1024,10 @@ mod tests {
         assert_eq!(category_speed(heavy, 130.0, code(b"FR")), 90.0);
         assert_eq!(
             category_speed(VehicleCategory::Medium, 130.0, code(b"DE")),
+            80.0
+        );
+        assert_eq!(
+            category_speed(VehicleCategory::Light, 130.0, code(b"DE")),
             130.0
         );
     }
@@ -1062,18 +1082,29 @@ mod tests {
         );
     }
 
-    /// A two-way rural road at a national limit runs at 0.845 of it (DfT's free-flow speeds);
-    /// motorways, one-way carriageways, towns and slower limits keep their limit.
+    /// A two-way rural road at its country's national limit runs at 0.845 of it (DfT's free-flow
+    /// speeds); motorways, one-way carriageways, towns, a lower posted limit and slow lanes keep
+    /// their limit.
     #[test]
     fn rural_roads_run_below_their_national_limit() {
-        assert!(free_flows_below_limit(4, 1, false, 90.0));
-        assert!(!free_flows_below_limit(4, 2, false, 90.0), "a town");
-        assert!(!free_flows_below_limit(0, 1, false, 130.0), "a motorway");
+        assert!(free_flows_below_limit(4, 1, false, 90.0, 90.0));
         assert!(
-            !free_flows_below_limit(1, 1, true, 110.0),
+            !free_flows_below_limit(4, 1, false, 80.0, 100.0),
+            "a road signed 80 where the open road allows 100"
+        );
+        assert!(!free_flows_below_limit(4, 2, false, 90.0, 90.0), "a town");
+        assert!(
+            !free_flows_below_limit(0, 1, false, 130.0, 130.0),
+            "a motorway"
+        );
+        assert!(
+            !free_flows_below_limit(1, 1, true, 110.0, 110.0),
             "a dual carriageway"
         );
-        assert!(!free_flows_below_limit(5, 1, false, 50.0), "a village lane");
+        assert!(
+            !free_flows_below_limit(5, 1, false, 50.0, 30.0),
+            "a village lane"
+        );
         assert!((90.0 * RURAL_FREE_FLOW_OF_LIMIT - 76.05).abs() < 1e-9);
     }
 }
