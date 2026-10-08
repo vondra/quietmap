@@ -23,7 +23,8 @@
 //! --squares X:Y[,X:Y..] --out DIR` projects the window's ground legs onto the aeroway lines of
 //! the squares (and their neighbours) once, one traffic file per square;
 //! `qm-build aircraft-shuffle --segments DIR --days D,.. [--increment-days D,..] --squares
-//! X:Y[,X:Y..] --out DIR` sorts the window's segments into squares, and `qm-build aircraft-boxes
+//! X:Y[,X:Y..] [--halo yes] --out DIR` sorts the window's segments into squares (with the squares
+//! within the events' reach of them), and `qm-build aircraft-boxes
 //! --shuffled DIR --days D,.. [--increment-days D,..] --squares .. --terrain DIR --weather FILE
 //! [--kind aircraft-far] --out DIR` boxes them, refusing a shuffle that is not exactly that window;
 //! `qm-build aircraft-events` with the same arguments (no kind) writes what flies over each cell
@@ -294,9 +295,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
         }
         "aircraft-shuffle" => {
             let window = sampling_window(&options);
-            let scope = parse_squares(options.get("squares")?)?
-                .into_iter()
-                .collect();
+            let mut squares = parse_squares(options.get("squares")?)?;
+            // `--halo`: with the squares the events of these read (within their reach).
+            if options.optional("halo").is_some() {
+                squares = boxes::events::halo(&squares);
+            }
+            let scope = squares.into_iter().collect();
             let left = boxes::shuffle::shuffle(
                 Path::new(options.get("segments")?),
                 &window,

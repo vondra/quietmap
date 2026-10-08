@@ -271,11 +271,19 @@ impl Receivers {
 }
 
 /// The squares within [`EVENTS_REACH_M`] of `square` (more than its neighbours where squares are
-/// narrower than the reach, near the poles).
-fn squares_within_reach(square: Square, receivers: &Receivers) -> Vec<Square> {
-    let [east, north] = receivers.least_scales();
+/// narrower than the reach, near the poles), by the metres per Mercator unit at its poleward edge.
+pub fn squares_within_reach(square: Square) -> Vec<Square> {
+    let poleward = if square.y < 256 {
+        square.y * 8
+    } else {
+        square.y * 8 + 8
+    };
+    let frame = LocalFrame::at(Mercator {
+        x: f64::from(square.x * 8) + 4.0,
+        y: f64::from(poleward).min(f64::from(TILES_PER_AXIS) - 1e-6),
+    });
     let span = |metres_per_unit: f64| (EVENTS_REACH_M / (8.0 * metres_per_unit)).ceil() as i64;
-    let (across, along) = (span(east), span(north));
+    let (across, along) = (span(frame.east_m_per_unit), span(frame.north_m_per_unit));
     let mut squares = Vec::new();
     for dy in -along..=along {
         let y = i64::from(square.y) + dy;
@@ -291,6 +299,18 @@ fn squares_within_reach(square: Square, receivers: &Receivers) -> Vec<Square> {
         }
     }
     squares
+}
+
+/// The squares a part's shuffle must hold for the events of `squares`: each with those within
+/// reach (review decision 4: a halo by distance, the events written for the part's own squares).
+pub fn halo(squares: &[Square]) -> Vec<Square> {
+    let mut all: Vec<Square> = squares
+        .iter()
+        .flat_map(|&square| squares_within_reach(square))
+        .collect();
+    all.sort();
+    all.dedup();
+    all
 }
 
 /// A flight's loudest moments at the cells it reaches: per cell index, over its primary segments
@@ -436,7 +456,7 @@ pub fn build_square(
     out: &Path,
 ) -> Result<usize, String> {
     let receivers = Receivers::new(square, terrain_root)?;
-    let inputs = squares_within_reach(square, &receivers);
+    let inputs = squares_within_reach(square);
     let places: HashMap<Square, PlaceAtmosphere> = inputs
         .par_iter()
         .map(|&input| (input, place_atmosphere(weather, input)))
@@ -529,6 +549,16 @@ mod tests {
     use crate::boxes::read::FLAG_DEPARTURE;
     use physics::weather::{COLUMNS, ROWS, WeatherNode, encode as encode_weather};
     use tiles::aircraft_events::AircraftEvents;
+
+    /// The halo is the eight neighbours at mid latitudes and reaches further where squares are
+    /// narrower than the reach: 3 x 3 squares around Prague, 5 x 5 at 80 degrees north (13 km wide).
+    #[test]
+    fn the_halo_follows_the_reach_not_the_neighbours() {
+        assert_eq!(squares_within_reach(Square { x: 276, y: 173 }).len(), 9);
+        assert_eq!(squares_within_reach(Square { x: 276, y: 57 }).len(), 25);
+        let part = [Square { x: 276, y: 173 }, Square { x: 277, y: 173 }];
+        assert_eq!(halo(&part).len(), 12);
+    }
 
     /// A departure passing over a cell at 600 m at night and back over it at 900 m by day, its
     /// segments in its own square's file and its neighbour's: the cell counts it once, at the
