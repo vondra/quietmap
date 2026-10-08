@@ -1,7 +1,8 @@
 // Places to stay in a real browser, without a backend: the switch and its search in the panel, what a
-// view asks for (from today for two nights, two guests, then the kind and stars chosen), the pin on
-// the map, a pin that opens its place above the popup of its point, on a desktop and on a phone, and
-// a view that asks again once Stay22's full minute is over.
+// view asks for (from today for two nights, two guests, then the kind and stars chosen; a box each
+// side of the antimeridian), the pin on the map, a pin that opens its place above the popup of its
+// point (in a repeated world copy too), on a desktop and on a phone, a place gone with its price,
+// and a view that asks again once Stay22 takes searches again.
 import { expect, test, type Page } from '@playwright/test'
 import { popupUpdate } from './answers'
 import {
@@ -22,13 +23,16 @@ const PLACE = {
   guests: 2, bedrooms: 1, freeCancellation: true, thumbnail: null, url: 'https://www.stay22.com/allez/roam/h1',
 }
 
-/** `/api/stay` answers the one place, and records what every view asked; the labels' glyphs are
- *  answered empty, so nothing leaves the page. */
-async function installStays(page: Page): Promise<URLSearchParams[]> {
+/** An answer of the one place, whose price lives `expiresIn` seconds more. */
+const answer = (expiresIn = 3300) => JSON.stringify({ listings: [PLACE], nights: 2, currency: 'EUR', expiresIn, failure: null })
+
+/** `/api/stay` answers the one place (the first answer living `firstExpiresIn` seconds), and records
+ *  what every view asked; the labels' glyphs are answered empty, so nothing leaves the page. */
+async function installStays(page: Page, firstExpiresIn?: number): Promise<URLSearchParams[]> {
   const asked: URLSearchParams[] = []
   await page.route('**/api/stay?**', route => {
     asked.push(new URL(route.request().url()).searchParams)
-    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ listings: [PLACE], nights: 2, currency: 'EUR' }) })
+    return route.fulfill({ status: 200, contentType: 'application/json', body: answer(asked.length === 1 ? firstExpiresIn : undefined) })
   })
   await page.route('**/fonts/**', route => route.fulfill({ status: 200, body: '' }))
   return asked
@@ -112,7 +116,7 @@ test('desktop: a full Stay22 minute is said, and the view asks again after the s
     return asked === 1
       ? route.fulfill({ status: 503, headers: { 'retry-after': '1' }, contentType: 'application/json',
         body: JSON.stringify({ error: 'Stay22 takes no more searches this minute; places to stay again in 1 s.' }) })
-      : route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ listings: [PLACE], nights: 2, currency: 'EUR' }) })
+      : route.fulfill({ status: 200, contentType: 'application/json', body: answer() })
   })
   await page.route('**/fonts/**', route => route.fulfill({ status: 200, body: '' }))
   await page.goto(`${mapUrl(POINT)}&stay=1`)
@@ -120,6 +124,42 @@ test('desktop: a full Stay22 minute is said, and the view asks again after the s
   await expectPinAtCentre(page)
   await expect(page.getByTestId('stay-note')).toHaveCount(0)
   expect(asked).toBe(2)
+})
+
+test('desktop: a pin opens its place in a repeated world copy too', async ({ page }) => {
+  await installHermeticMap(page, POINT)
+  await installStays(page)
+  await page.goto(`${mapUrl({ ...POINT, lng: POINT.lng + 360 })}&stay=1`)
+  await expectPinAtCentre(page)
+  const { x, y } = await canvasCenter(page)
+  await page.mouse.click(x, y)
+  await expect.poll(() => popupRequests(page)).toEqual([{ lat: PLACE.lat, lng: PLACE.lng }])
+  await expect(page.locator('[data-testid="stay-header"]:visible')).toContainText('Fixture hotel')
+})
+
+test('desktop: a view across the antimeridian asks for a box on each side', async ({ page }) => {
+  await installHermeticMap(page, POINT)
+  const asked = await installStays(page)
+  await page.goto('/#lat=-17.7&lng=179.99&z=12&bm=terrain&ro=road&stay=1')
+  await expect.poll(() => asked.length).toBe(2)
+  const sides = asked.map(params => [Number(params.get('swlng')), Number(params.get('nelng'))]).sort((a, b) => a[0] - b[0])
+  expect(sides[0][0]).toBe(-180)
+  expect(sides[0][1]).toBeGreaterThan(-180)
+  expect(sides[1][0]).toBeLessThan(180)
+  expect(sides[1][1]).toBe(180)
+})
+
+test('desktop: a place and its pin go when their price expires, and the view asks again', async ({ page }) => {
+  await installHermeticMap(page, POINT)
+  const asked = await installStays(page, 4)
+  await page.goto(`${mapUrl(POINT)}&stay=1`)
+  await expectPinAtCentre(page)
+  const { x, y } = await canvasCenter(page)
+  await page.mouse.click(x, y)
+  const header = page.locator('[data-testid="stay-header"]:visible')
+  await expect(header).toContainText('Fixture hotel')
+  await expect(header).toHaveCount(0)
+  await expect.poll(() => asked.length).toBeGreaterThan(1)
 })
 
 test.describe('mobile', () => {

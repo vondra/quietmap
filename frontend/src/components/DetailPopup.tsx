@@ -5,7 +5,8 @@ import { useMap, Source, Layer } from 'react-map-gl/maplibre'
 import type { MapMouseEvent } from 'maplibre-gl'
 import type { PopupUpdate } from '../types/noise'
 import { streamPopup } from '../lib/popup-stream'
-import { stayIdAt } from './StayLayer'
+import { stayAt } from './StayLayer'
+import type { Stay } from '../lib/stays'
 
 export interface DetailPopupProps {
   isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean
@@ -14,9 +15,11 @@ export interface DetailPopupProps {
   onDetailData?: (data: PopupUpdate) => void
   onDetailPositionChange?: (pos: { lat: number; lng: number } | null) => void
   onDetailError?: (message: string) => void
+  /** A click on a place to stay opens the place (at its point) instead. */
+  onStaySelect?: (stay: Stay) => void
 }
 
-export default function DetailPopup({ isCurrentDetailPosition, detailPosition, triggerPosition, onDetailData, onDetailPositionChange, onDetailError }: DetailPopupProps) {
+export default function DetailPopup({ isCurrentDetailPosition, detailPosition, triggerPosition, onDetailData, onDetailPositionChange, onDetailError, onStaySelect }: DetailPopupProps) {
   const { current: map } = useMap()
 
   useEffect(() => {
@@ -33,7 +36,11 @@ export default function DetailPopup({ isCurrentDetailPosition, detailPosition, t
         const dy = e.originalEvent.clientY - dragStart.y
         if (Math.sqrt(dx * dx + dy * dy) > 5) return
       }
-      if (stayIdAt(map.getMap(), e.point)) return
+      const stay = stayAt(map.getMap(), e.point)
+      if (stay) {
+        onStaySelect?.(stay)
+        return
+      }
       const { lat, lng } = e.lngLat
       onDetailPositionChange?.({ lat, lng })
     }
@@ -44,7 +51,7 @@ export default function DetailPopup({ isCurrentDetailPosition, detailPosition, t
       map.off('mousedown', onMouseDown)
       map.off('click', onClick)
     }
-  }, [map, onDetailPositionChange])
+  }, [map, onDetailPositionChange, onStaySelect])
 
   useEffect(() => {
     if (triggerPosition) onDetailPositionChange?.(triggerPosition)

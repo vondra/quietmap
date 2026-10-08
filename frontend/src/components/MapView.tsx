@@ -178,9 +178,10 @@ export default function MapView({
         onDetailData={onDetailData}
         onDetailPositionChange={onDetailPositionChange}
         onDetailError={onDetailError}
+        onStaySelect={stays?.onSelect}
       />
       {/* A new search starts from no pins. */}
-      {stays && <StayLayer key={JSON.stringify(stays.search)} search={stays.search} onSelect={stays.onSelect} />}
+      {stays && <StayLayer key={JSON.stringify(stays.search)} search={stays.search} />}
       <SegmentFanLayer fan={segmentFan ?? null} />
       <FlightTrackLayer track={flightTrack ?? null} />
       {onViewChange && onHashState && <MapStateSync onViewChange={onViewChange} onHashState={onHashState} />}

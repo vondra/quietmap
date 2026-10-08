@@ -4,8 +4,8 @@
 // stars as stars).
 import { addDays, firstCheckin, withCheckin, withCheckout, type StayKind, type StaySearch } from '../lib/stays'
 
-/** dev4's cap of the guests stepper. */
-const MAX_ADULTS = 16
+/** The most guests the server asks for (Stay22 answers up to 99, fewer places the more there are). */
+const MAX_ADULTS = 99
 
 function Choices<T>({ label, value, options, onChange, testId }: {
   label: string

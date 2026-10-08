@@ -18,7 +18,7 @@ import RecentPlaces from './components/RecentPlaces'
 import { loadRecentPlaces, saveRecentPlaces, withName, withPlace, withoutPlace, type RecentPlace } from './lib/recent-places'
 import { useIsDesktop } from './hooks/useIsDesktop'
 import type { DataLayerId } from './lib/data-layers'
-import { defaultStaySearch, firstCheckin, withCheckin, type Stay, type StaySearch } from './lib/stays'
+import { defaultStaySearch, freshSearch, type Stay, type StaySearch } from './lib/stays'
 
 
 export default function App() {
@@ -191,15 +191,28 @@ export default function App() {
     setStaySearch(search)
     setSelectedStay(null)
   }, [])
-  // A tab come back to after midnight (UTC) would search from a day Stay22 no longer takes.
+  // Past midnight a search from the day before is one Stay22 no longer takes: it moves on as a change
+  // of dates does, the open place with it; checked when the tab comes back, and every minute.
+  const staySearchRef = useRef(staySearch)
+  staySearchRef.current = staySearch
   useEffect(() => {
     const roll = () => {
-      const first = firstCheckin()
-      setStaySearch(search => (search.checkin < first ? withCheckin(search, first) : search))
+      const fresh = freshSearch(staySearchRef.current)
+      if (fresh !== staySearchRef.current) handleStaySearchChange(fresh)
     }
+    const minute = setInterval(roll, 60_000)
     document.addEventListener('visibilitychange', roll)
-    return () => document.removeEventListener('visibilitychange', roll)
-  }, [])
+    return () => {
+      clearInterval(minute)
+      document.removeEventListener('visibilitychange', roll)
+    }
+  }, [handleStaySearchChange])
+  // The open place goes with its price, at the end of Stay22's lifetime.
+  useEffect(() => {
+    if (!selectedStay) return
+    const timer = setTimeout(() => setSelectedStay(null), selectedStay.expires - Date.now())
+    return () => clearTimeout(timer)
+  }, [selectedStay])
 
   const handleViewChange = useCallback((lat: number, lng: number, zoom: number) => {
     mapViewRef.current = { lat, lng, zoom }

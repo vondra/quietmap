@@ -1,13 +1,13 @@
 // Places to stay on the map: a dot for every place with a room for the visitor's stay and its price
 // of a night above it wherever the labels do not collide (the most reviewed first), asked for every
-// view the map settles on and kept while it moves; a click on one opens it. One search per mount:
-// MapView mounts it anew for a new search.
-import { useEffect, useMemo, useRef, useState } from 'react'
+// view the map settles on, kept while it moves and until its price expires. A click on one opens it
+// (DetailPopup asks `stayAt`). One search per mount: MapView mounts it anew for a new search.
+import { useEffect, useMemo, useState } from 'react'
 import { Layer, Source, useMap } from 'react-map-gl/maplibre'
-import type { Map as MapLibreMap, MapMouseEvent } from 'maplibre-gl'
+import type { Map as MapLibreMap } from 'maplibre-gl'
 import {
-  STAY_DOT_LAYER as DOTS, STAY_MIN_ZOOM, stayFeatures, stayRequest, viewFootprint, withStays,
-  type Stay, type ViewBox, type StaySearch,
+  STAY_DOT_LAYER as DOTS, STAY_MIN_ZOOM, stayFeatures, stayOfFeature, stayRequests, viewFootprint, withStays,
+  type Stay, type StaySearch, type ViewBox,
 } from '../lib/stays'
 
 const PRICES = 'stays-price'
@@ -19,49 +19,43 @@ const FINGER_PX = 12
 /** How long the map rests before its view asks: a burst of wheel zooms is one search of Stay22's 150
  *  a minute, not one per step. */
 const REST_MS = 300
-/** The basemap labels' font, whose glyphs every basemap serves. */
-const FONT = ['Montserrat Medium', 'Open Sans Bold', 'Noto Sans Regular', 'HanWangHeiLight Regular', 'NanumBarunGothic Regular']
 
-/** The server's answer for a view. */
+/** The server's answer for a box. */
 interface StayAnswer {
-  listings: Omit<Stay, 'nights' | 'currency'>[]
+  listings: Omit<Stay, 'nights' | 'currency' | 'expires'>[]
   nights: number
   currency: string
+  /** Seconds the places have left. */
+  expiresIn: number
+  /** What part of the search failed, when the rest is answered. */
+  failure: string | null
 }
 
-/** The place whose pin is under a map point, if any, as it is seen: a dot clicked, else a price
- *  label clicked (labels lie over the dots), else the nearest dot within a finger's reach. On a
- *  street of hotels the dots lie a few pixels apart. DetailPopup asks too: a click on a pin opens
- *  the place, never a popup beside it. */
-export function stayIdAt(map: MapLibreMap, point: { x: number; y: number }): string | null {
+/** The place whose pin is under a map point, if any, as it is seen: the price label clicked (labels
+ *  lie over the dots), else the nearest dot within reach, in the world copy the click is in. */
+export function stayAt(map: MapLibreMap, point: { x: number; y: number }): Stay | null {
   if (!map.getLayer(DOTS)) return null
-  const reach = window.matchMedia('(pointer: coarse)').matches ? FINGER_PX : DOT_PX
-  const dots = map.queryRenderedFeatures(
-    [[point.x - reach, point.y - reach], [point.x + reach, point.y + reach]],
-    { layers: [DOTS] },
-  )
-  let nearest: { id: string; pixels: number } | null = null
-  for (const dot of dots) {
-    const at = map.project((dot.geometry as GeoJSON.Point).coordinates as [number, number])
-    const pixels = Math.hypot(at.x - point.x, at.y - point.y)
-    if (!nearest || pixels < nearest.pixels) nearest = { id: String(dot.properties.id), pixels }
-  }
-  if (nearest && nearest.pixels <= DOT_PX) return nearest.id
   const [label] = map.queryRenderedFeatures([point.x, point.y], { layers: [PRICES] })
-  return label ? String(label.properties.id) : nearest && nearest.pixels <= reach ? nearest.id : null
+  if (label) return stayOfFeature(label)
+  const reach = window.matchMedia('(pointer: coarse)').matches ? FINGER_PX : DOT_PX
+  const clicked = map.unproject([point.x, point.y]).lng
+  let nearest: { stay: Stay; pixels: number } | null = null
+  for (const dot of map.queryRenderedFeatures([[point.x - reach, point.y - reach], [point.x + reach, point.y + reach]], { layers: [DOTS] })) {
+    const stay = stayOfFeature(dot)
+    const at = map.project([stay.lng + 360 * Math.round((clicked - stay.lng) / 360), stay.lat])
+    const pixels = Math.hypot(at.x - point.x, at.y - point.y)
+    if (pixels <= reach && (!nearest || pixels < nearest.pixels)) nearest = { stay, pixels }
+  }
+  return nearest?.stay ?? null
 }
 
-export default function StayLayer({ search, onSelect }: { search: StaySearch; onSelect: (stay: Stay) => void }) {
+export default function StayLayer({ search }: { search: StaySearch }) {
   const { current: mapRef } = useMap()
   const [view, setView] = useState<ViewBox | null>(null)
   const [pins, setPins] = useState<Stay[]>([])
   const [status, setStatus] = useState<{ loading: boolean; failure: string | null }>({ loading: true, failure: null })
-  const pinsRef = useRef(pins)
-  pinsRef.current = pins
-  const onSelectRef = useRef(onSelect)
-  onSelectRef.current = onSelect
 
-  // The view the map settles on.
+  // The view the map settles on, and a pointer over a pin that shows it opens.
   useEffect(() => {
     if (!mapRef) return
     const map = mapRef.getMap()
@@ -73,55 +67,64 @@ export default function StayLayer({ search, onSelect }: { search: StaySearch; on
         setView(viewFootprint(map.getCenter(), map.getZoom(), map.getBearing(), canvas.clientWidth, canvas.clientHeight))
       }, REST_MS)
     }
-    // A pointer over a pin shows that it opens.
     const pointer = () => { map.getCanvas().style.cursor = 'pointer' }
     const away = () => { map.getCanvas().style.cursor = '' }
-    const open = (event: MapMouseEvent) => {
-      const id = stayIdAt(map, event.point)
-      const stay = id == null ? undefined : pinsRef.current.find(pin => pin.id === id)
-      if (stay) onSelectRef.current(stay)
-    }
     settle()
     map.on('moveend', settle)
     map.on('mouseenter', PINS, pointer)
     map.on('mouseleave', PINS, away)
-    map.on('click', open)
     return () => {
       clearTimeout(resting)
       map.off('moveend', settle)
       map.off('mouseenter', PINS, pointer)
       map.off('mouseleave', PINS, away)
-      map.off('click', open)
       away()
     }
   }, [mapRef])
 
-  // Every settled view asks for its places. Each answer adds to the pins, a late one too; the status
-  // is the current view's. When Stay22 takes no more searches this minute, the view asks again
-  // after the seconds the server names.
+  // Every settled view asks for its places (a box a side of the antimeridian). Each answer adds to
+  // the pins, a late one too; the status is the current view's. When Stay22 is asked too often, the
+  // view asks again after the seconds the server names.
   const zoomedIn = view != null && view.zoom >= STAY_MIN_ZOOM
   useEffect(() => {
     if (!view || view.zoom < STAY_MIN_ZOOM) return
     let current = true
     let retry: ReturnType<typeof setTimeout> | undefined
+    const failures: string[] = []
     setStatus({ loading: true, failure: null })
-    void (async () => {
-      const response = await fetch(stayRequest(view, search))
-      const body = await response.json().catch(() => null) as Partial<StayAnswer> & { error?: string } | null
-      const wait = Number(response.headers.get('retry-after'))
-      if (response.status === 503 && wait > 0 && current) retry = setTimeout(() => setView(view => view && { ...view }), wait * 1000)
-      if (!response.ok || !body?.listings) throw new Error(body?.error ?? `The server answered HTTP ${response.status}.`)
-      const answer = body as StayAnswer
-      setPins(pins => withStays(pins, answer.listings.map(listing => ({ ...listing, nights: answer.nights, currency: answer.currency }))))
-      if (current) setStatus({ loading: false, failure: null })
-    })().catch((error: unknown) => {
-      if (current) setStatus({ loading: false, failure: error instanceof Error ? error.message : String(error) })
+    void Promise.all(stayRequests(view, search).map(async request => {
+      try {
+        const response = await fetch(request)
+        const body = await response.json().catch(() => null) as Partial<StayAnswer> & { error?: string } | null
+        const wait = Number(response.headers.get('retry-after'))
+        if (wait > 0 && current && retry === undefined) retry = setTimeout(() => setView(view => view && { ...view }), wait * 1000)
+        if (!response.ok || !body?.listings) throw new Error(body?.error ?? `The server answered HTTP ${response.status}.`)
+        const answer = body as StayAnswer
+        const expires = Date.now() + answer.expiresIn * 1000
+        setPins(pins => withStays(pins, answer.listings.map(listing => ({ ...listing, nights: answer.nights, currency: answer.currency, expires }))))
+        if (answer.failure) failures.push(answer.failure)
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : String(error))
+      }
+    })).then(() => {
+      if (current) setStatus({ loading: false, failure: failures[0] ?? null })
     })
     return () => {
       current = false
       clearTimeout(retry)
     }
   }, [view, search])
+
+  // A pin goes when its price expires (Stay22's lifetime), and the view asks again.
+  useEffect(() => {
+    if (!pins.length) return
+    const next = Math.min(...pins.map(pin => pin.expires))
+    const timer = setTimeout(() => {
+      setPins(pins => withStays(pins, []))
+      setView(view => view && { ...view })
+    }, Math.max(0, next - Date.now()))
+    return () => clearTimeout(timer)
+  }, [pins])
 
   const data = useMemo(() => stayFeatures(pins), [pins])
   // A pin counts in the world copy nearest the view (a view across the antimeridian runs past 180°).
@@ -152,11 +155,12 @@ export default function StayLayer({ search, onSelect }: { search: StaySearch; on
             filter={['!=', ['get', 'price'], '']}
             layout={{
               'text-field': ['get', 'price'],
-              'text-font': FONT,
+              // Digits, the comma and € are all in it (its glyphs, 2026-10-08).
+              'text-font': ['Montserrat Medium'],
               'text-size': 12,
               'text-anchor': 'bottom',
               'text-offset': [0, -0.55],
-              'text-padding': 3,
+              'text-padding': 1,
               'symbol-sort-key': ['-', ['get', 'reviews']],
             }}
             // Haloed as the basemap's own labels are: without glyphs nothing covers the dot.

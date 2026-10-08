@@ -1,6 +1,7 @@
 // Places to stay: the stay a visitor searches (dates, guests, which places), the server's places
-// for a map view (`/api/stay`), the pins kept while the map moves, and their prices as the map and
-// the popup print them. Pure TypeScript, so it has dependency-free unit tests.
+// for a map view (`/api/stay`), the pins kept while the map moves and until their prices expire, and
+// their prices as the map and the popup print them. Pure TypeScript, so it has dependency-free unit
+// tests.
 
 /** Which places: all, hotels, or the rest (apartments, guest houses, hostels…). */
 export type StayKind = 'all' | 'hotel' | 'rental'
@@ -35,6 +36,8 @@ export interface Stay {
   /** The stay the price is for. */
   nights: number
   currency: string
+  /** When the place and its price go, by the page's clock: Stay22's lifetime of the answer. */
+  expires: number
 }
 
 /** A map view: its box and its zoom. */
@@ -111,29 +114,44 @@ export function withCheckout(search: StaySearch, checkout: string): StaySearch {
   return { ...search, checkout: checkout > search.checkin ? checkout : addDays(search.checkin, 1) }
 }
 
-/** The server's places for a map view: the view shifted to the world copy its centre is in and cut
- *  at the antimeridian (a view across it runs past ±180°). */
-export function stayRequest(view: Omit<ViewBox, 'zoom'>, search: StaySearch): string {
-  const shift = 360 * Math.round((view.west + view.east) / 2 / 360)
-  const degrees = (value: number) => String(+value.toFixed(6))
-  const params = new URLSearchParams({
-    swlat: degrees(view.south),
-    swlng: degrees(Math.max(-180, view.west - shift)),
-    nelat: degrees(view.north),
-    nelng: degrees(Math.min(180, view.east - shift)),
-    checkin: search.checkin,
-    checkout: search.checkout,
-    adults: String(search.adults),
-  })
-  if (search.kind !== 'all') params.set('type', search.kind)
-  if (search.minStars != null) params.set('minstars', String(search.minStars))
-  if (search.minScore != null) params.set('minscore', String(search.minScore))
-  return `/api/stay?${params}`
+/** The search still possible at `now`: a check-in Stay22 no longer takes (a tab open past midnight)
+ *  moved to its first, the stay's length kept; else the search itself. */
+export function freshSearch(search: StaySearch, now = new Date()): StaySearch {
+  const first = firstCheckin(now)
+  return search.checkin < first ? withCheckin(search, first) : search
 }
+
+/** The server's places for a map view (centred in the world copy -180..180): its box, or two where it
+ *  crosses the antimeridian, a side each, as the server takes boxes within ±180°. */
+export function stayRequests(view: Omit<ViewBox, 'zoom'>, search: StaySearch): string[] {
+  const sides = view.west < -180 ? [[view.west + 360, 180], [-180, view.east]]
+    : view.east > 180 ? [[view.west, 180], [-180, view.east - 360]]
+      : [[view.west, view.east]]
+  const degrees = (value: number) => String(+value.toFixed(6))
+  return sides.map(([west, east]) => {
+    const params = new URLSearchParams({
+      swlat: degrees(view.south),
+      swlng: degrees(west),
+      nelat: degrees(view.north),
+      nelng: degrees(east),
+      checkin: search.checkin,
+      checkout: search.checkout,
+      adults: String(search.adults),
+    })
+    if (search.kind !== 'all') params.set('type', search.kind)
+    if (search.minStars != null) params.set('minstars', String(search.minStars))
+    if (search.minScore != null) params.set('minscore', String(search.minScore))
+    return `/api/stay?${params}`
+  })
+}
+
+const priceFormats = new Map<string, Intl.NumberFormat>()
 
 /** A price in whole units of its currency: €1,234. */
 export function formatPrice(amount: number, currency: string): string {
-  return new Intl.NumberFormat('en', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount)
+  let format = priceFormats.get(currency)
+  if (!format) priceFormats.set(currency, format = new Intl.NumberFormat('en', { style: 'currency', currency, maximumFractionDigits: 0 }))
+  return format.format(amount)
 }
 
 /** The price of a night, or null when no supplier quoted one. */
@@ -141,30 +159,37 @@ export function pricePerNight(stay: Stay): number | null {
   return stay.total == null ? null : Math.round(stay.total / stay.nights)
 }
 
-/** The pins after an answer: the earlier and the new, a place once with its newest price, the
- *  oldest dropped beyond MAX_PINS. The server samples every view anew; the pins of a wider view stay
- *  when zooming in (the owner's report of 2026-07-29: a place seen in a street went on zooming). */
-export function withStays(pins: Stay[], answer: Stay[]): Stay[] {
+/** The pins after an answer at `now`: the earlier and the new, a place once with its newest price,
+ *  none past its expiry, the oldest dropped beyond MAX_PINS. The server samples every view anew; the
+ *  pins of a wider view stay when zooming in (the owner's report of 2026-07-29: a place seen in a
+ *  street went on zooming). */
+export function withStays(pins: Stay[], answer: Stay[], now = Date.now()): Stay[] {
   const byId = new Map(pins.map(stay => [stay.id, stay]))
   for (const stay of answer) {
     byId.delete(stay.id)
     byId.set(stay.id, stay)
   }
-  return [...byId.values()].slice(-MAX_PINS)
+  return [...byId.values()].filter(stay => stay.expires > now).slice(-MAX_PINS)
 }
 
 /** The pins as the map draws them: a point each, with its price of a night and its reviews, by
- *  which the labels that collide give way. */
+ *  which the labels that collide give way, and the place itself, which a click opens. */
 export function stayFeatures(pins: Stay[]): GeoJSON.FeatureCollection<GeoJSON.Point> {
   return {
     type: 'FeatureCollection',
     features: pins.map(stay => {
       const night = pricePerNight(stay)
+      const price = night == null ? '' : formatPrice(night, stay.currency)
       return {
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [stay.lng, stay.lat] },
-        properties: { id: stay.id, price: night == null ? '' : formatPrice(night, stay.currency), reviews: stay.reviews ?? 0 },
+        properties: { price, reviews: stay.reviews ?? 0, stay: JSON.stringify(stay) },
       }
     }),
   }
+}
+
+/** The place a map feature of the pins draws. */
+export function stayOfFeature(feature: { properties: Record<string, unknown> }): Stay {
+  return JSON.parse(String(feature.properties.stay)) as Stay
 }
