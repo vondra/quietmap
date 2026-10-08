@@ -93,6 +93,9 @@ impl Venues {
                 .or_default()
                 .push(site);
         }
+        for sites in by_square.values_mut() {
+            merge_nodes_into_outlines(sites);
+        }
         Ok(Venues { by_square })
     }
 
@@ -100,6 +103,55 @@ impl Venues {
     pub fn in_square(&self, x: u32, y: u32) -> &[VenueSite] {
         self.by_square.get(&(x, y)).map_or(&[], Vec::as_slice)
     }
+}
+
+/// Within this of an outline's own radius a node of the same kind stands on it (m).
+const ON_OUTLINE_M: f64 = 5.0;
+
+/// One place mapped twice, as a node and as its outline (Grok, review of 2026-10-05: two crowds,
+/// +3 dB): a node of the same kind within the outline's radius (that of a circle of its area) and
+/// [`ON_OUTLINE_M`] of its centre joins the nearest such outline, which takes from the node the
+/// terrace, hours and name it lacks.
+fn merge_nodes_into_outlines(sites: &mut Vec<VenueSite>) {
+    let mut merged = vec![false; sites.len()];
+    for node in 0..sites.len() {
+        if sites[node].area_m2 > 0.0 {
+            continue;
+        }
+        let (lat, lon, kind) = (sites[node].lat, sites[node].lon, sites[node].kind);
+        let metres_per_degree = 111_195.0;
+        let nearest = (0..sites.len())
+            .filter(|&outline| outline != node && !merged[outline] && sites[outline].area_m2 > 0.0)
+            .filter(|&outline| sites[outline].kind == kind)
+            .map(|outline| {
+                let site = &sites[outline];
+                let (dy, dx) = (
+                    (site.lat - lat) * metres_per_degree,
+                    (site.lon - lon) * metres_per_degree * lat.to_radians().cos(),
+                );
+                let reach = (site.area_m2 / std::f64::consts::PI).sqrt() + ON_OUTLINE_M;
+                (outline, dx.hypot(dy), reach)
+            })
+            .filter(|&(_, distance, reach)| distance <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        let Some((outline, _, _)) = nearest else {
+            continue;
+        };
+        let taken = sites[node].clone();
+        let site = &mut sites[outline];
+        if site.seating == Seating::Unknown {
+            site.seating = taken.seating;
+        }
+        if site.hours.is_none() {
+            site.hours = taken.hours;
+        }
+        if site.name.is_empty() {
+            site.name = taken.name;
+        }
+        merged[node] = true;
+    }
+    let mut keep = merged.iter().map(|merged| !merged);
+    sites.retain(|_| keep.next().unwrap_or(true));
 }
 
 /// The median mapped beer garden's outline (m2; 4,767 outlines in the planet of 2026-09-21).
