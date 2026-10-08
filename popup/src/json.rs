@@ -147,12 +147,13 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             );
         }
         // What the map draws of it as lines of [lat, lon], one point for a point source: all of it
-        // within the reach in the final update, its loudest pieces before.
+        // within the reach in the final update (what the shared budget leaves it, maybe nothing),
+        // its loudest pieces before.
         let degrees = |metres: &[f64; 2]| {
             let (lat, lon) = update.frame.to_mercator(*metres).to_degrees();
             json!([(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6])
         };
-        let geometry: Vec<Value> = if contributor.lines.is_empty() {
+        let geometry: Vec<Value> = if update.partial {
             let mut pieces = contributor.pieces.clone();
             crate::selection::loudest_pieces(&mut pieces);
             pieces
