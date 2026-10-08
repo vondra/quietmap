@@ -94,6 +94,32 @@ fn a_box_of_one_segment_reads_as_the_kernel() {
     }
 }
 
+/// In a place's air too a box of one segment is that segment, near and far: the segment reads its
+/// curve as the box reads its sums (review item 11: a 777-300ER approach 14 km off in 30 C, 90 %
+/// air read 37.19 dB as a segment and 35.44 as its box). What remains, 0.0005 dB at 14 km, is
+/// d_lambda between two power rows, which the table interpolates in metres and the box in lg.
+#[test]
+fn a_box_of_one_segment_reads_as_the_kernel_in_any_air() {
+    let humid =
+        crate::doc29::atmosphere::PlaceAtmosphere::new(&crate::atmosphere::alpha_bands(30.0, 90.0));
+    let approach = emission("B77W", &flight(false, 160.0, -0.05, 600.0)).in_atmosphere(&humid);
+    let (start, end) = ([-50.0, 0.0, 600.0], [50.0, 0.0, 595.0]);
+    for receiver in [
+        [0.0, 20.0],
+        [0.0, 2_000.0],
+        [0.0, 14_000.0],
+        [9_000.0, 20_000.0],
+    ] {
+        let shift = |p: [f64; 3]| [p[0] - receiver[0], p[1] - receiver[1], p[2]];
+        let exact = kernel_sel(&approach, shift(start), shift(end)).expect("heard");
+        let boxed = box_day_sel(&box_of(&[(approach, shift(start), shift(end))])).expect("heard");
+        assert!(
+            (boxed - exact).abs() < 1e-3,
+            "at {receiver:?}: box {boxed} vs kernel {exact}"
+        );
+    }
+}
+
 /// The pieces of a 150 m box crossed by 40 flights: one flow (a departure corridor, directions
 /// within 11 deg, climbs 5-10 %) or mixed (a quarter reversed, approaches descending among the
 /// departures).
