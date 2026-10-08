@@ -486,17 +486,17 @@ fn free_flows_below_limit(
         && limit_kmh >= RURAL_LIMIT_FROM_KMH.max(national_kmh)
 }
 
-/// The speed of an untagged road: the country's legal limit for main classes (urban or rural by
-/// the row's built-up flag, unknown density keeps the class default), else the class default. A
-/// trunk in a built-up area takes the urban limit like any street there; elsewhere the country's
-/// motorroad limit where it has one.
-pub(crate) fn default_speed(class: usize, country_iso: u16, built_up: u8) -> (f64, &'static str) {
+/// The country's legal limit for main classes (km/h; urban or rural by the row's built-up flag, 0
+/// for unknown density, other classes and countries without a table). A trunk in a built-up area
+/// takes the urban limit like any street there; elsewhere the country's motorroad limit where it
+/// has one.
+fn legal_speed(class: usize, country_iso: u16, built_up: u8) -> u8 {
     let iso = country_iso.to_le_bytes();
     let legal = COUNTRY_SPEEDS
         .binary_search_by(|(code, _)| code[..].cmp(&iso[..]))
         .ok()
         .map(|i| COUNTRY_SPEEDS[i].1);
-    let value = legal.map_or(0, |[urban, rural, motorway, motorroad]| match class {
+    legal.map_or(0, |[urban, rural, motorway, motorroad]| match class {
         0 => motorway,
         1 if built_up == 2 => urban,
         1 if motorroad > 0 => motorroad,
@@ -507,7 +507,13 @@ pub(crate) fn default_speed(class: usize, country_iso: u16, built_up: u8) -> (f6
             _ => 0,
         },
         _ => 0,
-    });
+    })
+}
+
+/// The speed of an untagged road: the country's legal limit ([`legal_speed`]), else the class
+/// default, or the country's median signed speed of the class where it is lower.
+pub(crate) fn default_speed(class: usize, country_iso: u16, built_up: u8) -> (f64, &'static str) {
+    let value = legal_speed(class, country_iso, built_up);
     let (speed, source) = if value > 0 {
         (f64::from(value), "country_legal_default")
     } else {
@@ -847,7 +853,7 @@ pub fn convert(
                 built_up.value(row),
                 oneway.value(row) != 0,
                 base_speed,
-                default_speed(class_index, country.value(row), 1).0,
+                f64::from(legal_speed(class_index, country.value(row), 1)),
             ) {
                 (base_speed * RURAL_FREE_FLOW_OF_LIMIT, "rural_free_flow")
             } else {
@@ -1123,6 +1129,17 @@ mod tests {
             "a road signed 80 where the open road allows 100"
         );
         assert!(!free_flows_below_limit(4, 2, false, 90.0, 90.0), "a town");
+        // Spain's rural limit is 90 while its primaries are signed 80 at the median: a primary
+        // signed 80 is driven at 80, as the national limit is the law's, not the median sign.
+        let es = u16::from_le_bytes(*b"ES");
+        assert_eq!(default_speed(2, es, 1), (80.0, "tagged_median"));
+        assert!(!free_flows_below_limit(
+            2,
+            1,
+            false,
+            80.0,
+            f64::from(legal_speed(2, es, 1))
+        ));
         assert!(
             !free_flows_below_limit(0, 1, false, 130.0, 130.0),
             "a motorway"
