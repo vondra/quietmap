@@ -200,3 +200,49 @@ fn provenance_and_synthetic_identities() {
         );
     }
 }
+
+/// A designator on the fallback flies by the transponder or the whole flight: a rotorcraft's
+/// emitter category the helicopter class, a light one the C172, a glider none; no flight number
+/// at a median under 140 kt the C172, a glitch to 400 kt notwithstanding; a flight number, a
+/// faster flight or a known type keeps its own.
+#[test]
+fn a_rotation_of_unknown_type_flies_by_its_whole_flight() {
+    let speeds = |speeds: &[f32]| -> Vec<TracePoint> {
+        speeds
+            .iter()
+            .enumerate()
+            .map(|(k, &speed)| TracePoint {
+                ground_speed_kt: speed,
+                ..air(10.0 * k as f64, 50.0 + 0.001 * k as f32, 1_000.0)
+            })
+            .collect()
+    };
+    let light = profile_idx("C172");
+    let slow = speeds(&[95.0, 400.0, 110.0]);
+    assert_eq!(rotation_profile("", 0, "OKBYS", &slow), Some(light));
+    assert_eq!(
+        rotation_profile("PIAX", 0, "N4721K", &speeds(&[88.0, 120.0, 140.0])),
+        Some(light)
+    );
+    let fallback = Some(FALLBACK_PROFILE_IDX);
+    assert_eq!(
+        rotation_profile("", 0, "RCH123", &speeds(&[130.0, 120.0])),
+        fallback
+    );
+    assert_eq!(
+        rotation_profile("", 0, "OKJFA", &speeds(&[130.0, 230.0, 250.0])),
+        fallback
+    );
+    assert_eq!(rotation_profile("C172", 0, "OKABC", &slow), Some(light));
+    assert_eq!(
+        rotation_profile("B738", 0, "", &slow),
+        Some(profile_idx("B738"))
+    );
+    let rotorcraft = rotation_profile("ALO3", 0xA7, "", &speeds(&[60.0])).unwrap();
+    assert!(is_helicopter_class(usize::from(noise_class_of(rotorcraft))));
+    assert_eq!(
+        rotation_profile("", 0xA1, "", &speeds(&[300.0])),
+        Some(light)
+    );
+    assert_eq!(rotation_profile("", 0xB1, "", &slow), None);
+}

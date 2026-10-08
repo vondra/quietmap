@@ -2,7 +2,7 @@
 //! one square's boxes: each day file is read once, filtered to the scope, and every segment that
 //! counts on its day (primary flights on baseline days, flights only the secondary provider saw
 //! on increment days) goes to that day's file of each square its ends' bounding box meets
-//! (`<out>/<x>/<y>/<day>.seg`, fixed 76-byte records). A day is done when its marker
+//! (`<out>/<x>/<y>/<day>.seg`, fixed 80-byte records). A day is done when its marker
 //! `<out>/days/<day>` exists; the marker names the day's roles, from which the builder weighs it.
 
 use super::Window;
@@ -23,7 +23,12 @@ fn encode(segment: &FlightSegment, out: &mut Vec<u8>) {
     out.extend_from_slice(&segment.flight_id.to_le_bytes());
     out.extend_from_slice(&segment.callsign);
     out.extend_from_slice(&segment.designator);
-    out.extend_from_slice(&[segment.source_id, segment.period, segment.flags, 0]);
+    out.extend_from_slice(&[
+        segment.source_id,
+        segment.period,
+        segment.flags,
+        segment.profile,
+    ]);
     let reals = [
         segment.start[0],
         segment.start[1],
@@ -59,6 +64,7 @@ fn decode(bytes: &[u8]) -> FlightSegment {
         source_id: bytes[20],
         period: bytes[21],
         flags: bytes[22],
+        profile: bytes[23],
         start: [real(0), real(1), real(2)],
         end: [real(3), real(4), real(5)],
         pressure_altitude_m: [real(6), real(7)],
@@ -295,6 +301,7 @@ mod tests {
             flight_id: 0x4b_1234 << 40 | 1_756_700_000,
             callsign: *b"CSA100  ",
             designator: *b"A320",
+            profile: 10,
             source_id: 1,
             period: 2,
             flags: 5,
