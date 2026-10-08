@@ -1,9 +1,11 @@
-// The map click that opens the popup, the clicked-point marker, and the streamed request for it.
+// The map click that opens the popup (a click on a place to stay opens the place instead, at its
+// point), the clicked-point marker, and the streamed request for it.
 import { useEffect } from 'react'
 import { useMap, Source, Layer } from 'react-map-gl/maplibre'
 import type { MapMouseEvent } from 'maplibre-gl'
 import type { PopupUpdate } from '../types/noise'
 import { streamPopup } from '../lib/popup-stream'
+import { stayIdAt } from './StayLayer'
 
 export interface DetailPopupProps {
   isCurrentDetailPosition: (position: { lat: number; lng: number }) => boolean
@@ -31,6 +33,7 @@ export default function DetailPopup({ isCurrentDetailPosition, detailPosition, t
         const dy = e.originalEvent.clientY - dragStart.y
         if (Math.sqrt(dx * dx + dy * dy) > 5) return
       }
+      if (stayIdAt(map.getMap(), e.point)) return
       const { lat, lng } = e.lngLat
       onDetailPositionChange?.({ lat, lng })
     }

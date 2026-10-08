@@ -1,7 +1,10 @@
-// The phone popup: a bottom sheet with a drag handle, a collapsed peek and the streamed answer.
+// The phone popup: a bottom sheet with a drag handle, a collapsed peek and the streamed answer, under
+// the place to stay whose pin opened it.
 import { lazy, Suspense, useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import DetailSkeleton from './DetailSkeleton'
+import StayHeader from './StayHeader'
 import type { PopupUpdate, SegmentFan } from '../types/noise'
+import type { Stay } from '../lib/stays'
 import { resolveSheetTouchEnd } from '../lib/sheet-drag'
 
 // Lazy popup body: see DetailCard.
@@ -20,9 +23,11 @@ interface MobileDetailSheetProps {
   onFan: (fan: SegmentFan | null) => void
   /** The recent places' tabs, shown above the answer. */
   recentPlaces?: ReactNode
+  /** The place to stay at the point, when its pin opened the popup: above the answer, in the peek. */
+  stay: Stay | null
 }
 
-export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, recentPlaces }: MobileDetailSheetProps) {
+export default function MobileDetailSheet({ data, position, error, onClose, onHighlight, calculationOpen, onCalculationToggle, onFan, recentPlaces, stay }: MobileDetailSheetProps) {
   const [expanded, setExpanded] = useState(false)
   const [dismissing, setDismissing] = useState(false)
   const [dragOffset, setDragOffset] = useState(0)
@@ -112,6 +117,7 @@ export default function MobileDetailSheet({ data, position, error, onClose, onHi
             a fixed cap; the tap now reaches onClick, so this state is real
             (review 2026-09-10: `auto` let a tall detail grow on Collapse). */}
         {recentPlaces && <div className="px-2.5 pb-1">{recentPlaces}</div>}
+        {stay && <StayHeader stay={stay} />}
         <div className={`pb-1 overflow-x-clip ${expanded ? 'overflow-y-auto max-h-[calc(50vh-16px)]' : 'overflow-hidden max-h-24'}`}>
           {showSkeleton
             ? <DetailSkeleton position={position} error={error} />

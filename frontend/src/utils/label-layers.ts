@@ -4,6 +4,10 @@
 import type { SymbolLayerSpecification } from 'maplibre-gl'
 import type { BasemapId } from './basemaps'
 import POSITRON_SYMBOL_LAYERS_JSON from '../assets/positron-labels.json'
+import { STAY_DOT_LAYER } from '../lib/stays'
+
+/** The basemap's vector tiles' source in every style: the Positron styles name it so. */
+export const CARTO_SOURCE = 'carto'
 
 export const CARTO_VECTOR_SOURCE = {
   type: 'vector' as const,
@@ -50,14 +54,16 @@ export function getLabelLayers(basemapId: BasemapId): SymbolLayerSpecification[]
   return POSITRON_SYMBOL_LAYERS.map(layer => ({
     ...layer,
     id: '_label-' + layer.id,
-    source: 'carto',
+    source: CARTO_SOURCE,
     paint: adaptPaint(layer.paint ?? {}, basemapId) as SymbolLayerSpecification['paint'],
   }))
 }
 
-/** The layer the map's overlays draw beneath, so place labels stay on top: the first of the
- *  `_label` layers (standard and satellite), else the first symbol layer (the Positron fallback). */
-export function labelAnchorId(layers: readonly { id: string; type: string }[] | undefined): string | undefined {
-  return layers?.find(layer => layer.id.startsWith('_label'))?.id
-    ?? layers?.find(layer => layer.type === 'symbol')?.id
+/** The layer the map's overlays draw beneath, so labels stay on top: the first label of the
+ *  basemap's tiles (the `_label` layers of standard and satellite, the Positron fallback's own), else,
+ *  on a basemap without labels (terrain), the dots of the places to stay. Those draw over everything
+ *  and their prices are no basemap label. */
+export function labelAnchorId(layers: readonly { id: string; type: string; source?: unknown }[] | undefined): string | undefined {
+  return layers?.find(layer => layer.type === 'symbol' && layer.source === CARTO_SOURCE)?.id
+    ?? layers?.find(layer => layer.id === STAY_DOT_LAYER)?.id
 }

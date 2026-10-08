@@ -1,5 +1,5 @@
 // The shareable map state in the URL hash: view, open popup point, basemap, layers, quiet zones,
-// data layers.
+// places to stay, data layers.
 import { useCallback, useRef, useMemo } from 'react'
 import { DEFAULT_BASEMAP, type BasemapId } from '../utils/basemaps'
 import { resolveInitialView } from '../utils/initial-view'
@@ -41,6 +41,8 @@ export interface UrlState {
   heatmapLayers: Record<string, boolean>
   /** The data layers switched on (`data=`, none when absent). */
   dataLayers: DataLayerId[]
+  /** The places to stay shown (`stay=1`); the stay searched is the visitor's own, never linked. */
+  stays: boolean
 }
 
 // Default view: every noise layer on (the overlay then fetches the precomputed `total` tile).
@@ -73,6 +75,7 @@ export function parseHash(): UrlState {
       basemap: DEFAULT_BASEMAP,
       heatmapLayers: { ...DEFAULT_HEATMAP_LAYERS },
       dataLayers: [],
+      stays: false,
     }
   }
 
@@ -113,6 +116,7 @@ export function parseHash(): UrlState {
     basemap: (params.get('bm') as BasemapId) || DEFAULT_BASEMAP,
     heatmapLayers,
     dataLayers: parseDataLayers(params.get('data')),
+    stays: params.has('stay'),
   }
 }
 
@@ -147,6 +151,8 @@ function buildHash(state: UrlWrite): string {
   if (state.dataLayers.length) {
     parts.push(`data=${state.dataLayers.join(',')}`)
   }
+
+  if (state.stays) parts.push('stay=1')
 
   return '#' + parts.join('&')
 }

@@ -1,25 +1,20 @@
 // The layer controls, shared by the desktop ControlCard and the phone LayersPanel: the noise
-// layers, the quiet-zone overlay and the data layers.
+// layers, the overlays (quiet zones, places to stay) and the data layers.
 import DataLayersSection, { type DataLayersSectionProps } from './DataLayersSection'
-import OverlayControls from './OverlayControls'
+import OverlayControls, { type OverlayControlsProps } from './OverlayControls'
 import SourceToggles from './SourceToggles'
 
-export interface LayerControlsBodyProps extends DataLayersSectionProps {
-  quietClustersEnabled: boolean
-  onQuietClustersChange: (enabled: boolean) => void
-  quietThreshold: number
-  onQuietThresholdChange: (threshold: number) => void
+export interface LayerControlsBodyProps extends DataLayersSectionProps, OverlayControlsProps {
   heatmapLayers: Record<string, boolean>
   onHeatmapLayersChange: (layers: Record<string, boolean>) => void
   dividerSpacing?: 'compact' | 'comfortable'
 }
 
 export default function LayerControlsBody({
-  quietClustersEnabled, onQuietClustersChange,
-  quietThreshold, onQuietThresholdChange,
   heatmapLayers, onHeatmapLayersChange,
   dataLayers, onDataLayersChange,
   dividerSpacing = 'compact',
+  ...overlays
 }: LayerControlsBodyProps) {
   const divClass = dividerSpacing === 'compact'
     ? 'my-1.5 border-t border-border'
@@ -34,12 +29,7 @@ export default function LayerControlsBody({
 
       <div className={divClass} />
 
-      <OverlayControls
-        quietClustersEnabled={quietClustersEnabled}
-        onQuietClustersChange={onQuietClustersChange}
-        quietThreshold={quietThreshold}
-        onQuietThresholdChange={onQuietThresholdChange}
-      />
+      <OverlayControls {...overlays} />
 
       <div className={divClass} />
 

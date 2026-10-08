@@ -1,6 +1,6 @@
 // The three basemaps (standard, terrain, satellite) and their MapLibre styles, loaded once each.
 import type { StyleSpecification } from 'maplibre-gl'
-import { CARTO_VECTOR_SOURCE, CARTO_GLYPHS, CARTO_SPRITE, getLabelLayers } from './label-layers'
+import { CARTO_SOURCE, CARTO_VECTOR_SOURCE, CARTO_GLYPHS, CARTO_SPRITE, getLabelLayers } from './label-layers'
 
 export type BasemapId = 'standard' | 'terrain' | 'satellite'
 export const DEFAULT_BASEMAP: BasemapId = 'standard'
@@ -30,6 +30,8 @@ const POSITRON_FALLBACK_STYLE_URL = 'https://basemaps.cartocdn.com/gl/positron-g
 
 const TERRAIN_STYLE: StyleSpecification = {
   version: 8,
+  // No labels of its own (they are in its tiles), but the places to stay print their prices.
+  glyphs: CARTO_GLYPHS,
   sources: {
     opentopomap: {
       type: 'raster',
@@ -58,7 +60,7 @@ const SATELLITE_STYLE: StyleSpecification = {
       tileSize: 256,
       attribution: '&copy; Esri, Maxar, Earthstar Geographics, &copy; CARTO',
     },
-    carto: CARTO_VECTOR_SOURCE,
+    [CARTO_SOURCE]: CARTO_VECTOR_SOURCE,
   },
   layers: [{ id: 'esri-imagery', type: 'raster', source: 'esri' }],
 }

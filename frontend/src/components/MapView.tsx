@@ -1,5 +1,5 @@
-// The map: basemap, noise heatmap, quiet zones, hover readout, search flight, the click popup and the
-// track of the loudest flight highlighted in it.
+// The map: basemap, noise heatmap, quiet zones, places to stay, hover readout, search flight, the
+// click popup and the track of the loudest flight highlighted in it.
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import Map, { NavigationControl, GeolocateControl } from 'react-map-gl/maplibre'
 import type { StyleSpecification, GeolocateControl as GeolocateControlInstance } from 'maplibre-gl'
@@ -13,6 +13,8 @@ import { HEATMAP_LAYERS, useTileBuild, type HeatmapSource } from '../lib/tile-ur
 import HoverTooltip from './HoverTooltip'
 import AboutControl from './AboutControl'
 import DataLayersOverlay from './DataLayersOverlay'
+import StayLayer from './StayLayer'
+import type { Stay, StaySearch } from '../lib/stays'
 import type { DataLayerId } from '../lib/data-layers'
 import MapStateSync from './MapStateSync'
 import { DEFAULT_BASEMAP, loadBasemapStyle, type BasemapId } from '../utils/basemaps'
@@ -46,6 +48,8 @@ interface MapViewProps {
   quietThreshold?: number
   heatmapLayers?: Record<string, boolean>
   dataLayers?: DataLayerId[]
+  /** The places to stay for the stay searched, when shown; a click on one selects it. */
+  stays?: { search: StaySearch; onSelect: (stay: Stay) => void } | null
   /** Hands the parent a function that fires the map's GeolocateControl — the
    *  mobile locate box in the BasemapBar row triggers GPS through it. */
   registerGeolocateTrigger?: (trigger: () => void) => void
@@ -59,7 +63,7 @@ interface MapViewProps {
 export default function MapView({
   isCurrentDetailPosition, selectedLocation, initialCenter, initialZoom,
   basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition, flightTrack, segmentFan,
-  quietClustersEnabled, quietThreshold, heatmapLayers, dataLayers,
+  quietClustersEnabled, quietThreshold, heatmapLayers, dataLayers, stays,
   registerGeolocateTrigger, onGeolocateActiveChange, onGeolocateReadyChange,
 }: MapViewProps) {
   const center = initialCenter ?? [49.8, 15.5]
@@ -175,6 +179,8 @@ export default function MapView({
         onDetailPositionChange={onDetailPositionChange}
         onDetailError={onDetailError}
       />
+      {/* A new search starts from no pins. */}
+      {stays && <StayLayer key={JSON.stringify(stays.search)} search={stays.search} onSelect={stays.onSelect} />}
       <SegmentFanLayer fan={segmentFan ?? null} />
       <FlightTrackLayer track={flightTrack ?? null} />
       {onViewChange && onHashState && <MapStateSync onViewChange={onViewChange} onHashState={onHashState} />}

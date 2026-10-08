@@ -1,14 +1,21 @@
-// The quiet-zone overlay switch and its threshold slider.
+// The overlay switches: the quiet zones with their threshold slider, and the places to stay with
+// the stay they are searched for.
 import { useState, useEffect, useRef } from 'react'
-import { TreePine } from 'lucide-react'
+import { BedDouble, TreePine } from 'lucide-react'
 import { QUIET_THRESHOLD_MIN, QUIET_THRESHOLD_MAX, QUIET_THRESHOLD_STEP } from '../hooks/useUrlState'
+import type { StaySearch } from '../lib/stays'
+import StaySearchFields from './StaySearchFields'
 import { Switch } from './ui/switch'
 
-interface OverlayControlsProps {
+export interface OverlayControlsProps {
   quietClustersEnabled: boolean
   onQuietClustersChange: (enabled: boolean) => void
   quietThreshold: number
   onQuietThresholdChange: (threshold: number) => void
+  staysOn: boolean
+  onStaysChange: (on: boolean) => void
+  staySearch: StaySearch
+  onStaySearchChange: (search: StaySearch) => void
 }
 
 function ToggleRow({ active, icon, label, tooltip, onClick }: {
@@ -18,6 +25,7 @@ function ToggleRow({ active, icon, label, tooltip, onClick }: {
     <button
       onClick={onClick}
       title={tooltip}
+      aria-pressed={active}
       className="flex w-full items-center gap-2.5 py-1.5 px-1 rounded-lg hover:bg-black/5 transition-colors cursor-pointer"
     >
       <span className={active ? 'text-foreground' : 'text-muted-foreground'}>{icon}</span>
@@ -53,6 +61,7 @@ function NoiseSlider({ value, onChange, min, max, step = 1, testId }: {
 export default function OverlayControls({
   quietClustersEnabled, onQuietClustersChange,
   quietThreshold, onQuietThresholdChange,
+  staysOn, onStaysChange, staySearch, onStaySearchChange,
 }: OverlayControlsProps) {
   return (
     <div>
@@ -66,6 +75,14 @@ export default function OverlayControls({
       {quietClustersEnabled && (
         <NoiseSlider value={quietThreshold} onChange={onQuietThresholdChange} min={QUIET_THRESHOLD_MIN} max={QUIET_THRESHOLD_MAX} step={QUIET_THRESHOLD_STEP} testId="quiet-threshold" />
       )}
+      <ToggleRow
+        active={staysOn}
+        icon={<BedDouble className="size-4" />}
+        label="Places to stay"
+        tooltip="Hotels and apartments with a room for your dates and their prices (Stay22); click one for its noise"
+        onClick={() => onStaysChange(!staysOn)}
+      />
+      {staysOn && <StaySearchFields search={staySearch} onChange={onStaySearchChange} />}
     </div>
   )
 }

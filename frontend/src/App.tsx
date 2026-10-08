@@ -1,6 +1,6 @@
 // The map application: search, layer controls, the map, and the popup card or sheet, with every
 // piece of state mirrored into the shareable URL hash.
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react'
 import MapView from './components/MapView'
 import SearchBar from './components/SearchBar'
 import ControlCard from './components/ControlCard'
@@ -18,6 +18,7 @@ import RecentPlaces from './components/RecentPlaces'
 import { loadRecentPlaces, saveRecentPlaces, withName, withPlace, withoutPlace, type RecentPlace } from './lib/recent-places'
 import { useIsDesktop } from './hooks/useIsDesktop'
 import type { DataLayerId } from './lib/data-layers'
+import { defaultStaySearch, firstCheckin, withCheckin, type Stay, type StaySearch } from './lib/stays'
 
 
 export default function App() {
@@ -62,6 +63,10 @@ export default function App() {
   const handleLocate = useCallback(() => geolocateTrigger.current(), [])
   const [heatmapLayers, setHeatmapLayers] = useState<Record<string, boolean>>(initial.heatmapLayers)
   const [dataLayers, setDataLayers] = useState<DataLayerId[]>(initial.dataLayers)
+  const [staysOn, setStaysOn] = useState(initial.stays)
+  const [staySearch, setStaySearch] = useState<StaySearch>(() => defaultStaySearch())
+  // The place to stay whose pin opened the popup: shown above the popup until the popup moves.
+  const [selectedStay, setSelectedStay] = useState<Stay | null>(null)
 
   // Refs are the post-event truth for the URL: each handler updates its ref before syncUrl.
   const mapViewRef = useRef({ lat: initial.lat, lng: initial.lng, zoom: initial.zoom })
@@ -74,6 +79,7 @@ export default function App() {
   const basemapRef = useRef(basemap)
   const heatmapLayersRef = useRef(heatmapLayers)
   const dataLayersRef = useRef(dataLayers)
+  const staysRef = useRef(staysOn)
 
   // Pre-warm the lazy popup-body chunk the instant a point is clicked, so it
   // downloads while the first answer is computed instead of after it.
@@ -156,6 +162,7 @@ export default function App() {
       basemap: basemapRef.current,
       heatmapLayers: heatmapLayersRef.current,
       dataLayers: dataLayersRef.current,
+      stays: staysRef.current,
       ...overrides,
     })
   }, [updateUrl])
@@ -171,6 +178,28 @@ export default function App() {
     dataLayersRef.current = next
     syncUrl({ dataLayers: next })
   }, [syncUrl])
+
+  const handleStaysChange = useCallback((on: boolean) => {
+    setStaysOn(on)
+    staysRef.current = on
+    setSelectedStay(null)
+    syncUrl({ stays: on })
+  }, [syncUrl])
+
+  // The place shown was priced for the stay searched before.
+  const handleStaySearchChange = useCallback((search: StaySearch) => {
+    setStaySearch(search)
+    setSelectedStay(null)
+  }, [])
+  // A tab come back to after midnight (UTC) would search from a day Stay22 no longer takes.
+  useEffect(() => {
+    const roll = () => {
+      const first = firstCheckin()
+      setStaySearch(search => (search.checkin < first ? withCheckin(search, first) : search))
+    }
+    document.addEventListener('visibilitychange', roll)
+    return () => document.removeEventListener('visibilitychange', roll)
+  }, [])
 
   const handleViewChange = useCallback((lat: number, lng: number, zoom: number) => {
     mapViewRef.current = { lat, lng, zoom }
@@ -206,8 +235,17 @@ export default function App() {
     setDetailPosition(pos)
     // Fresh click: clear the previous point's answer, error and flight so the new skeleton renders.
     closeNoiseDetail()
+    setSelectedStay(null)
     syncUrl({ detailPosition: pos })
   }, [syncUrl, closeNoiseDetail])
+
+  // A place to stay opens the popup at its point, with the place above it: one card, not two.
+  const handleStaySelect = useCallback((stay: Stay) => {
+    handleDetailPositionChange({ lat: stay.lat, lng: stay.lng })
+    setSelectedStay(stay)
+  }, [handleDetailPositionChange])
+  const stays = useMemo(() => (staysOn ? { search: staySearch, onSelect: handleStaySelect } : null),
+    [staysOn, staySearch, handleStaySelect])
 
   const handleDetailData = useCallback((update: PopupUpdate) => {
     setNoiseDetailData(update)
@@ -241,9 +279,11 @@ export default function App() {
     handleHeatmapLayersChange(next.heatmapLayers)
     handleDataLayersChange(next.dataLayers)
     handleBasemapChange(next.basemap)
+    if (next.stays !== staysRef.current) handleStaysChange(next.stays)
     if (sameDetailPosition(detailPositionRef.current, next.detailPosition)) return
     handleDetailPositionChange(next.detailPosition)
-  }, [handleQuietClustersChange, handleQuietThresholdChange, handleHeatmapLayersChange, handleDataLayersChange, handleBasemapChange, handleDetailPositionChange])
+  }, [handleQuietClustersChange, handleQuietThresholdChange, handleHeatmapLayersChange, handleDataLayersChange, handleBasemapChange, handleStaysChange, handleDetailPositionChange])
+  const stayControls = { staysOn, onStaysChange: handleStaysChange, staySearch, onStaySearchChange: handleStaySearchChange }
 
   return (
     <div className="relative h-screen w-screen overflow-hidden">
@@ -264,6 +304,7 @@ export default function App() {
             onHeatmapLayersChange={handleHeatmapLayersChange}
             dataLayers={dataLayers}
             onDataLayersChange={handleDataLayersChange}
+            {...stayControls}
           />
           {detailPosition && (
             <RecentPlaces places={recentPlaces} current={detailPosition} onOpen={openPlace} onRemove={forgetPlace} />
@@ -277,6 +318,7 @@ export default function App() {
             calculationOpen={calculationOpen && desktop}
             onCalculationToggle={toggleCalculation}
             onFan={setFan}
+            stay={selectedStay}
           />
         </div>
 
@@ -309,6 +351,7 @@ export default function App() {
         quietThreshold={quietThreshold}
         heatmapLayers={heatmapLayers}
         dataLayers={dataLayers}
+        stays={stays}
         registerGeolocateTrigger={registerGeolocateTrigger}
         onGeolocateActiveChange={setGeolocateActive}
         onGeolocateReadyChange={setGeolocateReady}
@@ -343,6 +386,7 @@ export default function App() {
           onHeatmapLayersChange={handleHeatmapLayersChange}
           dataLayers={dataLayers}
           onDataLayersChange={handleDataLayersChange}
+          {...stayControls}
         />
       </div>
 
@@ -357,6 +401,7 @@ export default function App() {
         onCalculationToggle={toggleCalculation}
         onFan={setFan}
         recentPlaces={<RecentPlaces places={recentPlaces} current={detailPosition} onOpen={openPlace} onRemove={forgetPlace} />}
+        stay={selectedStay}
       />
 
     </div>
