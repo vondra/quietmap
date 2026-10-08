@@ -43,13 +43,13 @@ function Table({ head, rows }: { head: ReactNode[], rows: ReactNode[][] }) {
     <table className="w-full text-[11px] font-mono tabular-nums">
       <thead>
         <tr className="text-[10px] font-sans text-muted-foreground/70">
-          {head.map((cell, k) => <th key={k} className={`py-0.5 font-normal ${k === 0 ? 'text-left' : 'text-right'}`}>{cell}</th>)}
+          {head.map((cell, k) => <th key={k} className={`py-0.5 font-normal ${k === 0 ? 'text-left' : 'pl-1.5 text-right'}`}>{cell}</th>)}
         </tr>
       </thead>
       <tbody>
         {rows.map((row, r) => (
           <tr key={r} className="border-t border-border/40">
-            {row.map((cell, k) => <td key={k} className={`py-0.5 ${k === 0 ? 'text-left font-sans' : 'text-right'}`}>{cell}</td>)}
+            {row.map((cell, k) => <td key={k} className={`py-0.5 ${k === 0 ? 'text-left font-sans' : 'pl-1.5 text-right'}`}>{cell}</td>)}
           </tr>
         ))}
       </tbody>
@@ -117,7 +117,8 @@ export default function CalculationDetails({ data, onFan }: {
           />
           <Table
             head={['Air, dB/km', '63', '125', '250', '500', '1k', '2k', '4k', '8k']}
-            rows={[['', ...data.weather.alpha_db_per_km.map(alpha => alpha.toFixed(2))]]}
+            // Three significant figures, so the eight bands fit the card's width (0.12 to 113).
+            rows={[['', ...data.weather.alpha_db_per_km.map(alpha => alpha.toFixed(alpha < 10 ? 2 : alpha < 100 ? 1 : 0))]]}
           />
         </Section>
       )}
