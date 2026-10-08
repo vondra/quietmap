@@ -298,6 +298,13 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             })
         }),
         "reflection_db": update.reflection_db,
+        // The place's weather (final update): the percent of each period the weather bends sound
+        // down along each of 16 bearings (the direction the sound travels, clockwise from north),
+        // and the air's absorption per octave band (dB/km).
+        "weather": update.weather.map(|weather| json!({
+            "favourable_percent": weather.favourable.by_sector.map(|row| row.map(|p| (p * 100.0).round() as u8)),
+            "alpha_db_per_km": weather.alpha_db_per_km.map(|alpha| (alpha * 100.0).round() / 100.0),
+        })),
         "total_lden": totals.get("lden"),
         "total": totals,
         "sources": layers,

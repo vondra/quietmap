@@ -18,6 +18,14 @@ const PERIODS = [
 
 const level = (db: number | null | undefined) => (db == null || db <= 0 ? '—' : db.toFixed(1))
 
+const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
+
+const WEATHER_EXPLAINED = 'How often the weather here bends sound down toward the ground\n'
+  + '(wind behind it or a temperature inversion: CNOSSOS-EU\'s favourable\n'
+  + 'conditions, which carry it further) for sound arriving from each\n'
+  + 'direction, by period, from ERA5 1991-2020; and how much the air\n'
+  + 'absorbs per km in each octave (ISO 9613-1 at the place\'s climate)'
+
 function Section({ title, hint, children }: { title: string, hint: string, children: ReactNode }) {
   return (
     <section className="mt-3">
@@ -96,6 +104,23 @@ export default function CalculationDetails({ data, onFan }: {
           ])}
         />
       </Section>
+
+      {data.weather && (
+        <Section title="Weather here" hint={WEATHER_EXPLAINED}>
+          <Table
+            head={['Sound from', 'Day', 'Eve', 'Night']}
+            rows={COMPASS.map((name, k) => [
+              name,
+              // Sound arriving from the south travels north: sector k + 8.
+              ...data.weather!.favourable_percent.map(row => `${row[(k + 8) % 16]} %`),
+            ])}
+          />
+          <Table
+            head={['Air, dB/km', '63', '125', '250', '500', '1k', '2k', '4k', '8k']}
+            rows={[['', ...data.weather.alpha_db_per_km.map(alpha => alpha.toFixed(2))]]}
+          />
+        </Section>
+      )}
 
       <Section title="Sources, pieces and rays" hint={SEGMENTS_EXPLAINED}>
         <SegmentsSection

@@ -207,6 +207,10 @@ export interface PopupUpdate {
   elevation_m: number
   /** The receiver reflection bonus of the surroundings (dB: 0, 1.5 or 3). */
   reflection_db?: number
+  /** The place's weather (final update): per period the percent of the time the weather bends
+   *  sound down along each of 16 bearings (the direction it travels, clockwise from north), and
+   *  the air's absorption per octave band, 63 Hz to 8 kHz (dB/km). */
+  weather?: { favourable_percent: number[][], alpha_db_per_km: number[] } | null
   building: BuildingAnswer | null
   total_lden: Level
   total: PeriodLevels

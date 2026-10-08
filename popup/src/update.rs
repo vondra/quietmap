@@ -85,6 +85,9 @@ pub struct Update<'u> {
     pub receiver_altitude_m: f64,
     /// The receiver reflection bonus of the surroundings (dB, 0, 1.5 or 3).
     pub reflection_db: f64,
+    /// The place's weather (the final update's): favourable propagation by period and direction,
+    /// and the air's absorption.
+    pub weather: Option<physics::weather::PlaceWeather>,
     /// The building the click stands in, and its chosen façade.
     pub building: Option<BuildingClick>,
     pub layers: Vec<LayerAnswer>,
@@ -197,6 +200,7 @@ pub fn empty_answer(
         frame,
         receiver_altitude_m: ground.at([0.0, 0.0])?.height_m + RECEIVER_HEIGHT_M,
         reflection_db: 0.0,
+        weather: None,
         building: Some(click),
         layers: layer_answers(selections),
         contributors: Vec::new(),

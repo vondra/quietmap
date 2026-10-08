@@ -514,6 +514,7 @@ pub fn answer(
             frame,
             receiver_altitude_m: station.altitude_m,
             reflection_db: station.reflection_db,
+            weather: last_ring.then_some(weather),
             building,
             layers,
             contributors,
