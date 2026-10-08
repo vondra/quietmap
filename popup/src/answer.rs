@@ -570,6 +570,15 @@ pub fn answer(
             let ground = lden_energy(&ground);
             [airliners, jets, propeller, helicopters, ground]
         });
+        // The listed flights; in the final answer each with its line, its reads counted.
+        let mut listed = flights.loudest();
+        if last_ring {
+            let read_started = std::time::Instant::now();
+            let (track_files, track_bytes) =
+                crate::aircraft::tracks::attach(&release.year_root, &mut listed, [lat, lon])?;
+            (files, bytes) = (files + track_files, bytes + track_bytes);
+            read_seconds += read_started.elapsed().as_secs_f64();
+        }
         let update = Update {
             partial: !last_ring,
             percentiles,
@@ -586,13 +595,7 @@ pub fn answer(
             building,
             layers,
             contributors,
-            flights: {
-                let mut listed = flights.loudest();
-                if last_ring {
-                    crate::aircraft::tracks::attach(&release.year_root, &mut listed, [lat, lon])?;
-                }
-                listed
-            },
+            flights: listed,
             pieces,
             statistics: Statistics {
                 rings_read: ring,

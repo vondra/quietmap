@@ -107,9 +107,9 @@ flight). The click reads every box through the click-time equation
 dB). The flight list is ranked by Lmax: each box states its kept pieces' loudest LAmax at 1,000
 ft, and boxes are searched loudest bound first until the bound falls below the list's entry
 level, so the list is what every kept piece would give. A listed flight's line on the map is its
-whole track (`aircraft-tracks`: every flight of the year, its segments' ends kept within 20 m by
-Douglas-Peucker, in 256 files by the address's low byte, found by a binary search of positioned
-reads), cut to 20 km around the click in the final answer.
+whole track (`aircraft-tracks`: every flight of the year flat, its segments' ends kept within 20 m
+by Douglas-Peucker, broken at the antimeridian, in 256 files by the address's low byte, found by
+a binary search of positioned reads), clipped to 20 km around the click in the final answer.
 
 Airport ground operations (`build/src/airport`) put the window's ground legs on the aeroway lines
 (OSM runways and taxiways, and lines found where legs of ten flights on three days run off every

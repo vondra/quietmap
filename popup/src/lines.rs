@@ -195,7 +195,7 @@ fn join(pieces: &[[GlobalSteps; 2]]) -> Vec<Vec<GlobalSteps>> {
 
 /// Every group's chains simplified to [`TOLERANCE_M`], all coarser by halves until together they
 /// hold at most `most` points (a chain keeps its two ends at least).
-fn simplified(groups: &[&[Vec<[f64; 2]>]], most: usize) -> Vec<Lines> {
+pub(crate) fn simplified(groups: &[&[Vec<[f64; 2]>]], most: usize) -> Vec<Lines> {
     let mut tolerance = TOLERANCE_M;
     loop {
         let lines: Vec<Lines> = groups

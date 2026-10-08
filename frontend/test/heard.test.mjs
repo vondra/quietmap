@@ -40,7 +40,9 @@ test('rarer events read by the week or the month', () => {
 test('the aircraft layer reads as its flights a day above 50 dB; none without them', () => {
   const events = (perDay) => ({ above_db: [50, 60, 70], per_day: perDay, night: [0, 0, 0], height_m: [null, null, null], type: [null, null, null], helicopters_per_day: 0 })
   assert.equal(flightsText(events([412.4, 30, 2])), '412 flights/day')
-  assert.equal(flightsText(events([0.3, 0, 0])), '2 flights/week')
+  assert.equal(flightsText(events([0.3, 0, 0])), '110 flights/year')
+  assert.equal(flightsText(events([0.014, 0, 0])), '5 flights/year')
+  assert.equal(flightsText(events([0.0005, 0, 0])), '<1 flight/year')
   assert.equal(flightsText(events([0, 0, 0])), null)
   assert.equal(flightsText(undefined), null)
 })

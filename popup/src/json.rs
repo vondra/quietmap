@@ -295,8 +295,8 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 "closest_m": flight.closest_m.round(),
                 "altitude_m": flight.altitude_m.round(),
                 "track": flight.track.iter().map(|line| {
-                    line.iter().map(|[lat, lon, altitude]| {
-                        [(lat * 1e5).round() / 1e5, (lon * 1e5).round() / 1e5, altitude.round()]
+                    line.iter().map(|[lat, lon]| {
+                        [(lat * 1e5).round() / 1e5, (lon * 1e5).round() / 1e5]
                     }).collect::<Vec<_>>()
                 }).collect::<Vec<_>>(),
             })

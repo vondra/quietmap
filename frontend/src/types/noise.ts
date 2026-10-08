@@ -98,8 +98,8 @@ export interface BuildingAnswer {
   [field: string]: unknown
 }
 
-/** A line of a flight's track: its points as [lat, lon, altitude above sea level in m]. */
-export type TrackLine = [number, number, number][]
+/** A line of a flight's track: its points as [lat, lon]. */
+export type TrackLine = [number, number][]
 
 /** One of the loudest flights at the point: an ADS-B flight of the aircraft layer. */
 export interface TopFlight {

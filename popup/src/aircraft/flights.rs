@@ -37,9 +37,9 @@ pub struct LoudFlight {
     pub lmax_db: f64,
     pub closest_m: f64,
     pub altitude_m: f64,
-    /// Its line on the map near the click ([`super::tracks`]): points as latitude, longitude
-    /// (deg) and altitude above sea level (m); the final answer's only.
-    pub track: Vec<Vec<[f64; 3]>>,
+    /// Its line on the map near the click ([`super::tracks`]): points as latitude and longitude
+    /// (deg); the final answer's only.
+    pub track: Vec<Vec<[f64; 2]>>,
 }
 
 fn text(bytes: &[u8]) -> String {
