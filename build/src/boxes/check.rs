@@ -171,6 +171,8 @@ fn leq_db(energy: &[f64]) -> Levels {
 struct Receiver {
     frame: LocalFrame,
     altitude_m: f64,
+    /// The yearly atmosphere of its square: the events' maximum levels read it, as the builder.
+    place: PlaceAtmosphere,
 }
 
 impl Receiver {
@@ -197,9 +199,13 @@ pub fn compare(
 ) -> Result<Vec<PointReport>, String> {
     let receivers: Vec<Receiver> = points
         .iter()
-        .map(|point| Receiver {
-            frame: LocalFrame::at(Mercator::from_degrees(point.lat, point.lon)),
-            altitude_m: point.ground_m + RECEIVER_HEIGHT_M,
+        .map(|point| {
+            let position = Mercator::from_degrees(point.lat, point.lon);
+            Receiver {
+                frame: LocalFrame::at(position),
+                altitude_m: point.ground_m + RECEIVER_HEIGHT_M,
+                place: place_atmosphere(weather, square_of_tile(TileId::containing(position))),
+            }
         })
         .collect();
     let mut near: HashSet<TileId> = HashSet::new();

@@ -2,7 +2,7 @@
 //! period, beyond the reach, per band and distance of its box pieces, and per flight.
 
 use super::super::emission_of;
-use super::super::events::{EventCounts, FlightPeaks, Peak, horizontal_distance_m};
+use super::super::events::{EVENTS_REACH_M, EventCounts, FlightPeaks, Peak, horizontal_distance_m};
 use super::super::place::{BoxKey, Placement, cut_into_pieces};
 use super::super::read::{FLAG_SECONDARY_ONLY, FlightSegment};
 use super::{BEYOND_REACH_M, REACH_M, RECEIVER_HEIGHT_M, Receiver, square_of, square_of_tile};
@@ -10,7 +10,9 @@ use crate::dev4::Square;
 use physics::bands::PERIODS;
 use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::doc29::screening::Unscreened;
-use physics::doc29::segment::{SegmentGeometry, segment_lmax_db, segment_sel_at_receiver};
+use physics::doc29::segment::{
+    SegmentGeometry, closest_points, receiver_lmax_db, segment_sel_at_receiver,
+};
 use std::collections::HashMap;
 use tiles::geo::Mercator;
 
@@ -103,8 +105,10 @@ impl Sums {
 
 /// Adds one segment of weight `weight` to the sums of every point it reaches (by its distance,
 /// not its ends'), each box piece in the atmosphere of its own square as the boxes sum it, a
-/// segment beyond the reach in its start's. A segment of weight 0 (a day without its provider's
-/// role) still sets its flight's loudest moment, which decides how the flight counts.
+/// segment beyond the reach in its start's. Its maximum level, for the flight's loudest moment, is
+/// the whole segment's in the receiver's square's atmosphere at the receiver's elevation, within
+/// the events' reach, as the events builder takes it. A segment of weight 0 (a day without its
+/// provider's role) still sets its flight's loudest moment, which decides how the flight counts.
 pub(super) fn add_segment(
     sums: &mut [Sums],
     receivers: &[Receiver],
@@ -131,6 +135,22 @@ pub(super) fn add_segment(
         };
         let period = usize::from(segment.period).min(PERIODS - 1);
         let ground = |metres: f64| metres - receiver.altitude_m;
+        let helicopter = aircraft.helicopter.is_some();
+        let loudest = (distance <= EVENTS_REACH_M).then(|| {
+            let closest = closest_points(start, end);
+            let emission = emission.in_atmosphere(&receiver.place);
+            Peak {
+                lmax_db: receiver_lmax_db(&emission, &closest, receiver.altitude_m),
+                period: segment.period,
+                height_m: closest.on_segment_m[2] + RECEIVER_HEIGHT_M,
+            }
+        });
+        if let Some(loudest) = loudest {
+            sums.peaks
+                .entry(segment.flight_id)
+                .or_insert_with(|| FlightPeaks::new(segment.designator, helicopter))
+                .add(loudest, segment.flags & FLAG_SECONDARY_ONLY != 0);
+        }
         if distance > REACH_M {
             let geometry = SegmentGeometry {
                 start_m: start,
@@ -145,10 +165,9 @@ pub(super) fn add_segment(
         }
         let point = |end: [f64; 3]| (Mercator::from_degrees(end[0], end[1]), end[2]);
         let (from, to) = (point(segment.start), point(segment.end));
-        let helicopter = aircraft.helicopter.is_some();
         let pieces = pieces.get_or_insert_with(|| cut_into_pieces(placement, from, to, helicopter));
         let length = (to.0.x - from.0.x).hypot(to.0.y - from.0.y);
-        let (mut flight_energy, mut loudest) = (0.0, None::<Peak>);
+        let mut flight_energy = 0.0;
         for piece in pieces.iter() {
             let emission = emission.in_atmosphere(place(square_of_tile(piece.key.tile)));
             // The terrain under the piece's ends, along the segment's.
@@ -169,14 +188,6 @@ pub(super) fn add_segment(
             let sel = segment_sel_at_receiver(&emission, &geometry, &Unscreened);
             let energy = 10f64.powf(sel.sel_db / 10.0);
             flight_energy += energy;
-            let moment = Peak {
-                lmax_db: segment_lmax_db(&emission, &sel.closest),
-                period: segment.period,
-                height_m: sel.closest.on_segment_m[2] + RECEIVER_HEIGHT_M,
-            };
-            if loudest.is_none_or(|loudest| moment.lmax_db > loudest.lmax_db) {
-                loudest = Some(moment);
-            }
             let value = weight * energy;
             sums.energy[EXACT + period] += value;
             let slot = if piece.key.band == 0 {
@@ -202,10 +213,7 @@ pub(super) fn add_segment(
                 sum[5][period] += value * (b[0] - a[0]).hypot(b[1] - a[1]);
             }
         }
-        let Some(loudest) = loudest else {
-            continue;
-        };
-        if weight > 0.0 {
+        if let (Some(loudest), true) = (loudest, weight > 0.0) {
             let flight = sums
                 .flights
                 .entry(segment.flight_id)
@@ -213,9 +221,5 @@ pub(super) fn add_segment(
             flight.0 += flight_energy;
             flight.1 = flight.1.max(loudest.lmax_db);
         }
-        sums.peaks
-            .entry(segment.flight_id)
-            .or_insert_with(|| FlightPeaks::new(segment.designator, helicopter))
-            .add(loudest, segment.flags & FLAG_SECONDARY_ONLY != 0);
     }
 }

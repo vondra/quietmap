@@ -2,7 +2,7 @@
 //! exact SEL the benchmark takes as the reference of the aircraft boxes, and the levels a box
 //! sums at the ten NPD distances.
 
-use super::atmosphere::{PlaceAtmosphere, SHIFT_DISTANCES};
+use super::atmosphere::{PlaceAtmosphere, SHIFT_DISTANCES, receiver_impedance_db};
 use super::corrections::{
     INSTALLATION_CORRECTION_MAX_DB, finite_segment_correction_db, installation_correction_db,
     lateral_attenuation_db, speed_correction_db,
@@ -325,6 +325,26 @@ pub fn segment_lmax_db(emission: &SegmentEmission, closest: &ClosestPoints) -> f
     emission.read_npd(distance_m).lamax_db
         + installation_correction_db(emission.installation, closest.height_m, line_slant_m)
         - lateral_attenuation
+}
+
+/// What the NPD curves gain at a receiver `altitude_m` above sea level (Doc 29 4.2.1, Eqs. 4-6 and
+/// 4-7); the helicopter class carries no impedance.
+pub fn receiver_impedance_for_db(emission: &SegmentEmission, altitude_m: f64) -> f64 {
+    if is_helicopter_class(emission.class) {
+        0.0
+    } else {
+        receiver_impedance_db(altitude_m)
+    }
+}
+
+/// A segment's maximum level at a receiver `altitude_m` above sea level: Eq. 4-8a at the
+/// receiver's elevation, as the flight list, the events table and their checker all read it.
+pub fn receiver_lmax_db(
+    emission: &SegmentEmission,
+    closest: &ClosestPoints,
+    altitude_m: f64,
+) -> f64 {
+    segment_lmax_db(emission, closest) + receiver_impedance_for_db(emission, altitude_m)
 }
 
 /// The slant (m) within which a segment's maximum level (Eq. 4-8a) can reach `threshold_db`: its

@@ -19,7 +19,7 @@ use crate::output::write_tile;
 use physics::bands::PERIODS;
 use physics::doc29::atmosphere::PlaceAtmosphere;
 use physics::doc29::corrections::INSTALLATION_CORRECTION_MAX_DB;
-use physics::doc29::segment::{SegmentEmission, closest_points, lmax_reach_m, segment_lmax_db};
+use physics::doc29::segment::{SegmentEmission, closest_points, lmax_reach_m, receiver_lmax_db};
 use physics::weather::WeatherTable;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -188,6 +188,9 @@ impl EventCounts {
 pub const EVENTS_REACH_M: f64 = 20_000.0;
 /// The receiver above the ground (m), as the popup's.
 const RECEIVER_HEIGHT_M: f64 = 4.0;
+/// The most the NPD curves gain at a receiver's elevation (Doc 29 4.2.1): +0.05 dB at the Dead
+/// Sea's 430 m below sea level, less everywhere above it. The bounds carry it.
+const IMPEDANCE_MARGIN_DB: f64 = 0.1;
 /// z16 cells per square side.
 const CELLS: usize = 8 * CELLS_PER_SIDE;
 
@@ -372,26 +375,32 @@ struct Candidate<'a> {
 fn flight_moments(
     segments: &[FlightSegment],
     receivers: &Receivers,
-    places: &HashMap<Square, PlaceAtmosphere>,
-    home: &PlaceAtmosphere,
+    place: &PlaceAtmosphere,
 ) -> CellMoments {
     let lowest_band = EVENT_BANDS_DB[0];
     let [least_east, least_north] = receivers.least_scales();
+    // The square's box widened by the reach (Mercator units): a segment beyond it reaches none of
+    // its cells, before its emission and reach are worked out.
+    let margin = [EVENTS_REACH_M / least_east, EVENTS_REACH_M / least_north];
+    let side = (CELLS / CELLS_PER_SIDE) as f64;
     let mut candidates: Vec<Candidate> = segments
         .iter()
         .filter_map(|segment| {
-            let (_, emission) = emission_of(segment)?;
             let ends =
                 [segment.start, segment.end].map(|end| Mercator::from_degrees(end[0], end[1]));
-            let square = TileId::containing(ends[0]);
-            let place = places
-                .get(&Square {
-                    x: square.x >> 3,
-                    y: square.y >> 3,
-                })
-                .unwrap_or(home);
+            let [x0, x1] = ends.map(|end| wrap_x(end.x - receivers.west));
+            let [y0, y1] = ends.map(|end| end.y - receivers.north);
+            if x0.max(x1) < -margin[0]
+                || x0.min(x1) > side + margin[0]
+                || y0.max(y1) < -margin[1]
+                || y0.min(y1) > side + margin[1]
+            {
+                return None;
+            }
+            let (_, emission) = emission_of(segment)?;
+            // The receivers' square's atmosphere, as the popup's flight list reads its place's.
             let emission = emission.in_atmosphere(place);
-            let reach_slant_m = lmax_reach_m(&emission, lowest_band);
+            let reach_slant_m = lmax_reach_m(&emission, lowest_band - IMPEDANCE_MARGIN_DB);
             let lowest_m = segment.start[2].min(segment.end[2]);
             let above_m = (lowest_m - receivers.highest_m).max(0.0);
             if reach_slant_m <= above_m {
@@ -400,8 +409,9 @@ fn flight_moments(
             let reach_m = (reach_slant_m * reach_slant_m - above_m * above_m)
                 .sqrt()
                 .min(EVENTS_REACH_M);
-            let bound_db =
-                emission.read_npd(above_m.max(1.0)).lamax_db + INSTALLATION_CORRECTION_MAX_DB;
+            let bound_db = emission.read_npd(above_m.max(1.0)).lamax_db
+                + INSTALLATION_CORRECTION_MAX_DB
+                + IMPEDANCE_MARGIN_DB;
             Some(Candidate {
                 segment,
                 emission,
@@ -475,7 +485,9 @@ fn flight_moments(
                 let nearest_m = horizontal_m
                     .max(0.0)
                     .hypot((candidate.lowest_m - top_m).max(0.0));
-                let bound = emission.read_npd(nearest_m).lamax_db + INSTALLATION_CORRECTION_MAX_DB;
+                let bound = emission.read_npd(nearest_m).lamax_db
+                    + INSTALLATION_CORRECTION_MAX_DB
+                    + IMPEDANCE_MARGIN_DB;
                 if bound < lowest_band {
                     continue;
                 }
@@ -501,15 +513,16 @@ fn flight_moments(
                     }
                     // The nearest the segment comes bounds what it can reach here.
                     let nearest_m = horizontal_m.hypot((candidate.lowest_m - altitude_m).max(0.0));
-                    let bound =
-                        emission.read_npd(nearest_m).lamax_db + INSTALLATION_CORRECTION_MAX_DB;
+                    let bound = emission.read_npd(nearest_m).lamax_db
+                        + INSTALLATION_CORRECTION_MAX_DB
+                        + IMPEDANCE_MARGIN_DB;
                     if bound < lowest_band
                         || cell[provider].is_some_and(|peak| peak.lmax_db >= bound)
                     {
                         continue;
                     }
                     let closest = closest_points(start_m, end_m);
-                    let lmax_db = segment_lmax_db(emission, &closest);
+                    let lmax_db = receiver_lmax_db(emission, &closest, altitude_m);
                     if lmax_db < lowest_band {
                         continue;
                     }
@@ -556,8 +569,9 @@ pub(crate) fn horizontal_distance_m(start: [f64; 3], end: [f64; 3]) -> f64 {
     (start[0] + t * dx).hypot(start[1] + t * dy)
 }
 
-/// A segment's identity in the shuffle: the same segment written to two squares' files.
-fn segment_key(segment: &FlightSegment) -> (u64, [u64; 6]) {
+/// A segment's identity in the shuffle: the same segment written to two squares' files (its
+/// flight, ends, period and provider flags).
+fn segment_key(segment: &FlightSegment) -> (u64, u8, u8, [u64; 6]) {
     let ends = [
         segment.start[0],
         segment.start[1],
@@ -566,7 +580,12 @@ fn segment_key(segment: &FlightSegment) -> (u64, [u64; 6]) {
         segment.end[1],
         segment.end[2],
     ];
-    (segment.flight_id, ends.map(f64::to_bits))
+    (
+        segment.flight_id,
+        segment.period,
+        segment.flags,
+        ends.map(f64::to_bits),
+    )
 }
 
 /// Builds the `aircraft-events` tiles of one z9 square from the day files of the squares within
@@ -583,11 +602,7 @@ pub fn build_square(
 ) -> Result<usize, String> {
     let receivers = Receivers::new(square, terrain_root)?;
     let inputs = squares_within_reach(square);
-    let places: HashMap<Square, PlaceAtmosphere> = inputs
-        .par_iter()
-        .map(|&input| (input, place_atmosphere(weather, input)))
-        .collect();
-    let home = &places[&square];
+    let place = place_atmosphere(weather, square);
     let (baseline, increment) = (
         days.iter()
             .filter(|(_, roles)| roles.baseline)
@@ -619,7 +634,7 @@ pub fn build_square(
             .par_windows(2)
             .map(|bounds| {
                 let flight = &segments[bounds[0]..bounds[1]];
-                (flight, flight_moments(flight, &receivers, &places, home))
+                (flight, flight_moments(flight, &receivers, &place))
             })
             .collect();
         let weights = (
@@ -764,12 +779,13 @@ mod tests {
         // The night pass overhead: its segment over the cell, 596 m above the receiver.
         let overhead = pass(600.0, 2).nth(20).unwrap();
         let (_, emission) = emission_of(&overhead).unwrap();
+        let receiver_m = RECEIVER_HEIGHT_M;
         let local = |end: [f64; 3]| {
             let [east, north] = frame.to_metres(Mercator::from_degrees(end[0], end[1]));
             [east, north, end[2] - RECEIVER_HEIGHT_M]
         };
         let closest = closest_points(local(overhead.start), local(overhead.end));
-        let loudest = segment_lmax_db(&emission, &closest);
+        let loudest = receiver_lmax_db(&emission, &closest, receiver_m);
         assert!(loudest > 60.0, "{loudest}");
         for (band, threshold) in heard.bands.iter().zip(EVENT_BANDS_DB) {
             let expected = if loudest >= threshold {

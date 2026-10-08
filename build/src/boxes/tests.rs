@@ -217,3 +217,39 @@ fn a_box_keeps_its_loudest_pieces_one_per_flight() {
         .collect();
     assert_eq!(kept, [(1, 83.0), (2, 85.0)]);
 }
+
+/// A flight passing a box across 23:00 counts in the evening and in the night, as its energy does
+/// (Codex, review of r055): its night count is what the night's intermittency reads.
+#[test]
+fn a_flight_across_a_period_boundary_counts_in_both() {
+    let mut segments: Vec<FlightSegment> = departures().into_iter().take(40).collect();
+    for (index, segment) in segments.iter_mut().enumerate() {
+        segment.period = if index < 21 { 1 } else { 2 };
+    }
+    let terrain = HashMap::new();
+    let scope: HashSet<TileId> = [0, 1].iter().flat_map(|&ring| PRAGUE.ring(ring)).collect();
+    let placement = Placement::new(&scope, &terrain, BOX_EDGE_LEVEL_STEP_DB);
+    let mut boxes = Boxes::default();
+    let weighted: Vec<(FlightSegment, f64)> = segments
+        .iter()
+        .map(|segment| (segment.clone(), 0.5))
+        .collect();
+    add_day(
+        &mut boxes,
+        &weighted,
+        (&placement, &PlaceAtmosphere::model()),
+        &scope,
+        PIECES_PER_BOX,
+    );
+    // The box where the flight's pieces change period holds it in both.
+    let both = boxes
+        .iter()
+        .filter(|(_, entry)| entry.flights_per_day == [0.0, 0.5, 0.5])
+        .count();
+    assert!(both >= 1, "no box counts the flight in both periods");
+    assert!(
+        boxes
+            .iter()
+            .all(|(_, entry)| entry.flights_per_day[0] == 0.0)
+    );
+}

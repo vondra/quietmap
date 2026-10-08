@@ -129,10 +129,11 @@ impl Boxes {
 pub struct BoxEntry {
     pub sums: BoxSums,
     pub ground_m: f64,
-    /// Flights per average day that crossed it by the period of their first piece in it, and the
-    /// last flight seen (a flight's segments arrive together within a day).
+    /// Flights per average day that crossed it in each period (a flight passing at 23:00 counts in
+    /// the evening and the night, as its energy does), and per period the last flight seen there
+    /// (a flight's segments arrive together within a day).
     pub flights_per_day: [f64; PERIODS],
-    last_flight: u64,
+    last_flight: [u64; PERIODS],
     pub kept: Vec<KeptPiece>,
 }
 
@@ -317,9 +318,10 @@ fn add_day(
                     end_m,
                 );
                 entry.ground_m = piece.ground_m;
-                if entry.last_flight != segment.flight_id {
-                    entry.last_flight = segment.flight_id;
-                    entry.flights_per_day[usize::from(segment.period)] += segment_weight;
+                let period = usize::from(segment.period);
+                if entry.last_flight[period] != segment.flight_id {
+                    entry.last_flight[period] = segment.flight_id;
+                    entry.flights_per_day[period] += segment_weight;
                 }
                 entry.keep(KeptPiece::new(segment, emission, piece), pieces);
             }
