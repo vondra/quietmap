@@ -19,7 +19,7 @@ const RECORD_BYTES: usize = 80;
 /// z12 tiles per z9 square side.
 const TILES_PER_SQUARE: f64 = 8.0;
 
-fn encode(segment: &FlightSegment, out: &mut Vec<u8>) {
+pub(super) fn encode(segment: &FlightSegment, out: &mut Vec<u8>) {
     out.extend_from_slice(&segment.flight_id.to_le_bytes());
     out.extend_from_slice(&segment.callsign);
     out.extend_from_slice(&segment.designator);

@@ -2,7 +2,7 @@
 //! period, beyond the reach, per band and distance of its box pieces, and per flight.
 
 use super::super::emission_of;
-use super::super::events::{EventCounts, FlightPeaks, Peak};
+use super::super::events::{EventCounts, FlightPeaks, Peak, horizontal_distance_m};
 use super::super::place::{BoxKey, Placement, cut_into_pieces};
 use super::super::read::{FLAG_SECONDARY_ONLY, FlightSegment};
 use super::{BEYOND_REACH_M, REACH_M, RECEIVER_HEIGHT_M, Receiver, square_of, square_of_tile};
@@ -99,18 +99,6 @@ impl Sums {
             }
         }
     }
-}
-
-/// The horizontal distance (m) from the receiver to a segment given in its frame.
-pub(super) fn horizontal_distance_m(start: [f64; 3], end: [f64; 3]) -> f64 {
-    let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
-    let length_squared = dx * dx + dy * dy;
-    let t = if length_squared > 0.0 {
-        (-(start[0] * dx + start[1] * dy) / length_squared).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
-    (start[0] + t * dx).hypot(start[1] + t * dy)
 }
 
 /// Adds one segment of weight `weight` to the sums of every point it reaches (by its distance,

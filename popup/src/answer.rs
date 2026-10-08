@@ -121,6 +121,7 @@ pub fn answer(
     let (mut files, mut bytes, mut read_seconds) = (0usize, 0u64, 0.0f64);
     let (mut candidate_seconds, mut evaluate_seconds) = (0.0f64, 0.0f64);
     let mut station: Option<Station> = None;
+    let mut aircraft_events = None;
     let mut building: Option<BuildingClick> = None;
     let mut attributes = Attributes::default();
     let mut ring = 0;
@@ -334,6 +335,14 @@ pub fn answer(
             station = Some(chosen);
         }
         let station = station.expect("chosen after the first read");
+        if aircraft_events.is_none() {
+            let (events, read) = crate::aircraft::events::events_at(
+                &release.year_root,
+                frame.to_mercator(station.position),
+            )?;
+            aircraft_events = Some(events);
+            (files, bytes) = (files + usize::from(read > 0), bytes + read);
+        }
         if reads_ground {
             horizons = Some(Horizons::build(
                 &ground,
@@ -567,6 +576,7 @@ pub fn answer(
             loudness,
             rest_nden_sone,
             aircraft_kinds,
+            aircraft_events,
             lat,
             lon,
             frame,

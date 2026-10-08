@@ -25,7 +25,9 @@
 //! `qm-build aircraft-shuffle --segments DIR --days D,.. [--increment-days D,..] --squares
 //! X:Y[,X:Y..] --out DIR` sorts the window's segments into squares, and `qm-build aircraft-boxes
 //! --shuffled DIR --days D,.. [--increment-days D,..] --squares .. --terrain DIR --weather FILE
-//! [--kind aircraft-far] --out DIR` boxes them, refusing a shuffle that is not exactly that window.
+//! [--kind aircraft-far] --out DIR` boxes them, refusing a shuffle that is not exactly that window;
+//! `qm-build aircraft-events` with the same arguments (no kind) writes what flies over each cell
+//! of the squares, reading the shuffle of the squares within reach of each (`boxes::events`).
 //!
 //! Roads: `qm-build traffic --prepared DIR --squares X:Y[,X:Y..] --out DIR` routes the buildings'
 //! trip ends down the local streets and grids them, one file per square, for the sources.
@@ -342,6 +344,40 @@ fn run(arguments: &[String]) -> Result<(), String> {
             }
             Ok(())
         }
+        "aircraft-events" => {
+            let shuffled = Path::new(options.get("shuffled")?);
+            let days = boxes::shuffle::window_days(shuffled, &sampling_window(&options))?;
+            let weather = read_weather(options.get("weather")?)?;
+            let progress = options.optional("progress").map(PathBuf::from);
+            if let Some(progress) = &progress {
+                std::fs::create_dir_all(progress).map_err(|error| error.to_string())?;
+            }
+            for square in parse_squares(options.get("squares")?)? {
+                let marker = progress
+                    .as_ref()
+                    .map(|progress| progress.join(format!("events-{}-{}", square.x, square.y)));
+                if marker.as_ref().is_some_and(|marker| marker.exists()) {
+                    continue;
+                }
+                let started = std::time::Instant::now();
+                let written = boxes::events::build_square(
+                    (shuffled, &days),
+                    (square, &weather),
+                    Path::new(options.get("terrain")?),
+                    &out,
+                )?;
+                eprintln!(
+                    "aircraft events: square {}/{}: {written} tiles, {:.0} s",
+                    square.x,
+                    square.y,
+                    started.elapsed().as_secs_f64()
+                );
+                if let Some(marker) = &marker {
+                    std::fs::write(marker, b"").map_err(|error| error.to_string())?;
+                }
+            }
+            Ok(())
+        }
         "aircraft-check" => {
             let window = sampling_window(&options);
             let points: Vec<serde_json::Value> = serde_json::from_str(
@@ -405,6 +441,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
                             "boxed_leq": report.aloft[1],
                         },
                         "exact_events": events_json(&report.events),
+                        "written_events": report.events_written.bands.map(|band| {
+                            serde_json::json!([band.per_day, band.night_per_day, band.height_m])
+                        }),
                         "exact_top": report
                             .exact_top
                             .iter()

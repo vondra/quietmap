@@ -81,6 +81,8 @@ pub struct Update<'u> {
     /// What the aircraft layer is made of, Lden energies (final update): airliners, regional and
     /// business jets, propeller aircraft, helicopters, airport ground operations.
     pub aircraft_kinds: Option<[f64; 5]>,
+    /// What flies over the receiver (from the first update on).
+    pub aircraft_events: Option<tiles::aircraft_events::EventCell>,
     pub lat: f64,
     pub lon: f64,
     pub frame: LocalFrame,
@@ -195,6 +197,7 @@ pub fn empty_answer(
         loudness: None,
         rest_nden_sone: None,
         aircraft_kinds: None,
+        aircraft_events: None,
         lat,
         lon,
         frame,

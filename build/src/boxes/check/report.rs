@@ -283,6 +283,7 @@ pub(super) fn report(
         lists,
         diagnosis,
         events: total.events,
+        events_written: popup::aircraft::events::events_at(aircraft_root, receiver.frame.origin)?.0,
     })
 }
 

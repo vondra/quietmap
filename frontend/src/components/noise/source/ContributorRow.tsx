@@ -105,7 +105,7 @@ export function AircraftLayerRow({ layer, flights, onHighlightFlight }: {
 }) {
   return (
     <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={null} received={layer} nden={layer.nden_sone}>
-      <AircraftLayerDetail received={layer} kinds={layer.kinds} flights={flights} onHighlightFlight={onHighlightFlight} />
+      <AircraftLayerDetail received={layer} kinds={layer.kinds} events={layer.events} flights={flights} onHighlightFlight={onHighlightFlight} />
     </SourceRow>
   )
 }
