@@ -6,6 +6,7 @@ pub mod boxes;
 pub mod events;
 pub mod flights;
 pub mod horizons;
+pub mod tracks;
 
 use boxes::{AircraftReceiver, FLIGHT_KINDS, tile_energy};
 use flights::FlightTotals;

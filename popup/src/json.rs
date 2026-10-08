@@ -287,10 +287,10 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 "lmax_db": (flight.lmax_db * 10.0).round() / 10.0,
                 "closest_m": flight.closest_m.round(),
                 "altitude_m": flight.altitude_m.round(),
-                "track": flight.track.iter().map(|piece| {
-                    piece.map(|[lat, lon, altitude]| {
+                "track": flight.track.iter().map(|line| {
+                    line.iter().map(|[lat, lon, altitude]| {
                         [(lat * 1e5).round() / 1e5, (lon * 1e5).round() / 1e5, altitude.round()]
-                    })
+                    }).collect::<Vec<_>>()
                 }).collect::<Vec<_>>(),
             })
         })

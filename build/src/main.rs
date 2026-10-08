@@ -386,6 +386,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             }
             Ok(())
         }
+        "aircraft-tracks" => aircraft::tracks::build(Path::new(options.get("segments")?), &out),
         "aircraft-check" => {
             let window = sampling_window(&options);
             let points: Vec<serde_json::Value> = serde_json::from_str(
