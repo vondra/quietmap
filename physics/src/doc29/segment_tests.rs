@@ -180,6 +180,26 @@ fn a_low_pass_aside_reads_its_maximum_level_attenuated() {
     assert!((segment_lmax_db(&climb, &past) - expected).abs() < 1e-9);
 }
 
+/// The reach bounds the maximum level: within it the curve plus the largest Delta_I reaches the
+/// threshold, beyond it no geometry does (Lambda only attenuates); a threshold above the curve's
+/// nearest reading has no reach.
+#[test]
+fn the_maximum_level_stays_within_its_reach() {
+    let climb = emission("B738", &flight(true, 160.0, 0.05), false);
+    let reach = lmax_reach_m(&climb, 60.0);
+    let bound = |slant: f64| climb.read_npd(slant).lamax_db + INSTALLATION_CORRECTION_MAX_DB;
+    assert!(
+        bound(reach * 0.999) >= 60.0 && bound(reach * 1.001) < 60.0,
+        "{reach}"
+    );
+    // Segments across the line of sight, their closest point at the reach.
+    for (east, up) in [(reach, 0.0), (0.0, reach), (0.6 * reach, 0.8 * reach)] {
+        let closest = closest_points([east, -100.0, up], [east, 100.0, up]);
+        assert!(segment_lmax_db(&climb, &closest) < 60.0);
+    }
+    assert_eq!(lmax_reach_m(&climb, 200.0), 0.0);
+}
+
 /// A final approach whose line, extended beyond touchdown, passes 46 m under the ground at the
 /// receiver's closest point is heard through its own extent (Doc 29; dev4's Filter D dropped it):
 /// finite, and quieter than with the receiver abeam its nearer end.

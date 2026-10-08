@@ -16,6 +16,19 @@ export interface PeriodLevels {
  *  taxiing and take-off rolls. */
 export type AircraftKind = 'airliners' | 'regional_business_jets' | 'propeller' | 'helicopters' | 'ground'
 
+/** What flies over the point: per band of maximum level (dB, at or above) the flights of an
+ *  average day and those at night (23-07), their mean height above the ground there and the type
+ *  flying most of them (null without flights); the helicopters a day above the lowest band. Each
+ *  flight of the year counts once, at its loudest moment, outdoors in the open. */
+export interface AircraftEvents {
+  above_db: number[]
+  per_day: number[]
+  night: number[]
+  height_m: (number | null)[]
+  type: (string | null)[]
+  helicopters_per_day: number
+}
+
 /** One layer's levels at the point. */
 export interface LayerLevels extends PeriodLevels {
   source_type: string
@@ -27,6 +40,8 @@ export interface LayerLevels extends PeriodLevels {
   /** What the aircraft layer is made of: each kind's share of its Lden energy, those of 0.5 % or
    *  more (the final update's). */
   kinds?: Partial<Record<AircraftKind, number>>
+  /** What flies over the point (the aircraft layer, from the first update on). */
+  events?: AircraftEvents
   /** Lden if everything the stop rule left out (so far) were as loud as its bound. */
   lden_upper: Level
   /** Sources computed in full, of the candidates the rings read so far. */

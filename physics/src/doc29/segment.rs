@@ -4,8 +4,8 @@
 
 use super::atmosphere::{PlaceAtmosphere, SHIFT_DISTANCES};
 use super::corrections::{
-    finite_segment_correction_db, installation_correction_db, lateral_attenuation_db,
-    speed_correction_db,
+    INSTALLATION_CORRECTION_MAX_DB, finite_segment_correction_db, installation_correction_db,
+    lateral_attenuation_db, speed_correction_db,
 };
 use super::helicopters::{HelicopterLevels, helicopter_levels};
 use super::npd::{
@@ -281,6 +281,34 @@ pub fn segment_lmax_db(emission: &SegmentEmission, closest: &ClosestPoints) -> f
     emission.read_npd(lateral_m.hypot(height_m)).lamax_db
         + installation_correction_db(emission.installation, line_height_m, line_slant_m)
         - lateral_attenuation_db(height_m, lateral_m)
+}
+
+/// The slant (m) within which a segment's maximum level (Eq. 4-8a) can reach `threshold_db`: its
+/// LAmax curve plus the most Delta_I adds ([`INSTALLATION_CORRECTION_MAX_DB`]; Lambda never adds).
+/// 0 where even its nearest reading stays below.
+pub fn lmax_reach_m(emission: &SegmentEmission, threshold_db: f64) -> f64 {
+    const NEAREST_M: f64 = 30.0;
+    const FARTHEST_M: f64 = 60_000.0;
+    let reaches = |slant_m: f64| {
+        emission.read_npd(slant_m).lamax_db + INSTALLATION_CORRECTION_MAX_DB >= threshold_db
+    };
+    if !reaches(NEAREST_M) {
+        return 0.0;
+    }
+    let (mut near, mut far) = (NEAREST_M, FARTHEST_M);
+    if reaches(far) {
+        return far;
+    }
+    // The curve falls with the slant: halve the ratio of the bracket in lg d.
+    for _ in 0..24 {
+        let middle = (near * far).sqrt();
+        if reaches(middle) {
+            near = middle;
+        } else {
+            far = middle;
+        }
+    }
+    far
 }
 
 #[cfg(test)]

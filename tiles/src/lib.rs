@@ -3,6 +3,7 @@
 //! reads whole files.
 
 pub mod aircraft;
+pub mod aircraft_events;
 pub mod geo;
 pub mod obstacles;
 pub mod read;
@@ -20,6 +21,8 @@ pub enum Kind {
     Aircraft,
     /// The same format with boxes of a coarser rule, read from the second ring on.
     AircraftFar,
+    /// What flies over each cell: flights a day above 50, 60 and 70 dB.
+    AircraftEvents,
 }
 
 impl Kind {
@@ -30,6 +33,7 @@ impl Kind {
             Kind::Sources => "sources",
             Kind::Aircraft => "aircraft",
             Kind::AircraftFar => "aircraft-far",
+            Kind::AircraftEvents => "aircraft-events",
         }
     }
 }

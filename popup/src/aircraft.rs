@@ -1,7 +1,9 @@
 //! The aircraft layer of a click: the receiver's horizons ([`horizons`]), every box of the read
-//! tiles through the click-time equation ([`boxes`]), and the loudest flights ([`flights`]).
+//! tiles through the click-time equation ([`boxes`]), the loudest flights ([`flights`]) and what
+//! flies over the receiver ([`events`]).
 
 pub mod boxes;
+pub mod events;
 pub mod flights;
 pub mod horizons;
 

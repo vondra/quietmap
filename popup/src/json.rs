@@ -67,6 +67,25 @@ fn aircraft_kinds(kinds: &[f64; 5]) -> Value {
     Value::Object(object)
 }
 
+/// What flies over the receiver: per band (maximum level at or above) the flights a day and at
+/// night, their mean height above the ground there and type (none without flights); the
+/// helicopters a day above the lowest band.
+fn aircraft_events(cell: &tiles::aircraft_events::EventCell) -> Value {
+    let per_day = |value: f32| (f64::from(value) * 1000.0).round() / 1000.0;
+    let bands = &cell.bands;
+    json!({
+        "above_db": tiles::aircraft_events::EVENT_BANDS_DB,
+        "per_day": bands.map(|band| per_day(band.per_day)),
+        "night": bands.map(|band| per_day(band.night_per_day)),
+        "height_m": bands.map(|band| (band.per_day > 0.0).then_some(band.height_m)),
+        "type": bands.map(|band| {
+            band.designator
+                .map(|designator| String::from_utf8_lossy(&designator).trim().to_string())
+        }),
+        "helicopters_per_day": per_day(cell.helicopters_per_day),
+    })
+}
+
 pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
     let mut total = [0.0; PERIODS];
     let mut layers = Vec::new();
@@ -90,6 +109,9 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         }
         if let (Layer::Aircraft, Some(kinds)) = (layer.layer, update.aircraft_kinds) {
             object.insert("kinds".into(), aircraft_kinds(&kinds));
+        }
+        if let (Layer::Aircraft, Some(events)) = (layer.layer, &update.aircraft_events) {
+            object.insert("events".into(), aircraft_events(events));
         }
         // Unrounded Lden for the benchmark's error measurement (fast against exact).
         let weighted = lden_energy(&layer.energy);

@@ -117,7 +117,7 @@ export function AircraftLayerRow({ layer, loudTotal, flights, onHighlightFlight 
 }) {
   return (
     <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={aircraftMakeup(layer.kinds)} received={layer} loud={loudLevel(layer.loud_lden, layer.lden)} loudTotal={loudTotal}>
-      <AircraftLayerDetail received={layer} kinds={layer.kinds} flights={flights} onHighlightFlight={onHighlightFlight} />
+      <AircraftLayerDetail received={layer} kinds={layer.kinds} events={layer.events} flights={flights} onHighlightFlight={onHighlightFlight} />
     </SourceRow>
   )
 }

@@ -76,8 +76,10 @@ pub struct PointReport {
     pub lists: Vec<FlightList>,
     /// For a diagnosed point, the fine boxes whose SEL sums miss their pieces' the most.
     pub diagnosis: Vec<BoxDiagnosis>,
-    /// The events table of every flight's exact maximum level.
+    /// The events table of every flight's exact maximum level, and the written table's cell
+    /// holding the point (as the popup reads it).
     pub events: EventCounts,
+    pub events_written: tiles::aircraft_events::EventCell,
 }
 
 /// One fine box at a diagnosed point: where it is (centroid latitude, longitude, altitude, the
@@ -342,7 +344,7 @@ mod tests {
         let (start, end) = ([50.0 + north, 14.0 - across], [50.0 + north, 14.0 + across]);
         assert!(within(&point, start, end, 1_001.0));
         assert!(!within(&point, start, end, 999.0));
-        let distance = exact::horizontal_distance_m(
+        let distance = super::super::events::horizontal_distance_m(
             [-50_000.0, 1_000.0, 9_000.0],
             [50_000.0, 1_000.0, 9_000.0],
         );
