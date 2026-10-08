@@ -434,11 +434,8 @@ const COUNTRY_HEAVY_SPEED_CAP_KMH: [([u8; 2], f64); 13] = [
     (*b"US", 105.0),
 ];
 
-/// The speed of a category on a road of `speed_kmh` in a country.
-fn category_speed(category: VehicleCategory, speed_kmh: f64, country_iso: u16) -> f64 {
-    if !matches!(category, VehicleCategory::Medium | VehicleCategory::Heavy) {
-        return speed_kmh;
-    }
+/// The speed of lorries and buses (medium and heavy) on a road of `speed_kmh` in a country.
+fn heavy_speed(speed_kmh: f64, country_iso: u16) -> f64 {
     let iso = country_iso.to_le_bytes();
     let cap = COUNTRY_HEAVY_SPEED_CAP_KMH
         .binary_search_by(|(code, _)| code[..].cmp(&iso[..]))
@@ -879,7 +876,9 @@ pub fn convert(
                 _ => &[(1.0, 1.0)],
             };
             let electric = electric_share(country.value(row));
-            let country_iso = country.value(row);
+            // The free-flow share is the cars' (DfT's counters); lorries and buses keep their own
+            // limit on the road's.
+            let heavy_speed = heavy_speed(base_speed, country.value(row));
             let emission: [[f64; BANDS]; PERIODS] = std::array::from_fn(|period| {
                 let flows: Vec<CategoryFlow> = directions
                     .iter()
@@ -887,11 +886,9 @@ pub fn convert(
                         (0..4).map(move |c| CategoryFlow {
                             vehicles_per_hour: share * daily[c] * shares[c][period]
                                 / PERIOD_HOURS[period],
-                            // The free-flow share is the cars' (DfT's counters); lorries and
-                            // buses keep their own limit on the road's.
                             speed_kmh: match categories[c] {
                                 VehicleCategory::Light | VehicleCategory::Motorcycle => speed,
-                                category => category_speed(category, base_speed, country_iso),
+                                VehicleCategory::Medium | VehicleCategory::Heavy => heavy_speed,
                             },
                             category: categories[c],
                             slope_percent: sign * slope,
@@ -1035,23 +1032,14 @@ mod tests {
     }
 
     /// Heavy and medium vehicles (lorries and buses over 3.5 t) keep to 80 km/h unless their
-    /// country lets them faster; cars and motorcycles drive the road's speed.
+    /// country lets them faster.
     #[test]
     fn heavy_vehicles_keep_their_countrys_limit() {
         let code = |iso: &[u8; 2]| u16::from_le_bytes(*iso);
-        let heavy = VehicleCategory::Heavy;
-        assert_eq!(category_speed(heavy, 130.0, code(b"DE")), 80.0);
-        assert_eq!(category_speed(heavy, 113.0, code(b"US")), 105.0);
-        assert_eq!(category_speed(heavy, 60.0, code(b"US")), 60.0);
-        assert_eq!(category_speed(heavy, 130.0, code(b"FR")), 90.0);
-        assert_eq!(
-            category_speed(VehicleCategory::Medium, 130.0, code(b"DE")),
-            80.0
-        );
-        assert_eq!(
-            category_speed(VehicleCategory::Light, 130.0, code(b"DE")),
-            130.0
-        );
+        assert_eq!(heavy_speed(130.0, code(b"DE")), 80.0);
+        assert_eq!(heavy_speed(113.0, code(b"US")), 105.0);
+        assert_eq!(heavy_speed(60.0, code(b"US")), 60.0);
+        assert_eq!(heavy_speed(130.0, code(b"FR")), 90.0);
     }
 
     #[test]

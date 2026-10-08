@@ -189,7 +189,7 @@ impl FlightTotals {
 
     /// The loudest flights by Lmax.
     pub fn loudest(&self) -> Vec<LoudFlight> {
-        let mut flights: Vec<LoudFlight> = self.flights.values().cloned().collect();
+        let mut flights: Vec<&LoudFlight> = self.flights.values().collect();
         flights.sort_by(|a, b| {
             b.lmax_db
                 .total_cmp(&a.lmax_db)
@@ -197,6 +197,6 @@ impl FlightTotals {
                 .then(a.icao.cmp(&b.icao))
         });
         flights.truncate(FLIGHTS_SHOWN);
-        flights
+        flights.into_iter().cloned().collect()
     }
 }
