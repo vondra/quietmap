@@ -84,7 +84,7 @@ impl Point {
         Ok(Point {
             position,
             altitude_m: square.ground.at(position)?.height_m + popup::answer::RECEIVER_HEIGHT_M,
-            weather: square.release.weather.place(lat, lon),
+            weather: square.weather.place(lat, lon),
             own_footprint: 0,
         })
     }

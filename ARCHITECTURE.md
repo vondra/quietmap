@@ -14,7 +14,8 @@ its builder's file header.
     inputs    an earlier version's prepared tables and rasters (dev4, 2026-09-24): roads with
               counts and speeds, railways, buildings, industry, leisure, ships, aerodromes,
               terrain, land cover, weather; the extra datasets of fetch/; ADS-B archives; EGM2008
-    build/    qm-build: converts the inputs and computes the emission, never at the click
+    build/    qm-build: converts the inputs and computes the emission (the click computes only
+              that of the flight list's kept pieces)
       -> <release>/<year>/<x9>/<y9>/<x12>_<y12>.<kind>     (z12 tiles in z9 directories)
          <release>/<year>/aircraft-tracks/<xx>.aircraft-tracks, <release>/<year>/complete
          <release>/weather
@@ -67,11 +68,11 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
 - The physics tables (NPD, CNOSSOS coefficients, the Doc 29 classes) are compiled into the
   programs. The weather table is a file beside the year roots (0.5 deg, ERA5 1991-2020:
   favourable probability per period and 16 sectors, and the yearly mean air absorption per
-  octave, ISO 9613-1), read when a release opens. Ground rays take the place's absorption, and
-  the NPD curves are moved to the place's air from the AIR-1845 atmosphere they come in (Doc 29
-  Appendix D, with the impedance adjustment), a box's at the centre of its z9 square; roads roll
-  at the place's yearly air temperature (WorldClim 2.1, CNOSSOS 2.2.10), with the gradient and
-  junction terms.
+  octave, ISO 9613-1): a click reads its own four nodes, the painter and the builders all of it.
+  Ground rays take the place's absorption, and the NPD curves are moved to the place's air from
+  the AIR-1845 atmosphere they come in (Doc 29 Appendix D, with the impedance adjustment), a
+  box's at the centre of its z9 square; roads roll at the place's yearly air temperature
+  (WorldClim 2.1, CNOSSOS 2.2.10), with the gradient and junction terms.
 - Tiles are read whole with plain reads, one task per file, a ring's files asked for together
   (cold on NVMe, 26 MB in 3-5 ms against 23-29 ms with mmap and MADV_WILLNEED, whose faults read
   32 KB at a time). The flight tracks are the exception: a file's directory, then each listed

@@ -172,7 +172,7 @@ pub(crate) fn place_atmosphere(weather: &WeatherTable, square: Square) -> PlaceA
     }
     .centre();
     let (lat, lon) = centre.to_degrees();
-    PlaceAtmosphere::new(&weather.alpha_at(lat, lon))
+    PlaceAtmosphere::new(&weather.place(lat, lon).alpha_db_per_km)
 }
 
 /// The Doc 29 emission of a segment in the class of the profile Stage 1 decided for its flight,

@@ -51,6 +51,7 @@ mod traffic;
 mod weather;
 
 use dev4::{Dev4, Square};
+use physics::weather::WeatherTable;
 use std::path::{Path, PathBuf};
 
 struct Arguments {
@@ -178,12 +179,6 @@ fn events_json(events: &boxes::events::EventCounts) -> serde_json::Value {
         })
         .collect();
     serde_json::json!({"bands": bands, "helicopters_per_day": events.helicopters})
-}
-
-/// The global weather table (`qm-build weather`): the yearly atmosphere the boxes are summed in.
-fn read_weather(path: &str) -> Result<physics::weather::WeatherTable, String> {
-    let bytes = std::fs::read(path).map_err(|error| format!("{path}: {error}"))?;
-    physics::weather::WeatherTable::parse(&bytes)
 }
 
 fn run(arguments: &[String]) -> Result<(), String> {
@@ -316,7 +311,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let days = boxes::shuffle::window_days(shuffled, &sampling_window(&options))?;
             let squares = parse_squares(options.get("squares")?)?;
             boxes::shuffle::holds(shuffled, &squares)?;
-            let weather = read_weather(options.get("weather")?)?;
+            let weather = WeatherTable::read(Path::new(options.get("weather")?))?;
             eprintln!("aircraft boxes: {} days", days.len());
             // `--progress DIR`: a marker per square built, so that a rerun resumes.
             let progress = options.optional("progress").map(PathBuf::from);
@@ -355,7 +350,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let days = boxes::shuffle::window_days(shuffled, &sampling_window(&options))?;
             let squares = parse_squares(options.get("squares")?)?;
             boxes::shuffle::holds(shuffled, &boxes::events::halo(&squares))?;
-            let weather = read_weather(options.get("weather")?)?;
+            let weather = WeatherTable::read(Path::new(options.get("weather")?))?;
             let progress = options.optional("progress").map(PathBuf::from);
             if let Some(progress) = &progress {
                 std::fs::create_dir_all(progress).map_err(|error| error.to_string())?;
@@ -419,7 +414,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 ),
                 None => None,
             };
-            let weather = read_weather(options.get("weather")?)?;
+            let weather = WeatherTable::read(Path::new(options.get("weather")?))?;
             let compared = boxes::check::compare(
                 (Path::new(options.get("segments")?), &weather),
                 &window,

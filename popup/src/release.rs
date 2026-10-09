@@ -1,7 +1,6 @@
-//! An opened release: its year root (served only when complete), the global weather table, and
-//! the whole-file reads of a ring's tiles.
+//! An opened release: its year root (served only when complete), the global weather table beside
+//! it, and the whole-file reads of a ring's tiles.
 
-use physics::weather::WeatherTable;
 use std::path::{Path, PathBuf};
 use tiles::geo::TileId;
 use tiles::read::read_all;
@@ -12,7 +11,9 @@ pub const WEATHER_FILE: &str = "weather";
 
 pub struct Release {
     pub year_root: PathBuf,
-    pub weather: WeatherTable,
+    /// The global weather table: a click reads its own place of it
+    /// (`physics::weather::read_place`), the painter all of it.
+    pub weather_path: PathBuf,
 }
 
 impl Release {
@@ -22,12 +23,9 @@ impl Release {
         if !year_root.join(COMPLETION_MARKER).exists() {
             return Err(format!("{} is not a complete release", year_root.display()));
         }
-        let weather_path = prepared.join(WEATHER_FILE);
-        let bytes = std::fs::read(&weather_path)
-            .map_err(|error| format!("{}: {error}", weather_path.display()))?;
         Ok(Release {
             year_root,
-            weather: WeatherTable::parse(&bytes)?,
+            weather_path: prepared.join(WEATHER_FILE),
         })
     }
 }

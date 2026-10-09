@@ -6,6 +6,7 @@
 use paint::hm3::{painted, write};
 use paint::paint::{Grid, paint};
 use paint::square::{Files, Square};
+use physics::weather::WeatherTable;
 use popup::release::Release;
 use std::io::Write;
 use std::path::PathBuf;
@@ -72,6 +73,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         );
     }
     let release = Release::open(&PathBuf::from(required("prepared")?), required("year")?)?;
+    let weather = WeatherTable::read(&release.weather_path)?;
     let out = PathBuf::from(required("out")?);
     let zoom: u32 = required("zoom")?
         .parse()
@@ -98,7 +100,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         let started = Instant::now();
         let files = Files::read(&release, *tile)?;
         let read_s = started.elapsed().as_secs_f64();
-        let square = Square::new(&release, *tile, &files)?;
+        let square = Square::new(&weather, *tile, &files)?;
         let built_s = started.elapsed().as_secs_f64() - read_s;
         let cells = paint(&square, grid)?;
         let painted_s = started.elapsed().as_secs_f64() - read_s - built_s;

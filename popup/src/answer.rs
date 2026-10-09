@@ -106,7 +106,9 @@ pub fn answer(
         .collect();
     let mut ground = Ground::new(frame, centre, most_ground_rings);
     let mut horizons: Option<Horizons> = None;
-    let weather = release.weather.place(lat, lon);
+    let weather_started = std::time::Instant::now();
+    let weather = physics::weather::read_place(&release.weather_path, lat, lon)?;
+    let weather_read_seconds = weather_started.elapsed().as_secs_f64();
     let mut flights = FlightTotals::default().in_atmosphere(&weather.alpha_db_per_km);
     // The flights' energy and energy times lambda per period, for the percentile levels.
     let (mut flight_energy, mut flight_energy_lambda) = ([0.0; PERIODS], [0.0; PERIODS]);
@@ -118,7 +120,9 @@ pub fn answer(
         .iter()
         .map(|&layer| LayerSelection::new(layer))
         .collect();
-    let (mut files, mut bytes, mut read_seconds) = (0usize, 0u64, 0.0f64);
+    // The weather table's nodes are the click's first read.
+    let (mut files, mut bytes, mut read_seconds) =
+        (1usize, physics::weather::PLACE_BYTES, weather_read_seconds);
     let (mut candidate_seconds, mut evaluate_seconds) = (0.0f64, 0.0f64);
     let mut station: Option<Station> = None;
     let mut aircraft_events = None;

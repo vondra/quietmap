@@ -5,7 +5,7 @@
 use physics::bands::{PERIODS, lden_energy};
 use physics::bound::receiver_bound;
 use physics::line::{LINE_PERPENDICULAR_FLOOR_M, POINT_DIVERGENCE_LINEAR};
-use physics::weather::PlaceWeather;
+use physics::weather::{PlaceWeather, WeatherTable};
 use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::AIRCRAFT_REACH_M;
 use popup::candidates::{Attributes, Candidate, GROUND_REACH_M, collect};
@@ -215,7 +215,7 @@ impl Index {
 pub struct Square<'a> {
     pub tile: TileId,
     pub frame: LocalFrame,
-    pub release: &'a Release,
+    pub weather: &'a WeatherTable,
     pub ground: Ground<'a>,
     pub obstacles: Scene<'a>,
     pub attributes: Attributes,
@@ -242,7 +242,7 @@ pub fn divergence(length_m: f64, distance_m: f64) -> f64 {
 }
 
 impl<'a> Square<'a> {
-    pub fn new(release: &'a Release, tile: TileId, files: &'a Files) -> Result<Self, String> {
+    pub fn new(weather: &'a WeatherTable, tile: TileId, files: &'a Files) -> Result<Self, String> {
         let frame = LocalFrame::at(tile.centre());
         let read = &files.rings;
         let mut ground = Ground::new(frame, tile, files.ground_rings);
@@ -288,8 +288,8 @@ impl<'a> Square<'a> {
         // and half its diagonal.
         let half_diagonal = frame.east_m_per_unit.hypot(frame.north_m_per_unit) / 2.0;
         let (lat, lon) = tile.centre().to_degrees();
-        let weather: PlaceWeather = release.weather.place(lat, lon);
-        let gain = receiver_bound(weather.favourable.maximum(), 0.0, weather.alpha_db_per_km);
+        let centre: PlaceWeather = weather.place(lat, lon);
+        let gain = receiver_bound(centre.favourable.maximum(), 0.0, centre.alpha_db_per_km);
         let mut attributes = Attributes::default();
         let mut candidates = Vec::new();
         for (index, (other, file)) in sources.iter().enumerate() {
@@ -329,7 +329,7 @@ impl<'a> Square<'a> {
         Ok(Square {
             tile,
             frame,
-            release,
+            weather,
             ground,
             obstacles,
             attributes,
