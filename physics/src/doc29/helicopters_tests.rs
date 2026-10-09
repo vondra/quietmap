@@ -183,9 +183,6 @@ fn designators_without_easa_levels_read_their_mass_class() {
     // Any other rotorcraft the mapping routes to the helicopter class reads the light class.
     let unlisted = AircraftType::from_designator("H199").helicopter;
     assert_eq!(unlisted, Some(Light.levels()));
-    assert_eq!(HelicopterMassClass::from_mass_kg(5_080.0), Heavy);
-    assert_eq!(HelicopterMassClass::from_mass_kg(5_000.0), Medium);
-    assert_eq!(HelicopterMassClass::from_mass_kg(3_200.0), Light);
     let spec = [(Light, 83.1), (Medium, 84.4), (Heavy, 89.7)];
     for (class, level) in spec {
         assert!(

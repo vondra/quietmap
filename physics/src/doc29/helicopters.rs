@@ -91,15 +91,6 @@ pub enum HelicopterMassClass {
 }
 
 impl HelicopterMassClass {
-    /// The class of a maximum take-off mass.
-    pub fn from_mass_kg(maximum_take_off_mass_kg: f64) -> Self {
-        match maximum_take_off_mass_kg {
-            m if m <= 3_200.0 => HelicopterMassClass::Light,
-            m if m <= 5_000.0 => HelicopterMassClass::Medium,
-            _ => HelicopterMassClass::Heavy,
-        }
-    }
-
     /// dev4 `HeliLevels` over the class's designators among its first twenty rows: the level is
     /// their traffic-weighted energy mean (SPEC: 83.1, 84.4, 89.7 dB), the uplifts their
     /// traffic-weighted means. The weights are dev4's pinned counts per profile, in which EC135's

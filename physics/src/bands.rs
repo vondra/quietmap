@@ -53,11 +53,6 @@ pub fn lden_energy(period_energy: &[f64; PERIODS]) -> f64 {
         / 24.0
 }
 
-/// Lden of per-period energies (A-weighted, linear).
-pub fn lden_db(period_energy: [f64; PERIODS]) -> f64 {
-    level_db(lden_energy(&period_energy))
-}
-
 /// A-weighted energy of band levels.
 pub fn a_weighted_energy(band_levels_db: &[f64; BANDS]) -> f64 {
     (0..BANDS)
@@ -71,7 +66,7 @@ mod tests {
 
     #[test]
     fn lden_of_60_55_50_is_60() {
-        let lden = lden_db([energy(60.0), energy(55.0), energy(50.0)]);
+        let lden = level_db(lden_energy(&[energy(60.0), energy(55.0), energy(50.0)]));
         assert!((lden - 60.0).abs() < 0.01, "{lden}");
     }
 
