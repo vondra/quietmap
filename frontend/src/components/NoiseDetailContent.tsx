@@ -98,9 +98,9 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
               {sone != null
                 ? (
                   <DataPoint title="Nden" text={LOUDNESS_TEXT}>
-                    <span className="text-xs font-medium text-muted-foreground">Nden </span>
                     <span className="text-2xl font-bold">{fmtSone(sone)}</span>
                     <span className="text-sm font-medium"> sone</span>
+                    <span className="text-xs font-medium text-muted-foreground"> Nden</span>
                   </DataPoint>
                 )
                 : <span className={`text-2xl font-bold text-muted-foreground/40${data.partial ? ' animate-pulse' : ''}`}>{data.partial ? '… sone' : '—'}</span>}
