@@ -35,18 +35,21 @@ const FAR_RULE: Rule = Rule {
     proven: 128,
     sample: 128,
     sample_max: 2_048,
+    certain: false,
 };
 const MID_RULE: Rule = Rule {
     tolerance: 0.047,
     proven: 64,
     sample: 64,
     sample_max: 512,
+    certain: false,
 };
 const NEAR_RULE: Rule = Rule {
     tolerance: 0.047,
     proven: 16,
     sample: 16,
     sample_max: 64,
+    certain: true,
 };
 /// The aircraft's near share is evaluated every second block corner, and at a block corner
 /// between them where the four around differ by more than this ratio (1 dB).
@@ -354,10 +357,17 @@ pub fn paint(square: &Square, grid: Grid) -> Result<Cells, String> {
                         let mut rest =
                             bilinear([&rests[0], &rests[1], &rests[2], &rests[3]], fx, fy);
                         let point = Point::outdoors(square, position)?;
+                        // The named sources whole, once: their mid share here, their near share
+                        // in the near level's evaluation below.
+                        work.known.clear();
                         for &index in &named {
-                            let layer = square.candidates[index as usize].layer as usize;
-                            rest[layer] +=
-                                energy_of(square, &point, index, &|d| levels.mid(d), work)?;
+                            let whole = energy_of(square, &point, index, &|_| 1.0, work)?;
+                            work.known.push((index, whole));
+                        }
+                        for &(index, whole) in &work.known {
+                            let candidate = &square.candidates[index as usize];
+                            let share = levels.mid(candidate.distance_from(position));
+                            rest[candidate.layer as usize] += share * whole;
                         }
                         let mut known: [f64; LAYERS] = std::array::from_fn(|l| rest[l]);
                         known[Layer::Aircraft as usize] += rest[FLIGHTS];
@@ -371,6 +381,7 @@ pub fn paint(square: &Square, grid: Grid) -> Result<Cells, String> {
                             mix(seed, (2 << 40) | (y * n + x) as u64),
                             work,
                         )?;
+                        work.known.clear();
                         let reflection = energy(square.obstacles.reflection_db(position, None)?);
                         let mut layers: [f64; LAYERS] =
                             std::array::from_fn(|l| (near[l] + rest[l]) * reflection);

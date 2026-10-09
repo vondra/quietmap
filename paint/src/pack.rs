@@ -1,9 +1,10 @@
 //! The painted tiles published for the map: per layer and the total one PMTiles archive
 //! (`<layer>.<build>.pmtiles`, Brotli tiles, as the server ships them) holding the painted zoom
 //! and every zoom down to 2, and `current.json` naming the build and zoom. Only squares painted
-//! whole are packed. A parent cell is the energy mean of its children that have a total level
-//! (a building's cells, without one, are left out), a layer's cell without a level counting as
-//! silence there, so the layers of a parent sum to its total as they do below.
+//! whole are packed. A parent cell holds each layer's energy mean over the painted pixels under it
+//! that have a total level (a building's, without one, are left out; a layer without a level there
+//! is silent), carried unrounded from zoom to zoom, and the total is the sum of its layers, so
+//! switching a silent layer off changes nothing.
 
 use crate::hm3::{HEADER, TILE_PX, layer_names, painted, tile_path};
 use crate::levels::LAYERS;
@@ -21,6 +22,15 @@ const MIN_ZOOM: u8 = 2;
 const BROTLI_QUALITY: u32 = 9;
 
 type Tiles = BTreeMap<(u32, u32), Vec<u8>>;
+
+/// A parent tile's cells: how many painted pixels with a total level each stands for, and per
+/// layer their mean energy.
+struct Means {
+    weight: Vec<u32>,
+    energy: Vec<[f32; LAYERS]>,
+}
+
+type Level = BTreeMap<(u32, u32), Means>;
 
 /// The cells of layer `number`'s tiles `wanted` at `zoom`, each tile's header checked.
 fn read(
@@ -46,42 +56,76 @@ fn read(
         .collect()
 }
 
-/// The parents of `children` (one layer's cells) over the total's children `totals`.
-fn parents(children: &Tiles, totals: &Tiles) -> Tiles {
-    let energy: [f64; 256] = std::array::from_fn(|cell| match cell as u8 {
-        NO_LEVEL => 0.0,
-        level => 10f64.powf(f64::from(level) / 20.0),
-    });
-    let mut parents = Tiles::new();
-    for (&(x, y), cells) in children {
-        let total = &totals[&(x, y)];
-        let parent = parents
-            .entry((x / 2, y / 2))
-            .or_insert_with(|| vec![NO_LEVEL; TILE_PX * TILE_PX]);
-        let (qx, qy) = (
-            (x % 2) as usize * TILE_PX / 2,
-            (y % 2) as usize * TILE_PX / 2,
-        );
+/// The cell of a parent tile child `(x, y)` fills at `(row, column)` of its quarter, and the
+/// child's four cells under it.
+fn children_of(x: u32, y: u32, row: usize, column: usize) -> (usize, [usize; 4]) {
+    let (qx, qy) = (
+        (x % 2) as usize * TILE_PX / 2,
+        (y % 2) as usize * TILE_PX / 2,
+    );
+    let at = 2 * row * TILE_PX + 2 * column;
+    (
+        (qy + row) * TILE_PX + qx + column,
+        [at, at + 1, at + TILE_PX, at + TILE_PX + 1],
+    )
+}
+
+/// The parents of children given by `child(tile, cell) -> (weight, energies)`.
+fn parents(
+    tiles: &BTreeSet<(u32, u32)>,
+    child: &(dyn Fn((u32, u32), usize) -> (u32, [f32; LAYERS]) + Sync),
+) -> Level {
+    let mut parents = Level::new();
+    for &(x, y) in tiles {
+        let parent = parents.entry((x / 2, y / 2)).or_insert_with(|| Means {
+            weight: vec![0; TILE_PX * TILE_PX],
+            energy: vec![[0.0; LAYERS]; TILE_PX * TILE_PX],
+        });
         for row in 0..TILE_PX / 2 {
             for column in 0..TILE_PX / 2 {
-                let at = 2 * row * TILE_PX + 2 * column;
-                let (mut sum, mut count) = (0.0, 0u32);
-                for child in [at, at + 1, at + TILE_PX, at + TILE_PX + 1] {
-                    if total[child] != NO_LEVEL {
-                        sum += energy[usize::from(cells[child])];
-                        count += 1;
+                let (to, four) = children_of(x, y, row, column);
+                let (mut weight, mut sum) = (0u32, [0.0f64; LAYERS]);
+                for cell in four {
+                    let (w, energy) = child((x, y), cell);
+                    weight += w;
+                    for (total, value) in sum.iter_mut().zip(energy) {
+                        *total += f64::from(w) * f64::from(value);
                     }
                 }
-                let mean = sum / f64::from(count.max(1));
-                parent[(qy + row) * TILE_PX + qx + column] = if mean < 1.0 {
-                    NO_LEVEL
-                } else {
-                    (20.0 * mean.log10()).round().min(254.0) as u8
-                };
+                parent.weight[to] = weight;
+                parent.energy[to] =
+                    std::array::from_fn(|l| (sum[l] / f64::from(weight.max(1))) as f32);
             }
         }
     }
     parents
+}
+
+/// A cell's byte of an energy: twice its level, or none under 0 dB.
+fn encode(energy: f64) -> u8 {
+    if energy < 1.0 {
+        NO_LEVEL
+    } else {
+        (20.0 * energy.log10()).round().min(254.0) as u8
+    }
+}
+
+/// Layer `number`'s (the total past the layers) cells of a parent tile.
+fn cells(means: &Means, number: usize) -> Vec<u8> {
+    means
+        .weight
+        .iter()
+        .zip(&means.energy)
+        .map(|(&weight, energy)| {
+            if weight == 0 {
+                NO_LEVEL
+            } else if number < LAYERS {
+                encode(f64::from(energy[number]))
+            } else {
+                encode(energy.iter().map(|&e| f64::from(e)).sum())
+            }
+        })
+        .collect()
 }
 
 /// The squares painted whole (their total's last tile written) and their tiles at `zoom`.
@@ -123,25 +167,45 @@ fn whole(out: &Path, zoom: u8) -> Result<(usize, BTreeSet<(u32, u32)>), String> 
 pub fn pack(out: &Path, zoom: u8, tiles_dir: &Path, build: &str) -> Result<(), String> {
     std::fs::create_dir_all(tiles_dir).map_err(|e| format!("{}: {e}", tiles_dir.display()))?;
     let (squares, wanted) = whole(out, zoom)?;
-    // The total's pyramid first: every layer's parents count the cells it has a level in.
-    let mut totals = vec![read(out, LAYERS, zoom, &wanted)?];
-    for _ in MIN_ZOOM..zoom {
-        let last = totals.last().expect("the painted zoom");
-        let next = parents(last, last);
-        totals.push(next);
+    // Every layer's painted cells, then the parents unrounded, zoom by zoom.
+    let mut painted: Vec<Tiles> = (0..=LAYERS)
+        .map(|number| read(out, number, zoom, &wanted))
+        .collect::<Result<_, String>>()?;
+    let energy: [f32; 256] = std::array::from_fn(|cell| match cell as u8 {
+        NO_LEVEL => 0.0,
+        level => 10f64.powf(f64::from(level) / 20.0) as f32,
+    });
+    let mut levels: Vec<Level> = vec![parents(&wanted, &|tile, cell| {
+        if painted[LAYERS][&tile][cell] == NO_LEVEL {
+            return (0, [0.0; LAYERS]);
+        }
+        (
+            1,
+            std::array::from_fn(|l| energy[usize::from(painted[l][&tile][cell])]),
+        )
+    })];
+    for _ in MIN_ZOOM + 1..zoom {
+        let below = levels.last().expect("the first parents");
+        let tiles: BTreeSet<(u32, u32)> = below.keys().copied().collect();
+        let next = parents(&tiles, &|tile, cell| {
+            let means = &below[&tile];
+            (means.weight[cell], means.energy[cell])
+        });
+        levels.push(next);
     }
     let mut layers = serde_json::Map::new();
     for (number, layer) in layer_names().iter().enumerate() {
-        let levels = if number == LAYERS {
-            std::mem::take(&mut totals)
-        } else {
-            let mut levels = vec![read(out, number, zoom, &wanted)?];
-            for below in 0..usize::from(zoom - MIN_ZOOM) {
-                let next = parents(&levels[below], &totals[below]);
-                levels.push(next);
-            }
-            levels
-        };
+        // The painted zoom as painted, the parents encoded from their means.
+        let mut tiles: Vec<Tiles> = vec![std::mem::take(&mut painted[number])];
+        for level in &levels {
+            tiles.push(
+                level
+                    .iter()
+                    .map(|(&at, means)| (at, cells(means, number)))
+                    .collect(),
+            );
+        }
+        let levels = tiles;
         let name = format!("{layer}.{build}.pmtiles");
         let path = tiles_dir.join(&name);
         let file =
@@ -208,25 +272,37 @@ pub fn pack(out: &Path, zoom: u8, tiles_dir: &Path, build: &str) -> Result<(), S
 mod tests {
     use super::*;
 
-    /// A parent cell is the energy mean of its children with a total level, a layer's cell
-    /// without a level silent there; four children without a total level leave it without one;
-    /// a child tile fills its own quarter.
+    /// One outdoor pixel at 60 dB and four at 40 dB two zooms below read their energy mean, not
+    /// the mean of their parents; a layer silent under a parent stays out of its total; a
+    /// building's pixel counts nowhere.
     #[test]
-    fn a_parent_averages_its_childrens_energy() {
-        let (mut layer, mut total) = (Tiles::new(), Tiles::new());
-        let mut cells = vec![NO_LEVEL; TILE_PX * TILE_PX];
-        let mut sums = vec![NO_LEVEL; TILE_PX * TILE_PX];
-        // 60 dB and a silent cell under one parent cell, both outdoors; two cells indoors.
-        cells[0] = 120;
-        sums[0] = 120;
-        sums[1] = 100;
-        layer.insert((5, 7), cells);
-        total.insert((5, 7), sums);
-        let parent = &parents(&layer, &total)[&(2, 3)];
-        let quarter = (TILE_PX / 2) * TILE_PX + TILE_PX / 2;
-        let mean: f64 = 10f64.powf(6.0) / 2.0;
-        assert_eq!(parent[quarter], (20.0 * mean.log10()).round() as u8);
-        assert_eq!(parent[quarter + 1], NO_LEVEL);
-        assert_eq!(parent[0], NO_LEVEL);
+    fn parents_average_the_painted_pixels_under_them() {
+        let energy = |db: f64| 10f64.powf(db / 10.0) as f32;
+        // Tile (4, 4): pixel 0 60 dB of road, pixel 1 inside a building; pixels 2, 3 and the two
+        // below them 40 dB of railway (the next parent cell).
+        let pixel = |tile: (u32, u32), cell: usize| -> (u32, [f32; LAYERS]) {
+            let mut layers = [0.0; LAYERS];
+            match (tile, cell) {
+                ((4, 4), 0) => layers[0] = energy(60.0),
+                ((4, 4), c) if [2, 3, TILE_PX + 2, TILE_PX + 3].contains(&c) => {
+                    layers[1] = energy(40.0)
+                }
+                _ => return (0, layers),
+            }
+            (1, layers)
+        };
+        let tiles: BTreeSet<(u32, u32)> = [(4, 4)].into();
+        let first = parents(&tiles, &pixel);
+        let parent = &first[&(2, 2)];
+        assert_eq!((parent.weight[0], parent.weight[1]), (1, 4));
+        let second = parents(&[(2, 2)].into(), &|tile, cell| {
+            (first[&tile].weight[cell], first[&tile].energy[cell])
+        });
+        let top = &second[&(1, 1)];
+        assert_eq!(top.weight[0], 5);
+        let mean = (10f64.powf(6.0) + 4.0 * 10f64.powf(4.0)) / 5.0;
+        assert_eq!(cells(top, LAYERS)[0], encode(mean));
+        assert_eq!(cells(top, 0)[0], encode(10f64.powf(6.0) / 5.0));
+        assert_eq!(cells(top, 2)[0], NO_LEVEL);
     }
 }

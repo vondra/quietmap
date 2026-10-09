@@ -54,6 +54,9 @@ pub struct Rule {
     /// Draws of the first sample, and of the largest.
     pub sample: usize,
     pub sample_max: usize,
+    /// Whether a source whose bound reaches the rest's over the sample size is evaluated with
+    /// certainty before sampling (at a pixel, so a close source is never missed by the draws).
+    pub certain: bool,
 }
 
 /// What one source added to its layer at the last point: its exact share when evaluated with
@@ -109,6 +112,9 @@ pub struct Work {
     values: std::collections::HashMap<u32, f64>,
     /// What each source evaluated at the last point added.
     pub added: Vec<Added>,
+    /// Sources already evaluated at the current point, by index: their whole Lden energy, so a
+    /// second share of one costs no second evaluation. The caller sets and clears it.
+    pub known: Vec<(u32, f64)>,
 }
 
 /// The Lden energy candidate `index` delivers at `point`, its share `weight` of its distance.
@@ -133,6 +139,9 @@ pub fn energy_of(
     let share = weight(candidate.distance_m);
     if share <= 0.0 || candidate.distance_m > GROUND_REACH_M {
         return Ok(0.0);
+    }
+    if let Ok(at) = work.known.binary_search_by_key(&index, |&(known, _)| known) {
+        return Ok(share * work.known[at].1);
     }
     let received = received_bands(
         &receiver,
@@ -219,59 +228,104 @@ pub fn energies(
             remaining -= bound;
             taken += 1;
         }
-        let rest = &list[taken..];
+        let rest = &mut list[taken..];
         if !rest.is_empty() && remaining > rule.tolerance * (energy + known[layer]) {
-            // Hansen-Hurwitz: draws with probability bound / total, each read as energy / p.
-            work.cumulative.clear();
-            let mut total = 0.0;
-            for item in rest {
-                total += item.0;
-                work.cumulative.push(total);
-            }
+            // Hansen-Hurwitz, as the popup samples: where the rule asks, a source whose bound
+            // reaches the rest's over the sample size is evaluated with certainty; the others are
+            // drawn with probability bound / total, each draw read as energy / p; the sample
+            // doubles until two standard errors stay under the tolerance, each size drawn afresh.
             let mut random = SplitMix(seed ^ (layer as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
-            work.drawn.clear();
             work.values.clear();
-            let (mut sum, mut squares) = (0.0, 0.0);
+            let mut certain = 0;
             let mut size = rule.sample;
             loop {
-                while work.drawn.len() < size {
+                if rule.certain {
+                    loop {
+                        let total: f64 = rest[certain..].iter().map(|item| item.0).sum();
+                        let least = total / size as f64;
+                        let mut moved = certain;
+                        for at in certain..rest.len() {
+                            if rest[at].0 >= least {
+                                rest.swap(at, moved);
+                                moved += 1;
+                            }
+                        }
+                        if moved == certain {
+                            break;
+                        }
+                        for &(_, index) in &rest[certain..moved] {
+                            let value = evaluate(index, work)?;
+                            work.added.push(Added {
+                                index,
+                                energy: value,
+                                certain: true,
+                            });
+                            energy += value;
+                        }
+                        certain = moved;
+                    }
+                }
+                if rest.len() - certain <= size {
+                    // No fewer evaluations by sampling: every one with certainty.
+                    for &(_, index) in &rest[certain..] {
+                        let value = evaluate(index, work)?;
+                        work.added.push(Added {
+                            index,
+                            energy: value,
+                            certain: true,
+                        });
+                        energy += value;
+                    }
+                    break;
+                }
+                let population = &rest[certain..];
+                work.cumulative.clear();
+                let mut total = 0.0;
+                for item in population {
+                    total += item.0;
+                    work.cumulative.push(total);
+                }
+                work.drawn.clear();
+                let (mut sum, mut squares) = (0.0, 0.0);
+                for _ in 0..size {
                     let target = random.unit() * total;
                     let at = work
                         .cumulative
                         .partition_point(|&sum| sum <= target)
-                        .min(rest.len() - 1) as u32;
-                    let read = match work.values.get(&at) {
-                        Some(&read) => read,
+                        .min(population.len() - 1);
+                    let (bound, index) = population[at];
+                    let value = match work.values.get(&index) {
+                        Some(&value) => value,
                         None => {
-                            let (bound, index) = rest[at as usize];
-                            let read = evaluate(index, work)? * total / bound;
-                            work.values.insert(at, read);
-                            read
+                            let value = evaluate(index, work)?;
+                            work.values.insert(index, value);
+                            value
                         }
                     };
-                    work.drawn.push(at);
+                    let read = value * total / bound;
+                    work.drawn.push(at as u32);
                     sum += read;
                     squares += read * read;
                 }
-                let n = work.drawn.len() as f64;
+                let n = size as f64;
                 let mean = sum / n;
                 let variance = ((squares - n * mean * mean) / (n * (n - 1.0))).max(0.0);
                 if size >= rule.sample_max
                     || 2.0 * variance.sqrt() <= rule.tolerance * (energy + mean + known[layer])
                 {
+                    energy += mean;
+                    work.drawn.sort_unstable();
+                    for draws in work.drawn.chunk_by(|a, b| a == b) {
+                        let (bound, index) = population[draws[0] as usize];
+                        work.added.push(Added {
+                            index,
+                            energy: draws.len() as f64 / n * work.values[&index] * total / bound,
+                            certain: false,
+                        });
+                    }
                     break;
                 }
                 size *= 2;
-            }
-            let n = work.drawn.len() as f64;
-            energy += sum / n;
-            work.drawn.sort_unstable();
-            for draws in work.drawn.chunk_by(|a, b| a == b) {
-                work.added.push(Added {
-                    index: rest[draws[0] as usize].1,
-                    energy: draws.len() as f64 / n * work.values[&draws[0]],
-                    certain: false,
-                });
             }
         }
         result[layer] = energy;
