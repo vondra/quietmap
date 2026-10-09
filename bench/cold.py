@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Cold popup benchmark: for every benchmark point, evict the tile files around it from the page
-cache (posix_fadvise DONTNEED, residency checked with mincore), run `qm-popup` and record the time
-to the first and the full answer, bytes and files read, and the levels per layer.
+"""Cold popup benchmark: for every benchmark point, evict every file its click can read from the
+page cache (its tiles of every kind, the flight tracks, the weather table; posix_fadvise DONTNEED,
+residency checked with mincore), run `qm-popup` and record the time to the first and the full
+answer, bytes and files read, and the levels per layer.
 
 usage: cold.py --prepared DIR --year YYYY [--points bench/points.json] [--only a,b] [--repeat 3]
                [--exact] [--popup target/release/qm-popup]
@@ -19,7 +20,8 @@ import subprocess
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-KINDS = ("terrain", "obstacles", "sources", "aircraft")
+# Every tile kind a click reads (`tiles::Kind`).
+KINDS = ("terrain", "obstacles", "sources", "aircraft", "aircraft-far", "aircraft-events")
 EVICT_RINGS = 4
 LIBC = ctypes.CDLL("libc.so.6", use_errno=True)
 LIBC.mincore.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_ubyte)]
@@ -44,6 +46,14 @@ def tile_files(year_root, lat, lon):
                 path = year_root / str(x >> 3) / str(y >> 3) / f"{x}_{y}.{kind}"
                 if path.exists():
                     yield path
+
+
+def click_files(prepared, year, lat, lon):
+    """Every file a click at (lat, lon) can read: its tiles, the flight tracks and the weather."""
+    yield from tile_files(prepared / year, lat, lon)
+    yield from sorted((prepared / year / "aircraft-tracks").glob("*.aircraft-tracks"))
+    if (prepared / "weather").exists():
+        yield prepared / "weather"
 
 
 LIBC.mmap.restype = ctypes.c_void_p
@@ -136,7 +146,7 @@ def main():
     for point in points:
         if wanted and point["name"] not in wanted:
             continue
-        paths = list(tile_files(prepared / arguments.year, point["lat"], point["lon"]))
+        paths = list(click_files(prepared, arguments.year, point["lat"], point["lon"]))
         for repeat in range(arguments.repeat):
             resident = evict(paths)
             lines = run(arguments.popup, prepared, arguments.year, point, arguments.exact)
