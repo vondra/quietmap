@@ -275,7 +275,6 @@ version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef16c47ba2797aa6a909cc37d39911f3a6743811fe7408ac0b0cc0276b656e9"
 dependencies = [
- "brotli",
  "compression-core",
  "flate2",
  "memchr",
@@ -738,6 +737,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "paint"
 version = "0.1.0"
 dependencies = [
+ "brotli",
  "physics",
  "pmtiles",
  "popup",
@@ -801,7 +801,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5eb69814c9ebfb2a75b55d5523501020a2ff53e97a9fa11c90398240d3419ad5"
 dependencies = [
  "async-compression",
- "brotli",
  "bytes",
  "countio",
  "fast_hilbert",

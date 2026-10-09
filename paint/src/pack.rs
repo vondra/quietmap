@@ -6,11 +6,16 @@
 use crate::hm3::{TILE_PX, layer_names};
 use crate::paint::NO_LEVEL;
 use pmtiles::{Compression, PmTilesWriter, TileCoord, TileType};
+use rayon::prelude::*;
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::Path;
 
 /// The lowest zoom published.
 const MIN_ZOOM: u8 = 2;
+/// Brotli's quality for the tiles: 9 of 11 packs a Prague tile within a few percent of 11 in a
+/// fraction of the time.
+const BROTLI_QUALITY: u32 = 9;
 const HEADER_BYTES: usize = 6;
 
 type Tiles = BTreeMap<(u32, u32), Vec<u8>>;
@@ -112,15 +117,25 @@ pub fn pack(out: &Path, zoom: u8, tiles_dir: &Path, build: &str) -> Result<(), S
             }
         }
         all.sort_unstable();
-        let mut bytes = Vec::with_capacity(HEADER_BYTES + TILE_PX * TILE_PX);
-        for (_, z, x, y) in all {
-            let cells = &levels[usize::from(zoom - z)][&(x, y)];
-            bytes.clear();
-            bytes.extend_from_slice(b"HM3 \x03");
-            bytes.push(number as u8);
-            bytes.extend_from_slice(cells);
+        // Compressed in parallel, written in order.
+        let compressed: Vec<Vec<u8>> = all
+            .par_iter()
+            .map(|&(_, z, x, y)| {
+                let mut tile = Vec::with_capacity(HEADER_BYTES + TILE_PX * TILE_PX);
+                tile.extend_from_slice(b"HM3 \x03");
+                tile.push(number as u8);
+                tile.extend_from_slice(&levels[usize::from(zoom - z)][&(x, y)]);
+                let mut out = Vec::new();
+                let mut encoder =
+                    brotli::CompressorWriter::new(&mut out, 1 << 16, BROTLI_QUALITY, 22);
+                encoder.write_all(&tile).expect("compressing in memory");
+                drop(encoder);
+                out
+            })
+            .collect();
+        for ((_, z, x, y), bytes) in all.into_iter().zip(compressed) {
             writer
-                .add_tile(TileCoord::new(z, x, y).map_err(|e| e.to_string())?, &bytes)
+                .add_raw_tile(TileCoord::new(z, x, y).map_err(|e| e.to_string())?, &bytes)
                 .map_err(|e| e.to_string())?;
         }
         writer.finalize().map_err(|e| e.to_string())?;

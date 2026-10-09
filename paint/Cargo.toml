@@ -13,5 +13,6 @@ tiles = { path = "../tiles" }
 physics = { path = "../physics" }
 popup = { path = "../popup" }
 rayon = "1.12"
-pmtiles = { version = "0.23.0", default-features = false, features = ["write", "brotli"] }
+brotli = "8"
+pmtiles = { version = "0.23.0", default-features = false, features = ["write"] }
 serde_json = "1"
