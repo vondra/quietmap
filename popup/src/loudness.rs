@@ -171,7 +171,8 @@ fn unweighted_thirds(
     let mut thirds = [0.0; THIRD_OCTAVES];
     for selection in selections {
         let mut layer = selection.answer_energy()[period];
-        // The flights leave the layer's shape only for their own spectrum (a helicopter has none).
+        // The flights leave the layer's shape for their own spectrum (none in a ground layer's own
+        // curves).
         if selection.layer == Layer::Aircraft && flights.spectrum_db.is_some() {
             layer -= flights.energy[period];
         }

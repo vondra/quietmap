@@ -24,8 +24,7 @@ use crate::update::{
 };
 use physics::bands::{PERIODS, lden_energy};
 use physics::bound::receiver_bound;
-use physics::doc29::atmosphere::{class_spectrum_at, place_rates_db_per_m};
-use physics::doc29::profiles_generated::{noise_class_of, profile_idx};
+use physics::doc29::atmosphere::place_rates_db_per_m;
 use physics::weather::PlaceWeather;
 use rayon::prelude::*;
 use std::cell::OnceCell;
@@ -438,6 +437,8 @@ pub fn answer(
                 .map_or([0.0; PERIODS], |selection| selection.answer_energy());
             std::array::from_fn(|p| (layer[p] - flight_energy[p]).max(0.0))
         });
+        // The listed flights; in the final answer each with its line, its reads counted.
+        let mut listed_flights = flights.loudest();
         // The time levels and the loudness come with the final answer only (the partial ones do
         // not show them).
         let timing = last_ring.then(|| {
@@ -446,18 +447,12 @@ pub fn answer(
                 (flight_energy, flight_energy_lambda),
                 &fields,
             );
-            let flight = flights.loudest().into_iter().next();
-            let spectrum_db = flight.and_then(|flight| {
-                let class = noise_class_of(profile_idx(&flight.type_designator));
-                class_spectrum_at(
-                    usize::from(class),
-                    flight.closest_m.hypot(flight.altitude_m),
-                    &place_rates_db_per_m(&weather.alpha_db_per_km),
-                )
-            });
             let flight_sound = crate::loudness::FlightSound {
                 energy: flight_energy,
-                spectrum_db,
+                spectrum_db: Some(crate::aircraft::flights::heard_spectrum(
+                    listed_flights.first(),
+                    &place_rates_db_per_m(&weather.alpha_db_per_km),
+                )),
             };
             let curves = crate::loudness::curves(&selections, &flight_sound);
             let layer_curves = crate::loudness::layer_curves(&selections, &flight_sound);
@@ -575,12 +570,13 @@ pub fn answer(
             let ground = lden_energy(&ground);
             [airliners, jets, propeller, helicopters, ground]
         });
-        // The listed flights; in the final answer each with its line, its reads counted.
-        let mut listed = flights.loudest();
         if last_ring {
             let read_started = std::time::Instant::now();
-            let (track_files, track_bytes) =
-                crate::aircraft::tracks::attach(&release.year_root, &mut listed, [lat, lon])?;
+            let (track_files, track_bytes) = crate::aircraft::tracks::attach(
+                &release.year_root,
+                &mut listed_flights,
+                [lat, lon],
+            )?;
             (files, bytes) = (files + track_files, bytes + track_bytes);
             read_seconds += read_started.elapsed().as_secs_f64();
         }
@@ -600,7 +596,7 @@ pub fn answer(
             building,
             layers,
             contributors,
-            flights: listed,
+            flights: listed_flights,
             pieces,
             statistics: Statistics {
                 rings_read: ring,

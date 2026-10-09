@@ -5,10 +5,13 @@
 //! to be kept).
 
 use super::boxes::AircraftReceiver;
-use physics::doc29::atmosphere::{PlaceAtmosphere, SHIFT_DISTANCES};
+use physics::doc29::atmosphere::{
+    PlaceAtmosphere, SHIFT_DISTANCES, SPECTRUM_DISTANCE_M, THIRD_OCTAVES, class_spectrum_at,
+};
 use physics::doc29::corrections::speed_correction_db;
 use physics::doc29::helicopters::helicopter_levels;
 use physics::doc29::npd::{class_anchor, is_helicopter_class};
+use physics::doc29::profiles_generated::FALLBACK_NOISE_CLASS;
 use physics::doc29::screening::ReceiverHorizons;
 use physics::doc29::segment::{
     SegmentEmission, SegmentGeometry, receiver_impedance_for_db, receiver_lmax_db,
@@ -28,6 +31,8 @@ pub struct LoudFlight {
     pub icao: u32,
     pub callsign: String,
     pub type_designator: String,
+    /// The noise class it flies (Stage 1 decides it once a flight; its spectrum in the Nden).
+    pub class: usize,
     pub start_unix: u32,
     pub period: u8,
     /// The flight's SEL at the receiver (dB), summed over its computed pieces only.
@@ -40,6 +45,22 @@ pub struct LoudFlight {
     /// Its line on the map near the click ([`super::tracks`]): points as latitude and longitude
     /// (deg); the final answer's only.
     pub track: Vec<Vec<[f64; 2]>>,
+}
+
+/// The flights' received spectrum for the loudness: the loudest listed flight's spectral class in
+/// the place's air (`rates_db_per_m`). A helicopter, which Doc 29 gives none, and flights none of
+/// which is listed take the fallback class's, so their energy always keeps a spectrum.
+pub fn heard_spectrum(
+    loudest: Option<&LoudFlight>,
+    rates_db_per_m: &[f64; THIRD_OCTAVES],
+) -> [f64; THIRD_OCTAVES] {
+    let fallback = usize::from(FALLBACK_NOISE_CLASS);
+    let (class, slant_m) = loudest.map_or((fallback, SPECTRUM_DISTANCE_M), |flight| {
+        (flight.class, flight.closest_m.hypot(flight.altitude_m))
+    });
+    class_spectrum_at(class, slant_m, rates_db_per_m)
+        .or_else(|| class_spectrum_at(fallback, slant_m, rates_db_per_m))
+        .expect("the fallback class has a spectrum")
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -161,6 +182,7 @@ impl FlightTotals {
                         icao: flight.icao,
                         callsign: text(&flight.callsign),
                         type_designator: designator.clone(),
+                        class: usize::from(piece.class),
                         start_unix: flight.start_unix,
                         period: piece.period,
                         sel_db: f64::NEG_INFINITY,
@@ -191,5 +213,50 @@ impl FlightTotals {
         });
         flights.truncate(FLIGHTS_SHOWN);
         flights.into_iter().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use physics::atmosphere::ALPHA_DB_PER_KM;
+    use physics::doc29::atmosphere::place_rates_db_per_m;
+    use physics::doc29::profiles_generated::NUM_CLASSES;
+
+    #[test]
+    fn a_helicopter_or_no_listed_flight_keeps_the_fallback_spectrum() {
+        let rates = place_rates_db_per_m(&ALPHA_DB_PER_KM);
+        let flight = |class| LoudFlight {
+            icao: 1,
+            callsign: String::new(),
+            type_designator: String::new(),
+            class,
+            start_unix: 0,
+            period: 0,
+            sel_db: 80.0,
+            lmax_db: 70.0,
+            closest_m: 300.0,
+            altitude_m: 400.0,
+            track: Vec::new(),
+        };
+        let fallback = usize::from(FALLBACK_NOISE_CLASS);
+        let own = |class| class_spectrum_at(class, 500.0, &rates);
+        let helicopter = (0..NUM_CLASSES)
+            .find(|&class| own(class).is_none())
+            .unwrap();
+        assert!(is_helicopter_class(helicopter));
+        assert_eq!(
+            heard_spectrum(Some(&flight(helicopter)), &rates),
+            own(fallback).unwrap()
+        );
+        let jet = (0..NUM_CLASSES)
+            .find(|&class| class != fallback && own(class).is_some())
+            .unwrap();
+        assert_eq!(
+            heard_spectrum(Some(&flight(jet)), &rates),
+            own(jet).unwrap()
+        );
+        let unlisted = class_spectrum_at(fallback, SPECTRUM_DISTANCE_M, &rates).unwrap();
+        assert_eq!(heard_spectrum(None, &rates), unlisted);
     }
 }
