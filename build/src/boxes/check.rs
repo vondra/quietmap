@@ -62,7 +62,7 @@ pub struct PointReport {
     pub exact: Levels,
     pub boxed: Levels,
     pub beyond: Levels,
-    /// The boxes as the popup reads them (far boxes from the second ring) and the megabytes of
+    /// The boxes as the popup reads them (far boxes beyond 3 km) and the megabytes of
     /// aircraft files read: fine boxes in every ring, and as the popup reads them.
     pub boxed_as_read: Levels,
     pub megabytes: [f64; 2],

@@ -1,4 +1,4 @@
-//! ECAC Doc 29 (4th ed., Vol 2) aircraft noise: the NPD curves of 15 noise classes interpolated by
+//! ECAC Doc 29 (4th ed., Vol 2) aircraft noise: the NPD curves of 55 noise classes interpolated by
 //! per-segment thrust, EASA-certified helicopter levels, the corrections of Eq. 4-8b, dev4's
 //! terrain and building screening, and one segment's exact SEL at a receiver, which is both the
 //! reference of the aircraft boxes and the source of their levels at the ten NPD distances.

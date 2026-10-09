@@ -1,5 +1,5 @@
 //! The aircraft layer of the ring loop on a synthetic release (flat ocean): a box of one segment
-//! answers as the kernel's SEL of that segment, as the day's Leq; from the second ring on the far
+//! answers as the kernel's SEL of that segment, as the day's Leq; for tiles beyond 3 km the far
 //! boxes are read; a box beyond the reach is not heard.
 
 use physics::bands::{PERIOD_HOURS, PERIODS};
@@ -157,7 +157,7 @@ fn a_box_of_one_segment_answers_as_the_kernel_reads_it() {
 
 /// Two tiles east (about 12.6 km in Prague) the far file is heard and the fine one is not read.
 #[test]
-fn the_second_ring_reads_the_far_boxes() {
+fn a_tile_beyond_3_km_reads_the_far_boxes() {
     let (emission, start, end) = departure(0.0);
     let second_ring = TileId {
         x: TILE.x + 2,

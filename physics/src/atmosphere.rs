@@ -1,6 +1,8 @@
 //! Air absorption: ISO 9613-1:1993 attenuation coefficients at exact mid-band frequencies
-//! (ISO/TR 17534-4 5.5). Propagation uses the CNOSSOS-EU default of 15 C and 70 % relative
-//! humidity at 101.325 kPa everywhere: A_atm = alpha * slant distance.
+//! (ISO/TR 17534-4 5.5): A_atm = alpha * slant distance. Propagation takes the place's yearly
+//! absorption from the weather table (`crate::weather`); the CNOSSOS-EU default of 15 C and 70 %
+//! relative humidity at 101.325 kPa is that table's node without data and the reference its
+//! third-octave rates are scaled from.
 
 use crate::bands::BANDS;
 use std::sync::LazyLock;
@@ -56,7 +58,7 @@ pub fn alpha_bands(temperature_c: f64, relative_humidity_pct: f64) -> [f64; BAND
     })
 }
 
-/// Alpha of propagation: 0.10, 0.38, 1.13, 2.36, 4.08, 8.75, 26.39, 93.71 dB/km.
+/// Alpha of the CNOSSOS-EU default: 0.10, 0.38, 1.13, 2.36, 4.08, 8.75, 26.39, 93.71 dB/km.
 pub static ALPHA_DB_PER_KM: LazyLock<[f64; BANDS]> =
     LazyLock::new(|| alpha_bands(DEFAULT_TEMPERATURE_C, DEFAULT_RELATIVE_HUMIDITY_PCT));
 

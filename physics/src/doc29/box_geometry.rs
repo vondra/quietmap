@@ -46,8 +46,8 @@ fn sizing_slope_db_per_m(slant_m: f64) -> f64 {
 
 /// D: the level change one box edge may span along the steepest NPD curve (dB).
 pub const BOX_EDGE_LEVEL_STEP_DB: f64 = 3.0;
-/// D of the far boxes, read from the second ring of z12 tiles on: at least a tile edge away the
-/// steepest slope is a fraction of the one at the boxes' clearance, so four times the edges hold.
+/// D of the far boxes, read for the z12 tiles beyond 3 km of the click: that far the steepest
+/// slope is a fraction of the one at the boxes' clearance, so four times the edges hold.
 pub const FAR_BOX_EDGE_LEVEL_STEP_DB: f64 = 12.0;
 /// The first layer's edge (m): the web-map zoom whose cell edge is nearest to it is the finest.
 pub const FIRST_LAYER_EDGE_M: f64 = 50.0;

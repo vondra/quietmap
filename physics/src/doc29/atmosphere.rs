@@ -1,12 +1,13 @@
 //! NPD curves recalculated for the model's atmosphere (Doc 29 4th ed. Vol 2 Appendix D). The ANP
 //! database normalises every NPD curve to the SAE AIR-1845 atmosphere (Table D-1), a notional
 //! average of certification tests that absorbs 5.9 dB/km at 1 kHz; the model propagates every
-//! ground source through CNOSSOS-EU's 15 C and 70 % (4.1 dB/km there), so the aircraft read up to
-//! 2 dB quieter than the same atmosphere gives them. Per class and operation the anchor's spectral
-//! class, at 305 m, is taken back to the source through AIR-1845 (Eq. D-1), out to each NPD distance
-//! through both atmospheres (D-2, D-3), and the A-weighted difference (D-4) is added to its SEL and
-//! LAmax curves. The model's absorption is ISO 9613-1 at the exact 1/3-octave centres (Doc 29
-//! names SAE ARP-5534, which it matches within 2 % in the bands that carry an aircraft's level).
+//! ground source through the place's yearly air (CNOSSOS-EU's 15 C and 70 % absorb 4.1 dB/km at
+//! 1 kHz), and read in AIR-1845 the aircraft would sound up to 2 dB quieter than that air gives
+//! them. Per class and operation the anchor's spectral class, at 305 m, is taken back to the
+//! source through AIR-1845 (Eq. D-1), out to each NPD distance through both atmospheres (D-2,
+//! D-3), and the A-weighted difference (D-4) is added to its SEL and LAmax curves. The model's
+//! absorption is ISO 9613-1 at the exact 1/3-octave centres (Doc 29 names SAE ARP-5534, which it
+//! matches within 2 % in the bands that carry an aircraft's level).
 
 use super::npd::{METRES_PER_FOOT, NPD_DISTANCES, NPD_DISTANCES_FT, TAIL_ANCHOR_M};
 use super::spectra_generated::SPECTRA;
