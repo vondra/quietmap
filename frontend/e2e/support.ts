@@ -164,7 +164,7 @@ export async function installHermeticMap(
       zoom: TILE_Z,
       layers: {
         road: { build: 'b1', file: 'road.b1.pmtiles' },
-        rail: { build: 'b1', file: 'rail.b1.pmtiles' },
+        railway: { build: 'b1', file: 'railway.b1.pmtiles' },
       },
     }),
   }))
@@ -174,7 +174,7 @@ export async function installHermeticMap(
     const source = match?.[1]
     const atPoint = match != null
       && Number(match[2]) === TILE_Z && Number(match[3]) === point.tx && Number(match[4]) === point.ty
-    const level = source === 'road' || source === 'rail' ? paintedDb : undefined
+    const level = source === 'road' || source === 'railway' ? paintedDb : undefined
     return route.fulfill({
       status: 200,
       contentType: 'application/octet-stream',

@@ -4,7 +4,7 @@
 
 use physics::bands::{PERIOD_HOURS, PERIODS, energy, lden_energy};
 use physics::doc29::atmosphere::receiver_impedance_db;
-use physics::doc29::boxes::{AircraftBoxAtReceiver, box_sel_at_receiver};
+use physics::doc29::boxes::{AircraftBoxAtReceiver, BoxSel, box_sel_at_receiver};
 use physics::doc29::corrections::INSTALLATION_CORRECTION_MAX_DB;
 use physics::doc29::npd::lamax_rise_bound_db;
 use physics::doc29::screening::ReceiverHorizons;
@@ -95,6 +95,74 @@ fn nearest_slant_m(
     east.hypot(north).hypot(up)
 }
 
+/// One box at the receiver: its centroid's horizontal distance (m), its period energies (Leq,
+/// linear) and its selection; none beyond `reach_m`.
+fn box_at(
+    record: &AircraftBox,
+    tile: TileId,
+    frame: &LocalFrame,
+    receiver: AircraftReceiver,
+    horizons: &impl ReceiverHorizons,
+    (impedance_db, reach_m): (f64, f64),
+) -> Option<(f64, [f64; PERIODS], BoxSel)> {
+    let global = tile.global(record.centroid);
+    let centroid = frame.metres_of_steps([global.x as f64, global.y as f64]);
+    let east_m = centroid[0] - receiver.position[0];
+    let north_m = centroid[1] - receiver.position[1];
+    let distance_m = east_m.hypot(north_m);
+    if distance_m > reach_m {
+        return None;
+    }
+    let at_receiver = AircraftBoxAtReceiver {
+        centroid_m: [
+            east_m,
+            north_m,
+            record.centroid_altitude_m - receiver.altitude_m,
+        ],
+        axis_rad: record.axis_rad,
+        gradient: record.gradient,
+        gradient_spread: record.gradient_spread,
+        piece_length_m: record.piece_length_m,
+        levels_db: &record.energy_db,
+        tail_levels_db: &record.tail_energy_db,
+        lg_scaled_distance: &record.lg_scaled_distance,
+        installation_shares: record.installation_shares,
+        ground_m: record.ground_m - receiver.altitude_m,
+    };
+    let sel = box_sel_at_receiver(&at_receiver, horizons);
+    let impedance_db = match record.group {
+        Group::FixedWing => impedance_db,
+        Group::Helicopter => 0.0,
+    };
+    let energy: [f64; PERIODS] = std::array::from_fn(|period| {
+        energy(sel.sel_db[period] + impedance_db) / (PERIOD_HOURS[period] * 3_600.0)
+    });
+    Some((distance_m, energy, sel))
+}
+
+/// The Lden energy of one tile's boxes within `reach_m` of the receiver (at most the aircraft
+/// reach), each box's share `weight` of its centroid's horizontal distance (the heatmap's levels).
+pub fn tile_lden_energy(
+    aircraft: &Aircraft<'_>,
+    tile: TileId,
+    frame: &LocalFrame,
+    receiver: AircraftReceiver,
+    horizons: &impl ReceiverHorizons,
+    (weight, reach_m): (&dyn Fn(f64) -> f64, f64),
+) -> f64 {
+    let ends = (
+        receiver_impedance_db(receiver.altitude_m),
+        reach_m.min(AIRCRAFT_REACH_M),
+    );
+    (0..aircraft.box_count())
+        .filter_map(|index| {
+            let record = aircraft.aircraft_box(index);
+            box_at(&record, tile, frame, receiver, horizons, ends)
+                .map(|(distance_m, energy, _)| weight(distance_m) * lden_energy(&energy))
+        })
+        .sum()
+}
+
 /// The boxes of one tile at the receiver.
 pub fn tile_energy(
     aircraft: &Aircraft<'_>,
@@ -110,37 +178,16 @@ pub fn tile_energy(
         .with_min_len(1_024)
         .map(|index| {
             let record = aircraft.aircraft_box(index);
-            let global = tile.global(record.centroid);
-            let centroid = frame.metres_of_steps([global.x as f64, global.y as f64]);
-            let east_m = centroid[0] - receiver.position[0];
-            let north_m = centroid[1] - receiver.position[1];
-            if east_m.hypot(north_m) > AIRCRAFT_REACH_M {
+            let Some((_, energy, sel)) = box_at(
+                &record,
+                tile,
+                frame,
+                receiver,
+                horizons,
+                (impedance_db, AIRCRAFT_REACH_M),
+            ) else {
                 return BEYOND_REACH;
-            }
-            let at_receiver = AircraftBoxAtReceiver {
-                centroid_m: [
-                    east_m,
-                    north_m,
-                    record.centroid_altitude_m - receiver.altitude_m,
-                ],
-                axis_rad: record.axis_rad,
-                gradient: record.gradient,
-                gradient_spread: record.gradient_spread,
-                piece_length_m: record.piece_length_m,
-                levels_db: &record.energy_db,
-                tail_levels_db: &record.tail_energy_db,
-                lg_scaled_distance: &record.lg_scaled_distance,
-                installation_shares: record.installation_shares,
-                ground_m: record.ground_m - receiver.altitude_m,
             };
-            let sel = box_sel_at_receiver(&at_receiver, horizons);
-            let impedance_db = match record.group {
-                Group::FixedWing => impedance_db,
-                Group::Helicopter => 0.0,
-            };
-            let energy: [f64; PERIODS] = std::array::from_fn(|period| {
-                energy(sel.sel_db[period] + impedance_db) / (PERIOD_HOURS[period] * 3_600.0)
-            });
             // The box's flights of a year split over the periods as its SEL energy is, each
             // period's rate over its hours; lambda is that rate times the slant over the speed.
             let period_sel: [f64; PERIODS] =
@@ -160,7 +207,10 @@ pub fn tile_energy(
                 record.loudest_lamax_db
                     + lamax_rise_bound_db(nearest_slant_m(&record, tile, frame, receiver))
                     + INSTALLATION_CORRECTION_MAX_DB
-                    + impedance_db
+                    + match record.group {
+                        Group::FixedWing => impedance_db,
+                        Group::Helicopter => 0.0,
+                    }
             });
             // The installation shares are the box's over the whole day (the tiles keep no share per
             // period), so a box whose jets fly by day and propellers by night splits its Lden as the

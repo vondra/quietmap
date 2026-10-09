@@ -25,7 +25,7 @@ const lden = (page: import('@playwright/test').Page) => page.locator('[data-test
 
 test('desktop: hover reads the painted cell, the popup redraws on every streamed update', async ({ page }) => {
   await installHermeticMap(page, POINT)
-  const expectedTiles = ['road', 'rail'].map(source =>
+  const expectedTiles = ['road', 'railway'].map(source =>
     `/api/tiles/b1/${source}/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`)
   const tilesLoaded = expectedTiles.map(path => page.waitForResponse(response =>
     new URL(response.url()).pathname === path && response.status() === 200,
@@ -33,7 +33,7 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   // Overzoom one exact z12 receiver so its single audible cell spans multiple
   // screen pixels: a one-cell spatial shift still misses the canvas centre,
   // and the linear texture filter dilutes the centre pixel far less.
-  await page.goto(mapUrl(POINT, 'road,rail', TILE_Z + 2))
+  await page.goto(mapUrl(POINT, 'road,railway', TILE_Z + 2))
   await Promise.all(tilesLoaded)
   const { canvas, x, y } = await canvasCenter(page)
   await page.mouse.move(x, y)

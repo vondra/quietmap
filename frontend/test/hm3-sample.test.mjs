@@ -24,11 +24,11 @@ function tileWith(byteAtCell, fill = HM3_NO_LEVEL) {
 test('the readout energy-sums the cell across layers; a layer without a level adds nothing', () => {
   const at60 = tileWith(120) // HM3 encodes dB × 2
   assert.deepEqual(readHeatmapCell([{ source: 'road', tile: at60 }], CELL), { kind: 'level', ldenDb: 60 })
-  const both = readHeatmapCell([{ source: 'road', tile: at60 }, { source: 'rail', tile: at60 }], CELL)
+  const both = readHeatmapCell([{ source: 'road', tile: at60 }, { source: 'railway', tile: at60 }], CELL)
   assert.equal(both.ldenDb.toFixed(2), '63.01')
-  const withNoLevel = readHeatmapCell([{ source: 'road', tile: at60 }, { source: 'rail', tile: tileWith(HM3_NO_LEVEL) }], CELL)
+  const withNoLevel = readHeatmapCell([{ source: 'road', tile: at60 }, { source: 'railway', tile: tileWith(HM3_NO_LEVEL) }], CELL)
   assert.deepEqual(withNoLevel, { kind: 'level', ldenDb: 60 })
-  const withAbsent = readHeatmapCell([{ source: 'road', tile: at60 }, { source: 'rail', tile: 'absent' }], CELL)
+  const withAbsent = readHeatmapCell([{ source: 'road', tile: at60 }, { source: 'railway', tile: 'absent' }], CELL)
   assert.deepEqual(withAbsent, { kind: 'level', ldenDb: 60 })
   // Byte 254 is a level (127 dB), not a sentinel.
   assert.equal(readHeatmapCell([{ source: 'road', tile: tileWith(254) }], CELL).ldenDb.toFixed(1), '127.0')
@@ -36,13 +36,13 @@ test('the readout energy-sums the cell across layers; a layer without a level ad
 
 test('a failed selected layer yields no number, never the sum of the rest', () => {
   const road40 = { source: 'road', tile: tileWith(80) }
-  assert.deepEqual(readHeatmapCell([road40, { source: 'rail', tile: 'failed' }], CELL), { kind: 'unavailable', failedSources: ['rail'] })
+  assert.deepEqual(readHeatmapCell([road40, { source: 'railway', tile: 'failed' }], CELL), { kind: 'unavailable', failedSources: ['railway'] })
 })
 
 test('no level in every layer, or only absent tiles, reads as no level', () => {
   const none = { source: 'road', tile: tileWith(HM3_NO_LEVEL) }
-  assert.deepEqual(readHeatmapCell([none, { ...none, source: 'rail' }], CELL), { kind: 'no-level' })
-  assert.deepEqual(readHeatmapCell([none, { source: 'rail', tile: 'absent' }], CELL), { kind: 'no-level' })
+  assert.deepEqual(readHeatmapCell([none, { ...none, source: 'railway' }], CELL), { kind: 'no-level' })
+  assert.deepEqual(readHeatmapCell([none, { source: 'railway', tile: 'absent' }], CELL), { kind: 'no-level' })
 })
 
 test('only HM3 version 3, the served tiles, decodes', () => {

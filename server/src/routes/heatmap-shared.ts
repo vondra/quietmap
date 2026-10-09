@@ -16,12 +16,11 @@ export const MAX_ZOOM = WORLD_BASE_ZOOM
 export const ALLOWED_LAYERS = new Set([
   'total',
   'road',
-  'rail',
+  'railway',
   'industrial',
   'building',
-  'aircraft-ground',
-  'aircraft-airborne',
-  'aircraft-cruise',
+  'ship',
+  'aircraft',
 ])
 
 /** The manifest naming the published archives, inside the tiles directory. */

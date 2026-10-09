@@ -1,0 +1,17 @@
+[package]
+name = "paint"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "qm-paint"
+path = "src/bin/qm-paint.rs"
+
+[dependencies]
+tiles = { path = "../tiles" }
+physics = { path = "../physics" }
+popup = { path = "../popup" }
+rayon = "1.12"
+pmtiles = { version = "0.23.0", default-features = false, features = ["write", "brotli"] }
+serde_json = "1"
