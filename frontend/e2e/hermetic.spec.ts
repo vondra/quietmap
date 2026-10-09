@@ -91,7 +91,7 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   await page.locator('button[aria-label="Close"]:visible').click()
   await expect(page.locator('[data-testid="detail-popup"]:visible')).toHaveCount(0)
   const road = page.getByTestId('layer-road').filter({ visible: true })
-  const rail = page.getByTestId('layer-rail').filter({ visible: true })
+  const rail = page.getByTestId('layer-railway').filter({ visible: true })
   await expect(road).toHaveAttribute('aria-pressed', 'true')
   await expect(rail).toHaveAttribute('aria-pressed', 'true')
   await rail.click()

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use tiles::sources::Layer;
 
 pub const TILE_PX: usize = 512;
-const HEADER: [u8; 5] = *b"HM3 \x03";
+pub const HEADER: [u8; 5] = *b"HM3 \x03";
 
 /// The tile trees' names: the layers, then the total.
 pub fn layer_names() -> [&'static str; LAYERS + 1] {

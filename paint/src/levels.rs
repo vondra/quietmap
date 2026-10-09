@@ -4,7 +4,8 @@
 //! changes slowly over the corners' spacing. At each point a level's sources are evaluated from
 //! the largest bound, as the popup's selection, until the bounds left out stay under the
 //! tolerance of the energy known there; past a number of them the rest is sampled in proportion
-//! to the bounds (Hansen-Hurwitz).
+//! to the bounds (Hansen-Hurwitz), the sample doubled until two standard errors stay under the
+//! same tolerance.
 
 use crate::square::Square;
 use physics::bands::{PERIODS, lden_energy};
@@ -45,12 +46,23 @@ impl Levels {
 /// How hard one level's evaluation works at one point.
 #[derive(Clone, Copy)]
 pub struct Rule {
-    /// The bounds left out may reach this fraction of the energy known at the point.
+    /// The bounds left out, and two standard errors of a sample, may reach this fraction of the
+    /// energy known at the point.
     pub tolerance: f64,
     /// Sources evaluated loudest first before the rest is sampled.
     pub proven: usize,
-    /// Draws of the sample.
+    /// Draws of the first sample, and of the largest.
     pub sample: usize,
+    pub sample_max: usize,
+}
+
+/// What one source added to its layer at the last point: its exact share when evaluated with
+/// certainty, its draws' share of the estimate when sampled.
+#[derive(Clone, Copy)]
+pub struct Added {
+    pub index: u32,
+    pub energy: f64,
+    pub certain: bool,
 }
 
 /// A point evaluated: where it stands and what its rays share.
@@ -63,17 +75,26 @@ pub struct Point {
 }
 
 impl Point {
-    /// The point at `position` (frame metres), the receiver height above its ground.
-    pub fn at(square: &Square, position: [f64; 2]) -> Result<Self, String> {
+    /// The point at `position` (frame metres) known to stand outdoors.
+    pub fn outdoors(square: &Square, position: [f64; 2]) -> Result<Self, String> {
         let (lat, lon) = square.frame.to_mercator(position).to_degrees();
         Ok(Point {
             position,
             altitude_m: square.ground.at(position)?.height_m + popup::answer::RECEIVER_HEIGHT_M,
             weather: square.release.weather.place(lat, lon),
+            own_footprint: 0,
+        })
+    }
+
+    /// The point at `position` (frame metres), the receiver height above its ground, in the
+    /// building it may stand in.
+    pub fn at(square: &Square, position: [f64; 2]) -> Result<Self, String> {
+        Ok(Point {
             own_footprint: square
                 .obstacles
                 .enclosing_building_id(position)?
                 .unwrap_or(0),
+            ..Point::outdoors(square, position)?
         })
     }
 }
@@ -84,9 +105,10 @@ pub struct Work {
     scratch: Scratch,
     lists: [Vec<(f64, u32)>; LAYERS],
     cumulative: Vec<f64>,
-    drawn: Vec<(u32, f64)>,
-    /// The last call's sources evaluated with certainty: their weighted energy and index.
-    pub evaluated: Vec<(f64, u32)>,
+    drawn: Vec<u32>,
+    values: std::collections::HashMap<u32, f64>,
+    /// What each source evaluated at the last point added.
+    pub added: Vec<Added>,
 }
 
 /// The Lden energy candidate `index` delivers at `point`, its share `weight` of its distance.
@@ -152,7 +174,7 @@ pub fn energies(
     for list in &mut work.lists {
         list.clear();
     }
-    work.evaluated.clear();
+    work.added.clear();
     for index in indices {
         let candidate = &square.candidates[index as usize];
         let distance = candidate.distance_from(point.position);
@@ -186,10 +208,15 @@ pub fn energies(
         let mut energy = 0.0;
         let mut taken = 0;
         while taken < head && remaining > rule.tolerance * (energy + known[layer]) {
-            let value = evaluate(list[taken].1, work)?;
-            work.evaluated.push((value, list[taken].1));
+            let (bound, index) = list[taken];
+            let value = evaluate(index, work)?;
+            work.added.push(Added {
+                index,
+                energy: value,
+                certain: true,
+            });
             energy += value;
-            remaining -= list[taken].0;
+            remaining -= bound;
             taken += 1;
         }
         let rest = &list[taken..];
@@ -203,34 +230,80 @@ pub fn energies(
             }
             let mut random = SplitMix(seed ^ (layer as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
             work.drawn.clear();
-            for _ in 0..rule.sample {
-                let target = random.unit() * total;
-                let at = work
-                    .cumulative
-                    .partition_point(|&sum| sum <= target)
-                    .min(rest.len() - 1);
-                work.drawn.push((at as u32, 0.0));
+            work.values.clear();
+            let (mut sum, mut squares) = (0.0, 0.0);
+            let mut size = rule.sample;
+            loop {
+                while work.drawn.len() < size {
+                    let target = random.unit() * total;
+                    let at = work
+                        .cumulative
+                        .partition_point(|&sum| sum <= target)
+                        .min(rest.len() - 1) as u32;
+                    let read = match work.values.get(&at) {
+                        Some(&read) => read,
+                        None => {
+                            let (bound, index) = rest[at as usize];
+                            let read = evaluate(index, work)? * total / bound;
+                            work.values.insert(at, read);
+                            read
+                        }
+                    };
+                    work.drawn.push(at);
+                    sum += read;
+                    squares += read * read;
+                }
+                let n = work.drawn.len() as f64;
+                let mean = sum / n;
+                let variance = ((squares - n * mean * mean) / (n * (n - 1.0))).max(0.0);
+                if size >= rule.sample_max
+                    || 2.0 * variance.sqrt() <= rule.tolerance * (energy + mean + known[layer])
+                {
+                    break;
+                }
+                size *= 2;
             }
-            work.drawn.sort_unstable_by_key(|draw| draw.0);
-            let mut estimate = 0.0;
-            let mut last: Option<(u32, f64)> = None;
-            for draw in 0..work.drawn.len() {
-                let at = work.drawn[draw].0;
-                let value = match last {
-                    Some((previous, value)) if previous == at => value,
-                    _ => {
-                        let (bound, index) = rest[at as usize];
-                        let value = evaluate(index, work)? * total / bound;
-                        last = Some((at, value));
-                        value
-                    }
-                };
-                estimate += value;
+            let n = work.drawn.len() as f64;
+            energy += sum / n;
+            work.drawn.sort_unstable();
+            for draws in work.drawn.chunk_by(|a, b| a == b) {
+                work.added.push(Added {
+                    index: rest[draws[0] as usize].1,
+                    energy: draws.len() as f64 / n * work.values[&draws[0]],
+                    certain: false,
+                });
             }
-            energy += estimate / rule.sample as f64;
         }
         result[layer] = energy;
         work.lists[layer] = list;
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every distance's three shares sum to one, each within [0, 1], near only near and far only
+    /// far.
+    #[test]
+    fn the_shares_split_every_distance_whole() {
+        let levels = Levels {
+            near: [150.0, 400.0],
+            far: [1_200.0, 2_400.0],
+        };
+        for step in 0..4_000 {
+            let d = step as f64 * 1.0;
+            let shares = [levels.near(d), levels.mid(d), levels.far(d)];
+            assert!((shares.iter().sum::<f64>() - 1.0).abs() < 1e-12, "{d}");
+            assert!(
+                shares.iter().all(|s| (0.0..=1.0).contains(s)),
+                "{d} {shares:?}"
+            );
+        }
+        assert_eq!(levels.near(100.0), 1.0);
+        assert_eq!(levels.far(100.0), 0.0);
+        assert_eq!(levels.mid(800.0), 1.0);
+        assert_eq!(levels.far(3_000.0), 1.0);
+    }
 }

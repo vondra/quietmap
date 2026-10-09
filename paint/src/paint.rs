@@ -1,6 +1,7 @@
 //! A square painted: the far level at the corners of its coarse cells, the mid level and the
 //! aircraft at the corners of its pixel blocks, each interpolated bilinearly in energy, and at
-//! every pixel the near level evaluated there, all times the pixel's own receiver reflection.
+//! every pixel the near level evaluated there; the ground sources times the pixel's own receiver
+//! reflection, the flights without it, as the popup adds them.
 //! A pixel inside an enclosed building has no level: the map shows the sound outdoors, and a
 //! click there answers at the loudest façade.
 
@@ -25,31 +26,54 @@ pub struct Grid {
     pub coarse: usize,
 }
 
-/// The levels' evaluation at their points: the bounds left out under 0.2 dB of the known energy,
-/// or the loudest bounds and a sample of the rest. Prague's square 2212/1387 (34 pixels outdoors
-/// against the popup there) reads the same with 16 + 16 at the pixels as with 128 + 64 (mean
-/// difference 0.34 against 0.36 dB) in a third of the time.
+/// The levels' evaluation at their points: the bounds left out, or two standard errors of the
+/// sample of the rest, under 0.2 dB of the known energy. Prague's square 2212/1387 (34 pixels
+/// outdoors against the popup there) reads the same with 16 + 16 at the pixels as with 128 + 64
+/// (mean difference 0.34 against 0.36 dB) in a third of the time.
 const FAR_RULE: Rule = Rule {
     tolerance: 0.047,
     proven: 128,
     sample: 128,
+    sample_max: 2_048,
 };
 const MID_RULE: Rule = Rule {
     tolerance: 0.047,
     proven: 64,
     sample: 64,
+    sample_max: 512,
 };
 const NEAR_RULE: Rule = Rule {
     tolerance: 0.047,
     proven: 16,
     sample: 16,
+    sample_max: 64,
 };
+/// The aircraft's near share is evaluated every second block corner, and at a block corner
+/// between them where the four around differ by more than this ratio (1 dB).
+const AIR_SMOOTH: f64 = 1.258_925_411_794_167_2;
 
-/// The loudest mid-level sources a block corner names, which its block's pixels evaluate exactly
-/// (screening near a pixel changes them where interpolation cannot: a courtyard): at most this
-/// many, each at least [`NAMED_SHARE`] of the corner's energy.
-const NAMED_PER_CORNER: usize = 12;
-const NAMED_SHARE: f64 = 0.02;
+/// The mid-level sources a block corner names, which its block's pixels evaluate exactly
+/// (screening near a pixel changes them where interpolation cannot: a courtyard): by their share
+/// of their own layer's energy at the corner, the largest first, at most this many, each at least
+/// [`NAMED_SHARE`] of its layer.
+const NAMED_PER_CORNER: usize = 16;
+const NAMED_SHARE: f64 = 0.01;
+
+/// A block corner: per slot the energy interpolated from it, the sources it names, and what each
+/// source its mid level evaluated added there (by index), so a named one leaves exactly that.
+struct Corner {
+    rest: [f64; SLOTS],
+    named: Vec<u32>,
+    added: Vec<(u32, f64)>,
+}
+
+impl Corner {
+    fn added(&self, index: u32) -> f64 {
+        self.added
+            .binary_search_by_key(&index, |&(at, _)| at)
+            .map_or(0.0, |at| self.added[at].1)
+    }
+}
 
 /// Per pixel (row-major from the north-west) its cell per layer and the total's last: twice the
 /// Lden rounded, or [`NO_LEVEL`].
@@ -69,8 +93,12 @@ fn mix(seed: u64, value: u64) -> u64 {
         .rotate_left(29)
 }
 
+/// A point's energies: per layer the ground sources', then the flights' (the aircraft boxes).
+const SLOTS: usize = LAYERS + 1;
+const FLIGHTS: usize = LAYERS;
+
 /// Bilinear in energy between four corners (north-west, north-east, south-west, south-east).
-fn bilinear(corners: [&[f64; LAYERS]; 4], fx: f64, fy: f64) -> [f64; LAYERS] {
+fn bilinear<const N: usize>(corners: [&[f64; N]; 4], fx: f64, fy: f64) -> [f64; N] {
     std::array::from_fn(|layer| {
         let north = corners[0][layer] * (1.0 - fx) + corners[1][layer] * fx;
         let south = corners[2][layer] * (1.0 - fx) + corners[3][layer] * fx;
@@ -144,13 +172,13 @@ pub fn paint(square: &Square, grid: Grid) -> Result<Cells, String> {
     let started = std::time::Instant::now();
     // The far level at the coarse corners.
     let coarse_side = n / grid.coarse + 1;
-    let coarse: Vec<[f64; LAYERS]> = (0..coarse_side * coarse_side)
+    let coarse: Vec<[f64; SLOTS]> = (0..coarse_side * coarse_side)
         .into_par_iter()
         .map_init(Work::default, |work, at| {
             let (i, j) = (at % coarse_side, at / coarse_side);
             let position = metres((i * grid.coarse) as f64, (j * grid.coarse) as f64);
             let point = Point::at(square, position)?;
-            let mut far = energies(
+            let ground = energies(
                 square,
                 &point,
                 &mut (0..everything),
@@ -160,8 +188,9 @@ pub fn paint(square: &Square, grid: Grid) -> Result<Cells, String> {
                 mix(seed, at as u64),
                 work,
             )?;
-            far[Layer::Aircraft as usize] +=
-                aircraft_energy(square, &point, &|d| levels.far(d), AIRCRAFT_REACH_M)?;
+            let mut far = [0.0; SLOTS];
+            far[..LAYERS].copy_from_slice(&ground);
+            far[FLIGHTS] = aircraft_energy(square, &point, &|d| levels.far(d), AIRCRAFT_REACH_M)?;
             Ok(far)
         })
         .collect::<Result<_, String>>()?;
@@ -179,17 +208,31 @@ pub fn paint(square: &Square, grid: Grid) -> Result<Cells, String> {
             aircraft_energy(square, &point, &|d| 1.0 - levels.far(d), levels.far[1])
         })
         .collect::<Result<_, String>>()?;
-    let air_at = |i: usize, j: usize| {
+    // At a block corner: the grid's own value, the four around interpolated where they agree,
+    // else evaluated there.
+    let air_at = |i: usize, j: usize, point: &Point| -> Result<f64, String> {
+        if i.is_multiple_of(2) && j.is_multiple_of(2) {
+            return Ok(air[(j / 2) * air_side + i / 2]);
+        }
         let (ai, aj) = ((i / 2).min(air_side - 2), (j / 2).min(air_side - 2));
+        let around =
+            [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(di, dj)| air[(aj + dj) * air_side + ai + di]);
+        let (low, high) = around
+            .iter()
+            .fold((f64::INFINITY, 0.0f64), |(low, high), &v| {
+                (low.min(v), high.max(v))
+            });
+        if high > AIR_SMOOTH * low {
+            return aircraft_energy(square, point, &|d| 1.0 - levels.far(d), levels.far[1]);
+        }
         let (fx, fy) = ((i - 2 * ai) as f64 / 2.0, (j - 2 * aj) as f64 / 2.0);
-        let value = |di: usize, dj: usize| air[(aj + dj) * air_side + ai + di];
-        (value(0, 0) * (1.0 - fx) + value(1, 0) * fx) * (1.0 - fy)
-            + (value(0, 1) * (1.0 - fx) + value(1, 1) * fx) * fy
+        Ok((around[0] * (1.0 - fx) + around[1] * fx) * (1.0 - fy)
+            + (around[2] * (1.0 - fx) + around[3] * fx) * fy)
     };
     // The mid level at the block corners, over the far level and the aircraft there.
     let ratio = grid.coarse / grid.block;
     let corner_side = n / grid.block + 1;
-    let corners: Vec<([f64; LAYERS], Vec<u32>)> = (0..corner_side * corner_side)
+    let corners: Vec<Corner> = (0..corner_side * corner_side)
         .into_par_iter()
         .map_init(
             || (Work::default(), Vec::new()),
@@ -216,28 +259,46 @@ pub fn paint(square: &Square, grid: Grid) -> Result<Cells, String> {
                 let position = metres((i * grid.block) as f64, (j * grid.block) as f64);
                 let point = Point::at(square, position)?;
                 square.index.within(position, position, levels.far[1], list);
+                let mut known: [f64; LAYERS] = std::array::from_fn(|l| far[l]);
+                known[Layer::Aircraft as usize] += far[FLIGHTS];
                 let mid = energies(
                     square,
                     &point,
                     &mut list.iter().copied(),
                     &|d| levels.mid(d),
-                    &far,
+                    &known,
                     &MID_RULE,
                     mix(seed, (1 << 40) | at as u64),
                     work,
                 )?;
-                let mut rest: [f64; LAYERS] = std::array::from_fn(|l| far[l] + mid[l]);
-                let mut named = std::mem::take(&mut work.evaluated);
+                let mut rest = far;
+                for (sum, value) in rest.iter_mut().zip(mid) {
+                    *sum += value;
+                }
+                let mut named: Vec<(f64, u32)> = work
+                    .added
+                    .iter()
+                    .filter(|added| added.certain)
+                    .map(|added| {
+                        let layer = square.candidates[added.index as usize].layer as usize;
+                        (
+                            added.energy / rest[layer].max(f64::MIN_POSITIVE),
+                            added.index,
+                        )
+                    })
+                    .filter(|&(share, _)| share >= NAMED_SHARE)
+                    .collect();
                 named.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
-                let least = NAMED_SHARE * rest.iter().sum::<f64>();
                 let named: Vec<u32> = named
                     .iter()
                     .take(NAMED_PER_CORNER)
-                    .filter(|(energy, _)| *energy > 0.0 && *energy >= least)
                     .map(|&(_, index)| index)
                     .collect();
-                rest[Layer::Aircraft as usize] += air_at(i, j);
-                Ok((rest, named))
+                let mut added: Vec<(u32, f64)> =
+                    work.added.iter().map(|a| (a.index, a.energy)).collect();
+                added.sort_unstable_by_key(|&(index, _)| index);
+                rest[FLIGHTS] += air_at(i, j, &point)?;
+                Ok(Corner { rest, named, added })
             },
         )
         .collect::<Result<_, String>>()?;
@@ -260,28 +321,23 @@ pub fn paint(square: &Square, grid: Grid) -> Result<Cells, String> {
                 let high = [a[0].max(b[0]), a[1].max(b[1])];
                 square.index.within(low, high, levels.near[1], list);
                 // The corners' named sources, evaluated exactly at every pixel, and the corners'
-                // rest without their mid-level shares.
-                let at = [(0, 0), (1, 0), (0, 1), (1, 1)];
-                let mut named: Vec<u32> = at
+                // rest without what each of them added there.
+                let around = [(0, 0), (1, 0), (0, 1), (1, 1)]
+                    .map(|(i, j)| &corners[(by + j) * corner_side + bx + i]);
+                let mut named: Vec<u32> = around
                     .iter()
-                    .flat_map(|&(i, j)| corners[(by + j) * corner_side + bx + i].1.iter().copied())
+                    .flat_map(|corner| corner.named.iter().copied())
                     .collect();
                 named.sort_unstable();
                 named.dedup();
-                let mut rests = [[0.0; LAYERS]; 4];
-                for (k, &(i, j)) in at.iter().enumerate() {
-                    rests[k] = corners[(by + j) * corner_side + bx + i].0;
-                    let position = metres(
-                        ((bx + i) * grid.block) as f64,
-                        ((by + j) * grid.block) as f64,
-                    );
-                    let point = Point::at(square, position)?;
+                let rests = around.map(|corner| {
+                    let mut rest = corner.rest;
                     for &index in &named {
                         let layer = square.candidates[index as usize].layer as usize;
-                        let share = energy_of(square, &point, index, &|d| levels.mid(d), work)?;
-                        rests[k][layer] = (rests[k][layer] - share).max(0.0);
+                        rest[layer] = (rest[layer] - corner.added(index)).max(0.0);
                     }
-                }
+                    rest
+                });
                 let mut cells = Vec::with_capacity(grid.block * grid.block);
                 for py in 0..grid.block {
                     for px in 0..grid.block {
@@ -297,32 +353,28 @@ pub fn paint(square: &Square, grid: Grid) -> Result<Cells, String> {
                         );
                         let mut rest =
                             bilinear([&rests[0], &rests[1], &rests[2], &rests[3]], fx, fy);
-                        let (lat, lon) = square.frame.to_mercator(position).to_degrees();
-                        let point = Point {
-                            position,
-                            altitude_m: square.ground.at(position)?.height_m
-                                + popup::answer::RECEIVER_HEIGHT_M,
-                            weather: square.release.weather.place(lat, lon),
-                            own_footprint: 0,
-                        };
+                        let point = Point::outdoors(square, position)?;
                         for &index in &named {
                             let layer = square.candidates[index as usize].layer as usize;
                             rest[layer] +=
                                 energy_of(square, &point, index, &|d| levels.mid(d), work)?;
                         }
+                        let mut known: [f64; LAYERS] = std::array::from_fn(|l| rest[l]);
+                        known[Layer::Aircraft as usize] += rest[FLIGHTS];
                         let near = energies(
                             square,
                             &point,
                             &mut list.iter().copied(),
                             &|d| levels.near(d),
-                            &rest,
+                            &known,
                             &NEAR_RULE,
                             mix(seed, (2 << 40) | (y * n + x) as u64),
                             work,
                         )?;
                         let reflection = energy(square.obstacles.reflection_db(position, None)?);
-                        let layers: [f64; LAYERS] =
+                        let mut layers: [f64; LAYERS] =
                             std::array::from_fn(|l| (near[l] + rest[l]) * reflection);
+                        layers[Layer::Aircraft as usize] += rest[FLIGHTS];
                         let mut pixel = [NO_LEVEL; LAYERS + 1];
                         for (l, value) in layers.iter().enumerate() {
                             pixel[l] = cell(*value);

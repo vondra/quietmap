@@ -67,12 +67,12 @@ impl Files {
             dx.unsigned_abs().max(dy.unsigned_abs()) as u32
         };
         let square_gap = |other: TileId| {
-            // The tile's distance from the square: from the nearer of its corners or edges.
-            let [x0, y0] = [f64::from(tile.x), f64::from(tile.y)];
-            let [x1, y1] = [f64::from(other.x), f64::from(other.y)];
-            let dx = ((x1 - x0).abs() - 1.0).max(0.0) * frame.east_m_per_unit;
-            let dy = ((y1 - y0).abs() - 1.0).max(0.0) * frame.north_m_per_unit;
-            dx.hypot(dy)
+            // The tile's distance from the square, across the antimeridian too.
+            let n = i64::from(tiles::geo::TILES_PER_AXIS);
+            let dx = (i64::from(other.x) - i64::from(tile.x) + n / 2).rem_euclid(n) - n / 2;
+            let dy = i64::from(other.y) - i64::from(tile.y);
+            let gap = |d: i64| (d.unsigned_abs() as f64 - 1.0).max(0.0);
+            (gap(dx) * frame.east_m_per_unit).hypot(gap(dy) * frame.north_m_per_unit)
         };
         let rings = RingFiles::read(
             release,
