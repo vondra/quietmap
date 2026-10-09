@@ -137,6 +137,14 @@ impl<'a> Scene<'a> {
         Ok(tallest_enclosed(&parities).is_some())
     }
 
+    /// The id of the enclosed building `point` (click metres) stands in, as
+    /// [`Scene::enclosing_building`] finds it, without copying its outline.
+    pub fn enclosing_building_id(&self, point: [f64; 2]) -> Result<Option<u64>, String> {
+        let mut parities = Vec::new();
+        self.footprint_parities(self.lattice.steps(point), 0.0, &mut parities)?;
+        Ok(tallest_enclosed(&parities).map(|winner| winner.footprint_id))
+    }
+
     /// The enclosed building `point` (click metres) stands in: the tallest enclosed footprint
     /// containing it, equal heights to the smallest id; `None` outdoors, in a courtyard or under
     /// an Outdoor-class roof.

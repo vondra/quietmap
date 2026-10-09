@@ -22,6 +22,9 @@ pub struct Receiver<'s, 'a> {
     pub altitude_m: f64,
     pub weather: PlaceWeather,
     pub reflection_db: f64,
+    /// The building the receiver stands in (a painted point inside a footprint): its walls do not
+    /// screen it. 0 for none: a click is answered outside every building.
+    pub own_footprint: u64,
 }
 
 /// Per-thread buffers.
@@ -73,6 +76,7 @@ pub fn trace(
     receiver
         .obstacles
         .crossings(point, receiver.position, &mut scratch.crossings)?;
+    without_own_walls(receiver, &mut scratch.crossings);
     let p = std::array::from_fn(|period| {
         receiver
             .weather
@@ -232,6 +236,13 @@ pub fn received_bands(
     Ok(received)
 }
 
+/// Drops the walls of the building the receiver stands in.
+fn without_own_walls(receiver: &Receiver, crossings: &mut Vec<Crossing>) {
+    if receiver.own_footprint != 0 {
+        crossings.retain(|crossing| crossing.footprint_id != receiver.own_footprint);
+    }
+}
+
 /// The transfer of one ray from `point` to the receiver.
 fn ray(
     receiver: &Receiver,
@@ -248,6 +259,7 @@ fn ray(
         receiver
             .obstacles
             .crossings(point, receiver.position, &mut scratch.crossings)?;
+        without_own_walls(receiver, &mut scratch.crossings);
     }
     let p = std::array::from_fn(|period| {
         receiver

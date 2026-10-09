@@ -21,12 +21,11 @@ import { useSyncExternalStore } from 'react'
 // source but no toggle.
 export const HEATMAP_LAYERS = [
   'road',
-  'rail',
+  'railway',
   'industrial',
   'building',
-  'aircraft-ground',
-  'aircraft-airborne',
-  'aircraft-cruise',
+  'ship',
+  'aircraft',
 ] as const
 
 export type HeatmapLayer = (typeof HEATMAP_LAYERS)[number]

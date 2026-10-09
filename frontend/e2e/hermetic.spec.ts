@@ -25,7 +25,7 @@ const lden = (page: import('@playwright/test').Page) => page.locator('[data-test
 
 test('desktop: hover reads the painted cell, the popup redraws on every streamed update', async ({ page }) => {
   await installHermeticMap(page, POINT)
-  const expectedTiles = ['road', 'rail'].map(source =>
+  const expectedTiles = ['road', 'railway'].map(source =>
     `/api/tiles/b1/${source}/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`)
   const tilesLoaded = expectedTiles.map(path => page.waitForResponse(response =>
     new URL(response.url()).pathname === path && response.status() === 200,
@@ -33,7 +33,7 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   // Overzoom one exact z12 receiver so its single audible cell spans multiple
   // screen pixels: a one-cell spatial shift still misses the canvas centre,
   // and the linear texture filter dilutes the centre pixel far less.
-  await page.goto(mapUrl(POINT, 'road,rail', TILE_Z + 2))
+  await page.goto(mapUrl(POINT, 'road,railway', TILE_Z + 2))
   await Promise.all(tilesLoaded)
   const { canvas, x, y } = await canvasCenter(page)
   await page.mouse.move(x, y)
@@ -74,7 +74,7 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   await expect(lden(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB Lden`)
   await expect(page.locator('[data-testid="popup-refining"]:visible')).toHaveCount(0)
   // The final answer says how loud the place sounds over the whole day.
-  await expect(badge(page)).toHaveText('Nden 15 sone')
+  await expect(badge(page)).toHaveText('15 sone Nden')
   await expect(page.getByText('9.6k/day').filter({ visible: true })).toBeVisible()
   await expect(flights.locator('tbody tr')).toHaveCount(2)
   await expect(flights.locator('tbody tr').nth(0).locator('td')).toHaveText(['70', '0.44', '0.26', '09-02 D', /^Airbus A320\b/])
@@ -91,7 +91,7 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
   await page.locator('button[aria-label="Close"]:visible').click()
   await expect(page.locator('[data-testid="detail-popup"]:visible')).toHaveCount(0)
   const road = page.getByTestId('layer-road').filter({ visible: true })
-  const rail = page.getByTestId('layer-rail').filter({ visible: true })
+  const rail = page.getByTestId('layer-railway').filter({ visible: true })
   await expect(road).toHaveAttribute('aria-pressed', 'true')
   await expect(rail).toHaveAttribute('aria-pressed', 'true')
   await rail.click()

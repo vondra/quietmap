@@ -349,6 +349,7 @@ pub fn answer(
                 &obstacles,
                 station.position,
                 station.altitude_m,
+                0,
             )?);
         }
         let receiver = AircraftReceiver {
@@ -383,6 +384,7 @@ pub fn answer(
             altitude_m: station.altitude_m,
             weather: station.weather,
             reflection_db: station.reflection_db,
+            own_footprint: 0,
         };
         select(
             &mut selections,

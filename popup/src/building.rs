@@ -114,6 +114,7 @@ pub fn loudest_facade(
                 altitude_m: facade.altitude_m,
                 weather,
                 reflection_db: facade.reflection_db,
+                own_footprint: 0,
             };
             let mut total = [0.0; PERIODS];
             for &(_, index) in &ranked {

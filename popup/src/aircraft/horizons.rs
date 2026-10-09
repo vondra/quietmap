@@ -109,12 +109,14 @@ pub struct Horizons {
 impl Horizons {
     /// The horizons of the receiver at `position` (click metres) and `altitude_m`, from the terrain
     /// and buildings read so far: samples in tiles not yet read are skipped, so a first answer's
-    /// horizon may lack far edges (edges only screen what lies behind them).
+    /// horizon may lack far edges (edges only screen what lies behind them). The walls of
+    /// `own_footprint`, the building a painted point stands in (0 for none), are no horizon.
     pub fn build(
         ground: &Ground<'_>,
         obstacles: &Scene<'_>,
         position: [f64; 2],
         altitude_m: f64,
+        own_footprint: u64,
     ) -> Result<Self, String> {
         let mut terrain = SectorEdges::new(TERRAIN_SECTORS);
         let growth = (TERRAIN_BAND_LIMITS_M[5] / TERRAIN_FIRST_SAMPLE_M)
@@ -144,7 +146,10 @@ impl Horizons {
             let [east, north] = sector_direction(sector, BUILDING_SECTORS);
             let end = [position[0] + east * reach_m, position[1] + north * reach_m];
             obstacles.crossings(position, end, &mut crossings)?;
-            for crossing in crossings.iter().filter(|crossing| crossing.building) {
+            for crossing in crossings
+                .iter()
+                .filter(|crossing| crossing.building && crossing.footprint_id != own_footprint)
+            {
                 let range_m = crossing.t * reach_m;
                 if range_m <= BUILDING_NEAREST_EDGE_M {
                     continue;

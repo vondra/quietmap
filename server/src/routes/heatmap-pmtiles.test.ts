@@ -56,7 +56,7 @@ test('miss is a cacheable empty 200, not a 204', async () => {
 
 test('unpacked layer archive is 404, unknown build id is 404', async () => {
   const app = await buildApp()
-  const noArchive = await app.inject({ url: '/api/tiles/b0/rail/6/33/21.bin' })
+  const noArchive = await app.inject({ url: '/api/tiles/b0/railway/6/33/21.bin' })
   assert.equal(noArchive.statusCode, 404)
   const badBuild = await app.inject({ url: '/api/tiles/evil/road/6/33/21.bin' })
   assert.equal(badBuild.statusCode, 404)
