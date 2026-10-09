@@ -25,8 +25,8 @@ use tiles::sources::Layer;
 /// not move a percentile of the sum).
 const FLUCTUATING_SHARE_MIN: f64 = 1e-4;
 /// The same for the list's last row, everything it leaves out: a coarser account of a row that
-/// names nothing.
-pub const REST_SHARE_MIN: f64 = 1e-2;
+/// names nothing ([`rest_lines`]).
+const REST_SHARE_MIN: f64 = 1e-2;
 /// Day, evening and night shares of a road's daily flow where its fields carry none (sources built
 /// before the shares by country): motorways, trunks and their links; other roads.
 const MOTORWAY_PERIOD_SHARES: [f64; PERIODS] = [0.65, 0.20, 0.15];
@@ -430,10 +430,26 @@ const HOLDS_MEAN_LAMBDA: f64 = 10.0;
 const HELD_EXCEEDED: f64 = 1e-3;
 const HELD_SHARE: f64 = 1e-2;
 
+/// The lines of what the list leaves out, summing to `total` per period, for its last row's Nden:
+/// those over [`REST_SHARE_MIN`] of it, each at its period's mean flow every hour (the hours'
+/// profile moved that Nden by 1.7 % at most at ten places and took it 3-4 times as long,
+/// 2026-10-09); and what is left, steady.
+pub fn rest_lines<'a>(
+    contributors: impl Iterator<Item = &'a crate::update::Contributor>,
+    total: [f64; PERIODS],
+    fields: &dyn Fn(&crate::update::Contributor) -> Option<serde_json::Value>,
+) -> (Vec<Line<'a>>, [f64; PERIODS]) {
+    let (mut lines, steady) = lines(contributors, total, REST_SHARE_MIN, fields);
+    for line in &mut lines {
+        line.profile = None;
+    }
+    (lines, steady)
+}
+
 /// The lines of `contributors` summing to `total` per period: every one with traffic in its fields
 /// (or steady but for its events) over `share_min` of its period, in a fixed order; and what is
 /// left of each period's energy, steady.
-pub fn lines<'a>(
+fn lines<'a>(
     contributors: impl Iterator<Item = &'a crate::update::Contributor>,
     total: [f64; PERIODS],
     share_min: f64,

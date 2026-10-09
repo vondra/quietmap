@@ -529,10 +529,9 @@ pub fn answer(
                         .filter_map(|layer| layer.unlisted.map(|energy| energy[p]))
                         .sum()
                 });
-                let (rest_lines, rest_steady) = crate::percentiles::lines(
+                let (rest_lines, rest_steady) = crate::percentiles::rest_lines(
                     contributors[shown..].iter().chain(quiet.iter().copied()),
                     rest,
-                    crate::percentiles::REST_SHARE_MIN,
                     &fields,
                 );
                 rest_nden_sone = Some(

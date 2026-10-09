@@ -174,8 +174,9 @@ response streams the updates as lines of JSON. The receiver stands 4 m up and ga
    octave bands as its evaluated pieces arrive, the flights' as the loudest flight's Doc 29
    spectral class through the place's air) set to the moment's level, the evening 5 dB and the
    night 10 dB up, the periods by their hours. The list (30 rows, the rest in one row, the
-   aircraft in one) ranks every heard source by its own Nden, alone; partial updates rank by
-   Lden. The final update also carries the listed flights' tracks.
+   aircraft in one) ranks every heard source by its own Nden, alone; the rest row's Nden takes
+   its lines over 1 % of it at their period's mean flow. Partial updates rank by Lden. The final
+   update also carries the listed flights' tracks.
 
 ## Heatmap
 
