@@ -39,7 +39,7 @@ function PartsTable({ parts, rowName }: { parts: ContributorPart[], rowName: str
     : []
   return (
     <DetailTable
-      head={[<HoverText title={PARTS_TOOLTIP}>Made of</HoverText>, 'dB Lden', 'Share']}
+      head={[<HoverText title={PARTS_TOOLTIP}>Breakdown</HoverText>, 'dB Lden', 'Share']}
       rows={parts.map((part, k) => [
         partLabel(part.metadata, rowName),
         fmtDbValue(part.received.lden),
@@ -127,7 +127,7 @@ export function AircraftLayerDetail({ received, kinds, events, flights, onHighli
     <div className={DETAIL}>
       {shares.length > 0 && (
         <DetailTable
-          caption={<HoverText title={KINDS_TOOLTIP}>Made of</HoverText>}
+          caption={<HoverText title={KINDS_TOOLTIP}>Breakdown</HoverText>}
           rows={shares.map(([label, share]) => [label, `${Math.round(100 * share)} %`])}
         />
       )}
