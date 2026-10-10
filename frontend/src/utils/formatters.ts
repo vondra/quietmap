@@ -18,6 +18,27 @@ export function fmtSone(sone: number): string {
   return sone.toFixed(2)
 }
 
+/** Shares of a whole as whole percents adding up to 100: each rounded down, the largest
+ *  remainders up (rounded one by one, thirty rows of 1.6 % and one of 52 % would read 112 %). */
+export function wholePercents(shares: number[]): number[] {
+  const total = shares.reduce((sum, share) => sum + share, 0)
+  if (!(total > 0)) return shares.map(() => 0)
+  const exact = shares.map(share => (100 * share) / total)
+  const percents = exact.map(Math.floor)
+  const left = 100 - percents.reduce((sum, percent) => sum + percent, 0)
+  exact
+    .map((value, row) => ({ remainder: value - percents[row], row }))
+    .sort((a, b) => b.remainder - a.remainder || a.row - b.row)
+    .slice(0, left)
+    .forEach(({ row }) => { percents[row] += 1 })
+  return percents
+}
+
+/** A whole percent of the whole; under one "<1 %". */
+export function fmtPercent(percent: number): string {
+  return percent < 1 ? '<1 %' : `${percent} %`
+}
+
 /** Rounds to integer and formats with thousands separators. */
 export function fmtInt(v: number): string {
   return Math.round(v).toLocaleString('en-US')

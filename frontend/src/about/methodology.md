@@ -285,7 +285,9 @@ sone after ISO 532-1 (Zwicker), the period's received spectrum set to the moment
 evening counted 5 dB and the night 10 dB louder, as Lden counts them, and the periods
 weighed by their hours. A sound counts by how loud it is and how long it lasts: a car every
 few hours by a window adds little, a constant hum all of its loudness. Each source in the
-list shows its own Nden, as if it sounded alone.
+list shows its own Nden, as if it sounded alone, and its share of the whole: every moment's
+loudness is shared among the sources by their energy at that moment, so the shares add up to
+100 % (the sources' own Nden do not: two equal roads each sound about 0.8 of their sum).
 
 ## Standards
 

@@ -107,7 +107,7 @@ html, body {
 :root {
   /* The right-hand card column (App.tsx) and the gutter every floating
      control keeps from the viewport edge; .map-top-bar is placed against them. */
-  --map-card-column: 320px;
+  --map-card-column: 360px;
   --map-gutter: 0.75rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);

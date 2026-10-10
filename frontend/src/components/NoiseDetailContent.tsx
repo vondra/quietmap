@@ -5,7 +5,7 @@
 // Redrawn on every streamed update of the click.
 import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
 import { ldenToColor } from '../utils/noise-colors'
-import { fmtSone } from '../utils/formatters'
+import { fmtSone, wholePercents } from '../utils/formatters'
 import { HoverText } from './ui/info-tip'
 import { restSources, type HiddenRow } from './noise/rest'
 import { Chevron } from './noise/shared'
@@ -34,7 +34,8 @@ export interface NoiseDetailContentProps {
 
 const NDEN_TOOLTIP = 'How loud the place sounds over the whole day: every moment by its loudness\n'
   + 'to the ear (ISO 532-1), the evening 5 dB and the night 10 dB louder, as in Lden.\n'
-  + 'Twice the sone sounds twice as loud. Each row: the source alone.'
+  + 'Twice the sone sounds twice as loud. Each row: the source alone, and its\n'
+  + 'share of the whole.'
 
 const LDEN_TOOLTIP = 'All sources together over the day (EU Directive 2002/49): the evening\n'
   + 'counts 5 dB and the night 10 dB louder. Each period in the detailed calculation.'
@@ -62,16 +63,27 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
   // The popup's Nden of what it left out knows nothing of rows hidden here (a phone shows fewer):
   // with them the last row has no Nden.
   const restNden = hidden.length > 0 && data.rest_nden_sone != null ? null : data.rest_nden_sone
-  const shown = shownEntries.map(e => e.contributor
+  // Shares add up: the last row's is the popup's rest with the hidden rows'.
+  const restShare = data.rest_share == null
+    ? undefined
+    : hidden.reduce((sum, row: HiddenRow) => sum + ((row.contributor ? row.contributor.share : row.layer?.share) ?? 0), data.rest_share)
+  // The rows' shares in whole percents adding up to 100, once the final update carries them.
+  const shares = [
+    ...shownEntries.map(e => (e.contributor ? e.contributor.share : e.layer?.share)),
+    ...(rest != null ? [restShare] : []),
+  ]
+  const percents = shares.every(share => share != null) ? wholePercents(shares as number[]) : []
+  const shown = shownEntries.map((e, row) => e.contributor
     ? (
       <ContributorRow
         key={`${e.contributor.source_type}-${e.contributor.id}`}
         c={e.contributor}
+        percent={percents[row]}
         onHighlight={id => onHighlight(id === null ? null : `source:${id}`)}
       />
     )
-    : <AircraftLayerRow key="aircraft" layer={e.layer!} flights={data.top_flights} onHighlightFlight={onHighlight} />)
-  if (rest != null) shown.push(<RestRow key="rest" sources={rest} nden={restNden} />)
+    : <AircraftLayerRow key="aircraft" layer={e.layer!} percent={percents[row]} flights={data.top_flights} onHighlightFlight={onHighlight} />)
+  if (rest != null) shown.push(<RestRow key="rest" sources={rest} nden={restNden} percent={percents[shownEntries.length]} />)
   const sone = data.loudness?.nden_sone ?? null
 
   return (

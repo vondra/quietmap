@@ -1,10 +1,10 @@
 // One row of the popup's "what you hear" list, in columns: the source, why it is loud (how often it
-// passes, or steady), how far, and how loud it is alone over the day (its own Nden, sone); it opens to
-// its details. A contributor has one, the aircraft layer as a whole has one (it lists no
+// passes, or steady), how far, how loud it is alone over the day (its own Nden, sone) and its share
+// of the place's loudness; it opens to its details. A contributor has one, the aircraft layer as a whole has one (it lists no
 // contributors), and so has the rest of the sources, together.
 import { useState, type ReactNode } from 'react'
 import type { Contributor, LayerLevels, TopFlight } from '../../../types/noise'
-import { fmtInt, fmtSone } from '../../../utils/formatters'
+import { fmtInt, fmtPercent, fmtSone } from '../../../utils/formatters'
 import { FadingText } from '../../ui/fading-text'
 import { flightsText, heardText } from '../heard'
 import { contributorLabel, SOURCE_LABELS } from '../labels'
@@ -16,7 +16,7 @@ export function rowRank(nden: number | undefined, lden: number | null | undefine
   return nden ?? (lden == null ? -Infinity : 10 ** (lden / 10))
 }
 
-function SourceRow({ label, distance, heard, nden, onToggle, children }: {
+function SourceRow({ label, distance, heard, nden, percent, onToggle, children }: {
   label: string
   distance: string
   /** Why it is loud, short: how often it passes, or steady; none for a source without passes. */
@@ -24,6 +24,8 @@ function SourceRow({ label, distance, heard, nden, onToggle, children }: {
   /** The row's own Nden in sone, alone: how loud it is over the day (undefined before the final
    *  update, null when it cannot be told). */
   nden: number | null | undefined
+  /** Its share of the place's loudness in whole percent (undefined before the final update). */
+  percent: number | undefined
   /** Told when the row opens or closes (a tap on a phone as well as a click). */
   onToggle?: (expanded: boolean) => void
   /** The opened body; none for a row that does not open. */
@@ -45,15 +47,16 @@ function SourceRow({ label, distance, heard, nden, onToggle, children }: {
         className="w-full py-1.5 text-left enabled:cursor-pointer enabled:hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
       >
         {/* The name takes the room the passes leave it and fades out where they would meet; opened, it
-            shows whole. How far (context, grey) and the loudness (the result, bold) in their own
-            columns, right-aligned, so they read down. */}
-        <div className="grid grid-cols-[minmax(0,1fr)_3rem_2.5rem_0.75rem] gap-x-2 items-baseline text-xs">
+            shows whole. How far (context, grey), the loudness alone (the result, bold) and the share
+            of the whole (grey) in their own columns, right-aligned, so they read down. */}
+        <div className="grid grid-cols-[minmax(0,1fr)_3rem_2.5rem_2.25rem_0.75rem] gap-x-2 items-baseline text-xs">
           <span className="flex min-w-0 items-baseline gap-2">
             <FadingText whole={expanded} className="flex-1 font-medium">{label}</FadingText>
             {heard && <span className="shrink-0 tabular-nums">{heard}</span>}
           </span>
           <span className="text-right tabular-nums text-muted-foreground/60">{distance}</span>
           <span className="text-right tabular-nums font-semibold">{nden === undefined ? '…' : nden === null ? '—' : fmtSone(nden)}</span>
+          <span data-testid="row-share" className="text-right tabular-nums text-muted-foreground">{percent === undefined ? '' : fmtPercent(percent)}</span>
           {children ? <Chevron open={expanded} /> : <span />}
         </div>
       </button>
@@ -64,8 +67,9 @@ function SourceRow({ label, distance, heard, nden, onToggle, children }: {
 }
 
 /** A source's row; opening it shows the source on the map. */
-export function ContributorRow({ c, onHighlight }: {
+export function ContributorRow({ c, percent, onHighlight }: {
   c: Contributor
+  percent?: number
   onHighlight?: (id: string | null) => void
 }) {
   return (
@@ -74,6 +78,7 @@ export function ContributorRow({ c, onHighlight }: {
       distance={formatDist(c.distance_m)}
       heard={heardText(c.source_type, c.heard)}
       nden={c.nden_sone}
+      percent={percent}
       onToggle={open => onHighlight?.(open ? c.id : null)}
     >
       <ContributorDetail c={c} />
@@ -82,23 +87,25 @@ export function ContributorRow({ c, onHighlight }: {
 }
 
 /** Flights pass at every distance: the layer's row has none. */
-export function AircraftLayerRow({ layer, flights, onHighlightFlight }: {
+export function AircraftLayerRow({ layer, percent, flights, onHighlightFlight }: {
   layer: LayerLevels
+  percent?: number
   flights: TopFlight[]
   onHighlightFlight: (key: string | null) => void
 }) {
   return (
-    <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={flightsText(layer.events)} nden={layer.nden_sone}>
+    <SourceRow label={SOURCE_LABELS.aircraft} distance="" heard={flightsText(layer.events)} nden={layer.nden_sone} percent={percent}>
       <AircraftLayerDetail received={layer} kinds={layer.kinds} events={layer.events} flights={flights} onHighlightFlight={onHighlightFlight} />
     </SourceRow>
   )
 }
 
-/** The sources the list does not name, together: how many, and their Nden. */
-export function RestRow({ sources, nden }: {
+/** The sources the list does not name, together: how many, their Nden and their share. */
+export function RestRow({ sources, nden, percent }: {
   sources: number
   /** Its Nden, all of it together and steady (the final update's). */
   nden: number | null | undefined
+  percent?: number
 }) {
-  return <SourceRow label={`Rest (${fmtInt(sources)})`} distance="" heard={null} nden={nden} />
+  return <SourceRow label={`Rest (${fmtInt(sources)})`} distance="" heard={null} nden={nden} percent={percent} />
 }

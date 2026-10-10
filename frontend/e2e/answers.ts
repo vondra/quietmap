@@ -44,7 +44,10 @@ export function popupUpdate(
     total_lden: db,
     total: levels,
     sources: [{ source_type: 'road', ...levels, lden_upper: db, evaluated: 1, candidates: 1 }],
-    top_contributors: db == null ? [] : [roadContributor(db)],
+    // The final answer carries each row's share of the loudness: the street three quarters, the
+    // aircraft row (when there is one) the rest.
+    top_contributors: db == null ? [] : [{ ...roadContributor(db), ...(partial ? {} : { share: 0.75 }) }],
+    rest_share: partial ? undefined : 0,
     top_flights: [],
     // The final answer carries the loudness and the time levels.
     loudness: partial || db == null ? null : { mean_sone: { day: 12, evening: 11, night: 7.4 }, nden_sone: 15 },
@@ -128,7 +131,10 @@ export function withAircraft(update: PopupUpdate, flights: TopFlight[]): PopupUp
     ...update,
     sources: [
       ...update.sources,
-      { source_type: 'aircraft', ld: db - 1, le: db - 4, ln: db - 9, lden: db, lden_upper: db, evaluated: 40, candidates: 40 },
+      {
+        source_type: 'aircraft', ld: db - 1, le: db - 4, ln: db - 9, lden: db, lden_upper: db, evaluated: 40, candidates: 40,
+        ...(update.partial ? {} : { share: 0.25 }),
+      },
     ],
     top_flights: flights,
   }

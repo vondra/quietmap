@@ -176,7 +176,11 @@ response streams the updates as lines of JSON. The receiver stands 4 m up and ga
    takes the fallback's) set to the moment's level, the evening 5 dB and the night 10 dB up, the
    periods by their hours. The list (30 rows, the rest in one row, the aircraft in one) ranks
    every heard source by its own Nden, alone; the rest row's Nden takes its lines over 1 % of it
-   at their period's mean flow. Partial updates rank by Lden. The final update also carries the
+   at their period's mean flow. Each row also carries its share of Nden (`shares.rs`): every
+   moment's loudness shared among the sources by their A-weighted energy at that moment, the
+   flows at their period's mean, so the rows add up to the whole; a moving line's part comes
+   from the moments before it (the distributions, forward) and the loudness per energy the lines
+   after it leave (backward). Partial updates rank by Lden. The final update also carries the
    listed flights' tracks.
 
 ## Heatmap

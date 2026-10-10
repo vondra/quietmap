@@ -441,12 +441,15 @@ pub fn answer(
         let mut listed_flights = flights.loudest();
         // The time levels and the loudness come with the final answer only (the partial ones do
         // not show them).
+        let flights_heard = (flight_energy, flight_energy_lambda);
+        let flights_weather = crate::percentiles::flight_weather(&flights_heard);
         let timing = last_ring.then(|| {
-            let distributions = crate::percentiles::distributions(
+            let (lines, steady) = crate::percentiles::click_lines(
                 &selections,
-                (flight_energy, flight_energy_lambda),
+                (&flights_weather, flights_heard),
                 &fields,
             );
+            let distributions = crate::percentiles::distributions_of(&lines, steady);
             let flight_sound = crate::loudness::FlightSound {
                 energy: flight_energy,
                 spectrum_db: Some(crate::aircraft::flights::heard_spectrum(
@@ -462,11 +465,13 @@ pub fn answer(
                 loudness,
                 curves,
                 layer_curves,
+                (lines, steady),
             )
         });
         let mut layers = layer_answers(&selections);
         let mut contributors: Vec<crate::update::Contributor>;
         let mut rest_nden_sone = None;
+        let mut rest_share = None;
         let (percentiles, loudness) = match &timing {
             None => {
                 // A partial list: the loudest listed by Lden, only they copied.
@@ -478,7 +483,7 @@ pub fn answer(
                 contributors = ranked[..shown].iter().map(|&c| c.clone()).collect();
                 (None, None)
             }
-            Some((percentiles, loudness, curves, layer_curves)) => {
+            Some((percentiles, loudness, curves, layer_curves, click_lines)) => {
                 let own_curves = |layer: Layer| {
                     layer_curves
                         .iter()
@@ -517,6 +522,23 @@ pub fn answer(
                     &mut layers,
                     contributors[shown..].iter().chain(quiet.iter().copied()),
                 );
+                // Each row's share of the loudness, the rows' own Nden not adding up to it.
+                let shares = crate::shares::row_shares(
+                    &selections,
+                    &contributors[..shown],
+                    (&click_lines.0, click_lines.1),
+                    curves,
+                );
+                for (contributor, share) in contributors.iter_mut().zip(&shares.listed) {
+                    contributor.share = Some(*share);
+                }
+                rest_share = Some(shares.rest);
+                if let Some(layer) = layers
+                    .iter_mut()
+                    .find(|layer| layer.layer == Layer::Aircraft)
+                {
+                    layer.share = Some(shares.aircraft);
+                }
                 // What the list leaves out, together: its own distribution's Nden.
                 let rest: [f64; PERIODS] = std::array::from_fn(|p| {
                     layers
@@ -585,6 +607,7 @@ pub fn answer(
             percentiles,
             loudness,
             rest_nden_sone,
+            rest_share,
             aircraft_kinds,
             aircraft_events,
             lat,

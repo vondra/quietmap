@@ -7,6 +7,17 @@ use crate::update::Contributor;
 use physics::bands::energy;
 use physics::percentile::{exceeded_level_db, relative_intensity};
 
+/// The distributions of `selections` and `flights`, `fields` the contributors' displays.
+fn distributions(
+    selections: &[LayerSelection],
+    flights: ([f64; PERIODS], [f64; PERIODS]),
+    fields: &dyn Fn(&Contributor) -> Option<serde_json::Value>,
+) -> [Distribution; PERIODS] {
+    let weather = flight_weather(&flights);
+    let (lines, steady) = click_lines(selections, (&weather, flights), fields);
+    distributions_of(&lines, steady)
+}
+
 /// The time levels of `selections` with no flights and `fields` the contributors' displays.
 fn levels(
     selections: &[LayerSelection],
@@ -19,7 +30,7 @@ fn levels(
     ))
 }
 
-fn contributor(key: u64, layer: Layer, leq_db: f64, distance_m: f64) -> Contributor {
+pub(crate) fn contributor(key: u64, layer: Layer, leq_db: f64, distance_m: f64) -> Contributor {
     Contributor {
         group_key: key,
         layer,
@@ -39,10 +50,11 @@ fn contributor(key: u64, layer: Layer, leq_db: f64, distance_m: f64) -> Contribu
         lines: Vec::new(),
         heard: None,
         nden_sone: None,
+        share: None,
     }
 }
 
-fn selection(layer: Layer, contributors: Vec<Contributor>) -> LayerSelection {
+pub(crate) fn selection(layer: Layer, contributors: Vec<Contributor>) -> LayerSelection {
     let mut selection = LayerSelection::new(layer);
     for contributor in contributors {
         for p in 0..PERIODS {

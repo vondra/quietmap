@@ -139,9 +139,10 @@ fn favourable_share(mean: f64, homogeneous: f64, favourable: f64) -> f64 {
 
 /// One source whose level varies in time: its mean energy, its weather and lambda per period
 /// (infinite for a steady source, whose level follows the weather alone).
+#[derive(Clone)]
 pub struct Line<'w> {
     /// The contributor's group: the lines are added in its order, so a click repeats exactly.
-    key: u64,
+    pub(crate) key: u64,
     pub energy: [f64; PERIODS],
     weather: &'w Weather,
     lambda: [f64; PERIODS],
@@ -211,7 +212,7 @@ impl<'w> Line<'w> {
     /// The line's mean in each weather state of `period`: a piece is favourable while the place's
     /// weather u lies under its favourable share, so over the state's span of u it is favourable
     /// for the part of the span under the share (no step where a share crosses a state's middle).
-    fn state_means(&self, period: usize) -> [f64; WEATHER_STATES] {
+    pub(crate) fn state_means(&self, period: usize) -> [f64; WEATHER_STATES] {
         let states = self.weather.states(period);
         if states
             .iter()
@@ -421,7 +422,7 @@ pub fn heard(
 
 /// Equally likely weather states of the place, one for every ray of it (a night's inversion bends
 /// them alike): in state k a piece is favourable when its share exceeds (k + 0.5) / WEATHER_STATES.
-const WEATHER_STATES: usize = 10;
+pub(crate) const WEATHER_STATES: usize = 10;
 /// A line at least this dense (Kurze's lambda) holds its mean: its level stays within about 0.5 dB.
 const HOLDS_MEAN_LAMBDA: f64 = 10.0;
 /// A line held at its mean: one whose level exceeded a thousandth of the time stays a hundredth of
@@ -440,10 +441,15 @@ pub fn rest_lines<'a>(
     fields: &dyn Fn(&crate::update::Contributor) -> Option<serde_json::Value>,
 ) -> (Vec<Line<'a>>, [f64; PERIODS]) {
     let (mut lines, steady) = lines(contributors, total, REST_SHARE_MIN, fields);
-    for line in &mut lines {
+    at_mean_flow(&mut lines);
+    (lines, steady)
+}
+
+/// Every line at its period's mean flow every hour.
+pub(crate) fn at_mean_flow(lines: &mut [Line]) {
+    for line in lines {
         line.profile = None;
     }
-    (lines, steady)
 }
 
 /// The lines of `contributors` summing to `total` per period: every one with traffic in its fields
@@ -467,15 +473,20 @@ fn lines<'a>(
     (lines, steady)
 }
 
-/// The distribution of the summed level over each period of a click: every contributor of
-/// `selections` and the flights heard ([`distributions_of`]).
-pub fn distributions(
-    selections: &[LayerSelection],
-    flights: ([f64; PERIODS], [f64; PERIODS]),
+/// The flights' weather: their mean in either state.
+pub fn flight_weather(flights: &([f64; PERIODS], [f64; PERIODS])) -> Weather {
+    let mut weather = Weather::default();
+    weather.add(&flights.0, &[flights.0; 2]);
+    weather
+}
+
+/// The lines of a click, every contributor of `selections` and the flights heard (`weather` from
+/// [`flight_weather`]), and what is left of each period's energy, steady.
+pub fn click_lines<'a>(
+    selections: &'a [LayerSelection],
+    (weather, flights): (&'a Weather, ([f64; PERIODS], [f64; PERIODS])),
     fields: &dyn Fn(&crate::update::Contributor) -> Option<serde_json::Value>,
-) -> [Distribution; PERIODS] {
-    let mut flight_weather = Weather::default();
-    flight_weather.add(&flights.0, &[flights.0; 2]);
+) -> (Vec<Line<'a>>, [f64; PERIODS]) {
     let total: [f64; PERIODS] =
         std::array::from_fn(|p| selections.iter().map(|s| s.answer_energy()[p]).sum::<f64>());
     let (mut lines, mut steady) = lines(
@@ -486,12 +497,12 @@ pub fn distributions(
         FLUCTUATING_SHARE_MIN,
         fields,
     );
-    let flights_line = Line::flights(&flight_weather, flights);
+    let flights_line = Line::flights(weather, flights);
     for (steady, energy) in steady.iter_mut().zip(flights_line.energy) {
         *steady = (*steady - energy).max(0.0);
     }
     lines.push(flights_line);
-    distributions_of(&lines, steady)
+    (lines, steady)
 }
 
 /// The distribution of the summed level over each period: for every hour of it (the roads' flows
@@ -514,41 +525,13 @@ pub fn distributions_of(lines: &[Line], steady: [f64; PERIODS]) -> [Distribution
             .into_par_iter()
             .map(|task| {
                 let (slot, state) = (task / WEATHER_STATES, task % WEATHER_STATES);
-                let mut floor = steady[p];
+                let moment = moment(lines, &means, steady[p], (p, slot, state));
                 let mut moving = Distribution::empty();
                 moving.silent = 1.0;
-                let mut held = Vec::new();
-                for (line, means) in lines.iter().zip(&means) {
-                    if line.energy[p] <= 0.0 {
-                        continue;
-                    }
-                    let factor = line
-                        .profile
-                        .map_or(1.0, |profile| hour_factor(profile, p, slot));
-                    let mean = means[state] * factor;
-                    let lambda = line.lambda[p] * factor;
-                    match line.duty.map(|duty| duty[p]) {
-                        Some(duty) if duty > 0.0 => {
-                            moving = moving.with_line(&line_values(mean, 0.0, Some(duty)))
-                        }
-                        Some(_) => {}
-                        None if lambda >= HOLDS_MEAN_LAMBDA => floor += mean,
-                        None => held.push((mean, lambda)),
-                    }
+                for (_, values) in &moment.moving {
+                    moving = moving.with_line(values);
                 }
-                // A line moves the level unless its level exceeded a thousandth of the time stays
-                // a hundredth of the steady energy: then it holds its mean in it.
-                let steady_energy = floor + held.iter().map(|(mean, _)| mean).sum::<f64>();
-                for (mean, lambda) in held {
-                    if mean * relative_intensity(lambda, 1.0 - HELD_EXCEEDED)
-                        < HELD_SHARE * steady_energy
-                    {
-                        floor += mean;
-                    } else {
-                        moving = moving.with_line(&line_values(mean, lambda, None));
-                    }
-                }
-                moving.over(floor)
+                moving.over(moment.floor)
             })
             .collect();
         let mut mixture = Distribution::empty();
@@ -557,6 +540,64 @@ pub fn distributions_of(lines: &[Line], steady: [f64; PERIODS]) -> [Distribution
         }
         mixture
     })
+}
+
+/// One hour and weather state of a period: the energy that holds steady (`steady` and the lines
+/// that hold their mean, each such line's part by its index) and the lines that move the level,
+/// with their values, the events first.
+pub(crate) struct Moment {
+    pub floor: f64,
+    pub holding: Vec<(usize, f64)>,
+    pub moving: Vec<(usize, Vec<(f64, f64)>)>,
+}
+
+/// The moment of `lines` (`means` their state means) in the `slot`th hour of `period` and weather
+/// `state`.
+pub(crate) fn moment(
+    lines: &[Line],
+    means: &[[f64; WEATHER_STATES]],
+    steady: f64,
+    (period, slot, state): (usize, usize, usize),
+) -> Moment {
+    let mut moment = Moment {
+        floor: steady,
+        holding: Vec::new(),
+        moving: Vec::new(),
+    };
+    let mut held = Vec::new();
+    for (index, (line, means)) in lines.iter().zip(means).enumerate() {
+        if line.energy[period] <= 0.0 {
+            continue;
+        }
+        let factor = line
+            .profile
+            .map_or(1.0, |profile| hour_factor(profile, period, slot));
+        let mean = means[state] * factor;
+        let lambda = line.lambda[period] * factor;
+        match line.duty.map(|duty| duty[period]) {
+            Some(duty) if duty > 0.0 => moment
+                .moving
+                .push((index, line_values(mean, 0.0, Some(duty)))),
+            Some(_) => {}
+            None if lambda >= HOLDS_MEAN_LAMBDA => {
+                moment.floor += mean;
+                moment.holding.push((index, mean));
+            }
+            None => held.push((index, mean, lambda)),
+        }
+    }
+    // A line moves the level unless its level exceeded a thousandth of the time stays a hundredth
+    // of the steady energy: then it holds its mean in it.
+    let steady_energy = moment.floor + held.iter().map(|(_, mean, _)| mean).sum::<f64>();
+    for (index, mean, lambda) in held {
+        if mean * relative_intensity(lambda, 1.0 - HELD_EXCEEDED) < HELD_SHARE * steady_energy {
+            moment.floor += mean;
+            moment.holding.push((index, mean));
+        } else {
+            moment.moving.push((index, line_values(mean, lambda, None)));
+        }
+    }
+    moment
 }
 
 impl Percentiles {
@@ -574,4 +615,4 @@ impl Percentiles {
 
 #[cfg(test)]
 #[path = "percentiles_tests.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -27,6 +27,8 @@ pub struct LayerAnswer {
     /// The aircraft layer's own Nden, its flights and its ground operations alone (the final
     /// update's): what ranks it, one row, in the visitor's list.
     pub nden_sone: Option<f64>,
+    /// The aircraft row's share of the click's loudness (the final update's).
+    pub share: Option<f64>,
     /// A ground layer's energy beyond the contributors sent: the list's last row.
     pub unlisted: Option<[f64; PERIODS]>,
     /// How many contributors that energy is of.
@@ -53,6 +55,8 @@ pub struct Contributor {
     pub heard: Option<crate::percentiles::Heard>,
     /// Its own Nden, alone (the final update's): what ranks it in the visitor's list.
     pub nden_sone: Option<f64>,
+    /// Its share of the click's loudness (the final update's).
+    pub share: Option<f64>,
 }
 
 /// Pieces a contributor keeps for the map.
@@ -80,6 +84,8 @@ pub struct Update<'u> {
     pub loudness: Option<crate::loudness::Loudness>,
     /// The Nden of everything the list leaves out, together and steady (the final update's).
     pub rest_nden_sone: Option<f64>,
+    /// Its share of the click's loudness (the final update's).
+    pub rest_share: Option<f64>,
     /// What the aircraft layer is made of, Lden energies (final update): airliners, regional and
     /// business jets, propeller aircraft, helicopters, airport ground operations.
     pub aircraft_kinds: Option<[f64; 5]>,
@@ -117,6 +123,7 @@ pub fn layer_answers(selections: &[LayerSelection]) -> Vec<LayerAnswer> {
             evaluated: selection.evaluated,
             candidates: selection.covered + selection.pending.len(),
             nden_sone: None,
+            share: None,
             unlisted: None,
             unlisted_sources: 0,
         })
@@ -203,6 +210,7 @@ pub fn empty_answer(
         percentiles: None,
         loudness: None,
         rest_nden_sone: None,
+        rest_share: None,
         aircraft_kinds: None,
         aircraft_events: None,
         lat,

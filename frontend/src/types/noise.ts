@@ -35,6 +35,8 @@ export interface LayerLevels extends PeriodLevels {
   /** The aircraft layer alone, its flights and its airports' ground operations: its Nden in sone
    *  (the final update's). */
   nden_sone?: number
+  /** The aircraft layer's share of the place's loudness, a fraction (the final update's). */
+  share?: number
   /** What the popup leaves out of a ground layer: its levels, and how many contributors they are. */
   unlisted?: PeriodLevels
   unlisted_sources?: number
@@ -68,6 +70,9 @@ export interface Contributor {
   received: PeriodLevels
   /** It alone: its Nden in sone (the final update's), as the list ranks it. */
   nden_sone?: number
+  /** Its share of the place's loudness, a fraction (the final update's): every moment's loudness
+   *  shared by the sources' energy then, so the rows add up to the whole. */
+  share?: number
   metadata: ContributorMetadata | null
   /** What the map draws of it, lines of [lat, lon] (one point for a point source): all of it within
    *  the reach in the final update, its loudest pieces before. */
@@ -240,6 +245,8 @@ export interface PopupUpdate {
   loudness?: PopupLoudness | null
   /** Everything the list leaves out, together and steady: its Nden in sone (the final update's). */
   rest_nden_sone?: number | null
+  /** Its share of the place's loudness, a fraction (the final update's). */
+  rest_share?: number | null
   /** The segments view's pieces, when asked for. */
   pieces?: PopupPiece[]
   stats: PopupStats

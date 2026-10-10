@@ -75,6 +75,11 @@ fn sone(value: f64) -> f64 {
     (value * scale).round() / scale
 }
 
+/// A share of the click's loudness to a tenth of a percent.
+fn share(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
+}
+
 /// What flies over the receiver: per band (maximum level at or above) the flights a day and at
 /// night, their mean height above the ground there and type (none without flights); the
 /// helicopters a day above the lowest band.
@@ -107,6 +112,9 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         // The aircraft layer is one row of the list: its own Nden ranks it there.
         if let Some(own) = layer.nden_sone {
             object.insert("nden_sone".into(), json!(sone(own)));
+        }
+        if let Some(part) = layer.share {
+            object.insert("share".into(), json!(share(part)));
         }
         // What the list leaves out of a ground layer: its last row.
         if let Some(energy) = layer.unlisted {
@@ -163,6 +171,9 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         object.insert("received".into(), Value::Object(received));
         if let Some(own) = contributor.nden_sone {
             object.insert("nden_sone".into(), json!(sone(own)));
+        }
+        if let Some(part) = contributor.share {
+            object.insert("share".into(), json!(share(part)));
         }
         object.insert("metadata".into(), display);
         if let Some(heard) = contributor.heard {
@@ -351,6 +362,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 "nden_sone": sone(loudness.nden_sone)})
         }),
         "rest_nden_sone": update.rest_nden_sone.map(sone),
+        "rest_share": update.rest_share.map(share),
         "top_contributors": contributors,
         "top_flights": flights,
         "stats": {

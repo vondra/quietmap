@@ -13,7 +13,7 @@ const kind = (name: string): FilterSpecification => ['==', ['get', 'kind'], name
 /** Below this width the popup is the bottom sheet over the lower half of the map. */
 const PHONE_WIDTH_PX = 768
 /** The desktop popup's column on the right: its width and two gutters. */
-const CARD_COLUMN_PX = 320 + 2 * 12
+const CARD_COLUMN_PX = 360 + 2 * 12
 /** The closest the map comes to frame an opened piece: a street's width stays readable. */
 const OPENED_PIECE_MAX_ZOOM = 18
 
