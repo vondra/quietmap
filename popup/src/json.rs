@@ -376,7 +376,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 listed
             }).collect::<Vec<_>>(),
             "received": received,
-            "path": path_account(&piece.path, update.reflection_db),
+            "path": path_account(&piece.path, &piece.energy, update.reflection_db),
             "emission": emission,
             "crossings": piece.crossings.iter().map(|(distance_m, height_m, footprint)| {
                 json!([
