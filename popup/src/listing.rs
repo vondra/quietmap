@@ -9,6 +9,7 @@ use crate::candidates::{Attributes, Candidate};
 use crate::evaluate::{Path, Received, Receiver, Scratch, period_sums, source_rays, trace};
 use crate::selection::LayerSelection;
 use physics::bands::{BANDS, PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy, lden_energy};
+use physics::ray::containing_footprints;
 
 /// Ground samples a listed piece's trace keeps.
 pub const PROFILE_POINTS: usize = 48;
@@ -219,21 +220,27 @@ pub fn list_source(
                 &mut scratch,
                 &mut |ray| {
                     let terms = &ray.terms;
-                    let profile = profiled.then(|| RayProfile {
-                        ground: sampled(ray.profile),
-                        source_altitude_m: ray.profile.ground_m.first().copied().unwrap_or(0.0)
-                            + source.height_m,
-                        walls: ray
-                            .crossings
-                            .iter()
-                            .map(|wall| {
-                                (
-                                    wall.t * ray.profile.horizontal_m,
-                                    wall.height_m,
-                                    wall.building,
-                                )
-                            })
-                            .collect(),
+                    let profile = profiled.then(|| {
+                        let mut own_walls = Vec::new();
+                        containing_footprints(ray.crossings, source.footprint_id, &mut own_walls);
+                        RayProfile {
+                            ground: sampled(ray.profile),
+                            source_altitude_m: ray.profile.ground_m.first().copied().unwrap_or(0.0)
+                                + source.height_m,
+                            // The walls that screen it: not those of the building it stands in.
+                            walls: ray
+                                .crossings
+                                .iter()
+                                .filter(|wall| own_walls.binary_search(&wall.footprint_id).is_err())
+                                .map(|wall| {
+                                    (
+                                        wall.t * ray.profile.horizontal_m,
+                                        wall.height_m,
+                                        wall.building,
+                                    )
+                                })
+                                .collect(),
+                        }
                     });
                     piece.rays.push(ListedRay {
                         profile,

@@ -166,6 +166,37 @@ fn attenuation_energy(attenuation_db: f64) -> f64 {
     (-attenuation_db * (std::f64::consts::LN_10 / 10.0)).exp()
 }
 
+/// The footprints containing a building's source, sorted, into `out`: its own (`own_footprint`, 0
+/// for a source that is no building's: none) and every footprint the ray crosses an odd number of
+/// times (the receiver stands outside every enclosed footprint, so the ray leaves it once more than
+/// it enters). They never screen the source.
+pub fn containing_footprints(crossings: &[Crossing], own_footprint: u64, out: &mut Vec<u64>) {
+    out.clear();
+    if own_footprint == 0 {
+        return;
+    }
+    out.extend(
+        crossings
+            .iter()
+            .filter(|c| c.building)
+            .map(|c| c.footprint_id),
+    );
+    out.sort_unstable();
+    let (mut odd, mut start) = (0, 0);
+    while start < out.len() {
+        let id = out[start];
+        let end = start + out[start..].partition_point(|&other| other == id);
+        if (end - start) % 2 == 1 {
+            out[odd] = id;
+            odd += 1;
+        }
+        start = end;
+    }
+    out.truncate(odd);
+    out.push(own_footprint);
+    out.sort_unstable();
+}
+
 impl PathBuffers {
     fn path<'a>(
         &'a self,
@@ -234,29 +265,7 @@ impl PathBuffers {
         // footprint, so a footprint the ray crosses an odd number of times contains the source:
         // it is the source's own and does not screen it.
         let mut containing = std::mem::take(&mut self.containing);
-        containing.clear();
-        if ends.own_footprint != 0 {
-            containing.extend(
-                crossings
-                    .iter()
-                    .filter(|c| c.building)
-                    .map(|c| c.footprint_id),
-            );
-            containing.sort_unstable();
-            let (mut odd, mut start) = (0, 0);
-            while start < containing.len() {
-                let id = containing[start];
-                let end = start + containing[start..].partition_point(|&other| other == id);
-                if (end - start) % 2 == 1 {
-                    containing[odd] = id;
-                    odd += 1;
-                }
-                start = end;
-            }
-            containing.truncate(odd);
-            containing.push(ends.own_footprint);
-            containing.sort_unstable();
-        }
+        containing_footprints(crossings, ends.own_footprint, &mut containing);
         for crossing in crossings
             .iter()
             .filter(|c| containing.binary_search(&c.footprint_id).is_err())

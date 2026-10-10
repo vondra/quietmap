@@ -6,7 +6,7 @@
 // arrives opens in its row.
 import type { ReactNode } from 'react'
 import type { BuildingAnswer, PopupUpdate } from '../../types/noise'
-import { fmtDbValue as level, fmtSone } from '../../utils/formatters'
+import { fmtDbValue as level, fmtInt, fmtSone } from '../../utils/formatters'
 import { SOURCE_LABELS } from '../noise/labels'
 import { CAPTION, compassPoint, DETAIL_TEXT, DetailTable, lineRow } from '../noise/shared'
 import { REFLECTIONS } from '../noise/source/PathTable'
@@ -27,6 +27,10 @@ const PERIODS_EXPLAINED = 'Each period\'s level, its share of Lden (the evening 
   + 'night 10 dB louder) and how loud it sounds on average (ISO 532-1)'
 
 const PERCENTILES_EXPLAINED = 'L5, L10, L50, L90: the level exceeded 5, 10, 50 and 90 % of the period\'s time'
+
+const COMPUTED_EXPLAINED = 'Each layer\'s segments within reach (flight boxes for aircraft) and how many\n'
+  + 'were computed in full, the loudest first; what the others could add is bounded\n'
+  + 'or estimated from a sample, at most 0.1 dB'
 
 const WEATHER_EXPLAINED = 'How often the wind or an inversion bends sound down to the ground and\n'
   + 'carries it further (CNOSSOS-EU\'s favorable conditions), for sound\n'
@@ -105,17 +109,27 @@ export default function CalculationDetails({ data }: { data: PopupUpdate }) {
       </Section>
 
       <Section title="Layers" hint="Each layer's levels and its share of Lden">
-        <DetailTable
-          head={['', 'Day', 'Evening', 'Night', 'Lden', 'Share']}
-          rows={layers.map(layer => [
-            SOURCE_LABELS[layer.source_type] ?? layer.source_type,
-            level(layer.ld),
-            level(layer.le),
-            level(layer.ln),
-            level(layer.lden),
-            share(layer.lden),
-          ])}
-        />
+        <div className="space-y-2">
+          <DetailTable
+            head={['', 'Day', 'Evening', 'Night', 'Lden', 'Share']}
+            rows={layers.map(layer => [
+              SOURCE_LABELS[layer.source_type] ?? layer.source_type,
+              level(layer.ld),
+              level(layer.le),
+              level(layer.ln),
+              level(layer.lden),
+              share(layer.lden),
+            ])}
+          />
+          <DetailTable
+            head={[<HoverText title={COMPUTED_EXPLAINED}>Segments</HoverText>, 'Computed', 'Within reach']}
+            rows={layers.map(layer => [
+              SOURCE_LABELS[layer.source_type] ?? layer.source_type,
+              fmtInt(layer.evaluated),
+              fmtInt(layer.candidates),
+            ])}
+          />
+        </div>
       </Section>
 
       {data.weather && (

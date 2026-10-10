@@ -25,7 +25,7 @@ group ids) adds how all of it arrives and its loudest pieces with their data and
 (`--piece`); the benchmark's `--exact` is never passed.
 
 - `400` with `{"error"}`: `lat` must be a number within ±85.05, `lon` a number (wrapped to
-  -180..180), `year` one of `QM_YEARS` (the first when absent), `source` one to eight ids of 16
+  -180..180), `year` one of `QM_YEARS` (the first when absent), `source` one to 32 ids of 16
   lowercase hex digits when given, `piece` 0 to 23 with a source.
 - `503` with `{"error"}` and `Retry-After`: every slot computes and the queue is full. A few clicks
   compute at once (each uses every core); two per slot may wait.
