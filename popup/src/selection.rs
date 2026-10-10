@@ -11,7 +11,7 @@
 //! same every time.
 
 use crate::candidates::{Attributes, Candidate};
-use crate::evaluate::{Bands, Received, Receiver, Scratch, period_sums, received_bands};
+use crate::evaluate::{Bands, Path, Received, Receiver, Scratch, period_sums, received_bands};
 use crate::listing::EvaluatedPiece;
 use crate::update::{CONTRIBUTOR_PIECES, Contributor};
 use physics::bands::{BANDS, PERIODS};
@@ -131,7 +131,7 @@ impl LayerSelection {
             *total += value;
         }
         self.add_spectrum(&received.bands);
-        self.add_contributor(candidate, energy, &received.states);
+        self.add_contributor(candidate, received, 1.0);
         if keep_pieces {
             self.pieces
                 .push(EvaluatedPiece::of(candidate, attributes, energy));
@@ -146,12 +146,13 @@ impl LayerSelection {
         }
     }
 
-    fn add_contributor(
-        &mut self,
-        candidate: &Candidate,
-        energy: [f64; PERIODS],
-        states: &[[f64; PERIODS]; 2],
-    ) {
+    /// Adds `weight` times one evaluated piece to its contributor group.
+    fn add_contributor(&mut self, candidate: &Candidate, received: &Received, weight: f64) {
+        let energy = period_sums(&received.bands).map(|value| weight * value);
+        let states = received
+            .path
+            .boundary
+            .map(|state| state.map(|value| weight * value));
         let contributor = self
             .contributors
             .entry(candidate.group_key)
@@ -167,11 +168,13 @@ impl LayerSelection {
                 heard: None,
                 nden_sone: None,
                 share: None,
+                path: Path::default(),
             });
         for (total, value) in contributor.energy.iter_mut().zip(energy) {
             *total += value;
         }
-        contributor.weather.add(&energy, states);
+        contributor.weather.add(&energy, &states);
+        contributor.path.add(&received.path, weight);
         contributor.distance_m = contributor.distance_m.min(candidate.distance_m);
         contributor
             .pieces
@@ -417,13 +420,7 @@ fn sample_rest(
                             .bands
                             .map(|period| period.map(|band| band * weight)),
                     );
-                    selection.add_contributor(
-                        &rest[index],
-                        energy.map(|value| value * weight),
-                        &received
-                            .states
-                            .map(|state| state.map(|value| value * weight)),
-                    );
+                    selection.add_contributor(&rest[index], received, weight);
                     if keep_pieces {
                         selection.pieces.push(EvaluatedPiece::of(
                             &rest[index],

@@ -57,6 +57,8 @@ pub struct Contributor {
     pub nden_sone: Option<f64>,
     /// Its share of the click's loudness (the final update's).
     pub share: Option<f64>,
+    /// How its sound reaches the receiver, summed over its evaluated pieces.
+    pub path: crate::evaluate::Path,
 }
 
 /// Pieces a contributor keeps for the map.

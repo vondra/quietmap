@@ -1,6 +1,6 @@
 //! The full physics of one source at the receiver: a line piece through the point-sum quadrature,
 //! each node on its own ray, or a point on one ray; received A-weighted energy per period and band,
-//! including the receiver reflection.
+//! including the receiver reflection, and how it got there (its path account).
 
 use crate::candidates::Candidate;
 use crate::candidates::SourceAttribute;
@@ -10,7 +10,7 @@ use physics::bands::{BANDS, PERIODS, energy};
 use physics::bound::POINT_DIVERGENCE_OFFSET_DB;
 use physics::line::{LinePieceGeometry, LineQuadratureNode, SkylineArc, line_quadrature_nodes};
 use physics::profile::Profile;
-use physics::ray::{Crossing, RayEnds, RayScratch, RayTerms, Transfer, ray_terms, ray_transfer};
+use physics::ray::{Crossing, RayEnds, RayScratch, RayTerms, ray_terms};
 use physics::weather::PlaceWeather;
 
 /// What every source of one click shares.
@@ -95,11 +95,41 @@ pub fn trace(
 /// Received A-weighted energy per period and octave band.
 pub type Bands = [[f64; BANDS]; PERIODS];
 
-/// What one source delivers: per period and band, and per meteorological state (homogeneous,
-/// favourable) and period summed over the bands, for the time the source is heard.
+/// What one source delivers: per period and band, and how its sound got there.
 pub struct Received {
     pub bands: Bands,
-    pub states: [[f64; PERIODS]; 2],
+    pub path: Path,
+}
+
+/// How a source's sound reaches the receiver, its rays' A-weighted energy per period summed after
+/// each term (the façades' reflection in all): over distance alone, with the air's absorption, with
+/// the screening of each meteorological state (homogeneous, favourable), and with its ground too:
+/// the boundary, whose states the weather mixes into what is received. Each term's dB is the ratio
+/// of two sums, so the terms add up from the free field to the level. `favourable` is the calm
+/// boundary's energy times each ray's favourable share: over it, the share of the time the weather
+/// bends the source's sound down.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Path {
+    pub free: [f64; PERIODS],
+    pub air: [f64; PERIODS],
+    pub screened: [[f64; PERIODS]; 2],
+    pub boundary: [[f64; PERIODS]; 2],
+    pub favourable: [f64; PERIODS],
+}
+
+impl Path {
+    /// The path `weight` times, added (a sampled piece stands for its share of the estimate).
+    pub fn add(&mut self, other: &Path, weight: f64) {
+        for period in 0..PERIODS {
+            self.free[period] += weight * other.free[period];
+            self.air[period] += weight * other.air[period];
+            self.favourable[period] += weight * other.favourable[period];
+            for state in 0..2 {
+                self.screened[state][period] += weight * other.screened[state][period];
+                self.boundary[state][period] += weight * other.boundary[state][period];
+            }
+        }
+    }
 }
 
 /// The per-period sums of band energies.
@@ -118,32 +148,45 @@ pub fn received_energy(
         .map(|received| period_sums(&received.bands))
 }
 
-/// Adds `weight` times one ray's transfer of `emission` to `received`.
+/// Adds `weight` times what one ray with its `terms` delivers of `emission` to `received`.
 fn add_ray(
     received: &mut Received,
     emission: &[[f64; BANDS]; PERIODS],
-    transfer: &Transfer,
+    terms: &RayTerms,
     weight: f64,
 ) {
-    for period in 0..PERIODS {
-        for (band, power) in emission[period].iter().enumerate() {
+    let air = terms.air_db.map(|db| energy(-db));
+    let screened = [0, 1].map(|state| {
+        std::array::from_fn::<f64, BANDS, _>(|band| {
+            air[band] * energy(-terms.boundaries[state].without_ground_db[band])
+        })
+    });
+    let transfer = &terms.transfer;
+    let path = &mut received.path;
+    for (period, powers) in emission.iter().enumerate() {
+        for (band, power) in powers.iter().enumerate() {
             let power = weight * power;
             received.bands[period][band] += power * transfer.periods[period][band];
-            for (state, total) in received.states.iter_mut().enumerate() {
-                total[period] += power * transfer.states[state][band];
+            path.free[period] += power;
+            path.air[period] += power * air[band];
+            for (state, (screened, boundary)) in screened.iter().zip(&transfer.states).enumerate() {
+                path.screened[state][period] += power * screened[band];
+                path.boundary[state][period] += power * boundary[band];
             }
+            path.favourable[period] +=
+                power * transfer.states[0][band] * terms.favourable_probability[period];
         }
     }
 }
 
 /// One ray of a source at the receiver: the point it leaves from (click metres), the in-plane
 /// angle it stands for on a line piece (0 for a point), its weight (the divergence, for a line the
-/// angle times the line's, and the receiver reflection) and its transfer.
+/// angle times the line's, and the receiver reflection) and its terms.
 pub struct SourceRay {
     pub from_m: [f64; 2],
     pub angle_rad: f64,
     pub weight: f64,
-    pub transfer: Transfer,
+    pub terms: RayTerms,
 }
 
 /// Every ray of one candidate at the receiver: a point's one, a line piece's quadrature nodes.
@@ -158,7 +201,7 @@ pub fn source_rays(
     let ends = ray_ends(receiver, source);
     let [a, b] = candidate.ends_m;
     if !candidate.line {
-        let transfer = ray(receiver, a, true, &ends, scratch)?;
+        let terms = ray(receiver, a, true, &ends, scratch)?;
         let distance = candidate
             .distance_m
             .max(source.exclusion_radius_m)
@@ -169,7 +212,7 @@ pub fn source_rays(
             from_m: a,
             angle_rad: 0.0,
             weight: divergence * reflection,
-            transfer,
+            terms,
         });
         return Ok(());
     }
@@ -207,12 +250,12 @@ pub fn source_rays(
             a[0] + fraction * (b[0] - a[0]),
             a[1] + fraction * (b[1] - a[1]),
         ];
-        let transfer = ray(receiver, point, node.obstacles_on_ray, &ends, scratch)?;
+        let terms = ray(receiver, point, node.obstacles_on_ray, &ends, scratch)?;
         visit(&SourceRay {
             from_m: point,
             angle_rad: node.weight_rad,
             weight: node.weight_rad * divergence * reflection,
-            transfer,
+            terms,
         });
     }
     scratch.nodes = nodes;
@@ -228,10 +271,10 @@ pub fn received_bands(
 ) -> Result<Received, String> {
     let mut received = Received {
         bands: [[0.0; BANDS]; PERIODS],
-        states: [[0.0; PERIODS]; 2],
+        path: Path::default(),
     };
     source_rays(receiver, candidate, source, scratch, &mut |ray| {
-        add_ray(&mut received, &source.energy, &ray.transfer, ray.weight)
+        add_ray(&mut received, &source.energy, &ray.terms, ray.weight)
     })?;
     Ok(received)
 }
@@ -243,14 +286,14 @@ fn without_own_walls(receiver: &Receiver, crossings: &mut Vec<Crossing>) {
     }
 }
 
-/// The transfer of one ray from `point` to the receiver.
+/// The terms of one ray from `point` to the receiver.
 fn ray(
     receiver: &Receiver,
     point: [f64; 2],
     obstacles_on_ray: bool,
     ends: &RayEnds,
     scratch: &mut Scratch,
-) -> Result<Transfer, String> {
+) -> Result<RayTerms, String> {
     receiver
         .ground
         .fill_profile(point, receiver.position, &mut scratch.profile)?;
@@ -267,7 +310,7 @@ fn ray(
             .favourable
             .at(period, receiver.azimuth(point))
     });
-    Ok(ray_transfer(
+    Ok(ray_terms(
         &scratch.profile,
         &scratch.crossings,
         ends,

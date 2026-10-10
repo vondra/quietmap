@@ -1,6 +1,6 @@
 // The opened body of a source row, a block apart from the next: a contributor's class and the facts
-// of its layer, then its levels by period; the aircraft layer's makeup, its levels, the flights of a
-// day by their peak level here and its loudest flights.
+// of its layer, its sound path, then its levels by period; the aircraft layer's
+// makeup, its levels, the flights of a day by their peak level here and its loudest flights.
 import type { AircraftEvents, AircraftKind, Contributor, PeriodLevels, TopFlight } from '../../../types/noise'
 import { fmtCount, fmtDbValue } from '../../../utils/formatters'
 import { FadingText } from '../../ui/fading-text'
@@ -9,6 +9,7 @@ import { aircraftEventRows } from '../aircraft-events'
 import { aircraftKindShares, contributorClass, labelNamesClass, subtypeLabel } from '../labels'
 import { CAPTION, COLUMN_NAME, DETAIL_TEXT, DetailTable, lineRow } from '../shared'
 import { MetadataRows } from './MetadataRows'
+import { PathTable } from './PathTable'
 import { TopFlightsTable } from './TopFlightsTable'
 
 const DETAIL = `mb-2 ml-2 mr-5 space-y-2 ${DETAIL_TEXT}`
@@ -37,6 +38,7 @@ export function ContributorDetail({ c }: { c: Contributor }) {
         {!labelNamesClass(c) && <div>{subtypeLabel(c.source_type, contributorClass(c))}</div>}
         <MetadataRows c={c} />
       </div>
+      {c.path && <PathTable path={c.path} />}
       <LevelsTable received={c.received} />
     </div>
   )

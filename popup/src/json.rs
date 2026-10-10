@@ -75,6 +75,38 @@ fn sone(value: f64) -> f64 {
     (value * scale).round() / scale
 }
 
+/// How a contributor's sound reaches the click, in Lden: its level over distance alone (the
+/// façades' reflection apart), the air's absorption, the screening and the ground in calm air and
+/// bent down by the weather (dB, each pair adding up to its state's level here, the façades' last),
+/// those two levels, and the percent of the day, evening and night the weather bends it down.
+fn path_account(path: &crate::evaluate::Path, reflection_db: f64) -> Value {
+    let facades = physics::bands::energy(reflection_db);
+    let lden = |energies: &[f64; PERIODS]| lden_energy(energies) / facades;
+    let (free, air) = (lden(&path.free), lden(&path.air));
+    let screened = path.screened.map(|state| lden(&state));
+    let boundary = path.boundary.map(|state| lden(&state));
+    let step = |to: f64, from: f64| {
+        if to > 0.0 && from > 0.0 {
+            json!((100.0 * (to / from).log10()).round() / 10.0)
+        } else {
+            Value::Null
+        }
+    };
+    let percent = |period: usize| {
+        let calm = path.boundary[0][period];
+        (calm > 0.0).then(|| (100.0 * path.favourable[period] / calm).round())
+    };
+    json!({
+        "free_lden": level(free),
+        "air_db": step(air, free),
+        "screening_db": [step(screened[0], air), step(screened[1], air)],
+        "ground_db": [step(boundary[0], screened[0]), step(boundary[1], screened[1])],
+        "facades_db": reflection_db,
+        "lden": path.boundary.map(|state| lden(&state) * facades).map(level),
+        "bent_percent": [percent(0), percent(1), percent(2)],
+    })
+}
+
 /// A share of the click's loudness to a tenth of a percent.
 fn share(value: f64) -> f64 {
     (value * 1000.0).round() / 1000.0
@@ -175,6 +207,10 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         if let Some(part) = contributor.share {
             object.insert("share".into(), json!(share(part)));
         }
+        object.insert(
+            "path".into(),
+            path_account(&contributor.path, update.reflection_db),
+        );
         object.insert("metadata".into(), display);
         if let Some(heard) = contributor.heard {
             let rate = |value: f64| (value * 100.0).round() / 100.0;
@@ -270,11 +306,12 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             "rays": piece.rays.iter().map(|ray| {
                 let (lat, lon) = update.frame.to_mercator(ray.from_m).to_degrees();
                 let tenth = |value: f64| (value * 10.0).round() / 10.0;
-                let terms = ray.terms.map(|t| json!([
+                let t = &ray.terms;
+                let terms = json!([
                     tenth(t.boundary_db[0]), tenth(t.boundary_db[1]),
                     tenth(t.without_ground_db[0]), tenth(t.without_ground_db[1]),
                     tenth(t.air_db), t.slant_m.round(),
-                ]));
+                ]);
                 json!([(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6,
                     (ray.angle_rad * 1e6).round() / 1e6, lden(&ray.energy), terms])
             }).collect::<Vec<_>>(),

@@ -155,8 +155,11 @@ response streams the updates as lines of JSON. The receiver stands 4 m up and ga
    (Hansen-Hurwitz, 512 to 32,768 draws, until two standard errors are within 0.05 dB, seeded by
    the click, so a click always answers the same): the usual path in cities.
 3. Lines through the point-sum quadrature; aircraft boxes by the click-time equation.
-4. One parallel pool over all layers' pieces; totals first. The detailed calculation's pieces
-   and rays come from a second run of the same click (`--pieces 8`).
+4. One parallel pool over all layers' pieces; totals first. Each contributor also sums its
+   rays' energy after each term (distance alone, air, screening, then ground, in either
+   meteorological state): its sound path, whose terms add up to its level. The detailed
+   calculation's pieces and rays come from a second run of the same click (`--pieces 8`), each
+   ray with the terms it was summed with.
 5. A click inside a building answers at its loudest CNOSSOS-EU 2.8 facade receiver, without
    indoor attenuation: after the first read, the eleven sources with the greatest bound at any
    facade are evaluated at every facade, the highest Lden wins, and the ring loop answers there;

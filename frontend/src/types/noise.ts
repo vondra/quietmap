@@ -56,6 +56,20 @@ export interface LayerLevels extends PeriodLevels {
  *  wrote them. Layers and fields keep being added, so every field is read defensively. */
 export type ContributorMetadata = Record<string, unknown>
 
+/** How a contributor's sound reaches the point, summed over its rays (Lden): its level over the
+ *  distance with nothing in the way (the façades apart), what the air takes (dB), the screening and
+ *  the ground in calm air and bent down by the weather, the façades' reflection, the level here in
+ *  either state, and the percent of the day, evening and night the weather bends it down. */
+export interface SourcePath {
+  free_lden: number | null
+  air_db: number | null
+  screening_db: [number | null, number | null]
+  ground_db: [number | null, number | null]
+  facades_db: number
+  lden: [number | null, number | null]
+  bent_percent: [number | null, number | null, number | null]
+}
+
 /** One contributor: sources sharing a name and class (a street, a railway line, a site). */
 export interface Contributor {
   /** Stable across the streamed updates of one click. */
@@ -73,6 +87,7 @@ export interface Contributor {
   /** Its share of the place's loudness, a fraction (the final update's): every moment's loudness
    *  shared by the sources' energy then, so the rows add up to the whole. */
   share?: number
+  path?: SourcePath
   metadata: ContributorMetadata | null
   /** What the map draws of it, lines of [lat, lon] (one point for a point source): all of it within
    *  the reach in the final update, its loudest pieces before. */

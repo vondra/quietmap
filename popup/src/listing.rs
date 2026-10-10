@@ -34,13 +34,13 @@ pub struct EvaluatedPiece {
 
 /// One ray of a listed piece: the point it leaves from (click metres), the in-plane angle it
 /// stands for (0 for a point), the energy it delivers per period (the piece's energy is their
-/// sum) and its terms.
+/// sum) and the terms it was summed with.
 #[derive(Clone)]
 pub struct ListedRay {
     pub from_m: [f64; 2],
     pub angle_rad: f64,
     pub energy: [f64; PERIODS],
-    pub terms: Option<ListedTerms>,
+    pub terms: ListedTerms,
 }
 
 /// A ray's terms as A-weighted attenuations over the piece's day emission spectrum (dB): ground
@@ -119,28 +119,6 @@ pub fn list_pieces(
             let mut piece = piece.clone();
             piece.source_energy = selection.contributors[&piece.candidate.group_key].energy;
             let source = &attributes[piece.candidate.attribute];
-            source_rays(
-                receiver,
-                &piece.candidate,
-                source,
-                &mut scratch,
-                &mut |ray| {
-                    piece.rays.push(ListedRay {
-                        from_m: ray.from_m,
-                        angle_rad: ray.angle_rad,
-                        energy: std::array::from_fn(|period| {
-                            (0..BANDS)
-                                .map(|band| {
-                                    ray.weight
-                                        * source.energy[period][band]
-                                        * ray.transfer.periods[period][band]
-                                })
-                                .sum()
-                        }),
-                        terms: None,
-                    })
-                },
-            )?;
             // The terms weigh the bands as the piece's Lden does (a source silent by day has terms).
             let spectrum: [f64; BANDS] = std::array::from_fn(|band| {
                 (0..PERIODS)
@@ -156,18 +134,38 @@ pub fn list_pieces(
                     .sum();
                 -10.0 * (passed / total).log10()
             };
-            // Every ray's own terms (the piece's nearest ray below also keeps its ground profile).
-            for ray in &mut piece.rays {
-                let terms = trace(receiver, ray.from_m, source, &mut scratch)?;
-                ray.terms = Some(ListedTerms {
-                    boundary_db: [0, 1]
-                        .map(|state| weighted(&terms.boundaries[state].attenuation_db)),
-                    without_ground_db: [0, 1]
-                        .map(|state| weighted(&terms.boundaries[state].without_ground_db)),
-                    air_db: weighted(&terms.air_db),
-                    slant_m: terms.transfer.slant_m,
-                });
-            }
+            // Every ray with the terms the evaluation summed it with (the piece's nearest ray below
+            // also keeps its ground profile).
+            source_rays(
+                receiver,
+                &piece.candidate,
+                source,
+                &mut scratch,
+                &mut |ray| {
+                    let terms = &ray.terms;
+                    piece.rays.push(ListedRay {
+                        from_m: ray.from_m,
+                        angle_rad: ray.angle_rad,
+                        energy: std::array::from_fn(|period| {
+                            (0..BANDS)
+                                .map(|band| {
+                                    ray.weight
+                                        * source.energy[period][band]
+                                        * terms.transfer.periods[period][band]
+                                })
+                                .sum()
+                        }),
+                        terms: ListedTerms {
+                            boundary_db: [0, 1]
+                                .map(|state| weighted(&terms.boundaries[state].attenuation_db)),
+                            without_ground_db: [0, 1]
+                                .map(|state| weighted(&terms.boundaries[state].without_ground_db)),
+                            air_db: weighted(&terms.air_db),
+                            slant_m: terms.transfer.slant_m,
+                        },
+                    })
+                },
+            )?;
             let [a, b] = piece.candidate.ends_m;
             let from = closest_point(receiver.position, a, b);
             let mut crossings = Vec::new();

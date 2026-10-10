@@ -81,27 +81,8 @@ struct Roof {
     top1: f64,
 }
 
-/// The transfer of one ray; `favourable_probability` is p of each period for this ray's direction,
-/// `alpha_db_per_km` the air absorption of the place per band.
-pub fn ray_transfer(
-    profile: &Profile,
-    crossings: &[Crossing],
-    ends: &RayEnds,
-    (favourable_probability, alpha_db_per_km): ([f64; PERIODS], &[f64; BANDS]),
-    scratch: &mut RayScratch,
-) -> Transfer {
-    ray_terms(
-        profile,
-        crossings,
-        ends,
-        (favourable_probability, alpha_db_per_km),
-        scratch,
-    )
-    .transfer
-}
-
 /// The terms of one ray: the transfer with the boundary of each state (homogeneous, favourable)
-/// and the air absorption behind it, for traces and comparisons.
+/// and the air absorption behind it.
 pub struct RayTerms {
     pub transfer: Transfer,
     pub favourable_probability: [f64; PERIODS],
@@ -109,7 +90,8 @@ pub struct RayTerms {
     pub air_db: [f64; BANDS],
 }
 
-/// [`ray_transfer`] with its terms.
+/// The terms of one ray; `favourable_probability` is p of each period for this ray's direction,
+/// `alpha_db_per_km` the air absorption of the place per band.
 pub fn ray_terms(
     profile: &Profile,
     crossings: &[Crossing],

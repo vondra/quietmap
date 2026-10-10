@@ -426,7 +426,7 @@ fn pair(
                         .map(|band| {
                             ray.weight
                                 * attribute.energy[period][band]
-                                * ray.transfer.periods[period][band]
+                                * ray.terms.transfer.periods[period][band]
                         })
                         .sum()
                 });

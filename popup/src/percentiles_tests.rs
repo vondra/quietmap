@@ -51,6 +51,7 @@ pub(crate) fn contributor(key: u64, layer: Layer, leq_db: f64, distance_m: f64) 
         heard: None,
         nden_sone: None,
         share: None,
+        path: Default::default(),
     }
 }
 
