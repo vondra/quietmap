@@ -1,16 +1,16 @@
 // The popup body: how loud the place is over the whole day (Nden, the mean loudness in sone, Lden
 // under it), and what is heard there and from what: the loudest contributors, the aircraft layer
-// and everything else, each with why it is loud and how loud it is alone. Under the list the whole
+// and the rest, each with why it is loud and how loud it is alone. Under the list the whole
 // calculation opens in place.
 // Redrawn on every streamed update of the click.
 import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
 import { ldenToColor } from '../utils/noise-colors'
-import { DataPoint } from './noise/noise-tooltips'
-import { fmtDb, fmtSone, txtTable } from '../utils/formatters'
-import { SOURCE_LABELS } from './noise/labels'
-import { PERIOD_LABELS_DETAIL } from './noise/shared'
+import { fmtSone } from '../utils/formatters'
+import { HoverText } from './ui/info-tip'
+import { restSources, type HiddenRow } from './noise/rest'
+import { Chevron } from './noise/shared'
 import { AircraftLayerRow, ContributorRow, RestRow, rowRank } from './noise/source/ContributorRow'
-import type { Contributor, LayerLevels, PeriodLevels, PopupUpdate, SegmentFan } from '../types/noise'
+import type { PopupUpdate, SegmentFan } from '../types/noise'
 
 // Lazy: the calculation is a separate chunk, loaded when a visitor opens it.
 const CalculationDetails = lazy(() => import('./calculation/CalculationDetails'))
@@ -32,15 +32,12 @@ export interface NoiseDetailContentProps {
   onFan?: (fan: SegmentFan | null) => void
 }
 
-const LOUDNESS_TEXT = [
-  'Nden: how loud the place sounds on average over',
-  'the whole day, every moment by its loudness to',
-  'the ear (Zwicker, ISO 532-1), so a sound counts',
-  'by how loud it is and how long it lasts; the',
-  'evening counted 5 dB and the night 10 dB louder,',
-  'as Lden counts them. Twice the number sounds',
-  'twice as loud.',
-].join('\n')
+const NDEN_TOOLTIP = 'How loud the place sounds over the whole day: every moment by its loudness\n'
+  + 'to the ear (ISO 532-1), the evening 5 dB and the night 10 dB louder, as in Lden.\n'
+  + 'Twice the sone sounds twice as loud. Each row: the source alone.'
+
+const LDEN_TOOLTIP = 'All sources together over the day (EU Directive 2002/49): the evening\n'
+  + 'counts 5 dB and the night 10 dB louder. Each period in the detailed calculation.'
 
 export default function NoiseDetailContent({ data, maxSources, onHighlight, calculationOpen = false, onCalculationToggle, onFan }: NoiseDetailContentProps) {
   const [centerLat, centerLng] = data.center
@@ -61,7 +58,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
     ...entries.slice(shownEntries.length),
     ...aircraftEntry.filter(e => (e.layer.lden ?? 0) <= 0),
   ]
-  const rest = restOf(data.sources, hidden)
+  const rest = restSources(data.sources, hidden)
   // The popup's Nden of what it left out knows nothing of rows hidden here (a phone shows fewer):
   // with them the last row has no Nden.
   const restNden = hidden.length > 0 && data.rest_nden_sone != null ? null : data.rest_nden_sone
@@ -74,18 +71,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
       />
     )
     : <AircraftLayerRow key="aircraft" layer={e.layer!} flights={data.top_flights} onHighlightFlight={onHighlight} />)
-  if (rest) shown.push(<RestRow key="rest" levels={rest} nden={restNden} />)
-  const totalLdenText = txtTable([
-    ...data.sources
-      .filter(s => s.lden != null && s.lden > 0)
-      .map(s => [SOURCE_LABELS[s.source_type] ?? s.source_type, fmtDb(s.lden)] as [string, string]),
-    { sep: true },
-    [PERIOD_LABELS_DETAIL[0], fmtDb(data.total.ld)],
-    [PERIOD_LABELS_DETAIL[1], fmtDb(data.total.le)],
-    [PERIOD_LABELS_DETAIL[2], fmtDb(data.total.ln)],
-    { sep: true },
-    ['Total Lden', fmtDb(data.total_lden)],
-  ], 16, 9)
+  if (rest != null) shown.push(<RestRow key="rest" sources={rest} nden={restNden} />)
   const sone = data.loudness?.nden_sone ?? null
 
   return (
@@ -97,33 +83,23 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
               <span className="inline-block size-2.5 rounded-full self-center" style={{ background: ldenToColor(data.total_lden) }} aria-hidden="true" />
               {sone != null
                 ? (
-                  <DataPoint title="Nden" text={LOUDNESS_TEXT}>
+                  <HoverText title={NDEN_TOOLTIP}>
                     <span className="text-2xl font-bold">{fmtSone(sone)}</span>
                     <span className="text-sm font-medium"> sone</span>
                     <span className="text-xs font-medium text-muted-foreground"> Nden</span>
-                  </DataPoint>
+                  </HoverText>
                 )
                 : <span className={`text-2xl font-bold text-muted-foreground/40${data.partial ? ' animate-pulse' : ''}`}>{data.partial ? '… sone' : '—'}</span>}
             </span>
-            <div data-testid="lden" className="mt-1 pl-4 text-xs text-muted-foreground/60 font-mono leading-tight">
-              <DataPoint title="Total Lden — energy sum across all sources (EU noise mapping)" text={totalLdenText}>
-                {data.total_lden.toFixed(1)} dB Lden
-              </DataPoint>
+            <div data-testid="lden" className="mt-1 pl-4 text-xs text-muted-foreground/60 tabular-nums leading-tight">
+              <HoverText title={LDEN_TOOLTIP}>{data.total_lden.toFixed(1)} dB Lden</HoverText>
             </div>
           </div>
         ) : <span />}
-        <div className="text-right pr-6 text-xs text-muted-foreground/60 font-mono leading-tight">
+        <div className="text-right pr-6 text-xs text-muted-foreground/60 tabular-nums leading-tight">
           <div>{centerLat.toFixed(4)}, {centerLng.toFixed(4)}</div>
           {data.elevation_m > 0 && <div>{Math.round(data.elevation_m)} m a.s.l.</div>}
-          {data.partial && (
-            <div
-              data-testid="popup-refining"
-              className="animate-pulse"
-              title="The levels shown are valid; farther sources are still being added."
-            >
-              refining…
-            </div>
-          )}
+          {data.partial && <div data-testid="popup-refining" className="animate-pulse">refining…</div>}
         </div>
       </div>
       {data.total_lden != null ? (
@@ -139,7 +115,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
                 onClick={onCalculationToggle}
               >
                 <span>Detailed calculation</span>
-                <span className="text-muted-foreground">{calculationOpen ? '▾' : '▸'}</span>
+                <Chevron open={calculationOpen} />
               </button>
               {calculationOpen && (
                 <Suspense fallback={<div className="mt-2 text-[11px] text-muted-foreground animate-pulse">…</div>}>
@@ -197,24 +173,6 @@ function IntoView({ children }: { children: ReactNode }) {
 }
 
 /** A row of the list: a contributor, or the aircraft layer as a whole; ranked by its Nden alone. */
-interface ListEntry {
+interface ListEntry extends HiddenRow {
   rank: number
-  contributor?: Contributor
-  layer?: LayerLevels
-}
-
-const PERIOD_KEYS = ['ld', 'le', 'ln', 'lden'] as const
-
-/** Everything the list does not show: the rows past its length (the aircraft layer among them when
- *  under 0 dB) and what the popup leaves out of each ground layer (its contributors cut from the
- *  thirty or under 0 dB): their levels. Null when it has no energy. */
-function restOf(layers: LayerLevels[], hidden: ListEntry[]): PeriodLevels | null {
-  const energy = (level: number | null | undefined) => (level == null ? 0 : 10 ** (level / 10))
-  const ground = layers.filter(l => l.source_type !== 'aircraft')
-  const levels = Object.fromEntries(PERIOD_KEYS.map(key => {
-    const total = ground.reduce((sum, l) => sum + energy(l.unlisted?.[key]), 0)
-      + hidden.reduce((sum, e) => sum + energy(e.contributor ? e.contributor.received[key] : e.layer?.[key]), 0)
-    return [key, total > 0 ? 10 * Math.log10(total) : null]
-  })) as unknown as PeriodLevels
-  return levels.lden == null ? null : levels
 }

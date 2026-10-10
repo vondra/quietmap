@@ -1,10 +1,10 @@
 // A loudest flight's cells: level, kilometres, the UTC start day with the period letter, the type in
 // words, and the link to the trace of the day the flight started; its identity across updates and its
-// track as map lines.
+// track as map lines; a contributor on the map, a ship cell as its square.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { highlightGeoJson, topFlightCells, topFlightKey } from '../src/components/noise/top-flights.ts'
+import { cellSquare, contributorHighlight, highlightGeoJson, topFlightCells, topFlightKey } from '../src/components/noise/top-flights.ts'
 
 // A visitor east of Greenwich, where 23:58 UTC is already the next day.
 process.env.TZ = 'Europe/Prague'
@@ -82,5 +82,31 @@ test('a highlight is one map line per piece, as computed and apart, [lon, lat] w
     ],
   })
   assert.deepEqual(points, { type: 'MultiPoint', coordinates: [[14.19, 50.06]] })
-  assert.deepEqual(highlightGeoJson([]).features.map(feature => feature.geometry.coordinates), [[], []])
+  assert.deepEqual(highlightGeoJson([]).features.map(feature => feature.geometry.coordinates), [[], [], []])
+})
+
+test('a ship cell is drawn as the square of its area around its sub-cells, not as their dots', () => {
+  // Meloneras, Gran Canaria: a 1 km² leisure-boat cell sent as its sixteen 250 m sub-cells.
+  const points = [27.742447, 27.744482, 27.746744, 27.749004].flatMap(lat =>
+    [-15.619372, -15.617004, -15.614804, -15.612267].map(lon => [[lat, lon]]))
+  const cell = {
+    id: 's', source_type: 'ship', name: 'leisure_craft', subtype: null, distance_m: 65,
+    received_lden: 30, received: { ld: 22.8, le: 22.9, ln: 22.9, lden: 30 },
+    metadata: { source_type: 'leisure_craft', area_m2: 1_000_000 }, geometry: points,
+  }
+  const [lines, dots, areas] = contributorHighlight(cell).features.map(feature => feature.geometry.coordinates)
+  assert.deepEqual([lines, dots], [[], []])
+  assert.equal(areas.length, 1)
+  const ring = areas[0][0]
+  assert.deepEqual(ring[0], ring[4], 'closed')
+  // 1 km a side: 0.009° of latitude, and of longitude 0.009° / cos 27.7°.
+  assert.ok(Math.abs((ring[2][1] - ring[0][1]) - 1000 / 111_320) < 1e-6)
+  assert.ok(Math.abs((ring[2][0] - ring[0][0]) - 1000 / 111_320 / Math.cos(27.7457 * Math.PI / 180)) < 1e-5)
+  // Every sub-cell lies inside it.
+  const [west, south] = ring[0]
+  const [east, north] = ring[2]
+  assert.ok(points.every(([[lat, lon]]) => lat > south && lat < north && lon > west && lon < east))
+  // Any other source keeps its pieces.
+  assert.deepEqual(contributorHighlight({ ...cell, source_type: 'industrial' }).features[1].geometry.coordinates.length, 16)
+  assert.equal(cellSquare([[0, 0]], 4).length, 5)
 })

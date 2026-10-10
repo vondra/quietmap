@@ -39,9 +39,8 @@ interface MapViewProps {
   onDetailPositionChange?: (pos: { lat: number; lng: number } | null) => void
   onDetailError?: (message: string) => void
   detailPosition?: { lat: number; lng: number } | null
-  /** The track of the loudest flight highlighted in the popup. */
-  /** The highlighted flight track or contributor pieces ([lat, lon, ..] ends). */
-  flightTrack?: number[][][] | null
+  /** What the popup highlights: a loudest flight's track or a contributor. */
+  highlight?: GeoJSON.FeatureCollection | null
   /** The segments view's rays from the computed pieces to the receiver. */
   segmentFan?: SegmentFan | null
   quietClustersEnabled?: boolean
@@ -62,7 +61,7 @@ interface MapViewProps {
 
 export default function MapView({
   isCurrentDetailPosition, selectedLocation, initialCenter, initialZoom,
-  basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition, flightTrack, segmentFan,
+  basemap, onViewChange, onHashState, onDetailData, onDetailPositionChange, onDetailError, detailPosition, highlight, segmentFan,
   quietClustersEnabled, quietThreshold, heatmapLayers, dataLayers, stays,
   registerGeolocateTrigger, onGeolocateActiveChange, onGeolocateReadyChange,
 }: MapViewProps) {
@@ -183,7 +182,7 @@ export default function MapView({
       {/* A new search starts from no pins. */}
       {stays && <StayLayer key={JSON.stringify(stays.search)} search={stays.search} />}
       <SegmentFanLayer fan={segmentFan ?? null} />
-      <FlightTrackLayer track={flightTrack ?? null} />
+      <FlightTrackLayer highlight={highlight ?? null} />
       {onViewChange && onHashState && <MapStateSync onViewChange={onViewChange} onHashState={onHashState} />}
     </Map>
   )

@@ -1,10 +1,13 @@
-// A contributor's display fields as rows: speed, traffic and surface of a road, trains of a
-// railway, the site of an industry, building or ship cell. A layer without rows of its own lists
-// its fields by name, so a newly added layer shows up before it gets its own wording.
+// A contributor's facts as lines, only what its row and class line do not say: a road's speed,
+// traffic and a surface other than asphalt, a railway's speed and trains, a building's floors, height
+// and footprint or an area's size and cars, a site's area or a turbine's rated power, a ship cell's
+// vessels, an airport's movements; then the source's sound power. A layer without lines of its own
+// lists its fields by name, so a newly added layer shows up before it gets its own wording.
 import type { ReactNode } from 'react'
 import type { Contributor, ContributorMetadata } from '../../../types/noise'
-import { fmt, fmtCompact, fmtInt, txtTable, type TableRow } from '../../../utils/formatters'
-import { MetricLabel, DataPoint } from '../noise-tooltips'
+import { fmt, fmtCompact, fmtCount, fmtInt, txtTable, type TableRow } from '../../../utils/formatters'
+import { HoverText } from '../../ui/info-tip'
+import { subtypeLabel } from '../labels'
 import { fieldText, lineRow } from '../shared'
 import { railTrafficDescription, railTrafficLabel, roadCategoryEstimated, type RailTraffic } from '../provenance'
 
@@ -20,6 +23,37 @@ function text(m: ContributorMetadata, key: string): string {
 
 const words = (value: string) => value.replace(/_/g, ' ')
 
+/** How a road's or a railway's speed was chosen (the builders' `speed_source`), in words. */
+const SPEED_SOURCES: Record<string, string> = {
+  osm_posted: 'The posted limit (OpenStreetMap)',
+  derestricted: 'No limit: the usual speed on a derestricted motorway',
+  graded_transition: 'Between two posted limits',
+  country_legal_default: 'No posted limit: the country\'s legal limit',
+  tagged_median: 'No posted limit: the median posted on such roads in the country',
+  default_by_class: 'No posted limit: the usual speed of the road class',
+  rural_free_flow: 'Free-flowing traffic below the limit of a rural road',
+  high_speed_default: 'No posted limit: the usual speed of a high-speed line',
+  default_by_type: 'No posted limit: the usual speed of the line type',
+}
+
+function speedLine(m: ContributorMetadata) {
+  const speed = num(m, 'speed_kmh')
+  if (speed == null) return null
+  const source = text(m, 'speed_source')
+  const posted = num(m, 'speed_posted_kmh')
+  const why = (SPEED_SOURCES[source] ?? words(source))
+    + (posted != null && posted > 0 && posted !== Math.round(speed) ? `\nPosted: ${posted} km/h` : '')
+  return lineRow('Speed', <HoverText title={why}>{speed.toFixed(0)} km/h</HoverText>)
+}
+
+/** Road surfaces other than asphalt, the reference (the road builder's `SURFACE_NAMES`). */
+const SURFACES: Record<string, string> = {
+  sett: 'Setts',
+  paving_stones: 'Paving stones',
+  concrete: 'Concrete',
+  unpaved: 'Unpaved',
+}
+
 function RoadRows({ m }: { m: ContributorMetadata }) {
   const light = num(m, 'aadt_light') ?? 0
   const medium = num(m, 'aadt_medium') ?? 0
@@ -30,66 +64,31 @@ function RoadRows({ m }: { m: ContributorMetadata }) {
   const crossSection = num(m, 'cross_section_aadt') ?? 0
   // The headline is the whole road; the classes below are this carriageway's.
   const wholeRoad = crossSection > 0
-  const speed = num(m, 'speed_kmh')
-  const posted = num(m, 'speed_posted_kmh')
-  const speedSource = text(m, 'speed_source')
-  // Derestricted (e.g. a German Autobahn) has no posted number; a missing number otherwise means
-  // no posted limit and a default speed.
-  const postedText = speedSource === 'derestricted' ? 'no limit' : posted != null && posted > 0 ? `${posted} km/h` : '— (none)'
-  const speedText = txtTable([
-    ['Source', words(speedSource)],
-    ['Posted maxspeed', postedText],
-    ['Road class', words(text(m, 'road_class'))],
-    { sep: true },
-    ['Used', speed != null ? `${speed.toFixed(0)} km/h` : '—'],
-  ], 18, 12)
   const trafficText = txtTable([
-    ...(wholeRoad
-      ? [['Whole road', `${fmtInt(crossSection)}/day`] as [string, string], 'both directions', '']
-      : total === 0
-        ? ['This carriageway carries no traffic.', '']
-        : ['Only this direction is known.', '']),
+    ...(wholeRoad ? [['Whole road, both ways', `${fmtInt(crossSection)}/day`] as [string, string]] : []),
     'This carriageway:',
     ...([['Light', light, 1], ['Medium', medium, 2], ['Heavy', heavy, 4], ['Moto', moto, 8]] as const)
       .map(([label, value, bit]) =>
-        [label, roadCategoryEstimated(estimated, bit) ? `${fmtInt(value)} (est.)` : fmtInt(value)] as [string, string],
+        [`  ${label}`, roadCategoryEstimated(estimated, bit) ? `${fmtInt(value)} est.` : fmtInt(value)] as [string, string],
       ),
-    { sep: true },
-    ['Total', `${fmtInt(total)}/day`],
     '',
-    'Counts are prepared per vehicle class:',
-    'a counted value is an observation, an',
-    '"(est.)" value is an estimate or class',
-    'prior from the build.',
-  ] as TableRow[], 18, 12)
-  const lanes = num(m, 'lanes')
-  const surfaceText = txtTable([
-    ['Type', text(m, 'surface')],
-    ['Effect on cars', `${fmt(num(m, 'surface_corr_db') ?? 0)} dB`],
-    ['Lanes', lanes != null && lanes > 0 ? String(lanes) : 'unknown'],
-    ['Oneway', m.oneway === true ? 'yes' : 'no'],
-    ...(m.bridge === true ? [['Bridge', 'yes'] as [string, string]] : []),
-  ], 18, 12)
+    'est.: estimated; the others counted',
+  ] as TableRow[], 22, 12)
+  const surface = SURFACES[text(m, 'surface')]
+  const correction = num(m, 'surface_corr_db') ?? 0
   return (
     <>
-      {speed != null && lineRow(
-        <MetricLabel term="speed" />,
-        <DataPoint title="Speed used in CNOSSOS emission" text={speedText}>
-          {speed.toFixed(0)} km/h
-        </DataPoint>,
-      )}
-      {lineRow(
-        <MetricLabel term="aadt">Traffic</MetricLabel>,
-        <DataPoint title={wholeRoad ? 'Daily traffic on the whole road, both directions' : 'Daily traffic in this direction'} text={trafficText}>
-          {wholeRoad ? `${fmtCompact(crossSection)}/day` : `${fmtCompact(total)}/day · one direction`}
-        </DataPoint>,
-      )}
-      {lineRow(
-        <MetricLabel term="surface">Surface</MetricLabel>,
-        <DataPoint title="CNOSSOS surface correction" text={surfaceText}>
-          {text(m, 'surface')}
-        </DataPoint>,
-      )}
+      {speedLine(m)}
+      {lineRow('Traffic', (
+        <HoverText title={trafficText}>
+          {wholeRoad ? `${fmtCompact(crossSection)}/day` : `${fmtCompact(total)}/day, one way`}
+        </HoverText>
+      ))}
+      {surface && lineRow('Surface', (
+        <HoverText title="On the rolling noise of cars, against asphalt (CNOSSOS-EU)">
+          {`${surface}, ${fmt(correction)} dB`}
+        </HoverText>
+      ))}
     </>
   )
 }
@@ -107,113 +106,85 @@ function railTraffic(m: ContributorMetadata): RailTraffic {
 }
 
 function RailwayRows({ m }: { m: ContributorMetadata }) {
-  const speed = num(m, 'speed_kmh')
   const traffic = railTraffic(m)
-  const speedText = txtTable([
-    ['Source', words(text(m, 'speed_source'))],
-    ['Rail type', words(text(m, 'rail_type'))],
-    ['Usage', words(text(m, 'usage'))],
-    ...(m.bridge === true ? [['Bridge', 'yes'] as [string, string]] : []),
-    { sep: true },
-    ['Used', speed != null ? `${speed.toFixed(0)} km/h` : '—'],
-  ], 18, 14)
+  // A level crossing's horn carries its soundings in the passenger slots.
+  const horn = text(m, 'rail_type') === 'horn'
   return (
     <>
-      {speed != null && lineRow(
-        <MetricLabel term="speed" />,
-        <DataPoint title="Speed used in CNOSSOS emission" text={speedText}>
-          {speed.toFixed(0)} km/h
-        </DataPoint>,
-      )}
-      {lineRow(
-        <MetricLabel term="trains">Trains/day</MetricLabel>,
-        <DataPoint title="Expected passages, with passenger and freight evidence shown separately." text={railTrafficDescription(traffic, text(m, 'rail_type') === 'horn')}>
-          {railTrafficLabel(traffic)}
-        </DataPoint>,
-      )}
+      {speedLine(m)}
+      {lineRow('Trains', (
+        <HoverText title={railTrafficDescription(traffic, horn)}>{railTrafficLabel(traffic, horn)}</HoverText>
+      ))}
     </>
   )
 }
 
-/** Building-layer types that are open-air activity areas, not buildings (no floors, no height). */
-const ACTIVITY_AREAS = new Set([
-  'padel_court', 'tennis_court', 'ball_court', 'playground', 'swimming_pool', 'outdoor_seating',
-  'stadium', 'sports_pitch', 'car_park', 'street_parking', 'motorsport', 'motorsport_circuit',
-  'motorsport_motocross', 'motorsport_kart', 'motorsport_speedway', 'motorsport_trial', 'shooting',
-  'shooting_rifle', 'shooting_pistol', 'shooting_shotgun',
-])
-
-// Only what the title does not already say: the type is the title (or the class line above), so the
-// line lists the floors, mapped height and footprint the data holds, and no line without them.
+// A building or an open area has a footprint; the people at a venue, its bells or its call to prayer
+// are a point, and their height is the source's own, not a building's.
 function BuildingRows({ m }: { m: ContributorMetadata }) {
-  const type = text(m, 'building_type')
+  const area = num(m, 'area_m2') ?? 0
+  if (area <= 0) return null
   const height = num(m, 'height_m') ?? 0
   const floors = num(m, 'floors') ?? 0
-  const area = num(m, 'area_m2') ?? 0
+  const cars = num(m, 'movements_per_day')
   const address = text(m, 'address')
-  const activity = ACTIVITY_AREAS.has(type)
   const facts = [
-    ...(!activity && floors > 1 ? [`${floors} floors`] : []),
-    ...(!activity && height > 0 ? [`${height.toFixed(0)} m high`] : []),
-    ...(area > 0 ? [`${fmtInt(area)} m²`] : []),
+    ...(floors > 1 ? [`${floors} floors`] : []),
+    ...(height > 0 ? [`${height.toFixed(0)} m high`] : []),
+    `${fmtInt(area)} m²`,
   ]
-  if (!facts.length && !address) return null
-  const detail = txtTable([...facts, ...(address ? ['', `Address: ${address}`] : [])], 14, 20)
-  return lineRow(
-    activity ? 'Area' : 'Building',
-    <DataPoint title={activity ? 'Activity area' : 'Building'} text={detail}>
-      {facts.join(' · ') || address}
-    </DataPoint>,
+  return (
+    <>
+      {lineRow(height > 0 ? 'Building' : 'Area', facts.join(' · '))}
+      {cars != null && lineRow('Cars in and out', `${fmtCount(cars)}/day`)}
+      {address && lineRow('Address', address)}
+    </>
   )
 }
 
 function IndustrialRows({ m }: { m: ContributorMetadata }) {
   const area = num(m, 'area_m2') ?? 0
-  const gridPoints = num(m, 'grid_points') ?? 0
-  const hubHeight = num(m, 'hub_height_m')
-  const ratedPower = num(m, 'rated_power_kw')
-  const nace = text(m, 'nace')
-  const siteText = txtTable([
-    ['Type', words(text(m, 'source_type'))],
-    ...(area > 0 ? [['Area', `${fmtInt(area)} m²`] as [string, string]] : []),
-    ...(nace ? [['NACE', nace] as [string, string]] : []),
-    ...(gridPoints > 0 ? [['Grid points', String(gridPoints)] as [string, string]] : []),
-    ...(hubHeight != null ? [['Hub height', `${hubHeight.toFixed(0)} m`] as [string, string]] : []),
-    ...(ratedPower != null ? [['Rated power', `${fmtInt(ratedPower)} kW`] as [string, string]] : []),
-    ...(gridPoints > 1
-      ? ['', 'Large sites are split into grid points;', 'each carries its area share', 'of the total sound power.']
-      : []),
-  ], 16, 16)
-  // The site type is the title (or the class line above): the line shows its area, if known.
-  if (area <= 0) return null
-  return lineRow(
-    'Site',
-    <DataPoint title="Industrial site metadata" text={siteText}>
-      {`${fmtInt(area)} m²`}
-    </DataPoint>,
+  const ratedKw = num(m, 'rated_power_kw')
+  return (
+    <>
+      {area > 0 && lineRow('Area', `${fmtInt(area)} m²`)}
+      {ratedKw != null && lineRow('Rated power', ratedKw >= 1000 ? `${(ratedKw / 1000).toFixed(1)} MW` : `${fmtInt(ratedKw)} kW`)}
+    </>
   )
 }
+
+/** A ship cell's vessel-hours a month by class, in the order of the builder's display. */
+const SHIP_CLASSES = ['large_ships', 'work_boats', 'leisure_craft'] as const
+const HOURS_PER_MONTH = (365.25 * 24) / 12
 
 function ShipRows({ m }: { m: ContributorMetadata }) {
   const hours = Array.isArray(m.hours_per_month) ? m.hours_per_month.map(Number) : []
-  const [large = 0, work = 0, leisure = 0] = hours
-  const cellText = txtTable([
-    ['Loudest', words(text(m, 'source_type'))],
-    ['Cell', `${((num(m, 'area_m2') ?? 0) / 1e6).toFixed(2)} km²`],
-    ['Large ships', `${large.toFixed(1)} h/month`],
-    ['Work boats', `${work.toFixed(1)} h/month`],
-    ['Leisure craft', `${leisure.toFixed(1)} h/month`],
-    '', 'Mean vessel-hours per month in this', 'water cell, from AIS positions;', 'ships radiate around the clock.',
-  ], 16, 16)
-  return lineRow(
-    'Ships',
-    <DataPoint title="Ship traffic cell" text={cellText}>
-      {`${(large + work + leisure).toFixed(0)} h/month`}
-    </DataPoint>,
+  // A month's vessel-hours over the hours of a month: how many vessels are in the cell at a time.
+  const atATime = SHIP_CLASSES.map((_, k) => (hours[k] ?? 0) / HOURS_PER_MONTH)
+  const cell = txtTable([
+    ...SHIP_CLASSES.map((name, k) => [subtypeLabel('ship', name), fmtCount(atATime[k])] as [string, string]),
+    '',
+    `On average in this ${((num(m, 'area_m2') ?? 0) / 1e6).toFixed(1)} km² cell, from the`,
+    'vessel-hours of a month in AIS positions',
+  ], 16, 8)
+  return lineRow('Vessels at a time', <HoverText title={cell}>{fmtCount(atATime.reduce((a, b) => a + b, 0))}</HoverText>)
+}
+
+/** An airport's ground operations: its taxiing and rolls come from its flights. */
+function AirportRows({ m }: { m: ContributorMetadata }) {
+  const perDay = (key: string) => `${fmtCount(num(m, key) ?? 0)}/day`
+  const airport = text(m, 'airport')
+  return (
+    <>
+      {airport && lineRow('Airport', airport)}
+      {lineRow('Arrivals', perDay('arrivals_per_day'))}
+      {lineRow('Departures', perDay('departures_per_day'))}
+      {(num(m, 'ground_vehicles_per_day') ?? 0) > 0 && lineRow('Ground vehicles', perDay('ground_vehicles_per_day'))}
+    </>
   )
 }
 
-// A layer without rows of its own: its fields by name, but for the name and the subtype that the
+// A layer without lines of its own: its fields by name, but for the name and the subtype that the
 // row and its class line show.
 function FieldRows({ m }: { m: ContributorMetadata }) {
   const fields = Object.entries(m).filter(([name, value]) =>
@@ -227,9 +198,18 @@ const LAYER_ROWS: Record<string, (props: { m: ContributorMetadata }) => ReactNod
   building: BuildingRows,
   industrial: IndustrialRows,
   ship: ShipRows,
+  aircraft: AirportRows,
 }
 
-/** The layer's rows for a contributor, and its sound power where the layer stores one. */
+/** When a source's stored sound power holds: a venue's people at their busiest, an event while it
+ *  sounds, every other source by day. */
+function soundPowerWhen(m: ContributorMetadata): string {
+  const type = text(m, 'building_type')
+  if (type.startsWith('people_')) return 'at its busiest'
+  return type === 'church_bells' || type === 'call_to_prayer' ? 'while sounding' : 'by day'
+}
+
+/** The layer's lines for a contributor, and its sound power where the layer stores one. */
 export function MetadataRows({ c }: { c: Contributor }) {
   const m = c.metadata
   if (!m) return null
@@ -239,10 +219,8 @@ export function MetadataRows({ c }: { c: Contributor }) {
     <>
       <Rows m={m} />
       {soundPower != null && lineRow(
-        <MetricLabel term="emission" />,
-        <DataPoint title="Sound power Lw of the source by day (A-weighted)" text="Summed over every point of the source.">
-          {soundPower.toFixed(1)} dB(A)
-        </DataPoint>,
+        <HoverText title="How much noise the source itself makes, all of it (A-weighted sound power)">Sound power</HoverText>,
+        `${soundPower.toFixed(1)} dB(A) ${soundPowerWhen(m)}`,
       )}
     </>
   )

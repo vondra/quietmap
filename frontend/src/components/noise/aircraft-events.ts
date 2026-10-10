@@ -1,44 +1,41 @@
-// What flies over the point in words: per band of maximum level the flights of an average day
-// (under one a day, of a year), those at night, their height and type. Pure TypeScript, so it has a
-// dependency-free unit test.
+// What flies over the point in words: per band of peak level the flights of an average day, those of
+// them at night, their height and their commonest type. Pure TypeScript, so it has a dependency-free
+// unit test.
 import type { AircraftEvents } from '../../types/noise.ts'
 import { aircraftTypeName } from '../../utils/aircraft-types.ts'
+import { fmtCount } from '../../utils/formatters.ts'
 
 export interface AircraftEventRow {
-  /** "50 dB" */
-  above: string
-  /** "412 a day", "3 a year", "<1 a year" */
-  count: string
-  /** The night's count ("21 a day"), or empty without night flights */
+  /** "≥ 50 dB" */
+  peak: string
+  /** Flights a day: "412", "1.5", "0.05" */
+  perDay: string
+  /** Of them at night, a day: "21", or "–" without */
   night: string
-  /** "0.6 km", or empty */
-  height: string
-  /** The type in words, or empty */
+  /** Kilometres above the ground: "0.6", or "–" */
+  heightKm: string
+  /** The type in words, else its designator; empty without */
   type: string
+  /** The type with its designator, for its hover tip */
+  typeTitle: string
 }
 
-/** A rate as the visitor counts it: a day from one a day up, else a year. */
-export function eventCount(perDay: number): string {
-  if (perDay >= 9.95) return `${Math.round(perDay)} a day`
-  if (perDay >= 0.995) return `${perDay.toFixed(1).replace(/\.0$/, '')} a day`
-  const perYear = perDay * 365.25
-  return perYear >= 0.5 ? `${Math.round(perYear)} a year` : '<1 a year'
-}
-
-/** The bands any flight reaches, loudest last. */
+/** The bands any flight reaches, the quietest first. */
 export function aircraftEventRows(events: AircraftEvents): AircraftEventRow[] {
   return events.above_db.flatMap((above, band) => {
     const perDay = events.per_day[band] ?? 0
     if (perDay <= 0) return []
     const night = events.night[band] ?? 0
     const height = events.height_m[band]
-    const type = events.type[band]
+    const designator = events.type[band] ?? ''
+    const type = designator ? aircraftTypeName(designator) : ''
     return [{
-      above: `${above} dB`,
-      count: eventCount(perDay),
-      night: night > 0 ? eventCount(night) : '',
-      height: height == null ? '' : `${(height / 1000).toFixed(1)} km`,
-      type: type ? aircraftTypeName(type) : '',
+      peak: `≥ ${above} dB`,
+      perDay: fmtCount(perDay),
+      night: night > 0 ? fmtCount(night) : '–',
+      heightKm: height == null ? '–' : (height / 1000).toFixed(1),
+      type,
+      typeTitle: type === designator ? type : `${type} (${designator})`,
     }]
   })
 }

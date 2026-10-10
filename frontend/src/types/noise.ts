@@ -35,8 +35,9 @@ export interface LayerLevels extends PeriodLevels {
   /** The aircraft layer alone, its flights and its airports' ground operations: its Nden in sone
    *  (the final update's). */
   nden_sone?: number
-  /** What the popup leaves out of a ground layer: its levels. */
+  /** What the popup leaves out of a ground layer: its levels, and how many contributors they are. */
   unlisted?: PeriodLevels
+  unlisted_sources?: number
   /** What the aircraft layer is made of: each kind's share of its Lden energy, those of 0.5 % or
    *  more (the final update's). */
   kinds?: Partial<Record<AircraftKind, number>>

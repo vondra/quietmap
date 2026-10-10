@@ -113,6 +113,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             let mut unlisted = Map::new();
             periods(&mut unlisted, &energy);
             object.insert("unlisted".into(), Value::Object(unlisted));
+            object.insert("unlisted_sources".into(), json!(layer.unlisted_sources));
         }
         if let (Layer::Aircraft, Some(kinds)) = (layer.layer, update.aircraft_kinds) {
             object.insert("kinds".into(), aircraft_kinds(&kinds));

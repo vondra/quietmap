@@ -1,9 +1,10 @@
 // A contributor's label: its name; a road or line known only by its number, with what it numbers;
-// else its class. What the aircraft layer is made of, largest kind first.
+// else its class, a place whose sound is its people named by them. What the aircraft layer is made
+// of, largest kind first.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { aircraftKindShares, contributorLabel, labelNamesClass } from '../src/components/noise/labels.ts'
+import { aircraftKindShares, contributorLabel, labelNamesClass, subtypeLabel } from '../src/components/noise/labels.ts'
 
 const road = (name, metadata) => ({
   id: 'r', source_type: 'road', name, subtype: 'tertiary', distance_m: 38,
@@ -30,6 +31,20 @@ test('a line known only by its number keeps its class, and its detail does not r
   assert.equal(labelNamesClass(road('2404', { road_class: 'tertiary', ref: '2404' })), false)
   const school = { ...road('School of Economics', { building_type: 'education', name: 'School of Economics' }), source_type: 'building', subtype: null }
   assert.equal(labelNamesClass(school), false)
+})
+
+test('every place whose sound is its people reads as the people there; boats in plain words', () => {
+  const unnamed = (type) => contributorLabel({
+    id: 'b', source_type: 'building', name: type, subtype: null, distance_m: 58,
+    received_lden: 40, received: { ld: 30, le: 38, ln: 32 }, metadata: { building_type: type, name: '' },
+  })
+  assert.equal(unnamed('people_bar'), 'People at a bar')
+  assert.equal(unnamed('people_biergarten'), 'People at a beer garden')
+  assert.equal(unnamed('tennis_court'), 'People on a tennis court')
+  assert.equal(unnamed('playground'), 'People at a playground')
+  assert.equal(unnamed('artificial_turf_pitch'), 'People on an artificial-turf pitch')
+  assert.equal(subtypeLabel('ship', 'leisure_craft'), 'Leisure boats')
+  assert.equal(subtypeLabel('road', 'track'), 'Track')
 })
 
 test('the aircraft makeup reads largest first', () => {

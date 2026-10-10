@@ -29,6 +29,8 @@ pub struct LayerAnswer {
     pub nden_sone: Option<f64>,
     /// A ground layer's energy beyond the contributors sent: the list's last row.
     pub unlisted: Option<[f64; PERIODS]>,
+    /// How many contributors that energy is of.
+    pub unlisted_sources: usize,
 }
 
 /// One contributor group (sources sharing a display group key).
@@ -116,6 +118,7 @@ pub fn layer_answers(selections: &[LayerSelection]) -> Vec<LayerAnswer> {
             candidates: selection.covered + selection.pending.len(),
             nden_sone: None,
             unlisted: None,
+            unlisted_sources: 0,
         })
         .collect()
 }
@@ -126,8 +129,8 @@ pub fn listed(contributor: &Contributor) -> bool {
     lden_energy(&contributor.energy) > 1.0
 }
 
-/// Each ground layer's part the list leaves out: the `unlisted` contributors' energy. Every
-/// evaluated piece is in a contributor, so nothing else is left.
+/// Each ground layer's part the list leaves out: the `unlisted` contributors' energy and their
+/// number. Every evaluated piece is in a contributor, so nothing else is left.
 pub fn set_unlisted<'c>(
     layers: &mut [LayerAnswer],
     unlisted: impl Iterator<Item = &'c Contributor>,
@@ -137,18 +140,22 @@ pub fn set_unlisted<'c>(
         .filter(|layer| layer.layer != Layer::Aircraft)
     {
         layer.unlisted = Some([0.0; PERIODS]);
+        layer.unlisted_sources = 0;
     }
     for contributor in unlisted {
-        let Some(energy) = layers
+        let Some(layer) = layers
             .iter_mut()
             .find(|layer| layer.layer == contributor.layer)
-            .and_then(|layer| layer.unlisted.as_mut())
         else {
+            continue;
+        };
+        let Some(energy) = layer.unlisted.as_mut() else {
             continue;
         };
         for (sum, value) in energy.iter_mut().zip(contributor.energy) {
             *sum += value;
         }
+        layer.unlisted_sources += 1;
     }
 }
 

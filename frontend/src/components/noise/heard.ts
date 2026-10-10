@@ -1,9 +1,11 @@
 // How a source is heard, short enough for a column of the popup's row, from its passes per hour (END
 // periods: day 12 h, evening 4 h, night 8 h): steady when its passes run together at its distance,
-// else how often it passes ("732 veh/h", "120 trains/day"); the building layer's events how often
-// they sound ("3× a day": church bells, calls to prayer); the aircraft layer its flights a day above
-// 50 dB. Steady sources (buildings, industry, ships) carry no passes and get no words.
+// else how often it passes, a road's vehicles an hour by day ("732 veh/h") and every rarer pass a
+// day ("120 trains/day", "0.3 veh/day"); the building layer's events how often they sound
+// ("3× a day": church bells, calls to prayer); the aircraft layer its flights a day above 50 dB.
+// Steady sources (buildings, industry, ships) carry no passes and get no words.
 import type { AircraftEvents, Contributor } from '../../types/noise'
+import { fmtCount } from '../../utils/formatters.ts'
 
 const PERIOD_HOURS = { day: 12, evening: 4, night: 8 } as const
 
@@ -12,32 +14,18 @@ function perDay(perHour: { day: number, evening: number, night: number }): numbe
   return perHour.day * PERIOD_HOURS.day + perHour.evening * PERIOD_HOURS.evening + perHour.night * PERIOD_HOURS.night
 }
 
-/** `count` a day, by the week or month when fewer: "120 trains/day", "2 trains/week", "3× a day". */
-function daily(count: number, unit: string | null): string {
-  const [n, per] = count >= 1.5 ? [count, 'day'] : count * 7 >= 0.75 ? [count * 7, 'week'] : [count * 30, 'month']
-  const whole = Math.max(1, Math.round(n))
-  return unit ? `${whole} ${unit}/${per}` : `${whole}× a ${per}`
-}
-
 export function heardText(sourceType: string, heard: Contributor['heard']): string | null {
   if (!heard) return null
   if (heard.steady) return 'steady'
-  const day = heard.per_hour.day
-  if (sourceType === 'railway') return daily(perDay(heard.per_hour), 'trains')
-  if (sourceType === 'building') return daily(perDay(heard.per_hour), null)
-  if (day >= 1) return `${Math.round(day)} veh/h`
-  return daily(perDay(heard.per_hour), 'veh')
+  const daily = fmtCount(perDay(heard.per_hour))
+  if (sourceType === 'railway') return `${daily} trains/day`
+  if (sourceType === 'building') return `${daily}× a day`
+  return heard.per_hour.day >= 1 ? `${Math.round(heard.per_hour.day)} veh/h` : `${daily} veh/day`
 }
 
-/** The aircraft layer's flights whose peak level here reaches the events table's first band
- *  (50 dB): an hour from two an hour (the column holds "48 flights/h", not "1143 flights/day"), a
- *  day from one and a half a day, else a year ("5 flights/year", "<1 flight/year"); none without
- *  such flights. */
+/** The aircraft layer's flights a day whose peak level here reaches the flights table's first band
+ *  (50 dB); none without such flights. */
 export function flightsText(events: AircraftEvents | undefined): string | null {
   const perDay = events?.per_day[0] ?? 0
-  if (perDay <= 0) return null
-  if (perDay >= 48) return `${Math.round(perDay / 24)} flights/h`
-  if (perDay >= 1.5) return `${Math.round(perDay)} flights/day`
-  const perYear = perDay * 365.25
-  return perYear >= 0.5 ? `${Math.round(perYear)} flights/year` : '<1 flight/year'
+  return perDay > 0 ? `${fmtCount(perDay)} flights/day` : null
 }

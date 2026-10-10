@@ -8,15 +8,16 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { streamPopup } from '../../../lib/popup-stream'
 import type { BuildingAnswer, Contributor, LayerLevels, PopupPiece, RayTerms, SegmentFan } from '../../../types/noise'
 import { fmtInt } from '../../../utils/formatters'
+import { FadingText } from '../../ui/fading-text'
 import { HoverText } from '../../ui/info-tip'
 import { contributorLabel, SOURCE_LABELS } from '../labels'
-import { formatDist, lineRow } from '../shared'
+import { Chevron, COLUMN_NAME, formatDist, lineRow } from '../shared'
 import { MetadataRows } from '../source/MetadataRows'
 import { ProfileDiagram } from './ProfileDiagram'
 
-/** One grid for the whole list: label, ground and screening in calm air and bent down, Lden. */
-const GRID = 'grid grid-cols-[minmax(0,1fr)_2.9rem_2.9rem_2.6rem] gap-x-2'
-const HEADER = 'text-[10px] font-sans text-muted-foreground/70'
+/** One grid for the whole list: label, ground and screening in calm air and bent down, Lden, and
+ *  the chevron of what opens. */
+const GRID = 'grid grid-cols-[minmax(0,1fr)_2.9rem_2.9rem_2.6rem_0.75rem] gap-x-2'
 const COMPASS_POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const
 const EARTH_M_PER_DEGREE = 111_320
 /** The map first frames the listed pieces within this of the loudest: those that make the level
@@ -84,14 +85,14 @@ function ReceiverRows({ building, reflectionDb }: { building: BuildingAnswer | n
       {facade && building && (
         <>
           {lineRow(
-            <HoverText title={'Inside a building the level is computed 0.1 m in front of\nits façades, 4 m up; the loudest by Lden is shown'}>Receiver</HoverText>,
+            <HoverText title={'Inside a building the level is computed 0.1 m in front of its\nfaçades, 4 m up; the loudest by Lden is shown'}>Receiver</HoverText>,
             `façade facing ${compassPoint(facade.bearing_deg)}`,
           )}
           {lineRow('Façade', `loudest of ${building.facade_receivers} façade points`)}
         </>
       )}
       {reflectionDb > 0 && lineRow(
-        <HoverText title={'Walls close behind the receiver reflect sound back to it\n(CNOSSOS-EU): added to every source'}>Reflection</HoverText>,
+        <HoverText title="Walls close behind the receiver reflect sound back to it (CNOSSOS-EU), for every source">Reflection</HoverText>,
         `+${reflectionDb.toFixed(1)} dB`,
       )}
     </div>
@@ -123,19 +124,19 @@ function summedRays(piece: PopupPiece): SummedRay[] {
 function RayTable({ rays }: { rays: SummedRay[] }) {
   const cell = 'text-right tabular-nums text-foreground'
   return (
-    <div data-testid="ray-table" className="grid grid-cols-[1.4rem_3.2rem_3.4rem_3.2rem_3.2rem_2.6rem] gap-x-1.5 mt-1 text-[10px]">
-      <span className="text-muted-foreground/70">#</span>
-      <span className="text-right text-muted-foreground/70">
-        <HoverText title={'What reaches the receiver along the ray, per its share of the\npiece, against the clearest ray (divergence apart)'}>reaches</HoverText>
+    <div data-testid="ray-table" className="grid grid-cols-[1.4rem_3.2rem_3.4rem_3.2rem_3.2rem_2.6rem] gap-x-1.5 mt-1">
+      <span className={COLUMN_NAME}>#</span>
+      <span className={`text-right ${COLUMN_NAME}`}>
+        <HoverText title={'What reaches the receiver along the ray, for its share of the\npiece, against the clearest ray (geometric spreading aside)'}>reaches</HoverText>
       </span>
-      <span className="text-right text-muted-foreground/70">m</span>
-      <span className="text-right text-muted-foreground/70">
+      <span className={`text-right ${COLUMN_NAME}`}>m</span>
+      <span className={`text-right ${COLUMN_NAME}`}>
         <HoverText title="Ground and screening together, in calm air">calm</HoverText>
       </span>
-      <span className="text-right text-muted-foreground/70">
+      <span className={`text-right ${COLUMN_NAME}`}>
         <HoverText title="Ground and screening together, the sound bent down (wind from the source, inversion)">bent</HoverText>
       </span>
-      <span className="text-right text-muted-foreground/70">air</span>
+      <span className={`text-right ${COLUMN_NAME}`}>air</span>
       {rays.map((ray, k) => (
         <RayRow key={k} index={k + 1} ray={ray} cell={cell} />
       ))}
@@ -176,40 +177,41 @@ function PieceDetail({ piece }: { piece: PopupPiece }) {
     </>
   )
   return (
-    <div data-testid="segment-piece" className="col-span-4 ml-3 mt-0.5 mb-1.5 pl-2 border-l-2 border-border/60">
+    <div data-testid="segment-piece" className="col-span-5 ml-3 mt-0.5 mb-2 space-y-1 pl-2 border-l-2 border-border/60">
       <MetadataRows c={asContributor(piece)} />
       {lineRow(
-        <HoverText title={line ? 'A-weighted sound power per metre of the road or track' : 'A-weighted sound power'}>
-          Sound power, day
-        </HoverText>,
-        `${piece.emission.ld?.toFixed(1) ?? '–'} dB(A)${line ? ' per m' : ''}`,
+        <HoverText title="This piece's own A-weighted sound power by day, per metre of a road or track">This piece</HoverText>,
+        `${piece.emission.ld?.toFixed(1) ?? '–'} dB(A)${line ? '/m' : ''} by day`,
       )}
       {length >= 1 && lineRow('Piece', `${fmtInt(length)} m long, ${formatDist(Math.round(piece.distance_m))} away`)}
       {rays.length > 1 && lineRow(
-        <HoverText title={'The piece is summed over the angle it fills as seen from\nthe receiver: five equal parts, one ray each, and where\nbuildings stand in front of a part, a ray for every stretch\nhidden behind them and every free gap (CNOSSOS-EU point\nsum). On the map each ray is coloured by what reaches the\nreceiver along it: red the clearest, violet 10 dB less,\nblue 20, grey 30 and more'}>
+        <HoverText title={'The piece is summed over the angle it fills from the receiver: five\nequal parts, and behind buildings a ray for every hidden stretch and\nfree gap (CNOSSOS-EU). On the map each ray is coloured by what reaches\nthe receiver along it: red the clearest, violet 10 dB less, blue 20,\ngrey 30 and more'}>
           Rays summed
         </HoverText>,
         <button
           type="button"
-          className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+          className="inline-flex items-center gap-1 hover:bg-muted/40"
           onClick={() => setShowRays(shown => !shown)}
           aria-expanded={showRays}
         >
           {weakest < -0.05 ? `${rays.length}, weakest ${term(-weakest)} dB` : `${rays.length}, all clear alike`}
+          <Chevron open={showRays} />
         </button>,
       )}
       {rays.length > 1 && showRays && <RayTable rays={rays} />}
       {trace && (
         <>
           {lineRow(
-            <HoverText title={'The ray from the piece\'s nearest point: the terms below and\nthe profile are its'}>Nearest ray</HoverText>,
+            <HoverText title="The ray from the piece's nearest point: the terms below and the profile are its">Nearest ray</HoverText>,
             `${fmtInt(trace.slant_m)} m, ${Math.round(trace.source_altitude_m)} → ${Math.round(trace.receiver_altitude_m)} m a.s.l.`,
           )}
           {buildings > 0 && lineRow('Buildings crossed', String(buildings))}
-          <div className="grid grid-cols-[minmax(0,1fr)_3.6rem_3.6rem] gap-x-2 mt-1">
-            {row('', 'calm air', 'bent down')}
+          <div className="grid grid-cols-[minmax(0,1fr)_3.6rem_3.6rem] gap-x-2">
+            <span />
+            <span className={`text-right ${COLUMN_NAME}`}>calm air</span>
+            <span className={`text-right ${COLUMN_NAME}`}>bent down</span>
             {row(
-              <HoverText title={'Ground reflection and screening by terrain, buildings and\nwalls together (CNOSSOS-EU)'}>Ground + screening</HoverText>,
+              <HoverText title="Ground reflection and screening by terrain, buildings and walls together (CNOSSOS-EU)">Ground + screening</HoverText>,
               term(trace.boundary_db[0]),
               term(trace.boundary_db[1]),
             )}
@@ -224,14 +226,14 @@ function PieceDetail({ piece }: { piece: PopupPiece }) {
               term(trace.air_db),
             )}
             {row(
-              <HoverText title={'How often the sound travels each way: bent down when the\nwind blows from the source or the air is inverted, mostly\nat night (the place\'s weather, ERA5)'}>Share of the day</HoverText>,
+              <HoverText title={'How often the sound travels each way: bent down when the wind blows\nfrom the source or the air is inverted, mostly at night (ERA5)'}>Share of the day</HoverText>,
               share(1 - trace.p[0]),
               share(trace.p[0]),
             )}
             {row('Share of the night', share(1 - trace.p[2]), share(trace.p[2]))}
           </div>
           <ProfileDiagram trace={trace} crossings={piece.crossings} />
-          <div className="text-[10px] text-muted-foreground/70">
+          <div className={COLUMN_NAME}>
             <span className="text-red-600">●</span> source <span className="text-sky-700">●</span> receiver
             {' '}<span className="text-sky-600">- -</span> calm air <span className="text-amber-600">···</span> bent down
           </div>
@@ -291,14 +293,14 @@ function groupPieces(pieces: PopupPiece[], layers: LayerLevels[]): LayerGroup[] 
 function layerNote(layer: LayerLevels): ReactNode {
   if (layer.source_type === 'aircraft') {
     return (
-      <HoverText title={'A box sums the flights of a year through one map cell at\none height for one aircraft group; an airport\'s ground\noperations are pieces like a road\'s. The loudest flights\nare listed under Sources'}>
+      <HoverText title={'A box sums the year\'s flights through one map cell at one height for\none aircraft group; an airport\'s ground operations are pieces like a\nroad\'s. The loudest flights are in the Aircraft row of the list'}>
         a year of ADS-B flights (ECAC Doc 29): {fmtInt(layer.evaluated)} boxes and pieces computed
       </HoverText>
     )
   }
   if (layer.evaluated >= layer.candidates) return `all ${fmtInt(layer.candidates)} pieces within reach computed`
   return (
-    <HoverText title={'The rest are far or screened: what they could add at most\nstays under 0.1 dB of the level, or a weighted sample of\nthem estimates it within 0.05 dB'}>
+    <HoverText title={'The rest are far or screened: together they add at most 0.1 dB,\nor a weighted sample of them stands for them within 0.05 dB'}>
       {fmtInt(layer.evaluated)} of {fmtInt(layer.candidates)} pieces within reach computed
     </HoverText>
   )
@@ -320,18 +322,19 @@ function PieceRow({ listed, open, onToggle, onHover }: {
     <>
       <button
         type="button"
-        className={`col-span-4 grid grid-cols-subgrid items-baseline py-px pl-3 text-left hover:bg-muted/40 ${open ? 'bg-muted/50' : ''}`}
+        className={`col-span-5 grid grid-cols-subgrid items-baseline py-px pl-3 text-left hover:bg-muted/40 ${open ? 'bg-muted/50' : ''}`}
         aria-expanded={open}
         onClick={onToggle}
         onMouseEnter={() => onHover(true)}
         onMouseLeave={() => onHover(false)}
       >
-        <span className="truncate whitespace-pre">
-          <span style={{ color }}>●</span> {direction.padEnd(2, ' ')} {formatDist(Math.round(piece.distance_m))}
+        <span className="truncate">
+          <span style={{ color }}>●</span> <span className="inline-block w-5">{direction}</span> {formatDist(Math.round(piece.distance_m))}
         </span>
         <span className="text-right tabular-nums text-foreground">{trace ? term(trace.boundary_db[0]) : '–'}</span>
         <span className="text-right tabular-nums text-foreground">{trace ? term(trace.boundary_db[1]) : '–'}</span>
         <span className="text-right tabular-nums text-foreground">{lden.toFixed(1)}</span>
+        <Chevron open={open} />
       </button>
       {open && <PieceDetail piece={piece} />}
     </>
@@ -339,12 +342,11 @@ function PieceRow({ listed, open, onToggle, onHover }: {
 }
 
 /** How the level comes about, for the view's heading. */
-export const SEGMENTS_EXPLAINED = 'Every source within reach is cut into pieces. The sound of each\n'
-  + 'piece is followed along its rays over the terrain and past\n'
-  + 'buildings, in calm air and bent down by the wind or a night\n'
-  + 'inversion, each as often as it happens here, 4 m above the\n'
-  + 'ground. The level is the energy sum of all pieces; the loudest\n'
-  + 'are listed and drawn on the map.'
+export const SEGMENTS_EXPLAINED = 'Every source within reach is cut into pieces. The sound of each piece\n'
+  + 'is followed along its rays over the terrain and past buildings, in calm\n'
+  + 'air and bent down by the wind or a night inversion, each as often as it\n'
+  + 'happens, to 4 m above the ground. The level is the energy sum of all\n'
+  + 'pieces; the loudest are listed and drawn on the map.'
 
 export function SegmentsSection({ lat, lng, building, reflectionDb, layers, onFan }: {
   lat: number
@@ -415,7 +417,7 @@ export function SegmentsSection({ lat, lng, building, reflectionDb, layers, onFa
     setOpen(next)
   }
   return (
-    <div data-testid="segments" className="text-[11px] font-mono text-muted-foreground">
+    <div data-testid="segments">
       <ReceiverRows building={building} reflectionDb={reflectionDb} />
       {!pieces && !error && <div className="animate-pulse">computing the pieces…</div>}
       {error && <div className="text-destructive">{error}</div>}
@@ -423,41 +425,43 @@ export function SegmentsSection({ lat, lng, building, reflectionDb, layers, onFa
         <div className={`${GRID} items-baseline`}>
           <span />
           <HoverText
-            className={`col-span-2 text-center ${HEADER}`}
-            title={'What the ground and the screening by terrain, buildings and\nwalls do to the ray from the piece\'s nearest point, in dB:\nin calm air and with the sound bent down by the wind or an\ninversion (CNOSSOS-EU)'}
+            className={`col-span-2 text-center ${COLUMN_NAME}`}
+            title={'What the ground and the screening by terrain, buildings and walls do\nto the ray from the piece\'s nearest point, in calm air and with the\nsound bent down by the wind or an inversion (CNOSSOS-EU)'}
           >
             ground + screening
           </HoverText>
-          <span />
+          <span className="col-span-2" />
           <HoverText
-            className={HEADER}
-            title={'A piece: its direction and distance from the receiver. Its dot\nis its colour on the map: red the loudest listed piece, violet\n10 dB below it, blue 20, grey 30 and more'}
+            className={COLUMN_NAME}
+            title={'A piece\'s direction and distance. Its dot is its colour on the map:\nred the loudest piece, violet 10 dB below it, blue 20, grey 30 and more'}
           >
-            source, piece
+            Source, piece
           </HoverText>
-          <span className={`text-right ${HEADER}`}>calm</span>
-          <span className={`text-right ${HEADER}`}>bent</span>
-          <span className={`text-right ${HEADER}`}>Lden</span>
+          <span className={`text-right ${COLUMN_NAME}`}>calm</span>
+          <span className={`text-right ${COLUMN_NAME}`}>bent</span>
+          <span className={`text-right ${COLUMN_NAME}`}>Lden</span>
+          <span />
           {grouped.map(({ layer, sources }) => (
             <div key={layer.source_type} className="contents">
-              <div className="col-span-4 mt-2 pt-1 border-t border-border text-foreground font-sans font-medium uppercase tracking-[0.08em]">
+              <div className="col-span-5 mt-2 pt-1 border-t border-border font-medium text-foreground">
                 {SOURCE_LABELS[layer.source_type] ?? layer.source_type}
               </div>
-              <span className="col-span-4 mb-0.5 font-sans text-[10px] text-muted-foreground/80">{layerNote(layer)}</span>
+              <span className={`col-span-5 mb-0.5 ${COLUMN_NAME}`}>{layerNote(layer)}</span>
               {sources.map(source => {
                 const isOpen = openKeys.has(source.key)
                 return (
                   <div key={source.key} className="contents">
                     <button
                       type="button"
-                      className="col-span-4 grid grid-cols-subgrid items-baseline py-px text-left hover:bg-muted/40"
+                      className="col-span-5 grid grid-cols-subgrid items-baseline py-px text-left hover:bg-muted/40"
                       aria-expanded={isOpen}
                       onClick={() => toggle(source.key)}
                     >
-                      <span className="col-span-3 truncate text-foreground">{isOpen ? '▾' : '▸'} {source.label}</span>
+                      <FadingText className="col-span-3 text-foreground">{source.label}</FadingText>
                       <span className="text-right tabular-nums text-foreground">
                         {source.lden.toFixed(1)}
                       </span>
+                      <Chevron open={isOpen} />
                     </button>
                     {isOpen && source.pieces.map(listed => (
                       <PieceRow

@@ -1,6 +1,7 @@
 //! The ring loop on a synthetic release (flat ocean, one tile of road pieces): the fast answer
-//! stays within 0.1 dB of the exact one while evaluating fewer pieces, a click inside a building
-//! answers at the façade facing the road, and a complete release is required.
+//! stays within 0.1 dB of the exact one while evaluating fewer pieces, the list's last row counts
+//! the sources it holds, a click inside a building answers at the façade facing the road, and a
+//! complete release is required.
 
 use physics::bands::{BANDS, PERIODS};
 use physics::weather::{COLUMNS, ROWS, SECTORS, WeatherNode, encode as encode_weather};
@@ -29,31 +30,36 @@ fn release_root(name: &str) -> PathBuf {
     root
 }
 
-/// Road pieces of 100 m running north-south at `distances` east of the tile centre.
-fn write_roads(root: &Path, distances: &[f64]) {
+/// Road pieces of 100 m running north-south at `distances` east of the tile centre: one road, or
+/// with `separate` each piece a road of its own.
+fn write_roads(root: &Path, distances: &[f64], separate: bool) {
     let steps_per_metre = steps_per_metre();
     let half = (50.0 * steps_per_metre).round() as i16;
     let pieces: Vec<Piece> = distances
         .iter()
-        .map(|&distance| {
+        .enumerate()
+        .map(|(index, &distance)| {
             let x = (distance * steps_per_metre).round() as i16;
             Piece {
                 ends: [[x, -half], [x, half]],
-                attribute: 0,
+                attribute: if separate { index as u32 } else { 0 },
             }
         })
         .collect();
-    let attributes = [Attribute {
-        layer: Layer::Road,
-        height_m: 0.05,
-        ground_percent: 0,
-        platform_half_width_m: 5.0,
-        exclusion_radius_m: 0.0,
-        footprint_id: 0,
-        group_key: 1,
-        emission: [[70.0; BANDS]; PERIODS],
-        display: r#"["test road"]"#.into(),
-    }];
+    let roads = if separate { distances.len() } else { 1 };
+    let attributes: Vec<Attribute> = (0..roads)
+        .map(|index| Attribute {
+            layer: Layer::Road,
+            height_m: 0.05,
+            ground_percent: 0,
+            platform_half_width_m: 5.0,
+            exclusion_radius_m: 0.0,
+            footprint_id: 0,
+            group_key: index as u64 + 1,
+            emission: [[70.0; BANDS]; PERIODS],
+            display: format!(r#"["test road {index}"]"#),
+        })
+        .collect();
     let path = tile_path(&root.join("2026"), TILE, Kind::Sources);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, encode(&pieces, &attributes)).unwrap();
@@ -141,7 +147,7 @@ fn the_fast_answer_is_within_a_tenth_of_a_decibel_of_the_exact_one() {
         .map(|i| 20.0 * 1.15f64.powi(i))
         .filter(|d| *d < 2_900.0)
         .collect();
-    write_roads(&root, &distances);
+    write_roads(&root, &distances, false);
     std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let (exact, exact_count, contributors) = road_answer(&release, true);
@@ -159,12 +165,45 @@ fn the_fast_answer_is_within_a_tenth_of_a_decibel_of_the_exact_one() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// The list's last row counts the sources it holds: of forty roads the thirty listed leave ten.
+#[test]
+fn the_last_row_counts_the_sources_the_list_leaves_out() {
+    let root = release_root("rest");
+    let distances: Vec<f64> = (0..40).map(|i| 30.0 + 20.0 * f64::from(i)).collect();
+    write_roads(&root, &distances, true);
+    std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+    let release = Release::open(&root, "2026").unwrap();
+    let (lat, lon) = TILE.centre().to_degrees();
+    let mut last = None;
+    answer(
+        &release,
+        lat,
+        lon,
+        &Options {
+            exact: true,
+            pieces: 0,
+        },
+        &mut |update| {
+            let road = update
+                .layers
+                .iter()
+                .find(|layer| layer.layer == Layer::Road)
+                .unwrap();
+            last = Some((update.contributors.len(), road.unlisted_sources));
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(last.unwrap(), (30, 10));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 /// A listed piece carries its whole source's energy, not only the listed pieces' (the detailed
 /// calculation showed a source cut from the list at "at least" the sum of its listed pieces).
 #[test]
 fn a_listed_piece_carries_its_whole_source() {
     let root = release_root("listed");
-    write_roads(&root, &[30.0, 60.0, 90.0, 120.0]);
+    write_roads(&root, &[30.0, 60.0, 90.0, 120.0], false);
     std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let (lat, lon) = TILE.centre().to_degrees();
@@ -202,7 +241,7 @@ fn a_listed_piece_carries_its_whole_source() {
 #[test]
 fn a_click_inside_a_building_answers_at_the_facade_facing_the_road() {
     let root = release_root("building");
-    write_roads(&root, &[40.0]);
+    write_roads(&root, &[40.0], false);
     write_building(&root);
     std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
