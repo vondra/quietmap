@@ -93,8 +93,8 @@ pub struct CategoryFlow {
     pub electric_share: f64,
 }
 
-/// The junctions of CNOSSOS-EU 2.2.5 (Table F-3: k = 1 and 2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The junctions of CNOSSOS-EU 2.2.5 (Table F-3: k = 1 and 2), in the order a tie is decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Junction {
     TrafficLights,
     Roundabout,

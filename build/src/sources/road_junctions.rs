@@ -140,11 +140,13 @@ pub fn row_junctions(
     for (chain, along) in chains.iter().zip(&along) {
         for (k, row) in chain.rows.iter().enumerate() {
             let middle = 0.5 * (chain.distances[k] + chain.distances[k + 1]);
+            // A crossing that is both a roundabout's entry and signalled, or two at one distance,
+            // is decided by kind, never by the order the chains came in.
             found[row.row] = along
                 .iter()
                 .map(|&(kind, at)| (kind, (at - middle).abs()))
                 .filter(|&(_, distance)| distance < JUNCTION_REACH_M)
-                .min_by(|a, b| a.1.total_cmp(&b.1));
+                .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
         }
     }
     found
@@ -264,5 +266,54 @@ mod tests {
         );
         assert_eq!([distance(3), distance(4)], [Some(25.0), Some(25.0)]);
         assert_eq!(found[5], None, "a parallel street");
+    }
+
+    /// A crossing both signalled and a roundabout's entry gives every road through it the signal,
+    /// whichever chain comes first: the ways' hash order decided it, so two builds of Prague's tile
+    /// 2212/1386 from the same inputs differed.
+    #[test]
+    fn a_tie_at_a_crossing_is_decided_by_kind_not_by_the_chains_order() {
+        use super::super::road_slope::{WayRow, chains};
+        let degrees = |metres: f64| metres / METRES_PER_DEGREE;
+        let junctions = Junctions::new(
+            0.0,
+            [
+                ((0.0, degrees(-10.0)), Junction::TrafficLights),
+                ((0.0, 0.0), Junction::Roundabout),
+            ],
+        );
+        let row = |row: usize, index: i16, from: (f64, f64), to: (f64, f64)| WayRow {
+            row,
+            segment_index: index,
+            start: (degrees(from.1), degrees(from.0)),
+            end: (degrees(to.1), degrees(to.0)),
+            off_ground: false,
+        };
+        let mut ways = HashMap::new();
+        ways.insert(
+            1,
+            vec![
+                row(0, 0, (-50.0, 0.0), (-10.0, 0.0)),
+                row(1, 1, (-10.0, 0.0), (0.0, 0.0)),
+                row(2, 2, (0.0, 0.0), (50.0, 0.0)),
+            ],
+        );
+        ways.insert(
+            2,
+            vec![
+                row(3, 0, (0.0, -50.0), (0.0, 0.0)),
+                row(4, 1, (0.0, 0.0), (0.0, 50.0)),
+            ],
+        );
+        let mut both = chains(&mut ways);
+        let found = row_junctions(&both, &junctions, 5);
+        both.reverse();
+        assert_eq!(row_junctions(&both, &junctions, 5), found);
+        assert!(
+            found
+                .iter()
+                .all(|row| row.is_some_and(|(kind, _)| kind == Junction::TrafficLights)),
+            "{found:?}"
+        );
     }
 }
