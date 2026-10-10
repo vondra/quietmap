@@ -98,6 +98,7 @@ fn click(release: &Release, east_m: f64) -> (f64, Option<f64>) {
         &Options {
             exact: true,
             source: Vec::new(),
+            piece: None,
         },
         &mut |update| {
             let road = update
@@ -128,6 +129,7 @@ fn road_answer(release: &Release, exact: bool) -> ([f64; PERIODS], usize, usize)
         &Options {
             exact,
             source: Vec::new(),
+            piece: None,
         },
         &mut |update| {
             let road = update
@@ -185,6 +187,7 @@ fn the_last_row_counts_the_sources_the_list_leaves_out() {
         &Options {
             exact: true,
             source: Vec::new(),
+            piece: None,
         },
         &mut |update| {
             let road = update
@@ -218,6 +221,7 @@ fn an_asked_source_lists_every_piece_of_it() {
         &Options {
             exact: false,
             source: vec![1],
+            piece: None,
         },
         &mut |update| {
             let road = update
@@ -313,6 +317,7 @@ fn a_source_on_the_edge_of_the_read_block_is_answered() {
         &Options {
             exact: true,
             source: Vec::new(),
+            piece: None,
         },
         &mut |update| {
             let layer = update
@@ -379,6 +384,7 @@ fn the_sampled_answer_is_within_a_twentieth_of_a_decibel_and_reproducible() {
             &Options {
                 exact,
                 source: Vec::new(),
+                piece: None,
             },
             &mut |update| {
                 let layer = update
@@ -471,6 +477,7 @@ fn a_sampled_layer_sounds_as_the_exact_one() {
             &Options {
                 exact,
                 source: Vec::new(),
+                piece: None,
             },
             &mut |update| {
                 last = update.loudness.as_ref().map(|loudness| loudness.nden_sone);

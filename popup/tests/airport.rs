@@ -144,6 +144,7 @@ fn aircraft_answer(root: &PathBuf, exact: bool) -> ([f64; PERIODS], usize, serde
         &Options {
             exact,
             source: Vec::new(),
+            piece: None,
         },
         &mut |update| {
             let layer = update

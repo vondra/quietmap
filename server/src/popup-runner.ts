@@ -8,6 +8,8 @@ export interface PopupRequest {
   lon: number
   /** An opened row's sound path: the group ids of its parts (16 hex digits each). */
   source?: string[]
+  /** Of that source, only its piece of this rank (loudest first) with every ray's ground. */
+  piece?: number
 }
 
 export interface PopupRunHandlers {
@@ -43,6 +45,7 @@ export function popupArguments(preparedDir: string, request: PopupRequest): stri
     '--lat', String(request.lat),
     '--lon', String(request.lon),
     ...(request.source ? ['--source', request.source.join(',')] : []),
+    ...(request.piece !== undefined ? ['--piece', String(request.piece)] : []),
   ]
 }
 

@@ -1,5 +1,6 @@
-// GET /api/popup?lat=&lon=[&year=][&source=ID,...]: one click's answer streamed as it is refined
-// (with an opened row's sound path when asked), one line of JSON
+// GET /api/popup?lat=&lon=[&year=][&source=ID,...[&piece=K]]: one click's answer streamed as it is
+// refined (with an opened row's sound path, or one of its pieces ray by ray, when asked), one line
+// of JSON
 // per update (application/x-ndjson), each line flushed as `qm-popup` writes it. A failed
 // computation ends the stream with one line `{"error": "..."}`; the updates before it are
 // incomplete and must not be shown as the level.
@@ -22,10 +23,12 @@ export function coordinate(text: unknown): number | null {
 
 /** An opened row's parts: one to eight group ids of 16 hex digits. */
 const SOURCE = /^[0-9a-f]{16}(,[0-9a-f]{16}){0,7}$/
+/** A listed piece's rank: the popup lists 24. */
+const PIECE = /^([0-9]|1[0-9]|2[0-3])$/
 
 /** The click's point and year, or what is wrong with the query. Longitude wraps to -180..180. */
 export function parsePopupQuery(
-  query: { lat?: unknown; lon?: unknown; year?: unknown; source?: unknown },
+  query: { lat?: unknown; lon?: unknown; year?: unknown; source?: unknown; piece?: unknown },
   years: readonly string[],
 ): PopupRequest | string {
   const lat = coordinate(query.lat)
@@ -37,6 +40,9 @@ export function parsePopupQuery(
   if (query.source !== undefined && (typeof query.source !== 'string' || !SOURCE.test(query.source))) {
     return 'source must be one to eight ids of 16 hex digits'
   }
+  if (query.piece !== undefined && (query.source === undefined || typeof query.piece !== 'string' || !PIECE.test(query.piece))) {
+    return 'piece must be 0 to 23, with a source'
+  }
   return {
     year,
     lat,
@@ -44,6 +50,7 @@ export function parsePopupQuery(
     // change the click's sampling seed against the same point asked of the popup directly.
     lon: lon >= -180 && lon < 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180,
     ...(typeof query.source === 'string' ? { source: query.source.split(',') } : {}),
+    ...(typeof query.piece === 'string' ? { piece: Number(query.piece) } : {}),
   }
 }
 
@@ -51,7 +58,7 @@ export async function popupRoutes(
   app: FastifyInstance,
   { runner, years }: { runner: PopupRunner; years: readonly string[] },
 ): Promise<void> {
-  app.get<{ Querystring: { lat?: string; lon?: string; year?: string; source?: string } }>('/api/popup', {
+  app.get<{ Querystring: { lat?: string; lon?: string; year?: string; source?: string; piece?: string } }>('/api/popup', {
     // Never compressed: a compressor holds lines back until its buffer fills.
     compress: false,
     // A HEAD request would compute a click nobody reads.

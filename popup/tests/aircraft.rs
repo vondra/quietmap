@@ -110,6 +110,7 @@ fn aircraft_day_energy(release: &Release) -> (f64, usize) {
         &Options {
             exact: false,
             source: Vec::new(),
+            piece: None,
         },
         &mut |update| {
             let layer = update

@@ -345,8 +345,23 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                     tenth(t.without_ground_db[0]), tenth(t.without_ground_db[1]),
                     tenth(t.air_db), t.slant_m.round(),
                 ]);
-                json!([(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6,
-                    (ray.angle_rad * 1e6).round() / 1e6, lden(&ray.energy), terms])
+                let mut listed = json!([(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6,
+                    (ray.angle_rad * 1e6).round() / 1e6, lden(&ray.energy), terms]);
+                // The asked piece's rays: the ground (distance from the source m, altitude m, G),
+                // the source's altitude and the walls (distance m, height m, a building's) under each.
+                if let Some(profile) = &ray.profile {
+                    let metres = |value: f64| (value * 10.0).round() / 10.0;
+                    listed.as_array_mut().expect("an array").push(json!({
+                        "ground": profile.ground.iter().map(|[distance, altitude, g]| {
+                            json!([metres(*distance), metres(*altitude), (g * 100.0).round() / 100.0])
+                        }).collect::<Vec<_>>(),
+                        "source_altitude_m": metres(profile.source_altitude_m),
+                        "walls": profile.walls.iter().map(|(distance, height, building)| {
+                            json!([metres(*distance), metres(*height), building])
+                        }).collect::<Vec<_>>(),
+                    }));
+                }
+                listed
             }).collect::<Vec<_>>(),
             "received": received,
             "path": path_account(&piece.path, update.reflection_db),

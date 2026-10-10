@@ -1,7 +1,8 @@
-//! `qm-popup --prepared DIR --year YYYY --lat LAT --lon LON [--exact 1] [--source KEY,...]`:
-//! answers one click and prints each streamed update as a line of JSON (the benchmark's and the
-//! server's reference); `--source` adds the sound path of the sources with those group ids (16 hex
-//! digits, an opened row's parts) to the final update.
+//! `qm-popup --prepared DIR --year YYYY --lat LAT --lon LON [--exact 1] [--source KEY,...
+//! [--piece K]]`: answers one click and prints each streamed update as a line of JSON (the
+//! benchmark's and the server's reference); `--source` adds the sound path of the sources with
+//! those group ids (16 hex digits, an opened row's parts) to the final update, `--piece` only its
+//! Kth loudest piece with the ground and walls under each of its rays.
 
 use popup::answer::{Options, answer};
 use popup::json::update_line;
@@ -35,6 +36,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
             })
             .transpose()?
             .unwrap_or_default(),
+        piece: value(arguments, "piece")
+            .map(|rank| rank.parse().map_err(|_| "--piece is not a rank"))
+            .transpose()?,
     };
     let (lat, lon) = (number("lat")?, number("lon")?);
     let mut stdout = std::io::stdout().lock();

@@ -606,6 +606,7 @@ fn against_popup(
             let options = popup::answer::Options {
                 exact: false,
                 source: Vec::new(),
+                piece: None,
             };
             let mut last = None;
             popup::answer::answer(release, lat, lon, &options, &mut |update| {

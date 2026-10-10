@@ -43,6 +43,8 @@ pub struct Options {
     /// The groups whose sound path the final update lists: every piece of them, each evaluated
     /// with certainty (an opened row's parts); none lists nothing.
     pub source: Vec<u64>,
+    /// Of those, list only the piece of this rank (loudest first) with each ray's ground and walls.
+    pub piece: Option<usize>,
 }
 
 /// Where the click is answered: the click itself or a building's façade.
@@ -410,7 +412,8 @@ pub fn answer(
         evaluate_seconds += evaluate_started.elapsed().as_secs_f64();
         let last_ring = ring == ground_rings.max(aircraft_rings);
         let (pieces, arrival) = if last_ring && !options.source.is_empty() {
-            let (pieces, arrival) = list_source(&mut selections, &evaluation, &attributes)?;
+            let (pieces, arrival) =
+                list_source(&mut selections, &evaluation, &attributes, options.piece)?;
             (pieces, Some(arrival))
         } else {
             (Vec::new(), None)

@@ -128,11 +128,14 @@ test('a click may name a configured year; longitude wraps into -180..180', async
   }
 })
 
-test('an opened row asks the popup for its parts\' sound path', async (t) => {
+test('an opened row asks the popup for its parts\' sound path, and an opened piece for its rays', async (t) => {
   const popup = await listen(t)
   const [first] = await lines(await popup('lat=1&lon=14&source=9e478fec839d6d5f,00000000000000aa'))
   assert.deepEqual((first.value.argv as string[]).slice(2),
     ['--year', '2026', '--lat', '1', '--lon', '14', '--source', '9e478fec839d6d5f,00000000000000aa'])
+  const [piece] = await lines(await popup('lat=1&lon=14&source=9e478fec839d6d5f&piece=23'))
+  assert.deepEqual((piece.value.argv as string[]).slice(2),
+    ['--year', '2026', '--lat', '1', '--lon', '14', '--source', '9e478fec839d6d5f', '--piece', '23'])
 })
 
 test('an invalid point or year, or a HEAD request, is refused before anything runs', async (t) => {
@@ -153,6 +156,9 @@ test('an invalid point or year, or a HEAD request, is refused before anything ru
     ['lat=50&lon=14&source=all', /^source must be/],
     ['lat=50&lon=14&source=9E478FEC839D6D5F', /^source must be/],
     ['lat=50&lon=14&source=', /^source must be/],
+    ['lat=50&lon=14&piece=1', /^piece must be/],
+    ['lat=50&lon=14&source=9e478fec839d6d5f&piece=24', /^piece must be/],
+    ['lat=50&lon=14&source=9e478fec839d6d5f&piece=01', /^piece must be/],
   ] as const) {
     const response = await app.inject(`/api/popup?${query}`)
     assert.equal(response.statusCode, 400, query)

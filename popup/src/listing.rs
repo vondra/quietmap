@@ -1,8 +1,9 @@
-//! A source's sound path (`qm-popup --source KEYS`, an opened row's "Sound path"): every piece of
-//! the asked sources, each evaluated with certainty, loudest first, with its emission, its own
-//! sound path account and the buildings and walls on the ray from its closest point; the
+//! A source's sound path (`qm-popup --source KEYS`, an opened row's pieces): every piece of the
+//! asked sources, each evaluated with certainty, loudest first, with its emission, its own sound
+//! path account and the buildings and walls on the ray from its closest point; the
 //! [`TRACED_PIECES`] loudest also with every ray they were summed over, what it delivers and its
-//! terms, and the ground under the ray from the closest point.
+//! terms, and the ground under the ray from the closest point; one asked piece (`--piece K`) with
+//! the ground and walls under each of its rays.
 
 use crate::candidates::{Attributes, Candidate};
 use crate::evaluate::{Path, Received, Receiver, Scratch, period_sums, source_rays, trace};
@@ -37,13 +38,42 @@ pub struct EvaluatedPiece {
 
 /// One ray of a listed piece: the point it leaves from (click metres), the in-plane angle it
 /// stands for (0 for a point), the energy it delivers per period (the piece's energy is their
-/// sum) and the terms it was summed with.
+/// sum), the terms it was summed with, and for the asked piece its ground and walls.
 #[derive(Clone)]
 pub struct ListedRay {
     pub from_m: [f64; 2],
     pub angle_rad: f64,
     pub energy: [f64; PERIODS],
     pub terms: ListedTerms,
+    pub profile: Option<RayProfile>,
+}
+
+/// The ground and the walls under one ray as the evaluation saw them: from the source, the
+/// distance (m), altitude (m) and G of at most [`PROFILE_POINTS`] samples; the source's altitude
+/// (m); each wall's distance (m), height above the ground (m) and whether a building's (else a
+/// barrier's). No wall where the skyline showed none could reach the line of sight.
+#[derive(Clone)]
+pub struct RayProfile {
+    pub ground: Vec<[f64; 3]>,
+    pub source_altitude_m: f64,
+    pub walls: Vec<(f64, f64, bool)>,
+}
+
+/// At most [`PROFILE_POINTS`] samples of the ground under a ray: distance, altitude, G.
+fn sampled(ground: &physics::profile::Profile) -> Vec<[f64; 3]> {
+    let step = ground.t.len().div_ceil(PROFILE_POINTS).max(1);
+    let mut samples: Vec<[f64; 3]> = (0..ground.t.len())
+        .filter(|&k| k % step == 0 || k + 1 == ground.t.len())
+        .map(|k| {
+            [
+                ground.t[k] * ground.horizontal_m,
+                ground.ground_m[k],
+                ground.ground_factor[k],
+            ]
+        })
+        .collect();
+    samples.dedup_by(|a, b| a[0] == b[0]);
+    samples
 }
 
 /// A ray's terms as A-weighted attenuations over the piece's day emission spectrum (dB): ground
@@ -119,11 +149,13 @@ pub struct Arrival {
 pub const EDGES: [&str; 3] = ["open", "buildings", "terrain"];
 
 /// The kept pieces of every layer (the asked source's) at `receiver`: how they arrive, and the
-/// [`TRACED_PIECES`] loudest listed.
+/// [`TRACED_PIECES`] loudest listed, or only the `piece`th loudest with every ray's ground and
+/// walls.
 pub fn list_source(
     selections: &mut [LayerSelection],
     receiver: &Receiver,
     attributes: &Attributes,
+    piece: Option<usize>,
 ) -> Result<(Vec<EvaluatedPiece>, Arrival), String> {
     let mut listed: Vec<EvaluatedPiece> = selections
         .iter_mut()
@@ -132,6 +164,7 @@ pub fn list_source(
     listed.sort_by(|a, b| lden_energy(&b.energy).total_cmp(&lden_energy(&a.energy)));
     let mut arrival = Arrival::default();
     let mut scratch = Scratch::default();
+    let asked = piece;
     for (rank, piece) in listed.iter_mut().enumerate() {
         let source = &attributes[piece.candidate.attribute];
         let [a, b] = piece.candidate.ends_m;
@@ -157,7 +190,8 @@ pub fn list_source(
                 *sum += value;
             }
         }
-        if rank >= TRACED_PIECES {
+        let profiled = asked == Some(rank);
+        if !profiled && (asked.is_some() || rank >= TRACED_PIECES) {
             continue;
         }
         {
@@ -185,7 +219,24 @@ pub fn list_source(
                 &mut scratch,
                 &mut |ray| {
                     let terms = &ray.terms;
+                    let profile = profiled.then(|| RayProfile {
+                        ground: sampled(ray.profile),
+                        source_altitude_m: ray.profile.ground_m.first().copied().unwrap_or(0.0)
+                            + source.height_m,
+                        walls: ray
+                            .crossings
+                            .iter()
+                            .map(|wall| {
+                                (
+                                    wall.t * ray.profile.horizontal_m,
+                                    wall.height_m,
+                                    wall.building,
+                                )
+                            })
+                            .collect(),
+                    });
                     piece.rays.push(ListedRay {
+                        profile,
                         from_m: ray.from_m,
                         angle_rad: ray.angle_rad,
                         energy: std::array::from_fn(|period| {
@@ -210,18 +261,7 @@ pub fn list_source(
             )?;
             let terms = trace(receiver, from, source, &mut scratch)?;
             let ground = scratch.profile();
-            let step = ground.t.len().div_ceil(PROFILE_POINTS).max(1);
-            let mut profile: Vec<[f64; 3]> = (0..ground.t.len())
-                .filter(|&k| k % step == 0 || k + 1 == ground.t.len())
-                .map(|k| {
-                    [
-                        ground.t[k] * ground.horizontal_m,
-                        ground.ground_m[k],
-                        ground.ground_factor[k],
-                    ]
-                })
-                .collect();
-            profile.dedup_by(|a, b| a[0] == b[0]);
+            let profile = sampled(ground);
             piece.trace = Some(PieceTrace {
                 source_altitude_m: ground.ground_m.first().copied().unwrap_or(0.0)
                     + source.height_m,
@@ -238,6 +278,9 @@ pub fn list_source(
             });
         }
     }
-    listed.truncate(TRACED_PIECES);
+    match asked {
+        Some(rank) => listed = listed.into_iter().nth(rank).into_iter().collect(),
+        None => listed.truncate(TRACED_PIECES),
+    }
     Ok((listed, arrival))
 }

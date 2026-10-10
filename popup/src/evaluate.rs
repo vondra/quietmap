@@ -189,12 +189,15 @@ fn add_ray(
 
 /// One ray of a source at the receiver: the point it leaves from (click metres), the in-plane
 /// angle it stands for on a line piece (0 for a point), its weight (the divergence, for a line the
-/// angle times the line's, and the receiver reflection) and its terms.
-pub struct SourceRay {
+/// angle times the line's, and the receiver reflection), its terms, and the ground and the walls it
+/// was computed over (none where the skyline shows no wall can reach its line of sight).
+pub struct SourceRay<'s> {
     pub from_m: [f64; 2],
     pub angle_rad: f64,
     pub weight: f64,
     pub terms: RayTerms,
+    pub profile: &'s Profile,
+    pub crossings: &'s [Crossing],
 }
 
 /// Every ray of one candidate at the receiver: a point's one, a line piece's quadrature nodes.
@@ -221,6 +224,8 @@ pub fn source_rays(
             angle_rad: 0.0,
             weight: divergence * reflection,
             terms,
+            profile: &scratch.profile,
+            crossings: &scratch.crossings,
         });
         return Ok(());
     }
@@ -264,6 +269,8 @@ pub fn source_rays(
             angle_rad: node.weight_rad,
             weight: node.weight_rad * divergence * reflection,
             terms,
+            profile: &scratch.profile,
+            crossings: &scratch.crossings,
         });
     }
     scratch.nodes = nodes;
