@@ -149,3 +149,72 @@ fn an_ocean_tile_is_at_sea_level_and_soft_ground_stays_read() {
         assert!(profile.ground_m[1] > 150.0);
     });
 }
+
+#[test]
+fn a_ray_starting_on_a_row_line_reads_the_stretch_it_heads_into() {
+    let fixture = fixture(rugged, false);
+    let row = (50.08_f64 * 3600.0).round();
+    let on_row = |lon: f64| {
+        fixture
+            .frame
+            .to_metres(Mercator::from_degrees(row / 3600.0, lon))
+    };
+    fixture.with_ground(|ground| {
+        let mut profile = Profile::default();
+        for (source, receiver) in [
+            (
+                on_row(14.42),
+                [on_row(14.42)[0] + 700.0, on_row(14.42)[1] + 900.0],
+            ),
+            (
+                on_row(14.43),
+                [on_row(14.43)[0] - 500.0, on_row(14.43)[1] - 800.0],
+            ),
+            (
+                on_row(14.41),
+                [on_row(14.41)[0] + 1_300.0, on_row(14.41)[1]],
+            ),
+        ] {
+            let start_y = fixture.frame.to_mercator(source).y;
+            assert!(
+                ground.row_y.contains(&start_y),
+                "the start lies on a row line"
+            );
+            ground.fill_profile(source, receiver, &mut profile).unwrap();
+            for (index, &t) in profile.t.iter().enumerate() {
+                let point = [
+                    source[0] + t * (receiver[0] - source[0]),
+                    source[1] + t * (receiver[1] - source[1]),
+                ];
+                let expected = ground.at(point).unwrap().height_m;
+                assert!(
+                    (profile.ground_m[index] - expected).abs() < 1e-6,
+                    "{t} {source:?}"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn a_reversed_ray_reads_the_same_ground() {
+    let fixture = fixture(rugged, false);
+    fixture.with_ground(|ground| {
+        let (mut forward, mut backward) = (Profile::default(), Profile::default());
+        for (source, receiver) in RAYS {
+            ground.fill_profile(source, receiver, &mut forward).unwrap();
+            ground
+                .fill_profile(receiver, source, &mut backward)
+                .unwrap();
+            assert_eq!(forward.t.len(), backward.t.len());
+            for (index, &t) in forward.t.iter().enumerate() {
+                let mirror = backward.t.len() - 1 - index;
+                assert!((t - (1.0 - backward.t[mirror])).abs() < 1e-9);
+                assert!((forward.ground_m[index] - backward.ground_m[mirror]).abs() < 1e-6);
+                assert!(
+                    (forward.ground_factor[index] - backward.ground_factor[mirror]).abs() < 1e-9
+                );
+            }
+        }
+    });
+}

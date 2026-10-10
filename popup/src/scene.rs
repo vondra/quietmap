@@ -134,14 +134,20 @@ impl<'a> Ground<'a> {
         };
         // Row lines ascend southward in `rows`; `north` is the index of the row at or north of
         // the point, `next_row` the next row line strictly ahead.
-        let at_or_north = rows.partition_point(|&y| y <= a.y);
-        let mut north = at_or_north
+        // A start exactly on a row line belongs to the stretch the ray heads into: the row is
+        // north of it heading south, south of it heading north.
+        let north_of_start = if rise > 0.0 {
+            rows.partition_point(|&y| y <= a.y)
+        } else {
+            rows.partition_point(|&y| y < a.y)
+        };
+        let mut north = north_of_start
             .checked_sub(1)
             .ok_or("the ray starts north of the scene")?;
         let mut next_row = if rise > 0.0 {
-            Some(at_or_north)
+            Some(north_of_start)
         } else {
-            rows.partition_point(|&y| y < a.y).checked_sub(1)
+            north_of_start.checked_sub(1)
         };
         let mut tile: Option<(TileId, Option<&Terrain<'a>>)> = None;
         loop {
@@ -235,9 +241,16 @@ fn node(terrain: &Terrain, row: i64, column: i64) -> Option<Node> {
 }
 
 /// The ground a fraction `f` of the way from node `a` to node `b`: height and ground factor
-/// linear, forest cover from the nearer node; `None` where either node has no data.
+/// linear, forest cover from the nearer node; `None` where a node it weighs is missing or has no
+/// data. A node of no weight is not read: on a node or a tile seam the vertex may lie in the tile
+/// that lacks its zero-weight neighbour.
 fn edge_sample(a: Option<Node>, b: Option<Node>, f: f64) -> Option<GroundSample> {
-    let (a, b) = (a?, b?);
+    let (a, b) = match (a, b) {
+        (Some(a), Some(b)) => (a, b),
+        (Some(a), None) if f <= 0.0 => (a, a),
+        (None, Some(b)) if f >= 1.0 => (b, b),
+        _ => return None,
+    };
     if [a, b]
         .iter()
         .any(|node| node.height_code == HEIGHT_MISSING || node.impervious_percent > PERCENT_MAX)

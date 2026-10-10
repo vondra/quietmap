@@ -56,15 +56,19 @@ impl StateRay {
         chord + self.arc_excess(chord)
     }
 
-    /// `2Γ·asin(ℓ/2Γ) − ℓ`, the arc's excess over its chord, by its series in `x = ℓ/2Γ` (at most
-    /// 1/16, as Γ ≥ 8d): `x³/6 + 3x⁵/40 + 5x⁷/112 + 35x⁹/1152` times 2Γ, the next term below 1e-15
-    /// of the arc; the kernel's `arc_excess`.
+    /// `2Γ·asin(ℓ/2Γ) − ℓ`, the arc's excess over its chord: by its series in `x = ℓ/2Γ` up to
+    /// x = 1/16 (Γ ≥ 8d holds the direct chord there; `x³/6 + 3x⁵/40 + 5x⁷/112 + 35x⁹/1152` times
+    /// 2Γ, the next term below 1e-15 of the arc), by asin beyond (a leg to an image or through A
+    /// can be longer than d).
     #[inline]
     fn arc_excess(&self, chord: f64) -> f64 {
         match self.state {
             MeteorologicalState::Homogeneous => 0.0,
             MeteorologicalState::Favourable => {
-                let x = (chord / (2.0 * self.radius_m)).min(1.0);
+                let x = chord / (2.0 * self.radius_m);
+                if x > 1.0 / 16.0 {
+                    return 2.0 * self.radius_m * x.min(1.0).asin() - chord;
+                }
                 let x2 = x * x;
                 2.0 * self.radius_m
                     * x
@@ -108,10 +112,12 @@ impl StateRay {
                 if first.1 >= chord {
                     excess
                 } else {
-                    // (2.5.27): 2 SA + 2 AR - SO - OR - SR with A on the chord under O; SA + AR =
-                    // SR, so it is -(SO + OR - SR) and the arcs' excesses.
+                    // (2.5.27): 2 SA + 2 AR - SO - OR - SR with A on the chord under O, that is
+                    // 2 (SA + AR - SR) - (SO + OR - SR) and the arcs' excesses. SA + AR = SR only
+                    // while A lies between S and R; an image point mirrored in a tilted plane
+                    // can stand beyond O, and then A lies outside.
                     let on_chord = (first.0, chord);
-                    -triangle_excess(from, first, to)
+                    2.0 * triangle_excess(from, on_chord, to) - triangle_excess(from, first, to)
                         + 2.0 * self.arc_excess(distance(from, on_chord))
                         + 2.0 * self.arc_excess(distance(on_chord, to))
                         - self.arc_excess(distance(from, first))
@@ -120,16 +126,6 @@ impl StateRay {
                 }
             }
         }
-    }
-
-    /// Absolute altitude of the state's direct ray above horizontal distance `x`.
-    pub fn altitude_at(&self, source: PlanePoint, receiver: PlanePoint, x: f64) -> f64 {
-        chord_altitude(source, receiver, x) + self.ray_height_above_chord(source, receiver, x)
-    }
-
-    /// Height the state's ray stands above the S–R chord at horizontal distance `x`.
-    fn ray_height_above_chord(&self, source: PlanePoint, receiver: PlanePoint, x: f64) -> f64 {
-        self.sag(source, receiver).at(x - source.0)
     }
 
     /// The state's ray height above the S–R chord as a function of the horizontal distance from
@@ -148,7 +144,7 @@ impl StateRay {
     }
 }
 
-/// Per-path constants of [`StateRay::ray_height_above_chord`].
+/// The favourable ray's height above the S–R chord, its per-path constants taken once.
 struct Sag {
     favourable: bool,
     along_per_x: f64,
@@ -263,3 +259,7 @@ pub fn diffraction_path(
         path.points.push(candidate);
     }
 }
+
+#[cfg(test)]
+#[path = "rubber_band_tests.rs"]
+mod tests;
