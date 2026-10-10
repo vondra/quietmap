@@ -349,7 +349,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                     (ray.angle_rad * 1e6).round() / 1e6, lden(&ray.energy), terms])
             }).collect::<Vec<_>>(),
             "received": received,
-            "source_lden": lden(&piece.source_energy),
+            "path": path_account(&piece.path, update.reflection_db),
             "emission": emission,
             "crossings": piece.crossings.iter().map(|(distance_m, height_m, footprint)| {
                 json!([
@@ -448,6 +448,24 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
     let mut line = line;
     if !pieces.is_empty() {
         line["pieces"] = Value::Array(pieces);
+    }
+    // How the asked source's sound arrives in calm air: the share of its energy whose rays see the
+    // point, bend over a building or wall, or over terrain, and what the screening takes of each.
+    if let Some(arrival) = &update.arrival {
+        let calm: f64 = arrival.edges.iter().map(|edge| edge[2]).sum();
+        line["arrival"] = json!({
+            "pieces": arrival.pieces,
+            "edges": crate::listing::EDGES
+                .iter()
+                .zip(&arrival.edges)
+                .filter(|(_, edge)| edge[2] > 0.0)
+                .map(|(name, edge)| json!({
+                    "edge": name,
+                    "share": share(edge[2] / calm),
+                    "screening_db": (100.0 * (edge[1] / edge[0]).log10()).round() / 10.0,
+                }))
+                .collect::<Vec<_>>(),
+        });
     }
     Ok(line.to_string())
 }

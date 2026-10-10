@@ -605,7 +605,7 @@ fn against_popup(
             .to_degrees();
             let options = popup::answer::Options {
                 exact: false,
-                pieces: 0,
+                source: Vec::new(),
             };
             let mut last = None;
             popup::answer::answer(release, lat, lon, &options, &mut |update| {

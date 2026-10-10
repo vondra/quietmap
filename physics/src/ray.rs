@@ -81,13 +81,23 @@ struct Roof {
     top1: f64,
 }
 
-/// The terms of one ray: the transfer with the boundary of each state (homogeneous, favourable)
-/// and the air absorption behind it.
+/// The terms of one ray: the transfer with the boundary of each state (homogeneous, favourable),
+/// the air absorption behind it, and what blocks its line of sight in calm air.
 pub struct RayTerms {
     pub transfer: Transfer,
     pub favourable_probability: [f64; PERIODS],
     pub boundaries: [StateBoundary; 2],
     pub air_db: [f64; BANDS],
+    pub calm_edge: Edge,
+}
+
+/// What a ray's sound bends over in calm air: nothing (a free line of sight), the top of a
+/// building or wall among the edges, or terrain alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Open,
+    Obstacle,
+    Terrain,
 }
 
 /// The terms of one ray; `favourable_probability` is p of each period for this ray's direction,
@@ -109,9 +119,23 @@ pub fn ray_terms(
         MeteorologicalState::Favourable,
     ];
     scratch.path.fill(profile, crossings, ends);
+    let mut calm_edge = Edge::Open;
     let boundaries: [StateBoundary; 2] = states.map(|state| {
         let path = scratch.path.path(profile, ends, source_altitude);
-        state_boundary(&path, state, &mut scratch.vertical)
+        let boundary = state_boundary(&path, state, &mut scratch.vertical);
+        let diffraction = &scratch.vertical.path;
+        if state == MeteorologicalState::Homogeneous && diffraction.blocked {
+            calm_edge = if diffraction
+                .points
+                .iter()
+                .any(|point| scratch.path.tops.contains(point))
+            {
+                Edge::Obstacle
+            } else {
+                Edge::Terrain
+            };
+        }
+        boundary
     });
     let air_db: [f64; BANDS] = std::array::from_fn(|band| alpha_db_per_km[band] * slant / 1000.0);
     let air: [f64; BANDS] = air_db.map(attenuation_energy);
@@ -134,6 +158,7 @@ pub fn ray_terms(
         favourable_probability,
         boundaries,
         air_db,
+        calm_edge,
     }
 }
 

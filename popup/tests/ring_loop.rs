@@ -97,7 +97,7 @@ fn click(release: &Release, east_m: f64) -> (f64, Option<f64>) {
         lon,
         &Options {
             exact: true,
-            pieces: 0,
+            source: Vec::new(),
         },
         &mut |update| {
             let road = update
@@ -125,7 +125,10 @@ fn road_answer(release: &Release, exact: bool) -> ([f64; PERIODS], usize, usize)
         release,
         lat,
         lon,
-        &Options { exact, pieces: 0 },
+        &Options {
+            exact,
+            source: Vec::new(),
+        },
         &mut |update| {
             let road = update
                 .layers
@@ -181,7 +184,7 @@ fn the_last_row_counts_the_sources_the_list_leaves_out() {
         lon,
         &Options {
             exact: true,
-            pieces: 0,
+            source: Vec::new(),
         },
         &mut |update| {
             let road = update
@@ -198,10 +201,10 @@ fn the_last_row_counts_the_sources_the_list_leaves_out() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
-/// A listed piece carries its whole source's energy, not only the listed pieces' (the detailed
-/// calculation showed a source cut from the list at "at least" the sum of its listed pieces).
+/// An asked source's sound path lists every piece of it, each evaluated, loudest first, adding up
+/// to the source (one group here, the whole layer), the loudest traced ray by ray.
 #[test]
-fn a_listed_piece_carries_its_whole_source() {
+fn an_asked_source_lists_every_piece_of_it() {
     let root = release_root("listed");
     write_roads(&root, &[30.0, 60.0, 90.0, 120.0], false);
     std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
@@ -213,8 +216,8 @@ fn a_listed_piece_carries_its_whole_source() {
         lat,
         lon,
         &Options {
-            exact: true,
-            pieces: 2,
+            exact: false,
+            source: vec![1],
         },
         &mut |update| {
             let road = update
@@ -227,14 +230,24 @@ fn a_listed_piece_carries_its_whole_source() {
     )
     .unwrap();
     let (road, pieces) = last.unwrap();
-    assert_eq!(pieces.len(), 2);
-    for piece in &pieces {
-        assert_eq!(
-            piece.source_energy, road,
-            "one group: the source is the layer"
+    assert_eq!(pieces.len(), 4);
+    for period in 0..PERIODS {
+        let summed: f64 = pieces.iter().map(|piece| piece.energy[period]).sum();
+        assert!(
+            (summed / road[period] - 1.0).abs() < 1e-9,
+            "{summed} {road:?}"
         );
-        assert!(piece.energy[0] < road[0]);
     }
+    assert!(
+        pieces
+            .windows(2)
+            .all(|pair| pair[0].energy[0] >= pair[1].energy[0])
+    );
+    assert!(
+        pieces
+            .iter()
+            .all(|piece| piece.trace.is_some() && !piece.rays.is_empty())
+    );
     std::fs::remove_dir_all(&root).unwrap();
 }
 
@@ -299,7 +312,7 @@ fn a_source_on_the_edge_of_the_read_block_is_answered() {
         lon,
         &Options {
             exact: true,
-            pieces: 0,
+            source: Vec::new(),
         },
         &mut |update| {
             let layer = update
@@ -363,7 +376,10 @@ fn the_sampled_answer_is_within_a_twentieth_of_a_decibel_and_reproducible() {
             &release,
             lat,
             lon,
-            &Options { exact, pieces: 0 },
+            &Options {
+                exact,
+                source: Vec::new(),
+            },
             &mut |update| {
                 let layer = update
                     .layers
@@ -452,7 +468,10 @@ fn a_sampled_layer_sounds_as_the_exact_one() {
             &release,
             lat,
             lon,
-            &Options { exact, pieces: 0 },
+            &Options {
+                exact,
+                source: Vec::new(),
+            },
             &mut |update| {
                 last = update.loudness.as_ref().map(|loudness| loudness.nden_sone);
                 Ok(())

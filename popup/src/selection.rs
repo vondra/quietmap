@@ -46,7 +46,7 @@ pub struct LayerSelection {
     /// Pieces no longer pending: evaluated with certainty or covered by an estimate.
     pub covered: usize,
     pub contributors: HashMap<u64, Contributor>,
-    /// Every evaluated piece, kept only when the benchmark lists pieces.
+    /// The pieces of the source whose sound path is asked for, every one evaluated.
     pub pieces: Vec<EvaluatedPiece>,
     /// The received band energies of every evaluated piece, certain and sampled alike: the
     /// spectrum's shape, not its level.
@@ -117,13 +117,7 @@ impl LayerSelection {
     }
 
     /// Adds one evaluated piece to the certain energy and its contributor group.
-    fn add(
-        &mut self,
-        candidate: &Candidate,
-        received: &Received,
-        attributes: &Attributes,
-        keep_pieces: bool,
-    ) {
+    fn add(&mut self, candidate: &Candidate, received: &Received) {
         let energy = period_sums(&received.bands);
         self.evaluated += 1;
         self.covered += 1;
@@ -132,10 +126,25 @@ impl LayerSelection {
         }
         self.add_spectrum(&received.bands);
         self.add_contributor(candidate, received, 1.0);
-        if keep_pieces {
+    }
+
+    /// Evaluates `candidates` (the pieces of the source whose sound path is asked for) with
+    /// certainty, outside the stop rule and the sample, and keeps each for its listing.
+    pub fn evaluate_kept(
+        &mut self,
+        candidates: Vec<Candidate>,
+        receiver: &Receiver,
+        attributes: &Attributes,
+    ) -> Result<(), String> {
+        let work: Vec<(usize, Candidate)> = candidates.into_iter().map(|c| (0, c)).collect();
+        for ((_, candidate), received) in work.iter().zip(evaluate_all(&work, receiver, attributes))
+        {
+            let received = received?;
+            self.add(candidate, &received);
             self.pieces
-                .push(EvaluatedPiece::of(candidate, attributes, energy));
+                .push(EvaluatedPiece::of(candidate, attributes, &received));
         }
+        Ok(())
     }
 
     fn add_spectrum(&mut self, bands: &Bands) {
@@ -204,14 +213,12 @@ fn evaluation_order(a: &Candidate, b: &Candidate) -> std::cmp::Ordering {
 /// Evaluates candidates from the loudest bound, in parallel batches over all unsatisfied layers,
 /// until every layer's omitted-energy account allows it to stop (`exact`: until none is left);
 /// a layer whose proven round would exceed `PROVEN_ROUND_LIMIT` is sampled instead. `seed` makes
-/// the sample of a click reproducible. `keep_pieces` keeps every evaluated piece for the
-/// benchmark's listing.
+/// the sample of a click reproducible.
 pub fn select(
     selections: &mut [LayerSelection],
     receiver: &Receiver,
     attributes: &Attributes,
     exact: bool,
-    keep_pieces: bool,
     seed: u64,
 ) -> Result<(), String> {
     for selection in selections.iter_mut() {
@@ -248,7 +255,7 @@ pub fn select(
         }
         let received = evaluate_all(&work, receiver, attributes);
         for ((layer, candidate), received) in work.into_iter().zip(received) {
-            selections[layer].add(&candidate, &received?, attributes, keep_pieces);
+            selections[layer].add(&candidate, &received?);
         }
     }
     for (layer, selection) in selections.iter_mut().enumerate() {
@@ -257,7 +264,6 @@ pub fn select(
                 selection,
                 receiver,
                 attributes,
-                keep_pieces,
                 seed ^ (layer as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15),
             )?;
         }
@@ -303,7 +309,6 @@ fn sample_rest(
     selection: &mut LayerSelection,
     receiver: &Receiver,
     attributes: &Attributes,
-    keep_pieces: bool,
     seed: u64,
 ) -> Result<(), String> {
     let mut rest = std::mem::take(&mut selection.pending);
@@ -357,7 +362,7 @@ fn sample_rest(
             evaluated.insert(*index, (period_sums(&received.bands), received));
         }
         for index in first..certain {
-            selection.add(&rest[index], &evaluated[&index].1, attributes, keep_pieces);
+            selection.add(&rest[index], &evaluated[&index].1);
         }
         first = certain;
         let (estimate, variance) = if exhaustive {
@@ -408,7 +413,7 @@ fn sample_rest(
             for (&index, &drawn) in &times {
                 let (energy, received) = &evaluated[&index];
                 if exhaustive {
-                    selection.add(&rest[index], received, attributes, keep_pieces);
+                    selection.add(&rest[index], received);
                     for (estimate, value) in selection.estimate.iter_mut().zip(energy) {
                         *estimate -= value;
                     }
@@ -421,13 +426,6 @@ fn sample_rest(
                             .map(|period| period.map(|band| band * weight)),
                     );
                     selection.add_contributor(&rest[index], received, weight);
-                    if keep_pieces {
-                        selection.pieces.push(EvaluatedPiece::of(
-                            &rest[index],
-                            attributes,
-                            *energy,
-                        ));
-                    }
                 }
             }
             return Ok(());
