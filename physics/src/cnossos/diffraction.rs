@@ -34,9 +34,37 @@ fn ground_split_db(ground_db: f64, mirrored_db: f64, direct_db: f64) -> f64 {
 }
 
 /// The boundary term of `path` in `state` over `candidates` (sorted by distance).
+/// What both states share of the direct path: its mean plane geometry, its mean ground factor
+/// and the source's ground factor near it.
+pub(super) struct DirectPath {
+    geometry: EquivalentGeometry,
+    path_ground: f64,
+    near_source: f64,
+}
+
+impl DirectPath {
+    pub(super) fn of(path: &VerticalPath<'_>) -> Self {
+        let length = path.receiver.0;
+        let geometry = EquivalentGeometry::over(
+            fit_mean_plane(&path.profile, 0.0, length),
+            path.source,
+            path.receiver,
+        );
+        let path_ground = path.profile.mean_ground_factor(0.0, length);
+        let near_source =
+            ground_factor_near_source(&geometry, path_ground, path.source_ground_factor);
+        DirectPath {
+            geometry,
+            path_ground,
+            near_source,
+        }
+    }
+}
+
 pub(super) fn boundary_for_candidates(
     path: &VerticalPath<'_>,
     state: MeteorologicalState,
+    shared: &DirectPath,
     candidates: &[PlanePoint],
     lowered: &mut Vec<(f64, f64, usize)>,
     hull: &mut Vec<(f64, f64, usize)>,
@@ -45,9 +73,8 @@ pub(super) fn boundary_for_candidates(
     let (source, receiver) = (path.source, path.receiver);
     let length = receiver.0;
     let profile = &path.profile;
-    let direct = EquivalentGeometry::over(fit_mean_plane(profile, 0.0, length), source, receiver);
-    let path_ground = profile.mean_ground_factor(0.0, length);
-    let near_source = ground_factor_near_source(&direct, path_ground, path.source_ground_factor);
+    let (direct, path_ground, near_source) =
+        (shared.geometry, shared.path_ground, shared.near_source);
     let whole_path = ground_attenuation_bands(
         &direct,
         source_side_factors(state, path_ground, near_source),

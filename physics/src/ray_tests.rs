@@ -173,12 +173,13 @@ fn overlapping_roofs_clip_in_closing_order_and_equal_exits_drop() {
     );
 }
 
+/// Flat ground at 200 m with G = 0.5, read at ten even steps.
 fn flat(horizontal_m: f64) -> Profile {
     let mut profile = Profile::default();
-    profile.reset(horizontal_m);
-    let n = profile.t.len();
-    profile.ground_m = vec![200.0; n];
-    profile.ground_factor = vec![0.5; n];
+    profile.clear(horizontal_m);
+    for step in 0..=10 {
+        profile.push(f64::from(step) / 10.0, 200.0, 0.5);
+    }
     profile
 }
 

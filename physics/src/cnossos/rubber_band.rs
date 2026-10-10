@@ -53,10 +53,23 @@ impl StateRay {
     #[inline]
     pub fn length(&self, from: PlanePoint, to: PlanePoint) -> f64 {
         let chord = distance(from, to);
+        chord + self.arc_excess(chord)
+    }
+
+    /// `2Γ·asin(ℓ/2Γ) − ℓ`, the arc's excess over its chord, by its series in `x = ℓ/2Γ` (at most
+    /// 1/16, as Γ ≥ 8d): `x³/6 + 3x⁵/40 + 5x⁷/112 + 35x⁹/1152` times 2Γ, the next term below 1e-15
+    /// of the arc; the kernel's `arc_excess`.
+    #[inline]
+    fn arc_excess(&self, chord: f64) -> f64 {
         match self.state {
-            MeteorologicalState::Homogeneous => chord,
+            MeteorologicalState::Homogeneous => 0.0,
             MeteorologicalState::Favourable => {
-                2.0 * self.radius_m * (chord / (2.0 * self.radius_m)).min(1.0).asin()
+                let x = (chord / (2.0 * self.radius_m)).min(1.0);
+                let x2 = x * x;
+                2.0 * self.radius_m
+                    * x
+                    * x2
+                    * (1.0 / 6.0 + x2 * (3.0 / 40.0 + x2 * (5.0 / 112.0 + x2 * (35.0 / 1152.0))))
             }
         }
     }
@@ -66,15 +79,19 @@ impl StateRay {
     /// (2.5.26) signed by the arcs themselves when the point is above the straight chord, else
     /// (2.5.27) with A where the straight chord meets the vertical through the point.
     pub fn path_difference(&self, from: PlanePoint, points: &[PlanePoint], to: PlanePoint) -> f64 {
-        let Some((&first, _)) = points.split_first() else {
+        let Some(&first) = points.first() else {
             return 0.0;
         };
-        let last = points[points.len() - 1];
-        let mut along = self.length(from, first) + self.length(last, to);
-        for pair in points.windows(2) {
-            along += self.length(pair[0], pair[1]);
+        // The chords' excess as a sum of triangle excesses (S O1 R) + (O1 O2 R) + ..., each free of
+        // the cancellation of three long lengths; the arcs add their own small excesses.
+        let (mut chords, mut arcs, mut start) = (0.0, 0.0, from);
+        for &point in points {
+            chords += triangle_excess(start, point, to);
+            arcs += self.arc_excess(distance(start, point));
+            start = point;
         }
-        let excess = along - self.length(from, to);
+        arcs += self.arc_excess(distance(start, to)) - self.arc_excess(distance(from, to));
+        let excess = chords + arcs;
         if points.len() > 1 {
             return excess;
         }
@@ -91,11 +108,15 @@ impl StateRay {
                 if first.1 >= chord {
                     excess
                 } else {
+                    // (2.5.27): 2 SA + 2 AR - SO - OR - SR with A on the chord under O; SA + AR =
+                    // SR, so it is -(SO + OR - SR) and the arcs' excesses.
                     let on_chord = (first.0, chord);
-                    2.0 * self.length(from, on_chord) + 2.0 * self.length(on_chord, to)
-                        - self.length(from, first)
-                        - self.length(first, to)
-                        - self.length(from, to)
+                    -triangle_excess(from, first, to)
+                        + 2.0 * self.arc_excess(distance(from, on_chord))
+                        + 2.0 * self.arc_excess(distance(on_chord, to))
+                        - self.arc_excess(distance(from, first))
+                        - self.arc_excess(distance(first, to))
+                        - self.arc_excess(distance(from, to))
                 }
             }
         }
@@ -108,26 +129,70 @@ impl StateRay {
 
     /// Height the state's ray stands above the S–R chord at horizontal distance `x`.
     fn ray_height_above_chord(&self, source: PlanePoint, receiver: PlanePoint, x: f64) -> f64 {
-        match self.state {
-            MeteorologicalState::Homogeneous => 0.0,
-            MeteorologicalState::Favourable => {
-                let horizontal = receiver.0 - source.0;
-                let chord = distance(source, receiver);
-                let along = (x - source.0) * chord / horizontal;
-                let gamma = self.radius_m;
-                let offset = along - 0.5 * chord;
-                let perpendicular = along * (chord - along)
-                    / ((gamma * gamma - offset * offset).max(0.0).sqrt()
-                        + (gamma * gamma - 0.25 * chord * chord).sqrt());
-                perpendicular * chord / horizontal
-            }
+        self.sag(source, receiver).at(x - source.0)
+    }
+
+    /// The state's ray height above the S–R chord as a function of the horizontal distance from
+    /// S, its per-path constants taken once.
+    fn sag(&self, source: PlanePoint, receiver: PlanePoint) -> Sag {
+        let horizontal = receiver.0 - source.0;
+        let chord = distance(source, receiver);
+        let gamma2 = self.radius_m * self.radius_m;
+        Sag {
+            favourable: self.state == MeteorologicalState::Favourable,
+            along_per_x: chord / horizontal,
+            chord,
+            gamma2,
+            centre_term: (gamma2 - 0.25 * chord * chord).sqrt(),
         }
+    }
+}
+
+/// Per-path constants of [`StateRay::ray_height_above_chord`].
+struct Sag {
+    favourable: bool,
+    along_per_x: f64,
+    chord: f64,
+    gamma2: f64,
+    centre_term: f64,
+}
+
+impl Sag {
+    #[inline]
+    fn at(&self, x_from_source: f64) -> f64 {
+        if !self.favourable {
+            return 0.0;
+        }
+        let along = x_from_source * self.along_per_x;
+        let offset = along - 0.5 * self.chord;
+        let perpendicular = along * (self.chord - along)
+            / ((self.gamma2 - offset * offset).max(0.0).sqrt() + self.centre_term);
+        perpendicular * self.along_per_x
     }
 }
 
 #[inline]
 pub fn distance(a: PlanePoint, b: PlanePoint) -> f64 {
-    (b.0 - a.0).hypot(b.1 - a.1)
+    let (dx, dz) = (b.0 - a.0, b.1 - a.1);
+    (dx * dx + dz * dz).sqrt()
+}
+
+/// `|SO| + |OR| − |SR|` without the cancellation of the three lengths: with u = O − S, v = R − O
+/// and w = u + v, `(|u| + |v|)² − |w|² = 2(|u||v| − u·v)` and `|u||v| − u·v = (u×v)²/(|u||v| + u·v)`;
+/// exact when O lies ahead of S toward R (u·v > 0), the direct difference otherwise (large, no
+/// cancellation); the kernel's `triangle_excess`.
+#[inline]
+fn triangle_excess(s: PlanePoint, o: PlanePoint, r: PlanePoint) -> f64 {
+    let (ux, uz, vx, vz) = (o.0 - s.0, o.1 - s.1, r.0 - o.0, r.1 - o.1);
+    let (lu, lv) = ((ux * ux + uz * uz).sqrt(), (vx * vx + vz * vz).sqrt());
+    let (wx, wz) = (ux + vx, uz + vz);
+    let lw = (wx * wx + wz * wz).sqrt();
+    let dot = ux * vx + uz * vz;
+    if dot <= 0.0 {
+        return lu + lv - lw;
+    }
+    let cross = ux * vz - uz * vx;
+    2.0 * cross * cross / ((lu * lv + dot) * (lu + lv + lw))
 }
 
 #[inline]
@@ -149,9 +214,11 @@ pub fn diffraction_path(
     path.points.clear();
     path.blocked = false;
     lowered.clear();
+    let sag = ray.sag(source, receiver);
+    let slope = (receiver.1 - source.1) / (receiver.0 - source.0);
     for (index, &(x, z)) in candidates.iter().enumerate() {
-        let z_lowered = z - ray.ray_height_above_chord(source, receiver, x);
-        if z_lowered > chord_altitude(source, receiver, x) {
+        let z_lowered = z - sag.at(x - source.0);
+        if z_lowered > source.1 + slope * (x - source.0) {
             lowered.push((x, z_lowered, index));
         }
     }

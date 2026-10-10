@@ -110,13 +110,15 @@ pub struct StateBoundary {
     pub path_difference_m: f64,
 }
 
-/// Reusable per-thread buffers; `path` holds the diffraction points of the last boundary.
+/// Reusable per-thread buffers; `path` holds the diffraction points of the last boundary,
+/// `calm_path` the homogeneous state's of [`state_boundaries`].
 #[derive(Default)]
 pub struct VerticalPathScratch {
     candidates: Vec<PlanePoint>,
     lowered: Vec<(f64, f64, usize)>,
     hull: Vec<(f64, f64, usize)>,
     pub path: DiffractionPath,
+    pub calm_path: DiffractionPath,
 }
 
 /// A_boundary of `path` in `state`.
@@ -125,21 +127,67 @@ pub fn state_boundary(
     state: MeteorologicalState,
     scratch: &mut VerticalPathScratch,
 ) -> StateBoundary {
-    let candidates = &mut scratch.candidates;
-    candidates.clear();
-    let length = path.receiver.0;
-    let inside = |point: &&PlanePoint| point.0 > 0.0 && point.0 < length;
-    candidates.extend(path.terrain_candidates.iter().filter(inside));
-    candidates.extend(path.obstacle_tops.iter().filter(inside));
-    candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+    collect_candidates(path, &mut scratch.candidates);
+    let direct = diffraction::DirectPath::of(path);
+    boundary_on_candidates(path, state, &direct, scratch)
+}
+
+/// A_boundary of `path` in both states (homogeneous, favourable), the candidates and the direct
+/// path's mean plane taken once; the homogeneous diffraction points are left in
+/// `scratch.calm_path`.
+pub fn state_boundaries(
+    path: &VerticalPath<'_>,
+    scratch: &mut VerticalPathScratch,
+) -> [StateBoundary; 2] {
+    collect_candidates(path, &mut scratch.candidates);
+    let direct = diffraction::DirectPath::of(path);
+    let calm = boundary_on_candidates(path, MeteorologicalState::Homogeneous, &direct, scratch);
+    std::mem::swap(&mut scratch.calm_path, &mut scratch.path);
+    let downwind = boundary_on_candidates(path, MeteorologicalState::Favourable, &direct, scratch);
+    [calm, downwind]
+}
+
+fn boundary_on_candidates(
+    path: &VerticalPath<'_>,
+    state: MeteorologicalState,
+    direct: &diffraction::DirectPath,
+    scratch: &mut VerticalPathScratch,
+) -> StateBoundary {
     diffraction::boundary_for_candidates(
         path,
         state,
-        candidates,
+        direct,
+        &scratch.candidates,
         &mut scratch.lowered,
         &mut scratch.hull,
         &mut scratch.path,
     )
+}
+
+/// The candidates strictly between S and R in order of distance: the terrain points and the
+/// obstacle tops, both already in order, merged (a terrain point first at one distance).
+fn collect_candidates(path: &VerticalPath<'_>, out: &mut Vec<PlanePoint>) {
+    out.clear();
+    let length = path.receiver.0;
+    let inside = |point: &&PlanePoint| point.0 > 0.0 && point.0 < length;
+    let mut terrain = path.terrain_candidates.iter().filter(inside).peekable();
+    let mut tops = path.obstacle_tops.iter().filter(inside).peekable();
+    loop {
+        let next = match (terrain.peek(), tops.peek()) {
+            (Some(a), Some(b)) => {
+                if b.0 < a.0 {
+                    tops.next()
+                } else {
+                    terrain.next()
+                }
+            }
+            (Some(_), None) => terrain.next(),
+            (None, Some(_)) => tops.next(),
+            (None, None) => break,
+        };
+        out.push(*next.expect("peeked"));
+    }
+    debug_assert!(out.windows(2).all(|pair| pair[0].0 <= pair[1].0));
 }
 
 #[cfg(test)]

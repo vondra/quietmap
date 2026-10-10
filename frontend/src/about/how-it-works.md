@@ -148,7 +148,7 @@ A point sends one ray. A line piece is summed as CNOSSOS-EU sums a line of point
 
 ### One ray
 
-Along each ray the click samples the ground: 10 m from each end, where a road's embankment would stand, then three steps each of 31, 61 and 123 m from both ends, and steps of 246 m through the middle. Each sample gives the terrain's height and how hard the ground is, from soft soil to sealed ground and water. Every wall the ray crosses stands at its height, and a building's roof joins its walls as hard ground. Over this cross-section CNOSSOS-EU takes:
+Along each ray the click reads the ground wherever the ray crosses a line of the terrain grid, every 20 to 30 m; between two grid points the height is interpolated, so no ridge of the grid falls between two readings. Each sample gives the terrain's height and how hard the ground is, from soft soil to sealed ground and water. Every wall the ray crosses stands at its height, and a building's roof joins its walls as hard ground. Over this cross-section CNOSSOS-EU takes:
 
 - the spreading of the sound with distance;
 - the air's absorption in each octave band over the ray's length, averaged over 30 years of the place's weather;
@@ -158,7 +158,7 @@ Along each ray the click samples the ground: 10 m from each end, where a road's 
 - the façades around the point, which add up to 3 dB.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
-<svg viewBox="0 78 400 150" role="img" aria-label="A ray seen from the side: dense ground samples near both ends, a soft hill and a house; in calm air the sound bends over the hilltop and the roof's edge in straight lines, downwind along arcs bent toward the ground" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
+<svg viewBox="0 78 400 150" role="img" aria-label="A ray seen from the side: ground samples at every line of the terrain grid, a soft hill and a house; in calm air the sound bends over the hilltop and the roof's edge in straight lines, downwind along arcs bent toward the ground" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
 <path d="M8 180H44L90 150L150 112L196 150L240 176H286V120H326V176L384 172H392V196H8Z" fill="currentColor" fill-opacity=".07"/>
 <path d="M8 180H44L90 150L150 112L196 150L240 176H286V120H326V176L384 172H392" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
 <path d="M44 180L90 150L150 112L196 150L240 176" fill="none" stroke="#3e9b57" stroke-width="3.5" stroke-linejoin="round"/>
@@ -170,7 +170,7 @@ Along each ray the click samples the ground: 10 m from each end, where a road's 
 <path d="M380 172V152" fill="none" stroke="currentColor" stroke-opacity=".6" stroke-dasharray="2 2"/>
 <g fill="currentColor"><text x="12" y="166" font-weight="600">S</text><text x="386" y="142" font-weight="600">R</text><text x="374" y="166" text-anchor="end">4 m</text><text x="236" y="92" text-anchor="middle">downwind</text><text x="236" y="136" text-anchor="middle">calm air</text><text x="306" y="160" text-anchor="middle">house</text></g>
 <text x="118" y="170" text-anchor="middle" fill="currentColor" fill-opacity=".75">soft ground</text>
-<path d="M22 206H380M22 202V210M26 202V210M31 202V210M37 202V210M44 202V210M52 202V210M62 202V210M76 202V210M94 202V210M118 202V210M150 202V210M201 202V210M252 202V210M284 202V210M308 202V210M326 202V210M340 202V210M350 202V210M358 202V210M365 202V210M371 202V210M376 202V210M380 202V210" fill="none" stroke="currentColor" stroke-opacity=".6"/>
+<path d="M22 206H380M22 202V210M39.9 202V210M57.8 202V210M75.7 202V210M93.6 202V210M111.5 202V210M129.4 202V210M147.3 202V210M165.2 202V210M183.1 202V210M201 202V210M218.9 202V210M236.8 202V210M254.7 202V210M272.6 202V210M290.5 202V210M308.4 202V210M326.3 202V210M344.2 202V210M362.1 202V210M380 202V210" fill="none" stroke="currentColor" stroke-opacity=".6"/>
 <text x="201" y="223" text-anchor="middle" fill="currentColor" fill-opacity=".75">ground samples</text>
 </svg>
 <figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">A ray seen from the side, from the source S to the point R. The ground is sampled densely near both ends; the hill is soft ground, the roof hard. In calm air the sound bends over the hilltop and the roof's edge in straight lines; downwind it follows arcs bent toward the ground and loses less.</figcaption>

@@ -8,8 +8,7 @@
 
 use crate::bands::{BANDS, PERIODS};
 use crate::cnossos::{
-    MeteorologicalState, PlanePoint, StateBoundary, VerticalPath, VerticalPathScratch,
-    VerticalProfile, state_boundary,
+    PlanePoint, StateBoundary, VerticalPath, VerticalPathScratch, VerticalProfile, state_boundaries,
 };
 use crate::profile::Profile;
 
@@ -114,29 +113,23 @@ pub fn ray_terms(
     let slant = horizontal
         .hypot(ends.receiver_altitude_m - source_altitude)
         .max(1.0);
-    let states = [
-        MeteorologicalState::Homogeneous,
-        MeteorologicalState::Favourable,
-    ];
     scratch.path.fill(profile, crossings, ends);
-    let mut calm_edge = Edge::Open;
-    let boundaries: [StateBoundary; 2] = states.map(|state| {
-        let path = scratch.path.path(profile, ends, source_altitude);
-        let boundary = state_boundary(&path, state, &mut scratch.vertical);
-        let diffraction = &scratch.vertical.path;
-        if state == MeteorologicalState::Homogeneous && diffraction.blocked {
-            calm_edge = if diffraction
-                .points
-                .iter()
-                .any(|point| scratch.path.tops.contains(point))
-            {
-                Edge::Obstacle
-            } else {
-                Edge::Terrain
-            };
-        }
-        boundary
-    });
+    let boundaries = state_boundaries(
+        &scratch.path.path(profile, ends, source_altitude),
+        &mut scratch.vertical,
+    );
+    let calm = &scratch.vertical.calm_path;
+    let calm_edge = if !calm.blocked {
+        Edge::Open
+    } else if calm
+        .points
+        .iter()
+        .any(|point| scratch.path.tops.contains(point))
+    {
+        Edge::Obstacle
+    } else {
+        Edge::Terrain
+    };
     let air_db: [f64; BANDS] = std::array::from_fn(|band| alpha_db_per_km[band] * slant / 1000.0);
     let air: [f64; BANDS] = air_db.map(attenuation_energy);
     let homogeneous: [f64; BANDS] =
@@ -302,10 +295,10 @@ impl PathBuffers {
             z.push(altitude);
             g.push(ground);
         };
-        push(0.0, terrain[0].1, ground_factor_at(0.0));
+        push(0.0, terrain[0].1, profile.ground_factor[0]);
         let mut roofs = self.roofs.iter().peekable();
         let mut covered_to = 0.0;
-        for &(x, altitude) in &terrain[1..] {
+        for (index, &(x, altitude)) in terrain.iter().enumerate().skip(1) {
             while let Some(roof) = roofs.peek() {
                 if roof.x0 >= x {
                     break;
@@ -318,7 +311,7 @@ impl PathBuffers {
                 roofs.next();
             }
             if x > covered_to {
-                push(x, altitude, ground_factor_at(x));
+                push(x, altitude, profile.ground_factor[index]);
             }
         }
     }

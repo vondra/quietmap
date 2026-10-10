@@ -1,9 +1,15 @@
 //! The tiles a click has read so far, in the click's metre frame: the ground under any point and
-//! the sampled profile of a ray.
+//! the profile of a ray, a vertex wherever it crosses a line of the terrain lattice.
 
 use physics::profile::Profile;
-use tiles::geo::{LocalFrame, TILES_PER_AXIS, TileId};
-use tiles::terrain::{GroundSample, OCEAN, Terrain};
+use tiles::geo::{LocalFrame, Mercator, TILES_PER_AXIS, TileId};
+use tiles::terrain::{
+    GroundSample, HEIGHT_MISSING, NODES_PER_DEGREE, Node, OCEAN, PERCENT_MAX, Terrain,
+    height_m_of_code,
+};
+
+/// Lattice columns around the globe.
+const COLUMNS_AROUND: i64 = 360 * NODES_PER_DEGREE as i64;
 
 /// Terrain of every read tile within `radius` rings of the clicked tile, by offset.
 pub struct Ground<'a> {
@@ -12,16 +18,37 @@ pub struct Ground<'a> {
     radius: i64,
     /// `None`: not read (an error to sample); `Some(None)`: read, absent (ocean).
     tiles: Vec<Option<Option<Terrain<'a>>>>,
+    /// Web Mercator y of every lattice row over the scene's tiles, the northernmost first: row
+    /// `north_row - k` (its latitude times 3600) at index k.
+    row_y: Vec<f64>,
+    north_row: i64,
 }
 
 impl<'a> Ground<'a> {
     pub fn new(frame: LocalFrame, centre: TileId, radius: u32) -> Self {
         let side = 2 * radius as usize + 1;
+        let latitude_at = |tile_y: i64| {
+            let y = tile_y.clamp(0, i64::from(TILES_PER_AXIS)) as f64;
+            Mercator { x: 0.0, y }.to_degrees().0
+        };
+        let nodes = f64::from(NODES_PER_DEGREE);
+        let (top, bottom) = (
+            i64::from(centre.y) - i64::from(radius),
+            i64::from(centre.y) + i64::from(radius) + 1,
+        );
+        let north_row = (latitude_at(top) * nodes).ceil() as i64;
+        let south_row = (latitude_at(bottom) * nodes).floor() as i64;
+        let row_y = (south_row..=north_row)
+            .rev()
+            .map(|row| Mercator::from_degrees(row as f64 / nodes, 0.0).y)
+            .collect();
         Ground {
             frame,
             centre,
             radius: i64::from(radius),
             tiles: (0..side * side).map(|_| None).collect(),
+            row_y,
+            north_row,
         }
     }
 
@@ -43,16 +70,19 @@ impl<'a> Ground<'a> {
         self.tiles[slot] = Some(terrain);
     }
 
+    /// The terrain of a read tile: `Some(None)` for ocean, an error for a tile not read.
+    fn terrain_of(&self, tile: TileId) -> Result<Option<&Terrain<'a>>, String> {
+        self.slot(tile)
+            .and_then(|slot| self.tiles[slot].as_ref())
+            .map(Option::as_ref)
+            .ok_or_else(|| format!("terrain of tile {tile:?} not read"))
+    }
+
     /// The ground at [east, north] metres; an error outside the read tiles or at a node without
     /// data (the click fails instead of answering quieter).
     pub fn at(&self, metres: [f64; 2]) -> Result<GroundSample, String> {
         let position = self.frame.to_mercator(metres).snapped_to_lattice();
-        let tile = TileId::containing(position);
-        let terrain = self
-            .slot(tile)
-            .and_then(|slot| self.tiles[slot].as_ref())
-            .ok_or_else(|| format!("terrain of tile {tile:?} not read"))?;
-        let Some(terrain) = terrain else {
+        let Some(terrain) = self.terrain_of(TileId::containing(position))? else {
             return Ok(OCEAN);
         };
         terrain.sample(position).ok_or_else(|| {
@@ -74,7 +104,9 @@ impl<'a> Ground<'a> {
         }
     }
 
-    /// Samples the ground under the ray from `source` to `receiver` (both in click metres).
+    /// The ground under the ray from `source` to `receiver` (click metres) at both ends and
+    /// wherever the ray crosses a row or a column of the lattice, in order from the source. A
+    /// vertex on a line reads that line's two nodes either side of it.
     pub fn fill_profile(
         &self,
         source: [f64; 2],
@@ -82,16 +114,152 @@ impl<'a> Ground<'a> {
         profile: &mut Profile,
     ) -> Result<(), String> {
         let offset = [source[0] - receiver[0], source[1] - receiver[1]];
-        profile.reset(offset[0].hypot(offset[1]).max(1.0));
-        for index in 0..profile.t.len() {
-            let keep = 1.0 - profile.t[index];
-            let sample = self.at([
-                receiver[0] + offset[0] * keep,
-                receiver[1] + offset[1] * keep,
-            ])?;
-            profile.ground_m.push(sample.height_m);
-            profile.ground_factor.push(sample.ground_factor);
+        profile.clear(offset[0].hypot(offset[1]).max(1.0));
+        let start = self.at(source)?;
+        profile.push(0.0, start.height_m, start.ground_factor);
+        let (a, b) = (
+            self.frame.to_mercator(source),
+            self.frame.to_mercator(receiver),
+        );
+        let columns_per_unit = COLUMNS_AROUND as f64 / f64::from(TILES_PER_AXIS);
+        let column_of = |x: f64| x * columns_per_unit - (COLUMNS_AROUND / 2) as f64;
+        let (column_a, column_b) = (column_of(a.x), column_of(b.x));
+        let (columns, rise) = (column_b - column_a, b.y - a.y);
+        let rows = &self.row_y;
+        // The next column line strictly ahead, in the direction of travel.
+        let (mut next_column, column_step) = if columns > 0.0 {
+            (column_a.floor() + 1.0, 1.0)
+        } else {
+            (column_a.ceil() - 1.0, -1.0)
+        };
+        // Row lines ascend southward in `rows`; `north` is the index of the row at or north of
+        // the point, `next_row` the next row line strictly ahead.
+        let at_or_north = rows.partition_point(|&y| y <= a.y);
+        let mut north = at_or_north
+            .checked_sub(1)
+            .ok_or("the ray starts north of the scene")?;
+        let mut next_row = if rise > 0.0 {
+            Some(at_or_north)
+        } else {
+            rows.partition_point(|&y| y < a.y).checked_sub(1)
+        };
+        let mut tile: Option<(TileId, Option<&Terrain<'a>>)> = None;
+        loop {
+            let t_column = if columns != 0.0 {
+                (next_column - column_a) / columns
+            } else {
+                f64::INFINITY
+            };
+            let t_row = match next_row.and_then(|k| rows.get(k)) {
+                Some(&y) if rise != 0.0 => (y - a.y) / rise,
+                _ => f64::INFINITY,
+            };
+            let t = t_column.min(t_row);
+            if t >= 1.0 {
+                break;
+            }
+            let position = Mercator {
+                x: a.x + t * (b.x - a.x),
+                y: a.y + t * rise,
+            };
+            let id = TileId::containing(position);
+            if tile.is_none_or(|(cached, _)| cached != id) {
+                tile = Some((id, self.terrain_of(id)?));
+            }
+            let terrain = tile.and_then(|(_, terrain)| terrain);
+            let sample = match terrain {
+                None => Some(OCEAN),
+                Some(terrain) if t_row <= t_column => {
+                    let k = next_row.expect("a row line ahead");
+                    let column = column_of(position.x);
+                    let west = column.floor();
+                    let row = self.north_row - k as i64;
+                    edge_sample(
+                        node(terrain, row, west as i64),
+                        node(terrain, row, west as i64 + 1),
+                        column - west,
+                    )
+                }
+                Some(terrain) => {
+                    let (y0, y1) = (
+                        rows[north],
+                        *rows
+                            .get(north + 1)
+                            .ok_or("the ray leaves the scene southward")?,
+                    );
+                    let row = self.north_row - north as i64;
+                    edge_sample(
+                        node(terrain, row, next_column as i64),
+                        node(terrain, row - 1, next_column as i64),
+                        ((position.y - y0) / (y1 - y0)).clamp(0.0, 1.0),
+                    )
+                }
+            }
+            .ok_or_else(|| {
+                let (lat, lon) = position.to_degrees();
+                format!("no terrain data at {lat:.6},{lon:.6}")
+            })?;
+            profile.push(t, sample.height_m, sample.ground_factor);
+            if t_row <= t_column {
+                let k = next_row.expect("a row line ahead");
+                if rise > 0.0 {
+                    north = k;
+                    next_row = Some(k + 1);
+                } else {
+                    north = k
+                        .checked_sub(1)
+                        .ok_or("the ray leaves the scene northward")?;
+                    next_row = k.checked_sub(1);
+                }
+            }
+            if t_column <= t_row {
+                next_column += column_step;
+            }
         }
+        let end = self.at(receiver)?;
+        profile.push(1.0, end.height_m, end.ground_factor);
         Ok(())
     }
 }
+
+/// The node of `terrain` at global lattice `row` (latitude times 3600) and `column` (longitude
+/// times 3600, any turn of the globe), or `None` outside its window.
+fn node(terrain: &Terrain, row: i64, column: i64) -> Option<Node> {
+    let window = terrain.window();
+    let local_row = i64::from(window.north_node) - row;
+    let local_column = (column - i64::from(window.west_node)).rem_euclid(COLUMNS_AROUND);
+    (local_row >= 0
+        && local_row < i64::from(window.rows)
+        && local_column < i64::from(window.columns))
+    .then(|| terrain.node(local_row as u32, local_column as u32))
+}
+
+/// The ground a fraction `f` of the way from node `a` to node `b`: height and ground factor
+/// linear, forest cover from the nearer node; `None` where either node has no data.
+fn edge_sample(a: Option<Node>, b: Option<Node>, f: f64) -> Option<GroundSample> {
+    let (a, b) = (a?, b?);
+    if [a, b]
+        .iter()
+        .any(|node| node.height_code == HEIGHT_MISSING || node.impervious_percent > PERCENT_MAX)
+    {
+        return None;
+    }
+    let lerp = |p: f64, q: f64| p + f * (q - p);
+    let nearer = if f < 0.5 { a } else { b };
+    Some(GroundSample {
+        height_m: lerp(
+            height_m_of_code(a.height_code),
+            height_m_of_code(b.height_code),
+        ),
+        ground_factor: 1.0
+            - lerp(
+                f64::from(a.impervious_percent),
+                f64::from(b.impervious_percent),
+            ) / 100.0,
+        forest_cover: f64::from(nearer.forest_percent.min(PERCENT_MAX)) / 100.0,
+    })
+}
+
+#[cfg(test)]
+#[path = "scene_tests.rs"]
+mod tests;
