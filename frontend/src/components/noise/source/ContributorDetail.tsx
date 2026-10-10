@@ -30,10 +30,10 @@ function LevelsTable({ received }: { received: PeriodLevels }) {
   )
 }
 
-const PARTS_TOOLTIP = 'What makes its sound: each part\'s level here and its share of the loudness.\nBuilding: its ventilation, cooling and heating.'
+const PARTS_TOOLTIP = 'What makes its sound: each part\'s level and its share of this source\'s\nloudness. Building: its ventilation, cooling and heating.'
 
 /** An object's parts: each one's level here and its share of the row's loudness. */
-function PartsTable({ parts }: { parts: ContributorPart[] }) {
+function PartsTable({ parts, rowName }: { parts: ContributorPart[], rowName: string }) {
   const percents = parts.every(part => part.share != null)
     ? wholePercents(parts.map(part => part.share!))
     : []
@@ -41,7 +41,7 @@ function PartsTable({ parts }: { parts: ContributorPart[] }) {
     <DetailTable
       head={[<HoverText title={PARTS_TOOLTIP}>Made of</HoverText>, 'dB Lden', 'Share']}
       rows={parts.map((part, k) => [
-        partLabel(part.metadata),
+        partLabel(part.metadata, rowName),
         fmtDbValue(part.received.lden),
         percents[k] == null ? '' : fmtPercent(percents[k]),
       ])}
@@ -57,7 +57,7 @@ export function ContributorDetail({ c }: { c: Contributor }) {
         {!labelNamesClass(c) && <div>{subtypeLabel(c.source_type, contributorClass(c))}</div>}
         <MetadataRows c={c} />
       </div>
-      {c.parts && c.parts.length > 1 && <PartsTable parts={c.parts} />}
+      {c.parts && c.parts.length > 1 && <PartsTable parts={c.parts} rowName={c.name} />}
       {c.path && <PathTable path={c.path} />}
       <LevelsTable received={c.received} />
     </div>

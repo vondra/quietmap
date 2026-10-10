@@ -20,8 +20,8 @@ const MOST_POINTS: usize = 2_000;
 /// A contributor's lines in click metres; a point source is a line of one point.
 pub type Lines = Vec<Vec<[f64; 2]>>;
 
-/// The lines of the groups `keys` (at most 255) within `reach_m` of `receiver` (click metres),
-/// one entry per key in its order.
+/// The lines of the groups `keys` (fewer than 65,535: the listed rows' parts) within `reach_m` of
+/// `receiver` (click metres), one entry per key in its order.
 pub fn whole_lines(
     rings: &[&RingFiles],
     frame: &LocalFrame,
@@ -32,11 +32,11 @@ pub fn whole_lines(
     if keys.is_empty() {
         return Ok(Vec::new());
     }
-    assert!(keys.len() < usize::from(u8::MAX));
-    let mut sorted: Vec<(u64, u8)> = keys
+    assert!(keys.len() < usize::from(u16::MAX));
+    let mut sorted: Vec<(u64, u16)> = keys
         .iter()
         .enumerate()
-        .map(|(position, &key)| (key, position as u8))
+        .map(|(position, &key)| (key, position as u16))
         .collect();
     sorted.sort_unstable();
     let files: Vec<(TileId, &[u8])> = rings
@@ -98,10 +98,10 @@ pub fn whole_lines(
 fn group_pieces(
     tile: TileId,
     bytes: &[u8],
-    sorted: &[(u64, u8)],
-) -> Result<Vec<(u8, [GlobalSteps; 2])>, String> {
+    sorted: &[(u64, u16)],
+) -> Result<Vec<(u16, [GlobalSteps; 2])>, String> {
     let sources = Sources::parse(bytes).map_err(|error| error.to_string())?;
-    let mut group = vec![u8::MAX; sources.attribute_count()];
+    let mut group = vec![u16::MAX; sources.attribute_count()];
     let mut any = false;
     for (index, position) in group.iter_mut().enumerate() {
         let key = sources
@@ -119,7 +119,7 @@ fn group_pieces(
     for index in 0..sources.piece_count() {
         let piece = sources.piece(index).map_err(|error| error.to_string())?;
         let position = group[piece.attribute as usize];
-        if position != u8::MAX {
+        if position != u16::MAX {
             pieces.push((position, piece.ends.map(|local| tile.global(local))));
         }
     }

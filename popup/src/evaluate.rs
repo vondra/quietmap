@@ -62,34 +62,15 @@ fn ray_ends(receiver: &Receiver, source: &SourceAttribute) -> RayEnds {
     }
 }
 
-/// The terms of the ray from `point` of `source` to the receiver (traces and comparisons).
+/// The terms of the ray from `point` of `source` to the receiver, every obstacle on it (traces and
+/// comparisons).
 pub fn trace(
     receiver: &Receiver,
     point: [f64; 2],
     source: &SourceAttribute,
     scratch: &mut Scratch,
 ) -> Result<RayTerms, String> {
-    let ends = ray_ends(receiver, source);
-    receiver
-        .ground
-        .fill_profile(point, receiver.position, &mut scratch.profile)?;
-    receiver
-        .obstacles
-        .crossings(point, receiver.position, &mut scratch.crossings)?;
-    without_own_walls(receiver, &mut scratch.crossings);
-    let p = std::array::from_fn(|period| {
-        receiver
-            .weather
-            .favourable
-            .at(period, receiver.azimuth(point))
-    });
-    Ok(ray_terms(
-        &scratch.profile,
-        &scratch.crossings,
-        &ends,
-        (p, &receiver.weather.alpha_db_per_km),
-        &mut scratch.ray,
-    ))
+    ray(receiver, point, true, &ray_ends(receiver, source), scratch)
 }
 
 /// Received A-weighted energy per period and octave band.
@@ -105,16 +86,13 @@ pub struct Received {
 /// each term (the façades' reflection in all): over distance alone, with the air's absorption, with
 /// the screening of each meteorological state (homogeneous, favourable), and with its ground too:
 /// the boundary, whose states the weather mixes into what is received. Each term's dB is the ratio
-/// of two sums, so the terms add up from the free field to the level. `favourable` is the calm
-/// boundary's energy times each ray's favourable share: over it, the share of the time the weather
-/// bends the source's sound down.
+/// of two sums, so the terms add up from the free field to the level.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Path {
     pub free: [f64; PERIODS],
     pub air: [f64; PERIODS],
     pub screened: [[f64; PERIODS]; 2],
     pub boundary: [[f64; PERIODS]; 2],
-    pub favourable: [f64; PERIODS],
 }
 
 impl Path {
@@ -123,7 +101,6 @@ impl Path {
         for period in 0..PERIODS {
             self.free[period] += weight * other.free[period];
             self.air[period] += weight * other.air[period];
-            self.favourable[period] += weight * other.favourable[period];
             for state in 0..2 {
                 self.screened[state][period] += weight * other.screened[state][period];
                 self.boundary[state][period] += weight * other.boundary[state][period];
@@ -173,8 +150,6 @@ fn add_ray(
                 path.screened[state][period] += power * screened[band];
                 path.boundary[state][period] += power * boundary[band];
             }
-            path.favourable[period] +=
-                power * transfer.states[0][band] * terms.favourable_probability[period];
         }
     }
 }

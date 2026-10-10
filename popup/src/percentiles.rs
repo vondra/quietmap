@@ -130,7 +130,7 @@ impl Weather {
 
 /// The share of the time a source is heard in its favourable state, from its mean being the mix
 /// of the two.
-fn favourable_share(mean: f64, homogeneous: f64, favourable: f64) -> f64 {
+pub(crate) fn favourable_share(mean: f64, homogeneous: f64, favourable: f64) -> f64 {
     if (favourable - homogeneous).abs() <= f64::EPSILON * favourable.abs() {
         return 0.0;
     }

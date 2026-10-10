@@ -78,8 +78,13 @@ fn sone(value: f64) -> f64 {
 /// How a contributor's sound reaches the click, in Lden: its level over distance alone (the
 /// façades' reflection apart), the air's absorption, the screening and the ground in calm air and
 /// bent down by the weather (dB, each pair adding up to its state's level here, the façades' last),
-/// those two levels, and the percent of the day, evening and night the weather bends it down.
-fn path_account(path: &crate::evaluate::Path, reflection_db: f64) -> Value {
+/// those two levels, and per day, evening and night the share of the time downwind that mixes
+/// them into what it delivers, `received` (none where the weather moves it by under 0.05 dB).
+fn path_account(
+    path: &crate::evaluate::Path,
+    received: &[f64; PERIODS],
+    reflection_db: f64,
+) -> Value {
     let facades = physics::bands::energy(reflection_db);
     let lden = |energies: &[f64; PERIODS]| lden_energy(energies) / facades;
     let (free, air) = (lden(&path.free), lden(&path.air));
@@ -93,8 +98,11 @@ fn path_account(path: &crate::evaluate::Path, reflection_db: f64) -> Value {
         }
     };
     let percent = |period: usize| {
-        let calm = path.boundary[0][period];
-        (calm > 0.0).then(|| (100.0 * path.favourable[period] / calm).round())
+        let [calm, downwind] = path.boundary.map(|state| state[period]);
+        (calm > 0.0 && downwind > calm * physics::bands::energy(0.05)).then(|| {
+            let share = crate::percentiles::favourable_share(received[period], calm, downwind);
+            (100.0 * share).round()
+        })
     };
     json!({
         "free_lden": level(free),
@@ -178,12 +186,12 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
     let mut contributors = Vec::new();
     for row in &update.rows {
         let contributor = row.principal();
-        let mut display = (update.display_record)(contributor.display, contributor.layer)?;
         let parts_display = row
             .parts
             .iter()
             .map(|part| (update.display_record)(part.display, part.layer))
             .collect::<Result<Vec<Value>, String>>()?;
+        let mut display = parts_display[0].clone();
         // An object is named by its first part that has a name (a bar's building may have none).
         let named = |display: &Value| {
             let name = display.get("name").and_then(Value::as_str);
@@ -225,7 +233,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         }
         object.insert(
             "path".into(),
-            path_account(&row.path(), update.reflection_db),
+            path_account(&row.path(), &row.energy(), update.reflection_db),
         );
         object.insert("metadata".into(), display);
         if let Some(heard) = contributor.heard {
@@ -251,7 +259,11 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                     "source_type": part.layer.name(),
                     "metadata": metadata,
                     "received": levels,
-                    "share": part.share.map(share),
+                    // Its share of the row's loudness (of the click's, the row has its own).
+                    "share": part
+                        .share
+                        .zip(row.share.filter(|whole| *whole > 0.0))
+                        .map(|(part, whole)| share(part / whole)),
                 }));
             }
             object.insert("parts".into(), Value::Array(parts));
