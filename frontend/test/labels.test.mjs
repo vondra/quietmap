@@ -33,16 +33,16 @@ test('a line known only by its number keeps its class, and its detail does not r
   assert.equal(labelNamesClass(school), false)
 })
 
-test('every place whose sound is its people reads as the people there; boats in plain words', () => {
+test('a place whose sound is its people reads as the place alone; boats in plain words', () => {
   const unnamed = (type) => contributorLabel({
     id: 'b', source_type: 'building', name: type, subtype: null, distance_m: 58,
     received_lden: 40, received: { ld: 30, le: 38, ln: 32 }, metadata: { building_type: type, name: '' },
   })
-  assert.equal(unnamed('people_bar'), 'People at a bar')
-  assert.equal(unnamed('people_biergarten'), 'People at a beer garden')
-  assert.equal(unnamed('tennis_court'), 'People on a tennis court')
-  assert.equal(unnamed('playground'), 'People at a playground')
-  assert.equal(unnamed('artificial_turf_pitch'), 'People on an artificial-turf pitch')
+  assert.equal(unnamed('people_bar'), 'Bar')
+  assert.equal(unnamed('people_biergarten'), 'Beer garden')
+  assert.equal(unnamed('tennis_court'), 'Tennis court')
+  assert.equal(unnamed('playground'), 'Playground')
+  assert.equal(unnamed('artificial_turf_pitch'), 'Artificial-turf pitch')
   assert.equal(subtypeLabel('ship', 'leisure_craft'), 'Leisure boats')
   assert.equal(subtypeLabel('road', 'track'), 'Track')
 })
