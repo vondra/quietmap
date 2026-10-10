@@ -2,7 +2,7 @@
 // ray crosses, walked in scene.cuh) and physics/src/ray.rs (the vertical path of terrain, roofs and
 // obstacle tops, and its transfer) without storing the ray. Terrain samples and wall crossings arrive in order of distance; each stretch of
 // the path is added at once to the moments the mean planes need, every candidate at once to both
-// states' hulls (rubber_band.rs as Andrew's monotone chain), a footprint's crossings pair into a roof
+// states' bands (rubber_band.rs: a monotone chain of the states' rays), a footprint's crossings pair into a roof
 // as they arrive. The CPU keeps the same path in arrays and sorts; the answer is the same.
 
 // Per-thread capacities; a ray needing more fails with FAILED_CAPACITY and goes to the CPU.
@@ -193,6 +193,13 @@ __device__ void stream_stretch(RayStream& s, float a, float b, float za, float z
     }
 }
 
+// Whether band point b stands on or under the state's ray from a to (x, z): straight in calm air,
+// the arc of the one radius Gamma downwind (rubber_band.rs diffraction_path).
+__device__ __forceinline__ bool under_state_ray(const StateRay& ray, const HullEntry& a, float x, float z, const HullEntry& b) {
+    PlanePoint from = {a.x, a.z}, to = {x, z};
+    return b.z <= chord_altitude(from, to, b.x) + ray_height_above_chord(ray, from, to, b.x);
+}
+
 // A diffraction candidate at (x, z), in the CPU's candidate order, into both states
 // (rubber_band.rs diffraction_path): one above the state's chord after lowering joins the hull,
 // otherwise it competes for the unblocked path's single point.
@@ -215,7 +222,7 @@ __device__ u32 stream_candidate(RayStream& s, float x, float z, float terrain_z,
             while (st.depth >= 2) {
                 const HullEntry& a = st.hull[st.depth - 2];
                 const HullEntry& b = st.hull[st.depth - 1];
-                if ((b.x - a.x) * (lowered - a.lowered) - (b.lowered - a.lowered) * (x - a.x) < 0.0f) break;
+                if (!under_state_ray(st.ray, a, x, z, b)) break;
                 // The popped point's stretch now belongs to the point below it.
                 if (st.depth - 2 >= 1) {
                     HullEntry& below = st.hull[st.depth - 2];
@@ -456,7 +463,7 @@ __device__ void close_hull(RayStream& s, StateStream& st) {
     while (st.depth >= 2) {
         const HullEntry& a = st.hull[st.depth - 2];
         const HullEntry& b = st.hull[st.depth - 1];
-        if ((b.x - a.x) * (receiver.z - a.lowered) - (b.lowered - a.lowered) * (receiver.x - a.x) < 0.0f) break;
+        if (!under_state_ray(st.ray, a, receiver.x, receiver.z, b)) break;
         if (st.depth - 2 >= 1) {
             HullEntry& below = st.hull[st.depth - 2];
             Moments moved = moments_about(b.after, s.streamed_to - b.x, b.x, b.terrain_z, below.x, below.terrain_z);
