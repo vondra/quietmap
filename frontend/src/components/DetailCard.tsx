@@ -22,7 +22,7 @@ interface DetailCardProps {
   onHighlight: (key: string | null) => void
   calculationOpen: boolean
   onCalculationToggle: () => void
-  onFan: (fan: SegmentFan | null) => void
+  onFan: (source: string, fan: SegmentFan | null) => void
   /** The place to stay at the point, when its pin opened the popup. */
   stay: Stay | null
 }

@@ -1,5 +1,6 @@
-// GET /api/popup?lat=&lon=[&year=][&segments=1]: one click's answer streamed as it is refined
-// (with the segments view's pieces when asked), one line of JSON
+// GET /api/popup?lat=&lon=[&year=][&source=ID,...[&piece=K]]: one click's answer streamed as it is
+// refined (with an opened row's sound path, or one of its pieces ray by ray, when asked), one line
+// of JSON
 // per update (application/x-ndjson), each line flushed as `qm-popup` writes it. A failed
 // computation ends the stream with one line `{"error": "..."}`; the updates before it are
 // incomplete and must not be shown as the level.
@@ -20,9 +21,14 @@ export function coordinate(text: unknown): number | null {
   return Number.isFinite(value) ? value : null
 }
 
+/** An opened row's parts: one to 32 group ids of 16 hex digits. */
+const SOURCE = /^[0-9a-f]{16}(,[0-9a-f]{16}){0,31}$/
+/** A listed piece's rank: the popup lists 24. */
+const PIECE = /^([0-9]|1[0-9]|2[0-3])$/
+
 /** The click's point and year, or what is wrong with the query. Longitude wraps to -180..180. */
 export function parsePopupQuery(
-  query: { lat?: unknown; lon?: unknown; year?: unknown; segments?: unknown },
+  query: { lat?: unknown; lon?: unknown; year?: unknown; source?: unknown; piece?: unknown },
   years: readonly string[],
 ): PopupRequest | string {
   const lat = coordinate(query.lat)
@@ -31,14 +37,20 @@ export function parsePopupQuery(
   if (lon === null) return 'lon must be a number'
   const year = query.year ?? years[0]
   if (typeof year !== 'string' || !years.includes(year)) return `year must be one of ${years.join(', ')}`
-  if (query.segments !== undefined && query.segments !== '1') return 'segments must be 1'
+  if (query.source !== undefined && (typeof query.source !== 'string' || !SOURCE.test(query.source))) {
+    return 'source must be one to 32 ids of 16 hex digits'
+  }
+  if (query.piece !== undefined && (query.source === undefined || typeof query.piece !== 'string' || !PIECE.test(query.piece))) {
+    return 'piece must be 0 to 23, with a source'
+  }
   return {
     year,
     lat,
     // Only a longitude outside it wraps: the arithmetic moves an in-range one by 1e-14, enough to
     // change the click's sampling seed against the same point asked of the popup directly.
     lon: lon >= -180 && lon < 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180,
-    ...(query.segments === '1' ? { segments: true } : {}),
+    ...(typeof query.source === 'string' ? { source: query.source.split(',') } : {}),
+    ...(typeof query.piece === 'string' ? { piece: Number(query.piece) } : {}),
   }
 }
 
@@ -46,7 +58,7 @@ export async function popupRoutes(
   app: FastifyInstance,
   { runner, years }: { runner: PopupRunner; years: readonly string[] },
 ): Promise<void> {
-  app.get<{ Querystring: { lat?: string; lon?: string; year?: string; segments?: string } }>('/api/popup', {
+  app.get<{ Querystring: { lat?: string; lon?: string; year?: string; source?: string; piece?: string } }>('/api/popup', {
     // Never compressed: a compressor holds lines back until its buffer fills.
     compress: false,
     // A HEAD request would compute a click nobody reads.

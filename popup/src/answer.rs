@@ -12,7 +12,7 @@ use crate::candidates::{
 };
 use crate::evaluate::Receiver;
 use crate::lines::whole_lines;
-use crate::listing::list_pieces;
+use crate::listing::list_source;
 use crate::obstacles::Scene;
 use crate::percentiles::Percentiles;
 use crate::release::{Release, RingFiles};
@@ -40,9 +40,11 @@ pub const RECEIVER_HEIGHT_M: f64 = 4.0;
 pub struct Options {
     /// Evaluate every candidate (the benchmark reference); the stop rule is off.
     pub exact: bool,
-    /// List this many loudest evaluated pieces per layer with the final update (the benchmark's
-    /// piece-by-piece comparison with dev4); 0 lists none.
-    pub pieces: usize,
+    /// The groups whose sound path the final update lists: every piece of them, each evaluated
+    /// with certainty (an opened row's parts); none lists nothing.
+    pub source: Vec<u64>,
+    /// Of those, list only the piece of this rank (loudest first) with each ray's ground and walls.
+    pub piece: Option<usize>,
 }
 
 /// Where the click is answered: the click itself or a building's façade.
@@ -389,20 +391,32 @@ pub fn answer(
             reflection_db: station.reflection_db,
             own_footprint: 0,
         };
+        // The asked source's pieces, each evaluated with certainty, so its sound path lists all.
+        if !options.source.is_empty() {
+            for selection in &mut selections {
+                let (asked, rest): (Vec<Candidate>, Vec<Candidate>) =
+                    std::mem::take(&mut selection.pending)
+                        .into_iter()
+                        .partition(|candidate| options.source.contains(&candidate.group_key));
+                selection.pending = rest;
+                selection.evaluate_kept(asked, &evaluation, &attributes)?;
+            }
+        }
         select(
             &mut selections,
             &evaluation,
             &attributes,
             options.exact,
-            options.pieces > 0,
             (lat.to_bits() ^ lon.to_bits().rotate_left(32)) ^ u64::from(ring),
         )?;
         evaluate_seconds += evaluate_started.elapsed().as_secs_f64();
         let last_ring = ring == ground_rings.max(aircraft_rings);
-        let pieces = if last_ring && options.pieces > 0 {
-            list_pieces(&mut selections, options.pieces, &evaluation, &attributes)?
+        let (pieces, arrival) = if last_ring && !options.source.is_empty() {
+            let (pieces, arrival) =
+                list_source(&mut selections, &evaluation, &attributes, options.piece)?;
+            (pieces, Some(arrival))
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
         let display_record =
             |display: DisplayRef, layer: Layer| -> Result<serde_json::Value, String> {
@@ -568,11 +582,16 @@ pub fn answer(
                         own_curves(Layer::Aircraft),
                     ));
                 }
+                // A sound path's answer leaves the rows' map lines and the flights' tracks to the
+                // click's own answer, which drew them (its update stays under 100 KB).
+                let keys: Vec<u64> = if !options.source.is_empty() {
+                    Vec::new()
+                } else {
+                    rows.iter()
+                        .flat_map(|row| row.parts.iter().map(|part| part.group_key))
+                        .collect()
+                };
                 let read: Vec<&RingFiles> = rings.iter().filter_map(OnceCell::get).collect();
-                let keys: Vec<u64> = rows
-                    .iter()
-                    .flat_map(|row| row.parts.iter().map(|part| part.group_key))
-                    .collect();
                 let lines = whole_lines(&read, &frame, &keys, station.position, GROUND_REACH_M)?;
                 let parts = rows.iter_mut().flat_map(|row| row.parts.iter_mut());
                 for (part, lines) in parts.zip(lines) {
@@ -587,7 +606,7 @@ pub fn answer(
             let ground = lden_energy(&ground);
             [airliners, jets, propeller, helicopters, ground]
         });
-        if last_ring {
+        if last_ring && options.source.is_empty() {
             let read_started = std::time::Instant::now();
             let (track_files, track_bytes) = crate::aircraft::tracks::attach(
                 &release.year_root,
@@ -616,6 +635,7 @@ pub fn answer(
             rows,
             flights: listed_flights,
             pieces,
+            arrival,
             statistics: Statistics {
                 rings_read: ring,
                 files,

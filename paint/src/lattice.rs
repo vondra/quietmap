@@ -159,14 +159,7 @@ fn hum_at(
         }
     }
     let receiver = point.receiver(square);
-    select(
-        &mut selections,
-        &receiver,
-        &square.attributes,
-        false,
-        false,
-        seed,
-    )?;
+    select(&mut selections, &receiver, &square.attributes, false, seed)?;
     Ok(std::array::from_fn(|layer| {
         (lden_energy(&selections[layer].answer_energy()) - lden_energy(&loud_energy[layer]))
             .max(0.0)

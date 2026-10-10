@@ -8,6 +8,7 @@ import { fmtInt, fmtPercent, fmtSone } from '../../../utils/formatters'
 import { FadingText } from '../../ui/fading-text'
 import { flightsText, heardText } from '../heard'
 import { contributorLabel, SOURCE_LABELS } from '../labels'
+import type { SegmentsClick } from '../segments/SegmentsSection'
 import { Chevron, formatDist } from '../shared'
 import { AircraftLayerDetail, ContributorDetail } from './ContributorDetail'
 
@@ -66,11 +67,13 @@ function SourceRow({ label, distance, heard, nden, percent, onToggle, children }
   )
 }
 
-/** A source's row; opening it shows the source on the map. */
-export function ContributorRow({ c, percent, onHighlight }: {
+/** A source's row; opening it shows the source on the map, and its segments once the click is
+ *  answered (`click`). */
+export function ContributorRow({ c, percent, onHighlight, click }: {
   c: Contributor
   percent?: number
   onHighlight?: (id: string | null) => void
+  click?: SegmentsClick
 }) {
   return (
     <SourceRow
@@ -81,7 +84,7 @@ export function ContributorRow({ c, percent, onHighlight }: {
       percent={percent}
       onToggle={open => onHighlight?.(open ? c.id : null)}
     >
-      <ContributorDetail c={c} />
+      <ContributorDetail c={c} click={click} />
     </SourceRow>
   )
 }

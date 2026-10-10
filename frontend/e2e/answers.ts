@@ -1,5 +1,6 @@
-// The popup answers the browser tests stream: one update of the contract, a street, Prague airport's
-// ground operations, and the loudest flights with their tracks near the hermetic world's point.
+// The popup answers the browser tests stream: one update of the contract, a street and a piece of
+// it, Prague airport's ground operations, and the loudest flights with their tracks near the
+// hermetic world's point.
 import type { Contributor, PopupPiece, PopupUpdate, TopFlight, TrackLine } from '../src/types/noise'
 import { POINT } from './support'
 
@@ -61,9 +62,9 @@ export function popupUpdate(
   }
 }
 
-/** A computed piece of `contributor` delivering `lden`, `distance_m` east of the point, with its
- *  ray's ground and screening in calm air and bent down. */
-export function computedPiece(contributor: Contributor, lden: number, distance_m: number, boundary_db: [number, number]): PopupPiece {
+/** A computed piece of `contributor` delivering `lden`, a 45 m line `distance_m` east of the point:
+ *  four rays, the southernmost behind a building that takes 20 dB in calm air and 8.5 downwind. */
+export function computedPiece(contributor: Contributor, lden: number, distance_m: number): PopupPiece {
   const east = distance_m / (111_320 * Math.cos((POINT.lat * Math.PI) / 180))
   const nearest: [number, number] = [POINT.lat, POINT.lng + east]
   return {
@@ -73,15 +74,19 @@ export function computedPiece(contributor: Contributor, lden: number, distance_m
     distance_m,
     emission: { ld: 80, le: 78, ln: 72, lden: 82 },
     received: { ld: lden - 2, le: lden - 3, ln: lden - 8, lden },
-    source_lden: contributor.received_lden,
+    path: {
+      free_lden: lden + 1.1, air_db: -0.1, screening_db: [-1.6, -0.6], ground_db: [0.2, 0.3],
+      facades_db: 0, lden: [lden - 0.4, lden + 0.6], bent_percent: [40, 55, 65],
+    },
     metadata: contributor.metadata,
-    crossings: [],
-    // Four rays along the piece summing to its Lden, the southernmost behind a building.
+    crossings: [[distance_m / 2, 9, '011400ad000668eb']],
+    // Terms as losses: ground and screening calm and downwind, screening alone calm and downwind,
+    // air; slant m.
     rays: [
-      [POINT.lat - 0.00015, POINT.lng + east, 0.3, lden - 30.5],
-      [POINT.lat - 0.00005, POINT.lng + east, 0.6, lden - 4],
-      [POINT.lat + 0.00005, POINT.lng + east, 0.6, lden - 4],
-      [POINT.lat + 0.00015, POINT.lng + east, 0.3, lden - 7],
+      [POINT.lat - 0.00015, POINT.lng + east, 0.3, lden - 30.5, [21.5, 8.2, 20, 8.5, 0.1, 22]],
+      [POINT.lat - 0.00005, POINT.lng + east, 0.6, lden - 4, [-0.4, -0.5, 0, 0, 0.1, 13]],
+      [POINT.lat + 0.00005, POINT.lng + east, 0.6, lden - 4, [-0.4, -0.5, 0, 0, 0.1, 13]],
+      [POINT.lat + 0.00015, POINT.lng + east, 0.3, lden - 7, [-0.3, -0.4, 0, 0, 0.1, 22]],
     ],
     trace: {
       profile: [[0, 350, 0], [distance_m, 350, 0]],
@@ -89,13 +94,25 @@ export function computedPiece(contributor: Contributor, lden: number, distance_m
       receiver_altitude_m: 354,
       slant_m: distance_m + 0.4,
       p: [0.55, 0.8, 0.9],
-      boundary_db,
+      boundary_db: [-0.4, -0.5],
       without_ground_db: [0, 0],
       air_db: 0.1,
       path_difference_m: [0, 0],
       ray: [nearest, [POINT.lat, POINT.lng]],
     },
   }
+}
+
+/** The answer of `piece`'s own run (`piece=`): that piece alone, every ray with the flat ground
+ *  under it, hard then soft, and the southernmost ray with the two walls of the building it
+ *  crosses. */
+export function pieceRun(update: PopupUpdate, piece: PopupPiece): PopupUpdate {
+  const rays = piece.rays.map(([lat, lon, angle, lden, terms], k) => [lat, lon, angle, lden, terms, {
+    ground: [[0, 350, 0], [terms[5] / 2, 350, 0], [terms[5], 350, 1]],
+    source_altitude_m: 350,
+    walls: k === 0 ? [[terms[5] / 2 - 3, 9, true], [terms[5] / 2 + 3, 9, true]] : [],
+  }] as PopupPiece['rays'][number])
+  return { ...update, pieces: [{ ...piece, rays }] }
 }
 
 /** A track line between two places given in degrees north and east of the point. */

@@ -1,12 +1,14 @@
 // The opened body of a source row, a block apart from the next: a contributor's class and the facts
-// of its layer, its sound path, then its levels by period; the aircraft layer's
-// makeup, its levels, the flights of a day by their peak level here and its loudest flights.
+// of its layer, its sound path, its levels by period, then its segments, computed when opened; the
+// aircraft layer's makeup, its levels, the flights of a day by their peak level here and its loudest
+// flights.
 import type { AircraftEvents, AircraftKind, Contributor, ContributorPart, PeriodLevels, TopFlight } from '../../../types/noise'
 import { fmtCount, fmtDbValue, fmtPercent, wholePercents } from '../../../utils/formatters'
 import { FadingText } from '../../ui/fading-text'
 import { HoverText } from '../../ui/info-tip'
 import { aircraftEventRows } from '../aircraft-events'
 import { aircraftKindShares, contributorClass, labelNamesClass, partLabel, subtypeLabel } from '../labels'
+import { SegmentsSection, type SegmentsClick } from '../segments/SegmentsSection'
 import { CAPTION, COLUMN_NAME, DETAIL_TEXT, DetailTable, lineRow } from '../shared'
 import { MetadataRows } from './MetadataRows'
 import { PathTable } from './PathTable'
@@ -49,7 +51,8 @@ function PartsTable({ parts, rowName }: { parts: ContributorPart[], rowName: str
   )
 }
 
-export function ContributorDetail({ c }: { c: Contributor }) {
+/** `click`: the answered click its segments are computed for (none before the final answer). */
+export function ContributorDetail({ c, click }: { c: Contributor, click?: SegmentsClick }) {
   return (
     <div className={DETAIL}>
       <div>
@@ -60,6 +63,7 @@ export function ContributorDetail({ c }: { c: Contributor }) {
       {c.parts && c.parts.length > 1 && <PartsTable parts={c.parts} rowName={c.name} />}
       {c.path && <PathTable path={c.path} />}
       <LevelsTable received={c.received} />
+      {click && <SegmentsSection c={c} click={click} />}
     </div>
   )
 }

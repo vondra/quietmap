@@ -38,8 +38,11 @@ export default function App() {
   // key, or a contributor's lines (its row opened), by `source:<id>`; read from the latest
   // update, so it follows the stream and goes when it leaves the list.
   const [highlighted, setHighlighted] = useState<string | null>(null)
-  // The detailed calculation's pieces and rays on the map, while it is open.
+  // An opened row's segments and rays on the map, while its segments are open: the row that drew
+  // them last; closing another row's leaves them.
   const [fan, setFan] = useState<SegmentFan | null>(null)
+  const showFan = useCallback((source: string, next: SegmentFan | null) =>
+    setFan(current => next ?? (current?.source === source ? null : current)), [])
   // The detailed calculation, open under the popup's list.
   const [calculationOpen, setCalculationOpen] = useState(false)
   const toggleCalculation = useCallback(() => setCalculationOpen(open => !open), [])
@@ -334,7 +337,7 @@ export default function App() {
             onHighlight={setHighlighted}
             calculationOpen={calculationOpen && desktop}
             onCalculationToggle={toggleCalculation}
-            onFan={setFan}
+            onFan={showFan}
             stay={selectedStay}
           />
         </div>
@@ -416,7 +419,7 @@ export default function App() {
         onHighlight={setHighlighted}
         calculationOpen={calculationOpen && !desktop}
         onCalculationToggle={toggleCalculation}
-        onFan={setFan}
+        onFan={showFan}
         recentPlaces={<RecentPlaces places={recentPlaces} current={detailPosition} onOpen={openPlace} onRemove={forgetPlace} />}
         stay={selectedStay}
       />

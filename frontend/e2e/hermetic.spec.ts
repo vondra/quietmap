@@ -1,8 +1,8 @@
 // The visitor's path in a real browser, without a backend: heatmap hover, the streamed popup (its
-// refinement, errors and aborts, the loudest flights), building clicks, layer switches, search, and
-// the phone sheet.
+// refinement, errors and aborts, the loudest flights, an opened row's segments), the detailed
+// calculation, layer switches, search, and the phone sheet.
 import { expect, test } from '@playwright/test'
-import { computedPiece, FIXTURE_FLIGHTS, popupUpdate, roadContributor, withAircraft } from './answers'
+import { computedPiece, FIXTURE_FLIGHTS, pieceRun, popupUpdate, roadContributor, withAircraft } from './answers'
 import {
   FIXTURE_DB,
   PHONE,
@@ -136,8 +136,9 @@ test('desktop: an error line replaces the partial answer, a new click aborts the
 })
 
 // Inside a building the popup shows the level at the building's loudest façade receiver; where
-// that receiver is reads in the segments view, not above the sources.
-test('desktop: a point inside a building tells its façade receiver in the segments view', async ({ page }) => {
+// that receiver is reads in the detailed calculation, not above the sources, with the levels
+// exceeded in each period.
+test('desktop: the detailed calculation tells the façade receiver and the percentile levels', async ({ page }) => {
   await installHermeticMap(page, POINT, FIXTURE_DB)
   await page.goto(mapUrl(POINT))
   const { x, y } = await canvasCenter(page)
@@ -154,50 +155,74 @@ test('desktop: a point inside a building tells its façade receiver in the segme
   await expect(lden(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB Lden`)
   await expect(page.locator('[data-testid="building-exposure"]')).toHaveCount(0)
   await page.locator('[data-testid="calculation-toggle"]:visible').click()
-  await expect.poll(() => popupRequests(page)).toHaveLength(2)
-  await sendPopupLine(page, { ...popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB, building), pieces: [] })
-  const segments = page.locator('[data-testid="segments"]:visible')
-  await expect(segments).toContainText('façade facing SE')
-  await expect(segments).toContainText('loudest of 12 façade points')
+  const calculation = page.locator('[data-testid="calculation"]:visible')
+  await expect(calculation).toContainText(/Façade\s*facing SE, loudest of 12 façade points/)
+  const percentiles = calculation.getByRole('table').filter({ hasText: 'Percentile levels' })
+  await expect(percentiles.locator('tbody tr').nth(0).locator('td')).toHaveText(['Day', '67.0', '66.0', '61.0', '57.0'])
+  await expect(percentiles.locator('tbody tr').nth(2).locator('td')).toHaveText(['Night', '60.0', '59.0', '54.0', '48.0'])
+  // The calculation computes nothing again.
+  expect(await popupRequests(page)).toHaveLength(1)
 })
 
-// The segments view lists each layer's sources once, the loudest open on its computed pieces, in
-// columns: what the ground and the screening do to each piece's ray in calm air and bent down,
-// and the Lden it delivers; pieces under 0 dB are left out. An opened piece tells its ray.
-test('desktop: the segments view groups the computed pieces under their source', async ({ page }) => {
+// An opened row computes its segments when asked: the same click again with the row's parts, whose
+// answer never replaces the click's own. How all of its sound arrives in calm air, its loudest
+// segments, and an opened one's sound path, rays and terrain profile.
+test('desktop: an opened row computes its segments, how they arrive and their rays', async ({ page }) => {
   await installHermeticMap(page, POINT, FIXTURE_DB)
   await page.goto(mapUrl(POINT))
   const { x, y } = await canvasCenter(page)
   await page.mouse.click(x, y)
   await expect.poll(() => popupRequests(page)).toHaveLength(1)
-  const answer = popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB)
-  await sendPopupLine(page, answer)
-  await page.locator('[data-testid="calculation-toggle"]:visible').click()
-  await expect.poll(() => popupRequests(page)).toHaveLength(2)
+  await sendPopupLine(page, popupUpdate(1, false, POINT.lat, POINT.lng, FIXTURE_DB))
+  await endPopup(page)
+  const popup = page.locator('[data-testid="detail-popup"]:visible')
+  await popup.getByRole('button', { name: /^Fixture street/ }).click()
+  await popup.getByRole('button', { name: /^Segments/ }).click()
+  await expect.poll(async () => (await popupRequests(page))[1])
+    .toEqual({ lat: POINT.lat, lng: POINT.lng, source: '00000000000000aa' })
+  const segments = popup.getByTestId('segments')
+  await expect(segments).toContainText('computing…')
   const street = roadContributor(FIXTURE_DB)
-  const lane = { ...street, id: '00000000000000cc', name: 'Fixture lane', metadata: { ...street.metadata, name: 'Fixture lane' } }
   await sendPopupLine(page, {
-    ...answer,
-    pieces: [
-      computedPiece(street, 61.2, 12, [-2.5, -2.4]),
-      computedPiece(street, 55.4, 40, [3.1, 1.2]),
-      computedPiece(lane, -1.5, 900, [20, 10]),
-    ],
+    ...popupUpdate(2, false, POINT.lat, POINT.lng, FIXTURE_DB + 5),
+    arrival: {
+      pieces: 3,
+      edges: [{ edge: 'open', share: 0.75, screening_db: 0 }, { edge: 'buildings', share: 0.25, screening_db: -12.3 }],
+    },
+    pieces: [computedPiece(street, 61.2, 12), computedPiece(street, 55.4, 40)],
   })
-  const segments = page.locator('[data-testid="segments"]:visible')
-  await expect(segments.getByRole('button', { name: /Fixture/ })).toHaveText([/^Fixture street\s*63\.0$/])
-  await expect(segments.getByRole('button', { name: /Fixture/ })).toHaveAttribute('aria-expanded', 'true')
-  const pieces = segments.getByRole('button', { name: /●/ })
-  await expect(pieces).toHaveText([/●\s+E\s+12 m\s*\+2\.5\s*\+2\.4\s*61\.2/, /●\s+E\s+40 m\s*−3\.1\s*−1\.2\s*55\.4/])
-  await pieces.nth(1).click()
-  const piece = segments.getByTestId('segment-piece')
-  await expect(piece).toContainText('Ground + screening')
-  await expect(piece).toContainText('Share of the night')
-  // Its four rays, the one behind the building 23.5 dB under the clearest per unit of angle.
-  await expect(piece).toContainText(/Rays summed\s*4, weakest −23\.5 dB/)
-  // The count opens every ray's row: what reaches along it, its length and its terms.
-  await piece.getByRole('button', { name: /4, weakest/ }).click()
-  await expect(piece.getByTestId('ray-table')).toContainText('reaches')
+  await endPopup(page)
+  // The run's own levels are not the popup's.
+  await expect(lden(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB Lden`)
+  await expect(popup.getByRole('button', { name: /^Segments/ })).toHaveText('Segments (3)')
+  const arrival = segments.getByRole('table').filter({ hasText: 'In calm air' })
+  await expect(arrival.locator('tbody tr')).toHaveText([/Line of sight\s*75 %\s*0\.0/, /Over buildings\s*25 %\s*−12\.3/])
+  // The two loudest of three, each by its direction and distance with the Lden it delivers.
+  await expect(segments).toContainText('2 loudest')
+  const listed = segments.getByRole('button', { name: /●/ })
+  await expect(listed).toHaveText([/●\s*E\s*12 m\s*61\.2/, /●\s*E\s*40 m\s*55\.4/])
+  await listed.nth(1).click()
+  // Opened, a segment is computed again on its own, every ray with the terrain under it.
+  await expect.poll(async () => (await popupRequests(page))[2])
+    .toEqual({ lat: POINT.lat, lng: POINT.lng, source: '00000000000000aa', piece: 1 })
+  const segment = segments.getByTestId('segment')
+  await expect(segment).toContainText(/Length\s*45 m/)
+  await expect(segment).toContainText('Sound path, dB Lden')
+  // Its four rays, the southernmost behind the building: 20 dB taken in calm air, 8.5 downwind.
+  const rays = segment.getByTestId('rays').getByRole('button')
+  await expect(rays).toHaveCount(4)
+  await expect(rays.nth(0)).toHaveText(/^●\s*1\s*−20\.0\s*−8\.5\s*−1\.5\s*\+0\.3\s*24\.9$/)
+  await rays.nth(0).click()
+  const ray = segment.getByTestId('ray')
+  await expect(ray).toContainText(/Length\s*22 m/)
+  await expect(ray).toContainText('computing…')
+  await sendPopupLine(page, pieceRun(popupUpdate(3, false, POINT.lat, POINT.lng, FIXTURE_DB + 5), computedPiece(street, 55.4, 40)))
+  await endPopup(page)
+  await expect(ray).toContainText(/Angle\s*17\.2°/)
+  await expect(ray).toContainText(/Terrain profile\s*350 → 354 m a\.s\.l\./)
+  await expect(ray.getByRole('img')).toBeVisible()
+  await expect(ray).toContainText('building')
+  await expect(ray).not.toContainText('barrier')
 })
 
 test('search: picking a result flies the map there and opens its popup', async ({ page }) => {

@@ -5,7 +5,7 @@ tiles, the data layers, the geocoder proxies, the places to stay and the streame
 
 | route | answer |
 |---|---|
-| `GET /api/popup?lat=&lon=[&year=][&segments=1]` | one click, streamed as `application/x-ndjson` (below) |
+| `GET /api/popup?lat=&lon=[&year=][&source=ID,...[&piece=K]]` | one click, streamed as `application/x-ndjson` (below) |
 | `GET /api/tiles-manifest` | the published heatmap generation: `{build, zoom, layers}` |
 | `GET /api/tiles/:build/:layer/:z/:x/:y.bin` | one HM3 tile, Brotli, immutable; a missing tile is an empty 200 |
 | `GET /api/raster/:layer/:z/:x/:y.png` | one 256-pixel map tile of a data layer, drawn by `qm-raster` from the default year: `elevation`, `forest`, `hard` (zoom 10-16), `buildings`, `barriers`, `traffic` (13-16), `trains` (11-16) and `others` (12-16); 400 for no such tile, 503 when eight draw and 256 wait, 500 when the drawing failed; kept an hour |
@@ -19,12 +19,14 @@ tiles, the data layers, the geocoder proxies, the places to stay and the streame
 forwards every line it prints as one line of the response, flushed at once: the first after the
 clicked tile and its neighbours are read, later ones as rings are added. Each line is the whole
 answer so far (`partial` is true until the last one), never a delta; the fields are those of
-`qm-popup` (`frontend/src/types/noise.ts`). `segments=1` (the detailed calculation's segments view)
-adds each layer's 8 loudest pieces with their data and rays (`--pieces 8`); the benchmark's
-`--exact` is never passed.
+`qm-popup` (`frontend/src/types/noise.ts`). `source=ID,...` (an opened row's sound path, its parts'
+group ids) adds how all of it arrives and its loudest pieces with their data and rays
+(`--source`); with `piece=K` only its Kth loudest piece, each ray with the ground and walls under it
+(`--piece`); the benchmark's `--exact` is never passed.
 
 - `400` with `{"error"}`: `lat` must be a number within ±85.05, `lon` a number (wrapped to
-  -180..180), `year` one of `QM_YEARS` (the first when absent), `segments` 1 when given.
+  -180..180), `year` one of `QM_YEARS` (the first when absent), `source` one to 32 ids of 16
+  lowercase hex digits when given, `piece` 0 to 23 with a source.
 - `503` with `{"error"}` and `Retry-After`: every slot computes and the queue is full. A few clicks
   compute at once (each uses every core); two per slot may wait.
 - `429`: more than 5 requests per second from one client (an IPv4 address or an IPv6 /64), as for

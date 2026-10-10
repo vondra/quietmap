@@ -1,7 +1,7 @@
 // The popup body: how loud the place is over the whole day (Nden, the mean loudness in sone, Lden
 // under it), and what is heard there and from what: the loudest contributors, the aircraft layer
-// and the rest, each with why it is loud and how loud it is alone. Under the list the whole
-// calculation opens in place.
+// and the rest, each with why it is loud and how loud it is alone; once answered, an opened row's
+// segments. Under the list the whole calculation opens in place.
 // Redrawn on every streamed update of the click.
 import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
 import { ldenToColor } from '../utils/noise-colors'
@@ -28,8 +28,8 @@ export interface NoiseDetailContentProps {
   /** Whether the detailed calculation is open under the list, and how to open or close it. */
   calculationOpen?: boolean
   onCalculationToggle?: () => void
-  /** Draws the calculation's pieces and rays on the map; null clears them. */
-  onFan?: (fan: SegmentFan | null) => void
+  /** Draws an opened row's segments and rays on the map; null takes that row's away. */
+  onFan?: (source: string, fan: SegmentFan | null) => void
 }
 
 const NDEN_TOOLTIP = 'How loud the place sounds over the whole day: every moment by its loudness\n'
@@ -73,6 +73,10 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
     ...(rest != null ? [restShare] : []),
   ]
   const percents = shares.every(share => share != null) ? wholePercents(shares as number[]) : []
+  // An opened row's segments are the same click computed again: only once it is answered.
+  const click = answered && onFan
+    ? { at: data.center, receiver: data.building?.facade?.receiver ?? data.center, onFan }
+    : undefined
   const shown = shownEntries.map((e, row) => e.contributor
     ? (
       <ContributorRow
@@ -80,6 +84,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
         c={e.contributor}
         percent={percents[row]}
         onHighlight={id => onHighlight(id === null ? null : `source:${id}`)}
+        click={click}
       />
     )
     : <AircraftLayerRow key="aircraft" layer={e.layer!} percent={percents[row]} flights={data.top_flights} onHighlightFlight={onHighlight} />)
@@ -132,7 +137,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
               {calculationOpen && (
                 <Suspense fallback={<div className="mt-2 text-[11px] text-muted-foreground animate-pulse">…</div>}>
                   <IntoView>
-                    <CalculationDetails data={data} onFan={onFan} />
+                    <CalculationDetails data={data} />
                   </IntoView>
                 </Suspense>
               )}

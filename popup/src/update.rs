@@ -109,8 +109,10 @@ pub struct Update<'u> {
     pub rows: Vec<crate::rows::Row>,
     /// The loudest flights so far.
     pub flights: Vec<LoudFlight>,
-    /// The loudest evaluated pieces per layer (final update, when asked for).
+    /// The asked source's loudest pieces, loudest first, and how all of it arrives (final update,
+    /// when asked for).
     pub pieces: Vec<EvaluatedPiece>,
+    pub arrival: Option<crate::listing::Arrival>,
     pub statistics: Statistics,
     /// The display record of a contributor: its display fields by name.
     pub display_record: &'u dyn Fn(DisplayRef, Layer) -> Result<serde_json::Value, String>,
@@ -227,6 +229,7 @@ pub fn empty_answer(
         rows: Vec::new(),
         flights: Vec::new(),
         pieces: Vec::new(),
+        arrival: None,
         statistics: Statistics {
             rings_read: 1,
             files,

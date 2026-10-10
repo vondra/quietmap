@@ -20,7 +20,7 @@ interface MobileDetailSheetProps {
   onHighlight: (key: string | null) => void
   calculationOpen: boolean
   onCalculationToggle: () => void
-  onFan: (fan: SegmentFan | null) => void
+  onFan: (source: string, fan: SegmentFan | null) => void
   /** The recent places' tabs, shown above the answer. */
   recentPlaces?: ReactNode
   /** The place to stay at the point, when its pin opened the popup: above the answer, in the peek. */

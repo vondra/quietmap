@@ -1,14 +1,15 @@
-// The detailed calculation of an answered click, opened inside the popup under its list: the day,
-// evening and night with their levels, shares of Lden and loudness, the layers with their levels
-// and shares, the place's weather, and then every source with its computed pieces and their rays,
-// drawn on the map. For finding out why a number is what it is, and where the data or the physics
-// went wrong.
+// The detailed calculation of an answered click, opened inside the popup under its list: where the
+// levels are computed (a building's façade, the reflection of the walls around), the day, evening
+// and night with their levels, shares of Lden and loudness and the levels exceeded 5 to 90 % of
+// each, the layers with their levels and shares, and the place's weather. For finding out why a
+// number is what it is, and where the data or the physics went wrong; how each source's sound
+// arrives opens in its row.
 import type { ReactNode } from 'react'
-import type { PopupUpdate, SegmentFan } from '../../types/noise'
-import { fmtDbValue as level, fmtSone } from '../../utils/formatters'
+import type { BuildingAnswer, PopupUpdate } from '../../types/noise'
+import { fmtDbValue as level, fmtInt, fmtSone } from '../../utils/formatters'
 import { SOURCE_LABELS } from '../noise/labels'
-import { SEGMENTS_EXPLAINED, SegmentsSection } from '../noise/segments/SegmentsSection'
-import { CAPTION, DETAIL_TEXT, DetailTable } from '../noise/shared'
+import { CAPTION, compassPoint, DETAIL_TEXT, DetailTable, lineRow } from '../noise/shared'
+import { REFLECTIONS } from '../noise/source/PathTable'
 import { HoverText } from '../ui/info-tip'
 
 /** END periods: their hours of the day and the penalty Lden adds, for each period's share. */
@@ -20,11 +21,19 @@ const PERIODS = [
 
 const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
 
+const RECEIVER_EXPLAINED = 'Where every level is computed: 4 m above the ground'
+
 const PERIODS_EXPLAINED = 'Each period\'s level, its share of Lden (the evening counts 5 dB and the\n'
   + 'night 10 dB louder) and how loud it sounds on average (ISO 532-1)'
 
+const PERCENTILES_EXPLAINED = 'L5, L10, L50, L90: the level exceeded 5, 10, 50 and 90 % of the period\'s time'
+
+const COMPUTED_EXPLAINED = 'Each layer\'s segments within reach (flight boxes for aircraft) and how many\n'
+  + 'were computed in full, the loudest first; what the others could add is bounded\n'
+  + 'or estimated from a sample, at most 0.1 dB'
+
 const WEATHER_EXPLAINED = 'How often the wind or an inversion bends sound down to the ground and\n'
-  + 'carries it further (CNOSSOS-EU\'s favourable conditions), for sound\n'
+  + 'carries it further (CNOSSOS-EU\'s favorable conditions), for sound\n'
   + 'from each direction (ERA5 1991–2020); and what the air absorbs\n'
   + 'in each octave (ISO 9613-1, the place\'s climate)'
 
@@ -39,12 +48,26 @@ function Section({ title, hint, children }: { title: string, hint: string, child
   )
 }
 
-export default function CalculationDetails({ data, onFan }: {
-  data: PopupUpdate
-  /** Draws the listed pieces and their rays on the map; null clears them. */
-  onFan?: (fan: SegmentFan | null) => void
-}) {
-  const [lat, lng] = data.center
+/** Where every level of the click is computed, when that is not just the clicked point: a
+ *  building's façade, and the reflection of walls close behind the receiver. */
+function ReceiverSection({ building, reflectionDb }: { building: BuildingAnswer | null, reflectionDb: number }) {
+  const facade = building?.facade ?? null
+  if (!facade && reflectionDb <= 0) return null
+  return (
+    <Section title="Receiver" hint={RECEIVER_EXPLAINED}>
+      {facade && building && lineRow(
+        <HoverText title={'Inside a building the level is computed 0.1 m in front of points along\nits façades; the loudest by Lden is shown'}>Façade</HoverText>,
+        `facing ${compassPoint(facade.bearing_deg)}, loudest of ${building.facade_receivers} façade points`,
+      )}
+      {reflectionDb > 0 && lineRow(
+        <HoverText title={REFLECTIONS}>Reflections</HoverText>,
+        `+${reflectionDb.toFixed(1)} dB`,
+      )}
+    </Section>
+  )
+}
+
+export default function CalculationDetails({ data }: { data: PopupUpdate }) {
   const periodEnergy = PERIODS.map(p => {
     const db = data.total[p.key]
     return db == null ? 0 : p.hours * 10 ** ((db + p.penalty) / 10)
@@ -52,6 +75,7 @@ export default function CalculationDetails({ data, onFan }: {
   const allEnergy = periodEnergy.reduce((a, b) => a + b, 0)
   const total = data.total_lden ?? 0
   const sone = data.loudness?.mean_sone
+  const percentiles = data.percentiles
   const layers = data.sources
     .filter(layer => (layer.lden ?? 0) > 0)
     .sort((a, b) => (b.lden ?? 0) - (a.lden ?? 0))
@@ -59,30 +83,53 @@ export default function CalculationDetails({ data, onFan }: {
 
   return (
     <div data-testid="calculation" className={DETAIL_TEXT}>
+      <ReceiverSection building={data.building} reflectionDb={data.reflection_db ?? 0} />
+
       <Section title="Day, evening, night" hint={PERIODS_EXPLAINED}>
-        <DetailTable
-          head={['', 'dB', 'Share', 'Sone']}
-          rows={PERIODS.map((p, k) => [
-            p.name,
-            level(data.total[p.key]),
-            allEnergy > 0 ? `${Math.round(100 * periodEnergy[k] / allEnergy)} %` : '—',
-            sone?.[p.sone] != null ? fmtSone(sone[p.sone] as number) : '—',
-          ])}
-        />
+        <div className="space-y-2">
+          <DetailTable
+            head={['', 'dB', 'Share', 'Sone']}
+            rows={PERIODS.map((p, k) => [
+              p.name,
+              level(data.total[p.key]),
+              allEnergy > 0 ? `${Math.round(100 * periodEnergy[k] / allEnergy)} %` : '—',
+              sone?.[p.sone] != null ? fmtSone(sone[p.sone] as number) : '—',
+            ])}
+          />
+          {percentiles && (
+            <DetailTable
+              head={[<HoverText title={PERCENTILES_EXPLAINED}>Percentile levels, dB</HoverText>, 'L5', 'L10', 'L50', 'L90']}
+              rows={PERIODS.map(p => [
+                p.name,
+                ...[percentiles.l5, percentiles.l10, percentiles.l50, percentiles.l90].map(levels => level(levels[p.sone])),
+              ])}
+            />
+          )}
+        </div>
       </Section>
 
       <Section title="Layers" hint="Each layer's levels and its share of Lden">
-        <DetailTable
-          head={['', 'Day', 'Evening', 'Night', 'Lden', 'Share']}
-          rows={layers.map(layer => [
-            SOURCE_LABELS[layer.source_type] ?? layer.source_type,
-            level(layer.ld),
-            level(layer.le),
-            level(layer.ln),
-            level(layer.lden),
-            share(layer.lden),
-          ])}
-        />
+        <div className="space-y-2">
+          <DetailTable
+            head={['', 'Day', 'Evening', 'Night', 'Lden', 'Share']}
+            rows={layers.map(layer => [
+              SOURCE_LABELS[layer.source_type] ?? layer.source_type,
+              level(layer.ld),
+              level(layer.le),
+              level(layer.ln),
+              level(layer.lden),
+              share(layer.lden),
+            ])}
+          />
+          <DetailTable
+            head={[<HoverText title={COMPUTED_EXPLAINED}>Segments</HoverText>, 'Computed', 'Within reach']}
+            rows={layers.map(layer => [
+              SOURCE_LABELS[layer.source_type] ?? layer.source_type,
+              fmtInt(layer.evaluated),
+              fmtInt(layer.candidates),
+            ])}
+          />
+        </div>
       </Section>
 
       {data.weather && (
@@ -104,17 +151,6 @@ export default function CalculationDetails({ data, onFan }: {
           </div>
         </Section>
       )}
-
-      <Section title="Sources, pieces and rays" hint={SEGMENTS_EXPLAINED}>
-        <SegmentsSection
-          lat={lat}
-          lng={lng}
-          building={data.building}
-          reflectionDb={data.reflection_db ?? 0}
-          layers={data.sources}
-          onFan={onFan}
-        />
-      </Section>
     </div>
   )
 }

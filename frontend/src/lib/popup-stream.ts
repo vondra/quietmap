@@ -31,16 +31,19 @@ function isPopupError(line: PopupUpdate | PopupError): line is PopupError {
  * Requests the answer at `position` and reports every streamed line. The stream must end with a
  * final (non-partial) update; an error line, a broken connection or a stream that stops early is
  * an error, never a quieter answer. Aborting `signal` (a new click, closing the popup) ends the
- * request silently, and the server stops the computation.
+ * request silently, and the server stops the computation. `source`, an opened row's parts, adds
+ * their pieces and how they arrive to the final update; `piece`, the index of one of them in the
+ * loudest-first list, that piece with every ray's own profile.
  */
 export async function streamPopup(
   position: { lat: number; lng: number },
   signal: AbortSignal,
   callbacks: PopupStreamCallbacks,
-  { segments = false }: { segments?: boolean } = {},
+  { source, piece }: { source?: string[]; piece?: number } = {},
 ): Promise<void> {
   const params = new URLSearchParams({ lat: String(position.lat), lon: String(position.lng) })
-  if (segments) params.set('segments', '1')
+  if (source) params.set('source', source.join(','))
+  if (piece != null) params.set('piece', String(piece))
   let last: PopupUpdate | null = null
   try {
     const response = await fetch(`/api/popup?${params}`, { signal })

@@ -6,7 +6,7 @@ use crate::candidates::Candidate;
 use crate::candidates::SourceAttribute;
 use crate::obstacles::Scene;
 use crate::scene::Ground;
-use physics::bands::{BANDS, PERIODS, energy};
+use physics::bands::{BANDS, PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy};
 use physics::bound::POINT_DIVERGENCE_OFFSET_DB;
 use physics::line::{LinePieceGeometry, LineQuadratureNode, SkylineArc, line_quadrature_nodes};
 use physics::profile::Profile;
@@ -76,10 +76,13 @@ pub fn trace(
 /// Received A-weighted energy per period and octave band.
 pub type Bands = [[f64; BANDS]; PERIODS];
 
-/// What one source delivers: per period and band, and how its sound got there.
+/// What one source delivers: per period and band, and how its sound got there; and by what its
+/// rays bend over in calm air ([`physics::ray::Edge`]: nothing, a building or wall, terrain) their
+/// Lden-weighted energy after the air, after the screening and after the boundary, calm.
 pub struct Received {
     pub bands: Bands,
     pub path: Path,
+    pub edges: [[f64; 3]; 3],
 }
 
 /// How a source's sound reaches the receiver, its rays' A-weighted energy per period summed after
@@ -140,9 +143,14 @@ fn add_ray(
     });
     let transfer = &terms.transfer;
     let path = &mut received.path;
+    let edge = &mut received.edges[terms.calm_edge as usize];
     for (period, powers) in emission.iter().enumerate() {
+        let lden = PERIOD_HOURS[period] / 24.0 * energy(PERIOD_PENALTY_DB[period]);
         for (band, power) in powers.iter().enumerate() {
             let power = weight * power;
+            edge[0] += lden * power * air[band];
+            edge[1] += lden * power * screened[0][band];
+            edge[2] += lden * power * transfer.states[0][band];
             received.bands[period][band] += power * transfer.periods[period][band];
             path.free[period] += power;
             path.air[period] += power * air[band];
@@ -156,12 +164,15 @@ fn add_ray(
 
 /// One ray of a source at the receiver: the point it leaves from (click metres), the in-plane
 /// angle it stands for on a line piece (0 for a point), its weight (the divergence, for a line the
-/// angle times the line's, and the receiver reflection) and its terms.
-pub struct SourceRay {
+/// angle times the line's, and the receiver reflection), its terms, and the ground and the walls it
+/// was computed over (none where the skyline shows no wall can reach its line of sight).
+pub struct SourceRay<'s> {
     pub from_m: [f64; 2],
     pub angle_rad: f64,
     pub weight: f64,
     pub terms: RayTerms,
+    pub profile: &'s Profile,
+    pub crossings: &'s [Crossing],
 }
 
 /// Every ray of one candidate at the receiver: a point's one, a line piece's quadrature nodes.
@@ -188,6 +199,8 @@ pub fn source_rays(
             angle_rad: 0.0,
             weight: divergence * reflection,
             terms,
+            profile: &scratch.profile,
+            crossings: &scratch.crossings,
         });
         return Ok(());
     }
@@ -231,6 +244,8 @@ pub fn source_rays(
             angle_rad: node.weight_rad,
             weight: node.weight_rad * divergence * reflection,
             terms,
+            profile: &scratch.profile,
+            crossings: &scratch.crossings,
         });
     }
     scratch.nodes = nodes;
@@ -247,6 +262,7 @@ pub fn received_bands(
     let mut received = Received {
         bands: [[0.0; BANDS]; PERIODS],
         path: Path::default(),
+        edges: [[0.0; 3]; 3],
     };
     source_rays(receiver, candidate, source, scratch, &mut |ray| {
         add_ray(&mut received, &source.energy, &ray.terms, ray.weight)

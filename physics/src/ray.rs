@@ -81,13 +81,23 @@ struct Roof {
     top1: f64,
 }
 
-/// The terms of one ray: the transfer with the boundary of each state (homogeneous, favourable)
-/// and the air absorption behind it.
+/// The terms of one ray: the transfer with the boundary of each state (homogeneous, favourable),
+/// the air absorption behind it, and what blocks its line of sight in calm air.
 pub struct RayTerms {
     pub transfer: Transfer,
     pub favourable_probability: [f64; PERIODS],
     pub boundaries: [StateBoundary; 2],
     pub air_db: [f64; BANDS],
+    pub calm_edge: Edge,
+}
+
+/// What a ray's sound bends over in calm air: nothing (a free line of sight), the top of a
+/// building or wall among the edges, or terrain alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Open,
+    Obstacle,
+    Terrain,
 }
 
 /// The terms of one ray; `favourable_probability` is p of each period for this ray's direction,
@@ -109,9 +119,23 @@ pub fn ray_terms(
         MeteorologicalState::Favourable,
     ];
     scratch.path.fill(profile, crossings, ends);
+    let mut calm_edge = Edge::Open;
     let boundaries: [StateBoundary; 2] = states.map(|state| {
         let path = scratch.path.path(profile, ends, source_altitude);
-        state_boundary(&path, state, &mut scratch.vertical)
+        let boundary = state_boundary(&path, state, &mut scratch.vertical);
+        let diffraction = &scratch.vertical.path;
+        if state == MeteorologicalState::Homogeneous && diffraction.blocked {
+            calm_edge = if diffraction
+                .points
+                .iter()
+                .any(|point| scratch.path.tops.contains(point))
+            {
+                Edge::Obstacle
+            } else {
+                Edge::Terrain
+            };
+        }
+        boundary
     });
     let air_db: [f64; BANDS] = std::array::from_fn(|band| alpha_db_per_km[band] * slant / 1000.0);
     let air: [f64; BANDS] = air_db.map(attenuation_energy);
@@ -134,11 +158,43 @@ pub fn ray_terms(
         favourable_probability,
         boundaries,
         air_db,
+        calm_edge,
     }
 }
 
 fn attenuation_energy(attenuation_db: f64) -> f64 {
     (-attenuation_db * (std::f64::consts::LN_10 / 10.0)).exp()
+}
+
+/// The footprints containing a building's source, sorted, into `out`: its own (`own_footprint`, 0
+/// for a source that is no building's: none) and every footprint the ray crosses an odd number of
+/// times (the receiver stands outside every enclosed footprint, so the ray leaves it once more than
+/// it enters). They never screen the source.
+pub fn containing_footprints(crossings: &[Crossing], own_footprint: u64, out: &mut Vec<u64>) {
+    out.clear();
+    if own_footprint == 0 {
+        return;
+    }
+    out.extend(
+        crossings
+            .iter()
+            .filter(|c| c.building)
+            .map(|c| c.footprint_id),
+    );
+    out.sort_unstable();
+    let (mut odd, mut start) = (0, 0);
+    while start < out.len() {
+        let id = out[start];
+        let end = start + out[start..].partition_point(|&other| other == id);
+        if (end - start) % 2 == 1 {
+            out[odd] = id;
+            odd += 1;
+        }
+        start = end;
+    }
+    out.truncate(odd);
+    out.push(own_footprint);
+    out.sort_unstable();
 }
 
 impl PathBuffers {
@@ -209,29 +265,7 @@ impl PathBuffers {
         // footprint, so a footprint the ray crosses an odd number of times contains the source:
         // it is the source's own and does not screen it.
         let mut containing = std::mem::take(&mut self.containing);
-        containing.clear();
-        if ends.own_footprint != 0 {
-            containing.extend(
-                crossings
-                    .iter()
-                    .filter(|c| c.building)
-                    .map(|c| c.footprint_id),
-            );
-            containing.sort_unstable();
-            let (mut odd, mut start) = (0, 0);
-            while start < containing.len() {
-                let id = containing[start];
-                let end = start + containing[start..].partition_point(|&other| other == id);
-                if (end - start) % 2 == 1 {
-                    containing[odd] = id;
-                    odd += 1;
-                }
-                start = end;
-            }
-            containing.truncate(odd);
-            containing.push(ends.own_footprint);
-            containing.sort_unstable();
-        }
+        containing_footprints(crossings, ends.own_footprint, &mut containing);
         for crossing in crossings
             .iter()
             .filter(|c| containing.binary_search(&c.footprint_id).is_err())

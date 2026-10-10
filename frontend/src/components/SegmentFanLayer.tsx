@@ -1,8 +1,8 @@
-// The segments view's pieces on the map: each listed piece drawn thick and a thin ray from its
-// nearest point to the point the level is computed at, both in the colour of the piece's row; the
-// selected piece white on a black casing with every ray it was summed over, each in the colour of
-// what reaches the receiver along it; and that point a dot. The map frames the pieces that make
-// the level when they first appear, and a piece when it is opened.
+// An opened row's segments on the map: each listed segment drawn thick in the colour of its line in
+// the list, the selected one (hovered or opened) white on a black casing with every ray it was
+// summed over, each in the colour of what it delivers, the selected ray thicker on a casing; and the
+// point the level is computed at, a dot. The map frames the segments that make the level when a
+// row's first appear, and a segment when it is opened.
 import type { FilterSpecification } from 'maplibre-gl'
 import { useEffect, useRef } from 'react'
 import { Layer, Source, useMap } from 'react-map-gl/maplibre'
@@ -22,28 +22,20 @@ export function fanGeoJson(fan: SegmentFan): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
     features: [
-      ...fan.pieces.flatMap(({ ray, ends, color, selected }) => {
+      ...fan.pieces.map(({ ends, color, selected }) => {
         const point = ends.length < 2 || (ends[0][0] === ends[1][0] && ends[0][1] === ends[1][1])
         const shape = point ? 'point' : 'piece'
-        return [
-          // The selected piece shows its summed rays instead of its nearest one.
-          ...(selected ? [] : [{
-            type: 'Feature' as const,
-            properties: { kind: 'ray', color },
-            geometry: { type: 'LineString' as const, coordinates: ray.map(lonLat) },
-          }]),
-          {
-            type: 'Feature' as const,
-            properties: { kind: selected ? `${shape}-selected` : shape, color },
-            geometry: point
-              ? { type: 'Point' as const, coordinates: lonLat(ends[0]) }
-              : { type: 'LineString' as const, coordinates: ends.map(lonLat) },
-          },
-        ]
+        return {
+          type: 'Feature' as const,
+          properties: { kind: selected ? `${shape}-selected` : shape, color },
+          geometry: point
+            ? { type: 'Point' as const, coordinates: lonLat(ends[0]) }
+            : { type: 'LineString' as const, coordinates: ends.map(lonLat) },
+        }
       }),
-      ...fan.rays.map(({ from, color }) => ({
+      ...fan.rays.map(({ from, color, selected }) => ({
         type: 'Feature' as const,
-        properties: { kind: 'summed', color },
+        properties: { kind: selected ? 'ray-selected' : 'ray', color },
         geometry: { type: 'LineString' as const, coordinates: [lonLat(from), lonLat(fan.receiver)] },
       })),
       {
@@ -63,21 +55,21 @@ function framePadding() {
     : { top: 72, bottom: 48, left: 48, right: CARD_COLUMN_PX + 24 }
 }
 
-/** Frames the fan: when a click's pieces first appear, the map moves out (never in) only as far as
- *  needed to show the pieces that make the level with the receiver; when a piece is opened, the
- *  map frames that piece, its rays and the receiver. */
+/** Frames the fan: when a row's segments first appear, the map moves out (never in) only as far as
+ *  needed to show the segments that make the level with the receiver; when a segment is opened,
+ *  the map frames that segment, its rays and the receiver. */
 function useFrameFan(fan: SegmentFan | null) {
   const { current: map } = useMap()
-  const framed = useRef<{ click: string, opened: number | null } | null>(null)
+  const framed = useRef<{ row: string, opened: number | null } | null>(null)
   useEffect(() => {
     if (!fan || !map) {
       if (!fan) framed.current = null
       return
     }
-    const click = fan.receiver.join(',')
+    const row = `${fan.source}@${fan.receiver.join(',')}`
     const opened = fan.opened?.index ?? null
-    const before = framed.current?.click === click ? framed.current : null
-    framed.current = { click, opened }
+    const before = framed.current?.row === row ? framed.current : null
+    framed.current = { row, opened }
     const padding = framePadding()
     const frame = (points: [number, number][], maxZoom: number) => {
       const lats = points.map(([lat]) => lat)
@@ -108,13 +100,6 @@ export default function SegmentFanLayer({ fan }: { fan: SegmentFan | null }) {
   return (
     <Source id="segment-fan" type="geojson" data={fanGeoJson(fan)}>
       <Layer
-        id="segment-fan-ray"
-        type="line"
-        filter={kind('ray')}
-        layout={LINE_LAYOUT}
-        paint={{ 'line-color': ['get', 'color'], 'line-width': 1.25, 'line-opacity': 0.85 }}
-      />
-      <Layer
         id="segment-fan-piece"
         type="line"
         filter={kind('piece')}
@@ -130,12 +115,14 @@ export default function SegmentFanLayer({ fan }: { fan: SegmentFan | null }) {
       <Layer id="segment-fan-piece-selected-casing" type="line" filter={kind('piece-selected')} layout={LINE_LAYOUT} paint={{ 'line-color': '#000000', 'line-width': 9 }} />
       <Layer id="segment-fan-piece-selected" type="line" filter={kind('piece-selected')} layout={LINE_LAYOUT} paint={{ 'line-color': '#ffffff', 'line-width': 5 }} />
       <Layer
-        id="segment-fan-summed"
+        id="segment-fan-ray"
         type="line"
-        filter={kind('summed')}
+        filter={kind('ray')}
         layout={LINE_LAYOUT}
         paint={{ 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': 0.95 }}
       />
+      <Layer id="segment-fan-ray-selected-casing" type="line" filter={kind('ray-selected')} layout={LINE_LAYOUT} paint={{ 'line-color': '#000000', 'line-width': 6 }} />
+      <Layer id="segment-fan-ray-selected" type="line" filter={kind('ray-selected')} layout={LINE_LAYOUT} paint={{ 'line-color': ['get', 'color'], 'line-width': 3 }} />
       <Layer
         id="segment-fan-point-selected"
         type="circle"

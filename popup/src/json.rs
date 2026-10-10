@@ -357,11 +357,26 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                     tenth(t.without_ground_db[0]), tenth(t.without_ground_db[1]),
                     tenth(t.air_db), t.slant_m.round(),
                 ]);
-                json!([(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6,
-                    (ray.angle_rad * 1e6).round() / 1e6, lden(&ray.energy), terms])
+                let mut listed = json!([(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6,
+                    (ray.angle_rad * 1e6).round() / 1e6, lden(&ray.energy), terms]);
+                // The asked piece's rays: the ground (distance from the source m, altitude m, G),
+                // the source's altitude and the walls (distance m, height m, a building's) under each.
+                if let Some(profile) = &ray.profile {
+                    let metres = |value: f64| (value * 10.0).round() / 10.0;
+                    listed.as_array_mut().expect("an array").push(json!({
+                        "ground": profile.ground.iter().map(|[distance, altitude, g]| {
+                            json!([metres(*distance), metres(*altitude), (g * 100.0).round() / 100.0])
+                        }).collect::<Vec<_>>(),
+                        "source_altitude_m": metres(profile.source_altitude_m),
+                        "walls": profile.walls.iter().map(|(distance, height, building)| {
+                            json!([metres(*distance), metres(*height), building])
+                        }).collect::<Vec<_>>(),
+                    }));
+                }
+                listed
             }).collect::<Vec<_>>(),
             "received": received,
-            "source_lden": lden(&piece.source_energy),
+            "path": path_account(&piece.path, update.reflection_db),
             "emission": emission,
             "crossings": piece.crossings.iter().map(|(distance_m, height_m, footprint)| {
                 json!([
@@ -460,6 +475,24 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
     let mut line = line;
     if !pieces.is_empty() {
         line["pieces"] = Value::Array(pieces);
+    }
+    // How the asked source's sound arrives in calm air: the share of its energy whose rays see the
+    // point, bend over a building or wall, or over terrain, and what the screening takes of each.
+    if let Some(arrival) = &update.arrival {
+        let calm: f64 = arrival.edges.iter().map(|edge| edge[2]).sum();
+        line["arrival"] = json!({
+            "pieces": arrival.pieces,
+            "edges": crate::listing::EDGES
+                .iter()
+                .zip(&arrival.edges)
+                .filter(|(_, edge)| edge[2] > 0.0)
+                .map(|(name, edge)| json!({
+                    "edge": name,
+                    "share": share(edge[2] / calm),
+                    "screening_db": (100.0 * (edge[1] / edge[0]).log10()).round() / 10.0,
+                }))
+                .collect::<Vec<_>>(),
+        });
     }
     Ok(line.to_string())
 }
