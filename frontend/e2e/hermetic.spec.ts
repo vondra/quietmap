@@ -196,7 +196,7 @@ test('desktop: an opened row computes its segments, how they arrive and their ra
   await expect(lden(page)).toHaveText(`${FIXTURE_DB.toFixed(1)} dB Lden`)
   await expect(popup.getByRole('button', { name: /^Segments/ })).toHaveText('Segments (3)')
   const arrival = segments.getByRole('table').filter({ hasText: 'In calm air' })
-  await expect(arrival.locator('tbody tr')).toHaveText([/Line of sight\s*75 %\s*0\.0/, /Over buildings\s*25 %\s*−12\.3/])
+  await expect(arrival.locator('tbody tr')).toHaveText([/Line of sight\s*75 %\s*0\.0/, /Over buildings or walls\s*25 %\s*−12\.3/])
   // The two loudest of three, each by its direction and distance with the Lden it delivers.
   await expect(segments).toContainText('2 loudest')
   const listed = segments.getByRole('button', { name: /●/ })

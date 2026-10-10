@@ -79,7 +79,6 @@ export function computedPiece(contributor: Contributor, lden: number, distance_m
       facades_db: 0, lden: [lden - 0.4, lden + 0.6], bent_percent: [40, 55, 65],
     },
     metadata: contributor.metadata,
-    crossings: [[distance_m / 2, 9, '011400ad000668eb']],
     // Terms as losses: ground and screening calm and downwind, screening alone calm and downwind,
     // air; slant m.
     rays: [
@@ -88,18 +87,7 @@ export function computedPiece(contributor: Contributor, lden: number, distance_m
       [POINT.lat + 0.00005, POINT.lng + east, 0.6, lden - 4, [-0.4, -0.5, 0, 0, 0.1, 13]],
       [POINT.lat + 0.00015, POINT.lng + east, 0.3, lden - 7, [-0.3, -0.4, 0, 0, 0.1, 22]],
     ],
-    trace: {
-      profile: [[0, 350, 0], [distance_m, 350, 0]],
-      source_altitude_m: 350,
-      receiver_altitude_m: 354,
-      slant_m: distance_m + 0.4,
-      p: [0.55, 0.8, 0.9],
-      boundary_db: [-0.4, -0.5],
-      without_ground_db: [0, 0],
-      air_db: 0.1,
-      path_difference_m: [0, 0],
-      ray: [nearest, [POINT.lat, POINT.lng]],
-    },
+    trace: { receiver_altitude_m: 354, ray: [nearest, [POINT.lat, POINT.lng]] },
   }
 }
 

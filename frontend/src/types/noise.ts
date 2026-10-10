@@ -188,23 +188,10 @@ export interface PopupStats {
   elapsed_ms: number
 }
 
-/** A listed piece's ray: the ground under it from the source (distance m, altitude m, G), the
- *  source and receiver altitudes, and its terms (dB, A-weighted over the source's day spectrum;
- *  pairs are homogeneous, favourable). */
+/** Where a listed piece's nearest ray runs: the receiver's altitude (m) and the ray on the map,
+ *  [lat, lon] of the piece's closest point, then of the receiver. */
 export interface PieceTrace {
-  profile: [number, number, number][]
-  source_altitude_m: number
   receiver_altitude_m: number
-  slant_m: number
-  /** Share of favourable (downward refracting) propagation by day, evening and night. */
-  p: [number, number, number]
-  /** Ground and screening together. */
-  boundary_db: [number, number]
-  /** Screening alone, without the ground. */
-  without_ground_db: [number, number]
-  air_db: number
-  path_difference_m: [number, number]
-  /** The ray on the map: [lat, lon] of the piece's closest point, then of the receiver. */
   ray?: [[number, number], [number, number]]
 }
 
@@ -256,8 +243,6 @@ export interface PopupPiece {
   /** How its sound reaches the point, summed over its rays, as a row's. */
   path: SourcePath
   metadata: ContributorMetadata | null
-  /** Buildings and walls the ray crosses: distance from the receiver (m), height (m), id. */
-  crossings: [number, number, string][]
   trace: PieceTrace | null
   /** Every ray the piece was summed over: [lat, lon] it leaves from, the in-plane angle it stands
    *  for (rad; 0 for a point source, its one ray), the Lden it delivers (null: silent), its terms

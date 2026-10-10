@@ -6,7 +6,7 @@
 //! the ground and walls under each of its rays.
 
 use crate::candidates::{Attributes, Candidate};
-use crate::evaluate::{Path, Received, Receiver, Scratch, period_sums, source_rays, trace};
+use crate::evaluate::{Path, Received, Receiver, Scratch, period_sums, source_rays};
 use crate::selection::LayerSelection;
 use physics::bands::{BANDS, PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy, lden_energy};
 use physics::ray::containing_footprints;
@@ -26,11 +26,6 @@ pub struct EvaluatedPiece {
     pub edges: [[f64; 3]; 3],
     /// A-weighted emission per period (per metre for lines), linear.
     pub emission: [f64; PERIODS],
-    /// Buildings and walls crossed by the ray from the piece's closest point: distance from the
-    /// receiver (m), height (m) and footprint id, filled when listed.
-    pub crossings: Vec<(f64, f64, u64)>,
-    /// The source's own footprint (0: none).
-    pub footprint_id: u64,
     /// The ray from the closest point, filled for the traced pieces.
     pub trace: Option<PieceTrace>,
     /// Every ray the piece was summed over, filled for the traced pieces.
@@ -60,21 +55,36 @@ pub struct RayProfile {
     pub walls: Vec<(f64, f64, bool)>,
 }
 
-/// At most [`PROFILE_POINTS`] samples of the ground under a ray: distance, altitude, G.
+/// At most [`PROFILE_POINTS`] samples of the ground under a ray (distance, altitude, G): the source's
+/// two (its ground and the probe a few metres out that finds a berm), the receiver's, and between
+/// them the highest of each stretch, so a crest that screens is never thinned away.
 fn sampled(ground: &physics::profile::Profile) -> Vec<[f64; 3]> {
-    let step = ground.t.len().div_ceil(PROFILE_POINTS).max(1);
-    let mut samples: Vec<[f64; 3]> = (0..ground.t.len())
-        .filter(|&k| k % step == 0 || k + 1 == ground.t.len())
-        .map(|k| {
-            [
-                ground.t[k] * ground.horizontal_m,
-                ground.ground_m[k],
-                ground.ground_factor[k],
-            ]
-        })
-        .collect();
-    samples.dedup_by(|a, b| a[0] == b[0]);
-    samples
+    let count = ground.t.len();
+    let at = |k: usize| {
+        [
+            ground.t[k] * ground.horizontal_m,
+            ground.ground_m[k],
+            ground.ground_factor[k],
+        ]
+    };
+    if count <= PROFILE_POINTS {
+        return (0..count).map(at).collect();
+    }
+    let stretches = PROFILE_POINTS - 3;
+    let inner = count - 3;
+    let highest = (0..stretches).filter_map(|stretch| {
+        let (low, high) = (
+            2 + inner * stretch / stretches,
+            2 + inner * (stretch + 1) / stretches,
+        );
+        (low..high).max_by(|&a, &b| ground.ground_m[a].total_cmp(&ground.ground_m[b]))
+    });
+    [0, 1]
+        .into_iter()
+        .chain(highest)
+        .chain([count - 1])
+        .map(at)
+        .collect()
 }
 
 /// A ray's terms as A-weighted attenuations over the piece's day emission spectrum (dB): ground
@@ -88,23 +98,12 @@ pub struct ListedTerms {
     pub slant_m: f64,
 }
 
-/// The terms of one ray, each as an A-weighted attenuation over the piece's day emission spectrum
-/// (dB), per state (homogeneous, favourable) where the state matters.
+/// Where a listed piece's nearest ray runs on the map, from its closest point to the receiver
+/// (click metres), and the receiver's altitude (m).
 #[derive(Clone)]
 pub struct PieceTrace {
-    /// The ground under the ray from the source: distance (m), altitude (m) and G, at most
-    /// [`PROFILE_POINTS`] samples; the source and the receiver altitudes (m).
-    pub profile: Vec<[f64; 3]>,
-    pub source_altitude_m: f64,
-    pub receiver_altitude_m: f64,
-    pub slant_m: f64,
-    pub favourable_probability: [f64; PERIODS],
-    pub boundary_db: [f64; 2],
-    pub without_ground_db: [f64; 2],
-    pub air_db: f64,
-    pub path_difference_m: [f64; 2],
-    /// The ray on the map: from the piece's closest point to the receiver (click metres).
     pub ray_m: [[f64; 2]; 2],
+    pub receiver_altitude_m: f64,
 }
 
 impl EvaluatedPiece {
@@ -117,8 +116,6 @@ impl EvaluatedPiece {
             emission: attributes[candidate.attribute]
                 .energy
                 .map(|bands| bands.iter().sum()),
-            crossings: Vec::new(),
-            footprint_id: attributes[candidate.attribute].footprint_id,
             trace: None,
             rays: Vec::new(),
         }
@@ -168,23 +165,6 @@ pub fn list_source(
     let asked = piece;
     for (rank, piece) in listed.iter_mut().enumerate() {
         let source = &attributes[piece.candidate.attribute];
-        let [a, b] = piece.candidate.ends_m;
-        let from = closest_point(receiver.position, a, b);
-        let mut crossings = Vec::new();
-        receiver
-            .obstacles
-            .crossings(from, receiver.position, &mut crossings)?;
-        let length = (from[0] - receiver.position[0]).hypot(from[1] - receiver.position[1]);
-        piece.crossings = crossings
-            .iter()
-            .map(|crossing| {
-                (
-                    (1.0 - crossing.t) * length,
-                    crossing.height_m,
-                    crossing.footprint_id,
-                )
-            })
-            .collect();
         arrival.pieces += 1;
         for (total, piece) in arrival.edges.iter_mut().zip(&piece.edges) {
             for (sum, value) in total.iter_mut().zip(piece) {
@@ -266,22 +246,10 @@ pub fn list_source(
                     })
                 },
             )?;
-            let terms = trace(receiver, from, source, &mut scratch)?;
-            let ground = scratch.profile();
-            let profile = sampled(ground);
+            let [a, b] = piece.candidate.ends_m;
             piece.trace = Some(PieceTrace {
-                source_altitude_m: ground.ground_m.first().copied().unwrap_or(0.0)
-                    + source.height_m,
+                ray_m: [closest_point(receiver.position, a, b), receiver.position],
                 receiver_altitude_m: receiver.altitude_m,
-                profile,
-                slant_m: terms.transfer.slant_m,
-                favourable_probability: terms.favourable_probability,
-                boundary_db: [0, 1].map(|state| weighted(&terms.boundaries[state].attenuation_db)),
-                without_ground_db: [0, 1]
-                    .map(|state| weighted(&terms.boundaries[state].without_ground_db)),
-                air_db: weighted(&terms.air_db),
-                path_difference_m: [0, 1].map(|state| terms.boundaries[state].path_difference_m),
-                ray_m: [from, receiver.position],
             });
         }
     }

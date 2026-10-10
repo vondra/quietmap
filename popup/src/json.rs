@@ -314,21 +314,9 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         periods(&mut received, &piece.energy);
         let mut emission = Map::new();
         periods(&mut emission, &piece.emission);
-        let round = |value: f64| (value * 100.0).round() / 100.0;
         let trace = piece.trace.as_ref().map(|trace| {
-            let metres = |value: f64| (value * 10.0).round() / 10.0;
             json!({
-                "profile": trace.profile.iter().map(|[distance, altitude, ground]| {
-                    json!([metres(*distance), metres(*altitude), round(*ground)])
-                }).collect::<Vec<_>>(),
-                "source_altitude_m": metres(trace.source_altitude_m),
-                "receiver_altitude_m": metres(trace.receiver_altitude_m),
-                "slant_m": round(trace.slant_m),
-                "p": trace.favourable_probability.map(round),
-                "boundary_db": trace.boundary_db.map(round),
-                "without_ground_db": trace.without_ground_db.map(round),
-                "air_db": round(trace.air_db),
-                "path_difference_m": trace.path_difference_m.map(round),
+                "receiver_altitude_m": (trace.receiver_altitude_m * 10.0).round() / 10.0,
                 "ray": trace.ray_m.map(|end| {
                     let (lat, lon) = update.frame.to_mercator(end).to_degrees();
                     [(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6]
@@ -378,14 +366,6 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             "received": received,
             "path": path_account(&piece.path, &piece.energy, update.reflection_db),
             "emission": emission,
-            "crossings": piece.crossings.iter().map(|(distance_m, height_m, footprint)| {
-                json!([
-                    (distance_m * 10.0).round() / 10.0,
-                    (height_m * 10.0).round() / 10.0,
-                    format!("{footprint:016x}"),
-                ])
-            }).collect::<Vec<_>>(),
-            "footprint": format!("{:016x}", piece.footprint_id),
         }));
     }
     let period_names = ["day", "evening", "night"];

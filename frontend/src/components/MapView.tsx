@@ -181,8 +181,10 @@ export default function MapView({
       />
       {/* A new search starts from no pins. */}
       {stays && <StayLayer key={JSON.stringify(stays.search)} search={stays.search} />}
-      <SegmentFanLayer fan={segmentFan ?? null} />
+      {/* The segments above the opened row's highlight: a style rebuild adds the layers in this
+          order. */}
       <FlightTrackLayer highlight={highlight ?? null} />
+      <SegmentFanLayer fan={segmentFan ?? null} />
       {onViewChange && onHashState && <MapStateSync onViewChange={onViewChange} onHashState={onHashState} />}
     </Map>
   )

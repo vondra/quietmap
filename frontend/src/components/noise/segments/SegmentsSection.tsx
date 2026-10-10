@@ -28,7 +28,7 @@ export interface SegmentsClick {
 
 const ARRIVAL_ROWS: Record<PieceArrival['edges'][number]['edge'], string> = {
   open: 'Line of sight',
-  buildings: 'Over buildings',
+  buildings: 'Over buildings or walls',
   terrain: 'Over terrain',
 }
 
@@ -92,8 +92,9 @@ interface Segments {
 
 export function SegmentsSection({ c, click }: { c: Contributor, click: SegmentsClick }) {
   const [open, setOpen] = useState(false)
-  // Asked for once, when first opened; the answer stays while the row is open.
-  const [asked, setAsked] = useState(false)
+  // Asked for when first opened, and again when opened after a failure; an answer stays while the
+  // row is open (0: not asked yet).
+  const [attempt, setAttempt] = useState(0)
   const [segments, setSegments] = useState<Segments | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [opened, setOpened] = useState<number | null>(null)
@@ -104,16 +105,20 @@ export function SegmentsSection({ c, click }: { c: Contributor, click: SegmentsC
   const parts = (c.parts?.map(part => part.id) ?? [c.id]).join(',')
   const [lat, lng] = click.at
   useEffect(() => {
-    if (!asked) return
+    if (attempt === 0) return
     const controller = new AbortController()
     void streamPopup({ lat, lng }, controller.signal, {
       onUpdate: update => {
         if (!update.partial) setSegments({ pieces: update.pieces ?? [], arrival: update.arrival ?? { pieces: 0, edges: [] } })
       },
-      onError: setError,
+      // A failure after the final update makes that answer void too.
+      onError: message => {
+        setError(message)
+        setSegments(null)
+      },
     }, { source: parts.split(',') })
     return () => controller.abort()
-  }, [asked, lat, lng, parts])
+  }, [attempt, lat, lng, parts])
 
   const { onFan } = click
   const [receiverLat, receiverLng] = click.receiver
@@ -140,8 +145,12 @@ export function SegmentsSection({ c, click }: { c: Contributor, click: SegmentsC
           aria-expanded={open}
           className="flex w-full items-center justify-between py-0.5 text-left text-foreground hover:bg-muted/40"
           onClick={() => {
-            setOpen(!open)
-            setAsked(true)
+            const opening = !open
+            setOpen(opening)
+            if (opening && (attempt === 0 || error)) {
+              setError(null)
+              setAttempt(attempt + 1)
+            }
           }}
         >
           <span>Segments{segments ? ` (${fmtInt(segments.arrival.pieces)})` : ''}</span>
