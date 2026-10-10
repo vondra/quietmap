@@ -70,6 +70,28 @@ impl<'a> Ground<'a> {
         self.tiles[slot] = Some(terrain);
     }
 
+    /// The tile a walk's vertex reads: the one containing it, or, for a vertex exactly on its north
+    /// or west edge (the equator, every 32nd tile meridian: lattice lines), the land tile across
+    /// that edge when the containing one is ocean; the land tile holds the seam's nodes.
+    fn land_tile_at(&self, position: Mercator) -> Result<TileId, String> {
+        let id = TileId::containing(position);
+        if self.terrain_of(id)?.is_some() {
+            return Ok(id);
+        }
+        let across = [
+            (position.y == f64::from(id.y) && id.y > 0).then(|| TileId { y: id.y - 1, ..id }),
+            (position.x.rem_euclid(f64::from(TILES_PER_AXIS)) == f64::from(id.x)).then(|| TileId {
+                x: (id.x + TILES_PER_AXIS - 1) % TILES_PER_AXIS,
+                ..id
+            }),
+        ];
+        Ok(across
+            .into_iter()
+            .flatten()
+            .find(|tile| matches!(self.terrain_of(*tile), Ok(Some(_))))
+            .unwrap_or(id))
+    }
+
     /// The terrain of a read tile: `Some(None)` for ocean, an error for a tile not read.
     fn terrain_of(&self, tile: TileId) -> Result<Option<&Terrain<'a>>, String> {
         self.slot(tile)
@@ -168,7 +190,7 @@ impl<'a> Ground<'a> {
                 x: a.x + t * (b.x - a.x),
                 y: a.y + t * rise,
             };
-            let id = TileId::containing(position);
+            let id = self.land_tile_at(position)?;
             if tile.is_none_or(|(cached, _)| cached != id) {
                 tile = Some((id, self.terrain_of(id)?));
             }

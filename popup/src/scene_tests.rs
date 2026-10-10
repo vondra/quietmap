@@ -13,7 +13,12 @@ struct Fixture {
 }
 
 fn fixture(height: impl Fn(i64, i64) -> f64, ocean: bool) -> Fixture {
-    let centre = TileId::containing(Mercator::from_degrees(50.08, 14.42));
+    fixture_at(14.42, height, |dx| ocean && dx == 1)
+}
+
+/// The same around the tile at `lon` (50.08 N), the columns of tiles `ocean` names absent.
+fn fixture_at(lon: f64, height: impl Fn(i64, i64) -> f64, ocean: impl Fn(i32) -> bool) -> Fixture {
+    let centre = TileId::containing(Mercator::from_degrees(50.08, lon));
     let mut tiles = Vec::new();
     for dy in -1..=1_i32 {
         for dx in -1..=1_i32 {
@@ -21,7 +26,7 @@ fn fixture(height: impl Fn(i64, i64) -> f64, ocean: bool) -> Fixture {
                 x: centre.x.wrapping_add_signed(dx),
                 y: centre.y.wrapping_add_signed(dy),
             };
-            if ocean && dx == 1 {
+            if ocean(dx) {
                 tiles.push((tile, None));
                 continue;
             }
@@ -216,5 +221,33 @@ fn a_reversed_ray_reads_the_same_ground() {
                 );
             }
         }
+    });
+}
+
+#[test]
+fn a_vertex_on_a_coast_seam_reads_the_land_tile() {
+    // Tile 2208's west edge, 14.0625 E, is a lattice column (every 32nd tile meridian is); the
+    // vertex on it belongs to tile 2208 by the floor, here ocean, while the land tile west of it
+    // holds the seam's nodes.
+    let fixture = fixture_at(14.08, rugged, |dx| dx >= 0);
+    assert_eq!(fixture.centre.x % 32, 0);
+    let seam = fixture
+        .frame
+        .to_metres(Mercator::from_degrees(50.08, 14.0625))[0];
+    fixture.with_ground(|ground| {
+        let mut profile = Profile::default();
+        let (source, receiver) = ([seam - 300.0, 20.0], [seam + 200.0, -35.0]);
+        ground.fill_profile(source, receiver, &mut profile).unwrap();
+        let on_seam = profile
+            .t
+            .iter()
+            .position(|&t| (source[0] + t * (receiver[0] - source[0]) - seam).abs() < 1e-6)
+            .expect("a vertex on the seam");
+        assert!(
+            profile.ground_m[on_seam] > 150.0,
+            "{}",
+            profile.ground_m[on_seam]
+        );
+        assert_eq!(*profile.ground_m.last().unwrap(), OCEAN.height_m);
     });
 }

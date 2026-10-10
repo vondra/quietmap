@@ -173,7 +173,7 @@ Along each ray the click reads the ground wherever the ray crosses a line of the
 <path d="M22 206H380M22 202V210M39.9 202V210M57.8 202V210M75.7 202V210M93.6 202V210M111.5 202V210M129.4 202V210M147.3 202V210M165.2 202V210M183.1 202V210M201 202V210M218.9 202V210M236.8 202V210M254.7 202V210M272.6 202V210M290.5 202V210M308.4 202V210M326.3 202V210M344.2 202V210M362.1 202V210M380 202V210" fill="none" stroke="currentColor" stroke-opacity=".6"/>
 <text x="201" y="223" text-anchor="middle" fill="currentColor" fill-opacity=".75">ground samples</text>
 </svg>
-<figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">A ray seen from the side, from the source S to the point R. The ground is sampled densely near both ends; the hill is soft ground, the roof hard. In calm air the sound bends over the hilltop and the roof's edge in straight lines; downwind it follows arcs bent toward the ground and loses less.</figcaption>
+<figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">A ray seen from the side, from the source S to the point R. The ground is read at every line of the terrain grid; the hill is soft ground, the roof hard. In calm air the sound bends over the hilltop and the roof's edge in straight lines; downwind it follows arcs bent toward the ground and loses less.</figcaption>
 </figure>
 
 ### From rays to the answer
