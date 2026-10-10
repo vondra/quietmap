@@ -4,9 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 publish.workspace = true
 
-[[bin]]
-name = "qm-paint"
-path = "src/bin/qm-paint.rs"
 
 [dependencies]
 tiles = { path = "../tiles" }

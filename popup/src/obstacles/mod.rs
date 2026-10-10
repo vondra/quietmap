@@ -15,7 +15,7 @@ mod skyline;
 mod tests;
 mod tile;
 
-pub use containment::{Footprint, FootprintRing};
+pub use containment::{Footprint, FootprintRing, REFLECTION_MAX_DB};
 pub use facades::FacadeReceiver;
 
 use tile::SceneTile;
@@ -101,6 +101,26 @@ enum Slot<'a> {
     /// Read, and no obstacles file.
     Empty,
     Read(SceneTile<'a>),
+}
+
+/// One slot of a scene's layout: its tile, the scene steps of the tile's local origin and its
+/// cells' tallest outline; `None` heights for a tile read without an obstacles file.
+pub struct SceneSlot<'s> {
+    pub tile: TileId,
+    pub offset: [i64; 2],
+    pub cell_max_height_m: Option<&'s [f64]>,
+}
+
+/// A scene as a copy of it needs it ([`Scene::layout`]): the lattice and the slots, `None` where
+/// no tile was read.
+pub struct SceneLayout<'s> {
+    pub origin_cell: [i64; 2],
+    pub origin: [f64; 2],
+    pub metres_per_step: [f64; 2],
+    pub centre: TileId,
+    pub origin_cell_in_centre: [i64; 2],
+    pub radius: i64,
+    pub slots: Vec<Option<SceneSlot<'s>>>,
 }
 
 /// The obstacles of the tiles read so far, by tile offset from the click's tile. A cell of a tile
@@ -235,6 +255,46 @@ impl<'a> Scene<'a> {
                 "obstacles of tile {}/{} were not read",
                 tile.x, tile.y
             )),
+        }
+    }
+
+    /// What a copy of the scene elsewhere (the GPU painter) needs to answer as it does: the
+    /// lattice and every slot, row-major over tile offsets `-radius..=radius`.
+    pub fn layout(&self) -> SceneLayout<'_> {
+        let (side, tiles) = (2 * self.radius + 1, i64::from(TILES_PER_AXIS));
+        let slots = (self.slots.iter().enumerate())
+            .map(|(index, slot)| {
+                let (dx, dy) = (
+                    index as i64 % side - self.radius,
+                    index as i64 / side - self.radius,
+                );
+                let tile = TileId {
+                    x: (i64::from(self.centre.x) + dx).rem_euclid(tiles) as u32,
+                    y: (i64::from(self.centre.y) + dy).clamp(0, tiles - 1) as u32,
+                };
+                match slot {
+                    Slot::NotRead => None,
+                    Slot::Empty => Some(SceneSlot {
+                        tile,
+                        offset: [0, 0],
+                        cell_max_height_m: None,
+                    }),
+                    Slot::Read(read) => Some(SceneSlot {
+                        tile,
+                        offset: read.offset,
+                        cell_max_height_m: Some(&read.cell_max_height_m),
+                    }),
+                }
+            })
+            .collect();
+        SceneLayout {
+            origin_cell: self.lattice.origin_cell,
+            origin: self.lattice.origin,
+            metres_per_step: self.lattice.metres_per_step,
+            centre: self.centre,
+            origin_cell_in_centre: self.origin_cell_in_centre,
+            radius: self.radius,
+            slots,
         }
     }
 

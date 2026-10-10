@@ -181,17 +181,29 @@ response streams the updates as lines of JSON. The receiver stands 4 m up and ga
 
 ## Heatmap
 
-`qm-paint` paints z12 squares one after another, each on every core, skipping those painted; a
-square's ground, obstacles, sources and boxes are read once, to the reach of its farthest pixel.
-A source's energy at a point is split by distance into three levels with smooth weights summing
-to one: near at every pixel, mid at the corners of pixel blocks, far at the corners of coarse
-cells (8 and 64 z12 pixels a side), the corner levels interpolated bilinearly in energy. Each is
-evaluated as the popup selects (largest bound first, the rest sampled); the mid sources a corner
-names (up to 16, each at least 1 % of its layer) are evaluated at every pixel of the block, so
-screening near a pixel holds for them. Ground sources take the pixel's receiver reflection, the
-flights do not; a pixel inside an enclosed building has no level. The tiles: per layer and the
-total, 512 x 512 cells of twice the Lden (255 none); `qm-paint pack` builds every zoom down to 2
-(energy means) into one PMTiles archive per layer and `current.json`, which the server publishes.
+`qm-paint` (crate `paint-gpu`) paints z12 squares one after another at zoom 12 or 13 (512 or 1,024
+pixels a side), skipping those painted; a square's ground, obstacles, sources and boxes are read
+once, to the reach of its farthest pixel, and the exact evaluations run on a CUDA card (the popup's
+pair physics in f32) or on the cores. A ground source is loud at a point where its bound there
+reaches 20 dB (`physics::bound::REACH_EDGE_LDEN_DB`); the quiet rest, never dropped, is the hum,
+estimated by the popup's own selection at a coarse lattice's points (every 128 pixels at z13) and
+blended. Every loud source is evaluated exactly at a far lattice's points (every 64 pixels, a far
+cell, and one cell beyond the square) and, within two far cells, at the corners of 16-pixel blocks.
+A pixel evaluates exactly the loud sources crossing its block and the blocks around; every other
+loud source is blended, its near share (whole within 0.75 far cells of the block's centre, none
+beyond 2) from the block's corners and its far share from its far cell's points, in groups by layer,
+10-degree direction and doubling distance around the far cell's centre. A group holding 0.3 % of its
+layer gets one exact ray from its loudest member to the pixel, which scales the group: the shadow
+there. The blocks of a far cell group by the same directions and distances, and a pixel within a
+quarter block of a far cell's edge, the square's too (the far lattice reaches one cell beyond the
+square), blends the two cells' groupings: no grouping switches at an edge, only a block's exact
+sources and its sources' near shares change from block to block. Ground sources take the pixel's
+receiver reflection, the flights (blended from the block corners) do not; a pixel inside an enclosed
+building has no level. The tiles: per layer and the total, 512 x 512 cells of twice the Lden (255
+none); `qm-paint pack` builds every zoom down to 2 (energy means) into one PMTiles archive per layer
+and `current.json`, which the server publishes. `qm-paint-gpu etalon` paints the reference (every
+loud source exact at every pixel, the same hum), `compare` scores a map against it cell by cell and
+`popup` scores a map against popup clicks.
 
 ## Web
 

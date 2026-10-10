@@ -6,8 +6,8 @@
 //! is silent), carried unrounded from zoom to zoom, and the total is the sum of its layers, so
 //! switching a silent layer off changes nothing.
 
+use crate::exact::LAYERS;
 use crate::hm3::{HEADER, TILE_PX, layer_names, painted, tile_path};
-use crate::levels::LAYERS;
 use crate::paint::NO_LEVEL;
 use pmtiles::{Compression, PmTilesWriter, TileCoord, TileType};
 use rayon::prelude::*;

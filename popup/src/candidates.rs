@@ -1,10 +1,15 @@
 //! Every source of the read rings as a candidate: its geometry in the click's frame, the ground at
 //! its ends, its closest horizontal distance and its upper bound per period.
 
+use crate::obstacles::REFLECTION_MAX_DB;
 use crate::scene::Ground;
 use physics::bands::BANDS;
+use physics::bands::energy;
 use physics::bands::{PERIODS, lden_energy};
-use physics::bound::{ReceiverBound, Spread, emission_energy, received_energy_bound};
+use physics::bound::{
+    FAVOURABLE_GAIN_BOUND_DB, REACH_EDGE_LDEN_DB, ReceiverBound, Spread, emission_energy, reach_m,
+    received_energy_bound,
+};
 use rayon::prelude::*;
 use tiles::geo::TileId;
 use tiles::sources::{Layer, Sources};
@@ -35,6 +40,8 @@ pub struct SourceAttribute {
     pub footprint_id: u64,
     pub group_key: u64,
     pub energy: [[f64; BANDS]; PERIODS],
+    /// Its Lden power (per metre for lines), which sets its reach.
+    pub lden_power: f64,
 }
 
 /// Which attribute a candidate carries: one list per sources file read, then the index in it.
@@ -51,6 +58,11 @@ pub struct Attributes {
 }
 
 impl Attributes {
+    /// Every file's attributes, in the order their candidates refer to them.
+    pub fn lists(&self) -> &[Vec<SourceAttribute>] {
+        &self.lists
+    }
+
     /// Keeps a file's attributes; returns the list number its candidates refer to.
     pub fn push(&mut self, list: Vec<SourceAttribute>) -> u32 {
         self.lists.push(list);
@@ -152,6 +164,25 @@ impl Candidate {
         self.order = lden_energy(&self.bound);
         self.distance_m <= GROUND_REACH_M
     }
+
+    /// The farthest any receiver can find the piece [`loud`]: its bound at the largest gain a
+    /// receiver can have (the ground's and the reflection's) reaches the edge, at most
+    /// [`GROUND_REACH_M`].
+    pub fn reach_m(&self, source: &SourceAttribute) -> f64 {
+        reach_m(
+            source.lden_power,
+            self.spread(),
+            FAVOURABLE_GAIN_BOUND_DB + REFLECTION_MAX_DB,
+        )
+        .min(GROUND_REACH_M)
+    }
+}
+
+/// Whether a piece whose bound at a receiver is `bound` is loud there: its bound reaches the edge.
+/// The painter evaluates a loud piece exactly and estimates the quiet rest as this crate's
+/// selection does (`paint::lattice`).
+pub fn loud(bound: &[f64; PERIODS]) -> bool {
+    lden_energy(bound) >= energy(REACH_EDGE_LDEN_DB)
 }
 
 /// The attributes of one sources file and its pieces within `reach_m` of the receiver at
@@ -174,6 +205,7 @@ pub fn collect(
             let attribute = sources
                 .attribute(index as u32)
                 .map_err(|error| error.to_string())?;
+            let energy = emission_energy(&attribute.emission);
             Ok(SourceAttribute {
                 layer: attribute.layer,
                 height_m: attribute.height_m,
@@ -182,7 +214,8 @@ pub fn collect(
                 exclusion_radius_m: attribute.exclusion_radius_m,
                 footprint_id: attribute.footprint_id,
                 group_key: attribute.group_key,
-                energy: emission_energy(&attribute.emission),
+                energy,
+                lden_power: lden_energy(&energy.map(|bands| bands.iter().sum())),
             })
         })
         .collect::<Result<Vec<_>, String>>()?;

@@ -1,11 +1,15 @@
 //! `qm-paint --prepared DIR --year YYYY --zoom 12|13 --out DIR (--squares X,Y[;X,Y...] | --bbox
-//! SOUTH,WEST,NORTH,EAST)`: paints the z12 squares one after another (each on every core) into
-//! heatmap tiles at `--zoom`, skipping squares already painted; one line per square on stdout.
+//! SOUTH,WEST,NORTH,EAST)`: paints the z12 squares one after another (each on every core, its exact
+//! evaluations on the first CUDA card when there is one) into heatmap tiles at `--zoom`, skipping
+//! squares already painted; one line per square on stdout.
 //! `qm-paint pack --out DIR --zoom Z --tiles DIR --build bNNN`: the map's archives and manifest.
 
+use paint::exact::Batch;
 use paint::hm3::{painted, write};
 use paint::paint::{Grid, paint};
 use paint::square::{Files, Square};
+use paint_gpu::batch::GpuBatch;
+use paint_gpu::device::{DeviceSquare, Gpu};
 use physics::weather::WeatherTable;
 use popup::release::Release;
 use std::io::Write;
@@ -82,16 +86,34 @@ fn run(arguments: &[String]) -> Result<(), String> {
         12 => Grid {
             pixels: 512,
             block: 8,
+            far: 32,
             coarse: 64,
         },
         13 => Grid {
             pixels: 1024,
             block: 16,
+            far: 64,
             coarse: 128,
         },
         _ => return Err("--zoom is 12 or 13".into()),
     };
     let squares = squares(arguments)?;
+    // The card, if this host has one (CUDA_VISIBLE_DEVICES chooses it); else the cores, said
+    // aloud (the CUDA loader panics where the driver's libraries are missing).
+    let gpu = match std::panic::catch_unwind(|| Gpu::new(0)) {
+        Ok(Ok(gpu)) => Some(gpu),
+        Ok(Err(error)) => {
+            eprintln!("qm-paint: no card ({error}); the cores evaluate");
+            None
+        }
+        Err(_) => {
+            eprintln!("qm-paint: no CUDA libraries; the cores evaluate");
+            None
+        }
+    };
+    if let Some(gpu) = &gpu {
+        eprintln!("qm-paint: exact evaluations on {}", gpu.name);
+    }
     let mut stdout = std::io::stdout().lock();
     for (number, tile) in squares.iter().enumerate() {
         if painted(&out, zoom, (tile.x, tile.y)) {
@@ -102,7 +124,19 @@ fn run(arguments: &[String]) -> Result<(), String> {
         let read_s = started.elapsed().as_secs_f64();
         let square = Square::new(&weather, *tile, &files)?;
         let built_s = started.elapsed().as_secs_f64() - read_s;
-        let cells = paint(&square, grid)?;
+        let device_square = match &gpu {
+            Some(gpu) => Some(DeviceSquare::upload(gpu, &square, &files, &weather)?),
+            None => None,
+        };
+        let batch = gpu
+            .as_ref()
+            .zip(device_square.as_ref())
+            .map(|(gpu, device_square)| GpuBatch {
+                gpu,
+                device_square,
+                square: &square,
+            });
+        let cells = paint(&square, grid, batch.as_ref().map(|b| b as &dyn Batch))?;
         let painted_s = started.elapsed().as_secs_f64() - read_s - built_s;
         write(&out, zoom, (tile.x, tile.y), &cells)?;
         writeln!(

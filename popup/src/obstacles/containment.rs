@@ -9,6 +9,8 @@ use tiles::obstacles::{CELL_STEPS, EnvelopeClass, OutlineKind};
 const REFLECTION_PROBE_SPACING_M: f64 = 75.0;
 /// A probe is built inside a footprint strictly taller than this (dev4 `enclosure_db`).
 const REFLECTION_BUILT_ABOVE_M: f64 = 5.0;
+/// The largest receiver reflection bonus (dB).
+pub const REFLECTION_MAX_DB: f64 = 3.0;
 
 /// A building footprint in click metres.
 #[derive(Clone, Debug, PartialEq)]
@@ -205,9 +207,9 @@ impl<'a> Scene<'a> {
         }
         let density = f64::from(built) / 9.0;
         Ok(if density > 0.5 {
-            3.0
+            REFLECTION_MAX_DB
         } else if density > 0.2 {
-            1.5
+            REFLECTION_MAX_DB / 2.0
         } else {
             0.0
         })

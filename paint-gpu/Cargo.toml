@@ -1,0 +1,23 @@
+[package]
+name = "paint-gpu"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "qm-paint"
+path = "src/bin/qm-paint.rs"
+
+[[bin]]
+name = "qm-paint-gpu"
+path = "src/bin/qm-paint-gpu.rs"
+
+[dependencies]
+tiles = { path = "../tiles" }
+physics = { path = "../physics" }
+popup = { path = "../popup" }
+paint = { path = "../paint" }
+rayon = "1.12"
+# The driver and NVRTC are loaded at run time: the crate builds and lints on a host without CUDA,
+# and the kernels compile for the card they run on (dev1's aircraft crate pinned the same 0.12).
+cudarc = { version = "0.12", default-features = false, features = ["std", "driver", "nvrtc", "cuda-12060"] }

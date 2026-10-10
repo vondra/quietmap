@@ -118,6 +118,11 @@ impl WeatherTable {
         Self::parse(&bytes).map_err(failed)
     }
 
+    /// The nodes as stored, without the magic (the GPU painter reads them as the table does).
+    pub fn node_bytes(&self) -> &[u8] {
+        &self.nodes
+    }
+
     /// The weather of a place: p and the air absorption, bilinear between the nodes.
     pub fn place(&self, lat: f64, lon: f64) -> PlaceWeather {
         place_of(corners(lat, lon).map(|(index, weight)| {

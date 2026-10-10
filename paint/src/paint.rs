@@ -1,16 +1,18 @@
-//! A square painted: the far level at the corners of its coarse cells, the mid level and the
-//! aircraft at the corners of its pixel blocks, each interpolated bilinearly in energy, and at
-//! every pixel the near level evaluated there; the ground sources times the pixel's own receiver
-//! reflection, the flights without it, as the popup adds them.
-//! A pixel inside an enclosed building has no level: the map shows the sound outdoors, and a
-//! click there answers at the loudest façade.
+//! A square painted. A pixel evaluates exactly the loud ground sources (bound there at least the
+//! edge, `popup::candidates::loud`) crossing its 16-pixel block and the blocks around. Every other
+//! loud source is blended from where it was evaluated exactly, its near share from the block's
+//! corners and its far share from the points of the block's far cell (64 pixels), in groups by
+//! layer, direction and distance whose energy one exact ray from the loudest member sets right at
+//! the pixel ([`crate::groups`]). The quiet hum is blended from the lattice ([`Lattice`]), the
+//! flights from the corners. A pixel inside an enclosed building has no level: the map shows the
+//! sound outdoors, and a click there answers at the loudest façade.
 
-use crate::levels::{LAYERS, Levels, Point, Rule, Work, energies, energy_of};
-use crate::square::{Square, gap_to_tile};
-use physics::bands::{energy, level_db};
-use popup::aircraft::FINE_BOXES_WITHIN_M;
-use popup::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver, tile_lden_energy};
-use popup::aircraft::horizons::Horizons;
+use crate::exact::{Batch, LAYERS, Point, evaluate};
+use crate::flights::flights_at_corners;
+use crate::groups::{Four, Frame, frame, frame_weight, group_energy, meets};
+use crate::lattice::Lattice;
+use crate::square::Square;
+use physics::bands::level_db;
 use rayon::prelude::*;
 use tiles::geo::Mercator;
 use tiles::sources::Layer;
@@ -18,69 +20,38 @@ use tiles::sources::Layer;
 /// A cell with no level: quiet (under 0 dB) or inside a building.
 pub const NO_LEVEL: u8 = 255;
 
-/// How a square is cut: pixels per side, pixels per block and per coarse cell.
+/// How a square is cut: pixels per side, pixels per block, pixels per far cell (the far shares'
+/// lattice and the groups' frames) and per cell of the quiet hum's lattice.
 #[derive(Clone, Copy)]
 pub struct Grid {
     pub pixels: usize,
     pub block: usize,
+    pub far: usize,
     pub coarse: usize,
 }
 
-/// The levels' evaluation at their points: the bounds left out, or two standard errors of the
-/// sample of the rest, under 0.2 dB of the known energy. Prague's square 2212/1387 (34 pixels
-/// outdoors against the popup there) reads the same with 16 + 16 at the pixels as with 128 + 64
-/// (mean difference 0.34 against 0.36 dB) in a third of the time.
-const FAR_RULE: Rule = Rule {
-    tolerance: 0.047,
-    proven: 128,
-    sample: 128,
-    sample_max: 2_048,
-    certain: false,
-};
-const MID_RULE: Rule = Rule {
-    tolerance: 0.047,
-    proven: 64,
-    sample: 64,
-    sample_max: 512,
-    certain: false,
-};
-const NEAR_RULE: Rule = Rule {
-    tolerance: 0.047,
-    proven: 16,
-    sample: 16,
-    sample_max: 64,
-    certain: true,
-};
-/// The aircraft's near share is evaluated every second block corner, and at a block corner
-/// between them where the four around differ by more than this ratio (1 dB).
-const AIR_SMOOTH: f64 = 1.258_925_411_794_167_2;
+/// Block rows one pass of pixels takes (4 rows of 64 blocks at z13, 65,536 pixels).
+const PIXEL_PASS_BLOCK_ROWS: usize = 4;
 
-/// The mid-level sources a block corner names, which its block's pixels evaluate exactly
-/// (screening near a pixel changes them where interpolation cannot: a courtyard): by their share
-/// of their own layer's energy at the corner, the largest first, at most this many, each at least
-/// [`NAMED_SHARE`] of its layer.
-const NAMED_PER_CORNER: usize = 16;
-const NAMED_SHARE: f64 = 0.01;
+/// A source's near share by its distance from a block's centre, in far cells: whole within the
+/// first, none beyond the second, linear between (at z13 about 300 and 800 m). Against the etalon
+/// in Dobříš a ramp from 300 to 800 m had industry over 1 dB at 2.8 % where a switch at 400 m had
+/// 4.3 % (`evidence/2026-10-10/painter-plan`).
+const NEAR_SHARE_CELLS: (f64, f64) = (0.75, 2.0);
 
-/// A block corner: per slot the energy interpolated from it, the sources it names, and what each
-/// source its mid level evaluated added there (by index), so a named one leaves exactly that.
-struct Corner {
-    rest: [f64; SLOTS],
-    named: Vec<u32>,
-    added: Vec<(u32, f64)>,
-}
-
-impl Corner {
-    fn added(&self, index: u32) -> f64 {
-        self.added
-            .binary_search_by_key(&index, |&(at, _)| at)
-            .map_or(0.0, |at| self.added[at].1)
-    }
+/// What a block's pixels share: the loud sources they evaluate exactly and the frames their
+/// groups are blended in.
+struct Block {
+    local: Vec<u32>,
+    frames: Vec<Frame>,
 }
 
 /// Per pixel (row-major from the north-west) its cell per layer and the total's last: twice the
 /// Lden rounded, or [`NO_LEVEL`].
 pub type Cells = Vec<[u8; LAYERS + 1]>;
+
+/// A pass's painted pixels: each one's place in the square and its cells.
+type PassCells = Vec<(usize, [u8; LAYERS + 1])>;
 
 fn cell(energy: f64) -> u8 {
     if energy < 1.0 {
@@ -90,72 +61,25 @@ fn cell(energy: f64) -> u8 {
     }
 }
 
-fn mix(seed: u64, value: u64) -> u64 {
-    (seed ^ value)
-        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
-        .rotate_left(29)
-}
-
-/// A point's energies: per layer the ground sources', then the flights' (the aircraft boxes).
-const SLOTS: usize = LAYERS + 1;
-const FLIGHTS: usize = LAYERS;
-
-/// Bilinear in energy between four corners (north-west, north-east, south-west, south-east).
-fn bilinear<const N: usize>(corners: [&[f64; N]; 4], fx: f64, fy: f64) -> [f64; N] {
-    std::array::from_fn(|layer| {
-        let north = corners[0][layer] * (1.0 - fx) + corners[1][layer] * fx;
-        let south = corners[2][layer] * (1.0 - fx) + corners[3][layer] * fx;
-        north * (1.0 - fy) + south * fy
-    })
-}
-
-/// The aircraft's Lden energy at `point`, each box's share `weight` of its distance: every box
-/// within `within_m`, fine boxes from tiles within their distance of the point, as the popup
-/// reads them for a click there.
-fn aircraft_energy(
-    square: &Square,
-    point: &Point,
-    weight: &dyn Fn(f64) -> f64,
-    within_m: f64,
-) -> Result<f64, String> {
-    let horizons = Horizons::build(
-        &square.ground,
-        &square.obstacles,
-        point.position,
-        point.altitude_m,
-        point.own_footprint,
-    )?;
-    let receiver = AircraftReceiver {
-        position: point.position,
-        altitude_m: point.altitude_m,
-    };
-    let mut total = 0.0;
-    for tile in &square.aircraft {
-        let gap = gap_to_tile(&square.frame, tile.tile, point.position);
-        if gap > within_m {
-            continue;
-        }
-        let boxes = if gap <= FINE_BOXES_WITHIN_M {
-            tile.fine.as_ref().or(tile.far.as_ref())
-        } else {
-            tile.far.as_ref()
-        };
-        if let Some(boxes) = boxes {
-            total += tile_lden_energy(
-                boxes,
-                tile.tile,
-                &square.frame,
-                receiver,
-                &horizons,
-                (weight, within_m),
-            );
-        }
+/// The cells of a pixel's energy per layer: each layer's and the total's.
+pub(crate) fn cells_of(layers: &[f64; LAYERS]) -> [u8; LAYERS + 1] {
+    let mut cells = [NO_LEVEL; LAYERS + 1];
+    for (l, &value) in layers.iter().enumerate() {
+        cells[l] = cell(value);
     }
-    Ok(total)
+    cells[LAYERS] = cell(layers.iter().sum());
+    cells
 }
 
-/// Paints the square: every pixel's cells.
-pub fn paint(square: &Square, grid: Grid) -> Result<Cells, String> {
+/// Bilinear between four corners (north-west, north-east, south-west, south-east).
+pub(crate) fn bilinear(corners: [f64; 4], fx: f64, fy: f64) -> f64 {
+    let north = corners[0] * (1.0 - fx) + corners[1] * fx;
+    let south = corners[2] * (1.0 - fx) + corners[3] * fx;
+    north * (1.0 - fy) + south * fy
+}
+
+/// Paints the square: every pixel's cells, the exact evaluations here or by `batch`.
+pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<Cells, String> {
     let n = grid.pixels;
     let metres = |x: f64, y: f64| {
         square.frame.to_metres(Mercator {
@@ -163,254 +87,282 @@ pub fn paint(square: &Square, grid: Grid) -> Result<Cells, String> {
             y: f64::from(square.tile.y) + y / n as f64,
         })
     };
-    let pixel_m = square.frame.east_m_per_unit / n as f64;
-    let (block_m, coarse_m) = (pixel_m * grid.block as f64, pixel_m * grid.coarse as f64);
-    let levels = Levels {
-        near: [1.5 * block_m, 4.0 * block_m],
-        far: [1.5 * coarse_m, 3.0 * coarse_m],
+    let rectangle = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        let (a, b) = (metres(x0, y0), metres(x1, y1));
+        (
+            [a[0].min(b[0]), a[1].min(b[1])],
+            [a[0].max(b[0]), a[1].max(b[1])],
+        )
     };
-    let seed = mix(u64::from(square.tile.x), u64::from(square.tile.y));
-    let everything = square.candidates.len() as u32;
-
     let started = std::time::Instant::now();
-    // The far level at the coarse corners.
-    let coarse_side = n / grid.coarse + 1;
-    let coarse: Vec<[f64; SLOTS]> = (0..coarse_side * coarse_side)
-        .into_par_iter()
-        .map_init(Work::default, |work, at| {
-            let (i, j) = (at % coarse_side, at / coarse_side);
-            let position = metres((i * grid.coarse) as f64, (j * grid.coarse) as f64);
-            let point = Point::at(square, position)?;
-            let ground = energies(
-                square,
-                &point,
-                &mut (0..everything),
-                &|d| levels.far(d),
-                &[0.0; LAYERS],
-                &FAR_RULE,
-                mix(seed, at as u64),
-                work,
-            )?;
-            let mut far = [0.0; SLOTS];
-            far[..LAYERS].copy_from_slice(&ground);
-            far[FLIGHTS] = aircraft_energy(square, &point, &|d| levels.far(d), AIRCRAFT_REACH_M)?;
-            Ok(far)
-        })
-        .collect::<Result<_, String>>()?;
-
-    let coarse_s = started.elapsed().as_secs_f64();
-    // The aircraft's near level every second block corner: boxes change over hundreds of metres.
-    let air_spacing = 2 * grid.block;
-    let air_side = n / air_spacing + 1;
-    let air: Vec<f64> = (0..air_side * air_side)
+    let lattice = Lattice::new(square, n, (grid.coarse, 0), true, batch)?;
+    // One far cell beyond the square, so its edge blends with the next square's groups too.
+    let far_lattice = Lattice::new(square, n, (grid.far, 1), false, batch)?;
+    // A square no loud source reaches, no flight crosses and whose hum stays under 0 dB (the
+    // reflection adding at most 3 dB) has no level: most of the world.
+    let mut near = Vec::new();
+    let (low, high) = rectangle(0.0, 0.0, n as f64, n as f64);
+    square.index.reaching(low, high, &mut near);
+    let no_flights = (square.aircraft.iter()).all(|tile| tile.fine.is_none() && tile.far.is_none());
+    if near.is_empty() && no_flights && lattice.silent() {
+        return Ok(vec![[NO_LEVEL; LAYERS + 1]; n * n]);
+    }
+    // The block corners evaluate every loud source with a near share for a block they bound.
+    let pixel_m = square.frame.east_m_per_unit / n as f64;
+    let cell_m = pixel_m * grid.far as f64;
+    let (whole_m, none_m) = (NEAR_SHARE_CELLS.0 * cell_m, NEAR_SHARE_CELLS.1 * cell_m);
+    let corner_reach_m = none_m + std::f64::consts::SQRT_2 * pixel_m * grid.block as f64;
+    let blocks = n / grid.block;
+    let corner_side = blocks + 1;
+    let corner_points: Vec<Point> = (0..corner_side * corner_side)
         .into_par_iter()
         .map(|at| {
-            let (i, j) = (at % air_side, at / air_side);
-            let position = metres((i * air_spacing) as f64, (j * air_spacing) as f64);
-            let point = Point::at(square, position)?;
-            aircraft_energy(square, &point, &|d| 1.0 - levels.far(d), levels.far[1])
+            let (i, j) = (at % corner_side, at / corner_side);
+            Point::at(
+                square,
+                metres((i * grid.block) as f64, (j * grid.block) as f64),
+            )
         })
         .collect::<Result<_, String>>()?;
-    // At a block corner: the grid's own value, the four around interpolated where they agree,
-    // else evaluated there.
-    let air_at = |i: usize, j: usize, point: &Point| -> Result<f64, String> {
-        if i.is_multiple_of(2) && j.is_multiple_of(2) {
-            return Ok(air[(j / 2) * air_side + i / 2]);
-        }
-        let (ai, aj) = ((i / 2).min(air_side - 2), (j / 2).min(air_side - 2));
-        let around =
-            [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(di, dj)| air[(aj + dj) * air_side + ai + di]);
-        let (low, high) = around
-            .iter()
-            .fold((f64::INFINITY, 0.0f64), |(low, high), &v| {
-                (low.min(v), high.max(v))
-            });
-        if high > AIR_SMOOTH * low {
-            return aircraft_energy(square, point, &|d| 1.0 - levels.far(d), levels.far[1]);
-        }
-        let (fx, fy) = ((i - 2 * ai) as f64 / 2.0, (j - 2 * aj) as f64 / 2.0);
-        Ok((around[0] * (1.0 - fx) + around[1] * fx) * (1.0 - fy)
-            + (around[2] * (1.0 - fx) + around[3] * fx) * fy)
+    let pairs: Vec<(u32, u32)> = (0..corner_points.len())
+        .into_par_iter()
+        .map_init(Vec::new, |near, k| {
+            let point = &corner_points[k];
+            square.index.reaching(point.position, point.position, near);
+            (near.iter())
+                .filter(|&&index| {
+                    square.candidates[index as usize].distance_from(point.position) < corner_reach_m
+                        && square.loud(index, point.position, &point.bound)
+                })
+                .map(|&index| (k as u32, index))
+                .collect::<Vec<_>>()
+        })
+        .flatten()
+        .collect();
+    let corner_pairs = pairs.len();
+    let energies = evaluate(square, &corner_points, &pairs, batch)?;
+    let mut corners: Vec<Vec<(u32, f64)>> = vec![Vec::new(); corner_points.len()];
+    for (&(k, index), energy) in pairs.iter().zip(energies) {
+        corners[k as usize].push((index, energy));
+    }
+    corners
+        .par_iter_mut()
+        .for_each(|corner| corner.sort_unstable_by_key(|&(index, _)| index));
+    let flights = flights_at_corners(square, grid, &metres, &corner_points)?;
+    let corners_s = started.elapsed().as_secs_f64();
+
+    // A block: its local sources, and its groups in its own far cell's frame and, near the cell's
+    // edges, in the neighbouring cells' frames.
+    let ratio = grid.far / grid.block;
+    let band = grid.block as f64 / 4.0;
+    // The far lattice's points of the far cell `(ci, cj)` (-1 to the square's cells: the margin).
+    let four = |ci: i64, cj: i64| {
+        let margin = far_lattice.margin as i64;
+        [(0, 0), (1, 0), (0, 1), (1, 1)].map(|(di, dj)| {
+            ((cj + margin + dj) * far_lattice.side as i64 + ci + margin + di) as usize
+        })
     };
-    // The mid level at the block corners, over the far level and the aircraft there.
-    let ratio = grid.coarse / grid.block;
-    let corner_side = n / grid.block + 1;
-    let corners: Vec<Corner> = (0..corner_side * corner_side)
-        .into_par_iter()
-        .map_init(
-            || (Work::default(), Vec::new()),
-            |(work, list), at| {
-                let (i, j) = (at % corner_side, at / corner_side);
-                let (ci, cj) = (
-                    (i / ratio).min(coarse_side - 2),
-                    (j / ratio).min(coarse_side - 2),
+    let block_of = |near: &mut Vec<u32>, at: usize| -> Block {
+        let (i, j) = (at % blocks, at / blocks);
+        let b = grid.block as f64;
+        let (x, y) = (i as f64 * b, j as f64 * b);
+        let (low, high) = rectangle(x - b, y - b, x + 2.0 * b, y + 2.0 * b);
+        square.index.reaching(low, high, near);
+        let mut local: Vec<u32> = (near.iter().copied())
+            .filter(|&index| {
+                let [a, b] = square.candidates[index as usize].ends_m;
+                meets(a, b, low, high)
+            })
+            .collect();
+        local.sort_unstable();
+        let centre = metres(x + b / 2.0, y + b / 2.0);
+        let near_share = |index: u32| {
+            local.binary_search(&index).is_err().then(|| {
+                let distance = square.candidates[index as usize].distance_from(centre);
+                ((none_m - distance) / (none_m - whole_m)).clamp(0.0, 1.0)
+            })
+        };
+        let corner_lists: Four = [(0, 0), (1, 0), (0, 1), (1, 1)]
+            .map(|(di, dj)| corners[(j + dj) * corner_side + i + di].as_slice());
+        let (ci, cj) = ((i / ratio) as i64, (j / ratio) as i64);
+        let cell_lists: Four = four(ci, cj).map(|k| far_lattice.loud[k].as_slice());
+        let along = |start: usize| {
+            let mut offsets = vec![0i64];
+            if (start as f64) < band {
+                offsets.push(-1);
+            }
+            if (start + grid.block) as f64 > grid.far as f64 - band {
+                offsets.push(1);
+            }
+            offsets
+        };
+        let mut frames = Vec::new();
+        for dy in along((j % ratio) * grid.block) {
+            for dx in along((i % ratio) * grid.block) {
+                let (fi, fj) = (ci + dx, cj + dy);
+                let frame_lists: Four = four(fi, fj).map(|k| far_lattice.loud[k].as_slice());
+                let centre = metres(
+                    (fi as f64 + 0.5) * grid.far as f64,
+                    (fj as f64 + 0.5) * grid.far as f64,
                 );
-                let (fx, fy) = (
-                    (i - ci * ratio) as f64 / ratio as f64,
-                    (j - cj * ratio) as f64 / ratio as f64,
-                );
-                let far = bilinear(
-                    [
-                        &coarse[cj * coarse_side + ci],
-                        &coarse[cj * coarse_side + ci + 1],
-                        &coarse[(cj + 1) * coarse_side + ci],
-                        &coarse[(cj + 1) * coarse_side + ci + 1],
-                    ],
-                    fx,
-                    fy,
-                );
-                let position = metres((i * grid.block) as f64, (j * grid.block) as f64);
-                let point = Point::at(square, position)?;
-                square.index.within(position, position, levels.far[1], list);
-                let mut known: [f64; LAYERS] = std::array::from_fn(|l| far[l]);
-                known[Layer::Aircraft as usize] += far[FLIGHTS];
-                let mid = energies(
+                frames.push(frame(
                     square,
-                    &point,
-                    &mut list.iter().copied(),
-                    &|d| levels.mid(d),
-                    &known,
-                    &MID_RULE,
-                    mix(seed, (1 << 40) | at as u64),
-                    work,
-                )?;
-                let mut rest = far;
-                for (sum, value) in rest.iter_mut().zip(mid) {
-                    *sum += value;
-                }
-                let mut named: Vec<(f64, u32)> = work
-                    .added
-                    .iter()
-                    .filter(|added| added.certain)
-                    .map(|added| {
-                        let layer = square.candidates[added.index as usize].layer as usize;
-                        (
-                            added.energy / rest[layer].max(f64::MIN_POSITIVE),
-                            added.index,
-                        )
-                    })
-                    .filter(|&(share, _)| share >= NAMED_SHARE)
-                    .collect();
-                named.sort_unstable_by(|a, b| b.0.total_cmp(&a.0));
-                let named: Vec<u32> = named
-                    .iter()
-                    .take(NAMED_PER_CORNER)
-                    .map(|&(_, index)| index)
-                    .collect();
-                let mut added: Vec<(u32, f64)> =
-                    work.added.iter().map(|a| (a.index, a.energy)).collect();
-                added.sort_unstable_by_key(|&(index, _)| index);
-                rest[FLIGHTS] += air_at(i, j, &point)?;
-                Ok(Corner { rest, named, added })
-            },
-        )
-        .collect::<Result<_, String>>()?;
+                    (corner_lists, cell_lists, frame_lists),
+                    &near_share,
+                    (centre, [dx, dy]),
+                ));
+            }
+        }
+        Block { local, frames }
+    };
 
-    let corners_s = started.elapsed().as_secs_f64() - coarse_s;
-    // Every pixel: the near level evaluated there over the rest interpolated.
-    let blocks = n / grid.block;
-    let painted: Vec<Cells> = (0..blocks * blocks)
-        .into_par_iter()
-        .map_init(
-            || (Work::default(), Vec::new()),
-            |(work, list), at| {
-                let (bx, by) = (at % blocks, at / blocks);
-                let a = metres((bx * grid.block) as f64, (by * grid.block) as f64);
-                let b = metres(
-                    ((bx + 1) * grid.block) as f64,
-                    ((by + 1) * grid.block) as f64,
-                );
-                let low = [a[0].min(b[0]), a[1].min(b[1])];
-                let high = [a[0].max(b[0]), a[1].max(b[1])];
-                square.index.within(low, high, levels.near[1], list);
-                // The corners' named sources, evaluated exactly at every pixel, and the corners'
-                // rest without what each of them added there.
+    // Every pixel, a few block rows at a time: its loud local sources and its block's probes.
+    let pass_of = |first_row: usize| -> Result<PassCells, String> {
+        let block_ids: Vec<usize> = (first_row..(first_row + PIXEL_PASS_BLOCK_ROWS).min(blocks))
+            .flat_map(|by| (0..blocks).map(move |bx| by * blocks + bx))
+            .collect();
+        let pass: Vec<Block> = (block_ids.par_iter())
+            .map_init(Vec::new, |near, &at| block_of(near, at))
+            .collect();
+        let outdoor: Vec<(usize, usize, Point)> = (0..block_ids.len() * grid.block * grid.block)
+            .into_par_iter()
+            .map(|k| {
+                let (slot, inside) = (k / (grid.block * grid.block), k % (grid.block * grid.block));
+                let at = block_ids[slot];
+                let x = (at % blocks) * grid.block + inside % grid.block;
+                let y = (at / blocks) * grid.block + inside / grid.block;
+                let point = Point::at(square, metres(x as f64 + 0.5, y as f64 + 0.5))?;
+                Ok((point.own_footprint == 0).then_some((slot, y * n + x, point)))
+            })
+            .collect::<Result<Vec<_>, String>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        // A pixel's frames: its own cell's, and within the band of an edge the neighbour's.
+        let side = grid.far as f64;
+        // A pixel's centre within its far cell, in pixels.
+        let cell_pixel = |at: usize| {
+            (
+                (at % n % grid.far) as f64 + 0.5,
+                (at / n % grid.far) as f64 + 0.5,
+            )
+        };
+        // Per pixel its loud local sources, then the probes of its frames (sorted).
+        let lists: Vec<(Vec<u32>, usize)> = (outdoor.par_iter())
+            .map(|(slot, at, point)| {
+                let block = &pass[*slot];
+                let mut list: Vec<u32> = (block.local.iter().copied())
+                    .filter(|&index| square.loud(index, point.position, &point.bound))
+                    .collect();
+                let local = list.len();
+                let mut probes: Vec<u32> = (block.frames.iter())
+                    .filter(|frame| frame_weight(frame.offset, cell_pixel(*at), side, band) > 0.0)
+                    .flat_map(|frame| frame.probed.iter().map(|group| group.probe.index))
+                    .collect();
+                probes.sort_unstable();
+                probes.dedup();
+                list.extend(probes);
+                (list, local)
+            })
+            .collect();
+        let pairs: Vec<(u32, u32)> = (lists.iter().enumerate())
+            .flat_map(|(k, (list, _))| list.iter().map(move |&index| (k as u32, index)))
+            .collect();
+        let (places, points): (Vec<(usize, usize)>, Vec<Point>) = outdoor
+            .into_iter()
+            .map(|(slot, at, point)| ((slot, at), point))
+            .unzip();
+        let energies = evaluate(square, &points, &pairs, batch)?;
+        let mut offset = 0;
+        let starts: Vec<usize> = (lists.iter())
+            .map(|(list, _)| {
+                offset += list.len();
+                offset - list.len()
+            })
+            .collect();
+        Ok((0..points.len())
+            .into_par_iter()
+            .map(|k| {
+                let ((slot, at), point) = (places[k], &points[k]);
+                let block = &pass[slot];
+                let (x, y) = (at % n, at / n);
+                let within = |side: usize| {
+                    (
+                        ((x % side) as f64 + 0.5) / side as f64,
+                        ((y % side) as f64 + 0.5) / side as f64,
+                    )
+                };
+                let (in_block, in_cell) = (within(grid.block), within(grid.far));
+                let (list, local) = (&lists[k].0, lists[k].1);
+                let values = &energies[starts[k]..starts[k] + list.len()];
+                let (probes, probe_values) = (&list[local..], &values[local..]);
+                let mut layers = lattice.quiet_at(x, y);
+                for (&index, &energy) in list[..local].iter().zip(&values[..local]) {
+                    layers[square.candidates[index as usize].layer as usize] += energy;
+                }
+                let (mut grouped, mut weights) = ([0.0; LAYERS], 0.0);
+                for frame in &block.frames {
+                    let weight = frame_weight(frame.offset, cell_pixel(at), side, band);
+                    if weight == 0.0 {
+                        continue;
+                    }
+                    weights += weight;
+                    for group in &frame.probed {
+                        let here = probes
+                            .binary_search(&group.probe.index)
+                            .map_or(0.0, |slot| probe_values[slot]);
+                        grouped[group.layer] +=
+                            weight * group_energy(group, here, in_block, in_cell);
+                    }
+                    for (layer, energy) in grouped.iter_mut().enumerate() {
+                        let rest = |points: &[[f64; LAYERS]; 4], (fx, fy): (f64, f64)| {
+                            bilinear(points.map(|point| point[layer]), fx, fy)
+                        };
+                        *energy += weight
+                            * (rest(&frame.rest_corners, in_block)
+                                + rest(&frame.rest_cell, in_cell));
+                    }
+                }
+                for (layer, energy) in layers.iter_mut().enumerate() {
+                    *energy = (*energy + grouped[layer] / weights) * point.reflection();
+                }
+                let (i, j) = (x / grid.block, y / grid.block);
                 let around = [(0, 0), (1, 0), (0, 1), (1, 1)]
-                    .map(|(i, j)| &corners[(by + j) * corner_side + bx + i]);
-                let mut named: Vec<u32> = around
-                    .iter()
-                    .flat_map(|corner| corner.named.iter().copied())
-                    .collect();
-                named.sort_unstable();
-                named.dedup();
-                let rests = around.map(|corner| {
-                    let mut rest = corner.rest;
-                    for &index in &named {
-                        let layer = square.candidates[index as usize].layer as usize;
-                        rest[layer] = (rest[layer] - corner.added(index)).max(0.0);
-                    }
-                    rest
-                });
-                let mut cells = Vec::with_capacity(grid.block * grid.block);
-                for py in 0..grid.block {
-                    for px in 0..grid.block {
-                        let (x, y) = (bx * grid.block + px, by * grid.block + py);
-                        let position = metres(x as f64 + 0.5, y as f64 + 0.5);
-                        if square.obstacles.enclosing_building_id(position)?.is_some() {
-                            cells.push([NO_LEVEL; LAYERS + 1]);
-                            continue;
-                        }
-                        let (fx, fy) = (
-                            (px as f64 + 0.5) / grid.block as f64,
-                            (py as f64 + 0.5) / grid.block as f64,
-                        );
-                        let mut rest =
-                            bilinear([&rests[0], &rests[1], &rests[2], &rests[3]], fx, fy);
-                        let point = Point::outdoors(square, position)?;
-                        // The named sources whole, once: their mid share here, their near share
-                        // in the near level's evaluation below.
-                        work.known.clear();
-                        for &index in &named {
-                            let whole = energy_of(square, &point, index, &|_| 1.0, work)?;
-                            work.known.push((index, whole));
-                        }
-                        for &(index, whole) in &work.known {
-                            let candidate = &square.candidates[index as usize];
-                            let share = levels.mid(candidate.distance_from(position));
-                            rest[candidate.layer as usize] += share * whole;
-                        }
-                        let mut known: [f64; LAYERS] = std::array::from_fn(|l| rest[l]);
-                        known[Layer::Aircraft as usize] += rest[FLIGHTS];
-                        let near = energies(
-                            square,
-                            &point,
-                            &mut list.iter().copied(),
-                            &|d| levels.near(d),
-                            &known,
-                            &NEAR_RULE,
-                            mix(seed, (2 << 40) | (y * n + x) as u64),
-                            work,
-                        )?;
-                        work.known.clear();
-                        let reflection = energy(square.obstacles.reflection_db(position, None)?);
-                        let mut layers: [f64; LAYERS] =
-                            std::array::from_fn(|l| (near[l] + rest[l]) * reflection);
-                        layers[Layer::Aircraft as usize] += rest[FLIGHTS];
-                        let mut pixel = [NO_LEVEL; LAYERS + 1];
-                        for (l, value) in layers.iter().enumerate() {
-                            pixel[l] = cell(*value);
-                        }
-                        pixel[LAYERS] = cell(layers.iter().sum());
-                        cells.push(pixel);
-                    }
-                }
-                Ok(cells)
-            },
-        )
-        .collect::<Result<_, String>>()?;
-
-    eprintln!(
-        "qm-paint: coarse {coarse_s:.1} s, corners {corners_s:.1} s, pixels {:.1} s",
-        started.elapsed().as_secs_f64() - coarse_s - corners_s
-    );
-    // Blocks back into rows.
+                    .map(|(di, dj)| flights[(j + dj) * corner_side + i + di]);
+                layers[Layer::Aircraft as usize] += bilinear(around, in_block.0, in_block.1);
+                (at, cells_of(&layers))
+            })
+            .collect())
+    };
+    // With a card, two passes run at once: one's lists on the cores while the other's pairs are
+    // on the card.
+    let first_rows: Vec<usize> = (0..blocks).step_by(PIXEL_PASS_BLOCK_ROWS).collect();
+    let painted: Vec<Result<PassCells, String>> = match batch {
+        None => first_rows.iter().map(|&row| pass_of(row)).collect(),
+        Some(_) => std::thread::scope(|scope| {
+            let (even, odd): (Vec<usize>, Vec<usize>) = (first_rows.iter())
+                .partition(|&&row| (row / PIXEL_PASS_BLOCK_ROWS).is_multiple_of(2));
+            let pass_of = &pass_of;
+            let other =
+                scope.spawn(move || odd.iter().map(|&row| pass_of(row)).collect::<Vec<_>>());
+            let mut done: Vec<_> = even.iter().map(|&row| pass_of(row)).collect();
+            done.extend(
+                other
+                    .join()
+                    .unwrap_or_else(|_| vec![Err("a pixel pass panicked".into())]),
+            );
+            done
+        }),
+    };
     let mut cells = vec![[NO_LEVEL; LAYERS + 1]; n * n];
-    for (at, block) in painted.into_iter().enumerate() {
-        let (bx, by) = (at % blocks, at / blocks);
-        for (k, pixel) in block.into_iter().enumerate() {
-            let (px, py) = (k % grid.block, k / grid.block);
-            cells[(by * grid.block + py) * n + bx * grid.block + px] = pixel;
+    for pass in painted {
+        for (at, value) in pass? {
+            cells[at] = value;
         }
     }
+    eprintln!(
+        "qm-paint: lattice and corners {corners_s:.1} s ({corner_pairs} corner pairs), pixels {:.1} s",
+        started.elapsed().as_secs_f64() - corners_s
+    );
     Ok(cells)
 }

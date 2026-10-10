@@ -107,9 +107,59 @@ pub fn received_energy_bound(
     })
 }
 
+/// A ground source is loud at a receiver where its bound there reaches this Lden (dB): the painter
+/// evaluates the loud ones exactly and estimates the quiet rest as the popup does, never dropping
+/// it (the distant quiet hum is up to 40 % of a quiet forest's level). The map is drawn from 20 dB
+/// (owner, 2026-10-10) (`evidence/2026-10-10/painter-plan`).
+pub const REACH_EDGE_LDEN_DB: f64 = 20.0;
+
+/// The farthest a source of A-weighted Lden power `lden_power` (per metre for a line) can be loud:
+/// where its bound at the gain `gain_db`, without air absorption, falls to [`REACH_EDGE_LDEN_DB`]
+/// (the inverse of [`Spread::divergence_db`], 0 for a source under the edge even at the distance
+/// floor). A receiver's own bound decides; this only finds the sources to bound.
+pub fn reach_m(lden_power: f64, spread: Spread, gain_db: f64) -> f64 {
+    // The bound at distance d is lden_power x gain x the divergence's energy; for a point d^2 = k.
+    let k = lden_power * energy(gain_db - REACH_EDGE_LDEN_DB) / POINT_DIVERGENCE_LINEAR;
+    let (reach, floor) = match spread {
+        Spread::Point => (k.sqrt(), POINT_DISTANCE_FLOOR_M),
+        // Within L / pi of a piece its infinite line bounds it, beyond that its whole power.
+        Spread::Line { length_m } => {
+            let infinite_line = std::f64::consts::PI * k;
+            let reach = if infinite_line <= length_m / std::f64::consts::PI {
+                infinite_line
+            } else {
+                (length_m * k).sqrt()
+            };
+            (reach, LINE_PERPENDICULAR_FLOOR_M)
+        }
+    };
+    if reach < floor { 0.0 } else { reach }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// At its reach a source's bound is the edge, for a point, a short piece seen as its power
+    /// and a long piece seen as its infinite line.
+    #[test]
+    fn the_reach_is_where_the_bound_falls_to_the_edge() {
+        let gain_db = FAVOURABLE_GAIN_BOUND_DB + 3.0;
+        for (power_db, spread) in [
+            (70.0, Spread::Point),
+            (60.0, Spread::Line { length_m: 40.0 }),
+            (80.0, Spread::Line { length_m: 250.0 }),
+            (60.0, Spread::Line { length_m: 250.0 }),
+        ] {
+            let reach = reach_m(energy(power_db), spread, gain_db);
+            let bound_db = power_db + gain_db - spread.divergence_db(reach);
+            assert!(
+                (bound_db - REACH_EDGE_LDEN_DB).abs() < 1e-9,
+                "{power_db} {spread:?}: {reach} m, {bound_db} dB"
+            );
+        }
+        assert_eq!(reach_m(energy(-30.0), Spread::Point, gain_db), 0.0);
+    }
 
     /// Both states now hold the same 18 dB, whatever the favourable probability.
     #[test]

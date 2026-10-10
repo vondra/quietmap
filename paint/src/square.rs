@@ -1,14 +1,12 @@
 //! One z12 square's neighbourhood, read and parsed once for all its pixels: the ground and the
-//! obstacles to the ground reach of its farthest pixel, every ground source that can reach one of
-//! its pixels, indexed by place, and the aircraft boxes to the aircraft reach.
+//! obstacles to the ground reach of its farthest pixel, every ground source whose reach covers
+//! one of its pixels, indexed by place and reach, and the aircraft boxes to the aircraft reach.
 
-use physics::bands::{PERIODS, lden_energy};
-use physics::bound::receiver_bound;
-use physics::line::{LINE_PERPENDICULAR_FLOOR_M, POINT_DIVERGENCE_LINEAR};
+use physics::bound::{ReceiverBound, receiver_bound};
 use physics::weather::{PlaceWeather, WeatherTable};
 use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::AIRCRAFT_REACH_M;
-use popup::candidates::{Attributes, Candidate, GROUND_REACH_M, collect};
+use popup::candidates::{Attributes, Candidate, GROUND_REACH_M, collect, loud};
 use popup::obstacles::Scene;
 use popup::release::{Release, RingFiles};
 use popup::scene::Ground;
@@ -19,10 +17,18 @@ use tiles::obstacles::Obstacles;
 use tiles::sources::Sources;
 use tiles::terrain::Terrain;
 
-/// The largest gain over free field a ray can have (FAVOURABLE_GAIN_BOUND_DB, linear).
-const GAIN_BOUND: f64 = 63.095_734_448_019_33;
 /// Side of the index's cells (m).
 const INDEX_CELL_M: f64 = 100.0;
+/// The index's reach classes (m): a source sits in the first that covers its reach.
+const REACH_CLASSES_M: [f64; 7] = [
+    250.0,
+    500.0,
+    1_000.0,
+    2_000.0,
+    4_000.0,
+    8_000.0,
+    GROUND_REACH_M,
+];
 
 /// The files of a square's neighbourhood.
 pub struct Files {
@@ -99,6 +105,16 @@ impl Files {
     pub fn bytes(&self) -> u64 {
         self.rings.bytes
     }
+
+    /// The files read, for a device copy of the square.
+    pub fn rings(&self) -> &RingFiles {
+        &self.rings
+    }
+
+    /// The rings around the square read for the ground kinds.
+    pub fn ground_rings(&self) -> u32 {
+        self.ground_rings
+    }
 }
 
 /// One tile's aircraft boxes, fine and far.
@@ -108,8 +124,52 @@ pub struct AircraftTile<'a> {
     pub far: Option<Aircraft<'a>>,
 }
 
-/// The candidates by place: short pieces by the cell of their middle, long ones always.
+/// The candidates by place and reach: per reach class a grid, a point asking each class within
+/// that class's reach.
 pub struct Index {
+    classes: Vec<(f64, Grid)>,
+}
+
+impl Index {
+    fn new(candidates: &[Candidate], reaches: &[f64]) -> Self {
+        let mut members = vec![Vec::new(); REACH_CLASSES_M.len()];
+        for (index, &reach) in reaches.iter().enumerate() {
+            let class = REACH_CLASSES_M
+                .iter()
+                .position(|&class| reach <= class)
+                .unwrap_or(REACH_CLASSES_M.len() - 1);
+            members[class].push(index as u32);
+        }
+        Index {
+            classes: REACH_CLASSES_M
+                .iter()
+                .zip(members)
+                .map(|(&reach, members)| (reach, Grid::new(candidates, members)))
+                .collect(),
+        }
+    }
+
+    /// Every candidate whose reach may cover a point of the rectangle `low`-`high` (frame
+    /// metres): every one loud there, and some not.
+    pub fn reaching(&self, low: [f64; 2], high: [f64; 2], out: &mut Vec<u32>) {
+        out.clear();
+        for (reach, grid) in &self.classes {
+            grid.within(low, high, *reach, out);
+        }
+    }
+
+    /// Every candidate that may lie within `radius_m` of the rectangle, and some farther.
+    pub fn within(&self, low: [f64; 2], high: [f64; 2], radius_m: f64, out: &mut Vec<u32>) {
+        out.clear();
+        for (_, grid) in &self.classes {
+            grid.within(low, high, radius_m, out);
+        }
+    }
+}
+
+/// One reach class's candidates by place: short pieces by the cell of their middle, long ones
+/// always.
+struct Grid {
     origin: [f64; 2],
     columns: usize,
     rows: usize,
@@ -118,25 +178,27 @@ pub struct Index {
     long: Vec<u32>,
 }
 
-impl Index {
-    fn new(candidates: &[Candidate]) -> Self {
-        let middle = |c: &Candidate| {
-            let [a, b] = c.ends_m;
+impl Grid {
+    fn new(candidates: &[Candidate], members: Vec<u32>) -> Self {
+        let middle = |index: u32| {
+            let [a, b] = candidates[index as usize].ends_m;
             [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
         };
-        let is_long = |c: &Candidate| {
-            let [a, b] = c.ends_m;
+        let is_long = |index: u32| {
+            let [a, b] = candidates[index as usize].ends_m;
             (b[0] - a[0]).hypot(b[1] - a[1]) > 2.0 * INDEX_CELL_M
         };
+        let (long, short): (Vec<u32>, Vec<u32>) =
+            members.into_iter().partition(|&index| is_long(index));
         let (mut low, mut high) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-        for c in candidates.iter().filter(|c| !is_long(c)) {
-            let m = middle(c);
+        for &index in &short {
+            let m = middle(index);
             for axis in 0..2 {
                 low[axis] = low[axis].min(m[axis]);
                 high[axis] = high[axis].max(m[axis]);
             }
         }
-        if low[0] > high[0] {
+        if short.is_empty() {
             (low, high) = ([0.0; 2], [0.0; 2]);
         }
         let columns = ((high[0] - low[0]) / INDEX_CELL_M) as usize + 1;
@@ -146,41 +208,33 @@ impl Index {
             let row = ((m[1] - low[1]) / INDEX_CELL_M) as usize;
             row.min(rows - 1) * columns + column.min(columns - 1)
         };
-        let mut counts = vec![0u32; columns * rows + 1];
-        let mut long = Vec::new();
-        for (index, c) in candidates.iter().enumerate() {
-            if is_long(c) {
-                long.push(index as u32);
-            } else {
-                counts[cell(middle(c)) + 1] += 1;
-            }
+        let mut starts = vec![0u32; columns * rows + 1];
+        for &index in &short {
+            starts[cell(middle(index)) + 1] += 1;
         }
-        for i in 1..counts.len() {
-            counts[i] += counts[i - 1];
+        for i in 1..starts.len() {
+            starts[i] += starts[i - 1];
         }
-        let mut next = counts.clone();
-        let mut items = vec![0u32; candidates.len() - long.len()];
-        for (index, c) in candidates.iter().enumerate() {
-            if !is_long(c) {
-                let slot = &mut next[cell(middle(c))];
-                items[*slot as usize] = index as u32;
-                *slot += 1;
-            }
+        let mut next = starts.clone();
+        let mut items = vec![0u32; short.len()];
+        for &index in &short {
+            let slot = &mut next[cell(middle(index))];
+            items[*slot as usize] = index;
+            *slot += 1;
         }
-        Index {
+        Grid {
             origin: low,
             columns,
             rows,
-            starts: counts,
+            starts,
             items,
             long,
         }
     }
 
-    /// Every candidate that may lie within `radius_m` of the rectangle `low`-`high` (frame
-    /// metres), and some farther.
-    pub fn within(&self, low: [f64; 2], high: [f64; 2], radius_m: f64, out: &mut Vec<u32>) {
-        out.clear();
+    /// Appends every member that may lie within `radius_m` of the rectangle `low`-`high`, and
+    /// some farther.
+    fn within(&self, low: [f64; 2], high: [f64; 2], radius_m: f64, out: &mut Vec<u32>) {
         out.extend_from_slice(&self.long);
         // A short piece reaches at most a cell from its middle.
         let reach = radius_m + INDEX_CELL_M;
@@ -189,7 +243,10 @@ impl Index {
                 .floor()
                 .clamp(0.0, (limit - 1) as f64) as usize
         };
-        if high[0] + reach < self.origin[0] || high[1] + reach < self.origin[1] {
+        if self.items.is_empty()
+            || high[0] + reach < self.origin[0]
+            || high[1] + reach < self.origin[1]
+        {
             return;
         }
         let (c0, c1) = (
@@ -220,25 +277,8 @@ pub struct Square<'a> {
     pub obstacles: Scene<'a>,
     pub attributes: Attributes,
     pub candidates: Vec<Candidate>,
-    /// Per candidate its bound's factor: the Lden energy it emits (per metre for a line) times
-    /// the largest gain, so that times the divergence at a distance bounds what it delivers.
-    pub bound_factor: Vec<f64>,
-    /// Per candidate its 3D length (m; 0 for a point).
-    pub length_m: Vec<f64>,
     pub index: Index,
     pub aircraft: Vec<AircraftTile<'a>>,
-}
-
-/// The divergence of a piece of `length_m` (0: a point) at horizontal distance `distance_m`, as
-/// the popup's bound takes it (`physics::bound::Spread`), linear.
-pub fn divergence(length_m: f64, distance_m: f64) -> f64 {
-    if length_m > 0.0 {
-        let d = distance_m.max(LINE_PERPENDICULAR_FLOOR_M);
-        (std::f64::consts::PI / d).min(length_m / (d * d)) / POINT_DIVERGENCE_LINEAR
-    } else {
-        let d = distance_m.max(1.0);
-        1.0 / (POINT_DIVERGENCE_LINEAR * d * d)
-    }
 }
 
 impl<'a> Square<'a> {
@@ -308,24 +348,10 @@ impl<'a> Square<'a> {
             }
             candidates.extend(found);
         }
-        let (bound_factor, length_m) = candidates
-            .iter()
-            .map(|c| {
-                let source = &attributes[c.attribute];
-                let periods: [f64; PERIODS] =
-                    std::array::from_fn(|p| source.energy[p].iter().sum());
-                let length = if c.line {
-                    let [a, b] = c.ends_m;
-                    (b[0] - a[0])
-                        .hypot(b[1] - a[1])
-                        .hypot(c.ground_m[1] - c.ground_m[0])
-                } else {
-                    0.0
-                };
-                (lden_energy(&periods) * GAIN_BOUND, length)
-            })
-            .unzip();
-        let index = Index::new(&candidates);
+        let reaches: Vec<f64> = (candidates.iter())
+            .map(|candidate| candidate.reach_m(&attributes[candidate.attribute]))
+            .collect();
+        let index = Index::new(&candidates, &reaches);
         Ok(Square {
             tile,
             frame,
@@ -334,17 +360,18 @@ impl<'a> Square<'a> {
             obstacles,
             attributes,
             candidates,
-            bound_factor,
-            length_m,
             index,
             aircraft,
         })
     }
 
-    /// The bound of candidate `index` at horizontal distance `distance_m`: its Lden energy as
-    /// the popup's bound takes it, without the air absorption (so larger).
-    pub fn bound(&self, index: usize, distance_m: f64) -> f64 {
-        self.bound_factor[index] * divergence(self.length_m[index], distance_m)
+    /// Whether candidate `index` is loud at `position` (frame metres) for a receiver bounded by
+    /// `receiver`, as the popup decides it: there it is evaluated exactly.
+    pub fn loud(&self, index: u32, position: [f64; 2], receiver: &ReceiverBound) -> bool {
+        let candidate = &self.candidates[index as usize];
+        let distance = candidate.distance_from(position);
+        let source = &self.attributes[candidate.attribute];
+        distance <= GROUND_REACH_M && loud(&candidate.bound_at_distance(distance, source, receiver))
     }
 }
 

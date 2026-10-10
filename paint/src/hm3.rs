@@ -2,7 +2,7 @@
 //! behind the header `HM3 `, version 3 and the layer's number, as the map decodes them
 //! (`frontend/src/lib/hm3-decoder.ts`). A painted square of zoom-12 is `2^(zoom - 12)` tiles a side.
 
-use crate::levels::LAYERS;
+use crate::exact::LAYERS;
 use crate::paint::Cells;
 use std::path::{Path, PathBuf};
 use tiles::sources::Layer;
