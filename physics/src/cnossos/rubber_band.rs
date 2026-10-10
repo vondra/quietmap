@@ -4,8 +4,9 @@
 //!
 //! Homogeneous rays are straight. The favourable ray is the arc of radius
 //! `Γ = max(1000, 8·d)` through S and R, concave toward the ground: a candidate blocks it when it
-//! stands above the arc, the band is the upper hull after lowering every candidate by the arc's
-//! height above the chord, and path lengths are arcs `2Γ·asin(ℓ/2Γ)` between consecutive points.
+//! stands above the arc, the band joins S, the blocking candidates and R by arcs of that one radius
+//! (a point under the arc between its neighbours drops out), and path lengths are arcs
+//! `2Γ·asin(ℓ/2Γ)` between consecutive points.
 
 use super::ground::MeteorologicalState;
 
@@ -197,29 +198,29 @@ fn chord_altitude(from: PlanePoint, to: PlanePoint, x: f64) -> f64 {
 }
 
 /// The state's diffraction path over `candidates` (sorted by distance, strictly between S and
-/// R). `lowered` is scratch.
+/// R). `blocking` and `hull` are scratch.
 pub fn diffraction_path(
     ray: &StateRay,
     source: PlanePoint,
     receiver: PlanePoint,
     candidates: &[PlanePoint],
-    lowered: &mut Vec<(f64, f64, usize)>,
+    blocking: &mut Vec<(f64, f64, usize)>,
     hull: &mut Vec<(f64, f64, usize)>,
     path: &mut DiffractionPath,
 ) {
     path.points.clear();
     path.blocked = false;
-    lowered.clear();
+    blocking.clear();
     let sag = ray.sag(source, receiver);
-    let slope = (receiver.1 - source.1) / (receiver.0 - source.0);
     for (index, &(x, z)) in candidates.iter().enumerate() {
-        let z_lowered = z - sag.at(x - source.0);
-        if z_lowered > source.1 + slope * (x - source.0) {
-            lowered.push((x, z_lowered, index));
+        if z > chord_altitude(source, receiver, x) + sag.at(x - source.0) {
+            blocking.push((x, z, index));
         }
     }
-    if !lowered.is_empty() {
-        // Upper hull of S, the blocking candidates and R (monotone chain on sorted x).
+    if !blocking.is_empty() {
+        // The rubber band: S, the blocking candidates and R joined by the state's rays (straight in
+        // calm air, arcs of the one radius Γ downwind: 2021/1226 (9)(g)), a point on or under the
+        // ray from the point before it to the next one dropped (a monotone chain on sorted x).
         path.blocked = true;
         hull.clear();
         let ends = [
@@ -227,12 +228,14 @@ pub fn diffraction_path(
             (receiver.0, receiver.1, usize::MAX),
         ];
         for point in std::iter::once(ends[0])
-            .chain(lowered.iter().copied())
+            .chain(blocking.iter().copied())
             .chain(std::iter::once(ends[1]))
         {
             while hull.len() >= 2 {
                 let (a, b) = (hull[hull.len() - 2], hull[hull.len() - 1]);
-                if (b.0 - a.0) * (point.1 - a.1) - (b.1 - a.1) * (point.0 - a.0) >= 0.0 {
+                let (from, to) = ((a.0, a.1), (point.0, point.1));
+                let ray_at_b = chord_altitude(from, to, b.0) + ray.sag(from, to).at(b.0 - a.0);
+                if b.1 <= ray_at_b {
                     hull.pop();
                 } else {
                     break;
