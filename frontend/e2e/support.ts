@@ -117,12 +117,19 @@ async function installPopupSeam(page: Page): Promise<void> {
   })
 }
 
-/** The points the page requested from `/api/popup`, in order. */
-export async function popupRequests(page: Page): Promise<{ lat: number; lng: number }[]> {
+/** The points the page requested from `/api/popup`, in order, with the row whose segments and the
+ *  segment whose rays were asked for. */
+export async function popupRequests(page: Page): Promise<{ lat: number; lng: number; source?: string; piece?: number }[]> {
   const urls = await page.evaluate(() => (window as unknown as { __popup: PopupSeam }).__popup.requests)
   return urls.map(url => {
     const params = new URL(url, 'http://localhost').searchParams
-    return { lat: Number(params.get('lat')), lng: Number(params.get('lon')) }
+    const [source, piece] = [params.get('source'), params.get('piece')]
+    return {
+      lat: Number(params.get('lat')),
+      lng: Number(params.get('lon')),
+      ...(source ? { source } : {}),
+      ...(piece ? { piece: Number(piece) } : {}),
+    }
   })
 }
 

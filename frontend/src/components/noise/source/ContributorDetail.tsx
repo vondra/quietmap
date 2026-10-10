@@ -1,12 +1,14 @@
 // The opened body of a source row, a block apart from the next: a contributor's class and the facts
-// of its layer, its sound path, then its levels by period; the aircraft layer's
-// makeup, its levels, the flights of a day by their peak level here and its loudest flights.
+// of its layer, its sound path, its levels by period, then its segments, computed when opened; the
+// aircraft layer's makeup, its levels, the flights of a day by their peak level here and its loudest
+// flights.
 import type { AircraftEvents, AircraftKind, Contributor, ContributorPart, PeriodLevels, TopFlight } from '../../../types/noise'
 import { fmtCount, fmtDbValue, fmtPercent, wholePercents } from '../../../utils/formatters'
 import { FadingText } from '../../ui/fading-text'
 import { HoverText } from '../../ui/info-tip'
 import { aircraftEventRows } from '../aircraft-events'
 import { aircraftKindShares, contributorClass, labelNamesClass, partLabel, subtypeLabel } from '../labels'
+import { SegmentsSection, type SegmentsClick } from '../segments/SegmentsSection'
 import { CAPTION, COLUMN_NAME, DETAIL_TEXT, DetailTable, lineRow } from '../shared'
 import { MetadataRows } from './MetadataRows'
 import { PathTable } from './PathTable'
@@ -30,18 +32,18 @@ function LevelsTable({ received }: { received: PeriodLevels }) {
   )
 }
 
-const PARTS_TOOLTIP = 'What makes its sound: each part\'s level here and its share of the loudness.\nBuilding: its ventilation, cooling and heating.'
+const PARTS_TOOLTIP = 'What makes its sound: each part\'s level and its share of this source\'s\nloudness. Building: its ventilation, cooling and heating.'
 
 /** An object's parts: each one's level here and its share of the row's loudness. */
-function PartsTable({ parts }: { parts: ContributorPart[] }) {
+function PartsTable({ parts, rowName }: { parts: ContributorPart[], rowName: string }) {
   const percents = parts.every(part => part.share != null)
     ? wholePercents(parts.map(part => part.share!))
     : []
   return (
     <DetailTable
-      head={[<HoverText title={PARTS_TOOLTIP}>Made of</HoverText>, 'dB Lden', 'Share']}
+      head={[<HoverText title={PARTS_TOOLTIP}>Breakdown</HoverText>, 'dB Lden', 'Share']}
       rows={parts.map((part, k) => [
-        partLabel(part.metadata),
+        partLabel(part.metadata, rowName),
         fmtDbValue(part.received.lden),
         percents[k] == null ? '' : fmtPercent(percents[k]),
       ])}
@@ -49,7 +51,8 @@ function PartsTable({ parts }: { parts: ContributorPart[] }) {
   )
 }
 
-export function ContributorDetail({ c }: { c: Contributor }) {
+/** `click`: the answered click its segments are computed for (none before the final answer). */
+export function ContributorDetail({ c, click }: { c: Contributor, click?: SegmentsClick }) {
   return (
     <div className={DETAIL}>
       <div>
@@ -57,9 +60,10 @@ export function ContributorDetail({ c }: { c: Contributor }) {
         {!labelNamesClass(c) && <div>{subtypeLabel(c.source_type, contributorClass(c))}</div>}
         <MetadataRows c={c} />
       </div>
-      {c.parts && c.parts.length > 1 && <PartsTable parts={c.parts} />}
+      {c.parts && c.parts.length > 1 && <PartsTable parts={c.parts} rowName={c.name} />}
       {c.path && <PathTable path={c.path} />}
       <LevelsTable received={c.received} />
+      {click && <SegmentsSection c={c} click={click} />}
     </div>
   )
 }
@@ -127,7 +131,7 @@ export function AircraftLayerDetail({ received, kinds, events, flights, onHighli
     <div className={DETAIL}>
       {shares.length > 0 && (
         <DetailTable
-          caption={<HoverText title={KINDS_TOOLTIP}>Made of</HoverText>}
+          caption={<HoverText title={KINDS_TOOLTIP}>Breakdown</HoverText>}
           rows={shares.map(([label, share]) => [label, `${Math.round(100 * share)} %`])}
         />
       )}

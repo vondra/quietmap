@@ -1,7 +1,7 @@
 // The popup's one look, shared by its rows, their details and the detailed calculation: one font
 // with tabular figures, a value in the foreground colour and its label muted, a table's column names
 // fainter, a dotted underline for a hover tip and for nothing else, a chevron on whatever opens.
-// Display fields as text, distances, label-value lines and tables.
+// Display fields as text, distances, directions, label-value lines and tables.
 import type { ReactNode } from 'react'
 import { ChevronDown } from 'lucide-react'
 
@@ -23,6 +23,13 @@ export function formatDist(m: number): string {
   if (m === 0) return 'overhead'
   if (m < 1000) return `${m} m`
   return `${(m / 1000).toFixed(1)} km`
+}
+
+const COMPASS_POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const
+
+/** A bearing (degrees clockwise from north) as the nearest of the eight compass points. */
+export function compassPoint(bearingDeg: number): string {
+  return COMPASS_POINTS[Math.round((((bearingDeg % 360) + 360) % 360) / 45) % 8]
 }
 
 /** A label and its value on one line, the value right-aligned. */

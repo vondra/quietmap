@@ -162,7 +162,7 @@ export interface TopFlight {
 
 /** The levels exceeded 5, 10, 50 and 90 % of the time, per period (null where silent). */
 export interface PopupPercentiles {
-  l5?: { day: number | null; evening: number | null; night: number | null }
+  l5: { day: number | null; evening: number | null; night: number | null }
   l10: { day: number | null; evening: number | null; night: number | null }
   l50: { day: number | null; evening: number | null; night: number | null }
   l90: { day: number | null; evening: number | null; night: number | null }
@@ -208,23 +208,44 @@ export interface PieceTrace {
   ray?: [[number, number], [number, number]]
 }
 
-/** The segments view's pieces on the map: each listed piece's ends and its nearest ray in the
- *  colour of its row (the selected piece's marked), every ray the selected piece was summed over
- *  in the colour of what reaches the receiver along it, and the point the level is computed at. */
+/** What one ray of a piece's own run (`piece=`) was computed over: the ground under it from the
+ *  source (distance m, altitude m, G: 1 soft, 0 hard), the source's altitude, and the walls the
+ *  computation looked at: distance from the source (m), height above the ground (m), a building's
+ *  (true) or a barrier's (false). The receiver's altitude is the piece's trace's. */
+export interface RayProfile {
+  ground: [number, number, number][]
+  source_altitude_m: number
+  walls: [number, number, boolean][]
+}
+
+/** An opened row's segments on the map (`source`, the row's id): each listed piece in the colour
+ *  of its line in the list (the selected one marked), every ray the selected piece was summed over
+ *  in the colour of what it delivers (the selected ray marked), and the point the level is computed
+ *  at. */
 export interface SegmentFan {
+  source: string
   receiver: [number, number]
-  pieces: { ends: [number, number][], ray: [[number, number], [number, number]], color: string, selected: boolean }[]
-  rays: { from: [number, number], color: string }[]
+  pieces: { ends: [number, number][], color: string, selected: boolean }[]
+  rays: { from: [number, number], color: string, selected: boolean }[]
   /** What the map shows when the pieces first appear: the pieces that make the level. */
   overview: [number, number][]
   /** The opened piece's ends and rays, which the map frames as it opens. */
   opened: { index: number, points: [number, number][] } | null
 }
 
-/** One computed piece of the segments view (asked with `segments=1`). */
+/** How all of an opened row's sound arrives in calm air (asked with `source=`): its pieces, every
+ *  one computed, and the share of the energy reaching the point whose rays see it (`open`), bend
+ *  over a building or wall, or bend over terrain, each with what buildings and terrain take of it
+ *  (dB, negative). Kinds no ray takes are left out. */
+export interface PieceArrival {
+  pieces: number
+  edges: { edge: 'open' | 'buildings' | 'terrain', share: number, screening_db: number }[]
+}
+
+/** One of an opened row's loudest pieces (asked with `source=`). */
 export interface PopupPiece {
   source_type: string
-  /** Its contributor group's id. */
+  /** Its contributor group's id: the row's, or one of the row's parts'. */
   id: string
   /** [lat, lon] ends; one for a point source. */
   ends: [number, number][]
@@ -232,21 +253,21 @@ export interface PopupPiece {
   /** A-weighted emission (per metre of a line). */
   emission: PeriodLevels
   received: PeriodLevels
-  /** Its whole source's Lden: every piece of it, listed or not. */
-  source_lden: number | null
+  /** How its sound reaches the point, summed over its rays, as a row's. */
+  path: SourcePath
   metadata: ContributorMetadata | null
   /** Buildings and walls the ray crosses: distance from the receiver (m), height (m), id. */
   crossings: [number, number, string][]
   trace: PieceTrace | null
   /** Every ray the piece was summed over: [lat, lon] it leaves from, the in-plane angle it stands
-   *  for (rad; 0 for a point source, its one ray), the Lden it delivers (null: silent) and its
-   *  terms. */
-  rays?: [number, number, number, number | null, RayTerms?][]
+   *  for (rad; 0 for a point source, its one ray), the Lden it delivers (null: silent), its terms
+   *  and, in the piece's own run (`piece=`), the terrain under it. */
+  rays: [number, number, number, number | null, RayTerms, RayProfile?][]
 }
 
-/** One ray's terms (dB, losses positive): ground and screening in calm air and bent down,
- *  screening alone in calm air and bent down, the air's absorption; then its slant length (m). */
-export type RayTerms = [number, number, number, number, number, number] | null
+/** One ray's terms (dB, losses positive): ground and screening in calm air and downwind,
+ *  screening alone in calm air and downwind, the air's absorption; then its slant length (m). */
+export type RayTerms = [number, number, number, number, number, number]
 
 export interface PopupUpdate {
   seq: number
@@ -274,8 +295,10 @@ export interface PopupUpdate {
   rest_nden_sone?: number | null
   /** Its share of the place's loudness, a fraction (the final update's). */
   rest_share?: number | null
-  /** The segments view's pieces, when asked for. */
+  /** An opened row's 24 loudest pieces, loudest first, and how all of it arrives (the final
+   *  update, when asked with `source=`). */
   pieces?: PopupPiece[]
+  arrival?: PieceArrival
   stats: PopupStats
 }
 

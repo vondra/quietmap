@@ -48,14 +48,22 @@ test('every line is reported as it arrives, split across chunks, and a final upd
   assert.deepEqual(events, [['update', 1, true], ['update', 2, false]])
 })
 
-test('the request names the point', async (t) => {
-  let requested
+test('the request names the point, an opened row\'s parts and one of their pieces when asked for', async (t) => {
+  const requested = []
   t.mock.method(globalThis, 'fetch', async (url) => {
-    requested = url
+    requested.push(url)
     return new Response(`${JSON.stringify(update(1, false))}\n`)
   })
   await run().done
-  assert.equal(requested, '/api/popup?lat=50&lon=14')
+  const callbacks = { onUpdate: () => {}, onError: () => {} }
+  const source = ['98310618668d60db', 'a2d8108c83a87fed']
+  await streamPopup({ lat: 50, lng: 14 }, new AbortController().signal, callbacks, { source })
+  await streamPopup({ lat: 50, lng: 14 }, new AbortController().signal, callbacks, { source, piece: 0 })
+  assert.deepEqual(requested, [
+    '/api/popup?lat=50&lon=14',
+    '/api/popup?lat=50&lon=14&source=98310618668d60db%2Ca2d8108c83a87fed',
+    '/api/popup?lat=50&lon=14&source=98310618668d60db%2Ca2d8108c83a87fed&piece=0',
+  ])
 })
 
 test('an error line is an error, after whatever came before it', async (t) => {

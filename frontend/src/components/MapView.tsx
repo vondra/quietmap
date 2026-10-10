@@ -41,7 +41,7 @@ interface MapViewProps {
   detailPosition?: { lat: number; lng: number } | null
   /** What the popup highlights: a loudest flight's track or a contributor. */
   highlight?: GeoJSON.FeatureCollection | null
-  /** The segments view's rays from the computed pieces to the receiver. */
+  /** An opened row's segments and the rays of the one selected. */
   segmentFan?: SegmentFan | null
   quietClustersEnabled?: boolean
   quietThreshold?: number

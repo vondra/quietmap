@@ -11,13 +11,13 @@ const DISTANCE_ONLY = 'Its sound power spread over the distance, with nothing in
 const AIR_ABSORPTION = 'Absorbed by the air (ISO 9613-1): more at high pitch and over long distances'
 const BUILDINGS_AND_TERRAIN = 'Blocked by buildings, walls and hills in between (CNOSSOS-EU)'
 const GROUND_EFFECT = 'Soft ground (fields, forest floor) absorbs, hard ground (asphalt, water) reflects'
-const REFLECTIONS = 'Reflected by the buildings around the point'
+export const REFLECTIONS = 'Reflected by the buildings around the point'
 const CALM = 'Sound travels in straight lines'
 const DOWNWIND = 'Wind toward the point, or a temperature inversion at night, bends sound\ndown over obstacles and carries it further (CNOSSOS-EU favourable conditions)'
 const SHARE_OF_TIME = 'Day · evening · night (ERA5 weather, by direction)'
 
 /** A term in dB with its sign. */
-function signed(db: number | null): string {
+export function signed(db: number | null): string {
   if (db == null) return '—'
   const tenth = Math.round(db * 10) / 10
   return `${tenth > 0 ? '+' : tenth < 0 ? '−' : ''}${Math.abs(tenth).toFixed(1)}`
