@@ -25,15 +25,30 @@ pub const FINE_BOXES_WITHIN_M: f64 = 3_000.0;
 
 /// Whether `tile` is read with its fine boxes for a click at the origin of `frame`.
 pub fn reads_fine_boxes(frame: &LocalFrame, tile: TileId) -> bool {
+    tile_gap_m(frame, tile, [0.0, 0.0]) <= FINE_BOXES_WITHIN_M
+}
+
+/// Whether `tile` can hold a box within the aircraft reach of a receiver at `position` (click
+/// metres). The builder cuts every flight segment at the z12 tile edges before it cuts it into
+/// box pieces (build/src/boxes/place.rs `cut_into_pieces`), so a box's centroid, its pieces'
+/// weighted middle, lies in its own tile: a tile further away than the reach holds none in it
+/// (a metre for the centroid's rounding to tile steps).
+pub fn holds_boxes_in_reach(frame: &LocalFrame, tile: TileId, position: [f64; 2]) -> bool {
+    tile_gap_m(frame, tile, position) <= boxes::AIRCRAFT_REACH_M + 1.0
+}
+
+/// The horizontal distance (m) from `position` (click metres) to the nearest point of `tile`.
+fn tile_gap_m(frame: &LocalFrame, tile: TileId, position: [f64; 2]) -> f64 {
     let corner = |dx: f64, dy: f64| {
-        frame.to_metres(tiles::geo::Mercator {
+        let m = frame.to_metres(tiles::geo::Mercator {
             x: f64::from(tile.x) + dx,
             y: f64::from(tile.y) + dy,
-        })
+        });
+        [m[0] - position[0], m[1] - position[1]]
     };
     let (a, b) = (corner(0.0, 0.0), corner(1.0, 1.0));
     let gap = |low: f64, high: f64| (low.min(high)).max(-high.max(low)).max(0.0);
-    gap(a[0], b[0]).hypot(gap(a[1], b[1])) <= FINE_BOXES_WITHIN_M
+    gap(a[0], b[0]).hypot(gap(a[1], b[1]))
 }
 
 /// One ring's boxes at the receiver.
@@ -94,4 +109,27 @@ pub fn ring_aircraft(
         }
     }
     ring
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tiles::geo::Mercator;
+
+    /// Around Prague a z12 tile is 6.28 km wide; from the centre of the click's tile the third tile
+    /// east begins 15.7 km away, within the 16 km reach, the fifth 28.3 km away: no box of it can
+    /// be heard, unless the receiver stands 13 km nearer it (the rule follows the receiver).
+    #[test]
+    fn a_tile_beyond_the_reach_holds_no_box_in_reach() {
+        let centre = TileId::containing(Mercator::from_degrees(50.08, 14.42));
+        let frame = LocalFrame::at(centre.centre());
+        let east = |tiles: u32| TileId {
+            x: centre.x + tiles,
+            ..centre
+        };
+        assert!(holds_boxes_in_reach(&frame, east(3), [0.0, 0.0]));
+        assert!(!holds_boxes_in_reach(&frame, east(5), [0.0, 0.0]));
+        assert!(holds_boxes_in_reach(&frame, east(5), [13_000.0, 0.0]));
+        assert!(!reads_fine_boxes(&frame, east(2)));
+    }
 }

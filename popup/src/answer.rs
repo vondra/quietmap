@@ -5,7 +5,7 @@
 use crate::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver};
 use crate::aircraft::flights::FlightTotals;
 use crate::aircraft::horizons::Horizons;
-use crate::aircraft::{reads_fine_boxes, ring_aircraft};
+use crate::aircraft::{holds_boxes_in_reach, reads_fine_boxes, ring_aircraft};
 use crate::building::{BuildingClick, loudest_facade};
 use crate::candidates::{
     Attributes, Candidate, DisplayRef, GROUND_REACH_M, TileCandidates, collect,
@@ -147,6 +147,11 @@ pub fn answer(
             kinds.extend([Kind::Aircraft, Kind::AircraftFar]);
         }
         let fine = |tile: TileId| reads_fine_boxes(&frame, tile);
+        // Far boxes only from tiles that can hold one within reach of the receiver (the click
+        // until the first ring has placed it, a façade after).
+        let receiver_m = station
+            .as_ref()
+            .map_or([0.0, 0.0], |station| station.position);
         let cell = &rings[ring as usize];
         let _ = cell.set(RingFiles::read(
             release,
@@ -154,7 +159,7 @@ pub fn answer(
             kinds,
             |tile, kind| match kind {
                 Kind::Aircraft => fine(tile),
-                Kind::AircraftFar => !fine(tile),
+                Kind::AircraftFar => !fine(tile) && holds_boxes_in_reach(&frame, tile, receiver_m),
                 _ => true,
             },
         )?);
