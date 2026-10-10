@@ -35,7 +35,9 @@ export function parsePopupQuery(
   return {
     year,
     lat,
-    lon: ((((lon + 180) % 360) + 360) % 360) - 180,
+    // Only a longitude outside it wraps: the arithmetic moves an in-range one by 1e-14, enough to
+    // change the click's sampling seed against the same point asked of the popup directly.
+    lon: lon >= -180 && lon < 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180,
     ...(query.segments === '1' ? { segments: true } : {}),
   }
 }

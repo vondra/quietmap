@@ -120,6 +120,7 @@ test('a click may name a configured year; longitude wraps into -180..180', async
     ['lat=1&lon=190&year=2025', '2025', '-170'],
     ['lat=1&lon=180', '2026', '-180'],
     ['lat=1&lon=-540.5', '2026', '179.5'],
+    ['lat=1&lon=-15.6118', '2026', '-15.6118'],
   ]
   for (const [query, year, lon] of cases) {
     const [first] = await lines(await popup(query))
