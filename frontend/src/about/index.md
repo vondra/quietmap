@@ -35,6 +35,9 @@ Each source layer — roads, railways, aircraft, ships, industrial, buildings �
 → **[Read the full methodology](/about/methodology)** — source layers, propagation,
 the standards they use, known limits, and validation against real measurements.
 
+→ **[How it works](/about/how-it-works)** — how the data are stored, and how a click and the
+map are computed, step by step.
+
 ## Click anywhere
 
 Every point on the map can explain itself. Click, and a panel shows the Lden at that spot, its day, evening and night levels and how loud it sounds, then every source audible there, loudest first — a road as one row, a factory, the aircraft — each with the share it contributes.

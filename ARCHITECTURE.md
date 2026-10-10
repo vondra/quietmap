@@ -5,9 +5,13 @@ Nden, the day's mean loudness in sone, over Lden, the levels of day, evening and
 how the level spreads over time, the loudest contributors and the flights. Physics: CNOSSOS-EU
 (Directive 2015/996 as amended by 2021/1226) for ground sources, ECAC Doc 29 (4th ed.) for
 aircraft. The answer must be exact within a stated error budget and fast from a cold disk; the
-heatmap shows what the popup would answer at each pixel. Read this page first. How each source is
-modelled, with its data and numbers, is told once, in `frontend/src/about/methodology.md`, and in
-its builder's file header.
+heatmap shows what the popup would answer at each pixel. Read this page first. Two About pages
+tell the rest once, for visitors and developers alike: how the data are stored and how a click
+and the heatmap are computed, in `frontend/src/about/how-it-works.md` (the site's "How it
+works"); how each source is modelled, with its data and numbers, in
+`frontend/src/about/methodology.md` and in its builder's file header. This page holds what a
+developer needs beyond them: which code does what, the contracts and invariants between the
+parts, the commands and the budgets.
 
 ## Data flow
 
@@ -42,17 +46,19 @@ that knows the bytes); `bench/` the benchmark points and runner; `scripts/` the 
 
 ## Tiles
 
-Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide in Prague and
-9.8 km at the equator; a z9 directory holds 64 tiles.
+What each kind of file holds, with the world's sizes, is in How it works. Each kind's bytes are in
+its module's header, the only code that knows them; `tiles::tile_path` names a tile's file in the
+standard web-map XYZ numbering (y grows southwards). What the readers rely on beyond the page:
 
-| kind | content |
-|---|---|
-| `terrain` | raster: terrain height and ground type; neighbours share their seam samples |
-| `obstacles` | buildings and walls: outlines and heights, listed per z19 cell (128 x 128 a tile, 49 m in Prague) with a cell -> offset table |
-| `sources` | every ground source as a point or a straight piece in one of six layers (road, railway, industry, building, ship, aircraft ground operations), emission per octave band (63 Hz-8 kHz) and period as u16 in 0.01 dB; a few display fields |
-| `aircraft` | aircraft boxes (energy, flights and installation mix per period at the NPD distances), each with its two loudest flight pieces, and the tile's flight table |
-| `aircraft-far` | the same with boxes four times larger, read for tiles beyond 3 km of the click |
-| `aircraft-events` | per z16 cell (16 x 16 a tile) the flights of an average day whose loudest moment reaches 50, 60 and 70 dB, those at night, their mean height and commonest type, and the helicopters; no file where none reaches 50 dB |
+| kind | module | contract |
+|---|---|---|
+| `terrain` | `tiles/src/terrain.rs` | the one-arc-second node window that brackets the tile: neighbours share their seam nodes; a sample touching a node without data is refused, never guessed |
+| `obstacles` | `tiles/src/obstacles.rs` | outlines stored whole, listed per z19 cell (128 x 128 a tile) through a cell -> offset table |
+| `sources` | `tiles/src/sources.rs` | 12-byte pieces, 80-byte records, each distinct display text once; emission per octave band and period as u16 in 0.01 dB |
+| `aircraft`, `aircraft-far` | `tiles/src/aircraft.rs` | the boxes, each with its two loudest flight pieces, and the tile's flight table |
+| `aircraft-events` | `tiles/src/aircraft_events.rs` | 16 x 16 z16 cells a tile; no file where no flight reaches 50 dB |
+| `aircraft-tracks` | `tiles/src/aircraft_tracks.rs` | 256 files by the address's low byte, each sorted by address and start |
+| `weather` | `physics/src/weather.rs` | 0.5 deg nodes: favourable probability per period and 16 sectors in percent, absorption per octave in 0.01 dB/km |
 
 - Coordinates are int16 relative to the tile centre, step = tile width / 32,768: the tile spans
   +-16,384 steps and half a tile of margin fits on every side.
@@ -66,13 +72,11 @@ Standard web-map XYZ numbering (y grows southwards). A z12 tile is 6.3 km wide i
 - A release is complete when its builder wrote the completion marker last. Only then does a
   missing file mean "empty"; an unfinished build is never served.
 - The physics tables (NPD, CNOSSOS coefficients, the Doc 29 classes) are compiled into the
-  programs. The weather table is a file beside the year roots (0.5 deg, ERA5 1991-2020:
-  favourable probability per period and 16 sectors, and the yearly mean air absorption per
-  octave, ISO 9613-1): a click reads its own four nodes, the painter and the builders all of it.
-  Ground rays take the place's absorption, and the NPD curves are moved to the place's air from
-  the AIR-1845 atmosphere they come in (Doc 29 Appendix D, with the impedance adjustment), a
-  box's at the centre of its z9 square; roads roll at the place's yearly air temperature
-  (WorldClim 2.1, CNOSSOS 2.2.10), with the gradient and junction terms.
+  programs. A click reads the weather table's four nodes around it, the painter and the builders
+  all of it. Ground rays take the place's absorption, and the NPD curves are moved to the place's
+  air from the AIR-1845 atmosphere they come in (Doc 29 Appendix D, with the impedance
+  adjustment), a box's at the centre of its z9 square; roads roll at the place's yearly air
+  temperature (WorldClim 2.1, CNOSSOS 2.2.10), with the gradient and junction terms.
 - Tiles are read whole with plain reads, one task per file, a ring's files asked for together
   (cold on NVMe, 26 MB in 3-5 ms against 23-29 ms with mmap and MADV_WILLNEED, whose faults read
   32 KB at a time). The flight tracks are the exception: a file's directory, then each listed
@@ -138,80 +142,56 @@ metre.
 
 ## Popup
 
-Read the clicked tile and ring 1 (9 tiles, all kinds) and the aircraft events at the receiver,
-compute, send the first answer; then ring 2, 3, ... until every kind's reach is covered (ground
-sources 12 km, aircraft 16 km). A ring beyond a kind's reach skips that kind's files. One HTTP
-response streams the updates as lines of JSON. The receiver stands 4 m up and gains 0, 1.5 or
-3 dB from the reflecting facades around it.
+How a click computes, ring by ring, piece by piece and ray by ray, and how the popup's levels map
+onto those sums, is in How it works. The code, in the order of a click (`popup/src/`):
 
-1. Upper bound per ground source: free field plus the ground and diffraction gain (18 dB in
-   either state: an elevated source gains more than the 6 dB homogeneous corner of a ground
-   source) plus the receiver reflection. Sort per layer. Every aircraft box is evaluated (well
-   under a microsecond each); its LAmax bound only orders the flight list's search.
-2. Full physics from the loudest. One omitted-energy account per layer and period runs across
-   all rings: a source is skipped only while the bounds of everything skipped so far stay below
-   (10^(0.1/10) - 1) x the energy evaluated. Never a per-source threshold. A layer that would
-   need more than 1,024 evaluations samples the rest in proportion to their bounds
-   (Hansen-Hurwitz, 512 to 32,768 draws, until two standard errors are within 0.05 dB, seeded by
-   the click, so a click always answers the same): the usual path in cities.
-3. Lines through the point-sum quadrature; aircraft boxes by the click-time equation.
-4. One parallel pool over all layers' pieces; totals first. Each contributor also sums its
-   rays' energy after each term (distance alone, air, screening, then ground, in either
-   meteorological state): its sound path, whose terms add up to its level. An opened row's
-   segments come from a second run of the same click with the row's parts (`--source`): every
-   piece of them evaluated, how all of it arrives in calm air, and the 24 loudest with each ray
-   and the terms it was summed with.
-5. A click inside a building answers at its loudest CNOSSOS-EU 2.8 facade receiver, without
-   indoor attenuation: after the first read, the eleven sources with the greatest bound at any
-   facade are evaluated at every facade, the highest Lden wins, and the ring loop answers there;
-   a building without an exposed facade is not assessed. A building's source is never screened
-   by a footprint containing it (its own, or another outline of the same building).
-6. Until every ring is read the answer says it is partial. A failed read is an error, never a
-   quieter answer. Exact mode (benchmark only) is the same loop with the stop rule off.
-7. The final update also carries how the level spreads over each period: roads, railways and
-   aeroways are lines of Kurze's Poisson statistics at their own lambda, all flights one line at
-   their energy-weighted lambda, events (bells, calls) on for the share of the period they
-   sound, the rest steady; for every hour and weather state the lines are added on a 0.1 dB
-   grid, then the steady energy (computed, not drawn). From it come the levels exceeded 5, 10,
-   50 and 90 % of the time and Nden, the headline: the mean over the day of Zwicker's loudness
-   (ISO 532-1, sone) of every moment, the received third-octave spectrum (each ground layer's
-   octave bands as its evaluated pieces arrive, the flights' as the class the loudest listed
-   flight flew, through the place's air; a helicopter, which Doc 29 gives no spectral class,
-   takes the fallback's) set to the moment's level, the evening 5 dB and the night 10 dB up, the
-   periods by their hours. The list (30 rows, the rest in one row, the aircraft in one) ranks
-   every heard source by its own Nden, alone; the rest row's Nden takes its lines over 1 % of it
-   at their period's mean flow. Each row also carries its share of Nden (`shares.rs`): every
-   moment's loudness shared among the sources by their A-weighted energy at that moment, the
-   flows at their period's mean, so the rows add up to the whole; a moving line's part comes
-   from the moments before it (the distributions, forward) and the loudness per energy the lines
-   after it leave (backward). Partial updates rank by Lden. The final update also carries the
-   listed flights' tracks.
+- `answer.rs`: the ring loop. The clicked tile and ring 1 (9 tiles, all kinds) and the aircraft
+  events at the receiver, then ring 2, 3, ... until every kind's reach is covered
+  (`candidates::GROUND_REACH_M`, `aircraft::boxes::AIRCRAFT_REACH_M`); a ring beyond a kind's
+  reach skips that kind's files. An update after every ring.
+- `candidates.rs`: every piece of the files read, with its bound (`physics/src/bound.rs`).
+- `selection.rs`: the stop rule and the sample, one omitted-energy account per layer and period
+  across all rings, the evaluations of all layers in one parallel pool.
+- `evaluate.rs`: one source at the receiver, a point's ray or a line's quadrature nodes
+  (`physics/src/line.rs`), each through `physics/src/ray.rs` and `cnossos/`; its energy per
+  period and band, and its sound path, its rays' energy summed after each term.
+- `building.rs`: a click inside a building, answered at its loudest façade.
+- `aircraft/`: every box through the click-time equation, screened by the receiver's horizons;
+  the flight list, the events at the receiver, the listed flights' tracks.
+- `rows.rs` (the list, a row an object), `percentiles.rs` with `distribution.rs` (how the level
+  spreads over time), `loudness.rs` (Nden), `shares.rs` (each row's share), `lines.rs` (the
+  listed sources' lines for the map), `listing.rs` (the listed pieces and their rays, asked for
+  by `bin/qm-popup.rs`'s options), `json.rs` (an update as a line of JSON).
+
+Invariants:
+
+- The bound stays an upper bound of `ray` and `line`: a source is skipped only by the
+  omitted-energy account, never by a per-source threshold.
+- The sample is seeded by the click, so a click always answers the same.
+- Until every ring is read the answer says it is partial; each update is the whole answer so far,
+  one line of JSON in one streamed HTTP response. A failed read is an error, never a quieter
+  answer. Exact mode (`--exact 1`, benchmark only) is the same loop with the stop rule off.
+- A building's source is never screened by a footprint containing it (its own, or another
+  outline of the same building).
 
 ## Heatmap
 
-`qm-paint` (crate `paint-gpu`) paints z12 squares one after another at zoom 12 or 13 (512 or 1,024
-pixels a side), skipping those painted; a square's ground, obstacles, sources and boxes are read
-once, to the reach of its farthest pixel, and the exact evaluations run on a CUDA card (the popup's
-pair physics in f32) or on the cores. A ground source is loud at a point where its bound there
-reaches 20 dB (`physics::bound::REACH_EDGE_LDEN_DB`); the quiet rest, never dropped, is the hum,
-estimated by the popup's own selection at a coarse lattice's points (every 128 pixels at z13) and
-blended. Every loud source is evaluated exactly at a far lattice's points (every 64 pixels, a far
-cell, and one cell beyond the square) and, within two far cells, at the corners of 16-pixel blocks.
-A pixel evaluates exactly the loud sources crossing its block and the blocks around; every other
-loud source is blended, its near share (whole within 0.75 far cells of the block's centre, none
-beyond 2) from the block's corners and its far share from its far cell's points, in groups by layer,
-10-degree direction and doubling distance around the far cell's centre. A group holding 0.3 % of its
-layer gets one exact ray from its loudest member to the pixel, which scales the group: the shadow
-there. The blocks of a far cell group by the same directions and distances, and a pixel within a
-quarter block of a far cell's edge, the square's too (the far lattice reaches one cell beyond the
-square), blends the two cells' groupings: no grouping switches at an edge, only a block's exact
-sources and its sources' near shares change from block to block. Ground sources take the pixel's
-receiver reflection, the flights (blended from the block corners) do not; a pixel inside an enclosed
-building has no level. The tiles: per layer and the total, 512 x 512 cells of twice the Lden (255
-none); `qm-paint pack` builds every zoom down to 2 (energy means) into one PMTiles archive per layer
-and `current.json`, which the server publishes. `qm-paint-gpu etalon` paints the reference (every
-loud source exact at every pixel, the same hum), `compare` scores a map against it cell by cell and
-`popup` scores a map against popup clicks.
+How the map is painted is in How it works. `qm-paint` (crate `paint-gpu`) paints z12 squares one
+after another at zoom 12 or 13 (512 or 1,024 pixels a side, `--squares` or `--bbox`), skipping
+those painted; a square's files are read once, to the reach of its farthest pixel, and its exact
+evaluations run on the first CUDA card (`paint-gpu/kernels/`, the popup's pair physics in f32,
+each function citing its Rust) or on the cores. The method is the `paint` crate: `square.rs` (a
+square's neighbourhood, its sources indexed by place and reach), `exact.rs` (the points and the
+exact evaluation of (point, source) pairs), `lattice.rs` (the loud sources exact and the hum at a
+lattice), `paint.rs` and `groups.rs` (the pixels), `flights.rs` and `etalon.rs`. Loud is one rule
+for the painter, its etalon and the hum: `popup::candidates::loud`, a bound reaching
+`physics::bound::REACH_EDGE_LDEN_DB` (20 dB).
+
+The tiles (`hm3.rs`): per layer and the total, 512 x 512 cells of twice the Lden (255 none);
+`qm-paint pack` (`pack.rs`) builds every zoom down to 2 (energy means) into one PMTiles archive
+per layer and `current.json`, which the server publishes. `qm-paint-gpu check` holds the card
+equal to the cores on random pairs, `pair` compares one pair, `etalon` paints the reference,
+`compare` scores a map against it cell by cell and `popup` scores a map against popup clicks.
 
 ## Web
 
