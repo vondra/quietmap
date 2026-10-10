@@ -115,7 +115,7 @@ pub struct StateBoundary {
 #[derive(Default)]
 pub struct VerticalPathScratch {
     candidates: Vec<PlanePoint>,
-    lowered: Vec<(f64, f64, usize)>,
+    blocking: Vec<(f64, f64, usize)>,
     hull: Vec<(f64, f64, usize)>,
     pub path: DiffractionPath,
     pub calm_path: DiffractionPath,
@@ -158,7 +158,7 @@ fn boundary_on_candidates(
         state,
         direct,
         &scratch.candidates,
-        &mut scratch.lowered,
+        &mut scratch.blocking,
         &mut scratch.hull,
         &mut scratch.path,
     )
