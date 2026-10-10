@@ -66,7 +66,7 @@ pub(super) fn boundary_for_candidates(
     state: MeteorologicalState,
     shared: &DirectPath,
     candidates: &[PlanePoint],
-    lowered: &mut Vec<(f64, f64, usize)>,
+    blocking: &mut Vec<(f64, f64, usize)>,
     hull: &mut Vec<(f64, f64, usize)>,
     diffraction: &mut DiffractionPath,
 ) -> StateBoundary {
@@ -91,7 +91,7 @@ pub(super) fn boundary_for_candidates(
         source,
         receiver,
         candidates,
-        lowered,
+        blocking,
         hull,
         diffraction,
     );
