@@ -273,7 +273,7 @@ pub struct Square<'a> {
     pub tile: TileId,
     pub frame: LocalFrame,
     pub weather: &'a WeatherTable,
-    pub ground: Ground<'a>,
+    pub ground: Ground,
     pub obstacles: Scene<'a>,
     pub attributes: Attributes,
     pub candidates: Vec<Candidate>,

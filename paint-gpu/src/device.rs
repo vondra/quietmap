@@ -73,7 +73,6 @@ const THREADS_PER_BLOCK: u32 = 32;
 const TILE_NOT_READ: i32 = 0;
 const TILE_EMPTY: i32 = 1;
 const TILE_READ: i32 = 2;
-const TERRAIN_HEADER_BYTES: usize = 24;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -535,10 +534,7 @@ impl DeviceSquare {
                             pad: 0,
                             column_at_origin: column_at_origin as f32,
                             columns_per_metre: (columns_per_unit / frame.east_m_per_unit) as f32,
-                            nodes_offset: append_aligned(
-                                &mut nodes,
-                                &bytes[TERRAIN_HEADER_BYTES..],
-                            ),
+                            nodes_offset: append_aligned(&mut nodes, terrain.node_bytes()),
                             rows_offset: row_north_m.len() as u64,
                         };
                         row_north_m.extend(

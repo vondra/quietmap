@@ -192,7 +192,7 @@ pub fn collect(
     sources: &Sources<'_>,
     tile: TileId,
     display: (u16, u16),
-    ground: &Ground<'_>,
+    ground: &Ground,
     receiver: [f64; 2],
     reach_m: f64,
     receiver_bound: &ReceiverBound,

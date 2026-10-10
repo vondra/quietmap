@@ -42,6 +42,7 @@ fn fixture_at(lon: f64, height: impl Fn(i64, i64) -> f64, ocean: impl Fn(i32) ->
                         height_code: ((height(row, column) + 500.0) * 5.0).round() as u16,
                         impervious_percent: (row * 7 + column * 3).rem_euclid(101) as u8,
                         forest_percent: 0,
+                        canopy_m: 0,
                     }
                 })
                 .collect();

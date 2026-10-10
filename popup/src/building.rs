@@ -46,7 +46,7 @@ fn facade_at(
     receiver: &FacadeReceiver,
     index: usize,
     footprint: &Footprint,
-    ground: &Ground<'_>,
+    ground: &Ground,
     obstacles: &Scene<'_>,
 ) -> Result<Facade, String> {
     Ok(Facade {
@@ -65,7 +65,7 @@ pub fn loudest_facade(
     receivers: &[FacadeReceiver],
     candidates: &[&Candidate],
     attributes: &Attributes,
-    ground: &Ground<'_>,
+    ground: &Ground,
     obstacles: &Scene<'_>,
     weather: PlaceWeather,
 ) -> Result<Facade, String> {

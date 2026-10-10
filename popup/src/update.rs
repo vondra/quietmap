@@ -201,7 +201,7 @@ pub fn empty_answer(
     lat: f64,
     lon: f64,
     frame: LocalFrame,
-    ground: &Ground<'_>,
+    ground: &Ground,
     click: BuildingClick,
     selections: &[LayerSelection],
     (files, bytes, read_seconds, started): (usize, u64, f64, std::time::Instant),

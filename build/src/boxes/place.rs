@@ -53,7 +53,7 @@ struct TileGround {
 }
 
 impl TileGround {
-    fn build(tile: TileId, finest_zoom: u8, terrain: &HashMap<TileId, Terrain<'_>>) -> Self {
+    fn build(tile: TileId, finest_zoom: u8, terrain: &HashMap<TileId, Terrain>) -> Self {
         let finest = usize::from(finest_zoom - 12);
         let side = 1usize << finest;
         let per_axis =
@@ -127,7 +127,7 @@ impl Placement {
     /// the bands of a level step D of `level_step_db`.
     pub fn new(
         tiles: &HashSet<TileId>,
-        terrain: &HashMap<TileId, Terrain<'_>>,
+        terrain: &HashMap<TileId, Terrain>,
         level_step_db: f64,
     ) -> Self {
         let mut placement = Placement {

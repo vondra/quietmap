@@ -1,7 +1,7 @@
 // The tiles of a square's neighbourhood as the device reads them, in f32: the ground
 // (popup/src/scene.rs, tiles/src/terrain.rs) and the buildings and walls (popup/src/obstacles/
 // {mod,crossings,tile}.rs, tiles/src/obstacles), whose crossings with a ray are walked in order.
-// Files are uploaded as stored. Positions are metres
+// Terrain is uploaded as its decoded nodes, the obstacles files as stored. Positions are metres
 // of the square's frame; the host turns the tiles' absolute Mercator and node coordinates into
 // offsets from the frame's origin (device.rs), so no f32 ever holds a world coordinate.
 

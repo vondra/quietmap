@@ -12,19 +12,19 @@ use tiles::terrain::{
 const COLUMNS_AROUND: i64 = 360 * NODES_PER_DEGREE as i64;
 
 /// Terrain of every read tile within `radius` rings of the clicked tile, by offset.
-pub struct Ground<'a> {
+pub struct Ground {
     pub frame: LocalFrame,
     centre: TileId,
     radius: i64,
     /// `None`: not read (an error to sample); `Some(None)`: read, absent (ocean).
-    tiles: Vec<Option<Option<Terrain<'a>>>>,
+    tiles: Vec<Option<Option<Terrain>>>,
     /// Web Mercator y of every lattice row over the scene's tiles, the northernmost first: row
     /// `north_row - k` (its latitude times 3600) at index k.
     row_y: Vec<f64>,
     north_row: i64,
 }
 
-impl<'a> Ground<'a> {
+impl Ground {
     pub fn new(frame: LocalFrame, centre: TileId, radius: u32) -> Self {
         let side = 2 * radius as usize + 1;
         let latitude_at = |tile_y: i64| {
@@ -63,7 +63,7 @@ impl<'a> Ground<'a> {
     }
 
     /// Records a read tile's terrain (`None` for an absent file: ocean).
-    pub fn insert(&mut self, tile: TileId, terrain: Option<Terrain<'a>>) {
+    pub fn insert(&mut self, tile: TileId, terrain: Option<Terrain>) {
         let slot = self
             .slot(tile)
             .expect("a read tile lies within the scene radius");
@@ -93,7 +93,7 @@ impl<'a> Ground<'a> {
     }
 
     /// The terrain of a read tile: `Some(None)` for ocean, an error for a tile not read.
-    fn terrain_of(&self, tile: TileId) -> Result<Option<&Terrain<'a>>, String> {
+    fn terrain_of(&self, tile: TileId) -> Result<Option<&Terrain>, String> {
         self.slot(tile)
             .and_then(|slot| self.tiles[slot].as_ref())
             .map(Option::as_ref)
@@ -171,7 +171,7 @@ impl<'a> Ground<'a> {
         } else {
             north_of_start.checked_sub(1)
         };
-        let mut tile: Option<(TileId, Option<&Terrain<'a>>)> = None;
+        let mut tile: Option<(TileId, Option<&Terrain>)> = None;
         loop {
             let t_column = if columns != 0.0 {
                 (next_column - column_a) / columns
@@ -292,6 +292,7 @@ fn edge_sample(a: Option<Node>, b: Option<Node>, f: f64) -> Option<GroundSample>
                 f64::from(b.impervious_percent),
             ) / 100.0,
         forest_cover: f64::from(nearer.forest_percent.min(PERCENT_MAX)) / 100.0,
+        canopy_m: f64::from(nearer.canopy_m),
     })
 }
 

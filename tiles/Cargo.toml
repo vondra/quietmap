@@ -6,3 +6,4 @@ publish.workspace = true
 
 [dependencies]
 rayon = "1.12"
+zstd = "0.14"

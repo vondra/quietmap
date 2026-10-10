@@ -221,7 +221,7 @@ pub fn compare(
             std::fs::read(path).ok().map(|bytes| (tile, bytes))
         })
         .collect();
-    let terrain: HashMap<TileId, Terrain<'_>> = bytes
+    let terrain: HashMap<TileId, Terrain> = bytes
         .iter()
         .map(|(tile, bytes)| Terrain::parse(bytes).map(|terrain| (*tile, terrain)))
         .collect::<Result<_, _>>()

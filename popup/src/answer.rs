@@ -171,7 +171,7 @@ pub fn answer(
         );
         let candidates_started = std::time::Instant::now();
         type Parsed<'a> = (
-            Option<Terrain<'a>>,
+            Option<Terrain>,
             Option<Obstacles<'a>>,
             Option<Sources<'a>>,
             Option<Aircraft<'a>>,

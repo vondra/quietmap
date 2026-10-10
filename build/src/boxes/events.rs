@@ -231,7 +231,7 @@ impl Receivers {
                 terrain_bytes.insert(tile, bytes);
             }
         }
-        let terrain: HashMap<TileId, Terrain<'_>> = terrain_bytes
+        let terrain: HashMap<TileId, Terrain> = terrain_bytes
             .iter()
             .map(|(tile, bytes)| Terrain::parse(bytes).map(|terrain| (*tile, terrain)))
             .collect::<Result<_, _>>()

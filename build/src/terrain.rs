@@ -14,18 +14,20 @@ use tiles::Kind;
 use tiles::geo::{Mercator, TileId};
 use tiles::terrain::{HEIGHT_MISSING, NODES_PER_DEGREE, Node, Window, encode, height_m_of_code};
 
-/// One dev4 square's three channels; an empty square is verified ocean.
+/// One dev4 square's four channels; an empty square is verified ocean.
 struct SquareRaster {
     window: Window,
     dem: Vec<u8>,
     imd: Vec<u8>,
     forest: Vec<u8>,
+    canopy: Vec<u8>,
 }
 
 const OCEAN_NODE: Node = Node {
     height_code: 2_500,
     impervious_percent: 100,
     forest_percent: 0,
+    canopy_m: 0,
 };
 
 impl SquareRaster {
@@ -50,6 +52,7 @@ impl SquareRaster {
             dem: read("dem.u16le", 2)?,
             imd: read("imd.u8", 1)?,
             forest: read("forest.u8", 1)?,
+            canopy: read("canopy.u8", 1)?,
         })
     }
 
@@ -72,6 +75,8 @@ impl SquareRaster {
             height_code: u16::from_le_bytes([self.dem[2 * at], self.dem[2 * at + 1]]),
             impervious_percent: self.imd[at],
             forest_percent: self.forest[at],
+            // dev4's canopy channel is empty where GLAD has no data: no trees.
+            canopy_m: self.canopy.get(at).copied().unwrap_or(0),
         })
     }
 }

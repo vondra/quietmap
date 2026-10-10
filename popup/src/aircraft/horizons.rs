@@ -112,7 +112,7 @@ impl Horizons {
     /// horizon may lack far edges (edges only screen what lies behind them). The walls of
     /// `own_footprint`, the building a painted point stands in (0 for none), are no horizon.
     pub fn build(
-        ground: &Ground<'_>,
+        ground: &Ground,
         obstacles: &Scene<'_>,
         position: [f64; 2],
         altitude_m: f64,

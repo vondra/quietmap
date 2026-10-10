@@ -1,6 +1,10 @@
-//! `terrain` tiles: the one-arc-second lattice window of a z12 tile with height, imperviousness
-//! and forest cover per node. The window brackets the tile with floor/ceil node edges, so every
-//! point of the tile interpolates from its own file and neighbours share their seam nodes.
+//! `terrain` tiles: the one-arc-second lattice window of a z12 tile with height, imperviousness,
+//! forest cover and canopy height per node. The window brackets the tile with floor/ceil node
+//! edges, so every point of the tile interpolates from its own file and neighbours share their
+//! seam nodes. Stored as planes in one zstd frame, the heights as the residual of a planar
+//! prediction from the west, north and north-west nodes: 0.64 B a node of information in 4 stored
+//! raw (`evidence/2026-10-10/storage-design/terrain.md`: the world 1,108.6 -> 177.1 GB, lossless).
+//! A parsed tile holds its nodes decoded, 4 bytes each, as the samplers and the GPU index them.
 
 use crate::FormatError;
 use crate::geo::{Mercator, TILES_PER_AXIS, TileId};
@@ -11,9 +15,16 @@ pub const NODES_PER_DEGREE: i32 = 3600;
 pub const HEIGHT_MISSING: u16 = u16::MAX;
 /// Imperviousness and forest cover above this percentage mark a node without data.
 pub const PERCENT_MAX: u8 = 100;
-const MAGIC: &[u8; 8] = b"qmterr1\n";
+const MAGIC: &[u8; 8] = b"qmterr2\n";
 const HEADER_BYTES: usize = 24;
-const NODE_BYTES: usize = 4;
+/// A decoded node: height code u16 LE, imperviousness, forest cover.
+pub const NODE_BYTES: usize = 4;
+/// The frame's planes, n bytes each: the height residual's low and high bytes, imperviousness,
+/// forest cover, canopy height.
+const PLANES: usize = 5;
+/// zstd level of a tile: 19 (zstd-9 is 4.6 % larger and builds 13x faster; terrain is rebuilt
+/// rarely).
+const ZSTD_LEVEL: i32 = 19;
 
 /// Metres of a height code: -500 m + code / 5 (0.2 m steps up to 12,606.8 m), EGM2008.
 pub fn height_m_of_code(code: u16) -> f64 {
@@ -69,9 +80,11 @@ pub struct Node {
     pub impervious_percent: u8,
     /// Canopy cover, 0-100 % (above: no data).
     pub forest_percent: u8,
+    /// Height of the tree canopy above the ground, metres (GLAD 2020 through dev4's rasters).
+    pub canopy_m: u8,
 }
 
-/// Ground under one point: bilinear height and ground factor, nearest forest cover.
+/// Ground under one point: bilinear height and ground factor, nearest forest cover and canopy.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GroundSample {
     pub height_m: f64,
@@ -79,6 +92,8 @@ pub struct GroundSample {
     pub ground_factor: f64,
     /// Canopy cover fraction in [0, 1].
     pub forest_cover: f64,
+    /// Canopy height above the ground (m).
+    pub canopy_m: f64,
 }
 
 /// An absent terrain file in a complete release: sea level, hard water, no forest.
@@ -86,38 +101,64 @@ pub const OCEAN: GroundSample = GroundSample {
     height_m: 0.0,
     ground_factor: 0.0,
     forest_cover: 0.0,
+    canopy_m: 0.0,
 };
 
-/// The bytes of a terrain file: header, then row-major nodes of 4 bytes (height code u16 LE,
-/// imperviousness u8, forest cover u8).
+/// The planar prediction of node (r, c) from its west, north and north-west neighbours (0 off the
+/// window), in the u16 ring: encoding stores the height minus it, decoding adds it back.
+fn predicted(heights: &[u16], columns: usize, r: usize, c: usize) -> u16 {
+    let at = |r: usize, c: usize| heights[r * columns + c];
+    let west = if c > 0 { at(r, c - 1) } else { 0 };
+    let north = if r > 0 { at(r - 1, c) } else { 0 };
+    let north_west = if r > 0 && c > 0 { at(r - 1, c - 1) } else { 0 };
+    west.wrapping_add(north).wrapping_sub(north_west)
+}
+
+/// The bytes of a terrain file: the header, then one zstd frame of the five planes, row-major,
+/// the height residual zigzag-coded (small of either sign: small codes).
 pub fn encode(window: Window, nodes: &[Node]) -> Vec<u8> {
     assert_eq!(nodes.len(), window.node_count());
-    let mut bytes = Vec::with_capacity(HEADER_BYTES + NODE_BYTES * nodes.len());
+    let (n, columns) = (nodes.len(), window.columns as usize);
+    let heights: Vec<u16> = nodes.iter().map(|node| node.height_code).collect();
+    let mut planes = vec![0u8; PLANES * n];
+    for (at, node) in nodes.iter().enumerate() {
+        let residual =
+            node.height_code
+                .wrapping_sub(predicted(&heights, columns, at / columns, at % columns))
+                as i16;
+        let zigzag = ((residual << 1) ^ (residual >> 15)) as u16;
+        planes[at] = zigzag as u8;
+        planes[n + at] = (zigzag >> 8) as u8;
+        planes[2 * n + at] = node.impervious_percent;
+        planes[3 * n + at] = node.forest_percent;
+        planes[4 * n + at] = node.canopy_m;
+    }
+    let frame = zstd::bulk::compress(&planes, ZSTD_LEVEL).expect("zstd compresses a buffer");
+    let mut bytes = Vec::with_capacity(HEADER_BYTES + frame.len());
     bytes.extend_from_slice(MAGIC);
     bytes.extend_from_slice(&window.north_node.to_le_bytes());
     bytes.extend_from_slice(&window.west_node.to_le_bytes());
     bytes.extend_from_slice(&window.rows.to_le_bytes());
     bytes.extend_from_slice(&window.columns.to_le_bytes());
-    for node in nodes {
-        bytes.extend_from_slice(&node.height_code.to_le_bytes());
-        bytes.push(node.impervious_percent);
-        bytes.push(node.forest_percent);
-    }
+    bytes.extend_from_slice(&frame);
     bytes
 }
 
-/// A parsed terrain file borrowing its bytes.
-pub struct Terrain<'a> {
+/// A parsed terrain file: its nodes decoded.
+pub struct Terrain {
     window: Window,
-    nodes: &'a [u8],
+    /// `NODE_BYTES` a node, row-major.
+    nodes: Vec<u8>,
+    /// Canopy height (m) a node, row-major.
+    canopy_m: Vec<u8>,
     /// Web Mercator y (z12 tile units) of every node row: a sample finds its rows without a
     /// transcendental function. Between two rows 31 m apart, latitude is linear in y to within
     /// 1e-6 of the row spacing (0.03 mm).
     row_mercator_y: Vec<f64>,
 }
 
-impl<'a> Terrain<'a> {
-    pub fn parse(bytes: &'a [u8]) -> Result<Self, FormatError> {
+impl Terrain {
+    pub fn parse(bytes: &[u8]) -> Result<Self, FormatError> {
         if bytes.len() < HEADER_BYTES || &bytes[..8] != MAGIC {
             return Err(FormatError("terrain: bad magic"));
         }
@@ -128,8 +169,27 @@ impl<'a> Terrain<'a> {
             rows: word(16),
             columns: word(20),
         };
-        if bytes.len() != HEADER_BYTES + NODE_BYTES * window.node_count() {
-            return Err(FormatError("terrain: length does not match the window"));
+        let (n, columns) = (window.node_count(), window.columns as usize);
+        let planes = zstd::bulk::decompress(&bytes[HEADER_BYTES..], PLANES * n)
+            .map_err(|_| FormatError("terrain: the frame does not decode"))?;
+        if planes.len() != PLANES * n {
+            return Err(FormatError("terrain: the frame does not match the window"));
+        }
+        let mut heights = vec![0u16; n];
+        let mut nodes = vec![0u8; NODE_BYTES * n];
+        for at in 0..n {
+            let zigzag = u16::from(planes[at]) | (u16::from(planes[n + at]) << 8);
+            let residual = ((zigzag >> 1) as i16) ^ -((zigzag & 1) as i16);
+            let height = (residual as u16).wrapping_add(predicted(
+                &heights,
+                columns,
+                at / columns,
+                at % columns,
+            ));
+            heights[at] = height;
+            nodes[NODE_BYTES * at..NODE_BYTES * at + 2].copy_from_slice(&height.to_le_bytes());
+            nodes[NODE_BYTES * at + 2] = planes[2 * n + at];
+            nodes[NODE_BYTES * at + 3] = planes[3 * n + at];
         }
         let row_mercator_y = (0..window.rows)
             .map(|row| {
@@ -139,9 +199,15 @@ impl<'a> Terrain<'a> {
             .collect();
         Ok(Terrain {
             window,
-            nodes: &bytes[HEADER_BYTES..],
+            nodes,
+            canopy_m: planes[4 * n..].to_vec(),
             row_mercator_y,
         })
+    }
+
+    /// The decoded nodes, `NODE_BYTES` each, row-major: what the GPU painter uploads.
+    pub fn node_bytes(&self) -> &[u8] {
+        &self.nodes
     }
 
     /// Web Mercator y of every node row (the GPU painter samples with these very values).
@@ -154,12 +220,13 @@ impl<'a> Terrain<'a> {
     }
 
     pub fn node(&self, row: u32, column: u32) -> Node {
-        let at = NODE_BYTES * (row as usize * self.window.columns as usize + column as usize);
-        let record = &self.nodes[at..at + NODE_BYTES];
+        let index = row as usize * self.window.columns as usize + column as usize;
+        let record = &self.nodes[NODE_BYTES * index..NODE_BYTES * (index + 1)];
         Node {
             height_code: u16::from_le_bytes([record[0], record[1]]),
             impervious_percent: record[2],
             forest_percent: record[3],
+            canopy_m: self.canopy_m[index],
         }
     }
 
@@ -232,6 +299,7 @@ impl<'a> Terrain<'a> {
             height_m: height,
             ground_factor: 1.0 - impervious / 100.0,
             forest_cover: f64::from(nearest.forest_percent) / 100.0,
+            canopy_m: f64::from(nearest.canopy_m),
         })
     }
 }
@@ -267,6 +335,44 @@ mod tests {
         assert!(here.north_node - (here.rows as i32) < south.north_node);
     }
 
+    /// Every node comes back as written: random heights (steep jumps, the no-data code and the
+    /// u16 ends wrap the prediction), percents and canopies on an odd window.
+    #[test]
+    fn a_tile_decodes_to_the_nodes_it_was_encoded_from() {
+        let window = Window {
+            north_node: 181_042,
+            west_node: 50_625,
+            rows: 37,
+            columns: 53,
+        };
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let nodes: Vec<Node> = (0..window.node_count())
+            .map(|at| Node {
+                height_code: match next() % 7 {
+                    0 => HEIGHT_MISSING,
+                    1 => 0,
+                    2 => (next() % 65_536) as u16,
+                    _ => 2_500 + (at as u16 % 53) * 3 + (next() % 5) as u16,
+                },
+                impervious_percent: (next() % 101) as u8,
+                forest_percent: (next() % 102) as u8,
+                canopy_m: (next() % 61) as u8,
+            })
+            .collect();
+        let terrain = Terrain::parse(&encode(window, &nodes)).unwrap();
+        assert_eq!(terrain.window(), window);
+        for (at, node) in nodes.iter().enumerate() {
+            let (row, column) = ((at as u32) / window.columns, (at as u32) % window.columns);
+            assert_eq!(terrain.node(row, column), *node, "node {at}");
+        }
+    }
+
     #[test]
     fn samples_interpolate_heights_and_refuse_missing_nodes() {
         let window = Window {
@@ -279,6 +385,7 @@ mod tests {
             height_code: ((metres + 500.0) * 5.0) as u16,
             impervious_percent: impervious,
             forest_percent: forest,
+            canopy_m: forest / 4,
         };
         let nodes = [
             node(100.0, 0, 0),

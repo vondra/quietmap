@@ -164,6 +164,7 @@ mod tests {
                         height_code: 7500,
                         impervious_percent: if corner { 80 } else { 0 },
                         forest_percent: if corner { 50 } else { 101 },
+                        canopy_m: 0,
                     }
                 })
             })

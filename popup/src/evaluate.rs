@@ -15,7 +15,7 @@ use physics::weather::PlaceWeather;
 
 /// What every source of one click shares.
 pub struct Receiver<'s, 'a> {
-    pub ground: &'s Ground<'a>,
+    pub ground: &'s Ground,
     pub obstacles: &'s Scene<'a>,
     /// Where the receiver stands (click metres): the click, or a building's façade receiver.
     pub position: [f64; 2],
