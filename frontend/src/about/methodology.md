@@ -14,6 +14,9 @@ evening and night levels and the levels exceeded 5, 10, 50 and 90 % of the time.
 from every source within 12 km, aircraft within 16 km. Layers are computed independently
 and can be toggled separately.
 
+How the data are stored, and how a click and the map are computed step by step, is on the
+[How it works](/about/how-it-works) page.
+
 Inside a building, the click panel shows the level at its noisiest façade point, placed as
 the EU method (CNOSSOS-EU) places receivers for building exposure. Receivers sit at most
 5 m apart along each façade, 0.1 m in front of the wall and 4 m above ground, with the
