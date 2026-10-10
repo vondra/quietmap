@@ -42,9 +42,9 @@ map are computed, step by step.
 
 Every point on the map can explain itself. Click, and a panel shows the Lden at that spot, its day, evening and night levels and how loud it sounds, then every source audible there, loudest first — a road as one row, a factory, the aircraft — each with the share it contributes.
 
-Open a source and you see its data (vehicles a day and their mix, speed, surface, trains a day, the flights and their types…) and how it is heard: a steady hum, so many cars an hour, a train every so many minutes. The ten loudest flights are listed.
+Open a source and you see its data (vehicles a day and their mix, speed, surface, trains a day, the flights and their types…), how it is heard (a steady hum, so many cars an hour, a train every so many minutes) and how its sound gets to you: what the distance, the air, buildings and terrain and the ground take in calm air and downwind. Open its segments and each one shows the rays it was computed along, each with the ground and the buildings under it, drawn on the map. The ten loudest flights are listed.
 
-**Detailed calculation** is the raw computation: per period and layer, the weather, and the pieces of road, track and flight path that count most, each drawn on the map with what the distance, the air, the ground, the terrain and the buildings took off on its path, band by band.
+**Detailed calculation** is the whole place: each period, each layer and how much of it was computed in full, the weather, the façade the click is answered at, and the levels exceeded 5 to 90 % of the time.
 
 <p>
 <img src="click.jpg" alt="A click on náměstí Míru in Prague: the level and its sources, the loudest road opened with its data" style="display:inline-block;width:300px;max-width:48%;vertical-align:top;margin:0 12px 0 0">

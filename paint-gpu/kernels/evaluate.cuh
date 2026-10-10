@@ -1,6 +1,6 @@
 // The full physics of one source at a receiver: popup/src/evaluate.rs (a point on one ray, a line
 // piece through its quadrature nodes), the weather of the receiver (physics/src/weather.rs) and
-// the receiver itself (paint/src/levels.rs Point::outdoors).
+// the receiver itself (paint/src/exact.rs Point::at).
 
 // physics/src/weather.rs
 #define SECTORS 16
@@ -9,7 +9,7 @@
 #define WEATHER_NODE_BYTES (PERIODS * SECTORS + 2 * BANDS)
 #define WEATHER_NODES_PER_DEGREE 2
 
-// paint/src/levels.rs, popup/src/answer.rs RECEIVER_HEIGHT_M
+// paint/src/exact.rs, popup/src/answer.rs RECEIVER_HEIGHT_M
 #define RECEIVER_HEIGHT_M 4.0f
 
 // physics::weather::PlaceWeather
