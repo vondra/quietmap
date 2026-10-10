@@ -1,12 +1,14 @@
 // The detailed calculation of an answered click, opened inside the popup under its list: the day,
 // evening and night with their levels, shares of Lden and loudness, the layers with their levels
-// and shares, and then every source with its computed pieces and their rays, drawn on the map.
-// For finding out why a number is what it is, and where the data or the physics went wrong.
+// and shares, the place's weather, and then every source with its computed pieces and their rays,
+// drawn on the map. For finding out why a number is what it is, and where the data or the physics
+// went wrong.
 import type { ReactNode } from 'react'
 import type { PopupUpdate, SegmentFan } from '../../types/noise'
-import { fmtSone } from '../../utils/formatters'
+import { fmtDbValue as level, fmtSone } from '../../utils/formatters'
 import { SOURCE_LABELS } from '../noise/labels'
 import { SEGMENTS_EXPLAINED, SegmentsSection } from '../noise/segments/SegmentsSection'
+import { CAPTION, DETAIL_TEXT, DetailTable } from '../noise/shared'
 import { HoverText } from '../ui/info-tip'
 
 /** END periods: their hours of the day and the penalty Lden adds, for each period's share. */
@@ -16,44 +18,24 @@ const PERIODS = [
   { key: 'ln', sone: 'night', name: 'Night', hours: 8, penalty: 10 },
 ] as const
 
-const level = (db: number | null | undefined) => (db == null || db <= 0 ? '—' : db.toFixed(1))
-
 const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW']
 
-const WEATHER_EXPLAINED = 'How often the weather here bends sound down toward the ground\n'
-  + '(wind behind it or a temperature inversion: CNOSSOS-EU\'s favourable\n'
-  + 'conditions, which carry it further) for sound arriving from each\n'
-  + 'direction, by period, from ERA5 1991-2020; and how much the air\n'
-  + 'absorbs per km in each octave (ISO 9613-1 at the place\'s climate)'
+const PERIODS_EXPLAINED = 'Each period\'s level, its share of Lden (the evening counts 5 dB and the\n'
+  + 'night 10 dB louder) and how loud it sounds on average (ISO 532-1)'
+
+const WEATHER_EXPLAINED = 'How often the wind or an inversion bends sound down to the ground and\n'
+  + 'carries it further (CNOSSOS-EU\'s favourable conditions), for sound\n'
+  + 'from each direction (ERA5 1991–2020); and what the air absorbs\n'
+  + 'in each octave (ISO 9613-1, the place\'s climate)'
 
 function Section({ title, hint, children }: { title: string, hint: string, children: ReactNode }) {
   return (
-    <section className="mt-3">
-      <h3 className="mb-0.5 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+    <section className="mt-4">
+      <h3 className={`${CAPTION} mb-1`}>
         <HoverText title={hint}>{title}</HoverText>
       </h3>
       {children}
     </section>
-  )
-}
-
-/** A table whose numeric columns are right-aligned. */
-function Table({ head, rows }: { head: ReactNode[], rows: ReactNode[][] }) {
-  return (
-    <table className="w-full text-[11px] font-mono tabular-nums">
-      <thead>
-        <tr className="text-[10px] font-sans text-muted-foreground/70">
-          {head.map((cell, k) => <th key={k} className={`py-0.5 font-normal ${k === 0 ? 'text-left' : 'pl-1.5 text-right'}`}>{cell}</th>)}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, r) => (
-          <tr key={r} className="border-t border-border/40">
-            {row.map((cell, k) => <td key={k} className={`py-0.5 ${k === 0 ? 'text-left font-sans' : 'pl-1.5 text-right'}`}>{cell}</td>)}
-          </tr>
-        ))}
-      </tbody>
-    </table>
   )
 }
 
@@ -76,9 +58,9 @@ export default function CalculationDetails({ data, onFan }: {
   const share = (lden: number | null) => (lden == null ? '—' : `${Math.round(100 * 10 ** ((lden - total) / 10))} %`)
 
   return (
-    <div data-testid="calculation">
-      <Section title="Day, evening, night" hint={'Each period\'s level, its share of the Lden energy (the evening\ncounts 5 dB and the night 10 dB up, EU Directive 2002/49) and\nits mean loudness as it sounds (ISO 532-1, every moment by\nits level); Nden counts the evening 5 dB and the night 10 dB\nlouder, as Lden does, and weighs the periods by their hours'}>
-        <Table
+    <div data-testid="calculation" className={DETAIL_TEXT}>
+      <Section title="Day, evening, night" hint={PERIODS_EXPLAINED}>
+        <DetailTable
           head={['', 'dB', 'Share', 'Sone']}
           rows={PERIODS.map((p, k) => [
             p.name,
@@ -89,35 +71,37 @@ export default function CalculationDetails({ data, onFan }: {
         />
       </Section>
 
-      <Section title="Layers" hint={'Each layer\'s levels by period, its Lden and its share of the\nLden energy'}>
-        <Table
-          head={['', 'Day', 'Eve', 'Night', 'Lden', 'Share']}
+      <Section title="Layers" hint="Each layer's levels and its share of Lden">
+        <DetailTable
+          head={['', 'Day', 'Evening', 'Night', 'Lden', 'Share']}
           rows={layers.map(layer => [
             SOURCE_LABELS[layer.source_type] ?? layer.source_type,
             level(layer.ld),
             level(layer.le),
             level(layer.ln),
-            <b key="l">{level(layer.lden)}</b>,
+            level(layer.lden),
             share(layer.lden),
           ])}
         />
       </Section>
 
       {data.weather && (
-        <Section title="Weather here" hint={WEATHER_EXPLAINED}>
-          <Table
-            head={['Sound from', 'Day', 'Eve', 'Night']}
-            rows={COMPASS.map((name, k) => [
-              name,
-              // Sound arriving from the south travels north: sector k + 8.
-              ...data.weather!.favourable_percent.map(row => `${row[(k + 8) % 16]} %`),
-            ])}
-          />
-          <Table
-            head={['Air, dB/km', '63', '125', '250', '500', '1k', '2k', '4k', '8k']}
-            // Three significant figures, so the eight bands fit the card's width (0.12 to 113).
-            rows={[['', ...data.weather.alpha_db_per_km.map(alpha => alpha.toFixed(alpha < 10 ? 2 : alpha < 100 ? 1 : 0))]]}
-          />
+        <Section title="Weather" hint={WEATHER_EXPLAINED}>
+          <div className="space-y-2">
+            <DetailTable
+              head={['Sound from', 'Day %', 'Evening %', 'Night %']}
+              rows={COMPASS.map((name, k) => [
+                name,
+                // Sound arriving from the south travels north: sector k + 8.
+                ...data.weather!.favourable_percent.map(row => String(row[(k + 8) % 16])),
+              ])}
+            />
+            <DetailTable
+              head={['Hz', '63', '125', '250', '500', '1k', '2k', '4k', '8k']}
+              // Three significant figures, so the eight bands fit the card's width (0.12 to 113).
+              rows={[['Air dB/km', ...data.weather.alpha_db_per_km.map(alpha => alpha.toFixed(alpha < 10 ? 2 : alpha < 100 ? 1 : 0))]]}
+            />
+          </div>
         </Section>
       )}
 

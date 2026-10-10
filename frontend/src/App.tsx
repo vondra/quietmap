@@ -11,7 +11,7 @@ import BasemapBar from './components/BasemapBar'
 import { sameDetailPosition, useUrlState, QUIET_THRESHOLD_DEFAULT, type UrlState } from './hooks/useUrlState'
 import type { SelectedLocation } from './components/FlyToLocation'
 import type { PopupUpdate, SegmentFan } from './types/noise'
-import { topFlightKey } from './components/noise/top-flights'
+import { contributorHighlight, highlightGeoJson, topFlightKey } from './components/noise/top-flights'
 import { DEFAULT_BASEMAP, type BasemapId } from './utils/basemaps'
 import { setDocumentTitle } from './utils/page-title'
 import RecentPlaces from './components/RecentPlaces'
@@ -46,9 +46,13 @@ export default function App() {
   const desktop = useIsDesktop()
   // The last places opened, newest first, kept in this browser.
   const [recentPlaces, setRecentPlaces] = useState<RecentPlace[]>(loadRecentPlaces)
-  const highlightedTrack = highlighted?.startsWith('source:')
-    ? noiseDetailData?.top_contributors.find(c => `source:${c.id}` === highlighted)?.geometry ?? null
-    : noiseDetailData?.top_flights.find(f => topFlightKey(f) === highlighted)?.track ?? null
+  const highlightedSource = highlighted?.startsWith('source:')
+    ? noiseDetailData?.top_contributors.find(c => `source:${c.id}` === highlighted)
+    : undefined
+  const highlightedTrack = noiseDetailData?.top_flights.find(f => topFlightKey(f) === highlighted)?.track
+  const highlight = highlightedSource?.geometry
+    ? contributorHighlight(highlightedSource)
+    : highlightedTrack ? highlightGeoJson(highlightedTrack) : null
   const [quietClustersEnabled, setQuietClustersEnabled] = useState(initial.quietClusters)
   const [quietThreshold, setQuietThreshold] = useState(initial.quietThreshold ?? QUIET_THRESHOLD_DEFAULT)
   const [basemap, setBasemap] = useState<BasemapId>(initial.basemap ?? DEFAULT_BASEMAP)
@@ -358,7 +362,7 @@ export default function App() {
         onHashState={handleHashState}
         onDetailError={handleDetailError}
         detailPosition={detailPosition}
-        flightTrack={highlightedTrack}
+        highlight={highlight}
         segmentFan={fan}
         quietClustersEnabled={quietClustersEnabled}
         quietThreshold={quietThreshold}

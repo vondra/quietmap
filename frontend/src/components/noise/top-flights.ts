@@ -1,7 +1,8 @@
 // A loudest flight in words and on the map: its cells (peak level, where it passed, when (UTC) and
 // in which period, what flew, the link to its trace on the adsb.lol globe) and its track as
-// GeoJSON. Pure TypeScript, so both have dependency-free unit tests.
-import type { TopFlight } from '../../types/noise.ts'
+// GeoJSON; a contributor on the map, a ship cell as its square. Pure TypeScript, so they have
+// dependency-free unit tests.
+import type { Contributor, TopFlight } from '../../types/noise.ts'
 import { aircraftTypeName } from '../../utils/aircraft-types.ts'
 
 /** The flight across the streamed updates of one click: one aircraft, one start. */
@@ -10,26 +11,55 @@ export function topFlightKey(flight: TopFlight): string {
 }
 
 /** Highlighted pieces as the map draws them, lines of [lon, lat]: a flight's track or a contributor's
- *  lines, and a point source's dot. The altitude stays out: a GeoJSON height is above the ellipsoid,
- *  the track's above sea level, and the map is flat. */
-export function highlightGeoJson(pieces: number[][][]): GeoJSON.FeatureCollection {
+ *  lines, a point source's dot, and an area's outline (closed rings of [lat, lon]). The altitude
+ *  stays out: a GeoJSON height is above the ellipsoid, the track's above sea level, and the map is
+ *  flat. */
+export function highlightGeoJson(pieces: number[][][], areas: number[][][] = []): GeoJSON.FeatureCollection {
   const lines = pieces.filter(piece => piece.length >= 2)
   const points = pieces.filter(piece => piece.length === 1)
+  const lonLat = ([lat, lon]: number[]) => [lon, lat]
   return {
     type: 'FeatureCollection',
     features: [
       {
         type: 'Feature',
         properties: {},
-        geometry: { type: 'MultiLineString', coordinates: lines.map(piece => piece.map(([lat, lon]) => [lon, lat])) },
+        geometry: { type: 'MultiLineString', coordinates: lines.map(piece => piece.map(lonLat)) },
       },
       {
         type: 'Feature',
         properties: {},
-        geometry: { type: 'MultiPoint', coordinates: points.map(([[lat, lon]]) => [lon, lat]) },
+        geometry: { type: 'MultiPoint', coordinates: points.map(([point]) => lonLat(point)) },
+      },
+      {
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'MultiPolygon', coordinates: areas.map(ring => [ring.map(lonLat)]) },
       },
     ],
   }
+}
+
+/** Metres of a degree of latitude, and of longitude on the equator. */
+const M_PER_DEGREE = 111_320
+
+/** The square of `areaM2` around the middle of `points` ([lat, lon]), as a closed ring. */
+export function cellSquare(points: number[][], areaM2: number): number[][] {
+  const lat = points.reduce((sum, [pointLat]) => sum + pointLat, 0) / points.length
+  const lon = points.reduce((sum, [, pointLon]) => sum + pointLon, 0) / points.length
+  const half = Math.sqrt(areaM2) / 2 / M_PER_DEGREE
+  const [north, east] = [half, half / Math.cos((lat * Math.PI) / 180)]
+  return [[lat - north, lon - east], [lat - north, lon + east], [lat + north, lon + east], [lat + north, lon - east], [lat - north, lon - east]]
+}
+
+/** What the map draws of a contributor: its pieces as computed; a ship cell, whose vessels the
+ *  builder spreads over sub-cells sent as their points, the square of its area around them. */
+export function contributorHighlight(c: Contributor): GeoJSON.FeatureCollection {
+  const pieces = c.geometry ?? []
+  const area = c.metadata?.area_m2
+  return c.source_type === 'ship' && typeof area === 'number' && area > 0 && pieces.length
+    ? highlightGeoJson([], [cellSquare(pieces.map(([point]) => point), area)])
+    : highlightGeoJson(pieces)
 }
 
 /** In the order of the popup's period labels. */

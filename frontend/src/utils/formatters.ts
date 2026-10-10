@@ -5,13 +5,8 @@ export function fmt(v: number): string {
   return v > 0 ? `+${v.toFixed(1)}` : v.toFixed(1)
 }
 
-/** A level: `12.3 dB`, or "—" for silence and for any level at or under the popup's 0 dB display
- *  floor (a night level of -20.1 dB tells nothing a dash does not). */
-export function fmtDb(v: number | null | undefined): string {
-  return v == null || v <= 0 ? '—' : `${v.toFixed(1)} dB`
-}
-
-/** Same as fmtDb but just the number, for strings like "12.3/—/8.7 dB". */
+/** A level in dB to a tenth, or "—" for silence and for any level at or under the popup's 0 dB
+ *  display floor (a night level of -20.1 dB tells nothing a dash does not). */
 export function fmtDbValue(v: number | null | undefined): string {
   return v == null || v <= 0 ? '—' : v.toFixed(1)
 }
@@ -26,6 +21,15 @@ export function fmtSone(sone: number): string {
 /** Rounds to integer and formats with thousands separators. */
 export function fmtInt(v: number): string {
   return Math.round(v).toLocaleString('en-US')
+}
+
+/** A rate or a mean count as the popup writes every one (flights a day, vessels at a time): whole
+ *  from ten, one decimal from one, below one its first significant digit, so one flight a year
+ *  reads 0.003 a day; under a thousandth "<0.001". */
+export function fmtCount(count: number): string {
+  if (count >= 9.95) return fmtInt(count)
+  if (count >= 0.995) return count.toFixed(1).replace(/\.0$/, '')
+  return count >= 0.001 ? String(Number(count.toPrecision(1))) : '<0.001'
 }
 
 /** Compact number formatting: 12 345 → "12k", 1 234 567 → "1.2M". */

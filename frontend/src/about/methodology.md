@@ -174,7 +174,7 @@ Ship noise is derived from AIS vessel-density products: EMODnet 2024 for Europea
 12 million water cells and about 131 million vessel-hours per month in total.
 
 Source sound powers are estimated at 108 dB(A) for large ships, 98 dB(A) for work boats
-and 88 dB(A) for leisure craft, based on [Fredianelli et al. (2020)](https://doi.org/10.3390/su12051740)
+and 88 dB(A) for leisure boats, based on [Fredianelli et al. (2020)](https://doi.org/10.3390/su12051740)
 and [Schiavoni et al. (2022)](https://pmc.ncbi.nlm.nih.gov/articles/PMC9518360/).
 These class averages do not describe individual vessels. Sound travels over hard water,
 with terrain and building screening.

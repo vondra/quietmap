@@ -193,3 +193,10 @@ html, body {
   .about-prose hr { @apply my-8 border-border; }
   .about-prose img { @apply h-auto max-w-full rounded-md; }
 }
+
+/* A name its box cuts fades out over its last characters instead of ending in an ellipsis
+   (components/ui/fading-text.tsx). */
+.fade-out-end {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 1.5rem), transparent);
+}

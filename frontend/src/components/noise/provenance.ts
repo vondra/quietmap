@@ -1,6 +1,7 @@
 // Where a contributor's traffic comes from, in words: counted or estimated per road vehicle class,
 // known, estimated or unknown per train category. Pure TypeScript, so the wording has
 // dependency-free unit tests.
+import { fmtCount } from '../../utils/formatters.ts'
 
 /** Prepared road traffic: effective vehicles/day per class plus the builder's estimated bitmask
  *  (light 1, medium 2, heavy 4, moto 8; bit set = estimate or prior, clear = observed count). */
@@ -51,10 +52,19 @@ export function railTrainSourceLine(category: RailCategoryTraffic): string {
 
 const railCount = (value: number): string => value.toLocaleString('en', { maximumSignificantDigits: 3 })
 
-export function railTrafficLabel(traffic: RailTraffic): string {
-  const categories = [traffic.passenger, traffic.freight]
-  const count = categories.flatMap(category => category.periods).reduce((sum, value) => sum + value, 0)
-  return `${railCount(count)}/day${categories.some(category => category.status === 0) ? ' + unknown' : ''}`
+/** The trains a day by category, the row beside it having their sum: a category without trains
+ *  left out, an unknown one named ("86 passenger · 16 freight/day", "60 passenger/day · freight
+ *  unknown"); a level crossing's horn its soundings. */
+export function railTrafficLabel(traffic: RailTraffic, soundings = false): string {
+  const categories: Array<[string, RailCategoryTraffic]> = soundings
+    ? [['soundings', traffic.passenger]]
+    : [['passenger', traffic.passenger], ['freight', traffic.freight]]
+  const daily = (category: RailCategoryTraffic) => category.periods.reduce((sum, value) => sum + value, 0)
+  const running = categories
+    .filter(([, category]) => category.status !== 0 && daily(category) > 0)
+    .map(([name, category]) => `${fmtCount(daily(category))} ${name}`)
+  const unknown = categories.filter(([, category]) => category.status === 0).map(([name]) => `${name} unknown`)
+  return [...(running.length ? [`${running.join(' · ')}/day`] : []), ...unknown].join(' · ') || '0/day'
 }
 
 export function railTrafficDescription(

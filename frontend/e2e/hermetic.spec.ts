@@ -184,7 +184,8 @@ test('desktop: the segments view groups the computed pieces under their source',
     ],
   })
   const segments = page.locator('[data-testid="segments"]:visible')
-  await expect(segments.getByRole('button', { name: /Fixture/ })).toHaveText([/^▾ Fixture street\s*63\.0$/])
+  await expect(segments.getByRole('button', { name: /Fixture/ })).toHaveText([/^Fixture street\s*63\.0$/])
+  await expect(segments.getByRole('button', { name: /Fixture/ })).toHaveAttribute('aria-expanded', 'true')
   const pieces = segments.getByRole('button', { name: /●/ })
   await expect(pieces).toHaveText([/●\s+E\s+12 m\s*\+2\.5\s*\+2\.4\s*61\.2/, /●\s+E\s+40 m\s*−3\.1\s*−1\.2\s*55\.4/])
   await pieces.nth(1).click()
