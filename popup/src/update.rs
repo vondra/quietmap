@@ -105,7 +105,8 @@ pub struct Update<'u> {
     /// The building the click stands in, and its chosen façade.
     pub building: Option<BuildingClick>,
     pub layers: Vec<LayerAnswer>,
-    pub contributors: Vec<Contributor>,
+    /// The visitor's list, its rows.
+    pub rows: Vec<crate::rows::Row>,
     /// The loudest flights so far.
     pub flights: Vec<LoudFlight>,
     /// The loudest evaluated pieces per layer (final update, when asked for).
@@ -223,7 +224,7 @@ pub fn empty_answer(
         weather: None,
         building: Some(click),
         layers: layer_answers(selections),
-        contributors: Vec::new(),
+        rows: Vec::new(),
         flights: Vec::new(),
         pieces: Vec::new(),
         statistics: Statistics {

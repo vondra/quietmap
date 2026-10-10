@@ -159,6 +159,12 @@ pub fn group_key(parts: &[&str]) -> u64 {
     hash
 }
 
+/// A source's object as its display writes it: the group key of the source it is a part of, as
+/// the popup writes a group's id.
+pub fn object_key(group_key: u64) -> String {
+    format!("{group_key:016x}")
+}
+
 /// The mapped places whose sound the buildings carry: places of worship (bells, calls to prayer)
 /// and bars, restaurants and cafés (the people outside them).
 #[derive(Clone, Copy, Default)]

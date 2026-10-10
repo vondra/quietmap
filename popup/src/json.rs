@@ -176,8 +176,24 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
         layers.push(Value::Object(object));
     }
     let mut contributors = Vec::new();
-    for contributor in &update.contributors {
-        let display = (update.display_record)(contributor.display, contributor.layer)?;
+    for row in &update.rows {
+        let contributor = row.principal();
+        let mut display = (update.display_record)(contributor.display, contributor.layer)?;
+        let parts_display = row
+            .parts
+            .iter()
+            .map(|part| (update.display_record)(part.display, part.layer))
+            .collect::<Result<Vec<Value>, String>>()?;
+        // An object is named by its first part that has a name (a bar's building may have none).
+        let named = |display: &Value| {
+            let name = display.get("name").and_then(Value::as_str);
+            name.filter(|name| !name.is_empty()).map(str::to_string)
+        };
+        if named(&display).is_none()
+            && let Some(name) = parts_display.iter().find_map(named)
+        {
+            display["name"] = json!(name);
+        }
         let mut object = Map::new();
         object.insert(
             "id".into(),
@@ -193,23 +209,23 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 .cloned()
                 .unwrap_or(Value::Null),
         );
-        object.insert("distance_m".into(), json!(contributor.distance_m.round()));
+        object.insert("distance_m".into(), json!(row.distance_m().round()));
         let mut received = Map::new();
-        periods(&mut received, &contributor.energy);
+        periods(&mut received, &row.energy());
         object.insert(
             "received_lden".into(),
             received.get("lden").cloned().unwrap_or(Value::Null),
         );
         object.insert("received".into(), Value::Object(received));
-        if let Some(own) = contributor.nden_sone {
+        if let Some(own) = row.nden_sone {
             object.insert("nden_sone".into(), json!(sone(own)));
         }
-        if let Some(part) = contributor.share {
+        if let Some(part) = row.share {
             object.insert("share".into(), json!(share(part)));
         }
         object.insert(
             "path".into(),
-            path_account(&contributor.path, update.reflection_db),
+            path_account(&row.path(), update.reflection_db),
         );
         object.insert("metadata".into(), display);
         if let Some(heard) = contributor.heard {
@@ -222,6 +238,23 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                     "steady": heard.steady,
                 }),
             );
+        }
+        // An object of several sources: each part, the loudest alone first, with its display,
+        // what it delivers and its share.
+        if row.parts.len() > 1 {
+            let mut parts = Vec::new();
+            for (part, metadata) in row.parts.iter().zip(parts_display) {
+                let mut levels = Map::new();
+                periods(&mut levels, &part.energy);
+                parts.push(json!({
+                    "id": format!("{:016x}", part.group_key),
+                    "source_type": part.layer.name(),
+                    "metadata": metadata,
+                    "received": levels,
+                    "share": part.share.map(share),
+                }));
+            }
+            object.insert("parts".into(), Value::Array(parts));
         }
         // What the map draws of it as lines of [lat, lon], one point for a point source: all of it
         // within the reach in the final update (what the shared budget leaves it, maybe nothing),
@@ -244,9 +277,9 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                 })
                 .collect()
         } else {
-            contributor
-                .lines
+            row.parts
                 .iter()
+                .flat_map(|part| part.lines.iter())
                 .map(|line| Value::Array(line.iter().map(degrees).collect()))
                 .collect()
         };

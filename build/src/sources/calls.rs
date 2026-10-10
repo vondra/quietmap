@@ -262,7 +262,7 @@ pub fn convert_calls(
             (horns, height, screen),
             ("call_to_prayer", name),
             (&plan, HORN_SPECTRUM),
-            &key,
+            (&key, mosque.and_then(Host::object)),
             out,
         );
         calling += 1;
@@ -329,6 +329,7 @@ mod tests {
             footprint_id: 9,
             name: "Yeni Cami".into(),
             worship: true,
+            group_key: 90,
         }];
         let refs: Vec<&WorshipSite> = sites.iter().collect();
         let square = sites[0].square();

@@ -130,6 +130,16 @@ function kindOf(c: Contributor): string {
   return cls ? subtypeLabel(c.source_type, cls) : SOURCE_LABELS[c.source_type] ?? c.source_type
 }
 
+/** What a part of an object makes the sound: a place's guests, its bells or call to prayer, else
+ *  the building itself (its ventilation, cooling and heating). */
+export function partLabel(metadata: Record<string, unknown> | null): string {
+  const kind = typeof metadata?.building_type === 'string' ? metadata.building_type : ''
+  if (kind === 'church_bells') return 'Bells'
+  if (kind === 'call_to_prayer') return 'Call to prayer'
+  if (kind.startsWith('people_')) return 'Guests outside'
+  return 'Building'
+}
+
 /** The contributor's name, else its number with what it numbers ("Road 2404"), else its class in
  *  words. */
 export function contributorLabel(c: Contributor): string {

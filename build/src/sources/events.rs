@@ -5,7 +5,7 @@
 
 use super::Converted;
 use super::cells::{Site, Z30Ring, push_site_points, site_points};
-use super::group_key;
+use super::{group_key, object_key};
 use physics::bands::{BANDS, PERIOD_HOURS};
 use physics::emission::spectrum::SoundPower;
 use serde_json::json;
@@ -76,12 +76,13 @@ pub fn event_emission(
 }
 
 /// The events as one point source `height_m` above the ground at `point` (lat, lon), screened by
-/// everything but `footprint_id`, listed as `label` under `name`.
+/// everything but `footprint_id`, listed as `label` under `name`, a part of `object` (the group key
+/// of the building it belongs to) where there is one.
 pub fn push_event_source(
     (point, height_m, footprint_id): ((f64, f64), f64, u64),
     (label, name): (&str, &str),
     (schedule, spectrum_db): (&EventSchedule, [f64; BANDS]),
-    key: &str,
+    (key, object): (&str, Option<u64>),
     out: &mut Vec<Converted>,
 ) {
     let (sound, duty, while_sounding) = event_emission(schedule, spectrum_db);
@@ -114,6 +115,7 @@ pub fn push_event_source(
             null,
             schedule.events_per_day.map(|e| (e * 100.0).round() / 100.0),
             duty.map(|d| (d * 1e5).round() / 1e5),
+            object.map(object_key),
         ])
         .to_string(),
     };

@@ -167,7 +167,7 @@ pub fn convert_bells(
             (centre, height_m, footprint_id),
             ("church_bells", name),
             (&plan, BELL_SPECTRUM),
-            &key,
+            (&key, host.and_then(Host::object)),
             out,
         );
         rung += 1;
@@ -236,6 +236,7 @@ mod tests {
             footprint_id: 7,
             name: "St Nicholas".into(),
             worship: true,
+            group_key: 70,
         }];
         let iso = |code: &[u8; 2]| u16::from_le_bytes(*code);
         let refs: Vec<&WorshipSite> = sites.iter().collect();

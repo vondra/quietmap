@@ -1,12 +1,12 @@
 // The opened body of a source row, a block apart from the next: a contributor's class and the facts
 // of its layer, its sound path, then its levels by period; the aircraft layer's
 // makeup, its levels, the flights of a day by their peak level here and its loudest flights.
-import type { AircraftEvents, AircraftKind, Contributor, PeriodLevels, TopFlight } from '../../../types/noise'
-import { fmtCount, fmtDbValue } from '../../../utils/formatters'
+import type { AircraftEvents, AircraftKind, Contributor, ContributorPart, PeriodLevels, TopFlight } from '../../../types/noise'
+import { fmtCount, fmtDbValue, fmtPercent, wholePercents } from '../../../utils/formatters'
 import { FadingText } from '../../ui/fading-text'
 import { HoverText } from '../../ui/info-tip'
 import { aircraftEventRows } from '../aircraft-events'
-import { aircraftKindShares, contributorClass, labelNamesClass, subtypeLabel } from '../labels'
+import { aircraftKindShares, contributorClass, labelNamesClass, partLabel, subtypeLabel } from '../labels'
 import { CAPTION, COLUMN_NAME, DETAIL_TEXT, DetailTable, lineRow } from '../shared'
 import { MetadataRows } from './MetadataRows'
 import { PathTable } from './PathTable'
@@ -30,6 +30,25 @@ function LevelsTable({ received }: { received: PeriodLevels }) {
   )
 }
 
+const PARTS_TOOLTIP = 'What makes its sound: each part\'s level here and its share of the loudness.\nBuilding: its ventilation, cooling and heating.'
+
+/** An object's parts: each one's level here and its share of the row's loudness. */
+function PartsTable({ parts }: { parts: ContributorPart[] }) {
+  const percents = parts.every(part => part.share != null)
+    ? wholePercents(parts.map(part => part.share!))
+    : []
+  return (
+    <DetailTable
+      head={[<HoverText title={PARTS_TOOLTIP}>Made of</HoverText>, 'dB Lden', 'Share']}
+      rows={parts.map((part, k) => [
+        partLabel(part.metadata),
+        fmtDbValue(part.received.lden),
+        percents[k] == null ? '' : fmtPercent(percents[k]),
+      ])}
+    />
+  )
+}
+
 export function ContributorDetail({ c }: { c: Contributor }) {
   return (
     <div className={DETAIL}>
@@ -38,6 +57,7 @@ export function ContributorDetail({ c }: { c: Contributor }) {
         {!labelNamesClass(c) && <div>{subtypeLabel(c.source_type, contributorClass(c))}</div>}
         <MetadataRows c={c} />
       </div>
+      {c.parts && c.parts.length > 1 && <PartsTable parts={c.parts} />}
       {c.path && <PathTable path={c.path} />}
       <LevelsTable received={c.received} />
     </div>

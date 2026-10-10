@@ -181,6 +181,8 @@ pub struct Host {
     pub footprint_id: u64,
     pub name: String,
     pub worship: bool,
+    /// The group key of the building's own source.
+    pub group_key: u64,
 }
 
 impl Host {
@@ -188,6 +190,12 @@ impl Host {
     /// something else.
     pub fn worship_name(&self) -> &str {
         if self.worship { &self.name } else { "" }
+    }
+
+    /// The source its bells or calls belong to: the place of worship's building, not another
+    /// building they hang from.
+    pub fn object(&self) -> Option<u64> {
+        self.worship.then_some(self.group_key)
     }
 }
 
@@ -264,6 +272,7 @@ mod tests {
             footprint_id: lat.to_bits(),
             name: String::new(),
             worship,
+            group_key: lat.to_bits(),
         };
         let hosts = [
             host(50.0001, false),

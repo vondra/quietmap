@@ -7,7 +7,7 @@
 use super::Converted;
 use super::cells::{Site, Z30Ring, push_site_points, site_points};
 use super::venues::{VenueKind, VenueSite, cluster_weight, customs, hours, seats};
-use super::{group_key, metres};
+use super::{group_key, metres, object_key};
 use crate::climate::Climate;
 use crate::dev4::{degrees_to_z30, z30_corner_degrees};
 use physics::emission::people::{
@@ -71,18 +71,18 @@ fn crowd_shares(sites: &[VenueSite]) -> Vec<Option<f64>> {
         .collect()
 }
 
-/// The people of the square's places at `positions` (z30, outside their buildings). Returns how
-/// many emit.
+/// The people of the square's places at `positions` (z30, outside their buildings), each a part of
+/// its `hosts` building's source where it has one. Returns how many emit.
 pub fn convert_people(
     sites: &[VenueSite],
-    positions: &[(i32, i32)],
+    (positions, hosts): (&[(i32, i32)], &[Option<u64>]),
     (country_iso, climate): (u16, &Climate),
     out: &mut Vec<Converted>,
 ) -> usize {
     let customs = customs(country_iso);
     let crowds = crowd_shares(sites);
     let mut emitting = 0;
-    for ((site, &position), crowd) in sites.iter().zip(positions).zip(crowds) {
+    for (((site, &position), crowd), host) in sites.iter().zip(positions).zip(crowds).zip(hosts) {
         let (open, terrace) = hours(site, &customs);
         let drinking = matches!(
             site.kind,
@@ -144,7 +144,11 @@ pub fn convert_people(
                 0,
                 0,
                 "",
-                (loudest * 10.0).round() / 10.0
+                (loudest * 10.0).round() / 10.0,
+                null,
+                null,
+                null,
+                host.map(object_key)
             ])
             .to_string(),
         };

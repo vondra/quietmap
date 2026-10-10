@@ -132,7 +132,7 @@ fn road_answer(release: &Release, exact: bool) -> ([f64; PERIODS], usize, usize)
                 .iter()
                 .find(|layer| layer.layer == Layer::Road)
                 .unwrap();
-            last = Some((road.energy, road.evaluated, update.contributors.len()));
+            last = Some((road.energy, road.evaluated, update.rows.len()));
             Ok(())
         },
     )
@@ -189,7 +189,7 @@ fn the_last_row_counts_the_sources_the_list_leaves_out() {
                 .iter()
                 .find(|layer| layer.layer == Layer::Road)
                 .unwrap();
-            last = Some((update.contributors.len(), road.unlisted_sources));
+            last = Some((update.rows.len(), road.unlisted_sources));
             Ok(())
         },
     )

@@ -18,8 +18,8 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use tiles::sources::Layer;
 
-/// The shares of the visitor's list, fractions of the whole: each listed row's, the aircraft
-/// row's and the last row's (everything else).
+/// The shares of the visitor's list, fractions of the whole: each listed contributor's, the
+/// aircraft row's and the last row's (everything else).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RowShares {
     pub listed: Vec<f64>,
@@ -27,12 +27,12 @@ pub struct RowShares {
     pub rest: f64,
 }
 
-/// The shares of `listed` (the ground rows, in order), the aircraft layer (its flights and its
-/// airports' ground operations) and the rest, from the click's lines and what they leave steady
-/// ([`crate::percentiles::click_lines`]).
+/// The shares of `listed` (the ground contributors the list names, in order), the aircraft layer
+/// (its flights and its airports' ground operations) and the rest, from the click's lines and what
+/// they leave steady ([`crate::percentiles::click_lines`]).
 pub fn row_shares(
     selections: &[LayerSelection],
-    listed: &[Contributor],
+    listed: &[&Contributor],
     (lines, remainder): (&[Line], [f64; PERIODS]),
     curves: &[Curve; PERIODS],
 ) -> RowShares {

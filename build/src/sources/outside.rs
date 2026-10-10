@@ -11,10 +11,12 @@ const OUT_FROM_WALL_M: f64 = 1.5;
 /// Grid cells of 2^12 z30 units (about 150 m at the equator) index the points.
 const CELL_SHIFT: u32 = 12;
 
-/// The points of a square and, once footprints are offered, where each goes.
+/// The points of a square and, once footprints are offered, where each goes and the source a
+/// point belongs to: the building it was mapped in, where that building is offered as one.
 pub struct OutsidePlacer {
     points: Vec<(i32, i32)>,
     moved: Vec<Option<(i32, i32)>>,
+    hosts: Vec<Option<u64>>,
     grid: HashMap<(i32, i32), Vec<usize>>,
     /// z30 units of a metre on the ground at the square's latitude.
     units_per_m: f64,
@@ -78,6 +80,7 @@ impl OutsidePlacer {
         }
         OutsidePlacer {
             moved: vec![None; points.len()],
+            hosts: vec![None; points.len()],
             points,
             grid,
             units_per_m: 1.0 / (Z30_QUANTUM_M * latitude.to_radians().cos()),
@@ -92,8 +95,9 @@ impl OutsidePlacer {
     }
 
     /// A footprint's part (its exterior, then its holes): the points inside it go outside its
-    /// nearest wall.
-    pub fn offer(&mut self, part: &[Vec<(i32, i32)>]) {
+    /// nearest wall; those mapped inside it belong to `host`, the group key of the source its
+    /// building is, if it is one.
+    pub fn offer(&mut self, part: &[Vec<(i32, i32)>], host: Option<u64>) {
         let Some(exterior) = part.first().filter(|ring| ring.len() >= 3) else {
             return;
         };
@@ -108,8 +112,19 @@ impl OutsidePlacer {
                     continue;
                 };
                 for &index in indices {
+                    let mapped = self.points[index];
+                    let mapped_at = (f64::from(mapped.0) + 0.5, f64::from(mapped.1) + 0.5);
+                    if host.is_some()
+                        && self.hosts[index].is_none()
+                        && inside(mapped_at, exterior)
+                        && !part[1..]
+                            .iter()
+                            .any(|hole| hole.len() >= 3 && inside(mapped_at, hole))
+                    {
+                        self.hosts[index] = host;
+                    }
                     // Overlapping outlines move a point on from where the last one left it.
-                    let point = self.moved[index].unwrap_or(self.points[index]);
+                    let point = self.moved[index].unwrap_or(mapped);
                     if point.0 < min.0 || point.0 > max.0 || point.1 < min.1 || point.1 > max.1 {
                         continue;
                     }
@@ -141,6 +156,11 @@ impl OutsidePlacer {
             .map(|(&point, moved)| moved.unwrap_or(point))
             .collect()
     }
+
+    /// Each point's host: the group key of the building source it was mapped in, if any.
+    pub fn hosts(&self) -> &[Option<u64>] {
+        &self.hosts
+    }
 }
 
 #[cfg(test)]
@@ -160,8 +180,10 @@ mod tests {
         let mut placer =
             OutsidePlacer::new(vec![at(10.0, 3.0), at(10.0, 5.0), at(10.0, -4.0)], 0.0);
         assert!(placer.near(at(10.0, 5.0)));
-        placer.offer(&[outline, courtyard]);
+        placer.offer(&[outline, courtyard], Some(7));
         let positions = placer.positions();
+        // The bar belongs to its building; the courtyard café and the terrace to none.
+        assert_eq!(placer.hosts(), &[Some(7), None, None]);
         let metres = |p: (i32, i32)| (f64::from(p.0) / m, f64::from(p.1) / m);
         let bar = metres(positions[0]);
         assert!(

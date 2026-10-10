@@ -70,6 +70,16 @@ export interface SourcePath {
   bent_percent: [number | null, number | null, number | null]
 }
 
+/** One part of a row whose object has several sources (a bar's guests and its building): its
+ *  display record, what it delivers and its share of the place's loudness. */
+export interface ContributorPart {
+  id: string
+  source_type: string
+  metadata: ContributorMetadata | null
+  received: PeriodLevels
+  share?: number
+}
+
 /** One contributor: sources sharing a name and class (a street, a railway line, a site). */
 export interface Contributor {
   /** Stable across the streamed updates of one click. */
@@ -88,6 +98,8 @@ export interface Contributor {
    *  shared by the sources' energy then, so the rows add up to the whole. */
   share?: number
   path?: SourcePath
+  /** Its parts when its object has several sources, the loudest alone first. */
+  parts?: ContributorPart[]
   metadata: ContributorMetadata | null
   /** What the map draws of it, lines of [lat, lon] (one point for a point source): all of it within
    *  the reach in the final update, its loudest pieces before. */

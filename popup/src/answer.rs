@@ -469,7 +469,7 @@ pub fn answer(
             )
         });
         let mut layers = layer_answers(&selections);
-        let mut contributors: Vec<crate::update::Contributor>;
+        let mut rows: Vec<crate::rows::Row>;
         let mut rest_nden_sone = None;
         let mut rest_share = None;
         let (percentiles, loudness) = match &timing {
@@ -480,7 +480,10 @@ pub fn answer(
                 let ranked = ranked_contributors(heard, |c| lden_energy(&c.energy));
                 let shown = ranked.len().min(CONTRIBUTORS_SHOWN);
                 set_unlisted(&mut layers, ranked[shown..].iter().copied().chain(quiet));
-                contributors = ranked[..shown].iter().map(|&c| c.clone()).collect();
+                rows = ranked[..shown]
+                    .iter()
+                    .map(|&c| crate::rows::Row::of(c.clone()))
+                    .collect();
                 (None, None)
             }
             Some((percentiles, loudness, curves, layer_curves, click_lines)) => {
@@ -490,47 +493,55 @@ pub fn answer(
                         .find(|(own, _)| *own == layer)
                         .map_or(curves, |(_, curves)| curves)
                 };
-                // The visitor's list ranks by each source's own Nden, alone, so a steady road
-                // leads brief passes louder in energy.
+                // The visitor's list ranks by each row's own Nden, alone, so a steady road leads
+                // brief passes louder in energy.
                 let (heard, quiet): (Vec<_>, Vec<_>) =
                     all_contributors(&selections).partition(|c| listed(c));
-                // The display records are read one by one; the sources scored in parallel.
-                let displays: Vec<(&crate::update::Contributor, Option<serde_json::Value>)> =
-                    heard.into_iter().map(|c| (c, fields(c))).collect();
-                let ranked: Vec<crate::update::Contributor> = displays
-                    .into_par_iter()
-                    .map(|(contributor, display)| {
-                        let line = crate::percentiles::Line::of(contributor, display.as_ref());
-                        let curves = own_curves(contributor.layer);
-                        let own = match &line {
-                            Some(line) => {
-                                crate::loudness::own_nden(Some(line), [0.0; PERIODS], curves)
-                            }
-                            None => crate::loudness::own_nden(None, contributor.energy, curves),
-                        };
-                        let mut contributor = contributor.clone();
-                        contributor.nden_sone = Some(own);
-                        contributor.heard = display
-                            .as_ref()
-                            .and_then(|fields| crate::percentiles::heard(&contributor, fields));
-                        contributor
-                    })
-                    .collect();
-                contributors = ranked_contributors(ranked, |c| c.nden_sone.unwrap_or(0.0));
-                let shown = contributors.len().min(CONTRIBUTORS_SHOWN);
-                set_unlisted(
-                    &mut layers,
-                    contributors[shown..].iter().chain(quiet.iter().copied()),
-                );
+                rows = crate::rows::ranked_rows(heard, &fields, &own_curves);
+                let shown = rows.len().min(CONTRIBUTORS_SHOWN);
+                let unlisted = || {
+                    rows[shown..]
+                        .iter()
+                        .flat_map(|row| row.parts.iter())
+                        .chain(quiet.iter().copied())
+                };
+                set_unlisted(&mut layers, unlisted());
                 // Each row's share of the loudness, the rows' own Nden not adding up to it.
+                let named: Vec<&crate::update::Contributor> = rows[..shown]
+                    .iter()
+                    .flat_map(|row| row.parts.iter())
+                    .collect();
                 let shares = crate::shares::row_shares(
                     &selections,
-                    &contributors[..shown],
+                    &named,
                     (&click_lines.0, click_lines.1),
                     curves,
                 );
-                for (contributor, share) in contributors.iter_mut().zip(&shares.listed) {
-                    contributor.share = Some(*share);
+                // What the list leaves out, together: its own distribution's Nden.
+                let rest: [f64; PERIODS] = std::array::from_fn(|p| {
+                    layers
+                        .iter()
+                        .filter_map(|layer| layer.unlisted.map(|energy| energy[p]))
+                        .sum()
+                });
+                let (rest_lines, rest_steady) =
+                    crate::percentiles::rest_lines(unlisted(), rest, &fields);
+                rest_nden_sone = Some(
+                    crate::loudness::loudness(
+                        &crate::percentiles::distributions_of(&rest_lines, rest_steady),
+                        curves,
+                    )
+                    .nden_sone,
+                );
+                rows.truncate(shown);
+                let mut part_shares = shares.listed.iter();
+                for row in &mut rows {
+                    let mut together = 0.0;
+                    for (part, &share) in row.parts.iter_mut().zip(&mut part_shares) {
+                        part.share = Some(share);
+                        together += share;
+                    }
+                    row.share = Some(together);
                 }
                 rest_share = Some(shares.rest);
                 if let Some(layer) = layers
@@ -539,26 +550,6 @@ pub fn answer(
                 {
                     layer.share = Some(shares.aircraft);
                 }
-                // What the list leaves out, together: its own distribution's Nden.
-                let rest: [f64; PERIODS] = std::array::from_fn(|p| {
-                    layers
-                        .iter()
-                        .filter_map(|layer| layer.unlisted.map(|energy| energy[p]))
-                        .sum()
-                });
-                let (rest_lines, rest_steady) = crate::percentiles::rest_lines(
-                    contributors[shown..].iter().chain(quiet.iter().copied()),
-                    rest,
-                    &fields,
-                );
-                rest_nden_sone = Some(
-                    crate::loudness::loudness(
-                        &crate::percentiles::distributions_of(&rest_lines, rest_steady),
-                        curves,
-                    )
-                    .nden_sone,
-                );
-                contributors.truncate(shown);
                 // The aircraft layer alone: its flights' line over its airports' ground operations.
                 let ground = airport_ground.unwrap_or([0.0; PERIODS]);
                 let mut flight_weather = crate::percentiles::Weather::default();
@@ -578,10 +569,14 @@ pub fn answer(
                     ));
                 }
                 let read: Vec<&RingFiles> = rings.iter().filter_map(OnceCell::get).collect();
-                let keys: Vec<u64> = contributors.iter().map(|c| c.group_key).collect();
+                let keys: Vec<u64> = rows
+                    .iter()
+                    .flat_map(|row| row.parts.iter().map(|part| part.group_key))
+                    .collect();
                 let lines = whole_lines(&read, &frame, &keys, station.position, GROUND_REACH_M)?;
-                for (contributor, lines) in contributors.iter_mut().zip(lines) {
-                    contributor.lines = lines;
+                let parts = rows.iter_mut().flat_map(|row| row.parts.iter_mut());
+                for (part, lines) in parts.zip(lines) {
+                    part.lines = lines;
                 }
                 (Some(*percentiles), Some(*loudness))
             }
@@ -618,7 +613,7 @@ pub fn answer(
             weather: last_ring.then_some(weather),
             building,
             layers,
-            contributors,
+            rows,
             flights: listed_flights,
             pieces,
             statistics: Statistics {

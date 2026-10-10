@@ -178,10 +178,13 @@ fn place(row: &IndustrialRow, emission: RowEmission, out: &mut Vec<Converted>) {
             cell_m: CELL_M,
         })
     });
+    // The area shown is the mapped one (its tag, else its outline): a default is not data.
     let display = json!([
         row.name,
         emission.label,
-        emission.area_m2.unwrap_or(0.0).round(),
+        row.area_m2
+            .or_else(|| ring_area_m2(&row.ring))
+            .map(f64::round),
         row.nace.map(|code| format!("{code:04}")),
         points.as_ref().map_or(1, Vec::len),
         emission.area_m2.is_none().then_some(emission.height_m),

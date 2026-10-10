@@ -26,9 +26,12 @@ use arrow_array::{
     Array, BinaryArray, Float32Array, Int32Array, Int64Array, RecordBatch, StringArray, UInt8Array,
     UInt32Array,
 };
-use physics::emission::settlement::{building_sound_power, is_home, plant_sound_power};
+use physics::emission::settlement::{
+    HOSPITALITY, building_sound_power, is_home, plant_sound_power,
+};
 use physics::emission::spectrum::SoundPower;
 use serde_json::json;
+use std::collections::HashMap;
 use tiles::sources::{Attribute, GROUND_FROM_TERRAIN, Layer};
 
 const KIND_BUILDING: u8 = 0;
@@ -163,11 +166,14 @@ pub fn convert(
     let mut emitting = 0;
     // Where bells and loudspeakers hang: every building's centre, height, footprint and name.
     let mut hosts: Vec<Host> = Vec::new();
+    // The bars, restaurants and cafés by footprint: the people mapped inside one are a part of it.
+    let mut hospitality: HashMap<u64, u64> = HashMap::new();
     for batch in batches {
         for row in read_batch(batch, square).map_err(context)? {
             let Some(emission) = building_emission(&row, Some((country_iso, climate))) else {
                 continue;
             };
+            let key = group_key(&["building", &row.osm_id.to_string()]);
             if places.worship.is_some() {
                 hosts.push(Host {
                     centre: z30_corner_degrees(row.centroid.0, row.centroid.1),
@@ -175,7 +181,11 @@ pub fn convert(
                     footprint_id: row.footprint_id,
                     name: row.name.clone(),
                     worship: row.class == WORSHIP,
+                    group_key: key,
                 });
+            }
+            if row.class == HOSPITALITY && row.footprint_id != 0 {
+                hospitality.insert(row.footprint_id, key);
             }
             let site = Site {
                 centroid: z30_corner_degrees(row.centroid.0, row.centroid.1),
@@ -192,7 +202,7 @@ pub fn convert(
                 platform_half_width_m: 0.0,
                 exclusion_radius_m: 0.0,
                 footprint_id: row.footprint_id,
-                group_key: group_key(&["building", &row.osm_id.to_string()]),
+                group_key: key,
                 emission: emission.sound.band_levels_db(),
                 display: json!([
                     row.name,
@@ -224,18 +234,29 @@ pub fn convert(
             .collect();
         let mut placer = OutsidePlacer::new(points, venues[0].lat);
         for batch in batches {
-            place_outside(batch, &mut placer).map_err(context)?;
+            place_outside(batch, (square, &hospitality), &mut placer).map_err(context)?;
         }
-        emitting += convert_people(venues, &placer.positions(), (country_iso, climate), out);
+        emitting += convert_people(
+            venues,
+            (&placer.positions(), placer.hosts()),
+            (country_iso, climate),
+            out,
+        );
     }
     Ok(emitting)
 }
 
 /// Offers every building footprint of a batch near a place (OpenStreetMap's and Overture's alike:
-/// both screen) to the placer.
-fn place_outside(batch: &RecordBatch, placer: &mut OutsidePlacer) -> Result<(), String> {
+/// both screen) to the placer, a bar's, restaurant's or café's (`hospitality`, by footprint id)
+/// with its source's group key.
+fn place_outside(
+    batch: &RecordBatch,
+    (square, hospitality): (Square, &HashMap<u64, u64>),
+    placer: &mut OutsidePlacer,
+) -> Result<(), String> {
     let kinds = column::<UInt8Array>(batch, "kind")?;
     let outlines = column::<BinaryArray>(batch, "geom")?;
+    let ordinals = column::<UInt32Array>(batch, "screening_ordinal")?;
     let centroid = [
         column::<Int32Array>(batch, "centroid_gx")?,
         column::<Int32Array>(batch, "centroid_gy")?,
@@ -248,8 +269,10 @@ fn place_outside(batch: &RecordBatch, placer: &mut OutsidePlacer) -> Result<(), 
         {
             continue;
         }
+        let host = cell(ordinals, row)
+            .and_then(|ordinal| hospitality.get(&footprint_id(square, ordinal)).copied());
         for part in decode_parts(outlines.value(row)).unwrap_or_default() {
-            placer.offer(&part);
+            placer.offer(&part, host);
         }
     }
     Ok(())

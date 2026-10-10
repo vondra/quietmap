@@ -135,7 +135,7 @@ fn every_line_and_every_steady_part_has_one_row() {
     let flights = ([energy(42.0); PERIODS], [energy(42.0) * 0.01; PERIODS]);
     let weather = flight_weather(&flights);
     let (lines, remainder) = click_lines(&selections, (&weather, flights), &traffic);
-    let shares = row_shares(&selections, &[road, site], (&lines, remainder), &curves);
+    let shares = row_shares(&selections, &[&road, &site], (&lines, remainder), &curves);
     let total: f64 = shares.listed.iter().sum::<f64>() + shares.aircraft + shares.rest;
     assert!((total - 1.0).abs() < 1e-12, "{shares:?}");
     assert!(shares.listed.iter().all(|&share| share > 0.0), "{shares:?}");
