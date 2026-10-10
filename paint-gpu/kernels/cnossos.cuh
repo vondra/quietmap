@@ -210,11 +210,13 @@ __device__ StateRay state_ray_between(int state, PlanePoint source, PlanePoint r
     return ray;
 }
 
-// 2 Gamma asin(l / 2 Gamma) - l, the arc's excess over its chord, by its series in x = l / 2 Gamma
-// (at most 1/16: Gamma >= 8 d): x^3/6 + 3x^5/40 + 5x^7/112 + 35x^9/1152.
+// 2 Gamma asin(l / 2 Gamma) - l, the arc's excess over its chord: by its series in x = l / 2 Gamma
+// up to 1/16 (Gamma >= 8 d holds the direct chord there): x^3/6 + 3x^5/40 + 5x^7/112 + 35x^9/1152;
+// by asin beyond (a leg to an image or through A can be longer than d).
 __device__ __forceinline__ float arc_excess(const StateRay& ray, float chord) {
     if (ray.state == HOMOGENEOUS) return 0.0f;
-    float x = fminf(chord / (2.0f * ray.radius_m), 1.0f);
+    float x = chord / (2.0f * ray.radius_m);
+    if (x > 1.0f / 16.0f) return 2.0f * ray.radius_m * asinf(fminf(x, 1.0f)) - chord;
     float x2 = x * x;
     return 2.0f * ray.radius_m * x * x2 * (1.0f / 6.0f + x2 * (3.0f / 40.0f + x2 * (5.0f / 112.0f + x2 * (35.0f / 1152.0f))));
 }
@@ -246,12 +248,13 @@ __device__ float state_ray_path_difference(const StateRay& ray, PlanePoint from,
     float chord = chord_altitude(from, to, first.x);
     if (ray.state == HOMOGENEOUS) return first.z >= chord ? excess : -excess;
     if (first.z >= chord) return excess;
-    // (2.5.27): 2 SA + 2 AR - SO - OR - SR with A on the chord under O; SA + AR = SR, so it is
-    // -(SO + OR - SR) and the arcs' excesses.
+    // (2.5.27): 2 SA + 2 AR - SO - OR - SR with A on the chord under O, that is 2 (SA + AR - SR)
+    // - (SO + OR - SR) and the arcs' excesses; SA + AR = SR only while A lies between the ends (an
+    // image mirrored in a tilted plane can stand beyond O).
     PlanePoint on_chord;
     on_chord.x = first.x;
     on_chord.z = chord;
-    return -triangle_excess(from, first, to)
+    return 2.0f * triangle_excess(from, on_chord, to) - triangle_excess(from, first, to)
         + 2.0f * arc_excess(ray, plane_distance(from, on_chord)) + 2.0f * arc_excess(ray, plane_distance(on_chord, to))
         - arc_excess(ray, plane_distance(from, first)) - arc_excess(ray, plane_distance(first, to)) - arc_excess(ray, plane_distance(from, to));
 }

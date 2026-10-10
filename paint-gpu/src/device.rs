@@ -13,9 +13,9 @@ use physics::weather::WeatherTable;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tiles::Kind;
-use tiles::geo::{TILES_PER_AXIS, TileId};
+use tiles::geo::{Mercator, TILES_PER_AXIS, TileId};
 use tiles::sources::GROUND_FROM_TERRAIN;
-use tiles::terrain::{NODES_PER_DEGREE, Terrain};
+use tiles::terrain::{NODES_PER_DEGREE, Terrain, Window};
 
 /// A launch of one thread, for the kernels that write one result (cudarc's `for_num_elems(1)` is
 /// a whole block of 1,024 writers).
@@ -81,7 +81,8 @@ struct TerrainTile {
     state: i32,
     rows: u32,
     columns: u32,
-    pad: u32,
+    /// The scene row of this tile's row 0: a node's local row is its scene row minus this.
+    row_shift: i32,
     column_at_origin: f32,
     columns_per_metre: f32,
     nodes_offset: u64,
@@ -101,6 +102,11 @@ struct TerrainScene {
     tiles: u64,
     nodes: u64,
     row_north_m: u64,
+    scene_rows: u64,
+    scene_row_count: u32,
+    column_at_origin: f32,
+    columns_per_metre: f32,
+    pad: u32,
 }
 
 #[repr(C)]
@@ -506,6 +512,24 @@ impl DeviceSquare {
         // tiles::terrain::Terrain::sample's node columns per Mercator unit.
         let columns_per_unit = f64::from(360 * NODES_PER_DEGREE) / f64::from(TILES_PER_AXIS);
         let (mut nodes, mut row_north_m) = (Vec::new(), Vec::<f32>::new());
+        // popup::scene::Ground's row table: every lattice row over the scene's tiles, metres north of
+        // the origin, the northernmost first.
+        let nodes_per_degree = f64::from(NODES_PER_DEGREE);
+        let latitude_at = |tile_y: i64| {
+            let y = tile_y.clamp(0, n) as f64;
+            Mercator { x: 0.0, y }.to_degrees().0
+        };
+        let north_row =
+            (latitude_at(i64::from(square.tile.y) - radius) * nodes_per_degree).ceil() as i64;
+        let south_row =
+            (latitude_at(i64::from(square.tile.y) + radius + 1) * nodes_per_degree).floor() as i64;
+        let scene_rows: Vec<f32> = (south_row..=north_row)
+            .rev()
+            .map(|row| {
+                let y = Mercator::from_degrees(row as f64 / nodes_per_degree, 0.0).y;
+                ((frame.origin.y - y) * frame.north_m_per_unit) as f32
+            })
+            .collect();
         for dy in -radius..=radius {
             for dx in -radius..=radius {
                 let y = i64::from(square.tile.y) + dy;
@@ -532,7 +556,7 @@ impl DeviceSquare {
                             state: TILE_READ,
                             rows: window.rows,
                             columns: window.columns,
-                            pad: 0,
+                            row_shift: (north_row - i64::from(window.north_node)) as i32,
                             column_at_origin: column_at_origin as f32,
                             columns_per_metre: (columns_per_unit / frame.east_m_per_unit) as f32,
                             nodes_offset: append_aligned(
@@ -640,6 +664,9 @@ impl DeviceSquare {
         } else {
             row_north_m
         }))?;
+        let scene_row_count = scene_rows.len() as u32;
+        let scene_rows = driver(device.htod_sync_copy(&scene_rows))?;
+        let centre_west_node = Window::of_tile(square.tile).west_node;
         let obstacle_tiles = upload(nonempty(bytes_of(&obstacle_tiles)))?;
         let blob = upload(nonempty(blob))?;
         let cell_max = driver(device.htod_sync_copy(&if cell_max.is_empty() {
@@ -662,6 +689,13 @@ impl DeviceSquare {
                 tiles: pointer(&terrain_tiles),
                 nodes: pointer(&nodes),
                 row_north_m: *row_north_m.device_ptr(),
+                scene_rows: *scene_rows.device_ptr(),
+                scene_row_count,
+                column_at_origin: (frame.origin.x * columns_per_unit
+                    - f64::from(180 * NODES_PER_DEGREE)
+                    - f64::from(centre_west_node)) as f32,
+                columns_per_metre: (columns_per_unit / frame.east_m_per_unit) as f32,
+                pad: 0,
             },
             obstacles: ObstacleScene {
                 origin_x: layout.origin[0] as f32,
@@ -703,7 +737,7 @@ impl DeviceSquare {
             scene,
             candidates: square.candidates.len() as u32,
             _buffers: buffers,
-            _floats: vec![row_north_m, cell_max],
+            _floats: vec![row_north_m, cell_max, scene_rows],
             bytes,
         })
     }
