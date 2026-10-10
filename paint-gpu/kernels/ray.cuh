@@ -1,94 +1,16 @@
-// One source-receiver ray in f32, streamed: physics/src/profile.rs (the sampling cadence) and
-// physics/src/ray.rs (the vertical path of terrain, roofs and obstacle tops, and its transfer) without
-// storing the ray. Terrain samples and wall crossings arrive in order of distance; each stretch of
+// One source-receiver ray in f32, streamed: popup/src/scene.rs (the ground at every lattice line the
+// ray crosses, walked in scene.cuh) and physics/src/ray.rs (the vertical path of terrain, roofs and
+// obstacle tops, and its transfer) without storing the ray. Terrain samples and wall crossings arrive in order of distance; each stretch of
 // the path is added at once to the moments the mean planes need, every candidate at once to both
 // states' hulls (rubber_band.rs as Andrew's monotone chain), a footprint's crossings pair into a roof
 // as they arrive. The CPU keeps the same path in arrays and sorts; the answer is the same.
 
-// profile.rs
-#define CADENCE_STEP_M (110540.0f / 3600.0f)
-#define NEAR_OFFSET_M 10.0f
-
 // Per-thread capacities; a ray needing more fails with FAILED_CAPACITY and goes to the CPU.
-#define MAX_SAMPLES 128      // a 12 km ray takes about 70 (profile.rs cadence)
-#define TERRAIN_HISTORY 16   // samples kept behind the stream, for a roof that closes later
+#define TERRAIN_HISTORY 32   // vertices kept behind the stream, for a roof that closes later
 #define HULL_CAPACITY 40     // points of one state's hull (dev4's oracle rays needed at most 21)
 #define OPEN_ROOFS 12        // footprints the ray is inside at once
 #define RECENT_CROSSINGS 8   // crossings kept to drop one found twice
 #define CONTAINING 8         // footprints a building's source stands in, its own among them
-
-// profile::fill_t_values into `t`; returns the count, or -1 past MAX_SAMPLES.
-__device__ int fill_t_values(float dist_m, float* t) {
-    bool emit_near = dist_m >= 3.0f * NEAR_OFFSET_M;
-    float near_t = NEAR_OFFSET_M / dist_m;
-    int count = 0;
-    // Rust's dedup_by drops a value next to the last kept (within 1e-9; f32 holds a fraction to
-    // 6e-8, so within 1e-6 here).
-#define PUSH(value) do { float v_ = (value); \
-        if (count > 0 && fabsf(v_ - t[count - 1]) < 1e-6f) break; \
-        if (count >= MAX_SAMPLES) return -1; t[count++] = v_; } while (0)
-    if (dist_m <= CADENCE_STEP_M * 10.0f) {
-        int n = (int)fmaxf(ceilf(dist_m / CADENCE_STEP_M), 3.0f);
-        PUSH(0.0f);
-        if (emit_near) PUSH(near_t);
-        for (int i = 1; i < n - 1; i++) {
-            float value = (float)i / (float)(n - 1);
-            if (emit_near && (fabsf(value - near_t) * dist_m < 3.0f || fabsf((1.0f - value) - near_t) * dist_m < 3.0f)) continue;
-            PUSH(value);
-        }
-        if (emit_near) PUSH(1.0f - near_t);
-        PUSH(1.0f);
-        return count;
-    }
-    const float levels[4] = {CADENCE_STEP_M, CADENCE_STEP_M * 2.0f, CADENCE_STEP_M * 4.0f, CADENCE_STEP_M * 8.0f};
-    const int reps = 3;
-    PUSH(0.0f);
-    if (emit_near) PUSH(near_t);
-    float pos = emit_near ? NEAR_OFFSET_M : 0.0f;
-    bool done = false;
-    for (int level = 0; level < 4 && !done; level++) {
-        for (int rep = 0; rep < reps; rep++) {
-            pos += levels[level];
-            if (pos >= dist_m * 0.5f) { done = true; break; }
-            PUSH(pos / dist_m);
-        }
-    }
-    float forward_end = fminf(pos, dist_m * 0.5f) / dist_m;
-    float coarse = fminf(levels[3], dist_m * 0.25f);
-    float back = emit_near ? NEAR_OFFSET_M : 0.0f;
-    done = false;
-    for (int level = 0; level < 4 && !done; level++) {
-        for (int rep = 0; rep < reps; rep++) {
-            float next = back + levels[level];
-            if (next >= dist_m * 0.5f) { done = true; break; }
-            back = next;
-        }
-    }
-    float backward_start = fmaxf(1.0f - back / dist_m, 1.0f - dist_m * 0.5f / dist_m);
-    float middle = forward_end;
-    while (middle < backward_start - 0.0001f) {
-        middle += coarse / dist_m;
-        if (middle < backward_start - 1e-6f) PUSH(middle);
-    }
-    // The backward ramp, nearest the receiver last: its positions from the receiver's end, the
-    // farthest first.
-    float ramp[12];
-    int ramp_count = 0;
-    pos = emit_near ? NEAR_OFFSET_M : 0.0f;
-    done = false;
-    for (int level = 0; level < 4 && !done; level++) {
-        for (int rep = 0; rep < reps; rep++) {
-            pos += levels[level];
-            if (pos >= dist_m * 0.5f) { done = true; break; }
-            ramp[ramp_count++] = pos;
-        }
-    }
-    for (int k = ramp_count - 1; k >= 0; k--) PUSH(1.0f - ramp[k] / dist_m);
-    if (emit_near) PUSH(1.0f - near_t);
-    PUSH(1.0f);
-#undef PUSH
-    return count;
-}
 
 // ray.rs RayEnds
 struct RayEnds {
@@ -147,8 +69,9 @@ struct RayStream {
     float inverse_length;
     float platform_half_width_m;
     StreamedPath path;
-    // The terrain samples: their fractions, how many were sampled, the last TERRAIN_HISTORY.
-    float t[MAX_SAMPLES];
+    // The terrain vertices: the walk producing them, how many there are and were sampled, the
+    // last TERRAIN_HISTORY.
+    LatticeWalk walk;
     int count;
     int sampled;
     TerrainPoint history[TERRAIN_HISTORY];
@@ -172,13 +95,27 @@ struct RayStream {
     StateStream states[2];
 };
 
-// Terrain sample k (generated in order, kept for TERRAIN_HISTORY samples).
+// Terrain vertex k (generated in order, kept for TERRAIN_HISTORY vertices): the source, the walk's
+// crossings, the receiver.
 __device__ u32 ray_sample(RayStream& s, int k, TerrainPoint* out) {
     while (s.sampled <= k) {
-        float t = s.t[s.sampled];
-        float keep = 1.0f - t;
         GroundSample sample;
-        u32 failed = ground_at(*s.ground, s.receiver_x + s.offset_x * keep, s.receiver_y + s.offset_y * keep, &sample);
+        u32 failed;
+        float t;
+        if (s.sampled == 0) {
+            t = 0.0f;
+            failed = ground_at(*s.ground, s.receiver_x + s.offset_x, s.receiver_y + s.offset_y, &sample);
+        } else if (s.sampled == s.count - 1) {
+            t = 1.0f;
+            failed = ground_at(*s.ground, s.receiver_x, s.receiver_y, &sample);
+        } else {
+            bool on_row;
+            int row;
+            if (!walk_next(*s.ground, &s.walk, &t, &on_row, &row)) return FAILED_CAPACITY;
+            float keep = 1.0f - t;
+            failed = walk_sample(*s.ground, s.receiver_x + s.offset_x * keep, s.receiver_y + s.offset_y * keep, on_row, row,
+                                 s.walk.north, &sample);
+        }
         if (failed) return failed;
         TerrainPoint point;
         point.x = t * s.length;
@@ -545,8 +482,13 @@ __device__ u32 ray_transfer(const TerrainScene& ground, const ObstacleScene& obs
     s.length = horizontal;
     s.inverse_length = 1.0f / horizontal;
     s.platform_half_width_m = ends.platform_half_width_m;
-    s.count = fill_t_values(horizontal, s.t);
-    if (s.count < 0) return FAILED_CAPACITY;
+    walk_start(ground, sx, sy, rx, ry, &s.walk);
+    LatticeWalk counting = s.walk;
+    float t_counted;
+    bool on_row_counted;
+    int row_counted;
+    s.count = 2;
+    while (walk_next(ground, &counting, &t_counted, &on_row_counted, &row_counted)) s.count++;
     s.sampled = 0;
     TerrainPoint first;
     u32 failed = ray_sample(s, 0, &first);

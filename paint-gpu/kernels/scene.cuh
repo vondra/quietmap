@@ -28,7 +28,7 @@ struct TerrainTile {
     i32 state;
     u32 rows;
     u32 columns;
-    u32 pad;
+    i32 row_shift;              // the scene row of this tile's row 0 (local row = scene row - shift)
     float column_at_origin;
     float columns_per_metre;
     u64 nodes_offset;
@@ -48,6 +48,14 @@ struct TerrainScene {
     const TerrainTile* tiles;
     const u8* nodes;
     const float* row_north_m;
+    // The lattice rows over the whole scene, metres north of the origin (descending), and a
+    // column coordinate whose integer values are the lattice columns (any tile's numbering: tiles
+    // differ by whole columns): popup::scene::Ground's row table and column lines.
+    const float* scene_rows;
+    u32 scene_row_count;
+    float column_at_origin;
+    float columns_per_metre;
+    u32 pad;
 };
 
 struct GroundSample {
@@ -100,6 +108,128 @@ __device__ bool terrain_sample(const TerrainScene& scene, const TerrainTile& til
     out->height_m = height;
     out->ground_factor = 1.0f - imperviousness * 0.01f;
     return true;
+}
+
+// The tile of the neighbourhood at offset (dx, dy) from the square, or null outside the radius.
+__device__ const TerrainTile* terrain_tile(const TerrainScene& scene, i64 dx, i64 dy) {
+    if (dx < -scene.radius || dx > scene.radius || dy < -scene.radius || dy > scene.radius) return 0;
+    return &scene.tiles[(dy + scene.radius) * (2 * scene.radius + 1) + dx + scene.radius];
+}
+
+// The lattice lines a ray crosses, in order from its source (popup::scene::Ground::fill_profile):
+// column lines at the integer values of u, row lines at scene.scene_rows.
+struct LatticeWalk {
+    float u_s, du;          // the column coordinate at the source, and its change to the receiver
+    float n_s, dn;          // metres north at the source, and the change
+    float next_column, column_step;
+    int next_row, row_step; // the scene row line ahead (outside the table: none)
+    int north;              // the scene row at or north of the point, in the direction of travel
+};
+
+// The walk from (sx, sy) to (rx, ry). A start exactly on a row line belongs to the stretch the
+// ray heads into.
+__device__ void walk_start(const TerrainScene& sc, float sx, float sy, float rx, float ry, LatticeWalk* w) {
+    w->u_s = sc.column_at_origin + sx * sc.columns_per_metre;
+    w->du = (rx - sx) * sc.columns_per_metre;
+    w->n_s = sy;
+    w->dn = ry - sy;
+    if (w->du > 0.0f) {
+        w->next_column = floorf(w->u_s) + 1.0f;
+        w->column_step = 1.0f;
+    } else {
+        w->next_column = ceilf(w->u_s) - 1.0f;
+        w->column_step = -1.0f;
+    }
+    // Rows north of the start: north_m > n_s heading north, north_m >= n_s heading south.
+    int lo = 0, hi = (int)sc.scene_row_count;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        bool north = w->dn < 0.0f ? sc.scene_rows[mid] >= w->n_s : sc.scene_rows[mid] > w->n_s;
+        if (north) lo = mid + 1; else hi = mid;
+    }
+    w->north = lo - 1;
+    w->next_row = w->dn < 0.0f ? lo : lo - 1;
+    w->row_step = w->dn < 0.0f ? 1 : -1;
+}
+
+// The next crossing strictly before the receiver: its fraction t, and whether it lies on a row line
+// (`row` its scene row) or a column line; false at the end.
+__device__ bool walk_next(const TerrainScene& sc, LatticeWalk* w, float* t, bool* on_row, int* row) {
+    float t_column = w->du != 0.0f ? (w->next_column - w->u_s) / w->du : QM_INFINITY;
+    float t_row = (w->dn != 0.0f && w->next_row >= 0 && w->next_row < (int)sc.scene_row_count)
+        ? (sc.scene_rows[w->next_row] - w->n_s) / w->dn : QM_INFINITY;
+    *t = fminf(t_column, t_row);
+    if (!(*t < 1.0f)) return false;
+    *on_row = t_row <= t_column;
+    *row = w->next_row;
+    if (t_row <= t_column) {
+        w->north = w->dn < 0.0f ? w->next_row : w->next_row - 1;
+        w->next_row += w->row_step;
+    }
+    if (t_column <= t_row) w->next_column += w->column_step;
+    return true;
+}
+
+// Node (row, column) of a read tile, false outside its window or without data.
+__device__ bool tile_node(const TerrainScene& sc, const TerrainTile& tile, int row, int column, float* height, float* imperviousness) {
+    if (row < 0 || column < 0 || row >= (int)tile.rows || column >= (int)tile.columns) return false;
+    u32 record = *(const u32*)(sc.nodes + tile.nodes_offset + 4 * ((u64)row * tile.columns + (u64)column));
+    if ((record & 0xffff) == HEIGHT_MISSING || ((record >> 16) & 0xff) > PERCENT_MAX) return false;
+    *height = -500.0f + (float)(record & 0xffff) * 0.2f;
+    *imperviousness = (float)((record >> 16) & 0xff);
+    return true;
+}
+
+// The ground at a walk's vertex in `tile`: between two nodes of a row line or a column line, the
+// node of no weight not read; false where a weighed node is outside the window or has no data.
+__device__ bool tile_edge_sample(const TerrainScene& sc, const TerrainTile& tile, float east_m, float north_m, bool on_row,
+                                 int scene_row, int north, GroundSample* out) {
+    int r0, c0, r1, c1;
+    float f;
+    float column = tile.column_at_origin + east_m * tile.columns_per_metre;
+    if (on_row) {
+        r0 = r1 = scene_row - tile.row_shift;
+        float west = floorf(column);
+        c0 = (int)west;
+        c1 = c0 + 1;
+        f = column - west;
+    } else {
+        c0 = c1 = (int)rintf(column);
+        r0 = north - tile.row_shift;
+        r1 = r0 + 1;
+        float y0 = sc.scene_rows[north], y1 = sc.scene_rows[north + 1];
+        f = clampf((y0 - north_m) / (y0 - y1), 0.0f, 1.0f);
+    }
+    float h0 = 0.0f, i0 = 0.0f, h1 = 0.0f, i1 = 0.0f;
+    if (f < 1.0f && !tile_node(sc, tile, r0, c0, &h0, &i0)) return false;
+    if (f > 0.0f && !tile_node(sc, tile, r1, c1, &h1, &i1)) return false;
+    if (f <= 0.0f) { h1 = h0; i1 = i0; }
+    if (f >= 1.0f) { h0 = h1; i0 = i1; }
+    out->height_m = h0 + f * (h1 - h0);
+    out->ground_factor = 1.0f - (i0 + f * (i1 - i0)) * 0.01f;
+    return true;
+}
+
+// The ground at a walk's vertex (popup::scene::Ground::fill_profile): from the tile holding it,
+// or, where that tile is ocean, from a land tile north or west of it that holds the vertex's
+// nodes (a vertex on a coast seam); 0 or a failure.
+__device__ u32 walk_sample(const TerrainScene& sc, float east_m, float north_m, bool on_row, int scene_row,
+                           int north, GroundSample* out) {
+    i64 dx = (i64)floorf(sc.tile_x_at_origin + east_m * sc.tiles_per_metre_east);
+    i64 dy = (i64)floorf(sc.tile_y_at_origin - north_m * sc.tiles_per_metre_north);
+    const TerrainTile* tile = terrain_tile(sc, dx, dy);
+    if (!tile || tile->state == TILE_NOT_READ) return FAILED_NOT_READ;
+    if (tile->state == TILE_READ) {
+        return tile_edge_sample(sc, *tile, east_m, north_m, on_row, scene_row, north, out) ? 0 : FAILED_NO_TERRAIN;
+    }
+    const TerrainTile* across[2] = {terrain_tile(sc, dx, dy - 1), terrain_tile(sc, dx - 1, dy)};
+    for (int k = 0; k < 2; k++) {
+        if (across[k] && across[k]->state == TILE_READ
+            && tile_edge_sample(sc, *across[k], east_m, north_m, on_row, scene_row, north, out)) return 0;
+    }
+    out->height_m = 0.0f;
+    out->ground_factor = 0.0f;
+    return 0;
 }
 
 // scene::Ground::at; 0 or a failure.
