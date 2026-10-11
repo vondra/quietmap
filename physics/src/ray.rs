@@ -1,15 +1,17 @@
 //! One source-receiver ray: its sampled ground and obstacle crossings become a CNOSSOS vertical
 //! path (the source platform, building roofs raised as hard ground, every crossing a candidate
 //! top), and the path's linear transfer 10^(-A/10) per period and band follows from both
-//! meteorological states mixed with the period's favourable probability (2.5.9) and air
-//! absorption at the slant distance. Divergence and the receiver reflection are the caller's.
-//! CNOSSOS-EU has no foliage term: dev4's ISO 9613-2 Annex A (informative, for foliage dense enough
-//! to block the view) took 11-13 dB from a motorway 320 m behind a forest the owner hears clearly.
+//! meteorological states, each with its foliage, mixed with the period's favourable probability
+//! (2.5.9) and air absorption at the slant distance. Divergence and the receiver reflection are
+//! the caller's.
 
 use crate::bands::{BANDS, PERIODS};
+use crate::cnossos::rubber_band::StateRay;
 use crate::cnossos::{
-    PlanePoint, StateBoundary, VerticalPath, VerticalPathScratch, VerticalProfile, state_boundaries,
+    MeteorologicalState, PlanePoint, StateBoundary, VerticalPath, VerticalPathScratch,
+    VerticalProfile, state_boundaries,
 };
+use crate::foliage;
 use crate::profile::Profile;
 
 /// Where a ray meets a wall of a building or a barrier.
@@ -80,12 +82,14 @@ struct Roof {
     top1: f64,
 }
 
-/// The terms of one ray: the transfer with the boundary of each state (homogeneous, favourable),
-/// the air absorption behind it, and what blocks its line of sight in calm air.
+/// The terms of one ray: the transfer with the boundary and the foliage of each state
+/// (homogeneous, favourable), each of them alone, the air absorption, and what blocks its line of
+/// sight in calm air.
 pub struct RayTerms {
     pub transfer: Transfer,
     pub favourable_probability: [f64; PERIODS],
     pub boundaries: [StateBoundary; 2],
+    pub foliage_db: [[f64; BANDS]; 2],
     pub air_db: [f64; BANDS],
     pub calm_edge: Edge,
 }
@@ -130,12 +134,25 @@ pub fn ray_terms(
     } else {
         Edge::Terrain
     };
+    let (source, receiver) = (
+        (0.0, source_altitude),
+        (horizontal, ends.receiver_altitude_m),
+    );
+    let foliage_db = [
+        MeteorologicalState::Homogeneous,
+        MeteorologicalState::Favourable,
+    ]
+    .map(|state| {
+        let ray = StateRay::between(state, source, receiver);
+        foliage::attenuation_db(foliage::depth_m(profile, &ray, source, receiver))
+    });
     let air_db: [f64; BANDS] = std::array::from_fn(|band| alpha_db_per_km[band] * slant / 1000.0);
     let air: [f64; BANDS] = air_db.map(attenuation_energy);
-    let homogeneous: [f64; BANDS] =
-        std::array::from_fn(|band| attenuation_energy(boundaries[0].attenuation_db[band]));
-    let favourable: [f64; BANDS] =
-        std::array::from_fn(|band| attenuation_energy(boundaries[1].attenuation_db[band]));
+    let [homogeneous, favourable] = [0, 1].map(|state| -> [f64; BANDS] {
+        std::array::from_fn(|band| {
+            attenuation_energy(boundaries[state].attenuation_db[band] + foliage_db[state][band])
+        })
+    });
     RayTerms {
         transfer: Transfer {
             slant_m: slant,
@@ -150,6 +167,7 @@ pub fn ray_terms(
         },
         favourable_probability,
         boundaries,
+        foliage_db,
         air_db,
         calm_edge,
     }

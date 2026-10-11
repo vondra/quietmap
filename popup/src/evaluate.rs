@@ -87,15 +87,16 @@ pub struct Received {
 
 /// How a source's sound reaches the receiver, its rays' A-weighted energy per period summed after
 /// each term (the façades' reflection in all): over distance alone, with the air's absorption, with
-/// the screening of each meteorological state (homogeneous, favourable), and with its ground too:
-/// the boundary, whose states the weather mixes into what is received. Each term's dB is the ratio
-/// of two sums, so the terms add up from the free field to the level.
+/// the screening of each meteorological state (homogeneous, favourable), with its ground too (the
+/// boundary), and with the foliage: the states, which the weather mixes into what is received.
+/// Each term's dB is the ratio of two sums, so the terms add up from the free field to the level.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Path {
     pub free: [f64; PERIODS],
     pub air: [f64; PERIODS],
     pub screened: [[f64; PERIODS]; 2],
     pub boundary: [[f64; PERIODS]; 2],
+    pub states: [[f64; PERIODS]; 2],
 }
 
 impl Path {
@@ -107,6 +108,7 @@ impl Path {
             for state in 0..2 {
                 self.screened[state][period] += weight * other.screened[state][period];
                 self.boundary[state][period] += weight * other.boundary[state][period];
+                self.states[state][period] += weight * other.states[state][period];
             }
         }
     }
@@ -136,11 +138,12 @@ fn add_ray(
     weight: f64,
 ) {
     let air = terms.air_db.map(|db| energy(-db));
-    let screened = [0, 1].map(|state| {
-        std::array::from_fn::<f64, BANDS, _>(|band| {
-            air[band] * energy(-terms.boundaries[state].without_ground_db[band])
-        })
-    });
+    let after = |attenuation_db: &[f64; BANDS]| -> [f64; BANDS] {
+        std::array::from_fn(|band| air[band] * energy(-attenuation_db[band]))
+    };
+    let boundaries = terms.boundaries.each_ref();
+    let screened = boundaries.map(|state| after(&state.without_ground_db));
+    let boundary = boundaries.map(|state| after(&state.attenuation_db));
     let transfer = &terms.transfer;
     let path = &mut received.path;
     let edge = &mut received.edges[terms.calm_edge as usize];
@@ -154,9 +157,10 @@ fn add_ray(
             received.bands[period][band] += power * transfer.periods[period][band];
             path.free[period] += power;
             path.air[period] += power * air[band];
-            for (state, (screened, boundary)) in screened.iter().zip(&transfer.states).enumerate() {
-                path.screened[state][period] += power * screened[band];
-                path.boundary[state][period] += power * boundary[band];
+            for state in 0..2 {
+                path.screened[state][period] += power * screened[state][band];
+                path.boundary[state][period] += power * boundary[state][band];
+                path.states[state][period] += power * transfer.states[state][band];
             }
         }
     }

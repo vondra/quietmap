@@ -32,7 +32,7 @@ export default function DataLayersSection({ dataLayers, onDataLayersChange }: Da
     <div>
       <button
         onClick={() => setOpen(value => !value)}
-        title="The data every click computes over: the ground's height, hard ground, buildings, road traffic, trains, the other sources and noise barriers; and the forest, which takes nothing off"
+        title="The data every click computes over: the ground's height, the forest, hard ground, buildings, road traffic, trains, the other sources and noise barriers"
         aria-expanded={open}
         className="flex w-full items-center gap-2.5 py-1.5 px-1 rounded-lg hover:bg-black/5 transition-colors cursor-pointer text-muted-foreground hover:text-foreground"
       >

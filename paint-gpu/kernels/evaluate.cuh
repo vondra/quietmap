@@ -103,8 +103,10 @@ __device__ u32 add_ray(const TerrainScene& ground, const ObstacleScene& obstacle
     for (int period = 0; period < PERIODS; period++) p[period] = favourable_at(receiver.weather, period, azimuth);
     for (int band = 0; band < BANDS; band++) {
         float air = attenuation_energy(receiver.weather.alpha_db_per_km[band] * transfer.slant_m / 1000.0f);
-        float homogeneous = attenuation_energy(state_attenuation_db(transfer.states[HOMOGENEOUS], band));
-        float favourable = attenuation_energy(state_attenuation_db(transfer.states[FAVOURABLE], band));
+        float homogeneous = attenuation_energy(state_attenuation_db(transfer.states[HOMOGENEOUS], band)
+                                               + foliage_db(transfer.foliage_m[HOMOGENEOUS], band));
+        float favourable = attenuation_energy(state_attenuation_db(transfer.states[FAVOURABLE], band)
+                                              + foliage_db(transfer.foliage_m[FAVOURABLE], band));
         for (int period = 0; period < PERIODS; period++) {
             sum[period] += source.energy[period][band] * air * (p[period] * favourable + (1.0f - p[period]) * homogeneous);
         }

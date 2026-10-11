@@ -255,6 +255,26 @@ fn pieces_on_either_side_keep_their_own_weather() {
     }
 }
 
+/// Two pieces in one share bin, one louder downwind and one louder in calm air (tree crowns can
+/// take more from the arc): the weather states still average to their mean (summed together the
+/// states' difference cancelled, and the mean read 0.29 dB loud).
+#[test]
+fn pieces_louder_in_opposite_states_keep_their_mean() {
+    let mut site = contributor(1, Layer::Industry, 0.0, 300.0);
+    site.weather = Weather::default();
+    let mut total = 0.0;
+    for (calm, downwind, share) in [(1.0, 10.0, 0.41), (10.0, 1.0, 0.49)] {
+        let mean = calm + share * (downwind - calm);
+        site.weather
+            .add(&[mean; PERIODS], &[[calm; PERIODS], [downwind; PERIODS]]);
+        total += mean;
+    }
+    site.energy = [total; PERIODS];
+    let line = Line::of(&site, None).unwrap();
+    let average = line.state_means(0).iter().sum::<f64>() / WEATHER_STATES as f64;
+    assert!((average - total).abs() < 1e-9, "{average} vs {total}");
+}
+
 /// A steady source alone keeps its weather: favourable (50 dB) half the time and calm (40 dB)
 /// the other half, it is at each for half the period, not at their mean.
 #[test]

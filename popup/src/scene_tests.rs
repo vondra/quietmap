@@ -1,10 +1,11 @@
-//! The ray's profile: a vertex on every lattice line it crosses, each on the bilinear surface, a
-//! crest one node wide never stepped over, an ocean tile at sea level.
+//! The ray's profile: a vertex on every lattice line it crosses, each on the bilinear surface with
+//! its nearest node's trees (none from a node without forest data), a crest one node wide never
+//! stepped over, an ocean tile at sea level.
 
 use super::*;
 use tiles::terrain::{Window, encode};
 
-/// Three by three tiles around Prague's centre, every node's height and imperviousness from
+/// Three by three tiles around Prague's centre, every node's height, imperviousness and trees from
 /// its global lattice row and column; `ocean` leaves the eastern column of tiles absent.
 struct Fixture {
     tiles: Vec<(TileId, Option<Vec<u8>>)>,
@@ -41,8 +42,8 @@ fn fixture_at(lon: f64, height: impl Fn(i64, i64) -> f64, ocean: impl Fn(i32) ->
                     Node {
                         height_code: ((height(row, column) + 500.0) * 5.0).round() as u16,
                         impervious_percent: (row * 7 + column * 3).rem_euclid(101) as u8,
-                        forest_percent: 0,
-                        canopy_m: 0,
+                        forest_percent: (row * 5 + column * 11).rem_euclid(101) as u8,
+                        canopy_m: (row * 3 + column * 13).rem_euclid(40) as u8,
                     }
                 })
                 .collect();
@@ -81,7 +82,7 @@ fn rugged(row: i64, column: i64) -> f64 {
 }
 
 #[test]
-fn every_vertex_lies_on_the_bilinear_surface_and_on_a_lattice_line() {
+fn every_vertex_lies_on_the_bilinear_surface_and_on_a_lattice_line_with_its_nearest_trees() {
     let fixture = fixture(rugged, false);
     fixture.with_ground(|ground| {
         let mut profile = Profile::default();
@@ -100,6 +101,11 @@ fn every_vertex_lies_on_the_bilinear_surface_and_on_a_lattice_line() {
                     "{t}"
                 );
                 assert!((profile.ground_factor[index] - expected.ground_factor).abs() < 1e-9);
+                assert_eq!(
+                    (profile.forest_cover[index], profile.canopy_m[index]),
+                    (expected.forest_cover, expected.canopy_m),
+                    "{t}"
+                );
             }
             // One vertex per lattice line between the ends (none passes through a node here).
             let lattice = |metres: [f64; 2]| {
@@ -251,4 +257,20 @@ fn a_vertex_on_a_coast_seam_reads_the_land_tile() {
         );
         assert_eq!(*profile.ground_m.last().unwrap(), OCEAN.height_m);
     });
+}
+
+/// A vertex takes the trees of its nearer node, and refuses a nearer node without forest data, as
+/// `Terrain::sample` does (a clamp read it as full cover: up to 24 dB at 8 kHz over 200 m).
+#[test]
+fn a_vertex_refuses_a_nearer_node_without_forest_data() {
+    let node = |forest_percent| Node {
+        height_code: 3_000,
+        impervious_percent: 0,
+        forest_percent,
+        canopy_m: 20,
+    };
+    let (trees, no_data) = (node(40), node(PERCENT_MAX + 1));
+    let cover = edge_sample(Some(trees), Some(no_data), 0.3).map(|sample| sample.forest_cover);
+    assert_eq!(cover, Some(0.4));
+    assert!(edge_sample(Some(trees), Some(no_data), 0.7).is_none());
 }

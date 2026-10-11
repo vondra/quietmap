@@ -11,7 +11,7 @@ import type { PopupPiece, RayProfile, RayTerms } from '../../../types/noise'
 import { fmtDbValue, fmtInt } from '../../../utils/formatters'
 import { HoverText } from '../../ui/info-tip'
 import { Chevron, COLUMN_NAME, lineRow } from '../shared'
-import { PathTable, signed } from '../source/PathTable'
+import { PathTable, signed, TREES } from '../source/PathTable'
 import { offsetM, rayColors } from './fan'
 import { ProfileDiagram } from './ProfileDiagram'
 
@@ -63,7 +63,8 @@ function TerrainProfile({ ground, slantM }: { ground: Ground, slantM: number }) 
   )
 }
 
-/** An opened ray: the angle it stands for, its length and air absorption, and its ground. */
+/** An opened ray: the angle it stands for, its length, air absorption and tree crowns, and its
+ *  ground. */
 function RayDetail({ angleRad, terms, ground }: { angleRad: number, terms: RayTerms, ground: Ground }) {
   const degrees = (angleRad * 180) / Math.PI
   return (
@@ -72,6 +73,8 @@ function RayDetail({ angleRad, terms, ground }: { angleRad: number, terms: RayTe
         {lineRow(<HoverText title={ANGLE}>Angle</HoverText>, `${degrees.toFixed(degrees < 1 ? 2 : 1)}°`)}
         {lineRow('Length', `${fmtInt(terms[5])} m`)}
         {lineRow('Air absorption', signed(-terms[4]))}
+        {(terms[6] !== 0 || terms[7] !== 0)
+          && lineRow(<HoverText title={TREES}>Trees, calm · downwind</HoverText>, `${signed(-terms[6])} · ${signed(-terms[7])}`)}
       </div>
       <TerrainProfile ground={ground} slantM={terms[5]} />
     </div>

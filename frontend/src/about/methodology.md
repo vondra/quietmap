@@ -262,8 +262,11 @@ OpenStreetMap and Overture Maps.
 
 CNOSSOS-EU in eight octave bands: geometric spreading, atmospheric absorption (ISO
 9613-1), ground effect, diffraction over terrain, buildings and barriers, and the share of
-favourable, downward-refracting weather by direction. Forest takes nothing off: CNOSSOS-EU
-has no term for foliage, and the ground under trees counts as soft ground.
+favourable, downward-refracting weather by direction. Tree crowns add ISO 9613-2's foliage
+attenuation (Annex A), which CNOSSOS-EU lacks: over the metres a ray runs through crowns,
+weighted by the tree cover, from 0.02 dB a metre at 63 Hz to 0.12 dB at 8 kHz, at most 200 m.
+At 392 Polish road monitoring stations behind forest the model read 2.4 dB above the
+measurement without it and 0.3 dB with it; at the 5,195 without forest it stays 0.2 dB above.
 
 Terrain is a bare-earth model: national LiDAR surveys in 17 countries (see the credits
 page) over the GEDTM30 world model; ground sealing comes from imperviousness data, water

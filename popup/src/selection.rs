@@ -160,7 +160,7 @@ impl LayerSelection {
         let energy = period_sums(&received.bands).map(|value| weight * value);
         let states = received
             .path
-            .boundary
+            .states
             .map(|state| state.map(|value| weight * value));
         let contributor = self
             .contributors

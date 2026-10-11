@@ -210,6 +210,11 @@ impl Terrain {
         &self.nodes
     }
 
+    /// The crowns' height of every node (m), row-major: what the GPU painter uploads beside them.
+    pub fn canopy_bytes(&self) -> &[u8] {
+        &self.canopy_m
+    }
+
     /// Web Mercator y of every node row (the GPU painter samples with these very values).
     pub fn row_mercator_y(&self) -> &[f64] {
         &self.row_mercator_y

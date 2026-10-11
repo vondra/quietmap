@@ -1,9 +1,11 @@
-// One source-receiver ray in f32, streamed: popup/src/scene.rs (the ground at every lattice line the
-// ray crosses, walked in scene.cuh) and physics/src/ray.rs (the vertical path of terrain, roofs and
-// obstacle tops, and its transfer) without storing the ray. Terrain samples and wall crossings arrive in order of distance; each stretch of
-// the path is added at once to the moments the mean planes need, every candidate at once to both
-// states' bands (rubber_band.rs: a monotone chain of the states' rays), a footprint's crossings pair into a roof
-// as they arrive. The CPU keeps the same path in arrays and sorts; the answer is the same.
+// One source-receiver ray in f32, streamed: popup/src/scene.rs (the ground at every lattice line
+// the ray crosses, walked in scene.cuh), physics/src/ray.rs (the vertical path of terrain, roofs and
+// obstacle tops, and its transfer) and physics/src/foliage.rs, without storing the ray. Terrain
+// samples and wall crossings arrive in order of distance; each stretch of the path is added at once
+// to the moments the mean planes need, every candidate at once to both states' bands
+// (rubber_band.rs: a monotone chain of the states' rays), a footprint's crossings pair into a roof
+// as they arrive, and each stretch adds its metres in the crowns. The CPU keeps the same path in
+// arrays and sorts; the answer is the same.
 
 // Per-thread capacities; a ray needing more fails with FAILED_CAPACITY and goes to the CPU.
 #define TERRAIN_HISTORY 32   // vertices kept behind the stream, for a roof that closes later
@@ -93,7 +95,38 @@ struct RayStream {
     int recent_count;
     float last_x;
     StateStream states[2];
+    // The cover-weighted metres of each state's ray inside the crowns so far, and the last sample
+    // with its distance from the source (physics/src/foliage.rs depth_m).
+    float foliage_m[2];
+    GroundSample trees_behind;
+    float trees_behind_x;
 };
+
+// The tree cover where a ray at `altitude` runs inside the crowns over `ground`, else 0.
+__device__ __forceinline__ float cover_inside_crowns(float altitude, const GroundSample& ground) {
+    float above = altitude - ground.height_m;
+    return above > 0.0f && above <= ground.canopy_m ? ground.forest_cover : 0.0f;
+}
+
+// Each state's foliage depth over the stretch from the last sample to `ground` at `x`: the cover
+// where the state's ray runs inside the crowns, linear between the samples, times the stretch's
+// length along the ray.
+__device__ void add_foliage(RayStream& s, float x, const GroundSample& ground) {
+    const GroundSample& behind = s.trees_behind;
+    if (behind.forest_cover > 0.0f || ground.forest_cover > 0.0f) {
+        PlanePoint source = s.path.source, receiver = s.path.receiver;
+        for (int state = 0; state < 2; state++) {
+            const StateRay& ray = s.states[state].ray;
+            float za = chord_altitude(source, receiver, s.trees_behind_x)
+                + ray_height_above_chord(ray, source, receiver, s.trees_behind_x);
+            float zb = chord_altitude(source, receiver, x) + ray_height_above_chord(ray, source, receiver, x);
+            float cover = cover_inside_crowns(za, behind) + cover_inside_crowns(zb, ground);
+            s.foliage_m[state] += 0.5f * cover * hypotf(x - s.trees_behind_x, zb - za);
+        }
+    }
+    s.trees_behind = ground;
+    s.trees_behind_x = x;
+}
 
 // Terrain vertex k (generated in order, kept for TERRAIN_HISTORY vertices): the source, the walk's
 // crossings, the receiver.
@@ -123,6 +156,10 @@ __device__ u32 ray_sample(RayStream& s, int k, TerrainPoint* out) {
         if (s.sampled == 0) {
             s.path.source_ground_z = sample.height_m;
             s.path.source_ground_g = sample.ground_factor;
+            s.trees_behind = sample;
+            s.trees_behind_x = 0.0f;
+        } else {
+            add_foliage(s, point.x, sample);
         }
         point.z = point.x < s.platform_half_width_m ? fminf(sample.height_m, s.path.source_ground_z) : sample.height_m;
         s.history[s.sampled % TERRAIN_HISTORY] = point;
@@ -440,11 +477,22 @@ __device__ u32 stream_crossing(RayStream& s, const Crossing& c) {
     return 0;
 }
 
-// One ray's boundary in each state and its slant: ray::ray_terms before its band loop.
+// One ray's boundary and foliage depth in each state and its slant: ray::ray_terms before its
+// band loop.
 struct Transfer {
     StateTerm states[2];
+    float foliage_m[2];
     float slant_m;
 };
+
+// physics/src/foliage.rs attenuation_db: ISO 9613-2 Table A.1 for `depth_m` of foliage, one band.
+__device__ __forceinline__ float foliage_db(float depth_m, int band) {
+    const float short_db[BANDS] = {0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 2.0f, 3.0f};
+    const float db_per_m[BANDS] = {0.02f, 0.03f, 0.04f, 0.05f, 0.06f, 0.08f, 0.09f, 0.12f};
+    if (depth_m < 10.0f) return 0.0f;
+    if (depth_m < 20.0f) return short_db[band];
+    return db_per_m[band] * fminf(depth_m, 200.0f);
+}
 
 __device__ __forceinline__ float attenuation_energy(float attenuation_db) {
     return expf(-attenuation_db * (QM_LN_10 / 10.0f));
@@ -507,16 +555,6 @@ __device__ u32 ray_transfer(const TerrainScene& ground, const ObstacleScene& obs
     s.path.receiver.z = ends.receiver_altitude_m;
     s.path.source_ground_factor = ends.source_ground_factor >= 0.0f ? ends.source_ground_factor : first.g;
     s.path.whole.z = s.path.whole.xz = s.path.whole.g = 0.0f;
-    s.streamed_to = 0.0f;
-    s.segment = 1;
-    s.below = first;
-    if ((failed = ray_sample(s, 1, &s.above))) return failed;
-    s.covered_to = -QM_INFINITY;
-    s.open_count = 0;
-    s.closing_count = 0;
-    s.recent_next = 0;
-    s.recent_count = 0;
-    s.last_x = 0.0f;
     for (int state = 0; state < 2; state++) {
         StateStream& st = s.states[state];
         st.ray = state_ray_between(state, s.path.source, s.path.receiver);
@@ -527,7 +565,18 @@ __device__ u32 ray_transfer(const TerrainScene& ground, const ObstacleScene& obs
         st.blocked = false;
         st.has_best = false;
         st.best_delta = 0.0f;
+        s.foliage_m[state] = 0.0f;
     }
+    s.streamed_to = 0.0f;
+    s.segment = 1;
+    s.below = first;
+    if ((failed = ray_sample(s, 1, &s.above))) return failed;
+    s.covered_to = -QM_INFINITY;
+    s.open_count = 0;
+    s.closing_count = 0;
+    s.recent_next = 0;
+    s.recent_count = 0;
+    s.last_x = 0.0f;
     s.containing_count = 0;
     if (obstacles_on_ray && ends.own_footprint != 0) {
         ParityTaker parity = {&s};
@@ -551,6 +600,7 @@ __device__ u32 ray_transfer(const TerrainScene& ground, const ObstacleScene& obs
         } else {
             state_term(s.path, st.ray, &st.best, st.has_best ? 1 : 0, false, &transfer->states[state]);
         }
+        transfer->foliage_m[state] = s.foliage_m[state];
     }
     transfer->slant_m = fmaxf(hypotf(horizontal, ends.receiver_altitude_m - source_altitude), 1.0f);
     return 0;

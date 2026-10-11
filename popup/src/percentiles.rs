@@ -96,9 +96,12 @@ const SHARE_BINS: usize = 10;
 /// their mix, binned by its pieces' favourable share p (CNOSSOS-EU 2.5.9, by direction): the
 /// pieces on either side of a click are favourable at different times (ERA5's sectors differ by
 /// up to 50 points across), so one share for the whole would make them all favourable or all calm
-/// together. A draw's weather is favourable in the bins whose share lies above it.
+/// together. Pieces louder in calm air (tree crowns or the ground taking more from the arc) keep
+/// bins of their own: summed with the others the states' difference cancels, and the share no
+/// longer gives back the mean. A draw's weather is favourable in the bins whose share lies above
+/// it.
 #[derive(Clone, Default)]
-pub struct Weather([[[f64; PERIODS]; 3]; SHARE_BINS]);
+pub struct Weather([[[f64; PERIODS]; 3]; 2 * SHARE_BINS]);
 
 impl Weather {
     /// Adds a piece of `energy` per period, the mix of its `states`; a piece without states
@@ -111,7 +114,9 @@ impl Weather {
                 [energy[period]; 2]
             };
             let share = favourable_share(energy[period], homogeneous, favourable);
-            let bin = &mut self.0[((share * SHARE_BINS as f64) as usize).min(SHARE_BINS - 1)];
+            let calm_louder = usize::from(favourable < homogeneous);
+            let bin = &mut self.0[calm_louder * SHARE_BINS
+                + ((share * SHARE_BINS as f64) as usize).min(SHARE_BINS - 1)];
             bin[0][period] += homogeneous;
             bin[1][period] += favourable;
             bin[2][period] += energy[period];
@@ -120,7 +125,7 @@ impl Weather {
 
     /// Each bin's favourable share and its energy of `period` in either state: a draw's weather u
     /// in [0, 1) takes the favourable energy of the bins whose share is above it.
-    fn states(&self, period: usize) -> [(f64, f64, f64); SHARE_BINS] {
+    fn states(&self, period: usize) -> [(f64, f64, f64); 2 * SHARE_BINS] {
         self.0.map(|[homogeneous, favourable, mix]| {
             let share = favourable_share(mix[period], homogeneous[period], favourable[period]);
             (share, homogeneous[period], favourable[period])

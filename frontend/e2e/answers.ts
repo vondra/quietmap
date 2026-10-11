@@ -76,16 +76,16 @@ export function computedPiece(contributor: Contributor, lden: number, distance_m
     received: { ld: lden - 2, le: lden - 3, ln: lden - 8, lden },
     path: {
       free_lden: lden + 1.1, air_db: -0.1, screening_db: [-1.6, -0.6], ground_db: [0.2, 0.3],
-      facades_db: 0, lden: [lden - 0.4, lden + 0.6], bent_percent: [40, 55, 65],
+      foliage_db: [0, 0], facades_db: 0, lden: [lden - 0.4, lden + 0.6], bent_percent: [40, 55, 65],
     },
     metadata: contributor.metadata,
     // Terms as losses: ground and screening calm and downwind, screening alone calm and downwind,
-    // air; slant m.
+    // air; slant m; tree crowns calm and downwind.
     rays: [
-      [POINT.lat - 0.00015, POINT.lng + east, 0.3, lden - 30.5, [21.5, 8.2, 20, 8.5, 0.1, 22]],
-      [POINT.lat - 0.00005, POINT.lng + east, 0.6, lden - 4, [-0.4, -0.5, 0, 0, 0.1, 13]],
-      [POINT.lat + 0.00005, POINT.lng + east, 0.6, lden - 4, [-0.4, -0.5, 0, 0, 0.1, 13]],
-      [POINT.lat + 0.00015, POINT.lng + east, 0.3, lden - 7, [-0.3, -0.4, 0, 0, 0.1, 22]],
+      [POINT.lat - 0.00015, POINT.lng + east, 0.3, lden - 30.5, [21.5, 8.2, 20, 8.5, 0.1, 22, 0, 0]],
+      [POINT.lat - 0.00005, POINT.lng + east, 0.6, lden - 4, [-0.4, -0.5, 0, 0, 0.1, 13, 0, 0]],
+      [POINT.lat + 0.00005, POINT.lng + east, 0.6, lden - 4, [-0.4, -0.5, 0, 0, 0.1, 13, 0, 0]],
+      [POINT.lat + 0.00015, POINT.lng + east, 0.3, lden - 7, [-0.3, -0.4, 0, 0, 0.1, 22, 0, 0]],
     ],
     trace: { receiver_altitude_m: 354, ray: [nearest, [POINT.lat, POINT.lng]] },
   }

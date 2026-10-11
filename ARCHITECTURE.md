@@ -39,8 +39,8 @@ chain (`aircraft-segments`, `aircraft-shuffle`, `aircraft-boxes`, `aircraft-even
 `aircraft-tracks`, checked by `aircraft-check`) and `complete`, the marker written last.
 
 `physics/` holds the kernels (ray, line quadrature, bounds, Doc 29), the emission models the
-builders run, ISO 9613-1 air absorption, ISO 532-1 loudness and Kurze's statistics, with the
-standards' test cases; `tiles/` holds each kind's file format, writer and reader (the only code
+builders run, ISO 9613-1 air absorption, ISO 9613-2's foliage, ISO 532-1 loudness and Kurze's
+statistics, with the standards' test cases; `tiles/` holds each kind's file format, writer and reader (the only code
 that knows the bytes); `bench/` the benchmark points and runner; `scripts/` the gate
 (`check-fast.sh`) and the generator of the Doc 29 class tables (`aircraft-classes.py`).
 
@@ -52,7 +52,7 @@ standard web-map XYZ numbering (y grows southwards). What the readers rely on be
 
 | kind | module | contract |
 |---|---|---|
-| `terrain` | `tiles/src/terrain.rs` | the one-arc-second node window that brackets the tile: neighbours share their seam nodes; a sample touching a node without data is refused, never guessed |
+| `terrain` | `tiles/src/terrain.rs` | the one-arc-second node window that brackets the tile: neighbours share their seam nodes; a sample touching a node without data is refused, never guessed; height, sealing, tree cover and crown height a node |
 | `obstacles` | `tiles/src/obstacles.rs` | outlines stored whole, listed per z19 cell (128 x 128 a tile) through a cell -> offset table |
 | `sources` | `tiles/src/sources.rs` | 12-byte pieces, 80-byte records, each distinct display text once; emission per octave band and period as u16 in 0.01 dB |
 | `aircraft`, `aircraft-far` | `tiles/src/aircraft.rs` | the boxes, each with its two loudest flight pieces, and the tile's flight table |
@@ -153,7 +153,7 @@ onto those sums, is in How it works. The code, in the order of a click (`popup/s
 - `selection.rs`: the stop rule and the sample, one omitted-energy account per layer and period
   across all rings, the evaluations of all layers in one parallel pool.
 - `evaluate.rs`: one source at the receiver, a point's ray or a line's quadrature nodes
-  (`physics/src/line.rs`), each through `physics/src/ray.rs` and `cnossos/`; its energy per
+  (`physics/src/line.rs`), each through `physics/src/ray.rs`, `cnossos/` and `foliage.rs`; its energy per
   period and band, and its sound path, its rays' energy summed after each term.
 - `building.rs`: a click inside a building, answered at its loudest façade.
 - `aircraft/`: every box through the click-time equation, screened by the receiver's horizons;
@@ -202,8 +202,8 @@ failed click ends with one `{"error"}` line. It serves the built map and the hea
 proxies the geocoder (Photon) and the places to stay (Stay22, kept in memory no longer than
 Stay22 allows), limits each client to 5 requests a second on the popup, geocoder and stays, and
 runs `qm-raster` once per tile of a data layer the visitor switched on: the "Advanced" group,
-elevation, hard ground, buildings, noise barriers, road traffic, trains and other sources as the
-computation reads them, and the forest cover it leaves out. `frontend/` redraws the popup on every
+elevation, forest, hard ground, buildings, noise barriers, road traffic, trains and other sources
+as the computation reads them. `frontend/` redraws the popup on every
 line, marks a partial answer as still refining, shows an error line as an error, aborts the
 previous request on a new click, and draws the places to stay as priced pins.
 

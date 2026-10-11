@@ -85,6 +85,7 @@ struct TerrainTile {
     column_at_origin: f32,
     columns_per_metre: f32,
     nodes_offset: u64,
+    canopy_offset: u64,
     rows_offset: u64,
 }
 
@@ -559,6 +560,7 @@ impl DeviceSquare {
                             column_at_origin: column_at_origin as f32,
                             columns_per_metre: (columns_per_unit / frame.east_m_per_unit) as f32,
                             nodes_offset: append_aligned(&mut nodes, terrain.node_bytes()),
+                            canopy_offset: append_aligned(&mut nodes, terrain.canopy_bytes()),
                             rows_offset: row_north_m.len() as u64,
                         };
                         row_north_m.extend(

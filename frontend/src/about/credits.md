@@ -52,8 +52,9 @@ None of this would exist without other people's open data. Thank you to everyone
   covers Antarctic ice and the remaining GB gaps (produced using Copernicus WorldDEM-30
   © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018, provided under COPERNICUS
   by the European Union and ESA; all rights reserved)
-- Tree cover, shown in the forest layer (the computation takes nothing off for it): [Copernicus Tree Cover Density](https://land.copernicus.eu/en/products/high-resolution-layer-tree-cover-density)
-  in Europe, [Hansen/UMD Global Forest Change](https://glad.earthengine.app/view/global-forest-change) elsewhere
+- Tree cover: [Copernicus Tree Cover Density](https://land.copernicus.eu/en/products/high-resolution-layer-tree-cover-density)
+  in Europe, [Hansen/UMD Global Forest Change](https://glad.earthengine.app/view/global-forest-change) elsewhere;
+  tree height: [GLAD Global Forest Canopy Height 2020](https://glad.umd.edu/dataset/gedi) (University of Maryland, CC BY 4.0)
 - Hard ground (paved, built over or water): [ESA WorldCover 2021](https://worldcover2021.esa.int/) (CC BY 4.0), refined by
   [Copernicus Imperviousness Density](https://land.copernicus.eu/en/products/high-resolution-layer-imperviousness) in Europe
 - Meteorology: [ERA5](https://www.ecmwf.int/en/forecasts/dataset/ecmwf-reanalysis-v5) 1991–2020 climatology

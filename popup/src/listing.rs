@@ -89,13 +89,14 @@ fn sampled(ground: &physics::profile::Profile) -> Vec<[f64; 3]> {
 
 /// A ray's terms as A-weighted attenuations over the piece's day emission spectrum (dB): ground
 /// and screening together and screening alone per state (calm air, bent down), the air's
-/// absorption, and its slant length (m).
+/// absorption, its slant length (m), and the tree crowns per state.
 #[derive(Clone, Copy)]
 pub struct ListedTerms {
     pub boundary_db: [f64; 2],
     pub without_ground_db: [f64; 2],
     pub air_db: f64,
     pub slant_m: f64,
+    pub foliage_db: [f64; 2],
 }
 
 /// Where a listed piece's nearest ray runs on the map, from its closest point to the receiver
@@ -242,6 +243,7 @@ pub fn list_source(
                                 .map(|state| weighted(&terms.boundaries[state].without_ground_db)),
                             air_db: weighted(&terms.air_db),
                             slant_m: terms.transfer.slant_m,
+                            foliage_db: terms.foliage_db.each_ref().map(weighted),
                         },
                     })
                 },

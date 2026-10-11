@@ -76,10 +76,10 @@ fn sone(value: f64) -> f64 {
 }
 
 /// How a contributor's sound reaches the click, in Lden: its level over distance alone (the
-/// façades' reflection apart), the air's absorption, the screening and the ground in calm air and
-/// bent down by the weather (dB, each pair adding up to its state's level here, the façades' last),
-/// those two levels, and per day, evening and night the share of the time downwind that mixes
-/// them into what it delivers, `received` (none where the weather moves it by under 0.05 dB).
+/// façades' reflection apart), the air's absorption, the screening, the ground and the foliage in
+/// calm air and bent down by the weather (dB, adding up to each state's level here, the façades'
+/// last), those two levels, and per day, evening and night the share of the time downwind that
+/// mixes them into what it delivers, `received` (none where the weather moves it by under 0.05 dB).
 fn path_account(
     path: &crate::evaluate::Path,
     received: &[f64; PERIODS],
@@ -90,6 +90,7 @@ fn path_account(
     let (free, air) = (lden(&path.free), lden(&path.air));
     let screened = path.screened.map(|state| lden(&state));
     let boundary = path.boundary.map(|state| lden(&state));
+    let states = path.states.map(|state| lden(&state));
     let step = |to: f64, from: f64| {
         if to > 0.0 && from > 0.0 {
             json!((100.0 * (to / from).log10()).round() / 10.0)
@@ -98,8 +99,9 @@ fn path_account(
         }
     };
     let percent = |period: usize| {
-        let [calm, downwind] = path.boundary.map(|state| state[period]);
-        (calm > 0.0 && downwind > calm * physics::bands::energy(0.05)).then(|| {
+        let [calm, downwind] = path.states.map(|state| state[period]);
+        let (quieter, louder) = (calm.min(downwind), calm.max(downwind));
+        (quieter > 0.0 && louder > quieter * physics::bands::energy(0.05)).then(|| {
             let share = crate::percentiles::favourable_share(received[period], calm, downwind);
             (100.0 * share).round()
         })
@@ -109,8 +111,9 @@ fn path_account(
         "air_db": step(air, free),
         "screening_db": [step(screened[0], air), step(screened[1], air)],
         "ground_db": [step(boundary[0], screened[0]), step(boundary[1], screened[1])],
+        "foliage_db": [step(states[0], boundary[0]), step(states[1], boundary[1])],
         "facades_db": reflection_db,
-        "lden": path.boundary.map(|state| lden(&state) * facades).map(level),
+        "lden": states.map(|state| state * facades).map(level),
         "bent_percent": [percent(0), percent(1), percent(2)],
     })
 }
@@ -335,7 +338,8 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
             "distance_m": (candidate.distance_m * 10.0).round() / 10.0,
             // Every ray the piece was summed over: [lat, lon] it leaves from, the in-plane angle
             // it stands for (rad, 0 for a point), the Lden it delivers and its terms (dB: ground
-            // and screening calm and bent, screening alone calm and bent, air; slant m).
+            // and screening calm and bent, screening alone calm and bent, air; slant m; tree
+            // crowns calm and bent, dB).
             "rays": piece.rays.iter().map(|ray| {
                 let (lat, lon) = update.frame.to_mercator(ray.from_m).to_degrees();
                 let tenth = |value: f64| (value * 10.0).round() / 10.0;
@@ -344,6 +348,7 @@ pub fn update_line(update: &Update, sequence: usize) -> Result<String, String> {
                     tenth(t.boundary_db[0]), tenth(t.boundary_db[1]),
                     tenth(t.without_ground_db[0]), tenth(t.without_ground_db[1]),
                     tenth(t.air_db), t.slant_m.round(),
+                    tenth(t.foliage_db[0]), tenth(t.foliage_db[1]),
                 ]);
                 let mut listed = json!([(lat * 1e6).round() / 1e6, (lon * 1e6).round() / 1e6,
                     (ray.angle_rad * 1e6).round() / 1e6, lden(&ray.energy), terms]);

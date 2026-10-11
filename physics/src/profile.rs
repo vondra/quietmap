@@ -5,7 +5,7 @@
 //! dB loud and a railway 3.8 dB, `evidence/2026-10-10/propagation-architecture/`).
 
 /// The ground under one ray, sampled at fractions `t` of its horizontal length (0 the source, 1
-/// the receiver), in increasing order.
+/// the receiver), in increasing order; every vector holds one value a sample.
 #[derive(Debug, Clone, Default)]
 pub struct Profile {
     pub horizontal_m: f64,
@@ -14,6 +14,10 @@ pub struct Profile {
     pub ground_m: Vec<f64>,
     /// CNOSSOS G in [0, 1].
     pub ground_factor: Vec<f64>,
+    /// Tree cover in [0, 1].
+    pub forest_cover: Vec<f64>,
+    /// Height of the tree crowns' top above the ground (m).
+    pub canopy_m: Vec<f64>,
 }
 
 impl Profile {
@@ -23,13 +27,24 @@ impl Profile {
         self.t.clear();
         self.ground_m.clear();
         self.ground_factor.clear();
+        self.forest_cover.clear();
+        self.canopy_m.clear();
     }
 
     /// Adds the ground at fraction `t`, beyond every sample already added.
-    pub fn push(&mut self, t: f64, ground_m: f64, ground_factor: f64) {
+    pub fn push(
+        &mut self,
+        t: f64,
+        ground_m: f64,
+        ground_factor: f64,
+        forest_cover: f64,
+        canopy_m: f64,
+    ) {
         debug_assert!(self.t.last().is_none_or(|&last| t > last));
         self.t.push(t);
         self.ground_m.push(ground_m);
         self.ground_factor.push(ground_factor);
+        self.forest_cover.push(forest_cover);
+        self.canopy_m.push(canopy_m);
     }
 }

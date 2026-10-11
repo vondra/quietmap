@@ -21,9 +21,10 @@
 #define TILE_EMPTY 1
 #define TILE_READ 2
 
-// One terrain tile of the neighbourhood (tiles::terrain::Terrain): its 4-byte nodes in
-// `TerrainScene::nodes`, its node column at the frame's origin and per metre east, and its rows'
-// metres north of the origin in `TerrainScene::row_north_m` (descending: row 0 is the northernmost).
+// One terrain tile of the neighbourhood (tiles::terrain::Terrain): its 4-byte nodes and its
+// crowns' heights (a byte a node) in `TerrainScene::nodes`, its node column at the frame's origin
+// and per metre east, and its rows' metres north of the origin in `TerrainScene::row_north_m`
+// (descending: row 0 is the northernmost).
 struct TerrainTile {
     i32 state;
     u32 rows;
@@ -32,6 +33,7 @@ struct TerrainTile {
     float column_at_origin;
     float columns_per_metre;
     u64 nodes_offset;
+    u64 canopy_offset;
     u64 rows_offset;
 };
 
@@ -61,7 +63,26 @@ struct TerrainScene {
 struct GroundSample {
     float height_m;
     float ground_factor;
+    float forest_cover;         // in [0, 1], of the nearest node
+    float canopy_m;             // the crowns' height above the ground, of the nearest node
 };
+
+// The trees of node (row, column) of a read tile into `out`; false where it has no forest data.
+__device__ bool tile_trees(const TerrainScene& sc, const TerrainTile& tile, u32 row, u32 column, GroundSample* out) {
+    u64 index = (u64)row * tile.columns + column;
+    u32 forest = *(const u32*)(sc.nodes + tile.nodes_offset + 4 * index) >> 24;
+    out->forest_cover = (float)forest * 0.01f;
+    out->canopy_m = (float)sc.nodes[tile.canopy_offset + index];
+    return forest <= PERCENT_MAX;
+}
+
+// The ground of an ocean tile: sea level, hard water, no trees (tiles::terrain::OCEAN).
+__device__ void ocean(GroundSample* out) {
+    out->height_m = 0.0f;
+    out->ground_factor = 0.0f;
+    out->forest_cover = 0.0f;
+    out->canopy_m = 0.0f;
+}
 
 // terrain::Terrain::sample at a point `east_m`, `north_m` of the frame; false outside the window
 // or at a node without data.
@@ -90,7 +111,6 @@ __device__ bool terrain_sample(const TerrainScene& scene, const TerrainTile& til
     u32 record[4];
     for (int k = 0; k < 4; k++) record[k] = *(const u32*)(nodes + 4 * ((u64)corner_row[k] * tile.columns + corner_column[k]));
     int nearest = (row_fraction >= 0.5f ? 2 : 0) + (column_fraction >= 0.5f ? 1 : 0);
-    if (((record[nearest] >> 24) & 0xff) > PERCENT_MAX) return false;
     for (int k = 0; k < 4; k++) {
         if ((record[k] & 0xffff) == HEIGHT_MISSING || ((record[k] >> 16) & 0xff) > PERCENT_MAX) return false;
     }
@@ -107,7 +127,7 @@ __device__ bool terrain_sample(const TerrainScene& scene, const TerrainTile& til
     }
     out->height_m = height;
     out->ground_factor = 1.0f - imperviousness * 0.01f;
-    return true;
+    return tile_trees(scene, tile, corner_row[nearest], corner_column[nearest], out);
 }
 
 // The tile of the neighbourhood at offset (dx, dy) from the square, or null outside the radius.
@@ -207,28 +227,36 @@ __device__ bool tile_edge_sample(const TerrainScene& sc, const TerrainTile& tile
     if (f >= 1.0f) { h0 = h1; i0 = i1; }
     out->height_m = h0 + f * (h1 - h0);
     out->ground_factor = 1.0f - (i0 + f * (i1 - i0)) * 0.01f;
-    return true;
+    return f < 0.5f ? tile_trees(sc, tile, (u32)r0, (u32)c0, out) : tile_trees(sc, tile, (u32)r1, (u32)c1, out);
 }
 
+// A walk's vertex this close to a tile's edge (in tiles, about 10 cm) lies on it: f32's error is
+// millimetres, and no lattice line that is not the edge comes within a metre of it.
+#define ON_TILE_EDGE 1e-5f
+
 // The ground at a walk's vertex (popup::scene::Ground::fill_profile): from the tile holding it,
-// or, where that tile is ocean, from a land tile north or west of it that holds the vertex's
-// nodes (a vertex on a coast seam); 0 or a failure.
+// or, for a vertex on the north or west edge of an ocean tile (the equator, every 32nd tile
+// meridian: lattice lines), from the land tile across that edge, which holds the seam's nodes;
+// 0 or a failure.
 __device__ u32 walk_sample(const TerrainScene& sc, float east_m, float north_m, bool on_row, int scene_row,
                            int north, GroundSample* out) {
-    i64 dx = (i64)floorf(sc.tile_x_at_origin + east_m * sc.tiles_per_metre_east);
-    i64 dy = (i64)floorf(sc.tile_y_at_origin - north_m * sc.tiles_per_metre_north);
+    float tile_x = sc.tile_x_at_origin + east_m * sc.tiles_per_metre_east;
+    float tile_y = sc.tile_y_at_origin - north_m * sc.tiles_per_metre_north;
+    i64 dx = (i64)floorf(tile_x), dy = (i64)floorf(tile_y);
     const TerrainTile* tile = terrain_tile(sc, dx, dy);
     if (!tile || tile->state == TILE_NOT_READ) return FAILED_NOT_READ;
     if (tile->state == TILE_READ) {
         return tile_edge_sample(sc, *tile, east_m, north_m, on_row, scene_row, north, out) ? 0 : FAILED_NO_TERRAIN;
     }
-    const TerrainTile* across[2] = {terrain_tile(sc, dx, dy - 1), terrain_tile(sc, dx - 1, dy)};
+    const TerrainTile* across[2] = {
+        tile_y - (float)dy < ON_TILE_EDGE ? terrain_tile(sc, dx, dy - 1) : 0,
+        tile_x - (float)dx < ON_TILE_EDGE ? terrain_tile(sc, dx - 1, dy) : 0,
+    };
     for (int k = 0; k < 2; k++) {
         if (across[k] && across[k]->state == TILE_READ
             && tile_edge_sample(sc, *across[k], east_m, north_m, on_row, scene_row, north, out)) return 0;
     }
-    out->height_m = 0.0f;
-    out->ground_factor = 0.0f;
+    ocean(out);
     return 0;
 }
 
@@ -240,8 +268,7 @@ __device__ u32 ground_at(const TerrainScene& scene, float east_m, float north_m,
     const TerrainTile& tile = scene.tiles[(dy + scene.radius) * (2 * scene.radius + 1) + dx + scene.radius];
     if (tile.state == TILE_NOT_READ) return FAILED_NOT_READ;
     if (tile.state == TILE_EMPTY) {
-        out->height_m = 0.0f;
-        out->ground_factor = 0.0f;
+        ocean(out);
         return 0;
     }
     return terrain_sample(scene, tile, east_m, north_m, out) ? 0 : FAILED_NO_TERRAIN;

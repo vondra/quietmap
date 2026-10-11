@@ -8,7 +8,7 @@ Everything on the map is computed from one tree of files. A click reads the tile
 
 ## The data on disk
 
-The world is cut into the standard web-map tiles of zoom 12, 6.3 km wide in Prague and 9.8 km at the equator. Each tile has one file per kind of data, and the 64 tiles of one zoom-9 square keep their files in one directory. Where a tile holds nothing of a kind, it has no file of that kind: the open sea has no terrain file, a desert without roads no sources file. The world's tree takes 2.8 TB (October 2026).
+The world is cut into the standard web-map tiles of zoom 12, 6.3 km wide in Prague and 9.8 km at the equator. Each tile has one file per kind of data, and the 64 tiles of one zoom-9 square keep their files in one directory. Where a tile holds nothing of a kind, it has no file of that kind: the open sea has no terrain file, a desert without roads no sources file. The world's tree takes 1.9 TB (October 2026).
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 226" role="img" aria-label="A zoom-9 square of eight by eight tiles with tile 2212/1387 of Prague's centre marked, and the directory holding its six files, beside the weather table and the flight tracks" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
@@ -43,7 +43,7 @@ The world is cut into the standard web-map tiles of zoom 12, 6.3 km wide in Prag
 
 | Kind | A file holds | The world |
 |---|---|---|
-| `terrain` | the ground's height every arc-second (31 m north to south), how much of it is sealed, and its forest cover | 1,109 GB in 7.0 million files |
+| `terrain` | the ground's height every arc-second (31 m north to south), how much of it is sealed, its forest cover and how tall the trees stand | 202 GB in 7.0 million files |
 | `obstacles` | the outlines and heights of buildings and walls, listed by cells 49 m wide in Prague | 233 GB in 1.4 million |
 | `sources` | every ground source, as points and straight pieces | 229 GB in 2.2 million |
 | `aircraft` | a year of flights, summed into boxes of airspace | 1,025 GB in 2.6 million |
@@ -148,12 +148,13 @@ A point sends one ray. A line piece is summed as CNOSSOS-EU sums a line of point
 
 ### One ray
 
-Along each ray the click reads the ground wherever the ray crosses a line of the terrain grid, every 20 to 30 m; between two grid points the height is interpolated, so no ridge of the grid falls between two readings. Each sample gives the terrain's height and how hard the ground is, from soft soil to sealed ground and water. Every wall the ray crosses stands at its height, and a building's roof joins its walls as hard ground. Over this cross-section CNOSSOS-EU takes:
+Along each ray the click reads the ground wherever the ray crosses a line of the terrain grid, every 20 to 30 m; between two grid points the height is interpolated, so no ridge of the grid falls between two readings. Each sample gives the terrain's height, how hard the ground is, from soft soil to sealed ground and water, and the trees: their cover and how tall they stand. Every wall the ray crosses stands at its height, and a building's roof joins its walls as hard ground. Over this cross-section the click takes:
 
 - the spreading of the sound with distance;
 - the air's absorption in each octave band over the ray's length, averaged over 30 years of the place's weather;
 - diffraction over the edges that block the line of sight, a hilltop, a roof or a wall: once in calm air, where sound travels straight, and once downwind, where it bends toward the ground along an arc of at least 1 km radius;
 - the ground's effect, on either side of those edges or over the whole ray;
+- the tree crowns the ray passes through, which CNOSSOS-EU leaves out: ISO 9613-2's foliage attenuation over those metres, weighted by the tree cover, in calm air and downwind;
 - how often the weather bends sound down in this ray's direction by day, evening and night, which mixes the calm and the downwind result;
 - the façades around the point, which add up to 3 dB.
 

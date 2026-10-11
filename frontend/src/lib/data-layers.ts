@@ -1,5 +1,5 @@
-// The data layers: the ground, obstacles and traffic every click computes over, and the forest it
-// leaves out, drawn from the served release by `qm-raster`
+// The data layers: the ground, the forest, obstacles and traffic every click computes over, drawn
+// from the served release by `qm-raster`
 // (`/api/raster/{id}/{z}/{x}/{y}.png`). Its zooms: the server's (server/src/routes/raster.ts).
 export const DATA_LAYERS = [
   {
@@ -8,7 +8,7 @@ export const DATA_LAYERS = [
   },
   {
     id: 'forest', label: 'Forest', minzoom: 10, opacity: 0.8,
-    tooltip: 'Tree cover at every lattice node: the darker the green, the denser the canopy. Trees take nothing off in the computation: CNOSSOS-EU, the EU method, has no term for foliage, and the ground under them counts as soft ground.',
+    tooltip: 'Tree cover at every lattice node: the darker the green, the denser the canopy. Sound passing through the crowns loses ISO 9613-2\'s foliage attenuation, by this cover and the crowns\' height; the ground under them counts as soft ground.',
   },
   {
     id: 'hard', label: 'Hard ground', minzoom: 10, opacity: 0.7,

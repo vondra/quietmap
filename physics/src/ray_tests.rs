@@ -1,6 +1,6 @@
 //! Pins of the ray: the platform clamp, ground-factor interpolation, the own footprint by id and
-//! every footprint containing a building's source, overlapping roofs, and the flat-ground transfer
-//! with state mixing and air absorption.
+//! every footprint containing a building's source, overlapping roofs, the flat-ground transfer
+//! with state mixing and air absorption, and the foliage of each state.
 
 use super::*;
 use crate::atmosphere::ALPHA_DB_PER_KM;
@@ -19,6 +19,8 @@ fn profile() -> Profile {
         t: vec![0.0, 0.25, 0.3, 0.5, 0.75, 1.0],
         ground_m: vec![100.0, 102.0, 105.0, 101.0, 103.0, 100.0],
         ground_factor: vec![1.0, 0.5, 0.4, 0.0, 0.5, 1.0],
+        forest_cover: vec![0.0; 6],
+        canopy_m: vec![0.0; 6],
     }
 }
 
@@ -141,6 +143,8 @@ fn overlapping_roofs_clip_in_closing_order_and_equal_exits_drop() {
         t: vec![0.0, 0.5, 1.0],
         ground_m: vec![100.0, 100.0, 100.0],
         ground_factor: vec![1.0, 0.5, 0.0],
+        forest_cover: vec![0.0; 3],
+        canopy_m: vec![0.0; 3],
     };
     let crossings = [
         building(0.2, 6.0, 11),
@@ -178,7 +182,7 @@ fn flat(horizontal_m: f64) -> Profile {
     let mut profile = Profile::default();
     profile.clear(horizontal_m);
     for step in 0..=10 {
-        profile.push(f64::from(step) / 10.0, 200.0, 0.5);
+        profile.push(f64::from(step) / 10.0, 200.0, 0.5, 0.0, 0.0);
     }
     profile
 }
@@ -235,6 +239,47 @@ fn flat_ground_transfer_mixes_states_and_absorbs_air() {
         );
         assert_eq!(mixed.periods[1][band], homogeneous.periods[1][band]);
         assert_eq!(mixed.periods[2][band], favourable.periods[2][band]);
+    }
+}
+
+/// Crowns of full cover 20 m high under the whole flat 110.54 m ray take Table A.1 for its slant
+/// length off the calm state, and for its arc, 6 cm longer, off the downwind one.
+#[test]
+fn a_forest_under_the_ray_takes_table_a1_off_each_state() {
+    let ends = RayEnds {
+        source_height_m: 1.0,
+        receiver_altitude_m: 204.0,
+        source_ground_factor: Some(0.5),
+        platform_half_width_m: 0.0,
+        own_footprint: 0,
+    };
+    let mut scratch = RayScratch::default();
+    let mut states = |profile: &Profile| {
+        ray_terms(
+            profile,
+            &[],
+            &ends,
+            ([0.5; PERIODS], &*ALPHA_DB_PER_KM),
+            &mut scratch,
+        )
+        .transfer
+        .states
+    };
+    let open = states(&flat(110.54));
+    let mut forest = flat(110.54);
+    forest.forest_cover.fill(1.0);
+    forest.canopy_m.fill(20.0);
+    let wooded = states(&forest);
+    let table = crate::foliage::attenuation_db(110.54f64.hypot(3.0));
+    for (state, tolerance_db) in [(0, 1e-9), (1, 0.01)] {
+        for band in 0..BANDS {
+            let taken_db = 10.0 * (open[state][band] / wooded[state][band]).log10();
+            assert!(
+                (taken_db - table[band]).abs() < tolerance_db,
+                "state {state} band {band}: {taken_db} vs {}",
+                table[band]
+            );
+        }
     }
 }
 

@@ -57,14 +57,16 @@ export interface LayerLevels extends PeriodLevels {
 export type ContributorMetadata = Record<string, unknown>
 
 /** How a contributor's sound reaches the point, summed over its rays (Lden): its level over the
- *  distance with nothing in the way (the façades apart), what the air takes (dB), the screening and
- *  the ground in calm air and bent down by the weather, the façades' reflection, the level here in
- *  either state, and the percent of the day, evening and night the weather bends it down. */
+ *  distance with nothing in the way (the façades apart), what the air takes (dB), the screening, the
+ *  ground and the tree crowns in calm air and bent down by the weather, the façades' reflection, the
+ *  level here in either state, and the percent of the day, evening and night the weather bends it
+ *  down. */
 export interface SourcePath {
   free_lden: number | null
   air_db: number | null
   screening_db: [number | null, number | null]
   ground_db: [number | null, number | null]
+  foliage_db: [number | null, number | null]
   facades_db: number
   lden: [number | null, number | null]
   bent_percent: [number | null, number | null, number | null]
@@ -251,8 +253,9 @@ export interface PopupPiece {
 }
 
 /** One ray's terms (dB, losses positive): ground and screening in calm air and downwind,
- *  screening alone in calm air and downwind, the air's absorption; then its slant length (m). */
-export type RayTerms = [number, number, number, number, number, number]
+ *  screening alone in calm air and downwind, the air's absorption; then its slant length (m);
+ *  then the tree crowns in calm air and downwind. */
+export type RayTerms = [number, number, number, number, number, number, number, number]
 
 export interface PopupUpdate {
   seq: number

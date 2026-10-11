@@ -131,7 +131,7 @@ impl StateRay {
 
     /// The state's ray height above the S–R chord as a function of the horizontal distance from
     /// S, its per-path constants taken once.
-    fn sag(&self, source: PlanePoint, receiver: PlanePoint) -> Sag {
+    pub(crate) fn sag(&self, source: PlanePoint, receiver: PlanePoint) -> Sag {
         let horizontal = receiver.0 - source.0;
         let chord = distance(source, receiver);
         let gamma2 = self.radius_m * self.radius_m;
@@ -146,7 +146,7 @@ impl StateRay {
 }
 
 /// The favourable ray's height above the S–R chord, its per-path constants taken once.
-struct Sag {
+pub(crate) struct Sag {
     favourable: bool,
     along_per_x: f64,
     chord: f64,
@@ -156,7 +156,7 @@ struct Sag {
 
 impl Sag {
     #[inline]
-    fn at(&self, x_from_source: f64) -> f64 {
+    pub(crate) fn at(&self, x_from_source: f64) -> f64 {
         if !self.favourable {
             return 0.0;
         }

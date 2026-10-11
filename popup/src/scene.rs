@@ -138,7 +138,7 @@ impl Ground {
         let offset = [source[0] - receiver[0], source[1] - receiver[1]];
         profile.clear(offset[0].hypot(offset[1]).max(1.0));
         let start = self.at(source)?;
-        profile.push(0.0, start.height_m, start.ground_factor);
+        push_sample(profile, 0.0, &start);
         let (a, b) = (
             self.frame.to_mercator(source),
             self.frame.to_mercator(receiver),
@@ -227,7 +227,7 @@ impl Ground {
                 let (lat, lon) = position.to_degrees();
                 format!("no terrain data at {lat:.6},{lon:.6}")
             })?;
-            profile.push(t, sample.height_m, sample.ground_factor);
+            push_sample(profile, t, &sample);
             if t_row <= t_column {
                 let k = next_row.expect("a row line ahead");
                 if rise > 0.0 {
@@ -245,9 +245,19 @@ impl Ground {
             }
         }
         let end = self.at(receiver)?;
-        profile.push(1.0, end.height_m, end.ground_factor);
+        push_sample(profile, 1.0, &end);
         Ok(())
     }
+}
+
+fn push_sample(profile: &mut Profile, t: f64, sample: &GroundSample) {
+    profile.push(
+        t,
+        sample.height_m,
+        sample.ground_factor,
+        sample.forest_cover,
+        sample.canopy_m,
+    );
 }
 
 /// The node of `terrain` at global lattice `row` (latitude times 3600) and `column` (longitude
@@ -263,9 +273,10 @@ fn node(terrain: &Terrain, row: i64, column: i64) -> Option<Node> {
 }
 
 /// The ground a fraction `f` of the way from node `a` to node `b`: height and ground factor
-/// linear, forest cover from the nearer node; `None` where a node it weighs is missing or has no
-/// data. A node of no weight is not read: on a node or a tile seam the vertex may lie in the tile
-/// that lacks its zero-weight neighbour.
+/// linear, the trees (cover and crown height) from the nearer node; `None` where a node it weighs
+/// is missing or has no data, or the nearer one has no forest data (as `Terrain::sample` refuses).
+/// A node of no weight is not read: on a node or a tile seam the vertex may lie in the tile that
+/// lacks its zero-weight neighbour.
 fn edge_sample(a: Option<Node>, b: Option<Node>, f: f64) -> Option<GroundSample> {
     let (a, b) = match (a, b) {
         (Some(a), Some(b)) => (a, b),
@@ -273,14 +284,15 @@ fn edge_sample(a: Option<Node>, b: Option<Node>, f: f64) -> Option<GroundSample>
         (None, Some(b)) if f >= 1.0 => (b, b),
         _ => return None,
     };
-    if [a, b]
-        .iter()
-        .any(|node| node.height_code == HEIGHT_MISSING || node.impervious_percent > PERCENT_MAX)
+    let nearer = if f < 0.5 { a } else { b };
+    if nearer.forest_percent > PERCENT_MAX
+        || [a, b]
+            .iter()
+            .any(|node| node.height_code == HEIGHT_MISSING || node.impervious_percent > PERCENT_MAX)
     {
         return None;
     }
     let lerp = |p: f64, q: f64| p + f * (q - p);
-    let nearer = if f < 0.5 { a } else { b };
     Some(GroundSample {
         height_m: lerp(
             height_m_of_code(a.height_code),
@@ -291,7 +303,7 @@ fn edge_sample(a: Option<Node>, b: Option<Node>, f: f64) -> Option<GroundSample>
                 f64::from(a.impervious_percent),
                 f64::from(b.impervious_percent),
             ) / 100.0,
-        forest_cover: f64::from(nearer.forest_percent.min(PERCENT_MAX)) / 100.0,
+        forest_cover: f64::from(nearer.forest_percent) / 100.0,
         canopy_m: f64::from(nearer.canopy_m),
     })
 }
