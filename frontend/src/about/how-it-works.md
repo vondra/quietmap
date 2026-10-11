@@ -44,6 +44,7 @@ The world is cut into the standard web-map tiles of zoom 12, 6.3 km wide in Prag
 | Kind | A file holds | The world |
 |---|---|---|
 | `terrain` | the ground's height every arc-second (31 m north to south), how much of it is sealed, its forest cover and how tall the trees stand | 202 GB in 7.0 million files |
+| `terrain-fine` | where a national terrain model of 5 m or finer exists (so far Czechia), the ground's height every sixth of an arc-second (5 m north to south), read near the ends of a ray | 1.1 GB in 2,146 files |
 | `obstacles` | the outlines and heights of buildings and walls, listed by cells 49 m wide in Prague | 233 GB in 1.4 million |
 | `sources` | every ground source, as points and straight pieces | 229 GB in 2.2 million |
 | `aircraft` | a year of flights, summed into boxes of airspace | 1,025 GB in 2.6 million |
@@ -148,7 +149,7 @@ A point sends one ray. A line piece is summed as CNOSSOS-EU sums a line of point
 
 ### One ray
 
-Along each ray the click reads the ground wherever the ray crosses a line of the terrain grid, every 20 to 30 m; between two grid points the height is interpolated, so no ridge of the grid falls between two readings. Each sample gives the terrain's height, how hard the ground is, from soft soil to sealed ground and water, and the trees: their cover and how tall they stand. Every wall the ray crosses stands at its height, and a building's roof joins its walls as hard ground. Over this cross-section the click takes:
+Along each ray the click reads the ground wherever the ray crosses a line of the terrain grid, every 20 to 30 m; between two grid points the height is interpolated, so no ridge of the grid falls between two readings. Within 100 m of either end, where a national terrain model of 5 m or finer exists, the grid is six times as fine, about 5 m, so an embankment, a cutting or a berm beside a road screens as it really stands. The D4's berm at Mníšek pod Brdy, 7 m high and 20 m wide, takes 3.5 dB off the motorway 70 m behind it; the coarser grid missed it. Each sample gives the terrain's height, how hard the ground is, from soft soil to sealed ground and water, and the trees: their cover and how tall they stand. Every wall the ray crosses stands at its height, and a building's roof joins its walls as hard ground. Over this cross-section the click takes:
 
 - the spreading of the sound with distance;
 - the air's absorption in each octave band over the ray's length, averaged over 30 years of the place's weather;
