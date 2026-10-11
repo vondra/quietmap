@@ -104,6 +104,7 @@ function evictSettledTilesBeyondLimit(): void {
 /** What a cell reads across the selected layers. */
 export type HeatmapCellReadout =
   | { kind: 'level'; ldenDb: number }
+  | { kind: 'silence' }
   | { kind: 'no-level' }
   | { kind: 'unavailable'; failedSources: string[] }
 
@@ -112,8 +113,8 @@ export type HeatmapCellReadout =
  * byte → 10^(dB/10) → Σ → 10·log10 chain the renderer paints with, so the
  * number equals the pixel colour. A number only when every layer is known: a
  * failed layer makes the cell unavailable (a partial sum would read quieter
- * than the place is). A layer without a level there adds no energy; no level
- * in every layer is no level.
+ * than the place is). A silent layer adds no energy; a cell some layer assessed
+ * and all left under 0 dB is silence; one no layer assessed has no level.
  */
 export function readHeatmapCell(
   layers: readonly { source: string; tile: SampledTile }[],
@@ -122,10 +123,13 @@ export function readHeatmapCell(
   const failedSources = layers.filter((layer) => layer.tile === 'failed').map((layer) => layer.source)
   if (failedSources.length > 0) return { kind: 'unavailable', failedSources }
   let sumLinear = 0
+  let assessed = false
   for (const { tile } of layers) {
     const byte = typeof tile === 'string' ? HM3_NO_LEVEL : tile[cell.py * TILE_PX + cell.px]
     sumLinear += HM3_BYTE_ENERGY[byte]
+    assessed ||= byte !== HM3_NO_LEVEL
   }
-  if (sumLinear === 0) return { kind: 'no-level' }
-  return { kind: 'level', ldenDb: 10 * Math.log10(sumLinear) }
+  if (!assessed) return { kind: 'no-level' }
+  const ldenDb = sumLinear > 0 ? 10 * Math.log10(sumLinear) : -Infinity
+  return ldenDb < 0 ? { kind: 'silence' } : { kind: 'level', ldenDb }
 }

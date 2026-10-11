@@ -3,7 +3,7 @@
  * See [`STOPS`].
  */
 
-import { HM3_NO_LEVEL } from './hm3-decoder.ts'
+import { HM3_SILENCE } from './hm3-decoder.ts'
 
 // Beate Tomio (Weninger), the "new color scheme" v5.b for noise maps —
 // coloringnoise.com/theoretical_background/new-color-scheme (CC BY-NC-ND 4.0;
@@ -96,12 +96,12 @@ export function paletteRgb(db: number): [number, number, number] {
  * `TILE_PX² = 65 536` times so the avoided palette interpolation is
  * the bulk of decode cost. Size: 256 × 4 = 1 KB, cache-resident.
  *
- * Byte 255 carries no level and maps to floor-hued alpha-0 (see [`TRANSPARENT`]).
+ * Silence (254) and no level (255) map to floor-hued alpha-0 (see [`TRANSPARENT`]).
  */
 export const PALETTE_LUT: Uint8ClampedArray = (() => {
   const lut = new Uint8ClampedArray(256 * 4)
   for (let byte = 0; byte < 256; byte++) {
-    const [r, g, b, a] = byte < HM3_NO_LEVEL ? paletteColor(byte / 2) : TRANSPARENT
+    const [r, g, b, a] = byte < HM3_SILENCE ? paletteColor(byte / 2) : TRANSPARENT
     lut[byte * 4] = r
     lut[byte * 4 + 1] = g
     lut[byte * 4 + 2] = b

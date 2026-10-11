@@ -18,8 +18,11 @@ use rayon::prelude::*;
 use tiles::geo::Mercator;
 use tiles::sources::Layer;
 
-/// A cell with no level: quiet (under 0 dB) or inside a building.
+/// A cell not assessed: a building with no painted pixel beside it, or nothing painted there.
 pub const NO_LEVEL: u8 = 255;
+/// A cell assessed and silent: under 0 dB (dev4's HM3 v4; the quiet zones count it quiet, a zoom out
+/// averages it as no energy).
+pub const SILENCE: u8 = 254;
 
 /// How a square is cut: pixels per side, pixels per block, pixels per far cell (the far shares'
 /// lattice and the groups' frames) and per cell of the quiet hum's lattice.
@@ -48,7 +51,7 @@ struct Block {
 }
 
 /// Per pixel (row-major from the north-west) its cell per layer and the total's last: twice the
-/// Lden rounded, or [`NO_LEVEL`].
+/// Lden rounded, [`SILENCE`] under 0 dB, or [`NO_LEVEL`].
 pub type Cells = Vec<[u8; LAYERS + 1]>;
 
 /// A pass's pixels: the outdoor ones' place in the square and energy per layer (the flights not yet
@@ -57,9 +60,9 @@ type PassLayers = (Vec<(usize, [f64; LAYERS])>, Vec<(usize, u64)>);
 
 fn cell(energy: f64) -> u8 {
     if energy < 1.0 {
-        NO_LEVEL
+        SILENCE
     } else {
-        (2.0 * level_db(energy)).round().min(254.0) as u8
+        (2.0 * level_db(energy)).round().min(f64::from(SILENCE - 1)) as u8
     }
 }
 
@@ -107,7 +110,7 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
     square.index.reaching(low, high, &mut near);
     let no_flights = (square.aircraft.iter()).all(|tile| tile.fine.is_none() && tile.far.is_none());
     if near.is_empty() && no_flights && lattice.silent() {
-        return Ok(vec![[NO_LEVEL; LAYERS + 1]; n * n]);
+        return Ok(vec![[SILENCE; LAYERS + 1]; n * n]);
     }
     // The block corners evaluate every loud source with a near share for a block they bound.
     let pixel_m = square.frame.east_m_per_unit / n as f64;

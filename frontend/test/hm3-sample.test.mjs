@@ -1,9 +1,9 @@
-// Heatmap cell readouts: the painted cell, the energy sum over layers, no level and failed tiles, the tile cache.
+// Heatmap cell readouts: the painted cell, the energy sum over layers, silence, no level and failed tiles, the tile cache.
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { displayedTileZoom, hm3CellAt, readHeatmapCell } from '../src/lib/hm3-sample.ts'
-import { decodeHM3, HM3_NO_LEVEL, TILE_PX } from '../src/lib/hm3-decoder.ts'
+import { decodeHM3, HM3_NO_LEVEL, HM3_SILENCE, TILE_PX } from '../src/lib/hm3-decoder.ts'
 
 test('a point maps to the painted tile cell, wraps across the antimeridian and is null off the world', () => {
   const cell = hm3CellAt(14.1639, 49.8486, 12)
@@ -30,8 +30,14 @@ test('the readout energy-sums the cell across layers; a layer without a level ad
   assert.deepEqual(withNoLevel, { kind: 'level', ldenDb: 60 })
   const withAbsent = readHeatmapCell([{ source: 'road', tile: at60 }, { source: 'railway', tile: 'absent' }], CELL)
   assert.deepEqual(withAbsent, { kind: 'level', ldenDb: 60 })
-  // Byte 254 is a level (127 dB), not a sentinel.
-  assert.equal(readHeatmapCell([{ source: 'road', tile: tileWith(254) }], CELL).ldenDb.toFixed(1), '127.0')
+  const withSilence = readHeatmapCell([{ source: 'road', tile: at60 }, { source: 'railway', tile: tileWith(HM3_SILENCE) }], CELL)
+  assert.deepEqual(withSilence, { kind: 'level', ldenDb: 60 })
+})
+
+test('a cell assessed under 0 dB in every layer reads silence, not no level', () => {
+  const silent = { source: 'road', tile: tileWith(HM3_SILENCE) }
+  assert.deepEqual(readHeatmapCell([silent], CELL), { kind: 'silence' })
+  assert.deepEqual(readHeatmapCell([silent, { source: 'railway', tile: 'absent' }], CELL), { kind: 'silence' })
 })
 
 test('a failed selected layer yields no number, never the sum of the rest', () => {
@@ -45,12 +51,14 @@ test('no level in every layer, or only absent tiles, reads as no level', () => {
   assert.deepEqual(readHeatmapCell([none, { source: 'railway', tile: 'absent' }], CELL), { kind: 'no-level' })
 })
 
-test('only HM3 version 3, the served tiles, decodes', () => {
+test('HM3 versions 3 and 4 decode, no other', () => {
   const bytes = new Uint8Array(6 + TILE_PX * TILE_PX).fill(HM3_NO_LEVEL)
   bytes.set([72, 77, 51, 32, 3, 1])
   assert.equal(decodeHM3(bytes.buffer).sourceId, 1)
   bytes[4] = 4
-  assert.throws(() => decodeHM3(bytes.buffer), /HM3 version 4 != 3/)
+  assert.equal(decodeHM3(bytes.buffer).sourceId, 1)
+  bytes[4] = 5
+  assert.throws(() => decodeHM3(bytes.buffer), /HM3 version 5 not one of 3,4/)
 })
 
 test('the sampled tile zoom is the renderer\'s: rounded, one finer on HiDPI, clamped into the published band', () => {

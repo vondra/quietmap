@@ -5,17 +5,19 @@
 // thread, in its network stack — by the time `fetch().arrayBuffer()` resolves.
 // This decoder therefore does NO decompression: it validates the 6-byte header
 // and returns the raw cells:
-//   0:4  magic "HM3 "   4:1  version = 3   5:1  source_id   6:…  512×512 u8 cells
-// Cell bytes 0–254 are 2·Lden (0–127 dB); 255 is no level. Version 3 does not
-// tell a quiet cell (no modelled source reaches 0 dB) from one never assessed.
+//   0:4  magic "HM3 "   4:1  version = 3 or 4   5:1  source_id   6:…  512×512 u8 cells
+// Cell bytes 0–253 are 2·Lden (0–126.5 dB); version 4 marks an assessed cell under 0 dB with 254
+// (silence) and keeps 255 for a cell not assessed; version 3 wrote 255 for both.
 
 export const TILE_PX = 512
-/** No level: quiet, or not assessed (outside painted coverage, missing input).
+/** No level: not assessed (outside painted coverage, missing input; in version 3 also silence).
  *  A tile absent from the archive is all this. */
 export const HM3_NO_LEVEL = 255
+/** Silence: assessed, under 0 dB (version 4). */
+export const HM3_SILENCE = 254
 const HEADER_BYTES = 6
 const MAGIC = 'HM3 '
-const VERSION = 3
+const VERSIONS = [3, 4]
 
 export interface DecodedHM3Tile {
   /** `TILE_PX * TILE_PX` cells, row-major (py * TILE_PX + px). */
@@ -54,6 +56,6 @@ export function decodeHM3(buf: ArrayBuffer): DecodedHM3Tile {
   const bytes = new Uint8Array(buf)
   const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3])
   if (magic !== MAGIC) throw new Error(`not HM3 (magic = "${magic}")`)
-  if (bytes[4] !== VERSION) throw new Error(`HM3 version ${bytes[4]} != ${VERSION}`)
+  if (!VERSIONS.includes(bytes[4])) throw new Error(`HM3 version ${bytes[4]} not one of ${VERSIONS}`)
   return { cells: bytes.subarray(HEADER_BYTES), sourceId: bytes[5] }
 }

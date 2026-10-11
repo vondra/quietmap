@@ -5,34 +5,39 @@
 /// mapping — alpha-compositing pre-coloured layers would be physically wrong and
 /// would break popup↔heatmap parity (the popup energy-sums the same way).
 
-import { HM3_NO_LEVEL } from './hm3-decoder.ts'
+import { HM3_NO_LEVEL, HM3_SILENCE } from './hm3-decoder.ts'
 import { PALETTE_LUT } from './heatmap-palette.ts'
 
-/** Linear energy 10^(byte·0.5/10) per quantised dB byte (0..254; HM3 encodes
+/** Linear energy 10^(byte·0.5/10) per quantised dB byte (0..253; HM3 encodes
  *  dB × 2), precomputed so a per-cell sum is a table read instead of a
- *  Math.pow. No level (255) carries zero energy. The one place the byte
- *  decoding lives — every readout of a cell (renderer, hover) sums through it. */
+ *  Math.pow. Silence (254) and no level (255) carry zero energy. The one place
+ *  the byte decoding lives — every readout of a cell (renderer, hover) sums
+ *  through it. */
 export const HM3_BYTE_ENERGY = (() => {
   const t = new Float32Array(256)
-  for (let b = 0; b < HM3_NO_LEVEL; b++) t[b] = 10 ** ((b * 0.5) / 10)
+  for (let b = 0; b < HM3_SILENCE; b++) t[b] = 10 ** ((b * 0.5) / 10)
   return t
 })()
 
 /**
  * Per-cell linear-energy sum of N `u8 × 0.5 dB` grids of equal length, back in
- * the same encoding (clamped at 254 so the palette saturates instead of
- * wrapping). A cell has no level only where no grid has one, or where the sum
- * stays below 0 dB.
+ * the same encoding (clamped at 253 so the palette saturates instead of
+ * wrapping). A cell is not assessed only where no grid assessed it; assessed
+ * and under 0 dB it is silence.
  */
 function sumEnergy(grids: Uint8Array[]): Uint8Array {
   const n = grids[0].length
   const out = new Uint8Array(n).fill(HM3_NO_LEVEL)
   for (let i = 0; i < n; i++) {
     let sumLin = 0
-    for (const grid of grids) sumLin += HM3_BYTE_ENERGY[grid[i]]
-    if (sumLin === 0) continue
-    const q = Math.round(10 * Math.log10(sumLin) * 2)
-    out[i] = q < 0 ? HM3_NO_LEVEL : Math.min(q, HM3_NO_LEVEL - 1)
+    let assessed = false
+    for (const grid of grids) {
+      sumLin += HM3_BYTE_ENERGY[grid[i]]
+      assessed ||= grid[i] !== HM3_NO_LEVEL
+    }
+    if (!assessed) continue
+    const q = sumLin === 0 ? -1 : Math.round(10 * Math.log10(sumLin) * 2)
+    out[i] = q < 0 ? HM3_SILENCE : Math.min(q, HM3_SILENCE - 1)
   }
   return out
 }
@@ -68,8 +73,8 @@ export const PREVIEW_DELTA = 3
  * Upsample one child's sub-block of its z−Δ ancestor grid to a full 512² grid
  * — the preview painted while the child's real layers load. Bilinear in the
  * half-dB byte space so the preview reads as an out-of-focus map rather than
- * hard blocks; a corner without a level falls back to nearest-neighbour so
- * transparency edges stay crisp instead of bleeding.
+ * hard blocks; a corner without a level (silence or not assessed) falls back to
+ * nearest-neighbour so transparency edges stay crisp instead of bleeding.
  */
 export function upsampleAncestorBlock(ancestor: Uint8Array, blockX: number, blockY: number): Uint8Array {
   const size = 512
@@ -93,7 +98,7 @@ export function upsampleAncestorBlock(ancestor: Uint8Array, blockX: number, bloc
       const c10 = ancestor[y0 * size + x1]
       const c01 = ancestor[y1 * size + x0]
       const c11 = ancestor[y1 * size + x1]
-      if (Math.max(c00, c10, c01, c11) === HM3_NO_LEVEL) {
+      if (Math.max(c00, c10, c01, c11) >= HM3_SILENCE) {
         out[outRow + px] = ty < 0.5 ? (tx < 0.5 ? c00 : c10) : (tx < 0.5 ? c01 : c11)
       } else {
         const top = c00 + (c10 - c00) * tx

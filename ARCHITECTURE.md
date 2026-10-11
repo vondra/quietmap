@@ -187,7 +187,8 @@ lattice), `paint.rs` and `groups.rs` (the pixels), `flights.rs` and `etalon.rs`.
 for the painter, its etalon and the hum: `popup::candidates::loud`, a bound reaching
 `physics::bound::REACH_EDGE_LDEN_DB` (20 dB).
 
-The tiles (`hm3.rs`): per layer and the total, 512 x 512 cells of twice the Lden (255 none);
+The tiles (`hm3.rs`, HM3 v4): per layer and the total, 512 x 512 cells of twice the Lden (254
+silence under 0 dB, 255 not assessed);
 `qm-paint pack` (`pack.rs`) builds every zoom down to 2 (energy means) into one PMTiles archive
 per layer and `current.json`, which the server publishes. `qm-paint-gpu check` holds the card
 equal to the cores on random pairs, `pair` compares one pair, `etalon` paints the reference,

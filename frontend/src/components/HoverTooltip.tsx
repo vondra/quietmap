@@ -63,6 +63,7 @@ export default function HoverTooltip({ sources }: Props) {
 function heatmapCellReadoutText(readout: HeatmapCellReadout): string {
   switch (readout.kind) {
     case 'level': return `${readout.ldenDb.toFixed(1)} dB`
+    case 'silence': return 'under 0 dB'
     case 'no-level': return '—'
     case 'unavailable': return `— (${readout.failedSources.map(heatmapSourceName).join(', ')} unavailable)`
   }

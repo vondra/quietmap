@@ -1,5 +1,5 @@
-//! The map's heatmap tiles: per layer and the total, 512 x 512 cells of twice the Lden (255 none)
-//! behind the header `HM3 `, version 3 and the layer's number, as the map decodes them
+//! The map's heatmap tiles: per layer and the total, 512 x 512 cells of twice the Lden (254 silence,
+//! under 0 dB; 255 not assessed) behind the header `HM3 `, version 4 and the layer's number, as the map decodes them
 //! (`frontend/src/lib/hm3-decoder.ts`). A painted square of zoom-12 is `2^(zoom - 12)` tiles a side.
 
 use crate::exact::LAYERS;
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use tiles::sources::Layer;
 
 pub const TILE_PX: usize = 512;
-pub const HEADER: [u8; 5] = *b"HM3 \x03";
+pub const HEADER: [u8; 5] = *b"HM3 \x04";
 
 /// The tile trees' names: the layers, then the total.
 pub fn layer_names() -> [&'static str; LAYERS + 1] {

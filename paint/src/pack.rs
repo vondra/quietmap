@@ -1,14 +1,14 @@
 //! The painted tiles published for the map: per layer and the total one PMTiles archive
 //! (`<layer>.<build>.pmtiles`, Brotli tiles, as the server ships them) holding the painted zoom
 //! and every zoom down to 2, and `current.json` naming the build and zoom. Only squares painted
-//! whole are packed. A parent cell holds each layer's energy mean over the painted pixels under it
-//! that have a total level (a building's, without one, are left out; a layer without a level there
-//! is silent), carried unrounded from zoom to zoom, and the total is the sum of its layers, so
-//! switching a silent layer off changes nothing.
+//! whole are packed. A parent cell holds each layer's energy mean over the assessed pixels under it
+//! (a silent one adds no energy and counts; one not assessed is left out), carried unrounded from
+//! zoom to zoom, and the total is the sum of its layers, so switching a silent layer off changes
+//! nothing.
 
 use crate::exact::LAYERS;
 use crate::hm3::{HEADER, TILE_PX, layer_names, painted, tile_path};
-use crate::paint::NO_LEVEL;
+use crate::paint::{NO_LEVEL, SILENCE};
 use pmtiles::{Compression, PmTilesWriter, TileCoord, TileType};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -101,12 +101,12 @@ fn parents(
     parents
 }
 
-/// A cell's byte of an energy: twice its level, or none under 0 dB.
+/// A cell's byte of an energy: twice its level, or silence under 0 dB.
 fn encode(energy: f64) -> u8 {
     if energy < 1.0 {
-        NO_LEVEL
+        SILENCE
     } else {
-        (20.0 * energy.log10()).round().min(254.0) as u8
+        (20.0 * energy.log10()).round().min(f64::from(SILENCE - 1)) as u8
     }
 }
 
@@ -172,7 +172,7 @@ pub fn pack(out: &Path, zoom: u8, tiles_dir: &Path, build: &str) -> Result<(), S
         .map(|number| read(out, number, zoom, &wanted))
         .collect::<Result<_, String>>()?;
     let energy: [f32; 256] = std::array::from_fn(|cell| match cell as u8 {
-        NO_LEVEL => 0.0,
+        SILENCE | NO_LEVEL => 0.0,
         level => 10f64.powf(f64::from(level) / 20.0) as f32,
     });
     let mut levels: Vec<Level> = vec![parents(&wanted, &|tile, cell| {
@@ -273,8 +273,8 @@ mod tests {
     use super::*;
 
     /// One outdoor pixel at 60 dB and four at 40 dB two zooms below read their energy mean, not
-    /// the mean of their parents; a layer silent under a parent stays out of its total; a
-    /// building's pixel counts nowhere.
+    /// the mean of their parents; a layer silent under a parent reads silence there, not "not
+    /// assessed"; a pixel not assessed counts nowhere.
     #[test]
     fn parents_average_the_painted_pixels_under_them() {
         let energy = |db: f64| 10f64.powf(db / 10.0) as f32;
@@ -303,6 +303,8 @@ mod tests {
         let mean = (10f64.powf(6.0) + 4.0 * 10f64.powf(4.0)) / 5.0;
         assert_eq!(cells(top, LAYERS)[0], encode(mean));
         assert_eq!(cells(top, 0)[0], encode(10f64.powf(6.0) / 5.0));
-        assert_eq!(cells(top, 2)[0], NO_LEVEL);
+        assert_eq!(cells(top, 2)[0], SILENCE);
+        let nothing = parents(&tiles, &|_, _| (0, [0.0; LAYERS]));
+        assert_eq!(cells(&nothing[&(2, 2)], LAYERS)[0], NO_LEVEL);
     }
 }

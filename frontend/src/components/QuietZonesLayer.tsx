@@ -5,7 +5,7 @@ import { TileLayer } from '@deck.gl/geo-layers'
 import { BitmapLayer } from '@deck.gl/layers'
 import { useMap } from 'react-map-gl/maplibre'
 
-import { fetchAndDecodeHM3, HM3_NO_LEVEL, TILE_PX } from '../lib/hm3-decoder'
+import { fetchAndDecodeHM3, HM3_NO_LEVEL, HM3_SILENCE, TILE_PX } from '../lib/hm3-decoder'
 import { buildKey, tileUrl, useTileBuild, type TileBuilds } from '../lib/tile-urls'
 
 // Translucent green wash over pixels whose total Lden is at or below the
@@ -111,16 +111,16 @@ function makeQuietLayer(threshold: number, build: TileBuilds) {
 }
 
 /**
- * Paint cells with a computed Lden ≤ `maxByte` green; leave the rest
- * transparent. A cell without a level stays transparent: the tiles do not tell
- * a quiet cell from an unassessed one, and an unknown level is not a quiet one.
+ * Paint cells with a computed Lden ≤ `maxByte` green, silence among them; leave
+ * the rest transparent. A cell not assessed stays transparent: an unknown level
+ * is not a quiet one (a version-3 tile wrote silence as not assessed too).
  */
 function quietMaskToImageData(cells: Uint8Array, maxByte: number): ImageData {
   const rgba = new Uint8ClampedArray(TILE_PX * TILE_PX * 4)
   const [r, g, b, a] = QUIET_RGBA
   for (let i = 0; i < cells.length; i++) {
     const byte = cells[i]
-    if (byte === HM3_NO_LEVEL || byte > maxByte) continue
+    if (byte === HM3_NO_LEVEL || (byte !== HM3_SILENCE && byte > maxByte)) continue
     const off = i * 4
     rgba[off] = r
     rgba[off + 1] = g

@@ -21,6 +21,7 @@
 //! painted map against the etalon, cell by cell, by the same contract.
 
 use paint::exact::Point;
+use paint::paint::{NO_LEVEL, SILENCE};
 use paint::square::{Files, Square};
 use paint_gpu::device::{DeviceSquare, Gpu};
 use physics::bands::{PERIODS, lden_energy};
@@ -663,20 +664,22 @@ fn score_against_popup(
     read: &dyn Fn(&str, u32, u32) -> Result<u8, String>,
 ) -> Result<(), String> {
     let names = paint::hm3::layer_names();
-    // The popup's level as the map stores it: twice the Lden rounded, 255 under 0 dB.
+    // The popup's level as the map stores it: twice the Lden rounded, silence under 0 dB.
     let byte = |energy: f64| -> u8 {
         if energy < 1.0 {
-            255
+            SILENCE
         } else {
-            (2.0 * physics::bands::level_db(energy)).round().min(254.0) as u8
+            (2.0 * physics::bands::level_db(energy))
+                .round()
+                .min(f64::from(SILENCE - 1)) as u8
         }
     };
     // The owner's z13 contract (dev1's accuracy ladder) per layer, in the stored byte, banded by
     // the reference: the rungs over the cells it paints (>= 30 dB), the last joined by paint-state
     // flips over 6 dB; under 30 dB an error of at most 10 dB; presence changes (across 30 dB unless
     // both lie inside (29, 31) dB) at most 0.25 % of the painted cells; the signed mean over the
-    // painted cells at most 0.5 dB. Both sides are outdoors, so no level (255) is a level under
-    // 0 dB, read as 0 dB.
+    // painted cells at most 0.5 dB. Both sides are outdoors, so silence (and a cell not assessed)
+    // reads 0 dB.
     const PAINTED: u8 = 60;
     let rungs = [(0.5, 20.0), (1.0, 1.0), (3.0, 0.01), (6.0, 0.001)];
     for (slot, name) in names.iter().enumerate() {
@@ -690,7 +693,7 @@ fn score_against_popup(
             } else {
                 energies.iter().sum()
             });
-            let level = |b: u8| if b == 255 { 0 } else { b };
+            let level = |b: u8| if b >= SILENCE { 0 } else { b };
             let (reference, mine) = (level(reference), level(read(name, x, y)?));
             let difference = (f64::from(mine) - f64::from(reference)) / 2.0;
             let edge_band = |b: u8| (59..=61).contains(&b);
@@ -772,8 +775,8 @@ fn compare_maps(
                 painted_bytes.insert((slot, x, y), read_tile(painted, name, x, y)?);
             }
             for k in 0..512 * 512 {
-                if reference_layers[names.len() - 1][6 + k] == 255
-                    && painted_bytes[&(names.len() - 1, x, y)][6 + k] == 255
+                if reference_layers[names.len() - 1][6 + k] == NO_LEVEL
+                    && painted_bytes[&(names.len() - 1, x, y)][6 + k] == NO_LEVEL
                 {
                     continue;
                 }
@@ -783,7 +786,7 @@ fn compare_maps(
                 answers.push(Some(
                     (0..names.len())
                         .map(|slot| match reference_layers[slot][6 + k] {
-                            255 => 0.0,
+                            SILENCE | NO_LEVEL => 0.0,
                             b => physics::bands::energy(f64::from(b) / 2.0),
                         })
                         .collect(),
