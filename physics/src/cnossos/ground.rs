@@ -14,6 +14,10 @@ pub const FAVOURABLE_TERRAIN_HEIGHT_COEFFICIENT: f64 = 6e-3;
 /// Height-sum guard: below one millimetre the ratios of (2.5.14), (2.5.19) and (2.5.20)
 /// use one millimetre.
 const MINIMUM_HEIGHT_SUM_M: f64 = 1e-3;
+/// G'path below this is hard ground, (2.5.15)'s -3 dB (favourable: its floor). The analytic form
+/// does not tend to it as G'path falls to 0, so a sliver of soft ground, or the kernel's f32 sums
+/// over an all-hard side, stepped by up to 2 dB at 8 kHz (a road's source side in Prague).
+pub const HARD_GROUND_BELOW: f64 = 1e-3;
 
 /// One of the two CNOSSOS-EU meteorological states (2.5.5 homogeneous, 2.5.7 favourable).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,7 +115,7 @@ pub fn ground_attenuation_bands(
     let gw13 = factors.impedance.max(0.0).powf(1.3);
     match state {
         MeteorologicalState::Homogeneous => {
-            if factors.path == 0.0 {
+            if factors.path < HARD_GROUND_BELOW {
                 return [-3.0; BANDS];
             }
             let floor = -3.0 * (1.0 - factors.floor);
@@ -119,7 +123,7 @@ pub fn ground_attenuation_bands(
         }
         MeteorologicalState::Favourable => {
             let floor = favourable_floor_db(geometry, factors.floor);
-            if factors.path == 0.0 {
+            if factors.path < HARD_GROUND_BELOW {
                 return [floor; BANDS];
             }
             let height_sum = (zs + zr).max(MINIMUM_HEIGHT_SUM_M);
@@ -130,6 +134,38 @@ pub fn ground_attenuation_bands(
             std::array::from_fn(|band| {
                 analytic_ground_db(band, dp, zs_favourable, zr_favourable, gw13).max(floor)
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cnossos::mean_plane::MeanPlane;
+
+    /// A side whose mean G is a sliver above zero reads as the hard side it is, in both states.
+    #[test]
+    fn a_sliver_of_soft_ground_is_hard_ground() {
+        let plane = MeanPlane {
+            slope: 0.0,
+            intercept_m: 0.0,
+        };
+        let geometry = EquivalentGeometry::over(plane, (0.0, 0.05), (36.5, 4.0));
+        let factors = |g: f64| GroundFactors {
+            path: g,
+            impedance: g,
+            floor: g,
+        };
+        for state in [
+            MeteorologicalState::Homogeneous,
+            MeteorologicalState::Favourable,
+        ] {
+            let sliver = ground_attenuation_bands(&geometry, factors(1e-6), state);
+            let hard = ground_attenuation_bands(&geometry, factors(0.0), state);
+            assert!(
+                sliver.iter().zip(&hard).all(|(a, b)| (a - b).abs() < 1e-4),
+                "{sliver:?} {hard:?}"
+            );
         }
     }
 }

@@ -112,6 +112,7 @@ __device__ EquivalentGeometry equivalent_geometry_over(MeanPlane plane, PlanePoi
 #define FAVOURABLE_CURVATURE_A0_PER_M 2e-4f
 #define FAVOURABLE_TERRAIN_HEIGHT_COEFFICIENT 6e-3f
 #define MINIMUM_HEIGHT_SUM_M 1e-3f
+#define HARD_GROUND_BELOW 1e-3f
 
 struct GroundFactors {
     float path;
@@ -165,7 +166,7 @@ __device__ GroundTerm ground_term(const EquivalentGeometry& geometry, GroundFact
     term.zs = geometry.source_side_height_m;
     term.zr = geometry.receiver_side_height_m;
     term.gw13 = powf(fmaxf(factors.impedance, 0.0f), 1.3f);
-    term.hard = factors.path == 0.0f;
+    term.hard = factors.path < HARD_GROUND_BELOW;
     if (state == HOMOGENEOUS) {
         term.floor = term.hard ? -3.0f : -3.0f * (1.0f - factors.floor);
         return term;
