@@ -17,10 +17,10 @@
 #define RECENT_CROSSINGS 8   // crossings kept to drop one found twice
 #define CONTAINING 8         // footprints a building's source stands in, its own among them
 #define LINE_NODES 64        // quadrature nodes of one line piece (five buckets, each wide one split at its edges)
-// ray::CREST_ENDS_M and CREST_GROUP: beyond 300 m of both ends only the highest of each 8 samples
-// may diffract.
+// ray::CREST_ENDS_M and CREST_SPACING_M: beyond 300 m of both ends only the highest sample of each
+// 150 m of the ray may diffract.
 #define CREST_ENDS_M 300.0f
-#define CREST_GROUP 8
+#define CREST_SPACING_M 150.0f
 
 // ray.rs RayEnds
 struct RayEnds {
@@ -187,7 +187,8 @@ __device__ __noinline__ u32 sample_ray(const TerrainScene& ground, float sx, flo
     Moments prefix = {0.0f, 0.0f, 0.0f};
     s.samples[0] = previous;
     s.prefix[0] = prefix;
-    int count = 1, group_size = 0, group_best = 0, last_crest = 0;
+    // The open stretch of the middle (its number from the source, -1: none) and its highest sample.
+    int count = 1, open_group = -1, group_best = 0, last_crest = 0;
     float group_best_z = 0.0f;
     LatticeWalk walk;
     walk_start(ground, sx, sy, s.receiver_x, s.receiver_y, &walk);
@@ -213,25 +214,22 @@ __device__ __noinline__ u32 sample_ray(const TerrainScene& ground, float sx, flo
         point.next_crest = -1;
         add_foliage(source, receiver, rays, crowns, point.x, sample);
         add_stretch(prefix, previous.x, point.x, previous.z, point.z, previous.g, point.g, 0.0f, ground_z);
-        // A sample that may diffract follows the last that may in their chain.
+        // A sample that may diffract follows the last that may in their chain (ray::crests_of).
         bool middle = point.x > CREST_ENDS_M && point.x < length - CREST_ENDS_M;
-        if (!middle && group_size > 0) {
+        int group = (int)floorf(point.x / CREST_SPACING_M);
+        if (open_group >= 0 && (!middle || group != open_group)) {
             s.samples[last_crest].next_crest = group_best;
             last_crest = group_best;
-            group_size = 0;
+            open_group = -1;
         }
         s.samples[count] = point;
         s.prefix[count] = prefix;
         if (middle) {
-            if (group_size == 0 || point.z > group_best_z) {
+            if (open_group < 0 || point.z > group_best_z) {
                 group_best = count;
                 group_best_z = point.z;
             }
-            if (++group_size == CREST_GROUP) {
-                s.samples[last_crest].next_crest = group_best;
-                last_crest = group_best;
-                group_size = 0;
-            }
+            open_group = group;
         } else {
             s.samples[last_crest].next_crest = count;
             last_crest = count;

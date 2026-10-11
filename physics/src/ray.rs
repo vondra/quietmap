@@ -14,13 +14,16 @@ use crate::cnossos::{
 use crate::foliage;
 use crate::profile::Profile;
 
-/// Within this distance of either end every terrain sample may diffract; beyond it, of each
-/// [`CREST_GROUP`] consecutive samples only the highest (the first of equals), while every sample
-/// still shapes the ground (mean planes, ground factor, foliage). Thinned so, the owner's 19 places
-/// and the ruler's accepted groups moved by at most 0.1 dB (2026-10-11, the highest of 8 beyond
-/// 300 m) and the card streamed a long line pair 2.7 times faster.
+/// Within this distance of either end every terrain sample may diffract; beyond it, of the samples
+/// in each [`CREST_SPACING_M`] of the ray from the source only the highest (the first of equals),
+/// while every sample still shapes the ground (mean planes, ground factor, foliage). Thinned so (the
+/// highest of each 8 samples), the owner's 19 places and the ruler's accepted groups moved by at
+/// most 0.1 dB (2026-10-11) and the card streamed a long line pair 2.7 times faster. By distance,
+/// not by count (Codex Astra on r060 and r061): the card's f32 and the CPU's f64 may put a sample
+/// across 300 m or keep one lattice crossing less near the source, which a count carries along the
+/// whole ray; 150 m holds about 8 samples at 50 degrees north.
 pub const CREST_ENDS_M: f64 = 300.0;
-pub const CREST_GROUP: usize = 8;
+pub const CREST_SPACING_M: f64 = 150.0;
 
 /// Where a ray meets a wall of a building or a barrier.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -351,32 +354,31 @@ impl PathBuffers {
 }
 
 /// The samples of `terrain` (a ray of `length` m) that may diffract into `out`: all within
-/// [`CREST_ENDS_M`] of either end, beyond it the highest of each [`CREST_GROUP`] consecutive ones.
+/// [`CREST_ENDS_M`] of either end, beyond it the highest in each [`CREST_SPACING_M`] (the first of
+/// equals).
 fn crests_of(terrain: &[PlanePoint], length: f64, out: &mut Vec<PlanePoint>) {
     out.clear();
     let middle = |x: f64| x > CREST_ENDS_M && x < length - CREST_ENDS_M;
-    let mut group: Option<(PlanePoint, usize)> = None;
+    // The open stretch: its highest sample and the stretch's number.
+    let mut open: Option<(PlanePoint, i64)> = None;
     for &point in terrain {
+        let group = (point.0 / CREST_SPACING_M).floor() as i64;
+        if let Some((best, at)) = open
+            && (!middle(point.0) || at != group)
+        {
+            out.push(best);
+            open = None;
+        }
         if !middle(point.0) {
-            if let Some((best, _)) = group.take() {
-                out.push(best);
-            }
             out.push(point);
             continue;
         }
-        let (best, size) = match group {
-            Some((best, size)) if point.1 > best.1 => (point, size + 1),
-            Some((best, size)) => (best, size + 1),
-            None => (point, 1),
+        open = match open {
+            Some((best, at)) if point.1 <= best.1 => Some((best, at)),
+            _ => Some((point, group)),
         };
-        if size == CREST_GROUP {
-            out.push(best);
-            group = None;
-        } else {
-            group = Some((best, size));
-        }
     }
-    if let Some((best, _)) = group {
+    if let Some((best, _)) = open {
         out.push(best);
     }
 }
