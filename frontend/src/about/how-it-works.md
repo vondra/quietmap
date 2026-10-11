@@ -44,7 +44,7 @@ The world is cut into the standard web-map tiles of zoom 12, 6.3 km wide in Prag
 | Kind | A file holds | The world |
 |---|---|---|
 | `terrain` | the ground's height every arc-second (31 m north to south), how much of it is sealed, its forest cover and how tall the trees stand | 202 GB in 7.0 million files |
-| `terrain-fine` | where a national terrain model of 5 m or finer exists (so far Czechia and Germany), what the arc-second grid misses of the ground every sixth of an arc-second (5 m north to south): the model's height less its own arc-second average, added to the `terrain` height near the ends of a ray | 4.7 GB in 12,095 files |
+| `terrain-fine` | where a national terrain model of 5 m or finer exists (so far Czechia, Germany, Switzerland, the Netherlands, Belgium and part of Portugal), what the arc-second grid misses of the ground every sixth of an arc-second (5 m north to south): the model's height less its own arc-second average, added to the `terrain` height near the ends of a ray | 6.2 GB in 15,289 files |
 | `obstacles` | the outlines and heights of buildings and walls, listed by cells 49 m wide in Prague | 233 GB in 1.4 million |
 | `sources` | every ground source, as points and straight pieces | 229 GB in 2.2 million |
 | `aircraft` | a year of flights, summed into boxes of airspace | 1,025 GB in 2.6 million |
