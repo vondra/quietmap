@@ -770,6 +770,7 @@ name = "paint-gpu"
 version = "0.1.0"
 dependencies = [
  "cudarc",
+ "libc",
  "paint",
  "physics",
  "popup",
