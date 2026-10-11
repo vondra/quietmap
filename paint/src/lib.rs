@@ -8,6 +8,7 @@
 //! popup answers it, the painter's reference),
 //! [`hm3`] and [`pack`] (the map's tiles).
 
+mod buildings;
 pub mod etalon;
 pub mod exact;
 mod flights;

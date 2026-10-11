@@ -4,9 +4,10 @@
 //! corners and its far share from the points of the block's far cell (64 pixels), in groups by
 //! layer, direction and distance whose energy one exact ray from the loudest member sets right at
 //! the pixel ([`crate::groups`]). The quiet hum is blended from the lattice ([`Lattice`]), the
-//! flights from the corners. A pixel inside an enclosed building has no level: the map shows the
-//! sound outdoors, and a click there answers at the loudest façade.
+//! flights from the corners. A building's pixels take its loudest façade from the outdoor pixels
+//! along its outline, as a click inside it answers ([`crate::buildings`]).
 
+use crate::buildings::fill_buildings;
 use crate::exact::{Batch, LAYERS, Point, evaluate};
 use crate::flights::flights_at_corners;
 use crate::groups::{Four, Frame, frame, frame_weight, group_energy, meets};
@@ -50,8 +51,9 @@ struct Block {
 /// Lden rounded, or [`NO_LEVEL`].
 pub type Cells = Vec<[u8; LAYERS + 1]>;
 
-/// A pass's painted pixels: each one's place in the square and its cells.
-type PassCells = Vec<(usize, [u8; LAYERS + 1])>;
+/// A pass's pixels: the outdoor ones' place in the square and energy per layer (the flights not yet
+/// added), and the indoor ones' place and building.
+type PassLayers = (Vec<(usize, [f64; LAYERS])>, Vec<(usize, u64)>);
 
 fn cell(energy: f64) -> u8 {
     if energy < 1.0 {
@@ -148,7 +150,6 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
     corners
         .par_iter_mut()
         .for_each(|corner| corner.sort_unstable_by_key(|&(index, _)| index));
-    let flights = flights_at_corners(square, grid, &metres, &corner_points)?;
     let corners_s = started.elapsed().as_secs_f64();
 
     // A block: its local sources, and its groups in its own far cell's frame and, near the cell's
@@ -217,14 +218,16 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
     };
 
     // Every pixel, a few block rows at a time: its loud local sources and its block's probes.
-    let pass_of = |first_row: usize| -> Result<PassCells, String> {
+    let pass_of = |first_row: usize| -> Result<PassLayers, String> {
         let block_ids: Vec<usize> = (first_row..(first_row + PIXEL_PASS_BLOCK_ROWS).min(blocks))
             .flat_map(|by| (0..blocks).map(move |bx| by * blocks + bx))
             .collect();
         let pass: Vec<Block> = (block_ids.par_iter())
             .map_init(Vec::new, |near, &at| block_of(near, at))
             .collect();
-        let outdoor: Vec<(usize, usize, Point)> = (0..block_ids.len() * grid.block * grid.block)
+        let (outdoor, indoor): (Vec<(usize, usize, Point)>, Vec<_>) = (0..block_ids.len()
+            * grid.block
+            * grid.block)
             .into_par_iter()
             .map(|k| {
                 let (slot, inside) = (k / (grid.block * grid.block), k % (grid.block * grid.block));
@@ -232,11 +235,13 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
                 let x = (at % blocks) * grid.block + inside % grid.block;
                 let y = (at / blocks) * grid.block + inside / grid.block;
                 let point = Point::at(square, metres(x as f64 + 0.5, y as f64 + 0.5))?;
-                Ok((point.own_footprint == 0).then_some((slot, y * n + x, point)))
+                Ok((slot, y * n + x, point))
             })
             .collect::<Result<Vec<_>, String>>()?
             .into_iter()
-            .flatten()
+            .partition(|(_, _, point)| point.own_footprint == 0);
+        let indoor: Vec<(usize, u64)> = (indoor.into_iter())
+            .map(|(_, at, point)| (at, point.own_footprint))
             .collect();
         // A pixel's frames: its own cell's, and within the band of an edge the neighbour's.
         let side = grid.far as f64;
@@ -280,7 +285,7 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
                 offset - list.len()
             })
             .collect();
-        Ok((0..points.len())
+        let painted = (0..points.len())
             .into_par_iter()
             .map(|k| {
                 let ((slot, at), point) = (places[k], &points[k]);
@@ -326,40 +331,53 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
                 for (layer, energy) in layers.iter_mut().enumerate() {
                     *energy = (*energy + grouped[layer] / weights) * point.reflection();
                 }
-                let (i, j) = (x / grid.block, y / grid.block);
-                let around = [(0, 0), (1, 0), (0, 1), (1, 1)]
-                    .map(|(di, dj)| flights[(j + dj) * corner_side + i + di]);
-                layers[Layer::Aircraft as usize] += bilinear(around, in_block.0, in_block.1);
-                (at, cells_of(&layers))
+                (at, layers)
             })
-            .collect())
+            .collect();
+        Ok((painted, indoor))
     };
-    // With a card, two passes run at once: one's lists on the cores while the other's pairs are
-    // on the card.
+    // The flights are the cores' work alone (7 s of a Dobříš square on msas2, 2026-10-11): they run
+    // beside the pixel passes. With a card, two passes run at once: one's lists on the cores while
+    // the other's pairs are on the card.
     let first_rows: Vec<usize> = (0..blocks).step_by(PIXEL_PASS_BLOCK_ROWS).collect();
-    let painted: Vec<Result<PassCells, String>> = match batch {
-        None => first_rows.iter().map(|&row| pass_of(row)).collect(),
-        Some(_) => std::thread::scope(|scope| {
-            let (even, odd): (Vec<usize>, Vec<usize>) = (first_rows.iter())
-                .partition(|&&row| (row / PIXEL_PASS_BLOCK_ROWS).is_multiple_of(2));
-            let pass_of = &pass_of;
-            let other =
-                scope.spawn(move || odd.iter().map(|&row| pass_of(row)).collect::<Vec<_>>());
-            let mut done: Vec<_> = even.iter().map(|&row| pass_of(row)).collect();
-            done.extend(
-                other
-                    .join()
-                    .unwrap_or_else(|_| vec![Err("a pixel pass panicked".into())]),
-            );
-            done
-        }),
-    };
+    let (painted, flights) = std::thread::scope(|scope| {
+        let flights = scope.spawn(|| flights_at_corners(square, grid, &metres, &corner_points));
+        let painted: Vec<Result<PassLayers, String>> = match batch {
+            None => first_rows.iter().map(|&row| pass_of(row)).collect(),
+            Some(_) => {
+                let (even, odd): (Vec<usize>, Vec<usize>) = (first_rows.iter())
+                    .partition(|&&row| (row / PIXEL_PASS_BLOCK_ROWS).is_multiple_of(2));
+                let pass_of = &pass_of;
+                let other =
+                    scope.spawn(move || odd.iter().map(|&row| pass_of(row)).collect::<Vec<_>>());
+                let mut done: Vec<_> = even.iter().map(|&row| pass_of(row)).collect();
+                done.extend(
+                    other
+                        .join()
+                        .unwrap_or_else(|_| vec![Err("a pixel pass panicked".into())]),
+                );
+                done
+            }
+        };
+        (painted, flights.join())
+    });
+    let flights = flights.map_err(|_| "the flights panicked".to_string())??;
     let mut cells = vec![[NO_LEVEL; LAYERS + 1]; n * n];
+    let mut indoor = Vec::new();
     for pass in painted {
-        for (at, value) in pass? {
-            cells[at] = value;
+        let (outdoor, inside) = pass?;
+        indoor.extend(inside);
+        for (at, mut layers) in outdoor {
+            let (x, y) = (at % n, at / n);
+            let (i, j) = (x / grid.block, y / grid.block);
+            let around = [(0, 0), (1, 0), (0, 1), (1, 1)]
+                .map(|(di, dj)| flights[(j + dj) * corner_side + i + di]);
+            let within = |t: usize| ((t % grid.block) as f64 + 0.5) / grid.block as f64;
+            layers[Layer::Aircraft as usize] += bilinear(around, within(x), within(y));
+            cells[at] = cells_of(&layers);
         }
     }
+    fill_buildings(&mut cells, n, &indoor);
     eprintln!(
         "qm-paint: lattice and corners {corners_s:.1} s ({corner_pairs} corner pairs), pixels {:.1} s",
         started.elapsed().as_secs_f64() - corners_s

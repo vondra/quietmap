@@ -1,7 +1,9 @@
 //! The painter's reference: every outdoor pixel answered as the popup answers a click there, every
 //! ground source loud there evaluated exactly, the quiet hum blended from its lattice as the
-//! painter takes it, and the flights; a painted map is scored against it cell by cell.
+//! painter takes it, and the flights, a building's pixels at its loudest outdoor neighbour as the
+//! painter takes them; a painted map is scored against it cell by cell.
 
+use crate::buildings::fill_buildings;
 use crate::exact::{Batch, LAYERS, Point, evaluate};
 use crate::flights::aircraft_energy;
 use crate::lattice::Lattice;
@@ -16,8 +18,8 @@ use tiles::sources::Layer;
 const ETALON_PASS_ROWS: usize = 4;
 
 /// Every outdoor pixel of the square (`pixels` a side) as the popup answers it: per layer the
-/// ground sources loud there and the quiet hum (`lattice`) times the pixel's reflection, and the flights;
-/// no level inside a building.
+/// ground sources loud there and the quiet hum (`lattice`) times the pixel's reflection, and the
+/// flights; a building's pixels at its loudest outdoor neighbour.
 pub fn etalon(
     square: &Square,
     pixels: usize,
@@ -32,19 +34,24 @@ pub fn etalon(
         })
     };
     let mut cells = vec![[NO_LEVEL; LAYERS + 1]; n * n];
+    let mut indoor = Vec::new();
     for first_row in (0..n).step_by(ETALON_PASS_ROWS) {
         let rows = first_row..(first_row + ETALON_PASS_ROWS).min(n);
-        let outdoor: Vec<(usize, Point)> = (rows.start * n..rows.end * n)
+        let (outdoor, inside): (Vec<(usize, Point)>, Vec<_>) = (rows.start * n..rows.end * n)
             .into_par_iter()
             .map(|at| {
                 let point =
                     Point::at(square, metres((at % n) as f64 + 0.5, (at / n) as f64 + 0.5))?;
-                Ok((point.own_footprint == 0).then_some((at, point)))
+                Ok((at, point))
             })
             .collect::<Result<Vec<_>, String>>()?
             .into_iter()
-            .flatten()
-            .collect();
+            .partition(|(_, point)| point.own_footprint == 0);
+        indoor.extend(
+            inside
+                .into_iter()
+                .map(|(at, point)| (at, point.own_footprint)),
+        );
         let (pixels_at, points): (Vec<usize>, Vec<Point>) = outdoor.into_iter().unzip();
         let pairs: Vec<(u32, u32)> = (0..points.len())
             .into_par_iter()
@@ -79,5 +86,6 @@ pub fn etalon(
             cells[at] = out;
         }
     }
+    fill_buildings(&mut cells, n, &indoor);
     Ok(cells)
 }
