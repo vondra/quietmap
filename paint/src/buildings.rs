@@ -36,10 +36,6 @@ pub fn fill_buildings(
     indoor: &[(usize, u64)],
     own_reflection_db: &dyn Fn(usize, u64) -> Result<f64, String>,
 ) -> Result<(), String> {
-    let mut footprint_at = vec![0u64; n * n];
-    for &(at, footprint) in indoor {
-        footprint_at[at] = footprint;
-    }
     // Per building its loudest outdoor neighbour: (ground energy, the neighbour's place).
     let mut loudest: HashMap<u64, (f64, usize)> = HashMap::new();
     for &(at, footprint) in indoor {
@@ -48,12 +44,14 @@ pub fn fill_buildings(
             .flat_map(|nx| (y.saturating_sub(1)..=(y + 1).min(n - 1)).map(move |ny| (nx, ny)))
         {
             let neighbour = ny * n + nx;
-            let Some(layers) = energies[neighbour].filter(|_| footprint_at[neighbour] == 0) else {
+            // A building's own pixels have no energies until the end: only outdoor ones answer.
+            let Some(layers) = energies[neighbour] else {
                 continue;
             };
+            // Equal energies go to the first pixel in the square's order, whatever the passes' order.
             let ground = ground_energy(&layers);
             let best = loudest.entry(footprint).or_insert((ground, neighbour));
-            if ground > best.0 {
+            if ground > best.0 || (ground == best.0 && neighbour < best.1) {
                 *best = (ground, neighbour);
             }
         }

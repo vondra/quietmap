@@ -123,11 +123,11 @@ fn nodes_are_uniform_in_the_in_plane_angle() {
     );
 }
 
-/// A far piece takes one bucket per 3 degrees it subtends: a 100 m piece one at 3 km, two at 1 km,
-/// four at 600 m and five from 300 m in, their weights the whole angle.
+/// A piece takes one bucket per 3 degrees it subtends, at least two: a 100 m piece two at 3 km and
+/// at 1 km, four at 600 m and five from 300 m in, their weights the whole angle.
 #[test]
-fn a_far_piece_takes_one_bucket_per_three_degrees() {
-    for (distance_m, buckets) in [(3000.0, 1), (1000.0, 2), (600.0, 4), (300.0, 5)] {
+fn a_piece_takes_one_bucket_per_three_degrees_and_at_least_two() {
+    for (distance_m, buckets) in [(3000.0, 2), (1000.0, 2), (600.0, 4), (300.0, 5)] {
         let geometry =
             LinePieceGeometry::new([-50.0, distance_m, 0.0], [50.0, distance_m, 0.0]).unwrap();
         let mut nodes = Vec::new();

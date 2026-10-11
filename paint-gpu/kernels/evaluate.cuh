@@ -117,23 +117,6 @@ __device__ u32 add_ray(const TerrainScene& ground, const ObstacleScene& obstacle
 }
 
 // The rays of one line piece's quadrature nodes (evaluate.rs received_bands for a line).
-// A line piece's quadrature nodes, collected before their rays run (as the CPU collects them): the
-// placement's state (the wide buckets' mask and runs) is dead while a ray streams, so the kernel
-// keeps the larger of the two's registers, not their sum.
-struct LineNodes {
-    int count;
-    float along_m[LINE_NODES];
-    float weight_rad[LINE_NODES];
-    bool obstacles_on_ray[LINE_NODES];
-    __device__ u32 operator()(float along_m, float weight_rad, bool obstacles_on_ray) {
-        if (count == LINE_NODES) return FAILED_CAPACITY;
-        this->along_m[count] = along_m;
-        this->weight_rad[count] = weight_rad;
-        this->obstacles_on_ray[count++] = obstacles_on_ray;
-        return 0;
-    }
-};
-
 // Node `node` of a line piece: its ray from its point on the piece (on a deck, the deck's ground
 // there) into `periods`, weighted by its dphi over the piece's perpendicular; 0 or a failure.
 __device__ u32 add_line_node(const TerrainScene& ground, const ObstacleScene& obstacles, const Receiver& receiver,

@@ -4,8 +4,9 @@
 //! For a straight piece and a receiver R, dx/r^2 = dphi/d_perp with phi the angle in the plane
 //! holding the line and R and d_perp the 3D distance from R to the line, so the incoherent point
 //! sum of A_div = 20 lg r + 11 is exactly E = W'/(10^1.1 d_perp) * integral of 10^(-A_path/10)
-//! dphi. The integral takes buckets of equal dphi, one node each, as many as keep each within
-//! [`WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD`] but at most [`LINE_BUCKET_COUNT`] ([`line_bucket_count`]).
+//! dphi. The integral takes buckets of equal dphi, one node each: one per
+//! [`WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD`], at least two and at most [`LINE_BUCKET_COUNT`]
+//! ([`line_bucket_count`]).
 //! A bucket spanning more than [`WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD`] of horizontal azimuth replaces its node
 //! by geometry-placed nodes: obstacle edges in front of the piece mark a blocked mask over the
 //! bucket's azimuths, and every blocked run and clear gap gets its own nodes, each weighted by its
@@ -172,14 +173,19 @@ impl LinePieceGeometry {
     }
 }
 
+/// The most rays a far piece needs at least: one narrow obstacle (a barrier, a house) on a single
+/// ray would screen the whole piece, 20 dB where five rays read 1 (Codex Astra's review,
+/// 2026-10-11); on one of two it screens half.
+pub const LINE_BUCKET_MIN_COUNT: usize = 2;
+
 /// The buckets of a piece subtending `angle_rad` (in-plane): one per
-/// [`WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD`], the widest bucket that keeps its centre node, at most
-/// [`LINE_BUCKET_COUNT`]. A far piece takes one or two rays: beyond 300 m five centre nodes differ
-/// from 41 by p99 1.4-5.7 dB a piece and still move the owner's places by at most 0.1 dB, this rule
-/// by -0.1 to +0.2 dB with the click 22 % faster (2026-10-11, quietmap-private
-/// `evidence/2026-10-11/quadrature/`).
+/// [`WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD`], the widest bucket that keeps its centre node, at least
+/// [`LINE_BUCKET_MIN_COUNT`] and at most [`LINE_BUCKET_COUNT`]. Beyond 300 m five centre nodes
+/// differ from 41 by p99 1.4-5.7 dB a piece and still move the owner's places by at most 0.1 dB
+/// (2026-10-11, quietmap-private `evidence/2026-10-11/painter-architecture/`).
 pub fn line_bucket_count(angle_rad: f64) -> usize {
-    ((angle_rad / WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD).ceil() as usize).clamp(1, LINE_BUCKET_COUNT)
+    ((angle_rad / WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD).ceil() as usize)
+        .clamp(LINE_BUCKET_MIN_COUNT, LINE_BUCKET_COUNT)
 }
 
 /// The quadrature nodes of one piece; `skyline` is asked only for wide buckets.

@@ -3,6 +3,7 @@
 // edges near the receiver that can break a sight line).
 
 #define LINE_BUCKET_COUNT 5
+#define LINE_BUCKET_MIN_COUNT 2
 #define WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD (3.0f * QM_PI / 180.0f)
 #define WIDE_BUCKET_MASK_BINS 128
 #define WIDE_BUCKET_PART_MAX_SPAN_RAD 0.26f
@@ -26,7 +27,6 @@ struct LinePieceGeometry {
     float foot_along_m;
     float perpendicular_m;
     float start_angle_rad;
-    float end_angle_rad;
 };
 
 // LinePieceGeometry::new; false for a piece shorter than a millimetre.
@@ -45,7 +45,6 @@ __device__ bool line_piece_geometry(const float* start, const float* end, LinePi
     g->foot_along_m = foot_along_m;
     g->perpendicular_m = perpendicular_m;
     g->start_angle_rad = atanf((0.0f - foot_along_m) / perpendicular_m);
-    g->end_angle_rad = atanf((length_m - foot_along_m) / perpendicular_m);
     return true;
 }
 
@@ -174,12 +173,28 @@ __device__ void skyline_mark(const ObstacleScene& scene, float origin_x, float o
     }
 }
 
-// line::push_wide_bucket_nodes, each node handed to `node(along_m, weight_rad, obstacles_on_ray)`
-// (0 or a failure) as it is placed; false when the bucket keeps its centre node.
-template <typename Node>
+// A line piece's quadrature nodes, collected before their rays run (as the CPU collects them): the
+// placement's state (the wide buckets' mask and runs) is dead while a ray streams, so the kernel
+// keeps the larger of the two's registers, not their sum.
+struct LineNodes {
+    int count;
+    float along_m[LINE_NODES];
+    float weight_rad[LINE_NODES];
+    bool obstacles_on_ray[LINE_NODES];
+    __device__ u32 operator()(float along_m, float weight_rad, bool obstacles_on_ray) {
+        if (count == LINE_NODES) return FAILED_CAPACITY;
+        this->along_m[count] = along_m;
+        this->weight_rad[count] = weight_rad;
+        this->obstacles_on_ray[count++] = obstacles_on_ray;
+        return 0;
+    }
+};
+
+// line::push_wide_bucket_nodes, each node added to `node` (0 or a failure) as it is placed; false
+// when the bucket keeps its centre node.
 __device__ bool push_wide_bucket_nodes(const LinePieceGeometry& g, float angle_lo, float angle_hi,
                                        const ObstacleScene& scene, float receiver_x, float receiver_y, float los_floor_m,
-                                       Node& node, u32* failed) {
+                                       LineNodes& node, u32* failed) {
     float along_lo = along_at_in_plane_angle(g, angle_lo), along_hi = along_at_in_plane_angle(g, angle_hi);
     float azimuth_a = azimuth_at(g, along_lo);
     float turn = wrap_to_pi(azimuth_at(g, along_hi) - azimuth_a);
@@ -243,18 +258,16 @@ __device__ bool push_wide_bucket_nodes(const LinePieceGeometry& g, float angle_l
     return true;
 }
 
-// line::line_quadrature_nodes, each node handed to `node(along_m, weight_rad, obstacles_on_ray)`
-// as it is placed (the CPU collects them first; the sum is the same); 0 or a failure.
-template <typename Node>
+// line::line_quadrature_nodes into `node`; 0 or a failure.
 __device__ u32 line_quadrature_nodes(const LinePieceGeometry& g, const ObstacleScene& scene, float receiver_x, float receiver_y,
-                                     float los_floor_m, Node& node) {
+                                     float los_floor_m, LineNodes& node) {
     // The span and the nodes from the start's angle, not as differences of two angles near
     // +-pi/2: a short piece pointing at a far receiver keeps its energy in f32 (in f64 the CPU's
     // differences are exact enough).
     float a = -g.foot_along_m, p = g.perpendicular_m;
     float span = atan2f(g.length_m * p, p * p + a * (g.length_m - g.foot_along_m));
     // line::line_bucket_count
-    int buckets = min(max((int)ceilf(span / WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD), 1), LINE_BUCKET_COUNT);
+    int buckets = min(max((int)ceilf(span / WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD), LINE_BUCKET_MIN_COUNT), LINE_BUCKET_COUNT);
     float bucket_angle = span / (float)buckets;
     for (int bucket = 0; bucket < buckets; bucket++) {
         float angle_lo = g.start_angle_rad + (float)bucket * bucket_angle;

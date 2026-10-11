@@ -100,7 +100,8 @@ extern "C" __global__ void ray_crossings(const SquareScene* square, float from_x
 }
 
 // One line pair's quadrature nodes as the device places them, each with its ray's period energies
-// (weighted), for the line parity check; out[0] their count, out[1] the failure.
+// (weighted), for the line parity check; out[0] the nodes written (those evaluated, up to
+// `capacity`), out[1] the failure.
 extern "C" __global__ void line_pair_nodes(const SquareScene* square_ptr, float rx, float ry, u32 candidate_index,
                                            float* along, float* weight, u32* blocked, float* periods, u32 capacity, u32* out) {
     const SquareScene& square = *square_ptr;
@@ -119,16 +120,17 @@ extern "C" __global__ void line_pair_nodes(const SquareScene* square_ptr, float 
     LineNodes nodes;
     nodes.count = 0;
     failed = line_quadrature_nodes(g, square.obstacles, receiver.x, receiver.y, fmaxf(source.height_m, 0.0f), nodes);
-    for (int node = 0; node < nodes.count && !failed; node++) {
+    u32 written = 0;
+    for (int node = 0; node < nodes.count && !failed && written < capacity; node++) {
         float sums[PERIODS] = {0.0f, 0.0f, 0.0f};
         failed = add_line_node(square.ground, square.obstacles, receiver, candidate, source, ends, g, nodes, node, s, sums);
-        if ((u32)node < capacity) {
-            along[node] = nodes.along_m[node];
-            weight[node] = nodes.weight_rad[node];
-            blocked[node] = nodes.obstacles_on_ray[node];
-            for (int p = 0; p < PERIODS; p++) periods[PERIODS * node + p] = sums[p];
-        }
+        if (failed) break;
+        along[written] = nodes.along_m[node];
+        weight[written] = nodes.weight_rad[node];
+        blocked[written] = nodes.obstacles_on_ray[node];
+        for (int p = 0; p < PERIODS; p++) periods[PERIODS * written + p] = sums[p];
+        written++;
     }
     out[1] = failed;
-    out[0] = nodes.count;
+    out[0] = written;
 }

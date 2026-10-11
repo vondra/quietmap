@@ -128,7 +128,7 @@ Most pieces in those tiles are too far or too quiet to matter, and the click pro
 
 ### A piece and its rays
 
-A point sends one ray. A line piece is summed as CNOSSOS-EU sums a line of points: the angle under which the point sees the piece is cut into equal parts of at most 3°, five parts at most, and each part sends one ray from its stretch of the piece. A 250 m piece sends five rays from 300 m, three from 2 km and one from 5 km. On a near piece five rays match a sum of 401 points within 0.1 dB; on a far one more rays change nothing that can be heard: at twelve test places 41 rays a piece moved the level by at most 0.1 dB. Where a part spans more than 3° of direction and buildings stand in front of the piece, the part is split at their edges as the point sees them, and every hidden stretch and every gap gets rays of its own, each weighted by its angle: a street is heard through the gaps between its houses. Seen from the village of Kytín, the D4 motorway 2.1 km away is 492 pieces.
+A point sends one ray. A line piece is summed as CNOSSOS-EU sums a line of points: the angle under which the point sees the piece is cut into equal parts, one for each 3°, at least two and at most five, and each part sends one ray from its stretch of the piece. A 250 m piece sends five rays from 300 m, three from 2 km and two from 5 km on. On a near piece five rays match a sum of 401 points within 0.1 dB; on a far one more rays change nothing that can be heard: at twelve test places 41 rays a piece moved the level by at most 0.1 dB. Two rays at least keep one narrow obstacle from hiding a whole far piece. Where a part spans 3° of direction or more and buildings stand in front of the piece, the part is split at their edges as the point sees them, and every hidden stretch and every gap gets rays of its own, each weighted by its angle: a street is heard through the gaps between its houses. Seen from the village of Kytín, the D4 motorway 2.1 km away is 492 pieces.
 
 <figure style="margin: 1.75rem 0; color: var(--foreground)">
 <svg viewBox="0 0 400 270" role="img" aria-label="A line piece seen from above by the point R: five rays at equal angles where the view is open, and more rays where two houses hide parts of the piece" style="display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto" font-size="12">
@@ -143,7 +143,7 @@ A point sends one ray. A line piece is summed as CNOSSOS-EU sums a line of point
 <text x="40" y="48" fill="currentColor">piece, ≤ 250 m</text>
 <g fill="currentColor" fill-opacity=".75"><text x="16" y="150">open view:</text><text x="16" y="166">a ray per part</text><text x="392" y="206" text-anchor="end">behind houses:</text><text x="392" y="222" text-anchor="end">a ray per hidden</text><text x="392" y="238" text-anchor="end">stretch and gap</text></g>
 </svg>
-<figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">Seen from above, R the click's point. The angle under which R sees the piece is cut into five equal parts, one ray each. Two houses hide stretches of the right-hand parts, so those parts get a ray for each hidden stretch and each gap.</figcaption>
+<figcaption style="margin-top: 0.5rem; font-size: 0.8125rem; line-height: 1.45; color: var(--muted-foreground)">Seen from above, R the click's point. The angle under which R sees this near piece is cut into five equal parts, one ray each. Two houses hide stretches of the right-hand parts, so those parts get a ray for each hidden stretch and each gap.</figcaption>
 </figure>
 
 ### One ray

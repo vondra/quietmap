@@ -384,7 +384,7 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
             footprint,
         )
     })?;
-    let cells = (energies.iter())
+    let cells = (energies.par_iter())
         .map(|layers| layers.as_ref().map_or([NO_LEVEL; LAYERS + 1], cells_of))
         .collect();
     eprintln!(

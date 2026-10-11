@@ -93,7 +93,7 @@ pub fn etalon(
             footprint,
         )
     })?;
-    Ok((pixel_layers.iter())
+    Ok((pixel_layers.par_iter())
         .map(|layers| layers.as_ref().map_or([NO_LEVEL; LAYERS + 1], cells_of))
         .collect())
 }
