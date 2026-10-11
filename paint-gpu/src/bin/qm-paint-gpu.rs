@@ -567,8 +567,7 @@ fn against_popup(
             tile.x * 2 + x / TILE,
             tile.y * 2 + y / TILE,
         );
-        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok(bytes[6 + ((y % TILE) * TILE + x % TILE) as usize])
+        Ok(read_hm3(&path)?[6 + ((y % TILE) * TILE + x % TILE) as usize])
     };
     // One line a pixel: x, y and the popup's Lden energy per layer, or "building".
     if let Some(cached) = answers_path.and_then(|path| std::fs::read_to_string(path).ok()) {
@@ -739,6 +738,18 @@ fn score_against_popup(
     Ok(())
 }
 
+/// A z13 tile's header and cells; a version-3 tile stored 127 dB or more as 254, which version 4
+/// keeps for silence: read as 253, 126.5 dB (frontend hm3-decoder.ts alike).
+fn read_hm3(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    let mut bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if bytes.get(4) == Some(&3) {
+        for byte in bytes.iter_mut().skip(6).filter(|byte| **byte == SILENCE) {
+            *byte = SILENCE - 1;
+        }
+    }
+    Ok(bytes)
+}
+
 /// A painted map against a reference map (the etalon) over every cell of the z13 squares
 /// `squares` ("X,Y;X,Y"), by the owner's z13 contract.
 fn compare_maps(
@@ -759,19 +770,9 @@ fn compare_maps(
     }
     // The reference's cells as energies, one pixel at a time over every square, for the scorer.
     let names = paint::hm3::layer_names();
-    // A version-3 tile stored 127 dB or more as 254, which version 4 keeps for silence: read as
-    // 126.5 dB (frontend hm3-decoder.ts alike).
-    let read_tile =
-        |root: &std::path::Path, name: &str, x: u32, y: u32| -> Result<Vec<u8>, String> {
-            let path = tile_path(root, name, 13, x, y);
-            let mut bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-            if bytes.get(4) == Some(&3) {
-                for byte in bytes.iter_mut().skip(6).filter(|byte| **byte == SILENCE) {
-                    *byte = SILENCE - 1;
-                }
-            }
-            Ok(bytes)
-        };
+    let read_tile = |root: &std::path::Path, name: &str, x: u32, y: u32| {
+        read_hm3(&tile_path(root, name, 13, x, y))
+    };
     let mut painted_bytes: std::collections::HashMap<(usize, u32, u32), Vec<u8>> =
         Default::default();
     for (sx, sy) in &tiles {

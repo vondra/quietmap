@@ -286,12 +286,10 @@ __device__ __forceinline__ GroundFactors source_side_factors(int state, float pa
 }
 
 // One diffraction point of a state as the ray's stream left it (rubber_band.rs diffraction_path's
-// points, with what diffraction.rs needs of the ground under it): the point, its height lowered by
-// the state's ray above the chord (the hull's ordinate), and the terrain under it.
+// points, with what diffraction.rs needs of the ground under it): the point and the terrain under it.
 struct HullEntry {
     float x;
     float z;
-    float lowered;
     float terrain_z;
     float terrain_g;
 };

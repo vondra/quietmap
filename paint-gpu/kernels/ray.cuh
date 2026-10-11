@@ -87,7 +87,6 @@ struct RayStream {
     float length;
     float inverse_length;
     float platform_half_width_m;
-    float source_stand_z;            // the ground the source stands on: a deck, else the terrain
     StreamedPath path;
     // The terrain vertices, all of them: the source, every lattice line crossed, the receiver; and
     // the terrain's moments from the source to each about the whole path's origin (0, the source's
@@ -174,7 +173,6 @@ __device__ __noinline__ u32 sample_ray(const TerrainScene& ground, float sx, flo
     float length = s.length, platform = s.platform_half_width_m;
     float stand = isnan(ends.source_ground_m) ? sample.height_m : ends.source_ground_m;
     float ground_z = fminf(sample.height_m, stand);
-    s.source_stand_z = stand;
     s.path.source_ground_z = ground_z;
     s.path.source_ground_g = sample.ground_factor;
     PlanePoint source = {0.0f, stand + ends.source_height_m}, receiver = {length, ends.receiver_altitude_m};
@@ -250,11 +248,10 @@ __device__ __forceinline__ void terrain_on(const TerrainPoint& lo, const Terrain
     *g = lo.g + f * (hi.g - lo.g);
 }
 
-// The terrain at `x` (ray::interpolate): `segment` moves to the sample ending the stretch that
-// holds x (crossings arrive in order of distance, so it moves ahead).
+// The terrain at `x` (ray::interpolate): `segment` moves ahead to the sample ending the stretch that
+// holds x (crossings arrive in order of distance).
 __device__ void ray_terrain_at(RayStream& s, float x, float* z, float* g) {
     int k = s.segment;
-    while (k > 1 && s.samples[k - 1].x > x) k--;
     while (k < s.count - 1 && s.samples[k].x <= x) k++;
     s.segment = k;
     terrain_on(s.samples[k - 1], s.samples[k], x, z, g);
@@ -373,7 +370,6 @@ __device__ u32 stream_candidate(RayStream& s, const RayFrame& f, float x, float 
         HullEntry entry;
         entry.x = x;
         entry.z = z;
-        entry.lowered = lowered;
         entry.terrain_z = terrain_z;
         entry.terrain_g = terrain_g;
         if (lowered > chord) {
@@ -601,7 +597,6 @@ __device__ __noinline__ u32 stream_ray(const ObstacleScene& obstacles, float sx,
         st.depth = 1;
         st.hull[0].x = 0.0f;
         st.hull[0].z = source_altitude;
-        st.hull[0].lowered = source_altitude;
         st.blocked = false;
         st.has_best = false;
         st.best_delta = 0.0f;
