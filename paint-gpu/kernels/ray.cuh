@@ -8,7 +8,7 @@
 // arrays and sorts; the answer is the same.
 
 // Per-thread capacities; a ray needing more fails with FAILED_CAPACITY and goes to the CPU.
-#define TERRAIN_HISTORY 32   // vertices kept behind the stream, for a roof that closes later
+#define RAY_SAMPLES 2048     // terrain vertices a ray keeps (a 12 km diagonal at 60 N crosses ~1,200 lines)
 #define HULL_CAPACITY 40     // points of one state's hull (dev4's oracle rays needed at most 21)
 #define OPEN_ROOFS 12        // footprints the ray is inside at once
 #define RECENT_CROSSINGS 8   // crossings kept to drop one found twice
@@ -73,12 +73,9 @@ struct RayStream {
     float platform_half_width_m;
     float source_stand_z;            // the ground the source stands on: a deck, else the terrain
     StreamedPath path;
-    // The terrain vertices: the walk producing them, how many there are and were sampled, the
-    // last TERRAIN_HISTORY.
-    LatticeWalk walk;
+    // The terrain vertices, all of them: the source, every lattice line crossed, the receiver.
     int count;
-    int sampled;
-    TerrainPoint history[TERRAIN_HISTORY];
+    TerrainPoint samples[RAY_SAMPLES];
     // The path is streamed over [0, streamed_to]; `segment` is the sample ending the terrain
     // stretch streamed_to lies in, `below` and `above` its two ends.
     float streamed_to;
@@ -130,46 +127,65 @@ __device__ void add_foliage(RayStream& s, float x, const GroundSample& ground) {
     s.trees_behind_x = x;
 }
 
-// Terrain vertex k (generated in order, kept for TERRAIN_HISTORY vertices): the source, the walk's
-// crossings, the receiver.
-__device__ u32 ray_sample(RayStream& s, int k, TerrainPoint* out) {
-    while (s.sampled <= k) {
+// Terrain vertex k of the ray, as `sample_ray` wrote it.
+__device__ __forceinline__ u32 ray_sample(RayStream& s, int k, TerrainPoint* out) {
+    if (k >= s.count) return FAILED_CAPACITY;
+    *out = s.samples[k];
+    return 0;
+}
+
+// The first of a ray's two passes: its terrain vertices into `s.samples` (the source, every lattice
+// line crossed, the receiver), each state's foliage with them. Out of line, once a ray: the walk's
+// state is not live while the second pass streams the hulls, so the kernel's registers are the
+// larger pass's (above 168 the card keeps 8 warps an SM; evidence 2026-10-11, sampling).
+__device__ __noinline__ u32 sample_ray(const TerrainScene& ground, float sx, float sy, const RayEnds& ends, RayStream& s) {
+    LatticeWalk walk;
+    walk_start(ground, sx, sy, s.receiver_x, s.receiver_y, &walk);
+    s.count = 0;
+    for (bool last = false; !last;) {
         GroundSample sample;
         u32 failed;
         float t;
-        if (s.sampled == 0) {
+        bool on_row;
+        int row;
+        if (s.count == 0) {
             t = 0.0f;
-            failed = ground_at(*s.ground, s.receiver_x + s.offset_x, s.receiver_y + s.offset_y, &sample);
-        } else if (s.sampled == s.count - 1) {
-            t = 1.0f;
-            failed = ground_at(*s.ground, s.receiver_x, s.receiver_y, &sample);
-        } else {
-            bool on_row;
-            int row;
-            if (!walk_next(*s.ground, &s.walk, &t, &on_row, &row)) return FAILED_CAPACITY;
+            failed = ground_at(ground, s.receiver_x + s.offset_x, s.receiver_y + s.offset_y, &sample);
+        } else if (walk_next(ground, &walk, &t, &on_row, &row)) {
             float keep = 1.0f - t;
-            failed = walk_sample(*s.ground, s.receiver_x + s.offset_x * keep, s.receiver_y + s.offset_y * keep, on_row, row,
-                                 s.walk.north, &sample);
+            failed = walk_sample(ground, s.receiver_x + s.offset_x * keep, s.receiver_y + s.offset_y * keep, on_row, row,
+                                 walk.north, &sample);
+        } else {
+            t = 1.0f;
+            last = true;
+            failed = ground_at(ground, s.receiver_x, s.receiver_y, &sample);
         }
         if (failed) return failed;
+        if (s.count == RAY_SAMPLES) return FAILED_CAPACITY;
         TerrainPoint point;
         point.x = t * s.length;
         point.g = sample.ground_factor;
-        if (s.sampled == 0) {
-            if (isnan(s.source_stand_z)) s.source_stand_z = sample.height_m;
+        if (s.count == 0) {
+            // The source stands on its deck, else on the terrain; the states' rays from there.
+            s.source_stand_z = isnan(ends.source_ground_m) ? sample.height_m : ends.source_ground_m;
             s.path.source_ground_z = fminf(sample.height_m, s.source_stand_z);
             s.path.source_ground_g = sample.ground_factor;
+            s.path.source.x = 0.0f;
+            s.path.source.z = s.source_stand_z + ends.source_height_m;
+            s.path.receiver.x = s.length;
+            s.path.receiver.z = ends.receiver_altitude_m;
+            for (int state = 0; state < 2; state++) {
+                s.states[state].ray = state_ray_between(state, s.path.source, s.path.receiver);
+                s.foliage_m[state] = 0.0f;
+            }
             s.trees_behind = sample;
             s.trees_behind_x = 0.0f;
         } else {
             add_foliage(s, point.x, sample);
         }
         point.z = point.x < s.platform_half_width_m ? fminf(sample.height_m, s.source_stand_z) : sample.height_m;
-        s.history[s.sampled % TERRAIN_HISTORY] = point;
-        s.sampled++;
+        s.samples[s.count++] = point;
     }
-    if (k <= s.sampled - 1 - TERRAIN_HISTORY) return FAILED_CAPACITY;
-    *out = s.history[k % TERRAIN_HISTORY];
     return 0;
 }
 
@@ -526,42 +542,16 @@ __device__ void close_hull(RayStream& s, StateStream& st) {
     }
 }
 
-// ray::ray_terms from (sx, sy) to the receiver at (rx, ry) at `receiver_altitude_m` standing in
-// building `receiver_footprint`, with the obstacles when `obstacles_on_ray`; 0 or a failure.
-__device__ u32 ray_transfer(const TerrainScene& ground, const ObstacleScene& obstacles, float sx, float sy, float rx, float ry,
-                            u64 receiver_footprint, bool obstacles_on_ray, const RayEnds& ends, RayStream& s, Transfer* transfer) {
-    s.ground = &ground;
-    s.receiver_x = rx;
-    s.receiver_y = ry;
-    s.offset_x = sx - rx;
-    s.offset_y = sy - ry;
-    s.receiver_footprint = receiver_footprint;
-    float horizontal = fmaxf(hypotf(s.offset_x, s.offset_y), 1.0f);
-    s.length = horizontal;
-    s.inverse_length = 1.0f / horizontal;
-    s.platform_half_width_m = ends.platform_half_width_m;
-    walk_start(ground, sx, sy, rx, ry, &s.walk);
-    LatticeWalk counting = s.walk;
-    float t_counted;
-    bool on_row_counted;
-    int row_counted;
-    s.count = 2;
-    while (walk_next(ground, &counting, &t_counted, &on_row_counted, &row_counted)) s.count++;
-    s.sampled = 0;
-    s.source_stand_z = ends.source_ground_m;
-    TerrainPoint first;
-    u32 failed = ray_sample(s, 0, &first);
-    if (failed) return failed;
-    float source_altitude = s.source_stand_z + ends.source_height_m;
-    s.path.source.x = 0.0f;
-    s.path.source.z = source_altitude;
-    s.path.receiver.x = horizontal;
-    s.path.receiver.z = ends.receiver_altitude_m;
-    s.path.source_ground_factor = ends.source_ground_factor >= 0.0f ? ends.source_ground_factor : first.g;
+// The second of a ray's two passes, over the samples `sample_ray` wrote: the hulls, the moments, the
+// obstacles' crossings and roofs, and each state's terms. Out of line, once a ray.
+__device__ __noinline__ u32 stream_ray(const ObstacleScene& obstacles, float sx, float sy, float rx, float ry, bool obstacles_on_ray,
+                                       const RayEnds& ends, RayStream& s, Transfer* transfer) {
+    float horizontal = s.length;
+    float source_altitude = s.path.source.z;
+    s.path.source_ground_factor = ends.source_ground_factor >= 0.0f ? ends.source_ground_factor : s.samples[0].g;
     s.path.whole.z = s.path.whole.xz = s.path.whole.g = 0.0f;
     for (int state = 0; state < 2; state++) {
         StateStream& st = s.states[state];
-        st.ray = state_ray_between(state, s.path.source, s.path.receiver);
         st.depth = 1;
         st.hull[0].x = 0.0f;
         st.hull[0].z = source_altitude;
@@ -569,11 +559,11 @@ __device__ u32 ray_transfer(const TerrainScene& ground, const ObstacleScene& obs
         st.blocked = false;
         st.has_best = false;
         st.best_delta = 0.0f;
-        s.foliage_m[state] = 0.0f;
     }
     s.streamed_to = 0.0f;
     s.segment = 1;
-    s.below = first;
+    s.below = s.samples[0];
+    u32 failed;
     if ((failed = ray_sample(s, 1, &s.above))) return failed;
     s.covered_to = -QM_INFINITY;
     s.open_count = 0;
@@ -608,4 +598,23 @@ __device__ u32 ray_transfer(const TerrainScene& ground, const ObstacleScene& obs
     }
     transfer->slant_m = fmaxf(hypotf(horizontal, ends.receiver_altitude_m - source_altitude), 1.0f);
     return 0;
+}
+
+// ray::ray_terms from (sx, sy) to the receiver at (rx, ry) at `receiver_altitude_m` standing in
+// building `receiver_footprint`, with the obstacles when `obstacles_on_ray`; 0 or a failure. Two
+// passes: the terrain's samples, then the stream over them.
+__device__ u32 ray_transfer(const TerrainScene& ground, const ObstacleScene& obstacles, float sx, float sy, float rx, float ry,
+                            u64 receiver_footprint, bool obstacles_on_ray, const RayEnds& ends, RayStream& s, Transfer* transfer) {
+    s.ground = &ground;
+    s.receiver_x = rx;
+    s.receiver_y = ry;
+    s.offset_x = sx - rx;
+    s.offset_y = sy - ry;
+    s.receiver_footprint = receiver_footprint;
+    s.length = fmaxf(hypotf(s.offset_x, s.offset_y), 1.0f);
+    s.inverse_length = 1.0f / s.length;
+    s.platform_half_width_m = ends.platform_half_width_m;
+    u32 failed = sample_ray(ground, sx, sy, ends, s);
+    if (failed) return failed;
+    return stream_ray(obstacles, sx, sy, rx, ry, obstacles_on_ray, ends, s, transfer);
 }
