@@ -11,11 +11,12 @@ use tiles::sources::Layer;
 
 pub const LAYERS: usize = Layer::ALL.len();
 
-/// A point evaluated: where it stands and what its rays share.
+/// A point evaluated: where it stands and what its rays share. Its weather is the table's at its
+/// place, taken when a ray is evaluated here ([`Point::weather`]): a card takes its own, and a
+/// square's million points stay small.
 pub struct Point {
     pub position: [f64; 2],
     pub altitude_m: f64,
-    pub weather: PlaceWeather,
     /// The building it stands in (0: none), whose walls do not screen it.
     pub own_footprint: u64,
     /// Its receiver reflection (dB), which every ground source's energy there takes.
@@ -28,14 +29,12 @@ impl Point {
     /// The point at `position` (frame metres), the receiver height above its ground, in the
     /// building it may stand in.
     pub fn at(square: &Square, position: [f64; 2]) -> Result<Self, String> {
-        let (lat, lon) = square.frame.to_mercator(position).to_degrees();
-        let weather = square.weather.place(lat, lon);
+        let weather = weather_at(square, position);
         let own_footprint = square.obstacles.enclosing_building_id(position)?;
         let reflection_db = square.obstacles.reflection_db(position, own_footprint)?;
         Ok(Point {
             position,
             altitude_m: square.ground.at(position)?.height_m + popup::answer::RECEIVER_HEIGHT_M,
-            weather,
             own_footprint: own_footprint.unwrap_or(0),
             reflection_db,
             bound: receiver_bound(
@@ -46,6 +45,11 @@ impl Point {
         })
     }
 
+    /// The weather at this point.
+    pub fn weather(&self, square: &Square) -> PlaceWeather {
+        weather_at(square, self.position)
+    }
+
     /// The receiver this point is for the popup's physics; its reflection is applied after.
     pub fn receiver<'s>(&self, square: &'s Square) -> Receiver<'s, 's> {
         Receiver {
@@ -53,7 +57,7 @@ impl Point {
             obstacles: &square.obstacles,
             position: self.position,
             altitude_m: self.altitude_m,
-            weather: self.weather,
+            weather: self.weather(square),
             reflection_db: 0.0,
             own_footprint: self.own_footprint,
         }
@@ -63,6 +67,12 @@ impl Point {
     pub fn reflection(&self) -> f64 {
         energy(self.reflection_db)
     }
+}
+
+/// The weather table's at `position` (frame metres).
+fn weather_at(square: &Square, position: [f64; 2]) -> PlaceWeather {
+    let (lat, lon) = square.frame.to_mercator(position).to_degrees();
+    square.weather.place(lat, lon)
 }
 
 /// Exact evaluations of many pairs at once (a card): the energy per period candidate `c` delivers

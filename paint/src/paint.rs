@@ -228,23 +228,26 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
         let pass: Vec<Block> = (block_ids.par_iter())
             .map_init(Vec::new, |near, &at| block_of(near, at))
             .collect();
-        let (outdoor, indoor): (Vec<(usize, usize, Point)>, Vec<_>) = (0..block_ids.len()
-            * grid.block
-            * grid.block)
+        // The pass's pixels block by block: a pixel's block (its slot in the pass) and its place in
+        // the square. The points stay where they are made (one is a few hundred bytes); an
+        // indoor one takes its building's façade later.
+        let place = |k: usize| {
+            let (slot, inside) = (k / (grid.block * grid.block), k % (grid.block * grid.block));
+            let at = block_ids[slot];
+            let x = (at % blocks) * grid.block + inside % grid.block;
+            let y = (at / blocks) * grid.block + inside / grid.block;
+            (slot, y * n + x)
+        };
+        let points: Vec<Point> = (0..block_ids.len() * grid.block * grid.block)
             .into_par_iter()
             .map(|k| {
-                let (slot, inside) = (k / (grid.block * grid.block), k % (grid.block * grid.block));
-                let at = block_ids[slot];
-                let x = (at % blocks) * grid.block + inside % grid.block;
-                let y = (at / blocks) * grid.block + inside / grid.block;
-                let point = Point::at(square, metres(x as f64 + 0.5, y as f64 + 0.5))?;
-                Ok((slot, y * n + x, point))
+                let at = place(k).1;
+                Point::at(square, metres((at % n) as f64 + 0.5, (at / n) as f64 + 0.5))
             })
-            .collect::<Result<Vec<_>, String>>()?
-            .into_iter()
-            .partition(|(_, _, point)| point.own_footprint == 0);
-        let indoor: Vec<(usize, u64)> = (indoor.into_iter())
-            .map(|(_, at, point)| (at, point.own_footprint))
+            .collect::<Result<_, String>>()?;
+        let indoor: Vec<(usize, u64)> = (points.iter().enumerate())
+            .filter(|(_, point)| point.own_footprint != 0)
+            .map(|(k, point)| (place(k).1, point.own_footprint))
             .collect();
         // A pixel's frames: its own cell's, and within the band of an edge the neighbour's.
         let side = grid.far as f64;
@@ -255,16 +258,20 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
                 (at / n % grid.far) as f64 + 0.5,
             )
         };
-        // Per pixel its loud local sources, then the probes of its frames (sorted).
-        let lists: Vec<(Vec<u32>, usize)> = (outdoor.par_iter())
-            .map(|(slot, at, point)| {
-                let block = &pass[*slot];
+        // Per outdoor pixel its loud local sources, then the probes of its frames (sorted).
+        let lists: Vec<(Vec<u32>, usize)> = (points.par_iter().enumerate())
+            .map(|(k, point)| {
+                if point.own_footprint != 0 {
+                    return (Vec::new(), 0);
+                }
+                let (slot, at) = place(k);
+                let block = &pass[slot];
                 let mut list: Vec<u32> = (block.local.iter().copied())
                     .filter(|&index| square.loud(index, point.position, &point.bound))
                     .collect();
                 let local = list.len();
                 let mut probes: Vec<u32> = (block.frames.iter())
-                    .filter(|frame| frame_weight(frame.offset, cell_pixel(*at), side, band) > 0.0)
+                    .filter(|frame| frame_weight(frame.offset, cell_pixel(at), side, band) > 0.0)
                     .flat_map(|frame| frame.probed.iter().map(|group| group.probe.index))
                     .collect();
                 probes.sort_unstable();
@@ -276,10 +283,6 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
         let pairs: Vec<(u32, u32)> = (lists.iter().enumerate())
             .flat_map(|(k, (list, _))| list.iter().map(move |&index| (k as u32, index)))
             .collect();
-        let (places, points): (Vec<(usize, usize)>, Vec<Point>) = outdoor
-            .into_iter()
-            .map(|(slot, at, point)| ((slot, at), point))
-            .unzip();
         let energies = evaluate(square, &points, &pairs, batch)?;
         let mut offset = 0;
         let starts: Vec<usize> = (lists.iter())
@@ -290,8 +293,9 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
             .collect();
         let painted = (0..points.len())
             .into_par_iter()
+            .filter(|&k| points[k].own_footprint == 0)
             .map(|k| {
-                let ((slot, at), point) = (places[k], &points[k]);
+                let ((slot, at), point) = (place(k), &points[k]);
                 let block = &pass[slot];
                 let (x, y) = (at % n, at / n);
                 let within = |side: usize| {

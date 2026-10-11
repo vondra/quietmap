@@ -283,7 +283,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 obstacles: &square.obstacles,
                 position,
                 altitude_m: point.altitude_m,
-                weather: point.weather,
+                weather: point.weather(&square),
                 reflection_db: 0.0,
                 own_footprint: 0,
             };
@@ -401,7 +401,7 @@ fn pair(
         obstacles: &square.obstacles,
         position,
         altitude_m: point.altitude_m,
-        weather: point.weather,
+        weather: point.weather(square),
         reflection_db: 0.0,
         own_footprint: 0,
     };
