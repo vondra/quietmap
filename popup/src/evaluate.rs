@@ -196,27 +196,16 @@ pub fn source_rays(
     let [a, b] = candidate.ends_m;
     // A piece on a bridge stands on its deck: the line between the deck's altitudes at its ends.
     let deck_at = |fraction: f64| {
-        candidate.on_deck.then(|| {
-            let [start, end] = candidate.ground_m;
-            start + fraction * (end - start)
-        })
+        candidate
+            .deck_m
+            .map(|[start, end]| start + fraction * (end - start))
     };
     let source_altitude = |fraction: f64, profile: &Profile| {
         deck_at(fraction).unwrap_or_else(|| profile.ground_m.first().copied().unwrap_or(0.0))
             + source.height_m
     };
-    // The ground under the piece's ends as its rays stand on it (the candidate keeps the 1"
-    // ground, for pieces never traced): the spreading and the line's geometry use this.
-    let ground_m = if candidate.on_deck {
-        candidate.ground_m
-    } else if candidate.line {
-        [
-            receiver.ground.at(a)?.height_m,
-            receiver.ground.at(b)?.height_m,
-        ]
-    } else {
-        [receiver.ground.at(a)?.height_m; 2]
-    };
+    // The spreading and the line's geometry stand where the rays do.
+    let ground_m = candidate.traced_ground_m(receiver.ground)?;
     if !candidate.line {
         let ends = RayEnds {
             source_ground_m: deck_at(0.0),

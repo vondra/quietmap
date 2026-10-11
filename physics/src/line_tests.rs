@@ -26,11 +26,12 @@ fn free_field_energy(start: [f64; 3], end: [f64; 3], receiver: [f64; 3]) -> f64 
     nodes.iter().map(|node| node.weight_rad).sum::<f64>() * geometry.divergence_factor()
 }
 
-/// The incoherent point sum with 20 lg r + 11 per point, by a fine midpoint rule.
+/// The incoherent point sum with 20 lg r + 11 per point, by a fine midpoint rule, the power per
+/// horizontal metre.
 fn point_sum_energy(start: [f64; 3], end: [f64; 3], receiver: [f64; 3]) -> f64 {
     let steps = 400_000;
     let along = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
-    let length = (along[0] * along[0] + along[1] * along[1] + along[2] * along[2]).sqrt();
+    let length = along[0].hypot(along[1]);
     (0..steps)
         .map(|i| {
             let f = (i as f64 + 0.5) / steps as f64;

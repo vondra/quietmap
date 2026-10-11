@@ -33,7 +33,7 @@ pub fn mixed_gain_bound_db(p: f64) -> f64 {
 /// How a source spreads, with what the bound needs of its geometry.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Spread {
-    /// A straight piece of `length_m` (3D) carrying L_W' per metre.
+    /// A straight piece of `length_m` (horizontal) carrying L_W' per horizontal metre.
     Line { length_m: f64 },
     /// A point carrying L_W.
     Point,

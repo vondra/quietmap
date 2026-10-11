@@ -190,8 +190,9 @@ impl Ground {
         .map_err(|error| error.to_string())
     }
 
-    /// The one arc-second ground at [east, north] metres: a source piece's geometry (its rays'
-    /// ends read [`Ground::at`]), so a click reads no fine terrain for pieces it never traces.
+    /// The one arc-second ground at [east, north] metres, its fine detail left out: what the walk
+    /// reads away from a ray's ends.
+    #[cfg(test)]
     pub fn coarse_at(&self, metres: [f64; 2]) -> Result<GroundSample, String> {
         let position = self.frame.to_mercator(metres).snapped_to_lattice();
         let Some(terrain) = self.terrain_of(TileId::containing(position))? else {
@@ -201,23 +202,29 @@ impl Ground {
     }
 
     /// The terrain height at `metres`, its fine detail added, `None` where no tile is read yet or a
-    /// node has no data (the aircraft horizons skip such samples; a ray never meets them).
-    pub fn read_height_m(&self, metres: [f64; 2]) -> Option<f64> {
+    /// node has no data (the aircraft horizons skip such samples; a ray never meets them); an error
+    /// where a fine file fails.
+    pub fn read_height_m(&self, metres: [f64; 2]) -> Result<Option<f64>, String> {
         let position = self.frame.to_mercator(metres).snapped_to_lattice();
         let tile = TileId::containing(position);
-        let terrain = self.slot(tile).and_then(|slot| self.tiles[slot].as_ref())?;
-        match terrain {
-            Some(terrain) => {
-                let place = terrain.locate(position)?;
-                Some(terrain.sample_at(place)?.height_m + self.detail_at(tile, place).ok()?)
-            }
-            None => Some(OCEAN.height_m),
-        }
+        let Some(terrain) = self.slot(tile).and_then(|slot| self.tiles[slot].as_ref()) else {
+            return Ok(None);
+        };
+        let Some(terrain) = terrain else {
+            return Ok(Some(OCEAN.height_m));
+        };
+        let Some((place, sample)) = terrain
+            .locate(position)
+            .and_then(|place| Some((place, terrain.sample_at(place)?)))
+        else {
+            return Ok(None);
+        };
+        Ok(Some(sample.height_m + self.detail_at(tile, place)?))
     }
 
     /// Whether a tile under the stretch from `a` to `b` has fine terrain: the tiles of its box's
-    /// corners, as a stretch of at most 200 m lies in two by two tiles at most (one without adds
-    /// no detail to its own part).
+    /// corners, as a stretch of at most 200 m lies in two by two tiles at most. A tile without a
+    /// file under a fine stretch adds no detail, its 1" surface read on the fine lattice.
     fn fine_near(&self, a: Mercator, b: Mercator) -> Result<bool, String> {
         for x in [a.x.min(b.x), a.x.max(b.x)] {
             for y in [a.y.min(b.y), a.y.max(b.y)] {

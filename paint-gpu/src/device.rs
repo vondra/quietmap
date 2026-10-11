@@ -675,14 +675,7 @@ impl DeviceSquare {
             .par_iter()
             .map(|candidate| {
                 let [a, b] = candidate.ends_m;
-                // The ground under the ends as the rays stand on it (popup::evaluate::source_rays).
-                let ground_m = if candidate.on_deck {
-                    candidate.ground_m
-                } else if candidate.line {
-                    [square.ground.at(a)?.height_m, square.ground.at(b)?.height_m]
-                } else {
-                    [square.ground.at(a)?.height_m; 2]
-                };
+                let ground_m = candidate.traced_ground_m(&square.ground)?;
                 Ok(DeviceCandidate {
                     ax: a[0] as f32,
                     ay: a[1] as f32,
@@ -693,7 +686,7 @@ impl DeviceSquare {
                     line: u32::from(candidate.line),
                     attribute: first_of_list[candidate.attribute.list as usize]
                         + candidate.attribute.index,
-                    on_deck: u32::from(candidate.on_deck),
+                    on_deck: u32::from(candidate.deck_m.is_some()),
                 })
             })
             .collect::<Result<_, String>>()?;

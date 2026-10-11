@@ -91,7 +91,8 @@ __device__ void ocean(GroundSample* out) {
 // FineTerrain::at): its codes are i16 in DETAIL_STEP_M steps.
 __device__ float fine_detail_at(const TerrainScene& sc, const TerrainTile& tile, float row, float column) {
     u32 rows = FINE_PER_NODE * (tile.rows - 1) + 1, columns = FINE_PER_NODE * (tile.columns - 1) + 1;
-    u32 r = min((u32)floorf(row), rows - 2), c = min((u32)floorf(column), columns - 2);
+    // A point a hair north of the window (terrain_sample's slack for f32) reads the first row.
+    u32 r = min((u32)fmaxf(floorf(row), 0.0f), rows - 2), c = min((u32)fmaxf(floorf(column), 0.0f), columns - 2);
     float fr = row - (float)r, fc = column - (float)c;
     const i16* detail = (const i16*)(sc.nodes + tile.fine_offset);
     u64 at = (u64)r * columns + c;
@@ -372,9 +373,14 @@ __device__ u32 fine_walk_sample(const TerrainScene& sc, float east_m, float nort
     const TerrainTile* tile = terrain_tile(sc, dx, dy);
     if (!tile || tile->state == TILE_NOT_READ) return FAILED_NOT_READ;
     if (tile->state == TILE_EMPTY) {
+        // Only a 1" line is ever a tile's edge; a finer one can pass within ON_TILE_EDGE of an edge
+        // inside the ocean tile, which the CPU reads as ocean.
+        bool coarse_row = on_row && scene_row % FINE_PER_NODE == 0;
+        bool coarse_column = !on_row
+            && (int)rintf(FINE_PER_NODE * (sc.column_at_origin + east_m * sc.columns_per_metre)) % FINE_PER_NODE == 0;
         const TerrainTile* across[2] = {
-            tile_y - (float)dy < ON_TILE_EDGE ? terrain_tile(sc, dx, dy - 1) : 0,
-            tile_x - (float)dx < ON_TILE_EDGE ? terrain_tile(sc, dx - 1, dy) : 0,
+            coarse_row && tile_y - (float)dy < ON_TILE_EDGE ? terrain_tile(sc, dx, dy - 1) : 0,
+            coarse_column && tile_x - (float)dx < ON_TILE_EDGE ? terrain_tile(sc, dx - 1, dy) : 0,
         };
         tile = 0;
         for (int k = 0; k < 2 && !tile; k++) {

@@ -1,5 +1,5 @@
-//! Every source of the read rings as a candidate: its geometry in the click's frame, the ground at
-//! its ends, its closest horizontal distance and its upper bound per period.
+//! Every source of the read rings as a candidate: its geometry in the click's frame, a bridge's deck
+//! under it, its closest horizontal distance and its upper bound per period.
 
 use crate::obstacles::REFLECTION_MAX_DB;
 use crate::scene::Ground;
@@ -88,10 +88,9 @@ pub struct Candidate {
     pub line: bool,
     pub attribute: AttributeRef,
     pub ends_m: [[f64; 2]; 2],
-    /// The ground under the piece's ends (m): the terrain, or a bridge's deck.
-    pub ground_m: [f64; 2],
-    /// On a bridge: its source stands on the deck in `ground_m`, not on the terrain under it.
-    pub on_deck: bool,
+    /// On a bridge: the deck's altitude (m) at the piece's ends, where its source stands instead of
+    /// on the terrain.
+    pub deck_m: Option<[f64; 2]>,
     pub distance_m: f64,
     pub bound: [f64; PERIODS],
     /// The bound's Lden-weighted energy: candidates are evaluated from the loudest.
@@ -121,17 +120,27 @@ fn distance_to_segment(a: [f64; 2], b: [f64; 2]) -> f64 {
 }
 
 impl Candidate {
-    /// How the piece spreads (a line's length is its 3D length).
+    /// How the piece spreads (a line carries its power per horizontal metre).
     fn spread(&self) -> Spread {
         if self.line {
             let [a, b] = self.ends_m;
-            let horizontal = (b[0] - a[0]).hypot(b[1] - a[1]);
             Spread::Line {
-                length_m: horizontal.hypot(self.ground_m[1] - self.ground_m[0]),
+                length_m: (b[0] - a[0]).hypot(b[1] - a[1]),
             }
         } else {
             Spread::Point
         }
+    }
+
+    /// The ground under the piece's ends as its rays stand on it: the deck on a bridge, else the
+    /// terrain with its fine detail (a point's both the same).
+    pub fn traced_ground_m(&self, ground: &Ground) -> Result<[f64; 2], String> {
+        let [a, b] = self.ends_m;
+        Ok(match self.deck_m {
+            Some(deck) => deck,
+            None if self.line => [ground.at(a)?.height_m, ground.at(b)?.height_m],
+            None => [ground.at(a)?.height_m; 2],
+        })
     }
 
     /// Horizontal distance from `receiver` (click metres) to the piece.
@@ -242,19 +251,13 @@ pub fn collect(
             if near > reach_m {
                 return Ok(None);
             }
-            let deck = sources.deck(index);
-            let ground_m = match deck {
-                Some([start, end]) if piece.is_line() => [start, end],
-                Some([start, _]) => [start; 2],
-                None => {
-                    let start_ground = ground.coarse_at(ends_m[0])?.height_m;
-                    if piece.is_line() {
-                        [start_ground, ground.coarse_at(ends_m[1])?.height_m]
-                    } else {
-                        [start_ground; 2]
-                    }
+            let deck_m = sources.deck(index).map(|[start, end]| {
+                if piece.is_line() {
+                    [start, end]
+                } else {
+                    [start; 2]
                 }
-            };
+            });
             let mut candidate = Candidate {
                 layer: source.layer,
                 line: piece.is_line(),
@@ -270,8 +273,7 @@ pub fn collect(
                     index: piece.attribute,
                 },
                 ends_m,
-                ground_m,
-                on_deck: deck.is_some(),
+                deck_m,
                 distance_m: near,
                 bound: [0.0; PERIODS],
             };

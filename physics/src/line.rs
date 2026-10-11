@@ -128,9 +128,11 @@ impl LinePieceGeometry {
         self.end_angle_rad - self.start_angle_rad
     }
 
-    /// 1/(10^1.1 d_perp): multiplies sum(dphi 10^(-A_path/10)) into energy per unit L_W'.
+    /// cos(grade)/(10^1.1 d_perp): multiplies sum(dphi 10^(-A_path/10)) into energy per unit L_W',
+    /// which a piece carries per horizontal metre: a road's grade adds at most 0.03 dB, the ground
+    /// under a piece's ends (a berm's flank) would add more, and the bound holds at any heights.
     pub fn divergence_factor(&self) -> f64 {
-        1.0 / (POINT_DIVERGENCE_LINEAR * self.perpendicular_m)
+        self.unit[0].hypot(self.unit[1]) / (POINT_DIVERGENCE_LINEAR * self.perpendicular_m)
     }
 
     pub fn in_plane_angle_at(&self, along_m: f64) -> f64 {

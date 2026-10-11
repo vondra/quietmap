@@ -126,7 +126,7 @@ impl Horizons {
             let mut range_m = TERRAIN_FIRST_SAMPLE_M;
             for _ in 0..TERRAIN_SAMPLES {
                 let point = [position[0] + east * range_m, position[1] + north * range_m];
-                if let Some(height_m) = ground.read_height_m(point) {
+                if let Some(height_m) = ground.read_height_m(point)? {
                     terrain.offer(
                         sector,
                         band_of(range_m, &TERRAIN_BAND_LIMITS_M),

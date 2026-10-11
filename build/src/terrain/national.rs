@@ -1,10 +1,11 @@
 //! A national terrain model laid over the dev4 heights (step 5, terrain first): a raster of one
 //! arc-second pixels centred on the lattice nodes, heights above EGM2008, prepared from the
 //! national source by `fetch/national-dem.sh` (area average, horizontal and vertical datum through
-//! PROJ with its grids); its 1/6" twin gives the fine terrain its detail (`terrain_fine`). It joins the base with dev4's feather, `w = min(max(d - 1, 0) / 256, 1)` with `d` the
-//! distance in nodes to the nearest node the model lacks (its edge and its voids), so no step
-//! shows where it ends.
+//! PROJ with its grids); its 1/6" twin gives the fine terrain its detail (`terrain_fine`). It joins
+//! the base with dev4's feather, `w = min(max(d - 1, 0) / 256, 1)` with `d` the distance in nodes
+//! to the nearest node the model lacks (its edge and its voids), so no step shows where it ends.
 
+use std::f32::consts::SQRT_2;
 use std::path::Path;
 use tiff::decoder::{Decoder, DecodingResult};
 use tiff::tags::Tag;
@@ -24,9 +25,14 @@ pub struct NationalHeights {
 }
 
 /// Distances in nodes to the nearest missing node (outside the raster counts as missing), by two
-/// chamfer passes with steps 1 and sqrt 2 (at most 8 % long, which a feather does not notice).
-fn distances_to_missing(valid: &[bool], rows: usize, columns: usize) -> Vec<f32> {
-    const DIAGONAL: f32 = std::f32::consts::SQRT_2;
+/// chamfer passes with steps of 1 along a row or a column and `diagonal` across: sqrt 2 is at most
+/// 8 % long, which a feather does not notice; 1 is the chessboard distance, a box's reach.
+pub(crate) fn distances_to_missing(
+    valid: &[bool],
+    rows: usize,
+    columns: usize,
+    diagonal: f32,
+) -> Vec<f32> {
     let mut distance: Vec<f32> = valid
         .iter()
         .map(|&v| if v { f32::MAX } else { 0.0 })
@@ -45,9 +51,9 @@ fn distances_to_missing(valid: &[bool], rows: usize, columns: usize) -> Vec<f32>
                 continue;
             }
             let best = [
-                at(row - 1, column - 1, &distance) + DIAGONAL,
+                at(row - 1, column - 1, &distance) + diagonal,
                 at(row - 1, column, &distance) + 1.0,
-                at(row - 1, column + 1, &distance) + DIAGONAL,
+                at(row - 1, column + 1, &distance) + diagonal,
                 at(row, column - 1, &distance) + 1.0,
             ]
             .into_iter()
@@ -62,9 +68,9 @@ fn distances_to_missing(valid: &[bool], rows: usize, columns: usize) -> Vec<f32>
                 continue;
             }
             let best = [
-                at(row + 1, column + 1, &distance) + DIAGONAL,
+                at(row + 1, column + 1, &distance) + diagonal,
                 at(row + 1, column, &distance) + 1.0,
-                at(row + 1, column - 1, &distance) + DIAGONAL,
+                at(row + 1, column - 1, &distance) + diagonal,
                 at(row, column + 1, &distance) + 1.0,
             ]
             .into_iter()
@@ -167,7 +173,7 @@ impl NationalHeights {
     pub fn read(path: &Path) -> Result<Self, String> {
         let raster = Raster::read(path, NODES_PER_DEGREE)?;
         let valid: Vec<bool> = raster.heights.iter().map(|h| h.is_finite()).collect();
-        let weights = distances_to_missing(&valid, raster.rows, raster.columns)
+        let weights = distances_to_missing(&valid, raster.rows, raster.columns, SQRT_2)
             .into_iter()
             .map(weight_code)
             .collect();
@@ -207,7 +213,7 @@ mod tests {
             }
         }
         valid[100 * columns + 100] = false;
-        let distance = distances_to_missing(&valid, rows, columns);
+        let distance = distances_to_missing(&valid, rows, columns, SQRT_2);
         let weight = |row: usize, column: usize| weight_code(distance[row * columns + column]);
         assert_eq!(weight(5, 5), 0);
         assert_eq!(weight(10, 400), 0);

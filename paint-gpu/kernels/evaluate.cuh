@@ -118,7 +118,8 @@ __device__ u32 add_ray(const TerrainScene& ground, const ObstacleScene& obstacle
 
 // The rays of one line piece's quadrature nodes (evaluate.rs received_bands for a line).
 // Node `node` of a line piece: its ray from its point on the piece (on a deck, the deck's ground
-// there) into `periods`, weighted by its dphi over the piece's perpendicular; 0 or a failure.
+// there) into `periods`, weighted by its dphi over the piece's perpendicular, per horizontal metre
+// (LinePieceGeometry::divergence_factor); 0 or a failure.
 __device__ u32 add_line_node(const TerrainScene& ground, const ObstacleScene& obstacles, const Receiver& receiver,
                              const Candidate& candidate, const Attribute& source, const RayEnds& ends,
                              const LinePieceGeometry& g, const LineNodes& nodes, int node, RayStream& s, float* periods) {
@@ -127,7 +128,7 @@ __device__ u32 add_line_node(const TerrainScene& ground, const ObstacleScene& ob
     float py = candidate.ay + fraction * (candidate.by - candidate.ay);
     RayEnds node_ends = ends;
     if (candidate.on_deck) node_ends.source_ground_m = candidate.ground0 + fraction * (candidate.ground1 - candidate.ground0);
-    float divergence = 1.0f / (POINT_DIVERGENCE_LINEAR * g.perpendicular_m);
+    float divergence = hypotf(g.unit[0], g.unit[1]) / (POINT_DIVERGENCE_LINEAR * g.perpendicular_m);
     return add_ray(ground, obstacles, receiver, source, node_ends, px, py, nodes.obstacles_on_ray[node],
                    nodes.weight_rad[node] * divergence, s, periods);
 }

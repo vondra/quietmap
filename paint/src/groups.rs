@@ -127,7 +127,7 @@ pub(crate) fn frame(
         let layer = candidate.layer as usize;
         // A bridge's deck and the ground under it are screened differently: never one probe.
         let group = groups
-            .entry((layer, sector, shell, candidate.on_deck))
+            .entry((layer, sector, shell, candidate.deck_m.is_some()))
             .or_insert(Summing {
                 layer,
                 corners: [0.0; 4],

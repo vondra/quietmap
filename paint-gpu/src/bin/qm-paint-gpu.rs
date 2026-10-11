@@ -239,7 +239,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             near.retain(|&index| {
                 let candidate = &square.candidates[index as usize];
                 candidate.distance_from(position) <= near_m
-                    && of_kind(candidate.line, candidate.on_deck)
+                    && of_kind(candidate.line, candidate.deck_m.is_some())
             });
             if near.is_empty() {
                 continue;
@@ -249,7 +249,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let index = (random.next() % square.candidates.len() as u64) as u32;
             let candidate = &square.candidates[index as usize];
             if candidate.distance_from(position) > reach_m
-                || !of_kind(candidate.line, candidate.on_deck)
+                || !of_kind(candidate.line, candidate.deck_m.is_some())
             {
                 continue;
             }
