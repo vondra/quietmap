@@ -51,12 +51,17 @@ test('no level in every layer, or only absent tiles, reads as no level', () => {
   assert.deepEqual(readHeatmapCell([none, { source: 'railway', tile: 'absent' }], CELL), { kind: 'no-level' })
 })
 
-test('HM3 versions 3 and 4 decode, no other', () => {
+test('HM3 versions 3 and 4 decode, no other; a version-3 cell of 127 dB stays a level', () => {
   const bytes = new Uint8Array(6 + TILE_PX * TILE_PX).fill(HM3_NO_LEVEL)
   bytes.set([72, 77, 51, 32, 3, 1])
-  assert.equal(decodeHM3(bytes.buffer).sourceId, 1)
+  bytes[6] = HM3_SILENCE
+  const v3 = decodeHM3(bytes.slice().buffer)
+  assert.equal(v3.sourceId, 1)
+  assert.equal(v3.cells[0], HM3_SILENCE - 1)
   bytes[4] = 4
-  assert.equal(decodeHM3(bytes.buffer).sourceId, 1)
+  const v4 = decodeHM3(bytes.slice().buffer)
+  assert.equal(v4.sourceId, 1)
+  assert.equal(v4.cells[0], HM3_SILENCE)
   bytes[4] = 5
   assert.throws(() => decodeHM3(bytes.buffer), /HM3 version 5 not one of 3,4/)
 })

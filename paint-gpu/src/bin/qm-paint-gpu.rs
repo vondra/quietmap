@@ -759,10 +759,18 @@ fn compare_maps(
     }
     // The reference's cells as energies, one pixel at a time over every square, for the scorer.
     let names = paint::hm3::layer_names();
+    // A version-3 tile stored 127 dB or more as 254, which version 4 keeps for silence: read as
+    // 126.5 dB (frontend hm3-decoder.ts alike).
     let read_tile =
         |root: &std::path::Path, name: &str, x: u32, y: u32| -> Result<Vec<u8>, String> {
             let path = tile_path(root, name, 13, x, y);
-            std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
+            let mut bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            if bytes.get(4) == Some(&3) {
+                for byte in bytes.iter_mut().skip(6).filter(|byte| **byte == SILENCE) {
+                    *byte = SILENCE - 1;
+                }
+            }
+            Ok(bytes)
         };
     let mut painted_bytes: std::collections::HashMap<(usize, u32, u32), Vec<u8>> =
         Default::default();
@@ -775,8 +783,9 @@ fn compare_maps(
                 painted_bytes.insert((slot, x, y), read_tile(painted, name, x, y)?);
             }
             for k in 0..512 * 512 {
-                if reference_layers[names.len() - 1][6 + k] == NO_LEVEL
-                    && painted_bytes[&(names.len() - 1, x, y)][6 + k] == NO_LEVEL
+                // Neither side has a level (silence or not assessed): nothing to score.
+                if reference_layers[names.len() - 1][6 + k] >= SILENCE
+                    && painted_bytes[&(names.len() - 1, x, y)][6 + k] >= SILENCE
                 {
                     continue;
                 }
