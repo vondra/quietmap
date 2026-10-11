@@ -11,7 +11,7 @@ use physics::bound::{
     received_energy_bound,
 };
 use rayon::prelude::*;
-use tiles::geo::TileId;
+use tiles::geo::{LocalFrame, TileId};
 use tiles::sources::{Layer, Sources};
 
 /// Attributes or pieces per parallel task of one tile.
@@ -204,7 +204,7 @@ pub fn collect(
     sources: &Sources<'_>,
     tile: TileId,
     display: (u16, u16),
-    ground: &Ground,
+    frame: &LocalFrame,
     receiver: [f64; 2],
     reach_m: f64,
     receiver_bound: &ReceiverBound,
@@ -239,9 +239,7 @@ pub fn collect(
             let source = &attributes[piece.attribute as usize];
             let ends_m = piece.ends.map(|local| {
                 let global = tile.global(local);
-                ground
-                    .frame
-                    .metres_of_steps([global.x as f64, global.y as f64])
+                frame.metres_of_steps([global.x as f64, global.y as f64])
             });
             let near = if piece.is_line() {
                 distance_from(receiver, ends_m[0], ends_m[1])

@@ -99,7 +99,10 @@ fn the_in_plane_angle_replaces_the_horizontal_one_beside_a_short_elevated_line()
 #[test]
 fn a_receiver_on_the_line_reads_it_half_a_metre_away() {
     let geometry = LinePieceGeometry::new([-125.0, 0.0, 0.0], [125.0, 0.0, 0.0]).unwrap();
-    assert_eq!(geometry.perpendicular_m(), LINE_PERPENDICULAR_FLOOR_M);
+    assert_eq!(
+        geometry.divergence_factor(),
+        1.0 / (POINT_DIVERGENCE_LINEAR * LINE_PERPENDICULAR_FLOOR_M)
+    );
     assert!(LinePieceGeometry::new([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]).is_none());
 }
 

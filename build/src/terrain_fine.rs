@@ -121,9 +121,15 @@ fn blended_detail(models: &[Model], north: i32, east: i32) -> f64 {
     sum / f64::max(weights, 1.0)
 }
 
-/// Whether a square's raster reaches `RASTER_MARGIN_NODES` beyond its tiles' fine windows, so no
-/// stored node fades towards the crop.
-fn check_margin(raster: &Raster, square: Square) -> Result<(), String> {
+/// Whether a square's raster fits its neighbours: it reaches `RASTER_MARGIN_NODES` beyond the
+/// square's tiles' fine windows, so no stored node fades towards the crop; and where it holds a
+/// height beyond them the model goes on into that neighbour, whose own raster must then exist
+/// (`has_raster`), or its tiles would get no detail beside full-weight ones here.
+fn check_raster(
+    raster: &Raster,
+    square: Square,
+    has_raster: impl Fn(Square) -> bool,
+) -> Result<(), String> {
     let corner = |dx: u32, dy: u32| {
         fine_window(Window::of_tile(TileId {
             x: square.x * 8 + dx,
@@ -131,23 +137,65 @@ fn check_margin(raster: &Raster, square: Square) -> Result<(), String> {
         }))
     };
     let (north_west, south_east) = (corner(0, 0), corner(7, 7));
-    // The southernmost and easternmost nodes of the tiles and of the raster.
-    let tiles_south = south_east.north_node - south_east.rows as i32 + 1;
-    let tiles_east = south_east.west_node + south_east.columns as i32 - 1;
+    let tiles = [
+        north_west.north_node,
+        north_west.west_node,
+        south_east.north_node - south_east.rows as i32 + 1,
+        south_east.west_node + south_east.columns as i32 - 1,
+    ];
+    check_raster_around(raster, tiles, square, has_raster)
+}
+
+/// `check_raster` for tiles whose fine windows span `[north, west, south, east]` (global nodes).
+fn check_raster_around(
+    raster: &Raster,
+    [tiles_north, tiles_west, tiles_south, tiles_east]: [i32; 4],
+    square: Square,
+    has_raster: impl Fn(Square) -> bool,
+) -> Result<(), String> {
     let raster_south = raster.north_node - raster.rows as i32 + 1;
     let raster_east = raster.west_node + raster.columns as i32 - 1;
     let margin = RASTER_MARGIN_NODES;
-    let reaches = raster.north_node >= north_west.north_node + margin
-        && raster.west_node <= north_west.west_node - margin
-        && raster_south <= tiles_south - margin
-        && raster_east >= tiles_east + margin;
-    if reaches {
-        Ok(())
-    } else {
-        Err(format!(
+    if raster.north_node < tiles_north + margin
+        || raster.west_node > tiles_west - margin
+        || raster_south > tiles_south - margin
+        || raster_east < tiles_east + margin
+    {
+        return Err(format!(
             "the raster does not reach {margin} fine nodes beyond the square's tiles"
-        ))
+        ));
     }
+    // The raster's nodes beyond the tiles towards a neighbour, west to east and north to south.
+    let columns = [
+        (raster.west_node, tiles_west - 1),
+        (tiles_west, tiles_east),
+        (tiles_east + 1, raster_east),
+    ];
+    let rows = [
+        (tiles_north + 1, raster.north_node),
+        (tiles_south, tiles_north),
+        (raster_south, tiles_south - 1),
+    ];
+    for (dy, &(south, north)) in rows.iter().enumerate() {
+        for (dx, &(west, east)) in columns.iter().enumerate() {
+            let neighbour = Square {
+                x: (square.x + dx as u32).wrapping_sub(1),
+                y: (square.y + dy as u32).wrapping_sub(1),
+            };
+            if (dx, dy) == (1, 1) || has_raster(neighbour) {
+                continue;
+            }
+            let held = (south..=north)
+                .any(|row| (west..=east).any(|column| raster.height(row, column).is_some()));
+            if held {
+                return Err(format!(
+                    "the model goes on into square {}_{}, which has no raster",
+                    neighbour.x, neighbour.y
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The fine details of `tile`, or `None` where no model has any in it.
@@ -190,8 +238,10 @@ pub fn build(
             match std::fs::metadata(&path) {
                 Ok(_) => {
                     let raster = Raster::read(&path, FINE_NODES_PER_DEGREE)?;
-                    check_margin(&raster, square)
-                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                    check_raster(&raster, square, |other| {
+                        model.join(format!("{}_{}.tif", other.x, other.y)).exists()
+                    })
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
                     rasters.push(Model::new(raster));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -250,6 +300,42 @@ mod tests {
             columns,
             heights,
         })
+    }
+
+    /// A raster holding a height beyond its square's tiles towards a neighbour without a raster is
+    /// refused; with that neighbour's raster, or with nothing beyond, it fits.
+    #[test]
+    fn a_model_going_on_into_a_square_without_a_raster_is_refused() {
+        let margin = RASTER_MARGIN_NODES as usize;
+        let (rows, columns) = (20 + 2 * margin, 30 + 2 * margin);
+        let (north_node, west_node) = (1_000_000, 300_000);
+        let tiles = [
+            north_node - margin as i32,
+            west_node + margin as i32,
+            north_node - (rows - 1 - margin) as i32,
+            west_node + (columns - 1 - margin) as i32,
+        ];
+        let square = Square { x: 10, y: 20 };
+        let raster = |east_margin_m: f32| Raster {
+            north_node,
+            west_node,
+            rows,
+            columns,
+            // The tiles at 100 m, the margin beyond their east edge at `east_margin_m`, no more.
+            heights: (0..rows * columns)
+                .map(|at| match (at / columns, at % columns) {
+                    (row, _) if row < margin || row >= rows - margin => f32::NAN,
+                    (_, column) if column < margin => f32::NAN,
+                    (_, column) if column >= columns - margin => east_margin_m,
+                    _ => 100.0,
+                })
+                .collect(),
+        };
+        let east = Square { x: 11, y: 20 };
+        let only_east = |other: Square| other == east;
+        assert!(check_raster_around(&raster(100.0), tiles, square, |_| false).is_err());
+        assert!(check_raster_around(&raster(100.0), tiles, square, only_east).is_ok());
+        assert!(check_raster_around(&raster(f32::NAN), tiles, square, |_| false).is_ok());
     }
 
     /// Along the bank towards a void: one model's detail fades to nothing, and over another model

@@ -121,6 +121,8 @@ struct TerrainScene {
     column_at_origin: f32,
     columns_per_metre: f32,
     has_fine: u32,
+    /// The scene row on the equator, the one parallel on a tile's edge; -1 for none.
+    equator_row: i32,
 }
 
 #[repr(C)]
@@ -740,6 +742,11 @@ impl DeviceSquare {
                     - f64::from(centre_west_node)) as f32,
                 columns_per_metre: (columns_per_unit / frame.east_m_per_unit) as f32,
                 has_fine: u32::from(has_fine),
+                equator_row: if (south_row..=north_row).contains(&0) {
+                    north_row as i32
+                } else {
+                    -1
+                },
             },
             obstacles: ObstacleScene {
                 origin_x: layout.origin[0] as f32,

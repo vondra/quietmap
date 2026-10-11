@@ -61,6 +61,7 @@ struct TerrainScene {
     float column_at_origin;
     float columns_per_metre;
     u32 has_fine;               // whether any tile has fine terrain
+    i32 equator_row;            // the scene row on the equator, -1 for none
 };
 
 struct GroundSample {
@@ -92,7 +93,9 @@ __device__ void ocean(GroundSample* out) {
 __device__ float fine_detail_at(const TerrainScene& sc, const TerrainTile& tile, float row, float column) {
     u32 rows = FINE_PER_NODE * (tile.rows - 1) + 1, columns = FINE_PER_NODE * (tile.columns - 1) + 1;
     // A point a hair north of the window (terrain_sample's slack for f32) reads the first row.
-    u32 r = min((u32)fmaxf(floorf(row), 0.0f), rows - 2), c = min((u32)fmaxf(floorf(column), 0.0f), columns - 2);
+    row = fmaxf(row, 0.0f);
+    column = fmaxf(column, 0.0f);
+    u32 r = min((u32)floorf(row), rows - 2), c = min((u32)floorf(column), columns - 2);
     float fr = row - (float)r, fc = column - (float)c;
     const i16* detail = (const i16*)(sc.nodes + tile.fine_offset);
     u64 at = (u64)r * columns + c;
@@ -273,13 +276,22 @@ __device__ bool tile_edge_sample(const TerrainScene& sc, const TerrainTile& tile
     return f < 0.5f ? tile_trees(sc, tile, (u32)r0, (u32)c0, out) : tile_trees(sc, tile, (u32)r1, (u32)c1, out);
 }
 
-// A walk's vertex this close to a tile's edge (in tiles, about 10 cm) lies on it: f32's error is
-// millimetres, and no lattice line that is not the edge comes within a metre of it.
+// A walk's vertex on a lattice line this close to a tile's edge (in tiles, 1-6 cm) lies on it, as
+// the CPU's exact test finds (f32's error is millimetres): a column line on a tile meridian (every
+// 32nd on the 1" lattice, every 16th on the 1/6"; any other passes a sixteenth of a fine column or
+// more from it), or a row line on the equator, the one parallel that is a tile's edge (five 1" rows
+// pass within 2 to 9 cm of one: -25.32, -6.14, -4.92, 27.22 and 63.70 degrees).
 #define ON_TILE_EDGE 1e-5f
 
+// Whether a walk's vertex on row line `scene_row` of the lattice `scale` times as fine as the one
+// arc-second lies on the equator.
+__device__ __forceinline__ bool on_equator(const TerrainScene& sc, bool on_row, int scene_row, int scale) {
+    return on_row && sc.equator_row >= 0 && scene_row == scale * sc.equator_row;
+}
+
 // The ground at a walk's vertex (popup::scene::Ground::fill_profile): from the tile holding it,
-// or, for a vertex on the north or west edge of an ocean tile (the equator, every 32nd tile
-// meridian: lattice lines), from the land tile across that edge, which holds the seam's nodes;
+// or, for a vertex on the north or west edge of an ocean tile (the equator, a tile meridian on a
+// lattice column), from the land tile across that edge, which holds the seam's nodes;
 // 0 or a failure.
 __device__ u32 walk_sample(const TerrainScene& sc, float east_m, float north_m, bool on_row, int scene_row,
                            int north, GroundSample* out) {
@@ -292,8 +304,8 @@ __device__ u32 walk_sample(const TerrainScene& sc, float east_m, float north_m, 
         return tile_edge_sample(sc, *tile, east_m, north_m, on_row, scene_row, north, out) ? 0 : FAILED_NO_TERRAIN;
     }
     const TerrainTile* across[2] = {
-        tile_y - (float)dy < ON_TILE_EDGE ? terrain_tile(sc, dx, dy - 1) : 0,
-        tile_x - (float)dx < ON_TILE_EDGE ? terrain_tile(sc, dx - 1, dy) : 0,
+        on_equator(sc, on_row, scene_row, 1) && tile_y - (float)dy < ON_TILE_EDGE ? terrain_tile(sc, dx, dy - 1) : 0,
+        !on_row && tile_x - (float)dx < ON_TILE_EDGE ? terrain_tile(sc, dx - 1, dy) : 0,
     };
     for (int k = 0; k < 2; k++) {
         if (across[k] && across[k]->state == TILE_READ
@@ -373,14 +385,9 @@ __device__ u32 fine_walk_sample(const TerrainScene& sc, float east_m, float nort
     const TerrainTile* tile = terrain_tile(sc, dx, dy);
     if (!tile || tile->state == TILE_NOT_READ) return FAILED_NOT_READ;
     if (tile->state == TILE_EMPTY) {
-        // Only a 1" line is ever a tile's edge; a finer one can pass within ON_TILE_EDGE of an edge
-        // inside the ocean tile, which the CPU reads as ocean.
-        bool coarse_row = on_row && scene_row % FINE_PER_NODE == 0;
-        bool coarse_column = !on_row
-            && (int)rintf(FINE_PER_NODE * (sc.column_at_origin + east_m * sc.columns_per_metre)) % FINE_PER_NODE == 0;
         const TerrainTile* across[2] = {
-            coarse_row && tile_y - (float)dy < ON_TILE_EDGE ? terrain_tile(sc, dx, dy - 1) : 0,
-            coarse_column && tile_x - (float)dx < ON_TILE_EDGE ? terrain_tile(sc, dx - 1, dy) : 0,
+            on_equator(sc, on_row, scene_row, FINE_PER_NODE) && tile_y - (float)dy < ON_TILE_EDGE ? terrain_tile(sc, dx, dy - 1) : 0,
+            !on_row && tile_x - (float)dx < ON_TILE_EDGE ? terrain_tile(sc, dx - 1, dy) : 0,
         };
         tile = 0;
         for (int k = 0; k < 2 && !tile; k++) {

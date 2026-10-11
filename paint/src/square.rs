@@ -345,7 +345,7 @@ impl<'a> Square<'a> {
                 file,
                 *other,
                 (0, index as u16),
-                &ground,
+                &ground.frame,
                 [0.0, 0.0],
                 GROUND_REACH_M + half_diagonal,
                 &gain,

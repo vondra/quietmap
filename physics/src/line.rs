@@ -119,10 +119,6 @@ impl LinePieceGeometry {
         self.length_m
     }
 
-    pub fn perpendicular_m(&self) -> f64 {
-        self.perpendicular_m
-    }
-
     /// theta of the free-field line level L_W' + 10 lg theta - 10 lg d_perp - 11.
     pub fn subtended_angle_rad(&self) -> f64 {
         self.end_angle_rad - self.start_angle_rad

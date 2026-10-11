@@ -290,7 +290,7 @@ pub fn answer(
                     sources,
                     *tile,
                     (ring as u16, *tile_index as u16),
-                    &ground,
+                    &ground.frame,
                     collect_at,
                     reach,
                     &collect_gain,

@@ -129,8 +129,9 @@ impl Ground {
     }
 
     /// The tile a walk's vertex reads: the one containing it, or, for a vertex exactly on its north
-    /// or west edge (the equator, every 32nd tile meridian: lattice lines), the land tile across
-    /// that edge when the containing one is ocean; the land tile holds the seam's nodes.
+    /// or west edge (the equator; a tile meridian, every 32nd a 1" column, every 16th a 1/6" one),
+    /// the land tile across that edge when the containing one is ocean; the land tile holds the
+    /// seam's nodes.
     fn land_tile_at(&self, position: Mercator) -> Result<TileId, String> {
         let id = TileId::containing(position);
         if self.terrain_of(id)?.is_some() {
