@@ -27,6 +27,7 @@ fn profile() -> Profile {
 fn ends() -> RayEnds {
     RayEnds {
         source_height_m: 4.0,
+        source_ground_m: None,
         receiver_altitude_m: 104.0,
         source_ground_factor: Some(0.5),
         platform_half_width_m: 30.0,
@@ -73,6 +74,32 @@ fn the_platform_clamps_near_terrain_and_ground_interpolates() {
     assert!((path.source_ground_factor - 0.5).abs() < 1e-12);
     assert_eq!(path.terrain_candidates.len(), 6);
     assert!(path.obstacle_tops.is_empty());
+}
+
+/// A source on a bridge's deck stands on the deck, not on the valley under it: the clamp leaves
+/// the valley in the profile, and the ray runs from the deck plus the source's height.
+#[test]
+fn a_source_on_a_deck_stands_on_it_above_the_valley() {
+    let profile = profile();
+    let deck = RayEnds {
+        source_ground_m: Some(150.0),
+        ..ends()
+    };
+    let mut buffers = PathBuffers::default();
+    buffers.fill(&profile, &[], &deck);
+    let path = buffers.path(&profile, &deck, 154.0);
+    assert_close(
+        path.profile.altitude_m,
+        &[100.0, 102.0, 105.0, 101.0, 103.0, 100.0],
+    );
+    let terms = ray_terms(
+        &profile,
+        &[],
+        &deck,
+        ([0.0; PERIODS], &*ALPHA_DB_PER_KM),
+        &mut RayScratch::default(),
+    );
+    assert!((terms.transfer.slant_m - 100f64.hypot(50.0)).abs() < 1e-9);
 }
 
 /// The source's own building (by id, both walls, wherever they are) never screens it; every other
@@ -194,6 +221,7 @@ fn flat(horizontal_m: f64) -> Profile {
 fn flat_ground_transfer_mixes_states_and_absorbs_air() {
     let ends = RayEnds {
         source_height_m: 1.0,
+        source_ground_m: None,
         receiver_altitude_m: 204.0,
         source_ground_factor: Some(0.5),
         platform_half_width_m: 0.0,
@@ -248,6 +276,7 @@ fn flat_ground_transfer_mixes_states_and_absorbs_air() {
 fn a_forest_under_the_ray_takes_table_a1_off_each_state() {
     let ends = RayEnds {
         source_height_m: 1.0,
+        source_ground_m: None,
         receiver_altitude_m: 204.0,
         source_ground_factor: Some(0.5),
         platform_half_width_m: 0.0,
@@ -290,6 +319,7 @@ fn a_wall_between_source_and_receiver_screens() {
     profile.ground_factor.fill(0.0);
     let ends = RayEnds {
         source_height_m: 0.05,
+        source_ground_m: None,
         receiver_altitude_m: 204.0,
         source_ground_factor: Some(0.0),
         platform_half_width_m: 0.0,

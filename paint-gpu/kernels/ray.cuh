@@ -17,6 +17,7 @@
 // ray.rs RayEnds
 struct RayEnds {
     float source_height_m;
+    float source_ground_m;        // a bridge's deck under the source; NAN: the terrain under it
     float receiver_altitude_m;
     float source_ground_factor;   // negative: the ground under the source
     float platform_half_width_m;
@@ -70,6 +71,7 @@ struct RayStream {
     float length;
     float inverse_length;
     float platform_half_width_m;
+    float source_stand_z;            // the ground the source stands on: a deck, else the terrain
     StreamedPath path;
     // The terrain vertices: the walk producing them, how many there are and were sampled, the
     // last TERRAIN_HISTORY.
@@ -154,14 +156,15 @@ __device__ u32 ray_sample(RayStream& s, int k, TerrainPoint* out) {
         point.x = t * s.length;
         point.g = sample.ground_factor;
         if (s.sampled == 0) {
-            s.path.source_ground_z = sample.height_m;
+            if (isnan(s.source_stand_z)) s.source_stand_z = sample.height_m;
+            s.path.source_ground_z = fminf(sample.height_m, s.source_stand_z);
             s.path.source_ground_g = sample.ground_factor;
             s.trees_behind = sample;
             s.trees_behind_x = 0.0f;
         } else {
             add_foliage(s, point.x, sample);
         }
-        point.z = point.x < s.platform_half_width_m ? fminf(sample.height_m, s.path.source_ground_z) : sample.height_m;
+        point.z = point.x < s.platform_half_width_m ? fminf(sample.height_m, s.source_stand_z) : sample.height_m;
         s.history[s.sampled % TERRAIN_HISTORY] = point;
         s.sampled++;
     }
@@ -545,10 +548,11 @@ __device__ u32 ray_transfer(const TerrainScene& ground, const ObstacleScene& obs
     s.count = 2;
     while (walk_next(ground, &counting, &t_counted, &on_row_counted, &row_counted)) s.count++;
     s.sampled = 0;
+    s.source_stand_z = ends.source_ground_m;
     TerrainPoint first;
     u32 failed = ray_sample(s, 0, &first);
     if (failed) return failed;
-    float source_altitude = s.path.source_ground_z + ends.source_height_m;
+    float source_altitude = s.source_stand_z + ends.source_height_m;
     s.path.source.x = 0.0f;
     s.path.source.z = source_altitude;
     s.path.receiver.x = horizontal;

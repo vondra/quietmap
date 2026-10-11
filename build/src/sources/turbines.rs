@@ -113,6 +113,7 @@ pub fn convert(turbines: &Turbines, square: Square, out: &mut Vec<Converted>) ->
                 emission: sound.band_levels_db(),
                 display: display.to_string(),
             },
+            deck_m: None,
         });
     }
     standing.len()

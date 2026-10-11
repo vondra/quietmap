@@ -1,6 +1,7 @@
 //! Railway, tram and horn pieces of the dev4 prepared tree as sources: the line speed, the calibrated
 //! per-category emission of each period's trains, and the display record of the line.
 
+use super::decks::Decks;
 use super::tent::{FreightNetwork, Tier};
 use super::{Converted, group_key, split_at_tile_edges};
 use crate::dev4::{Dev4, Square, Table, require_stamp, z30_corner_mercator_m, z30_to_global};
@@ -250,10 +251,12 @@ fn run_medians(rows: &[RunRow]) -> Vec<usize> {
     median_of
 }
 
-/// Converts the rail rows of one dev4 square; returns how many rows emit.
+/// Converts the rail rows of one dev4 square, a row on a bridge on its deck from `decks`; returns
+/// how many rows emit.
 pub fn convert(
     (dev4, network): (&Dev4, &FreightNetwork),
     square: Square,
+    decks: &Decks,
     out: &mut Vec<Converted>,
 ) -> Result<usize, String> {
     let Some(table) = dev4.table(square, "railways.arrow")? else {
@@ -397,11 +400,21 @@ pub fn convert(
                 emission,
                 display: display.to_string(),
             };
-            for (tile, ends) in split_at_tile_edges(start, end) {
+            let deck_m = bridge
+                .value(row)
+                .then(|| {
+                    decks
+                        .railways
+                        .get(&[start_x, start_y, end_x, end_y].map(|end| end.value(row)))
+                        .copied()
+                })
+                .flatten();
+            for part in split_at_tile_edges(start, end) {
                 out.push(Converted {
-                    tile,
-                    ends,
+                    tile: part.tile,
+                    ends: part.ends,
                     attribute: attribute.clone(),
+                    deck_m: part.deck(deck_m),
                 });
             }
             emitting += 1;

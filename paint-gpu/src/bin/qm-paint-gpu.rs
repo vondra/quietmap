@@ -201,7 +201,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let group = parse("group", 1)? as usize;
     let near_m = parse("near", 300)? as f64;
     let reach_m = parse("reach", GROUND_REACH_M as u64)? as f64;
-    let kind = option(arguments, "kind").map(|kind| kind == "line");
+    // --kind line, point or deck (a bridge's pieces): candidates of that kind only.
+    let kind = option(arguments, "kind");
+    let of_kind = |line: bool, on_deck: bool| match kind {
+        Some("line") => line,
+        Some("point") => !line,
+        Some("deck") => on_deck,
+        _ => true,
+    };
     let mut base = [0.0, 0.0];
     while receivers.len() < pairs {
         let member = receivers.len() % group;
@@ -231,7 +238,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             near.retain(|&index| {
                 let candidate = &square.candidates[index as usize];
                 candidate.distance_from(position) <= near_m
-                    && kind.is_none_or(|line| candidate.line == line)
+                    && of_kind(candidate.line, candidate.on_deck)
             });
             if near.is_empty() {
                 continue;
@@ -241,7 +248,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             let index = (random.next() % square.candidates.len() as u64) as u32;
             let candidate = &square.candidates[index as usize];
             if candidate.distance_from(position) > reach_m
-                || kind.is_some_and(|line| candidate.line != line)
+                || !of_kind(candidate.line, candidate.on_deck)
             {
                 continue;
             }

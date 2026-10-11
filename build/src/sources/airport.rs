@@ -67,11 +67,12 @@ pub fn convert(traffic: &Path, square: Square, out: &mut Vec<Converted>) -> Resu
         let [start, end] = line
             .ends
             .map(|[lat, lon]| GlobalSteps::nearest(Mercator::from_degrees(lat, lon)));
-        for (tile, ends) in split_at_tile_edges(start, end) {
+        for part in split_at_tile_edges(start, end) {
             out.push(Converted {
-                tile,
-                ends,
+                tile: part.tile,
+                ends: part.ends,
                 attribute: attribute.clone(),
+                deck_m: None,
             });
         }
     }

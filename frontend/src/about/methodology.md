@@ -34,15 +34,17 @@ rolling noise only. Motorcycles run 3.8 dB louder than cars at the same speed an
 louder pulling away (ASJ RTN-Model 2018); their share comes from counts and national
 fleets (WHO 2023).
 
-Geometry comes from OpenStreetMap. Traffic comes from national censuses and city counts
-where published. Where nobody counted, a street carries the trips its buildings make:
-every building, OpenStreetMap's and the Overture footprints OpenStreetMap lacks, sends its
-trips along the street network to the nearest main road. Uncounted motorways, trunk and
-primary roads in most of Europe, the United States, Mexico, Chile, Colombia and New Zealand
-follow one model of the trips made within 1, 5 and 15 km, fitted on counted roads; secondary
-and tertiary roads follow a fit of the same kind in Europe. Elsewhere a road keeps a fixed
-estimate for its class and surroundings — about half of the world's main-road length. All
-estimates are flagged in the click panel. They are the largest source of error on the map.
+Geometry comes from OpenStreetMap; a road or railway on a bridge emits from its deck,
+straight between the ground at the bridge's two ends, and climbs with it. Traffic comes from
+national censuses and city counts where published. Where nobody counted, a street carries the
+trips its buildings make: every building, OpenStreetMap's and the Overture footprints
+OpenStreetMap lacks, sends its trips along the street network to the nearest main road.
+Uncounted motorways, trunk and primary roads in most of Europe, the United States, Mexico,
+Chile, Colombia and New Zealand follow one model of the trips made within 1, 5 and 15 km,
+fitted on counted roads; secondary and tertiary roads follow a fit of the same kind in
+Europe. Elsewhere a road keeps a fixed estimate for its class and surroundings — about half
+of the world's main-road length. All estimates are flagged in the click panel. They are the
+largest source of error on the map.
 
 The vehicle mix is counted where counted; otherwise a main road takes the counted median of
 its class, a local street 1 % medium and 2 % heavy vehicles, and a US road its state's mix

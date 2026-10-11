@@ -294,6 +294,7 @@ pub fn push_site_points(
             tile,
             ends,
             attribute,
+            deck_m: None,
         });
     }
 }

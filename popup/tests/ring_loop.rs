@@ -1,7 +1,7 @@
 //! The ring loop on a synthetic release (flat ocean, one tile of road pieces): the fast answer
 //! stays within 0.1 dB of the exact one while evaluating fewer pieces, the list's last row counts
-//! the sources it holds, a click inside a building answers at the façade facing the road, and a
-//! complete release is required.
+//! the sources it holds, a click inside a building answers at the façade facing the road, a road on
+//! a bridge emits from its deck, and a complete release is required.
 
 use physics::bands::{BANDS, PERIODS};
 use physics::weather::{COLUMNS, ROWS, SECTORS, WeatherNode, encode as encode_weather};
@@ -10,7 +10,7 @@ use popup::release::Release;
 use std::path::{Path, PathBuf};
 use tiles::geo::{LocalFrame, TileId};
 use tiles::obstacles::{EnvelopeClass, Outline, OutlineKind, encode as encode_obstacles};
-use tiles::sources::{Attribute, Layer, Piece, encode};
+use tiles::sources::{Attribute, Deck, Layer, Piece, encode};
 use tiles::{COMPLETION_MARKER, Kind, tile_path};
 
 const TILE: TileId = TileId { x: 2212, y: 1387 };
@@ -33,6 +33,11 @@ fn release_root(name: &str) -> PathBuf {
 /// Road pieces of 100 m running north-south at `distances` east of the tile centre: one road, or
 /// with `separate` each piece a road of its own.
 fn write_roads(root: &Path, distances: &[f64], separate: bool) {
+    write_roads_on(root, distances, separate, None);
+}
+
+/// [`write_roads`], every piece on a bridge's deck at `deck_m` when given.
+fn write_roads_on(root: &Path, distances: &[f64], separate: bool, deck_m: Option<[f64; 2]>) {
     let steps_per_metre = steps_per_metre();
     let half = (50.0 * steps_per_metre).round() as i16;
     let pieces: Vec<Piece> = distances
@@ -62,7 +67,14 @@ fn write_roads(root: &Path, distances: &[f64], separate: bool) {
         .collect();
     let path = tile_path(&root.join("2026"), TILE, Kind::Sources);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, encode(&pieces, &attributes)).unwrap();
+    let decks: Vec<Deck> = deck_m
+        .map(|altitude_m| {
+            (0..pieces.len() as u32)
+                .map(|piece| Deck { piece, altitude_m })
+                .collect()
+        })
+        .unwrap_or_default();
+    std::fs::write(path, encode(&pieces, &attributes, &decks)).unwrap();
 }
 
 /// Int16 steps per metre east in the tile's frame.
@@ -204,6 +216,50 @@ fn the_last_row_counts_the_sources_the_list_leaves_out() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+/// A road on a bridge emits from its deck: each traced ray of the piece (100 m from north to south,
+/// 30 m east of the click) starts on the deck rising from 30 m at its north end to 50 m at its
+/// south end, plus the road's 0.05 m; on the ground it starts at the sea level under it.
+#[test]
+fn a_road_on_a_bridge_emits_from_its_deck() {
+    for (name, deck_m) in [("ground", None), ("deck", Some([30.0, 50.0]))] {
+        let root = release_root(name);
+        write_roads_on(&root, &[30.0], false, deck_m);
+        std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
+        let release = Release::open(&root, "2026").unwrap();
+        let (lat, lon) = TILE.centre().to_degrees();
+        let mut pieces = Vec::new();
+        answer(
+            &release,
+            lat,
+            lon,
+            &Options {
+                exact: false,
+                source: vec![1],
+                piece: Some(0),
+            },
+            &mut |update| {
+                pieces = update.pieces.clone();
+                Ok(())
+            },
+        )
+        .unwrap();
+        let rays = &pieces[0].rays;
+        assert!(rays.len() > 1 && rays.iter().all(|ray| ray.profile.is_some()));
+        for ray in rays {
+            // The piece starts at its north end (+50 m) and ends at its south end (-50 m).
+            let fraction = (50.0 - ray.from_m[1]) / 100.0;
+            let expected = deck_m.map_or(0.0, |[north, south]| north + fraction * (south - north));
+            let altitude = ray.profile.as_ref().unwrap().source_altitude_m;
+            assert!(
+                (altitude - (expected + 0.05)).abs() < 0.01,
+                "{name}: {altitude} at {:?}",
+                ray.from_m
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}
+
 /// An asked source's sound path lists every piece of it, each evaluated, loudest first, adding up
 /// to the source (one group here, the whole layer), the loudest traced ray by ray.
 #[test]
@@ -306,7 +362,7 @@ fn a_source_on_the_edge_of_the_read_block_is_answered() {
         .collect();
     let path = tile_path(&root.join("2026"), north, Kind::Sources);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, encode(&pieces, &attributes)).unwrap();
+    std::fs::write(path, encode(&pieces, &attributes, &[])).unwrap();
     std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let mut building_energy = 0.0;
@@ -371,7 +427,7 @@ fn the_sampled_answer_is_within_a_twentieth_of_a_decibel_and_reproducible() {
         .collect();
     let path = tile_path(&root.join("2026"), TILE, Kind::Sources);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, encode(&pieces, &attributes)).unwrap();
+    std::fs::write(path, encode(&pieces, &attributes, &[])).unwrap();
     std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let industry = |exact: bool| {
@@ -464,7 +520,7 @@ fn a_sampled_layer_sounds_as_the_exact_one() {
         .collect();
     let path = tile_path(&root.join("2026"), TILE, Kind::Sources);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, encode(&pieces, &attributes)).unwrap();
+    std::fs::write(path, encode(&pieces, &attributes, &[])).unwrap();
     std::fs::write(root.join("2026").join(COMPLETION_MARKER), "test").unwrap();
     let release = Release::open(&root, "2026").unwrap();
     let sone = |exact: bool| {

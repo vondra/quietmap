@@ -54,7 +54,7 @@ standard web-map XYZ numbering (y grows southwards). What the readers rely on be
 |---|---|---|
 | `terrain` | `tiles/src/terrain.rs` | the one-arc-second node window that brackets the tile: neighbours share their seam nodes; a sample touching a node without data is refused, never guessed; height, sealing, tree cover and crown height a node |
 | `obstacles` | `tiles/src/obstacles.rs` | outlines stored whole, listed per z19 cell (128 x 128 a tile) through a cell -> offset table |
-| `sources` | `tiles/src/sources.rs` | 12-byte pieces, 80-byte records, each distinct display text once; emission per octave band and period as u16 in 0.01 dB |
+| `sources` | `tiles/src/sources.rs` | 12-byte pieces, 80-byte records, 8-byte deck entries (a bridge piece's deck altitude at its ends), each distinct display text once; emission per octave band and period as u16 in 0.01 dB |
 | `aircraft`, `aircraft-far` | `tiles/src/aircraft.rs` | the boxes, each with its two loudest flight pieces, and the tile's flight table |
 | `aircraft-events` | `tiles/src/aircraft_events.rs` | 16 x 16 z16 cells a tile; no file where no flight reaches 50 dB |
 | `aircraft-tracks` | `tiles/src/aircraft_tracks.rs` | 256 files by the address's low byte, each sorted by address and start |

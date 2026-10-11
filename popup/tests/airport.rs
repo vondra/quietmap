@@ -120,7 +120,7 @@ fn release(name: &str, east_m: &[f64], level_db: f64, with_box: bool) -> PathBuf
         display: r#"["TEST ground operations","airport_traffic:TEST","Test Airport",1.0,2.0,3.0]"#
             .into(),
     };
-    write(Kind::Sources, encode_sources(&pieces, &[attribute]));
+    write(Kind::Sources, encode_sources(&pieces, &[attribute], &[]));
     if with_box {
         write(
             Kind::Aircraft,

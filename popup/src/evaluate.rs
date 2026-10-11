@@ -54,6 +54,7 @@ impl Receiver<'_, '_> {
 fn ray_ends(receiver: &Receiver, source: &SourceAttribute) -> RayEnds {
     RayEnds {
         source_height_m: source.height_m,
+        source_ground_m: None,
         receiver_altitude_m: receiver.altitude_m,
         source_ground_factor: (source.ground_percent != tiles::sources::GROUND_FROM_TERRAIN)
             .then(|| f64::from(source.ground_percent) / 100.0),
@@ -172,6 +173,9 @@ fn add_ray(
 /// was computed over (none where the skyline shows no wall can reach its line of sight).
 pub struct SourceRay<'s> {
     pub from_m: [f64; 2],
+    /// The source's altitude at `from_m` (m): its ground (the terrain, or a bridge's deck) plus its
+    /// height.
+    pub source_altitude_m: f64,
     pub angle_rad: f64,
     pub weight: f64,
     pub terms: RayTerms,
@@ -190,7 +194,22 @@ pub fn source_rays(
     let reflection = energy(receiver.reflection_db);
     let ends = ray_ends(receiver, source);
     let [a, b] = candidate.ends_m;
+    // A piece on a bridge stands on its deck: the line between the deck's altitudes at its ends.
+    let deck_at = |fraction: f64| {
+        candidate.on_deck.then(|| {
+            let [start, end] = candidate.ground_m;
+            start + fraction * (end - start)
+        })
+    };
+    let source_altitude = |fraction: f64, profile: &Profile| {
+        deck_at(fraction).unwrap_or_else(|| profile.ground_m.first().copied().unwrap_or(0.0))
+            + source.height_m
+    };
     if !candidate.line {
+        let ends = RayEnds {
+            source_ground_m: deck_at(0.0),
+            ..ends
+        };
         let terms = ray(receiver, a, true, &ends, scratch)?;
         let distance = candidate
             .distance_m
@@ -200,6 +219,7 @@ pub fn source_rays(
         let divergence = 1.0 / (distance * distance * energy(POINT_DIVERGENCE_OFFSET_DB));
         visit(&SourceRay {
             from_m: a,
+            source_altitude_m: source_altitude(0.0, &scratch.profile),
             angle_rad: 0.0,
             weight: divergence * reflection,
             terms,
@@ -242,9 +262,14 @@ pub fn source_rays(
             a[0] + fraction * (b[0] - a[0]),
             a[1] + fraction * (b[1] - a[1]),
         ];
-        let terms = ray(receiver, point, node.obstacles_on_ray, &ends, scratch)?;
+        let node_ends = RayEnds {
+            source_ground_m: deck_at(fraction),
+            ..ends
+        };
+        let terms = ray(receiver, point, node.obstacles_on_ray, &node_ends, scratch)?;
         visit(&SourceRay {
             from_m: point,
+            source_altitude_m: source_altitude(fraction, &scratch.profile),
             angle_rad: node.weight_rad,
             weight: node.weight_rad * divergence * reflection,
             terms,

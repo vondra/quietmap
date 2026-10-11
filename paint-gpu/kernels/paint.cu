@@ -135,12 +135,7 @@ extern "C" __global__ void line_pair_nodes(const SquareScene* square_ptr, float 
     const Candidate& candidate = square.candidates[candidate_index];
     const Attribute& source = square.attributes[candidate.attribute];
     float sums[PERIODS] = {0.0f, 0.0f, 0.0f};
-    RayEnds ends;
-    ends.source_height_m = source.height_m;
-    ends.receiver_altitude_m = receiver.altitude_m;
-    ends.source_ground_factor = source.ground_factor;
-    ends.platform_half_width_m = source.platform_half_width_m;
-    ends.own_footprint = source.footprint_id;
+    RayEnds ends = source_ends(source, receiver);
     float start[3] = {candidate.ax - receiver.x, candidate.ay - receiver.y, candidate.ground0 + source.height_m - receiver.altitude_m};
     float end[3] = {candidate.bx - receiver.x, candidate.by - receiver.y, candidate.ground1 + source.height_m - receiver.altitude_m};
     LinePieceGeometry g;

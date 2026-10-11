@@ -152,6 +152,7 @@ struct DeviceCandidate {
     ground1: f32,
     line: u32,
     attribute: u32,
+    on_deck: u32,
 }
 
 #[repr(C)]
@@ -642,6 +643,7 @@ impl DeviceSquare {
                     line: u32::from(candidate.line),
                     attribute: first_of_list[candidate.attribute.list as usize]
                         + candidate.attribute.index,
+                    on_deck: u32::from(candidate.on_deck),
                 }
             })
             .collect();

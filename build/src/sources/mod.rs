@@ -10,6 +10,7 @@ pub mod bus;
 pub mod calls;
 pub mod cells;
 pub mod country_speeds;
+pub mod decks;
 pub mod events;
 pub mod facilities;
 pub mod industry;
@@ -42,7 +43,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use tent::FreightNetwork;
 use tiles::geo::{GlobalSteps, TileId};
-use tiles::sources::{Attribute, Piece, attribute_key, encode};
+use tiles::sources::{Attribute, Deck, Piece, attribute_key, encode};
 use tiles::{COMPLETION_MARKER, Kind};
 
 /// int16 steps per tile and the world's width in steps.
@@ -81,17 +82,34 @@ impl Reach {
     }
 }
 
-/// One converted piece with its owner tile and attribute.
+/// One converted piece with its owner tile and attribute, and on a bridge the deck's altitude (m)
+/// at its two ends.
 pub struct Converted {
     pub tile: TileId,
     pub ends: [[i16; 2]; 2],
     pub attribute: Attribute,
+    pub deck_m: Option<[f64; 2]>,
+}
+
+/// A part of a straight piece inside one tile: its tile, its ends (tile steps) and where they lie
+/// along the piece (0 at its start, 1 at its end).
+pub struct Part {
+    pub tile: TileId,
+    pub ends: [[i16; 2]; 2],
+    pub along: [f64; 2],
+}
+
+impl Part {
+    /// A deck's altitude at the part's ends, from the piece's deck at its start and end.
+    pub fn deck(&self, piece_deck_m: Option<[f64; 2]>) -> Option<[f64; 2]> {
+        piece_deck_m.map(|[start, end]| self.along.map(|t| start + t * (end - start)))
+    }
 }
 
 /// A straight piece split at tile edges into parts that each lie inside one tile, so a ring's
 /// sources never reach into a ring not yet read. Each part's ends are clamped inside its tile
 /// (local -16,384..=16,383; the far edge belongs to the neighbour), losing under one step.
-pub fn split_at_tile_edges(start: GlobalSteps, end: GlobalSteps) -> Vec<(TileId, [[i16; 2]; 2])> {
+pub fn split_at_tile_edges(start: GlobalSteps, end: GlobalSteps) -> Vec<Part> {
     let dx = (end.x - start.x + WORLD_STEPS / 2).rem_euclid(WORLD_STEPS) - WORLD_STEPS / 2;
     let dy = end.y - start.y;
     let mut cuts = vec![0.0, 1.0];
@@ -133,7 +151,11 @@ pub fn split_at_tile_edges(start: GlobalSteps, end: GlobalSteps) -> Vec<(TileId,
         };
         let ends = [local(a), local(b)];
         if ends[0] != ends[1] {
-            parts.push((tile, ends));
+            parts.push(Part {
+                tile,
+                ends,
+                along: [pair[0], pair[1]],
+            });
         }
     }
     parts
@@ -174,7 +196,7 @@ pub struct Places<'a> {
 }
 
 /// Writes the sources tiles of `squares`, with the airport ground operations of the complete
-/// traffic pass under `airport_traffic`. A dev4 row is owned by the dev4 square of its midpoint,
+/// traffic pass under `airport_traffic`, and logs their bridge decks. A dev4 row is owned by the dev4 square of its midpoint,
 /// which may round into a neighbour's tile here, and an area source spreads over its site, so each
 /// square also converts its neighbours and keeps the sources its own tiles own (industry reads the
 /// neighbours itself, for its facility joins). Returns the number of tiles written.
@@ -195,7 +217,7 @@ pub fn build(
             airport_traffic.display()
         ));
     }
-    squares
+    let built = squares
         .par_iter()
         .map(|&square| {
             build_square(
@@ -205,10 +227,25 @@ pub fn build(
                 out,
             )
         })
-        .sum()
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut decks = decks::DeckCounts::default();
+    for &(_, counts) in &built {
+        decks += counts;
+    }
+    eprintln!(
+        "decks: {} with {} bridge rows; on the ground {} branched or closed, {} with an end \
+         meeting no approach, {} without terrain",
+        decks.decks,
+        decks.rows,
+        decks.branched_or_closed,
+        decks.without_approach,
+        decks.without_terrain
+    );
+    Ok(built.iter().map(|&(tiles, _)| tiles).sum())
 }
 
-/// The sources tiles of one square (the squares build in parallel, each within its own memory).
+/// The sources tiles of one square (the squares build in parallel, each within its own memory),
+/// and the count of its decks.
 fn build_square(
     (dev4, climate, network, turbines): (&Dev4, &Climate, &FreightNetwork, &turbines::Turbines),
     (airport_traffic, road_traffic, bus, places): (
@@ -219,19 +256,21 @@ fn build_square(
     ),
     square: Square,
     out: &Path,
-) -> Result<usize, String> {
+) -> Result<(usize, decks::DeckCounts), String> {
     let owned = |item: &Converted| (item.tile.x >> 3, item.tile.y >> 3) == (square.x, square.y);
     let mut converted = Vec::new();
     let reach = Reach::of_square(square);
+    let decks = decks::Decks::of_square(dev4, square, out)?;
     for neighbour in square.with_neighbours() {
         let road_reach = (neighbour != square).then_some(reach);
         road::convert(
             (dev4, &climate.mean, road_traffic, bus),
             neighbour,
             road_reach,
+            &decks,
             &mut converted,
         )?;
-        rail::convert((dev4, network), neighbour, &mut converted)?;
+        rail::convert((dev4, network), neighbour, &decks, &mut converted)?;
         leisure::convert(
             dev4,
             neighbour,
@@ -255,20 +294,35 @@ fn build_square(
         let mut attributes: Vec<Attribute> = Vec::new();
         let mut index: HashMap<Vec<u8>, u32> = HashMap::new();
         let mut pieces = Vec::with_capacity(items.len());
+        let mut decks = Vec::new();
         for Converted {
-            ends, attribute, ..
+            ends,
+            attribute,
+            deck_m,
+            ..
         } in items
         {
             let attribute = *index.entry(attribute_key(&attribute)).or_insert_with(|| {
                 attributes.push(attribute);
                 (attributes.len() - 1) as u32
             });
+            if let Some(altitude_m) = deck_m {
+                decks.push(Deck {
+                    piece: pieces.len() as u32,
+                    altitude_m,
+                });
+            }
             pieces.push(Piece { ends, attribute });
         }
-        write_tile(out, tile, Kind::Sources, &encode(&pieces, &attributes))?;
+        write_tile(
+            out,
+            tile,
+            Kind::Sources,
+            &encode(&pieces, &attributes, &decks),
+        )?;
         written += 1;
     }
-    Ok(written)
+    Ok((written, decks.counts))
 }
 
 #[cfg(test)]
@@ -298,11 +352,21 @@ mod tests {
         let (start, end) = (tile.global([16_000, 0]), tile.global([17_000, 100]));
         let parts = split_at_tile_edges(start, end);
         assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0].0, tile);
-        assert_eq!(parts[0].1[0], [16_000, 0]);
-        assert_eq!(parts[0].1[1][0], 16_383, "clamped inside the owner tile");
-        assert_eq!(parts[1].0, TileId { x: 2213, y: 1387 });
-        assert_eq!(parts[1].1[0][0], -16_384);
+        assert_eq!(parts[0].tile, tile);
+        assert_eq!(parts[0].ends[0], [16_000, 0]);
+        assert_eq!(parts[0].ends[1][0], 16_383, "clamped inside the owner tile");
+        assert_eq!(parts[1].tile, TileId { x: 2213, y: 1387 });
+        assert_eq!(parts[1].ends[0][0], -16_384);
+        assert_eq!((parts[0].along[0], parts[1].along[1]), (0.0, 1.0));
+        assert_eq!(parts[0].along[1], parts[1].along[0]);
+        // A deck from 10 m to 20 m along the piece: each part carries it at its own ends.
+        let decks = parts
+            .iter()
+            .map(|part| part.deck(Some([10.0, 20.0])).unwrap());
+        let decks: Vec<[f64; 2]> = decks.collect();
+        assert_eq!((decks[0][0], decks[1][1]), (10.0, 20.0));
+        assert_eq!(decks[0][1], decks[1][0]);
+        assert_eq!(parts[0].deck(None), None);
         assert_eq!(
             split_at_tile_edges(start, tile.global([16_100, 50])).len(),
             1
@@ -314,7 +378,7 @@ mod tests {
             east_start.global([-16_000, 0]),
         );
         assert_eq!(
-            parts.iter().map(|p| p.0).collect::<Vec<_>>(),
+            parts.iter().map(|p| p.tile).collect::<Vec<_>>(),
             vec![west_end, east_start]
         );
     }

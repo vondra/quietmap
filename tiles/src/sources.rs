@@ -3,15 +3,20 @@
 //! layer, the geometry of emission (height, ground, platform), emission per octave band and period
 //! computed at build time, and the display fields the popup shows for its contributors. Records
 //! sharing their display text point at one copy of it: the rows of a road differ in emission by
-//! their gradient and junction corrections, not in what the popup shows of them.
+//! their gradient and junction corrections, not in what the popup shows of them. A piece on a
+//! bridge has an entry in the deck table: the deck's altitude at its two ends, which its source
+//! stands on instead of the terrain under it.
 
 use crate::FormatError;
+use crate::terrain::{code_of_height_m, height_m_of_code};
 use std::collections::HashMap;
 
-const MAGIC: &[u8; 8] = b"qmsrc2\n\0";
+const MAGIC: &[u8; 8] = b"qmsrc3\n\0";
 const HEADER_BYTES: usize = 24;
 const PIECE_BYTES: usize = 12;
 const ATTRIBUTE_BYTES: usize = 80;
+/// A deck entry: the piece's index (u32) and the deck's altitude at its two ends (terrain codes).
+const DECK_BYTES: usize = 8;
 /// Octave bands 63 Hz .. 8 kHz.
 pub const BANDS: usize = 8;
 /// Day, evening, night.
@@ -225,6 +230,13 @@ impl Piece {
     }
 }
 
+/// The deck under a piece on a bridge: its altitude (m) at the piece's two ends.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Deck {
+    pub piece: u32,
+    pub altitude_m: [f64; 2],
+}
+
 /// What the pieces of one source share.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Attribute {
@@ -291,9 +303,9 @@ pub fn attribute_key(attribute: &Attribute) -> Vec<u8> {
     key
 }
 
-/// The bytes of a sources file: header, 12-byte pieces, 80-byte attributes, display texts (each
-/// distinct text once).
-pub fn encode(pieces: &[Piece], attributes: &[Attribute]) -> Vec<u8> {
+/// The bytes of a sources file: header, 12-byte pieces, 80-byte attributes, the 8-byte deck
+/// entries in piece order, display texts (each distinct text once).
+pub fn encode(pieces: &[Piece], attributes: &[Attribute], decks: &[Deck]) -> Vec<u8> {
     let mut text: Vec<u8> = Vec::new();
     let mut starts: HashMap<&str, u32> = HashMap::new();
     let text_starts: Vec<u32> = attributes
@@ -307,13 +319,16 @@ pub fn encode(pieces: &[Piece], attributes: &[Attribute]) -> Vec<u8> {
         })
         .collect();
     let mut bytes = Vec::with_capacity(
-        HEADER_BYTES + PIECE_BYTES * pieces.len() + ATTRIBUTE_BYTES * attributes.len() + text.len(),
+        HEADER_BYTES
+            + PIECE_BYTES * pieces.len()
+            + ATTRIBUTE_BYTES * attributes.len()
+            + DECK_BYTES * decks.len()
+            + text.len(),
     );
     bytes.extend_from_slice(MAGIC);
-    for count in [pieces.len(), attributes.len(), text.len()] {
+    for count in [pieces.len(), attributes.len(), text.len(), decks.len()] {
         bytes.extend_from_slice(&u32::try_from(count).expect("tile too large").to_le_bytes());
     }
-    bytes.extend_from_slice(&[0; 4]);
     for piece in pieces {
         assert!((piece.attribute as usize) < attributes.len());
         for coordinate in piece.ends.iter().flatten() {
@@ -324,6 +339,17 @@ pub fn encode(pieces: &[Piece], attributes: &[Attribute]) -> Vec<u8> {
     for (attribute, &start) in attributes.iter().zip(&text_starts) {
         write_attribute_record(&mut bytes, attribute, start);
     }
+    for (k, deck) in decks.iter().enumerate() {
+        assert!((deck.piece as usize) < pieces.len());
+        assert!(
+            k == 0 || decks[k - 1].piece < deck.piece,
+            "decks in piece order"
+        );
+        bytes.extend_from_slice(&deck.piece.to_le_bytes());
+        for altitude_m in deck.altitude_m {
+            bytes.extend_from_slice(&code_of_height_m(altitude_m).to_le_bytes());
+        }
+    }
     bytes.extend_from_slice(&text);
     bytes
 }
@@ -332,6 +358,7 @@ pub fn encode(pieces: &[Piece], attributes: &[Attribute]) -> Vec<u8> {
 pub struct Sources<'a> {
     pieces: &'a [u8],
     attributes: &'a [u8],
+    decks: &'a [u8],
     text: &'a [u8],
 }
 
@@ -341,17 +368,39 @@ impl<'a> Sources<'a> {
             return Err(FormatError("sources: bad magic"));
         }
         let count = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
-        let (pieces, attributes, text) = (count(8), count(12), count(16));
+        let (pieces, attributes, text, decks) = (count(8), count(12), count(16), count(20));
         let pieces_end = HEADER_BYTES + PIECE_BYTES * pieces;
         let attributes_end = pieces_end + ATTRIBUTE_BYTES * attributes;
-        if bytes.len() != attributes_end + text {
+        let decks_end = attributes_end + DECK_BYTES * decks;
+        if bytes.len() != decks_end + text {
             return Err(FormatError("sources: length does not match the counts"));
         }
         Ok(Sources {
             pieces: &bytes[HEADER_BYTES..pieces_end],
             attributes: &bytes[pieces_end..attributes_end],
-            text: &bytes[attributes_end..],
+            decks: &bytes[attributes_end..decks_end],
+            text: &bytes[decks_end..],
         })
+    }
+
+    /// The deck's altitude (m) at the two ends of a piece on a bridge.
+    pub fn deck(&self, piece: usize) -> Option<[f64; 2]> {
+        let entry = |k: usize| &self.decks[k * DECK_BYTES..(k + 1) * DECK_BYTES];
+        let piece_of = |k: usize| u32::from_le_bytes(entry(k)[..4].try_into().unwrap()) as usize;
+        let (mut low, mut high) = (0, self.decks.len() / DECK_BYTES);
+        while low < high {
+            let middle = (low + high) / 2;
+            match piece_of(middle).cmp(&piece) {
+                std::cmp::Ordering::Less => low = middle + 1,
+                std::cmp::Ordering::Greater => high = middle,
+                std::cmp::Ordering::Equal => {
+                    let code =
+                        |at: usize| u16::from_le_bytes([entry(middle)[at], entry(middle)[at + 1]]);
+                    return Some([height_m_of_code(code(4)), height_m_of_code(code(6))]);
+                }
+            }
+        }
+        None
     }
 
     pub fn piece_count(&self) -> usize {
@@ -471,9 +520,19 @@ mod tests {
             },
         ];
         let attributes = [road(), building.clone()];
-        let bytes = encode(&pieces, &attributes);
+        let decks = [Deck {
+            piece: 2,
+            altitude_m: [312.4, -12.2],
+        }];
+        let bytes = encode(&pieces, &attributes, &decks);
         let parsed = Sources::parse(&bytes).unwrap();
         assert_eq!(parsed.piece_count(), 3);
+        let deck = parsed.deck(2).unwrap();
+        assert!(
+            (deck[0] - 312.4).abs() < 1e-9 && (deck[1] + 12.2).abs() < 1e-9,
+            "0.2 m steps"
+        );
+        assert_eq!((parsed.deck(0), parsed.deck(1)), (None, None));
         for (index, piece) in pieces.iter().enumerate() {
             assert_eq!(parsed.piece(index).unwrap(), *piece);
         }
@@ -507,14 +566,14 @@ mod tests {
             ends: [[0, 0], [10, 10]],
             attribute,
         });
-        let bytes = encode(&pieces, &[road(), uphill.clone()]);
+        let bytes = encode(&pieces, &[road(), uphill.clone()], &[]);
         let parsed = Sources::parse(&bytes).unwrap();
         assert_eq!(parsed.attribute_count(), 2);
         assert_eq!(parsed.attribute(1).unwrap().emission, uphill.emission);
         for index in [0, 1] {
             assert_eq!(parsed.display(index).unwrap(), road().display);
         }
-        let single = encode(&pieces[..1], &[road()]);
+        let single = encode(&pieces[..1], &[road()], &[]);
         assert_eq!(bytes.len(), single.len() + PIECE_BYTES + ATTRIBUTE_BYTES);
     }
 }

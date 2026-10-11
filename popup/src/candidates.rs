@@ -88,7 +88,10 @@ pub struct Candidate {
     pub line: bool,
     pub attribute: AttributeRef,
     pub ends_m: [[f64; 2]; 2],
+    /// The ground under the piece's ends (m): the terrain, or a bridge's deck.
     pub ground_m: [f64; 2],
+    /// On a bridge: its source stands on the deck in `ground_m`, not on the terrain under it.
+    pub on_deck: bool,
     pub distance_m: f64,
     pub bound: [f64; PERIODS],
     /// The bound's Lden-weighted energy: candidates are evaluated from the loudest.
@@ -239,11 +242,18 @@ pub fn collect(
             if near > reach_m {
                 return Ok(None);
             }
-            let start_ground = ground.at(ends_m[0])?.height_m;
-            let ground_m = if piece.is_line() {
-                [start_ground, ground.at(ends_m[1])?.height_m]
-            } else {
-                [start_ground; 2]
+            let deck = sources.deck(index);
+            let ground_m = match deck {
+                Some([start, end]) if piece.is_line() => [start, end],
+                Some([start, _]) => [start; 2],
+                None => {
+                    let start_ground = ground.at(ends_m[0])?.height_m;
+                    if piece.is_line() {
+                        [start_ground, ground.at(ends_m[1])?.height_m]
+                    } else {
+                        [start_ground; 2]
+                    }
+                }
             };
             let mut candidate = Candidate {
                 layer: source.layer,
@@ -261,6 +271,7 @@ pub fn collect(
                 },
                 ends_m,
                 ground_m,
+                on_deck: deck.is_some(),
                 distance_m: near,
                 bound: [0.0; PERIODS],
             };

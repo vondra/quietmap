@@ -206,8 +206,7 @@ pub fn list_source(
                         containing_footprints(ray.crossings, source.footprint_id, &mut own_walls);
                         RayProfile {
                             ground: sampled(ray.profile),
-                            source_altitude_m: ray.profile.ground_m.first().copied().unwrap_or(0.0)
-                                + source.height_m,
+                            source_altitude_m: ray.source_altitude_m,
                             // The walls that screen it: not those of the building it stands in.
                             walls: ray
                                 .crossings

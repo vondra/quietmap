@@ -3,6 +3,7 @@
 
 use super::bus::BusRoutes;
 use super::country_speeds::COUNTRY_SPEEDS;
+use super::decks::Decks;
 use super::motorcycles::{LocalMotorcycles, country_share};
 use super::period_shares::period_shares;
 use super::road_junctions::{Junctions, row_junctions, traffic_signals};
@@ -13,7 +14,7 @@ use super::road_traffic::{
 use super::tagged_speeds::tagged_speed_kmh;
 use super::thai_highways::thai_highway;
 use super::us_trucks::us_vehicle_shares;
-use super::{Converted, Reach, group_key, split_at_tile_edges};
+use super::{Converted, Reach, group_key, metres, split_at_tile_edges};
 use crate::climate::Temperature;
 use crate::dev4::{Dev4, Square, require_stamp, z30_corner_degrees, z30_to_global};
 use arrow_array::cast::AsArray;
@@ -544,7 +545,8 @@ fn way_rows(
 
 /// Converts the road rows of one dev4 square, or with `reach` only those reaching into another
 /// square, the guessed traffic replaced by the building traffic under `traffic` when given and
-/// the buses of `bus` added to it; returns how many rows emit.
+/// the buses of `bus` added to it, a row on a bridge on its deck from `decks`; returns how many
+/// rows emit.
 pub fn convert(
     (dev4, temperature, traffic, bus): (
         &Dev4,
@@ -554,6 +556,7 @@ pub fn convert(
     ),
     square: Square,
     reach: Option<Reach>,
+    decks: &Decks,
     out: &mut Vec<Converted>,
 ) -> Result<usize, String> {
     let Some(table) = dev4.table(square, "roads.arrow")? else {
@@ -674,7 +677,27 @@ pub fn convert(
             if !within[row] {
                 continue;
             }
-            let slope = slopes[batch_first_row + row];
+            // A row on a bridge stands on its deck and climbs with it (CNOSSOS-EU 2.2.4), where
+            // the bare earth's slope would read the valley under it.
+            let row_ends = [start_x, start_y, end_x, end_y].map(|end| end.value(row));
+            let deck_m = bridge
+                .value(row)
+                .then(|| decks.roads.get(&row_ends).copied())
+                .flatten();
+            let slope = match deck_m {
+                Some([from, to]) => {
+                    let length = metres(
+                        z30_corner_degrees(row_ends[0], row_ends[1]),
+                        z30_corner_degrees(row_ends[2], row_ends[3]),
+                    );
+                    if length > 1.0 {
+                        100.0 * (to - from) / length
+                    } else {
+                        0.0
+                    }
+                }
+                None => slopes[batch_first_row + row],
+            };
             let class_index = usize::from(class.value(row)).min(CLASS_NAMES.len() - 1);
             let prior: [f64; 4] = std::array::from_fn(|category| aadt[category].value(row));
             let row_guessed = guessed(source_id.value(row), estimated.value(row))
@@ -914,11 +937,12 @@ pub fn convert(
                 emission,
                 display: display.to_string(),
             };
-            for (tile, ends) in split_at_tile_edges(start, end) {
+            for part in split_at_tile_edges(start, end) {
                 out.push(Converted {
-                    tile,
-                    ends,
+                    tile: part.tile,
+                    ends: part.ends,
                     attribute: attribute.clone(),
+                    deck_m: part.deck(deck_m),
                 });
             }
             emitting += 1;

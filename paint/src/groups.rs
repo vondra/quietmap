@@ -1,5 +1,5 @@
 //! A block's groups: the loud sources it does not evaluate at every pixel, grouped by layer,
-//! direction and distance around a frame's centre (a far cell's centre). A group's energy is known
+//! direction and distance around a frame's centre (a far cell's centre), a bridge's deck apart. A group's energy is known
 //! exactly where its members were evaluated: its near share at the block's corners, its far share
 //! at the four points of the block's far cell. A pixel blends both and scales them by one exact
 //! ray from the group's loudest member (its probe): the shadow that member meets there. Every block
@@ -98,7 +98,7 @@ pub(crate) fn frame(
         _ => frame[k % 4],
     });
     let mut cursors = [0usize; 12];
-    let mut groups: HashMap<(usize, i64, i64), Summing> = HashMap::new();
+    let mut groups: HashMap<(usize, i64, i64, bool), Summing> = HashMap::new();
     let mut totals = [[0.0; LAYERS]; 4];
     while let Some(index) = (0..12)
         .filter_map(|k| lists[k].get(cursors[k]).map(|e| e.0))
@@ -123,13 +123,16 @@ pub(crate) fn frame(
         let sector = (dy.atan2(dx).to_degrees().rem_euclid(360.0) / GROUP_SECTOR_DEG) as i64;
         let shell = (dx.hypot(dy) / GROUP_FIRST_SHELL_M).max(1.0).log2() as i64;
         let layer = candidate.layer as usize;
-        let group = groups.entry((layer, sector, shell)).or_insert(Summing {
-            layer,
-            corners: [0.0; 4],
-            cell: [0.0; 4],
-            at_frame: [0.0; 4],
-            probe: None,
-        });
+        // A bridge's deck and the ground under it are screened differently: never one probe.
+        let group = groups
+            .entry((layer, sector, shell, candidate.on_deck))
+            .or_insert(Summing {
+                layer,
+                corners: [0.0; 4],
+                cell: [0.0; 4],
+                at_frame: [0.0; 4],
+                probe: None,
+            });
         let at_corners: [f64; 4] = std::array::from_fn(|k| energies[k]);
         let at_cell: [f64; 4] = std::array::from_fn(|k| energies[4 + k]);
         // Where it is decided: a near share at the block's corners, a far share at the frame's.

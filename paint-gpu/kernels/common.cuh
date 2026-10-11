@@ -13,6 +13,7 @@ typedef unsigned short u16;
 typedef unsigned char u8;
 
 #define QM_INFINITY (__int_as_float(0x7f800000))
+#define QM_NAN (__int_as_float(0x7fffffff))
 #define QM_PI 3.14159265358979323846f
 #define QM_TAU 6.28318530717958647692f
 #define QM_LN_10 2.30258509299404568402f

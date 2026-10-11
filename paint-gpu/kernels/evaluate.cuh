@@ -76,9 +76,10 @@ struct Receiver {
 // attribute (SourceAttribute) by index.
 struct Candidate {
     float ax, ay, bx, by;
-    float ground0, ground1;
+    float ground0, ground1;       // the ground under the ends: the terrain, or a bridge's deck
     u32 line;
     u32 attribute;
+    u32 on_deck;                  // the source stands on the deck in ground0, ground1
 };
 
 struct Attribute {
@@ -131,22 +132,32 @@ struct LineNodes {
         float fraction = along_m / g->length_m;
         float px = candidate->ax + fraction * (candidate->bx - candidate->ax);
         float py = candidate->ay + fraction * (candidate->by - candidate->ay);
-        return add_ray(*ground, *obstacles, *receiver, *source, *ends, px, py, obstacles_on_ray, weight_rad * divergence, *s, periods);
+        RayEnds node_ends = *ends;
+        if (candidate->on_deck) node_ends.source_ground_m = candidate->ground0 + fraction * (candidate->ground1 - candidate->ground0);
+        return add_ray(*ground, *obstacles, *receiver, *source, node_ends, px, py, obstacles_on_ray, weight_rad * divergence, *s, periods);
     }
 };
+
+// evaluate::ray_ends: a source's ray ends at the receiver, standing on the terrain under it.
+__device__ __forceinline__ RayEnds source_ends(const Attribute& source, const Receiver& receiver) {
+    RayEnds ends;
+    ends.source_height_m = source.height_m;
+    ends.source_ground_m = QM_NAN;
+    ends.receiver_altitude_m = receiver.altitude_m;
+    ends.source_ground_factor = source.ground_factor;
+    ends.platform_half_width_m = source.platform_half_width_m;
+    ends.own_footprint = source.footprint_id;
+    return ends;
+}
 
 // evaluate::received_bands summed per period (period_sums): the energy one candidate delivers at
 // the receiver, without the receiver's reflection; 0 or a failure.
 __device__ u32 received_periods(const TerrainScene& ground, const ObstacleScene& obstacles, const Receiver& receiver,
                                 const Candidate& candidate, const Attribute& source, RayStream& s, float* periods) {
     for (int period = 0; period < PERIODS; period++) periods[period] = 0.0f;
-    RayEnds ends;
-    ends.source_height_m = source.height_m;
-    ends.receiver_altitude_m = receiver.altitude_m;
-    ends.source_ground_factor = source.ground_factor;
-    ends.platform_half_width_m = source.platform_half_width_m;
-    ends.own_footprint = source.footprint_id;
+    RayEnds ends = source_ends(source, receiver);
     if (!candidate.line) {
+        if (candidate.on_deck) ends.source_ground_m = candidate.ground0;
         float distance_m = hypotf(candidate.ax - receiver.x, candidate.ay - receiver.y);
         float distance = fmaxf(hypotf(fmaxf(distance_m, source.exclusion_radius_m), receiver.altitude_m - (candidate.ground0 + source.height_m)), 1.0f);
         float weight = 1.0f / (distance * distance * energy_of_level(11.0f));

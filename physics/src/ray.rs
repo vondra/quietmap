@@ -30,8 +30,10 @@ pub struct Crossing {
 /// The ends of one ray.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RayEnds {
-    /// Source height above the ground under it (m).
+    /// Source height above the ground it stands on (m).
     pub source_height_m: f64,
+    /// The ground the source stands on (m): a bridge's deck; `None`, the terrain under it.
+    pub source_ground_m: Option<f64>,
     pub receiver_altitude_m: f64,
     /// Gs of (2.5.14); `None` takes the ground factor under the source (point sources).
     pub source_ground_factor: Option<f64>,
@@ -113,7 +115,8 @@ pub fn ray_terms(
     scratch: &mut RayScratch,
 ) -> RayTerms {
     let horizontal = profile.horizontal_m.max(1.0);
-    let source_altitude = profile.ground_m[0] + ends.source_height_m;
+    let source_altitude =
+        ends.source_ground_m.unwrap_or(profile.ground_m[0]) + ends.source_height_m;
     let slant = horizontal
         .hypot(ends.receiver_altitude_m - source_altitude)
         .max(1.0);
@@ -239,7 +242,7 @@ impl PathBuffers {
         let length = profile.horizontal_m.max(1.0);
         let terrain = &mut self.terrain;
         terrain.clear();
-        let source_ground = profile.ground_m[0];
+        let source_ground = ends.source_ground_m.unwrap_or(profile.ground_m[0]);
         for (&t, &z) in profile.t.iter().zip(&profile.ground_m) {
             let x = t * length;
             terrain.push((

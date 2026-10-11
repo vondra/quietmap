@@ -452,6 +452,7 @@ mod tests {
                     &[("building_type", Value::from("people_pub"))],
                 ),
             ],
+            &[],
         );
         // The zoom-13 map tile in the north-west quarter of z12 tile (2048, 2048).
         let map_tile = MapTile::new(13, 4096, 4096);

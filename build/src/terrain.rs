@@ -12,7 +12,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use tiles::Kind;
 use tiles::geo::{Mercator, TileId};
-use tiles::terrain::{HEIGHT_MISSING, NODES_PER_DEGREE, Node, Window, encode, height_m_of_code};
+use tiles::terrain::{
+    HEIGHT_MISSING, NODES_PER_DEGREE, Node, Window, code_of_height_m, encode, height_m_of_code,
+};
 
 /// One dev4 square's four channels; an empty square is verified ocean.
 struct SquareRaster {
@@ -100,9 +102,7 @@ fn with_national(mut node: Node, north: i32, east: i32, national: &[NationalHeig
     if let Some((height_m, weight)) = national.iter().find_map(|model| model.at(north, east)) {
         let base_m = height_m_of_code(node.height_code);
         let blended_m = base_m + weight * (height_m - base_m);
-        node.height_code = ((blended_m + 500.0) * 5.0)
-            .round()
-            .clamp(0.0, f64::from(HEIGHT_MISSING - 1)) as u16;
+        node.height_code = code_of_height_m(blended_m);
     }
     node
 }

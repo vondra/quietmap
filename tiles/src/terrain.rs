@@ -31,6 +31,13 @@ pub fn height_m_of_code(code: u16) -> f64 {
     -500.0 + f64::from(code) / 5.0
 }
 
+/// The height code of a height (m), within the codes' range.
+pub fn code_of_height_m(height_m: f64) -> u16 {
+    ((height_m + 500.0) * 5.0)
+        .round()
+        .clamp(0.0, f64::from(HEIGHT_MISSING - 1)) as u16
+}
+
 /// A rectangle of lattice nodes: row 0 is the northernmost, column 0 the westernmost.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Window {

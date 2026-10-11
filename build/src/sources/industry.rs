@@ -211,6 +211,7 @@ fn place(row: &IndustrialRow, emission: RowEmission, out: &mut Vec<Converted>) {
                 tile,
                 ends,
                 attribute,
+                deck_m: None,
             });
         }
     }
