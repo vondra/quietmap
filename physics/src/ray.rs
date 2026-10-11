@@ -14,6 +14,14 @@ use crate::cnossos::{
 use crate::foliage;
 use crate::profile::Profile;
 
+/// Within this distance of either end every terrain sample may diffract; beyond it, of each
+/// [`CREST_GROUP`] consecutive samples only the highest (the first of equals), while every sample
+/// still shapes the ground (mean planes, ground factor, foliage). Thinned so, the owner's 19 places
+/// and the ruler's accepted groups moved by at most 0.1 dB (2026-10-11, the highest of 8 beyond
+/// 300 m) and the card streamed a long line pair 2.7 times faster.
+pub const CREST_ENDS_M: f64 = 300.0;
+pub const CREST_GROUP: usize = 8;
+
 /// Where a ray meets a wall of a building or a barrier.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Crossing {
@@ -68,6 +76,8 @@ struct PathBuffers {
     altitude_m: Vec<f64>,
     ground: Vec<f64>,
     terrain: Vec<PlanePoint>,
+    /// The terrain samples that may diffract ([`CREST_ENDS_M`]).
+    crests: Vec<PlanePoint>,
     tops: Vec<PlanePoint>,
     roofs: Vec<Roof>,
     buildings: Vec<(u64, f64, f64)>,
@@ -230,7 +240,7 @@ impl PathBuffers {
             source_ground_factor: ends
                 .source_ground_factor
                 .unwrap_or(profile.ground_factor[0]),
-            terrain_candidates: &self.terrain,
+            terrain_candidates: &self.crests,
             obstacle_tops: &self.tops,
         }
     }
@@ -254,6 +264,8 @@ impl PathBuffers {
                 },
             ));
         }
+        crests_of(terrain, length, &mut self.crests);
+        let terrain = &self.terrain;
         let terrain_at = |x: f64| interpolate(terrain, x);
         let ground_factor_at = |x: f64| {
             let upper = terrain
@@ -335,6 +347,37 @@ impl PathBuffers {
                 push(x, altitude, profile.ground_factor[index]);
             }
         }
+    }
+}
+
+/// The samples of `terrain` (a ray of `length` m) that may diffract into `out`: all within
+/// [`CREST_ENDS_M`] of either end, beyond it the highest of each [`CREST_GROUP`] consecutive ones.
+fn crests_of(terrain: &[PlanePoint], length: f64, out: &mut Vec<PlanePoint>) {
+    out.clear();
+    let middle = |x: f64| x > CREST_ENDS_M && x < length - CREST_ENDS_M;
+    let mut group: Option<(PlanePoint, usize)> = None;
+    for &point in terrain {
+        if !middle(point.0) {
+            if let Some((best, _)) = group.take() {
+                out.push(best);
+            }
+            out.push(point);
+            continue;
+        }
+        let (best, size) = match group {
+            Some((best, size)) if point.1 > best.1 => (point, size + 1),
+            Some((best, size)) => (best, size + 1),
+            None => (point, 1),
+        };
+        if size == CREST_GROUP {
+            out.push(best);
+            group = None;
+        } else {
+            group = Some((best, size));
+        }
+    }
+    if let Some((best, _)) = group {
+        out.push(best);
     }
 }
 

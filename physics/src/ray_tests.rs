@@ -345,3 +345,29 @@ fn a_wall_between_source_and_receiver_screens() {
     let loss_db = 10.0 * (open.periods[0][4] / walled.periods[0][4]).log10();
     assert!(loss_db > 10.0, "{loss_db}");
 }
+
+/// Within 300 m of either end every sample may diffract; beyond it the highest of each 8 (the first
+/// of equals), an open group's highest where the middle ends.
+#[test]
+fn the_middle_of_a_long_ray_diffracts_at_the_highest_of_each_eight() {
+    let length = 1000.0;
+    let terrain: Vec<PlanePoint> = (0..=100)
+        .map(|k| {
+            let x = 10.0 * f64::from(k);
+            (x, if k % 8 == 3 { 5.0 } else { 0.0 })
+        })
+        .collect();
+    let mut crests = Vec::new();
+    crests_of(&terrain, length, &mut crests);
+    let middle = |x: f64| x > CREST_ENDS_M && x < length - CREST_ENDS_M;
+    assert!(
+        terrain
+            .iter()
+            .filter(|p| !middle(p.0))
+            .all(|p| crests.contains(p))
+    );
+    let in_middle: Vec<PlanePoint> = crests.iter().copied().filter(|p| middle(p.0)).collect();
+    // 39 middle samples (310-690 m) in groups of 8: four full groups and one of 7.
+    assert_eq!(in_middle.len(), 5);
+    assert!(in_middle[..4].iter().all(|p| p.1 == 5.0));
+}
