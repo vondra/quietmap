@@ -191,8 +191,9 @@ The tiles (`hm3.rs`, HM3 v4): per layer and the total, 512 x 512 cells of twice 
 silence under 0 dB, 255 not assessed);
 `qm-paint pack` (`pack.rs`) builds every zoom down to 2 (energy means) into one PMTiles archive
 per layer and `current.json`, which the server publishes. `qm-paint-gpu check` holds the card
-equal to the cores on random pairs, `pair` compares one pair, `etalon` paints the reference,
-`compare` scores a map against it cell by cell and `popup` scores a map against popup clicks.
+equal to the cores on random pairs, `pair` compares one pair, `etalon` paints the reference (with
+`--sample-step 4` a sixteenth of its outdoor pixels, every fourth each way, the rest not assessed),
+`compare` scores a map against the cells it assesses and `popup` scores a map against popup clicks.
 
 ## Web
 

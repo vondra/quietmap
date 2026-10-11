@@ -14,8 +14,9 @@
 //! quiet band; a breached limit marked `!`), and the worst pixel; the popup's answers kept in
 //! FILE for the next map.
 //!
-//! `qm-paint-gpu etalon ... --square X,Y --out DIR [--device D]`: the square's etalon (every
-//! outdoor pixel as the popup answers it, `paint::etalon`) written as z13 tiles under DIR.
+//! `qm-paint-gpu etalon ... --square X,Y --out DIR [--device D] [--sample-step K]`: the square's
+//! etalon (every outdoor pixel as the popup answers it, `paint::etalon`; with K those at multiples
+//! of K both ways, the rest not assessed) written as z13 tiles under DIR.
 //!
 //! `qm-paint-gpu compare ... --painted DIR --reference DIR --squares X,Y;...`: a
 //! painted map against the etalon, cell by cell, by the same contract.
@@ -120,6 +121,10 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let square = Square::new(&weather, tile, &files)?;
     if command == Some("etalon") {
         let out = PathBuf::from(required("out")?);
+        let sample_step = match parse("sample-step", 1)? {
+            0 => return Err("--sample-step: at least 1".into()),
+            step => step as usize,
+        };
         let started = Instant::now();
         let gpu = Gpu::new(parse("device", 0)? as usize)?;
         let device_square = DeviceSquare::upload(&gpu, &square, &files, &weather)?;
@@ -129,10 +134,10 @@ fn run(arguments: &[String]) -> Result<(), String> {
             square: &square,
         };
         let lattice = paint::lattice::Lattice::new(&square, 1024, (128, 0), true, Some(&batch))?;
-        let cells = paint::etalon::etalon(&square, 1024, &lattice, Some(&batch))?;
+        let cells = paint::etalon::etalon(&square, 1024, &lattice, Some(&batch), sample_step)?;
         paint::hm3::write(&out, 13, (tile.x, tile.y), &cells)?;
         println!(
-            "etalon {}/{}: {} sources, {:.1} s on {}",
+            "etalon {}/{}: {} sources, sample step {sample_step}, {:.1} s on {}",
             tile.x,
             tile.y,
             square.candidates.len(),
@@ -784,9 +789,14 @@ fn compare_maps(
                 painted_bytes.insert((slot, x, y), read_tile(painted, name, x, y)?);
             }
             for k in 0..512 * 512 {
-                // Neither side has a level (silence or not assessed): nothing to score.
-                if reference_layers[names.len() - 1][6 + k] >= SILENCE
-                    && painted_bytes[&(names.len() - 1, x, y)][6 + k] >= SILENCE
+                // A pixel the reference does not assess (a sample's skipped pixels), or one
+                // neither side has a level at: nothing to score.
+                let (reference_total, painted_total) = (
+                    reference_layers[names.len() - 1][6 + k],
+                    painted_bytes[&(names.len() - 1, x, y)][6 + k],
+                );
+                if reference_total == NO_LEVEL
+                    || (reference_total >= SILENCE && painted_total >= SILENCE)
                 {
                     continue;
                 }
