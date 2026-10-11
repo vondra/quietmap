@@ -14,6 +14,7 @@
 #define OPEN_ROOFS 12        // footprints the ray is inside at once
 #define RECENT_CROSSINGS 8   // crossings kept to drop one found twice
 #define CONTAINING 8         // footprints a building's source stands in, its own among them
+#define LINE_NODES 64        // quadrature nodes of one line piece (five buckets, each wide one split at its edges)
 
 // ray.rs RayEnds
 struct RayEnds {

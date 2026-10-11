@@ -99,31 +99,8 @@ extern "C" __global__ void ray_crossings(const SquareScene* square, float from_x
     out[0] = recorder.count;
 }
 
-// The quadrature nodes of one line pair as the device places them, each with its ray's period
-// energies (weighted), for the line parity check.
-struct NodeRecorder {
-    LineNodes nodes;
-    float* along;
-    float* weight;
-    u32* blocked;
-    float* periods;
-    u32 capacity;
-    u32 count;
-    __device__ u32 operator()(float along_m, float weight_rad, bool obstacles_on_ray) {
-        float before[PERIODS] = {nodes.periods[0], nodes.periods[1], nodes.periods[2]};
-        u32 failed = nodes(along_m, weight_rad, obstacles_on_ray);
-        if (count < capacity) {
-            along[count] = along_m;
-            weight[count] = weight_rad;
-            blocked[count] = obstacles_on_ray;
-            for (int p = 0; p < PERIODS; p++) periods[PERIODS * count + p] = nodes.periods[p] - before[p];
-        }
-        count++;
-        return failed;
-    }
-};
-
-// One line pair's nodes; out[0] their count, out[1] the failure.
+// One line pair's quadrature nodes as the device places them, each with its ray's period energies
+// (weighted), for the line parity check; out[0] their count, out[1] the failure.
 extern "C" __global__ void line_pair_nodes(const SquareScene* square_ptr, float rx, float ry, u32 candidate_index,
                                            float* along, float* weight, u32* blocked, float* periods, u32 capacity, u32* out) {
     const SquareScene& square = *square_ptr;
@@ -134,15 +111,24 @@ extern "C" __global__ void line_pair_nodes(const SquareScene* square_ptr, float 
     if (failed) { out[1] = failed; return; }
     const Candidate& candidate = square.candidates[candidate_index];
     const Attribute& source = square.attributes[candidate.attribute];
-    float sums[PERIODS] = {0.0f, 0.0f, 0.0f};
     RayEnds ends = source_ends(source, receiver);
     float start[3] = {candidate.ax - receiver.x, candidate.ay - receiver.y, candidate.ground0 + source.height_m - receiver.altitude_m};
     float end[3] = {candidate.bx - receiver.x, candidate.by - receiver.y, candidate.ground1 + source.height_m - receiver.altitude_m};
     LinePieceGeometry g;
     if (!line_piece_geometry(start, end, &g)) { out[1] = 0; return; }
-    LineNodes nodes = {&square.ground, &square.obstacles, &receiver, &candidate, &source, &ends, &g,
-                       1.0f / (POINT_DIVERGENCE_LINEAR * g.perpendicular_m), &s, sums};
-    NodeRecorder recorder = {nodes, along, weight, blocked, periods, capacity, 0};
-    out[1] = line_quadrature_nodes(g, square.obstacles, receiver.x, receiver.y, fmaxf(source.height_m, 0.0f), recorder);
-    out[0] = recorder.count;
+    LineNodes nodes;
+    nodes.count = 0;
+    failed = line_quadrature_nodes(g, square.obstacles, receiver.x, receiver.y, fmaxf(source.height_m, 0.0f), nodes);
+    for (int node = 0; node < nodes.count && !failed; node++) {
+        float sums[PERIODS] = {0.0f, 0.0f, 0.0f};
+        failed = add_line_node(square.ground, square.obstacles, receiver, candidate, source, ends, g, nodes, node, s, sums);
+        if ((u32)node < capacity) {
+            along[node] = nodes.along_m[node];
+            weight[node] = nodes.weight_rad[node];
+            blocked[node] = nodes.obstacles_on_ray[node];
+            for (int p = 0; p < PERIODS; p++) periods[PERIODS * node + p] = sums[p];
+        }
+    }
+    out[1] = failed;
+    out[0] = nodes.count;
 }

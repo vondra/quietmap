@@ -117,26 +117,37 @@ __device__ u32 add_ray(const TerrainScene& ground, const ObstacleScene& obstacle
 }
 
 // The rays of one line piece's quadrature nodes (evaluate.rs received_bands for a line).
+// A line piece's quadrature nodes, collected before their rays run (as the CPU collects them): the
+// placement's state (the wide buckets' mask and runs) is dead while a ray streams, so the kernel
+// keeps the larger of the two's registers, not their sum.
 struct LineNodes {
-    const TerrainScene* ground;
-    const ObstacleScene* obstacles;
-    const Receiver* receiver;
-    const Candidate* candidate;
-    const Attribute* source;
-    const RayEnds* ends;
-    const LinePieceGeometry* g;
-    float divergence;
-    RayStream* s;
-    float* periods;
+    int count;
+    float along_m[LINE_NODES];
+    float weight_rad[LINE_NODES];
+    bool obstacles_on_ray[LINE_NODES];
     __device__ u32 operator()(float along_m, float weight_rad, bool obstacles_on_ray) {
-        float fraction = along_m / g->length_m;
-        float px = candidate->ax + fraction * (candidate->bx - candidate->ax);
-        float py = candidate->ay + fraction * (candidate->by - candidate->ay);
-        RayEnds node_ends = *ends;
-        if (candidate->on_deck) node_ends.source_ground_m = candidate->ground0 + fraction * (candidate->ground1 - candidate->ground0);
-        return add_ray(*ground, *obstacles, *receiver, *source, node_ends, px, py, obstacles_on_ray, weight_rad * divergence, *s, periods);
+        if (count == LINE_NODES) return FAILED_CAPACITY;
+        this->along_m[count] = along_m;
+        this->weight_rad[count] = weight_rad;
+        this->obstacles_on_ray[count++] = obstacles_on_ray;
+        return 0;
     }
 };
+
+// Node `node` of a line piece: its ray from its point on the piece (on a deck, the deck's ground
+// there) into `periods`, weighted by its dphi over the piece's perpendicular; 0 or a failure.
+__device__ u32 add_line_node(const TerrainScene& ground, const ObstacleScene& obstacles, const Receiver& receiver,
+                             const Candidate& candidate, const Attribute& source, const RayEnds& ends,
+                             const LinePieceGeometry& g, const LineNodes& nodes, int node, RayStream& s, float* periods) {
+    float fraction = nodes.along_m[node] / g.length_m;
+    float px = candidate.ax + fraction * (candidate.bx - candidate.ax);
+    float py = candidate.ay + fraction * (candidate.by - candidate.ay);
+    RayEnds node_ends = ends;
+    if (candidate.on_deck) node_ends.source_ground_m = candidate.ground0 + fraction * (candidate.ground1 - candidate.ground0);
+    float divergence = 1.0f / (POINT_DIVERGENCE_LINEAR * g.perpendicular_m);
+    return add_ray(ground, obstacles, receiver, source, node_ends, px, py, nodes.obstacles_on_ray[node],
+                   nodes.weight_rad[node] * divergence, s, periods);
+}
 
 // evaluate::ray_ends: a source's ray ends at the receiver, standing on the terrain under it.
 __device__ __forceinline__ RayEnds source_ends(const Attribute& source, const Receiver& receiver) {
@@ -167,7 +178,11 @@ __device__ u32 received_periods(const TerrainScene& ground, const ObstacleScene&
     float end[3] = {candidate.bx - receiver.x, candidate.by - receiver.y, candidate.ground1 + source.height_m - receiver.altitude_m};
     LinePieceGeometry g;
     if (!line_piece_geometry(start, end, &g)) return 0;
-    LineNodes nodes = {&ground, &obstacles, &receiver, &candidate, &source, &ends, &g,
-                       1.0f / (POINT_DIVERGENCE_LINEAR * g.perpendicular_m), &s, periods};
-    return line_quadrature_nodes(g, obstacles, receiver.x, receiver.y, fmaxf(source.height_m, 0.0f), nodes);
+    LineNodes nodes;
+    nodes.count = 0;
+    u32 failed = line_quadrature_nodes(g, obstacles, receiver.x, receiver.y, fmaxf(source.height_m, 0.0f), nodes);
+    for (int node = 0; node < nodes.count && !failed; node++) {
+        failed = add_line_node(ground, obstacles, receiver, candidate, source, ends, g, nodes, node, s, periods);
+    }
+    return failed;
 }
