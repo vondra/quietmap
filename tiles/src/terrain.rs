@@ -302,14 +302,25 @@ impl Terrain {
     /// The ground at a point, or `None` outside the window or where a needed node has no data:
     /// height and ground factor bilinear, forest cover from the nearest node.
     pub fn sample(&self, position: Mercator) -> Option<GroundSample> {
+        self.sample_at(self.locate(position)?)
+    }
+
+    /// The ground at a place among the nodes, as [`Terrain::sample`]; `None` outside the window. A
+    /// fraction of exactly one half takes the trees of the node south or east of it: the fine
+    /// walk's vertices on every sixth line lie there, and their place comes exact from its
+    /// indices, so the CPU and the card take the same node.
+    pub fn sample_at(&self, at: NodePosition) -> Option<GroundSample> {
         let NodePosition {
             row,
             row_fraction,
             column,
             column_fraction,
-        } = self.locate(position)?;
+        } = at;
         let next_row = row + u32::from(row_fraction > 0.0);
         let next_column = column + u32::from(column_fraction > 0.0);
+        if next_row >= self.window.rows || next_column >= self.window.columns {
+            return None;
+        }
         let corners = [
             self.node(row, column),
             self.node(row, next_column),

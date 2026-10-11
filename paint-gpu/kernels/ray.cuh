@@ -159,8 +159,8 @@ __device__ __forceinline__ u32 ray_sample(RayStream& s, int k, TerrainPoint* out
 }
 
 // The first of a ray's two passes: its terrain vertices into `s.samples` (the source, every lattice
-// line crossed, the receiver) with the terrain's moments from the source, each state's foliage with
-// them. Out of line, once a ray: the walk's state is not live while the second pass streams the
+// line crossed, the 1/6" one's within FINE_ENDS_M of either end where the tiles have it, the
+// receiver) with the terrain's moments from the source, each state's foliage with them. Out of line, once a ray: the walk's state is not live while the second pass streams the
 // hulls, so the kernel's registers are the larger pass's (above 168 the card keeps 8 warps an SM;
 // evidence 2026-10-11, sampling). The pass's own state (the previous vertex, the moments so far,
 // the open group of the middle's samples, the last sample that may diffract, the crowns) stays in
@@ -188,16 +188,27 @@ __device__ __noinline__ u32 sample_ray(const TerrainScene& ground, float sx, flo
     // The open stretch of the middle (its number from the source, -1: none) and its highest sample.
     int count = 1, open_group = -1, group_best = 0, last_crest = 0;
     float group_best_z = 0.0f;
+    // The stretches by lattice: their ends and the lattices' scales.
+    float stretch_ends[3] = {1.0f, 1.0f, 1.0f};
+    int stretch_scales[3] = {1, 1, 1};
+    if (ground.has_fine) stretches_of(ground, sx, sy, s.receiver_x, s.receiver_y, stretch_ends, stretch_scales);
+    int stretch = 0;
     LatticeWalk walk;
-    walk_start(ground, sx, sy, s.receiver_x, s.receiver_y, &walk);
+    walk_start(ground, stretch_scales[0], sx, sy, s.receiver_x, s.receiver_y, 0.0f, &walk);
     for (bool last = false; !last;) {
         float t;
         bool on_row;
         int row;
-        if (walk_next(ground, &walk, &t, &on_row, &row)) {
+        if (walk_next(ground, &walk, stretch_ends[stretch], &t, &on_row, &row)) {
+            float keep = 1.0f - t, x = s.receiver_x + s.offset_x * keep, y = s.receiver_y + s.offset_y * keep;
+            failed = walk.scale == 1 ? walk_sample(ground, x, y, on_row, row, walk.north, &sample)
+                                     : fine_walk_sample(ground, x, y, on_row, row, walk.north, &sample);
+        } else if (stretch_ends[stretch] < 1.0f) {
+            // A change of lattice is no line of the coarser one: a vertex there, on the finer.
+            t = stretch_ends[stretch];
             float keep = 1.0f - t;
-            failed = walk_sample(ground, s.receiver_x + s.offset_x * keep, s.receiver_y + s.offset_y * keep, on_row, row,
-                                 walk.north, &sample);
+            failed = ground_at(ground, s.receiver_x + s.offset_x * keep, s.receiver_y + s.offset_y * keep, &sample);
+            walk_start(ground, stretch_scales[++stretch], sx, sy, s.receiver_x, s.receiver_y, t, &walk);
         } else {
             t = 1.0f;
             last = true;

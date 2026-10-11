@@ -433,7 +433,8 @@ impl Ground {
     /// The ground at a vertex of the fine walk: the height between two fine nodes of its line
     /// (global 1/6" `row` and `column`, the second a row south when `down`, else a column east; a
     /// node of no weight not read), the ground factor and the trees of the one arc-second tile
-    /// there; `None` where a node it weighs has no data.
+    /// there; `None` where a node it weighs has no data. The fine window's corner is the 1"
+    /// window's, so a fine index over six is a 1" one.
     fn fine_sample(
         &self,
         position: Mercator,
@@ -469,7 +470,23 @@ impl Ground {
         } else {
             fine.pair(local_row, local_column, down).map_err(failed)?
         };
-        let Some(mut sample) = terrain.sample(position) else {
+        // The vertex's place in its 1" cell from its fine indices: on its own line exactly, along
+        // it by the fraction (so a vertex on a cell's midline takes the same trees here and on the
+        // card).
+        let (fine_row, fine_column) = if down {
+            (f64::from(local_row) + fraction, f64::from(local_column))
+        } else {
+            (f64::from(local_row), f64::from(local_column) + fraction)
+        };
+        let per = f64::from(FINE_PER_NODE);
+        let (row_position, column_position) = (fine_row / per, fine_column / per);
+        let place = NodePosition {
+            row: row_position.floor() as u32,
+            row_fraction: row_position - row_position.floor(),
+            column: column_position.floor() as u32,
+            column_fraction: column_position - column_position.floor(),
+        };
+        let Some(mut sample) = terrain.sample_at(place) else {
             return Ok(None);
         };
         if first_code == HEIGHT_MISSING || second_code == HEIGHT_MISSING {

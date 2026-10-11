@@ -24,7 +24,9 @@
 // One terrain tile of the neighbourhood (tiles::terrain::Terrain): its 4-byte nodes and its
 // crowns' heights (a byte a node) in `TerrainScene::nodes`, its node column at the frame's origin
 // and per metre east, and its rows' metres north of the origin in `TerrainScene::row_north_m`
-// (descending: row 0 is the northernmost).
+// (descending: row 0 is the northernmost); its fine terrain (tiles::terrain_fine), if any, as u16
+// height codes row-major over the window six times as fine, in `nodes` too (offset 0: none, as
+// the first tile's nodes come first).
 struct TerrainTile {
     i32 state;
     u32 rows;
@@ -35,6 +37,7 @@ struct TerrainTile {
     u64 nodes_offset;
     u64 canopy_offset;
     u64 rows_offset;
+    u64 fine_offset;
 };
 
 // popup::scene::Ground of a square: the frame origin's tile coordinates relative to the square's
@@ -57,7 +60,7 @@ struct TerrainScene {
     u32 scene_row_count;
     float column_at_origin;
     float columns_per_metre;
-    u32 pad;
+    u32 has_fine;               // whether any tile has fine terrain
 };
 
 struct GroundSample {
@@ -84,24 +87,32 @@ __device__ void ocean(GroundSample* out) {
     out->canopy_m = 0.0f;
 }
 
-// terrain::Terrain::sample at a point `east_m`, `north_m` of the frame; false outside the window
-// or at a node without data.
-__device__ bool terrain_sample(const TerrainScene& scene, const TerrainTile& tile, float east_m, float north_m, GroundSample* out) {
-    float column_position = tile.column_at_origin + east_m * tile.columns_per_metre;
-    if (column_position > -1e-6f) column_position = fmaxf(column_position, 0.0f);
-    float column = floorf(column_position);
-    float column_fraction = column_position - column;
-    const float* rows = scene.row_north_m + tile.rows_offset;
-    int row_count = (int)tile.rows;
-    // The last row at or north of the point, as the Rust finds it on Mercator y: a guess from the
-    // mean spacing, then a step or two.
-    float spacing = row_count > 1 ? (rows[0] - rows[row_count - 1]) / (float)(row_count - 1) : 1.0f;
-    int row = clampi((int)floorf((rows[0] - north_m) / spacing), 0, row_count - 1);
-    while (row > 0 && north_m > rows[row]) row--;
-    while (row + 1 < row_count && north_m <= rows[row + 1]) row++;
-    if (north_m > rows[0] + 1e-4f || column < 0.0f) return false;
-    float row_fraction = row + 1 < row_count ? (rows[row] - north_m) / (rows[row] - rows[row + 1]) : 0.0f;
-    u32 r = (u32)row, c = (u32)column;
+// The 1/6" height (m) at fractional node coordinates of a tile's fine window (tiles::terrain_fine::
+// FineTerrain::height_at); false where a corner it weighs has no data.
+__device__ bool fine_height(const TerrainScene& sc, const TerrainTile& tile, float row, float column, float* height) {
+    u32 rows = FINE_PER_NODE * (tile.rows - 1) + 1, columns = FINE_PER_NODE * (tile.columns - 1) + 1;
+    u32 r = min((u32)floorf(row), rows - 2), c = min((u32)floorf(column), columns - 2);
+    float fr = row - (float)r, fc = column - (float)c;
+    const u16* fine = (const u16*)(sc.nodes + tile.fine_offset);
+    float weights[4] = {(1.0f - fr) * (1.0f - fc), (1.0f - fr) * fc, fr * (1.0f - fc), fr * fc};
+    u64 corners[4] = {(u64)r * columns + c, (u64)r * columns + c + 1, (u64)(r + 1) * columns + c, (u64)(r + 1) * columns + c + 1};
+    float sum = 0.0f;
+    for (int k = 0; k < 4; k++) {
+        if (weights[k] > 0.0f) {
+            u32 code = fine[corners[k]];
+            if (code == HEIGHT_MISSING) return false;
+            sum += weights[k] * (-500.0f + (float)code * 0.2f);
+        }
+    }
+    *height = sum;
+    return true;
+}
+
+// terrain::Terrain::sample_at: the ground at row `r` and column `c` of a read tile and the
+// fractions south and east within that cell, the trees of the nearest node (one half: south or
+// east); false outside the window or at a node without data.
+__device__ bool cell_sample(const TerrainScene& scene, const TerrainTile& tile, u32 r, float row_fraction, u32 c,
+                            float column_fraction, GroundSample* out) {
     u32 next_row = r + (row_fraction > 0.0f ? 1u : 0u);
     u32 next_column = c + (column_fraction > 0.0f ? 1u : 0u);
     if (next_row >= tile.rows || next_column >= tile.columns) return false;
@@ -130,41 +141,78 @@ __device__ bool terrain_sample(const TerrainScene& scene, const TerrainTile& til
     return tile_trees(scene, tile, corner_row[nearest], corner_column[nearest], out);
 }
 
+// terrain::Terrain::sample at a point `east_m`, `north_m` of the frame, the 1/6" height where the
+// tile has one (popup::scene::Ground::at); false outside the window or at a node without data.
+__device__ bool terrain_sample(const TerrainScene& scene, const TerrainTile& tile, float east_m, float north_m, GroundSample* out) {
+    float column_position = tile.column_at_origin + east_m * tile.columns_per_metre;
+    if (column_position > -1e-6f) column_position = fmaxf(column_position, 0.0f);
+    float column = floorf(column_position);
+    float column_fraction = column_position - column;
+    const float* rows = scene.row_north_m + tile.rows_offset;
+    int row_count = (int)tile.rows;
+    // The last row at or north of the point, as the Rust finds it on Mercator y: a guess from the
+    // mean spacing, then a step or two.
+    float spacing = row_count > 1 ? (rows[0] - rows[row_count - 1]) / (float)(row_count - 1) : 1.0f;
+    int row = clampi((int)floorf((rows[0] - north_m) / spacing), 0, row_count - 1);
+    while (row > 0 && north_m > rows[row]) row--;
+    while (row + 1 < row_count && north_m <= rows[row + 1]) row++;
+    if (north_m > rows[0] + 1e-4f || column < 0.0f) return false;
+    float row_fraction = row + 1 < row_count ? (rows[row] - north_m) / (rows[row] - rows[row + 1]) : 0.0f;
+    if (!cell_sample(scene, tile, (u32)row, row_fraction, (u32)column, column_fraction, out)) return false;
+    return !tile.fine_offset
+        || fine_height(scene, tile, FINE_PER_NODE * ((float)row + row_fraction), FINE_PER_NODE * column_position, &out->height_m);
+}
+
 // The tile of the neighbourhood at offset (dx, dy) from the square, or null outside the radius.
 __device__ const TerrainTile* terrain_tile(const TerrainScene& scene, i64 dx, i64 dy) {
     if (dx < -scene.radius || dx > scene.radius || dy < -scene.radius || dy > scene.radius) return 0;
     return &scene.tiles[(dy + scene.radius) * (2 * scene.radius + 1) + dx + scene.radius];
 }
 
-// The lattice lines a ray crosses, in order from its source (popup::scene::Ground::fill_profile):
-// column lines at the integer values of u, row lines at scene.scene_rows.
+// Metres north of the origin of row line `k` of the lattice `scale` times as fine as the one
+// arc-second, the northernmost 0: on the 1" rows, evenly between them (popup::scene::Ground::
+// row_line_y).
+__device__ __forceinline__ float row_line_north(const TerrainScene& sc, int scale, int k) {
+    int row = k / scale, sub = k - row * scale;
+    float north = sc.scene_rows[row];
+    return sub == 0 ? north : north + (sc.scene_rows[row + 1] - north) * (float)sub / (float)scale;
+}
+
+// The lines of the lattice `scale` times as fine as the one arc-second a ray crosses, in order
+// from its source (popup::scene::Ground::walk): column lines at the integer values of u, row lines
+// at row_line_north.
 struct LatticeWalk {
     float u_s, du;          // the column coordinate at the source, and its change to the receiver
     float n_s, dn;          // metres north at the source, and the change
     float next_column, column_step;
-    int next_row, row_step; // the scene row line ahead (outside the table: none)
+    int next_row, row_step; // the scene row line ahead (outside the lines: none)
     int north;              // the scene row at or north of the point, in the direction of travel
+    int scale, lines;
 };
 
-// The walk from (sx, sy) to (rx, ry). A start exactly on a row line belongs to the stretch the
-// ray heads into.
-__device__ void walk_start(const TerrainScene& sc, float sx, float sy, float rx, float ry, LatticeWalk* w) {
-    w->u_s = sc.column_at_origin + sx * sc.columns_per_metre;
-    w->du = (rx - sx) * sc.columns_per_metre;
+// The walk from (sx, sy) to (rx, ry) from fraction `from` on. A start exactly on a row line
+// belongs to the stretch the ray heads into.
+__device__ void walk_start(const TerrainScene& sc, int scale, float sx, float sy, float rx, float ry, float from, LatticeWalk* w) {
+    w->scale = scale;
+    w->lines = scale * ((int)sc.scene_row_count - 1) + 1;
+    w->u_s = (float)scale * (sc.column_at_origin + sx * sc.columns_per_metre);
+    w->du = (float)scale * (rx - sx) * sc.columns_per_metre;
     w->n_s = sy;
     w->dn = ry - sy;
+    float u = w->u_s + from * w->du, n = w->n_s + from * w->dn;
     if (w->du > 0.0f) {
-        w->next_column = floorf(w->u_s) + 1.0f;
+        w->next_column = floorf(u) + 1.0f;
         w->column_step = 1.0f;
     } else {
-        w->next_column = ceilf(w->u_s) - 1.0f;
+        w->next_column = ceilf(u) - 1.0f;
         w->column_step = -1.0f;
     }
-    // Rows north of the start: north_m > n_s heading north, north_m >= n_s heading south.
-    int lo = 0, hi = (int)sc.scene_row_count;
+    // Rows north of the start: north_m > n heading north, north_m >= n heading south.
+    int lo = 0, hi = w->lines;
     while (lo < hi) {
         int mid = (lo + hi) / 2;
-        bool north = w->dn < 0.0f ? sc.scene_rows[mid] >= w->n_s : sc.scene_rows[mid] > w->n_s;
+        float line = row_line_north(sc, scale, mid);
+        bool north = w->dn < 0.0f ? line >= n : line > n;
         if (north) lo = mid + 1; else hi = mid;
     }
     w->north = lo - 1;
@@ -172,14 +220,14 @@ __device__ void walk_start(const TerrainScene& sc, float sx, float sy, float rx,
     w->row_step = w->dn < 0.0f ? 1 : -1;
 }
 
-// The next crossing strictly before the receiver: its fraction t, and whether it lies on a row line
-// (`row` its scene row) or a column line; false at the end.
-__device__ bool walk_next(const TerrainScene& sc, LatticeWalk* w, float* t, bool* on_row, int* row) {
+// The next crossing strictly before fraction `to`: its fraction t, and whether it lies on a row
+// line (`row` its scene row on the walk's lattice) or a column line; false past it.
+__device__ bool walk_next(const TerrainScene& sc, LatticeWalk* w, float to, float* t, bool* on_row, int* row) {
     float t_column = w->du != 0.0f ? (w->next_column - w->u_s) / w->du : QM_INFINITY;
-    float t_row = (w->dn != 0.0f && w->next_row >= 0 && w->next_row < (int)sc.scene_row_count)
-        ? (sc.scene_rows[w->next_row] - w->n_s) / w->dn : QM_INFINITY;
+    float t_row = (w->dn != 0.0f && w->next_row >= 0 && w->next_row < w->lines)
+        ? (row_line_north(sc, w->scale, w->next_row) - w->n_s) / w->dn : QM_INFINITY;
     *t = fminf(t_column, t_row);
-    if (!(*t < 1.0f)) return false;
+    if (!(*t < to)) return false;
     *on_row = t_row <= t_column;
     *row = w->next_row;
     if (t_row <= t_column) {
@@ -260,7 +308,7 @@ __device__ u32 walk_sample(const TerrainScene& sc, float east_m, float north_m, 
     return 0;
 }
 
-// scene::Ground::at; 0 or a failure.
+// scene::Ground::at, the 1/6" height where the tile has one; 0 or a failure.
 __device__ u32 ground_at(const TerrainScene& scene, float east_m, float north_m, GroundSample* out) {
     i64 dx = (i64)floorf(scene.tile_x_at_origin + east_m * scene.tiles_per_metre_east);
     i64 dy = (i64)floorf(scene.tile_y_at_origin - north_m * scene.tiles_per_metre_north);
@@ -272,6 +320,102 @@ __device__ u32 ground_at(const TerrainScene& scene, float east_m, float north_m,
         return 0;
     }
     return terrain_sample(scene, tile, east_m, north_m, out) ? 0 : FAILED_NO_TERRAIN;
+}
+
+// Whether every tile under the stretch from (ax, ay) to (bx, by) has fine terrain: the tiles of
+// its box's corners (popup::scene::Ground::fine_under).
+__device__ bool fine_under(const TerrainScene& sc, float ax, float ay, float bx, float by) {
+    float xs[2] = {fminf(ax, bx), fmaxf(ax, bx)}, ys[2] = {fminf(ay, by), fmaxf(ay, by)};
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 2; j++) {
+            const TerrainTile* tile = terrain_tile(sc, (i64)floorf(sc.tile_x_at_origin + xs[i] * sc.tiles_per_metre_east),
+                                                   (i64)floorf(sc.tile_y_at_origin - ys[j] * sc.tiles_per_metre_north));
+            if (!tile || tile->state != TILE_READ || !tile->fine_offset) return false;
+        }
+    }
+    return true;
+}
+
+// The stretches of the ray from (sx, sy) to (rx, ry) by lattice (popup::scene::Ground::
+// fill_profile): within FINE_ENDS_M of either end the 1/6" lattice where every tile under that
+// stretch has it, the 1" one elsewhere, neighbours on one lattice joined; their ends into `ends`
+// (the last 1) and their lattices' scales into `scales`.
+__device__ void stretches_of(const TerrainScene& sc, float sx, float sy, float rx, float ry, float* ends, int* scales) {
+    float length = hypotf(rx - sx, ry - sy);
+    if (length <= 2.0f * FINE_ENDS_M) {
+        scales[0] = fine_under(sc, sx, sy, rx, ry) ? FINE_PER_NODE : 1;
+        return;
+    }
+    float end = FINE_ENDS_M / length;
+    float ax = sx + end * (rx - sx), ay = sy + end * (ry - sy);
+    float bx = sx + (1.0f - end) * (rx - sx), by = sy + (1.0f - end) * (ry - sy);
+    int candidate_scales[3] = {fine_under(sc, sx, sy, ax, ay) ? FINE_PER_NODE : 1, 1,
+                               fine_under(sc, bx, by, rx, ry) ? FINE_PER_NODE : 1};
+    float candidate_ends[3] = {end, 1.0f - end, 1.0f};
+    int count = 0;
+    for (int k = 0; k < 3; k++) {
+        if (count > 0 && scales[count - 1] == candidate_scales[k]) {
+            ends[count - 1] = candidate_ends[k];
+        } else {
+            scales[count] = candidate_scales[k];
+            ends[count] = candidate_ends[k];
+            count++;
+        }
+    }
+}
+
+// The ground at a vertex of the fine walk (popup::scene::Ground::fine_sample): the height between
+// two fine nodes of its line (the scene's fine row `scene_row` for a row line, else the column
+// line between fine rows `north` and the next), a node of no weight not read, the ground factor
+// and the trees of the one arc-second tile there; 0 or a failure.
+__device__ u32 fine_walk_sample(const TerrainScene& sc, float east_m, float north_m, bool on_row, int scene_row, int north,
+                                GroundSample* out) {
+    const TerrainTile* tile = terrain_tile(sc, (i64)floorf(sc.tile_x_at_origin + east_m * sc.tiles_per_metre_east),
+                                           (i64)floorf(sc.tile_y_at_origin - north_m * sc.tiles_per_metre_north));
+    if (!tile || tile->state != TILE_READ || !tile->fine_offset) return FAILED_NO_TERRAIN;
+    float column = FINE_PER_NODE * (tile->column_at_origin + east_m * tile->columns_per_metre);
+    int r0, c0, r1, c1;
+    float f;
+    if (on_row) {
+        r0 = r1 = scene_row - FINE_PER_NODE * tile->row_shift;
+        float west = floorf(column);
+        c0 = (int)west;
+        c1 = c0 + 1;
+        f = column - west;
+    } else {
+        c0 = c1 = (int)rintf(column);
+        r0 = north - FINE_PER_NODE * tile->row_shift;
+        r1 = r0 + 1;
+        float y0 = row_line_north(sc, FINE_PER_NODE, north), y1 = row_line_north(sc, FINE_PER_NODE, north + 1);
+        f = clampf((y0 - north_m) / (y0 - y1), 0.0f, 1.0f);
+    }
+    int rows = FINE_PER_NODE * ((int)tile->rows - 1) + 1, columns = FINE_PER_NODE * ((int)tile->columns - 1) + 1;
+    const u16* fine = (const u16*)(sc.nodes + tile->fine_offset);
+    float h0 = 0.0f, h1 = 0.0f;
+    if (f < 1.0f) {
+        if (r0 < 0 || c0 < 0 || r0 >= rows || c0 >= columns) return FAILED_NO_TERRAIN;
+        u32 code = fine[(u64)r0 * columns + c0];
+        if (code == HEIGHT_MISSING) return FAILED_NO_TERRAIN;
+        h0 = -500.0f + (float)code * 0.2f;
+    }
+    if (f > 0.0f) {
+        if (r1 < 0 || c1 < 0 || r1 >= rows || c1 >= columns) return FAILED_NO_TERRAIN;
+        u32 code = fine[(u64)r1 * columns + c1];
+        if (code == HEIGHT_MISSING) return FAILED_NO_TERRAIN;
+        h1 = -500.0f + (float)code * 0.2f;
+    }
+    if (f <= 0.0f) h1 = h0;
+    if (f >= 1.0f) h0 = h1;
+    // The vertex's place in its 1" cell from its fine indices: on its own line exactly, along it
+    // by the fraction (a vertex on a cell's midline takes the CPU's trees).
+    float row_position = (on_row ? (float)r0 : (float)r0 + f) / (float)FINE_PER_NODE;
+    float column_position = (on_row ? (float)c0 + f : (float)c0) / (float)FINE_PER_NODE;
+    float cell_row = floorf(row_position), cell_column = floorf(column_position);
+    if (!cell_sample(sc, *tile, (u32)cell_row, row_position - cell_row, (u32)cell_column, column_position - cell_column, out)) {
+        return FAILED_NO_TERRAIN;
+    }
+    out->height_m = h0 + f * (h1 - h0);
+    return 0;
 }
 
 // One obstacles tile of the neighbourhood (popup::obstacles::SceneTile): where its file lies in the

@@ -61,6 +61,15 @@ fn band_constants() -> String {
     .concat()
 }
 
+/// The fine terrain's lattice and reach as device constants (kernels/scene.cuh).
+fn lattice_constants() -> String {
+    format!(
+        "#define FINE_PER_NODE {}\n#define FINE_ENDS_M {:?}f\n",
+        tiles::terrain_fine::FINE_PER_NODE,
+        physics::profile::FINE_ENDS_M as f32
+    )
+}
+
 /// A pair's failure (kernels/common.cuh): the host evaluates such a pair on the CPU.
 pub const FAILED_NOT_READ: u32 = 1;
 pub const FAILED_NO_TERRAIN: u32 = 2;
@@ -87,6 +96,9 @@ struct TerrainTile {
     nodes_offset: u64,
     canopy_offset: u64,
     rows_offset: u64,
+    /// Its fine terrain's u16 heights in the nodes' buffer; 0: none (the first tile's nodes come
+    /// first).
+    fine_offset: u64,
 }
 
 #[repr(C)]
@@ -106,7 +118,7 @@ struct TerrainScene {
     scene_row_count: u32,
     column_at_origin: f32,
     columns_per_metre: f32,
-    pad: u32,
+    has_fine: u32,
 }
 
 #[repr(C)]
@@ -219,7 +231,11 @@ impl Gpu {
         let multiprocessors =
             attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)? as u32;
         let arch: &'static str = Box::leak(format!("compute_{major}{minor}").into_boxed_str());
-        let source = format!("{COMMON}{}{PHYSICS}", band_constants());
+        let source = format!(
+            "{COMMON}{}{}{PHYSICS}",
+            band_constants(),
+            lattice_constants()
+        );
         let ptx = compile_ptx_with_opts(
             source,
             CompileOptions {
@@ -553,6 +569,15 @@ impl DeviceSquare {
                         let column_at_origin = frame.origin.x * columns_per_unit
                             - f64::from(180 * NODES_PER_DEGREE)
                             - f64::from(window.west_node);
+                        let nodes_offset = append_aligned(&mut nodes, terrain.node_bytes());
+                        let canopy_offset = append_aligned(&mut nodes, terrain.canopy_bytes());
+                        let fine_offset = match square.ground.fine_of(tile)? {
+                            Some(fine) => {
+                                let heights = fine.heights().map_err(|e| e.to_string())?;
+                                append_aligned(&mut nodes, &bytes_of(&heights))
+                            }
+                            None => 0,
+                        };
                         *slot = TerrainTile {
                             state: TILE_READ,
                             rows: window.rows,
@@ -560,9 +585,10 @@ impl DeviceSquare {
                             row_shift: (north_row - i64::from(window.north_node)) as i32,
                             column_at_origin: column_at_origin as f32,
                             columns_per_metre: (columns_per_unit / frame.east_m_per_unit) as f32,
-                            nodes_offset: append_aligned(&mut nodes, terrain.node_bytes()),
-                            canopy_offset: append_aligned(&mut nodes, terrain.canopy_bytes()),
+                            nodes_offset,
+                            canopy_offset,
                             rows_offset: row_north_m.len() as u64,
+                            fine_offset,
                         };
                         row_north_m.extend(
                             terrain
@@ -657,6 +683,7 @@ impl DeviceSquare {
             }
             bytes
         };
+        let has_fine = terrain_tiles.iter().any(|tile| tile.fine_offset != 0);
         let terrain_tiles = upload(bytes_of(&terrain_tiles))?;
         let nodes = upload(nonempty(nodes))?;
         let row_north_m = driver(device.htod_sync_copy(&if row_north_m.is_empty() {
@@ -695,7 +722,7 @@ impl DeviceSquare {
                     - f64::from(180 * NODES_PER_DEGREE)
                     - f64::from(centre_west_node)) as f32,
                 columns_per_metre: (columns_per_unit / frame.east_m_per_unit) as f32,
-                pad: 0,
+                has_fine: u32::from(has_fine),
             },
             obstacles: ObstacleScene {
                 origin_x: layout.origin[0] as f32,
