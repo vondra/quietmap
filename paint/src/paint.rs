@@ -7,7 +7,7 @@
 //! flights from the corners. A building's pixels take its loudest façade from the outdoor pixels
 //! along its outline, as a click inside it answers ([`crate::buildings`]).
 
-use crate::buildings::fill_buildings;
+use crate::buildings::{fill_buildings, own_reflection_db};
 use crate::exact::{Batch, LAYERS, Point, evaluate};
 use crate::flights::flights_at_corners;
 use crate::groups::{Four, Frame, frame, frame_weight, group_energy, meets};
@@ -362,7 +362,7 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
         (painted, flights.join())
     });
     let flights = flights.map_err(|_| "the flights panicked".to_string())??;
-    let mut cells = vec![[NO_LEVEL; LAYERS + 1]; n * n];
+    let mut energies: Vec<Option<[f64; LAYERS]>> = vec![None; n * n];
     let mut indoor = Vec::new();
     for pass in painted {
         let (outdoor, inside) = pass?;
@@ -374,10 +374,19 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
                 .map(|(di, dj)| flights[(j + dj) * corner_side + i + di]);
             let within = |t: usize| ((t % grid.block) as f64 + 0.5) / grid.block as f64;
             layers[Layer::Aircraft as usize] += bilinear(around, within(x), within(y));
-            cells[at] = cells_of(&layers);
+            energies[at] = Some(layers);
         }
     }
-    fill_buildings(&mut cells, n, &indoor);
+    fill_buildings(&mut energies, n, &indoor, &|at, footprint| {
+        own_reflection_db(
+            square,
+            metres((at % n) as f64 + 0.5, (at / n) as f64 + 0.5),
+            footprint,
+        )
+    })?;
+    let cells = (energies.iter())
+        .map(|layers| layers.as_ref().map_or([NO_LEVEL; LAYERS + 1], cells_of))
+        .collect();
     eprintln!(
         "qm-paint: lattice and corners {corners_s:.1} s ({corner_pairs} corner pairs), pixels {:.1} s",
         started.elapsed().as_secs_f64() - corners_s

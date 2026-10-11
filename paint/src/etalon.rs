@@ -3,7 +3,7 @@
 //! painter takes it, and the flights, a building's pixels at its loudest outdoor neighbour as the
 //! painter takes them; a painted map is scored against it cell by cell.
 
-use crate::buildings::fill_buildings;
+use crate::buildings::{fill_buildings, own_reflection_db};
 use crate::exact::{Batch, LAYERS, Point, evaluate};
 use crate::flights::aircraft_energy;
 use crate::lattice::Lattice;
@@ -33,7 +33,7 @@ pub fn etalon(
             y: f64::from(square.tile.y) + y / n as f64,
         })
     };
-    let mut cells = vec![[NO_LEVEL; LAYERS + 1]; n * n];
+    let mut pixel_layers: Vec<Option<[f64; LAYERS]>> = vec![None; n * n];
     let mut indoor = Vec::new();
     for first_row in (0..n).step_by(ETALON_PASS_ROWS) {
         let rows = first_row..(first_row + ETALON_PASS_ROWS).min(n);
@@ -70,7 +70,7 @@ pub fn etalon(
         for (&(k, index), energy) in pairs.iter().zip(energies) {
             ground[k as usize][square.candidates[index as usize].layer as usize] += energy;
         }
-        let painted: Vec<[u8; LAYERS + 1]> = (0..points.len())
+        let painted: Vec<[f64; LAYERS]> = (0..points.len())
             .into_par_iter()
             .map(|k| {
                 let point = &points[k];
@@ -79,13 +79,21 @@ pub fn etalon(
                     std::array::from_fn(|l| (ground[k][l] + quiet[l]) * point.reflection());
                 layers[Layer::Aircraft as usize] +=
                     aircraft_energy(square, point, &|_| 1.0, AIRCRAFT_REACH_M)?;
-                Ok(cells_of(&layers))
+                Ok(layers)
             })
             .collect::<Result<_, String>>()?;
-        for (at, out) in pixels_at.into_iter().zip(painted) {
-            cells[at] = out;
+        for (at, layers) in pixels_at.into_iter().zip(painted) {
+            pixel_layers[at] = Some(layers);
         }
     }
-    fill_buildings(&mut cells, n, &indoor);
-    Ok(cells)
+    fill_buildings(&mut pixel_layers, n, &indoor, &|at, footprint| {
+        own_reflection_db(
+            square,
+            metres((at % n) as f64 + 0.5, (at / n) as f64 + 0.5),
+            footprint,
+        )
+    })?;
+    Ok((pixel_layers.iter())
+        .map(|layers| layers.as_ref().map_or([NO_LEVEL; LAYERS + 1], cells_of))
+        .collect())
 }
