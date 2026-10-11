@@ -1,7 +1,8 @@
 // Where a contributor's traffic comes from, in words: counted or estimated per road vehicle class,
-// known, estimated or unknown per train category. Pure TypeScript, so the wording has
+// known, estimated or unknown per train category, and the dataset behind it. Pure TypeScript, so the wording has
 // dependency-free unit tests.
 import { fmtCount } from '../../utils/formatters.ts'
+import { DATASETS } from './datasets.ts'
 
 /** Prepared road traffic: effective vehicles/day per class plus the builder's estimated bitmask
  *  (light 1, medium 2, heavy 4, moto 8; bit set = estimate or prior, clear = observed count). */
@@ -79,4 +80,20 @@ export function railTrafficDescription(
     const periods = category.status === 0 ? '' : '\nDay / evening / night: ' + category.periods.map(railCount).join(' / ')
     return `${label}: ${railTrainSourceLine(category)}${periods}`
   }).join('\n\n')
+}
+
+const MEASUREMENTS: Record<string, string> = {
+  counted: 'counted',
+  proxy: 'modelled from other data',
+  derived: 'derived',
+}
+
+/** The dataset behind a record's traffic or trains (its source id), in words: "ŘSD Celostátní
+ *  sčítání dopravy, 2020, counted"; null for a class prior (0) or an id the catalogue lacks. */
+export function datasetLine(sourceId: number | null): string | null {
+  if (sourceId == null || sourceId === 0) return null
+  const entry = DATASETS[sourceId]
+  if (!entry) return null
+  const [name, year, measurement] = entry
+  return [name, year, MEASUREMENTS[measurement] ?? measurement].filter(Boolean).join(', ')
 }

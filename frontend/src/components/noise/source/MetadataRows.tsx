@@ -1,15 +1,16 @@
 // A contributor's facts as lines, only what its row and class line do not say: a road's speed,
-// traffic and a surface other than asphalt, a railway's speed and trains, a building's floors, height
-// and footprint or an area's size and cars, a site's area or a turbine's rated power, a ship cell's
-// vessels, an airport's movements; then the source's sound power. A layer without lines of its own
-// lists its fields by name, so a newly added layer shows up before it gets its own wording.
+// traffic (with the dataset behind it) and a surface other than asphalt, a railway's speed and
+// trains (with theirs), a building's floors, height and footprint or an area's size and cars, a
+// site's area or a turbine's rated power, a ship cell's vessels, an airport's movements; then the
+// source's sound power. A layer without lines of its own lists its fields by name, so a newly added
+// layer shows up before it gets its own wording.
 import type { ReactNode } from 'react'
 import type { Contributor, ContributorMetadata } from '../../../types/noise'
 import { fmt, fmtCompact, fmtCount, fmtInt, txtTable, type TableRow } from '../../../utils/formatters'
 import { HoverText } from '../../ui/info-tip'
 import { subtypeLabel } from '../labels'
 import { fieldText, lineRow } from '../shared'
-import { railTrafficDescription, railTrafficLabel, roadCategoryEstimated, type RailTraffic } from '../provenance'
+import { datasetLine, railTrafficDescription, railTrafficLabel, roadCategoryEstimated, type RailTraffic } from '../provenance'
 
 function num(m: ContributorMetadata, key: string): number | null {
   const value = m[key]
@@ -73,6 +74,7 @@ function RoadRows({ m }: { m: ContributorMetadata }) {
       ),
     '',
     'est.: estimated; the others counted',
+    ...(datasetLine(num(m, 'source_id')) ? ['', `Data: ${datasetLine(num(m, 'source_id'))}`] : []),
   ] as TableRow[], 22, 12)
   const surface = SURFACES[text(m, 'surface')]
   const correction = num(m, 'surface_corr_db') ?? 0
@@ -109,11 +111,16 @@ function RailwayRows({ m }: { m: ContributorMetadata }) {
   const traffic = railTraffic(m)
   // A level crossing's horn carries its soundings in the passenger slots.
   const horn = text(m, 'rail_type') === 'horn'
+  const data = [['Passenger trains', 'passenger_source_id'], ['Freight', 'freight_source_id']]
+    .map(([label, key]) => [label, datasetLine(num(m, key))])
+    .filter(([, line]) => line)
+    .map(([label, line]) => `${label}: ${line}`)
+  const description = [railTrafficDescription(traffic, horn), ...(data.length ? [`Data:\n${data.join('\n')}`] : [])]
   return (
     <>
       {speedLine(m)}
       {lineRow('Trains', (
-        <HoverText title={railTrafficDescription(traffic, horn)}>{railTrafficLabel(traffic, horn)}</HoverText>
+        <HoverText title={description.join('\n\n')}>{railTrafficLabel(traffic, horn)}</HoverText>
       ))}
     </>
   )

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  datasetLine,
   railTrafficDescription,
   railTrafficLabel,
   railTrainSourceLine,
@@ -52,4 +53,12 @@ test('the estimated bitmask marks per-category priors without touching values', 
   // ...and only an observed zero reads as "counted zero".
   assert.equal(roadCategoryLine('Moto', 0, false), 'Moto: 0/day — counted zero')
   assert.equal(roadCategoryLine('Moto', 0, true), 'Moto: 0/day — estimated')
+})
+
+test('a record names the dataset behind its traffic; a class prior or an unknown id names none', () => {
+  assert.equal(datasetLine(20), 'ŘSD Celostátní sčítání dopravy, 2020, counted')
+  assert.equal(datasetLine(30), 'Trips from the buildings along the street network (this map\'s model), 2026, derived')
+  assert.equal(datasetLine(0), null)
+  assert.equal(datasetLine(null), null)
+  assert.equal(datasetLine(65535), null)
 })
