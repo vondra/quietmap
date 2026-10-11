@@ -121,8 +121,9 @@ struct TerrainScene {
     column_at_origin: f32,
     columns_per_metre: f32,
     has_fine: u32,
-    /// The scene row on the equator, the one parallel on a tile's edge; -1 for none.
-    equator_row: i32,
+    /// The scene row on the equator, the one parallel on a tile's edge; -1 for none (i64: no
+    /// padding in the struct the card reads).
+    equator_row: i64,
 }
 
 #[repr(C)]
@@ -743,7 +744,7 @@ impl DeviceSquare {
                 columns_per_metre: (columns_per_unit / frame.east_m_per_unit) as f32,
                 has_fine: u32::from(has_fine),
                 equator_row: if (south_row..=north_row).contains(&0) {
-                    north_row as i32
+                    north_row
                 } else {
                     -1
                 },

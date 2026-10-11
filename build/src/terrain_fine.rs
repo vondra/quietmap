@@ -6,7 +6,7 @@
 //! the model's own datum cancels (`fetch/national-dem.sh` keeps its heights for this). Every node
 //! is computed from global lattice indices alone, so a node two tiles share gets one code.
 
-use crate::dev4::Square;
+use crate::dev4::{Square, Z9_PER_AXIS};
 use crate::output::write_tile;
 use crate::terrain::national::{Raster, distances_to_missing};
 use rayon::prelude::*;
@@ -178,11 +178,16 @@ fn check_raster_around(
     ];
     for (dy, &(south, north)) in rows.iter().enumerate() {
         for (dx, &(west, east)) in columns.iter().enumerate() {
+            // x wraps at the antimeridian; beyond a pole there is no square.
+            let y = i64::from(square.y) + dy as i64 - 1;
+            if (dx, dy) == (1, 1) || !(0..i64::from(Z9_PER_AXIS)).contains(&y) {
+                continue;
+            }
             let neighbour = Square {
-                x: (square.x + dx as u32).wrapping_sub(1),
-                y: (square.y + dy as u32).wrapping_sub(1),
+                x: (i64::from(square.x) + dx as i64 - 1).rem_euclid(i64::from(Z9_PER_AXIS)) as u32,
+                y: y as u32,
             };
-            if (dx, dy) == (1, 1) || has_raster(neighbour) {
+            if has_raster(neighbour) {
                 continue;
             }
             let held = (south..=north)
@@ -336,6 +341,10 @@ mod tests {
         assert!(check_raster_around(&raster(100.0), tiles, square, |_| false).is_err());
         assert!(check_raster_around(&raster(100.0), tiles, square, only_east).is_ok());
         assert!(check_raster_around(&raster(f32::NAN), tiles, square, |_| false).is_ok());
+        // At the antimeridian the east neighbour of square 511 is square 0.
+        let last = Square { x: 511, y: 20 };
+        let first = Square { x: 0, y: 20 };
+        assert!(check_raster_around(&raster(100.0), tiles, last, |other| other == first).is_ok());
     }
 
     /// Along the bank towards a void: one model's detail fades to nothing, and over another model

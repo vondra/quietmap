@@ -61,7 +61,7 @@ struct TerrainScene {
     float column_at_origin;
     float columns_per_metre;
     u32 has_fine;               // whether any tile has fine terrain
-    i32 equator_row;            // the scene row on the equator, -1 for none
+    i64 equator_row;            // the scene row on the equator, -1 for none
 };
 
 struct GroundSample {
