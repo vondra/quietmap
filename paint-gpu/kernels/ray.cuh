@@ -1,14 +1,15 @@
-// One source-receiver ray in f32, streamed: popup/src/scene.rs (the ground at every lattice line
-// the ray crosses, walked in scene.cuh), physics/src/ray.rs (the vertical path of terrain, roofs and
-// obstacle tops, and its transfer) and physics/src/foliage.rs, without storing the ray. Terrain
-// samples and wall crossings arrive in order of distance; each stretch of the path is added at once
-// to the moments the mean planes need, every candidate at once to both states' bands
-// (rubber_band.rs: a monotone chain of the states' rays), a footprint's crossings pair into a roof
-// as they arrive, and each stretch adds its metres in the crowns. The CPU keeps the same path in
-// arrays and sorts; the answer is the same.
+// One source-receiver ray in f32, in two passes: popup/src/scene.rs (the ground at every lattice
+// line the ray crosses, walked in scene.cuh into a per-thread buffer), then physics/src/ray.rs (the
+// vertical path of terrain, roofs and obstacle tops, and its transfer) and physics/src/foliage.rs
+// streamed over it. Terrain samples and wall crossings arrive in order of distance; each stretch of
+// the path is added at once to the moments the mean planes need, every candidate at once to both
+// states' bands (rubber_band.rs: a monotone chain of the states' rays), a footprint's crossings
+// pair into a roof as they arrive, and each stretch adds its metres in the crowns. The CPU keeps the
+// same path in arrays and sorts; the answer is the same.
 
 // Per-thread capacities; a ray needing more fails with FAILED_CAPACITY and goes to the CPU.
-#define RAY_SAMPLES 2048     // terrain vertices a ray keeps (a 12 km diagonal at 60 N crosses ~1,200 lines)
+// Terrain vertices a ray keeps: 12 km east-west crosses ~1,200 lattice lines at 71 N, 2,048 at 79 N.
+#define RAY_SAMPLES 2048
 #define HULL_CAPACITY 40     // points of one state's hull (dev4's oracle rays needed at most 21)
 #define OPEN_ROOFS 12        // footprints the ray is inside at once
 #define RECENT_CROSSINGS 8   // crossings kept to drop one found twice
@@ -60,7 +61,6 @@ struct KeptCrossing {
 
 // Everything a ray carries while it streams.
 struct RayStream {
-    const TerrainScene* ground;
     float receiver_x, receiver_y;    // frame metres
     float offset_x, offset_y;        // source - receiver
     u64 receiver_footprint;          // the receiver's building: its walls do not screen it
@@ -605,7 +605,6 @@ __device__ __noinline__ u32 stream_ray(const ObstacleScene& obstacles, float sx,
 // passes: the terrain's samples, then the stream over them.
 __device__ u32 ray_transfer(const TerrainScene& ground, const ObstacleScene& obstacles, float sx, float sy, float rx, float ry,
                             u64 receiver_footprint, bool obstacles_on_ray, const RayEnds& ends, RayStream& s, Transfer* transfer) {
-    s.ground = &ground;
     s.receiver_x = rx;
     s.receiver_y = ry;
     s.offset_x = sx - rx;

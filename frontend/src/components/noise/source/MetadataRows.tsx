@@ -10,7 +10,7 @@ import { fmt, fmtCompact, fmtCount, fmtInt, txtTable, type TableRow } from '../.
 import { HoverText } from '../../ui/info-tip'
 import { subtypeLabel } from '../labels'
 import { fieldText, lineRow } from '../shared'
-import { datasetLine, railTrafficDescription, railTrafficLabel, roadCategoryEstimated, type RailTraffic } from '../provenance'
+import { datasetLine, railDatasetLines, railTrafficDescription, railTrafficLabel, roadCategoryEstimated, type RailTraffic } from '../provenance'
 
 function num(m: ContributorMetadata, key: string): number | null {
   const value = m[key]
@@ -65,6 +65,7 @@ function RoadRows({ m }: { m: ContributorMetadata }) {
   const crossSection = num(m, 'cross_section_aadt') ?? 0
   // The headline is the whole road; the classes below are this carriageway's.
   const wholeRoad = crossSection > 0
+  const dataset = datasetLine(num(m, 'source_id'))
   const trafficText = txtTable([
     ...(wholeRoad ? [['Whole road, both ways', `${fmtInt(crossSection)}/day`] as [string, string]] : []),
     'This carriageway:',
@@ -74,7 +75,7 @@ function RoadRows({ m }: { m: ContributorMetadata }) {
       ),
     '',
     'est.: estimated; the others counted',
-    ...(datasetLine(num(m, 'source_id')) ? ['', `Data: ${datasetLine(num(m, 'source_id'))}`] : []),
+    ...(dataset ? ['', `Data: ${dataset}`] : []),
   ] as TableRow[], 22, 12)
   const surface = SURFACES[text(m, 'surface')]
   const correction = num(m, 'surface_corr_db') ?? 0
@@ -111,10 +112,7 @@ function RailwayRows({ m }: { m: ContributorMetadata }) {
   const traffic = railTraffic(m)
   // A level crossing's horn carries its soundings in the passenger slots.
   const horn = text(m, 'rail_type') === 'horn'
-  const data = [['Passenger trains', 'passenger_source_id'], ['Freight', 'freight_source_id']]
-    .map(([label, key]) => [label, datasetLine(num(m, key))])
-    .filter(([, line]) => line)
-    .map(([label, line]) => `${label}: ${line}`)
+  const data = railDatasetLines(num(m, 'passenger_source_id'), num(m, 'freight_source_id'), horn)
   const description = [railTrafficDescription(traffic, horn), ...(data.length ? [`Data:\n${data.join('\n')}`] : [])]
   return (
     <>

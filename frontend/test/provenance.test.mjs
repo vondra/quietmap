@@ -4,6 +4,7 @@ import test from 'node:test'
 
 import {
   datasetLine,
+  railDatasetLines,
   railTrafficDescription,
   railTrafficLabel,
   railTrainSourceLine,
@@ -62,3 +63,9 @@ test('a record names the dataset behind its traffic; a class prior or an unknown
   assert.equal(datasetLine(null), null)
   assert.equal(datasetLine(65535), null)
 })
+
+test('a level crossing names the dataset of its soundings, never passenger trains or freight', () => {
+  assert.deepEqual(railDatasetLines(111, 20, true), ['Soundings: FRA Highway-Rail Crossing Inventory (Form 6180.71), 2026'])
+  assert.deepEqual(railDatasetLines(20, 0, false), ['Passenger trains: ŘSD Celostátní sčítání dopravy, 2020, counted'])
+})
+

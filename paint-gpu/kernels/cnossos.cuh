@@ -150,7 +150,7 @@ __device__ float favourable_floor_db(const EquivalentGeometry& geometry, float f
 }
 
 // ground::ground_attenuation_bands up to its band loop: the heights and impedance of one side (or
-// the direct path) in one state, ready for any band; a hard path (G = 0) is its floor in every band.
+// the direct path) in one state, ready for any band; a hard path (G under 0.001) is its floor in every band.
 struct GroundTerm {
     float dp;
     float zs;
@@ -165,8 +165,8 @@ __device__ GroundTerm ground_term(const EquivalentGeometry& geometry, GroundFact
     term.dp = fmaxf(geometry.projected_distance_m, 1e-6f);
     term.zs = geometry.source_side_height_m;
     term.zr = geometry.receiver_side_height_m;
-    term.gw13 = powf(fmaxf(factors.impedance, 0.0f), 1.3f);
     term.hard = factors.path < HARD_GROUND_BELOW;
+    term.gw13 = term.hard ? 0.0f : powf(fmaxf(factors.impedance, 0.0f), 1.3f);
     if (state == HOMOGENEOUS) {
         term.floor = term.hard ? -3.0f : -3.0f * (1.0f - factors.floor);
         return term;

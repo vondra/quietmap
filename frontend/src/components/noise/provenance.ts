@@ -97,3 +97,19 @@ export function datasetLine(sourceId: number | null): string | null {
   const [name, year, measurement] = entry
   return [name, year, MEASUREMENTS[measurement] ?? measurement].filter(Boolean).join(', ')
 }
+
+/** The datasets behind a railway's trains, labelled as its description labels them: a horn's
+ *  soundings (held in the passenger slot) alone, else passenger trains and freight. */
+export function railDatasetLines(
+  passengerSourceId: number | null,
+  freightSourceId: number | null,
+  soundings = false,
+): string[] {
+  const slots: Array<[string, number | null]> = soundings
+    ? [['Soundings', passengerSourceId]]
+    : [['Passenger trains', passengerSourceId], ['Freight', freightSourceId]]
+  return slots.flatMap(([label, id]) => {
+    const line = datasetLine(id)
+    return line ? [`${label}: ${line}`] : []
+  })
+}
