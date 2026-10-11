@@ -35,16 +35,6 @@ __device__ __forceinline__ void add_stretch(Moments& m, float a, float b, float 
     m.g += 0.5f * (ga + gb) * width;
 }
 
-// Moments of a range [x_t, x_t + width] taken about (x_t, z_t) re-taken about (x_p, z_p).
-__device__ __forceinline__ Moments moments_about(const Moments& m, float width, float x_t, float z_t, float x_p, float z_p) {
-    float dx = x_t - x_p, dz = z_t - z_p;
-    Moments r;
-    r.z = m.z + dz * width;
-    r.xz = m.xz + dz * 0.5f * width * width + dx * m.z + dx * dz * width;
-    r.g = m.g;
-    return r;
-}
-
 // mean_plane::fit_mean_plane of the range [start, start + length] from its moments about
 // (start, z_r): the normal equations of the continuous fit; a range under a millimetre is a
 // level plane through z_r (the Rust's ground at the range start).
@@ -296,18 +286,14 @@ __device__ __forceinline__ GroundFactors source_side_factors(int state, float pa
 }
 
 // One diffraction point of a state as the ray's stream left it (rubber_band.rs diffraction_path's
-// points, with what diffraction.rs needs of the path around it): the point, its height lowered by
-// the state's ray above the chord (the hull's ordinate), the terrain under it, and the moments of
-// the path before it (about the source's ground) and after it up to the next point of the hull (about
-// itself; the hull's last point carries everything to the receiver).
+// points, with what diffraction.rs needs of the ground under it): the point, its height lowered by
+// the state's ray above the chord (the hull's ordinate), and the terrain under it.
 struct HullEntry {
     float x;
     float z;
     float lowered;
     float terrain_z;
     float terrain_g;
-    Moments before;
-    Moments after;
 };
 
 // The state's diffraction points read as plane points by state_ray_path_difference.
@@ -349,8 +335,10 @@ struct StateTerm {
     bool receiver_below;
 };
 
+// `source_side`: the path's moments from the source to the first point about (0, the source's
+// ground); `receiver_side`: from the last point to the receiver about the last point's terrain.
 __device__ void state_term(const StreamedPath& path, const StateRay& ray, const HullEntry* points, int count, bool blocked,
-                           StateTerm* term) {
+                           const Moments& source_moments, const Moments& receiver_moments, StateTerm* term) {
     int state = ray.state;
     PlanePoint source = path.source, receiver = path.receiver;
     float length = receiver.x;
@@ -372,17 +360,17 @@ __device__ void state_term(const StreamedPath& path, const StateRay& ray, const 
     term->span = 0.0f;
     for (int index = 0; index + 1 < count; index++) term->span += state_ray_length(ray, at[index], at[index + 1]);
     float receiver_side_length = length - last.x;
-    EquivalentGeometry source_side = equivalent_geometry_over(plane_of_moments(first.before, 0.0f, first.x, path.source_ground_z), source, at[0]);
-    EquivalentGeometry receiver_side = equivalent_geometry_over(plane_of_moments(last.after, last.x, receiver_side_length, last.terrain_z), at[count - 1], receiver);
+    EquivalentGeometry source_side = equivalent_geometry_over(plane_of_moments(source_moments, 0.0f, first.x, path.source_ground_z), source, at[0]);
+    EquivalentGeometry receiver_side = equivalent_geometry_over(plane_of_moments(receiver_moments, last.x, receiver_side_length, last.terrain_z), at[count - 1], receiver);
     PlanePoint source_image = plane_mirror(source_side.plane, source);
     PlanePoint receiver_image = plane_mirror(receiver_side.plane, receiver);
     term->delta_source_image = state_ray_path_difference(ray, source_image, at, count, receiver);
     term->delta_receiver_image = state_ray_path_difference(ray, source, at, count, receiver_image);
     term->rayleigh_star = blocked ? 0.0f : state_ray_path_difference(ray, source_image, at, count, receiver_image);
-    float source_side_ground = mean_ground_of_moments(first.before, first.x, path.source_ground_g);
+    float source_side_ground = mean_ground_of_moments(source_moments, first.x, path.source_ground_g);
     float source_side_near = ground_factor_near_source(source_side, source_side_ground, path.source_ground_factor);
     term->source_side = ground_term(source_side, source_side_factors(state, source_side_ground, source_side_near), state);
-    float receiver_side_ground = mean_ground_of_moments(last.after, receiver_side_length, last.terrain_g);
+    float receiver_side_ground = mean_ground_of_moments(receiver_moments, receiver_side_length, last.terrain_g);
     GroundFactors receiver_factors;
     receiver_factors.path = receiver_side_ground;
     receiver_factors.impedance = receiver_side_ground;

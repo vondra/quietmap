@@ -543,11 +543,10 @@ __device__ u32 walk_crossings(const ObstacleScene& scene, float from_x, float fr
         }
         if (last_cell) break;
         t_enter = t_exit;
-        int axis;
-        if (cell[0] == last[0]) axis = 1;
-        else if (cell[1] == last[1] || t_max[0] < t_max[1]) axis = 0;
-        else axis = 1;
-        cell[axis] += step[axis];
+        // The axis chosen by a branch, not as an index: an array indexed at run time lives in local
+        // memory.
+        if (cell[0] != last[0] && (cell[1] == last[1] || t_max[0] < t_max[1])) cell[0] += step[0];
+        else cell[1] += step[1];
     }
     return 0;
 }

@@ -1,17 +1,19 @@
 // One source-receiver ray in f32, in two passes: popup/src/scene.rs (the ground at every lattice
-// line the ray crosses, walked in scene.cuh into a per-thread buffer), then physics/src/ray.rs (the
-// vertical path of terrain, roofs and obstacle tops, and its transfer) and physics/src/foliage.rs
-// streamed over it. Terrain samples and wall crossings arrive in order of distance; each stretch of
-// the path is added at once to the moments the mean planes need, every candidate at once to both
-// states' bands (rubber_band.rs: a monotone chain of the states' rays), a footprint's crossings
-// pair into a roof as they arrive, and each stretch adds its metres in the crowns. The CPU keeps the
-// same path in arrays and sorts; the answer is the same.
+// line the ray crosses, walked in scene.cuh into a per-thread buffer with the terrain's moments from
+// the source and each stretch's metres in the crowns), then physics/src/ray.rs (the vertical path of
+// terrain, roofs and obstacle tops, and its transfer) over it. Terrain samples and wall crossings
+// arrive in order of distance: every candidate at once to both states' bands (rubber_band.rs: a
+// monotone chain of the states' rays), a footprint's crossings pair into a roof kept with its rise;
+// the mean planes' moments are taken once the hulls are known, from the source out of the prefixes
+// and to the receiver summed. The CPU keeps the same path in arrays and sorts; the answer is the
+// same.
 
 // Per-thread capacities; a ray needing more fails with FAILED_CAPACITY and goes to the CPU.
 // Terrain vertices a ray keeps: 12 km east-west crosses ~1,200 lattice lines at 71 N, 2,048 at 79 N.
 #define RAY_SAMPLES 2048
 #define HULL_CAPACITY 40     // points of one state's hull (dev4's oracle rays needed at most 21)
 #define OPEN_ROOFS 12        // footprints the ray is inside at once
+#define ROOFS 512            // roofs one ray passes under
 #define RECENT_CROSSINGS 8   // crossings kept to drop one found twice
 #define CONTAINING 8         // footprints a building's source stands in, its own among them
 #define LINE_NODES 64        // quadrature nodes of one line piece (five buckets, each wide one split at its edges)
@@ -31,16 +33,20 @@ struct RayEnds {
 };
 
 // A terrain sample of the ray: distance from the source, altitude (flattened to the source's
-// ground within its platform), ground factor, whether it may diffract (ray::crests_of) and, if so,
-// the next sample that may; the moments of the path from the source to it about the whole path's
-// origin (0, the source's ground), so a run of samples that may not diffract streams at once.
+// ground within its platform), ground factor, and the next sample that may diffract
+// (ray::crests_of) after one that may (-1: none).
 struct TerrainPoint {
     float x;
     float z;
     float g;
-    bool crest;
     int next_crest;
-    Moments prefix;
+};
+
+// A roof the ray passes under, clipped where the roofs closed before it end: its walls'
+// distances and tops, and its rise over the terrain's moments about (x0, 0).
+struct Roof {
+    float x0, top0, x1, top1;
+    Moments rise;
 };
 
 // One state's hull (rubber_band.rs diffraction_path): the source first, the candidates that
@@ -83,20 +89,20 @@ struct RayStream {
     float platform_half_width_m;
     float source_stand_z;            // the ground the source stands on: a deck, else the terrain
     StreamedPath path;
-    // The terrain vertices, all of them: the source, every lattice line crossed, the receiver.
+    // The terrain vertices, all of them: the source, every lattice line crossed, the receiver; and
+    // the terrain's moments from the source to each about the whole path's origin (0, the source's
+    // ground), which every range from the source is read from.
     int count;
     TerrainPoint samples[RAY_SAMPLES];
-    // The open group of the middle's samples: its size and its highest sample; the last sample
-    // that may diffract.
-    int group_size;
-    int group_best;
-    int last_crest;
-    // The path is streamed over [0, streamed_to]; `segment` is the sample ending the terrain
-    // stretch streamed_to lies in, `below` and `above` its two ends.
-    float streamed_to;
+    Moments prefix[RAY_SAMPLES];
+    // The next sample that may diffract, not yet a candidate; the sample ending the stretch of the
+    // last crossing.
+    int next_crest;
     int segment;
-    TerrainPoint below, above;
-    float covered_to;                // where the roofs closed so far end
+    // The roofs closed so far, in order of distance, and where they end.
+    Roof roofs[ROOFS];
+    int roof_count;
+    float covered_to;
     OpenRoof open[OPEN_ROOFS];
     int open_count;
     // Roofs closed by crossings at one t, applied together in the order the CPU sorts them.
@@ -109,11 +115,8 @@ struct RayStream {
     int recent_count;
     float last_x;
     StateStream states[2];
-    // The cover-weighted metres of each state's ray inside the crowns so far, and the last sample
-    // with its distance from the source (physics/src/foliage.rs depth_m).
+    // The cover-weighted metres of each state's ray inside the crowns (the first pass's).
     float foliage_m[2];
-    GroundSample trees_behind;
-    float trees_behind_x;
 };
 
 // The tree cover where a ray at `altitude` runs inside the crowns over `ground`, else 0.
@@ -122,24 +125,31 @@ __device__ __forceinline__ float cover_inside_crowns(float altitude, const Groun
     return above > 0.0f && above <= ground.canopy_m ? ground.forest_cover : 0.0f;
 }
 
+// The crowns the states' rays have passed so far: the last sample's ground and distance from the
+// source, and each state's cover-weighted metres inside them (physics/src/foliage.rs depth_m).
+struct Crowns {
+    GroundSample behind;
+    float behind_x;
+    float metres[2];
+};
+
 // Each state's foliage depth over the stretch from the last sample to `ground` at `x`: the cover
 // where the state's ray runs inside the crowns, linear between the samples, times the stretch's
 // length along the ray.
-__device__ void add_foliage(RayStream& s, float x, const GroundSample& ground) {
-    const GroundSample& behind = s.trees_behind;
+__device__ __forceinline__ void add_foliage(const PlanePoint& source, const PlanePoint& receiver, const StateRay* rays, Crowns& crowns,
+                                            float x, const GroundSample& ground) {
+    const GroundSample& behind = crowns.behind;
     if (behind.forest_cover > 0.0f || ground.forest_cover > 0.0f) {
-        PlanePoint source = s.path.source, receiver = s.path.receiver;
         for (int state = 0; state < 2; state++) {
-            const StateRay& ray = s.states[state].ray;
-            float za = chord_altitude(source, receiver, s.trees_behind_x)
-                + ray_height_above_chord(ray, source, receiver, s.trees_behind_x);
-            float zb = chord_altitude(source, receiver, x) + ray_height_above_chord(ray, source, receiver, x);
+            float za = chord_altitude(source, receiver, crowns.behind_x)
+                + ray_height_above_chord(rays[state], source, receiver, crowns.behind_x);
+            float zb = chord_altitude(source, receiver, x) + ray_height_above_chord(rays[state], source, receiver, x);
             float cover = cover_inside_crowns(za, behind) + cover_inside_crowns(zb, ground);
-            s.foliage_m[state] += 0.5f * cover * hypotf(x - s.trees_behind_x, zb - za);
+            crowns.metres[state] += 0.5f * cover * hypotf(x - crowns.behind_x, zb - za);
         }
     }
-    s.trees_behind = ground;
-    s.trees_behind_x = x;
+    crowns.behind = ground;
+    crowns.behind_x = x;
 }
 
 // Terrain vertex k of the ray, as `sample_ray` wrote it.
@@ -149,33 +159,43 @@ __device__ __forceinline__ u32 ray_sample(RayStream& s, int k, TerrainPoint* out
     return 0;
 }
 
-// Sample `k` may diffract: it follows the last that may in their chain.
-__device__ __forceinline__ void mark_crest(RayStream& s, int k) {
-    s.samples[k].crest = true;
-    s.samples[s.last_crest].next_crest = k;
-    s.last_crest = k;
-}
-
 // The first of a ray's two passes: its terrain vertices into `s.samples` (the source, every lattice
-// line crossed, the receiver), each state's foliage with them. Out of line, once a ray: the walk's
-// state is not live while the second pass streams the hulls, so the kernel's registers are the
-// larger pass's (above 168 the card keeps 8 warps an SM; evidence 2026-10-11, sampling).
+// line crossed, the receiver) with the terrain's moments from the source, each state's foliage with
+// them. Out of line, once a ray: the walk's state is not live while the second pass streams the
+// hulls, so the kernel's registers are the larger pass's (above 168 the card keeps 8 warps an SM;
+// evidence 2026-10-11, sampling). The pass's own state (the previous vertex, the moments so far,
+// the open group of the middle's samples, the last sample that may diffract, the crowns) stays in
+// registers: the ray's buffer lives in local memory, which half the card's time waits on.
 __device__ __noinline__ u32 sample_ray(const TerrainScene& ground, float sx, float sy, const RayEnds& ends, RayStream& s) {
+    GroundSample sample;
+    u32 failed = ground_at(ground, s.receiver_x + s.offset_x, s.receiver_y + s.offset_y, &sample);
+    if (failed) return failed;
+    // The source stands on its deck, else on the terrain; the states' rays from there.
+    float length = s.length, platform = s.platform_half_width_m;
+    float stand = isnan(ends.source_ground_m) ? sample.height_m : ends.source_ground_m;
+    float ground_z = fminf(sample.height_m, stand);
+    s.source_stand_z = stand;
+    s.path.source_ground_z = ground_z;
+    s.path.source_ground_g = sample.ground_factor;
+    PlanePoint source = {0.0f, stand + ends.source_height_m}, receiver = {length, ends.receiver_altitude_m};
+    s.path.source = source;
+    s.path.receiver = receiver;
+    StateRay rays[2];
+    for (int state = 0; state < 2; state++) rays[state] = s.states[state].ray = state_ray_between(state, source, receiver);
+    Crowns crowns = {sample, 0.0f, {0.0f, 0.0f}};
+    TerrainPoint previous = {0.0f, 0.0f < platform ? fminf(sample.height_m, stand) : sample.height_m, sample.ground_factor, -1};
+    Moments prefix = {0.0f, 0.0f, 0.0f};
+    s.samples[0] = previous;
+    s.prefix[0] = prefix;
+    int count = 1, group_size = 0, group_best = 0, last_crest = 0;
+    float group_best_z = 0.0f;
     LatticeWalk walk;
     walk_start(ground, sx, sy, s.receiver_x, s.receiver_y, &walk);
-    s.count = 0;
-    s.group_size = 0;
-    s.last_crest = 0;
     for (bool last = false; !last;) {
-        GroundSample sample;
-        u32 failed;
         float t;
         bool on_row;
         int row;
-        if (s.count == 0) {
-            t = 0.0f;
-            failed = ground_at(ground, s.receiver_x + s.offset_x, s.receiver_y + s.offset_y, &sample);
-        } else if (walk_next(ground, &walk, &t, &on_row, &row)) {
+        if (walk_next(ground, &walk, &t, &on_row, &row)) {
             float keep = 1.0f - t;
             failed = walk_sample(ground, s.receiver_x + s.offset_x * keep, s.receiver_y + s.offset_y * keep, on_row, row,
                                  walk.north, &sample);
@@ -185,160 +205,146 @@ __device__ __noinline__ u32 sample_ray(const TerrainScene& ground, float sx, flo
             failed = ground_at(ground, s.receiver_x, s.receiver_y, &sample);
         }
         if (failed) return failed;
-        if (s.count == RAY_SAMPLES) return FAILED_CAPACITY;
+        if (count == RAY_SAMPLES) return FAILED_CAPACITY;
         TerrainPoint point;
-        point.x = t * s.length;
+        point.x = t * length;
+        point.z = point.x < platform ? fminf(sample.height_m, stand) : sample.height_m;
         point.g = sample.ground_factor;
-        if (s.count == 0) {
-            // The source stands on its deck, else on the terrain; the states' rays from there.
-            s.source_stand_z = isnan(ends.source_ground_m) ? sample.height_m : ends.source_ground_m;
-            s.path.source_ground_z = fminf(sample.height_m, s.source_stand_z);
-            s.path.source_ground_g = sample.ground_factor;
-            s.path.source.x = 0.0f;
-            s.path.source.z = s.source_stand_z + ends.source_height_m;
-            s.path.receiver.x = s.length;
-            s.path.receiver.z = ends.receiver_altitude_m;
-            for (int state = 0; state < 2; state++) {
-                s.states[state].ray = state_ray_between(state, s.path.source, s.path.receiver);
-                s.foliage_m[state] = 0.0f;
-            }
-            s.trees_behind = sample;
-            s.trees_behind_x = 0.0f;
-        } else {
-            add_foliage(s, point.x, sample);
-        }
-        point.z = point.x < s.platform_half_width_m ? fminf(sample.height_m, s.source_stand_z) : sample.height_m;
         point.next_crest = -1;
-        if (s.count == 0) {
-            point.prefix.z = point.prefix.xz = point.prefix.g = 0.0f;
-        } else {
-            const TerrainPoint& previous = s.samples[s.count - 1];
-            point.prefix = previous.prefix;
-            add_stretch(point.prefix, previous.x, point.x, previous.z, point.z, previous.g, point.g, 0.0f,
-                        s.path.source_ground_z);
+        add_foliage(source, receiver, rays, crowns, point.x, sample);
+        add_stretch(prefix, previous.x, point.x, previous.z, point.z, previous.g, point.g, 0.0f, ground_z);
+        // A sample that may diffract follows the last that may in their chain.
+        bool middle = point.x > CREST_ENDS_M && point.x < length - CREST_ENDS_M;
+        if (!middle && group_size > 0) {
+            s.samples[last_crest].next_crest = group_best;
+            last_crest = group_best;
+            group_size = 0;
         }
-        bool middle = point.x > CREST_ENDS_M && point.x < s.length - CREST_ENDS_M;
-        point.crest = false;
-        if (!middle && s.group_size > 0) {
-            mark_crest(s, s.group_best);
-            s.group_size = 0;
-        }
-        s.samples[s.count] = point;
+        s.samples[count] = point;
+        s.prefix[count] = prefix;
         if (middle) {
-            if (s.group_size == 0 || point.z > s.samples[s.group_best].z) s.group_best = s.count;
-            if (++s.group_size == CREST_GROUP) {
-                mark_crest(s, s.group_best);
-                s.group_size = 0;
+            if (group_size == 0 || point.z > group_best_z) {
+                group_best = count;
+                group_best_z = point.z;
             }
-        } else if (s.count == 0) {
-            s.samples[0].crest = true;
+            if (++group_size == CREST_GROUP) {
+                s.samples[last_crest].next_crest = group_best;
+                last_crest = group_best;
+                group_size = 0;
+            }
         } else {
-            mark_crest(s, s.count);
+            s.samples[last_crest].next_crest = count;
+            last_crest = count;
         }
-        s.count++;
+        previous = point;
+        count++;
     }
+    s.count = count;
+    s.foliage_m[0] = crowns.metres[0];
+    s.foliage_m[1] = crowns.metres[1];
     return 0;
 }
 
-// ray::interpolate over the terrain samples at `x` (with its ground factor), from the samples still
-// kept; `hint` is a sample index near x.
-__device__ u32 ray_terrain_at(RayStream& s, float x, int hint, float* z, float* g) {
-    TerrainPoint below = s.below, above = s.above;
-    if (below.x <= x && (x < above.x || s.segment == s.count - 1)) {
-        float f = above.x > below.x ? clampf((x - below.x) / (above.x - below.x), 0.0f, 1.0f) : 0.0f;
-        *z = below.z + f * (above.z - below.z);
-        *g = below.g + f * (above.g - below.g);
-        return 0;
-    }
-    int upper = max(1, min(hint, s.count - 1));
-    u32 failed;
-    while (true) {
-        if ((failed = ray_sample(s, upper - 1, &below))) return failed;
-        if (upper > 1 && below.x > x) { upper--; continue; }
-        if ((failed = ray_sample(s, upper, &above))) return failed;
-        if (upper < s.count - 1 && above.x <= x) { upper++; continue; }
-        break;
-    }
-    float f = above.x > below.x ? clampf((x - below.x) / (above.x - below.x), 0.0f, 1.0f) : 0.0f;
-    *z = below.z + f * (above.z - below.z);
-    *g = below.g + f * (above.g - below.g);
-    return 0;
+// ray::interpolate on the stretch from `lo` to `hi` at `x` (with its ground factor).
+__device__ __forceinline__ void terrain_on(const TerrainPoint& lo, const TerrainPoint& hi, float x, float* z, float* g) {
+    float f = hi.x > lo.x ? clampf((x - lo.x) / (hi.x - lo.x), 0.0f, 1.0f) : 0.0f;
+    *z = lo.z + f * (hi.z - lo.z);
+    *g = lo.g + f * (hi.g - lo.g);
 }
 
-// A linear stretch [a, b] of the path into a hull entry's sums: its part after the point (up to
-// `end`) about the point's own terrain, and, for a roof's rise, its part before the point.
-__device__ __forceinline__ void entry_stretch(HullEntry& e, float a, float b, float end, float za, float zb, float ga, float gb, bool rise) {
-    float lo = fmaxf(a, e.x), hi = fminf(b, end);
-    if (hi > lo) {
-        float f_lo = (lo - a) / (b - a), f_hi = (hi - a) / (b - a);
-        add_stretch(e.after, lo, hi, za + f_lo * (zb - za), za + f_hi * (zb - za), ga + f_lo * (gb - ga), ga + f_hi * (gb - ga),
-                    e.x, rise ? 0.0f : e.terrain_z);
-    }
-    if (rise && e.x > a) {
-        float hi_before = fminf(b, e.x);
-        float f_hi = (hi_before - a) / (b - a);
-        add_stretch(e.before, a, hi_before, za, za + f_hi * (zb - za), ga, ga + f_hi * (gb - ga), 0.0f, 0.0f);
-    }
+// The terrain at `x` (ray::interpolate): `segment` moves to the sample ending the stretch that
+// holds x (crossings arrive in order of distance, so it moves ahead).
+__device__ void ray_terrain_at(RayStream& s, float x, float* z, float* g) {
+    int k = s.segment;
+    while (k > 1 && s.samples[k - 1].x > x) k--;
+    while (k < s.count - 1 && s.samples[k].x <= x) k++;
+    s.segment = k;
+    terrain_on(s.samples[k - 1], s.samples[k], x, z, g);
 }
 
-// A stretch [a, b] of the path, linear from (za, ga) to (zb, gb), into every sum it belongs to: the
-// whole path, the hull points whose stretch it falls in, and each state's best point. A terrain
-// stretch lies after every point streamed (only the hull's top takes it); a roof's `rise` over its
-// terrain comes when the roof closes and is shared by the points it spans, before and after them.
-__device__ void stream_stretch(RayStream& s, float a, float b, float za, float zb, float ga, float gb, bool rise) {
-    if (b <= a) return;
-    add_stretch(s.path.whole, a, b, za, zb, ga, gb, 0.0f, rise ? 0.0f : s.path.source_ground_z);
-    for (int state = 0; state < 2; state++) {
-        StateStream& st = s.states[state];
-        for (int i = st.depth - 1; i >= 1; i--) {
-            float end = i == st.depth - 1 ? QM_INFINITY : st.hull[i + 1].x;
-            if (end <= a) break;
-            entry_stretch(st.hull[i], a, b, end, za, zb, ga, gb, rise);
-            if (!rise) break;
-        }
-        if (st.has_best && !st.blocked) entry_stretch(st.best, a, b, QM_INFINITY, za, zb, ga, gb, rise);
+// The sample ending the stretch that holds `x` (1 to the last).
+__device__ int stretch_holding(const RayStream& s, float x) {
+    int lo = 1, hi = s.count - 1;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (s.samples[mid].x <= x) lo = mid + 1;
+        else hi = mid;
     }
+    return lo;
 }
 
-// The moments of the path over [samples j, samples k] about (x_p, z_p), from the prefix sums about
-// (0, the source's ground z0).
-__device__ __forceinline__ Moments run_about(const RayStream& s, int j, int k, float x_p, float z_p) {
-    const TerrainPoint &a = s.samples[j], &b = s.samples[k];
-    float z0 = s.path.source_ground_z, width = b.x - a.x;
-    Moments run;
-    run.z = b.prefix.z - a.prefix.z;
-    run.xz = b.prefix.xz - a.prefix.xz;
-    run.g = b.prefix.g - a.prefix.g;
-    Moments r;
-    r.z = run.z + (z0 - z_p) * width;
-    r.xz = run.xz - x_p * run.z + (z0 - z_p) * width * (0.5f * (a.x + b.x) - x_p);
-    r.g = run.g;
+// The rise of `roof` over the terrain on [a, b] within it, its moments about (x_r, 0): stretch by
+// stretch of the terrain under it, a roof hard (its ground factor rises by minus the terrain's).
+__device__ Moments roof_rise(const RayStream& s, const Roof& roof, float a, float b, float x_r) {
+    Moments m = {0.0f, 0.0f, 0.0f};
+    float slope = roof.x1 > roof.x0 ? (roof.top1 - roof.top0) / (roof.x1 - roof.x0) : 0.0f;
+    int k = stretch_holding(s, a);
+    float za, ga;
+    terrain_on(s.samples[k - 1], s.samples[k], a, &za, &ga);
+    while (a < b) {
+        float next = k < s.count - 1 ? fminf(s.samples[k].x, b) : b, zb, gb;
+        terrain_on(s.samples[k - 1], s.samples[k], next, &zb, &gb);
+        add_stretch(m, a, next, roof.top0 + slope * (a - roof.x0) - za, roof.top0 + slope * (next - roof.x0) - zb, -ga, -gb, x_r, 0.0f);
+        a = next;
+        za = zb;
+        ga = gb;
+        k = min(k + 1, s.count - 1);
+    }
+    return m;
+}
+
+// Moments of a range taken about (x_t, 0) re-taken about (x_p, 0).
+__device__ __forceinline__ Moments moved_to(const Moments& m, float x_t, float x_p) {
+    Moments r = m;
+    r.xz += (x_t - x_p) * m.z;
     return r;
 }
 
-// stream_stretch of every terrain stretch between samples j and k at once: the whole path, each
-// state's top hull point and, unblocked, its best point (none of them lies inside the run).
-__device__ void stream_run(RayStream& s, int j, int k) {
-    Moments whole = run_about(s, j, k, 0.0f, s.path.source_ground_z);
-    s.path.whole.z += whole.z;
-    s.path.whole.xz += whole.xz;
-    s.path.whole.g += whole.g;
-    for (int state = 0; state < 2; state++) {
-        StateStream& st = s.states[state];
-        if (st.depth >= 2) {
-            HullEntry& top = st.hull[st.depth - 1];
-            Moments m = run_about(s, j, k, top.x, top.terrain_z);
-            top.after.z += m.z;
-            top.after.xz += m.xz;
-            top.after.g += m.g;
-        }
-        if (st.has_best && !st.blocked) {
-            Moments m = run_about(s, j, k, st.best.x, st.best.terrain_z);
-            st.best.after.z += m.z;
-            st.best.after.xz += m.xz;
-            st.best.after.g += m.g;
-        }
+__device__ __forceinline__ void add_moments(Moments& m, const Moments& a) {
+    m.z += a.z;
+    m.xz += a.xz;
+    m.g += a.g;
+}
+
+// The path's moments from the source to `x` about (0, the source's ground): the terrain's prefix
+// up to x and the roofs' rises before it.
+__device__ Moments path_from_source(const RayStream& s, float x) {
+    int k = stretch_holding(s, x);
+    const TerrainPoint &lo = s.samples[k - 1], &hi = s.samples[k];
+    Moments m = s.prefix[k];
+    if (x < hi.x) {
+        float z, g;
+        terrain_on(lo, hi, x, &z, &g);
+        m = s.prefix[k - 1];
+        add_stretch(m, lo.x, x, lo.z, z, lo.g, g, 0.0f, s.path.source_ground_z);
     }
+    for (int r = 0; r < s.roof_count && s.roofs[r].x0 < x; r++) {
+        const Roof& roof = s.roofs[r];
+        add_moments(m, roof.x1 <= x ? moved_to(roof.rise, roof.x0, 0.0f) : roof_rise(s, roof, roof.x0, x, 0.0f));
+    }
+    return m;
+}
+
+// The path's moments from `x` to the receiver about (x, z_x): the terrain's stretches after x and
+// the roofs' rises after it, summed here, not as a difference of the prefixes (which f32 would
+// lose for a short stretch at the end of a long ray).
+__device__ Moments path_to_receiver(const RayStream& s, float x, float z_x) {
+    Moments m = {0.0f, 0.0f, 0.0f};
+    int k = stretch_holding(s, x);
+    float za, ga;
+    terrain_on(s.samples[k - 1], s.samples[k], x, &za, &ga);
+    for (float a = x; k < s.count; k++) {
+        const TerrainPoint& hi = s.samples[k];
+        add_stretch(m, a, hi.x, za, hi.z, ga, hi.g, x, z_x);
+        a = fmaxf(a, hi.x);
+        za = hi.z;
+        ga = hi.g;
+    }
+    for (int r = s.roof_count - 1; r >= 0 && s.roofs[r].x1 > x; r--) {
+        const Roof& roof = s.roofs[r];
+        add_moments(m, roof.x0 >= x ? moved_to(roof.rise, roof.x0, x) : roof_rise(s, roof, x, roof.x1, x));
+    }
+    return m;
 }
 
 // Whether band point b stands on or under the state's ray from a to (x, z): straight in calm air,
@@ -348,44 +354,38 @@ __device__ __forceinline__ bool under_state_ray(const StateRay& ray, const HullE
     return b.z <= chord_altitude(from, to, b.x) + ray_height_above_chord(ray, from, to, b.x);
 }
 
+// What every candidate of one ray reads: the path's ends, its length and the states' rays, in the
+// stream's registers rather than the ray's buffer.
+struct RayFrame {
+    PlanePoint source, receiver;
+    float length, inverse_length;
+    StateRay rays[2];
+};
+
 // A diffraction candidate at (x, z), in the CPU's candidate order, into both states
 // (rubber_band.rs diffraction_path): one above the state's chord after lowering joins the hull,
 // otherwise it competes for the unblocked path's single point.
-__device__ u32 stream_candidate(RayStream& s, float x, float z, float terrain_z, float terrain_g) {
-    PlanePoint source = s.path.source, receiver = s.path.receiver;
-    float chord = source.z + (receiver.z - source.z) * x * s.inverse_length;
+__device__ u32 stream_candidate(RayStream& s, const RayFrame& f, float x, float z, float terrain_z, float terrain_g) {
+    PlanePoint source = f.source, receiver = f.receiver;
+    float chord = source.z + (receiver.z - source.z) * x * f.inverse_length;
     for (int state = 0; state < 2; state++) {
         StateStream& st = s.states[state];
-        float lowered = z - ray_height_above_chord(st.ray, source, receiver, x);
+        const StateRay& ray = f.rays[state];
+        float lowered = z - ray_height_above_chord(ray, source, receiver, x);
         HullEntry entry;
         entry.x = x;
         entry.z = z;
         entry.lowered = lowered;
         entry.terrain_z = terrain_z;
         entry.terrain_g = terrain_g;
-        entry.before = s.path.whole;
-        entry.after.z = entry.after.xz = entry.after.g = 0.0f;
         if (lowered > chord) {
             st.blocked = true;
-            while (st.depth >= 2) {
-                const HullEntry& a = st.hull[st.depth - 2];
-                const HullEntry& b = st.hull[st.depth - 1];
-                if (!under_state_ray(st.ray, a, x, z, b)) break;
-                // The popped point's stretch now belongs to the point below it.
-                if (st.depth - 2 >= 1) {
-                    HullEntry& below = st.hull[st.depth - 2];
-                    Moments moved = moments_about(b.after, s.streamed_to - b.x, b.x, b.terrain_z, below.x, below.terrain_z);
-                    below.after.z += moved.z;
-                    below.after.xz += moved.xz;
-                    below.after.g += moved.g;
-                }
-                st.depth--;
-            }
+            while (st.depth >= 2 && under_state_ray(ray, st.hull[st.depth - 2], x, z, st.hull[st.depth - 1])) st.depth--;
             if (st.depth >= HULL_CAPACITY) return FAILED_CAPACITY;
             st.hull[st.depth++] = entry;
         } else if (!st.blocked) {
             PlanePoint single[1] = {{x, z}};
-            float delta = state_ray_path_difference(st.ray, source, single, 1, receiver);
+            float delta = state_ray_path_difference(ray, source, single, 1, receiver);
             if (!st.has_best || delta > st.best_delta) {
                 st.has_best = true;
                 st.best_delta = delta;
@@ -396,48 +396,23 @@ __device__ u32 stream_candidate(RayStream& s, float x, float z, float terrain_z,
     return 0;
 }
 
-// Streams the path up to `x`: the terrain stretches before it, and every terrain sample at or
-// before it as a candidate (samples come before obstacle tops at one distance, as the CPU's stable
-// sort leaves them).
-__device__ u32 stream_to(RayStream& s, float x) {
-    u32 failed;
-    while (true) {
-        // A run of samples that may not diffract, from a sample that may to the next that may,
-        // streamed at once when it ends by x: its terrain stretches, summed in the first pass, go to
-        // the same sums as one by one (no candidate joins between them).
-        if (s.streamed_to == s.below.x && s.below.crest) {
-            int k = s.below.next_crest;
-            if (k > s.segment && s.samples[k].x <= x) {
-                stream_run(s, s.segment - 1, k);
-                s.segment = k;
-                s.below = s.samples[k - 1];
-                s.above = s.samples[k];
-                s.streamed_to = s.above.x;
-            }
-        }
-        TerrainPoint below = s.below, above = s.above;
-        float b = fminf(x, above.x);
-        if (b > s.streamed_to) {
-            float span = above.x - below.x;
-            float fa = span > 0.0f ? (s.streamed_to - below.x) / span : 0.0f;
-            float fb = span > 0.0f ? (b - below.x) / span : 1.0f;
-            stream_stretch(s, s.streamed_to, b, below.z + fa * (above.z - below.z), below.z + fb * (above.z - below.z),
-                           below.g + fa * (above.g - below.g), below.g + fb * (above.g - below.g), false);
-            s.streamed_to = b;
-        }
-        if (above.x > x || s.segment == s.count - 1) return 0;
-        if (above.x > 0.0f && above.x < s.length && above.crest) {
-            if ((failed = stream_candidate(s, above.x, above.z, above.z, above.g))) return failed;
-        }
-        s.segment++;
-        s.below = above;
-        if ((failed = ray_sample(s, s.segment, &s.above))) return failed;
+// Every terrain sample that may diffract, up to `x`, into both states in order (samples come
+// before obstacle tops at one distance, as the CPU's stable sort leaves them).
+__device__ u32 stream_to(RayStream& s, const RayFrame& f, float x) {
+    while (s.next_crest > 0) {
+        TerrainPoint point;
+        u32 failed = ray_sample(s, s.next_crest, &point);
+        if (failed) return failed;
+        if (point.x > x) return 0;
+        if (point.x > 0.0f && point.x < f.length && (failed = stream_candidate(s, f, point.x, point.z, point.z, point.g))) return failed;
+        s.next_crest = point.next_crest;
     }
+    return 0;
 }
 
 // A roof from the wall at x0 (top0) to the wall at x1 (top1), clipped to start where the roofs
 // closed before it end (clip_roofs_in_closing_order: roofs close here in the order the ray leaves
-// them), streamed as its rise over the terrain stretch by stretch.
+// them), kept with its rise over the terrain.
 __device__ u32 stream_roof(RayStream& s, float x0, float top0, float x1, float top1) {
     if (x1 <= s.covered_to) return 0;
     if (x0 < s.covered_to) {
@@ -445,32 +420,13 @@ __device__ u32 stream_roof(RayStream& s, float x0, float top0, float x1, float t
         x0 = s.covered_to;
     }
     s.covered_to = x1;
-    float slope = x1 > x0 ? (top1 - top0) / (x1 - x0) : 0.0f;
-    // k: the first sample after x0.
-    int k = s.segment;
-    TerrainPoint sample;
-    u32 failed;
-    while (k > 1) {
-        if ((failed = ray_sample(s, k - 1, &sample))) return failed;
-        if (sample.x <= x0) break;
-        k--;
-    }
-    float a = x0, terrain_a, ground_a;
-    if ((failed = ray_terrain_at(s, a, k, &terrain_a, &ground_a))) return failed;
-    while (a < x1) {
-        float b = x1;
-        if (k < s.count - 1) {
-            if ((failed = ray_sample(s, k, &sample))) return failed;
-            b = fminf(sample.x, x1);
-        }
-        float terrain_b, ground_b;
-        if ((failed = ray_terrain_at(s, b, k, &terrain_b, &ground_b))) return failed;
-        stream_stretch(s, a, b, top0 + slope * (a - x0) - terrain_a, top0 + slope * (b - x0) - terrain_b, -ground_a, -ground_b, true);
-        a = b;
-        terrain_a = terrain_b;
-        ground_a = ground_b;
-        k++;
-    }
+    if (s.roof_count == ROOFS) return FAILED_CAPACITY;
+    Roof& roof = s.roofs[s.roof_count++];
+    roof.x0 = x0;
+    roof.top0 = top0;
+    roof.x1 = x1;
+    roof.top1 = top1;
+    roof.rise = roof_rise(s, roof, x0, x1, x0);
     return 0;
 }
 
@@ -554,16 +510,16 @@ __device__ u32 stream_closing_roofs(RayStream& s) {
 
 // One crossing kept: a footprint the receiver stands in is passed through, a building's entry
 // opens its roof and its exit queues the roof to close.
-__device__ u32 take_crossing(RayStream& s, const Crossing& c) {
+__device__ u32 take_crossing(RayStream& s, const RayFrame& f, const Crossing& c) {
     for (int k = 0; k < s.containing_count; k++) {
         if (s.containing[k] == c.footprint_id) return 0;
     }
-    float x = fmaxf(c.t * s.length, s.last_x);
+    float x = fmaxf(c.t * f.length, s.last_x);
     s.last_x = x;
     u32 failed;
-    if ((failed = stream_to(s, x))) return failed;
+    if ((failed = stream_to(s, f, x))) return failed;
     float terrain_z, terrain_g;
-    if ((failed = ray_terrain_at(s, x, s.segment, &terrain_z, &terrain_g))) return failed;
+    ray_terrain_at(s, x, &terrain_z, &terrain_g);
     float top = terrain_z + c.height_m;
     if (c.building) {
         int open = -1;
@@ -585,15 +541,15 @@ __device__ u32 take_crossing(RayStream& s, const Crossing& c) {
             s.open_count++;
         }
     }
-    if (x > 0.0f && x < s.length && (failed = stream_candidate(s, x, top, terrain_z, terrain_g))) return failed;
+    if (x > 0.0f && x < f.length && (failed = stream_candidate(s, f, x, top, terrain_z, terrain_g))) return failed;
     return 0;
 }
 
-__device__ u32 stream_crossing(RayStream& s, const Crossing& c) {
+__device__ u32 stream_crossing(RayStream& s, const RayFrame& f, const Crossing& c) {
     bool dropped;
     u32 failed = crossing_dropped(s, c, &dropped);
     if (failed) return failed;
-    if (!dropped && (failed = take_crossing(s, c))) return failed;
+    if (!dropped && (failed = take_crossing(s, f, c))) return failed;
     // The roofs closed at this t, once no other crossing at it follows, the last one dropped or
     // passed through alike (one call site: a warp that splits around a call stays split long
     // after).
@@ -610,12 +566,12 @@ struct Transfer {
 };
 
 // physics/src/foliage.rs attenuation_db: ISO 9613-2 Table A.1 for `depth_m` of foliage, one band.
+__constant__ float FOLIAGE_SHORT_DB[BANDS] = {0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 2.0f, 3.0f};
+__constant__ float FOLIAGE_DB_PER_M[BANDS] = {0.02f, 0.03f, 0.04f, 0.05f, 0.06f, 0.08f, 0.09f, 0.12f};
 __device__ __forceinline__ float foliage_db(float depth_m, int band) {
-    const float short_db[BANDS] = {0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 2.0f, 3.0f};
-    const float db_per_m[BANDS] = {0.02f, 0.03f, 0.04f, 0.05f, 0.06f, 0.08f, 0.09f, 0.12f};
     if (depth_m < 10.0f) return 0.0f;
-    if (depth_m < 20.0f) return short_db[band];
-    return db_per_m[band] * fminf(depth_m, 200.0f);
+    if (depth_m < 20.0f) return FOLIAGE_SHORT_DB[band];
+    return FOLIAGE_DB_PER_M[band] * fminf(depth_m, 200.0f);
 }
 
 __device__ __forceinline__ float attenuation_energy(float attenuation_db) {
@@ -625,36 +581,23 @@ __device__ __forceinline__ float attenuation_energy(float attenuation_db) {
 // What the crossing walk hands each crossing to.
 struct CrossingTaker {
     RayStream* s;
-    __device__ u32 operator()(const Crossing& c) { return stream_crossing(*s, c); }
+    const RayFrame* f;
+    __device__ u32 operator()(const Crossing& c) { return stream_crossing(*s, *f, c); }
 };
 
-// The receiver's hull closes each state (the CPU adds R last), merging every popped point's
-// stretch into the point below it.
+// The receiver's hull closes each state (the CPU adds R last).
 __device__ void close_hull(RayStream& s, StateStream& st) {
     PlanePoint receiver = s.path.receiver;
-    while (st.depth >= 2) {
-        const HullEntry& a = st.hull[st.depth - 2];
-        const HullEntry& b = st.hull[st.depth - 1];
-        if (!under_state_ray(st.ray, a, receiver.x, receiver.z, b)) break;
-        if (st.depth - 2 >= 1) {
-            HullEntry& below = st.hull[st.depth - 2];
-            Moments moved = moments_about(b.after, s.streamed_to - b.x, b.x, b.terrain_z, below.x, below.terrain_z);
-            below.after.z += moved.z;
-            below.after.xz += moved.xz;
-            below.after.g += moved.g;
-        }
-        st.depth--;
-    }
+    while (st.depth >= 2 && under_state_ray(st.ray, st.hull[st.depth - 2], receiver.x, receiver.z, st.hull[st.depth - 1])) st.depth--;
 }
 
-// The second of a ray's two passes, over the samples `sample_ray` wrote: the hulls, the moments, the
-// obstacles' crossings and roofs, and each state's terms. Out of line, once a ray.
+// The second of a ray's two passes, over the samples `sample_ray` wrote: the obstacles' crossings
+// and roofs, the hulls, and each state's terms. Out of line, once a ray.
 __device__ __noinline__ u32 stream_ray(const ObstacleScene& obstacles, float sx, float sy, float rx, float ry, bool obstacles_on_ray,
                                        const RayEnds& ends, RayStream& s, Transfer* transfer) {
     float horizontal = s.length;
     float source_altitude = s.path.source.z;
     s.path.source_ground_factor = ends.source_ground_factor >= 0.0f ? ends.source_ground_factor : s.samples[0].g;
-    s.path.whole.z = s.path.whole.xz = s.path.whole.g = 0.0f;
     for (int state = 0; state < 2; state++) {
         StateStream& st = s.states[state];
         st.depth = 1;
@@ -665,11 +608,11 @@ __device__ __noinline__ u32 stream_ray(const ObstacleScene& obstacles, float sx,
         st.has_best = false;
         st.best_delta = 0.0f;
     }
-    s.streamed_to = 0.0f;
+    RayFrame frame = {s.path.source, s.path.receiver, horizontal, s.inverse_length, {s.states[0].ray, s.states[1].ray}};
+    s.next_crest = s.samples[0].next_crest;
     s.segment = 1;
-    s.below = s.samples[0];
+    s.roof_count = 0;
     u32 failed;
-    if ((failed = ray_sample(s, 1, &s.above))) return failed;
     s.covered_to = -QM_INFINITY;
     s.open_count = 0;
     s.closing_count = 0;
@@ -685,20 +628,31 @@ __device__ __noinline__ u32 stream_ray(const ObstacleScene& obstacles, float sx,
         s.recent_count = 0;
     }
     if (obstacles_on_ray) {
-        CrossingTaker take = {&s};
+        CrossingTaker take = {&s, &frame};
         failed = walk_crossings(obstacles, sx, sy, rx, ry, take);
         if (failed) return failed;
     }
     if (s.closing_count > 0 && (failed = stream_closing_roofs(s))) return failed;
-    if ((failed = stream_to(s, horizontal))) return failed;
+    if ((failed = stream_to(s, frame, horizontal))) return failed;
+    s.path.whole = path_from_source(s, horizontal);
+    // Each state's diffraction points and the path's moments on either side of them, taken from the
+    // samples and roofs once where both states share the point.
+    Moments before[2], after[2];
+    float first_x[2] = {-1.0f, -1.0f}, last_x[2] = {-1.0f, -1.0f};
     for (int state = 0; state < 2; state++) {
         StateStream& st = s.states[state];
         close_hull(s, st);
-        if (st.blocked) {
-            state_term(s.path, st.ray, st.hull + 1, st.depth - 1, true, &transfer->states[state]);
-        } else {
-            state_term(s.path, st.ray, &st.best, st.has_best ? 1 : 0, false, &transfer->states[state]);
+        const HullEntry* points = st.blocked ? st.hull + 1 : &st.best;
+        int count = st.blocked ? st.depth - 1 : (st.has_best ? 1 : 0);
+        before[state] = after[state] = Moments{0.0f, 0.0f, 0.0f};
+        if (count > 0) {
+            const HullEntry &first = points[0], &last = points[count - 1];
+            first_x[state] = first.x;
+            last_x[state] = last.x;
+            before[state] = state == 1 && first.x == first_x[0] ? before[0] : path_from_source(s, first.x);
+            after[state] = state == 1 && last.x == last_x[0] ? after[0] : path_to_receiver(s, last.x, last.terrain_z);
         }
+        state_term(s.path, st.ray, points, count, st.blocked, before[state], after[state], &transfer->states[state]);
         transfer->foliage_m[state] = s.foliage_m[state];
     }
     transfer->slant_m = fmaxf(hypotf(horizontal, ends.receiver_altitude_m - source_altitude), 1.0f);
