@@ -89,6 +89,13 @@ impl<'a> Aircraft<'a> {
         &self.pieces[index * PIECE_BYTES..(index + 1) * PIECE_BYTES]
     }
 
+    /// A box's emission-weighted centroid alone (tile-local steps): where it is, without the rest
+    /// of its record.
+    pub fn box_centroid(&self, index: usize) -> [i16; 2] {
+        let record = self.box_record(index);
+        [i16_at(record, 12), i16_at(record, 14)]
+    }
+
     pub fn aircraft_box(&self, index: usize) -> AircraftBox {
         let record = self.box_record(index);
         let energy = |at: usize| level_db(u16_at(record, at));

@@ -97,6 +97,18 @@ fn nearest_slant_m(
 
 /// One box at the receiver: its centroid's horizontal distance (m), its period energies (Leq,
 /// linear) and its selection; none where `heard` refuses the distance.
+/// A box centroid's horizontal offset from the receiver, east and north (m).
+fn centroid_offset_m(
+    centroid: [i16; 2],
+    tile: TileId,
+    frame: &LocalFrame,
+    receiver: AircraftReceiver,
+) -> [f64; 2] {
+    let global = tile.global(centroid);
+    let at = frame.metres_of_steps([global.x as f64, global.y as f64]);
+    [at[0] - receiver.position[0], at[1] - receiver.position[1]]
+}
+
 fn box_at(
     record: &AircraftBox,
     tile: TileId,
@@ -105,10 +117,7 @@ fn box_at(
     horizons: &impl ReceiverHorizons,
     (impedance_db, heard): (f64, &dyn Fn(f64) -> bool),
 ) -> Option<(f64, [f64; PERIODS], BoxSel)> {
-    let global = tile.global(record.centroid);
-    let centroid = frame.metres_of_steps([global.x as f64, global.y as f64]);
-    let east_m = centroid[0] - receiver.position[0];
-    let north_m = centroid[1] - receiver.position[1];
+    let [east_m, north_m] = centroid_offset_m(record.centroid, tile, frame, receiver);
     let distance_m = east_m.hypot(north_m);
     if !heard(distance_m) {
         return None;
@@ -156,7 +165,13 @@ pub fn tile_lden_energy(
         receiver_impedance_db(receiver.altitude_m),
         &heard as &dyn Fn(f64) -> bool,
     );
+    // A box beyond the reach is known from its centroid alone, before its record is read.
     (0..aircraft.box_count())
+        .filter(|&index| {
+            let [east_m, north_m] =
+                centroid_offset_m(aircraft.box_centroid(index), tile, frame, receiver);
+            heard(east_m.hypot(north_m))
+        })
         .filter_map(|index| {
             let record = aircraft.aircraft_box(index);
             box_at(&record, tile, frame, receiver, horizons, ends)
