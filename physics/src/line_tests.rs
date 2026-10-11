@@ -123,6 +123,21 @@ fn nodes_are_uniform_in_the_in_plane_angle() {
     );
 }
 
+/// A far piece takes one bucket per 3 degrees it subtends: a 100 m piece one at 3 km, two at 1 km,
+/// four at 600 m and five from 300 m in, their weights the whole angle.
+#[test]
+fn a_far_piece_takes_one_bucket_per_three_degrees() {
+    for (distance_m, buckets) in [(3000.0, 1), (1000.0, 2), (600.0, 4), (300.0, 5)] {
+        let geometry =
+            LinePieceGeometry::new([-50.0, distance_m, 0.0], [50.0, distance_m, 0.0]).unwrap();
+        let mut nodes = Vec::new();
+        line_quadrature_nodes(&geometry, &mut no_obstacles, &mut nodes);
+        assert_eq!(nodes.len(), buckets, "{distance_m} m");
+        let total: f64 = nodes.iter().map(|n| n.weight_rad).sum();
+        assert!((total - geometry.subtended_angle_rad()).abs() < 1e-12);
+    }
+}
+
 fn wall_scene(nearest_m: f64) -> (LinePieceGeometry, Vec<LineQuadratureNode>) {
     let geometry = LinePieceGeometry::new([-125.0, 20.0, 0.0], [125.0, 20.0, 0.0]).unwrap();
     let wall = SkylineArc {

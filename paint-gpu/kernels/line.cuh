@@ -253,8 +253,10 @@ __device__ u32 line_quadrature_nodes(const LinePieceGeometry& g, const ObstacleS
     // differences are exact enough).
     float a = -g.foot_along_m, p = g.perpendicular_m;
     float span = atan2f(g.length_m * p, p * p + a * (g.length_m - g.foot_along_m));
-    float bucket_angle = span / (float)LINE_BUCKET_COUNT;
-    for (int bucket = 0; bucket < LINE_BUCKET_COUNT; bucket++) {
+    // line::line_bucket_count
+    int buckets = min(max((int)ceilf(span / WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD), 1), LINE_BUCKET_COUNT);
+    float bucket_angle = span / (float)buckets;
+    for (int bucket = 0; bucket < buckets; bucket++) {
         float angle_lo = g.start_angle_rad + (float)bucket * bucket_angle;
         float angle_hi = angle_lo + bucket_angle;
         u32 failed = 0;

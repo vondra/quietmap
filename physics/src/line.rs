@@ -4,17 +4,18 @@
 //! For a straight piece and a receiver R, dx/r^2 = dphi/d_perp with phi the angle in the plane
 //! holding the line and R and d_perp the 3D distance from R to the line, so the incoherent point
 //! sum of A_div = 20 lg r + 11 is exactly E = W'/(10^1.1 d_perp) * integral of 10^(-A_path/10)
-//! dphi. The integral takes [`LINE_BUCKET_COUNT`] buckets of equal dphi, one node each. A bucket
-//! spanning more than [`WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD`] of horizontal azimuth replaces its node
+//! dphi. The integral takes buckets of equal dphi, one node each, as many as keep each within
+//! [`WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD`] but at most [`LINE_BUCKET_COUNT`] ([`line_bucket_count`]).
+//! A bucket spanning more than [`WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD`] of horizontal azimuth replaces its node
 //! by geometry-placed nodes: obstacle edges in front of the piece mark a blocked mask over the
 //! bucket's azimuths, and every blocked run and clear gap gets its own nodes, each weighted by its
 //! own dphi (uniform nodes alias against building rows at any affordable count).
 
 use std::f64::consts::PI;
 
-/// Buckets per piece: five on a 250 m piece match a 401-node point sum within +-0.094 dB over
-/// G = 0, 0.5, 1 at 5-500 m (dev4 measurement 2026-09-24), where the closest-point ray applied to
-/// the whole piece is up to +1.75 dB loud.
+/// The most buckets a piece takes: five on a 250 m piece match a 401-node point sum within
+/// +-0.094 dB over G = 0, 0.5, 1 at 5-500 m (dev4 measurement 2026-09-24), where the closest-point
+/// ray applied to the whole piece is up to +1.75 dB loud.
 pub const LINE_BUCKET_COUNT: usize = 5;
 /// A bucket wider than this in horizontal azimuth gets geometry-placed nodes (dev4 screening
 /// fixtures 2026-08-08: at 3 deg the worst receiver sits on a 0.85 dB plateau, at 5 deg above 1 dB).
@@ -171,6 +172,16 @@ impl LinePieceGeometry {
     }
 }
 
+/// The buckets of a piece subtending `angle_rad` (in-plane): one per
+/// [`WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD`], the widest bucket that keeps its centre node, at most
+/// [`LINE_BUCKET_COUNT`]. A far piece takes one or two rays: beyond 300 m five centre nodes differ
+/// from 41 by p99 1.4-5.7 dB a piece and still move the owner's places by at most 0.1 dB, this rule
+/// by -0.1 to +0.2 dB with the click 22 % faster (2026-10-11, quietmap-private
+/// `evidence/2026-10-11/quadrature/`).
+pub fn line_bucket_count(angle_rad: f64) -> usize {
+    ((angle_rad / WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD).ceil() as usize).clamp(1, LINE_BUCKET_COUNT)
+}
+
 /// The quadrature nodes of one piece; `skyline` is asked only for wide buckets.
 pub fn line_quadrature_nodes(
     geometry: &LinePieceGeometry,
@@ -178,8 +189,9 @@ pub fn line_quadrature_nodes(
     nodes: &mut Vec<LineQuadratureNode>,
 ) {
     nodes.clear();
-    let bucket_angle = geometry.subtended_angle_rad() / LINE_BUCKET_COUNT as f64;
-    for bucket in 0..LINE_BUCKET_COUNT {
+    let buckets = line_bucket_count(geometry.subtended_angle_rad());
+    let bucket_angle = geometry.subtended_angle_rad() / buckets as f64;
+    for bucket in 0..buckets {
         let angle_lo = geometry.start_angle_rad + bucket as f64 * bucket_angle;
         let angle_hi = angle_lo + bucket_angle;
         let before = nodes.len();
