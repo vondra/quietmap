@@ -34,6 +34,8 @@ const REACH_CLASSES_M: [f64; 7] = [
 pub struct Files {
     rings: RingFiles,
     ground_rings: u32,
+    /// The release's year root, where the rays' ends read the fine terrain when they need it.
+    year_root: std::path::PathBuf,
 }
 
 /// The fewest rings around `tile` whose block covers `reach_m` beyond the tile's every edge.
@@ -99,6 +101,7 @@ impl Files {
         Ok(Files {
             rings,
             ground_rings,
+            year_root: release.year_root.clone(),
         })
     }
 
@@ -285,7 +288,12 @@ impl<'a> Square<'a> {
     pub fn new(weather: &'a WeatherTable, tile: TileId, files: &'a Files) -> Result<Self, String> {
         let frame = LocalFrame::at(tile.centre());
         let read = &files.rings;
-        let mut ground = Ground::new(frame, tile, files.ground_rings);
+        let mut ground = Ground::new(
+            frame,
+            tile,
+            files.ground_rings,
+            Some(files.year_root.clone()),
+        );
         let mut obstacle_tiles = Vec::new();
         let mut sources: Vec<(TileId, Sources<'a>)> = Vec::new();
         let mut aircraft = Vec::new();

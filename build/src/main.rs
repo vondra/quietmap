@@ -11,8 +11,11 @@
 //! the bus routes of `fetch/bus.sh`, the places of worship of `fetch/worship.sh` and the bars,
 //! restaurants and cafés of `fetch/venues.sh` when given; terrain lays the national models over
 //! dev4's heights);
-//! `qm-build weather --rasters DIR --out FILE` cuts the global weather table; `qm-build complete
-//! --out DIR --note TEXT` writes the completion marker last.
+//! `qm-build weather --rasters DIR --out FILE` cuts the global weather table; `qm-build
+//! terrain-fine --terrain DIR --fine-dem DIR,.. --squares .. --out DIR` adds the national models'
+//! 1/6" detail to the served terrain of DIR (a directory of z9 squares' rasters a model,
+//! `fetch/national-dem.sh`); `qm-build complete --out DIR --note TEXT` writes the completion
+//! marker last.
 //!
 //! Aircraft: `qm-build geoid --tiff FILE --out FILE` converts the EGM2008 GeoTIFF once;
 //! `qm-build aircraft-segments (--days D,D.. [--increment-days D,..] | --anchor YYYY-MM)
@@ -47,6 +50,7 @@ mod screening;
 mod sources;
 mod structures;
 mod terrain;
+mod terrain_fine;
 mod traffic;
 mod weather;
 
@@ -257,6 +261,21 @@ fn run(arguments: &[String]) -> Result<(), String> {
                 rasters: options.get("rasters")?.into(),
             };
             weather::build(&dev4, &out)
+        }
+        "terrain-fine" => {
+            let started = std::time::Instant::now();
+            let models: Vec<&Path> = options.get("fine-dem")?.split(',').map(Path::new).collect();
+            let written = terrain_fine::build(
+                &parse_squares(options.get("squares")?)?,
+                &models,
+                Path::new(options.get("terrain")?),
+                &out,
+            )?;
+            eprintln!(
+                "terrain-fine: {written} tiles in {:.1} s",
+                started.elapsed().as_secs_f64()
+            );
+            Ok(())
         }
         "complete" => output::mark_complete(&out, options.get("note")?),
         "geoid" => aircraft::geoid::build(Path::new(options.get("tiff")?), &out),

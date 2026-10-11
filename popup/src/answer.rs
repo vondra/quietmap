@@ -105,7 +105,12 @@ pub fn answer(
     let rings: Vec<OnceCell<RingFiles>> = (0..=most_ground_rings.max(most_aircraft_rings))
         .map(|_| OnceCell::new())
         .collect();
-    let mut ground = Ground::new(frame, centre, most_ground_rings);
+    let mut ground = Ground::new(
+        frame,
+        centre,
+        most_ground_rings,
+        Some(release.year_root.clone()),
+    );
     let mut horizons: Option<Horizons> = None;
     let weather_started = std::time::Instant::now();
     let weather = physics::weather::read_place(&release.weather_path, lat, lon)?;
@@ -621,6 +626,7 @@ pub fn answer(
             (files, bytes) = (files + track_files, bytes + track_bytes);
             read_seconds += read_started.elapsed().as_secs_f64();
         }
+        let (fine_files, fine_bytes) = ground.fine_read();
         let update = Update {
             partial: !last_ring,
             percentiles,
@@ -643,8 +649,8 @@ pub fn answer(
             arrival,
             statistics: Statistics {
                 rings_read: ring,
-                files,
-                bytes,
+                files: files + fine_files as usize,
+                bytes: bytes + fine_bytes,
                 read_seconds,
                 candidate_seconds,
                 evaluate_seconds,

@@ -1,7 +1,7 @@
 //! A national terrain model laid over the dev4 heights (step 5, terrain first): a raster of one
 //! arc-second pixels centred on the lattice nodes, heights above EGM2008, prepared from the
-//! national source by `fetch/` (area average, horizontal and vertical datum through PROJ with its
-//! grids). It joins the base with dev4's feather, `w = min(max(d - 1, 0) / 256, 1)` with `d` the
+//! national source by `fetch/national-dem.sh` (area average, horizontal and vertical datum through
+//! PROJ with its grids); its 1/6" twin gives the fine terrain its detail (`terrain_fine`). It joins the base with dev4's feather, `w = min(max(d - 1, 0) / 256, 1)` with `d` the
 //! distance in nodes to the nearest node the model lacks (its edge and its voids), so no step
 //! shows where it ends.
 
@@ -19,11 +19,7 @@ const GDAL_NODATA: u16 = 42_113;
 
 /// A national model in memory: heights (NaN where missing) and feather weights (1/255 steps).
 pub struct NationalHeights {
-    north_node: i32,
-    west_node: i32,
-    rows: usize,
-    columns: usize,
-    heights: Vec<f32>,
+    raster: Raster,
     weights: Vec<u8>,
 }
 
@@ -86,9 +82,19 @@ fn weight_code(distance: f32) -> u8 {
         .mul_add(255.0, 0.5) as u8
 }
 
-impl NationalHeights {
-    /// Reads a prepared model: float32, pixels of exactly one arc-second centred on the nodes.
-    pub fn read(path: &Path) -> Result<Self, String> {
+/// A prepared model's raster: float32 pixels of one lattice interval centred on its nodes (NaN
+/// where missing), row 0 the northernmost.
+pub struct Raster {
+    pub north_node: i32,
+    pub west_node: i32,
+    pub rows: usize,
+    pub columns: usize,
+    pub heights: Vec<f32>,
+}
+
+impl Raster {
+    /// Reads a model prepared by `fetch/national-dem.sh` on the lattice of `nodes_per_degree`.
+    pub fn read(path: &Path, nodes_per_degree: i32) -> Result<Self, String> {
         let failed = |error: tiff::TiffError| format!("{}: {error}", path.display());
         let file =
             std::fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -107,58 +113,79 @@ impl NationalHeights {
             .ok()
             .and_then(|text| text.trim_end_matches('\0').trim().parse().ok())
             .unwrap_or(f32::NAN);
-        let step = 1.0 / f64::from(NODES_PER_DEGREE);
+        let step = 1.0 / f64::from(nodes_per_degree);
+        let off_lattice = |pixel: f64| (pixel / step - 1.0).abs() > 1e-9;
         if scale.len() < 2
-            || (scale[0] - step).abs() > 1e-9
-            || (scale[1] - step).abs() > 1e-9
+            || off_lattice(scale[0])
+            || off_lattice(scale[1])
             || tiepoint.len() < 6
             || tiepoint[0] != 0.0
             || tiepoint[1] != 0.0
         {
-            return Err(format!("{}: not the one arc-second grid", path.display()));
+            return Err(format!(
+                "{}: not the lattice of {nodes_per_degree} nodes a degree",
+                path.display()
+            ));
         }
         // The tiepoint is the corner of the first pixel, half a pixel west and north of its node.
         let node = |degrees: f64, half: f64| (degrees / step + half).round() as i32;
-        let (west_node, north_node) = (node(tiepoint[3], 0.5), node(tiepoint[4], -0.5));
         let DecodingResult::F32(values) = decoder.read_image().map_err(failed)? else {
             return Err(format!("{}: not float32", path.display()));
         };
-        let heights: Vec<f32> = values
-            .into_iter()
-            .map(|h| {
-                if h == nodata || !h.is_finite() {
-                    f32::NAN
-                } else {
-                    h
-                }
-            })
-            .collect();
-        let (rows, columns) = (rows as usize, columns as usize);
-        let valid: Vec<bool> = heights.iter().map(|h| h.is_finite()).collect();
-        let weights = distances_to_missing(&valid, rows, columns)
-            .into_iter()
-            .map(weight_code)
-            .collect();
-        Ok(NationalHeights {
-            north_node,
-            west_node,
-            rows,
-            columns,
-            heights,
-            weights,
+        Ok(Raster {
+            north_node: node(tiepoint[4], -0.5),
+            west_node: node(tiepoint[3], 0.5),
+            rows: rows as usize,
+            columns: columns as usize,
+            heights: values
+                .into_iter()
+                .map(|h| {
+                    if h == nodata || !h.is_finite() {
+                        f32::NAN
+                    } else {
+                        h
+                    }
+                })
+                .collect(),
         })
     }
 
-    /// The model's height at a node and its weight there, or `None` where it has no say.
-    pub fn at(&self, north_node: i32, east_node: i32) -> Option<(f64, f64)> {
+    /// The height at a node, `None` outside the raster or where it is missing.
+    pub fn height(&self, north_node: i32, east_node: i32) -> Option<f64> {
         let row = self.north_node - north_node;
         let column = east_node - self.west_node;
         if row < 0 || column < 0 || row as usize >= self.rows || column as usize >= self.columns {
             return None;
         }
-        let index = row as usize * self.columns + column as usize;
+        let height = self.heights[row as usize * self.columns + column as usize];
+        height.is_finite().then_some(f64::from(height))
+    }
+}
+
+impl NationalHeights {
+    /// Reads a prepared model on the one arc-second lattice and its feather.
+    pub fn read(path: &Path) -> Result<Self, String> {
+        let raster = Raster::read(path, NODES_PER_DEGREE)?;
+        let valid: Vec<bool> = raster.heights.iter().map(|h| h.is_finite()).collect();
+        let weights = distances_to_missing(&valid, raster.rows, raster.columns)
+            .into_iter()
+            .map(weight_code)
+            .collect();
+        Ok(NationalHeights { raster, weights })
+    }
+
+    /// The model's height at a node and its weight there, or `None` where it has no say.
+    pub fn at(&self, north_node: i32, east_node: i32) -> Option<(f64, f64)> {
+        let raster = &self.raster;
+        let row = raster.north_node - north_node;
+        let column = east_node - raster.west_node;
+        if row < 0 || column < 0 || row as usize >= raster.rows || column as usize >= raster.columns
+        {
+            return None;
+        }
+        let index = row as usize * raster.columns + column as usize;
         let weight = self.weights[index];
-        (weight > 0).then(|| (f64::from(self.heights[index]), f64::from(weight) / 255.0))
+        (weight > 0).then(|| (f64::from(raster.heights[index]), f64::from(weight) / 255.0))
     }
 }
 

@@ -2,7 +2,15 @@
 //! two ends included (the popup's scene fills it). On a lattice line the bilinear terrain is linear
 //! between the line's two nodes, so the vertices hold every node row and column the ray passes:
 //! no crest of the lattice falls between two of them (a sampling cadence read quiet hills 0.4-1.0
-//! dB loud and a railway 3.8 dB, `evidence/2026-10-10/propagation-architecture/`).
+//! dB loud and a railway 3.8 dB, `evidence/2026-10-10/propagation-architecture/`). Within
+//! [`FINE_ENDS_M`] of either end the lattice is the 1/6" one where a national model gives it.
+
+/// Metres from either end of a ray within which its ground is walked on the 1/6" lattice: a berm,
+/// a cutting or a road's shelf narrower than the 1" lattice screens there (against 5 m heights
+/// every 2 m along the whole ray: the D4's berm at Mníšek 3.52 -> 0.12 dB, Pasito A 1.03 -> 0.20,
+/// Kytín 0.19 -> 0.02; 300 m gains at most 0.12 dB more for three times the added vertices;
+/// `evidence/2026-10-10/fine-terrain/`).
+pub const FINE_ENDS_M: f64 = 100.0;
 
 /// The ground under one ray, sampled at fractions `t` of its horizontal length (0 the source, 1
 /// the receiver), in increasing order; every vector holds one value a sample.

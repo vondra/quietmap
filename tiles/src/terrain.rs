@@ -91,6 +91,16 @@ pub struct Node {
     pub canopy_m: u8,
 }
 
+/// Where a point falls among a window's nodes: its cell's north-west node and the fractions south
+/// and east within the cell.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NodePosition {
+    pub row: u32,
+    pub row_fraction: f64,
+    pub column: u32,
+    pub column_fraction: f64,
+}
+
 /// Ground under one point: bilinear height and ground factor, nearest forest cover and canopy.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GroundSample {
@@ -113,7 +123,7 @@ pub const OCEAN: GroundSample = GroundSample {
 
 /// The planar prediction of node (r, c) from its west, north and north-west neighbours (0 off the
 /// window), in the u16 ring: encoding stores the height minus it, decoding adds it back.
-fn predicted(heights: &[u16], columns: usize, r: usize, c: usize) -> u16 {
+pub(crate) fn predicted(heights: &[u16], columns: usize, r: usize, c: usize) -> u16 {
     let at = |r: usize, c: usize| heights[r * columns + c];
     let west = if c > 0 { at(r, c - 1) } else { 0 };
     let north = if r > 0 { at(r - 1, c) } else { 0 };
@@ -242,9 +252,9 @@ impl Terrain {
         }
     }
 
-    /// The ground at a point, or `None` outside the window or where a needed node has no data:
-    /// height and ground factor bilinear, forest cover from the nearest node.
-    pub fn sample(&self, position: Mercator) -> Option<GroundSample> {
+    /// Where a point falls among the window's nodes, `None` outside the window: rows found on
+    /// Mercator y, so a row's fraction is linear in y between two rows (as the walk's).
+    pub fn locate(&self, position: Mercator) -> Option<NodePosition> {
         let columns_per_unit = f64::from(360 * NODES_PER_DEGREE) / f64::from(TILES_PER_AXIS);
         let column_position = position.x * columns_per_unit
             - f64::from(180 * NODES_PER_DEGREE)
@@ -276,11 +286,30 @@ impl Terrain {
             0.0
         };
         let (row, column) = (row as u32, column as u32);
-        let next_row = row + u32::from(row_fraction > 0.0);
-        let next_column = column + u32::from(column_fraction > 0.0);
-        if next_row >= self.window.rows || next_column >= self.window.columns {
+        if row + u32::from(row_fraction > 0.0) >= self.window.rows
+            || column + u32::from(column_fraction > 0.0) >= self.window.columns
+        {
             return None;
         }
+        Some(NodePosition {
+            row,
+            row_fraction,
+            column,
+            column_fraction,
+        })
+    }
+
+    /// The ground at a point, or `None` outside the window or where a needed node has no data:
+    /// height and ground factor bilinear, forest cover from the nearest node.
+    pub fn sample(&self, position: Mercator) -> Option<GroundSample> {
+        let NodePosition {
+            row,
+            row_fraction,
+            column,
+            column_fraction,
+        } = self.locate(position)?;
+        let next_row = row + u32::from(row_fraction > 0.0);
+        let next_column = column + u32::from(column_fraction > 0.0);
         let corners = [
             self.node(row, column),
             self.node(row, next_column),

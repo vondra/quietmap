@@ -59,7 +59,7 @@ fn fixture_at(lon: f64, height: impl Fn(i64, i64) -> f64, ocean: impl Fn(i32) ->
 
 impl Fixture {
     fn with_ground<T>(&self, f: impl FnOnce(&Ground) -> T) -> T {
-        let mut ground = Ground::new(self.frame, self.centre, 1);
+        let mut ground = Ground::new(self.frame, self.centre, 1, None);
         for (tile, bytes) in &self.tiles {
             ground.insert(*tile, bytes.as_deref().map(|b| Terrain::parse(b).unwrap()));
         }
@@ -273,4 +273,157 @@ fn a_vertex_refuses_a_nearer_node_without_forest_data() {
     let cover = edge_sample(Some(trees), Some(no_data), 0.3).map(|sample| sample.forest_cover);
     assert_eq!(cover, Some(0.4));
     assert!(edge_sample(Some(trees), Some(no_data), 0.7).is_none());
+}
+
+/// A fresh year root with the fine terrain of the fixture's land tiles that `fine` names, every
+/// fine node's height from its global 1/6" row and column.
+fn fine_root(
+    fixture: &Fixture,
+    height: impl Fn(i64, i64) -> f64,
+    fine: impl Fn(TileId) -> bool,
+) -> std::path::PathBuf {
+    static ROOTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "qm-fine-test-{}-{}",
+        std::process::id(),
+        ROOTS.fetch_add(1, Ordering::Relaxed)
+    ));
+    for (tile, bytes) in &fixture.tiles {
+        if bytes.is_none() || !fine(*tile) {
+            continue;
+        }
+        let window = tiles::terrain_fine::fine_window(Window::of_tile(*tile));
+        let heights: Vec<u16> = (0..window.rows)
+            .flat_map(|r| (0..window.columns).map(move |c| (r, c)))
+            .map(|(r, c)| {
+                tiles::terrain::code_of_height_m(height(
+                    i64::from(window.north_node) - i64::from(r),
+                    i64::from(window.west_node) + i64::from(c),
+                ))
+            })
+            .collect();
+        let path = tile_path(&root, *tile, Kind::TerrainFine);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, tiles::terrain_fine::encode(window, &heights)).unwrap();
+    }
+    root
+}
+
+impl Fixture {
+    fn with_fine_ground<T>(&self, root: &std::path::Path, f: impl FnOnce(&Ground) -> T) -> T {
+        let mut ground = Ground::new(self.frame, self.centre, 1, Some(root.to_path_buf()));
+        for (tile, bytes) in &self.tiles {
+            ground.insert(*tile, bytes.as_deref().map(|b| Terrain::parse(b).unwrap()));
+        }
+        f(&ground)
+    }
+}
+
+/// A berm 7 m high on every 23rd fine row: what the one arc-second lattice cannot hold.
+fn bermed(row: i64, column: i64) -> f64 {
+    rugged(row / 6, column / 6) + if row.rem_euclid(23) == 0 { 7.0 } else { 0.0 }
+}
+
+/// Rays within the clicked tile, every way round, long and short.
+const FINE_RAYS: [([f64; 2], [f64; 2]); 5] = [
+    ([0.0, 0.0], [1_000.0, 0.0]),
+    ([0.0, 0.0], [0.0, -1_500.0]),
+    ([-120.0, 340.0], [2_700.0, -2_300.0]),
+    ([12.3, 45.6], [-31.4, -15.9]),
+    ([1_900.0, -800.0], [-150.0, 260.0]),
+];
+
+#[test]
+fn near_either_end_the_ray_walks_the_fine_lattice_and_one_vertex_marks_each_switch() {
+    let fixture = fixture(rugged, false);
+    let root = fine_root(&fixture, bermed, |tile| tile == fixture.centre);
+    fixture.with_fine_ground(&root, |ground| {
+        let mut profile = Profile::default();
+        for (source, receiver) in FINE_RAYS {
+            ground.fill_profile(source, receiver, &mut profile).unwrap();
+            let length = (receiver[0] - source[0]).hypot(receiver[1] - source[1]);
+            assert!(profile.t.windows(2).all(|pair| pair[0] < pair[1]));
+            // A vertex's lattice coordinates as the walk lays the lines: columns by longitude,
+            // rows evenly in Mercator y between the one arc-second rows.
+            let on_line = |metres: [f64; 2], scale: f64| {
+                let position = fixture.frame.to_mercator(metres);
+                let column = position.to_degrees().1 * 3_600.0 * scale;
+                let rows = &ground.row_y;
+                let j = rows.partition_point(|&y| y <= position.y) - 1;
+                let row = scale * (j as f64 + (position.y - rows[j]) / (rows[j + 1] - rows[j]));
+                let near = |v: f64| (v - v.round()).abs() < 1e-6;
+                near(row) || near(column)
+            };
+            let mut switches = 0;
+            for (index, &t) in profile.t.iter().enumerate() {
+                let point = [
+                    source[0] + t * (receiver[0] - source[0]),
+                    source[1] + t * (receiver[1] - source[1]),
+                ];
+                let from_end = t.min(1.0 - t) * length;
+                let fine = from_end <= FINE_ENDS_M + 1e-6;
+                let expected = if fine {
+                    ground.at(point).unwrap()
+                } else {
+                    ground.coarse_at(point).unwrap()
+                };
+                assert!(
+                    (profile.ground_m[index] - expected.height_m).abs() < 1e-6,
+                    "{t} {source:?}"
+                );
+                assert!((profile.ground_factor[index] - expected.ground_factor).abs() < 1e-6);
+                if index == 0 || index + 1 == profile.t.len() {
+                    continue;
+                }
+                if (from_end - FINE_ENDS_M).abs() < 1e-6 && length > 2.0 * FINE_ENDS_M {
+                    switches += 1;
+                } else {
+                    let scale = if fine { 6.0 } else { 1.0 };
+                    assert!(on_line(point, scale), "{t} {source:?} off its lattice");
+                }
+            }
+            assert_eq!(switches, if length > 2.0 * FINE_ENDS_M { 2 } else { 0 });
+        }
+    });
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// Where a tile under an end's stretch has no fine terrain, that stretch walks the one arc-second
+/// lattice as before, bit for bit; without any fine terrain the whole ray does.
+#[test]
+fn a_stretch_without_fine_terrain_walks_the_one_arc_second_lattice() {
+    let fixture = fixture(rugged, false);
+    let root = fine_root(&fixture, bermed, |tile| tile == fixture.centre);
+    let east_edge = fixture
+        .frame
+        .to_metres(fixture.centre.to_mercator([16_384, 0]))[0];
+    let (source, receiver) = ([0.0, 0.0], [east_edge + 800.0, 120.0]);
+    let (mut fine, mut coarse) = (Profile::default(), Profile::default());
+    fixture.with_ground(|ground| ground.fill_profile(source, receiver, &mut coarse).unwrap());
+    fixture.with_fine_ground(&root, |ground| {
+        ground.fill_profile(source, receiver, &mut fine).unwrap();
+        // Without fine terrain at either end the profile is the one arc-second walk's.
+        let mut both_coarse = Profile::default();
+        let (west, east) = ([-east_edge - 900.0, 0.0], [east_edge + 900.0, 0.0]);
+        ground.fill_profile(west, east, &mut both_coarse).unwrap();
+        let mut plain = Profile::default();
+        fixture.with_ground(|ground| ground.fill_profile(west, east, &mut plain).unwrap());
+        assert_eq!(
+            (both_coarse.t, both_coarse.ground_m),
+            (plain.t, plain.ground_m)
+        );
+    });
+    let switch = FINE_ENDS_M / (receiver[0] - source[0]).hypot(receiver[1] - source[1]);
+    let beyond = |profile: &Profile| -> Vec<(f64, f64, f64)> {
+        (0..profile.t.len())
+            .filter(|&k| profile.t[k] > switch)
+            .map(|k| (profile.t[k], profile.ground_m[k], profile.ground_factor[k]))
+            .collect()
+    };
+    assert_eq!(beyond(&fine), beyond(&coarse));
+    assert!(
+        fine.t.iter().filter(|&&t| t < switch).count()
+            > 2 * coarse.t.iter().filter(|&&t| t < switch).count()
+    );
+    std::fs::remove_dir_all(&root).unwrap();
 }

@@ -1,6 +1,7 @@
 //! Prepared z12 tiles: numbering and coordinates ([`geo`]) and one module per kind with its
-//! file format, writer and reader ([`terrain`], [`obstacles`], [`sources`], [`aircraft`]); [`read`]
-//! reads whole files; [`aircraft_tracks`] holds the year's flights as the map draws them.
+//! file format, writer and reader ([`terrain`], [`terrain_fine`], [`obstacles`], [`sources`],
+//! [`aircraft`]); [`read`] reads whole files; [`aircraft_tracks`] holds the year's flights as the
+//! map draws them.
 
 pub mod aircraft;
 pub mod aircraft_events;
@@ -10,6 +11,7 @@ pub mod obstacles;
 pub mod read;
 pub mod sources;
 pub mod terrain;
+pub mod terrain_fine;
 
 use std::path::{Path, PathBuf};
 
@@ -17,6 +19,8 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
     Terrain,
+    /// The 1/6" heights where a national model has them, read near a ray's ends.
+    TerrainFine,
     Obstacles,
     Sources,
     Aircraft,
@@ -30,6 +34,7 @@ impl Kind {
     pub fn name(self) -> &'static str {
         match self {
             Kind::Terrain => "terrain",
+            Kind::TerrainFine => "terrain-fine",
             Kind::Obstacles => "obstacles",
             Kind::Sources => "sources",
             Kind::Aircraft => "aircraft",

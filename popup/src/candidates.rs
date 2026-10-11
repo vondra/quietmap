@@ -247,9 +247,9 @@ pub fn collect(
                 Some([start, end]) if piece.is_line() => [start, end],
                 Some([start, _]) => [start; 2],
                 None => {
-                    let start_ground = ground.at(ends_m[0])?.height_m;
+                    let start_ground = ground.coarse_at(ends_m[0])?.height_m;
                     if piece.is_line() {
-                        [start_ground, ground.at(ends_m[1])?.height_m]
+                        [start_ground, ground.coarse_at(ends_m[1])?.height_m]
                     } else {
                         [start_ground; 2]
                     }
