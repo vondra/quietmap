@@ -13,10 +13,12 @@ use std::collections::HashMap;
 
 /// A group's directions (degrees wide) and distances (shells doubling from this far) from its
 /// frame's centre, and the share of its layer's energy at some of the frame's points from which it
-/// gets a probe (the others are blended alone).
+/// gets a probe (the others are blended alone). Against 0.3 % (2026-10-11, Dobříš 2207/1394): 0.5 %
+/// paints 12 % faster with every layer's cells within 1 dB at 99.97 %; 1 % 25 % faster, industry
+/// over 1 dB at 0.66 %; 20-degree sectors 18 % faster, industry over 1 dB at 3 %.
 const GROUP_SECTOR_DEG: f64 = 10.0;
 const GROUP_FIRST_SHELL_M: f64 = 100.0;
-const PROBE_SHARE: f64 = 0.003;
+const PROBE_SHARE: f64 = 0.005;
 
 /// Each source's energy at four points (north-west, north-east, south-west, south-east), each list
 /// sorted by source.
