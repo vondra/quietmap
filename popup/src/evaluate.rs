@@ -205,6 +205,18 @@ pub fn source_rays(
         deck_at(fraction).unwrap_or_else(|| profile.ground_m.first().copied().unwrap_or(0.0))
             + source.height_m
     };
+    // The ground under the piece's ends as its rays stand on it (the candidate keeps the 1"
+    // ground, for pieces never traced): the spreading and the line's geometry use this.
+    let ground_m = if candidate.on_deck {
+        candidate.ground_m
+    } else if candidate.line {
+        [
+            receiver.ground.at(a)?.height_m,
+            receiver.ground.at(b)?.height_m,
+        ]
+    } else {
+        [receiver.ground.at(a)?.height_m; 2]
+    };
     if !candidate.line {
         let ends = RayEnds {
             source_ground_m: deck_at(0.0),
@@ -214,7 +226,7 @@ pub fn source_rays(
         let distance = candidate
             .distance_m
             .max(source.exclusion_radius_m)
-            .hypot(receiver.altitude_m - (candidate.ground_m[0] + source.height_m))
+            .hypot(receiver.altitude_m - (ground_m[0] + source.height_m))
             .max(1.0);
         let divergence = 1.0 / (distance * distance * energy(POINT_DIVERGENCE_OFFSET_DB));
         visit(&SourceRay {
@@ -228,7 +240,7 @@ pub fn source_rays(
         });
         return Ok(());
     }
-    let altitude = |end: usize| candidate.ground_m[end] + source.height_m - receiver.altitude_m;
+    let altitude = |end: usize| ground_m[end] + source.height_m - receiver.altitude_m;
     let [x, y] = receiver.position;
     let Some(geometry) = LinePieceGeometry::new(
         [a[0] - x, a[1] - y, altitude(0)],

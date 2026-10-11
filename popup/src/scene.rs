@@ -1,7 +1,8 @@
 //! The tiles a click has read so far, in the click's metre frame: the ground under any point and
 //! the profile of a ray, a vertex wherever it crosses a line of the terrain lattice: the 1/6"
-//! lattice within `FINE_ENDS_M` of either end where every tile under that stretch has it (read
-//! when first needed), the one arc-second lattice elsewhere.
+//! lattice within `FINE_ENDS_M` of either end where a tile under that stretch has fine terrain
+//! (its detail read when first needed, added to the 1" heights), the one arc-second lattice
+//! elsewhere.
 
 use physics::profile::{FINE_ENDS_M, Profile};
 use std::path::PathBuf;
@@ -12,7 +13,7 @@ use tiles::terrain::{
     GroundSample, HEIGHT_MISSING, NODES_PER_DEGREE, Node, NodePosition, OCEAN, PERCENT_MAX,
     Terrain, height_m_of_code,
 };
-use tiles::terrain_fine::{FINE_PER_NODE, FineTerrain};
+use tiles::terrain_fine::{FINE_PER_NODE, FineTerrain, fine_window};
 use tiles::{Kind, tile_path};
 
 /// Lattice columns around the globe.
@@ -94,6 +95,7 @@ impl Ground {
     }
 
     /// The fine terrain of a tile of the scene, read whole on first use; `None` where it has none.
+    /// Its window must be its `terrain` tile's, six times as fine.
     pub fn fine_of(&self, tile: TileId) -> Result<Option<&FineTerrain>, String> {
         let Some(root) = &self.fine_root else {
             return Ok(None);
@@ -104,17 +106,22 @@ impl Ground {
         self.fine[slot]
             .get_or_init(|| {
                 let path = tile_path(root, tile, Kind::TerrainFine);
-                match std::fs::read(&path) {
-                    Ok(bytes) => {
-                        self.fine_read[0].fetch_add(1, Ordering::Relaxed);
-                        self.fine_read[1].fetch_add(bytes.len() as u64, Ordering::Relaxed);
-                        FineTerrain::parse(bytes)
-                            .map(Some)
-                            .map_err(|error| format!("{}: {error}", path.display()))
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                    Err(error) => Err(format!("{}: {error}", path.display())),
+                let bytes = match std::fs::read(&path) {
+                    Ok(bytes) => bytes,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(error) => return Err(format!("{}: {error}", path.display())),
+                };
+                self.fine_read[0].fetch_add(1, Ordering::Relaxed);
+                self.fine_read[1].fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                let fine = FineTerrain::parse(bytes)
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+                let coarse = self
+                    .terrain_of(tile)?
+                    .ok_or_else(|| format!("{}: fine terrain over the ocean", path.display()))?;
+                if fine.window() != fine_window(coarse.window()) {
+                    return Err(format!("{}: not its terrain tile's window", path.display()));
                 }
+                Ok(Some(fine))
             })
             .as_ref()
             .map(Option::as_ref)
@@ -151,37 +158,36 @@ impl Ground {
             .ok_or_else(|| format!("terrain of tile {tile:?} not read"))
     }
 
-    /// The ground at [east, north] metres as a ray's end reads it, the 1/6" height where the tile
-    /// has one; an error outside the read tiles or at a node without data (the click fails
-    /// instead of answering quieter).
+    /// The ground at [east, north] metres as a ray's end reads it, the tile's fine detail added to
+    /// its height where it has one; an error outside the read tiles or at a node without data (the
+    /// click fails instead of answering quieter).
     pub fn at(&self, metres: [f64; 2]) -> Result<GroundSample, String> {
         let position = self.frame.to_mercator(metres).snapped_to_lattice();
         let tile = TileId::containing(position);
         let Some(terrain) = self.terrain_of(tile)? else {
             return Ok(OCEAN);
         };
-        let mut sample = terrain
-            .sample(position)
+        let place = terrain
+            .locate(position)
             .ok_or_else(|| no_data_at(position))?;
-        if let Some(fine) = self.fine_of(tile)? {
-            let NodePosition {
-                row,
-                row_fraction,
-                column,
-                column_fraction,
-            } = terrain
-                .locate(position)
-                .ok_or_else(|| no_data_at(position))?;
-            let per = f64::from(FINE_PER_NODE);
-            sample.height_m = fine
-                .height_at(
-                    per * (f64::from(row) + row_fraction),
-                    per * (f64::from(column) + column_fraction),
-                )
-                .map_err(|error| error.to_string())?
-                .ok_or_else(|| no_data_at(position))?;
-        }
+        let mut sample = terrain
+            .sample_at(place)
+            .ok_or_else(|| no_data_at(position))?;
+        sample.height_m += self.detail_at(tile, place)?;
         Ok(sample)
+    }
+
+    /// The fine detail (m) of `tile` at a place among its 1" nodes, 0 where it has none.
+    fn detail_at(&self, tile: TileId, place: NodePosition) -> Result<f64, String> {
+        let Some(fine) = self.fine_of(tile)? else {
+            return Ok(0.0);
+        };
+        let per = f64::from(FINE_PER_NODE);
+        fine.at(
+            per * (f64::from(place.row) + place.row_fraction),
+            per * (f64::from(place.column) + place.column_fraction),
+        )
+        .map_err(|error| error.to_string())
     }
 
     /// The one arc-second ground at [east, north] metres: a source piece's geometry (its rays'
@@ -194,39 +200,42 @@ impl Ground {
         terrain.sample(position).ok_or_else(|| no_data_at(position))
     }
 
-    /// The terrain height at `metres`, `None` where no tile is read yet or a node has no data
-    /// (the aircraft horizons skip such samples; a ray never meets them).
+    /// The terrain height at `metres`, its fine detail added, `None` where no tile is read yet or a
+    /// node has no data (the aircraft horizons skip such samples; a ray never meets them).
     pub fn read_height_m(&self, metres: [f64; 2]) -> Option<f64> {
         let position = self.frame.to_mercator(metres).snapped_to_lattice();
-        let terrain = self
-            .slot(TileId::containing(position))
-            .and_then(|slot| self.tiles[slot].as_ref())?;
+        let tile = TileId::containing(position);
+        let terrain = self.slot(tile).and_then(|slot| self.tiles[slot].as_ref())?;
         match terrain {
-            Some(terrain) => terrain.sample(position).map(|sample| sample.height_m),
+            Some(terrain) => {
+                let place = terrain.locate(position)?;
+                Some(terrain.sample_at(place)?.height_m + self.detail_at(tile, place).ok()?)
+            }
             None => Some(OCEAN.height_m),
         }
     }
 
-    /// Whether every tile under the stretch from `a` to `b` has fine terrain: the tiles of its
-    /// box's corners, as a stretch of at most 200 m lies in two by two tiles at most.
-    fn fine_under(&self, a: Mercator, b: Mercator) -> Result<bool, String> {
+    /// Whether a tile under the stretch from `a` to `b` has fine terrain: the tiles of its box's
+    /// corners, as a stretch of at most 200 m lies in two by two tiles at most (one without adds
+    /// no detail to its own part).
+    fn fine_near(&self, a: Mercator, b: Mercator) -> Result<bool, String> {
         for x in [a.x.min(b.x), a.x.max(b.x)] {
             for y in [a.y.min(b.y), a.y.max(b.y)] {
                 if self
                     .fine_of(TileId::containing(Mercator { x, y }))?
-                    .is_none()
+                    .is_some()
                 {
-                    return Ok(false);
+                    return Ok(true);
                 }
             }
         }
-        Ok(true)
+        Ok(false)
     }
 
     /// The ground under the ray from `source` to `receiver` (click metres) at both ends and
     /// wherever the ray crosses a row or a column of the lattice, in order from the source: the
-    /// 1/6" lattice within `FINE_ENDS_M` of either end where every tile under that stretch has
-    /// it, with a vertex where the lattice changes (no line of the coarser one), the one
+    /// 1/6" lattice within `FINE_ENDS_M` of either end where a tile under that stretch has fine
+    /// terrain, with a vertex where the lattice changes (no line of the coarser one), the one
     /// arc-second lattice elsewhere. A vertex on a line reads that line's two nodes either side.
     pub fn fill_profile(
         &self,
@@ -253,18 +262,18 @@ impl Ground {
         let count = if self.fine_root.is_none() {
             1
         } else if length_m <= 2.0 * FINE_ENDS_M {
-            stretches[0].2 = scale_of(self.fine_under(a, b)?);
+            stretches[0].2 = scale_of(self.fine_near(a, b)?);
             1
         } else {
             let end = FINE_ENDS_M / length_m;
             let mut count = 0;
             for (from, to, scale) in [
-                (0.0, end, scale_of(self.fine_under(a, along(end))?)),
+                (0.0, end, scale_of(self.fine_near(a, along(end))?)),
                 (end, 1.0 - end, 1),
                 (
                     1.0 - end,
                     1.0,
-                    scale_of(self.fine_under(along(1.0 - end), b)?),
+                    scale_of(self.fine_near(along(1.0 - end), b)?),
                 ),
             ] {
                 if count > 0 && stretches[count - 1].2 == scale {
@@ -430,10 +439,11 @@ impl Ground {
         Ok(())
     }
 
-    /// The ground at a vertex of the fine walk: the height between two fine nodes of its line
-    /// (global 1/6" `row` and `column`, the second a row south when `down`, else a column east; a
-    /// node of no weight not read), the ground factor and the trees of the one arc-second tile
-    /// there; `None` where a node it weighs has no data. The fine window's corner is the 1"
+    /// The ground at a vertex of the fine walk (global 1/6" `row` and `column` of its line's first
+    /// node, the second a row south when `down`, else a column east, `fraction` the way between):
+    /// the 1" tile's bilinear height, ground factor and trees at the vertex's place in its 1"
+    /// cell, taken from its fine indices, plus the fine detail on the line (a node of no weight
+    /// not read); `None` where a 1" node it weighs has no data. The fine window's corner is the 1"
     /// window's, so a fine index over six is a 1" one.
     fn fine_sample(
         &self,
@@ -443,36 +453,23 @@ impl Ground {
         down: bool,
         fraction: f64,
     ) -> Result<Option<GroundSample>, String> {
-        let tile = TileId::containing(position);
-        let (Some(terrain), Some(fine)) = (self.terrain_of(tile)?, self.fine_of(tile)?) else {
-            return Err(format!(
-                "no fine terrain in tile {tile:?} of a fine stretch"
-            ));
+        let tile = self.land_tile_at(position)?;
+        let Some(terrain) = self.terrain_of(tile)? else {
+            return Ok(Some(OCEAN));
         };
-        let window = fine.window();
+        let window = fine_window(terrain.window());
         let around = i64::from(FINE_PER_NODE) * COLUMNS_AROUND;
         let local_row = i64::from(window.north_node) - row;
         let local_column = (column - i64::from(window.west_node)).rem_euclid(around);
-        if local_row < 0 || local_column >= i64::from(window.columns) {
+        if local_row < 0
+            || local_row >= i64::from(window.rows)
+            || local_column >= i64::from(window.columns)
+        {
             return Err(format!("a fine vertex outside tile {tile:?}"));
         }
         let (local_row, local_column) = (local_row as u32, local_column as u32);
-        let second = if down {
-            (local_row + 1, local_column)
-        } else {
-            (local_row, local_column + 1)
-        };
-        let failed = |error: tiles::FormatError| error.to_string();
-        let [first_code, second_code] = if fraction <= 0.0 {
-            [fine.node(local_row, local_column).map_err(failed)?; 2]
-        } else if fraction >= 1.0 {
-            [fine.node(second.0, second.1).map_err(failed)?; 2]
-        } else {
-            fine.pair(local_row, local_column, down).map_err(failed)?
-        };
-        // The vertex's place in its 1" cell from its fine indices: on its own line exactly, along
-        // it by the fraction (so a vertex on a cell's midline takes the same trees here and on the
-        // card).
+        // The vertex's place in its 1" cell: on its own line exactly, along it by the fraction (so
+        // a vertex on a cell's midline takes the same trees here and on the card).
         let (fine_row, fine_column) = if down {
             (f64::from(local_row) + fraction, f64::from(local_column))
         } else {
@@ -489,11 +486,11 @@ impl Ground {
         let Some(mut sample) = terrain.sample_at(place) else {
             return Ok(None);
         };
-        if first_code == HEIGHT_MISSING || second_code == HEIGHT_MISSING {
-            return Ok(None);
+        if let Some(fine) = self.fine_of(tile)? {
+            sample.height_m += fine
+                .on_line(local_row, local_column, down, fraction)
+                .map_err(|error| error.to_string())?;
         }
-        let (first_m, second_m) = (height_m_of_code(first_code), height_m_of_code(second_code));
-        sample.height_m = first_m + fraction * (second_m - first_m);
         Ok(Some(sample))
     }
 }

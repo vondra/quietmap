@@ -276,10 +276,10 @@ fn a_vertex_refuses_a_nearer_node_without_forest_data() {
 }
 
 /// A fresh year root with the fine terrain of the fixture's land tiles that `fine` names, every
-/// fine node's height from its global 1/6" row and column.
+/// fine node's detail from its global 1/6" row and column.
 fn fine_root(
     fixture: &Fixture,
-    height: impl Fn(i64, i64) -> f64,
+    detail: impl Fn(i64, i64) -> f64,
     fine: impl Fn(TileId) -> bool,
 ) -> std::path::PathBuf {
     static ROOTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -293,10 +293,10 @@ fn fine_root(
             continue;
         }
         let window = tiles::terrain_fine::fine_window(Window::of_tile(*tile));
-        let heights: Vec<u16> = (0..window.rows)
+        let details: Vec<i16> = (0..window.rows)
             .flat_map(|r| (0..window.columns).map(move |c| (r, c)))
             .map(|(r, c)| {
-                tiles::terrain::code_of_height_m(height(
+                tiles::terrain_fine::detail_code(detail(
                     i64::from(window.north_node) - i64::from(r),
                     i64::from(window.west_node) + i64::from(c),
                 ))
@@ -304,7 +304,7 @@ fn fine_root(
             .collect();
         let path = tile_path(&root, *tile, Kind::TerrainFine);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, tiles::terrain_fine::encode(window, &heights)).unwrap();
+        std::fs::write(&path, tiles::terrain_fine::encode(window, &details)).unwrap();
     }
     root
 }
@@ -319,9 +319,9 @@ impl Fixture {
     }
 }
 
-/// A berm 7 m high on every 23rd fine row: what the one arc-second lattice cannot hold.
-fn bermed(row: i64, column: i64) -> f64 {
-    rugged(row / 6, column / 6) + if row.rem_euclid(23) == 0 { 7.0 } else { 0.0 }
+/// A berm 7 m high on every 23rd fine row: the detail the one arc-second lattice cannot hold.
+fn bermed(row: i64, _column: i64) -> f64 {
+    if row.rem_euclid(23) == 0 { 7.0 } else { 0.0 }
 }
 
 /// Rays within the clicked tile, every way round, long and short.

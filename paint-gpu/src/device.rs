@@ -10,6 +10,7 @@ use cudarc::nvrtc::{CompileOptions, compile_ptx_with_opts};
 use paint::square::{Files, Square};
 use physics::bands::{BAND_FREQUENCY_HZ, BANDS, PERIODS, SPEED_OF_SOUND_M_PER_S};
 use physics::weather::WeatherTable;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tiles::Kind;
@@ -61,12 +62,13 @@ fn band_constants() -> String {
     .concat()
 }
 
-/// The fine terrain's lattice and reach as device constants (kernels/scene.cuh).
+/// The fine terrain's lattice, reach and detail step as device constants (kernels/scene.cuh).
 fn lattice_constants() -> String {
     format!(
-        "#define FINE_PER_NODE {}\n#define FINE_ENDS_M {:?}f\n",
+        "#define FINE_PER_NODE {}\n#define FINE_ENDS_M {:?}f\n#define DETAIL_STEP_M {:?}f\n",
         tiles::terrain_fine::FINE_PER_NODE,
-        physics::profile::FINE_ENDS_M as f32
+        physics::profile::FINE_ENDS_M as f32,
+        tiles::terrain_fine::DETAIL_STEP_M as f32
     )
 }
 
@@ -96,8 +98,8 @@ struct TerrainTile {
     nodes_offset: u64,
     canopy_offset: u64,
     rows_offset: u64,
-    /// Its fine terrain's u16 heights in the nodes' buffer; 0: none (the first tile's nodes come
-    /// first).
+    /// Its fine terrain's detail codes (i16, tiles::terrain_fine) in the nodes' buffer; 0: none
+    /// (the first tile's nodes come first).
     fine_offset: u64,
 }
 
@@ -547,6 +549,24 @@ impl DeviceSquare {
                 ((frame.origin.y - y) * frame.north_m_per_unit) as f32
             })
             .collect();
+        // Each land tile's fine detail, decoded on every core (a tile is megabytes of it).
+        let land_tiles: Vec<TileId> = index_of
+            .iter()
+            .filter(|&(_, &index)| rings.file(index, Kind::Terrain).is_some())
+            .map(|(&tile, _)| tile)
+            .collect();
+        let fine_codes: HashMap<TileId, Vec<i16>> = land_tiles
+            .par_iter()
+            .filter_map(|&tile| match square.ground.fine_of(tile) {
+                Ok(Some(fine)) => Some(
+                    fine.codes()
+                        .map(|codes| (tile, codes))
+                        .map_err(|e| e.to_string()),
+                ),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<_, String>>()?;
         for dy in -radius..=radius {
             for dx in -radius..=radius {
                 let y = i64::from(square.tile.y) + dy;
@@ -571,13 +591,9 @@ impl DeviceSquare {
                             - f64::from(window.west_node);
                         let nodes_offset = append_aligned(&mut nodes, terrain.node_bytes());
                         let canopy_offset = append_aligned(&mut nodes, terrain.canopy_bytes());
-                        let fine_offset = match square.ground.fine_of(tile)? {
-                            Some(fine) => {
-                                let heights = fine.heights().map_err(|e| e.to_string())?;
-                                append_aligned(&mut nodes, &bytes_of(&heights))
-                            }
-                            None => 0,
-                        };
+                        let fine_offset = fine_codes
+                            .get(&tile)
+                            .map_or(0, |codes| append_aligned(&mut nodes, &bytes_of(codes)));
                         *slot = TerrainTile {
                             state: TILE_READ,
                             rows: window.rows,
@@ -656,23 +672,31 @@ impl DeviceSquare {
         }
         let candidates: Vec<DeviceCandidate> = square
             .candidates
-            .iter()
+            .par_iter()
             .map(|candidate| {
                 let [a, b] = candidate.ends_m;
-                DeviceCandidate {
+                // The ground under the ends as the rays stand on it (popup::evaluate::source_rays).
+                let ground_m = if candidate.on_deck {
+                    candidate.ground_m
+                } else if candidate.line {
+                    [square.ground.at(a)?.height_m, square.ground.at(b)?.height_m]
+                } else {
+                    [square.ground.at(a)?.height_m; 2]
+                };
+                Ok(DeviceCandidate {
                     ax: a[0] as f32,
                     ay: a[1] as f32,
                     bx: b[0] as f32,
                     by: b[1] as f32,
-                    ground0: candidate.ground_m[0] as f32,
-                    ground1: candidate.ground_m[1] as f32,
+                    ground0: ground_m[0] as f32,
+                    ground1: ground_m[1] as f32,
                     line: u32::from(candidate.line),
                     attribute: first_of_list[candidate.attribute.list as usize]
                         + candidate.attribute.index,
                     on_deck: u32::from(candidate.on_deck),
-                }
+                })
             })
-            .collect();
+            .collect::<Result<_, String>>()?;
         let device = &gpu.device;
         let upload = |bytes: Vec<u8>| driver(device.htod_sync_copy(&bytes));
         let pointer = |slice: &CudaSlice<u8>| *slice.device_ptr();
