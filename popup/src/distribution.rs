@@ -189,6 +189,16 @@ impl Distribution {
         sum
     }
 
+    /// The distribution with an independent `other` added at every moment: its levels as a line's
+    /// values, its silence a value of nothing.
+    pub(crate) fn with_distribution(&self, other: &Distribution) -> Self {
+        let values = (other.intensities())
+            .chain([(0.0, other.silent)])
+            .filter(|&(_, share)| share > 0.0)
+            .collect();
+        self.with_line((&LineValues::of(values), 1.0))
+    }
+
     /// The distribution with a steady `intensity` added at every moment.
     pub(crate) fn over(&self, intensity: f64) -> Self {
         self.with_line((&LineValues::of(vec![(intensity, 1.0)]), 1.0))

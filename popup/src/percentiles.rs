@@ -592,75 +592,126 @@ impl Resolution {
     };
 }
 
-/// The distribution of the summed level over each period at `resolution`: for every group of hours
-/// (the roads' flows follow the hour together) and every weather state (one for every ray of the
-/// place), the lines that move the level added, independent, then the steady energy; the groups
-/// and states averaged by their shares of the time.
+/// The distribution of the summed level over each period at `resolution` of `lines` over the
+/// `steady` energy: [`layered_distributions`] of one layer.
 pub fn distributions_of(
     lines: &[Line],
     steady: [f64; PERIODS],
     resolution: Resolution,
 ) -> [Distribution; PERIODS] {
-    std::array::from_fn(|p| {
-        let (groups, hours) = hour_groups(lines, p, resolution.hour_groups);
+    layered_distributions(&[(lines, steady)], resolution).1
+}
+
+/// The distribution of the summed level over each period at `resolution` of each of `layers` (its
+/// lines over its steady energy) and of all of them together: for every group of hours (the roads'
+/// flows follow the hour together) and every weather state (one for every ray of the place), each
+/// layer's steady energy with its moving lines added, independent; the place's the layers' added,
+/// independent at that moment too (each line once, not again for the place); the groups and states
+/// averaged by their shares of the time.
+pub fn layered_distributions(
+    layers: &[(&[Line], [f64; PERIODS])],
+    resolution: Resolution,
+) -> (Vec<[Distribution; PERIODS]>, [Distribution; PERIODS]) {
+    let profiled =
+        (layers.iter()).any(|(lines, _)| lines.iter().any(|line| line.profile.is_some()));
+    let periods: [(Vec<Distribution>, Distribution); PERIODS] = std::array::from_fn(|p| {
+        let (groups, hours) = hour_groups(profiled, p, resolution.hour_groups);
         let states = resolution.weather_states;
-        let means: Vec<Vec<f64>> = (lines.iter())
-            .map(|line| merged_states(&line.means[p], states))
+        let means: Vec<Vec<Vec<f64>>> = (layers.iter())
+            .map(|(lines, _)| {
+                (lines.iter())
+                    .map(|line| merged_states(&line.means[p], states))
+                    .collect()
+            })
             .collect();
         // Every group of hours apart, in parallel, its lines' shapes shared by the weather states.
-        let parts: Vec<(f64, Distribution)> = (0..groups.len())
+        let parts: Vec<(f64, Vec<Distribution>, Distribution)> = (0..groups.len())
             .into_par_iter()
             .flat_map_iter(|group| {
                 let slots = &groups[group];
-                let factors: Vec<f64> = (lines.iter())
-                    .map(|line| {
-                        line.profile.map_or(1.0, |profile| {
-                            slots
-                                .iter()
-                                .map(|&slot| hour_factor(profile, p, slot))
-                                .sum::<f64>()
-                                / slots.len() as f64
-                        })
+                let factors: Vec<Vec<f64>> = (layers.iter())
+                    .map(|(lines, _)| {
+                        (lines.iter())
+                            .map(|line| {
+                                line.profile.map_or(1.0, |profile| {
+                                    slots
+                                        .iter()
+                                        .map(|&slot| hour_factor(profile, p, slot))
+                                        .sum::<f64>()
+                                        / slots.len() as f64
+                                })
+                            })
+                            .collect()
                     })
                     .collect();
-                let shapes: Vec<Option<Shape>> = (lines.iter().zip(&factors))
-                    .map(|(line, &factor)| line.shape(p, factor))
+                let shapes: Vec<Vec<Option<Shape>>> = (layers.iter().zip(&factors))
+                    .map(|((lines, _), factors)| {
+                        (lines.iter().zip(factors))
+                            .map(|(line, &factor)| line.shape(p, factor))
+                            .collect()
+                    })
                     .collect();
                 let weight = slots.len() as f64 / (hours * states) as f64;
                 (0..states)
                     .map(|state| {
-                        let state_means: Vec<f64> =
-                            means.iter().map(|means| means[state]).collect();
-                        let moment = moment(lines, &shapes, (&state_means, &factors), steady[p], p);
-                        // What holds steady first: a moving line's quiet moments fall into its bin.
-                        let mut sum = Distribution::empty(resolution.bin_db);
-                        sum.silent = 1.0;
-                        sum = sum.over(moment.floor);
-                        for &(_, values, mean) in &moment.moving {
-                            sum = sum.with_line((values, mean));
+                        let each: Vec<Distribution> = (layers.iter().enumerate())
+                            .map(|(layer, (lines, steady))| {
+                                let state_means: Vec<f64> =
+                                    (means[layer].iter()).map(|means| means[state]).collect();
+                                let moment = moment(
+                                    lines,
+                                    &shapes[layer],
+                                    (&state_means, &factors[layer]),
+                                    steady[p],
+                                    p,
+                                );
+                                // What holds steady first: a moving line's quiet moments fall
+                                // into its bin.
+                                let mut sum = Distribution::empty(resolution.bin_db);
+                                sum.silent = 1.0;
+                                sum = sum.over(moment.floor);
+                                for &(_, values, mean) in &moment.moving {
+                                    sum = sum.with_line((values, mean));
+                                }
+                                sum
+                            })
+                            .collect();
+                        let mut whole = each[0].clone();
+                        for layer in &each[1..] {
+                            whole = whole.with_distribution(layer);
                         }
-                        (weight, sum)
+                        (weight, each, whole)
                     })
                     .collect::<Vec<_>>()
             })
             .collect();
-        let mut mixture = Distribution::empty(resolution.bin_db);
-        for (weight, part) in &parts {
-            mixture.add_scaled(part, *weight);
+        let mut each = vec![Distribution::empty(resolution.bin_db); layers.len()];
+        let mut whole = Distribution::empty(resolution.bin_db);
+        for (weight, parts, part) in &parts {
+            for (mixture, part) in each.iter_mut().zip(parts) {
+                mixture.add_scaled(part, *weight);
+            }
+            whole.add_scaled(part, *weight);
         }
-        mixture
-    })
+        (each, whole)
+    });
+    let [day, evening, night] = periods;
+    let whole = [day.1, evening.1, night.1];
+    let each = (day.0.into_iter().zip(evening.0).zip(night.0))
+        .map(|((day, evening), night)| [day, evening, night])
+        .collect();
+    (each, whole)
 }
 
 /// A period's hours in groups of `groups` (`None`: every hour apart) and how many there are: one
-/// where no line follows a profile; else the hours in order of their summed profiles' flow, cut
-/// into that many runs.
+/// where no line follows a profile (not `profiled`); else the hours in order of their summed
+/// profiles' flow, cut into that many runs.
 fn hour_groups(
-    lines: &[Line],
+    profiled: bool,
     period: usize,
     groups: Option<[usize; PERIODS]>,
 ) -> (Vec<Vec<usize>>, usize) {
-    if lines.iter().all(|line| line.profile.is_none()) {
+    if !profiled {
         return (vec![vec![0]], 1);
     }
     let hours = PERIOD_HOURS[period] as usize;

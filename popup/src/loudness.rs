@@ -12,7 +12,7 @@
 
 use crate::distribution::Distribution;
 use crate::evaluate::Bands;
-use crate::percentiles::{Group, Line, Resolution, Weather, distributions_of, place_lines};
+use crate::percentiles::{Group, Line, Resolution, Weather, layered_distributions, place_lines};
 use crate::selection::LayerSelection;
 use physics::bands::{
     A_WEIGHTING_DB as OCTAVE_A_DB, BANDS, PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy,
@@ -144,25 +144,22 @@ pub fn layer_curves(
         .collect()
 }
 
-/// Each layer's own loudness (Nden), as the place's is taken but of the layer alone: its own
-/// source `groups`' lines, chosen against its own energy (a railway beside a motorway keeps its
-/// passes), the flights' line the aircraft layer's, over the rest of its energy held steady, on
-/// its own curves; `None` for a layer without energy.
-pub fn layer_ndens(
+/// The loudness of a place and of each of its layers alone (Nden, `None` for a layer without
+/// energy): each layer's source `groups`' lines chosen against its own energy (a railway beside a
+/// motorway keeps its passes), the flights' line the aircraft layer's, over the rest of its energy
+/// held steady, on its own curves; the place's of all of them together, the layers independent at
+/// every moment (`layered_distributions`), on its curves; and the place's distributions.
+pub fn place_loudness(
     groups: &[Group],
-    (layers, layer_curves): (&[LayerSound], &[(Layer, [Curve; PERIODS])]),
+    layers: &[LayerSound],
+    (curves, layer_curves): (&[Curve; PERIODS], &[(Layer, [Curve; PERIODS])]),
     flights: (&Weather, ([f64; PERIODS], [f64; PERIODS])),
     fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
     resolution: Resolution,
-) -> Result<Vec<(Layer, Option<f64>)>, String> {
+) -> Result<PlaceLoudness, String> {
     let no_flights = ([0.0; PERIODS], [0.0; PERIODS]);
-    layers
-        .iter()
-        .zip(layer_curves)
-        .map(|(layer, (_, curves))| {
-            if layer.energy.iter().all(|&energy| energy <= 0.0) {
-                return Ok((layer.layer, None));
-            }
+    let placed: Vec<(Vec<Line>, [f64; PERIODS])> = (layers.iter())
+        .map(|layer| {
             let own = (groups.iter())
                 .filter(|group| group.layer == layer.layer)
                 .copied();
@@ -170,14 +167,34 @@ pub fn layer_ndens(
                 Layer::Aircraft => flights,
                 _ => (flights.0, no_flights),
             };
-            let (lines, steady) = place_lines(own, layer.energy, heard, fields)?;
-            let distributions = distributions_of(&lines, steady, resolution);
-            Ok((
-                layer.layer,
-                Some(loudness(&distributions, curves).nden_sone),
-            ))
+            place_lines(own, layer.energy, heard, fields)
         })
-        .collect()
+        .collect::<Result<_, String>>()?;
+    let views: Vec<(&[Line], [f64; PERIODS])> = (placed.iter())
+        .map(|(lines, steady)| (&lines[..], *steady))
+        .collect();
+    let (each, distributions) = layered_distributions(&views, resolution);
+    let own = (layers.iter().zip(layer_curves).zip(&each))
+        .map(|((layer, (_, curves)), distributions)| {
+            let heard = layer.energy.iter().any(|&energy| energy > 0.0);
+            (
+                layer.layer,
+                heard.then(|| loudness(distributions, curves).nden_sone),
+            )
+        })
+        .collect();
+    Ok(PlaceLoudness {
+        place: loudness(&distributions, curves),
+        distributions,
+        layers: own,
+    })
+}
+
+/// A place's loudness, its distributions and each layer's own Nden ([`place_loudness`]).
+pub struct PlaceLoudness {
+    pub place: Loudness,
+    pub distributions: [Distribution; PERIODS],
+    pub layers: Vec<(Layer, Option<f64>)>,
 }
 
 /// The mean loudness of levels with their shares of the time, `penalty_db` added.
