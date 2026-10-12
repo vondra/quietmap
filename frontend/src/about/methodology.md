@@ -282,11 +282,23 @@ than a fifth do; flights gain nothing.
 
 ## Time and loudness
 
-How the level spreads over each period is computed, not drawn: for every hour of road
-traffic and each of ten weather states (one for all sources at a time), each road, railway
-and flight path is a random stream of passes at its own rate, bells and calls sound in
-their share of the period, and industry, buildings and ships are steady; their sum's spread
-gives the levels exceeded 5, 10, 50 and 90 % of the time.
+The map does not know when a particular car or aircraft passed. It knows how many pass and how
+fast: a road's counted vehicles by hour, a railway's trains from the timetable, a flight path's
+flights by day, evening and night from a year of ADS-B tracks. Each is a stream of passes at
+random times. A pass rises as the vehicle approaches and falls as it leaves, and from the
+source's distance and speed follows how much of the time the level spends at each value
+(Kurze's statistics of moving sources on a line). What counts is the average number of vehicles
+within one distance of the receiver along the road: under one, passes stand apart with quiet
+between them; above one, they run together into a steady sound. A road with 600 vehicles an hour
+at 50 km/h is a series of passes 20 m away and a steady sound from about 80 m. One flight a day
+1 km away, at 70 m/s, is near its peak for about half a minute, under 0.1 % of the day's twelve
+hours; the rest of the day that layer is silent there.
+
+Sources only add up within the same moment, so the sum is taken for every hour of road traffic
+(the morning peak and 3 am differ) and for each of ten weather states (calm and downwind shares,
+one for all sources at a time), then averaged over the period. Bells and calls sound in their
+share of the period; industry, buildings and ships are steady. The result gives the levels
+exceeded 5, 10, 50 and 90 % of the time.
 
 Nden, the headline, is the mean over the whole day of how loud every moment is: loudness in
 sone after ISO 532-1 (Zwicker), the period's received spectrum set to the moment's level, the
