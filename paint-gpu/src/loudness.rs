@@ -3,7 +3,7 @@
 //! groups of hours, ISO 532-1), the pixels' packed sounds in (`paint::sone::PixelSound::pack`),
 //! their Nden out.
 
-use crate::device::{Gpu, driver};
+use crate::device::{Gpu, driver, read_back};
 use cudarc::driver::{LaunchAsync, LaunchConfig};
 use paint::exact::LAYERS;
 use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS};
@@ -211,6 +211,9 @@ impl Gpu {
                 .ok_or(format!("kernel {name} missing"))
         };
         let task_count = (count * tasks().len()) as u32;
+        // On a stream of their own (once the buffers above are zeroed): the pairs' kernels of
+        // another pass run beside them on the card.
+        let stream = driver(device.fork_default_stream())?;
         let tasks_config = LaunchConfig {
             grid_dim: (task_count.div_ceil(TASK_WARPS), 1, 1),
             block_dim: (TASK_WARPS * 32, 1, 1),
@@ -225,16 +228,20 @@ impl Gpu {
         // kernels/distribution.cuh lays them out); the first adds into `mixture_floats()` zeroed
         // floats a pixel, the second reads them and writes LOUDNESS_FLOATS a pixel.
         driver(unsafe {
-            kernel("pixel_mixtures")?
-                .launch(tasks_config, (&input, &offsets, task_count, &mixtures))
+            kernel("pixel_mixtures")?.launch_on_stream(
+                &stream,
+                tasks_config,
+                (&input, &offsets, task_count, &mixtures),
+            )
         })?;
         driver(unsafe {
-            kernel("pixel_ndens")?.launch(
+            kernel("pixel_ndens")?.launch_on_stream(
+                &stream,
                 pixels_config,
                 (&input, &offsets, &mixtures, count as u32, &ndens),
             )
         })?;
-        let flat = driver(device.dtoh_sync_copy(&ndens))?;
+        let flat = read_back(&stream, &ndens)?;
         Ok(flat
             .chunks_exact(LOUDNESS_FLOATS)
             .map(|pixel| std::array::from_fn(|k| pixel[k]))

@@ -5,7 +5,10 @@
 //! structs mirror kernels/scene.cuh, evaluate.cuh and paint.cu field by field.
 
 use cudarc::driver::sys::CUdevice_attribute;
-use cudarc::driver::{CudaDevice, CudaSlice, DevicePtr, DeviceSlice, LaunchAsync, LaunchConfig};
+use cudarc::driver::{
+    CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr, DeviceSlice, LaunchAsync,
+    LaunchConfig, result,
+};
 use cudarc::nvrtc::{CompileOptions, compile_ptx_with_opts};
 use paint::exact::LAYERS;
 use paint::square::{Files, Square};
@@ -366,11 +369,15 @@ impl Gpu {
         };
         // A null pointer: the listing kernel counts the rays instead of writing them.
         let none = 0u64;
+        // The pairs' kernels on a stream of their own (once the buffers above are zeroed): another
+        // pass's or square's kernels run beside them on the card.
+        let stream = driver(device.fork_default_stream())?;
         // SAFETY (each launch): every buffer holds what the kernel indexes: 2 receiver coordinates,
         // an owner, a candidate and a point (within `bands`, checked) per pair; a count, an offset,
         // PAIR_SUMS sums, PERIODS x BANDS bands and a failure per pair; a PairRay (24 bytes) per ray.
         driver(unsafe {
-            kernel("pair_rays")?.launch(
+            kernel("pair_rays")?.launch_on_stream(
+                &stream,
                 threads(count),
                 (
                     &square.scene,
@@ -385,7 +392,7 @@ impl Gpu {
                 ),
             )
         })?;
-        let mut offsets = driver(device.dtoh_sync_copy(&ray_counts))?;
+        let mut offsets = read_back(&stream, &ray_counts)?;
         let mut total = 0u32;
         for offset in &mut offsets {
             (*offset, total) = (total, total + *offset);
@@ -395,8 +402,10 @@ impl Gpu {
             let offsets = driver(device.htod_sync_copy(&offsets))?;
             let rays = driver(device.alloc_zeros::<u8>(PAIR_RAY_BYTES * total as usize))?;
             let pair_bands = driver(device.alloc_zeros::<f32>(PERIODS * BANDS * count))?;
+            driver(stream.wait_for_default())?;
             driver(unsafe {
-                kernel("pair_rays")?.launch(
+                kernel("pair_rays")?.launch_on_stream(
+                    &stream,
                     threads(count),
                     (
                         &square.scene,
@@ -412,7 +421,8 @@ impl Gpu {
                 )
             })?;
             driver(unsafe {
-                kernel("ray_transfers")?.launch(
+                kernel("ray_transfers")?.launch_on_stream(
+                    &stream,
                     threads(total as usize),
                     (
                         &square.scene,
@@ -428,7 +438,8 @@ impl Gpu {
                 )
             })?;
             driver(unsafe {
-                kernel("pair_bands_to_points")?.launch(
+                kernel("pair_bands_to_points")?.launch_on_stream(
+                    &stream,
                     threads(count),
                     (
                         &square.scene,
@@ -441,9 +452,13 @@ impl Gpu {
                     ),
                 )
             })?;
+            // The rays' buffers are freed on the default stream as this block ends: their kernels
+            // finish first.
+            // SAFETY: a stream this function created and still holds.
+            driver(unsafe { result::stream::synchronize(stream.stream) })?;
         }
-        let sums = driver(device.dtoh_sync_copy(&sums))?;
-        let failed = driver(device.dtoh_sync_copy(&failed))?;
+        let sums = read_back(&stream, &sums)?;
+        let failed = read_back(&stream, &failed)?;
         Ok((
             sums.chunks_exact(PAIR_SUMS)
                 .map(|chunk| std::array::from_fn(|k| chunk[k]))
@@ -451,6 +466,24 @@ impl Gpu {
             failed,
         ))
     }
+}
+
+/// `source` read back once `stream`'s work so far is done.
+pub(crate) fn read_back<T: DeviceRepr + Default + Clone>(
+    stream: &CudaStream,
+    source: &CudaSlice<T>,
+) -> Result<Vec<T>, String> {
+    let mut values = vec![T::default(); source.len()];
+    // SAFETY: `values` holds `source.len()` values, read once the stream is synchronized.
+    unsafe {
+        driver(result::memcpy_dtoh_async(
+            &mut values,
+            *source.device_ptr(),
+            stream.stream,
+        ))?;
+        driver(result::stream::synchronize(stream.stream))?;
+    }
+    Ok(values)
 }
 
 /// A square's buffers on the card; `scene` is the descriptor the kernels read.
