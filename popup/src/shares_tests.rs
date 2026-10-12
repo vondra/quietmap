@@ -3,23 +3,25 @@
 
 use super::*;
 use crate::distribution::Distribution;
-use crate::loudness::{NO_FLIGHTS, curves, loudness};
+use crate::loudness::{LayerSound, NO_FLIGHTS, curves, loudness};
 use crate::percentiles::tests::{contributor, selection};
-use crate::percentiles::{Weather, click_lines, distributions_of, flight_weather};
+use crate::percentiles::{Resolution, Weather, click_lines, distributions_of, flight_weather};
 use physics::bands::{BANDS, energy};
 
 /// A road's received A-weighted octave energies at 50 km/h (relative).
 const ROAD_SHAPE: [f64; BANDS] = [0.002, 0.03, 0.09, 0.28, 0.42, 0.18, 0.03, 0.004];
 
 fn road_curves() -> [Curve; PERIODS] {
-    let mut road = LayerSelection::new(Layer::Road);
-    road.energy = [energy(60.0); PERIODS];
-    road.spectrum = [ROAD_SHAPE; PERIODS];
+    let road = LayerSound {
+        layer: Layer::Road,
+        energy: [energy(60.0); PERIODS],
+        spectrum: [ROAD_SHAPE; PERIODS],
+    };
     curves(&[road], &NO_FLIGHTS)
 }
 
 /// A line of passes at `mean_db` with `lambda` emitters within its distance.
-fn passes(weather: &Weather, mean_db: f64, lambda: f64) -> Line<'_> {
+fn passes(weather: &Weather, mean_db: f64, lambda: f64) -> Line {
     let mean = [energy(mean_db); PERIODS];
     Line::flights(weather, (mean, mean.map(|value| value * lambda)))
 }
@@ -33,7 +35,7 @@ fn weather_of(mean_db: f64) -> Weather {
 
 /// The loudness of `lines` over `steady` as the level distributions give it (Nden).
 fn nden(lines: &[Line], steady: [f64; PERIODS], curves: &[Curve; PERIODS]) -> f64 {
-    let distributions: [Distribution; PERIODS] = distributions_of(lines, steady);
+    let distributions: [Distribution; PERIODS] = distributions_of(lines, steady, Resolution::CLICK);
     loudness(&distributions, curves).nden_sone
 }
 

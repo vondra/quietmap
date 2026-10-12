@@ -11,13 +11,15 @@
 //! measured the same way: its own Nden ranks it in the list.
 
 use crate::distribution::Distribution;
-use crate::percentiles::Line;
+use crate::evaluate::Bands;
+use crate::percentiles::{Line, Resolution, distributions_of};
 use crate::selection::LayerSelection;
 use physics::bands::{
     A_WEIGHTING_DB as OCTAVE_A_DB, BANDS, PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy,
 };
 use physics::doc29::atmosphere::THIRD_OCTAVES as CLASS_THIRDS;
 use physics::loudness::{A_WEIGHTING_DB, OCTAVE_START, THIRD_OCTAVES, zwicker_loudness_sone};
+use std::sync::OnceLock;
 use tiles::sources::Layer;
 
 /// The mean loudness of each period as it sounds and Nden, the day's with the evening and night
@@ -41,13 +43,39 @@ pub const NO_FLIGHTS: FlightSound = FlightSound {
     spectrum_db: None,
 };
 
+/// A layer's received sound: its energy per period and its spectrum's shape (A-weighted octave
+/// band energies per period at any scale).
+#[derive(Clone, Copy)]
+pub struct LayerSound {
+    pub layer: Layer,
+    pub energy: [f64; PERIODS],
+    pub spectrum: Bands,
+}
+
+/// The sound of a click's layers: each one's answer energy and evaluated spectrum.
+pub fn layer_sounds(selections: &[LayerSelection]) -> Vec<LayerSound> {
+    selections
+        .iter()
+        .map(|selection| LayerSound {
+            layer: selection.layer,
+            energy: selection.answer_energy(),
+            spectrum: selection.spectrum,
+        })
+        .collect()
+}
+
 /// Loudness is tabled at whole decibels over this span of A-weighted levels (dB).
 const CURVE_LOW_DB: f64 = -30.0;
 const CURVE_HIGH_DB: f64 = 160.0;
 
 /// One period's loudness by A-weighted level: its received spectrum set to each whole decibel,
-/// interpolated between.
-pub struct Curve(Vec<f64>);
+/// interpolated between; each whole decibel's loudness computed when first read (a place's levels
+/// visit a few dozen of the 191).
+pub struct Curve {
+    thirds: [f64; THIRD_OCTAVES],
+    a_weighted: f64,
+    values: Vec<OnceLock<f64>>,
+}
 
 impl Curve {
     fn new(thirds: &[f64; THIRD_OCTAVES]) -> Self {
@@ -57,56 +85,92 @@ impl Curve {
             .map(|(value, weight)| value * energy(weight))
             .sum();
         let steps = (CURVE_HIGH_DB - CURVE_LOW_DB) as usize;
-        Curve(
-            (0..=steps)
-                .map(|step| {
-                    if a_weighted <= 0.0 {
-                        return 0.0;
-                    }
-                    let scale = energy(CURVE_LOW_DB + step as f64) / a_weighted;
-                    zwicker_loudness_sone(&thirds.map(|value| {
-                        let scaled = value * scale;
-                        if scaled > 0.0 {
-                            10.0 * scaled.log10()
-                        } else {
-                            f64::NEG_INFINITY
-                        }
-                    }))
-                })
-                .collect(),
-        )
+        Curve {
+            thirds: *thirds,
+            a_weighted,
+            values: (0..=steps).map(|_| OnceLock::new()).collect(),
+        }
+    }
+
+    /// The loudness (sone) at the curve's `step`th whole decibel.
+    fn value(&self, step: usize) -> f64 {
+        *self.values[step].get_or_init(|| {
+            if self.a_weighted <= 0.0 {
+                return 0.0;
+            }
+            let scale = energy(CURVE_LOW_DB + step as f64) / self.a_weighted;
+            zwicker_loudness_sone(&self.thirds.map(|value| {
+                let scaled = value * scale;
+                if scaled > 0.0 {
+                    10.0 * scaled.log10()
+                } else {
+                    f64::NEG_INFINITY
+                }
+            }))
+        })
     }
 
     /// The loudness (sone) at `level_db`.
     pub fn at(&self, level_db: f64) -> f64 {
-        let position = (level_db - CURVE_LOW_DB).clamp(0.0, (self.0.len() - 1) as f64);
-        let below = (position.floor() as usize).min(self.0.len() - 2);
-        self.0[below] + (self.0[below + 1] - self.0[below]) * (position - below as f64)
+        let last = self.values.len() - 1;
+        let position = (level_db - CURVE_LOW_DB).clamp(0.0, last as f64);
+        let below = (position.floor() as usize).min(last - 1);
+        let (low, high) = (self.value(below), self.value(below + 1));
+        low + (high - low) * (position - below as f64)
     }
 }
 
-/// Each period's loudness curve of the click's received spectrum.
-pub fn curves(selections: &[LayerSelection], flights: &FlightSound) -> [Curve; PERIODS] {
-    std::array::from_fn(|period| Curve::new(&unweighted_thirds(selections, flights, period)))
+/// Each period's loudness curve of the received spectrum of `layers` and the flights.
+pub fn curves(layers: &[LayerSound], flights: &FlightSound) -> [Curve; PERIODS] {
+    std::array::from_fn(|period| Curve::new(&unweighted_thirds(layers, flights, period)))
 }
 
 /// Each layer's own curves, its received spectrum alone (the flights' for the aircraft layer): a
 /// source alone sounds as its layer does, not as the place.
 pub fn layer_curves(
-    selections: &[LayerSelection],
+    layers: &[LayerSound],
     flights: &FlightSound,
 ) -> Vec<(Layer, [Curve; PERIODS])> {
-    selections
+    layers
         .iter()
-        .map(|selection| {
-            let own = if selection.layer == Layer::Aircraft {
+        .map(|layer| {
+            let own = if layer.layer == Layer::Aircraft {
                 flights
             } else {
                 &NO_FLIGHTS
             };
+            (layer.layer, curves(std::slice::from_ref(layer), own))
+        })
+        .collect()
+}
+
+/// Each layer's own loudness (Nden), as the place's is taken: the layer's `lines` (the flights' line
+/// the aircraft layer's) over the rest of its energy held steady, on its own curves; `None` for a
+/// layer without energy.
+pub fn layer_ndens(
+    lines: &[Line],
+    layers: &[LayerSound],
+    layer_curves: &[(Layer, [Curve; PERIODS])],
+    resolution: Resolution,
+) -> Vec<(Layer, Option<f64>)> {
+    layers
+        .iter()
+        .zip(layer_curves)
+        .map(|(layer, (_, curves))| {
+            if layer.energy.iter().all(|&energy| energy <= 0.0) {
+                return (layer.layer, None);
+            }
+            let own: Vec<Line> = (lines.iter())
+                .filter(|line| line.layer == layer.layer)
+                .cloned()
+                .collect();
+            let steady = std::array::from_fn(|p| {
+                (layer.energy[p] - own.iter().map(|line| line.energy[p]).sum::<f64>()).max(0.0)
+            });
+            let distributions = distributions_of(&own, steady, resolution);
             (
-                selection.layer,
-                curves(std::slice::from_ref(selection), own),
+                layer.layer,
+                Some(loudness(&distributions, curves).nden_sone),
             )
         })
         .collect()
@@ -161,22 +225,22 @@ pub fn own_nden(line: Option<&Line>, floor: [f64; PERIODS], curves: &[Curve; PER
     }))
 }
 
-/// The click's unweighted third-octave energies (linear, 25 Hz to 12.5 kHz) of one period, at the
-/// layers' answer energies.
+/// The unweighted third-octave energies (linear, 25 Hz to 12.5 kHz) of one period of `layers` at
+/// their energies, and the flights.
 fn unweighted_thirds(
-    selections: &[LayerSelection],
+    layers: &[LayerSound],
     flights: &FlightSound,
     period: usize,
 ) -> [f64; THIRD_OCTAVES] {
     let mut thirds = [0.0; THIRD_OCTAVES];
-    for selection in selections {
-        let mut layer = selection.answer_energy()[period];
+    for sound in layers {
+        let mut layer = sound.energy[period];
         // The flights leave the layer's shape for their own spectrum (none in a ground layer's own
         // curves).
-        if selection.layer == Layer::Aircraft && flights.spectrum_db.is_some() {
+        if sound.layer == Layer::Aircraft && flights.spectrum_db.is_some() {
             layer -= flights.energy[period];
         }
-        let shape = &selection.spectrum[period];
+        let shape = &sound.spectrum[period];
         let sum: f64 = shape.iter().sum();
         if layer <= 0.0 || sum <= 0.0 {
             continue;
@@ -205,11 +269,12 @@ mod tests {
     use super::*;
     use crate::percentiles::Weather;
 
-    fn layer(kind: Layer, energy_db: f64, shape: [f64; BANDS]) -> LayerSelection {
-        let mut selection = LayerSelection::new(kind);
-        selection.energy = [energy(energy_db); PERIODS];
-        selection.spectrum = [shape; PERIODS];
-        selection
+    fn layer(kind: Layer, energy_db: f64, shape: [f64; BANDS]) -> LayerSound {
+        LayerSound {
+            layer: kind,
+            energy: [energy(energy_db); PERIODS],
+            spectrum: [shape; PERIODS],
+        }
     }
 
     const NONE: FlightSound = NO_FLIGHTS;

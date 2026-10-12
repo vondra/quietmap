@@ -8,9 +8,9 @@
 //! distribution of the moments before it; backward, the loudness per energy the lines after it
 //! leave in expectation. What holds steady takes its energy's part of every moment.
 
-use crate::distribution::{BINS, Distribution, value_levels};
+use crate::distribution::{Distribution, value_levels};
 use crate::loudness::Curve;
-use crate::percentiles::{Line, WEATHER_STATES, at_mean_flow, moment};
+use crate::percentiles::{Line, Resolution, WEATHER_STATES, at_mean_flow, moment};
 use crate::selection::LayerSelection;
 use crate::update::Contributor;
 use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS};
@@ -134,9 +134,12 @@ fn moment_shares(
     (period, state): (usize, usize),
 ) -> Vec<f64> {
     let total_steady: f64 = steady.iter().map(|energy| energy[period]).sum();
-    let moment = moment(lines, means, total_steady, (period, 0, state));
+    let state_means: Vec<f64> = means.iter().map(|means| means[state]).collect();
+    // The lines at their mean flow every hour (`at_mean_flow`).
+    let factors = vec![1.0; lines.len()];
+    let moment = moment(lines, (&state_means, &factors), total_steady, period);
     // Forward: the moments before each moving line, from what holds steady.
-    let mut silence = Distribution::empty();
+    let mut silence = Distribution::empty(Resolution::CLICK.bin_db);
     silence.silent = 1.0;
     let mut before = vec![silence.over(moment.floor)];
     for (_, values) in &moment.moving {
@@ -145,7 +148,8 @@ fn moment_shares(
     }
     // The loudness per energy at the end, by its bin; silence makes none.
     let penalty = PERIOD_PENALTY_DB[period];
-    let mut after = vec![0.0; BINS];
+    let bins = silence.bin_count();
+    let mut after = vec![0.0; bins];
     let mut after_silent = 0.0;
     let mut per_energy_mean = 0.0;
     for (bin, intensity, share) in before[before.len() - 1].bins() {
@@ -154,7 +158,7 @@ fn moment_shares(
     }
     let mut shares = vec![0.0; steady.len()];
     // Backward: each moving line's energy times the loudness per energy its moments end in.
-    let mut next = vec![0.0; BINS];
+    let mut next = vec![0.0; bins];
     for (position, (line, values)) in moment.moving.iter().enumerate().rev() {
         let levels = value_levels(values);
         let prefix = &before[position];
@@ -164,8 +168,8 @@ fn moment_shares(
         let step = |level_db: f64| {
             let (mut expected, mut owned) = (0.0, 0.0);
             for (&(value, weight), &value_db) in values.iter().zip(&levels) {
-                let per_energy = Distribution::sum_bin(level_db, value_db)
-                    .map_or(after_silent, |bin| after[bin]);
+                let per_energy =
+                    (prefix.sum_bin(level_db, value_db)).map_or(after_silent, |bin| after[bin]);
                 expected += weight * per_energy;
                 owned += weight * value * per_energy;
             }

@@ -7,7 +7,7 @@
 
 use crate::evaluate::Path;
 use crate::loudness::{Curve, loudness, own_nden};
-use crate::percentiles::{Line, distributions_of, heard};
+use crate::percentiles::{Line, Resolution, distributions_of, heard};
 use crate::update::Contributor;
 use physics::bands::PERIODS;
 use rayon::prelude::*;
@@ -122,7 +122,7 @@ pub fn ranked_rows<'a>(
                         .sum()
                 });
                 let lines: Vec<Line> = parts.iter().filter_map(|(_, line)| line.clone()).collect();
-                let distributions = distributions_of(&lines, steady);
+                let distributions = distributions_of(&lines, steady, Resolution::CLICK);
                 Some(loudness(&distributions, curves(parts[0].0.layer)).nden_sone)
             };
             Row {

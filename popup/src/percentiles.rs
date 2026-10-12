@@ -142,14 +142,17 @@ pub(crate) fn favourable_share(mean: f64, homogeneous: f64, favourable: f64) -> 
     ((mean - homogeneous) / (favourable - homogeneous)).clamp(0.0, 1.0)
 }
 
-/// One source whose level varies in time: its mean energy, its weather and lambda per period
-/// (infinite for a steady source, whose level follows the weather alone).
+/// One source whose level varies in time: its mean energy, its means in the weather states and
+/// lambda per period (infinite for a steady source, whose level follows the weather alone).
 #[derive(Clone)]
-pub struct Line<'w> {
+pub struct Line {
     /// The contributor's group: the lines are added in its order, so a click repeats exactly.
     pub(crate) key: u64,
+    /// Its layer (the flights' line the aircraft's), whose own loudness it is part of.
+    pub(crate) layer: Layer,
     pub energy: [f64; PERIODS],
-    weather: &'w Weather,
+    /// Per period its mean in each of the [`WEATHER_STATES`] ([`Line::state_means`]).
+    means: [[f64; WEATHER_STATES]; PERIODS],
     lambda: [f64; PERIODS],
     /// A road's hourly profile ([`HOURLY_SHARES`]); `None` keeps the period's mean every hour.
     profile: Option<usize>,
@@ -158,50 +161,58 @@ pub struct Line<'w> {
     duty: Option<[f64; PERIODS]>,
 }
 
-impl<'w> Line<'w> {
+impl Line {
     /// A contributor's line: industry, buildings and ships steady but for their events, a road,
     /// railway or aeroway by its traffic; none for one of those whose fields carry no traffic.
     pub fn of(
-        contributor: &'w crate::update::Contributor,
+        contributor: &crate::update::Contributor,
         fields: Option<&serde_json::Value>,
     ) -> Option<Self> {
-        let steady = matches!(
-            contributor.layer,
-            Layer::Industry | Layer::Building | Layer::Ship
-        );
+        Self::of_source(
+            (contributor.group_key, contributor.layer),
+            (contributor.energy, &contributor.weather),
+            contributor.distance_m,
+            fields,
+        )
+    }
+
+    /// The line of a source group `key` of `layer` heard with `energy` per period in `weather` at
+    /// `distance_m` (its nearest piece), its traffic or events read from its display `fields`.
+    pub fn of_source(
+        (key, layer): (u64, Layer),
+        (energy, weather): ([f64; PERIODS], &Weather),
+        distance_m: f64,
+        fields: Option<&serde_json::Value>,
+    ) -> Option<Self> {
+        let steady = matches!(layer, Layer::Industry | Layer::Building | Layer::Ship);
         let (lambda, profile, duty) = if steady {
             ([f64::INFINITY; PERIODS], None, fields.and_then(duty))
         } else {
-            let (per_hour, speed, profile) =
-                traffic(contributor.layer, fields?, contributor.energy)?;
-            (
-                lambda(per_hour, speed, contributor.distance_m),
-                profile,
-                None,
-            )
+            let (per_hour, speed, profile) = traffic(layer, fields?, energy)?;
+            (lambda(per_hour, speed, distance_m), profile, None)
         };
         Some(Line {
-            key: contributor.group_key,
-            energy: contributor.energy,
-            weather: &contributor.weather,
+            key,
+            layer,
+            energy,
+            means: weather_means(weather, energy),
             lambda,
             profile,
             duty,
         })
     }
-}
 
-impl<'w> Line<'w> {
     /// The flights heard, one line at their energy-weighted lambda (`weather` theirs: the mean in
     /// either state).
     pub fn flights(
-        weather: &'w Weather,
+        weather: &Weather,
         (energy, energy_lambda): ([f64; PERIODS], [f64; PERIODS]),
     ) -> Self {
         Line {
             key: u64::MAX,
+            layer: Layer::Aircraft,
             energy,
-            weather,
+            means: weather_means(weather, energy),
             lambda: std::array::from_fn(|p| {
                 if energy[p] > 0.0 {
                     energy_lambda[p] / energy[p]
@@ -214,28 +225,9 @@ impl<'w> Line<'w> {
         }
     }
 
-    /// The line's mean in each weather state of `period`: a piece is favourable while the place's
-    /// weather u lies under its favourable share, so over the state's span of u it is favourable
-    /// for the part of the span under the share (no step where a share crosses a state's middle).
+    /// The line's mean in each weather state of `period`.
     pub(crate) fn state_means(&self, period: usize) -> [f64; WEATHER_STATES] {
-        let states = self.weather.states(period);
-        if states
-            .iter()
-            .all(|&(_, homogeneous, favourable)| homogeneous + favourable <= 0.0)
-        {
-            return [self.energy[period]; WEATHER_STATES];
-        }
-        std::array::from_fn(|state| {
-            let span = 1.0 / WEATHER_STATES as f64;
-            let low = state as f64 * span;
-            states
-                .iter()
-                .map(|&(share, homogeneous, favourable)| {
-                    let favoured = (share.clamp(low, low + span) - low) / span;
-                    favoured * favourable + (1.0 - favoured) * homogeneous
-                })
-                .sum()
-        })
+        self.means[period]
     }
 
     /// The line's intensities in an hour of `period` with `factor` its flow then and the line at
@@ -401,6 +393,33 @@ fn traffic(
     }
 }
 
+/// Per period the mean of `energy` in `weather` in each weather state: a piece is favourable while
+/// the place's weather u lies under its favourable share, so over the state's span of u it is
+/// favourable for the part of the span under the share (no step where a share crosses a state's
+/// middle).
+fn weather_means(weather: &Weather, energy: [f64; PERIODS]) -> [[f64; WEATHER_STATES]; PERIODS] {
+    std::array::from_fn(|period| {
+        let states = weather.states(period);
+        if states
+            .iter()
+            .all(|&(_, homogeneous, favourable)| homogeneous + favourable <= 0.0)
+        {
+            return [energy[period]; WEATHER_STATES];
+        }
+        std::array::from_fn(|state| {
+            let span = 1.0 / WEATHER_STATES as f64;
+            let low = state as f64 * span;
+            states
+                .iter()
+                .map(|&(share, homogeneous, favourable)| {
+                    let favoured = (share.clamp(low, low + span) - low) / span;
+                    favoured * favourable + (1.0 - favoured) * homogeneous
+                })
+                .sum()
+        })
+    })
+}
+
 /// Kurze's lambda per period: the emitters within the contributor's distance of a line of them.
 fn lambda(per_hour: [f64; PERIODS], speed_m_s: f64, distance_m: f64) -> [f64; PERIODS] {
     per_hour.map(|passes| passes / 3_600.0 / speed_m_s * distance_m.max(DISTANCE_MIN_M))
@@ -444,7 +463,7 @@ pub fn rest_lines<'a>(
     contributors: impl Iterator<Item = &'a crate::update::Contributor>,
     total: [f64; PERIODS],
     fields: &dyn Fn(&crate::update::Contributor) -> Option<serde_json::Value>,
-) -> (Vec<Line<'a>>, [f64; PERIODS]) {
+) -> (Vec<Line>, [f64; PERIODS]) {
     let (mut lines, steady) = lines(contributors, total, REST_SHARE_MIN, fields);
     at_mean_flow(&mut lines);
     (lines, steady)
@@ -465,8 +484,8 @@ fn lines<'a>(
     total: [f64; PERIODS],
     share_min: f64,
     fields: &dyn Fn(&crate::update::Contributor) -> Option<serde_json::Value>,
-) -> (Vec<Line<'a>>, [f64; PERIODS]) {
-    let mut lines: Vec<Line<'a>> = contributors
+) -> (Vec<Line>, [f64; PERIODS]) {
+    let mut lines: Vec<Line> = contributors
         .filter(|contributor| (0..PERIODS).any(|p| contributor.energy[p] > share_min * total[p]))
         .filter_map(|contributor| Line::of(contributor, fields(contributor).as_ref()))
         .collect();
@@ -491,7 +510,7 @@ pub fn click_lines<'a>(
     selections: &'a [LayerSelection],
     (weather, flights): (&'a Weather, ([f64; PERIODS], [f64; PERIODS])),
     fields: &dyn Fn(&crate::update::Contributor) -> Option<serde_json::Value>,
-) -> (Vec<Line<'a>>, [f64; PERIODS]) {
+) -> (Vec<Line>, [f64; PERIODS]) {
     let total: [f64; PERIODS] =
         std::array::from_fn(|p| selections.iter().map(|s| s.answer_energy()[p]).sum::<f64>());
     let (mut lines, mut steady) = lines(
@@ -510,41 +529,138 @@ pub fn click_lines<'a>(
     (lines, steady)
 }
 
-/// The distribution of the summed level over each period: for every hour of it (the roads' flows
-/// follow the hour together) and every weather state (one for every ray of the place), the lines
-/// that move the level added, independent, then the steady energy; the hours and states averaged.
-pub fn distributions_of(lines: &[Line], steady: [f64; PERIODS]) -> [Distribution; PERIODS] {
+/// How finely the level distributions are computed: the grid's step (dB), the equally likely
+/// weather states (the native ten merged into as many) and the hours of a period with a profile
+/// (`None` every hour apart; groups of hours by their flow, each at its hours' mean flow).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Resolution {
+    pub bin_db: f64,
+    pub weather_states: usize,
+    pub hour_groups: Option<[usize; PERIODS]>,
+}
+
+impl Resolution {
+    /// A click's: 0.5 dB, Nden within 0.09 % of 0.1 dB's at 919 points
+    /// (`evidence/2026-10-12/sone-map-4`).
+    pub const CLICK: Resolution = Resolution {
+        bin_db: 0.5,
+        weather_states: WEATHER_STATES,
+        hour_groups: None,
+    };
+    /// The map's: 1 dB, three weather states, four, one and three groups of the day's, evening's
+    /// and night's hours: Nden within 2.5 % at p99 and 3.9 % at most of the click's 0.1 dB at the
+    /// same 919 points, 2.8 ms a point on one core against 787.
+    pub const MAP: Resolution = Resolution {
+        bin_db: 1.0,
+        weather_states: 3,
+        hour_groups: Some([4, 1, 3]),
+    };
+}
+
+/// The distribution of the summed level over each period at `resolution`: for every group of hours
+/// (the roads' flows follow the hour together) and every weather state (one for every ray of the
+/// place), the lines that move the level added, independent, then the steady energy; the groups
+/// and states averaged by their shares of the time.
+pub fn distributions_of(
+    lines: &[Line],
+    steady: [f64; PERIODS],
+    resolution: Resolution,
+) -> [Distribution; PERIODS] {
     std::array::from_fn(|p| {
-        let hours = PERIOD_HOURS[p] as usize;
-        let means: Vec<[f64; WEATHER_STATES]> =
-            lines.iter().map(|line| line.state_means(p)).collect();
-        // The hours differ only where a road follows its hourly profile.
-        let hours = if lines.iter().any(|line| line.profile.is_some()) {
-            hours
-        } else {
-            1
-        };
-        // Every hour and weather state apart, in parallel.
-        let weight = 1.0 / (hours * WEATHER_STATES) as f64;
-        let parts: Vec<Distribution> = (0..hours * WEATHER_STATES)
+        let (groups, hours) = hour_groups(lines, p, resolution.hour_groups);
+        let states = resolution.weather_states;
+        let means: Vec<Vec<f64>> = (lines.iter())
+            .map(|line| merged_states(&line.means[p], states))
+            .collect();
+        // Every group of hours and weather state apart, in parallel.
+        let parts: Vec<(f64, Distribution)> = (0..groups.len() * states)
             .into_par_iter()
             .map(|task| {
-                let (slot, state) = (task / WEATHER_STATES, task % WEATHER_STATES);
-                let moment = moment(lines, &means, steady[p], (p, slot, state));
-                let mut moving = Distribution::empty();
+                let (slots, state) = (&groups[task / states], task % states);
+                let factors: Vec<f64> = (lines.iter())
+                    .map(|line| {
+                        line.profile.map_or(1.0, |profile| {
+                            slots
+                                .iter()
+                                .map(|&slot| hour_factor(profile, p, slot))
+                                .sum::<f64>()
+                                / slots.len() as f64
+                        })
+                    })
+                    .collect();
+                let state_means: Vec<f64> = means.iter().map(|means| means[state]).collect();
+                let moment = moment(lines, (&state_means, &factors), steady[p], p);
+                let mut moving = Distribution::empty(resolution.bin_db);
                 moving.silent = 1.0;
                 for (_, values) in &moment.moving {
                     moving = moving.with_line(values);
                 }
-                moving.over(moment.floor)
+                let weight = slots.len() as f64 / (hours * states) as f64;
+                (weight, moving.over(moment.floor))
             })
             .collect();
-        let mut mixture = Distribution::empty();
-        for part in &parts {
-            mixture.add_scaled(part, weight);
+        let mut mixture = Distribution::empty(resolution.bin_db);
+        for (weight, part) in &parts {
+            mixture.add_scaled(part, *weight);
         }
         mixture
     })
+}
+
+/// A period's hours in groups of `groups` (`None`: every hour apart) and how many there are: one
+/// where no line follows a profile; else the hours in order of their summed profiles' flow, cut
+/// into that many runs.
+fn hour_groups(
+    lines: &[Line],
+    period: usize,
+    groups: Option<[usize; PERIODS]>,
+) -> (Vec<Vec<usize>>, usize) {
+    if lines.iter().all(|line| line.profile.is_none()) {
+        return (vec![vec![0]], 1);
+    }
+    let hours = PERIOD_HOURS[period] as usize;
+    let Some(groups) = groups else {
+        return ((0..hours).map(|slot| vec![slot]).collect(), hours);
+    };
+    let flow = |slot: usize| -> f64 {
+        (0..HOURLY_SHARES.len())
+            .map(|profile| hour_factor(profile, period, slot))
+            .sum()
+    };
+    let mut slots: Vec<usize> = (0..hours).collect();
+    slots.sort_by(|&a, &b| flow(a).total_cmp(&flow(b)).then(a.cmp(&b)));
+    let runs = groups[period];
+    let cut = (0..runs)
+        .map(|run| {
+            let mut run_slots = slots[run * hours / runs..(run + 1) * hours / runs].to_vec();
+            run_slots.sort_unstable();
+            run_slots
+        })
+        .collect();
+    (cut, hours)
+}
+
+/// The native weather states' means merged into `states` equally likely ones, each the mean over
+/// its span of the native ones it covers.
+fn merged_states(means: &[f64; WEATHER_STATES], states: usize) -> Vec<f64> {
+    if states == WEATHER_STATES {
+        return means.to_vec();
+    }
+    (0..states)
+        .map(|state| {
+            let (low, high) = (
+                state as f64 / states as f64,
+                (state + 1) as f64 / states as f64,
+            );
+            (0..WEATHER_STATES)
+                .map(|native| {
+                    let from = native as f64 / WEATHER_STATES as f64;
+                    let to = (native + 1) as f64 / WEATHER_STATES as f64;
+                    means[native] * (high.min(to) - low.max(from)).max(0.0) * states as f64
+                })
+                .sum()
+        })
+        .collect()
 }
 
 /// One hour and weather state of a period: the energy that holds steady (`steady` and the lines
@@ -556,13 +672,13 @@ pub(crate) struct Moment {
     pub moving: Vec<(usize, Vec<(f64, f64)>)>,
 }
 
-/// The moment of `lines` (`means` their state means) in the `slot`th hour of `period` and weather
-/// `state`.
+/// The moment of `lines` in `period`: each line's mean in the moment's weather state and its flow
+/// then against the period's mean (`state_means`, `factors`).
 pub(crate) fn moment(
     lines: &[Line],
-    means: &[[f64; WEATHER_STATES]],
+    (state_means, factors): (&[f64], &[f64]),
     steady: f64,
-    (period, slot, state): (usize, usize, usize),
+    period: usize,
 ) -> Moment {
     let mut moment = Moment {
         floor: steady,
@@ -570,14 +686,15 @@ pub(crate) fn moment(
         moving: Vec::new(),
     };
     let mut held = Vec::new();
-    for (index, (line, means)) in lines.iter().zip(means).enumerate() {
+    for (index, (line, (&state_mean, &factor))) in lines
+        .iter()
+        .zip(state_means.iter().zip(factors))
+        .enumerate()
+    {
         if line.energy[period] <= 0.0 {
             continue;
         }
-        let factor = line
-            .profile
-            .map_or(1.0, |profile| hour_factor(profile, period, slot));
-        let mean = means[state] * factor;
+        let mean = state_mean * factor;
         let lambda = line.lambda[period] * factor;
         match line.duty.map(|duty| duty[period]) {
             Some(duty) if duty > 0.0 => moment
