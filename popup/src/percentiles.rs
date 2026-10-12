@@ -15,7 +15,7 @@
 //! sound.
 
 use crate::candidates::DisplayRef;
-use crate::distribution::{Distribution, line_values};
+use crate::distribution::{Distribution, LineValues, line_values};
 use crate::selection::LayerSelection;
 use physics::bands::{PERIOD_HOURS, PERIODS};
 use physics::percentile::relative_intensity;
@@ -246,12 +246,12 @@ impl Line {
     /// The line's intensities in an hour of `period` with `factor` its flow then and the line at
     /// `mean` (its weather state's), each with its share of the time; a line that holds its mean
     /// one value, an event its duty.
-    fn values(&self, period: usize, mean: f64, factor: f64) -> Vec<(f64, f64)> {
+    fn values(&self, period: usize, mean: f64, factor: f64) -> LineValues {
         let lambda = self.lambda[period] * factor;
         match self.duty.map(|duty| duty[period]) {
             Some(duty) if duty > 0.0 => line_values(mean * factor, 0.0, Some(duty)),
-            Some(_) => Vec::new(),
-            None if lambda >= HOLDS_MEAN_LAMBDA => vec![(mean * factor, 1.0)],
+            Some(_) => LineValues::of(Vec::new()),
+            None if lambda >= HOLDS_MEAN_LAMBDA => LineValues::of(vec![(mean * factor, 1.0)]),
             None => line_values(mean * factor, lambda, None),
         }
     }
@@ -275,8 +275,8 @@ impl Line {
         for mean in self.state_means(period) {
             for &factor in &factors {
                 let values = self.values(period, mean, factor);
-                let silent = 1.0 - values.iter().map(|(_, share)| share).sum::<f64>();
-                for (value, share) in values.into_iter().chain([(0.0, silent)]) {
+                let silent = 1.0 - values.pairs().iter().map(|(_, share)| share).sum::<f64>();
+                for (value, share) in values.pairs().iter().copied().chain([(0.0, silent)]) {
                     if floor + value > 0.0 && share > 0.0 {
                         visit(10.0 * (floor + value).log10(), share * weight);
                     }
@@ -691,7 +691,7 @@ fn merged_states(means: &[f64; WEATHER_STATES], states: usize) -> Vec<f64> {
 pub(crate) struct Moment {
     pub floor: f64,
     pub holding: Vec<(usize, f64)>,
-    pub moving: Vec<(usize, Vec<(f64, f64)>)>,
+    pub moving: Vec<(usize, LineValues)>,
 }
 
 /// The moment of `lines` in `period`: each line's mean in the moment's weather state and its flow

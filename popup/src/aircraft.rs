@@ -98,6 +98,42 @@ pub fn ring_aircraft(
                 .map(|&(index, bound)| (bound, tile_index, index)),
         );
     }
+    read_loudest(bounds, tiles, (frame, receiver, horizons), flights);
+    ring
+}
+
+/// The loudest flights of `tiles` at the receiver into `flights` from the boxes' bounds alone
+/// (`boxes::tile_lamax_bounds`), as a click finds them, without the boxes' energies: what the
+/// map's flights' spectrum takes.
+pub fn loudest_flights(
+    tiles: &[(TileId, Aircraft<'_>)],
+    frame: &LocalFrame,
+    receiver: AircraftReceiver,
+    horizons: &(impl ReceiverHorizons + Sync),
+    flights: &mut FlightTotals,
+) {
+    let bounds = (tiles.iter().enumerate())
+        .flat_map(|(tile_index, (tile, boxes))| {
+            boxes::tile_lamax_bounds(boxes, *tile, frame, receiver)
+                .into_iter()
+                .map(move |(index, bound)| (bound, tile_index, index))
+        })
+        .collect();
+    read_loudest(bounds, tiles, (frame, receiver, horizons), flights);
+}
+
+/// The kept pieces of every box whose bound on their LAmax is above the list's entry level into
+/// `flights`, loudest bound first.
+fn read_loudest(
+    mut bounds: Vec<(f64, usize, usize)>,
+    tiles: &[(TileId, Aircraft<'_>)],
+    (frame, receiver, horizons): (
+        &LocalFrame,
+        AircraftReceiver,
+        &(impl ReceiverHorizons + Sync),
+    ),
+    flights: &mut FlightTotals,
+) {
     bounds.par_sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
     for chunk in bounds.chunks(SEARCH_CHUNK) {
         if chunk[0].0 <= flights.entry_lmax_db() {
@@ -108,7 +144,6 @@ pub fn ring_aircraft(
             flights.add_boxes(boxes, *tile, &[index], frame, receiver, horizons);
         }
     }
-    ring
 }
 
 #[cfg(test)]

@@ -204,6 +204,49 @@ pub fn tile_flight_sums(
         )
 }
 
+/// The most maximum level (dB) a box's kept pieces can reach at the receiver (Eq. 4-8a: Delta_I adds
+/// at most [`INSTALLATION_CORRECTION_MAX_DB`], Lambda only attenuates); `None` for a box keeping
+/// none. `impedance_db` is the receiver's elevation's, which helicopters do not take.
+fn lamax_bound(
+    record: &AircraftBox,
+    tile: TileId,
+    frame: &LocalFrame,
+    receiver: AircraftReceiver,
+    impedance_db: f64,
+) -> Option<f64> {
+    (record.piece_count > 0).then(|| {
+        record.loudest_lamax_db
+            + lamax_rise_bound_db(nearest_slant_m(record, tile, frame, receiver))
+            + INSTALLATION_CORRECTION_MAX_DB
+            + match record.group {
+                Group::FixedWing => impedance_db,
+                Group::Helicopter => 0.0,
+            }
+    })
+}
+
+/// Per box of a tile within the aircraft reach that keeps pieces, its index and its pieces'
+/// [`lamax_bound`]: what the loudest flights are searched by, without the boxes' energies.
+pub fn tile_lamax_bounds(
+    aircraft: &Aircraft<'_>,
+    tile: TileId,
+    frame: &LocalFrame,
+    receiver: AircraftReceiver,
+) -> Vec<(usize, f64)> {
+    let impedance_db = receiver_impedance_db(receiver.altitude_m);
+    (0..aircraft.box_count())
+        .filter(|&index| {
+            let [east_m, north_m] =
+                centroid_offset_m(aircraft.box_centroid(index), tile, frame, receiver);
+            east_m.hypot(north_m) <= AIRCRAFT_REACH_M
+        })
+        .filter_map(|index| {
+            let record = aircraft.aircraft_box(index);
+            lamax_bound(&record, tile, frame, receiver, impedance_db).map(|bound| (index, bound))
+        })
+        .collect()
+}
+
 /// The boxes of one tile at the receiver.
 pub fn tile_energy(
     aircraft: &Aircraft<'_>,
@@ -230,15 +273,7 @@ pub fn tile_energy(
                 return BEYOND_REACH;
             };
             let lambda = box_lambda(&record, &sel);
-            let bound = (record.piece_count > 0).then(|| {
-                record.loudest_lamax_db
-                    + lamax_rise_bound_db(nearest_slant_m(&record, tile, frame, receiver))
-                    + INSTALLATION_CORRECTION_MAX_DB
-                    + match record.group {
-                        Group::FixedWing => impedance_db,
-                        Group::Helicopter => 0.0,
-                    }
-            });
+            let bound = lamax_bound(&record, tile, frame, receiver, impedance_db);
             // Each period's Lden energy by that period's installation mix.
             let kinds = std::array::from_fn(|kind| {
                 (0..PERIODS)
