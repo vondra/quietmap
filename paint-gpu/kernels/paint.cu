@@ -1,5 +1,7 @@
-// The kernels: the energy one candidate delivers at one receiver, for pairs the host lists. The
-// square's tables are in one descriptor; a thread's ray lives in its own local memory.
+// The kernels: the energy one candidate delivers at one receiver, for pairs the host lists: each
+// pair's rays listed, then a thread a ray (a pair's rays differ in number, a warp's threads in step),
+// then the answered pairs' bands into their points. The square's tables are in one descriptor; a
+// thread's ray lives in its own local memory.
 
 // Everything one square's kernels read (paint-gpu/src/device.rs writes it).
 struct SquareScene {
@@ -50,30 +52,72 @@ __device__ u32 receiver_at(const SquareScene& square, float x, float y, u64 own_
     return 0;
 }
 
-// Per pair: the sums (PAIR_SUMS) candidate `candidate_index[i]` delivers at the receiver at
-// (receiver_xy[2i], receiver_xy[2i + 1]) standing in building `own_footprint[i]` (0 outdoors), or
-// its failure; an answered pair's mixed bands added to point `point_index[i]`'s in `bands`
-// (LAYERS x PERIODS x BANDS a point).
-extern "C" __global__ void evaluate_pairs(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
-                                          const u32* candidate_index, const u32* point_index, u32 pair_count, float* sums,
-                                          float* bands, u32* failed) {
+// What a pair's listing hands each ray to: counted, or written at the pair's offset.
+struct RayLister {
+    PairRay* rays;
+    u32 count;
+    __device__ u32 operator()(const PairRay& ray) {
+        if (rays) rays[count] = ray;
+        count++;
+        return 0;
+    }
+};
+
+// Per pair (candidate `candidate_index[i]` at the receiver at (receiver_xy[2i], receiver_xy[2i + 1])
+// standing in building `own_footprint[i]`, 0 outdoors): with `rays` null its rays counted into
+// `ray_counts` and its failure into `failed`; else its rays written from `ray_offsets[i]`.
+extern "C" __global__ void pair_rays(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
+                                     const u32* candidate_index, u32 pair_count, const u32* ray_offsets, PairRay* rays,
+                                     u32* ray_counts, u32* failed) {
     const SquareScene& square = *square_ptr;
-    u64 pair = (u64)blockIdx.x * blockDim.x + threadIdx.x;
-    if (pair >= pair_count) return;
-    RayStream s;
+    u32 pair = blockIdx.x * blockDim.x + threadIdx.x;
+    if (pair >= pair_count || (rays && failed[pair])) return;
     Receiver receiver;
     u32 status = receiver_at(square, receiver_xy[2 * pair], receiver_xy[2 * pair + 1], own_footprint[pair], &receiver);
-    float out[PAIR_SUMS], pair_bands[PERIODS * BANDS];
-    for (int k = 0; k < PAIR_SUMS; k++) out[k] = 0.0f;
     const Candidate& candidate = square.candidates[candidate_index[pair]];
-    if (status == 0) {
-        status = received_periods(square.ground, square.obstacles, receiver, candidate, square.attributes[candidate.attribute], s, out,
-                                  pair_bands);
+    RayLister lister{rays ? rays + ray_offsets[pair] : 0, 0u};
+    if (status == 0) status = pair_rays_of(square.obstacles, receiver, candidate, square.attributes[candidate.attribute], pair, lister);
+    if (!rays) {
+        ray_counts[pair] = status == 0 ? lister.count : 0u;
+        failed[pair] = status;
     }
-    if (status == 0) {
-        float* point_bands = bands + ((u64)point_index[pair] * LAYERS + candidate.layer) * (PERIODS * BANDS);
-        for (int k = 0; k < PERIODS * BANDS; k++) atomicAdd(&point_bands[k], pair_bands[k]);
+}
+
+// Per listed ray, a thread each: its pair's sums (PAIR_SUMS a pair) and mixed bands (PERIODS x BANDS
+// a pair) added to, or its failure to the pair's.
+extern "C" __global__ void ray_transfers(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
+                                         const u32* candidate_index, const PairRay* rays, u32 ray_count, float* sums,
+                                         float* pair_bands, u32* failed) {
+    const SquareScene& square = *square_ptr;
+    u32 k = blockIdx.x * blockDim.x + threadIdx.x;
+    if (k >= ray_count) return;
+    const PairRay ray = rays[k];
+    u32 pair = ray.pair;
+    Receiver receiver;
+    u32 status = receiver_at(square, receiver_xy[2 * pair], receiver_xy[2 * pair + 1], own_footprint[pair], &receiver);
+    const Candidate& candidate = square.candidates[candidate_index[pair]];
+    RayStream s;
+    float out[PAIR_SUMS], ray_bands[PERIODS * BANDS];
+    for (int j = 0; j < PAIR_SUMS; j++) out[j] = 0.0f;
+    for (int j = 0; j < PERIODS * BANDS; j++) ray_bands[j] = 0.0f;
+    if (status == 0) status = ray_received(square.ground, square.obstacles, receiver, square.attributes[candidate.attribute], ray, s, out, ray_bands);
+    if (status) {
+        atomicOr(&failed[pair], status);
+        return;
     }
-    for (int k = 0; k < PAIR_SUMS; k++) sums[PAIR_SUMS * pair + k] = status == 0 ? out[k] : 0.0f;
-    failed[pair] = status;
+    for (int j = 0; j < PAIR_SUMS; j++) atomicAdd(&sums[(u64)PAIR_SUMS * pair + j], out[j]);
+    for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&pair_bands[(u64)pair * (PERIODS * BANDS) + j], ray_bands[j]);
+}
+
+// Per answered pair: its mixed bands added to point `point_index[i]`'s in `bands` (LAYERS x PERIODS
+// x BANDS a point).
+extern "C" __global__ void pair_bands_to_points(const SquareScene* square_ptr, const u32* candidate_index,
+                                                const u32* point_index, u32 pair_count, const float* pair_bands,
+                                                const u32* failed, float* bands) {
+    const SquareScene& square = *square_ptr;
+    u32 pair = blockIdx.x * blockDim.x + threadIdx.x;
+    if (pair >= pair_count || failed[pair]) return;
+    const Candidate& candidate = square.candidates[candidate_index[pair]];
+    float* point_bands = bands + ((u64)point_index[pair] * LAYERS + candidate.layer) * (PERIODS * BANDS);
+    for (int j = 0; j < PERIODS * BANDS; j++) atomicAdd(&point_bands[j], pair_bands[(u64)pair * (PERIODS * BANDS) + j]);
 }
