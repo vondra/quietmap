@@ -15,8 +15,8 @@
 //! FILE for the next map.
 //!
 //! `qm-paint-gpu etalon ... --square X,Y --out DIR [--device D] [--sample-step K]`: the square's
-//! etalon (every outdoor pixel as the popup answers it, `paint::etalon`; with K those at multiples
-//! of K both ways, the rest not assessed) written as z13 tiles under DIR.
+//! etalon (every outdoor pixel as the popup answers it, `paint::etalon`; with K one drawn in each
+//! K x K cell, the rest not assessed) written as z13 tiles under DIR.
 //!
 //! `qm-paint-gpu compare ... --painted DIR --reference DIR --squares X,Y;...`: a
 //! painted map against the etalon, cell by cell, by the same contract.
@@ -30,27 +30,11 @@ use physics::weather::WeatherTable;
 use popup::candidates::GROUND_REACH_M;
 use popup::evaluate::{Receiver, Scratch, period_sums, received_bands};
 use popup::release::Release;
+use popup::selection::SplitMix;
 use rayon::prelude::*;
 use std::path::PathBuf;
 use std::time::Instant;
 use tiles::geo::{Mercator, TileId};
-
-/// SplitMix64.
-struct Random(u64);
-
-impl Random {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    fn unit(&mut self) -> f64 {
-        (self.next() >> 11) as f64 / (1u64 << 53) as f64
-    }
-}
 
 fn option<'a>(arguments: &'a [String], name: &str) -> Option<&'a str> {
     arguments
@@ -102,7 +86,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             tile,
             &PathBuf::from(required("painted")?),
             parse("pixels", 300)? as usize,
-            &mut Random(parse("seed", 1)?),
+            &mut SplitMix(parse("seed", 1)?),
             option(arguments, "answers").map(std::path::Path::new),
         );
     }
@@ -115,7 +99,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
         y: y.parse().map_err(|_| "--square y")?,
     };
     let pairs = parse("pairs", 20_000)? as usize;
-    let mut random = Random(parse("seed", 1)?);
+    let mut random = SplitMix(parse("seed", 1)?);
     let started = Instant::now();
     let files = Files::read(&release, tile)?;
     let square = Square::new(&weather, tile, &files)?;
@@ -249,9 +233,9 @@ fn run(arguments: &[String]) -> Result<(), String> {
             if near.is_empty() {
                 continue;
             }
-            near[(random.next() % near.len() as u64) as usize]
+            near[(random.next_u64() % near.len() as u64) as usize]
         } else {
-            let index = (random.next() % square.candidates.len() as u64) as u32;
+            let index = (random.next_u64() % square.candidates.len() as u64) as u32;
             let candidate = &square.candidates[index as usize];
             if candidate.distance_from(position) > reach_m
                 || !of_kind(candidate.line, candidate.deck_m.is_some())
@@ -557,7 +541,7 @@ fn against_popup(
     tile: TileId,
     painted: &std::path::Path,
     pixels: usize,
-    random: &mut Random,
+    random: &mut SplitMix,
     answers_path: Option<&std::path::Path>,
 ) -> Result<(), String> {
     use paint::hm3::tile_path;
@@ -602,7 +586,7 @@ fn against_popup(
     // which stand in a building.
     let chosen: Vec<(u32, u32)> = (0..pixels)
         .map(|_| {
-            let mut pick = || (random.next() % u64::from(SIDE)) as u32;
+            let mut pick = || (random.next_u64() % u64::from(SIDE)) as u32;
             (pick(), pick())
         })
         .collect();
