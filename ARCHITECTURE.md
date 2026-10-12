@@ -192,7 +192,8 @@ silence under 0 dB, 255 not assessed);
 `qm-paint pack` (`pack.rs`) builds every zoom down to 2 (energy means) into one PMTiles archive
 per layer and `current.json`, which the server publishes. `qm-paint-gpu check` holds the card
 equal to the cores on random pairs, `pair` compares one pair, `etalon` paints the reference (with
-`--sample-step 4` a sixteenth of its outdoor pixels, every fourth each way, the rest not assessed),
+`--sample-step 4` a sixteenth of its outdoor pixels, one drawn in each 4 x 4 cell, the rest not
+assessed),
 `compare` scores a map against the cells it assesses and `popup` scores a map against popup clicks.
 
 ## Web
