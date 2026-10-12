@@ -47,6 +47,7 @@ pub(crate) fn contributor(key: u64, layer: Layer, leq_db: f64, distance_m: f64) 
             tile: 0,
             attribute: key as u32,
         },
+        display_lden: energy(leq_db),
         pieces: Vec::new(),
         lines: Vec::new(),
         heard: None,

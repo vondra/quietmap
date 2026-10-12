@@ -10,7 +10,7 @@
 //! `SAMPLING_TOLERANCE` of the answer. The draws are seeded by the click, so a click answers the
 //! same every time.
 
-use crate::candidates::{Attributes, Candidate};
+use crate::candidates::{Attributes, Candidate, DisplayRef};
 use crate::evaluate::{Bands, Path, Received, Receiver, Scratch, period_sums, received_bands};
 use crate::listing::EvaluatedPiece;
 use crate::update::{CONTRIBUTOR_PIECES, Contributor};
@@ -125,7 +125,7 @@ impl LayerSelection {
             *total += value;
         }
         self.add_spectrum(&received.bands);
-        self.add_contributor(candidate, received, 1.0);
+        self.add_contributor(candidate, received);
     }
 
     /// Evaluates `candidates` (the pieces of the source whose sound path is asked for) with
@@ -155,13 +155,10 @@ impl LayerSelection {
         }
     }
 
-    /// Adds `weight` times one evaluated piece to its contributor group.
-    fn add_contributor(&mut self, candidate: &Candidate, received: &Received, weight: f64) {
-        let energy = period_sums(&received.bands).map(|value| weight * value);
-        let states = received
-            .path
-            .states
-            .map(|state| state.map(|value| weight * value));
+    /// Adds one evaluated piece to its contributor group.
+    fn add_contributor(&mut self, candidate: &Candidate, received: &Received) {
+        let energy = period_sums(&received.bands);
+        let states = received.path.states;
         let contributor = self
             .contributors
             .entry(candidate.group_key)
@@ -172,6 +169,7 @@ impl LayerSelection {
                 weather: Default::default(),
                 distance_m: candidate.distance_m,
                 display: candidate.display,
+                display_lden: f64::NEG_INFINITY,
                 pieces: Vec::new(),
                 lines: Vec::new(),
                 heard: None,
@@ -183,11 +181,17 @@ impl LayerSelection {
             *total += value;
         }
         contributor.weather.add(&energy, &states);
-        contributor.path.add(&received.path, weight);
+        contributor.path.add(&received.path);
         contributor.distance_m = contributor.distance_m.min(candidate.distance_m);
-        contributor
-            .pieces
-            .push((candidate.ends_m, physics::bands::lden_energy(&energy)));
+        let lden = physics::bands::lden_energy(&energy);
+        let order = |d: DisplayRef| (d.ring, d.tile, d.attribute);
+        if lden > contributor.display_lden
+            || (lden == contributor.display_lden
+                && order(candidate.display) < order(contributor.display))
+        {
+            (contributor.display, contributor.display_lden) = (candidate.display, lden);
+        }
+        contributor.pieces.push((candidate.ends_m, lden));
         if contributor.pieces.len() >= 2 * CONTRIBUTOR_PIECES {
             loudest_pieces(&mut contributor.pieces);
         }
@@ -408,8 +412,10 @@ fn sample_rest(
                 selection.covered += population;
             }
             // Each drawn piece stands for its share of the estimate: drawn m times out of n with
-            // probability p, its weight is m / (n p), so the spectrum and the contributors sum to
-            // the layer's estimate (a piece's own energy stays in its listing).
+            // probability p, its weight is m / (n p), so the spectrum sums to the layer's estimate.
+            // The estimate stays the layer's steady rest, no contributor's: weighted into its own
+            // group a drawn piece would carry other groups' energy as its passes (+1.5 sone where
+            // every piece evaluated read 2.55).
             let mut times: std::collections::BTreeMap<usize, f64> =
                 std::collections::BTreeMap::new();
             for &index in &draws {
@@ -430,7 +436,6 @@ fn sample_rest(
                             .bands
                             .map(|period| period.map(|band| band * weight)),
                     );
-                    selection.add_contributor(&rest[index], received, weight);
                 }
             }
             return Ok(());

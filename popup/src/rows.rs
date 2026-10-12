@@ -48,7 +48,7 @@ impl Row {
     pub fn path(&self) -> Path {
         let mut path = Path::default();
         for part in &self.parts {
-            path.add(&part.path, 1.0);
+            path.add(&part.path);
         }
         path
     }
