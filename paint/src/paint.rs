@@ -157,7 +157,7 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
         corners[k as usize].add(
             candidate.layer as usize,
             (index, candidate.group_key),
-            (energy.mixed, distance_m),
+            (*energy, distance_m),
         );
     }
     // A corner's bands: the shape of what its blocks leave out there.

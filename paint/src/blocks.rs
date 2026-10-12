@@ -1,7 +1,7 @@
 //! A block of the painter's square: its corners' loud sources and which of them the block's pixels
 //! evaluate exactly, by dev1's rule (`crate::paint`); the energy the others leave at each corner.
 
-use crate::exact::LAYERS;
+use crate::exact::{LAYERS, PairEnergy};
 use physics::bands::{PERIODS, lden_energy};
 use std::collections::HashSet;
 
@@ -12,13 +12,13 @@ use std::collections::HashSet;
 /// more card time).
 pub const DROP_BUDGET_FRACTION: f64 = 0.15;
 
-/// A source loud at a corner: its index, its group, its Lden energy, its energy per period and its
-/// distance from the corner.
+/// A source loud at a corner: its index, its group, its Lden energy, its energy per period (mixed
+/// and in either weather state) and its distance from the corner.
 pub(crate) struct Ranked {
     pub index: u32,
     pub group: u64,
     pub lden: f64,
-    pub energy: [f64; PERIODS],
+    pub energy: PairEnergy,
     pub distance_m: f64,
 }
 
@@ -37,9 +37,9 @@ impl Corner {
         &mut self,
         layer: usize,
         (index, group): (u32, u64),
-        (energy, distance_m): ([f64; PERIODS], f64),
+        (energy, distance_m): (PairEnergy, f64),
     ) {
-        let lden = lden_energy(&energy);
+        let lden = lden_energy(&energy.mixed);
         self.ranked[layer].push(Ranked {
             index,
             group,
@@ -52,14 +52,15 @@ impl Corner {
 }
 
 /// A source group a block leaves out: its energy per period at each corner (north-west,
-/// north-east, south-west, south-east); its loudest source left out, whose display record its line
-/// takes; and at each corner its nearest source left out (`u32::MAX` where it has none there),
+/// north-east, south-west, south-east), mixed and in either weather state, the far pieces' calm and
+/// downwind apart by up to 17 dB at 700 m; its loudest source left out, whose display record its
+/// line takes; and at each corner its nearest source left out (`u32::MAX` where it has none there),
 /// whose distance its line takes where a pixel hears none of its other pieces, as a click takes a
 /// group's nearest piece.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LeftGroup {
     pub key: u64,
-    pub at_corners: [[f64; PERIODS]; 4],
+    pub at_corners: [PairEnergy; 4],
     pub loudest: u32,
     pub nearest: [u32; 4],
 }
@@ -133,12 +134,12 @@ pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
                 .iter()
                 .filter(|source| !admitted.contains(&source.index))
             {
-                for (total, value) in left_out[c][layer].iter_mut().zip(source.energy) {
+                for (total, value) in left_out[c][layer].iter_mut().zip(source.energy.mixed) {
                     *total += value;
                 }
                 let mut group = LeftGroup {
                     key: source.group,
-                    at_corners: [[0.0; PERIODS]; 4],
+                    at_corners: [PairEnergy::default(); 4],
                     loudest: source.index,
                     nearest: [u32::MAX; 4],
                 };
@@ -162,8 +163,11 @@ pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
             return false;
         }
         for c in 0..4 {
-            for (total, value) in kept.0.at_corners[c].iter_mut().zip(later.0.at_corners[c]) {
-                *total += value;
+            let (into, from) = (&mut kept.0.at_corners[c], later.0.at_corners[c]);
+            for p in 0..PERIODS {
+                into.mixed[p] += from.mixed[p];
+                into.states[0][p] += from.states[0][p];
+                into.states[1][p] += from.states[1][p];
             }
             if later.2[c] < kept.2[c] {
                 (kept.2[c], kept.0.nearest[c]) = (later.2[c], later.0.nearest[c]);
@@ -191,10 +195,14 @@ mod tests {
         let mut corner = Corner::default();
         for (index, energy) in road {
             let group = u64::from(index);
+            let energy = PairEnergy {
+                mixed: [energy; PERIODS],
+                states: [[energy; PERIODS]; 2],
+            };
             corner.add(
                 Layer::Road as usize,
                 (index, group),
-                ([energy; PERIODS], f64::from(index)),
+                (energy, f64::from(index)),
             );
         }
         corner
@@ -227,9 +235,13 @@ mod tests {
                 .iter()
                 .all(|corner| corner[road] == [12.0; PERIODS])
         );
+        let twelve = PairEnergy {
+            mixed: [12.0; PERIODS],
+            states: [[12.0; PERIODS]; 2],
+        };
         let left = LeftGroup {
             key: 2,
-            at_corners: [[12.0; PERIODS]; 4],
+            at_corners: [twelve; 4],
             loudest: 2,
             nearest: [2; 4],
         };
