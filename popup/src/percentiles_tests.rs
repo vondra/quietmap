@@ -15,7 +15,8 @@ fn distributions(
     fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
 ) -> [Distribution; PERIODS] {
     let weather = flight_weather(&flights);
-    let (lines, steady) = click_lines(selections, (&weather, flights), fields).unwrap();
+    let passes = |group: &Group| fields(group).map(|fields| Passes::read(group.layer, &fields));
+    let (lines, steady) = click_lines(selections, (&weather, flights), &passes).unwrap();
     distributions_of(&lines, steady, Resolution::CLICK)
 }
 
@@ -84,11 +85,15 @@ fn quiet_road(_: &Group) -> Result<serde_json::Value, String> {
 fn a_road_runs_at_the_period_shares_its_fields_carry() {
     let thai = serde_json::json!({"aadt_light": 800.0, "speed_kmh": 50.0,
         "road_class": "primary", "period_shares": [0.632, 0.182, 0.186]});
-    let (per_hour, _, _) = traffic(Layer::Road, &thai, [1.0; PERIODS]).unwrap();
+    let (per_hour, _, _) = Passes::read(Layer::Road, &thai)
+        .traffic([1.0; PERIODS])
+        .unwrap();
     assert!((per_hour[2] - 800.0 * 0.186 / PERIOD_HOURS[2]).abs() < 1e-9);
     let older = serde_json::json!({"aadt_light": 800.0, "speed_kmh": 50.0,
         "road_class": "primary"});
-    let (per_hour, _, _) = traffic(Layer::Road, &older, [1.0; PERIODS]).unwrap();
+    let (per_hour, _, _) = Passes::read(Layer::Road, &older)
+        .traffic([1.0; PERIODS])
+        .unwrap();
     assert!((per_hour[2] - 800.0 * OTHER_PERIOD_SHARES[2] / PERIOD_HOURS[2]).abs() < 1e-9);
 }
 
@@ -121,7 +126,9 @@ fn a_road_follows_its_hours_and_movements_their_periods() {
     assert!((shares - 1.0).abs() < 1e-9);
     let cargo = serde_json::json!({"arrivals_per_day": 4.0, "departures_per_day": 4.0,
         "ground_vehicles_per_day": 2.0});
-    let (per_hour, _, _) = traffic(Layer::Aircraft, &cargo, [0.0, 0.0, 1.0]).unwrap();
+    let (per_hour, _, _) = Passes::read(Layer::Aircraft, &cargo)
+        .traffic([0.0, 0.0, 1.0])
+        .unwrap();
     assert_eq!(per_hour[0], 0.0);
     assert!((per_hour[2] - 10.0 / 8.0).abs() < 1e-12);
 }
@@ -274,7 +281,11 @@ fn pieces_louder_in_opposite_states_keep_their_mean() {
         total += mean;
     }
     site.energy = [total; PERIODS];
-    let line = Line::of(&site.group(), &serde_json::Value::Null).unwrap();
+    let line = Line::of(
+        &site.group(),
+        &Passes::read(site.layer, &serde_json::Value::Null),
+    )
+    .unwrap();
     let average = line.state_means(0).iter().sum::<f64>() / WEATHER_STATES as f64;
     assert!((average - total).abs() < 1e-9, "{average} vs {total}");
 }
@@ -291,7 +302,11 @@ fn a_source_alone_keeps_its_weather() {
         .weather
         .add(&[mean; PERIODS], &[[calm; PERIODS], [favourable; PERIODS]]);
     plant.energy = [mean; PERIODS];
-    let line = Line::of(&plant.group(), &serde_json::Value::Null).unwrap();
+    let line = Line::of(
+        &plant.group(),
+        &Passes::read(plant.layer, &serde_json::Value::Null),
+    )
+    .unwrap();
     let mut levels: Vec<(f64, f64)> = Vec::new();
     line.own_levels(0, 0.0, &mut |level, share| levels.push((level, share)));
     let at = |db: f64| -> f64 {

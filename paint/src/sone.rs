@@ -16,14 +16,14 @@ use popup::loudness::{
     Curve, FlightSound, LayerSound, PlacedLayer, curves, layer_curves, layers_loudness,
     place_layers,
 };
-use popup::percentiles::{Group, Resolution, Weather, flight_weather};
+use popup::percentiles::{Group, Passes, Resolution, Weather, flight_weather};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use tiles::sources::Layer;
 
-/// Every source group's display record a square's candidates point at, read once: where a line's
-/// traffic and events come from.
-pub(crate) struct Displays(HashMap<(u16, u32), serde_json::Value>);
+/// How every source group a square's candidates point at sounds in time, read once from its
+/// display record: where a line's traffic and events come from.
+pub(crate) struct Displays(HashMap<(u16, u32), Passes>);
 
 impl Displays {
     pub fn of(square: &Square) -> Result<Self, String> {
@@ -46,17 +46,17 @@ impl Displays {
                     attribute,
                     layer,
                 )?;
-                Ok(((tile, attribute), record))
+                Ok(((tile, attribute), Passes::read(layer, &record)))
             })
             .collect::<Result<_, String>>()?;
         Ok(Displays(records))
     }
 
-    fn of_group(&self, group: &Group) -> Result<serde_json::Value, String> {
+    fn of_group(&self, group: &Group) -> Result<Passes, String> {
         let DisplayRef {
             tile, attribute, ..
         } = group.display;
-        (self.0.get(&(tile, attribute)).cloned())
+        (self.0.get(&(tile, attribute)).copied())
             .ok_or_else(|| format!("the display {tile}/{attribute} was not read"))
     }
 }
@@ -278,7 +278,7 @@ pub(crate) fn pixel_sound(
         })
         .collect();
     let weather = flight_weather(&(flights, flights_lambda));
-    let fields = |group: &Group| displays.of_group(group);
+    let passes = |group: &Group| displays.of_group(group);
     let flight_sound = FlightSound {
         energy: flights,
         spectrum_db: Some(*flight_spectrum_db),
@@ -287,7 +287,7 @@ pub(crate) fn pixel_sound(
         &views,
         &sounds,
         (&weather, (flights, flights_lambda)),
-        &fields,
+        &passes,
     )?;
     Ok(PixelSound {
         placed,

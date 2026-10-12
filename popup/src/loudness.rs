@@ -12,7 +12,9 @@
 
 use crate::distribution::Distribution;
 use crate::evaluate::Bands;
-use crate::percentiles::{Group, Line, Resolution, Weather, layered_distributions, place_lines};
+use crate::percentiles::{
+    Group, Line, Passes, Resolution, Weather, layered_distributions, place_lines,
+};
 use crate::selection::LayerSelection;
 use physics::bands::{
     A_WEIGHTING_DB as OCTAVE_A_DB, BANDS, PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy,
@@ -159,10 +161,10 @@ pub fn place_loudness(
     layers: &[LayerSound],
     (curves, layer_curves): (&[Curve; PERIODS], &[(Layer, [Curve; PERIODS])]),
     flights: (&Weather, ([f64; PERIODS], [f64; PERIODS])),
-    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
+    passes: &dyn Fn(&Group) -> Result<Passes, String>,
     resolution: Resolution,
 ) -> Result<PlaceLoudness, String> {
-    let placed = place_layers(groups, layers, flights, fields)?;
+    let placed = place_layers(groups, layers, flights, passes)?;
     Ok(layers_loudness(
         &placed,
         layers,
@@ -208,7 +210,7 @@ pub fn place_layers(
     groups: &[Group],
     layers: &[LayerSound],
     flights: (&Weather, ([f64; PERIODS], [f64; PERIODS])),
-    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
+    passes: &dyn Fn(&Group) -> Result<Passes, String>,
 ) -> Result<Vec<PlacedLayer>, String> {
     let no_flights = ([0.0; PERIODS], [0.0; PERIODS]);
     (layers.iter())
@@ -220,7 +222,7 @@ pub fn place_layers(
                 Layer::Aircraft => flights,
                 _ => (flights.0, no_flights),
             };
-            place_lines(own, layer.energy, heard, fields)
+            place_lines(own, layer.energy, heard, passes)
         })
         .collect()
 }
