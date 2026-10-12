@@ -14,7 +14,7 @@ use crate::buildings::{fill_buildings, own_reflection_db};
 use crate::exact::{Batch, LAYERS, Point, PointBands, evaluate_all};
 use crate::flights::{FlightSpectra, blend_flights, flights_at_corners};
 use crate::hum::Hum;
-use crate::sone::{Displays, Rest, pixel_ndens};
+use crate::sone::{Displays, Rest, pixel_ndens, pixel_sound};
 use crate::square::Square;
 use physics::bands::{BANDS, PERIODS, lden_energy};
 use popup::percentiles::Resolution;
@@ -67,6 +67,12 @@ pub type Cells = Vec<[u8; LAYERS + 1]>;
 /// An outdoor pixel painted: per layer its Lden energy (a building's façade is chosen by it) and its
 /// loudness per layer and in total (sone).
 pub type Painted = ([f64; LAYERS], [f64; LAYERS + 1]);
+
+/// A pixel's loudness per layer and in total: known (sone), or its sound packed for the card.
+enum Loudness {
+    Known([f64; LAYERS + 1]),
+    Packed(Vec<f32>),
+}
 
 /// A pass's pixels: the outdoor ones' place in the square and paint, and the indoor ones' place and
 /// building.
@@ -302,7 +308,9 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
                 ]))
             })
             .collect::<Result<_, String>>()?;
-        let painted = (0..points.len())
+        // Each outdoor pixel's loudness: blended in a block hearing only the hum and the flights;
+        // else its sound packed for the card, or its loudness on the cores without one.
+        let heard: Vec<(usize, [f64; LAYERS], Loudness)> = (0..points.len())
             .into_par_iter()
             .filter(|&k| points[k].own_footprint == 0)
             .map(|k| -> Result<_, String> {
@@ -348,22 +356,53 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
                 }
                 let mut layers = layers.map(|energy| reflection * energy);
                 layers[Layer::Aircraft as usize] += lden_energy(&rest.flights[0]);
-                let ndens = match &smooth[slot] {
-                    Some(corners) => std::array::from_fn(|l| {
+                if let Some(corners) = &smooth[slot] {
+                    let ndens = std::array::from_fn(|l| {
                         (0..4).map(|c| weights[c] * corners[c][l]).sum::<f64>()
-                    }),
-                    None => pixel_ndens(
-                        square,
-                        &displays,
-                        (point.position, reflection),
-                        (&lists[k], &evaluated.pairs[range], &evaluated.bands[k]),
-                        (&rest, &flight_spectra.at(x, y)),
-                        Resolution::MAP,
-                    )?,
-                };
-                Ok((at, (layers, ndens)))
+                    });
+                    return Ok((at, layers, Loudness::Known(ndens)));
+                }
+                let sound = pixel_sound(
+                    square,
+                    &displays,
+                    (point.position, reflection),
+                    (&lists[k][..], &evaluated.pairs[range], &evaluated.bands[k]),
+                    (&rest, &flight_spectra.at(x, y)),
+                )?;
+                Ok(match batch {
+                    Some(_) => {
+                        let mut packed = Vec::new();
+                        sound.pack(Resolution::MAP.weather_states, &mut packed);
+                        (at, layers, Loudness::Packed(packed))
+                    }
+                    None => (at, layers, Loudness::Known(sound.ndens(Resolution::MAP))),
+                })
             })
             .collect::<Result<_, String>>()?;
+        let (mut input, mut offsets) = (Vec::new(), Vec::new());
+        for (_, _, loudness) in &heard {
+            if let Loudness::Packed(packed) = loudness {
+                offsets.push(input.len() as u64);
+                input.extend_from_slice(packed);
+            }
+        }
+        let mut card = match batch {
+            Some(batch) if !offsets.is_empty() => batch.loudness(&input, &offsets)?,
+            _ => Vec::new(),
+        }
+        .into_iter();
+        let painted = (heard.into_iter())
+            .map(|(at, layers, loudness)| {
+                let ndens = match loudness {
+                    Loudness::Known(ndens) => ndens,
+                    Loudness::Packed(_) => {
+                        let sone = card.next().unwrap_or([0.0; LAYERS + 1]);
+                        sone.map(f64::from)
+                    }
+                };
+                (at, (layers, ndens))
+            })
+            .collect();
         Ok((painted, indoor))
     };
     // With a card, two passes run at once: one's lists and loudness on the cores while the other's

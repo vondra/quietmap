@@ -14,6 +14,11 @@
 //! etalon (every outdoor pixel's loudness with every loud source exact, `paint::etalon`; with K one
 //! drawn in each K x K cell, the rest not assessed) written as z13 tiles under DIR.
 //!
+//! `qm-paint-gpu check-loudness ... --square X,Y [--pixels N] [--seed S] [--device D]`: the card's
+//! loudness (`paint_gpu::loudness`) of N random outdoor pixels' sounds (`paint::etalon::sounds_at`,
+//! 500) against the cores' (`PixelSound::ndens`): the differences in phon per layer and in total,
+//! the worst, and both times.
+//!
 //! `qm-paint-gpu compare ... --painted DIR --reference DIR --squares X,Y;...`: a painted map against
 //! a reference (an etalon, or the popup's sparse answers) cell by cell where the reference assesses
 //! one, per layer and the total by the owner's z13 contract in loudness level (rungs over 0.5, 1, 3
@@ -51,8 +56,11 @@ fn main() {
 
 fn run(arguments: &[String]) -> Result<(), String> {
     let command = arguments.first().map(String::as_str);
-    if !matches!(command, Some("check" | "popup" | "etalon" | "compare")) {
-        return Err("usage: qm-paint-gpu check|popup|etalon|compare --prepared DIR --year YYYY ... (see the file's header)".into());
+    if !matches!(
+        command,
+        Some("check" | "check-loudness" | "popup" | "etalon" | "compare")
+    ) {
+        return Err("usage: qm-paint-gpu check|check-loudness|popup|etalon|compare --prepared DIR --year YYYY ... (see the file's header)".into());
     }
     let required = |name: &str| option(arguments, name).ok_or(format!("--{name} is required"));
     let parse = |name: &str, default: u64| -> Result<u64, String> {
@@ -97,6 +105,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let started = Instant::now();
     let files = Files::read(&release, tile)?;
     let square = Square::new(&weather, tile, &files)?;
+    if command == Some("check-loudness") {
+        return check_loudness(
+            &square,
+            parse("pixels", 500)? as usize,
+            parse("seed", 1)?,
+            parse("device", 0)? as usize,
+        );
+    }
     if command == Some("etalon") {
         let out = PathBuf::from(required("out")?);
         let sample_step = match parse("sample-step", 1)? {
@@ -540,5 +556,86 @@ fn compare_maps(
     for (score, name) in scores.iter().zip(paint::hm3::layer_names()) {
         println!("{}", score.line(name));
     }
+    Ok(())
+}
+
+/// The card's loudness of `count` random outdoor pixels of the square against the cores'.
+fn check_loudness(square: &Square, count: usize, seed: u64, device: usize) -> Result<(), String> {
+    let grid = paint::paint::Grid::at_zoom(13).ok_or("no grid at zoom 13")?;
+    let started = Instant::now();
+    let sounds = paint::etalon::sounds_at(square, grid, count, seed)?;
+    let sounds_s = started.elapsed().as_secs_f64();
+    let started = Instant::now();
+    let cpu: Vec<[f64; LAYERS + 1]> = (sounds.par_iter())
+        .map(|sound| sound.ndens(popup::percentiles::Resolution::MAP))
+        .collect();
+    let cpu_s = started.elapsed().as_secs_f64();
+    let (mut input, mut offsets) = (Vec::new(), Vec::new());
+    for sound in &sounds {
+        offsets.push(input.len() as u64);
+        sound.pack(
+            popup::percentiles::Resolution::MAP.weather_states,
+            &mut input,
+        );
+    }
+    let gpu = Gpu::new(device)?;
+    let started = Instant::now();
+    let card = gpu.pixel_loudness(&input, &offsets)?;
+    let gpu_s = started.elapsed().as_secs_f64();
+    let phon = |sone: f64| {
+        if sone > 0.0 {
+            40.0 + 10.0 * sone.log2()
+        } else {
+            f64::NEG_INFINITY
+        }
+    };
+    let names = [
+        "road",
+        "railway",
+        "industrial",
+        "building",
+        "ship",
+        "aircraft",
+        "total",
+    ];
+    for (k, name) in names.iter().enumerate() {
+        let mut differences: Vec<(f64, usize)> = (0..sounds.len())
+            .filter_map(|pixel| {
+                let (c, g) = (cpu[pixel][k], f64::from(card[pixel][k]));
+                // Under 1/16 sone (0 phon) both count as silence.
+                if c < 1.0 / 16.0 && g < 1.0 / 16.0 {
+                    return None;
+                }
+                Some(((phon(g.max(1e-6)) - phon(c.max(1e-6))).abs(), pixel))
+            })
+            .collect();
+        differences.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let at = |q: f64| {
+            differences
+                .get(((differences.len() as f64 - 1.0) * q).round() as usize)
+                .map_or(0.0, |d| d.0)
+        };
+        let over = |limit: f64| differences.iter().filter(|d| d.0 > limit).count();
+        let worst = differences.last().copied().unwrap_or((0.0, 0));
+        println!(
+            "{name:10} {} pixels: |card - cores| phon median {:.3}, p99 {:.3}, max {:.3} (pixel {}: cores {:.4} card {:.4} sone); over 0.1 {}, 0.5 {}, 1 {}",
+            differences.len(),
+            at(0.5),
+            at(0.99),
+            worst.0,
+            worst.1,
+            cpu[worst.1][k],
+            card[worst.1][k],
+            over(0.1),
+            over(0.5),
+            over(1.0)
+        );
+    }
+    println!(
+        "{count} pixels: sounds {sounds_s:.1} s, cores {cpu_s:.2} s on {} threads, card {gpu_s:.3} s on {} ({} floats)",
+        rayon::current_num_threads(),
+        gpu.name,
+        input.len()
+    );
     Ok(())
 }

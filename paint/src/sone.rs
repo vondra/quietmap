@@ -10,8 +10,12 @@ use crate::flights::FlightSums;
 use crate::square::Square;
 use physics::bands::{PERIODS, lden_energy};
 use physics::doc29::atmosphere::THIRD_OCTAVES as CLASS_THIRDS;
+use physics::loudness::THIRD_OCTAVES;
 use popup::candidates::DisplayRef;
-use popup::loudness::{FlightSound, LayerSound, curves, layer_curves, place_loudness};
+use popup::loudness::{
+    Curve, FlightSound, LayerSound, PlacedLayer, curves, layer_curves, layers_loudness,
+    place_layers,
+};
 use popup::percentiles::{Group, Resolution, Weather, flight_weather};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -19,7 +23,7 @@ use tiles::sources::Layer;
 
 /// Every source group's display record a square's candidates point at, read once: where a line's
 /// traffic and events come from.
-pub struct Displays(HashMap<(u16, u32), serde_json::Value>);
+pub(crate) struct Displays(HashMap<(u16, u32), serde_json::Value>);
 
 impl Displays {
     pub fn of(square: &Square) -> Result<Self, String> {
@@ -60,7 +64,7 @@ impl Displays {
 /// What a pixel hears beside its exact pairs, its reflection not yet taken: per layer the energy
 /// per period not evaluated there (left out at the corners, humming) and its bands; of it the
 /// groups its block left out with the pixel's weights of the block's corners; the flights.
-pub struct Rest<'a> {
+pub(crate) struct Rest<'a> {
     pub steady: [[f64; PERIODS]; LAYERS],
     pub bands: PointBands,
     pub left_groups: (&'a [LeftGroup], [f64; 4]),
@@ -79,18 +83,89 @@ struct Heard {
     display: (DisplayRef, f64),
 }
 
-/// The pixel's Nden per layer and in total (sone, 0 for silence) at `resolution` (the map's,
-/// `Resolution::MAP`): its exact pairs (candidates and their energies) and their `bands`, the
+/// The pixel's Nden per layer and in total (sone, 0 for silence) at `resolution` on the cores: its
+/// [`pixel_sound`]'s.
+pub(crate) fn pixel_ndens(
+    square: &Square,
+    displays: &Displays,
+    position_reflection: ([f64; 2], f64),
+    exact: (&[u32], &[PairEnergy], &PointBands),
+    rest: (&Rest, &[f64; CLASS_THIRDS]),
+    resolution: Resolution,
+) -> Result<[f64; LAYERS + 1], String> {
+    Ok(pixel_sound(square, displays, position_reflection, exact, rest)?.ndens(resolution))
+}
+
+/// What a pixel's loudness takes: each layer's lines over its steady energy, the layers' sounds and
+/// the curves (the place's and each layer's).
+pub struct PixelSound {
+    placed: Vec<PlacedLayer>,
+    sounds: Vec<LayerSound>,
+    curves: [Curve; PERIODS],
+    layer_curves: Vec<(Layer, [Curve; PERIODS])>,
+}
+
+impl PixelSound {
+    /// Nden per layer and in total (sone, 0 for silence) at `resolution` on the cores.
+    pub fn ndens(&self, resolution: Resolution) -> [f64; LAYERS + 1] {
+        let place = layers_loudness(
+            &self.placed,
+            &self.sounds,
+            (&self.curves, &self.layer_curves),
+            resolution,
+        );
+        let mut ndens = [0.0; LAYERS + 1];
+        for (layer, nden) in place.layers {
+            ndens[layer as usize] = nden.unwrap_or(0.0);
+        }
+        ndens[LAYERS] = place.place.nden_sone;
+        ndens
+    }
+
+    /// The card's input at `states` merged weather states (paint-gpu/kernels/loudness.cuh): per
+    /// layer its steady energy, its line count and its lines; per curve (each layer's, then the
+    /// place's) and period its spectrum's shape, NaN for none.
+    pub fn pack(&self, states: usize, out: &mut Vec<f32>) {
+        for (lines, steady) in &self.placed {
+            out.extend(steady.map(|value| value as f32));
+            out.push(lines.len() as f32);
+            for line in lines {
+                let parts = line.parts(states);
+                out.extend(parts.energy.map(|value| value as f32));
+                for means in &parts.means {
+                    out.extend(means.iter().map(|&value| value as f32));
+                }
+                out.extend(parts.lambda.map(|value| value as f32));
+                out.push(parts.profile.map_or(-1.0, |profile| profile as f32));
+                out.extend(
+                    parts
+                        .duty
+                        .map_or([f32::NAN; PERIODS], |duty| duty.map(|value| value as f32)),
+                );
+            }
+        }
+        let place = std::iter::once(&self.curves);
+        for curves in (self.layer_curves.iter().map(|(_, curves)| curves)).chain(place) {
+            for curve in curves {
+                match curve.shape_db() {
+                    Some(shape) => out.extend(shape.iter().map(|&value| value as f32)),
+                    None => out.extend([f32::NAN; THIRD_OCTAVES]),
+                }
+            }
+        }
+    }
+}
+
+/// What the pixel hears: its exact pairs (candidates and their energies) and their `bands`, the
 /// `rest`, all times its `reflection`; the flights' spectrum `flight_spectrum_db` (unweighted third
-/// octaves from 50 Hz).
-pub fn pixel_ndens(
+/// octaves from 50 Hz); as each layer's lines over its steady energy and the curves.
+pub(crate) fn pixel_sound(
     square: &Square,
     displays: &Displays,
     (position, reflection): ([f64; 2], f64),
     (candidates, energies, bands): (&[u32], &[PairEnergy], &PointBands),
     (rest, flight_spectrum_db): (&Rest, &[f64; CLASS_THIRDS]),
-    resolution: Resolution,
-) -> Result<[f64; LAYERS + 1], String> {
+) -> Result<PixelSound, String> {
     let mut groups: HashMap<u64, Heard> = HashMap::new();
     for (&index, energy) in candidates.iter().zip(energies) {
         let candidate = &square.candidates[index as usize];
@@ -208,21 +283,16 @@ pub fn pixel_ndens(
         energy: flights,
         spectrum_db: Some(*flight_spectrum_db),
     };
-    let place = place_loudness(
+    let placed = place_layers(
         &views,
         &sounds,
-        (
-            &curves(&sounds, &flight_sound),
-            &layer_curves(&sounds, &flight_sound),
-        ),
         (&weather, (flights, flights_lambda)),
         &fields,
-        resolution,
     )?;
-    let mut ndens = [0.0; LAYERS + 1];
-    for (layer, nden) in place.layers {
-        ndens[layer as usize] = nden.unwrap_or(0.0);
-    }
-    ndens[LAYERS] = place.place.nden_sone;
-    Ok(ndens)
+    Ok(PixelSound {
+        placed,
+        curves: curves(&sounds, &flight_sound),
+        layer_curves: layer_curves(&sounds, &flight_sound),
+        sounds,
+    })
 }

@@ -18,12 +18,12 @@ pub const A_WEIGHTING_DB: [f64; THIRD_OCTAVES] = [
 /// The band of 63 Hz, the first octave band's centre.
 pub const OCTAVE_START: usize = 4;
 /// Bands below this level are silent (dB).
-const SILENT_DB: f64 = -60.0;
+pub const SILENT_DB: f64 = -60.0;
 
 /// Ranges of third-octave levels (dB) for the low-frequency corrections.
-const RAP: [f64; 8] = [45.0, 55.0, 65.0, 71.0, 80.0, 90.0, 100.0, 120.0];
+pub const RAP: [f64; 8] = [45.0, 55.0, 65.0, 71.0, 80.0, 90.0, 100.0, 120.0];
 /// Reduction of the levels of the bands 25-250 Hz within the ranges of [`RAP`] (dB).
-const DLL: [[f64; 11]; 8] = [
+pub const DLL: [[f64; 11]; 8] = [
     [
         -32.0, -24.0, -16.0, -10.0, -5.0, 0.0, -7.0, -3.0, 0.0, -2.0, 0.0,
     ],
@@ -50,32 +50,32 @@ const DLL: [[f64; 11]; 8] = [
     ],
 ];
 /// Critical band level at the absolute threshold, without the ear's transmission (dB).
-const LTQ: [f64; 20] = [
+pub const LTQ: [f64; 20] = [
     30.0, 18.0, 12.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
     3.0, 3.0,
 ];
 /// The ear's transmission (dB).
-const A0: [f64; 20] = [
+pub const A0: [f64; 20] = [
     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.5, -1.6, -3.2, -5.4, -5.6, -4.0, -1.5,
     2.0, 5.0, 12.0,
 ];
 /// Third-octave to critical band level adaptation (dB).
-const DCB: [f64; 20] = [
+pub const DCB: [f64; 20] = [
     -0.25, -0.6, -0.8, -0.8, -0.5, 0.0, 0.5, 1.1, 1.5, 1.7, 1.8, 1.8, 1.7, 1.6, 1.4, 1.2, 0.8, 0.5,
     0.0, -0.5,
 ];
 /// Upper limits of the approximated critical bands (Bark).
-const ZUP: [f64; 21] = [
+pub const ZUP: [f64; 21] = [
     0.9, 1.8, 2.8, 3.5, 4.4, 5.4, 6.6, 7.9, 9.2, 10.6, 12.3, 13.8, 15.2, 16.7, 18.1, 19.3, 20.6,
     21.8, 22.7, 23.6, 24.0,
 ];
 /// Ranges of specific loudness for the steepness of the upper slopes (sone/Bark).
-const RNS: [f64; 18] = [
+pub const RNS: [f64; 18] = [
     21.5, 18.0, 15.1, 11.5, 9.0, 6.1, 4.4, 3.1, 2.13, 1.36, 0.82, 0.42, 0.30, 0.22, 0.15, 0.10,
     0.035, 0.0,
 ];
 /// Steepness of the upper slopes (sone/Bark) per [`RNS`] range and critical band group.
-const USL: [[f64; 8]; 18] = [
+pub const USL: [[f64; 8]; 18] = [
     [13.0, 8.2, 6.3, 5.5, 5.5, 5.5, 5.5, 5.5],
     [9.0, 7.5, 6.0, 5.1, 4.5, 4.5, 4.5, 4.5],
     [7.8, 6.7, 5.6, 4.9, 4.4, 3.9, 3.9, 3.9],

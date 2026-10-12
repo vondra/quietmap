@@ -117,8 +117,9 @@ fn between_rows(low: f64, high: f64, fraction: f64) -> f64 {
     (low + fraction * (high - low)).exp()
 }
 
-/// The probability of quantile `k` of a table row.
-fn probability(k: usize) -> f64 {
+/// The probability of quantile `k` of a table row (the last's, `QUANTILES - 1`, is where a sparse
+/// line's passing takes over).
+pub fn probability(k: usize) -> f64 {
     (k as f64 + 0.5) / QUANTILES as f64
 }
 
@@ -189,6 +190,12 @@ impl AtProbabilities {
                 })
                 .collect(),
         )
+    }
+
+    /// Each probability's parts as a port of this function reads them: its standard normal
+    /// quantile, its logarithm and, within the table, its log intensity on every row.
+    pub fn parts(&self) -> impl Iterator<Item = (f64, f64, Option<&[f64; ROWS]>)> + '_ {
+        (self.0.iter()).map(|at| (at.normal, at.ln_p, at.rows.as_ref()))
     }
 
     /// Each probability's [`relative_intensity`] for a line of `lambda`, the same to the bit.

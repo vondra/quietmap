@@ -57,7 +57,7 @@ const HOURLY_SHARES: [[f64; 24]; 3] = [
 const PERIOD_FIRST_HOUR: [usize; PERIODS] = [7, 19, 23];
 
 /// A road's flow in the `slot`th hour of `period` against its mean over the period, by its profile.
-fn hour_factor(profile: usize, period: usize, slot: usize) -> f64 {
+pub fn hour_factor(profile: usize, period: usize, slot: usize) -> f64 {
     let hours = PERIOD_HOURS[period] as usize;
     let share = |slot: usize| HOURLY_SHARES[profile][(PERIOD_FIRST_HOUR[period] + slot) % 24];
     let mean = (0..hours).map(share).sum::<f64>() / hours as f64;
@@ -186,7 +186,28 @@ impl crate::update::Contributor {
     }
 }
 
+/// What a line is made of, period by period: its energy, its mean in each of a resolution's merged
+/// weather states and its lambda; its hourly profile and an event's duty.
+pub struct LineParts {
+    pub energy: [f64; PERIODS],
+    pub means: [Vec<f64>; PERIODS],
+    pub lambda: [f64; PERIODS],
+    pub profile: Option<usize>,
+    pub duty: Option<[f64; PERIODS]>,
+}
+
 impl Line {
+    /// Its parts at `states` merged weather states (a port of the distributions reads them).
+    pub fn parts(&self, states: usize) -> LineParts {
+        LineParts {
+            energy: self.energy,
+            means: std::array::from_fn(|p| merged_states(&self.means[p], states)),
+            lambda: self.lambda,
+            profile: self.profile,
+            duty: self.duty,
+        }
+    }
+
     /// A group's line: industry, buildings and ships steady but for their events, a road, railway
     /// or aeroway by its traffic, read from its display `fields`; none for one of those whose
     /// fields carry no traffic.
@@ -474,12 +495,12 @@ pub fn heard(
 /// them alike): in state k a piece is favourable when its share exceeds (k + 0.5) / WEATHER_STATES.
 pub(crate) const WEATHER_STATES: usize = 10;
 /// A line at least this dense (Kurze's lambda) holds its mean: its level stays within about 0.5 dB.
-const HOLDS_MEAN_LAMBDA: f64 = 10.0;
+pub const HOLDS_MEAN_LAMBDA: f64 = 10.0;
 /// A line held at its mean: one whose level exceeded a thousandth of the time stays a hundredth of
 /// the steady energy's (20 dB under it), so it moves no level by more than a bin but for moments
 /// too rare to count.
-const HELD_EXCEEDED: f64 = 1e-3;
-const HELD_SHARE: f64 = 1e-2;
+pub const HELD_EXCEEDED: f64 = 1e-3;
+pub const HELD_SHARE: f64 = 1e-2;
 
 /// The lines of what the list leaves out, summing to `total` per period, for its last row's Nden:
 /// those over [`REST_SHARE_MIN`] of it, each at its period's mean flow every hour (the hours'
@@ -734,7 +755,7 @@ fn layer_states(
 /// A period's hours in groups of `groups` (`None`: every hour apart) and how many there are: one
 /// where no line follows a profile (not `profiled`); else the hours in order of their summed
 /// profiles' flow, cut into that many runs.
-fn hour_groups(
+pub fn hour_groups(
     profiled: bool,
     period: usize,
     groups: Option<[usize; PERIODS]>,
@@ -766,7 +787,7 @@ fn hour_groups(
 
 /// The native weather states' means merged into `states` equally likely ones, each the mean over
 /// its span of the native ones it covers.
-fn merged_states(means: &[f64; WEATHER_STATES], states: usize) -> Vec<f64> {
+pub fn merged_states(means: &[f64; WEATHER_STATES], states: usize) -> Vec<f64> {
     if states == WEATHER_STATES {
         return means.to_vec();
     }
