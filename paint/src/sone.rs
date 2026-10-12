@@ -11,10 +11,8 @@ use crate::square::Square;
 use physics::bands::{PERIODS, lden_energy};
 use physics::doc29::atmosphere::THIRD_OCTAVES as CLASS_THIRDS;
 use popup::candidates::DisplayRef;
-use popup::loudness::{FlightSound, LayerSound, curves, layer_curves, layer_ndens, loudness};
-use popup::percentiles::{
-    Group, Resolution, Weather, distributions_of, flight_weather, place_lines,
-};
+use popup::loudness::{FlightSound, LayerSound, curves, layer_curves, place_loudness};
+use popup::percentiles::{Group, Resolution, Weather, flight_weather};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use tiles::sources::Layer;
@@ -194,8 +192,6 @@ pub fn pixel_ndens(
             }
         })
         .collect();
-    let total: [f64; PERIODS] =
-        std::array::from_fn(|p| sounds.iter().map(|sound| sound.energy[p]).sum());
     let views: Vec<Group> = (groups.iter())
         .map(|(&key, heard)| Group {
             key,
@@ -208,29 +204,25 @@ pub fn pixel_ndens(
         .collect();
     let weather = flight_weather(&(flights, flights_lambda));
     let fields = |group: &Group| displays.of_group(group);
-    let (lines, steady) = place_lines(
-        views.iter().copied(),
-        total,
-        (&weather, (flights, flights_lambda)),
-        &fields,
-    )?;
     let flight_sound = FlightSound {
         energy: flights,
         spectrum_db: Some(*flight_spectrum_db),
     };
-    let distributions = distributions_of(&lines, steady, resolution);
-    let whole = loudness(&distributions, &curves(&sounds, &flight_sound)).nden_sone;
-    let own = layer_ndens(
+    let place = place_loudness(
         &views,
-        (&sounds, &layer_curves(&sounds, &flight_sound)),
+        &sounds,
+        (
+            &curves(&sounds, &flight_sound),
+            &layer_curves(&sounds, &flight_sound),
+        ),
         (&weather, (flights, flights_lambda)),
         &fields,
         resolution,
     )?;
     let mut ndens = [0.0; LAYERS + 1];
-    for (layer, nden) in own {
+    for (layer, nden) in place.layers {
         ndens[layer as usize] = nden.unwrap_or(0.0);
     }
-    ndens[LAYERS] = whole;
+    ndens[LAYERS] = place.place.nden_sone;
     Ok(ndens)
 }

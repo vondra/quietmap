@@ -474,13 +474,12 @@ pub fn answer(
         let flights_heard = (flight_energy, flight_energy_lambda);
         let flights_weather = crate::percentiles::flight_weather(&flights_heard);
         let timing = last_ring.then(|| -> Result<_, String> {
+            // The place's lines together: what the rows' shares are taken over.
             let (lines, steady) = crate::percentiles::click_lines(
                 &selections,
                 (&flights_weather, flights_heard),
                 &fields,
             )?;
-            let distributions =
-                crate::percentiles::distributions_of(&lines, steady, Resolution::CLICK);
             let flight_sound = crate::loudness::FlightSound {
                 energy: flight_energy,
                 spectrum_db: Some(crate::aircraft::flights::heard_spectrum(
@@ -491,25 +490,25 @@ pub fn answer(
             let sounds = crate::loudness::layer_sounds(&selections);
             let curves = crate::loudness::curves(&sounds, &flight_sound);
             let layer_curves = crate::loudness::layer_curves(&sounds, &flight_sound);
-            let loudness = crate::loudness::loudness(&distributions, &curves);
             let groups: Vec<crate::percentiles::Group> = (selections.iter())
                 .flat_map(|selection| selection.contributors.values())
                 .map(|contributor| contributor.group())
                 .collect();
-            let layer_ndens = crate::loudness::layer_ndens(
+            let place = crate::loudness::place_loudness(
                 &groups,
-                (&sounds, &layer_curves),
+                &sounds,
+                (&curves, &layer_curves),
                 (&flights_weather, flights_heard),
                 &fields,
                 Resolution::CLICK,
             )?;
             Ok((
-                Percentiles::of(&distributions),
-                loudness,
+                Percentiles::of(&place.distributions),
+                place.place,
                 curves,
                 layer_curves,
                 (lines, steady),
-                layer_ndens,
+                place.layers,
             ))
         });
         let timing = timing.transpose()?;
