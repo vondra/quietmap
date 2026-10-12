@@ -35,6 +35,12 @@ __device__ __forceinline__ void add_stretch(Moments& m, float a, float b, float 
     m.g += 0.5f * (ga + gb) * width;
 }
 
+// Moments of the range [x1, x1 + length] taken about (x1, z1), re-taken about (x0, z0).
+__device__ __forceinline__ Moments rebased(const Moments& m, float x1, float z1, float x0, float z0, float length) {
+    float dx = x1 - x0, dz = z1 - z0;
+    return Moments{m.z + dz * length, m.xz + dx * m.z + dz * (0.5f * length * length + dx * length), m.g};
+}
+
 // mean_plane::fit_mean_plane of the range [start, start + length] from its moments about
 // (start, z_r): the normal equations of the continuous fit; a range under a millimetre is a
 // level plane through z_r (the Rust's ground at the range start).
