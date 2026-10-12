@@ -4,13 +4,14 @@
 //! the loudest at its corners until what is left out weighs at most a share of its quietest
 //! corner's ([`crate::blocks`]); what is left out is blended from the corners, the quiet hum from
 //! its points ([`Hum`]), the flights from the corners. Each pixel's loudness (Nden, sone) per layer
-//! and in total is the popup's model on those ([`crate::sone`]). A building's pixels take its
+//! and in total is the popup's model on those ([`crate::sone`]); a block hearing only the hum and
+//! the flights (no source of its own, no wall) blends its corners'. A building's pixels take its
 //! loudest façade from the outdoor pixels along its outline, as a click inside it answers
 //! ([`crate::buildings`]).
 
 use crate::blocks::{Block, Corner, admit, meets};
 use crate::buildings::{fill_buildings, own_reflection_db};
-use crate::exact::{Batch, LAYERS, Point, evaluate_all};
+use crate::exact::{Batch, LAYERS, Point, PointBands, evaluate_all};
 use crate::flights::{FlightSpectra, blend_flights, flights_at_corners};
 use crate::hum::Hum;
 use crate::sone::{Displays, Rest, pixel_ndens};
@@ -260,6 +261,47 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
             })
             .collect();
         let within = |t: usize| ((t % grid.block) as f64 + 0.5) / grid.block as f64;
+        // A block hearing no source of its own, left out or near, and no wall: only the hum and the
+        // flights, both blended, so its loudness is blended from its corners'.
+        let area = grid.block * grid.block;
+        let smooth: Vec<Option<[[f64; LAYERS + 1]; 4]>> = (0..pass.len())
+            .into_par_iter()
+            .map(|slot| -> Result<_, String> {
+                let block = &pass[slot];
+                let walls = (slot * area..(slot + 1) * area)
+                    .any(|k| points[k].own_footprint != 0 || points[k].reflection_db != 0.0);
+                if !block.exact.is_empty() || !block.left_groups.is_empty() || walls {
+                    return Ok(None);
+                }
+                let (i, j) = (block_ids[slot] % blocks, block_ids[slot] / blocks);
+                let silent: PointBands = [[[0.0; BANDS]; PERIODS]; LAYERS];
+                let corner = |(di, dj): (usize, usize)| {
+                    let at = (j + dj) * corner_side + i + di;
+                    let (x, y) = ((i + di) * grid.block, (j + dj) * grid.block);
+                    let (steady, bands) = hum.at(x, y);
+                    let rest = Rest {
+                        steady,
+                        bands,
+                        left_groups: (&[], [0.0; 4]),
+                        flights: flights[at],
+                    };
+                    pixel_ndens(
+                        square,
+                        &displays,
+                        (corner_points[at].position, 1.0),
+                        (&[], &[], &silent),
+                        (&rest, &flight_spectra.at(x, y)),
+                        Resolution::MAP,
+                    )
+                };
+                Ok(Some([
+                    corner((0, 0))?,
+                    corner((1, 0))?,
+                    corner((0, 1))?,
+                    corner((1, 1))?,
+                ]))
+            })
+            .collect::<Result<_, String>>()?;
         let painted = (0..points.len())
             .into_par_iter()
             .filter(|&k| points[k].own_footprint == 0)
@@ -306,14 +348,19 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
                 }
                 let mut layers = layers.map(|energy| reflection * energy);
                 layers[Layer::Aircraft as usize] += lden_energy(&rest.flights[0]);
-                let ndens = pixel_ndens(
-                    square,
-                    &displays,
-                    (point.position, reflection),
-                    (&lists[k], &evaluated.pairs[range], &evaluated.bands[k]),
-                    (&rest, &flight_spectra.at(x, y)),
-                    Resolution::MAP,
-                )?;
+                let ndens = match &smooth[slot] {
+                    Some(corners) => std::array::from_fn(|l| {
+                        (0..4).map(|c| weights[c] * corners[c][l]).sum::<f64>()
+                    }),
+                    None => pixel_ndens(
+                        square,
+                        &displays,
+                        (point.position, reflection),
+                        (&lists[k], &evaluated.pairs[range], &evaluated.bands[k]),
+                        (&rest, &flight_spectra.at(x, y)),
+                        Resolution::MAP,
+                    )?,
+                };
                 Ok((at, (layers, ndens)))
             })
             .collect::<Result<_, String>>()?;
