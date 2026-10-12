@@ -12,7 +12,7 @@
 use crate::blocks::{Block, Corner, admit, meets};
 use crate::buildings::{fill_buildings, own_reflection_db};
 use crate::exact::{Batch, LAYERS, Point, PointBands, evaluate_all};
-use crate::flights::{FlightSpectra, blend_flights, flights_at_corners};
+use crate::flights::{FlightSpectra, FlightSums, blend_flights, flights_at_corners};
 use crate::hum::Hum;
 use crate::sone::{Displays, Rest, pixel_ndens, pixel_sound};
 use crate::square::Square;
@@ -111,22 +111,62 @@ pub(crate) fn bilinear(corners: [f64; 4], fx: f64, fy: f64) -> f64 {
     north * (1.0 - fy) + south * fy
 }
 
+/// What a square's corners know before its pixels are painted: owned, so the next square's
+/// corners can be taken on the cores while this one's pixels are on the card.
+pub struct Corners {
+    corner_points: Vec<Point>,
+    flights: Vec<FlightSums>,
+    flight_spectra: FlightSpectra,
+    hum: Hum,
+    displays: Displays,
+    corners: Vec<Corner>,
+    corner_bands: Vec<PointBands>,
+    corner_pairs: usize,
+    seconds: f64,
+}
+
 /// Paints the square: every pixel's cells, the exact evaluations here or by `batch`.
 pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<Cells, String> {
+    match corners_of(square, grid, batch)? {
+        Some(corners) => paint_pixels(square, grid, batch, corners),
+        None => Ok(vec![[SILENCE; LAYERS + 1]; grid.pixels * grid.pixels]),
+    }
+}
+
+/// The square's point at pixel coordinates (x, y), in the square's frame.
+fn metres_at(square: &Square, n: usize, x: f64, y: f64) -> [f64; 2] {
+    square.frame.to_metres(Mercator {
+        x: f64::from(square.tile.x) + x / n as f64,
+        y: f64::from(square.tile.y) + y / n as f64,
+    })
+}
+
+/// The frame's rectangle over pixel coordinates (x0, y0) to (x1, y1).
+fn rectangle_at(
+    square: &Square,
+    n: usize,
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+) -> ([f64; 2], [f64; 2]) {
+    let (a, b) = (metres_at(square, n, x0, y0), metres_at(square, n, x1, y1));
+    (
+        [a[0].min(b[0]), a[1].min(b[1])],
+        [a[0].max(b[0]), a[1].max(b[1])],
+    )
+}
+
+/// The square's corners: each one's sources loud there evaluated exactly and ranked, its flights,
+/// the hum, the flights' spectra; `None` for a square that is silent everywhere.
+pub fn corners_of(
+    square: &Square,
+    grid: Grid,
+    batch: Option<&dyn Batch>,
+) -> Result<Option<Corners>, String> {
     let n = grid.pixels;
-    let metres = |x: f64, y: f64| {
-        square.frame.to_metres(Mercator {
-            x: f64::from(square.tile.x) + x / n as f64,
-            y: f64::from(square.tile.y) + y / n as f64,
-        })
-    };
-    let rectangle = |x0: f64, y0: f64, x1: f64, y1: f64| {
-        let (a, b) = (metres(x0, y0), metres(x1, y1));
-        (
-            [a[0].min(b[0]), a[1].min(b[1])],
-            [a[0].max(b[0]), a[1].max(b[1])],
-        )
-    };
+    let metres = |x: f64, y: f64| metres_at(square, n, x, y);
+    let rectangle = |x0: f64, y0: f64, x1: f64, y1: f64| rectangle_at(square, n, x0, y0, x1, y1);
     let started = std::time::Instant::now();
     let blocks = n / grid.block;
     let corner_side = blocks + 1;
@@ -158,7 +198,7 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
     square.index.reaching(low, high, &mut near);
     let no_flights = (square.aircraft.iter()).all(|tile| tile.fine.is_none() && tile.far.is_none());
     if near.is_empty() && no_flights && hum.silent() {
-        return Ok(vec![[SILENCE; LAYERS + 1]; n * n]);
+        return Ok(None);
     }
     let displays = Displays::of(square)?;
     // Every block corner evaluates every source loud there.
@@ -195,7 +235,43 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
             ranked.sort_unstable_by(|a, b| b.lden.total_cmp(&a.lden).then(a.index.cmp(&b.index)));
         }
     });
-    let corners_s = started.elapsed().as_secs_f64();
+    Ok(Some(Corners {
+        corner_points,
+        flights,
+        flight_spectra,
+        hum,
+        displays,
+        corners,
+        corner_bands,
+        corner_pairs,
+        seconds: started.elapsed().as_secs_f64(),
+    }))
+}
+
+/// Paints the square's pixels from its corners (`corners_of`).
+pub fn paint_pixels(
+    square: &Square,
+    grid: Grid,
+    batch: Option<&dyn Batch>,
+    corners: Corners,
+) -> Result<Cells, String> {
+    let n = grid.pixels;
+    let metres = |x: f64, y: f64| metres_at(square, n, x, y);
+    let rectangle = |x0: f64, y0: f64, x1: f64, y1: f64| rectangle_at(square, n, x0, y0, x1, y1);
+    let started = std::time::Instant::now();
+    let Corners {
+        corner_points,
+        flights,
+        flight_spectra,
+        hum,
+        displays,
+        corners,
+        corner_bands,
+        corner_pairs,
+        seconds: corners_s,
+    } = corners;
+    let blocks = n / grid.block;
+    let corner_side = blocks + 1;
 
     // A block: the loud sources crossing it or the eight around, and those its corners admit.
     let block_of = |near: &mut Vec<u32>, at: usize| -> Block {
@@ -450,7 +526,7 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
         .collect();
     eprintln!(
         "qm-paint: hum and corners {corners_s:.1} s ({corner_pairs} pairs), pixels {:.1} s ({} pairs)",
-        started.elapsed().as_secs_f64() - corners_s,
+        started.elapsed().as_secs_f64(),
         pixel_pairs.into_inner(),
     );
     Ok(cells)
