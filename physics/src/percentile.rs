@@ -72,12 +72,49 @@ fn normal_quantile(p: f64) -> f64 {
 }
 
 /// The intensity, relative to its mean, of a sparse line's nearest emitter passing that is exceeded
-/// with probability `1 - p`: an emitter within `s` distances of the closest point, which happens
-/// with probability `1 - exp(-2 lambda s)`, gives `1 / (lambda pi (1 + s^2))` (the simulation's
-/// own law; its L10 emitter is 0.105 / (2 lambda) away).
-fn passing_intensity(lambda: f64, p: f64) -> f64 {
-    let s = -p.ln() / (2.0 * lambda);
+/// with probability `1 - p` (`ln_p` its logarithm): an emitter within `s` distances of the closest
+/// point, which happens with probability `1 - exp(-2 lambda s)`, gives `1 / (lambda pi (1 + s^2))`
+/// (the simulation's own law; its L10 emitter is 0.105 / (2 lambda) away).
+fn passing_intensity(lambda: f64, ln_p: f64) -> f64 {
+    let s = -ln_p / (2.0 * lambda);
     1.0 / (lambda * std::f64::consts::PI * (1.0 + s * s))
+}
+
+/// A dense line's intensity relative to its mean at the standard normal quantile `normal`.
+fn normal_intensity(lambda: f64, normal: f64) -> f64 {
+    let deviation = 1.0 / (2.0 * std::f64::consts::PI * lambda).sqrt();
+    (1.0 + deviation * normal).max(0.0)
+}
+
+/// The table's row at or below `lambda` and the fraction of the way to the next.
+fn table_position(lambda: f64) -> (usize, f64) {
+    let position = ((lambda / LAMBDA_MIN).log10() * STEPS_PER_DECADE).clamp(0.0, (ROWS - 1) as f64);
+    (position.floor() as usize, position.fract())
+}
+
+/// The quantile at or below probability `p` (at least the first) and the fraction of the way to
+/// the next in the log of `1 - p`.
+fn quantile_position(p: f64) -> (usize, f64) {
+    let p = p.max(probability(0));
+    let k = ((p * QUANTILES as f64 - 0.5).floor() as usize).min(QUANTILES - 2);
+    let t = ((1.0 - p).ln() - (1.0 - probability(k)).ln())
+        / ((1.0 - probability(k + 1)).ln() - (1.0 - probability(k)).ln());
+    (k, t)
+}
+
+/// The log intensity of table row `row` at a quantile position ([`quantile_position`]).
+fn log_quantile(row: usize, (k, t): (usize, f64)) -> f64 {
+    let values = &TABLE[row];
+    let (here, next) = (
+        f64::from(values[k]).max(1e-30).ln(),
+        f64::from(values[k + 1]).max(1e-30).ln(),
+    );
+    here + t * (next - here)
+}
+
+/// The intensity between two rows' log intensities, `fraction` of the way (in log intensity).
+fn between_rows(low: f64, high: f64, fraction: f64) -> f64 {
+    (low + fraction * (high - low)).exp()
 }
 
 /// The probability of quantile `k` of a table row.
@@ -102,35 +139,85 @@ pub fn relative_intensity(lambda: f64, p: f64) -> f64 {
     }
     let (bottom, top) = (probability(0), probability(QUANTILES - 1));
     if lambda >= SIMULATED_LAMBDA_MAX {
-        let deviation = 1.0 / (2.0 * std::f64::consts::PI * lambda).sqrt();
-        return (1.0 + deviation * normal_quantile(p.clamp(bottom, top))).max(0.0);
+        return normal_intensity(lambda, normal_quantile(p.clamp(bottom, top)));
     }
     if p > top {
-        return relative_intensity(lambda, top) + passing_intensity(lambda, p)
-            - passing_intensity(lambda, top);
+        return relative_intensity(lambda, top) + passing_intensity(lambda, p.ln())
+            - passing_intensity(lambda, top.ln());
     }
     // Sparser than the table, a line's nearest emitters lie about 1 / lambda distances away and
     // its intensity, relative to its mean, is in proportion to lambda below the last quantile.
     if lambda < LAMBDA_MIN {
         return lambda / LAMBDA_MIN * relative_intensity(LAMBDA_MIN, p);
     }
-    let p = p.max(bottom);
-    let position = ((lambda / LAMBDA_MIN).log10() * STEPS_PER_DECADE).clamp(0.0, (ROWS - 1) as f64);
-    let (row, fraction) = (position.floor() as usize, position.fract());
-    let k = ((p * QUANTILES as f64 - 0.5).floor() as usize).min(QUANTILES - 2);
-    let t = ((1.0 - p).ln() - (1.0 - probability(k)).ln())
-        / ((1.0 - probability(k + 1)).ln() - (1.0 - probability(k)).ln());
-    let log_quantile = |values: &[f32; QUANTILES]| {
-        let (here, next) = (
-            f64::from(values[k]).max(1e-30).ln(),
-            f64::from(values[k + 1]).max(1e-30).ln(),
+    let (row, fraction) = table_position(lambda);
+    let position = quantile_position(p);
+    between_rows(
+        log_quantile(row, position),
+        log_quantile((row + 1).min(ROWS - 1), position),
+        fraction,
+    )
+}
+
+/// [`relative_intensity`] at fixed probabilities, all that does not depend on lambda read once
+/// (each probability's normal quantile, logarithm and log intensity on every row of the table): a
+/// line's intensities at a hundred probabilities cost an exponential each, not seven logarithms.
+pub struct AtProbabilities(Vec<AtProbability>);
+
+/// A probability's part of [`relative_intensity`]: its standard normal quantile (a dense line), its
+/// logarithm (a sparse line's passing above the table) and, within the table, its log intensity
+/// on every row.
+struct AtProbability {
+    normal: f64,
+    ln_p: f64,
+    rows: Option<[f64; ROWS]>,
+}
+
+impl AtProbabilities {
+    pub fn new(probabilities: &[f64]) -> Self {
+        let (bottom, top) = (probability(0), probability(QUANTILES - 1));
+        AtProbabilities(
+            probabilities
+                .iter()
+                .map(|&p| AtProbability {
+                    normal: normal_quantile(p.clamp(bottom, top)),
+                    ln_p: p.ln(),
+                    rows: (p <= top).then(|| {
+                        let position = quantile_position(p);
+                        std::array::from_fn(|row| log_quantile(row, position))
+                    }),
+                })
+                .collect(),
+        )
+    }
+
+    /// Each probability's [`relative_intensity`] for a line of `lambda`, the same to the bit.
+    pub fn relative_intensities(&self, lambda: f64) -> impl Iterator<Item = f64> + '_ {
+        let top = probability(QUANTILES - 1);
+        let (row, fraction) = table_position(lambda);
+        let (at_top, passing_top) = (
+            relative_intensity(lambda, top),
+            passing_intensity(lambda, top.ln()),
         );
-        here + t * (next - here)
-    };
-    let low = log_quantile(&TABLE[row]);
-    let high = log_quantile(&TABLE[(row + 1).min(ROWS - 1)]);
-    // Interpolated in log intensity between the rows.
-    (low + fraction * (high - low)).exp()
+        self.0.iter().map(move |at| {
+            if !lambda.is_finite() {
+                return 1.0;
+            }
+            if lambda <= 0.0 {
+                return 0.0;
+            }
+            if lambda >= SIMULATED_LAMBDA_MAX {
+                return normal_intensity(lambda, at.normal);
+            }
+            let Some(rows) = &at.rows else {
+                return at_top + passing_intensity(lambda, at.ln_p) - passing_top;
+            };
+            if lambda < LAMBDA_MIN {
+                return lambda / LAMBDA_MIN * between_rows(rows[0], rows[1], 0.0);
+            }
+            between_rows(rows[row], rows[(row + 1).min(ROWS - 1)], fraction)
+        })
+    }
 }
 
 /// The level exceeded a fraction `exceeded` of the time by a source of mean level `leq_db`: L10 is

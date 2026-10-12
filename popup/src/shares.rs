@@ -8,7 +8,7 @@
 //! distribution of the moments before it; backward, the loudness per energy the lines after it
 //! leave in expectation. What holds steady takes its energy's part of every moment.
 
-use crate::distribution::{Distribution, value_levels};
+use crate::distribution::Distribution;
 use crate::loudness::Curve;
 use crate::percentiles::{Line, Resolution, WEATHER_STATES, at_mean_flow, moment};
 use crate::selection::LayerSelection;
@@ -160,27 +160,25 @@ fn moment_shares(
     // Backward: each moving line's energy times the loudness per energy its moments end in.
     let mut next = vec![0.0; bins];
     for (position, (line, values)) in moment.moving.iter().enumerate().rev() {
-        let levels = value_levels(values);
         let prefix = &before[position];
         let mut own = 0.0;
-        // From a moment at `level_db`: the loudness per energy expected at the end, and the
+        // From a moment at `intensity`: the loudness per energy expected at the end, and the
         // line's energy times it.
-        let step = |level_db: f64| {
+        let step = |intensity: f64| {
             let (mut expected, mut owned) = (0.0, 0.0);
-            for (&(value, weight), &value_db) in values.iter().zip(&levels) {
-                let per_energy =
-                    (prefix.sum_bin(level_db, value_db)).map_or(after_silent, |bin| after[bin]);
-                expected += weight * per_energy;
-                owned += weight * value * per_energy;
-            }
+            prefix.runs(intensity, values, &mut |bin, [shares, weighted]| {
+                let per_energy = bin.map_or(after_silent, |bin| after[bin]);
+                expected += shares * per_energy;
+                owned += weighted * per_energy;
+            });
             (expected, owned)
         };
         for (bin, intensity, share) in prefix.bins() {
-            let (expected, owned) = step(10.0 * intensity.log10());
+            let (expected, owned) = step(intensity);
             next[bin] = expected;
             own += share * owned;
         }
-        let (expected_silent, owned_silent) = step(f64::NEG_INFINITY);
+        let (expected_silent, owned_silent) = step(0.0);
         own += prefix.silent * owned_silent;
         shares[owners[*line]] += own;
         std::mem::swap(&mut after, &mut next);

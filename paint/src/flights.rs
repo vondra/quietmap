@@ -12,7 +12,7 @@ use popup::aircraft::FINE_BOXES_WITHIN_M;
 use popup::aircraft::boxes::{AIRCRAFT_REACH_M, AircraftReceiver, tile_flight_sums};
 use popup::aircraft::flights::{FlightTotals, heard_spectrum};
 use popup::aircraft::horizons::Horizons;
-use popup::aircraft::ring_aircraft;
+use popup::aircraft::loudest_flights;
 use rayon::prelude::*;
 use tiles::aircraft::Aircraft;
 use tiles::geo::TileId;
@@ -92,7 +92,7 @@ impl FlightSpectra {
                 };
                 let mut flights = FlightTotals::default().in_atmosphere(&weather.alpha_db_per_km);
                 let tiles = tiles_heard(square, point.position, AIRCRAFT_REACH_M);
-                ring_aircraft(&tiles, &square.frame, receiver, &horizons, &mut flights);
+                loudest_flights(&tiles, &square.frame, receiver, &horizons, &mut flights);
                 let spectrum = heard_spectrum(
                     &flights.loudest(),
                     &place_rates_db_per_m(&weather.alpha_db_per_km),

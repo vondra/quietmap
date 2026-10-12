@@ -1,20 +1,21 @@
-//! How levels add over time: a distribution of the summed level on a 0.5 dB grid that keeps each
-//! bin's mean intensity, and a line's intensities at fixed probabilities (Kurze's quantiles,
+//! How levels add over time: a distribution of the summed level on a grid of a half or a whole
+//! decibel that keeps each bin's mean intensity, and a line's intensities at fixed probabilities (Kurze's quantiles,
 //! `physics::percentile`), so independent sounds are added exactly in energy and nearly in level.
 
-use physics::percentile::relative_intensity;
+use physics::bands::energy;
+use physics::percentile::AtProbabilities;
 
 /// The grid of the level distributions: levels at multiples of a step (the resolution's,
 /// `crate::percentiles::Resolution`) from [`LEVEL_MIN_DB`] over [`SPAN_DB`], each bin holding the
-/// levels rounding to it at their mean intensity; a level below the grid counts as silence.
+/// levels rounding to it at their mean intensity; a level below the grid is held in its lowest bin.
 const LEVEL_MIN_DB: f64 = -30.0;
 const SPAN_DB: f64 = 180.0;
 /// The probabilities at which a line's distribution is read, each with the share of the time it
 /// stands for: every percent to 0.99 (the levels exceeded 5 to 90 % of the time within one), then
 /// evenly in log(1 - p) to 1 - 1e-8, where a sparse line's rare passes lie (a car a day 10 m away
-/// is loud for a few seconds of it).
-fn nodes() -> &'static [(f64, f64)] {
-    static NODES: std::sync::OnceLock<Vec<(f64, f64)>> = std::sync::OnceLock::new();
+/// is loud for a few seconds of it). With the intensities' parts read once at the probabilities.
+fn nodes() -> &'static (AtProbabilities, Vec<f64>) {
+    static NODES: std::sync::OnceLock<(AtProbabilities, Vec<f64>)> = std::sync::OnceLock::new();
     NODES.get_or_init(|| {
         const EVEN: usize = 99;
         const TAIL_STEPS: usize = 24;
@@ -28,7 +29,8 @@ fn nodes() -> &'static [(f64, f64)] {
             nodes.push((at((a + b) / 2.0), at(b) - at(a)));
         }
         nodes.push((1.0 - 0.5e-8, 1e-8));
-        nodes
+        let (probabilities, shares): (Vec<f64>, Vec<f64>) = nodes.into_iter().unzip();
+        (AtProbabilities::new(&probabilities), shares)
     })
 }
 
@@ -60,7 +62,7 @@ impl Distribution {
 
     /// The bin of a level; a level under the grid is held in its lowest bin, at its own intensity.
     fn bin(&self, level_db: f64) -> usize {
-        nearest_index((level_db - LEVEL_MIN_DB) / self.bin_db).min(self.bins.len() - 1)
+        (((level_db - LEVEL_MIN_DB) / self.bin_db).round() as usize).min(self.bins.len() - 1)
     }
 
     /// Each bin holding a share of the time: its moments' mean intensity and its share.
@@ -80,11 +82,55 @@ impl Distribution {
             .map(|(bin, &[share, weighted])| (bin, weighted / share, share))
     }
 
-    /// The bin of a moment at `level_db` with a value at `value_db` added (`-inf` silent; the level
-    /// from the two levels, a table); `None` for a silent sum.
-    pub(crate) fn sum_bin(&self, level_db: f64, value_db: f64) -> Option<usize> {
-        (level_db.is_finite() || value_db.is_finite())
-            .then(|| self.bin(power_sum_db(level_db, value_db)))
+    /// The bins a moment at `intensity` (0 silent) moves to with each of `line`'s values added
+    /// (`None`: silence), each visited once, in increasing order, with the shares of the values
+    /// that take it there and their shares times their intensities: a logarithm a moment and a
+    /// short search a bin, not a bin's arithmetic a value.
+    pub(crate) fn runs(
+        &self,
+        intensity: f64,
+        line: &LineValues,
+        visit: &mut impl FnMut(Option<usize>, [f64; 2]),
+    ) {
+        let (pairs, sums) = (&line.pairs, &line.sums);
+        let run =
+            |from: usize, to: usize| [sums[to][0] - sums[from][0], sums[to][1] - sums[from][1]];
+        let mut from = 0;
+        if intensity <= 0.0 {
+            from = pairs.partition_point(|&(value, _)| value <= 0.0);
+            if from > 0 {
+                visit(None, run(0, from));
+            }
+        }
+        if from == pairs.len() {
+            return;
+        }
+        // A sum's bin is that of its level: the first value's by its logarithm, then a run ends at
+        // the first value whose sum reaches the next bin's lowest intensity, a step of the grid up
+        // at a time (each run takes at least one value, each next one a higher bin).
+        let last = self.bins.len() - 1;
+        let step = energy(self.bin_db);
+        let mut bin = self.bin(10.0 * (intensity + pairs[from].0).log10());
+        let mut ceiling = energy(LEVEL_MIN_DB + (bin as f64 + 0.5) * self.bin_db);
+        loop {
+            let to = if bin == last {
+                pairs.len()
+            } else {
+                first_at_or_above(pairs, from + 1, ceiling - intensity)
+            };
+            visit(Some(bin), run(from, to));
+            from = to;
+            let Some(&(value, _)) = pairs.get(from) else {
+                break;
+            };
+            loop {
+                bin += 1;
+                ceiling *= step;
+                if bin == last || intensity + value < ceiling {
+                    break;
+                }
+            }
+        }
     }
 
     /// Each level (dB) holding a share of the time, with its share; silence apart.
@@ -114,35 +160,34 @@ impl Distribution {
             .iter()
             .map(|&(level, share)| (10f64.powf(level / 10.0), share))
             .collect();
-        silence.with_line(&values)
+        silence.with_line(&LineValues::of(values))
     }
 
-    /// The distribution with independent `values` (intensities with their shares of the time)
-    /// added at every moment. A sum's bin is [`Self::sum_bin`]; its intensity is kept exact.
-    pub(crate) fn with_line(&self, values: &[(f64, f64)]) -> Self {
+    /// The distribution with an independent `line` added at every moment: each sum in the bin of
+    /// its level ([`Self::runs`]), its intensity kept exact.
+    pub(crate) fn with_line(&self, line: &LineValues) -> Self {
         let mut sum = Distribution::empty(self.bin_db);
-        let levels = value_levels(values);
-        let mut add = |level: f64, intensity: f64, share: f64| {
-            for (&(value, weight), &value_db) in values.iter().zip(&levels) {
-                match self.sum_bin(level, value_db) {
-                    Some(bin) => {
-                        sum.bins[bin][0] += share * weight;
-                        sum.bins[bin][1] += share * weight * (intensity + value);
-                    }
-                    None => sum.silent += share * weight,
+        let mut add = |intensity: f64, share: f64| {
+            self.runs(intensity, line, &mut |bin, [shares, weighted]| match bin {
+                Some(bin) => {
+                    sum.bins[bin][0] += share * shares;
+                    sum.bins[bin][1] += share * (intensity * shares + weighted);
                 }
-            }
+                None => sum.silent += share * shares,
+            });
         };
-        add(f64::NEG_INFINITY, 0.0, self.silent);
+        if self.silent > 0.0 {
+            add(0.0, self.silent);
+        }
         for (intensity, share) in self.intensities() {
-            add(10.0 * intensity.log10(), intensity, share);
+            add(intensity, share);
         }
         sum
     }
 
     /// The distribution with a steady `intensity` added at every moment.
     pub(crate) fn over(&self, intensity: f64) -> Self {
-        self.with_line(&[(intensity, 1.0)])
+        self.with_line(&LineValues::of(vec![(intensity, 1.0)]))
     }
 
     /// Adds `other`'s shares times `weight`.
@@ -155,81 +200,63 @@ impl Distribution {
     }
 }
 
-/// The nearest whole number at or above zero of `value` (0 for anything under a half): `round` and
-/// clamped, without the library call that took a fifth of a pixel's loudness (`Distribution::
-/// with_line`); equal to it at every half below 6,002, the most any index here reaches.
-fn nearest_index(value: f64) -> usize {
-    if value < 0.5 {
-        0
-    } else {
-        (value + 0.5) as usize
+/// The first of `pairs` from `from` whose value reaches `limit` (`pairs.len()` if none): probing one,
+/// two, four... ahead, then halving, as a run is mostly a few values.
+fn first_at_or_above(pairs: &[(f64, f64)], from: usize, limit: f64) -> usize {
+    let (mut low, mut step) = (from, 1);
+    while low + step - 1 < pairs.len() && pairs[low + step - 1].0 < limit {
+        low += step;
+        step *= 2;
     }
+    let high = (low + step - 1).min(pairs.len());
+    low + pairs[low..high].partition_point(|&(value, _)| value < limit)
 }
 
-/// The levels of a line's values (dB, `-inf` silent).
-pub(crate) fn value_levels(values: &[(f64, f64)]) -> Vec<f64> {
-    values
-        .iter()
-        .map(|&(value, _)| {
-            if value > 0.0 {
-                10.0 * value.log10()
-            } else {
-                f64::NEG_INFINITY
-            }
-        })
-        .collect()
+/// A line's intensities with their shares of the time, in increasing order, and the running sums
+/// of the shares and of the shares times the intensities ([`Distribution::runs`]).
+pub(crate) struct LineValues {
+    pairs: Vec<(f64, f64)>,
+    /// `sums[k]`: of the first `k` pairs, their shares and their shares times their intensities.
+    sums: Vec<[f64; 2]>,
 }
 
-/// The level of two levels' summed energy (dB): the louder one and the step the quieter adds,
-/// tabled every 0.01 dB of their difference (a silent one adds nothing).
-fn power_sum_db(a: f64, b: f64) -> f64 {
-    static STEPS: std::sync::OnceLock<Vec<f64>> = std::sync::OnceLock::new();
-    const PER_DB: f64 = 100.0;
-    const SPAN_DB: f64 = 60.0;
-    let steps = STEPS.get_or_init(|| {
-        (0..=(SPAN_DB * PER_DB) as usize)
-            .map(|k| 10.0 * (1.0 + 10f64.powf(-(k as f64 / PER_DB) / 10.0)).log10())
-            .collect()
-    });
-    let (high, difference) = if a >= b { (a, a - b) } else { (b, b - a) };
-    if !difference.is_finite() {
-        return high;
+impl LineValues {
+    /// Of intensities with their shares of the time, in any order.
+    pub(crate) fn of(mut pairs: Vec<(f64, f64)>) -> Self {
+        pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut sums = Vec::with_capacity(pairs.len() + 1);
+        sums.push([0.0; 2]);
+        for &(value, share) in &pairs {
+            let [shares, weighted] = sums[sums.len() - 1];
+            sums.push([shares + share, weighted + share * value]);
+        }
+        LineValues { pairs, sums }
     }
-    high + steps
-        .get(nearest_index(difference * PER_DB))
-        .copied()
-        .unwrap_or(0.0)
+
+    /// Each intensity with its share of the time.
+    pub(crate) fn pairs(&self) -> &[(f64, f64)] {
+        &self.pairs
+    }
 }
 
 /// A line's intensities at the nodes, each with its share of the time: Kurze's quantiles of
 /// `mean` at `lambda`, or an event's mean over its duty while it sounds and silence otherwise.
-pub(crate) fn line_values(mean: f64, lambda: f64, duty: Option<f64>) -> Vec<(f64, f64)> {
-    match duty {
+pub(crate) fn line_values(mean: f64, lambda: f64, duty: Option<f64>) -> LineValues {
+    LineValues::of(match duty {
         Some(duty) => vec![(0.0, 1.0 - duty), (mean / duty, duty)],
-        None => nodes()
-            .iter()
-            .map(|&(p, weight)| (mean * relative_intensity(lambda, p), weight))
-            .collect(),
-    }
+        None => {
+            let (at, shares) = nodes();
+            (at.relative_intensities(lambda))
+                .zip(shares)
+                .map(|(relative, &share)| (mean * relative, share))
+                .collect()
+        }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The index is `round`'s, clamped at zero, at every half up to the largest table's and four
-    /// representable numbers either side of it.
-    #[test]
-    fn the_nearest_index_rounds_as_the_library_does() {
-        for k in 0..6_002u64 {
-            let half = (k as f64 + 0.5).to_bits();
-            for step in -4i64..=4 {
-                let value = f64::from_bits((half as i64 + step) as u64);
-                assert_eq!(nearest_index(value), value.round() as usize, "{value}");
-            }
-        }
-        assert_eq!(nearest_index(-0.7), 0);
-    }
 
     /// Adding many lines loses no energy to the grid: 500 identical lines, each soon a small part
     /// of a step of their sum, keep their summed mean (rounding to the grid lost 1.2 dB).
@@ -238,7 +265,11 @@ mod tests {
         let mut sum = Distribution::empty(crate::percentiles::Resolution::CLICK.bin_db);
         sum.silent = 1.0;
         let values = line_values(1.0, 0.5, None);
-        let mean: f64 = values.iter().map(|(value, weight)| value * weight).sum();
+        let mean: f64 = values
+            .pairs()
+            .iter()
+            .map(|(value, weight)| value * weight)
+            .sum();
         for _ in 0..500 {
             sum = sum.with_line(&values);
         }
@@ -247,5 +278,52 @@ mod tests {
             .map(|(intensity, share)| intensity * share)
             .sum();
         assert!((total / (500.0 * mean) - 1.0).abs() < 1e-9, "{total}");
+    }
+
+    /// The runs put every sum in the bin of its level, as adding the values one by one does: sparse,
+    /// dense and steady lines, an event, a silent line, over silence and moments under, within and
+    /// above the grid, at both grids.
+    #[test]
+    fn runs_put_each_sum_in_the_bin_of_its_level() {
+        let lines = [
+            line_values(1e3, 1e-3, None),
+            line_values(1e5, 0.5, None),
+            line_values(2e4, 30.0, None),
+            line_values(1e6, 0.0, Some(0.02)),
+            LineValues::of(vec![(0.0, 0.3), (0.0, 0.7)]),
+            LineValues::of(vec![(4e4, 1.0)]),
+        ];
+        for bin_db in [0.5, 1.0] {
+            let grid = Distribution::empty(bin_db);
+            for line in &lines {
+                for intensity in [0.0, 1e-7, 3.3e3, 1e5, 2.2e7, 1e19] {
+                    let mut ours = vec![None; grid.bin_count() + 1];
+                    grid.runs(intensity, line, &mut |bin, sums| {
+                        let at = bin.map_or(grid.bin_count(), |bin| bin);
+                        assert!(ours[at].is_none(), "a bin visited twice");
+                        ours[at] = Some(sums);
+                    });
+                    let mut expected = vec![[0.0; 2]; grid.bin_count() + 1];
+                    for &(value, share) in line.pairs() {
+                        let sum = intensity + value;
+                        let at = if sum > 0.0 {
+                            grid.bin(10.0 * sum.log10())
+                        } else {
+                            grid.bin_count()
+                        };
+                        expected[at][0] += share;
+                        expected[at][1] += share * value;
+                    }
+                    for (at, expected) in expected.iter().enumerate() {
+                        let [shares, weighted] = ours[at].unwrap_or([0.0; 2]);
+                        let close = |a: f64, b: f64| (a - b).abs() <= 1e-12 * b.abs().max(1e-300);
+                        assert!(
+                            close(shares, expected[0]) && close(weighted, expected[1]),
+                            "{bin_db} {intensity} bin {at}: {shares} {weighted} {expected:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }

@@ -193,3 +193,25 @@ fn independent_sparse_lines_add_up_to_a_denser_one() {
         }
     }
 }
+
+/// The intensities at fixed probabilities are [`relative_intensity`]'s to the bit, at every regime:
+/// no emitters, sparser than the table, on and between its rows, dense, steady; below the first
+/// quantile, between quantiles, above the last.
+#[test]
+fn fixed_probabilities_read_the_same_intensities() {
+    let probabilities: Vec<f64> = (0..99)
+        .map(|k| (k as f64 + 0.5) / 100.0)
+        .chain((0..25).map(|k| 1.0 - 10f64.powf(-2.0 - 0.25 * k as f64)))
+        .chain([0.001, 0.004_9, 0.995, 0.995_1, 1.0 - 0.5e-8])
+        .collect();
+    let at = AtProbabilities::new(&probabilities);
+    let lambdas = [
+        0.0, 1e-7, 3e-5, LAMBDA_MIN, 1.3e-4, 0.01, 0.37, 1.0, 9.99, 10.0, 31.0,
+    ];
+    for lambda in lambdas.into_iter().chain([f64::INFINITY]) {
+        for (&p, intensity) in probabilities.iter().zip(at.relative_intensities(lambda)) {
+            let expected = relative_intensity(lambda, p);
+            assert_eq!(intensity.to_bits(), expected.to_bits(), "{lambda} {p}");
+        }
+    }
+}
