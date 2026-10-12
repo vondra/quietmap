@@ -5,14 +5,11 @@ import { DEFAULT_BASEMAP, type BasemapId } from '../utils/basemaps'
 import { resolveInitialView } from '../utils/initial-view'
 import { HEATMAP_LAYERS } from '../lib/tile-urls'
 import { parseDataLayers, type DataLayerId } from '../lib/data-layers'
-// Quiet-zone slider spec — highlight areas whose total Lden is ≤ this.
-// Range targets genuinely quiet places: 20 dB (rural quiet) to 45 dB (calm
-// suburb). Step 0.5 dB matches the model's native resolution; finer would
-// be false precision.
-export const QUIET_THRESHOLD_MIN = 20
-export const QUIET_THRESHOLD_MAX = 45
-export const QUIET_THRESHOLD_DEFAULT = 35
-export const QUIET_THRESHOLD_STEP = 0.5
+// Quiet-zone thresholds — highlight areas whose total loudness is ≤ this (sone): from a quarter
+// of a quiet room's to four times it, a step every half doubling; one sone (a quiet room, where the
+// map's colours begin) by default.
+export const QUIET_THRESHOLDS = [0.25, 0.35, 0.5, 0.7, 1, 1.4, 2, 2.8, 4] as const
+export const QUIET_THRESHOLD_DEFAULT = 1
 
 /** The popup point's decimals in the URL: 0.1 m, so a shared link answers at the very point
  *  clicked (at four decimals, 11 m, a click inside a building could open outside it). */
@@ -48,13 +45,14 @@ export interface UrlState {
 // Default view: every noise layer on (the overlay then fetches the precomputed `total` tile).
 const DEFAULT_HEATMAP_LAYERS: Record<string, boolean> = Object.fromEntries(HEATMAP_LAYERS.map(id => [id, true]))
 
-// Quiet-zone threshold, clamped to the slider's range. parseFloat (not parseInt)
-// so the 0.5 dB step survives the URL round-trip. A malformed `qt` (NaN) would
-// otherwise make `byte > maxByte` always false downstream and paint every
-// assessed pixel as quiet.
+// Quiet-zone threshold: the nearest of the slider's values (by loudness ratio). A malformed or
+// non-positive `qt` falls back to the default: a NaN threshold would otherwise mask nothing, or
+// every assessed pixel, downstream.
 function parseQuietThreshold(raw: string | null): number {
   const n = raw == null ? NaN : parseFloat(raw)
-  return Number.isFinite(n) ? Math.min(QUIET_THRESHOLD_MAX, Math.max(QUIET_THRESHOLD_MIN, n)) : QUIET_THRESHOLD_DEFAULT
+  if (!(Number.isFinite(n) && n > 0)) return QUIET_THRESHOLD_DEFAULT
+  const distance = (t: number) => Math.abs(Math.log2(t / n))
+  return QUIET_THRESHOLDS.reduce((best, t) => (distance(t) < distance(best) ? t : best))
 }
 
 export function parseHash(): UrlState {

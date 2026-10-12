@@ -1,4 +1,4 @@
-// The layer panel's noise-layer switches, all on by default.
+// The layer panel's noise-layer switches: every layer (the total) or one alone.
 import { Car, TrainFront, Plane, Building2, Factory, Ship } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { HeatmapLayer } from '../lib/tile-urls'
@@ -11,9 +11,10 @@ interface LayerRow {
   icon: ReactNode
 }
 
-// The layer panel: the noise layers, all on by default. There is no
-// `total` toggle — when every layer is on the overlay fetches the precomputed
-// `total` tile automatically (see MapView); turning any off sums the rest.
+// The layer panel: the noise layers, all on by default (the map shows the total). Loudness does
+// not add over layers, so a layer is seen alone or within the total: tapping a layer while all
+// are on shows it alone, tapping the layer shown alone brings every layer back, tapping another
+// shows that one alone (see MapView).
 const LAYER_ROWS: LayerRow[] = [
   { id: 'road', label: 'Roads', tooltip: 'Cars, lorries, buses and motorcycles', icon: <Car className="size-4" /> },
   { id: 'railway', label: 'Railways', tooltip: 'Trains and trams', icon: <TrainFront className="size-4" /> },
@@ -28,6 +29,13 @@ interface SourceTogglesProps {
   onHeatmapLayersChange: (layers: Record<string, boolean>) => void
 }
 
+/** The switches after tapping `id`: alone if it was not the one shown alone, else every layer. */
+function toggled(layers: Record<string, boolean>, id: HeatmapLayer): Record<string, boolean> {
+  const on = LAYER_ROWS.filter(row => !!layers[row.id])
+  const alone = on.length === 1 && on[0].id === id
+  return Object.fromEntries(LAYER_ROWS.map(row => [row.id, alone || row.id === id]))
+}
+
 export default function SourceToggles({
   heatmapLayers, onHeatmapLayersChange,
 }: SourceTogglesProps) {
@@ -38,7 +46,7 @@ export default function SourceToggles({
         return (
           <button
             key={row.id}
-            onClick={() => onHeatmapLayersChange({ ...heatmapLayers, [row.id]: !active })}
+            onClick={() => onHeatmapLayersChange(toggled(heatmapLayers, row.id))}
             title={row.tooltip}
             aria-pressed={active}
             data-testid={`layer-${row.id}`}

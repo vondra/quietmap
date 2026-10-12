@@ -1,6 +1,5 @@
-/** Cached heatmap cell readouts using the same grid and energy arithmetic as rendering. */
-import { fetchAndDecodeHM3, HM3_NO_LEVEL, TILE_PX } from './hm3-decoder.ts'
-import { HM3_BYTE_ENERGY } from './hm3-compose.ts'
+/** Cached heatmap cell readouts from the same grid and byte decoding as rendering. */
+import { fetchAndDecodeHM3, HM3_BYTE_SONE, HM3_NO_LEVEL, HM3_SILENCE, TILE_PX } from './hm3-decoder.ts'
 import { lngLatToTileFloat } from './tile-math.ts'
 import { MIN_ZOOM, WORLD_EXTENT, type TileBuilds } from './tile-urls.ts'
 
@@ -101,35 +100,22 @@ function evictSettledTilesBeyondLimit(): void {
   }
 }
 
-/** What a cell reads across the selected layers. */
+/** What a cell reads. */
 export type HeatmapCellReadout =
-  | { kind: 'level'; ldenDb: number }
+  | { kind: 'level'; sone: number }
   | { kind: 'silence' }
   | { kind: 'no-level' }
-  | { kind: 'unavailable'; failedSources: string[] }
+  | { kind: 'unavailable' }
 
 /**
- * Lden at one cell, energy-summed across the selected layers' tiles — the same
- * byte → 10^(dB/10) → Σ → 10·log10 chain the renderer paints with, so the
- * number equals the pixel colour. A number only when every layer is known: a
- * failed layer makes the cell unavailable (a partial sum would read quieter
- * than the place is). A silent layer adds no energy; a cell some layer assessed
- * and all left under 0 dB is silence; one no layer assessed has no level.
+ * The loudness (sone) at one cell of the shown source's tile: the byte the renderer painted. A
+ * failed tile reads unavailable (its level is unknown), an absent one has no level; a cell
+ * assessed under 1/16 sone is silence.
  */
-export function readHeatmapCell(
-  layers: readonly { source: string; tile: SampledTile }[],
-  cell: HM3CellAddress,
-): HeatmapCellReadout {
-  const failedSources = layers.filter((layer) => layer.tile === 'failed').map((layer) => layer.source)
-  if (failedSources.length > 0) return { kind: 'unavailable', failedSources }
-  let sumLinear = 0
-  let assessed = false
-  for (const { tile } of layers) {
-    const byte = typeof tile === 'string' ? HM3_NO_LEVEL : tile[cell.py * TILE_PX + cell.px]
-    sumLinear += HM3_BYTE_ENERGY[byte]
-    assessed ||= byte !== HM3_NO_LEVEL
-  }
-  if (!assessed) return { kind: 'no-level' }
-  const ldenDb = sumLinear > 0 ? 10 * Math.log10(sumLinear) : -Infinity
-  return ldenDb < 0 ? { kind: 'silence' } : { kind: 'level', ldenDb }
+export function readHeatmapCell(tile: SampledTile, cell: HM3CellAddress): HeatmapCellReadout {
+  if (tile === 'failed') return { kind: 'unavailable' }
+  const byte = tile === 'absent' ? HM3_NO_LEVEL : tile[cell.py * TILE_PX + cell.px]
+  if (byte === HM3_NO_LEVEL) return { kind: 'no-level' }
+  if (byte === HM3_SILENCE) return { kind: 'silence' }
+  return { kind: 'level', sone: HM3_BYTE_SONE[byte] }
 }

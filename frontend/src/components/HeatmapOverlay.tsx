@@ -1,5 +1,6 @@
-// The noise heatmap: HM3 tiles decoded, energy-summed over the selected layers and palette-mapped
-// in the browser, as deck.gl tiles below the base zoom and one stitched image past it.
+// The noise heatmap: HM3 tiles of one source (the total or one layer: loudness does not add over
+// layers) decoded and palette-mapped in the browser, as deck.gl tiles below the base zoom and one
+// stitched image past it.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { TileLayer } from '@deck.gl/geo-layers'
@@ -17,7 +18,8 @@ import { labelAnchorId } from '../utils/label-layers'
 import { lowestDataLayerId } from '../lib/data-layers'
 
 interface Props {
-  sources: readonly HeatmapSource[]
+  /** The total or one layer; `null` paints nothing. */
+  source: HeatmapSource | null
 }
 
 // Display zoom at/above which we stitch ONE composite image (no internal tile
@@ -47,11 +49,11 @@ const MAX_CACHE_TILES = 192
  *    Few tiles at this zoom, so the stitch is cheap.
  *
  * Each tile (and the composite) is fetched as static `.bin`, decoded +
- * energy-summed (multi-layer subsets) + palette-mapped to `ImageData` in the
- * browser — server stays a dumb static/CDN reader. Interleaved overlay + a
+ * palette-mapped to `ImageData` in the browser — server stays a dumb
+ * static/CDN reader. Interleaved overlay + a
  * `beforeId` beneath the data layers and the first label layer keeps both on top.
  */
-export default function HeatmapOverlay({ sources }: Props): null {
+export default function HeatmapOverlay({ source }: Props): null {
   const { current: mapRef } = useMap()
   // Generation snapshot: a build flip re-renders and re-keys every layer; the
   // snapshot is passed explicitly into URL builders so no fetch closure ever
@@ -149,7 +151,7 @@ export default function HeatmapOverlay({ sources }: Props): null {
     const layers = []
     // No published build yet (manifest still resolving) → no tile layers; the
     // store notification re-renders us the moment it lands.
-    if (sources.length > 0 && build !== null) {
+    if (source !== null && build !== null) {
       const c = composite.current
       const overzoom = map.getZoom() >= overzoomFrom(build)
       // Paint the stitched composite ONLY while its `sig` matches the live view.
@@ -157,7 +159,7 @@ export default function HeatmapOverlay({ sources }: Props): null {
       // composite is for the wrong source/range — fall back to the per-tile
       // TileLayer (correct data, maybe a faint seam) rather than paint stale tiles,
       // until `update` rebuilds the matching composite.
-      if (overzoom && c && c.sig === compositeSig(build, sources, baseRange(map.getBounds(), build))) {
+      if (overzoom && c && c.sig === compositeSig(build, source, baseRange(map.getBounds(), build))) {
         dropTileTails('') // the tile layer is gone — its tails must not linger
         layers.push(new BitmapLayer({
           id: 'hm3-composite',
@@ -171,21 +173,21 @@ export default function HeatmapOverlay({ sources }: Props): null {
         // Offset is part of the registry key AND the layer id: a DPR flip must
         // re-key the layer (deck won't recompute tile selection on an options
         // change alone) and start a fresh loaded/tails registry with it.
-        dropTileTails(`${buildKey(build, sources)}-o${zoomOffset}`)
+        dropTileTails(`${buildKey(build, source)}-o${zoomOffset}`)
         layers.push(makeHeatmapTileLayer(
-          build, sources, beforeId, refineSeq.current, onRefined,
+          build, source, beforeId, refineSeq.current, onRefined,
           tileTails.current, zoomOffset,
         ))
       }
     } else {
-      dropTileTails('') // every source off (or no build) removes the layer too
+      dropTileTails('') // no source (or no build) removes the layer too
     }
     overlay.setProps({ layers })
-  }, [overlay, mapRef, build, sources, onRefined, dropTileTails, dpr])
+  }, [overlay, mapRef, build, source, onRefined, dropTileTails, dpr])
   applyRef.current = apply
 
   // Rebuild the over-zoom composite (only past the composite threshold, only when the base
-  // range/sources changed) then re-apply. Coalesced to one run per frame. Below it this is
+  // range/source changed) then re-apply. Coalesced to one run per frame. Below it this is
   // just a re-apply (deck drives the TileLayer itself).
   const update = useCallback(() => {
     if (pending.current) return
@@ -194,9 +196,9 @@ export default function HeatmapOverlay({ sources }: Props): null {
       pending.current = false
       const map = mapRef?.getMap()
       if (!map || !mounted.current) return
-      if (build !== null && sources.length > 0 && map.getZoom() >= overzoomFrom(build)) {
+      if (build !== null && source !== null && map.getZoom() >= overzoomFrom(build)) {
         const range = baseRange(map.getBounds(), build)
-        const sig = compositeSig(build, sources, range)
+        const sig = compositeSig(build, source, range)
         if (composite.current?.sig !== sig) {
           // Re-apply NOW so the stale composite (built for the old source/range)
           // stops painting immediately — `apply`'s sig guard falls back to the
@@ -204,14 +206,14 @@ export default function HeatmapOverlay({ sources }: Props): null {
           // rebuild takes. The matching composite is painted by the apply below.
           applyRef.current()
           const seq = ++buildSeq.current
-          const built = await buildComposite(range, sources, build, () => seq !== buildSeq.current)
+          const built = await buildComposite(range, source, build, () => seq !== buildSeq.current)
           if (!mounted.current || seq !== buildSeq.current) return // unmounted or superseded
           composite.current = built ? { ...built, sig } : null
         }
       }
       applyRef.current()
     })
-  }, [mapRef, sources, build])
+  }, [mapRef, source, build])
 
   // Re-run on source/overlay change. `overlay` is load-bearing: it's null
   // on first render, so the mount-time update() no-ops (apply guards on overlay);
@@ -232,13 +234,13 @@ export default function HeatmapOverlay({ sources }: Props): null {
 
   // Idle ancestor prefetch: once the viewport settles, quietly pull the 3×3
   // ring of ancestor tiles around the view plus the centre block one zoom
-  // deeper — memoized, low-priority, ≤10 × |sources| small requests fired
+  // deeper — memoized, low-priority, ≤10 small requests fired
   // 600 ms after the map stops (deliberately outside deck's request budget:
   // they must never queue ahead of sharp tiles) — so ANY pan or zoom
   // direction already has its blurry preview in memory.
   const prefetchTimer = useRef(0)
   useEffect(() => {
-    if (!mapRef || build === null || sources.length === 0) return
+    if (!mapRef || build === null || source === null) return
     const map = mapRef.getMap()
     const prefetchRing = () => {
       window.clearTimeout(prefetchTimer.current)
@@ -254,7 +256,7 @@ export default function HeatmapOverlay({ sources }: Props): null {
           if (ay < 0 || ay >= span) continue
           for (let dx = -1; dx <= 1; dx++) {
             const ax = (((Math.floor(fx) + dx) % span) + span) % span
-            for (const s of sources) void fetchAncestor(tileUrl(build, s, pz, ax, ay))
+            void fetchAncestor(tileUrl(build, source, pz, ax, ay))
           }
         }
         // Zoom-in ahead: the centre ancestor block ONE level deeper, so the
@@ -267,7 +269,7 @@ export default function HeatmapOverlay({ sources }: Props): null {
           const ax = ((Math.floor(zx) % deepSpan) + deepSpan) % deepSpan
           const ay = Math.floor(zy)
           if (ay >= 0 && ay < deepSpan) {
-            for (const s of sources) void fetchAncestor(tileUrl(build, s, pz + 1, ax, ay))
+            void fetchAncestor(tileUrl(build, source, pz + 1, ax, ay))
           }
         }
       }, 600)
@@ -278,7 +280,7 @@ export default function HeatmapOverlay({ sources }: Props): null {
       window.clearTimeout(prefetchTimer.current)
       map.off('moveend', prefetchRing)
     }
-  }, [mapRef, build, sources])
+  }, [mapRef, build, source])
 
   // The heatmap's z-anchor (beforeId): beneath the data layers when any is on, else beneath the
   // basemap's first label layer.
@@ -309,7 +311,7 @@ export default function HeatmapOverlay({ sources }: Props): null {
  *  generations even if the module-level build advances mid-flight. */
 function makeHeatmapTileLayer(
   build: TileBuilds,
-  sources: readonly HeatmapSource[],
+  source: HeatmapSource,
   beforeId: string | undefined,
   refineSeq: number,
   onRefined: () => void,
@@ -318,7 +320,7 @@ function makeHeatmapTileLayer(
 ) {
   const { aborts: tails, loaded, inFlight } = registry
   return new TileLayer<HeatTile | null>({
-    id: `hm3-tiles-${buildKey(build, sources)}-o${zoomOffset}`,
+    id: `hm3-tiles-${buildKey(build, source)}-o${zoomOffset}`,
     // beforeId on the TileLayer (NOT its sublayers): MapboxOverlay slots only the
     // top-level deck layer; the tile BitmapLayers draw inside it. Spread because
     // _TileLayerProps doesn't type beforeId though MapboxOverlay reads it at runtime.
@@ -338,7 +340,7 @@ function makeHeatmapTileLayer(
     maxCacheSize: MAX_CACHE_TILES,
     // One fetch+decode per tile, so allow more in flight → faster fill.
     maxRequests: 12,
-    // 'no-overlap', NOT 'best-available': the Lden palette is highly opaque, so
+    // 'no-overlap', NOT 'best-available': the palette is highly opaque, so
     // best-available's brief parent+child overlap during a zoom double-draws the
     // colour → a dark flash. no-overlap never overlaps them.
     refinementStrategy: 'no-overlap',
@@ -346,7 +348,7 @@ function makeHeatmapTileLayer(
       const { x, y, z } = index
       const span = 2 ** z
       const wx = ((x % span) + span) % span // wrap x across the antimeridian
-      const urls = sources.map((s) => tileUrl(build, s, z, wx, y))
+      const url = tileUrl(build, source, z, wx, y)
       // Fallback policy: exact zoom > deck's cached z−1 > z−2 > … > coarse
       // preview > blank. If ANY nearby ancestor is already session-loaded,
       // skip the preview — deck's no-overlap refinement keeps painting that
@@ -365,7 +367,7 @@ function makeHeatmapTileLayer(
       const mask = (1 << PREVIEW_DELTA) - 1
       const preview = !deckHasFallback && pz >= MIN_ZOOM
         ? {
-            urls: sources.map((s) => tileUrl(build, s, pz, wx >> PREVIEW_DELTA, y >> PREVIEW_DELTA)),
+            url: tileUrl(build, source, pz, wx >> PREVIEW_DELTA, y >> PREVIEW_DELTA),
             blockX: wx & mask,
             blockY: y & mask,
           }
@@ -373,7 +375,7 @@ function makeHeatmapTileLayer(
       const key = `${z}/${wx}/${y}`
       const token = Symbol(key)
       inFlight.set(key, token)
-      return loadTileProgressively(urls, signal, onRefined, tails, preview, deckFallback).then((data) => {
+      return loadTileProgressively(url, signal, onRefined, tails, preview, deckFallback).then((data) => {
         // Register only while THIS request is still the current one for the
         // key — a tile evicted while pending (or superseded by a newer
         // request) must not become a ghost ancestor.
@@ -384,7 +386,7 @@ function makeHeatmapTileLayer(
         return data
       })
     },
-    // Bumped by onRefined when a tile's late layers land — deck re-runs
+    // Bumped by onRefined when a tile's sharp data lands — deck re-runs
     // renderSubLayers, and only mutated tiles carry a NEW ImageData reference
     // (unchanged tiles keep their texture; the sublayer descriptors of the
     // visible set are recreated, a few ms coalesced to one frame per wave).

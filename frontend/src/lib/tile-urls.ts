@@ -90,15 +90,14 @@ export function tileUrl(builds: TileBuilds, source: string, z: number, x: number
 }
 
 /**
- * Cache-identity string for a SET of sources: each source's own build, plus the
- * published base zoom. Deck layer ids and composite signatures key on THIS, not
- * on `latest` — so a partial flip re-keys exactly the layers whose archives
- * changed (unchanged layers keep their deck tile cache), and a same-`latest`
- * sequential partial still re-keys the layer it republished.
+ * Cache-identity string for a source: its own build, plus the published base
+ * zoom. Deck layer ids and composite signatures key on THIS, not on `latest` —
+ * so a partial flip re-keys exactly the layer whose archive changed (the others
+ * keep their deck tile cache), and a same-`latest` sequential partial still
+ * re-keys the layer it republished.
  */
-export function buildKey(builds: TileBuilds, sources: readonly string[]): string {
-  const base = sources.map((s) => `${s}:${builds.byLayer[s] ?? builds.latest}`).join('|')
-  return `${base}|z${builds.zoom}`
+export function buildKey(builds: TileBuilds, source: string): string {
+  return `${source}:${builds.byLayer[source] ?? builds.latest}|z${builds.zoom}`
 }
 
 /**

@@ -1,46 +1,9 @@
-/// Compose decoded HM3 cell grids into a palette-mapped RGBA `ImageData`.
-///
-/// Shared by the heatmap `TileLayer` overlay. Noise from independent sources adds
-/// in the LINEAR domain, so multiple layers are energy-summed BEFORE palette
-/// mapping — alpha-compositing pre-coloured layers would be physically wrong and
-/// would break popup↔heatmap parity (the popup energy-sums the same way).
+/// Colour a decoded HM3 cell grid into a palette-mapped RGBA `ImageData`, and the ancestor preview
+/// a child paints while its own tile loads. One grid a tile: loudness does not add over layers, so
+/// the map shows the total or one layer, each a tile of its own.
 
-import { HM3_NO_LEVEL, HM3_SILENCE } from './hm3-decoder.ts'
+import { HM3_SILENCE } from './hm3-decoder.ts'
 import { PALETTE_LUT } from './heatmap-palette.ts'
-
-/** Linear energy 10^(byte·0.5/10) per quantised dB byte (0..253; HM3 encodes
- *  dB × 2), precomputed so a per-cell sum is a table read instead of a
- *  Math.pow. Silence (254) and no level (255) carry zero energy. The one place
- *  the byte decoding lives — every readout of a cell (renderer, hover) sums
- *  through it. */
-export const HM3_BYTE_ENERGY = (() => {
-  const t = new Float32Array(256)
-  for (let b = 0; b < HM3_SILENCE; b++) t[b] = 10 ** ((b * 0.5) / 10)
-  return t
-})()
-
-/**
- * Per-cell linear-energy sum of N `u8 × 0.5 dB` grids of equal length, back in
- * the same encoding (clamped at 253 so the palette saturates instead of
- * wrapping). A cell is not assessed only where no grid assessed it; assessed
- * and under 0 dB it is silence.
- */
-function sumEnergy(grids: Uint8Array[]): Uint8Array {
-  const n = grids[0].length
-  const out = new Uint8Array(n).fill(HM3_NO_LEVEL)
-  for (let i = 0; i < n; i++) {
-    let sumLin = 0
-    let assessed = false
-    for (const grid of grids) {
-      sumLin += HM3_BYTE_ENERGY[grid[i]]
-      assessed ||= grid[i] !== HM3_NO_LEVEL
-    }
-    if (!assessed) continue
-    const q = sumLin === 0 ? -1 : Math.round(10 * Math.log10(sumLin) * 2)
-    out[i] = q < 0 ? HM3_SILENCE : Math.min(q, HM3_SILENCE - 1)
-  }
-  return out
-}
 
 /** Colour a cell grid into a row-major RGBA `ImageData` via the palette LUT. */
 function palette(cells: Uint8Array, width: number, height: number): ImageData {
@@ -56,13 +19,9 @@ function palette(cells: Uint8Array, width: number, height: number): ImageData {
   return new ImageData(rgba, width, height)
 }
 
-/**
- * Energy-sum the given source grids (single grid = passthrough) and palette-map
- * the result to one `width × height` RGBA `ImageData`.
- */
-export function composeToImageData(grids: Uint8Array[], width: number, height: number): ImageData {
-  const combined = grids.length === 1 ? grids[0] : sumEnergy(grids)
-  return palette(combined, width, height)
+/** Palette-map one grid to a `width × height` RGBA `ImageData`. */
+export function composeToImageData(cells: Uint8Array, width: number, height: number): ImageData {
+  return palette(cells, width, height)
 }
 
 // The preview ancestor sits PREVIEW_DELTA zooms above its child: it covers
@@ -71,8 +30,8 @@ export const PREVIEW_DELTA = 3
 
 /**
  * Upsample one child's sub-block of its z−Δ ancestor grid to a full 512² grid
- * — the preview painted while the child's real layers load. Bilinear in the
- * half-dB byte space so the preview reads as an out-of-focus map rather than
+ * — the preview painted while the child's real tile loads. Bilinear in the
+ * half-phon byte space so the preview reads as an out-of-focus map rather than
  * hard blocks; a corner without a level (silence or not assessed) falls back to
  * nearest-neighbour so transparency edges stay crisp instead of bleeding.
  */
