@@ -626,9 +626,9 @@ pub fn layered_distributions(
             .collect();
         // Every group of hours apart, in parallel: each layer's distribution in each weather state,
         // and the place's, the layers' added.
-        let parts: Vec<(f64, Vec<Option<States>>, States)> = (groups.par_iter())
+        let parts: Vec<GroupPart> = (groups.par_iter())
             .map(|slots| {
-                let own: Vec<Option<Vec<Distribution>>> = (layers.iter().zip(&alike))
+                let own: Vec<Option<States>> = (layers.iter().zip(&alike))
                     .map(|(&(lines, steady), alike)| {
                         alike
                             .is_none()
@@ -637,10 +637,17 @@ pub fn layered_distributions(
                     .collect();
                 let wholes = (0..states)
                     .map(|state| {
-                        let mut each = (own.iter().zip(&alike))
+                        // What holds steady in every layer at once, then the layers that move.
+                        let each = (own.iter().zip(&alike))
                             .map(|(own, alike)| &own.as_ref().or(alike.as_ref()).unwrap()[state]);
-                        let first = each.next().expect("a place has layers").clone();
-                        each.fold(first, |whole, layer| whole.with_distribution(layer))
+                        let (steady, moving): (Vec<_>, Vec<_>) =
+                            each.partition(|(_, floor)| floor.is_some());
+                        let floor = steady.iter().filter_map(|(_, floor)| *floor).sum::<f64>();
+                        let mut whole = Distribution::empty(resolution.bin_db);
+                        whole.silent = 1.0;
+                        (moving.iter()).fold(whole.over(floor), |whole, (layer, _)| {
+                            whole.with_distribution(layer)
+                        })
                     })
                     .collect();
                 (slots.len() as f64 / (hours * states) as f64, own, wholes)
@@ -649,7 +656,7 @@ pub fn layered_distributions(
         let mut each: Vec<Distribution> = (alike.iter())
             .map(|alike| {
                 let mut mixture = Distribution::empty(resolution.bin_db);
-                for part in alike.iter().flatten() {
+                for (part, _) in alike.iter().flatten() {
                     mixture.add_scaled(part, 1.0 / states as f64);
                 }
                 mixture
@@ -658,7 +665,7 @@ pub fn layered_distributions(
         let mut whole = Distribution::empty(resolution.bin_db);
         for (weight, own, wholes) in &parts {
             for (mixture, own) in each.iter_mut().zip(own) {
-                for part in own.iter().flatten() {
+                for (part, _) in own.iter().flatten() {
                     mixture.add_scaled(part, *weight);
                 }
             }
@@ -676,12 +683,16 @@ pub fn layered_distributions(
     (each, whole)
 }
 
-/// A distribution per weather state.
-type States = Vec<Distribution>;
+/// Per weather state a distribution, and its intensity where it holds steady (no line moves).
+type States = Vec<(Distribution, Option<f64>)>;
+
+/// A group of hours' share of its period, each layer's states there where they differ from the
+/// period's, and the place's distribution in each state.
+type GroupPart = (f64, Vec<Option<States>>, Vec<Distribution>);
 
 /// One layer's distributions in the hours `slots` of `period`, one per weather state of
 /// `resolution`: its `steady` energy with its moving lines added, their shapes shared by the
-/// states.
+/// states; where none moves, that energy.
 fn layer_states(
     lines: &[Line],
     steady: f64,
@@ -715,7 +726,7 @@ fn layer_states(
             for &(_, values, mean) in &moment.moving {
                 sum = sum.with_line((values, mean));
             }
-            sum
+            (sum, moment.moving.is_empty().then_some(moment.floor))
         })
         .collect()
 }
