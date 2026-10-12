@@ -85,9 +85,11 @@ pub const FAILED_NOT_READ: u32 = 1;
 pub const FAILED_NO_TERRAIN: u32 = 2;
 pub const FAILED_CAPACITY: u32 = 4;
 
-/// Threads per block of the pair kernel, one pair a thread: one warp, 5 % faster than 64 and
-/// 15-20 % faster than 256 (RTX 5070, pairs within 1 km grouped by 32, 2026-10-09).
+/// Threads per block of the pair kernels, one pair or one ray a thread: one warp, 5 % faster than 64
+/// and 15-20 % faster than 256 (RTX 5070, pairs within 1 km grouped by 32, 2026-10-09).
 const THREADS_PER_BLOCK: u32 = 32;
+/// Bytes of one listed ray (kernels/evaluate.cuh PairRay).
+const PAIR_RAY_BYTES: usize = 24;
 
 const TILE_NOT_READ: i32 = 0;
 const TILE_EMPTY: i32 = 1;
@@ -259,7 +261,16 @@ impl Gpu {
             },
         )
         .map_err(|error| format!("nvrtc: {error}"))?;
-        driver(device.load_ptx(ptx, "paint", &["evaluate_pairs", "struct_sizes"]))?;
+        driver(device.load_ptx(
+            ptx,
+            "paint",
+            &[
+                "pair_rays",
+                "ray_transfers",
+                "pair_bands_to_points",
+                "struct_sizes",
+            ],
+        ))?;
         // The pixels' loudness, in full precision (fast math moved a sum's bin at its edges).
         let loudness = format!("{COMMON}{}", crate::loudness::loudness_source());
         let ptx = compile_ptx_with_opts(
@@ -336,42 +347,103 @@ impl Gpu {
             return Ok((Vec::new(), Vec::new()));
         }
         let xy: Vec<f32> = receivers.iter().flatten().map(|&v| v as f32).collect();
-        let xy = driver(self.device.htod_sync_copy(&xy))?;
-        let own = driver(self.device.htod_sync_copy(own_footprint))?;
-        let index = driver(self.device.htod_sync_copy(candidates))?;
-        let point_index = driver(self.device.htod_sync_copy(points))?;
-        let sums = driver(self.device.alloc_zeros::<f32>(PAIR_SUMS * count))?;
-        let failed = driver(self.device.alloc_zeros::<u32>(count))?;
-        let function = self
-            .device
-            .get_func("paint", "evaluate_pairs")
-            .ok_or("kernel evaluate_pairs missing")?;
-        let config = LaunchConfig {
-            grid_dim: ((count as u32).div_ceil(THREADS_PER_BLOCK), 1, 1),
+        let device = &self.device;
+        let xy = driver(device.htod_sync_copy(&xy))?;
+        let own = driver(device.htod_sync_copy(own_footprint))?;
+        let index = driver(device.htod_sync_copy(candidates))?;
+        let point_index = driver(device.htod_sync_copy(points))?;
+        let ray_counts = driver(device.alloc_zeros::<u32>(count))?;
+        let failed = driver(device.alloc_zeros::<u32>(count))?;
+        let kernel = |name: &str| {
+            device
+                .get_func("paint", name)
+                .ok_or(format!("kernel {name} missing"))
+        };
+        let threads = |n: usize| LaunchConfig {
+            grid_dim: ((n as u32).div_ceil(THREADS_PER_BLOCK), 1, 1),
             block_dim: (THREADS_PER_BLOCK, 1, 1),
             shared_mem_bytes: 0,
         };
-        // SAFETY: every buffer holds what the kernel indexes: 2 receiver coordinates, an owner, a
-        // candidate and a point (within `bands`, checked) per pair in, PAIR_SUMS floats and a
-        // failure per pair out.
+        // A null pointer: the listing kernel counts the rays instead of writing them.
+        let none = 0u64;
+        // SAFETY (each launch): every buffer holds what the kernel indexes: 2 receiver coordinates,
+        // an owner, a candidate and a point (within `bands`, checked) per pair; a count, an offset,
+        // PAIR_SUMS sums, PERIODS x BANDS bands and a failure per pair; a PairRay (24 bytes) per ray.
         driver(unsafe {
-            function.launch(
-                config,
+            kernel("pair_rays")?.launch(
+                threads(count),
                 (
                     &square.scene,
                     &xy,
                     &own,
                     &index,
-                    &point_index,
                     count as u32,
-                    &sums,
-                    &mut *bands,
+                    none,
+                    none,
+                    &ray_counts,
                     &failed,
                 ),
             )
         })?;
-        let sums = driver(self.device.dtoh_sync_copy(&sums))?;
-        let failed = driver(self.device.dtoh_sync_copy(&failed))?;
+        let mut offsets = driver(device.dtoh_sync_copy(&ray_counts))?;
+        let mut total = 0u32;
+        for offset in &mut offsets {
+            (*offset, total) = (total, total + *offset);
+        }
+        let sums = driver(device.alloc_zeros::<f32>(PAIR_SUMS * count))?;
+        if total > 0 {
+            let offsets = driver(device.htod_sync_copy(&offsets))?;
+            let rays = driver(device.alloc_zeros::<u8>(PAIR_RAY_BYTES * total as usize))?;
+            let pair_bands = driver(device.alloc_zeros::<f32>(PERIODS * BANDS * count))?;
+            driver(unsafe {
+                kernel("pair_rays")?.launch(
+                    threads(count),
+                    (
+                        &square.scene,
+                        &xy,
+                        &own,
+                        &index,
+                        count as u32,
+                        &offsets,
+                        &rays,
+                        &ray_counts,
+                        &failed,
+                    ),
+                )
+            })?;
+            driver(unsafe {
+                kernel("ray_transfers")?.launch(
+                    threads(total as usize),
+                    (
+                        &square.scene,
+                        &xy,
+                        &own,
+                        &index,
+                        &rays,
+                        total,
+                        &sums,
+                        &pair_bands,
+                        &failed,
+                    ),
+                )
+            })?;
+            driver(unsafe {
+                kernel("pair_bands_to_points")?.launch(
+                    threads(count),
+                    (
+                        &square.scene,
+                        &index,
+                        &point_index,
+                        count as u32,
+                        &pair_bands,
+                        &failed,
+                        &mut *bands,
+                    ),
+                )
+            })?;
+        }
+        let sums = driver(device.dtoh_sync_copy(&sums))?;
+        let failed = driver(device.dtoh_sync_copy(&failed))?;
         Ok((
             sums.chunks_exact(PAIR_SUMS)
                 .map(|chunk| std::array::from_fn(|k| chunk[k]))

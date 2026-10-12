@@ -127,24 +127,6 @@ __device__ u32 add_ray(const TerrainScene& ground, const ObstacleScene& obstacle
     return 0;
 }
 
-// The rays of one line piece's quadrature nodes (evaluate.rs received_bands for a line).
-// Node `node` of a line piece: its ray from its point on the piece (on a deck, the deck's ground
-// there) into `periods`, weighted by its dphi over the piece's perpendicular, per horizontal metre
-// (LinePieceGeometry::divergence_factor); 0 or a failure.
-__device__ u32 add_line_node(const TerrainScene& ground, const ObstacleScene& obstacles, const Receiver& receiver,
-                             const Candidate& candidate, const Attribute& source, const RayEnds& ends,
-                             const LinePieceGeometry& g, const LineNodes& nodes, int node, RayStream& s, float* sums,
-                             float* bands) {
-    float fraction = nodes.along_m[node] / g.length_m;
-    float px = candidate.ax + fraction * (candidate.bx - candidate.ax);
-    float py = candidate.ay + fraction * (candidate.by - candidate.ay);
-    RayEnds node_ends = ends;
-    if (candidate.on_deck) node_ends.source_ground_m = candidate.ground0 + fraction * (candidate.ground1 - candidate.ground0);
-    float divergence = hypotf(g.unit[0], g.unit[1]) / (POINT_DIVERGENCE_LINEAR * g.perpendicular_m);
-    return add_ray(ground, obstacles, receiver, source, node_ends, px, py, nodes.obstacles_on_ray[node],
-                   nodes.weight_rad[node] * divergence, s, sums, bands);
-}
-
 // evaluate::ray_ends: a source's ray ends at the receiver, standing on the terrain under it.
 __device__ __forceinline__ RayEnds source_ends(const Attribute& source, const Receiver& receiver) {
     RayEnds ends;
@@ -157,20 +139,34 @@ __device__ __forceinline__ RayEnds source_ends(const Attribute& source, const Re
     return ends;
 }
 
-// evaluate::received_bands: what one candidate delivers at the receiver (its sums, PAIR_SUMS, and its
-// bands, PERIODS x BANDS), without the receiver's reflection; 0 or a failure.
-__device__ u32 received_periods(const TerrainScene& ground, const ObstacleScene& obstacles, const Receiver& receiver,
-                                const Candidate& candidate, const Attribute& source, RayStream& s, float* sums,
-                                float* bands) {
-    for (int k = 0; k < PAIR_SUMS; k++) sums[k] = 0.0f;
-    for (int k = 0; k < PERIODS * BANDS; k++) bands[k] = 0.0f;
-    RayEnds ends = source_ends(source, receiver);
+// One ray of a pair (evaluate::received_bands: a point source's ray, or a line piece's quadrature
+// node): where it leaves the source, its weight, a deck's ground under it (NaN: the terrain) and
+// whether obstacles may stand on it. A pair's rays are listed together; each runs on its own thread.
+struct PairRay {
+    u32 pair;
+    u32 obstacles_on_ray;
+    float px, py;
+    float weight;
+    float source_ground_m;
+};
+
+// The rays candidate `candidate` sends to `receiver`, each handed to `take` (0 or a failure, which
+// ends the listing): a point's one ray, weighted by its divergence; a line piece's quadrature nodes,
+// each by its dphi over the piece's perpendicular (LinePieceGeometry::divergence_factor).
+template <typename Take>
+__device__ u32 pair_rays_of(const ObstacleScene& obstacles, const Receiver& receiver, const Candidate& candidate,
+                            const Attribute& source, u32 pair, Take& take) {
+    PairRay ray;
+    ray.pair = pair;
     if (!candidate.line) {
-        if (candidate.on_deck) ends.source_ground_m = candidate.ground0;
         float distance_m = hypotf(candidate.ax - receiver.x, candidate.ay - receiver.y);
         float distance = fmaxf(hypotf(fmaxf(distance_m, source.exclusion_radius_m), receiver.altitude_m - (candidate.ground0 + source.height_m)), 1.0f);
-        float weight = 1.0f / (distance * distance * energy_of_level(11.0f));
-        return add_ray(ground, obstacles, receiver, source, ends, candidate.ax, candidate.ay, true, weight, s, sums, bands);
+        ray.obstacles_on_ray = 1u;
+        ray.px = candidate.ax;
+        ray.py = candidate.ay;
+        ray.weight = 1.0f / (distance * distance * energy_of_level(11.0f));
+        ray.source_ground_m = candidate.on_deck ? candidate.ground0 : QM_NAN;
+        return take(ray);
     }
     float start[3] = {candidate.ax - receiver.x, candidate.ay - receiver.y, candidate.ground0 + source.height_m - receiver.altitude_m};
     float end[3] = {candidate.bx - receiver.x, candidate.by - receiver.y, candidate.ground1 + source.height_m - receiver.altitude_m};
@@ -179,8 +175,27 @@ __device__ u32 received_periods(const TerrainScene& ground, const ObstacleScene&
     LineNodes nodes;
     nodes.count = 0;
     u32 failed = line_quadrature_nodes(g, obstacles, receiver.x, receiver.y, fmaxf(source.height_m, 0.0f), nodes);
-    for (int node = 0; node < nodes.count && !failed; node++) {
-        failed = add_line_node(ground, obstacles, receiver, candidate, source, ends, g, nodes, node, s, sums, bands);
+    if (failed) return failed;
+    float divergence = hypotf(g.unit[0], g.unit[1]) / (POINT_DIVERGENCE_LINEAR * g.perpendicular_m);
+    for (int node = 0; node < nodes.count; node++) {
+        float fraction = nodes.along_m[node] / g.length_m;
+        ray.obstacles_on_ray = nodes.obstacles_on_ray[node] ? 1u : 0u;
+        ray.px = candidate.ax + fraction * (candidate.bx - candidate.ax);
+        ray.py = candidate.ay + fraction * (candidate.by - candidate.ay);
+        ray.weight = nodes.weight_rad[node] * divergence;
+        ray.source_ground_m = candidate.on_deck ? candidate.ground0 + fraction * (candidate.ground1 - candidate.ground0) : QM_NAN;
+        failed = take(ray);
+        if (failed) return failed;
     }
-    return failed;
+    return 0;
+}
+
+// One listed ray at the receiver: its sums (PAIR_SUMS) and mixed bands (PERIODS x BANDS) added to
+// `sums` and `bands`; 0 or a failure.
+__device__ u32 ray_received(const TerrainScene& ground, const ObstacleScene& obstacles, const Receiver& receiver,
+                            const Attribute& source, const PairRay& ray, RayStream& s, float* sums, float* bands) {
+    RayEnds ends = source_ends(source, receiver);
+    if (!isnan(ray.source_ground_m)) ends.source_ground_m = ray.source_ground_m;
+    return add_ray(ground, obstacles, receiver, source, ends, ray.px, ray.py, ray.obstacles_on_ray != 0u, ray.weight, s, sums,
+                   bands);
 }
