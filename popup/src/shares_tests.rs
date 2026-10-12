@@ -5,7 +5,9 @@ use super::*;
 use crate::distribution::Distribution;
 use crate::loudness::{LayerSound, NO_FLIGHTS, curves, loudness};
 use crate::percentiles::tests::{contributor, selection};
-use crate::percentiles::{Resolution, Weather, click_lines, distributions_of, flight_weather};
+use crate::percentiles::{
+    Group, Resolution, Weather, click_lines, distributions_of, flight_weather,
+};
 use physics::bands::{BANDS, energy};
 
 /// A road's received A-weighted octave energies at 50 km/h (relative).
@@ -106,7 +108,7 @@ fn shares_split_exactly_the_moments_of_the_distributions() {
     let lines = [
         passes(&near, 55.0, 0.05),
         passes(&far, 50.0, 0.3),
-        Line::of(&bells, Some(&fields)).expect("an event line"),
+        Line::of(&bells.group(), Some(&fields)).expect("an event line"),
     ];
     let shares = loudness_shares(&lines, &[0, 1, 2], &[[0.0; PERIODS]; 3], &curves);
     let summed: f64 = shares.iter().sum();
@@ -129,8 +131,8 @@ fn every_line_and_every_steady_part_has_one_row() {
         selection(Layer::Industry, vec![site.clone()]),
         aircraft,
     ];
-    let traffic = |c: &Contributor| {
-        (c.group_key == 1).then(|| {
+    let traffic = |c: &Group| {
+        (c.key == 1).then(|| {
             serde_json::json!({"aadt_light": 3000.0, "speed_kmh": 50.0, "road_class": "secondary"})
         })
     };

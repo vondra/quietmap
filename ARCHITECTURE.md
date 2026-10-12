@@ -184,19 +184,22 @@ each function citing its Rust) or on the cores. The method is the `paint` crate:
 square's neighbourhood, its sources indexed by place and reach), `exact.rs` (the points and the
 exact evaluation of (point, source) pairs), `hum.rs` (the quiet hum at points 128 pixels apart),
 `paint.rs` (the blocks: their corners, the sources a block computes at every pixel, the pixels),
-`flights.rs` and `etalon.rs`. Loud is one rule
+`sone.rs` (a pixel's loudness: the popup's model, `popup::percentiles::Resolution::MAP`, on its
+exact pairs as source groups, what its block left out of a group as that group's passes, the hum
+steady and the flights' line), `flights.rs` and `etalon.rs`. Loud is one rule
 for the painter, its etalon and the hum: `popup::candidates::loud`, a bound reaching
 `physics::bound::REACH_EDGE_LDEN_DB` (20 dB).
 
-The tiles (`hm3.rs`, HM3 v4): per layer and the total, 512 x 512 cells of twice the Lden (254
-silence under 0 dB, 255 not assessed);
-`qm-paint pack` (`pack.rs`) builds every zoom down to 2 (energy means) into one PMTiles archive
-per layer and `current.json`, which the server publishes. `qm-paint-gpu check` holds the card
+The tiles (`hm3.rs`, HM3 v5): per layer and the total, 512 x 512 cells of twice the loudness level
+in phon (each layer's own Nden and the total's, 80 one sone, a doubling 20; 254 silence under 1/16
+sone, 255 not assessed);
+`qm-paint pack` (`pack.rs`) builds every zoom down to 2 (loudness means, the total its own) into one
+PMTiles archive per layer and `current.json`, which the server publishes. `qm-paint-gpu check` holds the card
 equal to the cores on random pairs, `etalon` paints the reference (with
 `--sample-step 4` a sixteenth of its outdoor pixels, one drawn in each 4 x 4 cell, the rest not
 assessed),
-`compare` scores a map against a reference's cells and `popup` writes the popup's answers at random
-pixels as a sparse reference.
+`compare` scores a map against a reference's cells (in phon) and `popup` writes the popup's loudness
+at random pixels as a sparse reference.
 
 ## Web
 

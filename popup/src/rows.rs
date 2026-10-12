@@ -76,18 +76,18 @@ fn object(contributor: &Contributor, display: Option<&serde_json::Value>) -> u64
 /// steady sound together on the curves of its loudest part's layer (`curves`).
 pub fn ranked_rows<'a>(
     heard_contributors: Vec<&'a Contributor>,
-    fields: &dyn Fn(&Contributor) -> Option<serde_json::Value>,
+    fields: &dyn Fn(&crate::percentiles::Group) -> Option<serde_json::Value>,
     curves: &(dyn Fn(Layer) -> &'a [Curve; PERIODS] + Sync),
 ) -> Vec<Row> {
     // The display records are read one by one; the parts scored in parallel.
     let displays: Vec<(&Contributor, Option<serde_json::Value>)> = heard_contributors
         .into_iter()
-        .map(|contributor| (contributor, fields(contributor)))
+        .map(|contributor| (contributor, fields(&contributor.group())))
         .collect();
     let scored: Vec<(Contributor, Option<Line>, u64)> = displays
         .par_iter()
         .map(|(contributor, display)| {
-            let line = Line::of(contributor, display.as_ref());
+            let line = Line::of(&contributor.group(), display.as_ref());
             let own = match &line {
                 Some(line) => own_nden(Some(line), [0.0; PERIODS], curves(contributor.layer)),
                 None => own_nden(None, contributor.energy, curves(contributor.layer)),

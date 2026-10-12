@@ -5,18 +5,19 @@
 //! metres (300), half anywhere within `--reach` (the ground reach), only points or only lines with
 //! `--kind`; prints the agreement, the failures, the worst pairs and both times.
 //!
-//! `qm-paint-gpu popup ... --square X,Y --out DIR [--pixels N] [--seed S]`: the popup's answers at
-//! N random outdoor pixels of the square (300), written as a sparse reference under DIR (every
-//! other cell not assessed), to score a map or an etalon against with `compare`.
+//! `qm-paint-gpu popup ... --square X,Y --out DIR [--pixels N] [--seed S]`: the popup's loudness
+//! (Nden per layer and in total) at N random outdoor pixels of the square (300), written as a
+//! sparse reference under DIR (every other cell not assessed), to score a map or an etalon against
+//! with `compare`.
 //!
 //! `qm-paint-gpu etalon ... --square X,Y --out DIR [--device D] [--sample-step K]`: the square's
-//! etalon (every outdoor pixel as the popup answers it, `paint::etalon`; with K one drawn in each
-//! K x K cell, the rest not assessed) written as z13 tiles under DIR.
+//! etalon (every outdoor pixel's loudness with every loud source exact, `paint::etalon`; with K one
+//! drawn in each K x K cell, the rest not assessed) written as z13 tiles under DIR.
 //!
 //! `qm-paint-gpu compare ... --painted DIR --reference DIR --squares X,Y;...`: a painted map against
 //! a reference (an etalon, or the popup's sparse answers) cell by cell where the reference assesses
-//! one, per layer and the total by the owner's z13 contract (rungs over 0.5, 1, 3 and 6 dB,
-//! presence, bias, the quiet band; a breached limit marked `!`), and the worst cell.
+//! one, per layer and the total by the owner's z13 contract in loudness level (rungs over 0.5, 1, 3
+//! and 6 phon, presence, bias, the quiet band; a breached limit marked `!`), and the worst cell.
 
 use paint::exact::{LAYERS, PairEnergy, Point, whole_energy};
 use paint::paint::{NO_LEVEL, SILENCE, cells_of};
@@ -110,8 +111,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
             device_square: &device_square,
             square: &square,
         };
-        let hum = paint::hum::Hum::new(&square, 1024, 128, Some(&batch))?;
-        let cells = paint::etalon::etalon(&square, 1024, &hum, Some(&batch), sample_step)?;
+        let grid = paint::paint::Grid {
+            pixels: 1024,
+            block: 16,
+            hum: 128,
+        };
+        let cells = paint::etalon::etalon(&square, grid, Some(&batch), sample_step)?;
         paint::hm3::write(&out, 13, (tile.x, tile.y), &cells)?;
         println!(
             "etalon {}/{}: {} sources, sample step {sample_step}, {:.1} s on {}",
@@ -389,8 +394,12 @@ fn popup_reference(
             let mut last = None;
             popup::answer::answer(release, lat, lon, &options, &mut |update| {
                 if !update.partial && update.building.is_none() {
-                    let layers = std::array::from_fn(|l| lden_energy(&update.layers[l].energy));
-                    last = Some(cells_of(&layers));
+                    let mut ndens = [0.0; LAYERS + 1];
+                    for (nden, layer) in ndens.iter_mut().zip(&update.layers) {
+                        *nden = layer.nden_sone.unwrap_or(0.0);
+                    }
+                    ndens[LAYERS] = update.loudness.map_or(0.0, |loudness| loudness.nden_sone);
+                    last = Some(cells_of(&ndens));
                 }
                 Ok(())
             })?;
@@ -411,11 +420,12 @@ fn popup_reference(
     Ok(())
 }
 
-/// One layer's score by the owner's z13 contract (dev1's accuracy ladder), in the stored bytes,
-/// banded by the reference: the rungs over the cells it paints (>= 30 dB), the last joined by
-/// paint-state flips over 6 dB; under 30 dB an error of at most 10 dB; presence changes (across
-/// 30 dB unless both lie inside (29, 31) dB) at most 0.25 % of the painted cells; the signed mean
-/// over the painted cells at most 0.5 dB. Silence reads 0 dB.
+/// One layer's score by the owner's z13 contract (dev1's accuracy ladder, in decibels there) in the
+/// stored bytes' loudness level (phon: a byte is half a phon, a phon 7.2 % of loudness), banded by
+/// the reference: the rungs over the cells it paints (1 sone, 40 phon, and louder), the last joined
+/// by paint-state flips over 6 phon; quieter an error of at most 10 phon; presence changes (across
+/// 40 phon unless both lie inside (39.5, 40.5)) at most 0.25 % of the painted cells; the signed
+/// mean over the painted cells at most 0.5 phon. Silence reads 0 phon.
 #[derive(Default)]
 struct Score {
     painted: usize,
@@ -423,20 +433,20 @@ struct Score {
     presence: usize,
     signed: f64,
     quiet_worst: f64,
-    /// The worst difference: dB, the global z13 pixel, the map's and the reference's bytes.
+    /// The worst difference: phon, the global z13 pixel, the map's and the reference's bytes.
     worst: (f64, u32, u32, u8, u8),
 }
 
-/// The rungs: a difference over this many dB at most this percentage of the painted cells.
+/// The rungs: a difference over this many phon at most this percentage of the painted cells.
 const RUNGS: [(f64, f64); 4] = [(0.5, 20.0), (1.0, 1.0), (3.0, 0.01), (6.0, 0.001)];
 
 impl Score {
     fn add(&mut self, mine: u8, reference: u8, (x, y): (u32, u32)) {
-        const PAINTED: u8 = 60;
+        const PAINTED: u8 = 80;
         let level = |b: u8| if b >= SILENCE { 0 } else { b };
         let (reference, mine) = (level(reference), level(mine));
         let difference = (f64::from(mine) - f64::from(reference)) / 2.0;
-        let edge_band = |b: u8| (59..=61).contains(&b);
+        let edge_band = |b: u8| (79..=81).contains(&b);
         let flip = (reference >= PAINTED) != (mine >= PAINTED)
             && !(edge_band(reference) && edge_band(mine));
         self.presence += usize::from(flip);
@@ -475,7 +485,7 @@ impl Score {
             );
         }
         format!(
-            "{line}; presence {:.2} %{} ({}); bias {:+.2} dB{}; quiet worst {:.1} dB{}; worst {:.1} dB at {},{} (map {}, reference {})",
+            "{line}; presence {:.2} %{} ({}); bias {:+.2} phon{}; quiet worst {:.1} phon{}; worst {:.1} phon at {},{} (map {}, reference {})",
             share(self.presence),
             if share(self.presence) > 0.25 { "!" } else { "" },
             self.presence,

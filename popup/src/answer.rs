@@ -85,6 +85,24 @@ fn rings_needed(frame: &LocalFrame, centre: TileId, receiver: [f64; 2], reach_m:
         .unwrap_or(1)
 }
 
+/// A source's display record in `sources` (the record of its attribute), its values named by its
+/// layer's fields: what the visitor reads of it and where its traffic and events are read.
+pub fn display_fields_of(
+    sources: &Sources,
+    attribute: u32,
+    layer: Layer,
+) -> Result<serde_json::Value, String> {
+    let values: Vec<serde_json::Value> =
+        serde_json::from_str(sources.display(attribute).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    let object: serde_json::Map<String, serde_json::Value> = display_fields(layer)
+        .iter()
+        .map(|field| field.to_string())
+        .zip(values)
+        .collect();
+    Ok(serde_json::Value::Object(object))
+}
+
 /// Answers a click, calling `emit` after the first read (tile + ring 1) and after every further ring.
 pub fn answer(
     release: &Release,
@@ -438,22 +456,10 @@ pub fn answer(
                     .file(usize::from(display.tile), Kind::Sources)
                     .ok_or("display of an absent sources file")?;
                 let sources = Sources::parse(bytes).map_err(|e| e.to_string())?;
-                let values: Vec<serde_json::Value> = serde_json::from_str(
-                    sources
-                        .display(display.attribute)
-                        .map_err(|e| e.to_string())?,
-                )
-                .map_err(|e| e.to_string())?;
-                let object: serde_json::Map<String, serde_json::Value> = display_fields(layer)
-                    .iter()
-                    .map(|field| field.to_string())
-                    .zip(values)
-                    .collect();
-                Ok(serde_json::Value::Object(object))
+                display_fields_of(&sources, display.attribute, layer)
             };
-        let fields = |contributor: &crate::update::Contributor| {
-            display_record(contributor.display, contributor.layer).ok()
-        };
+        let fields =
+            |group: &crate::percentiles::Group| display_record(group.display, group.layer).ok();
         // The aircraft layer beyond its flights: the airport ground operations, steady.
         let airport_ground: Option<[f64; PERIODS]> = last_ring.then(|| {
             let layer = selections

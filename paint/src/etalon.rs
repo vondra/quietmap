@@ -1,16 +1,19 @@
-//! The painter's reference: every outdoor pixel answered as the popup answers a click there, every
-//! ground source loud there evaluated exactly, the quiet hum blended from its points as the
-//! painter takes it, and the flights, a building's pixels at its loudest outdoor neighbour as the
-//! painter takes them; or, sampled, one outdoor pixel drawn in each K x K cell; a painted map is
-//! scored against it cell by cell.
+//! The painter's reference: every outdoor pixel's loudness as the painter's model takes it with
+//! every ground source loud there evaluated exactly, the quiet hum blended from its points as the
+//! painter takes it, and the flights at the pixel; a building's pixels at its loudest outdoor
+//! neighbour as the painter takes them; or, sampled, one outdoor pixel drawn in each K x K cell; a
+//! painted map is scored against it cell by cell.
 
 use crate::buildings::{fill_buildings, own_reflection_db};
-use crate::exact::{Batch, LAYERS, Point, evaluate};
-use crate::flights::aircraft_energy;
+use crate::exact::{Batch, LAYERS, Point, evaluate_all};
+use crate::flights::{FlightSpectra, aircraft_sums};
 use crate::hum::Hum;
-use crate::paint::{Cells, NO_LEVEL, cells_of};
+use crate::paint::{Cells, Grid, NO_LEVEL, Painted, cells_of};
+use crate::sone::{Displays, Rest, pixel_ndens};
 use crate::square::Square;
+use physics::bands::lden_energy;
 use popup::aircraft::boxes::AIRCRAFT_REACH_M;
+use popup::percentiles::Resolution;
 use popup::selection::SplitMix;
 use rayon::prelude::*;
 use tiles::geo::{Mercator, TileId};
@@ -23,20 +26,26 @@ const ETALON_PASS_ROWS: usize = 4;
 /// `sample_step` K above 1 one of every K x K cell (4: a sixteenth, the drift's sample), drawn per
 /// cell from the square and the cell, so the sample meets every place of the painter's blocks and
 /// cells alike (multiples of K would hit all of their corners and none of their insides):
-/// per layer the ground sources loud there and the quiet hum (`hum`) times the pixel's
-/// reflection, and the flights, the card's ground pairs beside the cores' flights; a building's
-/// pixels at its loudest outdoor neighbour, which only the full etalon has (a sample leaves them
-/// not assessed).
+/// per layer the ground sources loud there and the quiet hum (at the points of `grid`, as the
+/// painter takes it) times the pixel's reflection, and the flights, the card's ground pairs beside
+/// the cores' flights; its loudness by the painter's model (the flights' spectrum as the painter
+/// blends it); a building's pixels at its loudest outdoor neighbour, which only the full etalon
+/// has (a sample leaves them not assessed).
 pub fn etalon(
     square: &Square,
-    pixels: usize,
-    hum: &Hum,
+    grid: Grid,
     batch: Option<&dyn Batch>,
     sample_step: usize,
 ) -> Result<Cells, String> {
     if sample_step == 0 {
         return Err("the etalon's sample step is at least 1".into());
     }
+    let pixels = grid.pixels;
+    let (hum, flight_spectra) = rayon::join(
+        || Hum::new(square, pixels, grid.hum, batch),
+        || FlightSpectra::new(square, pixels, 2 * grid.block),
+    );
+    let (hum, flight_spectra) = (hum?, flight_spectra?);
     let n = pixels;
     let metres = |x: f64, y: f64| {
         square.frame.to_metres(Mercator {
@@ -44,7 +53,8 @@ pub fn etalon(
             y: f64::from(square.tile.y) + y / n as f64,
         })
     };
-    let mut pixel_layers: Vec<Option<[f64; LAYERS]>> = vec![None; n * n];
+    let displays = Displays::of(square);
+    let mut pixel_layers: Vec<Option<Painted>> = vec![None; n * n];
     let mut indoor = Vec::new();
     let cells = n.div_ceil(sample_step);
     for first_row in (0..cells).step_by(ETALON_PASS_ROWS) {
@@ -80,27 +90,63 @@ pub fn etalon(
             })
             .flatten()
             .collect();
-        let (energies, flights) = rayon::join(
-            || evaluate(square, &points, &pairs, batch),
+        let (evaluated, flights) = rayon::join(
+            || evaluate_all(square, &points, &pairs, batch),
             || {
                 (points.par_iter())
-                    .map(|point| aircraft_energy(square, point, &|_| 1.0, AIRCRAFT_REACH_M))
-                    .collect::<Result<Vec<f64>, String>>()
+                    .map(|point| aircraft_sums(square, point, &|_| 1.0, AIRCRAFT_REACH_M))
+                    .collect::<Result<Vec<_>, String>>()
             },
         );
-        let (energies, flights) = (energies?, flights?);
-        let mut ground = vec![[0.0; LAYERS]; points.len()];
-        for (&(k, index), energy) in pairs.iter().zip(energies) {
-            ground[k as usize][square.candidates[index as usize].layer as usize] += energy;
+        let (evaluated, flights) = (evaluated?, flights?);
+        // The pairs come point by point: each point's run of them.
+        let mut starts = vec![0usize; points.len() + 1];
+        for &(k, _) in &pairs {
+            starts[k as usize + 1] += 1;
         }
-        let painted: Vec<[f64; LAYERS]> = (0..points.len())
+        for k in 0..points.len() {
+            starts[k + 1] += starts[k];
+        }
+        let candidates: Vec<u32> = pairs.iter().map(|&(_, index)| index).collect();
+        let painted: Vec<Painted> = (0..points.len())
             .into_par_iter()
             .map(|k| {
-                let quiet = hum.at(pixels_at[k] % n, pixels_at[k] / n);
+                let (steady, bands) = hum.at(pixels_at[k] % n, pixels_at[k] / n);
+                let rest = Rest {
+                    steady,
+                    bands,
+                    left_groups: (&[], [0.0; 4]),
+                    flights: flights[k],
+                };
+                let range = starts[k]..starts[k + 1];
+                let reflection = points[k].reflection();
                 let mut layers: [f64; LAYERS] =
-                    std::array::from_fn(|l| (ground[k][l] + quiet[l]) * points[k].reflection());
-                layers[Layer::Aircraft as usize] += flights[k];
-                layers
+                    std::array::from_fn(|layer| lden_energy(&rest.steady[layer]));
+                for (&index, energy) in candidates[range.clone()]
+                    .iter()
+                    .zip(&evaluated.pairs[range.clone()])
+                {
+                    layers[square.candidates[index as usize].layer as usize] +=
+                        lden_energy(&energy.mixed);
+                }
+                let mut layers = layers.map(|energy| reflection * energy);
+                layers[Layer::Aircraft as usize] += lden_energy(&rest.flights[0]);
+                let ndens = pixel_ndens(
+                    square,
+                    &displays,
+                    (points[k].position, reflection),
+                    (
+                        &candidates[range.clone()],
+                        &evaluated.pairs[range],
+                        &evaluated.bands[k],
+                    ),
+                    (
+                        &rest,
+                        &flight_spectra.at(pixels_at[k] % n, pixels_at[k] / n),
+                    ),
+                    Resolution::MAP,
+                );
+                (layers, ndens)
             })
             .collect();
         for (at, layers) in pixels_at.into_iter().zip(painted) {
@@ -117,7 +163,11 @@ pub fn etalon(
         })?;
     }
     Ok((pixel_layers.par_iter())
-        .map(|layers| layers.as_ref().map_or([NO_LEVEL; LAYERS + 1], cells_of))
+        .map(|pixel| {
+            pixel
+                .as_ref()
+                .map_or([NO_LEVEL; LAYERS + 1], |(_, ndens)| cells_of(ndens))
+        })
         .collect())
 }
 

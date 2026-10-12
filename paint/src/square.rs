@@ -282,6 +282,9 @@ pub struct Square<'a> {
     pub candidates: Vec<Candidate>,
     pub index: Index,
     pub aircraft: Vec<AircraftTile<'a>>,
+    /// The source tiles the candidates came from (a candidate's `display.tile`), where its display
+    /// record is read.
+    pub sources: Vec<Sources<'a>>,
 }
 
 impl<'a> Square<'a> {
@@ -370,6 +373,7 @@ impl<'a> Square<'a> {
             candidates,
             index,
             aircraft,
+            sources: sources.into_iter().map(|(_, file)| file).collect(),
         })
     }
 
