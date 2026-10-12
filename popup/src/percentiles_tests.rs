@@ -12,7 +12,7 @@ const BIN_DB: f64 = Resolution::CLICK.bin_db;
 fn distributions(
     selections: &[LayerSelection],
     flights: ([f64; PERIODS], [f64; PERIODS]),
-    fields: &dyn Fn(&Contributor) -> Option<serde_json::Value>,
+    fields: &dyn Fn(&Group) -> Option<serde_json::Value>,
 ) -> [Distribution; PERIODS] {
     let weather = flight_weather(&flights);
     let (lines, steady) = click_lines(selections, (&weather, flights), fields);
@@ -22,7 +22,7 @@ fn distributions(
 /// The time levels of `selections` with no flights and `fields` the contributors' displays.
 fn levels(
     selections: &[LayerSelection],
-    fields: &dyn Fn(&Contributor) -> Option<serde_json::Value>,
+    fields: &dyn Fn(&Group) -> Option<serde_json::Value>,
 ) -> Percentiles {
     Percentiles::of(&distributions(
         selections,
@@ -71,7 +71,7 @@ pub(crate) fn selection(layer: Layer, contributors: Vec<Contributor>) -> LayerSe
 }
 
 /// 33 vehicles a day at 20 km/h, as the service road by the owner's hotel.
-fn quiet_road(_: &Contributor) -> Option<serde_json::Value> {
+fn quiet_road(_: &Group) -> Option<serde_json::Value> {
     Some(
         serde_json::json!({"aadt_light": 31.0, "aadt_heavy": 1.0, "aadt_moto": 1.0,
         "speed_kmh": 20.0, "road_class": "service"}),
@@ -170,7 +170,7 @@ fn a_busy_roads_quiet_hours_lower_its_night_l90() {
         Layer::Road,
         vec![contributor(7, Layer::Road, 60.0, 2_000.0)],
     );
-    let busy = |_: &Contributor| {
+    let busy = |_: &Group| {
         Some(
             serde_json::json!({"aadt_light": 20_000.0, "speed_kmh": 50.0,
             "road_class": "secondary"}),
@@ -189,7 +189,7 @@ fn a_busy_roads_quiet_hours_lower_its_night_l90() {
 #[test]
 fn a_contributor_is_heard_as_its_passes_or_as_a_steady_sound() {
     let lane = contributor(7, Layer::Road, 40.0, 4.0);
-    let heard_lane = heard(&lane, &quiet_road(&lane).unwrap()).unwrap();
+    let heard_lane = heard(&lane, &quiet_road(&lane.group()).unwrap()).unwrap();
     assert!((heard_lane.per_hour[0] - 33.0 * 0.70 / 12.0).abs() < 1e-9);
     assert!(!heard_lane.steady);
     let motorway = contributor(8, Layer::Road, 45.0, 300.0);
@@ -273,7 +273,7 @@ fn pieces_louder_in_opposite_states_keep_their_mean() {
         total += mean;
     }
     site.energy = [total; PERIODS];
-    let line = Line::of(&site, None).unwrap();
+    let line = Line::of(&site.group(), None).unwrap();
     let average = line.state_means(0).iter().sum::<f64>() / WEATHER_STATES as f64;
     assert!((average - total).abs() < 1e-9, "{average} vs {total}");
 }
@@ -290,7 +290,7 @@ fn a_source_alone_keeps_its_weather() {
         .weather
         .add(&[mean; PERIODS], &[[calm; PERIODS], [favourable; PERIODS]]);
     plant.energy = [mean; PERIODS];
-    let line = Line::of(&plant, None).unwrap();
+    let line = Line::of(&plant.group(), None).unwrap();
     let mut levels: Vec<(f64, f64)> = Vec::new();
     line.own_levels(0, 0.0, &mut |level, share| levels.push((level, share)));
     let at = |db: f64| -> f64 {
@@ -344,8 +344,8 @@ fn the_weather_moves_the_levels_smoothly() {
 /// but for the bells' own 2 %, and the bells are heard as their rings a day.
 #[test]
 fn events_sound_for_their_duty_and_are_silent_otherwise() {
-    let bells_fields = |c: &Contributor| {
-        (c.group_key == 2).then(
+    let bells_fields = |c: &Group| {
+        (c.key == 2).then(
             || serde_json::json!({"events_per_day": [36.0, 0.0, 3.0], "duty": [0.02, 0.0, 0.01]}),
         )
     };
@@ -375,7 +375,7 @@ fn events_sound_for_their_duty_and_are_silent_otherwise() {
     // Ringing, 40 dB over the duty's 2 %: 40 + 10 log10(1 + 50) for 2 % of the day.
     let ringing = 10.0 * 51f64.log10() + 40.0;
     assert!((distribution.exceeded_db(0.019) - ringing).abs() <= BIN_DB / 2.0);
-    let fields = bells_fields(&bells).unwrap();
+    let fields = bells_fields(&bells.group()).unwrap();
     let heard_bells = heard(&bells, &fields).unwrap();
     assert!(!heard_bells.steady && (heard_bells.per_hour[0] - 3.0).abs() < 1e-9);
 }

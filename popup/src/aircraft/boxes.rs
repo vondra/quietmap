@@ -149,16 +149,29 @@ fn box_at(
     Some((distance_m, energy, sel))
 }
 
-/// The Lden energy of one tile's boxes within `reach_m` of the receiver (at most the aircraft
-/// reach), each box's share `weight` of its centroid's horizontal distance (the heatmap's levels).
-pub fn tile_lden_energy(
+/// A box's flights' Kurze lambda per period: the period's flights a day over its hours, times its
+/// closest slant over the flights' speed.
+fn box_lambda(record: &AircraftBox, sel: &BoxSel) -> [f64; PERIODS] {
+    let slant = sel.closest.on_line_m[0]
+        .hypot(sel.closest.on_line_m[1])
+        .hypot(sel.closest.on_line_m[2]);
+    std::array::from_fn(|period| {
+        let flights = f64::from(record.flights[period]) / 365.25;
+        flights / (PERIOD_HOURS[period] * 3_600.0) * slant / FLIGHT_SPEED_M_S
+    })
+}
+
+/// The flights of one tile's boxes within `reach_m` of the receiver (at most the aircraft reach),
+/// each box's share `weight` of its centroid's horizontal distance (the heatmap's): their energy
+/// and energy times lambda per period.
+pub fn tile_flight_sums(
     aircraft: &Aircraft<'_>,
     tile: TileId,
     frame: &LocalFrame,
     receiver: AircraftReceiver,
     horizons: &impl ReceiverHorizons,
     (weight, reach_m): (&dyn Fn(f64) -> f64, f64),
-) -> f64 {
+) -> ([f64; PERIODS], [f64; PERIODS]) {
     let reach_m = reach_m.min(AIRCRAFT_REACH_M);
     let heard = |distance_m: f64| distance_m <= reach_m && weight(distance_m) > 0.0;
     let ends = (
@@ -174,10 +187,21 @@ pub fn tile_lden_energy(
         })
         .filter_map(|index| {
             let record = aircraft.aircraft_box(index);
-            box_at(&record, tile, frame, receiver, horizons, ends)
-                .map(|(distance_m, energy, _)| weight(distance_m) * lden_energy(&energy))
+            let (distance_m, energy, sel) = box_at(&record, tile, frame, receiver, horizons, ends)?;
+            let lambda = box_lambda(&record, &sel);
+            let share = weight(distance_m);
+            let heard: [f64; PERIODS] = std::array::from_fn(|p| share * energy[p] * lambda[p]);
+            Some((energy.map(|value| share * value), heard))
         })
-        .sum()
+        .fold(
+            ([0.0; PERIODS], [0.0; PERIODS]),
+            |(energy, lambda), (e, l)| {
+                (
+                    std::array::from_fn(|p| energy[p] + e[p]),
+                    std::array::from_fn(|p| lambda[p] + l[p]),
+                )
+            },
+        )
 }
 
 /// The boxes of one tile at the receiver.
@@ -205,15 +229,7 @@ pub fn tile_energy(
             ) else {
                 return BEYOND_REACH;
             };
-            // Each period's flights a day over its hours; lambda is that rate times the slant over
-            // the speed.
-            let slant = sel.closest.on_line_m[0]
-                .hypot(sel.closest.on_line_m[1])
-                .hypot(sel.closest.on_line_m[2]);
-            let lambda: [f64; PERIODS] = std::array::from_fn(|period| {
-                let flights = f64::from(record.flights[period]) / 365.25;
-                flights / (PERIOD_HOURS[period] * 3_600.0) * slant / FLIGHT_SPEED_M_S
-            });
+            let lambda = box_lambda(&record, &sel);
             let bound = (record.piece_count > 0).then(|| {
                 record.loudest_lamax_db
                     + lamax_rise_bound_db(nearest_slant_m(&record, tile, frame, receiver))

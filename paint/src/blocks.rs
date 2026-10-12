@@ -2,6 +2,7 @@
 //! evaluate exactly, by dev1's rule (`crate::paint`); the energy the others leave at each corner.
 
 use crate::exact::LAYERS;
+use physics::bands::{PERIODS, lden_energy};
 use std::collections::HashSet;
 
 /// A block's corners admit their loudest sources, layer by layer, until the energy each corner has
@@ -11,19 +12,38 @@ use std::collections::HashSet;
 /// more card time).
 pub const DROP_BUDGET_FRACTION: f64 = 0.15;
 
-/// A block corner: per layer every source loud there with its Lden energy, loudest first, and the
-/// layer's total.
+/// A source loud at a corner: its index, its group, its Lden energy and its energy per period.
+pub(crate) type Ranked = (u32, u64, f64, [f64; PERIODS]);
+
+/// A block corner: per layer every source loud there, loudest first, and the layer's total Lden
+/// energy.
 #[derive(Default)]
 pub(crate) struct Corner {
-    pub ranked: [Vec<(u32, f64)>; LAYERS],
+    pub ranked: [Vec<Ranked>; LAYERS],
     pub totals: [f64; LAYERS],
 }
 
-/// A block: the sources its pixels evaluate exactly (sorted), and per corner (north-west,
-/// north-east, south-west, south-east) and layer the energy they leave out there.
+impl Corner {
+    /// Adds source `index` of `group` and `layer` heard there with `energy` per period.
+    pub fn add(&mut self, layer: usize, (index, group): (u32, u64), energy: [f64; PERIODS]) {
+        let lden = lden_energy(&energy);
+        self.ranked[layer].push((index, group, lden, energy));
+        self.totals[layer] += lden;
+    }
+}
+
+/// A source group a block leaves out: its key, its energy per period at each corner (north-west,
+/// north-east, south-west, south-east), and its loudest source left out, whose display record and
+/// distance its line takes where a pixel hears none of its other pieces.
+pub(crate) type LeftGroup = (u64, [[f64; PERIODS]; 4], u32);
+
+/// A block: the sources its pixels evaluate exactly (sorted), what they leave out at each corner
+/// per layer and period, and of it each source group's (sorted by group): it sounds with its passes
+/// at the pixels, not steady (a railway's farther ways carry the same trains).
 pub(crate) struct Block {
     pub exact: Vec<u32>,
-    pub left_out: [[f64; LAYERS]; 4],
+    pub left_out: [[[f64; PERIODS]; LAYERS]; 4],
+    pub left_groups: Vec<LeftGroup>,
 }
 
 /// Whether the piece `a`-`b` meets the rectangle `low`-`high` (Liang-Barsky).
@@ -63,10 +83,10 @@ pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
         for corner in corners {
             let ranked = &corner.ranked[layer];
             let mut unadmitted: f64 = (ranked.iter())
-                .filter(|(source, _)| !admitted.contains(source))
-                .map(|(_, energy)| energy)
+                .filter(|(source, ..)| !admitted.contains(source))
+                .map(|&(_, _, energy, _)| energy)
                 .sum();
-            for &(source, energy) in ranked {
+            for &(source, _, energy, _) in ranked {
                 if unadmitted <= budget {
                     break;
                 }
@@ -77,17 +97,47 @@ pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
             }
         }
     }
-    let left_out = corners.map(|corner| {
-        std::array::from_fn(|layer| {
-            let kept: f64 = (corner.ranked[layer].iter())
-                .filter(|(source, _)| admitted.contains(source))
-                .map(|(_, energy)| energy)
-                .sum();
-            (corner.totals[layer] - kept).max(0.0)
-        })
+    let mut left_out = [[[0.0; PERIODS]; LAYERS]; 4];
+    let mut left_groups: Vec<(u64, f64, [[f64; PERIODS]; 4], u32)> = Vec::new();
+    for (c, corner) in corners.iter().enumerate() {
+        for (layer, ranked) in corner.ranked.iter().enumerate() {
+            for &(source, group, lden, energy) in ranked
+                .iter()
+                .filter(|(source, ..)| !admitted.contains(source))
+            {
+                for (total, value) in left_out[c][layer].iter_mut().zip(energy) {
+                    *total += value;
+                }
+                let mut at_corners = [[0.0; PERIODS]; 4];
+                at_corners[c] = energy;
+                left_groups.push((group, lden, at_corners, source));
+            }
+        }
+    }
+    // One entry a group, its loudest source's (ties to the lowest index) the representative.
+    left_groups
+        .sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.total_cmp(&a.1)).then(a.3.cmp(&b.3)));
+    left_groups.dedup_by(|later, kept| {
+        let same = later.0 == kept.0;
+        if same {
+            for (into, from) in kept.2.iter_mut().zip(later.2) {
+                for (total, value) in into.iter_mut().zip(from) {
+                    *total += value;
+                }
+            }
+        }
+        same
     });
+    let left_groups = left_groups
+        .into_iter()
+        .map(|(group, _, at_corners, source)| (group, at_corners, source))
+        .collect();
     exact.sort_unstable();
-    Block { exact, left_out }
+    Block {
+        exact,
+        left_out,
+        left_groups,
+    }
 }
 
 #[cfg(test)]
@@ -95,10 +145,16 @@ mod tests {
     use super::*;
     use tiles::sources::Layer;
 
+    /// A corner of road sources, each its own group and the same energy in every period.
     fn corner(road: Vec<(u32, f64)>) -> Corner {
         let mut corner = Corner::default();
-        corner.totals[Layer::Road as usize] = road.iter().map(|&(_, energy)| energy).sum();
-        corner.ranked[Layer::Road as usize] = road;
+        for (index, energy) in road {
+            corner.add(
+                Layer::Road as usize,
+                (index, u64::from(index)),
+                [energy; PERIODS],
+            );
+        }
         corner
     }
 
@@ -113,10 +169,22 @@ mod tests {
         let quiet = corner(vec![(2, 12.0), (1, 10.0), (9, 1.0)]);
         let block = admit(vec![9], [&loud, &loud, &quiet, &quiet]);
         assert_eq!(block.exact, vec![1, 2, 9]);
-        assert!(block.left_out.iter().all(|corner| corner[road] == 0.0));
+        assert!(
+            block
+                .left_out
+                .iter()
+                .all(|corner| corner[road] == [0.0; PERIODS])
+        );
+        assert!(block.left_groups.is_empty());
         let even = corner(vec![(1, 88.0), (2, 12.0)]);
         let block = admit(Vec::new(), [&even; 4]);
         assert_eq!(block.exact, vec![1]);
-        assert!(block.left_out.iter().all(|corner| corner[road] == 12.0));
+        assert!(
+            block
+                .left_out
+                .iter()
+                .all(|corner| corner[road] == [12.0; PERIODS])
+        );
+        assert_eq!(block.left_groups, vec![(2, [[12.0; PERIODS]; 4], 2)]);
     }
 }

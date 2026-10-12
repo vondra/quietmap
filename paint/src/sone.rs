@@ -1,0 +1,227 @@
+//! A painted pixel's loudness: Nden per layer and in total, the popup's model at the map's
+//! resolution (`popup::percentiles::Resolution::MAP`). The sources evaluated exactly there, each
+//! group a line (a road, a railway) by its display fields; what the block left out of a group
+//! sounds with its passes too, joined to its line, or as a line of its own from its loudest
+//! source left out; the quiet hum held steady with its own bands; the flights one line.
+
+use crate::blocks::LeftGroup;
+use crate::exact::{LAYERS, PairEnergy, PointBands};
+use crate::flights::FlightSums;
+use crate::square::Square;
+use physics::bands::{PERIODS, lden_energy};
+use physics::doc29::atmosphere::THIRD_OCTAVES as CLASS_THIRDS;
+use popup::candidates::DisplayRef;
+use popup::loudness::{FlightSound, LayerSound, curves, layer_curves, layer_ndens, loudness};
+use popup::percentiles::{
+    Group, Resolution, Weather, distributions_of, flight_weather, place_lines,
+};
+use rayon::prelude::*;
+use std::collections::HashMap;
+use tiles::sources::Layer;
+
+/// Every source group's display record a square's candidates point at, read once: where a line's
+/// traffic and events come from.
+pub struct Displays(HashMap<(u16, u32), Option<serde_json::Value>>);
+
+impl Displays {
+    pub fn of(square: &Square) -> Self {
+        let mut keys: Vec<(u16, u32, Layer)> = (square.candidates.iter())
+            .map(|candidate| {
+                (
+                    candidate.display.tile,
+                    candidate.display.attribute,
+                    candidate.layer,
+                )
+            })
+            .collect();
+        keys.par_sort_unstable_by_key(|&(tile, attribute, _)| (tile, attribute));
+        keys.dedup_by_key(|&mut (tile, attribute, _)| (tile, attribute));
+        Displays(
+            keys.par_iter()
+                .map(|&(tile, attribute, layer)| {
+                    let record = popup::answer::display_fields_of(
+                        &square.sources[usize::from(tile)],
+                        attribute,
+                        layer,
+                    );
+                    ((tile, attribute), record.ok())
+                })
+                .collect(),
+        )
+    }
+
+    fn of_group(&self, group: &Group) -> Option<serde_json::Value> {
+        let DisplayRef {
+            tile, attribute, ..
+        } = group.display;
+        self.0.get(&(tile, attribute)).cloned().flatten()
+    }
+}
+
+/// What a pixel hears beside its exact pairs, its reflection not yet taken: per layer the energy
+/// per period not evaluated there (left out at the corners, humming) and its bands; of it the
+/// groups its block left out with the pixel's weights of the block's corners; the flights.
+pub struct Rest<'a> {
+    pub steady: [[f64; PERIODS]; LAYERS],
+    pub bands: PointBands,
+    pub left_groups: (&'a [LeftGroup], [f64; 4]),
+    pub flights: FlightSums,
+}
+
+/// One source group's exact pairs at a pixel, summed: its energy per period, and in calm air and
+/// downwind; its loudest pair's display record (as a click's contributor) and that pair's Lden
+/// energy.
+struct Heard {
+    layer: Layer,
+    energy: [f64; PERIODS],
+    states: [[f64; PERIODS]; 2],
+    weather: Weather,
+    distance_m: f64,
+    display: (DisplayRef, f64),
+}
+
+/// The pixel's Nden per layer and in total (sone, 0 for silence) at `resolution` (the map's,
+/// `Resolution::MAP`): its exact pairs (candidates and their energies) and their `bands`, the
+/// `rest`, all times its `reflection`; the flights' spectrum `flight_spectrum_db` (unweighted third
+/// octaves from 50 Hz).
+pub fn pixel_ndens(
+    square: &Square,
+    displays: &Displays,
+    (position, reflection): ([f64; 2], f64),
+    (candidates, energies, bands): (&[u32], &[PairEnergy], &PointBands),
+    (rest, flight_spectrum_db): (&Rest, &[f64; CLASS_THIRDS]),
+    resolution: Resolution,
+) -> [f64; LAYERS + 1] {
+    let mut groups: HashMap<u64, Heard> = HashMap::new();
+    for (&index, energy) in candidates.iter().zip(energies) {
+        let candidate = &square.candidates[index as usize];
+        let heard = groups.entry(candidate.group_key).or_insert_with(|| Heard {
+            layer: candidate.layer,
+            energy: [0.0; PERIODS],
+            states: [[0.0; PERIODS]; 2],
+            weather: Weather::default(),
+            distance_m: f64::INFINITY,
+            display: (candidate.display, f64::NEG_INFINITY),
+        });
+        let lden = lden_energy(&energy.mixed);
+        let order = |d: DisplayRef| (d.ring, d.tile, d.attribute);
+        if lden > heard.display.1
+            || (lden == heard.display.1 && order(candidate.display) < order(heard.display.0))
+        {
+            heard.display = (candidate.display, lden);
+        }
+        let mixed = energy.mixed.map(|value| reflection * value);
+        let states = energy
+            .states
+            .map(|state| state.map(|value| reflection * value));
+        for p in 0..PERIODS {
+            heard.energy[p] += mixed[p];
+            heard.states[0][p] += states[0][p];
+            heard.states[1][p] += states[1][p];
+        }
+        heard.weather.add(&mixed, &states);
+        heard.distance_m = heard.distance_m.min(candidate.distance_from(position));
+    }
+    // What the block left out of a group sounds with its passes, and leaves the steady rest: its
+    // energy joins the group's line in its weather states' proportions, or is a line of its own
+    // taken from its loudest source left out (its weather unknown here: mean in either state).
+    let mut steady = rest
+        .steady
+        .map(|layer| layer.map(|value| reflection * value));
+    let (left_groups, weights) = rest.left_groups;
+    for &(key, at_corners, loudest) in left_groups {
+        let left: [f64; PERIODS] = std::array::from_fn(|p| {
+            reflection * (0..4).map(|c| weights[c] * at_corners[c][p]).sum::<f64>()
+        });
+        if left.iter().all(|&value| value <= 0.0) {
+            continue;
+        }
+        let candidate = &square.candidates[loudest as usize];
+        let heard = groups.entry(key).or_insert_with(|| Heard {
+            layer: candidate.layer,
+            energy: [0.0; PERIODS],
+            states: [[0.0; PERIODS]; 2],
+            weather: Weather::default(),
+            distance_m: candidate.distance_from(position),
+            display: (candidate.display, lden_energy(&left)),
+        });
+        let share = |state: usize, p: usize| {
+            if heard.energy[p] > 0.0 {
+                heard.states[state][p] / heard.energy[p]
+            } else {
+                1.0
+            }
+        };
+        let states = [0, 1].map(|state| std::array::from_fn(|p| left[p] * share(state, p)));
+        heard.weather.add(&left, &states);
+        let layer = heard.layer as usize;
+        for p in 0..PERIODS {
+            heard.energy[p] += left[p];
+            heard.states[0][p] += states[0][p];
+            heard.states[1][p] += states[1][p];
+            steady[layer][p] = (steady[layer][p] - left[p]).max(0.0);
+        }
+    }
+    // Each layer: its groups and its steady rest, its spectrum the exact bands and the rest's.
+    let [flights, flights_lambda] = rest.flights;
+    let sounds: Vec<LayerSound> = (0..LAYERS)
+        .map(|layer| {
+            let mut energy = steady[layer];
+            for heard in groups
+                .values()
+                .filter(|heard| heard.layer as usize == layer)
+            {
+                for (total, value) in energy.iter_mut().zip(heard.energy) {
+                    *total += value;
+                }
+            }
+            if layer == Layer::Aircraft as usize {
+                for (total, value) in energy.iter_mut().zip(flights) {
+                    *total += value;
+                }
+            }
+            LayerSound {
+                layer: Layer::ALL[layer],
+                energy,
+                spectrum: std::array::from_fn(|p| {
+                    std::array::from_fn(|b| bands[layer][p][b] + rest.bands[layer][p][b])
+                }),
+            }
+        })
+        .collect();
+    let total: [f64; PERIODS] =
+        std::array::from_fn(|p| sounds.iter().map(|sound| sound.energy[p]).sum());
+    let views = groups.iter().map(|(&key, heard)| Group {
+        key,
+        layer: heard.layer,
+        energy: heard.energy,
+        weather: &heard.weather,
+        distance_m: heard.distance_m,
+        display: heard.display.0,
+    });
+    let weather = flight_weather(&(flights, flights_lambda));
+    let (lines, steady) = place_lines(
+        views,
+        total,
+        (&weather, (flights, flights_lambda)),
+        &|group| displays.of_group(group),
+    );
+    let flight_sound = FlightSound {
+        energy: flights,
+        spectrum_db: Some(*flight_spectrum_db),
+    };
+    let distributions = distributions_of(&lines, steady, resolution);
+    let whole = loudness(&distributions, &curves(&sounds, &flight_sound)).nden_sone;
+    let own = layer_ndens(
+        &lines,
+        &sounds,
+        &layer_curves(&sounds, &flight_sound),
+        resolution,
+    );
+    let mut ndens = [0.0; LAYERS + 1];
+    for (layer, nden) in own {
+        ndens[layer as usize] = nden.unwrap_or(0.0);
+    }
+    ndens[LAYERS] = whole;
+    ndens
+}
