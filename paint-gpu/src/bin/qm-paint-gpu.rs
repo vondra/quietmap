@@ -5,21 +5,21 @@
 //! metres (300), half anywhere within `--reach` (the ground reach), only points or only lines with
 //! `--kind`; prints the agreement, the failures, the worst pairs and both times.
 //!
-//! `qm-paint-gpu popup ... --square X,Y --painted DIR [--pixels N] [--seed S] [--answers FILE]`:
-//! the painted z13 square against the popup (the reference) at random outdoor pixels, per layer
-//! and the total by the owner's z13 contract (rungs over 0.5, 1, 3 and 6 dB, presence, bias, the
-//! quiet band; a breached limit marked `!`), and the worst pixel; the popup's answers kept in
-//! FILE for the next map.
+//! `qm-paint-gpu popup ... --square X,Y --out DIR [--pixels N] [--seed S]`: the popup's answers at
+//! N random outdoor pixels of the square (300), written as a sparse reference under DIR (every
+//! other cell not assessed), to score a map or an etalon against with `compare`.
 //!
 //! `qm-paint-gpu etalon ... --square X,Y --out DIR [--device D] [--sample-step K]`: the square's
 //! etalon (every outdoor pixel as the popup answers it, `paint::etalon`; with K one drawn in each
 //! K x K cell, the rest not assessed) written as z13 tiles under DIR.
 //!
-//! `qm-paint-gpu compare ... --painted DIR --reference DIR --squares X,Y;...`: a
-//! painted map against the etalon, cell by cell, by the same contract.
+//! `qm-paint-gpu compare ... --painted DIR --reference DIR --squares X,Y;...`: a painted map against
+//! a reference (an etalon, or the popup's sparse answers) cell by cell where the reference assesses
+//! one, per layer and the total by the owner's z13 contract (rungs over 0.5, 1, 3 and 6 dB,
+//! presence, bias, the quiet band; a breached limit marked `!`), and the worst cell.
 
-use paint::exact::Point;
-use paint::paint::{NO_LEVEL, SILENCE};
+use paint::exact::{LAYERS, Point};
+use paint::paint::{NO_LEVEL, SILENCE, cells_of};
 use paint::square::{Files, Square};
 use paint_gpu::device::{DeviceSquare, Gpu};
 use physics::bands::{PERIODS, lden_energy};
@@ -75,13 +75,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
             x: x.parse().map_err(|_| "--square x")?,
             y: y.parse().map_err(|_| "--square y")?,
         };
-        return against_popup(
+        return popup_reference(
             &release,
             tile,
-            &PathBuf::from(required("painted")?),
             parse("pixels", 300)? as usize,
             &mut SplitMix(parse("seed", 1)?),
-            option(arguments, "answers").map(std::path::Path::new),
+            &PathBuf::from(required("out")?),
         );
     }
     let weather = WeatherTable::read(&release.weather_path)?;
@@ -338,68 +337,26 @@ fn run(arguments: &[String]) -> Result<(), String> {
 }
 
 /// The painted z13 square at random outdoor pixels against the popup's answer there; the answers
-/// read from `answers` when it exists, else computed and written there.
-fn against_popup(
+/// The popup's answers at `pixels` random outdoor pixels of the square, as a sparse reference: the
+/// square's tiles under `out`, every other cell not assessed (`compare` scores a map against it).
+fn popup_reference(
     release: &Release,
     tile: TileId,
-    painted: &std::path::Path,
     pixels: usize,
     random: &mut SplitMix,
-    answers_path: Option<&std::path::Path>,
+    out: &std::path::Path,
 ) -> Result<(), String> {
-    use paint::hm3::tile_path;
-    const SIDE: u32 = 1024;
-    const TILE: u32 = 512;
-    // The painted cells: per layer, the square's four z13 tiles.
-    let read = |name: &str, x: u32, y: u32| -> Result<u8, String> {
-        let path = tile_path(
-            painted,
-            name,
-            13,
-            tile.x * 2 + x / TILE,
-            tile.y * 2 + y / TILE,
-        );
-        Ok(read_hm3(&path)?[6 + ((y % TILE) * TILE + x % TILE) as usize])
-    };
-    // One line a pixel: x, y and the popup's Lden energy per layer, or "building".
-    if let Some(cached) = answers_path.and_then(|path| std::fs::read_to_string(path).ok()) {
-        let mut chosen = Vec::new();
-        let mut answers = Vec::new();
-        for line in cached.lines() {
-            let fields: Vec<&str> = line.split(' ').collect();
-            let number = |k: usize| {
-                fields[k]
-                    .parse::<f64>()
-                    .map_err(|_| format!("answers: {line}"))
-            };
-            chosen.push((number(0)? as u32, number(1)? as u32));
-            answers.push(if fields[2] == "building" {
-                None
-            } else {
-                Some(
-                    (2..fields.len())
-                        .map(number)
-                        .collect::<Result<Vec<f64>, String>>()?,
-                )
-            });
-        }
-        return score_against_popup(&chosen, &answers, &read);
-    }
-    // Pixels chosen regardless of the map, so a map missing a level is seen; the popup says
-    // which stand in a building.
-    let chosen: Vec<(u32, u32)> = (0..pixels)
-        .map(|_| {
-            let mut pick = || (random.next_u64() % u64::from(SIDE)) as u32;
-            (pick(), pick())
-        })
+    const SIDE: usize = 1024;
+    let chosen: Vec<usize> = (0..pixels)
+        .map(|_| (random.next_u64() % (SIDE * SIDE) as u64) as usize)
         .collect();
     let started = Instant::now();
-    let answers: Vec<Option<Vec<f64>>> = chosen
+    let answers: Vec<Option<[u8; LAYERS + 1]>> = chosen
         .par_iter()
-        .map(|&(x, y)| {
+        .map(|&at| {
             let (lat, lon) = Mercator {
-                x: f64::from(tile.x) + (f64::from(x) + 0.5) / f64::from(SIDE),
-                y: f64::from(tile.y) + (f64::from(y) + 0.5) / f64::from(SIDE),
+                x: f64::from(tile.x) + ((at % SIDE) as f64 + 0.5) / SIDE as f64,
+                y: f64::from(tile.y) + ((at / SIDE) as f64 + 0.5) / SIDE as f64,
             }
             .to_degrees();
             let options = popup::answer::Options {
@@ -410,201 +367,145 @@ fn against_popup(
             let mut last = None;
             popup::answer::answer(release, lat, lon, &options, &mut |update| {
                 if !update.partial && update.building.is_none() {
-                    last = Some(
-                        update
-                            .layers
-                            .iter()
-                            .map(|layer| physics::bands::lden_energy(&layer.energy))
-                            .collect::<Vec<f64>>(),
-                    );
+                    let layers = std::array::from_fn(|l| lden_energy(&update.layers[l].energy));
+                    last = Some(cells_of(&layers));
                 }
                 Ok(())
             })?;
             Ok(last)
         })
         .collect::<Result<_, String>>()?;
+    let mut cells = vec![[NO_LEVEL; LAYERS + 1]; SIDE * SIDE];
+    for (&at, answer) in chosen.iter().zip(answers) {
+        if let Some(answer) = answer {
+            cells[at] = answer;
+        }
+    }
+    paint::hm3::write(out, 13, (tile.x, tile.y), &cells)?;
     eprintln!(
-        "popup: {} answers in {:.1} s",
-        answers.len(),
+        "popup: {pixels} pixels answered in {:.1} s",
         started.elapsed().as_secs_f64()
     );
-    if let Some(path) = answers_path {
-        let lines: Vec<String> = (chosen.iter().zip(&answers))
-            .map(|(&(x, y), answer)| match answer {
-                Some(energies) => format!(
-                    "{x} {y} {}",
-                    energies
-                        .iter()
-                        .map(|e| format!("{e:e}"))
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                ),
-                None => format!("{x} {y} building"),
-            })
-            .collect();
-        std::fs::write(path, lines.join("\n") + "\n")
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-    }
-    score_against_popup(&chosen, &answers, &read)
-}
-
-/// The map's cells against the popup's answers at the chosen pixels, by the owner's z13 contract.
-fn score_against_popup(
-    chosen: &[(u32, u32)],
-    answers: &[Option<Vec<f64>>],
-    read: &dyn Fn(&str, u32, u32) -> Result<u8, String>,
-) -> Result<(), String> {
-    let names = paint::hm3::layer_names();
-    // The popup's level as the map stores it: twice the Lden rounded, silence under 0 dB.
-    let byte = |energy: f64| -> u8 {
-        if energy < 1.0 {
-            SILENCE
-        } else {
-            (2.0 * physics::bands::level_db(energy))
-                .round()
-                .min(f64::from(SILENCE - 1)) as u8
-        }
-    };
-    // The owner's z13 contract (dev1's accuracy ladder) per layer, in the stored byte, banded by
-    // the reference: the rungs over the cells it paints (>= 30 dB), the last joined by paint-state
-    // flips over 6 dB; under 30 dB an error of at most 10 dB; presence changes (across 30 dB unless
-    // both lie inside (29, 31) dB) at most 0.25 % of the painted cells; the signed mean over the
-    // painted cells at most 0.5 dB. Both sides are outdoors, so silence (and a cell not assessed)
-    // reads 0 dB.
-    const PAINTED: u8 = 60;
-    let rungs = [(0.5, 20.0), (1.0, 1.0), (3.0, 0.01), (6.0, 0.001)];
-    for (slot, name) in names.iter().enumerate() {
-        let (mut painted, mut over, mut presence, mut signed, mut quiet_worst) =
-            (0usize, [0usize; 4], 0usize, 0.0f64, 0.0f64);
-        let mut worst = (0.0f64, 0u32, 0u32, 0u8, 0u8);
-        for (&(x, y), answer) in chosen.iter().zip(answers) {
-            let Some(energies) = answer else { continue };
-            let reference = byte(if slot < energies.len() {
-                energies[slot]
-            } else {
-                energies.iter().sum()
-            });
-            let level = |b: u8| if b >= SILENCE { 0 } else { b };
-            let (reference, mine) = (level(reference), level(read(name, x, y)?));
-            let difference = (f64::from(mine) - f64::from(reference)) / 2.0;
-            let edge_band = |b: u8| (59..=61).contains(&b);
-            let flip = (reference >= PAINTED) != (mine >= PAINTED)
-                && !(edge_band(reference) && edge_band(mine));
-            presence += usize::from(flip);
-            if reference >= PAINTED {
-                painted += 1;
-                signed += difference;
-                for (k, &(limit, _)) in rungs[..3].iter().enumerate() {
-                    over[k] += usize::from(difference.abs() > limit);
-                }
-            } else {
-                quiet_worst = quiet_worst.max(difference.abs());
-                if !flip {
-                    continue;
-                }
-            }
-            over[3] += usize::from(difference.abs() > 6.0);
-            if difference.abs() > worst.0 {
-                worst = (difference.abs(), x, y, mine, reference);
-            }
-        }
-        let share = |count: usize| 100.0 * count as f64 / painted.max(1) as f64;
-        let mut line = format!("{name:<10} painted {painted:>5}:");
-        for (k, &(limit, allowed)) in rungs.iter().enumerate() {
-            let mark = if share(over[k]) > allowed { "!" } else { "" };
-            line += &format!(" >{limit} {:.2} %{mark} ({})", share(over[k]), over[k]);
-        }
-        println!(
-            "{line}; presence {:.2} %{} ({presence}); bias {:+.2} dB; quiet worst {quiet_worst:.1} dB{}; worst {:.1} dB at {},{} (map {}, popup {})",
-            share(presence),
-            if share(presence) > 0.25 { "!" } else { "" },
-            signed / painted.max(1) as f64,
-            if quiet_worst > 10.0 { "!" } else { "" },
-            worst.0,
-            worst.1,
-            worst.2,
-            f64::from(worst.3) / 2.0,
-            f64::from(worst.4) / 2.0
-        );
-    }
     Ok(())
 }
 
-/// A z13 tile's header and cells; a version-3 tile stored 127 dB or more as 254, which version 4
-/// keeps for silence: read as 253, 126.5 dB (frontend hm3-decoder.ts alike).
-fn read_hm3(path: &std::path::Path) -> Result<Vec<u8>, String> {
-    let mut bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if bytes.get(4) == Some(&3) {
-        for byte in bytes.iter_mut().skip(6).filter(|byte| **byte == SILENCE) {
-            *byte = SILENCE - 1;
-        }
-    }
-    Ok(bytes)
+/// One layer's score by the owner's z13 contract (dev1's accuracy ladder), in the stored bytes,
+/// banded by the reference: the rungs over the cells it paints (>= 30 dB), the last joined by
+/// paint-state flips over 6 dB; under 30 dB an error of at most 10 dB; presence changes (across
+/// 30 dB unless both lie inside (29, 31) dB) at most 0.25 % of the painted cells; the signed mean
+/// over the painted cells at most 0.5 dB. Silence reads 0 dB.
+#[derive(Default)]
+struct Score {
+    painted: usize,
+    over: [usize; 4],
+    presence: usize,
+    signed: f64,
+    quiet_worst: f64,
+    /// The worst difference: dB, the global z13 pixel, the map's and the reference's bytes.
+    worst: (f64, u32, u32, u8, u8),
 }
 
-/// A painted map against a reference map (the etalon) over every cell of the z13 squares
-/// `squares` ("X,Y;X,Y"), by the owner's z13 contract.
+/// The rungs: a difference over this many dB at most this percentage of the painted cells.
+const RUNGS: [(f64, f64); 4] = [(0.5, 20.0), (1.0, 1.0), (3.0, 0.01), (6.0, 0.001)];
+
+impl Score {
+    fn add(&mut self, mine: u8, reference: u8, (x, y): (u32, u32)) {
+        const PAINTED: u8 = 60;
+        let level = |b: u8| if b >= SILENCE { 0 } else { b };
+        let (reference, mine) = (level(reference), level(mine));
+        let difference = (f64::from(mine) - f64::from(reference)) / 2.0;
+        let edge_band = |b: u8| (59..=61).contains(&b);
+        let flip = (reference >= PAINTED) != (mine >= PAINTED)
+            && !(edge_band(reference) && edge_band(mine));
+        self.presence += usize::from(flip);
+        if reference >= PAINTED {
+            self.painted += 1;
+            self.signed += difference;
+            for (k, &(limit, _)) in RUNGS[..3].iter().enumerate() {
+                self.over[k] += usize::from(difference.abs() > limit);
+            }
+        } else {
+            self.quiet_worst = self.quiet_worst.max(difference.abs());
+            if !flip {
+                return;
+            }
+        }
+        self.over[3] += usize::from(difference.abs() > 6.0);
+        if difference.abs() > self.worst.0 {
+            self.worst = (difference.abs(), x, y, mine, reference);
+        }
+    }
+
+    fn line(&self, name: &str) -> String {
+        let share = |count: usize| 100.0 * count as f64 / self.painted.max(1) as f64;
+        let mut line = format!("{name:<10} painted {:>5}:", self.painted);
+        for (k, &(limit, allowed)) in RUNGS.iter().enumerate() {
+            let mark = if share(self.over[k]) > allowed {
+                "!"
+            } else {
+                ""
+            };
+            line += &format!(
+                " >{limit} {:.2} %{mark} ({})",
+                share(self.over[k]),
+                self.over[k]
+            );
+        }
+        format!(
+            "{line}; presence {:.2} %{} ({}); bias {:+.2} dB; quiet worst {:.1} dB{}; worst {:.1} dB at {},{} (map {}, popup {})",
+            share(self.presence),
+            if share(self.presence) > 0.25 { "!" } else { "" },
+            self.presence,
+            self.signed / self.painted.max(1) as f64,
+            self.quiet_worst,
+            if self.quiet_worst > 10.0 { "!" } else { "" },
+            self.worst.0,
+            self.worst.1,
+            self.worst.2,
+            f64::from(self.worst.3) / 2.0,
+            f64::from(self.worst.4) / 2.0
+        )
+    }
+}
+
+/// A painted map against a reference (the etalon, or the popup's sparse answers) over the z13
+/// squares `squares` ("X,Y;X,Y"), cell by cell where the reference assesses one and either side
+/// has a level, by the owner's z13 contract.
 fn compare_maps(
     painted: &std::path::Path,
     reference: &std::path::Path,
     squares: &str,
 ) -> Result<(), String> {
-    use paint::hm3::tile_path;
-    let mut chosen: Vec<(u32, u32)> = Vec::new();
-    let mut answers: Vec<Option<Vec<f64>>> = Vec::new();
-    let mut tiles = Vec::new();
+    let mut scores: Vec<Score> = (0..=LAYERS).map(|_| Score::default()).collect();
+    let mut cells = 0usize;
     for pair in squares.split(';') {
         let (x, y) = pair.split_once(',').ok_or("--squares is X,Y;X,Y")?;
-        tiles.push((
+        let square = (
             x.parse::<u32>().map_err(|_| "--squares x")?,
             y.parse::<u32>().map_err(|_| "--squares y")?,
-        ));
-    }
-    // The reference's cells as energies, one pixel at a time over every square, for the scorer.
-    let names = paint::hm3::layer_names();
-    let read_tile = |root: &std::path::Path, name: &str, x: u32, y: u32| {
-        read_hm3(&tile_path(root, name, 13, x, y))
-    };
-    let mut painted_bytes: std::collections::HashMap<(usize, u32, u32), Vec<u8>> =
-        Default::default();
-    for (sx, sy) in &tiles {
-        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-            let (x, y) = (sx * 2 + dx, sy * 2 + dy);
-            let mut reference_layers = Vec::new();
-            for (slot, name) in names.iter().enumerate() {
-                reference_layers.push(read_tile(reference, name, x, y)?);
-                painted_bytes.insert((slot, x, y), read_tile(painted, name, x, y)?);
+        );
+        let (mine, theirs) = (
+            paint::hm3::read(painted, 13, square)?,
+            paint::hm3::read(reference, 13, square)?,
+        );
+        for (at, (mine, theirs)) in mine.iter().zip(&theirs).enumerate() {
+            let (theirs_total, mine_total) = (theirs[LAYERS], mine[LAYERS]);
+            if theirs_total == NO_LEVEL || (theirs_total >= SILENCE && mine_total >= SILENCE) {
+                continue;
             }
-            for k in 0..512 * 512 {
-                // A pixel the reference does not assess (a sample's skipped pixels), or one
-                // neither side has a level at: nothing to score.
-                let (reference_total, painted_total) = (
-                    reference_layers[names.len() - 1][6 + k],
-                    painted_bytes[&(names.len() - 1, x, y)][6 + k],
-                );
-                if reference_total == NO_LEVEL
-                    || (reference_total >= SILENCE && painted_total >= SILENCE)
-                {
-                    continue;
-                }
-                // The global pixel coordinates (x, y in z13 pixels) carried in `chosen`.
-                chosen.push((x * 512 + (k % 512) as u32, y * 512 + (k / 512) as u32));
-                // Every layer and the stored total (the scorer reads a slot it is given).
-                answers.push(Some(
-                    (0..names.len())
-                        .map(|slot| match reference_layers[slot][6 + k] {
-                            SILENCE | NO_LEVEL => 0.0,
-                            b => physics::bands::energy(f64::from(b) / 2.0),
-                        })
-                        .collect(),
-                ));
+            cells += 1;
+            let place = (
+                square.0 * 1024 + (at % 1024) as u32,
+                square.1 * 1024 + (at / 1024) as u32,
+            );
+            for (score, (&m, &t)) in scores.iter_mut().zip(mine.iter().zip(theirs)) {
+                score.add(m, t, place);
             }
         }
     }
-    let read = |name: &str, gx: u32, gy: u32| -> Result<u8, String> {
-        let slot = names.iter().position(|n| *n == name).ok_or("layer")?;
-        Ok(painted_bytes[&(slot, gx / 512, gy / 512)][6 + ((gy % 512) * 512 + gx % 512) as usize])
-    };
-    eprintln!("compare: {} cells", chosen.len());
-    score_against_popup(&chosen, &answers, &read)
+    eprintln!("compare: {cells} cells");
+    for (score, name) in scores.iter().zip(paint::hm3::layer_names()) {
+        println!("{}", score.line(name));
+    }
+    Ok(())
 }
