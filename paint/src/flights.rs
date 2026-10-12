@@ -1,5 +1,5 @@
 //! The flights at a square's block corners: the aircraft boxes as the popup reads them for a
-//! click, the far ones on the coarse lattice and the near ones every second block corner, each
+//! click, the far ones at the hum's points and the near ones every second block corner, each
 //! interpolated where it changes slowly.
 
 use crate::exact::Point;
@@ -70,7 +70,7 @@ pub(crate) fn flights_at_corners(
     if (square.aircraft.iter()).all(|tile| tile.fine.is_none() && tile.far.is_none()) {
         return Ok(vec![0.0; corners.len()]);
     }
-    let coarse_m = square.frame.east_m_per_unit / grid.pixels as f64 * grid.coarse as f64;
+    let coarse_m = square.frame.east_m_per_unit / grid.pixels as f64 * grid.hum as f64;
     let far = |distance_m: f64| {
         let t = ((distance_m - 1.5 * coarse_m) / (1.5 * coarse_m)).clamp(0.0, 1.0);
         t * t * (3.0 - 2.0 * t)
@@ -95,10 +95,10 @@ pub(crate) fn flights_at_corners(
             .collect::<Result<_, String>>()?;
         Ok((side, values))
     };
-    let (coarse_side, coarse) = lattice(grid.coarse, true)?;
+    let (coarse_side, coarse) = lattice(grid.hum, true)?;
     let (air_side, air) = lattice(2 * grid.block, false)?;
     let corner_side = grid.pixels / grid.block + 1;
-    let ratio = grid.coarse / grid.block;
+    let ratio = grid.hum / grid.block;
     let blend = |values: &[f64], side: usize, step: usize, i: usize, j: usize| {
         let (ci, cj) = ((i / step).min(side - 2), (j / step).min(side - 2));
         let around =

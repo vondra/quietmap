@@ -1,5 +1,5 @@
 //! The painter's reference: every outdoor pixel answered as the popup answers a click there, every
-//! ground source loud there evaluated exactly, the quiet hum blended from its lattice as the
+//! ground source loud there evaluated exactly, the quiet hum blended from its points as the
 //! painter takes it, and the flights, a building's pixels at its loudest outdoor neighbour as the
 //! painter takes them; or, sampled, every K-th outdoor pixel each way; a painted map is scored
 //! against it cell by cell.
@@ -7,7 +7,7 @@
 use crate::buildings::{fill_buildings, own_reflection_db};
 use crate::exact::{Batch, LAYERS, Point, evaluate};
 use crate::flights::aircraft_energy;
-use crate::lattice::Lattice;
+use crate::hum::Hum;
 use crate::paint::{Cells, NO_LEVEL, cells_of};
 use crate::square::Square;
 use popup::aircraft::boxes::AIRCRAFT_REACH_M;
@@ -23,14 +23,14 @@ const ETALON_PASS_ROWS: usize = 4;
 /// `sample_step` K above 1 one of every K x K cell (4: a sixteenth, the drift's sample), drawn per
 /// cell from the square and the cell, so the sample meets every place of the painter's blocks and
 /// cells alike (multiples of K would hit all of their corners and none of their insides):
-/// per layer the ground sources loud there and the quiet hum (`lattice`) times the pixel's
+/// per layer the ground sources loud there and the quiet hum (`hum`) times the pixel's
 /// reflection, and the flights, the card's ground pairs beside the cores' flights; a building's
 /// pixels at its loudest outdoor neighbour, which only the full etalon has (a sample leaves them
 /// not assessed).
 pub fn etalon(
     square: &Square,
     pixels: usize,
-    lattice: &Lattice,
+    hum: &Hum,
     batch: Option<&dyn Batch>,
     sample_step: usize,
 ) -> Result<Cells, String> {
@@ -96,7 +96,7 @@ pub fn etalon(
         let painted: Vec<[f64; LAYERS]> = (0..points.len())
             .into_par_iter()
             .map(|k| {
-                let quiet = lattice.quiet_at(pixels_at[k] % n, pixels_at[k] / n);
+                let quiet = hum.at(pixels_at[k] % n, pixels_at[k] / n);
                 let mut layers: [f64; LAYERS] =
                     std::array::from_fn(|l| (ground[k][l] + quiet[l]) * points[k].reflection());
                 layers[Layer::Aircraft as usize] += flights[k];

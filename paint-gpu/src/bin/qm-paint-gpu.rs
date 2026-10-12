@@ -5,9 +5,6 @@
 //! metres (300), half anywhere within `--reach` (the ground reach), only points or only lines with
 //! `--kind`; prints the agreement, the failures, the worst pairs and both times.
 //!
-//! `qm-paint-gpu pair ... --square X,Y --receiver x,y --candidate N`: one pair's energies on both,
-//! and for a point source its ray's crossings as each walks them.
-//!
 //! `qm-paint-gpu popup ... --square X,Y --painted DIR [--pixels N] [--seed S] [--answers FILE]`:
 //! the painted z13 square against the popup (the reference) at random outdoor pixels, per layer
 //! and the total by the owner's z13 contract (rungs over 0.5, 1, 3 and 6 dB, presence, bias, the
@@ -53,11 +50,8 @@ fn main() {
 
 fn run(arguments: &[String]) -> Result<(), String> {
     let command = arguments.first().map(String::as_str);
-    if !matches!(
-        command,
-        Some("check" | "pair" | "popup" | "etalon" | "compare")
-    ) {
-        return Err("usage: qm-paint-gpu check|pair --prepared DIR --year YYYY --square X,Y [--pairs N] [--seed S] [--device D]".into());
+    if !matches!(command, Some("check" | "popup" | "etalon" | "compare")) {
+        return Err("usage: qm-paint-gpu check|popup|etalon|compare --prepared DIR --year YYYY ... (see the file's header)".into());
     }
     let required = |name: &str| option(arguments, name).ok_or(format!("--{name} is required"));
     let parse = |name: &str, default: u64| -> Result<u64, String> {
@@ -117,8 +111,8 @@ fn run(arguments: &[String]) -> Result<(), String> {
             device_square: &device_square,
             square: &square,
         };
-        let lattice = paint::lattice::Lattice::new(&square, 1024, (128, 0), true, Some(&batch))?;
-        let cells = paint::etalon::etalon(&square, 1024, &lattice, Some(&batch), sample_step)?;
+        let hum = paint::hum::Hum::new(&square, 1024, 128, Some(&batch))?;
+        let cells = paint::etalon::etalon(&square, 1024, &hum, Some(&batch), sample_step)?;
         paint::hm3::write(&out, 13, (tile.x, tile.y), &cells)?;
         println!(
             "etalon {}/{}: {} sources, sample step {sample_step}, {:.1} s on {}",
@@ -146,35 +140,6 @@ fn run(arguments: &[String]) -> Result<(), String> {
         device_square.bytes as f64 / 1e6,
         started.elapsed().as_secs_f64()
     );
-    if command == Some("pair") {
-        let coordinates = |name: &str| -> Result<[f64; 2], String> {
-            let (x, y) = required(name)?
-                .split_once(',')
-                .ok_or(format!("--{name} is x,y"))?;
-            Ok([
-                x.parse().map_err(|_| format!("--{name} x"))?,
-                y.parse().map_err(|_| format!("--{name} y"))?,
-            ])
-        };
-        // The receiver in frame metres, or a pixel's centre (--pixel x,y).
-        let receiver = match option(arguments, "pixel") {
-            Some(_) => {
-                let [px, py] = coordinates("pixel")?;
-                square.frame.to_metres(Mercator {
-                    x: f64::from(tile.x) + (px + 0.5) / 1024.0,
-                    y: f64::from(tile.y) + (py + 0.5) / 1024.0,
-                })
-            }
-            None => coordinates("receiver")?,
-        };
-        return pair(
-            &square,
-            &gpu,
-            &device_square,
-            receiver,
-            parse("candidate", 0)? as u32,
-        );
-    }
     // The pairs: outdoor receivers anywhere in the square, sources near or anywhere in reach.
     let corner = |dx: f64, dy: f64| {
         square.frame.to_metres(Mercator {
@@ -248,16 +213,14 @@ fn run(arguments: &[String]) -> Result<(), String> {
         chosen.push(index);
     }
     let own = vec![0u64; pairs];
-    // A first launch brings the card to its clocks (QM_GPU_WARM=0: none).
-    if std::env::var("QM_GPU_WARM").map_or(true, |v| v != "0") {
-        let warm = pairs.min(20_000);
-        gpu.evaluate_pairs(
-            &device_square,
-            &receivers[..warm],
-            &own[..warm],
-            &chosen[..warm],
-        )?;
-    }
+    // A first launch brings the card to its clocks.
+    let warm = pairs.min(20_000);
+    gpu.evaluate_pairs(
+        &device_square,
+        &receivers[..warm],
+        &own[..warm],
+        &chosen[..warm],
+    )?;
     let started = Instant::now();
     let (gpu_periods, failed) = gpu.evaluate_pairs(&device_square, &receivers, &own, &chosen)?;
     let gpu_s = started.elapsed().as_secs_f64();
@@ -369,166 +332,6 @@ fn run(arguments: &[String]) -> Result<(), String> {
         println!(
             "  GPU failure {code} at pair {pair}: CPU {:?}",
             cpu_periods[pair].as_ref().map(lden_energy)
-        );
-    }
-    Ok(())
-}
-
-/// One pair on both sides: the energies, and a point source's crossings as each walks them.
-fn pair(
-    square: &Square,
-    gpu: &Gpu,
-    device_square: &DeviceSquare,
-    position: [f64; 2],
-    index: u32,
-) -> Result<(), String> {
-    let candidate = &square.candidates[index as usize];
-    let (gpu_periods, failed) = gpu.evaluate_pairs(device_square, &[position], &[0], &[index])?;
-    let point = Point::at(square, position)?;
-    let receiver = Receiver {
-        ground: &square.ground,
-        obstacles: &square.obstacles,
-        position,
-        altitude_m: point.altitude_m,
-        weather: point.weather(square),
-        reflection_db: 0.0,
-        own_footprint: 0,
-    };
-    let mut evaluated = candidate.clone();
-    evaluated.distance_m = evaluated.distance_from(position);
-    let attribute = &square.attributes[candidate.attribute];
-    let cpu = received_bands(&receiver, &evaluated, attribute, &mut Scratch::default())
-        .map(|received| period_sums(&received.bands));
-    println!(
-        "candidate {index} ({}, {:.1} m, own footprint {}): GPU {:?} (failed {}) CPU {:?}",
-        if candidate.line { "line" } else { "point" },
-        evaluated.distance_m,
-        attribute.footprint_id,
-        gpu_periods[0],
-        failed[0],
-        cpu
-    );
-    if candidate.line {
-        // The quadrature nodes on both sides, in order.
-        let mut cpu_nodes = Vec::new();
-        popup::evaluate::source_rays(
-            &receiver,
-            &evaluated,
-            attribute,
-            &mut Scratch::default(),
-            &mut |ray| {
-                // evaluate.rs add_ray, summed per period.
-                let energy: [f64; PERIODS] = std::array::from_fn(|period| {
-                    (0..physics::bands::BANDS)
-                        .map(|band| {
-                            ray.weight
-                                * attribute.energy[period][band]
-                                * ray.terms.transfer.periods[period][band]
-                        })
-                        .sum()
-                });
-                let [a, _] = candidate.ends_m;
-                cpu_nodes.push((
-                    (ray.from_m[0] - a[0]).hypot(ray.from_m[1] - a[1]),
-                    ray.angle_rad,
-                    energy,
-                ));
-            },
-        )?;
-        let (gpu_nodes, failed) = gpu.line_pair_nodes(device_square, position, index)?;
-        println!(
-            "nodes: CPU {}, GPU {} (failed {failed})",
-            cpu_nodes.len(),
-            gpu_nodes.len()
-        );
-        for k in 0..cpu_nodes.len().max(gpu_nodes.len()) {
-            let cpu = cpu_nodes.get(k).map(|(along, weight, e)| {
-                format!("along {along:8.3} w {weight:.5} E {:.4e}", lden_energy(e))
-            });
-            let gpu = gpu_nodes.get(k).map(|(along, weight, blocked, e)| {
-                format!(
-                    "along {along:8.3} w {weight:.5} {} E {:.4e}",
-                    if *blocked { "B" } else { "-" },
-                    lden_energy(e)
-                )
-            });
-            println!(
-                "  {k:3}  CPU {:<44}  GPU {}",
-                cpu.unwrap_or_default(),
-                gpu.unwrap_or_default()
-            );
-        }
-        // The rays of the first two nodes, as each side walks them.
-        let [a, b] = candidate.ends_m;
-        let length = (b[0] - a[0]).hypot(b[1] - a[1]);
-        for &(along, _, _) in cpu_nodes.iter().take(2) {
-            let f = along / length;
-            let point = [a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1])];
-            compare_crossings(square, gpu, device_square, point, position)?;
-            // The CPU's terms of this ray, per state.
-            let mut scratch = Scratch::default();
-            let terms = popup::evaluate::trace(&receiver, point, attribute, &mut scratch)?;
-            println!(
-                "  profile: {} samples, t {:?}",
-                scratch.profile().t.len(),
-                &scratch.profile().t
-            );
-            for (state, boundary) in terms.boundaries.iter().enumerate() {
-                println!(
-                    "  state {state}: path difference {:.6} m, attenuation {:?}, whole-path ground {:?}",
-                    boundary.path_difference_m,
-                    boundary.attenuation_db.map(|v| (v * 100.0).round() / 100.0),
-                    boundary
-                        .whole_path_ground_db
-                        .map(|v| (v * 100.0).round() / 100.0)
-                );
-            }
-        }
-        return Ok(());
-    }
-    compare_crossings(square, gpu, device_square, candidate.ends_m[0], position)
-}
-
-/// The crossings of one ray as the CPU and the card walk them, side by side.
-fn compare_crossings(
-    square: &Square,
-    gpu: &Gpu,
-    device_square: &DeviceSquare,
-    source: [f64; 2],
-    position: [f64; 2],
-) -> Result<(), String> {
-    let mut cpu_crossings = Vec::new();
-    square
-        .obstacles
-        .crossings(source, position, &mut cpu_crossings)?;
-    let (gpu_crossings, walk_failed) = gpu.ray_crossings(device_square, source, position)?;
-    println!(
-        "crossings: CPU {}, GPU {} (walk failed {walk_failed})",
-        cpu_crossings.len(),
-        gpu_crossings.len()
-    );
-    for k in 0..cpu_crossings.len().max(gpu_crossings.len()) {
-        let cpu = cpu_crossings.get(k).map(|c| {
-            format!(
-                "t {:.7} fp {} h {:.1} {}",
-                c.t,
-                c.footprint_id,
-                c.height_m,
-                if c.building { "building" } else { "wall" }
-            )
-        });
-        let gpu = gpu_crossings
-            .get(k)
-            .map(|&(t, footprint, height, building)| {
-                format!(
-                    "t {t:.7} fp {footprint} h {height:.1} {}",
-                    if building { "building" } else { "wall" }
-                )
-            });
-        println!(
-            "  {k:3}  CPU {:<48}  GPU {}",
-            cpu.unwrap_or_default(),
-            gpu.unwrap_or_default()
         );
     }
     Ok(())
