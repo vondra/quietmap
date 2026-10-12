@@ -12,8 +12,8 @@ use rayon::prelude::*;
 
 /// Pairs one launch takes (about 110 MB of buffers on the card).
 const PAIRS_PER_LAUNCH: usize = 2_000_000;
-/// Pixels one loudness launch takes (about 100 MB of their sounds).
-const PIXELS_PER_LAUNCH: usize = 16_384;
+/// Pixels one loudness launch takes (about 50 MB of their sounds, 250 MB of their mixtures).
+const PIXELS_PER_LAUNCH: usize = 8_192;
 
 pub struct GpuBatch<'a> {
     pub gpu: &'a Gpu,

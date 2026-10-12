@@ -261,11 +261,7 @@ impl Gpu {
         .map_err(|error| format!("nvrtc: {error}"))?;
         driver(device.load_ptx(ptx, "paint", &["evaluate_pairs", "struct_sizes"]))?;
         // The pixels' loudness, in full precision (fast math moved a sum's bin at its edges).
-        let loudness = format!(
-            "{COMMON}{}{}",
-            crate::loudness::loudness_constants(),
-            crate::loudness::LOUDNESS
-        );
+        let loudness = format!("{COMMON}{}", crate::loudness::loudness_source());
         let ptx = compile_ptx_with_opts(
             loudness,
             CompileOptions {
@@ -275,7 +271,7 @@ impl Gpu {
             },
         )
         .map_err(|error| format!("nvrtc (loudness): {error}"))?;
-        driver(device.load_ptx(ptx, "loudness", &["pixel_loudness"]))?;
+        driver(device.load_ptx(ptx, "loudness", &["pixel_mixtures", "pixel_ndens"]))?;
         let sizes = driver(device.alloc_zeros::<u64>(HOST_STRUCT_SIZES.len()))?;
         let function = device
             .get_func("paint", "struct_sizes")
