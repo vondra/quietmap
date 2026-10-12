@@ -10,7 +10,7 @@
 //! hours of the day within each period (measured hourly profiles: a night's 3 am carries a fifth
 //! of its mean), all roads the same hour. The spread is computed, not drawn: for every hour and
 //! weather state the steady energy with each line's quantiles added (the lines independent, on a
-//! grid of 0.1 dB), averaged over the hours and states. The same traffic tells how a contributor
+//! grid of 0.5 dB), averaged over the hours and states. The same traffic tells how a contributor
 //! is heard: its passes per hour, and whether at its distance they run together into a steady
 //! sound.
 
