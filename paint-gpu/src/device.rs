@@ -97,7 +97,6 @@ struct TerrainTile {
     columns_per_metre: f32,
     nodes_offset: u64,
     canopy_offset: u64,
-    rows_offset: u64,
     /// Its fine terrain's detail codes (i16, tiles::terrain_fine) in the nodes' buffer; 0: none
     /// (the first tile's nodes come first).
     fine_offset: u64,
@@ -110,12 +109,9 @@ struct TerrainScene {
     tile_y_at_origin: f32,
     tiles_per_metre_east: f32,
     tiles_per_metre_north: f32,
-    centre_x: u32,
-    centre_y: u32,
     radius: i64,
     tiles: u64,
     nodes: u64,
-    row_north_m: u64,
     scene_rows: u64,
     scene_row_count: u32,
     column_at_origin: f32,
@@ -247,8 +243,9 @@ impl Gpu {
                 arch: Some(arch),
                 // Fast math: 113 and 290 ns a point and a line pair against 200 and 500, the
                 // agreement with the CPU the same (RTX 5070, evidence/2026-10-09/paint). The
-                // `use_fast_math` field only adds --fmad=true; the flag goes in `options`.
-                options: vec!["--use_fast_math".into()],
+                // `use_fast_math` field only adds --fmad=true; the flag goes in `options`. Line
+                // numbers cost nothing at run time and let a profiler name the kernel's lines.
+                options: vec!["--use_fast_math".into(), "-lineinfo".into()],
                 ..Default::default()
             },
         )
@@ -384,7 +381,7 @@ impl DeviceSquare {
         let frame = square.frame;
         // tiles::terrain::Terrain::sample's node columns per Mercator unit.
         let columns_per_unit = f64::from(360 * NODES_PER_DEGREE) / f64::from(TILES_PER_AXIS);
-        let (mut nodes, mut row_north_m) = (Vec::new(), Vec::<f32>::new());
+        let mut nodes = Vec::new();
         // popup::scene::Ground's row table: every lattice row over the scene's tiles, metres north of
         // the origin, the northernmost first.
         let nodes_per_degree = f64::from(NODES_PER_DEGREE);
@@ -457,15 +454,8 @@ impl DeviceSquare {
                             columns_per_metre: (columns_per_unit / frame.east_m_per_unit) as f32,
                             nodes_offset,
                             canopy_offset,
-                            rows_offset: row_north_m.len() as u64,
                             fine_offset,
                         };
-                        row_north_m.extend(
-                            terrain
-                                .row_mercator_y()
-                                .iter()
-                                .map(|&y| ((frame.origin.y - y) * frame.north_m_per_unit) as f32),
-                        );
                     }
                 }
             }
@@ -557,11 +547,6 @@ impl DeviceSquare {
         let has_fine = terrain_tiles.iter().any(|tile| tile.fine_offset != 0);
         let terrain_tiles = upload(bytes_of(&terrain_tiles))?;
         let nodes = upload(nonempty(nodes))?;
-        let row_north_m = driver(device.htod_sync_copy(&if row_north_m.is_empty() {
-            vec![0.0]
-        } else {
-            row_north_m
-        }))?;
         let scene_row_count = scene_rows.len() as u32;
         let scene_rows = driver(device.htod_sync_copy(&scene_rows))?;
         let centre_west_node = Window::of_tile(square.tile).west_node;
@@ -581,12 +566,9 @@ impl DeviceSquare {
                 tile_y_at_origin: (frame.origin.y - f64::from(square.tile.y)) as f32,
                 tiles_per_metre_east: (1.0 / frame.east_m_per_unit) as f32,
                 tiles_per_metre_north: (1.0 / frame.north_m_per_unit) as f32,
-                centre_x: square.tile.x,
-                centre_y: square.tile.y,
                 radius,
                 tiles: pointer(&terrain_tiles),
                 nodes: pointer(&nodes),
-                row_north_m: *row_north_m.device_ptr(),
                 scene_rows: *scene_rows.device_ptr(),
                 scene_row_count,
                 column_at_origin: (frame.origin.x * columns_per_unit
@@ -635,12 +617,12 @@ impl DeviceSquare {
             attributes_bytes,
         ];
         let bytes = buffers.iter().map(|b| b.len() as u64).sum::<u64>()
-            + 4 * (row_north_m.len() + cell_max.len()) as u64;
+            + 4 * (scene_rows.len() + cell_max.len()) as u64;
         Ok(DeviceSquare {
             scene,
             candidates: square.candidates.len() as u32,
             _buffers: buffers,
-            _floats: vec![row_north_m, cell_max, scene_rows],
+            _floats: vec![cell_max, scene_rows],
             bytes,
         })
     }

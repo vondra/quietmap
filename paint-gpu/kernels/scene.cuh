@@ -23,8 +23,8 @@
 
 // One terrain tile of the neighbourhood (tiles::terrain::Terrain): its 4-byte nodes and its
 // crowns' heights (a byte a node) in `TerrainScene::nodes`, its node column at the frame's origin
-// and per metre east, and its rows' metres north of the origin in `TerrainScene::row_north_m`
-// (descending: row 0 is the northernmost); its fine terrain (tiles::terrain_fine), if any, as i16
+// and per metre east, its rows those of the scene's row table from `row_shift` (row 0 the
+// northernmost); its fine terrain (tiles::terrain_fine), if any, as i16
 // detail codes row-major over the window six times as fine, in `nodes` too (offset 0: none, as
 // the first tile's nodes come first).
 struct TerrainTile {
@@ -36,7 +36,6 @@ struct TerrainTile {
     float columns_per_metre;
     u64 nodes_offset;
     u64 canopy_offset;
-    u64 rows_offset;
     u64 fine_offset;
 };
 
@@ -47,12 +46,9 @@ struct TerrainScene {
     float tile_y_at_origin;
     float tiles_per_metre_east;
     float tiles_per_metre_north;
-    u32 centre_x;
-    u32 centre_y;
     i64 radius;
     const TerrainTile* tiles;
     const u8* nodes;
-    const float* row_north_m;
     // The lattice rows over the whole scene, metres north of the origin (descending), and a
     // column coordinate whose integer values are the lattice columns (any tile's numbering: tiles
     // differ by whole columns): popup::scene::Ground's row table and column lines.
@@ -144,7 +140,7 @@ __device__ bool terrain_sample(const TerrainScene& scene, const TerrainTile& til
     if (column_position > -1e-6f) column_position = fmaxf(column_position, 0.0f);
     float column = floorf(column_position);
     float column_fraction = column_position - column;
-    const float* rows = scene.row_north_m + tile.rows_offset;
+    const float* rows = scene.scene_rows + tile.row_shift;
     int row_count = (int)tile.rows;
     // The last row at or north of the point, as the Rust finds it on Mercator y: a guess from the
     // mean spacing, then a step or two.
@@ -477,7 +473,6 @@ __device__ __forceinline__ u16 read_u16(const u8* bytes) {
 struct Outline {
     u64 footprint_id;
     u32 first_vertex;
-    u32 vertex_count;
     float height_m;
     int kind;
 };
@@ -500,7 +495,6 @@ __device__ Outline tile_outline(const ObstacleScene& scene, const ObstacleTile& 
     Outline outline;
     outline.footprint_id = (u64)read_u32(record) | ((u64)read_u32(record + 4) << 32);
     outline.first_vertex = read_u32(record + 8);
-    outline.vertex_count = read_u16(record + 12);
     outline.height_m = (float)read_u16(record + 14) * 0.1f;
     outline.kind = record[16];
     return outline;
