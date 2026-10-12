@@ -60,8 +60,7 @@ impl Distribution {
 
     /// The bin of a level; a level under the grid is held in its lowest bin, at its own intensity.
     fn bin(&self, level_db: f64) -> usize {
-        (((level_db - LEVEL_MIN_DB) / self.bin_db).round().max(0.0) as usize)
-            .min(self.bins.len() - 1)
+        nearest_index((level_db - LEVEL_MIN_DB) / self.bin_db).min(self.bins.len() - 1)
     }
 
     /// Each bin holding a share of the time: its moments' mean intensity and its share.
@@ -156,6 +155,17 @@ impl Distribution {
     }
 }
 
+/// The nearest whole number at or above zero of `value` (0 for anything under a half): `round` and
+/// clamped, without the library call that took a fifth of a pixel's loudness (`Distribution::
+/// with_line`); equal to it at every half below 6,002, the most any index here reaches.
+fn nearest_index(value: f64) -> usize {
+    if value < 0.5 {
+        0
+    } else {
+        (value + 0.5) as usize
+    }
+}
+
 /// The levels of a line's values (dB, `-inf` silent).
 pub(crate) fn value_levels(values: &[(f64, f64)]) -> Vec<f64> {
     values
@@ -186,7 +196,7 @@ fn power_sum_db(a: f64, b: f64) -> f64 {
         return high;
     }
     high + steps
-        .get((difference * PER_DB).round() as usize)
+        .get(nearest_index(difference * PER_DB))
         .copied()
         .unwrap_or(0.0)
 }
@@ -206,6 +216,20 @@ pub(crate) fn line_values(mean: f64, lambda: f64, duty: Option<f64>) -> Vec<(f64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The index is `round`'s, clamped at zero, at every half up to the largest table's and four
+    /// representable numbers either side of it.
+    #[test]
+    fn the_nearest_index_rounds_as_the_library_does() {
+        for k in 0..6_002u64 {
+            let half = (k as f64 + 0.5).to_bits();
+            for step in -4i64..=4 {
+                let value = f64::from_bits((half as i64 + step) as u64);
+                assert_eq!(nearest_index(value), value.round() as usize, "{value}");
+            }
+        }
+        assert_eq!(nearest_index(-0.7), 0);
+    }
 
     /// Adding many lines loses no energy to the grid: 500 identical lines, each soon a small part
     /// of a step of their sum, keep their summed mean (rounding to the grid lost 1.2 dB).
