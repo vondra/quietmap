@@ -44,7 +44,11 @@ pub struct Contributor {
     /// Its energy per meteorological state, kept apart by its pieces' favourable shares.
     pub weather: crate::percentiles::Weather,
     pub distance_m: f64,
+    /// Its loudest piece's display record, and that piece's Lden energy: a group's segments carry
+    /// their own flows (a way's AADT 3 to 768 along it at Dobříš), and the loudest is the one its
+    /// passes are heard by, whatever order its pieces come in.
     pub display: DisplayRef,
+    pub display_lden: f64,
     /// Its loudest evaluated pieces (ends in the click's frame, equal for a point) with their
     /// Lden-weighted energies: what the map shows of it while the click is computed.
     pub pieces: Vec<([[f64; 2]; 2], f64)>,

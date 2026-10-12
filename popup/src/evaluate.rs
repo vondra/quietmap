@@ -83,15 +83,15 @@ pub struct Path {
 }
 
 impl Path {
-    /// The path `weight` times, added (a sampled piece stands for its share of the estimate).
-    pub fn add(&mut self, other: &Path, weight: f64) {
+    /// Adds another piece's path.
+    pub fn add(&mut self, other: &Path) {
         for period in 0..PERIODS {
-            self.free[period] += weight * other.free[period];
-            self.air[period] += weight * other.air[period];
+            self.free[period] += other.free[period];
+            self.air[period] += other.air[period];
             for state in 0..2 {
-                self.screened[state][period] += weight * other.screened[state][period];
-                self.boundary[state][period] += weight * other.boundary[state][period];
-                self.states[state][period] += weight * other.states[state][period];
+                self.screened[state][period] += other.screened[state][period];
+                self.boundary[state][period] += other.boundary[state][period];
+                self.states[state][period] += other.states[state][period];
             }
         }
     }
