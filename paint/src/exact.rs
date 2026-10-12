@@ -143,7 +143,9 @@ pub fn evaluate_all(
     pairs: &[(u32, u32)],
     batch: Option<&dyn Batch>,
 ) -> Result<Evaluated, String> {
-    if let Some(batch) = batch {
+    // A pass without pairs (a square of flights alone) asks the card nothing: its bands' buffer
+    // would be allocated and read back for nothing (0.5 s of the Sahara's 0.6 s squares).
+    if let Some(batch) = batch.filter(|_| !pairs.is_empty()) {
         return batch.evaluate(points, pairs);
     }
     let each: Vec<(PairEnergy, Bands)> = pairs
