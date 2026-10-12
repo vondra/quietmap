@@ -612,13 +612,15 @@ pub fn distributions_of(
                     .collect();
                 let state_means: Vec<f64> = means.iter().map(|means| means[state]).collect();
                 let moment = moment(lines, (&state_means, &factors), steady[p], p);
-                let mut moving = Distribution::empty(resolution.bin_db);
-                moving.silent = 1.0;
+                // What holds steady first: a moving line's quiet moments fall into its bin.
+                let mut sum = Distribution::empty(resolution.bin_db);
+                sum.silent = 1.0;
+                sum = sum.over(moment.floor);
                 for (_, values) in &moment.moving {
-                    moving = moving.with_line(values);
+                    sum = sum.with_line(values);
                 }
                 let weight = slots.len() as f64 / (hours * states) as f64;
-                (weight, moving.over(moment.floor))
+                (weight, sum)
             })
             .collect();
         let mut mixture = Distribution::empty(resolution.bin_db);
