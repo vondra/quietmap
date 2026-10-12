@@ -5,8 +5,9 @@
 //! `qm-paint pack --out DIR --zoom Z --tiles DIR --build bNNN`: the map's archives and manifest.
 
 use paint::exact::Batch;
+use paint::exact::LAYERS;
 use paint::hm3::{painted, write};
-use paint::paint::{Grid, paint};
+use paint::paint::{Corners, Grid, SILENCE, corners_of, paint_pixels};
 use paint::square::{Files, Square};
 use paint_gpu::batch::GpuBatch;
 use paint_gpu::device::{DeviceSquare, Gpu};
@@ -100,44 +101,161 @@ fn run(arguments: &[String]) -> Result<(), String> {
     if let Some(gpu) = &gpu {
         eprintln!("qm-paint: exact evaluations on {}", gpu.name);
     }
-    let mut stdout = std::io::stdout().lock();
-    for (number, tile) in squares.iter().enumerate() {
-        if painted(&out, zoom, (tile.x, tile.y)) {
-            continue;
+    let todo: Vec<(usize, TileId)> = (squares.iter().copied().enumerate())
+        .filter(|(_, tile)| !painted(&out, zoom, (tile.x, tile.y)))
+        .collect();
+    // The next square is prepared on a few of the cores: the pixels on the card wait on the rest.
+    let preparing_pool = (rayon::ThreadPoolBuilder::new().num_threads(PREPARING_THREADS))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let prepare = |&(number, tile): &(usize, TileId)| {
+        preparing_pool
+            .install(|| prepare_square(&release, &weather, gpu.as_ref(), grid, number, tile))
+    };
+    let finish = |prepared: Prepared| {
+        finish_square(
+            &weather,
+            gpu.as_ref(),
+            grid,
+            (&out, zoom),
+            squares.len(),
+            prepared,
+        )
+    };
+    // While the card paints one square's pixels, the cores read the next and take its corners,
+    // unless the square on the card is heavy: two of those do not fit in memory.
+    let mut next = todo.first().map(prepare).transpose()?;
+    for k in 0..todo.len() {
+        let current = next.take().ok_or("a square not prepared")?;
+        match todo.get(k + 1) {
+            Some(following) if current.candidates <= PIPELINE_CANDIDATES_MAX => {
+                let (finished, prepared) = std::thread::scope(|scope| {
+                    let preparing = scope.spawn(|| prepare(following));
+                    let finished = finish(current);
+                    let prepared = (preparing.join())
+                        .unwrap_or_else(|_| Err("a square's preparation panicked".into()));
+                    (finished, prepared)
+                });
+                finished?;
+                next = Some(prepared?);
+            }
+            following => {
+                finish(current)?;
+                next = following.map(prepare).transpose()?;
+            }
         }
-        let started = Instant::now();
-        let files = Files::read(&release, *tile)?;
-        let read_s = started.elapsed().as_secs_f64();
-        let square = Square::new(&weather, *tile, &files)?;
+    }
+    Ok(())
+}
+
+/// A square's sources at most this many candidates paint while the next one is prepared (Dobris's
+/// about 130,000 do; Prague's centre, 470,000 and 30-45 GB, paints alone).
+const PIPELINE_CANDIDATES_MAX: usize = 250_000;
+
+/// Threads that prepare the next square while the pixels are painted.
+const PREPARING_THREADS: usize = 12;
+
+/// A square read, on the card and its corners taken, ready for its pixels.
+struct Prepared {
+    number: usize,
+    tile: TileId,
+    files: Files,
+    device_square: Option<DeviceSquare>,
+    corners: Option<Corners>,
+    candidates: usize,
+    seconds: [f64; 3],
+}
+
+/// Reads square `tile`, uploads it to the card (if there is one) and takes its corners.
+fn prepare_square(
+    release: &Release,
+    weather: &WeatherTable,
+    gpu: Option<&Gpu>,
+    grid: Grid,
+    number: usize,
+    tile: TileId,
+) -> Result<Prepared, String> {
+    let started = Instant::now();
+    let files = Files::read(release, tile)?;
+    let read_s = started.elapsed().as_secs_f64();
+    let (device_square, corners, candidates, built_s) = {
+        let square = Square::new(weather, tile, &files)?;
         let built_s = started.elapsed().as_secs_f64() - read_s;
-        let device_square = match &gpu {
-            Some(gpu) => Some(DeviceSquare::upload(gpu, &square, &files, &weather)?),
+        let device_square = match gpu {
+            Some(gpu) => Some(DeviceSquare::upload(gpu, &square, &files, weather)?),
             None => None,
         };
         let batch = gpu
-            .as_ref()
             .zip(device_square.as_ref())
             .map(|(gpu, device_square)| GpuBatch {
                 gpu,
                 device_square,
                 square: &square,
             });
-        let cells = paint(&square, grid, batch.as_ref().map(|b| b as &dyn Batch))?;
-        let painted_s = started.elapsed().as_secs_f64() - read_s - built_s;
-        write(&out, zoom, (tile.x, tile.y), &cells)?;
-        writeln!(
-            stdout,
-            "qm-paint: square {}/{} ({} of {}): {:.0} MB, {} sources, read {read_s:.1} s, built {built_s:.1} s, painted {painted_s:.1} s",
-            tile.x,
-            tile.y,
-            number + 1,
-            squares.len(),
-            files.bytes() as f64 / 1e6,
-            square.candidates.len(),
-        )
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+        let corners = corners_of(&square, grid, batch.as_ref().map(|b| b as &dyn Batch))?;
+        (device_square, corners, square.candidates.len(), built_s)
+    };
+    let corners_s = started.elapsed().as_secs_f64() - read_s - built_s;
+    Ok(Prepared {
+        number,
+        tile,
+        files,
+        device_square,
+        corners,
+        candidates,
+        seconds: [read_s, built_s, corners_s],
+    })
+}
+
+/// Paints a prepared square's pixels and writes its tiles; one line on stdout.
+fn finish_square(
+    weather: &WeatherTable,
+    gpu: Option<&Gpu>,
+    grid: Grid,
+    (out, zoom): (&PathBuf, u32),
+    count: usize,
+    prepared: Prepared,
+) -> Result<(), String> {
+    let started = Instant::now();
+    let Prepared {
+        number,
+        tile,
+        files,
+        device_square,
+        corners,
+        candidates,
+        seconds: [read_s, built_s, corners_s],
+    } = prepared;
+    let cells = match corners {
+        None => vec![[SILENCE; LAYERS + 1]; grid.pixels * grid.pixels],
+        Some(corners) => {
+            let square = Square::new(weather, tile, &files)?;
+            let batch = gpu
+                .zip(device_square.as_ref())
+                .map(|(gpu, device_square)| GpuBatch {
+                    gpu,
+                    device_square,
+                    square: &square,
+                });
+            paint_pixels(
+                &square,
+                grid,
+                batch.as_ref().map(|b| b as &dyn Batch),
+                corners,
+            )?
+        }
+    };
+    write(out, zoom, (tile.x, tile.y), &cells)?;
+    let painted_s = corners_s + started.elapsed().as_secs_f64();
+    writeln!(
+        std::io::stdout().lock(),
+        "qm-paint: square {}/{} ({} of {count}): {:.0} MB, {candidates} sources, read {read_s:.1} s, built {built_s:.1} s, painted {painted_s:.1} s",
+        tile.x,
+        tile.y,
+        number + 1,
+        files.bytes() as f64 / 1e6,
+    )
+    .map_err(|e| e.to_string())
 }
 
 fn main() {
