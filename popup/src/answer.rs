@@ -479,7 +479,7 @@ pub fn answer(
             let flight_sound = crate::loudness::FlightSound {
                 energy: flight_energy,
                 spectrum_db: Some(crate::aircraft::flights::heard_spectrum(
-                    listed_flights.first(),
+                    &listed_flights,
                     &place_rates_db_per_m(&weather.alpha_db_per_km),
                 )),
             };

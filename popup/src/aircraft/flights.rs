@@ -18,6 +18,7 @@ use physics::doc29::segment::{
     segment_sel_at_receiver,
 };
 use physics::doc29::thrust::PowerBracket;
+use physics::loudness::{A_WEIGHTING_DB, OCTAVE_START};
 use std::collections::HashMap;
 use tiles::aircraft::{Aircraft, FlightPiece};
 use tiles::geo::{LocalFrame, TileId};
@@ -47,20 +48,38 @@ pub struct LoudFlight {
     pub track: Vec<Vec<[f64; 2]>>,
 }
 
-/// The flights' received spectrum for the loudness: the loudest listed flight's spectral class in
-/// the place's air (`rates_db_per_m`). A helicopter, which Doc 29 gives none, and flights none of
-/// which is listed take the fallback class's, so their energy always keeps a spectrum.
+/// The flights' received spectrum for the loudness (unweighted third octaves, dB up to a
+/// constant): the listed flights' spectral classes at their slants in the place's air
+/// (`rates_db_per_m`), each by its sound exposure, as their energy adds (one loud light aircraft
+/// among airliners no longer lends them its spectrum). A helicopter, which Doc 29 gives none, takes
+/// the fallback class's, as do the flights where none is listed, so their energy always keeps a
+/// spectrum.
 pub fn heard_spectrum(
-    loudest: Option<&LoudFlight>,
+    listed: &[LoudFlight],
     rates_db_per_m: &[f64; THIRD_OCTAVES],
 ) -> [f64; THIRD_OCTAVES] {
     let fallback = usize::from(FALLBACK_NOISE_CLASS);
-    let (class, slant_m) = loudest.map_or((fallback, SPECTRUM_DISTANCE_M), |flight| {
-        (flight.class, flight.closest_m.hypot(flight.altitude_m))
-    });
-    class_spectrum_at(class, slant_m, rates_db_per_m)
-        .or_else(|| class_spectrum_at(fallback, slant_m, rates_db_per_m))
-        .expect("the fallback class has a spectrum")
+    let spectrum = |class: usize, slant_m: f64| {
+        class_spectrum_at(class, slant_m, rates_db_per_m)
+            .or_else(|| class_spectrum_at(fallback, slant_m, rates_db_per_m))
+            .expect("the fallback class has a spectrum")
+    };
+    if listed.is_empty() {
+        return spectrum(fallback, SPECTRUM_DISTANCE_M);
+    }
+    let mut energy = [0.0; THIRD_OCTAVES];
+    for flight in listed {
+        let own = spectrum(flight.class, flight.closest_m.hypot(flight.altitude_m));
+        // Its shape set to its A-weighted sound exposure.
+        let a_weighted: f64 = (own.iter().enumerate())
+            .map(|(n, db)| 10f64.powf((db + A_WEIGHTING_DB[n + OCTAVE_START - 1]) / 10.0))
+            .sum();
+        let scale = 10f64.powf(flight.sel_db / 10.0) / a_weighted;
+        for (total, db) in energy.iter_mut().zip(own) {
+            *total += scale * 10f64.powf(db / 10.0);
+        }
+    }
+    energy.map(|value| 10.0 * value.log10())
 }
 
 fn text(bytes: &[u8]) -> String {
@@ -245,18 +264,29 @@ mod tests {
             .find(|&class| own(class).is_none())
             .unwrap();
         assert!(is_helicopter_class(helicopter));
-        assert_eq!(
-            heard_spectrum(Some(&flight(helicopter)), &rates),
+        // One flight lends its own shape (dB up to a constant).
+        let same_shape = |a: [f64; THIRD_OCTAVES], b: [f64; THIRD_OCTAVES]| {
+            (0..THIRD_OCTAVES).all(|n| ((a[n] - b[n]) - (a[0] - b[0])).abs() < 1e-9)
+        };
+        assert!(same_shape(
+            heard_spectrum(&[flight(helicopter)], &rates),
             own(fallback).unwrap()
-        );
+        ));
         let jet = (0..NUM_CLASSES)
-            .find(|&class| class != fallback && own(class).is_some())
+            .find(|&class| {
+                own(class).is_some_and(|shape| !same_shape(shape, own(fallback).unwrap()))
+            })
             .unwrap();
-        assert_eq!(
-            heard_spectrum(Some(&flight(jet)), &rates),
+        assert!(same_shape(
+            heard_spectrum(&[flight(jet)], &rates),
             own(jet).unwrap()
-        );
+        ));
+        // Two by their exposure: the jet 10 dB louder in SEL weighs ten times the fallback's.
+        let mut loud = flight(jet);
+        loud.sel_db += 10.0;
+        let mixed = heard_spectrum(&[loud, flight(fallback)], &rates);
+        assert!(!same_shape(mixed, own(jet).unwrap()));
         let unlisted = class_spectrum_at(fallback, SPECTRUM_DISTANCE_M, &rates).unwrap();
-        assert_eq!(heard_spectrum(None, &rates), unlisted);
+        assert_eq!(heard_spectrum(&[], &rates), unlisted);
     }
 }
