@@ -18,14 +18,14 @@
 //! one, per layer and the total by the owner's z13 contract (rungs over 0.5, 1, 3 and 6 dB,
 //! presence, bias, the quiet band; a breached limit marked `!`), and the worst cell.
 
-use paint::exact::{LAYERS, Point};
+use paint::exact::{LAYERS, PairEnergy, Point, whole_energy};
 use paint::paint::{NO_LEVEL, SILENCE, cells_of};
 use paint::square::{Files, Square};
 use paint_gpu::device::{DeviceSquare, Gpu};
-use physics::bands::{PERIODS, lden_energy};
+use physics::bands::{BANDS, PERIODS, lden_energy};
 use physics::weather::WeatherTable;
 use popup::candidates::GROUND_REACH_M;
-use popup::evaluate::{Receiver, Scratch, period_sums, received_bands};
+use popup::evaluate::{Bands, Scratch};
 use popup::release::Release;
 use popup::selection::SplitMix;
 use rayon::prelude::*;
@@ -211,105 +211,130 @@ fn run(arguments: &[String]) -> Result<(), String> {
         receivers.push(position);
         chosen.push(index);
     }
-    let own = vec![0u64; pairs];
-    // A first launch brings the card to its clocks.
+    // Launches of a quarter of a million pairs, each pair its own point (its bands apart, 150 MB);
+    // a first launch brings the card to its clocks.
+    const LAUNCH: usize = 1 << 18;
+    let own = vec![0u64; LAUNCH];
+    let point_of_pair: Vec<u32> = (0..LAUNCH as u32).collect();
+    let mut bands = gpu.bands(LAUNCH)?;
     let warm = pairs.min(20_000);
     gpu.evaluate_pairs(
         &device_square,
-        &receivers[..warm],
-        &own[..warm],
-        &chosen[..warm],
+        (&receivers[..warm], &own[..warm]),
+        (&chosen[..warm], &point_of_pair[..warm]),
+        &mut bands,
     )?;
+    let (mut gpu_sums, mut failed, mut gpu_bands) = (Vec::new(), Vec::new(), Vec::new());
+    let mut gpu_s = 0.0;
+    for start in (0..pairs).step_by(LAUNCH) {
+        let count = LAUNCH.min(pairs - start);
+        bands = gpu.bands(LAUNCH)?;
+        let started = Instant::now();
+        let (sums, failures) = gpu.evaluate_pairs(
+            &device_square,
+            (&receivers[start..start + count], &own[..count]),
+            (&chosen[start..start + count], &point_of_pair[..count]),
+            &mut bands,
+        )?;
+        gpu_s += started.elapsed().as_secs_f64();
+        gpu_sums.extend(sums);
+        failed.extend(failures);
+        gpu_bands.extend_from_slice(&gpu.download(&bands)?[..count * LAYERS * PERIODS * BANDS]);
+    }
     let started = Instant::now();
-    let (gpu_periods, failed) = gpu.evaluate_pairs(&device_square, &receivers, &own, &chosen)?;
-    let gpu_s = started.elapsed().as_secs_f64();
-    let started = Instant::now();
-    let cpu_periods: Vec<Result<[f64; PERIODS], String>> = receivers
+    let cpu: Vec<Result<(PairEnergy, Bands), String>> = receivers
         .par_iter()
         .zip(&chosen)
         .map_init(Scratch::default, |scratch, (&position, &index)| {
-            let point = Point::at(&square, position)?;
-            let receiver = Receiver {
-                ground: &square.ground,
-                obstacles: &square.obstacles,
-                position,
-                altitude_m: point.altitude_m,
-                weather: point.weather(&square),
-                reflection_db: 0.0,
-                own_footprint: 0,
-            };
-            let mut candidate = square.candidates[index as usize].clone();
-            candidate.distance_m = candidate.distance_from(position);
-            let attribute = &square.attributes[candidate.attribute];
-            Ok(period_sums(
-                &received_bands(&receiver, &candidate, attribute, scratch)?.bands,
-            ))
+            whole_energy(&square, &Point::at(&square, position)?, index, scratch)
         })
         .collect();
     let cpu_s = started.elapsed().as_secs_f64();
-    // Agreement in dB of each pair's Lden energy, where both answered.
-    let mut differences: Vec<(f64, usize)> = Vec::new();
+    // Agreement in dB where both answered: each pair's Lden energy mixed and in either state, and
+    // each band carrying a thousandth of its period's energy or more.
+    let (mut mixed, mut calm, mut downwind, mut spectrum) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let (mut gpu_failed, mut cpu_failed, mut silent) = (0, 0, 0);
+    let decibels = |g: f64, c: f64| {
+        if g > 0.0 && c > 0.0 {
+            Some((10.0 * (g / c).log10()).abs())
+        } else if g == 0.0 && c == 0.0 {
+            None
+        } else {
+            Some(f64::INFINITY)
+        }
+    };
     for pair in 0..pairs {
         if failed[pair] != 0 {
             gpu_failed += 1;
             continue;
         }
-        let Ok(cpu) = &cpu_periods[pair] else {
+        let Ok((energy, cpu_bands)) = &cpu[pair] else {
             cpu_failed += 1;
             continue;
         };
-        let (g, c) = (lden_energy(&gpu_periods[pair]), lden_energy(cpu));
-        if g == 0.0 && c == 0.0 {
+        let card = |k: usize| std::array::from_fn(|p| f64::from(gpu_sums[pair][k * PERIODS + p]));
+        let Some(difference) = decibels(lden_energy(&card(0)), lden_energy(&energy.mixed)) else {
             silent += 1;
             continue;
-        }
-        let difference = if g > 0.0 && c > 0.0 {
-            10.0 * (g / c).log10()
-        } else {
-            f64::INFINITY
         };
-        differences.push((difference.abs(), pair));
+        mixed.push((difference, pair));
+        calm.extend(decibels(
+            lden_energy(&card(1)),
+            lden_energy(&energy.states[0]),
+        ));
+        downwind.extend(decibels(
+            lden_energy(&card(2)),
+            lden_energy(&energy.states[1]),
+        ));
+        let layer = square.candidates[chosen[pair] as usize].layer as usize;
+        for (period, cpu_period) in cpu_bands.iter().enumerate() {
+            for (band, &value) in cpu_period.iter().enumerate() {
+                if value >= 1e-3 * energy.mixed[period] {
+                    let at = ((pair * LAYERS + layer) * PERIODS + period) * BANDS + band;
+                    spectrum.extend(decibels(f64::from(gpu_bands[at]), value));
+                }
+            }
+        }
     }
-    differences.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let quantile = |q: f64| {
-        let mut values: Vec<f64> = differences.iter().map(|d| d.0).collect();
-        values.sort_by(f64::total_cmp);
-        values
-            .get(((values.len() as f64 - 1.0) * q).round() as usize)
-            .copied()
-            .unwrap_or(0.0)
-    };
+    let count = |code: u32| failed.iter().filter(|&&c| c == code).count();
     println!(
         "pairs {pairs}: compared {}, silent {silent}, GPU failed {gpu_failed} (not read {}, no terrain {}, capacity {}), CPU failed {cpu_failed}",
-        differences.len(),
-        failed
-            .iter()
-            .filter(|&&code| code == paint_gpu::device::FAILED_NOT_READ)
-            .count(),
-        failed
-            .iter()
-            .filter(|&&code| code == paint_gpu::device::FAILED_NO_TERRAIN)
-            .count(),
-        failed
-            .iter()
-            .filter(|&&code| code == paint_gpu::device::FAILED_CAPACITY)
-            .count(),
+        mixed.len(),
+        count(paint_gpu::device::FAILED_NOT_READ),
+        count(paint_gpu::device::FAILED_NO_TERRAIN),
+        count(paint_gpu::device::FAILED_CAPACITY),
     );
-    println!(
-        "|GPU - CPU| Lden dB: median {:.2e}, p99 {:.2e}, p99.9 {:.2e}, max {:.2e}",
-        quantile(0.5),
-        quantile(0.99),
-        quantile(0.999),
-        differences.first().map_or(0.0, |d| d.0)
-    );
+    mixed.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut lden: Vec<f64> = mixed.iter().map(|d| d.0).collect();
+    for (name, values) in [
+        ("Lden", &mut lden),
+        ("calm Lden", &mut calm),
+        ("downwind Lden", &mut downwind),
+        ("band", &mut spectrum),
+    ] {
+        values.sort_by(f64::total_cmp);
+        let at = |q: f64| {
+            values
+                .get(((values.len() as f64 - 1.0) * q).round() as usize)
+                .copied()
+                .unwrap_or(0.0)
+        };
+        println!(
+            "|GPU - CPU| {name} dB: median {:.2e}, p99 {:.2e}, p99.9 {:.2e}, max {:.2e}",
+            at(0.5),
+            at(0.99),
+            at(0.999),
+            at(1.0)
+        );
+    }
     println!(
         "time: GPU {gpu_s:.3} s ({:.0} ns a pair), CPU {cpu_s:.3} s on {} threads ({:.0} ns a pair)",
         gpu_s / pairs as f64 * 1e9,
         rayon::current_num_threads(),
         cpu_s / pairs as f64 * 1e9
     );
-    for &(difference, pair) in differences.iter().take(8) {
+    for &(difference, pair) in mixed.iter().take(8) {
         let candidate = &square.candidates[chosen[pair] as usize];
         println!(
             "  worst {difference:.3e} dB: receiver {:.1},{:.1} candidate {} ({}, {:.0} m) GPU {:?} CPU {:?}",
@@ -318,25 +343,22 @@ fn run(arguments: &[String]) -> Result<(), String> {
             chosen[pair],
             if candidate.line { "line" } else { "point" },
             candidate.distance_from(receivers[pair]),
-            gpu_periods[pair],
-            cpu_periods[pair].as_ref().ok()
+            &gpu_sums[pair][..PERIODS],
+            cpu[pair].as_ref().ok().map(|(energy, _)| energy.mixed)
         );
     }
-    let failures: Vec<(usize, u32)> = (0..pairs)
-        .filter(|&p| failed[p] != 0)
-        .map(|p| (p, failed[p]))
-        .take(5)
-        .collect();
-    for (pair, code) in failures {
+    for pair in (0..pairs).filter(|&p| failed[p] != 0).take(5) {
         println!(
-            "  GPU failure {code} at pair {pair}: CPU {:?}",
-            cpu_periods[pair].as_ref().map(lden_energy)
+            "  GPU failure {} at pair {pair}: CPU {:?}",
+            failed[pair],
+            cpu[pair]
+                .as_ref()
+                .map(|(energy, _)| lden_energy(&energy.mixed))
         );
     }
     Ok(())
 }
 
-/// The painted z13 square at random outdoor pixels against the popup's answer there; the answers
 /// The popup's answers at `pixels` random outdoor pixels of the square, as a sparse reference: the
 /// square's tiles under `out`, every other cell not assessed (`compare` scores a map against it).
 fn popup_reference(
