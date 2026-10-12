@@ -1,6 +1,7 @@
-//! The painted pixels' loudness on the card (kernels/loudness.cuh): its tables written from the
-//! Rust ones (the map's resolution, Kurze's quantiles at the nodes, the groups of hours, ISO
-//! 532-1), the pixels' packed sounds in (`paint::sone::PixelSound::pack`), their Nden out.
+//! The painted pixels' loudness on the card (kernels/distribution.cuh, kernels/loudness.cuh): its
+//! tables written from the Rust ones (the map's resolution, Kurze's quantiles at the nodes, the
+//! groups of hours, ISO 532-1), the pixels' packed sounds in (`paint::sone::PixelSound::pack`),
+//! their Nden out.
 
 use crate::device::{Gpu, driver};
 use cudarc::driver::{LaunchAsync, LaunchConfig};
@@ -17,7 +18,8 @@ use popup::percentiles::{
     HELD_EXCEEDED, HELD_SHARE, HOLDS_MEAN_LAMBDA, Resolution, hour_factor, hour_groups,
 };
 
-pub(crate) const LOUDNESS: &str = include_str!("../kernels/loudness.cuh");
+const DISTRIBUTION: &str = include_str!("../kernels/distribution.cuh");
+const LOUDNESS: &str = include_str!("../kernels/loudness.cuh");
 
 /// Floats a pixel's answer takes: per layer and in total.
 pub const LOUDNESS_FLOATS: usize = LAYERS + 1;
@@ -25,14 +27,48 @@ pub const LOUDNESS_FLOATS: usize = LAYERS + 1;
 /// The hourly profiles (`popup::percentiles` HOURLY_SHARES's rows).
 const PROFILES: usize = 3;
 
-/// The kernel's tables at the map's resolution, as device constants (f32's Debug is the shortest
-/// decimal that reads back as it).
-pub(crate) fn loudness_constants() -> String {
+/// Warps of a block of the mixtures' kernel, a task each (4 x 8 KB of shared memory).
+const TASK_WARPS: u32 = 4;
+
+/// The loudness kernels' source, their tables first.
+pub(crate) fn loudness_source() -> String {
+    format!("{}{DISTRIBUTION}{LOUDNESS}", loudness_constants())
+}
+
+/// The map's level bins (`popup::distribution`'s span at the map's resolution).
+fn bins() -> usize {
+    (SPAN_DB / Resolution::MAP.bin_db).round() as usize
+}
+
+/// A pixel's tasks on the card: each period's groups of hours (as when some line follows a
+/// profile) and weather states.
+fn tasks() -> Vec<(usize, usize, usize)> {
+    let resolution = Resolution::MAP;
+    (0..PERIODS)
+        .flat_map(|period| {
+            let groups = hour_groups(true, period, resolution.hour_groups).0.len();
+            (0..groups).flat_map(move |group| {
+                (0..resolution.weather_states).map(move |state| (period, group, state))
+            })
+        })
+        .collect()
+}
+
+/// The floats of a pixel's mixtures on the card: per period and curve (each layer's and the
+/// place's) and bin two.
+fn mixture_floats() -> usize {
+    PERIODS * (LAYERS + 1) * bins() * 2
+}
+
+/// The kernels' tables at the map's resolution, in global memory (a warp's lanes read different
+/// entries, which constant memory serves one at a time: 0.40 -> 0.29 s for 16,384 pixels on a V100);
+/// f32's Debug is the shortest decimal that reads back as it.
+fn loudness_constants() -> String {
     let resolution = Resolution::MAP;
     let floats = |name: &str, values: &[f64]| {
         let values: Vec<String> = values.iter().map(|&v| format!("{:?}f", v as f32)).collect();
         format!(
-            "__constant__ float {name}[{}] = {{{}}};\n",
+            "__device__ const float {name}[{}] = {{{}}};\n",
             values.len(),
             values.join(", ")
         )
@@ -40,7 +76,7 @@ pub(crate) fn loudness_constants() -> String {
     let ints = |name: &str, values: &[usize]| {
         let values: Vec<String> = values.iter().map(usize::to_string).collect();
         format!(
-            "__constant__ int {name}[{}] = {{{}}};\n",
+            "__device__ const int {name}[{}] = {{{}}};\n",
             values.len(),
             values.join(", ")
         )
@@ -82,10 +118,9 @@ pub(crate) fn loudness_constants() -> String {
     }
     let defines = [
         format!("#define LOUD_BIN_DB {:?}f\n", resolution.bin_db as f32),
-        format!(
-            "#define LOUD_BINS {}\n",
-            (SPAN_DB / resolution.bin_db).round() as usize
-        ),
+        format!("#define LOUD_BINS {}\n", bins()),
+        format!("#define LOUD_TASKS {}\n", tasks().len()),
+        format!("#define LOUD_TASK_WARPS {TASK_WARPS}\n"),
         format!("#define LOUD_LEVEL_MIN_DB ({:?}f)\n", LEVEL_MIN_DB as f32),
         format!("#define LOUD_STATES {}\n", resolution.weather_states),
         format!("#define LOUD_NODES {}\n", nodes.len()),
@@ -117,6 +152,10 @@ pub(crate) fn loudness_constants() -> String {
         format!("#define LOUD_SILENT_DB ({:?}f)\n", SILENT_DB as f32),
     ]
     .concat();
+    let tasks = tasks();
+    let task_part = |part: fn(&(usize, usize, usize)) -> usize| -> Vec<usize> {
+        tasks.iter().map(part).collect()
+    };
     let dll: Vec<f64> = DLL.iter().flatten().copied().collect();
     let usl: Vec<f64> = USL.iter().flatten().copied().collect();
     [
@@ -132,6 +171,9 @@ pub(crate) fn loudness_constants() -> String {
         ),
         ints("LOUD_GROUP_SLOTS", &group_slots),
         floats("LOUD_FACTOR", &factor),
+        ints("LOUD_TASK_PERIOD", &task_part(|task| task.0)),
+        ints("LOUD_TASK_GROUP", &task_part(|task| task.1)),
+        ints("LOUD_TASK_STATE", &task_part(|task| task.2)),
         floats("LOUD_PERIOD_HOURS", &PERIOD_HOURS),
         floats("LOUD_PENALTY_DB", &PERIOD_PENALTY_DB),
         floats("LOUD_RAP", &RAP),
@@ -161,17 +203,37 @@ impl Gpu {
         let device = &self.device;
         let input = driver(device.htod_sync_copy(input))?;
         let offsets = driver(device.htod_sync_copy(offsets))?;
+        let mixtures = driver(device.alloc_zeros::<f32>(mixture_floats() * count))?;
         let ndens = driver(device.alloc_zeros::<f32>(LOUDNESS_FLOATS * count))?;
-        let function = (device.get_func("loudness", "pixel_loudness"))
-            .ok_or("kernel pixel_loudness missing")?;
-        let config = LaunchConfig {
+        let kernel = |name: &str| {
+            device
+                .get_func("loudness", name)
+                .ok_or(format!("kernel {name} missing"))
+        };
+        let task_count = (count * tasks().len()) as u32;
+        let tasks_config = LaunchConfig {
+            grid_dim: (task_count.div_ceil(TASK_WARPS), 1, 1),
+            block_dim: (TASK_WARPS * 32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let pixels_config = LaunchConfig {
             grid_dim: (count as u32, 1, 1),
             block_dim: (32, 1, 1),
             shared_mem_bytes: 0,
         };
-        // SAFETY: the kernel reads each pixel's floats from its offset (the host packed them as
-        // kernels/loudness.cuh lays them out) and writes LOUDNESS_FLOATS per pixel.
-        driver(unsafe { function.launch(config, (&input, &offsets, count as u32, &ndens)) })?;
+        // SAFETY: the kernels read each pixel's floats from its offset (the host packed them as
+        // kernels/distribution.cuh lays them out); the first adds into `mixture_floats()` zeroed
+        // floats a pixel, the second reads them and writes LOUDNESS_FLOATS a pixel.
+        driver(unsafe {
+            kernel("pixel_mixtures")?
+                .launch(tasks_config, (&input, &offsets, task_count, &mixtures))
+        })?;
+        driver(unsafe {
+            kernel("pixel_ndens")?.launch(
+                pixels_config,
+                (&input, &offsets, &mixtures, count as u32, &ndens),
+            )
+        })?;
         let flat = driver(device.dtoh_sync_copy(&ndens))?;
         Ok(flat
             .chunks_exact(LOUDNESS_FLOATS)
