@@ -53,7 +53,7 @@ pub fn etalon(
             y: f64::from(square.tile.y) + y / n as f64,
         })
     };
-    let displays = Displays::of(square);
+    let displays = Displays::of(square)?;
     let mut pixel_layers: Vec<Option<Painted>> = vec![None; n * n];
     let mut indoor = Vec::new();
     let cells = n.div_ceil(sample_step);
@@ -110,7 +110,7 @@ pub fn etalon(
         let candidates: Vec<u32> = pairs.iter().map(|&(_, index)| index).collect();
         let painted: Vec<Painted> = (0..points.len())
             .into_par_iter()
-            .map(|k| {
+            .map(|k| -> Result<_, String> {
                 let (steady, bands) = hum.at(pixels_at[k] % n, pixels_at[k] / n);
                 let rest = Rest {
                     steady,
@@ -145,10 +145,10 @@ pub fn etalon(
                         &flight_spectra.at(pixels_at[k] % n, pixels_at[k] / n),
                     ),
                     Resolution::MAP,
-                );
-                (layers, ndens)
+                )?;
+                Ok((layers, ndens))
             })
-            .collect();
+            .collect::<Result<_, String>>()?;
         for (at, layers) in pixels_at.into_iter().zip(painted) {
             pixel_layers[at] = Some(layers);
         }

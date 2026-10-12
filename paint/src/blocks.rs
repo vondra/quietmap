@@ -12,8 +12,15 @@ use std::collections::HashSet;
 /// more card time).
 pub const DROP_BUDGET_FRACTION: f64 = 0.15;
 
-/// A source loud at a corner: its index, its group, its Lden energy and its energy per period.
-pub(crate) type Ranked = (u32, u64, f64, [f64; PERIODS]);
+/// A source loud at a corner: its index, its group, its Lden energy, its energy per period and its
+/// distance from the corner.
+pub(crate) struct Ranked {
+    pub index: u32,
+    pub group: u64,
+    pub lden: f64,
+    pub energy: [f64; PERIODS],
+    pub distance_m: f64,
+}
 
 /// A block corner: per layer every source loud there, loudest first, and the layer's total Lden
 /// energy.
@@ -24,18 +31,38 @@ pub(crate) struct Corner {
 }
 
 impl Corner {
-    /// Adds source `index` of `group` and `layer` heard there with `energy` per period.
-    pub fn add(&mut self, layer: usize, (index, group): (u32, u64), energy: [f64; PERIODS]) {
+    /// Adds source `index` of `group` and `layer` heard there with `energy` per period,
+    /// `distance_m` away.
+    pub fn add(
+        &mut self,
+        layer: usize,
+        (index, group): (u32, u64),
+        (energy, distance_m): ([f64; PERIODS], f64),
+    ) {
         let lden = lden_energy(&energy);
-        self.ranked[layer].push((index, group, lden, energy));
+        self.ranked[layer].push(Ranked {
+            index,
+            group,
+            lden,
+            energy,
+            distance_m,
+        });
         self.totals[layer] += lden;
     }
 }
 
-/// A source group a block leaves out: its key, its energy per period at each corner (north-west,
-/// north-east, south-west, south-east), and its loudest source left out, whose display record and
-/// distance its line takes where a pixel hears none of its other pieces.
-pub(crate) type LeftGroup = (u64, [[f64; PERIODS]; 4], u32);
+/// A source group a block leaves out: its energy per period at each corner (north-west,
+/// north-east, south-west, south-east); its loudest source left out, whose display record its line
+/// takes; and at each corner its nearest source left out (`u32::MAX` where it has none there),
+/// whose distance its line takes where a pixel hears none of its other pieces, as a click takes a
+/// group's nearest piece.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct LeftGroup {
+    pub key: u64,
+    pub at_corners: [[f64; PERIODS]; 4],
+    pub loudest: u32,
+    pub nearest: [u32; 4],
+}
 
 /// A block: the sources its pixels evaluate exactly (sorted), what they leave out at each corner
 /// per layer and period, and of it each source group's (sorted by group): it sounds with its passes
@@ -83,55 +110,68 @@ pub(crate) fn admit(local: Vec<u32>, corners: [&Corner; 4]) -> Block {
         for corner in corners {
             let ranked = &corner.ranked[layer];
             let mut unadmitted: f64 = (ranked.iter())
-                .filter(|(source, ..)| !admitted.contains(source))
-                .map(|&(_, _, energy, _)| energy)
+                .filter(|source| !admitted.contains(&source.index))
+                .map(|source| source.lden)
                 .sum();
-            for &(source, _, energy, _) in ranked {
+            for source in ranked {
                 if unadmitted <= budget {
                     break;
                 }
-                if admitted.insert(source) {
-                    exact.push(source);
-                    unadmitted -= energy;
+                if admitted.insert(source.index) {
+                    exact.push(source.index);
+                    unadmitted -= source.lden;
                 }
             }
         }
     }
     let mut left_out = [[[0.0; PERIODS]; LAYERS]; 4];
-    let mut left_groups: Vec<(u64, f64, [[f64; PERIODS]; 4], u32)> = Vec::new();
+    // Each source left out at a corner, with its Lden energy and distance there.
+    let mut left: Vec<(LeftGroup, f64, [f64; 4])> = Vec::new();
     for (c, corner) in corners.iter().enumerate() {
         for (layer, ranked) in corner.ranked.iter().enumerate() {
-            for &(source, group, lden, energy) in ranked
+            for source in ranked
                 .iter()
-                .filter(|(source, ..)| !admitted.contains(source))
+                .filter(|source| !admitted.contains(&source.index))
             {
-                for (total, value) in left_out[c][layer].iter_mut().zip(energy) {
+                for (total, value) in left_out[c][layer].iter_mut().zip(source.energy) {
                     *total += value;
                 }
-                let mut at_corners = [[0.0; PERIODS]; 4];
-                at_corners[c] = energy;
-                left_groups.push((group, lden, at_corners, source));
+                let mut group = LeftGroup {
+                    key: source.group,
+                    at_corners: [[0.0; PERIODS]; 4],
+                    loudest: source.index,
+                    nearest: [u32::MAX; 4],
+                };
+                group.at_corners[c] = source.energy;
+                group.nearest[c] = source.index;
+                let mut distances = [f64::INFINITY; 4];
+                distances[c] = source.distance_m;
+                left.push((group, source.lden, distances));
             }
         }
     }
-    // One entry a group, its loudest source's (ties to the lowest index) the representative.
-    left_groups
-        .sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.total_cmp(&a.1)).then(a.3.cmp(&b.3)));
-    left_groups.dedup_by(|later, kept| {
-        let same = later.0 == kept.0;
-        if same {
-            for (into, from) in kept.2.iter_mut().zip(later.2) {
-                for (total, value) in into.iter_mut().zip(from) {
-                    *total += value;
-                }
+    // One entry a group: its loudest source (ties to the lowest index) the representative, at each
+    // corner its nearest.
+    left.sort_unstable_by(|a, b| {
+        (a.0.key.cmp(&b.0.key))
+            .then(b.1.total_cmp(&a.1))
+            .then(a.0.loudest.cmp(&b.0.loudest))
+    });
+    left.dedup_by(|later, kept| {
+        if later.0.key != kept.0.key {
+            return false;
+        }
+        for c in 0..4 {
+            for (total, value) in kept.0.at_corners[c].iter_mut().zip(later.0.at_corners[c]) {
+                *total += value;
+            }
+            if later.2[c] < kept.2[c] {
+                (kept.2[c], kept.0.nearest[c]) = (later.2[c], later.0.nearest[c]);
             }
         }
-        same
+        true
     });
-    let left_groups = left_groups
-        .into_iter()
-        .map(|(group, _, at_corners, source)| (group, at_corners, source))
-        .collect();
+    let left_groups = left.into_iter().map(|(group, ..)| group).collect();
     exact.sort_unstable();
     Block {
         exact,
@@ -145,14 +185,16 @@ mod tests {
     use super::*;
     use tiles::sources::Layer;
 
-    /// A corner of road sources, each its own group and the same energy in every period.
+    /// A corner of road sources, each its own group, the same energy in every period, its index in
+    /// metres away.
     fn corner(road: Vec<(u32, f64)>) -> Corner {
         let mut corner = Corner::default();
         for (index, energy) in road {
+            let group = u64::from(index);
             corner.add(
                 Layer::Road as usize,
-                (index, u64::from(index)),
-                [energy; PERIODS],
+                (index, group),
+                ([energy; PERIODS], f64::from(index)),
             );
         }
         corner
@@ -185,6 +227,12 @@ mod tests {
                 .iter()
                 .all(|corner| corner[road] == [12.0; PERIODS])
         );
-        assert_eq!(block.left_groups, vec![(2, [[12.0; PERIODS]; 4], 2)]);
+        let left = LeftGroup {
+            key: 2,
+            at_corners: [[12.0; PERIODS]; 4],
+            loudest: 2,
+            nearest: [2; 4],
+        };
+        assert_eq!(block.left_groups, vec![left]);
     }
 }

@@ -108,7 +108,7 @@ fn shares_split_exactly_the_moments_of_the_distributions() {
     let lines = [
         passes(&near, 55.0, 0.05),
         passes(&far, 50.0, 0.3),
-        Line::of(&bells.group(), Some(&fields)).expect("an event line"),
+        Line::of(&bells.group(), &fields).expect("an event line"),
     ];
     let shares = loudness_shares(&lines, &[0, 1, 2], &[[0.0; PERIODS]; 3], &curves);
     let summed: f64 = shares.iter().sum();
@@ -132,13 +132,15 @@ fn every_line_and_every_steady_part_has_one_row() {
         aircraft,
     ];
     let traffic = |c: &Group| {
-        (c.key == 1).then(|| {
+        Ok(if c.key == 1 {
             serde_json::json!({"aadt_light": 3000.0, "speed_kmh": 50.0, "road_class": "secondary"})
+        } else {
+            serde_json::Value::Null
         })
     };
     let flights = ([energy(42.0); PERIODS], [energy(42.0) * 0.01; PERIODS]);
     let weather = flight_weather(&flights);
-    let (lines, remainder) = click_lines(&selections, (&weather, flights), &traffic);
+    let (lines, remainder) = click_lines(&selections, (&weather, flights), &traffic).unwrap();
     let shares = row_shares(&selections, &[&road, &site], (&lines, remainder), &curves);
     let total: f64 = shares.listed.iter().sum::<f64>() + shares.aircraft + shares.rest;
     assert!((total - 1.0).abs() < 1e-12, "{shares:?}");

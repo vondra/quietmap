@@ -132,7 +132,7 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
     if near.is_empty() && no_flights && hum.silent() {
         return Ok(vec![[SILENCE; LAYERS + 1]; n * n]);
     }
-    let displays = Displays::of(square);
+    let displays = Displays::of(square)?;
     // Every block corner evaluates every source loud there.
     let pairs: Vec<(u32, u32)> = (0..corner_points.len())
         .into_par_iter()
@@ -153,17 +153,18 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
     let evaluated = evaluate_all(square, &corner_points, &pairs, batch)?;
     for (&(k, index), energy) in pairs.iter().zip(&evaluated.pairs) {
         let candidate = &square.candidates[index as usize];
+        let distance_m = candidate.distance_from(corner_points[k as usize].position);
         corners[k as usize].add(
             candidate.layer as usize,
             (index, candidate.group_key),
-            energy.mixed,
+            (energy.mixed, distance_m),
         );
     }
     // A corner's bands: the shape of what its blocks leave out there.
     let corner_bands = evaluated.bands;
     corners.par_iter_mut().for_each(|corner| {
         for ranked in &mut corner.ranked {
-            ranked.sort_unstable_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
+            ranked.sort_unstable_by(|a, b| b.lden.total_cmp(&a.lden).then(a.index.cmp(&b.index)));
         }
     });
     let corners_s = started.elapsed().as_secs_f64();
@@ -241,7 +242,7 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
         let painted = (0..points.len())
             .into_par_iter()
             .filter(|&k| points[k].own_footprint == 0)
-            .map(|k| {
+            .map(|k| -> Result<_, String> {
                 let ((slot, at), point) = (place(k), &points[k]);
                 let (x, y) = (at % n, at / n);
                 let (fx, fy) = (within(x), within(y));
@@ -291,10 +292,10 @@ pub fn paint(square: &Square, grid: Grid, batch: Option<&dyn Batch>) -> Result<C
                     (&lists[k], &evaluated.pairs[range], &evaluated.bands[k]),
                     (&rest, &flight_spectra.at(x, y)),
                     Resolution::MAP,
-                );
-                (at, (layers, ndens))
+                )?;
+                Ok((at, (layers, ndens)))
             })
-            .collect();
+            .collect::<Result<_, String>>()?;
         Ok((painted, indoor))
     };
     // With a card, two passes run at once: one's lists and loudness on the cores while the other's
