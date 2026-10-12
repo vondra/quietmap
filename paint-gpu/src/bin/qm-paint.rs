@@ -82,19 +82,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
     let zoom: u32 = required("zoom")?
         .parse()
         .map_err(|_| "--zoom is 12 or 13")?;
-    let grid = match zoom {
-        12 => Grid {
-            pixels: 512,
-            block: 8,
-            hum: 64,
-        },
-        13 => Grid {
-            pixels: 1024,
-            block: 16,
-            hum: 128,
-        },
-        _ => return Err("--zoom is 12 or 13".into()),
-    };
+    let grid = Grid::at_zoom(zoom).ok_or("--zoom is 12 or 13")?;
     let squares = squares(arguments)?;
     // The card, if this host has one (CUDA_VISIBLE_DEVICES chooses it); else the cores, said
     // aloud (the CUDA loader panics where the driver's libraries are missing).

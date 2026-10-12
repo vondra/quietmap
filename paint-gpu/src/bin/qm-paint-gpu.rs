@@ -111,11 +111,7 @@ fn run(arguments: &[String]) -> Result<(), String> {
             device_square: &device_square,
             square: &square,
         };
-        let grid = paint::paint::Grid {
-            pixels: 1024,
-            block: 16,
-            hum: 128,
-        };
+        let grid = paint::paint::Grid::at_zoom(13).ok_or("no grid at zoom 13")?;
         let cells = paint::etalon::etalon(&square, grid, Some(&batch), sample_step)?;
         paint::hm3::write(&out, 13, (tile.x, tile.y), &cells)?;
         println!(
