@@ -36,13 +36,6 @@ pub struct Scratch {
     ray: RayScratch,
 }
 
-impl Scratch {
-    /// The ground under the last ray [`trace`] followed.
-    pub fn profile(&self) -> &Profile {
-        &self.profile
-    }
-}
-
 impl Receiver<'_, '_> {
     /// Direction of travel from `point` to the receiver, radians anticlockwise from east.
     fn azimuth(&self, point: [f64; 2]) -> f64 {
@@ -61,17 +54,6 @@ fn ray_ends(receiver: &Receiver, source: &SourceAttribute) -> RayEnds {
         platform_half_width_m: source.platform_half_width_m,
         own_footprint: source.footprint_id,
     }
-}
-
-/// The terms of the ray from `point` of `source` to the receiver, every obstacle on it (traces and
-/// comparisons).
-pub fn trace(
-    receiver: &Receiver,
-    point: [f64; 2],
-    source: &SourceAttribute,
-    scratch: &mut Scratch,
-) -> Result<RayTerms, String> {
-    ray(receiver, point, true, &ray_ends(receiver, source), scratch)
 }
 
 /// Received A-weighted energy per period and octave band.

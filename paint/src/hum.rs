@@ -1,9 +1,8 @@
-//! The lattice of a square's coarse cells: at every point, each ground source loud there
-//! (`popup::candidates::loud`) evaluated exactly, and the quiet hum, per layer the energy of every
-//! other source within the ground reach as the popup estimates it at a click
+//! The quiet hum of a square: at points every `spacing` pixels, per layer the energy of the ground
+//! sources not loud there (`popup::candidates::loud`) as the popup estimates it at a click
 //! (`popup::selection::select`: left out under 0.1 dB of the whole answer, else sampled to
-//! 0.05 dB). The hum changes slowly and a pixel takes it blended from the four points around; the
-//! loud sources' energies there serve the painter's far groups (`paint`).
+//! 0.05 dB), over the loud ones evaluated exactly. It changes slowly and a pixel takes it blended
+//! from the four points around; the painter and its etalon take the same.
 
 use crate::exact::{Batch, LAYERS, Point, evaluate_periods};
 use crate::paint::bilinear;
@@ -15,37 +14,26 @@ use rayon::prelude::*;
 use tiles::geo::Mercator;
 use tiles::sources::Layer;
 
-/// The lattice every `spacing` of the square's `pixels` and `margin` cells beyond it on every side,
-/// row-major from the north-west.
-pub struct Lattice {
-    pub side: usize,
-    pub spacing: usize,
-    pub margin: usize,
-    /// Per point the loud sources' Lden energy there, by source.
-    pub loud: Vec<Vec<(u32, f64)>>,
+/// The hum at points every `spacing` of the square's pixels, row-major from the north-west.
+pub struct Hum {
+    side: usize,
+    spacing: usize,
     quiet: Vec<[f64; LAYERS]>,
 }
 
-impl Lattice {
-    /// The lattice every `spacing` pixels, `margin` cells beyond the square; its quiet hum only
-    /// `with_hum`.
+impl Hum {
+    /// The hum of the square (`pixels` a side) at points every `spacing` pixels.
     pub fn new(
         square: &Square,
         pixels: usize,
-        (spacing, margin): (usize, usize),
-        with_hum: bool,
+        spacing: usize,
         batch: Option<&dyn Batch>,
     ) -> Result<Self, String> {
-        let side = pixels / spacing + 1 + 2 * margin;
-        // A point's pixel in the square (negative or past it in the margin).
-        let pixel = |at: usize| -> [i64; 2] {
-            let along = |k: usize| (k as i64 - margin as i64) * spacing as i64;
-            [along(at % side), along(at / side)]
-        };
+        let side = pixels / spacing + 1;
         let points: Vec<Point> = (0..side * side)
             .into_par_iter()
             .map(|at| {
-                let [x, y] = pixel(at);
+                let (x, y) = ((at % side) * spacing, (at / side) * spacing);
                 Point::at(
                     square,
                     square.frame.to_metres(Mercator {
@@ -67,57 +55,38 @@ impl Lattice {
             })
             .flatten()
             .collect();
-        let mut periods = vec![[[0.0; PERIODS]; LAYERS]; points.len()];
-        let mut loud = vec![Vec::new(); points.len()];
+        let mut loud_energy = vec![[[0.0; PERIODS]; LAYERS]; points.len()];
         for (&(k, index), energy) in pairs
             .iter()
             .zip(evaluate_periods(square, &points, &pairs, batch)?)
         {
             let layer = square.candidates[index as usize].layer as usize;
-            for (total, value) in periods[k as usize][layer].iter_mut().zip(energy) {
+            for (total, value) in loud_energy[k as usize][layer].iter_mut().zip(energy) {
                 *total += value;
             }
-            loud[k as usize].push((index, lden_energy(&energy)));
         }
-        loud.par_iter_mut()
-            .for_each(|list| list.sort_unstable_by_key(|&(index, _)| index));
-        let quiet = if with_hum {
-            (0..points.len())
-                .into_par_iter()
-                .map(|k| {
-                    // The point's pixel in the world, so a point two squares share samples alike.
-                    let x =
-                        u64::from(square.tile.x) * pixels as u64 + ((k % side) * spacing) as u64;
-                    let y =
-                        u64::from(square.tile.y) * pixels as u64 + ((k / side) * spacing) as u64;
-                    hum_at(square, &points[k], &periods[k], (x << 32) | y)
-                })
-                .collect::<Result<_, String>>()?
-        } else {
-            vec![[0.0; LAYERS]; points.len()]
-        };
-        Ok(Lattice {
+        let quiet = (0..points.len())
+            .into_par_iter()
+            .map(|k| {
+                // The point's pixel in the world, so a point two squares share samples alike.
+                let x = u64::from(square.tile.x) * pixels as u64 + ((k % side) * spacing) as u64;
+                let y = u64::from(square.tile.y) * pixels as u64 + ((k / side) * spacing) as u64;
+                hum_at(square, &points[k], &loud_energy[k], (x << 32) | y)
+            })
+            .collect::<Result<_, String>>()?;
+        Ok(Hum {
             side,
             spacing,
-            margin,
-            loud,
             quiet,
         })
     }
 
-    /// The cell of the pixel `(x, y)` of the square: its north-west point's column and row, and the
-    /// pixel's centre within the cell (0 to 1 east and south).
-    pub fn cell(&self, x: usize, y: usize) -> (usize, usize, f64, f64) {
-        let last = self.side - 2 - 2 * self.margin;
+    /// The hum at the pixel `(x, y)` of the square, blended from the four points around its centre.
+    pub fn at(&self, x: usize, y: usize) -> [f64; LAYERS] {
+        let last = self.side - 2;
         let (i, j) = ((x / self.spacing).min(last), (y / self.spacing).min(last));
         let fx = ((x - i * self.spacing) as f64 + 0.5) / self.spacing as f64;
         let fy = ((y - j * self.spacing) as f64 + 0.5) / self.spacing as f64;
-        (i + self.margin, j + self.margin, fx, fy)
-    }
-
-    /// The quiet hum at the pixel `(x, y)`, blended from the four points around.
-    pub fn quiet_at(&self, x: usize, y: usize) -> [f64; LAYERS] {
-        let (i, j, fx, fy) = self.cell(x, y);
         let corners = [(0, 0), (1, 0), (0, 1), (1, 1)]
             .map(|(di, dj)| &self.quiet[(j + dj) * self.side + i + di]);
         std::array::from_fn(|layer| bilinear(corners.map(|corner| corner[layer]), fx, fy))

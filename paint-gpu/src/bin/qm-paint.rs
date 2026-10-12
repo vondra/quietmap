@@ -86,14 +86,12 @@ fn run(arguments: &[String]) -> Result<(), String> {
         12 => Grid {
             pixels: 512,
             block: 8,
-            far: 32,
-            coarse: 64,
+            hum: 64,
         },
         13 => Grid {
             pixels: 1024,
             block: 16,
-            far: 64,
-            coarse: 128,
+            hum: 128,
         },
         _ => return Err("--zoom is 12 or 13".into()),
     };

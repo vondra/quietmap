@@ -182,8 +182,9 @@ those painted; a square's files are read once, to the reach of its farthest pixe
 evaluations run on the first CUDA card (`paint-gpu/kernels/`, the popup's pair physics in f32,
 each function citing its Rust) or on the cores. The method is the `paint` crate: `square.rs` (a
 square's neighbourhood, its sources indexed by place and reach), `exact.rs` (the points and the
-exact evaluation of (point, source) pairs), `lattice.rs` (the loud sources exact and the hum at a
-lattice), `paint.rs` and `groups.rs` (the pixels), `flights.rs` and `etalon.rs`. Loud is one rule
+exact evaluation of (point, source) pairs), `hum.rs` (the quiet hum at points 128 pixels apart),
+`paint.rs` (the blocks: their corners, the sources a block computes at every pixel, the pixels),
+`flights.rs` and `etalon.rs`. Loud is one rule
 for the painter, its etalon and the hum: `popup::candidates::loud`, a bound reaching
 `physics::bound::REACH_EDGE_LDEN_DB` (20 dB).
 
@@ -191,7 +192,7 @@ The tiles (`hm3.rs`, HM3 v4): per layer and the total, 512 x 512 cells of twice 
 silence under 0 dB, 255 not assessed);
 `qm-paint pack` (`pack.rs`) builds every zoom down to 2 (energy means) into one PMTiles archive
 per layer and `current.json`, which the server publishes. `qm-paint-gpu check` holds the card
-equal to the cores on random pairs, `pair` compares one pair, `etalon` paints the reference (with
+equal to the cores on random pairs, `etalon` paints the reference (with
 `--sample-step 4` a sixteenth of its outdoor pixels, one drawn in each 4 x 4 cell, the rest not
 assessed),
 `compare` scores a map against the cells it assesses and `popup` scores a map against popup clicks.

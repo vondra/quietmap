@@ -245,33 +245,15 @@ impl Gpu {
             source,
             CompileOptions {
                 arch: Some(arch),
-                maxrregcount: std::env::var("QM_GPU_REGISTERS")
-                    .ok()
-                    .and_then(|v| v.parse().ok()),
-                options: {
-                    let mut options = Vec::new();
-                    if std::env::var("QM_GPU_FAST_MATH").is_ok_and(|v| v == "1") {
-                        options.push("--use_fast_math".into());
-                    }
-                    if std::env::var("QM_GPU_LINEINFO").is_ok_and(|v| v == "1") {
-                        options.push("-lineinfo".into());
-                    }
-                    options
-                },
+                // Fast math: 113 and 290 ns a point and a line pair against 200 and 500, the
+                // agreement with the CPU the same (RTX 5070, evidence/2026-10-09/paint). The
+                // `use_fast_math` field only adds --fmad=true; the flag goes in `options`.
+                options: vec!["--use_fast_math".into()],
                 ..Default::default()
             },
         )
         .map_err(|error| format!("nvrtc: {error}"))?;
-        driver(device.load_ptx(
-            ptx,
-            "paint",
-            &[
-                "evaluate_pairs",
-                "ray_crossings",
-                "line_pair_nodes",
-                "struct_sizes",
-            ],
-        ))?;
+        driver(device.load_ptx(ptx, "paint", &["evaluate_pairs", "struct_sizes"]))?;
         let sizes = driver(device.alloc_zeros::<u64>(HOST_STRUCT_SIZES.len()))?;
         let function = device
             .get_func("paint", "struct_sizes")
@@ -353,137 +335,6 @@ impl Gpu {
                 .map(|chunk| [0, 1, 2].map(|period| f64::from(chunk[period])))
                 .collect(),
             failed,
-        ))
-    }
-}
-
-/// One crossing of a ray as the device walks it: t along the ray, footprint, height, building.
-pub type DeviceCrossing = (f32, u64, f32, bool);
-
-impl Gpu {
-    /// The crossings of the segment `from -> to` (frame metres) in the device walk's order, and
-    /// the walk's failure (0 for none).
-    pub fn ray_crossings(
-        &self,
-        square: &DeviceSquare,
-        from: [f64; 2],
-        to: [f64; 2],
-    ) -> Result<(Vec<DeviceCrossing>, u32), String> {
-        const CAPACITY: usize = 4096;
-        let t = driver(self.device.alloc_zeros::<f32>(CAPACITY))?;
-        let footprint = driver(self.device.alloc_zeros::<u64>(CAPACITY))?;
-        let height = driver(self.device.alloc_zeros::<f32>(CAPACITY))?;
-        let building = driver(self.device.alloc_zeros::<u32>(CAPACITY))?;
-        let out = driver(self.device.alloc_zeros::<u32>(2))?;
-        let function = self
-            .device
-            .get_func("paint", "ray_crossings")
-            .ok_or("kernel ray_crossings missing")?;
-        // SAFETY: the kernel writes at most CAPACITY crossings and two counts.
-        driver(unsafe {
-            function.launch(
-                ONE_THREAD,
-                (
-                    &square.scene,
-                    from[0] as f32,
-                    from[1] as f32,
-                    to[0] as f32,
-                    to[1] as f32,
-                    &t,
-                    &footprint,
-                    &height,
-                    &building,
-                    CAPACITY as u32,
-                    &out,
-                ),
-            )
-        })?;
-        let out = driver(self.device.dtoh_sync_copy(&out))?;
-        let count = (out[0] as usize).min(CAPACITY);
-        let (t, footprint) = (
-            driver(self.device.dtoh_sync_copy(&t))?,
-            driver(self.device.dtoh_sync_copy(&footprint))?,
-        );
-        let (height, building) = (
-            driver(self.device.dtoh_sync_copy(&height))?,
-            driver(self.device.dtoh_sync_copy(&building))?,
-        );
-        Ok((
-            (0..count)
-                .map(|k| (t[k], footprint[k], height[k], building[k] != 0))
-                .collect(),
-            out[1],
-        ))
-    }
-}
-
-/// One line node as the device places it: along the piece (m), weight (rad), whether obstacles
-/// stand on its ray, its weighted period energies.
-pub type DeviceNode = (f32, f32, bool, [f64; PERIODS]);
-
-impl Gpu {
-    /// The quadrature nodes of one line pair (receiver outdoors at `receiver`, frame metres) and
-    /// the failure (0 for none).
-    pub fn line_pair_nodes(
-        &self,
-        square: &DeviceSquare,
-        receiver: [f64; 2],
-        candidate: u32,
-    ) -> Result<(Vec<DeviceNode>, u32), String> {
-        const CAPACITY: usize = 512;
-        let along = driver(self.device.alloc_zeros::<f32>(CAPACITY))?;
-        let weight = driver(self.device.alloc_zeros::<f32>(CAPACITY))?;
-        let blocked = driver(self.device.alloc_zeros::<u32>(CAPACITY))?;
-        let periods = driver(self.device.alloc_zeros::<f32>(PERIODS * CAPACITY))?;
-        let out = driver(self.device.alloc_zeros::<u32>(2))?;
-        let function = self
-            .device
-            .get_func("paint", "line_pair_nodes")
-            .ok_or("kernel line_pair_nodes missing")?;
-        // SAFETY: the kernel writes at most CAPACITY nodes and two counts.
-        driver(unsafe {
-            function.launch(
-                LaunchConfig {
-                    grid_dim: (1, 1, 1),
-                    block_dim: (1, 1, 1),
-                    shared_mem_bytes: 0,
-                },
-                (
-                    &square.scene,
-                    receiver[0] as f32,
-                    receiver[1] as f32,
-                    candidate,
-                    &along,
-                    &weight,
-                    &blocked,
-                    &periods,
-                    CAPACITY as u32,
-                    &out,
-                ),
-            )
-        })?;
-        let out = driver(self.device.dtoh_sync_copy(&out))?;
-        let count = (out[0] as usize).min(CAPACITY);
-        let (along, weight) = (
-            driver(self.device.dtoh_sync_copy(&along))?,
-            driver(self.device.dtoh_sync_copy(&weight))?,
-        );
-        let (blocked, periods) = (
-            driver(self.device.dtoh_sync_copy(&blocked))?,
-            driver(self.device.dtoh_sync_copy(&periods))?,
-        );
-        Ok((
-            (0..count)
-                .map(|k| {
-                    (
-                        along[k],
-                        weight[k],
-                        blocked[k] != 0,
-                        [0, 1, 2].map(|p| f64::from(periods[PERIODS * k + p])),
-                    )
-                })
-                .collect(),
-            out[1],
         ))
     }
 }
