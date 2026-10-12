@@ -1,10 +1,9 @@
 // Off-main-thread palette compose for the heatmap tile pipeline.
 //
-// The energy sum + palette map of a 512² tile costs ~2–8 ms of main-thread
-// time per compose (40–90 ms per pan wave, visible as jank). This wrapper
-// ships the grids to a dedicated worker via structured clone (~0.3 ms — grids
-// stay usable on the main thread for progressive recomposes) and gets the
-// pixels back as a zero-copy transfer.
+// The palette map of a 512² tile costs ~2–8 ms of main-thread time per compose
+// (40–90 ms per pan wave, visible as jank). This wrapper ships the grid to a
+// dedicated worker via structured clone (~0.3 ms) and gets the pixels back as a
+// zero-copy transfer.
 //
 // Falls back to a synchronous main-thread compose when Workers are
 // unavailable, and drains in-flight requests synchronously if the worker
@@ -17,15 +16,14 @@ type Block = { x: number; y: number }
 type Pending = {
   resolve: (img: ImageData) => void
   reject: (err: unknown) => void
-  grids: Uint8Array[]
+  cells: Uint8Array
   width: number
   height: number
   block?: Block
 }
 
-function composeSync(grids: Uint8Array[], width: number, height: number, block?: Block): ImageData {
-  const cells = block ? grids.map((g) => upsampleAncestorBlock(g, block.x, block.y)) : grids
-  return composeToImageData(cells, width, height)
+function composeSync(cells: Uint8Array, width: number, height: number, block?: Block): ImageData {
+  return composeToImageData(block ? upsampleAncestorBlock(cells, block.x, block.y) : cells, width, height)
 }
 
 // undefined = not constructed yet · null = unavailable, use the sync fallback
@@ -54,7 +52,7 @@ function getWorker(): Worker | null {
       // must reject rather than strand every later request behind it.
       for (const p of pending.values()) {
         try {
-          p.resolve(composeSync(p.grids, p.width, p.height, p.block))
+          p.resolve(composeSync(p.cells, p.width, p.height, p.block))
         } catch (err) {
           p.reject(err)
         }
@@ -67,22 +65,21 @@ function getWorker(): Worker | null {
   return worker
 }
 
-/** Energy-sum + palette-map `grids` into a `width × height` ImageData off the
- *  main thread; synchronous on-thread fallback when no worker is available.
- *  Callers pass a SNAPSHOT (`grids.slice()`) when the array can still grow.
- *  With `block`, `grids` are z−PREVIEW_DELTA ancestor grids and the worker
- *  upsamples this child's sub-block of each before composing (preview). */
+/** Palette-map `cells` into a `width × height` ImageData off the main thread;
+ *  synchronous on-thread fallback when no worker is available. With `block`,
+ *  `cells` are a z−PREVIEW_DELTA ancestor grid and the worker upsamples this
+ *  child's sub-block of it before composing (preview). */
 export function composeOffThread(
-  grids: Uint8Array[],
+  cells: Uint8Array,
   width: number,
   height: number,
   block?: Block,
 ): Promise<ImageData> {
   const w = getWorker()
-  if (!w) return Promise.resolve(composeSync(grids, width, height, block))
+  if (!w) return Promise.resolve(composeSync(cells, width, height, block))
   return new Promise((resolve, reject) => {
     const id = nextId++
-    pending.set(id, { resolve, reject, grids, width, height, block })
-    w.postMessage({ id, grids, width, height, block })
+    pending.set(id, { resolve, reject, cells, width, height, block })
+    w.postMessage({ id, cells, width, height, block })
   })
 }

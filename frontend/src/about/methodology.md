@@ -292,7 +292,8 @@ within one distance of the receiver along the road: under one, passes stand apar
 between them; above one, they run together into a steady sound. A road with 600 vehicles an hour
 at 50 km/h is a series of passes 20 m away and a steady sound from about 80 m. One flight a day
 1 km away, at 70 m/s, is near its peak for about half a minute, under 0.1 % of the day's twelve
-hours; the rest of the day that layer is silent there.
+hours; the rest of the day that layer is silent there. A road's traffic can change along it; it
+is heard with the traffic of its stretch loudest at the receiver.
 
 Sources only add up within the same moment, so the sum is taken for every hour of road traffic
 (the morning peak and 3 am differ) and for each of ten weather states (calm and downwind shares,
@@ -301,7 +302,8 @@ share of the period; industry, buildings and ships are steady. The result gives 
 exceeded 5, 10, 50 and 90 % of the time.
 
 Nden, the headline, is the mean over the whole day of how loud every moment is: loudness in
-sone after ISO 532-1 (Zwicker), the period's received spectrum set to the moment's level, the
+sone after ISO 532-1 (Zwicker), the period's received spectrum (the flights' from the spectral
+classes of the loudest flights, each by its sound exposure) set to the moment's level, the
 evening counted 5 dB and the night 10 dB louder, as Lden counts them, and the periods
 weighed by their hours. A sound counts by how loud it is and how long it lasts: a car every
 few hours by a window adds little, a constant hum all of its loudness. Each source in the

@@ -5,6 +5,11 @@ import { TILE_PX } from '../src/lib/hm3-decoder'
 
 export const FIXTURE_DB = 63
 export const SOURCE_DB = 60
+/** The loudness the hermetic tiles carry at the point: each layer's own, and the total's (not
+ *  their sum: loudness does not add over layers). */
+export const ROAD_SONE = 8
+export const RAILWAY_SONE = 4
+export const TOTAL_SONE = 11
 /** The hermetic world's published zoom (a z12 world, while the served heatmap is z13: the
  *  frontend must take its tile ceiling from the manifest). */
 export const TILE_Z = 12
@@ -62,13 +67,14 @@ export function mapUrl(point: PixelCenter, layers = 'road', zoom = TILE_Z): stri
   return `/#lat=${point.lat}&lng=${point.lng}&z=${zoom}&bm=terrain&ro=${layers}`
 }
 
-/** A tile without levels but at most one audible receiver at the expected pixel. */
-function hm3Tile(point?: PixelCenter, db?: number): Buffer {
+/** A tile without levels but at most one audible receiver at the expected pixel, its loudness
+ *  `sone` (HM3 v5: twice the loudness level in phon). */
+function hm3Tile(point?: PixelCenter, sone?: number): Buffer {
   const tile = Buffer.alloc(6 + TILE_PX * TILE_PX, 255)
   tile.write('HM3 ', 0, 'ascii')
-  tile[4] = 3
+  tile[4] = 5
   tile[5] = 1
-  if (point && db != null) tile[6 + point.py * TILE_PX + point.px] = Math.round(db * 2)
+  if (point && sone != null) tile[6 + point.py * TILE_PX + point.px] = Math.round(80 + 20 * Math.log2(sone))
   return tile
 }
 
@@ -155,12 +161,8 @@ export async function endPopup(page: Page): Promise<void> {
   })
 }
 
-/** `paintedDb` is the level the road/rail tiles carry at `point`. */
-export async function installHermeticMap(
-  page: Page,
-  point: PixelCenter,
-  paintedDb = SOURCE_DB,
-): Promise<void> {
+/** The road, railway and total tiles carry their fixture loudness at `point`. */
+export async function installHermeticMap(page: Page, point: PixelCenter): Promise<void> {
   await mockTerrainBasemap(page)
   await installPopupSeam(page)
   await page.route('**/api/tiles-manifest', route => route.fulfill({
@@ -181,11 +183,11 @@ export async function installHermeticMap(
     const source = match?.[1]
     const atPoint = match != null
       && Number(match[2]) === TILE_Z && Number(match[3]) === point.tx && Number(match[4]) === point.ty
-    const level = source === 'road' || source === 'railway' ? paintedDb : undefined
+    const sone = { road: ROAD_SONE, railway: RAILWAY_SONE, total: TOTAL_SONE }[source ?? '']
     return route.fulfill({
       status: 200,
       contentType: 'application/octet-stream',
-      body: atPoint && level != null ? hm3Tile(point, level) : hm3Tile(),
+      body: atPoint && sone != null ? hm3Tile(point, sone) : hm3Tile(),
     })
   })
   await page.route('**/api/reverse?**', route => route.fulfill({

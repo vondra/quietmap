@@ -89,13 +89,14 @@ export default function MapView({
   }, [onGeolocateReadyChange])
 
   const tileBuild = useTileBuild()
-  const activeHeatmapSources = useMemo((): readonly HeatmapSource[] => {
+  // The map shows one source: loudness does not add over layers, so every layer on shows the total
+  // and one layer alone shows that layer's own loudness (`SourceToggles`). A layer the manifest
+  // does not publish (no archive painted yet) has no tiles to fetch.
+  const heatmapSource = useMemo((): HeatmapSource | null => {
     const active = HEATMAP_LAYERS.filter(s => !!heatmapLayers?.[s])
-    // All on → the single precomputed `total` tile (one fetch, no client-side sum);
-    // any subset → fetch + energy-sum those layers. A layer the manifest does not
-    // publish (no archive painted yet) has no tiles to fetch.
-    if (active.length === HEATMAP_LAYERS.length) return ['total']
-    return active.filter(s => tileBuild === null || s in tileBuild.byLayer)
+    if (active.length === 0) return null
+    if (active.length > 1) return 'total'
+    return tileBuild === null || active[0] in tileBuild.byLayer ? active[0] : null
   }, [heatmapLayers, tileBuild])
 
   useEffect(() => {
@@ -165,11 +166,11 @@ export default function MapView({
       {/* Noise heatmap (HM3 tiles out of the pmtiles archives, decoded +
           energy-summed + palette-mapped in the browser) below the labels,
           above the basemap, on its own interleaved deck.gl canvas. */}
-      <HeatmapOverlay sources={activeHeatmapSources} />
+      <HeatmapOverlay source={heatmapSource} />
       <DataLayersOverlay layers={dataLayers ?? []} />
       <QuietZonesLayer enabled={quietClustersEnabled ?? false} threshold={quietThreshold ?? QUIET_THRESHOLD_DEFAULT} />
       <FlyToLocation location={selectedLocation ?? null} onArrived={handleArrived} />
-      <HoverTooltip sources={activeHeatmapSources} />
+      <HoverTooltip source={heatmapSource} />
       <DetailPopup
         isCurrentDetailPosition={isCurrentDetailPosition}
         detailPosition={detailPosition ?? null}

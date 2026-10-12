@@ -5,20 +5,28 @@
 // thread, in its network stack — by the time `fetch().arrayBuffer()` resolves.
 // This decoder therefore does NO decompression: it validates the 6-byte header
 // and returns the raw cells:
-//   0:4  magic "HM3 "   4:1  version = 3 or 4   5:1  source_id   6:…  512×512 u8 cells
-// Cell bytes 0–253 are 2·Lden (0–126.5 dB); version 4 marks an assessed cell under 0 dB with 254
-// (silence) and keeps 255 for a cell not assessed; version 3 wrote 255 for both, and 254 for 127 dB
-// or more, read here as 126.5 dB.
+//   0:4  magic "HM3 "   4:1  version = 5   5:1  source_id   6:…  512×512 u8 cells
+// Version 5 holds loudness (Nden): cell bytes 0–253 are twice the loudness level in phon
+// (40 + 10·log2 sone; 1/16 to 401 sone, a doubling every 20 bytes, 80 one sone), 254 an assessed
+// cell under 1/16 sone (silence), 255 a cell not assessed.
 
 export const TILE_PX = 512
-/** No level: not assessed (outside painted coverage, missing input; in version 3 also silence).
- *  A tile absent from the archive is all this. */
+/** No level: not assessed (outside painted coverage, missing input). A tile absent from the
+ *  archive is all this. */
 export const HM3_NO_LEVEL = 255
-/** Silence: assessed, under 0 dB (version 4). */
+/** Silence: assessed, under 1/16 sone. */
 export const HM3_SILENCE = 254
 const HEADER_BYTES = 6
 const MAGIC = 'HM3 '
-const VERSIONS = [3, 4]
+const VERSION = 5
+
+/** A cell byte's loudness (sone): silence and no level none. The one place the byte decoding
+ *  lives — the renderer's palette and the hover read through it. */
+export const HM3_BYTE_SONE = (() => {
+  const table = new Float32Array(256)
+  for (let byte = 0; byte < HM3_SILENCE; byte++) table[byte] = 2 ** ((byte - 80) / 20)
+  return table
+})()
 
 export interface DecodedHM3Tile {
   /** `TILE_PX * TILE_PX` cells, row-major (py * TILE_PX + px). */
@@ -57,8 +65,6 @@ export function decodeHM3(buf: ArrayBuffer): DecodedHM3Tile {
   const bytes = new Uint8Array(buf)
   const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3])
   if (magic !== MAGIC) throw new Error(`not HM3 (magic = "${magic}")`)
-  if (!VERSIONS.includes(bytes[4])) throw new Error(`HM3 version ${bytes[4]} not one of ${VERSIONS}`)
-  const cells = bytes.subarray(HEADER_BYTES)
-  if (bytes[4] === 3) cells.forEach((byte, k) => byte === HM3_SILENCE && (cells[k] = HM3_SILENCE - 1))
-  return { cells, sourceId: bytes[5] }
+  if (bytes[4] !== VERSION) throw new Error(`HM3 version ${bytes[4]} is not ${VERSION}`)
+  return { cells: bytes.subarray(HEADER_BYTES), sourceId: bytes[5] }
 }

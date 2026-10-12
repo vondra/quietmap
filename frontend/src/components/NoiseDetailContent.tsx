@@ -4,7 +4,7 @@
 // segments. Under the list the whole calculation opens in place.
 // Redrawn on every streamed update of the click.
 import { lazy, Suspense, useEffect, useRef, type ReactNode } from 'react'
-import { ldenToColor } from '../utils/noise-colors'
+import { soneToColor } from '../utils/noise-colors'
 import { fmtSone, wholePercents } from '../utils/formatters'
 import { HoverText } from './ui/info-tip'
 import { restSources, type HiddenRow } from './noise/rest'
@@ -97,7 +97,7 @@ export default function NoiseDetailContent({ data, maxSources, onHighlight, calc
         {data.total_lden != null ? (
           <div className="shrink-0">
             <span data-testid="noise-badge" className="flex items-baseline gap-1.5 leading-none whitespace-nowrap text-foreground">
-              <span className="inline-block size-2.5 rounded-full self-center" style={{ background: ldenToColor(data.total_lden) }} aria-hidden="true" />
+              <span className="inline-block size-2.5 rounded-full self-center" style={{ background: sone != null ? soneToColor(sone) : 'transparent' }} aria-hidden="true" />
               {sone != null
                 ? (
                   <HoverText title={NDEN_TOOLTIP}>

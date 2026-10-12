@@ -7,8 +7,11 @@ import {
   FIXTURE_DB,
   PHONE,
   POINT,
+  RAILWAY_SONE,
+  ROAD_SONE,
   SOURCE_DB,
   TILE_Z,
+  TOTAL_SONE,
   abortedPopupRequests,
   afterPaint,
   canvasCenter,
@@ -21,23 +24,23 @@ import {
 } from './support'
 
 const badge = (page: import('@playwright/test').Page) => page.locator('[data-testid="noise-badge"]:visible')
+const ALL_LAYERS = 'road,railway,industrial,building,ship,aircraft'
 const lden = (page: import('@playwright/test').Page) => page.locator('[data-testid="lden"]:visible')
 
 test('desktop: hover reads the painted cell, the popup redraws on every streamed update', async ({ page }) => {
   await installHermeticMap(page, POINT)
-  const expectedTiles = ['road', 'railway'].map(source =>
-    `/api/tiles/b1/${source}/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`)
-  const tilesLoaded = expectedTiles.map(path => page.waitForResponse(response =>
-    new URL(response.url()).pathname === path && response.status() === 200,
-  ))
-  // Overzoom one exact z12 receiver so its single audible cell spans multiple
-  // screen pixels: a one-cell spatial shift still misses the canvas centre,
-  // and the linear texture filter dilutes the centre pixel far less.
-  await page.goto(mapUrl(POINT, 'road,railway', TILE_Z + 2))
-  await Promise.all(tilesLoaded)
+  const totalTile = `/api/tiles/b1/total/${TILE_Z}/${POINT.tx}/${POINT.ty}.bin`
+  const tileLoaded = page.waitForResponse(response =>
+    new URL(response.url()).pathname === totalTile && response.status() === 200,
+  )
+  // Every layer on shows the total. Overzoom one exact z12 receiver so its single audible cell
+  // spans multiple screen pixels: a one-cell spatial shift still misses the canvas centre, and the
+  // linear texture filter dilutes the centre pixel far less.
+  await page.goto(mapUrl(POINT, ALL_LAYERS, TILE_Z + 2))
+  await tileLoaded
   const { canvas, x, y } = await canvasCenter(page)
   await page.mouse.move(x, y)
-  await expect(page.getByTestId('heatmap-hover')).toHaveText(`Lden: ${(SOURCE_DB + 10 * Math.log10(2)).toFixed(1)} dB`)
+  await expect(page.getByTestId('heatmap-hover')).toHaveText(`${TOTAL_SONE} sone`)
   let combinedPixel: number[] = []
   await expect.poll(async () => {
     await afterPaint(page)
@@ -91,22 +94,25 @@ test('desktop: hover reads the painted cell, the popup redraws on every streamed
 
   await page.locator('button[aria-label="Close"]:visible').click()
   await expect(page.locator('[data-testid="detail-popup"]:visible')).toHaveCount(0)
+  // A layer alone shows its own loudness; tapping it again brings every layer, the total, back.
   const road = page.getByTestId('layer-road').filter({ visible: true })
   const rail = page.getByTestId('layer-railway').filter({ visible: true })
   await expect(road).toHaveAttribute('aria-pressed', 'true')
   await expect(rail).toHaveAttribute('aria-pressed', 'true')
   await rail.click()
-  await expect(rail).toHaveAttribute('aria-pressed', 'false')
-  await page.mouse.move(x, y)
-  await expect(page.getByTestId('heatmap-hover')).toHaveText(`Lden: ${SOURCE_DB.toFixed(1)} dB`)
-  await road.click()
+  await expect(rail).toHaveAttribute('aria-pressed', 'true')
   await expect(road).toHaveAttribute('aria-pressed', 'false')
-  await expect(page.getByTestId('heatmap-hover')).toHaveCount(0)
-  await expect.poll(async () => {
-    await afterPaint(page)
-    const emptyPixel = await pngCenterPixel(page, await canvas.screenshot())
-    return Math.max(...emptyPixel.slice(0, 3))
-  }).toBeLessThanOrEqual(2)
+  await page.mouse.move(x, y)
+  await expect(page.getByTestId('heatmap-hover')).toHaveText(`${RAILWAY_SONE.toFixed(1)} sone`)
+  await road.click()
+  await expect(road).toHaveAttribute('aria-pressed', 'true')
+  await expect(rail).toHaveAttribute('aria-pressed', 'false')
+  await page.mouse.move(x + 1, y)
+  await expect(page.getByTestId('heatmap-hover')).toHaveText(`${ROAD_SONE.toFixed(1)} sone`)
+  await road.click()
+  await expect(rail).toHaveAttribute('aria-pressed', 'true')
+  await page.mouse.move(x, y)
+  await expect(page.getByTestId('heatmap-hover')).toHaveText(`${TOTAL_SONE} sone`)
 })
 
 test('desktop: an error line replaces the partial answer, a new click aborts the old request', async ({ page }) => {
@@ -139,7 +145,7 @@ test('desktop: an error line replaces the partial answer, a new click aborts the
 // that receiver is reads in the detailed calculation, not above the sources, with the levels
 // exceeded in each period.
 test('desktop: the detailed calculation tells the façade receiver and the percentile levels', async ({ page }) => {
-  await installHermeticMap(page, POINT, FIXTURE_DB)
+  await installHermeticMap(page, POINT)
   await page.goto(mapUrl(POINT))
   const { x, y } = await canvasCenter(page)
   await page.mouse.click(x, y)
@@ -168,7 +174,7 @@ test('desktop: the detailed calculation tells the façade receiver and the perce
 // answer never replaces the click's own. How all of its sound arrives in calm air, its loudest
 // segments, and an opened one's sound path, rays and terrain profile.
 test('desktop: an opened row computes its segments, how they arrive and their rays', async ({ page }) => {
-  await installHermeticMap(page, POINT, FIXTURE_DB)
+  await installHermeticMap(page, POINT)
   await page.goto(mapUrl(POINT))
   const { x, y } = await canvasCenter(page)
   await page.mouse.click(x, y)
@@ -278,9 +284,15 @@ test.describe('mobile', () => {
     await page.getByRole('button', { name: 'Toggle layers panel' }).tap()
     const panel = page.locator('[data-testid="layers-panel"]:visible')
     await expect(panel).toBeVisible()
+    // The layer shown alone, tapped, brings every layer (the total) back; another tapped is alone.
     const road = panel.getByTestId('layer-road')
+    const rail = panel.getByTestId('layer-railway')
     await expect(road).toHaveAttribute('aria-pressed', 'true')
+    await expect(rail).toHaveAttribute('aria-pressed', 'false')
     await road.tap()
+    await expect(rail).toHaveAttribute('aria-pressed', 'true')
+    await expect(road).toHaveAttribute('aria-pressed', 'true')
+    await rail.tap()
     await expect(road).toHaveAttribute('aria-pressed', 'false')
   })
 })

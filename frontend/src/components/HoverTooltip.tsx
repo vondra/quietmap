@@ -1,74 +1,65 @@
-// The Lden under the cursor, read from the heatmap tile the renderer painted.
+// The loudness under the cursor, read from the heatmap tile the renderer painted.
 import { useEffect, useMemo, useState } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
 
 import { displayedTileZoom, hm3CellAt, readHeatmapCell, tileCells, type HeatmapCellReadout, type SampledTile } from '../lib/hm3-sample'
 import { buildKey, tileUrl, useTileBuild, type HeatmapSource } from '../lib/tile-urls'
 import { useMapHover } from '../lib/use-map-hover'
+import { fmtSone } from '../utils/formatters'
 import MapHoverBox from './MapHoverBox'
 
 interface Props {
-  /** Layers to read: the active subset, or `['total']` when all are on. */
-  sources: readonly HeatmapSource[]
+  /** The source the map shows: the total or one layer; `null` reads nothing. */
+  source: HeatmapSource | null
 }
 
 /**
- * Floating readout of the Lden under the cursor — the energy-sum of every
- * active heatmap source, read from the SAME tile the renderer painted (the
- * displayed pyramid level), so the number is that of the HM3 cell under the
- * cursor (the painted pixel blends neighbouring cells by linear filtering
- * and quantises to 0.5 dB) and costs a ~15 KB pyramid tile at world zoom
- * instead of a base-zoom tile per hover region.
+ * Floating readout of the loudness under the cursor, read from the SAME tile the renderer painted
+ * (the displayed pyramid level), so the number is that of the HM3 cell under the cursor (the
+ * painted pixel blends neighbouring cells by linear filtering and quantises to half a phon) and
+ * costs a ~15 KB pyramid tile at world zoom instead of a base-zoom tile per hover region.
  */
-export default function HoverTooltip({ sources }: Props) {
+export default function HoverTooltip({ source }: Props) {
   const { current: mapRef } = useMap()
   const build = useTileBuild()
-  const hover = useMapHover(mapRef, sources.length > 0)
+  const hover = useMapHover(mapRef, source !== null)
 
   const cell = useMemo(
     () => (hover && build ? hm3CellAt(hover.lng, hover.lat, displayedTileZoom(build, hover.zoom, window.devicePixelRatio)) : null),
     [hover, build],
   )
-  // The tile changes far less often than the cell: the source tiles are
-  // loaded once per tile × source set × generation (primitive deps, so a
-  // mousemove inside one tile re-uses the sample) and held here so a cache
-  // eviction cannot take them away from the readout.
+  // The tile changes far less often than the cell: it is loaded once per tile × source ×
+  // generation (primitive deps, so a mousemove inside one tile re-uses the sample) and held here
+  // so a cache eviction cannot take it away from the readout.
   const tileZ = cell?.z, tileX = cell?.tx, tileY = cell?.ty
   const sample = useMemo(() => {
-    if (tileZ === undefined || tileX === undefined || tileY === undefined || !build) return null
+    if (tileZ === undefined || tileX === undefined || tileY === undefined || !build || source === null) return null
     return {
-      key: `${buildKey(build, sources)}|${tileZ}/${tileX}/${tileY}`,
-      layers: sources.map((source) => ({ source, url: tileUrl(build, source, tileZ, tileX, tileY) })),
+      key: `${buildKey(build, source)}|${tileZ}/${tileX}/${tileY}`,
+      url: tileUrl(build, source, tileZ, tileX, tileY),
     }
-  }, [tileZ, tileX, tileY, build, sources])
-  const [loaded, setLoaded] = useState<{ key: string; layers: { source: string; tile: SampledTile }[] } | null>(null)
+  }, [tileZ, tileX, tileY, build, source])
+  const [loaded, setLoaded] = useState<{ key: string; tile: SampledTile } | null>(null)
   useEffect(() => {
     if (!sample) return
     let cancelled = false
-    void Promise.all(sample.layers.map(({ source, url }) => tileCells(url).then((tile) => ({ source, tile })))).then((layers) => {
-      if (!cancelled) setLoaded({ key: sample.key, layers })
+    void tileCells(sample.url).then((tile) => {
+      if (!cancelled) setLoaded({ key: sample.key, tile })
     })
     return () => { cancelled = true }
   }, [sample])
 
   if (!hover || !cell || !sample) return null
-  // '…' until every source tile of this sample has landed: a partial or
-  // previous-set sum would mislead.
-  const readout = loaded?.key === sample.key
-    ? heatmapCellReadoutText(readHeatmapCell(loaded.layers, cell))
-    : '…'
-  return <MapHoverBox hover={hover} placement="above" testId="heatmap-hover">Lden: {readout}</MapHoverBox>
+  // '…' until this sample's tile has landed: a previous tile's cell would mislead.
+  const readout = loaded?.key === sample.key ? heatmapCellReadoutText(readHeatmapCell(loaded.tile, cell)) : '…'
+  return <MapHoverBox hover={hover} placement="above" testId="heatmap-hover">{readout}</MapHoverBox>
 }
 
 function heatmapCellReadoutText(readout: HeatmapCellReadout): string {
   switch (readout.kind) {
-    case 'level': return `${readout.ldenDb.toFixed(1)} dB`
-    case 'silence': return 'under 0 dB'
+    case 'level': return `${fmtSone(readout.sone)} sone`
+    case 'silence': return 'silent'
     case 'no-level': return '—'
-    case 'unavailable': return `— (${readout.failedSources.map(heatmapSourceName).join(', ')} unavailable)`
+    case 'unavailable': return '— (unavailable)'
   }
-}
-
-function heatmapSourceName(source: string): string {
-  return source === 'total' ? 'all layers' : source.replace('-', ' ')
 }

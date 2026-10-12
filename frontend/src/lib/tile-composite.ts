@@ -1,8 +1,8 @@
 // Over-zoom composite stitching — the React/deck-independent half of
 // HeatmapOverlay's over-zoom mode (see its overzoomFrom): fetch the base-zoom tiles under the
-// viewport, energy-sum + palette-map them into ONE seamless ImageData (no
-// internal tile borders when magnified). Sources are plain strings here —
-// importing the component's HeatmapSource union back would create a type cycle
+// viewport, palette-map them into ONE seamless ImageData (no internal tile
+// borders when magnified). The source is a plain string here — importing the
+// component's HeatmapSource union back would create a type cycle
 // (buildKey/tileUrl accept strings anyway).
 
 import { fetchAndDecodeHM3, HM3_NO_LEVEL, TILE_PX } from './hm3-decoder'
@@ -22,13 +22,13 @@ type Bounds = [number, number, number, number]
 export type Composite = { image: ImageData; bounds: Bounds }
 type LngLatBounds = { getWest(): number; getEast(): number; getNorth(): number; getSouth(): number }
 
-/** Identity of a built composite — tile build + source set + base tile range.
+/** Identity of a built composite — tile build + source + base tile range.
  *  `update` skips a rebuild while this is unchanged; `apply` paints the composite
  *  only while it still matches the live view (else the cached one is stale → fall
  *  back to tiles). The build snapshot makes a mid-session generation flip rebuild
  *  the composite instead of keeping stale-generation pixels. */
-export function compositeSig(build: TileBuilds, sources: readonly string[], range: Range): string {
-  return `${buildKey(build, sources)}|${[...sources].join(',')}|z${range.z}:${range.x0},${range.x1},${range.y0},${range.y1}`
+export function compositeSig(build: TileBuilds, source: string, range: Range): string {
+  return `${buildKey(build, source)}|z${range.z}:${range.x0},${range.x1},${range.y0},${range.y1}`
 }
 
 /** The composite's tile range covering `bounds` (+ a 1-tile margin), clamped
@@ -47,12 +47,12 @@ export function baseRange(bounds: LngLatBounds, build: TileBuilds): Range {
   return { z, span, x0, x1, y0, y1, cols: x1 - x0 + 1, rows: y1 - y0 + 1 }
 }
 
-/** Stitch the base-zoom tiles of `range` (energy-summed across sources, palette-mapped)
- *  into ONE seamless `ImageData` + its geo bounds. Null if nothing audible. All
- *  source×tile fetches run in one parallel batch. */
+/** Stitch the base-zoom tiles of `range` of `source` (palette-mapped) into ONE
+ *  seamless `ImageData` + its geo bounds. Null if nothing has a level. All tile
+ *  fetches run in one parallel batch. */
 export async function buildComposite(
   range: Range,
-  sources: readonly string[],
+  source: string,
   build: TileBuilds,
   isStale: () => boolean,
 ): Promise<Composite | null> {
@@ -60,42 +60,33 @@ export async function buildComposite(
   if (cols < 1 || rows < 1 || cols * rows > MAX_COMPOSITE_TILES) return null
   const width = cols * TILE_PX
   const height = rows * TILE_PX
-  const jobs: Array<{ source: string; tx: number; ty: number }> = []
-  for (const source of sources) {
-    for (let ty = y0; ty <= y1; ty++) {
-      for (let tx = x0; tx <= x1; tx++) jobs.push({ source, tx, ty })
-    }
+  const jobs: Array<{ tx: number; ty: number }> = []
+  for (let ty = y0; ty <= y1; ty++) {
+    for (let tx = x0; tx <= x1; tx++) jobs.push({ tx, ty })
   }
   const decoded = await Promise.all(
-    jobs.map(({ source, tx, ty }) => {
+    jobs.map(({ tx, ty }) => {
       const wx = ((tx % span) + span) % span
       // 'low' priority: composite fetches carry no abort and a superseded
-      // batch (up to 96×|sources| requests) must not outrank the fresh
-      // view's sharp tiles.
+      // batch (up to 96 requests) must not outrank the fresh view's sharp
+      // tiles.
       return fetchAndDecodeHM3(tileUrl(build, source, z, wx, ty), undefined, 'low')
         .catch(() => null)
     }),
   )
-  // Bucket the landed tiles into one grid per source (allocated only on first
-  // hit); an absent or failed tile stays without a level, painted transparent.
-  const gridBySource = new Map<string, Uint8Array>()
+  // An absent or failed tile stays without a level, painted transparent.
+  let grid: Uint8Array | null = null
   decoded.forEach((d, i) => {
     if (!d?.cells) return
-    const { source, tx, ty } = jobs[i]
-    let grid = gridBySource.get(source)
-    if (!grid) {
-      grid = new Uint8Array(width * height).fill(HM3_NO_LEVEL)
-      gridBySource.set(source, grid)
-    }
-    blit(d.cells, grid, (tx - x0) * TILE_PX, (ty - y0) * TILE_PX, width)
+    grid ??= new Uint8Array(width * height).fill(HM3_NO_LEVEL)
+    blit(d.cells, grid, (jobs[i].tx - x0) * TILE_PX, (jobs[i].ty - y0) * TILE_PX, width)
   })
-  const grids = [...gridBySource.values()]
-  if (grids.length === 0) return null
+  if (grid === null) return null
   // A pan/zoom during the fetches supersedes this composite — bail before the
   // big compose (up to 96 tiles) so stale work never queues ahead of fresh
   // tile composes in the single worker.
   if (isStale()) return null
-  const image = await composeOffThread(grids, width, height)
+  const image = await composeOffThread(grid, width, height)
   const bounds: Bounds = [tileXToLng(x0, z), tileYToLat(y1 + 1, z), tileXToLng(x1 + 1, z), tileYToLat(y0, z)]
   return { image, bounds }
 }

@@ -26,7 +26,7 @@ Three steps:
 
 1. **Sources emit noise.** Roads, trains, planes, ships, factories, wind turbines and buildings — each modelled from real data: traffic counts, timetables, a year of flight tracks, ship positions, registries.
 2. **Sound travels and fades.** Hills and buildings block it, noise barriers screen it, soft ground and the air absorb it — computed with the EU method CNOSSOS-EU, and for aircraft with ECAC Doc 29.
-3. **You see the result.** Click any point and the level there is computed on the spot from every source around it; the map shows the levels in colour, from pale (quiet) through yellow and orange to deep purple (80+ dB).
+3. **You see the result.** Click any point and the level there is computed on the spot from every source around it; the map shows how loud each place sounds, in colour: clear under 1 sone (a quiet room), then pale green, yellow, orange, red and maroon, a colour for each doubling of loudness, maroon from 32 sone.
 
 Each source layer — roads, railways, aircraft, ships, industrial, buildings — is modelled independently and toggles on its own in the map.
 

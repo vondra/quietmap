@@ -1,4 +1,4 @@
-// Quiet zones: a green wash over every heatmap pixel at or below the chosen Lden threshold.
+// Quiet zones: a green wash over every heatmap pixel at or below the chosen loudness threshold.
 import { useEffect, useState } from 'react'
 import { MapboxOverlay } from '@deck.gl/mapbox'
 import { TileLayer } from '@deck.gl/geo-layers'
@@ -8,7 +8,7 @@ import { useMap } from 'react-map-gl/maplibre'
 import { fetchAndDecodeHM3, HM3_NO_LEVEL, HM3_SILENCE, TILE_PX } from '../lib/hm3-decoder'
 import { buildKey, tileUrl, useTileBuild, type TileBuilds } from '../lib/tile-urls'
 
-// Translucent green wash over pixels whose total Lden is at or below the
+// Translucent green wash over pixels whose total loudness is at or below the
 // user threshold. The legacy feature traced H3 hex clusters into outlined
 // polygons (h3-js + flood-fill + boundary stitching) — all of which existed
 // only because hexes had no raster to shade. The heatmap is now a raster,
@@ -22,16 +22,16 @@ const MIN_ZOOM = 5
 
 interface Props {
   enabled: boolean
-  /** Quiet if total Lden ≤ this (dB); pixels without a level are excluded. */
+  /** Quiet if the total loudness ≤ this (sone); pixels without a level are excluded. */
   threshold: number
 }
 
 /**
  * Highlight quiet areas: a deck.gl `TileLayer` over the precomputed `total`
- * raster that paints every pixel at or below `threshold` dB green. deck
+ * raster that paints every pixel at or below `threshold` sone green. deck
  * handles viewport tile loading; a threshold change re-keys the layer so the
  * mask recomputes. Its own overlay sits above the heatmap so the wash shows
- * over the faint sub-40 dB heatmap colours.
+ * over its faint quiet colours.
  */
 export default function QuietZonesLayer({ enabled, threshold }: Props): null {
   const { current: mapRef } = useMap()
@@ -66,11 +66,12 @@ export default function QuietZonesLayer({ enabled, threshold }: Props): null {
 type QuietTile = { cells: Uint8Array }
 
 function makeQuietLayer(threshold: number, build: TileBuilds) {
-  const maxByte = threshold * 2 // HM3 encodes dB × 2
+  // HM3 v5 encodes twice the loudness level in phon: 80 + 20 log2(sone).
+  const maxByte = 80 + 20 * Math.log2(threshold)
   return new TileLayer<QuietTile | null>({
     // Generation snapshot in the id: a flip re-keys the layer so deck drops
     // its tile cache instead of masking stale-generation tiles.
-    id: `quiet-zones-${buildKey(build, ['total'])}`,
+    id: `quiet-zones-${buildKey(build, 'total')}`,
     // Deliberately NO `extent` prop: without one deck renders nothing below
     // minZoom, which is exactly the z5 display floor above — an extent would
     // clamp-and-render the green wash at world zooms instead.
@@ -111,9 +112,9 @@ function makeQuietLayer(threshold: number, build: TileBuilds) {
 }
 
 /**
- * Paint cells with a computed Lden ≤ `maxByte` green, silence among them; leave
+ * Paint cells with a loudness byte ≤ `maxByte` green, silence among them; leave
  * the rest transparent. A cell not assessed stays transparent: an unknown level
- * is not a quiet one (a version-3 tile wrote silence as not assessed too).
+ * is not a quiet one.
  */
 function quietMaskToImageData(cells: Uint8Array, maxByte: number): ImageData {
   const rgba = new Uint8ClampedArray(TILE_PX * TILE_PX * 4)
