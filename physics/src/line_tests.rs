@@ -127,6 +127,19 @@ fn nodes_are_uniform_in_the_in_plane_angle() {
     );
 }
 
+/// A piece seen under less than 3 degrees takes one node, at the middle of its angle, weighing
+/// the whole angle: a 20 m piece 1 km away.
+#[test]
+fn a_piece_seen_under_a_small_angle_takes_one_node() {
+    let geometry = LinePieceGeometry::new([-10.0, 1000.0, -3.95], [10.0, 1000.0, -3.95]).unwrap();
+    assert!(geometry.subtended_angle_rad() < ONE_BUCKET_SPAN_RAD);
+    let mut nodes = Vec::new();
+    line_quadrature_nodes(&geometry, &mut no_obstacles, &mut nodes);
+    assert_eq!(nodes.len(), 1);
+    assert!((nodes[0].weight_rad - geometry.subtended_angle_rad()).abs() < 1e-15);
+    assert!((nodes[0].along_m - 10.0).abs() < 1e-9);
+}
+
 fn wall_scene(nearest_m: f64) -> (LinePieceGeometry, Vec<LineQuadratureNode>) {
     let geometry = LinePieceGeometry::new([-125.0, 20.0, 0.0], [125.0, 20.0, 0.0]).unwrap();
     let wall = SkylineArc {

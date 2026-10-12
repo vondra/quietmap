@@ -4,7 +4,8 @@
 //! For a straight piece and a receiver R, dx/r^2 = dphi/d_perp with phi the angle in the plane
 //! holding the line and R and d_perp the 3D distance from R to the line, so the incoherent point
 //! sum of A_div = 20 lg r + 11 is exactly E = W'/(10^1.1 d_perp) * integral of 10^(-A_path/10)
-//! dphi. The integral takes [`LINE_BUCKET_COUNT`] buckets of equal dphi, one node each. A bucket
+//! dphi. The integral takes [`LINE_BUCKET_COUNT`] buckets of equal dphi, one node each (one bucket
+//! for a piece seen under less than [`ONE_BUCKET_SPAN_RAD`]). A bucket
 //! spanning more than [`WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD`] of horizontal azimuth replaces its node
 //! by geometry-placed nodes: obstacle edges in front of the piece mark a blocked mask over the
 //! bucket's azimuths, and every blocked run and clear gap gets its own nodes, each weighted by its
@@ -19,6 +20,10 @@ use std::f64::consts::PI;
 /// buckets, five 0.1 dB (2026-10-11): a far piece half behind a slope needs its rays where the view
 /// changes, not fewer.
 pub const LINE_BUCKET_COUNT: usize = 5;
+/// A piece seen under less than this in-plane angle takes one bucket, its five rays lying within
+/// it: on Dobříš's four squares the painter 289 -> 155 s with every layer within the same drift
+/// from its etalon; under 5 degrees the railways drift more (2026-10-12).
+pub const ONE_BUCKET_SPAN_RAD: f64 = 3.0 * PI / 180.0;
 /// A bucket wider than this in horizontal azimuth gets geometry-placed nodes (dev4 screening
 /// fixtures 2026-08-08: at 3 deg the worst receiver sits on a 0.85 dB plateau, at 5 deg above 1 dB).
 pub const WIDE_BUCKET_MIN_AZIMUTH_SPAN_RAD: f64 = 3.0 * PI / 180.0;
@@ -179,8 +184,14 @@ pub fn line_quadrature_nodes(
     nodes: &mut Vec<LineQuadratureNode>,
 ) {
     nodes.clear();
-    let bucket_angle = geometry.subtended_angle_rad() / LINE_BUCKET_COUNT as f64;
-    for bucket in 0..LINE_BUCKET_COUNT {
+    let span = geometry.subtended_angle_rad();
+    let buckets = if span < ONE_BUCKET_SPAN_RAD {
+        1
+    } else {
+        LINE_BUCKET_COUNT
+    };
+    let bucket_angle = span / buckets as f64;
+    for bucket in 0..buckets {
         let angle_lo = geometry.start_angle_rad + bucket as f64 * bucket_angle;
         let angle_hi = angle_lo + bucket_angle;
         let before = nodes.len();
