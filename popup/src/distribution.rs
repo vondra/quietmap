@@ -4,13 +4,11 @@
 
 use physics::percentile::relative_intensity;
 
-/// The grid of the level distributions: levels at multiples of [`BIN_DB`] from [`LEVEL_MIN_DB`]
-/// (each bin holds the levels rounding to it, at their mean intensity); a level below the grid
-/// counts as silence. 0.5 dB against 0.1: Nden within 0.09 % at 919 points, the convolution 12
-/// times as fast (`evidence/2026-10-12/sone-map-4`).
-pub const BIN_DB: f64 = 0.5;
+/// The grid of the level distributions: levels at multiples of a step (the resolution's,
+/// `crate::percentiles::Resolution`) from [`LEVEL_MIN_DB`] over [`SPAN_DB`], each bin holding the
+/// levels rounding to it at their mean intensity; a level below the grid counts as silence.
 const LEVEL_MIN_DB: f64 = -30.0;
-pub(crate) const BINS: usize = 360;
+const SPAN_DB: f64 = 180.0;
 /// The probabilities at which a line's distribution is read, each with the share of the time it
 /// stands for: every percent to 0.99 (the levels exceeded 5 to 90 % of the time within one), then
 /// evenly in log(1 - p) to 1 - 1e-8, where a sparse line's rare passes lie (a car a day 10 m away
@@ -40,21 +38,30 @@ fn nodes() -> &'static [(f64, f64)] {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Distribution {
     pub silent: f64,
+    /// The grid's step (dB).
+    bin_db: f64,
     /// Per bin its share of the time and that share times its moments' mean intensity.
     bins: Vec<[f64; 2]>,
 }
 
 impl Distribution {
-    pub(crate) fn empty() -> Self {
+    pub(crate) fn empty(bin_db: f64) -> Self {
         Distribution {
             silent: 0.0,
-            bins: vec![[0.0; 2]; BINS],
+            bin_db,
+            bins: vec![[0.0; 2]; (SPAN_DB / bin_db).round() as usize],
         }
     }
 
+    /// The grid's bins.
+    pub(crate) fn bin_count(&self) -> usize {
+        self.bins.len()
+    }
+
     /// The bin of a level; a level under the grid is held in its lowest bin, at its own intensity.
-    fn bin(level_db: f64) -> usize {
-        (((level_db - LEVEL_MIN_DB) / BIN_DB).round().max(0.0) as usize).min(BINS - 1)
+    fn bin(&self, level_db: f64) -> usize {
+        (((level_db - LEVEL_MIN_DB) / self.bin_db).round().max(0.0) as usize)
+            .min(self.bins.len() - 1)
     }
 
     /// Each bin holding a share of the time: its moments' mean intensity and its share.
@@ -76,9 +83,9 @@ impl Distribution {
 
     /// The bin of a moment at `level_db` with a value at `value_db` added (`-inf` silent; the level
     /// from the two levels, a table); `None` for a silent sum.
-    pub(crate) fn sum_bin(level_db: f64, value_db: f64) -> Option<usize> {
+    pub(crate) fn sum_bin(&self, level_db: f64, value_db: f64) -> Option<usize> {
         (level_db.is_finite() || value_db.is_finite())
-            .then(|| Self::bin(power_sum_db(level_db, value_db)))
+            .then(|| self.bin(power_sum_db(level_db, value_db)))
     }
 
     /// Each level (dB) holding a share of the time, with its share; silence apart.
@@ -102,7 +109,7 @@ impl Distribution {
     /// A distribution of given levels (dB, `-inf` silent) with their shares of the time.
     #[cfg(test)]
     pub fn of_levels(levels: &[(f64, f64)]) -> Self {
-        let mut silence = Distribution::empty();
+        let mut silence = Distribution::empty(crate::percentiles::Resolution::CLICK.bin_db);
         silence.silent = 1.0;
         let values: Vec<(f64, f64)> = levels
             .iter()
@@ -114,11 +121,11 @@ impl Distribution {
     /// The distribution with independent `values` (intensities with their shares of the time)
     /// added at every moment. A sum's bin is [`Self::sum_bin`]; its intensity is kept exact.
     pub(crate) fn with_line(&self, values: &[(f64, f64)]) -> Self {
-        let mut sum = Distribution::empty();
+        let mut sum = Distribution::empty(self.bin_db);
         let levels = value_levels(values);
         let mut add = |level: f64, intensity: f64, share: f64| {
             for (&(value, weight), &value_db) in values.iter().zip(&levels) {
-                match Self::sum_bin(level, value_db) {
+                match self.sum_bin(level, value_db) {
                     Some(bin) => {
                         sum.bins[bin][0] += share * weight;
                         sum.bins[bin][1] += share * weight * (intensity + value);
@@ -204,7 +211,7 @@ mod tests {
     /// of a step of their sum, keep their summed mean (rounding to the grid lost 1.2 dB).
     #[test]
     fn many_quiet_lines_keep_their_energy() {
-        let mut sum = Distribution::empty();
+        let mut sum = Distribution::empty(crate::percentiles::Resolution::CLICK.bin_db);
         sum.silent = 1.0;
         let values = line_values(1.0, 0.5, None);
         let mean: f64 = values.iter().map(|(value, weight)| value * weight).sum();

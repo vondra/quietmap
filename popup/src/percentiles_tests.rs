@@ -2,10 +2,11 @@
 
 use super::*;
 use crate::candidates::DisplayRef;
-use crate::distribution::BIN_DB;
 use crate::update::Contributor;
 use physics::bands::energy;
 use physics::percentile::{exceeded_level_db, relative_intensity};
+
+const BIN_DB: f64 = Resolution::CLICK.bin_db;
 
 /// The distributions of `selections` and `flights`, `fields` the contributors' displays.
 fn distributions(
@@ -15,7 +16,7 @@ fn distributions(
 ) -> [Distribution; PERIODS] {
     let weather = flight_weather(&flights);
     let (lines, steady) = click_lines(selections, (&weather, flights), fields);
-    distributions_of(&lines, steady)
+    distributions_of(&lines, steady, Resolution::CLICK)
 }
 
 /// The time levels of `selections` with no flights and `fields` the contributors' displays.
@@ -97,8 +98,9 @@ fn a_road_runs_at_the_period_shares_its_fields_carry() {
 fn a_road_follows_its_hours_and_movements_their_periods() {
     let steady = Line {
         key: 1,
+        layer: Layer::Road,
         energy: [1.0; PERIODS],
-        weather: &Weather::default(),
+        means: [[1.0; WEATHER_STATES]; PERIODS],
         lambda: [1e6; PERIODS],
         profile: Some(2),
         duty: None,

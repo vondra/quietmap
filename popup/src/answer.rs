@@ -15,6 +15,7 @@ use crate::lines::whole_lines;
 use crate::listing::list_source;
 use crate::obstacles::Scene;
 use crate::percentiles::Percentiles;
+use crate::percentiles::Resolution;
 use crate::release::{Release, RingFiles};
 use crate::scene::Ground;
 use crate::selection::{LayerSelection, select};
@@ -473,7 +474,8 @@ pub fn answer(
                 (&flights_weather, flights_heard),
                 &fields,
             );
-            let distributions = crate::percentiles::distributions_of(&lines, steady);
+            let distributions =
+                crate::percentiles::distributions_of(&lines, steady, Resolution::CLICK);
             let flight_sound = crate::loudness::FlightSound {
                 energy: flight_energy,
                 spectrum_db: Some(crate::aircraft::flights::heard_spectrum(
@@ -481,15 +483,19 @@ pub fn answer(
                     &place_rates_db_per_m(&weather.alpha_db_per_km),
                 )),
             };
-            let curves = crate::loudness::curves(&selections, &flight_sound);
-            let layer_curves = crate::loudness::layer_curves(&selections, &flight_sound);
+            let sounds = crate::loudness::layer_sounds(&selections);
+            let curves = crate::loudness::curves(&sounds, &flight_sound);
+            let layer_curves = crate::loudness::layer_curves(&sounds, &flight_sound);
             let loudness = crate::loudness::loudness(&distributions, &curves);
+            let layer_ndens =
+                crate::loudness::layer_ndens(&lines, &sounds, &layer_curves, Resolution::CLICK);
             (
                 Percentiles::of(&distributions),
                 loudness,
                 curves,
                 layer_curves,
                 (lines, steady),
+                layer_ndens,
             )
         });
         let mut layers = layer_answers(&selections);
@@ -510,7 +516,7 @@ pub fn answer(
                     .collect();
                 (None, None)
             }
-            Some((percentiles, loudness, curves, layer_curves, click_lines)) => {
+            Some((percentiles, loudness, curves, layer_curves, click_lines, layer_ndens)) => {
                 let own_curves = |layer: Layer| {
                     layer_curves
                         .iter()
@@ -552,7 +558,11 @@ pub fn answer(
                     crate::percentiles::rest_lines(unlisted(), rest, &fields);
                 rest_nden_sone = Some(
                     crate::loudness::loudness(
-                        &crate::percentiles::distributions_of(&rest_lines, rest_steady),
+                        &crate::percentiles::distributions_of(
+                            &rest_lines,
+                            rest_steady,
+                            Resolution::CLICK,
+                        ),
                         curves,
                     )
                     .nden_sone,
@@ -574,23 +584,11 @@ pub fn answer(
                 {
                     layer.share = Some(shares.aircraft);
                 }
-                // The aircraft layer alone: its flights' line over its airports' ground operations.
-                let ground = airport_ground.unwrap_or([0.0; PERIODS]);
-                let mut flight_weather = crate::percentiles::Weather::default();
-                flight_weather.add(&flight_energy, &[flight_energy; 2]);
-                let flights_line = crate::percentiles::Line::flights(
-                    &flight_weather,
-                    (flight_energy, flight_energy_lambda),
-                );
-                if let Some(layer) = layers
-                    .iter_mut()
-                    .find(|layer| layer.layer == Layer::Aircraft)
-                {
-                    layer.nden_sone = Some(crate::loudness::own_nden(
-                        Some(&flights_line),
-                        ground,
-                        own_curves(Layer::Aircraft),
-                    ));
+                // Each layer alone: its lines over the rest of its energy, on its own curves.
+                for layer in &mut layers {
+                    layer.nden_sone = (layer_ndens.iter())
+                        .find(|(own, _)| *own == layer.layer)
+                        .and_then(|(_, nden)| *nden);
                 }
                 // A sound path's answer leaves the rows' map lines and the flights' tracks to the
                 // click's own answer, which drew them (its update stays under 100 KB).
