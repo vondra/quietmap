@@ -186,6 +186,68 @@ impl crate::update::Contributor {
     }
 }
 
+/// How a source group sounds in time, read once from its display fields: steady but for its events
+/// (industry, buildings and ships: the share of each period it sounds), passes (a road's vehicles,
+/// a track's trains: per hour by period, their speed in m/s and a road's hourly profile), an
+/// aeroway's movements and ground vehicles a day (spread over the periods by where its energy
+/// fell), or unknown (a road, railway or aeroway whose fields carry no traffic: no line).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Passes {
+    Steady(Option<[f64; PERIODS]>),
+    Traffic([f64; PERIODS], f64, Option<usize>),
+    Movements(f64),
+    Unknown,
+}
+
+impl Passes {
+    /// A `layer` source's passes from its display `fields`: vehicles on a road (the daily flow over
+    /// the period's share and hours, its profile by class), trains on a track (the period's trains
+    /// over its hours), airport movements and ground vehicles on an aeroway.
+    pub fn read(layer: Layer, fields: &serde_json::Value) -> Self {
+        let traffic = match layer {
+            Layer::Industry | Layer::Building | Layer::Ship => return Passes::Steady(duty(fields)),
+            Layer::Road => road_traffic(fields),
+            Layer::Railway => railway_traffic(fields),
+            Layer::Aircraft => {
+                let daily: f64 = [
+                    "arrivals_per_day",
+                    "departures_per_day",
+                    "ground_vehicles_per_day",
+                ]
+                .iter()
+                .filter_map(|name| number(fields, name))
+                .sum();
+                return if daily > 0.0 {
+                    Passes::Movements(daily)
+                } else {
+                    Passes::Unknown
+                };
+            }
+        };
+        traffic.map_or(Passes::Unknown, |(per_hour, speed, profile)| {
+            Passes::Traffic(per_hour, speed, profile)
+        })
+    }
+
+    /// Passes per hour by period, their speed (m/s) and hourly profile for a source of `energy` per
+    /// period (an aeroway's movements by the periods its energy fell in, at taxi speed); `None` for
+    /// a steady source or unknown traffic.
+    fn traffic(&self, energy: [f64; PERIODS]) -> Option<([f64; PERIODS], f64, Option<usize>)> {
+        match *self {
+            Passes::Traffic(per_hour, speed, profile) => Some((per_hour, speed, profile)),
+            Passes::Movements(daily) => {
+                let total: f64 = energy.iter().sum();
+                (total > 0.0).then(|| {
+                    let per_hour =
+                        std::array::from_fn(|p| daily * energy[p] / total / PERIOD_HOURS[p]);
+                    (per_hour, MOVEMENT_SPEED_M_S, None)
+                })
+            }
+            Passes::Steady(_) | Passes::Unknown => None,
+        }
+    }
+}
+
 /// What a line is made of, period by period: its energy, its mean in each of a resolution's merged
 /// weather states and its lambda; its hourly profile and an event's duty.
 pub struct LineParts {
@@ -208,24 +270,22 @@ impl Line {
         }
     }
 
-    /// A group's line: industry, buildings and ships steady but for their events, a road, railway
-    /// or aeroway by its traffic, read from its display `fields`; none for one of those whose
-    /// fields carry no traffic.
-    pub fn of(group: &Group, fields: &serde_json::Value) -> Option<Self> {
+    /// A group's line by its `passes`: steady but for its events, or its passes; none where its
+    /// traffic is unknown.
+    pub fn of(group: &Group, passes: &Passes) -> Option<Self> {
         let Group {
             key,
-            layer,
             energy,
             weather,
             distance_m,
             ..
         } = *group;
-        let steady = matches!(layer, Layer::Industry | Layer::Building | Layer::Ship);
-        let (lambda, profile, duty) = if steady {
-            ([f64::INFINITY; PERIODS], None, duty(fields))
-        } else {
-            let (per_hour, speed, profile) = traffic(layer, fields, energy)?;
-            (lambda(per_hour, speed, distance_m), profile, None)
+        let (lambda, profile, duty) = match *passes {
+            Passes::Steady(duty) => ([f64::INFINITY; PERIODS], None, duty),
+            _ => {
+                let (per_hour, speed, profile) = passes.traffic(energy)?;
+                (lambda(per_hour, speed, distance_m), profile, None)
+            }
         };
         Some(Line {
             key,
@@ -358,86 +418,59 @@ fn events_per_hour(fields: &serde_json::Value) -> Option<[f64; PERIODS]> {
     (events.len() == PERIODS).then(|| std::array::from_fn(|p| events[p] / PERIOD_HOURS[p]))
 }
 
-/// A contributor's passes per hour by day, evening and night, their speed (m/s) and, for a road,
-/// its hourly profile by class, from its display fields: vehicles on a road (the daily flow over
-/// the period's share and hours), trains on a track (the period's trains over its hours), airport
-/// movements and ground vehicles on an aeroway (at taxi speed, by the periods its `energy` fell
-/// in); `None` for a steady source (or one whose fields say nothing).
-fn traffic(
-    layer: Layer,
-    fields: &serde_json::Value,
-    energy: [f64; PERIODS],
-) -> Option<([f64; PERIODS], f64, Option<usize>)> {
-    match layer {
-        Layer::Road => {
-            let daily: f64 = ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"]
+/// A road's vehicles per hour by day, evening and night (its daily flow over the period's share and
+/// hours), their speed (m/s) and its hourly profile by class, from its display fields.
+fn road_traffic(fields: &serde_json::Value) -> Option<([f64; PERIODS], f64, Option<usize>)> {
+    let daily: f64 = ["aadt_light", "aadt_medium", "aadt_heavy", "aadt_moto"]
+        .iter()
+        .filter_map(|name| number(fields, name))
+        .sum();
+    let speed = number(fields, "speed_kmh")? / 3.6;
+    let class = fields
+        .get("road_class")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let motorway = matches!(class, "motorway" | "trunk" | "motorway_link" | "trunk_link");
+    let shares = period_shares(fields).unwrap_or(if motorway {
+        MOTORWAY_PERIOD_SHARES
+    } else {
+        OTHER_PERIOD_SHARES
+    });
+    let profile = if motorway {
+        0
+    } else if matches!(class, "primary" | "primary_link") {
+        1
+    } else {
+        2
+    };
+    (speed > 0.0 && daily > 0.0).then(|| {
+        (
+            std::array::from_fn(|p| daily * shares[p] / PERIOD_HOURS[p]),
+            speed,
+            Some(profile),
+        )
+    })
+}
+
+/// A track's trains per hour by day, evening and night and their speed (m/s), from its display
+/// fields.
+fn railway_traffic(fields: &serde_json::Value) -> Option<([f64; PERIODS], f64, Option<usize>)> {
+    let speed = number(fields, "speed_kmh")? / 3.6;
+    let names = [
+        ["trains_passenger_day", "trains_freight_day"],
+        ["trains_passenger_evening", "trains_freight_evening"],
+        ["trains_passenger_night", "trains_freight_night"],
+    ];
+    (speed > 0.0).then(|| {
+        let per_hour = std::array::from_fn(|p| {
+            let trains: f64 = names[p]
                 .iter()
                 .filter_map(|name| number(fields, name))
                 .sum();
-            let speed = number(fields, "speed_kmh")? / 3.6;
-            let class = fields
-                .get("road_class")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let motorway = matches!(class, "motorway" | "trunk" | "motorway_link" | "trunk_link");
-            let shares = period_shares(fields).unwrap_or(if motorway {
-                MOTORWAY_PERIOD_SHARES
-            } else {
-                OTHER_PERIOD_SHARES
-            });
-            let profile = if motorway {
-                0
-            } else if matches!(class, "primary" | "primary_link") {
-                1
-            } else {
-                2
-            };
-            (speed > 0.0 && daily > 0.0).then(|| {
-                (
-                    std::array::from_fn(|p| daily * shares[p] / PERIOD_HOURS[p]),
-                    speed,
-                    Some(profile),
-                )
-            })
-        }
-        Layer::Railway => {
-            let speed = number(fields, "speed_kmh")? / 3.6;
-            let names = [
-                ["trains_passenger_day", "trains_freight_day"],
-                ["trains_passenger_evening", "trains_freight_evening"],
-                ["trains_passenger_night", "trains_freight_night"],
-            ];
-            (speed > 0.0).then(|| {
-                let per_hour = std::array::from_fn(|p| {
-                    let trains: f64 = names[p]
-                        .iter()
-                        .filter_map(|name| number(fields, name))
-                        .sum();
-                    trains / PERIOD_HOURS[p]
-                });
-                (per_hour, speed, None)
-            })
-        }
-        Layer::Aircraft => {
-            let daily: f64 = [
-                "arrivals_per_day",
-                "departures_per_day",
-                "ground_vehicles_per_day",
-            ]
-            .iter()
-            .filter_map(|name| number(fields, name))
-            .sum();
-            let total: f64 = energy.iter().sum();
-            (daily > 0.0 && total > 0.0).then(|| {
-                (
-                    std::array::from_fn(|p| daily * energy[p] / total / PERIOD_HOURS[p]),
-                    MOVEMENT_SPEED_M_S,
-                    None,
-                )
-            })
-        }
-        Layer::Industry | Layer::Building | Layer::Ship => None,
-    }
+            trains / PERIOD_HOURS[p]
+        });
+        (per_hour, speed, None)
+    })
 }
 
 /// Per period the mean of `energy` in `weather` in each weather state: a piece is favourable while
@@ -484,7 +517,8 @@ pub fn heard(
             steady: false,
         });
     }
-    let (per_hour, speed, _) = traffic(contributor.layer, fields, contributor.energy)?;
+    let (per_hour, speed, _) =
+        Passes::read(contributor.layer, fields).traffic(contributor.energy)?;
     Some(Heard {
         per_hour,
         steady: lambda(per_hour, speed, contributor.distance_m)[0] >= STEADY_LAMBDA,
@@ -509,10 +543,10 @@ pub const HELD_SHARE: f64 = 1e-2;
 pub fn rest_lines<'a>(
     contributors: impl Iterator<Item = &'a crate::update::Contributor>,
     total: [f64; PERIODS],
-    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
+    passes: &dyn Fn(&Group) -> Result<Passes, String>,
 ) -> Result<(Vec<Line>, [f64; PERIODS]), String> {
     let groups = contributors.map(|contributor| contributor.group());
-    let (mut lines, steady) = lines(groups, total, REST_SHARE_MIN, fields)?;
+    let (mut lines, steady) = lines(groups, total, REST_SHARE_MIN, passes)?;
     at_mean_flow(&mut lines);
     Ok((lines, steady))
 }
@@ -531,11 +565,11 @@ fn lines<'a>(
     groups: impl Iterator<Item = Group<'a>>,
     total: [f64; PERIODS],
     share_min: f64,
-    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
+    passes: &dyn Fn(&Group) -> Result<Passes, String>,
 ) -> Result<(Vec<Line>, [f64; PERIODS]), String> {
     let mut lines = groups
         .filter(|group| (0..PERIODS).any(|p| group.energy[p] > share_min * total[p]))
-        .filter_map(|group| (fields(&group).map(|fields| Line::of(&group, &fields))).transpose())
+        .filter_map(|group| (passes(&group).map(|passes| Line::of(&group, &passes))).transpose())
         .collect::<Result<Vec<Line>, String>>()?;
     // The contributors come from hash maps: a fixed order keeps a click's rounding the same.
     lines.sort_by_key(|line| line.key);
@@ -557,14 +591,14 @@ pub fn flight_weather(flights: &([f64; PERIODS], [f64; PERIODS])) -> Weather {
 pub fn click_lines<'a>(
     selections: &'a [LayerSelection],
     flights: (&'a Weather, ([f64; PERIODS], [f64; PERIODS])),
-    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
+    passes: &dyn Fn(&Group) -> Result<Passes, String>,
 ) -> Result<(Vec<Line>, [f64; PERIODS]), String> {
     let total: [f64; PERIODS] =
         std::array::from_fn(|p| selections.iter().map(|s| s.answer_energy()[p]).sum::<f64>());
     let groups = (selections.iter())
         .flat_map(|selection| selection.contributors.values())
         .map(|contributor| contributor.group());
-    place_lines(groups, total, flights, fields)
+    place_lines(groups, total, flights, passes)
 }
 
 /// The lines of a place heard with `total` energy per period: its `groups` that move the level and
@@ -574,9 +608,9 @@ pub fn place_lines<'a>(
     groups: impl Iterator<Item = Group<'a>>,
     total: [f64; PERIODS],
     (weather, flights): (&Weather, ([f64; PERIODS], [f64; PERIODS])),
-    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
+    passes: &dyn Fn(&Group) -> Result<Passes, String>,
 ) -> Result<(Vec<Line>, [f64; PERIODS]), String> {
-    let (mut lines, mut steady) = lines(groups, total, FLUCTUATING_SHARE_MIN, fields)?;
+    let (mut lines, mut steady) = lines(groups, total, FLUCTUATING_SHARE_MIN, passes)?;
     let flights_line = Line::flights(weather, flights);
     for (steady, energy) in steady.iter_mut().zip(flights_line.energy) {
         *steady = (*steady - energy).max(0.0);

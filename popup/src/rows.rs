@@ -87,7 +87,10 @@ pub fn ranked_rows<'a>(
     let scored: Vec<(Contributor, Option<Line>, u64)> = displays
         .par_iter()
         .map(|(contributor, display)| {
-            let line = Line::of(&contributor.group(), display);
+            let line = Line::of(
+                &contributor.group(),
+                &crate::percentiles::Passes::read(contributor.layer, display),
+            );
             let own = match &line {
                 Some(line) => own_nden(Some(line), [0.0; PERIODS], curves(contributor.layer)),
                 None => own_nden(None, contributor.energy, curves(contributor.layer)),

@@ -459,6 +459,12 @@ pub fn answer(
                 display_fields_of(&sources, display.attribute, layer)
             };
         let fields = |group: &crate::percentiles::Group| display_record(group.display, group.layer);
+        let passes = |group: &crate::percentiles::Group| {
+            Ok(crate::percentiles::Passes::read(
+                group.layer,
+                &fields(group)?,
+            ))
+        };
         // The aircraft layer beyond its flights: the airport ground operations, steady.
         let airport_ground: Option<[f64; PERIODS]> = last_ring.then(|| {
             let layer = selections
@@ -478,7 +484,7 @@ pub fn answer(
             let (lines, steady) = crate::percentiles::click_lines(
                 &selections,
                 (&flights_weather, flights_heard),
-                &fields,
+                &passes,
             )?;
             let flight_sound = crate::loudness::FlightSound {
                 energy: flight_energy,
@@ -499,7 +505,7 @@ pub fn answer(
                 &sounds,
                 (&curves, &layer_curves),
                 (&flights_weather, flights_heard),
-                &fields,
+                &passes,
                 Resolution::CLICK,
             )?;
             Ok((
@@ -569,7 +575,7 @@ pub fn answer(
                         .sum()
                 });
                 let (rest_lines, rest_steady) =
-                    crate::percentiles::rest_lines(unlisted(), rest, &fields)?;
+                    crate::percentiles::rest_lines(unlisted(), rest, &passes)?;
                 rest_nden_sone = Some(
                     crate::loudness::loudness(
                         &crate::percentiles::distributions_of(

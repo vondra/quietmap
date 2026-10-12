@@ -6,7 +6,7 @@ use crate::distribution::Distribution;
 use crate::loudness::{LayerSound, NO_FLIGHTS, curves, loudness};
 use crate::percentiles::tests::{contributor, selection};
 use crate::percentiles::{
-    Group, Resolution, Weather, click_lines, distributions_of, flight_weather,
+    Group, Passes, Resolution, Weather, click_lines, distributions_of, flight_weather,
 };
 use physics::bands::{BANDS, energy};
 
@@ -108,7 +108,7 @@ fn shares_split_exactly_the_moments_of_the_distributions() {
     let lines = [
         passes(&near, 55.0, 0.05),
         passes(&far, 50.0, 0.3),
-        Line::of(&bells.group(), &fields).expect("an event line"),
+        Line::of(&bells.group(), &Passes::read(bells.layer, &fields)).expect("an event line"),
     ];
     let shares = loudness_shares(&lines, &[0, 1, 2], &[[0.0; PERIODS]; 3], &curves);
     let summed: f64 = shares.iter().sum();
@@ -140,7 +140,8 @@ fn every_line_and_every_steady_part_has_one_row() {
     };
     let flights = ([energy(42.0); PERIODS], [energy(42.0) * 0.01; PERIODS]);
     let weather = flight_weather(&flights);
-    let (lines, remainder) = click_lines(&selections, (&weather, flights), &traffic).unwrap();
+    let passes = |c: &Group| traffic(c).map(|fields| Passes::read(c.layer, &fields));
+    let (lines, remainder) = click_lines(&selections, (&weather, flights), &passes).unwrap();
     let shares = row_shares(&selections, &[&road, &site], (&lines, remainder), &curves);
     let total: f64 = shares.listed.iter().sum::<f64>() + shares.aircraft + shares.rest;
     assert!((total - 1.0).abs() < 1e-12, "{shares:?}");
