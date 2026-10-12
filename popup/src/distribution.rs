@@ -1,14 +1,16 @@
-//! How levels add over time: a distribution of the summed level on a 0.1 dB grid that keeps each
+//! How levels add over time: a distribution of the summed level on a 0.5 dB grid that keeps each
 //! bin's mean intensity, and a line's intensities at fixed probabilities (Kurze's quantiles,
 //! `physics::percentile`), so independent sounds are added exactly in energy and nearly in level.
 
 use physics::percentile::relative_intensity;
 
 /// The grid of the level distributions: levels at multiples of [`BIN_DB`] from [`LEVEL_MIN_DB`]
-/// (each bin holds the levels rounding to it); a level below the grid counts as silence.
-pub const BIN_DB: f64 = 0.1;
+/// (each bin holds the levels rounding to it, at their mean intensity); a level below the grid
+/// counts as silence. 0.5 dB against 0.1: Nden within 0.09 % at 919 points, the convolution 12
+/// times as fast (`evidence/2026-10-12/sone-map-4`).
+pub const BIN_DB: f64 = 0.5;
 const LEVEL_MIN_DB: f64 = -30.0;
-pub(crate) const BINS: usize = 1_800;
+pub(crate) const BINS: usize = 360;
 /// The probabilities at which a line's distribution is read, each with the share of the time it
 /// stands for: every percent to 0.99 (the levels exceeded 5 to 90 % of the time within one), then
 /// evenly in log(1 - p) to 1 - 1e-8, where a sparse line's rare passes lie (a car a day 10 m away
@@ -199,7 +201,7 @@ mod tests {
     use super::*;
 
     /// Adding many lines loses no energy to the grid: 500 identical lines, each soon a small part
-    /// of a 0.1 dB step of their sum, keep their summed mean (rounding to the grid lost 1.2 dB).
+    /// of a step of their sum, keep their summed mean (rounding to the grid lost 1.2 dB).
     #[test]
     fn many_quiet_lines_keep_their_energy() {
         let mut sum = Distribution::empty();
