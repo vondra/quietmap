@@ -612,86 +612,59 @@ pub fn layered_distributions(
     layers: &[(&[Line], [f64; PERIODS])],
     resolution: Resolution,
 ) -> (Vec<[Distribution; PERIODS]>, [Distribution; PERIODS]) {
-    let profiled =
-        (layers.iter()).any(|(lines, _)| lines.iter().any(|line| line.profile.is_some()));
+    let follows = |lines: &[Line]| lines.iter().any(|line| line.profile.is_some());
+    let profiled = layers.iter().any(|(lines, _)| follows(lines));
+    let states = resolution.weather_states;
     let periods: [(Vec<Distribution>, Distribution); PERIODS] = std::array::from_fn(|p| {
         let (groups, hours) = hour_groups(profiled, p, resolution.hour_groups);
-        let states = resolution.weather_states;
-        let means: Vec<Vec<Vec<f64>>> = (layers.iter())
-            .map(|(lines, _)| {
-                (lines.iter())
-                    .map(|line| merged_states(&line.means[p], states))
-                    .collect()
+        // A layer none of whose lines follows a profile sounds alike in every group of hours.
+        let alike: Vec<Option<States>> = (layers.iter())
+            .map(|&(lines, steady)| {
+                (!follows(lines))
+                    .then(|| layer_states(lines, steady[p], (p, &groups[0]), resolution))
             })
             .collect();
-        // Every group of hours apart, in parallel, its lines' shapes shared by the weather states.
-        let parts: Vec<(f64, Vec<Distribution>, Distribution)> = (0..groups.len())
-            .into_par_iter()
-            .flat_map_iter(|group| {
-                let slots = &groups[group];
-                let factors: Vec<Vec<f64>> = (layers.iter())
-                    .map(|(lines, _)| {
-                        (lines.iter())
-                            .map(|line| {
-                                line.profile.map_or(1.0, |profile| {
-                                    slots
-                                        .iter()
-                                        .map(|&slot| hour_factor(profile, p, slot))
-                                        .sum::<f64>()
-                                        / slots.len() as f64
-                                })
-                            })
-                            .collect()
+        // Every group of hours apart, in parallel: each layer's distribution in each weather state,
+        // and the place's, the layers' added.
+        let parts: Vec<(f64, Vec<Option<States>>, States)> = (groups.par_iter())
+            .map(|slots| {
+                let own: Vec<Option<Vec<Distribution>>> = (layers.iter().zip(&alike))
+                    .map(|(&(lines, steady), alike)| {
+                        alike
+                            .is_none()
+                            .then(|| layer_states(lines, steady[p], (p, slots), resolution))
                     })
                     .collect();
-                let shapes: Vec<Vec<Option<Shape>>> = (layers.iter().zip(&factors))
-                    .map(|((lines, _), factors)| {
-                        (lines.iter().zip(factors))
-                            .map(|(line, &factor)| line.shape(p, factor))
-                            .collect()
-                    })
-                    .collect();
-                let weight = slots.len() as f64 / (hours * states) as f64;
-                (0..states)
+                let wholes = (0..states)
                     .map(|state| {
-                        let each: Vec<Distribution> = (layers.iter().enumerate())
-                            .map(|(layer, (lines, steady))| {
-                                let state_means: Vec<f64> =
-                                    (means[layer].iter()).map(|means| means[state]).collect();
-                                let moment = moment(
-                                    lines,
-                                    &shapes[layer],
-                                    (&state_means, &factors[layer]),
-                                    steady[p],
-                                    p,
-                                );
-                                // What holds steady first: a moving line's quiet moments fall
-                                // into its bin.
-                                let mut sum = Distribution::empty(resolution.bin_db);
-                                sum.silent = 1.0;
-                                sum = sum.over(moment.floor);
-                                for &(_, values, mean) in &moment.moving {
-                                    sum = sum.with_line((values, mean));
-                                }
-                                sum
-                            })
-                            .collect();
-                        let mut whole = each[0].clone();
-                        for layer in &each[1..] {
-                            whole = whole.with_distribution(layer);
-                        }
-                        (weight, each, whole)
+                        let mut each = (own.iter().zip(&alike))
+                            .map(|(own, alike)| &own.as_ref().or(alike.as_ref()).unwrap()[state]);
+                        let first = each.next().expect("a place has layers").clone();
+                        each.fold(first, |whole, layer| whole.with_distribution(layer))
                     })
-                    .collect::<Vec<_>>()
+                    .collect();
+                (slots.len() as f64 / (hours * states) as f64, own, wholes)
             })
             .collect();
-        let mut each = vec![Distribution::empty(resolution.bin_db); layers.len()];
+        let mut each: Vec<Distribution> = (alike.iter())
+            .map(|alike| {
+                let mut mixture = Distribution::empty(resolution.bin_db);
+                for part in alike.iter().flatten() {
+                    mixture.add_scaled(part, 1.0 / states as f64);
+                }
+                mixture
+            })
+            .collect();
         let mut whole = Distribution::empty(resolution.bin_db);
-        for (weight, parts, part) in &parts {
-            for (mixture, part) in each.iter_mut().zip(parts) {
-                mixture.add_scaled(part, *weight);
+        for (weight, own, wholes) in &parts {
+            for (mixture, own) in each.iter_mut().zip(own) {
+                for part in own.iter().flatten() {
+                    mixture.add_scaled(part, *weight);
+                }
             }
-            whole.add_scaled(part, *weight);
+            for part in wholes {
+                whole.add_scaled(part, *weight);
+            }
         }
         (each, whole)
     });
@@ -701,6 +674,50 @@ pub fn layered_distributions(
         .map(|((day, evening), night)| [day, evening, night])
         .collect();
     (each, whole)
+}
+
+/// A distribution per weather state.
+type States = Vec<Distribution>;
+
+/// One layer's distributions in the hours `slots` of `period`, one per weather state of
+/// `resolution`: its `steady` energy with its moving lines added, their shapes shared by the
+/// states.
+fn layer_states(
+    lines: &[Line],
+    steady: f64,
+    (period, slots): (usize, &[usize]),
+    resolution: Resolution,
+) -> States {
+    let factors: Vec<f64> = (lines.iter())
+        .map(|line| {
+            line.profile.map_or(1.0, |profile| {
+                (slots.iter())
+                    .map(|&slot| hour_factor(profile, period, slot))
+                    .sum::<f64>()
+                    / slots.len() as f64
+            })
+        })
+        .collect();
+    let shapes: Vec<Option<Shape>> = (lines.iter().zip(&factors))
+        .map(|(line, &factor)| line.shape(period, factor))
+        .collect();
+    let means: Vec<Vec<f64>> = (lines.iter())
+        .map(|line| merged_states(&line.means[period], resolution.weather_states))
+        .collect();
+    (0..resolution.weather_states)
+        .map(|state| {
+            let state_means: Vec<f64> = means.iter().map(|means| means[state]).collect();
+            let moment = moment(lines, &shapes, (&state_means, &factors), steady, period);
+            // What holds steady first: a moving line's quiet moments fall into its bin.
+            let mut sum = Distribution::empty(resolution.bin_db);
+            sum.silent = 1.0;
+            sum = sum.over(moment.floor);
+            for &(_, values, mean) in &moment.moving {
+                sum = sum.with_line((values, mean));
+            }
+            sum
+        })
+        .collect()
 }
 
 /// A period's hours in groups of `groups` (`None`: every hour apart) and how many there are: one
