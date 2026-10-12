@@ -243,16 +243,21 @@ impl Line {
         self.means[period]
     }
 
-    /// The line's intensities in an hour of `period` with `factor` its flow then and the line at
-    /// `mean` (its weather state's), each with its share of the time; a line that holds its mean
-    /// one value, an event its duty.
-    fn values(&self, period: usize, mean: f64, factor: f64) -> LineValues {
+    /// The line's shape in hours of `period` with `factor` its flow then against the period's
+    /// mean; `None` where it holds its mean (a dense line) or is silent (an event off then).
+    pub(crate) fn shape(&self, period: usize, factor: f64) -> Option<Shape> {
         let lambda = self.lambda[period] * factor;
         match self.duty.map(|duty| duty[period]) {
-            Some(duty) if duty > 0.0 => line_values(mean * factor, 0.0, Some(duty)),
-            Some(_) => LineValues::of(Vec::new()),
-            None if lambda >= HOLDS_MEAN_LAMBDA => LineValues::of(vec![(mean * factor, 1.0)]),
-            None => line_values(mean * factor, lambda, None),
+            Some(duty) if duty > 0.0 => Some(Shape {
+                values: line_values(0.0, Some(duty)),
+                exceeded: None,
+            }),
+            Some(_) => None,
+            None if lambda >= HOLDS_MEAN_LAMBDA => None,
+            None => Some(Shape {
+                values: line_values(lambda, None),
+                exceeded: Some(relative_intensity(lambda, 1.0 - HELD_EXCEEDED)),
+            }),
         }
     }
 
@@ -272,11 +277,19 @@ impl Line {
             None => vec![1.0],
         };
         let weight = 1.0 / (factors.len() * WEATHER_STATES) as f64;
-        for mean in self.state_means(period) {
-            for &factor in &factors {
-                let values = self.values(period, mean, factor);
-                let silent = 1.0 - values.pairs().iter().map(|(_, share)| share).sum::<f64>();
-                for (value, share) in values.pairs().iter().copied().chain([(0.0, silent)]) {
+        for &factor in &factors {
+            let shape = self.shape(period, factor);
+            let values: &[(f64, f64)] = match &shape {
+                Some(shape) => shape.values.pairs(),
+                None if self.duty.is_some() => &[],
+                None => &[(1.0, 1.0)],
+            };
+            let silent = 1.0 - values.iter().map(|(_, share)| share).sum::<f64>();
+            for mean in self.state_means(period) {
+                let scaled = values
+                    .iter()
+                    .map(|&(relative, share)| (mean * factor * relative, share));
+                for (value, share) in scaled.chain([(0.0, silent)]) {
                     if floor + value > 0.0 && share > 0.0 {
                         visit(10.0 * (floor + value).log10(), share * weight);
                     }
@@ -594,11 +607,11 @@ pub fn distributions_of(
         let means: Vec<Vec<f64>> = (lines.iter())
             .map(|line| merged_states(&line.means[p], states))
             .collect();
-        // Every group of hours and weather state apart, in parallel.
-        let parts: Vec<(f64, Distribution)> = (0..groups.len() * states)
+        // Every group of hours apart, in parallel, its lines' shapes shared by the weather states.
+        let parts: Vec<(f64, Distribution)> = (0..groups.len())
             .into_par_iter()
-            .map(|task| {
-                let (slots, state) = (&groups[task / states], task % states);
+            .flat_map_iter(|group| {
+                let slots = &groups[group];
                 let factors: Vec<f64> = (lines.iter())
                     .map(|line| {
                         line.profile.map_or(1.0, |profile| {
@@ -610,17 +623,25 @@ pub fn distributions_of(
                         })
                     })
                     .collect();
-                let state_means: Vec<f64> = means.iter().map(|means| means[state]).collect();
-                let moment = moment(lines, (&state_means, &factors), steady[p], p);
-                // What holds steady first: a moving line's quiet moments fall into its bin.
-                let mut sum = Distribution::empty(resolution.bin_db);
-                sum.silent = 1.0;
-                sum = sum.over(moment.floor);
-                for (_, values) in &moment.moving {
-                    sum = sum.with_line(values);
-                }
+                let shapes: Vec<Option<Shape>> = (lines.iter().zip(&factors))
+                    .map(|(line, &factor)| line.shape(p, factor))
+                    .collect();
                 let weight = slots.len() as f64 / (hours * states) as f64;
-                (weight, sum)
+                (0..states)
+                    .map(|state| {
+                        let state_means: Vec<f64> =
+                            means.iter().map(|means| means[state]).collect();
+                        let moment = moment(lines, &shapes, (&state_means, &factors), steady[p], p);
+                        // What holds steady first: a moving line's quiet moments fall into its bin.
+                        let mut sum = Distribution::empty(resolution.bin_db);
+                        sum.silent = 1.0;
+                        sum = sum.over(moment.floor);
+                        for &(_, values, mean) in &moment.moving {
+                            sum = sum.with_line((values, mean));
+                        }
+                        (weight, sum)
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect();
         let mut mixture = Distribution::empty(resolution.bin_db);
@@ -687,60 +708,69 @@ fn merged_states(means: &[f64; WEATHER_STATES], states: usize) -> Vec<f64> {
         .collect()
 }
 
-/// One hour and weather state of a period: the energy that holds steady (`steady` and the lines
-/// that hold their mean, each such line's part by its index) and the lines that move the level,
-/// with their values, the events first.
-pub(crate) struct Moment {
-    pub floor: f64,
-    pub holding: Vec<(usize, f64)>,
-    pub moving: Vec<(usize, LineValues)>,
+/// A line's moving values in hours of a period, relative to its mean then (each weather state
+/// scales them by its own): an event's silence and sound, or a sparse line's Kurze quantiles at its
+/// lambda then, with its intensity exceeded a thousandth of the time.
+pub(crate) struct Shape {
+    values: LineValues,
+    /// `None` for an event, which moves the level whenever it sounds.
+    exceeded: Option<f64>,
 }
 
-/// The moment of `lines` in `period`: each line's mean in the moment's weather state and its flow
-/// then against the period's mean (`state_means`, `factors`).
-pub(crate) fn moment(
+/// One hour and weather state of a period: the energy that holds steady (`steady` and the lines
+/// that hold their mean, each such line's part by its index) and the lines that move the level,
+/// with their values relative to their mean and that mean, the events first.
+pub(crate) struct Moment<'a> {
+    pub floor: f64,
+    pub holding: Vec<(usize, f64)>,
+    pub moving: Vec<(usize, &'a LineValues, f64)>,
+}
+
+/// The moment of `lines` in `period`: their `shapes` then, each line's mean in the moment's
+/// weather state and its flow then against the period's mean (`state_means`, `factors`).
+pub(crate) fn moment<'a>(
     lines: &[Line],
+    shapes: &'a [Option<Shape>],
     (state_means, factors): (&[f64], &[f64]),
     steady: f64,
     period: usize,
-) -> Moment {
+) -> Moment<'a> {
     let mut moment = Moment {
         floor: steady,
         holding: Vec::new(),
         moving: Vec::new(),
     };
     let mut held = Vec::new();
-    for (index, (line, (&state_mean, &factor))) in lines
-        .iter()
-        .zip(state_means.iter().zip(factors))
-        .enumerate()
-    {
-        if line.energy[period] <= 0.0 {
+    for (index, (line, shape)) in lines.iter().zip(shapes).enumerate() {
+        let mean = state_means[index] * factors[index];
+        if line.energy[period] <= 0.0 || mean <= 0.0 {
             continue;
         }
-        let mean = state_mean * factor;
-        let lambda = line.lambda[period] * factor;
-        match line.duty.map(|duty| duty[period]) {
-            Some(duty) if duty > 0.0 => moment
-                .moving
-                .push((index, line_values(mean, 0.0, Some(duty)))),
-            Some(_) => {}
-            None if lambda >= HOLDS_MEAN_LAMBDA => {
+        match shape {
+            Some(Shape {
+                values,
+                exceeded: None,
+            }) => moment.moving.push((index, values, mean)),
+            Some(Shape {
+                values,
+                exceeded: Some(exceeded),
+            }) => held.push((index, values, mean, *exceeded)),
+            None if line.duty.is_some() => {}
+            None => {
                 moment.floor += mean;
                 moment.holding.push((index, mean));
             }
-            None => held.push((index, mean, lambda)),
         }
     }
     // A line moves the level unless its level exceeded a thousandth of the time stays a hundredth
     // of the steady energy: then it holds its mean in it.
-    let steady_energy = moment.floor + held.iter().map(|(_, mean, _)| mean).sum::<f64>();
-    for (index, mean, lambda) in held {
-        if mean * relative_intensity(lambda, 1.0 - HELD_EXCEEDED) < HELD_SHARE * steady_energy {
+    let steady_energy = moment.floor + held.iter().map(|&(_, _, mean, _)| mean).sum::<f64>();
+    for (index, values, mean, exceeded) in held {
+        if mean * exceeded < HELD_SHARE * steady_energy {
             moment.floor += mean;
             moment.holding.push((index, mean));
         } else {
-            moment.moving.push((index, line_values(mean, lambda, None)));
+            moment.moving.push((index, values, mean));
         }
     }
     moment

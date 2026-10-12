@@ -10,7 +10,7 @@
 
 use crate::distribution::Distribution;
 use crate::loudness::Curve;
-use crate::percentiles::{Line, Resolution, WEATHER_STATES, at_mean_flow, moment};
+use crate::percentiles::{Line, Resolution, Shape, WEATHER_STATES, at_mean_flow, moment};
 use crate::selection::LayerSelection;
 use crate::update::Contributor;
 use physics::bands::{PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS};
@@ -105,6 +105,10 @@ pub fn loudness_shares(
     let means: Vec<Vec<[f64; WEATHER_STATES]>> = (0..PERIODS)
         .map(|period| lines.iter().map(|line| line.state_means(period)).collect())
         .collect();
+    // The lines at their mean flow every hour (`at_mean_flow`): one shape a period.
+    let shapes: Vec<Vec<Option<Shape>>> = (0..PERIODS)
+        .map(|period| lines.iter().map(|line| line.shape(period, 1.0)).collect())
+        .collect();
     let parts: Vec<Vec<f64>> = (0..PERIODS * WEATHER_STATES)
         .into_par_iter()
         .map(|task| {
@@ -112,6 +116,7 @@ pub fn loudness_shares(
             let weight = PERIOD_HOURS[period] / 24.0 / WEATHER_STATES as f64;
             moment_shares(
                 (lines, &means[period], owners),
+                &shapes[period],
                 steady,
                 &curves[period],
                 (period, state),
@@ -126,24 +131,31 @@ pub fn loudness_shares(
         .collect()
 }
 
-/// The owners' loudness over the moments of one weather `state` of `period`.
+/// The owners' loudness over the moments of one weather `state` of `period`, the lines' `shapes`
+/// then.
 fn moment_shares(
     (lines, means, owners): (&[Line], &[[f64; WEATHER_STATES]], &[usize]),
+    shapes: &[Option<Shape>],
     steady: &[[f64; PERIODS]],
     curve: &Curve,
     (period, state): (usize, usize),
 ) -> Vec<f64> {
     let total_steady: f64 = steady.iter().map(|energy| energy[period]).sum();
     let state_means: Vec<f64> = means.iter().map(|means| means[state]).collect();
-    // The lines at their mean flow every hour (`at_mean_flow`).
     let factors = vec![1.0; lines.len()];
-    let moment = moment(lines, (&state_means, &factors), total_steady, period);
+    let moment = moment(
+        lines,
+        shapes,
+        (&state_means, &factors),
+        total_steady,
+        period,
+    );
     // Forward: the moments before each moving line, from what holds steady.
     let mut silence = Distribution::empty(Resolution::CLICK.bin_db);
     silence.silent = 1.0;
     let mut before = vec![silence.over(moment.floor)];
-    for (_, values) in &moment.moving {
-        let next = before[before.len() - 1].with_line(values);
+    for &(_, values, mean) in &moment.moving {
+        let next = before[before.len() - 1].with_line((values, mean));
         before.push(next);
     }
     // The loudness per energy at the end, by its bin; silence makes none.
@@ -159,14 +171,14 @@ fn moment_shares(
     let mut shares = vec![0.0; steady.len()];
     // Backward: each moving line's energy times the loudness per energy its moments end in.
     let mut next = vec![0.0; bins];
-    for (position, (line, values)) in moment.moving.iter().enumerate().rev() {
+    for (position, &(line, values, mean)) in moment.moving.iter().enumerate().rev() {
         let prefix = &before[position];
         let mut own = 0.0;
         // From a moment at `intensity`: the loudness per energy expected at the end, and the
         // line's energy times it.
         let step = |intensity: f64| {
             let (mut expected, mut owned) = (0.0, 0.0);
-            prefix.runs(intensity, values, &mut |bin, [shares, weighted]| {
+            prefix.runs(intensity, (values, mean), &mut |bin, [shares, weighted]| {
                 let per_energy = bin.map_or(after_silent, |bin| after[bin]);
                 expected += shares * per_energy;
                 owned += weighted * per_energy;
@@ -180,7 +192,7 @@ fn moment_shares(
         }
         let (expected_silent, owned_silent) = step(0.0);
         own += prefix.silent * owned_silent;
-        shares[owners[*line]] += own;
+        shares[owners[line]] += own;
         std::mem::swap(&mut after, &mut next);
         after_silent = expected_silent;
     }
