@@ -3,8 +3,9 @@
 //! tiles as stored. `qm-paint` paints with the card when there is one; `qm-paint-gpu check` holds
 //! the card equal to the CPU on random pairs.
 //!
-//! Map: [`device`] (the card, the kernels, a square's buffers and the pair evaluation), [`batch`]
-//! (the card as the painter's batch).
+//! Map: [`device`] (the card, the kernels, a square's buffers and the pair evaluation), [`loudness`]
+//! (the pixels' loudness), [`batch`] (the card as the painter's batch).
 
 pub mod batch;
 pub mod device;
+pub mod loudness;

@@ -98,6 +98,10 @@ pub struct Evaluated {
 /// every `(p, c)` of `pairs`.
 pub trait Batch: Sync {
     fn evaluate(&self, points: &[Point], pairs: &[(u32, u32)]) -> Result<Evaluated, String>;
+    /// Each pixel's Nden per layer and in total (sone) from its packed sound
+    /// (`crate::sone::PixelSound::pack`): `input` all the pixels' floats, `offsets` where each
+    /// pixel's begin.
+    fn loudness(&self, input: &[f32], offsets: &[u64]) -> Result<Vec<[f32; LAYERS + 1]>, String>;
 }
 
 /// What candidate `index` delivers at `point` on the CPU, and its bands.

@@ -8,28 +8,34 @@ use physics::percentile::AtProbabilities;
 /// The grid of the level distributions: levels at multiples of a step (the resolution's,
 /// `crate::percentiles::Resolution`) from [`LEVEL_MIN_DB`] over [`SPAN_DB`], each bin holding the
 /// levels rounding to it at their mean intensity; a level below the grid is held in its lowest bin.
-const LEVEL_MIN_DB: f64 = -30.0;
-const SPAN_DB: f64 = 180.0;
+pub const LEVEL_MIN_DB: f64 = -30.0;
+pub const SPAN_DB: f64 = 180.0;
 /// The probabilities at which a line's distribution is read, each with the share of the time it
 /// stands for: every percent to 0.99 (the levels exceeded 5 to 90 % of the time within one), then
 /// evenly in log(1 - p) to 1 - 1e-8, where a sparse line's rare passes lie (a car a day 10 m away
-/// is loud for a few seconds of it). With the intensities' parts read once at the probabilities.
+/// is loud for a few seconds of it).
+pub fn node_probabilities() -> Vec<(f64, f64)> {
+    const EVEN: usize = 99;
+    const TAIL_STEPS: usize = 24;
+    let mut nodes: Vec<(f64, f64)> = (0..EVEN)
+        .map(|k| ((k as f64 + 0.5) / 100.0, 0.01))
+        .collect();
+    // -log10(1 - p) from 2 to 8 in steps of a quarter, and the last 1e-8 in one.
+    let at = |t: f64| 1.0 - 10f64.powf(-t);
+    for k in 0..TAIL_STEPS {
+        let (a, b) = (2.0 + k as f64 * 0.25, 2.25 + k as f64 * 0.25);
+        nodes.push((at((a + b) / 2.0), at(b) - at(a)));
+    }
+    nodes.push((1.0 - 0.5e-8, 1e-8));
+    nodes
+}
+
+/// The nodes ([`node_probabilities`]) with the intensities' parts read once at their probabilities.
 fn nodes() -> &'static (AtProbabilities, Vec<f64>) {
     static NODES: std::sync::OnceLock<(AtProbabilities, Vec<f64>)> = std::sync::OnceLock::new();
     NODES.get_or_init(|| {
-        const EVEN: usize = 99;
-        const TAIL_STEPS: usize = 24;
-        let mut nodes: Vec<(f64, f64)> = (0..EVEN)
-            .map(|k| ((k as f64 + 0.5) / 100.0, 0.01))
-            .collect();
-        // -log10(1 - p) from 2 to 8 in steps of a quarter, and the last 1e-8 in one.
-        let at = |t: f64| 1.0 - 10f64.powf(-t);
-        for k in 0..TAIL_STEPS {
-            let (a, b) = (2.0 + k as f64 * 0.25, 2.25 + k as f64 * 0.25);
-            nodes.push((at((a + b) / 2.0), at(b) - at(a)));
-        }
-        nodes.push((1.0 - 0.5e-8, 1e-8));
-        let (probabilities, shares): (Vec<f64>, Vec<f64>) = nodes.into_iter().unzip();
+        let (probabilities, shares): (Vec<f64>, Vec<f64>) =
+            node_probabilities().into_iter().unzip();
         (AtProbabilities::new(&probabilities), shares)
     })
 }

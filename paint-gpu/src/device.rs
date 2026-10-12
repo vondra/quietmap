@@ -221,13 +221,13 @@ fn bytes_of<T: Copy>(values: &[T]) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), length) }.to_vec()
 }
 
-fn driver<T>(result: Result<T, cudarc::driver::DriverError>) -> Result<T, String> {
+pub(crate) fn driver<T>(result: Result<T, cudarc::driver::DriverError>) -> Result<T, String> {
     result.map_err(|error| format!("cuda: {error}"))
 }
 
 /// One card with the kernels loaded.
 pub struct Gpu {
-    device: Arc<CudaDevice>,
+    pub(crate) device: Arc<CudaDevice>,
     pub name: String,
 }
 
@@ -260,6 +260,22 @@ impl Gpu {
         )
         .map_err(|error| format!("nvrtc: {error}"))?;
         driver(device.load_ptx(ptx, "paint", &["evaluate_pairs", "struct_sizes"]))?;
+        // The pixels' loudness, in full precision (fast math moved a sum's bin at its edges).
+        let loudness = format!(
+            "{COMMON}{}{}",
+            crate::loudness::loudness_constants(),
+            crate::loudness::LOUDNESS
+        );
+        let ptx = compile_ptx_with_opts(
+            loudness,
+            CompileOptions {
+                arch: Some(arch),
+                options: vec!["-lineinfo".into()],
+                ..Default::default()
+            },
+        )
+        .map_err(|error| format!("nvrtc (loudness): {error}"))?;
+        driver(device.load_ptx(ptx, "loudness", &["pixel_loudness"]))?;
         let sizes = driver(device.alloc_zeros::<u64>(HOST_STRUCT_SIZES.len()))?;
         let function = device
             .get_func("paint", "struct_sizes")

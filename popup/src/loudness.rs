@@ -65,8 +65,8 @@ pub fn layer_sounds(selections: &[LayerSelection]) -> Vec<LayerSound> {
 }
 
 /// Loudness is tabled at whole decibels over this span of A-weighted levels (dB).
-const CURVE_LOW_DB: f64 = -30.0;
-const CURVE_HIGH_DB: f64 = 160.0;
+pub const CURVE_LOW_DB: f64 = -30.0;
+pub const CURVE_HIGH_DB: f64 = 160.0;
 
 /// One period's loudness by A-weighted level: its received spectrum set to each whole decibel,
 /// interpolated between; each whole decibel's loudness computed when first read (a place's levels
@@ -98,6 +98,11 @@ impl Curve {
             }),
             values: (0..=steps).map(|_| OnceLock::new()).collect(),
         }
+    }
+
+    /// The spectrum's third-octave levels at an A-weighted 0 dB (`-inf` silent), or none.
+    pub fn shape_db(&self) -> Option<&[f64; THIRD_OCTAVES]> {
+        self.shape_db.as_ref()
     }
 
     /// The loudness (sone) at the curve's `step`th whole decibel.
@@ -157,19 +162,23 @@ pub fn place_loudness(
     fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
     resolution: Resolution,
 ) -> Result<PlaceLoudness, String> {
-    let no_flights = ([0.0; PERIODS], [0.0; PERIODS]);
-    let placed: Vec<(Vec<Line>, [f64; PERIODS])> = (layers.iter())
-        .map(|layer| {
-            let own = (groups.iter())
-                .filter(|group| group.layer == layer.layer)
-                .copied();
-            let heard = match layer.layer {
-                Layer::Aircraft => flights,
-                _ => (flights.0, no_flights),
-            };
-            place_lines(own, layer.energy, heard, fields)
-        })
-        .collect::<Result<_, String>>()?;
+    let placed = place_layers(groups, layers, flights, fields)?;
+    Ok(layers_loudness(
+        &placed,
+        layers,
+        (curves, layer_curves),
+        resolution,
+    ))
+}
+
+/// The loudness of a place of `placed` layers (each its lines over its steady energy; `layers` their
+/// sounds) and of each of them alone ([`place_loudness`]'s second half).
+pub fn layers_loudness(
+    placed: &[PlacedLayer],
+    layers: &[LayerSound],
+    (curves, layer_curves): (&[Curve; PERIODS], &[(Layer, [Curve; PERIODS])]),
+    resolution: Resolution,
+) -> PlaceLoudness {
     let views: Vec<(&[Line], [f64; PERIODS])> = (placed.iter())
         .map(|(lines, steady)| (&lines[..], *steady))
         .collect();
@@ -183,11 +192,37 @@ pub fn place_loudness(
             )
         })
         .collect();
-    Ok(PlaceLoudness {
+    PlaceLoudness {
         place: loudness(&distributions, curves),
         distributions,
         layers: own,
-    })
+    }
+}
+
+/// A layer's lines over the rest of its energy per period, held steady.
+pub type PlacedLayer = (Vec<Line>, [f64; PERIODS]);
+
+/// Each of `layers`' lines over the rest of its energy held steady ([`place_loudness`]'s first
+/// half).
+pub fn place_layers(
+    groups: &[Group],
+    layers: &[LayerSound],
+    flights: (&Weather, ([f64; PERIODS], [f64; PERIODS])),
+    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
+) -> Result<Vec<PlacedLayer>, String> {
+    let no_flights = ([0.0; PERIODS], [0.0; PERIODS]);
+    (layers.iter())
+        .map(|layer| {
+            let own = (groups.iter())
+                .filter(|group| group.layer == layer.layer)
+                .copied();
+            let heard = match layer.layer {
+                Layer::Aircraft => flights,
+                _ => (flights.0, no_flights),
+            };
+            place_lines(own, layer.energy, heard, fields)
+        })
+        .collect()
 }
 
 /// A place's loudness, its distributions and each layer's own Nden ([`place_loudness`]).

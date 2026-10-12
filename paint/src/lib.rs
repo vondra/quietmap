@@ -16,5 +16,5 @@ pub mod hm3;
 pub mod hum;
 pub mod pack;
 pub mod paint;
-mod sone;
+pub mod sone;
 pub mod square;
