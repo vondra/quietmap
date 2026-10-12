@@ -12,17 +12,17 @@ const BIN_DB: f64 = Resolution::CLICK.bin_db;
 fn distributions(
     selections: &[LayerSelection],
     flights: ([f64; PERIODS], [f64; PERIODS]),
-    fields: &dyn Fn(&Group) -> Option<serde_json::Value>,
+    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
 ) -> [Distribution; PERIODS] {
     let weather = flight_weather(&flights);
-    let (lines, steady) = click_lines(selections, (&weather, flights), fields);
+    let (lines, steady) = click_lines(selections, (&weather, flights), fields).unwrap();
     distributions_of(&lines, steady, Resolution::CLICK)
 }
 
 /// The time levels of `selections` with no flights and `fields` the contributors' displays.
 fn levels(
     selections: &[LayerSelection],
-    fields: &dyn Fn(&Group) -> Option<serde_json::Value>,
+    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
 ) -> Percentiles {
     Percentiles::of(&distributions(
         selections,
@@ -71,8 +71,8 @@ pub(crate) fn selection(layer: Layer, contributors: Vec<Contributor>) -> LayerSe
 }
 
 /// 33 vehicles a day at 20 km/h, as the service road by the owner's hotel.
-fn quiet_road(_: &Group) -> Option<serde_json::Value> {
-    Some(
+fn quiet_road(_: &Group) -> Result<serde_json::Value, String> {
+    Ok(
         serde_json::json!({"aadt_light": 31.0, "aadt_heavy": 1.0, "aadt_moto": 1.0,
         "speed_kmh": 20.0, "road_class": "service"}),
     )
@@ -99,7 +99,6 @@ fn a_road_runs_at_the_period_shares_its_fields_carry() {
 fn a_road_follows_its_hours_and_movements_their_periods() {
     let steady = Line {
         key: 1,
-        layer: Layer::Road,
         energy: [1.0; PERIODS],
         means: [[1.0; WEATHER_STATES]; PERIODS],
         lambda: [1e6; PERIODS],
@@ -171,7 +170,7 @@ fn a_busy_roads_quiet_hours_lower_its_night_l90() {
         vec![contributor(7, Layer::Road, 60.0, 2_000.0)],
     );
     let busy = |_: &Group| {
-        Some(
+        Ok(
             serde_json::json!({"aadt_light": 20_000.0, "speed_kmh": 50.0,
             "road_class": "secondary"}),
         )
@@ -247,7 +246,9 @@ fn pieces_on_either_side_keep_their_own_weather() {
     site.weather
         .add(&[calm; PERIODS], &[[calm; PERIODS], [favourable; PERIODS]]);
     site.energy = [favourable + calm; PERIODS];
-    let levels = levels(&[selection(Layer::Industry, vec![site])], &|_| None);
+    let levels = levels(&[selection(Layer::Industry, vec![site])], &|_| {
+        Ok(serde_json::Value::Null)
+    });
     for p in 0..PERIODS {
         for level in [levels.l5[p], levels.l50[p], levels.l90[p]] {
             assert!(
@@ -273,7 +274,7 @@ fn pieces_louder_in_opposite_states_keep_their_mean() {
         total += mean;
     }
     site.energy = [total; PERIODS];
-    let line = Line::of(&site.group(), None).unwrap();
+    let line = Line::of(&site.group(), &serde_json::Value::Null).unwrap();
     let average = line.state_means(0).iter().sum::<f64>() / WEATHER_STATES as f64;
     assert!((average - total).abs() < 1e-9, "{average} vs {total}");
 }
@@ -290,7 +291,7 @@ fn a_source_alone_keeps_its_weather() {
         .weather
         .add(&[mean; PERIODS], &[[calm; PERIODS], [favourable; PERIODS]]);
     plant.energy = [mean; PERIODS];
-    let line = Line::of(&plant.group(), None).unwrap();
+    let line = Line::of(&plant.group(), &serde_json::Value::Null).unwrap();
     let mut levels: Vec<(f64, f64)> = Vec::new();
     line.own_levels(0, 0.0, &mut |level, share| levels.push((level, share)));
     let at = |db: f64| -> f64 {
@@ -322,7 +323,7 @@ fn the_weather_moves_the_levels_smoothly() {
         distributions(
             &[selection(Layer::Industry, vec![site])],
             ([0.0; PERIODS], [0.0; PERIODS]),
-            &|_| None,
+            &|_| Ok(serde_json::Value::Null),
         )
     };
     let (below, above) = (spread(0.249), spread(0.251));
@@ -345,9 +346,11 @@ fn the_weather_moves_the_levels_smoothly() {
 #[test]
 fn events_sound_for_their_duty_and_are_silent_otherwise() {
     let bells_fields = |c: &Group| {
-        (c.key == 2).then(
-            || serde_json::json!({"events_per_day": [36.0, 0.0, 3.0], "duty": [0.02, 0.0, 0.01]}),
-        )
+        Ok(if c.key == 2 {
+            serde_json::json!({"events_per_day": [36.0, 0.0, 3.0], "duty": [0.02, 0.0, 0.01]})
+        } else {
+            serde_json::Value::Null
+        })
     };
     let plant = contributor(1, Layer::Industry, 40.0, 50.0);
     let bells = contributor(2, Layer::Building, 40.0, 80.0);

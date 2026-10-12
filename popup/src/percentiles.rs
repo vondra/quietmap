@@ -149,8 +149,6 @@ pub(crate) fn favourable_share(mean: f64, homogeneous: f64, favourable: f64) -> 
 pub struct Line {
     /// The contributor's group: the lines are added in its order, so a click repeats exactly.
     pub(crate) key: u64,
-    /// Its layer (the flights' line the aircraft's), whose own loudness it is part of.
-    pub(crate) layer: Layer,
     pub energy: [f64; PERIODS],
     /// Per period its mean in each of the [`WEATHER_STATES`] ([`Line::state_means`]).
     means: [[f64; WEATHER_STATES]; PERIODS],
@@ -165,6 +163,7 @@ pub struct Line {
 /// A source group heard at a place, what its line is made of: its group, layer, energy per period
 /// and weather, its nearest piece's distance and where its display fields are read (a click's
 /// contributor, or a painted pixel's exactly evaluated sources of one group).
+#[derive(Clone, Copy)]
 pub struct Group<'a> {
     pub key: u64,
     pub layer: Layer,
@@ -191,7 +190,7 @@ impl Line {
     /// A group's line: industry, buildings and ships steady but for their events, a road, railway
     /// or aeroway by its traffic, read from its display `fields`; none for one of those whose
     /// fields carry no traffic.
-    pub fn of(group: &Group, fields: Option<&serde_json::Value>) -> Option<Self> {
+    pub fn of(group: &Group, fields: &serde_json::Value) -> Option<Self> {
         let Group {
             key,
             layer,
@@ -202,14 +201,13 @@ impl Line {
         } = *group;
         let steady = matches!(layer, Layer::Industry | Layer::Building | Layer::Ship);
         let (lambda, profile, duty) = if steady {
-            ([f64::INFINITY; PERIODS], None, fields.and_then(duty))
+            ([f64::INFINITY; PERIODS], None, duty(fields))
         } else {
-            let (per_hour, speed, profile) = traffic(layer, fields?, energy)?;
+            let (per_hour, speed, profile) = traffic(layer, fields, energy)?;
             (lambda(per_hour, speed, distance_m), profile, None)
         };
         Some(Line {
             key,
-            layer,
             energy,
             means: weather_means(weather, energy),
             lambda,
@@ -226,7 +224,6 @@ impl Line {
     ) -> Self {
         Line {
             key: u64::MAX,
-            layer: Layer::Aircraft,
             energy,
             means: weather_means(weather, energy),
             lambda: std::array::from_fn(|p| {
@@ -478,12 +475,12 @@ const HELD_SHARE: f64 = 1e-2;
 pub fn rest_lines<'a>(
     contributors: impl Iterator<Item = &'a crate::update::Contributor>,
     total: [f64; PERIODS],
-    fields: &dyn Fn(&Group) -> Option<serde_json::Value>,
-) -> (Vec<Line>, [f64; PERIODS]) {
+    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
+) -> Result<(Vec<Line>, [f64; PERIODS]), String> {
     let groups = contributors.map(|contributor| contributor.group());
-    let (mut lines, steady) = lines(groups, total, REST_SHARE_MIN, fields);
+    let (mut lines, steady) = lines(groups, total, REST_SHARE_MIN, fields)?;
     at_mean_flow(&mut lines);
-    (lines, steady)
+    Ok((lines, steady))
 }
 
 /// Every line at its period's mean flow every hour.
@@ -500,18 +497,18 @@ fn lines<'a>(
     groups: impl Iterator<Item = Group<'a>>,
     total: [f64; PERIODS],
     share_min: f64,
-    fields: &dyn Fn(&Group) -> Option<serde_json::Value>,
-) -> (Vec<Line>, [f64; PERIODS]) {
-    let mut lines: Vec<Line> = groups
+    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
+) -> Result<(Vec<Line>, [f64; PERIODS]), String> {
+    let mut lines = groups
         .filter(|group| (0..PERIODS).any(|p| group.energy[p] > share_min * total[p]))
-        .filter_map(|group| Line::of(&group, fields(&group).as_ref()))
-        .collect();
+        .filter_map(|group| (fields(&group).map(|fields| Line::of(&group, &fields))).transpose())
+        .collect::<Result<Vec<Line>, String>>()?;
     // The contributors come from hash maps: a fixed order keeps a click's rounding the same.
     lines.sort_by_key(|line| line.key);
     let steady = std::array::from_fn(|p| {
         (total[p] - lines.iter().map(|line| line.energy[p]).sum::<f64>()).max(0.0)
     });
-    (lines, steady)
+    Ok((lines, steady))
 }
 
 /// The flights' weather: their mean in either state.
@@ -526,8 +523,8 @@ pub fn flight_weather(flights: &([f64; PERIODS], [f64; PERIODS])) -> Weather {
 pub fn click_lines<'a>(
     selections: &'a [LayerSelection],
     flights: (&'a Weather, ([f64; PERIODS], [f64; PERIODS])),
-    fields: &dyn Fn(&Group) -> Option<serde_json::Value>,
-) -> (Vec<Line>, [f64; PERIODS]) {
+    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
+) -> Result<(Vec<Line>, [f64; PERIODS]), String> {
     let total: [f64; PERIODS] =
         std::array::from_fn(|p| selections.iter().map(|s| s.answer_energy()[p]).sum::<f64>());
     let groups = (selections.iter())
@@ -543,15 +540,15 @@ pub fn place_lines<'a>(
     groups: impl Iterator<Item = Group<'a>>,
     total: [f64; PERIODS],
     (weather, flights): (&Weather, ([f64; PERIODS], [f64; PERIODS])),
-    fields: &dyn Fn(&Group) -> Option<serde_json::Value>,
-) -> (Vec<Line>, [f64; PERIODS]) {
-    let (mut lines, mut steady) = lines(groups, total, FLUCTUATING_SHARE_MIN, fields);
+    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
+) -> Result<(Vec<Line>, [f64; PERIODS]), String> {
+    let (mut lines, mut steady) = lines(groups, total, FLUCTUATING_SHARE_MIN, fields)?;
     let flights_line = Line::flights(weather, flights);
     for (steady, energy) in steady.iter_mut().zip(flights_line.energy) {
         *steady = (*steady - energy).max(0.0);
     }
     lines.push(flights_line);
-    (lines, steady)
+    Ok((lines, steady))
 }
 
 /// How finely the level distributions are computed: the grid's step (dB), the equally likely

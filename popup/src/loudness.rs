@@ -12,7 +12,7 @@
 
 use crate::distribution::Distribution;
 use crate::evaluate::Bands;
-use crate::percentiles::{Line, Resolution, distributions_of};
+use crate::percentiles::{Group, Line, Resolution, Weather, distributions_of, place_lines};
 use crate::selection::LayerSelection;
 use physics::bands::{
     A_WEIGHTING_DB as OCTAVE_A_DB, BANDS, PERIOD_HOURS, PERIOD_PENALTY_DB, PERIODS, energy,
@@ -72,8 +72,9 @@ const CURVE_HIGH_DB: f64 = 160.0;
 /// interpolated between; each whole decibel's loudness computed when first read (a place's levels
 /// visit a few dozen of the 191).
 pub struct Curve {
-    thirds: [f64; THIRD_OCTAVES],
-    a_weighted: f64,
+    /// The spectrum's third-octave levels set to an A-weighted level of 0 dB (`-inf` silent);
+    /// `None` for a spectrum without energy.
+    shape_db: Option<[f64; THIRD_OCTAVES]>,
     values: Vec<OnceLock<f64>>,
 }
 
@@ -86,8 +87,15 @@ impl Curve {
             .sum();
         let steps = (CURVE_HIGH_DB - CURVE_LOW_DB) as usize;
         Curve {
-            thirds: *thirds,
-            a_weighted,
+            shape_db: (a_weighted > 0.0).then(|| {
+                thirds.map(|value| {
+                    if value > 0.0 {
+                        10.0 * (value / a_weighted).log10()
+                    } else {
+                        f64::NEG_INFINITY
+                    }
+                })
+            }),
             values: (0..=steps).map(|_| OnceLock::new()).collect(),
         }
     }
@@ -95,18 +103,10 @@ impl Curve {
     /// The loudness (sone) at the curve's `step`th whole decibel.
     fn value(&self, step: usize) -> f64 {
         *self.values[step].get_or_init(|| {
-            if self.a_weighted <= 0.0 {
-                return 0.0;
-            }
-            let scale = energy(CURVE_LOW_DB + step as f64) / self.a_weighted;
-            zwicker_loudness_sone(&self.thirds.map(|value| {
-                let scaled = value * scale;
-                if scaled > 0.0 {
-                    10.0 * scaled.log10()
-                } else {
-                    f64::NEG_INFINITY
-                }
-            }))
+            self.shape_db.map_or(0.0, |shape| {
+                let level_db = CURVE_LOW_DB + step as f64;
+                zwicker_loudness_sone(&shape.map(|db| db + level_db))
+            })
         })
     }
 
@@ -144,34 +144,38 @@ pub fn layer_curves(
         .collect()
 }
 
-/// Each layer's own loudness (Nden), as the place's is taken: the layer's `lines` (the flights' line
-/// the aircraft layer's) over the rest of its energy held steady, on its own curves; `None` for a
-/// layer without energy.
+/// Each layer's own loudness (Nden), as the place's is taken but of the layer alone: its own
+/// source `groups`' lines, chosen against its own energy (a railway beside a motorway keeps its
+/// passes), the flights' line the aircraft layer's, over the rest of its energy held steady, on
+/// its own curves; `None` for a layer without energy.
 pub fn layer_ndens(
-    lines: &[Line],
-    layers: &[LayerSound],
-    layer_curves: &[(Layer, [Curve; PERIODS])],
+    groups: &[Group],
+    (layers, layer_curves): (&[LayerSound], &[(Layer, [Curve; PERIODS])]),
+    flights: (&Weather, ([f64; PERIODS], [f64; PERIODS])),
+    fields: &dyn Fn(&Group) -> Result<serde_json::Value, String>,
     resolution: Resolution,
-) -> Vec<(Layer, Option<f64>)> {
+) -> Result<Vec<(Layer, Option<f64>)>, String> {
+    let no_flights = ([0.0; PERIODS], [0.0; PERIODS]);
     layers
         .iter()
         .zip(layer_curves)
         .map(|(layer, (_, curves))| {
             if layer.energy.iter().all(|&energy| energy <= 0.0) {
-                return (layer.layer, None);
+                return Ok((layer.layer, None));
             }
-            let own: Vec<Line> = (lines.iter())
-                .filter(|line| line.layer == layer.layer)
-                .cloned()
-                .collect();
-            let steady = std::array::from_fn(|p| {
-                (layer.energy[p] - own.iter().map(|line| line.energy[p]).sum::<f64>()).max(0.0)
-            });
-            let distributions = distributions_of(&own, steady, resolution);
-            (
+            let own = (groups.iter())
+                .filter(|group| group.layer == layer.layer)
+                .copied();
+            let heard = match layer.layer {
+                Layer::Aircraft => flights,
+                _ => (flights.0, no_flights),
+            };
+            let (lines, steady) = place_lines(own, layer.energy, heard, fields)?;
+            let distributions = distributions_of(&lines, steady, resolution);
+            Ok((
                 layer.layer,
                 Some(loudness(&distributions, curves).nden_sone),
-            )
+            ))
         })
         .collect()
 }

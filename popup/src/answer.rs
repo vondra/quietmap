@@ -458,8 +458,7 @@ pub fn answer(
                 let sources = Sources::parse(bytes).map_err(|e| e.to_string())?;
                 display_fields_of(&sources, display.attribute, layer)
             };
-        let fields =
-            |group: &crate::percentiles::Group| display_record(group.display, group.layer).ok();
+        let fields = |group: &crate::percentiles::Group| display_record(group.display, group.layer);
         // The aircraft layer beyond its flights: the airport ground operations, steady.
         let airport_ground: Option<[f64; PERIODS]> = last_ring.then(|| {
             let layer = selections
@@ -474,12 +473,12 @@ pub fn answer(
         // not show them).
         let flights_heard = (flight_energy, flight_energy_lambda);
         let flights_weather = crate::percentiles::flight_weather(&flights_heard);
-        let timing = last_ring.then(|| {
+        let timing = last_ring.then(|| -> Result<_, String> {
             let (lines, steady) = crate::percentiles::click_lines(
                 &selections,
                 (&flights_weather, flights_heard),
                 &fields,
-            );
+            )?;
             let distributions =
                 crate::percentiles::distributions_of(&lines, steady, Resolution::CLICK);
             let flight_sound = crate::loudness::FlightSound {
@@ -493,17 +492,27 @@ pub fn answer(
             let curves = crate::loudness::curves(&sounds, &flight_sound);
             let layer_curves = crate::loudness::layer_curves(&sounds, &flight_sound);
             let loudness = crate::loudness::loudness(&distributions, &curves);
-            let layer_ndens =
-                crate::loudness::layer_ndens(&lines, &sounds, &layer_curves, Resolution::CLICK);
-            (
+            let groups: Vec<crate::percentiles::Group> = (selections.iter())
+                .flat_map(|selection| selection.contributors.values())
+                .map(|contributor| contributor.group())
+                .collect();
+            let layer_ndens = crate::loudness::layer_ndens(
+                &groups,
+                (&sounds, &layer_curves),
+                (&flights_weather, flights_heard),
+                &fields,
+                Resolution::CLICK,
+            )?;
+            Ok((
                 Percentiles::of(&distributions),
                 loudness,
                 curves,
                 layer_curves,
                 (lines, steady),
                 layer_ndens,
-            )
+            ))
         });
+        let timing = timing.transpose()?;
         let mut layers = layer_answers(&selections);
         let mut rows: Vec<crate::rows::Row>;
         let mut rest_nden_sone = None;
@@ -533,7 +542,7 @@ pub fn answer(
                 // brief passes louder in energy.
                 let (heard, quiet): (Vec<_>, Vec<_>) =
                     all_contributors(&selections).partition(|c| listed(c));
-                rows = crate::rows::ranked_rows(heard, &fields, &own_curves);
+                rows = crate::rows::ranked_rows(heard, &fields, &own_curves)?;
                 let shown = rows.len().min(CONTRIBUTORS_SHOWN);
                 let unlisted = || {
                     rows[shown..]
@@ -561,7 +570,7 @@ pub fn answer(
                         .sum()
                 });
                 let (rest_lines, rest_steady) =
-                    crate::percentiles::rest_lines(unlisted(), rest, &fields);
+                    crate::percentiles::rest_lines(unlisted(), rest, &fields)?;
                 rest_nden_sone = Some(
                     crate::loudness::loudness(
                         &crate::percentiles::distributions_of(

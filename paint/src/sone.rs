@@ -21,10 +21,10 @@ use tiles::sources::Layer;
 
 /// Every source group's display record a square's candidates point at, read once: where a line's
 /// traffic and events come from.
-pub struct Displays(HashMap<(u16, u32), Option<serde_json::Value>>);
+pub struct Displays(HashMap<(u16, u32), serde_json::Value>);
 
 impl Displays {
-    pub fn of(square: &Square) -> Self {
+    pub fn of(square: &Square) -> Result<Self, String> {
         let mut keys: Vec<(u16, u32, Layer)> = (square.candidates.iter())
             .map(|candidate| {
                 (
@@ -36,25 +36,26 @@ impl Displays {
             .collect();
         keys.par_sort_unstable_by_key(|&(tile, attribute, _)| (tile, attribute));
         keys.dedup_by_key(|&mut (tile, attribute, _)| (tile, attribute));
-        Displays(
-            keys.par_iter()
-                .map(|&(tile, attribute, layer)| {
-                    let record = popup::answer::display_fields_of(
-                        &square.sources[usize::from(tile)],
-                        attribute,
-                        layer,
-                    );
-                    ((tile, attribute), record.ok())
-                })
-                .collect(),
-        )
+        let records = keys
+            .par_iter()
+            .map(|&(tile, attribute, layer)| {
+                let record = popup::answer::display_fields_of(
+                    &square.sources[usize::from(tile)],
+                    attribute,
+                    layer,
+                )?;
+                Ok(((tile, attribute), record))
+            })
+            .collect::<Result<_, String>>()?;
+        Ok(Displays(records))
     }
 
-    fn of_group(&self, group: &Group) -> Option<serde_json::Value> {
+    fn of_group(&self, group: &Group) -> Result<serde_json::Value, String> {
         let DisplayRef {
             tile, attribute, ..
         } = group.display;
-        self.0.get(&(tile, attribute)).cloned().flatten()
+        (self.0.get(&(tile, attribute)).cloned())
+            .ok_or_else(|| format!("the display {tile}/{attribute} was not read"))
     }
 }
 
@@ -91,7 +92,7 @@ pub fn pixel_ndens(
     (candidates, energies, bands): (&[u32], &[PairEnergy], &PointBands),
     (rest, flight_spectrum_db): (&Rest, &[f64; CLASS_THIRDS]),
     resolution: Resolution,
-) -> [f64; LAYERS + 1] {
+) -> Result<[f64; LAYERS + 1], String> {
     let mut groups: HashMap<u64, Heard> = HashMap::new();
     for (&index, energy) in candidates.iter().zip(energies) {
         let candidate = &square.candidates[index as usize];
@@ -129,22 +130,30 @@ pub fn pixel_ndens(
         .steady
         .map(|layer| layer.map(|value| reflection * value));
     let (left_groups, weights) = rest.left_groups;
-    for &(key, at_corners, loudest) in left_groups {
+    for group in left_groups {
         let left: [f64; PERIODS] = std::array::from_fn(|p| {
-            reflection * (0..4).map(|c| weights[c] * at_corners[c][p]).sum::<f64>()
+            reflection
+                * (0..4)
+                    .map(|c| weights[c] * group.at_corners[c][p])
+                    .sum::<f64>()
         });
         if left.iter().all(|&value| value <= 0.0) {
             continue;
         }
-        let candidate = &square.candidates[loudest as usize];
-        let heard = groups.entry(key).or_insert_with(|| Heard {
-            layer: candidate.layer,
+        let nearest_m = (group.nearest.iter())
+            .filter(|&&index| index != u32::MAX)
+            .map(|&index| square.candidates[index as usize].distance_from(position))
+            .fold(f64::INFINITY, f64::min);
+        let loudest = &square.candidates[group.loudest as usize];
+        let heard = groups.entry(group.key).or_insert_with(|| Heard {
+            layer: loudest.layer,
             energy: [0.0; PERIODS],
             states: [[0.0; PERIODS]; 2],
             weather: Weather::default(),
-            distance_m: candidate.distance_from(position),
-            display: (candidate.display, lden_energy(&left)),
+            distance_m: nearest_m,
+            display: (loudest.display, lden_energy(&left)),
         });
+        heard.distance_m = heard.distance_m.min(nearest_m);
         let share = |state: usize, p: usize| {
             if heard.energy[p] > 0.0 {
                 heard.states[state][p] / heard.energy[p]
@@ -191,21 +200,24 @@ pub fn pixel_ndens(
         .collect();
     let total: [f64; PERIODS] =
         std::array::from_fn(|p| sounds.iter().map(|sound| sound.energy[p]).sum());
-    let views = groups.iter().map(|(&key, heard)| Group {
-        key,
-        layer: heard.layer,
-        energy: heard.energy,
-        weather: &heard.weather,
-        distance_m: heard.distance_m,
-        display: heard.display.0,
-    });
+    let views: Vec<Group> = (groups.iter())
+        .map(|(&key, heard)| Group {
+            key,
+            layer: heard.layer,
+            energy: heard.energy,
+            weather: &heard.weather,
+            distance_m: heard.distance_m,
+            display: heard.display.0,
+        })
+        .collect();
     let weather = flight_weather(&(flights, flights_lambda));
+    let fields = |group: &Group| displays.of_group(group);
     let (lines, steady) = place_lines(
-        views,
+        views.iter().copied(),
         total,
         (&weather, (flights, flights_lambda)),
-        &|group| displays.of_group(group),
-    );
+        &fields,
+    )?;
     let flight_sound = FlightSound {
         energy: flights,
         spectrum_db: Some(*flight_spectrum_db),
@@ -213,15 +225,16 @@ pub fn pixel_ndens(
     let distributions = distributions_of(&lines, steady, resolution);
     let whole = loudness(&distributions, &curves(&sounds, &flight_sound)).nden_sone;
     let own = layer_ndens(
-        &lines,
-        &sounds,
-        &layer_curves(&sounds, &flight_sound),
+        &views,
+        (&sounds, &layer_curves(&sounds, &flight_sound)),
+        (&weather, (flights, flights_lambda)),
+        &fields,
         resolution,
-    );
+    )?;
     let mut ndens = [0.0; LAYERS + 1];
     for (layer, nden) in own {
         ndens[layer as usize] = nden.unwrap_or(0.0);
     }
     ndens[LAYERS] = whole;
-    ndens
+    Ok(ndens)
 }

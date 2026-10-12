@@ -63,9 +63,9 @@ impl Row {
 }
 
 /// The object a contributor is a part of: the one its display names, else its own group.
-fn object(contributor: &Contributor, display: Option<&serde_json::Value>) -> u64 {
+fn object(contributor: &Contributor, display: &serde_json::Value) -> u64 {
     display
-        .and_then(|fields| fields.get("object"))
+        .get("object")
         .and_then(serde_json::Value::as_str)
         .and_then(|key| u64::from_str_radix(key, 16).ok())
         .unwrap_or(contributor.group_key)
@@ -76,26 +76,26 @@ fn object(contributor: &Contributor, display: Option<&serde_json::Value>) -> u64
 /// steady sound together on the curves of its loudest part's layer (`curves`).
 pub fn ranked_rows<'a>(
     heard_contributors: Vec<&'a Contributor>,
-    fields: &dyn Fn(&crate::percentiles::Group) -> Option<serde_json::Value>,
+    fields: &dyn Fn(&crate::percentiles::Group) -> Result<serde_json::Value, String>,
     curves: &(dyn Fn(Layer) -> &'a [Curve; PERIODS] + Sync),
-) -> Vec<Row> {
+) -> Result<Vec<Row>, String> {
     // The display records are read one by one; the parts scored in parallel.
-    let displays: Vec<(&Contributor, Option<serde_json::Value>)> = heard_contributors
+    let displays: Vec<(&Contributor, serde_json::Value)> = heard_contributors
         .into_iter()
-        .map(|contributor| (contributor, fields(&contributor.group())))
-        .collect();
+        .map(|contributor| Ok((contributor, fields(&contributor.group())?)))
+        .collect::<Result<_, String>>()?;
     let scored: Vec<(Contributor, Option<Line>, u64)> = displays
         .par_iter()
         .map(|(contributor, display)| {
-            let line = Line::of(&contributor.group(), display.as_ref());
+            let line = Line::of(&contributor.group(), display);
             let own = match &line {
                 Some(line) => own_nden(Some(line), [0.0; PERIODS], curves(contributor.layer)),
                 None => own_nden(None, contributor.energy, curves(contributor.layer)),
             };
             let mut part = (*contributor).clone();
             part.nden_sone = Some(own);
-            part.heard = display.as_ref().and_then(|fields| heard(&part, fields));
-            (part, line, object(contributor, display.as_ref()))
+            part.heard = heard(&part, display);
+            (part, line, object(contributor, display))
         })
         .collect();
     let mut objects: BTreeMap<u64, Vec<(Contributor, Option<Line>)>> = BTreeMap::new();
@@ -138,5 +138,5 @@ pub fn ranked_rows<'a>(
             .total_cmp(&a.nden_sone.unwrap_or(0.0))
             .then(a.principal().group_key.cmp(&b.principal().group_key))
     });
-    rows
+    Ok(rows)
 }
