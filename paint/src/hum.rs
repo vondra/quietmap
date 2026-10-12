@@ -4,7 +4,7 @@
 //! 0.05 dB), over the loud ones evaluated exactly. It changes slowly and a pixel takes it blended
 //! from the four points around; the painter and its etalon take the same.
 
-use crate::exact::{Batch, LAYERS, Point, evaluate_periods};
+use crate::exact::{Batch, LAYERS, Point, evaluate_all};
 use crate::paint::bilinear;
 use crate::square::Square;
 use physics::bands::{PERIODS, lden_energy};
@@ -58,10 +58,10 @@ impl Hum {
         let mut loud_energy = vec![[[0.0; PERIODS]; LAYERS]; points.len()];
         for (&(k, index), energy) in pairs
             .iter()
-            .zip(evaluate_periods(square, &points, &pairs, batch)?)
+            .zip(evaluate_all(square, &points, &pairs, batch)?.pairs)
         {
             let layer = square.candidates[index as usize].layer as usize;
-            for (total, value) in loud_energy[k as usize][layer].iter_mut().zip(energy) {
+            for (total, value) in loud_energy[k as usize][layer].iter_mut().zip(energy.mixed) {
                 *total += value;
             }
         }

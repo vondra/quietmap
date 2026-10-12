@@ -7,6 +7,7 @@
 use cudarc::driver::sys::CUdevice_attribute;
 use cudarc::driver::{CudaDevice, CudaSlice, DevicePtr, DeviceSlice, LaunchAsync, LaunchConfig};
 use cudarc::nvrtc::{CompileOptions, compile_ptx_with_opts};
+use paint::exact::LAYERS;
 use paint::square::{Files, Square};
 use physics::bands::{BAND_FREQUENCY_HZ, BANDS, PERIODS, SPEED_OF_SOUND_M_PER_S};
 use physics::weather::WeatherTable;
@@ -62,15 +63,22 @@ fn band_constants() -> String {
     .concat()
 }
 
-/// The fine terrain's lattice, reach and detail step as device constants (kernels/scene.cuh).
+/// The fine terrain's lattice, reach and detail step, and the layers, as device constants
+/// (kernels/scene.cuh, paint.cu).
 fn lattice_constants() -> String {
     format!(
-        "#define FINE_PER_NODE {}\n#define FINE_ENDS_M {:?}f\n#define DETAIL_STEP_M {:?}f\n",
+        "#define FINE_PER_NODE {}\n#define FINE_ENDS_M {:?}f\n#define DETAIL_STEP_M {:?}f\n#define LAYERS {}\n",
         tiles::terrain_fine::FINE_PER_NODE,
         physics::profile::FINE_ENDS_M as f32,
-        tiles::terrain_fine::DETAIL_STEP_M as f32
+        tiles::terrain_fine::DETAIL_STEP_M as f32,
+        LAYERS
     )
 }
+
+/// Floats a pair's sums take (kernels/evaluate.cuh PAIR_SUMS): mixed, calm and downwind per period.
+const PAIR_SUMS: usize = 3 * PERIODS;
+/// Floats a point's bands take: per layer, period and octave band.
+pub const POINT_BANDS: usize = LAYERS * PERIODS * BANDS;
 
 /// A pair's failure (kernels/common.cuh): the host evaluates such a pair on the CPU.
 pub const FAILED_NOT_READ: u32 = 1;
@@ -166,6 +174,7 @@ struct DeviceCandidate {
     line: u32,
     attribute: u32,
     on_deck: u32,
+    layer: u32,
 }
 
 #[repr(C)]
@@ -274,21 +283,42 @@ impl Gpu {
         })
     }
 
+    /// Zeroed band sums for `points` points ([`POINT_BANDS`] floats a point).
+    pub fn bands(&self, points: usize) -> Result<CudaSlice<f32>, String> {
+        driver(
+            self.device
+                .alloc_zeros::<f32>((POINT_BANDS * points).max(1)),
+        )
+    }
+
+    /// The band sums as the pairs left them.
+    pub fn download(&self, bands: &CudaSlice<f32>) -> Result<Vec<f32>, String> {
+        driver(self.device.dtoh_sync_copy(bands))
+    }
+
     /// Per pair (receiver position in the square's frame, building it stands in or 0, candidate
-    /// index): the period energies the candidate delivers there and the failure, 0 for none.
+    /// index, its point's index in `bands`): what the candidate delivers there per period, mixed,
+    /// calm and downwind, and the failure, 0 for none; its mixed bands added to the point's.
     pub fn evaluate_pairs(
         &self,
         square: &DeviceSquare,
-        receivers: &[[f64; 2]],
-        own_footprint: &[u64],
-        candidates: &[u32],
-    ) -> Result<(Vec<[f64; PERIODS]>, Vec<u32>), String> {
+        (receivers, own_footprint): (&[[f64; 2]], &[u64]),
+        (candidates, points): (&[u32], &[u32]),
+        bands: &mut CudaSlice<f32>,
+    ) -> Result<(Vec<[f32; PAIR_SUMS]>, Vec<u32>), String> {
         let count = candidates.len();
-        if receivers.len() != count || own_footprint.len() != count {
-            return Err("evaluate_pairs: a receiver and an owner per candidate".into());
+        if receivers.len() != count || own_footprint.len() != count || points.len() != count {
+            return Err("evaluate_pairs: a receiver, an owner and a point per candidate".into());
         }
-        if candidates.iter().any(|&index| index >= square.candidates) {
-            return Err("evaluate_pairs: a candidate outside the square".into());
+        if candidates.iter().any(|&index| index >= square.candidates)
+            || points
+                .iter()
+                .any(|&point| (point as usize + 1) * POINT_BANDS > bands.len())
+        {
+            return Err(
+                "evaluate_pairs: a candidate outside the square or a point outside the bands"
+                    .into(),
+            );
         }
         if count == 0 {
             return Ok((Vec::new(), Vec::new()));
@@ -297,7 +327,8 @@ impl Gpu {
         let xy = driver(self.device.htod_sync_copy(&xy))?;
         let own = driver(self.device.htod_sync_copy(own_footprint))?;
         let index = driver(self.device.htod_sync_copy(candidates))?;
-        let periods = driver(self.device.alloc_zeros::<f32>(PERIODS * count))?;
+        let point_index = driver(self.device.htod_sync_copy(points))?;
+        let sums = driver(self.device.alloc_zeros::<f32>(PAIR_SUMS * count))?;
         let failed = driver(self.device.alloc_zeros::<u32>(count))?;
         let function = self
             .device
@@ -308,8 +339,9 @@ impl Gpu {
             block_dim: (THREADS_PER_BLOCK, 1, 1),
             shared_mem_bytes: 0,
         };
-        // SAFETY: every buffer holds what the kernel indexes: 2 receiver coordinates, an owner and
-        // a candidate per pair in, 3 periods and a failure per pair out.
+        // SAFETY: every buffer holds what the kernel indexes: 2 receiver coordinates, an owner, a
+        // candidate and a point (within `bands`, checked) per pair in, PAIR_SUMS floats and a
+        // failure per pair out.
         driver(unsafe {
             function.launch(
                 config,
@@ -318,18 +350,19 @@ impl Gpu {
                     &xy,
                     &own,
                     &index,
+                    &point_index,
                     count as u32,
-                    &periods,
+                    &sums,
+                    &mut *bands,
                     &failed,
                 ),
             )
         })?;
-        let periods = driver(self.device.dtoh_sync_copy(&periods))?;
+        let sums = driver(self.device.dtoh_sync_copy(&sums))?;
         let failed = driver(self.device.dtoh_sync_copy(&failed))?;
         Ok((
-            periods
-                .chunks_exact(PERIODS)
-                .map(|chunk| [0, 1, 2].map(|period| f64::from(chunk[period])))
+            sums.chunks_exact(PAIR_SUMS)
+                .map(|chunk| std::array::from_fn(|k| chunk[k]))
                 .collect(),
             failed,
         ))
@@ -531,6 +564,7 @@ impl DeviceSquare {
                     attribute: first_of_list[candidate.attribute.list as usize]
                         + candidate.attribute.index,
                     on_deck: u32::from(candidate.deck_m.is_some()),
+                    layer: candidate.layer as u32,
                 })
             })
             .collect::<Result<_, String>>()?;

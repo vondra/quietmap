@@ -80,6 +80,7 @@ struct Candidate {
     u32 line;
     u32 attribute;
     u32 on_deck;                  // the source stands on the deck in ground0, ground1
+    u32 layer;
 };
 
 struct Attribute {
@@ -91,28 +92,38 @@ struct Attribute {
     float energy[PERIODS][BANDS]; // A-weighted linear band energies, per metre for lines
 };
 
-// evaluate.rs ray: one ray from (px, py) to the receiver, its transfer weighted by `weight` into
-// the period sums (add_ray and period_sums, summed per period at once: the same sum).
+// What a pair delivers per period (popup::evaluate::Received): its energy mixed by the direction's
+// favourable share (the received bands summed), then in calm air and downwind alone (its path's
+// states); PAIR_SUMS floats a pair.
+#define PAIR_SUMS (3 * PERIODS)
+
+// evaluate.rs ray: one ray from (px, py) to the receiver, its transfer weighted by `weight` into the
+// pair's sums and its mixed band energies per period into the pair's `bands` (PERIODS x BANDS).
 __device__ u32 add_ray(const TerrainScene& ground, const ObstacleScene& obstacles, const Receiver& receiver,
                        const Attribute& source, const RayEnds& ends, float px, float py, bool obstacles_on_ray, float weight,
-                       RayStream& s, float* periods) {
+                       RayStream& s, float* sums, float* bands) {
     Transfer transfer;
     u32 failed = ray_transfer(ground, obstacles, px, py, receiver.x, receiver.y, receiver.own_footprint, obstacles_on_ray, ends, s, &transfer);
     if (failed) return failed;
     float azimuth = atan2f(receiver.y - py, receiver.x - px);
-    float p[PERIODS], sum[PERIODS] = {0.0f, 0.0f, 0.0f};
+    float p[PERIODS];
     for (int period = 0; period < PERIODS; period++) p[period] = favourable_at(receiver.weather, period, azimuth);
     for (int band = 0; band < BANDS; band++) {
-        float air = attenuation_energy(receiver.weather.alpha_db_per_km[band] * transfer.slant_m / 1000.0f);
+        float air = weight * attenuation_energy(receiver.weather.alpha_db_per_km[band] * transfer.slant_m / 1000.0f);
         float homogeneous = attenuation_energy(state_attenuation_db(transfer.states[HOMOGENEOUS], band)
                                                + foliage_db(transfer.foliage_m[HOMOGENEOUS], band));
         float favourable = attenuation_energy(state_attenuation_db(transfer.states[FAVOURABLE], band)
                                               + foliage_db(transfer.foliage_m[FAVOURABLE], band));
         for (int period = 0; period < PERIODS; period++) {
-            sum[period] += source.energy[period][band] * air * (p[period] * favourable + (1.0f - p[period]) * homogeneous);
+            float calm = source.energy[period][band] * air * homogeneous;
+            float downwind = source.energy[period][band] * air * favourable;
+            float mixed = p[period] * downwind + (1.0f - p[period]) * calm;
+            sums[period] += mixed;
+            sums[PERIODS + period] += calm;
+            sums[2 * PERIODS + period] += downwind;
+            bands[period * BANDS + band] += mixed;
         }
     }
-    for (int period = 0; period < PERIODS; period++) periods[period] += weight * sum[period];
     return 0;
 }
 
@@ -122,7 +133,8 @@ __device__ u32 add_ray(const TerrainScene& ground, const ObstacleScene& obstacle
 // (LinePieceGeometry::divergence_factor); 0 or a failure.
 __device__ u32 add_line_node(const TerrainScene& ground, const ObstacleScene& obstacles, const Receiver& receiver,
                              const Candidate& candidate, const Attribute& source, const RayEnds& ends,
-                             const LinePieceGeometry& g, const LineNodes& nodes, int node, RayStream& s, float* periods) {
+                             const LinePieceGeometry& g, const LineNodes& nodes, int node, RayStream& s, float* sums,
+                             float* bands) {
     float fraction = nodes.along_m[node] / g.length_m;
     float px = candidate.ax + fraction * (candidate.bx - candidate.ax);
     float py = candidate.ay + fraction * (candidate.by - candidate.ay);
@@ -130,7 +142,7 @@ __device__ u32 add_line_node(const TerrainScene& ground, const ObstacleScene& ob
     if (candidate.on_deck) node_ends.source_ground_m = candidate.ground0 + fraction * (candidate.ground1 - candidate.ground0);
     float divergence = hypotf(g.unit[0], g.unit[1]) / (POINT_DIVERGENCE_LINEAR * g.perpendicular_m);
     return add_ray(ground, obstacles, receiver, source, node_ends, px, py, nodes.obstacles_on_ray[node],
-                   nodes.weight_rad[node] * divergence, s, periods);
+                   nodes.weight_rad[node] * divergence, s, sums, bands);
 }
 
 // evaluate::ray_ends: a source's ray ends at the receiver, standing on the terrain under it.
@@ -145,18 +157,20 @@ __device__ __forceinline__ RayEnds source_ends(const Attribute& source, const Re
     return ends;
 }
 
-// evaluate::received_bands summed per period (period_sums): the energy one candidate delivers at
-// the receiver, without the receiver's reflection; 0 or a failure.
+// evaluate::received_bands: what one candidate delivers at the receiver (its sums, PAIR_SUMS, and its
+// bands, PERIODS x BANDS), without the receiver's reflection; 0 or a failure.
 __device__ u32 received_periods(const TerrainScene& ground, const ObstacleScene& obstacles, const Receiver& receiver,
-                                const Candidate& candidate, const Attribute& source, RayStream& s, float* periods) {
-    for (int period = 0; period < PERIODS; period++) periods[period] = 0.0f;
+                                const Candidate& candidate, const Attribute& source, RayStream& s, float* sums,
+                                float* bands) {
+    for (int k = 0; k < PAIR_SUMS; k++) sums[k] = 0.0f;
+    for (int k = 0; k < PERIODS * BANDS; k++) bands[k] = 0.0f;
     RayEnds ends = source_ends(source, receiver);
     if (!candidate.line) {
         if (candidate.on_deck) ends.source_ground_m = candidate.ground0;
         float distance_m = hypotf(candidate.ax - receiver.x, candidate.ay - receiver.y);
         float distance = fmaxf(hypotf(fmaxf(distance_m, source.exclusion_radius_m), receiver.altitude_m - (candidate.ground0 + source.height_m)), 1.0f);
         float weight = 1.0f / (distance * distance * energy_of_level(11.0f));
-        return add_ray(ground, obstacles, receiver, source, ends, candidate.ax, candidate.ay, true, weight, s, periods);
+        return add_ray(ground, obstacles, receiver, source, ends, candidate.ax, candidate.ay, true, weight, s, sums, bands);
     }
     float start[3] = {candidate.ax - receiver.x, candidate.ay - receiver.y, candidate.ground0 + source.height_m - receiver.altitude_m};
     float end[3] = {candidate.bx - receiver.x, candidate.by - receiver.y, candidate.ground1 + source.height_m - receiver.altitude_m};
@@ -166,7 +180,7 @@ __device__ u32 received_periods(const TerrainScene& ground, const ObstacleScene&
     nodes.count = 0;
     u32 failed = line_quadrature_nodes(g, obstacles, receiver.x, receiver.y, fmaxf(source.height_m, 0.0f), nodes);
     for (int node = 0; node < nodes.count && !failed; node++) {
-        failed = add_line_node(ground, obstacles, receiver, candidate, source, ends, g, nodes, node, s, periods);
+        failed = add_line_node(ground, obstacles, receiver, candidate, source, ends, g, nodes, node, s, sums, bands);
     }
     return failed;
 }

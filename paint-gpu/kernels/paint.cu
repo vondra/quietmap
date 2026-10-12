@@ -50,22 +50,30 @@ __device__ u32 receiver_at(const SquareScene& square, float x, float y, u64 own_
     return 0;
 }
 
-// Per pair: the period energies candidate `candidate_index[i]` delivers at the receiver at
+// Per pair: the sums (PAIR_SUMS) candidate `candidate_index[i]` delivers at the receiver at
 // (receiver_xy[2i], receiver_xy[2i + 1]) standing in building `own_footprint[i]` (0 outdoors), or
-// its failure.
+// its failure; an answered pair's mixed bands added to point `point_index[i]`'s in `bands`
+// (LAYERS x PERIODS x BANDS a point).
 extern "C" __global__ void evaluate_pairs(const SquareScene* square_ptr, const float* receiver_xy, const u64* own_footprint,
-                                          const u32* candidate_index, u32 pair_count, float* periods, u32* failed) {
+                                          const u32* candidate_index, const u32* point_index, u32 pair_count, float* sums,
+                                          float* bands, u32* failed) {
     const SquareScene& square = *square_ptr;
     u64 pair = (u64)blockIdx.x * blockDim.x + threadIdx.x;
     if (pair >= pair_count) return;
     RayStream s;
     Receiver receiver;
     u32 status = receiver_at(square, receiver_xy[2 * pair], receiver_xy[2 * pair + 1], own_footprint[pair], &receiver);
-    float out[PERIODS] = {0.0f, 0.0f, 0.0f};
+    float out[PAIR_SUMS], pair_bands[PERIODS * BANDS];
+    for (int k = 0; k < PAIR_SUMS; k++) out[k] = 0.0f;
+    const Candidate& candidate = square.candidates[candidate_index[pair]];
     if (status == 0) {
-        const Candidate& candidate = square.candidates[candidate_index[pair]];
-        status = received_periods(square.ground, square.obstacles, receiver, candidate, square.attributes[candidate.attribute], s, out);
+        status = received_periods(square.ground, square.obstacles, receiver, candidate, square.attributes[candidate.attribute], s, out,
+                                  pair_bands);
     }
-    for (int period = 0; period < PERIODS; period++) periods[PERIODS * pair + period] = status == 0 ? out[period] : 0.0f;
+    if (status == 0) {
+        float* point_bands = bands + ((u64)point_index[pair] * LAYERS + candidate.layer) * (PERIODS * BANDS);
+        for (int k = 0; k < PERIODS * BANDS; k++) atomicAdd(&point_bands[k], pair_bands[k]);
+    }
+    for (int k = 0; k < PAIR_SUMS; k++) sums[PAIR_SUMS * pair + k] = status == 0 ? out[k] : 0.0f;
     failed[pair] = status;
 }

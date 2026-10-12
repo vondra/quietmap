@@ -1,11 +1,12 @@
 //! The exact evaluation of (point, source) pairs, the popup's physics: the points a square is
-//! evaluated at, and every pair's whole Lden energy computed here or by a card ([`Batch`]).
+//! evaluated at, every pair's energy in both weather states and every point's octave bands per
+//! layer, computed here or by a card ([`Batch`]).
 
 use crate::square::Square;
-use physics::bands::{PERIODS, energy, lden_energy};
+use physics::bands::{BANDS, PERIODS, energy, lden_energy};
 use physics::bound::{ReceiverBound, receiver_bound};
 use physics::weather::PlaceWeather;
-use popup::evaluate::{Receiver, Scratch, period_sums, received_bands};
+use popup::evaluate::{Bands, Receiver, Scratch, period_sums, received_bands};
 use rayon::prelude::*;
 use tiles::sources::Layer;
 
@@ -75,23 +76,37 @@ fn weather_at(square: &Square, position: [f64; 2]) -> PlaceWeather {
     square.weather.place(lat, lon)
 }
 
-/// Exact evaluations of many pairs at once (a card): the energy per period candidate `c` delivers
-/// at point `p`, for every `(p, c)` of `pairs`.
-pub trait Batch: Sync {
-    fn evaluate(
-        &self,
-        points: &[Point],
-        pairs: &[(u32, u32)],
-    ) -> Result<Vec<[f64; PERIODS]>, String>;
+/// What a pair delivers per period: mixed by its direction's favourable share (its received bands
+/// summed), and in calm air and downwind alone (`popup::evaluate::Path::states`), which the
+/// popup's weather states mix.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PairEnergy {
+    pub mixed: [f64; PERIODS],
+    pub states: [[f64; PERIODS]; 2],
 }
 
-/// The energy per period candidate `index` delivers at `point` on the CPU.
+/// A point's received octave bands per layer and period, mixed: the spectrum its loudness takes.
+pub type PointBands = [Bands; LAYERS];
+
+/// Every pair's energy, in order, and every point's bands.
+pub struct Evaluated {
+    pub pairs: Vec<PairEnergy>,
+    pub bands: Vec<PointBands>,
+}
+
+/// Exact evaluations of many pairs at once (a card): what candidate `c` delivers at point `p`, for
+/// every `(p, c)` of `pairs`.
+pub trait Batch: Sync {
+    fn evaluate(&self, points: &[Point], pairs: &[(u32, u32)]) -> Result<Evaluated, String>;
+}
+
+/// What candidate `index` delivers at `point` on the CPU, and its bands.
 pub fn whole_energy(
     square: &Square,
     point: &Point,
     index: u32,
     scratch: &mut Scratch,
-) -> Result<[f64; PERIODS], String> {
+) -> Result<(PairEnergy, Bands), String> {
     let mut candidate = square.candidates[index as usize].clone();
     candidate.distance_m = candidate.distance_from(point.position);
     let received = received_bands(
@@ -100,25 +115,47 @@ pub fn whole_energy(
         &square.attributes[candidate.attribute],
         scratch,
     )?;
-    Ok(period_sums(&received.bands))
+    let energy = PairEnergy {
+        mixed: period_sums(&received.bands),
+        states: received.path.states,
+    };
+    Ok((energy, received.bands))
 }
 
-/// Every pair's energy per period: on the card when there is one, else on the CPU.
-pub fn evaluate_periods(
+/// Adds a pair's `bands` to its point's, in its candidate's layer.
+pub fn add_bands(square: &Square, point: &mut PointBands, index: u32, bands: &Bands) {
+    let layer = &mut point[square.candidates[index as usize].layer as usize];
+    for (total, period) in layer.iter_mut().zip(bands) {
+        for (sum, value) in total.iter_mut().zip(period) {
+            *sum += value;
+        }
+    }
+}
+
+/// Every pair's energy and every point's bands: on the card when there is one, else on the CPU.
+pub fn evaluate_all(
     square: &Square,
     points: &[Point],
     pairs: &[(u32, u32)],
     batch: Option<&dyn Batch>,
-) -> Result<Vec<[f64; PERIODS]>, String> {
-    match batch {
-        Some(batch) => batch.evaluate(points, pairs),
-        None => pairs
-            .par_iter()
-            .map_init(Scratch::default, |scratch, &(at, index)| {
-                whole_energy(square, &points[at as usize], index, scratch)
-            })
-            .collect(),
+) -> Result<Evaluated, String> {
+    if let Some(batch) = batch {
+        return batch.evaluate(points, pairs);
     }
+    let each: Vec<(PairEnergy, Bands)> = pairs
+        .par_iter()
+        .map_init(Scratch::default, |scratch, &(at, index)| {
+            whole_energy(square, &points[at as usize], index, scratch)
+        })
+        .collect::<Result<_, String>>()?;
+    let mut bands = vec![[[[0.0; BANDS]; PERIODS]; LAYERS]; points.len()];
+    for (&(at, index), (_, pair)) in pairs.iter().zip(&each) {
+        add_bands(square, &mut bands[at as usize], index, pair);
+    }
+    Ok(Evaluated {
+        pairs: each.into_iter().map(|(energy, _)| energy).collect(),
+        bands,
+    })
 }
 
 /// Every pair's Lden energy.
@@ -128,8 +165,9 @@ pub fn evaluate(
     pairs: &[(u32, u32)],
     batch: Option<&dyn Batch>,
 ) -> Result<Vec<f64>, String> {
-    Ok(evaluate_periods(square, points, pairs, batch)?
+    Ok(evaluate_all(square, points, pairs, batch)?
+        .pairs
         .iter()
-        .map(lden_energy)
+        .map(|energy| lden_energy(&energy.mixed))
         .collect())
 }
