@@ -15,10 +15,7 @@ use std::f64::consts::PI;
 
 /// Buckets per piece: five on a 250 m piece match a 401-node point sum within +-0.094 dB over
 /// G = 0, 0.5, 1 at 5-500 m (dev4 measurement 2026-09-24), where the closest-point ray applied to
-/// the whole piece is up to +1.75 dB loud. Fewer on far pieces (one per 3 degrees, at least two)
-/// paint Dobříš 42 % faster but read Koh Phangan above its ring road 0.6 dB quiet against 41
-/// buckets, five 0.1 dB (2026-10-11): a far piece half behind a slope needs its rays where the view
-/// changes, not fewer.
+/// the whole piece is up to +1.75 dB loud.
 pub const LINE_BUCKET_COUNT: usize = 5;
 /// A piece seen under less than this in-plane angle takes one bucket, its five rays lying within
 /// it: on Dobříš's four squares the painter 289 -> 155 s with every layer within the same drift
